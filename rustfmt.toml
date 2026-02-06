@@ -1,0 +1,20 @@
+# Rust code formatting configuration
+# Stable-only options (no nightly required)
+
+edition = "2021"
+max_width = 100
+tab_spaces = 4
+hard_tabs = false
+use_small_heuristics = "Max"
+newline_style = "Unix"
+use_field_init_shorthand = true
+use_try_shorthand = true
+
+# Note: Advanced options below require nightly
+# Uncomment when using nightly toolchain:
+# imports_granularity = "Crate"
+# group_imports = "StdExternalCrate"
+# wrap_comments = true
+# format_code_in_doc_comments = true
+# normalize_comments = true
+# format_strings = true

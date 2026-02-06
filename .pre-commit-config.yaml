@@ -1,0 +1,27 @@
+# Pre-commit hooks for HwpForge
+# Install: pip install pre-commit && pre-commit install
+
+repos:
+  - repo: https://github.com/doublify/pre-commit-rust
+    rev: v1.0
+    hooks:
+      - id: fmt
+        name: rustfmt
+        args: ['--all', '--', '--check']
+
+      - id: clippy
+        name: clippy
+        args: ['--all-targets', '--all-features', '--', '-D', 'warnings']
+
+      - id: cargo-check
+        name: cargo check
+        args: ['--all-targets', '--all-features']
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict

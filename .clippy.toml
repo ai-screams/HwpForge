@@ -1,0 +1,7 @@
+# Clippy configuration for HwpForge
+# See: https://rust-lang.github.io/rust-clippy/
+
+# Be pedantic but practical
+avoid-breaking-exported-api = false
+cognitive-complexity-threshold = 30
+type-complexity-threshold = 500
