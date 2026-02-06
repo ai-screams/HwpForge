@@ -94,8 +94,8 @@ pub enum FoundationError {
     /// An HwpUnit value was outside the valid range.
     #[error("invalid HwpUnit value {value}: must be in [{min}, {max}]")]
     InvalidHwpUnit {
-        /// The rejected value.
-        value: i32,
+        /// The rejected value (as i64 to avoid truncation in error messages).
+        value: i64,
         /// Minimum allowed value.
         min: i32,
         /// Maximum allowed value.

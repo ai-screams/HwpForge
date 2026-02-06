@@ -98,7 +98,7 @@ impl HwpUnit {
     pub fn new(value: i32) -> FoundationResult<Self> {
         if !(Self::MIN_VALUE..=Self::MAX_VALUE).contains(&value) {
             return Err(FoundationError::InvalidHwpUnit {
-                value,
+                value: value as i64,  // i64 for error reporting (no truncation)
                 min: Self::MIN_VALUE,
                 max: Self::MAX_VALUE,
             });
@@ -184,7 +184,7 @@ impl HwpUnit {
         let raw = (value * scale).round() as i64;
         if raw < Self::MIN_VALUE as i64 || raw > Self::MAX_VALUE as i64 {
             return Err(FoundationError::InvalidHwpUnit {
-                value: raw as i32,
+                value: raw,  // i64 그대로 (truncation 방지)
                 min: Self::MIN_VALUE,
                 max: Self::MAX_VALUE,
             });
