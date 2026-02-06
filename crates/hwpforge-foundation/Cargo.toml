@@ -1,5 +1,5 @@
 [package]
-name = "hwpforge-hwpx"
+name = "foundation"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -1,5 +1,5 @@
 [package]
-name = "hwpforge-hwp5"
+name = "stylesheet"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

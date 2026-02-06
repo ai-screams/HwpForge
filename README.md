@@ -67,18 +67,21 @@ bacon
 \`\`\`
 HwpForge/
 ├── crates/
-│   ├── hwpforge-primitive/    # Primitive types (HwpUnit, Color, ID)
-│   ├── hwpforge-ir/           # Intermediate Representation (DOM)
-│   ├── hwpforge-hwpx/         # HWPX Reader/Writer
-│   ├── hwpforge-hwp5/         # HWP5 Reader
-│   ├── hwpforge-style/        # Style Template System
-│   ├── hwpforge-md/           # Markdown Bridge
-│   ├── hwpforge-python/       # PyO3 Bindings
-│   └── hwpforge-cli/          # CLI Tool
-├── python/hwpforge/           # Python package + MCP Server
-├── templates/                 # Built-in style templates
-└── tests/fixtures/            # Test files
+│   ├── hwpforge-foundation/       # Primitives (HwpUnit, Color, ID)
+│   ├── hwpforge-core/             # Pure document structure (style refs only)
+│   ├── hwpforge-stylesheet/       # Style Template System (YAML)
+│   ├── hwpforge-compiler-hwpx/    # HWPX encoder/decoder
+│   ├── hwpforge-compiler-hwp5/    # HWP5 decoder
+│   ├── hwpforge-compiler-md/      # Markdown encoder/decoder
+│   ├── hwpforge-bindings-py/      # PyO3 Python bindings
+│   └── hwpforge-bindings-cli/     # CLI tool
+├── python/hwpforge/               # Python package + MCP Server
+├── templates/                     # Built-in style templates
+└── tests/fixtures/                # Test files
 \`\`\`
+
+**Architecture Philosophy**: Separation of structure (Core) and style (Stylesheet).
+Like HTML+CSS or React+Theme, enabling style reuse across multiple documents.
 
 ---
 

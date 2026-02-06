@@ -1,13 +1,13 @@
 [workspace]
 members = [
-    "crates/hwpforge-primitive",
-    "crates/hwpforge-ir",
-    "crates/hwpforge-hwpx",
-    "crates/hwpforge-hwp5",
-    "crates/hwpforge-style",
-    "crates/hwpforge-md",
-    "crates/hwpforge-python",
-    "crates/hwpforge-cli",
+    "crates/hwpforge-foundation",
+    "crates/hwpforge-core",
+    "crates/hwpforge-stylesheet",
+    "crates/hwpforge-compiler-hwpx",
+    "crates/hwpforge-compiler-hwp5",
+    "crates/hwpforge-compiler-md",
+    "crates/hwpforge-bindings-py",
+    "crates/hwpforge-bindings-cli",
 ]
 resolver = "2"
 
