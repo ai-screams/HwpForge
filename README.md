@@ -67,21 +67,27 @@ bacon
 \`\`\`
 HwpForge/
 ├── crates/
-│   ├── hwpforge-foundation/       # Primitives (HwpUnit, Color, ID)
-│   ├── hwpforge-core/             # Pure document structure (style refs only)
-│   ├── hwpforge-stylesheet/       # Style Template System (YAML)
-│   ├── hwpforge-compiler-hwpx/    # HWPX encoder/decoder
-│   ├── hwpforge-compiler-hwp5/    # HWP5 decoder
-│   ├── hwpforge-compiler-md/      # Markdown encoder/decoder
-│   ├── hwpforge-bindings-py/      # PyO3 Python bindings
-│   └── hwpforge-bindings-cli/     # CLI tool
+│   ├── hwpforge-foundation/       # 🔩 Primitives (HwpUnit, Color, ID)
+│   ├── hwpforge-core/             # 🔨 Pure document structure (style refs only)
+│   ├── hwpforge-blueprint/        # 📐 Style templates (YAML, like Figma tokens)
+│   ├── hwpforge-smithy-hwpx/      # 🔥 HWPX smithy (encoder/decoder)
+│   ├── hwpforge-smithy-hwp5/      # 🔥 HWP5 smithy (decoder)
+│   ├── hwpforge-smithy-md/        # 🔥 Markdown smithy (encoder/decoder)
+│   ├── hwpforge-bindings-py/      # 🐍 PyO3 Python bindings
+│   └── hwpforge-bindings-cli/     # ⚒️  CLI tool
 ├── python/hwpforge/               # Python package + MCP Server
-├── templates/                     # Built-in style templates
+├── templates/                     # Built-in blueprints (style templates)
 └── tests/fixtures/                # Test files
 \`\`\`
 
-**Architecture Philosophy**: Separation of structure (Core) and style (Stylesheet).
-Like HTML+CSS or React+Theme, enabling style reuse across multiple documents.
+**Forge Philosophy**:
+- **Foundation** = Raw materials (primitives)
+- **Core** = Anvil (pure structure, no style)
+- **Blueprint** = Design patterns (style definitions, reusable)
+- **Smithy** = Workshops (format-specific forges)
+- **Bindings** = Tools (interfaces for users)
+
+Like HTML+CSS or React+Theme, enabling style reuse across documents.
 
 ---
 

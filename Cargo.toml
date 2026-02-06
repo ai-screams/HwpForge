@@ -2,10 +2,10 @@
 members = [
     "crates/hwpforge-foundation",
     "crates/hwpforge-core",
-    "crates/hwpforge-stylesheet",
-    "crates/hwpforge-compiler-hwpx",
-    "crates/hwpforge-compiler-hwp5",
-    "crates/hwpforge-compiler-md",
+    "crates/hwpforge-blueprint",
+    "crates/hwpforge-smithy-hwpx",
+    "crates/hwpforge-smithy-hwp5",
+    "crates/hwpforge-smithy-md",
     "crates/hwpforge-bindings-py",
     "crates/hwpforge-bindings-cli",
 ]
