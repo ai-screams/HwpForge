@@ -1,0 +1,124 @@
+# HwpForge Default Template
+#
+# A sensible base template for Korean documents using A4 paper.
+# All other built-in templates extend this one.
+
+meta:
+  name: default
+  version: 1.0.0
+  description: Default template with A4 paper and Korean fonts
+
+page:
+  width: 210mm
+  height: 297mm
+  margin_top: 20mm
+  margin_bottom: 20mm
+  margin_left: 20mm
+  margin_right: 20mm
+  header_margin: 15mm
+  footer_margin: 15mm
+
+styles:
+  body:
+    char_shape:
+      font: 한컴바탕
+      size: 10pt
+      color: '#000000'
+    para_shape:
+      alignment: Justify
+      line_spacing:
+        spacing_type: Percentage
+        value: '160%'
+
+  heading1:
+    char_shape:
+      font: 한컴바탕
+      size: 16pt
+      bold: true
+      color: '#000000'
+    para_shape:
+      alignment: Left
+      line_spacing:
+        spacing_type: Percentage
+        value: '160%'
+      spacing:
+        before: 12pt
+        after: 6pt
+
+  heading2:
+    char_shape:
+      font: 한컴바탕
+      size: 14pt
+      bold: true
+      color: '#000000'
+    para_shape:
+      alignment: Left
+      line_spacing:
+        spacing_type: Percentage
+        value: '160%'
+      spacing:
+        before: 10pt
+        after: 4pt
+
+  heading3:
+    char_shape:
+      font: 한컴바탕
+      size: 12pt
+      bold: true
+      color: '#000000'
+    para_shape:
+      alignment: Left
+      line_spacing:
+        spacing_type: Percentage
+        value: '160%'
+      spacing:
+        before: 8pt
+        after: 4pt
+
+  code:
+    char_shape:
+      font: D2Coding
+      size: 9pt
+      color: '#333333'
+    para_shape:
+      alignment: Left
+      line_spacing:
+        spacing_type: Percentage
+        value: '140%'
+
+  blockquote:
+    char_shape:
+      font: 한컴바탕
+      size: 10pt
+      italic: true
+      color: '#555555'
+    para_shape:
+      alignment: Left
+      line_spacing:
+        spacing_type: Percentage
+        value: '160%'
+      indent:
+        left: 20pt
+
+  list_item:
+    char_shape:
+      font: 한컴바탕
+      size: 10pt
+      color: '#000000'
+    para_shape:
+      alignment: Left
+      line_spacing:
+        spacing_type: Percentage
+        value: '160%'
+      indent:
+        left: 20pt
+        first_line: -10pt
+
+markdown_mapping:
+  body: body
+  heading1: heading1
+  heading2: heading2
+  heading3: heading3
+  code: code
+  blockquote: blockquote
+  list_item: list_item

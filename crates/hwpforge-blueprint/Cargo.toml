@@ -1,5 +1,6 @@
 [package]
-name = "stylesheet"
+name = "hwpforge-blueprint"
+description = "YAML-based style template system for HwpForge (Figma Design Token pattern)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -12,6 +13,15 @@ readme.workspace = true
 keywords.workspace = true
 categories.workspace = true
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
+hwpforge-foundation = { path = "../hwpforge-foundation" }
+hwpforge-core = { path = "../hwpforge-core" }
+serde = { workspace = true }
+serde_yaml = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+schemars = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+pretty_assertions = { workspace = true }

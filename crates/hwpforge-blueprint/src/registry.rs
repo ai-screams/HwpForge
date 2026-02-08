@@ -1,0 +1,701 @@
+//! StyleRegistry: converts Template styles into indexed collections.
+//!
+//! The registry performs the final **resolution step** in the Blueprint workflow:
+//!
+//! ```text
+//! Template (YAML, all styles by name)
+//!     |
+//!     v
+//! StyleRegistry::from_template()
+//!     |
+//!     v
+//! StyleRegistry (indexed Vecs: fonts, char_shapes, para_shapes)
+//! ```
+//!
+//! This separation mirrors the **HTML + CSS** model:
+//! - Template = CSS (named styles in human-friendly format)
+//! - StyleRegistry = compiled CSS (numeric indices for runtime efficiency)
+//!
+//! Each style in the template gets allocated sequential indices
+//! (CharShapeIndex, ParaShapeIndex). Fonts are deduplicated: two styles
+//! using "한컴바탕" share a single FontIndex.
+
+use std::collections::BTreeMap;
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+use hwpforge_foundation::{CharShapeIndex, FontId, FontIndex, ParaShapeIndex};
+
+use crate::error::{BlueprintError, BlueprintResult};
+use crate::style::{CharShape, ParaShape};
+use crate::template::Template;
+
+/// A resolved style entry with allocated indices.
+///
+/// This is the result of resolving a named style from the Template.
+/// It contains indices pointing into the StyleRegistry's flat collections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub struct StyleEntry {
+    /// Index into the character shape collection.
+    pub char_shape_id: CharShapeIndex,
+    /// Index into the paragraph shape collection.
+    pub para_shape_id: ParaShapeIndex,
+    /// Index into the font collection (deduplicated).
+    pub font_id: FontIndex,
+}
+
+/// A registry of resolved styles with index-based access.
+///
+/// After inheritance resolution, the Template is converted into a
+/// StyleRegistry where every style is assigned numeric indices for
+/// efficient lookup during document rendering.
+///
+/// # Font Deduplication
+///
+/// Multiple styles can reference the same font. The registry deduplicates
+/// fonts automatically:
+///
+/// ```rust,ignore
+/// // Two styles with the same font → single FontIndex
+/// styles:
+///   body: { font: "Batang", size: 10pt }
+///   heading: { font: "Batang", size: 16pt }
+///
+/// // Registry: fonts = ["Batang"] (index 0)
+/// //           char_shapes[0].font_id = FontIndex(0)
+/// //           char_shapes[1].font_id = FontIndex(0)
+/// ```
+///
+/// # Index Allocation
+///
+/// Indices are allocated sequentially in the order styles appear in the
+/// template (preserving YAML field order via IndexMap):
+/// - CharShape 0, CharShape 1, CharShape 2...
+/// - ParaShape 0, ParaShape 1, ParaShape 2...
+/// - Font 0, Font 1... (deduplicated)
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub struct StyleRegistry {
+    /// All unique fonts referenced by character shapes.
+    pub fonts: Vec<FontId>,
+    /// All resolved character shapes.
+    pub char_shapes: Vec<CharShape>,
+    /// All resolved paragraph shapes.
+    pub para_shapes: Vec<ParaShape>,
+    /// Mapping from style name to its indices.
+    pub style_entries: BTreeMap<String, StyleEntry>,
+}
+
+impl StyleRegistry {
+    /// Creates a StyleRegistry from a Template.
+    ///
+    /// This is the **final resolution step**:
+    /// 1. Iterate over template styles (in order)
+    /// 2. Resolve each PartialStyle → CharShape + ParaShape
+    /// 3. Deduplicate fonts
+    /// 4. Allocate sequential indices
+    ///
+    /// # Errors
+    ///
+    /// - [`BlueprintError::EmptyStyleMap`] if the template has no styles
+    /// - [`BlueprintError::StyleResolution`] if any style is missing required fields
+    ///
+    /// # Examples
+    ///
+    /// ```rust,ignore
+    /// use hwpforge_blueprint::{Template, StyleRegistry};
+    ///
+    /// let template = Template::from_yaml(yaml)?;
+    /// let registry = StyleRegistry::from_template(&template)?;
+    ///
+    /// // Access by name
+    /// let body_entry = registry.get_style("body").unwrap();
+    /// let char_shape = registry.char_shape(body_entry.char_shape_id).unwrap();
+    /// assert_eq!(char_shape.font, "한컴바탕");
+    /// ```
+    pub fn from_template(template: &Template) -> BlueprintResult<Self> {
+        if template.styles.is_empty() {
+            return Err(BlueprintError::EmptyStyleMap);
+        }
+
+        // Validate style names
+        for name in template.styles.keys() {
+            validate_style_name(name)?;
+        }
+
+        let mut fonts = Vec::new();
+        let mut char_shapes = Vec::new();
+        let mut para_shapes = Vec::new();
+        let mut style_entries = BTreeMap::new();
+
+        // Font name → FontIndex mapping for deduplication
+        let mut font_indices: BTreeMap<String, FontIndex> = BTreeMap::new();
+
+        for (style_name, partial_style) in &template.styles {
+            // Resolve character shape (may fail if font/size missing)
+            let partial_char = partial_style.char_shape.as_ref().ok_or_else(|| {
+                BlueprintError::StyleResolution {
+                    style_name: style_name.clone(),
+                    field: "char_shape".to_string(),
+                }
+            })?;
+
+            let char_shape = partial_char.resolve(style_name)?;
+
+            // Deduplicate font: find or allocate FontIndex
+            let font_idx = if let Some(&existing_idx) = font_indices.get(&char_shape.font) {
+                existing_idx
+            } else {
+                let font_id = FontId::new(char_shape.font.clone())?;
+                let new_idx = FontIndex::new(fonts.len());
+                fonts.push(font_id);
+                font_indices.insert(char_shape.font.clone(), new_idx);
+                new_idx
+            };
+
+            let char_shape_id = CharShapeIndex::new(char_shapes.len());
+            char_shapes.push(char_shape);
+
+            // Resolve paragraph shape (always succeeds with defaults)
+            let partial_para = partial_style.para_shape.as_ref();
+            let para_shape = partial_para.map_or_else(
+                || {
+                    // No para_shape specified → use all defaults
+                    crate::style::PartialParaShape::default().resolve()
+                },
+                |p| p.resolve(),
+            );
+
+            let para_shape_id = ParaShapeIndex::new(para_shapes.len());
+            para_shapes.push(para_shape);
+
+            // Create style entry
+            style_entries.insert(
+                style_name.clone(),
+                StyleEntry { char_shape_id, para_shape_id, font_id: font_idx },
+            );
+        }
+
+        // Validate markdown mapping references
+        if let Some(ref md) = template.markdown_mapping {
+            validate_mapping_references(md, &style_entries)?;
+        }
+
+        Ok(StyleRegistry { fonts, char_shapes, para_shapes, style_entries })
+    }
+
+    /// Looks up a style by name.
+    ///
+    /// Returns `None` if the style name does not exist.
+    pub fn get_style(&self, name: &str) -> Option<&StyleEntry> {
+        self.style_entries.get(name)
+    }
+
+    /// Retrieves a character shape by index.
+    ///
+    /// Returns `None` if the index is out of bounds.
+    pub fn char_shape(&self, idx: CharShapeIndex) -> Option<&CharShape> {
+        self.char_shapes.get(idx.get())
+    }
+
+    /// Retrieves a paragraph shape by index.
+    ///
+    /// Returns `None` if the index is out of bounds.
+    pub fn para_shape(&self, idx: ParaShapeIndex) -> Option<&ParaShape> {
+        self.para_shapes.get(idx.get())
+    }
+
+    /// Retrieves a font by index.
+    ///
+    /// Returns `None` if the index is out of bounds.
+    pub fn font(&self, idx: FontIndex) -> Option<&FontId> {
+        self.fonts.get(idx.get())
+    }
+
+    /// Returns the number of unique fonts.
+    pub fn font_count(&self) -> usize {
+        self.fonts.len()
+    }
+
+    /// Returns the number of character shapes.
+    pub fn char_shape_count(&self) -> usize {
+        self.char_shapes.len()
+    }
+
+    /// Returns the number of paragraph shapes.
+    pub fn para_shape_count(&self) -> usize {
+        self.para_shapes.len()
+    }
+
+    /// Returns the number of named styles.
+    pub fn style_count(&self) -> usize {
+        self.style_entries.len()
+    }
+}
+
+/// Validates a style name: must be non-empty, alphanumeric + underscore, start with letter/underscore.
+fn validate_style_name(name: &str) -> BlueprintResult<()> {
+    if name.is_empty() {
+        return Err(BlueprintError::InvalidStyleName {
+            name: name.to_string(),
+            reason: "style name cannot be empty".to_string(),
+        });
+    }
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(BlueprintError::InvalidStyleName {
+            name: name.to_string(),
+            reason: "must contain only ASCII alphanumeric characters and underscores".to_string(),
+        });
+    }
+    if name.starts_with(|c: char| c.is_ascii_digit()) {
+        return Err(BlueprintError::InvalidStyleName {
+            name: name.to_string(),
+            reason: "must not start with a digit".to_string(),
+        });
+    }
+    Ok(())
+}
+
+/// Validates that all non-None MarkdownMapping references point to existing styles.
+fn validate_mapping_references(
+    md: &crate::template::MarkdownMapping,
+    styles: &BTreeMap<String, StyleEntry>,
+) -> BlueprintResult<()> {
+    let fields: &[(&str, &Option<String>)] = &[
+        ("body", &md.body),
+        ("heading1", &md.heading1),
+        ("heading2", &md.heading2),
+        ("heading3", &md.heading3),
+        ("heading4", &md.heading4),
+        ("heading5", &md.heading5),
+        ("heading6", &md.heading6),
+        ("code", &md.code),
+        ("blockquote", &md.blockquote),
+        ("list_item", &md.list_item),
+    ];
+    for &(field_name, ref_opt) in fields {
+        if let Some(style_name) = ref_opt {
+            if !styles.contains_key(style_name) {
+                return Err(BlueprintError::InvalidMappingReference {
+                    mapping_field: field_name.to_string(),
+                    style_name: style_name.clone(),
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::style::PartialStyle;
+    use crate::template::TemplateMeta;
+    use hwpforge_foundation::{Alignment, HwpUnit, LineSpacingType};
+    use pretty_assertions::assert_eq;
+
+    // Helper: create a minimal PartialStyle with font + size
+    fn make_partial_style(font: &str, size_pt: f64) -> PartialStyle {
+        PartialStyle {
+            char_shape: Some(crate::style::PartialCharShape {
+                font: Some(font.to_string()),
+                size: Some(HwpUnit::from_pt(size_pt).unwrap()),
+                bold: None,
+                italic: None,
+                underline: None,
+                strikethrough: None,
+                color: None,
+                superscript: None,
+                subscript: None,
+            }),
+            para_shape: None,
+        }
+    }
+
+    // Helper: create a minimal Template with given styles
+    fn make_template(styles: BTreeMap<String, PartialStyle>) -> Template {
+        Template {
+            meta: TemplateMeta {
+                name: "test".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                extends: None,
+            },
+            page: None,
+            styles,
+            markdown_mapping: None,
+        }
+    }
+
+    #[test]
+    fn from_template_single_style() {
+        let mut styles = BTreeMap::new();
+        styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
+
+        let template = make_template(styles);
+        let registry = StyleRegistry::from_template(&template).unwrap();
+
+        assert_eq!(registry.style_count(), 1);
+        assert_eq!(registry.char_shape_count(), 1);
+        assert_eq!(registry.para_shape_count(), 1);
+        assert_eq!(registry.font_count(), 1);
+
+        let entry = registry.get_style("body").unwrap();
+        assert_eq!(entry.char_shape_id, CharShapeIndex::new(0));
+        assert_eq!(entry.para_shape_id, ParaShapeIndex::new(0));
+        assert_eq!(entry.font_id, FontIndex::new(0));
+    }
+
+    #[test]
+    fn from_template_multiple_styles() {
+        let mut styles = BTreeMap::new();
+        styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
+        styles.insert("heading".to_string(), make_partial_style("Dotum", 16.0));
+
+        let template = make_template(styles);
+        let registry = StyleRegistry::from_template(&template).unwrap();
+
+        assert_eq!(registry.style_count(), 2);
+        assert_eq!(registry.char_shape_count(), 2);
+        assert_eq!(registry.para_shape_count(), 2);
+        assert_eq!(registry.font_count(), 2); // Different fonts
+
+        let body = registry.get_style("body").unwrap();
+        let heading = registry.get_style("heading").unwrap();
+
+        assert_eq!(body.char_shape_id, CharShapeIndex::new(0));
+        assert_eq!(heading.char_shape_id, CharShapeIndex::new(1));
+    }
+
+    #[test]
+    fn font_deduplication_same_font() {
+        let mut styles = BTreeMap::new();
+        styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
+        styles.insert("heading".to_string(), make_partial_style("Batang", 16.0));
+
+        let template = make_template(styles);
+        let registry = StyleRegistry::from_template(&template).unwrap();
+
+        // 2 styles, same font → 1 FontId
+        assert_eq!(registry.font_count(), 1);
+        assert_eq!(registry.fonts[0].as_str(), "Batang");
+
+        // Both entries point to the same FontIndex
+        let body = registry.get_style("body").unwrap();
+        let heading = registry.get_style("heading").unwrap();
+        assert_eq!(body.font_id, FontIndex::new(0));
+        assert_eq!(heading.font_id, FontIndex::new(0));
+    }
+
+    #[test]
+    fn font_deduplication_different_fonts() {
+        let mut styles = BTreeMap::new();
+        styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
+        styles.insert("heading".to_string(), make_partial_style("Dotum", 16.0));
+
+        let template = make_template(styles);
+        let registry = StyleRegistry::from_template(&template).unwrap();
+
+        // 2 styles, different fonts → 2 FontIds
+        assert_eq!(registry.font_count(), 2);
+        assert_eq!(registry.fonts[0].as_str(), "Batang");
+        assert_eq!(registry.fonts[1].as_str(), "Dotum");
+
+        // Each entry points to its own FontIndex
+        let body = registry.get_style("body").unwrap();
+        let heading = registry.get_style("heading").unwrap();
+        assert_eq!(body.font_id, FontIndex::new(0));
+        assert_eq!(heading.font_id, FontIndex::new(1));
+    }
+
+    #[test]
+    fn get_style_by_name() {
+        let mut styles = BTreeMap::new();
+        styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
+
+        let template = make_template(styles);
+        let registry = StyleRegistry::from_template(&template).unwrap();
+
+        let entry = registry.get_style("body").unwrap();
+        assert_eq!(entry.char_shape_id, CharShapeIndex::new(0));
+
+        assert!(registry.get_style("nonexistent").is_none());
+    }
+
+    #[test]
+    fn char_shape_by_index() {
+        let mut styles = BTreeMap::new();
+        styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
+
+        let template = make_template(styles);
+        let registry = StyleRegistry::from_template(&template).unwrap();
+
+        let cs = registry.char_shape(CharShapeIndex::new(0)).unwrap();
+        assert_eq!(cs.font, "Batang");
+        assert_eq!(cs.size, HwpUnit::from_pt(10.0).unwrap());
+
+        assert!(registry.char_shape(CharShapeIndex::new(99)).is_none());
+    }
+
+    #[test]
+    fn para_shape_by_index() {
+        let mut styles = BTreeMap::new();
+        styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
+
+        let template = make_template(styles);
+        let registry = StyleRegistry::from_template(&template).unwrap();
+
+        let ps = registry.para_shape(ParaShapeIndex::new(0)).unwrap();
+        // Defaults from PartialParaShape::default().resolve()
+        assert_eq!(ps.alignment, Alignment::Left);
+        assert_eq!(ps.line_spacing_type, LineSpacingType::Percentage);
+        assert_eq!(ps.line_spacing_value, 160.0);
+
+        assert!(registry.para_shape(ParaShapeIndex::new(99)).is_none());
+    }
+
+    #[test]
+    fn empty_template_error() {
+        let template = make_template(BTreeMap::new());
+
+        let err = StyleRegistry::from_template(&template).unwrap_err();
+        assert!(matches!(err, BlueprintError::EmptyStyleMap));
+    }
+
+    #[test]
+    fn missing_font_error() {
+        let mut styles = BTreeMap::new();
+        styles.insert(
+            "broken".to_string(),
+            PartialStyle {
+                char_shape: Some(crate::style::PartialCharShape {
+                    font: None, // Missing!
+                    size: Some(HwpUnit::from_pt(10.0).unwrap()),
+                    ..Default::default()
+                }),
+                para_shape: None,
+            },
+        );
+
+        let template = make_template(styles);
+        let err = StyleRegistry::from_template(&template).unwrap_err();
+
+        match err {
+            BlueprintError::StyleResolution { style_name, field } => {
+                assert_eq!(style_name, "broken");
+                assert_eq!(field, "font");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn missing_size_error() {
+        let mut styles = BTreeMap::new();
+        styles.insert(
+            "broken".to_string(),
+            PartialStyle {
+                char_shape: Some(crate::style::PartialCharShape {
+                    font: Some("Batang".to_string()),
+                    size: None, // Missing!
+                    ..Default::default()
+                }),
+                para_shape: None,
+            },
+        );
+
+        let template = make_template(styles);
+        let err = StyleRegistry::from_template(&template).unwrap_err();
+
+        match err {
+            BlueprintError::StyleResolution { style_name, field } => {
+                assert_eq!(style_name, "broken");
+                assert_eq!(field, "size");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn serde_roundtrip_style_registry() {
+        let mut styles = BTreeMap::new();
+        styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
+        styles.insert("heading".to_string(), make_partial_style("Dotum", 16.0));
+
+        let template = make_template(styles);
+        let original = StyleRegistry::from_template(&template).unwrap();
+
+        let yaml = serde_yaml::to_string(&original).unwrap();
+        let back: StyleRegistry = serde_yaml::from_str(&yaml).unwrap();
+
+        assert_eq!(original.font_count(), back.font_count());
+        assert_eq!(original.char_shape_count(), back.char_shape_count());
+        assert_eq!(original.para_shape_count(), back.para_shape_count());
+        assert_eq!(original.style_count(), back.style_count());
+    }
+
+    #[test]
+    fn style_entry_serde_roundtrip() {
+        let entry = StyleEntry {
+            char_shape_id: CharShapeIndex::new(3),
+            para_shape_id: ParaShapeIndex::new(7),
+            font_id: FontIndex::new(1),
+        };
+
+        let json = serde_json::to_string(&entry).unwrap();
+        let back: StyleEntry = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(entry, back);
+    }
+
+    #[test]
+    fn font_count() {
+        let mut styles = BTreeMap::new();
+        styles.insert("a".to_string(), make_partial_style("Batang", 10.0));
+        styles.insert("b".to_string(), make_partial_style("Batang", 12.0)); // Same font
+        styles.insert("c".to_string(), make_partial_style("Dotum", 10.0)); // Different
+
+        let template = make_template(styles);
+        let registry = StyleRegistry::from_template(&template).unwrap();
+
+        assert_eq!(registry.font_count(), 2); // Batang, Dotum
+    }
+
+    #[test]
+    fn char_shape_count() {
+        let mut styles = BTreeMap::new();
+        styles.insert("a".to_string(), make_partial_style("Batang", 10.0));
+        styles.insert("b".to_string(), make_partial_style("Batang", 12.0));
+
+        let template = make_template(styles);
+        let registry = StyleRegistry::from_template(&template).unwrap();
+
+        assert_eq!(registry.char_shape_count(), 2); // 2 char shapes even if same font
+    }
+
+    #[test]
+    fn para_shape_count() {
+        let mut styles = BTreeMap::new();
+        styles.insert("a".to_string(), make_partial_style("Batang", 10.0));
+        styles.insert("b".to_string(), make_partial_style("Dotum", 12.0));
+
+        let template = make_template(styles);
+        let registry = StyleRegistry::from_template(&template).unwrap();
+
+        assert_eq!(registry.para_shape_count(), 2);
+    }
+
+    #[test]
+    fn style_count() {
+        let mut styles = BTreeMap::new();
+        styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
+        styles.insert("heading".to_string(), make_partial_style("Dotum", 16.0));
+
+        let template = make_template(styles);
+        let registry = StyleRegistry::from_template(&template).unwrap();
+
+        assert_eq!(registry.style_count(), 2);
+    }
+
+    #[test]
+    fn valid_style_names_accepted() {
+        let mut styles = BTreeMap::new();
+        styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
+        styles.insert("heading1".to_string(), make_partial_style("Batang", 16.0));
+        styles.insert("_private".to_string(), make_partial_style("Batang", 12.0));
+        styles.insert("my_style_2".to_string(), make_partial_style("Batang", 14.0));
+
+        let template = make_template(styles);
+        assert!(StyleRegistry::from_template(&template).is_ok());
+    }
+
+    #[test]
+    fn invalid_style_name_with_spaces() {
+        let mut styles = BTreeMap::new();
+        styles.insert("body style".to_string(), make_partial_style("Batang", 10.0));
+
+        let template = make_template(styles);
+        let err = StyleRegistry::from_template(&template).unwrap_err();
+        assert!(matches!(err, BlueprintError::InvalidStyleName { .. }));
+    }
+
+    #[test]
+    fn invalid_style_name_starts_with_digit() {
+        let mut styles = BTreeMap::new();
+        styles.insert("1heading".to_string(), make_partial_style("Batang", 10.0));
+
+        let template = make_template(styles);
+        let err = StyleRegistry::from_template(&template).unwrap_err();
+        assert!(matches!(err, BlueprintError::InvalidStyleName { .. }));
+    }
+
+    #[test]
+    fn invalid_style_name_special_chars() {
+        let mut styles = BTreeMap::new();
+        styles.insert("body-style".to_string(), make_partial_style("Batang", 10.0));
+
+        let template = make_template(styles);
+        let err = StyleRegistry::from_template(&template).unwrap_err();
+        assert!(matches!(err, BlueprintError::InvalidStyleName { .. }));
+    }
+
+    #[test]
+    fn markdown_mapping_valid_references() {
+        let mut styles = BTreeMap::new();
+        styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
+        styles.insert("heading".to_string(), make_partial_style("Batang", 16.0));
+
+        let template = Template {
+            meta: TemplateMeta {
+                name: "test".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                extends: None,
+            },
+            page: None,
+            styles,
+            markdown_mapping: Some(crate::template::MarkdownMapping {
+                body: Some("body".to_string()),
+                heading1: Some("heading".to_string()),
+                ..Default::default()
+            }),
+        };
+
+        // Should succeed — all references are valid
+        let registry = StyleRegistry::from_template(&template).unwrap();
+        assert_eq!(registry.style_count(), 2);
+    }
+
+    #[test]
+    fn markdown_mapping_invalid_reference_error() {
+        let mut styles = BTreeMap::new();
+        styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
+
+        let template = Template {
+            meta: TemplateMeta {
+                name: "test".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                extends: None,
+            },
+            page: None,
+            styles,
+            markdown_mapping: Some(crate::template::MarkdownMapping {
+                body: Some("body".to_string()),
+                heading1: Some("nonexistent".to_string()), // Invalid!
+                ..Default::default()
+            }),
+        };
+
+        let err = StyleRegistry::from_template(&template).unwrap_err();
+        match err {
+            BlueprintError::InvalidMappingReference { mapping_field, style_name } => {
+                assert_eq!(mapping_field, "heading1");
+                assert_eq!(style_name, "nonexistent");
+            }
+            other => panic!("Expected InvalidMappingReference, got: {other:?}"),
+        }
+    }
+}
