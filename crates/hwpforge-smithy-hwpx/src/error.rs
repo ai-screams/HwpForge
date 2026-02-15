@@ -91,6 +91,13 @@ pub enum HwpxError {
     /// A Foundation-layer error propagated upward.
     #[error("Foundation error: {0}")]
     Foundation(#[from] hwpforge_foundation::FoundationError),
+
+    /// XML serialization failure (encoder).
+    #[error("XML serialization error: {detail}")]
+    XmlSerialize {
+        /// The serialization error message.
+        detail: String,
+    },
 }
 
 /// Error codes for smithy-hwpx (4000-4099 range).
@@ -120,6 +127,8 @@ pub enum HwpxErrorCode {
     Core = 4008,
     /// Propagated Foundation error.
     Foundation = 4009,
+    /// XML serialization failure.
+    XmlSerialize = 4010,
 }
 
 impl fmt::Display for HwpxErrorCode {
@@ -142,6 +151,7 @@ impl HwpxError {
             Self::Io(_) => HwpxErrorCode::Io,
             Self::Core(_) => HwpxErrorCode::Core,
             Self::Foundation(_) => HwpxErrorCode::Foundation,
+            Self::XmlSerialize { .. } => HwpxErrorCode::XmlSerialize,
         }
     }
 }
@@ -239,6 +249,14 @@ mod tests {
         assert_eq!(HwpxErrorCode::Io.to_string(), "E4007");
         assert_eq!(HwpxErrorCode::Core.to_string(), "E4008");
         assert_eq!(HwpxErrorCode::Foundation.to_string(), "E4009");
+        assert_eq!(HwpxErrorCode::XmlSerialize.to_string(), "E4010");
+    }
+
+    #[test]
+    fn xml_serialize_error_display() {
+        let err = HwpxError::XmlSerialize { detail: "missing field".into() };
+        assert!(err.to_string().contains("missing field"));
+        assert_eq!(err.code(), HwpxErrorCode::XmlSerialize);
     }
 
     #[test]
@@ -254,6 +272,7 @@ mod tests {
             HwpxErrorCode::Io,
             HwpxErrorCode::Core,
             HwpxErrorCode::Foundation,
+            HwpxErrorCode::XmlSerialize,
         ];
         for code in codes {
             let val = code as u16;

@@ -81,6 +81,12 @@ fn convert_paragraph(
         runs.append(&mut converted_runs);
     }
 
+    // Normalize empty paragraphs: HWPX files from 한글 can have empty paragraphs
+    // (blank lines). Core's validate() requires at least 1 run per paragraph.
+    if runs.is_empty() {
+        runs.push(Run::text("", CharShapeIndex::new(0)));
+    }
+
     let paragraph = Paragraph { runs, para_shape_id };
     Ok((paragraph, page_settings))
 }
@@ -315,14 +321,16 @@ mod tests {
     }
 
     #[test]
-    fn empty_text_is_skipped() {
+    fn empty_text_is_normalized_to_empty_run() {
         let xml = r#"<sec>
             <p paraPrIDRef="0">
                 <run charPrIDRef="0"><t/></run>
             </p>
         </sec>"#;
         let result = parse_section(xml, 0).unwrap();
-        assert!(result.paragraphs[0].runs.is_empty());
+        // Empty paragraphs are normalized to contain a single empty text run
+        assert_eq!(result.paragraphs[0].runs.len(), 1);
+        assert_eq!(result.paragraphs[0].runs[0].content.as_text(), Some(""));
     }
 
     // ── Page settings ────────────────────────────────────────────
@@ -464,7 +472,7 @@ mod tests {
     }
 
     #[test]
-    fn picture_without_img_child_is_skipped() {
+    fn picture_without_img_child_is_normalized() {
         let xml = r#"<sec>
             <p paraPrIDRef="0">
                 <run charPrIDRef="0">
@@ -473,7 +481,9 @@ mod tests {
             </p>
         </sec>"#;
         let result = parse_section(xml, 0).unwrap();
-        assert!(result.paragraphs[0].runs.is_empty());
+        // Empty paragraphs are normalized to contain a single empty text run
+        assert_eq!(result.paragraphs[0].runs.len(), 1);
+        assert_eq!(result.paragraphs[0].runs[0].content.as_text(), Some(""));
     }
 
     // ── Image format guessing ────────────────────────────────────

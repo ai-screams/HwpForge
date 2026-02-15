@@ -7,10 +7,10 @@ use hwpforge_foundation::{FontIndex, HwpUnit};
 use quick_xml::de::from_str;
 
 use crate::error::{HwpxError, HwpxResult};
-use crate::schema::header::{HxCharPr, HxHead, HxParaPr};
+use crate::schema::header::{HxCharPr, HxHead, HxParaPr, HxStyle};
 use crate::style_store::{
     parse_alignment, parse_hex_color, HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape,
-    HwpxStyleStore,
+    HwpxStyle, HwpxStyleStore,
 };
 
 /// Parses a `header.xml` string into an [`HwpxStyleStore`].
@@ -34,6 +34,10 @@ pub fn parse_header(xml: &str) -> HwpxResult<HwpxStyleStore> {
 
     if let Some(ref_list) = &head.ref_list {
         // ── Fonts ────────────────────────────────────────────
+        // NOTE: Fonts from all language groups are flattened into a single Vec.
+        // This works because 한글 mirrors identical fonts across all groups,
+        // making group-local indices equivalent to flat indices.
+        // See the ASSUMPTION comment in convert_char_pr() for details.
         if let Some(fontfaces) = &ref_list.fontfaces {
             for group in &fontfaces.groups {
                 for font in &group.fonts {
@@ -59,6 +63,13 @@ pub fn parse_header(xml: &str) -> HwpxResult<HwpxStyleStore> {
                 store.push_para_shape(convert_para_pr(pp));
             }
         }
+
+        // ── Styles ───────────────────────────────────────────
+        if let Some(styles) = &ref_list.styles {
+            for style in &styles.items {
+                store.push_style(convert_style(style));
+            }
+        }
     }
 
     Ok(store)
@@ -66,6 +77,13 @@ pub fn parse_header(xml: &str) -> HwpxResult<HwpxStyleStore> {
 
 /// Converts an `HxCharPr` XML type into an `HwpxCharShape`.
 fn convert_char_pr(cp: &HxCharPr) -> HwpxCharShape {
+    // ASSUMPTION: 한글 (Hangul Word Processor) always mirrors identical fonts
+    // across all 7 language groups (HANGUL, LATIN, HANJA, JAPANESE, OTHER,
+    // SYMBOL, USER). Therefore, fontRef group-local indices coincide with
+    // flat store indices. If a future HWPX producer uses different fonts per
+    // group, this mapping breaks.
+    // See: Phase 4 analysis H3, OWPML KS X 6101 §fontRef.
+    // TODO(v2.0): Refactor to per-group font model for full spec compliance.
     let font_ref = cp
         .font_ref
         .as_ref()
@@ -126,6 +144,20 @@ fn convert_para_pr(pp: &HxParaPr) -> HwpxParaShape {
         spacing_after,
         line_spacing,
         line_spacing_type,
+    }
+}
+
+/// Converts an `HxStyle` XML type into an `HwpxStyle`.
+fn convert_style(s: &HxStyle) -> HwpxStyle {
+    HwpxStyle {
+        id: s.id,
+        style_type: s.style_type.clone(),
+        name: s.name.clone(),
+        eng_name: s.eng_name.clone(),
+        para_pr_id_ref: s.para_pr_id_ref,
+        char_pr_id_ref: s.char_pr_id_ref,
+        next_style_id_ref: s.next_style_id_ref,
+        lang_id: s.lang_id,
     }
 }
 
@@ -436,5 +468,49 @@ mod tests {
         let cs = store.char_shape(hwpforge_foundation::CharShapeIndex::new(0)).unwrap();
         assert_eq!(cs.font_ref.hangul.get(), 0);
         assert_eq!(cs.font_ref.latin.get(), 0);
+    }
+
+    // ── Styles ───────────────────────────────────────────────────
+
+    #[test]
+    fn parse_styles_basic() {
+        let xml = r#"<head version="1.4" secCnt="1">
+            <refList>
+                <styles itemCnt="2">
+                    <style id="0" type="PARA" name="바탕글" engName="Normal"
+                           paraPrIDRef="0" charPrIDRef="0" nextStyleIDRef="0" langID="1042"/>
+                    <style id="1" type="CHAR" name="본문" engName="Body"
+                           paraPrIDRef="1" charPrIDRef="1" nextStyleIDRef="1" langID="1042"/>
+                </styles>
+            </refList>
+        </head>"#;
+        let store = parse_header(xml).unwrap();
+        assert_eq!(store.style_count(), 2);
+
+        let s0 = store.style(0).unwrap();
+        assert_eq!(s0.name, "바탕글");
+        assert_eq!(s0.eng_name, "Normal");
+        assert_eq!(s0.style_type, "PARA");
+        assert_eq!(s0.lang_id, 1042);
+
+        let s1 = store.style(1).unwrap();
+        assert_eq!(s1.name, "본문");
+        assert_eq!(s1.eng_name, "Body");
+        assert_eq!(s1.style_type, "CHAR");
+    }
+
+    #[test]
+    fn parse_header_without_styles() {
+        let xml = r#"<head version="1.4" secCnt="1">
+            <refList>
+                <fontfaces itemCnt="1">
+                    <fontface lang="HANGUL" fontCnt="1">
+                        <font id="0" face="함초롬돋움" type="TTF" isEmbedded="0"/>
+                    </fontface>
+                </fontfaces>
+            </refList>
+        </head>"#;
+        let store = parse_header(xml).unwrap();
+        assert_eq!(store.style_count(), 0);
     }
 }

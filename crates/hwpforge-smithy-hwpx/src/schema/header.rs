@@ -7,34 +7,54 @@
 //! Fields are used by serde deserialization even if not directly accessed.
 #![allow(dead_code)]
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 // ── Root ──────────────────────────────────────────────────────────
 
 /// `<hh:head version="1.4" secCnt="1">`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename = "head")]
 pub struct HxHead {
     #[serde(rename = "@version", default)]
     pub version: String,
     #[serde(rename = "@secCnt", default)]
     pub sec_cnt: u32,
-    #[serde(rename = "refList", default)]
+    #[serde(
+        rename(serialize = "hh:refList", deserialize = "refList"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub ref_list: Option<HxRefList>,
 }
 
 // ── RefList ───────────────────────────────────────────────────────
 
 /// `<hh:refList>` — container for all shared definitions.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
 pub struct HxRefList {
-    #[serde(rename = "fontfaces", default)]
+    #[serde(
+        rename(serialize = "hh:fontfaces", deserialize = "fontfaces"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub fontfaces: Option<HxFontFaces>,
-    #[serde(rename = "charProperties", default)]
+    #[serde(
+        rename(serialize = "hh:charProperties", deserialize = "charProperties"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub char_properties: Option<HxCharProperties>,
-    #[serde(rename = "paraProperties", default)]
+    #[serde(
+        rename(serialize = "hh:paraProperties", deserialize = "paraProperties"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub para_properties: Option<HxParaProperties>,
-    #[serde(rename = "styles", default)]
+    #[serde(
+        rename(serialize = "hh:styles", deserialize = "styles"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub styles: Option<HxStyles>,
     // borderFills, tabProperties, numberings — skipped (Phase 3)
 }
@@ -42,27 +62,35 @@ pub struct HxRefList {
 // ── Fonts ─────────────────────────────────────────────────────────
 
 /// `<hh:fontfaces itemCnt="7">`.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
 pub struct HxFontFaces {
     #[serde(rename = "@itemCnt", default)]
     pub item_cnt: u32,
-    #[serde(rename = "fontface", default)]
+    #[serde(
+        rename(serialize = "hh:fontface", deserialize = "fontface"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub groups: Vec<HxFontFaceGroup>,
 }
 
 /// `<hh:fontface lang="HANGUL" fontCnt="2">`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxFontFaceGroup {
     #[serde(rename = "@lang", default)]
     pub lang: String,
     #[serde(rename = "@fontCnt", default)]
     pub font_cnt: u32,
-    #[serde(rename = "font", default)]
+    #[serde(
+        rename(serialize = "hh:font", deserialize = "font"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub fonts: Vec<HxFont>,
 }
 
 /// `<hh:font id="0" face="함초롬돋움" type="TTF" isEmbedded="0">`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxFont {
     #[serde(rename = "@id")]
     pub id: u32,
@@ -77,11 +105,15 @@ pub struct HxFont {
 // ── Character Properties ──────────────────────────────────────────
 
 /// `<hh:charProperties itemCnt="8">`.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
 pub struct HxCharProperties {
     #[serde(rename = "@itemCnt", default)]
     pub item_cnt: u32,
-    #[serde(rename = "charPr", default)]
+    #[serde(
+        rename(serialize = "hh:charPr", deserialize = "charPr"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub items: Vec<HxCharPr>,
 }
 
@@ -91,7 +123,7 @@ pub struct HxCharProperties {
 ///     useKerning, symMark, borderFillIDRef.
 /// Children: fontRef, ratio, spacing, relSz, offset, underline,
 ///     strikeout, outline, shadow, (optional) bold, italic.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxCharPr {
     #[serde(rename = "@id")]
     pub id: u32,
@@ -111,26 +143,54 @@ pub struct HxCharPr {
     pub border_fill_id_ref: u32,
 
     // ── child elements ──
-    #[serde(rename = "fontRef", default)]
+    #[serde(
+        rename(serialize = "hh:fontRef", deserialize = "fontRef"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub font_ref: Option<HxFontRef>,
-    #[serde(rename = "bold", default)]
+    #[serde(
+        rename(serialize = "hh:bold", deserialize = "bold"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub bold: Option<HxPresence>,
-    #[serde(rename = "italic", default)]
+    #[serde(
+        rename(serialize = "hh:italic", deserialize = "italic"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub italic: Option<HxPresence>,
-    #[serde(rename = "underline", default)]
+    #[serde(
+        rename(serialize = "hh:underline", deserialize = "underline"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub underline: Option<HxUnderline>,
-    #[serde(rename = "strikeout", default)]
+    #[serde(
+        rename(serialize = "hh:strikeout", deserialize = "strikeout"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub strikeout: Option<HxStrikeout>,
-    #[serde(rename = "outline", default)]
+    #[serde(
+        rename(serialize = "hh:outline", deserialize = "outline"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub outline: Option<HxOutline>,
-    #[serde(rename = "shadow", default)]
+    #[serde(
+        rename(serialize = "hh:shadow", deserialize = "shadow"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub shadow: Option<HxShadow>,
     // ratio, spacing, relSz, offset — ignored (Phase 3)
 }
 
 /// Per-language font index references.
 /// `<hh:fontRef hangul="1" latin="1" hanja="1" .../>`.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
 pub struct HxFontRef {
     #[serde(rename = "@hangul", default)]
     pub hangul: u32,
@@ -151,11 +211,11 @@ pub struct HxFontRef {
 /// Marker for presence-based boolean elements (`<hh:bold/>`, `<hh:italic/>`).
 ///
 /// The element's mere presence means `true`; absence means `false`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxPresence;
 
 /// `<hh:underline type="NONE" shape="SOLID" color="#000000"/>`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxUnderline {
     #[serde(rename = "@type", default)]
     pub underline_type: String,
@@ -166,7 +226,7 @@ pub struct HxUnderline {
 }
 
 /// `<hh:strikeout shape="NONE" color="#000000"/>`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxStrikeout {
     #[serde(rename = "@shape", default)]
     pub shape: String,
@@ -175,14 +235,14 @@ pub struct HxStrikeout {
 }
 
 /// `<hh:outline type="NONE"/>`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxOutline {
     #[serde(rename = "@type", default)]
     pub outline_type: String,
 }
 
 /// `<hh:shadow type="NONE" color="#B2B2B2" offsetX="10" offsetY="10"/>`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxShadow {
     #[serde(rename = "@type", default)]
     pub shadow_type: String,
@@ -197,16 +257,20 @@ pub struct HxShadow {
 // ── Paragraph Properties ──────────────────────────────────────────
 
 /// `<hh:paraProperties itemCnt="16">`.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
 pub struct HxParaProperties {
     #[serde(rename = "@itemCnt", default)]
     pub item_cnt: u32,
-    #[serde(rename = "paraPr", default)]
+    #[serde(
+        rename(serialize = "hh:paraPr", deserialize = "paraPr"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub items: Vec<HxParaPr>,
 }
 
 /// `<hh:paraPr id="0" tabPrIDRef="0" condense="0" ...>`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxParaPr {
     #[serde(rename = "@id")]
     pub id: u32,
@@ -216,19 +280,31 @@ pub struct HxParaPr {
     pub condense: u32,
 
     // ── child elements ──
-    #[serde(rename = "align", default)]
+    #[serde(
+        rename(serialize = "hh:align", deserialize = "align"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub align: Option<HxAlign>,
-    #[serde(rename = "heading", default)]
+    #[serde(
+        rename(serialize = "hh:heading", deserialize = "heading"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub heading: Option<HxHeading>,
     /// The `<hp:switch>` element wrapping `<hp:default>` with margin
     /// and lineSpacing values.
-    #[serde(rename = "switch", default)]
+    #[serde(
+        rename(serialize = "hp:switch", deserialize = "switch"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub switch: Option<HxSwitch>,
     // breakSetting, autoSpacing, border — ignored (Phase 3 uses defaults)
 }
 
 /// `<hh:align horizontal="LEFT" vertical="BASELINE"/>`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxAlign {
     #[serde(rename = "@horizontal", default)]
     pub horizontal: String,
@@ -237,7 +313,7 @@ pub struct HxAlign {
 }
 
 /// `<hh:heading type="NONE" idRef="0" level="0"/>`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxHeading {
     #[serde(rename = "@type", default)]
     pub heading_type: String,
@@ -253,52 +329,99 @@ pub struct HxHeading {
 ///
 /// Phase 3 reads only the `<hp:default>` block for maximum
 /// compatibility across 한글 versions.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxSwitch {
-    #[serde(rename = "case", default)]
+    #[serde(
+        rename(serialize = "hp:case", deserialize = "case"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub case: Option<HxSwitchCase>,
-    #[serde(rename = "default", default)]
+    #[serde(
+        rename(serialize = "hp:default", deserialize = "default"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub default: Option<HxSwitchDefault>,
 }
 
 /// `<hp:case hp:required-namespace="...">`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxSwitchCase {
-    #[serde(rename = "@required-namespace", default)]
+    #[serde(
+        rename(serialize = "@hp:required-namespace", deserialize = "@required-namespace"),
+        default
+    )]
     pub required_namespace: String,
-    #[serde(rename = "margin", default)]
+    #[serde(
+        rename(serialize = "hh:margin", deserialize = "margin"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub margin: Option<HxMargin>,
-    #[serde(rename = "lineSpacing", default)]
+    #[serde(
+        rename(serialize = "hh:lineSpacing", deserialize = "lineSpacing"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub line_spacing: Option<HxLineSpacing>,
 }
 
 /// `<hp:default>` — fallback values for older viewers.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxSwitchDefault {
-    #[serde(rename = "margin", default)]
+    #[serde(
+        rename(serialize = "hh:margin", deserialize = "margin"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub margin: Option<HxMargin>,
-    #[serde(rename = "lineSpacing", default)]
+    #[serde(
+        rename(serialize = "hh:lineSpacing", deserialize = "lineSpacing"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub line_spacing: Option<HxLineSpacing>,
 }
 
 /// `<hh:margin>` containing `<hc:intent>`, `<hc:left>`, etc.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
 pub struct HxMargin {
     /// NB: HWPX uses `<hc:intent>` (typo in the spec; should be "indent").
-    #[serde(rename = "intent", default)]
+    #[serde(
+        rename(serialize = "hc:intent", deserialize = "intent"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub indent: Option<HxUnitValue>,
-    #[serde(rename = "left", default)]
+    #[serde(
+        rename(serialize = "hc:left", deserialize = "left"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub left: Option<HxUnitValue>,
-    #[serde(rename = "right", default)]
+    #[serde(
+        rename(serialize = "hc:right", deserialize = "right"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub right: Option<HxUnitValue>,
-    #[serde(rename = "prev", default)]
+    #[serde(
+        rename(serialize = "hc:prev", deserialize = "prev"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub prev: Option<HxUnitValue>,
-    #[serde(rename = "next", default)]
+    #[serde(
+        rename(serialize = "hc:next", deserialize = "next"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub next: Option<HxUnitValue>,
 }
 
 /// `<hc:left value="0" unit="HWPUNIT"/>` — generic value+unit pair.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxUnitValue {
     #[serde(rename = "@value", default)]
     pub value: i32,
@@ -307,7 +430,7 @@ pub struct HxUnitValue {
 }
 
 /// `<hh:lineSpacing type="PERCENT" value="130" unit="HWPUNIT"/>`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxLineSpacing {
     #[serde(rename = "@type", default)]
     pub spacing_type: String,
@@ -320,16 +443,20 @@ pub struct HxLineSpacing {
 // ── Styles ────────────────────────────────────────────────────────
 
 /// `<hh:styles itemCnt="18">`.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
 pub struct HxStyles {
     #[serde(rename = "@itemCnt", default)]
     pub item_cnt: u32,
-    #[serde(rename = "style", default)]
+    #[serde(
+        rename(serialize = "hh:style", deserialize = "style"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub items: Vec<HxStyle>,
 }
 
 /// `<hh:style id="0" type="PARA" name="바탕글" engName="Normal" ...>`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxStyle {
     #[serde(rename = "@id")]
     pub id: u32,
