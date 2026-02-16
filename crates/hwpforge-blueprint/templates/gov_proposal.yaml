@@ -1,0 +1,88 @@
+# HwpForge Government Proposal Template
+#
+# Korean government proposal (정부 제안서) style template.
+# Extends the default template with formal formatting:
+# - 한컴바탕 font throughout
+# - Wider margins for binding
+# - Larger headings with numbering space
+# - Justified body text
+
+meta:
+  name: gov_proposal
+  version: 1.0.0
+  description: Korean government proposal template (정부 제안서)
+  extends: default
+
+page:
+  width: 210mm
+  height: 297mm
+  margin_top: 25mm
+  margin_bottom: 25mm
+  margin_left: 30mm
+  margin_right: 25mm
+  header_margin: 15mm
+  footer_margin: 15mm
+
+styles:
+  body:
+    char_shape:
+      size: 11pt
+    para_shape:
+      alignment: Justify
+      line_spacing:
+        value: '170%'
+      spacing:
+        after: 3pt
+
+  heading1:
+    char_shape:
+      size: 18pt
+    para_shape:
+      spacing:
+        before: 18pt
+        after: 10pt
+
+  heading2:
+    char_shape:
+      size: 15pt
+    para_shape:
+      spacing:
+        before: 14pt
+        after: 6pt
+
+  heading3:
+    char_shape:
+      size: 13pt
+    para_shape:
+      spacing:
+        before: 10pt
+        after: 4pt
+
+  title:
+    char_shape:
+      font: 한컴바탕
+      size: 22pt
+      bold: true
+      color: '#000000'
+    para_shape:
+      alignment: Center
+      line_spacing:
+        spacing_type: Percentage
+        value: '160%'
+      spacing:
+        before: 24pt
+        after: 18pt
+
+  subtitle:
+    char_shape:
+      font: 한컴바탕
+      size: 14pt
+      color: '#333333'
+    para_shape:
+      alignment: Center
+      line_spacing:
+        spacing_type: Percentage
+        value: '160%'
+      spacing:
+        before: 6pt
+        after: 12pt
