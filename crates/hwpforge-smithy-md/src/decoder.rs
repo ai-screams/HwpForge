@@ -2,6 +2,7 @@
 
 use std::path::Path;
 
+use hwpforge_blueprint::builtins::builtin_default;
 use hwpforge_blueprint::registry::StyleRegistry;
 use hwpforge_blueprint::template::Template;
 use hwpforge_core::{
@@ -111,10 +112,26 @@ impl MdDecoder {
         Ok(document)
     }
 
+    /// Decodes markdown using the built-in default template.
+    ///
+    /// This is a convenience wrapper around [`Self::decode`] that uses
+    /// [`builtin_default()`](hwpforge_blueprint::builtins::builtin_default)
+    /// so callers don't need to construct a template manually.
+    pub fn decode_with_default(markdown: &str) -> MdResult<MdDocument> {
+        let template = builtin_default()?;
+        Self::decode(markdown, &template)
+    }
+
     /// Reads a markdown file and decodes it into a Core draft document with styles.
     pub fn decode_file(path: impl AsRef<Path>, template: &Template) -> MdResult<MdDocument> {
         let markdown = std::fs::read_to_string(path)?;
         Self::decode(&markdown, template)
+    }
+
+    /// Reads a markdown file and decodes it using the built-in default template.
+    pub fn decode_file_with_default(path: impl AsRef<Path>) -> MdResult<MdDocument> {
+        let template = builtin_default()?;
+        Self::decode_file(path, &template)
     }
 
     /// Reads a lossless markdown file and decodes it into a Core draft document.
@@ -1131,5 +1148,22 @@ mod tests {
         assert_eq!(restored.width.as_i32(), 59_529);
         assert_eq!(restored.height.as_i32(), 84_190);
         assert_eq!(restored.margin_left.as_i32(), 5_671);
+    }
+
+    #[test]
+    fn decode_with_default_uses_builtin_template() {
+        let result = MdDecoder::decode_with_default("# 제목\n\n본문입니다.").unwrap();
+        assert!(!result.document.sections().is_empty());
+        assert!(result.style_registry.font_count() > 0);
+    }
+
+    #[test]
+    fn decode_file_with_default_reads_and_decodes() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("tests")
+            .join("fixtures")
+            .join("simple_body.md");
+        let result = MdDecoder::decode_file_with_default(path).unwrap();
+        assert_eq!(result.document.metadata().title.as_deref(), Some("Simple Body Test"));
     }
 }
