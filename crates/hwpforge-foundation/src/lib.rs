@@ -1,14 +1,36 @@
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
-}
+//! HwpForge Foundation: primitive types for the HwpForge ecosystem.
+//!
+//! This crate sits at the bottom of the dependency graph. It provides
+//! raw-material value types used by every other HwpForge crate:
+//!
+//! - [`HwpUnit`] -- the universal measurement unit (1/100 pt)
+//! - [`Color`] -- BGR color matching the HWP specification
+//! - [`FontId`], [`TemplateName`], [`StyleName`] -- string-based identifiers
+//! - [`Index<T>`] -- branded numeric indices with phantom-type safety
+//! - [`Alignment`], [`LineSpacingType`], [`BreakType`], [`Language`] -- core enums
+//! - [`FoundationError`], [`ErrorCode`] -- structured error handling
+//!
+//! # Design Principles
+//!
+//! - **Zero-cost newtypes**: `repr(transparent)` on value wrappers
+//! - **Type safety**: phantom-branded indices prevent mixing
+//! - **Compile-time guarantees**: `const` size assertions
+//! - **No unsafe code**: `#![deny(unsafe_code)]`
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#![deny(missing_docs)]
+#![deny(unsafe_code)]
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub mod color;
+pub mod enums;
+pub mod error;
+pub mod ids;
+pub mod index;
+mod macros;
+pub mod units;
+
+pub use color::Color;
+pub use enums::{Alignment, BreakType, Language, LineSpacingType};
+pub use error::{ErrorCode, ErrorCodeExt, FoundationError, FoundationResult};
+pub use ids::{FontId, StyleName, TemplateName};
+pub use index::{BorderFillIndex, CharShapeIndex, FontIndex, Index, ParaShapeIndex, StyleIndex};
+pub use units::{HwpUnit, Insets, Point, Rect, Size};
