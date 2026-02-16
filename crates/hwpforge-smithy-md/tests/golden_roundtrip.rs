@@ -6,10 +6,7 @@ use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder, HwpxStyleStore};
 use hwpforge_smithy_md::{MdDecoder, MdEncoder};
 
 fn fixture_path(name: &str) -> std::path::PathBuf {
-    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-        .join(name)
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join(name)
 }
 
 /// Helper: MD file → Core → HWPX bytes → decode back.
@@ -19,10 +16,7 @@ fn fixture_path(name: &str) -> std::path::PathBuf {
 /// decode the fixture file once.
 fn roundtrip_fixture(
     name: &str,
-) -> (
-    hwpforge_smithy_md::MdDocument,
-    hwpforge_smithy_hwpx::HwpxDocument,
-) {
+) -> (hwpforge_smithy_md::MdDocument, hwpforge_smithy_hwpx::HwpxDocument) {
     let template = builtin_default().unwrap();
     let md_result = MdDecoder::decode_file(fixture_path(name), &template).unwrap();
     let validated = md_result.document.clone().validate().unwrap();
@@ -37,26 +31,16 @@ fn golden_simple_body_roundtrip() {
     let (md_result, hwpx_result) = roundtrip_fixture("simple_body.md");
 
     // Assert: MD decode metadata has title "Simple Body Test"
-    assert_eq!(
-        md_result.document.metadata().title.as_deref(),
-        Some("Simple Body Test")
-    );
+    assert_eq!(md_result.document.metadata().title.as_deref(), Some("Simple Body Test"));
 
     // Assert: HWPX decode has 1 section
     assert_eq!(hwpx_result.document.sections().len(), 1);
 
     // Assert: paragraphs contain "제목" and "본문 텍스트"
     let section = &hwpx_result.document.sections()[0];
-    let all_text: Vec<String> = section
-        .paragraphs
-        .iter()
-        .map(Paragraph::text_content)
-        .collect();
+    let all_text: Vec<String> = section.paragraphs.iter().map(Paragraph::text_content).collect();
 
-    assert!(
-        all_text.iter().any(|t| t.contains("제목")),
-        "Expected to find '제목' in paragraphs"
-    );
+    assert!(all_text.iter().any(|t| t.contains("제목")), "Expected to find '제목' in paragraphs");
     assert!(
         all_text.iter().any(|t| t.contains("본문 텍스트")),
         "Expected to find '본문 텍스트' in paragraphs"
@@ -68,18 +52,9 @@ fn golden_full_elements_roundtrip() {
     let (md_result, hwpx_result) = roundtrip_fixture("full_elements.md");
 
     // Assert: MD decode metadata has title "Full Elements Test", author "HwpForge", date "2026-02-16"
-    assert_eq!(
-        md_result.document.metadata().title.as_deref(),
-        Some("Full Elements Test")
-    );
-    assert_eq!(
-        md_result.document.metadata().author.as_deref(),
-        Some("HwpForge")
-    );
-    assert_eq!(
-        md_result.document.metadata().created.as_deref(),
-        Some("2026-02-16")
-    );
+    assert_eq!(md_result.document.metadata().title.as_deref(), Some("Full Elements Test"));
+    assert_eq!(md_result.document.metadata().author.as_deref(), Some("HwpForge"));
+    assert_eq!(md_result.document.metadata().created.as_deref(), Some("2026-02-16"));
 
     // Assert: HWPX decode has 1 section
     assert_eq!(hwpx_result.document.sections().len(), 1);
@@ -94,35 +69,26 @@ fn golden_full_elements_roundtrip() {
     );
 
     // Assert: at least one paragraph contains a Table run
-    let has_table = section
-        .paragraphs
-        .iter()
-        .flat_map(|p| &p.runs)
-        .any(|run| run.content.as_table().is_some());
+    let has_table =
+        section.paragraphs.iter().flat_map(|p| &p.runs).any(|run| run.content.as_table().is_some());
     assert!(has_table, "Expected to find at least one Table run");
 
     // Assert: MD decode captures a Hyperlink control.
     // Note: HWPX encoder does not preserve Control::Hyperlink (Phase 4 limitation),
     // so we only verify the MD decode result here, not the HWPX roundtrip.
-    let md_has_hyperlink = md_result
-        .document
-        .sections()
-        .iter()
-        .flat_map(|s| &s.paragraphs)
-        .flat_map(|p| &p.runs)
-        .any(|run| {
-            matches!(
-                run.content,
-                RunContent::Control(ref ctrl) if matches!(
-                    ctrl.as_ref(),
-                    Control::Hyperlink { .. }
+    let md_has_hyperlink =
+        md_result.document.sections().iter().flat_map(|s| &s.paragraphs).flat_map(|p| &p.runs).any(
+            |run| {
+                matches!(
+                    run.content,
+                    RunContent::Control(ref ctrl) if matches!(
+                        ctrl.as_ref(),
+                        Control::Hyperlink { .. }
+                    )
                 )
-            )
-        });
-    assert!(
-        md_has_hyperlink,
-        "Expected MD decode to find at least one Hyperlink control"
-    );
+            },
+        );
+    assert!(md_has_hyperlink, "Expected MD decode to find at least one Hyperlink control");
 }
 
 #[test]
@@ -137,11 +103,7 @@ fn golden_multi_section_roundtrip() {
 
     // Assert: each section has at least 1 paragraph
     for (i, section) in hwpx_result.document.sections().iter().enumerate() {
-        assert!(
-            !section.paragraphs.is_empty(),
-            "Section {} should have at least 1 paragraph",
-            i
-        );
+        assert!(!section.paragraphs.is_empty(), "Section {} should have at least 1 paragraph", i);
     }
 
     // Assert: section texts contain "섹션 1", "섹션 2", "섹션 3"
@@ -150,12 +112,7 @@ fn golden_multi_section_roundtrip() {
         .sections()
         .iter()
         .map(|section| {
-            section
-                .paragraphs
-                .iter()
-                .map(Paragraph::text_content)
-                .collect::<Vec<_>>()
-                .join(" ")
+            section.paragraphs.iter().map(Paragraph::text_content).collect::<Vec<_>>().join(" ")
         })
         .collect();
 
@@ -191,10 +148,7 @@ fn golden_lossy_encode_then_decode_stability() {
     let re_decoded = MdDecoder::decode(&lossy_md, &template).unwrap();
 
     // Assert: re-decoded document has same section count
-    assert_eq!(
-        re_decoded.document.sections().len(),
-        validated.sections().len()
-    );
+    assert_eq!(re_decoded.document.sections().len(), validated.sections().len());
 
     // Assert: similar paragraph count (lossy may normalize slightly)
     let original_para_count: usize = validated.sections().iter().map(|s| s.paragraphs.len()).sum();
@@ -224,10 +178,7 @@ fn golden_lossless_roundtrip() {
     let lossless_decoded = MdDecoder::decode_lossless(&lossless_md).unwrap();
 
     // Assert: same section count
-    assert_eq!(
-        lossless_decoded.sections().len(),
-        validated.sections().len()
-    );
+    assert_eq!(lossless_decoded.sections().len(), validated.sections().len());
 
     // Assert: same paragraph count
     let original_para_count: usize = validated.sections().iter().map(|s| s.paragraphs.len()).sum();

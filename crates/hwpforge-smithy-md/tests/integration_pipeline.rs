@@ -17,23 +17,20 @@ use pretty_assertions::assert_eq;
 /// Helper function to run the full pipeline and return decoded HWPX document (still Draft).
 fn run_full_pipeline(markdown: &str, template: &Template) -> (Vec<u8>, Document<Draft>) {
     // 1. Decode markdown
-    let md_doc = MdDecoder::decode(markdown, template)
-        .expect("MD decode should succeed");
+    let md_doc = MdDecoder::decode(markdown, template).expect("MD decode should succeed");
 
     // 2. Validate Core document
-    let validated = md_doc.document.validate()
-        .expect("Validation should succeed");
+    let validated = md_doc.document.validate().expect("Validation should succeed");
 
     // 3. Convert StyleRegistry to HwpxStyleStore
     let style_store = HwpxStyleStore::from_registry(&md_doc.style_registry);
 
     // 4. Encode to HWPX
-    let hwpx_bytes = HwpxEncoder::encode(&validated, &style_store)
-        .expect("HWPX encode should succeed");
+    let hwpx_bytes =
+        HwpxEncoder::encode(&validated, &style_store).expect("HWPX encode should succeed");
 
     // 5. Decode HWPX back (returns Document<Draft>)
-    let hwpx_doc = HwpxDecoder::decode(&hwpx_bytes)
-        .expect("HWPX decode should succeed");
+    let hwpx_doc = HwpxDecoder::decode(&hwpx_bytes).expect("HWPX decode should succeed");
 
     (hwpx_bytes, hwpx_doc.document)
 }
@@ -52,9 +49,7 @@ fn pipeline_simple_body_text() {
     let section = &decoded.sections()[0];
     assert!(!section.paragraphs.is_empty(), "Section should have paragraphs");
 
-    let all_text: Vec<String> = section.paragraphs.iter()
-        .map(|p| p.text_content())
-        .collect();
+    let all_text: Vec<String> = section.paragraphs.iter().map(|p| p.text_content()).collect();
     let combined = all_text.join(" ");
 
     assert!(combined.contains("제목"), "Should contain heading text");
@@ -77,16 +72,10 @@ fn pipeline_headings_h1_through_h6() {
 
     // Assert: HWPX decoded doc has correct number of paragraphs (7: 6 headings + body)
     let section = &decoded.sections()[0];
-    assert_eq!(
-        section.paragraphs.len(),
-        7,
-        "Should have 7 paragraphs (6 headings + 1 body)"
-    );
+    assert_eq!(section.paragraphs.len(), 7, "Should have 7 paragraphs (6 headings + 1 body)");
 
     // Verify heading texts are present
-    let texts: Vec<String> = section.paragraphs.iter()
-        .map(|p| p.text_content())
-        .collect();
+    let texts: Vec<String> = section.paragraphs.iter().map(|p| p.text_content()).collect();
 
     assert!(texts[0].contains("H1 제목"));
     assert!(texts[1].contains("H2 제목"));
@@ -109,11 +98,15 @@ fn pipeline_table_roundtrip() {
     assert!(!section.paragraphs.is_empty(), "Should have paragraphs");
 
     // Find the paragraph with a table
-    let table_para = section.paragraphs.iter()
+    let table_para = section
+        .paragraphs
+        .iter()
         .find(|p| p.runs.iter().any(|r| matches!(r.content, RunContent::Table(_))))
         .expect("Should have a paragraph with table");
 
-    let table_run = table_para.runs.iter()
+    let table_run = table_para
+        .runs
+        .iter()
         .find(|r| matches!(r.content, RunContent::Table(_)))
         .expect("Should have a table run");
 
@@ -170,8 +163,7 @@ fn pipeline_frontmatter_preserved() {
     let template = builtin_default().expect("builtin_default should succeed");
 
     // Decode MD and check metadata
-    let md_doc = MdDecoder::decode(markdown, &template)
-        .expect("MD decode should succeed");
+    let md_doc = MdDecoder::decode(markdown, &template).expect("MD decode should succeed");
 
     // Assert: metadata is preserved in MD decode result
     let metadata = md_doc.document.metadata();
@@ -181,16 +173,14 @@ fn pipeline_frontmatter_preserved() {
     // For now, just verify title and author work
 
     // Continue with full pipeline
-    let validated = md_doc.document.validate()
-        .expect("Validation should succeed");
+    let validated = md_doc.document.validate().expect("Validation should succeed");
 
     let style_store = HwpxStyleStore::from_registry(&md_doc.style_registry);
 
-    let hwpx_bytes = HwpxEncoder::encode(&validated, &style_store)
-        .expect("HWPX encode should succeed");
+    let hwpx_bytes =
+        HwpxEncoder::encode(&validated, &style_store).expect("HWPX encode should succeed");
 
-    let hwpx_doc = HwpxDecoder::decode(&hwpx_bytes)
-        .expect("HWPX decode should succeed");
+    let hwpx_doc = HwpxDecoder::decode(&hwpx_bytes).expect("HWPX decode should succeed");
 
     // HWPX should have the body text
     let section = &hwpx_doc.document.sections()[0];
@@ -231,9 +221,7 @@ fn pipeline_ordered_and_unordered_lists() {
 
     // Assert: decoded paragraphs contain list text
     let section = &decoded.sections()[0];
-    let all_text: Vec<String> = section.paragraphs.iter()
-        .map(|p| p.text_content())
-        .collect();
+    let all_text: Vec<String> = section.paragraphs.iter().map(|p| p.text_content()).collect();
 
     let combined = all_text.join(" ");
     assert!(combined.contains("item1"));
@@ -248,18 +236,13 @@ fn pipeline_style_store_counts_match_registry() {
     let template = builtin_default().expect("builtin_default should succeed");
 
     // Decode simple MD → get style_registry
-    let md_doc = MdDecoder::decode(markdown, &template)
-        .expect("MD decode should succeed");
+    let md_doc = MdDecoder::decode(markdown, &template).expect("MD decode should succeed");
 
     // Create HwpxStyleStore::from_registry(&registry)
     let store = HwpxStyleStore::from_registry(&md_doc.style_registry);
 
     // Assert: store counts match registry counts
-    assert_eq!(
-        store.font_count(),
-        md_doc.style_registry.font_count(),
-        "Font counts should match"
-    );
+    assert_eq!(store.font_count(), md_doc.style_registry.font_count(), "Font counts should match");
 
     assert_eq!(
         store.char_shape_count(),
@@ -283,8 +266,5 @@ fn pipeline_empty_markdown_produces_valid_hwpx() {
 
     // Assert: produces valid HWPX with at least 1 section and 1 paragraph
     assert!(!decoded.sections().is_empty(), "Should have at least 1 section");
-    assert!(
-        !decoded.sections()[0].paragraphs.is_empty(),
-        "Should have at least 1 paragraph"
-    );
+    assert!(!decoded.sections()[0].paragraphs.is_empty(), "Should have at least 1 paragraph");
 }
