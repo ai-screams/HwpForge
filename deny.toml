@@ -18,7 +18,10 @@ ignore = []
 multiple-versions = "warn"
 wildcards = "allow"
 highlight = "all"
-skip = []
+skip = [
+    { crate = "hashbrown@0.12.3", reason = "schemars 0.8.22 -> indexmap 1.9.3 requires old version" },
+    { crate = "indexmap@1.9.3", reason = "schemars 0.8.22 requires this version" },
+]
 skip-tree = []
 
 [licenses]
