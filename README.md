@@ -10,84 +10,90 @@
 
 ## 🚧 Status: Under Development (v0.1.0)
 
-프로젝트 세팅이 완료되었습니다. v1.0 구현 진행 중.
+**Phase 0-4 완료** (Foundation → Core → Blueprint → HWPX Codec)
 
-**v1.0 목표** (5개월):
-- HWPX T1~T3 Full (텍스트, 표, 이미지) — 읽기/쓰기
-- HWP5 T1~T2 Basic (텍스트, 표) — 읽기 전용
-- Style Template System (YAML)
-- Markdown ↔ HWPX 양방향 변환
-- MCP Server (Claude Code 통합)
+- ✅ Foundation: HwpUnit, Color (BGR), Index<T>, ErrorCode
+- ✅ Core: Document<Draft/Validated>, Paragraph, Run, Table
+- ✅ Blueprint: YAML Template System, StyleRegistry
+- ✅ Smithy-HWPX: Full Encoder/Decoder with roundtrip (5 golden tests)
+
+**Stats**: ~18,600 LOC, 767 tests, 0 clippy warnings
+
+**Next**: Phase 5 (smithy-md), Phase 6 (bindings), Phase 7 (MCP), Phase 8 (v1.0 release)
 
 ---
 
 ## Architecture
 
-\`\`\`
-Layer 3: LLM Interface (MCP Server, Python API, CLI)
-Layer 2: Markdown Bridge (MD ↔ DOM)
-Layer 1: Style Template System (YAML)
-Layer 0: Core Engine (HWPX R/W, HWP5 Reader, IR)
-\`\`\`
+```
+Foundation (🔩 primitives)
+  → Core (🔨 pure structure, style refs only)
+  → Blueprint (📐 YAML templates, centralized)
+  → Smithy (🔥 format compilers: HWPX, HWP5, MD)
+  → Bindings (🐍⚒️ Python/CLI interfaces)
+```
+
+**Key Principle**: Structure and Style are separate (like HTML + CSS).
 
 ---
 
-## Development
+## Quick Start
 
 ### Prerequisites
 
-- Rust 1.75+
-- Python 3.8+ (for Python bindings)
-- pre-commit (optional, recommended)
+- Rust 1.93+
+- (Optional) Python 3.8+ for bindings
+- (Optional) pre-commit for hooks
 
-### Setup
+### Build & Test
 
-\`\`\`bash
-# Install development tools
-make install-tools
-
+```bash
 # Build
 cargo build
 
 # Test
-make test
+cargo test --all-features
 
 # Lint
-make clippy
+cargo clippy --all-targets --all-features -- -D warnings
 
 # Format
-make fmt
+cargo fmt --all -- --check
 
-# Watch mode (bacon)
+# Watch mode
 bacon
-\`\`\`
+```
 
 ### Project Structure
 
-\`\`\`
+```
 HwpForge/
 ├── crates/
-│   ├── hwpforge-foundation/       # 🔩 Primitives (HwpUnit, Color, ID)
-│   ├── hwpforge-core/             # 🔨 Pure document structure (style refs only)
-│   ├── hwpforge-blueprint/        # 📐 Style templates (YAML, like Figma tokens)
-│   ├── hwpforge-smithy-hwpx/      # 🔥 HWPX smithy (encoder/decoder)
-│   ├── hwpforge-smithy-hwp5/      # 🔥 HWP5 smithy (decoder)
-│   ├── hwpforge-smithy-md/        # 🔥 Markdown smithy (encoder/decoder)
+│   ├── hwpforge-foundation/       # 🔩 Primitives (HwpUnit, Color, Index<T>)
+│   ├── hwpforge-core/             # 🔨 Document structure (style refs only)
+│   ├── hwpforge-blueprint/        # 📐 YAML templates (Figma-like)
+│   ├── hwpforge-smithy-hwpx/      # 🔥 HWPX codec (ZIP+XML ↔ Core)
+│   ├── hwpforge-smithy-hwp5/      # 🔥 HWP5 decoder (binary ↔ Core)
+│   ├── hwpforge-smithy-md/        # 🔥 Markdown codec (MD ↔ Core)
 │   ├── hwpforge-bindings-py/      # 🐍 PyO3 Python bindings
 │   └── hwpforge-bindings-cli/     # ⚒️  CLI tool
-├── python/hwpforge/               # Python package + MCP Server
-├── templates/                     # Built-in blueprints (style templates)
-└── tests/fixtures/                # Test files
-\`\`\`
+└── .docs/                         # Internal docs (git-excluded)
+```
 
-**Forge Philosophy**:
-- **Foundation** = Raw materials (primitives)
-- **Core** = Anvil (pure structure, no style)
-- **Blueprint** = Design patterns (style definitions, reusable)
-- **Smithy** = Workshops (format-specific forges)
-- **Bindings** = Tools (interfaces for users)
+---
 
-Like HTML+CSS or React+Theme, enabling style reuse across documents.
+## Development Philosophy
+
+**Forge Metaphor**:
+- Foundation = Raw materials
+- Core = Anvil (pure structure)
+- Blueprint = Design patterns (reusable styles)
+- Smithy = Format-specific workshops
+- Bindings = User tools
+
+**TDD**: Edge cases first, normal cases last.
+
+**Quality**: 90%+ coverage per crate, 0 warnings, 100% rustdoc.
 
 ---
 
