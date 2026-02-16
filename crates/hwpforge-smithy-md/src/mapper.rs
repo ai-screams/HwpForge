@@ -116,7 +116,10 @@ pub enum ParagraphKind {
 }
 
 /// Resolves template inheritance and compiles markdown mapping style indices.
-pub fn resolve_mapping(template: &Template) -> MdResult<MdMapping> {
+///
+/// Returns the mapping **and** the [`StyleRegistry`] so callers can pass it
+/// downstream (e.g. to the HWPX encoder) without re-resolving the template.
+pub fn resolve_mapping(template: &Template) -> MdResult<(MdMapping, StyleRegistry)> {
     let resolved = resolve_template_with_builtins(template)?;
     let registry = StyleRegistry::from_template(&resolved)?;
     let fallback = fallback_style(&registry)?;
@@ -148,19 +151,22 @@ pub fn resolve_mapping(template: &Template) -> MdResult<MdMapping> {
         .map(hwpforge_blueprint::template::PageStyle::to_page_settings)
         .unwrap_or_default();
 
-    Ok(MdMapping {
-        body,
-        heading1,
-        heading2,
-        heading3,
-        heading4,
-        heading5,
-        heading6,
-        code,
-        blockquote,
-        list_item,
-        page_settings,
-    })
+    Ok((
+        MdMapping {
+            body,
+            heading1,
+            heading2,
+            heading3,
+            heading4,
+            heading5,
+            heading6,
+            code,
+            blockquote,
+            list_item,
+            page_settings,
+        },
+        registry,
+    ))
 }
 
 fn resolve_template_with_builtins(template: &Template) -> MdResult<Template> {
@@ -247,17 +253,19 @@ mod tests {
     #[test]
     fn resolve_default_template_mapping() {
         let template = builtin_default().unwrap();
-        let mapping = resolve_mapping(&template).unwrap();
+        let (mapping, registry) = resolve_mapping(&template).unwrap();
 
-        assert_eq!(mapping.body.char_shape_id.get(), 1);
-        assert_eq!(mapping.heading1.char_shape_id.get(), 3);
-        assert_eq!(mapping.heading2.char_shape_id.get(), 4);
+        // IndexMap preserves YAML declaration order: body=0, heading1=1, heading2=2, ...
+        assert_eq!(mapping.body.char_shape_id.get(), 0);
+        assert_eq!(mapping.heading1.char_shape_id.get(), 1);
+        assert_eq!(mapping.heading2.char_shape_id.get(), 2);
+        assert!(registry.font_count() > 0);
     }
 
     #[test]
     fn resolve_gov_template_via_builtin_inheritance() {
         let template = builtin_gov_proposal().unwrap();
-        let mapping = resolve_mapping(&template).unwrap();
+        let (mapping, _registry) = resolve_mapping(&template).unwrap();
         assert!(mapping.heading1.char_shape_id.get() > 0);
         assert!(mapping.page_settings.margin_left.to_mm() >= 29.9);
     }
@@ -279,7 +287,7 @@ mod tests {
     #[test]
     fn classify_heading_shape() {
         let template = builtin_default().unwrap();
-        let mapping = resolve_mapping(&template).unwrap();
+        let (mapping, _registry) = resolve_mapping(&template).unwrap();
         assert_eq!(
             mapping.classify_para_shape(mapping.heading2.para_shape_id),
             ParagraphKind::Heading(2)

@@ -13,7 +13,7 @@ pub(crate) fn encode_with_template(
     document: &Document<Validated>,
     template: &Template,
 ) -> MdResult<String> {
-    let mapping = resolve_mapping(template)?;
+    let (mapping, _registry) = resolve_mapping(template)?;
     let body = encode_body(document, Some(&mapping));
 
     let frontmatter = from_metadata(document.metadata(), Some(template.meta.name.as_str()));
@@ -107,7 +107,7 @@ fn paragraph_text_markdown(paragraph: &Paragraph) -> String {
                         .map(Paragraph::text_content)
                         .collect::<Vec<_>>()
                         .join(" ");
-                    output.push_str(&format!("[^{}]", footnote.trim()));
+                    output.push_str(&format!("(footnote: {})", footnote.trim()));
                 }
                 Control::TextBox { paragraphs, .. } => {
                     let body = paragraphs
@@ -150,7 +150,7 @@ fn table_to_markdown(table: &Table) -> String {
                     let text = cell
                         .paragraphs
                         .iter()
-                        .map(Paragraph::text_content)
+                        .map(paragraph_text_markdown)
                         .collect::<Vec<_>>()
                         .join(" ");
                     escape_gfm_cell(&text)
@@ -276,6 +276,24 @@ mod tests {
     }
 
     #[test]
+    fn encode_footnote_control_as_plain_text_marker() {
+        let footnote_body = Paragraph::with_runs(
+            vec![Run::text("note body", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        let paragraph = Paragraph::with_runs(
+            vec![Run::control(
+                Control::Footnote { paragraphs: vec![footnote_body] },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        );
+
+        let md = paragraph_text_markdown(&paragraph);
+        assert_eq!(md, "(footnote: note body)");
+    }
+
+    #[test]
     fn encode_table_to_gfm() {
         let paragraph = Paragraph::with_runs(
             vec![Run::table(
@@ -351,6 +369,37 @@ mod tests {
 
         let md = encode_paragraph(&paragraph, None);
         assert!(md.contains("A\\|B"));
+    }
+
+    #[test]
+    fn encode_table_cell_preserves_link_markdown() {
+        let cell_paragraph = Paragraph::with_runs(
+            vec![Run::control(
+                Control::Hyperlink {
+                    text: "Rust".to_string(),
+                    url: "https://www.rust-lang.org".to_string(),
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        );
+
+        let paragraph = Paragraph::with_runs(
+            vec![Run::table(
+                Table::new(vec![TableRow {
+                    cells: vec![TableCell::new(
+                        vec![cell_paragraph],
+                        hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+                    )],
+                    height: None,
+                }]),
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        );
+
+        let md = encode_paragraph(&paragraph, None);
+        assert!(md.contains("[Rust](https://www.rust-lang.org)"));
     }
 
     #[test]

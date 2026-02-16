@@ -9,7 +9,7 @@
 //! Templates support inheritance via the `extends` field, allowing
 //! templates to build upon each other like CSS cascading.
 
-use std::collections::BTreeMap;
+use indexmap::IndexMap;
 
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::HwpUnit;
@@ -265,7 +265,7 @@ pub struct Template {
 
     /// Style definitions (name → PartialStyle).
     #[serde(default)]
-    pub styles: BTreeMap<String, PartialStyle>,
+    pub styles: IndexMap<String, PartialStyle>,
 
     /// Markdown element mappings (optional).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -552,7 +552,7 @@ styles:
     }
 
     #[test]
-    fn template_sorts_style_keys_alphabetically() {
+    fn template_preserves_yaml_style_declaration_order() {
         let yaml = r#"
 meta:
   name: ordered
@@ -573,13 +573,13 @@ styles:
 "#;
         let tmpl = Template::from_yaml(yaml).unwrap();
         let keys: Vec<&String> = tmpl.styles.keys().collect();
-        // BTreeMap sorts keys alphabetically
-        assert_eq!(keys, vec!["a_style", "m_style", "z_style"]);
+        // IndexMap preserves YAML declaration order (z, a, m — not alphabetical)
+        assert_eq!(keys, vec!["z_style", "a_style", "m_style"]);
     }
 
     #[test]
     fn template_serde_roundtrip() {
-        let mut styles = BTreeMap::new();
+        let mut styles = IndexMap::new();
         styles.insert(
             "body".to_string(),
             PartialStyle {

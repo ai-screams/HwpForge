@@ -31,6 +31,33 @@ pub enum MdError {
         detail: String,
     },
 
+    /// Lossless body parsing failed.
+    #[error("invalid lossless body: {detail}")]
+    LosslessParse {
+        /// Parsing error details.
+        detail: String,
+    },
+
+    /// Required attribute is missing in a lossless element.
+    #[error("missing required attribute '{attribute}' on <{element}>")]
+    LosslessMissingAttribute {
+        /// Element name.
+        element: &'static str,
+        /// Missing attribute name.
+        attribute: &'static str,
+    },
+
+    /// Attribute value in a lossless element is invalid.
+    #[error("invalid attribute '{attribute}' on <{element}>: {value}")]
+    LosslessInvalidAttribute {
+        /// Element name.
+        element: &'static str,
+        /// Attribute name.
+        attribute: &'static str,
+        /// Invalid value.
+        value: String,
+    },
+
     /// I/O error for file convenience APIs.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -60,6 +87,12 @@ pub enum MdErrorCode {
     TemplateResolution = 6002,
     /// Unsupported markdown structure.
     UnsupportedStructure = 6003,
+    /// Invalid lossless body.
+    LosslessParse = 6008,
+    /// Missing lossless element attribute.
+    LosslessMissingAttribute = 6009,
+    /// Invalid lossless element attribute value.
+    LosslessInvalidAttribute = 6010,
     /// I/O failure.
     Io = 6004,
     /// Propagated Core error.
@@ -84,6 +117,9 @@ impl MdError {
             Self::FrontmatterUnclosed => MdErrorCode::FrontmatterUnclosed,
             Self::TemplateResolution { .. } => MdErrorCode::TemplateResolution,
             Self::UnsupportedStructure { .. } => MdErrorCode::UnsupportedStructure,
+            Self::LosslessParse { .. } => MdErrorCode::LosslessParse,
+            Self::LosslessMissingAttribute { .. } => MdErrorCode::LosslessMissingAttribute,
+            Self::LosslessInvalidAttribute { .. } => MdErrorCode::LosslessInvalidAttribute,
             Self::Io(_) => MdErrorCode::Io,
             Self::Core(_) => MdErrorCode::Core,
             Self::Blueprint(_) => MdErrorCode::Blueprint,
@@ -102,6 +138,7 @@ mod tests {
     #[test]
     fn code_display_format() {
         assert_eq!(MdErrorCode::InvalidFrontmatter.to_string(), "E6000");
+        assert_eq!(MdErrorCode::LosslessParse.to_string(), "E6008");
         assert_eq!(MdErrorCode::Foundation.to_string(), "E6007");
     }
 
@@ -115,5 +152,11 @@ mod tests {
     fn unsupported_structure_variant_has_code() {
         let err = MdError::UnsupportedStructure { detail: "definition list".to_string() };
         assert_eq!(err.code(), MdErrorCode::UnsupportedStructure);
+    }
+
+    #[test]
+    fn lossless_attribute_error_code_mapping() {
+        let err = MdError::LosslessMissingAttribute { element: "img", attribute: "src" };
+        assert_eq!(err.code(), MdErrorCode::LosslessMissingAttribute);
     }
 }

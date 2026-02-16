@@ -7,7 +7,10 @@
 //! All fields use Foundation types (`Color`, `HwpUnit`, `Alignment`)
 //! so downstream code never touches raw XML strings.
 
-use hwpforge_foundation::{Alignment, CharShapeIndex, Color, FontIndex, HwpUnit, ParaShapeIndex};
+use hwpforge_blueprint::registry::StyleRegistry;
+use hwpforge_foundation::{
+    Alignment, CharShapeIndex, Color, FontIndex, HwpUnit, LineSpacingType, ParaShapeIndex,
+};
 
 use crate::error::{HwpxError, HwpxResult};
 
@@ -208,6 +211,101 @@ impl HwpxStyleStore {
         Self::default()
     }
 
+    /// Creates a store from a Blueprint [`StyleRegistry`].
+    ///
+    /// This is the **bridge** that lets the MD → Core → HWPX pipeline
+    /// carry resolved styles all the way through to the HWPX encoder.
+    ///
+    /// Mapping:
+    /// - `registry.fonts` → [`HwpxFont`] (assigned to HANGUL group)
+    /// - `registry.char_shapes` → [`HwpxCharShape`] (font ref mirrors same index for all lang groups)
+    /// - `registry.para_shapes` → [`HwpxParaShape`]
+    /// - `registry.style_entries` → [`HwpxStyle`] (PARA type, Korean langID)
+    pub fn from_registry(registry: &StyleRegistry) -> Self {
+        let mut store = Self::new();
+
+        // Fonts: FontId → HwpxFont (all assigned to HANGUL group)
+        for (i, font_id) in registry.fonts.iter().enumerate() {
+            store.push_font(HwpxFont {
+                id: i as u32,
+                face_name: font_id.as_str().to_string(),
+                lang: "HANGUL".to_string(),
+            });
+        }
+
+        // CharShapes: Blueprint CharShape → HwpxCharShape
+        for cs in &registry.char_shapes {
+            let font_idx = registry
+                .fonts
+                .iter()
+                .position(|f| f.as_str() == cs.font)
+                .map(FontIndex::new)
+                .unwrap_or(FontIndex::new(0));
+            let font_ref = HwpxFontRef {
+                hangul: font_idx,
+                latin: font_idx,
+                hanja: font_idx,
+                japanese: font_idx,
+                other: font_idx,
+                symbol: font_idx,
+                user: font_idx,
+            };
+            store.push_char_shape(HwpxCharShape {
+                font_ref,
+                height: cs.size,
+                text_color: cs.color,
+                shade_color: Color::BLACK,
+                bold: cs.bold,
+                italic: cs.italic,
+                underline_type: if cs.underline {
+                    "BOTTOM".to_string()
+                } else {
+                    "NONE".to_string()
+                },
+                strikeout_shape: if cs.strikethrough {
+                    "SLASH".to_string()
+                } else {
+                    "NONE".to_string()
+                },
+            });
+        }
+
+        // ParaShapes: Blueprint ParaShape → HwpxParaShape
+        for ps in &registry.para_shapes {
+            store.push_para_shape(HwpxParaShape {
+                alignment: ps.alignment,
+                margin_left: ps.indent_left,
+                margin_right: ps.indent_right,
+                indent: ps.indent_first_line,
+                spacing_before: ps.space_before,
+                spacing_after: ps.space_after,
+                line_spacing: ps.line_spacing_value.round() as i32,
+                line_spacing_type: match ps.line_spacing_type {
+                    LineSpacingType::Percentage => "PERCENT".to_string(),
+                    LineSpacingType::Fixed => "FIXED".to_string(),
+                    LineSpacingType::BetweenLines => "BETWEEN_LINES".to_string(),
+                    _ => "PERCENT".to_string(),
+                },
+            });
+        }
+
+        // Styles: StyleEntry → HwpxStyle (map style names)
+        for (i, (name, entry)) in registry.style_entries.iter().enumerate() {
+            store.push_style(HwpxStyle {
+                id: i as u32,
+                style_type: "PARA".to_string(),
+                name: name.clone(),
+                eng_name: name.clone(),
+                para_pr_id_ref: entry.para_shape_id.get() as u32,
+                char_pr_id_ref: entry.char_shape_id.get() as u32,
+                next_style_id_ref: 0,
+                lang_id: 1042, // Korean
+            });
+        }
+
+        store
+    }
+
     // ── Fonts ────────────────────────────────────────────────────
 
     /// Adds a font and returns its index.
@@ -381,6 +479,7 @@ pub(crate) fn parse_alignment(s: &str) -> Alignment {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hwpforge_blueprint::builtins::builtin_default;
     use hwpforge_foundation::{CharShapeIndex, FontIndex, ParaShapeIndex};
 
     // ── HwpxStyleStore basic operations ──────────────────────────
@@ -699,5 +798,107 @@ mod tests {
         });
         let names: Vec<&str> = store.iter_styles().map(|s| s.name.as_str()).collect();
         assert_eq!(names, vec!["바탕글", "본문"]);
+    }
+
+    // ── from_registry bridge tests ──────────────────────────────
+
+    #[test]
+    fn from_registry_empty_produces_empty_store() {
+        let registry: StyleRegistry = serde_json::from_str(
+            r#"{"fonts":[],"char_shapes":[],"para_shapes":[],"style_entries":{}}"#,
+        )
+        .unwrap();
+        let store = HwpxStyleStore::from_registry(&registry);
+
+        assert_eq!(store.font_count(), 0);
+        assert_eq!(store.char_shape_count(), 0);
+        assert_eq!(store.para_shape_count(), 0);
+        assert_eq!(store.style_count(), 0);
+    }
+
+    #[test]
+    fn from_registry_preserves_counts() {
+        let template = builtin_default().unwrap();
+        let registry = StyleRegistry::from_template(&template).unwrap();
+        let store = HwpxStyleStore::from_registry(&registry);
+
+        assert_eq!(store.font_count(), registry.font_count());
+        assert_eq!(store.char_shape_count(), registry.char_shape_count());
+        assert_eq!(store.para_shape_count(), registry.para_shape_count());
+        assert_eq!(store.style_count(), registry.style_count());
+    }
+
+    #[test]
+    fn from_registry_font_face_names_match() {
+        let template = builtin_default().unwrap();
+        let registry = StyleRegistry::from_template(&template).unwrap();
+        let store = HwpxStyleStore::from_registry(&registry);
+
+        for (i, font_id) in registry.fonts.iter().enumerate() {
+            let hwpx_font = store.font(FontIndex::new(i)).unwrap();
+            assert_eq!(hwpx_font.face_name, font_id.as_str());
+            assert_eq!(hwpx_font.lang, "HANGUL");
+        }
+    }
+
+    #[test]
+    fn from_registry_char_shape_properties() {
+        let template = builtin_default().unwrap();
+        let registry = StyleRegistry::from_template(&template).unwrap();
+        let store = HwpxStyleStore::from_registry(&registry);
+
+        for (i, bp_cs) in registry.char_shapes.iter().enumerate() {
+            let hwpx_cs = store.char_shape(CharShapeIndex::new(i)).unwrap();
+            assert_eq!(hwpx_cs.height, bp_cs.size);
+            assert_eq!(hwpx_cs.text_color, bp_cs.color);
+            assert_eq!(hwpx_cs.bold, bp_cs.bold);
+            assert_eq!(hwpx_cs.italic, bp_cs.italic);
+            let expected_underline = if bp_cs.underline { "BOTTOM" } else { "NONE" };
+            assert_eq!(hwpx_cs.underline_type, expected_underline);
+            let expected_strikeout = if bp_cs.strikethrough { "SLASH" } else { "NONE" };
+            assert_eq!(hwpx_cs.strikeout_shape, expected_strikeout);
+        }
+    }
+
+    #[test]
+    fn from_registry_para_shape_properties() {
+        let template = builtin_default().unwrap();
+        let registry = StyleRegistry::from_template(&template).unwrap();
+        let store = HwpxStyleStore::from_registry(&registry);
+
+        for (i, bp_ps) in registry.para_shapes.iter().enumerate() {
+            let hwpx_ps = store.para_shape(ParaShapeIndex::new(i)).unwrap();
+            assert_eq!(hwpx_ps.alignment, bp_ps.alignment);
+            assert_eq!(hwpx_ps.margin_left, bp_ps.indent_left);
+            assert_eq!(hwpx_ps.margin_right, bp_ps.indent_right);
+            assert_eq!(hwpx_ps.indent, bp_ps.indent_first_line);
+            assert_eq!(hwpx_ps.spacing_before, bp_ps.space_before);
+            assert_eq!(hwpx_ps.spacing_after, bp_ps.space_after);
+            assert_eq!(hwpx_ps.line_spacing, bp_ps.line_spacing_value.round() as i32);
+        }
+    }
+
+    #[test]
+    fn from_registry_style_entries_reference_valid_indices() {
+        let template = builtin_default().unwrap();
+        let registry = StyleRegistry::from_template(&template).unwrap();
+        let store = HwpxStyleStore::from_registry(&registry);
+
+        for i in 0..store.style_count() {
+            let style = store.style(i).unwrap();
+            assert_eq!(style.style_type, "PARA");
+            assert!(
+                (style.char_pr_id_ref as usize) < store.char_shape_count(),
+                "char_pr_id_ref {} out of bounds for style '{}'",
+                style.char_pr_id_ref,
+                style.name
+            );
+            assert!(
+                (style.para_pr_id_ref as usize) < store.para_shape_count(),
+                "para_pr_id_ref {} out of bounds for style '{}'",
+                style.para_pr_id_ref,
+                style.name
+            );
+        }
     }
 }

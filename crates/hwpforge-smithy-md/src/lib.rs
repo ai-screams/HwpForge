@@ -32,7 +32,7 @@ pub mod error;
 pub mod frontmatter;
 mod mapper;
 
-pub use decoder::MdDecoder;
+pub use decoder::{MdDecoder, MdDocument};
 pub use encoder::MdEncoder;
 pub use error::{MdError, MdErrorCode, MdResult};
 pub use frontmatter::Frontmatter;

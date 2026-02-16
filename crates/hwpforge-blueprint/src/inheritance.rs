@@ -43,7 +43,9 @@
 //! - **Page**: Child's page entirely replaces parent's (if present)
 //! - **Markdown mapping**: Field-level merge (child entries override parent)
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
+
+use indexmap::IndexMap;
 
 use crate::error::{BlueprintError, BlueprintResult};
 use crate::style::PartialStyle;
@@ -161,7 +163,7 @@ pub fn resolve_template(
 /// Returns a new template with merged data.
 fn merge_templates(base: &Template, child: &Template) -> Template {
     // Merge styles: start with base, apply child overrides
-    let mut merged_styles: BTreeMap<String, PartialStyle> = base.styles.clone();
+    let mut merged_styles: IndexMap<String, PartialStyle> = base.styles.clone();
 
     for (name, child_style) in &child.styles {
         if let Some(base_style) = merged_styles.get_mut(name) {
@@ -512,7 +514,7 @@ mod tests {
                 extends: None,
             },
             page: Some(PageStyle::a4()),
-            styles: BTreeMap::new(),
+            styles: IndexMap::new(),
             markdown_mapping: None,
         };
 
@@ -524,7 +526,7 @@ mod tests {
                 extends: Some("parent".into()),
             },
             page: Some(PageStyle::default()),
-            styles: BTreeMap::new(),
+            styles: IndexMap::new(),
             markdown_mapping: None,
         };
 
@@ -549,7 +551,7 @@ mod tests {
                 extends: None,
             },
             page: Some(PageStyle::a4()),
-            styles: BTreeMap::new(),
+            styles: IndexMap::new(),
             markdown_mapping: None,
         };
 
@@ -561,7 +563,7 @@ mod tests {
                 extends: Some("parent".into()),
             },
             page: None, // No page in child
-            styles: BTreeMap::new(),
+            styles: IndexMap::new(),
             markdown_mapping: None,
         };
 
@@ -584,7 +586,7 @@ mod tests {
                 extends: None,
             },
             page: None,
-            styles: BTreeMap::new(),
+            styles: IndexMap::new(),
             markdown_mapping: Some(MarkdownMapping {
                 heading1: Some("heading1".to_string()),
                 heading2: Some("heading2".to_string()),
@@ -600,7 +602,7 @@ mod tests {
                 extends: Some("parent".into()),
             },
             page: None,
-            styles: BTreeMap::new(),
+            styles: IndexMap::new(),
             markdown_mapping: Some(MarkdownMapping {
                 heading1: Some("custom_h1".to_string()), // Override
                 heading3: Some("heading3".to_string()),  // Add new

@@ -18,6 +18,7 @@ hwpforge-foundation = { path = "../hwpforge-foundation" }
 hwpforge-core = { path = "../hwpforge-core" }
 hwpforge-blueprint = { path = "../hwpforge-blueprint" }
 pulldown-cmark = { workspace = true }
+quick-xml = { workspace = true }
 serde = { workspace = true }
 serde_yaml = { workspace = true }
 thiserror = { workspace = true }
