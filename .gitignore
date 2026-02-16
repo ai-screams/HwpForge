@@ -465,3 +465,4 @@ $RECYCLE.BIN/
 
 # HwpForge internal docs (not for version control)
 .docs/
+.sisyphus/
