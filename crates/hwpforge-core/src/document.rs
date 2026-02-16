@@ -371,8 +371,11 @@ impl<S> JsonSchema for Document<S> {
 // ---------------------------------------------------------------------------
 
 const _: () = {
+    #[allow(dead_code)]
     fn assert_send<T: Send>() {}
+    #[allow(dead_code)]
     fn assert_sync<T: Sync>() {}
+    #[allow(dead_code)]
     fn verify() {
         assert_send::<Document<Draft>>();
         assert_sync::<Document<Draft>>();
