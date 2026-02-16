@@ -34,11 +34,12 @@ use crate::error::FoundationError;
 ///
 /// assert_eq!(Alignment::default(), Alignment::Left);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[non_exhaustive]
 #[repr(u8)]
 pub enum Alignment {
     /// Left-aligned (default).
+    #[default]
     Left = 0,
     /// Centered.
     Center = 1,
@@ -46,12 +47,6 @@ pub enum Alignment {
     Right = 2,
     /// Justified (both edges flush).
     Justify = 3,
-}
-
-impl Default for Alignment {
-    fn default() -> Self {
-        Self::Left
-    }
 }
 
 impl fmt::Display for Alignment {
@@ -124,22 +119,17 @@ impl schemars::JsonSchema for Alignment {
 ///
 /// assert_eq!(LineSpacingType::default(), LineSpacingType::Percentage);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[non_exhaustive]
 #[repr(u8)]
 pub enum LineSpacingType {
     /// Spacing as a percentage of the font size (default: 160%).
+    #[default]
     Percentage = 0,
     /// Fixed spacing in HwpUnit, regardless of font size.
     Fixed = 1,
     /// Space between the bottom of one line and top of the next.
     BetweenLines = 2,
-}
-
-impl Default for LineSpacingType {
-    fn default() -> Self {
-        Self::Percentage
-    }
 }
 
 impl fmt::Display for LineSpacingType {
@@ -209,22 +199,17 @@ impl schemars::JsonSchema for LineSpacingType {
 ///
 /// assert_eq!(BreakType::default(), BreakType::None);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[non_exhaustive]
 #[repr(u8)]
 pub enum BreakType {
     /// No break.
+    #[default]
     None = 0,
     /// Column break.
     Column = 1,
     /// Page break.
     Page = 2,
-}
-
-impl Default for BreakType {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 impl fmt::Display for BreakType {
@@ -298,11 +283,12 @@ impl schemars::JsonSchema for BreakType {
 /// assert_eq!(Language::COUNT, 7);
 /// assert_eq!(Language::Korean as u8, 0);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 #[repr(u8)]
 pub enum Language {
     /// Korean (slot 0).
+    #[default]
     Korean = 0,
     /// English (slot 1).
     English = 1,
@@ -332,12 +318,6 @@ impl Language {
         Self::Symbol,
         Self::User,
     ];
-}
-
-impl Default for Language {
-    fn default() -> Self {
-        Self::Korean
-    }
 }
 
 impl fmt::Display for Language {
