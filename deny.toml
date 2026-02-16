@@ -12,7 +12,9 @@ all-features = false
 
 [advisories]
 unmaintained = "warn"
-ignore = []
+ignore = [
+    "RUSTSEC-2026-0009",  # time crate CVSS 4.0 parsing issue in cargo-deny
+]
 
 [bans]
 multiple-versions = "warn"
