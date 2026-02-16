@@ -10,8 +10,8 @@ use crate::error::{HwpxError, HwpxResult};
 use crate::schema::header::{
     HxAlign, HxCharPr, HxCharProperties, HxFont, HxFontFaceGroup, HxFontFaces, HxFontRef, HxHead,
     HxLineSpacing, HxMargin, HxOutline, HxParaPr, HxParaProperties, HxPresence, HxRefList,
-    HxShadow, HxStrikeout, HxStyle, HxStyles, HxSwitch, HxSwitchCase, HxSwitchDefault,
-    HxUnderline, HxUnitValue,
+    HxShadow, HxStrikeout, HxStyle, HxStyles, HxSwitch, HxSwitchCase, HxSwitchDefault, HxUnderline,
+    HxUnitValue,
 };
 use crate::style_store::{HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyle, HwpxStyleStore};
 
