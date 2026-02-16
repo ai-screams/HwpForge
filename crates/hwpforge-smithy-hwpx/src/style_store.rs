@@ -106,6 +106,34 @@ impl Default for HwpxCharShape {
     }
 }
 
+// ── Style ────────────────────────────────────────────────────────
+
+/// Resolved style definition from `<hh:style>`.
+///
+/// Stores style metadata like names and references to character/paragraph
+/// properties. This enables full roundtrip of style names like "바탕글",
+/// "본문", etc.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct HwpxStyle {
+    /// Style ID (from `id` attribute).
+    pub id: u32,
+    /// Style type (e.g. `"PARA"`, `"CHAR"`).
+    pub style_type: String,
+    /// Korean style name (e.g. `"바탕글"`).
+    pub name: String,
+    /// English style name (e.g. `"Normal"`).
+    pub eng_name: String,
+    /// Reference to paragraph properties (from `paraPrIDRef`).
+    pub para_pr_id_ref: u32,
+    /// Reference to character properties (from `charPrIDRef`).
+    pub char_pr_id_ref: u32,
+    /// Reference to next style (from `nextStyleIDRef`).
+    pub next_style_id_ref: u32,
+    /// Language ID (from `langID`).
+    pub lang_id: u32,
+}
+
 // ── Paragraph Shape ──────────────────────────────────────────────
 
 /// Resolved paragraph properties from `<hh:paraPr>`.
@@ -171,6 +199,7 @@ pub struct HwpxStyleStore {
     fonts: Vec<HwpxFont>,
     char_shapes: Vec<HwpxCharShape>,
     para_shapes: Vec<HwpxParaShape>,
+    styles: Vec<HwpxStyle>,
 }
 
 impl HwpxStyleStore {
@@ -246,6 +275,49 @@ impl HwpxStyleStore {
     /// Returns the number of para shapes.
     pub fn para_shape_count(&self) -> usize {
         self.para_shapes.len()
+    }
+
+    // ── Iterators ────────────────────────────────────────────────
+
+    /// Returns an iterator over all fonts in the store.
+    pub fn iter_fonts(&self) -> impl Iterator<Item = &HwpxFont> {
+        self.fonts.iter()
+    }
+
+    /// Returns an iterator over all character shapes in the store.
+    pub fn iter_char_shapes(&self) -> impl Iterator<Item = &HwpxCharShape> {
+        self.char_shapes.iter()
+    }
+
+    /// Returns an iterator over all paragraph shapes in the store.
+    pub fn iter_para_shapes(&self) -> impl Iterator<Item = &HwpxParaShape> {
+        self.para_shapes.iter()
+    }
+
+    // ── Styles ───────────────────────────────────────────────────
+
+    /// Adds a style definition.
+    pub fn push_style(&mut self, style: HwpxStyle) {
+        self.styles.push(style);
+    }
+
+    /// Returns the style at `index`.
+    pub fn style(&self, index: usize) -> HwpxResult<&HwpxStyle> {
+        self.styles.get(index).ok_or(HwpxError::IndexOutOfBounds {
+            kind: "style",
+            index: index as u32,
+            max: self.styles.len() as u32,
+        })
+    }
+
+    /// Returns the number of styles.
+    pub fn style_count(&self) -> usize {
+        self.styles.len()
+    }
+
+    /// Returns an iterator over all styles in the store.
+    pub fn iter_styles(&self) -> impl Iterator<Item = &HwpxStyle> {
+        self.styles.iter()
     }
 }
 
@@ -409,6 +481,49 @@ mod tests {
         assert_eq!(store.para_shape_count(), 1);
     }
 
+    // ── Iterator methods ───────────────────────────────────────────
+
+    #[test]
+    fn iter_fonts_yields_all() {
+        let mut store = HwpxStyleStore::new();
+        for i in 0..3 {
+            store.push_font(HwpxFont {
+                id: i,
+                face_name: format!("Font{i}"),
+                lang: "LATIN".into(),
+            });
+        }
+        let names: Vec<&str> = store.iter_fonts().map(|f| f.face_name.as_str()).collect();
+        assert_eq!(names, vec!["Font0", "Font1", "Font2"]);
+    }
+
+    #[test]
+    fn iter_char_shapes_yields_all() {
+        let mut store = HwpxStyleStore::new();
+        store.push_char_shape(HwpxCharShape { bold: true, ..Default::default() });
+        store.push_char_shape(HwpxCharShape { italic: true, ..Default::default() });
+        let styles: Vec<(bool, bool)> =
+            store.iter_char_shapes().map(|c| (c.bold, c.italic)).collect();
+        assert_eq!(styles, vec![(true, false), (false, true)]);
+    }
+
+    #[test]
+    fn iter_para_shapes_yields_all() {
+        let mut store = HwpxStyleStore::new();
+        store.push_para_shape(HwpxParaShape { line_spacing: 130, ..Default::default() });
+        store.push_para_shape(HwpxParaShape { line_spacing: 200, ..Default::default() });
+        let spacings: Vec<i32> = store.iter_para_shapes().map(|p| p.line_spacing).collect();
+        assert_eq!(spacings, vec![130, 200]);
+    }
+
+    #[test]
+    fn iter_empty_store() {
+        let store = HwpxStyleStore::new();
+        assert_eq!(store.iter_fonts().count(), 0);
+        assert_eq!(store.iter_char_shapes().count(), 0);
+        assert_eq!(store.iter_para_shapes().count(), 0);
+    }
+
     // ── HwpxFontRef default ──────────────────────────────────────
 
     #[test]
@@ -520,5 +635,69 @@ mod tests {
     fn parse_alignment_unknown_defaults_left() {
         assert_eq!(parse_alignment("DISTRIBUTED"), Alignment::Left);
         assert_eq!(parse_alignment(""), Alignment::Left);
+    }
+
+    // ── HwpxStyle operations ────────────────────────────────────
+
+    #[test]
+    fn push_and_get_style() {
+        let mut store = HwpxStyleStore::new();
+        let style = HwpxStyle {
+            id: 0,
+            style_type: "PARA".into(),
+            name: "바탕글".into(),
+            eng_name: "Normal".into(),
+            para_pr_id_ref: 0,
+            char_pr_id_ref: 0,
+            next_style_id_ref: 0,
+            lang_id: 1042,
+        };
+        store.push_style(style);
+        assert_eq!(store.style_count(), 1);
+        let s = store.style(0).unwrap();
+        assert_eq!(s.name, "바탕글");
+        assert_eq!(s.eng_name, "Normal");
+        assert_eq!(s.style_type, "PARA");
+    }
+
+    #[test]
+    fn style_index_out_of_bounds() {
+        let store = HwpxStyleStore::new();
+        let err = store.style(0).unwrap_err();
+        match err {
+            HwpxError::IndexOutOfBounds { kind, index, max } => {
+                assert_eq!(kind, "style");
+                assert_eq!(index, 0);
+                assert_eq!(max, 0);
+            }
+            _ => panic!("expected IndexOutOfBounds"),
+        }
+    }
+
+    #[test]
+    fn iter_styles_yields_all() {
+        let mut store = HwpxStyleStore::new();
+        store.push_style(HwpxStyle {
+            id: 0,
+            style_type: "PARA".into(),
+            name: "바탕글".into(),
+            eng_name: "Normal".into(),
+            para_pr_id_ref: 0,
+            char_pr_id_ref: 0,
+            next_style_id_ref: 0,
+            lang_id: 1042,
+        });
+        store.push_style(HwpxStyle {
+            id: 1,
+            style_type: "CHAR".into(),
+            name: "본문".into(),
+            eng_name: "Body".into(),
+            para_pr_id_ref: 1,
+            char_pr_id_ref: 1,
+            next_style_id_ref: 1,
+            lang_id: 1042,
+        });
+        let names: Vec<&str> = store.iter_styles().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, vec!["바탕글", "본문"]);
     }
 }

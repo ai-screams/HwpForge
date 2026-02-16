@@ -1,6 +1,6 @@
 [package]
 name = "hwpforge-smithy-hwpx"
-description = "HWPX format decoder for HwpForge"
+description = "HWPX format codec (encoder + decoder) for HwpForge"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

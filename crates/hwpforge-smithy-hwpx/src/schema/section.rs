@@ -7,22 +7,26 @@
 //! Fields are used by serde deserialization even if not directly accessed.
 #![allow(dead_code)]
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 // ── Section root ──────────────────────────────────────────────────
 
 /// `<hs:sec>` — root element of section*.xml.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 #[serde(rename = "sec")]
 pub struct HxSection {
-    #[serde(rename = "p", default)]
+    #[serde(
+        rename(serialize = "hp:p", deserialize = "p"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub paragraphs: Vec<HxParagraph>,
 }
 
 // ── Paragraph ─────────────────────────────────────────────────────
 
 /// `<hp:p id="..." paraPrIDRef="3" styleIDRef="0" ...>`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxParagraph {
     #[serde(rename = "@id", default)]
     pub id: String,
@@ -37,7 +41,11 @@ pub struct HxParagraph {
     #[serde(rename = "@merged", default)]
     pub merged: u32,
 
-    #[serde(rename = "run", default)]
+    #[serde(
+        rename(serialize = "hp:run", deserialize = "run"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub runs: Vec<HxRun>,
     // <hp:linesegarray> — silently ignored
 }
@@ -52,25 +60,41 @@ pub struct HxParagraph {
 ///
 /// Phase 3 extracts text, tables, images, and secPr; everything else
 /// is silently skipped by serde (no `deny_unknown_fields`).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxRun {
     #[serde(rename = "@charPrIDRef", default)]
     pub char_pr_id_ref: u32,
 
     /// Section properties (typically in the first run of the first paragraph).
-    #[serde(rename = "secPr", default)]
+    #[serde(
+        rename(serialize = "hp:secPr", deserialize = "secPr"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub sec_pr: Option<HxSecPr>,
 
     /// All `<hp:t>` elements in this run (may be multiple).
-    #[serde(rename = "t", default)]
+    #[serde(
+        rename(serialize = "hp:t", deserialize = "t"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub texts: Vec<HxText>,
 
     /// All `<hp:tbl>` elements in this run.
-    #[serde(rename = "tbl", default)]
+    #[serde(
+        rename(serialize = "hp:tbl", deserialize = "tbl"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub tables: Vec<HxTable>,
 
     /// All `<hp:pic>` elements in this run.
-    #[serde(rename = "pic", default)]
+    #[serde(
+        rename(serialize = "hp:pic", deserialize = "pic"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub pictures: Vec<HxPic>,
     // hp:ctrl, hp:rect, hp:ellipse, etc. — ignored
 }
@@ -78,7 +102,7 @@ pub struct HxRun {
 // ── Text ──────────────────────────────────────────────────────────
 
 /// `<hp:t>수학</hp:t>` or `<hp:t/>` (empty).
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxText {
     #[serde(rename = "$text", default)]
     pub text: String,
@@ -87,19 +111,23 @@ pub struct HxText {
 // ── Section Properties ────────────────────────────────────────────
 
 /// `<hp:secPr>` — section settings, embedded in the first paragraph.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxSecPr {
     #[serde(rename = "@textDirection", default)]
     pub text_direction: String,
 
-    #[serde(rename = "pagePr", default)]
+    #[serde(
+        rename(serialize = "hp:pagePr", deserialize = "pagePr"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub page_pr: Option<HxPagePr>,
     // grid, startNum, visibility, lineNumberShape, footNotePr,
     // endNotePr, pageBorderFill — ignored (Phase 3)
 }
 
 /// `<hp:pagePr landscape="WIDELY" width="59528" height="84188">`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxPagePr {
     #[serde(rename = "@landscape", default)]
     pub landscape: String,
@@ -110,12 +138,16 @@ pub struct HxPagePr {
     #[serde(rename = "@gutterType", default)]
     pub gutter_type: String,
 
-    #[serde(rename = "margin", default)]
+    #[serde(
+        rename(serialize = "hp:margin", deserialize = "margin"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub margin: Option<HxPageMargin>,
 }
 
 /// `<hp:margin header="4252" footer="4252" gutter="0" left="8504" ...>`.
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
 pub struct HxPageMargin {
     #[serde(rename = "@header", default)]
     pub header: i32,
@@ -136,42 +168,62 @@ pub struct HxPageMargin {
 // ── Table ─────────────────────────────────────────────────────────
 
 /// `<hp:tbl ... rowCnt="3" colCnt="2">`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxTable {
     #[serde(rename = "@rowCnt", default)]
     pub row_cnt: u32,
     #[serde(rename = "@colCnt", default)]
     pub col_cnt: u32,
 
-    #[serde(rename = "tr", default)]
+    #[serde(
+        rename(serialize = "hp:tr", deserialize = "tr"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub rows: Vec<HxTableRow>,
     // hp:caption, hp:tblPr — ignored
 }
 
 /// `<hp:tr>`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxTableRow {
-    #[serde(rename = "tc", default)]
+    #[serde(
+        rename(serialize = "hp:tc", deserialize = "tc"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub cells: Vec<HxTableCell>,
 }
 
 /// `<hp:tc>`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxTableCell {
     #[serde(rename = "@name", default)]
     pub name: String,
 
-    #[serde(rename = "cellSpan", default)]
+    #[serde(
+        rename(serialize = "hp:cellSpan", deserialize = "cellSpan"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub cell_span: Option<HxCellSpan>,
-    #[serde(rename = "cellSz", default)]
+    #[serde(
+        rename(serialize = "hp:cellSz", deserialize = "cellSz"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub cell_sz: Option<HxCellSz>,
-    #[serde(rename = "subList", default)]
+    #[serde(
+        rename(serialize = "hp:subList", deserialize = "subList"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub sub_list: Option<HxSubList>,
     // hp:cellAddr, hp:cellMargin, hh:borderFill — ignored
 }
 
 /// `<hp:cellSpan rowSpan="1" colSpan="1"/>`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxCellSpan {
     #[serde(rename = "@rowSpan", default = "default_one")]
     pub row_span: u32,
@@ -184,7 +236,7 @@ fn default_one() -> u32 {
 }
 
 /// `<hp:cellSz width="..." height="..."/>`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxCellSz {
     #[serde(rename = "@width", default)]
     pub width: i32,
@@ -193,32 +245,48 @@ pub struct HxCellSz {
 }
 
 /// `<hp:subList>` — container for paragraphs inside a table cell.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxSubList {
-    #[serde(rename = "p", default)]
+    #[serde(
+        rename(serialize = "hp:p", deserialize = "p"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
     pub paragraphs: Vec<HxParagraph>,
 }
 
 // ── Picture / Image ───────────────────────────────────────────────
 
 /// `<hp:pic>` — image container.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxPic {
     #[serde(rename = "@id", default)]
     pub id: String,
 
-    #[serde(rename = "img", default)]
+    #[serde(
+        rename(serialize = "hp:img", deserialize = "img"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub img: Option<HxImg>,
-    #[serde(rename = "orgSz", default)]
+    #[serde(
+        rename(serialize = "hp:orgSz", deserialize = "orgSz"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub org_sz: Option<HxSizeAttr>,
-    #[serde(rename = "curSz", default)]
+    #[serde(
+        rename(serialize = "hp:curSz", deserialize = "curSz"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub cur_sz: Option<HxSizeAttr>,
     // lineShape, fillBrush, shadow, pos, sz — ignored
 }
 
 /// `<hp:img binaryItemIDRef="image1" bright="0" contrast="0" .../>` or
 /// `<hc:img binaryItemIDRef="..."/>`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxImg {
     #[serde(rename = "@binaryItemIDRef", default)]
     pub binary_item_id_ref: String,
@@ -229,7 +297,7 @@ pub struct HxImg {
 }
 
 /// Generic width/height attribute pair used in `<hp:orgSz>`, `<hp:curSz>`.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxSizeAttr {
     #[serde(rename = "@width", default)]
     pub width: i32,

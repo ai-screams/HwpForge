@@ -1,36 +1,45 @@
-//! HWPX format decoder for HwpForge.
+//! HWPX format codec for HwpForge.
 //!
-//! This crate reads HWPX files (ZIP archives containing XML, per KS X 6101)
-//! and converts them into HwpForge Core's `Document<Draft>` representation.
+//! This crate reads and writes HWPX files (ZIP archives containing XML,
+//! per KS X 6101), converting between HwpForge Core's document types
+//! and the HWPX on-disk format.
 //!
 //! # Architecture
 //!
-//! The decoding pipeline has four stages:
+//! **Decoding** (HWPX → Core):
+//! 1. Open ZIP, validate mimetype, enumerate section files
+//! 2. Parse `Contents/header.xml` → [`HwpxStyleStore`]
+//! 3. Parse `Contents/section*.xml` → paragraphs + page settings
+//! 4. Assemble `Document<Draft>` with sections
 //!
-//! 1. **Package** — Open ZIP, validate mimetype, enumerate section files
-//! 2. **Header** — Parse `Contents/header.xml` → [`HwpxStyleStore`]
-//! 3. **Section** — Parse `Contents/section*.xml` → paragraphs + page settings
-//! 4. **Assembly** — Combine into `Document<Draft>` with sections
+//! **Encoding** (Core → HWPX):
+//! 1. Serialize [`HwpxStyleStore`] → `header.xml`
+//! 2. Serialize each section → `section{N}.xml`
+//! 3. Package into ZIP with metadata files
 //!
 //! # Quick Start
 //!
 //! ```no_run
-//! use hwpforge_smithy_hwpx::HwpxDecoder;
+//! use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
 //!
+//! // Decode
 //! let result = HwpxDecoder::decode_file("document.hwpx").unwrap();
 //! println!("Sections: {}", result.document.sections().len());
-//! println!("Fonts: {}", result.style_store.font_count());
+//!
+//! // Round-trip: decode → validate → encode
+//! let validated = result.document.validate().unwrap();
+//! let output = HwpxEncoder::encode(&validated, &result.style_store).unwrap();
+//! std::fs::write("output.hwpx", &output).unwrap();
 //! ```
 //!
-//! # Phase 3 Scope
+//! # Supported Content
 //!
-//! Currently supports:
-//! - Text runs, tables, images
+//! - Text runs, tables (nested), images
 //! - Fonts, character shapes, paragraph shapes from `header.xml`
 //! - Page settings (size, margins) from `<secPr>` in sections
 //!
-//! Does **not** yet support:
-//! - Encoding (write-back to HWPX)
+//! Not yet supported:
+//! - Binary image round-trip (paths written, data omitted)
 //! - Footnotes, endnotes, bookmarks, field codes
 //! - Drawing objects, OLE, equations
 
@@ -38,10 +47,14 @@
 #![deny(unsafe_code)]
 
 pub mod decoder;
+mod encoder;
 pub mod error;
 mod schema;
 pub mod style_store;
 
 pub use decoder::{HwpxDecoder, HwpxDocument};
+pub use encoder::HwpxEncoder;
 pub use error::{HwpxError, HwpxErrorCode, HwpxResult};
-pub use style_store::{HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape, HwpxStyleStore};
+pub use style_store::{
+    HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape, HwpxStyle, HwpxStyleStore,
+};
