@@ -24,4 +24,5 @@ serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx" }
 pretty_assertions = { workspace = true }

@@ -275,6 +275,11 @@ impl TableBuilder {
         }
 
         let max_cols = self.rows.iter().map(Vec::len).max().unwrap_or(1).max(1);
+        if max_cols > 10_000 {
+            return Err(MdError::UnsupportedStructure {
+                detail: format!("table has too many columns: {max_cols}"),
+            });
+        }
         let divisor = i32::try_from(max_cols).unwrap_or(1);
         let mut cell_width = page.printable_width() / divisor;
         if cell_width.as_i32() <= 0 {

@@ -63,7 +63,8 @@ impl MdMapping {
             3 => self.heading3,
             4 => self.heading4,
             5 => self.heading5,
-            _ => self.heading6,
+            6.. => self.heading6,
+            0 => self.body,
         }
     }
 
