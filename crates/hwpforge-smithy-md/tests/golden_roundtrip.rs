@@ -12,7 +12,11 @@ fn fixture_path(name: &str) -> std::path::PathBuf {
         .join(name)
 }
 
-/// Helper: MD file → Core → HWPX bytes → decode back
+/// Helper: MD file → Core → HWPX bytes → decode back.
+///
+/// Returns the original `MdDocument` (for metadata/structure checks) and the
+/// HWPX decode result. The document is cloned before validation so we only
+/// decode the fixture file once.
 fn roundtrip_fixture(
     name: &str,
 ) -> (
@@ -21,14 +25,11 @@ fn roundtrip_fixture(
 ) {
     let template = builtin_default().unwrap();
     let md_result = MdDecoder::decode_file(fixture_path(name), &template).unwrap();
-    let validated = md_result.document.validate().unwrap();
+    let validated = md_result.document.clone().validate().unwrap();
     let store = HwpxStyleStore::from_registry(&md_result.style_registry);
     let hwpx_bytes = HwpxEncoder::encode(&validated, &store).unwrap();
     let hwpx_result = HwpxDecoder::decode(&hwpx_bytes).unwrap();
-    // Return the MD result (for metadata checks) and the HWPX decode result.
-    // We need to re-decode from the original since md_result.document was moved.
-    let md_result2 = MdDecoder::decode_file(fixture_path(name), &template).unwrap();
-    (md_result2, hwpx_result)
+    (md_result, hwpx_result)
 }
 
 #[test]
@@ -100,7 +101,9 @@ fn golden_full_elements_roundtrip() {
         .any(|run| run.content.as_table().is_some());
     assert!(has_table, "Expected to find at least one Table run");
 
-    // Assert: MD decode has a Hyperlink control (note: HWPX roundtrip may not preserve it in Phase 4)
+    // Assert: MD decode captures a Hyperlink control.
+    // Note: HWPX encoder does not preserve Control::Hyperlink (Phase 4 limitation),
+    // so we only verify the MD decode result here, not the HWPX roundtrip.
     let md_has_hyperlink = md_result
         .document
         .sections()
