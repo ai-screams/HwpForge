@@ -9,8 +9,8 @@ use quick_xml::de::from_str;
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::header::{HxCharPr, HxHead, HxParaPr};
 use crate::style_store::{
-    parse_alignment, parse_hex_color, HwpxCharShape, HwpxFont, HwpxFontRef,
-    HwpxParaShape, HwpxStyleStore,
+    parse_alignment, parse_hex_color, HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape,
+    HwpxStyleStore,
 };
 
 /// Parses a `header.xml` string into an [`HwpxStyleStore`].
@@ -27,10 +27,8 @@ use crate::style_store::{
 /// return an error if any are encountered. The ZIP size limits in
 /// `PackageReader` also bound the total input size.
 pub fn parse_header(xml: &str) -> HwpxResult<HwpxStyleStore> {
-    let head: HxHead = from_str(xml).map_err(|e| HwpxError::XmlParse {
-        file: "header.xml".into(),
-        detail: e.to_string(),
-    })?;
+    let head: HxHead = from_str(xml)
+        .map_err(|e| HwpxError::XmlParse { file: "header.xml".into(), detail: e.to_string() })?;
 
     let mut store = HwpxStyleStore::new();
 
@@ -83,10 +81,8 @@ fn convert_char_pr(cp: &HxCharPr) -> HwpxCharShape {
         .unwrap_or_default();
 
     // height is in HWPUNIT already; clamp u32 → i32 safely
-    let height = i32::try_from(cp.height)
-        .ok()
-        .and_then(|h| HwpUnit::new(h).ok())
-        .unwrap_or(HwpUnit::ZERO);
+    let height =
+        i32::try_from(cp.height).ok().and_then(|h| HwpUnit::new(h).ok()).unwrap_or(HwpUnit::ZERO);
 
     HwpxCharShape {
         font_ref,
@@ -117,8 +113,7 @@ fn convert_para_pr(pp: &HxParaPr) -> HwpxParaShape {
         .unwrap_or(hwpforge_foundation::Alignment::Left);
 
     // Margin and line spacing come from hp:switch/hp:default
-    let (margin_left, margin_right, indent, spacing_before, spacing_after) =
-        extract_margins(pp);
+    let (margin_left, margin_right, indent, spacing_before, spacing_after) = extract_margins(pp);
 
     let (line_spacing, line_spacing_type) = extract_line_spacing(pp);
 
@@ -148,9 +143,7 @@ fn extract_margins(pp: &HxParaPr) -> (HwpUnit, HwpUnit, HwpUnit, HwpUnit, HwpUni
     };
 
     let to_unit = |opt: &Option<crate::schema::header::HxUnitValue>| -> HwpUnit {
-        opt.as_ref()
-            .and_then(|v| HwpUnit::new(v.value).ok())
-            .unwrap_or(z)
+        opt.as_ref().and_then(|v| HwpUnit::new(v.value).ok()).unwrap_or(z)
     };
 
     (
@@ -175,11 +168,8 @@ fn extract_line_spacing(pp: &HxParaPr) -> (i32, String) {
         return default_ls;
     };
 
-    let spacing_type = if ls.spacing_type.is_empty() {
-        "PERCENT".to_string()
-    } else {
-        ls.spacing_type.clone()
-    };
+    let spacing_type =
+        if ls.spacing_type.is_empty() { "PERCENT".to_string() } else { ls.spacing_type.clone() };
 
     // Saturate to i32::MAX if value exceeds range (extremely rare in real HWPX files)
     let value = ls.value.min(i32::MAX as u32) as i32;

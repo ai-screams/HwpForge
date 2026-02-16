@@ -162,9 +162,7 @@ mod tests {
 
     #[test]
     fn invalid_mimetype_display() {
-        let err = HwpxError::InvalidMimetype {
-            actual: "application/zip".into(),
-        };
+        let err = HwpxError::InvalidMimetype { actual: "application/zip".into() };
         let msg = err.to_string();
         assert!(msg.contains("application/hwp+zip"));
         assert!(msg.contains("application/zip"));
@@ -173,9 +171,7 @@ mod tests {
 
     #[test]
     fn missing_file_display() {
-        let err = HwpxError::MissingFile {
-            path: "Contents/header.xml".into(),
-        };
+        let err = HwpxError::MissingFile { path: "Contents/header.xml".into() };
         assert!(err.to_string().contains("header.xml"));
         assert_eq!(err.code(), HwpxErrorCode::MissingFile);
     }
@@ -208,11 +204,7 @@ mod tests {
 
     #[test]
     fn index_out_of_bounds_display() {
-        let err = HwpxError::IndexOutOfBounds {
-            kind: "charPrIDRef",
-            index: 99,
-            max: 5,
-        };
+        let err = HwpxError::IndexOutOfBounds { kind: "charPrIDRef", index: 99, max: 5 };
         let msg = err.to_string();
         assert!(msg.contains("charPrIDRef"));
         assert!(msg.contains("99"));
@@ -222,9 +214,7 @@ mod tests {
 
     #[test]
     fn invalid_structure_display() {
-        let err = HwpxError::InvalidStructure {
-            detail: "section has no paragraphs".into(),
-        };
+        let err = HwpxError::InvalidStructure { detail: "section has no paragraphs".into() };
         assert!(err.to_string().contains("no paragraphs"));
         assert_eq!(err.code(), HwpxErrorCode::InvalidStructure);
     }
@@ -297,9 +287,7 @@ mod tests {
 
     #[test]
     fn foundation_error_conversion() {
-        let fe = hwpforge_foundation::FoundationError::EmptyIdentifier {
-            item: "FontId".into(),
-        };
+        let fe = hwpforge_foundation::FoundationError::EmptyIdentifier { item: "FontId".into() };
         let err: HwpxError = fe.into();
         assert_eq!(err.code(), HwpxErrorCode::Foundation);
     }

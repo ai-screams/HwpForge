@@ -23,11 +23,8 @@ const MAX_ENTRIES: usize = 10_000;
 // ── HWPX constants ───────────────────────────────────────────────
 
 /// Accepted mimetype values (first entry in ZIP, uncompressed).
-const ACCEPTED_MIMETYPES: &[&str] = &[
-    "application/hwp+zip",
-    "application/haansofthwp+zip",
-    "application/vnd.hancom.hwp+zip",
-];
+const ACCEPTED_MIMETYPES: &[&str] =
+    &["application/hwp+zip", "application/haansofthwp+zip", "application/vnd.hancom.hwp+zip"];
 
 /// Path to the mimetype file inside the ZIP.
 const MIMETYPE_PATH: &str = "mimetype";
@@ -64,8 +61,7 @@ impl PackageReader {
     /// - A `mimetype` file exists with an accepted value
     pub fn new(bytes: &[u8]) -> HwpxResult<Self> {
         let cursor = Cursor::new(bytes.to_vec());
-        let archive = ZipArchive::new(cursor)
-            .map_err(|e| HwpxError::Zip(e.to_string()))?;
+        let archive = ZipArchive::new(cursor).map_err(|e| HwpxError::Zip(e.to_string()))?;
 
         if archive.len() > MAX_ENTRIES {
             return Err(HwpxError::InvalidStructure {
@@ -80,10 +76,7 @@ impl PackageReader {
         // Count section files
         let section_count = archive
             .file_names()
-            .filter(|name| {
-                name.starts_with(SECTION_PREFIX)
-                    && name.ends_with(SECTION_SUFFIX)
-            })
+            .filter(|name| name.starts_with(SECTION_PREFIX) && name.ends_with(SECTION_SUFFIX))
             .count();
 
         let mut reader = Self { archive, section_count, total_read: 0 };
@@ -100,9 +93,7 @@ impl PackageReader {
         let trimmed = content.trim();
 
         if !ACCEPTED_MIMETYPES.contains(&trimmed) {
-            return Err(HwpxError::InvalidMimetype {
-                actual: trimmed.to_string(),
-            });
+            return Err(HwpxError::InvalidMimetype { actual: trimmed.to_string() });
         }
 
         Ok(())
@@ -134,9 +125,7 @@ impl PackageReader {
         let file = self
             .archive
             .by_name(path)
-            .map_err(|_| HwpxError::MissingFile {
-                path: path.to_string(),
-            })?;
+            .map_err(|_| HwpxError::MissingFile { path: path.to_string() })?;
 
         // Use take() to enforce actual decompressed size limit.
         // file.size() comes from the ZIP header and can be spoofed,
@@ -193,18 +182,14 @@ mod tests {
     use zip::ZipWriter;
 
     /// Helper: creates a minimal valid HWPX ZIP in memory.
-    fn make_hwpx_zip(
-        mimetype: &str,
-        header_xml: &str,
-        sections: &[&str],
-    ) -> Vec<u8> {
+    fn make_hwpx_zip(mimetype: &str, header_xml: &str, sections: &[&str]) -> Vec<u8> {
         let buf = Vec::new();
         let mut zip = ZipWriter::new(Cursor::new(buf));
         let opts = SimpleFileOptions::default();
 
         // mimetype must be first entry, stored (not compressed)
-        let stored = SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored);
+        let stored =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
         zip.start_file("mimetype", stored).unwrap();
         zip.write_all(mimetype.as_bytes()).unwrap();
 
@@ -225,39 +210,28 @@ mod tests {
     const MINIMAL_HEADER: &str =
         r#"<?xml version="1.0" encoding="UTF-8"?><head version="1.4" secCnt="1"></head>"#;
 
-    const MINIMAL_SECTION: &str =
-        r#"<?xml version="1.0" encoding="UTF-8"?><sec></sec>"#;
+    const MINIMAL_SECTION: &str = r#"<?xml version="1.0" encoding="UTF-8"?><sec></sec>"#;
 
     // ── Construction ─────────────────────────────────────────────
 
     #[test]
     fn new_valid_hwpx() {
-        let bytes = make_hwpx_zip(
-            "application/hwp+zip",
-            MINIMAL_HEADER,
-            &[MINIMAL_SECTION],
-        );
+        let bytes = make_hwpx_zip("application/hwp+zip", MINIMAL_HEADER, &[MINIMAL_SECTION]);
         let reader = PackageReader::new(&bytes).unwrap();
         assert_eq!(reader.section_count(), 1);
     }
 
     #[test]
     fn new_alternative_mimetype() {
-        let bytes = make_hwpx_zip(
-            "application/haansofthwp+zip",
-            MINIMAL_HEADER,
-            &[MINIMAL_SECTION],
-        );
+        let bytes =
+            make_hwpx_zip("application/haansofthwp+zip", MINIMAL_HEADER, &[MINIMAL_SECTION]);
         assert!(PackageReader::new(&bytes).is_ok());
     }
 
     #[test]
     fn new_vnd_mimetype() {
-        let bytes = make_hwpx_zip(
-            "application/vnd.hancom.hwp+zip",
-            MINIMAL_HEADER,
-            &[MINIMAL_SECTION],
-        );
+        let bytes =
+            make_hwpx_zip("application/vnd.hancom.hwp+zip", MINIMAL_HEADER, &[MINIMAL_SECTION]);
         assert!(PackageReader::new(&bytes).is_ok());
     }
 
@@ -269,11 +243,7 @@ mod tests {
 
     #[test]
     fn new_wrong_mimetype() {
-        let bytes = make_hwpx_zip(
-            "application/pdf",
-            MINIMAL_HEADER,
-            &[MINIMAL_SECTION],
-        );
+        let bytes = make_hwpx_zip("application/pdf", MINIMAL_HEADER, &[MINIMAL_SECTION]);
         let err = PackageReader::new(&bytes).unwrap_err();
         match err {
             HwpxError::InvalidMimetype { actual } => {
@@ -296,11 +266,7 @@ mod tests {
 
     #[test]
     fn read_header_xml() {
-        let bytes = make_hwpx_zip(
-            "application/hwp+zip",
-            MINIMAL_HEADER,
-            &[MINIMAL_SECTION],
-        );
+        let bytes = make_hwpx_zip("application/hwp+zip", MINIMAL_HEADER, &[MINIMAL_SECTION]);
         let mut reader = PackageReader::new(&bytes).unwrap();
         let xml = reader.read_header_xml().unwrap();
         assert!(xml.contains("head"));
@@ -308,11 +274,7 @@ mod tests {
 
     #[test]
     fn read_section_xml_index_0() {
-        let bytes = make_hwpx_zip(
-            "application/hwp+zip",
-            MINIMAL_HEADER,
-            &[MINIMAL_SECTION],
-        );
+        let bytes = make_hwpx_zip("application/hwp+zip", MINIMAL_HEADER, &[MINIMAL_SECTION]);
         let mut reader = PackageReader::new(&bytes).unwrap();
         let xml = reader.read_section_xml(0).unwrap();
         assert!(xml.contains("sec"));
@@ -320,11 +282,7 @@ mod tests {
 
     #[test]
     fn read_section_xml_out_of_range() {
-        let bytes = make_hwpx_zip(
-            "application/hwp+zip",
-            MINIMAL_HEADER,
-            &[MINIMAL_SECTION],
-        );
+        let bytes = make_hwpx_zip("application/hwp+zip", MINIMAL_HEADER, &[MINIMAL_SECTION]);
         let mut reader = PackageReader::new(&bytes).unwrap();
         let err = reader.read_section_xml(99).unwrap_err();
         assert!(matches!(err, HwpxError::MissingFile { .. }));
@@ -335,11 +293,7 @@ mod tests {
         let s0 = r#"<sec>section0</sec>"#;
         let s1 = r#"<sec>section1</sec>"#;
         let s2 = r#"<sec>section2</sec>"#;
-        let bytes = make_hwpx_zip(
-            "application/hwp+zip",
-            MINIMAL_HEADER,
-            &[s0, s1, s2],
-        );
+        let bytes = make_hwpx_zip("application/hwp+zip", MINIMAL_HEADER, &[s0, s1, s2]);
         let mut reader = PackageReader::new(&bytes).unwrap();
         assert_eq!(reader.section_count(), 3);
         assert!(reader.read_section_xml(0).unwrap().contains("section0"));
@@ -351,11 +305,7 @@ mod tests {
 
     #[test]
     fn debug_impl() {
-        let bytes = make_hwpx_zip(
-            "application/hwp+zip",
-            MINIMAL_HEADER,
-            &[MINIMAL_SECTION],
-        );
+        let bytes = make_hwpx_zip("application/hwp+zip", MINIMAL_HEADER, &[MINIMAL_SECTION]);
         let reader = PackageReader::new(&bytes).unwrap();
         let dbg = format!("{reader:?}");
         assert!(dbg.contains("PackageReader"));
@@ -366,11 +316,7 @@ mod tests {
 
     #[test]
     fn mimetype_with_trailing_whitespace() {
-        let bytes = make_hwpx_zip(
-            "application/hwp+zip  \n",
-            MINIMAL_HEADER,
-            &[MINIMAL_SECTION],
-        );
+        let bytes = make_hwpx_zip("application/hwp+zip  \n", MINIMAL_HEADER, &[MINIMAL_SECTION]);
         assert!(PackageReader::new(&bytes).is_ok());
     }
 }

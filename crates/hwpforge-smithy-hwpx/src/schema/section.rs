@@ -72,7 +72,6 @@ pub struct HxRun {
     /// All `<hp:pic>` elements in this run.
     #[serde(rename = "pic", default)]
     pub pictures: Vec<HxPic>,
-
     // hp:ctrl, hp:rect, hp:ellipse, etc. — ignored
 }
 

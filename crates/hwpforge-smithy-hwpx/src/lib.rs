@@ -44,6 +44,4 @@ pub mod style_store;
 
 pub use decoder::{HwpxDecoder, HwpxDocument};
 pub use error::{HwpxError, HwpxErrorCode, HwpxResult};
-pub use style_store::{
-    HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape, HwpxStyleStore,
-};
+pub use style_store::{HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape, HwpxStyleStore};

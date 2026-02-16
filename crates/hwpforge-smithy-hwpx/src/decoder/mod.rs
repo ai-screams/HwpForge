@@ -72,14 +72,9 @@ impl HwpxDecoder {
             let section_xml = pkg.read_section_xml(i)?;
             let result = section::parse_section(&section_xml, i)?;
 
-            let page_settings = result
-                .page_settings
-                .unwrap_or_else(PageSettings::a4);
+            let page_settings = result.page_settings.unwrap_or_else(PageSettings::a4);
 
-            let section = Section {
-                paragraphs: result.paragraphs,
-                page_settings,
-            };
+            let section = Section { paragraphs: result.paragraphs, page_settings };
 
             document.add_section(section);
         }
@@ -89,8 +84,7 @@ impl HwpxDecoder {
 
     /// Decodes an HWPX file from a filesystem path.
     pub fn decode_file(path: impl AsRef<Path>) -> HwpxResult<HwpxDocument> {
-        let bytes = std::fs::read(path.as_ref())
-            .map_err(crate::error::HwpxError::Io)?;
+        let bytes = std::fs::read(path.as_ref()).map_err(crate::error::HwpxError::Io)?;
         Self::decode(&bytes)
     }
 }
@@ -103,15 +97,12 @@ mod tests {
     use zip::ZipWriter;
 
     /// Creates a complete minimal HWPX for testing.
-    fn make_test_hwpx(
-        header_xml: &str,
-        section_xmls: &[&str],
-    ) -> Vec<u8> {
+    fn make_test_hwpx(header_xml: &str, section_xmls: &[&str]) -> Vec<u8> {
         let buf = Vec::new();
         let mut zip = ZipWriter::new(Cursor::new(buf));
 
-        let stored = SimpleFileOptions::default()
-            .compression_method(zip::CompressionMethod::Stored);
+        let stored =
+            SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
         let deflate = SimpleFileOptions::default();
 
         zip.start_file("mimetype", stored).unwrap();

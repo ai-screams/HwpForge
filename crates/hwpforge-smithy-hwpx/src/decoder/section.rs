@@ -12,9 +12,7 @@ use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
 use quick_xml::de::from_str;
 
 use crate::error::{HwpxError, HwpxResult};
-use crate::schema::section::{
-    HxParagraph, HxPic, HxRun, HxSection, HxTable, HxTableCell,
-};
+use crate::schema::section::{HxParagraph, HxPic, HxRun, HxSection, HxTable, HxTableCell};
 
 /// Maximum nesting depth for tables-within-tables.
 ///
@@ -37,10 +35,8 @@ pub struct SectionParseResult {
 /// `section_index` is used only for error messages (e.g. `"Contents/section0.xml"`).
 pub fn parse_section(xml: &str, section_index: usize) -> HwpxResult<SectionParseResult> {
     let file_hint = format!("Contents/section{section_index}.xml");
-    let section: HxSection = from_str(xml).map_err(|e| HwpxError::XmlParse {
-        file: file_hint,
-        detail: e.to_string(),
-    })?;
+    let section: HxSection = from_str(xml)
+        .map_err(|e| HwpxError::XmlParse { file: file_hint, detail: e.to_string() })?;
 
     let mut page_settings = None;
 
@@ -100,29 +96,20 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
     // Text runs
     for text in &hx.texts {
         if !text.text.is_empty() {
-            runs.push(Run {
-                content: RunContent::Text(text.text.clone()),
-                char_shape_id,
-            });
+            runs.push(Run { content: RunContent::Text(text.text.clone()), char_shape_id });
         }
     }
 
     // Table runs
     for table in &hx.tables {
         let core_table = convert_table(table, depth)?;
-        runs.push(Run {
-            content: RunContent::Table(Box::new(core_table)),
-            char_shape_id,
-        });
+        runs.push(Run { content: RunContent::Table(Box::new(core_table)), char_shape_id });
     }
 
     // Image runs
     for pic in &hx.pictures {
         if let Some(image) = convert_picture(pic) {
-            runs.push(Run {
-                content: RunContent::Image(image),
-                char_shape_id,
-            });
+            runs.push(Run { content: RunContent::Image(image), char_shape_id });
         }
     }
 
@@ -133,10 +120,7 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
 fn convert_table(hx: &HxTable, depth: usize) -> HwpxResult<Table> {
     if depth >= MAX_NESTING_DEPTH {
         return Err(HwpxError::InvalidStructure {
-            detail: format!(
-                "table nesting depth {} exceeds limit of {}",
-                depth, MAX_NESTING_DEPTH,
-            ),
+            detail: format!("table nesting depth {} exceeds limit of {}", depth, MAX_NESTING_DEPTH,),
         });
     }
 
@@ -182,25 +166,13 @@ fn convert_table_cell(hx: &HxTableCell, depth: usize) -> HwpxResult<TableCell> {
         vec![Paragraph::new(ParaShapeIndex::new(0))]
     };
 
-    let (col_span, row_span) = hx
-        .cell_span
-        .as_ref()
-        .map(|cs| (cs.col_span as u16, cs.row_span as u16))
-        .unwrap_or((1, 1));
+    let (col_span, row_span) =
+        hx.cell_span.as_ref().map(|cs| (cs.col_span as u16, cs.row_span as u16)).unwrap_or((1, 1));
 
-    let width = hx
-        .cell_sz
-        .as_ref()
-        .and_then(|sz| HwpUnit::new(sz.width).ok())
-        .unwrap_or(HwpUnit::ZERO);
+    let width =
+        hx.cell_sz.as_ref().and_then(|sz| HwpUnit::new(sz.width).ok()).unwrap_or(HwpUnit::ZERO);
 
-    Ok(TableCell {
-        paragraphs,
-        col_span,
-        row_span,
-        width,
-        background: None,
-    })
+    Ok(TableCell { paragraphs, col_span, row_span, width, background: None })
 }
 
 /// Converts an `HxPic` into a Core `Image`, if it has a valid image reference.
@@ -249,9 +221,7 @@ fn guess_image_format(name: &str) -> ImageFormat {
 }
 
 /// Extracts `PageSettings` from an `HxSecPr`.
-fn extract_page_settings(
-    sec_pr: &crate::schema::section::HxSecPr,
-) -> Option<PageSettings> {
+fn extract_page_settings(sec_pr: &crate::schema::section::HxSecPr) -> Option<PageSettings> {
     let page_pr = sec_pr.page_pr.as_ref()?;
 
     let width = HwpUnit::new(page_pr.width).unwrap_or_else(|_| {
@@ -435,16 +405,10 @@ mod tests {
                 assert_eq!(cell0.col_span, 1);
                 assert_eq!(cell0.row_span, 1);
                 assert_eq!(cell0.width.as_i32(), 5000);
-                assert_eq!(
-                    cell0.paragraphs[0].runs[0].content.as_text(),
-                    Some("Cell1"),
-                );
+                assert_eq!(cell0.paragraphs[0].runs[0].content.as_text(), Some("Cell1"),);
 
                 let cell3 = &table.rows[1].cells[0];
-                assert_eq!(
-                    cell3.paragraphs[0].runs[0].content.as_text(),
-                    Some("Cell3"),
-                );
+                assert_eq!(cell3.paragraphs[0].runs[0].content.as_text(), Some("Cell3"),);
             }
             _ => panic!("expected Table content"),
         }
@@ -523,10 +487,7 @@ mod tests {
         assert_eq!(guess_image_format("icon.bmp"), ImageFormat::Bmp);
         assert_eq!(guess_image_format("clip.wmf"), ImageFormat::Wmf);
         assert_eq!(guess_image_format("draw.emf"), ImageFormat::Emf);
-        assert!(matches!(
-            guess_image_format("unknown"),
-            ImageFormat::Unknown(_)
-        ));
+        assert!(matches!(guess_image_format("unknown"), ImageFormat::Unknown(_)));
     }
 
     // ── Error cases ──────────────────────────────────────────────
@@ -580,11 +541,7 @@ mod tests {
     fn table_row_count_mismatch_returns_error() {
         use crate::schema::section::{HxTable, HxTableRow};
         // Create table with rowCnt=2 but only 1 actual row
-        let hx = HxTable {
-            row_cnt: 2,
-            col_cnt: 1,
-            rows: vec![HxTableRow { cells: vec![] }],
-        };
+        let hx = HxTable { row_cnt: 2, col_cnt: 1, rows: vec![HxTableRow { cells: vec![] }] };
         let err = convert_table(&hx, 0).unwrap_err();
         match &err {
             HwpxError::InvalidStructure { detail } => {
@@ -605,9 +562,6 @@ mod tests {
             </p>
         </sec>"#;
         let result = parse_section(xml, 0).unwrap();
-        assert_eq!(
-            result.paragraphs[0].runs[0].content.as_text(),
-            Some("우리는 수학을 공부한다."),
-        );
+        assert_eq!(result.paragraphs[0].runs[0].content.as_text(), Some("우리는 수학을 공부한다."),);
     }
 }

@@ -7,9 +7,7 @@
 //! All fields use Foundation types (`Color`, `HwpUnit`, `Alignment`)
 //! so downstream code never touches raw XML strings.
 
-use hwpforge_foundation::{
-    Alignment, CharShapeIndex, Color, FontIndex, HwpUnit, ParaShapeIndex,
-};
+use hwpforge_foundation::{Alignment, CharShapeIndex, Color, FontIndex, HwpUnit, ParaShapeIndex};
 
 use crate::error::{HwpxError, HwpxResult};
 
@@ -192,12 +190,10 @@ impl HwpxStyleStore {
 
     /// Returns the font at `index`.
     pub fn font(&self, index: FontIndex) -> HwpxResult<&HwpxFont> {
-        self.fonts.get(index.get()).ok_or_else(|| {
-            HwpxError::IndexOutOfBounds {
-                kind: "font",
-                index: index.get() as u32,
-                max: self.fonts.len() as u32,
-            }
+        self.fonts.get(index.get()).ok_or_else(|| HwpxError::IndexOutOfBounds {
+            kind: "font",
+            index: index.get() as u32,
+            max: self.fonts.len() as u32,
         })
     }
 
@@ -217,12 +213,10 @@ impl HwpxStyleStore {
 
     /// Returns the char shape at `index`.
     pub fn char_shape(&self, index: CharShapeIndex) -> HwpxResult<&HwpxCharShape> {
-        self.char_shapes.get(index.get()).ok_or_else(|| {
-            HwpxError::IndexOutOfBounds {
-                kind: "char_shape",
-                index: index.get() as u32,
-                max: self.char_shapes.len() as u32,
-            }
+        self.char_shapes.get(index.get()).ok_or_else(|| HwpxError::IndexOutOfBounds {
+            kind: "char_shape",
+            index: index.get() as u32,
+            max: self.char_shapes.len() as u32,
         })
     }
 
@@ -242,12 +236,10 @@ impl HwpxStyleStore {
 
     /// Returns the para shape at `index`.
     pub fn para_shape(&self, index: ParaShapeIndex) -> HwpxResult<&HwpxParaShape> {
-        self.para_shapes.get(index.get()).ok_or_else(|| {
-            HwpxError::IndexOutOfBounds {
-                kind: "para_shape",
-                index: index.get() as u32,
-                max: self.para_shapes.len() as u32,
-            }
+        self.para_shapes.get(index.get()).ok_or_else(|| HwpxError::IndexOutOfBounds {
+            kind: "para_shape",
+            index: index.get() as u32,
+            max: self.para_shapes.len() as u32,
         })
     }
 
@@ -363,11 +355,8 @@ mod tests {
     #[test]
     fn push_and_get_para_shape() {
         let mut store = HwpxStyleStore::new();
-        let shape = HwpxParaShape {
-            alignment: Alignment::Center,
-            line_spacing: 200,
-            ..Default::default()
-        };
+        let shape =
+            HwpxParaShape { alignment: Alignment::Center, line_spacing: 200, ..Default::default() };
         let idx = store.push_para_shape(shape);
         let ps = store.para_shape(idx).unwrap();
         assert_eq!(ps.alignment, Alignment::Center);

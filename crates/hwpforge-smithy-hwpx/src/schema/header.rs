@@ -111,7 +111,6 @@ pub struct HxCharPr {
     pub border_fill_id_ref: u32,
 
     // ── child elements ──
-
     #[serde(rename = "fontRef", default)]
     pub font_ref: Option<HxFontRef>,
     #[serde(rename = "bold", default)]
@@ -217,7 +216,6 @@ pub struct HxParaPr {
     pub condense: u32,
 
     // ── child elements ──
-
     #[serde(rename = "align", default)]
     pub align: Option<HxAlign>,
     #[serde(rename = "heading", default)]
