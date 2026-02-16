@@ -112,8 +112,8 @@ impl std::fmt::Display for Section {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
     use crate::run::Run;
+    use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
 
     fn simple_paragraph() -> Paragraph {
         Paragraph::with_runs(
@@ -155,10 +155,7 @@ mod tests {
 
     #[test]
     fn display() {
-        let section = Section::with_paragraphs(
-            vec![simple_paragraph()],
-            PageSettings::a4(),
-        );
+        let section = Section::with_paragraphs(vec![simple_paragraph()], PageSettings::a4());
         assert_eq!(section.to_string(), "Section(1 paragraphs)");
     }
 
@@ -187,10 +184,7 @@ mod tests {
 
     #[test]
     fn serde_roundtrip() {
-        let section = Section::with_paragraphs(
-            vec![simple_paragraph()],
-            PageSettings::a4(),
-        );
+        let section = Section::with_paragraphs(vec![simple_paragraph()], PageSettings::a4());
         let json = serde_json::to_string(&section).unwrap();
         let back: Section = serde_json::from_str(&json).unwrap();
         assert_eq!(section, back);

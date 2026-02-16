@@ -166,11 +166,7 @@ impl Document<Draft> {
     /// assert!(doc.is_empty());
     /// ```
     pub fn new() -> Self {
-        Self {
-            sections: Vec::new(),
-            metadata: Metadata::default(),
-            _state: PhantomData,
-        }
+        Self { sections: Vec::new(), metadata: Metadata::default(), _state: PhantomData }
     }
 
     /// Creates a new draft document with the given metadata.
@@ -188,11 +184,7 @@ impl Document<Draft> {
     /// assert_eq!(doc.metadata().title.as_deref(), Some("Test"));
     /// ```
     pub fn with_metadata(metadata: Metadata) -> Self {
-        Self {
-            sections: Vec::new(),
-            metadata,
-            _state: PhantomData,
-        }
+        Self { sections: Vec::new(), metadata, _state: PhantomData }
     }
 
     /// Appends a section to the draft document.
@@ -268,11 +260,7 @@ impl Document<Draft> {
     /// ```
     pub fn validate(self) -> CoreResult<Document<Validated>> {
         validate_sections(&self.sections)?;
-        Ok(Document {
-            sections: self.sections,
-            metadata: self.metadata,
-            _state: PhantomData,
-        })
+        Ok(Document { sections: self.sections, metadata: self.metadata, _state: PhantomData })
     }
 }
 
@@ -342,11 +330,7 @@ impl<'de> Deserialize<'de> for Document<Draft> {
         }
 
         let data = DocumentData::deserialize(deserializer)?;
-        Ok(Document {
-            sections: data.sections,
-            metadata: data.metadata,
-            _state: PhantomData,
-        })
+        Ok(Document { sections: data.sections, metadata: data.metadata, _state: PhantomData })
     }
 }
 
@@ -375,11 +359,7 @@ impl<S> JsonSchema for Document<S> {
 
         SchemaObject {
             instance_type: Some(InstanceType::Object.into()),
-            object: Some(Box::new(ObjectValidation {
-                properties,
-                required,
-                ..Default::default()
-            })),
+            object: Some(Box::new(ObjectValidation { properties, required, ..Default::default() })),
             ..Default::default()
         }
         .into()
@@ -405,8 +385,8 @@ const _: () = {
 mod tests {
     use super::*;
     use crate::error::CoreError;
-    use crate::paragraph::Paragraph;
     use crate::page::PageSettings;
+    use crate::paragraph::Paragraph;
     use crate::run::Run;
     use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
 
@@ -594,10 +574,7 @@ mod tests {
     fn serde_roundtrip_draft() {
         let mut doc = Document::new();
         doc.add_section(valid_section());
-        doc.set_metadata(Metadata {
-            title: Some("Test".to_string()),
-            ..Metadata::default()
-        });
+        doc.set_metadata(Metadata { title: Some("Test".to_string()), ..Metadata::default() });
 
         let json = serde_json::to_string(&doc).unwrap();
         let back: Document<Draft> = serde_json::from_str(&json).unwrap();
@@ -630,9 +607,9 @@ mod tests {
 
     #[test]
     fn complex_document_roundtrip() {
-        use crate::table::{Table, TableCell, TableRow};
         use crate::control::Control;
         use crate::image::{Image, ImageFormat};
+        use crate::table::{Table, TableCell, TableRow};
         use hwpforge_foundation::HwpUnit;
 
         let cell = TableCell::new(
@@ -649,7 +626,12 @@ mod tests {
             url: "https://example.com".to_string(),
         };
 
-        let img = Image::new("test.png", HwpUnit::from_mm(10.0).unwrap(), HwpUnit::from_mm(10.0).unwrap(), ImageFormat::Png);
+        let img = Image::new(
+            "test.png",
+            HwpUnit::from_mm(10.0).unwrap(),
+            HwpUnit::from_mm(10.0).unwrap(),
+            ImageFormat::Png,
+        );
 
         let section = Section::with_paragraphs(
             vec![

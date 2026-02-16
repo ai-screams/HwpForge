@@ -156,12 +156,7 @@ impl Default for PageSettings {
 
 impl std::fmt::Display for PageSettings {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "PageSettings({:.1}mm x {:.1}mm)",
-            self.width.to_mm(),
-            self.height.to_mm()
-        )
+        write!(f, "PageSettings({:.1}mm x {:.1}mm)", self.width.to_mm(), self.height.to_mm())
     }
 }
 

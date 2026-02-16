@@ -195,13 +195,7 @@ impl TableCell {
     /// assert!(cell.background.is_none());
     /// ```
     pub fn new(paragraphs: Vec<Paragraph>, width: HwpUnit) -> Self {
-        Self {
-            paragraphs,
-            col_span: 1,
-            row_span: 1,
-            width,
-            background: None,
-        }
+        Self { paragraphs, col_span: 1, row_span: 1, width, background: None }
     }
 
     /// Creates a cell with explicit span values.
@@ -228,21 +222,15 @@ impl TableCell {
         col_span: u16,
         row_span: u16,
     ) -> Self {
-        Self {
-            paragraphs,
-            col_span,
-            row_span,
-            width,
-            background: None,
-        }
+        Self { paragraphs, col_span, row_span, width, background: None }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
     use crate::run::Run;
+    use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
 
     fn simple_paragraph() -> Paragraph {
         Paragraph::with_runs(
@@ -306,12 +294,8 @@ mod tests {
 
     #[test]
     fn cell_with_span() {
-        let cell = TableCell::with_span(
-            vec![simple_paragraph()],
-            HwpUnit::from_mm(100.0).unwrap(),
-            3,
-            2,
-        );
+        let cell =
+            TableCell::with_span(vec![simple_paragraph()], HwpUnit::from_mm(100.0).unwrap(), 3, 2);
         assert_eq!(cell.col_span, 3);
         assert_eq!(cell.row_span, 2);
     }
@@ -341,10 +325,8 @@ mod tests {
 
     #[test]
     fn row_with_fixed_height() {
-        let row = TableRow {
-            cells: vec![simple_cell()],
-            height: Some(HwpUnit::from_mm(25.0).unwrap()),
-        };
+        let row =
+            TableRow { cells: vec![simple_cell()], height: Some(HwpUnit::from_mm(25.0).unwrap()) };
         assert!(row.height.is_some());
     }
 

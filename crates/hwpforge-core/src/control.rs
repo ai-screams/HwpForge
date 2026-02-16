@@ -121,11 +121,8 @@ impl std::fmt::Display for Control {
                 write!(f, "TextBox({} paragraphs)", paragraphs.len())
             }
             Self::Hyperlink { text, url } => {
-                let preview: String = if text.len() > 30 {
-                    text.chars().take(30).collect()
-                } else {
-                    text.clone()
-                };
+                let preview: String =
+                    if text.len() > 30 { text.chars().take(30).collect() } else { text.clone() };
                 write!(f, "Hyperlink(\"{preview}\" -> {url})")
             }
             Self::Footnote { paragraphs } => {
@@ -141,8 +138,8 @@ impl std::fmt::Display for Control {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
     use crate::run::Run;
+    use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
 
     fn simple_paragraph() -> Paragraph {
         Paragraph::with_runs(
@@ -176,9 +173,7 @@ mod tests {
 
     #[test]
     fn footnote_construction() {
-        let ctrl = Control::Footnote {
-            paragraphs: vec![simple_paragraph()],
-        };
+        let ctrl = Control::Footnote { paragraphs: vec![simple_paragraph()] };
         assert!(ctrl.is_footnote());
         assert!(!ctrl.is_text_box());
     }
@@ -194,10 +189,7 @@ mod tests {
 
     #[test]
     fn unknown_without_data() {
-        let ctrl = Control::Unknown {
-            tag: "header".to_string(),
-            data: None,
-        };
+        let ctrl = Control::Unknown { tag: "header".to_string(), data: None };
         assert!(ctrl.is_unknown());
     }
 
@@ -213,10 +205,8 @@ mod tests {
 
     #[test]
     fn display_hyperlink() {
-        let ctrl = Control::Hyperlink {
-            text: "Short".to_string(),
-            url: "https://x.com".to_string(),
-        };
+        let ctrl =
+            Control::Hyperlink { text: "Short".to_string(), url: "https://x.com".to_string() };
         let s = ctrl.to_string();
         assert!(s.contains("Short"), "display: {s}");
         assert!(s.contains("https://x.com"), "display: {s}");
@@ -224,10 +214,8 @@ mod tests {
 
     #[test]
     fn display_hyperlink_long_text_truncated() {
-        let ctrl = Control::Hyperlink {
-            text: "A".repeat(100),
-            url: "https://example.com".to_string(),
-        };
+        let ctrl =
+            Control::Hyperlink { text: "A".repeat(100), url: "https://example.com".to_string() };
         let s = ctrl.to_string();
         // Should show first 30 chars
         assert!(s.contains(&"A".repeat(30)), "display: {s}");
@@ -236,9 +224,7 @@ mod tests {
 
     #[test]
     fn display_footnote() {
-        let ctrl = Control::Footnote {
-            paragraphs: vec![simple_paragraph()],
-        };
+        let ctrl = Control::Footnote { paragraphs: vec![simple_paragraph()] };
         assert_eq!(ctrl.to_string(), "Footnote(1 paragraphs)");
     }
 
@@ -290,10 +276,7 @@ mod tests {
 
     #[test]
     fn serde_roundtrip_unknown() {
-        let ctrl = Control::Unknown {
-            tag: "test".to_string(),
-            data: Some("payload".to_string()),
-        };
+        let ctrl = Control::Unknown { tag: "test".to_string(), data: Some("payload".to_string()) };
         let json = serde_json::to_string(&ctrl).unwrap();
         let back: Control = serde_json::from_str(&json).unwrap();
         assert_eq!(ctrl, back);

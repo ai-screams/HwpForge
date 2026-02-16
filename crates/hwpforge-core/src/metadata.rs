@@ -102,10 +102,7 @@ mod tests {
 
     #[test]
     fn partial_construction_with_defaults() {
-        let m = Metadata {
-            title: Some("Report".to_string()),
-            ..Metadata::default()
-        };
+        let m = Metadata { title: Some("Report".to_string()), ..Metadata::default() };
         assert_eq!(m.title.as_deref(), Some("Report"));
         assert!(m.author.is_none());
     }

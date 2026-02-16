@@ -76,7 +76,12 @@ impl Image {
     /// );
     /// assert_eq!(img.path, "images/photo.png");
     /// ```
-    pub fn new(path: impl Into<String>, width: HwpUnit, height: HwpUnit, format: ImageFormat) -> Self {
+    pub fn new(
+        path: impl Into<String>,
+        width: HwpUnit,
+        height: HwpUnit,
+        format: ImageFormat,
+    ) -> Self {
         Self { path: path.into(), width, height, format }
     }
 }

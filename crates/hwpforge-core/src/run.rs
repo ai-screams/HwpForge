@@ -292,10 +292,8 @@ mod tests {
 
     #[test]
     fn run_control_constructor() {
-        let ctrl = Control::Hyperlink {
-            text: "link".to_string(),
-            url: "https://example.com".to_string(),
-        };
+        let ctrl =
+            Control::Hyperlink { text: "link".to_string(), url: "https://example.com".to_string() };
         let run = Run::control(ctrl, CharShapeIndex::new(0));
         assert!(run.content.is_control());
         assert!(run.content.as_control().unwrap().is_hyperlink());
@@ -321,17 +319,16 @@ mod tests {
 
     #[test]
     fn run_content_image_checks() {
-        let c = RunContent::Image(Image::new("x.png", HwpUnit::ZERO, HwpUnit::ZERO, ImageFormat::Png));
+        let c =
+            RunContent::Image(Image::new("x.png", HwpUnit::ZERO, HwpUnit::ZERO, ImageFormat::Png));
         assert!(!c.is_text());
         assert!(c.is_image());
     }
 
     #[test]
     fn run_content_control_checks() {
-        let c = RunContent::Control(Box::new(Control::Unknown {
-            tag: "x".to_string(),
-            data: None,
-        }));
+        let c =
+            RunContent::Control(Box::new(Control::Unknown { tag: "x".to_string(), data: None }));
         assert!(!c.is_text());
         assert!(c.is_control());
     }
@@ -445,10 +442,8 @@ mod tests {
 
     #[test]
     fn serde_roundtrip_control() {
-        let ctrl = Control::Hyperlink {
-            text: "link".to_string(),
-            url: "https://example.com".to_string(),
-        };
+        let ctrl =
+            Control::Hyperlink { text: "link".to_string(), url: "https://example.com".to_string() };
         let run = Run::control(ctrl, CharShapeIndex::new(0));
         let json = serde_json::to_string(&run).unwrap();
         let back: Run = serde_json::from_str(&json).unwrap();

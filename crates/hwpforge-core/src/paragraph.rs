@@ -136,13 +136,15 @@ impl Paragraph {
     pub fn text_content(&self) -> String {
         self.runs
             .iter()
-            .filter_map(|r| {
-                if let RunContent::Text(s) = &r.content {
-                    Some(s.as_str())
-                } else {
-                    None
-                }
-            })
+            .filter_map(
+                |r| {
+                    if let RunContent::Text(s) = &r.content {
+                        Some(s.as_str())
+                    } else {
+                        None
+                    }
+                },
+            )
             .collect()
     }
 
@@ -166,9 +168,9 @@ impl std::fmt::Display for Paragraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hwpforge_foundation::CharShapeIndex;
-    use crate::table::Table;
     use crate::control::Control;
+    use crate::table::Table;
+    use hwpforge_foundation::CharShapeIndex;
 
     fn text_run(s: &str) -> Run {
         Run::text(s, CharShapeIndex::new(0))
@@ -184,10 +186,7 @@ mod tests {
 
     #[test]
     fn with_runs() {
-        let para = Paragraph::with_runs(
-            vec![text_run("a"), text_run("b")],
-            ParaShapeIndex::new(0),
-        );
+        let para = Paragraph::with_runs(vec![text_run("a"), text_run("b")], ParaShapeIndex::new(0));
         assert_eq!(para.run_count(), 2);
         assert!(!para.is_empty());
     }
@@ -296,10 +295,8 @@ mod tests {
 
     #[test]
     fn serde_roundtrip_with_control() {
-        let ctrl = Control::Hyperlink {
-            text: "link".to_string(),
-            url: "https://example.com".to_string(),
-        };
+        let ctrl =
+            Control::Hyperlink { text: "link".to_string(), url: "https://example.com".to_string() };
         let para = Paragraph::with_runs(
             vec![text_run("see "), Run::control(ctrl, CharShapeIndex::new(1))],
             ParaShapeIndex::new(0),

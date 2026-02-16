@@ -81,16 +81,11 @@ fn lifecycle_complex_document_with_all_content_types() {
     });
 
     // Section 1: Mixed content
-    let cell = TableCell::new(
-        vec![simple_paragraph("Cell content")],
-        HwpUnit::from_mm(70.0).unwrap(),
-    );
+    let cell =
+        TableCell::new(vec![simple_paragraph("Cell content")], HwpUnit::from_mm(70.0).unwrap());
     let table = Table {
         rows: vec![
-            TableRow {
-                cells: vec![cell.clone(), cell.clone()],
-                height: None,
-            },
+            TableRow { cells: vec![cell.clone(), cell.clone()], height: None },
             TableRow {
                 cells: vec![cell.clone(), cell],
                 height: Some(HwpUnit::from_mm(15.0).unwrap()),
@@ -118,9 +113,7 @@ fn lifecycle_complex_document_with_all_content_types() {
         height: HwpUnit::from_mm(30.0).unwrap(),
     };
 
-    let footnote = Control::Footnote {
-        paragraphs: vec![simple_paragraph("Footnote body")],
-    };
+    let footnote = Control::Footnote { paragraphs: vec![simple_paragraph("Footnote body")] };
 
     let section1 = Section::with_paragraphs(
         vec![
@@ -260,13 +253,16 @@ fn text_extraction_multi_run_paragraph() {
     let para = Paragraph::with_runs(
         vec![
             text_run("Hello "),
-            Run::table(Table::new(vec![TableRow {
-                cells: vec![TableCell::new(
-                    vec![simple_paragraph("ignored")],
-                    HwpUnit::from_mm(50.0).unwrap(),
-                )],
-                height: None,
-            }]), CharShapeIndex::new(0)),
+            Run::table(
+                Table::new(vec![TableRow {
+                    cells: vec![TableCell::new(
+                        vec![simple_paragraph("ignored")],
+                        HwpUnit::from_mm(50.0).unwrap(),
+                    )],
+                    height: None,
+                }]),
+                CharShapeIndex::new(0),
+            ),
             text_run("world"),
         ],
         ParaShapeIndex::new(0),
@@ -350,10 +346,8 @@ fn merged_cell_table_validates() {
         3,
         2,
     );
-    let regular_cell = TableCell::new(
-        vec![simple_paragraph("normal")],
-        HwpUnit::from_mm(50.0).unwrap(),
-    );
+    let regular_cell =
+        TableCell::new(vec![simple_paragraph("normal")], HwpUnit::from_mm(50.0).unwrap());
     let table = Table::new(vec![
         TableRow { cells: vec![merged_cell], height: None },
         TableRow { cells: vec![regular_cell], height: None },
@@ -372,10 +366,8 @@ fn merged_cell_table_validates() {
 
 #[test]
 fn table_cell_with_background_color() {
-    let mut cell = TableCell::new(
-        vec![simple_paragraph("colored")],
-        HwpUnit::from_mm(50.0).unwrap(),
-    );
+    let mut cell =
+        TableCell::new(vec![simple_paragraph("colored")], HwpUnit::from_mm(50.0).unwrap());
     cell.background = Some(Color::from_rgb(255, 200, 200));
 
     let table = Table::new(vec![TableRow { cells: vec![cell], height: None }]);

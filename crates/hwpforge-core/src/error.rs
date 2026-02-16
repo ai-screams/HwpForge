@@ -99,7 +99,9 @@ pub enum ValidationError {
     },
 
     /// A table contains zero rows.
-    #[error("Table has no rows (section {section_index}, paragraph {paragraph_index}, run {run_index})")]
+    #[error(
+        "Table has no rows (section {section_index}, paragraph {paragraph_index}, run {run_index})"
+    )]
     EmptyTable {
         /// Zero-based section index.
         section_index: usize,
@@ -288,11 +290,8 @@ mod tests {
 
     #[test]
     fn empty_table_displays_location() {
-        let err = ValidationError::EmptyTable {
-            section_index: 0,
-            paragraph_index: 2,
-            run_index: 0,
-        };
+        let err =
+            ValidationError::EmptyTable { section_index: 0, paragraph_index: 2, run_index: 0 };
         let msg = err.to_string();
         assert!(msg.contains("no rows"), "msg: {msg}");
     }
@@ -329,22 +328,16 @@ mod tests {
 
     #[test]
     fn empty_text_box_displays_location() {
-        let err = ValidationError::EmptyTextBox {
-            section_index: 0,
-            paragraph_index: 0,
-            run_index: 1,
-        };
+        let err =
+            ValidationError::EmptyTextBox { section_index: 0, paragraph_index: 0, run_index: 1 };
         let msg = err.to_string();
         assert!(msg.contains("TextBox"), "msg: {msg}");
     }
 
     #[test]
     fn empty_footnote_displays_location() {
-        let err = ValidationError::EmptyFootnote {
-            section_index: 0,
-            paragraph_index: 0,
-            run_index: 0,
-        };
+        let err =
+            ValidationError::EmptyFootnote { section_index: 0, paragraph_index: 0, run_index: 0 };
         let msg = err.to_string();
         assert!(msg.contains("Footnote"), "msg: {msg}");
     }
@@ -376,10 +369,8 @@ mod tests {
 
     #[test]
     fn core_error_from_foundation() {
-        let fe = FoundationError::InvalidField {
-            field: "test".to_string(),
-            reason: "bad".to_string(),
-        };
+        let fe =
+            FoundationError::InvalidField { field: "test".to_string(), reason: "bad".to_string() };
         let ce: CoreError = fe.into();
         assert!(matches!(ce, CoreError::Foundation(_)));
     }

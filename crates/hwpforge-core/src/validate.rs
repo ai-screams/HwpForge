@@ -143,11 +143,11 @@ fn validate_run_content(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::page::PageSettings;
     use crate::paragraph::Paragraph;
     use crate::run::Run;
     use crate::section::Section;
     use crate::table::{Table, TableCell, TableRow};
-    use crate::page::PageSettings;
     use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
 
     fn text_run(s: &str) -> Run {
@@ -191,10 +191,7 @@ mod tests {
 
     #[test]
     fn second_empty_section_reports_index_1() {
-        let sections = vec![
-            simple_section(),
-            Section::new(PageSettings::a4()),
-        ];
+        let sections = vec![simple_section(), Section::new(PageSettings::a4())];
         let result = validate_sections(&sections);
         assert_eq!(result, Err(ValidationError::EmptySection { section_index: 1 }));
     }
@@ -210,29 +207,20 @@ mod tests {
         let result = validate_sections(&sections);
         assert_eq!(
             result,
-            Err(ValidationError::EmptyParagraph {
-                section_index: 0,
-                paragraph_index: 0,
-            })
+            Err(ValidationError::EmptyParagraph { section_index: 0, paragraph_index: 0 })
         );
     }
 
     #[test]
     fn second_empty_paragraph_reports_correct_index() {
         let sections = vec![Section::with_paragraphs(
-            vec![
-                simple_paragraph(),
-                Paragraph::new(ParaShapeIndex::new(0)),
-            ],
+            vec![simple_paragraph(), Paragraph::new(ParaShapeIndex::new(0))],
             PageSettings::a4(),
         )];
         let result = validate_sections(&sections);
         assert_eq!(
             result,
-            Err(ValidationError::EmptyParagraph {
-                section_index: 0,
-                paragraph_index: 1,
-            })
+            Err(ValidationError::EmptyParagraph { section_index: 0, paragraph_index: 1 })
         );
     }
 
@@ -248,11 +236,7 @@ mod tests {
         let result = validate_sections(&sections);
         assert_eq!(
             result,
-            Err(ValidationError::EmptyTable {
-                section_index: 0,
-                paragraph_index: 0,
-                run_index: 0,
-            })
+            Err(ValidationError::EmptyTable { section_index: 0, paragraph_index: 0, run_index: 0 })
         );
     }
 
@@ -376,10 +360,7 @@ mod tests {
 
     #[test]
     fn valid_table_accepted() {
-        let table = Table::new(vec![TableRow {
-            cells: vec![simple_cell()],
-            height: None,
-        }]);
+        let table = Table::new(vec![TableRow { cells: vec![simple_cell()], height: None }]);
         let table_run = Run::table(table, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
             vec![Paragraph::with_runs(vec![table_run], ParaShapeIndex::new(0))],
@@ -405,9 +386,7 @@ mod tests {
 
     #[test]
     fn valid_footnote_accepted() {
-        let ctrl = Control::Footnote {
-            paragraphs: vec![simple_paragraph()],
-        };
+        let ctrl = Control::Footnote { paragraphs: vec![simple_paragraph()] };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
             vec![Paragraph::with_runs(vec![ctrl_run], ParaShapeIndex::new(0))],
@@ -418,10 +397,8 @@ mod tests {
 
     #[test]
     fn hyperlink_always_valid() {
-        let ctrl = Control::Hyperlink {
-            text: "link".to_string(),
-            url: "https://example.com".to_string(),
-        };
+        let ctrl =
+            Control::Hyperlink { text: "link".to_string(), url: "https://example.com".to_string() };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
             vec![Paragraph::with_runs(vec![ctrl_run], ParaShapeIndex::new(0))],
