@@ -1,14 +1,38 @@
-pub fn add(left: usize, right: usize) -> usize {
-    left + right
-}
+//! Markdown codec for HwpForge.
+//!
+//! This crate provides a bidirectional bridge between Markdown and the
+//! format-agnostic Core DOM:
+//!
+//! - Decode: Markdown + Template -> `Document<Draft>`
+//! - Encode (lossy): `Document<Validated>` -> readable GFM
+//! - Encode (lossless): `Document<Validated>` -> frontmatter + HTML-like markup
+//!
+//! # Architecture
+//!
+//! ```text
+//! foundation (indices, units)
+//!     |
+//!     v
+//! core (Document DOM)
+//!     |
+//!     v
+//! blueprint (Template, StyleRegistry)
+//!     |
+//!     v
+//! smithy-md (THIS CRATE)
+//! ```
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#![deny(missing_docs)]
+#![deny(unsafe_code)]
+#![deny(clippy::all)]
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+mod decoder;
+mod encoder;
+pub mod error;
+pub mod frontmatter;
+mod mapper;
+
+pub use decoder::MdDecoder;
+pub use encoder::MdEncoder;
+pub use error::{MdError, MdErrorCode, MdResult};
+pub use frontmatter::Frontmatter;
