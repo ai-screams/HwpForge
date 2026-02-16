@@ -11,10 +11,8 @@ targets = [
 all-features = false
 
 [advisories]
-unmaintained = "warn"
-ignore = [
-    "RUSTSEC-2026-0009",  # time crate CVSS 4.0 parsing issue in cargo-deny
-]
+unmaintained = "workspace"
+ignore = []
 
 [bans]
 multiple-versions = "warn"
