@@ -19,6 +19,8 @@
 //! assert!(img.path.ends_with(".png"));
 //! ```
 
+use std::collections::HashMap;
+
 use hwpforge_foundation::HwpUnit;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -147,6 +149,71 @@ impl std::fmt::Display for ImageFormat {
     }
 }
 
+// ---------------------------------------------------------------------------
+// ImageStore
+// ---------------------------------------------------------------------------
+
+/// Storage for binary image data keyed by path.
+///
+/// Maps image paths (e.g. `"image1.jpg"`) to their binary content.
+/// Used by the encoder to embed images into HWPX archives and by the
+/// decoder to extract them.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_core::image::ImageStore;
+///
+/// let mut store = ImageStore::new();
+/// store.insert("logo.png", vec![0x89, 0x50, 0x4E, 0x47]);
+/// assert_eq!(store.len(), 1);
+/// assert!(store.get("logo.png").is_some());
+/// ```
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ImageStore {
+    images: HashMap<String, Vec<u8>>,
+}
+
+impl ImageStore {
+    /// Creates an empty image store.
+    pub fn new() -> Self {
+        Self { images: HashMap::new() }
+    }
+
+    /// Inserts an image with the given key and binary data.
+    ///
+    /// If the key already exists, the data is replaced.
+    pub fn insert(&mut self, key: impl Into<String>, data: Vec<u8>) {
+        self.images.insert(key.into(), data);
+    }
+
+    /// Returns the binary data for the given key, if present.
+    pub fn get(&self, key: &str) -> Option<&[u8]> {
+        self.images.get(key).map(|v| v.as_slice())
+    }
+
+    /// Returns the number of stored images.
+    pub fn len(&self) -> usize {
+        self.images.len()
+    }
+
+    /// Returns `true` if the store contains no images.
+    pub fn is_empty(&self) -> bool {
+        self.images.is_empty()
+    }
+
+    /// Iterates over all `(key, data)` pairs.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &[u8])> {
+        self.images.iter().map(|(k, v)| (k.as_str(), v.as_slice()))
+    }
+}
+
+impl FromIterator<(String, Vec<u8>)> for ImageStore {
+    fn from_iter<I: IntoIterator<Item = (String, Vec<u8>)>>(iter: I) -> Self {
+        Self { images: iter.into_iter().collect() }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -257,5 +324,108 @@ mod tests {
         let path = String::from("dynamic/path.bmp");
         let img = Image::new(path, HwpUnit::ZERO, HwpUnit::ZERO, ImageFormat::Bmp);
         assert_eq!(img.path, "dynamic/path.bmp");
+    }
+
+    // -----------------------------------------------------------------------
+    // ImageStore tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn image_store_new_is_empty() {
+        let store = ImageStore::new();
+        assert!(store.is_empty());
+        assert_eq!(store.len(), 0);
+    }
+
+    #[test]
+    fn image_store_insert_and_get() {
+        let mut store = ImageStore::new();
+        store.insert("logo.png", vec![0x89, 0x50, 0x4E, 0x47]);
+        assert_eq!(store.len(), 1);
+        assert!(!store.is_empty());
+        assert_eq!(store.get("logo.png"), Some(&[0x89, 0x50, 0x4E, 0x47][..]));
+    }
+
+    #[test]
+    fn image_store_get_missing() {
+        let store = ImageStore::new();
+        assert!(store.get("nonexistent.png").is_none());
+    }
+
+    #[test]
+    fn image_store_insert_replaces() {
+        let mut store = ImageStore::new();
+        store.insert("img.png", vec![1, 2, 3]);
+        store.insert("img.png", vec![4, 5, 6]);
+        assert_eq!(store.len(), 1);
+        assert_eq!(store.get("img.png"), Some(&[4, 5, 6][..]));
+    }
+
+    #[test]
+    fn image_store_multiple_images() {
+        let mut store = ImageStore::new();
+        store.insert("a.png", vec![1]);
+        store.insert("b.jpg", vec![2]);
+        store.insert("c.gif", vec![3]);
+        assert_eq!(store.len(), 3);
+    }
+
+    #[test]
+    fn image_store_iter() {
+        let mut store = ImageStore::new();
+        store.insert("a.png", vec![1]);
+        store.insert("b.jpg", vec![2]);
+        let pairs: Vec<_> = store.iter().collect();
+        assert_eq!(pairs.len(), 2);
+    }
+
+    #[test]
+    fn image_store_from_iterator() {
+        let items = vec![("a.png".to_string(), vec![1, 2]), ("b.jpg".to_string(), vec![3, 4])];
+        let store: ImageStore = items.into_iter().collect();
+        assert_eq!(store.len(), 2);
+        assert_eq!(store.get("a.png"), Some(&[1, 2][..]));
+    }
+
+    #[test]
+    fn image_store_default() {
+        let store = ImageStore::default();
+        assert!(store.is_empty());
+    }
+
+    #[test]
+    fn image_store_clone_independence() {
+        let mut store = ImageStore::new();
+        store.insert("img.png", vec![1, 2, 3]);
+        let mut cloned = store.clone();
+        cloned.insert("other.png", vec![4, 5]);
+        assert_eq!(store.len(), 1);
+        assert_eq!(cloned.len(), 2);
+    }
+
+    #[test]
+    fn image_store_equality() {
+        let mut a = ImageStore::new();
+        a.insert("img.png", vec![1, 2, 3]);
+        let mut b = ImageStore::new();
+        b.insert("img.png", vec![1, 2, 3]);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn image_store_serde_roundtrip() {
+        let mut store = ImageStore::new();
+        store.insert("logo.png", vec![0x89, 0x50]);
+        let json = serde_json::to_string(&store).unwrap();
+        let back: ImageStore = serde_json::from_str(&json).unwrap();
+        assert_eq!(store, back);
+    }
+
+    #[test]
+    fn image_store_string_key() {
+        let mut store = ImageStore::new();
+        let key = String::from("dynamic/path.png");
+        store.insert(key, vec![42]);
+        assert!(store.get("dynamic/path.png").is_some());
     }
 }

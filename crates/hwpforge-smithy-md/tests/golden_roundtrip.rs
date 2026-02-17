@@ -21,7 +21,8 @@ fn roundtrip_fixture(
     let md_result = MdDecoder::decode_file(fixture_path(name), &template).unwrap();
     let validated = md_result.document.clone().validate().unwrap();
     let store = HwpxStyleStore::from_registry(&md_result.style_registry);
-    let hwpx_bytes = HwpxEncoder::encode(&validated, &store).unwrap();
+    let hwpx_bytes =
+        HwpxEncoder::encode(&validated, &store, &hwpforge_core::image::ImageStore::new()).unwrap();
     let hwpx_result = HwpxDecoder::decode(&hwpx_bytes).unwrap();
     (md_result, hwpx_result)
 }

@@ -122,7 +122,8 @@ date: "2026-02-17"
     let md_doc = MdDecoder::decode(&markdown_for_encode, &template).expect("MD decode failed");
     let validated = md_doc.document.validate().expect("validation failed");
     let store = HwpxStyleStore::from_registry(&md_doc.style_registry);
-    let hwpx_bytes = HwpxEncoder::encode(&validated, &store).expect("HWPX encode failed");
+    let images = hwpforge_core::image::ImageStore::new();
+    let hwpx_bytes = HwpxEncoder::encode(&validated, &store, &images).expect("HWPX encode failed");
 
     let out_path = "/Users/hanyul/Works/AiScream/HwpForge/Phase4_1_Improvements_Test.hwpx";
     std::fs::write(out_path, &hwpx_bytes).expect("file write failed");

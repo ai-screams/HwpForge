@@ -9,7 +9,9 @@
 
 use hwpforge_blueprint::registry::StyleRegistry;
 use hwpforge_foundation::{
-    Alignment, CharShapeIndex, Color, FontIndex, HwpUnit, LineSpacingType, ParaShapeIndex,
+    Alignment, BorderFillIndex, BreakType, CharShapeIndex, Color, EmbossType, EngraveType,
+    FontIndex, HwpUnit, LineSpacingType, OutlineType, ParaShapeIndex, ShadowType, StrikeoutShape,
+    UnderlineType, VerticalPosition,
 };
 
 use crate::error::{HwpxError, HwpxResult};
@@ -82,16 +84,30 @@ pub struct HwpxCharShape {
     pub height: HwpUnit,
     /// Text color (from `textColor` attribute, e.g. `"#000000"`).
     pub text_color: Color,
-    /// Background shade color (from `shadeColor`, `"none"` → BLACK).
-    pub shade_color: Color,
+    /// Background shade color (from `shadeColor`, `"none"` → None).
+    pub shade_color: Option<Color>,
     /// Bold formatting.
     pub bold: bool,
     /// Italic formatting.
     pub italic: bool,
-    /// Underline type string (e.g. `"NONE"`, `"BOTTOM"`).
-    pub underline_type: String,
-    /// Strikeout shape string (e.g. `"NONE"`, `"SLASH"`).
-    pub strikeout_shape: String,
+    /// Underline type (e.g. `None`, `Bottom`).
+    pub underline_type: UnderlineType,
+    /// Underline color (None = inherit text color).
+    pub underline_color: Option<Color>,
+    /// Strikeout shape (e.g. `None`, `Continuous`).
+    pub strikeout_shape: StrikeoutShape,
+    /// Strikeout color (None = inherit text color).
+    pub strikeout_color: Option<Color>,
+    /// Vertical position (Normal/Superscript/Subscript).
+    pub vertical_position: VerticalPosition,
+    /// Text outline type.
+    pub outline_type: OutlineType,
+    /// Drop shadow type.
+    pub shadow_type: ShadowType,
+    /// Emboss effect type.
+    pub emboss_type: EmbossType,
+    /// Engrave effect type.
+    pub engrave_type: EngraveType,
 }
 
 impl Default for HwpxCharShape {
@@ -100,11 +116,18 @@ impl Default for HwpxCharShape {
             font_ref: HwpxFontRef::default(),
             height: HwpUnit::ZERO,
             text_color: Color::BLACK,
-            shade_color: Color::BLACK,
+            shade_color: None,
             bold: false,
             italic: false,
-            underline_type: String::from("NONE"),
-            strikeout_shape: String::from("NONE"),
+            underline_type: UnderlineType::None,
+            underline_color: None,
+            strikeout_shape: StrikeoutShape::None,
+            strikeout_color: None,
+            vertical_position: VerticalPosition::Normal,
+            outline_type: OutlineType::None,
+            shadow_type: ShadowType::None,
+            emboss_type: EmbossType::None,
+            engrave_type: EngraveType::None,
         }
     }
 }
@@ -157,8 +180,20 @@ pub struct HwpxParaShape {
     pub spacing_after: HwpUnit,
     /// Line spacing value.
     pub line_spacing: i32,
-    /// Line spacing type (e.g. `"PERCENT"`, `"FIXED"`).
-    pub line_spacing_type: String,
+    /// Line spacing type.
+    pub line_spacing_type: LineSpacingType,
+
+    // Advanced paragraph controls (NEW - Phase 6.2)
+    /// Page/column break type before paragraph.
+    pub break_type: BreakType,
+    /// Keep paragraph with next (prevent page break between).
+    pub keep_with_next: bool,
+    /// Keep lines together (prevent page break within paragraph).
+    pub keep_lines_together: bool,
+    /// Widow/orphan control (minimum 2 lines at page boundaries).
+    pub widow_orphan: bool,
+    /// Border/fill reference (None = no border/fill).
+    pub border_fill_id: Option<BorderFillIndex>,
 }
 
 impl Default for HwpxParaShape {
@@ -171,7 +206,12 @@ impl Default for HwpxParaShape {
             spacing_before: HwpUnit::ZERO,
             spacing_after: HwpUnit::ZERO,
             line_spacing: 160,
-            line_spacing_type: String::from("PERCENT"),
+            line_spacing_type: LineSpacingType::Percentage,
+            break_type: BreakType::None,
+            keep_with_next: false,
+            keep_lines_together: false,
+            widow_orphan: true, // Enabled by default in HWPX
+            border_fill_id: None,
         }
     }
 }
@@ -268,11 +308,18 @@ impl HwpxStyleStore {
                 font_ref: HwpxFontRef::default(),    // All point to font 0
                 height: HwpUnit::new(1000).unwrap(), // 10pt
                 text_color: Color::BLACK,
-                shade_color: Color::BLACK,
+                shade_color: None,
                 bold: false,
                 italic: false,
-                underline_type: "NONE".to_string(),
-                strikeout_shape: "NONE".to_string(),
+                underline_type: UnderlineType::None,
+                underline_color: None,
+                strikeout_shape: StrikeoutShape::None,
+                strikeout_color: None,
+                vertical_position: VerticalPosition::Normal,
+                outline_type: OutlineType::None,
+                shadow_type: ShadowType::None,
+                emboss_type: EmbossType::None,
+                engrave_type: EngraveType::None,
             });
 
             // Inject minimal default para shape (justified, 160% line spacing)
@@ -284,7 +331,12 @@ impl HwpxStyleStore {
                 spacing_before: HwpUnit::ZERO,
                 spacing_after: HwpUnit::ZERO,
                 line_spacing: 160,
-                line_spacing_type: "PERCENT".to_string(),
+                line_spacing_type: LineSpacingType::Percentage,
+                break_type: BreakType::None,
+                keep_with_next: false,
+                keep_lines_together: false,
+                widow_orphan: true,
+                border_fill_id: None,
             });
         }
 
@@ -309,19 +361,18 @@ impl HwpxStyleStore {
                 font_ref,
                 height: cs.size,
                 text_color: cs.color,
-                shade_color: Color::BLACK,
+                shade_color: cs.shade_color,
                 bold: cs.bold,
                 italic: cs.italic,
-                underline_type: if cs.underline {
-                    "BOTTOM".to_string()
-                } else {
-                    "NONE".to_string()
-                },
-                strikeout_shape: if cs.strikethrough {
-                    "SLASH".to_string()
-                } else {
-                    "NONE".to_string()
-                },
+                underline_type: cs.underline_type,
+                underline_color: cs.underline_color,
+                strikeout_shape: cs.strikeout_shape,
+                strikeout_color: cs.strikeout_color,
+                vertical_position: cs.vertical_position,
+                outline_type: cs.outline,
+                shadow_type: cs.shadow,
+                emboss_type: cs.emboss,
+                engrave_type: cs.engrave,
             });
         }
 
@@ -335,12 +386,12 @@ impl HwpxStyleStore {
                 spacing_before: ps.space_before,
                 spacing_after: ps.space_after,
                 line_spacing: ps.line_spacing_value.round() as i32,
-                line_spacing_type: match ps.line_spacing_type {
-                    LineSpacingType::Percentage => "PERCENT".to_string(),
-                    LineSpacingType::Fixed => "FIXED".to_string(),
-                    LineSpacingType::BetweenLines => "BETWEEN_LINES".to_string(),
-                    _ => "PERCENT".to_string(),
-                },
+                line_spacing_type: ps.line_spacing_type,
+                break_type: ps.break_type,
+                keep_with_next: ps.keep_with_next,
+                keep_lines_together: ps.keep_lines_together,
+                widow_orphan: ps.widow_orphan,
+                border_fill_id: ps.border_fill_id,
             });
         }
 
@@ -713,10 +764,13 @@ mod tests {
         let cs = HwpxCharShape::default();
         assert_eq!(cs.height, HwpUnit::ZERO);
         assert_eq!(cs.text_color, Color::BLACK);
+        assert_eq!(cs.shade_color, None);
         assert!(!cs.bold);
         assert!(!cs.italic);
-        assert_eq!(cs.underline_type, "NONE");
-        assert_eq!(cs.strikeout_shape, "NONE");
+        assert_eq!(cs.underline_type, UnderlineType::None);
+        assert_eq!(cs.underline_color, None);
+        assert_eq!(cs.strikeout_shape, StrikeoutShape::None);
+        assert_eq!(cs.strikeout_color, None);
     }
 
     // ── HwpxParaShape default ────────────────────────────────────
@@ -728,7 +782,7 @@ mod tests {
         assert_eq!(ps.margin_left, HwpUnit::ZERO);
         assert_eq!(ps.indent, HwpUnit::ZERO);
         assert_eq!(ps.line_spacing, 160);
-        assert_eq!(ps.line_spacing_type, "PERCENT");
+        assert_eq!(ps.line_spacing_type, LineSpacingType::Percentage);
     }
 
     // ── parse_hex_color ──────────────────────────────────────────
@@ -931,12 +985,18 @@ mod tests {
             let hwpx_cs = store.char_shape(CharShapeIndex::new(i)).unwrap();
             assert_eq!(hwpx_cs.height, bp_cs.size);
             assert_eq!(hwpx_cs.text_color, bp_cs.color);
+            assert_eq!(hwpx_cs.shade_color, bp_cs.shade_color);
             assert_eq!(hwpx_cs.bold, bp_cs.bold);
             assert_eq!(hwpx_cs.italic, bp_cs.italic);
-            let expected_underline = if bp_cs.underline { "BOTTOM" } else { "NONE" };
-            assert_eq!(hwpx_cs.underline_type, expected_underline);
-            let expected_strikeout = if bp_cs.strikethrough { "SLASH" } else { "NONE" };
-            assert_eq!(hwpx_cs.strikeout_shape, expected_strikeout);
+            assert_eq!(hwpx_cs.underline_type, bp_cs.underline_type);
+            assert_eq!(hwpx_cs.underline_color, bp_cs.underline_color);
+            assert_eq!(hwpx_cs.strikeout_shape, bp_cs.strikeout_shape);
+            assert_eq!(hwpx_cs.strikeout_color, bp_cs.strikeout_color);
+            assert_eq!(hwpx_cs.vertical_position, bp_cs.vertical_position);
+            assert_eq!(hwpx_cs.outline_type, bp_cs.outline);
+            assert_eq!(hwpx_cs.shadow_type, bp_cs.shadow);
+            assert_eq!(hwpx_cs.emboss_type, bp_cs.emboss);
+            assert_eq!(hwpx_cs.engrave_type, bp_cs.engrave);
         }
     }
 

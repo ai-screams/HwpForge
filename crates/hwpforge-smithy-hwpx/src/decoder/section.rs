@@ -3,16 +3,23 @@
 //! Converts XML schema types (`HxParagraph`, `HxRun`, `HxText`, `HxTable`,
 //! `HxPic`) into Core types (`Paragraph`, `Run`, `RunContent`, `Table`, `Image`).
 
+use hwpforge_core::control::Control;
 use hwpforge_core::image::{Image, ImageFormat};
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::{Run, RunContent};
+use hwpforge_core::section::{HeaderFooter, PageNumber};
 use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_core::PageSettings;
-use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+use hwpforge_foundation::{
+    ApplyPageType, CharShapeIndex, HwpUnit, NumberFormatType, PageNumberPosition, ParaShapeIndex,
+};
 use quick_xml::de::from_str;
 
 use crate::error::{HwpxError, HwpxResult};
-use crate::schema::section::{HxParagraph, HxPic, HxRun, HxSection, HxTable, HxTableCell};
+use crate::schema::section::{
+    HxCtrl, HxFootNote, HxHeaderFooter, HxPageNum, HxParagraph, HxPic, HxRect, HxRun, HxSection,
+    HxSubList, HxTable, HxTableCell,
+};
 
 /// Maximum nesting depth for tables-within-tables.
 ///
@@ -28,6 +35,12 @@ pub struct SectionParseResult {
     pub paragraphs: Vec<Paragraph>,
     /// Page settings extracted from `<hp:secPr>`, if present.
     pub page_settings: Option<PageSettings>,
+    /// Header extracted from `<hp:ctrl><hp:header>`, if present.
+    pub header: Option<HeaderFooter>,
+    /// Footer extracted from `<hp:ctrl><hp:footer>`, if present.
+    pub footer: Option<HeaderFooter>,
+    /// Page number extracted from `<hp:ctrl><hp:pageNum>`, if present.
+    pub page_number: Option<PageNumber>,
 }
 
 /// Parses a section XML string into paragraphs and optional page settings.
@@ -39,6 +52,9 @@ pub fn parse_section(xml: &str, section_index: usize) -> HwpxResult<SectionParse
         .map_err(|e| HwpxError::XmlParse { file: file_hint, detail: e.to_string() })?;
 
     let mut page_settings = None;
+    let mut header = None;
+    let mut footer = None;
+    let mut page_number = None;
 
     let paragraphs = section
         .paragraphs
@@ -49,11 +65,33 @@ pub fn parse_section(xml: &str, section_index: usize) -> HwpxResult<SectionParse
             if ps.is_some() && page_settings.is_none() {
                 page_settings = ps;
             }
+
+            // Extract header/footer/pagenum from ctrl elements in runs
+            for hx_run in &hx_para.runs {
+                for ctrl in &hx_run.ctrls {
+                    if header.is_none() {
+                        if let Some(hf) = convert_ctrl_header(ctrl) {
+                            header = Some(hf);
+                        }
+                    }
+                    if footer.is_none() {
+                        if let Some(hf) = convert_ctrl_footer(ctrl) {
+                            footer = Some(hf);
+                        }
+                    }
+                    if page_number.is_none() {
+                        if let Some(pn) = convert_ctrl_page_number(ctrl) {
+                            page_number = Some(pn);
+                        }
+                    }
+                }
+            }
+
             Ok(para)
         })
         .collect::<HwpxResult<Vec<_>>>()?;
 
-    Ok(SectionParseResult { paragraphs, page_settings })
+    Ok(SectionParseResult { paragraphs, page_settings, header, footer, page_number })
 }
 
 /// Converts an `HxParagraph` to a Core `Paragraph`.
@@ -93,8 +131,9 @@ fn convert_paragraph(
 
 /// Converts an `HxRun` into one or more Core `Run`s.
 ///
-/// A single HxRun can contain multiple `<hp:t>`, `<hp:tbl>`, and `<hp:pic>`
-/// elements. Each is converted to a separate Run with the same charPrIDRef.
+/// A single HxRun can contain multiple `<hp:t>`, `<hp:tbl>`, `<hp:pic>`,
+/// `<hp:ctrl>` (footnote/endnote), and `<hp:rect>` (textbox) elements.
+/// Each is converted to a separate Run with the same charPrIDRef.
 fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
     let char_shape_id = CharShapeIndex::new(hx.char_pr_id_ref as usize);
     let mut runs = Vec::new();
@@ -116,6 +155,23 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
     for pic in &hx.pictures {
         if let Some(image) = convert_picture(pic) {
             runs.push(Run { content: RunContent::Image(image), char_shape_id });
+        }
+    }
+
+    // Footnote / Endnote runs (from <hp:ctrl>)
+    for ctrl in &hx.ctrls {
+        if let Some(run) = decode_footnote(ctrl, char_shape_id, depth)? {
+            runs.push(run);
+        }
+        if let Some(run) = decode_endnote(ctrl, char_shape_id, depth)? {
+            runs.push(run);
+        }
+    }
+
+    // Textbox runs (from <hp:rect>)
+    for rect in &hx.rects {
+        if let Some(run) = decode_textbox(rect, char_shape_id, depth)? {
+            runs.push(run);
         }
     }
 
@@ -206,6 +262,119 @@ fn convert_picture(hx: &HxPic) -> Option<Image> {
     Some(Image { path, width, height, format })
 }
 
+// ── Footnote / Endnote / TextBox decoding ────────────────────────
+
+/// Decodes an `HxCtrl`'s footnote into a Core `Run`, if present.
+fn decode_footnote(
+    ctrl: &HxCtrl,
+    char_shape_id: CharShapeIndex,
+    depth: usize,
+) -> HwpxResult<Option<Run>> {
+    let hx = match &ctrl.foot_note {
+        Some(note) => note,
+        None => return Ok(None),
+    };
+    let paragraphs = decode_note_paragraphs(hx, depth)?;
+    Ok(Some(Run {
+        content: RunContent::Control(Box::new(Control::Footnote {
+            inst_id: hx.inst_id,
+            paragraphs,
+        })),
+        char_shape_id,
+    }))
+}
+
+/// Decodes an `HxCtrl`'s endnote into a Core `Run`, if present.
+fn decode_endnote(
+    ctrl: &HxCtrl,
+    char_shape_id: CharShapeIndex,
+    depth: usize,
+) -> HwpxResult<Option<Run>> {
+    let hx = match &ctrl.end_note {
+        Some(note) => note,
+        None => return Ok(None),
+    };
+    let paragraphs = decode_note_paragraphs(hx, depth)?;
+    Ok(Some(Run {
+        content: RunContent::Control(Box::new(Control::Endnote {
+            inst_id: hx.inst_id,
+            paragraphs,
+        })),
+        char_shape_id,
+    }))
+}
+
+/// Decodes an `HxFootNote` (or `HxEndNote`, same type) sub-list into paragraphs.
+fn decode_note_paragraphs(hx: &HxFootNote, depth: usize) -> HwpxResult<Vec<Paragraph>> {
+    decode_sublist_paragraphs(&hx.sub_list, depth)
+}
+
+/// Decodes an `HxRect`'s draw text into a Core `Run` with `Control::TextBox`, if present.
+///
+/// Only rects with `<hp:drawText>` are treated as textboxes; rects without
+/// text content (pure shapes) are silently skipped.
+fn decode_textbox(
+    rect: &HxRect,
+    char_shape_id: CharShapeIndex,
+    depth: usize,
+) -> HwpxResult<Option<Run>> {
+    let draw_text = match &rect.draw_text {
+        Some(dt) => dt,
+        None => return Ok(None),
+    };
+
+    let paragraphs = decode_sublist_paragraphs(&draw_text.sub_list, depth)?;
+
+    // Extract width/height from sz, falling back to zero
+    let (width, height) = rect
+        .sz
+        .as_ref()
+        .map(|sz| {
+            (
+                HwpUnit::new(sz.width).unwrap_or(HwpUnit::ZERO),
+                HwpUnit::new(sz.height).unwrap_or(HwpUnit::ZERO),
+            )
+        })
+        .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
+
+    // Extract offsets from pos (treatAsChar=1 means inline, offsets=0)
+    let (horz_offset, vert_offset) =
+        rect.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
+
+    Ok(Some(Run {
+        content: RunContent::Control(Box::new(Control::TextBox {
+            paragraphs,
+            width,
+            height,
+            horz_offset,
+            vert_offset,
+        })),
+        char_shape_id,
+    }))
+}
+
+/// Converts paragraphs from an `HxSubList` into Core `Paragraph`s.
+///
+/// Reuses [`convert_paragraph`] at `depth + 1` to track nesting.
+fn decode_sublist_paragraphs(sub_list: &HxSubList, depth: usize) -> HwpxResult<Vec<Paragraph>> {
+    if depth >= MAX_NESTING_DEPTH {
+        return Err(HwpxError::InvalidStructure {
+            detail: format!(
+                "sublist nesting depth {} exceeds limit of {}",
+                depth, MAX_NESTING_DEPTH
+            ),
+        });
+    }
+    sub_list
+        .paragraphs
+        .iter()
+        .map(|hx_para| {
+            let (para, _) = convert_paragraph(hx_para, false, depth + 1)?;
+            Ok(para)
+        })
+        .collect()
+}
+
 /// Guesses image format from the file reference name.
 fn guess_image_format(name: &str) -> ImageFormat {
     let lower = name.to_ascii_lowercase();
@@ -257,6 +426,101 @@ fn extract_page_settings(sec_pr: &crate::schema::section::HxSecPr) -> Option<Pag
         header_margin,
         footer_margin,
     })
+}
+
+// ── Ctrl conversion helpers ──────────────────────────────────────
+
+/// Extracts a [`HeaderFooter`] from an `HxCtrl`'s header element, if present.
+fn convert_ctrl_header(ctrl: &HxCtrl) -> Option<HeaderFooter> {
+    let hx = ctrl.header.as_ref()?;
+    Some(convert_header_footer(hx))
+}
+
+/// Extracts a [`HeaderFooter`] from an `HxCtrl`'s footer element, if present.
+fn convert_ctrl_footer(ctrl: &HxCtrl) -> Option<HeaderFooter> {
+    let hx = ctrl.footer.as_ref()?;
+    Some(convert_header_footer(hx))
+}
+
+/// Converts an `HxHeaderFooter` into a Core [`HeaderFooter`].
+fn convert_header_footer(hx: &HxHeaderFooter) -> HeaderFooter {
+    let apply_page_type = parse_apply_page_type(&hx.apply_page_type);
+
+    let paragraphs = if let Some(sub_list) = &hx.sub_list {
+        sub_list
+            .paragraphs
+            .iter()
+            .filter_map(|hx_para| {
+                let (para, _) = convert_paragraph(hx_para, false, 0).ok()?;
+                Some(para)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    HeaderFooter::new(paragraphs, apply_page_type)
+}
+
+/// Extracts a [`PageNumber`] from an `HxCtrl`'s page_num element, if present.
+fn convert_ctrl_page_number(ctrl: &HxCtrl) -> Option<PageNumber> {
+    let hx = ctrl.page_num.as_ref()?;
+    Some(convert_page_number(hx))
+}
+
+/// Converts an `HxPageNum` into a Core [`PageNumber`].
+fn convert_page_number(hx: &HxPageNum) -> PageNumber {
+    let position = parse_page_number_position(&hx.pos);
+    let number_format = parse_number_format_type(&hx.format_type);
+    if hx.side_char.is_empty() {
+        PageNumber::new(position, number_format)
+    } else {
+        PageNumber::with_side_char(position, number_format, hx.side_char.clone())
+    }
+}
+
+/// Parses an HWPX `applyPageType` string into [`ApplyPageType`].
+fn parse_apply_page_type(s: &str) -> ApplyPageType {
+    match s {
+        "BOTH" | "Both" | "both" => ApplyPageType::Both,
+        "EVEN" | "Even" | "even" => ApplyPageType::Even,
+        "ODD" | "Odd" | "odd" => ApplyPageType::Odd,
+        _ => ApplyPageType::Both,
+    }
+}
+
+/// Parses an HWPX `pos` string into [`PageNumberPosition`].
+fn parse_page_number_position(s: &str) -> PageNumberPosition {
+    match s {
+        "NONE" => PageNumberPosition::None,
+        "TOP_LEFT" => PageNumberPosition::TopLeft,
+        "TOP_CENTER" => PageNumberPosition::TopCenter,
+        "TOP_RIGHT" => PageNumberPosition::TopRight,
+        "BOTTOM_LEFT" => PageNumberPosition::BottomLeft,
+        "BOTTOM_CENTER" => PageNumberPosition::BottomCenter,
+        "BOTTOM_RIGHT" => PageNumberPosition::BottomRight,
+        "OUTSIDE_TOP" => PageNumberPosition::OutsideTop,
+        "OUTSIDE_BOTTOM" => PageNumberPosition::OutsideBottom,
+        "INSIDE_TOP" => PageNumberPosition::InsideTop,
+        "INSIDE_BOTTOM" => PageNumberPosition::InsideBottom,
+        _ => PageNumberPosition::TopCenter,
+    }
+}
+
+/// Parses an HWPX `formatType` string into [`NumberFormatType`].
+fn parse_number_format_type(s: &str) -> NumberFormatType {
+    match s {
+        "DIGIT" => NumberFormatType::Digit,
+        "CIRCLED_DIGIT" => NumberFormatType::CircledDigit,
+        "ROMAN_CAPITAL" => NumberFormatType::RomanCapital,
+        "ROMAN_SMALL" => NumberFormatType::RomanSmall,
+        "LATIN_CAPITAL" => NumberFormatType::LatinCapital,
+        "LATIN_SMALL" => NumberFormatType::LatinSmall,
+        "HANGUL_SYLLABLE" => NumberFormatType::HangulSyllable,
+        "HANGUL_JAMO" => NumberFormatType::HangulJamo,
+        "HANJA_DIGIT" => NumberFormatType::HanjaDigit,
+        _ => NumberFormatType::Digit,
+    }
 }
 
 #[cfg(test)]
@@ -578,5 +842,363 @@ mod tests {
         </sec>"#;
         let result = parse_section(xml, 0).unwrap();
         assert_eq!(result.paragraphs[0].runs[0].content.as_text(), Some("우리는 수학을 공부한다."),);
+    }
+
+    // ── Header / Footer / PageNum ctrl parsing ──────────────────
+
+    #[test]
+    fn parse_header_ctrl() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <header id="0" applyPageType="BOTH">
+                            <subList id="0" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP"
+                                     linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">
+                                <p paraPrIDRef="0">
+                                    <run charPrIDRef="0"><t>Header Text</t></run>
+                                </p>
+                            </subList>
+                        </header>
+                    </ctrl>
+                    <t>Body</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0).unwrap();
+        let header = result.header.expect("should have header");
+        assert_eq!(header.apply_page_type, ApplyPageType::Both);
+        assert_eq!(header.paragraphs.len(), 1);
+        assert_eq!(header.paragraphs[0].runs[0].content.as_text(), Some("Header Text"));
+    }
+
+    #[test]
+    fn parse_footer_ctrl() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <footer id="0" applyPageType="EVEN">
+                            <subList id="0" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP"
+                                     linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">
+                                <p paraPrIDRef="0">
+                                    <run charPrIDRef="0"><t>Footer Text</t></run>
+                                </p>
+                            </subList>
+                        </footer>
+                    </ctrl>
+                    <t>Body</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0).unwrap();
+        let footer = result.footer.expect("should have footer");
+        assert_eq!(footer.apply_page_type, ApplyPageType::Even);
+        assert_eq!(footer.paragraphs.len(), 1);
+        assert_eq!(footer.paragraphs[0].runs[0].content.as_text(), Some("Footer Text"));
+    }
+
+    #[test]
+    fn parse_page_number_ctrl() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <pageNum pos="BOTTOM_CENTER" formatType="DIGIT" sideChar="- "/>
+                    </ctrl>
+                    <t>Body</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0).unwrap();
+        let pn = result.page_number.expect("should have page number");
+        assert_eq!(pn.position, PageNumberPosition::BottomCenter);
+        assert_eq!(pn.number_format, NumberFormatType::Digit);
+        assert_eq!(pn.side_char, "- ");
+    }
+
+    #[test]
+    fn parse_header_and_footer_and_pagenum_in_same_section() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <header id="0" applyPageType="BOTH">
+                            <subList id="0" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP"
+                                     linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">
+                                <p paraPrIDRef="0">
+                                    <run charPrIDRef="0"><t>My Header</t></run>
+                                </p>
+                            </subList>
+                        </header>
+                    </ctrl>
+                    <ctrl>
+                        <footer id="0" applyPageType="ODD">
+                            <subList id="0" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP"
+                                     linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">
+                                <p paraPrIDRef="0">
+                                    <run charPrIDRef="0"><t>My Footer</t></run>
+                                </p>
+                            </subList>
+                        </footer>
+                    </ctrl>
+                    <ctrl>
+                        <pageNum pos="TOP_LEFT" formatType="ROMAN_CAPITAL" sideChar=""/>
+                    </ctrl>
+                    <t>Body text</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0).unwrap();
+
+        let header = result.header.expect("should have header");
+        assert_eq!(header.apply_page_type, ApplyPageType::Both);
+        assert_eq!(header.paragraphs[0].runs[0].content.as_text(), Some("My Header"));
+
+        let footer = result.footer.expect("should have footer");
+        assert_eq!(footer.apply_page_type, ApplyPageType::Odd);
+        assert_eq!(footer.paragraphs[0].runs[0].content.as_text(), Some("My Footer"));
+
+        let pn = result.page_number.expect("should have page number");
+        assert_eq!(pn.position, PageNumberPosition::TopLeft);
+        assert_eq!(pn.number_format, NumberFormatType::RomanCapital);
+        assert!(pn.side_char.is_empty());
+    }
+
+    #[test]
+    fn section_without_ctrls_has_no_header_footer_pagenum() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0"><t>Plain text</t></run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0).unwrap();
+        assert!(result.header.is_none());
+        assert!(result.footer.is_none());
+        assert!(result.page_number.is_none());
+    }
+
+    // ── Footnote / Endnote / TextBox decoder tests ────────────
+
+    #[test]
+    fn parse_footnote_ctrl() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="2">
+                    <ctrl>
+                        <footNote instId="42">
+                            <subList id="0" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP"
+                                     linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">
+                                <p paraPrIDRef="0">
+                                    <run charPrIDRef="0"><t>Footnote body</t></run>
+                                </p>
+                            </subList>
+                        </footNote>
+                    </ctrl>
+                    <t>Main text</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0).unwrap();
+        let para = &result.paragraphs[0];
+
+        // Should have text run + footnote run
+        assert!(para.runs.len() >= 2, "expected at least 2 runs, got {}", para.runs.len());
+
+        // Find the footnote run
+        let footnote_run =
+            para.runs.iter().find(|r| r.content.is_control()).expect("no control run");
+        match &footnote_run.content {
+            RunContent::Control(ctrl) => match ctrl.as_ref() {
+                hwpforge_core::Control::Footnote { inst_id, paragraphs } => {
+                    assert_eq!(*inst_id, Some(42));
+                    assert_eq!(paragraphs.len(), 1);
+                    assert_eq!(paragraphs[0].runs[0].content.as_text(), Some("Footnote body"));
+                }
+                other => panic!("expected Footnote, got {other:?}"),
+            },
+            other => panic!("expected Control, got {other:?}"),
+        }
+        assert_eq!(footnote_run.char_shape_id.get(), 2);
+    }
+
+    #[test]
+    fn parse_endnote_ctrl() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <endNote>
+                            <subList id="0" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP"
+                                     linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">
+                                <p paraPrIDRef="0">
+                                    <run charPrIDRef="0"><t>Endnote body</t></run>
+                                </p>
+                            </subList>
+                        </endNote>
+                    </ctrl>
+                    <t>Main text</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0).unwrap();
+        let para = &result.paragraphs[0];
+
+        let endnote_run =
+            para.runs.iter().find(|r| r.content.is_control()).expect("no control run");
+        match &endnote_run.content {
+            RunContent::Control(ctrl) => match ctrl.as_ref() {
+                hwpforge_core::Control::Endnote { inst_id, paragraphs } => {
+                    assert_eq!(*inst_id, None);
+                    assert_eq!(paragraphs.len(), 1);
+                    assert_eq!(paragraphs[0].runs[0].content.as_text(), Some("Endnote body"));
+                }
+                other => panic!("expected Endnote, got {other:?}"),
+            },
+            other => panic!("expected Control, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_textbox_rect() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="3">
+                    <rect id="" zOrder="0" numberingType="NONE" textWrap="TOP_AND_BOTTOM"
+                          textFlow="BOTH_SIDES" lock="0" dropcapstyle="None"
+                          href="" groupLevel="0" instid="12345" ratio="0">
+                        <sz width="14000" height="8000" widthRelTo="ABSOLUTE" heightRelTo="ABSOLUTE" protect="0"/>
+                        <pos treatAsChar="1" affectLSpacing="0" flowWithText="0" allowOverlap="0"
+                             holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="PARA"
+                             vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/>
+                        <drawText lastWidth="13434" name="" editable="0">
+                            <subList id="0" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP"
+                                     linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">
+                                <p paraPrIDRef="0">
+                                    <run charPrIDRef="0"><t>Box content</t></run>
+                                </p>
+                            </subList>
+                        </drawText>
+                    </rect>
+                    <t>Main text</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0).unwrap();
+        let para = &result.paragraphs[0];
+
+        let tb_run = para.runs.iter().find(|r| r.content.is_control()).expect("no control run");
+        assert_eq!(tb_run.char_shape_id.get(), 3);
+        match &tb_run.content {
+            RunContent::Control(ctrl) => match ctrl.as_ref() {
+                hwpforge_core::Control::TextBox {
+                    paragraphs,
+                    width,
+                    height,
+                    horz_offset,
+                    vert_offset,
+                } => {
+                    assert_eq!(paragraphs.len(), 1);
+                    assert_eq!(paragraphs[0].runs[0].content.as_text(), Some("Box content"));
+                    assert_eq!(width.as_i32(), 14000);
+                    assert_eq!(height.as_i32(), 8000);
+                    assert_eq!(*horz_offset, 0);
+                    assert_eq!(*vert_offset, 0);
+                }
+                other => panic!("expected TextBox, got {other:?}"),
+            },
+            other => panic!("expected Control, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rect_without_draw_text_is_skipped() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <rect id="" zOrder="0" numberingType="NONE" textWrap="TOP_AND_BOTTOM"
+                          textFlow="BOTH_SIDES" lock="0" dropcapstyle="None"
+                          href="" groupLevel="0" instid="0" ratio="0"/>
+                    <t>Main text</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0).unwrap();
+        // The rect without drawText should be skipped, only text run present
+        assert_eq!(result.paragraphs[0].runs.len(), 1);
+        assert_eq!(result.paragraphs[0].runs[0].content.as_text(), Some("Main text"));
+    }
+
+    #[test]
+    fn parse_footnote_with_multiple_paragraphs() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <footNote>
+                            <subList id="0" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP"
+                                     linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">
+                                <p paraPrIDRef="0"><run charPrIDRef="0"><t>Line 1</t></run></p>
+                                <p paraPrIDRef="0"><run charPrIDRef="0"><t>Line 2</t></run></p>
+                            </subList>
+                        </footNote>
+                    </ctrl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0).unwrap();
+        let ctrl_run = result.paragraphs[0].runs.iter().find(|r| r.content.is_control()).unwrap();
+        match &ctrl_run.content {
+            RunContent::Control(ctrl) => match ctrl.as_ref() {
+                hwpforge_core::Control::Footnote { paragraphs, .. } => {
+                    assert_eq!(paragraphs.len(), 2);
+                    assert_eq!(paragraphs[0].runs[0].content.as_text(), Some("Line 1"));
+                    assert_eq!(paragraphs[1].runs[0].content.as_text(), Some("Line 2"));
+                }
+                other => panic!("expected Footnote, got {other:?}"),
+            },
+            _ => panic!("expected Control"),
+        }
+    }
+
+    // ── Parse helper tests ──────────────────────────────────────
+
+    #[test]
+    fn parse_apply_page_type_values() {
+        assert_eq!(parse_apply_page_type("BOTH"), ApplyPageType::Both);
+        assert_eq!(parse_apply_page_type("EVEN"), ApplyPageType::Even);
+        assert_eq!(parse_apply_page_type("ODD"), ApplyPageType::Odd);
+        assert_eq!(parse_apply_page_type("Both"), ApplyPageType::Both);
+        assert_eq!(parse_apply_page_type("unknown"), ApplyPageType::Both);
+    }
+
+    #[test]
+    fn parse_page_number_position_values() {
+        assert_eq!(parse_page_number_position("NONE"), PageNumberPosition::None);
+        assert_eq!(parse_page_number_position("TOP_LEFT"), PageNumberPosition::TopLeft);
+        assert_eq!(parse_page_number_position("TOP_CENTER"), PageNumberPosition::TopCenter);
+        assert_eq!(parse_page_number_position("TOP_RIGHT"), PageNumberPosition::TopRight);
+        assert_eq!(parse_page_number_position("BOTTOM_LEFT"), PageNumberPosition::BottomLeft);
+        assert_eq!(parse_page_number_position("BOTTOM_CENTER"), PageNumberPosition::BottomCenter);
+        assert_eq!(parse_page_number_position("BOTTOM_RIGHT"), PageNumberPosition::BottomRight);
+        assert_eq!(parse_page_number_position("OUTSIDE_TOP"), PageNumberPosition::OutsideTop);
+        assert_eq!(parse_page_number_position("OUTSIDE_BOTTOM"), PageNumberPosition::OutsideBottom);
+        assert_eq!(parse_page_number_position("INSIDE_TOP"), PageNumberPosition::InsideTop);
+        assert_eq!(parse_page_number_position("INSIDE_BOTTOM"), PageNumberPosition::InsideBottom);
+        assert_eq!(parse_page_number_position("unknown"), PageNumberPosition::TopCenter);
+    }
+
+    #[test]
+    fn parse_number_format_type_values() {
+        assert_eq!(parse_number_format_type("DIGIT"), NumberFormatType::Digit);
+        assert_eq!(parse_number_format_type("CIRCLED_DIGIT"), NumberFormatType::CircledDigit);
+        assert_eq!(parse_number_format_type("ROMAN_CAPITAL"), NumberFormatType::RomanCapital);
+        assert_eq!(parse_number_format_type("ROMAN_SMALL"), NumberFormatType::RomanSmall);
+        assert_eq!(parse_number_format_type("LATIN_CAPITAL"), NumberFormatType::LatinCapital);
+        assert_eq!(parse_number_format_type("LATIN_SMALL"), NumberFormatType::LatinSmall);
+        assert_eq!(parse_number_format_type("HANGUL_SYLLABLE"), NumberFormatType::HangulSyllable);
+        assert_eq!(parse_number_format_type("HANGUL_JAMO"), NumberFormatType::HangulJamo);
+        assert_eq!(parse_number_format_type("HANJA_DIGIT"), NumberFormatType::HanjaDigit);
+        assert_eq!(parse_number_format_type("unknown"), NumberFormatType::Digit);
     }
 }

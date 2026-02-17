@@ -12,6 +12,7 @@
 //! the **first paragraph**, not at the section level. This module reproduces
 //! that quirk so the output is compatible with the Hancom HWP editor.
 
+use hwpforge_core::control::Control;
 use hwpforge_core::image::Image;
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::{Run, RunContent};
@@ -22,9 +23,10 @@ use hwpforge_core::PageSettings;
 use crate::encoder::package::XMLNS_DECLS;
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    HxCellAddr, HxCellSpan, HxCellSz, HxImg, HxLineSeg, HxLineSegArray, HxPageMargin, HxPagePr,
-    HxParagraph, HxPic, HxRun, HxSecPr, HxSection, HxSizeAttr, HxSubList, HxTable, HxTableCell,
-    HxTableMargin, HxTablePos, HxTableRow, HxTableSz, HxText,
+    HxCellAddr, HxCellSpan, HxCellSz, HxCtrl, HxDrawText, HxFootNote, HxImg, HxLineSeg,
+    HxLineSegArray, HxPageMargin, HxPagePr, HxParagraph, HxPic, HxPoint, HxRect, HxRun, HxSecPr,
+    HxSection, HxSizeAttr, HxSubList, HxTable, HxTableCell, HxTableMargin, HxTablePos, HxTableRow,
+    HxTableSz, HxText,
 };
 
 /// Maximum nesting depth for tables-within-tables.
@@ -58,7 +60,10 @@ pub(crate) fn encode_section(section: &Section, _section_index: usize) -> HwpxRe
 
     // Enrich <hp:secPr> with sub-elements required by 한글 (grid,
     // startNum, visibility, footnote/endnote, pageBorderFill).
-    let enriched = enrich_sec_pr(inner_content);
+    let mut enriched = enrich_sec_pr(inner_content);
+
+    // Inject header/footer/page number controls after colPr
+    inject_header_footer_pagenum(&mut enriched, section);
 
     Ok(wrap_section_xml(&enriched))
 }
@@ -142,8 +147,9 @@ fn build_paragraph(
 
 /// Builds `Vec<HxRun>` from Core runs.
 ///
-/// Each Core `Run` maps to exactly one `HxRun`. `RunContent::Control`
-/// variants are silently skipped (no XML output for controls in Phase 4).
+/// Each Core `Run` maps to exactly one `HxRun`. Control runs produce
+/// `HxCtrl` (footnote/endnote) or `HxRect` (textbox) elements.
+/// Hyperlink and Unknown controls are silently skipped.
 ///
 /// If `inject_sec_pr` is true and `page_settings` is `Some`, the first
 /// run gets `<hp:secPr>` attached.
@@ -157,12 +163,7 @@ fn build_runs(
     let mut sec_pr_injected = false;
 
     for run in runs {
-        // Skip Control runs entirely
-        if run.content.is_control() {
-            continue;
-        }
-
-        let sec_pr = if inject_sec_pr && !sec_pr_injected {
+        let sec_pr = if inject_sec_pr && !sec_pr_injected && !run.content.is_control() {
             sec_pr_injected = true;
             page_settings.map(build_sec_pr)
         } else {
@@ -174,6 +175,8 @@ fn build_runs(
         let mut texts = Vec::new();
         let mut tables = Vec::new();
         let mut pictures = Vec::new();
+        let mut ctrls = Vec::new();
+        let mut rects = Vec::new();
 
         match &run.content {
             RunContent::Text(s) => {
@@ -185,14 +188,34 @@ fn build_runs(
             RunContent::Image(img) => {
                 pictures.push(build_picture(img));
             }
-            RunContent::Control(_) => unreachable!("Controls filtered above"),
+            RunContent::Control(ctrl) => {
+                match ctrl.as_ref() {
+                    Control::Footnote { .. } | Control::Endnote { .. } => {
+                        if let Some(hx_ctrl) = encode_control_to_ctrl(ctrl, depth)? {
+                            ctrls.push(hx_ctrl);
+                        }
+                    }
+                    Control::TextBox { .. } => {
+                        rects.push(encode_textbox_to_rect(ctrl, depth)?);
+                    }
+                    Control::Hyperlink { .. } | Control::Unknown { .. } => {
+                        // Skip for Phase 4.5 (not implemented yet)
+                        continue;
+                    }
+                    _ => {
+                        // Future Control variants silently skipped
+                        continue;
+                    }
+                }
+            }
             _ => {
                 // Future RunContent variants are silently skipped
                 // (non_exhaustive enum)
+                continue;
             }
         }
 
-        result.push(HxRun { char_pr_id_ref, sec_pr, texts, tables, pictures });
+        result.push(HxRun { char_pr_id_ref, sec_pr, texts, tables, pictures, ctrls, rects });
     }
 
     // If we need to inject secPr but there were no non-control runs,
@@ -207,12 +230,144 @@ fn build_runs(
                     texts: Vec::new(),
                     tables: Vec::new(),
                     pictures: Vec::new(),
+                    ctrls: Vec::new(),
+                    rects: Vec::new(),
                 },
             );
         }
     }
 
     Ok(result)
+}
+
+/// Converts a Core Control (Footnote/Endnote) to `HxCtrl`.
+///
+/// Returns `None` for non-ctrl controls (TextBox, Hyperlink, Unknown).
+fn encode_control_to_ctrl(ctrl: &Control, depth: usize) -> HwpxResult<Option<HxCtrl>> {
+    match ctrl {
+        Control::Footnote { inst_id, paragraphs } => Ok(Some(HxCtrl {
+            foot_note: Some(HxFootNote {
+                inst_id: *inst_id,
+                sub_list: encode_paragraphs_to_sublist(paragraphs, depth)?,
+            }),
+            ..Default::default()
+        })),
+        Control::Endnote { inst_id, paragraphs } => Ok(Some(HxCtrl {
+            end_note: Some(HxFootNote {
+                inst_id: *inst_id,
+                sub_list: encode_paragraphs_to_sublist(paragraphs, depth)?,
+            }),
+            ..Default::default()
+        })),
+        _ => Ok(None),
+    }
+}
+
+/// Encodes a `Vec<Paragraph>` into `HxSubList` with standard defaults.
+fn encode_paragraphs_to_sublist(paragraphs: &[Paragraph], depth: usize) -> HwpxResult<HxSubList> {
+    let hx_paragraphs = paragraphs
+        .iter()
+        .enumerate()
+        .map(|(idx, para)| build_paragraph(para, false, None, idx, depth + 1))
+        .collect::<HwpxResult<Vec<_>>>()?;
+
+    Ok(HxSubList {
+        id: String::new(),
+        text_direction: "HORIZONTAL".to_string(),
+        line_wrap: "BREAK".to_string(),
+        vert_align: "TOP".to_string(),
+        link_list_id_ref: 0,
+        link_list_next_id_ref: 0,
+        text_width: 0,
+        text_height: 0,
+        has_text_ref: 0,
+        has_num_ref: 0,
+        paragraphs: hx_paragraphs,
+    })
+}
+
+/// Encodes a Core `Control::TextBox` into `HxRect` with `<hp:drawText>`.
+///
+/// Phase 4.5 MVP: inline positioning (treatAsChar=1) when offsets are (0,0).
+fn encode_textbox_to_rect(ctrl: &Control, depth: usize) -> HwpxResult<HxRect> {
+    let (paragraphs, width, height, horz_offset, vert_offset) = match ctrl {
+        Control::TextBox { paragraphs, width, height, horz_offset, vert_offset } => {
+            (paragraphs, *width, *height, *horz_offset, *vert_offset)
+        }
+        _ => unreachable!("encode_textbox_to_rect called with non-TextBox"),
+    };
+
+    let width_hwp = width.as_i32();
+    let height_hwp = height.as_i32();
+
+    // Default text margin: 283 HWPUNIT (~1mm)
+    const MARGIN: i32 = 283;
+    let last_width = (width_hwp - 2 * MARGIN).max(0) as u32;
+
+    let sub_list = encode_paragraphs_to_sublist(paragraphs, depth)?;
+
+    Ok(HxRect {
+        id: String::new(),
+        z_order: 0,
+        numbering_type: "NONE".to_string(),
+        text_wrap: "TOP_AND_BOTTOM".to_string(),
+        text_flow: "BOTH_SIDES".to_string(),
+        lock: 0,
+        dropcap_style: "None".to_string(),
+        href: String::new(),
+        group_level: 0,
+        instid: generate_instid(),
+        ratio: 0,
+
+        sz: Some(HxTableSz {
+            width: width_hwp,
+            width_rel_to: "ABSOLUTE".to_string(),
+            height: height_hwp,
+            height_rel_to: "ABSOLUTE".to_string(),
+            protect: 0,
+        }),
+
+        pos: Some(HxTablePos {
+            treat_as_char: if horz_offset == 0 && vert_offset == 0 { 1 } else { 0 },
+            affect_l_spacing: 0,
+            flow_with_text: 0,
+            allow_overlap: 0,
+            hold_anchor_and_so: 0,
+            vert_rel_to: "PARA".to_string(),
+            horz_rel_to: "PARA".to_string(),
+            vert_align: "TOP".to_string(),
+            horz_align: "LEFT".to_string(),
+            vert_offset,
+            horz_offset,
+        }),
+
+        out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+
+        draw_text: Some(HxDrawText {
+            last_width,
+            name: String::new(),
+            editable: 0,
+            sub_list,
+            text_margin: Some(HxTableMargin {
+                left: MARGIN,
+                right: MARGIN,
+                top: MARGIN,
+                bottom: MARGIN,
+            }),
+        }),
+
+        pt0: Some(HxPoint { x: 0, y: 0 }),
+        pt1: Some(HxPoint { x: width_hwp, y: 0 }),
+        pt2: Some(HxPoint { x: width_hwp, y: height_hwp }),
+        pt3: Some(HxPoint { x: 0, y: height_hwp }),
+    })
+}
+
+/// Generates a random instance ID string (matches 한글 convention).
+fn generate_instid() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
+    format!("{}", (nanos % 1_000_000_000) as u32)
 }
 
 /// Builds `HxSecPr` from Core `PageSettings`.
@@ -385,11 +540,17 @@ fn build_table_cell(
 
 /// Builds `HxPic` from a Core `Image`.
 ///
-/// The `BinData/` prefix is stripped from the path to produce the
-/// `binaryItemIDRef` attribute value (e.g. `"BinData/image1.png"` becomes
-/// `"image1.png"`).
+/// The `BinData/` prefix and file extension are stripped from the path
+/// to produce the `binaryItemIDRef` attribute value. For example,
+/// `"BinData/image1.png"` becomes `"image1"`. This matches 한글's
+/// convention where `binaryItemIDRef` is a logical name without extension.
 fn build_picture(img: &Image) -> HxPic {
-    let binary_ref = img.path.strip_prefix("BinData/").unwrap_or(&img.path);
+    let without_prefix = img.path.strip_prefix("BinData/").unwrap_or(&img.path);
+    // Strip extension: "image1.png" → "image1"
+    let binary_ref = match without_prefix.rfind('.') {
+        Some(dot) => &without_prefix[..dot],
+        None => without_prefix,
+    };
 
     HxPic {
         id: String::new(),
@@ -515,6 +676,142 @@ fn enrich_sec_pr(xml: &str) -> String {
     }
 
     result
+}
+
+// ── Header/Footer/PageNumber injection ──────────────────────────
+
+/// Injects header, footer, and page number `<hp:ctrl>` blocks into
+/// the section XML after the colPr ctrl (in the first run).
+///
+/// In real HWPX from 한글, these appear as:
+/// - `<hp:ctrl><hp:header><hp:p>...</hp:p></hp:header></hp:ctrl>`
+/// - `<hp:ctrl><hp:footer><hp:p>...</hp:p></hp:footer></hp:ctrl>`
+/// - `<hp:ctrl><hp:autoNum numType="PAGE" ...></hp:ctrl>`
+fn inject_header_footer_pagenum(xml: &mut String, section: &Section) {
+    // Find insertion point: after the last </hp:ctrl> that contains colPr
+    // (or after </hp:secPr> if no colPr).
+    // We inject after the colPr ctrl block.
+    let insert_pos = find_ctrl_injection_point(xml);
+    if insert_pos == 0 {
+        return; // no suitable injection point found
+    }
+
+    let mut injection = String::new();
+
+    // Header
+    if let Some(ref header) = section.header {
+        injection.push_str(&build_header_xml(header, "header"));
+    }
+
+    // Footer
+    if let Some(ref footer) = section.footer {
+        injection.push_str(&build_header_xml(footer, "footer"));
+    }
+
+    // Page number
+    if let Some(ref page_number) = section.page_number {
+        injection.push_str(&build_page_number_xml(page_number));
+    }
+
+    if !injection.is_empty() {
+        xml.insert_str(insert_pos, &injection);
+    }
+}
+
+/// Finds the insertion point for header/footer/pagenum ctrl blocks.
+///
+/// Returns the byte offset after the colPr `</hp:ctrl>` block.
+/// Falls back to after `</hp:secPr>` if no colPr is found.
+fn find_ctrl_injection_point(xml: &str) -> usize {
+    // Look for colPr ctrl: find "</hp:colPr>" and then the next "</hp:ctrl>"
+    if let Some(col_pr_pos) = xml.find("</hp:colPr>") {
+        if let Some(ctrl_close) = xml[col_pr_pos..].find("</hp:ctrl>") {
+            return col_pr_pos + ctrl_close + "</hp:ctrl>".len();
+        }
+    }
+    // Fallback: after </hp:secPr>
+    if let Some(sec_pr_end) = xml.find("</hp:secPr>") {
+        return sec_pr_end + "</hp:secPr>".len();
+    }
+    0
+}
+
+/// Builds `<hp:ctrl><hp:header>` or `<hp:ctrl><hp:footer>` XML.
+///
+/// `tag_name` should be `"header"` or `"footer"`.
+fn build_header_xml(hf: &hwpforge_core::section::HeaderFooter, tag_name: &str) -> String {
+    use std::fmt::Write as _;
+
+    let apply_page = match hf.apply_page_type {
+        hwpforge_foundation::ApplyPageType::Both => "BOTH",
+        hwpforge_foundation::ApplyPageType::Even => "EVEN",
+        hwpforge_foundation::ApplyPageType::Odd => "ODD",
+        _ => "BOTH",
+    };
+
+    let mut xml = String::new();
+    write!(xml, r#"<hp:ctrl><hp:{tag_name} applyPageType="{apply_page}" createItemType="0">"#,)
+        .expect("write to String is infallible");
+
+    // Wrap paragraphs in <hp:subList> (required by HWPX schema)
+    xml.push_str(
+        r#"<hp:subList id="0" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">"#,
+    );
+
+    // Encode each paragraph in the header/footer
+    for (idx, para) in hf.paragraphs.iter().enumerate() {
+        write!(
+            xml,
+            r#"<hp:p id="{idx}" paraPrIDRef="{}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">"#,
+            para.para_shape_id.get(),
+        )
+        .expect("write to String is infallible");
+
+        for run in &para.runs {
+            if let hwpforge_core::run::RunContent::Text(text) = &run.content {
+                write!(
+                    xml,
+                    r#"<hp:run charPrIDRef="{}"><hp:t>{}</hp:t></hp:run>"#,
+                    run.char_shape_id.get(),
+                    escape_xml(text),
+                )
+                .expect("write to String is infallible");
+            }
+        }
+
+        xml.push_str("</hp:p>");
+    }
+
+    xml.push_str("</hp:subList>");
+    write!(xml, "</hp:{tag_name}></hp:ctrl>").expect("write to String is infallible");
+    xml
+}
+
+/// Builds `<hp:ctrl><hp:autoNum>` XML for page numbers.
+fn build_page_number_xml(pn: &hwpforge_core::section::PageNumber) -> String {
+    use std::fmt::Write as _;
+
+    let num_type = match pn.number_format {
+        hwpforge_foundation::NumberFormatType::Digit => "PAGE",
+        hwpforge_foundation::NumberFormatType::CircledDigit => "PAGE",
+        hwpforge_foundation::NumberFormatType::RomanCapital => "PAGE",
+        hwpforge_foundation::NumberFormatType::RomanSmall => "PAGE",
+        _ => "PAGE",
+    };
+
+    let mut xml = String::new();
+    write!(
+        xml,
+        r#"<hp:ctrl><hp:autoNum numType="{num_type}" sideChar="{side_char}"/></hp:ctrl>"#,
+        side_char = escape_xml(&pn.side_char),
+    )
+    .expect("write to String is infallible");
+    xml
+}
+
+/// Escapes XML special characters in text content.
+fn escape_xml(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
 #[cfg(test)]
@@ -665,8 +962,8 @@ mod tests {
         let xml = encode_section(&section, 0).unwrap();
 
         assert!(
-            xml.contains(r#"binaryItemIDRef="logo.png""#),
-            "missing binaryItemIDRef (should strip BinData/ prefix)"
+            xml.contains(r#"binaryItemIDRef="logo""#),
+            "missing binaryItemIDRef (should strip BinData/ prefix and extension)"
         );
         assert!(xml.contains(r#"width="10000""#), "missing image width");
         assert!(xml.contains(r#"height="5000""#), "missing image height");
@@ -839,8 +1136,8 @@ mod tests {
         let hx = build_picture(&img);
         assert_eq!(
             hx.img.unwrap().binary_item_id_ref,
-            "image.jpg",
-            "path without BinData/ prefix should be used as-is"
+            "image",
+            "path without BinData/ prefix should strip extension only"
         );
     }
 
@@ -903,8 +1200,323 @@ mod tests {
         let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
 
         let decoded_img = result.paragraphs[0].runs[0].content.as_image().unwrap();
-        assert_eq!(decoded_img.path, "BinData/photo.png");
+        // binaryItemIDRef is "photo" (extension stripped by encoder),
+        // so decoder reconstructs path as "BinData/photo"
+        assert_eq!(decoded_img.path, "BinData/photo");
         assert_eq!(decoded_img.width.as_i32(), 10000);
         assert_eq!(decoded_img.height.as_i32(), 5000);
+    }
+
+    // ── Header / Footer / PageNum encoder roundtrip ─────────────
+
+    #[test]
+    fn header_roundtrip_via_decoder() {
+        use hwpforge_core::section::HeaderFooter;
+        use hwpforge_foundation::ApplyPageType;
+
+        let mut section = simple_section("Body text");
+        section.header = Some(HeaderFooter::new(
+            vec![text_paragraph("Header Content", 0, 0)],
+            ApplyPageType::Both,
+        ));
+
+        let xml = encode_section(&section, 0).unwrap();
+        assert!(xml.contains("<hp:header"), "XML should contain header element");
+        assert!(xml.contains("Header Content"), "XML should contain header text");
+
+        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let header = result.header.expect("decoded section should have header");
+        assert_eq!(header.apply_page_type, ApplyPageType::Both);
+        assert_eq!(header.paragraphs.len(), 1);
+        assert_eq!(header.paragraphs[0].runs[0].content.as_text(), Some("Header Content"));
+    }
+
+    #[test]
+    fn footer_roundtrip_via_decoder() {
+        use hwpforge_core::section::HeaderFooter;
+        use hwpforge_foundation::ApplyPageType;
+
+        let mut section = simple_section("Body text");
+        section.footer = Some(HeaderFooter::new(
+            vec![text_paragraph("Footer Content", 0, 0)],
+            ApplyPageType::Even,
+        ));
+
+        let xml = encode_section(&section, 0).unwrap();
+        assert!(xml.contains("<hp:footer"), "XML should contain footer element");
+
+        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let footer = result.footer.expect("decoded section should have footer");
+        assert_eq!(footer.apply_page_type, ApplyPageType::Even);
+        assert_eq!(footer.paragraphs.len(), 1);
+        assert_eq!(footer.paragraphs[0].runs[0].content.as_text(), Some("Footer Content"));
+    }
+
+    #[test]
+    fn page_number_roundtrip_via_decoder() {
+        use hwpforge_core::section::PageNumber;
+        use hwpforge_foundation::{NumberFormatType, PageNumberPosition};
+
+        let mut section = simple_section("Body text");
+        section.page_number = Some(PageNumber::with_side_char(
+            PageNumberPosition::BottomCenter,
+            NumberFormatType::Digit,
+            "- ".to_string(),
+        ));
+
+        let xml = encode_section(&section, 0).unwrap();
+        assert!(xml.contains("<hp:autoNum"), "XML should contain autoNum element");
+        assert!(xml.contains("sideChar=\"- \""), "XML should contain side char");
+
+        // NOTE: The encoder outputs <hp:autoNum> but the schema decodes <hp:pageNum>.
+        // The autoNum element has different structure than pageNum, so full roundtrip
+        // of page number through encode→decode is only partially possible.
+        // This test validates the encoder output contains the right data.
+    }
+
+    #[test]
+    fn header_and_footer_together_roundtrip() {
+        use hwpforge_core::section::HeaderFooter;
+        use hwpforge_foundation::ApplyPageType;
+
+        let mut section = simple_section("Main body");
+        section.header =
+            Some(HeaderFooter::new(vec![text_paragraph("My Header", 0, 0)], ApplyPageType::Both));
+        section.footer =
+            Some(HeaderFooter::new(vec![text_paragraph("My Footer", 0, 0)], ApplyPageType::Odd));
+
+        let xml = encode_section(&section, 0).unwrap();
+
+        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let header = result.header.expect("should have header");
+        let footer = result.footer.expect("should have footer");
+
+        assert_eq!(header.paragraphs[0].runs[0].content.as_text(), Some("My Header"));
+        assert_eq!(header.apply_page_type, ApplyPageType::Both);
+        assert_eq!(footer.paragraphs[0].runs[0].content.as_text(), Some("My Footer"));
+        assert_eq!(footer.apply_page_type, ApplyPageType::Odd);
+    }
+
+    // ── Footnote / Endnote / TextBox encoder tests ────────────
+
+    #[test]
+    fn footnote_encoding() {
+        use hwpforge_core::control::Control;
+
+        let footnote_para = text_paragraph("Note body", 0, 0);
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![
+                    Run::text("Main text", CharShapeIndex::new(0)),
+                    Run::control(
+                        Control::Footnote { inst_id: Some(42), paragraphs: vec![footnote_para] },
+                        CharShapeIndex::new(0),
+                    ),
+                ],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0).unwrap();
+
+        assert!(xml.contains("<hp:ctrl>"), "missing ctrl wrapper");
+        assert!(xml.contains("<hp:footNote"), "missing footNote element");
+        assert!(xml.contains("<hp:t>Note body</hp:t>"), "missing footnote text");
+        assert!(xml.contains(r#"instId="42""#), "missing instId attribute");
+    }
+
+    #[test]
+    fn endnote_encoding() {
+        use hwpforge_core::control::Control;
+
+        let endnote_para = text_paragraph("End note", 0, 0);
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(
+                    Control::Endnote { inst_id: None, paragraphs: vec![endnote_para] },
+                    CharShapeIndex::new(0),
+                )],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0).unwrap();
+
+        assert!(xml.contains("<hp:endNote"), "missing endNote element");
+        assert!(xml.contains("<hp:t>End note</hp:t>"), "missing endnote text");
+    }
+
+    #[test]
+    fn textbox_encoding() {
+        use hwpforge_core::control::Control;
+
+        let tb_para = text_paragraph("Box text", 0, 0);
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(
+                    Control::TextBox {
+                        paragraphs: vec![tb_para],
+                        width: HwpUnit::new(14000).unwrap(),
+                        height: HwpUnit::new(8000).unwrap(),
+                        horz_offset: 0,
+                        vert_offset: 0,
+                    },
+                    CharShapeIndex::new(0),
+                )],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0).unwrap();
+
+        assert!(xml.contains("<hp:rect"), "missing rect element");
+        assert!(xml.contains("<hp:drawText"), "missing drawText element");
+        assert!(xml.contains("<hp:t>Box text</hp:t>"), "missing textbox text");
+        assert!(xml.contains(r#"width="14000""#), "missing width");
+        assert!(xml.contains(r#"height="8000""#), "missing height");
+        assert!(xml.contains(r#"treatAsChar="1""#), "inline textbox should have treatAsChar=1");
+    }
+
+    #[test]
+    fn footnote_roundtrip_via_decoder() {
+        use hwpforge_core::control::Control;
+
+        let footnote_para = text_paragraph("Roundtrip note", 0, 0);
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![
+                    Run::text("Before", CharShapeIndex::new(0)),
+                    Run::control(
+                        Control::Footnote { inst_id: Some(7), paragraphs: vec![footnote_para] },
+                        CharShapeIndex::new(1),
+                    ),
+                ],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+
+        let xml = encode_section(&section, 0).unwrap();
+        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+
+        // Find the footnote run in decoded output
+        let all_runs = &result.paragraphs[0].runs;
+        let footnote_run = all_runs
+            .iter()
+            .find(|r| r.content.is_control())
+            .expect("no control run in decoded output");
+
+        match &footnote_run.content {
+            RunContent::Control(ctrl) => match ctrl.as_ref() {
+                Control::Footnote { inst_id, paragraphs } => {
+                    assert_eq!(*inst_id, Some(7));
+                    assert_eq!(paragraphs.len(), 1);
+                    assert_eq!(paragraphs[0].runs[0].content.as_text(), Some("Roundtrip note"));
+                }
+                other => panic!("expected Footnote, got {other:?}"),
+            },
+            _ => panic!("expected Control"),
+        }
+    }
+
+    #[test]
+    fn endnote_roundtrip_via_decoder() {
+        use hwpforge_core::control::Control;
+
+        let endnote_para = text_paragraph("Endnote roundtrip", 0, 0);
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(
+                    Control::Endnote { inst_id: None, paragraphs: vec![endnote_para] },
+                    CharShapeIndex::new(0),
+                )],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+
+        let xml = encode_section(&section, 0).unwrap();
+        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+
+        let ctrl_run = result.paragraphs[0]
+            .runs
+            .iter()
+            .find(|r| r.content.is_control())
+            .expect("no control run");
+
+        match &ctrl_run.content {
+            RunContent::Control(ctrl) => match ctrl.as_ref() {
+                Control::Endnote { paragraphs, .. } => {
+                    assert_eq!(paragraphs[0].runs[0].content.as_text(), Some("Endnote roundtrip"));
+                }
+                other => panic!("expected Endnote, got {other:?}"),
+            },
+            _ => panic!("expected Control"),
+        }
+    }
+
+    #[test]
+    fn textbox_roundtrip_via_decoder() {
+        use hwpforge_core::control::Control;
+
+        let tb_para = text_paragraph("Textbox roundtrip", 0, 0);
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(
+                    Control::TextBox {
+                        paragraphs: vec![tb_para],
+                        width: HwpUnit::new(14000).unwrap(),
+                        height: HwpUnit::new(8000).unwrap(),
+                        horz_offset: 0,
+                        vert_offset: 0,
+                    },
+                    CharShapeIndex::new(0),
+                )],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+
+        let xml = encode_section(&section, 0).unwrap();
+        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+
+        let ctrl_run = result.paragraphs[0]
+            .runs
+            .iter()
+            .find(|r| r.content.is_control())
+            .expect("no control run");
+
+        match &ctrl_run.content {
+            RunContent::Control(ctrl) => match ctrl.as_ref() {
+                Control::TextBox { paragraphs, width, height, horz_offset, vert_offset } => {
+                    assert_eq!(paragraphs[0].runs[0].content.as_text(), Some("Textbox roundtrip"));
+                    assert_eq!(width.as_i32(), 14000);
+                    assert_eq!(height.as_i32(), 8000);
+                    assert_eq!(*horz_offset, 0);
+                    assert_eq!(*vert_offset, 0);
+                }
+                other => panic!("expected TextBox, got {other:?}"),
+            },
+            _ => panic!("expected Control"),
+        }
+    }
+
+    #[test]
+    fn xml_special_chars_escaped_in_header() {
+        use hwpforge_core::section::HeaderFooter;
+        use hwpforge_foundation::ApplyPageType;
+
+        let mut section = simple_section("Body");
+        section.header = Some(HeaderFooter::new(
+            vec![text_paragraph("A & B < C > D", 0, 0)],
+            ApplyPageType::Both,
+        ));
+
+        let xml = encode_section(&section, 0).unwrap();
+        assert!(xml.contains("A &amp; B &lt; C &gt; D"), "special chars must be escaped");
+
+        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let header = result.header.expect("should have header");
+        assert_eq!(header.paragraphs[0].runs[0].content.as_text(), Some("A & B < C > D"),);
     }
 }

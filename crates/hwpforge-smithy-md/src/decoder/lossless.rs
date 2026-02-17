@@ -463,7 +463,13 @@ fn attach_closed_node(
             push_run_to_parent(
                 stack,
                 Run::control(
-                    Control::TextBox { paragraphs, width: text_box.width, height: text_box.height },
+                    Control::TextBox {
+                        paragraphs,
+                        width: text_box.width,
+                        height: text_box.height,
+                        horz_offset: 0,
+                        vert_offset: 0,
+                    },
                     text_box.char_shape_id,
                 ),
             )
@@ -480,7 +486,10 @@ fn attach_closed_node(
 
             push_run_to_parent(
                 stack,
-                Run::control(Control::Footnote { paragraphs }, footnote.char_shape_id),
+                Run::control(
+                    Control::Footnote { inst_id: None, paragraphs },
+                    footnote.char_shape_id,
+                ),
             )
         }
         OpenNode::UnknownControl(control) => push_run_to_parent(

@@ -111,9 +111,12 @@ fn lifecycle_complex_document_with_all_content_types() {
         paragraphs: vec![simple_paragraph("Inside text box")],
         width: HwpUnit::from_mm(60.0).unwrap(),
         height: HwpUnit::from_mm(30.0).unwrap(),
+        horz_offset: 0,
+        vert_offset: 0,
     };
 
-    let footnote = Control::Footnote { paragraphs: vec![simple_paragraph("Footnote body")] };
+    let footnote =
+        Control::Footnote { inst_id: None, paragraphs: vec![simple_paragraph("Footnote body")] };
 
     let section1 = Section::with_paragraphs(
         vec![
@@ -223,6 +226,8 @@ fn validation_rejects_empty_text_box() {
         paragraphs: vec![],
         width: HwpUnit::from_mm(80.0).unwrap(),
         height: HwpUnit::from_mm(40.0).unwrap(),
+        horz_offset: 0,
+        vert_offset: 0,
     };
 
     let mut doc = Document::new();
