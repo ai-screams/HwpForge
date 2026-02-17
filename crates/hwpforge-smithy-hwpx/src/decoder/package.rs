@@ -117,6 +117,69 @@ impl PackageReader {
         self.section_count
     }
 
+    /// Reads all `BinData/*` entries from the archive into an [`ImageStore`].
+    ///
+    /// Each entry's filename (without the `BinData/` prefix) becomes the
+    /// key in the store, and the raw bytes become the value.
+    pub fn read_all_bindata(&mut self) -> HwpxResult<hwpforge_core::image::ImageStore> {
+        let bindata_paths: Vec<String> = self
+            .archive
+            .file_names()
+            .filter(|name| name.starts_with("BinData/") && name.len() > "BinData/".len())
+            .map(|s| s.to_string())
+            .collect();
+
+        let mut store = hwpforge_core::image::ImageStore::new();
+
+        for path in bindata_paths {
+            let data = self.read_binary_entry(&path)?;
+            let key = path.strip_prefix("BinData/").unwrap_or(&path);
+            store.insert(key, data);
+        }
+
+        Ok(store)
+    }
+
+    /// Reads a single entry from the archive as raw bytes.
+    ///
+    /// Similar to [`read_entry`] but returns `Vec<u8>` instead of `String`.
+    fn read_binary_entry(&mut self, path: &str) -> HwpxResult<Vec<u8>> {
+        let file = self
+            .archive
+            .by_name(path)
+            .map_err(|_| HwpxError::MissingFile { path: path.to_string() })?;
+
+        let hint = file.size().min(MAX_ENTRY_SIZE) as usize;
+        let mut limited = file.take(MAX_ENTRY_SIZE + 1);
+
+        let mut buf = Vec::with_capacity(hint);
+        std::io::Read::read_to_end(&mut limited, &mut buf)
+            .map_err(|e| HwpxError::Zip(format!("read '{}': {}", path, e)))?;
+
+        if buf.len() as u64 > MAX_ENTRY_SIZE {
+            return Err(HwpxError::InvalidStructure {
+                detail: format!(
+                    "entry '{}' decompressed to {} bytes, exceeds limit of {}",
+                    path,
+                    buf.len(),
+                    MAX_ENTRY_SIZE,
+                ),
+            });
+        }
+
+        self.total_read += buf.len() as u64;
+        if self.total_read > MAX_TOTAL_SIZE {
+            return Err(HwpxError::InvalidStructure {
+                detail: format!(
+                    "total decompressed data ({} bytes) exceeds limit of {}",
+                    self.total_read, MAX_TOTAL_SIZE,
+                ),
+            });
+        }
+
+        Ok(buf)
+    }
+
     /// Reads a single entry from the archive as a UTF-8 string.
     ///
     /// Uses `Read::take()` to enforce the per-entry size limit regardless

@@ -55,12 +55,12 @@ const SETTINGS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="y
 
 // ── content.hpf generator ────────────────────────────────────────
 
-/// Generates the OPF content manifest listing header and all sections.
+/// Generates the OPF content manifest listing header, sections, and images.
 ///
 /// Matches the structure produced by 한글: full namespace declarations,
-/// metadata section, header + sections + settings in manifest, and
-/// header + sections in spine.
-fn generate_content_hpf(section_count: usize) -> String {
+/// metadata section, header + sections + settings + images in manifest,
+/// and header + sections in spine (images are NOT in spine).
+fn generate_content_hpf(section_count: usize, image_paths: &[String]) -> String {
     let mut manifest_items = String::from(
         r#"<opf:item id="header" href="Contents/header.xml" media-type="application/xml"/>"#,
     );
@@ -81,6 +81,17 @@ fn generate_content_hpf(section_count: usize) -> String {
     manifest_items
         .push_str(r#"<opf:item id="settings" href="settings.xml" media-type="application/xml"/>"#);
 
+    // Image entries in manifest (not in spine)
+    for (idx, path) in image_paths.iter().enumerate() {
+        use std::fmt::Write as _;
+        let media_type = guess_image_media_type(path);
+        write!(
+            manifest_items,
+            r#"<opf:item id="image{idx}" href="BinData/{path}" media-type="{media_type}"/>"#,
+        )
+        .expect("write to String is infallible");
+    }
+
     format!(
         concat!(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>"#,
@@ -97,6 +108,26 @@ fn generate_content_hpf(section_count: usize) -> String {
         manifest_items = manifest_items,
         spine_refs = spine_refs,
     )
+}
+
+/// Guesses the MIME type for an image based on file extension.
+fn guess_image_media_type(path: &str) -> &'static str {
+    let lower = path.to_ascii_lowercase();
+    if lower.ends_with(".png") {
+        "image/png"
+    } else if lower.ends_with(".jpg") || lower.ends_with(".jpeg") {
+        "image/jpeg"
+    } else if lower.ends_with(".gif") {
+        "image/gif"
+    } else if lower.ends_with(".bmp") {
+        "image/bmp"
+    } else if lower.ends_with(".wmf") {
+        "image/x-wmf"
+    } else if lower.ends_with(".emf") {
+        "image/x-emf"
+    } else {
+        "application/octet-stream"
+    }
 }
 
 // ── PackageWriter ────────────────────────────────────────────────
@@ -155,7 +186,8 @@ impl PackageWriter {
         // 5. Contents/content.hpf (dynamic manifest)
         zip.start_file("Contents/content.hpf", deflate_opts)
             .map_err(|e| HwpxError::Zip(e.to_string()))?;
-        let content_hpf = generate_content_hpf(section_xmls.len());
+        let image_paths: Vec<String> = images.iter().map(|(path, _)| path.clone()).collect();
+        let content_hpf = generate_content_hpf(section_xmls.len(), &image_paths);
         zip.write_all(content_hpf.as_bytes()).map_err(|e| HwpxError::Zip(e.to_string()))?;
 
         // 6. settings.xml
@@ -267,18 +299,34 @@ mod tests {
     #[test]
     fn content_hpf_lists_all_sections() {
         // Single section
-        let hpf1 = generate_content_hpf(1);
+        let hpf1 = generate_content_hpf(1, &[]);
         assert!(hpf1.contains(r#"id="section0""#));
         assert!(hpf1.contains(r#"idref="section0""#));
         assert!(!hpf1.contains(r#"id="section1""#));
 
         // Three sections
-        let hpf3 = generate_content_hpf(3);
+        let hpf3 = generate_content_hpf(3, &[]);
         for i in 0..3 {
             assert!(hpf3.contains(&format!(r#"id="section{i}""#)), "manifest missing section{i}");
             assert!(hpf3.contains(&format!(r#"idref="section{i}""#)), "spine missing section{i}");
         }
         assert!(!hpf3.contains(r#"id="section3""#));
+    }
+
+    // ── Test: content.hpf includes image entries ────────────────
+
+    #[test]
+    fn content_hpf_includes_images() {
+        let images = vec!["photo.jpg".to_string(), "logo.png".to_string()];
+        let hpf = generate_content_hpf(1, &images);
+        assert!(hpf.contains(r#"id="image0""#), "missing image0 manifest entry");
+        assert!(hpf.contains(r#"href="BinData/photo.jpg""#), "missing image href");
+        assert!(hpf.contains(r#"media-type="image/jpeg""#), "missing jpeg media type");
+        assert!(hpf.contains(r#"id="image1""#), "missing image1 manifest entry");
+        assert!(hpf.contains(r#"href="BinData/logo.png""#), "missing image href");
+        assert!(hpf.contains(r#"media-type="image/png""#), "missing png media type");
+        // Images should NOT be in spine
+        assert!(!hpf.contains(r#"idref="image0""#), "images should not be in spine");
     }
 
     // ── Test 5: empty header XML succeeds ────────────────────────

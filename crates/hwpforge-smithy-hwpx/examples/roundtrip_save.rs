@@ -17,8 +17,10 @@ fn main() {
     let validated = decoded.document.validate().expect("validate");
 
     // Re-encode
-    let encoded = hwpforge_smithy_hwpx::HwpxEncoder::encode(&validated, &decoded.style_store)
-        .expect("encode");
+    let images = hwpforge_core::image::ImageStore::new();
+    let encoded =
+        hwpforge_smithy_hwpx::HwpxEncoder::encode(&validated, &decoded.style_store, &images)
+            .expect("encode");
 
     fs::write(output_path, &encoded).expect("write");
     println!("Roundtripped: {output_path} ({} bytes)", encoded.len());

@@ -1154,6 +1154,324 @@ impl schemars::JsonSchema for FillBrushType {
     }
 }
 
+// ---------------------------------------------------------------------------
+// ApplyPageType
+// ---------------------------------------------------------------------------
+
+/// Which pages a header/footer applies to.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_foundation::ApplyPageType;
+///
+/// assert_eq!(ApplyPageType::default(), ApplyPageType::Both);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+#[repr(u8)]
+pub enum ApplyPageType {
+    /// Both even and odd pages (default).
+    #[default]
+    Both = 0,
+    /// Even pages only.
+    Even = 1,
+    /// Odd pages only.
+    Odd = 2,
+}
+
+impl fmt::Display for ApplyPageType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Both => f.write_str("Both"),
+            Self::Even => f.write_str("Even"),
+            Self::Odd => f.write_str("Odd"),
+        }
+    }
+}
+
+impl std::str::FromStr for ApplyPageType {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Both" | "both" | "BOTH" => Ok(Self::Both),
+            "Even" | "even" | "EVEN" => Ok(Self::Even),
+            "Odd" | "odd" | "ODD" => Ok(Self::Odd),
+            _ => Err(FoundationError::ParseError {
+                type_name: "ApplyPageType".to_string(),
+                value: s.to_string(),
+                valid_values: "Both, Even, Odd".to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<u8> for ApplyPageType {
+    type Error = FoundationError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Both),
+            1 => Ok(Self::Even),
+            2 => Ok(Self::Odd),
+            _ => Err(FoundationError::ParseError {
+                type_name: "ApplyPageType".to_string(),
+                value: value.to_string(),
+                valid_values: "0 (Both), 1 (Even), 2 (Odd)".to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for ApplyPageType {
+    fn schema_name() -> String {
+        "ApplyPageType".to_string()
+    }
+
+    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// NumberFormatType
+// ---------------------------------------------------------------------------
+
+/// Number format for page numbering.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_foundation::NumberFormatType;
+///
+/// assert_eq!(NumberFormatType::default(), NumberFormatType::Digit);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+#[repr(u8)]
+pub enum NumberFormatType {
+    /// Arabic digits: 1, 2, 3, ... (default).
+    #[default]
+    Digit = 0,
+    /// Circled digits: ①, ②, ③, ...
+    CircledDigit = 1,
+    /// Roman capitals: I, II, III, ...
+    RomanCapital = 2,
+    /// Roman lowercase: i, ii, iii, ...
+    RomanSmall = 3,
+    /// Latin capitals: A, B, C, ...
+    LatinCapital = 4,
+    /// Latin lowercase: a, b, c, ...
+    LatinSmall = 5,
+    /// Hangul syllable: 가, 나, 다, ...
+    HangulSyllable = 6,
+    /// Hangul jamo: ㄱ, ㄴ, ㄷ, ...
+    HangulJamo = 7,
+    /// Hanja digits: 一, 二, 三, ...
+    HanjaDigit = 8,
+}
+
+impl fmt::Display for NumberFormatType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Digit => f.write_str("Digit"),
+            Self::CircledDigit => f.write_str("CircledDigit"),
+            Self::RomanCapital => f.write_str("RomanCapital"),
+            Self::RomanSmall => f.write_str("RomanSmall"),
+            Self::LatinCapital => f.write_str("LatinCapital"),
+            Self::LatinSmall => f.write_str("LatinSmall"),
+            Self::HangulSyllable => f.write_str("HangulSyllable"),
+            Self::HangulJamo => f.write_str("HangulJamo"),
+            Self::HanjaDigit => f.write_str("HanjaDigit"),
+        }
+    }
+}
+
+impl std::str::FromStr for NumberFormatType {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Digit" | "digit" | "DIGIT" => Ok(Self::Digit),
+            "CircledDigit" | "circleddigit" | "CIRCLED_DIGIT" => Ok(Self::CircledDigit),
+            "RomanCapital" | "romancapital" | "ROMAN_CAPITAL" => Ok(Self::RomanCapital),
+            "RomanSmall" | "romansmall" | "ROMAN_SMALL" => Ok(Self::RomanSmall),
+            "LatinCapital" | "latincapital" | "LATIN_CAPITAL" => Ok(Self::LatinCapital),
+            "LatinSmall" | "latinsmall" | "LATIN_SMALL" => Ok(Self::LatinSmall),
+            "HangulSyllable" | "hangulsyllable" | "HANGUL_SYLLABLE" => Ok(Self::HangulSyllable),
+            "HangulJamo" | "hanguljamo" | "HANGUL_JAMO" => Ok(Self::HangulJamo),
+            "HanjaDigit" | "hanjadigit" | "HANJA_DIGIT" => Ok(Self::HanjaDigit),
+            _ => Err(FoundationError::ParseError {
+                type_name: "NumberFormatType".to_string(),
+                value: s.to_string(),
+                valid_values: "Digit, CircledDigit, RomanCapital, RomanSmall, LatinCapital, LatinSmall, HangulSyllable, HangulJamo, HanjaDigit".to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<u8> for NumberFormatType {
+    type Error = FoundationError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Digit),
+            1 => Ok(Self::CircledDigit),
+            2 => Ok(Self::RomanCapital),
+            3 => Ok(Self::RomanSmall),
+            4 => Ok(Self::LatinCapital),
+            5 => Ok(Self::LatinSmall),
+            6 => Ok(Self::HangulSyllable),
+            7 => Ok(Self::HangulJamo),
+            8 => Ok(Self::HanjaDigit),
+            _ => Err(FoundationError::ParseError {
+                type_name: "NumberFormatType".to_string(),
+                value: value.to_string(),
+                valid_values: "0-8 (Digit, CircledDigit, RomanCapital, RomanSmall, LatinCapital, LatinSmall, HangulSyllable, HangulJamo, HanjaDigit)".to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for NumberFormatType {
+    fn schema_name() -> String {
+        "NumberFormatType".to_string()
+    }
+
+    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PageNumberPosition
+// ---------------------------------------------------------------------------
+
+/// Position of page numbers on the page.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_foundation::PageNumberPosition;
+///
+/// assert_eq!(PageNumberPosition::default(), PageNumberPosition::TopCenter);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+#[repr(u8)]
+pub enum PageNumberPosition {
+    /// No page number.
+    None = 0,
+    /// Top left.
+    TopLeft = 1,
+    /// Top center (default).
+    #[default]
+    TopCenter = 2,
+    /// Top right.
+    TopRight = 3,
+    /// Bottom left.
+    BottomLeft = 4,
+    /// Bottom center.
+    BottomCenter = 5,
+    /// Bottom right.
+    BottomRight = 6,
+    /// Outside top.
+    OutsideTop = 7,
+    /// Outside bottom.
+    OutsideBottom = 8,
+    /// Inside top.
+    InsideTop = 9,
+    /// Inside bottom.
+    InsideBottom = 10,
+}
+
+impl fmt::Display for PageNumberPosition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => f.write_str("None"),
+            Self::TopLeft => f.write_str("TopLeft"),
+            Self::TopCenter => f.write_str("TopCenter"),
+            Self::TopRight => f.write_str("TopRight"),
+            Self::BottomLeft => f.write_str("BottomLeft"),
+            Self::BottomCenter => f.write_str("BottomCenter"),
+            Self::BottomRight => f.write_str("BottomRight"),
+            Self::OutsideTop => f.write_str("OutsideTop"),
+            Self::OutsideBottom => f.write_str("OutsideBottom"),
+            Self::InsideTop => f.write_str("InsideTop"),
+            Self::InsideBottom => f.write_str("InsideBottom"),
+        }
+    }
+}
+
+impl std::str::FromStr for PageNumberPosition {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "None" | "none" | "NONE" => Ok(Self::None),
+            "TopLeft" | "topleft" | "TOP_LEFT" | "top-left" => Ok(Self::TopLeft),
+            "TopCenter" | "topcenter" | "TOP_CENTER" | "top-center" => Ok(Self::TopCenter),
+            "TopRight" | "topright" | "TOP_RIGHT" | "top-right" => Ok(Self::TopRight),
+            "BottomLeft" | "bottomleft" | "BOTTOM_LEFT" | "bottom-left" => Ok(Self::BottomLeft),
+            "BottomCenter" | "bottomcenter" | "BOTTOM_CENTER" | "bottom-center" => {
+                Ok(Self::BottomCenter)
+            }
+            "BottomRight" | "bottomright" | "BOTTOM_RIGHT" | "bottom-right" => {
+                Ok(Self::BottomRight)
+            }
+            "OutsideTop" | "outsidetop" | "OUTSIDE_TOP" | "outside-top" => Ok(Self::OutsideTop),
+            "OutsideBottom" | "outsidebottom" | "OUTSIDE_BOTTOM" | "outside-bottom" => {
+                Ok(Self::OutsideBottom)
+            }
+            "InsideTop" | "insidetop" | "INSIDE_TOP" | "inside-top" => Ok(Self::InsideTop),
+            "InsideBottom" | "insidebottom" | "INSIDE_BOTTOM" | "inside-bottom" => {
+                Ok(Self::InsideBottom)
+            }
+            _ => Err(FoundationError::ParseError {
+                type_name: "PageNumberPosition".to_string(),
+                value: s.to_string(),
+                valid_values: "None, TopLeft, TopCenter, TopRight, BottomLeft, BottomCenter, BottomRight, OutsideTop, OutsideBottom, InsideTop, InsideBottom".to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<u8> for PageNumberPosition {
+    type Error = FoundationError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::None),
+            1 => Ok(Self::TopLeft),
+            2 => Ok(Self::TopCenter),
+            3 => Ok(Self::TopRight),
+            4 => Ok(Self::BottomLeft),
+            5 => Ok(Self::BottomCenter),
+            6 => Ok(Self::BottomRight),
+            7 => Ok(Self::OutsideTop),
+            8 => Ok(Self::OutsideBottom),
+            9 => Ok(Self::InsideTop),
+            10 => Ok(Self::InsideBottom),
+            _ => Err(FoundationError::ParseError {
+                type_name: "PageNumberPosition".to_string(),
+                value: value.to_string(),
+                valid_values: "0-10 (None, TopLeft, TopCenter, TopRight, BottomLeft, BottomCenter, BottomRight, OutsideTop, OutsideBottom, InsideTop, InsideBottom)".to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for PageNumberPosition {
+    fn schema_name() -> String {
+        "PageNumberPosition".to_string()
+    }
+
+    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
 // Compile-time size assertions: all enums are 1 byte
 const _: () = assert!(std::mem::size_of::<Alignment>() == 1);
 const _: () = assert!(std::mem::size_of::<LineSpacingType>() == 1);
@@ -1168,6 +1486,9 @@ const _: () = assert!(std::mem::size_of::<EngraveType>() == 1);
 const _: () = assert!(std::mem::size_of::<VerticalPosition>() == 1);
 const _: () = assert!(std::mem::size_of::<BorderLineType>() == 1);
 const _: () = assert!(std::mem::size_of::<FillBrushType>() == 1);
+const _: () = assert!(std::mem::size_of::<ApplyPageType>() == 1);
+const _: () = assert!(std::mem::size_of::<NumberFormatType>() == 1);
+const _: () = assert!(std::mem::size_of::<PageNumberPosition>() == 1);
 
 #[cfg(test)]
 mod tests {
@@ -1803,5 +2124,171 @@ mod tests {
         assert_eq!(std::mem::size_of::<VerticalPosition>(), 1);
         assert_eq!(std::mem::size_of::<BorderLineType>(), 1);
         assert_eq!(std::mem::size_of::<FillBrushType>(), 1);
+        assert_eq!(std::mem::size_of::<ApplyPageType>(), 1);
+        assert_eq!(std::mem::size_of::<NumberFormatType>(), 1);
+        assert_eq!(std::mem::size_of::<PageNumberPosition>(), 1);
+    }
+
+    // ===================================================================
+    // ApplyPageType
+    // ===================================================================
+
+    #[test]
+    fn apply_page_type_default_is_both() {
+        assert_eq!(ApplyPageType::default(), ApplyPageType::Both);
+    }
+
+    #[test]
+    fn apply_page_type_display() {
+        assert_eq!(ApplyPageType::Both.to_string(), "Both");
+        assert_eq!(ApplyPageType::Even.to_string(), "Even");
+        assert_eq!(ApplyPageType::Odd.to_string(), "Odd");
+    }
+
+    #[test]
+    fn apply_page_type_from_str() {
+        assert_eq!(ApplyPageType::from_str("Both").unwrap(), ApplyPageType::Both);
+        assert_eq!(ApplyPageType::from_str("BOTH").unwrap(), ApplyPageType::Both);
+        assert_eq!(ApplyPageType::from_str("even").unwrap(), ApplyPageType::Even);
+        assert_eq!(ApplyPageType::from_str("ODD").unwrap(), ApplyPageType::Odd);
+        assert!(ApplyPageType::from_str("invalid").is_err());
+    }
+
+    #[test]
+    fn apply_page_type_try_from_u8() {
+        assert_eq!(ApplyPageType::try_from(0u8).unwrap(), ApplyPageType::Both);
+        assert_eq!(ApplyPageType::try_from(1u8).unwrap(), ApplyPageType::Even);
+        assert_eq!(ApplyPageType::try_from(2u8).unwrap(), ApplyPageType::Odd);
+        assert!(ApplyPageType::try_from(3u8).is_err());
+    }
+
+    #[test]
+    fn apply_page_type_str_roundtrip() {
+        for v in &[ApplyPageType::Both, ApplyPageType::Even, ApplyPageType::Odd] {
+            let s = v.to_string();
+            let back = ApplyPageType::from_str(&s).unwrap();
+            assert_eq!(&back, v);
+        }
+    }
+
+    // ===================================================================
+    // NumberFormatType
+    // ===================================================================
+
+    #[test]
+    fn number_format_type_default_is_digit() {
+        assert_eq!(NumberFormatType::default(), NumberFormatType::Digit);
+    }
+
+    #[test]
+    fn number_format_type_display() {
+        assert_eq!(NumberFormatType::Digit.to_string(), "Digit");
+        assert_eq!(NumberFormatType::CircledDigit.to_string(), "CircledDigit");
+        assert_eq!(NumberFormatType::RomanCapital.to_string(), "RomanCapital");
+        assert_eq!(NumberFormatType::HanjaDigit.to_string(), "HanjaDigit");
+    }
+
+    #[test]
+    fn number_format_type_from_str() {
+        assert_eq!(NumberFormatType::from_str("Digit").unwrap(), NumberFormatType::Digit);
+        assert_eq!(NumberFormatType::from_str("DIGIT").unwrap(), NumberFormatType::Digit);
+        assert_eq!(
+            NumberFormatType::from_str("CircledDigit").unwrap(),
+            NumberFormatType::CircledDigit
+        );
+        assert_eq!(
+            NumberFormatType::from_str("ROMAN_CAPITAL").unwrap(),
+            NumberFormatType::RomanCapital
+        );
+        assert!(NumberFormatType::from_str("invalid").is_err());
+    }
+
+    #[test]
+    fn number_format_type_try_from_u8() {
+        assert_eq!(NumberFormatType::try_from(0u8).unwrap(), NumberFormatType::Digit);
+        assert_eq!(NumberFormatType::try_from(1u8).unwrap(), NumberFormatType::CircledDigit);
+        assert_eq!(NumberFormatType::try_from(8u8).unwrap(), NumberFormatType::HanjaDigit);
+        assert!(NumberFormatType::try_from(9u8).is_err());
+    }
+
+    #[test]
+    fn number_format_type_str_roundtrip() {
+        for v in &[
+            NumberFormatType::Digit,
+            NumberFormatType::CircledDigit,
+            NumberFormatType::RomanCapital,
+            NumberFormatType::RomanSmall,
+            NumberFormatType::LatinCapital,
+            NumberFormatType::LatinSmall,
+            NumberFormatType::HangulSyllable,
+            NumberFormatType::HangulJamo,
+            NumberFormatType::HanjaDigit,
+        ] {
+            let s = v.to_string();
+            let back = NumberFormatType::from_str(&s).unwrap();
+            assert_eq!(&back, v);
+        }
+    }
+
+    // ===================================================================
+    // PageNumberPosition
+    // ===================================================================
+
+    #[test]
+    fn page_number_position_default_is_top_center() {
+        assert_eq!(PageNumberPosition::default(), PageNumberPosition::TopCenter);
+    }
+
+    #[test]
+    fn page_number_position_display() {
+        assert_eq!(PageNumberPosition::None.to_string(), "None");
+        assert_eq!(PageNumberPosition::TopCenter.to_string(), "TopCenter");
+        assert_eq!(PageNumberPosition::BottomCenter.to_string(), "BottomCenter");
+        assert_eq!(PageNumberPosition::InsideBottom.to_string(), "InsideBottom");
+    }
+
+    #[test]
+    fn page_number_position_from_str() {
+        assert_eq!(PageNumberPosition::from_str("None").unwrap(), PageNumberPosition::None);
+        assert_eq!(
+            PageNumberPosition::from_str("BOTTOM_CENTER").unwrap(),
+            PageNumberPosition::BottomCenter
+        );
+        assert_eq!(
+            PageNumberPosition::from_str("bottom-center").unwrap(),
+            PageNumberPosition::BottomCenter
+        );
+        assert_eq!(PageNumberPosition::from_str("TopLeft").unwrap(), PageNumberPosition::TopLeft);
+        assert!(PageNumberPosition::from_str("invalid").is_err());
+    }
+
+    #[test]
+    fn page_number_position_try_from_u8() {
+        assert_eq!(PageNumberPosition::try_from(0u8).unwrap(), PageNumberPosition::None);
+        assert_eq!(PageNumberPosition::try_from(2u8).unwrap(), PageNumberPosition::TopCenter);
+        assert_eq!(PageNumberPosition::try_from(5u8).unwrap(), PageNumberPosition::BottomCenter);
+        assert_eq!(PageNumberPosition::try_from(10u8).unwrap(), PageNumberPosition::InsideBottom);
+        assert!(PageNumberPosition::try_from(11u8).is_err());
+    }
+
+    #[test]
+    fn page_number_position_str_roundtrip() {
+        for v in &[
+            PageNumberPosition::None,
+            PageNumberPosition::TopLeft,
+            PageNumberPosition::TopCenter,
+            PageNumberPosition::TopRight,
+            PageNumberPosition::BottomLeft,
+            PageNumberPosition::BottomCenter,
+            PageNumberPosition::BottomRight,
+            PageNumberPosition::OutsideTop,
+            PageNumberPosition::OutsideBottom,
+            PageNumberPosition::InsideTop,
+            PageNumberPosition::InsideBottom,
+        ] {
+            let s = v.to_string();
+            let back = PageNumberPosition::from_str(&s).unwrap();
+            assert_eq!(&back, v);
+        }
     }
 }

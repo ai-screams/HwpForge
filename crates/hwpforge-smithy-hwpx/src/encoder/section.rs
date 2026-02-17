@@ -58,7 +58,10 @@ pub(crate) fn encode_section(section: &Section, _section_index: usize) -> HwpxRe
 
     // Enrich <hp:secPr> with sub-elements required by 한글 (grid,
     // startNum, visibility, footnote/endnote, pageBorderFill).
-    let enriched = enrich_sec_pr(inner_content);
+    let mut enriched = enrich_sec_pr(inner_content);
+
+    // Inject header/footer/page number controls after colPr
+    inject_header_footer_pagenum(&mut enriched, section);
 
     Ok(wrap_section_xml(&enriched))
 }
@@ -192,7 +195,7 @@ fn build_runs(
             }
         }
 
-        result.push(HxRun { char_pr_id_ref, sec_pr, texts, tables, pictures });
+        result.push(HxRun { char_pr_id_ref, sec_pr, texts, tables, pictures, ctrls: Vec::new() });
     }
 
     // If we need to inject secPr but there were no non-control runs,
@@ -207,6 +210,7 @@ fn build_runs(
                     texts: Vec::new(),
                     tables: Vec::new(),
                     pictures: Vec::new(),
+                    ctrls: Vec::new(),
                 },
             );
         }
@@ -385,11 +389,17 @@ fn build_table_cell(
 
 /// Builds `HxPic` from a Core `Image`.
 ///
-/// The `BinData/` prefix is stripped from the path to produce the
-/// `binaryItemIDRef` attribute value (e.g. `"BinData/image1.png"` becomes
-/// `"image1.png"`).
+/// The `BinData/` prefix and file extension are stripped from the path
+/// to produce the `binaryItemIDRef` attribute value. For example,
+/// `"BinData/image1.png"` becomes `"image1"`. This matches 한글's
+/// convention where `binaryItemIDRef` is a logical name without extension.
 fn build_picture(img: &Image) -> HxPic {
-    let binary_ref = img.path.strip_prefix("BinData/").unwrap_or(&img.path);
+    let without_prefix = img.path.strip_prefix("BinData/").unwrap_or(&img.path);
+    // Strip extension: "image1.png" → "image1"
+    let binary_ref = match without_prefix.rfind('.') {
+        Some(dot) => &without_prefix[..dot],
+        None => without_prefix,
+    };
 
     HxPic {
         id: String::new(),
@@ -515,6 +525,142 @@ fn enrich_sec_pr(xml: &str) -> String {
     }
 
     result
+}
+
+// ── Header/Footer/PageNumber injection ──────────────────────────
+
+/// Injects header, footer, and page number `<hp:ctrl>` blocks into
+/// the section XML after the colPr ctrl (in the first run).
+///
+/// In real HWPX from 한글, these appear as:
+/// - `<hp:ctrl><hp:header><hp:p>...</hp:p></hp:header></hp:ctrl>`
+/// - `<hp:ctrl><hp:footer><hp:p>...</hp:p></hp:footer></hp:ctrl>`
+/// - `<hp:ctrl><hp:autoNum numType="PAGE" ...></hp:ctrl>`
+fn inject_header_footer_pagenum(xml: &mut String, section: &Section) {
+    // Find insertion point: after the last </hp:ctrl> that contains colPr
+    // (or after </hp:secPr> if no colPr).
+    // We inject after the colPr ctrl block.
+    let insert_pos = find_ctrl_injection_point(xml);
+    if insert_pos == 0 {
+        return; // no suitable injection point found
+    }
+
+    let mut injection = String::new();
+
+    // Header
+    if let Some(ref header) = section.header {
+        injection.push_str(&build_header_xml(header, "header"));
+    }
+
+    // Footer
+    if let Some(ref footer) = section.footer {
+        injection.push_str(&build_header_xml(footer, "footer"));
+    }
+
+    // Page number
+    if let Some(ref page_number) = section.page_number {
+        injection.push_str(&build_page_number_xml(page_number));
+    }
+
+    if !injection.is_empty() {
+        xml.insert_str(insert_pos, &injection);
+    }
+}
+
+/// Finds the insertion point for header/footer/pagenum ctrl blocks.
+///
+/// Returns the byte offset after the colPr `</hp:ctrl>` block.
+/// Falls back to after `</hp:secPr>` if no colPr is found.
+fn find_ctrl_injection_point(xml: &str) -> usize {
+    // Look for colPr ctrl: find "</hp:colPr>" and then the next "</hp:ctrl>"
+    if let Some(col_pr_pos) = xml.find("</hp:colPr>") {
+        if let Some(ctrl_close) = xml[col_pr_pos..].find("</hp:ctrl>") {
+            return col_pr_pos + ctrl_close + "</hp:ctrl>".len();
+        }
+    }
+    // Fallback: after </hp:secPr>
+    if let Some(sec_pr_end) = xml.find("</hp:secPr>") {
+        return sec_pr_end + "</hp:secPr>".len();
+    }
+    0
+}
+
+/// Builds `<hp:ctrl><hp:header>` or `<hp:ctrl><hp:footer>` XML.
+///
+/// `tag_name` should be `"header"` or `"footer"`.
+fn build_header_xml(hf: &hwpforge_core::section::HeaderFooter, tag_name: &str) -> String {
+    use std::fmt::Write as _;
+
+    let apply_page = match hf.apply_page_type {
+        hwpforge_foundation::ApplyPageType::Both => "BOTH",
+        hwpforge_foundation::ApplyPageType::Even => "EVEN",
+        hwpforge_foundation::ApplyPageType::Odd => "ODD",
+        _ => "BOTH",
+    };
+
+    let mut xml = String::new();
+    write!(xml, r#"<hp:ctrl><hp:{tag_name} applyPageType="{apply_page}" createItemType="0">"#,)
+        .expect("write to String is infallible");
+
+    // Wrap paragraphs in <hp:subList> (required by HWPX schema)
+    xml.push_str(
+        r#"<hp:subList id="0" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">"#,
+    );
+
+    // Encode each paragraph in the header/footer
+    for (idx, para) in hf.paragraphs.iter().enumerate() {
+        write!(
+            xml,
+            r#"<hp:p id="{idx}" paraPrIDRef="{}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">"#,
+            para.para_shape_id.get(),
+        )
+        .expect("write to String is infallible");
+
+        for run in &para.runs {
+            if let hwpforge_core::run::RunContent::Text(text) = &run.content {
+                write!(
+                    xml,
+                    r#"<hp:run charPrIDRef="{}"><hp:t>{}</hp:t></hp:run>"#,
+                    run.char_shape_id.get(),
+                    escape_xml(text),
+                )
+                .expect("write to String is infallible");
+            }
+        }
+
+        xml.push_str("</hp:p>");
+    }
+
+    xml.push_str("</hp:subList>");
+    write!(xml, "</hp:{tag_name}></hp:ctrl>").expect("write to String is infallible");
+    xml
+}
+
+/// Builds `<hp:ctrl><hp:autoNum>` XML for page numbers.
+fn build_page_number_xml(pn: &hwpforge_core::section::PageNumber) -> String {
+    use std::fmt::Write as _;
+
+    let num_type = match pn.number_format {
+        hwpforge_foundation::NumberFormatType::Digit => "PAGE",
+        hwpforge_foundation::NumberFormatType::CircledDigit => "PAGE",
+        hwpforge_foundation::NumberFormatType::RomanCapital => "PAGE",
+        hwpforge_foundation::NumberFormatType::RomanSmall => "PAGE",
+        _ => "PAGE",
+    };
+
+    let mut xml = String::new();
+    write!(
+        xml,
+        r#"<hp:ctrl><hp:autoNum numType="{num_type}" sideChar="{side_char}"/></hp:ctrl>"#,
+        side_char = escape_xml(&pn.side_char),
+    )
+    .expect("write to String is infallible");
+    xml
+}
+
+/// Escapes XML special characters in text content.
+fn escape_xml(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
 #[cfg(test)]
@@ -665,8 +811,8 @@ mod tests {
         let xml = encode_section(&section, 0).unwrap();
 
         assert!(
-            xml.contains(r#"binaryItemIDRef="logo.png""#),
-            "missing binaryItemIDRef (should strip BinData/ prefix)"
+            xml.contains(r#"binaryItemIDRef="logo""#),
+            "missing binaryItemIDRef (should strip BinData/ prefix and extension)"
         );
         assert!(xml.contains(r#"width="10000""#), "missing image width");
         assert!(xml.contains(r#"height="5000""#), "missing image height");
@@ -839,8 +985,8 @@ mod tests {
         let hx = build_picture(&img);
         assert_eq!(
             hx.img.unwrap().binary_item_id_ref,
-            "image.jpg",
-            "path without BinData/ prefix should be used as-is"
+            "image",
+            "path without BinData/ prefix should strip extension only"
         );
     }
 
@@ -903,8 +1049,119 @@ mod tests {
         let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
 
         let decoded_img = result.paragraphs[0].runs[0].content.as_image().unwrap();
-        assert_eq!(decoded_img.path, "BinData/photo.png");
+        // binaryItemIDRef is "photo" (extension stripped by encoder),
+        // so decoder reconstructs path as "BinData/photo"
+        assert_eq!(decoded_img.path, "BinData/photo");
         assert_eq!(decoded_img.width.as_i32(), 10000);
         assert_eq!(decoded_img.height.as_i32(), 5000);
+    }
+
+    // ── Header / Footer / PageNum encoder roundtrip ─────────────
+
+    #[test]
+    fn header_roundtrip_via_decoder() {
+        use hwpforge_core::section::HeaderFooter;
+        use hwpforge_foundation::ApplyPageType;
+
+        let mut section = simple_section("Body text");
+        section.header = Some(HeaderFooter::new(
+            vec![text_paragraph("Header Content", 0, 0)],
+            ApplyPageType::Both,
+        ));
+
+        let xml = encode_section(&section, 0).unwrap();
+        assert!(xml.contains("<hp:header"), "XML should contain header element");
+        assert!(xml.contains("Header Content"), "XML should contain header text");
+
+        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let header = result.header.expect("decoded section should have header");
+        assert_eq!(header.apply_page_type, ApplyPageType::Both);
+        assert_eq!(header.paragraphs.len(), 1);
+        assert_eq!(header.paragraphs[0].runs[0].content.as_text(), Some("Header Content"));
+    }
+
+    #[test]
+    fn footer_roundtrip_via_decoder() {
+        use hwpforge_core::section::HeaderFooter;
+        use hwpforge_foundation::ApplyPageType;
+
+        let mut section = simple_section("Body text");
+        section.footer = Some(HeaderFooter::new(
+            vec![text_paragraph("Footer Content", 0, 0)],
+            ApplyPageType::Even,
+        ));
+
+        let xml = encode_section(&section, 0).unwrap();
+        assert!(xml.contains("<hp:footer"), "XML should contain footer element");
+
+        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let footer = result.footer.expect("decoded section should have footer");
+        assert_eq!(footer.apply_page_type, ApplyPageType::Even);
+        assert_eq!(footer.paragraphs.len(), 1);
+        assert_eq!(footer.paragraphs[0].runs[0].content.as_text(), Some("Footer Content"));
+    }
+
+    #[test]
+    fn page_number_roundtrip_via_decoder() {
+        use hwpforge_core::section::PageNumber;
+        use hwpforge_foundation::{NumberFormatType, PageNumberPosition};
+
+        let mut section = simple_section("Body text");
+        section.page_number = Some(PageNumber::with_side_char(
+            PageNumberPosition::BottomCenter,
+            NumberFormatType::Digit,
+            "- ".to_string(),
+        ));
+
+        let xml = encode_section(&section, 0).unwrap();
+        assert!(xml.contains("<hp:autoNum"), "XML should contain autoNum element");
+        assert!(xml.contains("sideChar=\"- \""), "XML should contain side char");
+
+        // NOTE: The encoder outputs <hp:autoNum> but the schema decodes <hp:pageNum>.
+        // The autoNum element has different structure than pageNum, so full roundtrip
+        // of page number through encode→decode is only partially possible.
+        // This test validates the encoder output contains the right data.
+    }
+
+    #[test]
+    fn header_and_footer_together_roundtrip() {
+        use hwpforge_core::section::HeaderFooter;
+        use hwpforge_foundation::ApplyPageType;
+
+        let mut section = simple_section("Main body");
+        section.header =
+            Some(HeaderFooter::new(vec![text_paragraph("My Header", 0, 0)], ApplyPageType::Both));
+        section.footer =
+            Some(HeaderFooter::new(vec![text_paragraph("My Footer", 0, 0)], ApplyPageType::Odd));
+
+        let xml = encode_section(&section, 0).unwrap();
+
+        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let header = result.header.expect("should have header");
+        let footer = result.footer.expect("should have footer");
+
+        assert_eq!(header.paragraphs[0].runs[0].content.as_text(), Some("My Header"));
+        assert_eq!(header.apply_page_type, ApplyPageType::Both);
+        assert_eq!(footer.paragraphs[0].runs[0].content.as_text(), Some("My Footer"));
+        assert_eq!(footer.apply_page_type, ApplyPageType::Odd);
+    }
+
+    #[test]
+    fn xml_special_chars_escaped_in_header() {
+        use hwpforge_core::section::HeaderFooter;
+        use hwpforge_foundation::ApplyPageType;
+
+        let mut section = simple_section("Body");
+        section.header = Some(HeaderFooter::new(
+            vec![text_paragraph("A & B < C > D", 0, 0)],
+            ApplyPageType::Both,
+        ));
+
+        let xml = encode_section(&section, 0).unwrap();
+        assert!(xml.contains("A &amp; B &lt; C &gt; D"), "special chars must be escaped");
+
+        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let header = result.header.expect("should have header");
+        assert_eq!(header.paragraphs[0].runs[0].content.as_text(), Some("A & B < C > D"),);
     }
 }

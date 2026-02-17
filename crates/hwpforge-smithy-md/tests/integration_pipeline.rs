@@ -27,7 +27,8 @@ fn run_full_pipeline(markdown: &str, template: &Template) -> (Vec<u8>, Document<
 
     // 4. Encode to HWPX
     let hwpx_bytes =
-        HwpxEncoder::encode(&validated, &style_store).expect("HWPX encode should succeed");
+        HwpxEncoder::encode(&validated, &style_store, &hwpforge_core::image::ImageStore::new())
+            .expect("HWPX encode should succeed");
 
     // 5. Decode HWPX back (returns Document<Draft>)
     let hwpx_doc = HwpxDecoder::decode(&hwpx_bytes).expect("HWPX decode should succeed");
@@ -178,7 +179,8 @@ fn pipeline_frontmatter_preserved() {
     let style_store = HwpxStyleStore::from_registry(&md_doc.style_registry);
 
     let hwpx_bytes =
-        HwpxEncoder::encode(&validated, &style_store).expect("HWPX encode should succeed");
+        HwpxEncoder::encode(&validated, &style_store, &hwpforge_core::image::ImageStore::new())
+            .expect("HWPX encode should succeed");
 
     let hwpx_doc = HwpxDecoder::decode(&hwpx_bytes).expect("HWPX decode should succeed");
 

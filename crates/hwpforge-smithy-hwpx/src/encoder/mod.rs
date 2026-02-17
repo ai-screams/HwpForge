@@ -15,6 +15,7 @@ pub(crate) mod section;
 use std::path::Path;
 
 use hwpforge_core::document::{Document, Validated};
+use hwpforge_core::image::ImageStore;
 
 use crate::error::{HwpxError, HwpxResult};
 use crate::style_store::HwpxStyleStore;
@@ -38,22 +39,22 @@ use self::section::encode_section;
 /// let bytes = std::fs::read("input.hwpx").unwrap();
 /// let result = HwpxDecoder::decode(&bytes).unwrap();
 /// let validated = result.document.validate().unwrap();
-/// let output = HwpxEncoder::encode(&validated, &result.style_store).unwrap();
+/// let output = HwpxEncoder::encode(&validated, &result.style_store, &result.image_store).unwrap();
 /// std::fs::write("output.hwpx", &output).unwrap();
 /// ```
 ///
-/// # Phase 4 Scope
+/// # Image Binary Support
 ///
-/// The encoder outputs text, tables, images (XML references), fonts,
-/// character shapes, paragraph shapes, and page settings. Binary image
-/// data (`BinData/`) is **not** included — image paths are written to
-/// XML but the actual files are omitted. Full binary round-trip is
-/// planned for a future phase.
+/// The encoder embeds binary image data from [`ImageStore`] into
+/// `BinData/` entries in the ZIP archive. Image paths in the document
+/// (e.g. `"BinData/image1.png"`) are matched against the store keys.
+/// Images not found in the store are silently skipped (XML reference
+/// only, no binary data).
 #[derive(Debug, Clone, Copy)]
 pub struct HwpxEncoder;
 
 impl HwpxEncoder {
-    /// Encodes a validated document with its style store to HWPX bytes.
+    /// Encodes a validated document with its style store and images to HWPX bytes.
     ///
     /// The returned bytes form a valid ZIP archive that can be written
     /// to a `.hwpx` file or decoded back with [`crate::HwpxDecoder`].
@@ -62,7 +63,8 @@ impl HwpxEncoder {
     ///
     /// 1. Serialize `HwpxStyleStore` → `header.xml`
     /// 2. Serialize each section → `section{N}.xml`
-    /// 3. Package into ZIP with metadata files
+    /// 3. Collect image binaries from `ImageStore`
+    /// 4. Package into ZIP with metadata files + BinData/
     ///
     /// # Errors
     ///
@@ -72,6 +74,7 @@ impl HwpxEncoder {
     pub fn encode(
         document: &Document<Validated>,
         style_store: &HwpxStyleStore,
+        image_store: &ImageStore,
     ) -> HwpxResult<Vec<u8>> {
         let sections = document.sections();
         let sec_cnt = sections.len() as u32;
@@ -86,8 +89,12 @@ impl HwpxEncoder {
             .map(|(i, section)| encode_section(section, i))
             .collect::<HwpxResult<Vec<_>>>()?;
 
-        // Step 3: Package into ZIP (no binary images in Phase 4)
-        PackageWriter::write_hwpx(&header_xml, &section_xmls, &[])
+        // Step 3: Collect image binaries
+        let images: Vec<(String, Vec<u8>)> =
+            image_store.iter().map(|(key, data)| (key.to_string(), data.to_vec())).collect();
+
+        // Step 4: Package into ZIP with images
+        PackageWriter::write_hwpx(&header_xml, &section_xmls, &images)
     }
 
     /// Encodes a validated document and writes it to a file.
@@ -103,8 +110,9 @@ impl HwpxEncoder {
         path: impl AsRef<Path>,
         document: &Document<Validated>,
         style_store: &HwpxStyleStore,
+        image_store: &ImageStore,
     ) -> HwpxResult<()> {
-        let bytes = Self::encode(document, style_store)?;
+        let bytes = Self::encode(document, style_store, image_store)?;
         std::fs::write(path.as_ref(), bytes).map_err(HwpxError::Io)
     }
 }
@@ -113,6 +121,7 @@ impl HwpxEncoder {
 mod tests {
     use super::*;
     use crate::HwpxDecoder;
+    use hwpforge_core::image::ImageStore;
     use hwpforge_core::paragraph::Paragraph;
     use hwpforge_core::run::Run;
     use hwpforge_core::section::Section;
@@ -177,7 +186,7 @@ mod tests {
     #[test]
     fn encode_produces_valid_zip() {
         let (doc, store) = minimal_doc_and_store();
-        let bytes = HwpxEncoder::encode(&doc, &store).unwrap();
+        let bytes = HwpxEncoder::encode(&doc, &store, &ImageStore::new()).unwrap();
 
         // Must be a valid ZIP (starts with PK magic bytes)
         assert_eq!(&bytes[0..2], b"PK", "output must be a ZIP archive");
@@ -189,7 +198,7 @@ mod tests {
     #[test]
     fn encode_decode_roundtrip() {
         let (doc, store) = minimal_doc_and_store();
-        let bytes = HwpxEncoder::encode(&doc, &store).unwrap();
+        let bytes = HwpxEncoder::encode(&doc, &store, &ImageStore::new()).unwrap();
 
         // Decode the encoded output
         let decoded = HwpxDecoder::decode(&bytes).unwrap();
@@ -235,7 +244,7 @@ mod tests {
         }
         let validated = doc.validate().unwrap();
 
-        let bytes = HwpxEncoder::encode(&validated, &store).unwrap();
+        let bytes = HwpxEncoder::encode(&validated, &store, &ImageStore::new()).unwrap();
         let decoded = HwpxDecoder::decode(&bytes).unwrap();
 
         assert_eq!(decoded.document.sections().len(), 3);
@@ -273,7 +282,7 @@ mod tests {
         ));
         let validated = doc.validate().unwrap();
 
-        let bytes = HwpxEncoder::encode(&validated, &store).unwrap();
+        let bytes = HwpxEncoder::encode(&validated, &store, &ImageStore::new()).unwrap();
         let decoded = HwpxDecoder::decode(&bytes).unwrap();
 
         let decoded_ps = &decoded.document.sections()[0].page_settings;
@@ -319,7 +328,7 @@ mod tests {
         ));
         let validated = doc.validate().unwrap();
 
-        let bytes = HwpxEncoder::encode(&validated, &store).unwrap();
+        let bytes = HwpxEncoder::encode(&validated, &store, &ImageStore::new()).unwrap();
         let decoded = HwpxDecoder::decode(&bytes).unwrap();
 
         let run = &decoded.document.sections()[0].paragraphs[0].runs[0];
@@ -386,7 +395,7 @@ mod tests {
         ));
         let validated = doc.validate().unwrap();
 
-        let bytes = HwpxEncoder::encode(&validated, &store).unwrap();
+        let bytes = HwpxEncoder::encode(&validated, &store, &ImageStore::new()).unwrap();
         let decoded = HwpxDecoder::decode(&bytes).unwrap();
 
         // Fonts
@@ -419,7 +428,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("test_output.hwpx");
 
-        HwpxEncoder::encode_file(&path, &doc, &store).unwrap();
+        HwpxEncoder::encode_file(&path, &doc, &store, &ImageStore::new()).unwrap();
 
         // Decode the file
         let decoded = HwpxDecoder::decode_file(&path).unwrap();
@@ -438,7 +447,13 @@ mod tests {
     #[test]
     fn encode_file_bad_path() {
         let (doc, store) = minimal_doc_and_store();
-        let err = HwpxEncoder::encode_file("/nonexistent/dir/test.hwpx", &doc, &store).unwrap_err();
+        let err = HwpxEncoder::encode_file(
+            "/nonexistent/dir/test.hwpx",
+            &doc,
+            &store,
+            &ImageStore::new(),
+        )
+        .unwrap_err();
         assert!(matches!(err, HwpxError::Io(_)));
     }
 
@@ -458,7 +473,7 @@ mod tests {
         let validated = doc.validate().unwrap();
 
         // Should still produce a valid ZIP (no style data, but valid structure)
-        let bytes = HwpxEncoder::encode(&validated, &store).unwrap();
+        let bytes = HwpxEncoder::encode(&validated, &store, &ImageStore::new()).unwrap();
         assert_eq!(&bytes[0..2], b"PK");
     }
 
@@ -467,7 +482,7 @@ mod tests {
     #[test]
     fn encoded_output_is_decodable_by_decoder() {
         let (doc, store) = minimal_doc_and_store();
-        let bytes = HwpxEncoder::encode(&doc, &store).unwrap();
+        let bytes = HwpxEncoder::encode(&doc, &store, &ImageStore::new()).unwrap();
 
         // The key test: the decoder accepts encoder output
         let result = HwpxDecoder::decode(&bytes);

@@ -28,7 +28,7 @@
 //!
 //! // Round-trip: decode → validate → encode
 //! let validated = result.document.validate().unwrap();
-//! let output = HwpxEncoder::encode(&validated, &result.style_store).unwrap();
+//! let output = HwpxEncoder::encode(&validated, &result.style_store, &result.image_store).unwrap();
 //! std::fs::write("output.hwpx", &output).unwrap();
 //! ```
 //!

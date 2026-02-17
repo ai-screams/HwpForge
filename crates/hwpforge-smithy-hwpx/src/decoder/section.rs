@@ -6,13 +6,18 @@
 use hwpforge_core::image::{Image, ImageFormat};
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::{Run, RunContent};
+use hwpforge_core::section::{HeaderFooter, PageNumber};
 use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_core::PageSettings;
-use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+use hwpforge_foundation::{
+    ApplyPageType, CharShapeIndex, HwpUnit, NumberFormatType, PageNumberPosition, ParaShapeIndex,
+};
 use quick_xml::de::from_str;
 
 use crate::error::{HwpxError, HwpxResult};
-use crate::schema::section::{HxParagraph, HxPic, HxRun, HxSection, HxTable, HxTableCell};
+use crate::schema::section::{
+    HxCtrl, HxHeaderFooter, HxPageNum, HxParagraph, HxPic, HxRun, HxSection, HxTable, HxTableCell,
+};
 
 /// Maximum nesting depth for tables-within-tables.
 ///
@@ -28,6 +33,12 @@ pub struct SectionParseResult {
     pub paragraphs: Vec<Paragraph>,
     /// Page settings extracted from `<hp:secPr>`, if present.
     pub page_settings: Option<PageSettings>,
+    /// Header extracted from `<hp:ctrl><hp:header>`, if present.
+    pub header: Option<HeaderFooter>,
+    /// Footer extracted from `<hp:ctrl><hp:footer>`, if present.
+    pub footer: Option<HeaderFooter>,
+    /// Page number extracted from `<hp:ctrl><hp:pageNum>`, if present.
+    pub page_number: Option<PageNumber>,
 }
 
 /// Parses a section XML string into paragraphs and optional page settings.
@@ -39,6 +50,9 @@ pub fn parse_section(xml: &str, section_index: usize) -> HwpxResult<SectionParse
         .map_err(|e| HwpxError::XmlParse { file: file_hint, detail: e.to_string() })?;
 
     let mut page_settings = None;
+    let mut header = None;
+    let mut footer = None;
+    let mut page_number = None;
 
     let paragraphs = section
         .paragraphs
@@ -49,11 +63,33 @@ pub fn parse_section(xml: &str, section_index: usize) -> HwpxResult<SectionParse
             if ps.is_some() && page_settings.is_none() {
                 page_settings = ps;
             }
+
+            // Extract header/footer/pagenum from ctrl elements in runs
+            for hx_run in &hx_para.runs {
+                for ctrl in &hx_run.ctrls {
+                    if header.is_none() {
+                        if let Some(hf) = convert_ctrl_header(ctrl) {
+                            header = Some(hf);
+                        }
+                    }
+                    if footer.is_none() {
+                        if let Some(hf) = convert_ctrl_footer(ctrl) {
+                            footer = Some(hf);
+                        }
+                    }
+                    if page_number.is_none() {
+                        if let Some(pn) = convert_ctrl_page_number(ctrl) {
+                            page_number = Some(pn);
+                        }
+                    }
+                }
+            }
+
             Ok(para)
         })
         .collect::<HwpxResult<Vec<_>>>()?;
 
-    Ok(SectionParseResult { paragraphs, page_settings })
+    Ok(SectionParseResult { paragraphs, page_settings, header, footer, page_number })
 }
 
 /// Converts an `HxParagraph` to a Core `Paragraph`.
@@ -257,6 +293,101 @@ fn extract_page_settings(sec_pr: &crate::schema::section::HxSecPr) -> Option<Pag
         header_margin,
         footer_margin,
     })
+}
+
+// ── Ctrl conversion helpers ──────────────────────────────────────
+
+/// Extracts a [`HeaderFooter`] from an `HxCtrl`'s header element, if present.
+fn convert_ctrl_header(ctrl: &HxCtrl) -> Option<HeaderFooter> {
+    let hx = ctrl.header.as_ref()?;
+    Some(convert_header_footer(hx))
+}
+
+/// Extracts a [`HeaderFooter`] from an `HxCtrl`'s footer element, if present.
+fn convert_ctrl_footer(ctrl: &HxCtrl) -> Option<HeaderFooter> {
+    let hx = ctrl.footer.as_ref()?;
+    Some(convert_header_footer(hx))
+}
+
+/// Converts an `HxHeaderFooter` into a Core [`HeaderFooter`].
+fn convert_header_footer(hx: &HxHeaderFooter) -> HeaderFooter {
+    let apply_page_type = parse_apply_page_type(&hx.apply_page_type);
+
+    let paragraphs = if let Some(sub_list) = &hx.sub_list {
+        sub_list
+            .paragraphs
+            .iter()
+            .filter_map(|hx_para| {
+                let (para, _) = convert_paragraph(hx_para, false, 0).ok()?;
+                Some(para)
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    HeaderFooter::new(paragraphs, apply_page_type)
+}
+
+/// Extracts a [`PageNumber`] from an `HxCtrl`'s page_num element, if present.
+fn convert_ctrl_page_number(ctrl: &HxCtrl) -> Option<PageNumber> {
+    let hx = ctrl.page_num.as_ref()?;
+    Some(convert_page_number(hx))
+}
+
+/// Converts an `HxPageNum` into a Core [`PageNumber`].
+fn convert_page_number(hx: &HxPageNum) -> PageNumber {
+    let position = parse_page_number_position(&hx.pos);
+    let number_format = parse_number_format_type(&hx.format_type);
+    if hx.side_char.is_empty() {
+        PageNumber::new(position, number_format)
+    } else {
+        PageNumber::with_side_char(position, number_format, hx.side_char.clone())
+    }
+}
+
+/// Parses an HWPX `applyPageType` string into [`ApplyPageType`].
+fn parse_apply_page_type(s: &str) -> ApplyPageType {
+    match s {
+        "BOTH" | "Both" | "both" => ApplyPageType::Both,
+        "EVEN" | "Even" | "even" => ApplyPageType::Even,
+        "ODD" | "Odd" | "odd" => ApplyPageType::Odd,
+        _ => ApplyPageType::Both,
+    }
+}
+
+/// Parses an HWPX `pos` string into [`PageNumberPosition`].
+fn parse_page_number_position(s: &str) -> PageNumberPosition {
+    match s {
+        "NONE" => PageNumberPosition::None,
+        "TOP_LEFT" => PageNumberPosition::TopLeft,
+        "TOP_CENTER" => PageNumberPosition::TopCenter,
+        "TOP_RIGHT" => PageNumberPosition::TopRight,
+        "BOTTOM_LEFT" => PageNumberPosition::BottomLeft,
+        "BOTTOM_CENTER" => PageNumberPosition::BottomCenter,
+        "BOTTOM_RIGHT" => PageNumberPosition::BottomRight,
+        "OUTSIDE_TOP" => PageNumberPosition::OutsideTop,
+        "OUTSIDE_BOTTOM" => PageNumberPosition::OutsideBottom,
+        "INSIDE_TOP" => PageNumberPosition::InsideTop,
+        "INSIDE_BOTTOM" => PageNumberPosition::InsideBottom,
+        _ => PageNumberPosition::TopCenter,
+    }
+}
+
+/// Parses an HWPX `formatType` string into [`NumberFormatType`].
+fn parse_number_format_type(s: &str) -> NumberFormatType {
+    match s {
+        "DIGIT" => NumberFormatType::Digit,
+        "CIRCLED_DIGIT" => NumberFormatType::CircledDigit,
+        "ROMAN_CAPITAL" => NumberFormatType::RomanCapital,
+        "ROMAN_SMALL" => NumberFormatType::RomanSmall,
+        "LATIN_CAPITAL" => NumberFormatType::LatinCapital,
+        "LATIN_SMALL" => NumberFormatType::LatinSmall,
+        "HANGUL_SYLLABLE" => NumberFormatType::HangulSyllable,
+        "HANGUL_JAMO" => NumberFormatType::HangulJamo,
+        "HANJA_DIGIT" => NumberFormatType::HanjaDigit,
+        _ => NumberFormatType::Digit,
+    }
 }
 
 #[cfg(test)]
@@ -578,5 +709,180 @@ mod tests {
         </sec>"#;
         let result = parse_section(xml, 0).unwrap();
         assert_eq!(result.paragraphs[0].runs[0].content.as_text(), Some("우리는 수학을 공부한다."),);
+    }
+
+    // ── Header / Footer / PageNum ctrl parsing ──────────────────
+
+    #[test]
+    fn parse_header_ctrl() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <header id="0" applyPageType="BOTH">
+                            <subList id="0" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP"
+                                     linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">
+                                <p paraPrIDRef="0">
+                                    <run charPrIDRef="0"><t>Header Text</t></run>
+                                </p>
+                            </subList>
+                        </header>
+                    </ctrl>
+                    <t>Body</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0).unwrap();
+        let header = result.header.expect("should have header");
+        assert_eq!(header.apply_page_type, ApplyPageType::Both);
+        assert_eq!(header.paragraphs.len(), 1);
+        assert_eq!(header.paragraphs[0].runs[0].content.as_text(), Some("Header Text"));
+    }
+
+    #[test]
+    fn parse_footer_ctrl() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <footer id="0" applyPageType="EVEN">
+                            <subList id="0" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP"
+                                     linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">
+                                <p paraPrIDRef="0">
+                                    <run charPrIDRef="0"><t>Footer Text</t></run>
+                                </p>
+                            </subList>
+                        </footer>
+                    </ctrl>
+                    <t>Body</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0).unwrap();
+        let footer = result.footer.expect("should have footer");
+        assert_eq!(footer.apply_page_type, ApplyPageType::Even);
+        assert_eq!(footer.paragraphs.len(), 1);
+        assert_eq!(footer.paragraphs[0].runs[0].content.as_text(), Some("Footer Text"));
+    }
+
+    #[test]
+    fn parse_page_number_ctrl() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <pageNum pos="BOTTOM_CENTER" formatType="DIGIT" sideChar="- "/>
+                    </ctrl>
+                    <t>Body</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0).unwrap();
+        let pn = result.page_number.expect("should have page number");
+        assert_eq!(pn.position, PageNumberPosition::BottomCenter);
+        assert_eq!(pn.number_format, NumberFormatType::Digit);
+        assert_eq!(pn.side_char, "- ");
+    }
+
+    #[test]
+    fn parse_header_and_footer_and_pagenum_in_same_section() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <header id="0" applyPageType="BOTH">
+                            <subList id="0" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP"
+                                     linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">
+                                <p paraPrIDRef="0">
+                                    <run charPrIDRef="0"><t>My Header</t></run>
+                                </p>
+                            </subList>
+                        </header>
+                    </ctrl>
+                    <ctrl>
+                        <footer id="0" applyPageType="ODD">
+                            <subList id="0" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP"
+                                     linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">
+                                <p paraPrIDRef="0">
+                                    <run charPrIDRef="0"><t>My Footer</t></run>
+                                </p>
+                            </subList>
+                        </footer>
+                    </ctrl>
+                    <ctrl>
+                        <pageNum pos="TOP_LEFT" formatType="ROMAN_CAPITAL" sideChar=""/>
+                    </ctrl>
+                    <t>Body text</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0).unwrap();
+
+        let header = result.header.expect("should have header");
+        assert_eq!(header.apply_page_type, ApplyPageType::Both);
+        assert_eq!(header.paragraphs[0].runs[0].content.as_text(), Some("My Header"));
+
+        let footer = result.footer.expect("should have footer");
+        assert_eq!(footer.apply_page_type, ApplyPageType::Odd);
+        assert_eq!(footer.paragraphs[0].runs[0].content.as_text(), Some("My Footer"));
+
+        let pn = result.page_number.expect("should have page number");
+        assert_eq!(pn.position, PageNumberPosition::TopLeft);
+        assert_eq!(pn.number_format, NumberFormatType::RomanCapital);
+        assert!(pn.side_char.is_empty());
+    }
+
+    #[test]
+    fn section_without_ctrls_has_no_header_footer_pagenum() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0"><t>Plain text</t></run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0).unwrap();
+        assert!(result.header.is_none());
+        assert!(result.footer.is_none());
+        assert!(result.page_number.is_none());
+    }
+
+    // ── Parse helper tests ──────────────────────────────────────
+
+    #[test]
+    fn parse_apply_page_type_values() {
+        assert_eq!(parse_apply_page_type("BOTH"), ApplyPageType::Both);
+        assert_eq!(parse_apply_page_type("EVEN"), ApplyPageType::Even);
+        assert_eq!(parse_apply_page_type("ODD"), ApplyPageType::Odd);
+        assert_eq!(parse_apply_page_type("Both"), ApplyPageType::Both);
+        assert_eq!(parse_apply_page_type("unknown"), ApplyPageType::Both);
+    }
+
+    #[test]
+    fn parse_page_number_position_values() {
+        assert_eq!(parse_page_number_position("NONE"), PageNumberPosition::None);
+        assert_eq!(parse_page_number_position("TOP_LEFT"), PageNumberPosition::TopLeft);
+        assert_eq!(parse_page_number_position("TOP_CENTER"), PageNumberPosition::TopCenter);
+        assert_eq!(parse_page_number_position("TOP_RIGHT"), PageNumberPosition::TopRight);
+        assert_eq!(parse_page_number_position("BOTTOM_LEFT"), PageNumberPosition::BottomLeft);
+        assert_eq!(parse_page_number_position("BOTTOM_CENTER"), PageNumberPosition::BottomCenter);
+        assert_eq!(parse_page_number_position("BOTTOM_RIGHT"), PageNumberPosition::BottomRight);
+        assert_eq!(parse_page_number_position("OUTSIDE_TOP"), PageNumberPosition::OutsideTop);
+        assert_eq!(parse_page_number_position("OUTSIDE_BOTTOM"), PageNumberPosition::OutsideBottom);
+        assert_eq!(parse_page_number_position("INSIDE_TOP"), PageNumberPosition::InsideTop);
+        assert_eq!(parse_page_number_position("INSIDE_BOTTOM"), PageNumberPosition::InsideBottom);
+        assert_eq!(parse_page_number_position("unknown"), PageNumberPosition::TopCenter);
+    }
+
+    #[test]
+    fn parse_number_format_type_values() {
+        assert_eq!(parse_number_format_type("DIGIT"), NumberFormatType::Digit);
+        assert_eq!(parse_number_format_type("CIRCLED_DIGIT"), NumberFormatType::CircledDigit);
+        assert_eq!(parse_number_format_type("ROMAN_CAPITAL"), NumberFormatType::RomanCapital);
+        assert_eq!(parse_number_format_type("ROMAN_SMALL"), NumberFormatType::RomanSmall);
+        assert_eq!(parse_number_format_type("LATIN_CAPITAL"), NumberFormatType::LatinCapital);
+        assert_eq!(parse_number_format_type("LATIN_SMALL"), NumberFormatType::LatinSmall);
+        assert_eq!(parse_number_format_type("HANGUL_SYLLABLE"), NumberFormatType::HangulSyllable);
+        assert_eq!(parse_number_format_type("HANGUL_JAMO"), NumberFormatType::HangulJamo);
+        assert_eq!(parse_number_format_type("HANJA_DIGIT"), NumberFormatType::HanjaDigit);
+        assert_eq!(parse_number_format_type("unknown"), NumberFormatType::Digit);
     }
 }

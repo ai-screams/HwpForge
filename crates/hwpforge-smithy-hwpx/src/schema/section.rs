@@ -102,7 +102,14 @@ pub struct HxRun {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub pictures: Vec<HxPic>,
-    // hp:ctrl, hp:rect, hp:ellipse, etc. — ignored
+
+    /// All `<hp:ctrl>` elements in this run (header, footer, colPr, pageNum).
+    #[serde(
+        rename(serialize = "hp:ctrl", deserialize = "ctrl"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub ctrls: Vec<HxCtrl>,
 }
 
 // ── Text ──────────────────────────────────────────────────────────
@@ -112,6 +119,66 @@ pub struct HxRun {
 pub struct HxText {
     #[serde(rename = "$text", default)]
     pub text: String,
+}
+
+// ── Control wrapper ──────────────────────────────────────────────
+
+/// `<hp:ctrl>` — wrapper for header, footer, colPr, or pageNum elements.
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct HxCtrl {
+    /// Optional header element.
+    #[serde(
+        rename(serialize = "hp:header", deserialize = "header"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub header: Option<HxHeaderFooter>,
+    /// Optional footer element.
+    #[serde(
+        rename(serialize = "hp:footer", deserialize = "footer"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub footer: Option<HxHeaderFooter>,
+    /// Optional page number element.
+    #[serde(
+        rename(serialize = "hp:pageNum", deserialize = "pageNum"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub page_num: Option<HxPageNum>,
+}
+
+/// `<hp:header>` or `<hp:footer>` — header/footer region with sub-list paragraphs.
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct HxHeaderFooter {
+    /// Element ID.
+    #[serde(rename = "@id", default)]
+    pub id: String,
+    /// Page type: BOTH, EVEN, ODD.
+    #[serde(rename = "@applyPageType", default)]
+    pub apply_page_type: String,
+    /// Sub-list containing paragraphs.
+    #[serde(
+        rename(serialize = "hp:subList", deserialize = "subList"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sub_list: Option<HxSubList>,
+}
+
+/// `<hp:pageNum>` — page number control element.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct HxPageNum {
+    /// Position: BOTTOM_CENTER, TOP_LEFT, etc.
+    #[serde(rename = "@pos", default)]
+    pub pos: String,
+    /// Format type: DIGIT, ROMAN_CAPITAL, etc.
+    #[serde(rename = "@formatType", default)]
+    pub format_type: String,
+    /// Side character (e.g. "-").
+    #[serde(rename = "@sideChar", default)]
+    pub side_char: String,
 }
 
 // ── Section Properties ────────────────────────────────────────────

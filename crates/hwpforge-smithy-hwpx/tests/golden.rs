@@ -121,7 +121,8 @@ fn assert_roundtrip(fixture_name: &str) {
 
     // Validate (Draft → Validated) then encode
     let validated = original.document.validate().unwrap();
-    let encoded = HwpxEncoder::encode(&validated, &original.style_store).unwrap();
+    let images = hwpforge_core::image::ImageStore::new();
+    let encoded = HwpxEncoder::encode(&validated, &original.style_store, &images).unwrap();
 
     // Decode the encoded output
     let roundtripped = HwpxDecoder::decode(&encoded).unwrap();

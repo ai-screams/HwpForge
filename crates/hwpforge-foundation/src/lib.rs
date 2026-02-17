@@ -30,8 +30,9 @@ pub mod units;
 
 pub use color::Color;
 pub use enums::{
-    Alignment, BorderLineType, BreakType, EmbossType, EngraveType, FillBrushType, Language,
-    LineSpacingType, OutlineType, ShadowType, StrikeoutShape, UnderlineType, VerticalPosition,
+    Alignment, ApplyPageType, BorderLineType, BreakType, EmbossType, EngraveType, FillBrushType,
+    Language, LineSpacingType, NumberFormatType, OutlineType, PageNumberPosition, ShadowType,
+    StrikeoutShape, UnderlineType, VerticalPosition,
 };
 pub use error::{ErrorCode, ErrorCodeExt, FoundationError, FoundationResult};
 pub use ids::{FontId, StyleName, TemplateName};
