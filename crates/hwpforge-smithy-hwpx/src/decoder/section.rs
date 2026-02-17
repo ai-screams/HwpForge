@@ -537,7 +537,7 @@ mod tests {
     fn nesting_depth_exceeded_returns_error() {
         use crate::schema::section::HxTable;
         // Directly call convert_table at max depth to trigger the limit
-        let hx = HxTable { row_cnt: 0, col_cnt: 0, rows: vec![] };
+        let hx = HxTable { row_cnt: 0, col_cnt: 0, rows: vec![], ..Default::default() };
         let err = convert_table(&hx, MAX_NESTING_DEPTH).unwrap_err();
         match &err {
             HwpxError::InvalidStructure { detail } => {
@@ -551,7 +551,12 @@ mod tests {
     fn table_row_count_mismatch_returns_error() {
         use crate::schema::section::{HxTable, HxTableRow};
         // Create table with rowCnt=2 but only 1 actual row
-        let hx = HxTable { row_cnt: 2, col_cnt: 1, rows: vec![HxTableRow { cells: vec![] }] };
+        let hx = HxTable {
+            row_cnt: 2,
+            col_cnt: 1,
+            rows: vec![HxTableRow { cells: vec![] }],
+            ..Default::default()
+        };
         let err = convert_table(&hx, 0).unwrap_err();
         match &err {
             HwpxError::InvalidStructure { detail } => {

@@ -82,15 +82,17 @@ fn wrap_header_xml(inner_xml: &str, sec_cnt: u32) -> String {
 const BEGIN_NUM_XML: &str =
     r#"<hh:beginNum page="1" footnote="1" endnote="1" pic="1" tbl="1" equation="1"/>"#;
 
-/// Default `<hh:borderFills>` with two border definitions.
+/// Default `<hh:borderFills>` with three border definitions.
 ///
 /// `borderFillIDRef="1"` is referenced by `<hp:pageBorderFill>` in secPr.
 /// `borderFillIDRef="2"` is referenced by every `<hh:charPr>`.
+/// `borderFillIDRef="3"` is referenced by table cells (`<hp:tbl>` / `<hp:tc>`).
 ///
-/// id=1: Empty border (no fill).
+/// id=1: Empty border (no fill) — page borders.
 /// id=2: Character background with `fillBrush`/`winBrush` (required by 한글).
+/// id=3: SOLID borders on all sides — table cell borders.
 const BORDER_FILLS_XML: &str = concat!(
-    r##"<hh:borderFills itemCnt="2">"##,
+    r##"<hh:borderFills itemCnt="3">"##,
     r##"<hh:borderFill id="1" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0">"##,
     r##"<hh:slash type="NONE" Crooked="0" isCounter="0"/>"##,
     r##"<hh:backSlash type="NONE" Crooked="0" isCounter="0"/>"##,
@@ -111,6 +113,15 @@ const BORDER_FILLS_XML: &str = concat!(
     r##"<hc:fillBrush>"##,
     r##"<hc:winBrush faceColor="none" hatchColor="#FF000000" alpha="0"/>"##,
     r##"</hc:fillBrush>"##,
+    r##"</hh:borderFill>"##,
+    r##"<hh:borderFill id="3" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0">"##,
+    r##"<hh:slash type="NONE" Crooked="0" isCounter="0"/>"##,
+    r##"<hh:backSlash type="NONE" Crooked="0" isCounter="0"/>"##,
+    r##"<hh:leftBorder type="SOLID" width="0.12 mm" color="#000000"/>"##,
+    r##"<hh:rightBorder type="SOLID" width="0.12 mm" color="#000000"/>"##,
+    r##"<hh:topBorder type="SOLID" width="0.12 mm" color="#000000"/>"##,
+    r##"<hh:bottomBorder type="SOLID" width="0.12 mm" color="#000000"/>"##,
+    r##"<hh:diagonal type="SOLID" width="0.1 mm" color="#000000"/>"##,
     r##"</hh:borderFill>"##,
     r##"</hh:borderFills>"##,
 );

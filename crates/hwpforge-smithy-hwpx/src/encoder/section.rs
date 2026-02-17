@@ -22,9 +22,9 @@ use hwpforge_core::PageSettings;
 use crate::encoder::package::XMLNS_DECLS;
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    HxCellSpan, HxCellSz, HxImg, HxLineSeg, HxLineSegArray, HxPageMargin, HxPagePr, HxParagraph,
-    HxPic, HxRun, HxSecPr, HxSection, HxSizeAttr, HxSubList, HxTable, HxTableCell, HxTableRow,
-    HxText,
+    HxCellAddr, HxCellSpan, HxCellSz, HxImg, HxLineSeg, HxLineSegArray, HxPageMargin, HxPagePr,
+    HxParagraph, HxPic, HxRun, HxSecPr, HxSection, HxSizeAttr, HxSubList, HxTable, HxTableCell,
+    HxTableMargin, HxTablePos, HxTableRow, HxTableSz, HxText,
 };
 
 /// Maximum nesting depth for tables-within-tables.
@@ -237,7 +237,22 @@ fn build_sec_pr(ps: &PageSettings) -> HxSecPr {
     }
 }
 
+/// Default inner cell margin (left/right: 510 ≈ 1.8mm, top/bottom: 141 ≈ 0.5mm).
+const DEFAULT_CELL_MARGIN: HxTableMargin =
+    HxTableMargin { left: 510, right: 510, top: 141, bottom: 141 };
+
+/// Default outer table margin (283 ≈ 1mm on all sides).
+const DEFAULT_OUT_MARGIN: HxTableMargin =
+    HxTableMargin { left: 283, right: 283, top: 283, bottom: 283 };
+
+/// `borderFillIDRef` for table cells (matches header.xml borderFill id=3).
+const TABLE_BORDER_FILL_ID: u32 = 3;
+
 /// Builds `HxTable` from a Core `Table`.
+///
+/// Populates all attributes and sub-elements required by 한글:
+/// `hp:sz`, `hp:pos`, `hp:outMargin`, `hp:inMargin`, plus full
+/// attribute set on `<hp:tbl>`.
 ///
 /// # Errors
 ///
@@ -250,20 +265,73 @@ fn build_table(table: &Table, depth: usize) -> HwpxResult<HxTable> {
         });
     }
 
-    let rows =
-        table.rows.iter().map(|row| build_table_row(row, depth)).collect::<HwpxResult<Vec<_>>>()?;
-
     let col_cnt = table.rows.iter().map(|r| r.cells.len()).max().unwrap_or(0) as u32;
 
-    Ok(HxTable { row_cnt: table.rows.len() as u32, col_cnt, rows })
+    let rows = table
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(row_idx, row)| build_table_row(row, row_idx as u32, depth))
+        .collect::<HwpxResult<Vec<_>>>()?;
+
+    // Table width: use explicit width or sum of first row's cell widths
+    let table_width = table
+        .width
+        .map(|w| w.as_i32())
+        .unwrap_or_else(|| {
+            table.rows.first().map_or(DEFAULT_HORZ_SIZE, |r| {
+                r.cells.iter().map(|c| c.width.as_i32()).sum()
+            })
+        });
+
+    Ok(HxTable {
+        id: String::new(),
+        z_order: 0,
+        numbering_type: "TABLE".to_string(),
+        text_wrap: "TOP_AND_BOTTOM".to_string(),
+        text_flow: "BOTH_SIDES".to_string(),
+        lock: 0,
+        dropcap_style: "None".to_string(),
+        page_break: "CELL".to_string(),
+        repeat_header: 1,
+        row_cnt: table.rows.len() as u32,
+        col_cnt,
+        cell_spacing: 0,
+        border_fill_id_ref: TABLE_BORDER_FILL_ID,
+        no_adjust: 0,
+        sz: Some(HxTableSz {
+            width: table_width,
+            width_rel_to: "ABSOLUTE".to_string(),
+            height: 0,
+            height_rel_to: "ABSOLUTE".to_string(),
+            protect: 0,
+        }),
+        pos: Some(HxTablePos {
+            treat_as_char: 0,
+            affect_l_spacing: 0,
+            flow_with_text: 1,
+            allow_overlap: 0,
+            hold_anchor_and_so: 0,
+            vert_rel_to: "PARA".to_string(),
+            horz_rel_to: "COLUMN".to_string(),
+            vert_align: "TOP".to_string(),
+            horz_align: "LEFT".to_string(),
+            vert_offset: 0,
+            horz_offset: 0,
+        }),
+        out_margin: Some(DEFAULT_OUT_MARGIN),
+        in_margin: Some(DEFAULT_CELL_MARGIN),
+        rows,
+    })
 }
 
 /// Builds `HxTableRow` from a Core `TableRow`.
-fn build_table_row(row: &TableRow, depth: usize) -> HwpxResult<HxTableRow> {
+fn build_table_row(row: &TableRow, row_idx: u32, depth: usize) -> HwpxResult<HxTableRow> {
     let cells = row
         .cells
         .iter()
-        .map(|cell| build_table_cell(cell, depth))
+        .enumerate()
+        .map(|(col_idx, cell)| build_table_cell(cell, col_idx as u32, row_idx, depth))
         .collect::<HwpxResult<Vec<_>>>()?;
 
     Ok(HxTableRow { cells })
@@ -272,7 +340,13 @@ fn build_table_row(row: &TableRow, depth: usize) -> HwpxResult<HxTableRow> {
 /// Builds `HxTableCell` from a Core `TableCell`.
 ///
 /// Cell paragraphs are built recursively at `depth + 1` to track nesting.
-fn build_table_cell(cell: &TableCell, depth: usize) -> HwpxResult<HxTableCell> {
+/// `col_idx` and `row_idx` are used to populate `<hp:cellAddr>`.
+fn build_table_cell(
+    cell: &TableCell,
+    col_idx: u32,
+    row_idx: u32,
+    depth: usize,
+) -> HwpxResult<HxTableCell> {
     let paragraphs = cell
         .paragraphs
         .iter()
@@ -282,12 +356,32 @@ fn build_table_cell(cell: &TableCell, depth: usize) -> HwpxResult<HxTableCell> {
 
     Ok(HxTableCell {
         name: String::new(),
+        header: 0,
+        has_margin: 0,
+        protect: 0,
+        editable: 0,
+        dirty: 0,
+        border_fill_id_ref: TABLE_BORDER_FILL_ID,
+        sub_list: Some(HxSubList {
+            id: String::new(),
+            text_direction: "HORIZONTAL".to_string(),
+            line_wrap: "BREAK".to_string(),
+            vert_align: "CENTER".to_string(),
+            link_list_id_ref: 0,
+            link_list_next_id_ref: 0,
+            text_width: 0,
+            text_height: 0,
+            has_text_ref: 0,
+            has_num_ref: 0,
+            paragraphs,
+        }),
+        cell_addr: Some(HxCellAddr { col_addr: col_idx, row_addr: row_idx }),
         cell_span: Some(HxCellSpan {
             col_span: cell.col_span as u32,
             row_span: cell.row_span as u32,
         }),
         cell_sz: Some(HxCellSz { width: cell.width.as_i32(), height: 0 }),
-        sub_list: Some(HxSubList { paragraphs }),
+        cell_margin: Some(DEFAULT_CELL_MARGIN),
     })
 }
 
