@@ -12,6 +12,7 @@
 //! the **first paragraph**, not at the section level. This module reproduces
 //! that quirk so the output is compatible with the Hancom HWP editor.
 
+use hwpforge_core::column::{ColumnLayoutMode, ColumnSettings, ColumnType};
 use hwpforge_core::control::Control;
 use hwpforge_core::image::Image;
 use hwpforge_core::paragraph::Paragraph;
@@ -23,10 +24,10 @@ use hwpforge_core::PageSettings;
 use crate::encoder::package::XMLNS_DECLS;
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    HxCellAddr, HxCellSpan, HxCellSz, HxCtrl, HxDrawText, HxFootNote, HxImg, HxLineSeg,
-    HxLineSegArray, HxPageMargin, HxPagePr, HxParagraph, HxPic, HxPoint, HxRect, HxRun, HxSecPr,
-    HxSection, HxSizeAttr, HxSubList, HxTable, HxTableCell, HxTableMargin, HxTablePos, HxTableRow,
-    HxTableSz, HxText,
+    HxCellAddr, HxCellSpan, HxCellSz, HxCtrl, HxDrawText, HxEllipse, HxFootNote, HxImg, HxLine,
+    HxLineSeg, HxLineSegArray, HxPageMargin, HxPagePr, HxParagraph, HxPic, HxPoint, HxPolygon,
+    HxRect, HxRun, HxSecPr, HxSection, HxSizeAttr, HxSubList, HxTable, HxTableCell, HxTableMargin,
+    HxTablePos, HxTableRow, HxTableSz, HxText,
 };
 
 /// Maximum nesting depth for tables-within-tables.
@@ -60,7 +61,7 @@ pub(crate) fn encode_section(section: &Section, _section_index: usize) -> HwpxRe
 
     // Enrich <hp:secPr> with sub-elements required by 한글 (grid,
     // startNum, visibility, footnote/endnote, pageBorderFill).
-    let mut enriched = enrich_sec_pr(inner_content);
+    let mut enriched = enrich_sec_pr(inner_content, section.column_settings.as_ref());
 
     // Inject header/footer/page number controls after colPr
     inject_header_footer_pagenum(&mut enriched, section);
@@ -177,6 +178,9 @@ fn build_runs(
         let mut pictures = Vec::new();
         let mut ctrls = Vec::new();
         let mut rects = Vec::new();
+        let mut lines = Vec::new();
+        let mut ellipses = Vec::new();
+        let mut polygons = Vec::new();
 
         match &run.content {
             RunContent::Text(s) => {
@@ -198,6 +202,15 @@ fn build_runs(
                     Control::TextBox { .. } => {
                         rects.push(encode_textbox_to_rect(ctrl, depth)?);
                     }
+                    Control::Line { .. } => {
+                        lines.push(encode_line_to_hx(ctrl));
+                    }
+                    Control::Ellipse { .. } => {
+                        ellipses.push(encode_ellipse_to_hx(ctrl, depth)?);
+                    }
+                    Control::Polygon { .. } => {
+                        polygons.push(encode_polygon_to_hx(ctrl, depth)?);
+                    }
                     Control::Hyperlink { .. } | Control::Unknown { .. } => {
                         // Skip for Phase 4.5 (not implemented yet)
                         continue;
@@ -215,7 +228,18 @@ fn build_runs(
             }
         }
 
-        result.push(HxRun { char_pr_id_ref, sec_pr, texts, tables, pictures, ctrls, rects });
+        result.push(HxRun {
+            char_pr_id_ref,
+            sec_pr,
+            texts,
+            tables,
+            pictures,
+            ctrls,
+            rects,
+            lines,
+            ellipses,
+            polygons,
+        });
     }
 
     // If we need to inject secPr but there were no non-control runs,
@@ -232,6 +256,9 @@ fn build_runs(
                     pictures: Vec::new(),
                     ctrls: Vec::new(),
                     rects: Vec::new(),
+                    lines: Vec::new(),
+                    ellipses: Vec::new(),
+                    polygons: Vec::new(),
                 },
             );
         }
@@ -360,6 +387,176 @@ fn encode_textbox_to_rect(ctrl: &Control, depth: usize) -> HwpxResult<HxRect> {
         pt1: Some(HxPoint { x: width_hwp, y: 0 }),
         pt2: Some(HxPoint { x: width_hwp, y: height_hwp }),
         pt3: Some(HxPoint { x: 0, y: height_hwp }),
+    })
+}
+
+/// Encodes a Core `Control::Line` into `HxLine`.
+fn encode_line_to_hx(ctrl: &Control) -> HxLine {
+    let (start, end, width, height) = match ctrl {
+        Control::Line { start, end, width, height } => (start, end, *width, *height),
+        _ => unreachable!("encode_line_to_hx called with non-Line"),
+    };
+
+    HxLine {
+        id: String::new(),
+        z_order: 0,
+        numbering_type: "NONE".to_string(),
+        text_wrap: "TOP_AND_BOTTOM".to_string(),
+        text_flow: "BOTH_SIDES".to_string(),
+        lock: 0,
+        dropcap_style: "None".to_string(),
+        href: String::new(),
+        group_level: 0,
+        instid: generate_instid(),
+        is_reverse_hv: 0,
+        sz: Some(HxTableSz {
+            width: width.as_i32(),
+            width_rel_to: "ABSOLUTE".to_string(),
+            height: height.as_i32(),
+            height_rel_to: "ABSOLUTE".to_string(),
+            protect: 0,
+        }),
+        pos: Some(HxTablePos {
+            treat_as_char: 1,
+            affect_l_spacing: 0,
+            flow_with_text: 0,
+            allow_overlap: 0,
+            hold_anchor_and_so: 0,
+            vert_rel_to: "PARA".to_string(),
+            horz_rel_to: "PARA".to_string(),
+            vert_align: "TOP".to_string(),
+            horz_align: "LEFT".to_string(),
+            vert_offset: 0,
+            horz_offset: 0,
+        }),
+        out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+        start_pt: Some(HxPoint { x: start.x, y: start.y }),
+        end_pt: Some(HxPoint { x: end.x, y: end.y }),
+    }
+}
+
+/// Encodes a Core `Control::Ellipse` into `HxEllipse`.
+fn encode_ellipse_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxEllipse> {
+    let (center, axis1, axis2, width, height, paragraphs) = match ctrl {
+        Control::Ellipse { center, axis1, axis2, width, height, paragraphs } => {
+            (center, axis1, axis2, *width, *height, paragraphs)
+        }
+        _ => unreachable!("encode_ellipse_to_hx called with non-Ellipse"),
+    };
+
+    let draw_text = if paragraphs.is_empty() {
+        None
+    } else {
+        let sub_list = encode_paragraphs_to_sublist(paragraphs, depth)?;
+        Some(HxDrawText {
+            last_width: 0,
+            name: String::new(),
+            editable: 0,
+            sub_list,
+            text_margin: None,
+        })
+    };
+
+    Ok(HxEllipse {
+        id: String::new(),
+        z_order: 0,
+        numbering_type: "NONE".to_string(),
+        text_wrap: "TOP_AND_BOTTOM".to_string(),
+        text_flow: "BOTH_SIDES".to_string(),
+        lock: 0,
+        dropcap_style: "None".to_string(),
+        href: String::new(),
+        group_level: 0,
+        instid: generate_instid(),
+        interval_dirty: 0,
+        has_arc_pr: 0,
+        arc_type: "NORMAL".to_string(),
+        sz: Some(HxTableSz {
+            width: width.as_i32(),
+            width_rel_to: "ABSOLUTE".to_string(),
+            height: height.as_i32(),
+            height_rel_to: "ABSOLUTE".to_string(),
+            protect: 0,
+        }),
+        pos: Some(HxTablePos {
+            treat_as_char: 1,
+            affect_l_spacing: 0,
+            flow_with_text: 0,
+            allow_overlap: 0,
+            hold_anchor_and_so: 0,
+            vert_rel_to: "PARA".to_string(),
+            horz_rel_to: "PARA".to_string(),
+            vert_align: "TOP".to_string(),
+            horz_align: "LEFT".to_string(),
+            vert_offset: 0,
+            horz_offset: 0,
+        }),
+        out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+        draw_text,
+        center: Some(HxPoint { x: center.x, y: center.y }),
+        ax1: Some(HxPoint { x: axis1.x, y: axis1.y }),
+        ax2: Some(HxPoint { x: axis2.x, y: axis2.y }),
+    })
+}
+
+/// Encodes a Core `Control::Polygon` into `HxPolygon`.
+fn encode_polygon_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxPolygon> {
+    let (vertices, width, height, paragraphs) = match ctrl {
+        Control::Polygon { vertices, width, height, paragraphs } => {
+            (vertices, *width, *height, paragraphs)
+        }
+        _ => unreachable!("encode_polygon_to_hx called with non-Polygon"),
+    };
+
+    let draw_text = if paragraphs.is_empty() {
+        None
+    } else {
+        let sub_list = encode_paragraphs_to_sublist(paragraphs, depth)?;
+        Some(HxDrawText {
+            last_width: 0,
+            name: String::new(),
+            editable: 0,
+            sub_list,
+            text_margin: None,
+        })
+    };
+
+    let points = vertices.iter().map(|v| HxPoint { x: v.x, y: v.y }).collect();
+
+    Ok(HxPolygon {
+        id: String::new(),
+        z_order: 0,
+        numbering_type: "NONE".to_string(),
+        text_wrap: "TOP_AND_BOTTOM".to_string(),
+        text_flow: "BOTH_SIDES".to_string(),
+        lock: 0,
+        dropcap_style: "None".to_string(),
+        href: String::new(),
+        group_level: 0,
+        instid: generate_instid(),
+        sz: Some(HxTableSz {
+            width: width.as_i32(),
+            width_rel_to: "ABSOLUTE".to_string(),
+            height: height.as_i32(),
+            height_rel_to: "ABSOLUTE".to_string(),
+            protect: 0,
+        }),
+        pos: Some(HxTablePos {
+            treat_as_char: 1,
+            affect_l_spacing: 0,
+            flow_with_text: 0,
+            allow_overlap: 0,
+            hold_anchor_and_so: 0,
+            vert_rel_to: "PARA".to_string(),
+            horz_rel_to: "PARA".to_string(),
+            vert_align: "TOP".to_string(),
+            horz_align: "LEFT".to_string(),
+            vert_offset: 0,
+            horz_offset: 0,
+        }),
+        out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+        draw_text,
+        points,
     })
 }
 
@@ -637,14 +834,61 @@ const SEC_PR_POST_ELEMENTS: &str = concat!(
     r#"</hp:pageBorderFill>"#,
 );
 
-/// Column properties injected after `</hp:secPr>` inside the first run.
+/// Builds `<hp:ctrl><hp:colPr>...</hp:colPr></hp:ctrl>` XML string.
 ///
-/// Single-column default layout matching 한글's standard output.
-const COL_PR_XML: &str = concat!(
-    r#"<hp:ctrl>"#,
-    r#"<hp:colPr id="" type="NEWSPAPER" layout="LEFT" colCount="1" sameSz="1" sameGap="0"/>"#,
-    r#"</hp:ctrl>"#,
-);
+/// When `column_settings` is `None`, produces the single-column default
+/// matching 한글's standard output. Otherwise generates multi-column
+/// XML with the appropriate attributes and optional `<hp:col>` children.
+fn build_col_pr_xml(column_settings: Option<&ColumnSettings>) -> String {
+    match column_settings {
+        None => {
+            // Single-column default
+            concat!(
+                r#"<hp:ctrl>"#,
+                r#"<hp:colPr id="" type="NEWSPAPER" layout="LEFT" colCount="1" sameSz="1" sameGap="0"/>"#,
+                r#"</hp:ctrl>"#,
+            )
+            .to_string()
+        }
+        Some(cs) => {
+            let col_type = match cs.column_type {
+                ColumnType::Newspaper => "NEWSPAPER",
+                ColumnType::Parallel => "PARALLEL",
+                _ => "NEWSPAPER",
+            };
+            let layout = match cs.layout_mode {
+                ColumnLayoutMode::Left => "LEFT",
+                ColumnLayoutMode::Right => "RIGHT",
+                ColumnLayoutMode::Mirror => "MIRROR",
+                _ => "LEFT",
+            };
+            let col_count = cs.columns.len();
+            let all_same = cs.is_equal_width();
+
+            if all_same {
+                // sameSz=1: 한글 calculates equal widths, we just specify gap
+                let same_gap = if col_count >= 2 { cs.columns[0].gap.as_i32() } else { 0 };
+                format!(
+                    r#"<hp:ctrl><hp:colPr id="" type="{col_type}" layout="{layout}" colCount="{col_count}" sameSz="1" sameGap="{same_gap}"/></hp:ctrl>"#
+                )
+            } else {
+                // sameSz=0: explicit <hp:col> children
+                let mut xml = format!(
+                    r#"<hp:ctrl><hp:colPr id="" type="{col_type}" layout="{layout}" colCount="{col_count}" sameSz="0" sameGap="0">"#
+                );
+                for col in &cs.columns {
+                    xml.push_str(&format!(
+                        r#"<hp:col width="{}" gap="{}"/>"#,
+                        col.width.as_i32(),
+                        col.gap.as_i32()
+                    ));
+                }
+                xml.push_str("</hp:colPr></hp:ctrl>");
+                xml
+            }
+        }
+    }
+}
 
 /// Enriches the minimal `<hp:secPr>` output with sub-elements required
 /// by 한글 for proper rendering.
@@ -653,7 +897,7 @@ const COL_PR_XML: &str = concat!(
 /// attributes, inserts grid/visibility elements before `<hp:pagePr>`,
 /// appends footnote/endnote/pageBorderFill after `</hp:pagePr>`,
 /// and injects `<hp:ctrl><hp:colPr>` after the closing `</hp:secPr>`.
-fn enrich_sec_pr(xml: &str) -> String {
+fn enrich_sec_pr(xml: &str, column_settings: Option<&ColumnSettings>) -> String {
     let minimal_open = r#"<hp:secPr textDirection="HORIZONTAL">"#;
 
     // If no secPr to enrich, return as-is
@@ -672,7 +916,8 @@ fn enrich_sec_pr(xml: &str) -> String {
     // Insert colPr after </hp:secPr>
     if let Some(pos) = result.find("</hp:secPr>") {
         let insert_pos = pos + "</hp:secPr>".len();
-        result.insert_str(insert_pos, COL_PR_XML);
+        let col_pr = build_col_pr_xml(column_settings);
+        result.insert_str(insert_pos, &col_pr);
     }
 
     result

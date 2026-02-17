@@ -80,6 +80,7 @@
 #![deny(unsafe_code)]
 #![deny(clippy::all)]
 
+pub mod column;
 pub mod control;
 pub mod document;
 pub mod error;
@@ -97,7 +98,8 @@ mod validate;
 // Re-exports for convenience
 // ---------------------------------------------------------------------------
 
-pub use control::Control;
+pub use column::{ColumnDef, ColumnLayoutMode, ColumnSettings, ColumnType};
+pub use control::{Control, ShapePoint};
 pub use document::{Document, Draft, Validated};
 pub use error::{CoreError, CoreErrorCode, CoreResult, ValidationError};
 pub use image::{Image, ImageFormat, ImageStore};

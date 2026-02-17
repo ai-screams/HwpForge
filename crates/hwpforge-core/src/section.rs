@@ -25,6 +25,7 @@ use hwpforge_foundation::{ApplyPageType, NumberFormatType, PageNumberPosition};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::column::ColumnSettings;
 use crate::page::PageSettings;
 use crate::paragraph::Paragraph;
 
@@ -176,6 +177,9 @@ pub struct Section {
     /// Optional page number settings for this section.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_number: Option<PageNumber>,
+    /// Multi-column layout. `None` = single column (default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column_settings: Option<ColumnSettings>,
 }
 
 impl Section {
@@ -197,6 +201,7 @@ impl Section {
             header: None,
             footer: None,
             page_number: None,
+            column_settings: None,
         }
     }
 
@@ -217,7 +222,14 @@ impl Section {
     /// assert_eq!(section.paragraph_count(), 1);
     /// ```
     pub fn with_paragraphs(paragraphs: Vec<Paragraph>, page_settings: PageSettings) -> Self {
-        Self { paragraphs, page_settings, header: None, footer: None, page_number: None }
+        Self {
+            paragraphs,
+            page_settings,
+            header: None,
+            footer: None,
+            page_number: None,
+            column_settings: None,
+        }
     }
 
     /// Appends a paragraph to this section.
@@ -462,6 +474,7 @@ mod tests {
         assert!(section.header.is_none());
         assert!(section.footer.is_none());
         assert!(section.page_number.is_none());
+        assert!(section.column_settings.is_none());
     }
 
     #[test]
@@ -508,11 +521,12 @@ mod tests {
     fn section_serde_none_fields_skipped() {
         let section = Section::new(PageSettings::a4());
         let json = serde_json::to_string(&section).unwrap();
-        // Section-level header/footer/page_number should not appear
+        // Section-level header/footer/page_number/column_settings should not appear
         // (PageSettings has header_margin/footer_margin, which is different)
         assert!(!json.contains("\"header\""));
         assert!(!json.contains("\"footer\""));
         assert!(!json.contains("\"page_number\""));
+        assert!(!json.contains("\"column_settings\""));
         let back: Section = serde_json::from_str(&json).unwrap();
         assert_eq!(section, back);
     }

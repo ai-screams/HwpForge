@@ -28,6 +28,18 @@ use serde::{Deserialize, Serialize};
 
 use crate::paragraph::Paragraph;
 
+/// A 2D point in raw HWPUNIT coordinates for shape geometry.
+///
+/// Uses `i32` (not `HwpUnit`) because shape geometry points are raw
+/// coordinate values within a bounding box, not document-level measurements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ShapePoint {
+    /// X coordinate (HWPUNIT).
+    pub x: i32,
+    /// Y coordinate (HWPUNIT).
+    pub y: i32,
+}
+
 /// An inline control element.
 ///
 /// Controls are non-text elements that appear within a Run.
@@ -95,6 +107,49 @@ pub enum Control {
         paragraphs: Vec<Paragraph>,
     },
 
+    /// A line drawing object (2 endpoints).
+    /// Maps to HWPX `<hp:line>`.
+    Line {
+        /// Start point (x, y in HWPUNIT).
+        start: ShapePoint,
+        /// End point (x, y in HWPUNIT).
+        end: ShapePoint,
+        /// Bounding box width (HWPUNIT).
+        width: HwpUnit,
+        /// Bounding box height (HWPUNIT).
+        height: HwpUnit,
+    },
+
+    /// An ellipse (or circle) drawing object.
+    /// Maps to HWPX `<hp:ellipse>`.
+    Ellipse {
+        /// Center point (x, y in HWPUNIT).
+        center: ShapePoint,
+        /// Axis 1 endpoint (defines semi-major axis direction and length).
+        axis1: ShapePoint,
+        /// Axis 2 endpoint (perpendicular to axis1, defines semi-minor axis).
+        axis2: ShapePoint,
+        /// Bounding box width (HWPUNIT).
+        width: HwpUnit,
+        /// Bounding box height (HWPUNIT).
+        height: HwpUnit,
+        /// Optional text content inside the ellipse.
+        paragraphs: Vec<Paragraph>,
+    },
+
+    /// A polygon drawing object (3+ vertices).
+    /// Maps to HWPX `<hp:polygon>`.
+    Polygon {
+        /// Ordered list of vertices (minimum 3).
+        vertices: Vec<ShapePoint>,
+        /// Bounding box width (HWPUNIT).
+        width: HwpUnit,
+        /// Bounding box height (HWPUNIT).
+        height: HwpUnit,
+        /// Optional text content inside the polygon.
+        paragraphs: Vec<Paragraph>,
+    },
+
     /// An unrecognized control element preserved for round-trip fidelity.
     ///
     /// `tag` holds the element's tag name or type identifier.
@@ -128,6 +183,21 @@ impl Control {
         matches!(self, Self::Endnote { .. })
     }
 
+    /// Returns `true` if this is a [`Control::Line`].
+    pub fn is_line(&self) -> bool {
+        matches!(self, Self::Line { .. })
+    }
+
+    /// Returns `true` if this is a [`Control::Ellipse`].
+    pub fn is_ellipse(&self) -> bool {
+        matches!(self, Self::Ellipse { .. })
+    }
+
+    /// Returns `true` if this is a [`Control::Polygon`].
+    pub fn is_polygon(&self) -> bool {
+        matches!(self, Self::Polygon { .. })
+    }
+
     /// Returns `true` if this is a [`Control::Unknown`].
     pub fn is_unknown(&self) -> bool {
         matches!(self, Self::Unknown { .. })
@@ -150,6 +220,15 @@ impl std::fmt::Display for Control {
             }
             Self::Endnote { paragraphs, .. } => {
                 write!(f, "Endnote({} paragraphs)", paragraphs.len())
+            }
+            Self::Line { .. } => {
+                write!(f, "Line")
+            }
+            Self::Ellipse { paragraphs, .. } => {
+                write!(f, "Ellipse({} paragraphs)", paragraphs.len())
+            }
+            Self::Polygon { vertices, paragraphs, .. } => {
+                write!(f, "Polygon({} vertices, {} paragraphs)", vertices.len(), paragraphs.len())
             }
             Self::Unknown { tag, .. } => {
                 write!(f, "Unknown({tag})")
@@ -333,5 +412,133 @@ mod tests {
         let json = serde_json::to_string(&ctrl).unwrap();
         let back: Control = serde_json::from_str(&json).unwrap();
         assert_eq!(ctrl, back);
+    }
+
+    // ── Shape variant tests ──────────────────────────────────────
+
+    #[test]
+    fn line_construction() {
+        let ctrl = Control::Line {
+            start: ShapePoint { x: 0, y: 0 },
+            end: ShapePoint { x: 1000, y: 500 },
+            width: HwpUnit::from_mm(50.0).unwrap(),
+            height: HwpUnit::from_mm(25.0).unwrap(),
+        };
+        assert!(ctrl.is_line());
+        assert!(!ctrl.is_text_box());
+        assert!(!ctrl.is_ellipse());
+        assert!(!ctrl.is_polygon());
+    }
+
+    #[test]
+    fn ellipse_construction() {
+        let ctrl = Control::Ellipse {
+            center: ShapePoint { x: 500, y: 500 },
+            axis1: ShapePoint { x: 1000, y: 500 },
+            axis2: ShapePoint { x: 500, y: 1000 },
+            width: HwpUnit::from_mm(40.0).unwrap(),
+            height: HwpUnit::from_mm(30.0).unwrap(),
+            paragraphs: vec![],
+        };
+        assert!(ctrl.is_ellipse());
+        assert!(!ctrl.is_line());
+        assert!(!ctrl.is_polygon());
+    }
+
+    #[test]
+    fn ellipse_with_paragraphs() {
+        let ctrl = Control::Ellipse {
+            center: ShapePoint { x: 500, y: 500 },
+            axis1: ShapePoint { x: 1000, y: 500 },
+            axis2: ShapePoint { x: 500, y: 1000 },
+            width: HwpUnit::from_mm(40.0).unwrap(),
+            height: HwpUnit::from_mm(30.0).unwrap(),
+            paragraphs: vec![simple_paragraph()],
+        };
+        assert!(ctrl.is_ellipse());
+        assert_eq!(ctrl.to_string(), "Ellipse(1 paragraphs)");
+    }
+
+    #[test]
+    fn polygon_construction() {
+        let ctrl = Control::Polygon {
+            vertices: vec![
+                ShapePoint { x: 0, y: 0 },
+                ShapePoint { x: 1000, y: 0 },
+                ShapePoint { x: 500, y: 1000 },
+            ],
+            width: HwpUnit::from_mm(50.0).unwrap(),
+            height: HwpUnit::from_mm(50.0).unwrap(),
+            paragraphs: vec![],
+        };
+        assert!(ctrl.is_polygon());
+        assert!(!ctrl.is_line());
+        assert!(!ctrl.is_ellipse());
+        assert_eq!(ctrl.to_string(), "Polygon(3 vertices, 0 paragraphs)");
+    }
+
+    #[test]
+    fn display_line() {
+        let ctrl = Control::Line {
+            start: ShapePoint { x: 0, y: 0 },
+            end: ShapePoint { x: 100, y: 200 },
+            width: HwpUnit::from_mm(10.0).unwrap(),
+            height: HwpUnit::from_mm(5.0).unwrap(),
+        };
+        assert_eq!(ctrl.to_string(), "Line");
+    }
+
+    #[test]
+    fn serde_roundtrip_line() {
+        let ctrl = Control::Line {
+            start: ShapePoint { x: 100, y: 200 },
+            end: ShapePoint { x: 300, y: 400 },
+            width: HwpUnit::from_mm(20.0).unwrap(),
+            height: HwpUnit::from_mm(10.0).unwrap(),
+        };
+        let json = serde_json::to_string(&ctrl).unwrap();
+        let back: Control = serde_json::from_str(&json).unwrap();
+        assert_eq!(ctrl, back);
+    }
+
+    #[test]
+    fn serde_roundtrip_ellipse() {
+        let ctrl = Control::Ellipse {
+            center: ShapePoint { x: 500, y: 500 },
+            axis1: ShapePoint { x: 1000, y: 500 },
+            axis2: ShapePoint { x: 500, y: 1000 },
+            width: HwpUnit::from_mm(40.0).unwrap(),
+            height: HwpUnit::from_mm(30.0).unwrap(),
+            paragraphs: vec![simple_paragraph()],
+        };
+        let json = serde_json::to_string(&ctrl).unwrap();
+        let back: Control = serde_json::from_str(&json).unwrap();
+        assert_eq!(ctrl, back);
+    }
+
+    #[test]
+    fn serde_roundtrip_polygon() {
+        let ctrl = Control::Polygon {
+            vertices: vec![
+                ShapePoint { x: 0, y: 0 },
+                ShapePoint { x: 1000, y: 0 },
+                ShapePoint { x: 500, y: 1000 },
+            ],
+            width: HwpUnit::from_mm(50.0).unwrap(),
+            height: HwpUnit::from_mm(50.0).unwrap(),
+            paragraphs: vec![],
+        };
+        let json = serde_json::to_string(&ctrl).unwrap();
+        let back: Control = serde_json::from_str(&json).unwrap();
+        assert_eq!(ctrl, back);
+    }
+
+    #[test]
+    fn shape_point_equality() {
+        let a = ShapePoint { x: 10, y: 20 };
+        let b = ShapePoint { x: 10, y: 20 };
+        let c = ShapePoint { x: 10, y: 30 };
+        assert_eq!(a, b);
+        assert_ne!(a, c);
     }
 }

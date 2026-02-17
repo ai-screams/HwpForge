@@ -138,6 +138,12 @@ fn validate_run_content(
                     });
                 }
             }
+            Control::Line { .. } => {
+                // No structural validation needed for lines
+            }
+            Control::Ellipse { .. } | Control::Polygon { .. } => {
+                // Shapes with optional paragraphs: empty paragraphs OK
+            }
             Control::Hyperlink { .. } | Control::Unknown { .. } => {
                 // No structural validation needed for these variants
             }

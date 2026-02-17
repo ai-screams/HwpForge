@@ -118,6 +118,30 @@ pub struct HxRun {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub rects: Vec<HxRect>,
+
+    /// All `<hp:line>` elements in this run (line drawing objects).
+    #[serde(
+        rename(serialize = "hp:line", deserialize = "line"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub lines: Vec<HxLine>,
+
+    /// All `<hp:ellipse>` elements in this run (ellipse/circle drawing objects).
+    #[serde(
+        rename(serialize = "hp:ellipse", deserialize = "ellipse"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub ellipses: Vec<HxEllipse>,
+
+    /// All `<hp:polygon>` elements in this run (polygon drawing objects).
+    #[serde(
+        rename(serialize = "hp:polygon", deserialize = "polygon"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub polygons: Vec<HxPolygon>,
 }
 
 // ── Text ──────────────────────────────────────────────────────────
@@ -134,6 +158,13 @@ pub struct HxText {
 /// `<hp:ctrl>` — wrapper for header, footer, colPr, pageNum, footnote, endnote.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxCtrl {
+    /// Optional column properties element.
+    #[serde(
+        rename(serialize = "hp:colPr", deserialize = "colPr"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub col_pr: Option<HxColPr>,
     /// Optional header element.
     #[serde(
         rename(serialize = "hp:header", deserialize = "header"),
@@ -169,6 +200,48 @@ pub struct HxCtrl {
         skip_serializing_if = "Option::is_none"
     )]
     pub end_note: Option<HxEndNote>,
+}
+
+/// `<hp:colPr>` — column properties element.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxColPr {
+    /// Element ID (usually empty).
+    #[serde(rename = "@id", default)]
+    pub id: String,
+    /// Column flow type: NEWSPAPER or PARALLEL.
+    #[serde(rename = "@type", default)]
+    pub col_type: String,
+    /// Column balance strategy: LEFT, RIGHT, or MIRROR.
+    #[serde(rename = "@layout", default)]
+    pub layout: String,
+    /// Number of columns.
+    #[serde(rename = "@colCount", default)]
+    pub col_count: u32,
+    /// Whether all columns have the same width (0 or 1).
+    #[serde(rename = "@sameSz", default)]
+    pub same_sz: u32,
+    /// Gap between columns in HWPUNIT (only when sameSz=1).
+    #[serde(rename = "@sameGap", default)]
+    pub same_gap: i32,
+
+    /// Individual column definitions (only when sameSz=0).
+    #[serde(
+        rename(serialize = "hp:col", deserialize = "col"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub columns: Vec<HxCol>,
+}
+
+/// `<hp:col>` — individual column width/gap.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxCol {
+    /// Column width in HWPUNIT.
+    #[serde(rename = "@width", default)]
+    pub width: i32,
+    /// Gap after this column in HWPUNIT (0 for last column).
+    #[serde(rename = "@gap", default)]
+    pub gap: i32,
 }
 
 /// `<hp:header>` or `<hp:footer>` — header/footer region with sub-list paragraphs.
@@ -786,6 +859,280 @@ pub struct HxPoint {
     /// Y coordinate (HWPUNIT).
     #[serde(rename = "@y", default)]
     pub y: i32,
+}
+
+// ── Line / Ellipse / Polygon shapes ─────────────────────────────
+
+/// `<hp:line>` — line drawing object (2 endpoints).
+///
+/// Flat struct (independent of HxRect) per Wave 3 API design decision.
+/// Common attributes duplicated from AbstractShapeObjectType / AbstractShapeComponentType.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxLine {
+    // ── AbstractShapeObjectType attrs ──
+    /// Element ID.
+    #[serde(rename = "@id", default)]
+    pub id: String,
+    /// Z-order for overlapping objects.
+    #[serde(rename = "@zOrder", default)]
+    pub z_order: u32,
+    /// Numbering type: NONE, TABLE, FIGURE, EQUATION.
+    #[serde(rename = "@numberingType", default)]
+    pub numbering_type: String,
+    /// Text wrapping mode.
+    #[serde(rename = "@textWrap", default)]
+    pub text_wrap: String,
+    /// Text flow mode.
+    #[serde(rename = "@textFlow", default)]
+    pub text_flow: String,
+    /// Lock flag (0 = unlocked).
+    #[serde(rename = "@lock", default)]
+    pub lock: u32,
+    /// Drop cap style.
+    #[serde(rename = "@dropcapstyle", default)]
+    pub dropcap_style: String,
+
+    // ── AbstractShapeComponentType attrs ──
+    /// Hyperlink reference.
+    #[serde(rename = "@href", default)]
+    pub href: String,
+    /// Group nesting level.
+    #[serde(rename = "@groupLevel", default)]
+    pub group_level: u32,
+    /// Instance identifier.
+    #[serde(rename = "@instid", default)]
+    pub instid: String,
+
+    // ── Line-specific attr ──
+    /// Whether to reverse horizontal/vertical orientation.
+    #[serde(rename = "@isReverseHV", default)]
+    pub is_reverse_hv: u32,
+
+    // ── Children (ORDER MATTERS!) ──
+    /// Size specification.
+    #[serde(
+        rename(serialize = "hp:sz", deserialize = "sz"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sz: Option<HxTableSz>,
+    /// Position specification.
+    #[serde(
+        rename(serialize = "hp:pos", deserialize = "pos"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pos: Option<HxTablePos>,
+    /// Outer margin.
+    #[serde(
+        rename(serialize = "hp:outMargin", deserialize = "outMargin"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub out_margin: Option<HxTableMargin>,
+
+    // ── Line-specific children ──
+    /// Start point of the line.
+    #[serde(
+        rename(serialize = "hp:startPt", deserialize = "startPt"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub start_pt: Option<HxPoint>,
+    /// End point of the line.
+    #[serde(
+        rename(serialize = "hp:endPt", deserialize = "endPt"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub end_pt: Option<HxPoint>,
+}
+
+/// `<hp:ellipse>` — ellipse/circle drawing object.
+///
+/// Flat struct with common attrs duplicated from AbstractShapeObjectType.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxEllipse {
+    // ── AbstractShapeObjectType attrs ──
+    /// Element ID.
+    #[serde(rename = "@id", default)]
+    pub id: String,
+    /// Z-order.
+    #[serde(rename = "@zOrder", default)]
+    pub z_order: u32,
+    /// Numbering type.
+    #[serde(rename = "@numberingType", default)]
+    pub numbering_type: String,
+    /// Text wrapping mode.
+    #[serde(rename = "@textWrap", default)]
+    pub text_wrap: String,
+    /// Text flow mode.
+    #[serde(rename = "@textFlow", default)]
+    pub text_flow: String,
+    /// Lock flag.
+    #[serde(rename = "@lock", default)]
+    pub lock: u32,
+    /// Drop cap style.
+    #[serde(rename = "@dropcapstyle", default)]
+    pub dropcap_style: String,
+
+    // ── AbstractShapeComponentType attrs ──
+    /// Hyperlink reference.
+    #[serde(rename = "@href", default)]
+    pub href: String,
+    /// Group nesting level.
+    #[serde(rename = "@groupLevel", default)]
+    pub group_level: u32,
+    /// Instance identifier.
+    #[serde(rename = "@instid", default)]
+    pub instid: String,
+
+    // ── Ellipse-specific attrs ──
+    /// Interval dirty flag.
+    #[serde(rename = "@intervalDirty", default)]
+    pub interval_dirty: u32,
+    /// Whether this ellipse has arc properties.
+    #[serde(rename = "@hasArcPr", default)]
+    pub has_arc_pr: u32,
+    /// Arc type (NORMAL for full ellipse).
+    #[serde(rename = "@arcType", default)]
+    pub arc_type: String,
+
+    // ── Common children (ORDER MATTERS!) ──
+    /// Size specification.
+    #[serde(
+        rename(serialize = "hp:sz", deserialize = "sz"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sz: Option<HxTableSz>,
+    /// Position specification.
+    #[serde(
+        rename(serialize = "hp:pos", deserialize = "pos"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pos: Option<HxTablePos>,
+    /// Outer margin.
+    #[serde(
+        rename(serialize = "hp:outMargin", deserialize = "outMargin"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub out_margin: Option<HxTableMargin>,
+
+    // ── drawText (textbox content, optional) ──
+    /// Optional textbox content inside the ellipse.
+    #[serde(
+        rename(serialize = "hp:drawText", deserialize = "drawText"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub draw_text: Option<HxDrawText>,
+
+    // ── Ellipse-specific children ──
+    /// Center point of the ellipse.
+    #[serde(
+        rename(serialize = "hp:center", deserialize = "center"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub center: Option<HxPoint>,
+    /// Axis 1 endpoint (semi-major axis direction).
+    #[serde(
+        rename(serialize = "hp:ax1", deserialize = "ax1"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub ax1: Option<HxPoint>,
+    /// Axis 2 endpoint (semi-minor axis direction).
+    #[serde(
+        rename(serialize = "hp:ax2", deserialize = "ax2"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub ax2: Option<HxPoint>,
+}
+
+/// `<hp:polygon>` — polygon drawing object (3+ vertices).
+///
+/// Flat struct with common attrs duplicated from AbstractShapeObjectType.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxPolygon {
+    // ── AbstractShapeObjectType attrs ──
+    /// Element ID.
+    #[serde(rename = "@id", default)]
+    pub id: String,
+    /// Z-order.
+    #[serde(rename = "@zOrder", default)]
+    pub z_order: u32,
+    /// Numbering type.
+    #[serde(rename = "@numberingType", default)]
+    pub numbering_type: String,
+    /// Text wrapping mode.
+    #[serde(rename = "@textWrap", default)]
+    pub text_wrap: String,
+    /// Text flow mode.
+    #[serde(rename = "@textFlow", default)]
+    pub text_flow: String,
+    /// Lock flag.
+    #[serde(rename = "@lock", default)]
+    pub lock: u32,
+    /// Drop cap style.
+    #[serde(rename = "@dropcapstyle", default)]
+    pub dropcap_style: String,
+
+    // ── AbstractShapeComponentType attrs ──
+    /// Hyperlink reference.
+    #[serde(rename = "@href", default)]
+    pub href: String,
+    /// Group nesting level.
+    #[serde(rename = "@groupLevel", default)]
+    pub group_level: u32,
+    /// Instance identifier.
+    #[serde(rename = "@instid", default)]
+    pub instid: String,
+
+    // ── Common children (ORDER MATTERS!) ──
+    /// Size specification.
+    #[serde(
+        rename(serialize = "hp:sz", deserialize = "sz"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sz: Option<HxTableSz>,
+    /// Position specification.
+    #[serde(
+        rename(serialize = "hp:pos", deserialize = "pos"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pos: Option<HxTablePos>,
+    /// Outer margin.
+    #[serde(
+        rename(serialize = "hp:outMargin", deserialize = "outMargin"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub out_margin: Option<HxTableMargin>,
+
+    // ── drawText (textbox content, optional) ──
+    /// Optional textbox content inside the polygon.
+    #[serde(
+        rename(serialize = "hp:drawText", deserialize = "drawText"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub draw_text: Option<HxDrawText>,
+
+    // ── Polygon-specific children ──
+    /// Ordered list of polygon vertices.
+    #[serde(
+        rename(serialize = "hp:pt", deserialize = "pt"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub points: Vec<HxPoint>,
 }
 
 // ── Tests ─────────────────────────────────────────────────────────

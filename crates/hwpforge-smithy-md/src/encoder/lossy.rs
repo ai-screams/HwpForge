@@ -128,6 +128,20 @@ fn paragraph_text_markdown(paragraph: &Paragraph) -> String {
                 Control::Unknown { tag, .. } => {
                     output.push_str(&format!("`[{tag}]`"));
                 }
+                Control::Line { .. } => {
+                    // Lines have no text content to render in lossy mode
+                }
+                Control::Ellipse { paragraphs, .. } | Control::Polygon { paragraphs, .. } => {
+                    // Render any text content inside the shape
+                    let body = paragraphs
+                        .iter()
+                        .map(Paragraph::text_content)
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    if !body.trim().is_empty() {
+                        output.push_str(body.trim());
+                    }
+                }
                 _ => {}
             },
             RunContent::Table(table) => {
