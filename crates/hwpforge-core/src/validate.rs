@@ -120,7 +120,16 @@ fn validate_run_content(
                     });
                 }
             }
-            Control::Footnote { paragraphs } => {
+            Control::Footnote { paragraphs, .. } => {
+                if paragraphs.is_empty() {
+                    return Err(ValidationError::EmptyFootnote {
+                        section_index: si,
+                        paragraph_index: pi,
+                        run_index: ri,
+                    });
+                }
+            }
+            Control::Endnote { paragraphs, .. } => {
                 if paragraphs.is_empty() {
                     return Err(ValidationError::EmptyFootnote {
                         section_index: si,
@@ -332,6 +341,8 @@ mod tests {
             paragraphs: vec![],
             width: HwpUnit::from_mm(80.0).unwrap(),
             height: HwpUnit::from_mm(40.0).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
@@ -346,7 +357,7 @@ mod tests {
 
     #[test]
     fn empty_footnote_rejected() {
-        let ctrl = Control::Footnote { paragraphs: vec![] };
+        let ctrl = Control::Footnote { inst_id: None, paragraphs: vec![] };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
             vec![Paragraph::with_runs(vec![ctrl_run], ParaShapeIndex::new(0))],
@@ -375,6 +386,8 @@ mod tests {
             paragraphs: vec![simple_paragraph()],
             width: HwpUnit::from_mm(80.0).unwrap(),
             height: HwpUnit::from_mm(40.0).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
@@ -386,7 +399,7 @@ mod tests {
 
     #[test]
     fn valid_footnote_accepted() {
-        let ctrl = Control::Footnote { paragraphs: vec![simple_paragraph()] };
+        let ctrl = Control::Footnote { inst_id: None, paragraphs: vec![simple_paragraph()] };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
             vec![Paragraph::with_runs(vec![ctrl_run], ParaShapeIndex::new(0))],

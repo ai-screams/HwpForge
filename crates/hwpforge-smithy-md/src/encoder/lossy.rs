@@ -101,13 +101,21 @@ fn paragraph_text_markdown(paragraph: &Paragraph) -> String {
                 Control::Hyperlink { text, url } => {
                     output.push_str(&format!("[{text}]({url})"));
                 }
-                Control::Footnote { paragraphs } => {
+                Control::Footnote { paragraphs, .. } => {
                     let footnote = paragraphs
                         .iter()
                         .map(Paragraph::text_content)
                         .collect::<Vec<_>>()
                         .join(" ");
                     output.push_str(&format!("(footnote: {})", footnote.trim()));
+                }
+                Control::Endnote { paragraphs, .. } => {
+                    let endnote = paragraphs
+                        .iter()
+                        .map(Paragraph::text_content)
+                        .collect::<Vec<_>>()
+                        .join(" ");
+                    output.push_str(&format!("(endnote: {})", endnote.trim()));
                 }
                 Control::TextBox { paragraphs, .. } => {
                     let body = paragraphs
@@ -283,7 +291,7 @@ mod tests {
         );
         let paragraph = Paragraph::with_runs(
             vec![Run::control(
-                Control::Footnote { paragraphs: vec![footnote_body] },
+                Control::Footnote { inst_id: None, paragraphs: vec![footnote_body] },
                 CharShapeIndex::new(0),
             )],
             ParaShapeIndex::new(0),

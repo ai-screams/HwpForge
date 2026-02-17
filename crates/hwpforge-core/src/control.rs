@@ -1,12 +1,12 @@
-//! Control elements: text boxes, hyperlinks, footnotes, etc.
+//! Control elements: text boxes, hyperlinks, footnotes, endnotes, etc.
 //!
 //! [`Control`] represents non-text inline elements within a document.
 //! The enum is `#[non_exhaustive]` so new control types can be added
 //! in future phases without a breaking change.
 //!
-//! TextBox and Footnote contain `Vec<Paragraph>` (recursive reference
-//! through the document tree). This is how HWP models inline frames
-//! and annotations.
+//! TextBox, Footnote, and Endnote contain `Vec<Paragraph>` (recursive
+//! reference through the document tree). This is how HWP models inline
+//! frames and annotations.
 //!
 //! # Examples
 //!
@@ -34,10 +34,6 @@ use crate::paragraph::Paragraph;
 /// Each variant carries its own data; the enum is `#[non_exhaustive]`
 /// for forward compatibility.
 ///
-/// # Phase 2 Additions
-///
-/// Future phases will add: Endnote, BookmarkStart, BookmarkEnd, etc.
-///
 /// # Examples
 ///
 /// ```
@@ -49,6 +45,8 @@ use crate::paragraph::Paragraph;
 ///     paragraphs: vec![Paragraph::new(ParaShapeIndex::new(0))],
 ///     width: HwpUnit::from_mm(80.0).unwrap(),
 ///     height: HwpUnit::from_mm(40.0).unwrap(),
+///     horz_offset: 0,
+///     vert_offset: 0,
 /// };
 /// assert!(text_box.is_text_box());
 /// assert!(!text_box.is_hyperlink());
@@ -57,13 +55,18 @@ use crate::paragraph::Paragraph;
 #[non_exhaustive]
 pub enum Control {
     /// An inline text box with its own paragraph content.
+    /// Maps to HWPX `<hp:rect>` + `<hp:drawText>` (drawing object, not control).
     TextBox {
         /// Paragraphs inside the text box.
         paragraphs: Vec<Paragraph>,
-        /// Box width.
+        /// Box width (HWPUNIT).
         width: HwpUnit,
-        /// Box height.
+        /// Box height (HWPUNIT).
         height: HwpUnit,
+        /// Horizontal offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
+        horz_offset: i32,
+        /// Vertical offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
+        vert_offset: i32,
     },
 
     /// A hyperlink with display text and URL.
@@ -75,8 +78,20 @@ pub enum Control {
     },
 
     /// A footnote containing paragraph content.
+    /// Maps to HWPX `<hp:ctrl><hp:footNote>`.
     Footnote {
+        /// Instance identifier (unique ID for linking, optional).
+        inst_id: Option<u32>,
         /// Paragraphs that form the footnote body.
+        paragraphs: Vec<Paragraph>,
+    },
+
+    /// An endnote containing paragraph content.
+    /// Maps to HWPX `<hp:ctrl><hp:endNote>`.
+    Endnote {
+        /// Instance identifier (unique ID for linking, optional).
+        inst_id: Option<u32>,
+        /// Paragraphs that form the endnote body.
         paragraphs: Vec<Paragraph>,
     },
 
@@ -108,6 +123,11 @@ impl Control {
         matches!(self, Self::Footnote { .. })
     }
 
+    /// Returns `true` if this is a [`Control::Endnote`].
+    pub fn is_endnote(&self) -> bool {
+        matches!(self, Self::Endnote { .. })
+    }
+
     /// Returns `true` if this is a [`Control::Unknown`].
     pub fn is_unknown(&self) -> bool {
         matches!(self, Self::Unknown { .. })
@@ -125,8 +145,11 @@ impl std::fmt::Display for Control {
                     if text.len() > 30 { text.chars().take(30).collect() } else { text.clone() };
                 write!(f, "Hyperlink(\"{preview}\" -> {url})")
             }
-            Self::Footnote { paragraphs } => {
+            Self::Footnote { paragraphs, .. } => {
                 write!(f, "Footnote({} paragraphs)", paragraphs.len())
+            }
+            Self::Endnote { paragraphs, .. } => {
+                write!(f, "Endnote({} paragraphs)", paragraphs.len())
             }
             Self::Unknown { tag, .. } => {
                 write!(f, "Unknown({tag})")
@@ -154,10 +177,13 @@ mod tests {
             paragraphs: vec![simple_paragraph()],
             width: HwpUnit::from_mm(80.0).unwrap(),
             height: HwpUnit::from_mm(40.0).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
         };
         assert!(ctrl.is_text_box());
         assert!(!ctrl.is_hyperlink());
         assert!(!ctrl.is_footnote());
+        assert!(!ctrl.is_endnote());
         assert!(!ctrl.is_unknown());
     }
 
@@ -173,8 +199,17 @@ mod tests {
 
     #[test]
     fn footnote_construction() {
-        let ctrl = Control::Footnote { paragraphs: vec![simple_paragraph()] };
+        let ctrl = Control::Footnote { inst_id: None, paragraphs: vec![simple_paragraph()] };
         assert!(ctrl.is_footnote());
+        assert!(!ctrl.is_text_box());
+        assert!(!ctrl.is_endnote());
+    }
+
+    #[test]
+    fn endnote_construction() {
+        let ctrl = Control::Endnote { inst_id: Some(123456), paragraphs: vec![simple_paragraph()] };
+        assert!(ctrl.is_endnote());
+        assert!(!ctrl.is_footnote());
         assert!(!ctrl.is_text_box());
     }
 
@@ -199,6 +234,8 @@ mod tests {
             paragraphs: vec![simple_paragraph(), simple_paragraph()],
             width: HwpUnit::from_mm(80.0).unwrap(),
             height: HwpUnit::from_mm(40.0).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
         };
         assert_eq!(ctrl.to_string(), "TextBox(2 paragraphs)");
     }
@@ -224,8 +261,15 @@ mod tests {
 
     #[test]
     fn display_footnote() {
-        let ctrl = Control::Footnote { paragraphs: vec![simple_paragraph()] };
+        let ctrl = Control::Footnote { inst_id: None, paragraphs: vec![simple_paragraph()] };
         assert_eq!(ctrl.to_string(), "Footnote(1 paragraphs)");
+    }
+
+    #[test]
+    fn display_endnote() {
+        let ctrl =
+            Control::Endnote { inst_id: Some(999), paragraphs: vec![simple_paragraph()] };
+        assert_eq!(ctrl.to_string(), "Endnote(1 paragraphs)");
     }
 
     #[test]
@@ -249,6 +293,8 @@ mod tests {
             paragraphs: vec![simple_paragraph()],
             width: HwpUnit::from_mm(80.0).unwrap(),
             height: HwpUnit::from_mm(40.0).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
         };
         let json = serde_json::to_string(&ctrl).unwrap();
         let back: Control = serde_json::from_str(&json).unwrap();
@@ -268,7 +314,16 @@ mod tests {
 
     #[test]
     fn serde_roundtrip_footnote() {
-        let ctrl = Control::Footnote { paragraphs: vec![simple_paragraph()] };
+        let ctrl =
+            Control::Footnote { inst_id: Some(12345), paragraphs: vec![simple_paragraph()] };
+        let json = serde_json::to_string(&ctrl).unwrap();
+        let back: Control = serde_json::from_str(&json).unwrap();
+        assert_eq!(ctrl, back);
+    }
+
+    #[test]
+    fn serde_roundtrip_endnote() {
+        let ctrl = Control::Endnote { inst_id: None, paragraphs: vec![simple_paragraph()] };
         let json = serde_json::to_string(&ctrl).unwrap();
         let back: Control = serde_json::from_str(&json).unwrap();
         assert_eq!(ctrl, back);

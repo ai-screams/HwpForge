@@ -3,6 +3,7 @@
 //! Converts XML schema types (`HxParagraph`, `HxRun`, `HxText`, `HxTable`,
 //! `HxPic`) into Core types (`Paragraph`, `Run`, `RunContent`, `Table`, `Image`).
 
+use hwpforge_core::control::Control;
 use hwpforge_core::image::{Image, ImageFormat};
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::{Run, RunContent};
@@ -16,7 +17,8 @@ use quick_xml::de::from_str;
 
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    HxCtrl, HxHeaderFooter, HxPageNum, HxParagraph, HxPic, HxRun, HxSection, HxTable, HxTableCell,
+    HxCtrl, HxFootNote, HxHeaderFooter, HxPageNum, HxParagraph, HxPic, HxRect, HxRun, HxSection,
+    HxSubList, HxTable, HxTableCell,
 };
 
 /// Maximum nesting depth for tables-within-tables.
@@ -129,8 +131,9 @@ fn convert_paragraph(
 
 /// Converts an `HxRun` into one or more Core `Run`s.
 ///
-/// A single HxRun can contain multiple `<hp:t>`, `<hp:tbl>`, and `<hp:pic>`
-/// elements. Each is converted to a separate Run with the same charPrIDRef.
+/// A single HxRun can contain multiple `<hp:t>`, `<hp:tbl>`, `<hp:pic>`,
+/// `<hp:ctrl>` (footnote/endnote), and `<hp:rect>` (textbox) elements.
+/// Each is converted to a separate Run with the same charPrIDRef.
 fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
     let char_shape_id = CharShapeIndex::new(hx.char_pr_id_ref as usize);
     let mut runs = Vec::new();
@@ -152,6 +155,23 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
     for pic in &hx.pictures {
         if let Some(image) = convert_picture(pic) {
             runs.push(Run { content: RunContent::Image(image), char_shape_id });
+        }
+    }
+
+    // Footnote / Endnote runs (from <hp:ctrl>)
+    for ctrl in &hx.ctrls {
+        if let Some(run) = decode_footnote(ctrl, char_shape_id, depth)? {
+            runs.push(run);
+        }
+        if let Some(run) = decode_endnote(ctrl, char_shape_id, depth)? {
+            runs.push(run);
+        }
+    }
+
+    // Textbox runs (from <hp:rect>)
+    for rect in &hx.rects {
+        if let Some(run) = decode_textbox(rect, char_shape_id, depth)? {
+            runs.push(run);
         }
     }
 
@@ -240,6 +260,122 @@ fn convert_picture(hx: &HxPic) -> Option<Image> {
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
     Some(Image { path, width, height, format })
+}
+
+// ── Footnote / Endnote / TextBox decoding ────────────────────────
+
+/// Decodes an `HxCtrl`'s footnote into a Core `Run`, if present.
+fn decode_footnote(
+    ctrl: &HxCtrl,
+    char_shape_id: CharShapeIndex,
+    depth: usize,
+) -> HwpxResult<Option<Run>> {
+    let hx = match &ctrl.foot_note {
+        Some(note) => note,
+        None => return Ok(None),
+    };
+    let paragraphs = decode_note_paragraphs(hx, depth)?;
+    Ok(Some(Run {
+        content: RunContent::Control(Box::new(Control::Footnote {
+            inst_id: hx.inst_id,
+            paragraphs,
+        })),
+        char_shape_id,
+    }))
+}
+
+/// Decodes an `HxCtrl`'s endnote into a Core `Run`, if present.
+fn decode_endnote(
+    ctrl: &HxCtrl,
+    char_shape_id: CharShapeIndex,
+    depth: usize,
+) -> HwpxResult<Option<Run>> {
+    let hx = match &ctrl.end_note {
+        Some(note) => note,
+        None => return Ok(None),
+    };
+    let paragraphs = decode_note_paragraphs(hx, depth)?;
+    Ok(Some(Run {
+        content: RunContent::Control(Box::new(Control::Endnote {
+            inst_id: hx.inst_id,
+            paragraphs,
+        })),
+        char_shape_id,
+    }))
+}
+
+/// Decodes an `HxFootNote` (or `HxEndNote`, same type) sub-list into paragraphs.
+fn decode_note_paragraphs(hx: &HxFootNote, depth: usize) -> HwpxResult<Vec<Paragraph>> {
+    decode_sublist_paragraphs(&hx.sub_list, depth)
+}
+
+/// Decodes an `HxRect`'s draw text into a Core `Run` with `Control::TextBox`, if present.
+///
+/// Only rects with `<hp:drawText>` are treated as textboxes; rects without
+/// text content (pure shapes) are silently skipped.
+fn decode_textbox(
+    rect: &HxRect,
+    char_shape_id: CharShapeIndex,
+    depth: usize,
+) -> HwpxResult<Option<Run>> {
+    let draw_text = match &rect.draw_text {
+        Some(dt) => dt,
+        None => return Ok(None),
+    };
+
+    let paragraphs = decode_sublist_paragraphs(&draw_text.sub_list, depth)?;
+
+    // Extract width/height from sz, falling back to zero
+    let (width, height) = rect
+        .sz
+        .as_ref()
+        .map(|sz| {
+            (
+                HwpUnit::new(sz.width).unwrap_or(HwpUnit::ZERO),
+                HwpUnit::new(sz.height).unwrap_or(HwpUnit::ZERO),
+            )
+        })
+        .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
+
+    // Extract offsets from pos (treatAsChar=1 means inline, offsets=0)
+    let (horz_offset, vert_offset) = rect
+        .pos
+        .as_ref()
+        .map(|p| (p.horz_offset, p.vert_offset))
+        .unwrap_or((0, 0));
+
+    Ok(Some(Run {
+        content: RunContent::Control(Box::new(Control::TextBox {
+            paragraphs,
+            width,
+            height,
+            horz_offset,
+            vert_offset,
+        })),
+        char_shape_id,
+    }))
+}
+
+/// Converts paragraphs from an `HxSubList` into Core `Paragraph`s.
+///
+/// Reuses [`convert_paragraph`] at `depth + 1` to track nesting.
+fn decode_sublist_paragraphs(sub_list: &HxSubList, depth: usize) -> HwpxResult<Vec<Paragraph>> {
+    if depth >= MAX_NESTING_DEPTH {
+        return Err(HwpxError::InvalidStructure {
+            detail: format!(
+                "sublist nesting depth {} exceeds limit of {}",
+                depth, MAX_NESTING_DEPTH
+            ),
+        });
+    }
+    sub_list
+        .paragraphs
+        .iter()
+        .map(|hx_para| {
+            let (para, _) = convert_paragraph(hx_para, false, depth + 1)?;
+            Ok(para)
+        })
+        .collect()
 }
 
 /// Guesses image format from the file reference name.
@@ -843,6 +979,181 @@ mod tests {
         assert!(result.header.is_none());
         assert!(result.footer.is_none());
         assert!(result.page_number.is_none());
+    }
+
+    // ── Footnote / Endnote / TextBox decoder tests ────────────
+
+    #[test]
+    fn parse_footnote_ctrl() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="2">
+                    <ctrl>
+                        <footNote instId="42">
+                            <subList id="0" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP"
+                                     linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">
+                                <p paraPrIDRef="0">
+                                    <run charPrIDRef="0"><t>Footnote body</t></run>
+                                </p>
+                            </subList>
+                        </footNote>
+                    </ctrl>
+                    <t>Main text</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0).unwrap();
+        let para = &result.paragraphs[0];
+
+        // Should have text run + footnote run
+        assert!(para.runs.len() >= 2, "expected at least 2 runs, got {}", para.runs.len());
+
+        // Find the footnote run
+        let footnote_run = para.runs.iter().find(|r| r.content.is_control()).expect("no control run");
+        match &footnote_run.content {
+            RunContent::Control(ctrl) => match ctrl.as_ref() {
+                hwpforge_core::Control::Footnote { inst_id, paragraphs } => {
+                    assert_eq!(*inst_id, Some(42));
+                    assert_eq!(paragraphs.len(), 1);
+                    assert_eq!(paragraphs[0].runs[0].content.as_text(), Some("Footnote body"));
+                }
+                other => panic!("expected Footnote, got {other:?}"),
+            },
+            other => panic!("expected Control, got {other:?}"),
+        }
+        assert_eq!(footnote_run.char_shape_id.get(), 2);
+    }
+
+    #[test]
+    fn parse_endnote_ctrl() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <endNote>
+                            <subList id="0" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP"
+                                     linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">
+                                <p paraPrIDRef="0">
+                                    <run charPrIDRef="0"><t>Endnote body</t></run>
+                                </p>
+                            </subList>
+                        </endNote>
+                    </ctrl>
+                    <t>Main text</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0).unwrap();
+        let para = &result.paragraphs[0];
+
+        let endnote_run = para.runs.iter().find(|r| r.content.is_control()).expect("no control run");
+        match &endnote_run.content {
+            RunContent::Control(ctrl) => match ctrl.as_ref() {
+                hwpforge_core::Control::Endnote { inst_id, paragraphs } => {
+                    assert_eq!(*inst_id, None);
+                    assert_eq!(paragraphs.len(), 1);
+                    assert_eq!(paragraphs[0].runs[0].content.as_text(), Some("Endnote body"));
+                }
+                other => panic!("expected Endnote, got {other:?}"),
+            },
+            other => panic!("expected Control, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_textbox_rect() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="3">
+                    <rect id="" zOrder="0" numberingType="NONE" textWrap="TOP_AND_BOTTOM"
+                          textFlow="BOTH_SIDES" lock="0" dropcapstyle="None"
+                          href="" groupLevel="0" instid="12345" ratio="0">
+                        <sz width="14000" height="8000" widthRelTo="ABSOLUTE" heightRelTo="ABSOLUTE" protect="0"/>
+                        <pos treatAsChar="1" affectLSpacing="0" flowWithText="0" allowOverlap="0"
+                             holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="PARA"
+                             vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/>
+                        <drawText lastWidth="13434" name="" editable="0">
+                            <subList id="0" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP"
+                                     linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">
+                                <p paraPrIDRef="0">
+                                    <run charPrIDRef="0"><t>Box content</t></run>
+                                </p>
+                            </subList>
+                        </drawText>
+                    </rect>
+                    <t>Main text</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0).unwrap();
+        let para = &result.paragraphs[0];
+
+        let tb_run = para.runs.iter().find(|r| r.content.is_control()).expect("no control run");
+        assert_eq!(tb_run.char_shape_id.get(), 3);
+        match &tb_run.content {
+            RunContent::Control(ctrl) => match ctrl.as_ref() {
+                hwpforge_core::Control::TextBox { paragraphs, width, height, horz_offset, vert_offset } => {
+                    assert_eq!(paragraphs.len(), 1);
+                    assert_eq!(paragraphs[0].runs[0].content.as_text(), Some("Box content"));
+                    assert_eq!(width.as_i32(), 14000);
+                    assert_eq!(height.as_i32(), 8000);
+                    assert_eq!(*horz_offset, 0);
+                    assert_eq!(*vert_offset, 0);
+                }
+                other => panic!("expected TextBox, got {other:?}"),
+            },
+            other => panic!("expected Control, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rect_without_draw_text_is_skipped() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <rect id="" zOrder="0" numberingType="NONE" textWrap="TOP_AND_BOTTOM"
+                          textFlow="BOTH_SIDES" lock="0" dropcapstyle="None"
+                          href="" groupLevel="0" instid="0" ratio="0"/>
+                    <t>Main text</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0).unwrap();
+        // The rect without drawText should be skipped, only text run present
+        assert_eq!(result.paragraphs[0].runs.len(), 1);
+        assert_eq!(result.paragraphs[0].runs[0].content.as_text(), Some("Main text"));
+    }
+
+    #[test]
+    fn parse_footnote_with_multiple_paragraphs() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <footNote>
+                            <subList id="0" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP"
+                                     linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">
+                                <p paraPrIDRef="0"><run charPrIDRef="0"><t>Line 1</t></run></p>
+                                <p paraPrIDRef="0"><run charPrIDRef="0"><t>Line 2</t></run></p>
+                            </subList>
+                        </footNote>
+                    </ctrl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0).unwrap();
+        let ctrl_run = result.paragraphs[0].runs.iter().find(|r| r.content.is_control()).unwrap();
+        match &ctrl_run.content {
+            RunContent::Control(ctrl) => match ctrl.as_ref() {
+                hwpforge_core::Control::Footnote { paragraphs, .. } => {
+                    assert_eq!(paragraphs.len(), 2);
+                    assert_eq!(paragraphs[0].runs[0].content.as_text(), Some("Line 1"));
+                    assert_eq!(paragraphs[1].runs[0].content.as_text(), Some("Line 2"));
+                }
+                other => panic!("expected Footnote, got {other:?}"),
+            },
+            _ => panic!("expected Control"),
+        }
     }
 
     // ── Parse helper tests ──────────────────────────────────────

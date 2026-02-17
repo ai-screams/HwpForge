@@ -87,7 +87,7 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                         escape_html(text)
                     ));
                 }
-                Control::TextBox { paragraphs, width, height } => {
+                Control::TextBox { paragraphs, width, height, .. } => {
                     out.push_str(&format!(
                         "<textbox data-char-shape=\"{}\" data-width-unit=\"{}\" data-height-unit=\"{}\" data-width-mm=\"{:.2}\" data-height-mm=\"{:.2}\">",
                         run.char_shape_id.get(),
@@ -101,7 +101,7 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                     }
                     out.push_str("</textbox>");
                 }
-                Control::Footnote { paragraphs } => {
+                Control::Footnote { paragraphs, .. } => {
                     out.push_str(&format!(
                         "<footnote data-char-shape=\"{}\">",
                         run.char_shape_id.get()
@@ -110,6 +110,16 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                         out.push_str(&encode_paragraph(paragraph)?);
                     }
                     out.push_str("</footnote>");
+                }
+                Control::Endnote { paragraphs, .. } => {
+                    out.push_str(&format!(
+                        "<endnote data-char-shape=\"{}\">",
+                        run.char_shape_id.get()
+                    ));
+                    for paragraph in paragraphs {
+                        out.push_str(&encode_paragraph(paragraph)?);
+                    }
+                    out.push_str("</endnote>");
                 }
                 Control::Unknown { tag, data } => {
                     out.push_str(&format!(
@@ -329,6 +339,8 @@ mod tests {
                     paragraphs: vec![textbox_paragraph],
                     width: HwpUnit::from_mm(50.0).unwrap(),
                     height: HwpUnit::from_mm(20.0).unwrap(),
+                    horz_offset: 0,
+                    vert_offset: 0,
                 },
                 CharShapeIndex::new(3),
             )],
@@ -352,7 +364,7 @@ mod tests {
 
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::control(
-                Control::Footnote { paragraphs: vec![footnote_paragraph] },
+                Control::Footnote { inst_id: None, paragraphs: vec![footnote_paragraph] },
                 CharShapeIndex::new(2),
             )],
             ParaShapeIndex::new(1),
