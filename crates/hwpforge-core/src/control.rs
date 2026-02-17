@@ -267,8 +267,7 @@ mod tests {
 
     #[test]
     fn display_endnote() {
-        let ctrl =
-            Control::Endnote { inst_id: Some(999), paragraphs: vec![simple_paragraph()] };
+        let ctrl = Control::Endnote { inst_id: Some(999), paragraphs: vec![simple_paragraph()] };
         assert_eq!(ctrl.to_string(), "Endnote(1 paragraphs)");
     }
 
@@ -314,8 +313,7 @@ mod tests {
 
     #[test]
     fn serde_roundtrip_footnote() {
-        let ctrl =
-            Control::Footnote { inst_id: Some(12345), paragraphs: vec![simple_paragraph()] };
+        let ctrl = Control::Footnote { inst_id: Some(12345), paragraphs: vec![simple_paragraph()] };
         let json = serde_json::to_string(&ctrl).unwrap();
         let back: Control = serde_json::from_str(&json).unwrap();
         assert_eq!(ctrl, back);

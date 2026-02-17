@@ -25,8 +25,8 @@ use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
     HxCellAddr, HxCellSpan, HxCellSz, HxCtrl, HxDrawText, HxFootNote, HxImg, HxLineSeg,
     HxLineSegArray, HxPageMargin, HxPagePr, HxParagraph, HxPic, HxPoint, HxRect, HxRun, HxSecPr,
-    HxSection, HxSizeAttr, HxSubList, HxTable, HxTableCell, HxTableMargin, HxTablePos,
-    HxTableRow, HxTableSz, HxText,
+    HxSection, HxSizeAttr, HxSubList, HxTable, HxTableCell, HxTableMargin, HxTablePos, HxTableRow,
+    HxTableSz, HxText,
 };
 
 /// Maximum nesting depth for tables-within-tables.
@@ -264,10 +264,7 @@ fn encode_control_to_ctrl(ctrl: &Control, depth: usize) -> HwpxResult<Option<HxC
 }
 
 /// Encodes a `Vec<Paragraph>` into `HxSubList` with standard defaults.
-fn encode_paragraphs_to_sublist(
-    paragraphs: &[Paragraph],
-    depth: usize,
-) -> HwpxResult<HxSubList> {
+fn encode_paragraphs_to_sublist(paragraphs: &[Paragraph], depth: usize) -> HwpxResult<HxSubList> {
     let hx_paragraphs = paragraphs
         .iter()
         .enumerate()

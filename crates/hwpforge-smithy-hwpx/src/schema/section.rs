@@ -245,7 +245,6 @@ pub struct HxSecPr {
         skip_serializing_if = "Option::is_none"
     )]
     pub page_pr: Option<HxPagePr>,
-
     // footNotePr, endNotePr, grid, startNum, visibility, lineNumberShape,
     // pageBorderFill — all skipped by serde (no deny_unknown_fields).
     // The encoder injects these as raw XML strings via enrich_sec_pr().

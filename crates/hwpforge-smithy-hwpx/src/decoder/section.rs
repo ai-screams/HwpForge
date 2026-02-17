@@ -338,11 +338,8 @@ fn decode_textbox(
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
     // Extract offsets from pos (treatAsChar=1 means inline, offsets=0)
-    let (horz_offset, vert_offset) = rect
-        .pos
-        .as_ref()
-        .map(|p| (p.horz_offset, p.vert_offset))
-        .unwrap_or((0, 0));
+    let (horz_offset, vert_offset) =
+        rect.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
 
     Ok(Some(Run {
         content: RunContent::Control(Box::new(Control::TextBox {
@@ -1009,7 +1006,8 @@ mod tests {
         assert!(para.runs.len() >= 2, "expected at least 2 runs, got {}", para.runs.len());
 
         // Find the footnote run
-        let footnote_run = para.runs.iter().find(|r| r.content.is_control()).expect("no control run");
+        let footnote_run =
+            para.runs.iter().find(|r| r.content.is_control()).expect("no control run");
         match &footnote_run.content {
             RunContent::Control(ctrl) => match ctrl.as_ref() {
                 hwpforge_core::Control::Footnote { inst_id, paragraphs } => {
@@ -1046,7 +1044,8 @@ mod tests {
         let result = parse_section(xml, 0).unwrap();
         let para = &result.paragraphs[0];
 
-        let endnote_run = para.runs.iter().find(|r| r.content.is_control()).expect("no control run");
+        let endnote_run =
+            para.runs.iter().find(|r| r.content.is_control()).expect("no control run");
         match &endnote_run.content {
             RunContent::Control(ctrl) => match ctrl.as_ref() {
                 hwpforge_core::Control::Endnote { inst_id, paragraphs } => {
@@ -1092,7 +1091,13 @@ mod tests {
         assert_eq!(tb_run.char_shape_id.get(), 3);
         match &tb_run.content {
             RunContent::Control(ctrl) => match ctrl.as_ref() {
-                hwpforge_core::Control::TextBox { paragraphs, width, height, horz_offset, vert_offset } => {
+                hwpforge_core::Control::TextBox {
+                    paragraphs,
+                    width,
+                    height,
+                    horz_offset,
+                    vert_offset,
+                } => {
                     assert_eq!(paragraphs.len(), 1);
                     assert_eq!(paragraphs[0].runs[0].content.as_text(), Some("Box content"));
                     assert_eq!(width.as_i32(), 14000);

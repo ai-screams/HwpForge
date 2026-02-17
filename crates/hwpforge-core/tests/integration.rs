@@ -115,10 +115,8 @@ fn lifecycle_complex_document_with_all_content_types() {
         vert_offset: 0,
     };
 
-    let footnote = Control::Footnote {
-        inst_id: None,
-        paragraphs: vec![simple_paragraph("Footnote body")],
-    };
+    let footnote =
+        Control::Footnote { inst_id: None, paragraphs: vec![simple_paragraph("Footnote body")] };
 
     let section1 = Section::with_paragraphs(
         vec![
