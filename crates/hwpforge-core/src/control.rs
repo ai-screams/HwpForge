@@ -40,6 +40,23 @@ pub struct ShapePoint {
     pub y: i32,
 }
 
+impl ShapePoint {
+    /// Creates a new shape point with the given coordinates.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::ShapePoint;
+    ///
+    /// let pt = ShapePoint::new(100, 200);
+    /// assert_eq!(pt.x, 100);
+    /// assert_eq!(pt.y, 200);
+    /// ```
+    pub fn new(x: i32, y: i32) -> Self {
+        Self { x, y }
+    }
+}
+
 /// An inline control element.
 ///
 /// Controls are non-text elements that appear within a Run.
@@ -109,6 +126,7 @@ pub enum Control {
 
     /// A line drawing object (2 endpoints).
     /// Maps to HWPX `<hp:line>`.
+    // TODO(phase9): Add horz_offset/vert_offset for non-inline positioning
     Line {
         /// Start point (x, y in HWPUNIT).
         start: ShapePoint,
@@ -122,6 +140,7 @@ pub enum Control {
 
     /// An ellipse (or circle) drawing object.
     /// Maps to HWPX `<hp:ellipse>`.
+    // TODO(phase9): Add horz_offset/vert_offset for non-inline positioning
     Ellipse {
         /// Center point (x, y in HWPUNIT).
         center: ShapePoint,
@@ -139,6 +158,7 @@ pub enum Control {
 
     /// A polygon drawing object (3+ vertices).
     /// Maps to HWPX `<hp:polygon>`.
+    // TODO(phase9): Add horz_offset/vert_offset for non-inline positioning
     Polygon {
         /// Ordered list of vertices (minimum 3).
         vertices: Vec<ShapePoint>,
@@ -540,5 +560,20 @@ mod tests {
         let c = ShapePoint { x: 10, y: 30 };
         assert_eq!(a, b);
         assert_ne!(a, c);
+    }
+
+    #[test]
+    fn shape_point_new() {
+        let pt = ShapePoint::new(100, 200);
+        assert_eq!(pt.x, 100);
+        assert_eq!(pt.y, 200);
+    }
+
+    #[test]
+    fn shape_point_serde_roundtrip() {
+        let pt = ShapePoint::new(500, 750);
+        let json = serde_json::to_string(&pt).unwrap();
+        let back: ShapePoint = serde_json::from_str(&json).unwrap();
+        assert_eq!(pt, back);
     }
 }

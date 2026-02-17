@@ -165,6 +165,43 @@ pub enum ValidationError {
         run_index: usize,
     },
 
+    /// An Endnote control contains zero paragraphs.
+    #[error("Endnote has no paragraphs (section {section_index}, paragraph {paragraph_index}, run {run_index})")]
+    EmptyEndnote {
+        /// Zero-based section index.
+        section_index: usize,
+        /// Zero-based paragraph index.
+        paragraph_index: usize,
+        /// Zero-based run index.
+        run_index: usize,
+    },
+
+    /// A Polygon control has fewer than 3 vertices.
+    #[error("Polygon has invalid vertex count: {vertex_count} (section {section_index}, paragraph {paragraph_index}, run {run_index})")]
+    InvalidPolygon {
+        /// Zero-based section index.
+        section_index: usize,
+        /// Zero-based paragraph index.
+        paragraph_index: usize,
+        /// Zero-based run index.
+        run_index: usize,
+        /// Number of vertices found.
+        vertex_count: usize,
+    },
+
+    /// A shape (Ellipse or Polygon) has zero width or height.
+    #[error("Shape {shape_type} has zero dimension (section {section_index}, paragraph {paragraph_index}, run {run_index})")]
+    InvalidShapeDimension {
+        /// Zero-based section index.
+        section_index: usize,
+        /// Zero-based paragraph index.
+        paragraph_index: usize,
+        /// Zero-based run index.
+        run_index: usize,
+        /// Type of shape ("Ellipse" or "Polygon").
+        shape_type: &'static str,
+    },
+
     /// A table cell contains zero paragraphs.
     #[error("Table cell has no paragraphs (section {section_index}, paragraph {paragraph_index}, run {run_index}, row {row_index}, cell {cell_index})")]
     EmptyTableCell {
@@ -217,6 +254,12 @@ pub enum CoreErrorCode {
     EmptyFootnote = 2007,
     /// Empty table cell (no paragraphs).
     EmptyTableCell = 2008,
+    /// Empty Endnote (no paragraphs).
+    EmptyEndnote = 2009,
+    /// Invalid Polygon (fewer than 3 vertices).
+    InvalidPolygon = 2010,
+    /// Invalid shape dimension (zero width or height).
+    InvalidShapeDimension = 2011,
     /// Invalid document structure.
     InvalidStructure = 2100,
 }
@@ -240,6 +283,9 @@ impl ValidationError {
             Self::EmptyTextBox { .. } => CoreErrorCode::EmptyTextBox,
             Self::EmptyFootnote { .. } => CoreErrorCode::EmptyFootnote,
             Self::EmptyTableCell { .. } => CoreErrorCode::EmptyTableCell,
+            Self::EmptyEndnote { .. } => CoreErrorCode::EmptyEndnote,
+            Self::InvalidPolygon { .. } => CoreErrorCode::InvalidPolygon,
+            Self::InvalidShapeDimension { .. } => CoreErrorCode::InvalidShapeDimension,
         }
     }
 }

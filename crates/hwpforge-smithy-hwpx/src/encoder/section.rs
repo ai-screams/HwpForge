@@ -391,6 +391,7 @@ fn encode_textbox_to_rect(ctrl: &Control, depth: usize) -> HwpxResult<HxRect> {
 }
 
 /// Encodes a Core `Control::Line` into `HxLine`.
+// NOTE: Shape encoders share ~27 default fields each. At 8+ shapes, extract a shared default helper.
 fn encode_line_to_hx(ctrl: &Control) -> HxLine {
     let (start, end, width, height) = match ctrl {
         Control::Line { start, end, width, height } => (start, end, *width, *height),
@@ -561,6 +562,7 @@ fn encode_polygon_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxPolygon> {
 }
 
 /// Generates a random instance ID string (matches 한글 convention).
+// NOTE: Nanosecond-based ID. Unique for single-threaded use; consider atomic counter for parallel encoding.
 fn generate_instid() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();

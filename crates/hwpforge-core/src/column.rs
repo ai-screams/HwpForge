@@ -155,9 +155,9 @@ impl ColumnSettings {
     ///
     /// Uses [`ColumnType::Newspaper`] and [`ColumnLayoutMode::Left`] as defaults.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `columns.len() < 2`.
+    /// Returns an error if `columns.len() < 2` (single-column should be `None`).
     ///
     /// # Examples
     ///
@@ -168,12 +168,18 @@ impl ColumnSettings {
     /// let cs = ColumnSettings::custom(vec![
     ///     ColumnDef { width: HwpUnit::new(14000).unwrap(), gap: HwpUnit::new(1134).unwrap() },
     ///     ColumnDef { width: HwpUnit::new(27000).unwrap(), gap: HwpUnit::ZERO },
-    /// ]);
+    /// ]).unwrap();
     /// assert_eq!(cs.columns.len(), 2);
     /// ```
-    pub fn custom(columns: Vec<ColumnDef>) -> Self {
-        assert!(columns.len() >= 2, "column count must be >= 2 (use None for single column)");
-        Self { column_type: ColumnType::Newspaper, layout_mode: ColumnLayoutMode::Left, columns }
+    pub fn custom(columns: Vec<ColumnDef>) -> Result<Self, &'static str> {
+        if columns.len() < 2 {
+            return Err("column count must be >= 2 (use None for single column)");
+        }
+        Ok(Self {
+            column_type: ColumnType::Newspaper,
+            layout_mode: ColumnLayoutMode::Left,
+            columns,
+        })
     }
 
     /// Returns the number of columns.
@@ -239,7 +245,8 @@ mod tests {
         let cs = ColumnSettings::custom(vec![
             ColumnDef { width: HwpUnit::new(14000).unwrap(), gap: HwpUnit::new(1134).unwrap() },
             ColumnDef { width: HwpUnit::new(27000).unwrap(), gap: HwpUnit::ZERO },
-        ]);
+        ])
+        .unwrap();
         assert_eq!(cs.count(), 2);
         assert!(!cs.is_equal_width());
         assert_eq!(cs.columns[0].width.as_i32(), 14000);
@@ -247,9 +254,11 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "column count must be >= 2")]
-    fn custom_panics_on_1() {
-        ColumnSettings::custom(vec![ColumnDef { width: HwpUnit::ZERO, gap: HwpUnit::ZERO }]);
+    fn custom_returns_error_on_1() {
+        let result =
+            ColumnSettings::custom(vec![ColumnDef { width: HwpUnit::ZERO, gap: HwpUnit::ZERO }]);
+        assert!(result.is_err());
+        assert_eq!(result.unwrap_err(), "column count must be >= 2 (use None for single column)");
     }
 
     #[test]
@@ -265,7 +274,8 @@ mod tests {
         let cs = ColumnSettings::custom(vec![
             ColumnDef { width: HwpUnit::new(14000).unwrap(), gap: HwpUnit::new(1134).unwrap() },
             ColumnDef { width: HwpUnit::new(27000).unwrap(), gap: HwpUnit::ZERO },
-        ]);
+        ])
+        .unwrap();
         let json = serde_json::to_string(&cs).unwrap();
         let back: ColumnSettings = serde_json::from_str(&json).unwrap();
         assert_eq!(cs, back);
@@ -313,5 +323,13 @@ mod tests {
         cloned.column_type = ColumnType::Parallel;
         assert_eq!(cs.column_type, ColumnType::Newspaper);
         assert_eq!(cloned.column_type, ColumnType::Parallel);
+    }
+
+    #[test]
+    fn column_settings_serde_roundtrip() {
+        let cs = ColumnSettings::equal_columns(2, HwpUnit::new(1134).unwrap());
+        let json = serde_json::to_string(&cs).unwrap();
+        let back: ColumnSettings = serde_json::from_str(&json).unwrap();
+        assert_eq!(cs, back);
     }
 }
