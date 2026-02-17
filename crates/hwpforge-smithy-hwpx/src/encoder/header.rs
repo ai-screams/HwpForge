@@ -8,10 +8,10 @@ use hwpforge_foundation::{Alignment, Color, HwpUnit};
 
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::header::{
-    HxAlign, HxCharPr, HxCharProperties, HxFont, HxFontFaceGroup, HxFontFaces, HxFontRef, HxHead,
-    HxLineSpacing, HxMargin, HxOutline, HxParaPr, HxParaProperties, HxPresence, HxRefList,
-    HxShadow, HxStrikeout, HxStyle, HxStyles, HxSwitch, HxSwitchCase, HxSwitchDefault, HxUnderline,
-    HxUnitValue,
+    HxAlign, HxAutoSpacing, HxBorder, HxBreakSetting, HxCharPr, HxCharProperties, HxFont,
+    HxFontFaceGroup, HxFontFaces, HxFontRef, HxHead, HxHeading, HxLangValues, HxLineSpacing,
+    HxMargin, HxOutline, HxParaPr, HxParaProperties, HxPresence, HxRefList, HxShadow, HxStrikeout,
+    HxStyle, HxStyles, HxSwitch, HxSwitchCase, HxSwitchDefault, HxUnderline, HxUnitValue,
 };
 use crate::style_store::{HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyle, HwpxStyleStore};
 
@@ -45,11 +45,154 @@ pub(crate) fn encode_header(store: &HwpxStyleStore, sec_cnt: u32) -> HwpxResult<
 ///
 /// quick-xml's serde serializer cannot emit xmlns attributes, so we
 /// hand-craft the root element and splice in the serialized content.
+///
+/// Also injects `<hh:beginNum>` (required by 한글) before the refList,
+/// and enriches the refList with `<hh:borderFills>` and `<hh:tabProperties>`
+/// that charPr/paraPr reference via `borderFillIDRef` and `tabPrIDRef`.
+/// Elements required after `</hh:refList>` for 한글 compatibility.
+///
+/// - `compatibleDocument` — declares target program compatibility.
+/// - `docOption` — document link/inheritance settings.
+/// - `trackchageConfig` — track-changes flags (note: "trackchage" is an
+///   intentional typo preserved from the official format).
+const POST_REFLIST_XML: &str = concat!(
+    r#"<hh:compatibleDocument targetProgram="HWP201X">"#,
+    r#"<hh:layoutCompatibility/>"#,
+    r#"</hh:compatibleDocument>"#,
+    r#"<hh:docOption>"#,
+    r#"<hh:linkinfo path="" pageInherit="0" footnoteInherit="0"/>"#,
+    r#"</hh:docOption>"#,
+    r#"<hh:trackchageConfig flags="56"/>"#,
+);
+
 fn wrap_header_xml(inner_xml: &str, sec_cnt: u32) -> String {
+    let enriched = enrich_ref_list(inner_xml);
     format!(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><hh:head{xmlns} version="1.4" secCnt="{sec_cnt}">{inner_xml}</hh:head>"#,
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><hh:head{xmlns} version="1.4" secCnt="{sec_cnt}">{begin_num}{enriched}{post_reflist}</hh:head>"#,
         xmlns = crate::encoder::package::XMLNS_DECLS,
+        begin_num = BEGIN_NUM_XML,
+        post_reflist = POST_REFLIST_XML,
     )
+}
+
+// ── 한글 compatibility defaults ─────────────────────────────────
+
+/// `<hh:beginNum>` — required by 한글 for page/footnote numbering.
+const BEGIN_NUM_XML: &str =
+    r#"<hh:beginNum page="1" footnote="1" endnote="1" pic="1" tbl="1" equation="1"/>"#;
+
+/// Default `<hh:borderFills>` with two border definitions.
+///
+/// `borderFillIDRef="1"` is referenced by `<hp:pageBorderFill>` in secPr.
+/// `borderFillIDRef="2"` is referenced by every `<hh:charPr>`.
+///
+/// id=1: Empty border (no fill).
+/// id=2: Character background with `fillBrush`/`winBrush` (required by 한글).
+const BORDER_FILLS_XML: &str = concat!(
+    r##"<hh:borderFills itemCnt="2">"##,
+    r##"<hh:borderFill id="1" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0">"##,
+    r##"<hh:slash type="NONE" Crooked="0" isCounter="0"/>"##,
+    r##"<hh:backSlash type="NONE" Crooked="0" isCounter="0"/>"##,
+    r##"<hh:leftBorder type="NONE" width="0.1 mm" color="#000000"/>"##,
+    r##"<hh:rightBorder type="NONE" width="0.1 mm" color="#000000"/>"##,
+    r##"<hh:topBorder type="NONE" width="0.1 mm" color="#000000"/>"##,
+    r##"<hh:bottomBorder type="NONE" width="0.1 mm" color="#000000"/>"##,
+    r##"<hh:diagonal type="NONE" width="0.1 mm" color="#000000"/>"##,
+    r##"</hh:borderFill>"##,
+    r##"<hh:borderFill id="2" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0">"##,
+    r##"<hh:slash type="NONE" Crooked="0" isCounter="0"/>"##,
+    r##"<hh:backSlash type="NONE" Crooked="0" isCounter="0"/>"##,
+    r##"<hh:leftBorder type="NONE" width="0.1 mm" color="#000000"/>"##,
+    r##"<hh:rightBorder type="NONE" width="0.1 mm" color="#000000"/>"##,
+    r##"<hh:topBorder type="NONE" width="0.1 mm" color="#000000"/>"##,
+    r##"<hh:bottomBorder type="NONE" width="0.1 mm" color="#000000"/>"##,
+    r##"<hh:diagonal type="NONE" width="0.1 mm" color="#000000"/>"##,
+    r##"<hh:fillBrush>"##,
+    r##"<hc:winBrush faceColor="none" hatchColor="#FF000000" alpha="0"/>"##,
+    r##"</hh:fillBrush>"##,
+    r##"</hh:borderFill>"##,
+    r##"</hh:borderFills>"##,
+);
+
+/// Default `<hh:tabProperties>` with two tab definitions.
+///
+/// `tabPrIDRef="0"` in every `<hh:paraPr>` references id=0.
+/// id=1 has `autoTabLeft="1"` for outline numbering auto-indent.
+const TAB_PROPERTIES_XML: &str = concat!(
+    r#"<hh:tabProperties itemCnt="2">"#,
+    r#"<hh:tabPr id="0" autoTabLeft="0" autoTabRight="0"/>"#,
+    r#"<hh:tabPr id="1" autoTabLeft="1" autoTabRight="0"/>"#,
+    r#"</hh:tabProperties>"#,
+);
+
+/// Default `<hh:numberings>` with one numbering (7 outline levels).
+///
+/// Referenced by heading styles for automatic outline numbering.
+/// `charPrIDRef="4294967295"` (u32::MAX) means "no override / use default".
+const NUMBERINGS_XML: &str = concat!(
+    r#"<hh:numberings itemCnt="1">"#,
+    r#"<hh:numbering id="1" start="0">"#,
+    r#"<hh:paraHead level="1" align="LEFT" useInstWidth="1" autoIndent="1" textOffsetType="PERCENT" textOffset="50" numFormat="DIGIT" charPrIDRef="4294967295">^1.</hh:paraHead>"#,
+    r#"<hh:paraHead level="2" align="LEFT" useInstWidth="1" autoIndent="1" textOffsetType="PERCENT" textOffset="50" numFormat="HANGUL_SYLLABLE" charPrIDRef="4294967295">^2.</hh:paraHead>"#,
+    r#"<hh:paraHead level="3" align="LEFT" useInstWidth="1" autoIndent="1" textOffsetType="PERCENT" textOffset="50" numFormat="DIGIT" charPrIDRef="4294967295">^3)</hh:paraHead>"#,
+    r#"<hh:paraHead level="4" align="LEFT" useInstWidth="1" autoIndent="1" textOffsetType="PERCENT" textOffset="50" numFormat="HANGUL_SYLLABLE" charPrIDRef="4294967295">^4)</hh:paraHead>"#,
+    r#"<hh:paraHead level="5" align="LEFT" useInstWidth="1" autoIndent="1" textOffsetType="PERCENT" textOffset="50" numFormat="DIGIT" charPrIDRef="4294967295">(^5)</hh:paraHead>"#,
+    r#"<hh:paraHead level="6" align="LEFT" useInstWidth="1" autoIndent="1" textOffsetType="PERCENT" textOffset="50" numFormat="HANGUL_SYLLABLE" charPrIDRef="4294967295">(^6)</hh:paraHead>"#,
+    r#"<hh:paraHead level="7" align="LEFT" useInstWidth="1" autoIndent="1" textOffsetType="PERCENT" textOffset="50" numFormat="CIRCLED_DIGIT" charPrIDRef="4294967295">^7</hh:paraHead>"#,
+    r#"</hh:numbering>"#,
+    r#"</hh:numberings>"#,
+);
+
+/// Injects `<hh:borderFills>`, `<hh:tabProperties>`, and `<hh:numberings>`
+/// into the serialized refList XML at the correct positions.
+///
+/// Element order inside `<hh:refList>`:
+/// fontfaces → **borderFills** → charProperties → **tabProperties** → **numberings** → paraProperties → styles
+fn enrich_ref_list(inner_xml: &str) -> String {
+    // If no refList exists, nothing to enrich
+    if !inner_xml.contains("<hh:refList>") {
+        return format!(
+            "<hh:refList>{BORDER_FILLS_XML}{TAB_PROPERTIES_XML}{NUMBERINGS_XML}</hh:refList>{inner_xml}"
+        );
+    }
+
+    let extra_len = BORDER_FILLS_XML.len() + TAB_PROPERTIES_XML.len() + NUMBERINGS_XML.len();
+    let mut result = String::with_capacity(inner_xml.len() + extra_len);
+    let ref_open = "<hh:refList>";
+    let ref_open_pos = inner_xml.find(ref_open).unwrap();
+    let after_ref_open = ref_open_pos + ref_open.len();
+
+    // Copy up to and including <hh:refList>
+    result.push_str(&inner_xml[..after_ref_open]);
+
+    let rest = &inner_xml[after_ref_open..];
+
+    // Insert borderFills before <hh:charProperties>
+    if let Some(cp_pos) = rest.find("<hh:charProperties") {
+        result.push_str(&rest[..cp_pos]);
+        result.push_str(BORDER_FILLS_XML);
+
+        let rest2 = &rest[cp_pos..];
+        // Insert tabProperties + numberings before <hh:paraProperties>
+        if let Some(pp_pos) = rest2.find("<hh:paraProperties") {
+            result.push_str(&rest2[..pp_pos]);
+            result.push_str(TAB_PROPERTIES_XML);
+            result.push_str(NUMBERINGS_XML);
+            result.push_str(&rest2[pp_pos..]);
+        } else {
+            result.push_str(rest2);
+            result.push_str(TAB_PROPERTIES_XML);
+            result.push_str(NUMBERINGS_XML);
+        }
+    } else {
+        // No charProperties — insert all defaults after fontfaces
+        result.push_str(BORDER_FILLS_XML);
+        result.push_str(TAB_PROPERTIES_XML);
+        result.push_str(NUMBERINGS_XML);
+        result.push_str(rest);
+    }
+
+    result
 }
 
 /// Builds a complete `HxHead` from the store data.
@@ -176,6 +319,10 @@ fn build_char_properties(store: &HwpxStyleStore) -> HxCharProperties {
 /// Converts a single `HwpxCharShape` back to `HxCharPr`.
 ///
 /// This is the reverse of `decoder::header::convert_char_pr`.
+///
+/// Emits all required child elements including `ratio` (100), `spacing` (0),
+/// `relSz` (100), and `offset` (0) for all 7 language groups, which 한글
+/// expects to be present in every `<hh:charPr>`.
 fn build_char_pr(id: u32, cs: &HwpxCharShape) -> HxCharPr {
     let fr = &cs.font_ref;
     HxCharPr {
@@ -197,6 +344,10 @@ fn build_char_pr(id: u32, cs: &HwpxCharShape) -> HxCharPr {
             symbol: fr.symbol.get() as u32,
             user: fr.user.get() as u32,
         }),
+        ratio: Some(lang_values_all(100)),
+        spacing: Some(lang_values_all(0)),
+        rel_sz: Some(lang_values_all(100)),
+        offset: Some(lang_values_all(0)),
         bold: if cs.bold { Some(HxPresence) } else { None },
         italic: if cs.italic { Some(HxPresence) } else { None },
         underline: Some(HxUnderline {
@@ -215,6 +366,11 @@ fn build_char_pr(id: u32, cs: &HwpxCharShape) -> HxCharPr {
     }
 }
 
+/// Creates an `HxLangValues` with the same value for all 7 language fields.
+fn lang_values_all(v: i32) -> HxLangValues {
+    HxLangValues { hangul: v, latin: v, hanja: v, japanese: v, other: v, symbol: v, user: v }
+}
+
 // ── ParaPr builder ──────────────────────────────────────────────
 
 /// Builds the `HxParaProperties` list from all para shapes in the store.
@@ -231,6 +387,10 @@ fn build_para_properties(store: &HwpxStyleStore) -> HxParaProperties {
 /// Converts a single `HwpxParaShape` back to `HxParaPr`.
 ///
 /// This is the reverse of `decoder::header::convert_para_pr`.
+///
+/// Emits all child elements expected by 한글: heading (NONE default),
+/// breakSetting, autoSpacing, margin/lineSpacing (inside hp:switch),
+/// and border (referencing borderFill id=2).
 fn build_para_pr(id: u32, ps: &HwpxParaShape) -> HxParaPr {
     HxParaPr {
         id,
@@ -240,8 +400,24 @@ fn build_para_pr(id: u32, ps: &HwpxParaShape) -> HxParaPr {
             horizontal: alignment_to_str(ps.alignment).into(),
             vertical: "BASELINE".into(),
         }),
-        heading: None,
+        heading: Some(HxHeading { heading_type: "NONE".into(), id_ref: 0, level: 0 }),
+        break_setting: Some(HxBreakSetting {
+            break_latin_word: "KEEP_WORD".into(),
+            break_non_latin_word: "BREAK_WORD".into(),
+            widow_orphan: 0,
+            keep_with_next: 0,
+            keep_lines: 0,
+            page_break_before: 0,
+        }),
+        auto_spacing: Some(HxAutoSpacing { e_asian_eng: 0, e_asian_num: 0 }),
         switch: Some(build_margin_switch(ps)),
+        border: Some(HxBorder {
+            border_fill_id_ref: 2,
+            offset_left: 0,
+            offset_right: 0,
+            offset_top: 0,
+            offset_bottom: 0,
+        }),
     }
 }
 
@@ -721,5 +897,50 @@ mod tests {
         let xml = encode_header(&store, 1).unwrap();
         // Styles should not appear in XML when empty
         assert!(!xml.contains("<hh:styles"));
+    }
+
+    // ── 14. Verify all 6 encoder improvements ──────────────────
+
+    #[test]
+    fn test_encoder_improvements_all_present() {
+        let store = minimal_store();
+        let xml = encode_header(&store, 1).unwrap();
+
+        // Gap 1: charPr ratio/spacing/relSz/offset
+        assert!(xml.contains("<hh:ratio hangul=\"100\""), "charPr must have ratio");
+        assert!(xml.contains("<hh:spacing hangul=\"0\""), "charPr must have spacing");
+        assert!(xml.contains("<hh:relSz hangul=\"100\""), "charPr must have relSz");
+        assert!(xml.contains("<hh:offset hangul=\"0\""), "charPr must have offset");
+
+        // Gap 2: paraPr heading/breakSetting/autoSpacing/border
+        assert!(xml.contains("<hh:heading type=\"NONE\""), "paraPr must have heading");
+        assert!(
+            xml.contains("<hh:breakSetting breakLatinWord=\"KEEP_WORD\""),
+            "paraPr must have breakSetting"
+        );
+        assert!(xml.contains("<hh:autoSpacing eAsianEng=\"0\""), "paraPr must have autoSpacing");
+        assert!(xml.contains("<hh:border borderFillIDRef=\"2\""), "paraPr must have border");
+
+        // Gap 3: borderFill id=2 fillBrush
+        assert!(xml.contains("<hh:fillBrush>"), "borderFill id=2 must have fillBrush");
+        assert!(xml.contains("<hc:winBrush faceColor=\"none\""), "fillBrush must have winBrush");
+        assert!(xml.contains("Crooked=\"0\""), "slash/backSlash must have Crooked attr");
+        assert!(xml.contains("isCounter=\"0\""), "slash/backSlash must have isCounter attr");
+
+        // Gap 4: tabProperties 2nd entry
+        assert!(
+            xml.contains("<hh:tabProperties itemCnt=\"2\""),
+            "tabProperties must have 2 entries"
+        );
+        assert!(xml.contains("<hh:tabPr id=\"1\" autoTabLeft=\"1\""), "tabPr id=1 must exist");
+
+        // Gap 5: numberings
+        assert!(xml.contains("<hh:numberings itemCnt=\"1\""), "numberings must exist");
+        assert!(xml.contains("<hh:paraHead level=\"1\""), "numbering must have paraHead levels");
+        assert!(xml.contains("numFormat=\"DIGIT\""), "paraHead must have numFormat");
+        assert!(
+            xml.contains("charPrIDRef=\"4294967295\""),
+            "paraHead must use u32::MAX for no override"
+        );
     }
 }

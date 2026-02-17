@@ -54,7 +54,12 @@ pub(crate) fn encode_section(section: &Section, _section_index: usize) -> HwpxRe
     // We need `<hs:sec xmlns:...>...</hs:sec>`, so strip the outer
     // element and wrap with our template.
     let inner_content = strip_root_element(&inner_xml);
-    Ok(wrap_section_xml(inner_content))
+
+    // Enrich <hp:secPr> with sub-elements required by 한글 (grid,
+    // startNum, visibility, footnote/endnote, pageBorderFill).
+    let enriched = enrich_sec_pr(inner_content);
+
+    Ok(wrap_section_xml(&enriched))
 }
 
 /// Wraps inner XML content in an `<hs:sec>` element with all xmlns declarations.
@@ -292,6 +297,92 @@ fn build_picture(img: &Image) -> HxPic {
     }
 }
 
+// ── 한글 compatibility: secPr enrichment ────────────────────────
+
+/// Enriched `<hp:secPr>` opening tag with all attributes 한글 expects.
+const SEC_PR_OPEN_ENRICHED: &str = concat!(
+    r#"<hp:secPr id="" textDirection="HORIZONTAL" "#,
+    r#"spaceColumns="1134" tabStop="8000" tabStopVal="4000" tabStopUnit="HWPUNIT" "#,
+    r#"outlineShapeIDRef="1" memoShapeIDRef="0" textVerticalWidthHead="0" masterPageCnt="0">"#,
+);
+
+/// Sub-elements inserted before `<hp:pagePr>` inside secPr.
+const SEC_PR_PRE_ELEMENTS: &str = concat!(
+    r#"<hp:grid lineGrid="0" charGrid="0" wonggojiFormat="0"/>"#,
+    r#"<hp:startNum pageStartsOn="BOTH" page="0" pic="0" tbl="0" equation="0"/>"#,
+    r#"<hp:visibility hideFirstHeader="0" hideFirstFooter="0" hideFirstMasterPage="0" "#,
+    r#"border="SHOW_ALL" fill="SHOW_ALL" hideFirstPageNum="0" hideFirstEmptyLine="0" showLineNumber="0"/>"#,
+    r#"<hp:lineNumberShape restartType="0" countBy="0" distance="0" startNumber="0"/>"#,
+);
+
+/// Sub-elements inserted after `</hp:pagePr>` and before `</hp:secPr>`.
+const SEC_PR_POST_ELEMENTS: &str = concat!(
+    r#"<hp:footNotePr>"#,
+    r#"<hp:autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar=")" supscript="0"/>"#,
+    r##"<hp:noteLine length="-1" type="SOLID" width="0.12 mm" color="#000000"/>"##,
+    r#"<hp:noteSpacing betweenNotes="283" belowLine="567" aboveLine="850"/>"#,
+    r#"<hp:numbering type="CONTINUOUS" newNum="1"/>"#,
+    r#"<hp:placement place="EACH_COLUMN" beneathText="0"/>"#,
+    r#"</hp:footNotePr>"#,
+    r#"<hp:endNotePr>"#,
+    r#"<hp:autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar=")" supscript="0"/>"#,
+    r##"<hp:noteLine length="14692344" type="SOLID" width="0.12 mm" color="#000000"/>"##,
+    r#"<hp:noteSpacing betweenNotes="0" belowLine="567" aboveLine="850"/>"#,
+    r#"<hp:numbering type="CONTINUOUS" newNum="1"/>"#,
+    r#"<hp:placement place="END_OF_DOCUMENT" beneathText="0"/>"#,
+    r#"</hp:endNotePr>"#,
+    r#"<hp:pageBorderFill type="BOTH" borderFillIDRef="1" textBorder="PAPER" headerInside="0" footerInside="0" fillArea="PAPER">"#,
+    r#"<hp:offset left="1417" right="1417" top="1417" bottom="1417"/>"#,
+    r#"</hp:pageBorderFill>"#,
+    r#"<hp:pageBorderFill type="EVEN" borderFillIDRef="1" textBorder="PAPER" headerInside="0" footerInside="0" fillArea="PAPER">"#,
+    r#"<hp:offset left="1417" right="1417" top="1417" bottom="1417"/>"#,
+    r#"</hp:pageBorderFill>"#,
+    r#"<hp:pageBorderFill type="ODD" borderFillIDRef="1" textBorder="PAPER" headerInside="0" footerInside="0" fillArea="PAPER">"#,
+    r#"<hp:offset left="1417" right="1417" top="1417" bottom="1417"/>"#,
+    r#"</hp:pageBorderFill>"#,
+);
+
+/// Column properties injected after `</hp:secPr>` inside the first run.
+///
+/// Single-column default layout matching 한글's standard output.
+const COL_PR_XML: &str = concat!(
+    r#"<hp:ctrl>"#,
+    r#"<hp:colPr type="NEWSPAPER" layout="LEFT" colCount="1" sameSz="0" sameGap="0"/>"#,
+    r#"</hp:ctrl>"#,
+);
+
+/// Enriches the minimal `<hp:secPr>` output with sub-elements required
+/// by 한글 for proper rendering.
+///
+/// Replaces the opening tag with an enriched version carrying all expected
+/// attributes, inserts grid/visibility elements before `<hp:pagePr>`,
+/// appends footnote/endnote/pageBorderFill after `</hp:pagePr>`,
+/// and injects `<hp:ctrl><hp:colPr>` after the closing `</hp:secPr>`.
+fn enrich_sec_pr(xml: &str) -> String {
+    let minimal_open = r#"<hp:secPr textDirection="HORIZONTAL">"#;
+
+    // If no secPr to enrich, return as-is
+    if !xml.contains(minimal_open) {
+        return xml.to_string();
+    }
+
+    let mut result =
+        xml.replacen(minimal_open, &format!("{SEC_PR_OPEN_ENRICHED}{SEC_PR_PRE_ELEMENTS}"), 1);
+
+    // Insert post-elements before the first </hp:secPr>
+    if let Some(pos) = result.find("</hp:secPr>") {
+        result.insert_str(pos, SEC_PR_POST_ELEMENTS);
+    }
+
+    // Insert colPr after </hp:secPr>
+    if let Some(pos) = result.find("</hp:secPr>") {
+        let insert_pos = pos + "</hp:secPr>".len();
+        result.insert_str(insert_pos, COL_PR_XML);
+    }
+
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -323,6 +414,19 @@ mod tests {
         assert!(xml.contains("<hs:sec"), "missing <hs:sec> root");
         assert!(xml.contains("</hs:sec>"), "missing </hs:sec> close");
         assert!(xml.contains("<hp:p "), "missing <hp:p>");
+
+        // Verify Gap 6: colPr is injected after </hp:secPr>
+        assert!(xml.contains("<hp:ctrl>"), "missing <hp:ctrl>");
+        assert!(
+            xml.contains("<hp:colPr type=\"NEWSPAPER\" layout=\"LEFT\" colCount=\"1\""),
+            "missing colPr with correct attributes"
+        );
+        assert!(xml.contains("sameSz=\"0\" sameGap=\"0\""), "colPr missing sameSz/sameGap");
+
+        // Verify colPr appears AFTER </hp:secPr> and BEFORE <hp:t>
+        let sec_pr_end = xml.find("</hp:secPr>").expect("secPr must be present");
+        let col_pr_pos = xml.find("<hp:colPr").expect("colPr must be present");
+        assert!(col_pr_pos > sec_pr_end, "colPr must come after </hp:secPr>");
         assert!(xml.contains("<hp:run "), "missing <hp:run>");
         assert!(xml.contains("<hp:t>텍스트</hp:t>"), "missing text content");
         assert!(xml.contains(r#"xmlns:hp="#), "missing xmlns:hp namespace");

@@ -242,7 +242,12 @@ fn pipeline_style_store_counts_match_registry() {
     let store = HwpxStyleStore::from_registry(&md_doc.style_registry);
 
     // Assert: store counts match registry counts
-    assert_eq!(store.font_count(), md_doc.style_registry.font_count(), "Font counts should match");
+    // Fonts are mirrored across 7 language groups (HANGUL, LATIN, HANJA, JAPANESE, OTHER, SYMBOL, USER)
+    assert_eq!(
+        store.font_count(),
+        md_doc.style_registry.font_count() * 7,
+        "Font counts should match (7 lang groups)"
+    );
 
     assert_eq!(
         store.char_shape_count(),

@@ -224,13 +224,18 @@ impl HwpxStyleStore {
     pub fn from_registry(registry: &StyleRegistry) -> Self {
         let mut store = Self::new();
 
-        // Fonts: FontId → HwpxFont (all assigned to HANGUL group)
-        for (i, font_id) in registry.fonts.iter().enumerate() {
-            store.push_font(HwpxFont {
-                id: i as u32,
-                face_name: font_id.as_str().to_string(),
-                lang: "HANGUL".to_string(),
-            });
+        // Fonts: FontId → HwpxFont (mirrored across all 7 language groups)
+        // 한글 expects identical font entries for each language group.
+        const FONT_LANGS: &[&str] =
+            &["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"];
+        for &lang in FONT_LANGS {
+            for (i, font_id) in registry.fonts.iter().enumerate() {
+                store.push_font(HwpxFont {
+                    id: i as u32,
+                    face_name: font_id.as_str().to_string(),
+                    lang: lang.to_string(),
+                });
+            }
         }
 
         // CharShapes: Blueprint CharShape → HwpxCharShape
@@ -822,7 +827,8 @@ mod tests {
         let registry = StyleRegistry::from_template(&template).unwrap();
         let store = HwpxStyleStore::from_registry(&registry);
 
-        assert_eq!(store.font_count(), registry.font_count());
+        // Fonts are mirrored across 7 language groups (HANGUL, LATIN, HANJA, JAPANESE, OTHER, SYMBOL, USER)
+        assert_eq!(store.font_count(), registry.font_count() * 7);
         assert_eq!(store.char_shape_count(), registry.char_shape_count());
         assert_eq!(store.para_shape_count(), registry.para_shape_count());
         assert_eq!(store.style_count(), registry.style_count());
@@ -834,10 +840,16 @@ mod tests {
         let registry = StyleRegistry::from_template(&template).unwrap();
         let store = HwpxStyleStore::from_registry(&registry);
 
-        for (i, font_id) in registry.fonts.iter().enumerate() {
-            let hwpx_font = store.font(FontIndex::new(i)).unwrap();
-            assert_eq!(hwpx_font.face_name, font_id.as_str());
-            assert_eq!(hwpx_font.lang, "HANGUL");
+        let font_count = registry.font_count();
+        let langs = ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"];
+        // Fonts are stored as: lang0[font0, font1, ...], lang1[font0, font1, ...], ...
+        for (lang_idx, &lang) in langs.iter().enumerate() {
+            for (font_idx, font_id) in registry.fonts.iter().enumerate() {
+                let store_idx = lang_idx * font_count + font_idx;
+                let hwpx_font = store.font(FontIndex::new(store_idx)).unwrap();
+                assert_eq!(hwpx_font.face_name, font_id.as_str());
+                assert_eq!(hwpx_font.lang, lang);
+            }
         }
     }
 

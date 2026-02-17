@@ -41,25 +41,30 @@ pub(crate) const XMLNS_DECLS: &str = concat!(
 
 /// HCF version descriptor. Note: `tagetApplication` is an intentional typo
 /// preserved from the official format for compatibility.
-const VERSION_XML: &str = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><hv:HCFVersion xmlns:hv="urn:hancom:office:hwpml:version" tagetApplication="WORDPROCESSOR" major="5" minor="0" micro="5" buildNumber="0"/>"##;
+/// The namespace URI matches the official 한글 output.
+const VERSION_XML: &str = r##"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><hv:HCFVersion xmlns:hv="http://www.hancom.co.kr/hwpml/2011/version" tagetApplication="WORDPROCESSOR" major="5" minor="0" micro="5" buildNumber="0" os="1" xmlVersion="1.4" application="Hancom Office Hangul" appVersion="12, 0, 0, 0"/>"##;
 
 /// META-INF/container.xml pointing to the content package file.
-const CONTAINER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><ocf:container xmlns:ocf="urn:oasis:names:tc:opendocument:xmlns:container"><ocf:rootfiles><ocf:rootfile full-path="Contents/content.hpf" media-type="application/hwpml-package+xml"/></ocf:rootfiles></ocf:container>"#;
+const CONTAINER_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><ocf:container xmlns:ocf="urn:oasis:names:tc:opendocument:xmlns:container" xmlns:hpf="http://www.hancom.co.kr/schema/2011/hpf"><ocf:rootfiles><ocf:rootfile full-path="Contents/content.hpf" media-type="application/hwpml-package+xml"/></ocf:rootfiles></ocf:container>"#;
 
 /// META-INF/manifest.xml (empty manifest).
 const MANIFEST_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><odf:manifest xmlns:odf="urn:oasis:names:tc:opendocument:xmlns:manifest:1.0"/>"#;
 
 /// Application settings with default caret position.
-const SETTINGS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><ha:HWPApplicationSetting xmlns:ha="http://www.hancom.co.kr/hwpml/2011/app" xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph"><ha:CaretPosition listIDRef="0" paraIDRef="0" pos="0"/></ha:HWPApplicationSetting>"#;
+const SETTINGS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><ha:HWPApplicationSetting xmlns:ha="http://www.hancom.co.kr/hwpml/2011/app" xmlns:config="urn:oasis:names:tc:opendocument:xmlns:config:1.0"><ha:CaretPosition listIDRef="0" paraIDRef="0" pos="0"/></ha:HWPApplicationSetting>"#;
 
 // ── content.hpf generator ────────────────────────────────────────
 
 /// Generates the OPF content manifest listing header and all sections.
+///
+/// Matches the structure produced by 한글: full namespace declarations,
+/// metadata section, header + sections + settings in manifest, and
+/// header + sections in spine.
 fn generate_content_hpf(section_count: usize) -> String {
     let mut manifest_items = String::from(
         r#"<opf:item id="header" href="Contents/header.xml" media-type="application/xml"/>"#,
     );
-    let mut spine_refs = String::new();
+    let mut spine_refs = String::from(r#"<opf:itemref idref="header" linear="yes"/>"#);
 
     for i in 0..section_count {
         use std::fmt::Write as _;
@@ -68,12 +73,29 @@ fn generate_content_hpf(section_count: usize) -> String {
             r#"<opf:item id="section{i}" href="Contents/section{i}.xml" media-type="application/xml"/>"#,
         )
         .expect("write to String is infallible");
-        write!(spine_refs, r#"<opf:itemref idref="section{i}"/>"#)
+        write!(spine_refs, r#"<opf:itemref idref="section{i}" linear="yes"/>"#)
             .expect("write to String is infallible");
     }
 
+    // settings in manifest (not in spine)
+    manifest_items
+        .push_str(r#"<opf:item id="settings" href="settings.xml" media-type="application/xml"/>"#);
+
     format!(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><opf:package xmlns:opf="http://www.idpf.org/2007/opf/" version="1.0" unique-identifier="bookid"><opf:manifest>{manifest_items}</opf:manifest><opf:spine>{spine_refs}</opf:spine></opf:package>"#,
+        concat!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>"#,
+            r#"<opf:package{xmlns} version="" unique-identifier="" id="">"#,
+            r#"<opf:metadata>"#,
+            r#"<opf:title/>"#,
+            r#"<opf:language>ko</opf:language>"#,
+            r#"</opf:metadata>"#,
+            r#"<opf:manifest>{manifest_items}</opf:manifest>"#,
+            r#"<opf:spine>{spine_refs}</opf:spine>"#,
+            r#"</opf:package>"#,
+        ),
+        xmlns = XMLNS_DECLS,
+        manifest_items = manifest_items,
+        spine_refs = spine_refs,
     )
 }
 
