@@ -22,8 +22,9 @@ use hwpforge_core::PageSettings;
 use crate::encoder::package::XMLNS_DECLS;
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    HxCellSpan, HxCellSz, HxImg, HxPageMargin, HxPagePr, HxParagraph, HxPic, HxRun, HxSecPr,
-    HxSection, HxSizeAttr, HxSubList, HxTable, HxTableCell, HxTableRow, HxText,
+    HxCellSpan, HxCellSz, HxImg, HxLineSeg, HxLineSegArray, HxPageMargin, HxPagePr, HxParagraph,
+    HxPic, HxRun, HxSecPr, HxSection, HxSizeAttr, HxSubList, HxTable, HxTableCell, HxTableRow,
+    HxText,
 };
 
 /// Maximum nesting depth for tables-within-tables.
@@ -119,6 +120,14 @@ fn build_paragraph(
 ) -> HwpxResult<HxParagraph> {
     let runs = build_runs(&para.runs, inject_sec_pr, page_settings, depth)?;
 
+    // Build a placeholder linesegarray with approximate values.
+    // 한글 will recalculate this on open, but having a placeholder
+    // improves initial rendering.
+    let horzsize = page_settings
+        .map(|ps| ps.width.as_i32() - ps.margin_left.as_i32() - ps.margin_right.as_i32())
+        .unwrap_or(DEFAULT_HORZ_SIZE);
+    let linesegarray = Some(build_linesegarray(horzsize));
+
     Ok(HxParagraph {
         id: format!("{para_idx}"),
         para_pr_id_ref: para.para_shape_id.get() as u32,
@@ -127,6 +136,7 @@ fn build_paragraph(
         column_break: 0,
         merged: 0,
         runs,
+        linesegarray,
     })
 }
 
@@ -297,6 +307,38 @@ fn build_picture(img: &Image) -> HxPic {
     }
 }
 
+// ── Linesegarray placeholder ─────────────────────────────────────
+
+/// Default horizontal size for A4 with 30mm margins (59528 - 8504 - 8504).
+const DEFAULT_HORZ_SIZE: i32 = 42520;
+
+/// Default char height in HWPUNIT (10pt = 1000).
+const DEFAULT_CHAR_HEIGHT: i32 = 1000;
+
+/// Builds a minimal placeholder `HxLineSegArray` with one line segment.
+///
+/// Uses fixed defaults for char height (10pt) and calculates baseline
+/// and spacing from standard ratios. 한글 recalculates these on open,
+/// so exact values are not critical.
+fn build_linesegarray(horzsize: i32) -> HxLineSegArray {
+    let vertsize = DEFAULT_CHAR_HEIGHT;
+    let baseline = vertsize * 85 / 100;
+    let spacing = 600; // default for ~160% line spacing
+    HxLineSegArray {
+        items: vec![HxLineSeg {
+            textpos: 0,
+            vertpos: 0,
+            vertsize,
+            textheight: vertsize,
+            baseline,
+            spacing,
+            horzpos: 0,
+            horzsize,
+            flags: 393216,
+        }],
+    }
+}
+
 // ── 한글 compatibility: secPr enrichment ────────────────────────
 
 /// Enriched `<hp:secPr>` opening tag with all attributes 한글 expects.
@@ -347,7 +389,7 @@ const SEC_PR_POST_ELEMENTS: &str = concat!(
 /// Single-column default layout matching 한글's standard output.
 const COL_PR_XML: &str = concat!(
     r#"<hp:ctrl>"#,
-    r#"<hp:colPr type="NEWSPAPER" layout="LEFT" colCount="1" sameSz="0" sameGap="0"/>"#,
+    r#"<hp:colPr id="" type="NEWSPAPER" layout="LEFT" colCount="1" sameSz="1" sameGap="0"/>"#,
     r#"</hp:ctrl>"#,
 );
 
@@ -418,10 +460,10 @@ mod tests {
         // Verify Gap 6: colPr is injected after </hp:secPr>
         assert!(xml.contains("<hp:ctrl>"), "missing <hp:ctrl>");
         assert!(
-            xml.contains("<hp:colPr type=\"NEWSPAPER\" layout=\"LEFT\" colCount=\"1\""),
+            xml.contains("<hp:colPr id=\"\" type=\"NEWSPAPER\" layout=\"LEFT\" colCount=\"1\""),
             "missing colPr with correct attributes"
         );
-        assert!(xml.contains("sameSz=\"0\" sameGap=\"0\""), "colPr missing sameSz/sameGap");
+        assert!(xml.contains("sameSz=\"1\" sameGap=\"0\""), "colPr missing sameSz/sameGap");
 
         // Verify colPr appears AFTER </hp:secPr> and BEFORE <hp:t>
         let sec_pr_end = xml.find("</hp:secPr>").expect("secPr must be present");

@@ -11,7 +11,8 @@ use crate::schema::header::{
     HxAlign, HxAutoSpacing, HxBorder, HxBreakSetting, HxCharPr, HxCharProperties, HxFont,
     HxFontFaceGroup, HxFontFaces, HxFontRef, HxHead, HxHeading, HxLangValues, HxLineSpacing,
     HxMargin, HxOutline, HxParaPr, HxParaProperties, HxPresence, HxRefList, HxShadow, HxStrikeout,
-    HxStyle, HxStyles, HxSwitch, HxSwitchCase, HxSwitchDefault, HxUnderline, HxUnitValue,
+    HxStyle, HxStyles, HxSwitch, HxSwitchCase, HxSwitchDefault, HxTypeInfo, HxUnderline,
+    HxUnitValue,
 };
 use crate::style_store::{HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyle, HwpxStyleStore};
 
@@ -97,7 +98,7 @@ const BORDER_FILLS_XML: &str = concat!(
     r##"<hh:rightBorder type="NONE" width="0.1 mm" color="#000000"/>"##,
     r##"<hh:topBorder type="NONE" width="0.1 mm" color="#000000"/>"##,
     r##"<hh:bottomBorder type="NONE" width="0.1 mm" color="#000000"/>"##,
-    r##"<hh:diagonal type="NONE" width="0.1 mm" color="#000000"/>"##,
+    r##"<hh:diagonal type="SOLID" width="0.1 mm" color="#000000"/>"##,
     r##"</hh:borderFill>"##,
     r##"<hh:borderFill id="2" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0">"##,
     r##"<hh:slash type="NONE" Crooked="0" isCounter="0"/>"##,
@@ -106,10 +107,10 @@ const BORDER_FILLS_XML: &str = concat!(
     r##"<hh:rightBorder type="NONE" width="0.1 mm" color="#000000"/>"##,
     r##"<hh:topBorder type="NONE" width="0.1 mm" color="#000000"/>"##,
     r##"<hh:bottomBorder type="NONE" width="0.1 mm" color="#000000"/>"##,
-    r##"<hh:diagonal type="NONE" width="0.1 mm" color="#000000"/>"##,
-    r##"<hh:fillBrush>"##,
+    r##"<hh:diagonal type="SOLID" width="0.1 mm" color="#000000"/>"##,
+    r##"<hc:fillBrush>"##,
     r##"<hc:winBrush faceColor="none" hatchColor="#FF000000" alpha="0"/>"##,
-    r##"</hh:fillBrush>"##,
+    r##"</hc:fillBrush>"##,
     r##"</hh:borderFill>"##,
     r##"</hh:borderFills>"##,
 );
@@ -132,13 +133,13 @@ const TAB_PROPERTIES_XML: &str = concat!(
 const NUMBERINGS_XML: &str = concat!(
     r#"<hh:numberings itemCnt="1">"#,
     r#"<hh:numbering id="1" start="0">"#,
-    r#"<hh:paraHead level="1" align="LEFT" useInstWidth="1" autoIndent="1" textOffsetType="PERCENT" textOffset="50" numFormat="DIGIT" charPrIDRef="4294967295">^1.</hh:paraHead>"#,
-    r#"<hh:paraHead level="2" align="LEFT" useInstWidth="1" autoIndent="1" textOffsetType="PERCENT" textOffset="50" numFormat="HANGUL_SYLLABLE" charPrIDRef="4294967295">^2.</hh:paraHead>"#,
-    r#"<hh:paraHead level="3" align="LEFT" useInstWidth="1" autoIndent="1" textOffsetType="PERCENT" textOffset="50" numFormat="DIGIT" charPrIDRef="4294967295">^3)</hh:paraHead>"#,
-    r#"<hh:paraHead level="4" align="LEFT" useInstWidth="1" autoIndent="1" textOffsetType="PERCENT" textOffset="50" numFormat="HANGUL_SYLLABLE" charPrIDRef="4294967295">^4)</hh:paraHead>"#,
-    r#"<hh:paraHead level="5" align="LEFT" useInstWidth="1" autoIndent="1" textOffsetType="PERCENT" textOffset="50" numFormat="DIGIT" charPrIDRef="4294967295">(^5)</hh:paraHead>"#,
-    r#"<hh:paraHead level="6" align="LEFT" useInstWidth="1" autoIndent="1" textOffsetType="PERCENT" textOffset="50" numFormat="HANGUL_SYLLABLE" charPrIDRef="4294967295">(^6)</hh:paraHead>"#,
-    r#"<hh:paraHead level="7" align="LEFT" useInstWidth="1" autoIndent="1" textOffsetType="PERCENT" textOffset="50" numFormat="CIRCLED_DIGIT" charPrIDRef="4294967295">^7</hh:paraHead>"#,
+    r#"<hh:paraHead start="1" level="1" align="LEFT" useInstWidth="1" autoIndent="1" widthAdjust="0" textOffsetType="PERCENT" textOffset="50" numFormat="DIGIT" charPrIDRef="4294967295" checkable="0">^1.</hh:paraHead>"#,
+    r#"<hh:paraHead start="1" level="2" align="LEFT" useInstWidth="1" autoIndent="1" widthAdjust="0" textOffsetType="PERCENT" textOffset="50" numFormat="HANGUL_SYLLABLE" charPrIDRef="4294967295" checkable="0">^2.</hh:paraHead>"#,
+    r#"<hh:paraHead start="1" level="3" align="LEFT" useInstWidth="1" autoIndent="1" widthAdjust="0" textOffsetType="PERCENT" textOffset="50" numFormat="DIGIT" charPrIDRef="4294967295" checkable="0">^3)</hh:paraHead>"#,
+    r#"<hh:paraHead start="1" level="4" align="LEFT" useInstWidth="1" autoIndent="1" widthAdjust="0" textOffsetType="PERCENT" textOffset="50" numFormat="HANGUL_SYLLABLE" charPrIDRef="4294967295" checkable="0">^4)</hh:paraHead>"#,
+    r#"<hh:paraHead start="1" level="5" align="LEFT" useInstWidth="1" autoIndent="1" widthAdjust="0" textOffsetType="PERCENT" textOffset="50" numFormat="DIGIT" charPrIDRef="4294967295" checkable="0">(^5)</hh:paraHead>"#,
+    r#"<hh:paraHead start="1" level="6" align="LEFT" useInstWidth="1" autoIndent="1" widthAdjust="0" textOffsetType="PERCENT" textOffset="50" numFormat="HANGUL_SYLLABLE" charPrIDRef="4294967295" checkable="0">(^6)</hh:paraHead>"#,
+    r#"<hh:paraHead start="1" level="7" align="LEFT" useInstWidth="1" autoIndent="1" widthAdjust="0" textOffsetType="PERCENT" textOffset="50" numFormat="CIRCLED_DIGIT" charPrIDRef="4294967295" checkable="1">^7</hh:paraHead>"#,
     r#"</hh:numbering>"#,
     r#"</hh:numberings>"#,
 );
@@ -296,6 +297,7 @@ fn group_fonts_by_lang(store: &HwpxStyleStore) -> Vec<HxFontFaceGroup> {
                     face: f.face_name.clone(),
                     font_type: "TTF".into(),
                     is_embedded: 0,
+                    type_info: Some(default_type_info()),
                 })
                 .collect();
             HxFontFaceGroup { lang, font_cnt, fonts: hx_fonts }
@@ -371,6 +373,25 @@ fn lang_values_all(v: i32) -> HxLangValues {
     HxLangValues { hangul: v, latin: v, hanja: v, japanese: v, other: v, symbol: v, user: v }
 }
 
+/// Returns a default `HxTypeInfo` with standard PANOSE-like values.
+///
+/// Uses `FCAT_GOTHIC` as the family type, which is the most common
+/// classification for Korean fonts (both gothic and myeongjo faces
+/// use this as a safe default).
+fn default_type_info() -> HxTypeInfo {
+    HxTypeInfo {
+        family_type: "FCAT_GOTHIC".into(),
+        weight: 6,
+        proportion: 0,
+        contrast: 0,
+        stroke_variation: 1,
+        arm_style: 1,
+        letterform: 1,
+        midline: 1,
+        x_height: 1,
+    }
+}
+
 // ── ParaPr builder ──────────────────────────────────────────────
 
 /// Builds the `HxParaProperties` list from all para shapes in the store.
@@ -396,6 +417,10 @@ fn build_para_pr(id: u32, ps: &HwpxParaShape) -> HxParaPr {
         id,
         tab_pr_id_ref: 0,
         condense: 0,
+        font_line_height: 0,
+        snap_to_grid: 1,
+        suppress_line_numbers: 0,
+        checked: 0,
         align: Some(HxAlign {
             horizontal: alignment_to_str(ps.alignment).into(),
             vertical: "BASELINE".into(),
@@ -408,6 +433,7 @@ fn build_para_pr(id: u32, ps: &HwpxParaShape) -> HxParaPr {
             keep_with_next: 0,
             keep_lines: 0,
             page_break_before: 0,
+            line_wrap: "BREAK".into(),
         }),
         auto_spacing: Some(HxAutoSpacing { e_asian_eng: 0, e_asian_num: 0 }),
         switch: Some(build_margin_switch(ps)),
@@ -417,6 +443,8 @@ fn build_para_pr(id: u32, ps: &HwpxParaShape) -> HxParaPr {
             offset_right: 0,
             offset_top: 0,
             offset_bottom: 0,
+            connect: 0,
+            ignore_margin: 0,
         }),
     }
 }
@@ -515,6 +543,7 @@ fn build_style(s: &HwpxStyle) -> HxStyle {
         char_pr_id_ref: s.char_pr_id_ref,
         next_style_id_ref: s.next_style_id_ref,
         lang_id: s.lang_id,
+        lock_form: 0,
     }
 }
 
@@ -922,7 +951,7 @@ mod tests {
         assert!(xml.contains("<hh:border borderFillIDRef=\"2\""), "paraPr must have border");
 
         // Gap 3: borderFill id=2 fillBrush
-        assert!(xml.contains("<hh:fillBrush>"), "borderFill id=2 must have fillBrush");
+        assert!(xml.contains("<hc:fillBrush>"), "borderFill id=2 must have fillBrush");
         assert!(xml.contains("<hc:winBrush faceColor=\"none\""), "fillBrush must have winBrush");
         assert!(xml.contains("Crooked=\"0\""), "slash/backSlash must have Crooked attr");
         assert!(xml.contains("isCounter=\"0\""), "slash/backSlash must have isCounter attr");
@@ -936,11 +965,16 @@ mod tests {
 
         // Gap 5: numberings
         assert!(xml.contains("<hh:numberings itemCnt=\"1\""), "numberings must exist");
-        assert!(xml.contains("<hh:paraHead level=\"1\""), "numbering must have paraHead levels");
+        assert!(
+            xml.contains("<hh:paraHead start=\"1\" level=\"1\""),
+            "numbering must have paraHead levels with start attr"
+        );
         assert!(xml.contains("numFormat=\"DIGIT\""), "paraHead must have numFormat");
         assert!(
             xml.contains("charPrIDRef=\"4294967295\""),
             "paraHead must use u32::MAX for no override"
         );
+        assert!(xml.contains("widthAdjust=\"0\""), "paraHead must have widthAdjust attr");
+        assert!(xml.contains("checkable=\"0\""), "paraHead must have checkable attr");
     }
 }

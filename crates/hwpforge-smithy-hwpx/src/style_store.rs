@@ -224,18 +224,68 @@ impl HwpxStyleStore {
     pub fn from_registry(registry: &StyleRegistry) -> Self {
         let mut store = Self::new();
 
+        // Step 1: Ensure 한글-compatible fonts exist
+        // If registry has no fonts, inject default Korean fonts
+        let has_fonts = !registry.fonts.is_empty();
+        let default_font = if has_fonts {
+            registry.fonts[0].as_str()
+        } else {
+            "함초롬바탕" // Fallback if no fonts in registry
+        };
+
         // Fonts: FontId → HwpxFont (mirrored across all 7 language groups)
         // 한글 expects identical font entries for each language group.
         const FONT_LANGS: &[&str] =
             &["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"];
-        for &lang in FONT_LANGS {
-            for (i, font_id) in registry.fonts.iter().enumerate() {
+
+        if has_fonts {
+            for &lang in FONT_LANGS {
+                for (i, font_id) in registry.fonts.iter().enumerate() {
+                    store.push_font(HwpxFont {
+                        id: i as u32,
+                        face_name: font_id.as_str().to_string(),
+                        lang: lang.to_string(),
+                    });
+                }
+            }
+        } else {
+            // No fonts in registry - inject minimal default
+            for &lang in FONT_LANGS {
                 store.push_font(HwpxFont {
-                    id: i as u32,
-                    face_name: font_id.as_str().to_string(),
+                    id: 0,
+                    face_name: default_font.to_string(),
                     lang: lang.to_string(),
                 });
             }
+        }
+
+        // Step 2: Ensure at least one char shape and para shape exist
+        let has_shapes = !registry.char_shapes.is_empty() && !registry.para_shapes.is_empty();
+
+        if !has_shapes {
+            // Inject minimal default char shape (10pt, black, no formatting)
+            store.push_char_shape(HwpxCharShape {
+                font_ref: HwpxFontRef::default(),    // All point to font 0
+                height: HwpUnit::new(1000).unwrap(), // 10pt
+                text_color: Color::BLACK,
+                shade_color: Color::BLACK,
+                bold: false,
+                italic: false,
+                underline_type: "NONE".to_string(),
+                strikeout_shape: "NONE".to_string(),
+            });
+
+            // Inject minimal default para shape (justified, 160% line spacing)
+            store.push_para_shape(HwpxParaShape {
+                alignment: Alignment::Justify,
+                margin_left: HwpUnit::ZERO,
+                margin_right: HwpUnit::ZERO,
+                indent: HwpUnit::ZERO,
+                spacing_before: HwpUnit::ZERO,
+                spacing_after: HwpUnit::ZERO,
+                line_spacing: 160,
+                line_spacing_type: "PERCENT".to_string(),
+            });
         }
 
         // CharShapes: Blueprint CharShape → HwpxCharShape
@@ -294,10 +344,24 @@ impl HwpxStyleStore {
             });
         }
 
-        // Styles: StyleEntry → HwpxStyle (map style names)
+        // Step 3: Inject 한글 required default style FIRST (id=0 MUST be "바탕글")
+        // This ensures compatibility even with minimal Blueprint templates.
+        // Both always reference the first char/para shape (index 0).
+        store.push_style(HwpxStyle {
+            id: 0,
+            style_type: "PARA".to_string(),
+            name: "바탕글".to_string(),
+            eng_name: "Normal".to_string(),
+            para_pr_id_ref: 0,
+            char_pr_id_ref: 0,
+            next_style_id_ref: 0,
+            lang_id: 1042, // Korean
+        });
+
+        // Step 4: Add user's styles from registry (starting from id=1)
         for (i, (name, entry)) in registry.style_entries.iter().enumerate() {
             store.push_style(HwpxStyle {
-                id: i as u32,
+                id: (i + 1) as u32, // Start from id=1 (id=0 is 바탕글)
                 style_type: "PARA".to_string(),
                 name: name.clone(),
                 eng_name: name.clone(),
@@ -815,10 +879,13 @@ mod tests {
         .unwrap();
         let store = HwpxStyleStore::from_registry(&registry);
 
-        assert_eq!(store.font_count(), 0);
-        assert_eq!(store.char_shape_count(), 0);
-        assert_eq!(store.para_shape_count(), 0);
-        assert_eq!(store.style_count(), 0);
+        // Empty registry now injects 한글-compatible defaults:
+        // 1 font × 7 language groups, 1 default char shape, 1 default para shape,
+        // 1 required style (바탕글, id=0)
+        assert_eq!(store.font_count(), 7);
+        assert_eq!(store.char_shape_count(), 1);
+        assert_eq!(store.para_shape_count(), 1);
+        assert_eq!(store.style_count(), 1);
     }
 
     #[test]
@@ -831,7 +898,8 @@ mod tests {
         assert_eq!(store.font_count(), registry.font_count() * 7);
         assert_eq!(store.char_shape_count(), registry.char_shape_count());
         assert_eq!(store.para_shape_count(), registry.para_shape_count());
-        assert_eq!(store.style_count(), registry.style_count());
+        // +1 for injected 바탕글 (id=0) base style
+        assert_eq!(store.style_count(), registry.style_count() + 1);
     }
 
     #[test]
