@@ -16,6 +16,7 @@ categories.workspace = true
 [dependencies]
 hwpforge-foundation = { path = "../hwpforge-foundation" }
 hwpforge-core = { path = "../hwpforge-core" }
+hwpforge-blueprint = { path = "../hwpforge-blueprint" }
 quick-xml = { workspace = true }
 serde = { workspace = true }
 zip = { workspace = true }
@@ -23,3 +24,4 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
+serde_json = { workspace = true }

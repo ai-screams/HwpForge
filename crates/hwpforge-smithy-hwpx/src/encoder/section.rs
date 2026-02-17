@@ -22,8 +22,9 @@ use hwpforge_core::PageSettings;
 use crate::encoder::package::XMLNS_DECLS;
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    HxCellSpan, HxCellSz, HxImg, HxPageMargin, HxPagePr, HxParagraph, HxPic, HxRun, HxSecPr,
-    HxSection, HxSizeAttr, HxSubList, HxTable, HxTableCell, HxTableRow, HxText,
+    HxCellAddr, HxCellSpan, HxCellSz, HxImg, HxLineSeg, HxLineSegArray, HxPageMargin, HxPagePr,
+    HxParagraph, HxPic, HxRun, HxSecPr, HxSection, HxSizeAttr, HxSubList, HxTable, HxTableCell,
+    HxTableMargin, HxTablePos, HxTableRow, HxTableSz, HxText,
 };
 
 /// Maximum nesting depth for tables-within-tables.
@@ -54,7 +55,12 @@ pub(crate) fn encode_section(section: &Section, _section_index: usize) -> HwpxRe
     // We need `<hs:sec xmlns:...>...</hs:sec>`, so strip the outer
     // element and wrap with our template.
     let inner_content = strip_root_element(&inner_xml);
-    Ok(wrap_section_xml(inner_content))
+
+    // Enrich <hp:secPr> with sub-elements required by 한글 (grid,
+    // startNum, visibility, footnote/endnote, pageBorderFill).
+    let enriched = enrich_sec_pr(inner_content);
+
+    Ok(wrap_section_xml(&enriched))
 }
 
 /// Wraps inner XML content in an `<hs:sec>` element with all xmlns declarations.
@@ -114,6 +120,14 @@ fn build_paragraph(
 ) -> HwpxResult<HxParagraph> {
     let runs = build_runs(&para.runs, inject_sec_pr, page_settings, depth)?;
 
+    // Build a placeholder linesegarray with approximate values.
+    // 한글 will recalculate this on open, but having a placeholder
+    // improves initial rendering.
+    let horzsize = page_settings
+        .map(|ps| ps.width.as_i32() - ps.margin_left.as_i32() - ps.margin_right.as_i32())
+        .unwrap_or(DEFAULT_HORZ_SIZE);
+    let linesegarray = Some(build_linesegarray(horzsize));
+
     Ok(HxParagraph {
         id: format!("{para_idx}"),
         para_pr_id_ref: para.para_shape_id.get() as u32,
@@ -122,6 +136,7 @@ fn build_paragraph(
         column_break: 0,
         merged: 0,
         runs,
+        linesegarray,
     })
 }
 
@@ -222,7 +237,22 @@ fn build_sec_pr(ps: &PageSettings) -> HxSecPr {
     }
 }
 
+/// Default inner cell margin (left/right: 510 ≈ 1.8mm, top/bottom: 141 ≈ 0.5mm).
+const DEFAULT_CELL_MARGIN: HxTableMargin =
+    HxTableMargin { left: 510, right: 510, top: 141, bottom: 141 };
+
+/// Default outer table margin (283 ≈ 1mm on all sides).
+const DEFAULT_OUT_MARGIN: HxTableMargin =
+    HxTableMargin { left: 283, right: 283, top: 283, bottom: 283 };
+
+/// `borderFillIDRef` for table cells (matches header.xml borderFill id=3).
+const TABLE_BORDER_FILL_ID: u32 = 3;
+
 /// Builds `HxTable` from a Core `Table`.
+///
+/// Populates all attributes and sub-elements required by 한글:
+/// `hp:sz`, `hp:pos`, `hp:outMargin`, `hp:inMargin`, plus full
+/// attribute set on `<hp:tbl>`.
 ///
 /// # Errors
 ///
@@ -235,20 +265,71 @@ fn build_table(table: &Table, depth: usize) -> HwpxResult<HxTable> {
         });
     }
 
-    let rows =
-        table.rows.iter().map(|row| build_table_row(row, depth)).collect::<HwpxResult<Vec<_>>>()?;
-
     let col_cnt = table.rows.iter().map(|r| r.cells.len()).max().unwrap_or(0) as u32;
 
-    Ok(HxTable { row_cnt: table.rows.len() as u32, col_cnt, rows })
+    let rows = table
+        .rows
+        .iter()
+        .enumerate()
+        .map(|(row_idx, row)| build_table_row(row, row_idx as u32, depth))
+        .collect::<HwpxResult<Vec<_>>>()?;
+
+    // Table width: use explicit width or sum of first row's cell widths
+    let table_width = table.width.map(|w| w.as_i32()).unwrap_or_else(|| {
+        table
+            .rows
+            .first()
+            .map_or(DEFAULT_HORZ_SIZE, |r| r.cells.iter().map(|c| c.width.as_i32()).sum())
+    });
+
+    Ok(HxTable {
+        id: String::new(),
+        z_order: 0,
+        numbering_type: "TABLE".to_string(),
+        text_wrap: "TOP_AND_BOTTOM".to_string(),
+        text_flow: "BOTH_SIDES".to_string(),
+        lock: 0,
+        dropcap_style: "None".to_string(),
+        page_break: "CELL".to_string(),
+        repeat_header: 1,
+        row_cnt: table.rows.len() as u32,
+        col_cnt,
+        cell_spacing: 0,
+        border_fill_id_ref: TABLE_BORDER_FILL_ID,
+        no_adjust: 0,
+        sz: Some(HxTableSz {
+            width: table_width,
+            width_rel_to: "ABSOLUTE".to_string(),
+            height: 0,
+            height_rel_to: "ABSOLUTE".to_string(),
+            protect: 0,
+        }),
+        pos: Some(HxTablePos {
+            treat_as_char: 0,
+            affect_l_spacing: 0,
+            flow_with_text: 1,
+            allow_overlap: 0,
+            hold_anchor_and_so: 0,
+            vert_rel_to: "PARA".to_string(),
+            horz_rel_to: "COLUMN".to_string(),
+            vert_align: "TOP".to_string(),
+            horz_align: "LEFT".to_string(),
+            vert_offset: 0,
+            horz_offset: 0,
+        }),
+        out_margin: Some(DEFAULT_OUT_MARGIN),
+        in_margin: Some(DEFAULT_CELL_MARGIN),
+        rows,
+    })
 }
 
 /// Builds `HxTableRow` from a Core `TableRow`.
-fn build_table_row(row: &TableRow, depth: usize) -> HwpxResult<HxTableRow> {
+fn build_table_row(row: &TableRow, row_idx: u32, depth: usize) -> HwpxResult<HxTableRow> {
     let cells = row
         .cells
         .iter()
-        .map(|cell| build_table_cell(cell, depth))
+        .enumerate()
+        .map(|(col_idx, cell)| build_table_cell(cell, col_idx as u32, row_idx, depth))
         .collect::<HwpxResult<Vec<_>>>()?;
 
     Ok(HxTableRow { cells })
@@ -257,7 +338,13 @@ fn build_table_row(row: &TableRow, depth: usize) -> HwpxResult<HxTableRow> {
 /// Builds `HxTableCell` from a Core `TableCell`.
 ///
 /// Cell paragraphs are built recursively at `depth + 1` to track nesting.
-fn build_table_cell(cell: &TableCell, depth: usize) -> HwpxResult<HxTableCell> {
+/// `col_idx` and `row_idx` are used to populate `<hp:cellAddr>`.
+fn build_table_cell(
+    cell: &TableCell,
+    col_idx: u32,
+    row_idx: u32,
+    depth: usize,
+) -> HwpxResult<HxTableCell> {
     let paragraphs = cell
         .paragraphs
         .iter()
@@ -267,12 +354,32 @@ fn build_table_cell(cell: &TableCell, depth: usize) -> HwpxResult<HxTableCell> {
 
     Ok(HxTableCell {
         name: String::new(),
+        header: 0,
+        has_margin: 0,
+        protect: 0,
+        editable: 0,
+        dirty: 0,
+        border_fill_id_ref: TABLE_BORDER_FILL_ID,
+        sub_list: Some(HxSubList {
+            id: String::new(),
+            text_direction: "HORIZONTAL".to_string(),
+            line_wrap: "BREAK".to_string(),
+            vert_align: "CENTER".to_string(),
+            link_list_id_ref: 0,
+            link_list_next_id_ref: 0,
+            text_width: 0,
+            text_height: 0,
+            has_text_ref: 0,
+            has_num_ref: 0,
+            paragraphs,
+        }),
+        cell_addr: Some(HxCellAddr { col_addr: col_idx, row_addr: row_idx }),
         cell_span: Some(HxCellSpan {
             col_span: cell.col_span as u32,
             row_span: cell.row_span as u32,
         }),
         cell_sz: Some(HxCellSz { width: cell.width.as_i32(), height: 0 }),
-        sub_list: Some(HxSubList { paragraphs }),
+        cell_margin: Some(DEFAULT_CELL_MARGIN),
     })
 }
 
@@ -290,6 +397,124 @@ fn build_picture(img: &Image) -> HxPic {
         org_sz: None,
         cur_sz: Some(HxSizeAttr { width: img.width.as_i32(), height: img.height.as_i32() }),
     }
+}
+
+// ── Linesegarray placeholder ─────────────────────────────────────
+
+/// Default horizontal size for A4 with 30mm margins (59528 - 8504 - 8504).
+const DEFAULT_HORZ_SIZE: i32 = 42520;
+
+/// Default char height in HWPUNIT (10pt = 1000).
+const DEFAULT_CHAR_HEIGHT: i32 = 1000;
+
+/// Builds a minimal placeholder `HxLineSegArray` with one line segment.
+///
+/// Uses fixed defaults for char height (10pt) and calculates baseline
+/// and spacing from standard ratios. 한글 recalculates these on open,
+/// so exact values are not critical.
+fn build_linesegarray(horzsize: i32) -> HxLineSegArray {
+    let vertsize = DEFAULT_CHAR_HEIGHT;
+    let baseline = vertsize * 85 / 100;
+    let spacing = 600; // default for ~160% line spacing
+    HxLineSegArray {
+        items: vec![HxLineSeg {
+            textpos: 0,
+            vertpos: 0,
+            vertsize,
+            textheight: vertsize,
+            baseline,
+            spacing,
+            horzpos: 0,
+            horzsize,
+            flags: 393216,
+        }],
+    }
+}
+
+// ── 한글 compatibility: secPr enrichment ────────────────────────
+
+/// Enriched `<hp:secPr>` opening tag with all attributes 한글 expects.
+const SEC_PR_OPEN_ENRICHED: &str = concat!(
+    r#"<hp:secPr id="" textDirection="HORIZONTAL" "#,
+    r#"spaceColumns="1134" tabStop="8000" tabStopVal="4000" tabStopUnit="HWPUNIT" "#,
+    r#"outlineShapeIDRef="1" memoShapeIDRef="0" textVerticalWidthHead="0" masterPageCnt="0">"#,
+);
+
+/// Sub-elements inserted before `<hp:pagePr>` inside secPr.
+const SEC_PR_PRE_ELEMENTS: &str = concat!(
+    r#"<hp:grid lineGrid="0" charGrid="0" wonggojiFormat="0"/>"#,
+    r#"<hp:startNum pageStartsOn="BOTH" page="0" pic="0" tbl="0" equation="0"/>"#,
+    r#"<hp:visibility hideFirstHeader="0" hideFirstFooter="0" hideFirstMasterPage="0" "#,
+    r#"border="SHOW_ALL" fill="SHOW_ALL" hideFirstPageNum="0" hideFirstEmptyLine="0" showLineNumber="0"/>"#,
+    r#"<hp:lineNumberShape restartType="0" countBy="0" distance="0" startNumber="0"/>"#,
+);
+
+/// Sub-elements inserted after `</hp:pagePr>` and before `</hp:secPr>`.
+const SEC_PR_POST_ELEMENTS: &str = concat!(
+    r#"<hp:footNotePr>"#,
+    r#"<hp:autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar=")" supscript="0"/>"#,
+    r##"<hp:noteLine length="-1" type="SOLID" width="0.12 mm" color="#000000"/>"##,
+    r#"<hp:noteSpacing betweenNotes="283" belowLine="567" aboveLine="850"/>"#,
+    r#"<hp:numbering type="CONTINUOUS" newNum="1"/>"#,
+    r#"<hp:placement place="EACH_COLUMN" beneathText="0"/>"#,
+    r#"</hp:footNotePr>"#,
+    r#"<hp:endNotePr>"#,
+    r#"<hp:autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar=")" supscript="0"/>"#,
+    r##"<hp:noteLine length="14692344" type="SOLID" width="0.12 mm" color="#000000"/>"##,
+    r#"<hp:noteSpacing betweenNotes="0" belowLine="567" aboveLine="850"/>"#,
+    r#"<hp:numbering type="CONTINUOUS" newNum="1"/>"#,
+    r#"<hp:placement place="END_OF_DOCUMENT" beneathText="0"/>"#,
+    r#"</hp:endNotePr>"#,
+    r#"<hp:pageBorderFill type="BOTH" borderFillIDRef="1" textBorder="PAPER" headerInside="0" footerInside="0" fillArea="PAPER">"#,
+    r#"<hp:offset left="1417" right="1417" top="1417" bottom="1417"/>"#,
+    r#"</hp:pageBorderFill>"#,
+    r#"<hp:pageBorderFill type="EVEN" borderFillIDRef="1" textBorder="PAPER" headerInside="0" footerInside="0" fillArea="PAPER">"#,
+    r#"<hp:offset left="1417" right="1417" top="1417" bottom="1417"/>"#,
+    r#"</hp:pageBorderFill>"#,
+    r#"<hp:pageBorderFill type="ODD" borderFillIDRef="1" textBorder="PAPER" headerInside="0" footerInside="0" fillArea="PAPER">"#,
+    r#"<hp:offset left="1417" right="1417" top="1417" bottom="1417"/>"#,
+    r#"</hp:pageBorderFill>"#,
+);
+
+/// Column properties injected after `</hp:secPr>` inside the first run.
+///
+/// Single-column default layout matching 한글's standard output.
+const COL_PR_XML: &str = concat!(
+    r#"<hp:ctrl>"#,
+    r#"<hp:colPr id="" type="NEWSPAPER" layout="LEFT" colCount="1" sameSz="1" sameGap="0"/>"#,
+    r#"</hp:ctrl>"#,
+);
+
+/// Enriches the minimal `<hp:secPr>` output with sub-elements required
+/// by 한글 for proper rendering.
+///
+/// Replaces the opening tag with an enriched version carrying all expected
+/// attributes, inserts grid/visibility elements before `<hp:pagePr>`,
+/// appends footnote/endnote/pageBorderFill after `</hp:pagePr>`,
+/// and injects `<hp:ctrl><hp:colPr>` after the closing `</hp:secPr>`.
+fn enrich_sec_pr(xml: &str) -> String {
+    let minimal_open = r#"<hp:secPr textDirection="HORIZONTAL">"#;
+
+    // If no secPr to enrich, return as-is
+    if !xml.contains(minimal_open) {
+        return xml.to_string();
+    }
+
+    let mut result =
+        xml.replacen(minimal_open, &format!("{SEC_PR_OPEN_ENRICHED}{SEC_PR_PRE_ELEMENTS}"), 1);
+
+    // Insert post-elements before the first </hp:secPr>
+    if let Some(pos) = result.find("</hp:secPr>") {
+        result.insert_str(pos, SEC_PR_POST_ELEMENTS);
+    }
+
+    // Insert colPr after </hp:secPr>
+    if let Some(pos) = result.find("</hp:secPr>") {
+        let insert_pos = pos + "</hp:secPr>".len();
+        result.insert_str(insert_pos, COL_PR_XML);
+    }
+
+    result
 }
 
 #[cfg(test)]
@@ -323,6 +548,19 @@ mod tests {
         assert!(xml.contains("<hs:sec"), "missing <hs:sec> root");
         assert!(xml.contains("</hs:sec>"), "missing </hs:sec> close");
         assert!(xml.contains("<hp:p "), "missing <hp:p>");
+
+        // Verify Gap 6: colPr is injected after </hp:secPr>
+        assert!(xml.contains("<hp:ctrl>"), "missing <hp:ctrl>");
+        assert!(
+            xml.contains("<hp:colPr id=\"\" type=\"NEWSPAPER\" layout=\"LEFT\" colCount=\"1\""),
+            "missing colPr with correct attributes"
+        );
+        assert!(xml.contains("sameSz=\"1\" sameGap=\"0\""), "colPr missing sameSz/sameGap");
+
+        // Verify colPr appears AFTER </hp:secPr> and BEFORE <hp:t>
+        let sec_pr_end = xml.find("</hp:secPr>").expect("secPr must be present");
+        let col_pr_pos = xml.find("<hp:colPr").expect("colPr must be present");
+        assert!(col_pr_pos > sec_pr_end, "colPr must come after </hp:secPr>");
         assert!(xml.contains("<hp:run "), "missing <hp:run>");
         assert!(xml.contains("<hp:t>텍스트</hp:t>"), "missing text content");
         assert!(xml.contains(r#"xmlns:hp="#), "missing xmlns:hp namespace");

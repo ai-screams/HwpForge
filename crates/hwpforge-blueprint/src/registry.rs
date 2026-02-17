@@ -22,6 +22,7 @@
 
 use std::collections::BTreeMap;
 
+use indexmap::IndexMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -84,8 +85,8 @@ pub struct StyleRegistry {
     pub char_shapes: Vec<CharShape>,
     /// All resolved paragraph shapes.
     pub para_shapes: Vec<ParaShape>,
-    /// Mapping from style name to its indices.
-    pub style_entries: BTreeMap<String, StyleEntry>,
+    /// Mapping from style name to its indices (insertion-order preserved).
+    pub style_entries: IndexMap<String, StyleEntry>,
 }
 
 impl StyleRegistry {
@@ -128,7 +129,7 @@ impl StyleRegistry {
         let mut fonts = Vec::new();
         let mut char_shapes = Vec::new();
         let mut para_shapes = Vec::new();
-        let mut style_entries = BTreeMap::new();
+        let mut style_entries = IndexMap::new();
 
         // Font name → FontIndex mapping for deduplication
         let mut font_indices: BTreeMap<String, FontIndex> = BTreeMap::new();
@@ -261,7 +262,7 @@ fn validate_style_name(name: &str) -> BlueprintResult<()> {
 /// Validates that all non-None MarkdownMapping references point to existing styles.
 fn validate_mapping_references(
     md: &crate::template::MarkdownMapping,
-    styles: &BTreeMap<String, StyleEntry>,
+    styles: &IndexMap<String, StyleEntry>,
 ) -> BlueprintResult<()> {
     let fields: &[(&str, &Option<String>)] = &[
         ("body", &md.body),
@@ -315,7 +316,7 @@ mod tests {
     }
 
     // Helper: create a minimal Template with given styles
-    fn make_template(styles: BTreeMap<String, PartialStyle>) -> Template {
+    fn make_template(styles: IndexMap<String, PartialStyle>) -> Template {
         Template {
             meta: TemplateMeta {
                 name: "test".to_string(),
@@ -331,7 +332,7 @@ mod tests {
 
     #[test]
     fn from_template_single_style() {
-        let mut styles = BTreeMap::new();
+        let mut styles = IndexMap::new();
         styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
 
         let template = make_template(styles);
@@ -350,7 +351,7 @@ mod tests {
 
     #[test]
     fn from_template_multiple_styles() {
-        let mut styles = BTreeMap::new();
+        let mut styles = IndexMap::new();
         styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
         styles.insert("heading".to_string(), make_partial_style("Dotum", 16.0));
 
@@ -371,7 +372,7 @@ mod tests {
 
     #[test]
     fn font_deduplication_same_font() {
-        let mut styles = BTreeMap::new();
+        let mut styles = IndexMap::new();
         styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
         styles.insert("heading".to_string(), make_partial_style("Batang", 16.0));
 
@@ -391,7 +392,7 @@ mod tests {
 
     #[test]
     fn font_deduplication_different_fonts() {
-        let mut styles = BTreeMap::new();
+        let mut styles = IndexMap::new();
         styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
         styles.insert("heading".to_string(), make_partial_style("Dotum", 16.0));
 
@@ -412,7 +413,7 @@ mod tests {
 
     #[test]
     fn get_style_by_name() {
-        let mut styles = BTreeMap::new();
+        let mut styles = IndexMap::new();
         styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
 
         let template = make_template(styles);
@@ -426,7 +427,7 @@ mod tests {
 
     #[test]
     fn char_shape_by_index() {
-        let mut styles = BTreeMap::new();
+        let mut styles = IndexMap::new();
         styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
 
         let template = make_template(styles);
@@ -441,7 +442,7 @@ mod tests {
 
     #[test]
     fn para_shape_by_index() {
-        let mut styles = BTreeMap::new();
+        let mut styles = IndexMap::new();
         styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
 
         let template = make_template(styles);
@@ -458,7 +459,7 @@ mod tests {
 
     #[test]
     fn empty_template_error() {
-        let template = make_template(BTreeMap::new());
+        let template = make_template(IndexMap::new());
 
         let err = StyleRegistry::from_template(&template).unwrap_err();
         assert!(matches!(err, BlueprintError::EmptyStyleMap));
@@ -466,7 +467,7 @@ mod tests {
 
     #[test]
     fn missing_font_error() {
-        let mut styles = BTreeMap::new();
+        let mut styles = IndexMap::new();
         styles.insert(
             "broken".to_string(),
             PartialStyle {
@@ -493,7 +494,7 @@ mod tests {
 
     #[test]
     fn missing_size_error() {
-        let mut styles = BTreeMap::new();
+        let mut styles = IndexMap::new();
         styles.insert(
             "broken".to_string(),
             PartialStyle {
@@ -520,7 +521,7 @@ mod tests {
 
     #[test]
     fn serde_roundtrip_style_registry() {
-        let mut styles = BTreeMap::new();
+        let mut styles = IndexMap::new();
         styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
         styles.insert("heading".to_string(), make_partial_style("Dotum", 16.0));
 
@@ -552,7 +553,7 @@ mod tests {
 
     #[test]
     fn font_count() {
-        let mut styles = BTreeMap::new();
+        let mut styles = IndexMap::new();
         styles.insert("a".to_string(), make_partial_style("Batang", 10.0));
         styles.insert("b".to_string(), make_partial_style("Batang", 12.0)); // Same font
         styles.insert("c".to_string(), make_partial_style("Dotum", 10.0)); // Different
@@ -565,7 +566,7 @@ mod tests {
 
     #[test]
     fn char_shape_count() {
-        let mut styles = BTreeMap::new();
+        let mut styles = IndexMap::new();
         styles.insert("a".to_string(), make_partial_style("Batang", 10.0));
         styles.insert("b".to_string(), make_partial_style("Batang", 12.0));
 
@@ -577,7 +578,7 @@ mod tests {
 
     #[test]
     fn para_shape_count() {
-        let mut styles = BTreeMap::new();
+        let mut styles = IndexMap::new();
         styles.insert("a".to_string(), make_partial_style("Batang", 10.0));
         styles.insert("b".to_string(), make_partial_style("Dotum", 12.0));
 
@@ -589,7 +590,7 @@ mod tests {
 
     #[test]
     fn style_count() {
-        let mut styles = BTreeMap::new();
+        let mut styles = IndexMap::new();
         styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
         styles.insert("heading".to_string(), make_partial_style("Dotum", 16.0));
 
@@ -601,7 +602,7 @@ mod tests {
 
     #[test]
     fn valid_style_names_accepted() {
-        let mut styles = BTreeMap::new();
+        let mut styles = IndexMap::new();
         styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
         styles.insert("heading1".to_string(), make_partial_style("Batang", 16.0));
         styles.insert("_private".to_string(), make_partial_style("Batang", 12.0));
@@ -613,7 +614,7 @@ mod tests {
 
     #[test]
     fn invalid_style_name_with_spaces() {
-        let mut styles = BTreeMap::new();
+        let mut styles = IndexMap::new();
         styles.insert("body style".to_string(), make_partial_style("Batang", 10.0));
 
         let template = make_template(styles);
@@ -623,7 +624,7 @@ mod tests {
 
     #[test]
     fn invalid_style_name_starts_with_digit() {
-        let mut styles = BTreeMap::new();
+        let mut styles = IndexMap::new();
         styles.insert("1heading".to_string(), make_partial_style("Batang", 10.0));
 
         let template = make_template(styles);
@@ -633,7 +634,7 @@ mod tests {
 
     #[test]
     fn invalid_style_name_special_chars() {
-        let mut styles = BTreeMap::new();
+        let mut styles = IndexMap::new();
         styles.insert("body-style".to_string(), make_partial_style("Batang", 10.0));
 
         let template = make_template(styles);
@@ -643,7 +644,7 @@ mod tests {
 
     #[test]
     fn markdown_mapping_valid_references() {
-        let mut styles = BTreeMap::new();
+        let mut styles = IndexMap::new();
         styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
         styles.insert("heading".to_string(), make_partial_style("Batang", 16.0));
 
@@ -670,7 +671,7 @@ mod tests {
 
     #[test]
     fn markdown_mapping_invalid_reference_error() {
-        let mut styles = BTreeMap::new();
+        let mut styles = IndexMap::new();
         styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
 
         let template = Template {

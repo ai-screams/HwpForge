@@ -47,7 +47,13 @@ pub struct HxParagraph {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub runs: Vec<HxRun>,
-    // <hp:linesegarray> — silently ignored
+    /// Line segment array for layout hints.
+    #[serde(
+        rename(serialize = "hp:linesegarray", deserialize = "linesegarray"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub linesegarray: Option<HxLineSegArray>,
 }
 
 // ── Run ───────────────────────────────────────────────────────────
@@ -165,27 +171,180 @@ pub struct HxPageMargin {
     pub bottom: i32,
 }
 
+// ── Line Segment Array ────────────────────────────────────────────
+
+/// `<hp:linesegarray>` — container for line layout segments.
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
+pub struct HxLineSegArray {
+    /// Individual line segments.
+    #[serde(
+        rename(serialize = "hp:lineseg", deserialize = "lineseg"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub items: Vec<HxLineSeg>,
+}
+
+/// `<hp:lineseg>` — a single line layout segment with position/size hints.
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub struct HxLineSeg {
+    /// Character position in the paragraph where this line starts.
+    #[serde(rename = "@textpos", default)]
+    pub textpos: u32,
+    /// Vertical position from the top of the paragraph (HWPUNIT).
+    #[serde(rename = "@vertpos", default)]
+    pub vertpos: i32,
+    /// Vertical size of the line (HWPUNIT).
+    #[serde(rename = "@vertsize", default)]
+    pub vertsize: i32,
+    /// Text height within the line (HWPUNIT).
+    #[serde(rename = "@textheight", default)]
+    pub textheight: i32,
+    /// Baseline position from the top of the line (HWPUNIT).
+    #[serde(rename = "@baseline", default)]
+    pub baseline: i32,
+    /// Line spacing value (HWPUNIT).
+    #[serde(rename = "@spacing", default)]
+    pub spacing: i32,
+    /// Horizontal position of the line start (HWPUNIT).
+    #[serde(rename = "@horzpos", default)]
+    pub horzpos: i32,
+    /// Horizontal size available for text (HWPUNIT).
+    #[serde(rename = "@horzsize", default)]
+    pub horzsize: i32,
+    /// Layout flags (393216 = standard value).
+    #[serde(rename = "@flags", default)]
+    pub flags: u32,
+}
+
 // ── Table ─────────────────────────────────────────────────────────
 
-/// `<hp:tbl ... rowCnt="3" colCnt="2">`.
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+/// `<hp:tbl>` — full table element with all attributes required by 한글.
+///
+/// Field order matters for serialization: attributes first, then
+/// `hp:sz`, `hp:pos`, `hp:outMargin`, `hp:inMargin`, then `hp:tr` rows.
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct HxTable {
+    // ── Attributes ──
+    #[serde(rename = "@id", default)]
+    pub id: String,
+    #[serde(rename = "@zOrder", default)]
+    pub z_order: u32,
+    #[serde(rename = "@numberingType", default)]
+    pub numbering_type: String,
+    #[serde(rename = "@textWrap", default)]
+    pub text_wrap: String,
+    #[serde(rename = "@textFlow", default)]
+    pub text_flow: String,
+    #[serde(rename = "@lock", default)]
+    pub lock: u32,
+    #[serde(rename = "@dropcapstyle", default)]
+    pub dropcap_style: String,
+    #[serde(rename = "@pageBreak", default)]
+    pub page_break: String,
+    #[serde(rename = "@repeatHeader", default)]
+    pub repeat_header: u32,
     #[serde(rename = "@rowCnt", default)]
     pub row_cnt: u32,
     #[serde(rename = "@colCnt", default)]
     pub col_cnt: u32,
+    #[serde(rename = "@cellSpacing", default)]
+    pub cell_spacing: u32,
+    #[serde(rename = "@borderFillIDRef", default)]
+    pub border_fill_id_ref: u32,
+    #[serde(rename = "@noAdjust", default)]
+    pub no_adjust: u32,
 
+    // ── Sub-elements (order: sz → pos → outMargin → inMargin → rows) ──
+    #[serde(
+        rename(serialize = "hp:sz", deserialize = "sz"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sz: Option<HxTableSz>,
+    #[serde(
+        rename(serialize = "hp:pos", deserialize = "pos"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pos: Option<HxTablePos>,
+    #[serde(
+        rename(serialize = "hp:outMargin", deserialize = "outMargin"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub out_margin: Option<HxTableMargin>,
+    #[serde(
+        rename(serialize = "hp:inMargin", deserialize = "inMargin"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub in_margin: Option<HxTableMargin>,
     #[serde(
         rename(serialize = "hp:tr", deserialize = "tr"),
         default,
         skip_serializing_if = "Vec::is_empty"
     )]
     pub rows: Vec<HxTableRow>,
-    // hp:caption, hp:tblPr — ignored
+}
+
+/// `<hp:sz>` — table size specification.
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct HxTableSz {
+    #[serde(rename = "@width", default)]
+    pub width: i32,
+    #[serde(rename = "@widthRelTo", default)]
+    pub width_rel_to: String,
+    #[serde(rename = "@height", default)]
+    pub height: i32,
+    #[serde(rename = "@heightRelTo", default)]
+    pub height_rel_to: String,
+    #[serde(rename = "@protect", default)]
+    pub protect: u32,
+}
+
+/// `<hp:pos>` — table position specification.
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct HxTablePos {
+    #[serde(rename = "@treatAsChar", default)]
+    pub treat_as_char: u32,
+    #[serde(rename = "@affectLSpacing", default)]
+    pub affect_l_spacing: u32,
+    #[serde(rename = "@flowWithText", default)]
+    pub flow_with_text: u32,
+    #[serde(rename = "@allowOverlap", default)]
+    pub allow_overlap: u32,
+    #[serde(rename = "@holdAnchorAndSO", default)]
+    pub hold_anchor_and_so: u32,
+    #[serde(rename = "@vertRelTo", default)]
+    pub vert_rel_to: String,
+    #[serde(rename = "@horzRelTo", default)]
+    pub horz_rel_to: String,
+    #[serde(rename = "@vertAlign", default)]
+    pub vert_align: String,
+    #[serde(rename = "@horzAlign", default)]
+    pub horz_align: String,
+    #[serde(rename = "@vertOffset", default)]
+    pub vert_offset: i32,
+    #[serde(rename = "@horzOffset", default)]
+    pub horz_offset: i32,
+}
+
+/// `<hp:outMargin>` / `<hp:inMargin>` / `<hp:cellMargin>` — margin specification.
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct HxTableMargin {
+    #[serde(rename = "@left", default)]
+    pub left: i32,
+    #[serde(rename = "@right", default)]
+    pub right: i32,
+    #[serde(rename = "@top", default)]
+    pub top: i32,
+    #[serde(rename = "@bottom", default)]
+    pub bottom: i32,
 }
 
 /// `<hp:tr>`.
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct HxTableRow {
     #[serde(
         rename(serialize = "hp:tc", deserialize = "tc"),
@@ -195,12 +354,41 @@ pub struct HxTableRow {
     pub cells: Vec<HxTableCell>,
 }
 
-/// `<hp:tc>`.
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+/// `<hp:tc>` — table cell with all attributes required by 한글.
+///
+/// Field order: attributes, then `hp:subList`, `hp:cellAddr`,
+/// `hp:cellSpan`, `hp:cellSz`, `hp:cellMargin`.
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct HxTableCell {
+    // ── Attributes ──
     #[serde(rename = "@name", default)]
     pub name: String,
+    #[serde(rename = "@header", default)]
+    pub header: u32,
+    #[serde(rename = "@hasMargin", default)]
+    pub has_margin: u32,
+    #[serde(rename = "@protect", default)]
+    pub protect: u32,
+    #[serde(rename = "@editable", default)]
+    pub editable: u32,
+    #[serde(rename = "@dirty", default)]
+    pub dirty: u32,
+    #[serde(rename = "@borderFillIDRef", default)]
+    pub border_fill_id_ref: u32,
 
+    // ── Sub-elements (order: subList → cellAddr → cellSpan → cellSz → cellMargin) ──
+    #[serde(
+        rename(serialize = "hp:subList", deserialize = "subList"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sub_list: Option<HxSubList>,
+    #[serde(
+        rename(serialize = "hp:cellAddr", deserialize = "cellAddr"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub cell_addr: Option<HxCellAddr>,
     #[serde(
         rename(serialize = "hp:cellSpan", deserialize = "cellSpan"),
         default,
@@ -214,16 +402,24 @@ pub struct HxTableCell {
     )]
     pub cell_sz: Option<HxCellSz>,
     #[serde(
-        rename(serialize = "hp:subList", deserialize = "subList"),
+        rename(serialize = "hp:cellMargin", deserialize = "cellMargin"),
         default,
         skip_serializing_if = "Option::is_none"
     )]
-    pub sub_list: Option<HxSubList>,
-    // hp:cellAddr, hp:cellMargin, hh:borderFill — ignored
+    pub cell_margin: Option<HxTableMargin>,
+}
+
+/// `<hp:cellAddr colAddr="0" rowAddr="0"/>`.
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct HxCellAddr {
+    #[serde(rename = "@colAddr", default)]
+    pub col_addr: u32,
+    #[serde(rename = "@rowAddr", default)]
+    pub row_addr: u32,
 }
 
 /// `<hp:cellSpan rowSpan="1" colSpan="1"/>`.
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct HxCellSpan {
     #[serde(rename = "@rowSpan", default = "default_one")]
     pub row_span: u32,
@@ -236,7 +432,7 @@ fn default_one() -> u32 {
 }
 
 /// `<hp:cellSz width="..." height="..."/>`.
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct HxCellSz {
     #[serde(rename = "@width", default)]
     pub width: i32,
@@ -245,8 +441,31 @@ pub struct HxCellSz {
 }
 
 /// `<hp:subList>` — container for paragraphs inside a table cell.
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+///
+/// Includes layout attributes required by 한글 (textDirection, lineWrap, etc.).
+#[derive(Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct HxSubList {
+    #[serde(rename = "@id", default)]
+    pub id: String,
+    #[serde(rename = "@textDirection", default)]
+    pub text_direction: String,
+    #[serde(rename = "@lineWrap", default)]
+    pub line_wrap: String,
+    #[serde(rename = "@vertAlign", default)]
+    pub vert_align: String,
+    #[serde(rename = "@linkListIDRef", default)]
+    pub link_list_id_ref: u32,
+    #[serde(rename = "@linkListNextIDRef", default)]
+    pub link_list_next_id_ref: u32,
+    #[serde(rename = "@textWidth", default)]
+    pub text_width: u32,
+    #[serde(rename = "@textHeight", default)]
+    pub text_height: u32,
+    #[serde(rename = "@hasTextRef", default)]
+    pub has_text_ref: u32,
+    #[serde(rename = "@hasNumRef", default)]
+    pub has_num_ref: u32,
+
     #[serde(
         rename(serialize = "hp:p", deserialize = "p"),
         default,

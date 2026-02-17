@@ -7,7 +7,10 @@
 //! All fields use Foundation types (`Color`, `HwpUnit`, `Alignment`)
 //! so downstream code never touches raw XML strings.
 
-use hwpforge_foundation::{Alignment, CharShapeIndex, Color, FontIndex, HwpUnit, ParaShapeIndex};
+use hwpforge_blueprint::registry::StyleRegistry;
+use hwpforge_foundation::{
+    Alignment, CharShapeIndex, Color, FontIndex, HwpUnit, LineSpacingType, ParaShapeIndex,
+};
 
 use crate::error::{HwpxError, HwpxResult};
 
@@ -208,6 +211,170 @@ impl HwpxStyleStore {
         Self::default()
     }
 
+    /// Creates a store from a Blueprint [`StyleRegistry`].
+    ///
+    /// This is the **bridge** that lets the MD → Core → HWPX pipeline
+    /// carry resolved styles all the way through to the HWPX encoder.
+    ///
+    /// Mapping:
+    /// - `registry.fonts` → [`HwpxFont`] (assigned to HANGUL group)
+    /// - `registry.char_shapes` → [`HwpxCharShape`] (font ref mirrors same index for all lang groups)
+    /// - `registry.para_shapes` → [`HwpxParaShape`]
+    /// - `registry.style_entries` → [`HwpxStyle`] (PARA type, Korean langID)
+    pub fn from_registry(registry: &StyleRegistry) -> Self {
+        let mut store = Self::new();
+
+        // Step 1: Ensure 한글-compatible fonts exist
+        // If registry has no fonts, inject default Korean fonts
+        let has_fonts = !registry.fonts.is_empty();
+        let default_font = if has_fonts {
+            registry.fonts[0].as_str()
+        } else {
+            "함초롬바탕" // Fallback if no fonts in registry
+        };
+
+        // Fonts: FontId → HwpxFont (mirrored across all 7 language groups)
+        // 한글 expects identical font entries for each language group.
+        const FONT_LANGS: &[&str] =
+            &["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"];
+
+        if has_fonts {
+            for &lang in FONT_LANGS {
+                for (i, font_id) in registry.fonts.iter().enumerate() {
+                    store.push_font(HwpxFont {
+                        id: i as u32,
+                        face_name: font_id.as_str().to_string(),
+                        lang: lang.to_string(),
+                    });
+                }
+            }
+        } else {
+            // No fonts in registry - inject minimal default
+            for &lang in FONT_LANGS {
+                store.push_font(HwpxFont {
+                    id: 0,
+                    face_name: default_font.to_string(),
+                    lang: lang.to_string(),
+                });
+            }
+        }
+
+        // Step 2: Ensure at least one char shape and para shape exist
+        let has_shapes = !registry.char_shapes.is_empty() && !registry.para_shapes.is_empty();
+
+        if !has_shapes {
+            // Inject minimal default char shape (10pt, black, no formatting)
+            store.push_char_shape(HwpxCharShape {
+                font_ref: HwpxFontRef::default(),    // All point to font 0
+                height: HwpUnit::new(1000).unwrap(), // 10pt
+                text_color: Color::BLACK,
+                shade_color: Color::BLACK,
+                bold: false,
+                italic: false,
+                underline_type: "NONE".to_string(),
+                strikeout_shape: "NONE".to_string(),
+            });
+
+            // Inject minimal default para shape (justified, 160% line spacing)
+            store.push_para_shape(HwpxParaShape {
+                alignment: Alignment::Justify,
+                margin_left: HwpUnit::ZERO,
+                margin_right: HwpUnit::ZERO,
+                indent: HwpUnit::ZERO,
+                spacing_before: HwpUnit::ZERO,
+                spacing_after: HwpUnit::ZERO,
+                line_spacing: 160,
+                line_spacing_type: "PERCENT".to_string(),
+            });
+        }
+
+        // CharShapes: Blueprint CharShape → HwpxCharShape
+        for cs in &registry.char_shapes {
+            let font_idx = registry
+                .fonts
+                .iter()
+                .position(|f| f.as_str() == cs.font)
+                .map(FontIndex::new)
+                .unwrap_or(FontIndex::new(0));
+            let font_ref = HwpxFontRef {
+                hangul: font_idx,
+                latin: font_idx,
+                hanja: font_idx,
+                japanese: font_idx,
+                other: font_idx,
+                symbol: font_idx,
+                user: font_idx,
+            };
+            store.push_char_shape(HwpxCharShape {
+                font_ref,
+                height: cs.size,
+                text_color: cs.color,
+                shade_color: Color::BLACK,
+                bold: cs.bold,
+                italic: cs.italic,
+                underline_type: if cs.underline {
+                    "BOTTOM".to_string()
+                } else {
+                    "NONE".to_string()
+                },
+                strikeout_shape: if cs.strikethrough {
+                    "SLASH".to_string()
+                } else {
+                    "NONE".to_string()
+                },
+            });
+        }
+
+        // ParaShapes: Blueprint ParaShape → HwpxParaShape
+        for ps in &registry.para_shapes {
+            store.push_para_shape(HwpxParaShape {
+                alignment: ps.alignment,
+                margin_left: ps.indent_left,
+                margin_right: ps.indent_right,
+                indent: ps.indent_first_line,
+                spacing_before: ps.space_before,
+                spacing_after: ps.space_after,
+                line_spacing: ps.line_spacing_value.round() as i32,
+                line_spacing_type: match ps.line_spacing_type {
+                    LineSpacingType::Percentage => "PERCENT".to_string(),
+                    LineSpacingType::Fixed => "FIXED".to_string(),
+                    LineSpacingType::BetweenLines => "BETWEEN_LINES".to_string(),
+                    _ => "PERCENT".to_string(),
+                },
+            });
+        }
+
+        // Step 3: Inject 한글 required default style FIRST (id=0 MUST be "바탕글")
+        // This ensures compatibility even with minimal Blueprint templates.
+        // Both always reference the first char/para shape (index 0).
+        store.push_style(HwpxStyle {
+            id: 0,
+            style_type: "PARA".to_string(),
+            name: "바탕글".to_string(),
+            eng_name: "Normal".to_string(),
+            para_pr_id_ref: 0,
+            char_pr_id_ref: 0,
+            next_style_id_ref: 0,
+            lang_id: 1042, // Korean
+        });
+
+        // Step 4: Add user's styles from registry (starting from id=1)
+        for (i, (name, entry)) in registry.style_entries.iter().enumerate() {
+            store.push_style(HwpxStyle {
+                id: (i + 1) as u32, // Start from id=1 (id=0 is 바탕글)
+                style_type: "PARA".to_string(),
+                name: name.clone(),
+                eng_name: name.clone(),
+                para_pr_id_ref: entry.para_shape_id.get() as u32,
+                char_pr_id_ref: entry.char_shape_id.get() as u32,
+                next_style_id_ref: 0,
+                lang_id: 1042, // Korean
+            });
+        }
+
+        store
+    }
+
     // ── Fonts ────────────────────────────────────────────────────
 
     /// Adds a font and returns its index.
@@ -381,6 +548,7 @@ pub(crate) fn parse_alignment(s: &str) -> Alignment {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hwpforge_blueprint::builtins::builtin_default;
     use hwpforge_foundation::{CharShapeIndex, FontIndex, ParaShapeIndex};
 
     // ── HwpxStyleStore basic operations ──────────────────────────
@@ -699,5 +867,118 @@ mod tests {
         });
         let names: Vec<&str> = store.iter_styles().map(|s| s.name.as_str()).collect();
         assert_eq!(names, vec!["바탕글", "본문"]);
+    }
+
+    // ── from_registry bridge tests ──────────────────────────────
+
+    #[test]
+    fn from_registry_empty_produces_empty_store() {
+        let registry: StyleRegistry = serde_json::from_str(
+            r#"{"fonts":[],"char_shapes":[],"para_shapes":[],"style_entries":{}}"#,
+        )
+        .unwrap();
+        let store = HwpxStyleStore::from_registry(&registry);
+
+        // Empty registry now injects 한글-compatible defaults:
+        // 1 font × 7 language groups, 1 default char shape, 1 default para shape,
+        // 1 required style (바탕글, id=0)
+        assert_eq!(store.font_count(), 7);
+        assert_eq!(store.char_shape_count(), 1);
+        assert_eq!(store.para_shape_count(), 1);
+        assert_eq!(store.style_count(), 1);
+    }
+
+    #[test]
+    fn from_registry_preserves_counts() {
+        let template = builtin_default().unwrap();
+        let registry = StyleRegistry::from_template(&template).unwrap();
+        let store = HwpxStyleStore::from_registry(&registry);
+
+        // Fonts are mirrored across 7 language groups (HANGUL, LATIN, HANJA, JAPANESE, OTHER, SYMBOL, USER)
+        assert_eq!(store.font_count(), registry.font_count() * 7);
+        assert_eq!(store.char_shape_count(), registry.char_shape_count());
+        assert_eq!(store.para_shape_count(), registry.para_shape_count());
+        // +1 for injected 바탕글 (id=0) base style
+        assert_eq!(store.style_count(), registry.style_count() + 1);
+    }
+
+    #[test]
+    fn from_registry_font_face_names_match() {
+        let template = builtin_default().unwrap();
+        let registry = StyleRegistry::from_template(&template).unwrap();
+        let store = HwpxStyleStore::from_registry(&registry);
+
+        let font_count = registry.font_count();
+        let langs = ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"];
+        // Fonts are stored as: lang0[font0, font1, ...], lang1[font0, font1, ...], ...
+        for (lang_idx, &lang) in langs.iter().enumerate() {
+            for (font_idx, font_id) in registry.fonts.iter().enumerate() {
+                let store_idx = lang_idx * font_count + font_idx;
+                let hwpx_font = store.font(FontIndex::new(store_idx)).unwrap();
+                assert_eq!(hwpx_font.face_name, font_id.as_str());
+                assert_eq!(hwpx_font.lang, lang);
+            }
+        }
+    }
+
+    #[test]
+    fn from_registry_char_shape_properties() {
+        let template = builtin_default().unwrap();
+        let registry = StyleRegistry::from_template(&template).unwrap();
+        let store = HwpxStyleStore::from_registry(&registry);
+
+        for (i, bp_cs) in registry.char_shapes.iter().enumerate() {
+            let hwpx_cs = store.char_shape(CharShapeIndex::new(i)).unwrap();
+            assert_eq!(hwpx_cs.height, bp_cs.size);
+            assert_eq!(hwpx_cs.text_color, bp_cs.color);
+            assert_eq!(hwpx_cs.bold, bp_cs.bold);
+            assert_eq!(hwpx_cs.italic, bp_cs.italic);
+            let expected_underline = if bp_cs.underline { "BOTTOM" } else { "NONE" };
+            assert_eq!(hwpx_cs.underline_type, expected_underline);
+            let expected_strikeout = if bp_cs.strikethrough { "SLASH" } else { "NONE" };
+            assert_eq!(hwpx_cs.strikeout_shape, expected_strikeout);
+        }
+    }
+
+    #[test]
+    fn from_registry_para_shape_properties() {
+        let template = builtin_default().unwrap();
+        let registry = StyleRegistry::from_template(&template).unwrap();
+        let store = HwpxStyleStore::from_registry(&registry);
+
+        for (i, bp_ps) in registry.para_shapes.iter().enumerate() {
+            let hwpx_ps = store.para_shape(ParaShapeIndex::new(i)).unwrap();
+            assert_eq!(hwpx_ps.alignment, bp_ps.alignment);
+            assert_eq!(hwpx_ps.margin_left, bp_ps.indent_left);
+            assert_eq!(hwpx_ps.margin_right, bp_ps.indent_right);
+            assert_eq!(hwpx_ps.indent, bp_ps.indent_first_line);
+            assert_eq!(hwpx_ps.spacing_before, bp_ps.space_before);
+            assert_eq!(hwpx_ps.spacing_after, bp_ps.space_after);
+            assert_eq!(hwpx_ps.line_spacing, bp_ps.line_spacing_value.round() as i32);
+        }
+    }
+
+    #[test]
+    fn from_registry_style_entries_reference_valid_indices() {
+        let template = builtin_default().unwrap();
+        let registry = StyleRegistry::from_template(&template).unwrap();
+        let store = HwpxStyleStore::from_registry(&registry);
+
+        for i in 0..store.style_count() {
+            let style = store.style(i).unwrap();
+            assert_eq!(style.style_type, "PARA");
+            assert!(
+                (style.char_pr_id_ref as usize) < store.char_shape_count(),
+                "char_pr_id_ref {} out of bounds for style '{}'",
+                style.char_pr_id_ref,
+                style.name
+            );
+            assert!(
+                (style.para_pr_id_ref as usize) < store.para_shape_count(),
+                "para_pr_id_ref {} out of bounds for style '{}'",
+                style.para_pr_id_ref,
+                style.name
+            );
+        }
     }
 }

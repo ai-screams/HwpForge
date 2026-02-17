@@ -100,6 +100,48 @@ pub struct HxFont {
     pub font_type: String,
     #[serde(rename = "@isEmbedded", default)]
     pub is_embedded: u32,
+    /// Font classification metadata.
+    #[serde(
+        rename(serialize = "hh:typeInfo", deserialize = "typeInfo"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub type_info: Option<HxTypeInfo>,
+}
+
+/// `<hh:typeInfo>` — font classification metadata (PANOSE-like).
+///
+/// Provides font metric hints for substitution when the exact font
+/// is unavailable. Values follow the PANOSE classification system.
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub struct HxTypeInfo {
+    /// Font family type (e.g. `"FCAT_GOTHIC"`, `"FCAT_MYEONGJO"`).
+    #[serde(rename = "@familyType", default)]
+    pub family_type: String,
+    /// Stroke weight (typically 1-10, 6 = medium).
+    #[serde(rename = "@weight", default)]
+    pub weight: u32,
+    /// Proportion (0 = any).
+    #[serde(rename = "@proportion", default)]
+    pub proportion: u32,
+    /// Contrast (0 = any).
+    #[serde(rename = "@contrast", default)]
+    pub contrast: u32,
+    /// Stroke variation (1 = no variation).
+    #[serde(rename = "@strokeVariation", default)]
+    pub stroke_variation: u32,
+    /// Arm style (1 = straight).
+    #[serde(rename = "@armStyle", default)]
+    pub arm_style: u32,
+    /// Letterform (1 = normal).
+    #[serde(rename = "@letterform", default)]
+    pub letterform: u32,
+    /// Midline (1 = standard).
+    #[serde(rename = "@midline", default)]
+    pub midline: u32,
+    /// x-height (1 = constant).
+    #[serde(rename = "@xHeight", default)]
+    pub x_height: u32,
 }
 
 // ── Character Properties ──────────────────────────────────────────
@@ -150,6 +192,30 @@ pub struct HxCharPr {
     )]
     pub font_ref: Option<HxFontRef>,
     #[serde(
+        rename(serialize = "hh:ratio", deserialize = "ratio"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub ratio: Option<HxLangValues>,
+    #[serde(
+        rename(serialize = "hh:spacing", deserialize = "spacing"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub spacing: Option<HxLangValues>,
+    #[serde(
+        rename(serialize = "hh:relSz", deserialize = "relSz"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub rel_sz: Option<HxLangValues>,
+    #[serde(
+        rename(serialize = "hh:offset", deserialize = "offset"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub offset: Option<HxLangValues>,
+    #[serde(
         rename(serialize = "hh:bold", deserialize = "bold"),
         default,
         skip_serializing_if = "Option::is_none"
@@ -185,7 +251,6 @@ pub struct HxCharPr {
         skip_serializing_if = "Option::is_none"
     )]
     pub shadow: Option<HxShadow>,
-    // ratio, spacing, relSz, offset — ignored (Phase 3)
 }
 
 /// Per-language font index references.
@@ -206,6 +271,29 @@ pub struct HxFontRef {
     pub symbol: u32,
     #[serde(rename = "@user", default)]
     pub user: u32,
+}
+
+/// Per-language value fields used by `<hh:ratio>`, `<hh:spacing>`,
+/// `<hh:relSz>`, and `<hh:offset>` child elements of `<hh:charPr>`.
+///
+/// Each field corresponds to one of the 7 language groups.
+/// Defaults: ratio=100, spacing=0, relSz=100, offset=0 for all languages.
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
+pub struct HxLangValues {
+    #[serde(rename = "@hangul", default)]
+    pub hangul: i32,
+    #[serde(rename = "@latin", default)]
+    pub latin: i32,
+    #[serde(rename = "@hanja", default)]
+    pub hanja: i32,
+    #[serde(rename = "@japanese", default)]
+    pub japanese: i32,
+    #[serde(rename = "@other", default)]
+    pub other: i32,
+    #[serde(rename = "@symbol", default)]
+    pub symbol: i32,
+    #[serde(rename = "@user", default)]
+    pub user: i32,
 }
 
 /// Marker for presence-based boolean elements (`<hh:bold/>`, `<hh:italic/>`).
@@ -269,7 +357,7 @@ pub struct HxParaProperties {
     pub items: Vec<HxParaPr>,
 }
 
-/// `<hh:paraPr id="0" tabPrIDRef="0" condense="0" ...>`.
+/// `<hh:paraPr id="0" tabPrIDRef="0" condense="0" fontLineHeight="0" snapToGrid="1" ...>`.
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxParaPr {
     #[serde(rename = "@id")]
@@ -278,6 +366,18 @@ pub struct HxParaPr {
     pub tab_pr_id_ref: u32,
     #[serde(rename = "@condense", default)]
     pub condense: u32,
+    /// Font-based line height calculation flag.
+    #[serde(rename = "@fontLineHeight", default)]
+    pub font_line_height: u32,
+    /// Snap paragraph to document grid.
+    #[serde(rename = "@snapToGrid", default)]
+    pub snap_to_grid: u32,
+    /// Whether line numbers are suppressed for this paragraph.
+    #[serde(rename = "@suppressLineNumbers", default)]
+    pub suppress_line_numbers: u32,
+    /// Checkbox state for this paragraph.
+    #[serde(rename = "@checked", default)]
+    pub checked: u32,
 
     // ── child elements ──
     #[serde(
@@ -292,6 +392,18 @@ pub struct HxParaPr {
         skip_serializing_if = "Option::is_none"
     )]
     pub heading: Option<HxHeading>,
+    #[serde(
+        rename(serialize = "hh:breakSetting", deserialize = "breakSetting"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub break_setting: Option<HxBreakSetting>,
+    #[serde(
+        rename(serialize = "hh:autoSpacing", deserialize = "autoSpacing"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub auto_spacing: Option<HxAutoSpacing>,
     /// The `<hp:switch>` element wrapping `<hp:default>` with margin
     /// and lineSpacing values.
     #[serde(
@@ -300,7 +412,12 @@ pub struct HxParaPr {
         skip_serializing_if = "Option::is_none"
     )]
     pub switch: Option<HxSwitch>,
-    // breakSetting, autoSpacing, border — ignored (Phase 3 uses defaults)
+    #[serde(
+        rename(serialize = "hh:border", deserialize = "border"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub border: Option<HxBorder>,
 }
 
 /// `<hh:align horizontal="LEFT" vertical="BASELINE"/>`.
@@ -321,6 +438,56 @@ pub struct HxHeading {
     pub id_ref: u32,
     #[serde(rename = "@level", default)]
     pub level: u32,
+}
+
+/// `<hh:breakSetting breakLatinWord="KEEP_WORD" breakNonLatinWord="BREAK_WORD" .../>`.
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub struct HxBreakSetting {
+    #[serde(rename = "@breakLatinWord", default)]
+    pub break_latin_word: String,
+    #[serde(rename = "@breakNonLatinWord", default)]
+    pub break_non_latin_word: String,
+    #[serde(rename = "@widowOrphan", default)]
+    pub widow_orphan: u32,
+    #[serde(rename = "@keepWithNext", default)]
+    pub keep_with_next: u32,
+    #[serde(rename = "@keepLines", default)]
+    pub keep_lines: u32,
+    #[serde(rename = "@pageBreakBefore", default)]
+    pub page_break_before: u32,
+    /// Line wrapping mode (`"BREAK"` is the standard default).
+    #[serde(rename = "@lineWrap", default, skip_serializing_if = "String::is_empty")]
+    pub line_wrap: String,
+}
+
+/// `<hh:autoSpacing eAsianEng="0" eAsianNum="0"/>`.
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub struct HxAutoSpacing {
+    #[serde(rename = "@eAsianEng", default)]
+    pub e_asian_eng: u32,
+    #[serde(rename = "@eAsianNum", default)]
+    pub e_asian_num: u32,
+}
+
+/// `<hh:border borderFillIDRef="2" offsetLeft="0" offsetRight="0" offsetTop="0" offsetBottom="0" connect="0" ignoreMargin="0"/>`.
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub struct HxBorder {
+    #[serde(rename = "@borderFillIDRef", default)]
+    pub border_fill_id_ref: u32,
+    #[serde(rename = "@offsetLeft", default)]
+    pub offset_left: i32,
+    #[serde(rename = "@offsetRight", default)]
+    pub offset_right: i32,
+    #[serde(rename = "@offsetTop", default)]
+    pub offset_top: i32,
+    #[serde(rename = "@offsetBottom", default)]
+    pub offset_bottom: i32,
+    /// Whether this border connects with adjacent paragraph borders.
+    #[serde(rename = "@connect", default)]
+    pub connect: u32,
+    /// Whether to ignore margin when drawing the border.
+    #[serde(rename = "@ignoreMargin", default)]
+    pub ignore_margin: u32,
 }
 
 // ── hp:switch / hp:case / hp:default ──────────────────────────────
@@ -474,6 +641,9 @@ pub struct HxStyle {
     pub next_style_id_ref: u32,
     #[serde(rename = "@langID", default)]
     pub lang_id: u32,
+    /// Whether the style is locked for form editing.
+    #[serde(rename = "@lockForm", default)]
+    pub lock_form: u32,
 }
 
 // ── Tests ─────────────────────────────────────────────────────────
