@@ -10,8 +10,8 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
 
-# All jobs use the toolchain defined in rust-toolchain.toml (currently 1.93)
-# to ensure CI and local dev environments stay in sync.
+# All jobs use the toolchain defined in rust-toolchain.toml (currently 1.93).
+# `rustup show` auto-installs it after checkout, ensuring CI = local.
 
 jobs:
   test:
@@ -20,10 +20,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@master
-        with:
-          components: rustfmt, clippy
+      - name: Install Rust toolchain from rust-toolchain.toml
+        run: rustup show
 
       - name: Cache cargo registry
         uses: Swatinem/rust-cache@v2
@@ -41,9 +39,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          components: clippy
+      - name: Install Rust toolchain from rust-toolchain.toml
+        run: rustup show
       - uses: Swatinem/rust-cache@v2
 
       - name: Run clippy
@@ -54,9 +51,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
-        with:
-          components: rustfmt
+      - name: Install Rust toolchain from rust-toolchain.toml
+        run: rustup show
 
       - name: Check formatting
         run: cargo fmt --all -- --check
@@ -66,7 +62,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
+      - name: Install Rust toolchain from rust-toolchain.toml
+        run: rustup show
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked

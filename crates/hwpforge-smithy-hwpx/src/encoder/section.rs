@@ -275,14 +275,12 @@ fn build_table(table: &Table, depth: usize) -> HwpxResult<HxTable> {
         .collect::<HwpxResult<Vec<_>>>()?;
 
     // Table width: use explicit width or sum of first row's cell widths
-    let table_width = table
-        .width
-        .map(|w| w.as_i32())
-        .unwrap_or_else(|| {
-            table.rows.first().map_or(DEFAULT_HORZ_SIZE, |r| {
-                r.cells.iter().map(|c| c.width.as_i32()).sum()
-            })
-        });
+    let table_width = table.width.map(|w| w.as_i32()).unwrap_or_else(|| {
+        table
+            .rows
+            .first()
+            .map_or(DEFAULT_HORZ_SIZE, |r| r.cells.iter().map(|c| c.width.as_i32()).sum())
+    });
 
     Ok(HxTable {
         id: String::new(),
