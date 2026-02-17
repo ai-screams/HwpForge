@@ -55,6 +55,7 @@
 #![deny(unsafe_code)]
 #![deny(clippy::all)]
 
+pub mod border_fill;
 pub mod builtins;
 pub mod error;
 pub mod inheritance;
@@ -63,3 +64,6 @@ pub mod schema;
 pub mod serde_helpers;
 pub mod style;
 pub mod template;
+
+// Re-export key types for convenience
+pub use border_fill::{Border, BorderFill, BorderSide, Fill, PartialBorderFill};

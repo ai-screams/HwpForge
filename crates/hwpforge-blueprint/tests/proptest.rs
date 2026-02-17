@@ -4,7 +4,10 @@
 
 use hwpforge_blueprint::error::BlueprintError;
 use hwpforge_blueprint::style::{CharShape, ParaShape, PartialCharShape, PartialParaShape};
-use hwpforge_foundation::{Alignment, Color, HwpUnit, LineSpacingType};
+use hwpforge_foundation::{
+    Alignment, Color, EmbossType, EngraveType, HwpUnit, LineSpacingType, OutlineType, ShadowType,
+    StrikeoutShape, UnderlineType, VerticalPosition,
+};
 use proptest::prelude::*;
 
 // ---------------------------------------------------------------------------
@@ -237,11 +240,17 @@ proptest! {
             size,
             bold,
             italic,
-            underline: false,
-            strikethrough: false,
             color,
-            superscript: false,
-            subscript: false,
+            underline_type: UnderlineType::None,
+            underline_color: None,
+            strikeout_shape: StrikeoutShape::None,
+            strikeout_color: None,
+            outline: OutlineType::None,
+            shadow: ShadowType::None,
+            emboss: EmbossType::None,
+            engrave: EngraveType::None,
+            vertical_position: VerticalPosition::Normal,
+            shade_color: None,
         };
         let yaml = serde_yaml::to_string(&original).unwrap();
         let back: CharShape = serde_yaml::from_str(&yaml).unwrap();
@@ -273,6 +282,11 @@ proptest! {
             indent_left: HwpUnit::ZERO,
             indent_right: HwpUnit::ZERO,
             indent_first_line: HwpUnit::ZERO,
+            break_type: hwpforge_foundation::BreakType::None,
+            keep_with_next: false,
+            keep_lines_together: false,
+            widow_orphan: true,
+            border_fill_id: None,
         };
         let yaml = serde_yaml::to_string(&original).unwrap();
         let back: ParaShape = serde_yaml::from_str(&yaml).unwrap();

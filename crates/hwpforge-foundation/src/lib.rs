@@ -29,7 +29,10 @@ mod macros;
 pub mod units;
 
 pub use color::Color;
-pub use enums::{Alignment, BreakType, Language, LineSpacingType};
+pub use enums::{
+    Alignment, BorderLineType, BreakType, EmbossType, EngraveType, FillBrushType, Language,
+    LineSpacingType, OutlineType, ShadowType, StrikeoutShape, UnderlineType, VerticalPosition,
+};
 pub use error::{ErrorCode, ErrorCodeExt, FoundationError, FoundationResult};
 pub use ids::{FontId, StyleName, TemplateName};
 pub use index::{BorderFillIndex, CharShapeIndex, FontIndex, Index, ParaShapeIndex, StyleIndex};

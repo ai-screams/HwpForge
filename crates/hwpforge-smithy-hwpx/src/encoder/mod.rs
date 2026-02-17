@@ -118,7 +118,9 @@ mod tests {
     use hwpforge_core::section::Section;
     use hwpforge_core::PageSettings;
     use hwpforge_foundation::{
-        Alignment, CharShapeIndex, Color, FontIndex, HwpUnit, ParaShapeIndex,
+        Alignment, CharShapeIndex, Color, EmbossType, EngraveType, FontIndex, HwpUnit,
+        LineSpacingType, OutlineType, ParaShapeIndex, ShadowType, StrikeoutShape, UnderlineType,
+        VerticalPosition,
     };
 
     use crate::style_store::{HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape};
@@ -133,11 +135,18 @@ mod tests {
             font_ref: HwpxFontRef::default(),
             height: HwpUnit::new(1000).unwrap(),
             text_color: Color::BLACK,
-            shade_color: Color::BLACK,
+            shade_color: None,
             bold: false,
             italic: false,
-            underline_type: "NONE".into(),
-            strikeout_shape: "NONE".into(),
+            underline_type: UnderlineType::None,
+            underline_color: None,
+            strikeout_shape: StrikeoutShape::None,
+            strikeout_color: None,
+            vertical_position: VerticalPosition::Normal,
+            outline_type: OutlineType::None,
+            shadow_type: ShadowType::None,
+            emboss_type: EmbossType::None,
+            engrave_type: EngraveType::None,
         });
         store.push_para_shape(HwpxParaShape {
             alignment: Alignment::Left,
@@ -147,7 +156,8 @@ mod tests {
             spacing_before: HwpUnit::ZERO,
             spacing_after: HwpUnit::ZERO,
             line_spacing: 160,
-            line_spacing_type: "PERCENT".into(),
+            line_spacing_type: LineSpacingType::Percentage,
+            ..Default::default()
         });
 
         let mut doc = Document::new();
@@ -337,11 +347,18 @@ mod tests {
             },
             height: HwpUnit::new(2400).unwrap(),
             text_color: Color::from_rgb(255, 0, 0),
-            shade_color: Color::BLACK,
+            shade_color: None,
             bold: true,
             italic: true,
-            underline_type: "BOTTOM".into(),
-            strikeout_shape: "NONE".into(),
+            underline_type: UnderlineType::Bottom,
+            underline_color: None,
+            strikeout_shape: StrikeoutShape::None,
+            strikeout_color: None,
+            vertical_position: VerticalPosition::Normal,
+            outline_type: OutlineType::None,
+            shadow_type: ShadowType::None,
+            emboss_type: EmbossType::None,
+            engrave_type: EngraveType::None,
         });
         store.push_char_shape(HwpxCharShape::default());
         store.push_para_shape(HwpxParaShape {
@@ -352,7 +369,8 @@ mod tests {
             spacing_before: HwpUnit::new(150).unwrap(),
             spacing_after: HwpUnit::new(50).unwrap(),
             line_spacing: 200,
-            line_spacing_type: "PERCENT".into(),
+            line_spacing_type: LineSpacingType::Percentage,
+            ..Default::default()
         });
 
         let mut doc = Document::new();
@@ -382,7 +400,7 @@ mod tests {
         assert_eq!(cs.text_color, Color::from_rgb(255, 0, 0));
         assert!(cs.bold);
         assert!(cs.italic);
-        assert_eq!(cs.underline_type, "BOTTOM");
+        assert_eq!(cs.underline_type, UnderlineType::Bottom);
 
         // Para shape
         let ps = decoded.style_store.para_shape(ParaShapeIndex::new(0)).unwrap();

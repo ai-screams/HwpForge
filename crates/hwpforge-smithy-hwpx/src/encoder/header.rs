@@ -4,7 +4,10 @@
 //! it converts Foundation types (`Color`, `HwpUnit`, `Alignment`) back
 //! into the `Hx*` schema types and serializes them to XML via quick-xml.
 
-use hwpforge_foundation::{Alignment, Color, HwpUnit};
+use hwpforge_foundation::{
+    Alignment, Color, HwpUnit, LineSpacingType, OutlineType, ShadowType, StrikeoutShape,
+    UnderlineType,
+};
 
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::header::{
@@ -342,7 +345,7 @@ fn build_char_pr(id: u32, cs: &HwpxCharShape) -> HxCharPr {
         id,
         height: cs.height.as_i32() as u32,
         text_color: color_to_hex(&cs.text_color),
-        shade_color: shade_color_to_str(&cs.shade_color),
+        shade_color: shade_color_to_str(cs.shade_color.as_ref()),
         use_font_space: 0,
         use_kerning: 0,
         sym_mark: "NONE".into(),
@@ -364,14 +367,17 @@ fn build_char_pr(id: u32, cs: &HwpxCharShape) -> HxCharPr {
         bold: if cs.bold { Some(HxPresence) } else { None },
         italic: if cs.italic { Some(HxPresence) } else { None },
         underline: Some(HxUnderline {
-            underline_type: cs.underline_type.clone(),
+            underline_type: underline_type_to_hwpx(cs.underline_type).into(),
             shape: "SOLID".into(),
-            color: "#000000".into(),
+            color: cs.underline_color.as_ref().map_or_else(|| "#000000".into(), color_to_hex),
         }),
-        strikeout: Some(HxStrikeout { shape: cs.strikeout_shape.clone(), color: "#000000".into() }),
-        outline: Some(HxOutline { outline_type: "NONE".into() }),
+        strikeout: Some(HxStrikeout {
+            shape: strikeout_shape_to_hwpx(cs.strikeout_shape).into(),
+            color: cs.strikeout_color.as_ref().map_or_else(|| "#000000".into(), color_to_hex),
+        }),
+        outline: Some(HxOutline { outline_type: outline_type_to_hwpx(cs.outline_type).into() }),
         shadow: Some(HxShadow {
-            shadow_type: "NONE".into(),
+            shadow_type: shadow_type_to_hwpx(cs.shadow_type).into(),
             color: "#B2B2B2".into(),
             offset_x: 10,
             offset_y: 10,
@@ -492,7 +498,7 @@ fn build_margin(ps: &HwpxParaShape) -> HxMargin {
 /// Builds an `HxLineSpacing` from a para shape's line-spacing fields.
 fn build_line_spacing(ps: &HwpxParaShape) -> HxLineSpacing {
     HxLineSpacing {
-        spacing_type: ps.line_spacing_type.clone(),
+        spacing_type: line_spacing_type_to_hwpx(ps.line_spacing_type).into(),
         value: ps.line_spacing as u32,
         unit: "HWPUNIT".into(),
     }
@@ -512,13 +518,13 @@ fn color_to_hex(c: &Color) -> String {
 
 /// Converts a shade color to its HWPX string representation.
 ///
-/// Black shading is represented as `"none"` in HWPX (meaning no shading),
+/// `None` or black shading is represented as `"none"` in HWPX (meaning no shading),
 /// while any other color uses the standard `"#RRGGBB"` format.
-fn shade_color_to_str(c: &Color) -> String {
-    if *c == Color::BLACK {
-        "none".to_string()
-    } else {
-        color_to_hex(c)
+fn shade_color_to_str(c: Option<&Color>) -> String {
+    match c {
+        None => "none".to_string(),
+        Some(color) if *color == Color::BLACK => "none".to_string(),
+        Some(color) => color_to_hex(color),
     }
 }
 
@@ -531,6 +537,69 @@ fn alignment_to_str(a: Alignment) -> &'static str {
         Alignment::Justify => "JUSTIFY",
         // non_exhaustive: default to LEFT for future variants
         _ => "LEFT",
+    }
+}
+
+// ── Enum → HWPX string conversion helpers ──────────────────────
+//
+// HWPX XML uses uppercase string identifiers for style enums.
+// These functions convert Foundation enums to their HWPX equivalents.
+// The Schema layer (`Hx*` types) stays `String`-typed; conversion
+// happens here at the encoder boundary.
+
+/// Converts an [`UnderlineType`] to its HWPX string representation.
+fn underline_type_to_hwpx(ut: UnderlineType) -> &'static str {
+    match ut {
+        UnderlineType::None => "NONE",
+        UnderlineType::Bottom => "BOTTOM",
+        UnderlineType::Center => "CENTER",
+        UnderlineType::Top => "TOP",
+        _ => "NONE",
+    }
+}
+
+/// Converts a [`StrikeoutShape`] to its HWPX string representation.
+///
+/// Note: HWPX uses `"SLASH"` for [`StrikeoutShape::Continuous`].
+fn strikeout_shape_to_hwpx(ss: StrikeoutShape) -> &'static str {
+    match ss {
+        StrikeoutShape::None => "NONE",
+        StrikeoutShape::Continuous => "SLASH",
+        StrikeoutShape::Dash => "DASH",
+        StrikeoutShape::Dot => "DOT",
+        StrikeoutShape::DashDot => "DASH_DOT",
+        StrikeoutShape::DashDotDot => "DASH_DOT_DOT",
+        _ => "NONE",
+    }
+}
+
+/// Converts a [`LineSpacingType`] to its HWPX string representation.
+///
+/// Note: HWPX uses `"PERCENT"` for [`LineSpacingType::Percentage`].
+fn line_spacing_type_to_hwpx(lst: LineSpacingType) -> &'static str {
+    match lst {
+        LineSpacingType::Percentage => "PERCENT",
+        LineSpacingType::Fixed => "FIXED",
+        LineSpacingType::BetweenLines => "BETWEEN_LINES",
+        _ => "PERCENT",
+    }
+}
+
+/// Converts an [`OutlineType`] to its HWPX string representation.
+fn outline_type_to_hwpx(ot: OutlineType) -> &'static str {
+    match ot {
+        OutlineType::None => "NONE",
+        OutlineType::Solid => "SOLID",
+        _ => "NONE",
+    }
+}
+
+/// Converts a [`ShadowType`] to its HWPX string representation.
+fn shadow_type_to_hwpx(st: ShadowType) -> &'static str {
+    match st {
+        ShadowType::None => "NONE",
+        ShadowType::Drop => "DROP",
+        _ => "NONE",
     }
 }
 
@@ -574,25 +643,10 @@ mod tests {
             id: 0, face_name: "함초롬돋움".into(), lang: "HANGUL".into()
         });
         store.push_char_shape(HwpxCharShape {
-            font_ref: crate::style_store::HwpxFontRef::default(),
             height: HwpUnit::new(1000).unwrap(),
-            text_color: Color::BLACK,
-            shade_color: Color::BLACK,
-            bold: false,
-            italic: false,
-            underline_type: "NONE".into(),
-            strikeout_shape: "NONE".into(),
+            ..Default::default()
         });
-        store.push_para_shape(HwpxParaShape {
-            alignment: Alignment::Left,
-            margin_left: HwpUnit::ZERO,
-            margin_right: HwpUnit::ZERO,
-            indent: HwpUnit::ZERO,
-            spacing_before: HwpUnit::ZERO,
-            spacing_after: HwpUnit::ZERO,
-            line_spacing: 160,
-            line_spacing_type: "PERCENT".into(),
-        });
+        store.push_para_shape(HwpxParaShape::default());
         store
     }
 
@@ -650,7 +704,7 @@ mod tests {
         let ps = decoded.para_shape(ParaShapeIndex::new(0)).unwrap();
         assert_eq!(ps.alignment, Alignment::Left);
         assert_eq!(ps.line_spacing, 160);
-        assert_eq!(ps.line_spacing_type, "PERCENT");
+        assert_eq!(ps.line_spacing_type, LineSpacingType::Percentage);
     }
 
     // ── 3. Bold/italic presence ─────────────────────────────────
@@ -679,9 +733,10 @@ mod tests {
 
     #[test]
     fn test_shade_color_none() {
-        assert_eq!(shade_color_to_str(&Color::BLACK), "none");
-        assert_eq!(shade_color_to_str(&Color::from_rgb(0, 255, 0)), "#00FF00");
-        assert_eq!(shade_color_to_str(&Color::WHITE), "#FFFFFF");
+        assert_eq!(shade_color_to_str(None), "none");
+        assert_eq!(shade_color_to_str(Some(&Color::BLACK)), "none");
+        assert_eq!(shade_color_to_str(Some(&Color::from_rgb(0, 255, 0))), "#00FF00");
+        assert_eq!(shade_color_to_str(Some(&Color::WHITE)), "#FFFFFF");
     }
 
     // ── 6. alignment_to_str ─────────────────────────────────────
@@ -735,7 +790,8 @@ mod tests {
             spacing_before: HwpUnit::new(300).unwrap(),
             spacing_after: HwpUnit::new(150).unwrap(),
             line_spacing: 200,
-            line_spacing_type: "PERCENT".into(),
+            line_spacing_type: LineSpacingType::Percentage,
+            ..Default::default()
         };
 
         let switch = build_margin_switch(&ps);
@@ -805,11 +861,12 @@ mod tests {
             },
             height: HwpUnit::new(2500).unwrap(),
             text_color: Color::from_rgb(255, 0, 0),
-            shade_color: Color::from_rgb(0, 255, 0),
+            shade_color: Some(Color::from_rgb(0, 255, 0)),
             bold: true,
             italic: true,
-            underline_type: "BOTTOM".into(),
-            strikeout_shape: "SLASH".into(),
+            underline_type: UnderlineType::Bottom,
+            strikeout_shape: StrikeoutShape::Continuous,
+            ..Default::default()
         });
 
         // Justified para with margins
@@ -821,7 +878,8 @@ mod tests {
             spacing_before: HwpUnit::new(300).unwrap(),
             spacing_after: HwpUnit::new(150).unwrap(),
             line_spacing: 200,
-            line_spacing_type: "PERCENT".into(),
+            line_spacing_type: LineSpacingType::Percentage,
+            ..Default::default()
         });
 
         let xml = encode_header(&store, 1).unwrap();
@@ -837,13 +895,13 @@ mod tests {
         let cs = decoded.char_shape(CharShapeIndex::new(0)).unwrap();
         assert_eq!(cs.height.as_i32(), 2500);
         assert_eq!(cs.text_color, Color::from_rgb(255, 0, 0));
-        assert_eq!(cs.shade_color, Color::from_rgb(0, 255, 0));
+        assert_eq!(cs.shade_color, Some(Color::from_rgb(0, 255, 0)));
         assert!(cs.bold);
         assert!(cs.italic);
         assert_eq!(cs.font_ref.hangul.get(), 1);
         assert_eq!(cs.font_ref.latin.get(), 2);
-        assert_eq!(cs.underline_type, "BOTTOM");
-        assert_eq!(cs.strikeout_shape, "SLASH");
+        assert_eq!(cs.underline_type, UnderlineType::Bottom);
+        assert_eq!(cs.strikeout_shape, StrikeoutShape::Continuous);
 
         // Para shape
         let ps = decoded.para_shape(ParaShapeIndex::new(0)).unwrap();

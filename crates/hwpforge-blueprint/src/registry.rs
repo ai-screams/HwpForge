@@ -303,13 +303,7 @@ mod tests {
             char_shape: Some(crate::style::PartialCharShape {
                 font: Some(font.to_string()),
                 size: Some(HwpUnit::from_pt(size_pt).unwrap()),
-                bold: None,
-                italic: None,
-                underline: None,
-                strikethrough: None,
-                color: None,
-                superscript: None,
-                subscript: None,
+                ..Default::default()
             }),
             para_shape: None,
         }

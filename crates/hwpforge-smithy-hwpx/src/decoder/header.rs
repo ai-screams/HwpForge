@@ -3,7 +3,10 @@
 //! Converts XML schema types (`HxCharPr`, `HxParaPr`, `HxFont`) into
 //! Foundation types (`Color`, `HwpUnit`, `Alignment`) for the store.
 
-use hwpforge_foundation::{FontIndex, HwpUnit};
+use hwpforge_foundation::{
+    Color, EmbossType, EngraveType, FontIndex, HwpUnit, LineSpacingType, OutlineType, ShadowType,
+    StrikeoutShape, UnderlineType, VerticalPosition,
+};
 use quick_xml::de::from_str;
 
 use crate::error::{HwpxError, HwpxResult};
@@ -75,6 +78,86 @@ pub fn parse_header(xml: &str) -> HwpxResult<HwpxStyleStore> {
     Ok(store)
 }
 
+// ── HWPX string → enum parsing helpers ──────────────────────────
+//
+// HWPX XML uses uppercase string identifiers that differ from Foundation's
+// Display/FromStr representations. These functions handle the HWPX-specific
+// mapping at the decoder boundary.
+
+/// Parses a HWPX underline type string to [`UnderlineType`].
+fn parse_underline_type(s: &str) -> UnderlineType {
+    match s.to_ascii_uppercase().as_str() {
+        "NONE" => UnderlineType::None,
+        "BOTTOM" => UnderlineType::Bottom,
+        "CENTER" => UnderlineType::Center,
+        "TOP" => UnderlineType::Top,
+        _ => UnderlineType::None,
+    }
+}
+
+/// Parses a HWPX strikeout shape string to [`StrikeoutShape`].
+///
+/// Note: HWPX uses `"SLASH"` for [`StrikeoutShape::Continuous`].
+fn parse_strikeout_shape(s: &str) -> StrikeoutShape {
+    match s.to_ascii_uppercase().as_str() {
+        "NONE" => StrikeoutShape::None,
+        "SLASH" => StrikeoutShape::Continuous,
+        "DASH" => StrikeoutShape::Dash,
+        "DOT" => StrikeoutShape::Dot,
+        "DASH_DOT" => StrikeoutShape::DashDot,
+        "DASH_DOT_DOT" => StrikeoutShape::DashDotDot,
+        _ => StrikeoutShape::None,
+    }
+}
+
+/// Parses a HWPX line spacing type string to [`LineSpacingType`].
+///
+/// Note: HWPX uses `"PERCENT"` for [`LineSpacingType::Percentage`].
+fn parse_line_spacing_type(s: &str) -> LineSpacingType {
+    match s.to_ascii_uppercase().as_str() {
+        "PERCENT" => LineSpacingType::Percentage,
+        "FIXED" => LineSpacingType::Fixed,
+        "BETWEEN_LINES" => LineSpacingType::BetweenLines,
+        _ => LineSpacingType::Percentage,
+    }
+}
+
+/// Parses a HWPX outline type string to [`OutlineType`].
+fn parse_outline_type(s: &str) -> OutlineType {
+    match s.to_ascii_uppercase().as_str() {
+        "NONE" => OutlineType::None,
+        "SOLID" => OutlineType::Solid,
+        _ => OutlineType::None,
+    }
+}
+
+/// Parses a HWPX shadow type string to [`ShadowType`].
+fn parse_shadow_type(s: &str) -> ShadowType {
+    match s.to_ascii_uppercase().as_str() {
+        "NONE" => ShadowType::None,
+        "DROP" => ShadowType::Drop,
+        _ => ShadowType::None,
+    }
+}
+
+/// Parses a HWPX shade color string into `Option<Color>`.
+///
+/// Returns `None` for `"none"`, empty strings, or black (#000000).
+fn parse_optional_hex_color(s: &str) -> Option<Color> {
+    let s = s.trim();
+    if s.is_empty() || s.eq_ignore_ascii_case("none") {
+        return None;
+    }
+    let color = parse_hex_color(s);
+    if color == Color::BLACK {
+        // Could be a real #000000 or a parse failure; treat as None for shade
+        // since black shading is not meaningful.
+        None
+    } else {
+        Some(color)
+    }
+}
+
 /// Converts an `HxCharPr` XML type into an `HwpxCharShape`.
 fn convert_char_pr(cp: &HxCharPr) -> HwpxCharShape {
     // ASSUMPTION: 한글 (Hangul Word Processor) always mirrors identical fonts
@@ -106,19 +189,48 @@ fn convert_char_pr(cp: &HxCharPr) -> HwpxCharShape {
         font_ref,
         height,
         text_color: parse_hex_color(&cp.text_color),
-        shade_color: parse_hex_color(&cp.shade_color),
+        shade_color: parse_optional_hex_color(&cp.shade_color),
         bold: cp.bold.is_some(),
         italic: cp.italic.is_some(),
         underline_type: cp
             .underline
             .as_ref()
-            .map(|u| u.underline_type.clone())
-            .unwrap_or_else(|| "NONE".into()),
+            .map(|u| parse_underline_type(&u.underline_type))
+            .unwrap_or(UnderlineType::None),
+        underline_color: cp.underline.as_ref().and_then(|u| {
+            let c = parse_hex_color(&u.color);
+            if c == Color::BLACK {
+                None
+            } else {
+                Some(c)
+            }
+        }),
         strikeout_shape: cp
             .strikeout
             .as_ref()
-            .map(|s| s.shape.clone())
-            .unwrap_or_else(|| "NONE".into()),
+            .map(|s| parse_strikeout_shape(&s.shape))
+            .unwrap_or(StrikeoutShape::None),
+        strikeout_color: cp.strikeout.as_ref().and_then(|s| {
+            let c = parse_hex_color(&s.color);
+            if c == Color::BLACK {
+                None
+            } else {
+                Some(c)
+            }
+        }),
+        vertical_position: VerticalPosition::Normal, // TODO(v2.0): Parse from XML
+        outline_type: cp
+            .outline
+            .as_ref()
+            .map(|o| parse_outline_type(&o.outline_type))
+            .unwrap_or(OutlineType::None),
+        shadow_type: cp
+            .shadow
+            .as_ref()
+            .map(|s| parse_shadow_type(&s.shadow_type))
+            .unwrap_or(ShadowType::None),
+        emboss_type: EmbossType::None,   // TODO(v2.0): Parse from XML
+        engrave_type: EngraveType::None, // TODO(v2.0): Parse from XML
     }
 }
 
@@ -144,6 +256,7 @@ fn convert_para_pr(pp: &HxParaPr) -> HwpxParaShape {
         spacing_after,
         line_spacing,
         line_spacing_type,
+        ..Default::default()
     }
 }
 
@@ -188,8 +301,9 @@ fn extract_margins(pp: &HxParaPr) -> (HwpUnit, HwpUnit, HwpUnit, HwpUnit, HwpUni
 }
 
 /// Extracts line spacing from the switch/default block.
-fn extract_line_spacing(pp: &HxParaPr) -> (i32, String) {
-    let default_ls = (160, "PERCENT".into());
+fn extract_line_spacing(pp: &HxParaPr) -> (i32, hwpforge_foundation::LineSpacingType) {
+    use hwpforge_foundation::LineSpacingType;
+    let default_ls = (160, LineSpacingType::Percentage);
     let Some(switch) = &pp.switch else {
         return default_ls;
     };
@@ -200,18 +314,23 @@ fn extract_line_spacing(pp: &HxParaPr) -> (i32, String) {
         return default_ls;
     };
 
-    let spacing_type =
-        if ls.spacing_type.is_empty() { "PERCENT".to_string() } else { ls.spacing_type.clone() };
+    let spacing_type = if ls.spacing_type.is_empty() {
+        LineSpacingType::Percentage
+    } else {
+        parse_line_spacing_type(&ls.spacing_type)
+    };
 
     // Saturate to i32::MAX if value exceeds range (extremely rare in real HWPX files)
     let value = ls.value.min(i32::MAX as u32) as i32;
     (value, spacing_type)
 }
 
+// (parse_optional_hex_color is defined above with the HWPX parsing helpers)
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hwpforge_foundation::{Alignment, Color};
+    use hwpforge_foundation::{Alignment, Color, LineSpacingType, StrikeoutShape, UnderlineType};
 
     // ── Minimal header ───────────────────────────────────────────
 
@@ -276,8 +395,8 @@ mod tests {
         assert_eq!(cs.text_color, Color::BLACK);
         assert!(!cs.bold);
         assert!(!cs.italic);
-        assert_eq!(cs.underline_type, "NONE");
-        assert_eq!(cs.strikeout_shape, "NONE");
+        assert_eq!(cs.underline_type, UnderlineType::None);
+        assert_eq!(cs.strikeout_shape, StrikeoutShape::None);
     }
 
     #[test]
@@ -300,13 +419,13 @@ mod tests {
         let cs = store.char_shape(hwpforge_foundation::CharShapeIndex::new(0)).unwrap();
         assert_eq!(cs.height.as_i32(), 2500);
         assert_eq!(cs.text_color, Color::from_rgb(255, 0, 0));
-        assert_eq!(cs.shade_color, Color::from_rgb(0, 255, 0));
+        assert_eq!(cs.shade_color, Some(Color::from_rgb(0, 255, 0)));
         assert!(cs.bold);
         assert!(cs.italic);
         assert_eq!(cs.font_ref.hangul.get(), 1);
         assert_eq!(cs.font_ref.latin.get(), 2);
-        assert_eq!(cs.underline_type, "BOTTOM");
-        assert_eq!(cs.strikeout_shape, "SLASH");
+        assert_eq!(cs.underline_type, UnderlineType::Bottom);
+        assert_eq!(cs.strikeout_shape, StrikeoutShape::Continuous);
     }
 
     // ── Paragraph properties ─────────────────────────────────────
@@ -361,7 +480,7 @@ mod tests {
         assert_eq!(ps.spacing_before.as_i32(), 300);
         assert_eq!(ps.spacing_after.as_i32(), 150);
         assert_eq!(ps.line_spacing, 200);
-        assert_eq!(ps.line_spacing_type, "PERCENT");
+        assert_eq!(ps.line_spacing_type, LineSpacingType::Percentage);
     }
 
     #[test]
@@ -379,7 +498,7 @@ mod tests {
         let ps = store.para_shape(hwpforge_foundation::ParaShapeIndex::new(0)).unwrap();
         assert_eq!(ps.margin_left, HwpUnit::ZERO);
         assert_eq!(ps.line_spacing, 160);
-        assert_eq!(ps.line_spacing_type, "PERCENT");
+        assert_eq!(ps.line_spacing_type, LineSpacingType::Percentage);
     }
 
     // ── Full header ──────────────────────────────────────────────

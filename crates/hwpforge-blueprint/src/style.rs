@@ -10,7 +10,10 @@
 //! This mirrors CSS inheritance: a child template can override only the
 //! fields it cares about, inheriting the rest from the parent.
 
-use hwpforge_foundation::{Alignment, Color, HwpUnit, LineSpacingType};
+use hwpforge_foundation::{
+    Alignment, BorderFillIndex, BreakType, Color, EmbossType, EngraveType, HwpUnit,
+    LineSpacingType, OutlineType, ShadowType, StrikeoutShape, UnderlineType, VerticalPosition,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -117,12 +120,6 @@ pub struct PartialCharShape {
     /// Italic style.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub italic: Option<bool>,
-    /// Underline.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub underline: Option<bool>,
-    /// Strikethrough.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub strikethrough: Option<bool>,
     /// Text color in `#RRGGBB`.
     #[serde(
         default,
@@ -131,12 +128,53 @@ pub struct PartialCharShape {
         skip_serializing_if = "Option::is_none"
     )]
     pub color: Option<Color>,
-    /// Superscript.
+
+    /// Underline type (None/Bottom/Center/Top).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub superscript: Option<bool>,
-    /// Subscript.
+    pub underline_type: Option<UnderlineType>,
+    /// Underline color (inherits text color if None).
+    #[serde(
+        default,
+        serialize_with = "ser_color_opt",
+        deserialize_with = "de_color_opt",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub underline_color: Option<Color>,
+    /// Strikeout line shape (None/Continuous/Dash/Dot/etc.).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub subscript: Option<bool>,
+    pub strikeout_shape: Option<StrikeoutShape>,
+    /// Strikeout color (inherits text color if None).
+    #[serde(
+        default,
+        serialize_with = "ser_color_opt",
+        deserialize_with = "de_color_opt",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub strikeout_color: Option<Color>,
+    /// Text outline (1pt border around glyphs).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outline: Option<OutlineType>,
+    /// Drop shadow.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shadow: Option<ShadowType>,
+    /// Emboss effect (raised).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emboss: Option<EmbossType>,
+    /// Engrave effect (sunken).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub engrave: Option<EngraveType>,
+    /// Vertical position (Normal/Superscript/Subscript).
+    /// Replaces bool superscript/subscript (backward compat: both supported).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vertical_position: Option<VerticalPosition>,
+    /// Background shade color (character-level highlight).
+    #[serde(
+        default,
+        serialize_with = "ser_color_opt",
+        deserialize_with = "de_color_opt",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub shade_color: Option<Color>,
 }
 
 impl PartialCharShape {
@@ -155,20 +193,38 @@ impl PartialCharShape {
         if other.italic.is_some() {
             self.italic = other.italic;
         }
-        if other.underline.is_some() {
-            self.underline = other.underline;
-        }
-        if other.strikethrough.is_some() {
-            self.strikethrough = other.strikethrough;
-        }
         if other.color.is_some() {
             self.color = other.color;
         }
-        if other.superscript.is_some() {
-            self.superscript = other.superscript;
+        if other.underline_type.is_some() {
+            self.underline_type = other.underline_type;
         }
-        if other.subscript.is_some() {
-            self.subscript = other.subscript;
+        if other.underline_color.is_some() {
+            self.underline_color = other.underline_color;
+        }
+        if other.strikeout_shape.is_some() {
+            self.strikeout_shape = other.strikeout_shape;
+        }
+        if other.strikeout_color.is_some() {
+            self.strikeout_color = other.strikeout_color;
+        }
+        if other.outline.is_some() {
+            self.outline = other.outline;
+        }
+        if other.shadow.is_some() {
+            self.shadow = other.shadow;
+        }
+        if other.emboss.is_some() {
+            self.emboss = other.emboss;
+        }
+        if other.engrave.is_some() {
+            self.engrave = other.engrave;
+        }
+        if other.vertical_position.is_some() {
+            self.vertical_position = other.vertical_position;
+        }
+        if other.shade_color.is_some() {
+            self.shade_color = other.shade_color;
         }
     }
 
@@ -187,11 +243,17 @@ impl PartialCharShape {
             })?,
             bold: self.bold.unwrap_or(false),
             italic: self.italic.unwrap_or(false),
-            underline: self.underline.unwrap_or(false),
-            strikethrough: self.strikethrough.unwrap_or(false),
             color: self.color.unwrap_or(Color::BLACK),
-            superscript: self.superscript.unwrap_or(false),
-            subscript: self.subscript.unwrap_or(false),
+            underline_type: self.underline_type.unwrap_or(UnderlineType::None),
+            underline_color: self.underline_color,
+            strikeout_shape: self.strikeout_shape.unwrap_or(StrikeoutShape::None),
+            strikeout_color: self.strikeout_color,
+            outline: self.outline.unwrap_or(OutlineType::None),
+            shadow: self.shadow.unwrap_or(ShadowType::None),
+            emboss: self.emboss.unwrap_or(EmbossType::None),
+            engrave: self.engrave.unwrap_or(EngraveType::None),
+            vertical_position: self.vertical_position.unwrap_or(VerticalPosition::Normal),
+            shade_color: self.shade_color,
         })
     }
 }
@@ -211,6 +273,23 @@ pub struct PartialParaShape {
     /// Indentation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub indent: Option<Indent>,
+
+    // Advanced paragraph controls (NEW in Phase 5.3)
+    /// Page/column break before paragraph.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub break_type: Option<BreakType>,
+    /// Keep paragraph with next (prevent page break between).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_with_next: Option<bool>,
+    /// Keep lines together (prevent page break within paragraph).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keep_lines_together: Option<bool>,
+    /// Widow/orphan control (minimum 2 lines).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub widow_orphan: Option<bool>,
+    /// Border/fill reference (for paragraph borders and backgrounds).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border_fill_id: Option<BorderFillIndex>,
 }
 
 impl Spacing {
@@ -278,6 +357,21 @@ impl PartialParaShape {
             (None, Some(child)) => self.indent = Some(*child),
             _ => {}
         }
+        if other.break_type.is_some() {
+            self.break_type = other.break_type;
+        }
+        if other.keep_with_next.is_some() {
+            self.keep_with_next = other.keep_with_next;
+        }
+        if other.keep_lines_together.is_some() {
+            self.keep_lines_together = other.keep_lines_together;
+        }
+        if other.widow_orphan.is_some() {
+            self.widow_orphan = other.widow_orphan;
+        }
+        if other.border_fill_id.is_some() {
+            self.border_fill_id = other.border_fill_id;
+        }
     }
 
     /// Resolves into a fully-specified [`ParaShape`] with defaults.
@@ -294,6 +388,11 @@ impl PartialParaShape {
             indent_left: self.indent.and_then(|i| i.left).unwrap_or(HwpUnit::ZERO),
             indent_right: self.indent.and_then(|i| i.right).unwrap_or(HwpUnit::ZERO),
             indent_first_line: self.indent.and_then(|i| i.first_line).unwrap_or(HwpUnit::ZERO),
+            break_type: self.break_type.unwrap_or(BreakType::None),
+            keep_with_next: self.keep_with_next.unwrap_or(false),
+            keep_lines_together: self.keep_lines_together.unwrap_or(false),
+            widow_orphan: self.widow_orphan.unwrap_or(true), // Enabled by default in HWPX
+            border_fill_id: self.border_fill_id,
         }
     }
 }
@@ -341,17 +440,47 @@ pub struct CharShape {
     pub bold: bool,
     /// Italic.
     pub italic: bool,
-    /// Underline.
-    pub underline: bool,
-    /// Strikethrough.
-    pub strikethrough: bool,
     /// Text color.
     #[serde(serialize_with = "ser_color", deserialize_with = "de_color")]
     pub color: Color,
-    /// Superscript.
-    pub superscript: bool,
-    /// Subscript.
-    pub subscript: bool,
+    /// Underline type.
+    pub underline_type: UnderlineType,
+    /// Underline color (None = inherit text color).
+    #[serde(
+        default,
+        serialize_with = "ser_color_opt",
+        deserialize_with = "de_color_opt",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub underline_color: Option<Color>,
+    /// Strikeout line shape.
+    pub strikeout_shape: StrikeoutShape,
+    /// Strikeout color (None = inherit text color).
+    #[serde(
+        default,
+        serialize_with = "ser_color_opt",
+        deserialize_with = "de_color_opt",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub strikeout_color: Option<Color>,
+    /// Text outline.
+    pub outline: OutlineType,
+    /// Drop shadow.
+    pub shadow: ShadowType,
+    /// Emboss effect.
+    pub emboss: EmbossType,
+    /// Engrave effect.
+    pub engrave: EngraveType,
+    /// Vertical position (replaces superscript/subscript bools).
+    pub vertical_position: VerticalPosition,
+    /// Background shade color (None = transparent).
+    #[serde(
+        default,
+        serialize_with = "ser_color_opt",
+        deserialize_with = "de_color_opt",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub shade_color: Option<Color>,
 }
 
 /// A fully-resolved paragraph shape (all fields present).
@@ -378,6 +507,19 @@ pub struct ParaShape {
     /// First-line indentation.
     #[serde(serialize_with = "ser_dim", deserialize_with = "de_dim")]
     pub indent_first_line: HwpUnit,
+
+    // Advanced paragraph controls (NEW in Phase 5.3)
+    /// Page/column break type.
+    pub break_type: BreakType,
+    /// Keep paragraph with next.
+    pub keep_with_next: bool,
+    /// Keep lines together.
+    pub keep_lines_together: bool,
+    /// Widow/orphan control (default: true).
+    pub widow_orphan: bool,
+    /// Border/fill reference (None = no border/fill).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub border_fill_id: Option<BorderFillIndex>,
 }
 
 #[cfg(test)]
@@ -392,11 +534,10 @@ mod tests {
         assert!(p.size.is_none());
         assert!(p.bold.is_none());
         assert!(p.italic.is_none());
-        assert!(p.underline.is_none());
-        assert!(p.strikethrough.is_none());
         assert!(p.color.is_none());
-        assert!(p.superscript.is_none());
-        assert!(p.subscript.is_none());
+        assert!(p.underline_type.is_none());
+        assert!(p.strikeout_shape.is_none());
+        assert!(p.vertical_position.is_none());
     }
 
     #[test]
@@ -584,11 +725,17 @@ mod tests {
             size: HwpUnit::from_pt(16.0).unwrap(),
             bold: true,
             italic: false,
-            underline: false,
-            strikethrough: false,
             color: Color::from_rgb(0x00, 0x33, 0x66),
-            superscript: false,
-            subscript: false,
+            underline_type: UnderlineType::None,
+            underline_color: None,
+            strikeout_shape: StrikeoutShape::None,
+            strikeout_color: None,
+            outline: OutlineType::None,
+            shadow: ShadowType::None,
+            emboss: EmbossType::None,
+            engrave: EngraveType::None,
+            vertical_position: VerticalPosition::Normal,
+            shade_color: None,
         };
         let yaml = serde_yaml::to_string(&original).unwrap();
         let back: CharShape = serde_yaml::from_str(&yaml).unwrap();
@@ -602,11 +749,17 @@ mod tests {
             size: HwpUnit::from_pt(12.0).unwrap(),
             bold: false,
             italic: true,
-            underline: false,
-            strikethrough: false,
             color: Color::RED,
-            superscript: false,
-            subscript: false,
+            underline_type: UnderlineType::None,
+            underline_color: None,
+            strikeout_shape: StrikeoutShape::None,
+            strikeout_color: None,
+            outline: OutlineType::None,
+            shadow: ShadowType::None,
+            emboss: EmbossType::None,
+            engrave: EngraveType::None,
+            vertical_position: VerticalPosition::Normal,
+            shade_color: None,
         };
         let yaml = serde_yaml::to_string(&cs).unwrap();
         assert!(yaml.contains("12pt"), "Expected '12pt' in: {yaml}");
@@ -624,6 +777,11 @@ mod tests {
             indent_left: HwpUnit::ZERO,
             indent_right: HwpUnit::ZERO,
             indent_first_line: HwpUnit::ZERO,
+            break_type: BreakType::None,
+            keep_with_next: false,
+            keep_lines_together: false,
+            widow_orphan: true,
+            border_fill_id: None,
         };
         let yaml = serde_yaml::to_string(&original).unwrap();
         let back: ParaShape = serde_yaml::from_str(&yaml).unwrap();
