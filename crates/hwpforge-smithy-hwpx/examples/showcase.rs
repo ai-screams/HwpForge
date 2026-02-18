@@ -127,61 +127,6 @@ fn build_style_store() -> HwpxStyleStore {
 // ---------------------------------------------------------------------------
 
 fn build_section1() -> Section {
-    let mut paragraphs: Vec<Paragraph> = Vec::new();
-
-    // Title paragraph (CharShape 3 = 16pt bold, ParaShape 1 = center)
-    paragraphs.push(Paragraph::with_runs(
-        vec![Run::text("HwpForge 쇼케이스 문서", CharShapeIndex::new(3))],
-        ParaShapeIndex::new(1),
-    ));
-
-    // Normal paragraph
-    paragraphs.push(text_para("이 문서는 HwpForge의 모든 구현된 API를 테스트합니다.", 0, 0));
-
-    // Mixed styles paragraph
-    paragraphs.push(Paragraph::with_runs(
-        vec![
-            Run::text("일반 텍스트, ", CharShapeIndex::new(0)),
-            Run::text("굵은 빨간색", CharShapeIndex::new(1)),
-            Run::text(", ", CharShapeIndex::new(0)),
-            Run::text("기울임 파란색 밑줄", CharShapeIndex::new(2)),
-            Run::text(" — 스타일 혼합 테스트.", CharShapeIndex::new(0)),
-        ],
-        ParaShapeIndex::new(0),
-    ));
-
-    // Paragraph with footnote
-    paragraphs.push(Paragraph::with_runs(
-        vec![
-            Run::text("각주가 포함된 문장입니다", CharShapeIndex::new(0)),
-            Run::control(
-                Control::Footnote {
-                    inst_id: Some(1),
-                    paragraphs: vec![text_para("이것은 각주(footnote) 내용입니다.", 0, 0)],
-                },
-                CharShapeIndex::new(0),
-            ),
-            Run::text(".", CharShapeIndex::new(0)),
-        ],
-        ParaShapeIndex::new(0),
-    ));
-
-    // Paragraph with endnote
-    paragraphs.push(Paragraph::with_runs(
-        vec![
-            Run::text("미주가 포함된 문장입니다", CharShapeIndex::new(0)),
-            Run::control(
-                Control::Endnote {
-                    inst_id: Some(1),
-                    paragraphs: vec![text_para("이것은 미주(endnote) 내용입니다.", 0, 0)],
-                },
-                CharShapeIndex::new(0),
-            ),
-            Run::text(".", CharShapeIndex::new(0)),
-        ],
-        ParaShapeIndex::new(0),
-    ));
-
     // Table with caption (3 rows x 2 cols)
     let table: Table = {
         let header_row: TableRow = TableRow {
@@ -209,10 +154,61 @@ fn build_section1() -> Section {
         t.caption = Some(make_caption("표 1. 프로젝트 현황", CaptionSide::Bottom));
         t
     };
-    paragraphs.push(Paragraph::with_runs(
-        vec![Run::table(table, CharShapeIndex::new(0))],
-        ParaShapeIndex::new(0),
-    ));
+    let paragraphs: Vec<Paragraph> = vec![
+        // Title paragraph (CharShape 3 = 16pt bold, ParaShape 1 = center)
+        Paragraph::with_runs(
+            vec![Run::text("HwpForge 쇼케이스 문서", CharShapeIndex::new(3))],
+            ParaShapeIndex::new(1),
+        ),
+        // Normal paragraph
+        text_para("이 문서는 HwpForge의 모든 구현된 API를 테스트합니다.", 0, 0),
+        // Mixed styles paragraph
+        Paragraph::with_runs(
+            vec![
+                Run::text("일반 텍스트, ", CharShapeIndex::new(0)),
+                Run::text("굵은 빨간색", CharShapeIndex::new(1)),
+                Run::text(", ", CharShapeIndex::new(0)),
+                Run::text("기울임 파란색 밑줄", CharShapeIndex::new(2)),
+                Run::text(" — 스타일 혼합 테스트.", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        ),
+        // Paragraph with footnote
+        Paragraph::with_runs(
+            vec![
+                Run::text("각주가 포함된 문장입니다", CharShapeIndex::new(0)),
+                Run::control(
+                    Control::Footnote {
+                        inst_id: Some(1),
+                        paragraphs: vec![text_para("이것은 각주(footnote) 내용입니다.", 0, 0)],
+                    },
+                    CharShapeIndex::new(0),
+                ),
+                Run::text(".", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        ),
+        // Paragraph with endnote
+        Paragraph::with_runs(
+            vec![
+                Run::text("미주가 포함된 문장입니다", CharShapeIndex::new(0)),
+                Run::control(
+                    Control::Endnote {
+                        inst_id: Some(1),
+                        paragraphs: vec![text_para("이것은 미주(endnote) 내용입니다.", 0, 0)],
+                    },
+                    CharShapeIndex::new(0),
+                ),
+                Run::text(".", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        ),
+        // Table with caption
+        Paragraph::with_runs(
+            vec![Run::table(table, CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        ),
+    ];
 
     // Build section with header, footer, page number
     let mut section: Section = Section::with_paragraphs(paragraphs, PageSettings::a4());
@@ -238,100 +234,97 @@ fn build_section1() -> Section {
 // ---------------------------------------------------------------------------
 
 fn build_section2() -> Section {
-    let mut paragraphs: Vec<Paragraph> = Vec::new();
+    // Image with caption (built before vec literal)
+    let img: Image = {
+        let mut i: Image = Image::new(
+            "BinData/showcase_image.png",
+            HwpUnit::from_mm(60.0).unwrap(),
+            HwpUnit::from_mm(40.0).unwrap(),
+            ImageFormat::Png,
+        );
+        i.caption = Some(make_caption("그림 1. HwpForge 아키텍처 다이어그램", CaptionSide::Bottom));
+        i
+    };
 
-    // Section title
-    paragraphs.push(Paragraph::with_runs(
-        vec![Run::text("섹션 2: 이미지, 글상자, 도형", CharShapeIndex::new(3))],
-        ParaShapeIndex::new(1),
-    ));
-
-    // Image with caption
-    let mut img: Image = Image::new(
-        "BinData/showcase_image.png",
-        HwpUnit::from_mm(60.0).unwrap(),
-        HwpUnit::from_mm(40.0).unwrap(),
-        ImageFormat::Png,
-    );
-    img.caption = Some(make_caption("그림 1. HwpForge 아키텍처 다이어그램", CaptionSide::Bottom));
-    paragraphs.push(Paragraph::with_runs(
-        vec![Run::image(img, CharShapeIndex::new(0))],
-        ParaShapeIndex::new(1),
-    ));
-
-    // TextBox with caption
-    paragraphs.push(Paragraph::with_runs(
-        vec![Run::control(
-            Control::TextBox {
-                paragraphs: vec![
-                    text_para("글상자 제목", 1, 1),
-                    text_para(
-                        "글상자 안의 본문 텍스트입니다. 다양한 내용을 포함할 수 있습니다.",
-                        0,
-                        0,
-                    ),
-                ],
-                width: HwpUnit::from_mm(80.0).unwrap(),
-                height: HwpUnit::from_mm(30.0).unwrap(),
-                horz_offset: 0,
-                vert_offset: 0,
-                caption: Some(make_caption("글상자 1. 설명", CaptionSide::Bottom)),
-            },
-            CharShapeIndex::new(0),
-        )],
-        ParaShapeIndex::new(0),
-    ));
-
-    // Line shape with caption
-    paragraphs.push(Paragraph::with_runs(
-        vec![Run::control(
-            Control::Line {
-                start: ShapePoint::new(0, 0),
-                end: ShapePoint::new(14000, 0),
-                width: HwpUnit::new(14000).unwrap(),
-                height: HwpUnit::new(100).unwrap(),
-                caption: Some(make_caption("선 1. 구분선", CaptionSide::Bottom)),
-            },
-            CharShapeIndex::new(0),
-        )],
-        ParaShapeIndex::new(0),
-    ));
-
-    // Ellipse shape with text and caption
-    paragraphs.push(Paragraph::with_runs(
-        vec![Run::control(
-            Control::Ellipse {
-                center: ShapePoint::new(5000, 5000),
-                axis1: ShapePoint::new(10000, 5000),
-                axis2: ShapePoint::new(5000, 8000),
-                width: HwpUnit::new(10000).unwrap(),
-                height: HwpUnit::new(6000).unwrap(),
-                paragraphs: vec![text_para("타원 내부 텍스트", 0, 1)],
-                caption: Some(make_caption("그림 2. 타원 도형", CaptionSide::Bottom)),
-            },
-            CharShapeIndex::new(0),
-        )],
-        ParaShapeIndex::new(0),
-    ));
-
-    // Polygon (triangle) with text and caption
-    paragraphs.push(Paragraph::with_runs(
-        vec![Run::control(
-            Control::Polygon {
-                vertices: vec![
-                    ShapePoint::new(5000, 0),
-                    ShapePoint::new(10000, 8000),
-                    ShapePoint::new(0, 8000),
-                ],
-                width: HwpUnit::new(10000).unwrap(),
-                height: HwpUnit::new(8000).unwrap(),
-                paragraphs: vec![text_para("삼각형", 0, 1)],
-                caption: Some(make_caption("그림 3. 삼각형 도형", CaptionSide::Bottom)),
-            },
-            CharShapeIndex::new(0),
-        )],
-        ParaShapeIndex::new(0),
-    ));
+    let paragraphs: Vec<Paragraph> = vec![
+        // Section title
+        Paragraph::with_runs(
+            vec![Run::text("섹션 2: 이미지, 글상자, 도형", CharShapeIndex::new(3))],
+            ParaShapeIndex::new(1),
+        ),
+        // Image with caption
+        Paragraph::with_runs(vec![Run::image(img, CharShapeIndex::new(0))], ParaShapeIndex::new(1)),
+        // TextBox with caption
+        Paragraph::with_runs(
+            vec![Run::control(
+                Control::TextBox {
+                    paragraphs: vec![
+                        text_para("글상자 제목", 1, 1),
+                        text_para(
+                            "글상자 안의 본문 텍스트입니다. 다양한 내용을 포함할 수 있습니다.",
+                            0,
+                            0,
+                        ),
+                    ],
+                    width: HwpUnit::from_mm(80.0).unwrap(),
+                    height: HwpUnit::from_mm(30.0).unwrap(),
+                    horz_offset: 0,
+                    vert_offset: 0,
+                    caption: Some(make_caption("글상자 1. 설명", CaptionSide::Bottom)),
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        ),
+        // Line shape with caption
+        Paragraph::with_runs(
+            vec![Run::control(
+                Control::Line {
+                    start: ShapePoint::new(0, 0),
+                    end: ShapePoint::new(14000, 0),
+                    width: HwpUnit::new(14000).unwrap(),
+                    height: HwpUnit::new(100).unwrap(),
+                    caption: Some(make_caption("선 1. 구분선", CaptionSide::Bottom)),
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        ),
+        // Ellipse shape with text and caption
+        Paragraph::with_runs(
+            vec![Run::control(
+                Control::Ellipse {
+                    center: ShapePoint::new(5000, 5000),
+                    axis1: ShapePoint::new(10000, 5000),
+                    axis2: ShapePoint::new(5000, 8000),
+                    width: HwpUnit::new(10000).unwrap(),
+                    height: HwpUnit::new(6000).unwrap(),
+                    paragraphs: vec![text_para("타원 내부 텍스트", 0, 1)],
+                    caption: Some(make_caption("그림 2. 타원 도형", CaptionSide::Bottom)),
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        ),
+        // Polygon (triangle) with text and caption
+        Paragraph::with_runs(
+            vec![Run::control(
+                Control::Polygon {
+                    vertices: vec![
+                        ShapePoint::new(5000, 0),
+                        ShapePoint::new(10000, 8000),
+                        ShapePoint::new(0, 8000),
+                    ],
+                    width: HwpUnit::new(10000).unwrap(),
+                    height: HwpUnit::new(8000).unwrap(),
+                    paragraphs: vec![text_para("삼각형", 0, 1)],
+                    caption: Some(make_caption("그림 3. 삼각형 도형", CaptionSide::Bottom)),
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        ),
+    ];
 
     let mut section: Section = Section::with_paragraphs(paragraphs, PageSettings::a4());
 

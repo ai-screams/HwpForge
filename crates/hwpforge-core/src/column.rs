@@ -150,7 +150,11 @@ impl ColumnSettings {
                 gap: if i < count - 1 { gap } else { HwpUnit::ZERO },
             })
             .collect();
-        Ok(Self { column_type: ColumnType::Newspaper, layout_mode: ColumnLayoutMode::Left, columns })
+        Ok(Self {
+            column_type: ColumnType::Newspaper,
+            layout_mode: ColumnLayoutMode::Left,
+            columns,
+        })
     }
 
     /// Creates a variable-width column layout from explicit definitions.
@@ -240,10 +244,7 @@ mod tests {
     fn equal_columns_returns_error_on_1() {
         let result = ColumnSettings::equal_columns(1, HwpUnit::ZERO);
         assert!(result.is_err());
-        assert_eq!(
-            result.unwrap_err(),
-            "column count must be >= 2 (use None for single column)"
-        );
+        assert_eq!(result.unwrap_err(), "column count must be >= 2 (use None for single column)");
     }
 
     #[test]
