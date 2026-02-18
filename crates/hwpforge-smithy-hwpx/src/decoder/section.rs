@@ -143,7 +143,7 @@ fn convert_paragraph(
         runs.push(Run::text("", CharShapeIndex::new(0)));
     }
 
-    let paragraph = Paragraph { runs, para_shape_id };
+    let paragraph = Paragraph { runs, para_shape_id, column_break: hx.column_break != 0 };
     Ok((paragraph, page_settings))
 }
 

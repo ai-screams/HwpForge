@@ -56,6 +56,9 @@ pub struct Paragraph {
     pub runs: Vec<Run>,
     /// Index into the paragraph shape collection (Blueprint resolves this).
     pub para_shape_id: ParaShapeIndex,
+    /// Whether this paragraph starts a new column (HWPX `columnBreak="1"`).
+    #[serde(default)]
+    pub column_break: bool,
 }
 
 impl Paragraph {
@@ -71,7 +74,7 @@ impl Paragraph {
     /// assert!(para.is_empty());
     /// ```
     pub fn new(para_shape_id: ParaShapeIndex) -> Self {
-        Self { runs: Vec::new(), para_shape_id }
+        Self { runs: Vec::new(), para_shape_id, column_break: false }
     }
 
     /// Creates a paragraph with pre-built runs.
@@ -90,7 +93,7 @@ impl Paragraph {
     /// assert_eq!(para.run_count(), 1);
     /// ```
     pub fn with_runs(runs: Vec<Run>, para_shape_id: ParaShapeIndex) -> Self {
-        Self { runs, para_shape_id }
+        Self { runs, para_shape_id, column_break: false }
     }
 
     /// Appends a run to this paragraph.
