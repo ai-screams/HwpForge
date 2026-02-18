@@ -75,7 +75,7 @@ pub struct HxFontFaces {
 }
 
 /// `<hh:fontface lang="HANGUL" fontCnt="2">`.
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxFontFaceGroup {
     #[serde(rename = "@lang", default)]
     pub lang: String,
@@ -90,7 +90,7 @@ pub struct HxFontFaceGroup {
 }
 
 /// `<hh:font id="0" face="함초롬돋움" type="TTF" isEmbedded="0">`.
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxFont {
     #[serde(rename = "@id")]
     pub id: u32,
@@ -113,7 +113,7 @@ pub struct HxFont {
 ///
 /// Provides font metric hints for substitution when the exact font
 /// is unavailable. Values follow the PANOSE classification system.
-#[derive(Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxTypeInfo {
     /// Font family type (e.g. `"FCAT_GOTHIC"`, `"FCAT_MYEONGJO"`).
     #[serde(rename = "@familyType", default)]

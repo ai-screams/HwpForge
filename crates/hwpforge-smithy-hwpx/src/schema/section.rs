@@ -710,30 +710,149 @@ pub struct HxSubList {
 
 // ── Picture / Image ───────────────────────────────────────────────
 
-/// `<hp:pic>` — image container.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// `<hp:pic>` — image container with full shape properties.
+///
+/// Element order matches 한글's expected serialization:
+/// offset → orgSz → curSz → flip → rotationInfo → renderingInfo →
+/// imgRect → imgClip → inMargin → imgDim → img → sz → pos → outMargin → caption
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxPic {
+    // ── AbstractShapeObjectType attrs ──
+    /// Element ID.
     #[serde(rename = "@id", default)]
     pub id: String,
+    /// Z-order for overlapping objects.
+    #[serde(rename = "@zOrder", default)]
+    pub z_order: u32,
+    /// Numbering type: NONE, PICTURE, TABLE, EQUATION.
+    #[serde(rename = "@numberingType", default)]
+    pub numbering_type: String,
+    /// Text wrapping mode.
+    #[serde(rename = "@textWrap", default)]
+    pub text_wrap: String,
+    /// Text flow mode.
+    #[serde(rename = "@textFlow", default)]
+    pub text_flow: String,
+    /// Lock flag (0 = unlocked).
+    #[serde(rename = "@lock", default)]
+    pub lock: u32,
+    /// Drop cap style.
+    #[serde(rename = "@dropcapstyle", default)]
+    pub dropcap_style: String,
 
+    // ── AbstractShapeComponentType attrs ──
+    /// Hyperlink reference.
+    #[serde(rename = "@href", default)]
+    pub href: String,
+    /// Group nesting level.
+    #[serde(rename = "@groupLevel", default)]
+    pub group_level: u32,
+    /// Instance identifier (unique within document).
+    #[serde(rename = "@instid", default)]
+    pub instid: String,
+    /// Reverse flag.
+    #[serde(rename = "@reverse", default)]
+    pub reverse: u32,
+
+    // ── Children (ORDER MATTERS for serialization!) ──
+    /// Position offset.
     #[serde(
-        rename(serialize = "hp:img", deserialize = "img"),
+        rename(serialize = "hp:offset", deserialize = "offset"),
         default,
         skip_serializing_if = "Option::is_none"
     )]
-    pub img: Option<HxImg>,
+    pub offset: Option<HxOffset>,
+    /// Original image size (before scaling).
     #[serde(
         rename(serialize = "hp:orgSz", deserialize = "orgSz"),
         default,
         skip_serializing_if = "Option::is_none"
     )]
     pub org_sz: Option<HxSizeAttr>,
+    /// Current display size.
     #[serde(
         rename(serialize = "hp:curSz", deserialize = "curSz"),
         default,
         skip_serializing_if = "Option::is_none"
     )]
     pub cur_sz: Option<HxSizeAttr>,
+    /// Flip state.
+    #[serde(
+        rename(serialize = "hp:flip", deserialize = "flip"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub flip: Option<HxFlip>,
+    /// Rotation information.
+    #[serde(
+        rename(serialize = "hp:rotationInfo", deserialize = "rotationInfo"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub rotation_info: Option<HxRotationInfo>,
+    /// Rendering transformation matrices.
+    #[serde(
+        rename(serialize = "hp:renderingInfo", deserialize = "renderingInfo"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub rendering_info: Option<HxRenderingInfo>,
+    /// Image bounding rectangle (4 corner points).
+    #[serde(
+        rename(serialize = "hp:imgRect", deserialize = "imgRect"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub img_rect: Option<HxImgRect>,
+    /// Image clipping region.
+    #[serde(
+        rename(serialize = "hp:imgClip", deserialize = "imgClip"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub img_clip: Option<HxImgClip>,
+    /// Inner margin.
+    #[serde(
+        rename(serialize = "hp:inMargin", deserialize = "inMargin"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub in_margin: Option<HxTableMargin>,
+    /// Image pixel dimensions.
+    #[serde(
+        rename(serialize = "hp:imgDim", deserialize = "imgDim"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub img_dim: Option<HxImgDim>,
+    /// Image binary reference (uses `hc:` core namespace).
+    #[serde(
+        rename(serialize = "hc:img", deserialize = "img"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub img: Option<HxImg>,
+    /// Size specification.
+    #[serde(
+        rename(serialize = "hp:sz", deserialize = "sz"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sz: Option<HxTableSz>,
+    /// Position specification.
+    #[serde(
+        rename(serialize = "hp:pos", deserialize = "pos"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pos: Option<HxTablePos>,
+    /// Outer margin.
+    #[serde(
+        rename(serialize = "hp:outMargin", deserialize = "outMargin"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub out_margin: Option<HxTableMargin>,
     /// Optional caption attached to this image.
     #[serde(
         rename(serialize = "hp:caption", deserialize = "caption"),
@@ -741,12 +860,11 @@ pub struct HxPic {
         skip_serializing_if = "Option::is_none"
     )]
     pub caption: Option<HxCaption>,
-    // lineShape, fillBrush, shadow, pos, sz — ignored
 }
 
-/// `<hp:img binaryItemIDRef="image1" bright="0" contrast="0" .../>` or
-/// `<hc:img binaryItemIDRef="..."/>`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// `<hc:img binaryItemIDRef="image1" bright="0" contrast="0" effect="REAL_PIC" alpha="0"/>`.
+/// Uses `hc:` (core namespace) per HWPX spec.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct HxImg {
     #[serde(rename = "@binaryItemIDRef", default)]
     pub binary_item_id_ref: String,
@@ -754,15 +872,141 @@ pub struct HxImg {
     pub bright: i32,
     #[serde(rename = "@contrast", default)]
     pub contrast: i32,
+    /// Image effect type: REAL_PIC (original), etc.
+    #[serde(rename = "@effect", default, skip_serializing_if = "String::is_empty")]
+    pub effect: String,
+    /// Alpha transparency (0 = opaque).
+    #[serde(rename = "@alpha", default, skip_serializing_if = "String::is_empty")]
+    pub alpha: String,
 }
 
 /// Generic width/height attribute pair used in `<hp:orgSz>`, `<hp:curSz>`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct HxSizeAttr {
     #[serde(rename = "@width", default)]
     pub width: i32,
     #[serde(rename = "@height", default)]
     pub height: i32,
+}
+
+// ── Picture-specific sub-elements ────────────────────────────────
+
+/// `<hp:offset x="0" y="0"/>` — position offset for shapes.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxOffset {
+    #[serde(rename = "@x", default)]
+    pub x: i32,
+    #[serde(rename = "@y", default)]
+    pub y: i32,
+}
+
+/// `<hp:flip horizontal="0" vertical="0"/>` — flip state.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxFlip {
+    #[serde(rename = "@horizontal", default)]
+    pub horizontal: u32,
+    #[serde(rename = "@vertical", default)]
+    pub vertical: u32,
+}
+
+/// `<hp:rotationInfo angle="0" centerX="..." centerY="..." rotateimage="1"/>`.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxRotationInfo {
+    #[serde(rename = "@angle", default)]
+    pub angle: i32,
+    #[serde(rename = "@centerX", default)]
+    pub center_x: i32,
+    #[serde(rename = "@centerY", default)]
+    pub center_y: i32,
+    #[serde(rename = "@rotateimage", default)]
+    pub rotate_image: u32,
+}
+
+/// 2D affine transformation matrix (6 elements: e1-e6).
+/// Used in `<hc:transMatrix>`, `<hc:scaMatrix>`, `<hc:rotMatrix>`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxMatrix {
+    #[serde(rename = "@e1", default)]
+    pub e1: String,
+    #[serde(rename = "@e2", default)]
+    pub e2: String,
+    #[serde(rename = "@e3", default)]
+    pub e3: String,
+    #[serde(rename = "@e4", default)]
+    pub e4: String,
+    #[serde(rename = "@e5", default)]
+    pub e5: String,
+    #[serde(rename = "@e6", default)]
+    pub e6: String,
+}
+
+impl HxMatrix {
+    /// Creates an identity transformation matrix.
+    pub fn identity() -> Self {
+        Self {
+            e1: "1".to_string(),
+            e2: "0".to_string(),
+            e3: "0".to_string(),
+            e4: "0".to_string(),
+            e5: "1".to_string(),
+            e6: "0".to_string(),
+        }
+    }
+}
+
+impl Default for HxMatrix {
+    fn default() -> Self {
+        Self::identity()
+    }
+}
+
+/// `<hp:renderingInfo>` — transformation matrices for rendering.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct HxRenderingInfo {
+    /// Translation matrix.
+    #[serde(rename(serialize = "hc:transMatrix", deserialize = "transMatrix"))]
+    pub trans_matrix: HxMatrix,
+    /// Scale matrix.
+    #[serde(rename(serialize = "hc:scaMatrix", deserialize = "scaMatrix"))]
+    pub sca_matrix: HxMatrix,
+    /// Rotation matrix.
+    #[serde(rename(serialize = "hc:rotMatrix", deserialize = "rotMatrix"))]
+    pub rot_matrix: HxMatrix,
+}
+
+/// `<hp:imgRect>` — image bounding rectangle (4 corner points, uses `hc:` namespace).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct HxImgRect {
+    #[serde(rename(serialize = "hc:pt0", deserialize = "pt0"))]
+    pub pt0: HxPoint,
+    #[serde(rename(serialize = "hc:pt1", deserialize = "pt1"))]
+    pub pt1: HxPoint,
+    #[serde(rename(serialize = "hc:pt2", deserialize = "pt2"))]
+    pub pt2: HxPoint,
+    #[serde(rename(serialize = "hc:pt3", deserialize = "pt3"))]
+    pub pt3: HxPoint,
+}
+
+/// `<hp:imgClip left="0" right="..." top="0" bottom="..."/>` — image clipping region.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxImgClip {
+    #[serde(rename = "@left", default)]
+    pub left: i32,
+    #[serde(rename = "@right", default)]
+    pub right: i32,
+    #[serde(rename = "@top", default)]
+    pub top: i32,
+    #[serde(rename = "@bottom", default)]
+    pub bottom: i32,
+}
+
+/// `<hp:imgDim dimwidth="..." dimheight="..."/>` — original pixel dimensions.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxImgDim {
+    #[serde(rename = "@dimwidth", default)]
+    pub dim_width: i32,
+    #[serde(rename = "@dimheight", default)]
+    pub dim_height: i32,
 }
 
 // ── Rectangle / TextBox ──────────────────────────────────────────

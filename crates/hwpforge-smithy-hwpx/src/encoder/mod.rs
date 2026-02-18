@@ -209,8 +209,8 @@ mod tests {
         assert_eq!(section.paragraphs.len(), 1);
         assert_eq!(section.paragraphs[0].runs[0].content.as_text(), Some("안녕하세요"),);
 
-        // Style store preserved
-        assert_eq!(decoded.style_store.font_count(), store.font_count());
+        // Style store preserved (fonts expanded to 7 language groups: 1 × 7 = 7)
+        assert_eq!(decoded.style_store.font_count(), 7);
         let font = decoded.style_store.font(FontIndex::new(0)).unwrap();
         assert_eq!(font.face_name, "함초롬돋움");
         assert_eq!(font.lang, "HANGUL");
@@ -398,8 +398,8 @@ mod tests {
         let bytes = HwpxEncoder::encode(&validated, &store, &ImageStore::new()).unwrap();
         let decoded = HwpxDecoder::decode(&bytes).unwrap();
 
-        // Fonts
-        assert_eq!(decoded.style_store.font_count(), 2);
+        // Fonts: expanded to 7 language groups (1+1+1×5 = 7)
+        assert_eq!(decoded.style_store.font_count(), 7);
         assert_eq!(decoded.style_store.font(FontIndex::new(0)).unwrap().face_name, "함초롬돋움");
         assert_eq!(decoded.style_store.font(FontIndex::new(1)).unwrap().face_name, "Arial");
 

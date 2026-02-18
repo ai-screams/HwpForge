@@ -270,7 +270,28 @@ fn build_ref_list(store: &HwpxStyleStore) -> HxRefList {
 /// index. The encoder re-groups them by language, preserving insertion
 /// order via a simple scan (no external dependency needed).
 fn build_fontfaces(store: &HwpxStyleStore) -> HxFontFaces {
-    let groups = group_fonts_by_lang(store);
+    let mut groups = group_fonts_by_lang(store);
+
+    // 한글 requires all 7 language groups to be present.
+    // If any are missing, fill them with the first font as fallback.
+    const REQUIRED_LANGS: &[&str] =
+        &["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"];
+
+    if !groups.is_empty() {
+        let fallback_group = groups[0].clone();
+        for &lang in REQUIRED_LANGS {
+            if !groups.iter().any(|g| g.lang == lang) {
+                let mut cloned = fallback_group.clone();
+                cloned.lang = lang.to_string();
+                groups.push(cloned);
+            }
+        }
+        // Sort to canonical order: HANGUL → LATIN → HANJA → JAPANESE → OTHER → SYMBOL → USER
+        groups.sort_by_key(|g| {
+            REQUIRED_LANGS.iter().position(|&l| l == g.lang).unwrap_or(usize::MAX)
+        });
+    }
+
     let item_cnt = groups.len() as u32;
     HxFontFaces { item_cnt, groups }
 }
@@ -606,8 +627,27 @@ fn shadow_type_to_hwpx(st: ShadowType) -> &'static str {
 // ── Style builders ──────────────────────────────────────────────
 
 /// Builds the `HxStyles` list from all styles in the store.
+///
+/// If the store has no styles, injects a minimal "바탕글" (Normal) style
+/// which 한글 expects as the default paragraph style (id=0).
 fn build_styles(store: &HwpxStyleStore) -> HxStyles {
-    let items: Vec<HxStyle> = store.iter_styles().map(build_style).collect();
+    let mut items: Vec<HxStyle> = store.iter_styles().map(build_style).collect();
+
+    // 한글 requires at least the "바탕글" (Normal) base style
+    if items.is_empty() {
+        items.push(HxStyle {
+            id: 0,
+            style_type: "PARA".into(),
+            name: "바탕글".into(),
+            eng_name: "Normal".into(),
+            para_pr_id_ref: 0,
+            char_pr_id_ref: 0,
+            next_style_id_ref: 0,
+            lang_id: 1042,
+            lock_form: 0,
+        });
+    }
+
     let item_cnt = items.len() as u32;
     HxStyles { item_cnt, items }
 }
@@ -685,8 +725,8 @@ mod tests {
         // quick-xml::de which strips namespace prefixes automatically.
         let decoded = crate::decoder::header::parse_header(&xml).unwrap();
 
-        // Font roundtrip
-        assert_eq!(decoded.font_count(), store.font_count());
+        // Font roundtrip: encoder expands to 7 language groups (1 font × 7 = 7)
+        assert_eq!(decoded.font_count(), 7);
         let f = decoded.font(FontIndex::new(0)).unwrap();
         assert_eq!(f.face_name, "함초롬돋움");
         assert_eq!(f.lang, "HANGUL");
@@ -885,8 +925,9 @@ mod tests {
         let xml = encode_header(&store, 1).unwrap();
         let decoded = crate::decoder::header::parse_header(&xml).unwrap();
 
-        // Fonts
-        assert_eq!(decoded.font_count(), 3);
+        // Fonts: encoder expands to 7 language groups
+        // HANGUL: 2, LATIN: 1, HANJA/JAPANESE/OTHER/SYMBOL/USER: 2 each (cloned from HANGUL)
+        assert_eq!(decoded.font_count(), 13);
         assert_eq!(decoded.font(FontIndex::new(0)).unwrap().face_name, "함초롬돋움");
         assert_eq!(decoded.font(FontIndex::new(1)).unwrap().face_name, "함초롬바탕");
         assert_eq!(decoded.font(FontIndex::new(2)).unwrap().face_name, "Times New Roman");
@@ -990,11 +1031,13 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_styles_not_serialized() {
+    fn test_empty_store_gets_default_style() {
         let store = HwpxStyleStore::new();
         let xml = encode_header(&store, 1).unwrap();
-        // Styles should not appear in XML when empty
-        assert!(!xml.contains("<hh:styles"));
+        // 한글 requires at least the "바탕글" default style
+        assert!(xml.contains("<hh:styles"), "default 바탕글 style should be injected");
+        assert!(xml.contains("바탕글"), "바탕글 style name must be present");
+        assert!(xml.contains("Normal"), "Normal eng_name must be present");
     }
 
     // ── 14. Verify all 6 encoder improvements ──────────────────

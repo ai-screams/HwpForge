@@ -25,10 +25,11 @@ use hwpforge_core::PageSettings;
 use crate::encoder::package::XMLNS_DECLS;
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    HxCaption, HxCellAddr, HxCellSpan, HxCellSz, HxCtrl, HxDrawText, HxEllipse, HxFootNote, HxImg,
-    HxLine, HxLineSeg, HxLineSegArray, HxPageMargin, HxPagePr, HxParagraph, HxPic, HxPoint,
-    HxPolygon, HxRect, HxRun, HxSecPr, HxSection, HxSizeAttr, HxSubList, HxTable, HxTableCell,
-    HxTableMargin, HxTablePos, HxTableRow, HxTableSz, HxText,
+    HxCaption, HxCellAddr, HxCellSpan, HxCellSz, HxCtrl, HxDrawText, HxEllipse, HxFlip,
+    HxFootNote, HxImg, HxImgClip, HxImgDim, HxImgRect, HxLine, HxLineSeg, HxLineSegArray,
+    HxMatrix, HxOffset, HxPageMargin, HxPagePr, HxParagraph, HxPic, HxPoint, HxPolygon, HxRect,
+    HxRenderingInfo, HxRotationInfo, HxRun, HxSecPr, HxSection, HxSizeAttr, HxSubList, HxTable,
+    HxTableCell, HxTableMargin, HxTablePos, HxTableRow, HxTableSz, HxText,
 };
 
 /// Maximum nesting depth for tables-within-tables.
@@ -140,7 +141,7 @@ fn build_paragraph(
         para_pr_id_ref: para.para_shape_id.get() as u32,
         style_id_ref: 0,
         page_break: 0,
-        column_break: 0,
+        column_break: u32::from(para.column_break),
         merged: 0,
         runs,
         linesegarray,
@@ -335,7 +336,7 @@ fn encode_textbox_to_rect(ctrl: &Control, depth: usize) -> HwpxResult<HxRect> {
     let sub_list = encode_paragraphs_to_sublist(paragraphs, depth)?;
 
     Ok(HxRect {
-        id: String::new(),
+        id: generate_instid(),
         z_order: 0,
         numbering_type: "NONE".to_string(),
         text_wrap: "TOP_AND_BOTTOM".to_string(),
@@ -403,7 +404,7 @@ fn encode_line_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxLine> {
     };
 
     Ok(HxLine {
-        id: String::new(),
+        id: generate_instid(),
         z_order: 0,
         numbering_type: "NONE".to_string(),
         text_wrap: "TOP_AND_BOTTOM".to_string(),
@@ -467,7 +468,7 @@ fn encode_ellipse_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxEllipse> {
     };
 
     Ok(HxEllipse {
-        id: String::new(),
+        id: generate_instid(),
         z_order: 0,
         numbering_type: "NONE".to_string(),
         text_wrap: "TOP_AND_BOTTOM".to_string(),
@@ -537,7 +538,7 @@ fn encode_polygon_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxPolygon> {
     let points = vertices.iter().map(|v| HxPoint { x: v.x, y: v.y }).collect();
 
     Ok(HxPolygon {
-        id: String::new(),
+        id: generate_instid(),
         z_order: 0,
         numbering_type: "NONE".to_string(),
         text_wrap: "TOP_AND_BOTTOM".to_string(),
@@ -674,7 +675,7 @@ fn build_table(table: &Table, depth: usize) -> HwpxResult<HxTable> {
     });
 
     Ok(HxTable {
-        id: String::new(),
+        id: generate_instid(),
         z_order: 0,
         numbering_type: "TABLE".to_string(),
         text_wrap: "TOP_AND_BOTTOM".to_string(),
@@ -779,12 +780,16 @@ fn build_table_cell(
     })
 }
 
-/// Builds `HxPic` from a Core `Image`.
+/// Builds `HxPic` from a Core `Image` with complete shape structure.
 ///
 /// The `BinData/` prefix and file extension are stripped from the path
 /// to produce the `binaryItemIDRef` attribute value. For example,
 /// `"BinData/image1.png"` becomes `"image1"`. This matches 한글's
 /// convention where `binaryItemIDRef` is a logical name without extension.
+///
+/// Generates all required sub-elements (offset, orgSz, curSz, flip,
+/// rotationInfo, renderingInfo, imgRect, imgClip, inMargin, imgDim,
+/// img, sz, pos, outMargin) to match 한글's expected structure.
 fn build_picture(img: &Image, depth: usize) -> HwpxResult<HxPic> {
     let without_prefix = img.path.strip_prefix("BinData/").unwrap_or(&img.path);
     // Strip extension: "image1.png" → "image1"
@@ -793,15 +798,80 @@ fn build_picture(img: &Image, depth: usize) -> HwpxResult<HxPic> {
         None => without_prefix,
     };
 
+    let w = img.width.as_i32();
+    let h = img.height.as_i32();
+    let half_w = w / 2;
+    let half_h = h / 2;
+
     Ok(HxPic {
-        id: String::new(),
-        img: Some(HxImg { binary_item_id_ref: binary_ref.to_string(), bright: 0, contrast: 0 }),
-        org_sz: None,
-        cur_sz: Some(HxSizeAttr { width: img.width.as_i32(), height: img.height.as_i32() }),
+        id: generate_instid(),
+        z_order: 0,
+        numbering_type: "PICTURE".to_string(),
+        text_wrap: "TOP_AND_BOTTOM".to_string(),
+        text_flow: "BOTH_SIDES".to_string(),
+        lock: 0,
+        dropcap_style: "None".to_string(),
+        href: String::new(),
+        group_level: 0,
+        instid: generate_instid(),
+        reverse: 0,
+
+        offset: Some(HxOffset { x: 0, y: 0 }),
+        org_sz: Some(HxSizeAttr { width: w, height: h }),
+        cur_sz: Some(HxSizeAttr { width: w, height: h }),
+        flip: Some(HxFlip { horizontal: 0, vertical: 0 }),
+        rotation_info: Some(HxRotationInfo {
+            angle: 0,
+            center_x: half_w,
+            center_y: half_h,
+            rotate_image: 1,
+        }),
+        rendering_info: Some(HxRenderingInfo {
+            trans_matrix: HxMatrix::identity(),
+            sca_matrix: HxMatrix::identity(),
+            rot_matrix: HxMatrix::identity(),
+        }),
+        img_rect: Some(HxImgRect {
+            pt0: HxPoint { x: 0, y: 0 },
+            pt1: HxPoint { x: w, y: 0 },
+            pt2: HxPoint { x: w, y: h },
+            pt3: HxPoint { x: 0, y: h },
+        }),
+        img_clip: Some(HxImgClip { left: 0, right: w, top: 0, bottom: h }),
+        in_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+        img_dim: Some(HxImgDim { dim_width: w, dim_height: h }),
+        img: Some(HxImg {
+            binary_item_id_ref: binary_ref.to_string(),
+            bright: 0,
+            contrast: 0,
+            effect: "REAL_PIC".to_string(),
+            alpha: "0".to_string(),
+        }),
+        sz: Some(HxTableSz {
+            width: w,
+            width_rel_to: "ABSOLUTE".to_string(),
+            height: h,
+            height_rel_to: "ABSOLUTE".to_string(),
+            protect: 0,
+        }),
+        pos: Some(HxTablePos {
+            treat_as_char: 1,
+            affect_l_spacing: 0,
+            flow_with_text: 0,
+            allow_overlap: 0,
+            hold_anchor_and_so: 0,
+            vert_rel_to: "PARA".to_string(),
+            horz_rel_to: "PARA".to_string(),
+            vert_align: "TOP".to_string(),
+            horz_align: "LEFT".to_string(),
+            vert_offset: 0,
+            horz_offset: 0,
+        }),
+        out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
         caption: img
             .caption
             .as_ref()
-            .map(|c| build_hx_caption(c, img.width.as_i32(), depth))
+            .map(|c| build_hx_caption(c, w, depth))
             .transpose()?,
     })
 }
@@ -1043,13 +1113,15 @@ fn build_header_xml(hf: &hwpforge_core::section::HeaderFooter, tag_name: &str) -
         _ => "BOTH",
     };
 
+    let hf_id = generate_instid();
     let mut xml = String::new();
-    write!(xml, r#"<hp:ctrl><hp:{tag_name} applyPageType="{apply_page}" createItemType="0">"#,)
+    write!(xml, r#"<hp:ctrl><hp:{tag_name} applyPageType="{apply_page}" id="{hf_id}">"#,)
         .expect("write to String is infallible");
 
     // Wrap paragraphs in <hp:subList> (required by HWPX schema)
+    // Note: subList id is empty string per reference files (NOT "0")
     xml.push_str(
-        r#"<hp:subList id="0" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">"#,
+        r#"<hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">"#,
     );
 
     // Encode each paragraph in the header/footer
@@ -1081,22 +1153,47 @@ fn build_header_xml(hf: &hwpforge_core::section::HeaderFooter, tag_name: &str) -
     xml
 }
 
-/// Builds `<hp:ctrl><hp:autoNum>` XML for page numbers.
+/// Builds `<hp:ctrl><hp:pageNum>` XML for page numbers.
+///
+/// Uses the HWPX `<hp:pageNum>` element (not `<hp:autoNum>`) which is
+/// the correct representation for page number controls. The `pos` attribute
+/// specifies where the page number appears, `formatType` controls the
+/// numbering style, and `sideChar` adds surrounding characters.
 fn build_page_number_xml(pn: &hwpforge_core::section::PageNumber) -> String {
     use std::fmt::Write as _;
 
-    let num_type = match pn.number_format {
-        hwpforge_foundation::NumberFormatType::Digit => "PAGE",
-        hwpforge_foundation::NumberFormatType::CircledDigit => "PAGE",
-        hwpforge_foundation::NumberFormatType::RomanCapital => "PAGE",
-        hwpforge_foundation::NumberFormatType::RomanSmall => "PAGE",
-        _ => "PAGE",
+    let pos = match pn.position {
+        hwpforge_foundation::PageNumberPosition::None => "NONE",
+        hwpforge_foundation::PageNumberPosition::TopLeft => "TOP_LEFT",
+        hwpforge_foundation::PageNumberPosition::TopCenter => "TOP_CENTER",
+        hwpforge_foundation::PageNumberPosition::TopRight => "TOP_RIGHT",
+        hwpforge_foundation::PageNumberPosition::BottomLeft => "BOTTOM_LEFT",
+        hwpforge_foundation::PageNumberPosition::BottomCenter => "BOTTOM_CENTER",
+        hwpforge_foundation::PageNumberPosition::BottomRight => "BOTTOM_RIGHT",
+        hwpforge_foundation::PageNumberPosition::OutsideTop => "OUTSIDE_TOP",
+        hwpforge_foundation::PageNumberPosition::OutsideBottom => "OUTSIDE_BOTTOM",
+        hwpforge_foundation::PageNumberPosition::InsideTop => "INSIDE_TOP",
+        hwpforge_foundation::PageNumberPosition::InsideBottom => "INSIDE_BOTTOM",
+        _ => "BOTTOM_CENTER",
+    };
+
+    let format_type = match pn.number_format {
+        hwpforge_foundation::NumberFormatType::Digit => "DIGIT",
+        hwpforge_foundation::NumberFormatType::CircledDigit => "CIRCLED_DIGIT",
+        hwpforge_foundation::NumberFormatType::RomanCapital => "ROMAN_CAPITAL",
+        hwpforge_foundation::NumberFormatType::RomanSmall => "ROMAN_SMALL",
+        hwpforge_foundation::NumberFormatType::LatinCapital => "LATIN_CAPITAL",
+        hwpforge_foundation::NumberFormatType::LatinSmall => "LATIN_SMALL",
+        hwpforge_foundation::NumberFormatType::HangulSyllable => "HANGUL_SYLLABLE",
+        hwpforge_foundation::NumberFormatType::HangulJamo => "HANGUL_JAMO",
+        hwpforge_foundation::NumberFormatType::HanjaDigit => "HANJA_DIGIT",
+        _ => "DIGIT",
     };
 
     let mut xml = String::new();
     write!(
         xml,
-        r#"<hp:ctrl><hp:autoNum numType="{num_type}" sideChar="{side_char}"/></hp:ctrl>"#,
+        r#"<hp:ctrl><hp:pageNum pos="{pos}" formatType="{format_type}" sideChar="{side_char}"/></hp:ctrl>"#,
         side_char = escape_xml(&pn.side_char),
     )
     .expect("write to String is infallible");
@@ -1559,13 +1656,17 @@ mod tests {
         ));
 
         let xml = encode_section(&section, 0).unwrap();
-        assert!(xml.contains("<hp:autoNum"), "XML should contain autoNum element");
+        assert!(xml.contains("<hp:pageNum"), "XML should contain pageNum element");
+        assert!(xml.contains(r#"pos="BOTTOM_CENTER""#), "XML should contain pos attribute");
+        assert!(xml.contains(r#"formatType="DIGIT""#), "XML should contain formatType");
         assert!(xml.contains("sideChar=\"- \""), "XML should contain side char");
 
-        // NOTE: The encoder outputs <hp:autoNum> but the schema decodes <hp:pageNum>.
-        // The autoNum element has different structure than pageNum, so full roundtrip
-        // of page number through encode→decode is only partially possible.
-        // This test validates the encoder output contains the right data.
+        // Full roundtrip: encoder outputs <hp:pageNum> which decoder parses back
+        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let pn = result.page_number.expect("decoded section should have page number");
+        assert_eq!(pn.position, PageNumberPosition::BottomCenter);
+        assert_eq!(pn.number_format, NumberFormatType::Digit);
+        assert_eq!(pn.side_char, "- ");
     }
 
     #[test]

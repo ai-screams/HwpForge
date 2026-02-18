@@ -121,7 +121,7 @@ impl Default for HwpxCharShape {
     fn default() -> Self {
         Self {
             font_ref: HwpxFontRef::default(),
-            height: HwpUnit::ZERO,
+            height: HwpUnit::new(1000).unwrap(), // 10pt default (한글 compatible)
             text_color: Color::BLACK,
             shade_color: None,
             bold: false,
@@ -769,7 +769,7 @@ mod tests {
     #[test]
     fn char_shape_default_values() {
         let cs = HwpxCharShape::default();
-        assert_eq!(cs.height, HwpUnit::ZERO);
+        assert_eq!(cs.height, HwpUnit::new(1000).unwrap()); // 10pt default
         assert_eq!(cs.text_color, Color::BLACK);
         assert_eq!(cs.shade_color, None);
         assert!(!cs.bold);
