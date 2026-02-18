@@ -474,7 +474,7 @@ fn build_para_pr(id: u32, ps: &HwpxParaShape) -> HxParaPr {
             line_wrap: "BREAK".into(),
         }),
         auto_spacing: Some(HxAutoSpacing { e_asian_eng: 0, e_asian_num: 0 }),
-        switch: Some(build_margin_switch(ps)),
+        switches: vec![build_margin_switch(ps)],
         border: Some(HxBorder {
             border_fill_id_ref: 2,
             offset_left: 0,

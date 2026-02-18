@@ -531,6 +531,7 @@ fn encode_line_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxLine> {
             horz_offset: 0,
         }),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+        shape_comment: None,
         caption: caption.as_ref().map(|c| build_hx_caption(c, w, depth)).transpose()?,
         start_pt: Some(HxPoint { x: start.x, y: start.y }),
         end_pt: Some(HxPoint { x: end.x, y: end.y }),

@@ -275,15 +275,13 @@ fn convert_style(s: &HxStyle) -> HwpxStyle {
 }
 
 /// Extracts margin values from the switch/default block.
+///
+/// Searches all `<hp:switch>` elements for one whose `<hp:default>` contains
+/// a `<hh:margin>` child (some `paraPr` have multiple switches).
 fn extract_margins(pp: &HxParaPr) -> (HwpUnit, HwpUnit, HwpUnit, HwpUnit, HwpUnit) {
     let z = HwpUnit::ZERO;
-    let Some(switch) = &pp.switch else {
-        return (z, z, z, z, z);
-    };
-    let Some(default) = &switch.default else {
-        return (z, z, z, z, z);
-    };
-    let Some(margin) = &default.margin else {
+    let margin = pp.switches.iter().find_map(|sw| sw.default.as_ref()?.margin.as_ref());
+    let Some(margin) = margin else {
         return (z, z, z, z, z);
     };
 
@@ -301,16 +299,14 @@ fn extract_margins(pp: &HxParaPr) -> (HwpUnit, HwpUnit, HwpUnit, HwpUnit, HwpUni
 }
 
 /// Extracts line spacing from the switch/default block.
+///
+/// Searches all `<hp:switch>` elements for one whose `<hp:default>` contains
+/// a `<hh:lineSpacing>` child (some `paraPr` have multiple switches).
 fn extract_line_spacing(pp: &HxParaPr) -> (i32, hwpforge_foundation::LineSpacingType) {
     use hwpforge_foundation::LineSpacingType;
     let default_ls = (160, LineSpacingType::Percentage);
-    let Some(switch) = &pp.switch else {
-        return default_ls;
-    };
-    let Some(default) = &switch.default else {
-        return default_ls;
-    };
-    let Some(ls) = &default.line_spacing else {
+    let ls = pp.switches.iter().find_map(|sw| sw.default.as_ref()?.line_spacing.as_ref());
+    let Some(ls) = ls else {
         return default_ls;
     };
 

@@ -404,14 +404,17 @@ pub struct HxParaPr {
         skip_serializing_if = "Option::is_none"
     )]
     pub auto_spacing: Option<HxAutoSpacing>,
-    /// The `<hp:switch>` element wrapping `<hp:default>` with margin
-    /// and lineSpacing values.
+    /// The `<hp:switch>` elements wrapping version-specific rendering data.
+    ///
+    /// Some `paraPr` elements contain multiple `<hp:switch>` blocks (e.g. one
+    /// for heading and one for margin/lineSpacing). Stored as a `Vec` to handle
+    /// all cases gracefully.
     #[serde(
         rename(serialize = "hp:switch", deserialize = "switch"),
         default,
-        skip_serializing_if = "Option::is_none"
+        skip_serializing_if = "Vec::is_empty"
     )]
-    pub switch: Option<HxSwitch>,
+    pub switches: Vec<HxSwitch>,
     #[serde(
         rename(serialize = "hh:border", deserialize = "border"),
         default,
@@ -779,7 +782,7 @@ mod tests {
         assert_eq!(pp.id, 0);
         let align = pp.align.as_ref().unwrap();
         assert_eq!(align.horizontal, "LEFT");
-        let sw = pp.switch.as_ref().unwrap();
+        let sw = pp.switches.first().unwrap();
         let def = sw.default.as_ref().unwrap();
         let margin = def.margin.as_ref().unwrap();
         assert_eq!(margin.left.as_ref().unwrap().value, 0);
@@ -814,7 +817,7 @@ mod tests {
         </hh:head>"#;
         let head = parse_head(xml);
         let pp = &head.ref_list.unwrap().para_properties.unwrap().items[0];
-        let def = pp.switch.as_ref().unwrap().default.as_ref().unwrap();
+        let def = pp.switches.first().unwrap().default.as_ref().unwrap();
         let margin = def.margin.as_ref().unwrap();
         assert_eq!(margin.left.as_ref().unwrap().value, 14000);
         assert_eq!(def.line_spacing.as_ref().unwrap().value, 160);

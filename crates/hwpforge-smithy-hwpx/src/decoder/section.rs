@@ -5,7 +5,7 @@
 
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::{ColumnDef, ColumnLayoutMode, ColumnSettings, ColumnType};
-use hwpforge_core::control::Control;
+use hwpforge_core::control::{Control, ShapeStyle};
 use hwpforge_core::image::{Image, ImageFormat};
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::{Run, RunContent};
@@ -19,8 +19,9 @@ use quick_xml::de::from_str;
 
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    HxCaption, HxCtrl, HxEllipse, HxFootNote, HxHeaderFooter, HxLine, HxPageNum, HxParagraph,
-    HxPic, HxPolygon, HxRect, HxRun, HxSection, HxSubList, HxTable, HxTableCell,
+    HxCaption, HxCtrl, HxEllipse, HxFillBrush, HxFootNote, HxHeaderFooter, HxLine, HxLineShape,
+    HxPageNum, HxParagraph, HxPic, HxPolygon, HxRect, HxRun, HxSection, HxSubList, HxTable,
+    HxTableCell,
 };
 
 /// Maximum nesting depth for tables-within-tables.
@@ -429,7 +430,7 @@ fn decode_line(line: &HxLine, char_shape_id: CharShapeIndex, depth: usize) -> Hw
             width,
             height,
             caption,
-            style: None,
+            style: decode_shape_style(&line.line_shape, &line.fill_brush),
         })),
         char_shape_id,
     })
@@ -488,7 +489,7 @@ fn decode_ellipse(
             vert_offset: 0,
             paragraphs,
             caption,
-            style: None,
+            style: decode_shape_style(&ellipse.line_shape, &ellipse.fill_brush),
         })),
         char_shape_id,
     })
@@ -530,10 +531,38 @@ fn decode_polygon(
             height,
             paragraphs,
             caption,
-            style: None,
+            style: decode_shape_style(&polygon.line_shape, &polygon.fill_brush),
         })),
         char_shape_id,
     })
+}
+
+/// Extracts a [`ShapeStyle`] from HWPX shape common elements.
+///
+/// Maps `HxLineShape` and `HxFillBrush` to Core's `ShapeStyle`.
+/// Returns `None` if no style information is present.
+fn decode_shape_style(
+    line_shape: &Option<HxLineShape>,
+    fill_brush: &Option<HxFillBrush>,
+) -> Option<ShapeStyle> {
+    let fill_color: Option<String> =
+        fill_brush.as_ref().map(|fb| &fb.win_brush.face_color).filter(|c| !c.is_empty()).cloned();
+
+    let (line_color, line_width, line_style) = match line_shape.as_ref() {
+        None => (None, None, None),
+        Some(ls) => (
+            if ls.color.is_empty() { None } else { Some(ls.color.clone()) },
+            if ls.width == 0 { None } else { Some(ls.width) },
+            if ls.style.is_empty() { None } else { Some(ls.style.clone()) },
+        ),
+    };
+
+    if line_color.is_none() && line_width.is_none() && line_style.is_none() && fill_color.is_none()
+    {
+        return None;
+    }
+
+    Some(ShapeStyle { line_color, fill_color, line_width, line_style })
 }
 
 /// Converts paragraphs from an `HxSubList` into Core `Paragraph`s.

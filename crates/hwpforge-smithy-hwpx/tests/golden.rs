@@ -259,3 +259,101 @@ fn roundtrip_page_size_margin() {
 fn roundtrip_sample1() {
     assert_roundtrip("sample1.hwpx");
 }
+
+// ── line.hwpx ──────────────────────────────────────────────────
+
+#[test]
+fn decode_line() {
+    let path = fixture_path("line.hwpx");
+    let result = HwpxDecoder::decode_file(&path).unwrap();
+
+    assert!(!result.document.sections().is_empty());
+
+    // Should contain at least one line shape
+    let has_line = result
+        .document
+        .sections()
+        .iter()
+        .flat_map(|s| &s.paragraphs)
+        .flat_map(|p| &p.runs)
+        .filter_map(|r| r.content.as_control())
+        .any(|ctrl| ctrl.is_line());
+    assert!(has_line, "line.hwpx should contain at least one line shape");
+}
+
+#[test]
+fn roundtrip_line() {
+    assert_roundtrip("line.hwpx");
+}
+
+// ── line shape from-scratch encoder→decoder roundtrip ────────────
+
+#[test]
+fn encode_decode_line_shape() {
+    use hwpforge_core::control::{Control, ShapePoint};
+    use hwpforge_core::document::Document;
+    use hwpforge_core::image::ImageStore;
+    use hwpforge_core::paragraph::Paragraph;
+    use hwpforge_core::run::Run;
+    use hwpforge_core::section::Section;
+    use hwpforge_core::PageSettings;
+    use hwpforge_foundation::{CharShapeIndex, HwpUnit};
+    use hwpforge_smithy_hwpx::style_store::{
+        HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore,
+    };
+
+    // Minimal style store
+    let mut store = HwpxStyleStore::new();
+    for &lang in &["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
+        store.push_font(HwpxFont::new(0, "함초롬돋움", lang));
+    }
+    store.push_char_shape(HwpxCharShape::default());
+    store.push_para_shape(HwpxParaShape::default());
+
+    // Build document with a single line shape
+    let line_ctrl = Control::Line {
+        start: ShapePoint::new(0, 0),
+        end: ShapePoint::new(14000, 0),
+        width: HwpUnit::new(14000).unwrap(),
+        height: HwpUnit::new(100).unwrap(),
+        caption: None,
+        style: None,
+    };
+    let para = Paragraph::with_runs(
+        vec![Run::control(line_ctrl, CharShapeIndex::new(0))],
+        hwpforge_foundation::ParaShapeIndex::new(0),
+    );
+
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(vec![para], PageSettings::a4()));
+
+    // Encode → decode
+    let images = ImageStore::new();
+    let validated = doc.validate().unwrap();
+    let encoded = HwpxEncoder::encode(&validated, &store, &images).unwrap();
+    let decoded = HwpxDecoder::decode(&encoded).unwrap();
+
+    assert!(!decoded.document.sections().is_empty());
+
+    // Must contain a line control with correct geometry
+    let line_ctrl = decoded
+        .document
+        .sections()
+        .iter()
+        .flat_map(|s| &s.paragraphs)
+        .flat_map(|p| &p.runs)
+        .filter_map(|r| r.content.as_control())
+        .find(|ctrl| ctrl.is_line())
+        .expect("encoded line document should round-trip a line shape");
+
+    if let Control::Line { start, end, width, height, .. } = line_ctrl {
+        assert_eq!(start.x, 0, "start.x");
+        assert_eq!(start.y, 0, "start.y");
+        assert_eq!(end.x, 14000, "end.x");
+        assert_eq!(end.y, 0, "end.y");
+        assert_eq!(width.as_i32(), 14000, "width");
+        assert_eq!(height.as_i32(), 100, "height");
+    } else {
+        panic!("expected Control::Line");
+    }
+}

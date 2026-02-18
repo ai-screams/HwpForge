@@ -1111,6 +1111,14 @@ impl HxShadow {
     }
 }
 
+/// `<hp:shapeComment>` — optional text description of a shape.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxShapeComment {
+    /// The comment text content.
+    #[serde(rename = "$text", default)]
+    pub text: String,
+}
+
 /// `<hp:imgRect>` — image bounding rectangle (4 corner points, uses `hc:` namespace).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct HxImgRect {
@@ -1375,7 +1383,7 @@ pub struct HxPoint {
 /// Element order matches 한글's expected serialization:
 /// offset → orgSz → curSz → flip → rotationInfo → renderingInfo →
 /// lineShape → fillBrush → shadow →
-/// startPt → endPt → sz → pos → outMargin → caption
+/// startPt → endPt → sz → pos → outMargin → shapeComment → caption
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxLine {
     // ── AbstractShapeObjectType attrs ──
@@ -1482,17 +1490,17 @@ pub struct HxLine {
     )]
     pub shadow: Option<HxShadow>,
 
-    // ── Line-specific children ──
+    // ── Line-specific children (hc: namespace geometry BEFORE sz/pos) ──
     /// Start point of the line.
     #[serde(
-        rename(serialize = "hp:startPt", deserialize = "startPt"),
+        rename(serialize = "hc:startPt", deserialize = "startPt"),
         default,
         skip_serializing_if = "Option::is_none"
     )]
     pub start_pt: Option<HxPoint>,
     /// End point of the line.
     #[serde(
-        rename(serialize = "hp:endPt", deserialize = "endPt"),
+        rename(serialize = "hc:endPt", deserialize = "endPt"),
         default,
         skip_serializing_if = "Option::is_none"
     )]
@@ -1520,6 +1528,14 @@ pub struct HxLine {
         skip_serializing_if = "Option::is_none"
     )]
     pub out_margin: Option<HxTableMargin>,
+
+    /// Optional shape description text (e.g. "선입니다.").
+    #[serde(
+        rename(serialize = "hp:shapeComment", deserialize = "shapeComment"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub shape_comment: Option<HxShapeComment>,
 
     /// Optional caption attached to this line.
     #[serde(
@@ -1749,7 +1765,7 @@ pub struct HxEllipse {
 /// Element order matches 한글's expected serialization:
 /// offset → orgSz → curSz → flip → rotationInfo → renderingInfo →
 /// lineShape → fillBrush → shadow →
-/// pt[] → sz → pos → outMargin → caption → drawText
+/// sz → pos → outMargin → caption → drawText → pt[]
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxPolygon {
     // ── AbstractShapeObjectType attrs ──
@@ -1851,16 +1867,7 @@ pub struct HxPolygon {
     )]
     pub shadow: Option<HxShadow>,
 
-    // ── Polygon-specific children ──
-    /// Ordered list of polygon vertices.
-    #[serde(
-        rename(serialize = "hp:pt", deserialize = "pt"),
-        default,
-        skip_serializing_if = "Vec::is_empty"
-    )]
-    pub points: Vec<HxPoint>,
-
-    // ── Size / position / margin ──
+    // ── Size / position / margin (MUST come before hp:-namespaced geometry) ──
     /// Size specification.
     #[serde(
         rename(serialize = "hp:sz", deserialize = "sz"),
@@ -1898,6 +1905,15 @@ pub struct HxPolygon {
         skip_serializing_if = "Option::is_none"
     )]
     pub draw_text: Option<HxDrawText>,
+
+    // ── Polygon-specific children (geometry AFTER sz/pos/outMargin) ──
+    /// Ordered list of polygon vertices.
+    #[serde(
+        rename(serialize = "hp:pt", deserialize = "pt"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub points: Vec<HxPoint>,
 }
 
 // ── Tests ─────────────────────────────────────────────────────────
