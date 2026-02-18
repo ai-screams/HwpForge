@@ -337,7 +337,7 @@ fn build_section2() -> Section {
 
     // Multi-column layout (2 columns)
     section.column_settings =
-        Some(ColumnSettings::equal_columns(2, HwpUnit::from_mm(4.0).unwrap()));
+        Some(ColumnSettings::equal_columns(2, HwpUnit::from_mm(4.0).unwrap()).unwrap());
 
     section
 }

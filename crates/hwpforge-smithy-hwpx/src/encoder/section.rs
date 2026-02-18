@@ -593,15 +593,17 @@ fn build_hx_caption(caption: &Caption, parent_width: i32, depth: usize) -> HwpxR
     let gap = caption.gap.as_i32();
     let sub_list = encode_paragraphs_to_sublist(&caption.paragraphs, depth)?;
 
-    Ok(HxCaption { side, full_sz: 0, width, gap, last_width: parent_width.max(0) as u32, sub_list })
+    // parent_width comes from HwpUnit::as_i32(), guaranteed non-negative
+    Ok(HxCaption { side, full_sz: 0, width, gap, last_width: parent_width as u32, sub_list })
 }
 
-/// Generates a random instance ID string (matches 한글 convention).
-// NOTE: Nanosecond-based ID. Unique for single-threaded use; consider atomic counter for parallel encoding.
+/// Generates a unique instance ID string via atomic counter.
+///
+/// Each call returns a monotonically increasing ID, safe for parallel encoding.
 fn generate_instid() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_nanos();
-    format!("{}", (nanos % 1_000_000_000) as u32)
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static INSTID_COUNTER: AtomicU64 = AtomicU64::new(1);
+    INSTID_COUNTER.fetch_add(1, Ordering::Relaxed).to_string()
 }
 
 /// Builds `HxSecPr` from Core `PageSettings`.

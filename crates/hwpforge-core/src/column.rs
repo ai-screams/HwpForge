@@ -15,7 +15,7 @@
 //! use hwpforge_foundation::HwpUnit;
 //!
 //! // Equal-width 2-column layout with 4mm gap
-//! let cols = ColumnSettings::equal_columns(2, HwpUnit::from_mm(4.0).unwrap());
+//! let cols = ColumnSettings::equal_columns(2, HwpUnit::from_mm(4.0).unwrap()).unwrap();
 //! assert_eq!(cols.columns.len(), 2);
 //! assert_eq!(cols.column_type, ColumnType::Newspaper);
 //! ```
@@ -105,7 +105,7 @@ pub struct ColumnDef {
 /// use hwpforge_core::column::{ColumnSettings, ColumnType, ColumnLayoutMode};
 /// use hwpforge_foundation::HwpUnit;
 ///
-/// let cs = ColumnSettings::equal_columns(3, HwpUnit::from_mm(4.0).unwrap());
+/// let cs = ColumnSettings::equal_columns(3, HwpUnit::from_mm(4.0).unwrap()).unwrap();
 /// assert_eq!(cs.columns.len(), 3);
 /// assert_eq!(cs.column_type, ColumnType::Newspaper);
 /// assert_eq!(cs.layout_mode, ColumnLayoutMode::Left);
@@ -127,9 +127,9 @@ impl ColumnSettings {
     /// by the encoder). Uses [`ColumnType::Newspaper`] and
     /// [`ColumnLayoutMode::Left`] as defaults.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if `count < 2` (single-column should be `None`).
+    /// Returns an error if `count < 2` (single-column should be `None`).
     ///
     /// # Examples
     ///
@@ -137,18 +137,20 @@ impl ColumnSettings {
     /// use hwpforge_core::column::ColumnSettings;
     /// use hwpforge_foundation::HwpUnit;
     ///
-    /// let cs = ColumnSettings::equal_columns(2, HwpUnit::from_mm(4.0).unwrap());
+    /// let cs = ColumnSettings::equal_columns(2, HwpUnit::from_mm(4.0).unwrap()).unwrap();
     /// assert_eq!(cs.columns.len(), 2);
     /// ```
-    pub fn equal_columns(count: u32, gap: HwpUnit) -> Self {
-        assert!(count >= 2, "column count must be >= 2 (use None for single column)");
+    pub fn equal_columns(count: u32, gap: HwpUnit) -> Result<Self, &'static str> {
+        if count < 2 {
+            return Err("column count must be >= 2 (use None for single column)");
+        }
         let columns: Vec<ColumnDef> = (0..count)
             .map(|i| ColumnDef {
                 width: HwpUnit::ZERO, // widths calculated by 한글 when sameSz=1
                 gap: if i < count - 1 { gap } else { HwpUnit::ZERO },
             })
             .collect();
-        Self { column_type: ColumnType::Newspaper, layout_mode: ColumnLayoutMode::Left, columns }
+        Ok(Self { column_type: ColumnType::Newspaper, layout_mode: ColumnLayoutMode::Left, columns })
     }
 
     /// Creates a variable-width column layout from explicit definitions.
@@ -215,7 +217,7 @@ mod tests {
     #[test]
     fn equal_columns_2() {
         let gap = HwpUnit::new(1134).unwrap();
-        let cs = ColumnSettings::equal_columns(2, gap);
+        let cs = ColumnSettings::equal_columns(2, gap).unwrap();
         assert_eq!(cs.count(), 2);
         assert_eq!(cs.column_type, ColumnType::Newspaper);
         assert_eq!(cs.layout_mode, ColumnLayoutMode::Left);
@@ -227,7 +229,7 @@ mod tests {
     #[test]
     fn equal_columns_3() {
         let gap = HwpUnit::new(1134).unwrap();
-        let cs = ColumnSettings::equal_columns(3, gap);
+        let cs = ColumnSettings::equal_columns(3, gap).unwrap();
         assert_eq!(cs.count(), 3);
         assert_eq!(cs.columns[0].gap, gap);
         assert_eq!(cs.columns[1].gap, gap);
@@ -235,9 +237,19 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "column count must be >= 2")]
-    fn equal_columns_panics_on_1() {
-        ColumnSettings::equal_columns(1, HwpUnit::ZERO);
+    fn equal_columns_returns_error_on_1() {
+        let result = ColumnSettings::equal_columns(1, HwpUnit::ZERO);
+        assert!(result.is_err());
+        assert_eq!(
+            result.unwrap_err(),
+            "column count must be >= 2 (use None for single column)"
+        );
+    }
+
+    #[test]
+    fn equal_columns_returns_error_on_0() {
+        let result = ColumnSettings::equal_columns(0, HwpUnit::ZERO);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -263,7 +275,7 @@ mod tests {
 
     #[test]
     fn serde_roundtrip() {
-        let cs = ColumnSettings::equal_columns(2, HwpUnit::new(1134).unwrap());
+        let cs = ColumnSettings::equal_columns(2, HwpUnit::new(1134).unwrap()).unwrap();
         let json = serde_json::to_string(&cs).unwrap();
         let back: ColumnSettings = serde_json::from_str(&json).unwrap();
         assert_eq!(cs, back);
@@ -283,7 +295,7 @@ mod tests {
 
     #[test]
     fn display() {
-        let cs = ColumnSettings::equal_columns(2, HwpUnit::new(1134).unwrap());
+        let cs = ColumnSettings::equal_columns(2, HwpUnit::new(1134).unwrap()).unwrap();
         let s = cs.to_string();
         assert!(s.contains("2 columns"), "display: {s}");
         assert!(s.contains("Newspaper"), "display: {s}");
@@ -297,28 +309,28 @@ mod tests {
 
     #[test]
     fn parallel_type() {
-        let mut cs = ColumnSettings::equal_columns(2, HwpUnit::ZERO);
+        let mut cs = ColumnSettings::equal_columns(2, HwpUnit::ZERO).unwrap();
         cs.column_type = ColumnType::Parallel;
         assert_eq!(cs.column_type, ColumnType::Parallel);
     }
 
     #[test]
     fn mirror_layout() {
-        let mut cs = ColumnSettings::equal_columns(2, HwpUnit::ZERO);
+        let mut cs = ColumnSettings::equal_columns(2, HwpUnit::ZERO).unwrap();
         cs.layout_mode = ColumnLayoutMode::Mirror;
         assert_eq!(cs.layout_mode, ColumnLayoutMode::Mirror);
     }
 
     #[test]
     fn is_equal_width_with_zero_widths() {
-        let cs = ColumnSettings::equal_columns(3, HwpUnit::new(1134).unwrap());
+        let cs = ColumnSettings::equal_columns(3, HwpUnit::new(1134).unwrap()).unwrap();
         // All widths are ZERO (sameSz mode), which counts as equal
         assert!(cs.is_equal_width());
     }
 
     #[test]
     fn clone_independence() {
-        let cs = ColumnSettings::equal_columns(2, HwpUnit::new(1134).unwrap());
+        let cs = ColumnSettings::equal_columns(2, HwpUnit::new(1134).unwrap()).unwrap();
         let mut cloned = cs.clone();
         cloned.column_type = ColumnType::Parallel;
         assert_eq!(cs.column_type, ColumnType::Newspaper);
@@ -327,7 +339,7 @@ mod tests {
 
     #[test]
     fn column_settings_serde_roundtrip() {
-        let cs = ColumnSettings::equal_columns(2, HwpUnit::new(1134).unwrap());
+        let cs = ColumnSettings::equal_columns(2, HwpUnit::new(1134).unwrap()).unwrap();
         let json = serde_json::to_string(&cs).unwrap();
         let back: ColumnSettings = serde_json::from_str(&json).unwrap();
         assert_eq!(cs, back);
