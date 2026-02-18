@@ -81,13 +81,20 @@ fn generate_content_hpf(section_count: usize, image_paths: &[String]) -> String 
     manifest_items
         .push_str(r#"<opf:item id="settings" href="settings.xml" media-type="application/xml"/>"#);
 
-    // Image entries in manifest (not in spine)
-    for (idx, path) in image_paths.iter().enumerate() {
+    // Image entries in manifest (not in spine).
+    // The `id` must match the `binaryItemIDRef` in section XML (filename stem, no extension).
+    // `isEmbeded="1"` (intentional typo matching 한글's output) marks the binary as embedded.
+    for path in image_paths {
         use std::fmt::Write as _;
         let media_type = guess_image_media_type(path);
+        // Strip extension: "test_image.png" → "test_image"
+        let stem = match path.rfind('.') {
+            Some(pos) => &path[..pos],
+            None => path.as_str(),
+        };
         write!(
             manifest_items,
-            r#"<opf:item id="image{idx}" href="BinData/{path}" media-type="{media_type}"/>"#,
+            r#"<opf:item id="{stem}" href="BinData/{path}" media-type="{media_type}" isEmbeded="1"/>"#,
         )
         .expect("write to String is infallible");
     }
@@ -319,10 +326,12 @@ mod tests {
     fn content_hpf_includes_images() {
         let images = vec!["photo.jpg".to_string(), "logo.png".to_string()];
         let hpf = generate_content_hpf(1, &images);
-        assert!(hpf.contains(r#"id="image0""#), "missing image0 manifest entry");
+        // id must match binaryItemIDRef (filename stem, no extension)
+        assert!(hpf.contains(r#"id="photo""#), "missing photo manifest entry");
         assert!(hpf.contains(r#"href="BinData/photo.jpg""#), "missing image href");
         assert!(hpf.contains(r#"media-type="image/jpeg""#), "missing jpeg media type");
-        assert!(hpf.contains(r#"id="image1""#), "missing image1 manifest entry");
+        assert!(hpf.contains(r#"isEmbeded="1""#), "missing isEmbeded attribute");
+        assert!(hpf.contains(r#"id="logo""#), "missing logo manifest entry");
         assert!(hpf.contains(r#"href="BinData/logo.png""#), "missing image href");
         assert!(hpf.contains(r#"media-type="image/png""#), "missing png media type");
         // Images should NOT be in spine

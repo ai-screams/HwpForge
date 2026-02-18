@@ -447,27 +447,44 @@ fn main() {
         encode_and_save("14_multi_column.hwpx", &store, &doc, &empty_images());
     }
 
-    // 15. Image
+    // 15. Image (two images: generated tiny PNG + real duck PNG)
     {
         let store = minimal_store();
         let mut doc = Document::new();
-        let mut img = Image::new(
-            "BinData/test_image.png",
-            HwpUnit::from_mm(40.0).unwrap(),
-            HwpUnit::from_mm(30.0).unwrap(),
+
+        // Image 1: tiny generated 1x1 PNG
+        let img1 = Image::new(
+            "BinData/tiny_generated.png",
+            HwpUnit::from_mm(20.0).unwrap(),
+            HwpUnit::from_mm(20.0).unwrap(),
             ImageFormat::Png,
         );
-        img.caption = None;
-        let para = Paragraph::with_runs(
-            vec![Run::image(img, CharShapeIndex::new(0))],
+        let para1 = Paragraph::with_runs(
+            vec![Run::image(img1, CharShapeIndex::new(0))],
             ParaShapeIndex::new(0),
         );
+
+        // Image 2: real duck character PNG from tests/fixtures/
+        let duck_bytes = std::fs::read("tests/fixtures/main-charactor.png")
+            .expect("tests/fixtures/main-charactor.png should exist");
+        let img2 = Image::new(
+            "BinData/main-charactor.png",
+            HwpUnit::from_mm(50.0).unwrap(),
+            HwpUnit::from_mm(50.0).unwrap(),
+            ImageFormat::Png,
+        );
+        let para2 = Paragraph::with_runs(
+            vec![Run::image(img2, CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+
         doc.add_section(Section::with_paragraphs(
-            vec![p("이미지 테스트:"), para],
+            vec![p("이미지 테스트 (2개):"), para1, p("오리 마법사:"), para2],
             PageSettings::a4(),
         ));
         let mut images = ImageStore::new();
-        images.insert("test_image.png".to_string(), tiny_png());
+        images.insert("tiny_generated.png".to_string(), tiny_png());
+        images.insert("main-charactor.png".to_string(), duck_bytes);
         encode_and_save("15_image.hwpx", &store, &doc, &images);
     }
 
