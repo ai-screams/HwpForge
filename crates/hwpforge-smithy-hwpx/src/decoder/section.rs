@@ -388,6 +388,7 @@ fn decode_textbox(
             horz_offset,
             vert_offset,
             caption,
+            style: None,
         })),
         char_shape_id,
     }))
@@ -428,6 +429,7 @@ fn decode_line(line: &HxLine, char_shape_id: CharShapeIndex, depth: usize) -> Hw
             width,
             height,
             caption,
+            style: None,
         })),
         char_shape_id,
     })
@@ -482,8 +484,11 @@ fn decode_ellipse(
             axis2,
             width,
             height,
+            horz_offset: 0,
+            vert_offset: 0,
             paragraphs,
             caption,
+            style: None,
         })),
         char_shape_id,
     })
@@ -525,6 +530,7 @@ fn decode_polygon(
             height,
             paragraphs,
             caption,
+            style: None,
         })),
         char_shape_id,
     })

@@ -14,7 +14,7 @@
 
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::{ColumnLayoutMode, ColumnSettings, ColumnType};
-use hwpforge_core::control::Control;
+use hwpforge_core::control::{Control, ShapeStyle};
 use hwpforge_core::image::Image;
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::{Run, RunContent};
@@ -25,11 +25,12 @@ use hwpforge_core::PageSettings;
 use crate::encoder::package::XMLNS_DECLS;
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    HxCaption, HxCellAddr, HxCellSpan, HxCellSz, HxCtrl, HxDrawText, HxEllipse, HxFlip,
-    HxFootNote, HxImg, HxImgClip, HxImgDim, HxImgRect, HxLine, HxLineSeg, HxLineSegArray,
-    HxMatrix, HxOffset, HxPageMargin, HxPagePr, HxParagraph, HxPic, HxPoint, HxPolygon, HxRect,
-    HxRenderingInfo, HxRotationInfo, HxRun, HxSecPr, HxSection, HxSizeAttr, HxSubList, HxTable,
-    HxTableCell, HxTableMargin, HxTablePos, HxTableRow, HxTableSz, HxText,
+    HxCaption, HxCellAddr, HxCellSpan, HxCellSz, HxCtrl, HxDrawText, HxEllipse, HxFillBrush,
+    HxFlip, HxFootNote, HxImg, HxImgClip, HxImgDim, HxImgRect, HxLine, HxLineSeg, HxLineSegArray,
+    HxLineShape, HxMatrix, HxOffset, HxPageMargin, HxPagePr, HxParagraph, HxPic, HxPoint,
+    HxPolygon, HxRect, HxRenderingInfo, HxRotationInfo, HxRun, HxSecPr, HxSection, HxShadow,
+    HxSizeAttr, HxSubList, HxTable, HxTableCell, HxTableMargin, HxTablePos, HxTableRow, HxTableSz,
+    HxText,
 };
 
 /// Maximum nesting depth for tables-within-tables.
@@ -315,14 +316,85 @@ fn encode_paragraphs_to_sublist(paragraphs: &[Paragraph], depth: usize) -> HwpxR
     })
 }
 
+// ── Shape-common helpers ─────────────────────────────────────────
+
+/// Collected common sub-elements required by 한글 for all drawing objects.
+///
+/// All four shape encoders (rect/textbox, line, ellipse, polygon) produce
+/// the same prefix block. This struct avoids repeating the construction logic.
+struct ShapeCommon {
+    offset: HxOffset,
+    org_sz: HxSizeAttr,
+    cur_sz: HxSizeAttr,
+    flip: HxFlip,
+    rotation_info: HxRotationInfo,
+    rendering_info: HxRenderingInfo,
+    line_shape: HxLineShape,
+    fill_brush: HxFillBrush,
+    shadow: HxShadow,
+}
+
+/// Builds the shape-common block for a drawing object of the given pixel size.
+///
+/// Defaults match 한글's output for a newly created shape:
+/// - zero offset, orgSz = given dimensions, curSz = 0×0
+/// - identity rotation/rendering matrices
+/// - solid black border, white fill, no shadow
+fn build_shape_common(width: i32, height: i32, style: Option<&ShapeStyle>) -> ShapeCommon {
+    let mut line_shape = HxLineShape::default_solid();
+    let mut fill_brush = HxFillBrush::default_white();
+
+    if let Some(s) = style {
+        if let Some(ref c) = s.line_color {
+            line_shape.color = c.clone();
+        }
+        if let Some(w) = s.line_width {
+            line_shape.width = w;
+        }
+        if let Some(ref ls) = s.line_style {
+            line_shape.style = ls.clone();
+        }
+        if let Some(ref c) = s.fill_color {
+            fill_brush.win_brush.face_color = c.clone();
+        }
+    }
+
+    ShapeCommon {
+        offset: HxOffset { x: 0, y: 0 },
+        org_sz: HxSizeAttr { width, height },
+        cur_sz: HxSizeAttr { width: 0, height: 0 },
+        flip: HxFlip { horizontal: 0, vertical: 0 },
+        rotation_info: HxRotationInfo {
+            angle: 0,
+            center_x: width / 2,
+            center_y: height / 2,
+            rotate_image: 1,
+        },
+        rendering_info: HxRenderingInfo {
+            trans_matrix: HxMatrix::identity(),
+            sca_matrix: HxMatrix::identity(),
+            rot_matrix: HxMatrix::identity(),
+        },
+        line_shape,
+        fill_brush,
+        shadow: HxShadow::default_none(),
+    }
+}
+
 /// Encodes a Core `Control::TextBox` into `HxRect` with `<hp:drawText>`.
 ///
 /// Phase 4.5 MVP: inline positioning (treatAsChar=1) when offsets are (0,0).
 fn encode_textbox_to_rect(ctrl: &Control, depth: usize) -> HwpxResult<HxRect> {
-    let (paragraphs, width, height, horz_offset, vert_offset, caption) = match ctrl {
-        Control::TextBox { paragraphs, width, height, horz_offset, vert_offset, caption } => {
-            (paragraphs, *width, *height, *horz_offset, *vert_offset, caption)
-        }
+    let (paragraphs, width, height, horz_offset, vert_offset, caption, style) = match ctrl {
+        Control::TextBox {
+            paragraphs,
+            width,
+            height,
+            horz_offset,
+            vert_offset,
+            caption,
+            style,
+        } => (paragraphs, *width, *height, *horz_offset, *vert_offset, caption, style),
         _ => unreachable!("encode_textbox_to_rect called with non-TextBox"),
     };
 
@@ -334,6 +406,7 @@ fn encode_textbox_to_rect(ctrl: &Control, depth: usize) -> HwpxResult<HxRect> {
     let last_width = (width_hwp - 2 * MARGIN).max(0) as u32;
 
     let sub_list = encode_paragraphs_to_sublist(paragraphs, depth)?;
+    let sc = build_shape_common(width_hwp, height_hwp, style.as_ref());
 
     Ok(HxRect {
         id: generate_instid(),
@@ -347,6 +420,16 @@ fn encode_textbox_to_rect(ctrl: &Control, depth: usize) -> HwpxResult<HxRect> {
         group_level: 0,
         instid: generate_instid(),
         ratio: 0,
+
+        offset: Some(sc.offset),
+        org_sz: Some(sc.org_sz),
+        cur_sz: Some(sc.cur_sz),
+        flip: Some(sc.flip),
+        rotation_info: Some(sc.rotation_info),
+        rendering_info: Some(sc.rendering_info),
+        line_shape: Some(sc.line_shape),
+        fill_brush: Some(sc.fill_brush),
+        shadow: Some(sc.shadow),
 
         sz: Some(HxTableSz {
             width: width_hwp,
@@ -394,14 +477,17 @@ fn encode_textbox_to_rect(ctrl: &Control, depth: usize) -> HwpxResult<HxRect> {
 }
 
 /// Encodes a Core `Control::Line` into `HxLine`.
-// NOTE: Shape encoders share ~27 default fields each. At 8+ shapes, extract a shared default helper.
 fn encode_line_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxLine> {
-    let (start, end, width, height, caption) = match ctrl {
-        Control::Line { start, end, width, height, caption } => {
-            (start, end, *width, *height, caption)
+    let (start, end, width, height, caption, style) = match ctrl {
+        Control::Line { start, end, width, height, caption, style } => {
+            (start, end, *width, *height, caption, style)
         }
         _ => unreachable!("encode_line_to_hx called with non-Line"),
     };
+
+    let w = width.as_i32();
+    let h = height.as_i32();
+    let sc = build_shape_common(w, h, style.as_ref());
 
     Ok(HxLine {
         id: generate_instid(),
@@ -415,10 +501,19 @@ fn encode_line_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxLine> {
         group_level: 0,
         instid: generate_instid(),
         is_reverse_hv: 0,
+        offset: Some(sc.offset),
+        org_sz: Some(sc.org_sz),
+        cur_sz: Some(sc.cur_sz),
+        flip: Some(sc.flip),
+        rotation_info: Some(sc.rotation_info),
+        rendering_info: Some(sc.rendering_info),
+        line_shape: Some(sc.line_shape),
+        fill_brush: Some(sc.fill_brush),
+        shadow: Some(sc.shadow),
         sz: Some(HxTableSz {
-            width: width.as_i32(),
+            width: w,
             width_rel_to: "ABSOLUTE".to_string(),
-            height: height.as_i32(),
+            height: h,
             height_rel_to: "ABSOLUTE".to_string(),
             protect: 0,
         }),
@@ -436,10 +531,7 @@ fn encode_line_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxLine> {
             horz_offset: 0,
         }),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
-        caption: caption
-            .as_ref()
-            .map(|c| build_hx_caption(c, width.as_i32(), depth))
-            .transpose()?,
+        caption: caption.as_ref().map(|c| build_hx_caption(c, w, depth)).transpose()?,
         start_pt: Some(HxPoint { x: start.x, y: start.y }),
         end_pt: Some(HxPoint { x: end.x, y: end.y }),
     })
@@ -447,12 +539,37 @@ fn encode_line_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxLine> {
 
 /// Encodes a Core `Control::Ellipse` into `HxEllipse`.
 fn encode_ellipse_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxEllipse> {
-    let (center, axis1, axis2, width, height, paragraphs, caption) = match ctrl {
-        Control::Ellipse { center, axis1, axis2, width, height, paragraphs, caption } => {
-            (center, axis1, axis2, *width, *height, paragraphs, caption)
-        }
-        _ => unreachable!("encode_ellipse_to_hx called with non-Ellipse"),
-    };
+    let (center, axis1, axis2, width, height, horz_offset, vert_offset, paragraphs, caption, style) =
+        match ctrl {
+            Control::Ellipse {
+                center,
+                axis1,
+                axis2,
+                width,
+                height,
+                horz_offset,
+                vert_offset,
+                paragraphs,
+                caption,
+                style,
+            } => (
+                center,
+                axis1,
+                axis2,
+                *width,
+                *height,
+                horz_offset,
+                vert_offset,
+                paragraphs,
+                caption,
+                style,
+            ),
+            _ => unreachable!("encode_ellipse_to_hx called with non-Ellipse"),
+        };
+
+    let w = width.as_i32();
+    let h = height.as_i32();
+    let sc = build_shape_common(w, h, style.as_ref());
 
     let draw_text = if paragraphs.is_empty() {
         None
@@ -481,15 +598,24 @@ fn encode_ellipse_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxEllipse> {
         interval_dirty: 0,
         has_arc_pr: 0,
         arc_type: "NORMAL".to_string(),
+        offset: Some(sc.offset),
+        org_sz: Some(sc.org_sz),
+        cur_sz: Some(sc.cur_sz),
+        flip: Some(sc.flip),
+        rotation_info: Some(sc.rotation_info),
+        rendering_info: Some(sc.rendering_info),
+        line_shape: Some(sc.line_shape),
+        fill_brush: Some(sc.fill_brush),
+        shadow: Some(sc.shadow),
         sz: Some(HxTableSz {
-            width: width.as_i32(),
+            width: w,
             width_rel_to: "ABSOLUTE".to_string(),
-            height: height.as_i32(),
+            height: h,
             height_rel_to: "ABSOLUTE".to_string(),
             protect: 0,
         }),
         pos: Some(HxTablePos {
-            treat_as_char: 1,
+            treat_as_char: if *horz_offset == 0 && *vert_offset == 0 { 1 } else { 0 },
             affect_l_spacing: 0,
             flow_with_text: 0,
             allow_overlap: 0,
@@ -498,29 +624,34 @@ fn encode_ellipse_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxEllipse> {
             horz_rel_to: "PARA".to_string(),
             vert_align: "TOP".to_string(),
             horz_align: "LEFT".to_string(),
-            vert_offset: 0,
-            horz_offset: 0,
+            vert_offset: *vert_offset,
+            horz_offset: *horz_offset,
         }),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
-        caption: caption
-            .as_ref()
-            .map(|c| build_hx_caption(c, width.as_i32(), depth))
-            .transpose()?,
+        caption: caption.as_ref().map(|c| build_hx_caption(c, w, depth)).transpose()?,
         draw_text,
         center: Some(HxPoint { x: center.x, y: center.y }),
         ax1: Some(HxPoint { x: axis1.x, y: axis1.y }),
         ax2: Some(HxPoint { x: axis2.x, y: axis2.y }),
+        start1: Some(HxPoint { x: 0, y: 0 }),
+        end1: Some(HxPoint { x: 0, y: 0 }),
+        start2: Some(HxPoint { x: 0, y: 0 }),
+        end2: Some(HxPoint { x: 0, y: 0 }),
     })
 }
 
 /// Encodes a Core `Control::Polygon` into `HxPolygon`.
 fn encode_polygon_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxPolygon> {
-    let (vertices, width, height, paragraphs, caption) = match ctrl {
-        Control::Polygon { vertices, width, height, paragraphs, caption } => {
-            (vertices, *width, *height, paragraphs, caption)
+    let (vertices, width, height, paragraphs, caption, style) = match ctrl {
+        Control::Polygon { vertices, width, height, paragraphs, caption, style } => {
+            (vertices, *width, *height, paragraphs, caption, style)
         }
         _ => unreachable!("encode_polygon_to_hx called with non-Polygon"),
     };
+
+    let w = width.as_i32();
+    let h = height.as_i32();
+    let sc = build_shape_common(w, h, style.as_ref());
 
     let draw_text = if paragraphs.is_empty() {
         None
@@ -548,10 +679,19 @@ fn encode_polygon_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxPolygon> {
         href: String::new(),
         group_level: 0,
         instid: generate_instid(),
+        offset: Some(sc.offset),
+        org_sz: Some(sc.org_sz),
+        cur_sz: Some(sc.cur_sz),
+        flip: Some(sc.flip),
+        rotation_info: Some(sc.rotation_info),
+        rendering_info: Some(sc.rendering_info),
+        line_shape: Some(sc.line_shape),
+        fill_brush: Some(sc.fill_brush),
+        shadow: Some(sc.shadow),
         sz: Some(HxTableSz {
-            width: width.as_i32(),
+            width: w,
             width_rel_to: "ABSOLUTE".to_string(),
-            height: height.as_i32(),
+            height: h,
             height_rel_to: "ABSOLUTE".to_string(),
             protect: 0,
         }),
@@ -569,10 +709,7 @@ fn encode_polygon_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxPolygon> {
             horz_offset: 0,
         }),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
-        caption: caption
-            .as_ref()
-            .map(|c| build_hx_caption(c, width.as_i32(), depth))
-            .transpose()?,
+        caption: caption.as_ref().map(|c| build_hx_caption(c, w, depth)).transpose()?,
         draw_text,
         points,
     })
@@ -868,11 +1005,7 @@ fn build_picture(img: &Image, depth: usize) -> HwpxResult<HxPic> {
             horz_offset: 0,
         }),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
-        caption: img
-            .caption
-            .as_ref()
-            .map(|c| build_hx_caption(c, w, depth))
-            .transpose()?,
+        caption: img.caption.as_ref().map(|c| build_hx_caption(c, w, depth)).transpose()?,
     })
 }
 
@@ -1756,6 +1889,7 @@ mod tests {
                         horz_offset: 0,
                         vert_offset: 0,
                         caption: None,
+                        style: None,
                     },
                     CharShapeIndex::new(0),
                 )],
@@ -1866,6 +2000,7 @@ mod tests {
                         horz_offset: 0,
                         vert_offset: 0,
                         caption: None,
+                        style: None,
                     },
                     CharShapeIndex::new(0),
                 )],

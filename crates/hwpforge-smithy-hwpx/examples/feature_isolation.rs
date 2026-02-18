@@ -25,7 +25,7 @@
 
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::ColumnSettings;
-use hwpforge_core::control::{Control, ShapePoint};
+use hwpforge_core::control::{Control, ShapePoint, ShapeStyle};
 use hwpforge_core::document::Document;
 use hwpforge_core::image::{Image, ImageFormat, ImageStore};
 use hwpforge_core::paragraph::Paragraph;
@@ -34,8 +34,8 @@ use hwpforge_core::section::{HeaderFooter, PageNumber, Section};
 use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
-    Alignment, ApplyPageType, CharShapeIndex, Color, HwpUnit, NumberFormatType,
-    PageNumberPosition, ParaShapeIndex,
+    Alignment, ApplyPageType, CharShapeIndex, Color, HwpUnit, NumberFormatType, PageNumberPosition,
+    ParaShapeIndex,
 };
 use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore};
 use hwpforge_smithy_hwpx::HwpxEncoder;
@@ -43,10 +43,7 @@ use hwpforge_smithy_hwpx::HwpxEncoder;
 // ── Helpers ──────────────────────────────────────────────────────
 
 fn p(text: &str) -> Paragraph {
-    Paragraph::with_runs(
-        vec![Run::text(text, CharShapeIndex::new(0))],
-        ParaShapeIndex::new(0),
-    )
+    Paragraph::with_runs(vec![Run::text(text, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
 }
 
 fn caption(text: &str) -> Caption {
@@ -110,11 +107,11 @@ fn encode_and_save(name: &str, store: &HwpxStyleStore, doc: &Document, images: &
 /// Minimal 1x1 red PNG (67 bytes).
 fn tiny_png() -> Vec<u8> {
     vec![
-        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48,
-        0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00,
-        0x00, 0x90, 0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08,
-        0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xE2, 0x21, 0xBC,
-        0x33, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44,
+        0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90,
+        0x77, 0x53, 0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x08, 0xD7, 0x63, 0xF8,
+        0xCF, 0xC0, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xE2, 0x21, 0xBC, 0x33, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
     ]
 }
 
@@ -177,10 +174,7 @@ fn main() {
             vec![Run::table(table, CharShapeIndex::new(0))],
             ParaShapeIndex::new(0),
         );
-        doc.add_section(Section::with_paragraphs(
-            vec![p("표 테스트:"), para],
-            PageSettings::a4(),
-        ));
+        doc.add_section(Section::with_paragraphs(vec![p("표 테스트:"), para], PageSettings::a4()));
         encode_and_save("03_table.hwpx", &store, &doc, &empty_images());
     }
 
@@ -210,14 +204,8 @@ fn main() {
         let store = minimal_store();
         let mut doc = Document::new();
         let mut sec = Section::with_paragraphs(vec![p("머리글/바닥글 테스트")], PageSettings::a4());
-        sec.header = Some(HeaderFooter::new(
-            vec![p("머리글 텍스트")],
-            ApplyPageType::Both,
-        ));
-        sec.footer = Some(HeaderFooter::new(
-            vec![p("바닥글 텍스트")],
-            ApplyPageType::Both,
-        ));
+        sec.header = Some(HeaderFooter::new(vec![p("머리글 텍스트")], ApplyPageType::Both));
+        sec.footer = Some(HeaderFooter::new(vec![p("바닥글 텍스트")], ApplyPageType::Both));
         doc.add_section(sec);
         encode_and_save("05_header_footer.hwpx", &store, &doc, &empty_images());
     }
@@ -227,10 +215,8 @@ fn main() {
         let store = minimal_store();
         let mut doc = Document::new();
         let mut sec = Section::with_paragraphs(vec![p("페이지 번호 테스트")], PageSettings::a4());
-        sec.page_number = Some(PageNumber::new(
-            PageNumberPosition::BottomCenter,
-            NumberFormatType::Digit,
-        ));
+        sec.page_number =
+            Some(PageNumber::new(PageNumberPosition::BottomCenter, NumberFormatType::Digit));
         doc.add_section(sec);
         encode_and_save("06_page_number.hwpx", &store, &doc, &empty_images());
     }
@@ -244,8 +230,7 @@ fn main() {
                 Run::text("각주가 있는 텍스트", CharShapeIndex::new(0)),
                 Run::control(
                     Control::Footnote {
-                        inst_id: Some(1),
-                        paragraphs: vec![p("각주 내용입니다.")],
+                        inst_id: Some(1), paragraphs: vec![p("각주 내용입니다.")]
                     },
                     CharShapeIndex::new(0),
                 ),
@@ -265,8 +250,7 @@ fn main() {
                 Run::text("미주가 있는 텍스트", CharShapeIndex::new(0)),
                 Run::control(
                     Control::Endnote {
-                        inst_id: Some(1),
-                        paragraphs: vec![p("미주 내용입니다.")],
+                        inst_id: Some(1), paragraphs: vec![p("미주 내용입니다.")]
                     },
                     CharShapeIndex::new(0),
                 ),
@@ -290,6 +274,7 @@ fn main() {
                     horz_offset: 0,
                     vert_offset: 0,
                     caption: None,
+                    style: None,
                 },
                 CharShapeIndex::new(0),
             )],
@@ -315,6 +300,7 @@ fn main() {
                     horz_offset: 0,
                     vert_offset: 0,
                     caption: Some(caption("글상자 1. 캡션")),
+                    style: None,
                 },
                 CharShapeIndex::new(0),
             )],
@@ -336,39 +322,147 @@ fn main() {
                     width: HwpUnit::new(14000).unwrap(),
                     height: HwpUnit::new(100).unwrap(),
                     caption: None,
+                    style: None,
                 },
                 CharShapeIndex::new(0),
             )],
             ParaShapeIndex::new(0),
         );
-        doc.add_section(Section::with_paragraphs(
-            vec![p("선 테스트:"), para],
-            PageSettings::a4(),
-        ));
+        doc.add_section(Section::with_paragraphs(vec![p("선 테스트:"), para], PageSettings::a4()));
         encode_and_save("11_line.hwpx", &store, &doc, &empty_images());
     }
 
-    // 12. Ellipse shape
+    // 12. Ellipse shape (multiple with different styles + positions)
     {
         let store = minimal_store();
         let mut doc = Document::new();
-        let para = Paragraph::with_runs(
-            vec![Run::control(
+
+        // Helper to make an ellipse run with position control
+        let ellipse = |w: i32, h: i32, ho: i32, vo: i32, text: &str, style: Option<ShapeStyle>| {
+            Run::control(
                 Control::Ellipse {
-                    center: ShapePoint::new(5000, 3000),
-                    axis1: ShapePoint::new(10000, 3000),
-                    axis2: ShapePoint::new(5000, 6000),
-                    width: HwpUnit::new(10000).unwrap(),
-                    height: HwpUnit::new(6000).unwrap(),
-                    paragraphs: vec![p("타원")],
+                    center: ShapePoint::new(w / 2, h / 2),
+                    axis1: ShapePoint::new(w, h / 2),
+                    axis2: ShapePoint::new(w / 2, h),
+                    width: HwpUnit::new(w).unwrap(),
+                    height: HwpUnit::new(h).unwrap(),
+                    horz_offset: ho,
+                    vert_offset: vo,
+                    paragraphs: vec![p(text)],
                     caption: None,
+                    style,
                 },
                 CharShapeIndex::new(0),
+            )
+        };
+
+        // 1) 글자처럼 취급 (inline, treat_as_char) — 빨강+노랑
+        let e1 = Paragraph::with_runs(
+            vec![ellipse(
+                8000,
+                5000,
+                0,
+                0,
+                "인라인",
+                Some(ShapeStyle {
+                    line_color: Some("#FF0000".to_string()),
+                    fill_color: Some("#FFFF00".to_string()),
+                    line_width: Some(100),
+                    line_style: None,
+                }),
             )],
             ParaShapeIndex::new(0),
         );
+
+        // 2) 왼쪽 위 — 파란 원 (absolute position)
+        let e2 = Paragraph::with_runs(
+            vec![ellipse(
+                7000,
+                7000,
+                500,
+                2000,
+                "왼쪽 위",
+                Some(ShapeStyle {
+                    line_color: Some("#0000FF".to_string()),
+                    fill_color: Some("#ADD8E6".to_string()),
+                    line_width: Some(200),
+                    line_style: None,
+                }),
+            )],
+            ParaShapeIndex::new(0),
+        );
+
+        // 3) 오른쪽 위 — 초록 대시 (absolute position)
+        let e3 = Paragraph::with_runs(
+            vec![ellipse(
+                9000,
+                5000,
+                18000,
+                2000,
+                "오른쪽 위",
+                Some(ShapeStyle {
+                    line_color: Some("#008000".to_string()),
+                    fill_color: Some("#90EE90".to_string()),
+                    line_width: Some(80),
+                    line_style: Some("DASH".to_string()),
+                }),
+            )],
+            ParaShapeIndex::new(0),
+        );
+
+        // 4) 가운데 — 보라 점선 (absolute position)
+        let e4 = Paragraph::with_runs(
+            vec![ellipse(
+                10000,
+                6000,
+                9000,
+                10000,
+                "가운데",
+                Some(ShapeStyle {
+                    line_color: Some("#800080".to_string()),
+                    fill_color: Some("#FFB6C1".to_string()),
+                    line_width: Some(60),
+                    line_style: Some("DOT".to_string()),
+                }),
+            )],
+            ParaShapeIndex::new(0),
+        );
+
+        // 5) 왼쪽 아래 — 주황 굵은선 (absolute position)
+        let e5 = Paragraph::with_runs(
+            vec![ellipse(
+                8000,
+                8000,
+                1000,
+                19000,
+                "왼쪽 아래",
+                Some(ShapeStyle {
+                    line_color: Some("#FF8C00".to_string()),
+                    fill_color: None,
+                    line_width: Some(300),
+                    line_style: Some("SOLID".to_string()),
+                }),
+            )],
+            ParaShapeIndex::new(0),
+        );
+
+        // 6) 오른쪽 아래 — 기본 스타일 (absolute position)
+        let e6 = Paragraph::with_runs(
+            vec![ellipse(12000, 7000, 16000, 20000, "오른쪽 아래", None)],
+            ParaShapeIndex::new(0),
+        );
+
         doc.add_section(Section::with_paragraphs(
-            vec![p("타원 테스트:"), para],
+            vec![
+                p("타원 위치+스타일 테스트 (6개):"),
+                e1,
+                p("↑ 인라인(글자처럼)  ↓ 아래는 절대 위치"),
+                e2,
+                e3,
+                e4,
+                e5,
+                e6,
+            ],
             PageSettings::a4(),
         ));
         encode_and_save("12_ellipse.hwpx", &store, &doc, &empty_images());
@@ -390,6 +484,7 @@ fn main() {
                     height: HwpUnit::new(8000).unwrap(),
                     paragraphs: vec![p("삼각형")],
                     caption: None,
+                    style: None,
                 },
                 CharShapeIndex::new(0),
             )],

@@ -479,6 +479,7 @@ fn attach_closed_node(
                         horz_offset: 0,
                         vert_offset: 0,
                         caption: None,
+                        style: None,
                     },
                     text_box.char_shape_id,
                 ),

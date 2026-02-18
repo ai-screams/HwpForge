@@ -114,6 +114,7 @@ fn lifecycle_complex_document_with_all_content_types() {
         horz_offset: 0,
         vert_offset: 0,
         caption: None,
+        style: None,
     };
 
     let footnote =
@@ -230,6 +231,7 @@ fn validation_rejects_empty_text_box() {
         horz_offset: 0,
         vert_offset: 0,
         caption: None,
+        style: None,
     };
 
     let mut doc = Document::new();
