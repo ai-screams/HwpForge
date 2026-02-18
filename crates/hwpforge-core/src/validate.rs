@@ -131,10 +131,45 @@ fn validate_run_content(
             }
             Control::Endnote { paragraphs, .. } => {
                 if paragraphs.is_empty() {
-                    return Err(ValidationError::EmptyFootnote {
+                    return Err(ValidationError::EmptyEndnote {
                         section_index: si,
                         paragraph_index: pi,
                         run_index: ri,
+                    });
+                }
+            }
+            Control::Line { .. } => {
+                // No structural validation needed for lines
+                // Lines can have zero height (horizontal) or zero width (vertical)
+            }
+            Control::Ellipse { width, height, .. } => {
+                // Ellipse must have non-zero dimensions
+                if width.as_i32() == 0 || height.as_i32() == 0 {
+                    return Err(ValidationError::InvalidShapeDimension {
+                        section_index: si,
+                        paragraph_index: pi,
+                        run_index: ri,
+                        shape_type: "Ellipse",
+                    });
+                }
+            }
+            Control::Polygon { vertices, width, height, .. } => {
+                // Polygon must have at least 3 vertices
+                if vertices.len() < 3 {
+                    return Err(ValidationError::InvalidPolygon {
+                        section_index: si,
+                        paragraph_index: pi,
+                        run_index: ri,
+                        vertex_count: vertices.len(),
+                    });
+                }
+                // Polygon must have non-zero dimensions
+                if width.as_i32() == 0 || height.as_i32() == 0 {
+                    return Err(ValidationError::InvalidShapeDimension {
+                        section_index: si,
+                        paragraph_index: pi,
+                        run_index: ri,
+                        shape_type: "Polygon",
                     });
                 }
             }
@@ -343,6 +378,7 @@ mod tests {
             height: HwpUnit::from_mm(40.0).unwrap(),
             horz_offset: 0,
             vert_offset: 0,
+            caption: None,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
@@ -388,6 +424,7 @@ mod tests {
             height: HwpUnit::from_mm(40.0).unwrap(),
             horz_offset: 0,
             vert_offset: 0,
+            caption: None,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
@@ -449,6 +486,266 @@ mod tests {
         let table_run = Run::table(table, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
             vec![Paragraph::with_runs(vec![table_run], ParaShapeIndex::new(0))],
+            PageSettings::a4(),
+        )];
+        assert!(validate_sections(&sections).is_ok());
+    }
+
+    // === Rule 9: Endnote has paragraphs ===
+
+    #[test]
+    fn empty_endnote_rejected() {
+        let ctrl = Control::Endnote { inst_id: None, paragraphs: vec![] };
+        let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
+        let sections = vec![Section::with_paragraphs(
+            vec![Paragraph::with_runs(vec![ctrl_run], ParaShapeIndex::new(0))],
+            PageSettings::a4(),
+        )];
+        let result = validate_sections(&sections);
+        assert!(matches!(result, Err(ValidationError::EmptyEndnote { .. })));
+    }
+
+    #[test]
+    fn valid_endnote_accepted() {
+        let ctrl = Control::Endnote { inst_id: Some(999), paragraphs: vec![simple_paragraph()] };
+        let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
+        let sections = vec![Section::with_paragraphs(
+            vec![Paragraph::with_runs(vec![ctrl_run], ParaShapeIndex::new(0))],
+            PageSettings::a4(),
+        )];
+        assert!(validate_sections(&sections).is_ok());
+    }
+
+    // === Rule 10: Polygon has at least 3 vertices ===
+
+    #[test]
+    fn polygon_zero_vertices_rejected() {
+        let ctrl = Control::Polygon {
+            vertices: vec![],
+            width: HwpUnit::from_mm(50.0).unwrap(),
+            height: HwpUnit::from_mm(50.0).unwrap(),
+            paragraphs: vec![],
+            caption: None,
+        };
+        let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
+        let sections = vec![Section::with_paragraphs(
+            vec![Paragraph::with_runs(vec![ctrl_run], ParaShapeIndex::new(0))],
+            PageSettings::a4(),
+        )];
+        let result = validate_sections(&sections);
+        assert!(matches!(result, Err(ValidationError::InvalidPolygon { vertex_count: 0, .. })));
+    }
+
+    #[test]
+    fn polygon_two_vertices_rejected() {
+        use crate::control::ShapePoint;
+        let ctrl = Control::Polygon {
+            vertices: vec![ShapePoint { x: 0, y: 0 }, ShapePoint { x: 100, y: 100 }],
+            width: HwpUnit::from_mm(50.0).unwrap(),
+            height: HwpUnit::from_mm(50.0).unwrap(),
+            paragraphs: vec![],
+            caption: None,
+        };
+        let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
+        let sections = vec![Section::with_paragraphs(
+            vec![Paragraph::with_runs(vec![ctrl_run], ParaShapeIndex::new(0))],
+            PageSettings::a4(),
+        )];
+        let result = validate_sections(&sections);
+        assert!(matches!(result, Err(ValidationError::InvalidPolygon { vertex_count: 2, .. })));
+    }
+
+    #[test]
+    fn polygon_three_vertices_accepted() {
+        use crate::control::ShapePoint;
+        let ctrl = Control::Polygon {
+            vertices: vec![
+                ShapePoint { x: 0, y: 0 },
+                ShapePoint { x: 1000, y: 0 },
+                ShapePoint { x: 500, y: 1000 },
+            ],
+            width: HwpUnit::from_mm(50.0).unwrap(),
+            height: HwpUnit::from_mm(50.0).unwrap(),
+            paragraphs: vec![],
+            caption: None,
+        };
+        let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
+        let sections = vec![Section::with_paragraphs(
+            vec![Paragraph::with_runs(vec![ctrl_run], ParaShapeIndex::new(0))],
+            PageSettings::a4(),
+        )];
+        assert!(validate_sections(&sections).is_ok());
+    }
+
+    // === Rule 11: Shape dimensions (Ellipse and Polygon only) ===
+
+    #[test]
+    fn ellipse_zero_width_rejected() {
+        use crate::control::ShapePoint;
+        let ctrl = Control::Ellipse {
+            center: ShapePoint { x: 500, y: 500 },
+            axis1: ShapePoint { x: 1000, y: 500 },
+            axis2: ShapePoint { x: 500, y: 1000 },
+            width: HwpUnit::new(0).unwrap(), // invalid
+            height: HwpUnit::from_mm(30.0).unwrap(),
+            paragraphs: vec![],
+            caption: None,
+        };
+        let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
+        let sections = vec![Section::with_paragraphs(
+            vec![Paragraph::with_runs(vec![ctrl_run], ParaShapeIndex::new(0))],
+            PageSettings::a4(),
+        )];
+        let result = validate_sections(&sections);
+        assert!(matches!(
+            result,
+            Err(ValidationError::InvalidShapeDimension { shape_type: "Ellipse", .. })
+        ));
+    }
+
+    #[test]
+    fn ellipse_zero_height_rejected() {
+        use crate::control::ShapePoint;
+        let ctrl = Control::Ellipse {
+            center: ShapePoint { x: 500, y: 500 },
+            axis1: ShapePoint { x: 1000, y: 500 },
+            axis2: ShapePoint { x: 500, y: 1000 },
+            width: HwpUnit::from_mm(40.0).unwrap(),
+            height: HwpUnit::new(0).unwrap(), // invalid
+            paragraphs: vec![],
+            caption: None,
+        };
+        let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
+        let sections = vec![Section::with_paragraphs(
+            vec![Paragraph::with_runs(vec![ctrl_run], ParaShapeIndex::new(0))],
+            PageSettings::a4(),
+        )];
+        let result = validate_sections(&sections);
+        assert!(matches!(
+            result,
+            Err(ValidationError::InvalidShapeDimension { shape_type: "Ellipse", .. })
+        ));
+    }
+
+    #[test]
+    fn polygon_zero_width_rejected() {
+        use crate::control::ShapePoint;
+        let ctrl = Control::Polygon {
+            vertices: vec![
+                ShapePoint { x: 0, y: 0 },
+                ShapePoint { x: 1000, y: 0 },
+                ShapePoint { x: 500, y: 1000 },
+            ],
+            width: HwpUnit::new(0).unwrap(), // invalid
+            height: HwpUnit::from_mm(50.0).unwrap(),
+            paragraphs: vec![],
+            caption: None,
+        };
+        let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
+        let sections = vec![Section::with_paragraphs(
+            vec![Paragraph::with_runs(vec![ctrl_run], ParaShapeIndex::new(0))],
+            PageSettings::a4(),
+        )];
+        let result = validate_sections(&sections);
+        assert!(matches!(
+            result,
+            Err(ValidationError::InvalidShapeDimension { shape_type: "Polygon", .. })
+        ));
+    }
+
+    #[test]
+    fn line_zero_height_accepted() {
+        use crate::control::ShapePoint;
+        // Lines can have zero height (horizontal line)
+        let ctrl = Control::Line {
+            start: ShapePoint { x: 0, y: 0 },
+            end: ShapePoint { x: 1000, y: 0 },
+            width: HwpUnit::from_mm(50.0).unwrap(),
+            height: HwpUnit::new(0).unwrap(), // valid for lines
+            caption: None,
+        };
+        let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
+        let sections = vec![Section::with_paragraphs(
+            vec![Paragraph::with_runs(vec![ctrl_run], ParaShapeIndex::new(0))],
+            PageSettings::a4(),
+        )];
+        assert!(validate_sections(&sections).is_ok());
+    }
+
+    #[test]
+    fn line_zero_width_accepted() {
+        use crate::control::ShapePoint;
+        // Lines can have zero width (vertical line)
+        let ctrl = Control::Line {
+            start: ShapePoint { x: 0, y: 0 },
+            end: ShapePoint { x: 0, y: 1000 },
+            width: HwpUnit::new(0).unwrap(), // valid for lines
+            height: HwpUnit::from_mm(50.0).unwrap(),
+            caption: None,
+        };
+        let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
+        let sections = vec![Section::with_paragraphs(
+            vec![Paragraph::with_runs(vec![ctrl_run], ParaShapeIndex::new(0))],
+            PageSettings::a4(),
+        )];
+        assert!(validate_sections(&sections).is_ok());
+    }
+
+    #[test]
+    fn valid_line_accepted() {
+        use crate::control::ShapePoint;
+        let ctrl = Control::Line {
+            start: ShapePoint { x: 0, y: 0 },
+            end: ShapePoint { x: 1000, y: 500 },
+            width: HwpUnit::from_mm(50.0).unwrap(),
+            height: HwpUnit::from_mm(25.0).unwrap(),
+            caption: None,
+        };
+        let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
+        let sections = vec![Section::with_paragraphs(
+            vec![Paragraph::with_runs(vec![ctrl_run], ParaShapeIndex::new(0))],
+            PageSettings::a4(),
+        )];
+        assert!(validate_sections(&sections).is_ok());
+    }
+
+    #[test]
+    fn valid_ellipse_accepted() {
+        use crate::control::ShapePoint;
+        let ctrl = Control::Ellipse {
+            center: ShapePoint { x: 500, y: 500 },
+            axis1: ShapePoint { x: 1000, y: 500 },
+            axis2: ShapePoint { x: 500, y: 1000 },
+            width: HwpUnit::from_mm(40.0).unwrap(),
+            height: HwpUnit::from_mm(30.0).unwrap(),
+            paragraphs: vec![],
+            caption: None,
+        };
+        let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
+        let sections = vec![Section::with_paragraphs(
+            vec![Paragraph::with_runs(vec![ctrl_run], ParaShapeIndex::new(0))],
+            PageSettings::a4(),
+        )];
+        assert!(validate_sections(&sections).is_ok());
+    }
+
+    #[test]
+    fn valid_polygon_accepted() {
+        use crate::control::ShapePoint;
+        let ctrl = Control::Polygon {
+            vertices: vec![
+                ShapePoint { x: 0, y: 0 },
+                ShapePoint { x: 1000, y: 0 },
+                ShapePoint { x: 500, y: 1000 },
+            ],
+            width: HwpUnit::from_mm(50.0).unwrap(),
+            height: HwpUnit::from_mm(50.0).unwrap(),
+            paragraphs: vec![],
+            caption: None,
+        };
+        let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
+        let sections = vec![Section::with_paragraphs(
+            vec![Paragraph::with_runs(vec![ctrl_run], ParaShapeIndex::new(0))],
             PageSettings::a4(),
         )];
         assert!(validate_sections(&sections).is_ok());

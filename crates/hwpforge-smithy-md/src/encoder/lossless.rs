@@ -129,6 +129,40 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                         escape_html(data.as_deref().unwrap_or(""))
                     ));
                 }
+                Control::Line { start, end, width, height, .. } => {
+                    out.push_str(&format!(
+                        "<line data-char-shape=\"{}\" data-start-x=\"{}\" data-start-y=\"{}\" data-end-x=\"{}\" data-end-y=\"{}\" data-width-unit=\"{}\" data-height-unit=\"{}\"/>",
+                        run.char_shape_id.get(),
+                        start.x, start.y, end.x, end.y,
+                        width.as_i32(), height.as_i32()
+                    ));
+                }
+                Control::Ellipse { center, axis1, axis2, width, height, paragraphs, .. } => {
+                    out.push_str(&format!(
+                        "<ellipse data-char-shape=\"{}\" data-cx=\"{}\" data-cy=\"{}\" data-ax1-x=\"{}\" data-ax1-y=\"{}\" data-ax2-x=\"{}\" data-ax2-y=\"{}\" data-width-unit=\"{}\" data-height-unit=\"{}\">",
+                        run.char_shape_id.get(),
+                        center.x, center.y, axis1.x, axis1.y, axis2.x, axis2.y,
+                        width.as_i32(), height.as_i32()
+                    ));
+                    for paragraph in paragraphs {
+                        out.push_str(&encode_paragraph(paragraph)?);
+                    }
+                    out.push_str("</ellipse>");
+                }
+                Control::Polygon { vertices, width, height, paragraphs, .. } => {
+                    let pts: Vec<String> =
+                        vertices.iter().map(|v| format!("{},{}", v.x, v.y)).collect();
+                    out.push_str(&format!(
+                        "<polygon data-char-shape=\"{}\" data-points=\"{}\" data-width-unit=\"{}\" data-height-unit=\"{}\">",
+                        run.char_shape_id.get(),
+                        pts.join(";"),
+                        width.as_i32(), height.as_i32()
+                    ));
+                    for paragraph in paragraphs {
+                        out.push_str(&encode_paragraph(paragraph)?);
+                    }
+                    out.push_str("</polygon>");
+                }
                 _ => {
                     return Err(MdError::UnsupportedStructure {
                         detail: "unsupported Control variant for lossless encoder".to_string(),
@@ -160,7 +194,16 @@ fn encode_table(table: &Table, char_shape_id: usize) -> MdResult<String> {
         ));
     }
     if let Some(caption) = table.caption.as_ref() {
-        out.push_str(&format!(" data-caption=\"{}\"", escape_html(caption)));
+        let text: String = caption
+            .paragraphs
+            .iter()
+            .flat_map(|p| p.runs.iter())
+            .filter_map(|r| r.content.as_text())
+            .collect::<Vec<_>>()
+            .join("");
+        if !text.is_empty() {
+            out.push_str(&format!(" data-caption=\"{}\"", escape_html(&text)));
+        }
     }
     out.push('>');
 
@@ -341,6 +384,7 @@ mod tests {
                     height: HwpUnit::from_mm(20.0).unwrap(),
                     horz_offset: 0,
                     vert_offset: 0,
+                    caption: None,
                 },
                 CharShapeIndex::new(3),
             )],

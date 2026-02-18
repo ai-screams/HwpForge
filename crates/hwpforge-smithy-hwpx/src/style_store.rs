@@ -30,6 +30,13 @@ pub struct HwpxFont {
     pub lang: String,
 }
 
+impl HwpxFont {
+    /// Creates a new font entry.
+    pub fn new(id: u32, face_name: impl Into<String>, lang: impl Into<String>) -> Self {
+        Self { id, face_name: face_name.into(), lang: lang.into() }
+    }
+}
+
 // ── Per-language font references ─────────────────────────────────
 
 /// Per-language font index references from `<hh:fontRef>`.

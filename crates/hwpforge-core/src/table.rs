@@ -39,6 +39,7 @@ use hwpforge_foundation::{Color, HwpUnit};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::caption::Caption;
 use crate::paragraph::Paragraph;
 
 /// A table: a sequence of rows, with optional width and caption.
@@ -75,7 +76,7 @@ pub struct Table {
     /// Optional explicit table width. `None` means auto-width.
     pub width: Option<HwpUnit>,
     /// Optional table caption.
-    pub caption: Option<String>,
+    pub caption: Option<Caption>,
 }
 
 impl Table {
@@ -272,8 +273,8 @@ mod tests {
     #[test]
     fn table_with_caption() {
         let mut t = simple_table();
-        t.caption = Some("Table 1: Results".to_string());
-        assert_eq!(t.caption.as_deref(), Some("Table 1: Results"));
+        t.caption = Some(crate::caption::Caption::default());
+        assert!(t.caption.is_some());
     }
 
     #[test]
@@ -341,7 +342,7 @@ mod tests {
     fn clone_independence() {
         let t = simple_table();
         let mut cloned = t.clone();
-        cloned.caption = Some("modified".to_string());
+        cloned.caption = Some(crate::caption::Caption::default());
         assert!(t.caption.is_none());
     }
 
@@ -357,7 +358,7 @@ mod tests {
     fn serde_with_all_optional_fields() {
         let mut t = simple_table();
         t.width = Some(HwpUnit::from_mm(150.0).unwrap());
-        t.caption = Some("Test table".to_string());
+        t.caption = Some(crate::caption::Caption::default());
         t.rows[0].height = Some(HwpUnit::from_mm(20.0).unwrap());
         t.rows[0].cells[0].background = Some(Color::from_rgb(255, 0, 0));
 

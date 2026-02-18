@@ -406,7 +406,16 @@ fn attach_closed_node(
             };
             let mut core_table = Table::new(rows);
             core_table.width = table.width;
-            core_table.caption = table.caption;
+            core_table.caption = table.caption.map(|text| {
+                use hwpforge_core::caption::Caption;
+                Caption {
+                    paragraphs: vec![Paragraph::with_runs(
+                        vec![Run::text(&text, CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
+                    )],
+                    ..Caption::default()
+                }
+            });
             push_run_to_parent(stack, Run::table(core_table, table.char_shape_id))
         }
         OpenNode::Row(row) => {
@@ -469,6 +478,7 @@ fn attach_closed_node(
                         height: text_box.height,
                         horz_offset: 0,
                         vert_offset: 0,
+                        caption: None,
                     },
                     text_box.char_shape_id,
                 ),

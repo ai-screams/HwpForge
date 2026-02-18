@@ -15,6 +15,7 @@
 //!     width: HwpUnit::from_mm(50.0).unwrap(),
 //!     height: HwpUnit::from_mm(30.0).unwrap(),
 //!     format: ImageFormat::Png,
+//!     caption: None,
 //! };
 //! assert!(img.path.ends_with(".png"));
 //! ```
@@ -24,6 +25,8 @@ use std::collections::HashMap;
 use hwpforge_foundation::HwpUnit;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+
+use crate::caption::Caption;
 
 /// An image reference within the document.
 ///
@@ -49,7 +52,7 @@ use serde::{Deserialize, Serialize};
 /// );
 /// assert_eq!(img.format, ImageFormat::Jpeg);
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct Image {
     /// Relative path within the document package (e.g. `"BinData/image1.png"`).
     pub path: String,
@@ -59,6 +62,8 @@ pub struct Image {
     pub height: HwpUnit,
     /// Image format hint.
     pub format: ImageFormat,
+    /// Optional image caption.
+    pub caption: Option<Caption>,
 }
 
 impl Image {
@@ -84,7 +89,7 @@ impl Image {
         height: HwpUnit,
         format: ImageFormat,
     ) -> Self {
-        Self { path: path.into(), width, height, format }
+        Self { path: path.into(), width, height, format, caption: None }
     }
 }
 
@@ -241,6 +246,7 @@ mod tests {
             width: HwpUnit::from_mm(10.0).unwrap(),
             height: HwpUnit::from_mm(10.0).unwrap(),
             format: ImageFormat::Jpeg,
+            caption: None,
         };
         assert_eq!(img.format, ImageFormat::Jpeg);
     }

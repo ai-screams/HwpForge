@@ -26,7 +26,37 @@ use hwpforge_foundation::HwpUnit;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::caption::Caption;
 use crate::paragraph::Paragraph;
+
+/// A 2D point in raw HWPUNIT coordinates for shape geometry.
+///
+/// Uses `i32` (not `HwpUnit`) because shape geometry points are raw
+/// coordinate values within a bounding box, not document-level measurements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ShapePoint {
+    /// X coordinate (HWPUNIT).
+    pub x: i32,
+    /// Y coordinate (HWPUNIT).
+    pub y: i32,
+}
+
+impl ShapePoint {
+    /// Creates a new shape point with the given coordinates.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::ShapePoint;
+    ///
+    /// let pt = ShapePoint::new(100, 200);
+    /// assert_eq!(pt.x, 100);
+    /// assert_eq!(pt.y, 200);
+    /// ```
+    pub fn new(x: i32, y: i32) -> Self {
+        Self { x, y }
+    }
+}
 
 /// An inline control element.
 ///
@@ -47,6 +77,7 @@ use crate::paragraph::Paragraph;
 ///     height: HwpUnit::from_mm(40.0).unwrap(),
 ///     horz_offset: 0,
 ///     vert_offset: 0,
+///     caption: None,
 /// };
 /// assert!(text_box.is_text_box());
 /// assert!(!text_box.is_hyperlink());
@@ -67,6 +98,8 @@ pub enum Control {
         horz_offset: i32,
         /// Vertical offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
         vert_offset: i32,
+        /// Optional caption attached to this text box.
+        caption: Option<Caption>,
     },
 
     /// A hyperlink with display text and URL.
@@ -93,6 +126,58 @@ pub enum Control {
         inst_id: Option<u32>,
         /// Paragraphs that form the endnote body.
         paragraphs: Vec<Paragraph>,
+    },
+
+    /// A line drawing object (2 endpoints).
+    /// Maps to HWPX `<hp:line>`.
+    // TODO(phase9): Add horz_offset/vert_offset for non-inline positioning
+    Line {
+        /// Start point (x, y in HWPUNIT).
+        start: ShapePoint,
+        /// End point (x, y in HWPUNIT).
+        end: ShapePoint,
+        /// Bounding box width (HWPUNIT).
+        width: HwpUnit,
+        /// Bounding box height (HWPUNIT).
+        height: HwpUnit,
+        /// Optional caption attached to this line.
+        caption: Option<Caption>,
+    },
+
+    /// An ellipse (or circle) drawing object.
+    /// Maps to HWPX `<hp:ellipse>`.
+    // TODO(phase9): Add horz_offset/vert_offset for non-inline positioning
+    Ellipse {
+        /// Center point (x, y in HWPUNIT).
+        center: ShapePoint,
+        /// Axis 1 endpoint (defines semi-major axis direction and length).
+        axis1: ShapePoint,
+        /// Axis 2 endpoint (perpendicular to axis1, defines semi-minor axis).
+        axis2: ShapePoint,
+        /// Bounding box width (HWPUNIT).
+        width: HwpUnit,
+        /// Bounding box height (HWPUNIT).
+        height: HwpUnit,
+        /// Optional text content inside the ellipse.
+        paragraphs: Vec<Paragraph>,
+        /// Optional caption attached to this ellipse.
+        caption: Option<Caption>,
+    },
+
+    /// A polygon drawing object (3+ vertices).
+    /// Maps to HWPX `<hp:polygon>`.
+    // TODO(phase9): Add horz_offset/vert_offset for non-inline positioning
+    Polygon {
+        /// Ordered list of vertices (minimum 3).
+        vertices: Vec<ShapePoint>,
+        /// Bounding box width (HWPUNIT).
+        width: HwpUnit,
+        /// Bounding box height (HWPUNIT).
+        height: HwpUnit,
+        /// Optional text content inside the polygon.
+        paragraphs: Vec<Paragraph>,
+        /// Optional caption attached to this polygon.
+        caption: Option<Caption>,
     },
 
     /// An unrecognized control element preserved for round-trip fidelity.
@@ -128,6 +213,21 @@ impl Control {
         matches!(self, Self::Endnote { .. })
     }
 
+    /// Returns `true` if this is a [`Control::Line`].
+    pub fn is_line(&self) -> bool {
+        matches!(self, Self::Line { .. })
+    }
+
+    /// Returns `true` if this is a [`Control::Ellipse`].
+    pub fn is_ellipse(&self) -> bool {
+        matches!(self, Self::Ellipse { .. })
+    }
+
+    /// Returns `true` if this is a [`Control::Polygon`].
+    pub fn is_polygon(&self) -> bool {
+        matches!(self, Self::Polygon { .. })
+    }
+
     /// Returns `true` if this is a [`Control::Unknown`].
     pub fn is_unknown(&self) -> bool {
         matches!(self, Self::Unknown { .. })
@@ -150,6 +250,15 @@ impl std::fmt::Display for Control {
             }
             Self::Endnote { paragraphs, .. } => {
                 write!(f, "Endnote({} paragraphs)", paragraphs.len())
+            }
+            Self::Line { .. } => {
+                write!(f, "Line")
+            }
+            Self::Ellipse { paragraphs, .. } => {
+                write!(f, "Ellipse({} paragraphs)", paragraphs.len())
+            }
+            Self::Polygon { vertices, paragraphs, .. } => {
+                write!(f, "Polygon({} vertices, {} paragraphs)", vertices.len(), paragraphs.len())
             }
             Self::Unknown { tag, .. } => {
                 write!(f, "Unknown({tag})")
@@ -179,6 +288,7 @@ mod tests {
             height: HwpUnit::from_mm(40.0).unwrap(),
             horz_offset: 0,
             vert_offset: 0,
+            caption: None,
         };
         assert!(ctrl.is_text_box());
         assert!(!ctrl.is_hyperlink());
@@ -236,6 +346,7 @@ mod tests {
             height: HwpUnit::from_mm(40.0).unwrap(),
             horz_offset: 0,
             vert_offset: 0,
+            caption: None,
         };
         assert_eq!(ctrl.to_string(), "TextBox(2 paragraphs)");
     }
@@ -294,6 +405,7 @@ mod tests {
             height: HwpUnit::from_mm(40.0).unwrap(),
             horz_offset: 0,
             vert_offset: 0,
+            caption: None,
         };
         let json = serde_json::to_string(&ctrl).unwrap();
         let back: Control = serde_json::from_str(&json).unwrap();
@@ -333,5 +445,156 @@ mod tests {
         let json = serde_json::to_string(&ctrl).unwrap();
         let back: Control = serde_json::from_str(&json).unwrap();
         assert_eq!(ctrl, back);
+    }
+
+    // ── Shape variant tests ──────────────────────────────────────
+
+    #[test]
+    fn line_construction() {
+        let ctrl = Control::Line {
+            start: ShapePoint { x: 0, y: 0 },
+            end: ShapePoint { x: 1000, y: 500 },
+            width: HwpUnit::from_mm(50.0).unwrap(),
+            height: HwpUnit::from_mm(25.0).unwrap(),
+            caption: None,
+        };
+        assert!(ctrl.is_line());
+        assert!(!ctrl.is_text_box());
+        assert!(!ctrl.is_ellipse());
+        assert!(!ctrl.is_polygon());
+    }
+
+    #[test]
+    fn ellipse_construction() {
+        let ctrl = Control::Ellipse {
+            center: ShapePoint { x: 500, y: 500 },
+            axis1: ShapePoint { x: 1000, y: 500 },
+            axis2: ShapePoint { x: 500, y: 1000 },
+            width: HwpUnit::from_mm(40.0).unwrap(),
+            height: HwpUnit::from_mm(30.0).unwrap(),
+            paragraphs: vec![],
+            caption: None,
+        };
+        assert!(ctrl.is_ellipse());
+        assert!(!ctrl.is_line());
+        assert!(!ctrl.is_polygon());
+    }
+
+    #[test]
+    fn ellipse_with_paragraphs() {
+        let ctrl = Control::Ellipse {
+            center: ShapePoint { x: 500, y: 500 },
+            axis1: ShapePoint { x: 1000, y: 500 },
+            axis2: ShapePoint { x: 500, y: 1000 },
+            width: HwpUnit::from_mm(40.0).unwrap(),
+            height: HwpUnit::from_mm(30.0).unwrap(),
+            paragraphs: vec![simple_paragraph()],
+            caption: None,
+        };
+        assert!(ctrl.is_ellipse());
+        assert_eq!(ctrl.to_string(), "Ellipse(1 paragraphs)");
+    }
+
+    #[test]
+    fn polygon_construction() {
+        let ctrl = Control::Polygon {
+            vertices: vec![
+                ShapePoint { x: 0, y: 0 },
+                ShapePoint { x: 1000, y: 0 },
+                ShapePoint { x: 500, y: 1000 },
+            ],
+            width: HwpUnit::from_mm(50.0).unwrap(),
+            height: HwpUnit::from_mm(50.0).unwrap(),
+            paragraphs: vec![],
+            caption: None,
+        };
+        assert!(ctrl.is_polygon());
+        assert!(!ctrl.is_line());
+        assert!(!ctrl.is_ellipse());
+        assert_eq!(ctrl.to_string(), "Polygon(3 vertices, 0 paragraphs)");
+    }
+
+    #[test]
+    fn display_line() {
+        let ctrl = Control::Line {
+            start: ShapePoint { x: 0, y: 0 },
+            end: ShapePoint { x: 100, y: 200 },
+            width: HwpUnit::from_mm(10.0).unwrap(),
+            height: HwpUnit::from_mm(5.0).unwrap(),
+            caption: None,
+        };
+        assert_eq!(ctrl.to_string(), "Line");
+    }
+
+    #[test]
+    fn serde_roundtrip_line() {
+        let ctrl = Control::Line {
+            start: ShapePoint { x: 100, y: 200 },
+            end: ShapePoint { x: 300, y: 400 },
+            width: HwpUnit::from_mm(20.0).unwrap(),
+            height: HwpUnit::from_mm(10.0).unwrap(),
+            caption: None,
+        };
+        let json = serde_json::to_string(&ctrl).unwrap();
+        let back: Control = serde_json::from_str(&json).unwrap();
+        assert_eq!(ctrl, back);
+    }
+
+    #[test]
+    fn serde_roundtrip_ellipse() {
+        let ctrl = Control::Ellipse {
+            center: ShapePoint { x: 500, y: 500 },
+            axis1: ShapePoint { x: 1000, y: 500 },
+            axis2: ShapePoint { x: 500, y: 1000 },
+            width: HwpUnit::from_mm(40.0).unwrap(),
+            height: HwpUnit::from_mm(30.0).unwrap(),
+            paragraphs: vec![simple_paragraph()],
+            caption: None,
+        };
+        let json = serde_json::to_string(&ctrl).unwrap();
+        let back: Control = serde_json::from_str(&json).unwrap();
+        assert_eq!(ctrl, back);
+    }
+
+    #[test]
+    fn serde_roundtrip_polygon() {
+        let ctrl = Control::Polygon {
+            vertices: vec![
+                ShapePoint { x: 0, y: 0 },
+                ShapePoint { x: 1000, y: 0 },
+                ShapePoint { x: 500, y: 1000 },
+            ],
+            width: HwpUnit::from_mm(50.0).unwrap(),
+            height: HwpUnit::from_mm(50.0).unwrap(),
+            paragraphs: vec![],
+            caption: None,
+        };
+        let json = serde_json::to_string(&ctrl).unwrap();
+        let back: Control = serde_json::from_str(&json).unwrap();
+        assert_eq!(ctrl, back);
+    }
+
+    #[test]
+    fn shape_point_equality() {
+        let a = ShapePoint { x: 10, y: 20 };
+        let b = ShapePoint { x: 10, y: 20 };
+        let c = ShapePoint { x: 10, y: 30 };
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+    }
+
+    #[test]
+    fn shape_point_new() {
+        let pt = ShapePoint::new(100, 200);
+        assert_eq!(pt.x, 100);
+        assert_eq!(pt.y, 200);
+    }
+
+    #[test]
+    fn shape_point_serde_roundtrip() {
+        let pt = ShapePoint::new(500, 750);
+        let json = serde_json::to_string(&pt).unwrap();
+        let back: ShapePoint = serde_json::from_str(&json).unwrap();
+        assert_eq!(pt, back);
     }
 }

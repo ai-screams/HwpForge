@@ -92,7 +92,7 @@ fn lifecycle_complex_document_with_all_content_types() {
             },
         ],
         width: Some(HwpUnit::from_mm(140.0).unwrap()),
-        caption: Some("Table 1: Test Data".to_string()),
+        caption: None,
     };
 
     let image = Image::new(
@@ -113,6 +113,7 @@ fn lifecycle_complex_document_with_all_content_types() {
         height: HwpUnit::from_mm(30.0).unwrap(),
         horz_offset: 0,
         vert_offset: 0,
+        caption: None,
     };
 
     let footnote =
@@ -228,6 +229,7 @@ fn validation_rejects_empty_text_box() {
         height: HwpUnit::from_mm(40.0).unwrap(),
         horz_offset: 0,
         vert_offset: 0,
+        caption: None,
     };
 
     let mut doc = Document::new();

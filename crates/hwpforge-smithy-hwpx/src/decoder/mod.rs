@@ -84,6 +84,7 @@ impl HwpxDecoder {
                 header: result.header,
                 footer: result.footer,
                 page_number: result.page_number,
+                column_settings: result.column_settings,
             };
 
             document.add_section(section);

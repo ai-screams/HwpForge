@@ -3,6 +3,8 @@
 //! Converts XML schema types (`HxParagraph`, `HxRun`, `HxText`, `HxTable`,
 //! `HxPic`) into Core types (`Paragraph`, `Run`, `RunContent`, `Table`, `Image`).
 
+use hwpforge_core::caption::{Caption, CaptionSide};
+use hwpforge_core::column::{ColumnDef, ColumnLayoutMode, ColumnSettings, ColumnType};
 use hwpforge_core::control::Control;
 use hwpforge_core::image::{Image, ImageFormat};
 use hwpforge_core::paragraph::Paragraph;
@@ -17,8 +19,8 @@ use quick_xml::de::from_str;
 
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    HxCtrl, HxFootNote, HxHeaderFooter, HxPageNum, HxParagraph, HxPic, HxRect, HxRun, HxSection,
-    HxSubList, HxTable, HxTableCell,
+    HxCaption, HxCtrl, HxEllipse, HxFootNote, HxHeaderFooter, HxLine, HxPageNum, HxParagraph,
+    HxPic, HxPolygon, HxRect, HxRun, HxSection, HxSubList, HxTable, HxTableCell,
 };
 
 /// Maximum nesting depth for tables-within-tables.
@@ -41,6 +43,9 @@ pub struct SectionParseResult {
     pub footer: Option<HeaderFooter>,
     /// Page number extracted from `<hp:ctrl><hp:pageNum>`, if present.
     pub page_number: Option<PageNumber>,
+    /// Multi-column settings extracted from `<hp:ctrl><hp:colPr>`, if present.
+    /// `None` means single-column (default).
+    pub column_settings: Option<ColumnSettings>,
 }
 
 /// Parses a section XML string into paragraphs and optional page settings.
@@ -55,6 +60,7 @@ pub fn parse_section(xml: &str, section_index: usize) -> HwpxResult<SectionParse
     let mut header = None;
     let mut footer = None;
     let mut page_number = None;
+    let mut column_settings = None;
 
     let paragraphs = section
         .paragraphs
@@ -66,9 +72,14 @@ pub fn parse_section(xml: &str, section_index: usize) -> HwpxResult<SectionParse
                 page_settings = ps;
             }
 
-            // Extract header/footer/pagenum from ctrl elements in runs
+            // Extract header/footer/pagenum/column_settings from ctrl elements in runs
             for hx_run in &hx_para.runs {
                 for ctrl in &hx_run.ctrls {
+                    if column_settings.is_none() {
+                        if let Some(cs) = convert_ctrl_column_settings(ctrl) {
+                            column_settings = Some(cs);
+                        }
+                    }
                     if header.is_none() {
                         if let Some(hf) = convert_ctrl_header(ctrl) {
                             header = Some(hf);
@@ -91,7 +102,14 @@ pub fn parse_section(xml: &str, section_index: usize) -> HwpxResult<SectionParse
         })
         .collect::<HwpxResult<Vec<_>>>()?;
 
-    Ok(SectionParseResult { paragraphs, page_settings, header, footer, page_number })
+    Ok(SectionParseResult {
+        paragraphs,
+        page_settings,
+        header,
+        footer,
+        page_number,
+        column_settings,
+    })
 }
 
 /// Converts an `HxParagraph` to a Core `Paragraph`.
@@ -153,7 +171,7 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
 
     // Image runs
     for pic in &hx.pictures {
-        if let Some(image) = convert_picture(pic) {
+        if let Some(image) = convert_picture(pic, depth)? {
             runs.push(Run { content: RunContent::Image(image), char_shape_id });
         }
     }
@@ -173,6 +191,21 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
         if let Some(run) = decode_textbox(rect, char_shape_id, depth)? {
             runs.push(run);
         }
+    }
+
+    // Line runs (from <hp:line>)
+    for line in &hx.lines {
+        runs.push(decode_line(line, char_shape_id, depth)?);
+    }
+
+    // Ellipse runs (from <hp:ellipse>)
+    for ellipse in &hx.ellipses {
+        runs.push(decode_ellipse(ellipse, char_shape_id, depth)?);
+    }
+
+    // Polygon runs (from <hp:polygon>)
+    for polygon in &hx.polygons {
+        runs.push(decode_polygon(polygon, char_shape_id, depth)?);
     }
 
     Ok(runs)
@@ -210,7 +243,9 @@ fn convert_table(hx: &HxTable, depth: usize) -> HwpxResult<Table> {
         });
     }
 
-    Ok(Table { rows, width: None, caption: None })
+    let caption = hx.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
+
+    Ok(Table { rows, width: None, caption })
 }
 
 /// Converts an `HxTableCell` into a Core `TableCell`.
@@ -238,11 +273,11 @@ fn convert_table_cell(hx: &HxTableCell, depth: usize) -> HwpxResult<TableCell> {
 }
 
 /// Converts an `HxPic` into a Core `Image`, if it has a valid image reference.
-fn convert_picture(hx: &HxPic) -> Option<Image> {
-    let img = hx.img.as_ref()?;
-    if img.binary_item_id_ref.is_empty() {
-        return None;
-    }
+fn convert_picture(hx: &HxPic, depth: usize) -> HwpxResult<Option<Image>> {
+    let img = match hx.img.as_ref() {
+        Some(img) if !img.binary_item_id_ref.is_empty() => img,
+        _ => return Ok(None),
+    };
 
     let path = format!("BinData/{}", img.binary_item_id_ref);
     let format = guess_image_format(&img.binary_item_id_ref);
@@ -259,7 +294,9 @@ fn convert_picture(hx: &HxPic) -> Option<Image> {
         })
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
-    Some(Image { path, width, height, format })
+    let caption = hx.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
+
+    Ok(Some(Image { path, width, height, format, caption }))
 }
 
 // ── Footnote / Endnote / TextBox decoding ────────────────────────
@@ -341,6 +378,8 @@ fn decode_textbox(
     let (horz_offset, vert_offset) =
         rect.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
 
+    let caption = rect.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
+
     Ok(Some(Run {
         content: RunContent::Control(Box::new(Control::TextBox {
             paragraphs,
@@ -348,9 +387,147 @@ fn decode_textbox(
             height,
             horz_offset,
             vert_offset,
+            caption,
         })),
         char_shape_id,
     }))
+}
+
+/// Decodes an `HxLine` into a Core `Run` with `Control::Line`.
+fn decode_line(line: &HxLine, char_shape_id: CharShapeIndex, depth: usize) -> HwpxResult<Run> {
+    use hwpforge_core::control::ShapePoint;
+
+    let start = line
+        .start_pt
+        .as_ref()
+        .map(|p| ShapePoint { x: p.x, y: p.y })
+        .unwrap_or(ShapePoint { x: 0, y: 0 });
+    let end = line
+        .end_pt
+        .as_ref()
+        .map(|p| ShapePoint { x: p.x, y: p.y })
+        .unwrap_or(ShapePoint { x: 0, y: 0 });
+
+    let (width, height) = line
+        .sz
+        .as_ref()
+        .map(|sz| {
+            (
+                HwpUnit::new(sz.width).unwrap_or(HwpUnit::ZERO),
+                HwpUnit::new(sz.height).unwrap_or(HwpUnit::ZERO),
+            )
+        })
+        .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
+
+    let caption = line.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
+
+    Ok(Run {
+        content: RunContent::Control(Box::new(Control::Line {
+            start,
+            end,
+            width,
+            height,
+            caption,
+        })),
+        char_shape_id,
+    })
+}
+
+/// Decodes an `HxEllipse` into a Core `Run` with `Control::Ellipse`.
+fn decode_ellipse(
+    ellipse: &HxEllipse,
+    char_shape_id: CharShapeIndex,
+    depth: usize,
+) -> HwpxResult<Run> {
+    use hwpforge_core::control::ShapePoint;
+
+    let center = ellipse
+        .center
+        .as_ref()
+        .map(|p| ShapePoint { x: p.x, y: p.y })
+        .unwrap_or(ShapePoint { x: 0, y: 0 });
+    let axis1 = ellipse
+        .ax1
+        .as_ref()
+        .map(|p| ShapePoint { x: p.x, y: p.y })
+        .unwrap_or(ShapePoint { x: 0, y: 0 });
+    let axis2 = ellipse
+        .ax2
+        .as_ref()
+        .map(|p| ShapePoint { x: p.x, y: p.y })
+        .unwrap_or(ShapePoint { x: 0, y: 0 });
+
+    let (width, height) = ellipse
+        .sz
+        .as_ref()
+        .map(|sz| {
+            (
+                HwpUnit::new(sz.width).unwrap_or(HwpUnit::ZERO),
+                HwpUnit::new(sz.height).unwrap_or(HwpUnit::ZERO),
+            )
+        })
+        .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
+
+    let paragraphs = match &ellipse.draw_text {
+        Some(dt) => decode_sublist_paragraphs(&dt.sub_list, depth)?,
+        None => Vec::new(),
+    };
+
+    let caption = ellipse.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
+
+    Ok(Run {
+        content: RunContent::Control(Box::new(Control::Ellipse {
+            center,
+            axis1,
+            axis2,
+            width,
+            height,
+            paragraphs,
+            caption,
+        })),
+        char_shape_id,
+    })
+}
+
+/// Decodes an `HxPolygon` into a Core `Run` with `Control::Polygon`.
+fn decode_polygon(
+    polygon: &HxPolygon,
+    char_shape_id: CharShapeIndex,
+    depth: usize,
+) -> HwpxResult<Run> {
+    use hwpforge_core::control::ShapePoint;
+
+    let vertices: Vec<ShapePoint> =
+        polygon.points.iter().map(|p| ShapePoint { x: p.x, y: p.y }).collect();
+
+    let (width, height) = polygon
+        .sz
+        .as_ref()
+        .map(|sz| {
+            (
+                HwpUnit::new(sz.width).unwrap_or(HwpUnit::ZERO),
+                HwpUnit::new(sz.height).unwrap_or(HwpUnit::ZERO),
+            )
+        })
+        .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
+
+    let paragraphs = match &polygon.draw_text {
+        Some(dt) => decode_sublist_paragraphs(&dt.sub_list, depth)?,
+        None => Vec::new(),
+    };
+
+    let caption = polygon.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
+
+    Ok(Run {
+        content: RunContent::Control(Box::new(Control::Polygon {
+            vertices,
+            width,
+            height,
+            paragraphs,
+            caption,
+        })),
+        char_shape_id,
+    })
 }
 
 /// Converts paragraphs from an `HxSubList` into Core `Paragraph`s.
@@ -373,6 +550,28 @@ fn decode_sublist_paragraphs(sub_list: &HxSubList, depth: usize) -> HwpxResult<V
             Ok(para)
         })
         .collect()
+}
+
+/// Converts an `HxCaption` into a Core `Caption`.
+///
+/// Parses side, gap, optional width, and paragraph content from the schema type.
+fn convert_hx_caption(hx: &HxCaption, depth: usize) -> HwpxResult<Caption> {
+    let side = match hx.side.as_str() {
+        "RIGHT" => CaptionSide::Right,
+        "TOP" => CaptionSide::Top,
+        "BOTTOM" => CaptionSide::Bottom,
+        // LEFT is default per schema default_caption_side()
+        _ => CaptionSide::Left,
+    };
+
+    let width =
+        if hx.width > 0 { Some(HwpUnit::new(hx.width).unwrap_or(HwpUnit::ZERO)) } else { None };
+
+    let gap = HwpUnit::new(hx.gap).unwrap_or(HwpUnit::new(850).unwrap());
+
+    let paragraphs = decode_sublist_paragraphs(&hx.sub_list, depth)?;
+
+    Ok(Caption { side, width, gap, paragraphs })
 }
 
 /// Guesses image format from the file reference name.
@@ -429,6 +628,53 @@ fn extract_page_settings(sec_pr: &crate::schema::section::HxSecPr) -> Option<Pag
 }
 
 // ── Ctrl conversion helpers ──────────────────────────────────────
+
+/// Extracts [`ColumnSettings`] from an `HxCtrl`'s `colPr` element, if present.
+///
+/// Returns `None` if the ctrl has no `colPr` or if `colCount <= 1`
+/// (single-column is represented as `column_settings: None` on Section).
+fn convert_ctrl_column_settings(ctrl: &HxCtrl) -> Option<ColumnSettings> {
+    let col_pr = ctrl.col_pr.as_ref()?;
+
+    // Single column (colCount=0 or 1) → None (default layout)
+    if col_pr.col_count <= 1 {
+        return None;
+    }
+
+    let column_type = match col_pr.col_type.as_str() {
+        "PARALLEL" => ColumnType::Parallel,
+        _ => ColumnType::Newspaper, // default
+    };
+
+    let layout = match col_pr.layout.as_str() {
+        "RIGHT" => ColumnLayoutMode::Right,
+        "MIRROR" => ColumnLayoutMode::Mirror,
+        _ => ColumnLayoutMode::Left, // default
+    };
+
+    let columns = if col_pr.same_sz == 1 || col_pr.columns.is_empty() {
+        // Equal-width columns: build from col_count + same_gap
+        let gap = HwpUnit::new(col_pr.same_gap).unwrap_or(HwpUnit::ZERO);
+        (0..col_pr.col_count)
+            .map(|i| ColumnDef {
+                width: HwpUnit::ZERO, // 한글 calculates actual widths
+                gap: if i < col_pr.col_count - 1 { gap } else { HwpUnit::ZERO },
+            })
+            .collect()
+    } else {
+        // Variable-width columns: read from <hp:col> children
+        col_pr
+            .columns
+            .iter()
+            .map(|c| ColumnDef {
+                width: HwpUnit::new(c.width).unwrap_or(HwpUnit::ZERO),
+                gap: HwpUnit::new(c.gap).unwrap_or(HwpUnit::ZERO),
+            })
+            .collect()
+    };
+
+    Some(ColumnSettings { column_type, layout_mode: layout, columns })
+}
 
 /// Extracts a [`HeaderFooter`] from an `HxCtrl`'s header element, if present.
 fn convert_ctrl_header(ctrl: &HxCtrl) -> Option<HeaderFooter> {
@@ -1097,6 +1343,7 @@ mod tests {
                     height,
                     horz_offset,
                     vert_offset,
+                    ..
                 } => {
                     assert_eq!(paragraphs.len(), 1);
                     assert_eq!(paragraphs[0].runs[0].content.as_text(), Some("Box content"));
@@ -1159,6 +1406,119 @@ mod tests {
             },
             _ => panic!("expected Control"),
         }
+    }
+
+    // ── Multi-column (다단) decoder tests ────────────────────────
+
+    #[test]
+    fn parse_two_column_equal_width() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <colPr id="" type="NEWSPAPER" layout="LEFT" colCount="2" sameSz="1" sameGap="1134"/>
+                    </ctrl>
+                    <t>Two column text</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0).unwrap();
+        let cs = result.column_settings.expect("should have column_settings");
+        assert_eq!(cs.column_type, ColumnType::Newspaper);
+        assert_eq!(cs.layout_mode, ColumnLayoutMode::Left);
+        assert_eq!(cs.columns.len(), 2);
+        assert_eq!(cs.columns[0].gap.as_i32(), 1134);
+        assert_eq!(cs.columns[1].gap.as_i32(), 0); // last column has no gap
+    }
+
+    #[test]
+    fn parse_three_column_variable_width() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <colPr id="" type="NEWSPAPER" layout="LEFT" colCount="3" sameSz="0" sameGap="0">
+                            <col width="10000" gap="500"/>
+                            <col width="15000" gap="500"/>
+                            <col width="10000" gap="0"/>
+                        </colPr>
+                    </ctrl>
+                    <t>Variable columns</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0).unwrap();
+        let cs = result.column_settings.expect("should have column_settings");
+        assert_eq!(cs.columns.len(), 3);
+        assert_eq!(cs.columns[0].width.as_i32(), 10000);
+        assert_eq!(cs.columns[0].gap.as_i32(), 500);
+        assert_eq!(cs.columns[1].width.as_i32(), 15000);
+        assert_eq!(cs.columns[1].gap.as_i32(), 500);
+        assert_eq!(cs.columns[2].width.as_i32(), 10000);
+        assert_eq!(cs.columns[2].gap.as_i32(), 0);
+    }
+
+    #[test]
+    fn parse_parallel_column_type() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <colPr id="" type="PARALLEL" layout="MIRROR" colCount="2" sameSz="1" sameGap="850"/>
+                    </ctrl>
+                    <t>Parallel columns</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0).unwrap();
+        let cs = result.column_settings.expect("should have column_settings");
+        assert_eq!(cs.column_type, ColumnType::Parallel);
+        assert_eq!(cs.layout_mode, ColumnLayoutMode::Mirror);
+        assert_eq!(cs.columns.len(), 2);
+    }
+
+    #[test]
+    fn parse_single_column_colpr_returns_none() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <colPr id="" type="NEWSPAPER" layout="LEFT" colCount="1" sameSz="1" sameGap="0"/>
+                    </ctrl>
+                    <t>Single column</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0).unwrap();
+        assert!(result.column_settings.is_none(), "colCount=1 should produce None");
+    }
+
+    #[test]
+    fn section_without_colpr_has_no_column_settings() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0"><t>Plain text</t></run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0).unwrap();
+        assert!(result.column_settings.is_none());
+    }
+
+    #[test]
+    fn parse_column_with_right_layout() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <colPr id="" type="NEWSPAPER" layout="RIGHT" colCount="2" sameSz="1" sameGap="567"/>
+                    </ctrl>
+                    <t>Right layout</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0).unwrap();
+        let cs = result.column_settings.unwrap();
+        assert_eq!(cs.layout_mode, ColumnLayoutMode::Right);
     }
 
     // ── Parse helper tests ──────────────────────────────────────
