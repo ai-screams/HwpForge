@@ -26,6 +26,7 @@ use hwpforge_foundation::HwpUnit;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::caption::Caption;
 use crate::paragraph::Paragraph;
 
 /// A 2D point in raw HWPUNIT coordinates for shape geometry.
@@ -76,6 +77,7 @@ impl ShapePoint {
 ///     height: HwpUnit::from_mm(40.0).unwrap(),
 ///     horz_offset: 0,
 ///     vert_offset: 0,
+///     caption: None,
 /// };
 /// assert!(text_box.is_text_box());
 /// assert!(!text_box.is_hyperlink());
@@ -96,6 +98,8 @@ pub enum Control {
         horz_offset: i32,
         /// Vertical offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
         vert_offset: i32,
+        /// Optional caption attached to this text box.
+        caption: Option<Caption>,
     },
 
     /// A hyperlink with display text and URL.
@@ -136,6 +140,8 @@ pub enum Control {
         width: HwpUnit,
         /// Bounding box height (HWPUNIT).
         height: HwpUnit,
+        /// Optional caption attached to this line.
+        caption: Option<Caption>,
     },
 
     /// An ellipse (or circle) drawing object.
@@ -154,6 +160,8 @@ pub enum Control {
         height: HwpUnit,
         /// Optional text content inside the ellipse.
         paragraphs: Vec<Paragraph>,
+        /// Optional caption attached to this ellipse.
+        caption: Option<Caption>,
     },
 
     /// A polygon drawing object (3+ vertices).
@@ -168,6 +176,8 @@ pub enum Control {
         height: HwpUnit,
         /// Optional text content inside the polygon.
         paragraphs: Vec<Paragraph>,
+        /// Optional caption attached to this polygon.
+        caption: Option<Caption>,
     },
 
     /// An unrecognized control element preserved for round-trip fidelity.
@@ -278,6 +288,7 @@ mod tests {
             height: HwpUnit::from_mm(40.0).unwrap(),
             horz_offset: 0,
             vert_offset: 0,
+            caption: None,
         };
         assert!(ctrl.is_text_box());
         assert!(!ctrl.is_hyperlink());
@@ -335,6 +346,7 @@ mod tests {
             height: HwpUnit::from_mm(40.0).unwrap(),
             horz_offset: 0,
             vert_offset: 0,
+            caption: None,
         };
         assert_eq!(ctrl.to_string(), "TextBox(2 paragraphs)");
     }
@@ -393,6 +405,7 @@ mod tests {
             height: HwpUnit::from_mm(40.0).unwrap(),
             horz_offset: 0,
             vert_offset: 0,
+            caption: None,
         };
         let json = serde_json::to_string(&ctrl).unwrap();
         let back: Control = serde_json::from_str(&json).unwrap();
@@ -443,6 +456,7 @@ mod tests {
             end: ShapePoint { x: 1000, y: 500 },
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(25.0).unwrap(),
+            caption: None,
         };
         assert!(ctrl.is_line());
         assert!(!ctrl.is_text_box());
@@ -459,6 +473,7 @@ mod tests {
             width: HwpUnit::from_mm(40.0).unwrap(),
             height: HwpUnit::from_mm(30.0).unwrap(),
             paragraphs: vec![],
+            caption: None,
         };
         assert!(ctrl.is_ellipse());
         assert!(!ctrl.is_line());
@@ -474,6 +489,7 @@ mod tests {
             width: HwpUnit::from_mm(40.0).unwrap(),
             height: HwpUnit::from_mm(30.0).unwrap(),
             paragraphs: vec![simple_paragraph()],
+            caption: None,
         };
         assert!(ctrl.is_ellipse());
         assert_eq!(ctrl.to_string(), "Ellipse(1 paragraphs)");
@@ -490,6 +506,7 @@ mod tests {
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(50.0).unwrap(),
             paragraphs: vec![],
+            caption: None,
         };
         assert!(ctrl.is_polygon());
         assert!(!ctrl.is_line());
@@ -504,6 +521,7 @@ mod tests {
             end: ShapePoint { x: 100, y: 200 },
             width: HwpUnit::from_mm(10.0).unwrap(),
             height: HwpUnit::from_mm(5.0).unwrap(),
+            caption: None,
         };
         assert_eq!(ctrl.to_string(), "Line");
     }
@@ -515,6 +533,7 @@ mod tests {
             end: ShapePoint { x: 300, y: 400 },
             width: HwpUnit::from_mm(20.0).unwrap(),
             height: HwpUnit::from_mm(10.0).unwrap(),
+            caption: None,
         };
         let json = serde_json::to_string(&ctrl).unwrap();
         let back: Control = serde_json::from_str(&json).unwrap();
@@ -530,6 +549,7 @@ mod tests {
             width: HwpUnit::from_mm(40.0).unwrap(),
             height: HwpUnit::from_mm(30.0).unwrap(),
             paragraphs: vec![simple_paragraph()],
+            caption: None,
         };
         let json = serde_json::to_string(&ctrl).unwrap();
         let back: Control = serde_json::from_str(&json).unwrap();
@@ -547,6 +567,7 @@ mod tests {
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(50.0).unwrap(),
             paragraphs: vec![],
+            caption: None,
         };
         let json = serde_json::to_string(&ctrl).unwrap();
         let back: Control = serde_json::from_str(&json).unwrap();

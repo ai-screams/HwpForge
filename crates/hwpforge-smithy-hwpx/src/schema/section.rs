@@ -304,6 +304,43 @@ pub struct HxFootNotePr {
 /// `<hp:endNotePr>` — section-level endnote formatting (decoder-only for Phase 4.5).
 pub type HxEndNotePr = HxFootNotePr;
 
+// ── Caption ──────────────────────────────────────────────────────
+
+/// `<hp:caption>` — caption element attached to shapes (tables, images, rects, etc.).
+///
+/// Captions contain paragraph content via a sub-list and are positioned
+/// relative to their parent object (LEFT, RIGHT, TOP, BOTTOM).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxCaption {
+    /// Caption side: LEFT, RIGHT, TOP, BOTTOM.
+    #[serde(rename = "@side", default = "default_caption_side")]
+    pub side: String,
+    /// Include outer margin in caption width (0=false, 1=true).
+    #[serde(rename = "@fullSz", default)]
+    pub full_sz: u32,
+    /// Caption width in HWPUNIT.
+    #[serde(rename = "@width", default)]
+    pub width: i32,
+    /// Gap between caption and object (default: 850 HWPUNIT ~= 3mm).
+    #[serde(rename = "@gap", default = "default_caption_gap")]
+    pub gap: i32,
+    /// Max text width = parent object width (HWPUNIT).
+    #[serde(rename = "@lastWidth", default)]
+    pub last_width: u32,
+    /// Caption paragraph content.
+    #[serde(rename(serialize = "hp:subList", deserialize = "subList"))]
+    pub sub_list: HxSubList,
+}
+
+/// XSD default is LEFT; Core `CaptionSide::default()` uses Bottom for Korean doc convenience.
+fn default_caption_side() -> String {
+    "LEFT".to_string()
+}
+
+fn default_caption_gap() -> i32 {
+    850
+}
+
 // ── Section Properties ────────────────────────────────────────────
 
 /// `<hp:secPr>` — section settings, embedded in the first paragraph.
@@ -465,6 +502,12 @@ pub struct HxTable {
         skip_serializing_if = "Option::is_none"
     )]
     pub out_margin: Option<HxTableMargin>,
+    #[serde(
+        rename(serialize = "hp:caption", deserialize = "caption"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub caption: Option<HxCaption>,
     #[serde(
         rename(serialize = "hp:inMargin", deserialize = "inMargin"),
         default,
@@ -691,6 +734,13 @@ pub struct HxPic {
         skip_serializing_if = "Option::is_none"
     )]
     pub cur_sz: Option<HxSizeAttr>,
+    /// Optional caption attached to this image.
+    #[serde(
+        rename(serialize = "hp:caption", deserialize = "caption"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub caption: Option<HxCaption>,
     // lineShape, fillBrush, shadow, pos, sz — ignored
 }
 
@@ -783,6 +833,14 @@ pub struct HxRect {
         skip_serializing_if = "Option::is_none"
     )]
     pub out_margin: Option<HxTableMargin>,
+
+    /// Optional caption attached to this rectangle.
+    #[serde(
+        rename(serialize = "hp:caption", deserialize = "caption"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub caption: Option<HxCaption>,
 
     /// Textbox content (if present, this rect is a textbox).
     #[serde(
@@ -931,6 +989,14 @@ pub struct HxLine {
     )]
     pub out_margin: Option<HxTableMargin>,
 
+    /// Optional caption attached to this line.
+    #[serde(
+        rename(serialize = "hp:caption", deserialize = "caption"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub caption: Option<HxCaption>,
+
     // ── Line-specific children ──
     /// Start point of the line.
     #[serde(
@@ -1020,6 +1086,14 @@ pub struct HxEllipse {
         skip_serializing_if = "Option::is_none"
     )]
     pub out_margin: Option<HxTableMargin>,
+
+    /// Optional caption attached to this ellipse.
+    #[serde(
+        rename(serialize = "hp:caption", deserialize = "caption"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub caption: Option<HxCaption>,
 
     // ── drawText (textbox content, optional) ──
     /// Optional textbox content inside the ellipse.
@@ -1115,6 +1189,14 @@ pub struct HxPolygon {
         skip_serializing_if = "Option::is_none"
     )]
     pub out_margin: Option<HxTableMargin>,
+
+    /// Optional caption attached to this polygon.
+    #[serde(
+        rename(serialize = "hp:caption", deserialize = "caption"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub caption: Option<HxCaption>,
 
     // ── drawText (textbox content, optional) ──
     /// Optional textbox content inside the polygon.
@@ -1384,5 +1466,142 @@ mod tests {
         assert_eq!(sec.paragraphs[0].runs[0].texts[0].text, "First");
         assert_eq!(sec.paragraphs[1].runs[0].texts[0].text, "Second");
         assert_eq!(sec.paragraphs[2].runs[0].texts[0].text, "Third");
+    }
+
+    // ── Caption tests ──
+
+    #[test]
+    fn parse_caption_standalone_roundtrip() {
+        let xml = r#"<caption side="BOTTOM" fullSz="0" width="42520" gap="850" lastWidth="42520"><subList id="" textDirection="" lineWrap="" vertAlign="" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0" hasTextRef="0" hasNumRef="0"><p id="0" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0"><t>Figure 1. Sample</t></run></p></subList></caption>"#;
+        let cap: HxCaption = quick_xml::de::from_str(xml).expect("parse HxCaption");
+        assert_eq!(cap.side, "BOTTOM");
+        assert_eq!(cap.full_sz, 0);
+        assert_eq!(cap.width, 42520);
+        assert_eq!(cap.gap, 850);
+        assert_eq!(cap.last_width, 42520);
+        assert_eq!(cap.sub_list.paragraphs.len(), 1);
+        assert_eq!(cap.sub_list.paragraphs[0].runs[0].texts[0].text, "Figure 1. Sample");
+
+        // Roundtrip: serialize and deserialize
+        let serialized = quick_xml::se::to_string(&cap).expect("serialize HxCaption");
+        let cap2: HxCaption = quick_xml::de::from_str(&serialized).expect("re-parse HxCaption");
+        assert_eq!(cap.side, cap2.side);
+        assert_eq!(cap.width, cap2.width);
+        assert_eq!(cap.gap, cap2.gap);
+    }
+
+    #[test]
+    fn caption_defaults() {
+        let xml = r#"<caption><subList><p id="0" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0"><t>cap</t></run></p></subList></caption>"#;
+        let cap: HxCaption = quick_xml::de::from_str(xml).expect("parse");
+        assert_eq!(cap.side, "LEFT");
+        assert_eq!(cap.gap, 850);
+        assert_eq!(cap.full_sz, 0);
+        assert_eq!(cap.width, 0);
+        assert_eq!(cap.last_width, 0);
+    }
+
+    #[test]
+    fn parse_table_with_caption() {
+        let xml = r#"
+        <hs:sec>
+          <hp:p id="0" paraPrIDRef="0" styleIDRef="0">
+            <hp:run charPrIDRef="0">
+              <hp:tbl rowCnt="1" colCnt="1">
+                <hp:sz width="42520" height="5000"/>
+                <hp:outMargin left="0" right="0" top="0" bottom="0"/>
+                <hp:caption side="BOTTOM" fullSz="0" width="42520" gap="850" lastWidth="42520">
+                  <hp:subList id="" textDirection="" lineWrap="" vertAlign="">
+                    <hp:p id="0" paraPrIDRef="0" styleIDRef="0">
+                      <hp:run charPrIDRef="0"><hp:t>Table 1. Data</hp:t></hp:run>
+                    </hp:p>
+                  </hp:subList>
+                </hp:caption>
+                <hp:inMargin left="0" right="0" top="0" bottom="0"/>
+                <hp:tr>
+                  <hp:tc name="A1">
+                    <hp:cellSpan rowSpan="1" colSpan="1"/>
+                    <hp:cellSz width="42520" height="5000"/>
+                    <hp:subList>
+                      <hp:p id="0" paraPrIDRef="0" styleIDRef="0">
+                        <hp:run charPrIDRef="0"><hp:t>cell</hp:t></hp:run>
+                      </hp:p>
+                    </hp:subList>
+                  </hp:tc>
+                </hp:tr>
+              </hp:tbl>
+            </hp:run>
+          </hp:p>
+        </hs:sec>"#;
+        let sec = parse_section(xml);
+        let tbl = &sec.paragraphs[0].runs[0].tables[0];
+        let cap = tbl.caption.as_ref().expect("table should have caption");
+        assert_eq!(cap.side, "BOTTOM");
+        assert_eq!(cap.width, 42520);
+        assert_eq!(cap.sub_list.paragraphs[0].runs[0].texts[0].text, "Table 1. Data");
+        // Table data should still parse correctly
+        assert_eq!(tbl.rows.len(), 1);
+    }
+
+    #[test]
+    fn table_without_caption_roundtrip() {
+        // Ensure existing tables without caption still work
+        let xml = r#"
+        <hs:sec>
+          <hp:p id="0" paraPrIDRef="0" styleIDRef="0">
+            <hp:run charPrIDRef="0">
+              <hp:tbl rowCnt="1" colCnt="1">
+                <hp:tr>
+                  <hp:tc name="A1">
+                    <hp:cellSpan rowSpan="1" colSpan="1"/>
+                    <hp:subList>
+                      <hp:p id="0" paraPrIDRef="0" styleIDRef="0">
+                        <hp:run charPrIDRef="0"><hp:t>ok</hp:t></hp:run>
+                      </hp:p>
+                    </hp:subList>
+                  </hp:tc>
+                </hp:tr>
+              </hp:tbl>
+            </hp:run>
+          </hp:p>
+        </hs:sec>"#;
+        let sec = parse_section(xml);
+        let tbl = &sec.paragraphs[0].runs[0].tables[0];
+        assert!(tbl.caption.is_none());
+    }
+
+    #[test]
+    fn parse_rect_with_caption() {
+        let xml = r#"
+        <hs:sec>
+          <hp:p id="0" paraPrIDRef="0" styleIDRef="0">
+            <hp:run charPrIDRef="0">
+              <hp:rect id="1" zOrder="0" numberingType="FIGURE" textWrap="TOP_AND_BOTTOM" textFlow="BOTH_SIDES" lock="0">
+                <hp:sz width="20000" height="10000"/>
+                <hp:outMargin left="0" right="0" top="0" bottom="0"/>
+                <hp:caption side="TOP" width="20000" gap="500" lastWidth="20000">
+                  <hp:subList>
+                    <hp:p id="0" paraPrIDRef="0" styleIDRef="0">
+                      <hp:run charPrIDRef="0"><hp:t>Fig caption</hp:t></hp:run>
+                    </hp:p>
+                  </hp:subList>
+                </hp:caption>
+                <hp:drawText lastWidth="18000">
+                  <hp:subList>
+                    <hp:p id="0" paraPrIDRef="0" styleIDRef="0">
+                      <hp:run charPrIDRef="0"><hp:t>box text</hp:t></hp:run>
+                    </hp:p>
+                  </hp:subList>
+                </hp:drawText>
+              </hp:rect>
+            </hp:run>
+          </hp:p>
+        </hs:sec>"#;
+        let sec = parse_section(xml);
+        let rect = &sec.paragraphs[0].runs[0].rects[0];
+        let cap = rect.caption.as_ref().expect("rect should have caption");
+        assert_eq!(cap.side, "TOP");
+        assert_eq!(cap.gap, 500);
+        assert!(rect.draw_text.is_some());
     }
 }

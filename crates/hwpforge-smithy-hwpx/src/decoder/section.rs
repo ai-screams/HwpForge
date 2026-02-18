@@ -3,6 +3,7 @@
 //! Converts XML schema types (`HxParagraph`, `HxRun`, `HxText`, `HxTable`,
 //! `HxPic`) into Core types (`Paragraph`, `Run`, `RunContent`, `Table`, `Image`).
 
+use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::{ColumnDef, ColumnLayoutMode, ColumnSettings, ColumnType};
 use hwpforge_core::control::Control;
 use hwpforge_core::image::{Image, ImageFormat};
@@ -18,8 +19,8 @@ use quick_xml::de::from_str;
 
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    HxCtrl, HxEllipse, HxFootNote, HxHeaderFooter, HxLine, HxPageNum, HxParagraph, HxPic,
-    HxPolygon, HxRect, HxRun, HxSection, HxSubList, HxTable, HxTableCell,
+    HxCaption, HxCtrl, HxEllipse, HxFootNote, HxHeaderFooter, HxLine, HxPageNum, HxParagraph,
+    HxPic, HxPolygon, HxRect, HxRun, HxSection, HxSubList, HxTable, HxTableCell,
 };
 
 /// Maximum nesting depth for tables-within-tables.
@@ -170,7 +171,7 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
 
     // Image runs
     for pic in &hx.pictures {
-        if let Some(image) = convert_picture(pic) {
+        if let Some(image) = convert_picture(pic, depth)? {
             runs.push(Run { content: RunContent::Image(image), char_shape_id });
         }
     }
@@ -194,7 +195,7 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
 
     // Line runs (from <hp:line>)
     for line in &hx.lines {
-        runs.push(decode_line(line, char_shape_id));
+        runs.push(decode_line(line, char_shape_id, depth)?);
     }
 
     // Ellipse runs (from <hp:ellipse>)
@@ -242,7 +243,9 @@ fn convert_table(hx: &HxTable, depth: usize) -> HwpxResult<Table> {
         });
     }
 
-    Ok(Table { rows, width: None, caption: None })
+    let caption = hx.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
+
+    Ok(Table { rows, width: None, caption })
 }
 
 /// Converts an `HxTableCell` into a Core `TableCell`.
@@ -270,11 +273,11 @@ fn convert_table_cell(hx: &HxTableCell, depth: usize) -> HwpxResult<TableCell> {
 }
 
 /// Converts an `HxPic` into a Core `Image`, if it has a valid image reference.
-fn convert_picture(hx: &HxPic) -> Option<Image> {
-    let img = hx.img.as_ref()?;
-    if img.binary_item_id_ref.is_empty() {
-        return None;
-    }
+fn convert_picture(hx: &HxPic, depth: usize) -> HwpxResult<Option<Image>> {
+    let img = match hx.img.as_ref() {
+        Some(img) if !img.binary_item_id_ref.is_empty() => img,
+        _ => return Ok(None),
+    };
 
     let path = format!("BinData/{}", img.binary_item_id_ref);
     let format = guess_image_format(&img.binary_item_id_ref);
@@ -291,7 +294,9 @@ fn convert_picture(hx: &HxPic) -> Option<Image> {
         })
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
-    Some(Image { path, width, height, format })
+    let caption = hx.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
+
+    Ok(Some(Image { path, width, height, format, caption }))
 }
 
 // ── Footnote / Endnote / TextBox decoding ────────────────────────
@@ -373,6 +378,8 @@ fn decode_textbox(
     let (horz_offset, vert_offset) =
         rect.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
 
+    let caption = rect.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
+
     Ok(Some(Run {
         content: RunContent::Control(Box::new(Control::TextBox {
             paragraphs,
@@ -380,13 +387,14 @@ fn decode_textbox(
             height,
             horz_offset,
             vert_offset,
+            caption,
         })),
         char_shape_id,
     }))
 }
 
 /// Decodes an `HxLine` into a Core `Run` with `Control::Line`.
-fn decode_line(line: &HxLine, char_shape_id: CharShapeIndex) -> Run {
+fn decode_line(line: &HxLine, char_shape_id: CharShapeIndex, depth: usize) -> HwpxResult<Run> {
     use hwpforge_core::control::ShapePoint;
 
     let start = line
@@ -411,10 +419,18 @@ fn decode_line(line: &HxLine, char_shape_id: CharShapeIndex) -> Run {
         })
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
-    Run {
-        content: RunContent::Control(Box::new(Control::Line { start, end, width, height })),
+    let caption = line.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
+
+    Ok(Run {
+        content: RunContent::Control(Box::new(Control::Line {
+            start,
+            end,
+            width,
+            height,
+            caption,
+        })),
         char_shape_id,
-    }
+    })
 }
 
 /// Decodes an `HxEllipse` into a Core `Run` with `Control::Ellipse`.
@@ -457,6 +473,8 @@ fn decode_ellipse(
         None => Vec::new(),
     };
 
+    let caption = ellipse.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
+
     Ok(Run {
         content: RunContent::Control(Box::new(Control::Ellipse {
             center,
@@ -465,6 +483,7 @@ fn decode_ellipse(
             width,
             height,
             paragraphs,
+            caption,
         })),
         char_shape_id,
     })
@@ -497,12 +516,15 @@ fn decode_polygon(
         None => Vec::new(),
     };
 
+    let caption = polygon.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
+
     Ok(Run {
         content: RunContent::Control(Box::new(Control::Polygon {
             vertices,
             width,
             height,
             paragraphs,
+            caption,
         })),
         char_shape_id,
     })
@@ -528,6 +550,28 @@ fn decode_sublist_paragraphs(sub_list: &HxSubList, depth: usize) -> HwpxResult<V
             Ok(para)
         })
         .collect()
+}
+
+/// Converts an `HxCaption` into a Core `Caption`.
+///
+/// Parses side, gap, optional width, and paragraph content from the schema type.
+fn convert_hx_caption(hx: &HxCaption, depth: usize) -> HwpxResult<Caption> {
+    let side = match hx.side.as_str() {
+        "RIGHT" => CaptionSide::Right,
+        "TOP" => CaptionSide::Top,
+        "BOTTOM" => CaptionSide::Bottom,
+        // LEFT is default per schema default_caption_side()
+        _ => CaptionSide::Left,
+    };
+
+    let width =
+        if hx.width > 0 { Some(HwpUnit::new(hx.width).unwrap_or(HwpUnit::ZERO)) } else { None };
+
+    let gap = HwpUnit::new(hx.gap).unwrap_or(HwpUnit::new(850).unwrap());
+
+    let paragraphs = decode_sublist_paragraphs(&hx.sub_list, depth)?;
+
+    Ok(Caption { side, width, gap, paragraphs })
 }
 
 /// Guesses image format from the file reference name.
@@ -1299,6 +1343,7 @@ mod tests {
                     height,
                     horz_offset,
                     vert_offset,
+                    ..
                 } => {
                     assert_eq!(paragraphs.len(), 1);
                     assert_eq!(paragraphs[0].runs[0].content.as_text(), Some("Box content"));

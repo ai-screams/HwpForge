@@ -80,6 +80,7 @@
 #![deny(unsafe_code)]
 #![deny(clippy::all)]
 
+pub mod caption;
 pub mod column;
 pub mod control;
 pub mod document;
@@ -98,6 +99,7 @@ mod validate;
 // Re-exports for convenience
 // ---------------------------------------------------------------------------
 
+pub use caption::{Caption, CaptionSide};
 pub use column::{ColumnDef, ColumnLayoutMode, ColumnSettings, ColumnType};
 pub use control::{Control, ShapePoint};
 pub use document::{Document, Draft, Validated};

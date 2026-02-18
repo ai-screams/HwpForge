@@ -378,6 +378,7 @@ mod tests {
             height: HwpUnit::from_mm(40.0).unwrap(),
             horz_offset: 0,
             vert_offset: 0,
+            caption: None,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
@@ -423,6 +424,7 @@ mod tests {
             height: HwpUnit::from_mm(40.0).unwrap(),
             horz_offset: 0,
             vert_offset: 0,
+            caption: None,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
@@ -523,6 +525,7 @@ mod tests {
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(50.0).unwrap(),
             paragraphs: vec![],
+            caption: None,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
@@ -541,6 +544,7 @@ mod tests {
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(50.0).unwrap(),
             paragraphs: vec![],
+            caption: None,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
@@ -563,6 +567,7 @@ mod tests {
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(50.0).unwrap(),
             paragraphs: vec![],
+            caption: None,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
@@ -584,6 +589,7 @@ mod tests {
             width: HwpUnit::new(0).unwrap(), // invalid
             height: HwpUnit::from_mm(30.0).unwrap(),
             paragraphs: vec![],
+            caption: None,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
@@ -607,6 +613,7 @@ mod tests {
             width: HwpUnit::from_mm(40.0).unwrap(),
             height: HwpUnit::new(0).unwrap(), // invalid
             paragraphs: vec![],
+            caption: None,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
@@ -632,6 +639,7 @@ mod tests {
             width: HwpUnit::new(0).unwrap(), // invalid
             height: HwpUnit::from_mm(50.0).unwrap(),
             paragraphs: vec![],
+            caption: None,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
@@ -654,6 +662,7 @@ mod tests {
             end: ShapePoint { x: 1000, y: 0 },
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::new(0).unwrap(), // valid for lines
+            caption: None,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
@@ -672,6 +681,7 @@ mod tests {
             end: ShapePoint { x: 0, y: 1000 },
             width: HwpUnit::new(0).unwrap(), // valid for lines
             height: HwpUnit::from_mm(50.0).unwrap(),
+            caption: None,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
@@ -689,6 +699,7 @@ mod tests {
             end: ShapePoint { x: 1000, y: 500 },
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(25.0).unwrap(),
+            caption: None,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
@@ -708,6 +719,7 @@ mod tests {
             width: HwpUnit::from_mm(40.0).unwrap(),
             height: HwpUnit::from_mm(30.0).unwrap(),
             paragraphs: vec![],
+            caption: None,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
@@ -729,6 +741,7 @@ mod tests {
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(50.0).unwrap(),
             paragraphs: vec![],
+            caption: None,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(

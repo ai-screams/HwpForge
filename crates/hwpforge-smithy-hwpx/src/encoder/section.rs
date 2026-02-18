@@ -12,6 +12,7 @@
 //! the **first paragraph**, not at the section level. This module reproduces
 //! that quirk so the output is compatible with the Hancom HWP editor.
 
+use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::{ColumnLayoutMode, ColumnSettings, ColumnType};
 use hwpforge_core::control::Control;
 use hwpforge_core::image::Image;
@@ -24,10 +25,10 @@ use hwpforge_core::PageSettings;
 use crate::encoder::package::XMLNS_DECLS;
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    HxCellAddr, HxCellSpan, HxCellSz, HxCtrl, HxDrawText, HxEllipse, HxFootNote, HxImg, HxLine,
-    HxLineSeg, HxLineSegArray, HxPageMargin, HxPagePr, HxParagraph, HxPic, HxPoint, HxPolygon,
-    HxRect, HxRun, HxSecPr, HxSection, HxSizeAttr, HxSubList, HxTable, HxTableCell, HxTableMargin,
-    HxTablePos, HxTableRow, HxTableSz, HxText,
+    HxCaption, HxCellAddr, HxCellSpan, HxCellSz, HxCtrl, HxDrawText, HxEllipse, HxFootNote, HxImg,
+    HxLine, HxLineSeg, HxLineSegArray, HxPageMargin, HxPagePr, HxParagraph, HxPic, HxPoint,
+    HxPolygon, HxRect, HxRun, HxSecPr, HxSection, HxSizeAttr, HxSubList, HxTable, HxTableCell,
+    HxTableMargin, HxTablePos, HxTableRow, HxTableSz, HxText,
 };
 
 /// Maximum nesting depth for tables-within-tables.
@@ -190,7 +191,7 @@ fn build_runs(
                 tables.push(build_table(t, depth)?);
             }
             RunContent::Image(img) => {
-                pictures.push(build_picture(img));
+                pictures.push(build_picture(img, depth)?);
             }
             RunContent::Control(ctrl) => {
                 match ctrl.as_ref() {
@@ -203,7 +204,7 @@ fn build_runs(
                         rects.push(encode_textbox_to_rect(ctrl, depth)?);
                     }
                     Control::Line { .. } => {
-                        lines.push(encode_line_to_hx(ctrl));
+                        lines.push(encode_line_to_hx(ctrl, depth)?);
                     }
                     Control::Ellipse { .. } => {
                         ellipses.push(encode_ellipse_to_hx(ctrl, depth)?);
@@ -317,9 +318,9 @@ fn encode_paragraphs_to_sublist(paragraphs: &[Paragraph], depth: usize) -> HwpxR
 ///
 /// Phase 4.5 MVP: inline positioning (treatAsChar=1) when offsets are (0,0).
 fn encode_textbox_to_rect(ctrl: &Control, depth: usize) -> HwpxResult<HxRect> {
-    let (paragraphs, width, height, horz_offset, vert_offset) = match ctrl {
-        Control::TextBox { paragraphs, width, height, horz_offset, vert_offset } => {
-            (paragraphs, *width, *height, *horz_offset, *vert_offset)
+    let (paragraphs, width, height, horz_offset, vert_offset, caption) = match ctrl {
+        Control::TextBox { paragraphs, width, height, horz_offset, vert_offset, caption } => {
+            (paragraphs, *width, *height, *horz_offset, *vert_offset, caption)
         }
         _ => unreachable!("encode_textbox_to_rect called with non-TextBox"),
     };
@@ -369,6 +370,7 @@ fn encode_textbox_to_rect(ctrl: &Control, depth: usize) -> HwpxResult<HxRect> {
         }),
 
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+        caption: caption.as_ref().map(|c| build_hx_caption(c, width_hwp, depth)).transpose()?,
 
         draw_text: Some(HxDrawText {
             last_width,
@@ -392,13 +394,15 @@ fn encode_textbox_to_rect(ctrl: &Control, depth: usize) -> HwpxResult<HxRect> {
 
 /// Encodes a Core `Control::Line` into `HxLine`.
 // NOTE: Shape encoders share ~27 default fields each. At 8+ shapes, extract a shared default helper.
-fn encode_line_to_hx(ctrl: &Control) -> HxLine {
-    let (start, end, width, height) = match ctrl {
-        Control::Line { start, end, width, height } => (start, end, *width, *height),
+fn encode_line_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxLine> {
+    let (start, end, width, height, caption) = match ctrl {
+        Control::Line { start, end, width, height, caption } => {
+            (start, end, *width, *height, caption)
+        }
         _ => unreachable!("encode_line_to_hx called with non-Line"),
     };
 
-    HxLine {
+    Ok(HxLine {
         id: String::new(),
         z_order: 0,
         numbering_type: "NONE".to_string(),
@@ -431,16 +435,20 @@ fn encode_line_to_hx(ctrl: &Control) -> HxLine {
             horz_offset: 0,
         }),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+        caption: caption
+            .as_ref()
+            .map(|c| build_hx_caption(c, width.as_i32(), depth))
+            .transpose()?,
         start_pt: Some(HxPoint { x: start.x, y: start.y }),
         end_pt: Some(HxPoint { x: end.x, y: end.y }),
-    }
+    })
 }
 
 /// Encodes a Core `Control::Ellipse` into `HxEllipse`.
 fn encode_ellipse_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxEllipse> {
-    let (center, axis1, axis2, width, height, paragraphs) = match ctrl {
-        Control::Ellipse { center, axis1, axis2, width, height, paragraphs } => {
-            (center, axis1, axis2, *width, *height, paragraphs)
+    let (center, axis1, axis2, width, height, paragraphs, caption) = match ctrl {
+        Control::Ellipse { center, axis1, axis2, width, height, paragraphs, caption } => {
+            (center, axis1, axis2, *width, *height, paragraphs, caption)
         }
         _ => unreachable!("encode_ellipse_to_hx called with non-Ellipse"),
     };
@@ -493,6 +501,10 @@ fn encode_ellipse_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxEllipse> {
             horz_offset: 0,
         }),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+        caption: caption
+            .as_ref()
+            .map(|c| build_hx_caption(c, width.as_i32(), depth))
+            .transpose()?,
         draw_text,
         center: Some(HxPoint { x: center.x, y: center.y }),
         ax1: Some(HxPoint { x: axis1.x, y: axis1.y }),
@@ -502,9 +514,9 @@ fn encode_ellipse_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxEllipse> {
 
 /// Encodes a Core `Control::Polygon` into `HxPolygon`.
 fn encode_polygon_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxPolygon> {
-    let (vertices, width, height, paragraphs) = match ctrl {
-        Control::Polygon { vertices, width, height, paragraphs } => {
-            (vertices, *width, *height, paragraphs)
+    let (vertices, width, height, paragraphs, caption) = match ctrl {
+        Control::Polygon { vertices, width, height, paragraphs, caption } => {
+            (vertices, *width, *height, paragraphs, caption)
         }
         _ => unreachable!("encode_polygon_to_hx called with non-Polygon"),
     };
@@ -556,9 +568,32 @@ fn encode_polygon_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxPolygon> {
             horz_offset: 0,
         }),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+        caption: caption
+            .as_ref()
+            .map(|c| build_hx_caption(c, width.as_i32(), depth))
+            .transpose()?,
         draw_text,
         points,
     })
+}
+
+/// Converts a Core `Caption` into an `HxCaption`.
+///
+/// `parent_width` is used for `lastWidth` (= parent object sz.width in HWPUNIT).
+fn build_hx_caption(caption: &Caption, parent_width: i32, depth: usize) -> HwpxResult<HxCaption> {
+    let side = match caption.side {
+        CaptionSide::Left => "LEFT",
+        CaptionSide::Right => "RIGHT",
+        CaptionSide::Top => "TOP",
+        CaptionSide::Bottom => "BOTTOM",
+    }
+    .to_string();
+
+    let width = caption.width.map(|w| w.as_i32()).unwrap_or(parent_width);
+    let gap = caption.gap.as_i32();
+    let sub_list = encode_paragraphs_to_sublist(&caption.paragraphs, depth)?;
+
+    Ok(HxCaption { side, full_sz: 0, width, gap, last_width: parent_width.max(0) as u32, sub_list })
 }
 
 /// Generates a random instance ID string (matches 한글 convention).
@@ -672,6 +707,11 @@ fn build_table(table: &Table, depth: usize) -> HwpxResult<HxTable> {
             horz_offset: 0,
         }),
         out_margin: Some(DEFAULT_OUT_MARGIN),
+        caption: table
+            .caption
+            .as_ref()
+            .map(|c| build_hx_caption(c, table_width, depth))
+            .transpose()?,
         in_margin: Some(DEFAULT_CELL_MARGIN),
         rows,
     })
@@ -743,7 +783,7 @@ fn build_table_cell(
 /// to produce the `binaryItemIDRef` attribute value. For example,
 /// `"BinData/image1.png"` becomes `"image1"`. This matches 한글's
 /// convention where `binaryItemIDRef` is a logical name without extension.
-fn build_picture(img: &Image) -> HxPic {
+fn build_picture(img: &Image, depth: usize) -> HwpxResult<HxPic> {
     let without_prefix = img.path.strip_prefix("BinData/").unwrap_or(&img.path);
     // Strip extension: "image1.png" → "image1"
     let binary_ref = match without_prefix.rfind('.') {
@@ -751,12 +791,17 @@ fn build_picture(img: &Image) -> HxPic {
         None => without_prefix,
     };
 
-    HxPic {
+    Ok(HxPic {
         id: String::new(),
         img: Some(HxImg { binary_item_id_ref: binary_ref.to_string(), bright: 0, contrast: 0 }),
         org_sz: None,
         cur_sz: Some(HxSizeAttr { width: img.width.as_i32(), height: img.height.as_i32() }),
-    }
+        caption: img
+            .caption
+            .as_ref()
+            .map(|c| build_hx_caption(c, img.width.as_i32(), depth))
+            .transpose()?,
+    })
 }
 
 // ── Linesegarray placeholder ─────────────────────────────────────
@@ -1380,7 +1425,7 @@ mod tests {
             HwpUnit::new(500).unwrap(),
             ImageFormat::Jpeg,
         );
-        let hx = build_picture(&img);
+        let hx = build_picture(&img, 0).unwrap();
         assert_eq!(
             hx.img.unwrap().binary_item_id_ref,
             "image",
@@ -1607,6 +1652,7 @@ mod tests {
                         height: HwpUnit::new(8000).unwrap(),
                         horz_offset: 0,
                         vert_offset: 0,
+                        caption: None,
                     },
                     CharShapeIndex::new(0),
                 )],
@@ -1716,6 +1762,7 @@ mod tests {
                         height: HwpUnit::new(8000).unwrap(),
                         horz_offset: 0,
                         vert_offset: 0,
+                        caption: None,
                     },
                     CharShapeIndex::new(0),
                 )],
@@ -1735,7 +1782,9 @@ mod tests {
 
         match &ctrl_run.content {
             RunContent::Control(ctrl) => match ctrl.as_ref() {
-                Control::TextBox { paragraphs, width, height, horz_offset, vert_offset } => {
+                Control::TextBox {
+                    paragraphs, width, height, horz_offset, vert_offset, ..
+                } => {
                     assert_eq!(paragraphs[0].runs[0].content.as_text(), Some("Textbox roundtrip"));
                     assert_eq!(width.as_i32(), 14000);
                     assert_eq!(height.as_i32(), 8000);
