@@ -70,7 +70,7 @@ jobs:
 
   test:
     name: Tests (nextest)
-    if: github.event_name != 'schedule'
+    if: github.event_name == 'push' && github.ref != 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
@@ -93,7 +93,7 @@ jobs:
 
   coverage:
     name: Coverage (>= 90%)
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -133,7 +133,7 @@ jobs:
 
   msrv:
     name: MSRV Check (1.75)
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -146,7 +146,7 @@ jobs:
 
   cross-platform:
     name: Cross-Platform Build Check
-    if: github.event_name == 'pull_request' || github.ref == 'refs/heads/main'
+    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     strategy:
