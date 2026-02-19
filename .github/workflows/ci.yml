@@ -181,7 +181,7 @@ jobs:
         run: npx markdownlint-cli2@latest "**/*.md"
 
   msrv:
-    name: "Verify › MSRV (1.75)"
+    name: "Verify › MSRV (1.85)"
     needs: [lint-format, lint-clippy]
     if: >-
       always() && !failure() && !cancelled() &&
@@ -190,13 +190,13 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
-      - name: Install MSRV toolchain (1.75)
-        run: rustup toolchain install 1.75 --profile minimal
+      - name: Install MSRV toolchain (1.85)
+        run: rustup toolchain install 1.85 --profile minimal
       - uses: Swatinem/rust-cache@v2
         with:
           key: msrv
-      - name: cargo +1.75 check
-        run: cargo +1.75 check --workspace --all-features
+      - name: cargo +1.85 check
+        run: cargo +1.85 check --workspace --all-features
 
   # ---------------------------------------------------------------------------
   # Tier 3 — Platform (needs test to pass)

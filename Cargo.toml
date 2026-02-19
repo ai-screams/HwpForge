@@ -22,7 +22,7 @@ keywords = ["hwp", "hwpx", "owpml", "document", "korean"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/aiscream/hwpforge"
-rust-version = "1.75"
+rust-version = "1.85"
 
 [workspace.dependencies]
 # === XML Processing ===
