@@ -41,7 +41,8 @@ Foundation (🔩 primitives)
 
 ### Prerequisites
 
-- Rust 1.93+
+- Rust 1.93+ (default development toolchain)
+- Rust 1.75 (MSRV validation target in CI)
 - (Optional) Python 3.8+ for bindings
 - (Optional) pre-commit for hooks
 
@@ -79,6 +80,21 @@ HwpForge/
 │   └── hwpforge-bindings-cli/     # ⚒️  CLI tool
 └── .docs/                         # Internal docs (git-excluded)
 ```
+
+---
+
+## CI/CD Policy
+
+- `push` (all branches): fast checks (`fmt`, `clippy`, `nextest`, `cargo-deny`, docs lint)
+- `pull_request` to `main`: full checks (+ coverage 90%, MSRV 1.75, macOS/Windows build check)
+- `push` to `main` (merge): full checks (same as PR gate)
+- `push` tag `v*.*.*`: release pipeline (verify + GitHub Release publish)
+- `schedule` (weekly): canary checks on Rust `beta`/`nightly`
+
+Version strategy is contract-based, not "all versions":
+
+- must pass: `1.75 (MSRV)` + pinned stable toolchain (`1.93` now)
+- monitored: `beta`/`nightly` weekly canary (nightly is non-blocking)
 
 ---
 

@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  verify-release:
+    name: Verify Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain from rust-toolchain.toml
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: Install release test tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,cargo-llvm-cov,cargo-deny
+      - name: Run format check
+        run: cargo fmt --all -- --check
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: Run tests
+        run: cargo nextest run --workspace --all-features --profile ci --junit-report junit.xml
+      - name: Enforce coverage gate
+        run: cargo llvm-cov nextest --workspace --all-features --fail-under-lines 90
+      - name: Enforce dependency policy
+        run: cargo deny --all-features check
+      - name: Build release artifacts
+        run: cargo build --workspace --release --all-features
+      - name: Package source archive
+        run: git archive --format=tar.gz --output hwpforge-${{ github.ref_name }}.tar.gz ${{ github.sha }}
+      - name: Upload release files
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ github.ref_name }}
+          path: |
+            hwpforge-${{ github.ref_name }}.tar.gz
+            junit.xml
+          retention-days: 30
+
+  github-release:
+    name: Publish GitHub Release
+    needs:
+      - verify-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download packaged release files
+        uses: actions/download-artifact@v4
+        with:
+          name: release-${{ github.ref_name }}
+          path: dist
+      - name: Create GitHub release from tag
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: |
+            dist/hwpforge-${{ github.ref_name }}.tar.gz
