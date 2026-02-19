@@ -95,6 +95,7 @@ HwpForge/
 Version strategy is contract-based, not "all versions":
 
 - must pass: `1.75 (MSRV)` + pinned stable toolchain (`1.93` now)
+- MSRV check scope: `cargo check --workspace --all-features` (compile contract, excludes test/dev-only graph)
 - monitored: `beta`/`nightly` weekly canary (nightly is non-blocking)
 
 ---

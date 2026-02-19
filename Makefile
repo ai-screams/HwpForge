@@ -74,7 +74,7 @@ deny:
 	cargo deny check
 
 msrv:
-	cargo +1.75 check --workspace --all-targets --all-features
+	cargo +1.75 check --workspace --all-features
 
 ci-fast: fmt clippy test deny lint-md
 	@echo "✅ Fast CI checks passed!"
