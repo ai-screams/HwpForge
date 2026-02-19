@@ -85,9 +85,9 @@ HwpForge/
 
 ## CI/CD Policy
 
-- `push` (all branches): fast checks (`fmt`, `clippy`, `nextest`, `cargo-deny`, docs lint)
-- `pull_request` to `main`: full checks (+ coverage 90%, MSRV 1.75, macOS/Windows build check)
-- `push` to `main` (merge): full checks (same as PR gate)
+- `push` (non-main branches): commit preflight check (fast compile)
+- `pull_request` to `main` (+ `merge_group`): full gate checks (+ coverage 90%, MSRV 1.75, macOS/Windows build check)
+- `push` to `main` (merge): post-merge smoke (`nextest` + `cargo-deny`)
 - `push` tag `v*.*.*`: release pipeline (verify + GitHub Release publish)
 - `schedule` (weekly): canary checks on Rust `beta`/`nightly`
 - workflow compatibility: `actionlint` + core action major baseline check (`checkout v6`, `setup-node v6`, `download-artifact v5`)

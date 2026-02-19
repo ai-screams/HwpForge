@@ -9,6 +9,14 @@ on:
   pull_request:
     branches:
       - main
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+  merge_group:
+    types:
+      - checks_requested
   schedule:
     - cron: "0 3 * * 1"
   workflow_dispatch:
@@ -28,7 +36,7 @@ concurrency:
 jobs:
   workflow-compat:
     name: Workflow Compatibility
-    if: github.event_name != 'schedule'
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -47,7 +55,7 @@ jobs:
 
   fmt:
     name: Rust Format
-    if: github.event_name != 'schedule'
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -59,7 +67,7 @@ jobs:
 
   clippy:
     name: Rust Clippy
-    if: github.event_name != 'schedule'
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -72,7 +80,7 @@ jobs:
 
   lint-docs:
     name: Docs Lint
-    if: github.event_name != 'schedule'
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -88,31 +96,21 @@ jobs:
         run: markdownlint-cli2 "**/*.md"
 
   test:
-    name: Tests (nextest)
+    name: Commit Preflight
     if: github.event_name == 'push' && github.ref != 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - name: Install Rust toolchain from rust-toolchain.toml
         run: rustup show
       - uses: Swatinem/rust-cache@v2
-      - name: Install cargo-nextest
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-nextest
-      - name: Run tests (ci profile + junit)
-        run: cargo nextest run --workspace --all-features --profile ci --junit-report junit.xml
-      - name: Upload junit report
-        uses: actions/upload-artifact@v4
-        with:
-          name: junit-${{ github.run_id }}
-          path: junit.xml
-          retention-days: 14
+      - name: Run fast compile preflight
+        run: cargo check --workspace --all-features
 
   coverage:
     name: Coverage (>= 90%)
-    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
@@ -135,7 +133,7 @@ jobs:
 
   deny:
     name: Dependency Policy (cargo-deny)
-    if: github.event_name != 'schedule'
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -152,7 +150,7 @@ jobs:
 
   msrv:
     name: MSRV Check (1.75)
-    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -165,7 +163,7 @@ jobs:
 
   cross-platform:
     name: Cross-Platform Build Check
-    if: github.event_name == 'pull_request' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     strategy:
@@ -201,3 +199,22 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Cargo check
         run: cargo +${{ matrix.toolchain }} check --workspace --all-targets --all-features
+
+  merge-smoke:
+    name: Merge Smoke (main)
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust toolchain from rust-toolchain.toml
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: Install smoke tools
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest,cargo-deny
+      - name: Run smoke tests
+        run: cargo nextest run --workspace --all-features --profile ci
+      - name: Run dependency policy check
+        run: cargo deny --all-features check
