@@ -1,10 +1,7 @@
 # Cargo build configuration
 
-[build]
-# Parallel compilation (default: use all CPU cores)
-
 [alias]
 # Convenient aliases
-xtask = "run --package hwpforge-cli --"
-cov = "llvm-cov nextest --all-features"
-lint = "clippy --all-targets --all-features -- -D warnings"
+xtask = "run --package bindings-cli --"
+cov = "llvm-cov nextest --workspace --all-features"
+lint = "clippy --workspace --all-targets --all-features -- -D warnings"
