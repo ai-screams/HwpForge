@@ -90,6 +90,7 @@ HwpForge/
 - `push` to `main` (merge): full checks (same as PR gate)
 - `push` tag `v*.*.*`: release pipeline (verify + GitHub Release publish)
 - `schedule` (weekly): canary checks on Rust `beta`/`nightly`
+- workflow compatibility: `actionlint` + core action major baseline check (`checkout v6`, `setup-node v6`, `download-artifact v5`)
 
 Version strategy is contract-based, not "all versions":
 

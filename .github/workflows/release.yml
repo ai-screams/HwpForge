@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install Rust toolchain from rust-toolchain.toml
         run: rustup show
       - uses: Swatinem/rust-cache@v2
@@ -62,7 +62,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Download packaged release files
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: release-${{ github.ref_name }}
           path: dist

@@ -26,13 +26,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  workflow-compat:
+    name: Workflow Compatibility
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: Lint GitHub workflow files
+        uses: rhysd/actionlint@v1
+      - name: Verify core action major baselines
+        run: |
+          set -euo pipefail
+          if grep -R -nE 'actions/checkout@v([0-5])\b|actions/setup-node@v([0-5])\b|actions/download-artifact@v([0-4])\b' .github/workflows/*.yml; then
+            echo "Outdated core action major version detected."
+            exit 1
+          fi
+
   fmt:
     name: Rust Format
     if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install Rust toolchain from rust-toolchain.toml
         run: rustup show
       - name: Check formatting
@@ -44,7 +61,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install Rust toolchain from rust-toolchain.toml
         run: rustup show
       - uses: Swatinem/rust-cache@v2
@@ -57,8 +74,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: "20"
       - name: Install markdown tooling
@@ -74,7 +91,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install Rust toolchain from rust-toolchain.toml
         run: rustup show
       - uses: Swatinem/rust-cache@v2
@@ -97,7 +114,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install Rust toolchain from rust-toolchain.toml
         run: rustup show
       - uses: Swatinem/rust-cache@v2
@@ -120,7 +137,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install Rust toolchain from rust-toolchain.toml
         run: rustup show
       - uses: Swatinem/rust-cache@v2
@@ -137,7 +154,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install Rust 1.75
         run: rustup toolchain install 1.75 --profile minimal
       - uses: Swatinem/rust-cache@v2
@@ -156,7 +173,7 @@ jobs:
           - windows-latest
           - macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install Rust toolchain from rust-toolchain.toml
         run: rustup show
       - uses: Swatinem/rust-cache@v2
@@ -176,7 +193,7 @@ jobs:
           - nightly
     continue-on-error: ${{ matrix.toolchain == 'nightly' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install toolchain
         run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal
       - uses: Swatinem/rust-cache@v2
