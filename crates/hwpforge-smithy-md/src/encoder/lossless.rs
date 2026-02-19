@@ -385,6 +385,7 @@ mod tests {
                     horz_offset: 0,
                     vert_offset: 0,
                     caption: None,
+                    style: None,
                 },
                 CharShapeIndex::new(3),
             )],

@@ -14,7 +14,7 @@
 
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::{ColumnLayoutMode, ColumnSettings, ColumnType};
-use hwpforge_core::control::Control;
+use hwpforge_core::control::{Control, ShapeStyle};
 use hwpforge_core::image::Image;
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::{Run, RunContent};
@@ -25,17 +25,29 @@ use hwpforge_core::PageSettings;
 use crate::encoder::package::XMLNS_DECLS;
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    HxCaption, HxCellAddr, HxCellSpan, HxCellSz, HxCtrl, HxDrawText, HxEllipse, HxFootNote, HxImg,
-    HxLine, HxLineSeg, HxLineSegArray, HxPageMargin, HxPagePr, HxParagraph, HxPic, HxPoint,
-    HxPolygon, HxRect, HxRun, HxSecPr, HxSection, HxSizeAttr, HxSubList, HxTable, HxTableCell,
-    HxTableMargin, HxTablePos, HxTableRow, HxTableSz, HxText,
+    HxCaption, HxCellAddr, HxCellSpan, HxCellSz, HxChart, HxCtrl, HxDrawText, HxEllipse,
+    HxEquation, HxFillBrush, HxFlip, HxFootNote, HxImg, HxImgClip, HxImgDim, HxImgRect, HxLine,
+    HxLineSeg, HxLineSegArray, HxLineShape, HxMatrix, HxOffset, HxPageMargin, HxPagePr,
+    HxParagraph, HxPic, HxPoint, HxPolygon, HxRect, HxRenderingInfo, HxRotationInfo, HxRun,
+    HxRunCase, HxRunSwitch, HxScript, HxSecPr, HxSection, HxShadow, HxShapeComment, HxSizeAttr,
+    HxSubList, HxTable, HxTableCell, HxTableMargin, HxTablePos, HxTableRow, HxTableSz, HxText,
 };
+
+use super::chart::generate_chart_xml;
 
 /// Maximum nesting depth for tables-within-tables.
 ///
 /// Mirrors the decoder's limit. Prevents stack overflow from deeply nested
 /// table structures (e.g. a table cell containing another table, ad infinitum).
 const MAX_NESTING_DEPTH: usize = 32;
+
+/// Result of encoding a section, including chart entries for ZIP packaging.
+pub(crate) struct SectionEncodeResult {
+    /// The section XML string.
+    pub xml: String,
+    /// Chart entries: (ZIP path, OOXML chart XML content).
+    pub charts: Vec<(String, String)>,
+}
 
 /// Encodes a Core [`Section`] into a complete HWPX section XML string.
 ///
@@ -50,8 +62,12 @@ const MAX_NESTING_DEPTH: usize = 32;
 ///
 /// Returns [`HwpxError::XmlSerialize`] if quick-xml serialization fails,
 /// or [`HwpxError::InvalidStructure`] if table nesting exceeds the limit.
-pub(crate) fn encode_section(section: &Section, _section_index: usize) -> HwpxResult<String> {
-    let hx_section = build_section(section)?;
+pub(crate) fn encode_section(
+    section: &Section,
+    _section_index: usize,
+) -> HwpxResult<SectionEncodeResult> {
+    let mut chart_entries: Vec<(String, String)> = Vec::new();
+    let hx_section = build_section(section, &mut chart_entries)?;
     let inner_xml = quick_xml::se::to_string(&hx_section)
         .map_err(|e| HwpxError::XmlSerialize { detail: e.to_string() })?;
 
@@ -67,7 +83,7 @@ pub(crate) fn encode_section(section: &Section, _section_index: usize) -> HwpxRe
     // Inject header/footer/page number controls after colPr
     inject_header_footer_pagenum(&mut enriched, section);
 
-    Ok(wrap_section_xml(&enriched))
+    Ok(SectionEncodeResult { xml: wrap_section_xml(&enriched), charts: chart_entries })
 }
 
 /// Wraps inner XML content in an `<hs:sec>` element with all xmlns declarations.
@@ -98,7 +114,10 @@ fn strip_root_element(xml: &str) -> &str {
 }
 
 /// Builds an `HxSection` from a Core `Section`.
-fn build_section(section: &Section) -> HwpxResult<HxSection> {
+fn build_section(
+    section: &Section,
+    chart_entries: &mut Vec<(String, String)>,
+) -> HwpxResult<HxSection> {
     let paragraphs = section
         .paragraphs
         .iter()
@@ -106,7 +125,7 @@ fn build_section(section: &Section) -> HwpxResult<HxSection> {
         .map(|(idx, para)| {
             let inject_sec_pr = idx == 0;
             let page_settings = if inject_sec_pr { Some(&section.page_settings) } else { None };
-            build_paragraph(para, inject_sec_pr, page_settings, idx, 0)
+            build_paragraph(para, inject_sec_pr, page_settings, idx, 0, chart_entries)
         })
         .collect::<HwpxResult<Vec<_>>>()?;
 
@@ -124,8 +143,9 @@ fn build_paragraph(
     page_settings: Option<&PageSettings>,
     para_idx: usize,
     depth: usize,
+    chart_entries: &mut Vec<(String, String)>,
 ) -> HwpxResult<HxParagraph> {
-    let runs = build_runs(&para.runs, inject_sec_pr, page_settings, depth)?;
+    let runs = build_runs(&para.runs, inject_sec_pr, page_settings, depth, chart_entries)?;
 
     // Build a placeholder linesegarray with approximate values.
     // 한글 will recalculate this on open, but having a placeholder
@@ -140,7 +160,7 @@ fn build_paragraph(
         para_pr_id_ref: para.para_shape_id.get() as u32,
         style_id_ref: 0,
         page_break: 0,
-        column_break: 0,
+        column_break: u32::from(para.column_break),
         merged: 0,
         runs,
         linesegarray,
@@ -160,6 +180,7 @@ fn build_runs(
     inject_sec_pr: bool,
     page_settings: Option<&PageSettings>,
     depth: usize,
+    chart_entries: &mut Vec<(String, String)>,
 ) -> HwpxResult<Vec<HxRun>> {
     let mut result = Vec::new();
     let mut sec_pr_injected = false;
@@ -182,6 +203,8 @@ fn build_runs(
         let mut lines = Vec::new();
         let mut ellipses = Vec::new();
         let mut polygons = Vec::new();
+        let mut equations = Vec::new();
+        let mut switches: Vec<HxRunSwitch> = Vec::new();
 
         match &run.content {
             RunContent::Text(s) => {
@@ -212,6 +235,16 @@ fn build_runs(
                     Control::Polygon { .. } => {
                         polygons.push(encode_polygon_to_hx(ctrl, depth)?);
                     }
+                    Control::Equation { .. } => {
+                        equations.push(encode_equation_to_hx(ctrl)?);
+                    }
+                    Control::Chart { .. } => {
+                        let chart_idx = chart_entries.len() + 1;
+                        let chart_ref = format!("Chart/chart{chart_idx}.xml");
+                        let chart_xml = generate_chart_xml(ctrl)?;
+                        chart_entries.push((chart_ref.clone(), chart_xml));
+                        switches.push(encode_chart_switch(ctrl, &chart_ref));
+                    }
                     Control::Hyperlink { .. } | Control::Unknown { .. } => {
                         // Skip for Phase 4.5 (not implemented yet)
                         continue;
@@ -240,6 +273,8 @@ fn build_runs(
             lines,
             ellipses,
             polygons,
+            equations,
+            switches,
         });
     }
 
@@ -260,6 +295,8 @@ fn build_runs(
                     lines: Vec::new(),
                     ellipses: Vec::new(),
                     polygons: Vec::new(),
+                    equations: Vec::new(),
+                    switches: Vec::new(),
                 },
             );
         }
@@ -293,10 +330,13 @@ fn encode_control_to_ctrl(ctrl: &Control, depth: usize) -> HwpxResult<Option<HxC
 
 /// Encodes a `Vec<Paragraph>` into `HxSubList` with standard defaults.
 fn encode_paragraphs_to_sublist(paragraphs: &[Paragraph], depth: usize) -> HwpxResult<HxSubList> {
+    let mut sub_chart_entries = Vec::new();
     let hx_paragraphs = paragraphs
         .iter()
         .enumerate()
-        .map(|(idx, para)| build_paragraph(para, false, None, idx, depth + 1))
+        .map(|(idx, para)| {
+            build_paragraph(para, false, None, idx, depth + 1, &mut sub_chart_entries)
+        })
         .collect::<HwpxResult<Vec<_>>>()?;
 
     Ok(HxSubList {
@@ -314,14 +354,85 @@ fn encode_paragraphs_to_sublist(paragraphs: &[Paragraph], depth: usize) -> HwpxR
     })
 }
 
+// ── Shape-common helpers ─────────────────────────────────────────
+
+/// Collected common sub-elements required by 한글 for all drawing objects.
+///
+/// All four shape encoders (rect/textbox, line, ellipse, polygon) produce
+/// the same prefix block. This struct avoids repeating the construction logic.
+struct ShapeCommon {
+    offset: HxOffset,
+    org_sz: HxSizeAttr,
+    cur_sz: HxSizeAttr,
+    flip: HxFlip,
+    rotation_info: HxRotationInfo,
+    rendering_info: HxRenderingInfo,
+    line_shape: HxLineShape,
+    fill_brush: HxFillBrush,
+    shadow: HxShadow,
+}
+
+/// Builds the shape-common block for a drawing object of the given pixel size.
+///
+/// Defaults match 한글's output for a newly created shape:
+/// - zero offset, orgSz = given dimensions, curSz = 0×0
+/// - identity rotation/rendering matrices
+/// - solid black border, white fill, no shadow
+fn build_shape_common(width: i32, height: i32, style: Option<&ShapeStyle>) -> ShapeCommon {
+    let mut line_shape = HxLineShape::default_solid();
+    let mut fill_brush = HxFillBrush::default_white();
+
+    if let Some(s) = style {
+        if let Some(ref c) = s.line_color {
+            line_shape.color = c.clone();
+        }
+        if let Some(w) = s.line_width {
+            line_shape.width = w;
+        }
+        if let Some(ref ls) = s.line_style {
+            line_shape.style = ls.clone();
+        }
+        if let Some(ref c) = s.fill_color {
+            fill_brush.win_brush.face_color = c.clone();
+        }
+    }
+
+    ShapeCommon {
+        offset: HxOffset { x: 0, y: 0 },
+        org_sz: HxSizeAttr { width, height },
+        cur_sz: HxSizeAttr { width: 0, height: 0 },
+        flip: HxFlip { horizontal: 0, vertical: 0 },
+        rotation_info: HxRotationInfo {
+            angle: 0,
+            center_x: width / 2,
+            center_y: height / 2,
+            rotate_image: 1,
+        },
+        rendering_info: HxRenderingInfo {
+            trans_matrix: HxMatrix::identity(),
+            sca_matrix: HxMatrix::identity(),
+            rot_matrix: HxMatrix::identity(),
+        },
+        line_shape,
+        fill_brush,
+        shadow: HxShadow::default_none(),
+    }
+}
+
 /// Encodes a Core `Control::TextBox` into `HxRect` with `<hp:drawText>`.
 ///
 /// Phase 4.5 MVP: inline positioning (treatAsChar=1) when offsets are (0,0).
 fn encode_textbox_to_rect(ctrl: &Control, depth: usize) -> HwpxResult<HxRect> {
-    let (paragraphs, width, height, horz_offset, vert_offset, caption) = match ctrl {
-        Control::TextBox { paragraphs, width, height, horz_offset, vert_offset, caption } => {
-            (paragraphs, *width, *height, *horz_offset, *vert_offset, caption)
-        }
+    let (paragraphs, width, height, horz_offset, vert_offset, caption, style) = match ctrl {
+        Control::TextBox {
+            paragraphs,
+            width,
+            height,
+            horz_offset,
+            vert_offset,
+            caption,
+            style,
+        } => (paragraphs, *width, *height, *horz_offset, *vert_offset, caption, style),
         _ => unreachable!("encode_textbox_to_rect called with non-TextBox"),
     };
 
@@ -333,9 +444,10 @@ fn encode_textbox_to_rect(ctrl: &Control, depth: usize) -> HwpxResult<HxRect> {
     let last_width = (width_hwp - 2 * MARGIN).max(0) as u32;
 
     let sub_list = encode_paragraphs_to_sublist(paragraphs, depth)?;
+    let sc = build_shape_common(width_hwp, height_hwp, style.as_ref());
 
     Ok(HxRect {
-        id: String::new(),
+        id: generate_instid(),
         z_order: 0,
         numbering_type: "NONE".to_string(),
         text_wrap: "TOP_AND_BOTTOM".to_string(),
@@ -346,6 +458,16 @@ fn encode_textbox_to_rect(ctrl: &Control, depth: usize) -> HwpxResult<HxRect> {
         group_level: 0,
         instid: generate_instid(),
         ratio: 0,
+
+        offset: Some(sc.offset),
+        org_sz: Some(sc.org_sz),
+        cur_sz: Some(sc.cur_sz),
+        flip: Some(sc.flip),
+        rotation_info: Some(sc.rotation_info),
+        rendering_info: Some(sc.rendering_info),
+        line_shape: Some(sc.line_shape),
+        fill_brush: Some(sc.fill_brush),
+        shadow: Some(sc.shadow),
 
         sz: Some(HxTableSz {
             width: width_hwp,
@@ -393,17 +515,20 @@ fn encode_textbox_to_rect(ctrl: &Control, depth: usize) -> HwpxResult<HxRect> {
 }
 
 /// Encodes a Core `Control::Line` into `HxLine`.
-// NOTE: Shape encoders share ~27 default fields each. At 8+ shapes, extract a shared default helper.
 fn encode_line_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxLine> {
-    let (start, end, width, height, caption) = match ctrl {
-        Control::Line { start, end, width, height, caption } => {
-            (start, end, *width, *height, caption)
+    let (start, end, width, height, caption, style) = match ctrl {
+        Control::Line { start, end, width, height, caption, style } => {
+            (start, end, *width, *height, caption, style)
         }
         _ => unreachable!("encode_line_to_hx called with non-Line"),
     };
 
+    let w = width.as_i32();
+    let h = height.as_i32();
+    let sc = build_shape_common(w, h, style.as_ref());
+
     Ok(HxLine {
-        id: String::new(),
+        id: generate_instid(),
         z_order: 0,
         numbering_type: "NONE".to_string(),
         text_wrap: "TOP_AND_BOTTOM".to_string(),
@@ -414,10 +539,19 @@ fn encode_line_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxLine> {
         group_level: 0,
         instid: generate_instid(),
         is_reverse_hv: 0,
+        offset: Some(sc.offset),
+        org_sz: Some(sc.org_sz),
+        cur_sz: Some(sc.cur_sz),
+        flip: Some(sc.flip),
+        rotation_info: Some(sc.rotation_info),
+        rendering_info: Some(sc.rendering_info),
+        line_shape: Some(sc.line_shape),
+        fill_brush: Some(sc.fill_brush),
+        shadow: Some(sc.shadow),
         sz: Some(HxTableSz {
-            width: width.as_i32(),
+            width: w,
             width_rel_to: "ABSOLUTE".to_string(),
-            height: height.as_i32(),
+            height: h,
             height_rel_to: "ABSOLUTE".to_string(),
             protect: 0,
         }),
@@ -435,10 +569,8 @@ fn encode_line_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxLine> {
             horz_offset: 0,
         }),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
-        caption: caption
-            .as_ref()
-            .map(|c| build_hx_caption(c, width.as_i32(), depth))
-            .transpose()?,
+        shape_comment: None,
+        caption: caption.as_ref().map(|c| build_hx_caption(c, w, depth)).transpose()?,
         start_pt: Some(HxPoint { x: start.x, y: start.y }),
         end_pt: Some(HxPoint { x: end.x, y: end.y }),
     })
@@ -446,12 +578,37 @@ fn encode_line_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxLine> {
 
 /// Encodes a Core `Control::Ellipse` into `HxEllipse`.
 fn encode_ellipse_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxEllipse> {
-    let (center, axis1, axis2, width, height, paragraphs, caption) = match ctrl {
-        Control::Ellipse { center, axis1, axis2, width, height, paragraphs, caption } => {
-            (center, axis1, axis2, *width, *height, paragraphs, caption)
-        }
-        _ => unreachable!("encode_ellipse_to_hx called with non-Ellipse"),
-    };
+    let (center, axis1, axis2, width, height, horz_offset, vert_offset, paragraphs, caption, style) =
+        match ctrl {
+            Control::Ellipse {
+                center,
+                axis1,
+                axis2,
+                width,
+                height,
+                horz_offset,
+                vert_offset,
+                paragraphs,
+                caption,
+                style,
+            } => (
+                center,
+                axis1,
+                axis2,
+                *width,
+                *height,
+                horz_offset,
+                vert_offset,
+                paragraphs,
+                caption,
+                style,
+            ),
+            _ => unreachable!("encode_ellipse_to_hx called with non-Ellipse"),
+        };
+
+    let w = width.as_i32();
+    let h = height.as_i32();
+    let sc = build_shape_common(w, h, style.as_ref());
 
     let draw_text = if paragraphs.is_empty() {
         None
@@ -467,7 +624,7 @@ fn encode_ellipse_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxEllipse> {
     };
 
     Ok(HxEllipse {
-        id: String::new(),
+        id: generate_instid(),
         z_order: 0,
         numbering_type: "NONE".to_string(),
         text_wrap: "TOP_AND_BOTTOM".to_string(),
@@ -480,15 +637,24 @@ fn encode_ellipse_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxEllipse> {
         interval_dirty: 0,
         has_arc_pr: 0,
         arc_type: "NORMAL".to_string(),
+        offset: Some(sc.offset),
+        org_sz: Some(sc.org_sz),
+        cur_sz: Some(sc.cur_sz),
+        flip: Some(sc.flip),
+        rotation_info: Some(sc.rotation_info),
+        rendering_info: Some(sc.rendering_info),
+        line_shape: Some(sc.line_shape),
+        fill_brush: Some(sc.fill_brush),
+        shadow: Some(sc.shadow),
         sz: Some(HxTableSz {
-            width: width.as_i32(),
+            width: w,
             width_rel_to: "ABSOLUTE".to_string(),
-            height: height.as_i32(),
+            height: h,
             height_rel_to: "ABSOLUTE".to_string(),
             protect: 0,
         }),
         pos: Some(HxTablePos {
-            treat_as_char: 1,
+            treat_as_char: if *horz_offset == 0 && *vert_offset == 0 { 1 } else { 0 },
             affect_l_spacing: 0,
             flow_with_text: 0,
             allow_overlap: 0,
@@ -497,29 +663,34 @@ fn encode_ellipse_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxEllipse> {
             horz_rel_to: "PARA".to_string(),
             vert_align: "TOP".to_string(),
             horz_align: "LEFT".to_string(),
-            vert_offset: 0,
-            horz_offset: 0,
+            vert_offset: *vert_offset,
+            horz_offset: *horz_offset,
         }),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
-        caption: caption
-            .as_ref()
-            .map(|c| build_hx_caption(c, width.as_i32(), depth))
-            .transpose()?,
+        caption: caption.as_ref().map(|c| build_hx_caption(c, w, depth)).transpose()?,
         draw_text,
         center: Some(HxPoint { x: center.x, y: center.y }),
         ax1: Some(HxPoint { x: axis1.x, y: axis1.y }),
         ax2: Some(HxPoint { x: axis2.x, y: axis2.y }),
+        start1: Some(HxPoint { x: 0, y: 0 }),
+        end1: Some(HxPoint { x: 0, y: 0 }),
+        start2: Some(HxPoint { x: 0, y: 0 }),
+        end2: Some(HxPoint { x: 0, y: 0 }),
     })
 }
 
 /// Encodes a Core `Control::Polygon` into `HxPolygon`.
 fn encode_polygon_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxPolygon> {
-    let (vertices, width, height, paragraphs, caption) = match ctrl {
-        Control::Polygon { vertices, width, height, paragraphs, caption } => {
-            (vertices, *width, *height, paragraphs, caption)
+    let (vertices, width, height, paragraphs, caption, style) = match ctrl {
+        Control::Polygon { vertices, width, height, paragraphs, caption, style } => {
+            (vertices, *width, *height, paragraphs, caption, style)
         }
         _ => unreachable!("encode_polygon_to_hx called with non-Polygon"),
     };
+
+    let w = width.as_i32();
+    let h = height.as_i32();
+    let sc = build_shape_common(w, h, style.as_ref());
 
     let draw_text = if paragraphs.is_empty() {
         None
@@ -537,7 +708,7 @@ fn encode_polygon_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxPolygon> {
     let points = vertices.iter().map(|v| HxPoint { x: v.x, y: v.y }).collect();
 
     Ok(HxPolygon {
-        id: String::new(),
+        id: generate_instid(),
         z_order: 0,
         numbering_type: "NONE".to_string(),
         text_wrap: "TOP_AND_BOTTOM".to_string(),
@@ -547,10 +718,19 @@ fn encode_polygon_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxPolygon> {
         href: String::new(),
         group_level: 0,
         instid: generate_instid(),
+        offset: Some(sc.offset),
+        org_sz: Some(sc.org_sz),
+        cur_sz: Some(sc.cur_sz),
+        flip: Some(sc.flip),
+        rotation_info: Some(sc.rotation_info),
+        rendering_info: Some(sc.rendering_info),
+        line_shape: Some(sc.line_shape),
+        fill_brush: Some(sc.fill_brush),
+        shadow: Some(sc.shadow),
         sz: Some(HxTableSz {
-            width: width.as_i32(),
+            width: w,
             width_rel_to: "ABSOLUTE".to_string(),
-            height: height.as_i32(),
+            height: h,
             height_rel_to: "ABSOLUTE".to_string(),
             protect: 0,
         }),
@@ -568,13 +748,117 @@ fn encode_polygon_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxPolygon> {
             horz_offset: 0,
         }),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
-        caption: caption
-            .as_ref()
-            .map(|c| build_hx_caption(c, width.as_i32(), depth))
-            .transpose()?,
+        caption: caption.as_ref().map(|c| build_hx_caption(c, w, depth)).transpose()?,
         draw_text,
         points,
     })
+}
+
+/// Encodes a Core `Control::Equation` into `HxEquation`.
+///
+/// Equations have NO shape common block (no offset, orgSz, curSz, flip,
+/// rotation, lineShape, fillBrush, shadow). Only sz + pos + outMargin + script.
+/// Does not take `depth` because equations have no recursive sub-content.
+fn encode_equation_to_hx(ctrl: &Control) -> HwpxResult<HxEquation> {
+    let (script, width, height, base_line, text_color, font) = match ctrl {
+        Control::Equation { script, width, height, base_line, text_color, font } => {
+            (script, *width, *height, *base_line, text_color, font)
+        }
+        _ => unreachable!("encode_equation_to_hx called with non-Equation"),
+    };
+
+    let w = width.as_i32();
+    let h = height.as_i32();
+
+    Ok(HxEquation {
+        id: generate_instid(),
+        z_order: 0,
+        numbering_type: "EQUATION".to_string(),
+        text_wrap: "TOP_AND_BOTTOM".to_string(),
+        text_flow: "BOTH_SIDES".to_string(),
+        lock: 0,
+        dropcap_style: "None".to_string(),
+
+        // Equation-specific attrs (hardcoded constants per ground truth)
+        version: "Equation Version 60".to_string(),
+        base_line,
+        text_color: text_color.clone(),
+        base_unit: 1000,
+        line_mode: "CHAR".to_string(),
+        font: font.clone(),
+
+        sz: Some(HxTableSz {
+            width: w,
+            width_rel_to: "ABSOLUTE".to_string(),
+            height: h,
+            height_rel_to: "ABSOLUTE".to_string(),
+            protect: 0,
+        }),
+        pos: Some(HxTablePos {
+            treat_as_char: 1,
+            affect_l_spacing: 0,
+            flow_with_text: 1, // equations always flowWithText=1
+            allow_overlap: 0,
+            hold_anchor_and_so: 0,
+            vert_rel_to: "PARA".to_string(),
+            horz_rel_to: "PARA".to_string(),
+            vert_align: "TOP".to_string(),
+            horz_align: "LEFT".to_string(),
+            vert_offset: 0,
+            horz_offset: 0,
+        }),
+        out_margin: Some(HxTableMargin { left: 56, right: 56, top: 0, bottom: 0 }),
+        shape_comment: Some(HxShapeComment { text: "수식입니다.".to_string() }),
+        script: Some(HxScript { text: script.clone() }),
+    })
+}
+
+/// Encodes a Core `Control::Chart` into an `HxRunSwitch` wrapping `HxChart`.
+///
+/// Charts use `<hp:switch><hp:case><hp:chart>` structure in section XML,
+/// referencing a separate OOXML chart XML file in the ZIP archive.
+fn encode_chart_switch(ctrl: &Control, chart_ref: &str) -> HxRunSwitch {
+    let (width, height) = match ctrl {
+        Control::Chart { width, height, .. } => (*width, *height),
+        _ => unreachable!("encode_chart_switch called with non-Chart"),
+    };
+
+    HxRunSwitch {
+        case: Some(HxRunCase {
+            required_namespace: "http://www.hancom.co.kr/hwpml/2016/ooxmlchart".to_string(),
+            chart: Some(HxChart {
+                id: generate_instid(),
+                z_order: 0,
+                numbering_type: "PICTURE".to_string(),
+                text_wrap: "SQUARE".to_string(),
+                text_flow: "BOTH_SIDES".to_string(),
+                lock: 0,
+                dropcap_style: "None".to_string(),
+                chart_id_ref: chart_ref.to_string(),
+                sz: Some(HxTableSz {
+                    width: width.as_i32(),
+                    width_rel_to: "ABSOLUTE".to_string(),
+                    height: height.as_i32(),
+                    height_rel_to: "ABSOLUTE".to_string(),
+                    protect: 0,
+                }),
+                pos: Some(HxTablePos {
+                    treat_as_char: 0,
+                    affect_l_spacing: 0,
+                    flow_with_text: 1,
+                    allow_overlap: 0,
+                    hold_anchor_and_so: 0,
+                    vert_rel_to: "PARA".to_string(),
+                    horz_rel_to: "COLUMN".to_string(),
+                    vert_align: "TOP".to_string(),
+                    horz_align: "LEFT".to_string(),
+                    vert_offset: 0,
+                    horz_offset: 0,
+                }),
+                out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+            }),
+        }),
+    }
 }
 
 /// Converts a Core `Caption` into an `HxCaption`.
@@ -674,7 +958,7 @@ fn build_table(table: &Table, depth: usize) -> HwpxResult<HxTable> {
     });
 
     Ok(HxTable {
-        id: String::new(),
+        id: generate_instid(),
         z_order: 0,
         numbering_type: "TABLE".to_string(),
         text_wrap: "TOP_AND_BOTTOM".to_string(),
@@ -745,7 +1029,10 @@ fn build_table_cell(
         .paragraphs
         .iter()
         .enumerate()
-        .map(|(idx, para)| build_paragraph(para, false, None, idx, depth + 1))
+        .map(|(idx, para)| {
+            let mut sub_chart_entries = Vec::new();
+            build_paragraph(para, false, None, idx, depth + 1, &mut sub_chart_entries)
+        })
         .collect::<HwpxResult<Vec<_>>>()?;
 
     Ok(HxTableCell {
@@ -779,12 +1066,16 @@ fn build_table_cell(
     })
 }
 
-/// Builds `HxPic` from a Core `Image`.
+/// Builds `HxPic` from a Core `Image` with complete shape structure.
 ///
 /// The `BinData/` prefix and file extension are stripped from the path
 /// to produce the `binaryItemIDRef` attribute value. For example,
 /// `"BinData/image1.png"` becomes `"image1"`. This matches 한글's
 /// convention where `binaryItemIDRef` is a logical name without extension.
+///
+/// Generates all required sub-elements (offset, orgSz, curSz, flip,
+/// rotationInfo, renderingInfo, imgRect, imgClip, inMargin, imgDim,
+/// img, sz, pos, outMargin) to match 한글's expected structure.
 fn build_picture(img: &Image, depth: usize) -> HwpxResult<HxPic> {
     let without_prefix = img.path.strip_prefix("BinData/").unwrap_or(&img.path);
     // Strip extension: "image1.png" → "image1"
@@ -793,16 +1084,77 @@ fn build_picture(img: &Image, depth: usize) -> HwpxResult<HxPic> {
         None => without_prefix,
     };
 
+    let w = img.width.as_i32();
+    let h = img.height.as_i32();
+    let half_w = w / 2;
+    let half_h = h / 2;
+
     Ok(HxPic {
-        id: String::new(),
-        img: Some(HxImg { binary_item_id_ref: binary_ref.to_string(), bright: 0, contrast: 0 }),
-        org_sz: None,
-        cur_sz: Some(HxSizeAttr { width: img.width.as_i32(), height: img.height.as_i32() }),
-        caption: img
-            .caption
-            .as_ref()
-            .map(|c| build_hx_caption(c, img.width.as_i32(), depth))
-            .transpose()?,
+        id: generate_instid(),
+        z_order: 0,
+        numbering_type: "PICTURE".to_string(),
+        text_wrap: "TOP_AND_BOTTOM".to_string(),
+        text_flow: "BOTH_SIDES".to_string(),
+        lock: 0,
+        dropcap_style: "None".to_string(),
+        href: String::new(),
+        group_level: 0,
+        instid: generate_instid(),
+        reverse: 0,
+
+        offset: Some(HxOffset { x: 0, y: 0 }),
+        org_sz: Some(HxSizeAttr { width: w, height: h }),
+        cur_sz: Some(HxSizeAttr { width: w, height: h }),
+        flip: Some(HxFlip { horizontal: 0, vertical: 0 }),
+        rotation_info: Some(HxRotationInfo {
+            angle: 0,
+            center_x: half_w,
+            center_y: half_h,
+            rotate_image: 1,
+        }),
+        rendering_info: Some(HxRenderingInfo {
+            trans_matrix: HxMatrix::identity(),
+            sca_matrix: HxMatrix::identity(),
+            rot_matrix: HxMatrix::identity(),
+        }),
+        img_rect: Some(HxImgRect {
+            pt0: HxPoint { x: 0, y: 0 },
+            pt1: HxPoint { x: w, y: 0 },
+            pt2: HxPoint { x: w, y: h },
+            pt3: HxPoint { x: 0, y: h },
+        }),
+        img_clip: Some(HxImgClip { left: 0, right: w, top: 0, bottom: h }),
+        in_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+        img_dim: Some(HxImgDim { dim_width: w, dim_height: h }),
+        img: Some(HxImg {
+            binary_item_id_ref: binary_ref.to_string(),
+            bright: 0,
+            contrast: 0,
+            effect: "REAL_PIC".to_string(),
+            alpha: "0".to_string(),
+        }),
+        sz: Some(HxTableSz {
+            width: w,
+            width_rel_to: "ABSOLUTE".to_string(),
+            height: h,
+            height_rel_to: "ABSOLUTE".to_string(),
+            protect: 0,
+        }),
+        pos: Some(HxTablePos {
+            treat_as_char: 1,
+            affect_l_spacing: 0,
+            flow_with_text: 0,
+            allow_overlap: 0,
+            hold_anchor_and_so: 0,
+            vert_rel_to: "PARA".to_string(),
+            horz_rel_to: "PARA".to_string(),
+            vert_align: "TOP".to_string(),
+            horz_align: "LEFT".to_string(),
+            vert_offset: 0,
+            horz_offset: 0,
+        }),
+        out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+        caption: img.caption.as_ref().map(|c| build_hx_caption(c, w, depth)).transpose()?,
     })
 }
 
@@ -1043,13 +1395,15 @@ fn build_header_xml(hf: &hwpforge_core::section::HeaderFooter, tag_name: &str) -
         _ => "BOTH",
     };
 
+    let hf_id = generate_instid();
     let mut xml = String::new();
-    write!(xml, r#"<hp:ctrl><hp:{tag_name} applyPageType="{apply_page}" createItemType="0">"#,)
+    write!(xml, r#"<hp:ctrl><hp:{tag_name} applyPageType="{apply_page}" id="{hf_id}">"#,)
         .expect("write to String is infallible");
 
     // Wrap paragraphs in <hp:subList> (required by HWPX schema)
+    // Note: subList id is empty string per reference files (NOT "0")
     xml.push_str(
-        r#"<hp:subList id="0" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">"#,
+        r#"<hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">"#,
     );
 
     // Encode each paragraph in the header/footer
@@ -1081,22 +1435,47 @@ fn build_header_xml(hf: &hwpforge_core::section::HeaderFooter, tag_name: &str) -
     xml
 }
 
-/// Builds `<hp:ctrl><hp:autoNum>` XML for page numbers.
+/// Builds `<hp:ctrl><hp:pageNum>` XML for page numbers.
+///
+/// Uses the HWPX `<hp:pageNum>` element (not `<hp:autoNum>`) which is
+/// the correct representation for page number controls. The `pos` attribute
+/// specifies where the page number appears, `formatType` controls the
+/// numbering style, and `sideChar` adds surrounding characters.
 fn build_page_number_xml(pn: &hwpforge_core::section::PageNumber) -> String {
     use std::fmt::Write as _;
 
-    let num_type = match pn.number_format {
-        hwpforge_foundation::NumberFormatType::Digit => "PAGE",
-        hwpforge_foundation::NumberFormatType::CircledDigit => "PAGE",
-        hwpforge_foundation::NumberFormatType::RomanCapital => "PAGE",
-        hwpforge_foundation::NumberFormatType::RomanSmall => "PAGE",
-        _ => "PAGE",
+    let pos = match pn.position {
+        hwpforge_foundation::PageNumberPosition::None => "NONE",
+        hwpforge_foundation::PageNumberPosition::TopLeft => "TOP_LEFT",
+        hwpforge_foundation::PageNumberPosition::TopCenter => "TOP_CENTER",
+        hwpforge_foundation::PageNumberPosition::TopRight => "TOP_RIGHT",
+        hwpforge_foundation::PageNumberPosition::BottomLeft => "BOTTOM_LEFT",
+        hwpforge_foundation::PageNumberPosition::BottomCenter => "BOTTOM_CENTER",
+        hwpforge_foundation::PageNumberPosition::BottomRight => "BOTTOM_RIGHT",
+        hwpforge_foundation::PageNumberPosition::OutsideTop => "OUTSIDE_TOP",
+        hwpforge_foundation::PageNumberPosition::OutsideBottom => "OUTSIDE_BOTTOM",
+        hwpforge_foundation::PageNumberPosition::InsideTop => "INSIDE_TOP",
+        hwpforge_foundation::PageNumberPosition::InsideBottom => "INSIDE_BOTTOM",
+        _ => "BOTTOM_CENTER",
+    };
+
+    let format_type = match pn.number_format {
+        hwpforge_foundation::NumberFormatType::Digit => "DIGIT",
+        hwpforge_foundation::NumberFormatType::CircledDigit => "CIRCLED_DIGIT",
+        hwpforge_foundation::NumberFormatType::RomanCapital => "ROMAN_CAPITAL",
+        hwpforge_foundation::NumberFormatType::RomanSmall => "ROMAN_SMALL",
+        hwpforge_foundation::NumberFormatType::LatinCapital => "LATIN_CAPITAL",
+        hwpforge_foundation::NumberFormatType::LatinSmall => "LATIN_SMALL",
+        hwpforge_foundation::NumberFormatType::HangulSyllable => "HANGUL_SYLLABLE",
+        hwpforge_foundation::NumberFormatType::HangulJamo => "HANGUL_JAMO",
+        hwpforge_foundation::NumberFormatType::HanjaDigit => "HANJA_DIGIT",
+        _ => "DIGIT",
     };
 
     let mut xml = String::new();
     write!(
         xml,
-        r#"<hp:ctrl><hp:autoNum numType="{num_type}" sideChar="{side_char}"/></hp:ctrl>"#,
+        r#"<hp:ctrl><hp:pageNum pos="{pos}" formatType="{format_type}" sideChar="{side_char}"/></hp:ctrl>"#,
         side_char = escape_xml(&pn.side_char),
     )
     .expect("write to String is infallible");
@@ -1133,7 +1512,7 @@ mod tests {
     #[test]
     fn encode_single_text_paragraph() {
         let section = simple_section("텍스트");
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
         assert!(xml.contains("<?xml version="), "missing XML declaration");
         assert!(xml.contains("<hs:sec"), "missing <hs:sec> root");
@@ -1162,10 +1541,12 @@ mod tests {
     #[test]
     fn encode_section_roundtrip() {
         let section = simple_section("안녕하세요 round-trip test");
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
         // Parse back with the decoder
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
         assert_eq!(result.paragraphs.len(), 1);
         assert_eq!(
             result.paragraphs[0].runs[0].content.as_text(),
@@ -1189,7 +1570,7 @@ mod tests {
             footer_margin: HwpUnit::new(4252).unwrap(),
         };
         let section = Section::with_paragraphs(vec![text_paragraph("Content", 0, 0)], ps);
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
         assert!(xml.contains("<hp:secPr"), "missing secPr");
         assert!(xml.contains(r#"textDirection="HORIZONTAL""#), "missing textDirection");
@@ -1198,7 +1579,9 @@ mod tests {
         assert!(xml.contains(r#"left="8504""#), "missing left margin");
 
         // Roundtrip the page settings through the decoder
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
         let decoded_ps = result.page_settings.unwrap();
         assert_eq!(decoded_ps.width.as_i32(), 59528);
         assert_eq!(decoded_ps.height.as_i32(), 84188);
@@ -1228,7 +1611,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
         assert!(xml.contains(r#"rowCnt="1""#), "missing rowCnt");
         assert!(xml.contains(r#"colCnt="2""#), "missing colCnt");
@@ -1253,7 +1636,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
         assert!(
             xml.contains(r#"binaryItemIDRef="logo""#),
@@ -1275,7 +1658,7 @@ mod tests {
             ],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
         assert!(xml.contains("<hp:t>First</hp:t>"), "missing First");
         assert!(xml.contains("<hp:t>Second</hp:t>"), "missing Second");
@@ -1317,7 +1700,7 @@ mod tests {
         );
 
         // Should succeed within nesting limit
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
         assert!(xml.contains("<hp:t>Deep</hp:t>"), "missing nested text");
     }
 
@@ -1340,7 +1723,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
         assert!(xml.contains("<hp:t>before</hp:t>"), "missing 'before' text");
         assert!(xml.contains("<hp:t>after</hp:t>"), "missing 'after' text");
@@ -1359,7 +1742,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
         // Should parse without error
         assert!(xml.contains("<hs:sec"), "missing root element");
@@ -1372,10 +1755,12 @@ mod tests {
     fn korean_text_preservation() {
         let korean = "우리는 수학을 공부한다.";
         let section = simple_section(korean);
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
         // Roundtrip through decoder
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
         assert_eq!(result.paragraphs[0].runs[0].content.as_text(), Some(korean),);
     }
 
@@ -1384,7 +1769,7 @@ mod tests {
     #[test]
     fn empty_section_produces_valid_xml() {
         let section = Section::new(PageSettings::a4());
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
         assert!(xml.contains("<hs:sec"), "missing root element");
         assert!(xml.contains("</hs:sec>"), "missing close tag");
@@ -1441,8 +1826,10 @@ mod tests {
             vec![text_paragraph("p0", 3, 5), text_paragraph("p1", 7, 2)],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap();
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
 
         assert_eq!(result.paragraphs[0].para_shape_id.get(), 3);
         assert_eq!(result.paragraphs[0].runs[0].char_shape_id.get(), 5);
@@ -1462,8 +1849,10 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap();
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
 
         let decoded_table = result.paragraphs[0].runs[0].content.as_table().unwrap();
         assert_eq!(decoded_table.rows.len(), 1);
@@ -1490,8 +1879,10 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap();
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
 
         let decoded_img = result.paragraphs[0].runs[0].content.as_image().unwrap();
         // binaryItemIDRef is "photo" (extension stripped by encoder),
@@ -1514,11 +1905,13 @@ mod tests {
             ApplyPageType::Both,
         ));
 
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
         assert!(xml.contains("<hp:header"), "XML should contain header element");
         assert!(xml.contains("Header Content"), "XML should contain header text");
 
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
         let header = result.header.expect("decoded section should have header");
         assert_eq!(header.apply_page_type, ApplyPageType::Both);
         assert_eq!(header.paragraphs.len(), 1);
@@ -1536,10 +1929,12 @@ mod tests {
             ApplyPageType::Even,
         ));
 
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
         assert!(xml.contains("<hp:footer"), "XML should contain footer element");
 
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
         let footer = result.footer.expect("decoded section should have footer");
         assert_eq!(footer.apply_page_type, ApplyPageType::Even);
         assert_eq!(footer.paragraphs.len(), 1);
@@ -1558,14 +1953,20 @@ mod tests {
             "- ".to_string(),
         ));
 
-        let xml = encode_section(&section, 0).unwrap();
-        assert!(xml.contains("<hp:autoNum"), "XML should contain autoNum element");
+        let xml = encode_section(&section, 0).unwrap().xml;
+        assert!(xml.contains("<hp:pageNum"), "XML should contain pageNum element");
+        assert!(xml.contains(r#"pos="BOTTOM_CENTER""#), "XML should contain pos attribute");
+        assert!(xml.contains(r#"formatType="DIGIT""#), "XML should contain formatType");
         assert!(xml.contains("sideChar=\"- \""), "XML should contain side char");
 
-        // NOTE: The encoder outputs <hp:autoNum> but the schema decodes <hp:pageNum>.
-        // The autoNum element has different structure than pageNum, so full roundtrip
-        // of page number through encode→decode is only partially possible.
-        // This test validates the encoder output contains the right data.
+        // Full roundtrip: encoder outputs <hp:pageNum> which decoder parses back
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
+        let pn = result.page_number.expect("decoded section should have page number");
+        assert_eq!(pn.position, PageNumberPosition::BottomCenter);
+        assert_eq!(pn.number_format, NumberFormatType::Digit);
+        assert_eq!(pn.side_char, "- ");
     }
 
     #[test]
@@ -1579,9 +1980,11 @@ mod tests {
         section.footer =
             Some(HeaderFooter::new(vec![text_paragraph("My Footer", 0, 0)], ApplyPageType::Odd));
 
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
         let header = result.header.expect("should have header");
         let footer = result.footer.expect("should have footer");
 
@@ -1611,7 +2014,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
         assert!(xml.contains("<hp:ctrl>"), "missing ctrl wrapper");
         assert!(xml.contains("<hp:footNote"), "missing footNote element");
@@ -1634,7 +2037,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
         assert!(xml.contains("<hp:endNote"), "missing endNote element");
         assert!(xml.contains("<hp:t>End note</hp:t>"), "missing endnote text");
@@ -1655,6 +2058,7 @@ mod tests {
                         horz_offset: 0,
                         vert_offset: 0,
                         caption: None,
+                        style: None,
                     },
                     CharShapeIndex::new(0),
                 )],
@@ -1662,7 +2066,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
         assert!(xml.contains("<hp:rect"), "missing rect element");
         assert!(xml.contains("<hp:drawText"), "missing drawText element");
@@ -1691,8 +2095,10 @@ mod tests {
             PageSettings::a4(),
         );
 
-        let xml = encode_section(&section, 0).unwrap();
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
 
         // Find the footnote run in decoded output
         let all_runs = &result.paragraphs[0].runs;
@@ -1730,8 +2136,10 @@ mod tests {
             PageSettings::a4(),
         );
 
-        let xml = encode_section(&section, 0).unwrap();
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
 
         let ctrl_run = result.paragraphs[0]
             .runs
@@ -1765,6 +2173,7 @@ mod tests {
                         horz_offset: 0,
                         vert_offset: 0,
                         caption: None,
+                        style: None,
                     },
                     CharShapeIndex::new(0),
                 )],
@@ -1773,8 +2182,10 @@ mod tests {
             PageSettings::a4(),
         );
 
-        let xml = encode_section(&section, 0).unwrap();
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
 
         let ctrl_run = result.paragraphs[0]
             .runs
@@ -1810,10 +2221,12 @@ mod tests {
             ApplyPageType::Both,
         ));
 
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
         assert!(xml.contains("A &amp; B &lt; C &gt; D"), "special chars must be escaped");
 
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
         let header = result.header.expect("should have header");
         assert_eq!(header.paragraphs[0].runs[0].content.as_text(), Some("A & B < C > D"),);
     }

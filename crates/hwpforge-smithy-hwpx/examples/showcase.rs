@@ -21,7 +21,7 @@ use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::ColumnSettings;
 use hwpforge_core::control::{Control, ShapePoint};
 use hwpforge_core::document::Document;
-use hwpforge_core::image::{Image, ImageFormat, ImageStore};
+use hwpforge_core::image::ImageStore;
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::Run;
 use hwpforge_core::section::{HeaderFooter, PageNumber, Section};
@@ -49,21 +49,6 @@ fn make_caption(text: &str, side: CaptionSide) -> Caption {
         width: None,
         paragraphs: vec![text_para(text, 0, 0)],
     }
-}
-
-/// Minimal 1x1 red PNG (67 bytes).
-fn tiny_png() -> Vec<u8> {
-    vec![
-        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // PNG signature
-        0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, // IHDR chunk
-        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // 1x1
-        0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, // 8-bit RGB
-        0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, // IDAT chunk
-        0x54, 0x08, 0xD7, 0x63, 0xF8, 0xCF, 0xC0, 0x00, // compressed
-        0x00, 0x00, 0x02, 0x00, 0x01, 0xE2, 0x21, 0xBC, // pixel data
-        0x33, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, // IEND chunk
-        0x44, 0xAE, 0x42, 0x60, 0x82,
-    ]
 }
 
 // ---------------------------------------------------------------------------
@@ -234,26 +219,12 @@ fn build_section1() -> Section {
 // ---------------------------------------------------------------------------
 
 fn build_section2() -> Section {
-    // Image with caption (built before vec literal)
-    let img: Image = {
-        let mut i: Image = Image::new(
-            "BinData/showcase_image.png",
-            HwpUnit::from_mm(60.0).unwrap(),
-            HwpUnit::from_mm(40.0).unwrap(),
-            ImageFormat::Png,
-        );
-        i.caption = Some(make_caption("그림 1. HwpForge 아키텍처 다이어그램", CaptionSide::Bottom));
-        i
-    };
-
     let paragraphs: Vec<Paragraph> = vec![
         // Section title
         Paragraph::with_runs(
-            vec![Run::text("섹션 2: 이미지, 글상자, 도형", CharShapeIndex::new(3))],
+            vec![Run::text("섹션 2: 글상자, 도형", CharShapeIndex::new(3))],
             ParaShapeIndex::new(1),
         ),
-        // Image with caption
-        Paragraph::with_runs(vec![Run::image(img, CharShapeIndex::new(0))], ParaShapeIndex::new(1)),
         // TextBox with caption
         Paragraph::with_runs(
             vec![Run::control(
@@ -271,6 +242,7 @@ fn build_section2() -> Section {
                     horz_offset: 0,
                     vert_offset: 0,
                     caption: Some(make_caption("글상자 1. 설명", CaptionSide::Bottom)),
+                    style: None,
                 },
                 CharShapeIndex::new(0),
             )],
@@ -285,6 +257,7 @@ fn build_section2() -> Section {
                     width: HwpUnit::new(14000).unwrap(),
                     height: HwpUnit::new(100).unwrap(),
                     caption: Some(make_caption("선 1. 구분선", CaptionSide::Bottom)),
+                    style: None,
                 },
                 CharShapeIndex::new(0),
             )],
@@ -299,8 +272,11 @@ fn build_section2() -> Section {
                     axis2: ShapePoint::new(5000, 8000),
                     width: HwpUnit::new(10000).unwrap(),
                     height: HwpUnit::new(6000).unwrap(),
+                    horz_offset: 0,
+                    vert_offset: 0,
                     paragraphs: vec![text_para("타원 내부 텍스트", 0, 1)],
                     caption: Some(make_caption("그림 2. 타원 도형", CaptionSide::Bottom)),
+                    style: None,
                 },
                 CharShapeIndex::new(0),
             )],
@@ -319,6 +295,7 @@ fn build_section2() -> Section {
                     height: HwpUnit::new(8000).unwrap(),
                     paragraphs: vec![text_para("삼각형", 0, 1)],
                     caption: Some(make_caption("그림 3. 삼각형 도형", CaptionSide::Bottom)),
+                    style: None,
                 },
                 CharShapeIndex::new(0),
             )],
@@ -351,9 +328,8 @@ fn main() {
         store.para_shape_count(),
     );
 
-    // 2. Build image store with a tiny PNG
-    let mut image_store: ImageStore = ImageStore::new();
-    image_store.insert("showcase_image.png".to_string(), tiny_png());
+    // 2. Build image store (empty — no images in this showcase)
+    let image_store: ImageStore = ImageStore::new();
     println!("[2] 이미지 스토어: {} images", image_store.len());
 
     // 3. Build document with 2 sections

@@ -3,9 +3,11 @@
 //! Converts XML schema types (`HxParagraph`, `HxRun`, `HxText`, `HxTable`,
 //! `HxPic`) into Core types (`Paragraph`, `Run`, `RunContent`, `Table`, `Image`).
 
+use std::collections::HashMap;
+
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::{ColumnDef, ColumnLayoutMode, ColumnSettings, ColumnType};
-use hwpforge_core::control::Control;
+use hwpforge_core::control::{Control, ShapeStyle};
 use hwpforge_core::image::{Image, ImageFormat};
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::{Run, RunContent};
@@ -19,8 +21,9 @@ use quick_xml::de::from_str;
 
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    HxCaption, HxCtrl, HxEllipse, HxFootNote, HxHeaderFooter, HxLine, HxPageNum, HxParagraph,
-    HxPic, HxPolygon, HxRect, HxRun, HxSection, HxSubList, HxTable, HxTableCell,
+    HxCaption, HxChart, HxCtrl, HxEllipse, HxEquation, HxFillBrush, HxFootNote, HxHeaderFooter,
+    HxLine, HxLineShape, HxPageNum, HxParagraph, HxPic, HxPolygon, HxRect, HxRun, HxSection,
+    HxSubList, HxTable, HxTableCell,
 };
 
 /// Maximum nesting depth for tables-within-tables.
@@ -51,7 +54,12 @@ pub struct SectionParseResult {
 /// Parses a section XML string into paragraphs and optional page settings.
 ///
 /// `section_index` is used only for error messages (e.g. `"Contents/section0.xml"`).
-pub fn parse_section(xml: &str, section_index: usize) -> HwpxResult<SectionParseResult> {
+/// `chart_xmls` maps chart file paths (e.g. `"Chart/chart1.xml"`) to their OOXML content.
+pub fn parse_section(
+    xml: &str,
+    section_index: usize,
+    chart_xmls: &HashMap<String, String>,
+) -> HwpxResult<SectionParseResult> {
     let file_hint = format!("Contents/section{section_index}.xml");
     let section: HxSection = from_str(xml)
         .map_err(|e| HwpxError::XmlParse { file: file_hint, detail: e.to_string() })?;
@@ -67,7 +75,7 @@ pub fn parse_section(xml: &str, section_index: usize) -> HwpxResult<SectionParse
         .iter()
         .enumerate()
         .map(|(para_idx, hx_para)| {
-            let (para, ps) = convert_paragraph(hx_para, para_idx == 0, 0)?;
+            let (mut para, ps) = convert_paragraph(hx_para, para_idx == 0, 0)?;
             if ps.is_some() && page_settings.is_none() {
                 page_settings = ps;
             }
@@ -93,6 +101,18 @@ pub fn parse_section(xml: &str, section_index: usize) -> HwpxResult<SectionParse
                     if page_number.is_none() {
                         if let Some(pn) = convert_ctrl_page_number(ctrl) {
                             page_number = Some(pn);
+                        }
+                    }
+                }
+
+                // Chart runs (from <hp:switch><hp:case><hp:chart>)
+                let char_shape_id = CharShapeIndex::new(hx_run.char_pr_id_ref as usize);
+                for switch in &hx_run.switches {
+                    if let Some(case) = &switch.case {
+                        if let Some(hx_chart) = &case.chart {
+                            if let Some(run) = decode_chart(hx_chart, char_shape_id, chart_xmls)? {
+                                para.runs.push(run);
+                            }
                         }
                     }
                 }
@@ -143,7 +163,7 @@ fn convert_paragraph(
         runs.push(Run::text("", CharShapeIndex::new(0)));
     }
 
-    let paragraph = Paragraph { runs, para_shape_id };
+    let paragraph = Paragraph { runs, para_shape_id, column_break: hx.column_break != 0 };
     Ok((paragraph, page_settings))
 }
 
@@ -206,6 +226,11 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
     // Polygon runs (from <hp:polygon>)
     for polygon in &hx.polygons {
         runs.push(decode_polygon(polygon, char_shape_id, depth)?);
+    }
+
+    // Equation runs (from <hp:equation>)
+    for equation in &hx.equations {
+        runs.push(decode_equation(equation, char_shape_id)?);
     }
 
     Ok(runs)
@@ -388,6 +413,7 @@ fn decode_textbox(
             horz_offset,
             vert_offset,
             caption,
+            style: None,
         })),
         char_shape_id,
     }))
@@ -428,6 +454,7 @@ fn decode_line(line: &HxLine, char_shape_id: CharShapeIndex, depth: usize) -> Hw
             width,
             height,
             caption,
+            style: decode_shape_style(&line.line_shape, &line.fill_brush),
         })),
         char_shape_id,
     })
@@ -482,8 +509,11 @@ fn decode_ellipse(
             axis2,
             width,
             height,
+            horz_offset: 0,
+            vert_offset: 0,
             paragraphs,
             caption,
+            style: decode_shape_style(&ellipse.line_shape, &ellipse.fill_brush),
         })),
         char_shape_id,
     })
@@ -525,9 +555,110 @@ fn decode_polygon(
             height,
             paragraphs,
             caption,
+            style: decode_shape_style(&polygon.line_shape, &polygon.fill_brush),
         })),
         char_shape_id,
     })
+}
+
+/// Decodes an `HxEquation` into a Core `Run` with `Control::Equation`.
+///
+/// Equations have no shape common block and no recursive sub-content,
+/// so no `depth` parameter is needed.
+fn decode_equation(eq: &HxEquation, char_shape_id: CharShapeIndex) -> HwpxResult<Run> {
+    let script = eq.script.as_ref().map(|s| s.text.clone()).unwrap_or_default();
+
+    let (width, height) = eq
+        .sz
+        .as_ref()
+        .map(|sz| {
+            (
+                HwpUnit::new(sz.width).unwrap_or(HwpUnit::ZERO),
+                HwpUnit::new(sz.height).unwrap_or(HwpUnit::ZERO),
+            )
+        })
+        .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
+
+    Ok(Run {
+        content: RunContent::Control(Box::new(Control::Equation {
+            script,
+            width,
+            height,
+            base_line: eq.base_line,
+            text_color: eq.text_color.clone(),
+            font: eq.font.clone(),
+        })),
+        char_shape_id,
+    })
+}
+
+/// Decodes an `HxChart` into a Core `Run` with `Control::Chart`.
+///
+/// Looks up the chart's OOXML XML by `chartIDRef` and parses it into
+/// structured chart data. Returns `None` if the chart XML is not found.
+fn decode_chart(
+    hx: &HxChart,
+    char_shape_id: CharShapeIndex,
+    chart_xmls: &HashMap<String, String>,
+) -> HwpxResult<Option<Run>> {
+    let chart_xml = match chart_xmls.get(&hx.chart_id_ref) {
+        Some(xml) => xml,
+        None => return Ok(None),
+    };
+
+    let parsed = super::chart::parse_chart_xml(chart_xml)?;
+
+    let (width, height) = hx
+        .sz
+        .as_ref()
+        .map(|sz| {
+            (
+                HwpUnit::new(sz.width).unwrap_or(HwpUnit::ZERO),
+                HwpUnit::new(sz.height).unwrap_or(HwpUnit::ZERO),
+            )
+        })
+        .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
+
+    Ok(Some(Run {
+        content: RunContent::Control(Box::new(Control::Chart {
+            chart_type: parsed.chart_type,
+            data: parsed.data,
+            width,
+            height,
+            title: parsed.title,
+            legend: parsed.legend,
+            grouping: parsed.grouping,
+        })),
+        char_shape_id,
+    }))
+}
+
+/// Extracts a [`ShapeStyle`] from HWPX shape common elements.
+///
+/// Maps `HxLineShape` and `HxFillBrush` to Core's `ShapeStyle`.
+/// Returns `None` if no style information is present.
+fn decode_shape_style(
+    line_shape: &Option<HxLineShape>,
+    fill_brush: &Option<HxFillBrush>,
+) -> Option<ShapeStyle> {
+    let fill_color: Option<String> =
+        fill_brush.as_ref().map(|fb| &fb.win_brush.face_color).filter(|c| !c.is_empty()).cloned();
+
+    let (line_color, line_width, line_style) = match line_shape.as_ref() {
+        None => (None, None, None),
+        Some(ls) => (
+            if ls.color.is_empty() { None } else { Some(ls.color.clone()) },
+            if ls.width == 0 { None } else { Some(ls.width) },
+            if ls.style.is_empty() { None } else { Some(ls.style.clone()) },
+        ),
+    };
+
+    if line_color.is_none() && line_width.is_none() && line_style.is_none() && fill_color.is_none()
+    {
+        return None;
+    }
+
+    Some(ShapeStyle { line_color, fill_color, line_width, line_style })
 }
 
 /// Converts paragraphs from an `HxSubList` into Core `Paragraph`s.
@@ -778,7 +909,7 @@ mod tests {
     #[test]
     fn parse_empty_section() {
         let xml = r#"<sec></sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         assert!(result.paragraphs.is_empty());
         assert!(result.page_settings.is_none());
     }
@@ -792,7 +923,7 @@ mod tests {
                 </run>
             </p>
         </sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         assert_eq!(result.paragraphs.len(), 1);
 
         let para = &result.paragraphs[0];
@@ -809,7 +940,7 @@ mod tests {
                 <run charPrIDRef="1"><t>World</t></run>
             </p>
         </sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         let para = &result.paragraphs[0];
         assert_eq!(para.runs.len(), 2);
         assert_eq!(para.runs[0].char_shape_id.get(), 0);
@@ -825,7 +956,7 @@ mod tests {
             <p paraPrIDRef="1"><run charPrIDRef="0"><t>Second</t></run></p>
             <p paraPrIDRef="2"><run charPrIDRef="0"><t>Third</t></run></p>
         </sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         assert_eq!(result.paragraphs.len(), 3);
         assert_eq!(result.paragraphs[2].para_shape_id.get(), 2);
     }
@@ -837,7 +968,7 @@ mod tests {
                 <run charPrIDRef="0"><t/></run>
             </p>
         </sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         // Empty paragraphs are normalized to contain a single empty text run
         assert_eq!(result.paragraphs[0].runs.len(), 1);
         assert_eq!(result.paragraphs[0].runs[0].content.as_text(), Some(""));
@@ -860,7 +991,7 @@ mod tests {
                 </run>
             </p>
         </sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         let ps = result.page_settings.unwrap();
         assert_eq!(ps.width.as_i32(), 59528);
         assert_eq!(ps.height.as_i32(), 84188);
@@ -875,7 +1006,7 @@ mod tests {
     #[test]
     fn no_sec_pr_gives_none_page_settings() {
         let xml = r#"<sec><p paraPrIDRef="0"><run charPrIDRef="0"><t>Hi</t></run></p></sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         assert!(result.page_settings.is_none());
     }
 
@@ -911,7 +1042,7 @@ mod tests {
                 </run>
             </p>
         </sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         let run = &result.paragraphs[0].runs[0];
 
         match &run.content {
@@ -945,7 +1076,7 @@ mod tests {
                 </run>
             </p>
         </sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         match &result.paragraphs[0].runs[0].content {
             RunContent::Table(table) => {
                 let cell = &table.rows[0].cells[0];
@@ -969,7 +1100,7 @@ mod tests {
                 </run>
             </p>
         </sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         match &result.paragraphs[0].runs[0].content {
             RunContent::Image(img) => {
                 assert_eq!(img.path, "BinData/logo.png");
@@ -990,7 +1121,7 @@ mod tests {
                 </run>
             </p>
         </sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         // Empty paragraphs are normalized to contain a single empty text run
         assert_eq!(result.paragraphs[0].runs.len(), 1);
         assert_eq!(result.paragraphs[0].runs[0].content.as_text(), Some(""));
@@ -1014,7 +1145,7 @@ mod tests {
 
     #[test]
     fn parse_invalid_xml() {
-        let err = parse_section("<not-closed", 0).unwrap_err();
+        let err = parse_section("<not-closed", 0, &HashMap::new()).unwrap_err();
         assert!(matches!(err, HwpxError::XmlParse { .. }));
     }
 
@@ -1040,7 +1171,7 @@ mod tests {
                 </run>
             </p>
         </sec>"#;
-        assert!(parse_section(xml, 0).is_ok());
+        assert!(parse_section(xml, 0, &HashMap::new()).is_ok());
     }
 
     #[test]
@@ -1086,7 +1217,7 @@ mod tests {
                 <run charPrIDRef="0"><t>우리는 수학을 공부한다.</t></run>
             </p>
         </sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         assert_eq!(result.paragraphs[0].runs[0].content.as_text(), Some("우리는 수학을 공부한다."),);
     }
 
@@ -1111,7 +1242,7 @@ mod tests {
                 </run>
             </p>
         </sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         let header = result.header.expect("should have header");
         assert_eq!(header.apply_page_type, ApplyPageType::Both);
         assert_eq!(header.paragraphs.len(), 1);
@@ -1137,7 +1268,7 @@ mod tests {
                 </run>
             </p>
         </sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         let footer = result.footer.expect("should have footer");
         assert_eq!(footer.apply_page_type, ApplyPageType::Even);
         assert_eq!(footer.paragraphs.len(), 1);
@@ -1156,7 +1287,7 @@ mod tests {
                 </run>
             </p>
         </sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         let pn = result.page_number.expect("should have page number");
         assert_eq!(pn.position, PageNumberPosition::BottomCenter);
         assert_eq!(pn.number_format, NumberFormatType::Digit);
@@ -1195,7 +1326,7 @@ mod tests {
                 </run>
             </p>
         </sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
 
         let header = result.header.expect("should have header");
         assert_eq!(header.apply_page_type, ApplyPageType::Both);
@@ -1218,7 +1349,7 @@ mod tests {
                 <run charPrIDRef="0"><t>Plain text</t></run>
             </p>
         </sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         assert!(result.header.is_none());
         assert!(result.footer.is_none());
         assert!(result.page_number.is_none());
@@ -1245,7 +1376,7 @@ mod tests {
                 </run>
             </p>
         </sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         let para = &result.paragraphs[0];
 
         // Should have text run + footnote run
@@ -1287,7 +1418,7 @@ mod tests {
                 </run>
             </p>
         </sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         let para = &result.paragraphs[0];
 
         let endnote_run =
@@ -1330,7 +1461,7 @@ mod tests {
                 </run>
             </p>
         </sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         let para = &result.paragraphs[0];
 
         let tb_run = para.runs.iter().find(|r| r.content.is_control()).expect("no control run");
@@ -1370,7 +1501,7 @@ mod tests {
                 </run>
             </p>
         </sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         // The rect without drawText should be skipped, only text run present
         assert_eq!(result.paragraphs[0].runs.len(), 1);
         assert_eq!(result.paragraphs[0].runs[0].content.as_text(), Some("Main text"));
@@ -1393,7 +1524,7 @@ mod tests {
                 </run>
             </p>
         </sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         let ctrl_run = result.paragraphs[0].runs.iter().find(|r| r.content.is_control()).unwrap();
         match &ctrl_run.content {
             RunContent::Control(ctrl) => match ctrl.as_ref() {
@@ -1422,7 +1553,7 @@ mod tests {
                 </run>
             </p>
         </sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         let cs = result.column_settings.expect("should have column_settings");
         assert_eq!(cs.column_type, ColumnType::Newspaper);
         assert_eq!(cs.layout_mode, ColumnLayoutMode::Left);
@@ -1447,7 +1578,7 @@ mod tests {
                 </run>
             </p>
         </sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         let cs = result.column_settings.expect("should have column_settings");
         assert_eq!(cs.columns.len(), 3);
         assert_eq!(cs.columns[0].width.as_i32(), 10000);
@@ -1470,7 +1601,7 @@ mod tests {
                 </run>
             </p>
         </sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         let cs = result.column_settings.expect("should have column_settings");
         assert_eq!(cs.column_type, ColumnType::Parallel);
         assert_eq!(cs.layout_mode, ColumnLayoutMode::Mirror);
@@ -1489,7 +1620,7 @@ mod tests {
                 </run>
             </p>
         </sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         assert!(result.column_settings.is_none(), "colCount=1 should produce None");
     }
 
@@ -1500,7 +1631,7 @@ mod tests {
                 <run charPrIDRef="0"><t>Plain text</t></run>
             </p>
         </sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         assert!(result.column_settings.is_none());
     }
 
@@ -1516,7 +1647,7 @@ mod tests {
                 </run>
             </p>
         </sec>"#;
-        let result = parse_section(xml, 0).unwrap();
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         let cs = result.column_settings.unwrap();
         assert_eq!(cs.layout_mode, ColumnLayoutMode::Right);
     }

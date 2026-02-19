@@ -1,0 +1,33 @@
+{
+  // HwpForge markdownlint configuration
+  "config": {
+    "default": true,
+    // Allow long lines (we use 120 line width)
+    "MD013": false,
+    // Allow multiple top-level headings (common in docs and test fixtures)
+    "MD025": false,
+    // Allow inline HTML (used in HWPX docs)
+    "MD033": false,
+    // Allow emphasis as heading (AGENTS.md uses **Step N:** pattern)
+    "MD036": false,
+    // Allow bare URLs
+    "MD034": false,
+    // Allow duplicate headings in different sections
+    "MD024": { "siblings_only": true },
+    // Disable compact table style check (widely used in project)
+    "MD060": false,
+    // Allow code blocks without language (text/diagram blocks)
+    "MD040": false
+  },
+  "gitignore": true,
+  "globs": [
+    "**/*.md"
+  ],
+  "ignores": [
+    "**/target/**",
+    "**/node_modules/**",
+    "**/temp/**",
+    ".omc/**",
+    ".serena/**"
+  ]
+}

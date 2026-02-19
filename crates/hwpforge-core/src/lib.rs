@@ -81,6 +81,7 @@
 #![deny(clippy::all)]
 
 pub mod caption;
+pub mod chart;
 pub mod column;
 pub mod control;
 pub mod document;
@@ -100,8 +101,9 @@ mod validate;
 // ---------------------------------------------------------------------------
 
 pub use caption::{Caption, CaptionSide};
+pub use chart::{ChartData, ChartGrouping, ChartSeries, ChartType, LegendPosition, XySeries};
 pub use column::{ColumnDef, ColumnLayoutMode, ColumnSettings, ColumnType};
-pub use control::{Control, ShapePoint};
+pub use control::{Control, ShapePoint, ShapeStyle};
 pub use document::{Document, Draft, Validated};
 pub use error::{CoreError, CoreErrorCode, CoreResult, ValidationError};
 pub use image::{Image, ImageFormat, ImageStore};

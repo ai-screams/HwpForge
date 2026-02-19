@@ -142,6 +142,22 @@ pub struct HxRun {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub polygons: Vec<HxPolygon>,
+
+    /// All `<hp:equation>` elements in this run (inline equations).
+    #[serde(
+        rename(serialize = "hp:equation", deserialize = "equation"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub equations: Vec<HxEquation>,
+
+    /// All `<hp:switch>` elements in this run (chart feature-gate wrappers).
+    #[serde(
+        rename(serialize = "hp:switch", deserialize = "switch"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub switches: Vec<HxRunSwitch>,
 }
 
 // ── Text ──────────────────────────────────────────────────────────
@@ -710,30 +726,149 @@ pub struct HxSubList {
 
 // ── Picture / Image ───────────────────────────────────────────────
 
-/// `<hp:pic>` — image container.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// `<hp:pic>` — image container with full shape properties.
+///
+/// Element order matches 한글's expected serialization:
+/// offset → orgSz → curSz → flip → rotationInfo → renderingInfo →
+/// imgRect → imgClip → inMargin → imgDim → img → sz → pos → outMargin → caption
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxPic {
+    // ── AbstractShapeObjectType attrs ──
+    /// Element ID.
     #[serde(rename = "@id", default)]
     pub id: String,
+    /// Z-order for overlapping objects.
+    #[serde(rename = "@zOrder", default)]
+    pub z_order: u32,
+    /// Numbering type: NONE, PICTURE, TABLE, EQUATION.
+    #[serde(rename = "@numberingType", default)]
+    pub numbering_type: String,
+    /// Text wrapping mode.
+    #[serde(rename = "@textWrap", default)]
+    pub text_wrap: String,
+    /// Text flow mode.
+    #[serde(rename = "@textFlow", default)]
+    pub text_flow: String,
+    /// Lock flag (0 = unlocked).
+    #[serde(rename = "@lock", default)]
+    pub lock: u32,
+    /// Drop cap style.
+    #[serde(rename = "@dropcapstyle", default)]
+    pub dropcap_style: String,
 
+    // ── AbstractShapeComponentType attrs ──
+    /// Hyperlink reference.
+    #[serde(rename = "@href", default)]
+    pub href: String,
+    /// Group nesting level.
+    #[serde(rename = "@groupLevel", default)]
+    pub group_level: u32,
+    /// Instance identifier (unique within document).
+    #[serde(rename = "@instid", default)]
+    pub instid: String,
+    /// Reverse flag.
+    #[serde(rename = "@reverse", default)]
+    pub reverse: u32,
+
+    // ── Children (ORDER MATTERS for serialization!) ──
+    /// Position offset.
     #[serde(
-        rename(serialize = "hp:img", deserialize = "img"),
+        rename(serialize = "hp:offset", deserialize = "offset"),
         default,
         skip_serializing_if = "Option::is_none"
     )]
-    pub img: Option<HxImg>,
+    pub offset: Option<HxOffset>,
+    /// Original image size (before scaling).
     #[serde(
         rename(serialize = "hp:orgSz", deserialize = "orgSz"),
         default,
         skip_serializing_if = "Option::is_none"
     )]
     pub org_sz: Option<HxSizeAttr>,
+    /// Current display size.
     #[serde(
         rename(serialize = "hp:curSz", deserialize = "curSz"),
         default,
         skip_serializing_if = "Option::is_none"
     )]
     pub cur_sz: Option<HxSizeAttr>,
+    /// Flip state.
+    #[serde(
+        rename(serialize = "hp:flip", deserialize = "flip"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub flip: Option<HxFlip>,
+    /// Rotation information.
+    #[serde(
+        rename(serialize = "hp:rotationInfo", deserialize = "rotationInfo"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub rotation_info: Option<HxRotationInfo>,
+    /// Rendering transformation matrices.
+    #[serde(
+        rename(serialize = "hp:renderingInfo", deserialize = "renderingInfo"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub rendering_info: Option<HxRenderingInfo>,
+    /// Image bounding rectangle (4 corner points).
+    #[serde(
+        rename(serialize = "hp:imgRect", deserialize = "imgRect"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub img_rect: Option<HxImgRect>,
+    /// Image clipping region.
+    #[serde(
+        rename(serialize = "hp:imgClip", deserialize = "imgClip"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub img_clip: Option<HxImgClip>,
+    /// Inner margin.
+    #[serde(
+        rename(serialize = "hp:inMargin", deserialize = "inMargin"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub in_margin: Option<HxTableMargin>,
+    /// Image pixel dimensions.
+    #[serde(
+        rename(serialize = "hp:imgDim", deserialize = "imgDim"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub img_dim: Option<HxImgDim>,
+    /// Image binary reference (uses `hc:` core namespace).
+    #[serde(
+        rename(serialize = "hc:img", deserialize = "img"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub img: Option<HxImg>,
+    /// Size specification.
+    #[serde(
+        rename(serialize = "hp:sz", deserialize = "sz"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sz: Option<HxTableSz>,
+    /// Position specification.
+    #[serde(
+        rename(serialize = "hp:pos", deserialize = "pos"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pos: Option<HxTablePos>,
+    /// Outer margin.
+    #[serde(
+        rename(serialize = "hp:outMargin", deserialize = "outMargin"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub out_margin: Option<HxTableMargin>,
     /// Optional caption attached to this image.
     #[serde(
         rename(serialize = "hp:caption", deserialize = "caption"),
@@ -741,12 +876,11 @@ pub struct HxPic {
         skip_serializing_if = "Option::is_none"
     )]
     pub caption: Option<HxCaption>,
-    // lineShape, fillBrush, shadow, pos, sz — ignored
 }
 
-/// `<hp:img binaryItemIDRef="image1" bright="0" contrast="0" .../>` or
-/// `<hc:img binaryItemIDRef="..."/>`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// `<hc:img binaryItemIDRef="image1" bright="0" contrast="0" effect="REAL_PIC" alpha="0"/>`.
+/// Uses `hc:` (core namespace) per HWPX spec.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct HxImg {
     #[serde(rename = "@binaryItemIDRef", default)]
     pub binary_item_id_ref: String,
@@ -754,15 +888,478 @@ pub struct HxImg {
     pub bright: i32,
     #[serde(rename = "@contrast", default)]
     pub contrast: i32,
+    /// Image effect type: REAL_PIC (original), etc.
+    #[serde(rename = "@effect", default, skip_serializing_if = "String::is_empty")]
+    pub effect: String,
+    /// Alpha transparency (0 = opaque).
+    #[serde(rename = "@alpha", default, skip_serializing_if = "String::is_empty")]
+    pub alpha: String,
 }
 
 /// Generic width/height attribute pair used in `<hp:orgSz>`, `<hp:curSz>`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct HxSizeAttr {
     #[serde(rename = "@width", default)]
     pub width: i32,
     #[serde(rename = "@height", default)]
     pub height: i32,
+}
+
+// ── Picture-specific sub-elements ────────────────────────────────
+
+/// `<hp:offset x="0" y="0"/>` — position offset for shapes.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxOffset {
+    #[serde(rename = "@x", default)]
+    pub x: i32,
+    #[serde(rename = "@y", default)]
+    pub y: i32,
+}
+
+/// `<hp:flip horizontal="0" vertical="0"/>` — flip state.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxFlip {
+    #[serde(rename = "@horizontal", default)]
+    pub horizontal: u32,
+    #[serde(rename = "@vertical", default)]
+    pub vertical: u32,
+}
+
+/// `<hp:rotationInfo angle="0" centerX="..." centerY="..." rotateimage="1"/>`.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxRotationInfo {
+    #[serde(rename = "@angle", default)]
+    pub angle: i32,
+    #[serde(rename = "@centerX", default)]
+    pub center_x: i32,
+    #[serde(rename = "@centerY", default)]
+    pub center_y: i32,
+    #[serde(rename = "@rotateimage", default)]
+    pub rotate_image: u32,
+}
+
+/// 2D affine transformation matrix (6 elements: e1-e6).
+/// Used in `<hc:transMatrix>`, `<hc:scaMatrix>`, `<hc:rotMatrix>`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxMatrix {
+    #[serde(rename = "@e1", default)]
+    pub e1: String,
+    #[serde(rename = "@e2", default)]
+    pub e2: String,
+    #[serde(rename = "@e3", default)]
+    pub e3: String,
+    #[serde(rename = "@e4", default)]
+    pub e4: String,
+    #[serde(rename = "@e5", default)]
+    pub e5: String,
+    #[serde(rename = "@e6", default)]
+    pub e6: String,
+}
+
+impl HxMatrix {
+    /// Creates an identity transformation matrix.
+    pub fn identity() -> Self {
+        Self {
+            e1: "1".to_string(),
+            e2: "0".to_string(),
+            e3: "0".to_string(),
+            e4: "0".to_string(),
+            e5: "1".to_string(),
+            e6: "0".to_string(),
+        }
+    }
+}
+
+impl Default for HxMatrix {
+    fn default() -> Self {
+        Self::identity()
+    }
+}
+
+/// `<hp:renderingInfo>` — transformation matrices for rendering.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct HxRenderingInfo {
+    /// Translation matrix.
+    #[serde(rename(serialize = "hc:transMatrix", deserialize = "transMatrix"))]
+    pub trans_matrix: HxMatrix,
+    /// Scale matrix.
+    #[serde(rename(serialize = "hc:scaMatrix", deserialize = "scaMatrix"))]
+    pub sca_matrix: HxMatrix,
+    /// Rotation matrix.
+    #[serde(rename(serialize = "hc:rotMatrix", deserialize = "rotMatrix"))]
+    pub rot_matrix: HxMatrix,
+}
+
+/// `<hp:lineShape>` — stroke style for drawing shapes (ellipse, rect, polygon, line).
+///
+/// All 12 attributes are required by 한글. Use [`HxLineShape::default_solid`] for
+/// a standard thin black border.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxLineShape {
+    /// Stroke color as `#RRGGBB`.
+    #[serde(rename = "@color", default)]
+    pub color: String,
+    /// Stroke width in HWPUNIT (33 ≈ 0.12mm, the standard thin border).
+    #[serde(rename = "@width", default)]
+    pub width: i32,
+    /// Line style: SOLID, DASH, DOT, etc.
+    #[serde(rename = "@style", default)]
+    pub style: String,
+    /// End cap style: FLAT, ROUND, SQUARE.
+    #[serde(rename = "@endCap", default)]
+    pub end_cap: String,
+    /// Arrowhead style at start: NORMAL, OPEN, etc.
+    #[serde(rename = "@headStyle", default)]
+    pub head_style: String,
+    /// Arrowhead style at end: NORMAL, OPEN, etc.
+    #[serde(rename = "@tailStyle", default)]
+    pub tail_style: String,
+    /// Whether arrowhead at start is filled (0 or 1).
+    #[serde(rename = "@headfill", default)]
+    pub head_fill: u32,
+    /// Whether arrowhead at end is filled (0 or 1).
+    #[serde(rename = "@tailfill", default)]
+    pub tail_fill: u32,
+    /// Arrowhead size at start: SMALL_SMALL, MEDIUM_MEDIUM, LARGE_LARGE, etc.
+    #[serde(rename = "@headSz", default)]
+    pub head_sz: String,
+    /// Arrowhead size at end.
+    #[serde(rename = "@tailSz", default)]
+    pub tail_sz: String,
+    /// Outline style: NORMAL, OUTER, INNER.
+    #[serde(rename = "@outlineStyle", default)]
+    pub outline_style: String,
+    /// Alpha transparency (0 = opaque).
+    #[serde(rename = "@alpha", default)]
+    pub alpha: i32,
+}
+
+impl HxLineShape {
+    /// Creates a standard thin solid black border (matches 한글 default).
+    pub fn default_solid() -> Self {
+        Self {
+            color: "#000000".to_string(),
+            width: 33,
+            style: "SOLID".to_string(),
+            end_cap: "FLAT".to_string(),
+            head_style: "NORMAL".to_string(),
+            tail_style: "NORMAL".to_string(),
+            head_fill: 1,
+            tail_fill: 1,
+            head_sz: "MEDIUM_MEDIUM".to_string(),
+            tail_sz: "MEDIUM_MEDIUM".to_string(),
+            outline_style: "NORMAL".to_string(),
+            alpha: 0,
+        }
+    }
+}
+
+/// `<hc:winBrush>` — solid or hatch fill brush (core `hc:` namespace).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxWinBrush {
+    /// Fill face color as `#RRGGBB`.
+    #[serde(rename = "@faceColor", default)]
+    pub face_color: String,
+    /// Hatch pattern color as `#RRGGBB`.
+    #[serde(rename = "@hatchColor", default)]
+    pub hatch_color: String,
+    /// Alpha transparency (0 = opaque).
+    #[serde(rename = "@alpha", default)]
+    pub alpha: i32,
+}
+
+/// `<hc:fillBrush>` — fill brush container (core `hc:` namespace).
+///
+/// Contains a `<hc:winBrush>` child. Use [`HxFillBrush::default_white`] for
+/// a standard white fill (the default for shapes in 한글).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxFillBrush {
+    /// Solid/hatch fill brush.
+    #[serde(rename(serialize = "hc:winBrush", deserialize = "winBrush"))]
+    pub win_brush: HxWinBrush,
+}
+
+impl HxFillBrush {
+    /// Creates a standard white fill brush (matches 한글 default for shapes).
+    pub fn default_white() -> Self {
+        Self {
+            win_brush: HxWinBrush {
+                face_color: "#FFFFFF".to_string(),
+                hatch_color: "#000000".to_string(),
+                alpha: 0,
+            },
+        }
+    }
+}
+
+/// `<hp:shadow>` — drop shadow properties for drawing shapes.
+///
+/// Use [`HxShadow::default_none`] for no shadow (the standard default).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxShadow {
+    /// Shadow type: NONE, DROP, etc.
+    #[serde(rename = "@type", default)]
+    pub shadow_type: String,
+    /// Shadow color as `#RRGGBB`.
+    #[serde(rename = "@color", default)]
+    pub color: String,
+    /// Horizontal shadow offset in HWPUNIT.
+    #[serde(rename = "@offsetX", default)]
+    pub offset_x: i32,
+    /// Vertical shadow offset in HWPUNIT.
+    #[serde(rename = "@offsetY", default)]
+    pub offset_y: i32,
+    /// Alpha transparency (0 = opaque).
+    #[serde(rename = "@alpha", default)]
+    pub alpha: i32,
+}
+
+impl HxShadow {
+    /// Creates a no-shadow default (matches 한글 default for shapes).
+    pub fn default_none() -> Self {
+        Self {
+            shadow_type: "NONE".to_string(),
+            color: "#B2B2B2".to_string(),
+            offset_x: 0,
+            offset_y: 0,
+            alpha: 0,
+        }
+    }
+}
+
+/// `<hp:shapeComment>` — optional text description of a shape.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxShapeComment {
+    /// The comment text content.
+    #[serde(rename = "$text", default)]
+    pub text: String,
+}
+
+// ── Equation ─────────────────────────────────────────────────────
+
+/// `<hp:equation>` — inline equation (수식) with HancomEQN script.
+///
+/// Unlike other drawing objects, equations have NO shape common block
+/// (no offset, orgSz, curSz, flip, rotation, lineShape, fillBrush, shadow).
+/// Only sz + pos + outMargin + shapeComment + script.
+///
+/// Element order matches 한글's expected serialization:
+/// attrs → sz → pos → outMargin → shapeComment → script
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxEquation {
+    // ── AbstractShapeObjectType attrs ──
+    /// Element ID.
+    #[serde(rename = "@id", default)]
+    pub id: String,
+    /// Z-order for overlapping objects.
+    #[serde(rename = "@zOrder", default)]
+    pub z_order: u32,
+    /// Numbering type: NONE, EQUATION, etc.
+    #[serde(rename = "@numberingType", default)]
+    pub numbering_type: String,
+    /// Text wrapping mode.
+    #[serde(rename = "@textWrap", default)]
+    pub text_wrap: String,
+    /// Text flow mode.
+    #[serde(rename = "@textFlow", default)]
+    pub text_flow: String,
+    /// Lock flag (0 = unlocked).
+    #[serde(rename = "@lock", default)]
+    pub lock: u32,
+    /// Drop cap style.
+    #[serde(rename = "@dropcapstyle", default)]
+    pub dropcap_style: String,
+
+    // ── Equation-specific attrs ──
+    /// Equation version string (e.g. "Equation Version 60").
+    #[serde(rename = "@version", default)]
+    pub version: String,
+    /// Baseline position (51-90 typical range).
+    #[serde(rename = "@baseLine", default)]
+    pub base_line: u32,
+    /// Text color as `#RRGGBB`.
+    #[serde(rename = "@textColor", default)]
+    pub text_color: String,
+    /// Base unit for equation rendering (typically 1000).
+    #[serde(rename = "@baseUnit", default)]
+    pub base_unit: u32,
+    /// Line mode: CHAR (inline).
+    #[serde(rename = "@lineMode", default)]
+    pub line_mode: String,
+    /// Font name (typically "HancomEQN").
+    #[serde(rename = "@font", default)]
+    pub font: String,
+
+    // ── Children (ORDER MATTERS) ──
+    /// Size specification (width, height).
+    #[serde(
+        rename(serialize = "hp:sz", deserialize = "sz"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sz: Option<HxTableSz>,
+    /// Position specification.
+    #[serde(
+        rename(serialize = "hp:pos", deserialize = "pos"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pos: Option<HxTablePos>,
+    /// Outer margin.
+    #[serde(
+        rename(serialize = "hp:outMargin", deserialize = "outMargin"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub out_margin: Option<HxTableMargin>,
+    /// Shape comment (typically "수식입니다.").
+    #[serde(
+        rename(serialize = "hp:shapeComment", deserialize = "shapeComment"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub shape_comment: Option<HxShapeComment>,
+    /// Equation script content (HancomEQN format).
+    #[serde(
+        rename(serialize = "hp:script", deserialize = "script"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub script: Option<HxScript>,
+}
+
+/// `<hp:script>` — equation script text content.
+///
+/// Uses `$text` to capture the raw text content. Serde handles XML entity
+/// escaping automatically (`&` → `&amp;`, `<` → `&lt;`).
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxScript {
+    /// The HancomEQN script text.
+    #[serde(rename = "$text", default)]
+    pub text: String,
+}
+
+// ── Chart (switch/case wrapper) ──────────────────────────────────
+
+/// `<hp:switch>` — chart feature-gate wrapper within a run.
+///
+/// Charts use `<hp:switch><hp:case required-namespace="..."><hp:chart .../></hp:case></hp:switch>`.
+/// The `<hp:default>` child (OLE fallback) is silently skipped.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxRunSwitch {
+    /// `<hp:case>` — conditional content (contains chart).
+    #[serde(
+        rename(serialize = "hp:case", deserialize = "case"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub case: Option<HxRunCase>,
+}
+
+/// `<hp:case>` — conditional content block requiring a namespace.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxRunCase {
+    /// Required namespace URI for this case to activate.
+    #[serde(rename = "@hp:required-namespace", default)]
+    pub required_namespace: String,
+
+    /// Optional chart element.
+    #[serde(
+        rename(serialize = "hp:chart", deserialize = "chart"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub chart: Option<HxChart>,
+}
+
+/// `<hp:chart>` — chart reference element (section-level). NO shape common block.
+///
+/// Only has sz + pos + outMargin (like Equation but with chartIDRef).
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxChart {
+    // ── Attributes ──
+    /// Element ID.
+    #[serde(rename = "@id", default)]
+    pub id: String,
+    /// Z-order for overlapping objects.
+    #[serde(rename = "@zOrder", default)]
+    pub z_order: u32,
+    /// Numbering type (typically "PICTURE" for charts).
+    #[serde(rename = "@numberingType", default)]
+    pub numbering_type: String,
+    /// Text wrapping mode.
+    #[serde(rename = "@textWrap", default)]
+    pub text_wrap: String,
+    /// Text flow mode.
+    #[serde(rename = "@textFlow", default)]
+    pub text_flow: String,
+    /// Lock flag (0 = unlocked).
+    #[serde(rename = "@lock", default)]
+    pub lock: u32,
+    /// Drop cap style (typically "None" for charts).
+    #[serde(rename = "@dropcapstyle", default)]
+    pub dropcap_style: String,
+    /// Reference to the chart XML file within the ZIP (e.g. "Chart/chart1.xml").
+    #[serde(rename = "@chartIDRef", default)]
+    pub chart_id_ref: String,
+
+    // ── Children (ORDER MATTERS) ──
+    /// Size specification.
+    #[serde(
+        rename(serialize = "hp:sz", deserialize = "sz"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sz: Option<HxTableSz>,
+    /// Position specification.
+    #[serde(
+        rename(serialize = "hp:pos", deserialize = "pos"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pos: Option<HxTablePos>,
+    /// Outer margin.
+    #[serde(
+        rename(serialize = "hp:outMargin", deserialize = "outMargin"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub out_margin: Option<HxTableMargin>,
+}
+
+/// `<hp:imgRect>` — image bounding rectangle (4 corner points, uses `hc:` namespace).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct HxImgRect {
+    #[serde(rename(serialize = "hc:pt0", deserialize = "pt0"))]
+    pub pt0: HxPoint,
+    #[serde(rename(serialize = "hc:pt1", deserialize = "pt1"))]
+    pub pt1: HxPoint,
+    #[serde(rename(serialize = "hc:pt2", deserialize = "pt2"))]
+    pub pt2: HxPoint,
+    #[serde(rename(serialize = "hc:pt3", deserialize = "pt3"))]
+    pub pt3: HxPoint,
+}
+
+/// `<hp:imgClip left="0" right="..." top="0" bottom="..."/>` — image clipping region.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxImgClip {
+    #[serde(rename = "@left", default)]
+    pub left: i32,
+    #[serde(rename = "@right", default)]
+    pub right: i32,
+    #[serde(rename = "@top", default)]
+    pub top: i32,
+    #[serde(rename = "@bottom", default)]
+    pub bottom: i32,
+}
+
+/// `<hp:imgDim dimwidth="..." dimheight="..."/>` — original pixel dimensions.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxImgDim {
+    #[serde(rename = "@dimwidth", default)]
+    pub dim_width: i32,
+    #[serde(rename = "@dimheight", default)]
+    pub dim_height: i32,
 }
 
 // ── Rectangle / TextBox ──────────────────────────────────────────
@@ -809,7 +1406,72 @@ pub struct HxRect {
     #[serde(rename = "@ratio", default)]
     pub ratio: u8,
 
-    // ── Children (ORDER MATTERS for serialization!) ──
+    // ── Shape-common children (ORDER MATTERS for serialization!) ──
+    /// Position offset (required by 한글).
+    #[serde(
+        rename(serialize = "hp:offset", deserialize = "offset"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub offset: Option<HxOffset>,
+    /// Original size before scaling (required by 한글).
+    #[serde(
+        rename(serialize = "hp:orgSz", deserialize = "orgSz"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub org_sz: Option<HxSizeAttr>,
+    /// Current display size (required by 한글, usually 0×0).
+    #[serde(
+        rename(serialize = "hp:curSz", deserialize = "curSz"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub cur_sz: Option<HxSizeAttr>,
+    /// Flip state (required by 한글).
+    #[serde(
+        rename(serialize = "hp:flip", deserialize = "flip"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub flip: Option<HxFlip>,
+    /// Rotation information (required by 한글).
+    #[serde(
+        rename(serialize = "hp:rotationInfo", deserialize = "rotationInfo"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub rotation_info: Option<HxRotationInfo>,
+    /// Rendering transformation matrices (required by 한글).
+    #[serde(
+        rename(serialize = "hp:renderingInfo", deserialize = "renderingInfo"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub rendering_info: Option<HxRenderingInfo>,
+    /// Stroke style (required by 한글).
+    #[serde(
+        rename(serialize = "hp:lineShape", deserialize = "lineShape"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub line_shape: Option<HxLineShape>,
+    /// Fill brush (hc: namespace, required by 한글).
+    #[serde(
+        rename(serialize = "hc:fillBrush", deserialize = "fillBrush"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub fill_brush: Option<HxFillBrush>,
+    /// Drop shadow (required by 한글).
+    #[serde(
+        rename(serialize = "hp:shadow", deserialize = "shadow"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub shadow: Option<HxShadow>,
+
+    // ── Size / position / margin ──
     /// Size specification (width, height).
     #[serde(
         rename(serialize = "hp:sz", deserialize = "sz"),
@@ -925,6 +1587,11 @@ pub struct HxPoint {
 ///
 /// Flat struct (independent of HxRect) per Wave 3 API design decision.
 /// Common attributes duplicated from AbstractShapeObjectType / AbstractShapeComponentType.
+///
+/// Element order matches 한글's expected serialization:
+/// offset → orgSz → curSz → flip → rotationInfo → renderingInfo →
+/// lineShape → fillBrush → shadow →
+/// startPt → endPt → sz → pos → outMargin → shapeComment → caption
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxLine {
     // ── AbstractShapeObjectType attrs ──
@@ -966,7 +1633,88 @@ pub struct HxLine {
     #[serde(rename = "@isReverseHV", default)]
     pub is_reverse_hv: u32,
 
-    // ── Children (ORDER MATTERS!) ──
+    // ── Shape-common children (ORDER MATTERS!) ──
+    /// Position offset (required by 한글).
+    #[serde(
+        rename(serialize = "hp:offset", deserialize = "offset"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub offset: Option<HxOffset>,
+    /// Original size before scaling (required by 한글).
+    #[serde(
+        rename(serialize = "hp:orgSz", deserialize = "orgSz"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub org_sz: Option<HxSizeAttr>,
+    /// Current display size (required by 한글, usually 0×0).
+    #[serde(
+        rename(serialize = "hp:curSz", deserialize = "curSz"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub cur_sz: Option<HxSizeAttr>,
+    /// Flip state (required by 한글).
+    #[serde(
+        rename(serialize = "hp:flip", deserialize = "flip"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub flip: Option<HxFlip>,
+    /// Rotation information (required by 한글).
+    #[serde(
+        rename(serialize = "hp:rotationInfo", deserialize = "rotationInfo"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub rotation_info: Option<HxRotationInfo>,
+    /// Rendering transformation matrices (required by 한글).
+    #[serde(
+        rename(serialize = "hp:renderingInfo", deserialize = "renderingInfo"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub rendering_info: Option<HxRenderingInfo>,
+    /// Stroke style (required by 한글).
+    #[serde(
+        rename(serialize = "hp:lineShape", deserialize = "lineShape"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub line_shape: Option<HxLineShape>,
+    /// Fill brush (hc: namespace, required by 한글).
+    #[serde(
+        rename(serialize = "hc:fillBrush", deserialize = "fillBrush"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub fill_brush: Option<HxFillBrush>,
+    /// Drop shadow (required by 한글).
+    #[serde(
+        rename(serialize = "hp:shadow", deserialize = "shadow"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub shadow: Option<HxShadow>,
+
+    // ── Line-specific children (hc: namespace geometry BEFORE sz/pos) ──
+    /// Start point of the line.
+    #[serde(
+        rename(serialize = "hc:startPt", deserialize = "startPt"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub start_pt: Option<HxPoint>,
+    /// End point of the line.
+    #[serde(
+        rename(serialize = "hc:endPt", deserialize = "endPt"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub end_pt: Option<HxPoint>,
+
+    // ── Size / position / margin ──
     /// Size specification.
     #[serde(
         rename(serialize = "hp:sz", deserialize = "sz"),
@@ -989,6 +1737,14 @@ pub struct HxLine {
     )]
     pub out_margin: Option<HxTableMargin>,
 
+    /// Optional shape description text (e.g. "선입니다.").
+    #[serde(
+        rename(serialize = "hp:shapeComment", deserialize = "shapeComment"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub shape_comment: Option<HxShapeComment>,
+
     /// Optional caption attached to this line.
     #[serde(
         rename(serialize = "hp:caption", deserialize = "caption"),
@@ -996,27 +1752,17 @@ pub struct HxLine {
         skip_serializing_if = "Option::is_none"
     )]
     pub caption: Option<HxCaption>,
-
-    // ── Line-specific children ──
-    /// Start point of the line.
-    #[serde(
-        rename(serialize = "hp:startPt", deserialize = "startPt"),
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub start_pt: Option<HxPoint>,
-    /// End point of the line.
-    #[serde(
-        rename(serialize = "hp:endPt", deserialize = "endPt"),
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub end_pt: Option<HxPoint>,
 }
 
 /// `<hp:ellipse>` — ellipse/circle drawing object.
 ///
 /// Flat struct with common attrs duplicated from AbstractShapeObjectType.
+///
+/// Element order matches 한글's expected serialization:
+/// offset → orgSz → curSz → flip → rotationInfo → renderingInfo →
+/// lineShape → fillBrush → shadow →
+/// center → ax1 → ax2 → start1 → end1 → start2 → end2 →
+/// sz → pos → outMargin → caption → drawText
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxEllipse {
     // ── AbstractShapeObjectType attrs ──
@@ -1064,7 +1810,123 @@ pub struct HxEllipse {
     #[serde(rename = "@arcType", default)]
     pub arc_type: String,
 
-    // ── Common children (ORDER MATTERS!) ──
+    // ── Shape-common children (ORDER MATTERS!) ──
+    /// Position offset (required by 한글).
+    #[serde(
+        rename(serialize = "hp:offset", deserialize = "offset"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub offset: Option<HxOffset>,
+    /// Original size before scaling (required by 한글).
+    #[serde(
+        rename(serialize = "hp:orgSz", deserialize = "orgSz"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub org_sz: Option<HxSizeAttr>,
+    /// Current display size (required by 한글, usually 0×0).
+    #[serde(
+        rename(serialize = "hp:curSz", deserialize = "curSz"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub cur_sz: Option<HxSizeAttr>,
+    /// Flip state (required by 한글).
+    #[serde(
+        rename(serialize = "hp:flip", deserialize = "flip"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub flip: Option<HxFlip>,
+    /// Rotation information (required by 한글).
+    #[serde(
+        rename(serialize = "hp:rotationInfo", deserialize = "rotationInfo"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub rotation_info: Option<HxRotationInfo>,
+    /// Rendering transformation matrices (required by 한글).
+    #[serde(
+        rename(serialize = "hp:renderingInfo", deserialize = "renderingInfo"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub rendering_info: Option<HxRenderingInfo>,
+    /// Stroke style (required by 한글).
+    #[serde(
+        rename(serialize = "hp:lineShape", deserialize = "lineShape"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub line_shape: Option<HxLineShape>,
+    /// Fill brush (hc: namespace, required by 한글).
+    #[serde(
+        rename(serialize = "hc:fillBrush", deserialize = "fillBrush"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub fill_brush: Option<HxFillBrush>,
+    /// Drop shadow (required by 한글).
+    #[serde(
+        rename(serialize = "hp:shadow", deserialize = "shadow"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub shadow: Option<HxShadow>,
+
+    // ── Ellipse geometry (hc: namespace per KS X 6101 spec) ──
+    /// Center point of the ellipse (hc: namespace).
+    #[serde(
+        rename(serialize = "hc:center", deserialize = "center"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub center: Option<HxPoint>,
+    /// Axis 1 endpoint — semi-major axis (hc: namespace).
+    #[serde(
+        rename(serialize = "hc:ax1", deserialize = "ax1"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub ax1: Option<HxPoint>,
+    /// Axis 2 endpoint — semi-minor axis (hc: namespace).
+    #[serde(
+        rename(serialize = "hc:ax2", deserialize = "ax2"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub ax2: Option<HxPoint>,
+    /// Arc start point 1 (hc: namespace; zero for full ellipse).
+    #[serde(
+        rename(serialize = "hc:start1", deserialize = "start1"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub start1: Option<HxPoint>,
+    /// Arc end point 1 (hc: namespace; zero for full ellipse).
+    #[serde(
+        rename(serialize = "hc:end1", deserialize = "end1"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub end1: Option<HxPoint>,
+    /// Arc start point 2 (hc: namespace; zero for full ellipse).
+    #[serde(
+        rename(serialize = "hc:start2", deserialize = "start2"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub start2: Option<HxPoint>,
+    /// Arc end point 2 (hc: namespace; zero for full ellipse).
+    #[serde(
+        rename(serialize = "hc:end2", deserialize = "end2"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub end2: Option<HxPoint>,
+
+    // ── Size / position / margin ──
     /// Size specification.
     #[serde(
         rename(serialize = "hp:sz", deserialize = "sz"),
@@ -1095,7 +1957,6 @@ pub struct HxEllipse {
     )]
     pub caption: Option<HxCaption>,
 
-    // ── drawText (textbox content, optional) ──
     /// Optional textbox content inside the ellipse.
     #[serde(
         rename(serialize = "hp:drawText", deserialize = "drawText"),
@@ -1103,34 +1964,16 @@ pub struct HxEllipse {
         skip_serializing_if = "Option::is_none"
     )]
     pub draw_text: Option<HxDrawText>,
-
-    // ── Ellipse-specific children ──
-    /// Center point of the ellipse.
-    #[serde(
-        rename(serialize = "hp:center", deserialize = "center"),
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub center: Option<HxPoint>,
-    /// Axis 1 endpoint (semi-major axis direction).
-    #[serde(
-        rename(serialize = "hp:ax1", deserialize = "ax1"),
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub ax1: Option<HxPoint>,
-    /// Axis 2 endpoint (semi-minor axis direction).
-    #[serde(
-        rename(serialize = "hp:ax2", deserialize = "ax2"),
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub ax2: Option<HxPoint>,
 }
 
 /// `<hp:polygon>` — polygon drawing object (3+ vertices).
 ///
 /// Flat struct with common attrs duplicated from AbstractShapeObjectType.
+///
+/// Element order matches 한글's expected serialization:
+/// offset → orgSz → curSz → flip → rotationInfo → renderingInfo →
+/// lineShape → fillBrush → shadow →
+/// sz → pos → outMargin → caption → drawText → pt[]
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxPolygon {
     // ── AbstractShapeObjectType attrs ──
@@ -1167,7 +2010,72 @@ pub struct HxPolygon {
     #[serde(rename = "@instid", default)]
     pub instid: String,
 
-    // ── Common children (ORDER MATTERS!) ──
+    // ── Shape-common children (ORDER MATTERS!) ──
+    /// Position offset (required by 한글).
+    #[serde(
+        rename(serialize = "hp:offset", deserialize = "offset"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub offset: Option<HxOffset>,
+    /// Original size before scaling (required by 한글).
+    #[serde(
+        rename(serialize = "hp:orgSz", deserialize = "orgSz"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub org_sz: Option<HxSizeAttr>,
+    /// Current display size (required by 한글, usually 0×0).
+    #[serde(
+        rename(serialize = "hp:curSz", deserialize = "curSz"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub cur_sz: Option<HxSizeAttr>,
+    /// Flip state (required by 한글).
+    #[serde(
+        rename(serialize = "hp:flip", deserialize = "flip"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub flip: Option<HxFlip>,
+    /// Rotation information (required by 한글).
+    #[serde(
+        rename(serialize = "hp:rotationInfo", deserialize = "rotationInfo"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub rotation_info: Option<HxRotationInfo>,
+    /// Rendering transformation matrices (required by 한글).
+    #[serde(
+        rename(serialize = "hp:renderingInfo", deserialize = "renderingInfo"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub rendering_info: Option<HxRenderingInfo>,
+    /// Stroke style (required by 한글).
+    #[serde(
+        rename(serialize = "hp:lineShape", deserialize = "lineShape"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub line_shape: Option<HxLineShape>,
+    /// Fill brush (hc: namespace, required by 한글).
+    #[serde(
+        rename(serialize = "hc:fillBrush", deserialize = "fillBrush"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub fill_brush: Option<HxFillBrush>,
+    /// Drop shadow (required by 한글).
+    #[serde(
+        rename(serialize = "hp:shadow", deserialize = "shadow"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub shadow: Option<HxShadow>,
+
+    // ── Size / position / margin (MUST come before hp:-namespaced geometry) ──
     /// Size specification.
     #[serde(
         rename(serialize = "hp:sz", deserialize = "sz"),
@@ -1198,7 +2106,6 @@ pub struct HxPolygon {
     )]
     pub caption: Option<HxCaption>,
 
-    // ── drawText (textbox content, optional) ──
     /// Optional textbox content inside the polygon.
     #[serde(
         rename(serialize = "hp:drawText", deserialize = "drawText"),
@@ -1207,7 +2114,7 @@ pub struct HxPolygon {
     )]
     pub draw_text: Option<HxDrawText>,
 
-    // ── Polygon-specific children ──
+    // ── Polygon-specific children (geometry AFTER sz/pos/outMargin) ──
     /// Ordered list of polygon vertices.
     #[serde(
         rename(serialize = "hp:pt", deserialize = "pt"),

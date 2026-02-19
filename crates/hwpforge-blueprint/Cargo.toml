@@ -1,28 +1,28 @@
 [package]
 name = "hwpforge-blueprint"
-description = "YAML-based style template system for HwpForge (Figma Design Token pattern)"
 version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
 authors.workspace = true
-repository.workspace = true
-homepage.workspace = true
-documentation.workspace = true
-readme.workspace = true
-keywords.workspace = true
 categories.workspace = true
+documentation.workspace = true
+edition.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+license.workspace = true
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "YAML-based style template system for HwpForge (Figma Design Token pattern)"
 
 [dependencies]
-hwpforge-foundation = { path = "../hwpforge-foundation" }
 hwpforge-core = { path = "../hwpforge-core" }
-serde = { workspace = true }
-serde_yaml = { workspace = true }
-serde_json = { workspace = true }
-thiserror = { workspace = true }
-schemars = { workspace = true }
+hwpforge-foundation = { path = "../hwpforge-foundation" }
 indexmap = { workspace = true }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
 
 [dev-dependencies]
-proptest = { workspace = true }
 pretty_assertions = { workspace = true }
+proptest = { workspace = true }

@@ -1,24 +1,24 @@
 [package]
 name = "hwpforge-core"
 version.workspace = true
-edition.workspace = true
-rust-version.workspace = true
-license.workspace = true
 authors.workspace = true
-repository.workspace = true
-homepage.workspace = true
-documentation.workspace = true
-description = "Format-independent Document Object Model for HwpForge"
-keywords.workspace = true
 categories.workspace = true
+documentation.workspace = true
+edition.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Format-independent Document Object Model for HwpForge"
 
 [dependencies]
 hwpforge-foundation = { path = "../hwpforge-foundation" }
-serde = { workspace = true }
 schemars = { workspace = true }
+serde = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-serde_json = { workspace = true }
-proptest = { workspace = true }
 pretty_assertions = { workspace = true }
+proptest = { workspace = true }
+serde_json = { workspace = true }
