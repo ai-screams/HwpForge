@@ -73,6 +73,7 @@ fn build_store() -> HwpxStyleStore {
 
 // ── Main ─────────────────────────────────────────────────────────
 
+#[allow(clippy::vec_init_then_push)]
 fn main() {
     println!("=== Line Style Showcase ===\n");
     std::fs::create_dir_all("temp").unwrap();

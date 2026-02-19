@@ -27,6 +27,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::caption::Caption;
+use crate::chart::{ChartData, ChartGrouping, ChartType, LegendPosition};
 use crate::paragraph::Paragraph;
 
 /// A 2D point in raw HWPUNIT coordinates for shape geometry.
@@ -243,6 +244,27 @@ pub enum Control {
         font: String,
     },
 
+    /// An OOXML chart embedded in the document.
+    /// Maps to HWPX `<hp:switch><hp:case><hp:chart>` with separate Chart XML file.
+    ///
+    /// Charts have NO shape common block (like Equation): only sz + pos + outMargin.
+    Chart {
+        /// Chart type (18 variants covering all OOXML chart types).
+        chart_type: ChartType,
+        /// Chart data (category-based or XY-based).
+        data: ChartData,
+        /// Chart width (HWPUNIT, default ~32250 ≈ 114mm).
+        width: HwpUnit,
+        /// Chart height (HWPUNIT, default ~18750 ≈ 66mm).
+        height: HwpUnit,
+        /// Optional chart title.
+        title: Option<String>,
+        /// Legend position.
+        legend: LegendPosition,
+        /// Series grouping mode.
+        grouping: ChartGrouping,
+    },
+
     /// An unrecognized control element preserved for round-trip fidelity.
     ///
     /// `tag` holds the element's tag name or type identifier.
@@ -296,9 +318,40 @@ impl Control {
         matches!(self, Self::Equation { .. })
     }
 
+    /// Returns `true` if this is a [`Control::Chart`].
+    pub fn is_chart(&self) -> bool {
+        matches!(self, Self::Chart { .. })
+    }
+
     /// Returns `true` if this is a [`Control::Unknown`].
     pub fn is_unknown(&self) -> bool {
         matches!(self, Self::Unknown { .. })
+    }
+
+    /// Creates a chart control with default dimensions and settings.
+    ///
+    /// Defaults: width ≈ 114mm, height ≈ 66mm, no title, right legend, clustered grouping.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::Control;
+    /// use hwpforge_core::chart::{ChartType, ChartData};
+    ///
+    /// let data = ChartData::category(&["A", "B"], &[("S1", &[10.0, 20.0])]);
+    /// let ctrl = Control::chart(ChartType::Column, data);
+    /// assert!(ctrl.is_chart());
+    /// ```
+    pub fn chart(chart_type: ChartType, data: ChartData) -> Self {
+        Self::Chart {
+            chart_type,
+            data,
+            width: HwpUnit::new(32250).expect("32250 is valid"),
+            height: HwpUnit::new(18750).expect("18750 is valid"),
+            title: None,
+            legend: LegendPosition::default(),
+            grouping: ChartGrouping::default(),
+        }
     }
 }
 
@@ -327,6 +380,13 @@ impl std::fmt::Display for Control {
             }
             Self::Polygon { vertices, paragraphs, .. } => {
                 write!(f, "Polygon({} vertices, {} paragraphs)", vertices.len(), paragraphs.len())
+            }
+            Self::Chart { chart_type, data, .. } => {
+                let series_count = match data {
+                    ChartData::Category { series, .. } => series.len(),
+                    ChartData::Xy { series } => series.len(),
+                };
+                write!(f, "Chart({chart_type:?}, {series_count} series)")
             }
             Self::Equation { script, .. } => {
                 let preview: String = if script.len() > 30 {

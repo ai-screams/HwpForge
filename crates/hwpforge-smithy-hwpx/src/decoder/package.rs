@@ -117,6 +117,26 @@ impl PackageReader {
         self.section_count
     }
 
+    /// Reads all `Chart/*.xml` entries from the archive into a map.
+    ///
+    /// Each entry's full path (e.g. `"Chart/chart1.xml"`) becomes the key,
+    /// and the XML string becomes the value.
+    pub fn read_chart_xmls(&mut self) -> HwpxResult<std::collections::HashMap<String, String>> {
+        let chart_paths: Vec<String> = self
+            .archive
+            .file_names()
+            .filter(|name| name.starts_with("Chart/") && name.ends_with(".xml"))
+            .map(|s| s.to_string())
+            .collect();
+
+        let mut map = std::collections::HashMap::new();
+        for path in chart_paths {
+            let xml = self.read_entry(&path)?;
+            map.insert(path, xml);
+        }
+        Ok(map)
+    }
+
     /// Reads all `BinData/*` entries from the archive into an [`ImageStore`].
     ///
     /// Each entry's filename (without the `BinData/` prefix) becomes the

@@ -8,6 +8,7 @@
 //! The public entry point is [`HwpxEncoder`], which orchestrates
 //! the full pipeline: header → sections → ZIP packaging.
 
+pub(crate) mod chart;
 pub(crate) mod header;
 pub(crate) mod package;
 pub(crate) mod section;
@@ -82,19 +83,23 @@ impl HwpxEncoder {
         // Step 1: Encode header
         let header_xml = encode_header(style_store, sec_cnt)?;
 
-        // Step 2: Encode sections
-        let section_xmls: Vec<String> = sections
+        // Step 2: Encode sections (each produces XML + chart entries)
+        let section_results: Vec<section::SectionEncodeResult> = sections
             .iter()
             .enumerate()
             .map(|(i, section)| encode_section(section, i))
             .collect::<HwpxResult<Vec<_>>>()?;
 
+        let section_xmls: Vec<String> = section_results.iter().map(|r| r.xml.clone()).collect();
+        let charts: Vec<(String, String)> =
+            section_results.into_iter().flat_map(|r| r.charts).collect();
+
         // Step 3: Collect image binaries
         let images: Vec<(String, Vec<u8>)> =
             image_store.iter().map(|(key, data)| (key.to_string(), data.to_vec())).collect();
 
-        // Step 4: Package into ZIP with images
-        PackageWriter::write_hwpx(&header_xml, &section_xmls, &images)
+        // Step 4: Package into ZIP with images and charts
+        PackageWriter::write_hwpx(&header_xml, &section_xmls, &images, &charts)
     }
 
     /// Encodes a validated document and writes it to a file.

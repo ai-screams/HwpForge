@@ -202,6 +202,17 @@ pub enum ValidationError {
         shape_type: &'static str,
     },
 
+    /// A Chart control has no data series.
+    #[error("Chart has empty data (section {section_index}, paragraph {paragraph_index}, run {run_index})")]
+    EmptyChartData {
+        /// Zero-based section index.
+        section_index: usize,
+        /// Zero-based paragraph index.
+        paragraph_index: usize,
+        /// Zero-based run index.
+        run_index: usize,
+    },
+
     /// An Equation control has an empty script.
     #[error("Equation has empty script (section {section_index}, paragraph {paragraph_index}, run {run_index})")]
     EmptyEquation {
@@ -273,6 +284,8 @@ pub enum CoreErrorCode {
     InvalidShapeDimension = 2011,
     /// Empty Equation (empty script).
     EmptyEquation = 2012,
+    /// Empty Chart data (no series).
+    EmptyChartData = 2013,
     /// Invalid document structure.
     InvalidStructure = 2100,
 }
@@ -299,6 +312,7 @@ impl ValidationError {
             Self::EmptyEndnote { .. } => CoreErrorCode::EmptyEndnote,
             Self::InvalidPolygon { .. } => CoreErrorCode::InvalidPolygon,
             Self::InvalidShapeDimension { .. } => CoreErrorCode::InvalidShapeDimension,
+            Self::EmptyChartData { .. } => CoreErrorCode::EmptyChartData,
             Self::EmptyEquation { .. } => CoreErrorCode::EmptyEquation,
         }
     }

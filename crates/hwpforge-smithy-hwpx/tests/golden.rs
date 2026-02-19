@@ -350,6 +350,140 @@ fn roundtrip_equations() {
     );
 }
 
+// ── charts.hwpx ────────────────────────────────────────────────
+
+#[test]
+fn decode_charts() {
+    let path = fixture_path("charts.hwpx");
+    let result = HwpxDecoder::decode_file(&path).unwrap();
+
+    assert!(!result.document.sections().is_empty());
+
+    // Count chart controls
+    let chart_count = result
+        .document
+        .sections()
+        .iter()
+        .flat_map(|s| &s.paragraphs)
+        .flat_map(|p| &p.runs)
+        .filter_map(|r| r.content.as_control())
+        .filter(|ctrl| ctrl.is_chart())
+        .count();
+    assert!(chart_count >= 1, "charts.hwpx should contain at least 1 chart, found {chart_count}");
+}
+
+#[test]
+fn roundtrip_charts() {
+    let bytes = std::fs::read(fixture_path("charts.hwpx")).unwrap();
+    let original = HwpxDecoder::decode(&bytes).unwrap();
+
+    // Count original charts
+    let orig_chart_count = original
+        .document
+        .sections()
+        .iter()
+        .flat_map(|s| &s.paragraphs)
+        .flat_map(|p| &p.runs)
+        .filter_map(|r| r.content.as_control())
+        .filter(|ctrl| ctrl.is_chart())
+        .count();
+
+    // Encode → decode
+    let validated = original.document.clone().validate().unwrap();
+    let images = hwpforge_core::image::ImageStore::new();
+    let encoded = HwpxEncoder::encode(&validated, &original.style_store, &images).unwrap();
+    let roundtripped = HwpxDecoder::decode(&encoded).unwrap();
+
+    // Count roundtripped charts
+    let rt_chart_count = roundtripped
+        .document
+        .sections()
+        .iter()
+        .flat_map(|s| &s.paragraphs)
+        .flat_map(|p| &p.runs)
+        .filter_map(|r| r.content.as_control())
+        .filter(|ctrl| ctrl.is_chart())
+        .count();
+
+    assert_eq!(
+        orig_chart_count, rt_chart_count,
+        "chart count mismatch after roundtrip: original={orig_chart_count}, roundtripped={rt_chart_count}"
+    );
+}
+
+// ── chart from-scratch encoder→decoder roundtrip ────────────────
+
+#[test]
+fn encode_decode_chart_from_scratch() {
+    use hwpforge_core::chart::{ChartData, ChartType};
+    use hwpforge_core::control::Control;
+    use hwpforge_core::document::Document;
+    use hwpforge_core::image::ImageStore;
+    use hwpforge_core::paragraph::Paragraph;
+    use hwpforge_core::run::Run;
+    use hwpforge_core::section::Section;
+    use hwpforge_core::PageSettings;
+    use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+    use hwpforge_smithy_hwpx::style_store::{
+        HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore,
+    };
+
+    // Minimal style store
+    let mut store = HwpxStyleStore::new();
+    for &lang in &["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
+        store.push_font(HwpxFont::new(0, "함초롬돋움", lang));
+    }
+    store.push_char_shape(HwpxCharShape::default());
+    store.push_para_shape(HwpxParaShape::default());
+
+    // Build document with a chart
+    let chart_ctrl = Control::chart(
+        ChartType::Column,
+        ChartData::category(&["Q1", "Q2", "Q3"], &[("Revenue", &[100.0, 200.0, 150.0])]),
+    );
+    let para = Paragraph::with_runs(
+        vec![Run::control(chart_ctrl, CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(vec![para], PageSettings::a4()));
+
+    // Encode → decode
+    let images = ImageStore::new();
+    let validated = doc.validate().unwrap();
+    let encoded = HwpxEncoder::encode(&validated, &store, &images).unwrap();
+    let decoded = HwpxDecoder::decode(&encoded).unwrap();
+
+    assert!(!decoded.document.sections().is_empty());
+
+    // Must contain a chart control with correct data
+    let chart_ctrl = decoded
+        .document
+        .sections()
+        .iter()
+        .flat_map(|s| &s.paragraphs)
+        .flat_map(|p| &p.runs)
+        .filter_map(|r| r.content.as_control())
+        .find(|ctrl| ctrl.is_chart())
+        .expect("encoded chart document should round-trip a chart");
+
+    if let Control::Chart { chart_type, data, .. } = chart_ctrl {
+        assert_eq!(*chart_type, ChartType::Column, "chart_type");
+        match data {
+            ChartData::Category { categories, series } => {
+                assert_eq!(categories, &["Q1", "Q2", "Q3"]);
+                assert_eq!(series.len(), 1);
+                assert_eq!(series[0].name, "Revenue");
+                assert_eq!(series[0].values, vec![100.0, 200.0, 150.0]);
+            }
+            _ => panic!("expected Category data"),
+        }
+    } else {
+        panic!("expected Control::Chart");
+    }
+}
+
 // ── line shape from-scratch encoder→decoder roundtrip ────────────
 
 #[test]

@@ -25,19 +25,29 @@ use hwpforge_core::PageSettings;
 use crate::encoder::package::XMLNS_DECLS;
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    HxCaption, HxCellAddr, HxCellSpan, HxCellSz, HxCtrl, HxDrawText, HxEllipse, HxEquation,
-    HxFillBrush, HxFlip, HxFootNote, HxImg, HxImgClip, HxImgDim, HxImgRect, HxLine, HxLineSeg,
-    HxLineSegArray, HxLineShape, HxMatrix, HxOffset, HxPageMargin, HxPagePr, HxParagraph, HxPic,
-    HxPoint, HxPolygon, HxRect, HxRenderingInfo, HxRotationInfo, HxRun, HxScript, HxSecPr,
-    HxSection, HxShadow, HxShapeComment, HxSizeAttr, HxSubList, HxTable, HxTableCell,
-    HxTableMargin, HxTablePos, HxTableRow, HxTableSz, HxText,
+    HxCaption, HxCellAddr, HxCellSpan, HxCellSz, HxChart, HxCtrl, HxDrawText, HxEllipse,
+    HxEquation, HxFillBrush, HxFlip, HxFootNote, HxImg, HxImgClip, HxImgDim, HxImgRect, HxLine,
+    HxLineSeg, HxLineSegArray, HxLineShape, HxMatrix, HxOffset, HxPageMargin, HxPagePr,
+    HxParagraph, HxPic, HxPoint, HxPolygon, HxRect, HxRenderingInfo, HxRotationInfo, HxRun,
+    HxRunCase, HxRunSwitch, HxScript, HxSecPr, HxSection, HxShadow, HxShapeComment, HxSizeAttr,
+    HxSubList, HxTable, HxTableCell, HxTableMargin, HxTablePos, HxTableRow, HxTableSz, HxText,
 };
+
+use super::chart::generate_chart_xml;
 
 /// Maximum nesting depth for tables-within-tables.
 ///
 /// Mirrors the decoder's limit. Prevents stack overflow from deeply nested
 /// table structures (e.g. a table cell containing another table, ad infinitum).
 const MAX_NESTING_DEPTH: usize = 32;
+
+/// Result of encoding a section, including chart entries for ZIP packaging.
+pub(crate) struct SectionEncodeResult {
+    /// The section XML string.
+    pub xml: String,
+    /// Chart entries: (ZIP path, OOXML chart XML content).
+    pub charts: Vec<(String, String)>,
+}
 
 /// Encodes a Core [`Section`] into a complete HWPX section XML string.
 ///
@@ -52,8 +62,12 @@ const MAX_NESTING_DEPTH: usize = 32;
 ///
 /// Returns [`HwpxError::XmlSerialize`] if quick-xml serialization fails,
 /// or [`HwpxError::InvalidStructure`] if table nesting exceeds the limit.
-pub(crate) fn encode_section(section: &Section, _section_index: usize) -> HwpxResult<String> {
-    let hx_section = build_section(section)?;
+pub(crate) fn encode_section(
+    section: &Section,
+    _section_index: usize,
+) -> HwpxResult<SectionEncodeResult> {
+    let mut chart_entries: Vec<(String, String)> = Vec::new();
+    let hx_section = build_section(section, &mut chart_entries)?;
     let inner_xml = quick_xml::se::to_string(&hx_section)
         .map_err(|e| HwpxError::XmlSerialize { detail: e.to_string() })?;
 
@@ -69,7 +83,7 @@ pub(crate) fn encode_section(section: &Section, _section_index: usize) -> HwpxRe
     // Inject header/footer/page number controls after colPr
     inject_header_footer_pagenum(&mut enriched, section);
 
-    Ok(wrap_section_xml(&enriched))
+    Ok(SectionEncodeResult { xml: wrap_section_xml(&enriched), charts: chart_entries })
 }
 
 /// Wraps inner XML content in an `<hs:sec>` element with all xmlns declarations.
@@ -100,7 +114,10 @@ fn strip_root_element(xml: &str) -> &str {
 }
 
 /// Builds an `HxSection` from a Core `Section`.
-fn build_section(section: &Section) -> HwpxResult<HxSection> {
+fn build_section(
+    section: &Section,
+    chart_entries: &mut Vec<(String, String)>,
+) -> HwpxResult<HxSection> {
     let paragraphs = section
         .paragraphs
         .iter()
@@ -108,7 +125,7 @@ fn build_section(section: &Section) -> HwpxResult<HxSection> {
         .map(|(idx, para)| {
             let inject_sec_pr = idx == 0;
             let page_settings = if inject_sec_pr { Some(&section.page_settings) } else { None };
-            build_paragraph(para, inject_sec_pr, page_settings, idx, 0)
+            build_paragraph(para, inject_sec_pr, page_settings, idx, 0, chart_entries)
         })
         .collect::<HwpxResult<Vec<_>>>()?;
 
@@ -126,8 +143,9 @@ fn build_paragraph(
     page_settings: Option<&PageSettings>,
     para_idx: usize,
     depth: usize,
+    chart_entries: &mut Vec<(String, String)>,
 ) -> HwpxResult<HxParagraph> {
-    let runs = build_runs(&para.runs, inject_sec_pr, page_settings, depth)?;
+    let runs = build_runs(&para.runs, inject_sec_pr, page_settings, depth, chart_entries)?;
 
     // Build a placeholder linesegarray with approximate values.
     // 한글 will recalculate this on open, but having a placeholder
@@ -162,6 +180,7 @@ fn build_runs(
     inject_sec_pr: bool,
     page_settings: Option<&PageSettings>,
     depth: usize,
+    chart_entries: &mut Vec<(String, String)>,
 ) -> HwpxResult<Vec<HxRun>> {
     let mut result = Vec::new();
     let mut sec_pr_injected = false;
@@ -185,6 +204,7 @@ fn build_runs(
         let mut ellipses = Vec::new();
         let mut polygons = Vec::new();
         let mut equations = Vec::new();
+        let mut switches: Vec<HxRunSwitch> = Vec::new();
 
         match &run.content {
             RunContent::Text(s) => {
@@ -218,6 +238,13 @@ fn build_runs(
                     Control::Equation { .. } => {
                         equations.push(encode_equation_to_hx(ctrl)?);
                     }
+                    Control::Chart { .. } => {
+                        let chart_idx = chart_entries.len() + 1;
+                        let chart_ref = format!("Chart/chart{chart_idx}.xml");
+                        let chart_xml = generate_chart_xml(ctrl)?;
+                        chart_entries.push((chart_ref.clone(), chart_xml));
+                        switches.push(encode_chart_switch(ctrl, &chart_ref));
+                    }
                     Control::Hyperlink { .. } | Control::Unknown { .. } => {
                         // Skip for Phase 4.5 (not implemented yet)
                         continue;
@@ -247,6 +274,7 @@ fn build_runs(
             ellipses,
             polygons,
             equations,
+            switches,
         });
     }
 
@@ -268,6 +296,7 @@ fn build_runs(
                     ellipses: Vec::new(),
                     polygons: Vec::new(),
                     equations: Vec::new(),
+                    switches: Vec::new(),
                 },
             );
         }
@@ -301,10 +330,13 @@ fn encode_control_to_ctrl(ctrl: &Control, depth: usize) -> HwpxResult<Option<HxC
 
 /// Encodes a `Vec<Paragraph>` into `HxSubList` with standard defaults.
 fn encode_paragraphs_to_sublist(paragraphs: &[Paragraph], depth: usize) -> HwpxResult<HxSubList> {
+    let mut sub_chart_entries = Vec::new();
     let hx_paragraphs = paragraphs
         .iter()
         .enumerate()
-        .map(|(idx, para)| build_paragraph(para, false, None, idx, depth + 1))
+        .map(|(idx, para)| {
+            build_paragraph(para, false, None, idx, depth + 1, &mut sub_chart_entries)
+        })
         .collect::<HwpxResult<Vec<_>>>()?;
 
     Ok(HxSubList {
@@ -781,6 +813,54 @@ fn encode_equation_to_hx(ctrl: &Control) -> HwpxResult<HxEquation> {
     })
 }
 
+/// Encodes a Core `Control::Chart` into an `HxRunSwitch` wrapping `HxChart`.
+///
+/// Charts use `<hp:switch><hp:case><hp:chart>` structure in section XML,
+/// referencing a separate OOXML chart XML file in the ZIP archive.
+fn encode_chart_switch(ctrl: &Control, chart_ref: &str) -> HxRunSwitch {
+    let (width, height) = match ctrl {
+        Control::Chart { width, height, .. } => (*width, *height),
+        _ => unreachable!("encode_chart_switch called with non-Chart"),
+    };
+
+    HxRunSwitch {
+        case: Some(HxRunCase {
+            required_namespace: "http://www.hancom.co.kr/hwpml/2016/ooxmlchart".to_string(),
+            chart: Some(HxChart {
+                id: generate_instid(),
+                z_order: 0,
+                numbering_type: "PICTURE".to_string(),
+                text_wrap: "SQUARE".to_string(),
+                text_flow: "BOTH_SIDES".to_string(),
+                lock: 0,
+                dropcap_style: "None".to_string(),
+                chart_id_ref: chart_ref.to_string(),
+                sz: Some(HxTableSz {
+                    width: width.as_i32(),
+                    width_rel_to: "ABSOLUTE".to_string(),
+                    height: height.as_i32(),
+                    height_rel_to: "ABSOLUTE".to_string(),
+                    protect: 0,
+                }),
+                pos: Some(HxTablePos {
+                    treat_as_char: 0,
+                    affect_l_spacing: 0,
+                    flow_with_text: 1,
+                    allow_overlap: 0,
+                    hold_anchor_and_so: 0,
+                    vert_rel_to: "PARA".to_string(),
+                    horz_rel_to: "COLUMN".to_string(),
+                    vert_align: "TOP".to_string(),
+                    horz_align: "LEFT".to_string(),
+                    vert_offset: 0,
+                    horz_offset: 0,
+                }),
+                out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+            }),
+        }),
+    }
+}
+
 /// Converts a Core `Caption` into an `HxCaption`.
 ///
 /// `parent_width` is used for `lastWidth` (= parent object sz.width in HWPUNIT).
@@ -949,7 +1029,10 @@ fn build_table_cell(
         .paragraphs
         .iter()
         .enumerate()
-        .map(|(idx, para)| build_paragraph(para, false, None, idx, depth + 1))
+        .map(|(idx, para)| {
+            let mut sub_chart_entries = Vec::new();
+            build_paragraph(para, false, None, idx, depth + 1, &mut sub_chart_entries)
+        })
         .collect::<HwpxResult<Vec<_>>>()?;
 
     Ok(HxTableCell {
@@ -1429,7 +1512,7 @@ mod tests {
     #[test]
     fn encode_single_text_paragraph() {
         let section = simple_section("텍스트");
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
         assert!(xml.contains("<?xml version="), "missing XML declaration");
         assert!(xml.contains("<hs:sec"), "missing <hs:sec> root");
@@ -1458,10 +1541,12 @@ mod tests {
     #[test]
     fn encode_section_roundtrip() {
         let section = simple_section("안녕하세요 round-trip test");
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
         // Parse back with the decoder
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
         assert_eq!(result.paragraphs.len(), 1);
         assert_eq!(
             result.paragraphs[0].runs[0].content.as_text(),
@@ -1485,7 +1570,7 @@ mod tests {
             footer_margin: HwpUnit::new(4252).unwrap(),
         };
         let section = Section::with_paragraphs(vec![text_paragraph("Content", 0, 0)], ps);
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
         assert!(xml.contains("<hp:secPr"), "missing secPr");
         assert!(xml.contains(r#"textDirection="HORIZONTAL""#), "missing textDirection");
@@ -1494,7 +1579,9 @@ mod tests {
         assert!(xml.contains(r#"left="8504""#), "missing left margin");
 
         // Roundtrip the page settings through the decoder
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
         let decoded_ps = result.page_settings.unwrap();
         assert_eq!(decoded_ps.width.as_i32(), 59528);
         assert_eq!(decoded_ps.height.as_i32(), 84188);
@@ -1524,7 +1611,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
         assert!(xml.contains(r#"rowCnt="1""#), "missing rowCnt");
         assert!(xml.contains(r#"colCnt="2""#), "missing colCnt");
@@ -1549,7 +1636,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
         assert!(
             xml.contains(r#"binaryItemIDRef="logo""#),
@@ -1571,7 +1658,7 @@ mod tests {
             ],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
         assert!(xml.contains("<hp:t>First</hp:t>"), "missing First");
         assert!(xml.contains("<hp:t>Second</hp:t>"), "missing Second");
@@ -1613,7 +1700,7 @@ mod tests {
         );
 
         // Should succeed within nesting limit
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
         assert!(xml.contains("<hp:t>Deep</hp:t>"), "missing nested text");
     }
 
@@ -1636,7 +1723,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
         assert!(xml.contains("<hp:t>before</hp:t>"), "missing 'before' text");
         assert!(xml.contains("<hp:t>after</hp:t>"), "missing 'after' text");
@@ -1655,7 +1742,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
         // Should parse without error
         assert!(xml.contains("<hs:sec"), "missing root element");
@@ -1668,10 +1755,12 @@ mod tests {
     fn korean_text_preservation() {
         let korean = "우리는 수학을 공부한다.";
         let section = simple_section(korean);
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
         // Roundtrip through decoder
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
         assert_eq!(result.paragraphs[0].runs[0].content.as_text(), Some(korean),);
     }
 
@@ -1680,7 +1769,7 @@ mod tests {
     #[test]
     fn empty_section_produces_valid_xml() {
         let section = Section::new(PageSettings::a4());
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
         assert!(xml.contains("<hs:sec"), "missing root element");
         assert!(xml.contains("</hs:sec>"), "missing close tag");
@@ -1737,8 +1826,10 @@ mod tests {
             vec![text_paragraph("p0", 3, 5), text_paragraph("p1", 7, 2)],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap();
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
 
         assert_eq!(result.paragraphs[0].para_shape_id.get(), 3);
         assert_eq!(result.paragraphs[0].runs[0].char_shape_id.get(), 5);
@@ -1758,8 +1849,10 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap();
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
 
         let decoded_table = result.paragraphs[0].runs[0].content.as_table().unwrap();
         assert_eq!(decoded_table.rows.len(), 1);
@@ -1786,8 +1879,10 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap();
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
 
         let decoded_img = result.paragraphs[0].runs[0].content.as_image().unwrap();
         // binaryItemIDRef is "photo" (extension stripped by encoder),
@@ -1810,11 +1905,13 @@ mod tests {
             ApplyPageType::Both,
         ));
 
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
         assert!(xml.contains("<hp:header"), "XML should contain header element");
         assert!(xml.contains("Header Content"), "XML should contain header text");
 
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
         let header = result.header.expect("decoded section should have header");
         assert_eq!(header.apply_page_type, ApplyPageType::Both);
         assert_eq!(header.paragraphs.len(), 1);
@@ -1832,10 +1929,12 @@ mod tests {
             ApplyPageType::Even,
         ));
 
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
         assert!(xml.contains("<hp:footer"), "XML should contain footer element");
 
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
         let footer = result.footer.expect("decoded section should have footer");
         assert_eq!(footer.apply_page_type, ApplyPageType::Even);
         assert_eq!(footer.paragraphs.len(), 1);
@@ -1854,14 +1953,16 @@ mod tests {
             "- ".to_string(),
         ));
 
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
         assert!(xml.contains("<hp:pageNum"), "XML should contain pageNum element");
         assert!(xml.contains(r#"pos="BOTTOM_CENTER""#), "XML should contain pos attribute");
         assert!(xml.contains(r#"formatType="DIGIT""#), "XML should contain formatType");
         assert!(xml.contains("sideChar=\"- \""), "XML should contain side char");
 
         // Full roundtrip: encoder outputs <hp:pageNum> which decoder parses back
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
         let pn = result.page_number.expect("decoded section should have page number");
         assert_eq!(pn.position, PageNumberPosition::BottomCenter);
         assert_eq!(pn.number_format, NumberFormatType::Digit);
@@ -1879,9 +1980,11 @@ mod tests {
         section.footer =
             Some(HeaderFooter::new(vec![text_paragraph("My Footer", 0, 0)], ApplyPageType::Odd));
 
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
         let header = result.header.expect("should have header");
         let footer = result.footer.expect("should have footer");
 
@@ -1911,7 +2014,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
         assert!(xml.contains("<hp:ctrl>"), "missing ctrl wrapper");
         assert!(xml.contains("<hp:footNote"), "missing footNote element");
@@ -1934,7 +2037,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
         assert!(xml.contains("<hp:endNote"), "missing endNote element");
         assert!(xml.contains("<hp:t>End note</hp:t>"), "missing endnote text");
@@ -1963,7 +2066,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
 
         assert!(xml.contains("<hp:rect"), "missing rect element");
         assert!(xml.contains("<hp:drawText"), "missing drawText element");
@@ -1992,8 +2095,10 @@ mod tests {
             PageSettings::a4(),
         );
 
-        let xml = encode_section(&section, 0).unwrap();
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
 
         // Find the footnote run in decoded output
         let all_runs = &result.paragraphs[0].runs;
@@ -2031,8 +2136,10 @@ mod tests {
             PageSettings::a4(),
         );
 
-        let xml = encode_section(&section, 0).unwrap();
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
 
         let ctrl_run = result.paragraphs[0]
             .runs
@@ -2075,8 +2182,10 @@ mod tests {
             PageSettings::a4(),
         );
 
-        let xml = encode_section(&section, 0).unwrap();
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
 
         let ctrl_run = result.paragraphs[0]
             .runs
@@ -2112,10 +2221,12 @@ mod tests {
             ApplyPageType::Both,
         ));
 
-        let xml = encode_section(&section, 0).unwrap();
+        let xml = encode_section(&section, 0).unwrap().xml;
         assert!(xml.contains("A &amp; B &lt; C &gt; D"), "special chars must be escaped");
 
-        let result = crate::decoder::section::parse_section(&xml, 0).unwrap();
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
         let header = result.header.expect("should have header");
         assert_eq!(header.paragraphs[0].runs[0].content.as_text(), Some("A & B < C > D"),);
     }

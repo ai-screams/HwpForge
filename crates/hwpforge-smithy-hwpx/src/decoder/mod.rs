@@ -5,6 +5,7 @@
 //! - `header` — `header.xml` parsing → [`HwpxStyleStore`]
 //! - `section` — `section*.xml` parsing → paragraphs + page settings
 
+pub(crate) mod chart;
 pub(crate) mod header;
 pub(crate) mod package;
 pub(crate) mod section;
@@ -68,13 +69,16 @@ impl HwpxDecoder {
         let header_xml = pkg.read_header_xml()?;
         let style_store = header::parse_header(&header_xml)?;
 
-        // Step 3: Parse sections
+        // Step 3: Extract chart XMLs from ZIP
+        let chart_xmls = pkg.read_chart_xmls()?;
+
+        // Step 4: Parse sections
         let mut document = Document::<Draft>::new();
         let section_count = pkg.section_count();
 
         for i in 0..section_count {
             let section_xml = pkg.read_section_xml(i)?;
-            let result = section::parse_section(&section_xml, i)?;
+            let result = section::parse_section(&section_xml, i, &chart_xmls)?;
 
             let page_settings = result.page_settings.unwrap_or_else(PageSettings::a4);
 
@@ -90,7 +94,7 @@ impl HwpxDecoder {
             document.add_section(section);
         }
 
-        // Step 4: Extract binary image data from BinData/
+        // Step 5: Extract binary image data from BinData/
         let image_store = pkg.read_all_bindata()?;
 
         Ok(HwpxDocument { document, style_store, image_store })

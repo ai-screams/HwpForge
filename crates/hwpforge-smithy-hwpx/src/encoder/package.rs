@@ -60,7 +60,11 @@ const SETTINGS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="y
 /// Matches the structure produced by 한글: full namespace declarations,
 /// metadata section, header + sections + settings + images in manifest,
 /// and header + sections in spine (images are NOT in spine).
-fn generate_content_hpf(section_count: usize, image_paths: &[String]) -> String {
+fn generate_content_hpf(
+    section_count: usize,
+    image_paths: &[String],
+    chart_paths: &[String],
+) -> String {
     let mut manifest_items = String::from(
         r#"<opf:item id="header" href="Contents/header.xml" media-type="application/xml"/>"#,
     );
@@ -98,6 +102,10 @@ fn generate_content_hpf(section_count: usize, image_paths: &[String]) -> String 
         )
         .expect("write to String is infallible");
     }
+
+    // NOTE: Chart XML files are NOT listed in the manifest.
+    // 한글 expects Chart/*.xml in the ZIP only, not in content.hpf.
+    let _ = chart_paths;
 
     format!(
         concat!(
@@ -162,6 +170,7 @@ impl PackageWriter {
         header_xml: &str,
         section_xmls: &[String],
         images: &[(String, Vec<u8>)],
+        charts: &[(String, String)],
     ) -> HwpxResult<Vec<u8>> {
         let buf: Vec<u8> = Vec::new();
         let cursor = Cursor::new(buf);
@@ -194,7 +203,8 @@ impl PackageWriter {
         zip.start_file("Contents/content.hpf", deflate_opts)
             .map_err(|e| HwpxError::Zip(e.to_string()))?;
         let image_paths: Vec<String> = images.iter().map(|(path, _)| path.clone()).collect();
-        let content_hpf = generate_content_hpf(section_xmls.len(), &image_paths);
+        let chart_paths: Vec<String> = charts.iter().map(|(path, _)| path.clone()).collect();
+        let content_hpf = generate_content_hpf(section_xmls.len(), &image_paths, &chart_paths);
         zip.write_all(content_hpf.as_bytes()).map_err(|e| HwpxError::Zip(e.to_string()))?;
 
         // 6. settings.xml
@@ -220,6 +230,13 @@ impl PackageWriter {
             zip.write_all(data).map_err(|e| HwpxError::Zip(e.to_string()))?;
         }
 
+        // 10. Chart/*.xml — OOXML chart files (deflated)
+        for (path, xml) in charts {
+            zip.start_file(path.as_str(), deflate_opts)
+                .map_err(|e| HwpxError::Zip(e.to_string()))?;
+            zip.write_all(xml.as_bytes()).map_err(|e| HwpxError::Zip(e.to_string()))?;
+        }
+
         let cursor = zip.finish().map_err(|e| HwpxError::Zip(e.to_string()))?;
         Ok(cursor.into_inner())
     }
@@ -240,7 +257,7 @@ mod tests {
 
     /// Helper: write a minimal HWPX and return the raw bytes.
     fn write_minimal(sections: &[String]) -> Vec<u8> {
-        PackageWriter::write_hwpx(MINIMAL_HEADER, sections, &[]).unwrap()
+        PackageWriter::write_hwpx(MINIMAL_HEADER, sections, &[], &[]).unwrap()
     }
 
     /// Helper: open a ZipArchive from raw bytes.
@@ -306,13 +323,13 @@ mod tests {
     #[test]
     fn content_hpf_lists_all_sections() {
         // Single section
-        let hpf1 = generate_content_hpf(1, &[]);
+        let hpf1 = generate_content_hpf(1, &[], &[]);
         assert!(hpf1.contains(r#"id="section0""#));
         assert!(hpf1.contains(r#"idref="section0""#));
         assert!(!hpf1.contains(r#"id="section1""#));
 
         // Three sections
-        let hpf3 = generate_content_hpf(3, &[]);
+        let hpf3 = generate_content_hpf(3, &[], &[]);
         for i in 0..3 {
             assert!(hpf3.contains(&format!(r#"id="section{i}""#)), "manifest missing section{i}");
             assert!(hpf3.contains(&format!(r#"idref="section{i}""#)), "spine missing section{i}");
@@ -325,7 +342,7 @@ mod tests {
     #[test]
     fn content_hpf_includes_images() {
         let images = vec!["photo.jpg".to_string(), "logo.png".to_string()];
-        let hpf = generate_content_hpf(1, &images);
+        let hpf = generate_content_hpf(1, &images, &[]);
         // id must match binaryItemIDRef (filename stem, no extension)
         assert!(hpf.contains(r#"id="photo""#), "missing photo manifest entry");
         assert!(hpf.contains(r#"href="BinData/photo.jpg""#), "missing image href");
@@ -342,7 +359,7 @@ mod tests {
 
     #[test]
     fn write_empty_header_succeeds() {
-        let result = PackageWriter::write_hwpx("", &[MINIMAL_SECTION.to_string()], &[]);
+        let result = PackageWriter::write_hwpx("", &[MINIMAL_SECTION.to_string()], &[], &[]);
         assert!(result.is_ok());
         let bytes = result.unwrap();
         let archive = open_zip(&bytes);
@@ -354,7 +371,7 @@ mod tests {
     #[test]
     fn multi_section_creates_multiple_entries() {
         let sections: Vec<String> = (0..3).map(|i| format!(r#"<sec>section{i}</sec>"#)).collect();
-        let bytes = PackageWriter::write_hwpx(MINIMAL_HEADER, &sections, &[]).unwrap();
+        let bytes = PackageWriter::write_hwpx(MINIMAL_HEADER, &sections, &[], &[]).unwrap();
         let mut archive = open_zip(&bytes);
 
         for i in 0..3 {
@@ -389,7 +406,7 @@ mod tests {
 
     #[test]
     fn write_zero_sections_succeeds() {
-        let result = PackageWriter::write_hwpx(MINIMAL_HEADER, &[], &[]);
+        let result = PackageWriter::write_hwpx(MINIMAL_HEADER, &[], &[], &[]);
         assert!(result.is_ok());
         let bytes = result.unwrap();
         let archive = open_zip(&bytes);
@@ -403,7 +420,7 @@ mod tests {
     #[test]
     fn large_section_count() {
         let sections: Vec<String> = (0..100).map(|i| format!(r#"<sec>s{i}</sec>"#)).collect();
-        let bytes = PackageWriter::write_hwpx(MINIMAL_HEADER, &sections, &[]).unwrap();
+        let bytes = PackageWriter::write_hwpx(MINIMAL_HEADER, &sections, &[], &[]).unwrap();
         let archive = open_zip(&bytes);
 
         let section_entries = archive
@@ -446,7 +463,7 @@ mod tests {
         let image_data = vec![0xFFu8, 0xD8, 0xFF, 0xE0]; // fake JPEG header
         let images = vec![("photo.jpg".to_string(), image_data.clone())];
         let bytes =
-            PackageWriter::write_hwpx(MINIMAL_HEADER, &[MINIMAL_SECTION.to_string()], &images)
+            PackageWriter::write_hwpx(MINIMAL_HEADER, &[MINIMAL_SECTION.to_string()], &images, &[])
                 .unwrap();
 
         let mut archive = open_zip(&bytes);

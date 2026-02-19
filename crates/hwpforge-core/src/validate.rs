@@ -173,6 +173,25 @@ fn validate_run_content(
                     });
                 }
             }
+            Control::Chart { data, width, height, .. } => {
+                // Chart must have non-empty data
+                if data.is_empty() {
+                    return Err(ValidationError::EmptyChartData {
+                        section_index: si,
+                        paragraph_index: pi,
+                        run_index: ri,
+                    });
+                }
+                // Chart must have non-zero dimensions
+                if width.as_i32() == 0 || height.as_i32() == 0 {
+                    return Err(ValidationError::InvalidShapeDimension {
+                        section_index: si,
+                        paragraph_index: pi,
+                        run_index: ri,
+                        shape_type: "Chart",
+                    });
+                }
+            }
             Control::Equation { script, width, height, .. } => {
                 // Equation must have non-empty script
                 if script.is_empty() {

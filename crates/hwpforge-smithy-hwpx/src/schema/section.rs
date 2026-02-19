@@ -150,6 +150,14 @@ pub struct HxRun {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub equations: Vec<HxEquation>,
+
+    /// All `<hp:switch>` elements in this run (chart feature-gate wrappers).
+    #[serde(
+        rename(serialize = "hp:switch", deserialize = "switch"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub switches: Vec<HxRunSwitch>,
 }
 
 // ── Text ──────────────────────────────────────────────────────────
@@ -1229,6 +1237,94 @@ pub struct HxScript {
     /// The HancomEQN script text.
     #[serde(rename = "$text", default)]
     pub text: String,
+}
+
+// ── Chart (switch/case wrapper) ──────────────────────────────────
+
+/// `<hp:switch>` — chart feature-gate wrapper within a run.
+///
+/// Charts use `<hp:switch><hp:case required-namespace="..."><hp:chart .../></hp:case></hp:switch>`.
+/// The `<hp:default>` child (OLE fallback) is silently skipped.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxRunSwitch {
+    /// `<hp:case>` — conditional content (contains chart).
+    #[serde(
+        rename(serialize = "hp:case", deserialize = "case"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub case: Option<HxRunCase>,
+}
+
+/// `<hp:case>` — conditional content block requiring a namespace.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxRunCase {
+    /// Required namespace URI for this case to activate.
+    #[serde(rename = "@hp:required-namespace", default)]
+    pub required_namespace: String,
+
+    /// Optional chart element.
+    #[serde(
+        rename(serialize = "hp:chart", deserialize = "chart"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub chart: Option<HxChart>,
+}
+
+/// `<hp:chart>` — chart reference element (section-level). NO shape common block.
+///
+/// Only has sz + pos + outMargin (like Equation but with chartIDRef).
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxChart {
+    // ── Attributes ──
+    /// Element ID.
+    #[serde(rename = "@id", default)]
+    pub id: String,
+    /// Z-order for overlapping objects.
+    #[serde(rename = "@zOrder", default)]
+    pub z_order: u32,
+    /// Numbering type (typically "PICTURE" for charts).
+    #[serde(rename = "@numberingType", default)]
+    pub numbering_type: String,
+    /// Text wrapping mode.
+    #[serde(rename = "@textWrap", default)]
+    pub text_wrap: String,
+    /// Text flow mode.
+    #[serde(rename = "@textFlow", default)]
+    pub text_flow: String,
+    /// Lock flag (0 = unlocked).
+    #[serde(rename = "@lock", default)]
+    pub lock: u32,
+    /// Drop cap style (typically "None" for charts).
+    #[serde(rename = "@dropcapstyle", default)]
+    pub dropcap_style: String,
+    /// Reference to the chart XML file within the ZIP (e.g. "Chart/chart1.xml").
+    #[serde(rename = "@chartIDRef", default)]
+    pub chart_id_ref: String,
+
+    // ── Children (ORDER MATTERS) ──
+    /// Size specification.
+    #[serde(
+        rename(serialize = "hp:sz", deserialize = "sz"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sz: Option<HxTableSz>,
+    /// Position specification.
+    #[serde(
+        rename(serialize = "hp:pos", deserialize = "pos"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pos: Option<HxTablePos>,
+    /// Outer margin.
+    #[serde(
+        rename(serialize = "hp:outMargin", deserialize = "outMargin"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub out_margin: Option<HxTableMargin>,
 }
 
 /// `<hp:imgRect>` — image bounding rectangle (4 corner points, uses `hc:` namespace).
