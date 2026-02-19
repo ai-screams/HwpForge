@@ -1,8 +1,12 @@
 # =============================================================================
-# HwpForge Security — Dependency Review & Advisory Scanning
+# HwpForge Security — Dependency Policy & Advisory Scanning
 # =============================================================================
-# PR: Reviews new/changed dependencies for vulnerabilities and license issues
+# PR/merge_group: cargo-deny checks licenses, advisories, and bans
 # Schedule: Weekly scan of existing dependencies for new advisories
+#
+# NOTE: actions/dependency-review-action requires GitHub Advanced Security
+#       (GHAS), which is unavailable on private repos without enterprise.
+#       cargo-deny provides equivalent coverage (advisories + licenses).
 # =============================================================================
 
 name: Security
@@ -24,15 +28,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  dependency-review:
-    name: Dependency Review (PR)
+  dependency-policy:
+    name: Dependency Policy (PR)
     if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
-      - name: Review dependency changes
-        uses: actions/dependency-review-action@v4
+      - name: Install Rust toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: Check licenses, advisories, and bans
+        run: cargo deny --all-features check
 
   advisory-scan:
     name: Advisory Scan (Weekly)
