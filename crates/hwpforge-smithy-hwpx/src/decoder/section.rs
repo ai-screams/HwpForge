@@ -19,9 +19,9 @@ use quick_xml::de::from_str;
 
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    HxCaption, HxCtrl, HxEllipse, HxFillBrush, HxFootNote, HxHeaderFooter, HxLine, HxLineShape,
-    HxPageNum, HxParagraph, HxPic, HxPolygon, HxRect, HxRun, HxSection, HxSubList, HxTable,
-    HxTableCell,
+    HxCaption, HxCtrl, HxEllipse, HxEquation, HxFillBrush, HxFootNote, HxHeaderFooter, HxLine,
+    HxLineShape, HxPageNum, HxParagraph, HxPic, HxPolygon, HxRect, HxRun, HxSection, HxSubList,
+    HxTable, HxTableCell,
 };
 
 /// Maximum nesting depth for tables-within-tables.
@@ -207,6 +207,11 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
     // Polygon runs (from <hp:polygon>)
     for polygon in &hx.polygons {
         runs.push(decode_polygon(polygon, char_shape_id, depth)?);
+    }
+
+    // Equation runs (from <hp:equation>)
+    for equation in &hx.equations {
+        runs.push(decode_equation(equation, char_shape_id)?);
     }
 
     Ok(runs)
@@ -532,6 +537,37 @@ fn decode_polygon(
             paragraphs,
             caption,
             style: decode_shape_style(&polygon.line_shape, &polygon.fill_brush),
+        })),
+        char_shape_id,
+    })
+}
+
+/// Decodes an `HxEquation` into a Core `Run` with `Control::Equation`.
+///
+/// Equations have no shape common block and no recursive sub-content,
+/// so no `depth` parameter is needed.
+fn decode_equation(eq: &HxEquation, char_shape_id: CharShapeIndex) -> HwpxResult<Run> {
+    let script = eq.script.as_ref().map(|s| s.text.clone()).unwrap_or_default();
+
+    let (width, height) = eq
+        .sz
+        .as_ref()
+        .map(|sz| {
+            (
+                HwpUnit::new(sz.width).unwrap_or(HwpUnit::ZERO),
+                HwpUnit::new(sz.height).unwrap_or(HwpUnit::ZERO),
+            )
+        })
+        .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
+
+    Ok(Run {
+        content: RunContent::Control(Box::new(Control::Equation {
+            script,
+            width,
+            height,
+            base_line: eq.base_line,
+            text_color: eq.text_color.clone(),
+            font: eq.font.clone(),
         })),
         char_shape_id,
     })

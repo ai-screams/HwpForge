@@ -25,12 +25,12 @@ use hwpforge_core::PageSettings;
 use crate::encoder::package::XMLNS_DECLS;
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    HxCaption, HxCellAddr, HxCellSpan, HxCellSz, HxCtrl, HxDrawText, HxEllipse, HxFillBrush,
-    HxFlip, HxFootNote, HxImg, HxImgClip, HxImgDim, HxImgRect, HxLine, HxLineSeg, HxLineSegArray,
-    HxLineShape, HxMatrix, HxOffset, HxPageMargin, HxPagePr, HxParagraph, HxPic, HxPoint,
-    HxPolygon, HxRect, HxRenderingInfo, HxRotationInfo, HxRun, HxSecPr, HxSection, HxShadow,
-    HxSizeAttr, HxSubList, HxTable, HxTableCell, HxTableMargin, HxTablePos, HxTableRow, HxTableSz,
-    HxText,
+    HxCaption, HxCellAddr, HxCellSpan, HxCellSz, HxCtrl, HxDrawText, HxEllipse, HxEquation,
+    HxFillBrush, HxFlip, HxFootNote, HxImg, HxImgClip, HxImgDim, HxImgRect, HxLine, HxLineSeg,
+    HxLineSegArray, HxLineShape, HxMatrix, HxOffset, HxPageMargin, HxPagePr, HxParagraph, HxPic,
+    HxPoint, HxPolygon, HxRect, HxRenderingInfo, HxRotationInfo, HxRun, HxScript, HxSecPr,
+    HxSection, HxShadow, HxShapeComment, HxSizeAttr, HxSubList, HxTable, HxTableCell,
+    HxTableMargin, HxTablePos, HxTableRow, HxTableSz, HxText,
 };
 
 /// Maximum nesting depth for tables-within-tables.
@@ -184,6 +184,7 @@ fn build_runs(
         let mut lines = Vec::new();
         let mut ellipses = Vec::new();
         let mut polygons = Vec::new();
+        let mut equations = Vec::new();
 
         match &run.content {
             RunContent::Text(s) => {
@@ -214,6 +215,9 @@ fn build_runs(
                     Control::Polygon { .. } => {
                         polygons.push(encode_polygon_to_hx(ctrl, depth)?);
                     }
+                    Control::Equation { .. } => {
+                        equations.push(encode_equation_to_hx(ctrl)?);
+                    }
                     Control::Hyperlink { .. } | Control::Unknown { .. } => {
                         // Skip for Phase 4.5 (not implemented yet)
                         continue;
@@ -242,6 +246,7 @@ fn build_runs(
             lines,
             ellipses,
             polygons,
+            equations,
         });
     }
 
@@ -262,6 +267,7 @@ fn build_runs(
                     lines: Vec::new(),
                     ellipses: Vec::new(),
                     polygons: Vec::new(),
+                    equations: Vec::new(),
                 },
             );
         }
@@ -713,6 +719,65 @@ fn encode_polygon_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxPolygon> {
         caption: caption.as_ref().map(|c| build_hx_caption(c, w, depth)).transpose()?,
         draw_text,
         points,
+    })
+}
+
+/// Encodes a Core `Control::Equation` into `HxEquation`.
+///
+/// Equations have NO shape common block (no offset, orgSz, curSz, flip,
+/// rotation, lineShape, fillBrush, shadow). Only sz + pos + outMargin + script.
+/// Does not take `depth` because equations have no recursive sub-content.
+fn encode_equation_to_hx(ctrl: &Control) -> HwpxResult<HxEquation> {
+    let (script, width, height, base_line, text_color, font) = match ctrl {
+        Control::Equation { script, width, height, base_line, text_color, font } => {
+            (script, *width, *height, *base_line, text_color, font)
+        }
+        _ => unreachable!("encode_equation_to_hx called with non-Equation"),
+    };
+
+    let w = width.as_i32();
+    let h = height.as_i32();
+
+    Ok(HxEquation {
+        id: generate_instid(),
+        z_order: 0,
+        numbering_type: "EQUATION".to_string(),
+        text_wrap: "TOP_AND_BOTTOM".to_string(),
+        text_flow: "BOTH_SIDES".to_string(),
+        lock: 0,
+        dropcap_style: "None".to_string(),
+
+        // Equation-specific attrs (hardcoded constants per ground truth)
+        version: "Equation Version 60".to_string(),
+        base_line,
+        text_color: text_color.clone(),
+        base_unit: 1000,
+        line_mode: "CHAR".to_string(),
+        font: font.clone(),
+
+        sz: Some(HxTableSz {
+            width: w,
+            width_rel_to: "ABSOLUTE".to_string(),
+            height: h,
+            height_rel_to: "ABSOLUTE".to_string(),
+            protect: 0,
+        }),
+        pos: Some(HxTablePos {
+            treat_as_char: 1,
+            affect_l_spacing: 0,
+            flow_with_text: 1, // equations always flowWithText=1
+            allow_overlap: 0,
+            hold_anchor_and_so: 0,
+            vert_rel_to: "PARA".to_string(),
+            horz_rel_to: "PARA".to_string(),
+            vert_align: "TOP".to_string(),
+            horz_align: "LEFT".to_string(),
+            vert_offset: 0,
+            horz_offset: 0,
+        }),
+        out_margin: Some(HxTableMargin { left: 56, right: 56, top: 0, bottom: 0 }),
+        shape_comment: Some(HxShapeComment { text: "수식입니다.".to_string() }),
+        script: Some(HxScript { text: script.clone() }),
     })
 }
 

@@ -223,6 +223,26 @@ pub enum Control {
         style: Option<ShapeStyle>,
     },
 
+    /// An inline equation (수식) using HancomEQN script format.
+    /// Maps to HWPX `<hp:equation>` with `<hp:script>` child.
+    ///
+    /// Equations have NO shape common block (no offset, orgSz, curSz, flip,
+    /// rotation, lineShape, fillBrush, shadow). Only sz + pos + outMargin + script.
+    Equation {
+        /// HancomEQN script text (e.g. `"{a+b} over {c+d}"`).
+        script: String,
+        /// Bounding box width (HWPUNIT).
+        width: HwpUnit,
+        /// Bounding box height (HWPUNIT).
+        height: HwpUnit,
+        /// Baseline position (51-90 typical range).
+        base_line: u32,
+        /// Text color as `#RRGGBB`.
+        text_color: String,
+        /// Font name (typically `"HancomEQN"`).
+        font: String,
+    },
+
     /// An unrecognized control element preserved for round-trip fidelity.
     ///
     /// `tag` holds the element's tag name or type identifier.
@@ -271,6 +291,11 @@ impl Control {
         matches!(self, Self::Polygon { .. })
     }
 
+    /// Returns `true` if this is a [`Control::Equation`].
+    pub fn is_equation(&self) -> bool {
+        matches!(self, Self::Equation { .. })
+    }
+
     /// Returns `true` if this is a [`Control::Unknown`].
     pub fn is_unknown(&self) -> bool {
         matches!(self, Self::Unknown { .. })
@@ -302,6 +327,14 @@ impl std::fmt::Display for Control {
             }
             Self::Polygon { vertices, paragraphs, .. } => {
                 write!(f, "Polygon({} vertices, {} paragraphs)", vertices.len(), paragraphs.len())
+            }
+            Self::Equation { script, .. } => {
+                let preview: String = if script.len() > 30 {
+                    script.chars().take(30).collect()
+                } else {
+                    script.clone()
+                };
+                write!(f, "Equation(\"{preview}\")")
             }
             Self::Unknown { tag, .. } => {
                 write!(f, "Unknown({tag})")

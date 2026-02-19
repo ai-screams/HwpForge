@@ -142,6 +142,14 @@ pub struct HxRun {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub polygons: Vec<HxPolygon>,
+
+    /// All `<hp:equation>` elements in this run (inline equations).
+    #[serde(
+        rename(serialize = "hp:equation", deserialize = "equation"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub equations: Vec<HxEquation>,
 }
 
 // ── Text ──────────────────────────────────────────────────────────
@@ -1115,6 +1123,110 @@ impl HxShadow {
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxShapeComment {
     /// The comment text content.
+    #[serde(rename = "$text", default)]
+    pub text: String,
+}
+
+// ── Equation ─────────────────────────────────────────────────────
+
+/// `<hp:equation>` — inline equation (수식) with HancomEQN script.
+///
+/// Unlike other drawing objects, equations have NO shape common block
+/// (no offset, orgSz, curSz, flip, rotation, lineShape, fillBrush, shadow).
+/// Only sz + pos + outMargin + shapeComment + script.
+///
+/// Element order matches 한글's expected serialization:
+/// attrs → sz → pos → outMargin → shapeComment → script
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxEquation {
+    // ── AbstractShapeObjectType attrs ──
+    /// Element ID.
+    #[serde(rename = "@id", default)]
+    pub id: String,
+    /// Z-order for overlapping objects.
+    #[serde(rename = "@zOrder", default)]
+    pub z_order: u32,
+    /// Numbering type: NONE, EQUATION, etc.
+    #[serde(rename = "@numberingType", default)]
+    pub numbering_type: String,
+    /// Text wrapping mode.
+    #[serde(rename = "@textWrap", default)]
+    pub text_wrap: String,
+    /// Text flow mode.
+    #[serde(rename = "@textFlow", default)]
+    pub text_flow: String,
+    /// Lock flag (0 = unlocked).
+    #[serde(rename = "@lock", default)]
+    pub lock: u32,
+    /// Drop cap style.
+    #[serde(rename = "@dropcapstyle", default)]
+    pub dropcap_style: String,
+
+    // ── Equation-specific attrs ──
+    /// Equation version string (e.g. "Equation Version 60").
+    #[serde(rename = "@version", default)]
+    pub version: String,
+    /// Baseline position (51-90 typical range).
+    #[serde(rename = "@baseLine", default)]
+    pub base_line: u32,
+    /// Text color as `#RRGGBB`.
+    #[serde(rename = "@textColor", default)]
+    pub text_color: String,
+    /// Base unit for equation rendering (typically 1000).
+    #[serde(rename = "@baseUnit", default)]
+    pub base_unit: u32,
+    /// Line mode: CHAR (inline).
+    #[serde(rename = "@lineMode", default)]
+    pub line_mode: String,
+    /// Font name (typically "HancomEQN").
+    #[serde(rename = "@font", default)]
+    pub font: String,
+
+    // ── Children (ORDER MATTERS) ──
+    /// Size specification (width, height).
+    #[serde(
+        rename(serialize = "hp:sz", deserialize = "sz"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sz: Option<HxTableSz>,
+    /// Position specification.
+    #[serde(
+        rename(serialize = "hp:pos", deserialize = "pos"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pos: Option<HxTablePos>,
+    /// Outer margin.
+    #[serde(
+        rename(serialize = "hp:outMargin", deserialize = "outMargin"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub out_margin: Option<HxTableMargin>,
+    /// Shape comment (typically "수식입니다.").
+    #[serde(
+        rename(serialize = "hp:shapeComment", deserialize = "shapeComment"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub shape_comment: Option<HxShapeComment>,
+    /// Equation script content (HancomEQN format).
+    #[serde(
+        rename(serialize = "hp:script", deserialize = "script"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub script: Option<HxScript>,
+}
+
+/// `<hp:script>` — equation script text content.
+///
+/// Uses `$text` to capture the raw text content. Serde handles XML entity
+/// escaping automatically (`&` → `&amp;`, `<` → `&lt;`).
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxScript {
+    /// The HancomEQN script text.
     #[serde(rename = "$text", default)]
     pub text: String,
 }

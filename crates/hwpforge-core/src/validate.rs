@@ -173,6 +173,25 @@ fn validate_run_content(
                     });
                 }
             }
+            Control::Equation { script, width, height, .. } => {
+                // Equation must have non-empty script
+                if script.is_empty() {
+                    return Err(ValidationError::EmptyEquation {
+                        section_index: si,
+                        paragraph_index: pi,
+                        run_index: ri,
+                    });
+                }
+                // Equation must have non-zero dimensions
+                if width.as_i32() == 0 || height.as_i32() == 0 {
+                    return Err(ValidationError::InvalidShapeDimension {
+                        section_index: si,
+                        paragraph_index: pi,
+                        run_index: ri,
+                        shape_type: "Equation",
+                    });
+                }
+            }
             Control::Hyperlink { .. } | Control::Unknown { .. } => {
                 // No structural validation needed for these variants
             }

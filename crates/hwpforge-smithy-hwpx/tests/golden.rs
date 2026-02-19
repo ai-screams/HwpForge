@@ -286,6 +286,70 @@ fn roundtrip_line() {
     assert_roundtrip("line.hwpx");
 }
 
+// ── equations.hwpx ──────────────────────────────────────────────
+
+#[test]
+fn decode_equations() {
+    let path = fixture_path("equations.hwpx");
+    let result = HwpxDecoder::decode_file(&path).unwrap();
+
+    assert!(!result.document.sections().is_empty());
+
+    // Count equation controls
+    let equation_count = result
+        .document
+        .sections()
+        .iter()
+        .flat_map(|s| &s.paragraphs)
+        .flat_map(|p| &p.runs)
+        .filter_map(|r| r.content.as_control())
+        .filter(|ctrl| ctrl.is_equation())
+        .count();
+    assert!(
+        equation_count >= 1,
+        "equations.hwpx should contain at least 1 equation, found {equation_count}"
+    );
+}
+
+#[test]
+fn roundtrip_equations() {
+    let bytes = std::fs::read(fixture_path("equations.hwpx")).unwrap();
+    let original = HwpxDecoder::decode(&bytes).unwrap();
+
+    // Count original equations
+    let orig_eq_count = original
+        .document
+        .sections()
+        .iter()
+        .flat_map(|s| &s.paragraphs)
+        .flat_map(|p| &p.runs)
+        .filter_map(|r| r.content.as_control())
+        .filter(|ctrl| ctrl.is_equation())
+        .count();
+
+    // Encode → decode
+    let validated = original.document.clone().validate().unwrap();
+    let images = hwpforge_core::image::ImageStore::new();
+    let encoded = HwpxEncoder::encode(&validated, &original.style_store, &images).unwrap();
+    let roundtripped = HwpxDecoder::decode(&encoded).unwrap();
+
+    // Count roundtripped equations
+    let rt_eq_count = roundtripped
+        .document
+        .sections()
+        .iter()
+        .flat_map(|s| &s.paragraphs)
+        .flat_map(|p| &p.runs)
+        .filter_map(|r| r.content.as_control())
+        .filter(|ctrl| ctrl.is_equation())
+        .count();
+
+    assert_eq!(
+        orig_eq_count, rt_eq_count,
+        "equation count mismatch after roundtrip: original={orig_eq_count}, roundtripped={rt_eq_count}"
+    );
+}
+
 // ── line shape from-scratch encoder→decoder roundtrip ────────────
 
 #[test]

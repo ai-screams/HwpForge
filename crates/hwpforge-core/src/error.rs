@@ -202,6 +202,17 @@ pub enum ValidationError {
         shape_type: &'static str,
     },
 
+    /// An Equation control has an empty script.
+    #[error("Equation has empty script (section {section_index}, paragraph {paragraph_index}, run {run_index})")]
+    EmptyEquation {
+        /// Zero-based section index.
+        section_index: usize,
+        /// Zero-based paragraph index.
+        paragraph_index: usize,
+        /// Zero-based run index.
+        run_index: usize,
+    },
+
     /// A table cell contains zero paragraphs.
     #[error("Table cell has no paragraphs (section {section_index}, paragraph {paragraph_index}, run {run_index}, row {row_index}, cell {cell_index})")]
     EmptyTableCell {
@@ -260,6 +271,8 @@ pub enum CoreErrorCode {
     InvalidPolygon = 2010,
     /// Invalid shape dimension (zero width or height).
     InvalidShapeDimension = 2011,
+    /// Empty Equation (empty script).
+    EmptyEquation = 2012,
     /// Invalid document structure.
     InvalidStructure = 2100,
 }
@@ -286,6 +299,7 @@ impl ValidationError {
             Self::EmptyEndnote { .. } => CoreErrorCode::EmptyEndnote,
             Self::InvalidPolygon { .. } => CoreErrorCode::InvalidPolygon,
             Self::InvalidShapeDimension { .. } => CoreErrorCode::InvalidShapeDimension,
+            Self::EmptyEquation { .. } => CoreErrorCode::EmptyEquation,
         }
     }
 }
