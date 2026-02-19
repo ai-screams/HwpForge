@@ -1,24 +1,52 @@
+# =============================================================================
+# HwpForge Security — Dependency Review & Advisory Scanning
+# =============================================================================
+# PR: Reviews new/changed dependencies for vulnerabilities and license issues
+# Schedule: Weekly scan of existing dependencies for new advisories
+# =============================================================================
+
 name: Security
 
 on:
   pull_request:
-    branches:
-      - main
+    branches: [main]
+  merge_group:
+    types: [checks_requested]
+  schedule:
+    - cron: "30 3 * * 1"  # Monday 03:30 UTC (30min after CI canary)
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: security-${{ github.workflow }}-${{ github.ref }}
+  group: security-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   dependency-review:
-    name: Dependency Review
+    name: Dependency Review (PR)
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
-      - name: Review dependency changes in PR
+      - name: Review dependency changes
         uses: actions/dependency-review-action@v4
+
+  advisory-scan:
+    name: Advisory Scan (Weekly)
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Rust toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+      - name: Scan for security advisories
+        run: cargo deny --all-features check advisories
