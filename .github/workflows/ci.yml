@@ -201,26 +201,29 @@ jobs:
   # ---------------------------------------------------------------------------
   # Tier 3 — Platform (needs test to pass)
   # ---------------------------------------------------------------------------
-
-  cross-platform:
-    name: "Platform › ${{ matrix.os }}"
-    needs: [test]
-    if: >-
-      always() && !failure() && !cancelled() &&
-      (github.event_name == 'pull_request' || github.event_name == 'merge_group' || inputs.run-full-suite)
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@v6
-      - name: Install Rust toolchain
-        run: rustup show
-      - uses: Swatinem/rust-cache@v2
-      - name: cargo check (all targets, all features)
-        run: cargo check --workspace --all-targets --all-features
+  # Disabled: Windows/macOS checks deferred until bindings phase (Phase 6).
+  # Linux is already covered by all Tier 1-2 jobs (ubuntu-latest).
+  # Re-enable when cross-platform binary distribution is needed.
+  #
+  # cross-platform:
+  #   name: "Platform › ${{ matrix.os }}"
+  #   needs: [test]
+  #   if: >-
+  #     always() && !failure() && !cancelled() &&
+  #     (github.event_name == 'pull_request' || github.event_name == 'merge_group' || inputs.run-full-suite)
+  #   runs-on: ${{ matrix.os }}
+  #   timeout-minutes: 25
+  #   strategy:
+  #     fail-fast: false
+  #     matrix:
+  #       os: [windows-latest, macos-latest]
+  #   steps:
+  #     - uses: actions/checkout@v6
+  #     - name: Install Rust toolchain
+  #       run: rustup show
+  #     - uses: Swatinem/rust-cache@v2
+  #     - name: cargo check (all targets, all features)
+  #       run: cargo check --workspace --all-targets --all-features
 
   # ---------------------------------------------------------------------------
   # Standalone — no gate dependency
