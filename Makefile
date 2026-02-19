@@ -1,4 +1,4 @@
-.PHONY: help install-tools check test clippy fmt doc cov clean
+.PHONY: help install-tools check test clippy fmt lint-md doc cov clean
 
 help:
 	@echo "HwpForge Development Commands"
@@ -11,6 +11,7 @@ help:
 	@echo "  make test             Run tests (cargo-nextest)"
 	@echo "  make clippy           Run clippy linter"
 	@echo "  make fmt              Format code (rustfmt)"
+	@echo "  make lint-md          Lint & format Markdown/TOML/JSON"
 	@echo "  make doc              Generate documentation"
 	@echo "  make cov              Code coverage (llvm-cov)"
 	@echo ""
@@ -27,8 +28,9 @@ install-tools:
 	cargo install bacon
 	cargo install cargo-deny
 	cargo install cargo-machete
-	@echo "Installing pre-commit..."
-	pip install pre-commit
+	@echo "Installing lint/format tools..."
+	brew install dprint pre-commit
+	npm install -g markdownlint-cli2
 	pre-commit install
 	@echo "Done!"
 
@@ -47,6 +49,14 @@ fmt:
 fmt-fix:
 	cargo fmt --all
 
+lint-md:
+	dprint check
+	npx markdownlint-cli2 "**/*.md"
+
+lint-md-fix:
+	dprint fmt
+	npx markdownlint-cli2 --fix "**/*.md"
+
 doc:
 	cargo doc --all-features --no-deps --open
 
@@ -56,7 +66,7 @@ cov:
 deny:
 	cargo deny check
 
-ci: fmt clippy test deny
+ci: fmt clippy test deny lint-md
 	@echo "✅ All CI checks passed!"
 
 clean:

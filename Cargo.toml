@@ -1,28 +1,28 @@
 [workspace]
 members = [
-    "crates/hwpforge-foundation",
-    "crates/hwpforge-core",
-    "crates/hwpforge-blueprint",
-    "crates/hwpforge-smithy-hwpx",
-    "crates/hwpforge-smithy-hwp5",
-    "crates/hwpforge-smithy-md",
-    "crates/hwpforge-bindings-py",
-    "crates/hwpforge-bindings-cli",
+  "crates/hwpforge-bindings-cli",
+  "crates/hwpforge-bindings-py",
+  "crates/hwpforge-blueprint",
+  "crates/hwpforge-core",
+  "crates/hwpforge-foundation",
+  "crates/hwpforge-smithy-hwp5",
+  "crates/hwpforge-smithy-hwpx",
+  "crates/hwpforge-smithy-md",
 ]
 resolver = "2"
 
 [workspace.package]
 version = "0.1.0"
-edition = "2021"
-rust-version = "1.75"
-license = "MIT OR Apache-2.0"
 authors = ["AiScream Team <team@aiscream.dev>"]
-repository = "https://github.com/aiscream/hwpforge"
-homepage = "https://github.com/aiscream/hwpforge"
-documentation = "https://docs.rs/hwpforge"
-readme = "README.md"
-keywords = ["hwp", "hwpx", "owpml", "document", "korean"]
 categories = ["parser-implementations", "encoding", "text-processing"]
+documentation = "https://docs.rs/hwpforge"
+edition = "2021"
+homepage = "https://github.com/aiscream/hwpforge"
+keywords = ["hwp", "hwpx", "owpml", "document", "korean"]
+license = "MIT OR Apache-2.0"
+readme = "README.md"
+repository = "https://github.com/aiscream/hwpforge"
+rust-version = "1.75"
 
 [workspace.dependencies]
 # === XML Processing ===
@@ -37,17 +37,17 @@ serde_yaml = "0.9"
 zip = { version = "2.1", default-features = false, features = ["deflate"] }
 
 # === HWP5 Binary ===
-cfb = "0.11"
-flate2 = "1.0"
 byteorder = "1.5"
+cfb = "0.11"
 encoding_rs = "0.8"
+flate2 = "1.0"
 
 # === Markdown ===
 pulldown-cmark = "0.12"
 
 # === Error Handling ===
-thiserror = "2.0"
 anyhow = "1.0"
+thiserror = "2.0"
 
 # === JSON Schema (for MCP) ===
 schemars = { version = "0.8", features = ["preserve_order", "indexmap2"] }
@@ -70,14 +70,14 @@ once_cell = "1.19"
 
 # === Type System Enhancement ===
 derive_more = { version = "1.0", features = ["full"] }
-string_cache = "0.8"
 smallvec = { version = "1.13", features = ["serde", "union"] }
+string_cache = "0.8"
 strum = { version = "0.26", features = ["derive"] }
 
 # === Testing (dev-dependencies) ===
-proptest = "1.5"
-pretty_assertions = "1.4"
 criterion = { version = "0.5", features = ["html_reports"] }
+pretty_assertions = "1.4"
+proptest = "1.5"
 
 [profile.release]
 opt-level = 3

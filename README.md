@@ -85,6 +85,7 @@ HwpForge/
 ## Development Philosophy
 
 **Forge Metaphor**:
+
 - Foundation = Raw materials
 - Core = Anvil (pure structure)
 - Blueprint = Design patterns (reusable styles)
