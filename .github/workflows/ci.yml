@@ -1,25 +1,47 @@
+# =============================================================================
+# HwpForge CI — Fan-out Gate Architecture
+# =============================================================================
+#
+# Tier 1 (Gate)        lint-format ──┐
+#   fast, blocks all   lint-clippy ──┤
+#                                    │
+# Tier 2 (Verify)      test ◄───────┤  (all events)
+#   needs gate pass     coverage ◄───┤  (PR / merge_group)
+#                       deny ◄───────┤  (PR / merge_group)
+#                       lint-docs ◄──┤  (PR / merge_group)
+#                       msrv ◄───────┘  (PR / merge_group)
+#
+# Tier 3 (Platform)    cross-platform ◄── test  (PR / merge_group)
+#
+# Standalone            workflow-compat    (PR / merge_group)
+#                       toolchain-canary   (schedule)
+#                       merge-smoke        (push → main)
+# =============================================================================
+
 name: CI
 
 on:
+  workflow_call:
+    inputs:
+      run-full-suite:
+        type: boolean
+        default: false
+        description: "Run all verification jobs (coverage, deny, msrv, lint-docs, cross-platform)"
   push:
-    branches:
-      - "**"
-    tags-ignore:
-      - "v*.*.*"
+    branches: ["**"]
   pull_request:
-    branches:
-      - main
-    types:
-      - opened
-      - reopened
-      - synchronize
-      - ready_for_review
+    branches: [main]
+    types: [opened, reopened, synchronize, ready_for_review]
   merge_group:
-    types:
-      - checks_requested
+    types: [checks_requested]
   schedule:
     - cron: "0 3 * * 1"
   workflow_dispatch:
+    inputs:
+      run-full-suite:
+        type: boolean
+        default: false
+        description: "Run all verification jobs (coverage, deny, msrv, lint-docs, cross-platform)"
 
 env:
   CARGO_TERM_COLOR: always
@@ -30,100 +52,88 @@ permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# =============================================================================
 jobs:
-  workflow-compat:
-    name: Workflow Compatibility
-    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v6
-      - name: Lint GitHub workflow files
-        uses: docker://rhysd/actionlint:latest
-        with:
-          args: -color
-      - name: Verify core action major baselines
-        run: |
-          set -euo pipefail
-          if grep -R -nE 'actions/checkout@v([0-5])\b|actions/setup-node@v([0-5])\b|actions/download-artifact@v([0-4])\b' .github/workflows/*.yml; then
-            echo "Outdated core action major version detected."
-            exit 1
-          fi
 
-  fmt:
-    name: Rust Format
-    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+  # ---------------------------------------------------------------------------
+  # Tier 1 — Gate (fast lint checks, block everything downstream)
+  # ---------------------------------------------------------------------------
+
+  lint-format:
+    name: "Gate › Format"
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
-      - name: Install Rust toolchain from rust-toolchain.toml
+      - name: Install Rust toolchain
         run: rustup show
-      - name: Check formatting
+      # No rust-cache — fmt needs zero compilation
+      - name: cargo fmt --check
         run: cargo fmt --all -- --check
 
-  clippy:
-    name: Rust Clippy
-    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+  lint-clippy:
+    name: "Gate › Clippy"
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
-      - name: Install Rust toolchain from rust-toolchain.toml
+      - name: Install Rust toolchain
         run: rustup show
       - uses: Swatinem/rust-cache@v2
-      - name: Run clippy
+      - name: cargo clippy (deny warnings)
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-  lint-docs:
-    name: Docs Lint
-    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: "20"
-      - name: Install markdown tooling
-        run: npm install -g dprint markdownlint-cli2
-      - name: Run dprint check
-        run: dprint check
-      - name: Run markdownlint
-        run: markdownlint-cli2 "**/*.md"
+  # ---------------------------------------------------------------------------
+  # Tier 2 — Verify (needs gate to pass)
+  # ---------------------------------------------------------------------------
 
   test:
-    name: Commit Preflight
-    if: github.event_name == 'push' && github.ref != 'refs/heads/main'
+    name: "Verify › Test"
+    needs: [lint-format, lint-clippy]
+    # Run on EVERY non-schedule event; tolerate skipped gates (schedule path)
+    if: always() && !failure() && !cancelled()
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
-      - name: Install Rust toolchain from rust-toolchain.toml
+      - name: Install Rust toolchain
         run: rustup show
       - uses: Swatinem/rust-cache@v2
-      - name: Run fast compile preflight
-        run: cargo check --workspace --all-features
+      - name: Install nextest
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-nextest
+      - name: cargo nextest run (all features, ci profile)
+        run: cargo nextest run --workspace --all-features --profile ci
 
   coverage:
-    name: Coverage (>= 90%)
-    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    name: "Verify › Coverage (≥ 90%)"
+    needs: [lint-format, lint-clippy]
+    if: >-
+      always() && !failure() && !cancelled() &&
+      (github.event_name == 'pull_request' || github.event_name == 'merge_group' || inputs.run-full-suite)
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v6
-      - name: Install Rust toolchain from rust-toolchain.toml
+      - name: Install Rust toolchain
         run: rustup show
       - uses: Swatinem/rust-cache@v2
       - name: Install coverage tools
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest,cargo-llvm-cov
-      - name: Run coverage gate
-        run: cargo llvm-cov nextest --workspace --all-features --fail-under-lines ${{ env.COVERAGE_THRESHOLD }} --lcov --output-path coverage.lcov
+      - name: cargo llvm-cov (fail-under-lines ${{ env.COVERAGE_THRESHOLD }}%)
+        run: >-
+          cargo llvm-cov nextest
+          --workspace --all-features
+          --fail-under-lines ${{ env.COVERAGE_THRESHOLD }}
+          --lcov --output-path coverage.lcov
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
         with:
@@ -132,89 +142,144 @@ jobs:
           retention-days: 14
 
   deny:
-    name: Dependency Policy (cargo-deny)
-    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    name: "Verify › Dependency Policy"
+    needs: [lint-format, lint-clippy]
+    if: >-
+      always() && !failure() && !cancelled() &&
+      (github.event_name == 'pull_request' || github.event_name == 'merge_group' || inputs.run-full-suite)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
-      - name: Install Rust toolchain from rust-toolchain.toml
+      - name: Install Rust toolchain
         run: rustup show
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-deny
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-deny
-      - name: Run cargo-deny
+      - name: cargo deny check
         run: cargo deny --all-features check
 
+  lint-docs:
+    name: "Verify › Docs Lint"
+    needs: [lint-format, lint-clippy]
+    if: >-
+      always() && !failure() && !cancelled() &&
+      (github.event_name == 'pull_request' || github.event_name == 'merge_group' || inputs.run-full-suite)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+      # npx handles install; setup-node caches the npm store
+      - name: dprint check
+        run: npx dprint@latest check
+      - name: markdownlint-cli2
+        run: npx markdownlint-cli2@latest "**/*.md"
+
   msrv:
-    name: MSRV Check (1.75)
-    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    name: "Verify › MSRV (1.75)"
+    needs: [lint-format, lint-clippy]
+    if: >-
+      always() && !failure() && !cancelled() &&
+      (github.event_name == 'pull_request' || github.event_name == 'merge_group' || inputs.run-full-suite)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
-      - name: Install Rust 1.75
+      - name: Install MSRV toolchain (1.75)
         run: rustup toolchain install 1.75 --profile minimal
       - uses: Swatinem/rust-cache@v2
-      - name: Check against MSRV
+        with:
+          key: msrv
+      - name: cargo +1.75 check
         run: cargo +1.75 check --workspace --all-features
 
+  # ---------------------------------------------------------------------------
+  # Tier 3 — Platform (needs test to pass)
+  # ---------------------------------------------------------------------------
+
   cross-platform:
-    name: Cross-Platform Build Check
-    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+    name: "Platform › ${{ matrix.os }}"
+    needs: [test]
+    if: >-
+      always() && !failure() && !cancelled() &&
+      (github.event_name == 'pull_request' || github.event_name == 'merge_group' || inputs.run-full-suite)
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - windows-latest
-          - macos-latest
+        os: [windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v6
-      - name: Install Rust toolchain from rust-toolchain.toml
+      - name: Install Rust toolchain
         run: rustup show
       - uses: Swatinem/rust-cache@v2
-      - name: Cargo check
+      - name: cargo check (all targets, all features)
         run: cargo check --workspace --all-targets --all-features
 
+  # ---------------------------------------------------------------------------
+  # Standalone — no gate dependency
+  # ---------------------------------------------------------------------------
+
+  workflow-compat:
+    name: "Standalone › Workflow Lint"
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group' || inputs.run-full-suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - name: actionlint
+        uses: docker://rhysd/actionlint:1.7.7
+        with:
+          args: -color
+      - name: Verify core action major versions
+        run: |
+          set -euo pipefail
+          if grep -R -nE 'actions/checkout@v([0-5])\b|actions/setup-node@v([0-5])\b|actions/(download|upload)-artifact@v([0-3])\b' .github/workflows/*.yml; then
+            echo "::error::Outdated core action major version detected"
+            exit 1
+          fi
+
   toolchain-canary:
-    name: Canary Toolchain Check
+    name: "Standalone › Canary (${{ matrix.toolchain }})"
     if: github.event_name == 'schedule'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        toolchain:
-          - beta
-          - nightly
+        toolchain: [beta, nightly]
     continue-on-error: ${{ matrix.toolchain == 'nightly' }}
     steps:
       - uses: actions/checkout@v6
-      - name: Install toolchain
+      - name: Install ${{ matrix.toolchain }} toolchain
         run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal
       - uses: Swatinem/rust-cache@v2
-      - name: Cargo check
+        with:
+          key: canary-${{ matrix.toolchain }}
+      - name: cargo +${{ matrix.toolchain }} check
         run: cargo +${{ matrix.toolchain }} check --workspace --all-targets --all-features
 
   merge-smoke:
-    name: Merge Smoke (main)
+    name: "Standalone › Merge Smoke (main)"
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
-      - name: Install Rust toolchain from rust-toolchain.toml
+      - name: Install Rust toolchain
         run: rustup show
       - uses: Swatinem/rust-cache@v2
       - name: Install smoke tools
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-nextest,cargo-deny
-      - name: Run smoke tests
+      - name: cargo nextest run (smoke)
         run: cargo nextest run --workspace --all-features --profile ci
-      - name: Run dependency policy check
+      - name: cargo deny check (smoke)
         run: cargo deny --all-features check
