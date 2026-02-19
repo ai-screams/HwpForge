@@ -34,7 +34,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - name: Lint GitHub workflow files
-        uses: rhysd/actionlint@v1
+        uses: docker://rhysd/actionlint:latest
+        with:
+          args: -color
       - name: Verify core action major baselines
         run: |
           set -euo pipefail
