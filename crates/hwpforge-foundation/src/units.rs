@@ -427,11 +427,11 @@ impl fmt::Display for Insets {
 // ---------------------------------------------------------------------------
 
 impl schemars::JsonSchema for HwpUnit {
-    fn schema_name() -> String {
-        "HwpUnit".to_string()
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "HwpUnit".into()
     }
 
-    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
         gen.subschema_for::<i32>()
     }
 }

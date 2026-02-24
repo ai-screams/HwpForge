@@ -4,14 +4,12 @@
 //! This schema can be used by editors (VS Code, Zed) for YAML autocompletion
 //! and validation, and by LLM agents to understand the template format.
 
-use schemars::schema::RootSchema;
-
 use crate::template::Template;
 
-/// Generates the JSON Schema for [`Template`] as a [`RootSchema`].
+/// Generates the JSON Schema for [`Template`] as a [`Schema`](schemars::Schema).
 ///
 /// Use this for programmatic access to the schema object.
-pub fn template_schema() -> RootSchema {
+pub fn template_schema() -> schemars::Schema {
     schemars::schema_for!(Template)
 }
 
@@ -39,8 +37,9 @@ mod tests {
 
     #[test]
     fn schema_has_template_title() {
-        let schema = template_schema();
-        let title = schema.schema.metadata.as_ref().and_then(|m| m.title.as_deref());
+        let json = template_schema_json();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let title = value.get("title").and_then(|t| t.as_str());
         assert_eq!(title, Some("Template"));
     }
 
@@ -77,7 +76,7 @@ mod tests {
     #[test]
     fn schema_roundtrip_through_json() {
         let json = template_schema_json();
-        let parsed: RootSchema = serde_json::from_str(&json).unwrap();
+        let parsed: schemars::Schema = serde_json::from_str(&json).unwrap();
         let json2 = serde_json::to_string_pretty(&parsed).unwrap();
         assert_eq!(json, json2);
     }

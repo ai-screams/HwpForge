@@ -64,13 +64,13 @@ macro_rules! string_newtype {
         }
 
         impl schemars::JsonSchema for $name {
-            fn schema_name() -> String {
-                stringify!($name).to_string()
+            fn schema_name() -> std::borrow::Cow<'static, str> {
+                stringify!($name).into()
             }
 
             fn json_schema(
-                gen: &mut schemars::gen::SchemaGenerator,
-            ) -> schemars::schema::Schema {
+                gen: &mut schemars::SchemaGenerator,
+            ) -> schemars::Schema {
                 gen.subschema_for::<String>()
             }
         }

@@ -43,7 +43,7 @@ Foundation (🔩 primitives)
 ### Prerequisites
 
 - Rust 1.93+ (pinned development toolchain)
-- Rust 1.85 (MSRV — minimum supported version)
+- Rust 1.88 (MSRV — minimum supported version)
 - (Optional) Python 3.8+ for bindings
 - (Optional) pre-commit for hooks
 
@@ -127,7 +127,7 @@ Tier 3 — Platform cross ◄── test  (Windows + macOS)
 
 | Tier   | Version        | Purpose                                  |
 | ------ | -------------- | ---------------------------------------- |
-| MSRV   | 1.85           | Minimum supported — `cargo +1.85 check`  |
+| MSRV   | 1.88           | Minimum supported — `cargo +1.88 check`  |
 | Stable | 1.93           | Pinned development toolchain             |
 | Canary | beta / nightly | Weekly monitoring (nightly non-blocking) |
 

@@ -491,7 +491,12 @@ impl<'a> DecoderState<'a> {
                 self.pending_image =
                     Some(PendingImage { dest_url: dest_url.to_string(), alt: String::new() });
             }
-            Tag::Emphasis | Tag::Strong | Tag::Strikethrough | Tag::HtmlBlock => {}
+            Tag::Emphasis
+            | Tag::Strong
+            | Tag::Strikethrough
+            | Tag::HtmlBlock
+            | Tag::Superscript
+            | Tag::Subscript => {}
             Tag::FootnoteDefinition(_) => {
                 return Err(unsupported_markdown_feature("footnote definition"));
             }
@@ -568,7 +573,12 @@ impl<'a> DecoderState<'a> {
                     self.push_run_to_active_context(Run::image(image, char_shape_id));
                 }
             }
-            TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::HtmlBlock => {}
+            TagEnd::Emphasis
+            | TagEnd::Strong
+            | TagEnd::Strikethrough
+            | TagEnd::HtmlBlock
+            | TagEnd::Superscript
+            | TagEnd::Subscript => {}
             TagEnd::FootnoteDefinition => {
                 return Err(unsupported_markdown_feature("footnote definition"));
             }

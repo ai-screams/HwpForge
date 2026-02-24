@@ -175,11 +175,11 @@ impl<'de, T> Deserialize<'de> for Index<T> {
 }
 
 impl<T> schemars::JsonSchema for Index<T> {
-    fn schema_name() -> String {
-        "Index".to_string()
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Index".into()
     }
 
-    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
         gen.subschema_for::<usize>()
     }
 }
