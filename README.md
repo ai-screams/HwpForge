@@ -18,7 +18,7 @@
 - Smithy-HWPX: Full Encoder/Decoder with roundtrip, 9 golden fixtures (253 tests)
 - Smithy-MD: GFM + lossless HTML+YAML dual-mode (74 tests)
 
-**Stats**: ~32,000 LOC | 1,120 tests | 0 clippy warnings | 90%+ coverage
+**Stats**: ~37,052 LOC | 988 tests | 0 clippy warnings | 90%+ coverage
 
 **Next**: Phase 6 (Python/CLI bindings), Phase 7 (MCP), Phase 8 (v1.0 release)
 
