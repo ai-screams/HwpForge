@@ -1,0 +1,8 @@
+[profile.ci]
+retries = 1
+
+[profile.ci.junit]
+path = "junit.xml"
+report-name = "hwpforge-nextest"
+store-success-output = false
+store-failure-output = true

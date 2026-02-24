@@ -8,18 +8,19 @@
 
 ---
 
-## 🚧 Status: Under Development (v0.1.0)
+## Status: Under Development (v0.1.0)
 
-**Phase 0-4 완료** (Foundation → Core → Blueprint → HWPX Codec)
+**Phase 0-5 + 4.5 Wave 1-6 완료** (Foundation → Core → Blueprint → HWPX → Markdown)
 
-- ✅ Foundation: HwpUnit, Color (BGR), Index<T>, ErrorCode
-- ✅ Core: Document<Draft/Validated>, Paragraph, Run, Table
-- ✅ Blueprint: YAML Template System, StyleRegistry
-- ✅ Smithy-HWPX: Full Encoder/Decoder with roundtrip (5 golden tests)
+- Foundation: HwpUnit, Color (BGR), Index<T>, ErrorCode (224 tests)
+- Core: Document<Draft/Validated>, Paragraph, Table, Image, Shapes, Equation, Chart (364 tests)
+- Blueprint: YAML Template System, StyleRegistry, Font Dedup (203 tests)
+- Smithy-HWPX: Full Encoder/Decoder with roundtrip, 9 golden fixtures (253 tests)
+- Smithy-MD: GFM + lossless HTML+YAML dual-mode (74 tests)
 
-**Stats**: ~18,600 LOC, 767 tests, 0 clippy warnings
+**Stats**: ~32,000 LOC | 1,120 tests | 0 clippy warnings | 90%+ coverage
 
-**Next**: Phase 5 (smithy-md), Phase 6 (bindings), Phase 7 (MCP), Phase 8 (v1.0 release)
+**Next**: Phase 6 (Python/CLI bindings), Phase 7 (MCP), Phase 8 (v1.0 release)
 
 ---
 
@@ -41,7 +42,8 @@ Foundation (🔩 primitives)
 
 ### Prerequisites
 
-- Rust 1.93+
+- Rust 1.93+ (pinned development toolchain)
+- Rust 1.85 (MSRV — minimum supported version)
 - (Optional) Python 3.8+ for bindings
 - (Optional) pre-commit for hooks
 
@@ -49,19 +51,25 @@ Foundation (🔩 primitives)
 
 ```bash
 # Build
-cargo build
+cargo build --workspace
 
-# Test
-cargo test --all-features
+# Test (using cargo-nextest)
+cargo nextest run --workspace --all-features
 
 # Lint
-cargo clippy --all-targets --all-features -- -D warnings
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 
-# Format
+# Format check
 cargo fmt --all -- --check
+
+# Coverage (90% gate)
+cargo llvm-cov nextest --workspace --all-features --fail-under-lines 90
 
 # Watch mode
 bacon
+
+# Full local CI
+make ci-fast
 ```
 
 ### Project Structure
@@ -79,6 +87,49 @@ HwpForge/
 │   └── hwpforge-bindings-cli/     # ⚒️  CLI tool
 └── .docs/                         # Internal docs (git-excluded)
 ```
+
+---
+
+## CI/CD
+
+### Pipeline Architecture (Fan-out Gate)
+
+```
+Tier 1 — Gate     fmt ──┐
+                  clippy┤
+                        │
+Tier 2 — Verify   test ◄┤  (all events)
+                  cov  ◄┤  (PR / merge_group / full-suite)
+                  deny ◄┤
+                  docs ◄┤
+                  msrv ◄┘
+                        │
+Tier 3 — Platform cross ◄── test  (Windows + macOS)
+```
+
+### Trigger Matrix
+
+| Event                             | Jobs                                      |
+| --------------------------------- | ----------------------------------------- |
+| `push` to main                    | merge-smoke (nextest + deny)              |
+| `pull_request` / `merge_group`    | Gate → full Tier 2 + Tier 3               |
+| `schedule` (weekly Mon 03:00 UTC) | toolchain canary (beta + nightly)         |
+| `workflow_dispatch`               | Gate + test (optional: full suite)        |
+| Tag `v*.*.*`                      | Release: full CI → build → GitHub Release |
+
+### Security
+
+- **PR**: `cargo-deny` (licenses + advisories + bans)
+- **Weekly** (Mon 03:30 UTC): advisory-only scan
+- **Dependabot**: weekly Cargo + Actions updates
+
+### Version Strategy
+
+| Tier   | Version        | Purpose                                  |
+| ------ | -------------- | ---------------------------------------- |
+| MSRV   | 1.85           | Minimum supported — `cargo +1.85 check`  |
+| Stable | 1.93           | Pinned development toolchain             |
+| Canary | beta / nightly | Weekly monitoring (nightly non-blocking) |
 
 ---
 
