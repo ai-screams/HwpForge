@@ -339,30 +339,19 @@ impl<'de> Deserialize<'de> for Document<Draft> {
 // ---------------------------------------------------------------------------
 
 impl<S> JsonSchema for Document<S> {
-    fn schema_name() -> String {
-        "Document".to_string()
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Document".into()
     }
 
-    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
-        use schemars::schema::*;
-
-        let sections_schema = gen.subschema_for::<Vec<Section>>();
-        let metadata_schema = gen.subschema_for::<crate::metadata::Metadata>();
-
-        let mut properties = schemars::Map::new();
-        properties.insert("sections".to_string(), sections_schema);
-        properties.insert("metadata".to_string(), metadata_schema);
-
-        let mut required = std::collections::BTreeSet::new();
-        required.insert("sections".to_string());
-        required.insert("metadata".to_string());
-
-        SchemaObject {
-            instance_type: Some(InstanceType::Object.into()),
-            object: Some(Box::new(ObjectValidation { properties, required, ..Default::default() })),
-            ..Default::default()
-        }
-        .into()
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": "object",
+            "properties": {
+                "sections": gen.subschema_for::<Vec<Section>>(),
+                "metadata": gen.subschema_for::<crate::metadata::Metadata>(),
+            },
+            "required": ["sections", "metadata"]
+        })
     }
 }
 

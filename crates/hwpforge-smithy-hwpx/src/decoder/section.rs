@@ -944,7 +944,7 @@ mod tests {
         let para = &result.paragraphs[0];
         assert_eq!(para.runs.len(), 2);
         assert_eq!(para.runs[0].char_shape_id.get(), 0);
-        assert_eq!(para.runs[0].content.as_text(), Some("Hello"));
+        assert_eq!(para.runs[0].content.as_text(), Some("Hello "));
         assert_eq!(para.runs[1].char_shape_id.get(), 1);
         assert_eq!(para.runs[1].content.as_text(), Some("World"));
     }

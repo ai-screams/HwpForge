@@ -97,11 +97,11 @@ impl TryFrom<u8> for Alignment {
 }
 
 impl schemars::JsonSchema for Alignment {
-    fn schema_name() -> String {
-        "Alignment".to_string()
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "$1".into()
     }
 
-    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
         gen.subschema_for::<String>()
     }
 }
@@ -177,11 +177,11 @@ impl TryFrom<u8> for LineSpacingType {
 }
 
 impl schemars::JsonSchema for LineSpacingType {
-    fn schema_name() -> String {
-        "LineSpacingType".to_string()
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "$1".into()
     }
 
-    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
         gen.subschema_for::<String>()
     }
 }
@@ -257,11 +257,11 @@ impl TryFrom<u8> for BreakType {
 }
 
 impl schemars::JsonSchema for BreakType {
-    fn schema_name() -> String {
-        "BreakType".to_string()
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "$1".into()
     }
 
-    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
         gen.subschema_for::<String>()
     }
 }
@@ -378,11 +378,11 @@ impl TryFrom<u8> for Language {
 }
 
 impl schemars::JsonSchema for Language {
-    fn schema_name() -> String {
-        "Language".to_string()
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "$1".into()
     }
 
-    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
         gen.subschema_for::<String>()
     }
 }
@@ -463,11 +463,11 @@ impl TryFrom<u8> for UnderlineType {
 }
 
 impl schemars::JsonSchema for UnderlineType {
-    fn schema_name() -> String {
-        "UnderlineType".to_string()
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "$1".into()
     }
 
-    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
         gen.subschema_for::<String>()
     }
 }
@@ -558,11 +558,11 @@ impl TryFrom<u8> for StrikeoutShape {
 }
 
 impl schemars::JsonSchema for StrikeoutShape {
-    fn schema_name() -> String {
-        "StrikeoutShape".to_string()
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "$1".into()
     }
 
-    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
         gen.subschema_for::<String>()
     }
 }
@@ -633,11 +633,11 @@ impl TryFrom<u8> for OutlineType {
 }
 
 impl schemars::JsonSchema for OutlineType {
-    fn schema_name() -> String {
-        "OutlineType".to_string()
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "$1".into()
     }
 
-    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
         gen.subschema_for::<String>()
     }
 }
@@ -708,11 +708,11 @@ impl TryFrom<u8> for ShadowType {
 }
 
 impl schemars::JsonSchema for ShadowType {
-    fn schema_name() -> String {
-        "ShadowType".to_string()
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "$1".into()
     }
 
-    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
         gen.subschema_for::<String>()
     }
 }
@@ -783,11 +783,11 @@ impl TryFrom<u8> for EmbossType {
 }
 
 impl schemars::JsonSchema for EmbossType {
-    fn schema_name() -> String {
-        "EmbossType".to_string()
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "$1".into()
     }
 
-    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
         gen.subschema_for::<String>()
     }
 }
@@ -858,11 +858,11 @@ impl TryFrom<u8> for EngraveType {
 }
 
 impl schemars::JsonSchema for EngraveType {
-    fn schema_name() -> String {
-        "EngraveType".to_string()
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "$1".into()
     }
 
-    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
         gen.subschema_for::<String>()
     }
 }
@@ -938,11 +938,11 @@ impl TryFrom<u8> for VerticalPosition {
 }
 
 impl schemars::JsonSchema for VerticalPosition {
-    fn schema_name() -> String {
-        "VerticalPosition".to_string()
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "$1".into()
     }
 
-    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
         gen.subschema_for::<String>()
     }
 }
@@ -1060,11 +1060,11 @@ impl TryFrom<u8> for BorderLineType {
 }
 
 impl schemars::JsonSchema for BorderLineType {
-    fn schema_name() -> String {
-        "BorderLineType".to_string()
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "$1".into()
     }
 
-    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
         gen.subschema_for::<String>()
     }
 }
@@ -1145,11 +1145,11 @@ impl TryFrom<u8> for FillBrushType {
 }
 
 impl schemars::JsonSchema for FillBrushType {
-    fn schema_name() -> String {
-        "FillBrushType".to_string()
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "$1".into()
     }
 
-    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
         gen.subschema_for::<String>()
     }
 }
@@ -1225,11 +1225,11 @@ impl TryFrom<u8> for ApplyPageType {
 }
 
 impl schemars::JsonSchema for ApplyPageType {
-    fn schema_name() -> String {
-        "ApplyPageType".to_string()
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "$1".into()
     }
 
-    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
         gen.subschema_for::<String>()
     }
 }
@@ -1335,11 +1335,11 @@ impl TryFrom<u8> for NumberFormatType {
 }
 
 impl schemars::JsonSchema for NumberFormatType {
-    fn schema_name() -> String {
-        "NumberFormatType".to_string()
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "$1".into()
     }
 
-    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
         gen.subschema_for::<String>()
     }
 }
@@ -1463,11 +1463,11 @@ impl TryFrom<u8> for PageNumberPosition {
 }
 
 impl schemars::JsonSchema for PageNumberPosition {
-    fn schema_name() -> String {
-        "PageNumberPosition".to_string()
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "$1".into()
     }
 
-    fn json_schema(gen: &mut schemars::gen::SchemaGenerator) -> schemars::schema::Schema {
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
         gen.subschema_for::<String>()
     }
 }

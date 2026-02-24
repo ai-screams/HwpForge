@@ -65,7 +65,7 @@ pub(super) fn decode_lossless_sections(content: &str) -> MdResult<Vec<Section>> 
                 attach_closed_node(node, &mut stack, &mut sections)?;
             }
             Ok(Event::Text(text)) => {
-                let value = text.unescape().map_err(|err| MdError::LosslessParse {
+                let value = text.decode().map_err(|err| MdError::LosslessParse {
                     detail: format!("text decode failed: {err}"),
                 })?;
                 append_text(&mut stack, value.as_ref())?;
@@ -77,7 +77,8 @@ pub(super) fn decode_lossless_sections(content: &str) -> MdResult<Vec<Section>> 
             Ok(Event::Comment(_))
             | Ok(Event::Decl(_))
             | Ok(Event::DocType(_))
-            | Ok(Event::PI(_)) => {}
+            | Ok(Event::PI(_))
+            | Ok(Event::GeneralRef(_)) => {}
             Ok(Event::Eof) => break,
             Err(err) => {
                 return Err(MdError::LosslessParse {

@@ -108,7 +108,7 @@ pub(crate) fn parse_chart_xml(xml: &str) -> HwpxResult<ParsedChart> {
                 process_start_attrs(e, &mut bar_dir, &mut grouping, &mut legend, local);
             }
             Ok(Event::Text(ref e)) => {
-                let text = e.unescape().unwrap_or_default().to_string();
+                let text = e.decode().map(|s| s.to_string()).unwrap_or_default();
                 if text.is_empty() || in_formula {
                     // skip formula text (<c:f>Sheet1!...</c:f>)
                 } else if in_title && !in_series {

@@ -22,11 +22,11 @@ keywords = ["hwp", "hwpx", "owpml", "document", "korean"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
 repository = "https://github.com/aiscream/hwpforge"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [workspace.dependencies]
 # === XML Processing ===
-quick-xml = { version = "0.36", features = ["serialize", "overlapped-lists"] }
+quick-xml = { version = "0.39", features = ["serialize", "overlapped-lists"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 
@@ -34,7 +34,7 @@ serde_json = "1.0"
 serde_yaml = "0.9"
 
 # === ZIP Compression ===
-zip = { version = "2.1", default-features = false, features = ["deflate"] }
+zip = { version = "8.1", default-features = false, features = ["deflate"] }
 
 # === HWP5 Binary ===
 byteorder = "1.5"
@@ -43,14 +43,14 @@ encoding_rs = "0.8"
 flate2 = "1.0"
 
 # === Markdown ===
-pulldown-cmark = "0.12"
+pulldown-cmark = "0.13"
 
 # === Error Handling ===
 anyhow = "1.0"
 thiserror = "2.0"
 
 # === JSON Schema (for MCP) ===
-schemars = { version = "0.8", features = ["preserve_order", "indexmap2"] }
+schemars = { version = "1.2", features = ["preserve_order", "indexmap2"] }
 
 # === Python Bindings ===
 pyo3 = { version = "0.22", features = ["extension-module"] }
