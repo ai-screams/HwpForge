@@ -48,7 +48,7 @@ jobs:
       - name: Package source archive
         run: git archive --format=tar.gz --output hwpforge-${{ github.ref_name }}.tar.gz ${{ github.sha }}
       - name: Upload release artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: release-${{ github.ref_name }}
           path: hwpforge-${{ github.ref_name }}.tar.gz
