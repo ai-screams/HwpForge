@@ -252,7 +252,7 @@ fn build_section_0() -> Section {
             Run::text("를 사용합니다.", CharShapeIndex::new(CS_NORMAL)),
             Run::control(
                 Control::footnote(vec![p(
-                    "KS X 6101은 한국산업표준(KS)으로 제정된 HWPX 문서 파일 포맷 규격입니다. openhwp 프로젝트에 9,054줄 분량의 마크다운 사양이 공개되어 있습니다.",
+                    "1) KS X 6101은 한국산업표준(KS)으로 제정된 HWPX 문서 파일 포맷 규격입니다. openhwp 프로젝트에 9,054줄 분량의 마크다운 사양이 공개되어 있습니다.",
                 )]),
                 CharShapeIndex::new(CS_NORMAL),
             ),
@@ -369,7 +369,7 @@ fn build_section_1() -> Section {
             Run::text("[차트 1] 크레이트별 LOC (총 32,386 LOC)", CharShapeIndex::new(CS_ITALIC)),
             Run::control(
                 Control::footnote_with_id(1, vec![p(
-                    "Foundation은 최소 의존성 원칙(serde/thiserror만)을 따릅니다. Foundation을 수정하면 모든 크레이트가 리빌드되므로, 변경은 최소화해야 합니다.",
+                    "2) Foundation은 최소 의존성 원칙(serde/thiserror만)을 따릅니다. Foundation을 수정하면 모든 크레이트가 리빌드되므로, 변경은 최소화해야 합니다.",
                 )]),
                 CharShapeIndex::new(CS_NORMAL),
             ),
@@ -633,13 +633,13 @@ fn build_section_3() -> Section {
             ),
             Run::control(
                 Control::endnote_with_id(1, vec![p(
-                    "본 문서는 HwpForge Write API의 28개 편의 생성자를 모두 활용하여 작성되었습니다. 각 생성자는 최소 1회 이상 사용되었으며, 생성된 HWPX 파일은 한글에서 정상적으로 열립니다.",
+                    "1) 본 문서는 HwpForge Write API의 28개 편의 생성자를 모두 활용하여 작성되었습니다. 각 생성자는 최소 1회 이상 사용되었으며, 생성된 HWPX 파일은 한글에서 정상적으로 열립니다.",
                 )]),
                 CharShapeIndex::new(CS_NORMAL),
             ),
             Run::control(
                 Control::endnote(vec![p(
-                    "HWPX 포맷은 KS X 6101 표준에 기반하며, HwpForge는 이 표준의 완전한 구현을 목표로 합니다. Phase 6(Python 바인딩), Phase 7(MCP 서버), Phase 8(v1.0 릴리즈)이 남아 있습니다.",
+                    "2) HWPX 포맷은 KS X 6101 표준에 기반하며, HwpForge는 이 표준의 완전한 구현을 목표로 합니다. Phase 6(Python 바인딩), Phase 7(MCP 서버), Phase 8(v1.0 릴리즈)이 남아 있습니다.",
                 )]),
                 CharShapeIndex::new(CS_NORMAL),
             ),
