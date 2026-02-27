@@ -11,7 +11,7 @@ use hwpforge_blueprint::registry::StyleRegistry;
 use hwpforge_foundation::{
     Alignment, BorderFillIndex, BreakType, CharShapeIndex, Color, EmbossType, EngraveType,
     FontIndex, HwpUnit, LineSpacingType, OutlineType, ParaShapeIndex, ShadowType, StrikeoutShape,
-    UnderlineType, VerticalPosition,
+    UnderlineType, VerticalPosition, WordBreakType,
 };
 
 use crate::default_styles::HancomStyleSet;
@@ -200,6 +200,10 @@ pub struct HwpxParaShape {
     pub keep_lines_together: bool,
     /// Widow/orphan control (minimum 2 lines at page boundaries).
     pub widow_orphan: bool,
+    /// Word-breaking rule for Latin text (default: KeepWord).
+    pub break_latin_word: WordBreakType,
+    /// Word-breaking rule for non-Latin text including Korean (default: KeepWord).
+    pub break_non_latin_word: WordBreakType,
     /// Border/fill reference (None = no border/fill).
     pub border_fill_id: Option<BorderFillIndex>,
 }
@@ -219,6 +223,8 @@ impl Default for HwpxParaShape {
             keep_with_next: false,
             keep_lines_together: false,
             widow_orphan: true, // Enabled by default in HWPX
+            break_latin_word: WordBreakType::KeepWord,
+            break_non_latin_word: WordBreakType::KeepWord,
             border_fill_id: None,
         }
     }
@@ -386,6 +392,8 @@ impl HwpxStyleStore {
                 keep_with_next: false,
                 keep_lines_together: false,
                 widow_orphan: true,
+                break_latin_word: WordBreakType::KeepWord,
+                break_non_latin_word: WordBreakType::KeepWord,
                 border_fill_id: None,
             });
         }
@@ -441,6 +449,8 @@ impl HwpxStyleStore {
                 keep_with_next: ps.keep_with_next,
                 keep_lines_together: ps.keep_lines_together,
                 widow_orphan: ps.widow_orphan,
+                break_latin_word: WordBreakType::KeepWord,
+                break_non_latin_word: WordBreakType::KeepWord,
                 border_fill_id: ps.border_fill_id,
             });
         }

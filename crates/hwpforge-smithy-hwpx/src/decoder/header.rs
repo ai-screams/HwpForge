@@ -5,7 +5,7 @@
 
 use hwpforge_foundation::{
     Color, EmbossType, EngraveType, FontIndex, HwpUnit, LineSpacingType, OutlineType, ShadowType,
-    StrikeoutShape, UnderlineType, VerticalPosition,
+    StrikeoutShape, UnderlineType, VerticalPosition, WordBreakType,
 };
 use quick_xml::de::from_str;
 
@@ -247,6 +247,17 @@ fn convert_para_pr(pp: &HxParaPr) -> HwpxParaShape {
 
     let (line_spacing, line_spacing_type) = extract_line_spacing(pp);
 
+    let (break_latin_word, break_non_latin_word) = pp
+        .break_setting
+        .as_ref()
+        .map(|bs| {
+            (
+                parse_word_break_type(&bs.break_latin_word),
+                parse_word_break_type(&bs.break_non_latin_word),
+            )
+        })
+        .unwrap_or_default();
+
     HwpxParaShape {
         alignment,
         margin_left,
@@ -256,7 +267,17 @@ fn convert_para_pr(pp: &HxParaPr) -> HwpxParaShape {
         spacing_after,
         line_spacing,
         line_spacing_type,
+        break_latin_word,
+        break_non_latin_word,
         ..Default::default()
+    }
+}
+
+/// Parses a `breakLatinWord` / `breakNonLatinWord` attribute string into a [`WordBreakType`].
+fn parse_word_break_type(s: &str) -> WordBreakType {
+    match s {
+        "BREAK_WORD" => WordBreakType::BreakWord,
+        _ => WordBreakType::KeepWord,
     }
 }
 

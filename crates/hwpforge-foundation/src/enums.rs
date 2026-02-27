@@ -1472,6 +1472,86 @@ impl schemars::JsonSchema for PageNumberPosition {
     }
 }
 
+// ---------------------------------------------------------------------------
+// WordBreakType
+// ---------------------------------------------------------------------------
+
+/// Word-breaking behavior for paragraph text justification.
+///
+/// Controls how 한글 distributes extra space in justified text.
+/// `KeepWord` preserves word boundaries (natural spacing),
+/// `BreakWord` allows breaking at any character (stretched spacing).
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_foundation::WordBreakType;
+///
+/// assert_eq!(WordBreakType::default(), WordBreakType::KeepWord);
+/// assert_eq!(WordBreakType::KeepWord.to_string(), "KEEP_WORD");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+#[repr(u8)]
+pub enum WordBreakType {
+    /// Keep words intact — distribute space between words only (한글 default).
+    #[default]
+    KeepWord = 0,
+    /// Allow breaking at any character — distribute space between all characters.
+    BreakWord = 1,
+}
+
+impl fmt::Display for WordBreakType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::KeepWord => f.write_str("KEEP_WORD"),
+            Self::BreakWord => f.write_str("BREAK_WORD"),
+        }
+    }
+}
+
+impl std::str::FromStr for WordBreakType {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "KEEP_WORD" | "KeepWord" | "keep_word" => Ok(Self::KeepWord),
+            "BREAK_WORD" | "BreakWord" | "break_word" => Ok(Self::BreakWord),
+            _ => Err(FoundationError::ParseError {
+                type_name: "WordBreakType".to_string(),
+                value: s.to_string(),
+                valid_values: "KEEP_WORD, BREAK_WORD".to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<u8> for WordBreakType {
+    type Error = FoundationError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::KeepWord),
+            1 => Ok(Self::BreakWord),
+            _ => Err(FoundationError::ParseError {
+                type_name: "WordBreakType".to_string(),
+                value: value.to_string(),
+                valid_values: "0 (KeepWord), 1 (BreakWord)".to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for WordBreakType {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "$1".into()
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
 // Compile-time size assertions: all enums are 1 byte
 const _: () = assert!(std::mem::size_of::<Alignment>() == 1);
 const _: () = assert!(std::mem::size_of::<LineSpacingType>() == 1);
@@ -1489,6 +1569,7 @@ const _: () = assert!(std::mem::size_of::<FillBrushType>() == 1);
 const _: () = assert!(std::mem::size_of::<ApplyPageType>() == 1);
 const _: () = assert!(std::mem::size_of::<NumberFormatType>() == 1);
 const _: () = assert!(std::mem::size_of::<PageNumberPosition>() == 1);
+const _: () = assert!(std::mem::size_of::<WordBreakType>() == 1);
 
 #[cfg(test)]
 mod tests {
@@ -2288,6 +2369,57 @@ mod tests {
         ] {
             let s = v.to_string();
             let back = PageNumberPosition::from_str(&s).unwrap();
+            assert_eq!(&back, v);
+        }
+    }
+
+    // ===================================================================
+    // WordBreakType
+    // ===================================================================
+
+    #[test]
+    fn word_break_type_default_is_keep_word() {
+        assert_eq!(WordBreakType::default(), WordBreakType::KeepWord);
+    }
+
+    #[test]
+    fn word_break_type_display() {
+        assert_eq!(WordBreakType::KeepWord.to_string(), "KEEP_WORD");
+        assert_eq!(WordBreakType::BreakWord.to_string(), "BREAK_WORD");
+    }
+
+    #[test]
+    fn word_break_type_from_str() {
+        assert_eq!(WordBreakType::from_str("KEEP_WORD").unwrap(), WordBreakType::KeepWord);
+        assert_eq!(WordBreakType::from_str("KeepWord").unwrap(), WordBreakType::KeepWord);
+        assert_eq!(WordBreakType::from_str("keep_word").unwrap(), WordBreakType::KeepWord);
+        assert_eq!(WordBreakType::from_str("BREAK_WORD").unwrap(), WordBreakType::BreakWord);
+        assert_eq!(WordBreakType::from_str("BreakWord").unwrap(), WordBreakType::BreakWord);
+        assert_eq!(WordBreakType::from_str("break_word").unwrap(), WordBreakType::BreakWord);
+        assert!(WordBreakType::from_str("invalid").is_err());
+    }
+
+    #[test]
+    fn word_break_type_try_from_u8() {
+        assert_eq!(WordBreakType::try_from(0u8).unwrap(), WordBreakType::KeepWord);
+        assert_eq!(WordBreakType::try_from(1u8).unwrap(), WordBreakType::BreakWord);
+        assert!(WordBreakType::try_from(2u8).is_err());
+    }
+
+    #[test]
+    fn word_break_type_serde_roundtrip() {
+        for v in &[WordBreakType::KeepWord, WordBreakType::BreakWord] {
+            let json = serde_json::to_string(v).unwrap();
+            let back: WordBreakType = serde_json::from_str(&json).unwrap();
+            assert_eq!(&back, v);
+        }
+    }
+
+    #[test]
+    fn word_break_type_str_roundtrip() {
+        for v in &[WordBreakType::KeepWord, WordBreakType::BreakWord] {
+            let s = v.to_string();
+            let back = WordBreakType::from_str(&s).unwrap();
             assert_eq!(&back, v);
         }
     }
