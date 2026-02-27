@@ -27,7 +27,10 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::caption::Caption;
-use crate::chart::{ChartData, ChartGrouping, ChartType, LegendPosition};
+use crate::chart::{
+    BarShape, ChartData, ChartGrouping, ChartType, LegendPosition, OfPieType, RadarStyle,
+    ScatterStyle, StockVariant,
+};
 use crate::error::{CoreError, CoreResult};
 use crate::paragraph::Paragraph;
 
@@ -166,7 +169,6 @@ pub enum Control {
 
     /// A line drawing object (2 endpoints).
     /// Maps to HWPX `<hp:line>`.
-    // TODO(phase9): Add horz_offset/vert_offset for non-inline positioning
     Line {
         /// Start point (x, y in HWPUNIT).
         start: ShapePoint,
@@ -176,6 +178,10 @@ pub enum Control {
         width: HwpUnit,
         /// Bounding box height (HWPUNIT).
         height: HwpUnit,
+        /// Horizontal offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
+        horz_offset: i32,
+        /// Vertical offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
+        vert_offset: i32,
         /// Optional caption attached to this line.
         caption: Option<Caption>,
         /// Optional visual style overrides (border color, fill, line width).
@@ -209,7 +215,6 @@ pub enum Control {
 
     /// A polygon drawing object (3+ vertices).
     /// Maps to HWPX `<hp:polygon>`.
-    // TODO(phase9): Add horz_offset/vert_offset for non-inline positioning
     Polygon {
         /// Ordered list of vertices (minimum 3).
         vertices: Vec<ShapePoint>,
@@ -217,6 +222,10 @@ pub enum Control {
         width: HwpUnit,
         /// Bounding box height (HWPUNIT).
         height: HwpUnit,
+        /// Horizontal offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
+        horz_offset: i32,
+        /// Vertical offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
+        vert_offset: i32,
         /// Optional text content inside the polygon.
         paragraphs: Vec<Paragraph>,
         /// Optional caption attached to this polygon.
@@ -264,6 +273,27 @@ pub enum Control {
         legend: LegendPosition,
         /// Series grouping mode.
         grouping: ChartGrouping,
+        /// 3D bar/column shape (None = default Box).
+        bar_shape: Option<BarShape>,
+        /// Exploded pie/doughnut percentage (None = not exploded, Some(25) = 25% explosion).
+        explosion: Option<u32>,
+        /// Pie-of-pie or bar-of-pie sub-type (None = default pie-of-pie).
+        of_pie_type: Option<OfPieType>,
+        /// Radar chart rendering style (None = default Standard).
+        radar_style: Option<RadarStyle>,
+        /// Surface chart wireframe mode (None = default solid).
+        wireframe: Option<bool>,
+        /// 3D bubble effect (None = default flat).
+        bubble_3d: Option<bool>,
+        /// Scatter chart style (None = default Dots).
+        scatter_style: Option<ScatterStyle>,
+        /// Show data point markers on line charts (None = no markers).
+        show_markers: Option<bool>,
+        /// Stock chart sub-variant (None = default HLC, 3 series).
+        ///
+        /// VHLC and VOHLC generate a composite `<c:plotArea>` with both
+        /// `<c:barChart>` (volume) and `<c:stockChart>` (price) elements.
+        stock_variant: Option<StockVariant>,
     },
 
     /// An unrecognized control element preserved for round-trip fidelity.
@@ -352,6 +382,15 @@ impl Control {
             title: None,
             legend: LegendPosition::default(),
             grouping: ChartGrouping::default(),
+            bar_shape: None,
+            explosion: None,
+            of_pie_type: None,
+            radar_style: None,
+            wireframe: None,
+            bubble_3d: None,
+            scatter_style: None,
+            show_markers: None,
+            stock_variant: None,
         }
     }
 
@@ -604,6 +643,8 @@ impl Control {
             vertices,
             width,
             height,
+            horz_offset: 0,
+            vert_offset: 0,
             paragraphs: vec![],
             caption: None,
             style: None,
@@ -641,7 +682,16 @@ impl Control {
         let raw_h = ((end.y as i64) - (start.y as i64)).unsigned_abs() as i32;
         let width = HwpUnit::new(raw_w).unwrap_or_else(|_| HwpUnit::new(1).expect("1 is valid"));
         let height = HwpUnit::new(raw_h).unwrap_or_else(|_| HwpUnit::new(1).expect("1 is valid"));
-        Ok(Self::Line { start, end, width, height, caption: None, style: None })
+        Ok(Self::Line {
+            start,
+            end,
+            width,
+            height,
+            horz_offset: 0,
+            vert_offset: 0,
+            caption: None,
+            style: None,
+        })
     }
 
     /// Creates a horizontal line of the given width.
@@ -666,6 +716,8 @@ impl Control {
             end: ShapePoint::new(w, 0),
             width,
             height: HwpUnit::new(0).expect("0 is valid"),
+            horz_offset: 0,
+            vert_offset: 0,
             caption: None,
             style: None,
         }
@@ -935,6 +987,8 @@ mod tests {
             end: ShapePoint { x: 1000, y: 500 },
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(25.0).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
             caption: None,
             style: None,
         };
@@ -991,6 +1045,8 @@ mod tests {
             ],
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(50.0).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
             paragraphs: vec![],
             caption: None,
             style: None,
@@ -1008,6 +1064,8 @@ mod tests {
             end: ShapePoint { x: 100, y: 200 },
             width: HwpUnit::from_mm(10.0).unwrap(),
             height: HwpUnit::from_mm(5.0).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
             caption: None,
             style: None,
         };
@@ -1021,6 +1079,8 @@ mod tests {
             end: ShapePoint { x: 300, y: 400 },
             width: HwpUnit::from_mm(20.0).unwrap(),
             height: HwpUnit::from_mm(10.0).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
             caption: None,
             style: None,
         };
@@ -1058,6 +1118,8 @@ mod tests {
             ],
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(50.0).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
             paragraphs: vec![],
             caption: None,
             style: None,
@@ -1200,11 +1262,22 @@ mod tests {
         let ctrl = Control::polygon(vertices).unwrap();
         assert!(ctrl.is_polygon());
         match &ctrl {
-            Control::Polygon { vertices, width, height, paragraphs, caption, style } => {
+            Control::Polygon {
+                vertices,
+                width,
+                height,
+                horz_offset,
+                vert_offset,
+                paragraphs,
+                caption,
+                style,
+            } => {
                 assert_eq!(vertices.len(), 3);
                 // bbox: x 0..1000, y 0..1000
                 assert_eq!(*width, HwpUnit::new(1000).unwrap());
                 assert_eq!(*height, HwpUnit::new(1000).unwrap());
+                assert_eq!(*horz_offset, 0);
+                assert_eq!(*vert_offset, 0);
                 assert!(paragraphs.is_empty());
                 assert!(caption.is_none());
                 assert!(style.is_none());
@@ -1257,11 +1330,22 @@ mod tests {
         let ctrl = Control::line(ShapePoint::new(0, 0), ShapePoint::new(5000, 0)).unwrap();
         assert!(ctrl.is_line());
         match ctrl {
-            Control::Line { start, end, width, height, caption, style } => {
+            Control::Line {
+                start,
+                end,
+                width,
+                height,
+                horz_offset,
+                vert_offset,
+                caption,
+                style,
+            } => {
                 assert_eq!(start, ShapePoint::new(0, 0));
                 assert_eq!(end, ShapePoint::new(5000, 0));
                 assert_eq!(width, HwpUnit::new(5000).unwrap());
                 assert_eq!(height, HwpUnit::new(0).unwrap());
+                assert_eq!(horz_offset, 0);
+                assert_eq!(vert_offset, 0);
                 assert!(caption.is_none());
                 assert!(style.is_none());
             }
@@ -1306,12 +1390,23 @@ mod tests {
         let ctrl = Control::horizontal_line(width);
         assert!(ctrl.is_line());
         match ctrl {
-            Control::Line { start, end, width: w, height, caption, style } => {
+            Control::Line {
+                start,
+                end,
+                width: w,
+                height,
+                horz_offset,
+                vert_offset,
+                caption,
+                style,
+            } => {
                 assert_eq!(start, ShapePoint::new(0, 0));
                 assert_eq!(end.y, 0);
                 assert_eq!(end.x, width.as_i32());
                 assert_eq!(w, width);
                 assert_eq!(height, HwpUnit::new(0).unwrap());
+                assert_eq!(horz_offset, 0);
+                assert_eq!(vert_offset, 0);
                 assert!(caption.is_none());
                 assert!(style.is_none());
             }

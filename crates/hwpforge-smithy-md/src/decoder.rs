@@ -169,11 +169,12 @@ struct PendingImage {
 struct ParagraphBuilder {
     style: MdStyleRef,
     runs: Vec<Run>,
+    heading_level: Option<u8>,
 }
 
 impl ParagraphBuilder {
     fn new(style: MdStyleRef) -> Self {
-        Self { style, runs: Vec::new() }
+        Self { style, runs: Vec::new(), heading_level: None }
     }
 
     fn push_text(&mut self, text: &str) {
@@ -201,7 +202,9 @@ impl ParagraphBuilder {
         if self.runs.is_empty() {
             self.runs.push(Run::text("", self.style.char_shape_id));
         }
-        Paragraph::with_runs(self.runs, self.style.para_shape_id)
+        let mut para = Paragraph::with_runs(self.runs, self.style.para_shape_id);
+        para.heading_level = self.heading_level;
+        para
     }
 }
 
@@ -443,7 +446,11 @@ impl<'a> DecoderState<'a> {
                 self.ensure_paragraph();
             }
             Tag::Heading { level, .. } => {
-                self.start_paragraph(self.mapping.heading(level_to_u32(level)));
+                let lvl = level_to_u32(level);
+                self.start_paragraph(self.mapping.heading(lvl));
+                if let Some(current) = self.current.as_mut() {
+                    current.heading_level = Some(lvl as u8);
+                }
             }
             Tag::BlockQuote(_) => {
                 self.blockquote_depth += 1;

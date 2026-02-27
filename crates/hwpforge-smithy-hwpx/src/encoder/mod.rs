@@ -13,6 +13,11 @@ pub(crate) mod header;
 pub(crate) mod package;
 pub(crate) mod section;
 
+/// Escapes XML special characters in text content.
+pub(crate) fn escape_xml(s: &str) -> String {
+    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+}
+
 use std::path::Path;
 
 use hwpforge_core::document::{Document, Validated};

@@ -53,8 +53,8 @@ use hwpforge_core::section::{HeaderFooter, PageNumber, Section};
 use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
-    Alignment, CharShapeIndex, Color, HwpUnit, NumberFormatType, PageNumberPosition, ParaShapeIndex,
-    UnderlineType,
+    Alignment, CharShapeIndex, Color, HwpUnit, NumberFormatType, PageNumberPosition,
+    ParaShapeIndex, UnderlineType,
 };
 use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
@@ -139,6 +139,15 @@ fn chart_para(
             grouping,
             width: HwpUnit::new(w).expect("chart width valid"),
             height: HwpUnit::new(h).expect("chart height valid"),
+            bar_shape: None,
+            explosion: None,
+            of_pie_type: None,
+            radar_style: None,
+            wireframe: None,
+            bubble_3d: None,
+            scatter_style: None,
+            show_markers: None,
+            stock_variant: None,
         },
         CS_NORMAL,
         PS_CENTER,

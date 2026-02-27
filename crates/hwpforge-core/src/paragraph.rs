@@ -59,6 +59,11 @@ pub struct Paragraph {
     /// Whether this paragraph starts a new column (HWPX `columnBreak="1"`).
     #[serde(default)]
     pub column_break: bool,
+    /// Optional heading level (1-7) for TOC participation.
+    /// Maps to 개요 1-7 styles. Paragraphs with a heading level
+    /// will emit `<hp:titleMark>` in HWPX for auto-TOC support.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heading_level: Option<u8>,
 }
 
 impl Paragraph {
@@ -74,7 +79,7 @@ impl Paragraph {
     /// assert!(para.is_empty());
     /// ```
     pub fn new(para_shape_id: ParaShapeIndex) -> Self {
-        Self { runs: Vec::new(), para_shape_id, column_break: false }
+        Self { runs: Vec::new(), para_shape_id, column_break: false, heading_level: None }
     }
 
     /// Creates a paragraph with pre-built runs.
@@ -93,7 +98,7 @@ impl Paragraph {
     /// assert_eq!(para.run_count(), 1);
     /// ```
     pub fn with_runs(runs: Vec<Run>, para_shape_id: ParaShapeIndex) -> Self {
-        Self { runs, para_shape_id, column_break: false }
+        Self { runs, para_shape_id, column_break: false, heading_level: None }
     }
 
     /// Appends a run to this paragraph.
@@ -111,6 +116,31 @@ impl Paragraph {
     /// ```
     pub fn add_run(&mut self, run: Run) {
         self.runs.push(run);
+    }
+
+    /// Sets the heading level for TOC participation (1-7).
+    ///
+    /// Paragraphs with a heading level emit `<hp:titleMark>` in HWPX,
+    /// enabling 한글 to auto-build a Table of Contents from document headings.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `level` is 0 or greater than 7.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::paragraph::Paragraph;
+    /// use hwpforge_foundation::ParaShapeIndex;
+    ///
+    /// let para = Paragraph::new(ParaShapeIndex::new(0))
+    ///     .with_heading_level(1);
+    /// assert_eq!(para.heading_level, Some(1));
+    /// ```
+    pub fn with_heading_level(mut self, level: u8) -> Self {
+        assert!((1..=7).contains(&level), "heading_level must be 1-7, got {level}");
+        self.heading_level = Some(level);
+        self
     }
 
     /// Concatenates all text runs into a single string.
@@ -315,5 +345,57 @@ mod tests {
         let json = serde_json::to_string(&para).unwrap();
         let back: Paragraph = serde_json::from_str(&json).unwrap();
         assert_eq!(para, back);
+    }
+
+    #[test]
+    fn with_heading_level_sets_field() {
+        let para = Paragraph::new(ParaShapeIndex::new(0)).with_heading_level(1);
+        assert_eq!(para.heading_level, Some(1));
+
+        let para7 = Paragraph::new(ParaShapeIndex::new(0)).with_heading_level(7);
+        assert_eq!(para7.heading_level, Some(7));
+    }
+
+    #[test]
+    fn with_heading_level_all_valid_levels() {
+        for level in 1u8..=7 {
+            let para = Paragraph::new(ParaShapeIndex::new(0)).with_heading_level(level);
+            assert_eq!(para.heading_level, Some(level));
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "heading_level must be 1-7")]
+    fn with_heading_level_zero_panics() {
+        let _ = Paragraph::new(ParaShapeIndex::new(0)).with_heading_level(0);
+    }
+
+    #[test]
+    #[should_panic(expected = "heading_level must be 1-7")]
+    fn with_heading_level_eight_panics() {
+        let _ = Paragraph::new(ParaShapeIndex::new(0)).with_heading_level(8);
+    }
+
+    #[test]
+    fn new_has_no_heading_level() {
+        let para = Paragraph::new(ParaShapeIndex::new(0));
+        assert_eq!(para.heading_level, None);
+    }
+
+    #[test]
+    fn serde_roundtrip_with_heading_level() {
+        let para = Paragraph::with_runs(vec![text_run("heading text")], ParaShapeIndex::new(0))
+            .with_heading_level(2);
+        let json = serde_json::to_string(&para).unwrap();
+        let back: Paragraph = serde_json::from_str(&json).unwrap();
+        assert_eq!(para, back);
+        assert_eq!(back.heading_level, Some(2));
+    }
+
+    #[test]
+    fn serde_heading_level_omitted_when_none() {
+        let para = Paragraph::new(ParaShapeIndex::new(0));
+        let json = serde_json::to_string(&para).unwrap();
+        assert!(!json.contains("heading_level"), "None should be skipped in serialization");
     }
 }

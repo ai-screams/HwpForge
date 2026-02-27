@@ -145,11 +145,19 @@ fn convert_paragraph(
     let mut page_settings = None;
 
     let mut runs = Vec::new();
+    let mut has_title_mark = false;
     for hx_run in &hx.runs {
         // Extract page settings from secPr in first paragraph
         if is_first && page_settings.is_none() {
             if let Some(sec_pr) = &hx_run.sec_pr {
                 page_settings = extract_page_settings(sec_pr);
+            }
+        }
+
+        // Detect titleMark for TOC participation
+        if let Some(tm) = &hx_run.title_mark {
+            if !tm.ignore {
+                has_title_mark = true;
             }
         }
 
@@ -163,7 +171,16 @@ fn convert_paragraph(
         runs.push(Run::text("", CharShapeIndex::new(0)));
     }
 
-    let paragraph = Paragraph { runs, para_shape_id, column_break: hx.column_break != 0 };
+    // Best-effort heading level: always decodes as `Some(1)` when a titleMark
+    // is present. Exact level inference (1-7) requires mapping `styleIDRef` to
+    // style names (e.g. "개요 1".."개요 7"), which is not yet implemented.
+    // This limitation is intentional: roundtrip fidelity of the heading level
+    // integer is not guaranteed; callers should not rely on the decoded value
+    // being the true outline depth from the original document.
+    let heading_level = if has_title_mark { Some(1) } else { None };
+
+    let paragraph =
+        Paragraph { runs, para_shape_id, column_break: hx.column_break != 0, heading_level };
     Ok((paragraph, page_settings))
 }
 
@@ -447,12 +464,17 @@ fn decode_line(line: &HxLine, char_shape_id: CharShapeIndex, depth: usize) -> Hw
 
     let caption = line.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
 
+    let (horz_offset, vert_offset) =
+        line.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
+
     Ok(Run {
         content: RunContent::Control(Box::new(Control::Line {
             start,
             end,
             width,
             height,
+            horz_offset,
+            vert_offset,
             caption,
             style: decode_shape_style(&line.line_shape, &line.fill_brush),
         })),
@@ -502,6 +524,9 @@ fn decode_ellipse(
 
     let caption = ellipse.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
 
+    let (horz_offset, vert_offset) =
+        ellipse.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
+
     Ok(Run {
         content: RunContent::Control(Box::new(Control::Ellipse {
             center,
@@ -509,8 +534,8 @@ fn decode_ellipse(
             axis2,
             width,
             height,
-            horz_offset: 0,
-            vert_offset: 0,
+            horz_offset,
+            vert_offset,
             paragraphs,
             caption,
             style: decode_shape_style(&ellipse.line_shape, &ellipse.fill_brush),
@@ -548,11 +573,16 @@ fn decode_polygon(
 
     let caption = polygon.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
 
+    let (horz_offset, vert_offset) =
+        polygon.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
+
     Ok(Run {
         content: RunContent::Control(Box::new(Control::Polygon {
             vertices,
             width,
             height,
+            horz_offset,
+            vert_offset,
             paragraphs,
             caption,
             style: decode_shape_style(&polygon.line_shape, &polygon.fill_brush),
@@ -628,6 +658,15 @@ fn decode_chart(
             title: parsed.title,
             legend: parsed.legend,
             grouping: parsed.grouping,
+            bar_shape: parsed.bar_shape,
+            explosion: parsed.explosion,
+            of_pie_type: parsed.of_pie_type,
+            radar_style: parsed.radar_style,
+            wireframe: parsed.wireframe,
+            bubble_3d: parsed.bubble_3d,
+            scatter_style: parsed.scatter_style,
+            show_markers: parsed.show_markers,
+            stock_variant: parsed.stock_variant,
         })),
         char_shape_id,
     }))

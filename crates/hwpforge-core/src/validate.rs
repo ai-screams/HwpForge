@@ -564,6 +564,8 @@ mod tests {
             vertices: vec![],
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(50.0).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
             paragraphs: vec![],
             caption: None,
             style: None,
@@ -584,6 +586,8 @@ mod tests {
             vertices: vec![ShapePoint { x: 0, y: 0 }, ShapePoint { x: 100, y: 100 }],
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(50.0).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
             paragraphs: vec![],
             caption: None,
             style: None,
@@ -608,6 +612,8 @@ mod tests {
             ],
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(50.0).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
             paragraphs: vec![],
             caption: None,
             style: None,
@@ -687,6 +693,8 @@ mod tests {
             ],
             width: HwpUnit::new(0).unwrap(), // invalid
             height: HwpUnit::from_mm(50.0).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
             paragraphs: vec![],
             caption: None,
             style: None,
@@ -712,6 +720,8 @@ mod tests {
             end: ShapePoint { x: 1000, y: 0 },
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::new(0).unwrap(), // valid for lines
+            horz_offset: 0,
+            vert_offset: 0,
             caption: None,
             style: None,
         };
@@ -732,6 +742,8 @@ mod tests {
             end: ShapePoint { x: 0, y: 1000 },
             width: HwpUnit::new(0).unwrap(), // valid for lines
             height: HwpUnit::from_mm(50.0).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
             caption: None,
             style: None,
         };
@@ -751,6 +763,8 @@ mod tests {
             end: ShapePoint { x: 1000, y: 500 },
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(25.0).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
             caption: None,
             style: None,
         };
@@ -796,6 +810,8 @@ mod tests {
             ],
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(50.0).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
             paragraphs: vec![],
             caption: None,
             style: None,

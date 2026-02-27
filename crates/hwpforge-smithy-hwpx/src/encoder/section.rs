@@ -30,10 +30,11 @@ use crate::schema::section::{
     HxLineShape, HxMatrix, HxOffset, HxPageMargin, HxPagePr, HxParagraph, HxPic, HxPoint,
     HxPolygon, HxRect, HxRenderingInfo, HxRotationInfo, HxRun, HxRunCase, HxRunSwitch, HxScript,
     HxSecPr, HxSection, HxShadow, HxShapeComment, HxSizeAttr, HxSubList, HxTable, HxTableCell,
-    HxTableMargin, HxTablePos, HxTableRow, HxTableSz, HxText,
+    HxTableMargin, HxTablePos, HxTableRow, HxTableSz, HxText, HxTitleMark,
 };
 
 use super::chart::generate_chart_xml;
+use super::escape_xml;
 
 /// Maximum nesting depth for tables-within-tables.
 ///
@@ -169,7 +170,7 @@ fn build_paragraph(
     hyperlink_entries: &mut Vec<(String, String)>,
     chart_offset: usize,
 ) -> HwpxResult<HxParagraph> {
-    let runs = build_runs(
+    let mut runs = build_runs(
         &para.runs,
         inject_sec_pr,
         page_settings,
@@ -178,6 +179,14 @@ fn build_paragraph(
         hyperlink_entries,
         chart_offset,
     )?;
+
+    // Inject <hp:titleMark ignore="false"/> into the first run when the
+    // paragraph has a heading level, enabling 한글 auto-TOC generation.
+    if para.heading_level.is_some() {
+        if let Some(first_run) = runs.first_mut() {
+            first_run.title_mark = Some(HxTitleMark { ignore: false });
+        }
+    }
 
     // Omit linesegarray so 한글 recalculates from scratch on open.
     // Previously we emitted a 1-seg placeholder, but justify alignment
@@ -331,6 +340,7 @@ fn build_runs(
             polygons,
             equations,
             switches,
+            title_mark: None,
         });
     }
 
@@ -353,6 +363,7 @@ fn build_runs(
                     polygons: Vec::new(),
                     equations: Vec::new(),
                     switches: Vec::new(),
+                    title_mark: None,
                 },
             );
         }
@@ -601,9 +612,9 @@ fn encode_line_to_hx(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
 ) -> HwpxResult<HxLine> {
-    let (start, end, width, height, caption, style) = match ctrl {
-        Control::Line { start, end, width, height, caption, style } => {
-            (start, end, *width, *height, caption, style)
+    let (start, end, width, height, horz_offset, vert_offset, caption, style) = match ctrl {
+        Control::Line { start, end, width, height, horz_offset, vert_offset, caption, style } => {
+            (start, end, *width, *height, horz_offset, vert_offset, caption, style)
         }
         _ => unreachable!("encode_line_to_hx called with non-Line"),
     };
@@ -641,7 +652,7 @@ fn encode_line_to_hx(
             protect: 0,
         }),
         pos: Some(HxTablePos {
-            treat_as_char: 1,
+            treat_as_char: if *horz_offset == 0 && *vert_offset == 0 { 1 } else { 0 },
             affect_l_spacing: 0,
             flow_with_text: 0,
             allow_overlap: 0,
@@ -650,8 +661,8 @@ fn encode_line_to_hx(
             horz_rel_to: "PARA".to_string(),
             vert_align: "TOP".to_string(),
             horz_align: "LEFT".to_string(),
-            vert_offset: 0,
-            horz_offset: 0,
+            vert_offset: *vert_offset,
+            horz_offset: *horz_offset,
         }),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
         shape_comment: Some(HxShapeComment { text: "선입니다.".to_string() }),
@@ -781,10 +792,18 @@ fn encode_polygon_to_hx(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
 ) -> HwpxResult<HxPolygon> {
-    let (vertices, width, height, paragraphs, caption, style) = match ctrl {
-        Control::Polygon { vertices, width, height, paragraphs, caption, style } => {
-            (vertices, *width, *height, paragraphs, caption, style)
-        }
+    let (vertices, width, height, horz_offset, vert_offset, paragraphs, caption, style) = match ctrl
+    {
+        Control::Polygon {
+            vertices,
+            width,
+            height,
+            horz_offset,
+            vert_offset,
+            paragraphs,
+            caption,
+            style,
+        } => (vertices, *width, *height, horz_offset, vert_offset, paragraphs, caption, style),
         _ => unreachable!("encode_polygon_to_hx called with non-Polygon"),
     };
 
@@ -835,7 +854,7 @@ fn encode_polygon_to_hx(
             protect: 0,
         }),
         pos: Some(HxTablePos {
-            treat_as_char: 1,
+            treat_as_char: if *horz_offset == 0 && *vert_offset == 0 { 1 } else { 0 },
             affect_l_spacing: 0,
             flow_with_text: 0,
             allow_overlap: 0,
@@ -844,8 +863,8 @@ fn encode_polygon_to_hx(
             horz_rel_to: "PARA".to_string(),
             vert_align: "TOP".to_string(),
             horz_align: "LEFT".to_string(),
-            vert_offset: 0,
-            horz_offset: 0,
+            vert_offset: *vert_offset,
+            horz_offset: *horz_offset,
         }),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
         shape_comment: Some(HxShapeComment { text: "다각형입니다.".to_string() }),
@@ -1651,11 +1670,6 @@ fn build_page_number_xml(pn: &hwpforge_core::section::PageNumber) -> String {
     )
     .expect("write to String is infallible");
     xml
-}
-
-/// Escapes XML special characters in text content.
-fn escape_xml(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
 
 #[cfg(test)]

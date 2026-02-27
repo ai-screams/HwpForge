@@ -158,6 +158,14 @@ pub struct HxRun {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub switches: Vec<HxRunSwitch>,
+
+    /// Optional `<hp:titleMark>` element for TOC participation.
+    #[serde(
+        rename(serialize = "hp:titleMark", deserialize = "titleMark"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub title_mark: Option<HxTitleMark>,
 }
 
 // ── Text ──────────────────────────────────────────────────────────
@@ -167,6 +175,19 @@ pub struct HxRun {
 pub struct HxText {
     #[serde(rename = "$text", default)]
     pub text: String,
+}
+
+// ── Title mark ────────────────────────────────────────────────────
+
+/// `<hp:titleMark ignore="false"/>` — marks a paragraph for TOC participation.
+///
+/// When present in a run, 한글 includes the paragraph in its auto-generated
+/// Table of Contents. `ignore = false` means "include in TOC".
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxTitleMark {
+    /// Whether to exclude from TOC (`false` = include, `true` = exclude).
+    #[serde(rename = "@ignore")]
+    pub ignore: bool,
 }
 
 // ── Control wrapper ──────────────────────────────────────────────
