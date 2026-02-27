@@ -68,7 +68,9 @@ pub(crate) fn encode_section(
     chart_offset: usize,
 ) -> HwpxResult<SectionEncodeResult> {
     let mut chart_entries: Vec<(String, String)> = Vec::new();
-    let hx_section = build_section(section, &mut chart_entries, chart_offset)?;
+    let mut hyperlink_entries: Vec<(String, String)> = Vec::new();
+    let hx_section =
+        build_section(section, &mut chart_entries, &mut hyperlink_entries, chart_offset)?;
     let inner_xml = quick_xml::se::to_string(&hx_section)
         .map_err(|e| HwpxError::XmlSerialize { detail: e.to_string() })?;
 
@@ -83,6 +85,13 @@ pub(crate) fn encode_section(
 
     // Inject header/footer/page number controls after colPr
     inject_header_footer_pagenum(&mut enriched, section);
+
+    // Replace hyperlink placeholder runs with real interleaved XML.
+    // Serde cannot express the ctrl-text-ctrl interleaving required by
+    // HWPX fieldBegin/fieldEnd, so we serialize a marker and swap it here.
+    for (marker_xml, real_xml) in &hyperlink_entries {
+        enriched = enriched.replacen(marker_xml, real_xml, 1);
+    }
 
     Ok(SectionEncodeResult { xml: wrap_section_xml(&enriched), charts: chart_entries })
 }
@@ -118,6 +127,7 @@ fn strip_root_element(xml: &str) -> &str {
 fn build_section(
     section: &Section,
     chart_entries: &mut Vec<(String, String)>,
+    hyperlink_entries: &mut Vec<(String, String)>,
     chart_offset: usize,
 ) -> HwpxResult<HxSection> {
     let paragraphs = section
@@ -127,7 +137,16 @@ fn build_section(
         .map(|(idx, para)| {
             let inject_sec_pr = idx == 0;
             let page_settings = if inject_sec_pr { Some(&section.page_settings) } else { None };
-            build_paragraph(para, inject_sec_pr, page_settings, idx, 0, chart_entries, chart_offset)
+            build_paragraph(
+                para,
+                inject_sec_pr,
+                page_settings,
+                idx,
+                0,
+                chart_entries,
+                hyperlink_entries,
+                chart_offset,
+            )
         })
         .collect::<HwpxResult<Vec<_>>>()?;
 
@@ -139,6 +158,7 @@ fn build_section(
 /// When `inject_sec_pr` is true (first paragraph of the section), page
 /// settings are embedded in the first run's `<hp:secPr>`.
 /// `depth` tracks table nesting level for overflow prevention.
+#[allow(clippy::too_many_arguments)]
 fn build_paragraph(
     para: &Paragraph,
     inject_sec_pr: bool,
@@ -146,10 +166,18 @@ fn build_paragraph(
     para_idx: usize,
     depth: usize,
     chart_entries: &mut Vec<(String, String)>,
+    hyperlink_entries: &mut Vec<(String, String)>,
     chart_offset: usize,
 ) -> HwpxResult<HxParagraph> {
-    let runs =
-        build_runs(&para.runs, inject_sec_pr, page_settings, depth, chart_entries, chart_offset)?;
+    let runs = build_runs(
+        &para.runs,
+        inject_sec_pr,
+        page_settings,
+        depth,
+        chart_entries,
+        hyperlink_entries,
+        chart_offset,
+    )?;
 
     // Omit linesegarray so 한글 recalculates from scratch on open.
     // Previously we emitted a 1-seg placeholder, but justify alignment
@@ -173,16 +201,20 @@ fn build_paragraph(
 ///
 /// Each Core `Run` maps to exactly one `HxRun`. Control runs produce
 /// `HxCtrl` (footnote/endnote) or `HxRect` (textbox) elements.
-/// Hyperlink and Unknown controls are silently skipped.
+/// Hyperlinks emit a placeholder text marker that is replaced with real
+/// interleaved XML after serialization (see [`build_hyperlink_run_xml`]).
+/// Unknown controls are silently skipped.
 ///
 /// If `inject_sec_pr` is true and `page_settings` is `Some`, the first
 /// run gets `<hp:secPr>` attached.
+#[allow(clippy::too_many_arguments)]
 fn build_runs(
     runs: &[Run],
     inject_sec_pr: bool,
     page_settings: Option<&PageSettings>,
     depth: usize,
     chart_entries: &mut Vec<(String, String)>,
+    hyperlink_entries: &mut Vec<(String, String)>,
     chart_offset: usize,
 ) -> HwpxResult<Vec<HxRun>> {
     let mut result = Vec::new();
@@ -214,29 +246,31 @@ fn build_runs(
                 texts.push(HxText { text: s.clone() });
             }
             RunContent::Table(t) => {
-                tables.push(build_table(t, depth)?);
+                tables.push(build_table(t, depth, hyperlink_entries)?);
             }
             RunContent::Image(img) => {
-                pictures.push(build_picture(img, depth)?);
+                pictures.push(build_picture(img, depth, hyperlink_entries)?);
             }
             RunContent::Control(ctrl) => {
                 match ctrl.as_ref() {
                     Control::Footnote { .. } | Control::Endnote { .. } => {
-                        if let Some(hx_ctrl) = encode_control_to_ctrl(ctrl, depth)? {
+                        if let Some(hx_ctrl) =
+                            encode_control_to_ctrl(ctrl, depth, hyperlink_entries)?
+                        {
                             ctrls.push(hx_ctrl);
                         }
                     }
                     Control::TextBox { .. } => {
-                        rects.push(encode_textbox_to_rect(ctrl, depth)?);
+                        rects.push(encode_textbox_to_rect(ctrl, depth, hyperlink_entries)?);
                     }
                     Control::Line { .. } => {
-                        lines.push(encode_line_to_hx(ctrl, depth)?);
+                        lines.push(encode_line_to_hx(ctrl, depth, hyperlink_entries)?);
                     }
                     Control::Ellipse { .. } => {
-                        ellipses.push(encode_ellipse_to_hx(ctrl, depth)?);
+                        ellipses.push(encode_ellipse_to_hx(ctrl, depth, hyperlink_entries)?);
                     }
                     Control::Polygon { .. } => {
-                        polygons.push(encode_polygon_to_hx(ctrl, depth)?);
+                        polygons.push(encode_polygon_to_hx(ctrl, depth, hyperlink_entries)?);
                     }
                     Control::Equation { .. } => {
                         equations.push(encode_equation_to_hx(ctrl)?);
@@ -248,8 +282,27 @@ fn build_runs(
                         chart_entries.push((chart_ref.clone(), chart_xml));
                         switches.push(encode_chart_switch(ctrl, &chart_ref));
                     }
-                    Control::Hyperlink { .. } | Control::Unknown { .. } => {
-                        // Skip for Phase 4.5 (not implemented yet)
+                    Control::Hyperlink { text, url } => {
+                        // Hyperlinks require interleaved ctrl-text-ctrl inside a
+                        // single <hp:run> (fieldBegin → text → fieldEnd). Serde
+                        // cannot express this ordering, so we emit a placeholder
+                        // run with a unique marker and replace it after
+                        // serialization in `encode_section`.
+                        let field_id = hyperlink_entries.len();
+                        let marker = format!("__HWPFORGE_HYPERLINK_{field_id}__");
+                        let real_xml = build_hyperlink_run_xml(text, url, char_pr_id_ref, field_id);
+                        // The marker run will serialize to something like
+                        // <hp:run charPrIDRef="N"><hp:t>__HWPFORGE_HYPERLINK_0__</hp:t></hp:run>
+                        // We record the full serialized marker run pattern so the
+                        // replacement in encode_section is exact.
+                        let marker_run_xml = format!(
+                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
+                        );
+                        hyperlink_entries.push((marker_run_xml, real_xml));
+                        texts.push(HxText { text: marker });
+                    }
+                    Control::Unknown { .. } => {
+                        // Unknown controls are silently skipped
                         continue;
                     }
                     _ => {
@@ -310,20 +363,24 @@ fn build_runs(
 
 /// Converts a Core Control (Footnote/Endnote) to `HxCtrl`.
 ///
-/// Returns `None` for non-ctrl controls (TextBox, Hyperlink, Unknown).
-fn encode_control_to_ctrl(ctrl: &Control, depth: usize) -> HwpxResult<Option<HxCtrl>> {
+/// Returns `None` for non-ctrl controls (TextBox, Unknown).
+fn encode_control_to_ctrl(
+    ctrl: &Control,
+    depth: usize,
+    hyperlink_entries: &mut Vec<(String, String)>,
+) -> HwpxResult<Option<HxCtrl>> {
     match ctrl {
         Control::Footnote { inst_id, paragraphs } => Ok(Some(HxCtrl {
             foot_note: Some(HxFootNote {
                 inst_id: *inst_id,
-                sub_list: encode_paragraphs_to_sublist(paragraphs, depth)?,
+                sub_list: encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries)?,
             }),
             ..Default::default()
         })),
         Control::Endnote { inst_id, paragraphs } => Ok(Some(HxCtrl {
             end_note: Some(HxFootNote {
                 inst_id: *inst_id,
-                sub_list: encode_paragraphs_to_sublist(paragraphs, depth)?,
+                sub_list: encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries)?,
             }),
             ..Default::default()
         })),
@@ -332,13 +389,26 @@ fn encode_control_to_ctrl(ctrl: &Control, depth: usize) -> HwpxResult<Option<HxC
 }
 
 /// Encodes a `Vec<Paragraph>` into `HxSubList` with standard defaults.
-fn encode_paragraphs_to_sublist(paragraphs: &[Paragraph], depth: usize) -> HwpxResult<HxSubList> {
+fn encode_paragraphs_to_sublist(
+    paragraphs: &[Paragraph],
+    depth: usize,
+    hyperlink_entries: &mut Vec<(String, String)>,
+) -> HwpxResult<HxSubList> {
     let mut sub_chart_entries = Vec::new();
     let hx_paragraphs = paragraphs
         .iter()
         .enumerate()
         .map(|(idx, para)| {
-            build_paragraph(para, false, None, idx, depth + 1, &mut sub_chart_entries, 0)
+            build_paragraph(
+                para,
+                false,
+                None,
+                idx,
+                depth + 1,
+                &mut sub_chart_entries,
+                hyperlink_entries,
+                0,
+            )
         })
         .collect::<HwpxResult<Vec<_>>>()?;
 
@@ -425,7 +495,11 @@ fn build_shape_common(width: i32, height: i32, style: Option<&ShapeStyle>) -> Sh
 /// Encodes a Core `Control::TextBox` into `HxRect` with `<hp:drawText>`.
 ///
 /// Phase 4.5 MVP: inline positioning (treatAsChar=1) when offsets are (0,0).
-fn encode_textbox_to_rect(ctrl: &Control, depth: usize) -> HwpxResult<HxRect> {
+fn encode_textbox_to_rect(
+    ctrl: &Control,
+    depth: usize,
+    hyperlink_entries: &mut Vec<(String, String)>,
+) -> HwpxResult<HxRect> {
     let (paragraphs, width, height, horz_offset, vert_offset, caption, style) = match ctrl {
         Control::TextBox {
             paragraphs,
@@ -446,7 +520,7 @@ fn encode_textbox_to_rect(ctrl: &Control, depth: usize) -> HwpxResult<HxRect> {
     const MARGIN: i32 = 283;
     let last_width = width_hwp as u32;
 
-    let sub_list = encode_paragraphs_to_sublist(paragraphs, depth)?;
+    let sub_list = encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries)?;
     let sc = build_shape_common(width_hwp, height_hwp, style.as_ref());
 
     Ok(HxRect {
@@ -495,7 +569,10 @@ fn encode_textbox_to_rect(ctrl: &Control, depth: usize) -> HwpxResult<HxRect> {
         }),
 
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
-        caption: caption.as_ref().map(|c| build_hx_caption(c, width_hwp, depth)).transpose()?,
+        caption: caption
+            .as_ref()
+            .map(|c| build_hx_caption(c, width_hwp, depth, hyperlink_entries))
+            .transpose()?,
 
         draw_text: Some(HxDrawText {
             last_width,
@@ -519,7 +596,11 @@ fn encode_textbox_to_rect(ctrl: &Control, depth: usize) -> HwpxResult<HxRect> {
 }
 
 /// Encodes a Core `Control::Line` into `HxLine`.
-fn encode_line_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxLine> {
+fn encode_line_to_hx(
+    ctrl: &Control,
+    depth: usize,
+    hyperlink_entries: &mut Vec<(String, String)>,
+) -> HwpxResult<HxLine> {
     let (start, end, width, height, caption, style) = match ctrl {
         Control::Line { start, end, width, height, caption, style } => {
             (start, end, *width, *height, caption, style)
@@ -574,14 +655,21 @@ fn encode_line_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxLine> {
         }),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
         shape_comment: Some(HxShapeComment { text: "선입니다.".to_string() }),
-        caption: caption.as_ref().map(|c| build_hx_caption(c, w, depth)).transpose()?,
+        caption: caption
+            .as_ref()
+            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries))
+            .transpose()?,
         start_pt: Some(HxPoint { x: start.x, y: start.y }),
         end_pt: Some(HxPoint { x: end.x, y: end.y }),
     })
 }
 
 /// Encodes a Core `Control::Ellipse` into `HxEllipse`.
-fn encode_ellipse_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxEllipse> {
+fn encode_ellipse_to_hx(
+    ctrl: &Control,
+    depth: usize,
+    hyperlink_entries: &mut Vec<(String, String)>,
+) -> HwpxResult<HxEllipse> {
     let (center, axis1, axis2, width, height, horz_offset, vert_offset, paragraphs, caption, style) =
         match ctrl {
             Control::Ellipse {
@@ -617,7 +705,7 @@ fn encode_ellipse_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxEllipse> {
     let draw_text = if paragraphs.is_empty() {
         None
     } else {
-        let sub_list = encode_paragraphs_to_sublist(paragraphs, depth)?;
+        let sub_list = encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries)?;
         Some(HxDrawText {
             last_width: 0,
             name: String::new(),
@@ -672,7 +760,10 @@ fn encode_ellipse_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxEllipse> {
         }),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
         shape_comment: Some(HxShapeComment { text: "타원입니다.".to_string() }),
-        caption: caption.as_ref().map(|c| build_hx_caption(c, w, depth)).transpose()?,
+        caption: caption
+            .as_ref()
+            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries))
+            .transpose()?,
         draw_text,
         center: Some(HxPoint { x: center.x, y: center.y }),
         ax1: Some(HxPoint { x: axis1.x, y: axis1.y }),
@@ -685,7 +776,11 @@ fn encode_ellipse_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxEllipse> {
 }
 
 /// Encodes a Core `Control::Polygon` into `HxPolygon`.
-fn encode_polygon_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxPolygon> {
+fn encode_polygon_to_hx(
+    ctrl: &Control,
+    depth: usize,
+    hyperlink_entries: &mut Vec<(String, String)>,
+) -> HwpxResult<HxPolygon> {
     let (vertices, width, height, paragraphs, caption, style) = match ctrl {
         Control::Polygon { vertices, width, height, paragraphs, caption, style } => {
             (vertices, *width, *height, paragraphs, caption, style)
@@ -700,7 +795,7 @@ fn encode_polygon_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxPolygon> {
     let draw_text = if paragraphs.is_empty() {
         None
     } else {
-        let sub_list = encode_paragraphs_to_sublist(paragraphs, depth)?;
+        let sub_list = encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries)?;
         Some(HxDrawText {
             last_width: 0,
             name: String::new(),
@@ -754,7 +849,10 @@ fn encode_polygon_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxPolygon> {
         }),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
         shape_comment: Some(HxShapeComment { text: "다각형입니다.".to_string() }),
-        caption: caption.as_ref().map(|c| build_hx_caption(c, w, depth)).transpose()?,
+        caption: caption
+            .as_ref()
+            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries))
+            .transpose()?,
         draw_text,
         points,
     })
@@ -819,6 +917,60 @@ fn encode_equation_to_hx(ctrl: &Control) -> HwpxResult<HxEquation> {
     })
 }
 
+/// Builds a complete `<hp:run>` XML string for a hyperlink.
+///
+/// HWPX hyperlinks use a `fieldBegin`/`fieldEnd` pair inside `<hp:ctrl>`
+/// elements, interleaved with text content within a single `<hp:run>`:
+///
+/// ```xml
+/// <hp:run charPrIDRef="N">
+///   <hp:ctrl>
+///     <hp:fieldBegin type="HYPERLINK" ... fieldid="F" ...>
+///       <hp:parameters cnt="4" name="">
+///         <hp:stringParam name="Path">URL</hp:stringParam>
+///         ...
+///       </hp:parameters>
+///     </hp:fieldBegin>
+///   </hp:ctrl>
+///   <hp:t>display text</hp:t>
+///   <hp:ctrl>
+///     <hp:fieldEnd beginIDRef="F" fieldid="F"/>
+///   </hp:ctrl>
+/// </hp:run>
+/// ```
+///
+/// This interleaved ordering (ctrl → text → ctrl) cannot be expressed by
+/// serde's field-order-based serialization, hence the manual XML generation.
+fn build_hyperlink_run_xml(text: &str, url: &str, char_pr_id_ref: u32, field_id: usize) -> String {
+    let escaped_url = escape_xml(url);
+    let escaped_text = escape_xml(text);
+    format!(
+        concat!(
+            r#"<hp:run charPrIDRef="{cpr}">"#,
+            r#"<hp:ctrl>"#,
+            r#"<hp:fieldBegin type="HYPERLINK" editable="false" dirty="false" "#,
+            r#"zorder="-1" fieldid="{fid}" name="">"#,
+            r#"<hp:parameters cnt="4" name="">"#,
+            r#"<hp:stringParam name="Path">{url}</hp:stringParam>"#,
+            r#"<hp:stringParam name="Category">HWPHYPERLINK_TYPE_URL</hp:stringParam>"#,
+            r#"<hp:stringParam name="TargetType">HWPHYPERLINK_TARGET_DOCUMENT_DONTCARE</hp:stringParam>"#,
+            r#"<hp:stringParam name="DocOpenType">HWPHYPERLINK_JUMP_NEWTAB</hp:stringParam>"#,
+            r#"</hp:parameters>"#,
+            r#"</hp:fieldBegin>"#,
+            r#"</hp:ctrl>"#,
+            r#"<hp:t>{txt}</hp:t>"#,
+            r#"<hp:ctrl>"#,
+            r#"<hp:fieldEnd beginIDRef="{fid}" fieldid="{fid}"/>"#,
+            r#"</hp:ctrl>"#,
+            r#"</hp:run>"#,
+        ),
+        cpr = char_pr_id_ref,
+        fid = field_id,
+        url = escaped_url,
+        txt = escaped_text,
+    )
+}
+
 /// Encodes a Core `Control::Chart` into an `HxRunSwitch` wrapping `HxChart`.
 ///
 /// Charts use `<hp:switch><hp:case><hp:chart>` structure in section XML,
@@ -870,7 +1022,12 @@ fn encode_chart_switch(ctrl: &Control, chart_ref: &str) -> HxRunSwitch {
 /// Converts a Core `Caption` into an `HxCaption`.
 ///
 /// `parent_width` is used for `lastWidth` (= parent object sz.width in HWPUNIT).
-fn build_hx_caption(caption: &Caption, parent_width: i32, depth: usize) -> HwpxResult<HxCaption> {
+fn build_hx_caption(
+    caption: &Caption,
+    parent_width: i32,
+    depth: usize,
+    hyperlink_entries: &mut Vec<(String, String)>,
+) -> HwpxResult<HxCaption> {
     let side = match caption.side {
         CaptionSide::Left => "LEFT",
         CaptionSide::Right => "RIGHT",
@@ -881,7 +1038,7 @@ fn build_hx_caption(caption: &Caption, parent_width: i32, depth: usize) -> HwpxR
 
     let width = caption.width.map(|w| w.as_i32()).unwrap_or(parent_width);
     let gap = caption.gap.as_i32();
-    let sub_list = encode_paragraphs_to_sublist(&caption.paragraphs, depth)?;
+    let sub_list = encode_paragraphs_to_sublist(&caption.paragraphs, depth, hyperlink_entries)?;
 
     // parent_width comes from HwpUnit::as_i32(), guaranteed non-negative
     Ok(HxCaption { side, full_sz: 0, width, gap, last_width: parent_width as u32, sub_list })
@@ -939,7 +1096,11 @@ const TABLE_BORDER_FILL_ID: u32 = 3;
 ///
 /// Returns [`HwpxError::InvalidStructure`] if nesting depth exceeds
 /// [`MAX_NESTING_DEPTH`].
-fn build_table(table: &Table, depth: usize) -> HwpxResult<HxTable> {
+fn build_table(
+    table: &Table,
+    depth: usize,
+    hyperlink_entries: &mut Vec<(String, String)>,
+) -> HwpxResult<HxTable> {
     if depth >= MAX_NESTING_DEPTH {
         return Err(HwpxError::InvalidStructure {
             detail: format!("table nesting depth {} exceeds limit of {}", depth, MAX_NESTING_DEPTH,),
@@ -952,7 +1113,7 @@ fn build_table(table: &Table, depth: usize) -> HwpxResult<HxTable> {
         .rows
         .iter()
         .enumerate()
-        .map(|(row_idx, row)| build_table_row(row, row_idx as u32, depth))
+        .map(|(row_idx, row)| build_table_row(row, row_idx as u32, depth, hyperlink_entries))
         .collect::<HwpxResult<Vec<_>>>()?;
 
     // Table width: use explicit width or sum of first row's cell widths
@@ -1002,7 +1163,7 @@ fn build_table(table: &Table, depth: usize) -> HwpxResult<HxTable> {
         caption: table
             .caption
             .as_ref()
-            .map(|c| build_hx_caption(c, table_width, depth))
+            .map(|c| build_hx_caption(c, table_width, depth, hyperlink_entries))
             .transpose()?,
         in_margin: Some(DEFAULT_CELL_MARGIN),
         rows,
@@ -1010,12 +1171,19 @@ fn build_table(table: &Table, depth: usize) -> HwpxResult<HxTable> {
 }
 
 /// Builds `HxTableRow` from a Core `TableRow`.
-fn build_table_row(row: &TableRow, row_idx: u32, depth: usize) -> HwpxResult<HxTableRow> {
+fn build_table_row(
+    row: &TableRow,
+    row_idx: u32,
+    depth: usize,
+    hyperlink_entries: &mut Vec<(String, String)>,
+) -> HwpxResult<HxTableRow> {
     let cells = row
         .cells
         .iter()
         .enumerate()
-        .map(|(col_idx, cell)| build_table_cell(cell, col_idx as u32, row_idx, depth))
+        .map(|(col_idx, cell)| {
+            build_table_cell(cell, col_idx as u32, row_idx, depth, hyperlink_entries)
+        })
         .collect::<HwpxResult<Vec<_>>>()?;
 
     Ok(HxTableRow { cells })
@@ -1030,6 +1198,7 @@ fn build_table_cell(
     col_idx: u32,
     row_idx: u32,
     depth: usize,
+    hyperlink_entries: &mut Vec<(String, String)>,
 ) -> HwpxResult<HxTableCell> {
     let paragraphs = cell
         .paragraphs
@@ -1037,7 +1206,16 @@ fn build_table_cell(
         .enumerate()
         .map(|(idx, para)| {
             let mut sub_chart_entries = Vec::new();
-            build_paragraph(para, false, None, idx, depth + 1, &mut sub_chart_entries, 0)
+            build_paragraph(
+                para,
+                false,
+                None,
+                idx,
+                depth + 1,
+                &mut sub_chart_entries,
+                hyperlink_entries,
+                0,
+            )
         })
         .collect::<HwpxResult<Vec<_>>>()?;
 
@@ -1082,7 +1260,11 @@ fn build_table_cell(
 /// Generates all required sub-elements (offset, orgSz, curSz, flip,
 /// rotationInfo, renderingInfo, imgRect, imgClip, inMargin, imgDim,
 /// img, sz, pos, outMargin) to match 한글's expected structure.
-fn build_picture(img: &Image, depth: usize) -> HwpxResult<HxPic> {
+fn build_picture(
+    img: &Image,
+    depth: usize,
+    hyperlink_entries: &mut Vec<(String, String)>,
+) -> HwpxResult<HxPic> {
     let without_prefix = img.path.strip_prefix("BinData/").unwrap_or(&img.path);
     // Strip extension: "image1.png" → "image1"
     let binary_ref = match without_prefix.rfind('.') {
@@ -1160,7 +1342,11 @@ fn build_picture(img: &Image, depth: usize) -> HwpxResult<HxPic> {
             horz_offset: 0,
         }),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
-        caption: img.caption.as_ref().map(|c| build_hx_caption(c, w, depth)).transpose()?,
+        caption: img
+            .caption
+            .as_ref()
+            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries))
+            .transpose()?,
     })
 }
 
@@ -1689,10 +1875,10 @@ mod tests {
         assert!(xml.contains("<hp:t>Deep</hp:t>"), "missing nested text");
     }
 
-    // ── Test 8: Control is skipped ───────────────────────────────
+    // ── Test 8: Hyperlink encoding ─────────────────────────────
 
     #[test]
-    fn control_skipped() {
+    fn hyperlink_encoding() {
         use hwpforge_core::control::Control;
 
         let ctrl =
@@ -1712,8 +1898,50 @@ mod tests {
 
         assert!(xml.contains("<hp:t>before</hp:t>"), "missing 'before' text");
         assert!(xml.contains("<hp:t>after</hp:t>"), "missing 'after' text");
-        // Control content should not appear
-        assert!(!xml.contains("example.com"), "control content should not appear in XML");
+
+        // Hyperlink must produce fieldBegin/fieldEnd pair
+        assert!(xml.contains(r#"type="HYPERLINK"#), "missing HYPERLINK fieldBegin type");
+        assert!(xml.contains("https://example.com"), "missing hyperlink URL in parameters");
+        assert!(xml.contains("<hp:t>link</hp:t>"), "missing hyperlink display text");
+        assert!(xml.contains("<hp:fieldEnd"), "missing fieldEnd closing element");
+
+        // fieldBegin and fieldEnd must share the same fieldid
+        assert!(xml.contains(r#"fieldid="0""#), "fieldBegin must have fieldid=0");
+        assert!(
+            xml.contains(r#"beginIDRef="0""#),
+            "fieldEnd must reference fieldid=0 via beginIDRef"
+        );
+
+        // No leftover placeholder marker
+        assert!(
+            !xml.contains("__HWPFORGE_HYPERLINK_"),
+            "hyperlink placeholder marker was not replaced"
+        );
+    }
+
+    // ── Test 8b: Unknown control is skipped ──────────────────────
+
+    #[test]
+    fn unknown_control_skipped() {
+        use hwpforge_core::control::Control;
+
+        let ctrl = Control::Unknown { tag: "test".to_string(), data: None };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![
+                    Run::text("before", CharShapeIndex::new(0)),
+                    Run::control(ctrl, CharShapeIndex::new(0)),
+                    Run::text("after", CharShapeIndex::new(0)),
+                ],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
+
+        assert!(xml.contains("<hp:t>before</hp:t>"), "missing 'before' text");
+        assert!(xml.contains("<hp:t>after</hp:t>"), "missing 'after' text");
+        assert!(!xml.contains("test"), "unknown control content should not appear in XML");
     }
 
     // ── Test 9: Empty text produces valid XML ────────────────────
@@ -1780,7 +2008,7 @@ mod tests {
     #[test]
     fn nesting_depth_exceeded() {
         let hx_table = Table::new(vec![]);
-        let err = build_table(&hx_table, MAX_NESTING_DEPTH).unwrap_err();
+        let err = build_table(&hx_table, MAX_NESTING_DEPTH, &mut Vec::new()).unwrap_err();
         match &err {
             HwpxError::InvalidStructure { detail } => {
                 assert!(detail.contains("nesting depth"));
@@ -1797,7 +2025,7 @@ mod tests {
             HwpUnit::new(500).unwrap(),
             ImageFormat::Jpeg,
         );
-        let hx = build_picture(&img, 0).unwrap();
+        let hx = build_picture(&img, 0, &mut Vec::new()).unwrap();
         assert_eq!(
             hx.img.unwrap().binary_item_id_ref,
             "image",
@@ -2214,5 +2442,67 @@ mod tests {
                 .unwrap();
         let header = result.header.expect("should have header");
         assert_eq!(header.paragraphs[0].runs[0].content.as_text(), Some("A & B < C > D"),);
+    }
+
+    // ── Hyperlink helper unit tests ──────────────────────────────
+
+    #[test]
+    fn build_hyperlink_run_xml_basic() {
+        let xml = build_hyperlink_run_xml("Click here", "https://example.com", 0, 0);
+        assert!(xml.starts_with(r#"<hp:run charPrIDRef="0">"#));
+        assert!(xml.contains(r#"type="HYPERLINK""#));
+        assert!(xml.contains(r#"fieldid="0""#));
+        assert!(xml.contains(r#"<hp:stringParam name="Path">https://example.com</hp:stringParam>"#));
+        assert!(xml.contains("<hp:t>Click here</hp:t>"));
+        assert!(xml.contains(r#"<hp:fieldEnd beginIDRef="0" fieldid="0"/>"#));
+        assert!(xml.ends_with("</hp:run>"));
+    }
+
+    #[test]
+    fn build_hyperlink_run_xml_escapes_special_chars() {
+        let xml = build_hyperlink_run_xml("A & B < C", "https://example.com?a=1&b=2", 2, 5);
+        assert!(xml.contains(r#"charPrIDRef="2""#));
+        assert!(xml.contains(r#"fieldid="5""#));
+        assert!(xml.contains("https://example.com?a=1&amp;b=2"), "URL ampersand must be escaped");
+        assert!(
+            xml.contains("<hp:t>A &amp; B &lt; C</hp:t>"),
+            "display text special chars must be escaped"
+        );
+    }
+
+    #[test]
+    fn multiple_hyperlinks_get_unique_field_ids() {
+        use hwpforge_core::control::Control;
+
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![
+                    Run::control(
+                        Control::hyperlink("Link 1", "https://one.com"),
+                        CharShapeIndex::new(0),
+                    ),
+                    Run::control(
+                        Control::hyperlink("Link 2", "https://two.com"),
+                        CharShapeIndex::new(0),
+                    ),
+                ],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
+
+        // First hyperlink: fieldid=0
+        assert!(xml.contains(r#"<hp:fieldEnd beginIDRef="0" fieldid="0"/>"#));
+        // Second hyperlink: fieldid=1
+        assert!(xml.contains(r#"<hp:fieldEnd beginIDRef="1" fieldid="1"/>"#));
+        // Both URLs present
+        assert!(xml.contains("https://one.com"));
+        assert!(xml.contains("https://two.com"));
+        // Both display texts present
+        assert!(xml.contains("<hp:t>Link 1</hp:t>"));
+        assert!(xml.contains("<hp:t>Link 2</hp:t>"));
+        // No leftover markers
+        assert!(!xml.contains("__HWPFORGE_HYPERLINK_"));
     }
 }

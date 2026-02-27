@@ -216,7 +216,10 @@ fn build_section_0() -> Section {
     // hyperlink (convenience constructor #9)
     paras.push(mixed_para(
         &[
-            ("HwpForge는 한국의 HWP/HWPX 문서 포맷을 순수 Rust로 제어하는 라이브러리입니다. ", CS_NORMAL),
+            (
+                "HwpForge는 한국의 HWP/HWPX 문서 포맷을 순수 Rust로 제어하는 라이브러리입니다. ",
+                CS_NORMAL,
+            ),
             ("KS X 6101 표준 사양은 ", CS_NORMAL),
         ],
         PS_JUSTIFY,
@@ -226,9 +229,7 @@ fn build_section_0() -> Section {
         CS_NORMAL,
         PS_JUSTIFY,
     ));
-    paras.push(p(
-        "에서 마크다운 형태로 열람할 수 있습니다.",
-    ));
+    paras.push(p("에서 마크다운 형태로 열람할 수 있습니다."));
     paras.push(empty());
     paras.push(line_separator());
     paras.push(empty());
@@ -318,10 +319,30 @@ fn build_section_1() -> Section {
     paras.push(table_para(make_table(
         &["계층", "크레이트", "비유", "역할"],
         &[
-            vec!["Foundation", "hwpforge-foundation", "원자재", "HwpUnit, Color, 브랜드 인덱스 등 원시 타입"],
-            vec!["Core", "hwpforge-core", "주조틀", "Document/Section/Paragraph 순수 구조체 (스타일 참조만)"],
-            vec!["Blueprint", "hwpforge-blueprint", "설계도", "YAML 스타일 템플릿 (Figma Design Token 개념)"],
-            vec!["Smithy", "smithy-hwpx/md", "용광로", "포맷별 인코더/디코더 (Core+Blueprint → HWPX/MD)"],
+            vec![
+                "Foundation",
+                "hwpforge-foundation",
+                "원자재",
+                "HwpUnit, Color, 브랜드 인덱스 등 원시 타입",
+            ],
+            vec![
+                "Core",
+                "hwpforge-core",
+                "주조틀",
+                "Document/Section/Paragraph 순수 구조체 (스타일 참조만)",
+            ],
+            vec![
+                "Blueprint",
+                "hwpforge-blueprint",
+                "설계도",
+                "YAML 스타일 템플릿 (Figma Design Token 개념)",
+            ],
+            vec![
+                "Smithy",
+                "smithy-hwpx/md",
+                "용광로",
+                "포맷별 인코더/디코더 (Core+Blueprint → HWPX/MD)",
+            ],
         ],
         10500,
         Some("[표 2] HwpForge 4-Layer 아키텍처"),
@@ -361,11 +382,7 @@ fn build_section_1() -> Section {
     paras.push(p(
         "Foundation의 핵심 혁신은 Branded Index입니다. Index<T>는 팬텀 타입을 사용하여 CharShapeIndex와 ParaShapeIndex를 컴파일 타임에 구분합니다.",
     ));
-    paras.push(ctrl_para(
-        Control::equation("Index langle T rangle"),
-        CS_NORMAL,
-        PS_CENTER,
-    ));
+    paras.push(ctrl_para(Control::equation("Index langle T rangle"), CS_NORMAL, PS_CENTER));
     paras.push(p(
         "위 수식에서 T는 팬텀 타입 파라미터로, CharShape/ParaShape/Font 등의 마커 타입이 됩니다. 서로 다른 인덱스 타입 간 대입은 컴파일 오류를 발생시킵니다.",
     ));
@@ -439,11 +456,7 @@ fn build_section_2() -> Section {
     paras.push(text_para("3.2 Document 노드", CS_SUBHEADING, PS_LEFT));
     let dw = HwpUnit::from_mm(30.0).expect("30mm valid");
     let dh = HwpUnit::from_mm(20.0).expect("20mm valid");
-    paras.push(ctrl_para(
-        Control::ellipse(dw, dh),
-        CS_NORMAL,
-        PS_CENTER,
-    ));
+    paras.push(ctrl_para(Control::ellipse(dw, dh), CS_NORMAL, PS_CENTER));
     paras.push(p(
         "Document는 최상위 컨테이너로, 1개 이상의 Section을 보유합니다. validate() 메서드로 Typestate 전환 (Draft → Validated)을 수행합니다.",
     ));
@@ -466,7 +479,8 @@ fn build_section_2() -> Section {
                 ShapePoint::new(tw, th),
                 ShapePoint::new(0, th),
                 ShapePoint::new(tw / 2, 0), // 첫 점 반복 (gotcha #17)
-            ]).expect("polygon with 4 vertices valid");
+            ])
+            .expect("polygon with 4 vertices valid");
             // Caption::new on polygon (constructor #17)
             if let Control::Polygon { ref mut caption, ref mut style, .. } = poly {
                 *caption = Some(make_caption("[그림 2] 의존성 방향 화살표", CaptionSide::Bottom));
@@ -488,10 +502,8 @@ fn build_section_2() -> Section {
     };
     paras.push(ctrl_para(
         {
-            let mut ln = Control::line(
-                ShapePoint::new(0, 0),
-                ShapePoint::new(14000, 5000),
-            ).expect("non-degenerate line valid");
+            let mut ln = Control::line(ShapePoint::new(0, 0), ShapePoint::new(14000, 5000))
+                .expect("non-degenerate line valid");
             if let Control::Line { ref mut style, .. } = ln {
                 *style = Some(line_style);
             }
@@ -508,8 +520,10 @@ fn build_section_2() -> Section {
 
     // ColumnSettings::equal_columns (constructor #23) — 2단 레이아웃
     let mut sec = Section::with_paragraphs(paras, PageSettings::a4());
-    sec.column_settings =
-        Some(ColumnSettings::equal_columns(2, HwpUnit::from_mm(8.0).expect("8mm valid")).expect("2 columns valid"));
+    sec.column_settings = Some(
+        ColumnSettings::equal_columns(2, HwpUnit::from_mm(8.0).expect("8mm valid"))
+            .expect("2 columns valid"),
+    );
     sec
 }
 
@@ -558,7 +572,8 @@ fn build_section_3() -> Section {
         TableCell::new(vec![p("라운드트립 동일성 검증")], cw),
     ]);
     let mut pipeline_table = Table::new(vec![header_row, row1, row2, row3, row4]);
-    pipeline_table.caption = Some(make_caption("[표 3] 인코드/디코드 파이프라인 단계 비교", CaptionSide::Top));
+    pipeline_table.caption =
+        Some(make_caption("[표 3] 인코드/디코드 파이프라인 단계 비교", CaptionSide::Top));
     paras.push(table_para(pipeline_table));
     paras.push(empty());
 
