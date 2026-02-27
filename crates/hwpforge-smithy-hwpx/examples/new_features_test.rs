@@ -116,7 +116,7 @@ fn section_positioning() -> Section {
         start: ShapePoint::new(0, 0),
         end: ShapePoint::new(14000, 0),
         width: HwpUnit::from_pt(140.0).unwrap(),
-        height: HwpUnit::new(0).expect("0 is valid"),
+        height: HwpUnit::new(100).expect("valid"),
         horz_offset: 5000,
         vert_offset: 2000,
         caption: None,
@@ -254,9 +254,10 @@ fn section_charts() -> Section {
     paras.push(ctrl_para(radar_chart));
     paras.push(p(""));
 
-    // ④ Scatter smooth
+    // ④ Scatter smooth (scatter charts require XY data, NOT category data)
     paras.push(p("④ 분산형 부드러운 곡선 (scatter_style=SmoothMarker):"));
-    let scatter_data: ChartData = ChartData::category(cat3, &[("데이터", &[5.0, 15.0, 12.0])]);
+    let scatter_data: ChartData =
+        ChartData::xy(&[("데이터", &[1.0, 2.0, 3.0, 4.0, 5.0], &[5.0, 15.0, 12.0, 18.0, 10.0])]);
     let scatter_chart: Control = Control::Chart {
         chart_type: ChartType::Scatter,
         data: scatter_data,

@@ -680,8 +680,12 @@ impl Control {
         }
         let raw_w = ((end.x as i64) - (start.x as i64)).unsigned_abs() as i32;
         let raw_h = ((end.y as i64) - (start.y as i64)).unsigned_abs() as i32;
-        let width = HwpUnit::new(raw_w).unwrap_or_else(|_| HwpUnit::new(1).expect("1 is valid"));
-        let height = HwpUnit::new(raw_h).unwrap_or_else(|_| HwpUnit::new(1).expect("1 is valid"));
+        // Minimum bounding box of 100 HwpUnit (~1pt) per axis.
+        // 한글 cannot render lines with a zero-dimension bounding box.
+        let raw_w = raw_w.max(100);
+        let raw_h = raw_h.max(100);
+        let width = HwpUnit::new(raw_w).unwrap_or_else(|_| HwpUnit::new(100).expect("valid"));
+        let height = HwpUnit::new(raw_h).unwrap_or_else(|_| HwpUnit::new(100).expect("valid"));
         Ok(Self::Line {
             start,
             end,
@@ -697,7 +701,7 @@ impl Control {
     /// Creates a horizontal line of the given width.
     ///
     /// Shortcut for `line(ShapePoint::new(0, 0), ShapePoint::new(width.as_i32(), 0))`.
-    /// The bounding box height is 0 (flat line). Defaults: no caption, no style.
+    /// The bounding box height is 100 HwpUnit (~1pt minimum). Defaults: no caption, no style.
     ///
     /// # Examples
     ///
@@ -715,7 +719,7 @@ impl Control {
             start: ShapePoint::new(0, 0),
             end: ShapePoint::new(w, 0),
             width,
-            height: HwpUnit::new(0).expect("0 is valid"),
+            height: HwpUnit::new(100).expect("100 is valid"),
             horz_offset: 0,
             vert_offset: 0,
             caption: None,
@@ -1343,7 +1347,7 @@ mod tests {
                 assert_eq!(start, ShapePoint::new(0, 0));
                 assert_eq!(end, ShapePoint::new(5000, 0));
                 assert_eq!(width, HwpUnit::new(5000).unwrap());
-                assert_eq!(height, HwpUnit::new(0).unwrap());
+                assert_eq!(height, HwpUnit::new(100).unwrap()); // min bounding box
                 assert_eq!(horz_offset, 0);
                 assert_eq!(vert_offset, 0);
                 assert!(caption.is_none());
@@ -1359,7 +1363,7 @@ mod tests {
         assert!(ctrl.is_line());
         match ctrl {
             Control::Line { width, height, .. } => {
-                assert_eq!(width, HwpUnit::new(0).unwrap());
+                assert_eq!(width, HwpUnit::new(100).unwrap()); // min bounding box
                 assert_eq!(height, HwpUnit::new(3000).unwrap());
             }
             _ => panic!("expected Line"),
@@ -1404,7 +1408,7 @@ mod tests {
                 assert_eq!(end.y, 0);
                 assert_eq!(end.x, width.as_i32());
                 assert_eq!(w, width);
-                assert_eq!(height, HwpUnit::new(0).unwrap());
+                assert_eq!(height, HwpUnit::new(100).unwrap()); // min bounding box
                 assert_eq!(horz_offset, 0);
                 assert_eq!(vert_offset, 0);
                 assert!(caption.is_none());

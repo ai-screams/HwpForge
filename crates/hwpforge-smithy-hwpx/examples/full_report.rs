@@ -155,7 +155,7 @@ fn line_separator() -> Paragraph {
             start: ShapePoint::new(0, 0),
             end: ShapePoint::new(42520, 0),
             width: HwpUnit::from_mm(150.0).unwrap(),
-            height: HwpUnit::new(0).unwrap(),
+            height: HwpUnit::new(100).unwrap(),
             horz_offset: 0,
             vert_offset: 0,
             caption: None,
