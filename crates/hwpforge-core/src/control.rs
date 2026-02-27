@@ -518,12 +518,12 @@ impl Control {
                 reason: format!("polygon requires at least 3 vertices, got {}", vertices.len()),
             });
         }
-        let min_x = vertices.iter().map(|p| p.x).min().unwrap_or(0);
-        let max_x = vertices.iter().map(|p| p.x).max().unwrap_or(0);
-        let min_y = vertices.iter().map(|p| p.y).min().unwrap_or(0);
-        let max_y = vertices.iter().map(|p| p.y).max().unwrap_or(0);
-        let bbox_w = (max_x - min_x).max(0);
-        let bbox_h = (max_y - min_y).max(0);
+        let min_x = vertices.iter().map(|p| p.x as i64).min().unwrap_or(0);
+        let max_x = vertices.iter().map(|p| p.x as i64).max().unwrap_or(0);
+        let min_y = vertices.iter().map(|p| p.y as i64).min().unwrap_or(0);
+        let max_y = vertices.iter().map(|p| p.y as i64).max().unwrap_or(0);
+        let bbox_w = (max_x - min_x).max(0) as i32;
+        let bbox_h = (max_y - min_y).max(0) as i32;
         let width = HwpUnit::new(bbox_w).unwrap_or_else(|_| HwpUnit::new(1).expect("1 is valid"));
         let height = HwpUnit::new(bbox_h).unwrap_or_else(|_| HwpUnit::new(1).expect("1 is valid"));
         Ok(Self::Polygon {
@@ -563,8 +563,8 @@ impl Control {
                 reason: "start and end points are identical (degenerate line)".to_string(),
             });
         }
-        let raw_w = (end.x - start.x).unsigned_abs() as i32;
-        let raw_h = (end.y - start.y).unsigned_abs() as i32;
+        let raw_w = ((end.x as i64) - (start.x as i64)).unsigned_abs() as i32;
+        let raw_h = ((end.y as i64) - (start.y as i64)).unsigned_abs() as i32;
         let width = HwpUnit::new(raw_w).unwrap_or_else(|_| HwpUnit::new(1).expect("1 is valid"));
         let height = HwpUnit::new(raw_h).unwrap_or_else(|_| HwpUnit::new(1).expect("1 is valid"));
         Ok(Self::Line { start, end, width, height, caption: None, style: None })
