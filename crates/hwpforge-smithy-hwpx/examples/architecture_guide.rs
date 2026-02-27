@@ -54,6 +54,7 @@ use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
     Alignment, CharShapeIndex, Color, HwpUnit, NumberFormatType, PageNumberPosition, ParaShapeIndex,
+    UnderlineType,
 };
 use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
@@ -68,6 +69,7 @@ const CS_ITALIC: usize = 2; // 함초롬돋움 10pt, 회색, 이탤릭
 const CS_TITLE: usize = 3; // 함초롬돋움 20pt, 남색, 굵게 (단독)
 const CS_HEADING: usize = 4; // 함초롬돋움 14pt, 검정, 굵게 (단독)
 const CS_SUBHEADING: usize = 5; // 함초롬돋움 11pt, 진회색, 굵게 (단독)
+const CS_LINK: usize = 6; // 함초롬돋움 10pt, 파란 #0563C1, 밑줄 (하이퍼링크)
 
 // ParaShape indices
 const PS_LEFT: usize = 0;
@@ -226,8 +228,8 @@ fn build_section_0() -> Section {
     ));
     paras.push(ctrl_para(
         Control::hyperlink("openhwp GitHub", "https://github.com/nicokimmel/openhwp"),
-        CS_NORMAL,
-        PS_JUSTIFY,
+        CS_LINK,
+        PS_CENTER,
     ));
     paras.push(p("에서 마크다운 형태로 열람할 수 있습니다."));
     paras.push(empty());
@@ -697,6 +699,13 @@ fn main() {
     cs5.text_color = Color::from_rgb(51, 51, 51);
     style_store.push_char_shape(cs5);
 
+    // CS 6: Hyperlink — standard blue + underline
+    let mut cs6 = HwpxCharShape::default();
+    cs6.text_color = Color::from_rgb(5, 99, 193); // #0563C1 (standard hyperlink blue)
+    cs6.underline_type = UnderlineType::Bottom;
+    cs6.underline_color = Some(Color::from_rgb(5, 99, 193));
+    style_store.push_char_shape(cs6);
+
     // PS 0: Left
     style_store.push_para_shape(HwpxParaShape::default());
 
@@ -715,7 +724,7 @@ fn main() {
     ps3.alignment = Alignment::Right;
     style_store.push_para_shape(ps3);
 
-    println!("[1] Style store: 7 fonts, 6 char shapes, 4 para shapes");
+    println!("[1] Style store: 7 fonts, 7 char shapes, 4 para shapes");
 
     // ── 2. Build Document ──
     // Document::new (constructor #27)
