@@ -279,12 +279,10 @@ fn main() {
                 end: ShapePoint::new(30000, 0),
                 width: HwpUnit::new(30000).unwrap(),
                 height: HwpUnit::new(100).unwrap(),
-                caption: Some(Caption {
-                    side: CaptionSide::Bottom,
-                    gap: HwpUnit::new(850).unwrap(),
-                    width: None,
-                    paragraphs: vec![p("그림 1. 구분선 (빨간 굵은 대시)")],
-                }),
+                caption: Some(Caption::new(
+                    vec![p("그림 1. 구분선 (빨간 굵은 대시)")],
+                    CaptionSide::Bottom,
+                )),
                 style: Some(ShapeStyle {
                     line_color: Some("#CC0000".to_string()),
                     fill_color: None,
@@ -305,12 +303,10 @@ fn main() {
                 end: ShapePoint::new(30000, 5000),
                 width: HwpUnit::new(30000).unwrap(),
                 height: HwpUnit::new(5000).unwrap(),
-                caption: Some(Caption {
-                    side: CaptionSide::Bottom,
-                    gap: HwpUnit::new(850).unwrap(),
-                    width: None,
-                    paragraphs: vec![p("그림 2. 대각선 (파란 점선)")],
-                }),
+                caption: Some(Caption::new(
+                    vec![p("그림 2. 대각선 (파란 점선)")],
+                    CaptionSide::Bottom,
+                )),
                 style: Some(ShapeStyle {
                     line_color: Some("#0000CC".to_string()),
                     fill_color: None,

@@ -78,6 +78,38 @@ impl Default for Caption {
     }
 }
 
+impl Caption {
+    /// Creates a caption with the given paragraphs and side placement.
+    ///
+    /// Uses default gap (850 HWPUNIT ≈ 3mm) and auto width (`None`).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::caption::{Caption, CaptionSide};
+    /// use hwpforge_core::paragraph::Paragraph;
+    /// use hwpforge_foundation::ParaShapeIndex;
+    ///
+    /// let cap = Caption::new(
+    ///     vec![Paragraph::new(ParaShapeIndex::new(0))],
+    ///     CaptionSide::Bottom,
+    /// );
+    /// assert_eq!(cap.side, CaptionSide::Bottom);
+    /// assert_eq!(cap.gap.as_i32(), 850);
+    /// assert!(cap.width.is_none());
+    /// assert_eq!(cap.paragraphs.len(), 1);
+    /// ```
+    pub fn new(paragraphs: Vec<Paragraph>, side: CaptionSide) -> Self {
+        Self {
+            side,
+            width: None,
+            // 850 HWPUNIT ≈ 3mm. unwrap is safe: 850 is well within valid range.
+            gap: HwpUnit::new(850).expect("850 is valid"),
+            paragraphs,
+        }
+    }
+}
+
 /// Position of caption relative to its parent object.
 ///
 /// # Default
@@ -127,6 +159,29 @@ mod tests {
             vec![Run::text("Figure 1: Example", CharShapeIndex::new(0))],
             ParaShapeIndex::new(0),
         )
+    }
+
+    #[test]
+    fn caption_new_bottom() {
+        let cap = Caption::new(vec![simple_paragraph()], CaptionSide::Bottom);
+        assert_eq!(cap.side, CaptionSide::Bottom);
+        assert_eq!(cap.gap.as_i32(), 850);
+        assert!(cap.width.is_none());
+        assert_eq!(cap.paragraphs.len(), 1);
+    }
+
+    #[test]
+    fn caption_new_top() {
+        let cap = Caption::new(vec![simple_paragraph(), simple_paragraph()], CaptionSide::Top);
+        assert_eq!(cap.side, CaptionSide::Top);
+        assert_eq!(cap.paragraphs.len(), 2);
+    }
+
+    #[test]
+    fn caption_new_empty_paragraphs() {
+        let cap = Caption::new(vec![], CaptionSide::Left);
+        assert!(cap.paragraphs.is_empty());
+        assert_eq!(cap.side, CaptionSide::Left);
     }
 
     #[test]

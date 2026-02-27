@@ -276,8 +276,7 @@ impl HwpxStyleStore {
     /// ```
     pub fn with_default_fonts(font_name: &str) -> Self {
         let mut store: Self = Self::new();
-        let langs: [&str; 7] =
-            ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"];
+        let langs: [&str; 7] = ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"];
         for (idx, &lang) in langs.iter().enumerate() {
             store.push_font(HwpxFont::new(idx as u32, font_name, lang));
         }

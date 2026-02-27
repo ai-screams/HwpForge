@@ -79,7 +79,7 @@ impl ShapePoint {
 ///     line_style: Some("DASH".to_string()),
 /// };
 /// ```
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ShapeStyle {
     /// Stroke/border color as `#RRGGBB` (e.g. `"#FF0000"` for red).
     pub line_color: Option<String>,
@@ -454,6 +454,44 @@ impl Control {
         Self::Endnote { inst_id: None, paragraphs }
     }
 
+    /// Creates a footnote with an explicit instance ID for cross-referencing.
+    ///
+    /// Use this when you need stable `inst_id` references (e.g. matching decoder output).
+    /// For simple footnotes without cross-references, prefer [`Control::footnote`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::Control;
+    /// use hwpforge_core::paragraph::Paragraph;
+    /// use hwpforge_foundation::ParaShapeIndex;
+    ///
+    /// let ctrl = Control::footnote_with_id(1, vec![Paragraph::new(ParaShapeIndex::new(0))]);
+    /// assert!(ctrl.is_footnote());
+    /// ```
+    pub fn footnote_with_id(inst_id: u32, paragraphs: Vec<Paragraph>) -> Self {
+        Self::Footnote { inst_id: Some(inst_id), paragraphs }
+    }
+
+    /// Creates an endnote with an explicit instance ID for cross-referencing.
+    ///
+    /// Use this when you need stable `inst_id` references (e.g. matching decoder output).
+    /// For simple endnotes without cross-references, prefer [`Control::endnote`].
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::Control;
+    /// use hwpforge_core::paragraph::Paragraph;
+    /// use hwpforge_foundation::ParaShapeIndex;
+    ///
+    /// let ctrl = Control::endnote_with_id(2, vec![Paragraph::new(ParaShapeIndex::new(0))]);
+    /// assert!(ctrl.is_endnote());
+    /// ```
+    pub fn endnote_with_id(inst_id: u32, paragraphs: Vec<Paragraph>) -> Self {
+        Self::Endnote { inst_id: Some(inst_id), paragraphs }
+    }
+
     /// Creates an ellipse control with the given bounding box dimensions.
     ///
     /// Geometry is auto-derived: center=(w/2, h/2), axis1=(w, h/2), axis2=(w/2, h).
@@ -482,6 +520,42 @@ impl Control {
             horz_offset: 0,
             vert_offset: 0,
             paragraphs: vec![],
+            caption: None,
+            style: None,
+        }
+    }
+
+    /// Creates an ellipse control with paragraph content inside.
+    ///
+    /// Same as [`Control::ellipse`] but accepts paragraphs for text drawn inside the ellipse.
+    /// Geometry is auto-derived: center=(w/2, h/2), axis1=(w, h/2), axis2=(w/2, h).
+    /// Defaults: inline positioning (horz_offset=0, vert_offset=0), no caption, no style.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::Control;
+    /// use hwpforge_core::paragraph::Paragraph;
+    /// use hwpforge_foundation::{HwpUnit, ParaShapeIndex};
+    ///
+    /// let width = HwpUnit::from_mm(40.0).unwrap();
+    /// let height = HwpUnit::from_mm(30.0).unwrap();
+    /// let para = Paragraph::new(ParaShapeIndex::new(0));
+    /// let ctrl = Control::ellipse_with_text(width, height, vec![para]);
+    /// assert!(ctrl.is_ellipse());
+    /// ```
+    pub fn ellipse_with_text(width: HwpUnit, height: HwpUnit, paragraphs: Vec<Paragraph>) -> Self {
+        let w = width.as_i32();
+        let h = height.as_i32();
+        Self::Ellipse {
+            center: ShapePoint::new(w / 2, h / 2),
+            axis1: ShapePoint::new(w, h / 2),
+            axis2: ShapePoint::new(w / 2, h),
+            width,
+            height,
+            horz_offset: 0,
+            vert_offset: 0,
+            paragraphs,
             caption: None,
             style: None,
         }
@@ -671,6 +745,15 @@ mod tests {
             vec![Run::text("footnote text", CharShapeIndex::new(0))],
             ParaShapeIndex::new(0),
         )
+    }
+
+    #[test]
+    fn shape_style_default_all_none() {
+        let s = ShapeStyle::default();
+        assert!(s.line_color.is_none());
+        assert!(s.fill_color.is_none());
+        assert!(s.line_width.is_none());
+        assert!(s.line_style.is_none());
     }
 
     #[test]
@@ -1247,5 +1330,94 @@ mod tests {
             }
             _ => panic!("expected Hyperlink"),
         }
+    }
+
+    #[test]
+    fn footnote_with_id_sets_inst_id() {
+        let para = Paragraph::new(ParaShapeIndex::new(0));
+        let ctrl = Control::footnote_with_id(42, vec![para]);
+        assert!(ctrl.is_footnote());
+        match ctrl {
+            Control::Footnote { inst_id, paragraphs } => {
+                assert_eq!(inst_id, Some(42));
+                assert_eq!(paragraphs.len(), 1);
+            }
+            _ => panic!("expected Footnote"),
+        }
+    }
+
+    #[test]
+    fn endnote_with_id_sets_inst_id() {
+        let para = Paragraph::new(ParaShapeIndex::new(0));
+        let ctrl = Control::endnote_with_id(7, vec![para]);
+        assert!(ctrl.is_endnote());
+        match ctrl {
+            Control::Endnote { inst_id, paragraphs } => {
+                assert_eq!(inst_id, Some(7));
+                assert_eq!(paragraphs.len(), 1);
+            }
+            _ => panic!("expected Endnote"),
+        }
+    }
+
+    #[test]
+    fn footnote_with_id_differs_from_plain_footnote() {
+        let ctrl_plain = Control::footnote(vec![]);
+        let ctrl_id = Control::footnote_with_id(1, vec![]);
+        match ctrl_plain {
+            Control::Footnote { inst_id, .. } => assert_eq!(inst_id, None),
+            _ => panic!("expected Footnote"),
+        }
+        match ctrl_id {
+            Control::Footnote { inst_id, .. } => assert_eq!(inst_id, Some(1)),
+            _ => panic!("expected Footnote"),
+        }
+    }
+
+    #[test]
+    fn ellipse_with_text_has_correct_geometry_and_paragraphs() {
+        use hwpforge_foundation::HwpUnit;
+        let width = HwpUnit::from_mm(40.0).unwrap();
+        let height = HwpUnit::from_mm(30.0).unwrap();
+        let para = Paragraph::new(ParaShapeIndex::new(0));
+        let ctrl = Control::ellipse_with_text(width, height, vec![para]);
+        assert!(ctrl.is_ellipse());
+        match ctrl {
+            Control::Ellipse {
+                center,
+                axis1,
+                axis2,
+                width: w,
+                height: h,
+                horz_offset,
+                vert_offset,
+                paragraphs,
+                caption,
+                style,
+            } => {
+                let wv = w.as_i32();
+                let hv = h.as_i32();
+                assert_eq!(center, ShapePoint::new(wv / 2, hv / 2));
+                assert_eq!(axis1, ShapePoint::new(wv, hv / 2));
+                assert_eq!(axis2, ShapePoint::new(wv / 2, hv));
+                assert_eq!(horz_offset, 0);
+                assert_eq!(vert_offset, 0);
+                assert_eq!(paragraphs.len(), 1);
+                assert!(caption.is_none());
+                assert!(style.is_none());
+            }
+            _ => panic!("expected Ellipse"),
+        }
+    }
+
+    #[test]
+    fn ellipse_with_text_empty_paragraphs_matches_ellipse() {
+        use hwpforge_foundation::HwpUnit;
+        let width = HwpUnit::from_mm(20.0).unwrap();
+        let height = HwpUnit::from_mm(10.0).unwrap();
+        let plain = Control::ellipse(width, height);
+        let with_text = Control::ellipse_with_text(width, height, vec![]);
+        // Both should produce identical shapes when paragraphs are empty
+        assert_eq!(plain, with_text);
     }
 }

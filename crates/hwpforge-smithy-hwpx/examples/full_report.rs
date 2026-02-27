@@ -98,12 +98,7 @@ fn empty() -> Paragraph {
 
 /// Create a Caption.
 fn make_caption(text: &str, side: CaptionSide) -> Caption {
-    Caption {
-        side,
-        gap: HwpUnit::new(850).unwrap(),
-        width: None,
-        paragraphs: vec![text_para(text, CS_ITALIC, PS_CENTER)],
-    }
+    Caption::new(vec![text_para(text, CS_ITALIC, PS_CENTER)], side)
 }
 
 /// Control run paragraph.
@@ -175,20 +170,13 @@ fn make_table(
 ) -> Table {
     let w = HwpUnit::new(col_width).unwrap();
 
-    let header_row = TableRow {
-        cells: headers
-            .iter()
-            .map(|h| TableCell::new(vec![text_para(h, CS_BOLD, PS_CENTER)], w))
-            .collect(),
-        height: None,
-    };
+    let header_row = TableRow::new(
+        headers.iter().map(|h| TableCell::new(vec![text_para(h, CS_BOLD, PS_CENTER)], w)).collect(),
+    );
 
     let data_rows: Vec<TableRow> = rows
         .iter()
-        .map(|row| TableRow {
-            cells: row.iter().map(|c| TableCell::new(vec![p(c)], w)).collect(),
-            height: None,
-        })
+        .map(|row| TableRow::new(row.iter().map(|c| TableCell::new(vec![p(c)], w)).collect()))
         .collect();
 
     let mut all_rows = vec![header_row];
@@ -260,12 +248,9 @@ fn build_section_0() -> Section {
         PS_JUSTIFY,
     ));
     paras.push(ctrl_para(
-        Control::Footnote {
-            inst_id: Some(1),
-            paragraphs: vec![
+        Control::footnote_with_id(1, vec![
                 p("KS X 6101은 한국산업표준(KS)으로 제정된 한글 문서 파일 포맷 규격입니다. 한국표준정보망(KSSN)을 통해 열람 가능하며, openhwp 프로젝트에 9,054줄 분량의 마크다운 사양이 공개되어 있습니다."),
-            ],
-        },
+            ]),
         CS_NORMAL,
         PS_JUSTIFY,
     ));
@@ -367,12 +352,9 @@ fn build_section_1() -> Section {
         PS_JUSTIFY,
     ));
     paras.push(ctrl_para(
-        Control::Footnote {
-            inst_id: Some(2),
-            paragraphs: vec![p(
+        Control::footnote_with_id(2, vec![p(
                 "HwpForge는 루트 요소를 수동으로 생성하고 내부 콘텐츠만 serde로 직렬화하는 'xmlns 래핑 패턴'을 사용합니다.",
-            )],
-        },
+            )]),
         CS_NORMAL,
         PS_JUSTIFY,
     ));
@@ -735,12 +717,9 @@ fn build_section_3() -> Section {
     ));
     // 미주
     paras.push(ctrl_para(
-        Control::Endnote {
-            inst_id: Some(1),
-            paragraphs: vec![p(
+        Control::endnote_with_id(1, vec![p(
                 "본 보고서는 HwpForge의 모든 구현 API를 활용하여 작성되었습니다. 텍스트, 표, 이미지, 차트, 수식, 도형, 다단, 머리글/바닥글, 각주/미주, 글상자 등 17개 API 유형을 포함합니다.",
-            )],
-        },
+            )]),
         CS_NORMAL,
         PS_JUSTIFY,
     ));
