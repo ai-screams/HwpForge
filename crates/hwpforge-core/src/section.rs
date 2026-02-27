@@ -66,6 +66,26 @@ impl HeaderFooter {
     pub fn new(paragraphs: Vec<Paragraph>, apply_page_type: ApplyPageType) -> Self {
         Self { paragraphs, apply_page_type }
     }
+
+    /// Creates a header/footer applied to **both** odd and even pages.
+    ///
+    /// This is the most common case for simple documents that use a single
+    /// header or footer on every page.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::section::HeaderFooter;
+    /// use hwpforge_core::paragraph::Paragraph;
+    /// use hwpforge_foundation::{ApplyPageType, ParaShapeIndex};
+    ///
+    /// let hf = HeaderFooter::both(vec![Paragraph::new(ParaShapeIndex::new(0))]);
+    /// assert_eq!(hf.apply_page_type, ApplyPageType::Both);
+    /// assert_eq!(hf.paragraphs.len(), 1);
+    /// ```
+    pub fn both(paragraphs: Vec<Paragraph>) -> Self {
+        Self { paragraphs, apply_page_type: ApplyPageType::Both }
+    }
 }
 
 impl std::fmt::Display for HeaderFooter {
@@ -110,6 +130,31 @@ impl PageNumber {
     /// Creates a new page number with no side decoration.
     pub fn new(position: PageNumberPosition, number_format: NumberFormatType) -> Self {
         Self { position, number_format, side_char: String::new() }
+    }
+
+    /// Creates a page number at the bottom-center in plain digit format.
+    ///
+    /// This is the most common page number layout for Korean documents.
+    /// Equivalent to `PageNumber::new(PageNumberPosition::BottomCenter, NumberFormatType::Digit)`
+    /// with an empty `side_char`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::section::PageNumber;
+    /// use hwpforge_foundation::{NumberFormatType, PageNumberPosition};
+    ///
+    /// let pn = PageNumber::bottom_center();
+    /// assert_eq!(pn.position, PageNumberPosition::BottomCenter);
+    /// assert_eq!(pn.number_format, NumberFormatType::Digit);
+    /// assert!(pn.side_char.is_empty());
+    /// ```
+    pub fn bottom_center() -> Self {
+        Self {
+            position: PageNumberPosition::BottomCenter,
+            number_format: NumberFormatType::Digit,
+            side_char: String::new(),
+        }
     }
 
     /// Creates a new page number with side decoration characters.
@@ -529,6 +574,59 @@ mod tests {
         assert!(!json.contains("\"column_settings\""));
         let back: Section = serde_json::from_str(&json).unwrap();
         assert_eq!(section, back);
+    }
+
+    // -----------------------------------------------------------------------
+    // HeaderFooter::both tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn header_footer_both_apply_page_type() {
+        let hf = HeaderFooter::both(vec![Paragraph::new(ParaShapeIndex::new(0))]);
+        assert_eq!(hf.apply_page_type, ApplyPageType::Both);
+    }
+
+    #[test]
+    fn header_footer_both_preserves_paragraphs() {
+        let paras = vec![simple_paragraph(), simple_paragraph()];
+        let hf = HeaderFooter::both(paras);
+        assert_eq!(hf.paragraphs.len(), 2);
+    }
+
+    #[test]
+    fn header_footer_both_empty_paragraphs() {
+        let hf = HeaderFooter::both(vec![]);
+        assert_eq!(hf.apply_page_type, ApplyPageType::Both);
+        assert!(hf.paragraphs.is_empty());
+    }
+
+    // -----------------------------------------------------------------------
+    // PageNumber::bottom_center tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn page_number_bottom_center_position() {
+        let pn = PageNumber::bottom_center();
+        assert_eq!(pn.position, PageNumberPosition::BottomCenter);
+    }
+
+    #[test]
+    fn page_number_bottom_center_format() {
+        let pn = PageNumber::bottom_center();
+        assert_eq!(pn.number_format, NumberFormatType::Digit);
+    }
+
+    #[test]
+    fn page_number_bottom_center_no_side_char() {
+        let pn = PageNumber::bottom_center();
+        assert!(pn.side_char.is_empty());
+    }
+
+    #[test]
+    fn page_number_bottom_center_equals_explicit() {
+        let shortcut = PageNumber::bottom_center();
+        let explicit = PageNumber::new(PageNumberPosition::BottomCenter, NumberFormatType::Digit);
+        assert_eq!(shortcut, explicit);
     }
 
     #[test]

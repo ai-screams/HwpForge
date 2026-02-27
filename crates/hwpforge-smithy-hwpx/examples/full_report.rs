@@ -42,17 +42,16 @@ use hwpforge_core::chart::{ChartData, ChartGrouping, ChartType, LegendPosition};
 use hwpforge_core::column::ColumnSettings;
 use hwpforge_core::control::{Control, ShapePoint, ShapeStyle};
 use hwpforge_core::document::Document;
-use hwpforge_core::image::{Image, ImageFormat, ImageStore};
+use hwpforge_core::image::{Image, ImageStore};
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::section::{HeaderFooter, PageNumber, Section};
 use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
-    Alignment, ApplyPageType, CharShapeIndex, Color, HwpUnit, NumberFormatType, PageNumberPosition,
-    ParaShapeIndex,
+    Alignment, CharShapeIndex, Color, HwpUnit, NumberFormatType, PageNumberPosition, ParaShapeIndex,
 };
-use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore};
+use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
 
 // ── Style Constants ─────────────────────────────────────────────
@@ -218,20 +217,15 @@ fn build_section_0() -> Section {
     paras.push(empty());
 
     // 마스코트 이미지 + 캡션 (작은 아이콘 크기)
+    let mut mascot_img = Image::from_path(
+        "BinData/image1.png",
+        HwpUnit::from_mm(35.0).unwrap(),
+        HwpUnit::from_mm(35.0).unwrap(),
+    );
+    mascot_img.caption =
+        Some(make_caption("[그림 1] HwpForge 마스코트 (오리너구리)", CaptionSide::Bottom));
     paras.push(Paragraph::with_runs(
-        vec![Run::image(
-            Image {
-                path: "BinData/image1.png".to_string(),
-                width: HwpUnit::from_mm(35.0).unwrap(),
-                height: HwpUnit::from_mm(35.0).unwrap(),
-                format: ImageFormat::Png,
-                caption: Some(make_caption(
-                    "[그림 1] HwpForge 마스코트 (오리너구리)",
-                    CaptionSide::Bottom,
-                )),
-            },
-            CharShapeIndex::new(CS_NORMAL),
-        )],
+        vec![Run::image(mascot_img, CharShapeIndex::new(CS_NORMAL))],
         ParaShapeIndex::new(PS_CENTER),
     ));
     paras.push(empty());
@@ -315,21 +309,15 @@ fn build_section_0() -> Section {
     paras.push(empty());
 
     let mut sec = Section::with_paragraphs(paras, PageSettings::a4());
-    sec.header = Some(HeaderFooter::new(
-        vec![mixed_para(
-            &[("HWPX 포맷 분석 보고서", CS_BOLD), ("  |  HwpForge 기술 문서 v1.0", CS_ITALIC)],
-            PS_LEFT,
-        )],
-        ApplyPageType::Both,
-    ));
-    sec.footer = Some(HeaderFooter::new(
-        vec![text_para(
-            "Copyright \u{00A9} 2026 HwpForge Project. Apache-2.0 / MIT",
-            CS_ITALIC,
-            PS_CENTER,
-        )],
-        ApplyPageType::Both,
-    ));
+    sec.header = Some(HeaderFooter::both(vec![mixed_para(
+        &[("HWPX 포맷 분석 보고서", CS_BOLD), ("  |  HwpForge 기술 문서 v1.0", CS_ITALIC)],
+        PS_LEFT,
+    )]));
+    sec.footer = Some(HeaderFooter::both(vec![text_para(
+        "Copyright \u{00A9} 2026 HwpForge Project. Apache-2.0 / MIT",
+        CS_ITALIC,
+        PS_CENTER,
+    )]));
     sec.page_number = Some(PageNumber::with_side_char(
         PageNumberPosition::BottomCenter,
         NumberFormatType::Digit,
@@ -565,14 +553,7 @@ fn build_section_2() -> Section {
         "HWPX 수식은 MathML이 아닌 HancomEQN 스크립트를 사용합니다. 수식에는 shape common 블록이 없습니다 (offset, orgSz, curSz 등 없음). flowWithText=1, outMargin=56이 기본값입니다.",
     ));
     paras.push(ctrl_para(
-        Control::Equation {
-            script: "x= {-b +-  root {2} of {b ^{2} -4ac}} over {2a}".to_string(),
-            width: HwpUnit::new(8779).unwrap(),
-            height: HwpUnit::new(2600).unwrap(),
-            base_line: 71,
-            text_color: "#000000".to_string(),
-            font: "HancomEQN".to_string(),
-        },
+        Control::equation("x= {-b +-  root {2} of {b ^{2} -4ac}} over {2a}"),
         CS_NORMAL,
         PS_CENTER,
     ));
@@ -777,12 +758,7 @@ fn main() {
     println!("=== HWPX 포맷 분석 보고서 ===\n");
 
     // ── 1. Style Store ──
-    let mut style_store = HwpxStyleStore::new();
-
-    // Fonts: 7 language groups required by 한글
-    for &lang in &["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
-        style_store.push_font(HwpxFont::new(0, "함초롬돋움", lang));
-    }
+    let mut style_store = HwpxStyleStore::with_default_fonts("함초롬돋움");
 
     // CS 0: Normal 10pt
     style_store.push_char_shape(HwpxCharShape::default());

@@ -91,6 +91,35 @@ impl Image {
     ) -> Self {
         Self { path: path.into(), width, height, format, caption: None }
     }
+
+    /// Creates an image reference by inferring the format from the file extension.
+    ///
+    /// The extension is case-insensitive. Unrecognized extensions produce
+    /// [`ImageFormat::Unknown`] containing the lowercase extension string.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::image::{Image, ImageFormat};
+    /// use hwpforge_foundation::HwpUnit;
+    ///
+    /// let w = HwpUnit::from_mm(100.0).unwrap();
+    /// let h = HwpUnit::from_mm(75.0).unwrap();
+    ///
+    /// let img = Image::from_path("photos/hero.png", w, h);
+    /// assert_eq!(img.format, ImageFormat::Png);
+    ///
+    /// let img_jpg = Image::from_path("scan.JPG", w, h);
+    /// assert_eq!(img_jpg.format, ImageFormat::Jpeg);
+    ///
+    /// let img_unknown = Image::from_path("diagram.svg", w, h);
+    /// assert_eq!(img_unknown.format, ImageFormat::Unknown("svg".to_string()));
+    /// ```
+    pub fn from_path(path: impl Into<String>, width: HwpUnit, height: HwpUnit) -> Self {
+        let path: String = path.into();
+        let format = ImageFormat::from_extension(&path);
+        Self { path, width, height, format, caption: None }
+    }
 }
 
 impl std::fmt::Display for Image {
@@ -138,6 +167,52 @@ pub enum ImageFormat {
     Emf,
     /// Unrecognized format with its extension or MIME type.
     Unknown(String),
+}
+
+impl ImageFormat {
+    /// Infers an [`ImageFormat`] from a file path's extension.
+    ///
+    /// The extension is extracted from everything after the last `'.'` in the
+    /// path string and matched case-insensitively. If no dot is found, or the
+    /// extension is not recognized, [`ImageFormat::Unknown`] is returned
+    /// containing the lowercase extension (or an empty string when absent).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::image::ImageFormat;
+    ///
+    /// assert_eq!(ImageFormat::from_extension("photo.png"),  ImageFormat::Png);
+    /// assert_eq!(ImageFormat::from_extension("image.JPG"),  ImageFormat::Jpeg);
+    /// assert_eq!(ImageFormat::from_extension("file.jpeg"), ImageFormat::Jpeg);
+    /// assert_eq!(ImageFormat::from_extension("doc.gif"),   ImageFormat::Gif);
+    /// assert_eq!(ImageFormat::from_extension("img.bmp"),   ImageFormat::Bmp);
+    /// assert_eq!(ImageFormat::from_extension("chart.wmf"), ImageFormat::Wmf);
+    /// assert_eq!(ImageFormat::from_extension("dia.emf"),   ImageFormat::Emf);
+    /// assert_eq!(
+    ///     ImageFormat::from_extension("file.xyz"),
+    ///     ImageFormat::Unknown("xyz".to_string()),
+    /// );
+    /// assert_eq!(
+    ///     ImageFormat::from_extension("noext"),
+    ///     ImageFormat::Unknown(String::new()),
+    /// );
+    /// assert_eq!(ImageFormat::from_extension("multi.dot.png"), ImageFormat::Png);
+    /// ```
+    pub fn from_extension(path: &str) -> Self {
+        // Only treat the suffix as an extension if a dot is actually present.
+        let ext_lower = path.rfind('.').map(|i| path[i + 1..].to_ascii_lowercase());
+        match ext_lower.as_deref() {
+            Some("png") => Self::Png,
+            Some("jpg" | "jpeg") => Self::Jpeg,
+            Some("gif") => Self::Gif,
+            Some("bmp") => Self::Bmp,
+            Some("wmf") => Self::Wmf,
+            Some("emf") => Self::Emf,
+            Some(ext) => Self::Unknown(ext.to_string()),
+            None => Self::Unknown(String::new()),
+        }
+    }
 }
 
 impl std::fmt::Display for ImageFormat {
@@ -433,5 +508,105 @@ mod tests {
         let key = String::from("dynamic/path.png");
         store.insert(key, vec![42]);
         assert!(store.get("dynamic/path.png").is_some());
+    }
+
+    // -----------------------------------------------------------------------
+    // ImageFormat::from_extension tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn from_extension_png() {
+        assert_eq!(ImageFormat::from_extension("photo.png"), ImageFormat::Png);
+    }
+
+    #[test]
+    fn from_extension_jpg_uppercase() {
+        assert_eq!(ImageFormat::from_extension("image.JPG"), ImageFormat::Jpeg);
+    }
+
+    #[test]
+    fn from_extension_jpeg() {
+        assert_eq!(ImageFormat::from_extension("file.jpeg"), ImageFormat::Jpeg);
+    }
+
+    #[test]
+    fn from_extension_gif() {
+        assert_eq!(ImageFormat::from_extension("doc.gif"), ImageFormat::Gif);
+    }
+
+    #[test]
+    fn from_extension_bmp() {
+        assert_eq!(ImageFormat::from_extension("img.bmp"), ImageFormat::Bmp);
+    }
+
+    #[test]
+    fn from_extension_wmf() {
+        assert_eq!(ImageFormat::from_extension("chart.wmf"), ImageFormat::Wmf);
+    }
+
+    #[test]
+    fn from_extension_emf() {
+        assert_eq!(ImageFormat::from_extension("dia.emf"), ImageFormat::Emf);
+    }
+
+    #[test]
+    fn from_extension_unknown() {
+        assert_eq!(
+            ImageFormat::from_extension("file.xyz"),
+            ImageFormat::Unknown("xyz".to_string()),
+        );
+    }
+
+    #[test]
+    fn from_extension_no_extension() {
+        assert_eq!(ImageFormat::from_extension("noext"), ImageFormat::Unknown(String::new()));
+    }
+
+    #[test]
+    fn from_extension_multi_dot() {
+        assert_eq!(ImageFormat::from_extension("multi.dot.png"), ImageFormat::Png);
+    }
+
+    // -----------------------------------------------------------------------
+    // Image::from_path tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn from_path_infers_format() {
+        let w = HwpUnit::from_mm(100.0).unwrap();
+        let h = HwpUnit::from_mm(75.0).unwrap();
+
+        let img = Image::from_path("photos/hero.png", w, h);
+        assert_eq!(img.format, ImageFormat::Png);
+        assert_eq!(img.path, "photos/hero.png");
+        assert_eq!(img.width, w);
+        assert_eq!(img.height, h);
+        assert!(img.caption.is_none());
+    }
+
+    #[test]
+    fn from_path_jpeg_uppercase() {
+        let w = HwpUnit::ZERO;
+        let h = HwpUnit::ZERO;
+        let img = Image::from_path("scan.JPG", w, h);
+        assert_eq!(img.format, ImageFormat::Jpeg);
+    }
+
+    #[test]
+    fn from_path_unknown_extension() {
+        let w = HwpUnit::ZERO;
+        let h = HwpUnit::ZERO;
+        let img = Image::from_path("diagram.svg", w, h);
+        assert_eq!(img.format, ImageFormat::Unknown("svg".to_string()));
+    }
+
+    #[test]
+    fn from_path_string_owned() {
+        let w = HwpUnit::ZERO;
+        let h = HwpUnit::ZERO;
+        let path = String::from("owned/path.bmp");
+        let img = Image::from_path(path, w, h);
+        assert_eq!(img.format, ImageFormat::Bmp);
+        assert_eq!(img.path, "owned/path.bmp");
     }
 }

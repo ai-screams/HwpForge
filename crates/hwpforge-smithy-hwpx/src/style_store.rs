@@ -261,6 +261,27 @@ impl HwpxStyleStore {
         Self::default()
     }
 
+    /// Creates a new style store with the given font registered for all 7 language groups
+    /// (HANGUL, LATIN, HANJA, JAPANESE, OTHER, SYMBOL, USER).
+    ///
+    /// This eliminates the common boilerplate of manually pushing fonts for each language.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_smithy_hwpx::style_store::HwpxStyleStore;
+    ///
+    /// let store = HwpxStyleStore::with_default_fonts("함초롬돋움");
+    /// assert_eq!(store.font_count(), 7);
+    /// ```
+    pub fn with_default_fonts(font_name: &str) -> Self {
+        let mut store = Self::new();
+        for &lang in &["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
+            store.push_font(HwpxFont::new(0, font_name, lang));
+        }
+        store
+    }
+
     /// Returns the style set used by this store.
     pub fn style_set(&self) -> HancomStyleSet {
         self.style_set
@@ -1098,6 +1119,30 @@ mod tests {
     #[test]
     fn default_style_set_modern_is_default() {
         assert_eq!(HancomStyleSet::default(), HancomStyleSet::Modern);
+    }
+
+    // ── with_default_fonts ───────────────────────────────────────
+
+    #[test]
+    fn with_default_fonts_creates_seven_fonts() {
+        let store = HwpxStyleStore::with_default_fonts("함초롬돋움");
+        assert_eq!(store.font_count(), 7);
+    }
+
+    #[test]
+    fn with_default_fonts_all_names_match() {
+        let font_name = "나눔고딕";
+        let store = HwpxStyleStore::with_default_fonts(font_name);
+        for font in store.iter_fonts() {
+            assert_eq!(font.face_name, font_name);
+        }
+    }
+
+    #[test]
+    fn with_default_fonts_lang_groups_correct() {
+        let store = HwpxStyleStore::with_default_fonts("함초롬바탕");
+        let langs: Vec<&str> = store.iter_fonts().map(|f| f.lang.as_str()).collect();
+        assert_eq!(langs, vec!["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"]);
     }
 
     #[test]

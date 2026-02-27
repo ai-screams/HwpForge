@@ -28,6 +28,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::caption::Caption;
 use crate::chart::{ChartData, ChartGrouping, ChartType, LegendPosition};
+use crate::error::{CoreError, CoreResult};
 use crate::paragraph::Paragraph;
 
 /// A 2D point in raw HWPUNIT coordinates for shape geometry.
@@ -352,6 +353,262 @@ impl Control {
             legend: LegendPosition::default(),
             grouping: ChartGrouping::default(),
         }
+    }
+
+    /// Creates an equation control with default dimensions for the given HancomEQN script.
+    ///
+    /// Defaults: width ≈ 31mm (8779 HWPUNIT), height ≈ 9.2mm (2600 HWPUNIT),
+    /// baseline 71%, black text, `HancomEQN` font.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::Control;
+    ///
+    /// let ctrl = Control::equation("{a+b} over {c+d}");
+    /// assert!(ctrl.is_equation());
+    /// ```
+    pub fn equation(script: &str) -> Self {
+        Self::Equation {
+            script: script.to_string(),
+            width: HwpUnit::new(8779).expect("8779 is valid"),
+            height: HwpUnit::new(2600).expect("2600 is valid"),
+            base_line: 71,
+            text_color: "#000000".to_string(),
+            font: "HancomEQN".to_string(),
+        }
+    }
+
+    /// Creates a text box control with the given paragraphs and dimensions.
+    ///
+    /// Defaults: inline positioning (horz_offset=0, vert_offset=0), no caption, no style override.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::Control;
+    /// use hwpforge_core::paragraph::Paragraph;
+    /// use hwpforge_foundation::{HwpUnit, ParaShapeIndex};
+    ///
+    /// let para = Paragraph::new(ParaShapeIndex::new(0));
+    /// let width = HwpUnit::from_mm(80.0).unwrap();
+    /// let height = HwpUnit::from_mm(40.0).unwrap();
+    /// let ctrl = Control::text_box(vec![para], width, height);
+    /// assert!(ctrl.is_text_box());
+    /// ```
+    pub fn text_box(paragraphs: Vec<Paragraph>, width: HwpUnit, height: HwpUnit) -> Self {
+        Self::TextBox {
+            paragraphs,
+            width,
+            height,
+            horz_offset: 0,
+            vert_offset: 0,
+            caption: None,
+            style: None,
+        }
+    }
+
+    /// Creates a footnote control with the given paragraph content.
+    ///
+    /// Defaults: no inst_id.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::Control;
+    /// use hwpforge_core::run::Run;
+    /// use hwpforge_core::paragraph::Paragraph;
+    /// use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+    ///
+    /// let para = Paragraph::with_runs(
+    ///     vec![Run::text("Note text", CharShapeIndex::new(0))],
+    ///     ParaShapeIndex::new(0),
+    /// );
+    /// let ctrl = Control::footnote(vec![para]);
+    /// assert!(ctrl.is_footnote());
+    /// ```
+    pub fn footnote(paragraphs: Vec<Paragraph>) -> Self {
+        Self::Footnote { inst_id: None, paragraphs }
+    }
+
+    /// Creates an endnote control with the given paragraph content.
+    ///
+    /// Defaults: no inst_id.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::Control;
+    /// use hwpforge_core::run::Run;
+    /// use hwpforge_core::paragraph::Paragraph;
+    /// use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+    ///
+    /// let para = Paragraph::with_runs(
+    ///     vec![Run::text("End note", CharShapeIndex::new(0))],
+    ///     ParaShapeIndex::new(0),
+    /// );
+    /// let ctrl = Control::endnote(vec![para]);
+    /// assert!(ctrl.is_endnote());
+    /// ```
+    pub fn endnote(paragraphs: Vec<Paragraph>) -> Self {
+        Self::Endnote { inst_id: None, paragraphs }
+    }
+
+    /// Creates an ellipse control with the given bounding box dimensions.
+    ///
+    /// Geometry is auto-derived: center=(w/2, h/2), axis1=(w, h/2), axis2=(w/2, h).
+    /// Defaults: inline positioning (horz_offset=0, vert_offset=0), no paragraphs, no caption, no style.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::Control;
+    /// use hwpforge_foundation::HwpUnit;
+    ///
+    /// let width = HwpUnit::from_mm(40.0).unwrap();
+    /// let height = HwpUnit::from_mm(30.0).unwrap();
+    /// let ctrl = Control::ellipse(width, height);
+    /// assert!(ctrl.is_ellipse());
+    /// ```
+    pub fn ellipse(width: HwpUnit, height: HwpUnit) -> Self {
+        let w = width.as_i32();
+        let h = height.as_i32();
+        Self::Ellipse {
+            center: ShapePoint::new(w / 2, h / 2),
+            axis1: ShapePoint::new(w, h / 2),
+            axis2: ShapePoint::new(w / 2, h),
+            width,
+            height,
+            horz_offset: 0,
+            vert_offset: 0,
+            paragraphs: vec![],
+            caption: None,
+            style: None,
+        }
+    }
+
+    /// Creates a polygon control from the given vertices.
+    ///
+    /// The bounding box is auto-derived from the min/max of vertex coordinates.
+    /// Defaults: no paragraphs, no caption, no style.
+    ///
+    /// Returns an error if fewer than 3 vertices are provided.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::InvalidStructure`] if `vertices.len() < 3`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::{Control, ShapePoint};
+    ///
+    /// let vertices = vec![
+    ///     ShapePoint::new(0, 1000),
+    ///     ShapePoint::new(500, 0),
+    ///     ShapePoint::new(1000, 1000),
+    /// ];
+    /// let ctrl = Control::polygon(vertices).unwrap();
+    /// assert!(ctrl.is_polygon());
+    /// ```
+    pub fn polygon(vertices: Vec<ShapePoint>) -> CoreResult<Self> {
+        if vertices.len() < 3 {
+            return Err(CoreError::InvalidStructure {
+                context: "Control::polygon".to_string(),
+                reason: format!("polygon requires at least 3 vertices, got {}", vertices.len()),
+            });
+        }
+        let min_x = vertices.iter().map(|p| p.x).min().unwrap_or(0);
+        let max_x = vertices.iter().map(|p| p.x).max().unwrap_or(0);
+        let min_y = vertices.iter().map(|p| p.y).min().unwrap_or(0);
+        let max_y = vertices.iter().map(|p| p.y).max().unwrap_or(0);
+        let bbox_w = (max_x - min_x).max(0);
+        let bbox_h = (max_y - min_y).max(0);
+        let width = HwpUnit::new(bbox_w).unwrap_or_else(|_| HwpUnit::new(1).expect("1 is valid"));
+        let height = HwpUnit::new(bbox_h).unwrap_or_else(|_| HwpUnit::new(1).expect("1 is valid"));
+        Ok(Self::Polygon {
+            vertices,
+            width,
+            height,
+            paragraphs: vec![],
+            caption: None,
+            style: None,
+        })
+    }
+
+    /// Creates a line control between two endpoints.
+    ///
+    /// The bounding box width and height are derived from the absolute difference
+    /// of the endpoint coordinates: `width = |end.x - start.x|`, `height = |end.y - start.y|`.
+    /// Defaults: no caption, no style.
+    ///
+    /// Returns an error if start and end are the same point (degenerate line).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::InvalidStructure`] if start equals end.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::{Control, ShapePoint};
+    ///
+    /// let ctrl = Control::line(ShapePoint::new(0, 0), ShapePoint::new(5000, 0)).unwrap();
+    /// assert!(ctrl.is_line());
+    /// ```
+    pub fn line(start: ShapePoint, end: ShapePoint) -> CoreResult<Self> {
+        if start == end {
+            return Err(CoreError::InvalidStructure {
+                context: "Control::line".to_string(),
+                reason: "start and end points are identical (degenerate line)".to_string(),
+            });
+        }
+        let raw_w = (end.x - start.x).unsigned_abs() as i32;
+        let raw_h = (end.y - start.y).unsigned_abs() as i32;
+        let width = HwpUnit::new(raw_w).unwrap_or_else(|_| HwpUnit::new(1).expect("1 is valid"));
+        let height = HwpUnit::new(raw_h).unwrap_or_else(|_| HwpUnit::new(1).expect("1 is valid"));
+        Ok(Self::Line { start, end, width, height, caption: None, style: None })
+    }
+
+    /// Creates a horizontal line of the given width.
+    ///
+    /// Shortcut for `line(ShapePoint::new(0, 0), ShapePoint::new(width.as_i32(), 0))`.
+    /// The bounding box height is 0 (flat line). Defaults: no caption, no style.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::Control;
+    /// use hwpforge_foundation::HwpUnit;
+    ///
+    /// let width = HwpUnit::from_mm(100.0).unwrap();
+    /// let ctrl = Control::horizontal_line(width);
+    /// assert!(ctrl.is_line());
+    /// ```
+    pub fn horizontal_line(width: HwpUnit) -> Self {
+        let w = width.as_i32();
+        Self::Line {
+            start: ShapePoint::new(0, 0),
+            end: ShapePoint::new(w, 0),
+            width,
+            height: HwpUnit::new(0).expect("0 is valid"),
+            caption: None,
+            style: None,
+        }
+    }
+
+    /// Creates a hyperlink control with the given display text and URL.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::Control;
+    ///
+    /// let ctrl = Control::hyperlink("Visit Rust", "https://rust-lang.org");
+    /// assert!(ctrl.is_hyperlink());
+    /// ```
+    pub fn hyperlink(text: &str, url: &str) -> Self {
+        Self::Hyperlink { text: text.to_string(), url: url.to_string() }
     }
 }
 
@@ -749,5 +1006,246 @@ mod tests {
         let json = serde_json::to_string(&pt).unwrap();
         let back: ShapePoint = serde_json::from_str(&json).unwrap();
         assert_eq!(pt, back);
+    }
+
+    // ── Convenience constructor tests ────────────────────────────────────
+
+    #[test]
+    fn equation_constructor_defaults() {
+        let ctrl = Control::equation("{a+b} over {c+d}");
+        assert!(ctrl.is_equation());
+        match ctrl {
+            Control::Equation { script, width, height, base_line, ref text_color, ref font } => {
+                assert_eq!(script, "{a+b} over {c+d}");
+                assert_eq!(width, HwpUnit::new(8779).unwrap());
+                assert_eq!(height, HwpUnit::new(2600).unwrap());
+                assert_eq!(base_line, 71);
+                assert_eq!(text_color, "#000000");
+                assert_eq!(font, "HancomEQN");
+            }
+            _ => panic!("expected Equation"),
+        }
+    }
+
+    #[test]
+    fn equation_constructor_empty_script() {
+        let ctrl = Control::equation("");
+        assert!(ctrl.is_equation());
+    }
+
+    #[test]
+    fn text_box_constructor_defaults() {
+        let width = HwpUnit::from_mm(80.0).unwrap();
+        let height = HwpUnit::from_mm(40.0).unwrap();
+        let ctrl = Control::text_box(vec![simple_paragraph()], width, height);
+        assert!(ctrl.is_text_box());
+        match ctrl {
+            Control::TextBox { paragraphs, horz_offset, vert_offset, caption, style, .. } => {
+                assert_eq!(paragraphs.len(), 1);
+                assert_eq!(horz_offset, 0);
+                assert_eq!(vert_offset, 0);
+                assert!(caption.is_none());
+                assert!(style.is_none());
+            }
+            _ => panic!("expected TextBox"),
+        }
+    }
+
+    #[test]
+    fn footnote_constructor_defaults() {
+        let ctrl = Control::footnote(vec![simple_paragraph()]);
+        assert!(ctrl.is_footnote());
+        match ctrl {
+            Control::Footnote { inst_id, paragraphs } => {
+                assert!(inst_id.is_none());
+                assert_eq!(paragraphs.len(), 1);
+            }
+            _ => panic!("expected Footnote"),
+        }
+    }
+
+    #[test]
+    fn endnote_constructor_defaults() {
+        let ctrl = Control::endnote(vec![simple_paragraph()]);
+        assert!(ctrl.is_endnote());
+        match ctrl {
+            Control::Endnote { inst_id, paragraphs } => {
+                assert!(inst_id.is_none());
+                assert_eq!(paragraphs.len(), 1);
+            }
+            _ => panic!("expected Endnote"),
+        }
+    }
+
+    #[test]
+    fn ellipse_constructor_geometry() {
+        let width = HwpUnit::from_mm(40.0).unwrap();
+        let height = HwpUnit::from_mm(30.0).unwrap();
+        let ctrl = Control::ellipse(width, height);
+        assert!(ctrl.is_ellipse());
+        match &ctrl {
+            Control::Ellipse {
+                center,
+                axis1,
+                axis2,
+                horz_offset,
+                vert_offset,
+                paragraphs,
+                caption,
+                style,
+                ..
+            } => {
+                let w = width.as_i32();
+                let h = height.as_i32();
+                assert_eq!(*center, ShapePoint::new(w / 2, h / 2));
+                assert_eq!(*axis1, ShapePoint::new(w, h / 2));
+                assert_eq!(*axis2, ShapePoint::new(w / 2, h));
+                assert_eq!(*horz_offset, 0);
+                assert_eq!(*vert_offset, 0);
+                assert!(paragraphs.is_empty());
+                assert!(caption.is_none());
+                assert!(style.is_none());
+            }
+            _ => panic!("expected Ellipse"),
+        }
+    }
+
+    #[test]
+    fn polygon_constructor_triangle() {
+        let vertices =
+            vec![ShapePoint::new(0, 1000), ShapePoint::new(500, 0), ShapePoint::new(1000, 1000)];
+        let ctrl = Control::polygon(vertices).unwrap();
+        assert!(ctrl.is_polygon());
+        match &ctrl {
+            Control::Polygon { vertices, width, height, paragraphs, caption, style } => {
+                assert_eq!(vertices.len(), 3);
+                // bbox: x 0..1000, y 0..1000
+                assert_eq!(*width, HwpUnit::new(1000).unwrap());
+                assert_eq!(*height, HwpUnit::new(1000).unwrap());
+                assert!(paragraphs.is_empty());
+                assert!(caption.is_none());
+                assert!(style.is_none());
+            }
+            _ => panic!("expected Polygon"),
+        }
+    }
+
+    #[test]
+    fn polygon_constructor_fewer_than_3_vertices_errors() {
+        assert!(Control::polygon(vec![]).is_err());
+        assert!(Control::polygon(vec![ShapePoint::new(0, 0)]).is_err());
+        assert!(Control::polygon(vec![ShapePoint::new(0, 0), ShapePoint::new(1, 1)]).is_err());
+    }
+
+    #[test]
+    fn polygon_constructor_negative_coordinates() {
+        let vertices =
+            vec![ShapePoint::new(-500, -500), ShapePoint::new(500, -500), ShapePoint::new(0, 500)];
+        let ctrl = Control::polygon(vertices).unwrap();
+        assert!(ctrl.is_polygon());
+        match ctrl {
+            Control::Polygon { width, height, .. } => {
+                // bbox: x -500..500 = 1000, y -500..500 = 1000
+                assert_eq!(width, HwpUnit::new(1000).unwrap());
+                assert_eq!(height, HwpUnit::new(1000).unwrap());
+            }
+            _ => panic!("expected Polygon"),
+        }
+    }
+
+    #[test]
+    fn polygon_constructor_degenerate_collinear() {
+        // 3 collinear points: height = 0 (flat), should succeed
+        let vertices =
+            vec![ShapePoint::new(0, 0), ShapePoint::new(500, 0), ShapePoint::new(1000, 0)];
+        let ctrl = Control::polygon(vertices).unwrap();
+        assert!(ctrl.is_polygon());
+        match ctrl {
+            Control::Polygon { width, height, .. } => {
+                assert_eq!(width, HwpUnit::new(1000).unwrap());
+                assert_eq!(height, HwpUnit::new(0).unwrap());
+            }
+            _ => panic!("expected Polygon"),
+        }
+    }
+
+    #[test]
+    fn line_constructor_horizontal() {
+        let ctrl = Control::line(ShapePoint::new(0, 0), ShapePoint::new(5000, 0)).unwrap();
+        assert!(ctrl.is_line());
+        match ctrl {
+            Control::Line { start, end, width, height, caption, style } => {
+                assert_eq!(start, ShapePoint::new(0, 0));
+                assert_eq!(end, ShapePoint::new(5000, 0));
+                assert_eq!(width, HwpUnit::new(5000).unwrap());
+                assert_eq!(height, HwpUnit::new(0).unwrap());
+                assert!(caption.is_none());
+                assert!(style.is_none());
+            }
+            _ => panic!("expected Line"),
+        }
+    }
+
+    #[test]
+    fn line_constructor_vertical() {
+        let ctrl = Control::line(ShapePoint::new(0, 0), ShapePoint::new(0, 3000)).unwrap();
+        assert!(ctrl.is_line());
+        match ctrl {
+            Control::Line { width, height, .. } => {
+                assert_eq!(width, HwpUnit::new(0).unwrap());
+                assert_eq!(height, HwpUnit::new(3000).unwrap());
+            }
+            _ => panic!("expected Line"),
+        }
+    }
+
+    #[test]
+    fn line_constructor_diagonal_bounding_box() {
+        let ctrl = Control::line(ShapePoint::new(100, 200), ShapePoint::new(400, 500)).unwrap();
+        match ctrl {
+            Control::Line { width, height, .. } => {
+                assert_eq!(width, HwpUnit::new(300).unwrap());
+                assert_eq!(height, HwpUnit::new(300).unwrap());
+            }
+            _ => panic!("expected Line"),
+        }
+    }
+
+    #[test]
+    fn line_constructor_same_point_errors() {
+        let pt = ShapePoint::new(100, 200);
+        assert!(Control::line(pt, pt).is_err());
+    }
+
+    #[test]
+    fn horizontal_line_constructor() {
+        let width = HwpUnit::from_mm(100.0).unwrap();
+        let ctrl = Control::horizontal_line(width);
+        assert!(ctrl.is_line());
+        match ctrl {
+            Control::Line { start, end, width: w, height, caption, style } => {
+                assert_eq!(start, ShapePoint::new(0, 0));
+                assert_eq!(end.y, 0);
+                assert_eq!(end.x, width.as_i32());
+                assert_eq!(w, width);
+                assert_eq!(height, HwpUnit::new(0).unwrap());
+                assert!(caption.is_none());
+                assert!(style.is_none());
+            }
+            _ => panic!("expected Line"),
+        }
+    }
+
+    #[test]
+    fn hyperlink_constructor() {
+        let ctrl = Control::hyperlink("Visit Rust", "https://rust-lang.org");
+        assert!(ctrl.is_hyperlink());
+        match ctrl {
+            Control::Hyperlink { text, url } => {
+                assert_eq!(text, "Visit Rust");
+                assert_eq!(url, "https://rust-lang.org");
+            }
+            _ => panic!("expected Hyperlink"),
+        }
     }
 }
