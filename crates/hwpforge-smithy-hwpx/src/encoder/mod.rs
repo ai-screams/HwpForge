@@ -84,11 +84,15 @@ impl HwpxEncoder {
         let header_xml = encode_header(style_store, sec_cnt)?;
 
         // Step 2: Encode sections (each produces XML + chart entries)
-        let section_results: Vec<section::SectionEncodeResult> = sections
-            .iter()
-            .enumerate()
-            .map(|(i, section)| encode_section(section, i))
-            .collect::<HwpxResult<Vec<_>>>()?;
+        // chart_offset tracks the global chart index across sections to avoid
+        // duplicate Chart/chartN.xml filenames in the ZIP archive.
+        let mut chart_offset = 0usize;
+        let mut section_results = Vec::with_capacity(sections.len());
+        for (i, section) in sections.iter().enumerate() {
+            let result = encode_section(section, i, chart_offset)?;
+            chart_offset += result.charts.len();
+            section_results.push(result);
+        }
 
         let section_xmls: Vec<String> = section_results.iter().map(|r| r.xml.clone()).collect();
         let charts: Vec<(String, String)> =

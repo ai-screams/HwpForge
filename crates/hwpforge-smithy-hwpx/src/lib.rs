@@ -39,20 +39,21 @@
 //! - Page settings (size, margins) from `<secPr>` in sections
 //!
 //! Not yet supported:
-//! - Binary image round-trip (paths written, data omitted)
-//! - Footnotes, endnotes, bookmarks, field codes
-//! - Drawing objects, OLE, equations
+//! - OLE objects, form controls, change tracking, bookmarks
+//! - Field codes
 
 #![deny(missing_docs)]
 #![deny(unsafe_code)]
 
 pub mod decoder;
+pub mod default_styles;
 mod encoder;
 pub mod error;
 mod schema;
 pub mod style_store;
 
 pub use decoder::{HwpxDecoder, HwpxDocument};
+pub use default_styles::{DefaultStyleEntry, HancomStyleSet};
 pub use encoder::HwpxEncoder;
 pub use error::{HwpxError, HwpxErrorCode, HwpxResult};
 pub use style_store::{

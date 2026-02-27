@@ -27,10 +27,10 @@ use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
     HxCaption, HxCellAddr, HxCellSpan, HxCellSz, HxChart, HxCtrl, HxDrawText, HxEllipse,
     HxEquation, HxFillBrush, HxFlip, HxFootNote, HxImg, HxImgClip, HxImgDim, HxImgRect, HxLine,
-    HxLineSeg, HxLineSegArray, HxLineShape, HxMatrix, HxOffset, HxPageMargin, HxPagePr,
-    HxParagraph, HxPic, HxPoint, HxPolygon, HxRect, HxRenderingInfo, HxRotationInfo, HxRun,
-    HxRunCase, HxRunSwitch, HxScript, HxSecPr, HxSection, HxShadow, HxShapeComment, HxSizeAttr,
-    HxSubList, HxTable, HxTableCell, HxTableMargin, HxTablePos, HxTableRow, HxTableSz, HxText,
+    HxLineShape, HxMatrix, HxOffset, HxPageMargin, HxPagePr, HxParagraph, HxPic, HxPoint,
+    HxPolygon, HxRect, HxRenderingInfo, HxRotationInfo, HxRun, HxRunCase, HxRunSwitch, HxScript,
+    HxSecPr, HxSection, HxShadow, HxShapeComment, HxSizeAttr, HxSubList, HxTable, HxTableCell,
+    HxTableMargin, HxTablePos, HxTableRow, HxTableSz, HxText,
 };
 
 use super::chart::generate_chart_xml;
@@ -65,9 +65,10 @@ pub(crate) struct SectionEncodeResult {
 pub(crate) fn encode_section(
     section: &Section,
     _section_index: usize,
+    chart_offset: usize,
 ) -> HwpxResult<SectionEncodeResult> {
     let mut chart_entries: Vec<(String, String)> = Vec::new();
-    let hx_section = build_section(section, &mut chart_entries)?;
+    let hx_section = build_section(section, &mut chart_entries, chart_offset)?;
     let inner_xml = quick_xml::se::to_string(&hx_section)
         .map_err(|e| HwpxError::XmlSerialize { detail: e.to_string() })?;
 
@@ -117,6 +118,7 @@ fn strip_root_element(xml: &str) -> &str {
 fn build_section(
     section: &Section,
     chart_entries: &mut Vec<(String, String)>,
+    chart_offset: usize,
 ) -> HwpxResult<HxSection> {
     let paragraphs = section
         .paragraphs
@@ -125,7 +127,7 @@ fn build_section(
         .map(|(idx, para)| {
             let inject_sec_pr = idx == 0;
             let page_settings = if inject_sec_pr { Some(&section.page_settings) } else { None };
-            build_paragraph(para, inject_sec_pr, page_settings, idx, 0, chart_entries)
+            build_paragraph(para, inject_sec_pr, page_settings, idx, 0, chart_entries, chart_offset)
         })
         .collect::<HwpxResult<Vec<_>>>()?;
 
@@ -144,16 +146,16 @@ fn build_paragraph(
     para_idx: usize,
     depth: usize,
     chart_entries: &mut Vec<(String, String)>,
+    chart_offset: usize,
 ) -> HwpxResult<HxParagraph> {
-    let runs = build_runs(&para.runs, inject_sec_pr, page_settings, depth, chart_entries)?;
+    let runs =
+        build_runs(&para.runs, inject_sec_pr, page_settings, depth, chart_entries, chart_offset)?;
 
-    // Build a placeholder linesegarray with approximate values.
-    // 한글 will recalculate this on open, but having a placeholder
-    // improves initial rendering.
-    let horzsize = page_settings
-        .map(|ps| ps.width.as_i32() - ps.margin_left.as_i32() - ps.margin_right.as_i32())
-        .unwrap_or(DEFAULT_HORZ_SIZE);
-    let linesegarray = Some(build_linesegarray(horzsize));
+    // Omit linesegarray so 한글 recalculates from scratch on open.
+    // Previously we emitted a 1-seg placeholder, but justify alignment
+    // relied on accurate per-line data — causing character overlap for
+    // multi-line paragraphs. Omitting it forces 한글 to compute properly.
+    let linesegarray = None;
 
     Ok(HxParagraph {
         id: format!("{para_idx}"),
@@ -181,6 +183,7 @@ fn build_runs(
     page_settings: Option<&PageSettings>,
     depth: usize,
     chart_entries: &mut Vec<(String, String)>,
+    chart_offset: usize,
 ) -> HwpxResult<Vec<HxRun>> {
     let mut result = Vec::new();
     let mut sec_pr_injected = false;
@@ -239,7 +242,7 @@ fn build_runs(
                         equations.push(encode_equation_to_hx(ctrl)?);
                     }
                     Control::Chart { .. } => {
-                        let chart_idx = chart_entries.len() + 1;
+                        let chart_idx = chart_offset + chart_entries.len() + 1;
                         let chart_ref = format!("Chart/chart{chart_idx}.xml");
                         let chart_xml = generate_chart_xml(ctrl)?;
                         chart_entries.push((chart_ref.clone(), chart_xml));
@@ -335,7 +338,7 @@ fn encode_paragraphs_to_sublist(paragraphs: &[Paragraph], depth: usize) -> HwpxR
         .iter()
         .enumerate()
         .map(|(idx, para)| {
-            build_paragraph(para, false, None, idx, depth + 1, &mut sub_chart_entries)
+            build_paragraph(para, false, None, idx, depth + 1, &mut sub_chart_entries, 0)
         })
         .collect::<HwpxResult<Vec<_>>>()?;
 
@@ -441,7 +444,7 @@ fn encode_textbox_to_rect(ctrl: &Control, depth: usize) -> HwpxResult<HxRect> {
 
     // Default text margin: 283 HWPUNIT (~1mm)
     const MARGIN: i32 = 283;
-    let last_width = (width_hwp - 2 * MARGIN).max(0) as u32;
+    let last_width = width_hwp as u32;
 
     let sub_list = encode_paragraphs_to_sublist(paragraphs, depth)?;
     let sc = build_shape_common(width_hwp, height_hwp, style.as_ref());
@@ -467,7 +470,7 @@ fn encode_textbox_to_rect(ctrl: &Control, depth: usize) -> HwpxResult<HxRect> {
         rendering_info: Some(sc.rendering_info),
         line_shape: Some(sc.line_shape),
         fill_brush: Some(sc.fill_brush),
-        shadow: Some(sc.shadow),
+        shadow: Some(HxShadow { alpha: 178, ..HxShadow::default_none() }),
 
         sz: Some(HxTableSz {
             width: width_hwp,
@@ -511,6 +514,7 @@ fn encode_textbox_to_rect(ctrl: &Control, depth: usize) -> HwpxResult<HxRect> {
         pt1: Some(HxPoint { x: width_hwp, y: 0 }),
         pt2: Some(HxPoint { x: width_hwp, y: height_hwp }),
         pt3: Some(HxPoint { x: 0, y: height_hwp }),
+        shape_comment: Some(HxShapeComment { text: "사각형입니다.".to_string() }),
     })
 }
 
@@ -546,7 +550,7 @@ fn encode_line_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxLine> {
         rotation_info: Some(sc.rotation_info),
         rendering_info: Some(sc.rendering_info),
         line_shape: Some(sc.line_shape),
-        fill_brush: Some(sc.fill_brush),
+        fill_brush: None, // lines have no fill brush per golden (line.hwpx)
         shadow: Some(sc.shadow),
         sz: Some(HxTableSz {
             width: w,
@@ -569,7 +573,7 @@ fn encode_line_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxLine> {
             horz_offset: 0,
         }),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
-        shape_comment: None,
+        shape_comment: Some(HxShapeComment { text: "선입니다.".to_string() }),
         caption: caption.as_ref().map(|c| build_hx_caption(c, w, depth)).transpose()?,
         start_pt: Some(HxPoint { x: start.x, y: start.y }),
         end_pt: Some(HxPoint { x: end.x, y: end.y }),
@@ -667,6 +671,7 @@ fn encode_ellipse_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxEllipse> {
             horz_offset: *horz_offset,
         }),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+        shape_comment: Some(HxShapeComment { text: "타원입니다.".to_string() }),
         caption: caption.as_ref().map(|c| build_hx_caption(c, w, depth)).transpose()?,
         draw_text,
         center: Some(HxPoint { x: center.x, y: center.y }),
@@ -748,6 +753,7 @@ fn encode_polygon_to_hx(ctrl: &Control, depth: usize) -> HwpxResult<HxPolygon> {
             horz_offset: 0,
         }),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+        shape_comment: Some(HxShapeComment { text: "다각형입니다.".to_string() }),
         caption: caption.as_ref().map(|c| build_hx_caption(c, w, depth)).transpose()?,
         draw_text,
         points,
@@ -1031,7 +1037,7 @@ fn build_table_cell(
         .enumerate()
         .map(|(idx, para)| {
             let mut sub_chart_entries = Vec::new();
-            build_paragraph(para, false, None, idx, depth + 1, &mut sub_chart_entries)
+            build_paragraph(para, false, None, idx, depth + 1, &mut sub_chart_entries, 0)
         })
         .collect::<HwpxResult<Vec<_>>>()?;
 
@@ -1163,32 +1169,11 @@ fn build_picture(img: &Image, depth: usize) -> HwpxResult<HxPic> {
 /// Default horizontal size for A4 with 30mm margins (59528 - 8504 - 8504).
 const DEFAULT_HORZ_SIZE: i32 = 42520;
 
-/// Default char height in HWPUNIT (10pt = 1000).
-const DEFAULT_CHAR_HEIGHT: i32 = 1000;
-
-/// Builds a minimal placeholder `HxLineSegArray` with one line segment.
-///
-/// Uses fixed defaults for char height (10pt) and calculates baseline
-/// and spacing from standard ratios. 한글 recalculates these on open,
-/// so exact values are not critical.
-fn build_linesegarray(horzsize: i32) -> HxLineSegArray {
-    let vertsize = DEFAULT_CHAR_HEIGHT;
-    let baseline = vertsize * 85 / 100;
-    let spacing = 600; // default for ~160% line spacing
-    HxLineSegArray {
-        items: vec![HxLineSeg {
-            textpos: 0,
-            vertpos: 0,
-            vertsize,
-            textheight: vertsize,
-            baseline,
-            spacing,
-            horzpos: 0,
-            horzsize,
-            flags: 393216,
-        }],
-    }
-}
+// NOTE: linesegarray is intentionally omitted from paragraph output.
+// Previously we emitted a 1-seg placeholder, but 한글 uses lineseg data
+// for justify alignment layout. Inaccurate values (1 seg for multi-line
+// paragraphs) caused character overlap. Omitting it lets 한글 compute
+// accurate linesegs from scratch on open.
 
 // ── 한글 compatibility: secPr enrichment ────────────────────────
 
@@ -1512,7 +1497,7 @@ mod tests {
     #[test]
     fn encode_single_text_paragraph() {
         let section = simple_section("텍스트");
-        let xml = encode_section(&section, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
 
         assert!(xml.contains("<?xml version="), "missing XML declaration");
         assert!(xml.contains("<hs:sec"), "missing <hs:sec> root");
@@ -1541,7 +1526,7 @@ mod tests {
     #[test]
     fn encode_section_roundtrip() {
         let section = simple_section("안녕하세요 round-trip test");
-        let xml = encode_section(&section, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
 
         // Parse back with the decoder
         let result =
@@ -1570,7 +1555,7 @@ mod tests {
             footer_margin: HwpUnit::new(4252).unwrap(),
         };
         let section = Section::with_paragraphs(vec![text_paragraph("Content", 0, 0)], ps);
-        let xml = encode_section(&section, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
 
         assert!(xml.contains("<hp:secPr"), "missing secPr");
         assert!(xml.contains(r#"textDirection="HORIZONTAL""#), "missing textDirection");
@@ -1611,7 +1596,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
 
         assert!(xml.contains(r#"rowCnt="1""#), "missing rowCnt");
         assert!(xml.contains(r#"colCnt="2""#), "missing colCnt");
@@ -1636,7 +1621,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
 
         assert!(
             xml.contains(r#"binaryItemIDRef="logo""#),
@@ -1658,7 +1643,7 @@ mod tests {
             ],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
 
         assert!(xml.contains("<hp:t>First</hp:t>"), "missing First");
         assert!(xml.contains("<hp:t>Second</hp:t>"), "missing Second");
@@ -1700,7 +1685,7 @@ mod tests {
         );
 
         // Should succeed within nesting limit
-        let xml = encode_section(&section, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
         assert!(xml.contains("<hp:t>Deep</hp:t>"), "missing nested text");
     }
 
@@ -1723,7 +1708,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
 
         assert!(xml.contains("<hp:t>before</hp:t>"), "missing 'before' text");
         assert!(xml.contains("<hp:t>after</hp:t>"), "missing 'after' text");
@@ -1742,7 +1727,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
 
         // Should parse without error
         assert!(xml.contains("<hs:sec"), "missing root element");
@@ -1755,7 +1740,7 @@ mod tests {
     fn korean_text_preservation() {
         let korean = "우리는 수학을 공부한다.";
         let section = simple_section(korean);
-        let xml = encode_section(&section, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
 
         // Roundtrip through decoder
         let result =
@@ -1769,7 +1754,7 @@ mod tests {
     #[test]
     fn empty_section_produces_valid_xml() {
         let section = Section::new(PageSettings::a4());
-        let xml = encode_section(&section, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
 
         assert!(xml.contains("<hs:sec"), "missing root element");
         assert!(xml.contains("</hs:sec>"), "missing close tag");
@@ -1826,7 +1811,7 @@ mod tests {
             vec![text_paragraph("p0", 3, 5), text_paragraph("p1", 7, 2)],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
         let result =
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
                 .unwrap();
@@ -1849,7 +1834,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
         let result =
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
                 .unwrap();
@@ -1879,7 +1864,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
         let result =
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
                 .unwrap();
@@ -1905,7 +1890,7 @@ mod tests {
             ApplyPageType::Both,
         ));
 
-        let xml = encode_section(&section, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
         assert!(xml.contains("<hp:header"), "XML should contain header element");
         assert!(xml.contains("Header Content"), "XML should contain header text");
 
@@ -1929,7 +1914,7 @@ mod tests {
             ApplyPageType::Even,
         ));
 
-        let xml = encode_section(&section, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
         assert!(xml.contains("<hp:footer"), "XML should contain footer element");
 
         let result =
@@ -1953,7 +1938,7 @@ mod tests {
             "- ".to_string(),
         ));
 
-        let xml = encode_section(&section, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
         assert!(xml.contains("<hp:pageNum"), "XML should contain pageNum element");
         assert!(xml.contains(r#"pos="BOTTOM_CENTER""#), "XML should contain pos attribute");
         assert!(xml.contains(r#"formatType="DIGIT""#), "XML should contain formatType");
@@ -1980,7 +1965,7 @@ mod tests {
         section.footer =
             Some(HeaderFooter::new(vec![text_paragraph("My Footer", 0, 0)], ApplyPageType::Odd));
 
-        let xml = encode_section(&section, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
 
         let result =
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
@@ -2014,7 +1999,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
 
         assert!(xml.contains("<hp:ctrl>"), "missing ctrl wrapper");
         assert!(xml.contains("<hp:footNote"), "missing footNote element");
@@ -2037,7 +2022,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
 
         assert!(xml.contains("<hp:endNote"), "missing endNote element");
         assert!(xml.contains("<hp:t>End note</hp:t>"), "missing endnote text");
@@ -2066,7 +2051,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
 
         assert!(xml.contains("<hp:rect"), "missing rect element");
         assert!(xml.contains("<hp:drawText"), "missing drawText element");
@@ -2095,7 +2080,7 @@ mod tests {
             PageSettings::a4(),
         );
 
-        let xml = encode_section(&section, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
         let result =
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
                 .unwrap();
@@ -2136,7 +2121,7 @@ mod tests {
             PageSettings::a4(),
         );
 
-        let xml = encode_section(&section, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
         let result =
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
                 .unwrap();
@@ -2182,7 +2167,7 @@ mod tests {
             PageSettings::a4(),
         );
 
-        let xml = encode_section(&section, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
         let result =
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
                 .unwrap();
@@ -2221,7 +2206,7 @@ mod tests {
             ApplyPageType::Both,
         ));
 
-        let xml = encode_section(&section, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
         assert!(xml.contains("A &amp; B &lt; C &gt; D"), "special chars must be escaped");
 
         let result =

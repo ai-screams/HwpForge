@@ -14,6 +14,7 @@ use hwpforge_foundation::{
     UnderlineType, VerticalPosition,
 };
 
+use crate::default_styles::HancomStyleSet;
 use crate::error::{HwpxError, HwpxResult};
 
 // ── Font ─────────────────────────────────────────────────────────
@@ -246,6 +247,8 @@ impl Default for HwpxParaShape {
 /// ```
 #[derive(Debug, Clone, Default)]
 pub struct HwpxStyleStore {
+    /// The 한글 version style set used when injecting default styles.
+    style_set: HancomStyleSet,
     fonts: Vec<HwpxFont>,
     char_shapes: Vec<HwpxCharShape>,
     para_shapes: Vec<HwpxParaShape>,
@@ -258,18 +261,36 @@ impl HwpxStyleStore {
         Self::default()
     }
 
-    /// Creates a store from a Blueprint [`StyleRegistry`].
+    /// Returns the style set used by this store.
+    pub fn style_set(&self) -> HancomStyleSet {
+        self.style_set
+    }
+
+    /// Creates a store from a Blueprint [`StyleRegistry`] using the default
+    /// style set ([`HancomStyleSet::Modern`]).
     ///
     /// This is the **bridge** that lets the MD → Core → HWPX pipeline
     /// carry resolved styles all the way through to the HWPX encoder.
+    ///
+    /// To target a specific 한글 version, use [`from_registry_with`][Self::from_registry_with].
+    pub fn from_registry(registry: &StyleRegistry) -> Self {
+        Self::from_registry_with(registry, HancomStyleSet::default())
+    }
+
+    /// Creates a store from a Blueprint [`StyleRegistry`] with a specific style set.
+    ///
+    /// The `style_set` controls which default styles are injected:
+    /// - [`Classic`][HancomStyleSet::Classic] — 18 styles (한글 2014–2020)
+    /// - [`Modern`][HancomStyleSet::Modern] — 22 styles (한글 2022+)
+    /// - [`Latest`][HancomStyleSet::Latest] — 23 styles (한글 2025+)
     ///
     /// Mapping:
     /// - `registry.fonts` → [`HwpxFont`] (assigned to HANGUL group)
     /// - `registry.char_shapes` → [`HwpxCharShape`] (font ref mirrors same index for all lang groups)
     /// - `registry.para_shapes` → [`HwpxParaShape`]
     /// - `registry.style_entries` → [`HwpxStyle`] (PARA type, Korean langID)
-    pub fn from_registry(registry: &StyleRegistry) -> Self {
-        let mut store = Self::new();
+    pub fn from_registry_with(registry: &StyleRegistry, style_set: HancomStyleSet) -> Self {
+        let mut store = Self { style_set, ..Self::default() };
 
         // Step 1: Ensure 한글-compatible fonts exist
         // If registry has no fonts, inject default Korean fonts
@@ -402,24 +423,28 @@ impl HwpxStyleStore {
             });
         }
 
-        // Step 3: Inject 한글 required default style FIRST (id=0 MUST be "바탕글")
-        // This ensures compatibility even with minimal Blueprint templates.
-        // Both always reference the first char/para shape (index 0).
-        store.push_style(HwpxStyle {
-            id: 0,
-            style_type: "PARA".to_string(),
-            name: "바탕글".to_string(),
-            eng_name: "Normal".to_string(),
-            para_pr_id_ref: 0,
-            char_pr_id_ref: 0,
-            next_style_id_ref: 0,
-            lang_id: 1042, // Korean
-        });
+        // Step 3: Inject default styles from the configured style set.
+        // The order and IDs must match exactly what 한글 expects for this version.
+        let defaults = store.style_set.default_styles();
+        for (idx, entry) in defaults.iter().enumerate() {
+            let next_style_id_ref = if entry.is_char_style() { 0 } else { idx as u32 };
+            store.push_style(HwpxStyle {
+                id: idx as u32,
+                style_type: entry.style_type.to_string(),
+                name: entry.name.to_string(),
+                eng_name: entry.eng_name.to_string(),
+                para_pr_id_ref: 0,
+                char_pr_id_ref: 0,
+                next_style_id_ref,
+                lang_id: 1042, // Korean
+            });
+        }
 
-        // Step 4: Add user's styles from registry (starting from id=1)
+        // Step 4: Add user's styles from registry (starting after defaults)
+        let offset = defaults.len();
         for (i, (name, entry)) in registry.style_entries.iter().enumerate() {
             store.push_style(HwpxStyle {
-                id: (i + 1) as u32, // Start from id=1 (id=0 is 바탕글)
+                id: (offset + i) as u32,
                 style_type: "PARA".to_string(),
                 name: name.clone(),
                 eng_name: name.clone(),
@@ -596,8 +621,6 @@ pub(crate) fn parse_alignment(s: &str) -> Alignment {
         Alignment::Center
     } else if s.eq_ignore_ascii_case("RIGHT") {
         Alignment::Right
-    } else if s.eq_ignore_ascii_case("JUSTIFY") {
-        Alignment::Justify
     } else {
         Alignment::Left
     }
@@ -940,13 +963,13 @@ mod tests {
         .unwrap();
         let store = HwpxStyleStore::from_registry(&registry);
 
-        // Empty registry now injects 한글-compatible defaults:
+        // Empty registry injects 한글-compatible defaults:
         // 1 font × 7 language groups, 1 default char shape, 1 default para shape,
-        // 1 required style (바탕글, id=0)
+        // 22 required styles (Modern default set)
         assert_eq!(store.font_count(), 7);
         assert_eq!(store.char_shape_count(), 1);
         assert_eq!(store.para_shape_count(), 1);
-        assert_eq!(store.style_count(), 1);
+        assert_eq!(store.style_count(), 22);
     }
 
     #[test]
@@ -959,8 +982,8 @@ mod tests {
         assert_eq!(store.font_count(), registry.font_count() * 7);
         assert_eq!(store.char_shape_count(), registry.char_shape_count());
         assert_eq!(store.para_shape_count(), registry.para_shape_count());
-        // +1 for injected 바탕글 (id=0) base style
-        assert_eq!(store.style_count(), registry.style_count() + 1);
+        // +22 for injected Modern default styles (the default HancomStyleSet)
+        assert_eq!(store.style_count(), registry.style_count() + 22);
     }
 
     #[test]
@@ -1033,7 +1056,13 @@ mod tests {
 
         for i in 0..store.style_count() {
             let style = store.style(i).unwrap();
-            assert_eq!(style.style_type, "PARA");
+            // Style type is either "PARA" or "CHAR" (default styles include both)
+            assert!(
+                style.style_type == "PARA" || style.style_type == "CHAR",
+                "unexpected style_type '{}' for style '{}'",
+                style.style_type,
+                style.name
+            );
             assert!(
                 (style.char_pr_id_ref as usize) < store.char_shape_count(),
                 "char_pr_id_ref {} out of bounds for style '{}'",
@@ -1047,5 +1076,57 @@ mod tests {
                 style.name
             );
         }
+    }
+
+    // ── HancomStyleSet count tests ──────────────────────────────
+
+    #[test]
+    fn default_style_set_classic_count() {
+        assert_eq!(HancomStyleSet::Classic.count(), 18);
+    }
+
+    #[test]
+    fn default_style_set_modern_count() {
+        assert_eq!(HancomStyleSet::Modern.count(), 22);
+    }
+
+    #[test]
+    fn default_style_set_latest_count() {
+        assert_eq!(HancomStyleSet::Latest.count(), 23);
+    }
+
+    #[test]
+    fn default_style_set_modern_is_default() {
+        assert_eq!(HancomStyleSet::default(), HancomStyleSet::Modern);
+    }
+
+    #[test]
+    fn from_registry_with_classic_style_set() {
+        let registry: StyleRegistry = serde_json::from_str(
+            r#"{"fonts":[],"char_shapes":[],"para_shapes":[],"style_entries":{}}"#,
+        )
+        .unwrap();
+        let store = HwpxStyleStore::from_registry_with(&registry, HancomStyleSet::Classic);
+        assert_eq!(store.style_set(), HancomStyleSet::Classic);
+        // Classic injects exactly 18 default styles
+        assert_eq!(store.style_count(), 18);
+        // 쪽 번호 at Classic position (id=9)
+        assert_eq!(store.style(9).unwrap().name, "쪽 번호");
+    }
+
+    #[test]
+    fn modern_styles_match_golden_fixture() {
+        // Verified from golden fixture tests/fixtures/textbox.hwpx (한글 2022+)
+        let styles = HancomStyleSet::Modern.default_styles();
+        // 개요 8-10 inserted at 9-11
+        assert_eq!(styles[9].name, "개요 8");
+        assert_eq!(styles[10].name, "개요 9");
+        assert_eq!(styles[11].name, "개요 10");
+        // 쪽 번호 shifted to 12
+        assert_eq!(styles[12].name, "쪽 번호");
+        assert_eq!(styles[12].style_type, "CHAR");
+        // 캡션 at 21
+        assert_eq!(styles[21].name, "캡션");
+        assert_eq!(styles[21].style_type, "PARA");
     }
 }
