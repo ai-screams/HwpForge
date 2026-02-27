@@ -240,27 +240,24 @@ fn build_section_0() -> Section {
     paras.push(text_para("1. 서론: HWPX 포맷 개요", CS_HEADING, PS_LEFT));
     paras.push(empty());
 
-    paras.push(mixed_para(
-        &[
-            ("HWPX는 한컴오피스(한글)가 사용하는 ", CS_NORMAL),
-            ("개방형 XML 문서 포맷", CS_BOLD),
-            ("입니다. 내부 구조는 ", CS_NORMAL),
-            ("ZIP 압축 아카이브", CS_BOLD),
-            (" 안에 XML 파일들을 계층적으로 배치한 형태로, OOXML(docx)과 유사하지만 ", CS_NORMAL),
-            ("독자적인 네임스페이스 체계", CS_BOLD),
-            ("를 사용합니다.", CS_NORMAL),
+    // footnote — zero-config (constructor #3) — 앞 텍스트와 같은 문단에 인라인
+    paras.push(Paragraph::with_runs(
+        vec![
+            Run::text("HWPX는 한컴오피스(한글)가 사용하는 ", CharShapeIndex::new(CS_NORMAL)),
+            Run::text("개방형 XML 문서 포맷", CharShapeIndex::new(CS_BOLD)),
+            Run::text("입니다. 내부 구조는 ", CharShapeIndex::new(CS_NORMAL)),
+            Run::text("ZIP 압축 아카이브", CharShapeIndex::new(CS_BOLD)),
+            Run::text(" 안에 XML 파일들을 계층적으로 배치한 형태로, OOXML(docx)과 유사하지만 ", CharShapeIndex::new(CS_NORMAL)),
+            Run::text("독자적인 네임스페이스 체계", CharShapeIndex::new(CS_BOLD)),
+            Run::text("를 사용합니다.", CharShapeIndex::new(CS_NORMAL)),
+            Run::control(
+                Control::footnote(vec![p(
+                    "KS X 6101은 한국산업표준(KS)으로 제정된 HWPX 문서 파일 포맷 규격입니다. openhwp 프로젝트에 9,054줄 분량의 마크다운 사양이 공개되어 있습니다.",
+                )]),
+                CharShapeIndex::new(CS_NORMAL),
+            ),
         ],
-        PS_JUSTIFY,
-    ));
-    paras.push(empty());
-
-    // footnote — zero-config (convenience constructor #3)
-    paras.push(ctrl_para(
-        Control::footnote(vec![p(
-            "KS X 6101은 한국산업표준(KS)으로 제정된 HWPX 문서 파일 포맷 규격입니다. openhwp 프로젝트에 9,054줄 분량의 마크다운 사양이 공개되어 있습니다.",
-        )]),
-        CS_NORMAL,
-        PS_JUSTIFY,
+        ParaShapeIndex::new(PS_JUSTIFY),
     ));
     paras.push(empty());
 
@@ -366,16 +363,18 @@ fn build_section_1() -> Section {
         42520,
         21000,
     ));
-    paras.push(text_para("[차트 1] 크레이트별 LOC (총 32,386 LOC)", CS_ITALIC, PS_CENTER));
-    paras.push(empty());
-
-    // footnote_with_id (convenience constructor #11)
-    paras.push(ctrl_para(
-        Control::footnote_with_id(1, vec![p(
-            "Foundation은 최소 의존성 원칙(serde/thiserror만)을 따릅니다. Foundation을 수정하면 모든 크레이트가 리빌드되므로, 변경은 최소화해야 합니다.",
-        )]),
-        CS_NORMAL,
-        PS_JUSTIFY,
+    // footnote_with_id (constructor #11) — 캡션 텍스트와 같은 문단에 인라인
+    paras.push(Paragraph::with_runs(
+        vec![
+            Run::text("[차트 1] 크레이트별 LOC (총 32,386 LOC)", CharShapeIndex::new(CS_ITALIC)),
+            Run::control(
+                Control::footnote_with_id(1, vec![p(
+                    "Foundation은 최소 의존성 원칙(serde/thiserror만)을 따릅니다. Foundation을 수정하면 모든 크레이트가 리빌드되므로, 변경은 최소화해야 합니다.",
+                )]),
+                CharShapeIndex::new(CS_NORMAL),
+            ),
+        ],
+        ParaShapeIndex::new(PS_CENTER),
     ));
     paras.push(empty());
 
@@ -625,27 +624,27 @@ fn build_section_3() -> Section {
     paras.push(p(
         "HwpForge는 4-Layer 아키텍처를 통해 구조(Core)와 스타일(Blueprint)을 분리하고, Smithy 계층에서 포맷별 인코딩/디코딩을 수행합니다.",
     ));
-    paras.push(p(
-        "Phase 0-5와 Wave 1-6을 거쳐 텍스트, 표, 이미지, 차트, 수식, 도형, 다단, 머리글/바닥글, 각주/미주, 글상자 등 실무 문서 생성에 필요한 모든 기능을 구현하였습니다.",
-    ));
-    paras.push(empty());
-
-    // endnote_with_id (convenience constructor #12)
-    paras.push(ctrl_para(
-        Control::endnote_with_id(1, vec![p(
-            "본 문서는 HwpForge Write API의 28개 편의 생성자를 모두 활용하여 작성되었습니다. 각 생성자는 최소 1회 이상 사용되었으며, 생성된 HWPX 파일은 한글에서 정상적으로 열립니다.",
-        )]),
-        CS_NORMAL,
-        PS_JUSTIFY,
-    ));
-
-    // endnote — zero-config (convenience constructor #4)
-    paras.push(ctrl_para(
-        Control::endnote(vec![p(
-            "HWPX 포맷은 KS X 6101 표준에 기반하며, HwpForge는 이 표준의 완전한 구현을 목표로 합니다. Phase 6(Python 바인딩), Phase 7(MCP 서버), Phase 8(v1.0 릴리즈)이 남아 있습니다.",
-        )]),
-        CS_NORMAL,
-        PS_JUSTIFY,
+    // endnote_with_id (constructor #12) + endnote (constructor #4) — 앞 텍스트와 인라인
+    paras.push(Paragraph::with_runs(
+        vec![
+            Run::text(
+                "Phase 0-5와 Wave 1-6을 거쳐 텍스트, 표, 이미지, 차트, 수식, 도형, 다단, 머리글/바닥글, 각주/미주, 글상자 등 실무 문서 생성에 필요한 모든 기능을 구현하였습니다.",
+                CharShapeIndex::new(CS_NORMAL),
+            ),
+            Run::control(
+                Control::endnote_with_id(1, vec![p(
+                    "본 문서는 HwpForge Write API의 28개 편의 생성자를 모두 활용하여 작성되었습니다. 각 생성자는 최소 1회 이상 사용되었으며, 생성된 HWPX 파일은 한글에서 정상적으로 열립니다.",
+                )]),
+                CharShapeIndex::new(CS_NORMAL),
+            ),
+            Run::control(
+                Control::endnote(vec![p(
+                    "HWPX 포맷은 KS X 6101 표준에 기반하며, HwpForge는 이 표준의 완전한 구현을 목표로 합니다. Phase 6(Python 바인딩), Phase 7(MCP 서버), Phase 8(v1.0 릴리즈)이 남아 있습니다.",
+                )]),
+                CharShapeIndex::new(CS_NORMAL),
+            ),
+        ],
+        ParaShapeIndex::new(PS_JUSTIFY),
     ));
     paras.push(empty());
 
