@@ -988,7 +988,7 @@ fn encode_chart_switch(ctrl: &Control, chart_ref: &str) -> HxRunSwitch {
                 id: generate_instid(),
                 z_order: 0,
                 numbering_type: "PICTURE".to_string(),
-                text_wrap: "SQUARE".to_string(),
+                text_wrap: "TOP_AND_BOTTOM".to_string(),
                 text_flow: "BOTH_SIDES".to_string(),
                 lock: 0,
                 dropcap_style: "None".to_string(),
