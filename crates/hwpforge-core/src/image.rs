@@ -148,7 +148,7 @@ impl std::fmt::Display for Image {
 /// assert_eq!(fmt.to_string(), "PNG");
 ///
 /// let unknown = ImageFormat::Unknown("SVG".to_string());
-/// assert_eq!(unknown.to_string(), "SVG");
+/// assert_eq!(unknown.to_string(), "svg");
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
@@ -224,7 +224,10 @@ impl std::fmt::Display for ImageFormat {
             Self::Bmp => write!(f, "BMP"),
             Self::Wmf => write!(f, "WMF"),
             Self::Emf => write!(f, "EMF"),
-            Self::Unknown(s) => write!(f, "{s}"),
+            Self::Unknown(s) => {
+                let lower = s.to_ascii_lowercase();
+                write!(f, "{lower}")
+            }
         }
     }
 }
@@ -343,7 +346,7 @@ mod tests {
         assert_eq!(ImageFormat::Bmp.to_string(), "BMP");
         assert_eq!(ImageFormat::Wmf.to_string(), "WMF");
         assert_eq!(ImageFormat::Emf.to_string(), "EMF");
-        assert_eq!(ImageFormat::Unknown("TIFF".to_string()).to_string(), "TIFF");
+        assert_eq!(ImageFormat::Unknown("TIFF".to_string()).to_string(), "tiff");
     }
 
     #[test]
@@ -608,5 +611,22 @@ mod tests {
         let img = Image::from_path(path, w, h);
         assert_eq!(img.format, ImageFormat::Bmp);
         assert_eq!(img.path, "owned/path.bmp");
+    }
+
+    #[test]
+    fn unknown_format_display_normalizes_to_lowercase() {
+        assert_eq!(ImageFormat::Unknown("SVG".to_string()).to_string(), "svg");
+        assert_eq!(ImageFormat::Unknown("Tiff".to_string()).to_string(), "tiff");
+        assert_eq!(ImageFormat::Unknown("webp".to_string()).to_string(), "webp");
+    }
+
+    #[test]
+    fn unknown_format_casing_inequality() {
+        // Unknown preserves the stored string for equality, even though display normalizes
+        let upper = ImageFormat::Unknown("SVG".to_string());
+        let lower = ImageFormat::Unknown("svg".to_string());
+        assert_ne!(upper, lower, "Different casing in Unknown produces inequality");
+        // But display output is identical
+        assert_eq!(upper.to_string(), lower.to_string());
     }
 }

@@ -306,12 +306,21 @@ impl ChartData {
         }
     }
 
-    /// Returns `true` if any series contains data.
-    pub fn is_empty(&self) -> bool {
+    /// Returns `true` if the chart data contains no series.
+    ///
+    /// A chart with zero series cannot be rendered. This is checked during
+    /// document validation (see [`ValidationError::EmptyChartData`](crate::error::ValidationError::EmptyChartData)).
+    pub fn has_no_series(&self) -> bool {
         match self {
             Self::Category { series, .. } => series.is_empty(),
             Self::Xy { series } => series.is_empty(),
         }
+    }
+
+    /// Returns `true` if the chart data contains no series.
+    #[deprecated(since = "0.2.0", note = "Use `has_no_series()` instead")]
+    pub fn is_empty(&self) -> bool {
+        self.has_no_series()
     }
 }
 
@@ -384,15 +393,23 @@ mod tests {
     }
 
     #[test]
-    fn chart_data_is_empty() {
+    fn chart_data_has_no_series() {
         let empty_cat = ChartData::category(&["A"], &[]);
-        assert!(empty_cat.is_empty());
+        assert!(empty_cat.has_no_series());
 
         let non_empty = ChartData::category(&["A"], &[("S", &[1.0])]);
-        assert!(!non_empty.is_empty());
+        assert!(!non_empty.has_no_series());
 
         let empty_xy = ChartData::Xy { series: vec![] };
-        assert!(empty_xy.is_empty());
+        assert!(empty_xy.has_no_series());
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn chart_data_is_empty_deprecated_alias() {
+        let empty = ChartData::category(&["A"], &[]);
+        assert!(empty.is_empty());
+        assert_eq!(empty.is_empty(), empty.has_no_series());
     }
 
     #[test]

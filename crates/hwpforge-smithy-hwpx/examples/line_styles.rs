@@ -14,14 +14,14 @@
 //!   temp/line_styles.hwpx
 
 use hwpforge_core::caption::{Caption, CaptionSide};
-use hwpforge_core::control::{Control, ShapePoint, ShapeStyle};
+use hwpforge_core::control::{Control, LineStyle, ShapePoint, ShapeStyle};
 use hwpforge_core::document::Document;
 use hwpforge_core::image::ImageStore;
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::Run;
 use hwpforge_core::section::Section;
 use hwpforge_core::PageSettings;
-use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+use hwpforge_foundation::{CharShapeIndex, Color, HwpUnit, ParaShapeIndex};
 use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore};
 use hwpforge_smithy_hwpx::HwpxEncoder;
 
@@ -93,13 +93,13 @@ fn main() {
     // ── 2. 선 스타일 비교 (Solid / Dash / Dot / DashDot) ──
     paragraphs.push(p("2. 선 스타일 비교"));
 
-    let line_styles: &[(&str, &str)] = &[
-        ("SOLID", "실선 (SOLID)"),
-        ("DASH", "긴 점선 (DASH)"),
-        ("DOT", "점선 (DOT)"),
-        ("DASH_DOT", "일점쇄선 (DASH_DOT)"),
+    let line_styles: &[(LineStyle, &str)] = &[
+        (LineStyle::Solid, "실선 (SOLID)"),
+        (LineStyle::Dash, "긴 점선 (DASH)"),
+        (LineStyle::Dot, "점선 (DOT)"),
+        (LineStyle::DashDot, "일점쇄선 (DASH_DOT)"),
     ];
-    for &(style_name, label) in line_styles {
+    for (style_variant, label) in line_styles {
         paragraphs.push(p(&format!("  {label}")));
         paragraphs.push(line_para(
             ShapePoint::new(0, 0),
@@ -107,10 +107,10 @@ fn main() {
             35000,
             100,
             Some(ShapeStyle {
-                line_color: Some("#000000".to_string()),
+                line_color: Some(Color::BLACK),
                 fill_color: None,
                 line_width: Some(100),
-                line_style: Some(style_name.to_string()),
+                line_style: Some(*style_variant),
             }),
         ));
     }
@@ -119,7 +119,7 @@ fn main() {
     // ── 3. 선 굵기 비교 (0.1mm ~ 1.5mm) ──
     paragraphs.push(p("3. 선 굵기 비교"));
 
-    let widths: &[(i32, &str)] = &[
+    let widths: &[(u32, &str)] = &[
         (28, "극세 (0.1mm)"),
         (56, "세 (0.2mm)"),
         (100, "보통 (0.35mm)"),
@@ -135,10 +135,10 @@ fn main() {
             35000,
             100,
             Some(ShapeStyle {
-                line_color: Some("#333333".to_string()),
+                line_color: Some(Color::from_rgb(0x33, 0x33, 0x33)),
                 fill_color: None,
                 line_width: Some(w),
-                line_style: Some("SOLID".to_string()),
+                line_style: Some(LineStyle::Solid),
             }),
         ));
     }
@@ -147,27 +147,27 @@ fn main() {
     // ── 4. 색상 라인 ──
     paragraphs.push(p("4. 색상 라인"));
 
-    let colors: &[(&str, &str)] = &[
-        ("#FF0000", "빨강"),
-        ("#FF8C00", "주황"),
-        ("#FFD700", "금색"),
-        ("#008000", "초록"),
-        ("#0000FF", "파랑"),
-        ("#4B0082", "남색"),
-        ("#800080", "보라"),
+    let colors: &[(Color, &str)] = &[
+        (Color::from_rgb(0xFF, 0x00, 0x00), "빨강 (#FF0000)"),
+        (Color::from_rgb(0xFF, 0x8C, 0x00), "주황 (#FF8C00)"),
+        (Color::from_rgb(0xFF, 0xD7, 0x00), "금색 (#FFD700)"),
+        (Color::from_rgb(0x00, 0x80, 0x00), "초록 (#008000)"),
+        (Color::from_rgb(0x00, 0x00, 0xFF), "파랑 (#0000FF)"),
+        (Color::from_rgb(0x4B, 0x00, 0x82), "남색 (#4B0082)"),
+        (Color::from_rgb(0x80, 0x00, 0x80), "보라 (#800080)"),
     ];
     for &(color, label) in colors {
-        paragraphs.push(p(&format!("  {label} ({color})")));
+        paragraphs.push(p(&format!("  {label}")));
         paragraphs.push(line_para(
             ShapePoint::new(0, 0),
             ShapePoint::new(35000, 0),
             35000,
             100,
             Some(ShapeStyle {
-                line_color: Some(color.to_string()),
+                line_color: Some(color),
                 fill_color: None,
                 line_width: Some(150),
-                line_style: Some("SOLID".to_string()),
+                line_style: Some(LineStyle::Solid),
             }),
         ));
     }
@@ -184,10 +184,10 @@ fn main() {
         20000,
         10000,
         Some(ShapeStyle {
-            line_color: Some("#FF0000".to_string()),
+            line_color: Some(Color::from_rgb(0xFF, 0x00, 0x00)),
             fill_color: None,
             line_width: Some(100),
-            line_style: Some("SOLID".to_string()),
+            line_style: Some(LineStyle::Solid),
         }),
     ));
 
@@ -199,10 +199,10 @@ fn main() {
         20000,
         10000,
         Some(ShapeStyle {
-            line_color: Some("#0000FF".to_string()),
+            line_color: Some(Color::from_rgb(0x00, 0x00, 0xFF)),
             fill_color: None,
             line_width: Some(100),
-            line_style: Some("SOLID".to_string()),
+            line_style: Some(LineStyle::Solid),
         }),
     ));
     paragraphs.push(p(""));
@@ -215,10 +215,10 @@ fn main() {
         100,
         14000,
         Some(ShapeStyle {
-            line_color: Some("#008000".to_string()),
+            line_color: Some(Color::from_rgb(0x00, 0x80, 0x00)),
             fill_color: None,
             line_width: Some(150),
-            line_style: Some("SOLID".to_string()),
+            line_style: Some(LineStyle::Solid),
         }),
     ));
     paragraphs.push(p(""));
@@ -226,12 +226,12 @@ fn main() {
     // ── 7. 색상 + 스타일 조합 ──
     paragraphs.push(p("7. 색상+스타일 조합"));
 
-    let combos: &[(&str, &str, i32, &str)] = &[
-        ("#FF0000", "DASH", 150, "빨강 대시"),
-        ("#0000FF", "DOT", 100, "파랑 점선"),
-        ("#008000", "DASH_DOT", 200, "초록 일점쇄선"),
-        ("#FF8C00", "SOLID", 300, "주황 굵은 실선"),
-        ("#800080", "DASH", 250, "보라 굵은 대시"),
+    let combos: &[(Color, LineStyle, u32, &str)] = &[
+        (Color::from_rgb(0xFF, 0x00, 0x00), LineStyle::Dash, 150, "빨강 대시"),
+        (Color::from_rgb(0x00, 0x00, 0xFF), LineStyle::Dot, 100, "파랑 점선"),
+        (Color::from_rgb(0x00, 0x80, 0x00), LineStyle::DashDot, 200, "초록 일점쇄선"),
+        (Color::from_rgb(0xFF, 0x8C, 0x00), LineStyle::Solid, 300, "주황 굵은 실선"),
+        (Color::from_rgb(0x80, 0x00, 0x80), LineStyle::Dash, 250, "보라 굵은 대시"),
     ];
     for &(color, style, width, label) in combos {
         paragraphs.push(p(&format!("  {label}")));
@@ -241,10 +241,10 @@ fn main() {
             35000,
             100,
             Some(ShapeStyle {
-                line_color: Some(color.to_string()),
+                line_color: Some(color),
                 fill_color: None,
                 line_width: Some(width),
-                line_style: Some(style.to_string()),
+                line_style: Some(style),
             }),
         ));
     }
@@ -263,10 +263,10 @@ fn main() {
             len,
             100,
             Some(ShapeStyle {
-                line_color: Some("#555555".to_string()),
+                line_color: Some(Color::from_rgb(0x55, 0x55, 0x55)),
                 fill_color: None,
                 line_width: Some(80),
-                line_style: Some("SOLID".to_string()),
+                line_style: Some(LineStyle::Solid),
             }),
         ));
     }
@@ -288,10 +288,10 @@ fn main() {
                     CaptionSide::Bottom,
                 )),
                 style: Some(ShapeStyle {
-                    line_color: Some("#CC0000".to_string()),
+                    line_color: Some(Color::from_rgb(0xCC, 0x00, 0x00)),
                     fill_color: None,
                     line_width: Some(200),
-                    line_style: Some("DASH".to_string()),
+                    line_style: Some(LineStyle::Dash),
                 }),
             },
             CharShapeIndex::new(0),
@@ -314,10 +314,10 @@ fn main() {
                     CaptionSide::Bottom,
                 )),
                 style: Some(ShapeStyle {
-                    line_color: Some("#0000CC".to_string()),
+                    line_color: Some(Color::from_rgb(0x00, 0x00, 0xCC)),
                     fill_color: None,
                     line_width: Some(150),
-                    line_style: Some("DOT".to_string()),
+                    line_style: Some(LineStyle::Dot),
                 }),
             },
             CharShapeIndex::new(0),
@@ -335,10 +335,10 @@ fn main() {
         42520,
         100,
         Some(ShapeStyle {
-            line_color: Some("#CC0000".to_string()),
+            line_color: Some(Color::from_rgb(0xCC, 0x00, 0x00)),
             fill_color: None,
             line_width: Some(200),
-            line_style: Some("SOLID".to_string()),
+            line_style: Some(LineStyle::Solid),
         }),
     ));
     // 아래쪽 선: 가는 빨강
@@ -348,10 +348,10 @@ fn main() {
         42520,
         100,
         Some(ShapeStyle {
-            line_color: Some("#CC0000".to_string()),
+            line_color: Some(Color::from_rgb(0xCC, 0x00, 0x00)),
             fill_color: None,
             line_width: Some(50),
-            line_style: Some("SOLID".to_string()),
+            line_style: Some(LineStyle::Solid),
         }),
     ));
 

@@ -32,6 +32,7 @@ use hwpforge_foundation::ParaShapeIndex;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::error::{CoreError, CoreResult};
 use crate::run::{Run, RunContent};
 
 /// A paragraph: an ordered sequence of runs sharing a paragraph shape.
@@ -141,6 +142,42 @@ impl Paragraph {
         assert!((1..=7).contains(&level), "heading_level must be 1-7, got {level}");
         self.heading_level = Some(level);
         self
+    }
+
+    /// Sets the heading level for TOC participation (1-7), returning an error
+    /// if the level is out of range.
+    ///
+    /// This is the fallible alternative to [`with_heading_level`](Self::with_heading_level),
+    /// suitable for user-supplied input where panicking is undesirable.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::InvalidStructure`] if `level` is 0 or greater than 7.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::paragraph::Paragraph;
+    /// use hwpforge_foundation::ParaShapeIndex;
+    ///
+    /// let para = Paragraph::new(ParaShapeIndex::new(0))
+    ///     .try_with_heading_level(3)
+    ///     .unwrap();
+    /// assert_eq!(para.heading_level, Some(3));
+    ///
+    /// let err = Paragraph::new(ParaShapeIndex::new(0))
+    ///     .try_with_heading_level(0);
+    /// assert!(err.is_err());
+    /// ```
+    pub fn try_with_heading_level(mut self, level: u8) -> CoreResult<Self> {
+        if !(1..=7).contains(&level) {
+            return Err(CoreError::InvalidStructure {
+                context: "Paragraph::try_with_heading_level".into(),
+                reason: format!("heading_level must be 1-7, got {level}"),
+            });
+        }
+        self.heading_level = Some(level);
+        Ok(self)
     }
 
     /// Concatenates all text runs into a single string.
@@ -397,5 +434,43 @@ mod tests {
         let para = Paragraph::new(ParaShapeIndex::new(0));
         let json = serde_json::to_string(&para).unwrap();
         assert!(!json.contains("heading_level"), "None should be skipped in serialization");
+    }
+
+    #[test]
+    fn try_with_heading_level_valid() {
+        for level in 1u8..=7 {
+            let para =
+                Paragraph::new(ParaShapeIndex::new(0)).try_with_heading_level(level).unwrap();
+            assert_eq!(para.heading_level, Some(level));
+        }
+    }
+
+    #[test]
+    fn try_with_heading_level_zero_errors() {
+        let result = Paragraph::new(ParaShapeIndex::new(0)).try_with_heading_level(0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn try_with_heading_level_eight_errors() {
+        let result = Paragraph::new(ParaShapeIndex::new(0)).try_with_heading_level(8);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn try_with_heading_level_255_errors() {
+        let result = Paragraph::new(ParaShapeIndex::new(0)).try_with_heading_level(255);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn serde_roundtrip_all_7_heading_levels() {
+        for level in 1u8..=7 {
+            let para = Paragraph::with_runs(vec![text_run("heading")], ParaShapeIndex::new(0))
+                .with_heading_level(level);
+            let json = serde_json::to_string(&para).unwrap();
+            let back: Paragraph = serde_json::from_str(&json).unwrap();
+            assert_eq!(back.heading_level, Some(level), "level {level} roundtrip failed");
+        }
     }
 }

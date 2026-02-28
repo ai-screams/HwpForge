@@ -443,4 +443,12 @@ mod tests {
         assert_eq!(cell.col_span, 0);
         assert_eq!(cell.row_span, 0);
     }
+
+    #[test]
+    fn row_new_equals_struct_literal() {
+        let cells = vec![simple_cell()];
+        let from_new = TableRow::new(cells.clone());
+        let from_literal = TableRow { cells, height: None };
+        assert_eq!(from_new, from_literal);
+    }
 }

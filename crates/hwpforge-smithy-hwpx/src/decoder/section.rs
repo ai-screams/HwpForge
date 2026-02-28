@@ -15,7 +15,8 @@ use hwpforge_core::section::{HeaderFooter, PageNumber};
 use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
-    ApplyPageType, CharShapeIndex, HwpUnit, NumberFormatType, PageNumberPosition, ParaShapeIndex,
+    ApplyPageType, CharShapeIndex, Color, HwpUnit, NumberFormatType, PageNumberPosition,
+    ParaShapeIndex,
 };
 use quick_xml::de::from_str;
 
@@ -615,7 +616,7 @@ fn decode_equation(eq: &HxEquation, char_shape_id: CharShapeIndex) -> HwpxResult
             width,
             height,
             base_line: eq.base_line,
-            text_color: eq.text_color.clone(),
+            text_color: parse_hex_color(&eq.text_color).unwrap_or(Color::BLACK),
             font: eq.font.clone(),
         })),
         char_shape_id,
@@ -680,15 +681,22 @@ fn decode_shape_style(
     line_shape: &Option<HxLineShape>,
     fill_brush: &Option<HxFillBrush>,
 ) -> Option<ShapeStyle> {
-    let fill_color: Option<String> =
-        fill_brush.as_ref().map(|fb| &fb.win_brush.face_color).filter(|c| !c.is_empty()).cloned();
+    let fill_color: Option<Color> = fill_brush
+        .as_ref()
+        .map(|fb| &fb.win_brush.face_color)
+        .filter(|c| !c.is_empty())
+        .and_then(|c| parse_hex_color(c));
 
     let (line_color, line_width, line_style) = match line_shape.as_ref() {
         None => (None, None, None),
         Some(ls) => (
-            if ls.color.is_empty() { None } else { Some(ls.color.clone()) },
-            if ls.width == 0 { None } else { Some(ls.width) },
-            if ls.style.is_empty() { None } else { Some(ls.style.clone()) },
+            if ls.color.is_empty() { None } else { parse_hex_color(&ls.color) },
+            if ls.width == 0 { None } else { u32::try_from(ls.width).ok() },
+            if ls.style.is_empty() {
+                None
+            } else {
+                ls.style.parse::<hwpforge_core::control::LineStyle>().ok()
+            },
         ),
     };
 
@@ -698,6 +706,18 @@ fn decode_shape_style(
     }
 
     Some(ShapeStyle { line_color, fill_color, line_width, line_style })
+}
+
+/// Parses a `#RRGGBB` hex string into a [`Color`].
+fn parse_hex_color(s: &str) -> Option<Color> {
+    let s = s.strip_prefix('#').unwrap_or(s);
+    if s.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&s[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&s[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&s[4..6], 16).ok()?;
+    Some(Color::from_rgb(r, g, b))
 }
 
 /// Converts paragraphs from an `HxSubList` into Core `Paragraph`s.
@@ -891,7 +911,7 @@ fn convert_page_number(hx: &HxPageNum) -> PageNumber {
     if hx.side_char.is_empty() {
         PageNumber::new(position, number_format)
     } else {
-        PageNumber::with_side_char(position, number_format, hx.side_char.clone())
+        PageNumber::with_decoration(position, number_format, hx.side_char.clone())
     }
 }
 
@@ -1330,7 +1350,7 @@ mod tests {
         let pn = result.page_number.expect("should have page number");
         assert_eq!(pn.position, PageNumberPosition::BottomCenter);
         assert_eq!(pn.number_format, NumberFormatType::Digit);
-        assert_eq!(pn.side_char, "- ");
+        assert_eq!(pn.decoration, "- ");
     }
 
     #[test]
@@ -1378,7 +1398,7 @@ mod tests {
         let pn = result.page_number.expect("should have page number");
         assert_eq!(pn.position, PageNumberPosition::TopLeft);
         assert_eq!(pn.number_format, NumberFormatType::RomanCapital);
-        assert!(pn.side_char.is_empty());
+        assert!(pn.decoration.is_empty());
     }
 
     #[test]

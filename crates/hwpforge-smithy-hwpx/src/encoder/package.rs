@@ -225,7 +225,8 @@ impl PackageWriter {
 
         // 9. BinData/* — images stored uncompressed (already compressed formats)
         for (path, data) in images {
-            zip.start_file(format!("BinData/{path}"), stored_opts)
+            let safe_path = super::sanitize_zip_entry_name(path);
+            zip.start_file(format!("BinData/{safe_path}"), stored_opts)
                 .map_err(|e| HwpxError::Zip(e.to_string()))?;
             zip.write_all(data).map_err(|e| HwpxError::Zip(e.to_string()))?;
         }

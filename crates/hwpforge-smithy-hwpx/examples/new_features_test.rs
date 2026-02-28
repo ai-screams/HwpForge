@@ -121,7 +121,7 @@ fn section_positioning() -> Section {
         vert_offset: 2000,
         caption: None,
         style: Some(ShapeStyle {
-            line_color: Some("#FF0000".to_string()),
+            line_color: Some(Color::from_rgb(0xFF, 0x00, 0x00)),
             fill_color: None,
             line_width: Some(100),
             line_style: None,
@@ -157,8 +157,8 @@ fn section_positioning() -> Section {
         paragraphs: vec![],
         caption: None,
         style: Some(ShapeStyle {
-            line_color: Some("#0064C8".to_string()),
-            fill_color: Some("#C8E6FF".to_string()),
+            line_color: Some(Color::from_rgb(0x00, 0x64, 0xC8)),
+            fill_color: Some(Color::from_rgb(0xC8, 0xE6, 0xFF)),
             line_width: None,
             line_style: None,
         }),

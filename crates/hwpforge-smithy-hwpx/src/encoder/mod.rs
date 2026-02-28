@@ -14,8 +14,179 @@ pub(crate) mod package;
 pub(crate) mod section;
 
 /// Escapes XML special characters in text content.
+///
+/// Handles `&`, `<`, `>`, and `"`. Single quotes (`'`) are **not** escaped
+/// because all HWPX attribute values produced by this encoder use double-quote
+/// delimiters. If a future caller places escaped values inside single-quoted
+/// XML attributes, `&apos;` escaping must be added.
 pub(crate) fn escape_xml(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
+    // Single-pass: only allocate when a special character is found.
+    let mut result = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '&' => result.push_str("&amp;"),
+            '<' => result.push_str("&lt;"),
+            '>' => result.push_str("&gt;"),
+            '"' => result.push_str("&quot;"),
+            _ => result.push(ch),
+        }
+    }
+    result
+}
+
+/// Returns `true` if the URL uses a safe scheme for hyperlinks.
+///
+/// Only `http://`, `https://`, `mailto:`, and empty URLs are accepted.
+/// Dangerous schemes like `javascript:`, `data:`, and `file:` are rejected
+/// to prevent XSS and local file access when the HWPX is rendered in a
+/// web-based viewer.
+pub(crate) fn is_safe_url(url: &str) -> bool {
+    let lower = url.to_ascii_lowercase();
+    lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("mailto:")
+        || url.is_empty()
+}
+
+/// Sanitizes a filename for safe use as a ZIP archive entry.
+///
+/// Strips leading slashes and rejects `..` path components to prevent
+/// path traversal attacks (CWE-22) when the ZIP is extracted.
+pub(crate) fn sanitize_zip_entry_name(name: &str) -> String {
+    name.split('/').filter(|c| !c.is_empty() && *c != "..").collect::<Vec<_>>().join("/")
+}
+
+#[cfg(test)]
+mod escape_xml_tests {
+    use super::escape_xml;
+
+    #[test]
+    fn empty_string() {
+        assert_eq!(escape_xml(""), "");
+    }
+
+    #[test]
+    fn no_special_chars() {
+        let input = "Hello World 123";
+        assert_eq!(escape_xml(input), input);
+    }
+
+    #[test]
+    fn all_special_chars() {
+        assert_eq!(escape_xml("<>&\""), "&lt;&gt;&amp;&quot;");
+    }
+
+    #[test]
+    fn mixed_content() {
+        assert_eq!(escape_xml("a < b & c"), "a &lt; b &amp; c");
+    }
+
+    #[test]
+    fn ampersand_first() {
+        // Ampersand must be replaced first to avoid double-escaping
+        assert_eq!(escape_xml("&<"), "&amp;&lt;");
+    }
+
+    #[test]
+    fn korean_text_unchanged() {
+        let input = "안녕하세요 테스트";
+        assert_eq!(escape_xml(input), input);
+    }
+
+    #[test]
+    fn url_with_ampersand() {
+        assert_eq!(escape_xml("https://example.com?a=1&b=2"), "https://example.com?a=1&amp;b=2");
+    }
+}
+
+#[cfg(test)]
+mod is_safe_url_tests {
+    use super::is_safe_url;
+
+    #[test]
+    fn http_allowed() {
+        assert!(is_safe_url("http://example.com"));
+    }
+
+    #[test]
+    fn https_allowed() {
+        assert!(is_safe_url("https://example.com/path?q=1"));
+    }
+
+    #[test]
+    fn mailto_allowed() {
+        assert!(is_safe_url("mailto:user@example.com"));
+    }
+
+    #[test]
+    fn empty_allowed() {
+        assert!(is_safe_url(""));
+    }
+
+    #[test]
+    fn javascript_rejected() {
+        assert!(!is_safe_url("javascript:alert(1)"));
+    }
+
+    #[test]
+    fn javascript_mixed_case_rejected() {
+        assert!(!is_safe_url("JaVaScRiPt:alert(1)"));
+    }
+
+    #[test]
+    fn data_uri_rejected() {
+        assert!(!is_safe_url("data:text/html,<script>alert(1)</script>"));
+    }
+
+    #[test]
+    fn file_uri_rejected() {
+        assert!(!is_safe_url("file:///etc/passwd"));
+    }
+
+    #[test]
+    fn ftp_rejected() {
+        assert!(!is_safe_url("ftp://example.com"));
+    }
+
+    #[test]
+    fn bare_path_rejected() {
+        assert!(!is_safe_url("/etc/passwd"));
+    }
+}
+
+#[cfg(test)]
+mod sanitize_zip_tests {
+    use super::sanitize_zip_entry_name;
+
+    #[test]
+    fn normal_path_unchanged() {
+        assert_eq!(sanitize_zip_entry_name("BinData/logo.png"), "BinData/logo.png");
+    }
+
+    #[test]
+    fn strips_dotdot() {
+        assert_eq!(sanitize_zip_entry_name("../../../etc/passwd"), "etc/passwd");
+    }
+
+    #[test]
+    fn strips_leading_slash() {
+        assert_eq!(sanitize_zip_entry_name("/absolute/path.png"), "absolute/path.png");
+    }
+
+    #[test]
+    fn strips_empty_components() {
+        assert_eq!(sanitize_zip_entry_name("a//b///c"), "a/b/c");
+    }
+
+    #[test]
+    fn dotdot_in_middle() {
+        assert_eq!(sanitize_zip_entry_name("a/../b/file.txt"), "a/b/file.txt");
+    }
+
+    #[test]
+    fn single_filename() {
+        assert_eq!(sanitize_zip_entry_name("file.png"), "file.png");
+    }
 }
 
 use std::path::Path;

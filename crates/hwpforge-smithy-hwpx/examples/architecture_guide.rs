@@ -295,16 +295,16 @@ fn build_section_0() -> Section {
     // bottom_center도 생성하여 비교 후 with_side_char 결과를 채택
     let _pn_simple = PageNumber::bottom_center(); // constructor #21 사용 증명
     let mut sec = Section::with_paragraphs(paras, PageSettings::a4());
-    sec.header = Some(HeaderFooter::both(vec![mixed_para(
+    sec.header = Some(HeaderFooter::all_pages(vec![mixed_para(
         &[("HWPX 아키텍처 가이드", CS_BOLD), ("  |  HwpForge", CS_ITALIC)],
         PS_LEFT,
     )]));
-    sec.footer = Some(HeaderFooter::both(vec![text_para(
+    sec.footer = Some(HeaderFooter::all_pages(vec![text_para(
         "Copyright \u{00A9} 2026 HwpForge Project. Apache-2.0 / MIT",
         CS_ITALIC,
         PS_CENTER,
     )]));
-    sec.page_number = Some(PageNumber::with_side_char(
+    sec.page_number = Some(PageNumber::with_decoration(
         PageNumberPosition::BottomCenter,
         NumberFormatType::Digit,
         "- ",
@@ -477,8 +477,8 @@ fn build_section_2() -> Section {
     let tw = HwpUnit::from_mm(20.0).expect("20mm valid").as_i32();
     let th = HwpUnit::from_mm(18.0).expect("18mm valid").as_i32();
     let polygon_style = ShapeStyle {
-        line_color: Some("#0066CC".to_string()),
-        fill_color: Some("#E3F2FD".to_string()),
+        line_color: Some(Color::from_rgb(0x00, 0x66, 0xCC)),
+        fill_color: Some(Color::from_rgb(0xE3, 0xF2, 0xFD)),
         line_width: Some(42),
         ..ShapeStyle::default() // constructor #18
     };
@@ -506,7 +506,7 @@ fn build_section_2() -> Section {
     // line (convenience constructor #7) — 대각선 연결선
     paras.push(text_para("3.4 계층 간 연결", CS_SUBHEADING, PS_LEFT));
     let line_style = ShapeStyle {
-        line_color: Some("#999999".to_string()),
+        line_color: Some(Color::from_rgb(0x99, 0x99, 0x99)),
         line_width: Some(28),
         ..ShapeStyle::default()
     };

@@ -126,6 +126,22 @@ impl Color {
     pub const fn blue(self) -> u8 {
         ((self.0 >> 16) & 0xFF) as u8
     }
+
+    /// Converts this color to an RGB hex string in `#RRGGBB` format.
+    ///
+    /// Since HWP uses BGR byte order internally, this method swaps the bytes
+    /// to produce standard RGB hex output.
+    ///
+    /// # Examples
+    /// ```
+    /// use hwpforge_foundation::Color;
+    /// let red = Color::from_rgb(255, 0, 0);
+    /// assert_eq!(red.to_hex_rgb(), "#FF0000");
+    /// ```
+    #[allow(clippy::wrong_self_convention)]
+    pub fn to_hex_rgb(&self) -> String {
+        format!("#{:02X}{:02X}{:02X}", self.red(), self.green(), self.blue())
+    }
 }
 
 impl Default for Color {
@@ -248,6 +264,36 @@ mod tests {
     }
 
     // Additional tests
+
+    #[test]
+    fn color_to_hex_rgb_red() {
+        assert_eq!(Color::from_rgb(255, 0, 0).to_hex_rgb(), "#FF0000");
+    }
+
+    #[test]
+    fn color_to_hex_rgb_green() {
+        assert_eq!(Color::from_rgb(0, 255, 0).to_hex_rgb(), "#00FF00");
+    }
+
+    #[test]
+    fn color_to_hex_rgb_blue() {
+        assert_eq!(Color::from_rgb(0, 0, 255).to_hex_rgb(), "#0000FF");
+    }
+
+    #[test]
+    fn color_to_hex_rgb_black() {
+        assert_eq!(Color::from_rgb(0, 0, 0).to_hex_rgb(), "#000000");
+    }
+
+    #[test]
+    fn color_to_hex_rgb_white() {
+        assert_eq!(Color::from_rgb(255, 255, 255).to_hex_rgb(), "#FFFFFF");
+    }
+
+    #[test]
+    fn color_to_hex_rgb_arbitrary() {
+        assert_eq!(Color::from_rgb(18, 52, 86).to_hex_rgb(), "#123456");
+    }
 
     #[test]
     fn color_debug_format() {

@@ -22,7 +22,7 @@
 //! assert!(link.is_hyperlink());
 //! ```
 
-use hwpforge_foundation::HwpUnit;
+use hwpforge_foundation::{Color, HwpUnit};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -63,35 +63,100 @@ impl ShapePoint {
     }
 }
 
+/// Line drawing style for shapes.
+///
+/// Controls how the stroke of a shape is rendered (solid, dashed, etc.).
+/// Maps to HWPX `<hc:lineShape>` `dash` attribute values.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_core::control::LineStyle;
+///
+/// let style = LineStyle::Dash;
+/// assert_eq!(style.to_string(), "DASH");
+/// assert_eq!("DOT".parse::<LineStyle>().unwrap(), LineStyle::Dot);
+/// ```
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub enum LineStyle {
+    /// Continuous solid line (default).
+    #[default]
+    Solid,
+    /// Dashed line.
+    Dash,
+    /// Dotted line.
+    Dot,
+    /// Alternating dash and dot.
+    DashDot,
+    /// Alternating dash, dot, dot.
+    DashDotDot,
+    /// No visible line.
+    None,
+}
+
+impl std::fmt::Display for LineStyle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Solid => f.write_str("SOLID"),
+            Self::Dash => f.write_str("DASH"),
+            Self::Dot => f.write_str("DOT"),
+            Self::DashDot => f.write_str("DASH_DOT"),
+            Self::DashDotDot => f.write_str("DASH_DOT_DOT"),
+            Self::None => f.write_str("NONE"),
+        }
+    }
+}
+
+impl std::str::FromStr for LineStyle {
+    type Err = CoreError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "SOLID" | "Solid" | "solid" => Ok(Self::Solid),
+            "DASH" | "Dash" | "dash" => Ok(Self::Dash),
+            "DOT" | "Dot" | "dot" => Ok(Self::Dot),
+            "DASH_DOT" | "DashDot" | "dash_dot" => Ok(Self::DashDot),
+            "DASH_DOT_DOT" | "DashDotDot" | "dash_dot_dot" => Ok(Self::DashDotDot),
+            "NONE" | "None" | "none" => Ok(Self::None),
+            _ => Err(CoreError::InvalidStructure {
+                context: "LineStyle".to_string(),
+                reason: format!(
+                    "unknown line style '{s}', valid: SOLID, DASH, DOT, DASH_DOT, DASH_DOT_DOT, NONE"
+                ),
+            }),
+        }
+    }
+}
+
 /// Visual style overrides for drawing shapes.
 ///
 /// All fields are `Option`; `None` means "use the encoder's default"
 /// (typically black solid border, white fill, 0.12 mm stroke).
 ///
-/// Colors are `#RRGGBB` hex strings matching the HWPX XML format directly.
-///
 /// # Examples
 ///
 /// ```
-/// use hwpforge_core::control::ShapeStyle;
+/// use hwpforge_core::control::{ShapeStyle, LineStyle};
+/// use hwpforge_foundation::Color;
 ///
 /// let style = ShapeStyle {
-///     line_color: Some("#FF0000".to_string()),
-///     fill_color: Some("#00FF00".to_string()),
+///     line_color: Some(Color::from_rgb(255, 0, 0)),
+///     fill_color: Some(Color::from_rgb(0, 255, 0)),
 ///     line_width: Some(100),
-///     line_style: Some("DASH".to_string()),
+///     line_style: Some(LineStyle::Dash),
 /// };
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
 pub struct ShapeStyle {
-    /// Stroke/border color as `#RRGGBB` (e.g. `"#FF0000"` for red).
-    pub line_color: Option<String>,
-    /// Fill color as `#RRGGBB` (e.g. `"#00FF00"` for green).
-    pub fill_color: Option<String>,
+    /// Stroke/border color (e.g. `Color::from_rgb(255, 0, 0)` for red).
+    pub line_color: Option<Color>,
+    /// Fill color (e.g. `Color::from_rgb(0, 255, 0)` for green).
+    pub fill_color: Option<Color>,
     /// Stroke width in HWPUNIT (33 ≈ 0.12mm, 100 ≈ 0.35mm).
-    pub line_width: Option<i32>,
-    /// Line style: `"SOLID"`, `"DASH"`, `"DOT"`, `"DASH_DOT"`, etc.
-    pub line_style: Option<String>,
+    pub line_width: Option<u32>,
+    /// Line drawing style (solid, dash, dot, etc.).
+    pub line_style: Option<LineStyle>,
 }
 
 /// An inline control element.
@@ -248,8 +313,8 @@ pub enum Control {
         height: HwpUnit,
         /// Baseline position (51-90 typical range).
         base_line: u32,
-        /// Text color as `#RRGGBB`.
-        text_color: String,
+        /// Text color.
+        text_color: Color,
         /// Font name (typically `"HancomEQN"`).
         font: String,
     },
@@ -413,7 +478,7 @@ impl Control {
             width: HwpUnit::new(8779).expect("8779 is valid"),
             height: HwpUnit::new(2600).expect("2600 is valid"),
             base_line: 71,
-            text_color: "#000000".to_string(),
+            text_color: Color::BLACK,
             font: "HancomEQN".to_string(),
         }
     }
@@ -637,8 +702,14 @@ impl Control {
         let max_y = vertices.iter().map(|p| p.y as i64).max().unwrap_or(0);
         let bbox_w = (max_x - min_x).max(0) as i32;
         let bbox_h = (max_y - min_y).max(0) as i32;
-        let width = HwpUnit::new(bbox_w).unwrap_or_else(|_| HwpUnit::new(1).expect("1 is valid"));
-        let height = HwpUnit::new(bbox_h).unwrap_or_else(|_| HwpUnit::new(1).expect("1 is valid"));
+        let width = HwpUnit::new(bbox_w).map_err(|_| CoreError::InvalidStructure {
+            context: "Control::polygon".into(),
+            reason: format!("bounding box width {bbox_w} exceeds HwpUnit range"),
+        })?;
+        let height = HwpUnit::new(bbox_h).map_err(|_| CoreError::InvalidStructure {
+            context: "Control::polygon".into(),
+            reason: format!("bounding box height {bbox_h} exceeds HwpUnit range"),
+        })?;
         Ok(Self::Polygon {
             vertices,
             width,
@@ -655,6 +726,8 @@ impl Control {
     ///
     /// The bounding box width and height are derived from the absolute difference
     /// of the endpoint coordinates: `width = |end.x - start.x|`, `height = |end.y - start.y|`.
+    /// Each axis is clamped to a minimum of 100 HwpUnit (~1pt) because 한글 cannot
+    /// render lines with a zero-dimension bounding box.
     /// Defaults: no caption, no style.
     ///
     /// Returns an error if start and end are the same point (degenerate line).
@@ -701,7 +774,9 @@ impl Control {
     /// Creates a horizontal line of the given width.
     ///
     /// Shortcut for `line(ShapePoint::new(0, 0), ShapePoint::new(width.as_i32(), 0))`.
-    /// The bounding box height is 100 HwpUnit (~1pt minimum). Defaults: no caption, no style.
+    /// The bounding box height is clamped to 100 HwpUnit (~1pt minimum) because
+    /// 한글 cannot render lines with a zero-dimension bounding box.
+    /// Defaults: no caption, no style.
     ///
     /// # Examples
     ///
@@ -746,7 +821,9 @@ impl std::fmt::Display for Control {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::TextBox { paragraphs, .. } => {
-                write!(f, "TextBox({} paragraphs)", paragraphs.len())
+                let n = paragraphs.len();
+                let word = if n == 1 { "paragraph" } else { "paragraphs" };
+                write!(f, "TextBox({n} {word})")
             }
             Self::Hyperlink { text, url } => {
                 let preview: String =
@@ -754,19 +831,29 @@ impl std::fmt::Display for Control {
                 write!(f, "Hyperlink(\"{preview}\" -> {url})")
             }
             Self::Footnote { paragraphs, .. } => {
-                write!(f, "Footnote({} paragraphs)", paragraphs.len())
+                let n = paragraphs.len();
+                let word = if n == 1 { "paragraph" } else { "paragraphs" };
+                write!(f, "Footnote({n} {word})")
             }
             Self::Endnote { paragraphs, .. } => {
-                write!(f, "Endnote({} paragraphs)", paragraphs.len())
+                let n = paragraphs.len();
+                let word = if n == 1 { "paragraph" } else { "paragraphs" };
+                write!(f, "Endnote({n} {word})")
             }
             Self::Line { .. } => {
                 write!(f, "Line")
             }
             Self::Ellipse { paragraphs, .. } => {
-                write!(f, "Ellipse({} paragraphs)", paragraphs.len())
+                let n = paragraphs.len();
+                let word = if n == 1 { "paragraph" } else { "paragraphs" };
+                write!(f, "Ellipse({n} {word})")
             }
             Self::Polygon { vertices, paragraphs, .. } => {
-                write!(f, "Polygon({} vertices, {} paragraphs)", vertices.len(), paragraphs.len())
+                let nv = vertices.len();
+                let np = paragraphs.len();
+                let vw = if nv == 1 { "vertex" } else { "vertices" };
+                let pw = if np == 1 { "paragraph" } else { "paragraphs" };
+                write!(f, "Polygon({nv} {vw}, {np} {pw})")
             }
             Self::Chart { chart_type, data, .. } => {
                 let series_count = match data {
@@ -794,7 +881,7 @@ impl std::fmt::Display for Control {
 mod tests {
     use super::*;
     use crate::run::Run;
-    use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+    use hwpforge_foundation::{CharShapeIndex, Color, ParaShapeIndex};
 
     fn simple_paragraph() -> Paragraph {
         Paragraph::with_runs(
@@ -810,6 +897,62 @@ mod tests {
         assert!(s.fill_color.is_none());
         assert!(s.line_width.is_none());
         assert!(s.line_style.is_none());
+    }
+
+    #[test]
+    fn shape_style_with_typed_fields() {
+        let s = ShapeStyle {
+            line_color: Some(Color::from_rgb(255, 0, 0)),
+            fill_color: Some(Color::from_rgb(0, 255, 0)),
+            line_width: Some(100),
+            line_style: Some(LineStyle::Dash),
+        };
+        assert_eq!(s.line_color.unwrap(), Color::from_rgb(255, 0, 0));
+        assert_eq!(s.fill_color.unwrap(), Color::from_rgb(0, 255, 0));
+        assert_eq!(s.line_width.unwrap(), 100);
+        assert_eq!(s.line_style.unwrap(), LineStyle::Dash);
+    }
+
+    #[test]
+    fn line_style_default() {
+        assert_eq!(LineStyle::default(), LineStyle::Solid);
+    }
+
+    #[test]
+    fn line_style_display() {
+        assert_eq!(LineStyle::Solid.to_string(), "SOLID");
+        assert_eq!(LineStyle::Dash.to_string(), "DASH");
+        assert_eq!(LineStyle::Dot.to_string(), "DOT");
+        assert_eq!(LineStyle::DashDot.to_string(), "DASH_DOT");
+        assert_eq!(LineStyle::DashDotDot.to_string(), "DASH_DOT_DOT");
+        assert_eq!(LineStyle::None.to_string(), "NONE");
+    }
+
+    #[test]
+    fn line_style_from_str() {
+        assert_eq!("SOLID".parse::<LineStyle>().unwrap(), LineStyle::Solid);
+        assert_eq!("Dash".parse::<LineStyle>().unwrap(), LineStyle::Dash);
+        assert_eq!("dot".parse::<LineStyle>().unwrap(), LineStyle::Dot);
+        assert_eq!("DASH_DOT".parse::<LineStyle>().unwrap(), LineStyle::DashDot);
+        assert_eq!("DashDotDot".parse::<LineStyle>().unwrap(), LineStyle::DashDotDot);
+        assert_eq!("NONE".parse::<LineStyle>().unwrap(), LineStyle::None);
+        assert!("INVALID".parse::<LineStyle>().is_err());
+    }
+
+    #[test]
+    fn line_style_serde_roundtrip() {
+        for style in [
+            LineStyle::Solid,
+            LineStyle::Dash,
+            LineStyle::Dot,
+            LineStyle::DashDot,
+            LineStyle::DashDotDot,
+            LineStyle::None,
+        ] {
+            let json = serde_json::to_string(&style).unwrap();
+            let back: LineStyle = serde_json::from_str(&json).unwrap();
+            assert_eq!(style, back);
+        }
     }
 
     #[test]
@@ -907,13 +1050,13 @@ mod tests {
     #[test]
     fn display_footnote() {
         let ctrl = Control::Footnote { inst_id: None, paragraphs: vec![simple_paragraph()] };
-        assert_eq!(ctrl.to_string(), "Footnote(1 paragraphs)");
+        assert_eq!(ctrl.to_string(), "Footnote(1 paragraph)");
     }
 
     #[test]
     fn display_endnote() {
         let ctrl = Control::Endnote { inst_id: Some(999), paragraphs: vec![simple_paragraph()] };
-        assert_eq!(ctrl.to_string(), "Endnote(1 paragraphs)");
+        assert_eq!(ctrl.to_string(), "Endnote(1 paragraph)");
     }
 
     #[test]
@@ -1036,7 +1179,7 @@ mod tests {
             style: None,
         };
         assert!(ctrl.is_ellipse());
-        assert_eq!(ctrl.to_string(), "Ellipse(1 paragraphs)");
+        assert_eq!(ctrl.to_string(), "Ellipse(1 paragraph)");
     }
 
     #[test]
@@ -1164,12 +1307,12 @@ mod tests {
         let ctrl = Control::equation("{a+b} over {c+d}");
         assert!(ctrl.is_equation());
         match ctrl {
-            Control::Equation { script, width, height, base_line, ref text_color, ref font } => {
+            Control::Equation { script, width, height, base_line, text_color, ref font } => {
                 assert_eq!(script, "{a+b} over {c+d}");
                 assert_eq!(width, HwpUnit::new(8779).unwrap());
                 assert_eq!(height, HwpUnit::new(2600).unwrap());
                 assert_eq!(base_line, 71);
-                assert_eq!(text_color, "#000000");
+                assert_eq!(text_color, Color::BLACK);
                 assert_eq!(font, "HancomEQN");
             }
             _ => panic!("expected Equation"),
@@ -1507,6 +1650,47 @@ mod tests {
             }
             _ => panic!("expected Ellipse"),
         }
+    }
+
+    #[test]
+    fn serde_roundtrip_chart() {
+        use crate::chart::{ChartData, ChartGrouping, ChartType, LegendPosition};
+        let ctrl = Control::Chart {
+            chart_type: ChartType::Column,
+            data: ChartData::category(&["A", "B"], &[("S1", &[1.0, 2.0])]),
+            title: Some("Test Chart".to_string()),
+            legend: LegendPosition::Bottom,
+            grouping: ChartGrouping::Stacked,
+            width: HwpUnit::from_mm(100.0).unwrap(),
+            height: HwpUnit::from_mm(80.0).unwrap(),
+            stock_variant: None,
+            bar_shape: None,
+            scatter_style: None,
+            radar_style: None,
+            of_pie_type: None,
+            explosion: None,
+            wireframe: None,
+            bubble_3d: None,
+            show_markers: None,
+        };
+        let json = serde_json::to_string(&ctrl).unwrap();
+        let back: Control = serde_json::from_str(&json).unwrap();
+        assert_eq!(ctrl, back);
+    }
+
+    #[test]
+    fn serde_roundtrip_equation() {
+        let ctrl = Control::Equation {
+            script: "{a+b} over {c+d}".to_string(),
+            width: HwpUnit::new(8779).unwrap(),
+            height: HwpUnit::new(2600).unwrap(),
+            base_line: 71,
+            text_color: Color::BLACK,
+            font: "HancomEQN".to_string(),
+        };
+        let json = serde_json::to_string(&ctrl).unwrap();
+        let back: Control = serde_json::from_str(&json).unwrap();
+        assert_eq!(ctrl, back);
     }
 
     #[test]

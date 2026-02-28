@@ -297,8 +297,20 @@ fn build_runs(
                         // cannot express this ordering, so we emit a placeholder
                         // run with a unique marker and replace it after
                         // serialization in `encode_section`.
+                        // Validate URL scheme before encoding
+                        if !super::is_safe_url(url) {
+                            return Err(crate::error::HwpxError::InvalidStructure {
+                                detail: format!(
+                                    "Unsafe URL scheme in hyperlink: '{url}'. Only http://, https://, and mailto: are allowed."
+                                ),
+                            });
+                        }
                         let field_id = hyperlink_entries.len();
-                        let marker = format!("__HWPFORGE_HYPERLINK_{field_id}__");
+                        // Use atomic nonce to prevent marker collision with user text
+                        static MARKER_NONCE: std::sync::atomic::AtomicU64 =
+                            std::sync::atomic::AtomicU64::new(0);
+                        let nonce = MARKER_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let marker = format!("__HWPHL_{nonce}_{field_id}__");
                         let real_xml = build_hyperlink_run_xml(text, url, char_pr_id_ref, field_id);
                         // The marker run will serialize to something like
                         // <hp:run charPrIDRef="N"><hp:t>__HWPFORGE_HYPERLINK_0__</hp:t></hp:run>
@@ -468,16 +480,16 @@ fn build_shape_common(width: i32, height: i32, style: Option<&ShapeStyle>) -> Sh
 
     if let Some(s) = style {
         if let Some(ref c) = s.line_color {
-            line_shape.color = c.clone();
+            line_shape.color = c.to_hex_rgb();
         }
         if let Some(w) = s.line_width {
-            line_shape.width = w;
+            line_shape.width = w as i32;
         }
         if let Some(ref ls) = s.line_style {
-            line_shape.style = ls.clone();
+            line_shape.style = ls.to_string();
         }
         if let Some(ref c) = s.fill_color {
-            fill_brush.win_brush.face_color = c.clone();
+            fill_brush.win_brush.face_color = c.to_hex_rgb();
         }
     }
 
@@ -905,7 +917,7 @@ fn encode_equation_to_hx(ctrl: &Control) -> HwpxResult<HxEquation> {
         // Equation-specific attrs (hardcoded constants per ground truth)
         version: "Equation Version 60".to_string(),
         base_line,
-        text_color: text_color.clone(),
+        text_color: text_color.to_hex_rgb(),
         base_unit: 1000,
         line_mode: "CHAR".to_string(),
         font: font.clone(),
@@ -1666,7 +1678,7 @@ fn build_page_number_xml(pn: &hwpforge_core::section::PageNumber) -> String {
     write!(
         xml,
         r#"<hp:ctrl><hp:pageNum pos="{pos}" formatType="{format_type}" sideChar="{side_char}"/></hp:ctrl>"#,
-        side_char = escape_xml(&pn.side_char),
+        side_char = escape_xml(&pn.decoration),
     )
     .expect("write to String is infallible");
     xml
@@ -2174,7 +2186,7 @@ mod tests {
         use hwpforge_foundation::{NumberFormatType, PageNumberPosition};
 
         let mut section = simple_section("Body text");
-        section.page_number = Some(PageNumber::with_side_char(
+        section.page_number = Some(PageNumber::with_decoration(
             PageNumberPosition::BottomCenter,
             NumberFormatType::Digit,
             "- ".to_string(),
@@ -2193,7 +2205,7 @@ mod tests {
         let pn = result.page_number.expect("decoded section should have page number");
         assert_eq!(pn.position, PageNumberPosition::BottomCenter);
         assert_eq!(pn.number_format, NumberFormatType::Digit);
-        assert_eq!(pn.side_char, "- ");
+        assert_eq!(pn.decoration, "- ");
     }
 
     #[test]

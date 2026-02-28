@@ -160,7 +160,7 @@ fn line_separator() -> Paragraph {
             vert_offset: 0,
             caption: None,
             style: Some(ShapeStyle {
-                line_color: Some("#999999".to_string()),
+                line_color: Some(Color::from_rgb(0x99, 0x99, 0x99)),
                 fill_color: None,
                 line_width: Some(28),
                 line_style: None,
@@ -305,16 +305,16 @@ fn build_section_0() -> Section {
     paras.push(empty());
 
     let mut sec = Section::with_paragraphs(paras, PageSettings::a4());
-    sec.header = Some(HeaderFooter::both(vec![mixed_para(
+    sec.header = Some(HeaderFooter::all_pages(vec![mixed_para(
         &[("HWPX 포맷 분석 보고서", CS_BOLD), ("  |  HwpForge 기술 문서 v1.0", CS_ITALIC)],
         PS_LEFT,
     )]));
-    sec.footer = Some(HeaderFooter::both(vec![text_para(
+    sec.footer = Some(HeaderFooter::all_pages(vec![text_para(
         "Copyright \u{00A9} 2026 HwpForge Project. Apache-2.0 / MIT",
         CS_ITALIC,
         PS_CENTER,
     )]));
-    sec.page_number = Some(PageNumber::with_side_char(
+    sec.page_number = Some(PageNumber::with_decoration(
         PageNumberPosition::BottomCenter,
         NumberFormatType::Digit,
         "- ",
@@ -405,8 +405,8 @@ fn build_section_1() -> Section {
             vert_offset: 0,
             caption: None,
             style: Some(ShapeStyle {
-                line_color: Some("#CCCCCC".to_string()),
-                fill_color: Some("#F5F5F5".to_string()),
+                line_color: Some(Color::from_rgb(0xCC, 0xCC, 0xCC)),
+                fill_color: Some(Color::from_rgb(0xF5, 0xF5, 0xF5)),
                 line_width: None,
                 line_style: None,
             }),
@@ -568,8 +568,8 @@ fn build_section_2() -> Section {
             paragraphs: vec![text_para("BGR!", CS_BOLD, PS_CENTER)],
             caption: Some(make_caption("[그림 2] BGR 색상 주의 영역", CaptionSide::Right)),
             style: Some(ShapeStyle {
-                line_color: Some("#FF0000".to_string()),
-                fill_color: Some("#FFEEEE".to_string()),
+                line_color: Some(Color::from_rgb(0xFF, 0x00, 0x00)),
+                fill_color: Some(Color::from_rgb(0xFF, 0xEE, 0xEE)),
                 line_width: Some(56),
                 line_style: None,
             }),
@@ -607,8 +607,8 @@ fn build_section_2() -> Section {
             paragraphs: vec![text_para("주의!", CS_BOLD, PS_CENTER)],
             caption: Some(make_caption("[그림 3] 경고 삼각형 (첫 점 반복)", CaptionSide::Bottom)),
             style: Some(ShapeStyle {
-                line_color: Some("#FF6600".to_string()),
-                fill_color: Some("#FFF3E0".to_string()),
+                line_color: Some(Color::from_rgb(0xFF, 0x66, 0x00)),
+                fill_color: Some(Color::from_rgb(0xFF, 0xF3, 0xE0)),
                 line_width: Some(42),
                 line_style: None,
             }),

@@ -32,6 +32,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::paragraph::Paragraph;
 
+/// Default caption gap in HWPUNIT (~3mm). Used by [`Caption::default`] and [`Caption::new`].
+pub const DEFAULT_CAPTION_GAP: i32 = 850;
+
 /// Caption attached to a shape object (table, image, textbox, etc.).
 ///
 /// Contains position, gap distance, optional explicit width, and the
@@ -71,8 +74,7 @@ impl Default for Caption {
         Self {
             side: CaptionSide::default(),
             width: None,
-            // 850 HWPUNIT ≈ 3mm. unwrap is safe: 850 is well within valid range.
-            gap: HwpUnit::new(850).unwrap(),
+            gap: HwpUnit::new(DEFAULT_CAPTION_GAP).unwrap(),
             paragraphs: Vec::new(),
         }
     }
@@ -103,8 +105,7 @@ impl Caption {
         Self {
             side,
             width: None,
-            // 850 HWPUNIT ≈ 3mm. unwrap is safe: 850 is well within valid range.
-            gap: HwpUnit::new(850).expect("850 is valid"),
+            gap: HwpUnit::new(DEFAULT_CAPTION_GAP).expect("DEFAULT_CAPTION_GAP is valid"),
             paragraphs,
         }
     }
@@ -306,5 +307,19 @@ mod tests {
     fn caption_custom_gap() {
         let cap = Caption { gap: HwpUnit::from_mm(5.0).unwrap(), ..Caption::default() };
         assert!(cap.gap.as_i32() > 850);
+    }
+
+    #[test]
+    fn caption_new_empty_bottom_equals_default() {
+        let from_new = Caption::new(vec![], CaptionSide::Bottom);
+        let from_default = Caption::default();
+        assert_eq!(from_new, from_default);
+    }
+
+    #[test]
+    fn default_caption_gap_constant() {
+        assert_eq!(super::DEFAULT_CAPTION_GAP, 850);
+        let cap = Caption::default();
+        assert_eq!(cap.gap.as_i32(), super::DEFAULT_CAPTION_GAP);
     }
 }
