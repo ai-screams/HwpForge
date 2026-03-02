@@ -175,12 +175,37 @@ fn validate_run_content(
             }
             Control::Chart { data, width, height, .. } => {
                 // Chart must have non-empty data
-                if data.is_empty() {
+                if data.has_no_series() {
                     return Err(ValidationError::EmptyChartData {
                         section_index: si,
                         paragraph_index: pi,
                         run_index: ri,
                     });
+                }
+                // Category charts must have category labels
+                if let crate::chart::ChartData::Category { categories, .. } = data {
+                    if categories.is_empty() {
+                        return Err(ValidationError::EmptyCategoryLabels {
+                            section_index: si,
+                            paragraph_index: pi,
+                            run_index: ri,
+                        });
+                    }
+                }
+                // XY series must have matching x/y lengths
+                if let crate::chart::ChartData::Xy { series } = data {
+                    for s in series {
+                        if s.x_values.len() != s.y_values.len() {
+                            return Err(ValidationError::MismatchedSeriesLengths {
+                                section_index: si,
+                                paragraph_index: pi,
+                                run_index: ri,
+                                series_name: s.name.clone(),
+                                x_len: s.x_values.len(),
+                                y_len: s.y_values.len(),
+                            });
+                        }
+                    }
                 }
                 // Chart must have non-zero dimensions
                 if width.as_i32() == 0 || height.as_i32() == 0 {
@@ -564,6 +589,8 @@ mod tests {
             vertices: vec![],
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(50.0).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
             paragraphs: vec![],
             caption: None,
             style: None,
@@ -584,6 +611,8 @@ mod tests {
             vertices: vec![ShapePoint { x: 0, y: 0 }, ShapePoint { x: 100, y: 100 }],
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(50.0).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
             paragraphs: vec![],
             caption: None,
             style: None,
@@ -608,6 +637,8 @@ mod tests {
             ],
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(50.0).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
             paragraphs: vec![],
             caption: None,
             style: None,
@@ -687,6 +718,8 @@ mod tests {
             ],
             width: HwpUnit::new(0).unwrap(), // invalid
             height: HwpUnit::from_mm(50.0).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
             paragraphs: vec![],
             caption: None,
             style: None,
@@ -712,6 +745,8 @@ mod tests {
             end: ShapePoint { x: 1000, y: 0 },
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::new(0).unwrap(), // valid for lines
+            horz_offset: 0,
+            vert_offset: 0,
             caption: None,
             style: None,
         };
@@ -732,6 +767,8 @@ mod tests {
             end: ShapePoint { x: 0, y: 1000 },
             width: HwpUnit::new(0).unwrap(), // valid for lines
             height: HwpUnit::from_mm(50.0).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
             caption: None,
             style: None,
         };
@@ -751,6 +788,8 @@ mod tests {
             end: ShapePoint { x: 1000, y: 500 },
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(25.0).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
             caption: None,
             style: None,
         };
@@ -796,6 +835,8 @@ mod tests {
             ],
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(50.0).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
             paragraphs: vec![],
             caption: None,
             style: None,
@@ -805,6 +846,208 @@ mod tests {
             vec![Paragraph::with_runs(vec![ctrl_run], ParaShapeIndex::new(0))],
             PageSettings::a4(),
         )];
+        assert!(validate_sections(&sections).is_ok());
+    }
+
+    // === Chart validation ===
+
+    fn chart_ctrl(data: crate::chart::ChartData) -> Control {
+        Control::Chart {
+            chart_type: crate::chart::ChartType::Column,
+            data,
+            title: None,
+            legend: crate::chart::LegendPosition::default(),
+            grouping: crate::chart::ChartGrouping::default(),
+            width: HwpUnit::from_mm(100.0).unwrap(),
+            height: HwpUnit::from_mm(80.0).unwrap(),
+            stock_variant: None,
+            bar_shape: None,
+            scatter_style: None,
+            radar_style: None,
+            of_pie_type: None,
+            explosion: None,
+            wireframe: None,
+            bubble_3d: None,
+            show_markers: None,
+        }
+    }
+
+    fn wrap_ctrl(ctrl: Control) -> Vec<Section> {
+        vec![Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        )]
+    }
+
+    #[test]
+    fn chart_with_empty_data_rejected() {
+        let data = crate::chart::ChartData::category(&["A"], &[]);
+        let sections = wrap_ctrl(chart_ctrl(data));
+        let result = validate_sections(&sections);
+        assert!(matches!(result, Err(ValidationError::EmptyChartData { .. })));
+    }
+
+    #[test]
+    fn chart_zero_width_rejected() {
+        let data = crate::chart::ChartData::category(&["A"], &[("S", &[1.0])]);
+        let ctrl = Control::Chart {
+            chart_type: crate::chart::ChartType::Column,
+            data,
+            title: None,
+            legend: crate::chart::LegendPosition::default(),
+            grouping: crate::chart::ChartGrouping::default(),
+            width: HwpUnit::new(0).unwrap(),
+            height: HwpUnit::from_mm(80.0).unwrap(),
+            stock_variant: None,
+            bar_shape: None,
+            scatter_style: None,
+            radar_style: None,
+            of_pie_type: None,
+            explosion: None,
+            wireframe: None,
+            bubble_3d: None,
+            show_markers: None,
+        };
+        let sections = wrap_ctrl(ctrl);
+        let result = validate_sections(&sections);
+        assert!(matches!(
+            result,
+            Err(ValidationError::InvalidShapeDimension { shape_type: "Chart", .. })
+        ));
+    }
+
+    #[test]
+    fn valid_chart_accepted() {
+        let data = crate::chart::ChartData::category(&["A", "B"], &[("Sales", &[10.0, 20.0])]);
+        let sections = wrap_ctrl(chart_ctrl(data));
+        assert!(validate_sections(&sections).is_ok());
+    }
+
+    #[test]
+    fn chart_empty_categories_rejected() {
+        let data = crate::chart::ChartData::category(&[], &[("S", &[])]);
+        let sections = wrap_ctrl(chart_ctrl(data));
+        let result = validate_sections(&sections);
+        assert!(matches!(result, Err(ValidationError::EmptyCategoryLabels { .. })));
+    }
+
+    #[test]
+    fn chart_xy_mismatched_lengths_rejected() {
+        let data = crate::chart::ChartData::Xy {
+            series: vec![crate::chart::XySeries {
+                name: "Points".to_string(),
+                x_values: vec![1.0, 2.0, 3.0],
+                y_values: vec![10.0, 20.0], // mismatched!
+            }],
+        };
+        let ctrl = Control::Chart {
+            chart_type: crate::chart::ChartType::Scatter,
+            data,
+            title: None,
+            legend: crate::chart::LegendPosition::default(),
+            grouping: crate::chart::ChartGrouping::default(),
+            width: HwpUnit::from_mm(100.0).unwrap(),
+            height: HwpUnit::from_mm(80.0).unwrap(),
+            stock_variant: None,
+            bar_shape: None,
+            scatter_style: None,
+            radar_style: None,
+            of_pie_type: None,
+            explosion: None,
+            wireframe: None,
+            bubble_3d: None,
+            show_markers: None,
+        };
+        let sections = wrap_ctrl(ctrl);
+        let result = validate_sections(&sections);
+        assert!(matches!(result, Err(ValidationError::MismatchedSeriesLengths { .. })));
+    }
+
+    #[test]
+    fn chart_xy_matching_lengths_accepted() {
+        let data = crate::chart::ChartData::xy(&[("Pts", &[1.0, 2.0], &[3.0, 4.0])]);
+        let ctrl = Control::Chart {
+            chart_type: crate::chart::ChartType::Scatter,
+            data,
+            title: None,
+            legend: crate::chart::LegendPosition::default(),
+            grouping: crate::chart::ChartGrouping::default(),
+            width: HwpUnit::from_mm(100.0).unwrap(),
+            height: HwpUnit::from_mm(80.0).unwrap(),
+            stock_variant: None,
+            bar_shape: None,
+            scatter_style: None,
+            radar_style: None,
+            of_pie_type: None,
+            explosion: None,
+            wireframe: None,
+            bubble_3d: None,
+            show_markers: None,
+        };
+        let sections = wrap_ctrl(ctrl);
+        assert!(validate_sections(&sections).is_ok());
+    }
+
+    // === Equation validation ===
+
+    #[test]
+    fn equation_empty_script_rejected() {
+        let ctrl = Control::Equation {
+            script: String::new(),
+            width: HwpUnit::from_mm(50.0).unwrap(),
+            height: HwpUnit::from_mm(20.0).unwrap(),
+            base_line: 71,
+            text_color: hwpforge_foundation::Color::BLACK,
+            font: "HancomEQN".to_string(),
+        };
+        let sections = wrap_ctrl(ctrl);
+        let result = validate_sections(&sections);
+        assert!(matches!(result, Err(ValidationError::EmptyEquation { .. })));
+    }
+
+    #[test]
+    fn equation_zero_height_rejected() {
+        let ctrl = Control::Equation {
+            script: "x^2".to_string(),
+            width: HwpUnit::from_mm(50.0).unwrap(),
+            height: HwpUnit::new(0).unwrap(),
+            base_line: 71,
+            text_color: hwpforge_foundation::Color::BLACK,
+            font: "HancomEQN".to_string(),
+        };
+        let sections = wrap_ctrl(ctrl);
+        let result = validate_sections(&sections);
+        assert!(matches!(
+            result,
+            Err(ValidationError::InvalidShapeDimension { shape_type: "Equation", .. })
+        ));
+    }
+
+    #[test]
+    fn equation_zero_width_rejected() {
+        let ctrl = Control::Equation {
+            script: "x^2".to_string(),
+            width: HwpUnit::new(0).unwrap(),
+            height: HwpUnit::from_mm(20.0).unwrap(),
+            base_line: 71,
+            text_color: hwpforge_foundation::Color::BLACK,
+            font: "HancomEQN".to_string(),
+        };
+        let sections = wrap_ctrl(ctrl);
+        let result = validate_sections(&sections);
+        assert!(matches!(
+            result,
+            Err(ValidationError::InvalidShapeDimension { shape_type: "Equation", .. })
+        ));
+    }
+
+    #[test]
+    fn valid_equation_accepted() {
+        let ctrl = Control::equation("{a+b} over {c+d}");
+        let sections = wrap_ctrl(ctrl);
         assert!(validate_sections(&sections).is_ok());
     }
 }

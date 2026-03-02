@@ -23,7 +23,7 @@ use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::Run;
 use hwpforge_core::section::Section;
 use hwpforge_core::PageSettings;
-use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+use hwpforge_foundation::{CharShapeIndex, Color, HwpUnit, ParaShapeIndex};
 use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore};
 use hwpforge_smithy_hwpx::HwpxEncoder;
 
@@ -41,14 +41,14 @@ fn empty_para() -> Paragraph {
 }
 
 /// Build an equation Run with the given parameters.
-fn eq_run(script: &str, width: i32, height: i32, base_line: u32, color: &str) -> Run {
+fn eq_run(script: &str, width: i32, height: i32, base_line: u32, color: Color) -> Run {
     Run::control(
         Control::Equation {
             script: script.to_string(),
             width: HwpUnit::new(width).unwrap(),
             height: HwpUnit::new(height).unwrap(),
             base_line,
-            text_color: color.to_string(),
+            text_color: color,
             font: "HancomEQN".to_string(),
         },
         CS0,
@@ -56,12 +56,12 @@ fn eq_run(script: &str, width: i32, height: i32, base_line: u32, color: &str) ->
 }
 
 /// Build a paragraph containing a single equation.
-fn eq_para(script: &str, width: i32, height: i32, base_line: u32, color: &str) -> Paragraph {
+fn eq_para(script: &str, width: i32, height: i32, base_line: u32, color: Color) -> Paragraph {
     Paragraph::with_runs(vec![eq_run(script, width, height, base_line, color)], PS0)
 }
 
 /// Build a paragraph with label text followed by an equation.
-fn labeled_eq(label: &str, script: &str, w: i32, h: i32, bl: u32, color: &str) -> Vec<Paragraph> {
+fn labeled_eq(label: &str, script: &str, w: i32, h: i32, bl: u32, color: Color) -> Vec<Paragraph> {
     vec![text_para(label), eq_para(script, w, h, bl, color), empty_para()]
 }
 
@@ -74,6 +74,13 @@ fn build_store() -> HwpxStyleStore {
     store.push_para_shape(HwpxParaShape::default());
     store
 }
+
+// colour constants used throughout
+const BLACK: Color = Color::BLACK;
+const DARK_BLUE: Color = Color::from_rgb(0x00, 0x00, 0xCC);
+const DARK_RED: Color = Color::from_rgb(0xCC, 0x00, 0x00);
+const DARK_GREEN: Color = Color::from_rgb(0x00, 0x66, 0x00);
+const PURPLE: Color = Color::from_rgb(0x80, 0x00, 0x80);
 
 // ── Main ─────────────────────────────────────────────────────────
 
@@ -96,14 +103,14 @@ fn main() {
     paras.push(text_para("1. 기본 분수 (Fractions)"));
     paras.push(empty_para());
 
-    paras.extend(labeled_eq("  단순 분수:", "{c+d} over {a+b}", 2467, 2250, 66, "#000000"));
+    paras.extend(labeled_eq("  단순 분수:", "{c+d} over {a+b}", 2467, 2250, 66, BLACK));
     paras.extend(labeled_eq(
         "  연분수:",
         "1+ {1} over {1+ {1} over {1+ {1} over {x}}}",
         3500,
         5000,
         55,
-        "#000000",
+        BLACK,
     ));
     paras.extend(labeled_eq(
         "  혼합 분수:",
@@ -111,7 +118,7 @@ fn main() {
         8000,
         2250,
         66,
-        "#000000",
+        BLACK,
     ));
 
     // ════════════════════════════════════════════════════════════════
@@ -120,15 +127,15 @@ fn main() {
     paras.push(text_para("2. 거듭제곱과 루트 (Powers & Roots)"));
     paras.push(empty_para());
 
-    paras.extend(labeled_eq("  제곱근:", "root {2} of {x ^{2} +`1}", 4020, 1308, 90, "#000000"));
-    paras.extend(labeled_eq("  세제곱근:", "root {3} of {(x ^{2} +1)}", 4020, 1308, 90, "#000000"));
+    paras.extend(labeled_eq("  제곱근:", "root {2} of {x ^{2} +`1}", 4020, 1308, 90, BLACK));
+    paras.extend(labeled_eq("  세제곱근:", "root {3} of {(x ^{2} +1)}", 4020, 1308, 90, BLACK));
     paras.extend(labeled_eq(
         "  중첩 루트:",
         "root {2} of {1+`root {2} of {1+`root {2} of {x}}}",
         8000,
         2200,
         70,
-        "#000000",
+        BLACK,
     ));
     paras.extend(labeled_eq(
         "  지수 표기:",
@@ -136,7 +143,7 @@ fn main() {
         9000,
         1175,
         88,
-        "#000000",
+        BLACK,
     ));
 
     // ════════════════════════════════════════════════════════════════
@@ -152,7 +159,7 @@ fn main() {
         5164,
         1175,
         88,
-        "#0000CC",
+        DARK_BLUE,
     ));
 
     // Quadratic formula
@@ -162,7 +169,7 @@ fn main() {
         8779,
         2600,
         71,
-        "#CC0000",
+        DARK_RED,
     ));
 
     // Pythagorean theorem
@@ -172,14 +179,14 @@ fn main() {
         5000,
         1175,
         88,
-        "#006600",
+        DARK_GREEN,
     ));
 
     // Area of circle
-    paras.extend(labeled_eq("  원의 넓이:", "A= pi  r ^{2}", 3269, 1163, 89, "#000000"));
+    paras.extend(labeled_eq("  원의 넓이:", "A= pi  r ^{2}", 3269, 1163, 89, BLACK));
 
     // E=mc^2
-    paras.extend(labeled_eq("  질량-에너지 등가:", "E`=`mc ^{2}", 3000, 1175, 88, "#800080"));
+    paras.extend(labeled_eq("  질량-에너지 등가:", "E`=`mc ^{2}", 3000, 1175, 88, PURPLE));
 
     // ════════════════════════════════════════════════════════════════
     // 4. 미적분학 (Calculus)
@@ -194,7 +201,7 @@ fn main() {
         4000,
         2586,
         62,
-        "#000000",
+        BLACK,
     ));
 
     // Gaussian integral
@@ -204,7 +211,7 @@ fn main() {
         10000,
         2600,
         62,
-        "#0000CC",
+        DARK_BLUE,
     ));
 
     // Limit
@@ -214,7 +221,7 @@ fn main() {
         7070,
         1875,
         51,
-        "#000000",
+        BLACK,
     ));
 
     // Derivative limit definition
@@ -224,11 +231,11 @@ fn main() {
         11000,
         2400,
         60,
-        "#CC0000",
+        DARK_RED,
     ));
 
     // Partial derivative
-    paras.extend(labeled_eq("  편미분:", "sigma  f/ sigma  x", 2496, 975, 86, "#000000"));
+    paras.extend(labeled_eq("  편미분:", "sigma  f/ sigma  x", 2496, 975, 86, BLACK));
 
     // ════════════════════════════════════════════════════════════════
     // 5. 급수와 곱 (Series & Products)
@@ -243,7 +250,7 @@ fn main() {
         11137,
         2700,
         63,
-        "#000000",
+        BLACK,
     ));
 
     // Product
@@ -253,7 +260,7 @@ fn main() {
         2033,
         2700,
         63,
-        "#000000",
+        BLACK,
     ));
 
     // Taylor series for e^x
@@ -263,14 +270,14 @@ fn main() {
         16000,
         2438,
         69,
-        "#006600",
+        DARK_GREEN,
     ));
 
     // Fourier series
     paras.extend(labeled_eq(
         "  푸리에 급수:",
         "f(x)=a _{0} + sum _{n=1} ^{INF } `(a _{n} cos {n pi  x} over {L} +`b _{n} sin {n pi  x} over {L} )",
-        16876, 2700, 63, "#0000CC",
+        16876, 2700, 63, DARK_BLUE,
     ));
 
     // Geometric series
@@ -280,7 +287,7 @@ fn main() {
         10000,
         2700,
         63,
-        "#000000",
+        BLACK,
     ));
 
     // ════════════════════════════════════════════════════════════════
@@ -290,10 +297,10 @@ fn main() {
     paras.push(empty_para());
 
     // 2x2 matrix
-    paras.extend(labeled_eq("  2x2 행렬:", "{matrix{1&2#3&4}}", 1144, 2100, 67, "#000000"));
+    paras.extend(labeled_eq("  2x2 행렬:", "{matrix{1&2#3&4}}", 1144, 2100, 67, BLACK));
 
     // Determinant
-    paras.extend(labeled_eq("  행렬식:", "det(A)=`ad-bc", 7119, 1000, 86, "#000000"));
+    paras.extend(labeled_eq("  행렬식:", "det(A)=`ad-bc", 7119, 1000, 86, BLACK));
 
     // 3x3 identity matrix
     paras.extend(labeled_eq(
@@ -302,7 +309,7 @@ fn main() {
         3500,
         3000,
         60,
-        "#800080",
+        PURPLE,
     ));
 
     // ════════════════════════════════════════════════════════════════
@@ -314,7 +321,7 @@ fn main() {
     paras.extend(labeled_eq(
         "  삼각함수 덧셈정리:",
         "cos` alpha  `+`cos` beta  =2`cos {1} over {2} ( alpha  `+` beta  )`cos {1} over {2} ( alpha  `-` beta  `)",
-        18199, 2250, 66, "#000000",
+        18199, 2250, 66, BLACK,
     ));
 
     paras.extend(labeled_eq(
@@ -323,7 +330,7 @@ fn main() {
         12000,
         2250,
         66,
-        "#CC0000",
+        DARK_RED,
     ));
 
     paras.extend(labeled_eq(
@@ -332,7 +339,7 @@ fn main() {
         7000,
         1175,
         88,
-        "#000000",
+        BLACK,
     ));
 
     // ════════════════════════════════════════════════════════════════
@@ -341,14 +348,14 @@ fn main() {
     paras.push(text_para("8. 색상별 수식 (Colored Equations)"));
     paras.push(empty_para());
 
-    let colored = &[
-        ("검정 (기본)", "a ^{2} +`b ^{2} =`c ^{2}", "#000000"),
-        ("빨강", "E`=`mc ^{2}", "#FF0000"),
-        ("파랑", "F`=`ma", "#0000FF"),
-        ("초록", "PV`=`nRT", "#008000"),
-        ("보라", "e ^{i pi } +`1`=`0", "#800080"),
-        ("주황", "f`=`ma", "#FF8C00"),
-        ("자홍", "lambda `=` {h} over {p}", "#FF00FF"),
+    let colored: &[(&str, &str, Color)] = &[
+        ("검정 (기본)", "a ^{2} +`b ^{2} =`c ^{2}", BLACK),
+        ("빨강", "E`=`mc ^{2}", Color::from_rgb(0xFF, 0x00, 0x00)),
+        ("파랑", "F`=`ma", Color::from_rgb(0x00, 0x00, 0xFF)),
+        ("초록", "PV`=`nRT", Color::from_rgb(0x00, 0x80, 0x00)),
+        ("보라", "e ^{i pi } +`1`=`0", PURPLE),
+        ("주황", "f`=`ma", Color::from_rgb(0xFF, 0x8C, 0x00)),
+        ("자홍", "lambda `=` {h} over {p}", Color::from_rgb(0xFF, 0x00, 0xFF)),
     ];
     for &(label, script, color) in colored {
         paras.push(text_para(&format!("  {label}:")));
@@ -366,9 +373,9 @@ fn main() {
     paras.push(Paragraph::with_runs(
         vec![
             Run::text("원의 넓이는 ", CS0),
-            eq_run("A= pi  r ^{2}", 3269, 1163, 89, "#0000CC"),
+            eq_run("A= pi  r ^{2}", 3269, 1163, 89, DARK_BLUE),
             Run::text(" 이고, 둘레는 ", CS0),
-            eq_run("C=`2 pi  r", 3000, 1000, 86, "#CC0000"),
+            eq_run("C=`2 pi  r", 3000, 1000, 86, DARK_RED),
             Run::text(" 입니다.", CS0),
         ],
         PS0,
@@ -378,9 +385,9 @@ fn main() {
     paras.push(Paragraph::with_runs(
         vec![
             Run::text("이차방정식 ", CS0),
-            eq_run("ax ^{2} +`bx+c`=`0", 5000, 1175, 88, "#000000"),
+            eq_run("ax ^{2} +`bx+c`=`0", 5000, 1175, 88, BLACK),
             Run::text(" 의 해는 ", CS0),
-            eq_run("x= {-b` +-  root {2} of {b ^{2} -`4ac}} over {2a}", 8779, 2600, 71, "#CC0000"),
+            eq_run("x= {-b` +-  root {2} of {b ^{2} -`4ac}} over {2a}", 8779, 2600, 71, DARK_RED),
             Run::text(" 이다.", CS0),
         ],
         PS0,
@@ -390,9 +397,9 @@ fn main() {
     paras.push(Paragraph::with_runs(
         vec![
             Run::text("함수 ", CS0),
-            eq_run("f(x)=`x ^{2}", 3500, 1175, 88, "#006600"),
+            eq_run("f(x)=`x ^{2}", 3500, 1175, 88, DARK_GREEN),
             Run::text(" 의 도함수는 ", CS0),
-            eq_run("f'(x)=`2x", 3000, 1000, 86, "#006600"),
+            eq_run("f'(x)=`2x", 3000, 1000, 86, DARK_GREEN),
             Run::text(" 이다.", CS0),
         ],
         PS0,
@@ -411,7 +418,7 @@ fn main() {
         12000,
         975,
         86,
-        "#000000",
+        BLACK,
     ));
     paras.extend(labeled_eq(
         "  그리스 대문자:",
@@ -419,7 +426,7 @@ fn main() {
         12000,
         975,
         86,
-        "#000000",
+        BLACK,
     ));
     paras.extend(labeled_eq(
         "  특수 기호:",
@@ -427,7 +434,7 @@ fn main() {
         14000,
         975,
         86,
-        "#800080",
+        PURPLE,
     ));
     paras.extend(labeled_eq(
         "  화살표:",
@@ -435,7 +442,7 @@ fn main() {
         14000,
         975,
         86,
-        "#0000CC",
+        DARK_BLUE,
     ));
 
     // ════════════════════════════════════════════════════════════════
@@ -450,7 +457,7 @@ fn main() {
         7000,
         2250,
         66,
-        "#CC0000",
+        DARK_RED,
     ));
     paras.extend(labeled_eq(
         "  슈뢰딩거 방정식:",
@@ -458,7 +465,7 @@ fn main() {
         8000,
         2250,
         66,
-        "#0000CC",
+        DARK_BLUE,
     ));
     paras.extend(labeled_eq(
         "  맥스웰 방정식 (가우스 법칙):",
@@ -466,7 +473,7 @@ fn main() {
         6000,
         2250,
         66,
-        "#006600",
+        DARK_GREEN,
     ));
     paras.extend(labeled_eq(
         "  드브로이 파장:",
@@ -474,7 +481,7 @@ fn main() {
         7000,
         2250,
         66,
-        "#800080",
+        PURPLE,
     ));
 
     // ════════════════════════════════════════════════════════════════
@@ -490,7 +497,7 @@ fn main() {
         10000,
         2600,
         62,
-        "#000000",
+        BLACK,
     ));
 
     // Basel problem
@@ -500,7 +507,7 @@ fn main() {
         8000,
         2700,
         63,
-        "#CC0000",
+        DARK_RED,
     ));
 
     // Binomial theorem
@@ -510,7 +517,7 @@ fn main() {
         14000,
         2700,
         63,
-        "#0000CC",
+        DARK_BLUE,
     ));
 
     // Cauchy-Schwarz inequality
@@ -520,7 +527,7 @@ fn main() {
         8000,
         1175,
         88,
-        "#006600",
+        DARK_GREEN,
     ));
 
     // ── Done ──

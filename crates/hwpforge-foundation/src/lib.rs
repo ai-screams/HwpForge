@@ -7,7 +7,7 @@
 //! - [`Color`] -- BGR color matching the HWP specification
 //! - [`FontId`], [`TemplateName`], [`StyleName`] -- string-based identifiers
 //! - [`Index<T>`] -- branded numeric indices with phantom-type safety
-//! - [`Alignment`], [`LineSpacingType`], [`BreakType`], [`Language`] -- core enums
+//! - [`Alignment`], [`LineSpacingType`], [`BreakType`], [`Language`], [`WordBreakType`] -- core enums
 //! - [`FoundationError`], [`ErrorCode`] -- structured error handling
 //!
 //! # Design Principles
@@ -32,7 +32,7 @@ pub use color::Color;
 pub use enums::{
     Alignment, ApplyPageType, BorderLineType, BreakType, EmbossType, EngraveType, FillBrushType,
     Language, LineSpacingType, NumberFormatType, OutlineType, PageNumberPosition, ShadowType,
-    StrikeoutShape, UnderlineType, VerticalPosition,
+    StrikeoutShape, UnderlineType, VerticalPosition, WordBreakType,
 };
 pub use error::{ErrorCode, ErrorCodeExt, FoundationError, FoundationResult};
 pub use ids::{FontId, StyleName, TemplateName};

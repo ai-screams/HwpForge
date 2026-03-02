@@ -100,10 +100,10 @@ mod validate;
 // Re-exports for convenience
 // ---------------------------------------------------------------------------
 
-pub use caption::{Caption, CaptionSide};
+pub use caption::{Caption, CaptionSide, DEFAULT_CAPTION_GAP};
 pub use chart::{ChartData, ChartGrouping, ChartSeries, ChartType, LegendPosition, XySeries};
 pub use column::{ColumnDef, ColumnLayoutMode, ColumnSettings, ColumnType};
-pub use control::{Control, ShapePoint, ShapeStyle};
+pub use control::{Control, LineStyle, ShapePoint, ShapeStyle};
 pub use document::{Document, Draft, Validated};
 pub use error::{CoreError, CoreErrorCode, CoreResult, ValidationError};
 pub use image::{Image, ImageFormat, ImageStore};

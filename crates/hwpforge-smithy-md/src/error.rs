@@ -58,6 +58,15 @@ pub enum MdError {
         value: String,
     },
 
+    /// Input file exceeds the maximum allowed size.
+    #[error("file too large: {size} bytes exceeds {limit} byte limit")]
+    FileTooLarge {
+        /// Actual file size in bytes.
+        size: u64,
+        /// Maximum allowed size in bytes.
+        limit: u64,
+    },
+
     /// I/O error for file convenience APIs.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -93,6 +102,8 @@ pub enum MdErrorCode {
     LosslessMissingAttribute = 6009,
     /// Invalid lossless element attribute value.
     LosslessInvalidAttribute = 6010,
+    /// File exceeds maximum allowed size.
+    FileTooLarge = 6011,
     /// I/O failure.
     Io = 6004,
     /// Propagated Core error.
@@ -120,6 +131,7 @@ impl MdError {
             Self::LosslessParse { .. } => MdErrorCode::LosslessParse,
             Self::LosslessMissingAttribute { .. } => MdErrorCode::LosslessMissingAttribute,
             Self::LosslessInvalidAttribute { .. } => MdErrorCode::LosslessInvalidAttribute,
+            Self::FileTooLarge { .. } => MdErrorCode::FileTooLarge,
             Self::Io(_) => MdErrorCode::Io,
             Self::Core(_) => MdErrorCode::Core,
             Self::Blueprint(_) => MdErrorCode::Blueprint,
@@ -158,5 +170,13 @@ mod tests {
     fn lossless_attribute_error_code_mapping() {
         let err = MdError::LosslessMissingAttribute { element: "img", attribute: "src" };
         assert_eq!(err.code(), MdErrorCode::LosslessMissingAttribute);
+    }
+
+    #[test]
+    fn file_too_large_error_code_and_display() {
+        let err = MdError::FileTooLarge { size: 100_000_000, limit: 50_000_000 };
+        assert_eq!(err.code(), MdErrorCode::FileTooLarge);
+        assert!(err.to_string().contains("100000000"));
+        assert!(err.to_string().contains("50000000"));
     }
 }

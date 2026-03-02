@@ -15,7 +15,8 @@ use hwpforge_core::section::{HeaderFooter, PageNumber};
 use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
-    ApplyPageType, CharShapeIndex, HwpUnit, NumberFormatType, PageNumberPosition, ParaShapeIndex,
+    ApplyPageType, CharShapeIndex, Color, HwpUnit, NumberFormatType, PageNumberPosition,
+    ParaShapeIndex,
 };
 use quick_xml::de::from_str;
 
@@ -145,11 +146,19 @@ fn convert_paragraph(
     let mut page_settings = None;
 
     let mut runs = Vec::new();
+    let mut has_title_mark = false;
     for hx_run in &hx.runs {
         // Extract page settings from secPr in first paragraph
         if is_first && page_settings.is_none() {
             if let Some(sec_pr) = &hx_run.sec_pr {
                 page_settings = extract_page_settings(sec_pr);
+            }
+        }
+
+        // Detect titleMark for TOC participation
+        if let Some(tm) = &hx_run.title_mark {
+            if !tm.ignore {
+                has_title_mark = true;
             }
         }
 
@@ -163,7 +172,16 @@ fn convert_paragraph(
         runs.push(Run::text("", CharShapeIndex::new(0)));
     }
 
-    let paragraph = Paragraph { runs, para_shape_id, column_break: hx.column_break != 0 };
+    // Best-effort heading level: always decodes as `Some(1)` when a titleMark
+    // is present. Exact level inference (1-7) requires mapping `styleIDRef` to
+    // style names (e.g. "개요 1".."개요 7"), which is not yet implemented.
+    // This limitation is intentional: roundtrip fidelity of the heading level
+    // integer is not guaranteed; callers should not rely on the decoded value
+    // being the true outline depth from the original document.
+    let heading_level = if has_title_mark { Some(1) } else { None };
+
+    let paragraph =
+        Paragraph { runs, para_shape_id, column_break: hx.column_break != 0, heading_level };
     Ok((paragraph, page_settings))
 }
 
@@ -447,12 +465,17 @@ fn decode_line(line: &HxLine, char_shape_id: CharShapeIndex, depth: usize) -> Hw
 
     let caption = line.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
 
+    let (horz_offset, vert_offset) =
+        line.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
+
     Ok(Run {
         content: RunContent::Control(Box::new(Control::Line {
             start,
             end,
             width,
             height,
+            horz_offset,
+            vert_offset,
             caption,
             style: decode_shape_style(&line.line_shape, &line.fill_brush),
         })),
@@ -502,6 +525,9 @@ fn decode_ellipse(
 
     let caption = ellipse.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
 
+    let (horz_offset, vert_offset) =
+        ellipse.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
+
     Ok(Run {
         content: RunContent::Control(Box::new(Control::Ellipse {
             center,
@@ -509,8 +535,8 @@ fn decode_ellipse(
             axis2,
             width,
             height,
-            horz_offset: 0,
-            vert_offset: 0,
+            horz_offset,
+            vert_offset,
             paragraphs,
             caption,
             style: decode_shape_style(&ellipse.line_shape, &ellipse.fill_brush),
@@ -548,11 +574,16 @@ fn decode_polygon(
 
     let caption = polygon.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
 
+    let (horz_offset, vert_offset) =
+        polygon.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
+
     Ok(Run {
         content: RunContent::Control(Box::new(Control::Polygon {
             vertices,
             width,
             height,
+            horz_offset,
+            vert_offset,
             paragraphs,
             caption,
             style: decode_shape_style(&polygon.line_shape, &polygon.fill_brush),
@@ -585,7 +616,7 @@ fn decode_equation(eq: &HxEquation, char_shape_id: CharShapeIndex) -> HwpxResult
             width,
             height,
             base_line: eq.base_line,
-            text_color: eq.text_color.clone(),
+            text_color: parse_hex_color(&eq.text_color).unwrap_or(Color::BLACK),
             font: eq.font.clone(),
         })),
         char_shape_id,
@@ -628,6 +659,15 @@ fn decode_chart(
             title: parsed.title,
             legend: parsed.legend,
             grouping: parsed.grouping,
+            bar_shape: parsed.bar_shape,
+            explosion: parsed.explosion,
+            of_pie_type: parsed.of_pie_type,
+            radar_style: parsed.radar_style,
+            wireframe: parsed.wireframe,
+            bubble_3d: parsed.bubble_3d,
+            scatter_style: parsed.scatter_style,
+            show_markers: parsed.show_markers,
+            stock_variant: parsed.stock_variant,
         })),
         char_shape_id,
     }))
@@ -641,15 +681,22 @@ fn decode_shape_style(
     line_shape: &Option<HxLineShape>,
     fill_brush: &Option<HxFillBrush>,
 ) -> Option<ShapeStyle> {
-    let fill_color: Option<String> =
-        fill_brush.as_ref().map(|fb| &fb.win_brush.face_color).filter(|c| !c.is_empty()).cloned();
+    let fill_color: Option<Color> = fill_brush
+        .as_ref()
+        .map(|fb| &fb.win_brush.face_color)
+        .filter(|c| !c.is_empty())
+        .and_then(|c| parse_hex_color(c));
 
     let (line_color, line_width, line_style) = match line_shape.as_ref() {
         None => (None, None, None),
         Some(ls) => (
-            if ls.color.is_empty() { None } else { Some(ls.color.clone()) },
-            if ls.width == 0 { None } else { Some(ls.width) },
-            if ls.style.is_empty() { None } else { Some(ls.style.clone()) },
+            if ls.color.is_empty() { None } else { parse_hex_color(&ls.color) },
+            if ls.width == 0 { None } else { u32::try_from(ls.width).ok() },
+            if ls.style.is_empty() {
+                None
+            } else {
+                ls.style.parse::<hwpforge_core::control::LineStyle>().ok()
+            },
         ),
     };
 
@@ -659,6 +706,18 @@ fn decode_shape_style(
     }
 
     Some(ShapeStyle { line_color, fill_color, line_width, line_style })
+}
+
+/// Parses a `#RRGGBB` hex string into a [`Color`].
+fn parse_hex_color(s: &str) -> Option<Color> {
+    let s = s.strip_prefix('#').unwrap_or(s);
+    if s.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&s[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&s[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&s[4..6], 16).ok()?;
+    Some(Color::from_rgb(r, g, b))
 }
 
 /// Converts paragraphs from an `HxSubList` into Core `Paragraph`s.
@@ -852,7 +911,7 @@ fn convert_page_number(hx: &HxPageNum) -> PageNumber {
     if hx.side_char.is_empty() {
         PageNumber::new(position, number_format)
     } else {
-        PageNumber::with_side_char(position, number_format, hx.side_char.clone())
+        PageNumber::with_decoration(position, number_format, hx.side_char.clone())
     }
 }
 
@@ -1291,7 +1350,7 @@ mod tests {
         let pn = result.page_number.expect("should have page number");
         assert_eq!(pn.position, PageNumberPosition::BottomCenter);
         assert_eq!(pn.number_format, NumberFormatType::Digit);
-        assert_eq!(pn.side_char, "- ");
+        assert_eq!(pn.decoration, "- ");
     }
 
     #[test]
@@ -1339,7 +1398,7 @@ mod tests {
         let pn = result.page_number.expect("should have page number");
         assert_eq!(pn.position, PageNumberPosition::TopLeft);
         assert_eq!(pn.number_format, NumberFormatType::RomanCapital);
-        assert!(pn.side_char.is_empty());
+        assert!(pn.decoration.is_empty());
     }
 
     #[test]

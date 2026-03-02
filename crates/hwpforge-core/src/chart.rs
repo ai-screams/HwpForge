@@ -90,6 +90,92 @@ pub enum ChartGrouping {
     Standard,
 }
 
+/// Stock chart sub-variant determining series composition.
+///
+/// The basic `ChartType::Stock` maps to HLC (High-Low-Close, 3 series).
+/// Volume variants require a composite `<c:plotArea>` with both a `<c:barChart>`
+/// (volume series) and a `<c:stockChart>` (price series).
+///
+/// # OOXML mapping
+///
+/// | Variant | Series | plotArea layout |
+/// |---------|--------|-----------------|
+/// | `Hlc`   | 3      | stockChart only |
+/// | `Ohlc`  | 4      | stockChart only |
+/// | `Vhlc`  | 4      | barChart + stockChart |
+/// | `Vohlc` | 5      | barChart + stockChart |
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum StockVariant {
+    /// High-Low-Close (3 price series, default).
+    Hlc,
+    /// Open-High-Low-Close (4 price series).
+    Ohlc,
+    /// Volume-High-Low-Close (1 volume + 3 price series, composite plotArea).
+    Vhlc,
+    /// Volume-Open-High-Low-Close (1 volume + 4 price series, composite plotArea).
+    Vohlc,
+}
+
+/// Bar/column 3D shape variant.
+///
+/// Controls the visual shape of bars in 3D bar and column charts.
+/// Maps to OOXML `<c:shape val="..."/>` within `<c:bar3DChart>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum BarShape {
+    /// Standard rectangular box (default).
+    Box,
+    /// Cylindrical column.
+    Cylinder,
+    /// Conical column.
+    Cone,
+    /// Pyramid-shaped column.
+    Pyramid,
+}
+
+/// Scatter chart line/marker style.
+///
+/// Controls how data points are connected and displayed in scatter charts.
+/// Maps to OOXML `<c:scatterStyle val="..."/>` within `<c:scatterChart>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum ScatterStyle {
+    /// Points only, no lines.
+    Dots,
+    /// Straight lines with markers.
+    LineMarker,
+    /// Smooth curves with markers.
+    SmoothMarker,
+    /// Straight lines without markers.
+    Line,
+    /// Smooth curves without markers.
+    Smooth,
+}
+
+/// Radar chart rendering style.
+///
+/// Controls how the radar chart area is rendered.
+/// Maps to OOXML `<c:radarStyle val="..."/>` within `<c:radarChart>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum RadarStyle {
+    /// Standard radar (lines only).
+    Standard,
+    /// Radar with data point markers.
+    Marker,
+    /// Filled/shaded radar area.
+    Filled,
+}
+
+/// Pie-of-pie or bar-of-pie sub-type.
+///
+/// Determines whether the secondary chart is a pie or a bar.
+/// Maps to OOXML `<c:ofPieType val="..."/>` within `<c:ofPieChart>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+pub enum OfPieType {
+    /// Pie-of-pie chart.
+    Pie,
+    /// Bar-of-pie chart.
+    Bar,
+}
+
 /// Legend position relative to the chart area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
 pub enum LegendPosition {
@@ -220,12 +306,21 @@ impl ChartData {
         }
     }
 
-    /// Returns `true` if any series contains data.
-    pub fn is_empty(&self) -> bool {
+    /// Returns `true` if the chart data contains no series.
+    ///
+    /// A chart with zero series cannot be rendered. This is checked during
+    /// document validation (see [`ValidationError::EmptyChartData`](crate::error::ValidationError::EmptyChartData)).
+    pub fn has_no_series(&self) -> bool {
         match self {
             Self::Category { series, .. } => series.is_empty(),
             Self::Xy { series } => series.is_empty(),
         }
+    }
+
+    /// Returns `true` if the chart data contains no series.
+    #[deprecated(since = "0.2.0", note = "Use `has_no_series()` instead")]
+    pub fn is_empty(&self) -> bool {
+        self.has_no_series()
     }
 }
 
@@ -298,15 +393,23 @@ mod tests {
     }
 
     #[test]
-    fn chart_data_is_empty() {
+    fn chart_data_has_no_series() {
         let empty_cat = ChartData::category(&["A"], &[]);
-        assert!(empty_cat.is_empty());
+        assert!(empty_cat.has_no_series());
 
         let non_empty = ChartData::category(&["A"], &[("S", &[1.0])]);
-        assert!(!non_empty.is_empty());
+        assert!(!non_empty.has_no_series());
 
         let empty_xy = ChartData::Xy { series: vec![] };
-        assert!(empty_xy.is_empty());
+        assert!(empty_xy.has_no_series());
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn chart_data_is_empty_deprecated_alias() {
+        let empty = ChartData::category(&["A"], &[]);
+        assert!(empty.is_empty());
+        assert_eq!(empty.is_empty(), empty.has_no_series());
     }
 
     #[test]

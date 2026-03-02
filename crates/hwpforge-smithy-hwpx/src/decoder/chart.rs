@@ -5,7 +5,8 @@
 //! OOXML chart namespace (`xmlns:c`) differs from HWPX's serde-based schema.
 
 use hwpforge_core::chart::{
-    ChartData, ChartGrouping, ChartSeries, ChartType, LegendPosition, XySeries,
+    BarShape, ChartData, ChartGrouping, ChartSeries, ChartType, LegendPosition, OfPieType,
+    RadarStyle, ScatterStyle, StockVariant, XySeries,
 };
 
 use crate::error::{HwpxError, HwpxResult};
@@ -22,6 +23,24 @@ pub(crate) struct ParsedChart {
     pub legend: LegendPosition,
     /// Series grouping mode.
     pub grouping: ChartGrouping,
+    /// 3D bar/column shape variant.
+    pub bar_shape: Option<BarShape>,
+    /// Exploded pie/doughnut percentage.
+    pub explosion: Option<u32>,
+    /// Pie-of-pie or bar-of-pie sub-type.
+    pub of_pie_type: Option<OfPieType>,
+    /// Radar chart rendering style.
+    pub radar_style: Option<RadarStyle>,
+    /// Surface chart wireframe mode.
+    pub wireframe: Option<bool>,
+    /// 3D bubble effect.
+    pub bubble_3d: Option<bool>,
+    /// Scatter chart style.
+    pub scatter_style: Option<ScatterStyle>,
+    /// Show data point markers on line charts.
+    pub show_markers: Option<bool>,
+    /// Stock chart sub-variant (HLC/OHLC/VHLC/VOHLC).
+    pub stock_variant: Option<StockVariant>,
 }
 
 /// Parses an OOXML chart XML string into structured chart data.
@@ -41,6 +60,22 @@ pub(crate) fn parse_chart_xml(xml: &str) -> HwpxResult<ParsedChart> {
     let mut legend = LegendPosition::Right;
     let mut grouping = ChartGrouping::Clustered;
     let mut is_xy = false;
+
+    // Sub-variant fields
+    let mut bar_shape: Option<BarShape> = None;
+    let mut explosion: Option<u32> = None;
+    let mut of_pie_type: Option<OfPieType> = None;
+    let mut radar_style: Option<RadarStyle> = None;
+    let mut wireframe: Option<bool> = None;
+    let mut bubble_3d: Option<bool> = None;
+    let mut scatter_style: Option<ScatterStyle> = None;
+    let mut show_markers: Option<bool> = None;
+    let mut in_marker = false;
+
+    // Stock variant detection
+    let mut has_volume_bar = false; // barChart present alongside stockChart
+    let mut stock_series_count: usize = 0; // series count inside the stockChart block
+    let mut in_stock_chart = false;
 
     // Accumulated series data
     let mut all_categories: Vec<String> = Vec::new();
@@ -83,6 +118,9 @@ pub(crate) fn parse_chart_xml(xml: &str) -> HwpxResult<ParsedChart> {
                         val_values.clear();
                         x_values.clear();
                         y_values.clear();
+                        if in_stock_chart {
+                            stock_series_count += 1;
+                        }
                     }
                     b"f" if in_series => in_formula = true,
                     b"tx" if in_series => in_tx = true,
@@ -90,22 +128,61 @@ pub(crate) fn parse_chart_xml(xml: &str) -> HwpxResult<ParsedChart> {
                     b"val" if in_series && !in_xval && !in_yval => in_val = true,
                     b"xVal" if in_series => in_xval = true,
                     b"yVal" if in_series => in_yval = true,
+                    b"marker" if in_series => in_marker = true,
                     _ => {
-                        if in_plot_area && !in_chart_elem {
+                        if in_plot_area {
                             if let Some(ct) = detect_chart_type(local) {
-                                chart_type = Some(ct);
-                                is_xy = matches!(ct, ChartType::Scatter | ChartType::Bubble);
-                                in_chart_elem = true;
+                                if !in_chart_elem {
+                                    chart_type = Some(ct);
+                                    is_xy = matches!(ct, ChartType::Scatter | ChartType::Bubble);
+                                    in_chart_elem = true;
+                                    in_stock_chart = ct == ChartType::Stock;
+                                } else if ct == ChartType::Stock {
+                                    // Secondary stockChart in composite plotArea (VHLC/VOHLC)
+                                    has_volume_bar = true;
+                                    in_stock_chart = true;
+                                    stock_series_count = 0;
+                                }
                             }
                         }
                     }
                 }
-                process_start_attrs(e, &mut bar_dir, &mut grouping, &mut legend, local);
+                process_start_attrs(
+                    e,
+                    &mut bar_dir,
+                    &mut grouping,
+                    &mut legend,
+                    &mut bar_shape,
+                    &mut explosion,
+                    &mut of_pie_type,
+                    &mut radar_style,
+                    &mut wireframe,
+                    &mut bubble_3d,
+                    &mut scatter_style,
+                    &mut show_markers,
+                    in_marker,
+                    local,
+                );
             }
             Ok(Event::Empty(ref e)) => {
                 let name = e.name();
                 let local = local_name(name.as_ref());
-                process_start_attrs(e, &mut bar_dir, &mut grouping, &mut legend, local);
+                process_start_attrs(
+                    e,
+                    &mut bar_dir,
+                    &mut grouping,
+                    &mut legend,
+                    &mut bar_shape,
+                    &mut explosion,
+                    &mut of_pie_type,
+                    &mut radar_style,
+                    &mut wireframe,
+                    &mut bubble_3d,
+                    &mut scatter_style,
+                    &mut show_markers,
+                    in_marker,
+                    local,
+                );
             }
             Ok(Event::Text(ref e)) => {
                 let text = e.decode().map(|s| s.to_string()).unwrap_or_default();
@@ -163,6 +240,7 @@ pub(crate) fn parse_chart_xml(xml: &str) -> HwpxResult<ParsedChart> {
                         in_val = false;
                         in_xval = false;
                         in_yval = false;
+                        in_marker = false;
                     }
                     b"f" => in_formula = false,
                     b"tx" => in_tx = false,
@@ -170,8 +248,12 @@ pub(crate) fn parse_chart_xml(xml: &str) -> HwpxResult<ParsedChart> {
                     b"val" if in_val => in_val = false,
                     b"xVal" => in_xval = false,
                     b"yVal" => in_yval = false,
+                    b"marker" => in_marker = false,
                     _ => {
                         if in_chart_elem && detect_chart_type(local).is_some() {
+                            if local == b"stockChart" {
+                                in_stock_chart = false;
+                            }
                             in_chart_elem = false;
                         }
                     }
@@ -201,7 +283,39 @@ pub(crate) fn parse_chart_xml(xml: &str) -> HwpxResult<ParsedChart> {
         ChartData::Category { categories: all_categories, series: cat_series_list }
     };
 
-    Ok(ParsedChart { chart_type: ct, data, title, legend, grouping })
+    // Derive stock variant from composite plotArea detection
+    let stock_variant = if ct == ChartType::Stock {
+        Some(if has_volume_bar {
+            if stock_series_count >= 4 {
+                StockVariant::Vohlc
+            } else {
+                StockVariant::Vhlc
+            }
+        } else if stock_series_count >= 4 {
+            StockVariant::Ohlc
+        } else {
+            StockVariant::Hlc
+        })
+    } else {
+        None
+    };
+
+    Ok(ParsedChart {
+        chart_type: ct,
+        data,
+        title,
+        legend,
+        grouping,
+        bar_shape,
+        explosion,
+        of_pie_type,
+        radar_style,
+        wireframe,
+        bubble_3d,
+        scatter_style,
+        show_markers,
+        stock_variant,
+    })
 }
 
 /// Strips the namespace prefix from an XML tag name (`c:barChart` → `barChart`).
@@ -220,12 +334,22 @@ fn get_val_attr(e: &quick_xml::events::BytesStart) -> Option<String> {
         .and_then(|a| String::from_utf8(a.value.to_vec()).ok())
 }
 
-/// Processes attributes on Start/Empty elements for barDir, grouping, legendPos.
+/// Processes attributes on Start/Empty elements for barDir, grouping, legendPos, and sub-variants.
+#[allow(clippy::too_many_arguments)]
 fn process_start_attrs(
     e: &quick_xml::events::BytesStart,
     bar_dir: &mut Option<String>,
     grouping: &mut ChartGrouping,
     legend: &mut LegendPosition,
+    bar_shape: &mut Option<BarShape>,
+    explosion: &mut Option<u32>,
+    of_pie_type: &mut Option<OfPieType>,
+    radar_style: &mut Option<RadarStyle>,
+    wireframe: &mut Option<bool>,
+    bubble_3d: &mut Option<bool>,
+    scatter_style: &mut Option<ScatterStyle>,
+    show_markers: &mut Option<bool>,
+    in_marker: bool,
     local: &[u8],
 ) {
     match local {
@@ -243,6 +367,45 @@ fn process_start_attrs(
             if let Some(val) = get_val_attr(e) {
                 *legend = parse_legend_pos(&val);
             }
+        }
+        b"shape" => {
+            if let Some(val) = get_val_attr(e) {
+                *bar_shape = parse_bar_shape(&val);
+            }
+        }
+        b"explosion" => {
+            if let Some(val) = get_val_attr(e) {
+                *explosion = val.parse::<u32>().ok();
+            }
+        }
+        b"ofPieType" => {
+            if let Some(val) = get_val_attr(e) {
+                *of_pie_type = parse_of_pie_type(&val);
+            }
+        }
+        b"radarStyle" => {
+            if let Some(val) = get_val_attr(e) {
+                *radar_style = parse_radar_style(&val);
+            }
+        }
+        b"wireframe" => {
+            if let Some(val) = get_val_attr(e) {
+                *wireframe = Some(val == "1");
+            }
+        }
+        b"bubble3D" => {
+            if let Some(val) = get_val_attr(e) {
+                *bubble_3d = Some(val == "1");
+            }
+        }
+        b"scatterStyle" => {
+            if let Some(val) = get_val_attr(e) {
+                *scatter_style = parse_scatter_style(&val);
+            }
+        }
+        b"symbol" if in_marker => {
+            // Any symbol in a marker block means markers are shown
+            *show_markers = Some(true);
         }
         _ => {}
     }
@@ -299,6 +462,47 @@ fn parse_legend_pos(val: &str) -> LegendPosition {
         "t" => LegendPosition::Top,
         "l" => LegendPosition::Left,
         _ => LegendPosition::Right,
+    }
+}
+
+/// Parses an OOXML `<c:shape>` val attribute to `BarShape`.
+fn parse_bar_shape(val: &str) -> Option<BarShape> {
+    match val {
+        "box" => Some(BarShape::Box),
+        "cylinder" => Some(BarShape::Cylinder),
+        "cone" => Some(BarShape::Cone),
+        "pyramid" => Some(BarShape::Pyramid),
+        _ => None,
+    }
+}
+
+/// Parses an OOXML `<c:ofPieType>` val attribute to `OfPieType`.
+fn parse_of_pie_type(val: &str) -> Option<OfPieType> {
+    match val {
+        "pie" => Some(OfPieType::Pie),
+        "bar" => Some(OfPieType::Bar),
+        _ => None,
+    }
+}
+
+/// Parses an OOXML `<c:radarStyle>` val attribute to `RadarStyle`.
+fn parse_radar_style(val: &str) -> Option<RadarStyle> {
+    match val {
+        "standard" => Some(RadarStyle::Standard),
+        "marker" => Some(RadarStyle::Marker),
+        "filled" => Some(RadarStyle::Filled),
+        _ => None,
+    }
+}
+
+/// Parses an OOXML `<c:scatterStyle>` val attribute to `ScatterStyle`.
+fn parse_scatter_style(val: &str) -> Option<ScatterStyle> {
+    match val {
+        "lineMarker" => Some(ScatterStyle::LineMarker),
+        "smoothMarker" => Some(ScatterStyle::SmoothMarker),
+        "line" => Some(ScatterStyle::Line),
+        "smooth" => Some(ScatterStyle::Smooth),
+        _ => Some(ScatterStyle::Dots), // default / "marker" → Dots
     }
 }
 

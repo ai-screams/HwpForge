@@ -224,6 +224,34 @@ pub enum ValidationError {
         run_index: usize,
     },
 
+    /// A Category chart has an empty categories list.
+    #[error("Chart has empty category labels (section {section_index}, paragraph {paragraph_index}, run {run_index})")]
+    EmptyCategoryLabels {
+        /// Zero-based section index.
+        section_index: usize,
+        /// Zero-based paragraph index.
+        paragraph_index: usize,
+        /// Zero-based run index.
+        run_index: usize,
+    },
+
+    /// An XY series has mismatched x/y value lengths.
+    #[error("XY series '{series_name}' has mismatched lengths: x={x_len}, y={y_len} (section {section_index}, paragraph {paragraph_index}, run {run_index})")]
+    MismatchedSeriesLengths {
+        /// Zero-based section index.
+        section_index: usize,
+        /// Zero-based paragraph index.
+        paragraph_index: usize,
+        /// Zero-based run index.
+        run_index: usize,
+        /// Name of the offending series.
+        series_name: String,
+        /// Length of x_values.
+        x_len: usize,
+        /// Length of y_values.
+        y_len: usize,
+    },
+
     /// A table cell contains zero paragraphs.
     #[error("Table cell has no paragraphs (section {section_index}, paragraph {paragraph_index}, run {run_index}, row {row_index}, cell {cell_index})")]
     EmptyTableCell {
@@ -286,6 +314,10 @@ pub enum CoreErrorCode {
     EmptyEquation = 2012,
     /// Empty Chart data (no series).
     EmptyChartData = 2013,
+    /// Empty category labels in a Category chart.
+    EmptyCategoryLabels = 2014,
+    /// Mismatched x/y value lengths in an XY series.
+    MismatchedSeriesLengths = 2015,
     /// Invalid document structure.
     InvalidStructure = 2100,
 }
@@ -313,6 +345,8 @@ impl ValidationError {
             Self::InvalidPolygon { .. } => CoreErrorCode::InvalidPolygon,
             Self::InvalidShapeDimension { .. } => CoreErrorCode::InvalidShapeDimension,
             Self::EmptyChartData { .. } => CoreErrorCode::EmptyChartData,
+            Self::EmptyCategoryLabels { .. } => CoreErrorCode::EmptyCategoryLabels,
+            Self::MismatchedSeriesLengths { .. } => CoreErrorCode::MismatchedSeriesLengths,
             Self::EmptyEquation { .. } => CoreErrorCode::EmptyEquation,
         }
     }

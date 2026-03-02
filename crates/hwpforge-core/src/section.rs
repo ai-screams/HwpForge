@@ -66,11 +66,39 @@ impl HeaderFooter {
     pub fn new(paragraphs: Vec<Paragraph>, apply_page_type: ApplyPageType) -> Self {
         Self { paragraphs, apply_page_type }
     }
+
+    /// Creates a header/footer applied to **all** pages (both odd and even).
+    ///
+    /// This is the most common case for simple documents that use a single
+    /// header or footer on every page.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::section::HeaderFooter;
+    /// use hwpforge_core::paragraph::Paragraph;
+    /// use hwpforge_foundation::{ApplyPageType, ParaShapeIndex};
+    ///
+    /// let hf = HeaderFooter::all_pages(vec![Paragraph::new(ParaShapeIndex::new(0))]);
+    /// assert_eq!(hf.apply_page_type, ApplyPageType::Both);
+    /// assert_eq!(hf.paragraphs.len(), 1);
+    /// ```
+    pub fn all_pages(paragraphs: Vec<Paragraph>) -> Self {
+        Self { paragraphs, apply_page_type: ApplyPageType::Both }
+    }
+
+    /// Creates a header/footer applied to all pages.
+    #[deprecated(since = "0.2.0", note = "Use `all_pages()` instead")]
+    pub fn both(paragraphs: Vec<Paragraph>) -> Self {
+        Self::all_pages(paragraphs)
+    }
 }
 
 impl std::fmt::Display for HeaderFooter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "HeaderFooter({} paragraphs, {:?})", self.paragraphs.len(), self.apply_page_type)
+        let n = self.paragraphs.len();
+        let word = if n == 1 { "paragraph" } else { "paragraphs" };
+        write!(f, "HeaderFooter({n} {word}, {:?})", self.apply_page_type)
     }
 }
 
@@ -103,16 +131,20 @@ pub struct PageNumber {
     pub number_format: NumberFormatType,
     /// Optional decoration string placed around the number
     /// (e.g. `"- "` for `"- 1 -"`). Empty means no decoration.
-    pub side_char: String,
+    pub decoration: String,
 }
 
 impl PageNumber {
-    /// Creates a new page number with no side decoration.
+    /// Creates a new page number with no decoration.
     pub fn new(position: PageNumberPosition, number_format: NumberFormatType) -> Self {
-        Self { position, number_format, side_char: String::new() }
+        Self { position, number_format, decoration: String::new() }
     }
 
-    /// Creates a new page number with side decoration characters.
+    /// Creates a page number at the bottom-center in plain digit format.
+    ///
+    /// This is the most common page number layout for Korean documents.
+    /// Equivalent to `PageNumber::new(PageNumberPosition::BottomCenter, NumberFormatType::Digit)`
+    /// with an empty `decoration`.
     ///
     /// # Examples
     ///
@@ -120,19 +152,50 @@ impl PageNumber {
     /// use hwpforge_core::section::PageNumber;
     /// use hwpforge_foundation::{NumberFormatType, PageNumberPosition};
     ///
-    /// let pn = PageNumber::with_side_char(
+    /// let pn = PageNumber::bottom_center();
+    /// assert_eq!(pn.position, PageNumberPosition::BottomCenter);
+    /// assert_eq!(pn.number_format, NumberFormatType::Digit);
+    /// assert!(pn.decoration.is_empty());
+    /// ```
+    pub fn bottom_center() -> Self {
+        Self {
+            position: PageNumberPosition::BottomCenter,
+            number_format: NumberFormatType::Digit,
+            decoration: String::new(),
+        }
+    }
+
+    /// Creates a new page number with decoration characters placed around the number.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::section::PageNumber;
+    /// use hwpforge_foundation::{NumberFormatType, PageNumberPosition};
+    ///
+    /// let pn = PageNumber::with_decoration(
     ///     PageNumberPosition::BottomCenter,
     ///     NumberFormatType::Digit,
     ///     "- ",
     /// );
-    /// assert_eq!(pn.side_char, "- ");
+    /// assert_eq!(pn.decoration, "- ");
     /// ```
+    pub fn with_decoration(
+        position: PageNumberPosition,
+        number_format: NumberFormatType,
+        decoration: impl Into<String>,
+    ) -> Self {
+        Self { position, number_format, decoration: decoration.into() }
+    }
+
+    /// Creates a new page number with side decoration characters.
+    #[deprecated(since = "0.2.0", note = "Use `with_decoration()` instead")]
     pub fn with_side_char(
         position: PageNumberPosition,
         number_format: NumberFormatType,
         side_char: impl Into<String>,
     ) -> Self {
-        Self { position, number_format, side_char: side_char.into() }
+        Self::with_decoration(position, number_format, side_char)
     }
 }
 
@@ -250,7 +313,9 @@ impl Section {
 
 impl std::fmt::Display for Section {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Section({} paragraphs)", self.paragraphs.len())
+        let n = self.paragraphs.len();
+        let word = if n == 1 { "paragraph" } else { "paragraphs" };
+        write!(f, "Section({n} {word})")
     }
 }
 
@@ -301,9 +366,18 @@ mod tests {
     }
 
     #[test]
-    fn display() {
+    fn display_singular() {
         let section = Section::with_paragraphs(vec![simple_paragraph()], PageSettings::a4());
-        assert_eq!(section.to_string(), "Section(1 paragraphs)");
+        assert_eq!(section.to_string(), "Section(1 paragraph)");
+    }
+
+    #[test]
+    fn display_plural() {
+        let section = Section::with_paragraphs(
+            vec![simple_paragraph(), simple_paragraph()],
+            PageSettings::a4(),
+        );
+        assert_eq!(section.to_string(), "Section(2 paragraphs)");
     }
 
     #[test]
@@ -379,7 +453,7 @@ mod tests {
         let hf =
             HeaderFooter::new(vec![Paragraph::new(ParaShapeIndex::new(0))], ApplyPageType::Both);
         let s = hf.to_string();
-        assert!(s.contains("1 paragraphs"), "display: {s}");
+        assert!(s.contains("1 paragraph"), "display: {s}");
         assert!(s.contains("Both"), "display: {s}");
     }
 
@@ -416,18 +490,29 @@ mod tests {
         let pn = PageNumber::new(PageNumberPosition::BottomCenter, NumberFormatType::Digit);
         assert_eq!(pn.position, PageNumberPosition::BottomCenter);
         assert_eq!(pn.number_format, NumberFormatType::Digit);
-        assert!(pn.side_char.is_empty());
+        assert!(pn.decoration.is_empty());
     }
 
     #[test]
-    fn page_number_with_side_char() {
-        let pn = PageNumber::with_side_char(
+    fn page_number_with_decoration() {
+        let pn = PageNumber::with_decoration(
             PageNumberPosition::BottomCenter,
             NumberFormatType::RomanCapital,
             "- ",
         );
-        assert_eq!(pn.side_char, "- ");
+        assert_eq!(pn.decoration, "- ");
         assert_eq!(pn.number_format, NumberFormatType::RomanCapital);
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn page_number_with_side_char_deprecated() {
+        let pn = PageNumber::with_side_char(
+            PageNumberPosition::BottomCenter,
+            NumberFormatType::Digit,
+            "- ",
+        );
+        assert_eq!(pn.decoration, "- ");
     }
 
     #[test]
@@ -440,7 +525,7 @@ mod tests {
 
     #[test]
     fn page_number_serde_roundtrip() {
-        let pn = PageNumber::with_side_char(
+        let pn = PageNumber::with_decoration(
             PageNumberPosition::BottomCenter,
             NumberFormatType::CircledDigit,
             "< ",
@@ -531,6 +616,66 @@ mod tests {
         assert_eq!(section, back);
     }
 
+    // -----------------------------------------------------------------------
+    // HeaderFooter::all_pages tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn header_footer_all_pages_apply_page_type() {
+        let hf = HeaderFooter::all_pages(vec![Paragraph::new(ParaShapeIndex::new(0))]);
+        assert_eq!(hf.apply_page_type, ApplyPageType::Both);
+    }
+
+    #[test]
+    fn header_footer_all_pages_preserves_paragraphs() {
+        let paras = vec![simple_paragraph(), simple_paragraph()];
+        let hf = HeaderFooter::all_pages(paras);
+        assert_eq!(hf.paragraphs.len(), 2);
+    }
+
+    #[test]
+    fn header_footer_all_pages_empty_paragraphs() {
+        let hf = HeaderFooter::all_pages(vec![]);
+        assert_eq!(hf.apply_page_type, ApplyPageType::Both);
+        assert!(hf.paragraphs.is_empty());
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn header_footer_both_deprecated_alias() {
+        let hf = HeaderFooter::both(vec![Paragraph::new(ParaShapeIndex::new(0))]);
+        assert_eq!(hf.apply_page_type, ApplyPageType::Both);
+    }
+
+    // -----------------------------------------------------------------------
+    // PageNumber::bottom_center tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn page_number_bottom_center_position() {
+        let pn = PageNumber::bottom_center();
+        assert_eq!(pn.position, PageNumberPosition::BottomCenter);
+    }
+
+    #[test]
+    fn page_number_bottom_center_format() {
+        let pn = PageNumber::bottom_center();
+        assert_eq!(pn.number_format, NumberFormatType::Digit);
+    }
+
+    #[test]
+    fn page_number_bottom_center_no_decoration() {
+        let pn = PageNumber::bottom_center();
+        assert!(pn.decoration.is_empty());
+    }
+
+    #[test]
+    fn page_number_bottom_center_equals_explicit() {
+        let shortcut = PageNumber::bottom_center();
+        let explicit = PageNumber::new(PageNumberPosition::BottomCenter, NumberFormatType::Digit);
+        assert_eq!(shortcut, explicit);
+    }
+
     #[test]
     fn section_backward_compat_deserialize() {
         // JSON without header/footer/page_number fields (pre-4.5 format)
@@ -540,5 +685,13 @@ mod tests {
         assert!(section.header.is_none());
         assert!(section.footer.is_none());
         assert!(section.page_number.is_none());
+    }
+
+    #[test]
+    fn all_pages_equals_new_with_both() {
+        let paras = vec![simple_paragraph()];
+        let from_all_pages = HeaderFooter::all_pages(paras.clone());
+        let from_new = HeaderFooter::new(paras, ApplyPageType::Both);
+        assert_eq!(from_all_pages, from_new);
     }
 }

@@ -465,8 +465,8 @@ fn build_para_pr(id: u32, ps: &HwpxParaShape) -> HxParaPr {
         }),
         heading: Some(HxHeading { heading_type: "NONE".into(), id_ref: 0, level: 0 }),
         break_setting: Some(HxBreakSetting {
-            break_latin_word: "KEEP_WORD".into(),
-            break_non_latin_word: "BREAK_WORD".into(),
+            break_latin_word: ps.break_latin_word.to_string(),
+            break_non_latin_word: ps.break_non_latin_word.to_string(),
             widow_orphan: 0,
             keep_with_next: 0,
             keep_lines: 0,

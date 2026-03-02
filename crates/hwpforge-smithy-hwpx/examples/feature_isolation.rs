@@ -25,7 +25,7 @@
 
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::ColumnSettings;
-use hwpforge_core::control::{Control, ShapePoint, ShapeStyle};
+use hwpforge_core::control::{Control, LineStyle, ShapePoint, ShapeStyle};
 use hwpforge_core::document::Document;
 use hwpforge_core::image::{Image, ImageFormat, ImageStore};
 use hwpforge_core::paragraph::Paragraph;
@@ -47,12 +47,7 @@ fn p(text: &str) -> Paragraph {
 }
 
 fn caption(text: &str) -> Caption {
-    Caption {
-        side: CaptionSide::Bottom,
-        gap: HwpUnit::new(850).unwrap(),
-        width: None,
-        paragraphs: vec![p(text)],
-    }
+    Caption::new(vec![p(text)], CaptionSide::Bottom)
 }
 
 /// Minimal style store: 1 font (×7 lang groups), 1 char shape, 1 para shape.
@@ -155,20 +150,14 @@ fn main() {
         let mut doc = Document::new();
         let cell_w = HwpUnit::new(21260).unwrap();
         let table = Table::new(vec![
-            TableRow {
-                cells: vec![
-                    TableCell::new(vec![p("A1")], cell_w),
-                    TableCell::new(vec![p("B1")], cell_w),
-                ],
-                height: None,
-            },
-            TableRow {
-                cells: vec![
-                    TableCell::new(vec![p("A2")], cell_w),
-                    TableCell::new(vec![p("B2")], cell_w),
-                ],
-                height: None,
-            },
+            TableRow::new(vec![
+                TableCell::new(vec![p("A1")], cell_w),
+                TableCell::new(vec![p("B1")], cell_w),
+            ]),
+            TableRow::new(vec![
+                TableCell::new(vec![p("A2")], cell_w),
+                TableCell::new(vec![p("B2")], cell_w),
+            ]),
         ]);
         let para = Paragraph::with_runs(
             vec![Run::table(table, CharShapeIndex::new(0))],
@@ -183,13 +172,10 @@ fn main() {
         let store = minimal_store();
         let mut doc = Document::new();
         let cell_w = HwpUnit::new(21260).unwrap();
-        let mut table = Table::new(vec![TableRow {
-            cells: vec![
-                TableCell::new(vec![p("셀1")], cell_w),
-                TableCell::new(vec![p("셀2")], cell_w),
-            ],
-            height: None,
-        }]);
+        let mut table = Table::new(vec![TableRow::new(vec![
+            TableCell::new(vec![p("셀1")], cell_w),
+            TableCell::new(vec![p("셀2")], cell_w),
+        ])]);
         table.caption = Some(caption("표 1. 캡션 테스트"));
         let para = Paragraph::with_runs(
             vec![Run::table(table, CharShapeIndex::new(0))],
@@ -229,9 +215,7 @@ fn main() {
             vec![
                 Run::text("각주가 있는 텍스트", CharShapeIndex::new(0)),
                 Run::control(
-                    Control::Footnote {
-                        inst_id: Some(1), paragraphs: vec![p("각주 내용입니다.")]
-                    },
+                    Control::footnote_with_id(1, vec![p("각주 내용입니다.")]),
                     CharShapeIndex::new(0),
                 ),
             ],
@@ -249,9 +233,7 @@ fn main() {
             vec![
                 Run::text("미주가 있는 텍스트", CharShapeIndex::new(0)),
                 Run::control(
-                    Control::Endnote {
-                        inst_id: Some(1), paragraphs: vec![p("미주 내용입니다.")]
-                    },
+                    Control::endnote_with_id(1, vec![p("미주 내용입니다.")]),
                     CharShapeIndex::new(0),
                 ),
             ],
@@ -321,6 +303,8 @@ fn main() {
                     end: ShapePoint::new(14000, 0),
                     width: HwpUnit::new(14000).unwrap(),
                     height: HwpUnit::new(100).unwrap(),
+                    horz_offset: 0,
+                    vert_offset: 0,
                     caption: None,
                     style: None,
                 },
@@ -365,8 +349,8 @@ fn main() {
                 0,
                 "인라인",
                 Some(ShapeStyle {
-                    line_color: Some("#FF0000".to_string()),
-                    fill_color: Some("#FFFF00".to_string()),
+                    line_color: Some(Color::from_rgb(0xFF, 0x00, 0x00)),
+                    fill_color: Some(Color::from_rgb(0xFF, 0xFF, 0x00)),
                     line_width: Some(100),
                     line_style: None,
                 }),
@@ -383,8 +367,8 @@ fn main() {
                 2000,
                 "왼쪽 위",
                 Some(ShapeStyle {
-                    line_color: Some("#0000FF".to_string()),
-                    fill_color: Some("#ADD8E6".to_string()),
+                    line_color: Some(Color::from_rgb(0x00, 0x00, 0xFF)),
+                    fill_color: Some(Color::from_rgb(0xAD, 0xD8, 0xE6)),
                     line_width: Some(200),
                     line_style: None,
                 }),
@@ -401,10 +385,10 @@ fn main() {
                 2000,
                 "오른쪽 위",
                 Some(ShapeStyle {
-                    line_color: Some("#008000".to_string()),
-                    fill_color: Some("#90EE90".to_string()),
+                    line_color: Some(Color::from_rgb(0x00, 0x80, 0x00)),
+                    fill_color: Some(Color::from_rgb(0x90, 0xEE, 0x90)),
                     line_width: Some(80),
-                    line_style: Some("DASH".to_string()),
+                    line_style: Some(LineStyle::Dash),
                 }),
             )],
             ParaShapeIndex::new(0),
@@ -419,10 +403,10 @@ fn main() {
                 10000,
                 "가운데",
                 Some(ShapeStyle {
-                    line_color: Some("#800080".to_string()),
-                    fill_color: Some("#FFB6C1".to_string()),
+                    line_color: Some(Color::from_rgb(0x80, 0x00, 0x80)),
+                    fill_color: Some(Color::from_rgb(0xFF, 0xB6, 0xC1)),
                     line_width: Some(60),
-                    line_style: Some("DOT".to_string()),
+                    line_style: Some(LineStyle::Dot),
                 }),
             )],
             ParaShapeIndex::new(0),
@@ -437,10 +421,10 @@ fn main() {
                 19000,
                 "왼쪽 아래",
                 Some(ShapeStyle {
-                    line_color: Some("#FF8C00".to_string()),
+                    line_color: Some(Color::from_rgb(0xFF, 0x8C, 0x00)),
                     fill_color: None,
                     line_width: Some(300),
-                    line_style: Some("SOLID".to_string()),
+                    line_style: Some(LineStyle::Solid),
                 }),
             )],
             ParaShapeIndex::new(0),
@@ -482,6 +466,8 @@ fn main() {
                     ],
                     width: HwpUnit::new(10000).unwrap(),
                     height: HwpUnit::new(8000).unwrap(),
+                    horz_offset: 0,
+                    vert_offset: 0,
                     paragraphs: vec![p("삼각형")],
                     caption: None,
                     style: None,

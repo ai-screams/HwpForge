@@ -318,7 +318,7 @@ mod tests {
         let pn = sec.page_number.as_ref().expect("section should have page number");
         assert_eq!(pn.position, hwpforge_foundation::PageNumberPosition::BottomCenter);
         assert_eq!(pn.number_format, hwpforge_foundation::NumberFormatType::Digit);
-        assert_eq!(pn.side_char, "- ");
+        assert_eq!(pn.decoration, "- ");
     }
 
     // ── Image binary roundtrip test ─────────────────────────────

@@ -144,6 +144,48 @@ pub struct TableRow {
     pub height: Option<HwpUnit>,
 }
 
+impl TableRow {
+    /// Creates a new table row with the given cells and auto-calculated height.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::table::{TableRow, TableCell};
+    /// use hwpforge_core::paragraph::Paragraph;
+    /// use hwpforge_foundation::{HwpUnit, ParaShapeIndex};
+    ///
+    /// let cell = TableCell::new(
+    ///     vec![Paragraph::new(ParaShapeIndex::new(0))],
+    ///     HwpUnit::from_mm(40.0).unwrap(),
+    /// );
+    /// let row = TableRow::new(vec![cell]);
+    /// assert!(row.height.is_none());
+    /// ```
+    pub fn new(cells: Vec<TableCell>) -> Self {
+        Self { cells, height: None }
+    }
+
+    /// Creates a new table row with an explicit fixed height.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::table::{TableRow, TableCell};
+    /// use hwpforge_core::paragraph::Paragraph;
+    /// use hwpforge_foundation::{HwpUnit, ParaShapeIndex};
+    ///
+    /// let cell = TableCell::new(
+    ///     vec![Paragraph::new(ParaShapeIndex::new(0))],
+    ///     HwpUnit::from_mm(40.0).unwrap(),
+    /// );
+    /// let row = TableRow::with_height(vec![cell], HwpUnit::from_mm(20.0).unwrap());
+    /// assert!(row.height.is_some());
+    /// ```
+    pub fn with_height(cells: Vec<TableCell>, height: HwpUnit) -> Self {
+        Self { cells, height: Some(height) }
+    }
+}
+
 /// A single cell within a table row.
 ///
 /// Each cell contains its own paragraphs (rich content). Spans
@@ -332,6 +374,28 @@ mod tests {
     }
 
     #[test]
+    fn row_new_auto_height() {
+        let row = TableRow::new(vec![simple_cell(), simple_cell()]);
+        assert_eq!(row.cells.len(), 2);
+        assert!(row.height.is_none());
+    }
+
+    #[test]
+    fn row_new_empty_cells() {
+        let row = TableRow::new(vec![]);
+        assert!(row.cells.is_empty());
+        assert!(row.height.is_none());
+    }
+
+    #[test]
+    fn row_with_height_constructor() {
+        let h = HwpUnit::from_mm(20.0).unwrap();
+        let row = TableRow::with_height(vec![simple_cell()], h);
+        assert_eq!(row.cells.len(), 1);
+        assert_eq!(row.height, Some(h));
+    }
+
+    #[test]
     fn equality() {
         let a = simple_table();
         let b = simple_table();
@@ -378,5 +442,13 @@ mod tests {
         );
         assert_eq!(cell.col_span, 0);
         assert_eq!(cell.row_span, 0);
+    }
+
+    #[test]
+    fn row_new_equals_struct_literal() {
+        let cells = vec![simple_cell()];
+        let from_new = TableRow::new(cells.clone());
+        let from_literal = TableRow { cells, height: None };
+        assert_eq!(from_new, from_literal);
     }
 }

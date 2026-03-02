@@ -158,6 +158,14 @@ pub struct HxRun {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub switches: Vec<HxRunSwitch>,
+
+    /// Optional `<hp:titleMark>` element for TOC participation.
+    #[serde(
+        rename(serialize = "hp:titleMark", deserialize = "titleMark"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub title_mark: Option<HxTitleMark>,
 }
 
 // ── Text ──────────────────────────────────────────────────────────
@@ -167,6 +175,19 @@ pub struct HxRun {
 pub struct HxText {
     #[serde(rename = "$text", default)]
     pub text: String,
+}
+
+// ── Title mark ────────────────────────────────────────────────────
+
+/// `<hp:titleMark ignore="false"/>` — marks a paragraph for TOC participation.
+///
+/// When present in a run, 한글 includes the paragraph in its auto-generated
+/// Table of Contents. `ignore = false` means "include in TOC".
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxTitleMark {
+    /// Whether to exclude from TOC (`false` = include, `true` = exclude).
+    #[serde(rename = "@ignore")]
+    pub ignore: bool,
 }
 
 // ── Control wrapper ──────────────────────────────────────────────
@@ -1471,6 +1492,52 @@ pub struct HxRect {
     )]
     pub shadow: Option<HxShadow>,
 
+    /// Textbox content (if present, this rect is a textbox).
+    #[serde(
+        rename(serialize = "hp:drawText", deserialize = "drawText"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub draw_text: Option<HxDrawText>,
+
+    /// Optional caption attached to this rectangle.
+    #[serde(
+        rename(serialize = "hp:caption", deserialize = "caption"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub caption: Option<HxCaption>,
+
+    // ── Rectangle corner points (hc: namespace per KS X 6101) ──
+    /// Rectangle corner point 0 (top-left).
+    #[serde(
+        rename(serialize = "hc:pt0", deserialize = "pt0"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pt0: Option<HxPoint>,
+    /// Rectangle corner point 1 (top-right).
+    #[serde(
+        rename(serialize = "hc:pt1", deserialize = "pt1"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pt1: Option<HxPoint>,
+    /// Rectangle corner point 2 (bottom-right).
+    #[serde(
+        rename(serialize = "hc:pt2", deserialize = "pt2"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pt2: Option<HxPoint>,
+    /// Rectangle corner point 3 (bottom-left).
+    #[serde(
+        rename(serialize = "hc:pt3", deserialize = "pt3"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub pt3: Option<HxPoint>,
+
     // ── Size / position / margin ──
     /// Size specification (width, height).
     #[serde(
@@ -1496,50 +1563,13 @@ pub struct HxRect {
     )]
     pub out_margin: Option<HxTableMargin>,
 
-    /// Optional caption attached to this rectangle.
+    /// Shape description comment (e.g. "사각형입니다.").
     #[serde(
-        rename(serialize = "hp:caption", deserialize = "caption"),
+        rename(serialize = "hp:shapeComment", deserialize = "shapeComment"),
         default,
         skip_serializing_if = "Option::is_none"
     )]
-    pub caption: Option<HxCaption>,
-
-    /// Textbox content (if present, this rect is a textbox).
-    #[serde(
-        rename(serialize = "hp:drawText", deserialize = "drawText"),
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub draw_text: Option<HxDrawText>,
-
-    /// Rectangle corner point 0 (top-left).
-    #[serde(
-        rename(serialize = "hp:pt0", deserialize = "pt0"),
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub pt0: Option<HxPoint>,
-    /// Rectangle corner point 1 (top-right).
-    #[serde(
-        rename(serialize = "hp:pt1", deserialize = "pt1"),
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub pt1: Option<HxPoint>,
-    /// Rectangle corner point 2 (bottom-right).
-    #[serde(
-        rename(serialize = "hp:pt2", deserialize = "pt2"),
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub pt2: Option<HxPoint>,
-    /// Rectangle corner point 3 (bottom-left).
-    #[serde(
-        rename(serialize = "hp:pt3", deserialize = "pt3"),
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub pt3: Option<HxPoint>,
+    pub shape_comment: Option<HxShapeComment>,
 }
 
 /// `<hp:drawText>` — textbox content container (paragraphs + text margin).
@@ -1949,6 +1979,14 @@ pub struct HxEllipse {
     )]
     pub out_margin: Option<HxTableMargin>,
 
+    /// Shape description comment (e.g. "타원입니다.").
+    #[serde(
+        rename(serialize = "hp:shapeComment", deserialize = "shapeComment"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub shape_comment: Option<HxShapeComment>,
+
     /// Optional caption attached to this ellipse.
     #[serde(
         rename(serialize = "hp:caption", deserialize = "caption"),
@@ -2098,6 +2136,14 @@ pub struct HxPolygon {
     )]
     pub out_margin: Option<HxTableMargin>,
 
+    /// Shape description comment (e.g. "다각형입니다.").
+    #[serde(
+        rename(serialize = "hp:shapeComment", deserialize = "shapeComment"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub shape_comment: Option<HxShapeComment>,
+
     /// Optional caption attached to this polygon.
     #[serde(
         rename(serialize = "hp:caption", deserialize = "caption"),
@@ -2114,10 +2160,10 @@ pub struct HxPolygon {
     )]
     pub draw_text: Option<HxDrawText>,
 
-    // ── Polygon-specific children (geometry AFTER sz/pos/outMargin) ──
-    /// Ordered list of polygon vertices.
+    // ── Polygon-specific children (geometry AFTER sz/pos/outMargin; hc: namespace) ──
+    /// Ordered list of polygon vertices (hc: namespace per KS X 6101).
     #[serde(
-        rename(serialize = "hp:pt", deserialize = "pt"),
+        rename(serialize = "hc:pt", deserialize = "pt"),
         default,
         skip_serializing_if = "Vec::is_empty"
     )]

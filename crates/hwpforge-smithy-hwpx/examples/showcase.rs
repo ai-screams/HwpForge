@@ -43,12 +43,7 @@ fn text_para(text: &str, cs: usize, ps: usize) -> Paragraph {
 }
 
 fn make_caption(text: &str, side: CaptionSide) -> Caption {
-    Caption {
-        side,
-        gap: HwpUnit::new(850).unwrap(),
-        width: None,
-        paragraphs: vec![text_para(text, 0, 0)],
-    }
+    Caption::new(vec![text_para(text, 0, 0)], side)
 }
 
 // ---------------------------------------------------------------------------
@@ -114,27 +109,18 @@ fn build_style_store() -> HwpxStyleStore {
 fn build_section1() -> Section {
     // Table with caption (3 rows x 2 cols)
     let table: Table = {
-        let header_row: TableRow = TableRow {
-            cells: vec![
-                TableCell::new(vec![text_para("항목", 1, 1)], HwpUnit::new(21260).unwrap()),
-                TableCell::new(vec![text_para("내용", 1, 1)], HwpUnit::new(21260).unwrap()),
-            ],
-            height: None,
-        };
-        let row1: TableRow = TableRow {
-            cells: vec![
-                TableCell::new(vec![text_para("프로젝트", 0, 0)], HwpUnit::new(21260).unwrap()),
-                TableCell::new(vec![text_para("HwpForge", 0, 0)], HwpUnit::new(21260).unwrap()),
-            ],
-            height: None,
-        };
-        let row2: TableRow = TableRow {
-            cells: vec![
-                TableCell::new(vec![text_para("버전", 0, 0)], HwpUnit::new(21260).unwrap()),
-                TableCell::new(vec![text_para("v1.0-alpha", 0, 0)], HwpUnit::new(21260).unwrap()),
-            ],
-            height: None,
-        };
+        let header_row: TableRow = TableRow::new(vec![
+            TableCell::new(vec![text_para("항목", 1, 1)], HwpUnit::new(21260).unwrap()),
+            TableCell::new(vec![text_para("내용", 1, 1)], HwpUnit::new(21260).unwrap()),
+        ]);
+        let row1: TableRow = TableRow::new(vec![
+            TableCell::new(vec![text_para("프로젝트", 0, 0)], HwpUnit::new(21260).unwrap()),
+            TableCell::new(vec![text_para("HwpForge", 0, 0)], HwpUnit::new(21260).unwrap()),
+        ]);
+        let row2: TableRow = TableRow::new(vec![
+            TableCell::new(vec![text_para("버전", 0, 0)], HwpUnit::new(21260).unwrap()),
+            TableCell::new(vec![text_para("v1.0-alpha", 0, 0)], HwpUnit::new(21260).unwrap()),
+        ]);
         let mut t: Table = Table::new(vec![header_row, row1, row2]);
         t.caption = Some(make_caption("표 1. 프로젝트 현황", CaptionSide::Bottom));
         t
@@ -163,10 +149,10 @@ fn build_section1() -> Section {
             vec![
                 Run::text("각주가 포함된 문장입니다", CharShapeIndex::new(0)),
                 Run::control(
-                    Control::Footnote {
-                        inst_id: Some(1),
-                        paragraphs: vec![text_para("이것은 각주(footnote) 내용입니다.", 0, 0)],
-                    },
+                    Control::footnote_with_id(
+                        1,
+                        vec![text_para("이것은 각주(footnote) 내용입니다.", 0, 0)],
+                    ),
                     CharShapeIndex::new(0),
                 ),
                 Run::text(".", CharShapeIndex::new(0)),
@@ -178,10 +164,10 @@ fn build_section1() -> Section {
             vec![
                 Run::text("미주가 포함된 문장입니다", CharShapeIndex::new(0)),
                 Run::control(
-                    Control::Endnote {
-                        inst_id: Some(1),
-                        paragraphs: vec![text_para("이것은 미주(endnote) 내용입니다.", 0, 0)],
-                    },
+                    Control::endnote_with_id(
+                        1,
+                        vec![text_para("이것은 미주(endnote) 내용입니다.", 0, 0)],
+                    ),
                     CharShapeIndex::new(0),
                 ),
                 Run::text(".", CharShapeIndex::new(0)),
@@ -256,6 +242,8 @@ fn build_section2() -> Section {
                     end: ShapePoint::new(14000, 0),
                     width: HwpUnit::new(14000).unwrap(),
                     height: HwpUnit::new(100).unwrap(),
+                    horz_offset: 0,
+                    vert_offset: 0,
                     caption: Some(make_caption("선 1. 구분선", CaptionSide::Bottom)),
                     style: None,
                 },
@@ -293,6 +281,8 @@ fn build_section2() -> Section {
                     ],
                     width: HwpUnit::new(10000).unwrap(),
                     height: HwpUnit::new(8000).unwrap(),
+                    horz_offset: 0,
+                    vert_offset: 0,
                     paragraphs: vec![text_para("삼각형", 0, 1)],
                     caption: Some(make_caption("그림 3. 삼각형 도형", CaptionSide::Bottom)),
                     style: None,

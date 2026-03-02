@@ -3,6 +3,9 @@
 use std::path::Path;
 
 use hwpforge_blueprint::builtins::builtin_default;
+
+/// Maximum markdown file size: 50 MB.
+const MAX_MD_FILE_SIZE: u64 = 50 * 1024 * 1024;
 use hwpforge_blueprint::registry::StyleRegistry;
 use hwpforge_blueprint::template::Template;
 use hwpforge_core::{
@@ -123,20 +126,26 @@ impl MdDecoder {
     }
 
     /// Reads a markdown file and decodes it into a Core draft document with styles.
+    ///
+    /// Files larger than 50 MB are rejected with [`MdError::FileTooLarge`].
     pub fn decode_file(path: impl AsRef<Path>, template: &Template) -> MdResult<MdDocument> {
-        let markdown = std::fs::read_to_string(path)?;
+        let markdown = read_checked(path.as_ref())?;
         Self::decode(&markdown, template)
     }
 
     /// Reads a markdown file and decodes it using the built-in default template.
+    ///
+    /// Files larger than 50 MB are rejected with [`MdError::FileTooLarge`].
     pub fn decode_file_with_default(path: impl AsRef<Path>) -> MdResult<MdDocument> {
         let template = builtin_default()?;
         Self::decode_file(path, &template)
     }
 
     /// Reads a lossless markdown file and decodes it into a Core draft document.
+    ///
+    /// Files larger than 50 MB are rejected with [`MdError::FileTooLarge`].
     pub fn decode_lossless_file(path: impl AsRef<Path>) -> MdResult<Document> {
-        let markdown = std::fs::read_to_string(path)?;
+        let markdown = read_checked(path.as_ref())?;
         Self::decode_lossless(&markdown)
     }
 }
@@ -169,11 +178,12 @@ struct PendingImage {
 struct ParagraphBuilder {
     style: MdStyleRef,
     runs: Vec<Run>,
+    heading_level: Option<u8>,
 }
 
 impl ParagraphBuilder {
     fn new(style: MdStyleRef) -> Self {
-        Self { style, runs: Vec::new() }
+        Self { style, runs: Vec::new(), heading_level: None }
     }
 
     fn push_text(&mut self, text: &str) {
@@ -201,7 +211,9 @@ impl ParagraphBuilder {
         if self.runs.is_empty() {
             self.runs.push(Run::text("", self.style.char_shape_id));
         }
-        Paragraph::with_runs(self.runs, self.style.para_shape_id)
+        let mut para = Paragraph::with_runs(self.runs, self.style.para_shape_id);
+        para.heading_level = self.heading_level;
+        para
     }
 }
 
@@ -443,7 +455,11 @@ impl<'a> DecoderState<'a> {
                 self.ensure_paragraph();
             }
             Tag::Heading { level, .. } => {
-                self.start_paragraph(self.mapping.heading(level_to_u32(level)));
+                let lvl = level_to_u32(level);
+                self.start_paragraph(self.mapping.heading(lvl));
+                if let Some(current) = self.current.as_mut() {
+                    current.heading_level = Some(lvl as u8);
+                }
             }
             Tag::BlockQuote(_) => {
                 self.blockquote_depth += 1;
@@ -828,6 +844,16 @@ fn default_empty_section() -> Section {
 
 fn unsupported_markdown_feature(feature: &str) -> MdError {
     MdError::UnsupportedStructure { detail: format!("unsupported markdown feature: {feature}") }
+}
+
+/// Reads a file after checking that its size does not exceed [`MAX_MD_FILE_SIZE`].
+fn read_checked(path: &Path) -> MdResult<String> {
+    let metadata = std::fs::metadata(path)?;
+    let size = metadata.len();
+    if size > MAX_MD_FILE_SIZE {
+        return Err(MdError::FileTooLarge { size, limit: MAX_MD_FILE_SIZE });
+    }
+    Ok(std::fs::read_to_string(path)?)
 }
 
 fn split_sections(paragraphs: Vec<Paragraph>, section_breaks: &[usize]) -> Vec<Vec<Paragraph>> {

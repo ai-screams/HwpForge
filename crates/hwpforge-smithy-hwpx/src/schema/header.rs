@@ -443,7 +443,7 @@ pub struct HxHeading {
     pub level: u32,
 }
 
-/// `<hh:breakSetting breakLatinWord="KEEP_WORD" breakNonLatinWord="BREAK_WORD" .../>`.
+/// `<hh:breakSetting breakLatinWord="KEEP_WORD" breakNonLatinWord="KEEP_WORD" .../>`.
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxBreakSetting {
     #[serde(rename = "@breakLatinWord", default)]

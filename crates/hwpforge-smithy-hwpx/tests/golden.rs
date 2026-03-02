@@ -514,6 +514,8 @@ fn encode_decode_line_shape() {
         end: ShapePoint::new(14000, 0),
         width: HwpUnit::new(14000).unwrap(),
         height: HwpUnit::new(100).unwrap(),
+        horz_offset: 0,
+        vert_offset: 0,
         caption: None,
         style: None,
     };
