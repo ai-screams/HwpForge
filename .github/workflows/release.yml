@@ -61,7 +61,7 @@ jobs:
     timeout-minutes: 10
     steps:
       - name: Download release artifacts
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: release-${{ github.ref_name }}
           path: dist
