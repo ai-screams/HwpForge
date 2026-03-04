@@ -163,6 +163,26 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                     }
                     out.push_str("</polygon>");
                 }
+                Control::Dutmal { main_text, sub_text, sz_ratio, position, align } => {
+                    out.push_str(&format!(
+                        "<dutmal data-char-shape=\"{}\" data-sz-ratio=\"{}\" data-position=\"{:?}\" data-align=\"{:?}\">{}</dutmal>",
+                        run.char_shape_id.get(),
+                        sz_ratio,
+                        position,
+                        align,
+                        escape_html(&format!("{main_text}|{sub_text}"))
+                    ));
+                }
+                Control::Compose { compose_text, circle_type, char_sz, compose_type } => {
+                    out.push_str(&format!(
+                        "<compose data-char-shape=\"{}\" data-circle-type=\"{}\" data-char-sz=\"{}\" data-compose-type=\"{}\">{}</compose>",
+                        run.char_shape_id.get(),
+                        escape_html(circle_type),
+                        char_sz,
+                        escape_html(compose_type),
+                        escape_html(compose_text)
+                    ));
+                }
                 _ => {
                     return Err(MdError::UnsupportedStructure {
                         detail: "unsupported Control variant for lossless encoder".to_string(),

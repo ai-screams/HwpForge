@@ -142,6 +142,12 @@ fn paragraph_text_markdown(paragraph: &Paragraph) -> String {
                         output.push_str(body.trim());
                     }
                 }
+                Control::Dutmal { main_text, sub_text, .. } => {
+                    output.push_str(&format!("{main_text}({sub_text})"));
+                }
+                Control::Compose { compose_text, .. } => {
+                    output.push_str(compose_text);
+                }
                 _ => {}
             },
             RunContent::Table(table) => {

@@ -14,7 +14,7 @@
 
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::{ColumnLayoutMode, ColumnSettings, ColumnType};
-use hwpforge_core::control::{Control, ShapeStyle};
+use hwpforge_core::control::{Control, DutmalAlign, DutmalPosition, ShapeStyle};
 use hwpforge_core::image::Image;
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::{Run, RunContent};
@@ -25,12 +25,13 @@ use hwpforge_core::PageSettings;
 use crate::encoder::package::XMLNS_DECLS;
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    HxCaption, HxCellAddr, HxCellSpan, HxCellSz, HxChart, HxCtrl, HxDrawText, HxEllipse,
-    HxEquation, HxFillBrush, HxFlip, HxFootNote, HxImg, HxImgClip, HxImgDim, HxImgRect, HxLine,
-    HxLineShape, HxMatrix, HxOffset, HxPageMargin, HxPagePr, HxParagraph, HxPic, HxPoint,
-    HxPolygon, HxRect, HxRenderingInfo, HxRotationInfo, HxRun, HxRunCase, HxRunSwitch, HxScript,
-    HxSecPr, HxSection, HxShadow, HxShapeComment, HxSizeAttr, HxSubList, HxTable, HxTableCell,
-    HxTableMargin, HxTablePos, HxTableRow, HxTableSz, HxText, HxTitleMark,
+    HxCaption, HxCellAddr, HxCellSpan, HxCellSz, HxChart, HxCompose, HxComposeCharPr, HxCtrl,
+    HxDrawText, HxDutmal, HxEllipse, HxEquation, HxFillBrush, HxFlip, HxFootNote, HxImg, HxImgClip,
+    HxImgDim, HxImgRect, HxLine, HxLineShape, HxMatrix, HxOffset, HxPageMargin, HxPagePr,
+    HxParagraph, HxPic, HxPoint, HxPolygon, HxRect, HxRenderingInfo, HxRotationInfo, HxRun,
+    HxRunCase, HxRunSwitch, HxScript, HxSecPr, HxSection, HxShadow, HxShapeComment, HxSizeAttr,
+    HxSubList, HxTable, HxTableCell, HxTableMargin, HxTablePos, HxTableRow, HxTableSz, HxText,
+    HxTitleMark,
 };
 
 use super::chart::generate_chart_xml;
@@ -249,6 +250,8 @@ fn build_runs(
         let mut polygons = Vec::new();
         let mut equations = Vec::new();
         let mut switches: Vec<HxRunSwitch> = Vec::new();
+        let mut dutmals: Vec<HxDutmal> = Vec::new();
+        let mut composes: Vec<HxCompose> = Vec::new();
 
         match &run.content {
             RunContent::Text(s) => {
@@ -322,6 +325,19 @@ fn build_runs(
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText { text: marker });
                     }
+                    Control::Dutmal { main_text, sub_text, position, sz_ratio, align } => {
+                        dutmals.push(encode_dutmal_to_hx(
+                            main_text, sub_text, *position, *sz_ratio, *align,
+                        ));
+                    }
+                    Control::Compose { compose_text, circle_type, char_sz, compose_type } => {
+                        composes.push(encode_compose_to_hx(
+                            compose_text,
+                            circle_type,
+                            *char_sz,
+                            compose_type,
+                        ));
+                    }
                     Control::Unknown { .. } => {
                         // Unknown controls are silently skipped
                         continue;
@@ -353,6 +369,8 @@ fn build_runs(
             equations,
             switches,
             title_mark: None,
+            dutmals,
+            composes,
         });
     }
 
@@ -376,6 +394,8 @@ fn build_runs(
                     equations: Vec::new(),
                     switches: Vec::new(),
                     title_mark: None,
+                    dutmals: Vec::new(),
+                    composes: Vec::new(),
                 },
             );
         }
@@ -946,6 +966,59 @@ fn encode_equation_to_hx(ctrl: &Control) -> HwpxResult<HxEquation> {
         shape_comment: Some(HxShapeComment { text: "수식입니다.".to_string() }),
         script: Some(HxScript { text: script.clone() }),
     })
+}
+
+/// Encodes a Core `Control::Dutmal` into `HxDutmal`.
+fn encode_dutmal_to_hx(
+    main_text: &str,
+    sub_text: &str,
+    position: DutmalPosition,
+    sz_ratio: u32,
+    align: DutmalAlign,
+) -> HxDutmal {
+    let pos_type = match position {
+        DutmalPosition::Top => "TOP",
+        DutmalPosition::Bottom => "BOTTOM",
+        DutmalPosition::Right => "RIGHT",
+        DutmalPosition::Left => "LEFT",
+        _ => "TOP",
+    };
+    let align_str = match align {
+        DutmalAlign::Center => "CENTER",
+        DutmalAlign::Left => "LEFT",
+        DutmalAlign::Right => "RIGHT",
+        _ => "CENTER",
+    };
+    HxDutmal {
+        pos_type: pos_type.to_string(),
+        sz_ratio,
+        option: 0,
+        style_id_ref: 0,
+        align: align_str.to_string(),
+        main_text: main_text.to_string(),
+        sub_text: sub_text.to_string(),
+    }
+}
+
+/// Encodes a Core `Control::Compose` into `HxCompose`.
+///
+/// Always emits 10 `<hp:charPr>` entries with `prIDRef = u32::MAX`
+/// (the HWPX sentinel meaning "no override"), as required by KS X 6101.
+fn encode_compose_to_hx(
+    compose_text: &str,
+    circle_type: &str,
+    char_sz: i32,
+    compose_type: &str,
+) -> HxCompose {
+    let char_prs = (0..10).map(|_| HxComposeCharPr { pr_id_ref: u32::MAX }).collect();
+    HxCompose {
+        circle_type: circle_type.to_string(),
+        char_sz,
+        compose_type: compose_type.to_string(),
+        char_pr_cnt: 10,
+        compose_text: compose_text.to_string(),
+        char_prs,
+    }
 }
 
 /// Builds a complete `<hp:run>` XML string for a hyperlink.

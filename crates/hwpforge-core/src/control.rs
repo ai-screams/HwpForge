@@ -361,6 +361,34 @@ pub enum Control {
         stock_variant: Option<StockVariant>,
     },
 
+    /// Dutmal (덧말): annotation text displayed above or below main text.
+    /// Maps to HWPX `<hp:dutmal>`.
+    Dutmal {
+        /// Main text that receives the annotation.
+        main_text: String,
+        /// Annotation text displayed above/below.
+        sub_text: String,
+        /// Position of the annotation relative to main text.
+        position: DutmalPosition,
+        /// Size ratio of annotation text relative to main (0 = auto).
+        sz_ratio: u32,
+        /// Alignment of the annotation text.
+        align: DutmalAlign,
+    },
+
+    /// Compose (글자겹침): overlaid/combined characters.
+    /// Maps to HWPX `<hp:compose>`.
+    Compose {
+        /// The combined text (e.g. "12" for two overlaid digits).
+        compose_text: String,
+        /// Circle/frame type for the composition.
+        circle_type: String,
+        /// Character size adjustment (-3 = slightly smaller).
+        char_sz: i32,
+        /// Composition layout type.
+        compose_type: String,
+    },
+
     /// An unrecognized control element preserved for round-trip fidelity.
     ///
     /// `tag` holds the element's tag name or type identifier.
@@ -371,6 +399,34 @@ pub enum Control {
         /// Optional serialized data for round-trip preservation.
         data: Option<String>,
     },
+}
+
+/// Position of dutmal annotation text relative to the main text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub enum DutmalPosition {
+    /// Annotation above main text (default).
+    #[default]
+    Top,
+    /// Annotation below main text.
+    Bottom,
+    /// Annotation to the right.
+    Right,
+    /// Annotation to the left.
+    Left,
+}
+
+/// Alignment of dutmal annotation text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub enum DutmalAlign {
+    /// Center-aligned (default).
+    #[default]
+    Center,
+    /// Left-aligned.
+    Left,
+    /// Right-aligned.
+    Right,
 }
 
 impl Control {
@@ -422,6 +478,16 @@ impl Control {
     /// Returns `true` if this is a [`Control::Unknown`].
     pub fn is_unknown(&self) -> bool {
         matches!(self, Self::Unknown { .. })
+    }
+
+    /// Returns `true` if this is a [`Control::Dutmal`].
+    pub fn is_dutmal(&self) -> bool {
+        matches!(self, Self::Dutmal { .. })
+    }
+
+    /// Returns `true` if this is a [`Control::Compose`].
+    pub fn is_compose(&self) -> bool {
+        matches!(self, Self::Compose { .. })
     }
 
     /// Creates a chart control with default dimensions and settings.
@@ -802,6 +868,50 @@ impl Control {
         }
     }
 
+    /// Creates a dutmal (annotation text) control with default positioning.
+    ///
+    /// Defaults: position = Top, sz_ratio = 0 (auto), align = Center.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::Control;
+    ///
+    /// let ctrl = Control::dutmal("본문", "주석");
+    /// assert!(ctrl.is_dutmal());
+    /// ```
+    pub fn dutmal(main_text: impl Into<String>, sub_text: impl Into<String>) -> Self {
+        Self::Dutmal {
+            main_text: main_text.into(),
+            sub_text: sub_text.into(),
+            position: DutmalPosition::Top,
+            sz_ratio: 0,
+            align: DutmalAlign::Center,
+        }
+    }
+
+    /// Creates a compose (글자겹침) control with default settings.
+    ///
+    /// Defaults: `circle_type = "SHAPE_REVERSAL_TIRANGLE"` (spec typo preserved),
+    /// `char_sz = -3`, `compose_type = "SPREAD"`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::Control;
+    ///
+    /// let ctrl = Control::compose("12");
+    /// assert!(ctrl.is_compose());
+    /// ```
+    pub fn compose(text: impl Into<String>) -> Self {
+        Self::Compose {
+            compose_text: text.into(),
+            circle_type: "SHAPE_REVERSAL_TIRANGLE".to_string(), // official spec typo preserved
+            char_sz: -3,
+            compose_type: "SPREAD".to_string(),
+        }
+    }
+
     /// Creates a hyperlink control with the given display text and URL.
     ///
     /// # Examples
@@ -869,6 +979,12 @@ impl std::fmt::Display for Control {
                     script.clone()
                 };
                 write!(f, "Equation(\"{preview}\")")
+            }
+            Self::Dutmal { main_text, sub_text, .. } => {
+                write!(f, "Dutmal(\"{main_text}\" / \"{sub_text}\")")
+            }
+            Self::Compose { compose_text, .. } => {
+                write!(f, "Compose(\"{compose_text}\")")
             }
             Self::Unknown { tag, .. } => {
                 write!(f, "Unknown({tag})")
@@ -1702,5 +1818,122 @@ mod tests {
         let with_text = Control::ellipse_with_text(width, height, vec![]);
         // Both should produce identical shapes when paragraphs are empty
         assert_eq!(plain, with_text);
+    }
+
+    // ── Dutmal (덧말) tests ──────────────────────────────────────
+
+    #[test]
+    fn dutmal_constructor_defaults() {
+        let ctrl = Control::dutmal("본문", "주석");
+        assert!(ctrl.is_dutmal());
+        match ctrl {
+            Control::Dutmal { main_text, sub_text, position, sz_ratio, align } => {
+                assert_eq!(main_text, "본문");
+                assert_eq!(sub_text, "주석");
+                assert_eq!(position, DutmalPosition::Top);
+                assert_eq!(sz_ratio, 0);
+                assert_eq!(align, DutmalAlign::Center);
+            }
+            _ => panic!("expected Dutmal"),
+        }
+    }
+
+    #[test]
+    fn dutmal_is_dutmal_true() {
+        assert!(Control::dutmal("a", "b").is_dutmal());
+    }
+
+    #[test]
+    fn dutmal_is_compose_false() {
+        assert!(!Control::dutmal("a", "b").is_compose());
+    }
+
+    #[test]
+    fn dutmal_display() {
+        let ctrl = Control::dutmal("hello", "world");
+        assert_eq!(ctrl.to_string(), r#"Dutmal("hello" / "world")"#);
+    }
+
+    #[test]
+    fn dutmal_serde_roundtrip() {
+        let ctrl = Control::Dutmal {
+            main_text: "테스트".to_string(),
+            sub_text: "test".to_string(),
+            position: DutmalPosition::Bottom,
+            sz_ratio: 50,
+            align: DutmalAlign::Right,
+        };
+        let json = serde_json::to_string(&ctrl).unwrap();
+        let decoded: Control = serde_json::from_str(&json).unwrap();
+        assert_eq!(ctrl, decoded);
+    }
+
+    #[test]
+    fn dutmal_position_default_is_top() {
+        assert_eq!(DutmalPosition::default(), DutmalPosition::Top);
+    }
+
+    #[test]
+    fn dutmal_align_default_is_center() {
+        assert_eq!(DutmalAlign::default(), DutmalAlign::Center);
+    }
+
+    // ── Compose (글자겹침) tests ─────────────────────────────────
+
+    #[test]
+    fn compose_constructor_defaults() {
+        let ctrl = Control::compose("가");
+        assert!(ctrl.is_compose());
+        match ctrl {
+            Control::Compose { compose_text, circle_type, char_sz, compose_type } => {
+                assert_eq!(compose_text, "가");
+                assert_eq!(circle_type, "SHAPE_REVERSAL_TIRANGLE");
+                assert_eq!(char_sz, -3);
+                assert_eq!(compose_type, "SPREAD");
+            }
+            _ => panic!("expected Compose"),
+        }
+    }
+
+    #[test]
+    fn compose_is_compose_true() {
+        assert!(Control::compose("나").is_compose());
+    }
+
+    #[test]
+    fn compose_is_dutmal_false() {
+        assert!(!Control::compose("나").is_dutmal());
+    }
+
+    #[test]
+    fn compose_display() {
+        let ctrl = Control::compose("가나");
+        assert_eq!(ctrl.to_string(), r#"Compose("가나")"#);
+    }
+
+    #[test]
+    fn compose_serde_roundtrip() {
+        let ctrl = Control::Compose {
+            compose_text: "①".to_string(),
+            circle_type: "SHAPE_REVERSAL_TIRANGLE".to_string(),
+            char_sz: -3,
+            compose_type: "SPREAD".to_string(),
+        };
+        let json = serde_json::to_string(&ctrl).unwrap();
+        let decoded: Control = serde_json::from_str(&json).unwrap();
+        assert_eq!(ctrl, decoded);
+    }
+
+    #[test]
+    fn compose_spec_typo_preserved() {
+        // "SHAPE_REVERSAL_TIRANGLE" is an official spec typo — must be preserved exactly
+        let ctrl = Control::compose("X");
+        match ctrl {
+            Control::Compose { circle_type, .. } => {
+                assert_eq!(circle_type, "SHAPE_REVERSAL_TIRANGLE");
+                assert!(!circle_type.contains("TRIANGLE")); // confirm the typo
+            }
+            _ => panic!("expected Compose"),
+        }
     }
 }

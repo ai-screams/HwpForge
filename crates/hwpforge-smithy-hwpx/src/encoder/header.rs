@@ -4,9 +4,10 @@
 //! it converts Foundation types (`Color`, `HwpUnit`, `Alignment`) back
 //! into the `Hx*` schema types and serializes them to XML via quick-xml.
 
+use hwpforge_core::{NumberingDef, TabDef};
 use hwpforge_foundation::{
-    Alignment, Color, HwpUnit, LineSpacingType, OutlineType, ShadowType, StrikeoutShape,
-    UnderlineType,
+    Alignment, Color, EmphasisType, HwpUnit, LineSpacingType, NumberFormatType, OutlineType,
+    ShadowType, StrikeoutShape, UnderlineType,
 };
 
 use crate::error::{HwpxError, HwpxResult};
@@ -161,34 +162,87 @@ fn build_fill_brush_xml(fill: &HwpxFill) -> String {
     }
 }
 
-/// Default `<hh:tabProperties>` with two tab definitions.
+/// Builds `<hh:tabProperties>` XML from the store's tab definitions.
 ///
-/// `tabPrIDRef="0"` in every `<hh:paraPr>` references id=0.
-/// id=1 has `autoTabLeft="1"` for outline numbering auto-indent.
-const TAB_PROPERTIES_XML: &str = concat!(
-    r#"<hh:tabProperties itemCnt="2">"#,
-    r#"<hh:tabPr id="0" autoTabLeft="0" autoTabRight="0"/>"#,
-    r#"<hh:tabPr id="1" autoTabLeft="1" autoTabRight="0"/>"#,
-    r#"</hh:tabProperties>"#,
-);
+/// If no tab definitions exist in the store, emits the 3 defaults
+/// (id=0 no auto tabs, id=1 autoTabLeft, id=2 autoTabRight).
+fn build_tab_properties_xml(store: &HwpxStyleStore) -> String {
+    let tabs: Vec<TabDef> = if store.tab_count() == 0 {
+        TabDef::defaults().to_vec()
+    } else {
+        store.iter_tabs().cloned().collect()
+    };
 
-/// Default `<hh:numberings>` with one numbering (7 outline levels).
+    let count = tabs.len();
+    let mut xml = format!(r#"<hh:tabProperties itemCnt="{count}">"#);
+    for tab in &tabs {
+        let atl = u32::from(tab.auto_tab_left);
+        let atr = u32::from(tab.auto_tab_right);
+        xml.push_str(&format!(
+            r#"<hh:tabPr id="{}" autoTabLeft="{atl}" autoTabRight="{atr}"/>"#,
+            tab.id,
+        ));
+    }
+    xml.push_str("</hh:tabProperties>");
+    xml
+}
+
+/// Builds `<hh:numberings>` XML from the store's numbering definitions.
 ///
-/// Referenced by heading styles for automatic outline numbering.
+/// If no numberings exist in the store, emits the default 10-level outline
+/// numbering (한글 Modern). Uses string injection (not serde) because
+/// `<hh:paraHead>` has mixed XML content (attributes + text body).
+///
 /// `charPrIDRef="4294967295"` (u32::MAX) means "no override / use default".
-const NUMBERINGS_XML: &str = concat!(
-    r#"<hh:numberings itemCnt="1">"#,
-    r#"<hh:numbering id="1" start="0">"#,
-    r#"<hh:paraHead start="1" level="1" align="LEFT" useInstWidth="1" autoIndent="1" widthAdjust="0" textOffsetType="PERCENT" textOffset="50" numFormat="DIGIT" charPrIDRef="4294967295" checkable="0">^1.</hh:paraHead>"#,
-    r#"<hh:paraHead start="1" level="2" align="LEFT" useInstWidth="1" autoIndent="1" widthAdjust="0" textOffsetType="PERCENT" textOffset="50" numFormat="HANGUL_SYLLABLE" charPrIDRef="4294967295" checkable="0">^2.</hh:paraHead>"#,
-    r#"<hh:paraHead start="1" level="3" align="LEFT" useInstWidth="1" autoIndent="1" widthAdjust="0" textOffsetType="PERCENT" textOffset="50" numFormat="DIGIT" charPrIDRef="4294967295" checkable="0">^3)</hh:paraHead>"#,
-    r#"<hh:paraHead start="1" level="4" align="LEFT" useInstWidth="1" autoIndent="1" widthAdjust="0" textOffsetType="PERCENT" textOffset="50" numFormat="HANGUL_SYLLABLE" charPrIDRef="4294967295" checkable="0">^4)</hh:paraHead>"#,
-    r#"<hh:paraHead start="1" level="5" align="LEFT" useInstWidth="1" autoIndent="1" widthAdjust="0" textOffsetType="PERCENT" textOffset="50" numFormat="DIGIT" charPrIDRef="4294967295" checkable="0">(^5)</hh:paraHead>"#,
-    r#"<hh:paraHead start="1" level="6" align="LEFT" useInstWidth="1" autoIndent="1" widthAdjust="0" textOffsetType="PERCENT" textOffset="50" numFormat="HANGUL_SYLLABLE" charPrIDRef="4294967295" checkable="0">(^6)</hh:paraHead>"#,
-    r#"<hh:paraHead start="1" level="7" align="LEFT" useInstWidth="1" autoIndent="1" widthAdjust="0" textOffsetType="PERCENT" textOffset="50" numFormat="CIRCLED_DIGIT" charPrIDRef="4294967295" checkable="1">^7</hh:paraHead>"#,
-    r#"</hh:numbering>"#,
-    r#"</hh:numberings>"#,
-);
+fn build_numberings_xml(store: &HwpxStyleStore) -> String {
+    let numberings: Vec<NumberingDef> = if store.numbering_count() == 0 {
+        vec![NumberingDef::default_outline()]
+    } else {
+        store.iter_numberings().cloned().collect()
+    };
+
+    let count = numberings.len();
+    let mut xml = format!(r#"<hh:numberings itemCnt="{count}">"#);
+    for ndef in &numberings {
+        xml.push_str(&format!(r#"<hh:numbering id="{}" start="{}">"#, ndef.id, ndef.start));
+        for lvl in &ndef.levels {
+            let num_format = number_format_to_hwpx(lvl.num_format);
+            let checkable = u32::from(lvl.checkable);
+            if lvl.text.is_empty() {
+                // Self-closing for levels with empty text (levels 9 and 10)
+                xml.push_str(&format!(
+                    r#"<hh:paraHead start="{}" level="{}" align="LEFT" useInstWidth="1" autoIndent="1" widthAdjust="0" textOffsetType="PERCENT" textOffset="50" numFormat="{num_format}" charPrIDRef="4294967295" checkable="{checkable}"/>"#,
+                    lvl.start, lvl.level,
+                ));
+            } else {
+                xml.push_str(&format!(
+                    r#"<hh:paraHead start="{}" level="{}" align="LEFT" useInstWidth="1" autoIndent="1" widthAdjust="0" textOffsetType="PERCENT" textOffset="50" numFormat="{num_format}" charPrIDRef="4294967295" checkable="{checkable}">{}</hh:paraHead>"#,
+                    lvl.start, lvl.level, lvl.text,
+                ));
+            }
+        }
+        xml.push_str("</hh:numbering>");
+    }
+    xml.push_str("</hh:numberings>");
+    xml
+}
+
+/// Maps a [`NumberFormatType`] to its HWPX string representation.
+fn number_format_to_hwpx(nf: NumberFormatType) -> &'static str {
+    match nf {
+        NumberFormatType::Digit => "DIGIT",
+        NumberFormatType::CircledDigit => "CIRCLED_DIGIT",
+        NumberFormatType::RomanCapital => "ROMAN_CAPITAL",
+        NumberFormatType::RomanSmall => "ROMAN_SMALL",
+        NumberFormatType::LatinCapital => "LATIN_CAPITAL",
+        NumberFormatType::LatinSmall => "LATIN_SMALL",
+        NumberFormatType::HangulSyllable => "HANGUL_SYLLABLE",
+        NumberFormatType::HangulJamo => "HANGUL_JAMO",
+        NumberFormatType::HanjaDigit => "HANJA_DIGIT",
+        NumberFormatType::CircledHangulSyllable => "CIRCLED_HANGUL_SYLLABLE",
+        _ => "DIGIT",
+    }
+}
 
 /// Injects `<hh:borderFills>`, `<hh:tabProperties>`, and `<hh:numberings>`
 /// into the serialized refList XML at the correct positions.
@@ -197,15 +251,17 @@ const NUMBERINGS_XML: &str = concat!(
 /// fontfaces → **borderFills** → charProperties → **tabProperties** → **numberings** → paraProperties → styles
 fn enrich_ref_list(inner_xml: &str, store: &HwpxStyleStore) -> String {
     let border_fills_xml = build_border_fills_xml(store);
+    let tab_properties_xml = build_tab_properties_xml(store);
+    let numberings_xml = build_numberings_xml(store);
 
     // If no refList exists, nothing to enrich
     if !inner_xml.contains("<hh:refList>") {
         return format!(
-            "<hh:refList>{border_fills_xml}{TAB_PROPERTIES_XML}{NUMBERINGS_XML}</hh:refList>{inner_xml}"
+            "<hh:refList>{border_fills_xml}{tab_properties_xml}{numberings_xml}</hh:refList>{inner_xml}"
         );
     }
 
-    let extra_len = border_fills_xml.len() + TAB_PROPERTIES_XML.len() + NUMBERINGS_XML.len();
+    let extra_len = border_fills_xml.len() + tab_properties_xml.len() + numberings_xml.len();
     let mut result = String::with_capacity(inner_xml.len() + extra_len);
     let ref_open = "<hh:refList>";
     let ref_open_pos = inner_xml.find(ref_open).unwrap();
@@ -225,19 +281,19 @@ fn enrich_ref_list(inner_xml: &str, store: &HwpxStyleStore) -> String {
         // Insert tabProperties + numberings before <hh:paraProperties>
         if let Some(pp_pos) = rest2.find("<hh:paraProperties") {
             result.push_str(&rest2[..pp_pos]);
-            result.push_str(TAB_PROPERTIES_XML);
-            result.push_str(NUMBERINGS_XML);
+            result.push_str(&tab_properties_xml);
+            result.push_str(&numberings_xml);
             result.push_str(&rest2[pp_pos..]);
         } else {
             result.push_str(rest2);
-            result.push_str(TAB_PROPERTIES_XML);
-            result.push_str(NUMBERINGS_XML);
+            result.push_str(&tab_properties_xml);
+            result.push_str(&numberings_xml);
         }
     } else {
         // No charProperties — insert all defaults after fontfaces
         result.push_str(&border_fills_xml);
-        result.push_str(TAB_PROPERTIES_XML);
-        result.push_str(NUMBERINGS_XML);
+        result.push_str(&tab_properties_xml);
+        result.push_str(&numberings_xml);
         result.push_str(rest);
     }
 
@@ -279,7 +335,6 @@ fn build_ref_list(store: &HwpxStyleStore) -> HxRefList {
     let char_properties = build_char_properties(store);
     let para_properties = build_para_properties(store);
     let styles = build_styles(store);
-
     HxRefList {
         fontfaces: if fontfaces.groups.is_empty() { None } else { Some(fontfaces) },
         border_fills: None,
@@ -288,6 +343,10 @@ fn build_ref_list(store: &HwpxStyleStore) -> HxRefList {
         } else {
             Some(char_properties)
         },
+        // tabProperties and numberings are injected via enrich_ref_list (string manipulation)
+        // to ensure correct element ordering within <hh:refList>. Serde emits None here.
+        tab_properties: None,
+        numberings: None,
         para_properties: if para_properties.items.is_empty() {
             None
         } else {
@@ -402,9 +461,9 @@ fn build_char_pr(id: u32, cs: &HwpxCharShape) -> HxCharPr {
         height: cs.height.as_i32() as u32,
         text_color: color_to_hex(&cs.text_color),
         shade_color: shade_color_to_str(cs.shade_color.as_ref()),
-        use_font_space: 0,
-        use_kerning: 0,
-        sym_mark: "NONE".into(),
+        use_font_space: u32::from(cs.use_font_space),
+        use_kerning: u32::from(cs.use_kerning),
+        sym_mark: emphasis_type_to_hwpx(cs.emphasis).into(),
         border_fill_id_ref: 2,
 
         font_ref: Some(HxFontRef {
@@ -416,10 +475,10 @@ fn build_char_pr(id: u32, cs: &HwpxCharShape) -> HxCharPr {
             symbol: fr.symbol.get() as u32,
             user: fr.user.get() as u32,
         }),
-        ratio: Some(lang_values_all(100)),
-        spacing: Some(lang_values_all(0)),
-        rel_sz: Some(lang_values_all(100)),
-        offset: Some(lang_values_all(0)),
+        ratio: Some(lang_values_all(cs.ratio)),
+        spacing: Some(lang_values_all(cs.spacing)),
+        rel_sz: Some(lang_values_all(cs.rel_sz)),
+        offset: Some(lang_values_all(cs.char_offset)),
         bold: if cs.bold { Some(HxPresence) } else { None },
         italic: if cs.italic { Some(HxPresence) } else { None },
         underline: Some(HxUnderline {
@@ -444,6 +503,26 @@ fn build_char_pr(id: u32, cs: &HwpxCharShape) -> HxCharPr {
 /// Creates an `HxLangValues` with the same value for all 7 language fields.
 fn lang_values_all(v: i32) -> HxLangValues {
     HxLangValues { hangul: v, latin: v, hanja: v, japanese: v, other: v, symbol: v, user: v }
+}
+
+/// Converts an [`EmphasisType`] to the HWPX `symMark` attribute string.
+fn emphasis_type_to_hwpx(e: EmphasisType) -> &'static str {
+    match e {
+        EmphasisType::None => "NONE",
+        EmphasisType::DotAbove => "DOT_ABOVE",
+        EmphasisType::RingAbove => "RING_ABOVE",
+        EmphasisType::Tilde => "TILDE",
+        EmphasisType::Caron => "CARON",
+        EmphasisType::Side => "SIDE",
+        EmphasisType::Colon => "COLON",
+        EmphasisType::GraveAccent => "GRAVE_ACCENT",
+        EmphasisType::AcuteAccent => "ACUTE_ACCENT",
+        EmphasisType::Circumflex => "CIRCUMFLEX",
+        EmphasisType::Macron => "MACRON",
+        EmphasisType::HookAbove => "HOOK_ABOVE",
+        EmphasisType::DotBelow => "DOT_BELOW",
+        _ => "NONE",
+    }
 }
 
 /// Returns a default `HxTypeInfo` with standard PANOSE-like values.
@@ -488,8 +567,8 @@ fn build_para_properties(store: &HwpxStyleStore) -> HxParaProperties {
 fn build_para_pr(id: u32, ps: &HwpxParaShape) -> HxParaPr {
     HxParaPr {
         id,
-        tab_pr_id_ref: 0,
-        condense: 0,
+        tab_pr_id_ref: ps.tab_pr_id_ref,
+        condense: ps.condense,
         font_line_height: 0,
         snap_to_grid: 1,
         suppress_line_numbers: 0,
@@ -498,7 +577,11 @@ fn build_para_pr(id: u32, ps: &HwpxParaShape) -> HxParaPr {
             horizontal: alignment_to_str(ps.alignment).into(),
             vertical: "BASELINE".into(),
         }),
-        heading: Some(HxHeading { heading_type: "NONE".into(), id_ref: 0, level: 0 }),
+        heading: Some(HxHeading {
+            heading_type: ps.heading_type.to_hwpx_str().into(),
+            id_ref: ps.heading_id_ref,
+            level: ps.heading_level,
+        }),
         break_setting: Some(HxBreakSetting {
             break_latin_word: ps.break_latin_word.to_string(),
             break_non_latin_word: ps.break_non_latin_word.to_string(),
@@ -1110,12 +1193,16 @@ mod tests {
         assert!(xml.contains("Crooked=\"0\""), "slash/backSlash must have Crooked attr");
         assert!(xml.contains("isCounter=\"0\""), "slash/backSlash must have isCounter attr");
 
-        // Gap 4: tabProperties 2nd entry
+        // Gap 4: tabProperties 3 entries (id=0 default, id=1 autoTabLeft, id=2 autoTabRight)
         assert!(
-            xml.contains("<hh:tabProperties itemCnt=\"2\""),
-            "tabProperties must have 2 entries"
+            xml.contains("<hh:tabProperties itemCnt=\"3\""),
+            "tabProperties must have 3 entries"
         );
         assert!(xml.contains("<hh:tabPr id=\"1\" autoTabLeft=\"1\""), "tabPr id=1 must exist");
+        assert!(
+            xml.contains("<hh:tabPr id=\"2\" autoTabLeft=\"0\" autoTabRight=\"1\""),
+            "tabPr id=2 must exist"
+        );
 
         // Gap 5: numberings
         assert!(xml.contains("<hh:numberings itemCnt=\"1\""), "numberings must exist");

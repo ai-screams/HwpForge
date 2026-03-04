@@ -341,6 +341,7 @@ mod tests {
             shadow_type: ShadowType::None,
             emboss_type: EmbossType::None,
             engrave_type: EngraveType::None,
+            ..Default::default()
         });
         store.push_para_shape(HwpxParaShape {
             alignment: Alignment::Left,
@@ -553,6 +554,7 @@ mod tests {
             shadow_type: ShadowType::None,
             emboss_type: EmbossType::None,
             engrave_type: EngraveType::None,
+            ..Default::default()
         });
         store.push_char_shape(HwpxCharShape::default());
         store.push_para_shape(HwpxParaShape {

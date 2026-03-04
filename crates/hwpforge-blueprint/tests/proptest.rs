@@ -5,8 +5,8 @@
 use hwpforge_blueprint::error::BlueprintError;
 use hwpforge_blueprint::style::{CharShape, ParaShape, PartialCharShape, PartialParaShape};
 use hwpforge_foundation::{
-    Alignment, Color, EmbossType, EngraveType, HwpUnit, LineSpacingType, OutlineType, ShadowType,
-    StrikeoutShape, UnderlineType, VerticalPosition,
+    Alignment, Color, EmbossType, EmphasisType, EngraveType, HwpUnit, LineSpacingType, OutlineType,
+    ShadowType, StrikeoutShape, UnderlineType, VerticalPosition,
 };
 use proptest::prelude::*;
 
@@ -251,6 +251,13 @@ proptest! {
             engrave: EngraveType::None,
             vertical_position: VerticalPosition::Normal,
             shade_color: None,
+            emphasis: EmphasisType::None,
+            ratio: 100,
+            spacing: 0,
+            rel_sz: 100,
+            offset: 0,
+            use_kerning: false,
+            use_font_space: false,
         };
         let yaml = serde_yaml::to_string(&original).unwrap();
         let back: CharShape = serde_yaml::from_str(&yaml).unwrap();
@@ -287,6 +294,7 @@ proptest! {
             keep_lines_together: false,
             widow_orphan: true,
             border_fill_id: None,
+            heading_type: hwpforge_foundation::HeadingType::None,
         };
         let yaml = serde_yaml::to_string(&original).unwrap();
         let back: ParaShape = serde_yaml::from_str(&yaml).unwrap();

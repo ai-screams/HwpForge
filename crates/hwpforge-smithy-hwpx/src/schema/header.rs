@@ -30,6 +30,9 @@ pub struct HxHead {
 // ── RefList ───────────────────────────────────────────────────────
 
 /// `<hh:refList>` — container for all shared definitions.
+///
+/// Field order matches HWPX element order:
+/// fontfaces → borderFills → charProperties → tabProperties → numberings → paraProperties → styles
 #[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
 pub struct HxRefList {
     #[serde(
@@ -38,12 +41,33 @@ pub struct HxRefList {
         skip_serializing_if = "Option::is_none"
     )]
     pub fontfaces: Option<HxFontFaces>,
+    /// Border fill definitions.
+    #[serde(
+        rename(serialize = "hh:borderFills", deserialize = "borderFills"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub border_fills: Option<HxBorderFills>,
     #[serde(
         rename(serialize = "hh:charProperties", deserialize = "charProperties"),
         default,
         skip_serializing_if = "Option::is_none"
     )]
     pub char_properties: Option<HxCharProperties>,
+    /// Tab property definitions.
+    #[serde(
+        rename(serialize = "hh:tabProperties", deserialize = "tabProperties"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub tab_properties: Option<HxTabProperties>,
+    /// Numbering definitions.
+    #[serde(
+        rename(serialize = "hh:numberings", deserialize = "numberings"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub numberings: Option<HxNumberings>,
     #[serde(
         rename(serialize = "hh:paraProperties", deserialize = "paraProperties"),
         default,
@@ -56,14 +80,6 @@ pub struct HxRefList {
         skip_serializing_if = "Option::is_none"
     )]
     pub styles: Option<HxStyles>,
-    /// Border fill definitions.
-    #[serde(
-        rename(serialize = "hh:borderFills", deserialize = "borderFills"),
-        default,
-        skip_serializing_if = "Option::is_none"
-    )]
-    pub border_fills: Option<HxBorderFills>,
-    // tabProperties, numberings — skipped (Phase 3)
 }
 
 // ── Fonts ─────────────────────────────────────────────────────────
@@ -820,6 +836,101 @@ pub struct HxImgBrush {
     /// Image fill mode string.
     #[serde(rename = "@mode", default)]
     pub mode: String,
+}
+
+// ── Numberings ────────────────────────────────────────────────────
+
+/// `<hh:numberings itemCnt="1">` — collection of numbering definitions.
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
+pub struct HxNumberings {
+    /// Number of numbering entries.
+    #[serde(rename = "@itemCnt", default)]
+    pub item_cnt: u32,
+    /// Numbering definition list.
+    #[serde(rename(serialize = "hh:numbering", deserialize = "numbering"), default)]
+    pub items: Vec<HxNumbering>,
+}
+
+/// `<hh:numbering id="1" start="0">` — a single numbering definition.
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub struct HxNumbering {
+    /// Numbering ID (1-based).
+    #[serde(rename = "@id")]
+    pub id: u32,
+    /// Starting number offset.
+    #[serde(rename = "@start", default)]
+    pub start: u32,
+    /// Level definitions.
+    #[serde(rename(serialize = "hh:paraHead", deserialize = "paraHead"), default)]
+    pub para_heads: Vec<HxParaHead>,
+}
+
+/// `<hh:paraHead start="1" level="1" numFormat="DIGIT" ...>^1.</hh:paraHead>`.
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub struct HxParaHead {
+    /// Starting number for this level.
+    #[serde(rename = "@start", default)]
+    pub start: u32,
+    /// Outline level (1-10).
+    #[serde(rename = "@level", default)]
+    pub level: u32,
+    /// Alignment (e.g. "LEFT").
+    #[serde(rename = "@align", default)]
+    pub align: String,
+    /// Whether to use the numbering instance width.
+    #[serde(rename = "@useInstWidth", default)]
+    pub use_inst_width: u32,
+    /// Whether to auto-indent.
+    #[serde(rename = "@autoIndent", default)]
+    pub auto_indent: u32,
+    /// Width adjustment.
+    #[serde(rename = "@widthAdjust", default)]
+    pub width_adjust: u32,
+    /// Text offset type (e.g. "PERCENT").
+    #[serde(rename = "@textOffsetType", default)]
+    pub text_offset_type: String,
+    /// Text offset value.
+    #[serde(rename = "@textOffset", default)]
+    pub text_offset: u32,
+    /// Number format string (e.g. "DIGIT", "HANGUL_SYLLABLE").
+    #[serde(rename = "@numFormat", default)]
+    pub num_format: String,
+    /// Character property ID reference (u32::MAX = no override).
+    #[serde(rename = "@charPrIDRef", default)]
+    pub char_pr_id_ref: u32,
+    /// Whether this level is checkable.
+    #[serde(rename = "@checkable", default)]
+    pub checkable: u32,
+    /// Text content of the paraHead (e.g. "^1."). Empty for self-closing levels.
+    #[serde(rename = "$text", default)]
+    pub text: String,
+}
+
+// ── TabProperties ─────────────────────────────────────────────────
+
+/// `<hh:tabProperties itemCnt="3">` — collection of tab property definitions.
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
+pub struct HxTabProperties {
+    /// Number of tab property entries.
+    #[serde(rename = "@itemCnt", default)]
+    pub item_cnt: u32,
+    /// Tab property list.
+    #[serde(rename(serialize = "hh:tabPr", deserialize = "tabPr"), default)]
+    pub items: Vec<HxTabPr>,
+}
+
+/// `<hh:tabPr id="0" autoTabLeft="0" autoTabRight="0"/>`.
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub struct HxTabPr {
+    /// Tab property ID (0-based).
+    #[serde(rename = "@id")]
+    pub id: u32,
+    /// Auto-insert tab at left margin (0/1).
+    #[serde(rename = "@autoTabLeft", default)]
+    pub auto_tab_left: u32,
+    /// Auto-insert tab at right margin (0/1).
+    #[serde(rename = "@autoTabRight", default)]
+    pub auto_tab_right: u32,
 }
 
 // ── Tests ─────────────────────────────────────────────────────────

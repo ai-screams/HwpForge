@@ -198,6 +198,10 @@ pub struct FontMarker;
 pub struct BorderFillMarker;
 /// Phantom marker for style indices.
 pub struct StyleMarker;
+/// Phantom marker for numbering definition indices.
+pub struct NumberingMarker;
+/// Phantom marker for tab property indices.
+pub struct TabMarker;
 
 /// Index into a character shape collection.
 pub type CharShapeIndex = Index<CharShapeMarker>;
@@ -209,6 +213,10 @@ pub type FontIndex = Index<FontMarker>;
 pub type BorderFillIndex = Index<BorderFillMarker>;
 /// Index into a style collection.
 pub type StyleIndex = Index<StyleMarker>;
+/// Index into the numbering definition list.
+pub type NumberingIndex = Index<NumberingMarker>;
+/// Index into the tab properties list.
+pub type TabIndex = Index<TabMarker>;
 
 #[cfg(test)]
 mod tests {
