@@ -220,14 +220,20 @@ fn build_section1() -> Section {
         Paragraph::with_runs(
             vec![
                 Run::text("· DotAbove 강조: ", CharShapeIndex::new(CS_NORMAL)),
-                Run::text("강조점이 글자 위에 점으로 표시됩니다", CharShapeIndex::new(CS_EMPHASIS_DOT)),
+                Run::text(
+                    "강조점이 글자 위에 점으로 표시됩니다",
+                    CharShapeIndex::new(CS_EMPHASIS_DOT),
+                ),
             ],
             ParaShapeIndex::new(PS_BODY),
         ),
         Paragraph::with_runs(
             vec![
                 Run::text("· RingAbove 강조: ", CharShapeIndex::new(CS_NORMAL)),
-                Run::text("강조점이 글자 위에 동그라미로 표시됩니다", CharShapeIndex::new(CS_EMPHASIS_RING)),
+                Run::text(
+                    "강조점이 글자 위에 동그라미로 표시됩니다",
+                    CharShapeIndex::new(CS_EMPHASIS_RING),
+                ),
             ],
             ParaShapeIndex::new(PS_BODY),
         ),
@@ -248,7 +254,10 @@ fn build_section1() -> Section {
         Paragraph::with_runs(
             vec![
                 Run::text("· Colon 강조: ", CharShapeIndex::new(CS_NORMAL)),
-                Run::text("강조점이 콜론 형태로 표시됩니다", CharShapeIndex::new(CS_EMPHASIS_COLON)),
+                Run::text(
+                    "강조점이 콜론 형태로 표시됩니다",
+                    CharShapeIndex::new(CS_EMPHASIS_COLON),
+                ),
             ],
             ParaShapeIndex::new(PS_BODY),
         ),
@@ -265,15 +274,24 @@ fn build_section1() -> Section {
         ),
         Paragraph::with_runs(
             vec![
-                Run::text("· 상대크기(rel_sz)=80%, 오프셋(offset)=100: ", CharShapeIndex::new(CS_NORMAL)),
+                Run::text(
+                    "· 상대크기(rel_sz)=80%, 오프셋(offset)=100: ",
+                    CharShapeIndex::new(CS_NORMAL),
+                ),
                 Run::text("이 텍스트는 작고 위로 올라갑니다", CharShapeIndex::new(CS_SMALL_REL)),
             ],
             ParaShapeIndex::new(PS_BODY),
         ),
         Paragraph::with_runs(
             vec![
-                Run::text("· 커닝(kerning) + 글꼴간격(font_space): ", CharShapeIndex::new(CS_NORMAL)),
-                Run::text("AV WAve Typography 커닝이 적용된 텍스트", CharShapeIndex::new(CS_KERNING)),
+                Run::text(
+                    "· 커닝(kerning) + 글꼴간격(font_space): ",
+                    CharShapeIndex::new(CS_NORMAL),
+                ),
+                Run::text(
+                    "AV WAve Typography 커닝이 적용된 텍스트",
+                    CharShapeIndex::new(CS_KERNING),
+                ),
             ],
             ParaShapeIndex::new(PS_BODY),
         ),
@@ -304,15 +322,27 @@ fn build_section1() -> Section {
 fn build_section2() -> Section {
     let paragraphs = vec![
         // ── Title ──
-        text_para("Wave 8: 개요(Outline), 번호매기기(Numbering), 탭(Tab) 테스트", CS_TITLE, PS_CENTER),
+        text_para(
+            "Wave 8: 개요(Outline), 번호매기기(Numbering), 탭(Tab) 테스트",
+            CS_TITLE,
+            PS_CENTER,
+        ),
         text_para("", CS_NORMAL, PS_BODY),
         // ── Outline headings with styleIDRef for 개요 1-3 ──
         // 개요 1 = style ID 2 (Modern), 개요 2 = style ID 3, 개요 3 = style ID 4
         text_para("[1] 개요 번호 (HeadingType::Outline)", CS_RED_BOLD, PS_BODY),
         styled_para("개요 수준 1: 첫 번째 대제목입니다", CS_NORMAL, PS_OUTLINE_LV1, 2),
-        text_para("개요 수준 1 아래의 본문 내용입니다. 이 문단은 들여쓰기 없이 표시됩니다.", CS_NORMAL, PS_BODY),
+        text_para(
+            "개요 수준 1 아래의 본문 내용입니다. 이 문단은 들여쓰기 없이 표시됩니다.",
+            CS_NORMAL,
+            PS_BODY,
+        ),
         styled_para("개요 수준 2: 소제목 가", CS_NORMAL, PS_OUTLINE_LV2, 3),
-        text_para("개요 수준 2 아래의 본문 내용입니다. 약간의 들여쓰기가 적용됩니다.", CS_NORMAL, PS_BODY),
+        text_para(
+            "개요 수준 2 아래의 본문 내용입니다. 약간의 들여쓰기가 적용됩니다.",
+            CS_NORMAL,
+            PS_BODY,
+        ),
         styled_para("개요 수준 3: 항목 1)", CS_NORMAL, PS_OUTLINE_LV3, 4),
         text_para("개요 수준 3 아래의 세부 내용입니다.", CS_NORMAL, PS_BODY),
         styled_para("개요 수준 3: 항목 2)", CS_NORMAL, PS_OUTLINE_LV3, 4),
@@ -325,8 +355,16 @@ fn build_section2() -> Section {
         text_para("", CS_NORMAL, PS_BODY),
         // ── Tab properties ──
         text_para("[2] 탭 속성 (TabDef) 테스트", CS_RED_BOLD, PS_BODY),
-        text_para("tabPrIDRef=1 (자동 왼쪽 탭): 이 문단은 auto left tab이 적용됩니다.", CS_NORMAL, PS_TAB_LEFT),
-        text_para("tabPrIDRef=2 (자동 오른쪽 탭): 이 문단은 auto right tab이 적용됩니다.", CS_NORMAL, PS_TAB_RIGHT),
+        text_para(
+            "tabPrIDRef=1 (자동 왼쪽 탭): 이 문단은 auto left tab이 적용됩니다.",
+            CS_NORMAL,
+            PS_TAB_LEFT,
+        ),
+        text_para(
+            "tabPrIDRef=2 (자동 오른쪽 탭): 이 문단은 auto right tab이 적용됩니다.",
+            CS_NORMAL,
+            PS_TAB_RIGHT,
+        ),
         text_para("tabPrIDRef=0 (기본값): 이 문단은 기본 탭 설정입니다.", CS_NORMAL, PS_BODY),
     ];
 
@@ -459,10 +497,7 @@ fn build_section3() -> Section {
                     CharShapeIndex::new(CS_NORMAL),
                 ),
                 Run::text(" 파일을 생성하는 ", CharShapeIndex::new(CS_NORMAL)),
-                Run::control(
-                    Control::dutmal("Rust", "러스트"),
-                    CharShapeIndex::new(CS_NORMAL),
-                ),
+                Run::control(Control::dutmal("Rust", "러스트"), CharShapeIndex::new(CS_NORMAL)),
                 Run::text(" 라이브러리입니다.", CharShapeIndex::new(CS_NORMAL)),
             ],
             ParaShapeIndex::new(PS_BODY),
@@ -513,10 +548,7 @@ fn build_section3() -> Section {
         Paragraph::with_runs(
             vec![
                 Run::text("혼합: ", CharShapeIndex::new(CS_NORMAL)),
-                Run::control(
-                    Control::dutmal("제1조", "Article 1"),
-                    CharShapeIndex::new(CS_NORMAL),
-                ),
+                Run::control(Control::dutmal("제1조", "Article 1"), CharShapeIndex::new(CS_NORMAL)),
                 Run::text(" ", CharShapeIndex::new(CS_NORMAL)),
                 Run::control(Control::compose("甲"), CharShapeIndex::new(CS_NORMAL)),
                 Run::text("은 ", CharShapeIndex::new(CS_NORMAL)),
