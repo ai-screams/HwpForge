@@ -166,6 +166,22 @@ pub struct HxRun {
         skip_serializing_if = "Option::is_none"
     )]
     pub title_mark: Option<HxTitleMark>,
+
+    /// All `<hp:dutmal>` elements in this run (Korean annotation text).
+    #[serde(
+        rename(serialize = "hp:dutmal", deserialize = "dutmal"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub dutmals: Vec<HxDutmal>,
+
+    /// All `<hp:compose>` elements in this run (Korean overlaid characters).
+    #[serde(
+        rename(serialize = "hp:compose", deserialize = "compose"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub composes: Vec<HxCompose>,
 }
 
 // ── Text ──────────────────────────────────────────────────────────
@@ -188,6 +204,71 @@ pub struct HxTitleMark {
     /// Whether to exclude from TOC (`false` = include, `true` = exclude).
     #[serde(rename = "@ignore")]
     pub ignore: bool,
+}
+
+// ── Dutmal ────────────────────────────────────────────────────────
+
+/// `<hp:dutmal posType="TOP" szRatio="0" option="0" styleIDRef="0" align="CENTER">`.
+///
+/// Represents a Korean 덧말 (annotation text above/below main text).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxDutmal {
+    /// Position of annotation relative to main text (e.g. `"TOP"`, `"BOTTOM"`).
+    #[serde(rename = "@posType", default)]
+    pub pos_type: String,
+    /// Size ratio of annotation text (0 = auto).
+    #[serde(rename = "@szRatio", default)]
+    pub sz_ratio: u32,
+    /// Additional option flags (typically 0).
+    #[serde(rename = "@option", default)]
+    pub option: u32,
+    /// Style ID reference (0 = default).
+    #[serde(rename = "@styleIDRef", default)]
+    pub style_id_ref: u32,
+    /// Alignment of annotation text (e.g. `"CENTER"`, `"LEFT"`, `"RIGHT"`).
+    #[serde(rename = "@align", default)]
+    pub align: String,
+    /// The main text that receives the annotation.
+    #[serde(rename(serialize = "hp:mainText", deserialize = "mainText"), default)]
+    pub main_text: String,
+    /// The annotation text displayed above/below.
+    #[serde(rename(serialize = "hp:subText", deserialize = "subText"), default)]
+    pub sub_text: String,
+}
+
+// ── Compose ───────────────────────────────────────────────────────
+
+/// `<hp:compose circleType="..." charSz="-3" composeType="SPREAD" ...>`.
+///
+/// Represents a Korean 글자겹침 (overlaid/combined characters).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxCompose {
+    /// Circle/frame type (e.g. `"SHAPE_REVERSAL_TIRANGLE"` — spec typo preserved).
+    #[serde(rename = "@circleType", default)]
+    pub circle_type: String,
+    /// Character size adjustment (typically -3).
+    #[serde(rename = "@charSz", default)]
+    pub char_sz: i32,
+    /// Composition layout type (e.g. `"SPREAD"`).
+    #[serde(rename = "@composeType", default)]
+    pub compose_type: String,
+    /// Number of character property references (always 10).
+    #[serde(rename = "@charPrCnt", default)]
+    pub char_pr_cnt: u32,
+    /// The combined text content.
+    #[serde(rename = "@composeText", default)]
+    pub compose_text: String,
+    /// 10 charPr references (u32::MAX = no override sentinel).
+    #[serde(rename(serialize = "hp:charPr", deserialize = "charPr"), default)]
+    pub char_prs: Vec<HxComposeCharPr>,
+}
+
+/// `<hp:charPr prIDRef="7"/>` inside compose.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxComposeCharPr {
+    /// Property ID reference (u32::MAX = no override).
+    #[serde(rename = "@prIDRef")]
+    pub pr_id_ref: u32,
 }
 
 // ── Control wrapper ──────────────────────────────────────────────

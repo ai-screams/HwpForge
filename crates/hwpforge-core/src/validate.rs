@@ -236,7 +236,10 @@ fn validate_run_content(
                     });
                 }
             }
-            Control::Hyperlink { .. } | Control::Unknown { .. } => {
+            Control::Hyperlink { .. }
+            | Control::Unknown { .. }
+            | Control::Dutmal { .. }
+            | Control::Compose { .. } => {
                 // No structural validation needed for these variants
             }
         },
