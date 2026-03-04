@@ -332,7 +332,7 @@ fn main() {
     for (i, p) in orig_paragraphs.iter().enumerate() {
         if let Some(sid) = p.style_id {
             let text = p.text_content();
-            let preview = if text.len() > 40 { &text[..40] } else { &text };
+            let preview: String = text.chars().take(20).collect();
             println!("      p[{i}] styleIDRef={} \"{preview}...\"", sid.get());
         }
     }
