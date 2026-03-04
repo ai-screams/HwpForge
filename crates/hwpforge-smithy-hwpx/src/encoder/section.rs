@@ -197,7 +197,7 @@ fn build_paragraph(
     Ok(HxParagraph {
         id: format!("{para_idx}"),
         para_pr_id_ref: para.para_shape_id.get() as u32,
-        style_id_ref: 0,
+        style_id_ref: para.style_id.map_or(0, |s| s.get() as u32),
         page_break: 0,
         column_break: u32::from(para.column_break),
         merged: 0,
@@ -1612,8 +1612,9 @@ fn build_header_xml(hf: &hwpforge_core::section::HeaderFooter, tag_name: &str) -
     for (idx, para) in hf.paragraphs.iter().enumerate() {
         write!(
             xml,
-            r#"<hp:p id="{idx}" paraPrIDRef="{}" styleIDRef="0" pageBreak="0" columnBreak="0" merged="0">"#,
+            r#"<hp:p id="{idx}" paraPrIDRef="{}" styleIDRef="{}" pageBreak="0" columnBreak="0" merged="0">"#,
             para.para_shape_id.get(),
+            para.style_id.map_or(0, |s| s.get()),
         )
         .expect("write to String is infallible");
 
@@ -2530,5 +2531,58 @@ mod tests {
         assert!(xml.contains("<hp:t>Link 2</hp:t>"));
         // No leftover markers
         assert!(!xml.contains("__HWPFORGE_HYPERLINK_"));
+    }
+
+    // ── style_id encoding tests ──────────────────────────────────
+
+    #[test]
+    fn style_id_none_encodes_as_zero() {
+        let section = simple_section("body text");
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
+        assert!(xml.contains(r#"styleIDRef="0""#), "None style_id should encode as styleIDRef=0");
+    }
+
+    #[test]
+    fn style_id_some_encodes_correctly() {
+        use hwpforge_foundation::StyleIndex;
+        let para = Paragraph::with_runs(
+            vec![Run::text("heading", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )
+        .with_style(StyleIndex::new(2));
+        let section = Section::with_paragraphs(vec![para], PageSettings::a4());
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
+        assert!(
+            xml.contains(r#"styleIDRef="2""#),
+            "style_id=Some(2) should encode as styleIDRef=2"
+        );
+    }
+
+    #[test]
+    fn decoder_nonzero_style_id_ref_roundtrips() {
+        use hwpforge_foundation::StyleIndex;
+        let para = Paragraph::with_runs(
+            vec![Run::text("outline", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )
+        .with_style(StyleIndex::new(3));
+        let section = Section::with_paragraphs(vec![para], PageSettings::a4());
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
+
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
+        assert_eq!(result.paragraphs[0].style_id, Some(StyleIndex::new(3)));
+    }
+
+    #[test]
+    fn decoder_zero_style_id_ref_gives_none() {
+        let section = simple_section("normal");
+        let xml = encode_section(&section, 0, 0).unwrap().xml;
+
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
+        assert_eq!(result.paragraphs[0].style_id, None);
     }
 }

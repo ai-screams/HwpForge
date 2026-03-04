@@ -251,16 +251,17 @@ fn pipeline_style_store_counts_match_registry() {
         "Font counts should match (7 lang groups)"
     );
 
+    // 7 default charPr groups + user charShapes; 20 default paraPr groups + user paraShapes
     assert_eq!(
         store.char_shape_count(),
-        md_doc.style_registry.char_shape_count(),
-        "Char shape counts should match"
+        7 + md_doc.style_registry.char_shape_count(),
+        "Char shape counts should match (7 defaults + user)"
     );
 
     assert_eq!(
         store.para_shape_count(),
-        md_doc.style_registry.para_shape_count(),
-        "Para shape counts should match"
+        20 + md_doc.style_registry.para_shape_count(),
+        "Para shape counts should match (20 defaults + user)"
     );
 }
 

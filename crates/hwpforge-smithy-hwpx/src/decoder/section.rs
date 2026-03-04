@@ -16,7 +16,7 @@ use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
     ApplyPageType, CharShapeIndex, Color, HwpUnit, NumberFormatType, PageNumberPosition,
-    ParaShapeIndex,
+    ParaShapeIndex, StyleIndex,
 };
 use quick_xml::de::from_str;
 
@@ -180,8 +180,16 @@ fn convert_paragraph(
     // being the true outline depth from the original document.
     let heading_level = if has_title_mark { Some(1) } else { None };
 
-    let paragraph =
-        Paragraph { runs, para_shape_id, column_break: hx.column_break != 0, heading_level };
+    let style_id =
+        if hx.style_id_ref == 0 { None } else { Some(StyleIndex::new(hx.style_id_ref as usize)) };
+
+    let paragraph = Paragraph {
+        runs,
+        para_shape_id,
+        column_break: hx.column_break != 0,
+        heading_level,
+        style_id,
+    };
     Ok((paragraph, page_settings))
 }
 
