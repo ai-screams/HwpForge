@@ -11,7 +11,7 @@ use hwpforge_blueprint::template::Template;
 use hwpforge_core::{
     Control, Document, Image, Paragraph, Run, RunContent, Section, Table, TableCell, TableRow,
 };
-use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex, StyleIndex};
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use crate::error::{MdError, MdResult};
@@ -213,6 +213,12 @@ impl ParagraphBuilder {
         }
         let mut para = Paragraph::with_runs(self.runs, self.style.para_shape_id);
         para.heading_level = self.heading_level;
+        if let Some(level) = self.heading_level {
+            if (1..=7).contains(&level) {
+                // 개요 N is at style index N+1 (바탕글=0, 본문=1, 개요1=2, ...)
+                para.style_id = Some(StyleIndex::new((level as usize) + 1));
+            }
+        }
         para
     }
 }
@@ -1201,5 +1207,39 @@ mod tests {
             .join("simple_body.md");
         let result = MdDecoder::decode_file_with_default(path).unwrap();
         assert_eq!(result.document.metadata().title.as_deref(), Some("Simple Body Test"));
+    }
+
+    #[test]
+    fn h1_heading_sets_style_id_to_2() {
+        use hwpforge_foundation::StyleIndex;
+        let template = default_template();
+        let result = MdDecoder::decode("# 제목", &template).unwrap();
+        let section = &result.document.sections()[0];
+        assert_eq!(section.paragraphs[0].style_id, Some(StyleIndex::new(2)));
+    }
+
+    #[test]
+    fn all_heading_levels_map_to_style_id() {
+        use hwpforge_foundation::StyleIndex;
+        let template = default_template();
+        for level in 1u8..=6 {
+            let md = format!("{} 제목{level}", "#".repeat(level as usize));
+            let result = MdDecoder::decode(&md, &template).unwrap();
+            let section = &result.document.sections()[0];
+            assert_eq!(
+                section.paragraphs[0].style_id,
+                Some(StyleIndex::new((level as usize) + 1)),
+                "H{level} should map to style_id {}",
+                (level as usize) + 1
+            );
+        }
+    }
+
+    #[test]
+    fn body_paragraph_has_no_style_id() {
+        let template = default_template();
+        let result = MdDecoder::decode("본문입니다.", &template).unwrap();
+        let section = &result.document.sections()[0];
+        assert_eq!(section.paragraphs[0].style_id, None);
     }
 }

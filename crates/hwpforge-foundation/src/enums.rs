@@ -47,6 +47,10 @@ pub enum Alignment {
     Right = 2,
     /// Justified (both edges flush).
     Justify = 3,
+    /// Distribute spacing evenly between characters.
+    Distribute = 4,
+    /// Distribute spacing evenly between characters, last line flush.
+    DistributeFlush = 5,
 }
 
 impl fmt::Display for Alignment {
@@ -56,6 +60,8 @@ impl fmt::Display for Alignment {
             Self::Center => f.write_str("Center"),
             Self::Right => f.write_str("Right"),
             Self::Justify => f.write_str("Justify"),
+            Self::Distribute => f.write_str("Distribute"),
+            Self::DistributeFlush => f.write_str("DistributeFlush"),
         }
     }
 }
@@ -69,10 +75,13 @@ impl std::str::FromStr for Alignment {
             "Center" | "center" => Ok(Self::Center),
             "Right" | "right" => Ok(Self::Right),
             "Justify" | "justify" => Ok(Self::Justify),
+            "Distribute" | "distribute" => Ok(Self::Distribute),
+            "DistributeFlush" | "distributeflush" | "distribute_flush" => Ok(Self::DistributeFlush),
             _ => Err(FoundationError::ParseError {
                 type_name: "Alignment".to_string(),
                 value: s.to_string(),
-                valid_values: "Left, Center, Right, Justify".to_string(),
+                valid_values: "Left, Center, Right, Justify, Distribute, DistributeFlush"
+                    .to_string(),
             }),
         }
     }
@@ -87,10 +96,14 @@ impl TryFrom<u8> for Alignment {
             1 => Ok(Self::Center),
             2 => Ok(Self::Right),
             3 => Ok(Self::Justify),
+            4 => Ok(Self::Distribute),
+            5 => Ok(Self::DistributeFlush),
             _ => Err(FoundationError::ParseError {
                 type_name: "Alignment".to_string(),
                 value: value.to_string(),
-                valid_values: "0 (Left), 1 (Center), 2 (Right), 3 (Justify)".to_string(),
+                valid_values:
+                    "0 (Left), 1 (Center), 2 (Right), 3 (Justify), 4 (Distribute), 5 (DistributeFlush)"
+                        .to_string(),
             }),
         }
     }
@@ -1591,6 +1604,8 @@ mod tests {
         assert_eq!(Alignment::Center.to_string(), "Center");
         assert_eq!(Alignment::Right.to_string(), "Right");
         assert_eq!(Alignment::Justify.to_string(), "Justify");
+        assert_eq!(Alignment::Distribute.to_string(), "Distribute");
+        assert_eq!(Alignment::DistributeFlush.to_string(), "DistributeFlush");
     }
 
     #[test]
@@ -1599,12 +1614,17 @@ mod tests {
         assert_eq!(Alignment::from_str("Center").unwrap(), Alignment::Center);
         assert_eq!(Alignment::from_str("Right").unwrap(), Alignment::Right);
         assert_eq!(Alignment::from_str("Justify").unwrap(), Alignment::Justify);
+        assert_eq!(Alignment::from_str("Distribute").unwrap(), Alignment::Distribute);
+        assert_eq!(Alignment::from_str("DistributeFlush").unwrap(), Alignment::DistributeFlush);
     }
 
     #[test]
     fn alignment_from_str_lower_case() {
         assert_eq!(Alignment::from_str("left").unwrap(), Alignment::Left);
         assert_eq!(Alignment::from_str("center").unwrap(), Alignment::Center);
+        assert_eq!(Alignment::from_str("distribute").unwrap(), Alignment::Distribute);
+        assert_eq!(Alignment::from_str("distributeflush").unwrap(), Alignment::DistributeFlush);
+        assert_eq!(Alignment::from_str("distribute_flush").unwrap(), Alignment::DistributeFlush);
     }
 
     #[test]
@@ -1625,7 +1645,9 @@ mod tests {
         assert_eq!(Alignment::try_from(1u8).unwrap(), Alignment::Center);
         assert_eq!(Alignment::try_from(2u8).unwrap(), Alignment::Right);
         assert_eq!(Alignment::try_from(3u8).unwrap(), Alignment::Justify);
-        assert!(Alignment::try_from(4u8).is_err());
+        assert_eq!(Alignment::try_from(4u8).unwrap(), Alignment::Distribute);
+        assert_eq!(Alignment::try_from(5u8).unwrap(), Alignment::DistributeFlush);
+        assert!(Alignment::try_from(6u8).is_err());
         assert!(Alignment::try_from(255u8).is_err());
     }
 
@@ -1635,11 +1657,20 @@ mod tests {
         assert_eq!(Alignment::Center as u8, 1);
         assert_eq!(Alignment::Right as u8, 2);
         assert_eq!(Alignment::Justify as u8, 3);
+        assert_eq!(Alignment::Distribute as u8, 4);
+        assert_eq!(Alignment::DistributeFlush as u8, 5);
     }
 
     #[test]
     fn alignment_serde_roundtrip() {
-        for variant in &[Alignment::Left, Alignment::Center, Alignment::Right, Alignment::Justify] {
+        for variant in &[
+            Alignment::Left,
+            Alignment::Center,
+            Alignment::Right,
+            Alignment::Justify,
+            Alignment::Distribute,
+            Alignment::DistributeFlush,
+        ] {
             let json = serde_json::to_string(variant).unwrap();
             let back: Alignment = serde_json::from_str(&json).unwrap();
             assert_eq!(&back, variant);
@@ -1648,7 +1679,14 @@ mod tests {
 
     #[test]
     fn alignment_str_roundtrip() {
-        for variant in &[Alignment::Left, Alignment::Center, Alignment::Right, Alignment::Justify] {
+        for variant in &[
+            Alignment::Left,
+            Alignment::Center,
+            Alignment::Right,
+            Alignment::Justify,
+            Alignment::Distribute,
+            Alignment::DistributeFlush,
+        ] {
             let s = variant.to_string();
             let back = Alignment::from_str(&s).unwrap();
             assert_eq!(&back, variant);

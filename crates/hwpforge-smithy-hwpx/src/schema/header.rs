@@ -56,7 +56,14 @@ pub struct HxRefList {
         skip_serializing_if = "Option::is_none"
     )]
     pub styles: Option<HxStyles>,
-    // borderFills, tabProperties, numberings — skipped (Phase 3)
+    /// Border fill definitions.
+    #[serde(
+        rename(serialize = "hh:borderFills", deserialize = "borderFills"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub border_fills: Option<HxBorderFills>,
+    // tabProperties, numberings — skipped (Phase 3)
 }
 
 // ── Fonts ─────────────────────────────────────────────────────────
@@ -647,6 +654,172 @@ pub struct HxStyle {
     /// Whether the style is locked for form editing.
     #[serde(rename = "@lockForm", default)]
     pub lock_form: u32,
+}
+
+// ── BorderFill schema ─────────────────────────────────────────────
+
+/// `<hh:borderFills itemCnt="N">` — collection of border/fill definitions.
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct HxBorderFills {
+    /// Number of border fill entries.
+    #[serde(rename = "@itemCnt")]
+    pub item_cnt: u32,
+    /// Border fill entries.
+    #[serde(
+        rename(serialize = "hh:borderFill", deserialize = "borderFill"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub items: Vec<HxBorderFill>,
+}
+
+/// `<hh:borderFill>` — border and fill definition.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxBorderFill {
+    /// Border fill ID (1-based).
+    #[serde(rename = "@id")]
+    pub id: u32,
+    /// 3D border effect flag.
+    #[serde(rename = "@threeD", default)]
+    pub three_d: u32,
+    /// Shadow effect flag.
+    #[serde(rename = "@shadow", default)]
+    pub shadow: u32,
+    /// Center line type string.
+    #[serde(rename = "@centerLine", default)]
+    pub center_line: String,
+    /// Whether to break cell separator line.
+    #[serde(rename = "@breakCellSeparateLine", default)]
+    pub break_cell_separate_line: u32,
+
+    /// Slash diagonal border.
+    #[serde(rename(serialize = "hh:slash", deserialize = "slash"))]
+    pub slash: HxDiagonalBorder,
+    /// Back-slash diagonal border.
+    #[serde(rename(serialize = "hh:backSlash", deserialize = "backSlash"))]
+    pub back_slash: HxDiagonalBorder,
+    /// Left border line.
+    #[serde(rename(serialize = "hh:leftBorder", deserialize = "leftBorder"))]
+    pub left_border: HxBorderLine,
+    /// Right border line.
+    #[serde(rename(serialize = "hh:rightBorder", deserialize = "rightBorder"))]
+    pub right_border: HxBorderLine,
+    /// Top border line.
+    #[serde(rename(serialize = "hh:topBorder", deserialize = "topBorder"))]
+    pub top_border: HxBorderLine,
+    /// Bottom border line.
+    #[serde(rename(serialize = "hh:bottomBorder", deserialize = "bottomBorder"))]
+    pub bottom_border: HxBorderLine,
+    /// Diagonal border line.
+    #[serde(rename(serialize = "hh:diagonal", deserialize = "diagonal"))]
+    pub diagonal: HxBorderLine,
+
+    /// Fill brush (None = no fill / transparent).
+    #[serde(
+        rename(serialize = "hc:fillBrush", deserialize = "fillBrush"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub fill_brush: Option<HxFillBrush>,
+}
+
+/// `<hh:slash>` or `<hh:backSlash>` — diagonal border line.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxDiagonalBorder {
+    /// Border type string (e.g. `"NONE"`, `"SOLID"`).
+    #[serde(rename = "@type", default)]
+    pub border_type: String,
+    /// Crooked flag.
+    #[serde(rename = "@Crooked", default)]
+    pub crooked: String,
+    /// Counter direction flag.
+    #[serde(rename = "@isCounter", default)]
+    pub is_counter: String,
+}
+
+/// `<hh:leftBorder>` etc. — a single border line definition.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxBorderLine {
+    /// Line type string (e.g. `"NONE"`, `"SOLID"`).
+    #[serde(rename = "@type", default)]
+    pub border_type: String,
+    /// Width string (e.g. `"0.1 mm"`).
+    #[serde(rename = "@width", default)]
+    pub width: String,
+    /// Color string (e.g. `"#000000"`).
+    #[serde(rename = "@color", default)]
+    pub color: String,
+}
+
+/// `<hc:fillBrush>` — fill brush definition.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxFillBrush {
+    /// Solid or hatch fill.
+    #[serde(
+        rename(serialize = "hc:winBrush", deserialize = "winBrush"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub win_brush: Option<HxWinBrush>,
+    /// Gradient fill (future use).
+    #[serde(
+        rename(serialize = "hc:gradation", deserialize = "gradation"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub gradation: Option<HxGradation>,
+    /// Image fill (future use).
+    #[serde(
+        rename(serialize = "hc:imgBrush", deserialize = "imgBrush"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub img_brush: Option<HxImgBrush>,
+}
+
+/// `<hc:winBrush>` — solid or hatch fill.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxWinBrush {
+    /// Face color (e.g. `"none"`, `"#RRGGBB"`).
+    #[serde(rename = "@faceColor", default)]
+    pub face_color: String,
+    /// Hatch pattern color.
+    #[serde(rename = "@hatchColor", default)]
+    pub hatch_color: String,
+    /// Alpha transparency value.
+    #[serde(rename = "@alpha", default)]
+    pub alpha: String,
+}
+
+/// `<hc:gradation>` — gradient fill (placeholder, attributes parsed but not used).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxGradation {
+    /// Gradient type string.
+    #[serde(rename = "@type", default)]
+    pub gradation_type: String,
+    /// Gradient angle in degrees.
+    #[serde(rename = "@angle", default)]
+    pub angle: String,
+    /// Gradient center X.
+    #[serde(rename = "@centerX", default)]
+    pub center_x: String,
+    /// Gradient center Y.
+    #[serde(rename = "@centerY", default)]
+    pub center_y: String,
+    /// Number of gradient steps.
+    #[serde(rename = "@step", default)]
+    pub step: String,
+    /// Number of colors.
+    #[serde(rename = "@colorNum", default)]
+    pub color_num: String,
+}
+
+/// `<hc:imgBrush>` — image pattern fill (placeholder).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxImgBrush {
+    /// Image fill mode string.
+    #[serde(rename = "@mode", default)]
+    pub mode: String,
 }
 
 // ── Tests ─────────────────────────────────────────────────────────

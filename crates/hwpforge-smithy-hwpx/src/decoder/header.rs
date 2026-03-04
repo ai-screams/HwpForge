@@ -10,10 +10,10 @@ use hwpforge_foundation::{
 use quick_xml::de::from_str;
 
 use crate::error::{HwpxError, HwpxResult};
-use crate::schema::header::{HxCharPr, HxHead, HxParaPr, HxStyle};
+use crate::schema::header::{HxBorderFill, HxCharPr, HxHead, HxParaPr, HxStyle};
 use crate::style_store::{
-    parse_alignment, parse_hex_color, HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape,
-    HwpxStyle, HwpxStyleStore,
+    parse_alignment, parse_hex_color, HwpxBorderFill, HwpxBorderLine, HwpxCharShape, HwpxFill,
+    HwpxFont, HwpxFontRef, HwpxParaShape, HwpxStyle, HwpxStyleStore,
 };
 
 /// Parses a `header.xml` string into an [`HwpxStyleStore`].
@@ -50,6 +50,13 @@ pub fn parse_header(xml: &str) -> HwpxResult<HwpxStyleStore> {
                         lang: group.lang.clone(),
                     });
                 }
+            }
+        }
+
+        // ── Border Fills ─────────────────────────────────────
+        if let Some(border_fills) = &ref_list.border_fills {
+            for bf in &border_fills.items {
+                store.push_border_fill(convert_border_fill(bf));
             }
         }
 
@@ -340,6 +347,41 @@ fn extract_line_spacing(pp: &HxParaPr) -> (i32, hwpforge_foundation::LineSpacing
     // Saturate to i32::MAX if value exceeds range (extremely rare in real HWPX files)
     let value = ls.value.min(i32::MAX as u32) as i32;
     (value, spacing_type)
+}
+
+/// Converts an `HxBorderFill` XML type into an `HwpxBorderFill`.
+fn convert_border_fill(hx: &HxBorderFill) -> HwpxBorderFill {
+    let fill = hx.fill_brush.as_ref().and_then(|fb| {
+        fb.win_brush.as_ref().map(|wb| HwpxFill::WinBrush {
+            face_color: wb.face_color.clone(),
+            hatch_color: wb.hatch_color.clone(),
+            alpha: wb.alpha.clone(),
+        })
+    });
+
+    HwpxBorderFill {
+        id: hx.id,
+        three_d: hx.three_d != 0,
+        shadow: hx.shadow != 0,
+        center_line: hx.center_line.clone(),
+        left: convert_border_line(&hx.left_border),
+        right: convert_border_line(&hx.right_border),
+        top: convert_border_line(&hx.top_border),
+        bottom: convert_border_line(&hx.bottom_border),
+        diagonal: convert_border_line(&hx.diagonal),
+        slash_type: hx.slash.border_type.clone(),
+        back_slash_type: hx.back_slash.border_type.clone(),
+        fill,
+    }
+}
+
+/// Converts an `HxBorderLine` XML type into an `HwpxBorderLine`.
+fn convert_border_line(hx: &crate::schema::header::HxBorderLine) -> HwpxBorderLine {
+    HwpxBorderLine {
+        line_type: hx.border_type.clone(),
+        width: hx.width.clone(),
+        color: hx.color.clone(),
+    }
 }
 
 // (parse_optional_hex_color is defined above with the HWPX parsing helpers)

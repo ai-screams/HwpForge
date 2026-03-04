@@ -17,7 +17,10 @@ use crate::schema::header::{
     HxStyle, HxStyles, HxSwitch, HxSwitchCase, HxSwitchDefault, HxTypeInfo, HxUnderline,
     HxUnitValue,
 };
-use crate::style_store::{HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyle, HwpxStyleStore};
+use crate::style_store::{
+    HwpxBorderFill, HwpxBorderLine, HwpxCharShape, HwpxFill, HwpxFont, HwpxParaShape, HwpxStyle,
+    HwpxStyleStore,
+};
 
 // ── Public entry point ──────────────────────────────────────────
 
@@ -39,7 +42,7 @@ pub(crate) fn encode_header(store: &HwpxStyleStore, sec_cnt: u32) -> HwpxResult<
     // We need to extract the inner content and wrap it in our xmlns-decorated
     // root element instead.
     let inner = extract_inner_content(&head_xml);
-    Ok(wrap_header_xml(inner, sec_cnt))
+    Ok(wrap_header_xml(inner, sec_cnt, store))
 }
 
 // ── XML wrapper ─────────────────────────────────────────────────
@@ -69,8 +72,8 @@ const POST_REFLIST_XML: &str = concat!(
     r#"<hh:trackchageConfig flags="56"/>"#,
 );
 
-fn wrap_header_xml(inner_xml: &str, sec_cnt: u32) -> String {
-    let enriched = enrich_ref_list(inner_xml);
+fn wrap_header_xml(inner_xml: &str, sec_cnt: u32, store: &HwpxStyleStore) -> String {
+    let enriched = enrich_ref_list(inner_xml, store);
     format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><hh:head{xmlns} version="1.4" secCnt="{sec_cnt}">{begin_num}{enriched}{post_reflist}</hh:head>"#,
         xmlns = crate::encoder::package::XMLNS_DECLS,
@@ -85,49 +88,78 @@ fn wrap_header_xml(inner_xml: &str, sec_cnt: u32) -> String {
 const BEGIN_NUM_XML: &str =
     r#"<hh:beginNum page="1" footnote="1" endnote="1" pic="1" tbl="1" equation="1"/>"#;
 
-/// Default `<hh:borderFills>` with three border definitions.
+/// Generates the `<hh:borderFills>` XML dynamically from the store's border fills.
 ///
 /// `borderFillIDRef="1"` is referenced by `<hp:pageBorderFill>` in secPr.
 /// `borderFillIDRef="2"` is referenced by every `<hh:charPr>`.
 /// `borderFillIDRef="3"` is referenced by table cells (`<hp:tbl>` / `<hp:tc>`).
 ///
-/// id=1: Empty border (no fill) — page borders.
-/// id=2: Character background with `fillBrush`/`winBrush` (required by 한글).
-/// id=3: SOLID borders on all sides — table cell borders.
-const BORDER_FILLS_XML: &str = concat!(
-    r##"<hh:borderFills itemCnt="3">"##,
-    r##"<hh:borderFill id="1" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0">"##,
-    r##"<hh:slash type="NONE" Crooked="0" isCounter="0"/>"##,
-    r##"<hh:backSlash type="NONE" Crooked="0" isCounter="0"/>"##,
-    r##"<hh:leftBorder type="NONE" width="0.1 mm" color="#000000"/>"##,
-    r##"<hh:rightBorder type="NONE" width="0.1 mm" color="#000000"/>"##,
-    r##"<hh:topBorder type="NONE" width="0.1 mm" color="#000000"/>"##,
-    r##"<hh:bottomBorder type="NONE" width="0.1 mm" color="#000000"/>"##,
-    r##"<hh:diagonal type="SOLID" width="0.1 mm" color="#000000"/>"##,
-    r##"</hh:borderFill>"##,
-    r##"<hh:borderFill id="2" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0">"##,
-    r##"<hh:slash type="NONE" Crooked="0" isCounter="0"/>"##,
-    r##"<hh:backSlash type="NONE" Crooked="0" isCounter="0"/>"##,
-    r##"<hh:leftBorder type="NONE" width="0.1 mm" color="#000000"/>"##,
-    r##"<hh:rightBorder type="NONE" width="0.1 mm" color="#000000"/>"##,
-    r##"<hh:topBorder type="NONE" width="0.1 mm" color="#000000"/>"##,
-    r##"<hh:bottomBorder type="NONE" width="0.1 mm" color="#000000"/>"##,
-    r##"<hh:diagonal type="SOLID" width="0.1 mm" color="#000000"/>"##,
-    r##"<hc:fillBrush>"##,
-    r##"<hc:winBrush faceColor="none" hatchColor="#FF000000" alpha="0"/>"##,
-    r##"</hc:fillBrush>"##,
-    r##"</hh:borderFill>"##,
-    r##"<hh:borderFill id="3" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0">"##,
-    r##"<hh:slash type="NONE" Crooked="0" isCounter="0"/>"##,
-    r##"<hh:backSlash type="NONE" Crooked="0" isCounter="0"/>"##,
-    r##"<hh:leftBorder type="SOLID" width="0.12 mm" color="#000000"/>"##,
-    r##"<hh:rightBorder type="SOLID" width="0.12 mm" color="#000000"/>"##,
-    r##"<hh:topBorder type="SOLID" width="0.12 mm" color="#000000"/>"##,
-    r##"<hh:bottomBorder type="SOLID" width="0.12 mm" color="#000000"/>"##,
-    r##"<hh:diagonal type="SOLID" width="0.1 mm" color="#000000"/>"##,
-    r##"</hh:borderFill>"##,
-    r##"</hh:borderFills>"##,
-);
+/// If the store has no border fills (e.g. a manually constructed store that
+/// did not go through `from_registry`), the 3 standard defaults are emitted
+/// to maintain backward compatibility with 한글.
+fn build_border_fills_xml(store: &HwpxStyleStore) -> String {
+    if store.border_fill_count() == 0 {
+        let page = HwpxBorderFill::default_page_border();
+        let char_bg = HwpxBorderFill::default_char_background();
+        let table = HwpxBorderFill::default_table_border();
+        let count = 3u32;
+        let mut xml = format!(r##"<hh:borderFills itemCnt="{count}">"##);
+        for bf in [&page, &char_bg, &table] {
+            xml.push_str(&build_border_fill_xml(bf));
+        }
+        xml.push_str("</hh:borderFills>");
+        return xml;
+    }
+
+    let count = store.border_fill_count();
+    let mut xml = format!(r##"<hh:borderFills itemCnt="{count}">"##);
+    for bf in store.iter_border_fills() {
+        xml.push_str(&build_border_fill_xml(bf));
+    }
+    xml.push_str("</hh:borderFills>");
+    xml
+}
+
+/// Serializes a single [`HwpxBorderFill`] to its XML representation.
+fn build_border_fill_xml(bf: &HwpxBorderFill) -> String {
+    let three_d = u32::from(bf.three_d);
+    let shadow = u32::from(bf.shadow);
+    let mut xml = format!(
+        r##"<hh:borderFill id="{}" threeD="{three_d}" shadow="{shadow}" centerLine="{}" breakCellSeparateLine="0">"##,
+        bf.id, bf.center_line,
+    );
+    xml.push_str(&build_diagonal_xml("hh:slash", &bf.slash_type));
+    xml.push_str(&build_diagonal_xml("hh:backSlash", &bf.back_slash_type));
+    xml.push_str(&build_border_line_xml("hh:leftBorder", &bf.left));
+    xml.push_str(&build_border_line_xml("hh:rightBorder", &bf.right));
+    xml.push_str(&build_border_line_xml("hh:topBorder", &bf.top));
+    xml.push_str(&build_border_line_xml("hh:bottomBorder", &bf.bottom));
+    xml.push_str(&build_border_line_xml("hh:diagonal", &bf.diagonal));
+    if let Some(fill) = &bf.fill {
+        xml.push_str(&build_fill_brush_xml(fill));
+    }
+    xml.push_str("</hh:borderFill>");
+    xml
+}
+
+/// Serializes a diagonal border element (`<hh:slash>` / `<hh:backSlash>`).
+fn build_diagonal_xml(tag: &str, border_type: &str) -> String {
+    format!(r##"<{tag} type="{border_type}" Crooked="0" isCounter="0"/>"##)
+}
+
+/// Serializes a border line element.
+fn build_border_line_xml(tag: &str, line: &HwpxBorderLine) -> String {
+    format!(r##"<{tag} type="{}" width="{}" color="{}"/>"##, line.line_type, line.width, line.color,)
+}
+
+/// Serializes a fill brush element.
+fn build_fill_brush_xml(fill: &HwpxFill) -> String {
+    match fill {
+        HwpxFill::WinBrush { face_color, hatch_color, alpha } => format!(
+            r##"<hc:fillBrush><hc:winBrush faceColor="{face_color}" hatchColor="{hatch_color}" alpha="{alpha}"/></hc:fillBrush>"##
+        ),
+    }
+}
 
 /// Default `<hh:tabProperties>` with two tab definitions.
 ///
@@ -163,15 +195,17 @@ const NUMBERINGS_XML: &str = concat!(
 ///
 /// Element order inside `<hh:refList>`:
 /// fontfaces → **borderFills** → charProperties → **tabProperties** → **numberings** → paraProperties → styles
-fn enrich_ref_list(inner_xml: &str) -> String {
+fn enrich_ref_list(inner_xml: &str, store: &HwpxStyleStore) -> String {
+    let border_fills_xml = build_border_fills_xml(store);
+
     // If no refList exists, nothing to enrich
     if !inner_xml.contains("<hh:refList>") {
         return format!(
-            "<hh:refList>{BORDER_FILLS_XML}{TAB_PROPERTIES_XML}{NUMBERINGS_XML}</hh:refList>{inner_xml}"
+            "<hh:refList>{border_fills_xml}{TAB_PROPERTIES_XML}{NUMBERINGS_XML}</hh:refList>{inner_xml}"
         );
     }
 
-    let extra_len = BORDER_FILLS_XML.len() + TAB_PROPERTIES_XML.len() + NUMBERINGS_XML.len();
+    let extra_len = border_fills_xml.len() + TAB_PROPERTIES_XML.len() + NUMBERINGS_XML.len();
     let mut result = String::with_capacity(inner_xml.len() + extra_len);
     let ref_open = "<hh:refList>";
     let ref_open_pos = inner_xml.find(ref_open).unwrap();
@@ -185,7 +219,7 @@ fn enrich_ref_list(inner_xml: &str) -> String {
     // Insert borderFills before <hh:charProperties>
     if let Some(cp_pos) = rest.find("<hh:charProperties") {
         result.push_str(&rest[..cp_pos]);
-        result.push_str(BORDER_FILLS_XML);
+        result.push_str(&border_fills_xml);
 
         let rest2 = &rest[cp_pos..];
         // Insert tabProperties + numberings before <hh:paraProperties>
@@ -201,7 +235,7 @@ fn enrich_ref_list(inner_xml: &str) -> String {
         }
     } else {
         // No charProperties — insert all defaults after fontfaces
-        result.push_str(BORDER_FILLS_XML);
+        result.push_str(&border_fills_xml);
         result.push_str(TAB_PROPERTIES_XML);
         result.push_str(NUMBERINGS_XML);
         result.push_str(rest);
@@ -248,6 +282,7 @@ fn build_ref_list(store: &HwpxStyleStore) -> HxRefList {
 
     HxRefList {
         fontfaces: if fontfaces.groups.is_empty() { None } else { Some(fontfaces) },
+        border_fills: None,
         char_properties: if char_properties.items.is_empty() {
             None
         } else {
@@ -556,6 +591,8 @@ fn alignment_to_str(a: Alignment) -> &'static str {
         Alignment::Center => "CENTER",
         Alignment::Right => "RIGHT",
         Alignment::Justify => "JUSTIFY",
+        Alignment::Distribute => "DISTRIBUTE",
+        Alignment::DistributeFlush => "DISTRIBUTE_FLUSH",
         // non_exhaustive: default to LEFT for future variants
         _ => "LEFT",
     }
@@ -676,7 +713,7 @@ mod tests {
 
     // ── Helper: build a minimal store ───────────────────────────
 
-    /// Creates a store with 1 HANGUL font, 1 char shape, 1 para shape.
+    /// Creates a store with 1 HANGUL font, 1 char shape, 1 para shape, and 3 default border fills.
     fn minimal_store() -> HwpxStyleStore {
         let mut store = HwpxStyleStore::new();
         store.push_font(HwpxFont {
@@ -687,6 +724,9 @@ mod tests {
             ..Default::default()
         });
         store.push_para_shape(HwpxParaShape::default());
+        store.push_border_fill(HwpxBorderFill::default_page_border());
+        store.push_border_fill(HwpxBorderFill::default_char_background());
+        store.push_border_fill(HwpxBorderFill::default_table_border());
         store
     }
 
@@ -787,6 +827,8 @@ mod tests {
         assert_eq!(alignment_to_str(Alignment::Center), "CENTER");
         assert_eq!(alignment_to_str(Alignment::Right), "RIGHT");
         assert_eq!(alignment_to_str(Alignment::Justify), "JUSTIFY");
+        assert_eq!(alignment_to_str(Alignment::Distribute), "DISTRIBUTE");
+        assert_eq!(alignment_to_str(Alignment::DistributeFlush), "DISTRIBUTE_FLUSH");
     }
 
     // ── 7. Font grouping ────────────────────────────────────────
@@ -1088,5 +1130,55 @@ mod tests {
         );
         assert!(xml.contains("widthAdjust=\"0\""), "paraHead must have widthAdjust attr");
         assert!(xml.contains("checkable=\"0\""), "paraHead must have checkable attr");
+    }
+
+    // ── Border fill XML generation ───────────────────────────────
+
+    #[test]
+    fn build_border_fills_xml_matches_expected_format() {
+        let mut store = HwpxStyleStore::new();
+        store.push_border_fill(HwpxBorderFill::default_page_border());
+        store.push_border_fill(HwpxBorderFill::default_char_background());
+        store.push_border_fill(HwpxBorderFill::default_table_border());
+        let xml = build_border_fills_xml(&store);
+
+        // Validate structure
+        assert!(xml.starts_with(r##"<hh:borderFills itemCnt="3">"##));
+        assert!(xml.ends_with("</hh:borderFills>"));
+        // id=1 no fill
+        assert!(xml.contains(r##"<hh:borderFill id="1" threeD="0" shadow="0" centerLine="NONE""##));
+        // id=2 has fillBrush
+        assert!(xml.contains(r##"<hh:borderFill id="2" threeD="0" shadow="0" centerLine="NONE""##));
+        assert!(xml.contains("<hc:fillBrush>"));
+        assert!(xml.contains(r##"faceColor="none""##));
+        assert!(xml.contains(r##"hatchColor="#FF000000""##));
+        // id=3 has SOLID borders
+        assert!(xml.contains(r##"<hh:borderFill id="3""##));
+        assert!(xml.contains(r##"<hh:leftBorder type="SOLID" width="0.12 mm""##));
+        // Diagonal present in all
+        assert!(xml.contains(r##"<hh:diagonal type="SOLID" width="0.1 mm""##));
+        // Slash/backSlash present in all
+        assert!(xml.contains(r##"<hh:slash type="NONE" Crooked="0" isCounter="0"/>"##));
+        assert!(xml.contains(r##"<hh:backSlash type="NONE" Crooked="0" isCounter="0"/>"##));
+    }
+
+    #[test]
+    fn build_border_fills_xml_empty_store_emits_defaults() {
+        // An empty store (no fills) still emits 3 standard defaults for backward compat.
+        let store = HwpxStyleStore::new();
+        let xml = build_border_fills_xml(&store);
+        assert!(xml.contains(r##"<hh:borderFills itemCnt="3">"##));
+        assert!(xml.contains(r##"<hh:borderFill id="1""##));
+        assert!(xml.contains(r##"<hh:borderFill id="2""##));
+        assert!(xml.contains(r##"<hh:borderFill id="3""##));
+    }
+
+    #[test]
+    fn encoded_header_contains_dynamic_border_fills() {
+        let store = minimal_store();
+        let xml = encode_header(&store, 1).unwrap();
+        // Dynamic generation produces the same structure as the old constant
+        assert!(xml.contains(r##"<hh:borderFills itemCnt="3">"##));
+        assert!(xml.contains(r##"borderFillIDRef="2""##)); // charPr references fill id=2
     }
 }

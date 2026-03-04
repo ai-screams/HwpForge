@@ -28,7 +28,7 @@
 //! assert_eq!(para.run_count(), 2);
 //! ```
 
-use hwpforge_foundation::ParaShapeIndex;
+use hwpforge_foundation::{ParaShapeIndex, StyleIndex};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -65,6 +65,10 @@ pub struct Paragraph {
     /// will emit `<hp:titleMark>` in HWPX for auto-TOC support.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heading_level: Option<u8>,
+    /// Optional reference to a named style (e.g. 개요 1, 본문).
+    /// `None` means 바탕글 (style 0, the default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub style_id: Option<StyleIndex>,
 }
 
 impl Paragraph {
@@ -80,7 +84,13 @@ impl Paragraph {
     /// assert!(para.is_empty());
     /// ```
     pub fn new(para_shape_id: ParaShapeIndex) -> Self {
-        Self { runs: Vec::new(), para_shape_id, column_break: false, heading_level: None }
+        Self {
+            runs: Vec::new(),
+            para_shape_id,
+            column_break: false,
+            heading_level: None,
+            style_id: None,
+        }
     }
 
     /// Creates a paragraph with pre-built runs.
@@ -99,7 +109,7 @@ impl Paragraph {
     /// assert_eq!(para.run_count(), 1);
     /// ```
     pub fn with_runs(runs: Vec<Run>, para_shape_id: ParaShapeIndex) -> Self {
-        Self { runs, para_shape_id, column_break: false, heading_level: None }
+        Self { runs, para_shape_id, column_break: false, heading_level: None, style_id: None }
     }
 
     /// Appends a run to this paragraph.
@@ -141,6 +151,23 @@ impl Paragraph {
     pub fn with_heading_level(mut self, level: u8) -> Self {
         assert!((1..=7).contains(&level), "heading_level must be 1-7, got {level}");
         self.heading_level = Some(level);
+        self
+    }
+
+    /// Sets the style ID for this paragraph.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::paragraph::Paragraph;
+    /// use hwpforge_foundation::{ParaShapeIndex, StyleIndex};
+    ///
+    /// let para = Paragraph::new(ParaShapeIndex::new(0))
+    ///     .with_style(StyleIndex::new(2));
+    /// assert_eq!(para.style_id, Some(StyleIndex::new(2)));
+    /// ```
+    pub fn with_style(mut self, style_id: StyleIndex) -> Self {
+        self.style_id = Some(style_id);
         self
     }
 
@@ -472,5 +499,46 @@ mod tests {
             let back: Paragraph = serde_json::from_str(&json).unwrap();
             assert_eq!(back.heading_level, Some(level), "level {level} roundtrip failed");
         }
+    }
+
+    #[test]
+    fn new_has_no_style_id() {
+        let para = Paragraph::new(ParaShapeIndex::new(0));
+        assert_eq!(para.style_id, None);
+    }
+
+    #[test]
+    fn with_style_builder_works() {
+        let para = Paragraph::new(ParaShapeIndex::new(0)).with_style(StyleIndex::new(2));
+        assert_eq!(para.style_id, Some(StyleIndex::new(2)));
+    }
+
+    #[test]
+    fn with_runs_has_no_style_id() {
+        let para = Paragraph::with_runs(vec![text_run("x")], ParaShapeIndex::new(0));
+        assert_eq!(para.style_id, None);
+    }
+
+    #[test]
+    fn serde_roundtrip_with_style_id() {
+        let para = Paragraph::new(ParaShapeIndex::new(0)).with_style(StyleIndex::new(5));
+        let json = serde_json::to_string(&para).unwrap();
+        let back: Paragraph = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.style_id, Some(StyleIndex::new(5)));
+    }
+
+    #[test]
+    fn serde_missing_style_id_deserializes_to_none() {
+        // JSON without style_id field → backward compat → None
+        let json = r#"{"runs":[],"para_shape_id":0,"column_break":false}"#;
+        let para: Paragraph = serde_json::from_str(json).unwrap();
+        assert_eq!(para.style_id, None);
+    }
+
+    #[test]
+    fn serde_style_id_omitted_when_none() {
+        let para = Paragraph::new(ParaShapeIndex::new(0));
+        let json = serde_json::to_string(&para).unwrap();
+        assert!(!json.contains("style_id"), "None should be skipped in serialization");
     }
 }
