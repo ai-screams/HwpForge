@@ -4,13 +4,15 @@
 //! Foundation types (`Color`, `HwpUnit`, `Alignment`) for the store.
 
 use hwpforge_foundation::{
-    Color, EmbossType, EngraveType, FontIndex, HwpUnit, LineSpacingType, OutlineType, ShadowType,
-    StrikeoutShape, UnderlineType, VerticalPosition, WordBreakType,
+    Color, EmbossType, EmphasisType, EngraveType, FontIndex, HeadingType, HwpUnit, LineSpacingType,
+    OutlineType, ShadowType, StrikeoutShape, UnderlineType, VerticalPosition, WordBreakType,
 };
 use quick_xml::de::from_str;
 
 use crate::error::{HwpxError, HwpxResult};
-use crate::schema::header::{HxBorderFill, HxCharPr, HxHead, HxParaPr, HxStyle};
+use crate::schema::header::{
+    HxBorderFill, HxCharPr, HxHead, HxNumbering, HxParaPr, HxStyle, HxTabPr,
+};
 use crate::style_store::{
     parse_alignment, parse_hex_color, HwpxBorderFill, HwpxBorderLine, HwpxCharShape, HwpxFill,
     HwpxFont, HwpxFontRef, HwpxParaShape, HwpxStyle, HwpxStyleStore,
@@ -74,6 +76,20 @@ pub fn parse_header(xml: &str) -> HwpxResult<HwpxStyleStore> {
             }
         }
 
+        // ── Tab Properties ───────────────────────────────────
+        if let Some(tab_props) = &ref_list.tab_properties {
+            for tp in &tab_props.items {
+                store.push_tab(convert_tab(tp));
+            }
+        }
+
+        // ── Numberings ───────────────────────────────────────
+        if let Some(numberings) = &ref_list.numberings {
+            for ndef in &numberings.items {
+                store.push_numbering(convert_numbering(ndef));
+            }
+        }
+
         // ── Styles ───────────────────────────────────────────
         if let Some(styles) = &ref_list.styles {
             for style in &styles.items {
@@ -83,6 +99,51 @@ pub fn parse_header(xml: &str) -> HwpxResult<HwpxStyleStore> {
     }
 
     Ok(store)
+}
+
+/// Converts an [`HxNumbering`] XML type into a [`hwpforge_core::NumberingDef`].
+fn convert_numbering(hx: &HxNumbering) -> hwpforge_core::NumberingDef {
+    let levels = hx
+        .para_heads
+        .iter()
+        .map(|ph| hwpforge_core::ParaHead {
+            start: ph.start,
+            level: ph.level,
+            num_format: parse_number_format(&ph.num_format),
+            text: ph.text.clone(),
+            checkable: ph.checkable != 0,
+        })
+        .collect();
+    hwpforge_core::NumberingDef { id: hx.id, start: hx.start, levels }
+}
+
+/// Parses a HWPX number format string into a [`hwpforge_foundation::NumberFormatType`].
+///
+/// Shared by header (numbering definitions) and section (page number format).
+pub(crate) fn parse_number_format(s: &str) -> hwpforge_foundation::NumberFormatType {
+    use hwpforge_foundation::NumberFormatType;
+    match s {
+        "DIGIT" => NumberFormatType::Digit,
+        "CIRCLED_DIGIT" => NumberFormatType::CircledDigit,
+        "ROMAN_CAPITAL" => NumberFormatType::RomanCapital,
+        "ROMAN_SMALL" => NumberFormatType::RomanSmall,
+        "LATIN_CAPITAL" => NumberFormatType::LatinCapital,
+        "LATIN_SMALL" => NumberFormatType::LatinSmall,
+        "HANGUL_SYLLABLE" => NumberFormatType::HangulSyllable,
+        "HANGUL_JAMO" => NumberFormatType::HangulJamo,
+        "HANJA_DIGIT" => NumberFormatType::HanjaDigit,
+        "CIRCLED_HANGUL_SYLLABLE" => NumberFormatType::CircledHangulSyllable,
+        _ => NumberFormatType::Digit,
+    }
+}
+
+/// Converts an [`HxTabPr`] XML type into a [`hwpforge_core::TabDef`].
+fn convert_tab(hx: &HxTabPr) -> hwpforge_core::TabDef {
+    hwpforge_core::TabDef {
+        id: hx.id,
+        auto_tab_left: hx.auto_tab_left != 0,
+        auto_tab_right: hx.auto_tab_right != 0,
+    }
 }
 
 // ── HWPX string → enum parsing helpers ──────────────────────────
@@ -238,6 +299,33 @@ fn convert_char_pr(cp: &HxCharPr) -> HwpxCharShape {
             .unwrap_or(ShadowType::None),
         emboss_type: EmbossType::None,   // TODO(v2.0): Parse from XML
         engrave_type: EngraveType::None, // TODO(v2.0): Parse from XML
+        emphasis: parse_emphasis_type(&cp.sym_mark),
+        ratio: cp.ratio.as_ref().map_or(100, |r| r.hangul),
+        spacing: cp.spacing.as_ref().map_or(0, |s| s.hangul),
+        rel_sz: cp.rel_sz.as_ref().map_or(100, |r| r.hangul),
+        char_offset: cp.offset.as_ref().map_or(0, |o| o.hangul),
+        use_kerning: cp.use_kerning != 0,
+        use_font_space: cp.use_font_space != 0,
+    }
+}
+
+/// Converts an HWPX `symMark` attribute string to an [`EmphasisType`].
+fn parse_emphasis_type(s: &str) -> EmphasisType {
+    match s.to_ascii_uppercase().as_str() {
+        "NONE" => EmphasisType::None,
+        "DOT_ABOVE" => EmphasisType::DotAbove,
+        "RING_ABOVE" => EmphasisType::RingAbove,
+        "TILDE" => EmphasisType::Tilde,
+        "CARON" => EmphasisType::Caron,
+        "SIDE" => EmphasisType::Side,
+        "COLON" => EmphasisType::Colon,
+        "GRAVE_ACCENT" => EmphasisType::GraveAccent,
+        "ACUTE_ACCENT" => EmphasisType::AcuteAccent,
+        "CIRCUMFLEX" => EmphasisType::Circumflex,
+        "MACRON" => EmphasisType::Macron,
+        "HOOK_ABOVE" => EmphasisType::HookAbove,
+        "DOT_BELOW" => EmphasisType::DotBelow,
+        _ => EmphasisType::None,
     }
 }
 
@@ -265,6 +353,15 @@ fn convert_para_pr(pp: &HxParaPr) -> HwpxParaShape {
         })
         .unwrap_or_default();
 
+    let heading_type = pp
+        .heading
+        .as_ref()
+        .map_or(HeadingType::None, |h| HeadingType::from_hwpx_str(&h.heading_type));
+    let heading_id_ref = pp.heading.as_ref().map_or(0, |h| h.id_ref);
+    let heading_level = pp.heading.as_ref().map_or(0, |h| h.level);
+    let tab_pr_id_ref = pp.tab_pr_id_ref;
+    let condense = pp.condense;
+
     HwpxParaShape {
         alignment,
         margin_left,
@@ -276,6 +373,11 @@ fn convert_para_pr(pp: &HxParaPr) -> HwpxParaShape {
         line_spacing_type,
         break_latin_word,
         break_non_latin_word,
+        heading_type,
+        heading_id_ref,
+        heading_level,
+        tab_pr_id_ref,
+        condense,
         ..Default::default()
     }
 }

@@ -8,10 +8,11 @@
 //! so downstream code never touches raw XML strings.
 
 use hwpforge_blueprint::registry::StyleRegistry;
+use hwpforge_core::{NumberingDef, TabDef};
 use hwpforge_foundation::{
-    Alignment, BorderFillIndex, BreakType, CharShapeIndex, Color, EmbossType, EngraveType,
-    FontIndex, HwpUnit, LineSpacingType, OutlineType, ParaShapeIndex, ShadowType, StrikeoutShape,
-    UnderlineType, VerticalPosition, WordBreakType,
+    Alignment, BorderFillIndex, BreakType, CharShapeIndex, Color, EmbossType, EmphasisType,
+    EngraveType, FontIndex, HeadingType, HwpUnit, LineSpacingType, OutlineType, ParaShapeIndex,
+    ShadowType, StrikeoutShape, UnderlineType, VerticalPosition, WordBreakType,
 };
 
 use crate::default_styles::HancomStyleSet;
@@ -116,6 +117,20 @@ pub struct HwpxCharShape {
     pub emboss_type: EmbossType,
     /// Engrave effect type.
     pub engrave_type: EngraveType,
+    /// Emphasis mark type (from `symMark` attribute).
+    pub emphasis: EmphasisType,
+    /// Character width ratio (uniform, from `ratio` child element).
+    pub ratio: i32,
+    /// Inter-character spacing (uniform, from `spacing` child element).
+    pub spacing: i32,
+    /// Relative font size (uniform, from `relSz` child element).
+    pub rel_sz: i32,
+    /// Vertical position offset (uniform, from `offset` child element).
+    pub char_offset: i32,
+    /// Enable kerning (from `useKerning` attribute, 0/1).
+    pub use_kerning: bool,
+    /// Use font space (from `useFontSpace` attribute, 0/1).
+    pub use_font_space: bool,
 }
 
 impl Default for HwpxCharShape {
@@ -136,6 +151,13 @@ impl Default for HwpxCharShape {
             shadow_type: ShadowType::None,
             emboss_type: EmbossType::None,
             engrave_type: EngraveType::None,
+            emphasis: EmphasisType::None,
+            ratio: 100,
+            spacing: 0,
+            rel_sz: 100,
+            char_offset: 0,
+            use_kerning: false,
+            use_font_space: false,
         }
     }
 }
@@ -206,6 +228,16 @@ pub struct HwpxParaShape {
     pub break_non_latin_word: WordBreakType,
     /// Border/fill reference (None = no border/fill).
     pub border_fill_id: Option<BorderFillIndex>,
+    /// Heading type for this paragraph.
+    pub heading_type: HeadingType,
+    /// Heading numbering reference (idRef in heading element, 0 = none).
+    pub heading_id_ref: u32,
+    /// Heading outline level (0 = none, 1-10 for outline levels).
+    pub heading_level: u32,
+    /// Tab property reference (tabPrIDRef, 0 = default).
+    pub tab_pr_id_ref: u32,
+    /// Condense value for tight outline spacing.
+    pub condense: u32,
 }
 
 impl Default for HwpxParaShape {
@@ -226,6 +258,11 @@ impl Default for HwpxParaShape {
             break_latin_word: WordBreakType::KeepWord,
             break_non_latin_word: WordBreakType::KeepWord,
             border_fill_id: None,
+            heading_type: HeadingType::None,
+            heading_id_ref: 0,
+            heading_level: 0,
+            tab_pr_id_ref: 0,
+            condense: 0,
         }
     }
 }
@@ -426,6 +463,13 @@ pub(crate) fn default_char_shapes_modern() -> [HwpxCharShape; 7] {
         shadow_type: ShadowType::None,
         emboss_type: EmbossType::None,
         engrave_type: EngraveType::None,
+        emphasis: EmphasisType::None,
+        ratio: 100,
+        spacing: 0,
+        rel_sz: 100,
+        char_offset: 0,
+        use_kerning: false,
+        use_font_space: false,
     };
 
     [
@@ -477,6 +521,11 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         break_latin_word: WordBreakType::KeepWord,
         break_non_latin_word: WordBreakType::KeepWord,
         border_fill_id: None,
+        heading_type: HeadingType::None,
+        heading_id_ref: 0,
+        heading_level: 0,
+        tab_pr_id_ref: 0,
+        condense: 0,
     };
 
     [
@@ -484,20 +533,76 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         base.clone(),
         //  1: 본문 — JUSTIFY left=1500 160%
         HwpxParaShape { margin_left: HwpUnit::new(1500).unwrap(), ..base.clone() },
-        //  2: 개요 1 — JUSTIFY left=1000 160% (OUTLINE handled in encoder)
-        HwpxParaShape { margin_left: HwpUnit::new(1000).unwrap(), ..base.clone() },
-        //  3: 개요 2 — JUSTIFY left=2000 160%
-        HwpxParaShape { margin_left: HwpUnit::new(2000).unwrap(), ..base.clone() },
-        //  4: 개요 3 — JUSTIFY left=3000 160%
-        HwpxParaShape { margin_left: HwpUnit::new(3000).unwrap(), ..base.clone() },
-        //  5: 개요 4 — JUSTIFY left=4000 160%
-        HwpxParaShape { margin_left: HwpUnit::new(4000).unwrap(), ..base.clone() },
-        //  6: 개요 5 — JUSTIFY left=5000 160%
-        HwpxParaShape { margin_left: HwpUnit::new(5000).unwrap(), ..base.clone() },
-        //  7: 개요 6 — JUSTIFY left=6000 160%
-        HwpxParaShape { margin_left: HwpUnit::new(6000).unwrap(), ..base.clone() },
-        //  8: 개요 7 — JUSTIFY left=7000 160%
-        HwpxParaShape { margin_left: HwpUnit::new(7000).unwrap(), ..base.clone() },
+        //  2: 개요 1 — JUSTIFY left=1000 160% OUTLINE level=1
+        HwpxParaShape {
+            margin_left: HwpUnit::new(1000).unwrap(),
+            heading_type: HeadingType::Outline,
+            heading_id_ref: 1,
+            heading_level: 1,
+            tab_pr_id_ref: 1,
+            condense: 20,
+            ..base.clone()
+        },
+        //  3: 개요 2 — JUSTIFY left=2000 160% OUTLINE level=2
+        HwpxParaShape {
+            margin_left: HwpUnit::new(2000).unwrap(),
+            heading_type: HeadingType::Outline,
+            heading_id_ref: 1,
+            heading_level: 2,
+            tab_pr_id_ref: 1,
+            condense: 20,
+            ..base.clone()
+        },
+        //  4: 개요 3 — JUSTIFY left=3000 160% OUTLINE level=3
+        HwpxParaShape {
+            margin_left: HwpUnit::new(3000).unwrap(),
+            heading_type: HeadingType::Outline,
+            heading_id_ref: 1,
+            heading_level: 3,
+            tab_pr_id_ref: 1,
+            condense: 20,
+            ..base.clone()
+        },
+        //  5: 개요 4 — JUSTIFY left=4000 160% OUTLINE level=4
+        HwpxParaShape {
+            margin_left: HwpUnit::new(4000).unwrap(),
+            heading_type: HeadingType::Outline,
+            heading_id_ref: 1,
+            heading_level: 4,
+            tab_pr_id_ref: 1,
+            condense: 20,
+            ..base.clone()
+        },
+        //  6: 개요 5 — JUSTIFY left=5000 160% OUTLINE level=5
+        HwpxParaShape {
+            margin_left: HwpUnit::new(5000).unwrap(),
+            heading_type: HeadingType::Outline,
+            heading_id_ref: 1,
+            heading_level: 5,
+            tab_pr_id_ref: 1,
+            condense: 20,
+            ..base.clone()
+        },
+        //  7: 개요 6 — JUSTIFY left=6000 160% OUTLINE level=6
+        HwpxParaShape {
+            margin_left: HwpUnit::new(6000).unwrap(),
+            heading_type: HeadingType::Outline,
+            heading_id_ref: 1,
+            heading_level: 6,
+            tab_pr_id_ref: 1,
+            condense: 20,
+            ..base.clone()
+        },
+        //  8: 개요 7 — JUSTIFY left=7000 160% OUTLINE level=7
+        HwpxParaShape {
+            margin_left: HwpUnit::new(7000).unwrap(),
+            heading_type: HeadingType::Outline,
+            heading_id_ref: 1,
+            heading_level: 7,
+            tab_pr_id_ref: 1,
+            condense: 20,
+            ..base.clone()
+        },
         //  9: 머리말 — JUSTIFY left=0 150%
         HwpxParaShape { line_spacing: 150, ..base.clone() },
         // 10: 각주/미주 — JUSTIFY indent=-1310 130%
@@ -531,12 +636,36 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
             spacing_after: HwpUnit::new(700).unwrap(),
             ..base.clone()
         },
-        // 16: 개요 8 (style 10→paraPr 16) — JUSTIFY left=9000 160%
-        HwpxParaShape { margin_left: HwpUnit::new(9000).unwrap(), ..base.clone() },
-        // 17: 개요 9 (style 11→paraPr 17) — JUSTIFY left=10000 160%
-        HwpxParaShape { margin_left: HwpUnit::new(10000).unwrap(), ..base.clone() },
-        // 18: 개요 8 used by style 9 (style 9→paraPr 18) — JUSTIFY left=8000 160%
-        HwpxParaShape { margin_left: HwpUnit::new(8000).unwrap(), ..base.clone() },
+        // 16: 개요 9 (style 10→paraPr 16) — JUSTIFY left=9000 160% OUTLINE level=9
+        HwpxParaShape {
+            margin_left: HwpUnit::new(9000).unwrap(),
+            heading_type: HeadingType::Outline,
+            heading_id_ref: 1,
+            heading_level: 9,
+            tab_pr_id_ref: 1,
+            condense: 20,
+            ..base.clone()
+        },
+        // 17: 개요 10 (style 11→paraPr 17) — JUSTIFY left=10000 160% OUTLINE level=10
+        HwpxParaShape {
+            margin_left: HwpUnit::new(10000).unwrap(),
+            heading_type: HeadingType::Outline,
+            heading_id_ref: 1,
+            heading_level: 10,
+            tab_pr_id_ref: 1,
+            condense: 20,
+            ..base.clone()
+        },
+        // 18: 개요 8 (style 9→paraPr 18) — JUSTIFY left=8000 160% OUTLINE level=8
+        HwpxParaShape {
+            margin_left: HwpUnit::new(8000).unwrap(),
+            heading_type: HeadingType::Outline,
+            heading_id_ref: 1,
+            heading_level: 8,
+            tab_pr_id_ref: 1,
+            condense: 20,
+            ..base.clone()
+        },
         // 19: 캡션 — JUSTIFY left=0 next=800 150%
         HwpxParaShape { line_spacing: 150, spacing_after: HwpUnit::new(800).unwrap(), ..base },
     ]
@@ -572,6 +701,8 @@ pub struct HwpxStyleStore {
     para_shapes: Vec<HwpxParaShape>,
     styles: Vec<HwpxStyle>,
     border_fills: Vec<HwpxBorderFill>,
+    numberings: Vec<NumberingDef>,
+    tabs: Vec<TabDef>,
 }
 
 impl HwpxStyleStore {
@@ -720,6 +851,13 @@ impl HwpxStyleStore {
                 shadow_type: cs.shadow,
                 emboss_type: cs.emboss,
                 engrave_type: cs.engrave,
+                emphasis: cs.emphasis,
+                ratio: cs.ratio,
+                spacing: cs.spacing,
+                rel_sz: cs.rel_sz,
+                char_offset: cs.offset,
+                use_kerning: cs.use_kerning,
+                use_font_space: cs.use_font_space,
             });
         }
 
@@ -741,6 +879,11 @@ impl HwpxStyleStore {
                 break_latin_word: WordBreakType::KeepWord,
                 break_non_latin_word: WordBreakType::KeepWord,
                 border_fill_id: ps.border_fill_id,
+                heading_type: HeadingType::None,
+                heading_id_ref: 0,
+                heading_level: 0,
+                tab_pr_id_ref: 0,
+                condense: 0,
             });
         }
 
@@ -931,6 +1074,36 @@ impl HwpxStyleStore {
     /// Returns an iterator over all border fills in the store.
     pub fn iter_border_fills(&self) -> impl Iterator<Item = &HwpxBorderFill> {
         self.border_fills.iter()
+    }
+
+    /// Adds a numbering definition to the store.
+    pub fn push_numbering(&mut self, ndef: NumberingDef) {
+        self.numberings.push(ndef);
+    }
+
+    /// Adds a tab property definition to the store.
+    pub fn push_tab(&mut self, tab: TabDef) {
+        self.tabs.push(tab);
+    }
+
+    /// Returns the number of numbering definitions in the store.
+    pub fn numbering_count(&self) -> u32 {
+        self.numberings.len() as u32
+    }
+
+    /// Returns the number of tab property definitions in the store.
+    pub fn tab_count(&self) -> u32 {
+        self.tabs.len() as u32
+    }
+
+    /// Returns an iterator over all numbering definitions in the store.
+    pub fn iter_numberings(&self) -> impl Iterator<Item = &NumberingDef> {
+        self.numberings.iter()
+    }
+
+    /// Returns an iterator over all tab property definitions in the store.
+    pub fn iter_tabs(&self) -> impl Iterator<Item = &TabDef> {
+        self.tabs.iter()
     }
 }
 

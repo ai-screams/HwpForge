@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::{ColumnDef, ColumnLayoutMode, ColumnSettings, ColumnType};
-use hwpforge_core::control::{Control, ShapeStyle};
+use hwpforge_core::control::{Control, DutmalAlign, DutmalPosition, ShapeStyle};
 use hwpforge_core::image::{Image, ImageFormat};
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::{Run, RunContent};
@@ -15,16 +15,15 @@ use hwpforge_core::section::{HeaderFooter, PageNumber};
 use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
-    ApplyPageType, CharShapeIndex, Color, HwpUnit, NumberFormatType, PageNumberPosition,
-    ParaShapeIndex, StyleIndex,
+    ApplyPageType, CharShapeIndex, Color, HwpUnit, PageNumberPosition, ParaShapeIndex, StyleIndex,
 };
 use quick_xml::de::from_str;
 
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    HxCaption, HxChart, HxCtrl, HxEllipse, HxEquation, HxFillBrush, HxFootNote, HxHeaderFooter,
-    HxLine, HxLineShape, HxPageNum, HxParagraph, HxPic, HxPolygon, HxRect, HxRun, HxSection,
-    HxSubList, HxTable, HxTableCell,
+    HxCaption, HxChart, HxCompose, HxCtrl, HxDutmal, HxEllipse, HxEquation, HxFillBrush,
+    HxFootNote, HxHeaderFooter, HxLine, HxLineShape, HxPageNum, HxParagraph, HxPic, HxPolygon,
+    HxRect, HxRun, HxSection, HxSubList, HxTable, HxTableCell,
 };
 
 /// Maximum nesting depth for tables-within-tables.
@@ -257,6 +256,16 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
     // Equation runs (from <hp:equation>)
     for equation in &hx.equations {
         runs.push(decode_equation(equation, char_shape_id)?);
+    }
+
+    // Dutmal runs (from <hp:dutmal>)
+    for dutmal in &hx.dutmals {
+        runs.push(decode_dutmal(dutmal, char_shape_id));
+    }
+
+    // Compose runs (from <hp:compose>)
+    for compose in &hx.composes {
+        runs.push(decode_compose(compose, char_shape_id));
     }
 
     Ok(runs)
@@ -631,6 +640,44 @@ fn decode_equation(eq: &HxEquation, char_shape_id: CharShapeIndex) -> HwpxResult
     })
 }
 
+/// Decodes an `HxDutmal` into a Core `Run` with `Control::Dutmal`.
+fn decode_dutmal(dutmal: &HxDutmal, char_shape_id: CharShapeIndex) -> Run {
+    let position = match dutmal.pos_type.as_str() {
+        "BOTTOM" => DutmalPosition::Bottom,
+        "RIGHT" => DutmalPosition::Right,
+        "LEFT" => DutmalPosition::Left,
+        _ => DutmalPosition::Top,
+    };
+    let align = match dutmal.align.as_str() {
+        "LEFT" => DutmalAlign::Left,
+        "RIGHT" => DutmalAlign::Right,
+        _ => DutmalAlign::Center,
+    };
+    Run {
+        content: RunContent::Control(Box::new(Control::Dutmal {
+            main_text: dutmal.main_text.clone(),
+            sub_text: dutmal.sub_text.clone(),
+            position,
+            sz_ratio: dutmal.sz_ratio,
+            align,
+        })),
+        char_shape_id,
+    }
+}
+
+/// Decodes an `HxCompose` into a Core `Run` with `Control::Compose`.
+fn decode_compose(compose: &HxCompose, char_shape_id: CharShapeIndex) -> Run {
+    Run {
+        content: RunContent::Control(Box::new(Control::Compose {
+            compose_text: compose.compose_text.clone(),
+            circle_type: compose.circle_type.clone(),
+            char_sz: compose.char_sz,
+            compose_type: compose.compose_type.clone(),
+        })),
+        char_shape_id,
+    }
+}
+
 /// Decodes an `HxChart` into a Core `Run` with `Control::Chart`.
 ///
 /// Looks up the chart's OOXML XML by `chartIDRef` and parses it into
@@ -915,7 +962,7 @@ fn convert_ctrl_page_number(ctrl: &HxCtrl) -> Option<PageNumber> {
 /// Converts an `HxPageNum` into a Core [`PageNumber`].
 fn convert_page_number(hx: &HxPageNum) -> PageNumber {
     let position = parse_page_number_position(&hx.pos);
-    let number_format = parse_number_format_type(&hx.format_type);
+    let number_format = super::header::parse_number_format(&hx.format_type);
     if hx.side_char.is_empty() {
         PageNumber::new(position, number_format)
     } else {
@@ -951,25 +998,10 @@ fn parse_page_number_position(s: &str) -> PageNumberPosition {
     }
 }
 
-/// Parses an HWPX `formatType` string into [`NumberFormatType`].
-fn parse_number_format_type(s: &str) -> NumberFormatType {
-    match s {
-        "DIGIT" => NumberFormatType::Digit,
-        "CIRCLED_DIGIT" => NumberFormatType::CircledDigit,
-        "ROMAN_CAPITAL" => NumberFormatType::RomanCapital,
-        "ROMAN_SMALL" => NumberFormatType::RomanSmall,
-        "LATIN_CAPITAL" => NumberFormatType::LatinCapital,
-        "LATIN_SMALL" => NumberFormatType::LatinSmall,
-        "HANGUL_SYLLABLE" => NumberFormatType::HangulSyllable,
-        "HANGUL_JAMO" => NumberFormatType::HangulJamo,
-        "HANJA_DIGIT" => NumberFormatType::HanjaDigit,
-        _ => NumberFormatType::Digit,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hwpforge_foundation::NumberFormatType;
 
     // ── Text-only sections ───────────────────────────────────────
 
@@ -1747,16 +1779,21 @@ mod tests {
     }
 
     #[test]
-    fn parse_number_format_type_values() {
-        assert_eq!(parse_number_format_type("DIGIT"), NumberFormatType::Digit);
-        assert_eq!(parse_number_format_type("CIRCLED_DIGIT"), NumberFormatType::CircledDigit);
-        assert_eq!(parse_number_format_type("ROMAN_CAPITAL"), NumberFormatType::RomanCapital);
-        assert_eq!(parse_number_format_type("ROMAN_SMALL"), NumberFormatType::RomanSmall);
-        assert_eq!(parse_number_format_type("LATIN_CAPITAL"), NumberFormatType::LatinCapital);
-        assert_eq!(parse_number_format_type("LATIN_SMALL"), NumberFormatType::LatinSmall);
-        assert_eq!(parse_number_format_type("HANGUL_SYLLABLE"), NumberFormatType::HangulSyllable);
-        assert_eq!(parse_number_format_type("HANGUL_JAMO"), NumberFormatType::HangulJamo);
-        assert_eq!(parse_number_format_type("HANJA_DIGIT"), NumberFormatType::HanjaDigit);
-        assert_eq!(parse_number_format_type("unknown"), NumberFormatType::Digit);
+    fn parse_number_format_shared_with_header() {
+        use crate::decoder::header::parse_number_format;
+        assert_eq!(parse_number_format("DIGIT"), NumberFormatType::Digit);
+        assert_eq!(parse_number_format("CIRCLED_DIGIT"), NumberFormatType::CircledDigit);
+        assert_eq!(parse_number_format("ROMAN_CAPITAL"), NumberFormatType::RomanCapital);
+        assert_eq!(parse_number_format("ROMAN_SMALL"), NumberFormatType::RomanSmall);
+        assert_eq!(parse_number_format("LATIN_CAPITAL"), NumberFormatType::LatinCapital);
+        assert_eq!(parse_number_format("LATIN_SMALL"), NumberFormatType::LatinSmall);
+        assert_eq!(parse_number_format("HANGUL_SYLLABLE"), NumberFormatType::HangulSyllable);
+        assert_eq!(parse_number_format("HANGUL_JAMO"), NumberFormatType::HangulJamo);
+        assert_eq!(parse_number_format("HANJA_DIGIT"), NumberFormatType::HanjaDigit);
+        assert_eq!(
+            parse_number_format("CIRCLED_HANGUL_SYLLABLE"),
+            NumberFormatType::CircledHangulSyllable
+        );
+        assert_eq!(parse_number_format("unknown"), NumberFormatType::Digit);
     }
 }

@@ -1283,6 +1283,8 @@ pub enum NumberFormatType {
     HangulJamo = 7,
     /// Hanja digits: 一, 二, 三, ...
     HanjaDigit = 8,
+    /// Circled Hangul syllable: ㉮, ㉯, ㉰, ... (used for outline level 8).
+    CircledHangulSyllable = 9,
 }
 
 impl fmt::Display for NumberFormatType {
@@ -1297,6 +1299,7 @@ impl fmt::Display for NumberFormatType {
             Self::HangulSyllable => f.write_str("HangulSyllable"),
             Self::HangulJamo => f.write_str("HangulJamo"),
             Self::HanjaDigit => f.write_str("HanjaDigit"),
+            Self::CircledHangulSyllable => f.write_str("CircledHangulSyllable"),
         }
     }
 }
@@ -1315,10 +1318,13 @@ impl std::str::FromStr for NumberFormatType {
             "HangulSyllable" | "hangulsyllable" | "HANGUL_SYLLABLE" => Ok(Self::HangulSyllable),
             "HangulJamo" | "hanguljamo" | "HANGUL_JAMO" => Ok(Self::HangulJamo),
             "HanjaDigit" | "hanjadigit" | "HANJA_DIGIT" => Ok(Self::HanjaDigit),
+            "CircledHangulSyllable" | "circledhangulsyllable" | "CIRCLED_HANGUL_SYLLABLE" => {
+                Ok(Self::CircledHangulSyllable)
+            }
             _ => Err(FoundationError::ParseError {
                 type_name: "NumberFormatType".to_string(),
                 value: s.to_string(),
-                valid_values: "Digit, CircledDigit, RomanCapital, RomanSmall, LatinCapital, LatinSmall, HangulSyllable, HangulJamo, HanjaDigit".to_string(),
+                valid_values: "Digit, CircledDigit, RomanCapital, RomanSmall, LatinCapital, LatinSmall, HangulSyllable, HangulJamo, HanjaDigit, CircledHangulSyllable".to_string(),
             }),
         }
     }
@@ -1338,10 +1344,11 @@ impl TryFrom<u8> for NumberFormatType {
             6 => Ok(Self::HangulSyllable),
             7 => Ok(Self::HangulJamo),
             8 => Ok(Self::HanjaDigit),
+            9 => Ok(Self::CircledHangulSyllable),
             _ => Err(FoundationError::ParseError {
                 type_name: "NumberFormatType".to_string(),
                 value: value.to_string(),
-                valid_values: "0-8 (Digit, CircledDigit, RomanCapital, RomanSmall, LatinCapital, LatinSmall, HangulSyllable, HangulJamo, HanjaDigit)".to_string(),
+                valid_values: "0-9 (Digit, CircledDigit, RomanCapital, RomanSmall, LatinCapital, LatinSmall, HangulSyllable, HangulJamo, HanjaDigit, CircledHangulSyllable)".to_string(),
             }),
         }
     }
@@ -1565,6 +1572,252 @@ impl schemars::JsonSchema for WordBreakType {
     }
 }
 
+// ---------------------------------------------------------------------------
+// EmphasisType
+// ---------------------------------------------------------------------------
+
+/// Character emphasis mark (symMark attribute in HWPX).
+///
+/// Controls the emphasis symbol displayed above or below characters.
+/// Maps to HWPX `symMark` attribute values.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_foundation::EmphasisType;
+///
+/// assert_eq!(EmphasisType::default(), EmphasisType::None);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+#[repr(u8)]
+pub enum EmphasisType {
+    /// No emphasis mark (default).
+    #[default]
+    None = 0,
+    /// Dot above character.
+    DotAbove = 1,
+    /// Ring above character.
+    RingAbove = 2,
+    /// Tilde above character.
+    Tilde = 3,
+    /// Caron (hacek) above character.
+    Caron = 4,
+    /// Side dot.
+    Side = 5,
+    /// Colon mark.
+    Colon = 6,
+    /// Grave accent.
+    GraveAccent = 7,
+    /// Acute accent.
+    AcuteAccent = 8,
+    /// Circumflex accent.
+    Circumflex = 9,
+    /// Macron (overline).
+    Macron = 10,
+    /// Hook above.
+    HookAbove = 11,
+    /// Dot below character.
+    DotBelow = 12,
+}
+
+impl fmt::Display for EmphasisType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => f.write_str("None"),
+            Self::DotAbove => f.write_str("DotAbove"),
+            Self::RingAbove => f.write_str("RingAbove"),
+            Self::Tilde => f.write_str("Tilde"),
+            Self::Caron => f.write_str("Caron"),
+            Self::Side => f.write_str("Side"),
+            Self::Colon => f.write_str("Colon"),
+            Self::GraveAccent => f.write_str("GraveAccent"),
+            Self::AcuteAccent => f.write_str("AcuteAccent"),
+            Self::Circumflex => f.write_str("Circumflex"),
+            Self::Macron => f.write_str("Macron"),
+            Self::HookAbove => f.write_str("HookAbove"),
+            Self::DotBelow => f.write_str("DotBelow"),
+        }
+    }
+}
+
+impl std::str::FromStr for EmphasisType {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "NONE" | "None" | "none" => Ok(Self::None),
+            "DOT_ABOVE" | "DotAbove" | "dot_above" => Ok(Self::DotAbove),
+            "RING_ABOVE" | "RingAbove" | "ring_above" => Ok(Self::RingAbove),
+            "TILDE" | "Tilde" | "tilde" => Ok(Self::Tilde),
+            "CARON" | "Caron" | "caron" => Ok(Self::Caron),
+            "SIDE" | "Side" | "side" => Ok(Self::Side),
+            "COLON" | "Colon" | "colon" => Ok(Self::Colon),
+            "GRAVE_ACCENT" | "GraveAccent" | "grave_accent" => Ok(Self::GraveAccent),
+            "ACUTE_ACCENT" | "AcuteAccent" | "acute_accent" => Ok(Self::AcuteAccent),
+            "CIRCUMFLEX" | "Circumflex" | "circumflex" => Ok(Self::Circumflex),
+            "MACRON" | "Macron" | "macron" => Ok(Self::Macron),
+            "HOOK_ABOVE" | "HookAbove" | "hook_above" => Ok(Self::HookAbove),
+            "DOT_BELOW" | "DotBelow" | "dot_below" => Ok(Self::DotBelow),
+            _ => Err(FoundationError::ParseError {
+                type_name: "EmphasisType".to_string(),
+                value: s.to_string(),
+                valid_values:
+                    "NONE, DOT_ABOVE, RING_ABOVE, TILDE, CARON, SIDE, COLON, GRAVE_ACCENT, ACUTE_ACCENT, CIRCUMFLEX, MACRON, HOOK_ABOVE, DOT_BELOW"
+                        .to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<u8> for EmphasisType {
+    type Error = FoundationError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::None),
+            1 => Ok(Self::DotAbove),
+            2 => Ok(Self::RingAbove),
+            3 => Ok(Self::Tilde),
+            4 => Ok(Self::Caron),
+            5 => Ok(Self::Side),
+            6 => Ok(Self::Colon),
+            7 => Ok(Self::GraveAccent),
+            8 => Ok(Self::AcuteAccent),
+            9 => Ok(Self::Circumflex),
+            10 => Ok(Self::Macron),
+            11 => Ok(Self::HookAbove),
+            12 => Ok(Self::DotBelow),
+            _ => Err(FoundationError::ParseError {
+                type_name: "EmphasisType".to_string(),
+                value: value.to_string(),
+                valid_values: "0-12 (None through DotBelow)".to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for EmphasisType {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("EmphasisType")
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// HeadingType
+// ---------------------------------------------------------------------------
+
+/// Paragraph heading type for outline/numbering classification.
+///
+/// Controls how a paragraph participates in document outline or numbering.
+/// Maps to the HWPX `<hh:heading type="...">` attribute.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_foundation::HeadingType;
+///
+/// assert_eq!(HeadingType::default(), HeadingType::None);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+#[repr(u8)]
+pub enum HeadingType {
+    /// No heading (body text, default).
+    #[default]
+    None = 0,
+    /// Outline heading (개요).
+    Outline = 1,
+    /// Number heading.
+    Number = 2,
+    /// Bullet heading.
+    Bullet = 3,
+}
+
+impl HeadingType {
+    /// Converts to the HWPX XML attribute string.
+    pub fn to_hwpx_str(self) -> &'static str {
+        match self {
+            Self::None => "NONE",
+            Self::Outline => "OUTLINE",
+            Self::Number => "NUMBER",
+            Self::Bullet => "BULLET",
+        }
+    }
+
+    /// Parses a HWPX XML attribute string.
+    pub fn from_hwpx_str(s: &str) -> Self {
+        match s {
+            "NONE" => Self::None,
+            "OUTLINE" => Self::Outline,
+            "NUMBER" => Self::Number,
+            "BULLET" => Self::Bullet,
+            _ => Self::None,
+        }
+    }
+}
+
+impl fmt::Display for HeadingType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => f.write_str("None"),
+            Self::Outline => f.write_str("Outline"),
+            Self::Number => f.write_str("Number"),
+            Self::Bullet => f.write_str("Bullet"),
+        }
+    }
+}
+
+impl std::str::FromStr for HeadingType {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "None" | "none" | "NONE" => Ok(Self::None),
+            "Outline" | "outline" | "OUTLINE" => Ok(Self::Outline),
+            "Number" | "number" | "NUMBER" => Ok(Self::Number),
+            "Bullet" | "bullet" | "BULLET" => Ok(Self::Bullet),
+            _ => Err(FoundationError::ParseError {
+                type_name: "HeadingType".to_string(),
+                value: s.to_string(),
+                valid_values: "None, Outline, Number, Bullet".to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<u8> for HeadingType {
+    type Error = FoundationError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::None),
+            1 => Ok(Self::Outline),
+            2 => Ok(Self::Number),
+            3 => Ok(Self::Bullet),
+            _ => Err(FoundationError::ParseError {
+                type_name: "HeadingType".to_string(),
+                value: value.to_string(),
+                valid_values: "0 (None), 1 (Outline), 2 (Number), 3 (Bullet)".to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for HeadingType {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("HeadingType")
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
 // Compile-time size assertions: all enums are 1 byte
 const _: () = assert!(std::mem::size_of::<Alignment>() == 1);
 const _: () = assert!(std::mem::size_of::<LineSpacingType>() == 1);
@@ -1583,6 +1836,8 @@ const _: () = assert!(std::mem::size_of::<ApplyPageType>() == 1);
 const _: () = assert!(std::mem::size_of::<NumberFormatType>() == 1);
 const _: () = assert!(std::mem::size_of::<PageNumberPosition>() == 1);
 const _: () = assert!(std::mem::size_of::<WordBreakType>() == 1);
+const _: () = assert!(std::mem::size_of::<EmphasisType>() == 1);
+const _: () = assert!(std::mem::size_of::<HeadingType>() == 1);
 
 #[cfg(test)]
 mod tests {
@@ -2327,7 +2582,24 @@ mod tests {
         assert_eq!(NumberFormatType::try_from(0u8).unwrap(), NumberFormatType::Digit);
         assert_eq!(NumberFormatType::try_from(1u8).unwrap(), NumberFormatType::CircledDigit);
         assert_eq!(NumberFormatType::try_from(8u8).unwrap(), NumberFormatType::HanjaDigit);
-        assert!(NumberFormatType::try_from(9u8).is_err());
+        assert_eq!(
+            NumberFormatType::try_from(9u8).unwrap(),
+            NumberFormatType::CircledHangulSyllable
+        );
+        assert!(NumberFormatType::try_from(10u8).is_err());
+    }
+
+    #[test]
+    fn number_format_type_circled_hangul_syllable() {
+        assert_eq!(NumberFormatType::CircledHangulSyllable.to_string(), "CircledHangulSyllable");
+        assert_eq!(
+            NumberFormatType::from_str("CircledHangulSyllable").unwrap(),
+            NumberFormatType::CircledHangulSyllable
+        );
+        assert_eq!(
+            NumberFormatType::from_str("CIRCLED_HANGUL_SYLLABLE").unwrap(),
+            NumberFormatType::CircledHangulSyllable
+        );
     }
 
     #[test]
@@ -2342,6 +2614,7 @@ mod tests {
             NumberFormatType::HangulSyllable,
             NumberFormatType::HangulJamo,
             NumberFormatType::HanjaDigit,
+            NumberFormatType::CircledHangulSyllable,
         ] {
             let s = v.to_string();
             let back = NumberFormatType::from_str(&s).unwrap();
@@ -2459,6 +2732,104 @@ mod tests {
             let s = v.to_string();
             let back = WordBreakType::from_str(&s).unwrap();
             assert_eq!(&back, v);
+        }
+    }
+
+    // ===================================================================
+    // EmphasisType
+    // ===================================================================
+
+    #[test]
+    fn emphasis_type_default_is_none() {
+        assert_eq!(EmphasisType::default(), EmphasisType::None);
+    }
+
+    #[test]
+    fn emphasis_type_display_pascal_case() {
+        assert_eq!(EmphasisType::None.to_string(), "None");
+        assert_eq!(EmphasisType::DotAbove.to_string(), "DotAbove");
+        assert_eq!(EmphasisType::RingAbove.to_string(), "RingAbove");
+        assert_eq!(EmphasisType::Tilde.to_string(), "Tilde");
+        assert_eq!(EmphasisType::Caron.to_string(), "Caron");
+        assert_eq!(EmphasisType::Side.to_string(), "Side");
+        assert_eq!(EmphasisType::Colon.to_string(), "Colon");
+        assert_eq!(EmphasisType::GraveAccent.to_string(), "GraveAccent");
+        assert_eq!(EmphasisType::AcuteAccent.to_string(), "AcuteAccent");
+        assert_eq!(EmphasisType::Circumflex.to_string(), "Circumflex");
+        assert_eq!(EmphasisType::Macron.to_string(), "Macron");
+        assert_eq!(EmphasisType::HookAbove.to_string(), "HookAbove");
+        assert_eq!(EmphasisType::DotBelow.to_string(), "DotBelow");
+    }
+
+    #[test]
+    fn emphasis_type_from_str_screaming_snake_case() {
+        assert_eq!(EmphasisType::from_str("NONE").unwrap(), EmphasisType::None);
+        assert_eq!(EmphasisType::from_str("DOT_ABOVE").unwrap(), EmphasisType::DotAbove);
+        assert_eq!(EmphasisType::from_str("RING_ABOVE").unwrap(), EmphasisType::RingAbove);
+        assert_eq!(EmphasisType::from_str("GRAVE_ACCENT").unwrap(), EmphasisType::GraveAccent);
+        assert_eq!(EmphasisType::from_str("DOT_BELOW").unwrap(), EmphasisType::DotBelow);
+    }
+
+    #[test]
+    fn emphasis_type_from_str_pascal_case() {
+        assert_eq!(EmphasisType::from_str("None").unwrap(), EmphasisType::None);
+        assert_eq!(EmphasisType::from_str("DotAbove").unwrap(), EmphasisType::DotAbove);
+        assert_eq!(EmphasisType::from_str("HookAbove").unwrap(), EmphasisType::HookAbove);
+    }
+
+    #[test]
+    fn emphasis_type_from_str_invalid() {
+        let err = EmphasisType::from_str("INVALID").unwrap_err();
+        match err {
+            FoundationError::ParseError { ref type_name, ref value, .. } => {
+                assert_eq!(type_name, "EmphasisType");
+                assert_eq!(value, "INVALID");
+            }
+            other => panic!("unexpected: {other}"),
+        }
+    }
+
+    #[test]
+    fn emphasis_type_try_from_u8() {
+        assert_eq!(EmphasisType::try_from(0u8).unwrap(), EmphasisType::None);
+        assert_eq!(EmphasisType::try_from(1u8).unwrap(), EmphasisType::DotAbove);
+        assert_eq!(EmphasisType::try_from(12u8).unwrap(), EmphasisType::DotBelow);
+        assert!(EmphasisType::try_from(13u8).is_err());
+        assert!(EmphasisType::try_from(255u8).is_err());
+    }
+
+    #[test]
+    fn emphasis_type_repr_values() {
+        assert_eq!(EmphasisType::None as u8, 0);
+        assert_eq!(EmphasisType::DotAbove as u8, 1);
+        assert_eq!(EmphasisType::DotBelow as u8, 12);
+    }
+
+    #[test]
+    fn emphasis_type_serde_roundtrip() {
+        for variant in &[
+            EmphasisType::None,
+            EmphasisType::DotAbove,
+            EmphasisType::RingAbove,
+            EmphasisType::DotBelow,
+        ] {
+            let json = serde_json::to_string(variant).unwrap();
+            let back: EmphasisType = serde_json::from_str(&json).unwrap();
+            assert_eq!(&back, variant);
+        }
+    }
+
+    #[test]
+    fn emphasis_type_str_roundtrip() {
+        for variant in &[
+            EmphasisType::None,
+            EmphasisType::DotAbove,
+            EmphasisType::GraveAccent,
+            EmphasisType::DotBelow,
+        ] {
+            let s = variant.to_string();
+            let back = EmphasisType::from_str(&s).unwrap();
+            assert_eq!(&back, variant);
         }
     }
 }

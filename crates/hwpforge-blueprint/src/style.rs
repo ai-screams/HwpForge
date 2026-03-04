@@ -11,8 +11,9 @@
 //! fields it cares about, inheriting the rest from the parent.
 
 use hwpforge_foundation::{
-    Alignment, BorderFillIndex, BreakType, Color, EmbossType, EngraveType, HwpUnit,
-    LineSpacingType, OutlineType, ShadowType, StrikeoutShape, UnderlineType, VerticalPosition,
+    Alignment, BorderFillIndex, BreakType, Color, EmbossType, EmphasisType, EngraveType,
+    HeadingType, HwpUnit, LineSpacingType, OutlineType, ShadowType, StrikeoutShape, UnderlineType,
+    VerticalPosition,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -175,6 +176,31 @@ pub struct PartialCharShape {
         skip_serializing_if = "Option::is_none"
     )]
     pub shade_color: Option<Color>,
+    /// Emphasis mark type (symMark: NONE, DOT_ABOVE, etc.).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emphasis: Option<EmphasisType>,
+    /// Character width ratio (percent, uniform across all 7 lang groups).
+    /// Default: 100. Range: 50-200.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ratio: Option<i32>,
+    /// Inter-character spacing (percent, uniform).
+    /// Default: 0. Negative = tighter.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spacing: Option<i32>,
+    /// Relative font size (percent, uniform).
+    /// Default: 100.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rel_sz: Option<i32>,
+    /// Vertical position offset (percent, uniform).
+    /// Default: 0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<i32>,
+    /// Enable kerning (pair adjustment). Default: false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_kerning: Option<bool>,
+    /// Use font-defined inter-character spacing. Default: false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub use_font_space: Option<bool>,
 }
 
 impl PartialCharShape {
@@ -226,6 +252,27 @@ impl PartialCharShape {
         if other.shade_color.is_some() {
             self.shade_color = other.shade_color;
         }
+        if other.emphasis.is_some() {
+            self.emphasis = other.emphasis;
+        }
+        if other.ratio.is_some() {
+            self.ratio = other.ratio;
+        }
+        if other.spacing.is_some() {
+            self.spacing = other.spacing;
+        }
+        if other.rel_sz.is_some() {
+            self.rel_sz = other.rel_sz;
+        }
+        if other.offset.is_some() {
+            self.offset = other.offset;
+        }
+        if other.use_kerning.is_some() {
+            self.use_kerning = other.use_kerning;
+        }
+        if other.use_font_space.is_some() {
+            self.use_font_space = other.use_font_space;
+        }
     }
 
     /// Attempts to resolve this partial into a fully-specified [`CharShape`].
@@ -254,6 +301,13 @@ impl PartialCharShape {
             engrave: self.engrave.unwrap_or(EngraveType::None),
             vertical_position: self.vertical_position.unwrap_or(VerticalPosition::Normal),
             shade_color: self.shade_color,
+            emphasis: self.emphasis.unwrap_or(EmphasisType::None),
+            ratio: self.ratio.unwrap_or(100),
+            spacing: self.spacing.unwrap_or(0),
+            rel_sz: self.rel_sz.unwrap_or(100),
+            offset: self.offset.unwrap_or(0),
+            use_kerning: self.use_kerning.unwrap_or(false),
+            use_font_space: self.use_font_space.unwrap_or(false),
         })
     }
 }
@@ -290,6 +344,9 @@ pub struct PartialParaShape {
     /// Border/fill reference (for paragraph borders and backgrounds).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub border_fill_id: Option<BorderFillIndex>,
+    /// Heading type for outline/numbering styles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub heading_type: Option<HeadingType>,
 }
 
 impl Spacing {
@@ -372,6 +429,9 @@ impl PartialParaShape {
         if other.border_fill_id.is_some() {
             self.border_fill_id = other.border_fill_id;
         }
+        if other.heading_type.is_some() {
+            self.heading_type = other.heading_type;
+        }
     }
 
     /// Resolves into a fully-specified [`ParaShape`] with defaults.
@@ -393,6 +453,7 @@ impl PartialParaShape {
             keep_lines_together: self.keep_lines_together.unwrap_or(false),
             widow_orphan: self.widow_orphan.unwrap_or(true), // Enabled by default in HWPX
             border_fill_id: self.border_fill_id,
+            heading_type: self.heading_type.unwrap_or(HeadingType::None),
         }
     }
 }
@@ -481,6 +542,20 @@ pub struct CharShape {
         skip_serializing_if = "Option::is_none"
     )]
     pub shade_color: Option<Color>,
+    /// Emphasis mark type (symMark). Default: None.
+    pub emphasis: EmphasisType,
+    /// Character width ratio (percent, uniform). Default: 100.
+    pub ratio: i32,
+    /// Inter-character spacing (percent, uniform). Default: 0.
+    pub spacing: i32,
+    /// Relative font size (percent, uniform). Default: 100.
+    pub rel_sz: i32,
+    /// Vertical position offset (percent, uniform). Default: 0.
+    pub offset: i32,
+    /// Enable kerning. Default: false.
+    pub use_kerning: bool,
+    /// Use font-defined inter-character spacing. Default: false.
+    pub use_font_space: bool,
 }
 
 /// A fully-resolved paragraph shape (all fields present).
@@ -520,6 +595,9 @@ pub struct ParaShape {
     /// Border/fill reference (None = no border/fill).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub border_fill_id: Option<BorderFillIndex>,
+    /// Heading type (None, Outline, Number, Bullet). Default: None.
+    #[serde(default)]
+    pub heading_type: HeadingType,
 }
 
 #[cfg(test)]
@@ -736,6 +814,13 @@ mod tests {
             engrave: EngraveType::None,
             vertical_position: VerticalPosition::Normal,
             shade_color: None,
+            emphasis: EmphasisType::None,
+            ratio: 100,
+            spacing: 0,
+            rel_sz: 100,
+            offset: 0,
+            use_kerning: false,
+            use_font_space: false,
         };
         let yaml = serde_yaml::to_string(&original).unwrap();
         let back: CharShape = serde_yaml::from_str(&yaml).unwrap();
@@ -760,6 +845,13 @@ mod tests {
             engrave: EngraveType::None,
             vertical_position: VerticalPosition::Normal,
             shade_color: None,
+            emphasis: EmphasisType::None,
+            ratio: 100,
+            spacing: 0,
+            rel_sz: 100,
+            offset: 0,
+            use_kerning: false,
+            use_font_space: false,
         };
         let yaml = serde_yaml::to_string(&cs).unwrap();
         assert!(yaml.contains("12pt"), "Expected '12pt' in: {yaml}");
@@ -782,6 +874,7 @@ mod tests {
             keep_lines_together: false,
             widow_orphan: true,
             border_fill_id: None,
+            heading_type: HeadingType::None,
         };
         let yaml = serde_yaml::to_string(&original).unwrap();
         let back: ParaShape = serde_yaml::from_str(&yaml).unwrap();
