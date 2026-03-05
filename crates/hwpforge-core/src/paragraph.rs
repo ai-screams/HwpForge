@@ -60,6 +60,9 @@ pub struct Paragraph {
     /// Whether this paragraph starts a new column (HWPX `columnBreak="1"`).
     #[serde(default)]
     pub column_break: bool,
+    /// Whether this paragraph starts a new page (HWPX `pageBreak="1"`).
+    #[serde(default)]
+    pub page_break: bool,
     /// Optional heading level (1-7) for TOC participation.
     /// Maps to 개요 1-7 styles. Paragraphs with a heading level
     /// will emit `<hp:titleMark>` in HWPX for auto-TOC support.
@@ -88,6 +91,7 @@ impl Paragraph {
             runs: Vec::new(),
             para_shape_id,
             column_break: false,
+            page_break: false,
             heading_level: None,
             style_id: None,
         }
@@ -109,7 +113,14 @@ impl Paragraph {
     /// assert_eq!(para.run_count(), 1);
     /// ```
     pub fn with_runs(runs: Vec<Run>, para_shape_id: ParaShapeIndex) -> Self {
-        Self { runs, para_shape_id, column_break: false, heading_level: None, style_id: None }
+        Self {
+            runs,
+            para_shape_id,
+            column_break: false,
+            page_break: false,
+            heading_level: None,
+            style_id: None,
+        }
     }
 
     /// Appends a run to this paragraph.
@@ -168,6 +179,22 @@ impl Paragraph {
     /// ```
     pub fn with_style(mut self, style_id: StyleIndex) -> Self {
         self.style_id = Some(style_id);
+        self
+    }
+
+    /// Marks this paragraph as starting a new page (HWPX `pageBreak="1"`).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::paragraph::Paragraph;
+    /// use hwpforge_foundation::ParaShapeIndex;
+    ///
+    /// let para = Paragraph::new(ParaShapeIndex::new(0)).with_page_break();
+    /// assert!(para.page_break);
+    /// ```
+    pub fn with_page_break(mut self) -> Self {
+        self.page_break = true;
         self
     }
 

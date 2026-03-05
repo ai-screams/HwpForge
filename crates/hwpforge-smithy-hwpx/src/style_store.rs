@@ -131,6 +131,11 @@ pub struct HwpxCharShape {
     pub use_kerning: bool,
     /// Use font space (from `useFontSpace` attribute, 0/1).
     pub use_font_space: bool,
+    /// Border/fill reference for character border (`borderFillIDRef`).
+    ///
+    /// `None` means use the default value of `2` (한글 default char background).
+    /// Set to `Some(id)` to reference a custom `HwpxBorderFill` entry.
+    pub border_fill_id: Option<u32>,
 }
 
 impl Default for HwpxCharShape {
@@ -158,6 +163,7 @@ impl Default for HwpxCharShape {
             char_offset: 0,
             use_kerning: false,
             use_font_space: false,
+            border_fill_id: None,
         }
     }
 }
@@ -470,6 +476,7 @@ pub(crate) fn default_char_shapes_modern() -> [HwpxCharShape; 7] {
         char_offset: 0,
         use_kerning: false,
         use_font_space: false,
+        border_fill_id: None,
     };
 
     [
@@ -858,6 +865,7 @@ impl HwpxStyleStore {
                 char_offset: cs.offset,
                 use_kerning: cs.use_kerning,
                 use_font_space: cs.use_font_space,
+                border_fill_id: cs.char_border_fill_id,
             });
         }
 

@@ -478,7 +478,7 @@ fn build_char_pr(id: u32, cs: &HwpxCharShape) -> HxCharPr {
         use_font_space: u32::from(cs.use_font_space),
         use_kerning: u32::from(cs.use_kerning),
         sym_mark: emphasis_type_to_hwpx(cs.emphasis).into(),
-        border_fill_id_ref: 2,
+        border_fill_id_ref: cs.border_fill_id.unwrap_or(2),
 
         font_ref: Some(HxFontRef {
             hangul: fr.hangul.get() as u32,

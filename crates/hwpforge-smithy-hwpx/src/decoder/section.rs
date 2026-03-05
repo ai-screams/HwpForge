@@ -16,6 +16,7 @@ use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
     ApplyPageType, CharShapeIndex, Color, HwpUnit, PageNumberPosition, ParaShapeIndex, StyleIndex,
+    TextDirection,
 };
 use quick_xml::de::from_str;
 
@@ -56,6 +57,8 @@ pub struct SectionParseResult {
     pub page_border_fills: Option<Vec<hwpforge_core::section::PageBorderFillEntry>>,
     /// Master pages extracted from `<masterPage>`, if present.
     pub master_pages: Option<Vec<hwpforge_core::section::MasterPage>>,
+    /// Text writing direction extracted from `<hp:secPr textDirection="...">`.
+    pub text_direction: TextDirection,
 }
 
 /// Parses a section XML string into paragraphs and optional page settings.
@@ -79,6 +82,7 @@ pub fn parse_section(
     let mut visibility = None;
     let mut line_number_shape = None;
     let mut page_border_fills = None;
+    let mut text_direction = TextDirection::Horizontal;
 
     let mut paragraphs = section
         .paragraphs
@@ -90,8 +94,8 @@ pub fn parse_section(
                 page_settings = ps;
             }
 
-            // Extract secPr sub-elements (visibility, lineNumberShape, pageBorderFill)
-            // from the first paragraph's first run
+            // Extract secPr sub-elements (visibility, lineNumberShape, pageBorderFill,
+            // textDirection) from the first paragraph's first run
             if para_idx == 0 {
                 for hx_run in &hx_para.runs {
                     if let Some(sec_pr) = &hx_run.sec_pr {
@@ -104,6 +108,7 @@ pub fn parse_section(
                         if page_border_fills.is_none() {
                             page_border_fills = extract_page_border_fills(sec_pr);
                         }
+                        text_direction = TextDirection::from_hwpx_str(&sec_pr.text_direction);
                     }
                 }
             }
@@ -180,6 +185,7 @@ pub fn parse_section(
         line_number_shape,
         page_border_fills,
         master_pages: None,
+        text_direction,
     })
 }
 
@@ -237,6 +243,7 @@ fn convert_paragraph(
         runs,
         para_shape_id,
         column_break: hx.column_break != 0,
+        page_break: hx.page_break != 0,
         heading_level,
         style_id,
     };

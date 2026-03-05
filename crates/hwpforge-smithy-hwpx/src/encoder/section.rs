@@ -24,7 +24,7 @@ use hwpforge_core::PageSettings;
 
 use crate::encoder::package::XMLNS_DECLS;
 use crate::error::{HwpxError, HwpxResult};
-use hwpforge_foundation::BookmarkType;
+use hwpforge_foundation::{BookmarkType, TextDirection};
 
 use crate::schema::section::{
     HxBookmark, HxCaption, HxCellAddr, HxCellSpan, HxCellSz, HxChart, HxCompose, HxComposeCharPr,
@@ -154,6 +154,7 @@ fn build_section(
                 para,
                 inject_sec_pr,
                 page_settings,
+                section.text_direction,
                 idx,
                 0,
                 chart_entries,
@@ -176,6 +177,7 @@ fn build_paragraph(
     para: &Paragraph,
     inject_sec_pr: bool,
     page_settings: Option<&PageSettings>,
+    text_direction: TextDirection,
     para_idx: usize,
     depth: usize,
     chart_entries: &mut Vec<(String, String)>,
@@ -186,6 +188,7 @@ fn build_paragraph(
         &para.runs,
         inject_sec_pr,
         page_settings,
+        text_direction,
         depth,
         chart_entries,
         hyperlink_entries,
@@ -233,6 +236,7 @@ fn build_runs(
     runs: &[Run],
     inject_sec_pr: bool,
     page_settings: Option<&PageSettings>,
+    text_direction: TextDirection,
     depth: usize,
     chart_entries: &mut Vec<(String, String)>,
     hyperlink_entries: &mut Vec<(String, String)>,
@@ -247,7 +251,7 @@ fn build_runs(
     for run in runs {
         let sec_pr = if inject_sec_pr && !sec_pr_injected && !run.content.is_control() {
             sec_pr_injected = true;
-            page_settings.map(build_sec_pr)
+            page_settings.map(|ps| build_sec_pr(ps, text_direction))
         } else {
             None
         };
@@ -522,7 +526,7 @@ fn build_runs(
                 0,
                 HxRun {
                     char_pr_id_ref: 0,
-                    sec_pr: Some(build_sec_pr(ps)),
+                    sec_pr: Some(build_sec_pr(ps, text_direction)),
                     texts: Vec::new(),
                     tables: Vec::new(),
                     pictures: Vec::new(),
@@ -599,6 +603,7 @@ pub(crate) fn encode_paragraphs_to_sublist(
                 para,
                 false,
                 None,
+                TextDirection::Horizontal,
                 idx,
                 depth + 1,
                 &mut sub_chart_entries,
@@ -1159,8 +1164,8 @@ pub(crate) fn generate_instid() -> String {
     INSTID_COUNTER.fetch_add(1, Ordering::Relaxed).to_string()
 }
 
-/// Builds `HxSecPr` from Core `PageSettings`.
-fn build_sec_pr(ps: &PageSettings) -> HxSecPr {
+/// Builds `HxSecPr` from Core `PageSettings` and text direction.
+fn build_sec_pr(ps: &PageSettings, text_direction: TextDirection) -> HxSecPr {
     let gutter_type_str = match ps.gutter_type {
         hwpforge_foundation::GutterType::LeftOnly => "LEFT_ONLY",
         hwpforge_foundation::GutterType::LeftRight => "LEFT_RIGHT",
@@ -1169,7 +1174,7 @@ fn build_sec_pr(ps: &PageSettings) -> HxSecPr {
         _ => "LEFT_ONLY",
     };
     HxSecPr {
-        text_direction: "HORIZONTAL".to_string(),
+        text_direction: text_direction.to_string(),
         master_page_cnt: 0,
         visibility: None,
         line_number_shape: None,
@@ -1329,6 +1334,7 @@ fn build_table_cell(
                 para,
                 false,
                 None,
+                TextDirection::Horizontal,
                 idx,
                 depth + 1,
                 &mut sub_chart_entries,
@@ -1485,10 +1491,14 @@ const DEFAULT_HORZ_SIZE: i32 = 42520;
 /// Builds the enriched `<hp:secPr>` opening tag with all attributes 한글 expects.
 ///
 /// `master_page_cnt` is set dynamically from the section's master pages.
+/// `textVerticalWidthHead` is `"1"` when text direction is not horizontal, `"0"` otherwise.
 fn build_sec_pr_open_enriched(section: &Section) -> String {
     let master_page_cnt = section.master_pages.as_ref().map_or(0, |v| v.len());
+    let text_direction = section.text_direction.to_string();
+    let vert_width_head =
+        if section.text_direction == TextDirection::Horizontal { "0" } else { "1" };
     format!(
-        r#"<hp:secPr id="" textDirection="HORIZONTAL" spaceColumns="1134" tabStop="8000" tabStopVal="4000" tabStopUnit="HWPUNIT" outlineShapeIDRef="1" memoShapeIDRef="0" textVerticalWidthHead="0" masterPageCnt="{master_page_cnt}">"#,
+        r#"<hp:secPr id="" textDirection="{text_direction}" spaceColumns="1134" tabStop="8000" tabStopVal="4000" tabStopUnit="HWPUNIT" outlineShapeIDRef="1" memoShapeIDRef="0" textVerticalWidthHead="{vert_width_head}" masterPageCnt="{master_page_cnt}">"#,
     )
 }
 
@@ -2901,5 +2911,69 @@ mod tests {
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
                 .unwrap();
         assert_eq!(result.paragraphs[0].style_id, None);
+    }
+
+    // ── TextDirection tests ──────────────────────────────────────
+
+    #[test]
+    fn text_direction_horizontal_is_default() {
+        let section = simple_section("가로쓰기");
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(
+            xml.contains(r#"textDirection="HORIZONTAL""#),
+            "default section should use HORIZONTAL"
+        );
+        assert!(
+            xml.contains(r#"textVerticalWidthHead="0""#),
+            "horizontal should have textVerticalWidthHead=0"
+        );
+    }
+
+    #[test]
+    fn text_direction_vertical_encodes_correctly() {
+        let section =
+            Section::with_paragraphs(vec![text_paragraph("세로쓰기", 0, 0)], PageSettings::a4())
+                .with_text_direction(TextDirection::Vertical);
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(
+            xml.contains(r#"textDirection="VERTICAL""#),
+            "vertical section should use VERTICAL"
+        );
+        assert!(
+            xml.contains(r#"textVerticalWidthHead="1""#),
+            "vertical should have textVerticalWidthHead=1"
+        );
+    }
+
+    #[test]
+    fn text_direction_vertical_all_encodes_correctly() {
+        let section = Section::with_paragraphs(
+            vec![text_paragraph("세로쓰기 영문 세움", 0, 0)],
+            PageSettings::a4(),
+        )
+        .with_text_direction(TextDirection::VerticalAll);
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(
+            xml.contains(r#"textDirection="VERTICALALL""#),
+            "verticalall section should use VERTICALALL"
+        );
+        assert!(
+            xml.contains(r#"textVerticalWidthHead="1""#),
+            "verticalall should have textVerticalWidthHead=1"
+        );
+    }
+
+    #[test]
+    fn text_direction_vertical_roundtrips() {
+        let section = Section::with_paragraphs(
+            vec![text_paragraph("세로쓰기 roundtrip", 0, 0)],
+            PageSettings::a4(),
+        )
+        .with_text_direction(TextDirection::Vertical);
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
+        assert_eq!(result.text_direction, TextDirection::Vertical);
     }
 }

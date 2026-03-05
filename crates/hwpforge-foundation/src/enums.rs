@@ -3181,7 +3181,87 @@ impl schemars::JsonSchema for RefContentType {
     }
 }
 
+/// Drop cap style for floating shape objects (HWPX `dropcapstyle` attribute).
+///
+/// Controls whether a shape (text box, image, table, etc.) is formatted as a
+/// drop capital that occupies multiple lines at the start of a paragraph.
+///
+/// # HWPX Values
+///
+/// | Variant      | HWPX string     |
+/// |--------------|-----------------|
+/// | `None`       | `"None"`        |
+/// | `DoubleLine` | `"DOUBLE_LINE"` |
+/// | `TripleLine` | `"TRIPLE_LINE"` |
+/// | `Margin`     | `"MARGIN"`      |
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DropCapStyle {
+    /// No drop cap (default).
+    #[default]
+    None = 0,
+    /// Drop cap spanning 2 lines.
+    DoubleLine = 1,
+    /// Drop cap spanning 3 lines.
+    TripleLine = 2,
+    /// Drop cap positioned in the margin.
+    Margin = 3,
+}
+
+impl fmt::Display for DropCapStyle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => f.write_str("None"),
+            Self::DoubleLine => f.write_str("DOUBLE_LINE"),
+            Self::TripleLine => f.write_str("TRIPLE_LINE"),
+            Self::Margin => f.write_str("MARGIN"),
+        }
+    }
+}
+
+impl std::str::FromStr for DropCapStyle {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "None" | "NONE" | "none" => Ok(Self::None),
+            "DOUBLE_LINE" => Ok(Self::DoubleLine),
+            "TRIPLE_LINE" => Ok(Self::TripleLine),
+            "MARGIN" => Ok(Self::Margin),
+            _ => Err(FoundationError::ParseError {
+                type_name: "DropCapStyle".to_string(),
+                value: s.to_string(),
+                valid_values: "None, DOUBLE_LINE, TRIPLE_LINE, MARGIN".to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for DropCapStyle {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("DropCapStyle")
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
+impl serde::Serialize for DropCapStyle {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for DropCapStyle {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        s.parse().map_err(serde::de::Error::custom)
+    }
+}
+
 // Compile-time size assertions: all enums are 1 byte
+const _: () = assert!(std::mem::size_of::<DropCapStyle>() == 1);
 const _: () = assert!(std::mem::size_of::<Alignment>() == 1);
 const _: () = assert!(std::mem::size_of::<LineSpacingType>() == 1);
 const _: () = assert!(std::mem::size_of::<BreakType>() == 1);
@@ -3217,6 +3297,70 @@ const _: () = assert!(std::mem::size_of::<BookmarkType>() == 1);
 const _: () = assert!(std::mem::size_of::<FieldType>() == 1);
 const _: () = assert!(std::mem::size_of::<RefType>() == 1);
 const _: () = assert!(std::mem::size_of::<RefContentType>() == 1);
+
+// ---------------------------------------------------------------------------
+// TextDirection
+// ---------------------------------------------------------------------------
+
+/// Text writing direction for sections and sub-lists.
+///
+/// Controls whether text flows horizontally (가로쓰기) or vertically (세로쓰기).
+/// Used in `<hp:secPr textDirection="...">` and `<hp:subList textDirection="...">`.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_foundation::TextDirection;
+///
+/// assert_eq!(TextDirection::default(), TextDirection::Horizontal);
+/// assert_eq!(TextDirection::Horizontal.to_string(), "HORIZONTAL");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum TextDirection {
+    /// Horizontal writing (가로쓰기) — default.
+    #[default]
+    Horizontal,
+    /// Vertical writing with Latin chars rotated 90° (세로쓰기 영문 눕힘).
+    Vertical,
+    /// Vertical writing with Latin chars upright (세로쓰기 영문 세움).
+    VerticalAll,
+}
+
+impl TextDirection {
+    /// Parses a HWPX XML attribute string (e.g. `"VERTICAL"`).
+    ///
+    /// Unknown values fall back to [`TextDirection::Horizontal`].
+    pub fn from_hwpx_str(s: &str) -> Self {
+        match s {
+            "VERTICAL" => Self::Vertical,
+            "VERTICALALL" => Self::VerticalAll,
+            _ => Self::Horizontal,
+        }
+    }
+}
+
+impl fmt::Display for TextDirection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Horizontal => f.write_str("HORIZONTAL"),
+            Self::Vertical => f.write_str("VERTICAL"),
+            Self::VerticalAll => f.write_str("VERTICALALL"),
+        }
+    }
+}
+
+impl schemars::JsonSchema for TextDirection {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("TextDirection")
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
+const _: () = assert!(std::mem::size_of::<TextDirection>() == 1);
 
 #[cfg(test)]
 mod tests {

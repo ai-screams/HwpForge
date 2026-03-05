@@ -95,6 +95,7 @@ impl HwpxDecoder {
                 page_border_fills: result.page_border_fills,
                 master_pages: result.master_pages,
                 begin_num: None,
+                text_direction: result.text_direction,
             };
 
             document.add_section(section);

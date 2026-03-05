@@ -21,7 +21,9 @@
 //! assert_eq!(section.paragraph_count(), 1);
 //! ```
 
-use hwpforge_foundation::{ApplyPageType, HwpUnit, NumberFormatType, PageNumberPosition, ShowMode};
+use hwpforge_foundation::{
+    ApplyPageType, HwpUnit, NumberFormatType, PageNumberPosition, ShowMode, TextDirection,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -477,6 +479,10 @@ pub struct Section {
     /// `None` = default values (all start at 1).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub begin_num: Option<BeginNum>,
+    /// Text writing direction for this section.
+    /// Defaults to [`TextDirection::Horizontal`] (가로쓰기).
+    #[serde(default)]
+    pub text_direction: TextDirection,
 }
 
 impl Section {
@@ -504,6 +510,7 @@ impl Section {
             page_border_fills: None,
             master_pages: None,
             begin_num: None,
+            text_direction: TextDirection::Horizontal,
         }
     }
 
@@ -536,7 +543,26 @@ impl Section {
             page_border_fills: None,
             master_pages: None,
             begin_num: None,
+            text_direction: TextDirection::Horizontal,
         }
+    }
+
+    /// Sets the text writing direction for this section and returns `self`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::section::Section;
+    /// use hwpforge_core::PageSettings;
+    /// use hwpforge_foundation::TextDirection;
+    ///
+    /// let section = Section::new(PageSettings::a4())
+    ///     .with_text_direction(TextDirection::Vertical);
+    /// assert_eq!(section.text_direction, TextDirection::Vertical);
+    /// ```
+    pub fn with_text_direction(mut self, dir: TextDirection) -> Self {
+        self.text_direction = dir;
+        self
     }
 
     /// Appends a paragraph to this section.
