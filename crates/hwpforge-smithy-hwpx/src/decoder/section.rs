@@ -956,9 +956,12 @@ fn extract_page_settings(sec_pr: &crate::schema::section::HxSecPr) -> Option<Pag
         _ => GutterType::LeftOnly,
     };
 
-    // KS X 6101: landscape is page orientation (NARROWLY=portrait, WIDELY=landscape),
-    // NOT mirror margins. No HWPX attribute exists for mirror_margins.
+    // No HWPX attribute exists for mirror_margins.
     let mirror_margins = false;
+
+    // 한글 실제 동작: WIDELY=portrait (세로), NARROWLY=landscape (가로)
+    // KS X 6101 스펙과 반대! (gotcha #3: landscape 값 반전)
+    let landscape = page_pr.landscape == "NARROWLY";
 
     Some(PageSettings {
         width,
@@ -972,6 +975,7 @@ fn extract_page_settings(sec_pr: &crate::schema::section::HxSecPr) -> Option<Pag
         gutter,
         gutter_type,
         mirror_margins,
+        landscape,
     })
 }
 

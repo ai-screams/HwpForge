@@ -73,9 +73,15 @@ pub struct PageSettings {
     /// Whether to mirror left/right margins on even pages (for bound documents).
     #[serde(default)]
     pub mirror_margins: bool,
+    /// Whether this section uses landscape orientation.
+    /// When `true`, the encoder outputs `landscape="NARROWLY"` (한글's reversed convention).
+    /// Width/height should remain in portrait order (e.g. 210x297 for A4);
+    /// 한글 handles the rotation internally.
+    #[serde(default)]
+    pub landscape: bool,
 }
 
-// 9 x HwpUnit(i32=4) + GutterType(1) + bool(1) + padding(2) = 40 bytes
+// 9 x HwpUnit(i32=4) + GutterType(1) + bool(1) + bool(1) + padding(1) = 40 bytes
 const _: () = assert!(std::mem::size_of::<PageSettings>() == 40);
 
 impl PageSettings {
@@ -110,6 +116,7 @@ impl PageSettings {
             gutter: HwpUnit::ZERO,
             gutter_type: GutterType::LeftOnly,
             mirror_margins: false,
+            landscape: false,
         }
     }
 
@@ -137,6 +144,7 @@ impl PageSettings {
             gutter: HwpUnit::ZERO,
             gutter_type: GutterType::LeftOnly,
             mirror_margins: false,
+            landscape: false,
         }
     }
 
