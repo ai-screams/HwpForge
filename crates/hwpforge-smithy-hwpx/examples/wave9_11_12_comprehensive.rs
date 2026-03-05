@@ -634,11 +634,18 @@ fn section_bookmarks_refs_fields() -> Section {
             text_para("▶ 누름틀 (ClickHere):", CS_RED, PS_LEFT),
             ctrl_para(field_click, CS_NORMAL, PS_BODY),
             empty_para(),
-            text_para("▶ 날짜 필드:", CS_RED, PS_LEFT),
+            text_para("▶ 날짜 필드 (SUMMERY → $modifiedtime):", CS_RED, PS_LEFT),
             ctrl_para(field_date, CS_NORMAL, PS_BODY),
             empty_para(),
-            text_para("▶ 쪽번호 필드:", CS_RED, PS_LEFT),
-            ctrl_para(field_page, CS_NORMAL, PS_BODY),
+            text_para("▶ 쪽번호 필드 (autoNum PAGE):", CS_RED, PS_LEFT),
+            multi_run_para(
+                vec![
+                    Run::text("현재 페이지: ", CharShapeIndex::new(CS_NORMAL)),
+                    Run::control(field_page, CharShapeIndex::new(CS_BLUE)),
+                    Run::text(" 쪽", CharShapeIndex::new(CS_NORMAL)),
+                ],
+                PS_BODY,
+            ),
         ],
         PageSettings::a4(),
     )

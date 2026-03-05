@@ -418,13 +418,18 @@ fn build_runs(
                         let nonce = MARKER_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                         let marker = format!("__HWPFD_{nonce}_{field_id}__");
                         let hint = hint_text.as_deref().unwrap_or("");
-                        let real_xml = build_field_run_xml(
-                            field_type,
-                            hint,
-                            help_text.as_deref().unwrap_or(""),
-                            char_pr_id_ref,
-                            field_id,
-                        );
+                        // PageNum uses <hp:autoNum> (NOT fieldBegin/fieldEnd).
+                        let real_xml = if *field_type == hwpforge_foundation::FieldType::PageNum {
+                            build_autonum_run_xml(char_pr_id_ref)
+                        } else {
+                            build_field_run_xml(
+                                field_type,
+                                hint,
+                                help_text.as_deref().unwrap_or(""),
+                                char_pr_id_ref,
+                                field_id,
+                            )
+                        };
                         let marker_run_xml = format!(
                             r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
                         );
@@ -827,7 +832,14 @@ fn build_bookmark_span_end_run_xml(char_pr_id_ref: u32, field_id: usize) -> Stri
     )
 }
 
-/// Builds a `<hp:run>` XML string for a press-field (누름틀).
+/// Builds a `<hp:run>` XML string for a field control.
+///
+/// # Encoding rules (from reference files):
+///
+/// - **CLICK_HERE**: `type="CLICK_HERE"`, `fieldid=627272811`, `Command=Clickhere:set:43:...`
+/// - **Date/Time/DocSummary/UserInfo**: `type="SUMMERY"` (한글 typo for "Summary"),
+///   `fieldid=628321650`, `Command=$modifiedtime`/`$createtime`/`$author`/`$lastsaveby`
+/// - **PageNum**: NOT handled here — uses `build_autonum_run_xml()` instead.
 fn build_field_run_xml(
     field_type: &hwpforge_foundation::FieldType,
     hint: &str,
@@ -835,35 +847,137 @@ fn build_field_run_xml(
     char_pr_id_ref: u32,
     field_id: usize,
 ) -> String {
+    use hwpforge_foundation::FieldType;
+
     let escaped_hint = escape_xml(hint);
-    let escaped_help = escape_xml(help);
-    let field_type_str = field_type.to_string();
+    let begin_id = 1_000_000_000 + field_id as u64;
+
+    match field_type {
+        FieldType::ClickHere => {
+            // CLICK_HERE: editable press-field (누름틀)
+            let escaped_help = escape_xml(help);
+            let hint_len = hint.chars().count();
+            let help_len = help.chars().count();
+            let command = format!(
+                "Clickhere:set:43:Direction:wstring:{hint_len}:{escaped_hint} HelpState:wstring:{help_len}:{escaped_help}  ",
+            );
+            format!(
+                concat!(
+                    r#"<hp:run charPrIDRef="{cpr}">"#,
+                    r#"<hp:ctrl>"#,
+                    r#"<hp:fieldBegin id="{bid}" type="CLICK_HERE" name="" editable="1" dirty="0" "#,
+                    r#"zorder="-1" fieldid="627272811" metaTag="">"#,
+                    r#"<hp:parameters cnt="3" name="">"#,
+                    r#"<hp:integerParam name="Prop">9</hp:integerParam>"#,
+                    r#"<hp:stringParam name="Command" xml:space="preserve">{cmd}</hp:stringParam>"#,
+                    r#"<hp:stringParam name="Direction">{hint}</hp:stringParam>"#,
+                    r#"</hp:parameters>"#,
+                    r#"</hp:fieldBegin>"#,
+                    r#"</hp:ctrl>"#,
+                    r#"<hp:t>{display}</hp:t>"#,
+                    r#"<hp:ctrl>"#,
+                    r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="627272811"/>"#,
+                    r#"</hp:ctrl>"#,
+                    r#"</hp:run>"#,
+                ),
+                cpr = char_pr_id_ref,
+                bid = begin_id,
+                cmd = command,
+                hint = escaped_hint,
+                display = escaped_hint,
+            )
+        }
+        FieldType::Date | FieldType::Time | FieldType::DocSummary | FieldType::UserInfo => {
+            // SUMMERY fields (한글 internal type for document summary/date/time).
+            // Reference: tests/fixtures/date_field.hwpx
+            let (command, display_text) = match field_type {
+                FieldType::Date => {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs();
+                    let days = now / 86400;
+                    let (y, m, d) = days_to_ymd(days);
+                    ("$modifiedtime".to_string(), format!("{y}-{m:02}-{d:02}"))
+                }
+                FieldType::Time => ("$createtime".to_string(), " ".to_string()),
+                FieldType::DocSummary => {
+                    let text =
+                        if !hint.is_empty() { escaped_hint.clone() } else { " ".to_string() };
+                    ("$author".to_string(), text)
+                }
+                FieldType::UserInfo => {
+                    let text =
+                        if !hint.is_empty() { escaped_hint.clone() } else { " ".to_string() };
+                    ("$lastsaveby".to_string(), text)
+                }
+                _ => unreachable!(),
+            };
+            format!(
+                concat!(
+                    r#"<hp:run charPrIDRef="{cpr}">"#,
+                    r#"<hp:ctrl>"#,
+                    r#"<hp:fieldBegin id="{bid}" type="SUMMERY" name="" editable="1" dirty="0" "#,
+                    r#"zorder="-1" fieldid="628321650" metaTag="">"#,
+                    r#"<hp:parameters cnt="3" name="">"#,
+                    r#"<hp:integerParam name="Prop">8</hp:integerParam>"#,
+                    r#"<hp:stringParam name="Command">{cmd}</hp:stringParam>"#,
+                    r#"<hp:stringParam name="Property">{cmd}</hp:stringParam>"#,
+                    r#"</hp:parameters>"#,
+                    r#"</hp:fieldBegin>"#,
+                    r#"</hp:ctrl>"#,
+                    r#"<hp:t>{display}</hp:t>"#,
+                    r#"<hp:ctrl>"#,
+                    r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="628321650"/>"#,
+                    r#"</hp:ctrl>"#,
+                    r#"</hp:run>"#,
+                ),
+                cpr = char_pr_id_ref,
+                bid = begin_id,
+                cmd = command,
+                display = display_text,
+            )
+        }
+        _ => {
+            // Fallback: encode as CLICK_HERE for any unknown/future field types.
+            build_field_run_xml(&FieldType::ClickHere, hint, help, char_pr_id_ref, field_id)
+        }
+    }
+}
+
+/// Builds a `<hp:run>` XML string for an inline page number (`<hp:autoNum>`).
+///
+/// Page numbers within body text use `<hp:autoNum numType="PAGE">` — NOT
+/// fieldBegin/fieldEnd. Reference: tests/fixtures/date_field.hwpx
+fn build_autonum_run_xml(char_pr_id_ref: u32) -> String {
     format!(
         concat!(
             r#"<hp:run charPrIDRef="{cpr}">"#,
             r#"<hp:ctrl>"#,
-            r#"<hp:fieldBegin type="{ftype}" editable="true" dirty="false" "#,
-            r#"zorder="-1" fieldid="{fid}" name="">"#,
-            r#"<hp:parameters cnt="3" name="">"#,
-            r#"<hp:integerParam name="Prop">9</hp:integerParam>"#,
-            r#"<hp:stringParam name="Direction">{hint}</hp:stringParam>"#,
-            r#"<hp:stringParam name="HelpState">{help}</hp:stringParam>"#,
-            r#"</hp:parameters>"#,
-            r##"<hp:metaTag>{{"name":"#누름틀"}}</hp:metaTag>"##,
-            r#"</hp:fieldBegin>"#,
-            r#"</hp:ctrl>"#,
-            r#"<hp:t>{hint}</hp:t>"#,
-            r#"<hp:ctrl>"#,
-            r#"<hp:fieldEnd beginIDRef="{fid}" fieldid="{fid}"/>"#,
+            r#"<hp:autoNum num="1" numType="PAGE">"#,
+            r#"<hp:autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar="" supscript="0"/>"#,
+            r#"</hp:autoNum>"#,
             r#"</hp:ctrl>"#,
             r#"</hp:run>"#,
         ),
         cpr = char_pr_id_ref,
-        ftype = field_type_str,
-        fid = field_id,
-        hint = escaped_hint,
-        help = escaped_help,
     )
+}
+
+/// Simple days-since-epoch to (year, month, day) conversion.
+fn days_to_ymd(days_since_epoch: u64) -> (u64, u64, u64) {
+    // Simplified civil calendar calculation.
+    let z = days_since_epoch + 719_468;
+    let era = z / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if m <= 2 { y + 1 } else { y };
+    (y, m, d)
 }
 
 /// Builds a `<hp:run>` XML string for a cross-reference (상호참조).

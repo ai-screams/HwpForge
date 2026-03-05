@@ -525,7 +525,24 @@ pub(crate) fn extract_field_controls(xml: &str) -> Vec<Control> {
             Ok(quick_xml::events::Event::Start(ref e)) => {
                 let local_name = e.local_name();
                 let local = std::str::from_utf8(local_name.as_ref()).unwrap_or("");
-                if local == "fieldBegin" {
+                if local == "autoNum" {
+                    // <hp:autoNum numType="PAGE"> — inline page number
+                    let mut num_type = String::new();
+                    for attr in e.attributes().flatten() {
+                        let key_local = attr.key.local_name();
+                        let key = std::str::from_utf8(key_local.as_ref()).unwrap_or("");
+                        if key == "numType" {
+                            num_type = std::str::from_utf8(&attr.value).unwrap_or("").to_string();
+                        }
+                    }
+                    if num_type == "PAGE" {
+                        controls.push(Control::Field {
+                            field_type: hwpforge_foundation::FieldType::PageNum,
+                            hint_text: None,
+                            help_text: None,
+                        });
+                    }
+                } else if local == "fieldBegin" {
                     in_field_begin = true;
                     field_type.clear();
                     field_name.clear();
@@ -625,6 +642,23 @@ pub(crate) fn extract_field_controls(xml: &str) -> Vec<Control> {
                                 field_type: ft,
                                 hint_text: params.get("Direction").cloned(),
                                 help_text: params.get("HelpState").cloned(),
+                            });
+                        }
+                        "SUMMERY" => {
+                            // 한글 uses type="SUMMERY" (typo for Summary) for
+                            // date/time/author fields. Map to FieldType via Command.
+                            let cmd = params.get("Command").map(|s| s.as_str()).unwrap_or("");
+                            let ft = match cmd {
+                                "$modifiedtime" => hwpforge_foundation::FieldType::Date,
+                                "$createtime" => hwpforge_foundation::FieldType::Time,
+                                "$author" | "$title" => hwpforge_foundation::FieldType::DocSummary,
+                                "$lastsaveby" => hwpforge_foundation::FieldType::UserInfo,
+                                _ => hwpforge_foundation::FieldType::DocSummary,
+                            };
+                            controls.push(Control::Field {
+                                field_type: ft,
+                                hint_text: None,
+                                help_text: None,
                             });
                         }
                         "CROSSREF" => {
