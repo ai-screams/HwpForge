@@ -213,7 +213,7 @@ fn build_paragraph(
         id: format!("{para_idx}"),
         para_pr_id_ref: para.para_shape_id.get() as u32,
         style_id_ref: para.style_id.map_or(0, |s| s.get() as u32),
-        page_break: 0,
+        page_break: u32::from(para.page_break),
         column_break: u32::from(para.column_break),
         merged: 0,
         runs,
