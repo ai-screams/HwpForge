@@ -3191,9 +3191,9 @@ impl schemars::JsonSchema for RefContentType {
 /// | Variant      | HWPX string     |
 /// |--------------|-----------------|
 /// | `None`       | `"None"`        |
-/// | `DoubleLine` | `"DOUBLE_LINE"` |
-/// | `TripleLine` | `"TRIPLE_LINE"` |
-/// | `Margin`     | `"MARGIN"`      |
+/// | `DoubleLine` | `"DoubleLine"`  |
+/// | `TripleLine` | `"TripleLine"`  |
+/// | `Margin`     | `"Margin"`      |
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum DropCapStyle {
@@ -3212,9 +3212,9 @@ impl fmt::Display for DropCapStyle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::None => f.write_str("None"),
-            Self::DoubleLine => f.write_str("DOUBLE_LINE"),
-            Self::TripleLine => f.write_str("TRIPLE_LINE"),
-            Self::Margin => f.write_str("MARGIN"),
+            Self::DoubleLine => f.write_str("DoubleLine"),
+            Self::TripleLine => f.write_str("TripleLine"),
+            Self::Margin => f.write_str("Margin"),
         }
     }
 }
@@ -3225,13 +3225,13 @@ impl std::str::FromStr for DropCapStyle {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "None" | "NONE" | "none" => Ok(Self::None),
-            "DOUBLE_LINE" => Ok(Self::DoubleLine),
-            "TRIPLE_LINE" => Ok(Self::TripleLine),
-            "MARGIN" => Ok(Self::Margin),
+            "DoubleLine" | "DOUBLE_LINE" => Ok(Self::DoubleLine),
+            "TripleLine" | "TRIPLE_LINE" => Ok(Self::TripleLine),
+            "Margin" | "MARGIN" => Ok(Self::Margin),
             _ => Err(FoundationError::ParseError {
                 type_name: "DropCapStyle".to_string(),
                 value: s.to_string(),
-                valid_values: "None, DOUBLE_LINE, TRIPLE_LINE, MARGIN".to_string(),
+                valid_values: "None, DoubleLine, TripleLine, Margin".to_string(),
             }),
         }
     }
