@@ -105,7 +105,7 @@ mod validate;
 pub use caption::{Caption, CaptionSide, DEFAULT_CAPTION_GAP};
 pub use chart::{ChartData, ChartGrouping, ChartSeries, ChartType, LegendPosition, XySeries};
 pub use column::{ColumnDef, ColumnLayoutMode, ColumnSettings, ColumnType};
-pub use control::{Control, LineStyle, ShapePoint, ShapeStyle};
+pub use control::{ArrowStyle, Control, Fill, LineStyle, ShapePoint, ShapeStyle};
 pub use document::{Document, Draft, Validated};
 pub use error::{CoreError, CoreErrorCode, CoreResult, ValidationError};
 pub use image::{Image, ImageFormat, ImageStore};
@@ -114,6 +114,9 @@ pub use numbering::{NumberingDef, ParaHead};
 pub use page::PageSettings;
 pub use paragraph::Paragraph;
 pub use run::{Run, RunContent};
-pub use section::{HeaderFooter, PageNumber, Section};
+pub use section::{
+    BeginNum, HeaderFooter, LineNumberShape, MasterPage, PageBorderFillEntry, PageNumber, Section,
+    Visibility,
+};
 pub use tab::TabDef;
 pub use table::{Table, TableCell, TableRow};

@@ -19,7 +19,7 @@
 //! assert!(letter.width.to_inch() > 8.4);
 //! ```
 
-use hwpforge_foundation::HwpUnit;
+use hwpforge_foundation::{GutterType, HwpUnit};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -64,10 +64,19 @@ pub struct PageSettings {
     pub header_margin: HwpUnit,
     /// Footer margin (distance from page bottom to footer baseline).
     pub footer_margin: HwpUnit,
+    /// Binding gutter width. Defaults to 0 (no gutter).
+    #[serde(default, skip_serializing_if = "HwpUnit::is_zero")]
+    pub gutter: HwpUnit,
+    /// Gutter position type. Defaults to `LeftOnly`.
+    #[serde(default)]
+    pub gutter_type: GutterType,
+    /// Whether to mirror left/right margins on even pages (for bound documents).
+    #[serde(default)]
+    pub mirror_margins: bool,
 }
 
-// 8 x HwpUnit(i32 = 4 bytes) = 32 bytes
-const _: () = assert!(std::mem::size_of::<PageSettings>() == 32);
+// 9 x HwpUnit(i32=4) + GutterType(1) + bool(1) + padding(2) = 40 bytes
+const _: () = assert!(std::mem::size_of::<PageSettings>() == 40);
 
 impl PageSettings {
     /// A4 paper (210 mm x 297 mm) with 20 mm margins, 10 mm header/footer.
@@ -98,6 +107,9 @@ impl PageSettings {
             margin_bottom: HwpUnit::from_mm(20.0).unwrap(),
             header_margin: HwpUnit::from_mm(10.0).unwrap(),
             footer_margin: HwpUnit::from_mm(10.0).unwrap(),
+            gutter: HwpUnit::ZERO,
+            gutter_type: GutterType::LeftOnly,
+            mirror_margins: false,
         }
     }
 
@@ -122,6 +134,9 @@ impl PageSettings {
             margin_bottom: HwpUnit::from_inch(1.0).unwrap(),
             header_margin: HwpUnit::from_inch(0.5).unwrap(),
             footer_margin: HwpUnit::from_inch(0.5).unwrap(),
+            gutter: HwpUnit::ZERO,
+            gutter_type: GutterType::LeftOnly,
+            mirror_margins: false,
         }
     }
 
@@ -239,7 +254,7 @@ mod tests {
 
     #[test]
     fn size_assertion() {
-        assert_eq!(std::mem::size_of::<PageSettings>(), 32);
+        assert_eq!(std::mem::size_of::<PageSettings>(), 40);
     }
 
     #[test]

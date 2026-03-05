@@ -231,6 +231,7 @@ fn build_section_1() -> Section {
             fill_color: None,
             line_width: Some(80_u32), // u32 (was i32)
             line_style: Some(style),  // LineStyle enum (was String)
+            ..Default::default()
         };
         let line_ctrl: Control =
             Control::line(ShapePoint::new(0, 0), ShapePoint::new(35000, 0)).expect("valid line");
@@ -282,6 +283,7 @@ fn build_section_1() -> Section {
         fill_color: Some(Color::from_rgb(0xE3, 0xF2, 0xFD)),
         line_width: Some(56_u32),
         line_style: Some(LineStyle::Solid),
+        ..Default::default()
     };
     let ew: HwpUnit = HwpUnit::from_mm(50.0).expect("50mm");
     let eh: HwpUnit = HwpUnit::from_mm(25.0).expect("25mm");
@@ -307,6 +309,7 @@ fn build_section_1() -> Section {
         fill_color: Some(Color::from_rgb(0xF3, 0xE5, 0xF5)),
         line_width: Some(42_u32),
         line_style: Some(LineStyle::DashDot),
+        ..Default::default()
     };
     let tw: i32 = HwpUnit::from_mm(30.0).expect("30mm").as_i32();
     let th: i32 = HwpUnit::from_mm(25.0).expect("25mm").as_i32();

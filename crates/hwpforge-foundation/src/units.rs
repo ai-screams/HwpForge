@@ -119,6 +119,13 @@ impl HwpUnit {
         self.0
     }
 
+    /// Returns `true` if this unit is zero.
+    ///
+    /// Useful as a `skip_serializing_if` predicate for serde.
+    pub const fn is_zero(&self) -> bool {
+        self.0 == 0
+    }
+
     /// Constructs an `HwpUnit` from typographic points.
     ///
     /// # Errors

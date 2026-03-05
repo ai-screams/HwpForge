@@ -21,13 +21,229 @@
 //! assert_eq!(section.paragraph_count(), 1);
 //! ```
 
-use hwpforge_foundation::{ApplyPageType, NumberFormatType, PageNumberPosition};
+use hwpforge_foundation::{ApplyPageType, HwpUnit, NumberFormatType, PageNumberPosition, ShowMode};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::column::ColumnSettings;
 use crate::page::PageSettings;
 use crate::paragraph::Paragraph;
+
+// ---------------------------------------------------------------------------
+// Visibility
+// ---------------------------------------------------------------------------
+
+/// Controls visibility of headers, footers, master pages, borders, and fills.
+///
+/// Maps to `<hp:visibility>` inside `<hp:secPr>`. All flags default to
+/// the standard 한글 values (show everything, no hiding).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct Visibility {
+    /// Hide header on the first page.
+    #[serde(default)]
+    pub hide_first_header: bool,
+    /// Hide footer on the first page.
+    #[serde(default)]
+    pub hide_first_footer: bool,
+    /// Hide master page on the first page.
+    #[serde(default)]
+    pub hide_first_master_page: bool,
+    /// Hide page number on the first page.
+    #[serde(default)]
+    pub hide_first_page_num: bool,
+    /// Hide empty line on the first page.
+    #[serde(default)]
+    pub hide_first_empty_line: bool,
+    /// Show line numbers in the section.
+    #[serde(default)]
+    pub show_line_number: bool,
+    /// Border visibility mode.
+    #[serde(default)]
+    pub border: ShowMode,
+    /// Fill visibility mode.
+    #[serde(default)]
+    pub fill: ShowMode,
+}
+
+impl Default for Visibility {
+    fn default() -> Self {
+        Self {
+            hide_first_header: false,
+            hide_first_footer: false,
+            hide_first_master_page: false,
+            hide_first_page_num: false,
+            hide_first_empty_line: false,
+            show_line_number: false,
+            border: ShowMode::ShowAll,
+            fill: ShowMode::ShowAll,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// LineNumberShape
+// ---------------------------------------------------------------------------
+
+/// Line numbering settings for a section.
+///
+/// Maps to `<hp:lineNumberShape>` inside `<hp:secPr>`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+pub struct LineNumberShape {
+    /// Restart type: 0 = continuous, 1 = per page, 2 = per section.
+    #[serde(default)]
+    pub restart_type: u8,
+    /// Count by N (show number every N lines, 0 = disabled).
+    #[serde(default)]
+    pub count_by: u16,
+    /// Distance from text to line number (HwpUnit).
+    #[serde(default)]
+    pub distance: HwpUnit,
+    /// Starting line number.
+    #[serde(default)]
+    pub start_number: u32,
+}
+
+// ---------------------------------------------------------------------------
+// PageBorderFillEntry
+// ---------------------------------------------------------------------------
+
+/// A single page border/fill entry for the section.
+///
+/// Maps to `<hp:pageBorderFill>` inside `<hp:secPr>`.
+/// Standard 한글 documents have 3 entries: BOTH, EVEN, ODD.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct PageBorderFillEntry {
+    /// Which pages this border fill applies to: `"BOTH"`, `"EVEN"`, `"ODD"`.
+    pub apply_type: String,
+    /// Reference to a borderFill definition (1-based index).
+    #[serde(default = "PageBorderFillEntry::default_border_fill_id")]
+    pub border_fill_id: u32,
+    /// Whether the border is relative to text or paper.
+    #[serde(default = "PageBorderFillEntry::default_text_border")]
+    pub text_border: String,
+    /// Whether header is inside the border.
+    #[serde(default)]
+    pub header_inside: bool,
+    /// Whether footer is inside the border.
+    #[serde(default)]
+    pub footer_inside: bool,
+    /// Fill area: `"PAPER"` or `"PAGE"`.
+    #[serde(default = "PageBorderFillEntry::default_fill_area")]
+    pub fill_area: String,
+    /// Offset from page edge (left, right, top, bottom) in HwpUnit.
+    #[serde(default = "PageBorderFillEntry::default_offset")]
+    pub offset: [HwpUnit; 4],
+}
+
+impl PageBorderFillEntry {
+    fn default_border_fill_id() -> u32 {
+        1
+    }
+    fn default_text_border() -> String {
+        "PAPER".to_string()
+    }
+    fn default_fill_area() -> String {
+        "PAPER".to_string()
+    }
+    fn default_offset() -> [HwpUnit; 4] {
+        // 1417 HwpUnit ≈ 5mm default offset
+        [
+            HwpUnit::new(1417).unwrap(),
+            HwpUnit::new(1417).unwrap(),
+            HwpUnit::new(1417).unwrap(),
+            HwpUnit::new(1417).unwrap(),
+        ]
+    }
+}
+
+impl Default for PageBorderFillEntry {
+    fn default() -> Self {
+        Self {
+            apply_type: "BOTH".to_string(),
+            border_fill_id: 1,
+            text_border: "PAPER".to_string(),
+            header_inside: false,
+            footer_inside: false,
+            fill_area: "PAPER".to_string(),
+            offset: Self::default_offset(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// BeginNum
+// ---------------------------------------------------------------------------
+
+/// Starting numbers for various auto-numbering sequences.
+///
+/// Maps to `<hh:beginNum>` in header.xml.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BeginNum {
+    /// Starting page number (default: 1).
+    #[serde(default = "BeginNum::one")]
+    pub page: u32,
+    /// Starting footnote number (default: 1).
+    #[serde(default = "BeginNum::one")]
+    pub footnote: u32,
+    /// Starting endnote number (default: 1).
+    #[serde(default = "BeginNum::one")]
+    pub endnote: u32,
+    /// Starting picture number (default: 1).
+    #[serde(default = "BeginNum::one")]
+    pub pic: u32,
+    /// Starting table number (default: 1).
+    #[serde(default = "BeginNum::one")]
+    pub tbl: u32,
+    /// Starting equation number (default: 1).
+    #[serde(default = "BeginNum::one")]
+    pub equation: u32,
+}
+
+impl BeginNum {
+    fn one() -> u32 {
+        1
+    }
+}
+
+impl Default for BeginNum {
+    fn default() -> Self {
+        Self { page: 1, footnote: 1, endnote: 1, pic: 1, tbl: 1, equation: 1 }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MasterPage
+// ---------------------------------------------------------------------------
+
+/// A master page (background/watermark page) for a section.
+///
+/// Master pages provide background content rendered behind the main body.
+/// Maps to `<masterPage>` elements inside `<hp:secPr>`.
+///
+/// In HWPX, each master page has an `applyPageType` attribute
+/// (`BOTH`, `EVEN`, or `ODD`) and contains its own paragraphs.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct MasterPage {
+    /// Which pages this master page applies to.
+    pub apply_page_type: ApplyPageType,
+    /// Paragraphs composing the master page content.
+    pub paragraphs: Vec<Paragraph>,
+}
+
+impl MasterPage {
+    /// Creates a new master page with the given page type and paragraphs.
+    pub fn new(apply_page_type: ApplyPageType, paragraphs: Vec<Paragraph>) -> Self {
+        Self { apply_page_type, paragraphs }
+    }
+}
+
+impl std::fmt::Display for MasterPage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let n = self.paragraphs.len();
+        let word = if n == 1 { "paragraph" } else { "paragraphs" };
+        write!(f, "MasterPage({n} {word}, {:?})", self.apply_page_type)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // HeaderFooter
@@ -243,6 +459,24 @@ pub struct Section {
     /// Multi-column layout. `None` = single column (default).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub column_settings: Option<ColumnSettings>,
+    /// Visibility flags for headers, footers, borders, etc.
+    /// `None` = default visibility (show everything).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visibility: Option<Visibility>,
+    /// Line numbering settings. `None` = no line numbers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line_number_shape: Option<LineNumberShape>,
+    /// Page border/fill entries. `None` = default 3 entries (BOTH/EVEN/ODD with borderFillIDRef=1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub page_border_fills: Option<Vec<PageBorderFillEntry>>,
+    /// Master pages (background content rendered behind the body).
+    /// `None` = no master pages (default).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub master_pages: Option<Vec<MasterPage>>,
+    /// Starting numbers for auto-numbering sequences.
+    /// `None` = default values (all start at 1).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub begin_num: Option<BeginNum>,
 }
 
 impl Section {
@@ -265,6 +499,11 @@ impl Section {
             footer: None,
             page_number: None,
             column_settings: None,
+            visibility: None,
+            line_number_shape: None,
+            page_border_fills: None,
+            master_pages: None,
+            begin_num: None,
         }
     }
 
@@ -292,6 +531,11 @@ impl Section {
             footer: None,
             page_number: None,
             column_settings: None,
+            visibility: None,
+            line_number_shape: None,
+            page_border_fills: None,
+            master_pages: None,
+            begin_num: None,
         }
     }
 

@@ -164,6 +164,7 @@ fn line_separator() -> Paragraph {
                 fill_color: None,
                 line_width: Some(28),
                 line_style: None,
+                ..Default::default()
             }),
         },
         CS_NORMAL,
@@ -409,6 +410,7 @@ fn build_section_1() -> Section {
                 fill_color: Some(Color::from_rgb(0xF5, 0xF5, 0xF5)),
                 line_width: None,
                 line_style: None,
+                ..Default::default()
             }),
         },
         CS_NORMAL,
@@ -572,6 +574,7 @@ fn build_section_2() -> Section {
                 fill_color: Some(Color::from_rgb(0xFF, 0xEE, 0xEE)),
                 line_width: Some(56),
                 line_style: None,
+                ..Default::default()
             }),
         },
         CS_NORMAL,
@@ -611,6 +614,7 @@ fn build_section_2() -> Section {
                 fill_color: Some(Color::from_rgb(0xFF, 0xF3, 0xE0)),
                 line_width: Some(42),
                 line_style: None,
+                ..Default::default()
             }),
         },
         CS_NORMAL,

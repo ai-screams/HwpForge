@@ -14,7 +14,7 @@
 
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::{ColumnLayoutMode, ColumnSettings, ColumnType};
-use hwpforge_core::control::{Control, DutmalAlign, DutmalPosition, ShapeStyle};
+use hwpforge_core::control::{Control, DutmalAlign, DutmalPosition};
 use hwpforge_core::image::Image;
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::{Run, RunContent};
@@ -24,14 +24,15 @@ use hwpforge_core::PageSettings;
 
 use crate::encoder::package::XMLNS_DECLS;
 use crate::error::{HwpxError, HwpxResult};
+use hwpforge_foundation::BookmarkType;
+
 use crate::schema::section::{
-    HxCaption, HxCellAddr, HxCellSpan, HxCellSz, HxChart, HxCompose, HxComposeCharPr, HxCtrl,
-    HxDrawText, HxDutmal, HxEllipse, HxEquation, HxFillBrush, HxFlip, HxFootNote, HxImg, HxImgClip,
-    HxImgDim, HxImgRect, HxLine, HxLineShape, HxMatrix, HxOffset, HxPageMargin, HxPagePr,
-    HxParagraph, HxPic, HxPoint, HxPolygon, HxRect, HxRenderingInfo, HxRotationInfo, HxRun,
-    HxRunCase, HxRunSwitch, HxScript, HxSecPr, HxSection, HxShadow, HxShapeComment, HxSizeAttr,
-    HxSubList, HxTable, HxTableCell, HxTableMargin, HxTablePos, HxTableRow, HxTableSz, HxText,
-    HxTitleMark,
+    HxBookmark, HxCaption, HxCellAddr, HxCellSpan, HxCellSz, HxChart, HxCompose, HxComposeCharPr,
+    HxCtrl, HxDutmal, HxEquation, HxFlip, HxFootNote, HxImg, HxImgClip, HxImgDim, HxImgRect,
+    HxIndexMark, HxMatrix, HxOffset, HxPageMargin, HxPagePr, HxParagraph, HxPic, HxPoint,
+    HxRenderingInfo, HxRotationInfo, HxRun, HxRunCase, HxRunSwitch, HxScript, HxSecPr, HxSection,
+    HxShapeComment, HxSizeAttr, HxSubList, HxTable, HxTableCell, HxTableMargin, HxTablePos,
+    HxTableRow, HxTableSz, HxText, HxTitleMark,
 };
 
 use super::chart::generate_chart_xml;
@@ -83,7 +84,7 @@ pub(crate) fn encode_section(
 
     // Enrich <hp:secPr> with sub-elements required by 한글 (grid,
     // startNum, visibility, footnote/endnote, pageBorderFill).
-    let mut enriched = enrich_sec_pr(inner_content, section.column_settings.as_ref());
+    let mut enriched = enrich_sec_pr(inner_content, section);
 
     // Inject header/footer/page number controls after colPr
     inject_header_footer_pagenum(&mut enriched, section);
@@ -248,6 +249,8 @@ fn build_runs(
         let mut lines = Vec::new();
         let mut ellipses = Vec::new();
         let mut polygons = Vec::new();
+        let mut curves = Vec::new();
+        let mut connect_lines = Vec::new();
         let mut equations = Vec::new();
         let mut switches: Vec<HxRunSwitch> = Vec::new();
         let mut dutmals: Vec<HxDutmal> = Vec::new();
@@ -283,6 +286,19 @@ fn build_runs(
                     }
                     Control::Polygon { .. } => {
                         polygons.push(encode_polygon_to_hx(ctrl, depth, hyperlink_entries)?);
+                    }
+                    Control::Arc { .. } => {
+                        ellipses.push(encode_arc_to_hx(ctrl, depth, hyperlink_entries)?);
+                    }
+                    Control::Curve { .. } => {
+                        curves.push(encode_curve_to_hx(ctrl, depth, hyperlink_entries)?);
+                    }
+                    Control::ConnectLine { .. } => {
+                        connect_lines.push(encode_connect_line_to_hx(
+                            ctrl,
+                            depth,
+                            hyperlink_entries,
+                        )?);
                     }
                     Control::Equation { .. } => {
                         equations.push(encode_equation_to_hx(ctrl)?);
@@ -338,6 +354,89 @@ fn build_runs(
                             compose_type,
                         ));
                     }
+                    Control::IndexMark { .. }
+                    | Control::Bookmark { bookmark_type: BookmarkType::Point, .. } => {
+                        if let Some(hx_ctrl) =
+                            encode_control_to_ctrl(ctrl, depth, hyperlink_entries)?
+                        {
+                            ctrls.push(hx_ctrl);
+                        }
+                    }
+                    Control::Bookmark { name, bookmark_type }
+                        if *bookmark_type == BookmarkType::SpanStart =>
+                    {
+                        let field_id = hyperlink_entries.len();
+                        static MARKER_NONCE: std::sync::atomic::AtomicU64 =
+                            std::sync::atomic::AtomicU64::new(0);
+                        let nonce = MARKER_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let marker = format!("__HWPBM_{nonce}_{field_id}__");
+                        let real_xml = build_bookmark_span_run_xml(name, char_pr_id_ref, field_id);
+                        let marker_run_xml = format!(
+                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
+                        );
+                        hyperlink_entries.push((marker_run_xml, real_xml));
+                        texts.push(HxText { text: marker });
+                    }
+                    Control::Field { field_type, hint_text, help_text } => {
+                        let field_id = hyperlink_entries.len();
+                        static MARKER_NONCE: std::sync::atomic::AtomicU64 =
+                            std::sync::atomic::AtomicU64::new(0);
+                        let nonce = MARKER_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let marker = format!("__HWPFD_{nonce}_{field_id}__");
+                        let hint = hint_text.as_deref().unwrap_or("");
+                        let real_xml = build_field_run_xml(
+                            field_type,
+                            hint,
+                            help_text.as_deref().unwrap_or(""),
+                            char_pr_id_ref,
+                            field_id,
+                        );
+                        let marker_run_xml = format!(
+                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
+                        );
+                        hyperlink_entries.push((marker_run_xml, real_xml));
+                        texts.push(HxText { text: marker });
+                    }
+                    Control::CrossRef { target_name, ref_type, content_type, as_hyperlink } => {
+                        let field_id = hyperlink_entries.len();
+                        static MARKER_NONCE: std::sync::atomic::AtomicU64 =
+                            std::sync::atomic::AtomicU64::new(0);
+                        let nonce = MARKER_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let marker = format!("__HWPXR_{nonce}_{field_id}__");
+                        let real_xml = build_crossref_run_xml(
+                            target_name,
+                            ref_type,
+                            content_type,
+                            *as_hyperlink,
+                            char_pr_id_ref,
+                            field_id,
+                        );
+                        let marker_run_xml = format!(
+                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
+                        );
+                        hyperlink_entries.push((marker_run_xml, real_xml));
+                        texts.push(HxText { text: marker });
+                    }
+                    Control::Memo { content, author, date } => {
+                        let field_id = hyperlink_entries.len();
+                        static MARKER_NONCE: std::sync::atomic::AtomicU64 =
+                            std::sync::atomic::AtomicU64::new(0);
+                        let nonce = MARKER_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                        let marker = format!("__HWPME_{nonce}_{field_id}__");
+                        let sublist_xml = encode_memo_sublist(content, depth, hyperlink_entries)?;
+                        let real_xml = build_memo_run_xml(
+                            &sublist_xml,
+                            author,
+                            date,
+                            char_pr_id_ref,
+                            field_id,
+                        );
+                        let marker_run_xml = format!(
+                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
+                        );
+                        hyperlink_entries.push((marker_run_xml, real_xml));
+                        texts.push(HxText { text: marker });
+                    }
                     Control::Unknown { .. } => {
                         // Unknown controls are silently skipped
                         continue;
@@ -366,6 +465,8 @@ fn build_runs(
             lines,
             ellipses,
             polygons,
+            curves,
+            connect_lines,
             equations,
             switches,
             title_mark: None,
@@ -396,6 +497,8 @@ fn build_runs(
                     title_mark: None,
                     dutmals: Vec::new(),
                     composes: Vec::new(),
+                    curves: Vec::new(),
+                    connect_lines: Vec::new(),
                 },
             );
         }
@@ -427,12 +530,23 @@ fn encode_control_to_ctrl(
             }),
             ..Default::default()
         })),
+        Control::Bookmark { name, bookmark_type: BookmarkType::Point } => Ok(Some(HxCtrl {
+            bookmark: Some(HxBookmark { name: name.clone() }),
+            ..Default::default()
+        })),
+        Control::IndexMark { primary, secondary } => Ok(Some(HxCtrl {
+            indexmark: Some(HxIndexMark {
+                first_key: primary.clone(),
+                second_key: secondary.clone(),
+            }),
+            ..Default::default()
+        })),
         _ => Ok(None),
     }
 }
 
 /// Encodes a `Vec<Paragraph>` into `HxSubList` with standard defaults.
-fn encode_paragraphs_to_sublist(
+pub(crate) fn encode_paragraphs_to_sublist(
     paragraphs: &[Paragraph],
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
@@ -470,444 +584,11 @@ fn encode_paragraphs_to_sublist(
     })
 }
 
-// ── Shape-common helpers ─────────────────────────────────────────
-
-/// Collected common sub-elements required by 한글 for all drawing objects.
-///
-/// All four shape encoders (rect/textbox, line, ellipse, polygon) produce
-/// the same prefix block. This struct avoids repeating the construction logic.
-struct ShapeCommon {
-    offset: HxOffset,
-    org_sz: HxSizeAttr,
-    cur_sz: HxSizeAttr,
-    flip: HxFlip,
-    rotation_info: HxRotationInfo,
-    rendering_info: HxRenderingInfo,
-    line_shape: HxLineShape,
-    fill_brush: HxFillBrush,
-    shadow: HxShadow,
-}
-
-/// Builds the shape-common block for a drawing object of the given pixel size.
-///
-/// Defaults match 한글's output for a newly created shape:
-/// - zero offset, orgSz = given dimensions, curSz = 0×0
-/// - identity rotation/rendering matrices
-/// - solid black border, white fill, no shadow
-fn build_shape_common(width: i32, height: i32, style: Option<&ShapeStyle>) -> ShapeCommon {
-    let mut line_shape = HxLineShape::default_solid();
-    let mut fill_brush = HxFillBrush::default_white();
-
-    if let Some(s) = style {
-        if let Some(ref c) = s.line_color {
-            line_shape.color = c.to_hex_rgb();
-        }
-        if let Some(w) = s.line_width {
-            line_shape.width = w as i32;
-        }
-        if let Some(ref ls) = s.line_style {
-            line_shape.style = ls.to_string();
-        }
-        if let Some(ref c) = s.fill_color {
-            fill_brush.win_brush.face_color = c.to_hex_rgb();
-        }
-    }
-
-    ShapeCommon {
-        offset: HxOffset { x: 0, y: 0 },
-        org_sz: HxSizeAttr { width, height },
-        cur_sz: HxSizeAttr { width: 0, height: 0 },
-        flip: HxFlip { horizontal: 0, vertical: 0 },
-        rotation_info: HxRotationInfo {
-            angle: 0,
-            center_x: width / 2,
-            center_y: height / 2,
-            rotate_image: 1,
-        },
-        rendering_info: HxRenderingInfo {
-            trans_matrix: HxMatrix::identity(),
-            sca_matrix: HxMatrix::identity(),
-            rot_matrix: HxMatrix::identity(),
-        },
-        line_shape,
-        fill_brush,
-        shadow: HxShadow::default_none(),
-    }
-}
-
-/// Encodes a Core `Control::TextBox` into `HxRect` with `<hp:drawText>`.
-///
-/// Phase 4.5 MVP: inline positioning (treatAsChar=1) when offsets are (0,0).
-fn encode_textbox_to_rect(
-    ctrl: &Control,
-    depth: usize,
-    hyperlink_entries: &mut Vec<(String, String)>,
-) -> HwpxResult<HxRect> {
-    let (paragraphs, width, height, horz_offset, vert_offset, caption, style) = match ctrl {
-        Control::TextBox {
-            paragraphs,
-            width,
-            height,
-            horz_offset,
-            vert_offset,
-            caption,
-            style,
-        } => (paragraphs, *width, *height, *horz_offset, *vert_offset, caption, style),
-        _ => unreachable!("encode_textbox_to_rect called with non-TextBox"),
-    };
-
-    let width_hwp = width.as_i32();
-    let height_hwp = height.as_i32();
-
-    // Default text margin: 283 HWPUNIT (~1mm)
-    const MARGIN: i32 = 283;
-    let last_width = width_hwp as u32;
-
-    let sub_list = encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries)?;
-    let sc = build_shape_common(width_hwp, height_hwp, style.as_ref());
-
-    Ok(HxRect {
-        id: generate_instid(),
-        z_order: 0,
-        numbering_type: "NONE".to_string(),
-        text_wrap: "TOP_AND_BOTTOM".to_string(),
-        text_flow: "BOTH_SIDES".to_string(),
-        lock: 0,
-        dropcap_style: "None".to_string(),
-        href: String::new(),
-        group_level: 0,
-        instid: generate_instid(),
-        ratio: 0,
-
-        offset: Some(sc.offset),
-        org_sz: Some(sc.org_sz),
-        cur_sz: Some(sc.cur_sz),
-        flip: Some(sc.flip),
-        rotation_info: Some(sc.rotation_info),
-        rendering_info: Some(sc.rendering_info),
-        line_shape: Some(sc.line_shape),
-        fill_brush: Some(sc.fill_brush),
-        shadow: Some(HxShadow { alpha: 178, ..HxShadow::default_none() }),
-
-        sz: Some(HxTableSz {
-            width: width_hwp,
-            width_rel_to: "ABSOLUTE".to_string(),
-            height: height_hwp,
-            height_rel_to: "ABSOLUTE".to_string(),
-            protect: 0,
-        }),
-
-        pos: Some(HxTablePos {
-            treat_as_char: if horz_offset == 0 && vert_offset == 0 { 1 } else { 0 },
-            affect_l_spacing: 0,
-            flow_with_text: 0,
-            allow_overlap: 0,
-            hold_anchor_and_so: 0,
-            vert_rel_to: "PARA".to_string(),
-            horz_rel_to: "PARA".to_string(),
-            vert_align: "TOP".to_string(),
-            horz_align: "LEFT".to_string(),
-            vert_offset,
-            horz_offset,
-        }),
-
-        out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
-        caption: caption
-            .as_ref()
-            .map(|c| build_hx_caption(c, width_hwp, depth, hyperlink_entries))
-            .transpose()?,
-
-        draw_text: Some(HxDrawText {
-            last_width,
-            name: String::new(),
-            editable: 0,
-            sub_list,
-            text_margin: Some(HxTableMargin {
-                left: MARGIN,
-                right: MARGIN,
-                top: MARGIN,
-                bottom: MARGIN,
-            }),
-        }),
-
-        pt0: Some(HxPoint { x: 0, y: 0 }),
-        pt1: Some(HxPoint { x: width_hwp, y: 0 }),
-        pt2: Some(HxPoint { x: width_hwp, y: height_hwp }),
-        pt3: Some(HxPoint { x: 0, y: height_hwp }),
-        shape_comment: Some(HxShapeComment { text: "사각형입니다.".to_string() }),
-    })
-}
-
-/// Encodes a Core `Control::Line` into `HxLine`.
-fn encode_line_to_hx(
-    ctrl: &Control,
-    depth: usize,
-    hyperlink_entries: &mut Vec<(String, String)>,
-) -> HwpxResult<HxLine> {
-    let (start, end, width, height, horz_offset, vert_offset, caption, style) = match ctrl {
-        Control::Line { start, end, width, height, horz_offset, vert_offset, caption, style } => {
-            (start, end, *width, *height, horz_offset, vert_offset, caption, style)
-        }
-        _ => unreachable!("encode_line_to_hx called with non-Line"),
-    };
-
-    let w = width.as_i32();
-    let h = height.as_i32();
-    let sc = build_shape_common(w, h, style.as_ref());
-
-    Ok(HxLine {
-        id: generate_instid(),
-        z_order: 0,
-        numbering_type: "NONE".to_string(),
-        text_wrap: "TOP_AND_BOTTOM".to_string(),
-        text_flow: "BOTH_SIDES".to_string(),
-        lock: 0,
-        dropcap_style: "None".to_string(),
-        href: String::new(),
-        group_level: 0,
-        instid: generate_instid(),
-        is_reverse_hv: 0,
-        offset: Some(sc.offset),
-        org_sz: Some(sc.org_sz),
-        cur_sz: Some(sc.cur_sz),
-        flip: Some(sc.flip),
-        rotation_info: Some(sc.rotation_info),
-        rendering_info: Some(sc.rendering_info),
-        line_shape: Some(sc.line_shape),
-        fill_brush: None, // lines have no fill brush per golden (line.hwpx)
-        shadow: Some(sc.shadow),
-        sz: Some(HxTableSz {
-            width: w,
-            width_rel_to: "ABSOLUTE".to_string(),
-            height: h,
-            height_rel_to: "ABSOLUTE".to_string(),
-            protect: 0,
-        }),
-        pos: Some(HxTablePos {
-            treat_as_char: if *horz_offset == 0 && *vert_offset == 0 { 1 } else { 0 },
-            affect_l_spacing: 0,
-            flow_with_text: 0,
-            allow_overlap: 0,
-            hold_anchor_and_so: 0,
-            vert_rel_to: "PARA".to_string(),
-            horz_rel_to: "PARA".to_string(),
-            vert_align: "TOP".to_string(),
-            horz_align: "LEFT".to_string(),
-            vert_offset: *vert_offset,
-            horz_offset: *horz_offset,
-        }),
-        out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
-        shape_comment: Some(HxShapeComment { text: "선입니다.".to_string() }),
-        caption: caption
-            .as_ref()
-            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries))
-            .transpose()?,
-        start_pt: Some(HxPoint { x: start.x, y: start.y }),
-        end_pt: Some(HxPoint { x: end.x, y: end.y }),
-    })
-}
-
-/// Encodes a Core `Control::Ellipse` into `HxEllipse`.
-fn encode_ellipse_to_hx(
-    ctrl: &Control,
-    depth: usize,
-    hyperlink_entries: &mut Vec<(String, String)>,
-) -> HwpxResult<HxEllipse> {
-    let (center, axis1, axis2, width, height, horz_offset, vert_offset, paragraphs, caption, style) =
-        match ctrl {
-            Control::Ellipse {
-                center,
-                axis1,
-                axis2,
-                width,
-                height,
-                horz_offset,
-                vert_offset,
-                paragraphs,
-                caption,
-                style,
-            } => (
-                center,
-                axis1,
-                axis2,
-                *width,
-                *height,
-                horz_offset,
-                vert_offset,
-                paragraphs,
-                caption,
-                style,
-            ),
-            _ => unreachable!("encode_ellipse_to_hx called with non-Ellipse"),
-        };
-
-    let w = width.as_i32();
-    let h = height.as_i32();
-    let sc = build_shape_common(w, h, style.as_ref());
-
-    let draw_text = if paragraphs.is_empty() {
-        None
-    } else {
-        let sub_list = encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries)?;
-        Some(HxDrawText {
-            last_width: 0,
-            name: String::new(),
-            editable: 0,
-            sub_list,
-            text_margin: None,
-        })
-    };
-
-    Ok(HxEllipse {
-        id: generate_instid(),
-        z_order: 0,
-        numbering_type: "NONE".to_string(),
-        text_wrap: "TOP_AND_BOTTOM".to_string(),
-        text_flow: "BOTH_SIDES".to_string(),
-        lock: 0,
-        dropcap_style: "None".to_string(),
-        href: String::new(),
-        group_level: 0,
-        instid: generate_instid(),
-        interval_dirty: 0,
-        has_arc_pr: 0,
-        arc_type: "NORMAL".to_string(),
-        offset: Some(sc.offset),
-        org_sz: Some(sc.org_sz),
-        cur_sz: Some(sc.cur_sz),
-        flip: Some(sc.flip),
-        rotation_info: Some(sc.rotation_info),
-        rendering_info: Some(sc.rendering_info),
-        line_shape: Some(sc.line_shape),
-        fill_brush: Some(sc.fill_brush),
-        shadow: Some(sc.shadow),
-        sz: Some(HxTableSz {
-            width: w,
-            width_rel_to: "ABSOLUTE".to_string(),
-            height: h,
-            height_rel_to: "ABSOLUTE".to_string(),
-            protect: 0,
-        }),
-        pos: Some(HxTablePos {
-            treat_as_char: if *horz_offset == 0 && *vert_offset == 0 { 1 } else { 0 },
-            affect_l_spacing: 0,
-            flow_with_text: 0,
-            allow_overlap: 0,
-            hold_anchor_and_so: 0,
-            vert_rel_to: "PARA".to_string(),
-            horz_rel_to: "PARA".to_string(),
-            vert_align: "TOP".to_string(),
-            horz_align: "LEFT".to_string(),
-            vert_offset: *vert_offset,
-            horz_offset: *horz_offset,
-        }),
-        out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
-        shape_comment: Some(HxShapeComment { text: "타원입니다.".to_string() }),
-        caption: caption
-            .as_ref()
-            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries))
-            .transpose()?,
-        draw_text,
-        center: Some(HxPoint { x: center.x, y: center.y }),
-        ax1: Some(HxPoint { x: axis1.x, y: axis1.y }),
-        ax2: Some(HxPoint { x: axis2.x, y: axis2.y }),
-        start1: Some(HxPoint { x: 0, y: 0 }),
-        end1: Some(HxPoint { x: 0, y: 0 }),
-        start2: Some(HxPoint { x: 0, y: 0 }),
-        end2: Some(HxPoint { x: 0, y: 0 }),
-    })
-}
-
-/// Encodes a Core `Control::Polygon` into `HxPolygon`.
-fn encode_polygon_to_hx(
-    ctrl: &Control,
-    depth: usize,
-    hyperlink_entries: &mut Vec<(String, String)>,
-) -> HwpxResult<HxPolygon> {
-    let (vertices, width, height, horz_offset, vert_offset, paragraphs, caption, style) = match ctrl
-    {
-        Control::Polygon {
-            vertices,
-            width,
-            height,
-            horz_offset,
-            vert_offset,
-            paragraphs,
-            caption,
-            style,
-        } => (vertices, *width, *height, horz_offset, vert_offset, paragraphs, caption, style),
-        _ => unreachable!("encode_polygon_to_hx called with non-Polygon"),
-    };
-
-    let w = width.as_i32();
-    let h = height.as_i32();
-    let sc = build_shape_common(w, h, style.as_ref());
-
-    let draw_text = if paragraphs.is_empty() {
-        None
-    } else {
-        let sub_list = encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries)?;
-        Some(HxDrawText {
-            last_width: 0,
-            name: String::new(),
-            editable: 0,
-            sub_list,
-            text_margin: None,
-        })
-    };
-
-    let points = vertices.iter().map(|v| HxPoint { x: v.x, y: v.y }).collect();
-
-    Ok(HxPolygon {
-        id: generate_instid(),
-        z_order: 0,
-        numbering_type: "NONE".to_string(),
-        text_wrap: "TOP_AND_BOTTOM".to_string(),
-        text_flow: "BOTH_SIDES".to_string(),
-        lock: 0,
-        dropcap_style: "None".to_string(),
-        href: String::new(),
-        group_level: 0,
-        instid: generate_instid(),
-        offset: Some(sc.offset),
-        org_sz: Some(sc.org_sz),
-        cur_sz: Some(sc.cur_sz),
-        flip: Some(sc.flip),
-        rotation_info: Some(sc.rotation_info),
-        rendering_info: Some(sc.rendering_info),
-        line_shape: Some(sc.line_shape),
-        fill_brush: Some(sc.fill_brush),
-        shadow: Some(sc.shadow),
-        sz: Some(HxTableSz {
-            width: w,
-            width_rel_to: "ABSOLUTE".to_string(),
-            height: h,
-            height_rel_to: "ABSOLUTE".to_string(),
-            protect: 0,
-        }),
-        pos: Some(HxTablePos {
-            treat_as_char: if *horz_offset == 0 && *vert_offset == 0 { 1 } else { 0 },
-            affect_l_spacing: 0,
-            flow_with_text: 0,
-            allow_overlap: 0,
-            hold_anchor_and_so: 0,
-            vert_rel_to: "PARA".to_string(),
-            horz_rel_to: "PARA".to_string(),
-            vert_align: "TOP".to_string(),
-            horz_align: "LEFT".to_string(),
-            vert_offset: *vert_offset,
-            horz_offset: *horz_offset,
-        }),
-        out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
-        shape_comment: Some(HxShapeComment { text: "다각형입니다.".to_string() }),
-        caption: caption
-            .as_ref()
-            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries))
-            .transpose()?,
-        draw_text,
-        points,
-    })
-}
+// Shape encoding functions are defined in `super::shapes`.
+use super::shapes::{
+    encode_arc_to_hx, encode_connect_line_to_hx, encode_curve_to_hx, encode_ellipse_to_hx,
+    encode_line_to_hx, encode_polygon_to_hx, encode_textbox_to_rect,
+};
 
 /// Encodes a Core `Control::Equation` into `HxEquation`.
 ///
@@ -1075,6 +756,157 @@ fn build_hyperlink_run_xml(text: &str, url: &str, char_pr_id_ref: u32, field_id:
     )
 }
 
+/// Builds a `<hp:run>` XML string for a span bookmark (fieldBegin/fieldEnd).
+fn build_bookmark_span_run_xml(name: &str, char_pr_id_ref: u32, field_id: usize) -> String {
+    let escaped_name = escape_xml(name);
+    format!(
+        concat!(
+            r#"<hp:run charPrIDRef="{cpr}">"#,
+            r#"<hp:ctrl>"#,
+            r#"<hp:fieldBegin type="BOOKMARK" editable="false" dirty="false" "#,
+            r#"zorder="-1" fieldid="{fid}" name="{name}"/>"#,
+            r#"</hp:ctrl>"#,
+            r#"<hp:t/>"#,
+            r#"<hp:ctrl>"#,
+            r#"<hp:fieldEnd beginIDRef="{fid}" fieldid="{fid}"/>"#,
+            r#"</hp:ctrl>"#,
+            r#"</hp:run>"#,
+        ),
+        cpr = char_pr_id_ref,
+        fid = field_id,
+        name = escaped_name,
+    )
+}
+
+/// Builds a `<hp:run>` XML string for a press-field (누름틀).
+fn build_field_run_xml(
+    field_type: &hwpforge_foundation::FieldType,
+    hint: &str,
+    help: &str,
+    char_pr_id_ref: u32,
+    field_id: usize,
+) -> String {
+    let escaped_hint = escape_xml(hint);
+    let escaped_help = escape_xml(help);
+    let field_type_str = field_type.to_string();
+    format!(
+        concat!(
+            r#"<hp:run charPrIDRef="{cpr}">"#,
+            r#"<hp:ctrl>"#,
+            r#"<hp:fieldBegin type="{ftype}" editable="true" dirty="false" "#,
+            r#"zorder="-1" fieldid="{fid}" name="">"#,
+            r#"<hp:parameters cnt="3" name="">"#,
+            r#"<hp:integerParam name="Prop">9</hp:integerParam>"#,
+            r#"<hp:stringParam name="Direction">{hint}</hp:stringParam>"#,
+            r#"<hp:stringParam name="HelpState">{help}</hp:stringParam>"#,
+            r#"</hp:parameters>"#,
+            r##"<hp:metaTag>{{"name":"#누름틀"}}</hp:metaTag>"##,
+            r#"</hp:fieldBegin>"#,
+            r#"</hp:ctrl>"#,
+            r#"<hp:t>{hint}</hp:t>"#,
+            r#"<hp:ctrl>"#,
+            r#"<hp:fieldEnd beginIDRef="{fid}" fieldid="{fid}"/>"#,
+            r#"</hp:ctrl>"#,
+            r#"</hp:run>"#,
+        ),
+        cpr = char_pr_id_ref,
+        ftype = field_type_str,
+        fid = field_id,
+        hint = escaped_hint,
+        help = escaped_help,
+    )
+}
+
+/// Builds a `<hp:run>` XML string for a cross-reference (상호참조).
+fn build_crossref_run_xml(
+    target_name: &str,
+    ref_type: &hwpforge_foundation::RefType,
+    content_type: &hwpforge_foundation::RefContentType,
+    as_hyperlink: bool,
+    char_pr_id_ref: u32,
+    field_id: usize,
+) -> String {
+    let escaped_name = escape_xml(target_name);
+    let ref_path = format!("?#{escaped_name}");
+    let ref_type_str = ref_type.to_string();
+    let content_type_str = content_type.to_string();
+    let hyperlink_val = if as_hyperlink { "true" } else { "false" };
+    format!(
+        concat!(
+            r#"<hp:run charPrIDRef="{cpr}">"#,
+            r#"<hp:ctrl>"#,
+            r#"<hp:fieldBegin type="CROSSREF" editable="false" dirty="false" "#,
+            r#"zorder="-1" fieldid="{fid}" name="">"#,
+            r#"<hp:parameters cnt="5" name="">"#,
+            r#"<hp:stringParam name="RefPath">{ref_path}</hp:stringParam>"#,
+            r#"<hp:stringParam name="RefType">{ref_type}</hp:stringParam>"#,
+            r#"<hp:stringParam name="RefContentType">{content_type}</hp:stringParam>"#,
+            r#"<hp:booleanParam name="RefHyperLink">{hyperlink}</hp:booleanParam>"#,
+            r#"<hp:stringParam name="RefOpenType">HYPERLINK_JUMP_DONTCARE</hp:stringParam>"#,
+            r#"</hp:parameters>"#,
+            r#"</hp:fieldBegin>"#,
+            r#"</hp:ctrl>"#,
+            r#"<hp:t>{name}</hp:t>"#,
+            r#"<hp:ctrl>"#,
+            r#"<hp:fieldEnd beginIDRef="{fid}" fieldid="{fid}"/>"#,
+            r#"</hp:ctrl>"#,
+            r#"</hp:run>"#,
+        ),
+        cpr = char_pr_id_ref,
+        fid = field_id,
+        ref_path = ref_path,
+        ref_type = ref_type_str,
+        content_type = content_type_str,
+        hyperlink = hyperlink_val,
+        name = escaped_name,
+    )
+}
+
+/// Builds a `<hp:run>` XML string for a memo annotation.
+fn build_memo_run_xml(
+    sublist_xml: &str,
+    _author: &str,
+    _date: &str,
+    char_pr_id_ref: u32,
+    field_id: usize,
+) -> String {
+    format!(
+        concat!(
+            r#"<hp:run charPrIDRef="{cpr}">"#,
+            r#"<hp:ctrl>"#,
+            r#"<hp:fieldBegin type="MEMO" editable="false" dirty="false" "#,
+            r#"zorder="-1" fieldid="{fid}" name="">"#,
+            r#"<hp:parameters cnt="2" name="">"#,
+            r#"<hp:integerParam name="MemoShapeID">0</hp:integerParam>"#,
+            r#"<hp:stringParam name="MemoType">DEFAULT</hp:stringParam>"#,
+            r#"</hp:parameters>"#,
+            r#"{sublist}"#,
+            r#"</hp:fieldBegin>"#,
+            r#"</hp:ctrl>"#,
+            r#"<hp:t/>"#,
+            r#"<hp:ctrl>"#,
+            r#"<hp:fieldEnd beginIDRef="{fid}" fieldid="{fid}"/>"#,
+            r#"</hp:ctrl>"#,
+            r#"</hp:run>"#,
+        ),
+        cpr = char_pr_id_ref,
+        fid = field_id,
+        sublist = sublist_xml,
+    )
+}
+
+/// Encodes memo body paragraphs as an XML string for embedding inside fieldBegin.
+fn encode_memo_sublist(
+    paragraphs: &[Paragraph],
+    depth: usize,
+    hyperlink_entries: &mut Vec<(String, String)>,
+) -> HwpxResult<String> {
+    let sublist = encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries)?;
+    let xml = quick_xml::se::to_string(&sublist)
+        .map_err(|e| HwpxError::InvalidStructure { detail: e.to_string() })?;
+    Ok(xml)
+}
+
 /// Encodes a Core `Control::Chart` into an `HxRunSwitch` wrapping `HxChart`.
 ///
 /// Charts use `<hp:switch><hp:case><hp:chart>` structure in section XML,
@@ -1126,7 +958,7 @@ fn encode_chart_switch(ctrl: &Control, chart_ref: &str) -> HxRunSwitch {
 /// Converts a Core `Caption` into an `HxCaption`.
 ///
 /// `parent_width` is used for `lastWidth` (= parent object sz.width in HWPUNIT).
-fn build_hx_caption(
+pub(crate) fn build_hx_caption(
     caption: &Caption,
     parent_width: i32,
     depth: usize,
@@ -1151,7 +983,7 @@ fn build_hx_caption(
 /// Generates a unique instance ID string via atomic counter.
 ///
 /// Each call returns a monotonically increasing ID, safe for parallel encoding.
-fn generate_instid() -> String {
+pub(crate) fn generate_instid() -> String {
     use std::sync::atomic::{AtomicU64, Ordering};
     static INSTID_COUNTER: AtomicU64 = AtomicU64::new(1);
     INSTID_COUNTER.fetch_add(1, Ordering::Relaxed).to_string()
@@ -1159,23 +991,39 @@ fn generate_instid() -> String {
 
 /// Builds `HxSecPr` from Core `PageSettings`.
 fn build_sec_pr(ps: &PageSettings) -> HxSecPr {
+    let gutter_type_str = match ps.gutter_type {
+        hwpforge_foundation::GutterType::LeftOnly => "LEFT_ONLY",
+        hwpforge_foundation::GutterType::LeftRight => "LEFT_RIGHT",
+        hwpforge_foundation::GutterType::TopOnly => "TOP_ONLY",
+        hwpforge_foundation::GutterType::TopBottom => "TOP_BOTTOM",
+        _ => "LEFT_ONLY",
+    };
     HxSecPr {
         text_direction: "HORIZONTAL".to_string(),
+        master_page_cnt: 0,
+        visibility: None,
+        line_number_shape: None,
         page_pr: Some(HxPagePr {
-            landscape: "WIDELY".to_string(),
+            // KS X 6101: NARROWLY=portrait (세로), WIDELY=landscape (가로)
+            landscape: if ps.width > ps.height {
+                "WIDELY".to_string()
+            } else {
+                "NARROWLY".to_string()
+            },
             width: ps.width.as_i32(),
             height: ps.height.as_i32(),
-            gutter_type: "LEFT_ONLY".to_string(),
+            gutter_type: gutter_type_str.to_string(),
             margin: Some(HxPageMargin {
                 header: ps.header_margin.as_i32(),
                 footer: ps.footer_margin.as_i32(),
-                gutter: 0,
+                gutter: ps.gutter.as_i32(),
                 left: ps.margin_left.as_i32(),
                 right: ps.margin_right.as_i32(),
                 top: ps.margin_top.as_i32(),
                 bottom: ps.margin_bottom.as_i32(),
             }),
         }),
+        page_border_fills: Vec::new(),
     }
 }
 
@@ -1467,48 +1315,126 @@ const DEFAULT_HORZ_SIZE: i32 = 42520;
 
 // ── 한글 compatibility: secPr enrichment ────────────────────────
 
-/// Enriched `<hp:secPr>` opening tag with all attributes 한글 expects.
-const SEC_PR_OPEN_ENRICHED: &str = concat!(
-    r#"<hp:secPr id="" textDirection="HORIZONTAL" "#,
-    r#"spaceColumns="1134" tabStop="8000" tabStopVal="4000" tabStopUnit="HWPUNIT" "#,
-    r#"outlineShapeIDRef="1" memoShapeIDRef="0" textVerticalWidthHead="0" masterPageCnt="0">"#,
-);
+/// Builds the enriched `<hp:secPr>` opening tag with all attributes 한글 expects.
+///
+/// `master_page_cnt` is set dynamically from the section's master pages.
+fn build_sec_pr_open_enriched(section: &Section) -> String {
+    let master_page_cnt = section.master_pages.as_ref().map_or(0, |v| v.len());
+    format!(
+        r#"<hp:secPr id="" textDirection="HORIZONTAL" spaceColumns="1134" tabStop="8000" tabStopVal="4000" tabStopUnit="HWPUNIT" outlineShapeIDRef="1" memoShapeIDRef="0" textVerticalWidthHead="0" masterPageCnt="{master_page_cnt}">"#,
+    )
+}
 
-/// Sub-elements inserted before `<hp:pagePr>` inside secPr.
-const SEC_PR_PRE_ELEMENTS: &str = concat!(
-    r#"<hp:grid lineGrid="0" charGrid="0" wonggojiFormat="0"/>"#,
-    r#"<hp:startNum pageStartsOn="BOTH" page="0" pic="0" tbl="0" equation="0"/>"#,
-    r#"<hp:visibility hideFirstHeader="0" hideFirstFooter="0" hideFirstMasterPage="0" "#,
-    r#"border="SHOW_ALL" fill="SHOW_ALL" hideFirstPageNum="0" hideFirstEmptyLine="0" showLineNumber="0"/>"#,
-    r#"<hp:lineNumberShape restartType="0" countBy="0" distance="0" startNumber="0"/>"#,
-);
+/// Builds sub-elements inserted before `<hp:pagePr>` inside secPr.
+///
+/// Reads visibility and line number settings from the Section, falling back
+/// to 한글 defaults when not specified.
+fn build_sec_pr_pre_elements(section: &Section) -> String {
+    use std::fmt::Write as _;
 
-/// Sub-elements inserted after `</hp:pagePr>` and before `</hp:secPr>`.
-const SEC_PR_POST_ELEMENTS: &str = concat!(
-    r#"<hp:footNotePr>"#,
-    r#"<hp:autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar=")" supscript="0"/>"#,
-    r##"<hp:noteLine length="-1" type="SOLID" width="0.12 mm" color="#000000"/>"##,
-    r#"<hp:noteSpacing betweenNotes="283" belowLine="567" aboveLine="850"/>"#,
-    r#"<hp:numbering type="CONTINUOUS" newNum="1"/>"#,
-    r#"<hp:placement place="EACH_COLUMN" beneathText="0"/>"#,
-    r#"</hp:footNotePr>"#,
-    r#"<hp:endNotePr>"#,
-    r#"<hp:autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar=")" supscript="0"/>"#,
-    r##"<hp:noteLine length="14692344" type="SOLID" width="0.12 mm" color="#000000"/>"##,
-    r#"<hp:noteSpacing betweenNotes="0" belowLine="567" aboveLine="850"/>"#,
-    r#"<hp:numbering type="CONTINUOUS" newNum="1"/>"#,
-    r#"<hp:placement place="END_OF_DOCUMENT" beneathText="0"/>"#,
-    r#"</hp:endNotePr>"#,
-    r#"<hp:pageBorderFill type="BOTH" borderFillIDRef="1" textBorder="PAPER" headerInside="0" footerInside="0" fillArea="PAPER">"#,
-    r#"<hp:offset left="1417" right="1417" top="1417" bottom="1417"/>"#,
-    r#"</hp:pageBorderFill>"#,
-    r#"<hp:pageBorderFill type="EVEN" borderFillIDRef="1" textBorder="PAPER" headerInside="0" footerInside="0" fillArea="PAPER">"#,
-    r#"<hp:offset left="1417" right="1417" top="1417" bottom="1417"/>"#,
-    r#"</hp:pageBorderFill>"#,
-    r#"<hp:pageBorderFill type="ODD" borderFillIDRef="1" textBorder="PAPER" headerInside="0" footerInside="0" fillArea="PAPER">"#,
-    r#"<hp:offset left="1417" right="1417" top="1417" bottom="1417"/>"#,
-    r#"</hp:pageBorderFill>"#,
-);
+    let vis = section.visibility.as_ref().cloned().unwrap_or_default();
+    let lns = section.line_number_shape.as_ref().copied().unwrap_or_default();
+
+    let border_str = show_mode_to_hwpx(vis.border);
+    let fill_str = show_mode_to_hwpx(vis.fill);
+
+    let mut xml = String::with_capacity(512);
+    let _ = write!(xml, r#"<hp:grid lineGrid="0" charGrid="0" wonggojiFormat="0"/>"#);
+    let _ =
+        write!(xml, r#"<hp:startNum pageStartsOn="BOTH" page="0" pic="0" tbl="0" equation="0"/>"#);
+    let _ = write!(
+        xml,
+        r#"<hp:visibility hideFirstHeader="{}" hideFirstFooter="{}" hideFirstMasterPage="{}" border="{border_str}" fill="{fill_str}" hideFirstPageNum="{}" hideFirstEmptyLine="{}" showLineNumber="{}"/>"#,
+        u8::from(vis.hide_first_header),
+        u8::from(vis.hide_first_footer),
+        u8::from(vis.hide_first_master_page),
+        u8::from(vis.hide_first_page_num),
+        u8::from(vis.hide_first_empty_line),
+        u8::from(vis.show_line_number),
+    );
+    let _ = write!(
+        xml,
+        r#"<hp:lineNumberShape restartType="{}" countBy="{}" distance="{}" startNumber="{}"/>"#,
+        lns.restart_type,
+        lns.count_by,
+        lns.distance.as_i32(),
+        lns.start_number,
+    );
+    xml
+}
+
+/// Converts a [`ShowMode`] enum to the HWPX SCREAMING_SNAKE string.
+fn show_mode_to_hwpx(mode: hwpforge_foundation::ShowMode) -> &'static str {
+    use hwpforge_foundation::ShowMode;
+    match mode {
+        ShowMode::ShowAll => "SHOW_ALL",
+        ShowMode::HideAll => "HIDE_ALL",
+        ShowMode::ShowOdd => "SHOW_ODD",
+        ShowMode::ShowEven => "SHOW_EVEN",
+        _ => "SHOW_ALL",
+    }
+}
+
+/// Builds sub-elements inserted after `</hp:pagePr>` and before `</hp:secPr>`.
+///
+/// Reads page border fill entries from the Section, falling back to 한글
+/// defaults (3 entries: BOTH/EVEN/ODD with borderFillIDRef=1).
+fn build_sec_pr_post_elements(section: &Section) -> String {
+    use hwpforge_core::section::PageBorderFillEntry;
+    use std::fmt::Write as _;
+
+    let mut xml = String::with_capacity(1024);
+
+    // Footnote/endnote properties (always default for now)
+    let _ = write!(
+        xml,
+        concat!(
+            r#"<hp:footNotePr>"#,
+            r#"<hp:autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar=")" supscript="0"/>"#,
+            r##"<hp:noteLine length="-1" type="SOLID" width="0.12 mm" color="#000000"/>"##,
+            r#"<hp:noteSpacing betweenNotes="283" belowLine="567" aboveLine="850"/>"#,
+            r#"<hp:numbering type="CONTINUOUS" newNum="1"/>"#,
+            r#"<hp:placement place="EACH_COLUMN" beneathText="0"/>"#,
+            r#"</hp:footNotePr>"#,
+            r#"<hp:endNotePr>"#,
+            r#"<hp:autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar=")" supscript="0"/>"#,
+            r##"<hp:noteLine length="14692344" type="SOLID" width="0.12 mm" color="#000000"/>"##,
+            r#"<hp:noteSpacing betweenNotes="0" belowLine="567" aboveLine="850"/>"#,
+            r#"<hp:numbering type="CONTINUOUS" newNum="1"/>"#,
+            r#"<hp:placement place="END_OF_DOCUMENT" beneathText="0"/>"#,
+            r#"</hp:endNotePr>"#,
+        )
+    );
+
+    // Page border fills
+    let default_entries = vec![
+        PageBorderFillEntry { apply_type: "BOTH".to_string(), ..Default::default() },
+        PageBorderFillEntry { apply_type: "EVEN".to_string(), ..Default::default() },
+        PageBorderFillEntry { apply_type: "ODD".to_string(), ..Default::default() },
+    ];
+    let entries = section.page_border_fills.as_deref().unwrap_or(&default_entries);
+    for entry in entries {
+        let hi = u8::from(entry.header_inside);
+        let fi = u8::from(entry.footer_inside);
+        let [l, r, t, b] = entry.offset;
+        let _ = write!(
+            xml,
+            r#"<hp:pageBorderFill type="{}" borderFillIDRef="{}" textBorder="{}" headerInside="{hi}" footerInside="{fi}" fillArea="{}">"#,
+            entry.apply_type, entry.border_fill_id, entry.text_border, entry.fill_area,
+        );
+        let _ = write!(
+            xml,
+            r#"<hp:offset left="{}" right="{}" top="{}" bottom="{}"/>"#,
+            l.as_i32(),
+            r.as_i32(),
+            t.as_i32(),
+            b.as_i32(),
+        );
+        let _ = write!(xml, "</hp:pageBorderFill>");
+    }
+
+    xml
+}
 
 /// Builds `<hp:ctrl><hp:colPr>...</hp:colPr></hp:ctrl>` XML string.
 ///
@@ -1573,26 +1499,35 @@ fn build_col_pr_xml(column_settings: Option<&ColumnSettings>) -> String {
 /// attributes, inserts grid/visibility elements before `<hp:pagePr>`,
 /// appends footnote/endnote/pageBorderFill after `</hp:pagePr>`,
 /// and injects `<hp:ctrl><hp:colPr>` after the closing `</hp:secPr>`.
-fn enrich_sec_pr(xml: &str, column_settings: Option<&ColumnSettings>) -> String {
-    let minimal_open = r#"<hp:secPr textDirection="HORIZONTAL">"#;
+fn enrich_sec_pr(xml: &str, section: &Section) -> String {
+    let sec_pr_prefix = r#"<hp:secPr "#;
 
     // If no secPr to enrich, return as-is
-    if !xml.contains(minimal_open) {
+    let Some(start) = xml.find(sec_pr_prefix) else {
         return xml.to_string();
-    }
+    };
 
-    let mut result =
-        xml.replacen(minimal_open, &format!("{SEC_PR_OPEN_ENRICHED}{SEC_PR_PRE_ELEMENTS}"), 1);
+    // Find the closing `>` of the opening tag to replace the entire opening element
+    let Some(end) = xml[start..].find('>') else {
+        return xml.to_string();
+    };
+    let minimal_open = &xml[start..start + end + 1];
+
+    let open_enriched = build_sec_pr_open_enriched(section);
+    let pre_elements = build_sec_pr_pre_elements(section);
+    let post_elements = build_sec_pr_post_elements(section);
+
+    let mut result = xml.replacen(minimal_open, &format!("{open_enriched}{pre_elements}"), 1);
 
     // Insert post-elements before the first </hp:secPr>
     if let Some(pos) = result.find("</hp:secPr>") {
-        result.insert_str(pos, SEC_PR_POST_ELEMENTS);
+        result.insert_str(pos, &post_elements);
     }
 
     // Insert colPr after </hp:secPr>
     if let Some(pos) = result.find("</hp:secPr>") {
         let insert_pos = pos + "</hp:secPr>".len();
-        let col_pr = build_col_pr_xml(column_settings);
+        let col_pr = build_col_pr_xml(section.column_settings.as_ref());
         result.insert_str(insert_pos, &col_pr);
     }
 
@@ -1839,6 +1774,7 @@ mod tests {
             margin_bottom: HwpUnit::new(4252).unwrap(),
             header_margin: HwpUnit::new(4252).unwrap(),
             footer_margin: HwpUnit::new(4252).unwrap(),
+            ..PageSettings::a4()
         };
         let section = Section::with_paragraphs(vec![text_paragraph("Content", 0, 0)], ps);
         let xml = encode_section(&section, 0, 0).unwrap().xml;

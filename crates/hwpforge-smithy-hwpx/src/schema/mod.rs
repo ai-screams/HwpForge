@@ -9,3 +9,4 @@
 
 pub(crate) mod header;
 pub(crate) mod section;
+pub(crate) mod shapes;

@@ -12,6 +12,7 @@ pub(crate) mod chart;
 pub(crate) mod header;
 pub(crate) mod package;
 pub(crate) mod section;
+pub(crate) mod shapes;
 
 /// Escapes XML special characters in text content.
 ///
@@ -257,7 +258,8 @@ impl HwpxEncoder {
         let sec_cnt = sections.len() as u32;
 
         // Step 1: Encode header
-        let header_xml = encode_header(style_store, sec_cnt)?;
+        let begin_num = sections.first().and_then(|s| s.begin_num.as_ref());
+        let header_xml = encode_header(style_store, sec_cnt, begin_num)?;
 
         // Step 2: Encode sections (each produces XML + chart entries)
         // chart_offset tracks the global chart index across sections to avoid
@@ -456,6 +458,7 @@ mod tests {
             margin_bottom: HwpUnit::new(4252).unwrap(),
             header_margin: HwpUnit::new(4252).unwrap(),
             footer_margin: HwpUnit::new(4252).unwrap(),
+            ..PageSettings::a4()
         };
 
         let mut doc = Document::new();

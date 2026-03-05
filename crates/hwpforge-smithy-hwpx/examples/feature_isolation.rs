@@ -353,6 +353,7 @@ fn main() {
                     fill_color: Some(Color::from_rgb(0xFF, 0xFF, 0x00)),
                     line_width: Some(100),
                     line_style: None,
+                    ..Default::default()
                 }),
             )],
             ParaShapeIndex::new(0),
@@ -371,6 +372,7 @@ fn main() {
                     fill_color: Some(Color::from_rgb(0xAD, 0xD8, 0xE6)),
                     line_width: Some(200),
                     line_style: None,
+                    ..Default::default()
                 }),
             )],
             ParaShapeIndex::new(0),
@@ -389,6 +391,7 @@ fn main() {
                     fill_color: Some(Color::from_rgb(0x90, 0xEE, 0x90)),
                     line_width: Some(80),
                     line_style: Some(LineStyle::Dash),
+                    ..Default::default()
                 }),
             )],
             ParaShapeIndex::new(0),
@@ -407,6 +410,7 @@ fn main() {
                     fill_color: Some(Color::from_rgb(0xFF, 0xB6, 0xC1)),
                     line_width: Some(60),
                     line_style: Some(LineStyle::Dot),
+                    ..Default::default()
                 }),
             )],
             ParaShapeIndex::new(0),
@@ -425,6 +429,7 @@ fn main() {
                     fill_color: None,
                     line_width: Some(300),
                     line_style: Some(LineStyle::Solid),
+                    ..Default::default()
                 }),
             )],
             ParaShapeIndex::new(0),

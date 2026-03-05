@@ -22,7 +22,10 @@
 //! assert!(link.is_hyperlink());
 //! ```
 
-use hwpforge_foundation::{Color, HwpUnit};
+use hwpforge_foundation::{
+    ArcType, ArrowSize, ArrowType, BookmarkType, Color, CurveSegmentType, FieldType, Flip,
+    GradientType, HwpUnit, ImageFillMode, PatternType, RefContentType, RefType,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -129,6 +132,77 @@ impl std::str::FromStr for LineStyle {
     }
 }
 
+/// Arrowhead style for line endpoints.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_core::control::ArrowStyle;
+/// use hwpforge_foundation::{ArrowType, ArrowSize};
+///
+/// let arrow = ArrowStyle {
+///     arrow_type: ArrowType::Normal,
+///     size: ArrowSize::Medium,
+///     filled: true,
+/// };
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct ArrowStyle {
+    /// Shape of the arrowhead.
+    pub arrow_type: ArrowType,
+    /// Size of the arrowhead.
+    pub size: ArrowSize,
+    /// Whether the arrowhead is filled (true) or outlined (false).
+    pub filled: bool,
+}
+
+/// Fill specification for shapes.
+///
+/// Replaces simple `fill_color` for shapes that need gradient, pattern, or image fills.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_core::control::Fill;
+/// use hwpforge_foundation::Color;
+///
+/// let solid = Fill::Solid { color: Color::from_rgb(255, 0, 0) };
+/// ```
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub enum Fill {
+    /// Solid color fill.
+    Solid {
+        /// Fill color.
+        color: Color,
+    },
+    /// Gradient fill.
+    Gradient {
+        /// Gradient direction type.
+        gradient_type: GradientType,
+        /// Gradient angle in degrees.
+        angle: i32,
+        /// Color stops: (color, position 0-100).
+        colors: Vec<(Color, u32)>,
+    },
+    /// Hatch pattern fill.
+    Pattern {
+        /// Pattern type.
+        pattern_type: PatternType,
+        /// Foreground pattern color.
+        fg_color: Color,
+        /// Background color.
+        bg_color: Color,
+    },
+    /// Image fill.
+    Image {
+        /// Image binary data reference ID.
+        image_id: String,
+        /// Image fill mode (tile, stretch, etc.).
+        mode: ImageFillMode,
+    },
+}
+
 /// Visual style overrides for drawing shapes.
 ///
 /// All fields are `Option`; `None` means "use the encoder's default"
@@ -145,6 +219,7 @@ impl std::str::FromStr for LineStyle {
 ///     fill_color: Some(Color::from_rgb(0, 255, 0)),
 ///     line_width: Some(100),
 ///     line_style: Some(LineStyle::Dash),
+///     ..Default::default()
 /// };
 /// ```
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -152,11 +227,22 @@ pub struct ShapeStyle {
     /// Stroke/border color (e.g. `Color::from_rgb(255, 0, 0)` for red).
     pub line_color: Option<Color>,
     /// Fill color (e.g. `Color::from_rgb(0, 255, 0)` for green).
+    /// For advanced fills (gradient, pattern, image), use the `fill` field instead.
     pub fill_color: Option<Color>,
     /// Stroke width in HWPUNIT (33 ≈ 0.12mm, 100 ≈ 0.35mm).
     pub line_width: Option<u32>,
     /// Line drawing style (solid, dash, dot, etc.).
     pub line_style: Option<LineStyle>,
+    /// Rotation angle in degrees (0-360). `None` means no rotation.
+    pub rotation: Option<f32>,
+    /// Flip/mirror state. `None` means no flip.
+    pub flip: Option<Flip>,
+    /// Arrowhead at the start of a line. Only meaningful for `Control::Line`.
+    pub head_arrow: Option<ArrowStyle>,
+    /// Arrowhead at the end of a line. Only meaningful for `Control::Line`.
+    pub tail_arrow: Option<ArrowStyle>,
+    /// Advanced fill (gradient, pattern, image). Overrides `fill_color` when present.
+    pub fill: Option<Fill>,
 }
 
 /// An inline control element.
@@ -389,6 +475,138 @@ pub enum Control {
         compose_type: String,
     },
 
+    /// An arc (partial ellipse) drawing object.
+    /// Maps to HWPX `<hp:ellipse>` with `hasArcPr="1"`.
+    Arc {
+        /// Arc type (normal open arc, pie/sector, chord).
+        arc_type: ArcType,
+        /// Center point of the parent ellipse.
+        center: ShapePoint,
+        /// Axis 1 endpoint (semi-major axis).
+        axis1: ShapePoint,
+        /// Axis 2 endpoint (semi-minor axis).
+        axis2: ShapePoint,
+        /// Arc start point 1.
+        start1: ShapePoint,
+        /// Arc end point 1.
+        end1: ShapePoint,
+        /// Arc start point 2.
+        start2: ShapePoint,
+        /// Arc end point 2.
+        end2: ShapePoint,
+        /// Bounding box width (HWPUNIT).
+        width: HwpUnit,
+        /// Bounding box height (HWPUNIT).
+        height: HwpUnit,
+        /// Horizontal offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
+        horz_offset: i32,
+        /// Vertical offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
+        vert_offset: i32,
+        /// Optional caption attached to this arc.
+        caption: Option<Caption>,
+        /// Optional visual style overrides.
+        style: Option<ShapeStyle>,
+    },
+
+    /// A curve drawing object (bezier/polyline).
+    /// Maps to HWPX `<hp:curve>`.
+    Curve {
+        /// Ordered control points for the curve path.
+        points: Vec<ShapePoint>,
+        /// Segment types (one per segment between points).
+        segment_types: Vec<CurveSegmentType>,
+        /// Bounding box width (HWPUNIT).
+        width: HwpUnit,
+        /// Bounding box height (HWPUNIT).
+        height: HwpUnit,
+        /// Horizontal offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
+        horz_offset: i32,
+        /// Vertical offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
+        vert_offset: i32,
+        /// Optional caption attached to this curve.
+        caption: Option<Caption>,
+        /// Optional visual style overrides.
+        style: Option<ShapeStyle>,
+    },
+
+    /// A connect line drawing object (line with control points for routing).
+    /// Maps to HWPX `<hp:connectLine>`.
+    ConnectLine {
+        /// Start point of the connect line.
+        start: ShapePoint,
+        /// End point of the connect line.
+        end: ShapePoint,
+        /// Intermediate control points for routing.
+        control_points: Vec<ShapePoint>,
+        /// Connect line type (e.g. "STRAIGHT", "BENT", "CURVED").
+        connect_type: String,
+        /// Bounding box width (HWPUNIT).
+        width: HwpUnit,
+        /// Bounding box height (HWPUNIT).
+        height: HwpUnit,
+        /// Horizontal offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
+        horz_offset: i32,
+        /// Vertical offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
+        vert_offset: i32,
+        /// Optional caption attached to this connect line.
+        caption: Option<Caption>,
+        /// Optional visual style overrides.
+        style: Option<ShapeStyle>,
+    },
+
+    /// A bookmark marking a named location in the document.
+    /// Maps to HWPX `<hp:ctrl><hp:bookmark>` (point) or `fieldBegin/fieldEnd type="BOOKMARK"` (span).
+    Bookmark {
+        /// Bookmark name (unique within the document).
+        name: String,
+        /// Type: point bookmark or span start/end.
+        bookmark_type: BookmarkType,
+    },
+
+    /// A cross-reference (상호참조) to a bookmark, table, figure, or equation.
+    /// Maps to HWPX `fieldBegin type="CROSSREF"` with parameters.
+    CrossRef {
+        /// Target bookmark or object name (e.g. `"bookmark1"`, `"table23"`).
+        target_name: String,
+        /// What kind of target is being referenced.
+        ref_type: RefType,
+        /// What content to display at the reference site.
+        content_type: RefContentType,
+        /// Whether to render the reference as a clickable hyperlink.
+        as_hyperlink: bool,
+    },
+
+    /// A press-field (누름틀) — an interactive form field.
+    /// Maps to HWPX `fieldBegin type="CLICK_HERE"` with parameters and `metaTag`.
+    Field {
+        /// Field type (ClickHere, Date, Time, etc.).
+        field_type: FieldType,
+        /// Hint/visible text shown in the field placeholder.
+        hint_text: Option<String>,
+        /// Help text shown when hovering or clicking the field.
+        help_text: Option<String>,
+    },
+
+    /// A memo (메모) annotation attached to text.
+    /// Maps to HWPX `fieldBegin type="MEMO"` with `<hp:subList>` body inside.
+    Memo {
+        /// Paragraphs forming the memo body content.
+        content: Vec<Paragraph>,
+        /// Author name.
+        author: String,
+        /// Date string (e.g. `"2026-03-05"`).
+        date: String,
+    },
+
+    /// An index mark for building a document index (찾아보기).
+    /// Maps to HWPX `<hp:ctrl><hp:indexmark>`.
+    IndexMark {
+        /// Primary index key (required).
+        primary: String,
+        /// Secondary (sub-entry) index key.
+        secondary: Option<String>,
+    },
+
     /// An unrecognized control element preserved for round-trip fidelity.
     ///
     /// `tag` holds the element's tag name or type identifier.
@@ -488,6 +706,129 @@ impl Control {
     /// Returns `true` if this is a [`Control::Compose`].
     pub fn is_compose(&self) -> bool {
         matches!(self, Self::Compose { .. })
+    }
+
+    /// Returns `true` if this is a [`Control::Arc`].
+    pub fn is_arc(&self) -> bool {
+        matches!(self, Self::Arc { .. })
+    }
+
+    /// Returns `true` if this is a [`Control::Curve`].
+    pub fn is_curve(&self) -> bool {
+        matches!(self, Self::Curve { .. })
+    }
+
+    /// Returns `true` if this is a [`Control::ConnectLine`].
+    pub fn is_connect_line(&self) -> bool {
+        matches!(self, Self::ConnectLine { .. })
+    }
+
+    /// Returns `true` if this is a [`Control::Bookmark`].
+    pub fn is_bookmark(&self) -> bool {
+        matches!(self, Self::Bookmark { .. })
+    }
+
+    /// Returns `true` if this is a [`Control::CrossRef`].
+    pub fn is_cross_ref(&self) -> bool {
+        matches!(self, Self::CrossRef { .. })
+    }
+
+    /// Returns `true` if this is a [`Control::Field`].
+    pub fn is_field(&self) -> bool {
+        matches!(self, Self::Field { .. })
+    }
+
+    /// Returns `true` if this is a [`Control::Memo`].
+    pub fn is_memo(&self) -> bool {
+        matches!(self, Self::Memo { .. })
+    }
+
+    /// Returns `true` if this is a [`Control::IndexMark`].
+    pub fn is_index_mark(&self) -> bool {
+        matches!(self, Self::IndexMark { .. })
+    }
+
+    /// Creates a point bookmark at a named location.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::Control;
+    ///
+    /// let bm = Control::bookmark("section1");
+    /// assert!(bm.is_bookmark());
+    /// ```
+    pub fn bookmark(name: &str) -> Self {
+        Self::Bookmark { name: name.to_string(), bookmark_type: BookmarkType::Point }
+    }
+
+    /// Creates a press-field (누름틀) with the given hint text.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::Control;
+    ///
+    /// let field = Control::field("이름을 입력하세요");
+    /// assert!(field.is_field());
+    /// ```
+    pub fn field(hint: &str) -> Self {
+        Self::Field {
+            field_type: FieldType::ClickHere,
+            hint_text: Some(hint.to_string()),
+            help_text: None,
+        }
+    }
+
+    /// Creates an index mark with a primary key.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::Control;
+    ///
+    /// let mark = Control::index_mark("한글");
+    /// assert!(mark.is_index_mark());
+    /// ```
+    pub fn index_mark(primary: &str) -> Self {
+        Self::IndexMark { primary: primary.to_string(), secondary: None }
+    }
+
+    /// Creates a memo annotation with the given text content.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::Control;
+    /// use hwpforge_core::paragraph::Paragraph;
+    /// use hwpforge_foundation::ParaShapeIndex;
+    ///
+    /// let para = Paragraph::new(ParaShapeIndex::new(0));
+    /// let memo = Control::memo(vec![para], "Author", "2026-03-05");
+    /// assert!(memo.is_memo());
+    /// ```
+    pub fn memo(content: Vec<Paragraph>, author: &str, date: &str) -> Self {
+        Self::Memo { content, author: author.to_string(), date: date.to_string() }
+    }
+
+    /// Creates a cross-reference to a bookmark target.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::Control;
+    /// use hwpforge_foundation::{RefType, RefContentType};
+    ///
+    /// let xref = Control::cross_ref("section1", RefType::Bookmark, RefContentType::Page);
+    /// assert!(xref.is_cross_ref());
+    /// ```
+    pub fn cross_ref(target: &str, ref_type: RefType, content_type: RefContentType) -> Self {
+        Self::CrossRef {
+            target_name: target.to_string(),
+            ref_type,
+            content_type,
+            as_hyperlink: false,
+        }
     }
 
     /// Creates a chart control with default dimensions and settings.
@@ -912,6 +1253,149 @@ impl Control {
         }
     }
 
+    /// Creates an arc control with the given bounding box dimensions.
+    ///
+    /// Geometry is auto-derived from the bounding box.
+    /// Defaults: inline positioning, no caption, no style.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::Control;
+    /// use hwpforge_foundation::{ArcType, HwpUnit};
+    ///
+    /// let width = HwpUnit::from_mm(40.0).unwrap();
+    /// let height = HwpUnit::from_mm(30.0).unwrap();
+    /// let ctrl = Control::arc(ArcType::Pie, width, height);
+    /// assert!(ctrl.is_arc());
+    /// ```
+    pub fn arc(arc_type: ArcType, width: HwpUnit, height: HwpUnit) -> Self {
+        let w = width.as_i32();
+        let h = height.as_i32();
+        Self::Arc {
+            arc_type,
+            center: ShapePoint::new(w / 2, h / 2),
+            axis1: ShapePoint::new(w, h / 2),
+            axis2: ShapePoint::new(w / 2, h),
+            start1: ShapePoint::new(w, h / 2),
+            end1: ShapePoint::new(w / 2, 0),
+            start2: ShapePoint::new(w, h / 2),
+            end2: ShapePoint::new(w / 2, 0),
+            width,
+            height,
+            horz_offset: 0,
+            vert_offset: 0,
+            caption: None,
+            style: None,
+        }
+    }
+
+    /// Creates a curve control from the given control points.
+    ///
+    /// All segments default to [`CurveSegmentType::Curve`].
+    /// The bounding box is auto-derived from min/max of point coordinates.
+    ///
+    /// Returns an error if fewer than 2 points are provided.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::InvalidStructure`] if `points.len() < 2`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::{Control, ShapePoint};
+    ///
+    /// let pts = vec![
+    ///     ShapePoint::new(0, 0),
+    ///     ShapePoint::new(2500, 5000),
+    ///     ShapePoint::new(5000, 0),
+    /// ];
+    /// let ctrl = Control::curve(pts).unwrap();
+    /// assert!(ctrl.is_curve());
+    /// ```
+    pub fn curve(points: Vec<ShapePoint>) -> CoreResult<Self> {
+        if points.len() < 2 {
+            return Err(CoreError::InvalidStructure {
+                context: "Control::curve".to_string(),
+                reason: format!("curve requires at least 2 points, got {}", points.len()),
+            });
+        }
+        let min_x = points.iter().map(|p| p.x as i64).min().unwrap_or(0);
+        let max_x = points.iter().map(|p| p.x as i64).max().unwrap_or(0);
+        let min_y = points.iter().map(|p| p.y as i64).min().unwrap_or(0);
+        let max_y = points.iter().map(|p| p.y as i64).max().unwrap_or(0);
+        let bbox_w = (max_x - min_x).max(1) as i32;
+        let bbox_h = (max_y - min_y).max(1) as i32;
+        let width = HwpUnit::new(bbox_w).map_err(|_| CoreError::InvalidStructure {
+            context: "Control::curve".into(),
+            reason: format!("bounding box width {bbox_w} exceeds HwpUnit range"),
+        })?;
+        let height = HwpUnit::new(bbox_h).map_err(|_| CoreError::InvalidStructure {
+            context: "Control::curve".into(),
+            reason: format!("bounding box height {bbox_h} exceeds HwpUnit range"),
+        })?;
+        let seg_count = points.len().saturating_sub(1);
+        Ok(Self::Curve {
+            points,
+            segment_types: vec![CurveSegmentType::Curve; seg_count],
+            width,
+            height,
+            horz_offset: 0,
+            vert_offset: 0,
+            caption: None,
+            style: None,
+        })
+    }
+
+    /// Creates a connect line between two endpoints.
+    ///
+    /// Defaults: no control points, type "STRAIGHT", no caption, no style.
+    ///
+    /// Returns an error if start equals end.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::InvalidStructure`] if start equals end.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::{Control, ShapePoint};
+    ///
+    /// let ctrl = Control::connect_line(
+    ///     ShapePoint::new(0, 0),
+    ///     ShapePoint::new(5000, 5000),
+    /// ).unwrap();
+    /// assert!(ctrl.is_connect_line());
+    /// ```
+    pub fn connect_line(start: ShapePoint, end: ShapePoint) -> CoreResult<Self> {
+        if start == end {
+            return Err(CoreError::InvalidStructure {
+                context: "Control::connect_line".to_string(),
+                reason: "start and end points are identical (degenerate line)".to_string(),
+            });
+        }
+        let raw_w = ((end.x as i64) - (start.x as i64)).unsigned_abs() as i32;
+        let raw_h = ((end.y as i64) - (start.y as i64)).unsigned_abs() as i32;
+        let raw_w = raw_w.max(100);
+        let raw_h = raw_h.max(100);
+        let width = HwpUnit::new(raw_w).unwrap_or_else(|_| HwpUnit::new(100).expect("valid"));
+        let height = HwpUnit::new(raw_h).unwrap_or_else(|_| HwpUnit::new(100).expect("valid"));
+        Ok(Self::ConnectLine {
+            start,
+            end,
+            control_points: Vec::new(),
+            connect_type: "STRAIGHT".to_string(),
+            width,
+            height,
+            horz_offset: 0,
+            vert_offset: 0,
+            caption: None,
+            style: None,
+        })
+    }
+
     /// Creates a hyperlink control with the given display text and URL.
     ///
     /// # Examples
@@ -986,6 +1470,37 @@ impl std::fmt::Display for Control {
             Self::Compose { compose_text, .. } => {
                 write!(f, "Compose(\"{compose_text}\")")
             }
+            Self::Arc { arc_type, .. } => {
+                write!(f, "Arc({arc_type})")
+            }
+            Self::Curve { points, .. } => {
+                write!(f, "Curve({} points)", points.len())
+            }
+            Self::ConnectLine { .. } => {
+                write!(f, "ConnectLine")
+            }
+            Self::Bookmark { name, bookmark_type } => {
+                write!(f, "Bookmark(\"{name}\", {bookmark_type})")
+            }
+            Self::CrossRef { target_name, ref_type, .. } => {
+                write!(f, "CrossRef(\"{target_name}\", {ref_type})")
+            }
+            Self::Field { field_type, hint_text, .. } => {
+                let hint = hint_text.as_deref().unwrap_or("");
+                write!(f, "Field({field_type}, \"{hint}\")")
+            }
+            Self::Memo { content, author, .. } => {
+                let n = content.len();
+                let word = if n == 1 { "paragraph" } else { "paragraphs" };
+                write!(f, "Memo({n} {word}, by {author})")
+            }
+            Self::IndexMark { primary, secondary } => {
+                if let Some(sec) = secondary {
+                    write!(f, "IndexMark(\"{primary}\" / \"{sec}\")")
+                } else {
+                    write!(f, "IndexMark(\"{primary}\")")
+                }
+            }
             Self::Unknown { tag, .. } => {
                 write!(f, "Unknown({tag})")
             }
@@ -1022,6 +1537,7 @@ mod tests {
             fill_color: Some(Color::from_rgb(0, 255, 0)),
             line_width: Some(100),
             line_style: Some(LineStyle::Dash),
+            ..Default::default()
         };
         assert_eq!(s.line_color.unwrap(), Color::from_rgb(255, 0, 0));
         assert_eq!(s.fill_color.unwrap(), Color::from_rgb(0, 255, 0));

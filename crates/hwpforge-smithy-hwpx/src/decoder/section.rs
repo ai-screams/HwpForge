@@ -7,7 +7,7 @@ use std::collections::HashMap;
 
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::{ColumnDef, ColumnLayoutMode, ColumnSettings, ColumnType};
-use hwpforge_core::control::{Control, DutmalAlign, DutmalPosition, ShapeStyle};
+use hwpforge_core::control::{Control, DutmalAlign, DutmalPosition};
 use hwpforge_core::image::{Image, ImageFormat};
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::{Run, RunContent};
@@ -21,9 +21,8 @@ use quick_xml::de::from_str;
 
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    HxCaption, HxChart, HxCompose, HxCtrl, HxDutmal, HxEllipse, HxEquation, HxFillBrush,
-    HxFootNote, HxHeaderFooter, HxLine, HxLineShape, HxPageNum, HxParagraph, HxPic, HxPolygon,
-    HxRect, HxRun, HxSection, HxSubList, HxTable, HxTableCell,
+    HxCaption, HxChart, HxCompose, HxCtrl, HxDutmal, HxEquation, HxFootNote, HxHeaderFooter,
+    HxPageNum, HxParagraph, HxPic, HxRun, HxSection, HxSubList, HxTable, HxTableCell,
 };
 
 /// Maximum nesting depth for tables-within-tables.
@@ -49,6 +48,14 @@ pub struct SectionParseResult {
     /// Multi-column settings extracted from `<hp:ctrl><hp:colPr>`, if present.
     /// `None` means single-column (default).
     pub column_settings: Option<ColumnSettings>,
+    /// Visibility flags extracted from `<hp:visibility>`, if present.
+    pub visibility: Option<hwpforge_core::section::Visibility>,
+    /// Line number settings extracted from `<hp:lineNumberShape>`, if present.
+    pub line_number_shape: Option<hwpforge_core::section::LineNumberShape>,
+    /// Page border fill entries extracted from `<hp:pageBorderFill>`, if present.
+    pub page_border_fills: Option<Vec<hwpforge_core::section::PageBorderFillEntry>>,
+    /// Master pages extracted from `<masterPage>`, if present.
+    pub master_pages: Option<Vec<hwpforge_core::section::MasterPage>>,
 }
 
 /// Parses a section XML string into paragraphs and optional page settings.
@@ -69,8 +76,11 @@ pub fn parse_section(
     let mut footer = None;
     let mut page_number = None;
     let mut column_settings = None;
+    let mut visibility = None;
+    let mut line_number_shape = None;
+    let mut page_border_fills = None;
 
-    let paragraphs = section
+    let mut paragraphs = section
         .paragraphs
         .iter()
         .enumerate()
@@ -78,6 +88,24 @@ pub fn parse_section(
             let (mut para, ps) = convert_paragraph(hx_para, para_idx == 0, 0)?;
             if ps.is_some() && page_settings.is_none() {
                 page_settings = ps;
+            }
+
+            // Extract secPr sub-elements (visibility, lineNumberShape, pageBorderFill)
+            // from the first paragraph's first run
+            if para_idx == 0 {
+                for hx_run in &hx_para.runs {
+                    if let Some(sec_pr) = &hx_run.sec_pr {
+                        if visibility.is_none() {
+                            visibility = extract_visibility(sec_pr);
+                        }
+                        if line_number_shape.is_none() {
+                            line_number_shape = extract_line_number_shape(sec_pr);
+                        }
+                        if page_border_fills.is_none() {
+                            page_border_fills = extract_page_border_fills(sec_pr);
+                        }
+                    }
+                }
             }
 
             // Extract header/footer/pagenum/column_settings from ctrl elements in runs
@@ -122,6 +150,25 @@ pub fn parse_section(
         })
         .collect::<HwpxResult<Vec<_>>>()?;
 
+    // Extract field-based controls (Bookmark span, Field, CrossRef, Memo, Hyperlink)
+    // that are invisible to serde (fieldBegin/fieldEnd interleaved XML).
+    let field_controls = extract_field_controls(xml);
+    if !field_controls.is_empty() {
+        // Inject field controls as runs in the first paragraph (or create one)
+        let target_para = if paragraphs.is_empty() {
+            paragraphs.push(Paragraph::new(ParaShapeIndex::new(0)));
+            paragraphs.last_mut().unwrap()
+        } else {
+            &mut paragraphs[0]
+        };
+        for ctrl in field_controls {
+            target_para.runs.push(Run {
+                content: RunContent::Control(Box::new(ctrl)),
+                char_shape_id: CharShapeIndex::new(0),
+            });
+        }
+    }
+
     Ok(SectionParseResult {
         paragraphs,
         page_settings,
@@ -129,6 +176,10 @@ pub fn parse_section(
         footer,
         page_number,
         column_settings,
+        visibility,
+        line_number_shape,
+        page_border_fills,
+        master_pages: None,
     })
 }
 
@@ -221,12 +272,18 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
         }
     }
 
-    // Footnote / Endnote runs (from <hp:ctrl>)
+    // Footnote / Endnote / Bookmark / IndexMark runs (from <hp:ctrl>)
     for ctrl in &hx.ctrls {
         if let Some(run) = decode_footnote(ctrl, char_shape_id, depth)? {
             runs.push(run);
         }
         if let Some(run) = decode_endnote(ctrl, char_shape_id, depth)? {
+            runs.push(run);
+        }
+        if let Some(run) = decode_bookmark(ctrl, char_shape_id) {
+            runs.push(run);
+        }
+        if let Some(run) = decode_indexmark(ctrl, char_shape_id) {
             runs.push(run);
         }
     }
@@ -243,14 +300,28 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
         runs.push(decode_line(line, char_shape_id, depth)?);
     }
 
-    // Ellipse runs (from <hp:ellipse>)
+    // Ellipse and Arc runs (from <hp:ellipse>)
     for ellipse in &hx.ellipses {
-        runs.push(decode_ellipse(ellipse, char_shape_id, depth)?);
+        if ellipse.has_arc_pr == 1 {
+            runs.push(decode_arc(ellipse, char_shape_id, depth)?);
+        } else {
+            runs.push(decode_ellipse(ellipse, char_shape_id, depth)?);
+        }
     }
 
     // Polygon runs (from <hp:polygon>)
     for polygon in &hx.polygons {
         runs.push(decode_polygon(polygon, char_shape_id, depth)?);
+    }
+
+    // Curve runs (from <hp:curve>)
+    for curve in &hx.curves {
+        runs.push(decode_curve(curve, char_shape_id, depth)?);
+    }
+
+    // ConnectLine runs (from <hp:connectLine>)
+    for connect_line in &hx.connect_lines {
+        runs.push(decode_connect_line(connect_line, char_shape_id, depth)?);
     }
 
     // Equation runs (from <hp:equation>)
@@ -406,208 +477,219 @@ fn decode_note_paragraphs(hx: &HxFootNote, depth: usize) -> HwpxResult<Vec<Parag
     decode_sublist_paragraphs(&hx.sub_list, depth)
 }
 
-/// Decodes an `HxRect`'s draw text into a Core `Run` with `Control::TextBox`, if present.
+/// Decodes an `HxCtrl`'s bookmark into a Core `Run`, if present.
+fn decode_bookmark(ctrl: &HxCtrl, char_shape_id: CharShapeIndex) -> Option<Run> {
+    let bm = ctrl.bookmark.as_ref()?;
+    Some(Run {
+        content: RunContent::Control(Box::new(Control::Bookmark {
+            name: bm.name.clone(),
+            bookmark_type: hwpforge_foundation::BookmarkType::Point,
+        })),
+        char_shape_id,
+    })
+}
+
+/// Decodes an `HxCtrl`'s indexmark into a Core `Run`, if present.
+fn decode_indexmark(ctrl: &HxCtrl, char_shape_id: CharShapeIndex) -> Option<Run> {
+    let im = ctrl.indexmark.as_ref()?;
+    Some(Run {
+        content: RunContent::Control(Box::new(Control::IndexMark {
+            primary: im.first_key.clone(),
+            secondary: im.second_key.clone(),
+        })),
+        char_shape_id,
+    })
+}
+
+/// Extracts field-based controls (Bookmark span, Field, CrossRef, Memo) from raw section XML.
 ///
-/// Only rects with `<hp:drawText>` are treated as textboxes; rects without
-/// text content (pure shapes) are silently skipped.
-fn decode_textbox(
-    rect: &HxRect,
-    char_shape_id: CharShapeIndex,
-    depth: usize,
-) -> HwpxResult<Option<Run>> {
-    let draw_text = match &rect.draw_text {
-        Some(dt) => dt,
-        None => return Ok(None),
-    };
+/// These controls use `fieldBegin`/`fieldEnd` pairs that serde cannot capture
+/// (interleaved ctrl-text-ctrl ordering). This function does a quick-xml scan
+/// of the raw XML to extract them and returns `(field_type, params)` tuples.
+pub(crate) fn extract_field_controls(xml: &str) -> Vec<Control> {
+    let mut controls = Vec::new();
+    let mut reader = quick_xml::Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+    let mut buf = Vec::new();
+    let mut in_field_begin = false;
+    let mut field_type = String::new();
+    let mut field_name = String::new();
+    let mut params: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut current_param_name = String::new();
+    let mut in_param = false;
+    let mut in_sublist = false;
+    let mut sublist_depth: usize = 0;
 
-    let paragraphs = decode_sublist_paragraphs(&draw_text.sub_list, depth)?;
-
-    // Extract width/height from sz, falling back to zero
-    let (width, height) = rect
-        .sz
-        .as_ref()
-        .map(|sz| {
-            (
-                HwpUnit::new(sz.width).unwrap_or(HwpUnit::ZERO),
-                HwpUnit::new(sz.height).unwrap_or(HwpUnit::ZERO),
-            )
-        })
-        .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
-
-    // Extract offsets from pos (treatAsChar=1 means inline, offsets=0)
-    let (horz_offset, vert_offset) =
-        rect.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
-
-    let caption = rect.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
-
-    Ok(Some(Run {
-        content: RunContent::Control(Box::new(Control::TextBox {
-            paragraphs,
-            width,
-            height,
-            horz_offset,
-            vert_offset,
-            caption,
-            style: None,
-        })),
-        char_shape_id,
-    }))
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(quick_xml::events::Event::Start(ref e)) => {
+                let local_name = e.local_name();
+                let local = std::str::from_utf8(local_name.as_ref()).unwrap_or("");
+                if local == "fieldBegin" {
+                    in_field_begin = true;
+                    field_type.clear();
+                    field_name.clear();
+                    params.clear();
+                    for attr in e.attributes().flatten() {
+                        let key_local = attr.key.local_name();
+                        let key = std::str::from_utf8(key_local.as_ref()).unwrap_or("");
+                        let val = std::str::from_utf8(&attr.value).unwrap_or("").to_string();
+                        match key {
+                            "type" => field_type = val,
+                            "name" => field_name = val,
+                            _ => {}
+                        }
+                    }
+                } else if in_field_begin && !in_sublist {
+                    if local == "stringParam" || local == "integerParam" || local == "booleanParam"
+                    {
+                        in_param = true;
+                        current_param_name.clear();
+                        for attr in e.attributes().flatten() {
+                            let key_local = attr.key.local_name();
+                            let key = std::str::from_utf8(key_local.as_ref()).unwrap_or("");
+                            if key == "name" {
+                                current_param_name =
+                                    std::str::from_utf8(&attr.value).unwrap_or("").to_string();
+                            }
+                        }
+                    } else if local == "subList" {
+                        in_sublist = true;
+                        sublist_depth = 1;
+                    }
+                } else if in_sublist {
+                    sublist_depth += 1;
+                }
+            }
+            Ok(quick_xml::events::Event::End(ref e)) => {
+                let local_name = e.local_name();
+                let local = std::str::from_utf8(local_name.as_ref()).unwrap_or("");
+                if in_sublist {
+                    if local == "subList" {
+                        sublist_depth -= 1;
+                        if sublist_depth == 0 {
+                            in_sublist = false;
+                        }
+                    }
+                } else if local == "fieldBegin" || local == "fieldEnd" {
+                    if local == "fieldEnd" && in_field_begin {
+                        // fieldEnd closes the pair — emit control
+                    }
+                    if local == "fieldBegin" && in_field_begin {
+                        // Self-closing fieldBegin handled in Empty event; this is
+                        // a closing tag for a fieldBegin with children.
+                    }
+                } else if in_param {
+                    in_param = false;
+                }
+            }
+            Ok(quick_xml::events::Event::Empty(ref e)) => {
+                let local_name = e.local_name();
+                let local = std::str::from_utf8(local_name.as_ref()).unwrap_or("");
+                if local == "fieldBegin" {
+                    // Self-closing fieldBegin (e.g., bookmark span)
+                    field_type.clear();
+                    field_name.clear();
+                    for attr in e.attributes().flatten() {
+                        let key_local = attr.key.local_name();
+                        let key = std::str::from_utf8(key_local.as_ref()).unwrap_or("");
+                        let val = std::str::from_utf8(&attr.value).unwrap_or("").to_string();
+                        match key {
+                            "type" => field_type = val,
+                            "name" => field_name = val,
+                            _ => {}
+                        }
+                    }
+                    if field_type == "BOOKMARK" {
+                        controls.push(Control::Bookmark {
+                            name: field_name.clone(),
+                            bookmark_type: hwpforge_foundation::BookmarkType::SpanStart,
+                        });
+                    }
+                    in_field_begin = false;
+                } else if local == "fieldEnd" && !field_type.is_empty() {
+                    // Emit the control based on accumulated field_type + params
+                    match field_type.as_str() {
+                        "BOOKMARK" => {
+                            controls.push(Control::Bookmark {
+                                name: field_name.clone(),
+                                bookmark_type: hwpforge_foundation::BookmarkType::SpanStart,
+                            });
+                        }
+                        "CLICK_HERE" | "DATE" | "TIME" | "PAGE_NUM" | "DOC_SUMMARY"
+                        | "USER_INFO" => {
+                            let ft = field_type
+                                .parse::<hwpforge_foundation::FieldType>()
+                                .unwrap_or_default();
+                            controls.push(Control::Field {
+                                field_type: ft,
+                                hint_text: params.get("Direction").cloned(),
+                                help_text: params.get("HelpState").cloned(),
+                            });
+                        }
+                        "CROSSREF" => {
+                            let target = params
+                                .get("RefPath")
+                                .map(|p| p.trim_start_matches("?#").to_string())
+                                .unwrap_or_default();
+                            let rt = params
+                                .get("RefType")
+                                .and_then(|s| s.parse::<hwpforge_foundation::RefType>().ok())
+                                .unwrap_or_default();
+                            let ct = params
+                                .get("RefContentType")
+                                .and_then(|s| s.parse::<hwpforge_foundation::RefContentType>().ok())
+                                .unwrap_or_default();
+                            let hl =
+                                params.get("RefHyperLink").map(|s| s == "true").unwrap_or(false);
+                            controls.push(Control::CrossRef {
+                                target_name: target,
+                                ref_type: rt,
+                                content_type: ct,
+                                as_hyperlink: hl,
+                            });
+                        }
+                        "MEMO" => {
+                            // Memo body is in subList inside fieldBegin — skip for now
+                            // (full memo decode requires parsing subList paragraphs)
+                            controls.push(Control::Memo {
+                                content: Vec::new(),
+                                author: String::new(),
+                                date: String::new(),
+                            });
+                        }
+                        "HYPERLINK" => {
+                            // Hyperlink decode — extract URL from params, text from XML
+                            let url = params.get("Path").cloned().unwrap_or_default();
+                            controls.push(Control::Hyperlink { text: String::new(), url });
+                        }
+                        _ => {}
+                    }
+                    field_type.clear();
+                    in_field_begin = false;
+                }
+            }
+            Ok(quick_xml::events::Event::Text(ref e)) => {
+                if in_param && !current_param_name.is_empty() {
+                    let text = reader.decoder().decode(e.as_ref()).unwrap_or_default().to_string();
+                    params.insert(current_param_name.clone(), text);
+                }
+            }
+            Ok(quick_xml::events::Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    controls
 }
 
-/// Decodes an `HxLine` into a Core `Run` with `Control::Line`.
-fn decode_line(line: &HxLine, char_shape_id: CharShapeIndex, depth: usize) -> HwpxResult<Run> {
-    use hwpforge_core::control::ShapePoint;
-
-    let start = line
-        .start_pt
-        .as_ref()
-        .map(|p| ShapePoint { x: p.x, y: p.y })
-        .unwrap_or(ShapePoint { x: 0, y: 0 });
-    let end = line
-        .end_pt
-        .as_ref()
-        .map(|p| ShapePoint { x: p.x, y: p.y })
-        .unwrap_or(ShapePoint { x: 0, y: 0 });
-
-    let (width, height) = line
-        .sz
-        .as_ref()
-        .map(|sz| {
-            (
-                HwpUnit::new(sz.width).unwrap_or(HwpUnit::ZERO),
-                HwpUnit::new(sz.height).unwrap_or(HwpUnit::ZERO),
-            )
-        })
-        .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
-
-    let caption = line.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
-
-    let (horz_offset, vert_offset) =
-        line.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
-
-    Ok(Run {
-        content: RunContent::Control(Box::new(Control::Line {
-            start,
-            end,
-            width,
-            height,
-            horz_offset,
-            vert_offset,
-            caption,
-            style: decode_shape_style(&line.line_shape, &line.fill_brush),
-        })),
-        char_shape_id,
-    })
-}
-
-/// Decodes an `HxEllipse` into a Core `Run` with `Control::Ellipse`.
-fn decode_ellipse(
-    ellipse: &HxEllipse,
-    char_shape_id: CharShapeIndex,
-    depth: usize,
-) -> HwpxResult<Run> {
-    use hwpforge_core::control::ShapePoint;
-
-    let center = ellipse
-        .center
-        .as_ref()
-        .map(|p| ShapePoint { x: p.x, y: p.y })
-        .unwrap_or(ShapePoint { x: 0, y: 0 });
-    let axis1 = ellipse
-        .ax1
-        .as_ref()
-        .map(|p| ShapePoint { x: p.x, y: p.y })
-        .unwrap_or(ShapePoint { x: 0, y: 0 });
-    let axis2 = ellipse
-        .ax2
-        .as_ref()
-        .map(|p| ShapePoint { x: p.x, y: p.y })
-        .unwrap_or(ShapePoint { x: 0, y: 0 });
-
-    let (width, height) = ellipse
-        .sz
-        .as_ref()
-        .map(|sz| {
-            (
-                HwpUnit::new(sz.width).unwrap_or(HwpUnit::ZERO),
-                HwpUnit::new(sz.height).unwrap_or(HwpUnit::ZERO),
-            )
-        })
-        .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
-
-    let paragraphs = match &ellipse.draw_text {
-        Some(dt) => decode_sublist_paragraphs(&dt.sub_list, depth)?,
-        None => Vec::new(),
-    };
-
-    let caption = ellipse.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
-
-    let (horz_offset, vert_offset) =
-        ellipse.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
-
-    Ok(Run {
-        content: RunContent::Control(Box::new(Control::Ellipse {
-            center,
-            axis1,
-            axis2,
-            width,
-            height,
-            horz_offset,
-            vert_offset,
-            paragraphs,
-            caption,
-            style: decode_shape_style(&ellipse.line_shape, &ellipse.fill_brush),
-        })),
-        char_shape_id,
-    })
-}
-
-/// Decodes an `HxPolygon` into a Core `Run` with `Control::Polygon`.
-fn decode_polygon(
-    polygon: &HxPolygon,
-    char_shape_id: CharShapeIndex,
-    depth: usize,
-) -> HwpxResult<Run> {
-    use hwpforge_core::control::ShapePoint;
-
-    let vertices: Vec<ShapePoint> =
-        polygon.points.iter().map(|p| ShapePoint { x: p.x, y: p.y }).collect();
-
-    let (width, height) = polygon
-        .sz
-        .as_ref()
-        .map(|sz| {
-            (
-                HwpUnit::new(sz.width).unwrap_or(HwpUnit::ZERO),
-                HwpUnit::new(sz.height).unwrap_or(HwpUnit::ZERO),
-            )
-        })
-        .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
-
-    let paragraphs = match &polygon.draw_text {
-        Some(dt) => decode_sublist_paragraphs(&dt.sub_list, depth)?,
-        None => Vec::new(),
-    };
-
-    let caption = polygon.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
-
-    let (horz_offset, vert_offset) =
-        polygon.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
-
-    Ok(Run {
-        content: RunContent::Control(Box::new(Control::Polygon {
-            vertices,
-            width,
-            height,
-            horz_offset,
-            vert_offset,
-            paragraphs,
-            caption,
-            style: decode_shape_style(&polygon.line_shape, &polygon.fill_brush),
-        })),
-        char_shape_id,
-    })
-}
+// Shape decode functions (decode_textbox, decode_line, decode_ellipse, decode_polygon)
+// are defined in `super::shapes`.
+use super::shapes::{
+    decode_arc, decode_connect_line, decode_curve, decode_ellipse, decode_line, decode_polygon,
+    decode_textbox,
+};
 
 /// Decodes an `HxEquation` into a Core `Run` with `Control::Equation`.
 ///
@@ -728,43 +810,10 @@ fn decode_chart(
     }))
 }
 
-/// Extracts a [`ShapeStyle`] from HWPX shape common elements.
-///
-/// Maps `HxLineShape` and `HxFillBrush` to Core's `ShapeStyle`.
-/// Returns `None` if no style information is present.
-fn decode_shape_style(
-    line_shape: &Option<HxLineShape>,
-    fill_brush: &Option<HxFillBrush>,
-) -> Option<ShapeStyle> {
-    let fill_color: Option<Color> = fill_brush
-        .as_ref()
-        .map(|fb| &fb.win_brush.face_color)
-        .filter(|c| !c.is_empty())
-        .and_then(|c| parse_hex_color(c));
-
-    let (line_color, line_width, line_style) = match line_shape.as_ref() {
-        None => (None, None, None),
-        Some(ls) => (
-            if ls.color.is_empty() { None } else { parse_hex_color(&ls.color) },
-            if ls.width == 0 { None } else { u32::try_from(ls.width).ok() },
-            if ls.style.is_empty() {
-                None
-            } else {
-                ls.style.parse::<hwpforge_core::control::LineStyle>().ok()
-            },
-        ),
-    };
-
-    if line_color.is_none() && line_width.is_none() && line_style.is_none() && fill_color.is_none()
-    {
-        return None;
-    }
-
-    Some(ShapeStyle { line_color, fill_color, line_width, line_style })
-}
+// decode_shape_style is defined in `super::shapes`.
 
 /// Parses a `#RRGGBB` hex string into a [`Color`].
-fn parse_hex_color(s: &str) -> Option<Color> {
+pub(crate) fn parse_hex_color(s: &str) -> Option<Color> {
     let s = s.strip_prefix('#').unwrap_or(s);
     if s.len() != 6 {
         return None;
@@ -778,7 +827,10 @@ fn parse_hex_color(s: &str) -> Option<Color> {
 /// Converts paragraphs from an `HxSubList` into Core `Paragraph`s.
 ///
 /// Reuses [`convert_paragraph`] at `depth + 1` to track nesting.
-fn decode_sublist_paragraphs(sub_list: &HxSubList, depth: usize) -> HwpxResult<Vec<Paragraph>> {
+pub(crate) fn decode_sublist_paragraphs(
+    sub_list: &HxSubList,
+    depth: usize,
+) -> HwpxResult<Vec<Paragraph>> {
     if depth >= MAX_NESTING_DEPTH {
         return Err(HwpxError::InvalidStructure {
             detail: format!(
@@ -800,7 +852,7 @@ fn decode_sublist_paragraphs(sub_list: &HxSubList, depth: usize) -> HwpxResult<V
 /// Converts an `HxCaption` into a Core `Caption`.
 ///
 /// Parses side, gap, optional width, and paragraph content from the schema type.
-fn convert_hx_caption(hx: &HxCaption, depth: usize) -> HwpxResult<Caption> {
+pub(crate) fn convert_hx_caption(hx: &HxCaption, depth: usize) -> HwpxResult<Caption> {
     let side = match hx.side.as_str() {
         "RIGHT" => CaptionSide::Right,
         "TOP" => CaptionSide::Top,
@@ -841,6 +893,8 @@ fn guess_image_format(name: &str) -> ImageFormat {
 
 /// Extracts `PageSettings` from an `HxSecPr`.
 fn extract_page_settings(sec_pr: &crate::schema::section::HxSecPr) -> Option<PageSettings> {
+    use hwpforge_foundation::GutterType;
+
     let page_pr = sec_pr.page_pr.as_ref()?;
 
     let width = HwpUnit::new(page_pr.width).unwrap_or_else(|_| {
@@ -859,6 +913,18 @@ fn extract_page_settings(sec_pr: &crate::schema::section::HxSecPr) -> Option<Pag
     let margin_bottom = m.and_then(|m| HwpUnit::new(m.bottom).ok()).unwrap_or(HwpUnit::ZERO);
     let header_margin = m.and_then(|m| HwpUnit::new(m.header).ok()).unwrap_or(HwpUnit::ZERO);
     let footer_margin = m.and_then(|m| HwpUnit::new(m.footer).ok()).unwrap_or(HwpUnit::ZERO);
+    let gutter = m.and_then(|m| HwpUnit::new(m.gutter).ok()).unwrap_or(HwpUnit::ZERO);
+
+    let gutter_type = match page_pr.gutter_type.as_str() {
+        "LEFT_RIGHT" => GutterType::LeftRight,
+        "TOP_ONLY" => GutterType::TopOnly,
+        "TOP_BOTTOM" => GutterType::TopBottom,
+        _ => GutterType::LeftOnly,
+    };
+
+    // KS X 6101: landscape is page orientation (NARROWLY=portrait, WIDELY=landscape),
+    // NOT mirror margins. No HWPX attribute exists for mirror_margins.
+    let mirror_margins = false;
 
     Some(PageSettings {
         width,
@@ -869,7 +935,107 @@ fn extract_page_settings(sec_pr: &crate::schema::section::HxSecPr) -> Option<Pag
         margin_bottom,
         header_margin,
         footer_margin,
+        gutter,
+        gutter_type,
+        mirror_margins,
     })
+}
+
+/// Extracts [`Visibility`] from an `HxSecPr`.
+fn extract_visibility(
+    sec_pr: &crate::schema::section::HxSecPr,
+) -> Option<hwpforge_core::section::Visibility> {
+    use hwpforge_foundation::ShowMode;
+
+    let hx = sec_pr.visibility.as_ref()?;
+
+    let parse_show_mode = |s: &str| -> ShowMode {
+        match s {
+            "HIDE_ALL" => ShowMode::HideAll,
+            "SHOW_ODD" => ShowMode::ShowOdd,
+            "SHOW_EVEN" => ShowMode::ShowEven,
+            _ => ShowMode::ShowAll,
+        }
+    };
+
+    Some(hwpforge_core::section::Visibility {
+        hide_first_header: hx.hide_first_header != 0,
+        hide_first_footer: hx.hide_first_footer != 0,
+        hide_first_master_page: hx.hide_first_master_page != 0,
+        hide_first_page_num: hx.hide_first_page_num != 0,
+        hide_first_empty_line: hx.hide_first_empty_line != 0,
+        show_line_number: hx.show_line_number != 0,
+        border: parse_show_mode(&hx.border),
+        fill: parse_show_mode(&hx.fill),
+    })
+}
+
+/// Extracts [`LineNumberShape`] from an `HxSecPr`.
+fn extract_line_number_shape(
+    sec_pr: &crate::schema::section::HxSecPr,
+) -> Option<hwpforge_core::section::LineNumberShape> {
+    let hx = sec_pr.line_number_shape.as_ref()?;
+
+    // restart_type: CONTINUOUS=0, PAGE=1, SECTION=2
+    let restart_type = match hx.restart_type.as_str() {
+        "PAGE" => 1,
+        "SECTION" => 2,
+        _ => 0, // CONTINUOUS
+    };
+
+    Some(hwpforge_core::section::LineNumberShape {
+        restart_type,
+        count_by: hx.count_by,
+        distance: HwpUnit::new(hx.distance).unwrap_or(HwpUnit::ZERO),
+        start_number: hx.start_number,
+    })
+}
+
+/// Extracts [`PageBorderFillEntry`] list from an `HxSecPr`.
+fn extract_page_border_fills(
+    sec_pr: &crate::schema::section::HxSecPr,
+) -> Option<Vec<hwpforge_core::section::PageBorderFillEntry>> {
+    if sec_pr.page_border_fills.is_empty() {
+        return None;
+    }
+
+    let entries = sec_pr
+        .page_border_fills
+        .iter()
+        .map(|hx| {
+            let offset = hx.offset.as_ref().map_or(
+                hwpforge_core::section::PageBorderFillEntry::default().offset,
+                |o| {
+                    [
+                        HwpUnit::new(o.left).unwrap_or(HwpUnit::ZERO),
+                        HwpUnit::new(o.right).unwrap_or(HwpUnit::ZERO),
+                        HwpUnit::new(o.top).unwrap_or(HwpUnit::ZERO),
+                        HwpUnit::new(o.bottom).unwrap_or(HwpUnit::ZERO),
+                    ]
+                },
+            );
+
+            hwpforge_core::section::PageBorderFillEntry {
+                apply_type: hx.apply_type.clone(),
+                border_fill_id: hx.border_fill_id,
+                text_border: if hx.text_border.is_empty() {
+                    "PAPER".to_string()
+                } else {
+                    hx.text_border.clone()
+                },
+                header_inside: hx.header_inside != 0,
+                footer_inside: hx.footer_inside != 0,
+                fill_area: if hx.fill_area.is_empty() {
+                    "PAPER".to_string()
+                } else {
+                    hx.fill_area.clone()
+                },
+                offset,
+            }
+        })
+        .collect();
+
+    Some(entries)
 }
 
 // ── Ctrl conversion helpers ──────────────────────────────────────
