@@ -5,13 +5,33 @@
 //! and `Control::Polygon` into their corresponding `Hx*` schema types.
 
 use hwpforge_core::control::{Control, ShapeStyle};
-use hwpforge_foundation::Flip;
+use hwpforge_foundation::{ArrowType, CurveSegmentType, Flip};
+
+/// Resolve `ArrowType` to KS X 6101 string.
+///
+/// For geometric shapes (Diamond, Oval, Open), 한글 only recognises the `EMPTY_*`
+/// form and uses the separate `headfill`/`tailfill` attribute to control fill.
+/// Reference: `SimpleLine.hwpx` uses `EMPTY_BOX` + `headfill="1"` for a filled box.
+fn resolve_arrow_type_str(arrow_type: &ArrowType, _filled: bool) -> String {
+    match arrow_type {
+        ArrowType::None => "NORMAL",
+        ArrowType::Normal => "ARROW",
+        ArrowType::Arrow => "SPEAR",
+        ArrowType::Concave => "CONCAVE_ARROW",
+        ArrowType::Diamond => "EMPTY_DIAMOND",
+        ArrowType::Oval => "EMPTY_CIRCLE",
+        ArrowType::Open => "EMPTY_BOX",
+        _ => "NORMAL",
+    }
+    .to_string()
+}
 
 use crate::error::HwpxResult;
 use crate::schema::section::{
-    HxConnectLine, HxCurve, HxCurveSegment, HxDrawText, HxEllipse, HxFillBrush, HxFlip, HxLine,
-    HxLineShape, HxMatrix, HxOffset, HxPoint, HxPolygon, HxRect, HxRenderingInfo, HxRotationInfo,
-    HxShadow, HxShapeComment, HxSizeAttr, HxTableMargin, HxTablePos, HxTableSz,
+    HxConnectLine, HxConnectPoint, HxControlPoint, HxControlPoints, HxCurve, HxCurveSegment,
+    HxDrawText, HxEllipse, HxFillBrush, HxFlip, HxLine, HxLineShape, HxMatrix, HxOffset, HxPoint,
+    HxPolygon, HxRect, HxRenderingInfo, HxRotationInfo, HxShadow, HxShapeComment, HxSizeAttr,
+    HxTableMargin, HxTablePos, HxTableSz,
 };
 
 use super::section::{build_hx_caption, encode_paragraphs_to_sublist, generate_instid};
@@ -88,14 +108,14 @@ pub(crate) fn build_shape_common(
             }
         }
 
-        // Arrow heads
+        // Arrow heads — resolve FILLED_ vs EMPTY_ for geometric types per KS X 6101.
         if let Some(ref arrow) = s.head_arrow {
-            line_shape.head_style = arrow.arrow_type.to_string();
+            line_shape.head_style = resolve_arrow_type_str(&arrow.arrow_type, arrow.filled);
             line_shape.head_sz = arrow.size.to_string();
             line_shape.head_fill = if arrow.filled { 1 } else { 0 };
         }
         if let Some(ref arrow) = s.tail_arrow {
-            line_shape.tail_style = arrow.arrow_type.to_string();
+            line_shape.tail_style = resolve_arrow_type_str(&arrow.arrow_type, arrow.filled);
             line_shape.tail_sz = arrow.size.to_string();
             line_shape.tail_fill = if arrow.filled { 1 } else { 0 };
         }
@@ -661,9 +681,23 @@ pub(crate) fn encode_curve_to_hx(
     let h = height.as_i32();
     let sc = build_shape_common(w, h, style.as_ref());
 
-    let hx_points = points.iter().map(|v| HxPoint { x: v.x, y: v.y }).collect();
-    let segments =
-        segment_types.iter().map(|st| HxCurveSegment { seg_type: st.to_string() }).collect();
+    // Per KS X 6101 표 269: each <hp:seg> has x1/y1 (start) + x2/y2 (end).
+    // Points array encodes control vertices; segments connect adjacent pairs.
+    let segments: Vec<HxCurveSegment> = if points.len() >= 2 {
+        points
+            .windows(2)
+            .zip(segment_types.iter().chain(std::iter::repeat(&CurveSegmentType::Curve)))
+            .map(|(pair, st)| HxCurveSegment {
+                seg_type: st.to_string(),
+                x1: pair[0].x,
+                y1: pair[0].y,
+                x2: pair[1].x,
+                y2: pair[1].y,
+            })
+            .collect()
+    } else {
+        vec![]
+    };
 
     Ok(HxCurve {
         id: generate_instid(),
@@ -711,7 +745,7 @@ pub(crate) fn encode_curve_to_hx(
             .as_ref()
             .map(|c| build_hx_caption(c, w, depth, hyperlink_entries))
             .transpose()?,
-        points: hx_points,
+        points: vec![], // KS X 6101: coordinates are in <hp:seg> elements, not <hc:pt>
         segments,
     })
 }
@@ -764,8 +798,14 @@ pub(crate) fn encode_connect_line_to_hx(
     let h = height.as_i32();
     let sc = build_shape_common(w, h, style.as_ref());
 
-    let hx_control_pts: Vec<HxPoint> =
-        control_points.iter().map(|p| HxPoint { x: p.x, y: p.y }).collect();
+    // Per golden fixture: controlPoints wrapper contains ALL points
+    // (start type=3, intermediates type=2, end type=26).
+    let mut all_points = Vec::with_capacity(control_points.len() + 2);
+    all_points.push(HxControlPoint { x: start.x, y: start.y, point_type: "3".to_string() });
+    for p in control_points {
+        all_points.push(HxControlPoint { x: p.x, y: p.y, point_type: "2".to_string() });
+    }
+    all_points.push(HxControlPoint { x: end.x, y: end.y, point_type: "26".to_string() });
 
     Ok(HxConnectLine {
         id: generate_instid(),
@@ -788,9 +828,19 @@ pub(crate) fn encode_connect_line_to_hx(
         line_shape: Some(sc.line_shape),
         fill_brush: None, // connect lines have no fill like regular lines
         shadow: Some(sc.shadow),
-        start_pt: Some(HxPoint { x: start.x, y: start.y }),
-        end_pt: Some(HxPoint { x: end.x, y: end.y }),
-        control_points: hx_control_pts,
+        start_pt: Some(HxConnectPoint {
+            x: start.x,
+            y: start.y,
+            subject_id_ref: "0".to_string(),
+            subject_idx: "0".to_string(),
+        }),
+        end_pt: Some(HxConnectPoint {
+            x: end.x,
+            y: end.y,
+            subject_id_ref: "0".to_string(),
+            subject_idx: "0".to_string(),
+        }),
+        control_points: Some(HxControlPoints { points: all_points }),
         sz: Some(HxTableSz {
             width: w,
             width_rel_to: "ABSOLUTE".to_string(),

@@ -1543,14 +1543,18 @@ fn build_masterpage_entries(section: &Section, masterpage_offset: usize) -> Vec<
             };
 
             let mut xml = String::with_capacity(1024);
-            let _ = write!(xml, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
+            let _ = write!(xml, r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>"#);
+            // Root element uses NO namespace prefix (like real 한글 output).
+            // All 15 xmlns declarations are required.
             let _ = write!(
                 xml,
-                r#"<hm:masterPage xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hm="http://www.hancom.co.kr/hwpml/2011/master-page" id="{mp_id}" type="{apply_type}" pageNumber="0" pageDuplicate="0" pageFront="0">"#,
+                r#"<masterPage{} id="{mp_id}" type="{apply_type}" pageNumber="0" pageDuplicate="0" pageFront="0">"#,
+                super::package::XMLNS_DECLS,
             );
+            // subList uses hp: prefix (NOT hm:)
             let _ = write!(
                 xml,
-                r#"<hm:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="42520" textHeight="65762" hasTextRef="0" hasNumRef="0">"#,
+                r#"<hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="42520" textHeight="65762" hasTextRef="0" hasNumRef="0">"#,
             );
 
             for (pidx, para) in mp.paragraphs.iter().enumerate() {
@@ -1573,7 +1577,7 @@ fn build_masterpage_entries(section: &Section, masterpage_offset: usize) -> Vec<
                 xml.push_str("</hp:p>");
             }
 
-            xml.push_str("</hm:subList></hm:masterPage>");
+            xml.push_str("</hp:subList></masterPage>");
             (format!("Contents/masterpage{idx}.xml"), xml)
         })
         .collect()

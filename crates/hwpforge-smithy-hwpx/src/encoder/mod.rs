@@ -261,27 +261,31 @@ impl HwpxEncoder {
         let begin_num = sections.first().and_then(|s| s.begin_num.as_ref());
         let header_xml = encode_header(style_store, sec_cnt, begin_num)?;
 
-        // Step 2: Encode sections (each produces XML + chart entries)
-        // chart_offset tracks the global chart index across sections to avoid
-        // duplicate Chart/chartN.xml filenames in the ZIP archive.
+        // Step 2: Encode sections (each produces XML + chart + masterpage entries)
+        // chart_offset and masterpage_offset track global indices across sections
+        // to avoid duplicate filenames in the ZIP archive.
         let mut chart_offset = 0usize;
+        let mut masterpage_offset = 0usize;
         let mut section_results = Vec::with_capacity(sections.len());
         for (i, section) in sections.iter().enumerate() {
-            let result = encode_section(section, i, chart_offset)?;
+            let result = encode_section(section, i, chart_offset, masterpage_offset)?;
             chart_offset += result.charts.len();
+            masterpage_offset += result.master_pages.len();
             section_results.push(result);
         }
 
         let section_xmls: Vec<String> = section_results.iter().map(|r| r.xml.clone()).collect();
         let charts: Vec<(String, String)> =
-            section_results.into_iter().flat_map(|r| r.charts).collect();
+            section_results.iter().flat_map(|r| r.charts.clone()).collect();
+        let master_pages: Vec<(String, String)> =
+            section_results.into_iter().flat_map(|r| r.master_pages).collect();
 
         // Step 3: Collect image binaries
         let images: Vec<(String, Vec<u8>)> =
             image_store.iter().map(|(key, data)| (key.to_string(), data.to_vec())).collect();
 
-        // Step 4: Package into ZIP with images and charts
-        PackageWriter::write_hwpx(&header_xml, &section_xmls, &images, &charts)
+        // Step 4: Package into ZIP with images, charts, and master pages
+        PackageWriter::write_hwpx(&header_xml, &section_xmls, &images, &charts, &master_pages)
     }
 
     /// Encodes a validated document and writes it to a file.

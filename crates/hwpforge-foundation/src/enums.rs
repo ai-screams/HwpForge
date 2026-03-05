@@ -2363,14 +2363,17 @@ pub enum ArrowType {
 
 impl fmt::Display for ArrowType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // KS X 6101 ArrowType values.
+        // Diamond/Oval/Open default to FILLED_ variants here;
+        // the encoder resolves FILLED_ vs EMPTY_ based on ArrowStyle.filled.
         match self {
             Self::None => f.write_str("NORMAL"),
             Self::Normal => f.write_str("ARROW"),
-            Self::Arrow => f.write_str("ARROW_ARROW"),
-            Self::Concave => f.write_str("CONCAVE"),
-            Self::Diamond => f.write_str("DIAMOND"),
-            Self::Oval => f.write_str("OVAL"),
-            Self::Open => f.write_str("OPEN"),
+            Self::Arrow => f.write_str("SPEAR"),
+            Self::Concave => f.write_str("CONCAVE_ARROW"),
+            Self::Diamond => f.write_str("FILLED_DIAMOND"),
+            Self::Oval => f.write_str("FILLED_CIRCLE"),
+            Self::Open => f.write_str("EMPTY_BOX"),
         }
     }
 }
@@ -2379,18 +2382,19 @@ impl std::str::FromStr for ArrowType {
     type Err = FoundationError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // KS X 6101 ArrowType values (primary) + legacy aliases for backward compat.
         match s {
-            "NORMAL" | "Normal" | "normal" => Ok(Self::None),
-            "ARROW" | "Arrow" | "arrow" => Ok(Self::Normal),
-            "ARROW_ARROW" => Ok(Self::Arrow),
-            "CONCAVE" | "Concave" | "concave" => Ok(Self::Concave),
-            "DIAMOND" | "Diamond" | "diamond" => Ok(Self::Diamond),
-            "OVAL" | "Oval" | "oval" => Ok(Self::Oval),
-            "OPEN" | "Open" | "open" => Ok(Self::Open),
+            "NORMAL" => Ok(Self::None),
+            "ARROW" => Ok(Self::Normal),
+            "SPEAR" => Ok(Self::Arrow),
+            "CONCAVE_ARROW" => Ok(Self::Concave),
+            "FILLED_DIAMOND" | "EMPTY_DIAMOND" => Ok(Self::Diamond),
+            "FILLED_CIRCLE" | "EMPTY_CIRCLE" => Ok(Self::Oval),
+            "FILLED_BOX" | "EMPTY_BOX" => Ok(Self::Open),
             _ => Err(FoundationError::ParseError {
                 type_name: "ArrowType".to_string(),
                 value: s.to_string(),
-                valid_values: "NORMAL, ARROW, ARROW_ARROW, CONCAVE, DIAMOND, OVAL, OPEN"
+                valid_values: "NORMAL, ARROW, SPEAR, CONCAVE_ARROW, FILLED_DIAMOND, EMPTY_DIAMOND, FILLED_CIRCLE, EMPTY_CIRCLE, FILLED_BOX, EMPTY_BOX"
                     .to_string(),
             }),
         }
