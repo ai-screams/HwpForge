@@ -3219,6 +3219,20 @@ impl fmt::Display for DropCapStyle {
     }
 }
 
+impl DropCapStyle {
+    /// Parses an HWPX `dropcapstyle` attribute value (PascalCase).
+    ///
+    /// Unknown values fall back to `None` (default) for forward compatibility.
+    pub fn from_hwpx_str(s: &str) -> Self {
+        match s {
+            "DoubleLine" => Self::DoubleLine,
+            "TripleLine" => Self::TripleLine,
+            "Margin" => Self::Margin,
+            _ => Self::None,
+        }
+    }
+}
+
 impl std::str::FromStr for DropCapStyle {
     type Err = FoundationError;
 

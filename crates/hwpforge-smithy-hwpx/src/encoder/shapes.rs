@@ -5,7 +5,12 @@
 //! and `Control::Polygon` into their corresponding `Hx*` schema types.
 
 use hwpforge_core::control::{Control, ShapeStyle};
-use hwpforge_foundation::{ArrowType, CurveSegmentType, Flip};
+use hwpforge_foundation::{ArrowType, CurveSegmentType, DropCapStyle, Flip};
+
+/// Extracts the dropcap style string from an optional `ShapeStyle`.
+fn dropcap_str(style: &Option<ShapeStyle>) -> String {
+    style.as_ref().map_or(DropCapStyle::None, |s| s.drop_cap_style).to_string()
+}
 
 /// Resolve `ArrowType` to KS X 6101 string.
 ///
@@ -198,7 +203,7 @@ pub(crate) fn encode_textbox_to_rect(
         text_wrap: "TOP_AND_BOTTOM".to_string(),
         text_flow: "BOTH_SIDES".to_string(),
         lock: 0,
-        dropcap_style: "None".to_string(),
+        dropcap_style: dropcap_str(style),
         href: String::new(),
         group_level: 0,
         instid: generate_instid(),
@@ -287,7 +292,7 @@ pub(crate) fn encode_line_to_hx(
         text_wrap: "TOP_AND_BOTTOM".to_string(),
         text_flow: "BOTH_SIDES".to_string(),
         lock: 0,
-        dropcap_style: "None".to_string(),
+        dropcap_style: dropcap_str(style),
         href: String::new(),
         group_level: 0,
         instid: generate_instid(),
@@ -390,7 +395,7 @@ pub(crate) fn encode_ellipse_to_hx(
         text_wrap: "TOP_AND_BOTTOM".to_string(),
         text_flow: "BOTH_SIDES".to_string(),
         lock: 0,
-        dropcap_style: "None".to_string(),
+        dropcap_style: dropcap_str(style),
         href: String::new(),
         group_level: 0,
         instid: generate_instid(),
@@ -490,7 +495,7 @@ pub(crate) fn encode_polygon_to_hx(
         text_wrap: "TOP_AND_BOTTOM".to_string(),
         text_flow: "BOTH_SIDES".to_string(),
         lock: 0,
-        dropcap_style: "None".to_string(),
+        dropcap_style: dropcap_str(style),
         href: String::new(),
         group_level: 0,
         instid: generate_instid(),
@@ -603,7 +608,7 @@ pub(crate) fn encode_arc_to_hx(
         text_wrap: "TOP_AND_BOTTOM".to_string(),
         text_flow: "BOTH_SIDES".to_string(),
         lock: 0,
-        dropcap_style: "None".to_string(),
+        dropcap_style: dropcap_str(style),
         href: String::new(),
         group_level: 0,
         instid: generate_instid(),
@@ -706,7 +711,7 @@ pub(crate) fn encode_curve_to_hx(
         text_wrap: "TOP_AND_BOTTOM".to_string(),
         text_flow: "BOTH_SIDES".to_string(),
         lock: 0,
-        dropcap_style: "None".to_string(),
+        dropcap_style: dropcap_str(style),
         href: String::new(),
         group_level: 0,
         instid: generate_instid(),
@@ -814,7 +819,7 @@ pub(crate) fn encode_connect_line_to_hx(
         text_wrap: "TOP_AND_BOTTOM".to_string(),
         text_flow: "BOTH_SIDES".to_string(),
         lock: 0,
-        dropcap_style: "None".to_string(),
+        dropcap_style: dropcap_str(style),
         href: String::new(),
         group_level: 0,
         instid: generate_instid(),

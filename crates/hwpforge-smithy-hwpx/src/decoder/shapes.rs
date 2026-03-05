@@ -6,7 +6,9 @@
 
 use hwpforge_core::control::{Control, ShapeStyle};
 use hwpforge_core::run::{Run, RunContent};
-use hwpforge_foundation::{ArcType, CharShapeIndex, Color, CurveSegmentType, Flip, HwpUnit};
+use hwpforge_foundation::{
+    ArcType, CharShapeIndex, Color, CurveSegmentType, DropCapStyle, Flip, HwpUnit,
+};
 
 use crate::error::HwpxResult;
 use crate::schema::section::{
@@ -107,7 +109,7 @@ pub(crate) fn decode_line(
             horz_offset,
             vert_offset,
             caption,
-            style: decode_shape_style(&line.line_shape, &line.fill_brush),
+            style: decode_shape_style(&line.line_shape, &line.fill_brush, &line.dropcap_style),
         })),
         char_shape_id,
     })
@@ -169,7 +171,11 @@ pub(crate) fn decode_ellipse(
             vert_offset,
             paragraphs,
             caption,
-            style: decode_shape_style(&ellipse.line_shape, &ellipse.fill_brush),
+            style: decode_shape_style(
+                &ellipse.line_shape,
+                &ellipse.fill_brush,
+                &ellipse.dropcap_style,
+            ),
         })),
         char_shape_id,
     })
@@ -216,7 +222,11 @@ pub(crate) fn decode_polygon(
             vert_offset,
             paragraphs,
             caption,
-            style: decode_shape_style(&polygon.line_shape, &polygon.fill_brush),
+            style: decode_shape_style(
+                &polygon.line_shape,
+                &polygon.fill_brush,
+                &polygon.dropcap_style,
+            ),
         })),
         char_shape_id,
     })
@@ -229,16 +239,18 @@ pub(crate) fn decode_polygon(
 pub(crate) fn decode_shape_style(
     line_shape: &Option<HxLineShape>,
     fill_brush: &Option<HxFillBrush>,
+    dropcap_style: &str,
 ) -> Option<ShapeStyle> {
-    decode_shape_style_full(line_shape, fill_brush, None, None)
+    decode_shape_style_full(line_shape, fill_brush, None, None, dropcap_style)
 }
 
-/// Extended shape style decoder that also extracts rotation, flip, and arrow info.
+/// Extended shape style decoder that also extracts rotation, flip, arrow, and drop cap info.
 pub(crate) fn decode_shape_style_full(
     line_shape: &Option<HxLineShape>,
     fill_brush: &Option<HxFillBrush>,
     rotation_info: Option<&crate::schema::section::HxRotationInfo>,
     flip_info: Option<&crate::schema::section::HxFlip>,
+    dropcap_style: &str,
 ) -> Option<ShapeStyle> {
     use hwpforge_core::control::ArrowStyle;
     use hwpforge_foundation::{ArrowSize, ArrowType};
@@ -301,6 +313,8 @@ pub(crate) fn decode_shape_style_full(
         }
     };
 
+    let drop_cap = DropCapStyle::from_hwpx_str(dropcap_style);
+
     let has_anything = line_color.is_some()
         || line_width.is_some()
         || line_style.is_some()
@@ -308,7 +322,8 @@ pub(crate) fn decode_shape_style_full(
         || rotation.is_some()
         || flip.is_some()
         || head_arrow.is_some()
-        || tail_arrow.is_some();
+        || tail_arrow.is_some()
+        || drop_cap != DropCapStyle::None;
 
     if !has_anything {
         return None;
@@ -324,6 +339,7 @@ pub(crate) fn decode_shape_style_full(
         head_arrow,
         tail_arrow,
         fill: None,
+        drop_cap_style: drop_cap,
     })
 }
 
@@ -387,6 +403,7 @@ pub(crate) fn decode_arc(
                 &ellipse.fill_brush,
                 ellipse.rotation_info.as_ref(),
                 ellipse.flip.as_ref(),
+                &ellipse.dropcap_style,
             ),
         })),
         char_shape_id,
@@ -451,6 +468,7 @@ pub(crate) fn decode_curve(
                 &curve.fill_brush,
                 curve.rotation_info.as_ref(),
                 curve.flip.as_ref(),
+                &curve.dropcap_style,
             ),
         })),
         char_shape_id,
@@ -515,6 +533,7 @@ pub(crate) fn decode_connect_line(
                 &cl.fill_brush,
                 cl.rotation_info.as_ref(),
                 cl.flip.as_ref(),
+                &cl.dropcap_style,
             ),
         })),
         char_shape_id,

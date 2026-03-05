@@ -23,8 +23,8 @@
 //! ```
 
 use hwpforge_foundation::{
-    ArcType, ArrowSize, ArrowType, BookmarkType, Color, CurveSegmentType, FieldType, Flip,
-    GradientType, HwpUnit, ImageFillMode, PatternType, RefContentType, RefType,
+    ArcType, ArrowSize, ArrowType, BookmarkType, Color, CurveSegmentType, DropCapStyle, FieldType,
+    Flip, GradientType, HwpUnit, ImageFillMode, PatternType, RefContentType, RefType,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -243,6 +243,10 @@ pub struct ShapeStyle {
     pub tail_arrow: Option<ArrowStyle>,
     /// Advanced fill (gradient, pattern, image). Overrides `fill_color` when present.
     pub fill: Option<Fill>,
+    /// Drop cap style for the shape (HWPX `dropcapstyle` attribute).
+    /// Controls whether the shape participates in a drop-cap layout.
+    #[serde(default)]
+    pub drop_cap_style: DropCapStyle,
 }
 
 /// An inline control element.

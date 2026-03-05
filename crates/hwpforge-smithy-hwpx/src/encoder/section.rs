@@ -24,7 +24,7 @@ use hwpforge_core::PageSettings;
 
 use crate::encoder::package::XMLNS_DECLS;
 use crate::error::{HwpxError, HwpxResult};
-use hwpforge_foundation::{BookmarkType, TextDirection};
+use hwpforge_foundation::{BookmarkType, DropCapStyle, TextDirection};
 
 use crate::schema::section::{
     HxBookmark, HxCaption, HxCellAddr, HxCellSpan, HxCellSz, HxChart, HxCompose, HxComposeCharPr,
@@ -657,7 +657,7 @@ fn encode_equation_to_hx(ctrl: &Control) -> HwpxResult<HxEquation> {
         text_wrap: "TOP_AND_BOTTOM".to_string(),
         text_flow: "BOTH_SIDES".to_string(),
         lock: 0,
-        dropcap_style: "None".to_string(),
+        dropcap_style: DropCapStyle::None.to_string(),
 
         // Equation-specific attrs (hardcoded constants per ground truth)
         version: "Equation Version 60".to_string(),
@@ -1102,7 +1102,7 @@ fn encode_chart_switch(ctrl: &Control, chart_ref: &str) -> HxRunSwitch {
                 text_wrap: "TOP_AND_BOTTOM".to_string(),
                 text_flow: "BOTH_SIDES".to_string(),
                 lock: 0,
-                dropcap_style: "None".to_string(),
+                dropcap_style: DropCapStyle::None.to_string(),
                 chart_id_ref: chart_ref.to_string(),
                 sz: Some(HxTableSz {
                     width: width.as_i32(),
@@ -1255,7 +1255,7 @@ fn build_table(
         text_wrap: "TOP_AND_BOTTOM".to_string(),
         text_flow: "BOTH_SIDES".to_string(),
         lock: 0,
-        dropcap_style: "None".to_string(),
+        dropcap_style: DropCapStyle::None.to_string(),
         page_break: "CELL".to_string(),
         repeat_header: 1,
         row_cnt: table.rows.len() as u32,
@@ -1409,7 +1409,7 @@ fn build_picture(
         text_wrap: "TOP_AND_BOTTOM".to_string(),
         text_flow: "BOTH_SIDES".to_string(),
         lock: 0,
-        dropcap_style: "None".to_string(),
+        dropcap_style: DropCapStyle::None.to_string(),
         href: String::new(),
         group_level: 0,
         instid: generate_instid(),
