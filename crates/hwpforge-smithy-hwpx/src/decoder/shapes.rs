@@ -401,7 +401,20 @@ pub(crate) fn decode_curve(
 ) -> HwpxResult<Run> {
     use hwpforge_core::control::ShapePoint;
 
-    let points: Vec<ShapePoint> = curve.points.iter().map(|p| ShapePoint::new(p.x, p.y)).collect();
+    // KS X 6101: coordinates are in <hp:seg> x1/y1/x2/y2, not separate <hc:pt>.
+    // Reconstruct points from segments if the points array is empty.
+    let points: Vec<ShapePoint> = if !curve.points.is_empty() {
+        curve.points.iter().map(|p| ShapePoint::new(p.x, p.y)).collect()
+    } else if !curve.segments.is_empty() {
+        let mut pts = Vec::with_capacity(curve.segments.len() + 1);
+        pts.push(ShapePoint::new(curve.segments[0].x1, curve.segments[0].y1));
+        for seg in &curve.segments {
+            pts.push(ShapePoint::new(seg.x2, seg.y2));
+        }
+        pts
+    } else {
+        vec![]
+    };
 
     let segment_types: Vec<CurveSegmentType> = curve
         .segments
@@ -456,8 +469,20 @@ pub(crate) fn decode_connect_line(
         cl.start_pt.as_ref().map(|p| ShapePoint::new(p.x, p.y)).unwrap_or(ShapePoint::new(0, 0));
     let end =
         cl.end_pt.as_ref().map(|p| ShapePoint::new(p.x, p.y)).unwrap_or(ShapePoint::new(0, 0));
-    let control_points: Vec<ShapePoint> =
-        cl.control_points.iter().map(|p| ShapePoint::new(p.x, p.y)).collect();
+    // controlPoints wrapper contains all points (start type=3, intermediates type=2, end type=26).
+    // Extract only intermediate points (skip first=start and last=end).
+    let control_points: Vec<ShapePoint> = cl
+        .control_points
+        .as_ref()
+        .map(|cp| {
+            let pts = &cp.points;
+            if pts.len() > 2 {
+                pts[1..pts.len() - 1].iter().map(|p| ShapePoint::new(p.x, p.y)).collect()
+            } else {
+                vec![]
+            }
+        })
+        .unwrap_or_default();
 
     let (width, height) = cl
         .sz

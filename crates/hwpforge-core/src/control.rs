@@ -1158,6 +1158,13 @@ impl Control {
                 reason: "start and end points are identical (degenerate line)".to_string(),
             });
         }
+        // Normalize points to bounding-box-relative coordinates.
+        // HWPX requires startPt/endPt within the shape's bounding box (0,0)→(w,h).
+        let min_x = start.x.min(end.x);
+        let min_y = start.y.min(end.y);
+        let norm_start = ShapePoint::new(start.x - min_x, start.y - min_y);
+        let norm_end = ShapePoint::new(end.x - min_x, end.y - min_y);
+
         let raw_w = ((end.x as i64) - (start.x as i64)).unsigned_abs() as i32;
         let raw_h = ((end.y as i64) - (start.y as i64)).unsigned_abs() as i32;
         // Minimum bounding box of 100 HwpUnit (~1pt) per axis.
@@ -1167,8 +1174,8 @@ impl Control {
         let width = HwpUnit::new(raw_w).unwrap_or_else(|_| HwpUnit::new(100).expect("valid"));
         let height = HwpUnit::new(raw_h).unwrap_or_else(|_| HwpUnit::new(100).expect("valid"));
         Ok(Self::Line {
-            start,
-            end,
+            start: norm_start,
+            end: norm_end,
             width,
             height,
             horz_offset: 0,
@@ -1376,6 +1383,13 @@ impl Control {
                 reason: "start and end points are identical (degenerate line)".to_string(),
             });
         }
+        // Normalize points to bounding-box-relative coordinates.
+        // HWPX requires startPt/endPt within the shape's bounding box (0,0)→(w,h).
+        let min_x = start.x.min(end.x);
+        let min_y = start.y.min(end.y);
+        let norm_start = ShapePoint::new(start.x - min_x, start.y - min_y);
+        let norm_end = ShapePoint::new(end.x - min_x, end.y - min_y);
+
         let raw_w = ((end.x as i64) - (start.x as i64)).unsigned_abs() as i32;
         let raw_h = ((end.y as i64) - (start.y as i64)).unsigned_abs() as i32;
         let raw_w = raw_w.max(100);
@@ -1383,8 +1397,8 @@ impl Control {
         let width = HwpUnit::new(raw_w).unwrap_or_else(|_| HwpUnit::new(100).expect("valid"));
         let height = HwpUnit::new(raw_h).unwrap_or_else(|_| HwpUnit::new(100).expect("valid"));
         Ok(Self::ConnectLine {
-            start,
-            end,
+            start: norm_start,
+            end: norm_end,
             control_points: Vec::new(),
             connect_type: "STRAIGHT".to_string(),
             width,

@@ -12,8 +12,9 @@ use serde::{Deserialize, Serialize};
 // Re-export shape types so `crate::schema::section::HxRect` etc. still resolve.
 // Re-export shape types so `crate::schema::section::HxRect` etc. still resolve.
 pub use super::shapes::{
-    HxConnectLine, HxCurve, HxCurveSegment, HxDrawText, HxEllipse, HxFillBrush, HxLine,
-    HxLineShape, HxPolygon, HxRect, HxShadow, HxShapeComment,
+    HxConnectLine, HxConnectPoint, HxControlPoint, HxControlPoints, HxCurve, HxCurveSegment,
+    HxDrawText, HxEllipse, HxFillBrush, HxLine, HxLineShape, HxPolygon, HxRect, HxShadow,
+    HxShapeComment,
 };
 
 // ── Section root ──────────────────────────────────────────────────

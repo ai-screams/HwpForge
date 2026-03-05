@@ -1107,12 +1107,78 @@ pub struct HxCurve {
     pub segments: Vec<HxCurveSegment>,
 }
 
-/// `<hp:seg>` — curve segment type descriptor.
+/// `<hp:seg>` — curve segment descriptor with start/end coordinates.
+///
+/// Per KS X 6101 표 269: each segment has type + x1/y1 (start) + x2/y2 (end).
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxCurveSegment {
     /// Segment type: "LINE" or "CURVE".
     #[serde(rename = "@type", default)]
     pub seg_type: String,
+    /// Segment start x coordinate.
+    #[serde(rename = "@x1", default)]
+    pub x1: i32,
+    /// Segment start y coordinate.
+    #[serde(rename = "@y1", default)]
+    pub y1: i32,
+    /// Segment end x coordinate.
+    #[serde(rename = "@x2", default)]
+    pub x2: i32,
+    /// Segment end y coordinate.
+    #[serde(rename = "@y2", default)]
+    pub y2: i32,
+}
+
+// ── Connect line helper types ───────────────────────────────────
+
+/// `<hp:startPt>` / `<hp:endPt>` — connect line endpoint with subject refs.
+///
+/// Per golden fixture: `hp:` namespace (NOT `hc:`), with `subjectIDRef`/`subjectIdx`.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxConnectPoint {
+    /// X coordinate.
+    #[serde(rename = "@x", default)]
+    pub x: i32,
+    /// Y coordinate.
+    #[serde(rename = "@y", default)]
+    pub y: i32,
+    /// Subject ID reference (connected shape ID, "0" if unconnected).
+    #[serde(rename = "@subjectIDRef", default)]
+    pub subject_id_ref: String,
+    /// Subject index (connection point index on the target shape).
+    #[serde(rename = "@subjectIdx", default)]
+    pub subject_idx: String,
+}
+
+/// `<hp:point>` — control point inside `<hp:controlPoints>` wrapper.
+///
+/// Per golden fixture: has `x`, `y`, and `type` attributes.
+/// type=3 → start, type=2 → intermediate, type=26 → end.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxControlPoint {
+    /// X coordinate.
+    #[serde(rename = "@x", default)]
+    pub x: i32,
+    /// Y coordinate.
+    #[serde(rename = "@y", default)]
+    pub y: i32,
+    /// Point type (3=start, 2=intermediate, 26=end).
+    #[serde(rename = "@type", default)]
+    pub point_type: String,
+}
+
+/// `<hp:controlPoints>` — wrapper for connect line routing points.
+///
+/// Per golden fixture and KS X 6101 표 271: wrapper element containing `<hp:point>` children.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxControlPoints {
+    /// Ordered list of routing points.
+    #[serde(
+        rename(serialize = "hp:point", deserialize = "point"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub points: Vec<HxControlPoint>,
 }
 
 // ── Connect line shape ──────────────────────────────────────────
@@ -1122,7 +1188,7 @@ pub struct HxCurveSegment {
 /// Element order matches 한글's expected serialization:
 /// offset → orgSz → curSz → flip → rotationInfo → renderingInfo →
 /// lineShape → fillBrush → shadow →
-/// startPt → endPt → controlPt[] → sz → pos → outMargin → shapeComment → caption
+/// startPt → endPt → controlPoints → sz → pos → outMargin → shapeComment → caption
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxConnectLine {
     // ── AbstractShapeObjectType attrs ──
@@ -1229,28 +1295,28 @@ pub struct HxConnectLine {
     )]
     pub shadow: Option<HxShadow>,
 
-    // ── ConnectLine-specific children (hc: namespace geometry) ──
-    /// Start point of the connect line.
+    // ── ConnectLine-specific children (hp: namespace per golden fixture) ──
+    /// Start point with subject reference (hp: namespace, NOT hc:).
     #[serde(
-        rename(serialize = "hc:startPt", deserialize = "startPt"),
+        rename(serialize = "hp:startPt", deserialize = "startPt"),
         default,
         skip_serializing_if = "Option::is_none"
     )]
-    pub start_pt: Option<HxPoint>,
-    /// End point of the connect line.
+    pub start_pt: Option<HxConnectPoint>,
+    /// End point with subject reference (hp: namespace, NOT hc:).
     #[serde(
-        rename(serialize = "hc:endPt", deserialize = "endPt"),
+        rename(serialize = "hp:endPt", deserialize = "endPt"),
         default,
         skip_serializing_if = "Option::is_none"
     )]
-    pub end_pt: Option<HxPoint>,
-    /// Intermediate control points for routing.
+    pub end_pt: Option<HxConnectPoint>,
+    /// Control points wrapper with typed routing points.
     #[serde(
-        rename(serialize = "hc:controlPt", deserialize = "controlPt"),
+        rename(serialize = "hp:controlPoints", deserialize = "controlPoints"),
         default,
-        skip_serializing_if = "Vec::is_empty"
+        skip_serializing_if = "Option::is_none"
     )]
-    pub control_points: Vec<HxPoint>,
+    pub control_points: Option<HxControlPoints>,
 
     // ── Size / position / margin ──
     /// Size specification.
