@@ -1,0 +1,79 @@
+name: Bug Report
+description: Report a bug in HwpForge
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug! Please fill in the details below.
+        For security vulnerabilities, please use [Security Advisories](https://github.com/ai-screams/HwpForge/security/advisories/new) instead.
+
+  - type: input
+    id: version
+    attributes:
+      label: HwpForge version
+      description: Output of `cargo tree -p hwpforge` or the version in your Cargo.toml.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+
+  - type: input
+    id: rust-version
+    attributes:
+      label: Rust version
+      description: Output of `rustc --version`.
+      placeholder: "rustc 1.88.0 (xxxxxxx 2025-xx-xx)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: crate
+    attributes:
+      label: Affected crate
+      options:
+        - hwpforge (umbrella)
+        - hwpforge-foundation
+        - hwpforge-core
+        - hwpforge-blueprint
+        - hwpforge-smithy-hwpx
+        - hwpforge-smithy-md
+        - hwpforge-smithy-hwp5
+        - hwpforge-bindings-py
+        - hwpforge-bindings-cli
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What happened? What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Minimal code or steps to reproduce the issue.
+      render: rust
+    validations:
+      required: true
+
+  - type: textarea
+    id: hwpx-sample
+    attributes:
+      label: HWPX/HWP sample
+      description: If applicable, attach or describe the input file that triggers the bug. You can drag-and-drop a .hwpx file here.
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error output / backtrace
+      description: Paste any error messages or `RUST_BACKTRACE=1` output.
+      render: text
+    validations:
+      required: false
