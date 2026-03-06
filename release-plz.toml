@@ -54,11 +54,14 @@ commit_parsers = [
 [[package]]
 name = "hwpforge-bindings-py"
 release = false
+publish = false
 
 [[package]]
 name = "hwpforge-bindings-cli"
 release = false
+publish = false
 
 [[package]]
 name = "hwpforge-smithy-hwp5"
 release = false
+publish = false
