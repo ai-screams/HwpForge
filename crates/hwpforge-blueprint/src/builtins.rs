@@ -24,7 +24,7 @@ pub const GOV_PROPOSAL_YAML: &str = include_str!("../templates/gov_proposal.yaml
 ///
 /// # Errors
 ///
-/// Returns [`BlueprintError::YamlParse`] if the embedded YAML is malformed
+/// Returns [`crate::error::BlueprintError::YamlParse`] if the embedded YAML is malformed
 /// (should never happen for built-in templates).
 pub fn builtin_default() -> BlueprintResult<Template> {
     Template::from_yaml(DEFAULT_YAML)
@@ -43,7 +43,7 @@ pub fn builtin_default() -> BlueprintResult<Template> {
 ///
 /// # Errors
 ///
-/// Returns [`BlueprintError::YamlParse`] if the embedded YAML is malformed.
+/// Returns [`crate::error::BlueprintError::YamlParse`] if the embedded YAML is malformed.
 pub fn builtin_gov_proposal() -> BlueprintResult<Template> {
     Template::from_yaml(GOV_PROPOSAL_YAML)
 }

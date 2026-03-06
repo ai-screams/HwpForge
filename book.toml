@@ -1,0 +1,51 @@
+# =============================================================================
+# HwpForge Documentation — mdBook Configuration
+# =============================================================================
+# Build:  mdbook build
+# Serve:  mdbook serve --open
+# Test:   mdbook test
+# =============================================================================
+
+[book]
+title = "HwpForge"
+authors = ["Pignuante"]
+description = "한글 문서(HWP/HWPX)를 프로그래밍으로 제어하는 Rust 라이브러리"
+src = "docs"
+language = "ko"
+
+[build]
+build-dir = "book"
+create-missing = false
+
+[rust]
+edition = "2021"
+
+[output.html]
+default-theme = "light"
+preferred-dark-theme = "navy"
+smart-punctuation = true
+no-section-label = false
+git-repository-url = "https://github.com/ai-screams/HwpForge"
+git-repository-icon = "fa-github"
+edit-url-template = "https://github.com/ai-screams/HwpForge/edit/main/docs/{path}"
+site-url = "/HwpForge/"
+additional-css = ["theme/custom.css", "./mdbook-admonish.css"]
+additional-js = ["mermaid.min.js", "mermaid-init.js"]
+
+[output.html.search]
+enable = true
+limit-results = 30
+use-boolean-and = true
+boost-title = 2
+expand = true
+
+[output.html.print]
+enable = true
+page-break = true
+
+[preprocessor.mermaid]
+command = "mdbook-mermaid"
+
+[preprocessor.admonish]
+command = "mdbook-admonish"
+assets_version = "3.1.0"

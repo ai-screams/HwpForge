@@ -34,13 +34,16 @@
 //!
 //! # Supported Content
 //!
-//! - Text runs, tables (nested), images
-//! - Fonts, character shapes, paragraph shapes from `header.xml`
-//! - Page settings (size, margins) from `<secPr>` in sections
+//! - Text runs with character shapes, paragraph shapes, styles
+//! - Tables (nested), images (binary + path), text boxes
+//! - Headers, footers, page numbers, footnotes, endnotes
+//! - Shapes: line, ellipse, polygon, arc, curve, connect line
+//! - Equations (HancomEQN), charts (18 types, OOXML)
+//! - Multi-column layouts, captions, bookmarks, fields, memos
+//! - Page settings (size, margins, landscape, gutter, master pages)
 //!
 //! Not yet supported:
-//! - OLE objects, form controls, change tracking, bookmarks
-//! - Field codes
+//! - OLE objects, form controls, change tracking
 
 #![deny(missing_docs)]
 #![deny(unsafe_code)]

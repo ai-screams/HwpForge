@@ -1,0 +1,27 @@
+[package]
+name = "hwpforge"
+version.workspace = true
+authors.workspace = true
+categories.workspace = true
+documentation.workspace = true
+edition.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+license.workspace = true
+readme = "../../README.md"
+repository.workspace = true
+rust-version.workspace = true
+description = "Programmatic control of Korean HWP/HWPX documents — read, write, and convert Hancom 한글 files"
+
+[features]
+default = ["hwpx"]
+hwpx = ["dep:hwpforge-smithy-hwpx"]
+md = ["dep:hwpforge-smithy-md"]
+full = ["hwpx", "md"]
+
+[dependencies]
+hwpforge-blueprint = { path = "../hwpforge-blueprint", version = "0.1.0" }
+hwpforge-core = { path = "../hwpforge-core", version = "0.1.0" }
+hwpforge-foundation = { path = "../hwpforge-foundation", version = "0.1.0" }
+hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0.1.0", optional = true }
+hwpforge-smithy-md = { path = "../hwpforge-smithy-md", version = "0.1.0", optional = true }

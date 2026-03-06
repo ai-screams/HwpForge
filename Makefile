@@ -19,7 +19,7 @@ help:
 	@echo "  make cov              Code coverage (llvm-cov, fail-under-lines=90)"
 	@echo "  make deny             Dependency license/advisory check"
 	@echo "  make machete          Find unused dependencies"
-	@echo "  make msrv             MSRV compatibility check (Rust 1.85)"
+	@echo "  make msrv             MSRV compatibility check (Rust 1.88)"
 	@echo ""
 	@echo "CI:"
 	@echo "  make ci-fast          Fast CI checks (fmt/clippy/test/deny/lint-md)"
@@ -94,7 +94,7 @@ machete:
 	cargo machete
 
 msrv:
-	cargo +1.85 check --workspace --all-features
+	cargo +1.88 check --workspace --all-features
 
 ci-fast: fmt clippy test deny lint-md
 	@echo "✅ Fast CI checks passed!"

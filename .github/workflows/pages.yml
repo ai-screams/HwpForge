@@ -1,0 +1,86 @@
+# =============================================================================
+# HwpForge Pages — mdBook + rustdoc → GitHub Pages
+# =============================================================================
+# Deploys to ai-screams.github.io/HwpForge/
+#   /           — mdBook (guides & tutorials)
+#   /api/       — rustdoc (API reference)
+# Requires: repo Settings → Pages → Source = "GitHub Actions"
+# =============================================================================
+name: Pages
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  MDBOOK_VERSION: "0.4.52"
+
+jobs:
+  build:
+    name: "Pages > Build"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install mdBook
+        run: |
+          mkdir -p bin
+          curl -sSL "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xz --directory=bin
+          echo "$GITHUB_WORKSPACE/bin" >> "$GITHUB_PATH"
+
+      - name: Install mdBook plugins
+        run: |
+          curl -sSL "https://github.com/tommilligan/mdbook-admonish/releases/latest/download/mdbook-admonish-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xz --directory=bin 2>/dev/null \
+            || cargo install mdbook-admonish --root . --locked
+          curl -sSL "https://github.com/badboy/mdbook-mermaid/releases/download/v0.14.0/mdbook-mermaid-v0.14.0-x86_64-unknown-linux-gnu.tar.gz" \
+            | tar -xz --directory=bin 2>/dev/null \
+            || cargo install mdbook-mermaid --version 0.14.0 --root . --locked
+
+      - name: Build mdBook
+        run: |
+          mdbook-mermaid install .
+          mdbook-admonish install .
+          mdbook build
+
+      - name: Build rustdoc
+        run: |
+          cargo doc --workspace --no-deps --all-features --exclude hwpforge-bindings-py --exclude hwpforge-bindings-cli --exclude hwpforge-smithy-hwp5
+          cp -r target/doc book/api
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: book
+
+  deploy:
+    name: "Pages > Deploy"
+    needs: [build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
