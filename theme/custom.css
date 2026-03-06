@@ -3,7 +3,7 @@
 /* Korean font stack */
 :root {
   --ko-font: "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
-  --ko-mono: "D2Coding", "Noto Sans Mono", "Fira Code", monospace;
+  --ko-mono: "JetBrains Mono", "D2Coding", monospace;
 }
 
 body {
@@ -16,6 +16,14 @@ code, pre code {
 
 /* Improve readability for Korean text */
 .content main {
+  max-width: 900px;
   line-height: 1.8;
   word-break: keep-all;
+}
+
+/* Improve inline code readability */
+:not(pre) > code {
+  background-color: var(--quote-bg);
+  border-radius: 3px;
+  padding: 1px 5px;
 }
