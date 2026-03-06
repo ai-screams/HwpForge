@@ -1,0 +1,65 @@
+[workspace]
+# Only release on meaningful changes
+release_commits = "^feat|^fix|^perf|^refactor"
+# Enable semver compatibility checking
+semver_check = true
+# Changelog settings
+changelog_update = true
+# GitHub Release settings
+git_release_enable = true
+git_release_draft = false
+# Tag format: v0.1.0 (umbrella style, triggers pages.yml)
+git_tag_name = "v{{ version }}"
+git_release_name = "v{{ version }}"
+# Don't allow dirty working directory
+allow_dirty = false
+# PR settings
+pr_labels = ["release"]
+pr_name = "chore: release v{{ version }}"
+
+[changelog]
+header = """# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+"""
+body = """
+## [{{ version }}]({{ release_link }}) - {{ timestamp | date(format="%Y-%m-%d") }}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {% if commit.scope %}*({{ commit.scope }})* {% endif %}{% if commit.breaking %}**BREAKING** {% endif %}{{ commit.message }}
+{% endfor %}
+{% endfor %}
+"""
+trim = true
+protect_breaking_commits = true
+sort_commits = "newest"
+
+commit_parsers = [
+  { message = "^feat", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Changed" },
+  { message = "^doc", group = "Documentation" },
+  { message = "^style", skip = true },
+  { message = "^test", skip = true },
+  { message = "^chore", skip = true },
+  { message = "^ci", skip = true },
+  { message = "^build", skip = true },
+]
+
+# Skip stub crates (they also have publish = false in Cargo.toml)
+[[package]]
+name = "hwpforge-bindings-py"
+release = false
+
+[[package]]
+name = "hwpforge-bindings-cli"
+release = false
+
+[[package]]
+name = "hwpforge-smithy-hwp5"
+release = false
