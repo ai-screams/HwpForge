@@ -37,7 +37,7 @@
 //! use hwpforge::core::ImageStore;
 //!
 //! let validated = doc.validate().unwrap();
-//! let style_store = HwpxStyleStore::default_modern();
+//! let style_store = HwpxStyleStore::with_default_fonts("함초롬바탕");
 //! let image_store = ImageStore::new();
 //! let bytes = HwpxEncoder::encode(&validated, &style_store, &image_store).unwrap();
 //! std::fs::write("output.hwpx", &bytes).unwrap();

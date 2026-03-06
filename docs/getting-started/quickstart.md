@@ -29,7 +29,7 @@ fn main() -> anyhow::Result<()> {
     let validated = doc.validate()?;
 
     // 6. 스타일 스토어: 한컴 Modern(22종) 기본 스타일 사용
-    let style_store = HwpxStyleStore::default_modern();
+    let style_store = HwpxStyleStore::with_default_fonts("함초롬바탕");
 
     // 7. 이미지 스토어: 이미지가 없으므로 빈 스토어 사용
     let image_store = ImageStore::new();
@@ -43,7 +43,7 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
-> **참고**: `CharShapeIndex::new(0)`과 `ParaShapeIndex::new(0)`은 `HwpxStyleStore::default_modern()`이
+> **참고**: `CharShapeIndex::new(0)`과 `ParaShapeIndex::new(0)`은 `HwpxStyleStore::with_default_fonts()`이
 > 제공하는 기본 스타일(본문)을 가리킵니다. 커스텀 스타일을 사용하려면
 > [스타일 템플릿](../guide/style-templates.md) 문서를 참고하세요.
 
@@ -55,6 +55,7 @@ fn main() -> anyhow::Result<()> {
 
 ```rust,no_run
 use hwpforge::hwpx::HwpxDecoder;
+use hwpforge::core::run::RunContent;
 
 fn main() -> anyhow::Result<()> {
     // 파일 경로를 받아 HWPX를 디코딩
@@ -68,9 +69,9 @@ fn main() -> anyhow::Result<()> {
     // 각 섹션의 문단과 텍스트 출력
     for (sec_idx, section) in doc.sections().iter().enumerate() {
         println!("--- 섹션 {} ---", sec_idx + 1);
-        for paragraph in section.paragraphs() {
-            for run in paragraph.runs() {
-                if let Some(text) = run.text() {
+        for paragraph in &section.paragraphs {
+            for run in &paragraph.runs {
+                if let RunContent::Text(ref text) = run.content {
                     print!("{}", text);
                 }
             }
@@ -121,14 +122,14 @@ date: 2026-03-06
 "#;
 
     // 2. Markdown → Core 문서 모델 변환
-    //    MdDecoder::decode는 document + registry(스타일 매핑)를 반환
-    let md_doc = MdDecoder::decode(markdown)?;
+    //    MdDecoder::decode_with_default는 document + style_registry(스타일 매핑)를 반환
+    let md_doc = MdDecoder::decode_with_default(markdown)?;
 
     // 3. Draft → Validated 상태 전이
     let validated = md_doc.document.validate()?;
 
     // 4. Markdown 헤딩(H1-H6)이 한컴 개요 1-6 스타일로 자동 매핑된 스타일 스토어 생성
-    let style_store = HwpxStyleStore::from_registry(&md_doc.registry);
+    let style_store = HwpxStyleStore::from_registry(&md_doc.style_registry);
 
     // 5. 이미지 없음
     let image_store = ImageStore::new();

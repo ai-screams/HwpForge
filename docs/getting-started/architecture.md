@@ -21,12 +21,12 @@ graph TD
     C --> B[hwpforge-blueprint<br/>스타일 템플릿]
     B --> SH[hwpforge-smithy-hwpx<br/>HWPX 코덱]
     B --> SM[hwpforge-smithy-md<br/>Markdown 코덱]
-    B --> S5[hwpforge-smithy-hwp5<br/>HWP5 디코더]
+    B --> S5[hwpforge-smithy-hwp5<br/>HWP5 디코더 (예정)]
     SH --> U[hwpforge<br/>umbrella crate]
     SM --> U
     S5 --> U
-    U --> PY[hwpforge-bindings-py<br/>Python]
-    U --> CLI[hwpforge-bindings-cli<br/>CLI]
+    U --> PY[hwpforge-bindings-py<br/>Python (예정)]
+    U --> CLI[hwpforge-bindings-cli<br/>CLI (예정)]
 ```
 
 > **규칙**: 의존성은 위에서 아래로만 흐릅니다. `foundation`을 수정하면 모든 크레이트가 재빌드됩니다.
@@ -69,7 +69,7 @@ let validated = doc.validate().unwrap();
 // doc.validate()를 건너뛰면 컴파일 에러 발생
 let bytes = hwpforge::hwpx::HwpxEncoder::encode(
     &validated,
-    &hwpforge::hwpx::HwpxStyleStore::default_modern(),
+    &hwpforge::hwpx::HwpxStyleStore::with_default_fonts("함초롬바탕"),
     &hwpforge::core::ImageStore::new(),
 ).unwrap();
 ```

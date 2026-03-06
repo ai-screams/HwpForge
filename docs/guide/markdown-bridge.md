@@ -22,7 +22,7 @@ HWPX 바이트 → .hwpx 파일
 ## MdDecoder::decode() 사용법
 
 ```rust,no_run
-use hwpforge_smithy_md::{MdDecoder, MdDocument};
+use hwpforge::md::{MdDecoder, MdDocument};
 
 let markdown = r#"
 ---
@@ -40,12 +40,12 @@ date: 2026-03-06
 시장 분석에 따르면 성장 가능성이 높습니다.
 "#;
 
-let MdDocument { document, registry } = MdDecoder::decode(markdown).unwrap();
+let MdDocument { document, style_registry } = MdDecoder::decode_with_default(markdown).unwrap();
 
 println!("섹션 수: {}", document.sections().len());
 ```
 
-`MdDocument`에는 `document: Document<Draft>`와 `registry: StyleRegistry`가 포함됩니다.
+`MdDocument`에는 `document: Document<Draft>`와 `style_registry: StyleRegistry`가 포함됩니다.
 
 ## YAML Frontmatter
 
@@ -106,8 +106,8 @@ Markdown 헤딩은 한글의 개요 스타일로 자동 변환됩니다.
 반대 방향(HWPX → Markdown) 변환도 지원합니다. 두 가지 모드가 있습니다.
 
 ```rust,no_run
-use hwpforge_smithy_md::MdEncoder;
-use hwpforge_smithy_hwpx::HwpxDecoder;
+use hwpforge::md::MdEncoder;
+use hwpforge::hwpx::HwpxDecoder;
 
 let result = HwpxDecoder::decode_file("document.hwpx").unwrap();
 let validated = result.document.validate().unwrap();
@@ -127,18 +127,18 @@ let lossless = MdEncoder::encode_lossless(&validated).unwrap();
 ## 전체 파이프라인 예제 (MD string → HWPX file)
 
 ```rust,no_run
-use hwpforge_smithy_md::{MdDecoder, MdDocument};
-use hwpforge_smithy_hwpx::{HwpxEncoder, HwpxStyleStore};
+use hwpforge::md::{MdDecoder, MdDocument};
+use hwpforge::hwpx::{HwpxEncoder, HwpxStyleStore};
 
 fn markdown_to_hwpx(markdown: &str, output_path: &str) {
     // 1. Markdown 파싱 → Core DOM
-    let MdDocument { document, registry: _ } = MdDecoder::decode(markdown).unwrap();
+    let MdDocument { document, .. } = MdDecoder::decode_with_default(markdown).unwrap();
 
     // 2. 문서 검증
     let validated = document.validate().unwrap();
 
     // 3. 한컴 기본 스타일 적용 후 HWPX 인코딩
-    let style_store = HwpxStyleStore::default_modern();
+    let style_store = HwpxStyleStore::with_default_fonts("함초롬바탕");
     let image_store = Default::default();
     let bytes = HwpxEncoder::encode(&validated, &style_store, &image_store).unwrap();
 

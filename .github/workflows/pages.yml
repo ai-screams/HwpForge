@@ -30,10 +30,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-action/setup@v1
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Install mdBook
         run: |
@@ -52,11 +52,14 @@ jobs:
             || cargo install mdbook-mermaid --version 0.14.0 --root . --locked
 
       - name: Build mdBook
-        run: mdbook build
+        run: |
+          mdbook-mermaid install .
+          mdbook-admonish install .
+          mdbook build
 
       - name: Build rustdoc
         run: |
-          cargo doc --no-deps --all-features
+          cargo doc --no-deps --all-features --exclude hwpforge-bindings-py --exclude hwpforge-bindings-cli --exclude hwpforge-smithy-hwp5
           cp -r target/doc book/api
 
       - name: Upload Pages artifact

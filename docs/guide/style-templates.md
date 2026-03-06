@@ -101,7 +101,7 @@ let template = builtin_default().unwrap();
 let registry = StyleRegistry::from_template(&template).unwrap();
 
 // Blueprint StyleRegistry → HWPX 전용 스타일 저장소
-let style_store = HwpxStyleStore::from_registry(&registry).unwrap();
+let style_store = HwpxStyleStore::from_registry(&registry);
 ```
 
 ## 한컴 스타일셋: Classic / Modern / Latest
@@ -119,8 +119,8 @@ let style_store = HwpxStyleStore::from_registry(&registry).unwrap();
 ```rust,no_run
 use hwpforge_smithy_hwpx::{HwpxStyleStore, HancomStyleSet};
 
-// 기본값 (Modern)
-let modern = HwpxStyleStore::default_modern();
+// 기본값 (간단한 방법)
+let modern = HwpxStyleStore::with_default_fonts("함초롬바탕");
 
 // 특정 스타일셋 지정
 // from_registry_with()로 커스텀 레지스트리 + 스타일셋 조합 가능
@@ -156,7 +156,7 @@ styles:
 // 스타일 빌드
 let template = Template::from_yaml(yaml).unwrap();
 let registry = StyleRegistry::from_template(&template).unwrap();
-let style_store = HwpxStyleStore::from_registry(&registry).unwrap();
+let style_store = HwpxStyleStore::from_registry(&registry);
 
 // 문서 구성 (스타일 인덱스는 레지스트리에서 조회)
 let mut doc = Document::new();

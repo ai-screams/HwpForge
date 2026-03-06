@@ -173,7 +173,7 @@ doc.add_section(Section::with_paragraphs(
 let validated = doc.validate().unwrap();
 let bytes = HwpxEncoder::encode(
     &validated,
-    &HwpxStyleStore::default_modern(),
+    &HwpxStyleStore::with_default_fonts("함초롬바탕"),
     &Default::default(),
 ).unwrap();
 std::fs::write("bar_chart.hwpx", &bytes).unwrap();

@@ -73,7 +73,7 @@ doc.add_section(Section::with_paragraphs(
 ));
 
 let validated = doc.validate().unwrap();
-let style_store = HwpxStyleStore::default_modern();
+let style_store = HwpxStyleStore::with_default_fonts("함초롬바탕");
 let image_store = Default::default();
 
 let bytes = HwpxEncoder::encode(&validated, &style_store, &image_store).unwrap();
@@ -82,14 +82,14 @@ std::fs::write("output.hwpx", &bytes).unwrap();
 
 ## HwpxStyleStore 생성 방법
 
-### default_modern() — 한컴 기본 스타일 (Modern 스타일셋)
+### with_default_fonts() — 간단한 기본 스타일
 
-한글 프로그램의 기본 스타일(22개 스타일, Modern 스타일셋)을 그대로 사용합니다. 가장 간단한 방법입니다.
+단일 글꼴 이름으로 빠르게 스타일 스토어를 생성합니다. 가장 간단한 방법입니다.
 
 ```rust,no_run
-use hwpforge_smithy_hwpx::HwpxStyleStore;
+use hwpforge::hwpx::HwpxStyleStore;
 
-let style_store = HwpxStyleStore::default_modern();
+let style_store = HwpxStyleStore::with_default_fonts("함초롬바탕");
 ```
 
 ### from_registry() — Blueprint 템플릿에서 변환
@@ -97,13 +97,13 @@ let style_store = HwpxStyleStore::default_modern();
 커스텀 YAML 스타일 템플릿을 적용할 때 사용합니다. 자세한 내용은 [스타일 템플릿](./style-templates.md) 참조.
 
 ```rust,no_run
-use hwpforge_blueprint::builtins::builtin_default;
-use hwpforge_blueprint::registry::StyleRegistry;
-use hwpforge_smithy_hwpx::HwpxStyleStore;
+use hwpforge::blueprint::builtins::builtin_default;
+use hwpforge::blueprint::registry::StyleRegistry;
+use hwpforge::hwpx::HwpxStyleStore;
 
 let template = builtin_default().unwrap();
 let registry = StyleRegistry::from_template(&template).unwrap();
-let style_store = HwpxStyleStore::from_registry(&registry).unwrap();
+let style_store = HwpxStyleStore::from_registry(&registry);
 ```
 
 ## 라운드트립 예제 (decode → modify → encode)
@@ -143,10 +143,10 @@ std::fs::write("modified.hwpx", &bytes).unwrap();
 모든 함수는 `HwpxResult<T>`를 반환합니다. `HwpxError`는 `HwpxErrorCode`와 메시지를 포함합니다.
 
 ```rust,no_run
-use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxError};
+use hwpforge::hwpx::HwpxDecoder;
 
 match HwpxDecoder::decode_file("missing.hwpx") {
-    Ok(result) => println!("디코딩 성공"),
-    Err(HwpxError { .. }) => eprintln!("디코딩 실패"),
+    Ok(_result) => println!("디코딩 성공"),
+    Err(e) => eprintln!("디코딩 실패: {e}"),
 }
 ```
