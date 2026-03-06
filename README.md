@@ -190,9 +190,16 @@ HwpForge/
 
 ## Acknowledgements
 
-- **[Hancom](https://www.hancom.com)** — HWP/HWPX 파일 포맷의 공개 문서와 KS X 6101 (OWPML) 국가 표준을 기반으로 합니다.
-- **[openhwp](https://github.com/openhwp/openhwp)** — IR 기반 아키텍처 설계에서 영감을 받았습니다.
-- **[hwpxlib](https://github.com/neolord0/hwpxlib)** — 가장 성숙한 HWPX 구현체로, 포맷 동작 검증에 참고했습니다.
-- **[hwp.js](https://github.com/hahnlee/hwp.js)** — HWP5 포맷의 실제 동작과 edge case 분석에 참고했습니다.
-- **[hwpx-owpml-model](https://github.com/hancom-io/hwpx-owpml-model)** — Hancom 공식 OWPML 모델 구현체입니다.
-- **Rust 생태계** — [serde](https://serde.rs), [quick-xml](https://github.com/tafia/quick-xml), [pulldown-cmark](https://github.com/pulldown-cmark/pulldown-cmark), [zip](https://github.com/zip-rs/zip2) 등 훌륭한 라이브러리 덕분에 HwpForge를 순수 safe Rust로 구현할 수 있었습니다.
+HwpForge는 거인들의 어깨 위에 서 있습니다.
+
+- **[Hancom](https://www.hancom.com)** — HWPX 포맷의 공개 문서와 [KS X 6101 (OWPML)](https://www.kssn.net/) 국가 표준이 없었다면 이 프로젝트는 시작조차 할 수 없었습니다. 포맷을 공개해 주신 Hancom에 감사드립니다.
+
+- **[openhwp](https://github.com/openhwp/openhwp)** — Rust로 HWP/HWPX를 다루는 IR 기반 아키텍처 설계에서 큰 영감을 받았습니다. HwpForge의 Core 레이어가 존재할 수 있었던 것은 openhwp이 먼저 그 길을 걸었기 때문입니다.
+
+- **[hwpxlib](https://github.com/neolord0/hwpxlib)** — Java로 작성된 가장 성숙한 HWPX 구현체입니다. 스펙과 실제 동작의 차이를 파악하는 데 결정적인 참고가 되었습니다.
+
+- **[hwp.js](https://github.com/hahnlee/hwp.js)** — HWP5 포맷의 quirks와 edge case를 꼼꼼히 문서화한 프로젝트입니다. 바이너리 포맷의 어두운 구석을 밝혀 준 덕분에 시행착오를 크게 줄일 수 있었습니다.
+
+- **[hwpx-owpml-model](https://github.com/hancom-io/hwpx-owpml-model)** — Hancom이 직접 공개한 C++ OWPML 모델 구현체로, 스키마 해석의 최종 기준으로 삼았습니다.
+
+- **Rust 생태계** — [serde](https://serde.rs), [quick-xml](https://github.com/tafia/quick-xml), [pulldown-cmark](https://github.com/pulldown-cmark/pulldown-cmark), [zip](https://github.com/zip-rs/zip2) 등 뛰어난 라이브러리들 덕분에 HwpForge 전체를 zero unsafe 순수 Rust로 구현할 수 있었습니다. Rust 커뮤니티와 Ferris 🦀에게 감사드립니다.
