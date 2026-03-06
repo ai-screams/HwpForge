@@ -35,6 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write  # Required for GitHub Releases + tags; branch protection mitigates push risk
+      pull-requests: read  # Required for release-plz to check PR-associated commits
     concurrency:
       group: release-plz-release
       cancel-in-progress: false
