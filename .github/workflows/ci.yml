@@ -241,6 +241,8 @@ jobs:
     continue-on-error: true
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - name: Check semver compatibility
         uses: obi1kenobi/cargo-semver-checks-action@v2
 

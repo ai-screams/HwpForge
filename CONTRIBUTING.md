@@ -90,8 +90,7 @@ foundation (primitives: HwpUnit, Color, Index<T>)
 **Key principle**: Structure and Style are separate (like HTML + CSS).
 Core holds style _references_ (indices), Blueprint holds style _definitions_ (fonts, sizes, colors).
 
-Before touching a crate, read its `AGENTS.md` (if present) and
-[`.docs/architecture/CRATE_ROLES.md`](.docs/architecture/CRATE_ROLES.md) for role definitions.
+Before touching a crate, read its `AGENTS.md` (if present) for role definitions.
 
 **Foundation is the root.** Changes to `hwpforge-foundation` rebuild _everything_.
 Keep it minimal.
