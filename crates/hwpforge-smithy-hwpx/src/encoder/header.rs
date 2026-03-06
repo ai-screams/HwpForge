@@ -278,9 +278,8 @@ fn enrich_ref_list(inner_xml: &str, store: &HwpxStyleStore) -> String {
     let extra_len = border_fills_xml.len() + tab_properties_xml.len() + numberings_xml.len();
     let mut result = String::with_capacity(inner_xml.len() + extra_len);
     let ref_open = "<hh:refList>";
-    let ref_open_pos = inner_xml
-        .find(ref_open)
-        .expect("refList was confirmed present by contains() check above");
+    let ref_open_pos =
+        inner_xml.find(ref_open).expect("refList was confirmed present by contains() check above");
     let after_ref_open = ref_open_pos + ref_open.len();
 
     // Copy up to and including <hh:refList>

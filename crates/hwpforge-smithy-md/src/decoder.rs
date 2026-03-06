@@ -31,9 +31,7 @@ fn is_safe_url(url: &str) -> bool {
         return true;
     }
     let lower = url.to_ascii_lowercase();
-    lower.starts_with("http://")
-        || lower.starts_with("https://")
-        || lower.starts_with("mailto:")
+    lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("mailto:")
 }
 
 /// Result of decoding markdown, containing both the document and the
@@ -606,10 +604,7 @@ impl<'a> DecoderState<'a> {
                     if link.dest_url.starts_with('\x00') {
                         // Unsafe URL: emit the link text as plain text only.
                         if !link.text.is_empty() {
-                            self.push_run_to_active_context(Run::text(
-                                link.text,
-                                char_shape_id,
-                            ));
+                            self.push_run_to_active_context(Run::text(link.text, char_shape_id));
                         }
                     } else {
                         self.push_run_to_active_context(Run::control(

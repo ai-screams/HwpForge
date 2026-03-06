@@ -1111,10 +1111,8 @@ impl Control {
         let max_x = vertices.iter().map(|p| p.x as i64).max().unwrap_or(0);
         let min_y = vertices.iter().map(|p| p.y as i64).min().unwrap_or(0);
         let max_y = vertices.iter().map(|p| p.y as i64).max().unwrap_or(0);
-        let bbox_w =
-            i32::try_from((max_x - min_x).max(0)).unwrap_or(i32::MAX);
-        let bbox_h =
-            i32::try_from((max_y - min_y).max(0)).unwrap_or(i32::MAX);
+        let bbox_w = i32::try_from((max_x - min_x).max(0)).unwrap_or(i32::MAX);
+        let bbox_h = i32::try_from((max_y - min_y).max(0)).unwrap_or(i32::MAX);
         let width = HwpUnit::new(bbox_w).map_err(|_| CoreError::InvalidStructure {
             context: "Control::polygon".into(),
             reason: format!("bounding box width {bbox_w} exceeds HwpUnit range"),
@@ -1170,13 +1168,12 @@ impl Control {
         let min_y = start.y.min(end.y);
         let norm_start =
             ShapePoint::new(start.x.saturating_sub(min_x), start.y.saturating_sub(min_y));
-        let norm_end =
-            ShapePoint::new(end.x.saturating_sub(min_x), end.y.saturating_sub(min_y));
+        let norm_end = ShapePoint::new(end.x.saturating_sub(min_x), end.y.saturating_sub(min_y));
 
-        let raw_w = i32::try_from(((end.x as i64) - (start.x as i64)).unsigned_abs())
-            .unwrap_or(i32::MAX);
-        let raw_h = i32::try_from(((end.y as i64) - (start.y as i64)).unsigned_abs())
-            .unwrap_or(i32::MAX);
+        let raw_w =
+            i32::try_from(((end.x as i64) - (start.x as i64)).unsigned_abs()).unwrap_or(i32::MAX);
+        let raw_h =
+            i32::try_from(((end.y as i64) - (start.y as i64)).unsigned_abs()).unwrap_or(i32::MAX);
         // Minimum bounding box of 100 HwpUnit (~1pt) per axis.
         // 한글 cannot render lines with a zero-dimension bounding box.
         let raw_w = raw_w.max(100);
@@ -1342,10 +1339,8 @@ impl Control {
         let max_x = points.iter().map(|p| p.x as i64).max().unwrap_or(0);
         let min_y = points.iter().map(|p| p.y as i64).min().unwrap_or(0);
         let max_y = points.iter().map(|p| p.y as i64).max().unwrap_or(0);
-        let bbox_w =
-            i32::try_from((max_x - min_x).max(1)).unwrap_or(i32::MAX);
-        let bbox_h =
-            i32::try_from((max_y - min_y).max(1)).unwrap_or(i32::MAX);
+        let bbox_w = i32::try_from((max_x - min_x).max(1)).unwrap_or(i32::MAX);
+        let bbox_h = i32::try_from((max_y - min_y).max(1)).unwrap_or(i32::MAX);
         let width = HwpUnit::new(bbox_w).map_err(|_| CoreError::InvalidStructure {
             context: "Control::curve".into(),
             reason: format!("bounding box width {bbox_w} exceeds HwpUnit range"),
@@ -1401,13 +1396,12 @@ impl Control {
         let min_y = start.y.min(end.y);
         let norm_start =
             ShapePoint::new(start.x.saturating_sub(min_x), start.y.saturating_sub(min_y));
-        let norm_end =
-            ShapePoint::new(end.x.saturating_sub(min_x), end.y.saturating_sub(min_y));
+        let norm_end = ShapePoint::new(end.x.saturating_sub(min_x), end.y.saturating_sub(min_y));
 
-        let raw_w = i32::try_from(((end.x as i64) - (start.x as i64)).unsigned_abs())
-            .unwrap_or(i32::MAX);
-        let raw_h = i32::try_from(((end.y as i64) - (start.y as i64)).unsigned_abs())
-            .unwrap_or(i32::MAX);
+        let raw_w =
+            i32::try_from(((end.x as i64) - (start.x as i64)).unsigned_abs()).unwrap_or(i32::MAX);
+        let raw_h =
+            i32::try_from(((end.y as i64) - (start.y as i64)).unsigned_abs()).unwrap_or(i32::MAX);
         let raw_w = raw_w.max(100);
         let raw_h = raw_h.max(100);
         let width = HwpUnit::new(raw_w).unwrap_or_else(|_| HwpUnit::new(100).expect("valid"));
@@ -2518,10 +2512,7 @@ mod tests {
 
     #[test]
     fn curve_extreme_coords_no_panic() {
-        let points = vec![
-            ShapePoint::new(i32::MIN, i32::MIN),
-            ShapePoint::new(i32::MAX, i32::MAX),
-        ];
+        let points = vec![ShapePoint::new(i32::MIN, i32::MIN), ShapePoint::new(i32::MAX, i32::MAX)];
         let _ = Control::curve(points);
     }
 }
