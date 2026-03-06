@@ -67,6 +67,7 @@ jobs:
       run_deny: ${{ steps.plan.outputs.run_deny }}
       run_docs_build: ${{ steps.plan.outputs.run_docs_build }}
       run_msrv: ${{ steps.plan.outputs.run_msrv }}
+      run_semver: ${{ steps.plan.outputs.run_semver }}
     steps:
       - name: Resolve validation mode
         id: plan
@@ -95,24 +96,28 @@ jobs:
               run_deny=true
               run_docs_build=true
               run_msrv=true
+              run_semver=true
               ;;
             merge_queue)
               run_coverage=false
               run_deny=false
               run_docs_build=true
               run_msrv=false
+              run_semver=false
               ;;
             release)
               run_coverage=false
               run_deny=false
               run_docs_build=true
               run_msrv=false
+              run_semver=false
               ;;
             full)
               run_coverage=true
               run_deny=true
               run_docs_build=true
               run_msrv=true
+              run_semver=true
               ;;
             *)
               echo "Invalid validation mode: $mode" >&2
@@ -126,6 +131,7 @@ jobs:
             echo "run_deny=$run_deny"
             echo "run_docs_build=$run_docs_build"
             echo "run_msrv=$run_msrv"
+            echo "run_semver=$run_semver"
           } >> "$GITHUB_OUTPUT"
 
   lint-format:
@@ -222,6 +228,21 @@ jobs:
           tool: cargo-deny
       - name: cargo deny check
         run: cargo deny --all-features check
+
+  semver:
+    name: "Verify › SemVer"
+    needs: [plan, lint-format, lint-clippy]
+    if: >-
+      always() && !failure() && !cancelled() &&
+      needs.plan.outputs.run_semver == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # Will start enforcing after first crates.io publish
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - name: Check semver compatibility
+        uses: obi1kenobi/cargo-semver-checks-action@v2
 
   lint-docs:
     name: "Verify › Docs Lint"
