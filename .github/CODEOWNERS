@@ -1,0 +1,14 @@
+# HwpForge Code Owners
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for everything
+* @Pignuante
+
+# Foundation (root crate — changes rebuild everything)
+crates/hwpforge-foundation/ @Pignuante
+
+# CI/CD and release configuration
+.github/ @Pignuante
+Cargo.toml @Pignuante
+deny.toml @Pignuante
+release-plz.toml @Pignuante

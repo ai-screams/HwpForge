@@ -13,6 +13,9 @@
 [![Lines of Code](https://img.shields.io/badge/LOC-~49%2C200-informational.svg)](https://github.com/ai-screams/HwpForge)
 [![Tests](https://img.shields.io/badge/tests-1%2C510_passed-success.svg?logo=checkmarx)](https://github.com/ai-screams/HwpForge)
 [![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg?logo=rust)](https://github.com/ai-screams/HwpForge)
+[![Security Policy](https://img.shields.io/badge/security-policy-blueviolet.svg?logo=githubactions)](SECURITY.md)
+[![Contributing](https://img.shields.io/badge/contributing-guide-blue.svg?logo=handshake)](CONTRIBUTING.md)
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-yellow.svg?logo=buy-me-a-coffee&logoColor=white)](https://buymeacoffee.com/pignuante)
 
 <div align="center">
 <img src="https://raw.githubusercontent.com/ai-screams/HwpForge/main/assets/banner-main.png" alt="HwpForge Banner" width="600">
@@ -26,8 +29,9 @@ HwpForge는 HWPX 문서(ZIP + XML, KS X 6101)를 다루기 위한 **오픈소스
 
 **LLM-first 설계** 🔥 — AI 친화적인 Markdown과 공식 한글 문서 포맷(HWPX), 두 세계를 자연스럽게 잇습니다. LLM이 Markdown으로 작성한 내용은 공문서 규격의 HWPX로 컴파일되고 📜, 반대로 기존 HWPX 문서는 AI가 쉽게 읽을 수 있는 구조로 꺼낼 수 있습니다 ⚒️.
 
+- **HWPX Reader for AI** — 기존 한글 문서(.hwpx)를 Markdown으로 변환하여 LLM이 즉시 이해 가능
 - **Full HWPX codec** — HWPX 파일을 손실 없이 디코딩/인코딩 (lossless roundtrip)
-- **Markdown bridge** — GFM Markdown과 HWPX 간 상호 변환
+- **Markdown bridge** — GFM Markdown과 HWPX 간 양방향 변환 (읽기 + 쓰기)
 - **YAML style template** — Figma Design Token처럼 재사용 가능한 스타일 정의 (폰트, 크기, 색상)
 - **Type-safe API** — branded index, typestate validation, zero unsafe code
 
@@ -77,6 +81,20 @@ use hwpforge::hwpx::HwpxDecoder;
 let result = HwpxDecoder::decode_file("input.hwpx").unwrap();
 println!("섹션 수: {}", result.document.sections().len());
 ```
+
+### ⚒️ HWPX → Markdown 변환 (AI가 한글 문서 읽기)
+
+```rust
+use hwpforge::hwpx::HwpxDecoder;
+use hwpforge::md::MdEncoder;
+
+let decoded = HwpxDecoder::decode_file("government_report.hwpx").unwrap();
+let validated = decoded.document.validate().unwrap();
+let markdown = MdEncoder::encode_lossy(&validated).unwrap();
+println!("{}", markdown); // LLM이 바로 이해할 수 있는 Markdown
+```
+
+기존 .hwpx 파일을 Markdown으로 변환하면 Claude, GPT 등 어떤 LLM이든 한글 공문서를 즉시 읽고 분석할 수 있습니다.
 
 ### ⚒️ Markdown → HWPX 변환
 
@@ -176,6 +194,14 @@ Smithy compiler가 Core + Blueprint를 합쳐 최종 포맷을 생성합니다.
 - (권장) [cargo-nextest](https://nexte.st/) — 병렬 테스트 실행
 - (선택) [pre-commit](https://pre-commit.com/) — git hook 자동화
 
+### MSRV 정책
+
+- 현재 MSRV는 **Rust 1.88**입니다.
+- HwpForge는 **stable에서 4 릴리스 뒤처진 버전**을 기본 MSRV 정책으로 유지합니다.
+- `Cargo.toml`의 `rust-version`이 단일 진실원이며, CI의 `Verify › MSRV` job이 이 계약을 검증합니다.
+- MSRV 상향이 필요하면 PR에서 이유를 명시하고, `Cargo.toml`, CI, CHANGELOG를 함께 갱신합니다.
+- 개발용 기본 툴체인은 더 최신일 수 있습니다. 호환성 판단 기준은 최신 stable이 아니라 **MSRV + CI 통과 여부**입니다.
+
 ### ⚒️ 명령어
 
 ```bash
@@ -204,6 +230,16 @@ HwpForge/
 ├── tests/                        # 통합 테스트 + golden fixture
 └── examples/                     # 📜 사용 예제 + 생성된 HWPX 파일
 ```
+
+## 기여
+
+버그 수정, 포맷 리서치, 테스트 보강, 문서 개선 모두 환영합니다.
+
+- 시작 전 가이드: [CONTRIBUTING.md](CONTRIBUTING.md)
+- 특히 확인할 것: release-plz가 쓰는 커밋 prefix (`feat`, `fix`, `perf`, `refactor`)
+- 특히 확인할 것: MSRV 정책과 dependency/MSRV 상승 기준
+- 특히 확인할 것: 문서 변경 시 `mdbook build`와 markdown lint 검증
+- 특히 확인할 것: CI required checks를 깨지 않는 범위에서의 변경 분리
 
 ## 로드맵
 
@@ -250,5 +286,11 @@ HwpForge는 거인들의 어깨 위에 서 있습니다.
 
 <strong>쇠부리 (SoeBuri)</strong><br/>
 <em>한컴 문서를 불에 달구어 단단하게 벼려내는 대장장이 오리너구리 🔥</em>
+
+<br/><br/>
+
+<a href="https://buymeacoffee.com/pignuante">
+<img src="https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=☕&slug=pignuante&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff" alt="Buy Me a Coffee" height="50">
+</a>
 
 </div>

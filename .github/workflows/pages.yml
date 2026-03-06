@@ -1,63 +1,57 @@
 # =============================================================================
 # HwpForge Pages — mdBook + rustdoc → GitHub Pages
 # =============================================================================
-# Deploys to ai-screams.github.io/HwpForge/
-#   /           — mdBook (guides & tutorials)
-#   /api/       — rustdoc (API reference)
-# Requires: repo Settings → Pages → Source = "GitHub Actions"
+# Triggered directly from the release workflow after real releases,
+# or manually via workflow_dispatch.
 # =============================================================================
+
 name: Pages
 
 on:
-  push:
-    tags:
-      - "v*.*.*"
+  workflow_call:
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: pages-${{ github.ref }}
+  group: pages-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
 
 env:
   MDBOOK_VERSION: "0.4.52"
+  MDBOOK_ADMONISH_VERSION: "1.20.0"
+  MDBOOK_MERMAID_VERSION: "0.14.0"
 
 jobs:
   build:
     name: "Pages > Build"
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        run: rustup show
 
-      - name: Install mdBook
-        run: |
-          mkdir -p bin
-          curl -sSL "https://github.com/rust-lang/mdBook/releases/download/v${MDBOOK_VERSION}/mdbook-v${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
-            | tar -xz --directory=bin
-          echo "$GITHUB_WORKSPACE/bin" >> "$GITHUB_PATH"
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
 
-      - name: Install mdBook plugins
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install mdBook toolchain
         run: |
-          curl -sSL "https://github.com/tommilligan/mdbook-admonish/releases/latest/download/mdbook-admonish-x86_64-unknown-linux-gnu.tar.gz" \
-            | tar -xz --directory=bin 2>/dev/null \
-            || cargo install mdbook-admonish --root . --locked
-          curl -sSL "https://github.com/badboy/mdbook-mermaid/releases/download/v0.14.0/mdbook-mermaid-v0.14.0-x86_64-unknown-linux-gnu.tar.gz" \
-            | tar -xz --directory=bin 2>/dev/null \
-            || cargo install mdbook-mermaid --version 0.14.0 --root . --locked
+          set -euo pipefail
+          install_root="$RUNNER_TEMP/mdbook-tools"
+          echo "$install_root/bin" >> "$GITHUB_PATH"
+          cargo install --locked --version "$MDBOOK_VERSION" mdbook --root "$install_root"
+          cargo install --locked --version "$MDBOOK_ADMONISH_VERSION" mdbook-admonish --root "$install_root"
+          cargo install --locked --version "$MDBOOK_MERMAID_VERSION" mdbook-mermaid --root "$install_root"
 
       - name: Build mdBook
-        run: |
-          mdbook-mermaid install .
-          mdbook-admonish install .
-          mdbook build
+        run: mdbook build
 
       - name: Build rustdoc
         run: |

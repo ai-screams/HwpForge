@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+title: HwpForge
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - given-names: Hanyul
+    family-names: Ryu
+    alias: Pignuante
+    email: hanyul.ryu@hanyul.xyz
+repository-code: "https://github.com/ai-screams/HwpForge"
+url: "https://ai-screams.github.io/HwpForge/"
+keywords:
+  - hwp
+  - hwpx
+  - hancom
+  - hangul
+  - korean
+  - document-processing
+  - rust
+license: MIT OR Apache-2.0
+version: 0.1.0
+date-released: "2026-03-07"
+abstract: >-
+  A pure Rust library for programmatic control of Korean HWP/HWPX
+  document formats. Provides lossless HWPX codec, Markdown bridge,
+  and YAML style templates with LLM-first design principles.

@@ -28,6 +28,7 @@
     "**/node_modules/**",
     "**/temp/**",
     ".omc/**",
-    ".serena/**"
+    ".serena/**",
+    ".github/PULL_REQUEST_TEMPLATE.md"
   ]
 }
