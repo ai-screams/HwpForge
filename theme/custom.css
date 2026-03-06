@@ -1,0 +1,21 @@
+/* HwpForge Documentation — Custom Theme */
+
+/* Korean font stack */
+:root {
+  --ko-font: "Noto Sans KR", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  --ko-mono: "D2Coding", "Noto Sans Mono", "Fira Code", monospace;
+}
+
+body {
+  font-family: var(--ko-font);
+}
+
+code, pre code {
+  font-family: var(--ko-mono);
+}
+
+/* Improve readability for Korean text */
+.content main {
+  line-height: 1.8;
+  word-break: keep-all;
+}

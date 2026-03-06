@@ -955,7 +955,7 @@ fn main() {
     let validated = doc.validate().expect("validation should pass");
     let bytes =
         HwpxEncoder::encode(&validated, &style_store, &image_store).expect("encode should succeed");
-    std::fs::write("wave9_11_12_output.hwpx", &bytes).expect("write should succeed");
+    std::fs::write("../../../temp/wave9_11_12_output.hwpx", &bytes).expect("write should succeed");
     println!("\n  wave9_11_12_output.hwpx ({} bytes) — all 11 sections", bytes.len());
 
     println!("\n각 파일을 한글에서 열어서 어떤 섹션이 크래시하는지 확인하세요.");

@@ -467,3 +467,7 @@ $RECYCLE.BIN/
 .docs/
 .sisyphus/
 .scoop-version
+
+# mdBook build output
+/book/
+temp/
