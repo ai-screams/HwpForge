@@ -1,53 +1,28 @@
 # =============================================================================
-# HwpForge Security — Dependency Policy & Advisory Scanning
+# HwpForge Nightly — Security & Compatibility
 # =============================================================================
-# PR/merge_group: cargo-deny checks licenses, advisories, and bans
-# Schedule: Weekly scan of existing dependencies for new advisories
-#
-# NOTE: actions/dependency-review-action requires GitHub Advanced Security
-#       (GHAS), which is unavailable on private repos without enterprise.
-#       cargo-deny provides equivalent coverage (advisories + licenses).
+# Weekly maintenance checks that should not slow down contributor feedback:
+#   - cargo-deny advisory scan
+#   - beta/nightly toolchain canary
 # =============================================================================
 
-name: Security
+name: Nightly
 
 on:
-  pull_request:
-    branches: [main]
-  merge_group:
-    types: [checks_requested]
   schedule:
-    - cron: "30 3 * * 1"  # Monday 03:30 UTC (30min after CI canary)
+    - cron: "30 3 * * 1"
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: security-${{ github.ref }}
+  group: nightly-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  dependency-policy:
-    name: Dependency Policy (PR)
-    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v6
-      - name: Install Rust toolchain
-        run: rustup show
-      - uses: Swatinem/rust-cache@v2
-      - name: Install cargo-deny
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-deny
-      - name: Check licenses, advisories, and bans
-        run: cargo deny --all-features check
-
   advisory-scan:
-    name: Advisory Scan (Weekly)
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    name: "Nightly › Advisory Scan"
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -61,3 +36,22 @@ jobs:
           tool: cargo-deny
       - name: Scan for security advisories
         run: cargo deny --all-features check advisories
+
+  toolchain-canary:
+    name: "Nightly › Canary (${{ matrix.toolchain }})"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [beta, nightly]
+    continue-on-error: ${{ matrix.toolchain == 'nightly' }}
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install ${{ matrix.toolchain }} toolchain
+        run: rustup toolchain install ${{ matrix.toolchain }} --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: canary-${{ matrix.toolchain }}
+      - name: cargo +${{ matrix.toolchain }} check
+        run: cargo +${{ matrix.toolchain }} check --locked --workspace --all-targets --all-features

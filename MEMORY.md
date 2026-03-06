@@ -64,16 +64,16 @@ SSoT: `.docs/planning/ROADMAP.md`
 
 ## CI/CD [stable]
 
-Fan-out Gate Pipeline (`ci.yml` -- reusable via `workflow_call`):
+Purpose-based workflows:
 
-- **Tier 1 (Gate)**: lint-format + lint-clippy
-- **Tier 2 (Verify)**: test, coverage (90%), deny, lint-docs, msrv (1.85)
-- **Tier 3 (Platform)**: cross-platform (Windows, macOS)
-
-Triggers: push(main), PR, merge_group, schedule(weekly), workflow_call.
-Release: `release.yml` -> `ci.yml`(full) -> build -> GitHub Release.
-Security: cargo-deny on PR + weekly advisory scan.
-Pre-commit: markdownlint + dprint + file hygiene (no Rust checks for speed).
+- **`ci.yml`**: PR, merge_group, workflow_dispatch, workflow_call
+- **Gate**: lint-format + lint-clippy
+- **Verify**: test + lint-docs + docs-build + workflow-compat
+- **Mode-gated**: coverage (90%), deny, msrv (1.88)
+- **`release-plz.yml`**: push(main) -> `ci.yml`(mode=release) -> release-plz release/release-pr -> `pages.yml`
+- **`pages.yml`**: reusable/manual GitHub Pages deployment (mdBook + rustdoc)
+- **`security.yml`**: weekly advisory scan + beta/nightly canary
+- **Pre-commit**: markdownlint + dprint + file hygiene (no Rust checks for speed)
 
 ---
 

@@ -1,14 +1,12 @@
 # =============================================================================
 # HwpForge Release Automation (release-plz)
 # =============================================================================
-# On push to main:
-#   1. CI verification runs first (via workflow_call to ci.yml)
-#   2. release-plz-release: Publishes unpublished crates to crates.io + GitHub Release
-#   3. release-plz-pr: Creates/updates a Release PR with version bumps + changelog
 #
-# The release and PR jobs run independently but both wait for CI to pass.
-# release-plz-release only publishes if versions were already bumped (by a merged Release PR).
-# release-plz-pr only creates/updates a PR if meaningful commits exist.
+# On push to main:
+#   1. Run reusable release preflight from ci.yml
+#   2. Publish crates / create GitHub Releases when a release PR was merged
+#   3. Create or refresh the next release PR
+#   4. Deploy Pages only when a real release was created
 # =============================================================================
 
 name: Release
@@ -17,27 +15,41 @@ on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  # Gate: run CI before any release action
-  ci:
-    name: CI Verification
+  preflight:
+    name: Release Preflight
+    if: github.ref == 'refs/heads/main'
     uses: ./.github/workflows/ci.yml
     permissions:
       contents: read
+    with:
+      mode: release
 
   release-plz-release:
     name: Release
-    needs: [ci]
+    needs: [preflight]
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    outputs:
+      releases_created: ${{ steps.release_plz.outputs.releases_created }}
+      releases: ${{ steps.release_plz.outputs.releases }}
     permissions:
-      contents: write  # Required for GitHub Releases + tags; branch protection mitigates push risk
-      pull-requests: read  # Required for release-plz to check PR-associated commits
+      contents: write
+      pull-requests: read
     concurrency:
-      group: release-plz-release
+      group: release-plz-release-${{ github.ref }}
       cancel-in-progress: false
     steps:
       - name: Checkout repository
@@ -46,8 +58,9 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        run: rustup show
       - name: Run release-plz release
+        id: release_plz
         uses: release-plz/action@v0.5
         with:
           command: release
@@ -57,13 +70,14 @@ jobs:
 
   release-plz-pr:
     name: Release PR
-    needs: [ci]
+    needs: [preflight]
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
       contents: write
       pull-requests: write
     concurrency:
-      group: release-plz-pr
+      group: release-plz-pr-${{ github.ref }}
       cancel-in-progress: false
     steps:
       - name: Checkout repository
@@ -72,10 +86,20 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        run: rustup show
       - name: Run release-plz release-pr
         uses: release-plz/action@v0.5
         with:
           command: release-pr
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  pages:
+    name: Pages
+    needs: [release-plz-release]
+    if: needs.release-plz-release.outputs.releases_created == 'true'
+    uses: ./.github/workflows/pages.yml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
