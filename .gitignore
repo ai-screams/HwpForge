@@ -471,8 +471,3 @@ $RECYCLE.BIN/
 # mdBook build output
 /book/
 temp/
-
-# mdBook plugin generated files
-mdbook-admonish.css
-mermaid.min.js
-mermaid-init.js
