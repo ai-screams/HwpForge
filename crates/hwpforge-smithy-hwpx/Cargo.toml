@@ -14,9 +14,9 @@ rust-version.workspace = true
 description = "HWPX format codec (encoder + decoder) for HwpForge"
 
 [dependencies]
-hwpforge-blueprint = { path = "../hwpforge-blueprint" }
-hwpforge-core = { path = "../hwpforge-core" }
-hwpforge-foundation = { path = "../hwpforge-foundation" }
+hwpforge-blueprint = { path = "../hwpforge-blueprint", version = "0.1.0" }
+hwpforge-core = { path = "../hwpforge-core", version = "0.1.0" }
+hwpforge-foundation = { path = "../hwpforge-foundation", version = "0.1.0" }
 quick-xml = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
