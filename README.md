@@ -20,7 +20,7 @@
 
 HwpForge는 HWPX 문서(ZIP + XML, KS X 6101)를 다루기 위한 **오픈소스** 순수 Rust 라이브러리입니다. 한국에서 가장 많이 사용되는 워드프로세서인 [Hancom 한글](https://www.hancom.com)의 최신 포맷을 지원합니다.
 
-**LLM-first 설계** — AI 에이전트(Claude, GPT 등)가 자연어 지시만으로 한글 공문서, 보고서, 제안서를 생성할 수 있도록 설계되었습니다. Markdown + YAML 템플릿으로 문서 구조를 표현하고, HwpForge가 HWPX로 컴파일합니다.
+**LLM-first 설계** — AI 에이전트가 Markdown으로 문서 내용을, YAML 스타일 템플릿으로 디자인을 정의하면 HwpForge가 HWPX로 컴파일합니다. Claude나 GPT 같은 LLM이 한글 문서를 프로그래밍 방식으로 생성하기에 적합한 구조입니다.
 
 - **Full HWPX codec** — HWPX 파일을 손실 없이 디코딩/인코딩 (lossless roundtrip)
 - **Markdown bridge** — GFM Markdown과 HWPX 간 상호 변환
