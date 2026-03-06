@@ -5,12 +5,9 @@ release_commits = "^feat|^fix|^perf|^refactor"
 semver_check = true
 # Changelog settings
 changelog_update = true
-# GitHub Release settings
-git_release_enable = true
+# Disable GitHub Release at workspace level (only umbrella crate creates releases)
+git_release_enable = false
 git_release_draft = false
-# Tag format: v0.1.0 (umbrella style, triggers pages.yml)
-git_tag_name = "v{{ version }}"
-git_release_name = "v{{ version }}"
 # Don't allow dirty working directory
 allow_dirty = false
 # PR settings
@@ -49,6 +46,13 @@ commit_parsers = [
   { message = "^ci", skip = true },
   { message = "^build", skip = true },
 ]
+
+# Umbrella crate: creates GitHub Release + v0.1.0 tag (triggers pages.yml)
+[[package]]
+name = "hwpforge"
+git_release_enable = true
+git_tag_name = "v{{ version }}"
+git_release_name = "v{{ version }}"
 
 # Skip stub crates (they also have publish = false in Cargo.toml)
 [[package]]
