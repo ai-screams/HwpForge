@@ -258,6 +258,7 @@ proptest! {
             offset: 0,
             use_kerning: false,
             use_font_space: false,
+            char_border_fill_id: None,
         };
         let yaml = serde_yaml::to_string(&original).unwrap();
         let back: CharShape = serde_yaml::from_str(&yaml).unwrap();

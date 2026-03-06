@@ -201,6 +201,12 @@ pub struct PartialCharShape {
     /// Use font-defined inter-character spacing. Default: false.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub use_font_space: Option<bool>,
+    /// Border/fill reference for character-level border.
+    ///
+    /// References a `borderFill` entry by raw ID. `None` = use the default
+    /// `borderFillIDRef=2` (한글 default char background, no visible border).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub char_border_fill_id: Option<u32>,
 }
 
 impl PartialCharShape {
@@ -273,6 +279,9 @@ impl PartialCharShape {
         if other.use_font_space.is_some() {
             self.use_font_space = other.use_font_space;
         }
+        if other.char_border_fill_id.is_some() {
+            self.char_border_fill_id = other.char_border_fill_id;
+        }
     }
 
     /// Attempts to resolve this partial into a fully-specified [`CharShape`].
@@ -308,6 +317,7 @@ impl PartialCharShape {
             offset: self.offset.unwrap_or(0),
             use_kerning: self.use_kerning.unwrap_or(false),
             use_font_space: self.use_font_space.unwrap_or(false),
+            char_border_fill_id: self.char_border_fill_id,
         })
     }
 }
@@ -556,6 +566,13 @@ pub struct CharShape {
     pub use_kerning: bool,
     /// Use font-defined inter-character spacing. Default: false.
     pub use_font_space: bool,
+    /// Border/fill reference for character-level border (None = default).
+    ///
+    /// When `None`, the HWPX encoder uses `borderFillIDRef=2` (the 한글 default
+    /// char background, which has no visible border). Set to `Some(id)` to
+    /// reference a custom borderFill entry for character-level borders.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub char_border_fill_id: Option<u32>,
 }
 
 /// A fully-resolved paragraph shape (all fields present).
@@ -821,6 +838,7 @@ mod tests {
             offset: 0,
             use_kerning: false,
             use_font_space: false,
+            char_border_fill_id: None,
         };
         let yaml = serde_yaml::to_string(&original).unwrap();
         let back: CharShape = serde_yaml::from_str(&yaml).unwrap();
@@ -852,6 +870,7 @@ mod tests {
             offset: 0,
             use_kerning: false,
             use_font_space: false,
+            char_border_fill_id: None,
         };
         let yaml = serde_yaml::to_string(&cs).unwrap();
         assert!(yaml.contains("12pt"), "Expected '12pt' in: {yaml}");

@@ -239,7 +239,15 @@ fn validate_run_content(
             Control::Hyperlink { .. }
             | Control::Unknown { .. }
             | Control::Dutmal { .. }
-            | Control::Compose { .. } => {
+            | Control::Compose { .. }
+            | Control::Arc { .. }
+            | Control::Curve { .. }
+            | Control::ConnectLine { .. }
+            | Control::Bookmark { .. }
+            | Control::CrossRef { .. }
+            | Control::Field { .. }
+            | Control::Memo { .. }
+            | Control::IndexMark { .. } => {
                 // No structural validation needed for these variants
             }
         },

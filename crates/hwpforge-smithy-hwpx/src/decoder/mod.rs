@@ -9,6 +9,7 @@ pub(crate) mod chart;
 pub(crate) mod header;
 pub(crate) mod package;
 pub(crate) mod section;
+pub(crate) mod shapes;
 
 use std::path::Path;
 
@@ -89,6 +90,12 @@ impl HwpxDecoder {
                 footer: result.footer,
                 page_number: result.page_number,
                 column_settings: result.column_settings,
+                visibility: result.visibility,
+                line_number_shape: result.line_number_shape,
+                page_border_fills: result.page_border_fills,
+                master_pages: result.master_pages,
+                begin_num: None,
+                text_direction: result.text_direction,
             };
 
             document.add_section(section);

@@ -125,6 +125,7 @@ fn section_positioning() -> Section {
             fill_color: None,
             line_width: Some(100),
             line_style: None,
+            ..Default::default()
         }),
     };
     paras.push(ctrl_para(line_abs));
@@ -161,6 +162,7 @@ fn section_positioning() -> Section {
             fill_color: Some(Color::from_rgb(0xC8, 0xE6, 0xFF)),
             line_width: None,
             line_style: None,
+            ..Default::default()
         }),
     };
     paras.push(ctrl_para(diamond));

@@ -30,9 +30,12 @@ pub mod units;
 
 pub use color::Color;
 pub use enums::{
-    Alignment, ApplyPageType, BorderLineType, BreakType, EmbossType, EmphasisType, EngraveType,
-    FillBrushType, HeadingType, Language, LineSpacingType, NumberFormatType, OutlineType,
-    PageNumberPosition, ShadowType, StrikeoutShape, UnderlineType, VerticalPosition, WordBreakType,
+    Alignment, ApplyPageType, ArcType, ArrowSize, ArrowType, BookmarkType, BorderLineType,
+    BreakType, CurveSegmentType, DropCapStyle, EmbossType, EmphasisType, EngraveType, FieldType,
+    FillBrushType, Flip, GradientType, GutterType, HeadingType, ImageFillMode, Language,
+    LineSpacingType, NumberFormatType, OutlineType, PageNumberPosition, PatternType,
+    RefContentType, RefType, RestartType, ShadowType, ShowMode, StrikeoutShape, TextBorderType,
+    TextDirection, UnderlineType, VerticalPosition, WordBreakType,
 };
 pub use error::{ErrorCode, ErrorCodeExt, FoundationError, FoundationResult};
 pub use ids::{FontId, StyleName, TemplateName};

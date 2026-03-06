@@ -158,6 +158,7 @@ impl PageStyle {
             margin_right: self.margin_right.unwrap_or(a4.margin_right),
             header_margin: self.header_margin.unwrap_or(a4.header_margin),
             footer_margin: self.footer_margin.unwrap_or(a4.footer_margin),
+            ..a4
         }
     }
 }

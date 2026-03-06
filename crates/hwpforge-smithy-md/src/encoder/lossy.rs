@@ -452,4 +452,445 @@ mod tests {
         let md = encode_without_template(&doc).unwrap();
         assert!(md.contains("<!-- hwpforge:section -->"));
     }
+
+    #[test]
+    fn encode_endnote_control_as_plain_text_marker() {
+        let endnote_body = Paragraph::with_runs(
+            vec![Run::text("end body", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        let paragraph = Paragraph::with_runs(
+            vec![Run::control(
+                Control::Endnote { inst_id: None, paragraphs: vec![endnote_body] },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        );
+
+        let md = paragraph_text_markdown(&paragraph);
+        assert_eq!(md, "(endnote: end body)");
+    }
+
+    #[test]
+    fn encode_textbox_extracts_plain_text() {
+        let textbox_body = Paragraph::with_runs(
+            vec![Run::text("box content", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        let paragraph = Paragraph::with_runs(
+            vec![Run::control(
+                Control::TextBox {
+                    paragraphs: vec![textbox_body],
+                    width: hwpforge_foundation::HwpUnit::from_mm(80.0).unwrap(),
+                    height: hwpforge_foundation::HwpUnit::from_mm(40.0).unwrap(),
+                    horz_offset: 0,
+                    vert_offset: 0,
+                    caption: None,
+                    style: None,
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        );
+
+        let md = paragraph_text_markdown(&paragraph);
+        assert_eq!(md, "box content");
+    }
+
+    #[test]
+    fn encode_unknown_control_renders_tag_as_code() {
+        let paragraph = Paragraph::with_runs(
+            vec![Run::control(
+                Control::Unknown { tag: "mystery".to_string(), data: None },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        );
+
+        let md = paragraph_text_markdown(&paragraph);
+        assert_eq!(md, "`[mystery]`");
+    }
+
+    #[test]
+    fn encode_line_control_renders_as_empty() {
+        use hwpforge_core::control::ShapePoint;
+        let paragraph = Paragraph::with_runs(
+            vec![Run::control(
+                Control::Line {
+                    start: ShapePoint::new(0, 0),
+                    end: ShapePoint::new(1000, 0),
+                    width: hwpforge_foundation::HwpUnit::from_mm(50.0).unwrap(),
+                    height: hwpforge_foundation::HwpUnit::from_mm(1.0).unwrap(),
+                    horz_offset: 0,
+                    vert_offset: 0,
+                    caption: None,
+                    style: None,
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        );
+
+        let md = paragraph_text_markdown(&paragraph);
+        // Lines render as nothing (no text content)
+        assert_eq!(md, "");
+    }
+
+    #[test]
+    fn encode_ellipse_with_text_renders_content() {
+        use hwpforge_core::control::ShapePoint;
+        let inner = Paragraph::with_runs(
+            vec![Run::text("shape text", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        let paragraph = Paragraph::with_runs(
+            vec![Run::control(
+                Control::Ellipse {
+                    center: ShapePoint::new(500, 300),
+                    axis1: ShapePoint::new(1000, 300),
+                    axis2: ShapePoint::new(500, 600),
+                    width: hwpforge_foundation::HwpUnit::from_mm(40.0).unwrap(),
+                    height: hwpforge_foundation::HwpUnit::from_mm(20.0).unwrap(),
+                    horz_offset: 0,
+                    vert_offset: 0,
+                    paragraphs: vec![inner],
+                    caption: None,
+                    style: None,
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        );
+
+        let md = paragraph_text_markdown(&paragraph);
+        assert_eq!(md, "shape text");
+    }
+
+    #[test]
+    fn encode_ellipse_without_text_renders_empty() {
+        use hwpforge_core::control::ShapePoint;
+        let paragraph = Paragraph::with_runs(
+            vec![Run::control(
+                Control::Ellipse {
+                    center: ShapePoint::new(500, 300),
+                    axis1: ShapePoint::new(1000, 300),
+                    axis2: ShapePoint::new(500, 600),
+                    width: hwpforge_foundation::HwpUnit::from_mm(40.0).unwrap(),
+                    height: hwpforge_foundation::HwpUnit::from_mm(20.0).unwrap(),
+                    horz_offset: 0,
+                    vert_offset: 0,
+                    paragraphs: vec![],
+                    caption: None,
+                    style: None,
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        );
+
+        let md = paragraph_text_markdown(&paragraph);
+        assert_eq!(md, "");
+    }
+
+    #[test]
+    fn encode_polygon_with_text_renders_content() {
+        use hwpforge_core::control::ShapePoint;
+        let inner = Paragraph::with_runs(
+            vec![Run::text("polygon text", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        let paragraph = Paragraph::with_runs(
+            vec![Run::control(
+                Control::Polygon {
+                    vertices: vec![
+                        ShapePoint::new(0, 1000),
+                        ShapePoint::new(500, 0),
+                        ShapePoint::new(1000, 1000),
+                    ],
+                    width: hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+                    height: hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+                    horz_offset: 0,
+                    vert_offset: 0,
+                    paragraphs: vec![inner],
+                    caption: None,
+                    style: None,
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        );
+
+        let md = paragraph_text_markdown(&paragraph);
+        assert_eq!(md, "polygon text");
+    }
+
+    #[test]
+    fn encode_dutmal_renders_main_sub_text() {
+        use hwpforge_core::control::{DutmalAlign, DutmalPosition};
+        let paragraph = Paragraph::with_runs(
+            vec![Run::control(
+                Control::Dutmal {
+                    main_text: "한글".to_string(),
+                    sub_text: "hangeul".to_string(),
+                    sz_ratio: 50,
+                    position: DutmalPosition::Top,
+                    align: DutmalAlign::Center,
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        );
+
+        let md = paragraph_text_markdown(&paragraph);
+        assert_eq!(md, "한글(hangeul)");
+    }
+
+    #[test]
+    fn encode_compose_renders_compose_text() {
+        let paragraph = Paragraph::with_runs(
+            vec![Run::control(
+                Control::Compose {
+                    compose_text: "㊀".to_string(),
+                    circle_type: "CIRCLE".to_string(),
+                    char_sz: -3,
+                    compose_type: "COMPOSED".to_string(),
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        );
+
+        let md = paragraph_text_markdown(&paragraph);
+        assert_eq!(md, "㊀");
+    }
+
+    #[test]
+    fn encode_image_run_in_paragraph() {
+        use hwpforge_core::ImageFormat;
+        let image = hwpforge_core::Image::new(
+            "path/to/photo.jpg",
+            hwpforge_foundation::HwpUnit::from_mm(50.0).unwrap(),
+            hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+            ImageFormat::Jpeg,
+        );
+        let paragraph = Paragraph::with_runs(
+            vec![Run::image(image, CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+
+        let md = encode_paragraph(&paragraph, None);
+        assert_eq!(md, "![photo](path/to/photo.jpg)");
+    }
+
+    #[test]
+    fn encode_image_alt_text_from_filename_without_extension() {
+        use hwpforge_core::ImageFormat;
+        // Test image alt text extraction
+        let image = hwpforge_core::Image::new(
+            "docs/figures/figure_1.png",
+            hwpforge_foundation::HwpUnit::from_mm(50.0).unwrap(),
+            hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+            ImageFormat::Png,
+        );
+        let paragraph = Paragraph::with_runs(
+            vec![Run::image(image, CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+
+        let md = encode_paragraph(&paragraph, None);
+        assert!(md.contains("![figure_1]"));
+    }
+
+    #[test]
+    fn encode_image_run_in_mixed_paragraph() {
+        use hwpforge_core::ImageFormat;
+        let image = hwpforge_core::Image::new(
+            "img.png",
+            hwpforge_foundation::HwpUnit::from_mm(20.0).unwrap(),
+            hwpforge_foundation::HwpUnit::from_mm(20.0).unwrap(),
+            ImageFormat::Png,
+        );
+        let paragraph = Paragraph::with_runs(
+            vec![
+                Run::text("before", CharShapeIndex::new(0)),
+                Run::image(image, CharShapeIndex::new(0)),
+                Run::text("after", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+
+        let md = paragraph_text_markdown(&paragraph);
+        assert!(md.contains("before"));
+        assert!(md.contains("![img](img.png)"));
+        assert!(md.contains("after"));
+    }
+
+    #[test]
+    fn encode_table_in_paragraph_with_preceding_text() {
+        // When paragraph has table run AND text runs before it,
+        // table_to_markdown is called inline (pushed with newline)
+        let text_run = Run::text("intro", CharShapeIndex::new(0));
+        let table = Table::new(vec![TableRow {
+            cells: vec![TableCell::new(
+                vec![Paragraph::with_runs(
+                    vec![Run::text("A", CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )],
+                hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+            )],
+            height: None,
+        }]);
+        let paragraph = Paragraph::with_runs(
+            vec![text_run, Run::table(table, CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+
+        let md = paragraph_text_markdown(&paragraph);
+        assert!(md.contains("intro"));
+        assert!(md.contains("| A |"));
+    }
+
+    #[test]
+    fn encode_empty_table_renders_placeholder() {
+        let table = Table::new(vec![]);
+        let paragraph = Paragraph::with_runs(
+            vec![Run::table(table, CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+
+        let md = encode_paragraph(&paragraph, None);
+        assert_eq!(md, "| |\n| --- |");
+    }
+
+    #[test]
+    fn encode_table_with_empty_row_renders_placeholder() {
+        use hwpforge_core::TableRow;
+        let table = Table::new(vec![
+            TableRow {
+                cells: vec![TableCell::new(
+                    vec![Paragraph::with_runs(
+                        vec![Run::text("header", CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
+                    )],
+                    hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+                )],
+                height: None,
+            },
+            TableRow { cells: vec![], height: None },
+        ]);
+
+        let paragraph = Paragraph::with_runs(
+            vec![Run::table(table, CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+
+        let md = encode_paragraph(&paragraph, None);
+        // An empty row renders as "| |"
+        assert!(md.contains("| |"));
+    }
+
+    #[test]
+    fn encode_table_cell_escapes_backslash() {
+        let paragraph = Paragraph::with_runs(
+            vec![Run::table(
+                Table::new(vec![TableRow {
+                    cells: vec![TableCell::new(
+                        vec![Paragraph::with_runs(
+                            vec![Run::text(r"path\to\file", CharShapeIndex::new(0))],
+                            ParaShapeIndex::new(0),
+                        )],
+                        hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+                    )],
+                    height: None,
+                }]),
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        );
+
+        let md = encode_paragraph(&paragraph, None);
+        assert!(md.contains(r"path\\to\\file"));
+    }
+
+    #[test]
+    fn encode_table_cell_escapes_newline_as_br() {
+        let paragraph = Paragraph::with_runs(
+            vec![Run::table(
+                Table::new(vec![TableRow {
+                    cells: vec![TableCell::new(
+                        vec![Paragraph::with_runs(
+                            vec![Run::text("line1\nline2", CharShapeIndex::new(0))],
+                            ParaShapeIndex::new(0),
+                        )],
+                        hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+                    )],
+                    height: None,
+                }]),
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        );
+
+        let md = encode_paragraph(&paragraph, None);
+        assert!(md.contains("<br>"));
+    }
+
+    #[test]
+    fn encode_blockquote_format() {
+        // Verify the blockquote branch: each line gets "> " prefix
+        let text = "line1\nline2";
+        let result: Vec<String> = text.lines().map(|line| format!("> {line}")).collect::<Vec<_>>();
+        let expected = "> line1\n> line2";
+        assert_eq!(result.join("\n"), expected);
+    }
+
+    #[test]
+    fn encode_list_item_without_marker_adds_dash() {
+        // starts_with_list_marker returns false → "- " prefix is added
+        assert!(!starts_with_list_marker("no marker here"));
+        assert!(starts_with_list_marker("- already a list"));
+        assert!(starts_with_list_marker("* bullet"));
+        assert!(starts_with_list_marker("+ plus"));
+        assert!(starts_with_list_marker("1. ordered"));
+        assert!(!starts_with_list_marker("1x not ordered"));
+        assert!(!starts_with_list_marker(""));
+    }
+
+    #[test]
+    fn encode_empty_document_produces_only_frontmatter() {
+        let mut draft = Document::new();
+        draft.add_section(Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::text("   ", CharShapeIndex::new(0))], // whitespace only
+                ParaShapeIndex::new(0),
+            )],
+            hwpforge_core::PageSettings::a4(),
+        ));
+        let doc = draft.validate().unwrap();
+
+        // encode_body skips paragraphs whose markdown is all whitespace
+        let md = encode_without_template(&doc).unwrap();
+        // Result should be empty (no blocks pushed)
+        assert_eq!(md.trim(), "");
+    }
+
+    #[test]
+    fn encode_code_paragraph_with_template() {
+        // Verify the code block branch produces ``` fencing using the real template
+        // The builtin_default template maps para_shape_id=2 to Code
+        let template = builtin_default().unwrap();
+        let (mapping, _registry) = resolve_mapping(&template).unwrap();
+
+        // Use the code para shape ID from the resolved mapping
+        let code_para_shape = mapping.code.para_shape_id;
+        let paragraph = Paragraph::with_runs(
+            vec![Run::text("let x = 1;", CharShapeIndex::new(0))],
+            code_para_shape,
+        );
+
+        let md = encode_paragraph(&paragraph, Some(&mapping));
+        assert!(md.starts_with("```\n"));
+        assert!(md.ends_with("\n```"));
+        assert!(md.contains("let x = 1;"));
+    }
 }

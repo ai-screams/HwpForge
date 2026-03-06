@@ -845,6 +845,15 @@ mod tests {
     use super::*;
     use hwpforge_core::RunContent;
 
+    fn section_wrap(inner: &str) -> String {
+        let mut s = String::from(
+            "<section data-index=\"0\" data-width-mm=\"210.0\" data-height-mm=\"297.0\">",
+        );
+        s.push_str(inner);
+        s.push_str("</section>");
+        s
+    }
+
     #[test]
     fn decode_basic_lossless_section() {
         let input = r#"<section data-index="0" data-width-mm="210.0" data-height-mm="297.0"><p data-para-shape="3"><span data-char-shape="5">hello</span></p></section>"#;
@@ -854,6 +863,48 @@ mod tests {
         assert_eq!(sections[0].paragraphs.len(), 1);
         assert_eq!(sections[0].paragraphs[0].para_shape_id.get(), 3);
         assert_eq!(sections[0].paragraphs[0].runs[0].char_shape_id.get(), 5);
+    }
+
+    #[test]
+    fn decode_multiple_sections() {
+        let input = r#"<section data-index="0" data-width-mm="210.0" data-height-mm="297.0"><p data-para-shape="0"><span data-char-shape="0">A</span></p></section><section data-index="1" data-width-mm="210.0" data-height-mm="297.0"><p data-para-shape="0"><span data-char-shape="0">B</span></p></section>"#;
+        let sections = decode_lossless_sections(input).unwrap();
+        assert_eq!(sections.len(), 2);
+    }
+
+    #[test]
+    fn decode_empty_section_gets_default_paragraph() {
+        let input =
+            r#"<section data-index="0" data-width-mm="210.0" data-height-mm="297.0"></section>"#;
+        let sections = decode_lossless_sections(input).unwrap();
+        assert_eq!(sections.len(), 1);
+        assert_eq!(sections[0].paragraphs.len(), 1);
+    }
+
+    #[test]
+    fn decode_section_page_settings_preserved() {
+        let input = r#"<section data-index="0" data-width-mm="297.0" data-height-mm="210.0" data-margin-left-mm="20.0" data-margin-right-mm="15.0" data-margin-top-mm="25.0" data-margin-bottom-mm="30.0" data-header-margin-mm="12.0" data-footer-margin-mm="11.0"></section>"#;
+        let sections = decode_lossless_sections(input).unwrap();
+        let page = &sections[0].page_settings;
+        // Width ~297mm in HWPUNIT
+        assert!((page.width.to_mm() - 297.0).abs() < 0.5);
+        assert!((page.height.to_mm() - 210.0).abs() < 0.5);
+        assert!((page.margin_left.to_mm() - 20.0).abs() < 0.5);
+        assert!((page.margin_right.to_mm() - 15.0).abs() < 0.5);
+        assert!((page.margin_top.to_mm() - 25.0).abs() < 0.5);
+        assert!((page.margin_bottom.to_mm() - 30.0).abs() < 0.5);
+        assert!((page.header_margin.to_mm() - 12.0).abs() < 0.5);
+        assert!((page.footer_margin.to_mm() - 11.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn decode_section_page_settings_via_unit_attr() {
+        // data-width-unit takes priority over data-width-mm
+        let input = r#"<section data-index="0" data-width-unit="59528" data-height-unit="84188" data-width-mm="999.0" data-height-mm="999.0"></section>"#;
+        let sections = decode_lossless_sections(input).unwrap();
+        let page = &sections[0].page_settings;
+        assert_eq!(page.width.as_i32(), 59528);
+        assert_eq!(page.height.as_i32(), 84188);
     }
 
     #[test]
@@ -887,9 +938,281 @@ mod tests {
     }
 
     #[test]
+    fn decode_table_with_width_and_caption() {
+        let input = section_wrap(
+            r#"<p data-para-shape="0"><table data-char-shape="0" data-width-mm="120.0" data-caption="표 1"><tr><td data-width-mm="60.0"><p data-para-shape="0"><span data-char-shape="0">A</span></p></td></tr></table></p>"#,
+        );
+        let sections = decode_lossless_sections(&input).unwrap();
+        let table = sections[0].paragraphs[0].runs[0].content.as_table().unwrap();
+        assert!(table.width.is_some());
+        assert!((table.width.unwrap().to_mm() - 120.0).abs() < 0.5);
+        assert!(table.caption.is_some());
+    }
+
+    #[test]
+    fn decode_table_with_row_height() {
+        let input = section_wrap(
+            r#"<p data-para-shape="0"><table data-char-shape="0"><tr data-height-mm="15.0"><td data-width-mm="40.0"><p data-para-shape="0"><span data-char-shape="0">A</span></p></td></tr></table></p>"#,
+        );
+        let sections = decode_lossless_sections(&input).unwrap();
+        let table = sections[0].paragraphs[0].runs[0].content.as_table().unwrap();
+        let row_height = table.rows[0].height;
+        assert!(row_height.is_some());
+        assert!((row_height.unwrap().to_mm() - 15.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn decode_table_cell_with_background_color() {
+        let input = section_wrap(
+            r##"<p data-para-shape="0"><table data-char-shape="0"><tr><td data-width-mm="40.0" data-background="#FF0000"><p data-para-shape="0"><span data-char-shape="0">A</span></p></td></tr></table></p>"##,
+        );
+        let sections = decode_lossless_sections(&input).unwrap();
+        let table = sections[0].paragraphs[0].runs[0].content.as_table().unwrap();
+        let bg = table.rows[0].cells[0].background;
+        assert!(bg.is_some());
+    }
+
+    #[test]
+    fn decode_table_cell_with_span() {
+        let input = section_wrap(
+            r#"<p data-para-shape="0"><table data-char-shape="0"><tr><td data-col-span="3" data-row-span="2" data-width-mm="60.0"><p data-para-shape="0"><span data-char-shape="0">merged</span></p></td></tr></table></p>"#,
+        );
+        let sections = decode_lossless_sections(&input).unwrap();
+        let table = sections[0].paragraphs[0].runs[0].content.as_table().unwrap();
+        let cell = &table.rows[0].cells[0];
+        assert_eq!(cell.col_span, 3);
+        assert_eq!(cell.row_span, 2);
+    }
+
+    #[test]
+    fn decode_empty_table_gets_default_row() {
+        let input =
+            section_wrap(r#"<p data-para-shape="0"><table data-char-shape="0"></table></p>"#);
+        let sections = decode_lossless_sections(&input).unwrap();
+        let table = sections[0].paragraphs[0].runs[0].content.as_table().unwrap();
+        assert_eq!(table.rows.len(), 1);
+        assert_eq!(table.rows[0].cells.len(), 1);
+    }
+
+    #[test]
+    fn decode_image_png() {
+        let input = section_wrap(
+            r#"<p data-para-shape="0"><img data-char-shape="1" src="image.png" data-format="PNG" data-width-mm="50.0" data-height-mm="30.0" /></p>"#,
+        );
+        let sections = decode_lossless_sections(&input).unwrap();
+        let run = &sections[0].paragraphs[0].runs[0];
+        assert!(matches!(run.content, RunContent::Image(_)));
+        if let RunContent::Image(ref img) = run.content {
+            assert_eq!(img.path, "image.png");
+            assert_eq!(img.format, ImageFormat::Png);
+            assert!((img.width.to_mm() - 50.0).abs() < 0.5);
+            assert!((img.height.to_mm() - 30.0).abs() < 0.5);
+        }
+    }
+
+    #[test]
+    fn decode_image_jpeg_format_variants() {
+        for fmt in &["JPEG", "JPG", "jpeg", "jpg"] {
+            let input = section_wrap(&format!(
+                r#"<p data-para-shape="0"><img data-char-shape="0" src="img.jpg" data-format="{fmt}" data-width-mm="10.0" data-height-mm="10.0" /></p>"#
+            ));
+            let sections = decode_lossless_sections(&input).unwrap();
+            let run = &sections[0].paragraphs[0].runs[0];
+            if let RunContent::Image(ref img) = run.content {
+                assert_eq!(img.format, ImageFormat::Jpeg, "format '{fmt}' should be Jpeg");
+            }
+        }
+    }
+
+    #[test]
+    fn decode_image_unknown_format() {
+        let input = section_wrap(
+            r#"<p data-para-shape="0"><img data-char-shape="0" src="img.abc" data-format="abc" data-width-mm="10.0" data-height-mm="10.0" /></p>"#,
+        );
+        let sections = decode_lossless_sections(&input).unwrap();
+        let run = &sections[0].paragraphs[0].runs[0];
+        if let RunContent::Image(ref img) = run.content {
+            assert_eq!(img.format, ImageFormat::Unknown("abc".to_string()));
+        }
+    }
+
+    #[test]
+    fn decode_hyperlink() {
+        let input = section_wrap(
+            r#"<p data-para-shape="0"><a data-char-shape="2" href="https://rust-lang.org">Rust</a></p>"#,
+        );
+        let sections = decode_lossless_sections(&input).unwrap();
+        let run = &sections[0].paragraphs[0].runs[0];
+        if let RunContent::Control(ctrl) = &run.content {
+            assert!(
+                matches!(ctrl.as_ref(), Control::Hyperlink { text, url } if text == "Rust" && url == "https://rust-lang.org")
+            );
+        } else {
+            panic!("expected hyperlink control");
+        }
+    }
+
+    #[test]
+    fn decode_empty_hyperlink_tag() {
+        // Self-closing <a /> with no text content
+        let input = section_wrap(
+            r#"<p data-para-shape="0"><a data-char-shape="0" href="https://example.com" /></p>"#,
+        );
+        let sections = decode_lossless_sections(&input).unwrap();
+        let run = &sections[0].paragraphs[0].runs[0];
+        if let RunContent::Control(ctrl) = &run.content {
+            assert!(matches!(ctrl.as_ref(), Control::Hyperlink { text, .. } if text.is_empty()));
+        } else {
+            panic!("expected hyperlink control");
+        }
+    }
+
+    #[test]
+    fn decode_empty_span_tag() {
+        // Self-closing <span /> becomes empty text run
+        let input = section_wrap(r#"<p data-para-shape="0"><span data-char-shape="3" /></p>"#);
+        let sections = decode_lossless_sections(&input).unwrap();
+        let run = &sections[0].paragraphs[0].runs[0];
+        assert_eq!(run.char_shape_id.get(), 3);
+        assert!(matches!(run.content, RunContent::Text(ref t) if t.is_empty()));
+    }
+
+    #[test]
+    fn decode_empty_paragraph_tag() {
+        // Self-closing <p /> creates a paragraph with empty text run
+        let input = section_wrap(r#"<p data-para-shape="5" />"#);
+        let sections = decode_lossless_sections(&input).unwrap();
+        assert_eq!(sections[0].paragraphs.len(), 1);
+        assert_eq!(sections[0].paragraphs[0].para_shape_id.get(), 5);
+    }
+
+    #[test]
+    fn decode_textbox_with_nested_paragraphs() {
+        let input = section_wrap(
+            r#"<p data-para-shape="0"><textbox data-char-shape="2" data-width-mm="80.0" data-height-mm="40.0"><p data-para-shape="1"><span data-char-shape="3">inside</span></p></textbox></p>"#,
+        );
+        let sections = decode_lossless_sections(&input).unwrap();
+        let run = &sections[0].paragraphs[0].runs[0];
+        if let RunContent::Control(ctrl) = &run.content {
+            assert!(ctrl.is_text_box());
+            if let Control::TextBox { paragraphs, width, height, .. } = ctrl.as_ref() {
+                assert_eq!(paragraphs.len(), 1);
+                assert!((width.to_mm() - 80.0).abs() < 0.5);
+                assert!((height.to_mm() - 40.0).abs() < 0.5);
+                // Nested paragraph should have the correct para_shape_id
+                assert_eq!(paragraphs[0].para_shape_id.get(), 1);
+            }
+        } else {
+            panic!("expected textbox control");
+        }
+    }
+
+    #[test]
+    fn decode_textbox_simple_text() {
+        // textbox with only text content (no nested <p>)
+        let input = section_wrap(
+            r#"<p data-para-shape="0"><textbox data-char-shape="1" data-width-mm="50.0" data-height-mm="20.0">plain text</textbox></p>"#,
+        );
+        let sections = decode_lossless_sections(&input).unwrap();
+        let run = &sections[0].paragraphs[0].runs[0];
+        if let RunContent::Control(ctrl) = &run.content {
+            if let Control::TextBox { paragraphs, .. } = ctrl.as_ref() {
+                // text goes into a default paragraph
+                let text = paragraphs[0].runs[0].content.as_text().unwrap_or("");
+                assert_eq!(text, "plain text");
+            }
+        } else {
+            panic!("expected textbox control");
+        }
+    }
+
+    #[test]
+    fn decode_footnote_with_nested_paragraphs() {
+        let input = section_wrap(
+            r#"<p data-para-shape="0"><footnote data-char-shape="4"><p data-para-shape="2"><span data-char-shape="5">note text</span></p></footnote></p>"#,
+        );
+        let sections = decode_lossless_sections(&input).unwrap();
+        let run = &sections[0].paragraphs[0].runs[0];
+        if let RunContent::Control(ctrl) = &run.content {
+            if let Control::Footnote { paragraphs, .. } = ctrl.as_ref() {
+                assert_eq!(paragraphs.len(), 1);
+                assert_eq!(paragraphs[0].para_shape_id.get(), 2);
+                let text = paragraphs[0].runs[0].content.as_text().unwrap_or("");
+                assert_eq!(text, "note text");
+            } else {
+                panic!("expected Footnote, got other control");
+            }
+        } else {
+            panic!("expected control run");
+        }
+    }
+
+    #[test]
+    fn decode_footnote_simple_text() {
+        let input = section_wrap(
+            r#"<p data-para-shape="0"><footnote data-char-shape="1">note body</footnote></p>"#,
+        );
+        let sections = decode_lossless_sections(&input).unwrap();
+        let run = &sections[0].paragraphs[0].runs[0];
+        if let RunContent::Control(ctrl) = &run.content {
+            if let Control::Footnote { paragraphs, .. } = ctrl.as_ref() {
+                let text = paragraphs[0].runs[0].content.as_text().unwrap_or("");
+                assert_eq!(text, "note body");
+            } else {
+                panic!("expected Footnote control");
+            }
+        } else {
+            panic!("expected Control run");
+        }
+    }
+
+    #[test]
+    fn decode_unknown_control() {
+        let input = section_wrap(
+            r#"<p data-para-shape="0"><control data-char-shape="0" data-kind="mystery">some data</control></p>"#,
+        );
+        let sections = decode_lossless_sections(&input).unwrap();
+        let run = &sections[0].paragraphs[0].runs[0];
+        if let RunContent::Control(ctrl) = &run.content {
+            if let Control::Unknown { tag, data } = ctrl.as_ref() {
+                assert_eq!(tag, "mystery");
+                assert_eq!(data.as_deref(), Some("some data"));
+            } else {
+                panic!("expected Unknown control");
+            }
+        }
+    }
+
+    #[test]
+    fn decode_unknown_control_empty_data() {
+        // Empty control has None data
+        let input = section_wrap(
+            r#"<p data-para-shape="0"><control data-char-shape="0" data-kind="empty"></control></p>"#,
+        );
+        let sections = decode_lossless_sections(&input).unwrap();
+        let run = &sections[0].paragraphs[0].runs[0];
+        if let RunContent::Control(ctrl) = &run.content {
+            if let Control::Unknown { data, .. } = ctrl.as_ref() {
+                assert!(data.is_none());
+            } else {
+                panic!("expected Unknown control");
+            }
+        } else {
+            panic!("expected Control run");
+        }
+    }
+
+    #[test]
     fn decode_invalid_tag_fails() {
         let input = r#"<section data-index="0" data-width-mm="210.0" data-height-mm="297.0"><unknown /></section>"#;
         let err = decode_lossless_sections(input).unwrap_err();
+        assert!(matches!(err, MdError::LosslessParse { .. }));
+    }
+
+    #[test]
+    fn decode_unsupported_start_tag_fails() {
+        let input = section_wrap(r#"<div data-something="1"></div>"#);
+        let err = decode_lossless_sections(&input).unwrap_err();
         assert!(matches!(err, MdError::LosslessParse { .. }));
     }
 
@@ -902,5 +1225,156 @@ mod tests {
 "#;
         let err = decode_lossless_sections(input).unwrap_err();
         assert!(matches!(err, MdError::LosslessParse { .. }));
+    }
+
+    #[test]
+    fn decode_table_outside_p_fails() {
+        // table must be inside <p>
+        let input = section_wrap(r#"<table data-char-shape="0"></table>"#);
+        let err = decode_lossless_sections(&input).unwrap_err();
+        assert!(matches!(err, MdError::LosslessParse { .. }));
+    }
+
+    #[test]
+    fn decode_span_outside_p_fails() {
+        let input = section_wrap(r#"<span data-char-shape="0">text</span>"#);
+        let err = decode_lossless_sections(&input).unwrap_err();
+        assert!(matches!(err, MdError::LosslessParse { .. }));
+    }
+
+    #[test]
+    fn decode_unexpected_root_text_fails() {
+        // Text at root level (not inside any section/p) should fail
+        let input = "loose text without any tags";
+        let err = decode_lossless_sections(input).unwrap_err();
+        assert!(matches!(err, MdError::LosslessParse { .. }));
+    }
+
+    #[test]
+    fn decode_missing_href_on_anchor_fails() {
+        let input =
+            section_wrap(r#"<p data-para-shape="0"><a data-char-shape="0">no href</a></p>"#);
+        let err = decode_lossless_sections(&input).unwrap_err();
+        assert!(matches!(err, MdError::LosslessMissingAttribute { .. }));
+    }
+
+    #[test]
+    fn decode_missing_char_shape_fails() {
+        let input = section_wrap(r#"<p data-para-shape="0"><span>no char-shape</span></p>"#);
+        let err = decode_lossless_sections(&input).unwrap_err();
+        assert!(matches!(err, MdError::LosslessMissingAttribute { .. }));
+    }
+
+    #[test]
+    fn decode_invalid_char_shape_index_fails() {
+        let input = section_wrap(
+            r#"<p data-para-shape="0"><span data-char-shape="not_a_number">text</span></p>"#,
+        );
+        let err = decode_lossless_sections(&input).unwrap_err();
+        assert!(matches!(err, MdError::LosslessInvalidAttribute { .. }));
+    }
+
+    #[test]
+    fn decode_invalid_para_shape_index_fails() {
+        let input = section_wrap(
+            r#"<p data-para-shape="bad_value"><span data-char-shape="0">text</span></p>"#,
+        );
+        let err = decode_lossless_sections(&input).unwrap_err();
+        assert!(matches!(err, MdError::LosslessInvalidAttribute { .. }));
+    }
+
+    #[test]
+    fn decode_invalid_color_wrong_length_fails() {
+        // Background color with wrong hex length
+        let input = section_wrap(
+            r##"<p data-para-shape="0"><table data-char-shape="0"><tr><td data-width-mm="40.0" data-background="#FFF"><p data-para-shape="0"><span data-char-shape="0">A</span></p></td></tr></table></p>"##,
+        );
+        let err = decode_lossless_sections(&input).unwrap_err();
+        assert!(matches!(err, MdError::LosslessInvalidAttribute { .. }));
+    }
+
+    #[test]
+    fn decode_invalid_color_bad_hex_fails() {
+        let input = section_wrap(
+            r##"<p data-para-shape="0"><table data-char-shape="0"><tr><td data-width-mm="40.0" data-background="#GGGGGG"><p data-para-shape="0"><span data-char-shape="0">A</span></p></td></tr></table></p>"##,
+        );
+        let err = decode_lossless_sections(&input).unwrap_err();
+        assert!(matches!(err, MdError::LosslessInvalidAttribute { .. }));
+    }
+
+    #[test]
+    fn decode_color_without_hash_prefix() {
+        // Color parsing should accept both "#RRGGBB" and "RRGGBB"
+        let input = section_wrap(
+            r#"<p data-para-shape="0"><table data-char-shape="0"><tr><td data-width-mm="40.0" data-background="FF0000"><p data-para-shape="0"><span data-char-shape="0">A</span></p></td></tr></table></p>"#,
+        );
+        let sections = decode_lossless_sections(&input).unwrap();
+        let bg = sections[0].paragraphs[0].runs[0].content.as_table().unwrap().rows[0].cells[0]
+            .background;
+        assert!(bg.is_some());
+    }
+
+    #[test]
+    fn decode_invalid_width_mm_fails() {
+        let input = r#"<section data-index="0" data-width-mm="not_a_number" data-height-mm="297.0"></section>"#;
+        let err = decode_lossless_sections(input).unwrap_err();
+        assert!(matches!(err, MdError::LosslessInvalidAttribute { .. }));
+    }
+
+    #[test]
+    fn decode_unclosed_tag_fails() {
+        let input = r#"<section data-index="0" data-width-mm="210.0" data-height-mm="297.0"><p data-para-shape="0">"#;
+        let err = decode_lossless_sections(input).unwrap_err();
+        assert!(matches!(err, MdError::LosslessParse { .. }));
+    }
+
+    #[test]
+    fn decode_tag_mismatch_fails() {
+        // Open <p> but close </span>
+        let input = r#"<hwpforge-lossless-root><section data-index="0" data-width-mm="210.0" data-height-mm="297.0"><p data-para-shape="0"></span></section></hwpforge-lossless-root>"#;
+        // This should fail due to tag mismatch
+        let result = decode_lossless_sections(input);
+        assert!(result.is_err(), "tag mismatch should produce an error");
+    }
+
+    #[test]
+    fn decode_image_all_known_formats() {
+        let cases = [
+            ("GIF", ImageFormat::Gif),
+            ("BMP", ImageFormat::Bmp),
+            ("WMF", ImageFormat::Wmf),
+            ("EMF", ImageFormat::Emf),
+        ];
+        for (fmt_str, expected) in &cases {
+            let result = parse_image_format(fmt_str);
+            assert_eq!(result, *expected, "format '{fmt_str}' mismatch");
+        }
+    }
+
+    #[test]
+    fn decode_paragraph_text_with_whitespace_nodes_ok() {
+        // Whitespace between tags at the section level is allowed
+        let input = "<section data-index=\"0\" data-width-mm=\"210.0\" data-height-mm=\"297.0\">\n  <p data-para-shape=\"0\"><span data-char-shape=\"0\">text</span></p>\n</section>";
+        let sections = decode_lossless_sections(input).unwrap();
+        assert_eq!(sections.len(), 1);
+    }
+
+    #[test]
+    fn decode_table_empty_cell_gets_default_paragraph() {
+        let input = section_wrap(
+            r#"<p data-para-shape="0"><table data-char-shape="0"><tr><td data-width-mm="40.0"></td></tr></table></p>"#,
+        );
+        let sections = decode_lossless_sections(&input).unwrap();
+        let table = sections[0].paragraphs[0].runs[0].content.as_table().unwrap();
+        // Empty cell should get a default paragraph
+        assert_eq!(table.rows[0].cells[0].paragraphs.len(), 1);
+    }
+
+    #[test]
+    fn decode_paragraph_with_empty_runs_gets_default_run() {
+        let input = section_wrap(r#"<p data-para-shape="0"></p>"#);
+        let sections = decode_lossless_sections(&input).unwrap();
+        // Empty paragraph should get a default empty run
+        assert_eq!(sections[0].paragraphs[0].runs.len(), 1);
     }
 }

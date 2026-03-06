@@ -1818,7 +1818,1464 @@ impl schemars::JsonSchema for HeadingType {
     }
 }
 
+// ---------------------------------------------------------------------------
+// GutterType
+// ---------------------------------------------------------------------------
+
+/// Gutter position type for page margins.
+///
+/// Controls where the binding gutter space is placed on the page.
+/// Used in `<hp:pagePr gutterType="...">`.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_foundation::GutterType;
+///
+/// assert_eq!(GutterType::default(), GutterType::LeftOnly);
+/// assert_eq!(GutterType::LeftOnly.to_string(), "LeftOnly");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+#[repr(u8)]
+pub enum GutterType {
+    /// Gutter on the left side only (default).
+    #[default]
+    LeftOnly = 0,
+    /// Gutter on the left and right sides.
+    LeftRight = 1,
+    /// Gutter on the top side only.
+    TopOnly = 2,
+    /// Gutter on the top and bottom sides.
+    TopBottom = 3,
+}
+
+impl fmt::Display for GutterType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::LeftOnly => f.write_str("LeftOnly"),
+            Self::LeftRight => f.write_str("LeftRight"),
+            Self::TopOnly => f.write_str("TopOnly"),
+            Self::TopBottom => f.write_str("TopBottom"),
+        }
+    }
+}
+
+impl std::str::FromStr for GutterType {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "LeftOnly" | "LEFT_ONLY" | "left_only" => Ok(Self::LeftOnly),
+            "LeftRight" | "LEFT_RIGHT" | "left_right" => Ok(Self::LeftRight),
+            "TopOnly" | "TOP_ONLY" | "top_only" => Ok(Self::TopOnly),
+            "TopBottom" | "TOP_BOTTOM" | "top_bottom" => Ok(Self::TopBottom),
+            _ => Err(FoundationError::ParseError {
+                type_name: "GutterType".to_string(),
+                value: s.to_string(),
+                valid_values: "LeftOnly, LeftRight, TopOnly, TopBottom".to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<u8> for GutterType {
+    type Error = FoundationError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::LeftOnly),
+            1 => Ok(Self::LeftRight),
+            2 => Ok(Self::TopOnly),
+            3 => Ok(Self::TopBottom),
+            _ => Err(FoundationError::ParseError {
+                type_name: "GutterType".to_string(),
+                value: value.to_string(),
+                valid_values: "0 (LeftOnly), 1 (LeftRight), 2 (TopOnly), 3 (TopBottom)".to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for GutterType {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("GutterType")
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ShowMode
+// ---------------------------------------------------------------------------
+
+/// Visibility mode for page borders and fills.
+///
+/// Controls on which pages the border or fill is displayed.
+/// Used in `<hp:visibility border="..." fill="...">`.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_foundation::ShowMode;
+///
+/// assert_eq!(ShowMode::default(), ShowMode::ShowAll);
+/// assert_eq!(ShowMode::ShowAll.to_string(), "ShowAll");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+#[repr(u8)]
+pub enum ShowMode {
+    /// Show on all pages (default).
+    #[default]
+    ShowAll = 0,
+    /// Hide on all pages.
+    HideAll = 1,
+    /// Show on odd pages only.
+    ShowOdd = 2,
+    /// Show on even pages only.
+    ShowEven = 3,
+}
+
+impl fmt::Display for ShowMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ShowAll => f.write_str("ShowAll"),
+            Self::HideAll => f.write_str("HideAll"),
+            Self::ShowOdd => f.write_str("ShowOdd"),
+            Self::ShowEven => f.write_str("ShowEven"),
+        }
+    }
+}
+
+impl std::str::FromStr for ShowMode {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "ShowAll" | "SHOW_ALL" | "show_all" => Ok(Self::ShowAll),
+            "HideAll" | "HIDE_ALL" | "hide_all" => Ok(Self::HideAll),
+            "ShowOdd" | "SHOW_ODD" | "show_odd" => Ok(Self::ShowOdd),
+            "ShowEven" | "SHOW_EVEN" | "show_even" => Ok(Self::ShowEven),
+            _ => Err(FoundationError::ParseError {
+                type_name: "ShowMode".to_string(),
+                value: s.to_string(),
+                valid_values: "ShowAll, HideAll, ShowOdd, ShowEven".to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<u8> for ShowMode {
+    type Error = FoundationError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::ShowAll),
+            1 => Ok(Self::HideAll),
+            2 => Ok(Self::ShowOdd),
+            3 => Ok(Self::ShowEven),
+            _ => Err(FoundationError::ParseError {
+                type_name: "ShowMode".to_string(),
+                value: value.to_string(),
+                valid_values: "0 (ShowAll), 1 (HideAll), 2 (ShowOdd), 3 (ShowEven)".to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for ShowMode {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("ShowMode")
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RestartType
+// ---------------------------------------------------------------------------
+
+/// Line number restart type.
+///
+/// Controls when line numbering restarts to 1.
+/// Used in `<hp:lineNumberShape restartType="...">`.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_foundation::RestartType;
+///
+/// assert_eq!(RestartType::default(), RestartType::Continuous);
+/// assert_eq!(RestartType::Continuous.to_string(), "Continuous");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+#[repr(u8)]
+pub enum RestartType {
+    /// Continuous numbering throughout the document (default).
+    #[default]
+    Continuous = 0,
+    /// Restart numbering at each section.
+    Section = 1,
+    /// Restart numbering at each page.
+    Page = 2,
+}
+
+impl fmt::Display for RestartType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Continuous => f.write_str("Continuous"),
+            Self::Section => f.write_str("Section"),
+            Self::Page => f.write_str("Page"),
+        }
+    }
+}
+
+impl std::str::FromStr for RestartType {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Continuous" | "continuous" | "0" => Ok(Self::Continuous),
+            "Section" | "section" | "1" => Ok(Self::Section),
+            "Page" | "page" | "2" => Ok(Self::Page),
+            _ => Err(FoundationError::ParseError {
+                type_name: "RestartType".to_string(),
+                value: s.to_string(),
+                valid_values: "Continuous, Section, Page".to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<u8> for RestartType {
+    type Error = FoundationError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Continuous),
+            1 => Ok(Self::Section),
+            2 => Ok(Self::Page),
+            _ => Err(FoundationError::ParseError {
+                type_name: "RestartType".to_string(),
+                value: value.to_string(),
+                valid_values: "0 (Continuous), 1 (Section), 2 (Page)".to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for RestartType {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("RestartType")
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TextBorderType
+// ---------------------------------------------------------------------------
+
+/// Reference frame for page border offset measurement.
+///
+/// Controls whether page border offsets are measured from the paper edge
+/// or from the content area.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_foundation::TextBorderType;
+///
+/// assert_eq!(TextBorderType::default(), TextBorderType::Paper);
+/// assert_eq!(TextBorderType::Paper.to_string(), "Paper");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+#[repr(u8)]
+pub enum TextBorderType {
+    /// Offsets measured from paper edge (default).
+    #[default]
+    Paper = 0,
+    /// Offsets measured from content area.
+    Content = 1,
+}
+
+impl fmt::Display for TextBorderType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Paper => f.write_str("Paper"),
+            Self::Content => f.write_str("Content"),
+        }
+    }
+}
+
+impl std::str::FromStr for TextBorderType {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Paper" | "PAPER" | "paper" => Ok(Self::Paper),
+            "Content" | "CONTENT" | "content" => Ok(Self::Content),
+            _ => Err(FoundationError::ParseError {
+                type_name: "TextBorderType".to_string(),
+                value: s.to_string(),
+                valid_values: "Paper, Content".to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<u8> for TextBorderType {
+    type Error = FoundationError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Paper),
+            1 => Ok(Self::Content),
+            _ => Err(FoundationError::ParseError {
+                type_name: "TextBorderType".to_string(),
+                value: value.to_string(),
+                valid_values: "0 (Paper), 1 (Content)".to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for TextBorderType {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("TextBorderType")
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Flip
+// ---------------------------------------------------------------------------
+
+/// Flip/mirror state for drawing shapes.
+///
+/// Controls horizontal and/or vertical mirroring of a shape.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_foundation::Flip;
+///
+/// assert_eq!(Flip::default(), Flip::None);
+/// assert_eq!(Flip::Horizontal.to_string(), "Horizontal");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+#[repr(u8)]
+pub enum Flip {
+    /// No flip (default).
+    #[default]
+    None = 0,
+    /// Mirrored horizontally.
+    Horizontal = 1,
+    /// Mirrored vertically.
+    Vertical = 2,
+    /// Mirrored both horizontally and vertically.
+    Both = 3,
+}
+
+impl fmt::Display for Flip {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => f.write_str("None"),
+            Self::Horizontal => f.write_str("Horizontal"),
+            Self::Vertical => f.write_str("Vertical"),
+            Self::Both => f.write_str("Both"),
+        }
+    }
+}
+
+impl std::str::FromStr for Flip {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "None" | "NONE" | "none" => Ok(Self::None),
+            "Horizontal" | "HORIZONTAL" | "horizontal" => Ok(Self::Horizontal),
+            "Vertical" | "VERTICAL" | "vertical" => Ok(Self::Vertical),
+            "Both" | "BOTH" | "both" => Ok(Self::Both),
+            _ => Err(FoundationError::ParseError {
+                type_name: "Flip".to_string(),
+                value: s.to_string(),
+                valid_values: "None, Horizontal, Vertical, Both".to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<u8> for Flip {
+    type Error = FoundationError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::None),
+            1 => Ok(Self::Horizontal),
+            2 => Ok(Self::Vertical),
+            3 => Ok(Self::Both),
+            _ => Err(FoundationError::ParseError {
+                type_name: "Flip".to_string(),
+                value: value.to_string(),
+                valid_values: "0 (None), 1 (Horizontal), 2 (Vertical), 3 (Both)".to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for Flip {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("Flip")
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ArcType
+// ---------------------------------------------------------------------------
+
+/// Arc drawing type for ellipse-based arc shapes.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_foundation::ArcType;
+///
+/// assert_eq!(ArcType::default(), ArcType::Normal);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+#[repr(u8)]
+pub enum ArcType {
+    /// Open arc (just the curved edge).
+    #[default]
+    Normal = 0,
+    /// Pie/sector (arc + two radii closing to center).
+    Pie = 1,
+    /// Chord (arc + straight line closing endpoints).
+    Chord = 2,
+}
+
+impl fmt::Display for ArcType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Normal => f.write_str("NORMAL"),
+            Self::Pie => f.write_str("PIE"),
+            Self::Chord => f.write_str("CHORD"),
+        }
+    }
+}
+
+impl std::str::FromStr for ArcType {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "NORMAL" | "Normal" | "normal" => Ok(Self::Normal),
+            "PIE" | "Pie" | "pie" => Ok(Self::Pie),
+            "CHORD" | "Chord" | "chord" => Ok(Self::Chord),
+            _ => Err(FoundationError::ParseError {
+                type_name: "ArcType".to_string(),
+                value: s.to_string(),
+                valid_values: "NORMAL, PIE, CHORD".to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<u8> for ArcType {
+    type Error = FoundationError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Normal),
+            1 => Ok(Self::Pie),
+            2 => Ok(Self::Chord),
+            _ => Err(FoundationError::ParseError {
+                type_name: "ArcType".to_string(),
+                value: value.to_string(),
+                valid_values: "0 (Normal), 1 (Pie), 2 (Chord)".to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for ArcType {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("ArcType")
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ArrowType
+// ---------------------------------------------------------------------------
+
+/// Arrowhead shape for line endpoints.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_foundation::ArrowType;
+///
+/// assert_eq!(ArrowType::default(), ArrowType::None);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+#[repr(u8)]
+pub enum ArrowType {
+    /// No arrowhead (default).
+    #[default]
+    None = 0,
+    /// Standard filled arrowhead.
+    Normal = 1,
+    /// Arrow-shaped arrowhead.
+    Arrow = 2,
+    /// Concave arrowhead.
+    Concave = 3,
+    /// Diamond arrowhead.
+    Diamond = 4,
+    /// Oval/circle arrowhead.
+    Oval = 5,
+    /// Open (unfilled) arrowhead.
+    Open = 6,
+}
+
+impl fmt::Display for ArrowType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // KS X 6101 ArrowType values.
+        // Diamond/Oval/Open default to FILLED_ variants here;
+        // the encoder resolves FILLED_ vs EMPTY_ based on ArrowStyle.filled.
+        match self {
+            Self::None => f.write_str("NORMAL"),
+            Self::Normal => f.write_str("ARROW"),
+            Self::Arrow => f.write_str("SPEAR"),
+            Self::Concave => f.write_str("CONCAVE_ARROW"),
+            Self::Diamond => f.write_str("FILLED_DIAMOND"),
+            Self::Oval => f.write_str("FILLED_CIRCLE"),
+            Self::Open => f.write_str("EMPTY_BOX"),
+        }
+    }
+}
+
+impl std::str::FromStr for ArrowType {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // KS X 6101 ArrowType values (primary) + legacy aliases for backward compat.
+        match s {
+            "NORMAL" => Ok(Self::None),
+            "ARROW" => Ok(Self::Normal),
+            "SPEAR" => Ok(Self::Arrow),
+            "CONCAVE_ARROW" => Ok(Self::Concave),
+            "FILLED_DIAMOND" | "EMPTY_DIAMOND" => Ok(Self::Diamond),
+            "FILLED_CIRCLE" | "EMPTY_CIRCLE" => Ok(Self::Oval),
+            "FILLED_BOX" | "EMPTY_BOX" => Ok(Self::Open),
+            _ => Err(FoundationError::ParseError {
+                type_name: "ArrowType".to_string(),
+                value: s.to_string(),
+                valid_values: "NORMAL, ARROW, SPEAR, CONCAVE_ARROW, FILLED_DIAMOND, EMPTY_DIAMOND, FILLED_CIRCLE, EMPTY_CIRCLE, FILLED_BOX, EMPTY_BOX"
+                    .to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<u8> for ArrowType {
+    type Error = FoundationError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::None),
+            1 => Ok(Self::Normal),
+            2 => Ok(Self::Arrow),
+            3 => Ok(Self::Concave),
+            4 => Ok(Self::Diamond),
+            5 => Ok(Self::Oval),
+            6 => Ok(Self::Open),
+            _ => Err(FoundationError::ParseError {
+                type_name: "ArrowType".to_string(),
+                value: value.to_string(),
+                valid_values:
+                    "0 (None), 1 (Normal), 2 (Arrow), 3 (Concave), 4 (Diamond), 5 (Oval), 6 (Open)"
+                        .to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for ArrowType {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("ArrowType")
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ArrowSize
+// ---------------------------------------------------------------------------
+
+/// Arrowhead size for line endpoints.
+///
+/// Encoded as `{HEAD}_{TAIL}` string in HWPX (e.g. `"MEDIUM_MEDIUM"`).
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_foundation::ArrowSize;
+///
+/// assert_eq!(ArrowSize::default(), ArrowSize::Medium);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+#[repr(u8)]
+pub enum ArrowSize {
+    /// Small arrowhead.
+    Small = 0,
+    /// Medium arrowhead (default).
+    #[default]
+    Medium = 1,
+    /// Large arrowhead.
+    Large = 2,
+}
+
+impl fmt::Display for ArrowSize {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Small => f.write_str("SMALL_SMALL"),
+            Self::Medium => f.write_str("MEDIUM_MEDIUM"),
+            Self::Large => f.write_str("LARGE_LARGE"),
+        }
+    }
+}
+
+impl std::str::FromStr for ArrowSize {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "SMALL_SMALL" | "Small" | "small" => Ok(Self::Small),
+            "MEDIUM_MEDIUM" | "Medium" | "medium" => Ok(Self::Medium),
+            "LARGE_LARGE" | "Large" | "large" => Ok(Self::Large),
+            _ => Err(FoundationError::ParseError {
+                type_name: "ArrowSize".to_string(),
+                value: s.to_string(),
+                valid_values: "SMALL_SMALL, MEDIUM_MEDIUM, LARGE_LARGE".to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<u8> for ArrowSize {
+    type Error = FoundationError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Small),
+            1 => Ok(Self::Medium),
+            2 => Ok(Self::Large),
+            _ => Err(FoundationError::ParseError {
+                type_name: "ArrowSize".to_string(),
+                value: value.to_string(),
+                valid_values: "0 (Small), 1 (Medium), 2 (Large)".to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for ArrowSize {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("ArrowSize")
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// GradientType
+// ---------------------------------------------------------------------------
+
+/// Gradient fill direction type.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_foundation::GradientType;
+///
+/// assert_eq!(GradientType::default(), GradientType::Linear);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+#[repr(u8)]
+pub enum GradientType {
+    /// Linear gradient (default).
+    #[default]
+    Linear = 0,
+    /// Radial gradient (from center outward).
+    Radial = 1,
+    /// Square/rectangular gradient.
+    Square = 2,
+    /// Conical gradient (angular sweep).
+    Conical = 3,
+}
+
+impl fmt::Display for GradientType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Linear => f.write_str("LINEAR"),
+            Self::Radial => f.write_str("RADIAL"),
+            Self::Square => f.write_str("SQUARE"),
+            Self::Conical => f.write_str("CONICAL"),
+        }
+    }
+}
+
+impl std::str::FromStr for GradientType {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "LINEAR" | "Linear" | "linear" => Ok(Self::Linear),
+            "RADIAL" | "Radial" | "radial" => Ok(Self::Radial),
+            "SQUARE" | "Square" | "square" => Ok(Self::Square),
+            "CONICAL" | "Conical" | "conical" => Ok(Self::Conical),
+            _ => Err(FoundationError::ParseError {
+                type_name: "GradientType".to_string(),
+                value: s.to_string(),
+                valid_values: "LINEAR, RADIAL, SQUARE, CONICAL".to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<u8> for GradientType {
+    type Error = FoundationError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Linear),
+            1 => Ok(Self::Radial),
+            2 => Ok(Self::Square),
+            3 => Ok(Self::Conical),
+            _ => Err(FoundationError::ParseError {
+                type_name: "GradientType".to_string(),
+                value: value.to_string(),
+                valid_values: "0 (Linear), 1 (Radial), 2 (Square), 3 (Conical)".to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for GradientType {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("GradientType")
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// PatternType
+// ---------------------------------------------------------------------------
+
+/// Hatch/pattern fill type for shapes.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_foundation::PatternType;
+///
+/// assert_eq!(PatternType::default(), PatternType::Horizontal);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+#[repr(u8)]
+pub enum PatternType {
+    /// Horizontal lines (default).
+    #[default]
+    Horizontal = 0,
+    /// Vertical lines.
+    Vertical = 1,
+    /// Backslash diagonal lines.
+    BackSlash = 2,
+    /// Forward slash diagonal lines.
+    Slash = 3,
+    /// Cross-hatch (horizontal + vertical).
+    Cross = 4,
+    /// Cross-diagonal hatch.
+    CrossDiagonal = 5,
+}
+
+impl fmt::Display for PatternType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Horizontal => f.write_str("HORIZONTAL"),
+            Self::Vertical => f.write_str("VERTICAL"),
+            Self::BackSlash => f.write_str("BACK_SLASH"),
+            Self::Slash => f.write_str("SLASH"),
+            Self::Cross => f.write_str("CROSS"),
+            Self::CrossDiagonal => f.write_str("CROSS_DIAGONAL"),
+        }
+    }
+}
+
+impl std::str::FromStr for PatternType {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "HORIZONTAL" | "Horizontal" | "horizontal" => Ok(Self::Horizontal),
+            "VERTICAL" | "Vertical" | "vertical" => Ok(Self::Vertical),
+            "BACK_SLASH" | "BackSlash" | "backslash" => Ok(Self::BackSlash),
+            "SLASH" | "Slash" | "slash" => Ok(Self::Slash),
+            "CROSS" | "Cross" | "cross" => Ok(Self::Cross),
+            "CROSS_DIAGONAL" | "CrossDiagonal" | "crossdiagonal" => Ok(Self::CrossDiagonal),
+            _ => Err(FoundationError::ParseError {
+                type_name: "PatternType".to_string(),
+                value: s.to_string(),
+                valid_values: "HORIZONTAL, VERTICAL, BACK_SLASH, SLASH, CROSS, CROSS_DIAGONAL"
+                    .to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<u8> for PatternType {
+    type Error = FoundationError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Horizontal),
+            1 => Ok(Self::Vertical),
+            2 => Ok(Self::BackSlash),
+            3 => Ok(Self::Slash),
+            4 => Ok(Self::Cross),
+            5 => Ok(Self::CrossDiagonal),
+            _ => Err(FoundationError::ParseError {
+                type_name: "PatternType".to_string(),
+                value: value.to_string(),
+                valid_values:
+                    "0 (Horizontal), 1 (Vertical), 2 (BackSlash), 3 (Slash), 4 (Cross), 5 (CrossDiagonal)"
+                        .to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for PatternType {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("PatternType")
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ImageFillMode
+// ---------------------------------------------------------------------------
+
+/// How an image is fitted within a shape fill area.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_foundation::ImageFillMode;
+///
+/// assert_eq!(ImageFillMode::default(), ImageFillMode::Tile);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+#[repr(u8)]
+pub enum ImageFillMode {
+    /// Tile the image to fill the area (default).
+    #[default]
+    Tile = 0,
+    /// Center the image without scaling.
+    Center = 1,
+    /// Stretch the image to fit exactly.
+    Stretch = 2,
+    /// Scale proportionally to fit all within the area.
+    FitAll = 3,
+}
+
+impl fmt::Display for ImageFillMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Tile => f.write_str("TILE"),
+            Self::Center => f.write_str("CENTER"),
+            Self::Stretch => f.write_str("STRETCH"),
+            Self::FitAll => f.write_str("FIT_ALL"),
+        }
+    }
+}
+
+impl std::str::FromStr for ImageFillMode {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "TILE" | "Tile" | "tile" => Ok(Self::Tile),
+            "CENTER" | "Center" | "center" => Ok(Self::Center),
+            "STRETCH" | "Stretch" | "stretch" => Ok(Self::Stretch),
+            "FIT_ALL" | "FitAll" | "fit_all" => Ok(Self::FitAll),
+            _ => Err(FoundationError::ParseError {
+                type_name: "ImageFillMode".to_string(),
+                value: s.to_string(),
+                valid_values: "TILE, CENTER, STRETCH, FIT_ALL".to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<u8> for ImageFillMode {
+    type Error = FoundationError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Tile),
+            1 => Ok(Self::Center),
+            2 => Ok(Self::Stretch),
+            3 => Ok(Self::FitAll),
+            _ => Err(FoundationError::ParseError {
+                type_name: "ImageFillMode".to_string(),
+                value: value.to_string(),
+                valid_values: "0 (Tile), 1 (Center), 2 (Stretch), 3 (FitAll)".to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for ImageFillMode {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("ImageFillMode")
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// CurveSegmentType
+// ---------------------------------------------------------------------------
+
+/// Segment type within a curve path.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_foundation::CurveSegmentType;
+///
+/// assert_eq!(CurveSegmentType::default(), CurveSegmentType::Line);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+#[repr(u8)]
+pub enum CurveSegmentType {
+    /// Straight line segment (default).
+    #[default]
+    Line = 0,
+    /// Cubic bezier curve segment.
+    Curve = 1,
+}
+
+impl fmt::Display for CurveSegmentType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Line => f.write_str("LINE"),
+            Self::Curve => f.write_str("CURVE"),
+        }
+    }
+}
+
+impl std::str::FromStr for CurveSegmentType {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "LINE" | "Line" | "line" => Ok(Self::Line),
+            "CURVE" | "Curve" | "curve" => Ok(Self::Curve),
+            _ => Err(FoundationError::ParseError {
+                type_name: "CurveSegmentType".to_string(),
+                value: s.to_string(),
+                valid_values: "LINE, CURVE".to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<u8> for CurveSegmentType {
+    type Error = FoundationError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Line),
+            1 => Ok(Self::Curve),
+            _ => Err(FoundationError::ParseError {
+                type_name: "CurveSegmentType".to_string(),
+                value: value.to_string(),
+                valid_values: "0 (Line), 1 (Curve)".to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for CurveSegmentType {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("CurveSegmentType")
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// BookmarkType
+// ---------------------------------------------------------------------------
+
+/// Type of bookmark in an HWPX document.
+///
+/// Bookmarks can mark a single point or span a range of content
+/// (start/end pair using `fieldBegin`/`fieldEnd`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+#[repr(u8)]
+pub enum BookmarkType {
+    /// A point bookmark at a single location (direct serde in `<hp:ctrl>`).
+    #[default]
+    Point = 0,
+    /// Start of a span bookmark (`fieldBegin type="BOOKMARK"`).
+    SpanStart = 1,
+    /// End of a span bookmark (`fieldEnd beginIDRef`).
+    SpanEnd = 2,
+}
+
+impl fmt::Display for BookmarkType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Point => f.write_str("Point"),
+            Self::SpanStart => f.write_str("SpanStart"),
+            Self::SpanEnd => f.write_str("SpanEnd"),
+        }
+    }
+}
+
+impl std::str::FromStr for BookmarkType {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Point" | "point" => Ok(Self::Point),
+            "SpanStart" | "span_start" => Ok(Self::SpanStart),
+            "SpanEnd" | "span_end" => Ok(Self::SpanEnd),
+            _ => Err(FoundationError::ParseError {
+                type_name: "BookmarkType".to_string(),
+                value: s.to_string(),
+                valid_values: "Point, SpanStart, SpanEnd".to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<u8> for BookmarkType {
+    type Error = FoundationError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Point),
+            1 => Ok(Self::SpanStart),
+            2 => Ok(Self::SpanEnd),
+            _ => Err(FoundationError::ParseError {
+                type_name: "BookmarkType".to_string(),
+                value: value.to_string(),
+                valid_values: "0 (Point), 1 (SpanStart), 2 (SpanEnd)".to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for BookmarkType {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("BookmarkType")
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// FieldType
+// ---------------------------------------------------------------------------
+
+/// Type of a press-field (누름틀) in an HWPX document.
+///
+/// Press-fields are interactive form fields that users can click to fill in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+#[repr(u8)]
+pub enum FieldType {
+    /// Click-here placeholder field (default).
+    #[default]
+    ClickHere = 0,
+    /// Automatic date field.
+    Date = 1,
+    /// Automatic time field.
+    Time = 2,
+    /// Page number field.
+    PageNum = 3,
+    /// Document summary field.
+    DocSummary = 4,
+    /// User information field.
+    UserInfo = 5,
+}
+
+impl fmt::Display for FieldType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ClickHere => f.write_str("CLICK_HERE"),
+            Self::Date => f.write_str("DATE"),
+            Self::Time => f.write_str("TIME"),
+            Self::PageNum => f.write_str("PAGE_NUM"),
+            Self::DocSummary => f.write_str("DOC_SUMMARY"),
+            Self::UserInfo => f.write_str("USER_INFO"),
+        }
+    }
+}
+
+impl std::str::FromStr for FieldType {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "CLICK_HERE" | "ClickHere" | "click_here" => Ok(Self::ClickHere),
+            "DATE" | "Date" | "date" => Ok(Self::Date),
+            "TIME" | "Time" | "time" => Ok(Self::Time),
+            "PAGE_NUM" | "PageNum" | "page_num" => Ok(Self::PageNum),
+            "DOC_SUMMARY" | "DocSummary" | "doc_summary" => Ok(Self::DocSummary),
+            "USER_INFO" | "UserInfo" | "user_info" => Ok(Self::UserInfo),
+            _ => Err(FoundationError::ParseError {
+                type_name: "FieldType".to_string(),
+                value: s.to_string(),
+                valid_values: "CLICK_HERE, DATE, TIME, PAGE_NUM, DOC_SUMMARY, USER_INFO"
+                    .to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<u8> for FieldType {
+    type Error = FoundationError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::ClickHere),
+            1 => Ok(Self::Date),
+            2 => Ok(Self::Time),
+            3 => Ok(Self::PageNum),
+            4 => Ok(Self::DocSummary),
+            5 => Ok(Self::UserInfo),
+            _ => Err(FoundationError::ParseError {
+                type_name: "FieldType".to_string(),
+                value: value.to_string(),
+                valid_values: "0..5 (ClickHere..UserInfo)".to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for FieldType {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("FieldType")
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RefType
+// ---------------------------------------------------------------------------
+
+/// Target type of a cross-reference (상호참조).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+#[repr(u8)]
+pub enum RefType {
+    /// Reference to a bookmark target.
+    #[default]
+    Bookmark = 0,
+    /// Reference to a table caption number.
+    Table = 1,
+    /// Reference to a figure/image caption number.
+    Figure = 2,
+    /// Reference to an equation number.
+    Equation = 3,
+}
+
+impl fmt::Display for RefType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Bookmark => f.write_str("TARGET_BOOKMARK"),
+            Self::Table => f.write_str("TARGET_TABLE"),
+            Self::Figure => f.write_str("TARGET_FIGURE"),
+            Self::Equation => f.write_str("TARGET_EQUATION"),
+        }
+    }
+}
+
+impl std::str::FromStr for RefType {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "TARGET_BOOKMARK" | "Bookmark" | "bookmark" => Ok(Self::Bookmark),
+            "TARGET_TABLE" | "Table" | "table" => Ok(Self::Table),
+            "TARGET_FIGURE" | "Figure" | "figure" => Ok(Self::Figure),
+            "TARGET_EQUATION" | "Equation" | "equation" => Ok(Self::Equation),
+            _ => Err(FoundationError::ParseError {
+                type_name: "RefType".to_string(),
+                value: s.to_string(),
+                valid_values: "TARGET_BOOKMARK, TARGET_TABLE, TARGET_FIGURE, TARGET_EQUATION"
+                    .to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<u8> for RefType {
+    type Error = FoundationError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Bookmark),
+            1 => Ok(Self::Table),
+            2 => Ok(Self::Figure),
+            3 => Ok(Self::Equation),
+            _ => Err(FoundationError::ParseError {
+                type_name: "RefType".to_string(),
+                value: value.to_string(),
+                valid_values: "0..3 (Bookmark..Equation)".to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for RefType {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("RefType")
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// RefContentType
+// ---------------------------------------------------------------------------
+
+/// Content display type for a cross-reference (what to show at the reference site).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+#[repr(u8)]
+pub enum RefContentType {
+    /// Show page number where the target appears.
+    #[default]
+    Page = 0,
+    /// Show the target's numbering (e.g. "표 3", "그림 2").
+    Number = 1,
+    /// Show the target's content text.
+    Contents = 2,
+    /// Show relative position ("위" / "아래").
+    UpDownPos = 3,
+}
+
+impl fmt::Display for RefContentType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Page => f.write_str("OBJECT_TYPE_PAGE"),
+            Self::Number => f.write_str("OBJECT_TYPE_NUMBER"),
+            Self::Contents => f.write_str("OBJECT_TYPE_CONTENTS"),
+            Self::UpDownPos => f.write_str("OBJECT_TYPE_UPDOWNPOS"),
+        }
+    }
+}
+
+impl std::str::FromStr for RefContentType {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "OBJECT_TYPE_PAGE" | "Page" | "page" => Ok(Self::Page),
+            "OBJECT_TYPE_NUMBER" | "Number" | "number" => Ok(Self::Number),
+            "OBJECT_TYPE_CONTENTS" | "Contents" | "contents" => Ok(Self::Contents),
+            "OBJECT_TYPE_UPDOWNPOS" | "UpDownPos" | "updownpos" => Ok(Self::UpDownPos),
+            _ => Err(FoundationError::ParseError {
+                type_name: "RefContentType".to_string(),
+                value: s.to_string(),
+                valid_values:
+                    "OBJECT_TYPE_PAGE, OBJECT_TYPE_NUMBER, OBJECT_TYPE_CONTENTS, OBJECT_TYPE_UPDOWNPOS"
+                        .to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<u8> for RefContentType {
+    type Error = FoundationError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Page),
+            1 => Ok(Self::Number),
+            2 => Ok(Self::Contents),
+            3 => Ok(Self::UpDownPos),
+            _ => Err(FoundationError::ParseError {
+                type_name: "RefContentType".to_string(),
+                value: value.to_string(),
+                valid_values: "0..3 (Page..UpDownPos)".to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for RefContentType {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("RefContentType")
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
+/// Drop cap style for floating shape objects (HWPX `dropcapstyle` attribute).
+///
+/// Controls whether a shape (text box, image, table, etc.) is formatted as a
+/// drop capital that occupies multiple lines at the start of a paragraph.
+///
+/// # HWPX Values
+///
+/// | Variant      | HWPX string     |
+/// |--------------|-----------------|
+/// | `None`       | `"None"`        |
+/// | `DoubleLine` | `"DoubleLine"`  |
+/// | `TripleLine` | `"TripleLine"`  |
+/// | `Margin`     | `"Margin"`      |
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum DropCapStyle {
+    /// No drop cap (default).
+    #[default]
+    None = 0,
+    /// Drop cap spanning 2 lines.
+    DoubleLine = 1,
+    /// Drop cap spanning 3 lines.
+    TripleLine = 2,
+    /// Drop cap positioned in the margin.
+    Margin = 3,
+}
+
+impl fmt::Display for DropCapStyle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::None => f.write_str("None"),
+            Self::DoubleLine => f.write_str("DoubleLine"),
+            Self::TripleLine => f.write_str("TripleLine"),
+            Self::Margin => f.write_str("Margin"),
+        }
+    }
+}
+
+impl DropCapStyle {
+    /// Parses an HWPX `dropcapstyle` attribute value (PascalCase).
+    ///
+    /// Unknown values fall back to `None` (default) for forward compatibility.
+    pub fn from_hwpx_str(s: &str) -> Self {
+        match s {
+            "DoubleLine" => Self::DoubleLine,
+            "TripleLine" => Self::TripleLine,
+            "Margin" => Self::Margin,
+            _ => Self::None,
+        }
+    }
+}
+
+impl std::str::FromStr for DropCapStyle {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "None" | "NONE" | "none" => Ok(Self::None),
+            "DoubleLine" | "DOUBLE_LINE" => Ok(Self::DoubleLine),
+            "TripleLine" | "TRIPLE_LINE" => Ok(Self::TripleLine),
+            "Margin" | "MARGIN" => Ok(Self::Margin),
+            _ => Err(FoundationError::ParseError {
+                type_name: "DropCapStyle".to_string(),
+                value: s.to_string(),
+                valid_values: "None, DoubleLine, TripleLine, Margin".to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for DropCapStyle {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("DropCapStyle")
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
+impl serde::Serialize for DropCapStyle {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for DropCapStyle {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(deserializer)?;
+        s.parse().map_err(serde::de::Error::custom)
+    }
+}
+
 // Compile-time size assertions: all enums are 1 byte
+const _: () = assert!(std::mem::size_of::<DropCapStyle>() == 1);
 const _: () = assert!(std::mem::size_of::<Alignment>() == 1);
 const _: () = assert!(std::mem::size_of::<LineSpacingType>() == 1);
 const _: () = assert!(std::mem::size_of::<BreakType>() == 1);
@@ -1838,6 +3295,86 @@ const _: () = assert!(std::mem::size_of::<PageNumberPosition>() == 1);
 const _: () = assert!(std::mem::size_of::<WordBreakType>() == 1);
 const _: () = assert!(std::mem::size_of::<EmphasisType>() == 1);
 const _: () = assert!(std::mem::size_of::<HeadingType>() == 1);
+const _: () = assert!(std::mem::size_of::<GutterType>() == 1);
+const _: () = assert!(std::mem::size_of::<ShowMode>() == 1);
+const _: () = assert!(std::mem::size_of::<RestartType>() == 1);
+const _: () = assert!(std::mem::size_of::<TextBorderType>() == 1);
+const _: () = assert!(std::mem::size_of::<Flip>() == 1);
+const _: () = assert!(std::mem::size_of::<ArcType>() == 1);
+const _: () = assert!(std::mem::size_of::<ArrowType>() == 1);
+const _: () = assert!(std::mem::size_of::<ArrowSize>() == 1);
+const _: () = assert!(std::mem::size_of::<GradientType>() == 1);
+const _: () = assert!(std::mem::size_of::<PatternType>() == 1);
+const _: () = assert!(std::mem::size_of::<ImageFillMode>() == 1);
+const _: () = assert!(std::mem::size_of::<CurveSegmentType>() == 1);
+const _: () = assert!(std::mem::size_of::<BookmarkType>() == 1);
+const _: () = assert!(std::mem::size_of::<FieldType>() == 1);
+const _: () = assert!(std::mem::size_of::<RefType>() == 1);
+const _: () = assert!(std::mem::size_of::<RefContentType>() == 1);
+
+// ---------------------------------------------------------------------------
+// TextDirection
+// ---------------------------------------------------------------------------
+
+/// Text writing direction for sections and sub-lists.
+///
+/// Controls whether text flows horizontally (가로쓰기) or vertically (세로쓰기).
+/// Used in `<hp:secPr textDirection="...">` and `<hp:subList textDirection="...">`.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_foundation::TextDirection;
+///
+/// assert_eq!(TextDirection::default(), TextDirection::Horizontal);
+/// assert_eq!(TextDirection::Horizontal.to_string(), "HORIZONTAL");
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum TextDirection {
+    /// Horizontal writing (가로쓰기) — default.
+    #[default]
+    Horizontal,
+    /// Vertical writing with Latin chars rotated 90° (세로쓰기 영문 눕힘).
+    Vertical,
+    /// Vertical writing with Latin chars upright (세로쓰기 영문 세움).
+    VerticalAll,
+}
+
+impl TextDirection {
+    /// Parses a HWPX XML attribute string (e.g. `"VERTICAL"`).
+    ///
+    /// Unknown values fall back to [`TextDirection::Horizontal`].
+    pub fn from_hwpx_str(s: &str) -> Self {
+        match s {
+            "VERTICAL" => Self::Vertical,
+            "VERTICALALL" => Self::VerticalAll,
+            _ => Self::Horizontal,
+        }
+    }
+}
+
+impl fmt::Display for TextDirection {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Horizontal => f.write_str("HORIZONTAL"),
+            Self::Vertical => f.write_str("VERTICAL"),
+            Self::VerticalAll => f.write_str("VERTICALALL"),
+        }
+    }
+}
+
+impl schemars::JsonSchema for TextDirection {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("TextDirection")
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
+const _: () = assert!(std::mem::size_of::<TextDirection>() == 1);
 
 #[cfg(test)]
 mod tests {

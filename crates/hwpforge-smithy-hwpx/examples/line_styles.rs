@@ -111,6 +111,7 @@ fn main() {
                 fill_color: None,
                 line_width: Some(100),
                 line_style: Some(*style_variant),
+                ..Default::default()
             }),
         ));
     }
@@ -139,6 +140,7 @@ fn main() {
                 fill_color: None,
                 line_width: Some(w),
                 line_style: Some(LineStyle::Solid),
+                ..Default::default()
             }),
         ));
     }
@@ -168,6 +170,7 @@ fn main() {
                 fill_color: None,
                 line_width: Some(150),
                 line_style: Some(LineStyle::Solid),
+                ..Default::default()
             }),
         ));
     }
@@ -188,6 +191,7 @@ fn main() {
             fill_color: None,
             line_width: Some(100),
             line_style: Some(LineStyle::Solid),
+            ..Default::default()
         }),
     ));
 
@@ -203,6 +207,7 @@ fn main() {
             fill_color: None,
             line_width: Some(100),
             line_style: Some(LineStyle::Solid),
+            ..Default::default()
         }),
     ));
     paragraphs.push(p(""));
@@ -219,6 +224,7 @@ fn main() {
             fill_color: None,
             line_width: Some(150),
             line_style: Some(LineStyle::Solid),
+            ..Default::default()
         }),
     ));
     paragraphs.push(p(""));
@@ -245,6 +251,7 @@ fn main() {
                 fill_color: None,
                 line_width: Some(width),
                 line_style: Some(style),
+                ..Default::default()
             }),
         ));
     }
@@ -267,6 +274,7 @@ fn main() {
                 fill_color: None,
                 line_width: Some(80),
                 line_style: Some(LineStyle::Solid),
+                ..Default::default()
             }),
         ));
     }
@@ -292,6 +300,7 @@ fn main() {
                     fill_color: None,
                     line_width: Some(200),
                     line_style: Some(LineStyle::Dash),
+                    ..Default::default()
                 }),
             },
             CharShapeIndex::new(0),
@@ -318,6 +327,7 @@ fn main() {
                     fill_color: None,
                     line_width: Some(150),
                     line_style: Some(LineStyle::Dot),
+                    ..Default::default()
                 }),
             },
             CharShapeIndex::new(0),
@@ -339,6 +349,7 @@ fn main() {
             fill_color: None,
             line_width: Some(200),
             line_style: Some(LineStyle::Solid),
+            ..Default::default()
         }),
     ));
     // 아래쪽 선: 가는 빨강
@@ -352,6 +363,7 @@ fn main() {
             fill_color: None,
             line_width: Some(50),
             line_style: Some(LineStyle::Solid),
+            ..Default::default()
         }),
     ));
 

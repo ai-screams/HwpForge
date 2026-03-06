@@ -34,7 +34,11 @@ use crate::style_store::{
 /// # Errors
 ///
 /// Returns [`HwpxError::XmlSerialize`] if quick-xml serialization fails.
-pub(crate) fn encode_header(store: &HwpxStyleStore, sec_cnt: u32) -> HwpxResult<String> {
+pub(crate) fn encode_header(
+    store: &HwpxStyleStore,
+    sec_cnt: u32,
+    begin_num: Option<&hwpforge_core::section::BeginNum>,
+) -> HwpxResult<String> {
     let head = build_head(store, sec_cnt);
     let head_xml = quick_xml::se::to_string(&head)
         .map_err(|e| HwpxError::XmlSerialize { detail: e.to_string() })?;
@@ -43,7 +47,7 @@ pub(crate) fn encode_header(store: &HwpxStyleStore, sec_cnt: u32) -> HwpxResult<
     // We need to extract the inner content and wrap it in our xmlns-decorated
     // root element instead.
     let inner = extract_inner_content(&head_xml);
-    Ok(wrap_header_xml(inner, sec_cnt, store))
+    Ok(wrap_header_xml(inner, sec_cnt, store, begin_num))
 }
 
 // ── XML wrapper ─────────────────────────────────────────────────
@@ -73,21 +77,31 @@ const POST_REFLIST_XML: &str = concat!(
     r#"<hh:trackchageConfig flags="56"/>"#,
 );
 
-fn wrap_header_xml(inner_xml: &str, sec_cnt: u32, store: &HwpxStyleStore) -> String {
+fn wrap_header_xml(
+    inner_xml: &str,
+    sec_cnt: u32,
+    store: &HwpxStyleStore,
+    begin_num: Option<&hwpforge_core::section::BeginNum>,
+) -> String {
     let enriched = enrich_ref_list(inner_xml, store);
+    let begin_num_xml = build_begin_num_xml(begin_num);
     format!(
-        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><hh:head{xmlns} version="1.4" secCnt="{sec_cnt}">{begin_num}{enriched}{post_reflist}</hh:head>"#,
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><hh:head{xmlns} version="1.4" secCnt="{sec_cnt}">{begin_num_xml}{enriched}{post_reflist}</hh:head>"#,
         xmlns = crate::encoder::package::XMLNS_DECLS,
-        begin_num = BEGIN_NUM_XML,
         post_reflist = POST_REFLIST_XML,
     )
 }
 
 // ── 한글 compatibility defaults ─────────────────────────────────
 
-/// `<hh:beginNum>` — required by 한글 for page/footnote numbering.
-const BEGIN_NUM_XML: &str =
-    r#"<hh:beginNum page="1" footnote="1" endnote="1" pic="1" tbl="1" equation="1"/>"#;
+/// Builds `<hh:beginNum>` XML from Core `BeginNum`, defaulting to all 1s.
+fn build_begin_num_xml(begin_num: Option<&hwpforge_core::section::BeginNum>) -> String {
+    let bn = begin_num.copied().unwrap_or_default();
+    format!(
+        r#"<hh:beginNum page="{}" footnote="{}" endnote="{}" pic="{}" tbl="{}" equation="{}"/>"#,
+        bn.page, bn.footnote, bn.endnote, bn.pic, bn.tbl, bn.equation,
+    )
+}
 
 /// Generates the `<hh:borderFills>` XML dynamically from the store's border fills.
 ///
@@ -464,7 +478,7 @@ fn build_char_pr(id: u32, cs: &HwpxCharShape) -> HxCharPr {
         use_font_space: u32::from(cs.use_font_space),
         use_kerning: u32::from(cs.use_kerning),
         sym_mark: emphasis_type_to_hwpx(cs.emphasis).into(),
-        border_fill_id_ref: 2,
+        border_fill_id_ref: cs.border_fill_id.unwrap_or(2),
 
         font_ref: Some(HxFontRef {
             hangul: fr.hangul.get() as u32,
@@ -818,7 +832,7 @@ mod tests {
     #[test]
     fn test_encode_minimal_store() {
         let store = minimal_store();
-        let xml = encode_header(&store, 1).unwrap();
+        let xml = encode_header(&store, 1, None).unwrap();
 
         assert!(xml.starts_with(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>"#));
         assert!(xml.contains("<hh:head"));
@@ -841,7 +855,7 @@ mod tests {
     #[test]
     fn test_encode_header_roundtrip() {
         let store = minimal_store();
-        let xml = encode_header(&store, 1).unwrap();
+        let xml = encode_header(&store, 1, None).unwrap();
 
         // The decoder strips namespace prefixes, so we need to feed it
         // XML without them. However, the decoder's parse_header uses
@@ -876,7 +890,7 @@ mod tests {
     fn test_bold_italic_presence() {
         let mut store = HwpxStyleStore::new();
         store.push_char_shape(HwpxCharShape { bold: true, italic: false, ..Default::default() });
-        let xml = encode_header(&store, 1).unwrap();
+        let xml = encode_header(&store, 1, None).unwrap();
 
         assert!(xml.contains("<hh:bold"), "bold element must be present");
         assert!(!xml.contains("<hh:italic"), "italic element must be absent");
@@ -988,7 +1002,7 @@ mod tests {
     #[test]
     fn test_empty_store() {
         let store = HwpxStyleStore::new();
-        let xml = encode_header(&store, 0).unwrap();
+        let xml = encode_header(&store, 0, None).unwrap();
 
         assert!(xml.contains("<hh:head"));
         assert!(xml.contains(r#"secCnt="0""#));
@@ -1047,7 +1061,7 @@ mod tests {
             ..Default::default()
         });
 
-        let xml = encode_header(&store, 1).unwrap();
+        let xml = encode_header(&store, 1, None).unwrap();
         let decoded = crate::decoder::header::parse_header(&xml).unwrap();
 
         // Fonts: encoder expands to 7 language groups
@@ -1085,7 +1099,7 @@ mod tests {
     #[test]
     fn test_sec_cnt_in_output() {
         let store = HwpxStyleStore::new();
-        let xml = encode_header(&store, 42).unwrap();
+        let xml = encode_header(&store, 42, None).unwrap();
         assert!(xml.contains(r#"secCnt="42""#));
     }
 
@@ -1098,7 +1112,7 @@ mod tests {
         store.push_char_shape(HwpxCharShape { italic: true, ..Default::default() });
         store.push_char_shape(HwpxCharShape::default());
 
-        let xml = encode_header(&store, 1).unwrap();
+        let xml = encode_header(&store, 1, None).unwrap();
         let decoded = crate::decoder::header::parse_header(&xml).unwrap();
 
         assert_eq!(decoded.char_shape_count(), 3);
@@ -1134,7 +1148,7 @@ mod tests {
             lang_id: 1042,
         });
 
-        let xml = encode_header(&store, 1).unwrap();
+        let xml = encode_header(&store, 1, None).unwrap();
         assert!(xml.contains("바탕글"));
         assert!(xml.contains("Normal"));
         assert!(xml.contains("본문"));
@@ -1158,7 +1172,7 @@ mod tests {
     #[test]
     fn test_empty_store_gets_default_style() {
         let store = HwpxStyleStore::new();
-        let xml = encode_header(&store, 1).unwrap();
+        let xml = encode_header(&store, 1, None).unwrap();
         // 한글 requires at least the "바탕글" default style
         assert!(xml.contains("<hh:styles"), "default 바탕글 style should be injected");
         assert!(xml.contains("바탕글"), "바탕글 style name must be present");
@@ -1170,7 +1184,7 @@ mod tests {
     #[test]
     fn test_encoder_improvements_all_present() {
         let store = minimal_store();
-        let xml = encode_header(&store, 1).unwrap();
+        let xml = encode_header(&store, 1, None).unwrap();
 
         // Gap 1: charPr ratio/spacing/relSz/offset
         assert!(xml.contains("<hh:ratio hangul=\"100\""), "charPr must have ratio");
@@ -1263,7 +1277,7 @@ mod tests {
     #[test]
     fn encoded_header_contains_dynamic_border_fills() {
         let store = minimal_store();
-        let xml = encode_header(&store, 1).unwrap();
+        let xml = encode_header(&store, 1, None).unwrap();
         // Dynamic generation produces the same structure as the old constant
         assert!(xml.contains(r##"<hh:borderFills itemCnt="3">"##));
         assert!(xml.contains(r##"borderFillIDRef="2""##)); // charPr references fill id=2

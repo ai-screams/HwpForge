@@ -306,6 +306,7 @@ fn convert_char_pr(cp: &HxCharPr) -> HwpxCharShape {
         char_offset: cp.offset.as_ref().map_or(0, |o| o.hangul),
         use_kerning: cp.use_kerning != 0,
         use_font_space: cp.use_font_space != 0,
+        border_fill_id: if cp.border_fill_id_ref == 2 { None } else { Some(cp.border_fill_id_ref) },
     }
 }
 
