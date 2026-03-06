@@ -1,0 +1,38 @@
+# Auto-detect text files and normalize line endings
+* text=auto eol=lf
+
+# Rust sources — enable language-aware diffs
+*.rs text diff=rust
+
+# Config and data files
+*.toml text
+*.yml text
+*.yaml text
+*.md text
+*.json text
+*.jsonc text
+*.xml text
+*.html text
+*.css text
+*.js text
+*.sh text eol=lf
+
+# Binary document formats — never diff or merge
+*.hwpx binary
+*.hwp binary
+
+# Binary media
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.svg text
+
+# Archives
+*.zip binary
+*.gz binary
+*.tar binary
+
+# Lockfiles — track but don't show noisy diffs
+Cargo.lock text -diff
