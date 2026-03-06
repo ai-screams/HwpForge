@@ -94,9 +94,11 @@ pub(crate) fn build_shape_common(
             fill_brush.win_brush.face_color = c.to_hex_rgb();
         }
 
-        // Rotation: Core uses degrees (f32), HWPX uses degrees * 100 (i32)
+        // Rotation: Core uses degrees (f32), HWPX uses degrees * 100 (i32).
+        // rem_euclid normalises NaN/INF/negatives before the cast.
         if let Some(rot) = s.rotation {
-            angle = (rot * 100.0) as i32;
+            let clamped = rot.rem_euclid(360.0);
+            angle = (clamped * 100.0) as i32;
         }
 
         // Flip
@@ -191,7 +193,7 @@ pub(crate) fn encode_textbox_to_rect(
 
     // Default text margin: 283 HWPUNIT (~1mm)
     const MARGIN: i32 = 283;
-    let last_width = width_hwp as u32;
+    let last_width = width_hwp.max(0) as u32;
 
     let sub_list = encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries)?;
     let sc = build_shape_common(width_hwp, height_hwp, style.as_ref());

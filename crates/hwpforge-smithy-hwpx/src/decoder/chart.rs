@@ -77,6 +77,11 @@ pub(crate) fn parse_chart_xml(xml: &str) -> HwpxResult<ParsedChart> {
     let mut stock_series_count: usize = 0; // series count inside the stockChart block
     let mut in_stock_chart = false;
 
+    // Maximum number of series in a chart.
+    const MAX_CHART_SERIES: usize = 256;
+    // Maximum number of data points per series (or categories).
+    const MAX_CHART_DATA_POINTS: usize = 10_000;
+
     // Accumulated series data
     let mut all_categories: Vec<String> = Vec::new();
     let mut cat_series_list: Vec<ChartSeries> = Vec::new();
@@ -193,17 +198,49 @@ pub(crate) fn parse_chart_xml(xml: &str) -> HwpxResult<ParsedChart> {
                 } else if in_series && in_tx {
                     series_name = text;
                 } else if in_series && in_cat {
+                    if cat_values.len() >= MAX_CHART_DATA_POINTS {
+                        return Err(HwpxError::InvalidStructure {
+                            detail: format!(
+                                "chart category count exceeds limit of {}",
+                                MAX_CHART_DATA_POINTS,
+                            ),
+                        });
+                    }
                     cat_values.push(text);
                 } else if in_series && in_xval {
                     if let Ok(f) = text.parse::<f64>() {
+                        if x_values.len() >= MAX_CHART_DATA_POINTS {
+                            return Err(HwpxError::InvalidStructure {
+                                detail: format!(
+                                    "chart x-value count exceeds limit of {}",
+                                    MAX_CHART_DATA_POINTS,
+                                ),
+                            });
+                        }
                         x_values.push(f);
                     }
                 } else if in_series && in_yval {
                     if let Ok(f) = text.parse::<f64>() {
+                        if y_values.len() >= MAX_CHART_DATA_POINTS {
+                            return Err(HwpxError::InvalidStructure {
+                                detail: format!(
+                                    "chart y-value count exceeds limit of {}",
+                                    MAX_CHART_DATA_POINTS,
+                                ),
+                            });
+                        }
                         y_values.push(f);
                     }
                 } else if in_series && in_val {
                     if let Ok(f) = text.parse::<f64>() {
+                        if val_values.len() >= MAX_CHART_DATA_POINTS {
+                            return Err(HwpxError::InvalidStructure {
+                                detail: format!(
+                                    "chart value count exceeds limit of {}",
+                                    MAX_CHART_DATA_POINTS,
+                                ),
+                            });
+                        }
                         val_values.push(f);
                     }
                 }
@@ -217,12 +254,28 @@ pub(crate) fn parse_chart_xml(xml: &str) -> HwpxResult<ParsedChart> {
                     b"ser" => {
                         // Finalize current series
                         if is_xy {
+                            if xy_series_list.len() >= MAX_CHART_SERIES {
+                                return Err(HwpxError::InvalidStructure {
+                                    detail: format!(
+                                        "chart series count exceeds limit of {}",
+                                        MAX_CHART_SERIES,
+                                    ),
+                                });
+                            }
                             xy_series_list.push(XySeries {
                                 name: std::mem::take(&mut series_name),
                                 x_values: std::mem::take(&mut x_values),
                                 y_values: std::mem::take(&mut y_values),
                             });
                         } else {
+                            if cat_series_list.len() >= MAX_CHART_SERIES {
+                                return Err(HwpxError::InvalidStructure {
+                                    detail: format!(
+                                        "chart series count exceeds limit of {}",
+                                        MAX_CHART_SERIES,
+                                    ),
+                                });
+                            }
                             // First series captures the shared categories
                             if all_categories.is_empty() && !cat_values.is_empty() {
                                 all_categories = std::mem::take(&mut cat_values);

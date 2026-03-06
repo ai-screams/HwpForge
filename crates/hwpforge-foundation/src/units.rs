@@ -25,7 +25,7 @@
 use std::fmt;
 use std::ops::{Add, Div, Mul, Neg, Sub};
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::error::{FoundationError, FoundationResult};
 
@@ -53,7 +53,7 @@ use crate::error::{FoundationError, FoundationResult};
 /// let one_inch = HwpUnit::from_inch(1.0).unwrap();
 /// assert_eq!(one_inch.as_i32(), 7200);
 /// ```
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
 #[repr(transparent)]
 pub struct HwpUnit(i32);
 
@@ -206,6 +206,19 @@ impl Default for HwpUnit {
     }
 }
 
+impl<'de> Deserialize<'de> for HwpUnit {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let raw = i32::deserialize(deserializer)?;
+        HwpUnit::new(raw).map_err(|_| {
+            serde::de::Error::custom(format!(
+                "HwpUnit out of range: {raw} (must be in [{}, {}])",
+                HwpUnit::MIN_VALUE,
+                HwpUnit::MAX_VALUE
+            ))
+        })
+    }
+}
+
 impl fmt::Debug for HwpUnit {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "HwpUnit({})", self.0)
@@ -249,7 +262,10 @@ impl Mul<i32> for HwpUnit {
 impl Div<i32> for HwpUnit {
     type Output = Self;
     fn div(self, rhs: i32) -> Self {
-        Self(self.0 / rhs)
+        if rhs == 0 {
+            return Self::ZERO;
+        }
+        Self(self.0.saturating_div(rhs))
     }
 }
 
@@ -731,5 +747,69 @@ mod tests {
                     "inch={inch}, back={back}");
             }
         }
+    }
+
+    // ===================================================================
+    // C1: Div<i32> panic fixes
+    // ===================================================================
+
+    #[test]
+    fn hwpunit_div_by_zero_returns_zero() {
+        let u = HwpUnit::new(300).unwrap();
+        assert_eq!((u / 0).as_i32(), 0);
+    }
+
+    #[test]
+    fn hwpunit_div_min_by_neg_one_saturates() {
+        // i32::MIN / -1 would overflow; saturating_div clamps to i32::MAX
+        let u = HwpUnit::new_unchecked(i32::MIN);
+        let result = u / -1;
+        assert_eq!(result.as_i32(), i32::MAX);
+    }
+
+    #[test]
+    fn hwpunit_div_normal_works() {
+        let u = HwpUnit::new(600).unwrap();
+        assert_eq!((u / 2).as_i32(), 300);
+    }
+
+    // ===================================================================
+    // C2: custom Deserialize range validation
+    // ===================================================================
+
+    #[test]
+    fn hwpunit_deser_valid_roundtrip() {
+        let u = HwpUnit::new(42000).unwrap();
+        let json = serde_json::to_string(&u).unwrap();
+        let back: HwpUnit = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, u);
+    }
+
+    #[test]
+    fn hwpunit_deser_out_of_range_is_error() {
+        // 200_000_000 exceeds MAX_VALUE (100_000_000)
+        let err = serde_json::from_str::<HwpUnit>("200000000");
+        assert!(err.is_err(), "expected error for out-of-range value");
+    }
+
+    #[test]
+    fn hwpunit_deser_i32_min_is_error() {
+        let json = format!("{}", i32::MIN);
+        let err = serde_json::from_str::<HwpUnit>(&json);
+        assert!(err.is_err(), "i32::MIN should be rejected");
+    }
+
+    #[test]
+    fn hwpunit_deser_max_valid_boundary() {
+        let json = format!("{}", HwpUnit::MAX_VALUE);
+        let u: HwpUnit = serde_json::from_str(&json).unwrap();
+        assert_eq!(u.as_i32(), HwpUnit::MAX_VALUE);
+    }
+
+    #[test]
+    fn hwpunit_deser_min_valid_boundary() {
+        let json = format!("{}", HwpUnit::MIN_VALUE);
+        let u: HwpUnit = serde_json::from_str(&json).unwrap();
+        assert_eq!(u.as_i32(), HwpUnit::MIN_VALUE);
     }
 }

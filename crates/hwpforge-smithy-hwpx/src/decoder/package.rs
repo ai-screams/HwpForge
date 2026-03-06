@@ -45,22 +45,22 @@ const SECTION_SUFFIX: &str = ".xml";
 /// Validates structure and provides access to individual XML files
 /// within the archive. Enforces safety limits on decompressed data
 /// to prevent ZIP bomb attacks.
-pub struct PackageReader {
-    archive: ZipArchive<Cursor<Vec<u8>>>,
+pub struct PackageReader<'a> {
+    archive: ZipArchive<Cursor<&'a [u8]>>,
     section_count: usize,
     /// Cumulative bytes decompressed so far.
     total_read: u64,
 }
 
-impl PackageReader {
+impl<'a> PackageReader<'a> {
     /// Opens an HWPX archive from raw bytes.
     ///
     /// Validates:
     /// - The bytes form a valid ZIP archive
     /// - The entry count is within safety limits
     /// - A `mimetype` file exists with an accepted value
-    pub fn new(bytes: &[u8]) -> HwpxResult<Self> {
-        let cursor = Cursor::new(bytes.to_vec());
+    pub fn new(bytes: &'a [u8]) -> HwpxResult<Self> {
+        let cursor = Cursor::new(bytes);
         let archive = ZipArchive::new(cursor).map_err(|e| HwpxError::Zip(e.to_string()))?;
 
         if archive.len() > MAX_ENTRIES {
@@ -141,6 +141,9 @@ impl PackageReader {
     ///
     /// Each entry's filename (without the `BinData/` prefix) becomes the
     /// key in the store, and the raw bytes become the value.
+    ///
+    /// Keys are sanitized to prevent path traversal (CWE-22): `..` components
+    /// and leading slashes are stripped before insertion.
     pub fn read_all_bindata(&mut self) -> HwpxResult<hwpforge_core::image::ImageStore> {
         let bindata_paths: Vec<String> = self
             .archive
@@ -153,8 +156,12 @@ impl PackageReader {
 
         for path in bindata_paths {
             let data = self.read_binary_entry(&path)?;
-            let key = path.strip_prefix("BinData/").unwrap_or(&path);
-            store.insert(key, data);
+            let raw_key = path.strip_prefix("BinData/").unwrap_or(&path);
+            // Sanitize to prevent path traversal: strip ".." and leading slashes.
+            let key = sanitize_bindata_key(raw_key);
+            if !key.is_empty() {
+                store.insert(&key, data);
+            }
         }
 
         Ok(store)
@@ -247,7 +254,15 @@ impl PackageReader {
     }
 }
 
-impl std::fmt::Debug for PackageReader {
+/// Sanitizes a BinData filename to prevent path traversal (CWE-22).
+///
+/// Strips leading slashes and rejects `..` path components, matching the
+/// encoder-side `sanitize_zip_entry_name` logic.
+fn sanitize_bindata_key(name: &str) -> String {
+    name.split('/').filter(|c| !c.is_empty() && *c != "..").collect::<Vec<_>>().join("/")
+}
+
+impl std::fmt::Debug for PackageReader<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PackageReader")
             .field("entries", &self.archive.len())
@@ -401,5 +416,17 @@ mod tests {
     fn mimetype_with_trailing_whitespace() {
         let bytes = make_hwpx_zip("application/hwp+zip  \n", MINIMAL_HEADER, &[MINIMAL_SECTION]);
         assert!(PackageReader::new(&bytes).is_ok());
+    }
+
+    // ── sanitize_bindata_key ──────────────────────────────────────
+
+    #[test]
+    fn sanitize_bindata_key_strips_traversal() {
+        assert_eq!(sanitize_bindata_key("../../../etc/passwd"), "etc/passwd");
+        assert_eq!(sanitize_bindata_key("BinData/../secret"), "BinData/secret");
+        assert_eq!(sanitize_bindata_key("image.png"), "image.png");
+        assert_eq!(sanitize_bindata_key(".."), "");
+        assert_eq!(sanitize_bindata_key("a/../../b"), "a/b");
+        assert_eq!(sanitize_bindata_key("//double//slash"), "double/slash");
     }
 }

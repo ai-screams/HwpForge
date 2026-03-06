@@ -278,7 +278,9 @@ fn enrich_ref_list(inner_xml: &str, store: &HwpxStyleStore) -> String {
     let extra_len = border_fills_xml.len() + tab_properties_xml.len() + numberings_xml.len();
     let mut result = String::with_capacity(inner_xml.len() + extra_len);
     let ref_open = "<hh:refList>";
-    let ref_open_pos = inner_xml.find(ref_open).unwrap();
+    let ref_open_pos = inner_xml
+        .find(ref_open)
+        .expect("refList was confirmed present by contains() check above");
     let after_ref_open = ref_open_pos + ref_open.len();
 
     // Copy up to and including <hh:refList>
@@ -472,7 +474,7 @@ fn build_char_pr(id: u32, cs: &HwpxCharShape) -> HxCharPr {
     let fr = &cs.font_ref;
     HxCharPr {
         id,
-        height: cs.height.as_i32() as u32,
+        height: cs.height.as_i32().max(0) as u32,
         text_color: color_to_hex(&cs.text_color),
         shade_color: shade_color_to_str(cs.shade_color.as_ref()),
         use_font_space: u32::from(cs.use_font_space),
@@ -652,7 +654,7 @@ fn build_margin(ps: &HwpxParaShape) -> HxMargin {
 fn build_line_spacing(ps: &HwpxParaShape) -> HxLineSpacing {
     HxLineSpacing {
         spacing_type: line_spacing_type_to_hwpx(ps.line_spacing_type).into(),
-        value: ps.line_spacing as u32,
+        value: ps.line_spacing.max(0) as u32,
         unit: "HWPUNIT".into(),
     }
 }

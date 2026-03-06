@@ -38,6 +38,18 @@ use crate::schema::section::{
 use super::chart::generate_chart_xml;
 use super::escape_xml;
 
+/// Shared nonce counter for all marker-based placeholder runs.
+///
+/// Using a single module-level counter prevents duplicate marker strings
+/// even when multiple Control variants are encoded in the same document.
+static MARKER_NONCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Returns a unique marker string for placeholder run injection.
+fn next_marker(prefix: &str, field_id: usize) -> String {
+    let nonce = MARKER_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("__{prefix}_{nonce}_{field_id}__")
+}
+
 /// Maximum nesting depth for tables-within-tables.
 ///
 /// Mirrors the decoder's limit. Prevents stack overflow from deeply nested
@@ -343,11 +355,7 @@ fn build_runs(
                             });
                         }
                         let field_id = hyperlink_entries.len();
-                        // Use atomic nonce to prevent marker collision with user text
-                        static MARKER_NONCE: std::sync::atomic::AtomicU64 =
-                            std::sync::atomic::AtomicU64::new(0);
-                        let nonce = MARKER_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let marker = format!("__HWPHL_{nonce}_{field_id}__");
+                        let marker = next_marker("HWPHL", field_id);
                         let real_xml = build_hyperlink_run_xml(text, url, char_pr_id_ref, field_id);
                         // The marker run will serialize to something like
                         // <hp:run charPrIDRef="N"><hp:t>__HWPFORGE_HYPERLINK_0__</hp:t></hp:run>
@@ -385,10 +393,7 @@ fn build_runs(
                     {
                         let field_id = hyperlink_entries.len();
                         bookmark_span_ids.insert(name.clone(), field_id);
-                        static MARKER_NONCE: std::sync::atomic::AtomicU64 =
-                            std::sync::atomic::AtomicU64::new(0);
-                        let nonce = MARKER_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let marker = format!("__HWPBM_{nonce}_{field_id}__");
+                        let marker = next_marker("HWPBM", field_id);
                         let real_xml =
                             build_bookmark_span_start_run_xml(name, char_pr_id_ref, field_id);
                         let marker_run_xml = format!(
@@ -401,11 +406,7 @@ fn build_runs(
                         if *bookmark_type == BookmarkType::SpanEnd =>
                     {
                         if let Some(&field_id) = bookmark_span_ids.get(name) {
-                            static MARKER_NONCE: std::sync::atomic::AtomicU64 =
-                                std::sync::atomic::AtomicU64::new(0);
-                            let nonce =
-                                MARKER_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                            let marker = format!("__HWPBE_{nonce}_{field_id}__");
+                            let marker = next_marker("HWPBE", field_id);
                             let real_xml =
                                 build_bookmark_span_end_run_xml(char_pr_id_ref, field_id);
                             let marker_run_xml = format!(
@@ -418,10 +419,7 @@ fn build_runs(
                     }
                     Control::Field { field_type, hint_text, help_text } => {
                         let field_id = hyperlink_entries.len();
-                        static MARKER_NONCE: std::sync::atomic::AtomicU64 =
-                            std::sync::atomic::AtomicU64::new(0);
-                        let nonce = MARKER_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let marker = format!("__HWPFD_{nonce}_{field_id}__");
+                        let marker = next_marker("HWPFD", field_id);
                         let hint = hint_text.as_deref().unwrap_or("");
                         // PageNum uses <hp:autoNum> (NOT fieldBegin/fieldEnd).
                         let real_xml = if *field_type == hwpforge_foundation::FieldType::PageNum {
@@ -443,10 +441,7 @@ fn build_runs(
                     }
                     Control::CrossRef { target_name, ref_type, content_type, as_hyperlink } => {
                         let field_id = hyperlink_entries.len();
-                        static MARKER_NONCE: std::sync::atomic::AtomicU64 =
-                            std::sync::atomic::AtomicU64::new(0);
-                        let nonce = MARKER_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let marker = format!("__HWPXR_{nonce}_{field_id}__");
+                        let marker = next_marker("HWPXR", field_id);
                         let real_xml = build_crossref_run_xml(
                             target_name,
                             ref_type,
@@ -463,10 +458,7 @@ fn build_runs(
                     }
                     Control::Memo { content, author, date } => {
                         let field_id = hyperlink_entries.len();
-                        static MARKER_NONCE: std::sync::atomic::AtomicU64 =
-                            std::sync::atomic::AtomicU64::new(0);
-                        let nonce = MARKER_NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                        let marker = format!("__HWPME_{nonce}_{field_id}__");
+                        let marker = next_marker("HWPME", field_id);
                         let sublist_xml = encode_memo_sublist(content, depth, hyperlink_entries)?;
                         let real_xml = build_memo_run_xml(
                             &sublist_xml,
@@ -862,8 +854,9 @@ fn build_field_run_xml(
         FieldType::ClickHere => {
             // CLICK_HERE: editable press-field (누름틀)
             let escaped_help = escape_xml(help);
-            let hint_len = hint.chars().count();
-            let help_len = help.chars().count();
+            // Lengths must match the escaped strings embedded in the Command attribute.
+            let hint_len = escaped_hint.chars().count();
+            let help_len = escaped_help.chars().count();
             let command = format!(
                 "Clickhere:set:43:Direction:wstring:{hint_len}:{escaped_hint} HelpState:wstring:{help_len}:{escaped_help}  ",
             );
@@ -917,7 +910,7 @@ fn build_field_run_xml(
                         if !hint.is_empty() { escaped_hint.clone() } else { " ".to_string() };
                     ("$lastsaveby".to_string(), text)
                 }
-                _ => unreachable!(),
+                _ => unreachable!("outer match arm already guards Date|Time|DocSummary|UserInfo"),
             };
             format!(
                 concat!(
