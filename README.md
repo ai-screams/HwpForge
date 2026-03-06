@@ -15,7 +15,7 @@
 [![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg?logo=rust)](https://github.com/ai-screams/HwpForge)
 
 <div align="center">
-<img src="assets/banner-main.png" alt="HwpForge Banner" width="600">
+<img src="https://raw.githubusercontent.com/ai-screams/HwpForge/main/assets/banner-main.png" alt="HwpForge Banner" width="600">
 </div>
 
 ---
@@ -244,7 +244,7 @@ HwpForge는 거인들의 어깨 위에 서 있습니다.
 ---
 
 <div align="center">
-<img src="assets/mascot-main.png" width="260" alt="쇠부리 (SoeBuri)">
+<img src="https://raw.githubusercontent.com/ai-screams/HwpForge/main/assets/mascot-main.png" width="260" alt="쇠부리 (SoeBuri)">
 
 <br/><br/>
 
