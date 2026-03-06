@@ -21,7 +21,7 @@ concurrency:
 env:
   MDBOOK_VERSION: "0.4.52"
   MDBOOK_ADMONISH_VERSION: "1.20.0"
-  MDBOOK_MERMAID_VERSION: "0.17.0"
+  MDBOOK_MERMAID_VERSION: "0.14.0"
 
 jobs:
   build:
@@ -51,10 +51,7 @@ jobs:
           cargo install --locked --version "$MDBOOK_MERMAID_VERSION" mdbook-mermaid --root "$install_root"
 
       - name: Build mdBook
-        run: |
-          mdbook-mermaid install .
-          mdbook-admonish install .
-          mdbook build
+        run: mdbook build
 
       - name: Build rustdoc
         run: |
