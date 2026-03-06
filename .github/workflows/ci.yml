@@ -153,7 +153,7 @@ jobs:
         run: rustup show
       - uses: Swatinem/rust-cache@v2
       - name: cargo clippy (deny warnings)
-        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   test:
     name: "Verify › Test"
@@ -171,7 +171,7 @@ jobs:
         with:
           tool: cargo-nextest
       - name: cargo nextest run (all features, ci profile)
-        run: cargo nextest run --locked --workspace --all-features --profile ci
+        run: cargo nextest run --workspace --all-features --profile ci
 
   coverage:
     name: "Verify › Coverage (≥ 90%)"
@@ -193,7 +193,6 @@ jobs:
       - name: cargo llvm-cov (fail-under-lines ${{ env.COVERAGE_THRESHOLD }}%)
         run: >-
           cargo llvm-cov nextest
-          --locked
           --workspace --all-features
           --fail-under-lines ${{ env.COVERAGE_THRESHOLD }}
           --lcov --output-path coverage.lcov
@@ -268,7 +267,7 @@ jobs:
           mdbook build
       - name: Build rustdoc
         run: >-
-          cargo doc --locked --workspace --no-deps --all-features
+          cargo doc --workspace --no-deps --all-features
           --exclude hwpforge-bindings-py
           --exclude hwpforge-bindings-cli
           --exclude hwpforge-smithy-hwp5
@@ -289,7 +288,7 @@ jobs:
         with:
           key: msrv
       - name: cargo +1.88 check
-        run: cargo +1.88 check --locked --workspace --all-features
+        run: cargo +1.88 check --workspace --all-features
 
   workflow-compat:
     name: "Standalone › Workflow Lint"

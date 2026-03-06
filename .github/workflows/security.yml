@@ -54,4 +54,4 @@ jobs:
         with:
           key: canary-${{ matrix.toolchain }}
       - name: cargo +${{ matrix.toolchain }} check
-        run: cargo +${{ matrix.toolchain }} check --locked --workspace --all-targets --all-features
+        run: cargo +${{ matrix.toolchain }} check --workspace --all-targets --all-features

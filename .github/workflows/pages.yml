@@ -58,7 +58,7 @@ jobs:
 
       - name: Build rustdoc
         run: |
-          cargo doc --locked --workspace --no-deps --all-features --exclude hwpforge-bindings-py --exclude hwpforge-bindings-cli --exclude hwpforge-smithy-hwp5
+          cargo doc --workspace --no-deps --all-features --exclude hwpforge-bindings-py --exclude hwpforge-bindings-cli --exclude hwpforge-smithy-hwp5
           cp -r target/doc book/api
 
       - name: Upload Pages artifact
