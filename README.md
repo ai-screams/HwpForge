@@ -29,8 +29,9 @@ HwpForge는 HWPX 문서(ZIP + XML, KS X 6101)를 다루기 위한 **오픈소스
 
 **LLM-first 설계** 🔥 — AI 친화적인 Markdown과 공식 한글 문서 포맷(HWPX), 두 세계를 자연스럽게 잇습니다. LLM이 Markdown으로 작성한 내용은 공문서 규격의 HWPX로 컴파일되고 📜, 반대로 기존 HWPX 문서는 AI가 쉽게 읽을 수 있는 구조로 꺼낼 수 있습니다 ⚒️.
 
+- **HWPX Reader for AI** — 기존 한글 문서(.hwpx)를 Markdown으로 변환하여 LLM이 즉시 이해 가능
 - **Full HWPX codec** — HWPX 파일을 손실 없이 디코딩/인코딩 (lossless roundtrip)
-- **Markdown bridge** — GFM Markdown과 HWPX 간 상호 변환
+- **Markdown bridge** — GFM Markdown과 HWPX 간 양방향 변환 (읽기 + 쓰기)
 - **YAML style template** — Figma Design Token처럼 재사용 가능한 스타일 정의 (폰트, 크기, 색상)
 - **Type-safe API** — branded index, typestate validation, zero unsafe code
 
@@ -80,6 +81,20 @@ use hwpforge::hwpx::HwpxDecoder;
 let result = HwpxDecoder::decode_file("input.hwpx").unwrap();
 println!("섹션 수: {}", result.document.sections().len());
 ```
+
+### ⚒️ HWPX → Markdown 변환 (AI가 한글 문서 읽기)
+
+```rust
+use hwpforge::hwpx::HwpxDecoder;
+use hwpforge::md::MdEncoder;
+
+let decoded = HwpxDecoder::decode_file("government_report.hwpx").unwrap();
+let validated = decoded.document.validate().unwrap();
+let markdown = MdEncoder::encode_lossy(&validated).unwrap();
+println!("{}", markdown); // LLM이 바로 이해할 수 있는 Markdown
+```
+
+기존 .hwpx 파일을 Markdown으로 변환하면 Claude, GPT 등 어떤 LLM이든 한글 공문서를 즉시 읽고 분석할 수 있습니다.
 
 ### ⚒️ Markdown → HWPX 변환
 
