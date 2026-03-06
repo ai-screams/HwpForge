@@ -1,7 +1,7 @@
 # Pre-commit hooks for HwpForge (Hybrid mode)
 #
-# Light hooks only — MD lint/format + basic file checks.
-# Rust checks (fmt/clippy/test) stay in `make ci` to keep commits fast.
+# Light hooks: MD lint/format + file hygiene + cargo fmt.
+# Heavy checks (clippy/test) stay in `make ci` to keep commits fast.
 #
 # Install: brew install dprint pre-commit && npm install -g markdownlint-cli2
 # Activate: pre-commit install
@@ -22,6 +22,14 @@ repos:
         entry: dprint check
         language: system
         pass_filenames: false
+
+  # ── Rust formatting (~1-2s, prevents CI format failures) ─
+      - id: cargo-fmt
+        name: cargo fmt check
+        entry: cargo fmt --all -- --check
+        language: system
+        pass_filenames: false
+        types: [rust]
 
   # ── Basic file hygiene ───────────────────────────────────
   - repo: https://github.com/pre-commit/pre-commit-hooks
