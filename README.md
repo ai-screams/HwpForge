@@ -1,75 +1,160 @@
 # HwpForge
 
-> **한글 문서(HWP/HWPX)를 프로그래밍으로 제어하는 Rust 라이브러리**
+> **Programmatic control of Korean HWP/HWPX documents in Rust**
 >
-> LLM-first design | Rust Core + Python Wrapper | YAML Style Templates
+> Read, write, and convert [Hancom](https://www.hancom.com/) 한글 files
 
+[![CI](https://github.com/ai-screams/HwpForge/actions/workflows/ci.yml/badge.svg)](https://github.com/ai-screams/HwpForge/actions/workflows/ci.yml)
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
+[![crates.io](https://img.shields.io/crates/v/hwpforge.svg)](https://crates.io/crates/hwpforge)
+[![docs.rs](https://docs.rs/hwpforge/badge.svg)](https://docs.rs/hwpforge)
 
 ---
 
-## Status: Under Development (v0.1.0)
+## What is HwpForge?
 
-**Phase 0-5 + 4.5 Wave 1-6 완료** (Foundation → Core → Blueprint → HWPX → Markdown)
+HwpForge is a pure-Rust library for working with HWPX documents (ZIP + XML, KS X 6101) used by modern versions of Hancom 한글, the dominant word processor in Korea. It provides:
 
-- Foundation: HwpUnit, Color (BGR), Index<T>, ErrorCode (224 tests)
-- Core: Document<Draft/Validated>, Paragraph, Table, Image, Shapes, Equation, Chart (364 tests)
-- Blueprint: YAML Template System, StyleRegistry, Font Dedup (203 tests)
-- Smithy-HWPX: Full Encoder/Decoder with roundtrip, 9 golden fixtures (253 tests)
-- Smithy-MD: GFM + lossless HTML+YAML dual-mode (74 tests)
+- **Full HWPX codec** -- decode and encode HWPX files with lossless roundtrip
+- **Markdown bridge** -- convert between GFM Markdown and HWPX
+- **YAML style templates** -- reusable design tokens (like Figma) for fonts, sizes, colors
+- **Type-safe API** -- branded indices, typestate validation, zero unsafe code
 
-**Stats**: ~37,052 LOC | 988 tests | 0 clippy warnings | 90%+ coverage
+## Quick Start
 
-**Next**: Phase 6 (Python/CLI bindings), Phase 7 (MCP), Phase 8 (v1.0 release)
+Add to your `Cargo.toml`:
 
----
+```toml
+[dependencies]
+hwpforge = "0.1"
+```
+
+### Build a document
+
+```rust
+use hwpforge::core::{Document, Draft, Paragraph, Run, Section, PageSettings};
+use hwpforge::foundation::{CharShapeIndex, ParaShapeIndex};
+
+let mut doc = Document::<Draft>::new();
+doc.add_section(Section::with_paragraphs(
+    vec![Paragraph::with_runs(
+        vec![Run::text("Hello, 한글!", CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    )],
+    PageSettings::a4(),
+));
+```
+
+### Encode to HWPX
+
+```rust
+use hwpforge::hwpx::{HwpxEncoder, HwpxStyleStore};
+use hwpforge::core::ImageStore;
+
+let validated = doc.validate().unwrap();
+let style_store = HwpxStyleStore::default_modern();
+let image_store = ImageStore::new();
+let bytes = HwpxEncoder::encode(&validated, &style_store, &image_store).unwrap();
+std::fs::write("output.hwpx", &bytes).unwrap();
+```
+
+### Decode from HWPX
+
+```rust
+use hwpforge::hwpx::HwpxDecoder;
+
+let result = HwpxDecoder::decode_file("input.hwpx").unwrap();
+println!("Sections: {}", result.document.sections().len());
+```
+
+### Markdown to HWPX
+
+```rust
+use hwpforge::md::MdDecoder;
+use hwpforge::hwpx::{HwpxEncoder, HwpxStyleStore};
+
+let md_doc = MdDecoder::decode("# Title\n\nHello from Markdown!").unwrap();
+let validated = md_doc.document.validate().unwrap();
+let style_store = HwpxStyleStore::from_registry(&md_doc.registry);
+let image_store = hwpforge::core::ImageStore::new();
+let bytes = HwpxEncoder::encode(&validated, &style_store, &image_store).unwrap();
+```
+
+## Feature Flags
+
+| Feature | Default | Description                  |
+| ------- | ------- | ---------------------------- |
+| `hwpx`  | Yes     | HWPX encoder/decoder         |
+| `md`    | --      | Markdown <-> Core conversion |
+| `full`  | --      | All features                 |
+
+```toml
+# Markdown support
+hwpforge = { version = "0.1", features = ["full"] }
+```
+
+## Supported Content
+
+| Category        | Elements                                                                       |
+| --------------- | ------------------------------------------------------------------------------ |
+| Text            | Runs, character shapes, paragraph shapes, styles (22 Hancom defaults)          |
+| Structure       | Tables (nested), images (binary + path), text boxes, captions                  |
+| Layout          | Multi-column, page settings, landscape, gutter, master pages                   |
+| Headers/Footers | Header, footer, page numbers (autoNum)                                         |
+| Notes           | Footnotes, endnotes                                                            |
+| Shapes          | Line, ellipse, polygon, arc, curve, connect line (with fill, rotation, arrows) |
+| Equations       | HancomEQN script format                                                        |
+| Charts          | 18 chart types (OOXML-compatible)                                              |
+| References      | Bookmarks, cross-references, fields (date/time/summary), memos, index marks    |
+| Annotations     | Dutmal (side text), compose characters                                         |
+| Markdown        | GFM decode, lossy + lossless encode, YAML frontmatter                          |
 
 ## Architecture
 
 ```
-Foundation (🔩 primitives)
-  → Core (🔨 pure structure, style refs only)
-  → Blueprint (📐 YAML templates, centralized)
-  → Smithy (🔥 format compilers: HWPX, HWP5, MD)
-  → Bindings (🐍⚒️ Python/CLI interfaces)
+hwpforge (umbrella crate)
+  |
+  +-- hwpforge-foundation    Primitives: HwpUnit, Color (BGR), Index<T>
+  +-- hwpforge-core          Document model: Section, Paragraph, Table, Shape
+  +-- hwpforge-blueprint     YAML style templates with inheritance
+  +-- hwpforge-smithy-hwpx   HWPX codec (ZIP+XML, KS X 6101)
+  +-- hwpforge-smithy-md     Markdown codec (GFM + frontmatter)
 ```
 
-**Key Principle**: Structure and Style are separate (like HTML + CSS).
+**Key principle**: Structure and style are separate (like HTML + CSS).
+Core holds document structure with style _references_ (indices).
+Blueprint holds style _definitions_ (fonts, sizes, colors).
+Smithy compilers fuse Core + Blueprint into the target format.
 
----
+## Stats
 
-## Quick Start
+| Metric          | Value                 |
+| --------------- | --------------------- |
+| Total LOC       | ~49,200               |
+| Tests           | 1,510 (cargo-nextest) |
+| Source files    | 92 .rs                |
+| Crates          | 9 (6 publishable)     |
+| Coverage        | 92.65%                |
+| Clippy warnings | 0                     |
+| Unsafe code     | 0                     |
+
+## Development
 
 ### Prerequisites
 
-- Rust 1.93+ (pinned development toolchain)
-- Rust 1.88 (MSRV — minimum supported version)
-- (Optional) Python 3.8+ for bindings
-- (Optional) pre-commit for hooks
+- Rust 1.88+ (MSRV)
+- (Recommended) [cargo-nextest](https://nexte.st/) for parallel testing
+- (Optional) [pre-commit](https://pre-commit.com/) for git hooks
 
-### Build & Test
+### Commands
 
 ```bash
-# Build
-cargo build --workspace
-
-# Test (using cargo-nextest)
-cargo nextest run --workspace --all-features
-
-# Lint
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-
-# Format check
-cargo fmt --all -- --check
-
-# Coverage (90% gate)
-cargo llvm-cov nextest --workspace --all-features --fail-under-lines 90
-
-# Watch mode
-bacon
-
-# Full local CI
-make ci-fast
+make ci          # fmt + clippy + test + deny + lint (matches CI exactly)
+make test        # cargo nextest run
+make clippy      # cargo clippy (all targets, all features, -D warnings)
+make fmt-fix     # auto-format with rustfmt
+make doc         # generate rustdoc (opens browser)
+make cov         # coverage report (90% gate)
 ```
 
 ### Project Structure
@@ -77,77 +162,18 @@ make ci-fast
 ```
 HwpForge/
 ├── crates/
-│   ├── hwpforge-foundation/       # 🔩 Primitives (HwpUnit, Color, Index<T>)
-│   ├── hwpforge-core/             # 🔨 Document structure (style refs only)
-│   ├── hwpforge-blueprint/        # 📐 YAML templates (Figma-like)
-│   ├── hwpforge-smithy-hwpx/      # 🔥 HWPX codec (ZIP+XML ↔ Core)
-│   ├── hwpforge-smithy-hwp5/      # 🔥 HWP5 decoder (binary ↔ Core)
-│   ├── hwpforge-smithy-md/        # 🔥 Markdown codec (MD ↔ Core)
-│   ├── hwpforge-bindings-py/      # 🐍 PyO3 Python bindings
-│   └── hwpforge-bindings-cli/     # ⚒️  CLI tool
-└── .docs/                         # Internal docs (git-excluded)
+│   ├── hwpforge/                 # Umbrella crate (re-exports)
+│   ├── hwpforge-foundation/      # Primitives (HwpUnit, Color, Index<T>)
+│   ├── hwpforge-core/            # Document model (style refs only)
+│   ├── hwpforge-blueprint/       # YAML templates (Figma-like)
+│   ├── hwpforge-smithy-hwpx/     # HWPX codec (ZIP+XML <-> Core)
+│   ├── hwpforge-smithy-md/       # Markdown codec (MD <-> Core)
+│   ├── hwpforge-smithy-hwp5/     # HWP5 decoder (planned)
+│   ├── hwpforge-bindings-py/     # Python bindings (planned)
+│   └── hwpforge-bindings-cli/    # CLI tool (planned)
+├── tests/                        # Integration tests + golden fixtures
+└── examples/                     # Usage examples
 ```
-
----
-
-## CI/CD
-
-### Pipeline Architecture (Fan-out Gate)
-
-```
-Tier 1 — Gate     fmt ──┐
-                  clippy┤
-                        │
-Tier 2 — Verify   test ◄┤  (all events)
-                  cov  ◄┤  (PR / merge_group / full-suite)
-                  deny ◄┤
-                  docs ◄┤
-                  msrv ◄┘
-                        │
-Tier 3 — Platform cross ◄── test  (Windows + macOS)
-```
-
-### Trigger Matrix
-
-| Event                             | Jobs                                      |
-| --------------------------------- | ----------------------------------------- |
-| `push` to main                    | merge-smoke (nextest + deny)              |
-| `pull_request` / `merge_group`    | Gate → full Tier 2 + Tier 3               |
-| `schedule` (weekly Mon 03:00 UTC) | toolchain canary (beta + nightly)         |
-| `workflow_dispatch`               | Gate + test (optional: full suite)        |
-| Tag `v*.*.*`                      | Release: full CI → build → GitHub Release |
-
-### Security
-
-- **PR**: `cargo-deny` (licenses + advisories + bans)
-- **Weekly** (Mon 03:30 UTC): advisory-only scan
-- **Dependabot**: weekly Cargo + Actions updates
-
-### Version Strategy
-
-| Tier   | Version        | Purpose                                  |
-| ------ | -------------- | ---------------------------------------- |
-| MSRV   | 1.88           | Minimum supported — `cargo +1.88 check`  |
-| Stable | 1.93           | Pinned development toolchain             |
-| Canary | beta / nightly | Weekly monitoring (nightly non-blocking) |
-
----
-
-## Development Philosophy
-
-**Forge Metaphor**:
-
-- Foundation = Raw materials
-- Core = Anvil (pure structure)
-- Blueprint = Design patterns (reusable styles)
-- Smithy = Format-specific workshops
-- Bindings = User tools
-
-**TDD**: Edge cases first, normal cases last.
-
-**Quality**: 90%+ coverage per crate, 0 warnings, 100% rustdoc.
-
----
 
 ## License
 
@@ -158,8 +184,7 @@ Licensed under either of
 
 at your option.
 
----
-
 ## Acknowledgments
 
-본 제품은 한글과컴퓨터의 한/글 문서 파일(.hwp) 공개 문서를 참고하여 개발하였습니다.
+This project references the public documentation for Hancom 한글 (.hwp/.hwpx) file formats.
+The HWPX format follows the KS X 6101 (OWPML) national standard.
