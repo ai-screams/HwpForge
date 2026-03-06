@@ -188,7 +188,11 @@ HwpForge/
 - Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
 - MIT license ([LICENSE-MIT](LICENSE-MIT))
 
-## 감사의 말
+## Acknowledgements
 
-이 프로젝트는 Hancom 한글(.hwp/.hwpx) 파일 포맷의 공개 문서를 참조합니다.
-HWPX 포맷은 KS X 6101 (OWPML) 국가 표준을 따릅니다.
+- **[Hancom](https://www.hancom.com)** — HWP/HWPX 파일 포맷의 공개 문서와 KS X 6101 (OWPML) 국가 표준을 기반으로 합니다.
+- **[openhwp](https://github.com/openhwp/openhwp)** — IR 기반 아키텍처 설계에서 영감을 받았습니다.
+- **[hwpxlib](https://github.com/neolord0/hwpxlib)** — 가장 성숙한 HWPX 구현체로, 포맷 동작 검증에 참고했습니다.
+- **[hwp.js](https://github.com/hahnlee/hwp.js)** — HWP5 포맷의 실제 동작과 edge case 분석에 참고했습니다.
+- **[hwpx-owpml-model](https://github.com/hancom-io/hwpx-owpml-model)** — Hancom 공식 OWPML 모델 구현체입니다.
+- **Rust 생태계** — [serde](https://serde.rs), [quick-xml](https://github.com/tafia/quick-xml), [pulldown-cmark](https://github.com/pulldown-cmark/pulldown-cmark), [zip](https://github.com/zip-rs/zip2) 등 훌륭한 라이브러리 덕분에 HwpForge를 순수 safe Rust로 구현할 수 있었습니다.
