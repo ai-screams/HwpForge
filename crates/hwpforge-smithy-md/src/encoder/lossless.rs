@@ -446,4 +446,480 @@ mod tests {
         let escaped = escape_html("<&>'\"");
         assert_eq!(escaped, "&lt;&amp;&gt;&#39;&quot;");
     }
+
+    #[test]
+    fn lossless_encodes_image_run() {
+        use hwpforge_core::ImageFormat;
+        let image = hwpforge_core::Image::new(
+            "path/to/img.png",
+            HwpUnit::from_mm(60.0).unwrap(),
+            HwpUnit::from_mm(40.0).unwrap(),
+            ImageFormat::Png,
+        );
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::image(image, CharShapeIndex::new(1))],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let out = encode_lossless(&doc).unwrap();
+        assert!(out.contains("data-char-shape=\"1\""));
+        assert!(out.contains("src=\"path/to/img.png\""));
+        assert!(out.contains("data-format=\"PNG\""));
+        assert!(out.contains("data-width-mm=\"60.00\""));
+        assert!(out.contains("data-height-mm=\"40.00\""));
+    }
+
+    #[test]
+    fn lossless_encodes_hyperlink() {
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Hyperlink {
+                    text: "click me".to_string(),
+                    url: "https://example.com".to_string(),
+                },
+                CharShapeIndex::new(3),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let out = encode_lossless(&doc).unwrap();
+        assert!(out.contains(r#"<a data-char-shape="3" href="https://example.com">click me</a>"#));
+    }
+
+    #[test]
+    fn lossless_encodes_endnote() {
+        let endnote_para = Paragraph::with_runs(
+            vec![Run::text("endnote body", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Endnote { inst_id: None, paragraphs: vec![endnote_para] },
+                CharShapeIndex::new(5),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let out = encode_lossless(&doc).unwrap();
+        assert!(out.contains(r#"<endnote data-char-shape="5">"#));
+        assert!(out.contains("endnote body"));
+        assert!(out.contains("</endnote>"));
+    }
+
+    #[test]
+    fn lossless_encodes_unknown_control() {
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Unknown {
+                    tag: "custom-tag".to_string(),
+                    data: Some("some data".to_string()),
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let out = encode_lossless(&doc).unwrap();
+        assert!(out.contains(r#"data-kind="custom-tag""#));
+        assert!(out.contains("some data"));
+        assert!(out.contains("<control"));
+        assert!(out.contains("</control>"));
+    }
+
+    #[test]
+    fn lossless_encodes_unknown_control_with_no_data() {
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Unknown { tag: "empty".to_string(), data: None },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let out = encode_lossless(&doc).unwrap();
+        assert!(out.contains(r#"data-kind="empty""#));
+        assert!(out.contains("<control"));
+    }
+
+    #[test]
+    fn lossless_encodes_line_shape() {
+        use hwpforge_core::control::ShapePoint;
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Line {
+                    start: ShapePoint::new(0, 0),
+                    end: ShapePoint::new(1000, 500),
+                    width: HwpUnit::from_mm(50.0).unwrap(),
+                    height: HwpUnit::from_mm(25.0).unwrap(),
+                    horz_offset: 0,
+                    vert_offset: 0,
+                    caption: None,
+                    style: None,
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let out = encode_lossless(&doc).unwrap();
+        assert!(out.contains("<line"));
+        assert!(out.contains("data-start-x=\"0\""));
+        assert!(out.contains("data-start-y=\"0\""));
+        assert!(out.contains("data-end-x=\"1000\""));
+        assert!(out.contains("data-end-y=\"500\""));
+    }
+
+    #[test]
+    fn lossless_encodes_ellipse_shape() {
+        use hwpforge_core::control::ShapePoint;
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Ellipse {
+                    center: ShapePoint::new(500, 300),
+                    axis1: ShapePoint::new(1000, 300),
+                    axis2: ShapePoint::new(500, 600),
+                    width: HwpUnit::from_mm(40.0).unwrap(),
+                    height: HwpUnit::from_mm(20.0).unwrap(),
+                    horz_offset: 0,
+                    vert_offset: 0,
+                    paragraphs: vec![],
+                    caption: None,
+                    style: None,
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let out = encode_lossless(&doc).unwrap();
+        assert!(out.contains("<ellipse"));
+        assert!(out.contains("data-cx=\"500\""));
+        assert!(out.contains("data-cy=\"300\""));
+        assert!(out.contains("</ellipse>"));
+    }
+
+    #[test]
+    fn lossless_encodes_ellipse_with_inner_paragraphs() {
+        use hwpforge_core::control::ShapePoint;
+        let inner_para = Paragraph::with_runs(
+            vec![Run::text("shape text", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Ellipse {
+                    center: ShapePoint::new(500, 300),
+                    axis1: ShapePoint::new(1000, 300),
+                    axis2: ShapePoint::new(500, 600),
+                    width: HwpUnit::from_mm(40.0).unwrap(),
+                    height: HwpUnit::from_mm(20.0).unwrap(),
+                    horz_offset: 0,
+                    vert_offset: 0,
+                    paragraphs: vec![inner_para],
+                    caption: None,
+                    style: None,
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let out = encode_lossless(&doc).unwrap();
+        assert!(out.contains("shape text"));
+    }
+
+    #[test]
+    fn lossless_encodes_polygon_shape() {
+        use hwpforge_core::control::ShapePoint;
+        let vertices =
+            vec![ShapePoint::new(0, 1000), ShapePoint::new(500, 0), ShapePoint::new(1000, 1000)];
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Polygon {
+                    vertices,
+                    width: HwpUnit::from_mm(30.0).unwrap(),
+                    height: HwpUnit::from_mm(30.0).unwrap(),
+                    horz_offset: 0,
+                    vert_offset: 0,
+                    paragraphs: vec![],
+                    caption: None,
+                    style: None,
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let out = encode_lossless(&doc).unwrap();
+        assert!(out.contains("<polygon"));
+        assert!(out.contains("data-points=\"0,1000;500,0;1000,1000\""));
+        assert!(out.contains("</polygon>"));
+    }
+
+    #[test]
+    fn lossless_encodes_table_with_row_height() {
+        use hwpforge_core::TableRow;
+        let table = hwpforge_core::Table::new(vec![TableRow {
+            cells: vec![TableCell::new(
+                vec![Paragraph::with_runs(
+                    vec![Run::text("cell", CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )],
+                HwpUnit::from_mm(40.0).unwrap(),
+            )],
+            height: Some(HwpUnit::from_mm(15.0).unwrap()),
+        }]);
+
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::table(table, CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let out = encode_lossless(&doc).unwrap();
+        assert!(out.contains("data-height-mm=\"15.00\""));
+        assert!(out.contains("data-height-unit="));
+    }
+
+    #[test]
+    fn lossless_encodes_table_with_caption() {
+        use hwpforge_core::{caption::Caption, TableRow};
+        let mut table = hwpforge_core::Table::new(vec![TableRow {
+            cells: vec![TableCell::new(
+                vec![Paragraph::with_runs(
+                    vec![Run::text("data", CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )],
+                HwpUnit::from_mm(40.0).unwrap(),
+            )],
+            height: None,
+        }]);
+        table.caption = Some(Caption {
+            paragraphs: vec![Paragraph::with_runs(
+                vec![Run::text("My Caption", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            ..Caption::default()
+        });
+
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::table(table, CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let out = encode_lossless(&doc).unwrap();
+        assert!(out.contains("data-caption=\"My Caption\""));
+    }
+
+    #[test]
+    fn lossless_encodes_table_with_width() {
+        use hwpforge_core::TableRow;
+        let mut table = hwpforge_core::Table::new(vec![TableRow {
+            cells: vec![TableCell::new(
+                vec![Paragraph::with_runs(
+                    vec![Run::text("data", CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )],
+                HwpUnit::from_mm(40.0).unwrap(),
+            )],
+            height: None,
+        }]);
+        table.width = Some(HwpUnit::from_mm(120.0).unwrap());
+
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::table(table, CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let out = encode_lossless(&doc).unwrap();
+        assert!(out.contains("data-width-mm=\"120.00\""));
+    }
+
+    #[test]
+    fn lossless_encodes_cell_with_background_color() {
+        use hwpforge_core::TableRow;
+        use hwpforge_foundation::Color;
+        let mut cell = TableCell::new(
+            vec![Paragraph::with_runs(
+                vec![Run::text("colored", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            HwpUnit::from_mm(40.0).unwrap(),
+        );
+        cell.background = Some(Color::from_rgb(255, 0, 0));
+
+        let table = hwpforge_core::Table::new(vec![TableRow { cells: vec![cell], height: None }]);
+
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::table(table, CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let out = encode_lossless(&doc).unwrap();
+        assert!(out.contains("data-background="));
+    }
+
+    #[test]
+    fn lossless_unsupported_control_returns_error() {
+        use hwpforge_core::control::ShapePoint;
+        use hwpforge_foundation::{ArcType, HwpUnit};
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Arc {
+                    arc_type: ArcType::Pie,
+                    center: ShapePoint::new(500, 300),
+                    axis1: ShapePoint::new(1000, 300),
+                    axis2: ShapePoint::new(500, 600),
+                    start1: ShapePoint::new(800, 100),
+                    end1: ShapePoint::new(200, 100),
+                    start2: ShapePoint::new(100, 400),
+                    end2: ShapePoint::new(900, 400),
+                    width: HwpUnit::from_mm(40.0).unwrap(),
+                    height: HwpUnit::from_mm(20.0).unwrap(),
+                    horz_offset: 0,
+                    vert_offset: 0,
+                    caption: None,
+                    style: None,
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let result = encode_lossless(&doc);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn lossless_encodes_dutmal_control() {
+        use hwpforge_core::control::{DutmalAlign, DutmalPosition};
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Dutmal {
+                    main_text: "한글".to_string(),
+                    sub_text: "hangeul".to_string(),
+                    sz_ratio: 50,
+                    position: DutmalPosition::Top,
+                    align: DutmalAlign::Center,
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let out = encode_lossless(&doc).unwrap();
+        assert!(out.contains("<dutmal"));
+        assert!(out.contains("data-sz-ratio=\"50\""));
+        assert!(out.contains("한글|hangeul"));
+        assert!(out.contains("</dutmal>"));
+    }
+
+    #[test]
+    fn lossless_encodes_compose_control() {
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Compose {
+                    compose_text: "㊀".to_string(),
+                    circle_type: "CIRCLE".to_string(),
+                    char_sz: -3,
+                    compose_type: "COMPOSED".to_string(),
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let out = encode_lossless(&doc).unwrap();
+        assert!(out.contains("<compose"));
+        assert!(out.contains("data-circle-type=\"CIRCLE\""));
+        assert!(out.contains("data-char-sz=\"-3\""));
+        assert!(out.contains("㊀"));
+        assert!(out.contains("</compose>"));
+    }
+
+    #[test]
+    fn lossless_no_frontmatter_adds_format_key() {
+        // Document with no metadata should add format=lossless to frontmatter
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::text("body", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let out = encode_lossless(&doc).unwrap();
+        assert!(out.contains("format: lossless"));
+    }
+
+    #[test]
+    fn lossless_section_encodes_unit_and_mm_attributes() {
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::text("text", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let out = encode_lossless(&doc).unwrap();
+        // Should contain both -unit and -mm variants
+        assert!(out.contains("data-width-unit="));
+        assert!(out.contains("data-width-mm="));
+        assert!(out.contains("data-height-unit="));
+        assert!(out.contains("data-height-mm="));
+        assert!(out.contains("data-margin-left-unit="));
+        assert!(out.contains("data-margin-left-mm="));
+    }
+
+    #[test]
+    fn lossless_roundtrip_text() {
+        // Verify encode → structural check: key attributes present in output
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::text("hello world", CharShapeIndex::new(2))],
+            ParaShapeIndex::new(1),
+        )]);
+
+        let encoded = encode_lossless(&doc).unwrap();
+        assert!(encoded.contains("data-para-shape=\"1\""));
+        assert!(encoded.contains("data-char-shape=\"2\""));
+        assert!(encoded.contains("hello world"));
+        assert!(encoded.contains("<section"));
+        assert!(encoded.contains("</section>"));
+    }
+
+    #[test]
+    fn lossless_roundtrip_hyperlink() {
+        // Verify encode produces decodable hyperlink markup
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Hyperlink {
+                    text: "Example".to_string(),
+                    url: "https://example.com".to_string(),
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let encoded = encode_lossless(&doc).unwrap();
+        assert!(encoded.contains(r#"href="https://example.com""#));
+        assert!(encoded.contains("Example"));
+        assert!(encoded.contains("<a "));
+        assert!(encoded.contains("</a>"));
+    }
+
+    #[test]
+    fn lossless_roundtrip_footnote() {
+        // Verify encode produces decodable footnote markup
+        let note_para = Paragraph::with_runs(
+            vec![Run::text("note content", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Footnote { inst_id: None, paragraphs: vec![note_para] },
+                CharShapeIndex::new(1),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let encoded = encode_lossless(&doc).unwrap();
+        assert!(encoded.contains("<footnote "));
+        assert!(encoded.contains("note content"));
+        assert!(encoded.contains("</footnote>"));
+    }
 }

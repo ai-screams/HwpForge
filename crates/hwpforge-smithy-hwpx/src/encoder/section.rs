@@ -45,6 +45,7 @@ use super::escape_xml;
 const MAX_NESTING_DEPTH: usize = 32;
 
 /// Result of encoding a section, including chart and masterpage entries for ZIP packaging.
+#[derive(Debug)]
 pub(crate) struct SectionEncodeResult {
     /// The section XML string.
     pub xml: String,
@@ -2975,5 +2976,915 @@ mod tests {
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
                 .unwrap();
         assert_eq!(result.text_direction, TextDirection::Vertical);
+    }
+
+    // ── Landscape / Gutter encoding ──────────────────────────────
+
+    #[test]
+    fn landscape_encodes_as_narrowly() {
+        let ps = PageSettings { landscape: true, ..PageSettings::a4() };
+        let section = Section::with_paragraphs(vec![text_paragraph("landscape", 0, 0)], ps);
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains(r#"landscape="NARROWLY""#), "landscape=true must encode as NARROWLY");
+    }
+
+    #[test]
+    fn portrait_encodes_as_widely() {
+        let ps = PageSettings { landscape: false, ..PageSettings::a4() };
+        let section = Section::with_paragraphs(vec![text_paragraph("portrait", 0, 0)], ps);
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains(r#"landscape="WIDELY""#), "landscape=false must encode as WIDELY");
+    }
+
+    #[test]
+    fn landscape_roundtrips() {
+        let ps = PageSettings { landscape: true, ..PageSettings::a4() };
+        let section = Section::with_paragraphs(vec![text_paragraph("land", 0, 0)], ps);
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
+        assert!(result.page_settings.unwrap().landscape, "landscape must roundtrip");
+    }
+
+    #[test]
+    fn gutter_type_left_right_encodes() {
+        use hwpforge_foundation::GutterType;
+        let ps = PageSettings { gutter_type: GutterType::LeftRight, ..PageSettings::a4() };
+        let section = Section::with_paragraphs(vec![text_paragraph("gutter", 0, 0)], ps);
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains(r#"gutterType="LEFT_RIGHT""#));
+    }
+
+    #[test]
+    fn gutter_type_top_only_encodes() {
+        use hwpforge_foundation::GutterType;
+        let ps = PageSettings { gutter_type: GutterType::TopOnly, ..PageSettings::a4() };
+        let section = Section::with_paragraphs(vec![text_paragraph("gutter", 0, 0)], ps);
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains(r#"gutterType="TOP_ONLY""#));
+    }
+
+    // ── Visibility encoding ──────────────────────────────────────
+
+    #[test]
+    fn visibility_defaults_encode() {
+        let section = simple_section("text");
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        // Default visibility: all zeros, SHOW_ALL
+        assert!(xml.contains(r#"hideFirstHeader="0""#));
+        assert!(xml.contains(r#"hideFirstFooter="0""#));
+        assert!(xml.contains(r#"showLineNumber="0""#));
+        assert!(xml.contains(r#"border="SHOW_ALL""#));
+        assert!(xml.contains(r#"fill="SHOW_ALL""#));
+    }
+
+    #[test]
+    fn visibility_custom_encodes() {
+        use hwpforge_core::section::Visibility;
+        use hwpforge_foundation::ShowMode;
+        let mut section = simple_section("text");
+        section.visibility = Some(Visibility {
+            hide_first_header: true,
+            hide_first_footer: true,
+            hide_first_master_page: false,
+            hide_first_page_num: true,
+            hide_first_empty_line: false,
+            show_line_number: true,
+            border: ShowMode::HideAll,
+            fill: ShowMode::ShowOdd,
+        });
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains(r#"hideFirstHeader="1""#));
+        assert!(xml.contains(r#"hideFirstFooter="1""#));
+        assert!(xml.contains(r#"hideFirstMasterPage="0""#));
+        assert!(xml.contains(r#"hideFirstPageNum="1""#));
+        assert!(xml.contains(r#"showLineNumber="1""#));
+        assert!(xml.contains(r#"border="HIDE_ALL""#));
+        assert!(xml.contains(r#"fill="SHOW_ODD""#));
+    }
+
+    #[test]
+    fn show_mode_to_hwpx_covers_all_variants() {
+        use hwpforge_foundation::ShowMode;
+        assert_eq!(show_mode_to_hwpx(ShowMode::ShowAll), "SHOW_ALL");
+        assert_eq!(show_mode_to_hwpx(ShowMode::HideAll), "HIDE_ALL");
+        assert_eq!(show_mode_to_hwpx(ShowMode::ShowOdd), "SHOW_ODD");
+        assert_eq!(show_mode_to_hwpx(ShowMode::ShowEven), "SHOW_EVEN");
+    }
+
+    // ── LineNumberShape encoding ─────────────────────────────────
+
+    #[test]
+    fn line_number_shape_encodes() {
+        use hwpforge_core::section::LineNumberShape;
+        let mut section = simple_section("text");
+        section.line_number_shape = Some(LineNumberShape {
+            restart_type: 1,
+            count_by: 5,
+            distance: HwpUnit::new(1000).unwrap(),
+            start_number: 3,
+        });
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains(r#"restartType="1""#));
+        assert!(xml.contains(r#"countBy="5""#));
+        assert!(xml.contains(r#"distance="1000""#));
+        assert!(xml.contains(r#"startNumber="3""#));
+    }
+
+    #[test]
+    fn line_number_shape_defaults_encode() {
+        // Section with no line_number_shape uses all-zero defaults
+        let section = simple_section("text");
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains(r#"restartType="0""#));
+        assert!(xml.contains(r#"countBy="0""#));
+        assert!(xml.contains(r#"startNumber="0""#));
+    }
+
+    // ── PageBorderFillEntry encoding ─────────────────────────────
+
+    #[test]
+    fn page_border_fill_defaults_encode_three_entries() {
+        let section = simple_section("text");
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        // Default: BOTH, EVEN, ODD entries
+        assert!(xml.contains(r#"type="BOTH""#));
+        assert!(xml.contains(r#"type="EVEN""#));
+        assert!(xml.contains(r#"type="ODD""#));
+        assert!(xml.contains("<hp:pageBorderFill"));
+    }
+
+    #[test]
+    fn page_border_fill_custom_encodes() {
+        use hwpforge_core::section::PageBorderFillEntry;
+        let mut section = simple_section("text");
+        section.page_border_fills = Some(vec![PageBorderFillEntry {
+            apply_type: "BOTH".to_string(),
+            border_fill_id: 5,
+            text_border: "PAGE".to_string(),
+            header_inside: true,
+            footer_inside: false,
+            fill_area: "PAGE".to_string(),
+            offset: [
+                HwpUnit::new(500).unwrap(),
+                HwpUnit::new(600).unwrap(),
+                HwpUnit::new(700).unwrap(),
+                HwpUnit::new(800).unwrap(),
+            ],
+        }]);
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains(r#"borderFillIDRef="5""#));
+        assert!(xml.contains(r#"textBorder="PAGE""#));
+        assert!(xml.contains(r#"headerInside="1""#));
+        assert!(xml.contains(r#"footerInside="0""#));
+        assert!(xml.contains(r#"fillArea="PAGE""#));
+        assert!(xml.contains(r#"left="500""#));
+        assert!(xml.contains(r#"right="600""#));
+    }
+
+    // ── BeginNum encoding ────────────────────────────────────────
+
+    #[test]
+    fn begin_num_encodes_in_startnum() {
+        use hwpforge_core::section::BeginNum;
+        let mut section = simple_section("text");
+        section.begin_num =
+            Some(BeginNum { page: 3, footnote: 2, endnote: 1, pic: 4, tbl: 5, equation: 6 });
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains(r#"page="3""#));
+        assert!(xml.contains(r#"pic="4""#));
+        assert!(xml.contains(r#"tbl="5""#));
+        assert!(xml.contains(r#"equation="6""#));
+        // footnote/endnote appear in footNotePr/endNotePr
+        assert!(xml.contains(r#"newNum="2""#)); // footnote
+        assert!(xml.contains(r#"newNum="1""#)); // endnote
+    }
+
+    #[test]
+    fn begin_num_none_defaults_to_zero_in_startnum() {
+        let section = simple_section("text");
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        // When begin_num is None, startNum defaults page/pic/tbl/equation to 0
+        assert!(xml.contains(r#"<hp:startNum pageStartsOn="BOTH" page="0""#));
+    }
+
+    // ── MasterPage encoding ──────────────────────────────────────
+
+    #[test]
+    fn master_page_encoding_produces_xml_file() {
+        use hwpforge_core::section::MasterPage;
+        use hwpforge_foundation::ApplyPageType;
+        let mut section = simple_section("body");
+        section.master_pages =
+            Some(vec![MasterPage::new(ApplyPageType::Both, vec![text_paragraph("bg text", 0, 0)])]);
+        let result = encode_section(&section, 0, 0, 0).unwrap();
+        assert_eq!(result.master_pages.len(), 1);
+        let (path, xml) = &result.master_pages[0];
+        assert_eq!(path, "Contents/masterpage0.xml");
+        assert!(xml.contains("<masterPage"), "masterPage root element required");
+        assert!(xml.contains(r#"type="BOTH""#));
+        assert!(xml.contains("<hp:subList"), "subList required");
+        assert!(xml.contains("<hp:t>bg text</hp:t>"), "master page text content");
+    }
+
+    #[test]
+    fn master_page_offset_applies_to_index() {
+        use hwpforge_core::section::MasterPage;
+        use hwpforge_foundation::ApplyPageType;
+        let mut section = simple_section("body");
+        section.master_pages =
+            Some(vec![MasterPage::new(ApplyPageType::Even, vec![text_paragraph("mp", 0, 0)])]);
+        // offset=5 → masterpage5
+        let result = encode_section(&section, 0, 0, 5).unwrap();
+        let (path, xml) = &result.master_pages[0];
+        assert_eq!(path, "Contents/masterpage5.xml");
+        assert!(xml.contains(r#"id="masterpage5""#));
+        assert!(xml.contains(r#"type="EVEN""#));
+    }
+
+    #[test]
+    fn masterpage_refs_in_secpr() {
+        use hwpforge_core::section::MasterPage;
+        use hwpforge_foundation::ApplyPageType;
+        let mut section = simple_section("body");
+        section.master_pages =
+            Some(vec![MasterPage::new(ApplyPageType::Both, vec![text_paragraph("mp", 0, 0)])]);
+        let result = encode_section(&section, 0, 0, 0).unwrap();
+        assert!(
+            result.xml.contains(r#"<hp:masterPage idRef="masterpage0"/>"#),
+            "secPr must reference the master page"
+        );
+    }
+
+    // ── page_break / column_break encoding ───────────────────────
+
+    #[test]
+    fn page_break_encodes_as_one() {
+        let mut para = text_paragraph("break here", 0, 0);
+        para.page_break = true;
+        let section =
+            Section::with_paragraphs(vec![text_paragraph("first", 0, 0), para], PageSettings::a4());
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains(r#"pageBreak="1""#), "page_break=true must encode as pageBreak=1");
+    }
+
+    #[test]
+    fn column_break_encodes_as_one() {
+        let mut para = text_paragraph("col break", 0, 0);
+        para.column_break = true;
+        let section =
+            Section::with_paragraphs(vec![text_paragraph("first", 0, 0), para], PageSettings::a4());
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains(r#"columnBreak="1""#));
+    }
+
+    #[test]
+    fn page_break_roundtrips() {
+        let mut para = text_paragraph("break", 0, 0);
+        para.page_break = true;
+        let section =
+            Section::with_paragraphs(vec![text_paragraph("first", 0, 0), para], PageSettings::a4());
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
+        assert!(!result.paragraphs[0].page_break, "first para must NOT have page_break");
+        assert!(result.paragraphs[1].page_break, "second para must have page_break");
+    }
+
+    // ── Bookmark (Point) encoding ────────────────────────────────
+
+    #[test]
+    fn bookmark_point_encoding() {
+        use hwpforge_core::control::Control;
+        use hwpforge_foundation::BookmarkType;
+        let ctrl =
+            Control::Bookmark { name: "mymark".to_string(), bookmark_type: BookmarkType::Point };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains("<hp:bookmark"), "must emit bookmark element");
+        assert!(xml.contains(r#"name="mymark""#));
+    }
+
+    // ── Bookmark SpanStart/SpanEnd encoding ──────────────────────
+
+    #[test]
+    fn bookmark_span_encoding() {
+        use hwpforge_core::control::Control;
+        use hwpforge_foundation::BookmarkType;
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![
+                    Run::control(
+                        Control::Bookmark {
+                            name: "span1".to_string(),
+                            bookmark_type: BookmarkType::SpanStart,
+                        },
+                        CharShapeIndex::new(0),
+                    ),
+                    Run::text("covered text", CharShapeIndex::new(0)),
+                    Run::control(
+                        Control::Bookmark {
+                            name: "span1".to_string(),
+                            bookmark_type: BookmarkType::SpanEnd,
+                        },
+                        CharShapeIndex::new(0),
+                    ),
+                ],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        // SpanStart produces fieldBegin type="BOOKMARK"
+        assert!(xml.contains(r#"type="BOOKMARK""#), "BOOKMARK fieldBegin required");
+        assert!(xml.contains(r#"name="span1""#));
+        // SpanEnd produces fieldEnd
+        assert!(xml.contains("<hp:fieldEnd"), "fieldEnd required for SpanEnd");
+        assert!(!xml.contains("__HWPBM_"), "no leftover SpanStart marker");
+        assert!(!xml.contains("__HWPBE_"), "no leftover SpanEnd marker");
+    }
+
+    #[test]
+    fn bookmark_span_end_without_start_is_skipped() {
+        use hwpforge_core::control::Control;
+        use hwpforge_foundation::BookmarkType;
+        // SpanEnd without matching SpanStart should be silently skipped
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![
+                    Run::text("text", CharShapeIndex::new(0)),
+                    Run::control(
+                        Control::Bookmark {
+                            name: "orphan".to_string(),
+                            bookmark_type: BookmarkType::SpanEnd,
+                        },
+                        CharShapeIndex::new(0),
+                    ),
+                ],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        // Should not panic or error
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains("<hp:t>text</hp:t>"), "text must still be present");
+    }
+
+    // ── IndexMark encoding ────────────────────────────────────────
+
+    #[test]
+    fn indexmark_encoding() {
+        use hwpforge_core::control::Control;
+        let ctrl = Control::IndexMark {
+            primary: "색인항목".to_string(),
+            secondary: Some("부항목".to_string()),
+        };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains("<hp:indexmark"), "indexmark element required");
+        assert!(xml.contains("색인항목"), "primary key must be present");
+        assert!(xml.contains("부항목"), "secondary key must be present");
+    }
+
+    // ── Field encoding ────────────────────────────────────────────
+
+    #[test]
+    fn field_pagenum_produces_autonum() {
+        use hwpforge_core::control::Control;
+        use hwpforge_foundation::FieldType;
+        let ctrl =
+            Control::Field { field_type: FieldType::PageNum, hint_text: None, help_text: None };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains(r#"<hp:autoNum num="1" numType="PAGE">"#), "autoNum for PageNum");
+        assert!(xml.contains("<hp:autoNumFormat"), "autoNumFormat required");
+    }
+
+    #[test]
+    fn field_date_produces_summery_type() {
+        use hwpforge_core::control::Control;
+        use hwpforge_foundation::FieldType;
+        let ctrl = Control::Field { field_type: FieldType::Date, hint_text: None, help_text: None };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        // Date uses SUMMERY type (한글 typo)
+        assert!(xml.contains(r#"type="SUMMERY""#), "Date field must use SUMMERY type");
+        assert!(xml.contains(r#"fieldid="628321650""#), "Date field must use fieldid 628321650");
+        assert!(xml.contains("$modifiedtime"), "Date field Command must be $modifiedtime");
+    }
+
+    #[test]
+    fn field_time_produces_summery_createtime() {
+        use hwpforge_core::control::Control;
+        use hwpforge_foundation::FieldType;
+        let ctrl = Control::Field { field_type: FieldType::Time, hint_text: None, help_text: None };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains(r#"type="SUMMERY""#));
+        assert!(xml.contains("$createtime"));
+    }
+
+    #[test]
+    fn field_docsummary_produces_summery_author() {
+        use hwpforge_core::control::Control;
+        use hwpforge_foundation::FieldType;
+        let ctrl =
+            Control::Field { field_type: FieldType::DocSummary, hint_text: None, help_text: None };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains(r#"type="SUMMERY""#));
+        assert!(xml.contains("$author"));
+    }
+
+    #[test]
+    fn field_userinfo_produces_summery_lastsaveby() {
+        use hwpforge_core::control::Control;
+        use hwpforge_foundation::FieldType;
+        let ctrl =
+            Control::Field { field_type: FieldType::UserInfo, hint_text: None, help_text: None };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains(r#"type="SUMMERY""#));
+        assert!(xml.contains("$lastsaveby"));
+    }
+
+    #[test]
+    fn field_clickhere_produces_correct_format() {
+        use hwpforge_core::control::Control;
+        use hwpforge_foundation::FieldType;
+        let ctrl = Control::Field {
+            field_type: FieldType::ClickHere,
+            hint_text: Some("클릭하세요".to_string()),
+            help_text: Some("도움말".to_string()),
+        };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains(r#"type="CLICK_HERE""#), "ClickHere field type");
+        assert!(xml.contains(r#"fieldid="627272811""#), "ClickHere fieldid");
+        assert!(xml.contains("클릭하세요"), "hint text must appear");
+    }
+
+    // ── CrossRef encoding ─────────────────────────────────────────
+
+    #[test]
+    fn crossref_encoding() {
+        use hwpforge_core::control::Control;
+        use hwpforge_foundation::{RefContentType, RefType};
+        let ctrl = Control::CrossRef {
+            target_name: "bookmark1".to_string(),
+            ref_type: RefType::default(),
+            content_type: RefContentType::default(),
+            as_hyperlink: true,
+        };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains(r#"type="CROSSREF""#), "CROSSREF fieldBegin type");
+        assert!(xml.contains("bookmark1"), "target name must appear");
+        assert!(xml.contains("RefHyperLink"), "RefHyperLink param required");
+        assert!(!xml.contains("__HWPXR_"), "no leftover CrossRef marker");
+    }
+
+    // ── Memo encoding ─────────────────────────────────────────────
+
+    #[test]
+    fn memo_encoding() {
+        use hwpforge_core::control::Control;
+        let ctrl = Control::Memo {
+            content: vec![text_paragraph("Memo note", 0, 0)],
+            author: "Author".to_string(),
+            date: "2026-01-01".to_string(),
+        };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains(r#"type="MEMO""#), "MEMO fieldBegin type");
+        assert!(xml.contains("MemoShapeID"), "MemoShapeID param required");
+        assert!(!xml.contains("__HWPME_"), "no leftover Memo marker");
+    }
+
+    // ── Dutmal encoding ────────────────────────────────────────────
+
+    #[test]
+    fn dutmal_encoding() {
+        use hwpforge_core::control::Control;
+        use hwpforge_core::control::{DutmalAlign, DutmalPosition};
+        use hwpforge_foundation::{CharShapeIndex as CSI, ParaShapeIndex as PSI};
+        let ctrl = Control::Dutmal {
+            main_text: "漢".to_string(),
+            sub_text: "한".to_string(),
+            position: DutmalPosition::Top,
+            sz_ratio: 50,
+            align: DutmalAlign::Center,
+        };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(vec![Run::control(ctrl, CSI::new(0))], PSI::new(0))],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains("<hp:dutmal"), "dutmal element required");
+        assert!(xml.contains("漢"), "main text required");
+        assert!(xml.contains("한"), "sub text required");
+        assert!(xml.contains(r#"szRatio="50""#), "szRatio attribute required");
+        assert!(xml.contains(r#"posType="TOP""#), "posType attribute required");
+        assert!(xml.contains(r#"align="CENTER""#), "align attribute required");
+    }
+
+    #[test]
+    fn dutmal_position_bottom_and_align_right() {
+        use hwpforge_core::control::Control;
+        use hwpforge_core::control::{DutmalAlign, DutmalPosition};
+        let ctrl = Control::Dutmal {
+            main_text: "A".to_string(),
+            sub_text: "a".to_string(),
+            position: DutmalPosition::Bottom,
+            sz_ratio: 75,
+            align: DutmalAlign::Right,
+        };
+        let xml_result =
+            encode_dutmal_to_hx("A", "a", DutmalPosition::Bottom, 75, DutmalAlign::Right);
+        assert_eq!(xml_result.pos_type, "BOTTOM");
+        assert_eq!(xml_result.align, "RIGHT");
+        assert_eq!(xml_result.sz_ratio, 75);
+        let _ = ctrl; // suppress unused warning
+    }
+
+    #[test]
+    fn dutmal_position_left_encodes() {
+        use hwpforge_core::control::{DutmalAlign, DutmalPosition};
+        let hx = encode_dutmal_to_hx("X", "x", DutmalPosition::Left, 60, DutmalAlign::Left);
+        assert_eq!(hx.pos_type, "LEFT");
+        assert_eq!(hx.align, "LEFT");
+    }
+
+    #[test]
+    fn dutmal_position_right_encodes() {
+        use hwpforge_core::control::{DutmalAlign, DutmalPosition};
+        let hx = encode_dutmal_to_hx("X", "x", DutmalPosition::Right, 60, DutmalAlign::Center);
+        assert_eq!(hx.pos_type, "RIGHT");
+    }
+
+    // ── Compose encoding ───────────────────────────────────────────
+
+    #[test]
+    fn compose_encoding() {
+        use hwpforge_core::control::Control;
+        let ctrl = Control::Compose {
+            compose_text: "AB".to_string(),
+            circle_type: "CIRCLE".to_string(),
+            char_sz: 100,
+            compose_type: "COMPOSE".to_string(),
+        };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains("<hp:compose"), "compose element required");
+        assert!(xml.contains(r#"charPrCnt="10""#), "10 charPr entries required");
+        assert!(xml.contains("AB"), "compose text required");
+    }
+
+    #[test]
+    fn encode_compose_has_ten_charpr_entries() {
+        let hx = encode_compose_to_hx("AB", "CIRCLE", 100, "COMPOSE");
+        assert_eq!(hx.char_prs.len(), 10, "always 10 charPr entries");
+        // All must have pr_id_ref = u32::MAX (HWPX sentinel)
+        for cp in &hx.char_prs {
+            assert_eq!(cp.pr_id_ref, u32::MAX);
+        }
+    }
+
+    // ── Equation encoding ──────────────────────────────────────────
+
+    #[test]
+    fn equation_encoding() {
+        use hwpforge_core::control::Control;
+        use hwpforge_foundation::Color;
+        let ctrl = Control::Equation {
+            script: "{a} over {b}".to_string(),
+            width: HwpUnit::new(10000).unwrap(),
+            height: HwpUnit::new(5000).unwrap(),
+            base_line: 80,
+            text_color: Color::BLACK,
+            font: "HCR Batang".to_string(),
+        };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains("<hp:equation"), "equation element required");
+        assert!(xml.contains("{a} over {b}"), "equation script required");
+        assert!(xml.contains(r#"width="10000""#));
+        assert!(xml.contains(r#"height="5000""#));
+        assert!(xml.contains(r#"baseLine="80""#));
+        assert!(xml.contains(r#"textWrap="TOP_AND_BOTTOM""#));
+        assert!(xml.contains(r#"flowWithText="1""#));
+        assert!(xml.contains(r#"outMargin"#));
+        assert!(xml.contains("수식입니다."), "equation shapeComment required");
+    }
+
+    // ── Multi-column encoding roundtrip ──────────────────────────
+
+    #[test]
+    fn two_column_equal_roundtrip() {
+        use hwpforge_core::column::{ColumnDef, ColumnLayoutMode, ColumnSettings, ColumnType};
+        let mut section = simple_section("two columns");
+        section.column_settings = Some(ColumnSettings {
+            column_type: ColumnType::Newspaper,
+            layout_mode: ColumnLayoutMode::Left,
+            columns: vec![
+                ColumnDef { width: HwpUnit::ZERO, gap: HwpUnit::new(1134).unwrap() },
+                ColumnDef { width: HwpUnit::ZERO, gap: HwpUnit::ZERO },
+            ],
+        });
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains(r#"colCount="2""#));
+        assert!(xml.contains(r#"sameSz="1""#));
+        assert!(xml.contains(r#"sameGap="1134""#));
+
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
+        let cs = result.column_settings.expect("should have column_settings");
+        assert_eq!(cs.columns.len(), 2);
+    }
+
+    #[test]
+    fn three_column_variable_encodes() {
+        use hwpforge_core::column::{ColumnDef, ColumnLayoutMode, ColumnSettings, ColumnType};
+        let mut section = simple_section("three columns");
+        section.column_settings = Some(ColumnSettings {
+            column_type: ColumnType::Newspaper,
+            layout_mode: ColumnLayoutMode::Right,
+            columns: vec![
+                ColumnDef { width: HwpUnit::new(10000).unwrap(), gap: HwpUnit::new(500).unwrap() },
+                ColumnDef { width: HwpUnit::new(15000).unwrap(), gap: HwpUnit::new(500).unwrap() },
+                ColumnDef { width: HwpUnit::new(10000).unwrap(), gap: HwpUnit::ZERO },
+            ],
+        });
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains(r#"colCount="3""#));
+        assert!(xml.contains(r#"sameSz="0""#), "variable width must use sameSz=0");
+        // Explicit hp:col children required
+        assert!(xml.contains(r#"<hp:col"#));
+    }
+
+    // ── days_to_ymd helper ────────────────────────────────────────
+
+    #[test]
+    fn days_to_ymd_unix_epoch() {
+        // Days 0 = 1970-01-01
+        let (y, m, d) = days_to_ymd(0);
+        assert_eq!(y, 1970);
+        assert_eq!(m, 1);
+        assert_eq!(d, 1);
+    }
+
+    #[test]
+    fn days_to_ymd_known_date() {
+        // 2026-03-06: days since epoch
+        // 2026-01-01 = 365*56 + 14 (leap years 1972..2024) = 20454 days
+        // Then + 31 (Jan) + 28 (Feb non-leap) + 5 = 64 → total 20518
+        // Use a direct calculation: 2026-03-06 = 20518 days
+        let days: u64 = (365 * 56 + 14 + 31 + 28 + 5) as u64; // rough calculation
+        let (y, _m, _d) = days_to_ymd(days);
+        // Just verify it's in a reasonable range for 2026
+        assert!((2025..=2026).contains(&y), "year should be around 2026, got {y}");
+    }
+
+    // ── build_autonum_run_xml ─────────────────────────────────────
+
+    #[test]
+    fn build_autonum_run_xml_structure() {
+        let xml = build_autonum_run_xml(3);
+        assert!(xml.contains(r#"charPrIDRef="3""#));
+        assert!(xml.contains(r#"<hp:autoNum num="1" numType="PAGE">"#));
+        assert!(xml.contains("<hp:autoNumFormat"));
+        assert!(xml.contains(r#"type="DIGIT""#));
+        assert!(xml.ends_with("</hp:run>"));
+    }
+
+    // ── Hyperlink unsafe URL rejection ───────────────────────────
+
+    #[test]
+    fn unsafe_url_rejected() {
+        use hwpforge_core::control::Control;
+        let ctrl =
+            Control::Hyperlink { text: "evil".to_string(), url: "javascript:alert(1)".to_string() };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let result = encode_section(&section, 0, 0, 0);
+        assert!(result.is_err(), "javascript: URL must be rejected");
+        match result.unwrap_err() {
+            crate::error::HwpxError::InvalidStructure { detail } => {
+                assert!(detail.contains("Unsafe URL"), "error must mention Unsafe URL");
+            }
+            other => panic!("expected InvalidStructure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mailto_url_is_safe() {
+        use hwpforge_core::control::Control;
+        let ctrl = Control::Hyperlink {
+            text: "email".to_string(),
+            url: "mailto:test@example.com".to_string(),
+        };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let result = encode_section(&section, 0, 0, 0);
+        assert!(result.is_ok(), "mailto: URL must be accepted");
+    }
+
+    // ── Chart encoding ────────────────────────────────────────────
+
+    #[test]
+    fn chart_encoding_produces_chart_entry() {
+        use hwpforge_core::chart::{ChartData, ChartGrouping, ChartType, LegendPosition};
+        use hwpforge_core::control::Control;
+        let ctrl = Control::Chart {
+            chart_type: ChartType::Bar,
+            data: ChartData::category(&["A", "B"], &[("Series1", [1.0, 2.0].as_slice())]),
+            width: HwpUnit::new(10000).unwrap(),
+            height: HwpUnit::new(8000).unwrap(),
+            title: None,
+            legend: LegendPosition::default(),
+            grouping: ChartGrouping::Clustered,
+            bar_shape: None,
+            explosion: None,
+            of_pie_type: None,
+            radar_style: None,
+            wireframe: None,
+            bubble_3d: None,
+            scatter_style: None,
+            show_markers: None,
+            stock_variant: None,
+        };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let result = encode_section(&section, 0, 0, 0).unwrap();
+        assert_eq!(result.charts.len(), 1, "one chart entry expected");
+        let (path, xml) = &result.charts[0];
+        assert!(path.starts_with("Chart/chart"), "chart path format");
+        assert!(path.ends_with(".xml"), "chart path extension");
+        assert!(!xml.is_empty(), "chart XML must not be empty");
+    }
+
+    #[test]
+    fn chart_offset_applied_to_chart_path() {
+        use hwpforge_core::chart::{ChartData, ChartGrouping, ChartType, LegendPosition};
+        use hwpforge_core::control::Control;
+        let ctrl = Control::Chart {
+            chart_type: ChartType::Line,
+            data: ChartData::category(&["X"], &[("S", [1.0].as_slice())]),
+            width: HwpUnit::new(5000).unwrap(),
+            height: HwpUnit::new(4000).unwrap(),
+            title: None,
+            legend: LegendPosition::default(),
+            grouping: ChartGrouping::Clustered,
+            bar_shape: None,
+            explosion: None,
+            of_pie_type: None,
+            radar_style: None,
+            wireframe: None,
+            bubble_3d: None,
+            scatter_style: None,
+            show_markers: None,
+            stock_variant: None,
+        };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        // chart_offset=5 → chart1 index becomes 5+1=6 → chart6.xml
+        let result = encode_section(&section, 0, 5, 0).unwrap();
+        assert_eq!(result.charts.len(), 1);
+        assert_eq!(result.charts[0].0, "Chart/chart6.xml");
+    }
+
+    // ── build_bookmark_span_start/end run xml helpers ─────────────
+
+    #[test]
+    fn bookmark_span_start_run_xml_structure() {
+        let xml = build_bookmark_span_start_run_xml("mymark", 2, 7);
+        assert!(xml.contains(r#"charPrIDRef="2""#));
+        assert!(xml.contains(r#"type="BOOKMARK""#));
+        assert!(xml.contains(r#"name="mymark""#));
+        assert!(xml.contains(r#"fieldid="7""#));
+        assert!(xml.ends_with("</hp:run>"));
+    }
+
+    #[test]
+    fn bookmark_span_end_run_xml_structure() {
+        let xml = build_bookmark_span_end_run_xml(1, 3);
+        assert!(xml.contains(r#"charPrIDRef="1""#));
+        assert!(xml.contains("<hp:fieldEnd"));
+        assert!(xml.contains(r#"beginIDRef="3""#));
+        assert!(xml.ends_with("</hp:run>"));
+    }
+
+    // ── Heading level (titleMark) encoding ───────────────────────
+
+    #[test]
+    fn heading_level_injects_title_mark() {
+        let mut para = text_paragraph("Heading", 0, 0);
+        para.heading_level = Some(1);
+        let section = Section::with_paragraphs(vec![para], PageSettings::a4());
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains("<hp:titleMark"), "titleMark required for headings");
+        assert!(xml.contains(r#"ignore="false""#));
+    }
+
+    #[test]
+    fn no_heading_level_no_title_mark() {
+        let section = simple_section("Normal paragraph");
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(!xml.contains("<hp:titleMark"), "non-heading must NOT have titleMark");
     }
 }

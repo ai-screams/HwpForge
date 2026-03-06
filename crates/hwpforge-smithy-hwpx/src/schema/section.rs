@@ -34,7 +34,7 @@ pub struct HxSection {
 // ── Paragraph ─────────────────────────────────────────────────────
 
 /// `<hp:p id="..." paraPrIDRef="3" styleIDRef="0" ...>`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct HxParagraph {
     #[serde(rename = "@id", default)]
     pub id: String,
@@ -525,7 +525,7 @@ fn default_caption_gap() -> i32 {
 // ── Section Properties ────────────────────────────────────────────
 
 /// `<hp:secPr>` — section settings, embedded in the first paragraph.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct HxSecPr {
     #[serde(rename = "@textDirection", default)]
     pub text_direction: String,

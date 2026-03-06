@@ -2007,4 +2007,982 @@ mod tests {
         );
         assert_eq!(parse_number_format("unknown"), NumberFormatType::Digit);
     }
+
+    // ── parse_hex_color ──────────────────────────────────────────
+
+    #[test]
+    fn parse_hex_color_with_hash() {
+        use hwpforge_foundation::Color;
+        let c = parse_hex_color("#FF0000").unwrap();
+        assert_eq!(c, Color::from_rgb(255, 0, 0));
+    }
+
+    #[test]
+    fn parse_hex_color_without_hash() {
+        use hwpforge_foundation::Color;
+        let c = parse_hex_color("0000FF").unwrap();
+        assert_eq!(c, Color::from_rgb(0, 0, 255));
+    }
+
+    #[test]
+    fn parse_hex_color_black() {
+        use hwpforge_foundation::Color;
+        let c = parse_hex_color("#000000").unwrap();
+        assert_eq!(c, Color::BLACK);
+    }
+
+    #[test]
+    fn parse_hex_color_invalid_returns_none() {
+        assert!(parse_hex_color("GGGGGG").is_none(), "invalid hex must return None");
+        assert!(parse_hex_color("#FFFF").is_none(), "short hex must return None");
+        assert!(parse_hex_color("").is_none(), "empty string must return None");
+    }
+
+    // ── page_break / column_break decoding ──────────────────────
+
+    #[test]
+    fn parse_page_break() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0" pageBreak="1"><run charPrIDRef="0"><t>break</t></run></p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        assert!(result.paragraphs[0].page_break, "pageBreak=1 must decode as true");
+    }
+
+    #[test]
+    fn parse_column_break() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0" columnBreak="1"><run charPrIDRef="0"><t>col</t></run></p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        assert!(result.paragraphs[0].column_break, "columnBreak=1 must decode as true");
+    }
+
+    #[test]
+    fn parse_page_break_zero_is_false() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0" pageBreak="0"><run charPrIDRef="0"><t>normal</t></run></p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        assert!(!result.paragraphs[0].page_break, "pageBreak=0 must decode as false");
+    }
+
+    // ── Dutmal decoding ──────────────────────────────────────────
+
+    #[test]
+    fn parse_dutmal() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <dutmal posType="TOP" szRatio="50" option="0" styleIDRef="0" align="CENTER">
+                        <mainText>漢</mainText>
+                        <subText>한</subText>
+                    </dutmal>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let ctrl_run = result.paragraphs[0]
+            .runs
+            .iter()
+            .find(|r| r.content.is_control())
+            .expect("expected control run");
+        match &ctrl_run.content {
+            RunContent::Control(ctrl) => match ctrl.as_ref() {
+                hwpforge_core::Control::Dutmal { main_text, sub_text, sz_ratio, .. } => {
+                    assert_eq!(main_text, "漢");
+                    assert_eq!(sub_text, "한");
+                    assert_eq!(*sz_ratio, 50);
+                }
+                other => panic!("expected Dutmal, got {other:?}"),
+            },
+            _ => panic!("expected Control"),
+        }
+    }
+
+    #[test]
+    fn parse_dutmal_bottom_position() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <dutmal posType="BOTTOM" szRatio="75" option="0" styleIDRef="0" align="RIGHT">
+                        <mainText>A</mainText>
+                        <subText>a</subText>
+                    </dutmal>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let ctrl_run = result.paragraphs[0]
+            .runs
+            .iter()
+            .find(|r| r.content.is_control())
+            .expect("expected dutmal control");
+        match &ctrl_run.content {
+            RunContent::Control(ctrl) => match ctrl.as_ref() {
+                hwpforge_core::Control::Dutmal { position, align, .. } => {
+                    use hwpforge_core::control::{DutmalAlign, DutmalPosition};
+                    assert_eq!(*position, DutmalPosition::Bottom);
+                    assert_eq!(*align, DutmalAlign::Right);
+                }
+                other => panic!("expected Dutmal, got {other:?}"),
+            },
+            _ => panic!("expected Control"),
+        }
+    }
+
+    #[test]
+    fn parse_dutmal_left_position() {
+        use crate::schema::section::HxDutmal;
+        use hwpforge_core::control::DutmalPosition;
+        use hwpforge_foundation::CharShapeIndex;
+        let hx = HxDutmal {
+            pos_type: "LEFT".to_string(),
+            sz_ratio: 60,
+            option: 0,
+            style_id_ref: 0,
+            align: "LEFT".to_string(),
+            main_text: "X".to_string(),
+            sub_text: "x".to_string(),
+        };
+        let run = decode_dutmal(&hx, CharShapeIndex::new(0));
+        match &run.content {
+            RunContent::Control(ctrl) => match ctrl.as_ref() {
+                hwpforge_core::Control::Dutmal { position, .. } => {
+                    assert_eq!(*position, DutmalPosition::Left);
+                }
+                _ => panic!("expected Dutmal"),
+            },
+            _ => panic!("expected Control"),
+        }
+    }
+
+    #[test]
+    fn parse_dutmal_right_position() {
+        use crate::schema::section::HxDutmal;
+        use hwpforge_core::control::DutmalPosition;
+        use hwpforge_foundation::CharShapeIndex;
+        let hx = HxDutmal {
+            pos_type: "RIGHT".to_string(),
+            sz_ratio: 60,
+            option: 0,
+            style_id_ref: 0,
+            align: "CENTER".to_string(),
+            main_text: "Y".to_string(),
+            sub_text: "y".to_string(),
+        };
+        let run = decode_dutmal(&hx, CharShapeIndex::new(0));
+        match &run.content {
+            RunContent::Control(ctrl) => match ctrl.as_ref() {
+                hwpforge_core::Control::Dutmal { position, .. } => {
+                    assert_eq!(*position, DutmalPosition::Right);
+                }
+                _ => panic!("expected Dutmal"),
+            },
+            _ => panic!("expected Control"),
+        }
+    }
+
+    // ── Compose decoding ─────────────────────────────────────────
+
+    #[test]
+    fn parse_compose() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <compose circleType="CIRCLE" charSz="100" composeType="COMPOSE" charPrCnt="2" composeText="AB">
+                        <charPr prIDRef="4294967295"/>
+                        <charPr prIDRef="4294967295"/>
+                    </compose>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let ctrl_run = result.paragraphs[0]
+            .runs
+            .iter()
+            .find(|r| r.content.is_control())
+            .expect("expected compose control");
+        match &ctrl_run.content {
+            RunContent::Control(ctrl) => match ctrl.as_ref() {
+                hwpforge_core::Control::Compose {
+                    compose_text,
+                    circle_type,
+                    char_sz,
+                    compose_type,
+                } => {
+                    assert_eq!(compose_text, "AB");
+                    assert_eq!(circle_type, "CIRCLE");
+                    assert_eq!(*char_sz, 100);
+                    assert_eq!(compose_type, "COMPOSE");
+                }
+                other => panic!("expected Compose, got {other:?}"),
+            },
+            _ => panic!("expected Control"),
+        }
+    }
+
+    // ── extract_field_controls tests ─────────────────────────────
+
+    #[test]
+    fn extract_field_controls_autonum_page() {
+        let xml = r#"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+            <hp:p>
+                <hp:run charPrIDRef="0">
+                    <hp:ctrl>
+                        <hp:autoNum num="1" numType="PAGE">
+                            <hp:autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar="" supscript="0"/>
+                        </hp:autoNum>
+                    </hp:ctrl>
+                </hp:run>
+            </hp:p>
+        </hs:sec>"#;
+        let controls = extract_field_controls(xml);
+        assert_eq!(controls.len(), 1, "autoNum PAGE must produce one control");
+        match &controls[0] {
+            hwpforge_core::Control::Field { field_type, .. } => {
+                assert_eq!(*field_type, hwpforge_foundation::FieldType::PageNum);
+            }
+            other => panic!("expected Field PageNum, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extract_field_controls_summery_modifiedtime() {
+        let xml = r##"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+            <hp:run charPrIDRef="0">
+                <hp:ctrl>
+                    <hp:fieldBegin id="0" type="SUMMERY" name="" editable="1" dirty="0" zorder="-1" fieldid="628321650" metaTag="">
+                        <hp:parameters cnt="3" name="">
+                            <hp:integerParam name="Prop">8</hp:integerParam>
+                            <hp:stringParam name="Command">$modifiedtime</hp:stringParam>
+                            <hp:stringParam name="Property">$modifiedtime</hp:stringParam>
+                        </hp:parameters>
+                    </hp:fieldBegin>
+                </hp:ctrl>
+                <hp:t>2026-03-06</hp:t>
+                <hp:ctrl><hp:fieldEnd beginIDRef="0" fieldid="628321650"/></hp:ctrl>
+            </hp:run>
+        </hs:sec>"##;
+        let controls = extract_field_controls(xml);
+        // Should decode SUMMERY/$modifiedtime → FieldType::Date
+        let date_ctrl = controls.iter().find(|c| {
+            matches!(c, hwpforge_core::Control::Field { field_type, .. }
+                if *field_type == hwpforge_foundation::FieldType::Date)
+        });
+        assert!(date_ctrl.is_some(), "SUMMERY/$modifiedtime must decode as FieldType::Date");
+    }
+
+    #[test]
+    fn extract_field_controls_summery_createtime() {
+        let xml = r##"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+            <hp:run charPrIDRef="0">
+                <hp:ctrl>
+                    <hp:fieldBegin id="0" type="SUMMERY" name="" editable="1" dirty="0" zorder="-1" fieldid="628321650" metaTag="">
+                        <hp:parameters cnt="3" name="">
+                            <hp:integerParam name="Prop">8</hp:integerParam>
+                            <hp:stringParam name="Command">$createtime</hp:stringParam>
+                            <hp:stringParam name="Property">$createtime</hp:stringParam>
+                        </hp:parameters>
+                    </hp:fieldBegin>
+                </hp:ctrl>
+                <hp:t> </hp:t>
+                <hp:ctrl><hp:fieldEnd beginIDRef="0" fieldid="628321650"/></hp:ctrl>
+            </hp:run>
+        </hs:sec>"##;
+        let controls = extract_field_controls(xml);
+        let time_ctrl = controls.iter().find(|c| {
+            matches!(c, hwpforge_core::Control::Field { field_type, .. }
+                if *field_type == hwpforge_foundation::FieldType::Time)
+        });
+        assert!(time_ctrl.is_some(), "SUMMERY/$createtime must decode as FieldType::Time");
+    }
+
+    #[test]
+    fn extract_field_controls_summery_author() {
+        let xml = r##"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+            <hp:run charPrIDRef="0">
+                <hp:ctrl>
+                    <hp:fieldBegin id="0" type="SUMMERY" name="" editable="1" dirty="0" zorder="-1" fieldid="628321650" metaTag="">
+                        <hp:parameters cnt="3" name="">
+                            <hp:integerParam name="Prop">8</hp:integerParam>
+                            <hp:stringParam name="Command">$author</hp:stringParam>
+                            <hp:stringParam name="Property">$author</hp:stringParam>
+                        </hp:parameters>
+                    </hp:fieldBegin>
+                </hp:ctrl>
+                <hp:t> </hp:t>
+                <hp:ctrl><hp:fieldEnd beginIDRef="0" fieldid="628321650"/></hp:ctrl>
+            </hp:run>
+        </hs:sec>"##;
+        let controls = extract_field_controls(xml);
+        let doc_ctrl = controls.iter().find(|c| {
+            matches!(c, hwpforge_core::Control::Field { field_type, .. }
+                if *field_type == hwpforge_foundation::FieldType::DocSummary)
+        });
+        assert!(doc_ctrl.is_some(), "SUMMERY/$author must decode as FieldType::DocSummary");
+    }
+
+    #[test]
+    fn extract_field_controls_summery_lastsaveby() {
+        let xml = r##"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+            <hp:run charPrIDRef="0">
+                <hp:ctrl>
+                    <hp:fieldBegin id="0" type="SUMMERY" name="" editable="1" dirty="0" zorder="-1" fieldid="628321650" metaTag="">
+                        <hp:parameters cnt="3" name="">
+                            <hp:integerParam name="Prop">8</hp:integerParam>
+                            <hp:stringParam name="Command">$lastsaveby</hp:stringParam>
+                            <hp:stringParam name="Property">$lastsaveby</hp:stringParam>
+                        </hp:parameters>
+                    </hp:fieldBegin>
+                </hp:ctrl>
+                <hp:t> </hp:t>
+                <hp:ctrl><hp:fieldEnd beginIDRef="0" fieldid="628321650"/></hp:ctrl>
+            </hp:run>
+        </hs:sec>"##;
+        let controls = extract_field_controls(xml);
+        let ui_ctrl = controls.iter().find(|c| {
+            matches!(c, hwpforge_core::Control::Field { field_type, .. }
+                if *field_type == hwpforge_foundation::FieldType::UserInfo)
+        });
+        assert!(ui_ctrl.is_some(), "SUMMERY/$lastsaveby must decode as FieldType::UserInfo");
+    }
+
+    #[test]
+    fn extract_field_controls_crossref() {
+        let xml = r##"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+            <hp:run charPrIDRef="0">
+                <hp:ctrl>
+                    <hp:fieldBegin type="CROSSREF" editable="false" dirty="false" zorder="-1" fieldid="0" name="">
+                        <hp:parameters cnt="5" name="">
+                            <hp:stringParam name="RefPath">?#mybook</hp:stringParam>
+                            <hp:stringParam name="RefType">CURRENT</hp:stringParam>
+                            <hp:stringParam name="RefContentType">PAGE_NUMBER</hp:stringParam>
+                            <hp:booleanParam name="RefHyperLink">true</hp:booleanParam>
+                            <hp:stringParam name="RefOpenType">HYPERLINK_JUMP_DONTCARE</hp:stringParam>
+                        </hp:parameters>
+                    </hp:fieldBegin>
+                </hp:ctrl>
+                <hp:t>mybook</hp:t>
+                <hp:ctrl><hp:fieldEnd beginIDRef="0" fieldid="0"/></hp:ctrl>
+            </hp:run>
+        </hs:sec>"##;
+        let controls = extract_field_controls(xml);
+        let crossref =
+            controls.iter().find(|c| matches!(c, hwpforge_core::Control::CrossRef { .. }));
+        assert!(crossref.is_some(), "CROSSREF field must produce CrossRef control");
+        if let Some(hwpforge_core::Control::CrossRef { target_name, as_hyperlink, .. }) = crossref {
+            assert_eq!(target_name, "mybook", "target_name must strip ?# prefix");
+            assert!(*as_hyperlink, "RefHyperLink=true must decode as as_hyperlink=true");
+        }
+    }
+
+    #[test]
+    fn extract_field_controls_bookmark_self_closing() {
+        let xml = r##"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+            <hp:run charPrIDRef="0">
+                <hp:ctrl>
+                    <hp:fieldBegin type="BOOKMARK" editable="false" dirty="false" zorder="-1" fieldid="0" name="spanmark"/>
+                </hp:ctrl>
+            </hp:run>
+        </hs:sec>"##;
+        let controls = extract_field_controls(xml);
+        let bm = controls.iter().find(|c| {
+            matches!(
+                c,
+                hwpforge_core::Control::Bookmark {
+                    bookmark_type: hwpforge_foundation::BookmarkType::SpanStart,
+                    ..
+                }
+            )
+        });
+        assert!(bm.is_some(), "self-closing BOOKMARK fieldBegin must produce SpanStart");
+        if let Some(hwpforge_core::Control::Bookmark { name, .. }) = bm {
+            assert_eq!(name, "spanmark");
+        }
+    }
+
+    #[test]
+    fn extract_field_controls_hyperlink() {
+        let xml = r##"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+            <hp:run charPrIDRef="0">
+                <hp:ctrl>
+                    <hp:fieldBegin type="HYPERLINK" editable="false" dirty="false" zorder="-1" fieldid="0" name="">
+                        <hp:parameters cnt="4" name="">
+                            <hp:stringParam name="Path">https://example.com</hp:stringParam>
+                        </hp:parameters>
+                    </hp:fieldBegin>
+                </hp:ctrl>
+                <hp:t>link text</hp:t>
+                <hp:ctrl><hp:fieldEnd beginIDRef="0" fieldid="0"/></hp:ctrl>
+            </hp:run>
+        </hs:sec>"##;
+        let controls = extract_field_controls(xml);
+        let hyperlink =
+            controls.iter().find(|c| matches!(c, hwpforge_core::Control::Hyperlink { .. }));
+        assert!(hyperlink.is_some(), "HYPERLINK field must produce Hyperlink control");
+        if let Some(hwpforge_core::Control::Hyperlink { url, .. }) = hyperlink {
+            assert_eq!(url, "https://example.com");
+        }
+    }
+
+    #[test]
+    fn extract_field_controls_memo() {
+        let xml = r##"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
+            <hp:run charPrIDRef="0">
+                <hp:ctrl>
+                    <hp:fieldBegin type="MEMO" editable="false" dirty="false" zorder="-1" fieldid="0" name="">
+                        <hp:parameters cnt="2" name="">
+                            <hp:integerParam name="MemoShapeID">0</hp:integerParam>
+                            <hp:stringParam name="MemoType">DEFAULT</hp:stringParam>
+                        </hp:parameters>
+                        <hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP"
+                                    linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">
+                            <hp:p paraPrIDRef="0"><hp:run charPrIDRef="0"><hp:t>memo content</hp:t></hp:run></hp:p>
+                        </hp:subList>
+                    </hp:fieldBegin>
+                </hp:ctrl>
+                <hp:t/>
+                <hp:ctrl><hp:fieldEnd beginIDRef="0" fieldid="0"/></hp:ctrl>
+            </hp:run>
+        </hs:sec>"##;
+        let controls = extract_field_controls(xml);
+        let memo = controls.iter().find(|c| matches!(c, hwpforge_core::Control::Memo { .. }));
+        assert!(memo.is_some(), "MEMO field must produce Memo control");
+    }
+
+    #[test]
+    fn extract_field_controls_empty_xml_no_controls() {
+        let xml =
+            r#"<sec><p paraPrIDRef="0"><run charPrIDRef="0"><t>no fields</t></run></p></sec>"#;
+        let controls = extract_field_controls(xml);
+        assert!(controls.is_empty(), "plain text produces no field controls");
+    }
+
+    // ── Visibility decoding via secPr ────────────────────────────
+
+    #[test]
+    fn extract_visibility_from_sec_pr() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <secPr textDirection="HORIZONTAL">
+                        <visibility hideFirstHeader="1" hideFirstFooter="0" hideFirstMasterPage="0"
+                                    border="HIDE_ALL" fill="SHOW_ODD" hideFirstPageNum="1"
+                                    hideFirstEmptyLine="0" showLineNumber="1"/>
+                        <pagePr landscape="WIDELY" width="59528" height="84188">
+                            <margin header="4252" footer="4252" gutter="0"
+                                    left="8504" right="8504" top="5668" bottom="4252"/>
+                        </pagePr>
+                    </secPr>
+                    <t>body</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let vis = result.visibility.expect("should have visibility");
+        assert!(vis.hide_first_header, "hideFirstHeader=1 must decode as true");
+        assert!(!vis.hide_first_footer);
+        assert!(vis.hide_first_page_num);
+        assert!(vis.show_line_number);
+        use hwpforge_foundation::ShowMode;
+        assert_eq!(vis.border, ShowMode::HideAll);
+        assert_eq!(vis.fill, ShowMode::ShowOdd);
+    }
+
+    #[test]
+    fn no_visibility_in_sec_pr_gives_none() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <secPr textDirection="HORIZONTAL">
+                        <pagePr landscape="WIDELY" width="59528" height="84188">
+                            <margin header="4252" footer="4252" gutter="0"
+                                    left="8504" right="8504" top="5668" bottom="4252"/>
+                        </pagePr>
+                    </secPr>
+                    <t>body</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        assert!(result.visibility.is_none(), "absent visibility must give None");
+    }
+
+    // ── LineNumberShape decoding ─────────────────────────────────
+
+    #[test]
+    fn extract_line_number_shape_from_sec_pr() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <secPr textDirection="HORIZONTAL">
+                        <lineNumberShape restartType="PAGE" countBy="5" distance="1000" startNumber="3"/>
+                        <pagePr landscape="WIDELY" width="59528" height="84188">
+                            <margin header="4252" footer="4252" gutter="0"
+                                    left="8504" right="8504" top="5668" bottom="4252"/>
+                        </pagePr>
+                    </secPr>
+                    <t>body</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let lns = result.line_number_shape.expect("should have line_number_shape");
+        assert_eq!(lns.restart_type, 1, "PAGE restart_type must be 1");
+        assert_eq!(lns.count_by, 5);
+        assert_eq!(lns.distance.as_i32(), 1000);
+        assert_eq!(lns.start_number, 3);
+    }
+
+    fn make_empty_sec_pr() -> crate::schema::section::HxSecPr {
+        use crate::schema::section::HxSecPr;
+        HxSecPr {
+            text_direction: String::new(),
+            master_page_cnt: 0,
+            visibility: None,
+            line_number_shape: None,
+            page_pr: None,
+            page_border_fills: vec![],
+        }
+    }
+
+    #[test]
+    fn extract_line_number_shape_section_type() {
+        use crate::schema::section::HxLineNumberShape;
+        let mut sec_pr = make_empty_sec_pr();
+        sec_pr.line_number_shape = Some(HxLineNumberShape {
+            restart_type: "SECTION".to_string(),
+            count_by: 10,
+            distance: 2000,
+            start_number: 1,
+        });
+        let lns = extract_line_number_shape(&sec_pr).unwrap();
+        assert_eq!(lns.restart_type, 2, "SECTION restart_type must be 2");
+    }
+
+    #[test]
+    fn extract_line_number_shape_continuous_type() {
+        use crate::schema::section::HxLineNumberShape;
+        let mut sec_pr = make_empty_sec_pr();
+        sec_pr.line_number_shape = Some(HxLineNumberShape {
+            restart_type: "CONTINUOUS".to_string(),
+            count_by: 1,
+            distance: 0,
+            start_number: 0,
+        });
+        let lns = extract_line_number_shape(&sec_pr).unwrap();
+        assert_eq!(lns.restart_type, 0, "CONTINUOUS restart_type must be 0");
+    }
+
+    // ── PageBorderFillEntry decoding ─────────────────────────────
+
+    #[test]
+    fn extract_page_border_fills_from_sec_pr() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <secPr textDirection="HORIZONTAL">
+                        <pagePr landscape="WIDELY" width="59528" height="84188">
+                            <margin header="4252" footer="4252" gutter="0"
+                                    left="8504" right="8504" top="5668" bottom="4252"/>
+                        </pagePr>
+                        <pageBorderFill type="BOTH" borderFillIDRef="2" textBorder="PAPER" headerInside="1" footerInside="0" fillArea="PAGE">
+                            <offset left="500" right="600" top="700" bottom="800"/>
+                        </pageBorderFill>
+                    </secPr>
+                    <t>body</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let fills = result.page_border_fills.expect("should have page_border_fills");
+        assert_eq!(fills.len(), 1);
+        assert_eq!(fills[0].apply_type, "BOTH");
+        assert_eq!(fills[0].border_fill_id, 2);
+        assert!(fills[0].header_inside, "headerInside=1 must be true");
+        assert!(!fills[0].footer_inside, "footerInside=0 must be false");
+        assert_eq!(fills[0].fill_area, "PAGE");
+        assert_eq!(fills[0].offset[0].as_i32(), 500); // left
+    }
+
+    #[test]
+    fn empty_page_border_fills_gives_none() {
+        let sec_pr = make_empty_sec_pr();
+        assert!(extract_page_border_fills(&sec_pr).is_none(), "empty list must give None");
+    }
+
+    // ── Landscape decoding (reversed semantics) ──────────────────
+
+    #[test]
+    fn narrowly_decodes_as_landscape_true() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <secPr textDirection="HORIZONTAL">
+                        <pagePr landscape="NARROWLY" width="59528" height="84188">
+                            <margin header="0" footer="0" gutter="0" left="0" right="0" top="0" bottom="0"/>
+                        </pagePr>
+                    </secPr>
+                    <t>landscape</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let ps = result.page_settings.unwrap();
+        assert!(ps.landscape, "NARROWLY must decode as landscape=true");
+    }
+
+    #[test]
+    fn widely_decodes_as_landscape_false() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <secPr textDirection="HORIZONTAL">
+                        <pagePr landscape="WIDELY" width="59528" height="84188">
+                            <margin header="0" footer="0" gutter="0" left="0" right="0" top="0" bottom="0"/>
+                        </pagePr>
+                    </secPr>
+                    <t>portrait</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let ps = result.page_settings.unwrap();
+        assert!(!ps.landscape, "WIDELY must decode as landscape=false");
+    }
+
+    // ── Gutter type decoding ─────────────────────────────────────
+
+    #[test]
+    fn gutter_type_left_right_decodes() {
+        use hwpforge_foundation::GutterType;
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <secPr textDirection="HORIZONTAL">
+                        <pagePr landscape="WIDELY" width="59528" height="84188" gutterType="LEFT_RIGHT">
+                            <margin header="0" footer="0" gutter="0" left="0" right="0" top="0" bottom="0"/>
+                        </pagePr>
+                    </secPr>
+                    <t>gutter</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let ps = result.page_settings.unwrap();
+        assert_eq!(ps.gutter_type, GutterType::LeftRight);
+    }
+
+    #[test]
+    fn gutter_type_top_only_decodes() {
+        use hwpforge_foundation::GutterType;
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <secPr textDirection="HORIZONTAL">
+                        <pagePr landscape="WIDELY" width="59528" height="84188" gutterType="TOP_ONLY">
+                            <margin header="0" footer="0" gutter="0" left="0" right="0" top="0" bottom="0"/>
+                        </pagePr>
+                    </secPr>
+                    <t>gutter</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let ps = result.page_settings.unwrap();
+        assert_eq!(ps.gutter_type, GutterType::TopOnly);
+    }
+
+    #[test]
+    fn gutter_type_top_bottom_decodes() {
+        use hwpforge_foundation::GutterType;
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <secPr textDirection="HORIZONTAL">
+                        <pagePr landscape="WIDELY" width="59528" height="84188" gutterType="TOP_BOTTOM">
+                            <margin header="0" footer="0" gutter="0" left="0" right="0" top="0" bottom="0"/>
+                        </pagePr>
+                    </secPr>
+                    <t>gutter</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let ps = result.page_settings.unwrap();
+        assert_eq!(ps.gutter_type, GutterType::TopBottom);
+    }
+
+    // ── Sublist nesting depth limit ──────────────────────────────
+
+    #[test]
+    fn sublist_nesting_depth_exceeded_returns_error() {
+        use crate::schema::section::{HxParagraph, HxSubList};
+        let sub_list = HxSubList {
+            id: String::new(),
+            text_direction: "HORIZONTAL".to_string(),
+            line_wrap: "BREAK".to_string(),
+            vert_align: "TOP".to_string(),
+            link_list_id_ref: 0,
+            link_list_next_id_ref: 0,
+            text_width: 0,
+            text_height: 0,
+            has_text_ref: 0,
+            has_num_ref: 0,
+            paragraphs: vec![HxParagraph::default()],
+        };
+        let err = decode_sublist_paragraphs(&sub_list, MAX_NESTING_DEPTH).unwrap_err();
+        match &err {
+            crate::error::HwpxError::InvalidStructure { detail } => {
+                assert!(detail.contains("nesting depth"), "error must mention nesting depth");
+            }
+            _ => panic!("expected InvalidStructure, got: {err:?}"),
+        }
+    }
+
+    // ── Bookmark (Point) decoding ────────────────────────────────
+
+    #[test]
+    fn parse_bookmark_point_ctrl() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <bookmark name="bk1"/>
+                    </ctrl>
+                    <t>text</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let bm_run = result.paragraphs[0]
+            .runs
+            .iter()
+            .find(|r| r.content.is_control())
+            .expect("expected bookmark control run");
+        match &bm_run.content {
+            RunContent::Control(ctrl) => match ctrl.as_ref() {
+                hwpforge_core::Control::Bookmark { name, bookmark_type } => {
+                    assert_eq!(name, "bk1");
+                    assert_eq!(*bookmark_type, hwpforge_foundation::BookmarkType::Point);
+                }
+                other => panic!("expected Bookmark, got {other:?}"),
+            },
+            _ => panic!("expected Control"),
+        }
+    }
+
+    // ── IndexMark decoding ───────────────────────────────────────
+
+    #[test]
+    fn parse_indexmark_ctrl() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <indexmark>
+                            <firstKey>주항목</firstKey>
+                            <secondKey>부항목</secondKey>
+                        </indexmark>
+                    </ctrl>
+                    <t>text</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let im_run = result.paragraphs[0]
+            .runs
+            .iter()
+            .find(|r| r.content.is_control())
+            .expect("expected indexmark control run");
+        match &im_run.content {
+            RunContent::Control(ctrl) => match ctrl.as_ref() {
+                hwpforge_core::Control::IndexMark { primary, secondary } => {
+                    assert_eq!(primary, "주항목");
+                    assert_eq!(secondary.as_deref(), Some("부항목"));
+                }
+                other => panic!("expected IndexMark, got {other:?}"),
+            },
+            _ => panic!("expected Control"),
+        }
+    }
+
+    // ── text_direction decoding ──────────────────────────────────
+
+    #[test]
+    fn vertical_text_direction_decodes() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <secPr textDirection="VERTICAL">
+                        <pagePr landscape="WIDELY" width="59528" height="84188">
+                            <margin header="0" footer="0" gutter="0" left="0" right="0" top="0" bottom="0"/>
+                        </pagePr>
+                    </secPr>
+                    <t>세로</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        assert_eq!(result.text_direction, TextDirection::Vertical);
+    }
+
+    // ── Caption decoding ─────────────────────────────────────────
+
+    #[test]
+    fn convert_hx_caption_left_side() {
+        use crate::schema::section::{HxCaption, HxSubList};
+        let hx = HxCaption {
+            side: "LEFT".to_string(),
+            full_sz: 0,
+            width: 5000,
+            gap: 850,
+            last_width: 10000,
+            sub_list: HxSubList {
+                id: String::new(),
+                text_direction: "HORIZONTAL".to_string(),
+                line_wrap: "BREAK".to_string(),
+                vert_align: "TOP".to_string(),
+                link_list_id_ref: 0,
+                link_list_next_id_ref: 0,
+                text_width: 0,
+                text_height: 0,
+                has_text_ref: 0,
+                has_num_ref: 0,
+                paragraphs: vec![],
+            },
+        };
+        let caption = convert_hx_caption(&hx, 0).unwrap();
+        use hwpforge_core::caption::CaptionSide;
+        assert_eq!(caption.side, CaptionSide::Left);
+        assert_eq!(caption.width.unwrap().as_i32(), 5000);
+        assert_eq!(caption.gap.as_i32(), 850);
+    }
+
+    #[test]
+    fn convert_hx_caption_right_side() {
+        use crate::schema::section::{HxCaption, HxSubList};
+        let hx = HxCaption {
+            side: "RIGHT".to_string(),
+            full_sz: 0,
+            width: 0, // zero width → None
+            gap: 0,
+            last_width: 0,
+            sub_list: HxSubList {
+                id: String::new(),
+                text_direction: "HORIZONTAL".to_string(),
+                line_wrap: "BREAK".to_string(),
+                vert_align: "TOP".to_string(),
+                link_list_id_ref: 0,
+                link_list_next_id_ref: 0,
+                text_width: 0,
+                text_height: 0,
+                has_text_ref: 0,
+                has_num_ref: 0,
+                paragraphs: vec![],
+            },
+        };
+        let caption = convert_hx_caption(&hx, 0).unwrap();
+        use hwpforge_core::caption::CaptionSide;
+        assert_eq!(caption.side, CaptionSide::Right);
+        assert!(caption.width.is_none(), "zero width must decode as None");
+    }
+
+    #[test]
+    fn convert_hx_caption_top_and_bottom() {
+        use crate::schema::section::{HxCaption, HxSubList};
+        use hwpforge_core::caption::CaptionSide;
+
+        let make_caption = |side: &str| HxCaption {
+            side: side.to_string(),
+            full_sz: 0,
+            width: 0,
+            gap: 0,
+            last_width: 0,
+            sub_list: HxSubList {
+                id: String::new(),
+                text_direction: "HORIZONTAL".to_string(),
+                line_wrap: "BREAK".to_string(),
+                vert_align: "TOP".to_string(),
+                link_list_id_ref: 0,
+                link_list_next_id_ref: 0,
+                text_width: 0,
+                text_height: 0,
+                has_text_ref: 0,
+                has_num_ref: 0,
+                paragraphs: vec![],
+            },
+        };
+
+        let top = convert_hx_caption(&make_caption("TOP"), 0).unwrap();
+        assert_eq!(top.side, CaptionSide::Top);
+
+        let bottom = convert_hx_caption(&make_caption("BOTTOM"), 0).unwrap();
+        assert_eq!(bottom.side, CaptionSide::Bottom);
+    }
+
+    // ── Equation decoding ────────────────────────────────────────
+
+    #[test]
+    fn parse_equation_from_schema() {
+        use crate::schema::section::{HxEquation, HxScript, HxTableSz};
+        use hwpforge_foundation::CharShapeIndex;
+        let hx = HxEquation {
+            sz: Some(HxTableSz {
+                width: 10000,
+                width_rel_to: "ABSOLUTE".to_string(),
+                height: 5000,
+                height_rel_to: "ABSOLUTE".to_string(),
+                protect: 0,
+            }),
+            base_line: 80,
+            text_color: "#000000".to_string(),
+            font: "HCR Batang".to_string(),
+            script: Some(HxScript { text: "{x} over {y}".to_string() }),
+            ..Default::default()
+        };
+        let run = decode_equation(&hx, CharShapeIndex::new(0)).unwrap();
+        match &run.content {
+            RunContent::Control(ctrl) => match ctrl.as_ref() {
+                hwpforge_core::Control::Equation {
+                    script, width, height, base_line, font, ..
+                } => {
+                    assert_eq!(script, "{x} over {y}");
+                    assert_eq!(width.as_i32(), 10000);
+                    assert_eq!(height.as_i32(), 5000);
+                    assert_eq!(*base_line, 80);
+                    assert_eq!(font, "HCR Batang");
+                }
+                other => panic!("expected Equation, got {other:?}"),
+            },
+            _ => panic!("expected Control"),
+        }
+    }
+
+    #[test]
+    fn decode_equation_no_sz_uses_zero() {
+        use crate::schema::section::HxEquation;
+        use hwpforge_foundation::CharShapeIndex;
+        let hx = HxEquation {
+            sz: None,
+            base_line: 0,
+            text_color: "#000000".to_string(),
+            font: "".to_string(),
+            script: None,
+            ..Default::default()
+        };
+        let run = decode_equation(&hx, CharShapeIndex::new(0)).unwrap();
+        match &run.content {
+            RunContent::Control(ctrl) => match ctrl.as_ref() {
+                hwpforge_core::Control::Equation { width, height, script, .. } => {
+                    assert_eq!(width.as_i32(), 0);
+                    assert_eq!(height.as_i32(), 0);
+                    assert_eq!(script, "");
+                }
+                _ => panic!("expected Equation"),
+            },
+            _ => panic!("expected Control"),
+        }
+    }
 }
