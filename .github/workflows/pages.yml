@@ -1,7 +1,9 @@
 # =============================================================================
-# HwpForge Pages — mdBook → GitHub Pages
+# HwpForge Pages — mdBook + rustdoc → GitHub Pages
 # =============================================================================
-# Deploys docs/ to ai-screams.github.io/HwpForge/
+# Deploys to ai-screams.github.io/HwpForge/
+#   /           — mdBook (guides & tutorials)
+#   /api/       — rustdoc (API reference)
 # Requires: repo Settings → Pages → Source = "GitHub Actions"
 # =============================================================================
 name: Pages
@@ -26,9 +28,12 @@ jobs:
   build:
     name: "Pages > Build"
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-action/setup@v1
 
       - name: Install mdBook
         run: |
@@ -46,8 +51,13 @@ jobs:
             | tar -xz --directory=bin 2>/dev/null \
             || cargo install mdbook-mermaid --version 0.14.0 --root . --locked
 
-      - name: Build book
+      - name: Build mdBook
         run: mdbook build
+
+      - name: Build rustdoc
+        run: |
+          cargo doc --no-deps --all-features
+          cp -r target/doc book/api
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v3
