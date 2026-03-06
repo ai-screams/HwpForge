@@ -1,5 +1,6 @@
 [workspace]
 members = [
+  "crates/hwpforge",
   "crates/hwpforge-bindings-cli",
   "crates/hwpforge-bindings-py",
   "crates/hwpforge-blueprint",
@@ -13,15 +14,21 @@ resolver = "2"
 
 [workspace.package]
 version = "0.1.0"
-authors = ["AiScream Team <team@aiscream.dev>"]
-categories = ["parser-implementations", "encoding", "text-processing"]
+authors = ["Pignuante <hanyul.ryu@hanyul.xyz>"]
+categories = [
+  "parser-implementations",
+  "encoding",
+  "text-processing",
+  "template-engine",
+  "internationalization",
+]
 documentation = "https://docs.rs/hwpforge"
 edition = "2021"
-homepage = "https://github.com/aiscream/hwpforge"
-keywords = ["hwp", "hwpx", "owpml", "document", "korean"]
+homepage = "https://ai-screams.github.io/HwpForge/"
+keywords = ["hwp", "hwpx", "hancom", "hangul", "korean"]
 license = "MIT OR Apache-2.0"
 readme = "README.md"
-repository = "https://github.com/aiscream/hwpforge"
+repository = "https://github.com/ai-screams/HwpForge"
 rust-version = "1.88"
 
 [workspace.dependencies]

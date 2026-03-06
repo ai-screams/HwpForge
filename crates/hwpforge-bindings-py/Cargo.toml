@@ -1,5 +1,5 @@
 [package]
-name = "bindings-py"
+name = "hwpforge-bindings-py"
 version.workspace = true
 authors.workspace = true
 categories.workspace = true
@@ -8,10 +8,10 @@ edition.workspace = true
 homepage.workspace = true
 keywords.workspace = true
 license.workspace = true
+publish = false
 readme.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+description = "Python bindings for HwpForge via PyO3 (not yet implemented)"
 
 [dependencies]
