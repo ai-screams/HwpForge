@@ -22,6 +22,18 @@ mod lossless;
 
 const SECTION_MARKER_COMMENT: &str = "<!-- hwpforge:section -->";
 
+/// Returns `true` if the URL uses a safe scheme for hyperlinks.
+///
+/// Rejects `javascript:`, `data:`, `file:`, and similar schemes that can
+/// execute code or access local resources when rendered.
+fn is_safe_url(url: &str) -> bool {
+    if url.is_empty() {
+        return true;
+    }
+    let lower = url.to_ascii_lowercase();
+    lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("mailto:")
+}
+
 /// Result of decoding markdown, containing both the document and the
 /// [`StyleRegistry`] resolved from the template.
 ///
@@ -503,8 +515,21 @@ impl<'a> DecoderState<'a> {
                 if !self.is_in_table_cell() {
                     self.ensure_paragraph();
                 }
-                self.pending_link =
-                    Some(PendingLink { dest_url: dest_url.to_string(), text: String::new() });
+                // Only create a hyperlink for safe URL schemes. Unsafe URLs
+                // (javascript:, data:, file:, etc.) are emitted as plain text
+                // by leaving pending_link as None and letting the text pass through.
+                if is_safe_url(&dest_url) {
+                    self.pending_link =
+                        Some(PendingLink { dest_url: dest_url.to_string(), text: String::new() });
+                } else {
+                    // Store the URL in pending_link with an empty sentinel so
+                    // we can still collect the link text, but mark it unsafe
+                    // by prefixing with '\0' (never a valid URL character).
+                    self.pending_link = Some(PendingLink {
+                        dest_url: format!("\x00{}", dest_url),
+                        text: String::new(),
+                    });
+                }
             }
             Tag::Image { dest_url, .. } => {
                 if !self.is_in_table_cell() {
@@ -576,10 +601,17 @@ impl<'a> DecoderState<'a> {
             TagEnd::Link => {
                 if let Some(link) = self.pending_link.take() {
                     let char_shape_id = self.current_char_shape_id();
-                    self.push_run_to_active_context(Run::control(
-                        Control::Hyperlink { text: link.text, url: link.dest_url },
-                        char_shape_id,
-                    ));
+                    if link.dest_url.starts_with('\x00') {
+                        // Unsafe URL: emit the link text as plain text only.
+                        if !link.text.is_empty() {
+                            self.push_run_to_active_context(Run::text(link.text, char_shape_id));
+                        }
+                    } else {
+                        self.push_run_to_active_context(Run::control(
+                            Control::Hyperlink { text: link.text, url: link.dest_url },
+                            char_shape_id,
+                        ));
+                    }
                 }
             }
             TagEnd::Image => {
@@ -972,6 +1004,59 @@ mod tests {
         assert!(paragraph.runs.iter().any(|run| matches!(
             run.content,
             RunContent::Image(ref img) if img.path == "logo.png"
+        )));
+    }
+
+    #[test]
+    fn unsafe_url_emitted_as_plain_text() {
+        let template = default_template();
+        // javascript: URL must NOT produce a Control::Hyperlink
+        let markdown = "[click me](javascript:alert(1))";
+        let doc = MdDecoder::decode(markdown, &template).unwrap().document;
+        let paragraph = &doc.sections()[0].paragraphs[0];
+
+        // No hyperlink control should be present
+        assert!(!paragraph.runs.iter().any(|run| matches!(
+            run.content,
+            RunContent::Control(ref ctrl) if matches!(ctrl.as_ref(), Control::Hyperlink { .. })
+        )));
+
+        // The link text "click me" should appear as plain text
+        assert!(paragraph.runs.iter().any(|run| matches!(
+            &run.content,
+            RunContent::Text(t) if t == "click me"
+        )));
+    }
+
+    #[test]
+    fn unsafe_data_url_emitted_as_plain_text() {
+        let template = default_template();
+        let markdown = "[xss](data:text/html,<script>alert(1)</script>)";
+        let doc = MdDecoder::decode(markdown, &template).unwrap().document;
+        let paragraph = &doc.sections()[0].paragraphs[0];
+
+        assert!(!paragraph.runs.iter().any(|run| matches!(
+            run.content,
+            RunContent::Control(ref ctrl) if matches!(ctrl.as_ref(), Control::Hyperlink { .. })
+        )));
+    }
+
+    #[test]
+    fn unsafe_file_url_emitted_as_plain_text() {
+        let template = default_template();
+        let markdown = "[secret](file:///etc/passwd)";
+        let doc = MdDecoder::decode(markdown, &template).unwrap().document;
+        let paragraph = &doc.sections()[0].paragraphs[0];
+
+        // Should NOT produce a Hyperlink control
+        assert!(!paragraph.runs.iter().any(|run| matches!(
+            run.content,
+            RunContent::Control(ref ctrl) if matches!(ctrl.as_ref(), Control::Hyperlink { .. })
+        )));
+        // Should contain the link text as plain text
+        assert!(paragraph.runs.iter().any(|run| matches!(
+            &run.content,
+            RunContent::Text(t) if t == "secret"
         )));
     }
 

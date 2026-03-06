@@ -139,6 +139,15 @@ pub fn parse_section(
                 }
 
                 // Chart runs (from <hp:switch><hp:case><hp:chart>)
+                const MAX_STYLE_INDEX: u32 = 100_000;
+                if hx_run.char_pr_id_ref > MAX_STYLE_INDEX {
+                    return Err(crate::error::HwpxError::InvalidStructure {
+                        detail: format!(
+                            "charPrIDRef {} exceeds maximum allowed index {}",
+                            hx_run.char_pr_id_ref, MAX_STYLE_INDEX,
+                        ),
+                    });
+                }
                 let char_shape_id = CharShapeIndex::new(hx_run.char_pr_id_ref as usize);
                 for switch in &hx_run.switches {
                     if let Some(case) = &switch.case {
@@ -198,6 +207,15 @@ fn convert_paragraph(
     is_first: bool,
     depth: usize,
 ) -> HwpxResult<(Paragraph, Option<PageSettings>)> {
+    const MAX_STYLE_INDEX: u32 = 100_000;
+    if hx.para_pr_id_ref > MAX_STYLE_INDEX {
+        return Err(crate::error::HwpxError::InvalidStructure {
+            detail: format!(
+                "paraPrIDRef {} exceeds maximum allowed index {}",
+                hx.para_pr_id_ref, MAX_STYLE_INDEX,
+            ),
+        });
+    }
     let para_shape_id = ParaShapeIndex::new(hx.para_pr_id_ref as usize);
     let mut page_settings = None;
 
@@ -256,6 +274,15 @@ fn convert_paragraph(
 /// `<hp:ctrl>` (footnote/endnote), and `<hp:rect>` (textbox) elements.
 /// Each is converted to a separate Run with the same charPrIDRef.
 fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
+    const MAX_STYLE_INDEX: u32 = 100_000;
+    if hx.char_pr_id_ref > MAX_STYLE_INDEX {
+        return Err(crate::error::HwpxError::InvalidStructure {
+            detail: format!(
+                "charPrIDRef {} exceeds maximum allowed index {}",
+                hx.char_pr_id_ref, MAX_STYLE_INDEX,
+            ),
+        });
+    }
     let char_shape_id = CharShapeIndex::new(hx.char_pr_id_ref as usize);
     let mut runs = Vec::new();
 
