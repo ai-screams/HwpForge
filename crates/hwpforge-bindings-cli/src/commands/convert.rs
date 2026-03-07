@@ -31,7 +31,9 @@ pub fn run(input: &str, output: &PathBuf, preset: &str, json_mode: bool) {
     // Read input (file or stdin)
     let markdown = if input == "-" {
         let mut buf = String::new();
-        if let Err(e) = std::io::stdin().read_to_string(&mut buf) {
+        // Use take() to limit reads BEFORE buffering, preventing OOM on infinite streams.
+        if let Err(e) = std::io::stdin().take((MAX_STDIN_SIZE + 1) as u64).read_to_string(&mut buf)
+        {
             CliError::new("STDIN_READ_FAILED", format!("Failed to read stdin: {e}"))
                 .exit(json_mode, 1);
         }

@@ -12,15 +12,9 @@ static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 // ─── Helpers ───
 
-/// Path to the built binary.
+/// Path to the built binary (set by cargo for integration tests).
 fn hwpforge_bin() -> PathBuf {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.pop(); // crates/
-    path.pop(); // workspace root
-    path.push("target");
-    path.push("debug");
-    path.push("hwpforge");
-    path
+    PathBuf::from(env!("CARGO_BIN_EXE_hwpforge"))
 }
 
 /// Create a unique temp directory for each test.
@@ -254,6 +248,7 @@ fn convert_empty_md() {
     let (_, _, code) = run(&["convert", md.to_str().unwrap(), "-o", out.to_str().unwrap()]);
     assert_eq!(code, 0);
     assert!(out.exists());
+    assert_valid_hwpx(&out);
 }
 
 #[test]
