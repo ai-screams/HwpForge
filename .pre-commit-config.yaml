@@ -1,10 +1,10 @@
-# Pre-commit hooks for HwpForge (Hybrid mode)
+# Pre-commit hooks for HwpForge
 #
-# Light hooks: MD lint/format + file hygiene + cargo fmt.
-# Heavy checks (clippy/test) stay in `make ci` to keep commits fast.
+# Pre-commit: MD lint/format + file hygiene + cargo fmt + clippy.
+# Pre-push: full `make ci` (fmt + clippy + test + deny + lint).
 #
 # Install: brew install dprint pre-commit && npm install -g markdownlint-cli2
-# Activate: pre-commit install
+# Activate: pre-commit install && pre-commit install --hook-type pre-push
 
 repos:
   # ── Markdown ──────────────────────────────────────────────
@@ -30,6 +30,23 @@ repos:
         language: system
         pass_filenames: false
         types: [rust]
+
+  # ── Rust clippy (~10-20s, catches warnings before CI) ──
+      - id: cargo-clippy
+        name: cargo clippy
+        entry: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        language: system
+        pass_filenames: false
+        types: [rust]
+
+  # ── Pre-push: full CI pipeline ─────────────────────────
+      - id: make-ci
+        name: make ci (pre-push)
+        entry: make ci
+        language: system
+        stages: [pre-push]
+        pass_filenames: false
+        always_run: true
 
   # ── Basic file hygiene ───────────────────────────────────
   - repo: https://github.com/pre-commit/pre-commit-hooks
