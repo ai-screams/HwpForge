@@ -2,16 +2,27 @@
 name = "hwpforge-bindings-cli"
 version.workspace = true
 authors.workspace = true
-categories.workspace = true
-documentation.workspace = true
 edition.workspace = true
-homepage.workspace = true
-keywords.workspace = true
 license.workspace = true
 publish = false
 readme.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "CLI interface for HwpForge (not yet implemented)"
+description = "AI-first CLI for HwpForge document generation and editing"
+
+[[bin]]
+name = "hwpforge"
+path = "src/main.rs"
 
 [dependencies]
+clap = { workspace = true }
+hwpforge-core = { path = "../hwpforge-core" }
+hwpforge-foundation = { path = "../hwpforge-foundation" }
+hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx" }
+hwpforge-smithy-md = { path = "../hwpforge-smithy-md" }
+schemars = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
