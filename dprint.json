@@ -20,7 +20,8 @@
     "**/.docs/**",
     "**/.omc/**",
     "**/temp/**",
-    "**/*.hwpx"
+    "**/*.hwpx",
+    "**/CHANGELOG.md"
   ],
   "plugins": [
     "https://plugins.dprint.dev/markdown-0.20.0.wasm",
