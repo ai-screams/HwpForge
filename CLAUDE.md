@@ -700,11 +700,12 @@ Valid values: None, DoubleLine, TripleLine, Margin
 | Wave 12       | References & Annotations                          | ✅ Done           | —     | ~500   |
 | Wave 13       | Remaining Content (Dutmal/Compose)                | ✅ Done           | —     | ~400   |
 | Wave 14       | Final Features (TextDirection/DropCap/page_break) | ✅ Done           | —     | ~200   |
-| 6             | bindings (Py + CLI)                               | 📋 Ready          | —     | —      |
+| 6 (CLI)       | bindings-cli (AI-first CLI)                       | ✅ Done           | 28    | 1,021  |
+| 6 (Python)    | bindings-py (PyO3)                                | 📋 Ready          | —     | —      |
 | 7             | MCP integration                                   | 📋 Ready          | —     | —      |
 | 8             | Testing + Release v1.0                            | 📋 Ready          | —     | —      |
 
-**Totals (Phase 0-5 + 4.5 Wave 1-14 + Wave 7-14)**: ~49,215 LOC, 1,494 tests (nextest), 92 .rs files, 9 crates
+**Totals (Phase 0-5 + 4.5 Wave 1-14 + Wave 7-14 + Phase 6 CLI)**: ~50,581 LOC, 1,541 tests (nextest), 103 .rs files, 9 crates
 
 ### v2.0 (Second Cycle: Full Compatibility)
 
