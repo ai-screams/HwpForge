@@ -27,6 +27,19 @@
 
 HwpForge는 HWPX 문서(ZIP + XML, KS X 6101)를 다루기 위한 **오픈소스** 순수 Rust 라이브러리입니다. 한국에서 가장 많이 사용되는 워드프로세서인 [Hancom 한글](https://www.hancom.com)의 최신 포맷을 지원합니다.
 
+### 지원 버전
+
+| 한글 버전        | 포맷         | 읽기    | 쓰기 | 스타일 세트                    |
+| ---------------- | ------------ | ------- | ---- | ------------------------------ |
+| 한글 2014 ~ 2020 | HWPX (.hwpx) | ✅      | ✅   | Classic (18 styles)            |
+| 한글 2022 ~ 2024 | HWPX (.hwpx) | ✅      | ✅   | Modern (22 styles, **기본값**) |
+| 한글 2025+       | HWPX (.hwpx) | ✅      | ✅   | Latest (23 styles)             |
+| 한글 97 ~ 2010   | HWP5 (.hwp)  | 📋 예정 | —    | —                              |
+
+- **HWPX**: OWPML 국가표준 (KS X 6101) 기반, ZIP + XML 컨테이너
+- **HWP5**: 구형 바이너리 포맷 (v2.0에서 읽기 지원 예정)
+- 스타일 세트는 `HancomStyleSet` enum으로 선택 가능 (기본: Modern)
+
 **LLM-first 설계** 🔥 — AI 친화적인 Markdown과 공식 한글 문서 포맷(HWPX), 두 세계를 자연스럽게 잇습니다. LLM이 Markdown으로 작성한 내용은 공문서 규격의 HWPX로 컴파일되고 📜, 반대로 기존 HWPX 문서는 AI가 쉽게 읽을 수 있는 구조로 꺼낼 수 있습니다 ⚒️.
 
 - **HWPX Reader for AI** — 기존 한글 문서(.hwpx)를 Markdown으로 변환하여 LLM이 즉시 이해 가능
@@ -37,7 +50,17 @@ HwpForge는 HWPX 문서(ZIP + XML, KS X 6101)를 다루기 위한 **오픈소스
 
 ## 빠른 시작
 
-`Cargo.toml`에 추가:
+### 설치
+
+```bash
+# Cargo.toml에 추가
+cargo add hwpforge
+
+# Markdown 지원 포함
+cargo add hwpforge --features full
+```
+
+또는 `Cargo.toml`에 직접 추가:
 
 ```toml
 [dependencies]
