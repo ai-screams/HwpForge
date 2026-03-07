@@ -313,7 +313,7 @@ HwpForge는 거인들의 어깨 위에 서 있습니다.
 <br/><br/>
 
 <a href="https://buymeacoffee.com/pignuante">
-<img src="https://img.buymeacoffee.com/button-api/?text=Buy me a coffee&emoji=☕&slug=pignuante&button_colour=FFDD00&font_colour=000000&font_family=Cookie&outline_colour=000000&coffee_colour=ffffff" alt="Buy Me a Coffee" height="50">
+<img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" height="50" width="217">
 </a>
 
 </div>
