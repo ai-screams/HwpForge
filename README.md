@@ -10,8 +10,8 @@
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
 [![MSRV](https://img.shields.io/badge/MSRV-1.88+-orange.svg?logo=rust)](Cargo.toml)
 [![codecov](https://img.shields.io/badge/coverage-92.65%25-brightgreen.svg?logo=codecov)](https://github.com/ai-screams/HwpForge)
-[![Lines of Code](https://img.shields.io/badge/LOC-~49%2C200-informational.svg)](https://github.com/ai-screams/HwpForge)
-[![Tests](https://img.shields.io/badge/tests-1%2C510_passed-success.svg?logo=checkmarx)](https://github.com/ai-screams/HwpForge)
+[![Lines of Code](https://img.shields.io/badge/LOC-~50%2C500-informational.svg)](https://github.com/ai-screams/HwpForge)
+[![Tests](https://img.shields.io/badge/tests-1%2C592_passed-success.svg?logo=checkmarx)](https://github.com/ai-screams/HwpForge)
 [![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg?logo=rust)](https://github.com/ai-screams/HwpForge)
 [![Security Policy](https://img.shields.io/badge/security-policy-blueviolet.svg?logo=githubactions)](SECURITY.md)
 [![Contributing](https://img.shields.io/badge/contributing-guide-blue.svg?logo=handshake)](CONTRIBUTING.md)
@@ -66,6 +66,36 @@ cargo add hwpforge --features full
 [dependencies]
 hwpforge = "0.1"
 ```
+
+### ⚒️ CLI로 시작하기
+
+CLI 도구 `hwpforge`를 설치하면 터미널에서 바로 문서를 생성하고 편집할 수 있습니다.
+
+```bash
+cargo install hwpforge-bindings-cli
+```
+
+```bash
+# Markdown → HWPX 변환
+hwpforge convert report.md -o report.hwpx
+
+# HWPX 구조 확인
+hwpforge inspect report.hwpx
+
+# HWPX → JSON 추출 (AI 편집용)
+hwpforge to-json report.hwpx --section 0 > section0.json
+
+# JSON으로 섹션 교체
+hwpforge patch report.hwpx --section 0 < modified.json -o updated.hwpx
+
+# JSON Schema 출력 (AI agent용)
+hwpforge schema document
+```
+
+> **AI-first 설계**: CLI는 AI agent(Claude Code 등)가 주 사용자입니다.
+> Markdown으로 문서를 생성한 뒤, JSON round-trip으로 기존 스타일을 보존하면서
+> section 단위로 정밀하게 편집할 수 있습니다. `--json` 플래그로 모든 명령어가
+> machine-readable 출력을 지원합니다.
 
 ### 🔨 문서 생성
 
@@ -201,9 +231,9 @@ Smithy compiler가 Core + Blueprint를 합쳐 최종 포맷을 생성합니다.
 
 | 지표        | 값                      |
 | ----------- | ----------------------- |
-| 총 LOC      | ~49,200                 |
-| 테스트      | 1,510개 (cargo-nextest) |
-| 소스 파일   | 92 .rs                  |
+| 총 LOC      | ~50,700                 |
+| 테스트      | 1,592개 (cargo-nextest) |
+| 소스 파일   | 103 .rs                 |
 | Crate 수    | 9개 (6개 배포)          |
 | 커버리지    | 92.65%                  |
 | Clippy 경고 | 0                       |
@@ -249,7 +279,7 @@ HwpForge/
 │   ├── hwpforge-smithy-md/       # Markdown codec (MD ↔ Core)
 │   ├── hwpforge-smithy-hwp5/     # HWP5 decoder (예정)
 │   ├── hwpforge-bindings-py/     # Python bindings (예정)
-│   └── hwpforge-bindings-cli/    # CLI 도구 (예정)
+│   └── hwpforge-bindings-cli/    # CLI 도구 (hwpforge)
 ├── tests/                        # 통합 테스트 + golden fixture
 └── examples/                     # 📜 사용 예제 + 생성된 HWPX 파일
 ```
@@ -270,7 +300,7 @@ HwpForge/
 
 - [ ] HWP5 읽기 — 구형 바이너리 포맷(`.hwp`) 디코더
 - [ ] MCP 서버 — Claude, GPT 등 LLM이 tool로 직접 HWPX 생성
-- [ ] CLI 도구 — `hwpforge convert doc.md doc.hwpx` 한 줄 변환
+- [x] CLI 도구 — `hwpforge convert doc.md doc.hwpx` 한 줄 변환 (7개 명령어)
 
 - [ ] HWPX 완전 지원 — 양식 컨트롤, 변경 추적, OLE 객체
 - [ ] Python 바인딩 — `pip install hwpforge`로 설치, PyPI 배포
