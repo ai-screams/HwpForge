@@ -456,6 +456,34 @@ hwpxlib(Java)도 세 필드 모두 nullable. 도형(DrawingObject)과 borderFill
 - **이동 없으면**: 도형이 바운딩 박스 원점(0,0) 기준으로 회전 → 위치 이탈
 - **scaMatrix, transMatrix**: 순수 회전 시 identity 유지
 
+### 21. PatternType BACK_SLASH/SLASH 반전 (spec 반전!)
+
+```rust
+// ❌ WRONG — spec대로 매핑하면 한글에서 역사선(\)과 사선(/)이 반대로 렌더링됨
+PatternType::BackSlash => "BACK_SLASH"  // 한글이 `/`로 렌더링
+PatternType::Slash => "SLASH"           // 한글이 `\`로 렌더링
+
+// ✅ CORRECT — 스왑하여 실제 렌더링과 일치
+PatternType::BackSlash => "SLASH"       // 한글이 `\`로 렌더링 ✓
+PatternType::Slash => "BACK_SLASH"      // 한글이 `/`로 렌더링 ✓
+```
+
+KS X 6101 XSD 문서에는 `BACK_SLASH = \\\\`, `SLASH = ////`이지만, 한글은 반대로 렌더링합니다.
+landscape 반전(gotcha #2)과 동일한 패턴. `PatternType`의 `Display`/`FromStr`에서 스왑 처리됨.
+
+### 22. 패턴 채우기는 winBrush + hatchStyle 필수
+
+```xml
+<!-- ❌ WRONG — hatchStyle 없으면 솔리드 채우기로 표시됨 -->
+<hc:winBrush faceColor="#FFD700" hatchColor="#000000" alpha="0"/>
+
+<!-- ✅ CORRECT — hatchStyle로 패턴 종류 지정 -->
+<hc:winBrush faceColor="#FFD700" hatchColor="#000000" hatchStyle="HORIZONTAL" alpha="0"/>
+```
+
+패턴 채우기 시 `hatchStyle` 속성 필수. 없으면 한글이 솔리드 채우기로 렌더링.
+유효값: `HORIZONTAL`, `VERTICAL`, `BACK_SLASH`, `SLASH`, `CROSS`, `CROSS_DIAGONAL`
+
 ---
 
 ## Phase Status

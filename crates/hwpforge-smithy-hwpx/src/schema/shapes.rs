@@ -89,6 +89,10 @@ pub struct HxWinBrush {
     /// Hatch pattern color as `#RRGGBB`.
     #[serde(rename = "@hatchColor", default)]
     pub hatch_color: String,
+    /// Hatch pattern type (e.g. `"HORIZONTAL"`, `"VERTICAL"`, `"CROSS"`).
+    /// Absent for solid fills, present for pattern/hatch fills.
+    #[serde(rename = "@hatchStyle", default, skip_serializing_if = "Option::is_none")]
+    pub hatch_style: Option<String>,
     /// Alpha transparency (0 = opaque).
     #[serde(rename = "@alpha", default)]
     pub alpha: i32,
@@ -124,6 +128,7 @@ impl HxFillBrush {
             win_brush: Some(HxWinBrush {
                 face_color: "#FFFFFF".to_string(),
                 hatch_color: "#000000".to_string(),
+                hatch_style: None,
                 alpha: 0,
             }),
             gradation: None,

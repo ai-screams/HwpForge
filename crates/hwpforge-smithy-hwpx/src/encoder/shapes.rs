@@ -17,7 +17,7 @@ fn dropcap_str(style: &Option<ShapeStyle>) -> String {
 /// For geometric shapes (Diamond, Oval, Open), 한글 only recognises the `EMPTY_*`
 /// form and uses the separate `headfill`/`tailfill` attribute to control fill.
 /// Reference: `SimpleLine.hwpx` uses `EMPTY_BOX` + `headfill="1"` for a filled box.
-fn resolve_arrow_type_str(arrow_type: &ArrowType, _filled: bool) -> String {
+fn resolve_arrow_type_str(arrow_type: &ArrowType) -> String {
     match arrow_type {
         ArrowType::None => "NORMAL",
         ArrowType::Normal => "ARROW",
@@ -132,10 +132,11 @@ pub(crate) fn build_shape_common(
                             .collect(),
                     });
                 }
-                Fill::Pattern { fg_color, bg_color, .. } => {
+                Fill::Pattern { fg_color, bg_color, pattern_type } => {
                     if let Some(ref mut wb) = fill_brush.win_brush {
                         wb.face_color = bg_color.to_hex_rgb();
                         wb.hatch_color = fg_color.to_hex_rgb();
+                        wb.hatch_style = Some(pattern_type.to_string());
                     }
                 }
                 Fill::Image { .. } => {
@@ -169,12 +170,12 @@ pub(crate) fn build_shape_common(
 
         // Arrow heads — resolve FILLED_ vs EMPTY_ for geometric types per KS X 6101.
         if let Some(ref arrow) = s.head_arrow {
-            line_shape.head_style = resolve_arrow_type_str(&arrow.arrow_type, arrow.filled);
+            line_shape.head_style = resolve_arrow_type_str(&arrow.arrow_type);
             line_shape.head_sz = arrow.size.to_string();
             line_shape.head_fill = if arrow.filled { 1 } else { 0 };
         }
         if let Some(ref arrow) = s.tail_arrow {
-            line_shape.tail_style = resolve_arrow_type_str(&arrow.arrow_type, arrow.filled);
+            line_shape.tail_style = resolve_arrow_type_str(&arrow.arrow_type);
             line_shape.tail_sz = arrow.size.to_string();
             line_shape.tail_fill = if arrow.filled { 1 } else { 0 };
         }
@@ -957,9 +958,10 @@ pub(crate) fn encode_connect_line_to_hx(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hwpforge_core::control::{ArrowStyle, Control, LineStyle, ShapePoint, ShapeStyle};
+    use hwpforge_core::control::{ArrowStyle, Control, Fill, LineStyle, ShapePoint, ShapeStyle};
     use hwpforge_foundation::{
-        ArcType, ArrowSize, ArrowType, CurveSegmentType, DropCapStyle, Flip, HwpUnit,
+        ArcType, ArrowSize, ArrowType, Color, CurveSegmentType, DropCapStyle, Flip, HwpUnit,
+        PatternType,
     };
 
     fn empty_hyperlinks() -> Vec<(String, String)> {
@@ -1026,40 +1028,38 @@ mod tests {
 
     #[test]
     fn arrow_type_none_maps_to_normal() {
-        assert_eq!(resolve_arrow_type_str(&ArrowType::None, false), "NORMAL");
+        assert_eq!(resolve_arrow_type_str(&ArrowType::None), "NORMAL");
     }
 
     #[test]
     fn arrow_type_normal_maps_to_arrow() {
-        assert_eq!(resolve_arrow_type_str(&ArrowType::Normal, false), "ARROW");
+        assert_eq!(resolve_arrow_type_str(&ArrowType::Normal), "ARROW");
     }
 
     #[test]
     fn arrow_type_arrow_maps_to_spear() {
-        assert_eq!(resolve_arrow_type_str(&ArrowType::Arrow, false), "SPEAR");
+        assert_eq!(resolve_arrow_type_str(&ArrowType::Arrow), "SPEAR");
     }
 
     #[test]
     fn arrow_type_concave_maps_to_concave_arrow() {
-        assert_eq!(resolve_arrow_type_str(&ArrowType::Concave, false), "CONCAVE_ARROW");
+        assert_eq!(resolve_arrow_type_str(&ArrowType::Concave), "CONCAVE_ARROW");
     }
 
     #[test]
-    fn arrow_type_diamond_maps_to_empty_diamond_regardless_of_fill() {
-        // Gotcha #25: 한글 only recognises EMPTY_* form for geometric shapes
-        assert_eq!(resolve_arrow_type_str(&ArrowType::Diamond, true), "EMPTY_DIAMOND");
-        assert_eq!(resolve_arrow_type_str(&ArrowType::Diamond, false), "EMPTY_DIAMOND");
+    fn arrow_type_diamond_maps_to_empty_diamond() {
+        // Gotcha #14: 한글 only recognises EMPTY_* form for geometric shapes
+        assert_eq!(resolve_arrow_type_str(&ArrowType::Diamond), "EMPTY_DIAMOND");
     }
 
     #[test]
     fn arrow_type_oval_maps_to_empty_circle() {
-        assert_eq!(resolve_arrow_type_str(&ArrowType::Oval, true), "EMPTY_CIRCLE");
-        assert_eq!(resolve_arrow_type_str(&ArrowType::Oval, false), "EMPTY_CIRCLE");
+        assert_eq!(resolve_arrow_type_str(&ArrowType::Oval), "EMPTY_CIRCLE");
     }
 
     #[test]
     fn arrow_type_open_maps_to_empty_box() {
-        assert_eq!(resolve_arrow_type_str(&ArrowType::Open, false), "EMPTY_BOX");
+        assert_eq!(resolve_arrow_type_str(&ArrowType::Open), "EMPTY_BOX");
     }
 
     // ── build_shape_common tests ─────────────────────────────────────
@@ -1222,6 +1222,68 @@ mod tests {
         assert_eq!(sc.rendering_info.rot_matrix.e1, "1");
         assert_eq!(sc.rendering_info.rot_matrix.e2, "0");
         assert_eq!(sc.rendering_info.rot_matrix.e5, "1");
+    }
+
+    // ── pattern fill encode tests ──────────────────────────────────────
+
+    #[test]
+    fn build_shape_common_pattern_fill_sets_hatch_style() {
+        let style = ShapeStyle {
+            fill: Some(Fill::Pattern {
+                pattern_type: PatternType::Horizontal,
+                fg_color: Color::BLACK,
+                bg_color: Color::WHITE,
+            }),
+            ..Default::default()
+        };
+        let sc = build_shape_common(1000, 500, Some(&style));
+        let wb = sc.fill_brush.win_brush.as_ref().unwrap();
+        assert_eq!(wb.hatch_style, Some("HORIZONTAL".to_string()));
+        assert_eq!(wb.face_color, "#FFFFFF");
+        assert_eq!(wb.hatch_color, "#000000");
+    }
+
+    #[test]
+    fn build_shape_common_pattern_backslash_outputs_slash() {
+        // 한글 spec reversal: BackSlash → "SLASH"
+        let style = ShapeStyle {
+            fill: Some(Fill::Pattern {
+                pattern_type: PatternType::BackSlash,
+                fg_color: Color::from_rgb(0, 150, 0),
+                bg_color: Color::from_rgb(230, 255, 230),
+            }),
+            ..Default::default()
+        };
+        let sc = build_shape_common(1000, 500, Some(&style));
+        let wb = sc.fill_brush.win_brush.as_ref().unwrap();
+        assert_eq!(wb.hatch_style, Some("SLASH".to_string()));
+    }
+
+    #[test]
+    fn build_shape_common_pattern_slash_outputs_back_slash() {
+        // 한글 spec reversal: Slash → "BACK_SLASH"
+        let style = ShapeStyle {
+            fill: Some(Fill::Pattern {
+                pattern_type: PatternType::Slash,
+                fg_color: Color::from_rgb(150, 0, 150),
+                bg_color: Color::from_rgb(255, 230, 255),
+            }),
+            ..Default::default()
+        };
+        let sc = build_shape_common(1000, 500, Some(&style));
+        let wb = sc.fill_brush.win_brush.as_ref().unwrap();
+        assert_eq!(wb.hatch_style, Some("BACK_SLASH".to_string()));
+    }
+
+    #[test]
+    fn build_shape_common_solid_fill_no_hatch_style() {
+        let style = ShapeStyle {
+            fill: Some(Fill::Solid { color: Color::from_rgb(255, 0, 0) }),
+            ..Default::default()
+        };
+        let sc = build_shape_common(1000, 500, Some(&style));
+        let wb = sc.fill_brush.win_brush.as_ref().unwrap();
+        assert_eq!(wb.hatch_style, None);
     }
 
     // ── encode_arc_to_hx tests ───────────────────────────────────────

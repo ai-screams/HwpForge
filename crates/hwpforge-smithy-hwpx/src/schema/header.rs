@@ -802,6 +802,10 @@ pub struct HxWinBrush {
     /// Hatch pattern color.
     #[serde(rename = "@hatchColor", default)]
     pub hatch_color: String,
+    /// Hatch pattern type (e.g. `"HORIZONTAL"`, `"VERTICAL"`, `"CROSS"`).
+    /// Absent for solid fills, present for pattern/hatch fills.
+    #[serde(rename = "@hatchStyle", default, skip_serializing_if = "Option::is_none")]
+    pub hatch_style: Option<String>,
     /// Alpha transparency value.
     #[serde(rename = "@alpha", default)]
     pub alpha: String,
