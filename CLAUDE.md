@@ -376,25 +376,30 @@ Paragraph::with_runs(vec![
 
 `page_break: u32::from(para.page_break)` — hardcoded 0이 아닌 실제 필드값 사용.
 
-### 18. Flip은 `<hp:flip>` 속성만으로 부족 — scaMatrix + transMatrix 필수
+### 18. Flip은 `rotMatrix`에 인코딩 — scaMatrix/transMatrix는 identity 유지
 
 ```xml
-<!-- ❌ WRONG — flip 속성만 설정, 렌더링 행렬은 identity → 한글이 반전 무시 -->
-<hp:flip horizontal="1" vertical="0"/>
-<hp:renderingInfo>
-  <hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
-  <hc:scaMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
-</hp:renderingInfo>
-
-<!-- ✅ CORRECT — flip 속성 + scaMatrix(반전) + transMatrix(보정 이동) -->
+<!-- ❌ WRONG — scaMatrix에 flip 저장 → 드래그 잔영이 원본, 회전/대칭 메뉴 비활성화 -->
 <hp:flip horizontal="1" vertical="0"/>
 <hp:renderingInfo>
   <hc:transMatrix e1="1" e2="0" e3="{width}" e4="0" e5="1" e6="0"/>
   <hc:scaMatrix e1="-1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
+  <hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
+</hp:renderingInfo>
+
+<!-- ✅ CORRECT — rotMatrix에 flip + 보정 이동, scaMatrix/transMatrix는 identity -->
+<hp:flip horizontal="1" vertical="0"/>
+<hp:renderingInfo>
+  <hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
+  <hc:scaMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
+  <hc:rotMatrix e1="-1" e2="0" e3="{width}" e4="0" e5="1" e6="0"/>
 </hp:renderingInfo>
 ```
 
-한글은 `<hp:flip>` 요소를 상태 표시로만 사용하고, 실제 렌더링은 `scaMatrix`로 수행합니다.
+한글은 flip을 `rotMatrix`에서 읽음. `scaMatrix`에 넣으면 수학적으로 동일하지만:
+
+- 드래그 시 잔영(ghost)이 원본(반전 전) 모양으로 표시됨
+- 우클릭 메뉴의 회전/대칭 기능이 비활성화됨
 
 ### 19. fillBrush는 xs:choice — winBrush/gradation/imgBrush 중 하나만
 
@@ -421,8 +426,8 @@ KS X 6101 스펙: "`<fillBrush>` 요소는 세 개의 하위 요소 중 **하나
 hwpxlib(Java)도 세 필드 모두 nullable. 도형(DrawingObject)과 borderFill이 동일한 `hc:FillBrushType` 사용.
 `gradation` 필수 속성: type, angle, centerX, centerY, step, colorNum, stepCenter, alpha + `<hc:color>` 자식.
 
-- **Horizontal flip**: `scaMatrix e1="-1"` + `transMatrix e3=width` (x축 반전 후 보정)
-- **Vertical flip**: `scaMatrix e5="-1"` + `transMatrix e6=height` (y축 반전 후 보정)
+- **Horizontal flip**: `rotMatrix e1="-1"`, `e3=width`
+- **Vertical flip**: `rotMatrix e5="-1"`, `e6=height`
 - **Both**: 양쪽 모두 적용
 - **Pipeline**: `point' = transMatrix × rotMatrix × scaMatrix × point`
 - **검증**: `15_shapes_advanced.hwpx` Section 6 — 비대칭 깃발 도형으로 4방향 반전 확인

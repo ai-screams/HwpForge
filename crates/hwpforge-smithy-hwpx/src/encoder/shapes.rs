@@ -179,8 +179,14 @@ pub(crate) fn build_shape_common(
         }
     }
 
-    // Build rotation matrix if angle != 0
-    let rot_matrix = if angle != 0 {
+    // Build rotation matrix for rotation and/or flip.
+    // 한글 reads flip from rotMatrix (NOT scaMatrix). scaMatrix and transMatrix stay identity.
+    //   Horizontal flip: e1=-1, e3=width (mirror x then shift back)
+    //   Vertical flip:   e5=-1, e6=height (mirror y then shift back)
+    //   Rotation:        standard cos/sin matrix
+    let has_flip = hx_flip.horizontal != 0 || hx_flip.vertical != 0;
+    let rot_matrix = if angle != 0 && !has_flip {
+        // Pure rotation, no flip
         let rad = (angle as f64) / 100.0 * std::f64::consts::PI / 180.0;
         let cos_val = rad.cos();
         let sin_val = rad.sin();
@@ -192,44 +198,28 @@ pub(crate) fn build_shape_common(
             e5: format!("{cos_val:.6}"),
             e6: "0".to_string(),
         }
-    } else {
-        HxMatrix::identity()
-    };
-
-    // Build scale + translation matrices for flip.
-    // scaMatrix: horizontal flip → e1=-1, vertical flip → e5=-1.
-    // transMatrix: compensate so shape stays in its bounding box after flip.
-    //   Horizontal: translate by +width (e3=width) to shift back from negative x.
-    //   Vertical:   translate by +height (e6=height) to shift back from negative y.
-    // Pipeline: point' = transMatrix * rotMatrix * scaMatrix * point
-    let (sca_matrix, trans_matrix) = if hx_flip.horizontal != 0 || hx_flip.vertical != 0 {
+    } else if has_flip {
+        // Flip (with or without rotation) — encode flip in rotMatrix
         let h = hx_flip.horizontal != 0;
         let v = hx_flip.vertical != 0;
-        let sca = HxMatrix {
+        HxMatrix {
             e1: if h { "-1" } else { "1" }.to_string(),
-            e2: "0".to_string(),
-            e3: "0".to_string(),
-            e4: "0".to_string(),
-            e5: if v { "-1" } else { "1" }.to_string(),
-            e6: "0".to_string(),
-        };
-        let trans = HxMatrix {
-            e1: "1".to_string(),
             e2: "0".to_string(),
             e3: if h { width.to_string() } else { "0".to_string() },
             e4: "0".to_string(),
-            e5: "1".to_string(),
+            e5: if v { "-1" } else { "1" }.to_string(),
             e6: if v { height.to_string() } else { "0".to_string() },
-        };
-        (sca, trans)
+        }
     } else {
-        (HxMatrix::identity(), HxMatrix::identity())
+        HxMatrix::identity()
     };
+    let sca_matrix = HxMatrix::identity();
+    let trans_matrix = HxMatrix::identity();
 
     ShapeCommon {
         offset: HxOffset { x: 0, y: 0 },
         org_sz: HxSizeAttr { width, height },
-        cur_sz: HxSizeAttr { width: 0, height: 0 },
+        cur_sz: HxSizeAttr { width, height },
         flip: hx_flip,
         rotation_info: HxRotationInfo {
             angle,
@@ -1080,10 +1070,10 @@ mod tests {
     }
 
     #[test]
-    fn build_shape_common_cur_sz_is_zero() {
+    fn build_shape_common_cur_sz_matches_dimensions() {
         let sc = build_shape_common(8000, 4000, None);
-        assert_eq!(sc.cur_sz.width, 0);
-        assert_eq!(sc.cur_sz.height, 0);
+        assert_eq!(sc.cur_sz.width, 8000);
+        assert_eq!(sc.cur_sz.height, 4000);
     }
 
     #[test]
