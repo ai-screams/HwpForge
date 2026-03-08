@@ -376,6 +376,33 @@ Paragraph::with_runs(vec![
 
 `page_break: u32::from(para.page_break)` — hardcoded 0이 아닌 실제 필드값 사용.
 
+### 18. Flip은 `<hp:flip>` 속성만으로 부족 — scaMatrix + transMatrix 필수
+
+```xml
+<!-- ❌ WRONG — flip 속성만 설정, 렌더링 행렬은 identity → 한글이 반전 무시 -->
+<hp:flip horizontal="1" vertical="0"/>
+<hp:renderingInfo>
+  <hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
+  <hc:scaMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
+</hp:renderingInfo>
+
+<!-- ✅ CORRECT — flip 속성 + scaMatrix(반전) + transMatrix(보정 이동) -->
+<hp:flip horizontal="1" vertical="0"/>
+<hp:renderingInfo>
+  <hc:transMatrix e1="1" e2="0" e3="{width}" e4="0" e5="1" e6="0"/>
+  <hc:scaMatrix e1="-1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
+</hp:renderingInfo>
+```
+
+한글은 `<hp:flip>` 요소를 상태 표시로만 사용하고, 실제 렌더링은 `scaMatrix`로 수행합니다.
+
+- **Horizontal flip**: `scaMatrix e1="-1"` + `transMatrix e3=width` (x축 반전 후 보정)
+- **Vertical flip**: `scaMatrix e5="-1"` + `transMatrix e6=height` (y축 반전 후 보정)
+- **Both**: 양쪽 모두 적용
+- **Pipeline**: `point' = transMatrix × rotMatrix × scaMatrix × point`
+- **검증**: `15_shapes_advanced.hwpx` Section 6 — 비대칭 깃발 도형으로 4방향 반전 확인
+- **적용 대상**: 모든 도형 (Polygon, Ellipse, Line, Arc, Curve, ConnectLine, TextBox)
+
 ---
 
 ## Phase Status

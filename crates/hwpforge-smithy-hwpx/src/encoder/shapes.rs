@@ -145,6 +145,36 @@ pub(crate) fn build_shape_common(
         HxMatrix::identity()
     };
 
+    // Build scale + translation matrices for flip.
+    // scaMatrix: horizontal flip → e1=-1, vertical flip → e5=-1.
+    // transMatrix: compensate so shape stays in its bounding box after flip.
+    //   Horizontal: translate by +width (e3=width) to shift back from negative x.
+    //   Vertical:   translate by +height (e6=height) to shift back from negative y.
+    // Pipeline: point' = transMatrix * rotMatrix * scaMatrix * point
+    let (sca_matrix, trans_matrix) = if hx_flip.horizontal != 0 || hx_flip.vertical != 0 {
+        let h = hx_flip.horizontal != 0;
+        let v = hx_flip.vertical != 0;
+        let sca = HxMatrix {
+            e1: if h { "-1" } else { "1" }.to_string(),
+            e2: "0".to_string(),
+            e3: "0".to_string(),
+            e4: "0".to_string(),
+            e5: if v { "-1" } else { "1" }.to_string(),
+            e6: "0".to_string(),
+        };
+        let trans = HxMatrix {
+            e1: "1".to_string(),
+            e2: "0".to_string(),
+            e3: if h { width.to_string() } else { "0".to_string() },
+            e4: "0".to_string(),
+            e5: "1".to_string(),
+            e6: if v { height.to_string() } else { "0".to_string() },
+        };
+        (sca, trans)
+    } else {
+        (HxMatrix::identity(), HxMatrix::identity())
+    };
+
     ShapeCommon {
         offset: HxOffset { x: 0, y: 0 },
         org_sz: HxSizeAttr { width, height },
@@ -156,11 +186,7 @@ pub(crate) fn build_shape_common(
             center_y: height / 2,
             rotate_image: 1,
         },
-        rendering_info: HxRenderingInfo {
-            trans_matrix: HxMatrix::identity(),
-            sca_matrix: HxMatrix::identity(),
-            rot_matrix,
-        },
+        rendering_info: HxRenderingInfo { trans_matrix, sca_matrix, rot_matrix },
         line_shape,
         fill_brush,
         shadow: HxShadow::default_none(),
