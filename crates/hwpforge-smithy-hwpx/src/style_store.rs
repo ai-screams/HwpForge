@@ -7,6 +7,8 @@
 //! All fields use Foundation types (`Color`, `HwpUnit`, `Alignment`)
 //! so downstream code never touches raw XML strings.
 
+use serde::{Deserialize, Serialize};
+
 use hwpforge_blueprint::registry::StyleRegistry;
 use hwpforge_core::{NumberingDef, TabDef};
 use hwpforge_foundation::{
@@ -21,7 +23,7 @@ use crate::error::{HwpxError, HwpxResult};
 // ── Font ─────────────────────────────────────────────────────────
 
 /// A resolved font from `<hh:fontface>` → `<hh:font>`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct HwpxFont {
     /// Original `id` attribute from XML.
@@ -45,7 +47,7 @@ impl HwpxFont {
 ///
 /// Each field is a [`FontIndex`] pointing into the store's font list
 /// for that language group.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct HwpxFontRef {
     /// Hangul (한글) font index.
@@ -84,7 +86,7 @@ impl Default for HwpxFontRef {
 /// Resolved character properties from `<hh:charPr>`.
 ///
 /// All raw XML strings have been converted to Foundation types.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct HwpxCharShape {
     /// Per-language font references.
@@ -175,7 +177,7 @@ impl Default for HwpxCharShape {
 /// Stores style metadata like names and references to character/paragraph
 /// properties. This enables full roundtrip of style names like "바탕글",
 /// "본문", etc.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct HwpxStyle {
     /// Style ID (from `id` attribute).
@@ -199,7 +201,7 @@ pub struct HwpxStyle {
 // ── Paragraph Shape ──────────────────────────────────────────────
 
 /// Resolved paragraph properties from `<hh:paraPr>`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct HwpxParaShape {
     /// Horizontal alignment.
@@ -279,7 +281,7 @@ impl Default for HwpxParaShape {
 ///
 /// Stores border line styles for all 4 sides plus diagonal borders,
 /// 3D/shadow flags, and optional fill configuration.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct HwpxBorderFill {
     /// Border fill ID (1-based, matching `borderFillIDRef` in charPr/paraPr).
@@ -309,7 +311,7 @@ pub struct HwpxBorderFill {
 }
 
 /// A single border line configuration.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct HwpxBorderLine {
     /// Border line type (e.g. `"NONE"`, `"SOLID"`).
     pub line_type: String,
@@ -326,7 +328,7 @@ impl Default for HwpxBorderLine {
 }
 
 /// Fill brush configuration for a [`HwpxBorderFill`].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum HwpxFill {
     /// Solid or hatch fill via `<hc:winBrush>`.
     WinBrush {
@@ -699,7 +701,7 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
 /// let store = HwpxStyleStore::new();
 /// assert!(store.char_shape(CharShapeIndex::new(0)).is_err());
 /// ```
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct HwpxStyleStore {
     /// The 한글 version style set used when injecting default styles.
     style_set: HancomStyleSet,
@@ -1901,6 +1903,36 @@ mod tests {
                 entry.name
             );
         }
+    }
+
+    // ── serde round-trip tests ─────────────────────────────────
+
+    #[test]
+    fn char_shape_roundtrip_json() {
+        let cs = HwpxCharShape::default();
+        let json = serde_json::to_string(&cs).unwrap();
+        let restored: HwpxCharShape = serde_json::from_str(&json).unwrap();
+        assert_eq!(cs, restored);
+    }
+
+    #[test]
+    fn para_shape_roundtrip_json() {
+        let ps = HwpxParaShape::default();
+        let json = serde_json::to_string(&ps).unwrap();
+        let restored: HwpxParaShape = serde_json::from_str(&json).unwrap();
+        assert_eq!(ps, restored);
+    }
+
+    #[test]
+    fn style_store_roundtrip_json() {
+        let mut store = HwpxStyleStore::with_default_fonts("함초롬돋움");
+        store.push_char_shape(HwpxCharShape::default());
+        store.push_para_shape(HwpxParaShape::default());
+        let json = serde_json::to_string_pretty(&store).unwrap();
+        let restored: HwpxStyleStore = serde_json::from_str(&json).unwrap();
+        assert_eq!(store.font_count(), restored.font_count());
+        assert_eq!(store.char_shape_count(), restored.char_shape_count());
+        assert_eq!(store.para_shape_count(), restored.para_shape_count());
     }
 
     #[test]
