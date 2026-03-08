@@ -766,15 +766,24 @@ fn encode_compose_to_hx(
 fn build_hyperlink_run_xml(text: &str, url: &str, char_pr_id_ref: u32, field_id: usize) -> String {
     let escaped_url = escape_xml(url);
     let escaped_text = escape_xml(text);
+    // Unique begin_id per field instance (matches build_field_run_xml pattern).
+    // beginIDRef must reference this id, NOT the fieldid.
+    let begin_id = 2_000_000_000_u64 + field_id as u64;
+    // KS X 6101: mailto: → HWPHYPERLINK_TYPE_EMAIL, others → HWPHYPERLINK_TYPE_URL
+    let category = if url.starts_with("mailto:") {
+        "HWPHYPERLINK_TYPE_EMAIL"
+    } else {
+        "HWPHYPERLINK_TYPE_URL"
+    };
     format!(
         concat!(
             r#"<hp:run charPrIDRef="{cpr}">"#,
             r#"<hp:ctrl>"#,
-            r#"<hp:fieldBegin type="HYPERLINK" editable="false" dirty="false" "#,
-            r#"zorder="-1" fieldid="{fid}" name="">"#,
+            r#"<hp:fieldBegin id="{bid}" type="HYPERLINK" name="" editable="0" dirty="0" "#,
+            r#"zorder="-1" fieldid="{fid}" metaTag="">"#,
             r#"<hp:parameters cnt="4" name="">"#,
             r#"<hp:stringParam name="Path">{url}</hp:stringParam>"#,
-            r#"<hp:stringParam name="Category">HWPHYPERLINK_TYPE_URL</hp:stringParam>"#,
+            r#"<hp:stringParam name="Category">{cat}</hp:stringParam>"#,
             r#"<hp:stringParam name="TargetType">HWPHYPERLINK_TARGET_DOCUMENT_DONTCARE</hp:stringParam>"#,
             r#"<hp:stringParam name="DocOpenType">HWPHYPERLINK_JUMP_NEWTAB</hp:stringParam>"#,
             r#"</hp:parameters>"#,
@@ -782,13 +791,15 @@ fn build_hyperlink_run_xml(text: &str, url: &str, char_pr_id_ref: u32, field_id:
             r#"</hp:ctrl>"#,
             r#"<hp:t>{txt}</hp:t>"#,
             r#"<hp:ctrl>"#,
-            r#"<hp:fieldEnd beginIDRef="{fid}" fieldid="{fid}"/>"#,
+            r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="{fid}"/>"#,
             r#"</hp:ctrl>"#,
             r#"</hp:run>"#,
         ),
         cpr = char_pr_id_ref,
+        bid = begin_id,
         fid = field_id,
         url = escaped_url,
+        cat = category,
         txt = escaped_text,
     )
 }
@@ -800,16 +811,18 @@ fn build_hyperlink_run_xml(text: &str, url: &str, char_pr_id_ref: u32, field_id:
 /// Text between them (in separate runs) is covered by the bookmark span.
 fn build_bookmark_span_start_run_xml(name: &str, char_pr_id_ref: u32, field_id: usize) -> String {
     let escaped_name = escape_xml(name);
+    let begin_id = 3_000_000_000_u64 + field_id as u64;
     format!(
         concat!(
             r#"<hp:run charPrIDRef="{cpr}">"#,
             r#"<hp:ctrl>"#,
-            r#"<hp:fieldBegin type="BOOKMARK" editable="false" dirty="false" "#,
-            r#"zorder="-1" fieldid="{fid}" name="{name}"/>"#,
+            r#"<hp:fieldBegin id="{bid}" type="BOOKMARK" name="{name}" editable="0" dirty="0" "#,
+            r#"zorder="-1" fieldid="{fid}" metaTag=""/>"#,
             r#"</hp:ctrl>"#,
             r#"</hp:run>"#,
         ),
         cpr = char_pr_id_ref,
+        bid = begin_id,
         fid = field_id,
         name = escaped_name,
     )
@@ -817,15 +830,17 @@ fn build_bookmark_span_start_run_xml(name: &str, char_pr_id_ref: u32, field_id: 
 
 /// Builds a `<hp:run>` containing only `<hp:fieldEnd>` for bookmark span end.
 fn build_bookmark_span_end_run_xml(char_pr_id_ref: u32, field_id: usize) -> String {
+    let begin_id = 3_000_000_000_u64 + field_id as u64;
     format!(
         concat!(
             r#"<hp:run charPrIDRef="{cpr}">"#,
             r#"<hp:ctrl>"#,
-            r#"<hp:fieldEnd beginIDRef="{fid}" fieldid="{fid}"/>"#,
+            r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="{fid}"/>"#,
             r#"</hp:ctrl>"#,
             r#"</hp:run>"#,
         ),
         cpr = char_pr_id_ref,
+        bid = begin_id,
         fid = field_id,
     )
 }
@@ -993,12 +1008,13 @@ fn build_crossref_run_xml(
     let ref_type_str = ref_type.to_string();
     let content_type_str = content_type.to_string();
     let hyperlink_val = if as_hyperlink { "true" } else { "false" };
+    let begin_id = 4_000_000_000_u64 + field_id as u64;
     format!(
         concat!(
             r#"<hp:run charPrIDRef="{cpr}">"#,
             r#"<hp:ctrl>"#,
-            r#"<hp:fieldBegin type="CROSSREF" editable="false" dirty="false" "#,
-            r#"zorder="-1" fieldid="{fid}" name="">"#,
+            r#"<hp:fieldBegin id="{bid}" type="CROSSREF" name="" editable="0" dirty="0" "#,
+            r#"zorder="-1" fieldid="{fid}" metaTag="">"#,
             r#"<hp:parameters cnt="5" name="">"#,
             r#"<hp:stringParam name="RefPath">{ref_path}</hp:stringParam>"#,
             r#"<hp:stringParam name="RefType">{ref_type}</hp:stringParam>"#,
@@ -1010,11 +1026,12 @@ fn build_crossref_run_xml(
             r#"</hp:ctrl>"#,
             r#"<hp:t>{name}</hp:t>"#,
             r#"<hp:ctrl>"#,
-            r#"<hp:fieldEnd beginIDRef="{fid}" fieldid="{fid}"/>"#,
+            r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="{fid}"/>"#,
             r#"</hp:ctrl>"#,
             r#"</hp:run>"#,
         ),
         cpr = char_pr_id_ref,
+        bid = begin_id,
         fid = field_id,
         ref_path = ref_path,
         ref_type = ref_type_str,
@@ -1032,12 +1049,13 @@ fn build_memo_run_xml(
     char_pr_id_ref: u32,
     field_id: usize,
 ) -> String {
+    let begin_id = 5_000_000_000_u64 + field_id as u64;
     format!(
         concat!(
             r#"<hp:run charPrIDRef="{cpr}">"#,
             r#"<hp:ctrl>"#,
-            r#"<hp:fieldBegin type="MEMO" editable="false" dirty="false" "#,
-            r#"zorder="-1" fieldid="{fid}" name="">"#,
+            r#"<hp:fieldBegin id="{bid}" type="MEMO" name="" editable="0" dirty="0" "#,
+            r#"zorder="-1" fieldid="{fid}" metaTag="">"#,
             r#"<hp:parameters cnt="2" name="">"#,
             r#"<hp:integerParam name="MemoShapeID">0</hp:integerParam>"#,
             r#"<hp:stringParam name="MemoType">DEFAULT</hp:stringParam>"#,
@@ -1047,11 +1065,12 @@ fn build_memo_run_xml(
             r#"</hp:ctrl>"#,
             r#"<hp:t/>"#,
             r#"<hp:ctrl>"#,
-            r#"<hp:fieldEnd beginIDRef="{fid}" fieldid="{fid}"/>"#,
+            r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="{fid}"/>"#,
             r#"</hp:ctrl>"#,
             r#"</hp:run>"#,
         ),
         cpr = char_pr_id_ref,
+        bid = begin_id,
         fid = field_id,
         sublist = sublist_xml,
     )
@@ -1225,13 +1244,43 @@ fn build_table(
         });
     }
 
-    let col_cnt = table.rows.iter().map(|r| r.cells.len()).max().unwrap_or(0) as u32;
+    // Build grid occupancy map to compute correct cellAddr for merged cells.
+    // Tracks which (row, col) positions are occupied by col_span/row_span.
+    let mut occupied = std::collections::HashSet::<(u32, u32)>::new();
+    let mut cell_addrs: Vec<Vec<u32>> = Vec::new();
+    let mut max_col: u32 = 0;
+
+    for (row_idx, row) in table.rows.iter().enumerate() {
+        let mut col_addr: u32 = 0;
+        let mut addrs = Vec::new();
+        for cell in &row.cells {
+            // Skip columns occupied by row_span from previous rows
+            while occupied.contains(&(row_idx as u32, col_addr)) {
+                col_addr += 1;
+            }
+            addrs.push(col_addr);
+            // Mark all grid positions covered by this cell's span
+            for dr in 0..cell.row_span as u32 {
+                for dc in 0..cell.col_span as u32 {
+                    occupied.insert((row_idx as u32 + dr, col_addr + dc));
+                }
+            }
+            col_addr += cell.col_span as u32;
+        }
+        if col_addr > max_col {
+            max_col = col_addr;
+        }
+        cell_addrs.push(addrs);
+    }
+    let col_cnt = max_col;
 
     let rows = table
         .rows
         .iter()
         .enumerate()
-        .map(|(row_idx, row)| build_table_row(row, row_idx as u32, depth, hyperlink_entries))
+        .map(|(row_idx, row)| {
+            build_table_row(row, row_idx as u32, &cell_addrs[row_idx], depth, hyperlink_entries)
+        })
         .collect::<HwpxResult<Vec<_>>>()?;
 
     // Table width: use explicit width or sum of first row's cell widths
@@ -1289,9 +1338,13 @@ fn build_table(
 }
 
 /// Builds `HxTableRow` from a Core `TableRow`.
+///
+/// `col_addrs` contains the precomputed grid column address for each cell,
+/// accounting for col_span/row_span from this and previous rows.
 fn build_table_row(
     row: &TableRow,
     row_idx: u32,
+    col_addrs: &[u32],
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
 ) -> HwpxResult<HxTableRow> {
@@ -1299,8 +1352,9 @@ fn build_table_row(
         .cells
         .iter()
         .enumerate()
-        .map(|(col_idx, cell)| {
-            build_table_cell(cell, col_idx as u32, row_idx, depth, hyperlink_entries)
+        .map(|(i, cell)| {
+            let col_addr = col_addrs.get(i).copied().unwrap_or(i as u32);
+            build_table_cell(cell, col_addr, row_idx, depth, hyperlink_entries)
         })
         .collect::<HwpxResult<Vec<_>>>()?;
 
@@ -2211,11 +2265,13 @@ mod tests {
         assert!(xml.contains("<hp:t>link</hp:t>"), "missing hyperlink display text");
         assert!(xml.contains("<hp:fieldEnd"), "missing fieldEnd closing element");
 
-        // fieldBegin and fieldEnd must share the same fieldid
+        // fieldBegin must have unique id and fieldid
         assert!(xml.contains(r#"fieldid="0""#), "fieldBegin must have fieldid=0");
+        assert!(xml.contains(r#"id="2000000000""#), "fieldBegin must have unique id");
+        // fieldEnd.beginIDRef must reference fieldBegin.id (NOT fieldid)
         assert!(
-            xml.contains(r#"beginIDRef="0""#),
-            "fieldEnd must reference fieldid=0 via beginIDRef"
+            xml.contains(r#"beginIDRef="2000000000""#),
+            "fieldEnd must reference fieldBegin id via beginIDRef"
         );
 
         // No leftover placeholder marker
@@ -2799,10 +2855,14 @@ mod tests {
         let xml = build_hyperlink_run_xml("Click here", "https://example.com", 0, 0);
         assert!(xml.starts_with(r#"<hp:run charPrIDRef="0">"#));
         assert!(xml.contains(r#"type="HYPERLINK""#));
+        assert!(xml.contains(r#"id="2000000000""#), "must have unique id");
         assert!(xml.contains(r#"fieldid="0""#));
+        assert!(xml.contains(r#"editable="0""#), "editable must be numeric");
+        assert!(xml.contains(r#"dirty="0""#), "dirty must be numeric");
+        assert!(xml.contains(r#"metaTag="""#));
         assert!(xml.contains(r#"<hp:stringParam name="Path">https://example.com</hp:stringParam>"#));
         assert!(xml.contains("<hp:t>Click here</hp:t>"));
-        assert!(xml.contains(r#"<hp:fieldEnd beginIDRef="0" fieldid="0"/>"#));
+        assert!(xml.contains(r#"<hp:fieldEnd beginIDRef="2000000000" fieldid="0"/>"#));
         assert!(xml.ends_with("</hp:run>"));
     }
 
@@ -2810,6 +2870,7 @@ mod tests {
     fn build_hyperlink_run_xml_escapes_special_chars() {
         let xml = build_hyperlink_run_xml("A & B < C", "https://example.com?a=1&b=2", 2, 5);
         assert!(xml.contains(r#"charPrIDRef="2""#));
+        assert!(xml.contains(r#"id="2000000005""#), "unique id for field_id=5");
         assert!(xml.contains(r#"fieldid="5""#));
         assert!(xml.contains("https://example.com?a=1&amp;b=2"), "URL ampersand must be escaped");
         assert!(
@@ -2840,10 +2901,10 @@ mod tests {
         );
         let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
 
-        // First hyperlink: fieldid=0
-        assert!(xml.contains(r#"<hp:fieldEnd beginIDRef="0" fieldid="0"/>"#));
-        // Second hyperlink: fieldid=1
-        assert!(xml.contains(r#"<hp:fieldEnd beginIDRef="1" fieldid="1"/>"#));
+        // First hyperlink: id=2000000000, fieldid=0
+        assert!(xml.contains(r#"<hp:fieldEnd beginIDRef="2000000000" fieldid="0"/>"#));
+        // Second hyperlink: id=2000000001, fieldid=1
+        assert!(xml.contains(r#"<hp:fieldEnd beginIDRef="2000000001" fieldid="1"/>"#));
         // Both URLs present
         assert!(xml.contains("https://one.com"));
         assert!(xml.contains("https://two.com"));
@@ -3858,7 +3919,9 @@ mod tests {
         let xml = build_bookmark_span_end_run_xml(1, 3);
         assert!(xml.contains(r#"charPrIDRef="1""#));
         assert!(xml.contains("<hp:fieldEnd"));
-        assert!(xml.contains(r#"beginIDRef="3""#));
+        // beginIDRef references the unique id (3_000_000_000 + field_id)
+        assert!(xml.contains(r#"beginIDRef="3000000003""#));
+        assert!(xml.contains(r#"fieldid="3""#));
         assert!(xml.ends_with("</hp:run>"));
     }
 
