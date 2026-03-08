@@ -23,5 +23,5 @@ full = ["hwpx", "md"]
 hwpforge-blueprint = { path = "../hwpforge-blueprint", version = "0.1.1" }
 hwpforge-core = { path = "../hwpforge-core", version = "0.1.1" }
 hwpforge-foundation = { path = "../hwpforge-foundation", version = "0.1.1" }
-hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0.1.1", optional = true }
-hwpforge-smithy-md = { path = "../hwpforge-smithy-md", version = "0.1.1", optional = true }
+hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0.1.2", optional = true }
+hwpforge-smithy-md = { path = "../hwpforge-smithy-md", version = "0.1.2", optional = true }
