@@ -396,6 +396,31 @@ Paragraph::with_runs(vec![
 
 한글은 `<hp:flip>` 요소를 상태 표시로만 사용하고, 실제 렌더링은 `scaMatrix`로 수행합니다.
 
+### 19. fillBrush는 xs:choice — winBrush/gradation/imgBrush 중 하나만
+
+```xml
+<!-- ❌ WRONG — winBrush와 gradation 동시 출력 (xs:choice 위반) -->
+<hc:fillBrush>
+  <hc:winBrush faceColor="none" hatchColor="#000000" alpha="0"/>
+  <hc:gradation type="LINEAR" angle="0" ...>
+    <hc:color value="#FF0000"/><hc:color value="#0000FF"/>
+  </hc:gradation>
+</hc:fillBrush>
+
+<!-- ✅ CORRECT — gradation만 (winBrush 없음) -->
+<hc:fillBrush>
+  <hc:gradation type="LINEAR" angle="0" centerX="0" centerY="0"
+    step="255" colorNum="2" stepCenter="50" alpha="0">
+    <hc:color value="#FF0000"/>
+    <hc:color value="#0000FF"/>
+  </hc:gradation>
+</hc:fillBrush>
+```
+
+KS X 6101 스펙: "`<fillBrush>` 요소는 세 개의 하위 요소 중 **하나의 요소**를 가질 수 있다(choice)."
+hwpxlib(Java)도 세 필드 모두 nullable. 도형(DrawingObject)과 borderFill이 동일한 `hc:FillBrushType` 사용.
+`gradation` 필수 속성: type, angle, centerX, centerY, step, colorNum, stepCenter, alpha + `<hc:color>` 자식.
+
 - **Horizontal flip**: `scaMatrix e1="-1"` + `transMatrix e3=width` (x축 반전 후 보정)
 - **Vertical flip**: `scaMatrix e5="-1"` + `transMatrix e6=height` (y축 반전 후 보정)
 - **Both**: 양쪽 모두 적용
