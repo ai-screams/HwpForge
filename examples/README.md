@@ -37,6 +37,26 @@ HwpForge 사용 예제 모음
 [src-hwpx-complete-guide]: ../crates/hwpforge-smithy-hwpx/examples/hwpx_complete_guide.rs
 [src-feature-isolation]: ../crates/hwpforge-smithy-hwpx/examples/feature_isolation.rs
 
+### HWPX ↔ JSON 변환 예제
+
+[`hwpx_json_roundtrip.rs`][src-json-roundtrip]로 생성. HWPX와 JSON 간 round-trip을 시연합니다.
+
+#### HWPX → JSON
+
+| 파일                                               | 설명                                |
+| -------------------------------------------------- | ----------------------------------- |
+| [`hwpx2json/01_text.hwpx`](hwpx2json/01_text.hwpx) | 입력 — 텍스트 예제 원본             |
+| [`hwpx2json/01_text.json`](hwpx2json/01_text.json) | 출력 — JSON 변환 결과 (스타일 포함) |
+
+#### JSON → HWPX
+
+| 파일                                               | 설명                          |
+| -------------------------------------------------- | ----------------------------- |
+| [`json2hwpx/01_text.json`](json2hwpx/01_text.json) | 입력 — 위 JSON과 동일         |
+| [`json2hwpx/01_text.hwpx`](json2hwpx/01_text.hwpx) | 출력 — JSON에서 재변환된 HWPX |
+
+[src-json-roundtrip]: ../crates/hwpforge-smithy-hwpx/examples/hwpx_json_roundtrip.rs
+
 ## Example 소스 코드
 
 소스: [`crates/hwpforge-smithy-hwpx/examples/`](../crates/hwpforge-smithy-hwpx/examples/)
@@ -50,6 +70,7 @@ HwpForge 사용 예제 모음
 | [`showcase.rs`][src-showcase]                       | 13개 API 데모 (Table, Image, TextBox, 도형, 차트 등) |
 | [`full_report.rs`][src-full-report]                 | HWPX 포맷 분석 보고서 (4섹션)                        |
 | [`architecture_guide.rs`][src-architecture-guide]   | 아키텍처 가이드 + Write API 통합 검증 (28개 생성자)  |
+| [`hwpx_json_roundtrip.rs`][src-json-roundtrip]      | HWPX ↔ JSON round-trip (스타일 포함)                 |
 
 [src-showcase]: ../crates/hwpforge-smithy-hwpx/examples/showcase.rs
 [src-full-report]: ../crates/hwpforge-smithy-hwpx/examples/full_report.rs
@@ -104,8 +125,11 @@ cargo run -p hwpforge-smithy-hwpx --example hwpx_complete_guide
 cargo run -p hwpforge-smithy-hwpx --example chart_styles
 cargo run -p hwpforge-smithy-hwpx --example large_table
 
+# HWPX ↔ JSON round-trip
+cargo run -p hwpforge-smithy-hwpx --example hwpx_json_roundtrip
+
 # Markdown → HWPX
 cargo run -p hwpforge-smithy-md --example gen_hwpx
 ```
 
-모든 출력은 `temp/` 디렉토리에 생성됩니다.
+기능별/종합 가이드는 `temp/`에, round-trip 예제는 `examples/hwpx2json/`과 `examples/json2hwpx/`에 생성됩니다.
