@@ -252,14 +252,39 @@ pub(crate) fn decode_shape_style_full(
     flip_info: Option<&crate::schema::section::HxFlip>,
     dropcap_style: &str,
 ) -> Option<ShapeStyle> {
-    use hwpforge_core::control::ArrowStyle;
-    use hwpforge_foundation::{ArrowSize, ArrowType};
+    use hwpforge_core::control::{ArrowStyle, Fill};
+    use hwpforge_foundation::{ArrowSize, ArrowType, GradientType};
 
     let fill_color: Option<Color> = fill_brush
         .as_ref()
-        .map(|fb| &fb.win_brush.face_color)
-        .filter(|c| !c.is_empty())
+        .and_then(|fb| fb.win_brush.as_ref())
+        .map(|wb| &wb.face_color)
+        .filter(|c| !c.is_empty() && *c != "none")
         .and_then(|c| parse_hex_color(c));
+
+    // Decode gradient fill
+    let fill: Option<Fill> = fill_brush.as_ref().and_then(|fb| {
+        fb.gradation.as_ref().map(|g| {
+            let gradient_type = match g.gradation_type.as_str() {
+                "RADIAL" => GradientType::Radial,
+                "SQUARE" => GradientType::Square,
+                "CONICAL" => GradientType::Conical,
+                _ => GradientType::Linear,
+            };
+            Fill::Gradient {
+                gradient_type,
+                angle: g.angle,
+                colors: g
+                    .colors
+                    .iter()
+                    .map(|c| {
+                        let color = parse_hex_color(&c.value).unwrap_or(Color::BLACK);
+                        (color, 0)
+                    })
+                    .collect(),
+            }
+        })
+    });
 
     let (line_color, line_width, line_style) = match line_shape.as_ref() {
         None => (None, None, None),
@@ -319,6 +344,7 @@ pub(crate) fn decode_shape_style_full(
         || line_width.is_some()
         || line_style.is_some()
         || fill_color.is_some()
+        || fill.is_some()
         || rotation.is_some()
         || flip.is_some()
         || head_arrow.is_some()
@@ -338,7 +364,7 @@ pub(crate) fn decode_shape_style_full(
         flip,
         head_arrow,
         tail_arrow,
-        fill: None,
+        fill,
         drop_cap_style: drop_cap,
     })
 }
@@ -583,11 +609,12 @@ mod tests {
     fn make_fill_brush(face_color: &str) -> HxFillBrush {
         use crate::schema::shapes::HxWinBrush;
         HxFillBrush {
-            win_brush: HxWinBrush {
+            win_brush: Some(HxWinBrush {
                 face_color: face_color.to_string(),
                 hatch_color: "#000000".to_string(),
                 alpha: 0,
-            },
+            }),
+            gradation: None,
         }
     }
 

@@ -4,8 +4,8 @@
 //! Functions here convert `Control::TextBox`, `Control::Line`, `Control::Ellipse`,
 //! and `Control::Polygon` into their corresponding `Hx*` schema types.
 
-use hwpforge_core::control::{Control, ShapeStyle};
-use hwpforge_foundation::{ArrowType, CurveSegmentType, DropCapStyle, Flip};
+use hwpforge_core::control::{Control, Fill, ShapeStyle};
+use hwpforge_foundation::{ArrowType, CurveSegmentType, DropCapStyle, Flip, GradientType};
 
 /// Extracts the dropcap style string from an optional `ShapeStyle`.
 fn dropcap_str(style: &Option<ShapeStyle>) -> String {
@@ -91,7 +91,58 @@ pub(crate) fn build_shape_common(
             line_shape.style = ls.to_string();
         }
         if let Some(ref c) = s.fill_color {
-            fill_brush.win_brush.face_color = c.to_hex_rgb();
+            if let Some(ref mut wb) = fill_brush.win_brush {
+                wb.face_color = c.to_hex_rgb();
+            }
+        }
+
+        // Advanced fill (overrides fill_color when present).
+        // Per KS X 6101, fillBrush is xs:choice — only ONE child element.
+        if let Some(ref fill) = s.fill {
+            match fill {
+                Fill::Solid { color } => {
+                    if let Some(ref mut wb) = fill_brush.win_brush {
+                        wb.face_color = color.to_hex_rgb();
+                    }
+                }
+                Fill::Gradient { gradient_type, angle, colors } => {
+                    // xs:choice: fillBrush has exactly ONE child (winBrush|gradation|imgBrush).
+                    // When using gradation, winBrush must be absent (hwpxlib reference confirms).
+                    fill_brush.win_brush = None;
+                    // LINEAR: center=0,0 for one-directional gradient.
+                    // RADIAL/SQUARE/CONICAL: center=50,50 for center-outward gradient.
+                    let (cx, cy) = match gradient_type {
+                        GradientType::Linear => (0, 0),
+                        _ => (50, 50),
+                    };
+                    fill_brush.gradation = Some(super::super::schema::shapes::HxGradation {
+                        gradation_type: gradient_type.to_string(),
+                        angle: *angle,
+                        center_x: cx,
+                        center_y: cy,
+                        step: 255,
+                        color_num: colors.len() as i32,
+                        step_center: 50,
+                        alpha: 0,
+                        colors: colors
+                            .iter()
+                            .map(|(c, _pos)| super::super::schema::shapes::HxGradColor {
+                                value: c.to_hex_rgb(),
+                            })
+                            .collect(),
+                    });
+                }
+                Fill::Pattern { fg_color, bg_color, .. } => {
+                    if let Some(ref mut wb) = fill_brush.win_brush {
+                        wb.face_color = bg_color.to_hex_rgb();
+                        wb.hatch_color = fg_color.to_hex_rgb();
+                    }
+                }
+                Fill::Image { .. } => {
+                    // Image fill requires imgBrush — not yet supported in shapes
+                }
+                _ => {} // future Fill variants
+            }
         }
 
         // Rotation: Core uses degrees (f32), HWPX uses degrees * 100 (i32).
@@ -1106,7 +1157,7 @@ mod tests {
     fn build_shape_common_fill_color_overridden() {
         let style = make_style(None, Some("#00FF00"), None);
         let sc = build_shape_common(1000, 500, Some(&style));
-        assert_eq!(sc.fill_brush.win_brush.face_color, "#00FF00");
+        assert_eq!(sc.fill_brush.win_brush.as_ref().unwrap().face_color, "#00FF00");
     }
 
     #[test]
@@ -1160,7 +1211,7 @@ mod tests {
     #[test]
     fn build_shape_common_default_white_fill() {
         let sc = build_shape_common(1000, 500, None);
-        assert_eq!(sc.fill_brush.win_brush.face_color, "#FFFFFF");
+        assert_eq!(sc.fill_brush.win_brush.as_ref().unwrap().face_color, "#FFFFFF");
     }
 
     #[test]
