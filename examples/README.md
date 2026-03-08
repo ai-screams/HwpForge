@@ -43,17 +43,21 @@ HwpForge 사용 예제 모음
 
 #### HWPX → JSON
 
-| 파일                                               | 설명                                |
-| -------------------------------------------------- | ----------------------------------- |
-| [`hwpx2json/01_text.hwpx`](hwpx2json/01_text.hwpx) | 입력 — 텍스트 예제 원본             |
-| [`hwpx2json/01_text.json`](hwpx2json/01_text.json) | 출력 — JSON 변환 결과 (스타일 포함) |
+| 파일                                                                       | 설명                                          |
+| -------------------------------------------------------------------------- | --------------------------------------------- |
+| [`hwpx2json/01_text.hwpx`](hwpx2json/01_text.hwpx)                         | 입력 — 텍스트 예제 원본                       |
+| [`hwpx2json/01_text.json`](hwpx2json/01_text.json)                         | 출력 — JSON 변환 결과 (스타일 포함)           |
+| [`hwpx2json/hwpx_complete_guide.hwpx`](hwpx2json/hwpx_complete_guide.hwpx) | 입력 — 종합 가이드 (4섹션, 표/차트/수식/도형) |
+| [`hwpx2json/hwpx_complete_guide.json`](hwpx2json/hwpx_complete_guide.json) | 출력 — JSON 변환 결과 (5,880줄, 스타일 포함)  |
 
 #### JSON → HWPX
 
-| 파일                                               | 설명                          |
-| -------------------------------------------------- | ----------------------------- |
-| [`json2hwpx/01_text.json`](json2hwpx/01_text.json) | 입력 — 위 JSON과 동일         |
-| [`json2hwpx/01_text.hwpx`](json2hwpx/01_text.hwpx) | 출력 — JSON에서 재변환된 HWPX |
+| 파일                                                                       | 설명                          |
+| -------------------------------------------------------------------------- | ----------------------------- |
+| [`json2hwpx/01_text.json`](json2hwpx/01_text.json)                         | 입력 — 위 JSON과 동일         |
+| [`json2hwpx/01_text.hwpx`](json2hwpx/01_text.hwpx)                         | 출력 — JSON에서 재변환된 HWPX |
+| [`json2hwpx/hwpx_complete_guide.json`](json2hwpx/hwpx_complete_guide.json) | 입력 — 종합 가이드 JSON       |
+| [`json2hwpx/hwpx_complete_guide.hwpx`](json2hwpx/hwpx_complete_guide.hwpx) | 출력 — JSON에서 재변환된 HWPX |
 
 [src-json-roundtrip]: ../crates/hwpforge-smithy-hwpx/examples/hwpx_json_roundtrip.rs
 
