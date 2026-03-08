@@ -501,10 +501,14 @@ fn write_xy_series(
 }
 
 /// Writes the chart title element.
+///
+/// Uses `a:` (DrawingML) namespace inside `<c:rich>` as required by OOXML.
+/// Includes `<a:bodyPr/>`, `<a:lstStyle/>`, and `<a:rPr lang="ko-KR"/>` so
+/// that 한글 recognises the custom title instead of falling back to "차트 제목".
 fn write_title(xml: &mut String, title: &str) {
     write!(
         xml,
-        r#"<c:title><c:tx><c:rich><c:p><c:r><c:t>{}</c:t></c:r></c:p></c:rich></c:tx></c:title>"#,
+        r#"<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="ko-KR"/><a:t>{}</a:t></a:r></a:p></c:rich></c:tx><c:layout/><c:overlay val="0"/></c:title>"#,
         escape_xml(title),
     )
     .unwrap();
