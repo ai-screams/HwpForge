@@ -1,7 +1,7 @@
-//! Wave 9: Page Layout Completion test
+//! 페이지 레이아웃 테스트: Gutter, Visibility, LineNumberShape, MasterPage, PageBorderFill
 //!
 //! Usage:
-//!   cargo run -p hwpforge-smithy-hwpx --example wave9_page_layout_test
+//!   cargo run -p hwpforge-smithy-hwpx --example page_layout
 
 use hwpforge_core::document::Document;
 use hwpforge_core::image::ImageStore;
@@ -242,7 +242,8 @@ fn main() {
 
     let bytes =
         HwpxEncoder::encode(&validated, &style_store, &image_store).expect("encode should succeed");
-    let path = "wave9_page_layout_output.hwpx";
+    std::fs::create_dir_all("temp").ok();
+    let path = "temp/page_layout.hwpx";
     std::fs::write(path, &bytes).expect("write should succeed");
     println!("Written: {path} ({} bytes)", bytes.len());
 

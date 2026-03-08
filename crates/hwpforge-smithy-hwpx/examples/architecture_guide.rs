@@ -761,7 +761,8 @@ fn main() {
 
     // ── 4. Encode ──
     let mut image_store = ImageStore::new();
-    let mascot_bytes = std::fs::read("assets/mascot.png").expect("assets/mascot.png not found");
+    let mascot_bytes =
+        std::fs::read("assets/mascot-main.png").expect("assets/mascot-main.png not found");
     image_store.insert("image1.png", mascot_bytes);
 
     let bytes =

@@ -1,14 +1,14 @@
-//! Wave 8/10/13 API 종합 테스트: 새로 추가된 모든 API를 사용하여 HWPX 파일을 생성합니다.
+//! 문단 기능 및 주석 종합 테스트
 //!
-//! **Wave 8**: NumberingDef (10 levels), TabDef, HeadingType, heading_id_ref/heading_level/tab_pr_id_ref
-//! **Wave 10**: EmphasisType (13 variants), ratio/spacing/rel_sz/char_offset/use_kerning/use_font_space
-//! **Wave 13**: Control::Dutmal (position/align combos), Control::Compose
+//! - **Numbering**: NumberingDef (10 levels), TabDef, HeadingType
+//! - **Character**: EmphasisType (13 variants), ratio/spacing/rel_sz/char_offset
+//! - **Annotations**: Control::Dutmal (position/align combos), Control::Compose
 //!
 //! Usage:
-//!   cargo run -p hwpforge-smithy-hwpx --example wave8_10_13_test
+//!   cargo run -p hwpforge-smithy-hwpx --example paragraph_and_annotations
 //!
 //! Output:
-//!   wave8_10_13_output.hwpx (in the project root)
+//!   temp/paragraph_and_annotations.hwpx
 
 use hwpforge_core::control::{Control, DutmalAlign, DutmalPosition};
 use hwpforge_core::document::Document;
@@ -608,7 +608,8 @@ fn main() {
 
     // 4. Encode to HWPX
     let bytes = HwpxEncoder::encode(&validated, &store, &image_store).expect("encode failed");
-    let output_path = "wave8_10_13_output.hwpx";
+    std::fs::create_dir_all("temp").ok();
+    let output_path = "temp/paragraph_and_annotations.hwpx";
     std::fs::write(output_path, &bytes).expect("write failed");
     println!("[4] HWPX 파일 생성: {output_path} ({} bytes)", bytes.len());
 

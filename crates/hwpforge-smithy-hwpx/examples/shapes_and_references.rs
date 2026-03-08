@@ -1,12 +1,12 @@
-//! Wave 9/11/12 종합 테스트: 페이지 레이아웃, 도형 확장, 참조/주석 전체 API 검증
+//! 도형 확장 + 참조/주석 종합 테스트: Arc, Curve, ConnectLine, Bookmark, CrossRef, Field, Memo
 //!
 //! 한글에서 열어서 각 기능이 정상 렌더링되는지 확인합니다.
 //!
 //! Usage:
-//!   cargo run -p hwpforge-smithy-hwpx --example wave9_11_12_comprehensive
+//!   cargo run -p hwpforge-smithy-hwpx --example shapes_and_references
 //!
 //! Output:
-//!   wave9_11_12_output.hwpx (프로젝트 루트)
+//!   temp/shapes_and_references.hwpx
 
 use hwpforge_core::control::{ArrowStyle, Control, DutmalPosition, ShapePoint, ShapeStyle};
 use hwpforge_core::document::Document;
@@ -955,8 +955,9 @@ fn main() {
     let validated = doc.validate().expect("validation should pass");
     let bytes =
         HwpxEncoder::encode(&validated, &style_store, &image_store).expect("encode should succeed");
-    std::fs::write("../../../temp/wave9_11_12_output.hwpx", &bytes).expect("write should succeed");
-    println!("\n  wave9_11_12_output.hwpx ({} bytes) — all 11 sections", bytes.len());
+    std::fs::create_dir_all("temp").ok();
+    std::fs::write("temp/shapes_and_references.hwpx", &bytes).expect("write should succeed");
+    println!("\n  temp/shapes_and_references.hwpx ({} bytes) — all 11 sections", bytes.len());
 
     println!("\n각 파일을 한글에서 열어서 어떤 섹션이 크래시하는지 확인하세요.");
     println!("크래시하는 파일 번호를 알려주시면 해당 섹션을 수정하겠습니다.");

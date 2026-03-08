@@ -1,10 +1,10 @@
-//! Visual test for Wave 14 features: TextDirection, DropCapStyle, page_break, char border.
+//! TextDirection, DropCapStyle, page_break, char border 테스트
 //!
 //! Usage:
-//!   cargo run -p hwpforge-smithy-hwpx --example wave14_test
+//!   cargo run -p hwpforge-smithy-hwpx --example text_direction_and_dropcap
 //!
 //! Output:
-//!   temp/wave14_test.hwpx
+//!   temp/text_direction_and_dropcap.hwpx
 //!
 //! Open in 한글 to verify:
 //! - Section 1: 가로쓰기 (horizontal, default) with page_break between paragraphs
@@ -166,8 +166,8 @@ fn main() {
 
     let bytes = HwpxEncoder::encode(&doc, &store, &images).expect("encode failed");
 
-    std::fs::write("temp/wave14_test.hwpx", &bytes).unwrap();
-    println!("Written: temp/wave14_test.hwpx ({} bytes)", bytes.len());
+    std::fs::write("temp/text_direction_and_dropcap.hwpx", &bytes).unwrap();
+    println!("Written: temp/text_direction_and_dropcap.hwpx ({} bytes)", bytes.len());
     println!();
     println!("Open in 한글 and verify:");
     println!("  Section 1: 가로쓰기 + page_break (문단 사이 페이지 나뉨)");
