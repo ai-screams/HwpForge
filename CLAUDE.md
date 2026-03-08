@@ -433,6 +433,29 @@ hwpxlib(Java)도 세 필드 모두 nullable. 도형(DrawingObject)과 borderFill
 - **검증**: `15_shapes_advanced.hwpx` Section 6 — 비대칭 깃발 도형으로 4방향 반전 확인
 - **적용 대상**: 모든 도형 (Polygon, Ellipse, Line, Arc, Curve, ConnectLine, TextBox)
 
+### 20. Rotation은 정수 degrees + CCW 방향 + 중심 이동 포함
+
+```xml
+<!-- ❌ WRONG — centidegrees, CW 방향, 이동 없음 → 도형이 원점 기준 회전 -->
+<hp:rotationInfo angle="9000" centerX="3000" centerY="2000" rotateimage="1"/>
+<hc:rotMatrix e1="0" e2="1" e3="0" e4="-1" e5="0" e6="0"/>
+
+<!-- ✅ CORRECT — 정수 degrees, CCW 방향, 중심 기준 이동 포함 -->
+<hp:rotationInfo angle="90" centerX="3000" centerY="2000" rotateimage="1"/>
+<hc:rotMatrix e1="0" e2="-1" e3="5000" e4="1" e5="0" e6="-1000"/>
+```
+
+한글 회전 인코딩 규칙:
+
+- **angle 단위**: 정수 degrees (NOT centidegrees). 90° = `angle="90"` (NOT `"9000"`)
+- **rotMatrix 방향**: `[cos θ, -sin θ; sin θ, cos θ]` (CCW, 화면 좌표계에서 시계방향)
+- **rotMatrix 이동**: 중심 기준 회전을 위한 보정 필수
+  - `e3 = cx*(1-cos) + cy*sin`
+  - `e6 = cy*(1-cos) - cx*sin`
+  - `cx = width/2, cy = height/2`
+- **이동 없으면**: 도형이 바운딩 박스 원점(0,0) 기준으로 회전 → 위치 이탈
+- **scaMatrix, transMatrix**: 순수 회전 시 identity 유지
+
 ---
 
 ## Phase Status

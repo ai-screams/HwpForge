@@ -299,9 +299,8 @@ pub(crate) fn decode_shape_style_full(
         ),
     };
 
-    // Decode rotation (HWPX stores angle * 100)
-    let rotation: Option<f32> =
-        rotation_info.filter(|ri| ri.angle != 0).map(|ri| ri.angle as f32 / 100.0);
+    // Decode rotation (HWPX stores angle in integer degrees)
+    let rotation: Option<f32> = rotation_info.filter(|ri| ri.angle != 0).map(|ri| ri.angle as f32);
 
     // Decode flip
     let flip: Option<Flip> = flip_info.and_then(|fi| match (fi.horizontal, fi.vertical) {
@@ -918,7 +917,7 @@ mod tests {
 
     #[test]
     fn decode_shape_style_full_rotation_extracted() {
-        let ri = HxRotationInfo { angle: 4500, center_x: 50, center_y: 50, rotate_image: 1 };
+        let ri = HxRotationInfo { angle: 45, center_x: 50, center_y: 50, rotate_image: 1 };
         let style = decode_shape_style_full(&None, &None, Some(&ri), None, "None").unwrap();
         let rot = style.rotation.unwrap();
         assert!((rot - 45.0f32).abs() < 0.01, "45 degrees expected, got {rot}");
@@ -961,7 +960,7 @@ mod tests {
 
     #[test]
     fn decode_shape_style_full_combined_rotation_and_flip() {
-        let ri = HxRotationInfo { angle: 9000, center_x: 0, center_y: 0, rotate_image: 1 };
+        let ri = HxRotationInfo { angle: 90, center_x: 0, center_y: 0, rotate_image: 1 };
         let fi = HxFlip { horizontal: 1, vertical: 0 };
         let style = decode_shape_style_full(&None, &None, Some(&ri), Some(&fi), "None").unwrap();
         let rot = style.rotation.unwrap();
@@ -1063,7 +1062,7 @@ mod tests {
     fn decode_arc_with_rotation_style() {
         let mut ellipse = default_ellipse();
         ellipse.rotation_info =
-            Some(HxRotationInfo { angle: 4500, center_x: 50, center_y: 50, rotate_image: 1 });
+            Some(HxRotationInfo { angle: 45, center_x: 50, center_y: 50, rotate_image: 1 });
         let cs = CharShapeIndex::new(0);
         let run = decode_arc(&ellipse, cs, 0).unwrap();
         if let Control::Arc { style, .. } = run.content.as_control().unwrap().clone() {

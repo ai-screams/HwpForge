@@ -62,7 +62,7 @@ pub(crate) struct ShapeCommon {
 /// Builds the shape-common block for a drawing object of the given pixel size.
 ///
 /// Defaults match 한글's output for a newly created shape:
-/// - zero offset, orgSz = given dimensions, curSz = 0×0
+/// - zero offset, orgSz = curSz = given dimensions
 /// - identity rotation/rendering matrices
 /// - solid black border, white fill, no shadow
 ///
@@ -76,7 +76,7 @@ pub(crate) fn build_shape_common(
     let mut line_shape = HxLineShape::default_solid();
     let mut fill_brush = HxFillBrush::default_white();
 
-    // Rotation angle (in 1/100 degree units for HWPX schema)
+    // Rotation angle in integer degrees for HWPX schema
     let mut angle: i32 = 0;
     let mut hx_flip = HxFlip { horizontal: 0, vertical: 0 };
 
@@ -145,11 +145,12 @@ pub(crate) fn build_shape_common(
             }
         }
 
-        // Rotation: Core uses degrees (f32), HWPX uses degrees * 100 (i32).
-        // rem_euclid normalises NaN/INF/negatives before the cast.
+        // Rotation: Core uses degrees (f32), HWPX uses integer degrees.
+        // rem_euclid normalises negatives to [0,360). NaN/INF pass through
+        // as NaN but Rust's saturating cast maps NaN → 0, so angle stays 0.
         if let Some(rot) = s.rotation {
             let clamped = rot.rem_euclid(360.0);
-            angle = (clamped * 100.0) as i32;
+            angle = clamped.round() as i32;
         }
 
         // Flip
@@ -180,26 +181,35 @@ pub(crate) fn build_shape_common(
     }
 
     // Build rotation matrix for rotation and/or flip.
-    // 한글 reads flip from rotMatrix (NOT scaMatrix). scaMatrix and transMatrix stay identity.
-    //   Horizontal flip: e1=-1, e3=width (mirror x then shift back)
-    //   Vertical flip:   e5=-1, e6=height (mirror y then shift back)
-    //   Rotation:        standard cos/sin matrix
+    // 한글 reads both flip and rotation from rotMatrix.
+    // scaMatrix and transMatrix stay identity (unless external scaling).
+    //
+    // Rotation convention (한글): [cos θ, -sin θ, tx; sin θ, cos θ, ty]
+    //   tx = cx*(1-cos) + cy*sin,  ty = cy*(1-cos) - cx*sin
+    //   where cx=width/2, cy=height/2 (rotation around center)
+    //
+    // Flip: horizontal → e1=-1, e3=width; vertical → e5=-1, e6=height
     let has_flip = hx_flip.horizontal != 0 || hx_flip.vertical != 0;
     let rot_matrix = if angle != 0 && !has_flip {
         // Pure rotation, no flip
-        let rad = (angle as f64) / 100.0 * std::f64::consts::PI / 180.0;
+        let rad = (angle as f64).to_radians();
         let cos_val = rad.cos();
         let sin_val = rad.sin();
+        let cx = width as f64 / 2.0;
+        let cy = height as f64 / 2.0;
+        let tx = cx * (1.0 - cos_val) + cy * sin_val;
+        let ty = cy * (1.0 - cos_val) - cx * sin_val;
         HxMatrix {
             e1: format!("{cos_val:.6}"),
-            e2: format!("{sin_val:.6}"),
-            e3: "0".to_string(),
-            e4: format!("{:.6}", -sin_val),
+            e2: format!("{:.6}", -sin_val),
+            e3: format!("{tx:.6}"),
+            e4: format!("{sin_val:.6}"),
             e5: format!("{cos_val:.6}"),
-            e6: "0".to_string(),
+            e6: format!("{ty:.6}"),
         }
     } else if has_flip {
         // Flip (with or without rotation) — encode flip in rotMatrix
+        // TODO: compose flip+rotation when both are present
         let h = hx_flip.horizontal != 0;
         let v = hx_flip.vertical != 0;
         HxMatrix {
@@ -1087,7 +1097,7 @@ mod tests {
     fn build_shape_common_rotation_applied_correctly() {
         let style = ShapeStyle { rotation: Some(45.0), ..Default::default() };
         let sc = build_shape_common(1000, 500, Some(&style));
-        assert_eq!(sc.rotation_info.angle, 4500);
+        assert_eq!(sc.rotation_info.angle, 45);
         // rotation center = dimension / 2
         assert_eq!(sc.rotation_info.center_x, 500);
         assert_eq!(sc.rotation_info.center_y, 250);
@@ -1097,12 +1107,14 @@ mod tests {
     fn build_shape_common_rotation_90_degrees() {
         let style = ShapeStyle { rotation: Some(90.0), ..Default::default() };
         let sc = build_shape_common(2000, 1000, Some(&style));
-        assert_eq!(sc.rotation_info.angle, 9000);
-        // rotation matrix: cos(90°)≈0, sin(90°)≈1
+        assert_eq!(sc.rotation_info.angle, 90);
+        // 한글 rotation matrix convention: [cos, -sin; sin, cos]
         let e1: f64 = sc.rendering_info.rot_matrix.e1.parse().unwrap();
         let e2: f64 = sc.rendering_info.rot_matrix.e2.parse().unwrap();
+        let e4: f64 = sc.rendering_info.rot_matrix.e4.parse().unwrap();
         assert!(e1.abs() < 0.001, "cos(90°) must be ~0");
-        assert!((e2 - 1.0).abs() < 0.001, "sin(90°) must be ~1");
+        assert!((e2 + 1.0).abs() < 0.001, "-sin(90°) must be ~-1");
+        assert!((e4 - 1.0).abs() < 0.001, "sin(90°) must be ~1");
     }
 
     #[test]
