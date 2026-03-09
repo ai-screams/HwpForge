@@ -149,7 +149,7 @@ pub fn run_to_json(
             return Err(ToolErrorInfo::new(
                 "OUTPUT_TOO_LARGE",
                 format!("JSON output is {} KB, too large for inline response", size_bytes / 1024,),
-                "Use output_path to write to a file, or use --section to export a single section.",
+                "Use output_path to write to a file, or use section parameter to export a single section.",
             ));
         }
         Ok(ToJsonData {

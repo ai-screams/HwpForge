@@ -83,7 +83,7 @@ pub fn run_convert(
         markdown.to_string()
     };
 
-    // 3. Decode Markdown → Core Document
+    // 4. Decode Markdown → Core Document
     let md_doc = MdDecoder::decode_with_default(&md_content).map_err(|e| {
         ToolErrorInfo::new(
             "MD_DECODE_ERROR",
@@ -92,11 +92,11 @@ pub fn run_convert(
         )
     })?;
 
-    // 4. Count sections and paragraphs
+    // 5. Count sections and paragraphs
     let sections: usize = md_doc.document.sections().len();
     let paragraphs: usize = md_doc.document.sections().iter().map(|s| s.paragraphs.len()).sum();
 
-    // 5. Build style store and validate
+    // 6. Build style store and validate
     let style_store = HwpxStyleStore::from_registry(&md_doc.style_registry);
     let image_store = ImageStore::new();
 
@@ -108,7 +108,7 @@ pub fn run_convert(
         )
     })?;
 
-    // 6. Encode to HWPX bytes
+    // 7. Encode to HWPX bytes
     let hwpx_bytes = HwpxEncoder::encode(&validated, &style_store, &image_store).map_err(|e| {
         ToolErrorInfo::new(
             "ENCODE_ERROR",
@@ -117,7 +117,7 @@ pub fn run_convert(
         )
     })?;
 
-    // 7. Write output file
+    // 8. Write output file
     let out = Path::new(output_path);
     if let Some(parent) = out.parent() {
         if !parent.as_os_str().is_empty() {
