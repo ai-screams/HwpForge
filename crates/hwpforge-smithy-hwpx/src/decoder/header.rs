@@ -17,13 +17,24 @@ use crate::style_store::{
     parse_alignment, parse_hex_color, HwpxBorderFill, HwpxBorderLine, HwpxCharShape, HwpxFill,
     HwpxFont, HwpxFontRef, HwpxParaShape, HwpxStyle, HwpxStyleStore,
 };
+use hwpforge_core::section::BeginNum;
 
-/// Parses a `header.xml` string into an [`HwpxStyleStore`].
+/// Result of parsing `header.xml`.
+#[derive(Debug)]
+pub struct HeaderParseResult {
+    /// Style information parsed from `header.xml`.
+    pub style_store: HwpxStyleStore,
+    /// Starting auto-numbering values from `<hh:beginNum>`, if present.
+    pub begin_num: Option<BeginNum>,
+}
+
+/// Parses a `header.xml` string into an [`HwpxStyleStore`] and optional [`BeginNum`].
 ///
 /// Extracts:
 /// - Font face definitions → `Vec<HwpxFont>`
 /// - Character properties → `Vec<HwpxCharShape>`
 /// - Paragraph properties → `Vec<HwpxParaShape>`
+/// - Beginning auto-numbering values → `Option<BeginNum>`
 ///
 /// # Security
 ///
@@ -31,9 +42,18 @@ use crate::style_store::{
 /// quick-xml's serde deserializer does not expand custom entities and will
 /// return an error if any are encountered. The ZIP size limits in
 /// `PackageReader` also bound the total input size.
-pub fn parse_header(xml: &str) -> HwpxResult<HwpxStyleStore> {
+pub fn parse_header(xml: &str) -> HwpxResult<HeaderParseResult> {
     let head: HxHead = from_str(xml)
         .map_err(|e| HwpxError::XmlParse { file: "header.xml".into(), detail: e.to_string() })?;
+
+    let begin_num = head.begin_num.map(|bn| BeginNum {
+        page: bn.page,
+        footnote: bn.footnote,
+        endnote: bn.endnote,
+        pic: bn.pic,
+        tbl: bn.tbl,
+        equation: bn.equation,
+    });
 
     let mut store = HwpxStyleStore::new();
 
@@ -98,7 +118,7 @@ pub fn parse_header(xml: &str) -> HwpxResult<HwpxStyleStore> {
         }
     }
 
-    Ok(store)
+    Ok(HeaderParseResult { style_store: store, begin_num })
 }
 
 /// Converts an [`HxNumbering`] XML type into a [`hwpforge_core::NumberingDef`].
@@ -499,7 +519,7 @@ mod tests {
     #[test]
     fn parse_empty_header() {
         let xml = r#"<head version="1.4" secCnt="1"></head>"#;
-        let store = parse_header(xml).unwrap();
+        let store = parse_header(xml).unwrap().style_store;
         assert_eq!(store.font_count(), 0);
         assert_eq!(store.char_shape_count(), 0);
         assert_eq!(store.para_shape_count(), 0);
@@ -519,7 +539,7 @@ mod tests {
                 </fontfaces>
             </refList>
         </head>"##;
-        let store = parse_header(xml).unwrap();
+        let store = parse_header(xml).unwrap().style_store;
         assert_eq!(store.font_count(), 2);
 
         let f0 = store.font(FontIndex::new(0)).unwrap();
@@ -549,7 +569,7 @@ mod tests {
                 </charProperties>
             </refList>
         </head>"##;
-        let store = parse_header(xml).unwrap();
+        let store = parse_header(xml).unwrap().style_store;
         assert_eq!(store.char_shape_count(), 1);
 
         let cs = store.char_shape(hwpforge_foundation::CharShapeIndex::new(0)).unwrap();
@@ -577,7 +597,7 @@ mod tests {
                 </charProperties>
             </refList>
         </head>"##;
-        let store = parse_header(xml).unwrap();
+        let store = parse_header(xml).unwrap().style_store;
         let cs = store.char_shape(hwpforge_foundation::CharShapeIndex::new(0)).unwrap();
         assert_eq!(cs.height.as_i32(), 2500);
         assert_eq!(cs.text_color, Color::from_rgb(255, 0, 0));
@@ -603,7 +623,7 @@ mod tests {
                 </paraProperties>
             </refList>
         </head>"#;
-        let store = parse_header(xml).unwrap();
+        let store = parse_header(xml).unwrap().style_store;
         assert_eq!(store.para_shape_count(), 1);
 
         let ps = store.para_shape(hwpforge_foundation::ParaShapeIndex::new(0)).unwrap();
@@ -633,7 +653,7 @@ mod tests {
                 </paraProperties>
             </refList>
         </head>"#;
-        let store = parse_header(xml).unwrap();
+        let store = parse_header(xml).unwrap().style_store;
         let ps = store.para_shape(hwpforge_foundation::ParaShapeIndex::new(0)).unwrap();
         assert_eq!(ps.alignment, Alignment::Justify);
         assert_eq!(ps.indent.as_i32(), 200);
@@ -656,7 +676,7 @@ mod tests {
                 </paraProperties>
             </refList>
         </head>"#;
-        let store = parse_header(xml).unwrap();
+        let store = parse_header(xml).unwrap().style_store;
         let ps = store.para_shape(hwpforge_foundation::ParaShapeIndex::new(0)).unwrap();
         assert_eq!(ps.margin_left, HwpUnit::ZERO);
         assert_eq!(ps.line_spacing, 160);
@@ -703,7 +723,7 @@ mod tests {
             </refList>
         </head>"##;
 
-        let store = parse_header(xml).unwrap();
+        let store = parse_header(xml).unwrap().style_store;
         assert_eq!(store.font_count(), 2);
         assert_eq!(store.char_shape_count(), 2);
         assert_eq!(store.para_shape_count(), 1);
@@ -730,7 +750,7 @@ mod tests {
     #[test]
     fn parse_header_with_no_reflist() {
         let xml = r#"<head version="1.4" secCnt="1"></head>"#;
-        let store = parse_header(xml).unwrap();
+        let store = parse_header(xml).unwrap().style_store;
         assert_eq!(store.font_count(), 0);
     }
 
@@ -745,7 +765,7 @@ mod tests {
                 </charProperties>
             </refList>
         </head>"##;
-        let store = parse_header(xml).unwrap();
+        let store = parse_header(xml).unwrap().style_store;
         let cs = store.char_shape(hwpforge_foundation::CharShapeIndex::new(0)).unwrap();
         assert_eq!(cs.font_ref.hangul.get(), 0);
         assert_eq!(cs.font_ref.latin.get(), 0);
@@ -765,7 +785,7 @@ mod tests {
                 </styles>
             </refList>
         </head>"#;
-        let store = parse_header(xml).unwrap();
+        let store = parse_header(xml).unwrap().style_store;
         assert_eq!(store.style_count(), 2);
 
         let s0 = store.style(0).unwrap();
@@ -791,7 +811,7 @@ mod tests {
                 </fontfaces>
             </refList>
         </head>"#;
-        let store = parse_header(xml).unwrap();
+        let store = parse_header(xml).unwrap().style_store;
         assert_eq!(store.style_count(), 0);
     }
 }

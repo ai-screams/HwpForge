@@ -326,6 +326,7 @@ fn build_head(store: &HwpxStyleStore, sec_cnt: u32) -> HxHead {
     HxHead {
         version: "1.4".into(),
         sec_cnt,
+        begin_num: None, // beginNum is injected as raw XML in wrap_header_xml
         ref_list: if has_content { Some(ref_list) } else { None },
     }
 }
@@ -474,7 +475,7 @@ fn build_char_pr(id: u32, cs: &HwpxCharShape) -> HxCharPr {
     HxCharPr {
         id,
         height: cs.height.as_i32().max(0) as u32,
-        text_color: color_to_hex(&cs.text_color),
+        text_color: cs.text_color.to_hex_rgb(),
         shade_color: shade_color_to_str(cs.shade_color.as_ref()),
         use_font_space: u32::from(cs.use_font_space),
         use_kerning: u32::from(cs.use_kerning),
@@ -499,11 +500,11 @@ fn build_char_pr(id: u32, cs: &HwpxCharShape) -> HxCharPr {
         underline: Some(HxUnderline {
             underline_type: underline_type_to_hwpx(cs.underline_type).into(),
             shape: "SOLID".into(),
-            color: cs.underline_color.as_ref().map_or_else(|| "#000000".into(), color_to_hex),
+            color: cs.underline_color.as_ref().map_or_else(|| "#000000".into(), |c| c.to_hex_rgb()),
         }),
         strikeout: Some(HxStrikeout {
             shape: strikeout_shape_to_hwpx(cs.strikeout_shape).into(),
-            color: cs.strikeout_color.as_ref().map_or_else(|| "#000000".into(), color_to_hex),
+            color: cs.strikeout_color.as_ref().map_or_else(|| "#000000".into(), |c| c.to_hex_rgb()),
         }),
         outline: Some(HxOutline { outline_type: outline_type_to_hwpx(cs.outline_type).into() }),
         shadow: Some(HxShadow {
@@ -665,11 +666,6 @@ fn hwpunit_value(u: HwpUnit) -> HxUnitValue {
 
 // ── Color / alignment helpers ───────────────────────────────────
 
-/// Formats a [`Color`] as `"#RRGGBB"`.
-fn color_to_hex(c: &Color) -> String {
-    format!("#{:02X}{:02X}{:02X}", c.red(), c.green(), c.blue())
-}
-
 /// Converts a shade color to its HWPX string representation.
 ///
 /// `None` or black shading is represented as `"none"` in HWPX (meaning no shading),
@@ -678,7 +674,7 @@ fn shade_color_to_str(c: Option<&Color>) -> String {
     match c {
         None => "none".to_string(),
         Some(color) if *color == Color::BLACK => "none".to_string(),
-        Some(color) => color_to_hex(color),
+        Some(color) => color.to_hex_rgb(),
     }
 }
 
@@ -861,7 +857,7 @@ mod tests {
         // The decoder strips namespace prefixes, so we need to feed it
         // XML without them. However, the decoder's parse_header uses
         // quick-xml::de which strips namespace prefixes automatically.
-        let decoded = crate::decoder::header::parse_header(&xml).unwrap();
+        let decoded = crate::decoder::header::parse_header(&xml).unwrap().style_store;
 
         // Font roundtrip: encoder expands to 7 language groups (1 font × 7 = 7)
         assert_eq!(decoded.font_count(), 7);
@@ -897,17 +893,7 @@ mod tests {
         assert!(!xml.contains("<hh:italic"), "italic element must be absent");
     }
 
-    // ── 4. color_to_hex ─────────────────────────────────────────
-
-    #[test]
-    fn test_color_to_hex() {
-        assert_eq!(color_to_hex(&Color::from_rgb(255, 0, 0)), "#FF0000");
-        assert_eq!(color_to_hex(&Color::BLACK), "#000000");
-        assert_eq!(color_to_hex(&Color::WHITE), "#FFFFFF");
-        assert_eq!(color_to_hex(&Color::from_rgb(0xAB, 0xCD, 0xEF)), "#ABCDEF");
-    }
-
-    // ── 5. shade_color_to_str ───────────────────────────────────
+    // ── 4. shade_color_to_str ───────────────────────────────────
 
     #[test]
     fn test_shade_color_none() {
@@ -1063,7 +1049,7 @@ mod tests {
         });
 
         let xml = encode_header(&store, 1, None).unwrap();
-        let decoded = crate::decoder::header::parse_header(&xml).unwrap();
+        let decoded = crate::decoder::header::parse_header(&xml).unwrap().style_store;
 
         // Fonts: encoder expands to 7 language groups
         // HANGUL: 2, LATIN: 1, HANJA/JAPANESE/OTHER/SYMBOL/USER: 2 each (cloned from HANGUL)
@@ -1114,7 +1100,7 @@ mod tests {
         store.push_char_shape(HwpxCharShape::default());
 
         let xml = encode_header(&store, 1, None).unwrap();
-        let decoded = crate::decoder::header::parse_header(&xml).unwrap();
+        let decoded = crate::decoder::header::parse_header(&xml).unwrap().style_store;
 
         assert_eq!(decoded.char_shape_count(), 3);
         assert!(decoded.char_shape(CharShapeIndex::new(0)).unwrap().bold);
@@ -1155,7 +1141,7 @@ mod tests {
         assert!(xml.contains("본문"));
         assert!(xml.contains("Body"));
 
-        let decoded = crate::decoder::header::parse_header(&xml).unwrap();
+        let decoded = crate::decoder::header::parse_header(&xml).unwrap().style_store;
         assert_eq!(decoded.style_count(), 2);
 
         let s0 = decoded.style(0).unwrap();

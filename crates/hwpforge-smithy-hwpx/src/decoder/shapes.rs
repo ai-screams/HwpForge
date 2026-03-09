@@ -51,6 +51,14 @@ pub(crate) fn decode_textbox(
 
     let caption = rect.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
 
+    let style = decode_shape_style_full(
+        &rect.line_shape,
+        &rect.fill_brush,
+        rect.rotation_info.as_ref(),
+        rect.flip.as_ref(),
+        &rect.dropcap_style,
+    );
+
     Ok(Some(Run {
         content: RunContent::Control(Box::new(Control::TextBox {
             paragraphs,
@@ -59,7 +67,7 @@ pub(crate) fn decode_textbox(
             horz_offset,
             vert_offset,
             caption,
-            style: None,
+            style,
         })),
         char_shape_id,
     }))
@@ -109,7 +117,13 @@ pub(crate) fn decode_line(
             horz_offset,
             vert_offset,
             caption,
-            style: decode_shape_style(&line.line_shape, &line.fill_brush, &line.dropcap_style),
+            style: decode_shape_style_full(
+                &line.line_shape,
+                &line.fill_brush,
+                line.rotation_info.as_ref(),
+                line.flip.as_ref(),
+                &line.dropcap_style,
+            ),
         })),
         char_shape_id,
     })
@@ -171,9 +185,11 @@ pub(crate) fn decode_ellipse(
             vert_offset,
             paragraphs,
             caption,
-            style: decode_shape_style(
+            style: decode_shape_style_full(
                 &ellipse.line_shape,
                 &ellipse.fill_brush,
+                ellipse.rotation_info.as_ref(),
+                ellipse.flip.as_ref(),
                 &ellipse.dropcap_style,
             ),
         })),
@@ -222,9 +238,11 @@ pub(crate) fn decode_polygon(
             vert_offset,
             paragraphs,
             caption,
-            style: decode_shape_style(
+            style: decode_shape_style_full(
                 &polygon.line_shape,
                 &polygon.fill_brush,
+                polygon.rotation_info.as_ref(),
+                polygon.flip.as_ref(),
                 &polygon.dropcap_style,
             ),
         })),
@@ -232,19 +250,8 @@ pub(crate) fn decode_polygon(
     })
 }
 
-/// Extracts a [`ShapeStyle`] from HWPX shape common elements.
-///
-/// Maps `HxLineShape` and `HxFillBrush` to Core's `ShapeStyle`.
-/// Returns `None` if no style information is present.
-pub(crate) fn decode_shape_style(
-    line_shape: &Option<HxLineShape>,
-    fill_brush: &Option<HxFillBrush>,
-    dropcap_style: &str,
-) -> Option<ShapeStyle> {
-    decode_shape_style_full(line_shape, fill_brush, None, None, dropcap_style)
-}
-
-/// Extended shape style decoder that also extracts rotation, flip, arrow, and drop cap info.
+/// Extracts a [`ShapeStyle`] from HWPX shape common elements including rotation, flip, arrow,
+/// and drop cap info.
 pub(crate) fn decode_shape_style_full(
     line_shape: &Option<HxLineShape>,
     fill_brush: &Option<HxFillBrush>,
@@ -584,6 +591,16 @@ mod tests {
         HxFillBrush, HxFlip, HxLine, HxLineShape, HxPoint, HxRotationInfo, HxTablePos, HxTableSz,
     };
     use hwpforge_core::control::{Control, Fill, ShapePoint};
+
+    /// Test-only convenience wrapper that calls `decode_shape_style_full` without rotation/flip.
+    fn decode_shape_style(
+        line_shape: &Option<HxLineShape>,
+        fill_brush: &Option<HxFillBrush>,
+        dropcap_style: &str,
+    ) -> Option<ShapeStyle> {
+        decode_shape_style_full(line_shape, fill_brush, None, None, dropcap_style)
+    }
+
     use hwpforge_foundation::{
         ArcType, ArrowSize, ArrowType, CharShapeIndex, Color, DropCapStyle, Flip, PatternType,
     };

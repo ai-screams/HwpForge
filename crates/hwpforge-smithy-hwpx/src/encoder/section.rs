@@ -863,7 +863,7 @@ fn build_field_run_xml(
     use hwpforge_foundation::FieldType;
 
     let escaped_hint = escape_xml(hint);
-    let begin_id = 1_000_000_000 + field_id as u64;
+    let begin_id = 1_000_000_000_u64 + field_id as u64;
 
     match field_type {
         FieldType::ClickHere => {
@@ -1209,6 +1209,7 @@ fn build_sec_pr(ps: &PageSettings, text_direction: TextDirection) -> HxSecPr {
             }),
         }),
         page_border_fills: Vec::new(),
+        start_num: None,
     }
 }
 
@@ -1259,13 +1260,16 @@ fn build_table(
                 col_addr += 1;
             }
             addrs.push(col_addr);
+            // Clamp spans to minimum 1 (API contract: col_span >= 1, row_span >= 1)
+            let col_span = (cell.col_span as u32).max(1);
+            let row_span = (cell.row_span as u32).max(1);
             // Mark all grid positions covered by this cell's span
-            for dr in 0..cell.row_span as u32 {
-                for dc in 0..cell.col_span as u32 {
+            for dr in 0..row_span {
+                for dc in 0..col_span {
                     occupied.insert((row_idx as u32 + dr, col_addr + dc));
                 }
             }
-            col_addr += cell.col_span as u32;
+            col_addr += col_span;
         }
         if col_addr > max_col {
             max_col = col_addr;
