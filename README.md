@@ -112,7 +112,7 @@ hwpforge schema document
 > section 단위로 정밀하게 편집할 수 있습니다. `--json` 플래그로 모든 명령어가
 > machine-readable 출력을 지원합니다.
 
-### ⚒️ Anvil — MCP Server로 AI가 직접 한글 문서를 다루다
+### ⚙️ Anvil — MCP Server로 AI가 직접 한글 문서를 다루다
 
 Claude Code, Codex CLI, ChatGPT, Cursor, Windsurf 등 [MCP](https://modelcontextprotocol.io/) 지원 AI 도구에서 **한글 문서를 직접 생성하고 편집**할 수 있습니다. "보고서 만들어줘"라고 말하면, AI가 알아서 `.hwpx` 파일을 뚝딱 만들어냅니다.
 
