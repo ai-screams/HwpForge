@@ -2,6 +2,8 @@
 //!
 //! Communicates via stdio (JSON-RPC 2.0). All logging goes to stderr.
 
+#![deny(missing_docs)]
+
 mod output;
 mod server;
 mod tools;

@@ -7,7 +7,7 @@ use serde::Serialize;
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
 
 use super::to_json::ExportedSection;
-use crate::output::ToolErrorInfo;
+use crate::output::{check_file_size, ToolErrorInfo};
 
 /// Output data from a successful patch operation.
 #[derive(Debug, Serialize)]
@@ -38,6 +38,7 @@ pub fn run_patch(
             "Check the file path and try again.",
         ));
     }
+    check_file_size(base)?;
     let base_bytes = std::fs::read(base).map_err(|e| {
         ToolErrorInfo::new(
             "READ_ERROR",
@@ -63,6 +64,7 @@ pub fn run_patch(
             "Check the file path and try again.",
         ));
     }
+    check_file_size(json_path)?;
     let json_str = std::fs::read_to_string(json_path).map_err(|e| {
         ToolErrorInfo::new(
             "READ_ERROR",
@@ -75,11 +77,26 @@ pub fn run_patch(
         ToolErrorInfo::new(
             "JSON_PARSE_ERROR",
             format!("Invalid section JSON: {e}"),
-            "Ensure the JSON matches the ExportedSection schema. Use `hwpforge schema exported-section` to check.",
+            "Ensure the JSON matches the ExportedSection schema from hwpforge_to_json output.",
         )
     })?;
 
-    // 3. Replace section
+    // 3. Warn if section index in JSON doesn't match request
+    if exported.section_index != section_idx {
+        return Err(ToolErrorInfo::new(
+            "SECTION_INDEX_MISMATCH",
+            format!(
+                "Requested section {} but JSON contains section {} data",
+                section_idx, exported.section_index,
+            ),
+            format!(
+                "Use section: {} to match the JSON, or re-export section {} with hwpforge_to_json.",
+                exported.section_index, section_idx,
+            ),
+        ));
+    }
+
+    // 4. Replace section
     let sections = hwpx_doc.document.sections_mut();
     if section_idx >= sections.len() {
         return Err(ToolErrorInfo::new(
@@ -93,10 +110,10 @@ pub fn run_patch(
     }
     sections[section_idx] = exported.section;
 
-    // 4. Use patch styles if provided, otherwise keep base styles
+    // 5. Use patch styles if provided, otherwise keep base styles
     let style_store = exported.styles.unwrap_or(hwpx_doc.style_store);
 
-    // 5. Validate and encode
+    // 6. Validate and encode
     let validated = hwpx_doc.document.validate().map_err(|e| {
         ToolErrorInfo::new(
             "VALIDATION_ERROR",
@@ -114,7 +131,7 @@ pub fn run_patch(
             )
         })?;
 
-    // 6. Write output
+    // 7. Write output
     let out = Path::new(output_path);
     if let Some(parent) = out.parent() {
         if !parent.as_os_str().is_empty() {

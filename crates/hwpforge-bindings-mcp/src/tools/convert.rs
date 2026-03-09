@@ -8,7 +8,7 @@ use hwpforge_core::image::ImageStore;
 use hwpforge_smithy_hwpx::{HwpxEncoder, HwpxStyleStore};
 use hwpforge_smithy_md::MdDecoder;
 
-use crate::output::ToolErrorInfo;
+use crate::output::{check_file_size, ToolErrorInfo, MAX_INLINE_SIZE};
 
 /// Output data from a successful conversion.
 #[derive(Debug, Serialize)]
@@ -41,7 +41,16 @@ pub fn run_convert(
         ));
     }
 
-    // 2. Read markdown content
+    // 2. Validate output extension
+    if !output_path.ends_with(".hwpx") {
+        return Err(ToolErrorInfo::new(
+            "INVALID_EXTENSION",
+            format!("Output path must end with .hwpx: {output_path}"),
+            "Use a .hwpx extension for the output file.",
+        ));
+    }
+
+    // 3. Read markdown content
     let md_content: String = if is_file {
         let path = Path::new(markdown);
         if !path.exists() {
@@ -51,6 +60,7 @@ pub fn run_convert(
                 "Check the file path and try again.",
             ));
         }
+        check_file_size(path)?;
         std::fs::read_to_string(path).map_err(|e| {
             ToolErrorInfo::new(
                 "READ_ERROR",
@@ -59,6 +69,17 @@ pub fn run_convert(
             )
         })?
     } else {
+        if markdown.len() > MAX_INLINE_SIZE {
+            return Err(ToolErrorInfo::new(
+                "INPUT_TOO_LARGE",
+                format!(
+                    "Inline content is {} MB, exceeds {} MB limit",
+                    markdown.len() / 1024 / 1024,
+                    MAX_INLINE_SIZE / 1024 / 1024,
+                ),
+                "Write the content to a file and use is_file: true.",
+            ));
+        }
         markdown.to_string()
     };
 

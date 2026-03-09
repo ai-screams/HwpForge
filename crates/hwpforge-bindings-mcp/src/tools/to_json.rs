@@ -10,7 +10,7 @@ use hwpforge_core::section::Section;
 use hwpforge_core::Draft;
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxStyleStore};
 
-use crate::output::ToolErrorInfo;
+use crate::output::{check_file_size, ToolErrorInfo};
 
 /// Full document export for JSON round-trip.
 #[derive(Serialize, Deserialize, JsonSchema)]
@@ -65,6 +65,7 @@ pub fn run_to_json(
         ));
     }
 
+    check_file_size(path)?;
     let bytes = std::fs::read(path).map_err(|e| {
         ToolErrorInfo::new(
             "READ_ERROR",
@@ -142,6 +143,15 @@ pub fn run_to_json(
             json_content: None,
         })
     } else {
+        // Warn if inline response is very large (> 1 MB)
+        const MAX_INLINE_RESPONSE: u64 = 1024 * 1024;
+        if size_bytes > MAX_INLINE_RESPONSE {
+            return Err(ToolErrorInfo::new(
+                "OUTPUT_TOO_LARGE",
+                format!("JSON output is {} KB, too large for inline response", size_bytes / 1024,),
+                "Use output_path to write to a file, or use --section to export a single section.",
+            ));
+        }
         Ok(ToJsonData {
             output_path: None,
             size_bytes,

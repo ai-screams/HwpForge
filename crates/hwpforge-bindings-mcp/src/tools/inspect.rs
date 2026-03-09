@@ -8,7 +8,7 @@ use hwpforge_core::control::Control;
 use hwpforge_core::RunContent;
 use hwpforge_smithy_hwpx::HwpxDecoder;
 
-use crate::output::ToolErrorInfo;
+use crate::output::{check_file_size, ToolErrorInfo};
 
 /// Summary of a single section.
 #[derive(Debug, Serialize)]
@@ -59,6 +59,7 @@ pub fn run_inspect(file_path: &str, _show_styles: bool) -> Result<InspectData, T
         ));
     }
 
+    check_file_size(path)?;
     let bytes = std::fs::read(path).map_err(|e| {
         ToolErrorInfo::new(
             "READ_ERROR",

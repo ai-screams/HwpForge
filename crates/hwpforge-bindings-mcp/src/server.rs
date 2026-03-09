@@ -278,7 +278,7 @@ impl HwpForgeServer {
                 let output = ToolOutput::new(
                     &data,
                     format!("Available presets: {}", names.join(", ")),
-                    vec!["Use --preset <name> with hwpforge_convert"],
+                    vec!["Set preset parameter in hwpforge_convert"],
                 );
                 Ok(CallToolResult::success(vec![Content::text(output.to_json_string())]))
             }
