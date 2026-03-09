@@ -468,6 +468,13 @@ $RECYCLE.BIN/
 .sisyphus/
 .scoop-version
 
+# Claude Code / AI agent config (user-specific, not shared)
+# Use .claude/* (not .claude/) so negation patterns below can work.
+# Git skips excluded directories entirely — wildcard keeps the dir traversable.
+.claude/*
+# Share skills (agentskills.io standard — project-level AI instructions)
+!.claude/skills/
+
 # mdBook build output
 /book/
 temp/
