@@ -10,9 +10,7 @@ name = "hwpforge-mcp"
 path = "src/main.rs"
 
 [dependencies]
-hwpforge-blueprint = { path = "../hwpforge-blueprint" }
 hwpforge-core = { path = "../hwpforge-core" }
-hwpforge-foundation = { path = "../hwpforge-foundation" }
 hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx" }
 hwpforge-smithy-md = { path = "../hwpforge-smithy-md" }
 rmcp = { version = "0.16", features = ["server", "macros", "transport-io"] }

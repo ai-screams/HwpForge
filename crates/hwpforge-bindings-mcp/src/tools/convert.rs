@@ -4,6 +4,10 @@ use std::path::Path;
 
 use serde::Serialize;
 
+use hwpforge_core::image::ImageStore;
+use hwpforge_smithy_hwpx::{HwpxEncoder, HwpxStyleStore};
+use hwpforge_smithy_md::MdDecoder;
+
 use crate::output::ToolErrorInfo;
 
 /// Output data from a successful conversion.
@@ -26,13 +30,18 @@ pub fn run_convert(
     markdown: &str,
     is_file: bool,
     output_path: &str,
-    _preset: &str,
+    preset: &str,
 ) -> Result<ConvertData, ToolErrorInfo> {
-    use hwpforge_core::image::ImageStore;
-    use hwpforge_smithy_hwpx::{HwpxEncoder, HwpxStyleStore};
-    use hwpforge_smithy_md::MdDecoder;
+    // 1. Validate preset
+    if preset != "default" {
+        return Err(ToolErrorInfo::new(
+            "PRESET_NOT_FOUND",
+            format!("Preset '{preset}' not found"),
+            "Available presets: default. Use hwpforge_templates to see all.",
+        ));
+    }
 
-    // 1. Read markdown content
+    // 2. Read markdown content
     let md_content: String = if is_file {
         let path = Path::new(markdown);
         if !path.exists() {
@@ -53,7 +62,7 @@ pub fn run_convert(
         markdown.to_string()
     };
 
-    // 2. Decode Markdown → Core Document
+    // 3. Decode Markdown → Core Document
     let md_doc = MdDecoder::decode_with_default(&md_content).map_err(|e| {
         ToolErrorInfo::new(
             "MD_DECODE_ERROR",
@@ -62,11 +71,11 @@ pub fn run_convert(
         )
     })?;
 
-    // 3. Count sections and paragraphs
+    // 4. Count sections and paragraphs
     let sections: usize = md_doc.document.sections().len();
     let paragraphs: usize = md_doc.document.sections().iter().map(|s| s.paragraphs.len()).sum();
 
-    // 4. Build style store and validate
+    // 5. Build style store and validate
     let style_store = HwpxStyleStore::from_registry(&md_doc.style_registry);
     let image_store = ImageStore::new();
 
@@ -78,7 +87,7 @@ pub fn run_convert(
         )
     })?;
 
-    // 5. Encode to HWPX bytes
+    // 6. Encode to HWPX bytes
     let hwpx_bytes = HwpxEncoder::encode(&validated, &style_store, &image_store).map_err(|e| {
         ToolErrorInfo::new(
             "ENCODE_ERROR",
@@ -87,7 +96,7 @@ pub fn run_convert(
         )
     })?;
 
-    // 6. Write output file
+    // 7. Write output file
     let out = Path::new(output_path);
     if let Some(parent) = out.parent() {
         if !parent.as_os_str().is_empty() {

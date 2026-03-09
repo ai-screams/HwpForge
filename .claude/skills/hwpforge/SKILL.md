@@ -35,7 +35,7 @@ echo "# Title" | hwpforge convert - -o out.hwpx
 cat document.md | hwpforge convert - -o document.hwpx
 ```
 
-Presets: `default`, `government`, `report`, `official`. See [templates.md](references/templates.md).
+Presets: `default`. See [templates.md](references/templates.md) for details. Additional presets (`government`, `report`, `official`) are planned.
 
 ### inspect — HWPX Structure Summary
 

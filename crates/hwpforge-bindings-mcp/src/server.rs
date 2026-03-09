@@ -32,7 +32,7 @@ pub struct ConvertRequest {
 pub struct InspectRequest {
     /// Path to the HWPX file to inspect.
     pub file_path: String,
-    /// Include style details (fonts, char shapes, para shapes). Default: false.
+    /// Reserved for future use. When true, will include style details. Currently ignored.
     #[serde(default)]
     pub styles: bool,
 }
@@ -295,10 +295,12 @@ impl ServerHandler for HwpForgeServer {
             server_info: Implementation {
                 name: "hwpforge-mcp".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
-                title: None,
-                description: None,
+                title: Some("HwpForge MCP Server".into()),
+                description: Some(
+                    "AI-first Korean HWPX document generation and editing tools".into(),
+                ),
                 icons: None,
-                website_url: None,
+                website_url: Some("https://github.com/ai-screams/HwpForge".into()),
             },
             instructions: Some(
                 "HwpForge MCP server for Korean HWPX document generation and editing. \
