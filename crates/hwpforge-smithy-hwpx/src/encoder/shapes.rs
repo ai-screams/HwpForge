@@ -4,8 +4,8 @@
 //! Functions here convert `Control::TextBox`, `Control::Line`, `Control::Ellipse`,
 //! and `Control::Polygon` into their corresponding `Hx*` schema types.
 
-use hwpforge_core::control::{Control, ShapeStyle};
-use hwpforge_foundation::{ArrowType, CurveSegmentType, DropCapStyle, Flip};
+use hwpforge_core::control::{Control, Fill, ShapeStyle};
+use hwpforge_foundation::{ArrowType, CurveSegmentType, DropCapStyle, Flip, GradientType};
 
 /// Extracts the dropcap style string from an optional `ShapeStyle`.
 fn dropcap_str(style: &Option<ShapeStyle>) -> String {
@@ -17,7 +17,7 @@ fn dropcap_str(style: &Option<ShapeStyle>) -> String {
 /// For geometric shapes (Diamond, Oval, Open), 한글 only recognises the `EMPTY_*`
 /// form and uses the separate `headfill`/`tailfill` attribute to control fill.
 /// Reference: `SimpleLine.hwpx` uses `EMPTY_BOX` + `headfill="1"` for a filled box.
-fn resolve_arrow_type_str(arrow_type: &ArrowType, _filled: bool) -> String {
+fn resolve_arrow_type_str(arrow_type: &ArrowType) -> String {
     match arrow_type {
         ArrowType::None => "NORMAL",
         ArrowType::Normal => "ARROW",
@@ -62,7 +62,7 @@ pub(crate) struct ShapeCommon {
 /// Builds the shape-common block for a drawing object of the given pixel size.
 ///
 /// Defaults match 한글's output for a newly created shape:
-/// - zero offset, orgSz = given dimensions, curSz = 0×0
+/// - zero offset, orgSz = curSz = given dimensions
 /// - identity rotation/rendering matrices
 /// - solid black border, white fill, no shadow
 ///
@@ -76,7 +76,7 @@ pub(crate) fn build_shape_common(
     let mut line_shape = HxLineShape::default_solid();
     let mut fill_brush = HxFillBrush::default_white();
 
-    // Rotation angle (in 1/100 degree units for HWPX schema)
+    // Rotation angle in integer degrees for HWPX schema
     let mut angle: i32 = 0;
     let mut hx_flip = HxFlip { horizontal: 0, vertical: 0 };
 
@@ -91,14 +91,67 @@ pub(crate) fn build_shape_common(
             line_shape.style = ls.to_string();
         }
         if let Some(ref c) = s.fill_color {
-            fill_brush.win_brush.face_color = c.to_hex_rgb();
+            if let Some(ref mut wb) = fill_brush.win_brush {
+                wb.face_color = c.to_hex_rgb();
+            }
         }
 
-        // Rotation: Core uses degrees (f32), HWPX uses degrees * 100 (i32).
-        // rem_euclid normalises NaN/INF/negatives before the cast.
+        // Advanced fill (overrides fill_color when present).
+        // Per KS X 6101, fillBrush is xs:choice — only ONE child element.
+        if let Some(ref fill) = s.fill {
+            match fill {
+                Fill::Solid { color } => {
+                    if let Some(ref mut wb) = fill_brush.win_brush {
+                        wb.face_color = color.to_hex_rgb();
+                    }
+                }
+                Fill::Gradient { gradient_type, angle, colors } => {
+                    // xs:choice: fillBrush has exactly ONE child (winBrush|gradation|imgBrush).
+                    // When using gradation, winBrush must be absent (hwpxlib reference confirms).
+                    fill_brush.win_brush = None;
+                    // LINEAR: center=0,0 for one-directional gradient.
+                    // RADIAL/SQUARE/CONICAL: center=50,50 for center-outward gradient.
+                    let (cx, cy) = match gradient_type {
+                        GradientType::Linear => (0, 0),
+                        _ => (50, 50),
+                    };
+                    fill_brush.gradation = Some(super::super::schema::shapes::HxGradation {
+                        gradation_type: gradient_type.to_string(),
+                        angle: *angle,
+                        center_x: cx,
+                        center_y: cy,
+                        step: 255,
+                        color_num: colors.len() as i32,
+                        step_center: 50,
+                        alpha: 0,
+                        colors: colors
+                            .iter()
+                            .map(|(c, _pos)| super::super::schema::shapes::HxGradColor {
+                                value: c.to_hex_rgb(),
+                            })
+                            .collect(),
+                    });
+                }
+                Fill::Pattern { fg_color, bg_color, pattern_type } => {
+                    if let Some(ref mut wb) = fill_brush.win_brush {
+                        wb.face_color = bg_color.to_hex_rgb();
+                        wb.hatch_color = fg_color.to_hex_rgb();
+                        wb.hatch_style = Some(pattern_type.to_string());
+                    }
+                }
+                Fill::Image { .. } => {
+                    // Image fill requires imgBrush — not yet supported in shapes
+                }
+                _ => {} // future Fill variants
+            }
+        }
+
+        // Rotation: Core uses degrees (f32), HWPX uses integer degrees.
+        // rem_euclid normalises negatives to [0,360). NaN/INF pass through
+        // as NaN but Rust's saturating cast maps NaN → 0, so angle stays 0.
         if let Some(rot) = s.rotation {
             let clamped = rot.rem_euclid(360.0);
-            angle = (clamped * 100.0) as i32;
+            angle = clamped.round() as i32;
         }
 
         // Flip
@@ -117,38 +170,67 @@ pub(crate) fn build_shape_common(
 
         // Arrow heads — resolve FILLED_ vs EMPTY_ for geometric types per KS X 6101.
         if let Some(ref arrow) = s.head_arrow {
-            line_shape.head_style = resolve_arrow_type_str(&arrow.arrow_type, arrow.filled);
+            line_shape.head_style = resolve_arrow_type_str(&arrow.arrow_type);
             line_shape.head_sz = arrow.size.to_string();
             line_shape.head_fill = if arrow.filled { 1 } else { 0 };
         }
         if let Some(ref arrow) = s.tail_arrow {
-            line_shape.tail_style = resolve_arrow_type_str(&arrow.arrow_type, arrow.filled);
+            line_shape.tail_style = resolve_arrow_type_str(&arrow.arrow_type);
             line_shape.tail_sz = arrow.size.to_string();
             line_shape.tail_fill = if arrow.filled { 1 } else { 0 };
         }
     }
 
-    // Build rotation matrix if angle != 0
-    let rot_matrix = if angle != 0 {
-        let rad = (angle as f64) / 100.0 * std::f64::consts::PI / 180.0;
+    // Build rotation matrix for rotation and/or flip.
+    // 한글 reads both flip and rotation from rotMatrix.
+    // scaMatrix and transMatrix stay identity (unless external scaling).
+    //
+    // Rotation convention (한글): [cos θ, -sin θ, tx; sin θ, cos θ, ty]
+    //   tx = cx*(1-cos) + cy*sin,  ty = cy*(1-cos) - cx*sin
+    //   where cx=width/2, cy=height/2 (rotation around center)
+    //
+    // Flip: horizontal → e1=-1, e3=width; vertical → e5=-1, e6=height
+    let has_flip = hx_flip.horizontal != 0 || hx_flip.vertical != 0;
+    let rot_matrix = if angle != 0 && !has_flip {
+        // Pure rotation, no flip
+        let rad = (angle as f64).to_radians();
         let cos_val = rad.cos();
         let sin_val = rad.sin();
+        let cx = width as f64 / 2.0;
+        let cy = height as f64 / 2.0;
+        let tx = cx * (1.0 - cos_val) + cy * sin_val;
+        let ty = cy * (1.0 - cos_val) - cx * sin_val;
         HxMatrix {
             e1: format!("{cos_val:.6}"),
-            e2: format!("{sin_val:.6}"),
-            e3: "0".to_string(),
-            e4: format!("{:.6}", -sin_val),
+            e2: format!("{:.6}", -sin_val),
+            e3: format!("{tx:.6}"),
+            e4: format!("{sin_val:.6}"),
             e5: format!("{cos_val:.6}"),
-            e6: "0".to_string(),
+            e6: format!("{ty:.6}"),
+        }
+    } else if has_flip {
+        // Flip (with or without rotation) — encode flip in rotMatrix
+        // TODO: compose flip+rotation when both are present
+        let h = hx_flip.horizontal != 0;
+        let v = hx_flip.vertical != 0;
+        HxMatrix {
+            e1: if h { "-1" } else { "1" }.to_string(),
+            e2: "0".to_string(),
+            e3: if h { width.to_string() } else { "0".to_string() },
+            e4: "0".to_string(),
+            e5: if v { "-1" } else { "1" }.to_string(),
+            e6: if v { height.to_string() } else { "0".to_string() },
         }
     } else {
         HxMatrix::identity()
     };
+    let sca_matrix = HxMatrix::identity();
+    let trans_matrix = HxMatrix::identity();
 
     ShapeCommon {
         offset: HxOffset { x: 0, y: 0 },
         org_sz: HxSizeAttr { width, height },
-        cur_sz: HxSizeAttr { width: 0, height: 0 },
+        cur_sz: HxSizeAttr { width, height },
         flip: hx_flip,
         rotation_info: HxRotationInfo {
             angle,
@@ -156,11 +238,7 @@ pub(crate) fn build_shape_common(
             center_y: height / 2,
             rotate_image: 1,
         },
-        rendering_info: HxRenderingInfo {
-            trans_matrix: HxMatrix::identity(),
-            sca_matrix: HxMatrix::identity(),
-            rot_matrix,
-        },
+        rendering_info: HxRenderingInfo { trans_matrix, sca_matrix, rot_matrix },
         line_shape,
         fill_brush,
         shadow: HxShadow::default_none(),
@@ -880,9 +958,10 @@ pub(crate) fn encode_connect_line_to_hx(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hwpforge_core::control::{ArrowStyle, Control, LineStyle, ShapePoint, ShapeStyle};
+    use hwpforge_core::control::{ArrowStyle, Control, Fill, LineStyle, ShapePoint, ShapeStyle};
     use hwpforge_foundation::{
-        ArcType, ArrowSize, ArrowType, CurveSegmentType, DropCapStyle, Flip, HwpUnit,
+        ArcType, ArrowSize, ArrowType, Color, CurveSegmentType, DropCapStyle, Flip, HwpUnit,
+        PatternType,
     };
 
     fn empty_hyperlinks() -> Vec<(String, String)> {
@@ -949,40 +1028,38 @@ mod tests {
 
     #[test]
     fn arrow_type_none_maps_to_normal() {
-        assert_eq!(resolve_arrow_type_str(&ArrowType::None, false), "NORMAL");
+        assert_eq!(resolve_arrow_type_str(&ArrowType::None), "NORMAL");
     }
 
     #[test]
     fn arrow_type_normal_maps_to_arrow() {
-        assert_eq!(resolve_arrow_type_str(&ArrowType::Normal, false), "ARROW");
+        assert_eq!(resolve_arrow_type_str(&ArrowType::Normal), "ARROW");
     }
 
     #[test]
     fn arrow_type_arrow_maps_to_spear() {
-        assert_eq!(resolve_arrow_type_str(&ArrowType::Arrow, false), "SPEAR");
+        assert_eq!(resolve_arrow_type_str(&ArrowType::Arrow), "SPEAR");
     }
 
     #[test]
     fn arrow_type_concave_maps_to_concave_arrow() {
-        assert_eq!(resolve_arrow_type_str(&ArrowType::Concave, false), "CONCAVE_ARROW");
+        assert_eq!(resolve_arrow_type_str(&ArrowType::Concave), "CONCAVE_ARROW");
     }
 
     #[test]
-    fn arrow_type_diamond_maps_to_empty_diamond_regardless_of_fill() {
-        // Gotcha #25: 한글 only recognises EMPTY_* form for geometric shapes
-        assert_eq!(resolve_arrow_type_str(&ArrowType::Diamond, true), "EMPTY_DIAMOND");
-        assert_eq!(resolve_arrow_type_str(&ArrowType::Diamond, false), "EMPTY_DIAMOND");
+    fn arrow_type_diamond_maps_to_empty_diamond() {
+        // Gotcha #14: 한글 only recognises EMPTY_* form for geometric shapes
+        assert_eq!(resolve_arrow_type_str(&ArrowType::Diamond), "EMPTY_DIAMOND");
     }
 
     #[test]
     fn arrow_type_oval_maps_to_empty_circle() {
-        assert_eq!(resolve_arrow_type_str(&ArrowType::Oval, true), "EMPTY_CIRCLE");
-        assert_eq!(resolve_arrow_type_str(&ArrowType::Oval, false), "EMPTY_CIRCLE");
+        assert_eq!(resolve_arrow_type_str(&ArrowType::Oval), "EMPTY_CIRCLE");
     }
 
     #[test]
     fn arrow_type_open_maps_to_empty_box() {
-        assert_eq!(resolve_arrow_type_str(&ArrowType::Open, false), "EMPTY_BOX");
+        assert_eq!(resolve_arrow_type_str(&ArrowType::Open), "EMPTY_BOX");
     }
 
     // ── build_shape_common tests ─────────────────────────────────────
@@ -1003,10 +1080,10 @@ mod tests {
     }
 
     #[test]
-    fn build_shape_common_cur_sz_is_zero() {
+    fn build_shape_common_cur_sz_matches_dimensions() {
         let sc = build_shape_common(8000, 4000, None);
-        assert_eq!(sc.cur_sz.width, 0);
-        assert_eq!(sc.cur_sz.height, 0);
+        assert_eq!(sc.cur_sz.width, 8000);
+        assert_eq!(sc.cur_sz.height, 4000);
     }
 
     #[test]
@@ -1020,7 +1097,7 @@ mod tests {
     fn build_shape_common_rotation_applied_correctly() {
         let style = ShapeStyle { rotation: Some(45.0), ..Default::default() };
         let sc = build_shape_common(1000, 500, Some(&style));
-        assert_eq!(sc.rotation_info.angle, 4500);
+        assert_eq!(sc.rotation_info.angle, 45);
         // rotation center = dimension / 2
         assert_eq!(sc.rotation_info.center_x, 500);
         assert_eq!(sc.rotation_info.center_y, 250);
@@ -1030,12 +1107,14 @@ mod tests {
     fn build_shape_common_rotation_90_degrees() {
         let style = ShapeStyle { rotation: Some(90.0), ..Default::default() };
         let sc = build_shape_common(2000, 1000, Some(&style));
-        assert_eq!(sc.rotation_info.angle, 9000);
-        // rotation matrix: cos(90°)≈0, sin(90°)≈1
+        assert_eq!(sc.rotation_info.angle, 90);
+        // 한글 rotation matrix convention: [cos, -sin; sin, cos]
         let e1: f64 = sc.rendering_info.rot_matrix.e1.parse().unwrap();
         let e2: f64 = sc.rendering_info.rot_matrix.e2.parse().unwrap();
+        let e4: f64 = sc.rendering_info.rot_matrix.e4.parse().unwrap();
         assert!(e1.abs() < 0.001, "cos(90°) must be ~0");
-        assert!((e2 - 1.0).abs() < 0.001, "sin(90°) must be ~1");
+        assert!((e2 + 1.0).abs() < 0.001, "-sin(90°) must be ~-1");
+        assert!((e4 - 1.0).abs() < 0.001, "sin(90°) must be ~1");
     }
 
     #[test]
@@ -1080,7 +1159,7 @@ mod tests {
     fn build_shape_common_fill_color_overridden() {
         let style = make_style(None, Some("#00FF00"), None);
         let sc = build_shape_common(1000, 500, Some(&style));
-        assert_eq!(sc.fill_brush.win_brush.face_color, "#00FF00");
+        assert_eq!(sc.fill_brush.win_brush.as_ref().unwrap().face_color, "#00FF00");
     }
 
     #[test]
@@ -1134,7 +1213,7 @@ mod tests {
     #[test]
     fn build_shape_common_default_white_fill() {
         let sc = build_shape_common(1000, 500, None);
-        assert_eq!(sc.fill_brush.win_brush.face_color, "#FFFFFF");
+        assert_eq!(sc.fill_brush.win_brush.as_ref().unwrap().face_color, "#FFFFFF");
     }
 
     #[test]
@@ -1143,6 +1222,68 @@ mod tests {
         assert_eq!(sc.rendering_info.rot_matrix.e1, "1");
         assert_eq!(sc.rendering_info.rot_matrix.e2, "0");
         assert_eq!(sc.rendering_info.rot_matrix.e5, "1");
+    }
+
+    // ── pattern fill encode tests ──────────────────────────────────────
+
+    #[test]
+    fn build_shape_common_pattern_fill_sets_hatch_style() {
+        let style = ShapeStyle {
+            fill: Some(Fill::Pattern {
+                pattern_type: PatternType::Horizontal,
+                fg_color: Color::BLACK,
+                bg_color: Color::WHITE,
+            }),
+            ..Default::default()
+        };
+        let sc = build_shape_common(1000, 500, Some(&style));
+        let wb = sc.fill_brush.win_brush.as_ref().unwrap();
+        assert_eq!(wb.hatch_style, Some("HORIZONTAL".to_string()));
+        assert_eq!(wb.face_color, "#FFFFFF");
+        assert_eq!(wb.hatch_color, "#000000");
+    }
+
+    #[test]
+    fn build_shape_common_pattern_backslash_outputs_slash() {
+        // 한글 spec reversal: BackSlash → "SLASH"
+        let style = ShapeStyle {
+            fill: Some(Fill::Pattern {
+                pattern_type: PatternType::BackSlash,
+                fg_color: Color::from_rgb(0, 150, 0),
+                bg_color: Color::from_rgb(230, 255, 230),
+            }),
+            ..Default::default()
+        };
+        let sc = build_shape_common(1000, 500, Some(&style));
+        let wb = sc.fill_brush.win_brush.as_ref().unwrap();
+        assert_eq!(wb.hatch_style, Some("SLASH".to_string()));
+    }
+
+    #[test]
+    fn build_shape_common_pattern_slash_outputs_back_slash() {
+        // 한글 spec reversal: Slash → "BACK_SLASH"
+        let style = ShapeStyle {
+            fill: Some(Fill::Pattern {
+                pattern_type: PatternType::Slash,
+                fg_color: Color::from_rgb(150, 0, 150),
+                bg_color: Color::from_rgb(255, 230, 255),
+            }),
+            ..Default::default()
+        };
+        let sc = build_shape_common(1000, 500, Some(&style));
+        let wb = sc.fill_brush.win_brush.as_ref().unwrap();
+        assert_eq!(wb.hatch_style, Some("BACK_SLASH".to_string()));
+    }
+
+    #[test]
+    fn build_shape_common_solid_fill_no_hatch_style() {
+        let style = ShapeStyle {
+            fill: Some(Fill::Solid { color: Color::from_rgb(255, 0, 0) }),
+            ..Default::default()
+        };
+        let sc = build_shape_common(1000, 500, Some(&style));
+        let wb = sc.fill_brush.win_brush.as_ref().unwrap();
+        assert_eq!(wb.hatch_style, None);
     }
 
     // ── encode_arc_to_hx tests ───────────────────────────────────────

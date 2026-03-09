@@ -1,0 +1,5953 @@
+{
+  "document": {
+    "sections": [
+      {
+        "paragraphs": [
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "HWPX 문서 구조 완전 가이드"
+                },
+                "char_shape_id": 1
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Image": {
+                    "path": "BinData/image1",
+                    "width": 17008,
+                    "height": 17008,
+                    "format": {
+                      "Unknown": "image1"
+                    },
+                    "caption": {
+                      "side": "Bottom",
+                      "width": 17008,
+                      "gap": 850,
+                      "paragraphs": [
+                        {
+                          "runs": [
+                            {
+                              "content": {
+                                "Text": "[그림 1] 쇠부리 (SoeBuri) — 한컴 문서를 불에 달구어 단단하게 벼려내는 대장장이 오리너구리 🔥"
+                              },
+                              "char_shape_id": 3
+                            }
+                          ],
+                          "para_shape_id": 1,
+                          "column_break": false,
+                          "page_break": false
+                        }
+                      ]
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "HwpForge는 한국의 HWP/HWPX 문서 포맷을 프로그래밍으로 제어하는 "
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Text": "순수 Rust 라이브러리"
+                },
+                "char_shape_id": 4
+              },
+              {
+                "content": {
+                  "Text": "입니다. 프로젝트 마스코트인 "
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Text": "오리너구리(Platypus)"
+                },
+                "char_shape_id": 4
+              },
+              {
+                "content": {
+                  "Text": "는 HWPX 포맷의 독특한 특성을 상징합니다 — XML 기반이면서 독자적인 네임스페이스와 규격을 가진 독특한 포맷입니다."
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Control": {
+                    "Bookmark": {
+                      "name": "HWPX정의",
+                      "bookmark_type": "Point"
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Control": {
+                    "IndexMark": {
+                      "primary": "HWPX",
+                      "secondary": null
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Text": "1. HWPX 문서 포맷이란?"
+                },
+                "char_shape_id": 2
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "HWPX는 대한민국 국가표준 "
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Control": {
+                    "IndexMark": {
+                      "primary": "KS X 6101",
+                      "secondary": null
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Text": "KS X 6101"
+                },
+                "char_shape_id": 5
+              },
+              {
+                "content": {
+                  "Control": {
+                    "Footnote": {
+                      "inst_id": null,
+                      "paragraphs": [
+                        {
+                          "runs": [
+                            {
+                              "content": {
+                                "Text": "KS X 6101: 한국산업표준(Korean Industrial Standards)에서 제정한 문서 파일 형식 표준. 2014년 최초 제정, 2021년 개정."
+                              },
+                              "char_shape_id": 3
+                            }
+                          ],
+                          "para_shape_id": 0,
+                          "column_break": false,
+                          "page_break": false
+                        }
+                      ]
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Text": "에 정의된 XML 기반 문서 포맷입니다. ZIP 컨테이너 안에 여러 XML 파일이 구조화되어 저장됩니다."
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "상세 사양은 "
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Control": {
+                    "Hyperlink": {
+                      "text": "한국정보통신기술협회(TTA)",
+                      "url": "https://www.tta.or.kr"
+                    }
+                  }
+                },
+                "char_shape_id": 5
+              },
+              {
+                "content": {
+                  "Text": " 홈페이지에서 확인할 수 있습니다."
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Control": {
+                    "Bookmark": {
+                      "name": "헤더구조",
+                      "bookmark_type": "Point"
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Text": "2. ZIP 컨테이너 파일 구성"
+                },
+                "char_shape_id": 2
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "HWPX 파일은 확장자가 .hwpx인 ZIP 아카이브입니다. 내부에는 다음과 같은 XML 파일들이 포함됩니다:"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Table": {
+                    "rows": [
+                      {
+                        "cells": [
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "파일 경로"
+                                    },
+                                    "char_shape_id": 4
+                                  }
+                                ],
+                                "para_shape_id": 1,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 15591,
+                            "background": null
+                          },
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "설명"
+                                    },
+                                    "char_shape_id": 4
+                                  }
+                                ],
+                                "para_shape_id": 1,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 17008,
+                            "background": null
+                          },
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "Media-Type"
+                                    },
+                                    "char_shape_id": 4
+                                  }
+                                ],
+                                "para_shape_id": 1,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 15591,
+                            "background": null
+                          }
+                        ],
+                        "height": null
+                      },
+                      {
+                        "cells": [
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "META-INF/manifest.xml"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 15591,
+                            "background": null
+                          },
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "패키지 매니페스트 (파일 목록)"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 17008,
+                            "background": null
+                          },
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "text/xml"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 15591,
+                            "background": null
+                          }
+                        ],
+                        "height": null
+                      },
+                      {
+                        "cells": [
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "Contents/content.hpf"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 15591,
+                            "background": null
+                          },
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "콘텐츠 목차 (OPF)"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 17008,
+                            "background": null
+                          },
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "application/xml"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 15591,
+                            "background": null
+                          }
+                        ],
+                        "height": null
+                      },
+                      {
+                        "cells": [
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "Contents/header.xml"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 15591,
+                            "background": null
+                          },
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "스타일 정의 (폰트, 문단, 글자)"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 17008,
+                            "background": null
+                          },
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "application/xml"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 15591,
+                            "background": null
+                          }
+                        ],
+                        "height": null
+                      },
+                      {
+                        "cells": [
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "Contents/section0.xml"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 15591,
+                            "background": null
+                          },
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "본문 첫 번째 구획 (paragraphs)"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 17008,
+                            "background": null
+                          },
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "application/xml"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 15591,
+                            "background": null
+                          }
+                        ],
+                        "height": null
+                      },
+                      {
+                        "cells": [
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "Contents/section1.xml"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 15591,
+                            "background": null
+                          },
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "본문 두 번째 구획 (선택적)"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 17008,
+                            "background": null
+                          },
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "application/xml"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 15591,
+                            "background": null
+                          }
+                        ],
+                        "height": null
+                      },
+                      {
+                        "cells": [
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "BinData/ — 이미지, OLE 등 바이너리 데이터 폴더 (Content.hpf에 등록, Chart XML은 미등록)"
+                                    },
+                                    "char_shape_id": 6
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 3,
+                            "row_span": 1,
+                            "width": 48189,
+                            "background": null
+                          }
+                        ],
+                        "height": null
+                      }
+                    ],
+                    "width": null,
+                    "caption": {
+                      "side": "Bottom",
+                      "width": 48189,
+                      "gap": 850,
+                      "paragraphs": [
+                        {
+                          "runs": [
+                            {
+                              "content": {
+                                "Text": "표 1. HWPX ZIP 컨테이너 내부 파일 구성"
+                              },
+                              "char_shape_id": 3
+                            }
+                          ],
+                          "para_shape_id": 1,
+                          "column_break": false,
+                          "page_break": false
+                        }
+                      ]
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Control": {
+                    "Bookmark": {
+                      "name": "섹션구조",
+                      "bookmark_type": "Point"
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Control": {
+                    "IndexMark": {
+                      "primary": "OWPML",
+                      "secondary": "섹션 구조"
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Text": "3. 섹션(Section) 구조"
+                },
+                "char_shape_id": 2
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "HWPX 문서는 하나 이상의 섹션으로 구성됩니다. 각 섹션은 독립적인 페이지 설정(용지 크기, 여백, 방향)을 가질 수 있어, 세로 페이지와 가로 페이지를 하나의 문서에 혼합할 수 있습니다."
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "각 섹션의 XML은 <hp:sec> 루트 아래 <hp:p>(문단) 요소들로 구성됩니다. 문단 안에는 <hp:run>(텍스트 런), <hp:ctrl>(컨트롤), <hp:tbl>(표) 등이 포함됩니다."
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "4. header.xml 스타일 시스템"
+                },
+                "char_shape_id": 2
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "header.xml에는 문서 전체의 스타일 정의가 담깁니다: "
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Text": "fontface(폰트)"
+                },
+                "char_shape_id": 4
+              },
+              {
+                "content": {
+                  "Text": ", "
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Text": "charShape(글자 모양)"
+                },
+                "char_shape_id": 4
+              },
+              {
+                "content": {
+                  "Text": ", "
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Text": "paraShape(문단 모양)"
+                },
+                "char_shape_id": 4
+              },
+              {
+                "content": {
+                  "Text": ". 본문의 각 요소는 인덱스(IDRef)로 이 정의를 참조합니다."
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "스타일 정의 인덱스는 0부터 시작하며, Modern 스타일셋 기준으로 기본 charShape 7개, paraShape 20개가 자동 생성됩니다"
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Control": {
+                    "Footnote": {
+                      "inst_id": null,
+                      "paragraphs": [
+                        {
+                          "runs": [
+                            {
+                              "content": {
+                                "Text": "한글 2022(Modern 스타일셋)의 기본 스타일: charShape 0-6 (바탕~개요10), paraShape 0-19 (바탕~개요10). 사용자 정의 스타일은 이후 인덱스부터 시작합니다."
+                              },
+                              "char_shape_id": 3
+                            }
+                          ],
+                          "para_shape_id": 0,
+                          "column_break": false,
+                          "page_break": false
+                        }
+                      ]
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Text": "."
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "이 문서는 HwpForge 라이브러리로 생성되었으며, 4개 섹션에 걸쳐 문서 포맷의 각 요소를 실제로 사용하면서 설명합니다."
+                },
+                "char_shape_id": 6
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          }
+        ],
+        "page_settings": {
+          "width": 59528,
+          "height": 84189,
+          "margin_left": 5669,
+          "margin_right": 5669,
+          "margin_top": 5669,
+          "margin_bottom": 5669,
+          "header_margin": 2835,
+          "footer_margin": 2835,
+          "gutter_type": "LeftOnly",
+          "mirror_margins": false,
+          "landscape": false
+        },
+        "header": {
+          "paragraphs": [
+            {
+              "runs": [
+                {
+                  "content": {
+                    "Text": "HWPX 문서 구조 완전 가이드 — HwpForge"
+                  },
+                  "char_shape_id": 3
+                }
+              ],
+              "para_shape_id": 1,
+              "column_break": false,
+              "page_break": false
+            }
+          ],
+          "apply_page_type": "Both"
+        },
+        "footer": {
+          "paragraphs": [
+            {
+              "runs": [
+                {
+                  "content": {
+                    "Text": "Copyright 2026 HwpForge Project. All rights reserved."
+                  },
+                  "char_shape_id": 3
+                }
+              ],
+              "para_shape_id": 1,
+              "column_break": false,
+              "page_break": false
+            }
+          ],
+          "apply_page_type": "Both"
+        },
+        "page_number": {
+          "position": "BottomCenter",
+          "number_format": "Digit",
+          "decoration": "- "
+        },
+        "visibility": {
+          "hide_first_header": false,
+          "hide_first_footer": false,
+          "hide_first_master_page": false,
+          "hide_first_page_num": false,
+          "hide_first_empty_line": false,
+          "show_line_number": false,
+          "border": "ShowAll",
+          "fill": "ShowAll"
+        },
+        "line_number_shape": {
+          "restart_type": 0,
+          "count_by": 0,
+          "distance": 0,
+          "start_number": 0
+        },
+        "page_border_fills": [
+          {
+            "apply_type": "BOTH",
+            "border_fill_id": 1,
+            "text_border": "PAPER",
+            "header_inside": false,
+            "footer_inside": false,
+            "fill_area": "PAPER",
+            "offset": [
+              1417,
+              1417,
+              1417,
+              1417
+            ]
+          },
+          {
+            "apply_type": "EVEN",
+            "border_fill_id": 1,
+            "text_border": "PAPER",
+            "header_inside": false,
+            "footer_inside": false,
+            "fill_area": "PAPER",
+            "offset": [
+              1417,
+              1417,
+              1417,
+              1417
+            ]
+          },
+          {
+            "apply_type": "ODD",
+            "border_fill_id": 1,
+            "text_border": "PAPER",
+            "header_inside": false,
+            "footer_inside": false,
+            "fill_area": "PAPER",
+            "offset": [
+              1417,
+              1417,
+              1417,
+              1417
+            ]
+          }
+        ],
+        "begin_num": {
+          "page": 0,
+          "footnote": 1,
+          "endnote": 1,
+          "pic": 0,
+          "tbl": 0,
+          "equation": 0
+        },
+        "text_direction": "Horizontal"
+      },
+      {
+        "paragraphs": [
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "텍스트 서식 시스템"
+                },
+                "char_shape_id": 1
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "1. 문단 정렬 (Paragraph Alignment)"
+                },
+                "char_shape_id": 2
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "양쪽 정렬(Justify): 본문에서 가장 일반적으로 사용되는 정렬입니다. 양쪽 여백에 맞춰 글자 간격이 자동 조절됩니다."
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "가운데 정렬(Center): 제목이나 캡션에 주로 사용합니다."
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "왼쪽 정렬(Left): 코드나 목록에 적합합니다."
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "오른쪽 정렬(Right): 날짜, 서명 등에 사용합니다."
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 3,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "배분 정렬(Distribute): 글자를 균등하게 분배합니다."
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 4,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "2. 덧말 (Dutmal / Ruby Text)"
+                },
+                "char_shape_id": 2
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "덧말은 한자 위나 아래에 한글 읽기를 표시하는 기능입니다:"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "위쪽 덧말: "
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Control": {
+                    "Dutmal": {
+                      "main_text": "大韓民國",
+                      "sub_text": "대한민국",
+                      "position": "Top",
+                      "sz_ratio": 0,
+                      "align": "Center"
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Text": "    아래쪽 덧말: "
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Control": {
+                    "Dutmal": {
+                      "main_text": "漢字",
+                      "sub_text": "한자",
+                      "position": "Bottom",
+                      "sz_ratio": 0,
+                      "align": "Center"
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Text": "    오른쪽 덧말: "
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Control": {
+                    "Dutmal": {
+                      "main_text": "情報",
+                      "sub_text": "정보",
+                      "position": "Right",
+                      "sz_ratio": 0,
+                      "align": "Left"
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "3. 글자겹침 (Compose)"
+                },
+                "char_shape_id": 2
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "글자겹침 기능: "
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Control": {
+                    "Compose": {
+                      "compose_text": "12",
+                      "circle_type": "SHAPE_REVERSAL_TIRANGLE",
+                      "char_sz": -3,
+                      "compose_type": "SPREAD"
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Text": "  (숫자 1과 2를 겹침)"
+                },
+                "char_shape_id": 3
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "4. 필드 (Field)"
+                },
+                "char_shape_id": 2
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "누름틀(ClickHere): "
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Control": {
+                    "Field": {
+                      "field_type": "ClickHere",
+                      "hint_text": "이름을 입력하세요",
+                      "help_text": null
+                    }
+                  }
+                },
+                "char_shape_id": 5
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "날짜 필드(Date): "
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Control": {
+                    "Field": {
+                      "field_type": "Date",
+                      "hint_text": null,
+                      "help_text": null
+                    }
+                  }
+                },
+                "char_shape_id": 5
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "쪽 번호 필드(autoNum): 현재 "
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Control": {
+                    "Field": {
+                      "field_type": "PageNum",
+                      "hint_text": null,
+                      "help_text": null
+                    }
+                  }
+                },
+                "char_shape_id": 5
+              },
+              {
+                "content": {
+                  "Text": "쪽"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "5. 미주 (Endnote)"
+                },
+                "char_shape_id": 2
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "글자 모양(charShape)은 폰트, 크기, 색상, 굵기, 기울임, 밑줄, 취소선 등을 정의합니다"
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Control": {
+                    "Endnote": {
+                      "inst_id": null,
+                      "paragraphs": [
+                        {
+                          "runs": [
+                            {
+                              "content": {
+                                "Text": "charShape 속성 목록: height(크기), textColor(색상), bold(굵기), italic(기울임), underlineType(밑줄), strikeoutShape(취소선), emphasis(강조점), ratio(장평), spacing(자간), relSz(상대크기), offset(세로위치), useKerning(커닝), useFontSpace(폰트 자간)."
+                              },
+                              "char_shape_id": 3
+                            }
+                          ],
+                          "para_shape_id": 0,
+                          "column_break": false,
+                          "page_break": false
+                        }
+                      ]
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Text": "."
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "6. 메모 (Memo)"
+                },
+                "char_shape_id": 2
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "이 문단에는 검토 메모가 첨부되어 있습니다."
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Control": {
+                    "Memo": {
+                      "content": [
+                        {
+                          "runs": [
+                            {
+                              "content": {
+                                "Text": "검토 의견:"
+                              },
+                              "char_shape_id": 4
+                            }
+                          ],
+                          "para_shape_id": 2,
+                          "column_break": false,
+                          "page_break": false
+                        },
+                        {
+                          "runs": [
+                            {
+                              "content": {
+                                "Text": "charShape 설명을 표 형태로 정리하면 더 좋겠습니다."
+                              },
+                              "char_shape_id": 0
+                            }
+                          ],
+                          "para_shape_id": 2,
+                          "column_break": false,
+                          "page_break": false
+                        },
+                        {
+                          "runs": [
+                            {
+                              "content": {
+                                "Text": "다음 버전에 반영 부탁드립니다."
+                              },
+                              "char_shape_id": 0
+                            }
+                          ],
+                          "para_shape_id": 2,
+                          "column_break": false,
+                          "page_break": false
+                        }
+                      ],
+                      "author": "",
+                      "date": ""
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "7. 상호참조 (CrossRef)"
+                },
+                "char_shape_id": 2
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "HWPX 문서 정의는 섹션 1의 "
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Control": {
+                    "CrossRef": {
+                      "target_name": "HWPX정의",
+                      "ref_type": "Bookmark",
+                      "content_type": "Page",
+                      "as_hyperlink": false
+                    }
+                  }
+                },
+                "char_shape_id": 5
+              },
+              {
+                "content": {
+                  "Text": "쪽을 참조하세요. ZIP 파일 구조는 "
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Control": {
+                    "CrossRef": {
+                      "target_name": "헤더구조",
+                      "ref_type": "Bookmark",
+                      "content_type": "Page",
+                      "as_hyperlink": true
+                    }
+                  }
+                },
+                "char_shape_id": 5
+              },
+              {
+                "content": {
+                  "Text": "쪽에 설명되어 있습니다."
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "8. 글자 서식 변화 시연"
+                },
+                "char_shape_id": 2
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "기본 "
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Text": "굵게 "
+                },
+                "char_shape_id": 4
+              },
+              {
+                "content": {
+                  "Text": "파랑 "
+                },
+                "char_shape_id": 5
+              },
+              {
+                "content": {
+                  "Text": "기울임 녹색 "
+                },
+                "char_shape_id": 6
+              },
+              {
+                "content": {
+                  "Text": "작은 글씨 "
+                },
+                "char_shape_id": 3
+              },
+              {
+                "content": {
+                  "Text": "제목 크기 "
+                },
+                "char_shape_id": 1
+              },
+              {
+                "content": {
+                  "Text": "회색 워터마크"
+                },
+                "char_shape_id": 7
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          }
+        ],
+        "page_settings": {
+          "width": 59528,
+          "height": 84189,
+          "margin_left": 5669,
+          "margin_right": 5669,
+          "margin_top": 5669,
+          "margin_bottom": 5669,
+          "header_margin": 2835,
+          "footer_margin": 2835,
+          "gutter_type": "LeftOnly",
+          "mirror_margins": false,
+          "landscape": false
+        },
+        "visibility": {
+          "hide_first_header": true,
+          "hide_first_footer": false,
+          "hide_first_master_page": false,
+          "hide_first_page_num": false,
+          "hide_first_empty_line": false,
+          "show_line_number": true,
+          "border": "ShowAll",
+          "fill": "ShowAll"
+        },
+        "line_number_shape": {
+          "restart_type": 2,
+          "count_by": 5,
+          "distance": 850,
+          "start_number": 1
+        },
+        "page_border_fills": [
+          {
+            "apply_type": "BOTH",
+            "border_fill_id": 1,
+            "text_border": "PAPER",
+            "header_inside": false,
+            "footer_inside": false,
+            "fill_area": "PAPER",
+            "offset": [
+              1417,
+              1417,
+              1417,
+              1417
+            ]
+          },
+          {
+            "apply_type": "EVEN",
+            "border_fill_id": 1,
+            "text_border": "PAPER",
+            "header_inside": false,
+            "footer_inside": false,
+            "fill_area": "PAPER",
+            "offset": [
+              1417,
+              1417,
+              1417,
+              1417
+            ]
+          },
+          {
+            "apply_type": "ODD",
+            "border_fill_id": 1,
+            "text_border": "PAPER",
+            "header_inside": false,
+            "footer_inside": false,
+            "fill_area": "PAPER",
+            "offset": [
+              1417,
+              1417,
+              1417,
+              1417
+            ]
+          }
+        ],
+        "begin_num": {
+          "page": 0,
+          "footnote": 1,
+          "endnote": 1,
+          "pic": 0,
+          "tbl": 0,
+          "equation": 0
+        },
+        "text_direction": "Horizontal"
+      },
+      {
+        "paragraphs": [
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "도형과 그래픽 요소"
+                },
+                "char_shape_id": 1
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "이 섹션은 가로(landscape) 방향이며, Gutter 10mm가 적용되어 있습니다. HWPX의 다양한 도형 요소를 시연합니다."
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "3.1 선 (Line)"
+                },
+                "char_shape_id": 2
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "실선 (기본):"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Control": {
+                    "Line": {
+                      "start": {
+                        "x": 0,
+                        "y": 0
+                      },
+                      "end": {
+                        "x": 15000,
+                        "y": 0
+                      },
+                      "width": 15000,
+                      "height": 100,
+                      "horz_offset": 0,
+                      "vert_offset": 0,
+                      "caption": null,
+                      "style": {
+                        "line_color": 0,
+                        "fill_color": null,
+                        "line_width": 33,
+                        "line_style": "Solid",
+                        "rotation": null,
+                        "flip": null,
+                        "head_arrow": null,
+                        "tail_arrow": null,
+                        "fill": null,
+                        "drop_cap_style": "None"
+                      }
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "점선 + 화살표:"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Control": {
+                    "Line": {
+                      "start": {
+                        "x": 0,
+                        "y": 0
+                      },
+                      "end": {
+                        "x": 15000,
+                        "y": 0
+                      },
+                      "width": 15000,
+                      "height": 100,
+                      "horz_offset": 0,
+                      "vert_offset": 0,
+                      "caption": null,
+                      "style": {
+                        "line_color": 13132800,
+                        "fill_color": null,
+                        "line_width": 25,
+                        "line_style": "Dot",
+                        "rotation": null,
+                        "flip": null,
+                        "head_arrow": {
+                          "arrow_type": "Arrow",
+                          "size": "Medium",
+                          "filled": true
+                        },
+                        "tail_arrow": {
+                          "arrow_type": "Normal",
+                          "size": "Large",
+                          "filled": true
+                        },
+                        "fill": null,
+                        "drop_cap_style": "None"
+                      }
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "쇄선(DashDot) 빨강:"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Control": {
+                    "Line": {
+                      "start": {
+                        "x": 0,
+                        "y": 0
+                      },
+                      "end": {
+                        "x": 15000,
+                        "y": 0
+                      },
+                      "width": 15000,
+                      "height": 100,
+                      "horz_offset": 0,
+                      "vert_offset": 0,
+                      "caption": null,
+                      "style": {
+                        "line_color": 1973960,
+                        "fill_color": null,
+                        "line_width": 30,
+                        "line_style": "DashDot",
+                        "rotation": null,
+                        "flip": null,
+                        "head_arrow": null,
+                        "tail_arrow": null,
+                        "fill": null,
+                        "drop_cap_style": "None"
+                      }
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "3.2 타원 (Ellipse)"
+                },
+                "char_shape_id": 2
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Control": {
+                    "Ellipse": {
+                      "center": {
+                        "x": 7086,
+                        "y": 4252
+                      },
+                      "axis1": {
+                        "x": 14173,
+                        "y": 4252
+                      },
+                      "axis2": {
+                        "x": 7086,
+                        "y": 8504
+                      },
+                      "width": 14173,
+                      "height": 8504,
+                      "horz_offset": 0,
+                      "vert_offset": 0,
+                      "paragraphs": [
+                        {
+                          "runs": [
+                            {
+                              "content": {
+                                "Text": "타원 내부 텍스트"
+                              },
+                              "char_shape_id": 3
+                            }
+                          ],
+                          "para_shape_id": 1,
+                          "column_break": false,
+                          "page_break": false
+                        }
+                      ],
+                      "caption": {
+                        "side": "Bottom",
+                        "width": 14173,
+                        "gap": 850,
+                        "paragraphs": [
+                          {
+                            "runs": [
+                              {
+                                "content": {
+                                  "Text": "그림 1. 텍스트가 포함된 타원"
+                                },
+                                "char_shape_id": 3
+                              }
+                            ],
+                            "para_shape_id": 1,
+                            "column_break": false,
+                            "page_break": false
+                          }
+                        ]
+                      },
+                      "style": {
+                        "line_color": 13132830,
+                        "fill_color": 16773350,
+                        "line_width": 30,
+                        "line_style": "Solid",
+                        "rotation": null,
+                        "flip": null,
+                        "head_arrow": null,
+                        "tail_arrow": null,
+                        "fill": null,
+                        "drop_cap_style": "None"
+                      }
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "3.3 다각형 (Polygon)"
+                },
+                "char_shape_id": 2
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "삼각형 (그라디언트 채우기):"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Control": {
+                    "Polygon": {
+                      "vertices": [
+                        {
+                          "x": 5000,
+                          "y": 0
+                        },
+                        {
+                          "x": 10000,
+                          "y": 8660
+                        },
+                        {
+                          "x": 0,
+                          "y": 8660
+                        }
+                      ],
+                      "width": 10000,
+                      "height": 8660,
+                      "horz_offset": 0,
+                      "vert_offset": 0,
+                      "paragraphs": [],
+                      "caption": null,
+                      "style": {
+                        "line_color": 25600,
+                        "fill_color": null,
+                        "line_width": 25,
+                        "line_style": "Solid",
+                        "rotation": null,
+                        "flip": null,
+                        "head_arrow": null,
+                        "tail_arrow": null,
+                        "fill": {
+                          "Gradient": {
+                            "gradient_type": "Linear",
+                            "angle": 45,
+                            "colors": [
+                              [
+                                13158655,
+                                0
+                              ],
+                              [
+                                16763080,
+                                0
+                              ]
+                            ]
+                          }
+                        },
+                        "drop_cap_style": "None"
+                      }
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "오각형 (패턴 채우기):"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Control": {
+                    "Polygon": {
+                      "vertices": [
+                        {
+                          "x": 5000,
+                          "y": 0
+                        },
+                        {
+                          "x": 10000,
+                          "y": 3800
+                        },
+                        {
+                          "x": 8100,
+                          "y": 10000
+                        },
+                        {
+                          "x": 1900,
+                          "y": 10000
+                        },
+                        {
+                          "x": 0,
+                          "y": 3800
+                        }
+                      ],
+                      "width": 10000,
+                      "height": 10000,
+                      "horz_offset": 0,
+                      "vert_offset": 0,
+                      "paragraphs": [],
+                      "caption": {
+                        "side": "Bottom",
+                        "width": 10000,
+                        "gap": 850,
+                        "paragraphs": [
+                          {
+                            "runs": [
+                              {
+                                "content": {
+                                  "Text": "그림 2. 패턴 채우기 오각형"
+                                },
+                                "char_shape_id": 3
+                              }
+                            ],
+                            "para_shape_id": 1,
+                            "column_break": false,
+                            "page_break": false
+                          }
+                        ]
+                      },
+                      "style": {
+                        "line_color": 9843300,
+                        "fill_color": 16770800,
+                        "line_width": 33,
+                        "line_style": "Solid",
+                        "rotation": null,
+                        "flip": null,
+                        "head_arrow": null,
+                        "tail_arrow": null,
+                        "fill": {
+                          "Pattern": {
+                            "pattern_type": "Horizontal",
+                            "fg_color": 9843300,
+                            "bg_color": 16770800
+                          }
+                        },
+                        "drop_cap_style": "None"
+                      }
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "3.4 호 (Arc) — 3가지 타입"
+                },
+                "char_shape_id": 2
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "Normal (열린 호):"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Control": {
+                    "Arc": {
+                      "arc_type": "Normal",
+                      "center": {
+                        "x": 4960,
+                        "y": 3543
+                      },
+                      "axis1": {
+                        "x": 9921,
+                        "y": 3543
+                      },
+                      "axis2": {
+                        "x": 4960,
+                        "y": 7087
+                      },
+                      "start1": {
+                        "x": 9921,
+                        "y": 3543
+                      },
+                      "end1": {
+                        "x": 4960,
+                        "y": 0
+                      },
+                      "start2": {
+                        "x": 9921,
+                        "y": 3543
+                      },
+                      "end2": {
+                        "x": 4960,
+                        "y": 0
+                      },
+                      "width": 9921,
+                      "height": 7087,
+                      "horz_offset": 0,
+                      "vert_offset": 0,
+                      "caption": null,
+                      "style": {
+                        "line_color": 0,
+                        "fill_color": 16777215,
+                        "line_width": 33,
+                        "line_style": "Solid",
+                        "rotation": null,
+                        "flip": null,
+                        "head_arrow": null,
+                        "tail_arrow": null,
+                        "fill": null,
+                        "drop_cap_style": "None"
+                      }
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "Pie (부채꼴):"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Control": {
+                    "Arc": {
+                      "arc_type": "Pie",
+                      "center": {
+                        "x": 4960,
+                        "y": 3543
+                      },
+                      "axis1": {
+                        "x": 9921,
+                        "y": 3543
+                      },
+                      "axis2": {
+                        "x": 4960,
+                        "y": 7087
+                      },
+                      "start1": {
+                        "x": 9921,
+                        "y": 3543
+                      },
+                      "end1": {
+                        "x": 4960,
+                        "y": 0
+                      },
+                      "start2": {
+                        "x": 9921,
+                        "y": 3543
+                      },
+                      "end2": {
+                        "x": 4960,
+                        "y": 0
+                      },
+                      "width": 9921,
+                      "height": 7087,
+                      "horz_offset": 0,
+                      "vert_offset": 0,
+                      "caption": null,
+                      "style": {
+                        "line_color": 0,
+                        "fill_color": 16777215,
+                        "line_width": 33,
+                        "line_style": "Solid",
+                        "rotation": null,
+                        "flip": null,
+                        "head_arrow": null,
+                        "tail_arrow": null,
+                        "fill": null,
+                        "drop_cap_style": "None"
+                      }
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "Chord (활꼴):"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Control": {
+                    "Arc": {
+                      "arc_type": "Chord",
+                      "center": {
+                        "x": 4960,
+                        "y": 3543
+                      },
+                      "axis1": {
+                        "x": 9921,
+                        "y": 3543
+                      },
+                      "axis2": {
+                        "x": 4960,
+                        "y": 7087
+                      },
+                      "start1": {
+                        "x": 9921,
+                        "y": 3543
+                      },
+                      "end1": {
+                        "x": 4960,
+                        "y": 0
+                      },
+                      "start2": {
+                        "x": 9921,
+                        "y": 3543
+                      },
+                      "end2": {
+                        "x": 4960,
+                        "y": 0
+                      },
+                      "width": 9921,
+                      "height": 7087,
+                      "horz_offset": 0,
+                      "vert_offset": 0,
+                      "caption": null,
+                      "style": {
+                        "line_color": 0,
+                        "fill_color": 16777215,
+                        "line_width": 33,
+                        "line_style": "Solid",
+                        "rotation": null,
+                        "flip": null,
+                        "head_arrow": null,
+                        "tail_arrow": null,
+                        "fill": null,
+                        "drop_cap_style": "None"
+                      }
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "3.5 곡선 (Curve)"
+                },
+                "char_shape_id": 2
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "베지어 S자 곡선:"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Control": {
+                    "Curve": {
+                      "points": [
+                        {
+                          "x": 0,
+                          "y": 5000
+                        },
+                        {
+                          "x": 3000,
+                          "y": 0
+                        },
+                        {
+                          "x": 6000,
+                          "y": 10000
+                        },
+                        {
+                          "x": 9000,
+                          "y": 5000
+                        }
+                      ],
+                      "segment_types": [
+                        "Curve",
+                        "Curve",
+                        "Curve"
+                      ],
+                      "width": 9000,
+                      "height": 10000,
+                      "horz_offset": 0,
+                      "vert_offset": 0,
+                      "caption": null,
+                      "style": {
+                        "line_color": 0,
+                        "fill_color": 16777215,
+                        "line_width": 33,
+                        "line_style": "Solid",
+                        "rotation": null,
+                        "flip": null,
+                        "head_arrow": null,
+                        "tail_arrow": null,
+                        "fill": null,
+                        "drop_cap_style": "None"
+                      }
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "3.6 연결선 (ConnectLine)"
+                },
+                "char_shape_id": 2
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "양방향 다이아몬드 화살표:"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Control": {
+                    "ConnectLine": {
+                      "start": {
+                        "x": 0,
+                        "y": 0
+                      },
+                      "end": {
+                        "x": 14000,
+                        "y": 0
+                      },
+                      "control_points": [],
+                      "connect_type": "STRAIGHT",
+                      "width": 14000,
+                      "height": 100,
+                      "horz_offset": 0,
+                      "vert_offset": 0,
+                      "caption": null,
+                      "style": {
+                        "line_color": 3289750,
+                        "fill_color": null,
+                        "line_width": 30,
+                        "line_style": "Solid",
+                        "rotation": null,
+                        "flip": null,
+                        "head_arrow": {
+                          "arrow_type": "Diamond",
+                          "size": "Large",
+                          "filled": true
+                        },
+                        "tail_arrow": {
+                          "arrow_type": "Diamond",
+                          "size": "Large",
+                          "filled": true
+                        },
+                        "fill": null,
+                        "drop_cap_style": "None"
+                      }
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "3.7 글상자 (TextBox)"
+                },
+                "char_shape_id": 2
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Control": {
+                    "TextBox": {
+                      "paragraphs": [
+                        {
+                          "runs": [
+                            {
+                              "content": {
+                                "Text": "이것은 글상자(TextBox) 안의 문단입니다."
+                              },
+                              "char_shape_id": 0
+                            }
+                          ],
+                          "para_shape_id": 0,
+                          "column_break": false,
+                          "page_break": false
+                        },
+                        {
+                          "runs": [
+                            {
+                              "content": {
+                                "Text": "HWPX에서 글상자는 <hp:rect> + <hp:drawText> 구조로 인코딩됩니다. 별도의 Control 요소가 아닌 도형 객체입니다."
+                              },
+                              "char_shape_id": 3
+                            }
+                          ],
+                          "para_shape_id": 0,
+                          "column_break": false,
+                          "page_break": false
+                        }
+                      ],
+                      "width": 28346,
+                      "height": 8504,
+                      "horz_offset": 0,
+                      "vert_offset": 0,
+                      "caption": {
+                        "side": "Bottom",
+                        "width": 28346,
+                        "gap": 850,
+                        "paragraphs": [
+                          {
+                            "runs": [
+                              {
+                                "content": {
+                                  "Text": "그림 3. 스타일이 적용된 글상자"
+                                },
+                                "char_shape_id": 3
+                              }
+                            ],
+                            "para_shape_id": 1,
+                            "column_break": false,
+                            "page_break": false
+                          }
+                        ]
+                      },
+                      "style": {
+                        "line_color": 10506240,
+                        "fill_color": 16775413,
+                        "line_width": 25,
+                        "line_style": "Solid",
+                        "rotation": null,
+                        "flip": null,
+                        "head_arrow": null,
+                        "tail_arrow": null,
+                        "fill": null,
+                        "drop_cap_style": "None"
+                      }
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "3.8 도형 스타일 — 회전/뒤집기"
+                },
+                "char_shape_id": 2
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "타원 45도 회전:"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Control": {
+                    "Ellipse": {
+                      "center": {
+                        "x": 4960,
+                        "y": 3543
+                      },
+                      "axis1": {
+                        "x": 9921,
+                        "y": 3543
+                      },
+                      "axis2": {
+                        "x": 4960,
+                        "y": 7087
+                      },
+                      "width": 9921,
+                      "height": 7087,
+                      "horz_offset": 0,
+                      "vert_offset": 0,
+                      "paragraphs": [],
+                      "caption": null,
+                      "style": {
+                        "line_color": 25800,
+                        "fill_color": 16777215,
+                        "line_width": 25,
+                        "line_style": "Solid",
+                        "rotation": 45.0,
+                        "flip": null,
+                        "head_arrow": null,
+                        "tail_arrow": null,
+                        "fill": null,
+                        "drop_cap_style": "None"
+                      }
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "타원 수평 뒤집기:"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Control": {
+                    "Ellipse": {
+                      "center": {
+                        "x": 4960,
+                        "y": 3543
+                      },
+                      "axis1": {
+                        "x": 9921,
+                        "y": 3543
+                      },
+                      "axis2": {
+                        "x": 4960,
+                        "y": 7087
+                      },
+                      "width": 9921,
+                      "height": 7087,
+                      "horz_offset": 0,
+                      "vert_offset": 0,
+                      "paragraphs": [],
+                      "caption": null,
+                      "style": {
+                        "line_color": 6592000,
+                        "fill_color": 15794140,
+                        "line_width": 25,
+                        "line_style": "Solid",
+                        "rotation": null,
+                        "flip": "Horizontal",
+                        "head_arrow": null,
+                        "tail_arrow": null,
+                        "fill": null,
+                        "drop_cap_style": "None"
+                      }
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          }
+        ],
+        "page_settings": {
+          "width": 59528,
+          "height": 84189,
+          "margin_left": 5669,
+          "margin_right": 5669,
+          "margin_top": 5669,
+          "margin_bottom": 5669,
+          "header_margin": 2835,
+          "footer_margin": 2835,
+          "gutter": 2835,
+          "gutter_type": "LeftOnly",
+          "mirror_margins": false,
+          "landscape": true
+        },
+        "column_settings": {
+          "column_type": "Newspaper",
+          "layout_mode": "Left",
+          "columns": [
+            {
+              "width": 0,
+              "gap": 2268
+            },
+            {
+              "width": 0,
+              "gap": 0
+            }
+          ]
+        },
+        "visibility": {
+          "hide_first_header": false,
+          "hide_first_footer": false,
+          "hide_first_master_page": false,
+          "hide_first_page_num": false,
+          "hide_first_empty_line": false,
+          "show_line_number": false,
+          "border": "ShowAll",
+          "fill": "ShowAll"
+        },
+        "line_number_shape": {
+          "restart_type": 0,
+          "count_by": 0,
+          "distance": 0,
+          "start_number": 0
+        },
+        "page_border_fills": [
+          {
+            "apply_type": "BOTH",
+            "border_fill_id": 1,
+            "text_border": "PAPER",
+            "header_inside": false,
+            "footer_inside": false,
+            "fill_area": "PAPER",
+            "offset": [
+              1417,
+              1417,
+              1417,
+              1417
+            ]
+          },
+          {
+            "apply_type": "EVEN",
+            "border_fill_id": 1,
+            "text_border": "PAPER",
+            "header_inside": false,
+            "footer_inside": false,
+            "fill_area": "PAPER",
+            "offset": [
+              1417,
+              1417,
+              1417,
+              1417
+            ]
+          },
+          {
+            "apply_type": "ODD",
+            "border_fill_id": 1,
+            "text_border": "PAPER",
+            "header_inside": false,
+            "footer_inside": false,
+            "fill_area": "PAPER",
+            "offset": [
+              1417,
+              1417,
+              1417,
+              1417
+            ]
+          }
+        ],
+        "begin_num": {
+          "page": 0,
+          "footnote": 1,
+          "endnote": 1,
+          "pic": 0,
+          "tbl": 0,
+          "equation": 0
+        },
+        "text_direction": "Horizontal"
+      },
+      {
+        "paragraphs": [
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "차트, 수식, 고급 기능"
+                },
+                "char_shape_id": 1
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "4.1 수식 (Equation — HancomEQN)"
+                },
+                "char_shape_id": 2
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "HWPX의 수식은 HancomEQN 스크립트 형식을 사용합니다. MathML이 아닌 자체 문법입니다:"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "분수:"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Control": {
+                    "Equation": {
+                      "script": "{a + b} over {c + d}",
+                      "width": 8779,
+                      "height": 2600,
+                      "base_line": 71,
+                      "text_color": 0,
+                      "font": "HancomEQN"
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "제곱근:"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Control": {
+                    "Equation": {
+                      "script": "root {2} of {x^2 + y^2}",
+                      "width": 8779,
+                      "height": 2600,
+                      "base_line": 71,
+                      "text_color": 0,
+                      "font": "HancomEQN"
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "적분:"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Control": {
+                    "Equation": {
+                      "script": "int _{0} ^{inf} e^{-x^2} dx = {sqrt {pi}} over {2}",
+                      "width": 8779,
+                      "height": 2600,
+                      "base_line": 71,
+                      "text_color": 0,
+                      "font": "HancomEQN"
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "행렬:"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Control": {
+                    "Equation": {
+                      "script": "left ( matrix {a # b ## c # d} right )",
+                      "width": 8779,
+                      "height": 2600,
+                      "base_line": 71,
+                      "text_color": 0,
+                      "font": "HancomEQN"
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "4.2 차트 (Chart — OOXML)"
+                },
+                "char_shape_id": 2
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "HWPX는 OOXML(Office Open XML) 차트 형식을 사용합니다. Chart XML은 ZIP 내 별도 파일로 저장되며, content.hpf 매니페스트에는 등록하지 않습니다."
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "세로막대 차트 (Column, Clustered):"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Control": {
+                    "Chart": {
+                      "chart_type": "Column",
+                      "data": {
+                        "Category": {
+                          "categories": [
+                            "1분기",
+                            "2분기",
+                            "3분기",
+                            "4분기"
+                          ],
+                          "series": [
+                            {
+                              "name": "매출",
+                              "values": [
+                                120.0,
+                                180.0,
+                                150.0,
+                                210.0
+                              ]
+                            },
+                            {
+                              "name": "비용",
+                              "values": [
+                                80.0,
+                                100.0,
+                                95.0,
+                                130.0
+                              ]
+                            }
+                          ]
+                        }
+                      },
+                      "width": 32250,
+                      "height": 18750,
+                      "title": "분기별 매출/비용",
+                      "legend": "Bottom",
+                      "grouping": "Clustered",
+                      "bar_shape": null,
+                      "explosion": null,
+                      "of_pie_type": null,
+                      "radar_style": null,
+                      "wireframe": null,
+                      "bubble_3d": null,
+                      "scatter_style": null,
+                      "show_markers": null,
+                      "stock_variant": null
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "원형 차트 (Pie):"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Control": {
+                    "Chart": {
+                      "chart_type": "Pie",
+                      "data": {
+                        "Category": {
+                          "categories": [
+                            "한국",
+                            "미국",
+                            "일본",
+                            "기타"
+                          ],
+                          "series": [
+                            {
+                              "name": "시장점유율",
+                              "values": [
+                                35.0,
+                                28.0,
+                                22.0,
+                                15.0
+                              ]
+                            }
+                          ]
+                        }
+                      },
+                      "width": 32250,
+                      "height": 18750,
+                      "title": "시장 점유율",
+                      "legend": "Right",
+                      "grouping": "Clustered",
+                      "bar_shape": null,
+                      "explosion": 15,
+                      "of_pie_type": null,
+                      "radar_style": null,
+                      "wireframe": null,
+                      "bubble_3d": null,
+                      "scatter_style": null,
+                      "show_markers": null,
+                      "stock_variant": null
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "꺾은선 차트 (Line):"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Control": {
+                    "Chart": {
+                      "chart_type": "Line",
+                      "data": {
+                        "Category": {
+                          "categories": [
+                            "1월",
+                            "2월",
+                            "3월",
+                            "4월",
+                            "5월",
+                            "6월"
+                          ],
+                          "series": [
+                            {
+                              "name": "서울",
+                              "values": [
+                                2.0,
+                                4.0,
+                                10.0,
+                                17.0,
+                                22.0,
+                                26.0
+                              ]
+                            },
+                            {
+                              "name": "부산",
+                              "values": [
+                                5.0,
+                                7.0,
+                                12.0,
+                                18.0,
+                                23.0,
+                                27.0
+                              ]
+                            }
+                          ]
+                        }
+                      },
+                      "width": 32250,
+                      "height": 18750,
+                      "title": "월별 평균 기온",
+                      "legend": "Right",
+                      "grouping": "Standard",
+                      "bar_shape": null,
+                      "explosion": null,
+                      "of_pie_type": null,
+                      "radar_style": null,
+                      "wireframe": null,
+                      "bubble_3d": null,
+                      "scatter_style": null,
+                      "show_markers": true,
+                      "stock_variant": null
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "분산형 차트 (Scatter):"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Control": {
+                    "Chart": {
+                      "chart_type": "Scatter",
+                      "data": {
+                        "Xy": {
+                          "series": [
+                            {
+                              "name": "측정값",
+                              "x_values": [
+                                1.0,
+                                2.5,
+                                3.0,
+                                4.5,
+                                5.0,
+                                6.5,
+                                7.0,
+                                8.5
+                              ],
+                              "y_values": [
+                                2.3,
+                                3.1,
+                                4.8,
+                                5.2,
+                                7.1,
+                                6.8,
+                                8.9,
+                                9.5
+                              ]
+                            }
+                          ]
+                        }
+                      },
+                      "width": 32250,
+                      "height": 18750,
+                      "title": "X-Y 상관 분석",
+                      "legend": "Right",
+                      "grouping": "Clustered",
+                      "bar_shape": null,
+                      "explosion": null,
+                      "of_pie_type": null,
+                      "radar_style": null,
+                      "wireframe": null,
+                      "bubble_3d": null,
+                      "scatter_style": "LineMarker",
+                      "show_markers": null,
+                      "stock_variant": null
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "4.3 고급 표 서식"
+                },
+                "char_shape_id": 2
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "표는 col_span으로 셀 병합, background로 배경색 지정이 가능합니다:"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Table": {
+                    "rows": [
+                      {
+                        "cells": [
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "HWPX 요소 분류표"
+                                    },
+                                    "char_shape_id": 4
+                                  }
+                                ],
+                                "para_shape_id": 1,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 3,
+                            "row_span": 1,
+                            "width": 48189,
+                            "background": null
+                          }
+                        ],
+                        "height": null
+                      },
+                      {
+                        "cells": [
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "분류"
+                                    },
+                                    "char_shape_id": 4
+                                  }
+                                ],
+                                "para_shape_id": 1,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 11339,
+                            "background": null
+                          },
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "요소명"
+                                    },
+                                    "char_shape_id": 4
+                                  }
+                                ],
+                                "para_shape_id": 1,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 18425,
+                            "background": null
+                          },
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "설명"
+                                    },
+                                    "char_shape_id": 4
+                                  }
+                                ],
+                                "para_shape_id": 1,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 18425,
+                            "background": null
+                          }
+                        ],
+                        "height": null
+                      },
+                      {
+                        "cells": [
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "구조"
+                                    },
+                                    "char_shape_id": 0
+                                  }
+                                ],
+                                "para_shape_id": 1,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 11339,
+                            "background": null
+                          },
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "Section, Paragraph, Run"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 18425,
+                            "background": null
+                          },
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "문서의 기본 골격 (섹션→문단→런)"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 18425,
+                            "background": null
+                          }
+                        ],
+                        "height": null
+                      },
+                      {
+                        "cells": [
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "서식"
+                                    },
+                                    "char_shape_id": 0
+                                  }
+                                ],
+                                "para_shape_id": 1,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 11339,
+                            "background": null
+                          },
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "CharShape, ParaShape, Style"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 18425,
+                            "background": null
+                          },
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "글자/문단 모양 정의 (header.xml)"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 18425,
+                            "background": null
+                          }
+                        ],
+                        "height": null
+                      },
+                      {
+                        "cells": [
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "객체"
+                                    },
+                                    "char_shape_id": 0
+                                  }
+                                ],
+                                "para_shape_id": 1,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 11339,
+                            "background": null
+                          },
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "Table, Image, TextBox, Chart"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 18425,
+                            "background": null
+                          },
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "인라인 또는 부동 객체"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 18425,
+                            "background": null
+                          }
+                        ],
+                        "height": null
+                      },
+                      {
+                        "cells": [
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "도형"
+                                    },
+                                    "char_shape_id": 0
+                                  }
+                                ],
+                                "para_shape_id": 1,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 11339,
+                            "background": null
+                          },
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "Line, Ellipse, Polygon, Arc, Curve"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 18425,
+                            "background": null
+                          },
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "벡터 드로잉 객체 (shape common block)"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 18425,
+                            "background": null
+                          }
+                        ],
+                        "height": null
+                      },
+                      {
+                        "cells": [
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "주석"
+                                    },
+                                    "char_shape_id": 0
+                                  }
+                                ],
+                                "para_shape_id": 1,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 11339,
+                            "background": null
+                          },
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "Footnote, Endnote, Memo, Bookmark"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 18425,
+                            "background": null
+                          },
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "참조 및 주석 체계"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 18425,
+                            "background": null
+                          }
+                        ],
+                        "height": null
+                      },
+                      {
+                        "cells": [
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "필드"
+                                    },
+                                    "char_shape_id": 0
+                                  }
+                                ],
+                                "para_shape_id": 1,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 11339,
+                            "background": null
+                          },
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "Hyperlink, Field, CrossRef, IndexMark"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 18425,
+                            "background": null
+                          },
+                          {
+                            "paragraphs": [
+                              {
+                                "runs": [
+                                  {
+                                    "content": {
+                                      "Text": "fieldBegin/fieldEnd 패턴 인코딩"
+                                    },
+                                    "char_shape_id": 3
+                                  }
+                                ],
+                                "para_shape_id": 2,
+                                "column_break": false,
+                                "page_break": false
+                              }
+                            ],
+                            "col_span": 1,
+                            "row_span": 1,
+                            "width": 18425,
+                            "background": null
+                          }
+                        ],
+                        "height": null
+                      }
+                    ],
+                    "width": null,
+                    "caption": {
+                      "side": "Bottom",
+                      "width": 48189,
+                      "gap": 850,
+                      "paragraphs": [
+                        {
+                          "runs": [
+                            {
+                              "content": {
+                                "Text": "표 2. HWPX 문서 요소 분류"
+                              },
+                              "char_shape_id": 3
+                            }
+                          ],
+                          "para_shape_id": 1,
+                          "column_break": false,
+                          "page_break": false
+                        }
+                      ]
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "4.4 페이지 테두리 (PageBorderFill) + BeginNum"
+                },
+                "char_shape_id": 2
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "이 섹션에는 페이지 테두리(borderFillIDRef=3, 검은 실선)가 설정되어 있으며, 페이지 번호는 1부터 새로 시작합니다."
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "4.5 종합 요약"
+                },
+                "char_shape_id": 2
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "이 문서는 HwpForge 라이브러리의 전체 API를 사용하여 생성되었습니다. 4개 섹션에 걸쳐 다음 기능들을 시연했습니다:"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "구조: Document, Section, Paragraph, Run, Table, Image(Store)"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "섹션: Header, Footer, PageNumber, ColumnSettings, Visibility, LineNumberShape"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "섹션: PageBorderFill, MasterPage, BeginNum, Gutter, Landscape"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "도형: Line, Ellipse, Polygon, Arc, Curve, ConnectLine, TextBox"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "스타일: ShapeStyle (rotation, flip, fill, arrow), Caption (4방향)"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "채우기: Solid, Gradient (Linear), Pattern (HorizontalLine)"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "차트: Column, Pie, Line, Scatter (OOXML 형식)"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "수식: fraction, root, integral, matrix (HancomEQN)"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "텍스트: Dutmal (3방향), Compose (글자겹침)"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "참조: Bookmark (Point/Span), CrossRef, Hyperlink"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "필드: ClickHere, Date, PageNum"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "주석: Footnote, Endnote, Memo, IndexMark"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "정렬: Left, Center, Right, Justify, Distribute"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "스타일스토어: Font, CharShape(8종), ParaShape(5종), BorderFill(4종), Numbering, Tab"
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "=== HWPX 문서 구조 완전 가이드 끝 ==="
+                },
+                "char_shape_id": 1
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          }
+        ],
+        "page_settings": {
+          "width": 59528,
+          "height": 84189,
+          "margin_left": 5669,
+          "margin_right": 5669,
+          "margin_top": 5669,
+          "margin_bottom": 5669,
+          "header_margin": 2835,
+          "footer_margin": 2835,
+          "gutter_type": "LeftOnly",
+          "mirror_margins": false,
+          "landscape": false
+        },
+        "page_number": {
+          "position": "BottomCenter",
+          "number_format": "Digit",
+          "decoration": ""
+        },
+        "visibility": {
+          "hide_first_header": false,
+          "hide_first_footer": false,
+          "hide_first_master_page": false,
+          "hide_first_page_num": false,
+          "hide_first_empty_line": false,
+          "show_line_number": false,
+          "border": "ShowAll",
+          "fill": "ShowAll"
+        },
+        "line_number_shape": {
+          "restart_type": 0,
+          "count_by": 0,
+          "distance": 0,
+          "start_number": 0
+        },
+        "page_border_fills": [
+          {
+            "apply_type": "BOTH",
+            "border_fill_id": 3,
+            "text_border": "PAPER",
+            "header_inside": false,
+            "footer_inside": false,
+            "fill_area": "PAPER",
+            "offset": [
+              1417,
+              1417,
+              1417,
+              1417
+            ]
+          },
+          {
+            "apply_type": "EVEN",
+            "border_fill_id": 3,
+            "text_border": "PAPER",
+            "header_inside": false,
+            "footer_inside": false,
+            "fill_area": "PAPER",
+            "offset": [
+              1417,
+              1417,
+              1417,
+              1417
+            ]
+          },
+          {
+            "apply_type": "ODD",
+            "border_fill_id": 3,
+            "text_border": "PAPER",
+            "header_inside": false,
+            "footer_inside": false,
+            "fill_area": "PAPER",
+            "offset": [
+              1417,
+              1417,
+              1417,
+              1417
+            ]
+          }
+        ],
+        "master_pages": [
+          {
+            "apply_page_type": "Both",
+            "paragraphs": [
+              {
+                "runs": [
+                  {
+                    "content": {
+                      "Text": "[ DRAFT / 초안 ]"
+                    },
+                    "char_shape_id": 7
+                  }
+                ],
+                "para_shape_id": 1,
+                "column_break": false,
+                "page_break": false
+              }
+            ]
+          }
+        ],
+        "begin_num": {
+          "page": 1,
+          "footnote": 1,
+          "endnote": 1,
+          "pic": 1,
+          "tbl": 1,
+          "equation": 1
+        },
+        "text_direction": "Horizontal"
+      }
+    ],
+    "metadata": {
+      "title": null,
+      "author": null,
+      "subject": null,
+      "keywords": [],
+      "created": null,
+      "modified": null
+    }
+  },
+  "styles": {
+    "style_set": "Modern",
+    "fonts": [
+      {
+        "id": 0,
+        "face_name": "함초롬돋움",
+        "lang": "HANGUL"
+      },
+      {
+        "id": 1,
+        "face_name": "함초롬바탕",
+        "lang": "HANGUL"
+      },
+      {
+        "id": 0,
+        "face_name": "함초롬돋움",
+        "lang": "LATIN"
+      },
+      {
+        "id": 1,
+        "face_name": "함초롬바탕",
+        "lang": "LATIN"
+      },
+      {
+        "id": 0,
+        "face_name": "함초롬돋움",
+        "lang": "HANJA"
+      },
+      {
+        "id": 1,
+        "face_name": "함초롬바탕",
+        "lang": "HANJA"
+      },
+      {
+        "id": 0,
+        "face_name": "함초롬돋움",
+        "lang": "JAPANESE"
+      },
+      {
+        "id": 1,
+        "face_name": "함초롬바탕",
+        "lang": "JAPANESE"
+      },
+      {
+        "id": 0,
+        "face_name": "함초롬돋움",
+        "lang": "OTHER"
+      },
+      {
+        "id": 1,
+        "face_name": "함초롬바탕",
+        "lang": "OTHER"
+      },
+      {
+        "id": 0,
+        "face_name": "함초롬돋움",
+        "lang": "SYMBOL"
+      },
+      {
+        "id": 1,
+        "face_name": "함초롬바탕",
+        "lang": "SYMBOL"
+      },
+      {
+        "id": 0,
+        "face_name": "함초롬돋움",
+        "lang": "USER"
+      },
+      {
+        "id": 1,
+        "face_name": "함초롬바탕",
+        "lang": "USER"
+      }
+    ],
+    "char_shapes": [
+      {
+        "font_ref": {
+          "hangul": 0,
+          "latin": 0,
+          "hanja": 0,
+          "japanese": 0,
+          "other": 0,
+          "symbol": 0,
+          "user": 0
+        },
+        "height": 1000,
+        "text_color": 0,
+        "shade_color": null,
+        "bold": false,
+        "italic": false,
+        "underline_type": "None",
+        "underline_color": null,
+        "strikeout_shape": "None",
+        "strikeout_color": null,
+        "vertical_position": "Normal",
+        "outline_type": "None",
+        "shadow_type": "None",
+        "emboss_type": "None",
+        "engrave_type": "None",
+        "emphasis": "None",
+        "ratio": 100,
+        "spacing": 0,
+        "rel_sz": 100,
+        "char_offset": 0,
+        "use_kerning": false,
+        "use_font_space": false,
+        "border_fill_id": null
+      },
+      {
+        "font_ref": {
+          "hangul": 0,
+          "latin": 0,
+          "hanja": 0,
+          "japanese": 0,
+          "other": 0,
+          "symbol": 0,
+          "user": 0
+        },
+        "height": 1800,
+        "text_color": 0,
+        "shade_color": null,
+        "bold": true,
+        "italic": false,
+        "underline_type": "None",
+        "underline_color": null,
+        "strikeout_shape": "None",
+        "strikeout_color": null,
+        "vertical_position": "Normal",
+        "outline_type": "None",
+        "shadow_type": "None",
+        "emboss_type": "None",
+        "engrave_type": "None",
+        "emphasis": "None",
+        "ratio": 100,
+        "spacing": 0,
+        "rel_sz": 100,
+        "char_offset": 0,
+        "use_kerning": false,
+        "use_font_space": false,
+        "border_fill_id": null
+      },
+      {
+        "font_ref": {
+          "hangul": 0,
+          "latin": 0,
+          "hanja": 0,
+          "japanese": 0,
+          "other": 0,
+          "symbol": 0,
+          "user": 0
+        },
+        "height": 1400,
+        "text_color": 10503680,
+        "shade_color": null,
+        "bold": true,
+        "italic": false,
+        "underline_type": "None",
+        "underline_color": null,
+        "strikeout_shape": "None",
+        "strikeout_color": null,
+        "vertical_position": "Normal",
+        "outline_type": "None",
+        "shadow_type": "None",
+        "emboss_type": "None",
+        "engrave_type": "None",
+        "emphasis": "None",
+        "ratio": 100,
+        "spacing": 0,
+        "rel_sz": 100,
+        "char_offset": 0,
+        "use_kerning": false,
+        "use_font_space": false,
+        "border_fill_id": null
+      },
+      {
+        "font_ref": {
+          "hangul": 0,
+          "latin": 0,
+          "hanja": 0,
+          "japanese": 0,
+          "other": 0,
+          "symbol": 0,
+          "user": 0
+        },
+        "height": 800,
+        "text_color": 0,
+        "shade_color": null,
+        "bold": false,
+        "italic": false,
+        "underline_type": "None",
+        "underline_color": null,
+        "strikeout_shape": "None",
+        "strikeout_color": null,
+        "vertical_position": "Normal",
+        "outline_type": "None",
+        "shadow_type": "None",
+        "emboss_type": "None",
+        "engrave_type": "None",
+        "emphasis": "None",
+        "ratio": 100,
+        "spacing": 0,
+        "rel_sz": 100,
+        "char_offset": 0,
+        "use_kerning": false,
+        "use_font_space": false,
+        "border_fill_id": null
+      },
+      {
+        "font_ref": {
+          "hangul": 0,
+          "latin": 0,
+          "hanja": 0,
+          "japanese": 0,
+          "other": 0,
+          "symbol": 0,
+          "user": 0
+        },
+        "height": 1000,
+        "text_color": 1973960,
+        "shade_color": null,
+        "bold": true,
+        "italic": false,
+        "underline_type": "None",
+        "underline_color": null,
+        "strikeout_shape": "None",
+        "strikeout_color": null,
+        "vertical_position": "Normal",
+        "outline_type": "None",
+        "shadow_type": "None",
+        "emboss_type": "None",
+        "engrave_type": "None",
+        "emphasis": "None",
+        "ratio": 100,
+        "spacing": 0,
+        "rel_sz": 100,
+        "char_offset": 0,
+        "use_kerning": false,
+        "use_font_space": false,
+        "border_fill_id": null
+      },
+      {
+        "font_ref": {
+          "hangul": 0,
+          "latin": 0,
+          "hanja": 0,
+          "japanese": 0,
+          "other": 0,
+          "symbol": 0,
+          "user": 0
+        },
+        "height": 1000,
+        "text_color": 13114910,
+        "shade_color": null,
+        "bold": false,
+        "italic": false,
+        "underline_type": "None",
+        "underline_color": null,
+        "strikeout_shape": "None",
+        "strikeout_color": null,
+        "vertical_position": "Normal",
+        "outline_type": "None",
+        "shadow_type": "None",
+        "emboss_type": "None",
+        "engrave_type": "None",
+        "emphasis": "None",
+        "ratio": 100,
+        "spacing": 0,
+        "rel_sz": 100,
+        "char_offset": 0,
+        "use_kerning": false,
+        "use_font_space": false,
+        "border_fill_id": null
+      },
+      {
+        "font_ref": {
+          "hangul": 0,
+          "latin": 0,
+          "hanja": 0,
+          "japanese": 0,
+          "other": 0,
+          "symbol": 0,
+          "user": 0
+        },
+        "height": 1000,
+        "text_color": 3965440,
+        "shade_color": null,
+        "bold": false,
+        "italic": true,
+        "underline_type": "None",
+        "underline_color": null,
+        "strikeout_shape": "None",
+        "strikeout_color": null,
+        "vertical_position": "Normal",
+        "outline_type": "None",
+        "shadow_type": "None",
+        "emboss_type": "None",
+        "engrave_type": "None",
+        "emphasis": "None",
+        "ratio": 100,
+        "spacing": 0,
+        "rel_sz": 100,
+        "char_offset": 0,
+        "use_kerning": false,
+        "use_font_space": false,
+        "border_fill_id": null
+      },
+      {
+        "font_ref": {
+          "hangul": 0,
+          "latin": 0,
+          "hanja": 0,
+          "japanese": 0,
+          "other": 0,
+          "symbol": 0,
+          "user": 0
+        },
+        "height": 1400,
+        "text_color": 11842740,
+        "shade_color": null,
+        "bold": false,
+        "italic": false,
+        "underline_type": "None",
+        "underline_color": null,
+        "strikeout_shape": "None",
+        "strikeout_color": null,
+        "vertical_position": "Normal",
+        "outline_type": "None",
+        "shadow_type": "None",
+        "emboss_type": "None",
+        "engrave_type": "None",
+        "emphasis": "None",
+        "ratio": 100,
+        "spacing": 0,
+        "rel_sz": 100,
+        "char_offset": 0,
+        "use_kerning": false,
+        "use_font_space": false,
+        "border_fill_id": null
+      }
+    ],
+    "para_shapes": [
+      {
+        "alignment": "Justify",
+        "margin_left": 0,
+        "margin_right": 0,
+        "indent": 0,
+        "spacing_before": 0,
+        "spacing_after": 0,
+        "line_spacing": 160,
+        "line_spacing_type": "Percentage",
+        "break_type": "None",
+        "keep_with_next": false,
+        "keep_lines_together": false,
+        "widow_orphan": true,
+        "break_latin_word": "KeepWord",
+        "break_non_latin_word": "KeepWord",
+        "border_fill_id": null,
+        "heading_type": "None",
+        "heading_id_ref": 0,
+        "heading_level": 0,
+        "tab_pr_id_ref": 0,
+        "condense": 0
+      },
+      {
+        "alignment": "Center",
+        "margin_left": 0,
+        "margin_right": 0,
+        "indent": 0,
+        "spacing_before": 0,
+        "spacing_after": 0,
+        "line_spacing": 160,
+        "line_spacing_type": "Percentage",
+        "break_type": "None",
+        "keep_with_next": false,
+        "keep_lines_together": false,
+        "widow_orphan": true,
+        "break_latin_word": "KeepWord",
+        "break_non_latin_word": "KeepWord",
+        "border_fill_id": null,
+        "heading_type": "None",
+        "heading_id_ref": 0,
+        "heading_level": 0,
+        "tab_pr_id_ref": 0,
+        "condense": 0
+      },
+      {
+        "alignment": "Left",
+        "margin_left": 0,
+        "margin_right": 0,
+        "indent": 0,
+        "spacing_before": 0,
+        "spacing_after": 0,
+        "line_spacing": 160,
+        "line_spacing_type": "Percentage",
+        "break_type": "None",
+        "keep_with_next": false,
+        "keep_lines_together": false,
+        "widow_orphan": true,
+        "break_latin_word": "KeepWord",
+        "break_non_latin_word": "KeepWord",
+        "border_fill_id": null,
+        "heading_type": "None",
+        "heading_id_ref": 0,
+        "heading_level": 0,
+        "tab_pr_id_ref": 0,
+        "condense": 0
+      },
+      {
+        "alignment": "Right",
+        "margin_left": 0,
+        "margin_right": 0,
+        "indent": 0,
+        "spacing_before": 0,
+        "spacing_after": 0,
+        "line_spacing": 160,
+        "line_spacing_type": "Percentage",
+        "break_type": "None",
+        "keep_with_next": false,
+        "keep_lines_together": false,
+        "widow_orphan": true,
+        "break_latin_word": "KeepWord",
+        "break_non_latin_word": "KeepWord",
+        "border_fill_id": null,
+        "heading_type": "None",
+        "heading_id_ref": 0,
+        "heading_level": 0,
+        "tab_pr_id_ref": 0,
+        "condense": 0
+      },
+      {
+        "alignment": "Distribute",
+        "margin_left": 0,
+        "margin_right": 0,
+        "indent": 0,
+        "spacing_before": 0,
+        "spacing_after": 0,
+        "line_spacing": 160,
+        "line_spacing_type": "Percentage",
+        "break_type": "None",
+        "keep_with_next": false,
+        "keep_lines_together": false,
+        "widow_orphan": true,
+        "break_latin_word": "KeepWord",
+        "break_non_latin_word": "KeepWord",
+        "border_fill_id": null,
+        "heading_type": "None",
+        "heading_id_ref": 0,
+        "heading_level": 0,
+        "tab_pr_id_ref": 0,
+        "condense": 0
+      }
+    ],
+    "styles": [
+      {
+        "id": 0,
+        "style_type": "PARA",
+        "name": "바탕글",
+        "eng_name": "Normal",
+        "para_pr_id_ref": 0,
+        "char_pr_id_ref": 0,
+        "next_style_id_ref": 0,
+        "lang_id": 1042
+      }
+    ],
+    "border_fills": [
+      {
+        "id": 1,
+        "three_d": false,
+        "shadow": false,
+        "center_line": "NONE",
+        "left": {
+          "line_type": "NONE",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "right": {
+          "line_type": "NONE",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "top": {
+          "line_type": "NONE",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "bottom": {
+          "line_type": "NONE",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "diagonal": {
+          "line_type": "SOLID",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "slash_type": "NONE",
+        "back_slash_type": "NONE",
+        "fill": null
+      },
+      {
+        "id": 2,
+        "three_d": false,
+        "shadow": false,
+        "center_line": "NONE",
+        "left": {
+          "line_type": "NONE",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "right": {
+          "line_type": "NONE",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "top": {
+          "line_type": "NONE",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "bottom": {
+          "line_type": "NONE",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "diagonal": {
+          "line_type": "SOLID",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "slash_type": "NONE",
+        "back_slash_type": "NONE",
+        "fill": {
+          "WinBrush": {
+            "face_color": "none",
+            "hatch_color": "#FF000000",
+            "alpha": "0"
+          }
+        }
+      },
+      {
+        "id": 3,
+        "three_d": false,
+        "shadow": false,
+        "center_line": "NONE",
+        "left": {
+          "line_type": "SOLID",
+          "width": "0.12 mm",
+          "color": "#000000"
+        },
+        "right": {
+          "line_type": "SOLID",
+          "width": "0.12 mm",
+          "color": "#000000"
+        },
+        "top": {
+          "line_type": "SOLID",
+          "width": "0.12 mm",
+          "color": "#000000"
+        },
+        "bottom": {
+          "line_type": "SOLID",
+          "width": "0.12 mm",
+          "color": "#000000"
+        },
+        "diagonal": {
+          "line_type": "SOLID",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "slash_type": "NONE",
+        "back_slash_type": "NONE",
+        "fill": null
+      },
+      {
+        "id": 4,
+        "three_d": false,
+        "shadow": false,
+        "center_line": "NONE",
+        "left": {
+          "line_type": "SOLID",
+          "width": "0.4 mm",
+          "color": "#FF0000"
+        },
+        "right": {
+          "line_type": "SOLID",
+          "width": "0.4 mm",
+          "color": "#FF0000"
+        },
+        "top": {
+          "line_type": "SOLID",
+          "width": "0.4 mm",
+          "color": "#FF0000"
+        },
+        "bottom": {
+          "line_type": "SOLID",
+          "width": "0.4 mm",
+          "color": "#FF0000"
+        },
+        "diagonal": {
+          "line_type": "SOLID",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "slash_type": "NONE",
+        "back_slash_type": "NONE",
+        "fill": null
+      }
+    ],
+    "numberings": [
+      {
+        "id": 1,
+        "start": 0,
+        "levels": [
+          {
+            "start": 1,
+            "level": 1,
+            "num_format": "Digit",
+            "text": "^1.",
+            "checkable": false
+          },
+          {
+            "start": 1,
+            "level": 2,
+            "num_format": "HangulSyllable",
+            "text": "^2.",
+            "checkable": false
+          },
+          {
+            "start": 1,
+            "level": 3,
+            "num_format": "Digit",
+            "text": "^3)",
+            "checkable": false
+          },
+          {
+            "start": 1,
+            "level": 4,
+            "num_format": "HangulSyllable",
+            "text": "^4)",
+            "checkable": false
+          },
+          {
+            "start": 1,
+            "level": 5,
+            "num_format": "Digit",
+            "text": "(^5)",
+            "checkable": false
+          },
+          {
+            "start": 1,
+            "level": 6,
+            "num_format": "HangulSyllable",
+            "text": "(^6)",
+            "checkable": false
+          },
+          {
+            "start": 1,
+            "level": 7,
+            "num_format": "CircledDigit",
+            "text": "^7",
+            "checkable": true
+          },
+          {
+            "start": 1,
+            "level": 8,
+            "num_format": "CircledHangulSyllable",
+            "text": "^8",
+            "checkable": true
+          },
+          {
+            "start": 1,
+            "level": 9,
+            "num_format": "HangulJamo",
+            "text": "",
+            "checkable": false
+          },
+          {
+            "start": 1,
+            "level": 10,
+            "num_format": "RomanSmall",
+            "text": "",
+            "checkable": true
+          }
+        ]
+      }
+    ],
+    "tabs": [
+      {
+        "id": 0,
+        "auto_tab_left": false,
+        "auto_tab_right": false
+      },
+      {
+        "id": 1,
+        "auto_tab_left": true,
+        "auto_tab_right": false
+      },
+      {
+        "id": 2,
+        "auto_tab_left": false,
+        "auto_tab_right": true
+      }
+    ]
+  }
+}

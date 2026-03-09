@@ -2635,11 +2635,13 @@ pub enum PatternType {
 
 impl fmt::Display for PatternType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // 한글 renders BACK_SLASH as `/` and SLASH as `\` — opposite to KS X 6101 XSD docs.
+        // We swap the mapping so our semantic enum values match actual rendering.
         match self {
             Self::Horizontal => f.write_str("HORIZONTAL"),
             Self::Vertical => f.write_str("VERTICAL"),
-            Self::BackSlash => f.write_str("BACK_SLASH"),
-            Self::Slash => f.write_str("SLASH"),
+            Self::BackSlash => f.write_str("SLASH"),
+            Self::Slash => f.write_str("BACK_SLASH"),
             Self::Cross => f.write_str("CROSS"),
             Self::CrossDiagonal => f.write_str("CROSS_DIAGONAL"),
         }
@@ -2650,13 +2652,15 @@ impl std::str::FromStr for PatternType {
     type Err = FoundationError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Swapped BACK_SLASH/SLASH to match Display (한글 renders them opposite to spec).
+        // Only SCREAMING_CASE forms used here — PascalCase comes through serde derive.
         match s {
-            "HORIZONTAL" | "Horizontal" | "horizontal" => Ok(Self::Horizontal),
-            "VERTICAL" | "Vertical" | "vertical" => Ok(Self::Vertical),
-            "BACK_SLASH" | "BackSlash" | "backslash" => Ok(Self::BackSlash),
-            "SLASH" | "Slash" | "slash" => Ok(Self::Slash),
-            "CROSS" | "Cross" | "cross" => Ok(Self::Cross),
-            "CROSS_DIAGONAL" | "CrossDiagonal" | "crossdiagonal" => Ok(Self::CrossDiagonal),
+            "HORIZONTAL" | "horizontal" => Ok(Self::Horizontal),
+            "VERTICAL" | "vertical" => Ok(Self::Vertical),
+            "BACK_SLASH" | "backslash" => Ok(Self::Slash),
+            "SLASH" | "slash" => Ok(Self::BackSlash),
+            "CROSS" | "cross" => Ok(Self::Cross),
+            "CROSS_DIAGONAL" | "crossdiagonal" => Ok(Self::CrossDiagonal),
             _ => Err(FoundationError::ParseError {
                 type_name: "PatternType".to_string(),
                 value: s.to_string(),

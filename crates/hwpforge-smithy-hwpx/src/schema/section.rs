@@ -295,9 +295,172 @@ pub struct HxComposeCharPr {
     pub pr_id_ref: u32,
 }
 
+// ── Field control types ──────────────────────────────────────────
+
+/// `<hp:stringParam name="..." xml:space="preserve">value</hp:stringParam>`.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxStringParam {
+    /// Parameter name (e.g. `"Path"`, `"Command"`).
+    #[serde(rename = "@name", default)]
+    pub name: String,
+    /// XML space preservation attribute.
+    #[serde(rename = "@xml:space", default, skip_serializing_if = "String::is_empty")]
+    pub xml_space: String,
+    /// Parameter value (text content).
+    #[serde(rename = "$text", default)]
+    pub value: String,
+}
+
+/// `<hp:integerParam name="...">value</hp:integerParam>`.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxIntegerParam {
+    /// Parameter name (e.g. `"Prop"`).
+    #[serde(rename = "@name", default)]
+    pub name: String,
+    /// Parameter value as string (text content).
+    #[serde(rename = "$text", default)]
+    pub value: String,
+}
+
+/// `<hp:booleanParam name="...">value</hp:booleanParam>`.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxBooleanParam {
+    /// Parameter name (e.g. `"RefHyperLink"`).
+    #[serde(rename = "@name", default)]
+    pub name: String,
+    /// Parameter value as string (text content).
+    #[serde(rename = "$text", default)]
+    pub value: String,
+}
+
+/// `<hp:parameters cnt="..." name="...">` — field parameter container.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxFieldParameters {
+    /// Number of parameters declared.
+    #[serde(rename = "@cnt", default)]
+    pub cnt: u32,
+    /// Parameter group name (usually empty).
+    #[serde(rename = "@name", default)]
+    pub name: String,
+    /// String-typed parameters.
+    #[serde(
+        rename(serialize = "hp:stringParam", deserialize = "stringParam"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub string_params: Vec<HxStringParam>,
+    /// Integer-typed parameters.
+    #[serde(
+        rename(serialize = "hp:integerParam", deserialize = "integerParam"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub integer_params: Vec<HxIntegerParam>,
+    /// Boolean-typed parameters.
+    #[serde(
+        rename(serialize = "hp:booleanParam", deserialize = "booleanParam"),
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub boolean_params: Vec<HxBooleanParam>,
+}
+
+/// `<hp:fieldBegin>` — start of a field control pair (hyperlink, bookmark, etc.).
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxFieldBegin {
+    /// Element ID.
+    #[serde(rename = "@id", default)]
+    pub id: String,
+    /// Field type (e.g. `"HYPERLINK"`, `"BOOKMARK"`, `"SUMMERY"`, `"CROSSREF"`, `"MEMO"`).
+    #[serde(rename = "@type", default)]
+    pub field_type: String,
+    /// Field name (used by bookmarks).
+    #[serde(rename = "@name", default)]
+    pub name: String,
+    /// Whether the field content is editable.
+    #[serde(rename = "@editable", default)]
+    pub editable: String,
+    /// Dirty flag.
+    #[serde(rename = "@dirty", default)]
+    pub dirty: String,
+    /// Z-order for stacking.
+    #[serde(rename = "@zorder", default)]
+    pub zorder: String,
+    /// Field identifier for begin/end pairing.
+    #[serde(rename = "@fieldid", default)]
+    pub fieldid: String,
+    /// Meta tag for field categorization.
+    #[serde(rename = "@metaTag", default)]
+    pub meta_tag: String,
+    /// Optional parameters (Path, Command, RefPath, etc.).
+    #[serde(
+        rename(serialize = "hp:parameters", deserialize = "parameters"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub parameters: Option<HxFieldParameters>,
+    /// Optional subList (used by MEMO fields for memo body content).
+    #[serde(
+        rename(serialize = "hp:subList", deserialize = "subList"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub sub_list: Option<HxSubList>,
+}
+
+/// `<hp:fieldEnd>` — end of a field control pair.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxFieldEnd {
+    /// Reference to the matching fieldBegin's ID.
+    #[serde(rename = "@beginIDRef", default)]
+    pub begin_id_ref: String,
+    /// Field identifier for begin/end pairing.
+    #[serde(rename = "@fieldid", default)]
+    pub fieldid: String,
+}
+
+/// `<hp:autoNumFormat>` — formatting for auto-numbering.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxAutoNumFormat {
+    /// Format type (e.g. `"DIGIT"`).
+    #[serde(rename = "@type", default)]
+    pub format_type: String,
+    /// User-defined character for custom numbering.
+    #[serde(rename = "@userChar", default)]
+    pub user_char: String,
+    /// Prefix character before the number.
+    #[serde(rename = "@prefixChar", default)]
+    pub prefix_char: String,
+    /// Suffix character after the number.
+    #[serde(rename = "@suffixChar", default)]
+    pub suffix_char: String,
+    /// Superscript flag.
+    #[serde(rename = "@supscript", default)]
+    pub supscript: String,
+}
+
+/// `<hp:autoNum>` — inline auto-numbering (page number, etc.).
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxAutoNum {
+    /// Current number value.
+    #[serde(rename = "@num", default)]
+    pub num: u32,
+    /// Numbering type (e.g. `"PAGE"`, `"FOOTNOTE"`).
+    #[serde(rename = "@numType", default)]
+    pub num_type: String,
+    /// Optional formatting specification.
+    #[serde(
+        rename(serialize = "hp:autoNumFormat", deserialize = "autoNumFormat"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub auto_num_format: Option<HxAutoNumFormat>,
+}
+
 // ── Control wrapper ──────────────────────────────────────────────
 
-/// `<hp:ctrl>` — wrapper for header, footer, colPr, pageNum, footnote, endnote.
+/// `<hp:ctrl>` — wrapper for header, footer, colPr, pageNum, footnote, endnote,
+/// fieldBegin, fieldEnd, autoNum.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxCtrl {
     /// Optional column properties element.
@@ -356,6 +519,27 @@ pub struct HxCtrl {
         skip_serializing_if = "Option::is_none"
     )]
     pub indexmark: Option<HxIndexMark>,
+    /// Optional fieldBegin element (hyperlink, bookmark, field, crossref, memo).
+    #[serde(
+        rename(serialize = "hp:fieldBegin", deserialize = "fieldBegin"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub field_begin: Option<HxFieldBegin>,
+    /// Optional fieldEnd element (closes a fieldBegin pair).
+    #[serde(
+        rename(serialize = "hp:fieldEnd", deserialize = "fieldEnd"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub field_end: Option<HxFieldEnd>,
+    /// Optional autoNum element (inline page number).
+    #[serde(
+        rename(serialize = "hp:autoNum", deserialize = "autoNum"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub auto_num: Option<HxAutoNum>,
 }
 
 /// `<hp:bookmark name="..."/>` — point bookmark element inside `<hp:ctrl>`.
@@ -564,7 +748,13 @@ pub struct HxSecPr {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub page_border_fills: Vec<HxPageBorderFill>,
-    // footNotePr, endNotePr, grid, startNum — still skipped by serde
+
+    /// `<hp:startNum>` — starting numbers for page/pic/tbl/equation.
+    /// Deserialized from secPr for round-trip fidelity; encoding is handled
+    /// by `enrich_sec_pr()` via raw XML injection (hence `skip_serializing`).
+    #[serde(rename = "startNum", default, skip_serializing)]
+    pub start_num: Option<HxStartNum>,
+    // footNotePr, endNotePr, grid — still skipped by serde
     // (no deny_unknown_fields). The encoder injects these as raw XML strings
     // via enrich_sec_pr().
 }
@@ -613,6 +803,26 @@ pub struct HxLineNumberShape {
     /// Starting line number.
     #[serde(rename = "@startNumber", default)]
     pub start_number: u32,
+}
+
+/// `<hp:startNum>` — starting numbers for auto-numbering within a section.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct HxStartNum {
+    /// Which page to start on: BOTH, ODD, EVEN.
+    #[serde(rename = "@pageStartsOn", default)]
+    pub page_starts_on: String,
+    /// Starting page number.
+    #[serde(rename = "@page", default)]
+    pub page: u32,
+    /// Starting picture number.
+    #[serde(rename = "@pic", default)]
+    pub pic: u32,
+    /// Starting table number.
+    #[serde(rename = "@tbl", default)]
+    pub tbl: u32,
+    /// Starting equation number.
+    #[serde(rename = "@equation", default)]
+    pub equation: u32,
 }
 
 /// `<hp:pageBorderFill>` — a single page border/fill entry.

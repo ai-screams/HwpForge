@@ -19,12 +19,40 @@ pub struct HxHead {
     pub version: String,
     #[serde(rename = "@secCnt", default)]
     pub sec_cnt: u32,
+    /// `<hh:beginNum>` — starting auto-numbering values.
+    #[serde(
+        rename(serialize = "hh:beginNum", deserialize = "beginNum"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub begin_num: Option<HxBeginNum>,
     #[serde(
         rename(serialize = "hh:refList", deserialize = "refList"),
         default,
         skip_serializing_if = "Option::is_none"
     )]
     pub ref_list: Option<HxRefList>,
+}
+
+/// `<hh:beginNum page="1" footnote="1" endnote="1" pic="1" tbl="1" equation="1"/>`.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Clone, Copy)]
+pub struct HxBeginNum {
+    #[serde(rename = "@page", default = "one")]
+    pub page: u32,
+    #[serde(rename = "@footnote", default = "one")]
+    pub footnote: u32,
+    #[serde(rename = "@endnote", default = "one")]
+    pub endnote: u32,
+    #[serde(rename = "@pic", default = "one")]
+    pub pic: u32,
+    #[serde(rename = "@tbl", default = "one")]
+    pub tbl: u32,
+    #[serde(rename = "@equation", default = "one")]
+    pub equation: u32,
+}
+
+fn one() -> u32 {
+    1
 }
 
 // ── RefList ───────────────────────────────────────────────────────
@@ -802,6 +830,10 @@ pub struct HxWinBrush {
     /// Hatch pattern color.
     #[serde(rename = "@hatchColor", default)]
     pub hatch_color: String,
+    /// Hatch pattern type (e.g. `"HORIZONTAL"`, `"VERTICAL"`, `"CROSS"`).
+    /// Absent for solid fills, present for pattern/hatch fills.
+    #[serde(rename = "@hatchStyle", default, skip_serializing_if = "Option::is_none")]
+    pub hatch_style: Option<String>,
     /// Alpha transparency value.
     #[serde(rename = "@alpha", default)]
     pub alpha: String,

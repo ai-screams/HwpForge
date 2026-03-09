@@ -1,17 +1,15 @@
 #![allow(clippy::vec_init_then_push)]
-//! Wave 7 Style Infrastructure verification — generates an actual HWPX file.
-//!
-//! This example exercises all Wave 7 features and verifies roundtrip fidelity:
+//! 스타일 인프라 검증 — StyleIndex, Alignment, BorderFill, charPr/paraPr 테스트
 //!
 //! 1. **StyleIndex on Paragraph** — `with_style()` for 바탕글/본문/개요 1-3
-//! 2. **Distribute/DistributeFlush alignment** — new `Alignment` variants
+//! 2. **Distribute/DistributeFlush alignment** — Alignment variants
 //! 3. **Dynamic borderFills** — 3 defaults + 1 user-defined (colored borders)
 //! 4. **Per-style charPr/paraPr** — 7+20 default shapes + user shapes
 //! 5. **Roundtrip decode** — encode → decode → verify everything preserved
 //!
 //! # Usage
 //! ```bash
-//! cargo run -p hwpforge-smithy-hwpx --example wave7_style_test
+//! cargo run -p hwpforge-smithy-hwpx --example style_infrastructure
 //! ```
 
 use hwpforge_core::document::Document;
@@ -346,7 +344,7 @@ fn main() {
     let bytes = HwpxEncoder::encode(&validated, &store, &image_store).expect("encode failed");
 
     std::fs::create_dir_all("temp").ok();
-    let path = "temp/wave7_style_test.hwpx";
+    let path = "temp/style_infrastructure.hwpx";
     std::fs::write(path, &bytes).expect("write failed");
     println!("[4] Encoded: {path} ({} bytes)", bytes.len());
 

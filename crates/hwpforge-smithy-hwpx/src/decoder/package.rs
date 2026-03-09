@@ -117,6 +117,30 @@ impl<'a> PackageReader<'a> {
         self.section_count
     }
 
+    /// Reads all `Contents/masterpage*.xml` entries from the archive.
+    ///
+    /// Returns a map from masterpage index to XML content.
+    /// E.g., `{0: "<masterPage>...</masterPage>"}` for `Contents/masterpage0.xml`.
+    pub fn read_masterpage_xmls(&mut self) -> HwpxResult<std::collections::HashMap<usize, String>> {
+        let mp_paths: Vec<(usize, String)> = self
+            .archive
+            .file_names()
+            .filter_map(|name| {
+                let stripped = name.strip_prefix("Contents/masterpage")?;
+                let idx_str = stripped.strip_suffix(".xml")?;
+                let idx: usize = idx_str.parse().ok()?;
+                Some((idx, name.to_string()))
+            })
+            .collect();
+
+        let mut result = std::collections::HashMap::new();
+        for (idx, path) in mp_paths {
+            let xml = self.read_entry(&path)?;
+            result.insert(idx, xml);
+        }
+        Ok(result)
+    }
+
     /// Reads all `Chart/*.xml` entries from the archive into a map.
     ///
     /// Each entry's full path (e.g. `"Chart/chart1.xml"`) becomes the key,

@@ -89,6 +89,10 @@ pub struct HxWinBrush {
     /// Hatch pattern color as `#RRGGBB`.
     #[serde(rename = "@hatchColor", default)]
     pub hatch_color: String,
+    /// Hatch pattern type (e.g. `"HORIZONTAL"`, `"VERTICAL"`, `"CROSS"`).
+    /// Absent for solid fills, present for pattern/hatch fills.
+    #[serde(rename = "@hatchStyle", default, skip_serializing_if = "Option::is_none")]
+    pub hatch_style: Option<String>,
     /// Alpha transparency (0 = opaque).
     #[serde(rename = "@alpha", default)]
     pub alpha: i32,
@@ -96,26 +100,84 @@ pub struct HxWinBrush {
 
 /// `<hc:fillBrush>` — fill brush container (core `hc:` namespace).
 ///
-/// Contains a `<hc:winBrush>` child. Use [`HxFillBrush::default_white`] for
-/// a standard white fill (the default for shapes in 한글).
+/// Per KS X 6101, fillBrush is an `xs:choice` — exactly ONE of `winBrush`,
+/// `gradation`, or `imgBrush`. Use [`HxFillBrush::default_white`] for a
+/// standard solid white fill, or [`HxFillBrush::gradient`] for gradient fills.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxFillBrush {
-    /// Solid/hatch fill brush.
-    #[serde(rename(serialize = "hc:winBrush", deserialize = "winBrush"))]
-    pub win_brush: HxWinBrush,
+    /// Solid/hatch fill brush (absent when gradient or image fill is used).
+    #[serde(
+        rename(serialize = "hc:winBrush", deserialize = "winBrush"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub win_brush: Option<HxWinBrush>,
+    /// Gradient fill (absent when solid or image fill is used).
+    #[serde(
+        rename(serialize = "hc:gradation", deserialize = "gradation"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub gradation: Option<HxGradation>,
 }
 
 impl HxFillBrush {
     /// Creates a standard white fill brush (matches 한글 default for shapes).
     pub fn default_white() -> Self {
         Self {
-            win_brush: HxWinBrush {
+            win_brush: Some(HxWinBrush {
                 face_color: "#FFFFFF".to_string(),
                 hatch_color: "#000000".to_string(),
+                hatch_style: None,
                 alpha: 0,
-            },
+            }),
+            gradation: None,
         }
     }
+}
+
+/// `<hc:gradation>` — gradient fill definition for shapes.
+///
+/// Contains gradient attributes and `<hc:color>` child elements for color stops.
+/// `stepCenter` and `alpha` attributes are required by 한글 even though missing
+/// from some spec references.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxGradation {
+    /// Gradient type: LINEAR, RADIAL, SQUARE, CONICAL.
+    #[serde(rename = "@type", default)]
+    pub gradation_type: String,
+    /// Gradient angle in degrees (0-360).
+    #[serde(rename = "@angle", default)]
+    pub angle: i32,
+    /// Gradient center X (0-100, percentage).
+    #[serde(rename = "@centerX", default)]
+    pub center_x: i32,
+    /// Gradient center Y (0-100, percentage).
+    #[serde(rename = "@centerY", default)]
+    pub center_y: i32,
+    /// Number of interpolation steps (255 = smooth).
+    #[serde(rename = "@step", default)]
+    pub step: i32,
+    /// Number of color stops.
+    #[serde(rename = "@colorNum", default)]
+    pub color_num: i32,
+    /// Step center position (0-100, default 50).
+    #[serde(rename = "@stepCenter", default)]
+    pub step_center: i32,
+    /// Alpha transparency (0 = opaque).
+    #[serde(rename = "@alpha", default)]
+    pub alpha: i32,
+    /// Color stop values.
+    #[serde(rename(serialize = "hc:color", deserialize = "color"), default)]
+    pub colors: Vec<HxGradColor>,
+}
+
+/// `<hc:color>` — a single gradient color stop.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxGradColor {
+    /// Color value as `#RRGGBB`.
+    #[serde(rename = "@value", default)]
+    pub value: String,
 }
 
 /// `<hp:shadow>` — drop shadow properties for drawing shapes.

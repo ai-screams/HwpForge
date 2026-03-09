@@ -22,8 +22,9 @@ use quick_xml::de::from_str;
 
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    HxCaption, HxChart, HxCompose, HxCtrl, HxDutmal, HxEquation, HxFootNote, HxHeaderFooter,
-    HxPageNum, HxParagraph, HxPic, HxRun, HxSection, HxSubList, HxTable, HxTableCell,
+    HxCaption, HxChart, HxCompose, HxCtrl, HxDutmal, HxEquation, HxFieldBegin, HxFootNote,
+    HxHeaderFooter, HxPageNum, HxParagraph, HxPic, HxRun, HxSection, HxSubList, HxTable,
+    HxTableCell,
 };
 
 /// Maximum nesting depth for tables-within-tables.
@@ -59,6 +60,8 @@ pub struct SectionParseResult {
     pub master_pages: Option<Vec<hwpforge_core::section::MasterPage>>,
     /// Text writing direction extracted from `<hp:secPr textDirection="...">`.
     pub text_direction: TextDirection,
+    /// Starting numbers extracted from `<hp:startNum>` in secPr.
+    pub begin_num: Option<hwpforge_core::section::BeginNum>,
 }
 
 /// Parses a section XML string into paragraphs and optional page settings.
@@ -83,8 +86,9 @@ pub fn parse_section(
     let mut line_number_shape = None;
     let mut page_border_fills = None;
     let mut text_direction = TextDirection::Horizontal;
+    let mut begin_num = None;
 
-    let mut paragraphs = section
+    let paragraphs = section
         .paragraphs
         .iter()
         .enumerate()
@@ -107,6 +111,9 @@ pub fn parse_section(
                         }
                         if page_border_fills.is_none() {
                             page_border_fills = extract_page_border_fills(sec_pr);
+                        }
+                        if begin_num.is_none() {
+                            begin_num = extract_begin_num(sec_pr);
                         }
                         text_direction = TextDirection::from_hwpx_str(&sec_pr.text_direction);
                     }
@@ -164,25 +171,6 @@ pub fn parse_section(
         })
         .collect::<HwpxResult<Vec<_>>>()?;
 
-    // Extract field-based controls (Bookmark span, Field, CrossRef, Memo, Hyperlink)
-    // that are invisible to serde (fieldBegin/fieldEnd interleaved XML).
-    let field_controls = extract_field_controls(xml);
-    if !field_controls.is_empty() {
-        // Inject field controls as runs in the first paragraph (or create one)
-        let target_para = if paragraphs.is_empty() {
-            paragraphs.push(Paragraph::new(ParaShapeIndex::new(0)));
-            paragraphs.last_mut().unwrap()
-        } else {
-            &mut paragraphs[0]
-        };
-        for ctrl in field_controls {
-            target_para.runs.push(Run {
-                content: RunContent::Control(Box::new(ctrl)),
-                char_shape_id: CharShapeIndex::new(0),
-            });
-        }
-    }
-
     Ok(SectionParseResult {
         paragraphs,
         page_settings,
@@ -195,6 +183,7 @@ pub fn parse_section(
         page_border_fills,
         master_pages: None,
         text_direction,
+        begin_num,
     })
 }
 
@@ -286,10 +275,17 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
     let char_shape_id = CharShapeIndex::new(hx.char_pr_id_ref as usize);
     let mut runs = Vec::new();
 
-    // Text runs
-    for text in &hx.texts {
-        if !text.text.is_empty() {
-            runs.push(Run { content: RunContent::Text(text.text.clone()), char_shape_id });
+    // Check if this run has a fieldBegin+fieldEnd pair — if so, the text
+    // is consumed by the field control and should NOT be emitted separately.
+    let has_field_pair = hx.ctrls.iter().any(|c| c.field_begin.is_some())
+        && hx.ctrls.iter().any(|c| c.field_end.is_some());
+
+    // Text runs — skip if consumed by field controls
+    if !has_field_pair {
+        for text in &hx.texts {
+            if !text.text.is_empty() {
+                runs.push(Run { content: RunContent::Text(text.text.clone()), char_shape_id });
+            }
         }
     }
 
@@ -306,7 +302,15 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
         }
     }
 
-    // Footnote / Endnote / Bookmark / IndexMark runs (from <hp:ctrl>)
+    // Footnote / Endnote / Bookmark / IndexMark / Field runs (from <hp:ctrl>)
+    //
+    // Field controls use fieldBegin/fieldEnd pairs. We collect fieldBegin ctrls
+    // and match them with fieldEnd ctrls to extract the field's text from
+    // intervening <hp:t> elements. The text runs between begin and end are
+    // consumed as the field's display text.
+    let mut field_begin: Option<&HxFieldBegin> = None;
+    let mut field_begin_char_shape: CharShapeIndex = char_shape_id;
+
     for ctrl in &hx.ctrls {
         if let Some(run) = decode_footnote(ctrl, char_shape_id, depth)? {
             runs.push(run);
@@ -319,6 +323,48 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
         }
         if let Some(run) = decode_indexmark(ctrl, char_shape_id) {
             runs.push(run);
+        }
+        // Field begin: remember for pairing with fieldEnd
+        if let Some(fb) = &ctrl.field_begin {
+            field_begin = Some(fb);
+            field_begin_char_shape = char_shape_id;
+        }
+        // Field end: pair with remembered fieldBegin and emit control
+        if ctrl.field_end.is_some() {
+            if let Some(fb) = field_begin.take() {
+                let field_text = collect_run_text(hx);
+                if let Some(run) =
+                    decode_field_control(fb, &field_text, field_begin_char_shape, depth)?
+                {
+                    runs.push(run);
+                }
+            }
+        }
+        // AutoNum (inline page number)
+        if let Some(an) = &ctrl.auto_num {
+            if an.num_type == "PAGE" {
+                runs.push(Run {
+                    content: RunContent::Control(Box::new(Control::Field {
+                        field_type: hwpforge_foundation::FieldType::PageNum,
+                        hint_text: None,
+                        help_text: None,
+                    })),
+                    char_shape_id,
+                });
+            }
+        }
+    }
+
+    // Handle self-closing fieldBegin without a matching fieldEnd (e.g. bookmark span start)
+    if let Some(fb) = field_begin.take() {
+        if fb.field_type == "BOOKMARK" {
+            runs.push(Run {
+                content: RunContent::Control(Box::new(Control::Bookmark {
+                    name: fb.name.clone(),
+                    bookmark_type: hwpforge_foundation::BookmarkType::SpanStart,
+                })),
+                char_shape_id: field_begin_char_shape,
+            });
         }
     }
 
@@ -535,221 +581,107 @@ fn decode_indexmark(ctrl: &HxCtrl, char_shape_id: CharShapeIndex) -> Option<Run>
     })
 }
 
-/// Extracts field-based controls (Bookmark span, Field, CrossRef, Memo) from raw section XML.
+/// Collects all text content from an `HxRun`'s `<hp:t>` elements.
 ///
-/// These controls use `fieldBegin`/`fieldEnd` pairs that serde cannot capture
-/// (interleaved ctrl-text-ctrl ordering). This function does a quick-xml scan
-/// of the raw XML to extract them and returns `(field_type, params)` tuples.
-pub(crate) fn extract_field_controls(xml: &str) -> Vec<Control> {
-    let mut controls = Vec::new();
-    let mut reader = quick_xml::Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
-    let mut buf = Vec::new();
-    let mut in_field_begin = false;
-    let mut field_type = String::new();
-    let mut field_name = String::new();
-    let mut params: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    let mut current_param_name = String::new();
-    let mut in_param = false;
-    let mut in_sublist = false;
-    let mut sublist_depth: usize = 0;
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(quick_xml::events::Event::Start(ref e)) => {
-                let local_name = e.local_name();
-                let local = std::str::from_utf8(local_name.as_ref()).unwrap_or("");
-                if local == "autoNum" {
-                    // <hp:autoNum numType="PAGE"> — inline page number
-                    let mut num_type = String::new();
-                    for attr in e.attributes().flatten() {
-                        let key_local = attr.key.local_name();
-                        let key = std::str::from_utf8(key_local.as_ref()).unwrap_or("");
-                        if key == "numType" {
-                            num_type = std::str::from_utf8(&attr.value).unwrap_or("").to_string();
-                        }
-                    }
-                    if num_type == "PAGE" {
-                        controls.push(Control::Field {
-                            field_type: hwpforge_foundation::FieldType::PageNum,
-                            hint_text: None,
-                            help_text: None,
-                        });
-                    }
-                } else if local == "fieldBegin" {
-                    in_field_begin = true;
-                    field_type.clear();
-                    field_name.clear();
-                    params.clear();
-                    for attr in e.attributes().flatten() {
-                        let key_local = attr.key.local_name();
-                        let key = std::str::from_utf8(key_local.as_ref()).unwrap_or("");
-                        let val = std::str::from_utf8(&attr.value).unwrap_or("").to_string();
-                        match key {
-                            "type" => field_type = val,
-                            "name" => field_name = val,
-                            _ => {}
-                        }
-                    }
-                } else if in_field_begin && !in_sublist {
-                    if local == "stringParam" || local == "integerParam" || local == "booleanParam"
-                    {
-                        in_param = true;
-                        current_param_name.clear();
-                        for attr in e.attributes().flatten() {
-                            let key_local = attr.key.local_name();
-                            let key = std::str::from_utf8(key_local.as_ref()).unwrap_or("");
-                            if key == "name" {
-                                current_param_name =
-                                    std::str::from_utf8(&attr.value).unwrap_or("").to_string();
-                            }
-                        }
-                    } else if local == "subList" {
-                        in_sublist = true;
-                        sublist_depth = 1;
-                    }
-                } else if in_sublist {
-                    sublist_depth += 1;
-                }
-            }
-            Ok(quick_xml::events::Event::End(ref e)) => {
-                let local_name = e.local_name();
-                let local = std::str::from_utf8(local_name.as_ref()).unwrap_or("");
-                if in_sublist {
-                    if local == "subList" {
-                        sublist_depth -= 1;
-                        if sublist_depth == 0 {
-                            in_sublist = false;
-                        }
-                    }
-                } else if local == "fieldBegin" || local == "fieldEnd" {
-                    if local == "fieldEnd" && in_field_begin {
-                        // fieldEnd closes the pair — emit control
-                    }
-                    if local == "fieldBegin" && in_field_begin {
-                        // Self-closing fieldBegin handled in Empty event; this is
-                        // a closing tag for a fieldBegin with children.
-                    }
-                } else if in_param {
-                    in_param = false;
-                }
-            }
-            Ok(quick_xml::events::Event::Empty(ref e)) => {
-                let local_name = e.local_name();
-                let local = std::str::from_utf8(local_name.as_ref()).unwrap_or("");
-                if local == "fieldBegin" {
-                    // Self-closing fieldBegin (e.g., bookmark span)
-                    field_type.clear();
-                    field_name.clear();
-                    for attr in e.attributes().flatten() {
-                        let key_local = attr.key.local_name();
-                        let key = std::str::from_utf8(key_local.as_ref()).unwrap_or("");
-                        let val = std::str::from_utf8(&attr.value).unwrap_or("").to_string();
-                        match key {
-                            "type" => field_type = val,
-                            "name" => field_name = val,
-                            _ => {}
-                        }
-                    }
-                    if field_type == "BOOKMARK" {
-                        controls.push(Control::Bookmark {
-                            name: field_name.clone(),
-                            bookmark_type: hwpforge_foundation::BookmarkType::SpanStart,
-                        });
-                    }
-                    in_field_begin = false;
-                } else if local == "fieldEnd" && !field_type.is_empty() {
-                    // Emit the control based on accumulated field_type + params
-                    match field_type.as_str() {
-                        "BOOKMARK" => {
-                            controls.push(Control::Bookmark {
-                                name: field_name.clone(),
-                                bookmark_type: hwpforge_foundation::BookmarkType::SpanStart,
-                            });
-                        }
-                        "CLICK_HERE" | "DATE" | "TIME" | "PAGE_NUM" | "DOC_SUMMARY"
-                        | "USER_INFO" => {
-                            let ft = field_type
-                                .parse::<hwpforge_foundation::FieldType>()
-                                .unwrap_or_default();
-                            controls.push(Control::Field {
-                                field_type: ft,
-                                hint_text: params.get("Direction").cloned(),
-                                help_text: params.get("HelpState").cloned(),
-                            });
-                        }
-                        "SUMMERY" => {
-                            // 한글 uses type="SUMMERY" (typo for Summary) for
-                            // date/time/author fields. Map to FieldType via Command.
-                            let cmd = params.get("Command").map(|s| s.as_str()).unwrap_or("");
-                            let ft = match cmd {
-                                "$modifiedtime" => hwpforge_foundation::FieldType::Date,
-                                "$createtime" => hwpforge_foundation::FieldType::Time,
-                                "$author" | "$title" => hwpforge_foundation::FieldType::DocSummary,
-                                "$lastsaveby" => hwpforge_foundation::FieldType::UserInfo,
-                                _ => hwpforge_foundation::FieldType::DocSummary,
-                            };
-                            controls.push(Control::Field {
-                                field_type: ft,
-                                hint_text: None,
-                                help_text: None,
-                            });
-                        }
-                        "CROSSREF" => {
-                            let target = params
-                                .get("RefPath")
-                                .map(|p| p.trim_start_matches("?#").to_string())
-                                .unwrap_or_default();
-                            let rt = params
-                                .get("RefType")
-                                .and_then(|s| s.parse::<hwpforge_foundation::RefType>().ok())
-                                .unwrap_or_default();
-                            let ct = params
-                                .get("RefContentType")
-                                .and_then(|s| s.parse::<hwpforge_foundation::RefContentType>().ok())
-                                .unwrap_or_default();
-                            let hl =
-                                params.get("RefHyperLink").map(|s| s == "true").unwrap_or(false);
-                            controls.push(Control::CrossRef {
-                                target_name: target,
-                                ref_type: rt,
-                                content_type: ct,
-                                as_hyperlink: hl,
-                            });
-                        }
-                        "MEMO" => {
-                            // Memo body is in subList inside fieldBegin — skip for now
-                            // (full memo decode requires parsing subList paragraphs)
-                            controls.push(Control::Memo {
-                                content: Vec::new(),
-                                author: String::new(),
-                                date: String::new(),
-                            });
-                        }
-                        "HYPERLINK" => {
-                            // Hyperlink decode — extract URL from params, text from XML
-                            let url = params.get("Path").cloned().unwrap_or_default();
-                            controls.push(Control::Hyperlink { text: String::new(), url });
-                        }
-                        _ => {}
-                    }
-                    field_type.clear();
-                    in_field_begin = false;
-                }
-            }
-            Ok(quick_xml::events::Event::Text(ref e)) => {
-                if in_param && !current_param_name.is_empty() {
-                    let text = reader.decoder().decode(e.as_ref()).unwrap_or_default().to_string();
-                    params.insert(current_param_name.clone(), text);
-                }
-            }
-            Ok(quick_xml::events::Event::Eof) => break,
-            Err(_) => break,
-            _ => {}
-        }
-        buf.clear();
+/// Used to extract the display text between a fieldBegin and fieldEnd pair.
+fn collect_run_text(hx: &HxRun) -> String {
+    let mut text = String::new();
+    for t in &hx.texts {
+        text.push_str(&t.text);
     }
-    controls
+    text
+}
+
+/// Extracts named parameter values from an `HxFieldBegin`'s parameters.
+fn get_field_param(fb: &HxFieldBegin, name: &str) -> Option<String> {
+    let params = fb.parameters.as_ref()?;
+    for sp in &params.string_params {
+        if sp.name == name {
+            return Some(sp.value.clone());
+        }
+    }
+    for ip in &params.integer_params {
+        if ip.name == name {
+            return Some(ip.value.clone());
+        }
+    }
+    for bp in &params.boolean_params {
+        if bp.name == name {
+            return Some(bp.value.clone());
+        }
+    }
+    None
+}
+
+/// Decodes a fieldBegin into the appropriate Core `Control`, using the run's text as display text.
+///
+/// Returns `None` for unrecognized field types.
+fn decode_field_control(
+    fb: &HxFieldBegin,
+    text: &str,
+    char_shape_id: CharShapeIndex,
+    depth: usize,
+) -> HwpxResult<Option<Run>> {
+    let control = match fb.field_type.as_str() {
+        "HYPERLINK" => {
+            let url = get_field_param(fb, "Path").unwrap_or_default();
+            Control::Hyperlink { text: text.to_string(), url }
+        }
+        "BOOKMARK" => Control::Bookmark {
+            name: fb.name.clone(),
+            bookmark_type: hwpforge_foundation::BookmarkType::SpanStart,
+        },
+        "CLICK_HERE" | "DATE" | "TIME" | "PAGE_NUM" | "DOC_SUMMARY" | "USER_INFO" => {
+            let ft = fb.field_type.parse::<hwpforge_foundation::FieldType>().unwrap_or_default();
+            Control::Field {
+                field_type: ft,
+                hint_text: get_field_param(fb, "Direction"),
+                help_text: get_field_param(fb, "HelpState"),
+            }
+        }
+        "SUMMERY" => {
+            // 한글 uses type="SUMMERY" (typo for Summary) for
+            // date/time/author fields. Map to FieldType via Command param.
+            let cmd = get_field_param(fb, "Command").unwrap_or_default();
+            let ft = match cmd.as_str() {
+                "$modifiedtime" => hwpforge_foundation::FieldType::Date,
+                "$createtime" => hwpforge_foundation::FieldType::Time,
+                "$author" | "$title" => hwpforge_foundation::FieldType::DocSummary,
+                "$lastsaveby" => hwpforge_foundation::FieldType::UserInfo,
+                _ => hwpforge_foundation::FieldType::DocSummary,
+            };
+            Control::Field { field_type: ft, hint_text: None, help_text: None }
+        }
+        "CROSSREF" => {
+            let target = get_field_param(fb, "RefPath")
+                .map(|p| p.trim_start_matches("?#").to_string())
+                .unwrap_or_default();
+            let rt = get_field_param(fb, "RefType")
+                .and_then(|s| s.parse::<hwpforge_foundation::RefType>().ok())
+                .unwrap_or_default();
+            let ct = get_field_param(fb, "RefContentType")
+                .and_then(|s| s.parse::<hwpforge_foundation::RefContentType>().ok())
+                .unwrap_or_default();
+            let hl = get_field_param(fb, "RefHyperLink").map(|s| s == "true").unwrap_or(false);
+            Control::CrossRef {
+                target_name: target,
+                ref_type: rt,
+                content_type: ct,
+                as_hyperlink: hl,
+            }
+        }
+        "MEMO" => {
+            // Memo body is in subList inside fieldBegin
+            let content = if let Some(sub_list) = &fb.sub_list {
+                decode_sublist_paragraphs(sub_list, depth)?
+            } else {
+                Vec::new()
+            };
+            Control::Memo { content, author: String::new(), date: String::new() }
+        }
+        _ => return Ok(None),
+    };
+    Ok(Some(Run { content: RunContent::Control(Box::new(control)), char_shape_id }))
 }
 
 // Shape decode functions (decode_textbox, decode_line, decode_ellipse, decode_polygon)
@@ -877,8 +809,6 @@ fn decode_chart(
         char_shape_id,
     }))
 }
-
-// decode_shape_style is defined in `super::shapes`.
 
 /// Parses a `#RRGGBB` hex string into a [`Color`].
 pub(crate) fn parse_hex_color(s: &str) -> Option<Color> {
@@ -1050,8 +980,8 @@ fn extract_line_number_shape(
 
     // restart_type: CONTINUOUS=0, PAGE=1, SECTION=2
     let restart_type = match hx.restart_type.as_str() {
-        "PAGE" => 1,
-        "SECTION" => 2,
+        "PAGE" | "1" => 1,
+        "SECTION" | "2" => 2,
         _ => 0, // CONTINUOUS
     };
 
@@ -1060,6 +990,21 @@ fn extract_line_number_shape(
         count_by: hx.count_by,
         distance: HwpUnit::new(hx.distance).unwrap_or(HwpUnit::ZERO),
         start_number: hx.start_number,
+    })
+}
+
+/// Extracts [`BeginNum`] from an `HxSecPr`'s `<hp:startNum>` element.
+fn extract_begin_num(
+    sec_pr: &crate::schema::section::HxSecPr,
+) -> Option<hwpforge_core::section::BeginNum> {
+    let sn = sec_pr.start_num.as_ref()?;
+    Some(hwpforge_core::section::BeginNum {
+        page: sn.page,
+        pic: sn.pic,
+        tbl: sn.tbl,
+        equation: sn.equation,
+        footnote: 1,
+        endnote: 1,
     })
 }
 
@@ -2249,50 +2194,64 @@ mod tests {
         }
     }
 
-    // ── extract_field_controls tests ─────────────────────────────
+    // ── serde field control tests ──────────────────────────────────
 
-    #[test]
-    fn extract_field_controls_autonum_page() {
-        let xml = r#"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
-            <hp:p>
-                <hp:run charPrIDRef="0">
-                    <hp:ctrl>
-                        <hp:autoNum num="1" numType="PAGE">
-                            <hp:autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar="" supscript="0"/>
-                        </hp:autoNum>
-                    </hp:ctrl>
-                </hp:run>
-            </hp:p>
-        </hs:sec>"#;
-        let controls = extract_field_controls(xml);
-        assert_eq!(controls.len(), 1, "autoNum PAGE must produce one control");
-        match &controls[0] {
-            hwpforge_core::Control::Field { field_type, .. } => {
-                assert_eq!(*field_type, hwpforge_foundation::FieldType::PageNum);
-            }
-            other => panic!("expected Field PageNum, got {other:?}"),
-        }
+    /// Helper: find control runs in a parsed section's paragraphs.
+    fn find_controls(result: &SectionParseResult) -> Vec<&hwpforge_core::Control> {
+        result
+            .paragraphs
+            .iter()
+            .flat_map(|p| p.runs.iter())
+            .filter_map(|r| match &r.content {
+                RunContent::Control(ctrl) => Some(ctrl.as_ref()),
+                _ => None,
+            })
+            .collect()
     }
 
     #[test]
-    fn extract_field_controls_summery_modifiedtime() {
-        let xml = r##"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
-            <hp:run charPrIDRef="0">
-                <hp:ctrl>
-                    <hp:fieldBegin id="0" type="SUMMERY" name="" editable="1" dirty="0" zorder="-1" fieldid="628321650" metaTag="">
-                        <hp:parameters cnt="3" name="">
-                            <hp:integerParam name="Prop">8</hp:integerParam>
-                            <hp:stringParam name="Command">$modifiedtime</hp:stringParam>
-                            <hp:stringParam name="Property">$modifiedtime</hp:stringParam>
-                        </hp:parameters>
-                    </hp:fieldBegin>
-                </hp:ctrl>
-                <hp:t>2026-03-06</hp:t>
-                <hp:ctrl><hp:fieldEnd beginIDRef="0" fieldid="628321650"/></hp:ctrl>
-            </hp:run>
-        </hs:sec>"##;
-        let controls = extract_field_controls(xml);
-        // Should decode SUMMERY/$modifiedtime → FieldType::Date
+    fn serde_field_autonum_page() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <autoNum num="1" numType="PAGE">
+                            <autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar="" supscript="0"/>
+                        </autoNum>
+                    </ctrl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let controls = find_controls(&result);
+        let page_num = controls.iter().find(|c| {
+            matches!(c, hwpforge_core::Control::Field { field_type, .. }
+                if *field_type == hwpforge_foundation::FieldType::PageNum)
+        });
+        assert!(page_num.is_some(), "autoNum PAGE must produce Field PageNum control");
+    }
+
+    #[test]
+    fn serde_field_summery_modifiedtime() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <fieldBegin id="0" type="SUMMERY" name="" editable="1" dirty="0" zorder="-1" fieldid="628321650" metaTag="">
+                            <parameters cnt="3" name="">
+                                <integerParam name="Prop">8</integerParam>
+                                <stringParam name="Command">$modifiedtime</stringParam>
+                                <stringParam name="Property">$modifiedtime</stringParam>
+                            </parameters>
+                        </fieldBegin>
+                    </ctrl>
+                    <t>2026-03-06</t>
+                    <ctrl><fieldEnd beginIDRef="0" fieldid="628321650"/></ctrl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let controls = find_controls(&result);
         let date_ctrl = controls.iter().find(|c| {
             matches!(c, hwpforge_core::Control::Field { field_type, .. }
                 if *field_type == hwpforge_foundation::FieldType::Date)
@@ -2301,23 +2260,26 @@ mod tests {
     }
 
     #[test]
-    fn extract_field_controls_summery_createtime() {
-        let xml = r##"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
-            <hp:run charPrIDRef="0">
-                <hp:ctrl>
-                    <hp:fieldBegin id="0" type="SUMMERY" name="" editable="1" dirty="0" zorder="-1" fieldid="628321650" metaTag="">
-                        <hp:parameters cnt="3" name="">
-                            <hp:integerParam name="Prop">8</hp:integerParam>
-                            <hp:stringParam name="Command">$createtime</hp:stringParam>
-                            <hp:stringParam name="Property">$createtime</hp:stringParam>
-                        </hp:parameters>
-                    </hp:fieldBegin>
-                </hp:ctrl>
-                <hp:t> </hp:t>
-                <hp:ctrl><hp:fieldEnd beginIDRef="0" fieldid="628321650"/></hp:ctrl>
-            </hp:run>
-        </hs:sec>"##;
-        let controls = extract_field_controls(xml);
+    fn serde_field_summery_createtime() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <fieldBegin id="0" type="SUMMERY" name="" editable="1" dirty="0" zorder="-1" fieldid="628321650" metaTag="">
+                            <parameters cnt="3" name="">
+                                <integerParam name="Prop">8</integerParam>
+                                <stringParam name="Command">$createtime</stringParam>
+                                <stringParam name="Property">$createtime</stringParam>
+                            </parameters>
+                        </fieldBegin>
+                    </ctrl>
+                    <t> </t>
+                    <ctrl><fieldEnd beginIDRef="0" fieldid="628321650"/></ctrl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let controls = find_controls(&result);
         let time_ctrl = controls.iter().find(|c| {
             matches!(c, hwpforge_core::Control::Field { field_type, .. }
                 if *field_type == hwpforge_foundation::FieldType::Time)
@@ -2326,23 +2288,26 @@ mod tests {
     }
 
     #[test]
-    fn extract_field_controls_summery_author() {
-        let xml = r##"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
-            <hp:run charPrIDRef="0">
-                <hp:ctrl>
-                    <hp:fieldBegin id="0" type="SUMMERY" name="" editable="1" dirty="0" zorder="-1" fieldid="628321650" metaTag="">
-                        <hp:parameters cnt="3" name="">
-                            <hp:integerParam name="Prop">8</hp:integerParam>
-                            <hp:stringParam name="Command">$author</hp:stringParam>
-                            <hp:stringParam name="Property">$author</hp:stringParam>
-                        </hp:parameters>
-                    </hp:fieldBegin>
-                </hp:ctrl>
-                <hp:t> </hp:t>
-                <hp:ctrl><hp:fieldEnd beginIDRef="0" fieldid="628321650"/></hp:ctrl>
-            </hp:run>
-        </hs:sec>"##;
-        let controls = extract_field_controls(xml);
+    fn serde_field_summery_author() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <fieldBegin id="0" type="SUMMERY" name="" editable="1" dirty="0" zorder="-1" fieldid="628321650" metaTag="">
+                            <parameters cnt="3" name="">
+                                <integerParam name="Prop">8</integerParam>
+                                <stringParam name="Command">$author</stringParam>
+                                <stringParam name="Property">$author</stringParam>
+                            </parameters>
+                        </fieldBegin>
+                    </ctrl>
+                    <t> </t>
+                    <ctrl><fieldEnd beginIDRef="0" fieldid="628321650"/></ctrl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let controls = find_controls(&result);
         let doc_ctrl = controls.iter().find(|c| {
             matches!(c, hwpforge_core::Control::Field { field_type, .. }
                 if *field_type == hwpforge_foundation::FieldType::DocSummary)
@@ -2351,23 +2316,26 @@ mod tests {
     }
 
     #[test]
-    fn extract_field_controls_summery_lastsaveby() {
-        let xml = r##"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
-            <hp:run charPrIDRef="0">
-                <hp:ctrl>
-                    <hp:fieldBegin id="0" type="SUMMERY" name="" editable="1" dirty="0" zorder="-1" fieldid="628321650" metaTag="">
-                        <hp:parameters cnt="3" name="">
-                            <hp:integerParam name="Prop">8</hp:integerParam>
-                            <hp:stringParam name="Command">$lastsaveby</hp:stringParam>
-                            <hp:stringParam name="Property">$lastsaveby</hp:stringParam>
-                        </hp:parameters>
-                    </hp:fieldBegin>
-                </hp:ctrl>
-                <hp:t> </hp:t>
-                <hp:ctrl><hp:fieldEnd beginIDRef="0" fieldid="628321650"/></hp:ctrl>
-            </hp:run>
-        </hs:sec>"##;
-        let controls = extract_field_controls(xml);
+    fn serde_field_summery_lastsaveby() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <fieldBegin id="0" type="SUMMERY" name="" editable="1" dirty="0" zorder="-1" fieldid="628321650" metaTag="">
+                            <parameters cnt="3" name="">
+                                <integerParam name="Prop">8</integerParam>
+                                <stringParam name="Command">$lastsaveby</stringParam>
+                                <stringParam name="Property">$lastsaveby</stringParam>
+                            </parameters>
+                        </fieldBegin>
+                    </ctrl>
+                    <t> </t>
+                    <ctrl><fieldEnd beginIDRef="0" fieldid="628321650"/></ctrl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let controls = find_controls(&result);
         let ui_ctrl = controls.iter().find(|c| {
             matches!(c, hwpforge_core::Control::Field { field_type, .. }
                 if *field_type == hwpforge_foundation::FieldType::UserInfo)
@@ -2376,25 +2344,28 @@ mod tests {
     }
 
     #[test]
-    fn extract_field_controls_crossref() {
-        let xml = r##"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
-            <hp:run charPrIDRef="0">
-                <hp:ctrl>
-                    <hp:fieldBegin type="CROSSREF" editable="false" dirty="false" zorder="-1" fieldid="0" name="">
-                        <hp:parameters cnt="5" name="">
-                            <hp:stringParam name="RefPath">?#mybook</hp:stringParam>
-                            <hp:stringParam name="RefType">CURRENT</hp:stringParam>
-                            <hp:stringParam name="RefContentType">PAGE_NUMBER</hp:stringParam>
-                            <hp:booleanParam name="RefHyperLink">true</hp:booleanParam>
-                            <hp:stringParam name="RefOpenType">HYPERLINK_JUMP_DONTCARE</hp:stringParam>
-                        </hp:parameters>
-                    </hp:fieldBegin>
-                </hp:ctrl>
-                <hp:t>mybook</hp:t>
-                <hp:ctrl><hp:fieldEnd beginIDRef="0" fieldid="0"/></hp:ctrl>
-            </hp:run>
-        </hs:sec>"##;
-        let controls = extract_field_controls(xml);
+    fn serde_field_crossref() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <fieldBegin type="CROSSREF" editable="false" dirty="false" zorder="-1" fieldid="0" name="">
+                            <parameters cnt="5" name="">
+                                <stringParam name="RefPath">?#mybook</stringParam>
+                                <stringParam name="RefType">CURRENT</stringParam>
+                                <stringParam name="RefContentType">PAGE_NUMBER</stringParam>
+                                <booleanParam name="RefHyperLink">true</booleanParam>
+                                <stringParam name="RefOpenType">HYPERLINK_JUMP_DONTCARE</stringParam>
+                            </parameters>
+                        </fieldBegin>
+                    </ctrl>
+                    <t>mybook</t>
+                    <ctrl><fieldEnd beginIDRef="0" fieldid="0"/></ctrl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let controls = find_controls(&result);
         let crossref =
             controls.iter().find(|c| matches!(c, hwpforge_core::Control::CrossRef { .. }));
         assert!(crossref.is_some(), "CROSSREF field must produce CrossRef control");
@@ -2405,15 +2376,18 @@ mod tests {
     }
 
     #[test]
-    fn extract_field_controls_bookmark_self_closing() {
-        let xml = r##"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
-            <hp:run charPrIDRef="0">
-                <hp:ctrl>
-                    <hp:fieldBegin type="BOOKMARK" editable="false" dirty="false" zorder="-1" fieldid="0" name="spanmark"/>
-                </hp:ctrl>
-            </hp:run>
-        </hs:sec>"##;
-        let controls = extract_field_controls(xml);
+    fn serde_field_bookmark_self_closing() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <fieldBegin type="BOOKMARK" editable="false" dirty="false" zorder="-1" fieldid="0" name="spanmark"/>
+                    </ctrl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let controls = find_controls(&result);
         let bm = controls.iter().find(|c| {
             matches!(
                 c,
@@ -2430,60 +2404,106 @@ mod tests {
     }
 
     #[test]
-    fn extract_field_controls_hyperlink() {
-        let xml = r##"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
-            <hp:run charPrIDRef="0">
-                <hp:ctrl>
-                    <hp:fieldBegin type="HYPERLINK" editable="false" dirty="false" zorder="-1" fieldid="0" name="">
-                        <hp:parameters cnt="4" name="">
-                            <hp:stringParam name="Path">https://example.com</hp:stringParam>
-                        </hp:parameters>
-                    </hp:fieldBegin>
-                </hp:ctrl>
-                <hp:t>link text</hp:t>
-                <hp:ctrl><hp:fieldEnd beginIDRef="0" fieldid="0"/></hp:ctrl>
-            </hp:run>
-        </hs:sec>"##;
-        let controls = extract_field_controls(xml);
+    fn serde_field_hyperlink() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <fieldBegin type="HYPERLINK" editable="false" dirty="false" zorder="-1" fieldid="0" name="">
+                            <parameters cnt="4" name="">
+                                <stringParam name="Path">https://example.com</stringParam>
+                            </parameters>
+                        </fieldBegin>
+                    </ctrl>
+                    <t>link text</t>
+                    <ctrl><fieldEnd beginIDRef="0" fieldid="0"/></ctrl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let controls = find_controls(&result);
         let hyperlink =
             controls.iter().find(|c| matches!(c, hwpforge_core::Control::Hyperlink { .. }));
         assert!(hyperlink.is_some(), "HYPERLINK field must produce Hyperlink control");
-        if let Some(hwpforge_core::Control::Hyperlink { url, .. }) = hyperlink {
+        if let Some(hwpforge_core::Control::Hyperlink { url, text, .. }) = hyperlink {
             assert_eq!(url, "https://example.com");
+            assert_eq!(text, "link text", "hyperlink text must be captured from run");
         }
     }
 
     #[test]
-    fn extract_field_controls_memo() {
-        let xml = r##"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph">
-            <hp:run charPrIDRef="0">
-                <hp:ctrl>
-                    <hp:fieldBegin type="MEMO" editable="false" dirty="false" zorder="-1" fieldid="0" name="">
-                        <hp:parameters cnt="2" name="">
-                            <hp:integerParam name="MemoShapeID">0</hp:integerParam>
-                            <hp:stringParam name="MemoType">DEFAULT</hp:stringParam>
-                        </hp:parameters>
-                        <hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP"
-                                    linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">
-                            <hp:p paraPrIDRef="0"><hp:run charPrIDRef="0"><hp:t>memo content</hp:t></hp:run></hp:p>
-                        </hp:subList>
-                    </hp:fieldBegin>
-                </hp:ctrl>
-                <hp:t/>
-                <hp:ctrl><hp:fieldEnd beginIDRef="0" fieldid="0"/></hp:ctrl>
-            </hp:run>
-        </hs:sec>"##;
-        let controls = extract_field_controls(xml);
+    fn serde_field_memo() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <fieldBegin type="MEMO" editable="false" dirty="false" zorder="-1" fieldid="0" name="">
+                            <parameters cnt="2" name="">
+                                <integerParam name="MemoShapeID">0</integerParam>
+                                <stringParam name="MemoType">DEFAULT</stringParam>
+                            </parameters>
+                            <subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP"
+                                     linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">
+                                <p paraPrIDRef="0"><run charPrIDRef="0"><t>memo content</t></run></p>
+                            </subList>
+                        </fieldBegin>
+                    </ctrl>
+                    <ctrl><fieldEnd beginIDRef="0" fieldid="0"/></ctrl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let controls = find_controls(&result);
         let memo = controls.iter().find(|c| matches!(c, hwpforge_core::Control::Memo { .. }));
         assert!(memo.is_some(), "MEMO field must produce Memo control");
+        if let Some(hwpforge_core::Control::Memo { content, .. }) = memo {
+            assert_eq!(content.len(), 1, "memo should have 1 paragraph from subList");
+            assert_eq!(
+                content[0].runs[0].content.as_text(),
+                Some("memo content"),
+                "memo body text must be decoded from subList"
+            );
+        }
     }
 
     #[test]
-    fn extract_field_controls_empty_xml_no_controls() {
+    fn serde_field_empty_xml_no_controls() {
         let xml =
             r#"<sec><p paraPrIDRef="0"><run charPrIDRef="0"><t>no fields</t></run></p></sec>"#;
-        let controls = extract_field_controls(xml);
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let controls = find_controls(&result);
         assert!(controls.is_empty(), "plain text produces no field controls");
+    }
+
+    #[test]
+    fn serde_field_stays_in_correct_paragraph() {
+        // Field controls should stay in the paragraph they belong to, not get
+        // dumped into paragraph 0 like the old extract_field_controls() did.
+        let xml = r#"<sec>
+            <p paraPrIDRef="0"><run charPrIDRef="0"><t>First paragraph</t></run></p>
+            <p paraPrIDRef="1">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <fieldBegin type="HYPERLINK" editable="false" dirty="false" zorder="-1" fieldid="0" name="">
+                            <parameters cnt="1" name="">
+                                <stringParam name="Path">https://example.com</stringParam>
+                            </parameters>
+                        </fieldBegin>
+                    </ctrl>
+                    <t>link</t>
+                    <ctrl><fieldEnd beginIDRef="0" fieldid="0"/></ctrl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        // First paragraph should have no controls
+        let p0_controls: Vec<_> =
+            result.paragraphs[0].runs.iter().filter(|r| r.content.is_control()).collect();
+        assert!(p0_controls.is_empty(), "first paragraph must have no controls");
+        // Second paragraph should have the hyperlink control
+        let p1_controls: Vec<_> =
+            result.paragraphs[1].runs.iter().filter(|r| r.content.is_control()).collect();
+        assert_eq!(p1_controls.len(), 1, "second paragraph must have 1 control");
     }
 
     // ── Visibility decoding via secPr ────────────────────────────
@@ -2571,6 +2591,7 @@ mod tests {
             line_number_shape: None,
             page_pr: None,
             page_border_fills: vec![],
+            start_num: None,
         }
     }
 

@@ -376,6 +376,114 @@ Paragraph::with_runs(vec![
 
 `page_break: u32::from(para.page_break)` — hardcoded 0이 아닌 실제 필드값 사용.
 
+### 18. Flip은 `rotMatrix`에 인코딩 — scaMatrix/transMatrix는 identity 유지
+
+```xml
+<!-- ❌ WRONG — scaMatrix에 flip 저장 → 드래그 잔영이 원본, 회전/대칭 메뉴 비활성화 -->
+<hp:flip horizontal="1" vertical="0"/>
+<hp:renderingInfo>
+  <hc:transMatrix e1="1" e2="0" e3="{width}" e4="0" e5="1" e6="0"/>
+  <hc:scaMatrix e1="-1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
+  <hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
+</hp:renderingInfo>
+
+<!-- ✅ CORRECT — rotMatrix에 flip + 보정 이동, scaMatrix/transMatrix는 identity -->
+<hp:flip horizontal="1" vertical="0"/>
+<hp:renderingInfo>
+  <hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
+  <hc:scaMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
+  <hc:rotMatrix e1="-1" e2="0" e3="{width}" e4="0" e5="1" e6="0"/>
+</hp:renderingInfo>
+```
+
+한글은 flip을 `rotMatrix`에서 읽음. `scaMatrix`에 넣으면 수학적으로 동일하지만:
+
+- 드래그 시 잔영(ghost)이 원본(반전 전) 모양으로 표시됨
+- 우클릭 메뉴의 회전/대칭 기능이 비활성화됨
+
+### 19. fillBrush는 xs:choice — winBrush/gradation/imgBrush 중 하나만
+
+```xml
+<!-- ❌ WRONG — winBrush와 gradation 동시 출력 (xs:choice 위반) -->
+<hc:fillBrush>
+  <hc:winBrush faceColor="none" hatchColor="#000000" alpha="0"/>
+  <hc:gradation type="LINEAR" angle="0" ...>
+    <hc:color value="#FF0000"/><hc:color value="#0000FF"/>
+  </hc:gradation>
+</hc:fillBrush>
+
+<!-- ✅ CORRECT — gradation만 (winBrush 없음) -->
+<hc:fillBrush>
+  <hc:gradation type="LINEAR" angle="0" centerX="0" centerY="0"
+    step="255" colorNum="2" stepCenter="50" alpha="0">
+    <hc:color value="#FF0000"/>
+    <hc:color value="#0000FF"/>
+  </hc:gradation>
+</hc:fillBrush>
+```
+
+KS X 6101 스펙: "`<fillBrush>` 요소는 세 개의 하위 요소 중 **하나의 요소**를 가질 수 있다(choice)."
+hwpxlib(Java)도 세 필드 모두 nullable. 도형(DrawingObject)과 borderFill이 동일한 `hc:FillBrushType` 사용.
+`gradation` 필수 속성: type, angle, centerX, centerY, step, colorNum, stepCenter, alpha + `<hc:color>` 자식.
+
+- **Horizontal flip**: `rotMatrix e1="-1"`, `e3=width`
+- **Vertical flip**: `rotMatrix e5="-1"`, `e6=height`
+- **Both**: 양쪽 모두 적용
+- **Pipeline**: `point' = transMatrix × rotMatrix × scaMatrix × point`
+- **검증**: `15_shapes_advanced.hwpx` Section 6 — 비대칭 깃발 도형으로 4방향 반전 확인
+- **적용 대상**: 모든 도형 (Polygon, Ellipse, Line, Arc, Curve, ConnectLine, TextBox)
+
+### 20. Rotation은 정수 degrees + CCW 방향 + 중심 이동 포함
+
+```xml
+<!-- ❌ WRONG — centidegrees, CW 방향, 이동 없음 → 도형이 원점 기준 회전 -->
+<hp:rotationInfo angle="9000" centerX="3000" centerY="2000" rotateimage="1"/>
+<hc:rotMatrix e1="0" e2="1" e3="0" e4="-1" e5="0" e6="0"/>
+
+<!-- ✅ CORRECT — 정수 degrees, CCW 방향, 중심 기준 이동 포함 -->
+<hp:rotationInfo angle="90" centerX="3000" centerY="2000" rotateimage="1"/>
+<hc:rotMatrix e1="0" e2="-1" e3="5000" e4="1" e5="0" e6="-1000"/>
+```
+
+한글 회전 인코딩 규칙:
+
+- **angle 단위**: 정수 degrees (NOT centidegrees). 90° = `angle="90"` (NOT `"9000"`)
+- **rotMatrix 방향**: `[cos θ, -sin θ; sin θ, cos θ]` (CCW, 화면 좌표계에서 시계방향)
+- **rotMatrix 이동**: 중심 기준 회전을 위한 보정 필수
+  - `e3 = cx*(1-cos) + cy*sin`
+  - `e6 = cy*(1-cos) - cx*sin`
+  - `cx = width/2, cy = height/2`
+- **이동 없으면**: 도형이 바운딩 박스 원점(0,0) 기준으로 회전 → 위치 이탈
+- **scaMatrix, transMatrix**: 순수 회전 시 identity 유지
+
+### 21. PatternType BACK_SLASH/SLASH 반전 (spec 반전!)
+
+```rust
+// ❌ WRONG — spec대로 매핑하면 한글에서 역사선(\)과 사선(/)이 반대로 렌더링됨
+PatternType::BackSlash => "BACK_SLASH"  // 한글이 `/`로 렌더링
+PatternType::Slash => "SLASH"           // 한글이 `\`로 렌더링
+
+// ✅ CORRECT — 스왑하여 실제 렌더링과 일치
+PatternType::BackSlash => "SLASH"       // 한글이 `\`로 렌더링 ✓
+PatternType::Slash => "BACK_SLASH"      // 한글이 `/`로 렌더링 ✓
+```
+
+KS X 6101 XSD 문서에는 `BACK_SLASH = \\\\`, `SLASH = ////`이지만, 한글은 반대로 렌더링합니다.
+landscape 반전(gotcha #2)과 동일한 패턴. `PatternType`의 `Display`/`FromStr`에서 스왑 처리됨.
+
+### 22. 패턴 채우기는 winBrush + hatchStyle 필수
+
+```xml
+<!-- ❌ WRONG — hatchStyle 없으면 솔리드 채우기로 표시됨 -->
+<hc:winBrush faceColor="#FFD700" hatchColor="#000000" alpha="0"/>
+
+<!-- ✅ CORRECT — hatchStyle로 패턴 종류 지정 -->
+<hc:winBrush faceColor="#FFD700" hatchColor="#000000" hatchStyle="HORIZONTAL" alpha="0"/>
+```
+
+패턴 채우기 시 `hatchStyle` 속성 필수. 없으면 한글이 솔리드 채우기로 렌더링.
+유효값: `HORIZONTAL`, `VERTICAL`, `BACK_SLASH`, `SLASH`, `CROSS`, `CROSS_DIAGONAL`
+
 ---
 
 ## Phase Status

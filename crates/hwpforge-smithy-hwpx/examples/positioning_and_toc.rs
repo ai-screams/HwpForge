@@ -1,10 +1,10 @@
-//! Test HWPX for 3 new features: positioning, chart sub-variants, TOC titleMark.
+//! 도형 위치 지정, 차트 세부 변형, TOC titleMark 테스트
 //!
 //! Usage:
-//!   cargo run -p hwpforge-smithy-hwpx --example new_features_test
+//!   cargo run -p hwpforge-smithy-hwpx --example positioning_and_toc
 //!
 //! Output:
-//!   temp/new_features_test.hwpx
+//!   temp/positioning_and_toc.hwpx
 
 use hwpforge_core::chart::{
     BarShape, ChartData, ChartGrouping, ChartType, LegendPosition, OfPieType, RadarStyle,
@@ -409,10 +409,10 @@ fn main() {
     std::fs::create_dir_all("temp").expect("create temp dir");
 
     let images = ImageStore::new();
-    HwpxEncoder::encode_file("temp/new_features_test.hwpx", &validated, &store, &images)
+    HwpxEncoder::encode_file("temp/positioning_and_toc.hwpx", &validated, &store, &images)
         .expect("encode failed");
 
-    println!("Created: temp/new_features_test.hwpx");
+    println!("Created: temp/positioning_and_toc.hwpx");
     println!("Open in 한글 to verify:");
     println!("  - Section 1: heading_level → titleMark (삽입 > 차례에서 TOC 생성 가능)");
     println!("  - Section 2: Line/Polygon with horz_offset/vert_offset");

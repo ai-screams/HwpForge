@@ -254,11 +254,11 @@ fn section1_document_structure() -> Section {
     // ── 마스코트 이미지 + 캡션 ──
     let mut mascot_img = Image::from_path(
         "BinData/image1.png",
-        HwpUnit::from_mm(35.0).unwrap(),
-        HwpUnit::from_mm(35.0).unwrap(),
+        HwpUnit::from_mm(60.0).unwrap(),
+        HwpUnit::from_mm(60.0).unwrap(),
     );
     mascot_img.caption = Some(Caption::new(
-        vec![p("[그림 1] HwpForge 마스코트 (오리너구리)", CS_SMALL, PS_CENTER)],
+        vec![p("[그림 1] 쇠부리 (SoeBuri) — 한컴 문서를 불에 달구어 단단하게 벼려내는 대장장이 오리너구리 🔥", CS_SMALL, PS_CENTER)],
         CaptionSide::Bottom,
     ));
     paras.push(Paragraph::with_runs(
@@ -1344,7 +1344,8 @@ fn main() {
     // 스타일 스토어 구성
     let store = build_style_store();
     let mut image_store = ImageStore::new();
-    let mascot_bytes = std::fs::read("assets/mascot.png").expect("assets/mascot.png not found");
+    let mascot_bytes =
+        std::fs::read("assets/mascot-main.png").expect("assets/mascot-main.png not found");
     image_store.insert("image1.png", mascot_bytes);
 
     // 문서 구성: 4개 섹션

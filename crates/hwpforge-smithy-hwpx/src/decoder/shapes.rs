@@ -7,7 +7,7 @@
 use hwpforge_core::control::{Control, ShapeStyle};
 use hwpforge_core::run::{Run, RunContent};
 use hwpforge_foundation::{
-    ArcType, CharShapeIndex, Color, CurveSegmentType, DropCapStyle, Flip, HwpUnit,
+    ArcType, CharShapeIndex, Color, CurveSegmentType, DropCapStyle, Flip, HwpUnit, PatternType,
 };
 
 use crate::error::HwpxResult;
@@ -51,6 +51,14 @@ pub(crate) fn decode_textbox(
 
     let caption = rect.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
 
+    let style = decode_shape_style_full(
+        &rect.line_shape,
+        &rect.fill_brush,
+        rect.rotation_info.as_ref(),
+        rect.flip.as_ref(),
+        &rect.dropcap_style,
+    );
+
     Ok(Some(Run {
         content: RunContent::Control(Box::new(Control::TextBox {
             paragraphs,
@@ -59,7 +67,7 @@ pub(crate) fn decode_textbox(
             horz_offset,
             vert_offset,
             caption,
-            style: None,
+            style,
         })),
         char_shape_id,
     }))
@@ -109,7 +117,13 @@ pub(crate) fn decode_line(
             horz_offset,
             vert_offset,
             caption,
-            style: decode_shape_style(&line.line_shape, &line.fill_brush, &line.dropcap_style),
+            style: decode_shape_style_full(
+                &line.line_shape,
+                &line.fill_brush,
+                line.rotation_info.as_ref(),
+                line.flip.as_ref(),
+                &line.dropcap_style,
+            ),
         })),
         char_shape_id,
     })
@@ -171,9 +185,11 @@ pub(crate) fn decode_ellipse(
             vert_offset,
             paragraphs,
             caption,
-            style: decode_shape_style(
+            style: decode_shape_style_full(
                 &ellipse.line_shape,
                 &ellipse.fill_brush,
+                ellipse.rotation_info.as_ref(),
+                ellipse.flip.as_ref(),
                 &ellipse.dropcap_style,
             ),
         })),
@@ -222,9 +238,11 @@ pub(crate) fn decode_polygon(
             vert_offset,
             paragraphs,
             caption,
-            style: decode_shape_style(
+            style: decode_shape_style_full(
                 &polygon.line_shape,
                 &polygon.fill_brush,
+                polygon.rotation_info.as_ref(),
+                polygon.flip.as_ref(),
                 &polygon.dropcap_style,
             ),
         })),
@@ -232,19 +250,8 @@ pub(crate) fn decode_polygon(
     })
 }
 
-/// Extracts a [`ShapeStyle`] from HWPX shape common elements.
-///
-/// Maps `HxLineShape` and `HxFillBrush` to Core's `ShapeStyle`.
-/// Returns `None` if no style information is present.
-pub(crate) fn decode_shape_style(
-    line_shape: &Option<HxLineShape>,
-    fill_brush: &Option<HxFillBrush>,
-    dropcap_style: &str,
-) -> Option<ShapeStyle> {
-    decode_shape_style_full(line_shape, fill_brush, None, None, dropcap_style)
-}
-
-/// Extended shape style decoder that also extracts rotation, flip, arrow, and drop cap info.
+/// Extracts a [`ShapeStyle`] from HWPX shape common elements including rotation, flip, arrow,
+/// and drop cap info.
 pub(crate) fn decode_shape_style_full(
     line_shape: &Option<HxLineShape>,
     fill_brush: &Option<HxFillBrush>,
@@ -252,14 +259,50 @@ pub(crate) fn decode_shape_style_full(
     flip_info: Option<&crate::schema::section::HxFlip>,
     dropcap_style: &str,
 ) -> Option<ShapeStyle> {
-    use hwpforge_core::control::ArrowStyle;
-    use hwpforge_foundation::{ArrowSize, ArrowType};
+    use hwpforge_core::control::{ArrowStyle, Fill};
+    use hwpforge_foundation::{ArrowSize, ArrowType, GradientType};
 
     let fill_color: Option<Color> = fill_brush
         .as_ref()
-        .map(|fb| &fb.win_brush.face_color)
-        .filter(|c| !c.is_empty())
+        .and_then(|fb| fb.win_brush.as_ref())
+        .map(|wb| &wb.face_color)
+        .filter(|c| !c.is_empty() && *c != "none")
         .and_then(|c| parse_hex_color(c));
+
+    // Decode advanced fill (gradient or pattern)
+    let fill: Option<Fill> = fill_brush.as_ref().and_then(|fb| {
+        // Gradient takes priority (xs:choice — only one child)
+        if let Some(g) = fb.gradation.as_ref() {
+            let gradient_type = match g.gradation_type.as_str() {
+                "RADIAL" => GradientType::Radial,
+                "SQUARE" => GradientType::Square,
+                "CONICAL" => GradientType::Conical,
+                _ => GradientType::Linear,
+            };
+            return Some(Fill::Gradient {
+                gradient_type,
+                angle: g.angle,
+                colors: g
+                    .colors
+                    .iter()
+                    .map(|c| {
+                        let color = parse_hex_color(&c.value).unwrap_or(Color::BLACK);
+                        (color, 0)
+                    })
+                    .collect(),
+            });
+        }
+        // Pattern fill: winBrush with hatchStyle present
+        if let Some(wb) = fb.win_brush.as_ref() {
+            if let Some(ref hs) = wb.hatch_style {
+                let pattern_type = hs.parse::<PatternType>().unwrap_or(PatternType::Horizontal);
+                let fg = parse_hex_color(&wb.hatch_color).unwrap_or(Color::BLACK);
+                let bg = parse_hex_color(&wb.face_color).unwrap_or(Color::WHITE);
+                return Some(Fill::Pattern { pattern_type, fg_color: fg, bg_color: bg });
+            }
+        }
+        None
+    });
 
     let (line_color, line_width, line_style) = match line_shape.as_ref() {
         None => (None, None, None),
@@ -274,9 +317,8 @@ pub(crate) fn decode_shape_style_full(
         ),
     };
 
-    // Decode rotation (HWPX stores angle * 100)
-    let rotation: Option<f32> =
-        rotation_info.filter(|ri| ri.angle != 0).map(|ri| ri.angle as f32 / 100.0);
+    // Decode rotation (HWPX stores angle in integer degrees)
+    let rotation: Option<f32> = rotation_info.filter(|ri| ri.angle != 0).map(|ri| ri.angle as f32);
 
     // Decode flip
     let flip: Option<Flip> = flip_info.and_then(|fi| match (fi.horizontal, fi.vertical) {
@@ -319,6 +361,7 @@ pub(crate) fn decode_shape_style_full(
         || line_width.is_some()
         || line_style.is_some()
         || fill_color.is_some()
+        || fill.is_some()
         || rotation.is_some()
         || flip.is_some()
         || head_arrow.is_some()
@@ -338,7 +381,7 @@ pub(crate) fn decode_shape_style_full(
         flip,
         head_arrow,
         tail_arrow,
-        fill: None,
+        fill,
         drop_cap_style: drop_cap,
     })
 }
@@ -547,8 +590,20 @@ mod tests {
         HxConnectLine, HxControlPoint, HxControlPoints, HxCurve, HxCurveSegment, HxEllipse,
         HxFillBrush, HxFlip, HxLine, HxLineShape, HxPoint, HxRotationInfo, HxTablePos, HxTableSz,
     };
-    use hwpforge_core::control::{Control, ShapePoint};
-    use hwpforge_foundation::{ArcType, ArrowSize, ArrowType, CharShapeIndex, DropCapStyle, Flip};
+    use hwpforge_core::control::{Control, Fill, ShapePoint};
+
+    /// Test-only convenience wrapper that calls `decode_shape_style_full` without rotation/flip.
+    fn decode_shape_style(
+        line_shape: &Option<HxLineShape>,
+        fill_brush: &Option<HxFillBrush>,
+        dropcap_style: &str,
+    ) -> Option<ShapeStyle> {
+        decode_shape_style_full(line_shape, fill_brush, None, None, dropcap_style)
+    }
+
+    use hwpforge_foundation::{
+        ArcType, ArrowSize, ArrowType, CharShapeIndex, Color, DropCapStyle, Flip, PatternType,
+    };
 
     // ── Helper builders ──────────────────────────────────────────────
 
@@ -583,11 +638,13 @@ mod tests {
     fn make_fill_brush(face_color: &str) -> HxFillBrush {
         use crate::schema::shapes::HxWinBrush;
         HxFillBrush {
-            win_brush: HxWinBrush {
+            win_brush: Some(HxWinBrush {
                 face_color: face_color.to_string(),
                 hatch_color: "#000000".to_string(),
+                hatch_style: None,
                 alpha: 0,
-            },
+            }),
+            gradation: None,
         }
     }
 
@@ -891,7 +948,7 @@ mod tests {
 
     #[test]
     fn decode_shape_style_full_rotation_extracted() {
-        let ri = HxRotationInfo { angle: 4500, center_x: 50, center_y: 50, rotate_image: 1 };
+        let ri = HxRotationInfo { angle: 45, center_x: 50, center_y: 50, rotate_image: 1 };
         let style = decode_shape_style_full(&None, &None, Some(&ri), None, "None").unwrap();
         let rot = style.rotation.unwrap();
         assert!((rot - 45.0f32).abs() < 0.01, "45 degrees expected, got {rot}");
@@ -934,12 +991,124 @@ mod tests {
 
     #[test]
     fn decode_shape_style_full_combined_rotation_and_flip() {
-        let ri = HxRotationInfo { angle: 9000, center_x: 0, center_y: 0, rotate_image: 1 };
+        let ri = HxRotationInfo { angle: 90, center_x: 0, center_y: 0, rotate_image: 1 };
         let fi = HxFlip { horizontal: 1, vertical: 0 };
         let style = decode_shape_style_full(&None, &None, Some(&ri), Some(&fi), "None").unwrap();
         let rot = style.rotation.unwrap();
         assert!((rot - 90.0f32).abs() < 0.01);
         assert_eq!(style.flip, Some(Flip::Horizontal));
+    }
+
+    // ── pattern fill decode tests ─────────────────────────────────────
+
+    #[test]
+    fn decode_shape_style_pattern_fill_horizontal() {
+        let fb = Some(HxFillBrush {
+            win_brush: Some(crate::schema::shapes::HxWinBrush {
+                face_color: "#FFD700".to_string(),
+                hatch_color: "#000000".to_string(),
+                hatch_style: Some("HORIZONTAL".to_string()),
+                alpha: 0,
+            }),
+            gradation: None,
+        });
+        let style = decode_shape_style_full(&None, &fb, None, None, "None").unwrap();
+        match style.fill.unwrap() {
+            Fill::Pattern { pattern_type, fg_color, bg_color } => {
+                assert_eq!(pattern_type, PatternType::Horizontal);
+                assert_eq!(fg_color, Color::BLACK);
+                assert_eq!(bg_color, Color::from_rgb(0xFF, 0xD7, 0x00));
+            }
+            other => panic!("expected Fill::Pattern, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_shape_style_pattern_fill_backslash_swapped() {
+        // HWPX "BACK_SLASH" → PatternType::Slash (한글 spec reversal)
+        let fb = Some(HxFillBrush {
+            win_brush: Some(crate::schema::shapes::HxWinBrush {
+                face_color: "#FFFFFF".to_string(),
+                hatch_color: "#FF0000".to_string(),
+                hatch_style: Some("BACK_SLASH".to_string()),
+                alpha: 0,
+            }),
+            gradation: None,
+        });
+        let style = decode_shape_style_full(&None, &fb, None, None, "None").unwrap();
+        match style.fill.unwrap() {
+            Fill::Pattern { pattern_type, .. } => {
+                assert_eq!(pattern_type, PatternType::Slash);
+            }
+            other => panic!("expected Fill::Pattern, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_shape_style_pattern_fill_slash_swapped() {
+        // HWPX "SLASH" → PatternType::BackSlash (한글 spec reversal)
+        let fb = Some(HxFillBrush {
+            win_brush: Some(crate::schema::shapes::HxWinBrush {
+                face_color: "#FFFFFF".to_string(),
+                hatch_color: "#0000FF".to_string(),
+                hatch_style: Some("SLASH".to_string()),
+                alpha: 0,
+            }),
+            gradation: None,
+        });
+        let style = decode_shape_style_full(&None, &fb, None, None, "None").unwrap();
+        match style.fill.unwrap() {
+            Fill::Pattern { pattern_type, .. } => {
+                assert_eq!(pattern_type, PatternType::BackSlash);
+            }
+            other => panic!("expected Fill::Pattern, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_shape_style_no_hatch_style_is_solid_not_pattern() {
+        // winBrush without hatchStyle → solid fill (fill_color), NOT pattern
+        let fb = Some(HxFillBrush {
+            win_brush: Some(crate::schema::shapes::HxWinBrush {
+                face_color: "#FF0000".to_string(),
+                hatch_color: "#000000".to_string(),
+                hatch_style: None,
+                alpha: 0,
+            }),
+            gradation: None,
+        });
+        let style = decode_shape_style_full(&None, &fb, None, None, "None").unwrap();
+        assert!(style.fill.is_none(), "no hatchStyle → no Fill::Pattern");
+        assert!(style.fill_color.is_some(), "fill_color should be set");
+    }
+
+    #[test]
+    fn decode_shape_style_gradient_takes_priority_over_pattern() {
+        // If both gradation and winBrush with hatchStyle exist, gradient wins
+        let fb = Some(HxFillBrush {
+            win_brush: Some(crate::schema::shapes::HxWinBrush {
+                face_color: "#FFFFFF".to_string(),
+                hatch_color: "#000000".to_string(),
+                hatch_style: Some("HORIZONTAL".to_string()),
+                alpha: 0,
+            }),
+            gradation: Some(crate::schema::shapes::HxGradation {
+                gradation_type: "LINEAR".to_string(),
+                angle: 0,
+                center_x: 0,
+                center_y: 0,
+                step: 255,
+                color_num: 2,
+                step_center: 50,
+                alpha: 0,
+                colors: vec![
+                    crate::schema::shapes::HxGradColor { value: "#FF0000".to_string() },
+                    crate::schema::shapes::HxGradColor { value: "#0000FF".to_string() },
+                ],
+            }),
+        });
+        let style = decode_shape_style_full(&None, &fb, None, None, "None").unwrap();
+        assert!(matches!(style.fill, Some(Fill::Gradient { .. })));
     }
 
     // ── decode_arc tests ─────────────────────────────────────────────
@@ -1036,7 +1205,7 @@ mod tests {
     fn decode_arc_with_rotation_style() {
         let mut ellipse = default_ellipse();
         ellipse.rotation_info =
-            Some(HxRotationInfo { angle: 4500, center_x: 50, center_y: 50, rotate_image: 1 });
+            Some(HxRotationInfo { angle: 45, center_x: 50, center_y: 50, rotate_image: 1 });
         let cs = CharShapeIndex::new(0);
         let run = decode_arc(&ellipse, cs, 0).unwrap();
         if let Control::Arc { style, .. } = run.content.as_control().unwrap().clone() {

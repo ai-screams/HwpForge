@@ -372,8 +372,8 @@ fn inspect_complex_styles() {
     let (val, _, code) = run_json(&["inspect", f.to_str().unwrap(), "--styles"]);
     assert_eq!(code, 0);
     let styles = &val["styles"];
-    assert_eq!(styles["fonts"].as_array().unwrap().len(), 7);
-    assert_eq!(styles["char_shapes"].as_array().unwrap().len(), 9);
+    assert_eq!(styles["fonts"].as_array().unwrap().len(), 14);
+    assert_eq!(styles["char_shapes"].as_array().unwrap().len(), 8);
     assert_eq!(styles["para_shapes"].as_array().unwrap().len(), 5);
 }
 
