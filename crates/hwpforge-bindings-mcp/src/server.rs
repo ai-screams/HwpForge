@@ -3,7 +3,7 @@
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
-use rmcp::{tool, tool_router, ErrorData as McpError, ServerHandler};
+use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
@@ -287,6 +287,7 @@ impl HwpForgeServer {
     }
 }
 
+#[tool_handler]
 impl ServerHandler for HwpForgeServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
