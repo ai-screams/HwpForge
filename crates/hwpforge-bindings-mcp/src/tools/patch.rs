@@ -4,10 +4,8 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
-
-use super::to_json::ExportedSection;
 use crate::output::{check_file_size, ToolErrorInfo};
+use hwpforge_smithy_hwpx::{ExportedSection, HwpxDecoder, HwpxEncoder};
 
 /// Output data from a successful patch operation.
 #[derive(Debug, Serialize)]

@@ -2,39 +2,11 @@
 
 use std::path::Path;
 
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-use hwpforge_core::document::Document;
-use hwpforge_core::section::Section;
-use hwpforge_core::Draft;
-use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxStyleStore};
+use hwpforge_smithy_hwpx::{ExportedDocument, ExportedSection, HwpxDecoder};
 
 use crate::output::{check_file_size, ToolErrorInfo};
-
-/// Full document export for JSON round-trip.
-#[derive(Serialize, Deserialize, JsonSchema)]
-pub struct ExportedDocument {
-    /// The Core document in Draft state.
-    pub document: Document<Draft>,
-    /// Optional style information for round-trip fidelity.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub styles: Option<HwpxStyleStore>,
-}
-
-/// Section-only export for targeted editing.
-#[derive(Serialize, Deserialize, JsonSchema)]
-pub struct ExportedSection {
-    /// Which section index this was extracted from.
-    pub section_index: usize,
-    /// The section data.
-    pub section: Section,
-    /// Optional style information.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub styles: Option<HwpxStyleStore>,
-}
 
 /// Output data from a successful JSON export.
 #[derive(Debug, Serialize)]

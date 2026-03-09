@@ -2,39 +2,12 @@
 
 use std::path::PathBuf;
 
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
-
-use hwpforge_core::document::Document;
-use hwpforge_core::section::Section;
-use hwpforge_core::Draft;
-use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxStyleStore};
+use hwpforge_smithy_hwpx::HwpxDecoder;
 
 use crate::error::{check_file_size, CliError};
 
-/// Full document export (used by to-json and from-json).
-#[derive(Serialize, Deserialize, JsonSchema)]
-pub struct ExportedDocument {
-    /// The Core document in Draft state.
-    pub document: Document<Draft>,
-    /// Optional style information for round-trip fidelity.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub styles: Option<HwpxStyleStore>,
-}
-
-/// Section-only export (used by to-json --section N and patch).
-#[derive(Serialize, Deserialize, JsonSchema)]
-pub struct ExportedSection {
-    /// Which section index this was extracted from.
-    pub section_index: usize,
-    /// The section data.
-    pub section: Section,
-    /// Optional style information.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[schemars(skip)]
-    pub styles: Option<HwpxStyleStore>,
-}
+// Re-export shared exchange types so existing imports (`crate::commands::to_json::Exported*`) keep working.
+pub use hwpforge_smithy_hwpx::{ExportedDocument, ExportedSection};
 
 /// Run the to-json command.
 pub fn run(

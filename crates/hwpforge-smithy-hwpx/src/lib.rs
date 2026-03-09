@@ -52,6 +52,8 @@ pub mod decoder;
 pub mod default_styles;
 mod encoder;
 pub mod error;
+pub mod exchange;
+pub mod presets;
 mod schema;
 pub mod style_store;
 
@@ -59,6 +61,8 @@ pub use decoder::{HwpxDecoder, HwpxDocument};
 pub use default_styles::{DefaultStyleEntry, HancomStyleSet};
 pub use encoder::HwpxEncoder;
 pub use error::{HwpxError, HwpxErrorCode, HwpxResult};
+pub use exchange::{ExportedDocument, ExportedSection};
+pub use presets::{builtin_presets, PresetInfo};
 pub use style_store::{
     HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape, HwpxStyle, HwpxStyleStore,
 };

@@ -2,36 +2,15 @@
 
 use serde::Serialize;
 
-use crate::output::ToolErrorInfo;
+use hwpforge_smithy_hwpx::presets::{builtin_presets, PresetInfo};
 
-/// Information about a single preset.
-#[derive(Debug, Serialize)]
-pub struct PresetInfo {
-    /// Preset name (e.g., "default", "government").
-    pub name: String,
-    /// Human-readable description.
-    pub description: String,
-    /// Base font name.
-    pub font: String,
-    /// Page size (e.g., "A4").
-    pub page_size: String,
-}
+use crate::output::ToolErrorInfo;
 
 /// Output data from the templates tool.
 #[derive(Debug, Serialize)]
 pub struct TemplatesData {
     /// List of available presets.
     pub templates: Vec<PresetInfo>,
-}
-
-/// List built-in presets.
-fn builtin_presets() -> Vec<PresetInfo> {
-    vec![PresetInfo {
-        name: "default".to_string(),
-        description: "한컴 Modern 기본 스타일 (함초롬돋움 10pt, A4)".to_string(),
-        font: "함초롬돋움".to_string(),
-        page_size: "A4".to_string(),
-    }]
 }
 
 /// Get available templates, optionally filtered by name.

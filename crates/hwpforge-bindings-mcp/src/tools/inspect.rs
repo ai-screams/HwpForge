@@ -4,8 +4,6 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use hwpforge_core::control::Control;
-use hwpforge_core::RunContent;
 use hwpforge_smithy_hwpx::HwpxDecoder;
 
 use crate::output::{check_file_size, ToolErrorInfo};
@@ -87,36 +85,19 @@ pub fn run_inspect(file_path: &str, _show_styles: bool) -> Result<InspectData, T
         .iter()
         .enumerate()
         .map(|(i, sec)| {
-            let mut tables = 0usize;
-            let mut images = 0usize;
-            let mut charts = 0usize;
+            let counts = sec.content_counts();
 
-            for para in &sec.paragraphs {
-                for run in &para.runs {
-                    match &run.content {
-                        RunContent::Table(_) => tables += 1,
-                        RunContent::Image(_) => images += 1,
-                        RunContent::Control(c) => {
-                            if matches!(**c, Control::Chart { .. }) {
-                                charts += 1;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-
-            total_tables += tables;
-            total_images += images;
-            total_charts += charts;
+            total_tables += counts.tables;
+            total_images += counts.images;
+            total_charts += counts.charts;
             total_paragraphs += sec.paragraphs.len();
 
             SectionDetail {
                 index: i,
                 paragraphs: sec.paragraphs.len(),
-                tables,
-                images,
-                charts,
+                tables: counts.tables,
+                images: counts.images,
+                charts: counts.charts,
                 has_header: sec.header.is_some(),
                 has_footer: sec.footer.is_some(),
                 has_page_number: sec.page_number.is_some(),
