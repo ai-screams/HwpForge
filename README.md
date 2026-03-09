@@ -4,18 +4,32 @@
 >
 > [Hancom](https://www.hancom.com/) 한글 파일 읽기, 쓰기, 변환
 
+<div align="center">
+
 [![CI](https://img.shields.io/github/actions/workflow/status/ai-screams/HwpForge/ci.yml?branch=main&label=CI&logo=github)](https://github.com/ai-screams/HwpForge/actions/workflows/ci.yml)
+[![codecov](https://img.shields.io/badge/coverage-92.65%25-brightgreen.svg?logo=codecov)](https://github.com/ai-screams/HwpForge)
+[![Tests](https://img.shields.io/badge/tests-1%2C602_passed-success.svg?logo=checkmarx)](https://github.com/ai-screams/HwpForge)
+[![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg?logo=rust)](https://github.com/ai-screams/HwpForge)
+[![Lines of Code](https://img.shields.io/badge/LOC-~52%2C700-informational.svg)](https://github.com/ai-screams/HwpForge)
+
 [![crates.io](https://img.shields.io/crates/v/hwpforge.svg?logo=rust)](https://crates.io/crates/hwpforge)
 [![docs.rs](https://img.shields.io/docsrs/hwpforge?logo=docs.rs)](https://docs.rs/hwpforge)
-[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
+[![crates.io downloads](https://img.shields.io/crates/d/hwpforge.svg?label=downloads&logo=rust&color=orange)](https://crates.io/crates/hwpforge)
 [![MSRV](https://img.shields.io/badge/MSRV-1.88+-orange.svg?logo=rust)](Cargo.toml)
-[![codecov](https://img.shields.io/badge/coverage-92.65%25-brightgreen.svg?logo=codecov)](https://github.com/ai-screams/HwpForge)
-[![Lines of Code](https://img.shields.io/badge/LOC-~50%2C500-informational.svg)](https://github.com/ai-screams/HwpForge)
-[![Tests](https://img.shields.io/badge/tests-1%2C592_passed-success.svg?logo=checkmarx)](https://github.com/ai-screams/HwpForge)
-[![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg?logo=rust)](https://github.com/ai-screams/HwpForge)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](LICENSE-MIT)
+
+[![MCP Ready](https://img.shields.io/badge/MCP-ready-blueviolet.svg?logo=data:image/svg%2bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCI+PHBhdGggZD0iTTEyIDJMMiA3bDEwIDVMMjIgN3oiIGZpbGw9IndoaXRlIi8+PHBhdGggZD0iTTIgMTdsMTAgNSAxMC01IiBmaWxsPSJ3aGl0ZSIgb3BhY2l0eT0iMC43Ii8+PHBhdGggZD0iTTIgMTJsMTAgNSAxMC01IiBmaWxsPSJ3aGl0ZSIgb3BhY2l0eT0iMC44NSIvPjwvc3ZnPg==)](https://modelcontextprotocol.io/)
+[![GitHub release](https://img.shields.io/github/v/release/ai-screams/HwpForge?logo=github&color=green)](https://github.com/ai-screams/HwpForge/releases)
+[![GitHub last commit](https://img.shields.io/github/last-commit/ai-screams/HwpForge?logo=github)](https://github.com/ai-screams/HwpForge)
+[![GitHub stars](https://img.shields.io/github/stars/ai-screams/HwpForge?style=social)](https://github.com/ai-screams/HwpForge)
+
 [![Security Policy](https://img.shields.io/badge/security-policy-blueviolet.svg?logo=githubactions)](SECURITY.md)
 [![Contributing](https://img.shields.io/badge/contributing-guide-blue.svg?logo=handshake)](CONTRIBUTING.md)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?logo=github)](https://github.com/ai-screams/HwpForge/pulls)
+[![Made in Korea](https://img.shields.io/badge/made_in-Korea_🇰🇷-red.svg)](https://github.com/ai-screams/HwpForge)
 [![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-support-yellow.svg?logo=buy-me-a-coffee&logoColor=white)](https://buymeacoffee.com/pignuante)
+
+</div>
 
 <div align="center">
 <img src="https://raw.githubusercontent.com/ai-screams/HwpForge/main/assets/banner-main.png" alt="HwpForge Banner" width="600">
@@ -68,9 +82,9 @@ cargo add hwpforge --features full
 hwpforge = "0.1"
 ```
 
-### ⚒️ CLI로 시작하기
+### 🔨 Hammer — CLI로 시작하기
 
-CLI 도구 `hwpforge`를 설치하면 터미널에서 바로 문서를 생성하고 편집할 수 있습니다.
+CLI 도구 `hwpforge`(Hammer)를 설치하면 터미널에서 바로 문서를 생성하고 편집할 수 있습니다.
 
 ```bash
 cargo install hwpforge-bindings-cli
@@ -97,6 +111,146 @@ hwpforge schema document
 > Markdown으로 문서를 생성한 뒤, JSON round-trip으로 기존 스타일을 보존하면서
 > section 단위로 정밀하게 편집할 수 있습니다. `--json` 플래그로 모든 명령어가
 > machine-readable 출력을 지원합니다.
+
+### ⚙️ Anvil — MCP Server로 AI가 직접 한글 문서를 다루다
+
+Claude Code, Codex CLI, ChatGPT, Cursor, Windsurf 등 [MCP](https://modelcontextprotocol.io/) 지원 AI 도구에서 **한글 문서를 직접 생성하고 편집**할 수 있습니다. "보고서 만들어줘"라고 말하면, AI가 알아서 `.hwpx` 파일을 뚝딱 만들어냅니다.
+
+#### 1단계: 설치
+
+```bash
+cargo install hwpforge-bindings-mcp
+```
+
+#### 2단계: AI 도구에 등록
+
+<details>
+<summary><strong>Claude Code</strong> (터미널)</summary>
+
+```bash
+# 현재 프로젝트에만
+claude mcp add hwpforge hwpforge-mcp
+
+# 모든 프로젝트에서 사용 (글로벌)
+claude mcp add --global hwpforge hwpforge-mcp
+```
+
+</details>
+
+<details>
+<summary><strong>Codex CLI</strong> (터미널)</summary>
+
+`~/.codex/config.toml`에 추가:
+
+```toml
+[mcp_servers.hwpforge]
+command = "hwpforge-mcp"
+```
+
+또는 CLI로:
+
+```bash
+codex mcp add hwpforge hwpforge-mcp
+```
+
+</details>
+
+<details>
+<summary><strong>Claude Desktop</strong> (앱)</summary>
+
+설정 파일을 편집합니다:
+
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
+
+```json
+{
+  "mcpServers": {
+    "hwpforge": {
+      "command": "hwpforge-mcp"
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>ChatGPT Desktop</strong> (앱)</summary>
+
+Settings → Tools → Add MCP Server에서:
+
+- Name: `hwpforge`
+- Command: `hwpforge-mcp`
+
+또는 설정 파일을 직접 편집:
+
+```json
+{
+  "mcpServers": {
+    "hwpforge": {
+      "command": "hwpforge-mcp"
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>Cursor</strong> (에디터)</summary>
+
+프로젝트 루트에 `.cursor/mcp.json` 생성:
+
+```json
+{
+  "mcpServers": {
+    "hwpforge": {
+      "command": "hwpforge-mcp"
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>Windsurf</strong> (에디터)</summary>
+
+`~/.codeium/windsurf/mcp_config.json`에 추가:
+
+```json
+{
+  "mcpServers": {
+    "hwpforge": {
+      "command": "hwpforge-mcp"
+    }
+  }
+}
+```
+
+</details>
+
+#### 등록하면 5개 도구를 사용할 수 있습니다
+
+| 도구                 | 하는 일              | 한마디                         |
+| -------------------- | -------------------- | ------------------------------ |
+| `hwpforge_convert`   | Markdown → HWPX 변환 | "이 마크다운을 한글 파일로!"   |
+| `hwpforge_inspect`   | HWPX 구조 확인       | "이 문서 뭐가 들어있어?"       |
+| `hwpforge_to_json`   | HWPX → JSON 추출     | "이 섹션 내용 좀 꺼내봐"       |
+| `hwpforge_patch`     | JSON으로 섹션 교체   | "이 부분만 바꿔서 다시 저장해" |
+| `hwpforge_templates` | 스타일 프리셋 조회   | "어떤 템플릿 쓸 수 있어?"      |
+
+#### 업데이트 / 삭제
+
+```bash
+cargo install hwpforge-bindings-mcp --force   # 업데이트
+cargo uninstall hwpforge-bindings-mcp          # 삭제
+```
+
+> **왜 MCP?** CLI(Hammer)는 AI가 `bash` 명령을 실행해야 하지만, MCP(Anvil)는 AI가 **네이티브 도구**로
+> 직접 호출합니다. 파일 경로 파싱도, stdout 해석도 필요 없습니다.
+> JSON-RPC로 요청하면 구조화된 JSON으로 응답 — 깔끔합니다.
 
 ### 🔨 문서 생성
 
@@ -232,10 +386,10 @@ Smithy compiler가 Core + Blueprint를 합쳐 최종 포맷을 생성합니다.
 
 | 지표        | 값                      |
 | ----------- | ----------------------- |
-| 총 LOC      | ~50,700                 |
-| 테스트      | 1,592개 (cargo-nextest) |
-| 소스 파일   | 103 .rs                 |
-| Crate 수    | 9개 (6개 배포)          |
+| 총 LOC      | ~52,700                 |
+| 테스트      | 1,602개 (cargo-nextest) |
+| 소스 파일   | 116 .rs                 |
+| Crate 수    | 10개 (7개 배포)         |
 | 커버리지    | 92.65%                  |
 | Clippy 경고 | 0                       |
 | Unsafe 코드 | 0                       |
@@ -280,7 +434,8 @@ HwpForge/
 │   ├── hwpforge-smithy-md/       # Markdown codec (MD ↔ Core)
 │   ├── hwpforge-smithy-hwp5/     # HWP5 decoder (예정)
 │   ├── hwpforge-bindings-py/     # Python bindings (예정)
-│   └── hwpforge-bindings-cli/    # CLI 도구 (hwpforge)
+│   ├── hwpforge-bindings-cli/    # CLI 도구 (hwpforge)
+│   └── hwpforge-bindings-mcp/    # MCP Server (hwpforge-mcp)
 ├── tests/                        # 통합 테스트 + golden fixture
 └── examples/                     # 📜 사용 예제 + 생성된 HWPX 파일
 ```
@@ -300,7 +455,7 @@ HwpForge/
 ### 출시 예정
 
 - [ ] HWP5 읽기 — 구형 바이너리 포맷(`.hwp`) 디코더
-- [ ] MCP 서버 — Claude, GPT 등 LLM이 tool로 직접 HWPX 생성
+- [x] MCP 서버 — Claude, Cursor 등 AI 도구가 tool로 직접 HWPX 생성 (5개 도구)
 - [x] CLI 도구 — `hwpforge convert doc.md doc.hwpx` 한 줄 변환 (7개 명령어)
 
 - [ ] HWPX 완전 지원 — 양식 컨트롤, 변경 추적, OLE 객체
@@ -334,11 +489,11 @@ HwpForge는 거인들의 어깨 위에 서 있습니다.
 ---
 
 <div align="center">
-<img src="https://raw.githubusercontent.com/ai-screams/HwpForge/main/assets/mascot-main.png" width="260" alt="쇠부리 (SoeBuri)">
+<img src="https://raw.githubusercontent.com/ai-screams/HwpForge/main/assets/mascot-main.png" width="260" alt="쇠부리 Anvilscribe (SoeBuri Anvilscribe)">
 
 <br/><br/>
 
-<strong>쇠부리 (SoeBuri)</strong><br/>
+<strong>쇠부리 Anvilscribe (SoeBuri Anvilscribe)</strong><br/>
 <em>한컴 문서를 불에 달구어 단단하게 벼려내는 대장장이 오리너구리 🔥</em>
 
 <br/><br/>

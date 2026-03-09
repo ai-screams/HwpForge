@@ -8,7 +8,7 @@ publish = false
 readme.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "AI-first CLI for HwpForge document generation and editing"
+description = "Hammer — AI-first CLI for HwpForge document generation and editing"
 
 [[bin]]
 name = "hwpforge"
@@ -18,7 +18,7 @@ path = "src/main.rs"
 clap = { workspace = true }
 hwpforge-core = { path = "../hwpforge-core" }
 hwpforge-foundation = { path = "../hwpforge-foundation" }
-hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx" }
+hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", features = ["schemars"] }
 hwpforge-smithy-md = { path = "../hwpforge-smithy-md" }
 schemars = { workspace = true }
 serde = { workspace = true }

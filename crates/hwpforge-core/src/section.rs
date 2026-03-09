@@ -579,6 +579,56 @@ impl Section {
     pub fn is_empty(&self) -> bool {
         self.paragraphs.is_empty()
     }
+
+    /// Counts tables, images, and charts in this section.
+    ///
+    /// Traverses all paragraph runs once and returns aggregate counts.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::section::{ContentCounts, Section};
+    /// use hwpforge_core::PageSettings;
+    ///
+    /// let section = Section::new(PageSettings::a4());
+    /// let counts = section.content_counts();
+    /// assert_eq!(counts.tables, 0);
+    /// assert_eq!(counts.images, 0);
+    /// assert_eq!(counts.charts, 0);
+    /// ```
+    pub fn content_counts(&self) -> ContentCounts {
+        let mut tables: usize = 0;
+        let mut images: usize = 0;
+        let mut charts: usize = 0;
+
+        for para in &self.paragraphs {
+            for run in &para.runs {
+                match &run.content {
+                    crate::RunContent::Table(_) => tables += 1,
+                    crate::RunContent::Image(_) => images += 1,
+                    crate::RunContent::Control(c) => {
+                        if matches!(**c, crate::control::Control::Chart { .. }) {
+                            charts += 1;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        ContentCounts { tables, images, charts }
+    }
+}
+
+/// Aggregate content counts for a section.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ContentCounts {
+    /// Number of tables.
+    pub tables: usize,
+    /// Number of images.
+    pub images: usize,
+    /// Number of charts.
+    pub charts: usize,
 }
 
 impl std::fmt::Display for Section {

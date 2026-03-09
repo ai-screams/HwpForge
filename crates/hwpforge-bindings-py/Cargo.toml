@@ -12,6 +12,6 @@ publish = false
 readme.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "Python bindings for HwpForge via PyO3 (not yet implemented)"
+description = "Tongs — Python bindings for HwpForge via PyO3 (not yet implemented)"
 
 [dependencies]

@@ -115,8 +115,8 @@ pub use page::PageSettings;
 pub use paragraph::Paragraph;
 pub use run::{Run, RunContent};
 pub use section::{
-    BeginNum, HeaderFooter, LineNumberShape, MasterPage, PageBorderFillEntry, PageNumber, Section,
-    Visibility,
+    BeginNum, ContentCounts, HeaderFooter, LineNumberShape, MasterPage, PageBorderFillEntry,
+    PageNumber, Section, Visibility,
 };
 pub use tab::TabDef;
 pub use table::{Table, TableCell, TableRow};

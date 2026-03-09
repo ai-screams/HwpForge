@@ -1,25 +1,8 @@
 //! Manage style presets.
 
-use serde::Serialize;
+use hwpforge_smithy_hwpx::presets::builtin_presets;
 
 use crate::error::CliError;
-
-#[derive(Serialize)]
-struct PresetInfo {
-    name: String,
-    description: String,
-    font: String,
-    page_size: String,
-}
-
-fn builtin_presets() -> Vec<PresetInfo> {
-    vec![PresetInfo {
-        name: "default".to_string(),
-        description: "한컴 Modern 기본 스타일 (함초롬돋움 10pt, A4)".to_string(),
-        font: "함초롬돋움".to_string(),
-        page_size: "A4".to_string(),
-    }]
-}
 
 /// List all available presets.
 pub fn run_list(json_mode: bool) {

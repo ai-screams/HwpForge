@@ -8,8 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document formats, designed with LLM-first principles. The goal is to enable AI agents (like Claude Code) to generate Korean government proposal documents using natural language + Markdown + YAML style templates.
 
-**Current Status**: Phase 0-5 + Wave 1-14 + Phase 6 CLI 완료
-**Stats**: ~51,500 LOC, 1,601 tests (nextest), 104 .rs files, 10 crates, 92.65% coverage
+**Current Status**: Phase 0-5 + Wave 1-14 + Phase 6 CLI + Phase 7a MCP 완료
+**Stats**: ~52,700 LOC, 1,602 tests (nextest), 116 .rs files, 10 crates, 92.65% coverage
 
 ---
 
@@ -22,7 +22,7 @@ Foundation (🔩 primitives)
   → Core (🔨 pure document structure, no style definitions)
   → Blueprint (📐 YAML style templates, centralized like Figma Design Tokens)
   → Smithy (🔥 format-specific compilers: HWPX, HWP5, Markdown)
-  → Bindings (🐍⚒️ Python/CLI interfaces)
+  → Bindings (🐍⚒️🤖 Python/CLI/MCP interfaces)
 ```
 
 **Key Principle**: **Structure and Style are separate** (like HTML + CSS).
@@ -86,7 +86,7 @@ blueprint (foundation + core)
     ↓
 smithy-hwpx, smithy-hwp5, smithy-md (foundation + core + blueprint)
     ↓
-bindings-py, bindings-cli (all smithy crates)
+bindings-py, bindings-cli, bindings-mcp (all smithy crates)
 ```
 
 **Important**: Foundation is the root. If you modify foundation, ALL crates rebuild. Keep it minimal.
@@ -232,6 +232,8 @@ These were planned but **removed as unnecessary** (keep it simple):
 - `phase1_core_detailed.md` ~ `phase4_smithy_hwpx_encoder_detailed.md` — Phase별 상세 계획
 - `v1.0_decisions.md`, `v1.0_learnings.md` — 초기 의사결정/학습 기록
 - `BACKLOG_SMITHY_MD.md` — Phase 5 백로그
+- `2026-03-09-plugin-trinity-design.md` — Plugin Trinity (SKILL.md + MCP + Context7) 설계
+- `2026-03-09-plugin-trinity-implementation-plan.md` — Phase 7a 구현 계획
 
 ### Reference Projects (.docs/references/ - git excluded)
 
@@ -524,10 +526,12 @@ landscape 반전(gotcha #2)과 동일한 패턴. `PatternType`의 `Display`/`Fro
 | Wave 14       | Final Features (TextDirection/DropCap/page_break) | ✅ Done           | —     | ~200   |
 | 6 (CLI)       | bindings-cli (AI-first CLI, 78 integration tests) | ✅ Done           | 78    | 1,035  |
 | 6 (Python)    | bindings-py (PyO3)                                | 📋 Ready          | —     | —      |
-| 7             | MCP integration                                   | 📋 Ready          | —     | —      |
+| 7a (MCP)      | bindings-mcp (5 MCP tools + SKILL.md)             | ✅ Done           | —     | 1,031  |
+| 7b (Dist)     | npm packaging, MCP Registry, Context7             | 📋 Ready          | —     | —      |
+| 7c (Ext)      | Tier 2/3 tools, workspace, resources, prompts     | 📋 Ready          | —     | —      |
 | 8             | Testing + Release v1.0                            | 📋 Ready          | —     | —      |
 
-**Totals**: ~51,500 LOC, 1,601 tests (nextest), 104 .rs files, 10 crates
+**Totals**: ~52,700 LOC, 1,602 tests (nextest), 116 .rs files, 10 crates
 
 ### v2.0 (Second Cycle: Full Compatibility)
 

@@ -4,8 +4,6 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
-use hwpforge_core::control::Control;
-use hwpforge_core::RunContent;
 use hwpforge_smithy_hwpx::HwpxDecoder;
 
 use crate::error::{check_file_size, CliError};
@@ -97,31 +95,13 @@ pub fn run(file: &PathBuf, show_styles: bool, json_mode: bool) {
         .iter()
         .enumerate()
         .map(|(i, sec)| {
-            let mut tables = 0usize;
-            let mut images = 0usize;
-            let mut charts = 0usize;
-
-            for para in &sec.paragraphs {
-                for run in &para.runs {
-                    match &run.content {
-                        RunContent::Table(_) => tables += 1,
-                        RunContent::Image(_) => images += 1,
-                        RunContent::Control(c) => {
-                            if matches!(**c, Control::Chart { .. }) {
-                                charts += 1;
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-
+            let counts = sec.content_counts();
             SectionInfo {
                 index: i,
                 paragraphs: sec.paragraphs.len(),
-                tables,
-                images,
-                charts,
+                tables: counts.tables,
+                images: counts.images,
+                charts: counts.charts,
                 has_header: sec.header.is_some(),
                 has_footer: sec.footer.is_some(),
                 has_page_number: sec.page_number.is_some(),

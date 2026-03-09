@@ -2,6 +2,7 @@
 members = [
   "crates/hwpforge",
   "crates/hwpforge-bindings-cli",
+  "crates/hwpforge-bindings-mcp",
   "crates/hwpforge-bindings-py",
   "crates/hwpforge-blueprint",
   "crates/hwpforge-core",
