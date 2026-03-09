@@ -286,6 +286,14 @@
             ]
           }
         ],
+        "begin_num": {
+          "page": 0,
+          "footnote": 1,
+          "endnote": 1,
+          "pic": 0,
+          "tbl": 0,
+          "equation": 0
+        },
         "text_direction": "Horizontal"
       }
     ],

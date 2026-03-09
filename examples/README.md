@@ -6,11 +6,12 @@ HwpForge 사용 예제 모음
 
 다운로드하여 한글에서 열어보세요. 모두 HwpForge API로 생성된 파일입니다.
 
-### 종합 가이드
+### 종합
 
 | 파일                                                   | 설명                                            | 생성 코드                                           |
 | ------------------------------------------------------ | ----------------------------------------------- | --------------------------------------------------- |
 | [`hwpx_complete_guide.hwpx`](hwpx_complete_guide.hwpx) | 전체 API 데모 (4섹션, 표/이미지/차트/수식/도형) | [`hwpx_complete_guide.rs`][src-hwpx-complete-guide] |
+| [`full_report.hwpx`](full_report.hwpx)                 | HWPX 포맷 분석 보고서 (4섹션)                   | [`full_report.rs`][src-full-report]                 |
 
 ### 기능별 개별 파일
 
@@ -35,6 +36,7 @@ HwpForge 사용 예제 모음
 | [`15_shapes_advanced.hwpx`](15_shapes_advanced.hwpx)   | 고급 도형 — Arc/Curve/ConnectLine, Fill(Solid/Gradient/Pattern), 회전/반전 |
 
 [src-hwpx-complete-guide]: ../crates/hwpforge-smithy-hwpx/examples/hwpx_complete_guide.rs
+[src-full-report]: ../crates/hwpforge-smithy-hwpx/examples/full_report.rs
 [src-feature-isolation]: ../crates/hwpforge-smithy-hwpx/examples/feature_isolation.rs
 
 ### HWPX ↔ JSON 변환 예제
@@ -48,7 +50,7 @@ HwpForge 사용 예제 모음
 | [`hwpx2json/01_text.hwpx`](hwpx2json/01_text.hwpx)                         | 입력 — 텍스트 예제 원본                       |
 | [`hwpx2json/01_text.json`](hwpx2json/01_text.json)                         | 출력 — JSON 변환 결과 (스타일 포함)           |
 | [`hwpx2json/hwpx_complete_guide.hwpx`](hwpx2json/hwpx_complete_guide.hwpx) | 입력 — 종합 가이드 (4섹션, 표/차트/수식/도형) |
-| [`hwpx2json/hwpx_complete_guide.json`](hwpx2json/hwpx_complete_guide.json) | 출력 — JSON 변환 결과 (5,880줄, 스타일 포함)  |
+| [`hwpx2json/hwpx_complete_guide.json`](hwpx2json/hwpx_complete_guide.json) | 출력 — JSON 변환 결과 (스타일 포함)           |
 
 #### JSON → HWPX
 
@@ -61,61 +63,6 @@ HwpForge 사용 예제 모음
 
 [src-json-roundtrip]: ../crates/hwpforge-smithy-hwpx/examples/hwpx_json_roundtrip.rs
 
-## Example 소스 코드
-
-소스: [`crates/hwpforge-smithy-hwpx/examples/`](../crates/hwpforge-smithy-hwpx/examples/)
-
-### 쇼케이스
-
-| 파일                                                | 설명                                                 |
-| --------------------------------------------------- | ---------------------------------------------------- |
-| [`hwpx_complete_guide.rs`][src-hwpx-complete-guide] | HWPX 문서 구조 완전 가이드 (4섹션, 전체 API 시연)    |
-| [`feature_isolation.rs`][src-feature-isolation]     | 기능별 개별 HWPX 생성 (15개)                         |
-| [`showcase.rs`][src-showcase]                       | 13개 API 데모 (Table, Image, TextBox, 도형, 차트 등) |
-| [`full_report.rs`][src-full-report]                 | HWPX 포맷 분석 보고서 (4섹션)                        |
-| [`architecture_guide.rs`][src-architecture-guide]   | 아키텍처 가이드 + Write API 통합 검증 (28개 생성자)  |
-| [`hwpx_json_roundtrip.rs`][src-json-roundtrip]      | HWPX ↔ JSON round-trip (스타일 포함)                 |
-
-[src-showcase]: ../crates/hwpforge-smithy-hwpx/examples/showcase.rs
-[src-full-report]: ../crates/hwpforge-smithy-hwpx/examples/full_report.rs
-[src-architecture-guide]: ../crates/hwpforge-smithy-hwpx/examples/architecture_guide.rs
-
-### 기능별 데모
-
-| 파일                                        | 설명                             |
-| ------------------------------------------- | -------------------------------- |
-| [`chart_styles.rs`][src-chart-styles]       | 18종 차트 타입 데모              |
-| [`equation_styles.rs`][src-equation-styles] | 12종 수식 카테고리               |
-| [`line_styles.rs`][src-line-styles]         | 10종 선 스타일 변형              |
-| [`large_table.rs`][src-large-table]         | 대용량 표 (페이지 분할 레이아웃) |
-
-[src-chart-styles]: ../crates/hwpforge-smithy-hwpx/examples/chart_styles.rs
-[src-equation-styles]: ../crates/hwpforge-smithy-hwpx/examples/equation_styles.rs
-[src-line-styles]: ../crates/hwpforge-smithy-hwpx/examples/line_styles.rs
-[src-large-table]: ../crates/hwpforge-smithy-hwpx/examples/large_table.rs
-
-### 기능 검증
-
-| 파일                                                              | 설명                                                     |
-| ----------------------------------------------------------------- | -------------------------------------------------------- |
-| [`style_infrastructure.rs`][src-style-infrastructure]             | StyleIndex, Alignment, BorderFill, charPr/paraPr         |
-| [`paragraph_and_annotations.rs`][src-paragraph-and-annotations]   | NumberingDef, TabDef, EmphasisType, Dutmal, Compose      |
-| [`page_layout.rs`][src-page-layout]                               | Gutter, Visibility, LineNumberShape, MasterPage          |
-| [`shapes_and_references.rs`][src-shapes-and-references]           | Arc, Curve, ConnectLine, Bookmark, CrossRef, Field, Memo |
-| [`text_direction_and_dropcap.rs`][src-text-direction-and-dropcap] | TextDirection, DropCapStyle, page_break, char border     |
-| [`positioning_and_toc.rs`][src-positioning-and-toc]               | 도형 위치 지정, 차트 세부 변형, TOC titleMark            |
-| [`review_api.rs`][src-review-api]                                 | API 변경사항 검증 (ShapeStyle, LineStyle 등)             |
-| [`roundtrip_save.rs`][src-roundtrip-save]                         | HWPX 읽기/쓰기 round-trip                                |
-
-[src-style-infrastructure]: ../crates/hwpforge-smithy-hwpx/examples/style_infrastructure.rs
-[src-paragraph-and-annotations]: ../crates/hwpforge-smithy-hwpx/examples/paragraph_and_annotations.rs
-[src-page-layout]: ../crates/hwpforge-smithy-hwpx/examples/page_layout.rs
-[src-shapes-and-references]: ../crates/hwpforge-smithy-hwpx/examples/shapes_and_references.rs
-[src-text-direction-and-dropcap]: ../crates/hwpforge-smithy-hwpx/examples/text_direction_and_dropcap.rs
-[src-positioning-and-toc]: ../crates/hwpforge-smithy-hwpx/examples/positioning_and_toc.rs
-[src-review-api]: ../crates/hwpforge-smithy-hwpx/examples/review_api.rs
-[src-roundtrip-save]: ../crates/hwpforge-smithy-hwpx/examples/roundtrip_save.rs
-
 ## 실행 방법
 
 ```bash
@@ -125,9 +72,8 @@ cargo run -p hwpforge-smithy-hwpx --example feature_isolation
 # 종합 가이드 생성
 cargo run -p hwpforge-smithy-hwpx --example hwpx_complete_guide
 
-# 기타 예제
-cargo run -p hwpforge-smithy-hwpx --example chart_styles
-cargo run -p hwpforge-smithy-hwpx --example large_table
+# 종합 보고서 생성
+cargo run -p hwpforge-smithy-hwpx --example full_report
 
 # HWPX ↔ JSON round-trip
 cargo run -p hwpforge-smithy-hwpx --example hwpx_json_roundtrip

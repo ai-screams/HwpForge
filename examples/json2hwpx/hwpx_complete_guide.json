@@ -10,17 +10,6 @@
                   "Text": "HWPX 문서 구조 완전 가이드"
                 },
                 "char_shape_id": 1
-              },
-              {
-                "content": {
-                  "Control": {
-                    "Hyperlink": {
-                      "text": "",
-                      "url": "https://www.tta.or.kr"
-                    }
-                  }
-                },
-                "char_shape_id": 0
               }
             ],
             "para_shape_id": 1,
@@ -275,7 +264,12 @@
               },
               {
                 "content": {
-                  "Text": "한국정보통신기술협회(TTA)"
+                  "Control": {
+                    "Hyperlink": {
+                      "text": "한국정보통신기술협회(TTA)",
+                      "url": "https://www.tta.or.kr"
+                    }
+                  }
                 },
                 "char_shape_id": 5
               },
@@ -1223,6 +1217,14 @@
             ]
           }
         ],
+        "begin_num": {
+          "page": 0,
+          "footnote": 1,
+          "endnote": 1,
+          "pic": 0,
+          "tbl": 0,
+          "equation": 0
+        },
         "text_direction": "Horizontal"
       },
       {
@@ -1234,80 +1236,6 @@
                   "Text": "텍스트 서식 시스템"
                 },
                 "char_shape_id": 1
-              },
-              {
-                "content": {
-                  "Control": {
-                    "Field": {
-                      "field_type": "ClickHere",
-                      "hint_text": "이름을 입력하세요",
-                      "help_text": null
-                    }
-                  }
-                },
-                "char_shape_id": 0
-              },
-              {
-                "content": {
-                  "Control": {
-                    "Field": {
-                      "field_type": "Date",
-                      "hint_text": null,
-                      "help_text": null
-                    }
-                  }
-                },
-                "char_shape_id": 0
-              },
-              {
-                "content": {
-                  "Control": {
-                    "Field": {
-                      "field_type": "PageNum",
-                      "hint_text": null,
-                      "help_text": null
-                    }
-                  }
-                },
-                "char_shape_id": 0
-              },
-              {
-                "content": {
-                  "Control": {
-                    "Memo": {
-                      "content": [],
-                      "author": "",
-                      "date": ""
-                    }
-                  }
-                },
-                "char_shape_id": 0
-              },
-              {
-                "content": {
-                  "Control": {
-                    "CrossRef": {
-                      "target_name": "",
-                      "ref_type": "Bookmark",
-                      "content_type": "Page",
-                      "as_hyperlink": false
-                    }
-                  }
-                },
-                "char_shape_id": 0
-              },
-              {
-                "content": {
-                  "Control": {
-                    "CrossRef": {
-                      "target_name": "",
-                      "ref_type": "Bookmark",
-                      "content_type": "Page",
-                      "as_hyperlink": false
-                    }
-                  }
-                },
-                "char_shape_id": 0
               }
             ],
             "para_shape_id": 1,
@@ -1670,7 +1598,13 @@
               },
               {
                 "content": {
-                  "Text": "이름을 입력하세요"
+                  "Control": {
+                    "Field": {
+                      "field_type": "ClickHere",
+                      "hint_text": "이름을 입력하세요",
+                      "help_text": null
+                    }
+                  }
                 },
                 "char_shape_id": 5
               }
@@ -1689,7 +1623,13 @@
               },
               {
                 "content": {
-                  "Text": "2026-03-08"
+                  "Control": {
+                    "Field": {
+                      "field_type": "Date",
+                      "hint_text": null,
+                      "help_text": null
+                    }
+                  }
                 },
                 "char_shape_id": 5
               }
@@ -1705,6 +1645,18 @@
                   "Text": "쪽 번호 필드(autoNum): 현재 "
                 },
                 "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Control": {
+                    "Field": {
+                      "field_type": "PageNum",
+                      "hint_text": null,
+                      "help_text": null
+                    }
+                  }
+                },
+                "char_shape_id": 5
               },
               {
                 "content": {
@@ -1846,6 +1798,58 @@
                   "Text": "이 문단에는 검토 메모가 첨부되어 있습니다."
                 },
                 "char_shape_id": 0
+              },
+              {
+                "content": {
+                  "Control": {
+                    "Memo": {
+                      "content": [
+                        {
+                          "runs": [
+                            {
+                              "content": {
+                                "Text": "검토 의견:"
+                              },
+                              "char_shape_id": 4
+                            }
+                          ],
+                          "para_shape_id": 2,
+                          "column_break": false,
+                          "page_break": false
+                        },
+                        {
+                          "runs": [
+                            {
+                              "content": {
+                                "Text": "charShape 설명을 표 형태로 정리하면 더 좋겠습니다."
+                              },
+                              "char_shape_id": 0
+                            }
+                          ],
+                          "para_shape_id": 2,
+                          "column_break": false,
+                          "page_break": false
+                        },
+                        {
+                          "runs": [
+                            {
+                              "content": {
+                                "Text": "다음 버전에 반영 부탁드립니다."
+                              },
+                              "char_shape_id": 0
+                            }
+                          ],
+                          "para_shape_id": 2,
+                          "column_break": false,
+                          "page_break": false
+                        }
+                      ],
+                      "author": "",
+                      "date": ""
+                    }
+                  }
+                },
+                "char_shape_id": 0
               }
             ],
             "para_shape_id": 0,
@@ -1901,7 +1905,14 @@
               },
               {
                 "content": {
-                  "Text": "HWPX정의"
+                  "Control": {
+                    "CrossRef": {
+                      "target_name": "HWPX정의",
+                      "ref_type": "Bookmark",
+                      "content_type": "Page",
+                      "as_hyperlink": false
+                    }
+                  }
                 },
                 "char_shape_id": 5
               },
@@ -1913,7 +1924,14 @@
               },
               {
                 "content": {
-                  "Text": "헤더구조"
+                  "Control": {
+                    "CrossRef": {
+                      "target_name": "헤더구조",
+                      "ref_type": "Bookmark",
+                      "content_type": "Page",
+                      "as_hyperlink": true
+                    }
+                  }
                 },
                 "char_shape_id": 5
               },
@@ -2041,7 +2059,7 @@
           "fill": "ShowAll"
         },
         "line_number_shape": {
-          "restart_type": 0,
+          "restart_type": 2,
           "count_by": 5,
           "distance": 850,
           "start_number": 1
@@ -2090,6 +2108,14 @@
             ]
           }
         ],
+        "begin_num": {
+          "page": 0,
+          "footnote": 1,
+          "endnote": 1,
+          "pic": 0,
+          "tbl": 0,
+          "equation": 0
+        },
         "text_direction": "Horizontal"
       },
       {
@@ -3254,7 +3280,18 @@
                           }
                         ]
                       },
-                      "style": null
+                      "style": {
+                        "line_color": 10506240,
+                        "fill_color": 16775413,
+                        "line_width": 25,
+                        "line_style": "Solid",
+                        "rotation": null,
+                        "flip": null,
+                        "head_arrow": null,
+                        "tail_arrow": null,
+                        "fill": null,
+                        "drop_cap_style": "None"
+                      }
                     }
                   }
                 },
@@ -3346,7 +3383,7 @@
                         "fill_color": 16777215,
                         "line_width": 25,
                         "line_style": "Solid",
-                        "rotation": null,
+                        "rotation": 45.0,
                         "flip": null,
                         "head_arrow": null,
                         "tail_arrow": null,
@@ -3406,7 +3443,7 @@
                         "line_width": 25,
                         "line_style": "Solid",
                         "rotation": null,
-                        "flip": null,
+                        "flip": "Horizontal",
                         "head_arrow": null,
                         "tail_arrow": null,
                         "fill": null,
@@ -3511,6 +3548,14 @@
             ]
           }
         ],
+        "begin_num": {
+          "page": 0,
+          "footnote": 1,
+          "endnote": 1,
+          "pic": 0,
+          "tbl": 0,
+          "equation": 0
+        },
         "text_direction": "Horizontal"
       },
       {
@@ -5161,6 +5206,34 @@
             ]
           }
         ],
+        "master_pages": [
+          {
+            "apply_page_type": "Both",
+            "paragraphs": [
+              {
+                "runs": [
+                  {
+                    "content": {
+                      "Text": "[ DRAFT / 초안 ]"
+                    },
+                    "char_shape_id": 7
+                  }
+                ],
+                "para_shape_id": 1,
+                "column_break": false,
+                "page_break": false
+              }
+            ]
+          }
+        ],
+        "begin_num": {
+          "page": 1,
+          "footnote": 1,
+          "endnote": 1,
+          "pic": 1,
+          "tbl": 1,
+          "equation": 1
+        },
         "text_direction": "Horizontal"
       }
     ],
