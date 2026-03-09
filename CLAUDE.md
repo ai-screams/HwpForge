@@ -22,7 +22,7 @@ Foundation (🔩 primitives)
   → Core (🔨 pure document structure, no style definitions)
   → Blueprint (📐 YAML style templates, centralized like Figma Design Tokens)
   → Smithy (🔥 format-specific compilers: HWPX, HWP5, Markdown)
-  → Bindings (🐍⚒️ Python/CLI interfaces)
+  → Bindings (🐍⚒️🤖 Python/CLI/MCP interfaces)
 ```
 
 **Key Principle**: **Structure and Style are separate** (like HTML + CSS).
@@ -86,7 +86,7 @@ blueprint (foundation + core)
     ↓
 smithy-hwpx, smithy-hwp5, smithy-md (foundation + core + blueprint)
     ↓
-bindings-py, bindings-cli (all smithy crates)
+bindings-py, bindings-cli, bindings-mcp (all smithy crates)
 ```
 
 **Important**: Foundation is the root. If you modify foundation, ALL crates rebuild. Keep it minimal.
@@ -232,6 +232,8 @@ These were planned but **removed as unnecessary** (keep it simple):
 - `phase1_core_detailed.md` ~ `phase4_smithy_hwpx_encoder_detailed.md` — Phase별 상세 계획
 - `v1.0_decisions.md`, `v1.0_learnings.md` — 초기 의사결정/학습 기록
 - `BACKLOG_SMITHY_MD.md` — Phase 5 백로그
+- `2026-03-09-plugin-trinity-design.md` — Plugin Trinity (SKILL.md + MCP + Context7) 설계
+- `2026-03-09-plugin-trinity-implementation-plan.md` — Phase 7a 구현 계획
 
 ### Reference Projects (.docs/references/ - git excluded)
 
