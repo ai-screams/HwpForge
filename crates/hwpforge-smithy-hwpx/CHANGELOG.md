@@ -4,6 +4,36 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+## [0.1.3](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.1.2...hwpforge-smithy-hwpx-v0.1.3) - 2026-03-09
+
+### Added
+
+- *(examples)* add hwpx_complete_guide to JSON round-trip
+
+- *(examples)* add HWPX↔JSON round-trip examples
+
+- *(examples)* reorganize examples and add 16 HWPX showcase files
+
+- *(smithy-hwpx)* add gradient fill support for shapes
+
+
+### Fixed
+
+- *(smithy-hwpx)* fix JSON round-trip crash and improve codec fidelity
+
+- *(encoder)* use DrawingML namespace for chart title
+
+- *(encoder)* add pattern fill (hatchStyle) support and fix BACK_SLASH/SLASH swap
+
+- *(encoder)* fix rotation encoding to match 한글 convention
+
+- *(encoder)* encode flip in rotMatrix instead of scaMatrix
+
+- *(encoder)* apply scaMatrix + transMatrix for shape flip rendering
+
+- *(encoder)* add unique id to fieldBegin and fix table cellAddr for merged cells
+
+
 ## [0.1.2](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.1.1...hwpforge-smithy-hwpx-v0.1.2) - 2026-03-08
 
 ### Added

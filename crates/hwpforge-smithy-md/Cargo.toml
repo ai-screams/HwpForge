@@ -14,9 +14,9 @@ rust-version.workspace = true
 description = "Markdown codec (decoder + lossy/lossless encoder) for HwpForge"
 
 [dependencies]
-hwpforge-blueprint = { path = "../hwpforge-blueprint", version = "0.1.1" }
-hwpforge-core = { path = "../hwpforge-core", version = "0.1.1" }
-hwpforge-foundation = { path = "../hwpforge-foundation", version = "0.1.1" }
+hwpforge-blueprint = { path = "../hwpforge-blueprint", version = "0.1.3" }
+hwpforge-core = { path = "../hwpforge-core", version = "0.1.3" }
+hwpforge-foundation = { path = "../hwpforge-foundation", version = "0.1.3" }
 pulldown-cmark = { workspace = true }
 quick-xml = { workspace = true }
 serde = { workspace = true }
@@ -24,5 +24,5 @@ serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
-hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0.1.2" }
+hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0.1.3" }
 pretty_assertions = { workspace = true }
