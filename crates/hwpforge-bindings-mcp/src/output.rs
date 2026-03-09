@@ -1,6 +1,4 @@
 //! Shared output types for MCP tool responses.
-// Types are used by tool handlers added in subsequent tasks.
-#![allow(dead_code)]
 
 use serde::Serialize;
 

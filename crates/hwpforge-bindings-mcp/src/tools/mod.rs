@@ -6,3 +6,9 @@
 //! - `to_json`: Read for Edit (HWPX → JSON)
 //! - `patch`: Update (JSON → HWPX section replacement)
 //! - `templates`: Discover (available style presets)
+
+pub mod convert;
+pub mod inspect;
+pub mod patch;
+pub mod templates;
+pub mod to_json;
