@@ -42,35 +42,40 @@ The exported JSON follows the `ExportedSection` schema:
 
 ```json
 {
-  "paragraphs": [
-    {
-      "runs": [
-        {
-          "type": "text",
-          "text": "본문 텍스트입니다.",
-          "char_shape": { ... }
-        }
-      ],
-      "para_shape": { ... }
-    }
-  ],
-  "style_store": { ... }
+  "section_index": 0,
+  "section": {
+    "paragraphs": [
+      {
+        "runs": [
+          {
+            "content": { "Text": "본문 텍스트입니다." },
+            "char_shape_id": 0
+          }
+        ],
+        "para_shape_id": 0,
+        "column_break": false,
+        "page_break": false,
+        "style_id": 0
+      }
+    ]
+  },
+  "styles": { ... }
 }
 ```
 
 **Editable fields:**
 
-- `runs[].char_shape.font` — change font
-- `runs[].char_shape.size` — change font size (in HwpUnit, 1pt = 100)
-- `paragraphs[].para_shape.alignment` — change alignment
-- Add/remove entire paragraphs
-
+- `section.paragraphs[].runs[].content` — change text (e.g., `{"Text": "new text"}`)
+- `section.paragraphs[].runs[].char_shape_id` — reference a different char shape
+- `section.paragraphs[].para_shape_id` — reference a different paragraph shape
+- Add/remove entire paragraphs in `section.paragraphs`
 - Add/remove runs within a paragraph
 
 **Read-only fields (do not modify):**
 
-- `style_store` — style registry (modify via presets instead)
-- Internal IDs and indices
+- `styles` — style registry (modify via presets instead)
+- `section_index` — must match the `--section` argument in patch
+- `style_id`, `char_shape_id`, `para_shape_id` — only change to existing valid IDs
 
 ### 4. Patch — Write Changes Back
 
@@ -78,11 +83,11 @@ The exported JSON follows the `ExportedSection` schema:
 # Replace section 0
 hwpforge patch document.hwpx --section 0 section0.json -o updated.hwpx
 
-# With base file for image inheritance
-hwpforge patch document.hwpx --section 0 section0.json --base original.hwpx -o updated.hwpx
+# The first argument (base HWPX) provides image/style inheritance
+hwpforge patch original.hwpx --section 0 section0.json -o updated.hwpx
 ```
 
-Use `--base` when the original document contains images. The patch command inherits binary resources (images, OLE objects) from the base file.
+The first positional argument is the base HWPX file. The patch command inherits binary resources (images, OLE objects) from it.
 
 ### 5. Verify — Confirm Result
 
@@ -110,27 +115,29 @@ hwpforge schema exported-section
 
 ```python
 # Find paragraph by text content
-for para in section["paragraphs"]:
+for para in data["section"]["paragraphs"]:
     for run in para["runs"]:
-        if run.get("text") and "기존 텍스트" in run["text"]:
-            run["text"] = run["text"].replace("기존 텍스트", "새 텍스트")
+        content = run.get("content", {})
+        if "Text" in content and "기존 텍스트" in content["Text"]:
+            run["content"]["Text"] = content["Text"].replace("기존 텍스트", "새 텍스트")
 ```
 
 ### Add a new paragraph
 
 ```python
+existing = data["section"]["paragraphs"][0]
 new_para = {
-    "runs": [{"type": "text", "text": "추가할 내용입니다."}],
-    "para_shape": section["paragraphs"][0]["para_shape"]  # copy existing style
+    "runs": [{"content": {"Text": "추가할 내용입니다."}}],
+    "para_shape": existing["para_shape"]  # copy existing style
 }
-section["paragraphs"].append(new_para)
+data["section"]["paragraphs"].append(new_para)
 ```
 
 ### Delete a paragraph
 
 ```python
 # Remove paragraph at index 2
-del section["paragraphs"][2]
+del data["section"]["paragraphs"][2]
 ```
 
 ## Tips
@@ -138,5 +145,5 @@ del section["paragraphs"][2]
 - Always inspect before editing to understand the document structure
 - Use `--section N` to minimize JSON size (token efficiency)
 - Back up the original file before patching
-- Use `--base` for documents with images to preserve binary resources
+- The first positional argument (base HWPX) preserves binary resources (images)
 - Verify the output with `inspect` after patching

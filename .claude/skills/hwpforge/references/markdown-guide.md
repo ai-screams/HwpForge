@@ -11,19 +11,19 @@ HwpForge가 올바르게 변환하려면 GFM(GitHub Flavored Markdown) 표준을
 title: "문서 제목"
 author: "작성자 이름"
 date: "2026-03-09"
-preset: government
+preset: default
 ---
 ```
 
 지원 필드:
 
-| 필드           | 설명          | 예시                                          |
-| -------------- | ------------- | --------------------------------------------- |
-| `title`        | 문서 제목     | `"AI 기반 시스템 구축 제안서"`                |
-| `author`       | 작성자        | `"홍길동"`                                    |
-| `date`         | 작성일        | `"2026-03-09"`                                |
-| `preset`       | 스타일 프리셋 | `government`, `report`, `official`, `default` |
-| `organization` | 소속 기관     | `"(주)에이아이스크림"`                        |
+| 필드           | 설명          | 예시                                            |
+| -------------- | ------------- | ----------------------------------------------- |
+| `title`        | 문서 제목     | `"AI 기반 시스템 구축 제안서"`                  |
+| `author`       | 작성자        | `"홍길동"`                                      |
+| `date`         | 작성일        | `"2026-03-09"`                                  |
+| `preset`       | 스타일 프리셋 | `default` (currently the only available preset) |
+| `organization` | 소속 기관     | `"(주)에이아이스크림"`                          |
 
 프론트매터가 없으면 `default` 프리셋이 적용됩니다.
 

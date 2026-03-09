@@ -1,5 +1,7 @@
 # 보고서 (Report) 시나리오
 
+> **Note**: This scenario references the `report` preset which is **planned but not yet available**. Use `default` preset until it is implemented.
+
 ## 표준 구조
 
 연구 보고서, 용역 결과 보고서, 진행 보고서에 공통 적용되는 목차입니다.

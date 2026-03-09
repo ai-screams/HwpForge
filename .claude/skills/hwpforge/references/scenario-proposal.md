@@ -1,5 +1,7 @@
 # 정부 제안서 (Government Proposal) 시나리오
 
+> **Note**: This scenario references the `government` preset which is **planned but not yet available**. Use `default` preset until it is implemented.
+
 ## 표준 구조
 
 한국 정부 발주 RFP에 대응하는 제안서의 표준 목차 구성입니다.

@@ -1,5 +1,7 @@
 # 공문서 (Official Document) 시나리오
 
+> **Note**: This scenario references the `official` preset which is **planned but not yet available**. Use `default` preset until it is implemented.
+
 ## 표준 구조
 
 행정업무운영규정(대통령령)에 따른 공문서 구성입니다.

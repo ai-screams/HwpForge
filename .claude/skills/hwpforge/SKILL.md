@@ -25,8 +25,8 @@ The CLI binary is `hwpforge`. All commands support `--json` for machine-readable
 # File input
 hwpforge convert input.md -o output.hwpx
 
-# With preset
-hwpforge convert input.md -o output.hwpx --preset government
+# With preset (only 'default' available currently)
+hwpforge convert input.md -o output.hwpx --preset default
 
 # stdin input (use - as path)
 echo "# Title" | hwpforge convert - -o out.hwpx
@@ -69,8 +69,8 @@ hwpforge to-json document.hwpx
 # Replace section 0 with edited JSON
 hwpforge patch document.hwpx --section 0 section.json -o updated.hwpx
 
-# Use base file for image inheritance
-hwpforge patch document.hwpx --section 0 section.json --base original.hwpx -o updated.hwpx
+# The first argument is the base HWPX file (preserves images and styles)
+hwpforge patch original.hwpx --section 0 section.json -o updated.hwpx
 ```
 
 ### templates — List and Inspect Presets
