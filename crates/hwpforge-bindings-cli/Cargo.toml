@@ -8,7 +8,7 @@ publish = false
 readme.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "AI-first CLI for HwpForge document generation and editing"
+description = "Hammer — AI-first CLI for HwpForge document generation and editing"
 
 [[bin]]
 name = "hwpforge"

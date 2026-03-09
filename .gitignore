@@ -475,6 +475,9 @@ $RECYCLE.BIN/
 # Share skills (agentskills.io standard — project-level AI instructions)
 !.claude/skills/
 
+# MCP server config (local binary paths, user-specific)
+.mcp.json
+
 # mdBook build output
 /book/
 temp/

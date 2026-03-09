@@ -138,6 +138,24 @@ See [markdown-guide.md](references/markdown-guide.md) for:
 - Horizontal rule (`---`) as page break signal
 - Korean special character handling
 
+## Agent Behavior Rules
+
+### Output: No Raw JSON
+
+Never show raw JSON output to the user during JSON round-trip workflows. Always present results as a summarized table, structure diagram, or concise description. Save intermediate JSON to temporary files for internal processing only.
+
+### Edit: In-Place by Default
+
+When the user asks to modify a specific HWPX file, overwrite the original file unless they explicitly specify a different output path. Set the `-o` flag to the same path as the input file.
+
+```bash
+# Default behavior: overwrite the original
+hwpforge patch document.hwpx --section 0 modified.json -o document.hwpx
+
+# Only create a new file when the user explicitly specifies a different output path
+hwpforge patch document.hwpx --section 0 modified.json -o new_document.hwpx
+```
+
 ## Error Handling
 
 All commands return structured errors when `--json` is passed:

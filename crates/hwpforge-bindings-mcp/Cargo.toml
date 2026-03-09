@@ -3,7 +3,7 @@ name = "hwpforge-bindings-mcp"
 version.workspace = true
 edition = "2021"
 license = "MIT OR Apache-2.0"
-description = "HwpForge MCP server — AI-first HWPX document tools"
+description = "Anvil — HwpForge MCP server for AI-native HWPX document tools"
 
 [[bin]]
 name = "hwpforge-mcp"

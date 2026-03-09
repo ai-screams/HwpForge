@@ -82,9 +82,9 @@ cargo add hwpforge --features full
 hwpforge = "0.1"
 ```
 
-### ⚒️ CLI로 시작하기
+### 🔨 Hammer — CLI로 시작하기
 
-CLI 도구 `hwpforge`를 설치하면 터미널에서 바로 문서를 생성하고 편집할 수 있습니다.
+CLI 도구 `hwpforge`(Hammer)를 설치하면 터미널에서 바로 문서를 생성하고 편집할 수 있습니다.
 
 ```bash
 cargo install hwpforge-bindings-cli
@@ -112,17 +112,56 @@ hwpforge schema document
 > section 단위로 정밀하게 편집할 수 있습니다. `--json` 플래그로 모든 명령어가
 > machine-readable 출력을 지원합니다.
 
-### 🤖 MCP Server — AI가 직접 한글 문서를 다루다
+### ⚒️ Anvil — MCP Server로 AI가 직접 한글 문서를 다루다
 
-Claude Code, Cursor, Windsurf 등 [MCP](https://modelcontextprotocol.io/) 지원 AI 도구에서 **한글 문서를 직접 생성하고 편집**할 수 있습니다. "보고서 만들어줘"라고 말하면, AI가 알아서 `.hwpx` 파일을 뚝딱 만들어냅니다.
+Claude Code, Codex CLI, ChatGPT, Cursor, Windsurf 등 [MCP](https://modelcontextprotocol.io/) 지원 AI 도구에서 **한글 문서를 직접 생성하고 편집**할 수 있습니다. "보고서 만들어줘"라고 말하면, AI가 알아서 `.hwpx` 파일을 뚝딱 만들어냅니다.
 
-**설치**
+#### 1단계: 설치
 
 ```bash
 cargo install hwpforge-bindings-mcp
 ```
 
-**Claude Code에 등록** — `.claude/settings.json`에 추가:
+#### 2단계: AI 도구에 등록
+
+<details>
+<summary><strong>Claude Code</strong> (터미널)</summary>
+
+```bash
+# 현재 프로젝트에만
+claude mcp add hwpforge hwpforge-mcp
+
+# 모든 프로젝트에서 사용 (글로벌)
+claude mcp add --global hwpforge hwpforge-mcp
+```
+
+</details>
+
+<details>
+<summary><strong>Codex CLI</strong> (터미널)</summary>
+
+`~/.codex/config.toml`에 추가:
+
+```toml
+[mcp_servers.hwpforge]
+command = "hwpforge-mcp"
+```
+
+또는 CLI로:
+
+```bash
+codex mcp add hwpforge hwpforge-mcp
+```
+
+</details>
+
+<details>
+<summary><strong>Claude Desktop</strong> (앱)</summary>
+
+설정 파일을 편집합니다:
+
+- macOS: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- Windows: `%APPDATA%\Claude\claude_desktop_config.json`
 
 ```json
 {
@@ -134,7 +173,65 @@ cargo install hwpforge-bindings-mcp
 }
 ```
 
-등록하면 Claude Code가 자동으로 5개 도구를 인식합니다:
+</details>
+
+<details>
+<summary><strong>ChatGPT Desktop</strong> (앱)</summary>
+
+Settings → Tools → Add MCP Server에서:
+
+- Name: `hwpforge`
+- Command: `hwpforge-mcp`
+
+또는 설정 파일을 직접 편집:
+
+```json
+{
+  "mcpServers": {
+    "hwpforge": {
+      "command": "hwpforge-mcp"
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>Cursor</strong> (에디터)</summary>
+
+프로젝트 루트에 `.cursor/mcp.json` 생성:
+
+```json
+{
+  "mcpServers": {
+    "hwpforge": {
+      "command": "hwpforge-mcp"
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><strong>Windsurf</strong> (에디터)</summary>
+
+`~/.codeium/windsurf/mcp_config.json`에 추가:
+
+```json
+{
+  "mcpServers": {
+    "hwpforge": {
+      "command": "hwpforge-mcp"
+    }
+  }
+}
+```
+
+</details>
+
+#### 등록하면 5개 도구를 사용할 수 있습니다
 
 | 도구                 | 하는 일              | 한마디                         |
 | -------------------- | -------------------- | ------------------------------ |
@@ -144,21 +241,14 @@ cargo install hwpforge-bindings-mcp
 | `hwpforge_patch`     | JSON으로 섹션 교체   | "이 부분만 바꿔서 다시 저장해" |
 | `hwpforge_templates` | 스타일 프리셋 조회   | "어떤 템플릿 쓸 수 있어?"      |
 
-**업데이트** — 최신 버전으로 갱신:
+#### 업데이트 / 삭제
 
 ```bash
-cargo install hwpforge-bindings-mcp --force
+cargo install hwpforge-bindings-mcp --force   # 업데이트
+cargo uninstall hwpforge-bindings-mcp          # 삭제
 ```
 
-**삭제** — 깔끔하게 제거:
-
-```bash
-cargo uninstall hwpforge-bindings-mcp
-```
-
-`.claude/settings.json`에서 `hwpforge` 항목도 지워주세요.
-
-> **왜 MCP?** CLI는 AI가 `bash` 명령을 실행해야 하지만, MCP는 AI가 **네이티브 도구**로
+> **왜 MCP?** CLI(Hammer)는 AI가 `bash` 명령을 실행해야 하지만, MCP(Anvil)는 AI가 **네이티브 도구**로
 > 직접 호출합니다. 파일 경로 파싱도, stdout 해석도 필요 없습니다.
 > JSON-RPC로 요청하면 구조화된 JSON으로 응답 — 깔끔합니다.
 
