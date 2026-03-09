@@ -63,6 +63,22 @@ HwpForge 사용 예제 모음
 
 [src-json-roundtrip]: ../crates/hwpforge-smithy-hwpx/examples/hwpx_json_roundtrip.rs
 
+### HWPX → Markdown 변환 예제
+
+[`hwpx_md_convert.rs`][src-md-convert]로 생성. HWPX를 Lossy(읽기용 GFM)와 Lossless(라운드트립용 HTML) 마크다운으로 변환합니다.
+
+| 파일                                                                   | 설명                                             |
+| ---------------------------------------------------------------------- | ------------------------------------------------ |
+| [`hwpx2md/01_text.hwpx`](hwpx2md/01_text.hwpx)                         | 입력 — 텍스트 예제 원본                          |
+| [`hwpx2md/01_text.md`](hwpx2md/01_text.md)                             | 출력 — Lossy GFM (사람이 읽기 좋은 형태)         |
+| [`hwpx2md/01_text.lossless.md`](hwpx2md/01_text.lossless.md)           | 출력 — Lossless HTML (스타일/레이아웃 정보 보존) |
+| [`hwpx2md/hwpx_complete_guide.hwpx`](hwpx2md/hwpx_complete_guide.hwpx) | 입력 — 종합 가이드 (4섹션, 표/차트/수식/도형)    |
+| [`hwpx2md/hwpx_complete_guide.md`](hwpx2md/hwpx_complete_guide.md)     | 출력 — Lossy GFM (차트/수식/도형은 텍스트 추출)  |
+
+> **참고**: `hwpx_complete_guide`는 차트/수식/호/곡선 등 Lossless 미지원 요소를 포함하여 Lossy만 생성됩니다.
+
+[src-md-convert]: ../crates/hwpforge-smithy-md/examples/hwpx_md_convert.rs
+
 ## 실행 방법
 
 ```bash
@@ -78,8 +94,11 @@ cargo run -p hwpforge-smithy-hwpx --example full_report
 # HWPX ↔ JSON round-trip
 cargo run -p hwpforge-smithy-hwpx --example hwpx_json_roundtrip
 
+# HWPX → Markdown
+cargo run -p hwpforge-smithy-md --example hwpx_md_convert
+
 # Markdown → HWPX
 cargo run -p hwpforge-smithy-md --example gen_hwpx
 ```
 
-기능별/종합 가이드는 `temp/`에, round-trip 예제는 `examples/hwpx2json/`과 `examples/json2hwpx/`에 생성됩니다.
+기능별/종합 가이드는 `temp/`에, round-trip 예제는 `examples/hwpx2json/`과 `examples/json2hwpx/`에, MD 변환은 `examples/hwpx2md/`에 생성됩니다.
