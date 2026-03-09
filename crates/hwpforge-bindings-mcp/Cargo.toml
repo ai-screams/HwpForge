@@ -1,8 +1,16 @@
 [package]
 name = "hwpforge-bindings-mcp"
 version.workspace = true
-edition = "2021"
-license = "MIT OR Apache-2.0"
+authors.workspace = true
+categories.workspace = true
+documentation.workspace = true
+edition.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+license.workspace = true
+readme = "README.md"
+repository.workspace = true
+rust-version.workspace = true
 description = "Anvil — HwpForge MCP server for AI-native HWPX document tools"
 
 [[bin]]
@@ -10,9 +18,9 @@ name = "hwpforge-mcp"
 path = "src/main.rs"
 
 [dependencies]
-hwpforge-core = { path = "../hwpforge-core" }
-hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx" }
-hwpforge-smithy-md = { path = "../hwpforge-smithy-md" }
+hwpforge-core = { path = "../hwpforge-core", version = "0.1.3" }
+hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0.1.3" }
+hwpforge-smithy-md = { path = "../hwpforge-smithy-md", version = "0.1.3" }
 rmcp = { version = "0.16", features = ["server", "macros", "transport-io"] }
 schemars = { workspace = true }
 serde = { workspace = true }
