@@ -1,12 +1,10 @@
 //! `hwpforge_to_json` — HWPX → JSON export tool.
 
-use std::path::Path;
-
 use serde::Serialize;
 
 use hwpforge_smithy_hwpx::{ExportedDocument, ExportedSection, HwpxDecoder};
 
-use crate::output::{check_file_size, ToolErrorInfo};
+use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo};
 
 /// Output data from a successful JSON export.
 #[derive(Debug, Serialize)]
@@ -28,23 +26,7 @@ pub fn run_to_json(
     section_idx: Option<usize>,
     output_path: Option<&str>,
 ) -> Result<ToJsonData, ToolErrorInfo> {
-    let path = Path::new(file_path);
-    if !path.exists() {
-        return Err(ToolErrorInfo::new(
-            "FILE_NOT_FOUND",
-            format!("HWPX file not found: {file_path}"),
-            "Check the file path and try again.",
-        ));
-    }
-
-    check_file_size(path)?;
-    let bytes = std::fs::read(path).map_err(|e| {
-        ToolErrorInfo::new(
-            "READ_ERROR",
-            format!("Failed to read file: {e}"),
-            "Check file permissions.",
-        )
-    })?;
+    let bytes = read_file_bytes(file_path)?;
 
     let hwpx_doc = HwpxDecoder::decode(&bytes).map_err(|e| {
         ToolErrorInfo::new(
@@ -62,7 +44,7 @@ pub fn run_to_json(
             return Err(ToolErrorInfo::new(
                 "SECTION_OUT_OF_RANGE",
                 format!("Section {idx} does not exist (document has {} sections)", sections.len()),
-                format!("Valid range: 0..{}", sections.len().saturating_sub(1)),
+                format!("Valid range: 0..={}", sections.len().saturating_sub(1)),
             ));
         }
         let exported =
@@ -89,25 +71,7 @@ pub fn run_to_json(
 
     // Write to file if output_path is given
     if let Some(out_path) = output_path {
-        let out = Path::new(out_path);
-        if let Some(parent) = out.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    ToolErrorInfo::new(
-                        "WRITE_ERROR",
-                        format!("Cannot create output directory: {e}"),
-                        "Check write permissions.",
-                    )
-                })?;
-            }
-        }
-        std::fs::write(out, &json_string).map_err(|e| {
-            ToolErrorInfo::new(
-                "WRITE_ERROR",
-                format!("Failed to write JSON: {e}"),
-                "Check disk space and permissions.",
-            )
-        })?;
+        write_output_file(out_path, json_string.as_bytes())?;
         Ok(ToJsonData {
             output_path: Some(out_path.to_string()),
             size_bytes,

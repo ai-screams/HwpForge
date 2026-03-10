@@ -23,7 +23,7 @@ pub fn run_templates(name: Option<&str>) -> Result<TemplatesData, ToolErrorInfo>
             return Err(ToolErrorInfo::new(
                 "PRESET_NOT_FOUND",
                 format!("Preset '{name}' not found"),
-                "Available presets: default. Use hwpforge_templates without a name to list all.",
+                "Available presets: default, modern, classic, latest. Use hwpforge_templates without a name to list all.",
             ));
         }
         Ok(TemplatesData { templates: filtered })

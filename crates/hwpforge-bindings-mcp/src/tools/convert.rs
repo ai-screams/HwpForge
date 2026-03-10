@@ -1,14 +1,14 @@
 //! `hwpforge_convert` — Markdown → HWPX conversion tool.
 
-use std::path::Path;
-
 use serde::Serialize;
 
 use hwpforge_core::image::ImageStore;
+use hwpforge_foundation::FontId;
+use hwpforge_smithy_hwpx::presets::builtin_presets;
 use hwpforge_smithy_hwpx::{HwpxEncoder, HwpxStyleStore};
 use hwpforge_smithy_md::MdDecoder;
 
-use crate::output::{check_file_size, ToolErrorInfo, MAX_INLINE_SIZE};
+use crate::output::{read_file_string, write_output_file, ToolErrorInfo, MAX_INLINE_SIZE};
 
 /// Output data from a successful conversion.
 #[derive(Debug, Serialize)]
@@ -33,13 +33,15 @@ pub fn run_convert(
     preset: &str,
 ) -> Result<ConvertData, ToolErrorInfo> {
     // 1. Validate preset
-    if preset != "default" {
-        return Err(ToolErrorInfo::new(
+    let presets = builtin_presets();
+    let preset_info = presets.iter().find(|p| p.name == preset).ok_or_else(|| {
+        ToolErrorInfo::new(
             "PRESET_NOT_FOUND",
             format!("Preset '{preset}' not found"),
-            "Available presets: default. Use hwpforge_templates to see all.",
-        ));
-    }
+            "Use hwpforge_templates to see available presets.",
+        )
+    })?;
+    let preset_font = preset_info.font.clone();
 
     // 2. Validate output extension
     if !output_path.ends_with(".hwpx") {
@@ -52,22 +54,7 @@ pub fn run_convert(
 
     // 3. Read markdown content
     let md_content: String = if is_file {
-        let path = Path::new(markdown);
-        if !path.exists() {
-            return Err(ToolErrorInfo::new(
-                "FILE_NOT_FOUND",
-                format!("Markdown file not found: {markdown}"),
-                "Check the file path and try again.",
-            ));
-        }
-        check_file_size(path)?;
-        std::fs::read_to_string(path).map_err(|e| {
-            ToolErrorInfo::new(
-                "READ_ERROR",
-                format!("Failed to read file: {e}"),
-                "Check file permissions.",
-            )
-        })?
+        read_file_string(markdown)?
     } else {
         if markdown.len() > MAX_INLINE_SIZE {
             return Err(ToolErrorInfo::new(
@@ -84,7 +71,7 @@ pub fn run_convert(
     };
 
     // 4. Decode Markdown → Core Document
-    let md_doc = MdDecoder::decode_with_default(&md_content).map_err(|e| {
+    let mut md_doc = MdDecoder::decode_with_default(&md_content).map_err(|e| {
         ToolErrorInfo::new(
             "MD_DECODE_ERROR",
             format!("Markdown decode failed: {e}"),
@@ -96,7 +83,27 @@ pub fn run_convert(
     let sections: usize = md_doc.document.sections().len();
     let paragraphs: usize = md_doc.document.sections().iter().map(|s| s.paragraphs.len()).sum();
 
-    // 6. Build style store and validate
+    // 6. Apply preset font to style registry, then build full style store.
+    //    from_registry() creates the complete store (char shapes, para shapes,
+    //    styles, border fills) unlike with_default_fonts() which only sets fonts.
+    //    Only replace base font entries — preserve specialty fonts (e.g., D2Coding
+    //    for code blocks) by checking against the original base font name.
+    let preset_font_id = FontId::new(&preset_font).map_err(|e| {
+        ToolErrorInfo::new("PRESET_ERROR", format!("Invalid preset font name: {e}"), "")
+    })?;
+    let original_base =
+        md_doc.style_registry.fonts.first().map(|f| f.as_str().to_string()).unwrap_or_default();
+    md_doc.style_registry.fonts = md_doc
+        .style_registry
+        .fonts
+        .iter()
+        .map(|f| if f.as_str() == original_base { preset_font_id.clone() } else { f.clone() })
+        .collect();
+    for cs in &mut md_doc.style_registry.char_shapes {
+        if cs.font == original_base {
+            cs.font.clone_from(&preset_font);
+        }
+    }
     let style_store = HwpxStyleStore::from_registry(&md_doc.style_registry);
     let image_store = ImageStore::new();
 
@@ -118,25 +125,7 @@ pub fn run_convert(
     })?;
 
     // 8. Write output file
-    let out = Path::new(output_path);
-    if let Some(parent) = out.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                ToolErrorInfo::new(
-                    "WRITE_ERROR",
-                    format!("Cannot create output directory: {e}"),
-                    "Check write permissions.",
-                )
-            })?;
-        }
-    }
-    std::fs::write(out, &hwpx_bytes).map_err(|e| {
-        ToolErrorInfo::new(
-            "WRITE_ERROR",
-            format!("Failed to write HWPX: {e}"),
-            "Check disk space and permissions.",
-        )
-    })?;
+    write_output_file(output_path, &hwpx_bytes)?;
 
     let size_bytes: u64 = hwpx_bytes.len() as u64;
 

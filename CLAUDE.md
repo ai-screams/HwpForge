@@ -8,8 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document formats, designed with LLM-first principles. The goal is to enable AI agents (like Claude Code) to generate Korean government proposal documents using natural language + Markdown + YAML style templates.
 
-**Current Status**: Phase 0-5 + Wave 1-14 + Phase 6 CLI + Phase 7a MCP 완료
-**Stats**: ~52,700 LOC, 1,602 tests (nextest), 116 .rs files, 10 crates, 92.65% coverage
+**Current Status**: Phase 0-5 + Wave 1-14 + Phase 6 CLI + Phase 7a MCP + Phase 7b Dist + Phase 7c Extended 완료
+**Stats**: ~54,100 LOC, 1,645 tests (nextest), 96 .rs files, 10 crates, 92.65% coverage
 
 ---
 
@@ -524,14 +524,14 @@ landscape 반전(gotcha #2)과 동일한 패턴. `PatternType`의 `Display`/`Fro
 | Wave 12       | References & Annotations                          | ✅ Done           | —     | ~500   |
 | Wave 13       | Remaining Content (Dutmal/Compose)                | ✅ Done           | —     | ~400   |
 | Wave 14       | Final Features (TextDirection/DropCap/page_break) | ✅ Done           | —     | ~200   |
-| 6 (CLI)       | bindings-cli (AI-first CLI, 78 integration tests) | ✅ Done           | 78    | 1,035  |
+| 6 (CLI)       | bindings-cli (AI-first CLI, 79 integration tests) | ✅ Done           | 79    | 971    |
 | 6 (Python)    | bindings-py (PyO3)                                | 📋 Ready          | —     | —      |
 | 7a (MCP)      | bindings-mcp (5 MCP tools + SKILL.md)             | ✅ Done           | —     | 1,031  |
-| 7b (Dist)     | npm packaging, MCP Registry, Context7             | 📋 Ready          | —     | —      |
-| 7c (Ext)      | Tier 2/3 tools, workspace, resources, prompts     | 📋 Ready          | —     | —      |
+| 7b (Dist)     | npm packaging, CI, Registry 준비                  | ✅ Done           | —     | —      |
+| 7c (Ext)      | 3 new tools + 4 resources + 3 prompts             | ✅ Done           | 43    | +1,277 |
 | 8             | Testing + Release v1.0                            | 📋 Ready          | —     | —      |
 
-**Totals**: ~52,700 LOC, 1,602 tests (nextest), 116 .rs files, 10 crates
+**Totals**: ~54,100 LOC, 1,645 tests (nextest), 96 .rs files, 10 crates
 
 ### v2.0 (Second Cycle: Full Compatibility)
 
