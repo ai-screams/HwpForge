@@ -191,7 +191,7 @@ jobs:
                 echo "::error::@hwpforge/${pkg}@${version} not visible after 5 min — aborting"
                 exit 1
               fi
-              echo "Waiting for @hwpforge/${pkg}@${version} (attempt ${i}/18)..."
+              echo "Waiting for @hwpforge/${pkg}@${version} (attempt ${i}/30)..."
               sleep 10
             done
           done
