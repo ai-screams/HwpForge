@@ -114,31 +114,21 @@ hwpforge schema document
 
 ### ⚙️ Anvil — MCP Server로 AI가 직접 한글 문서를 다루다
 
-Claude Code, Codex CLI, ChatGPT, Cursor, Windsurf 등 [MCP](https://modelcontextprotocol.io/) 지원 AI 도구에서 **한글 문서를 직접 생성하고 편집**할 수 있습니다. "보고서 만들어줘"라고 말하면, AI가 알아서 `.hwpx` 파일을 뚝딱 만들어냅니다.
+Claude Code, Codex CLI, Claude, ChatGPT, Cursor, Antigravity 등 [MCP](https://modelcontextprotocol.io/) 지원 AI 도구에서 **한글 문서를 직접 생성하고 편집**할 수 있습니다. "보고서 만들어줘"라고 말하면, AI가 알아서 `.hwpx` 파일을 뚝딱 만들어냅니다.
 
-#### 1단계: 설치
+#### AI 도구에 등록
 
-npm (Node.js 20+) 또는 Cargo 중 하나를 선택합니다:
-
-```bash
-# 방법 A: npm (권장 — Rust 툴체인 불필요)
-npx -y @hwpforge/mcp
-
-# 방법 B: Cargo (Rust 개발자용)
-cargo install hwpforge-bindings-mcp
-```
-
-#### 2단계: AI 도구에 등록
+한 줄이면 설치 + 등록이 끝납니다. npm은 `npx -y`가 자동으로 바이너리를 다운로드합니다.
 
 <details>
 <summary><strong>Claude Code</strong> (터미널)</summary>
 
 ```bash
-# npm으로 설치한 경우
+# npm (권장 — Rust 툴체인 불필요)
 claude mcp add hwpforge -- npx -y @hwpforge/mcp
 
-# cargo로 설치한 경우
-claude mcp add hwpforge hwpforge-mcp
+# Cargo (Rust 개발자용)
+cargo install hwpforge-bindings-mcp && claude mcp add hwpforge hwpforge-mcp
 
 # 모든 프로젝트에서 사용 (글로벌)
 claude mcp add --global hwpforge -- npx -y @hwpforge/mcp
@@ -228,9 +218,9 @@ Settings → Tools → Add MCP Server에서:
 </details>
 
 <details>
-<summary><strong>Windsurf</strong> (에디터)</summary>
+<summary><strong>Antigravity</strong> (에디터)</summary>
 
-`~/.codeium/windsurf/mcp_config.json`에 추가:
+`...` 드롭다운 → MCP Store → Manage MCP Servers → View raw config (`mcp_config.json`)에 추가:
 
 ```json
 {
@@ -257,7 +247,10 @@ Settings → Tools → Add MCP Server에서:
 
 #### 업데이트 / 삭제
 
+npm은 `npx -y`가 항상 최신 버전을 가져오므로 별도 업데이트가 필요 없습니다.
+
 ```bash
+# Cargo 사용자만 해당
 cargo install hwpforge-bindings-mcp --force   # 업데이트
 cargo uninstall hwpforge-bindings-mcp          # 삭제
 ```
