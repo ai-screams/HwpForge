@@ -8,9 +8,9 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/ai-screams/HwpForge/ci.yml?branch=main&label=CI&logo=github)](https://github.com/ai-screams/HwpForge/actions/workflows/ci.yml)
 [![codecov](https://img.shields.io/badge/coverage-92.65%25-brightgreen.svg?logo=codecov)](https://github.com/ai-screams/HwpForge)
-[![Tests](https://img.shields.io/badge/tests-1%2C602_passed-success.svg?logo=checkmarx)](https://github.com/ai-screams/HwpForge)
+[![Tests](https://img.shields.io/badge/tests-1%2C645_passed-success.svg?logo=checkmarx)](https://github.com/ai-screams/HwpForge)
 [![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg?logo=rust)](https://github.com/ai-screams/HwpForge)
-[![Lines of Code](https://img.shields.io/badge/LOC-~52%2C700-informational.svg)](https://github.com/ai-screams/HwpForge)
+[![Lines of Code](https://img.shields.io/badge/LOC-~54%2C100-informational.svg)](https://github.com/ai-screams/HwpForge)
 
 [![crates.io](https://img.shields.io/crates/v/hwpforge.svg?logo=rust)](https://crates.io/crates/hwpforge)
 [![docs.rs](https://img.shields.io/docsrs/hwpforge?logo=docs.rs)](https://docs.rs/hwpforge)
@@ -235,15 +235,18 @@ Settings → Tools → Add MCP Server에서:
 
 </details>
 
-#### 등록하면 5개 도구를 사용할 수 있습니다
+#### 등록하면 8개 도구를 사용할 수 있습니다
 
-| 도구                 | 하는 일              | 한마디                         |
-| -------------------- | -------------------- | ------------------------------ |
-| `hwpforge_convert`   | Markdown → HWPX 변환 | "이 마크다운을 한글 파일로!"   |
-| `hwpforge_inspect`   | HWPX 구조 확인       | "이 문서 뭐가 들어있어?"       |
-| `hwpforge_to_json`   | HWPX → JSON 추출     | "이 섹션 내용 좀 꺼내봐"       |
-| `hwpforge_patch`     | JSON으로 섹션 교체   | "이 부분만 바꿔서 다시 저장해" |
-| `hwpforge_templates` | 스타일 프리셋 조회   | "어떤 템플릿 쓸 수 있어?"      |
+| 도구                 | 하는 일                 | 한마디                         |
+| -------------------- | ----------------------- | ------------------------------ |
+| `hwpforge_convert`   | Markdown → HWPX 변환    | "이 마크다운을 한글 파일로!"   |
+| `hwpforge_inspect`   | HWPX 구조 확인          | "이 문서 뭐가 들어있어?"       |
+| `hwpforge_to_json`   | HWPX → JSON 추출        | "이 섹션 내용 좀 꺼내봐"       |
+| `hwpforge_patch`     | JSON으로 섹션 교체      | "이 부분만 바꿔서 다시 저장해" |
+| `hwpforge_templates` | 스타일 프리셋 조회      | "어떤 템플릿 쓸 수 있어?"      |
+| `hwpforge_validate`  | HWPX 구조/무결성 검증   | "이 파일 문제 없는지 확인해"   |
+| `hwpforge_restyle`   | 스타일 프리셋 일괄 적용 | "이 문서 폰트 바꿔줘"          |
+| `hwpforge_from_json` | JSON → HWPX 직접 생성   | "이 JSON으로 한글 파일 만들어" |
 
 #### 업데이트 / 삭제
 
@@ -393,9 +396,9 @@ Smithy compiler가 Core + Blueprint를 합쳐 최종 포맷을 생성합니다.
 
 | 지표        | 값                      |
 | ----------- | ----------------------- |
-| 총 LOC      | ~52,700                 |
-| 테스트      | 1,602개 (cargo-nextest) |
-| 소스 파일   | 116 .rs                 |
+| 총 LOC      | ~54,100                 |
+| 테스트      | 1,645개 (cargo-nextest) |
+| 소스 파일   | 96 .rs                  |
 | Crate 수    | 10개 (7개 배포)         |
 | 커버리지    | 92.65%                  |
 | Clippy 경고 | 0                       |
@@ -462,7 +465,7 @@ HwpForge/
 ### 출시 예정
 
 - [ ] HWP5 읽기 — 구형 바이너리 포맷(`.hwp`) 디코더
-- [x] MCP 서버 — Claude, Cursor 등 AI 도구가 tool로 직접 HWPX 생성 (5개 도구)
+- [x] MCP 서버 — Claude, Cursor 등 AI 도구가 tool로 직접 HWPX 생성·검증·편집 (8개 도구 + 4 리소스 + 3 프롬프트)
 - [x] CLI 도구 — `hwpforge convert doc.md doc.hwpx` 한 줄 변환 (7개 명령어)
 
 - [ ] HWPX 완전 지원 — 양식 컨트롤, 변경 추적, OLE 객체
