@@ -76,6 +76,26 @@ let bytes = hwpforge::hwpx::HwpxEncoder::encode(
 
 잘못된 상태에서 저장을 시도하면 **런타임 에러가 아닌 컴파일 에러**가 발생합니다.
 
+## 이중 포맷 설계: HWP5 + HWPX
+
+한국에는 두 가지 주요 문서 포맷이 있습니다:
+
+- **HWP5** (`.hwp`): OLE2/CFB 바이너리 컨테이너 + TLV 레코드 (1990년대~현재, 레거시)
+- **HWPX** (`.hwpx`): ZIP 컨테이너 + XML 파일 (KS X 6101 국가 표준, 2014년~현재)
+
+HwpForge는 **Core DOM이 포맷에 독립적**이도록 설계하여 두 포맷을 통합 처리합니다:
+
+```text
+HWP5 (.hwp)  ──decode──▶ ┌────────────────────┐ ◀──decode── Markdown (.md)
+                          │  Document<Draft>   │
+HWPX (.hwpx) ──decode──▶ │  (포맷 독립 IR)    │ ──encode──▶ HWPX / Markdown
+                          └────────────────────┘
+```
+
+모든 Smithy 크레이트는 Core DOM으로/에서 변환만 수행합니다. 비즈니스 로직은 Core에만 의존하므로, 새 포맷(예: smithy-odt)을 추가해도 기존 코드를 수정할 필요가 없습니다.
+
+> 자세한 내용은 [HWP5와 HWPX: 이중 포맷 파이프라인](../guide/format-pipeline.md)을 참고하세요.
+
 ## 각 크레이트 설명
 
 ### `hwpforge-foundation`
