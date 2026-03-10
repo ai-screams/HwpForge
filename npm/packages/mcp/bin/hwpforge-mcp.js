@@ -43,5 +43,6 @@ try {
   execFileSync(binPath, process.argv.slice(2), { stdio: "inherit" });
 } catch (e) {
   if (e.status !== null) process.exit(e.status);
+  if (e.signal) process.kill(process.pid, e.signal);
   throw e;
 }

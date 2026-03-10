@@ -26,6 +26,7 @@ concurrency:
 jobs:
   publish-platform:
     name: "npm › ${{ matrix.npm-suffix }}"
+    if: startsWith(github.ref_name, 'v')
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
     strategy:
@@ -70,7 +71,7 @@ jobs:
 
       - name: Install cross-rs
         if: matrix.cross
-        run: cargo install cross --locked
+        uses: taiki-e/install-action@cross
 
       - name: Build (native)
         if: "!matrix.cross"
@@ -80,12 +81,16 @@ jobs:
         if: matrix.cross
         run: cross build --release -p hwpforge-bindings-mcp --target ${{ matrix.target }}
 
-      - name: Extract version from tag
+      - name: Extract and validate version from tag
         id: version
         shell: bash
         run: |
           tag="${{ github.ref_name }}"
           version="${tag#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid version '$version' from tag '$tag'"
+            exit 1
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Update platform package.json version
@@ -130,12 +135,19 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Extract version from tag
+      - name: Extract and validate version from tag
         id: version
         run: |
           tag="${{ github.ref_name }}"
           version="${tag#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid version '$version' from tag '$tag'"
+            exit 1
+          fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Wait for npm registry propagation
+        run: sleep 30
 
       - name: Update base package.json version and optionalDependencies
         run: |
