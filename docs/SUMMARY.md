@@ -19,6 +19,7 @@
 - [차트 생성](guide/charts.md)
 - [텍스트 추출 (Text Extraction)](guide/text-extraction.md)
 - [HWP5와 HWPX: 이중 포맷 파이프라인](guide/format-pipeline.md)
+- [대규모 HWP 아카이브 마이그레이션](guide/migration-strategy.md)
 
 # 레퍼런스
 
