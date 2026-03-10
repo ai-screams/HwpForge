@@ -18,9 +18,9 @@ description = "HWPX format codec (encoder + decoder) for HwpForge"
 schemars = ["dep:schemars"]
 
 [dependencies]
-hwpforge-blueprint = { path = "../hwpforge-blueprint", version = "0.1.4" }
-hwpforge-core = { path = "../hwpforge-core", version = "0.1.4" }
-hwpforge-foundation = { path = "../hwpforge-foundation", version = "0.1.3" }
+hwpforge-blueprint = { path = "../hwpforge-blueprint", version = "0.1.5" }
+hwpforge-core = { path = "../hwpforge-core", version = "0.1.5" }
+hwpforge-foundation = { path = "../hwpforge-foundation", version = "0.1.5" }
 quick-xml = { workspace = true }
 schemars = { workspace = true, optional = true }
 serde = { workspace = true }
