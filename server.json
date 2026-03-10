@@ -4,14 +4,20 @@
   "description": "AI-native Korean HWP/HWPX document generation, inspection, and editing tools",
   "packages": [
     {
-      "registry_type": "npm",
+      "registryType": "npm",
       "identifier": "@hwpforge/mcp",
       "version": "0.1.6",
       "transport": {
         "type": "stdio"
       },
-      "runtime_hint": "npx",
-      "runtime_arguments": ["-y"]
+      "runtimeHint": "npx",
+      "runtimeArguments": [
+        {
+          "type": "positional",
+          "value": "-y",
+          "description": "Auto-confirm npx install prompt"
+        }
+      ]
     }
   ]
 }

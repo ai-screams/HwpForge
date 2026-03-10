@@ -2,6 +2,8 @@
   "$schema": "https://context7.com/schema/context7.json",
   "projectTitle": "HwpForge",
   "description": "Rust library for programmatic Korean HWP/HWPX document control, designed for AI agents",
+  "url": "https://context7.com/ai-screams/hwpforge",
+  "public_key": "pk_ZQZFyT7POrCDe0fKgNLzM",
   "branch": "main",
   "folders": ["docs", "examples", ".claude/skills/hwpforge"],
   "excludeFolders": ["target", ".docs/references", "node_modules"],
