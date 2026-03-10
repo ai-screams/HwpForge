@@ -1,7 +1,5 @@
 //! `hwpforge_convert` — Markdown → HWPX conversion tool.
 
-use std::path::Path;
-
 use serde::Serialize;
 
 use hwpforge_core::image::ImageStore;
@@ -10,7 +8,7 @@ use hwpforge_smithy_hwpx::presets::builtin_presets;
 use hwpforge_smithy_hwpx::{HwpxEncoder, HwpxStyleStore};
 use hwpforge_smithy_md::MdDecoder;
 
-use crate::output::{check_file_size, ToolErrorInfo, MAX_INLINE_SIZE};
+use crate::output::{read_file_string, write_output_file, ToolErrorInfo, MAX_INLINE_SIZE};
 
 /// Output data from a successful conversion.
 #[derive(Debug, Serialize)]
@@ -56,22 +54,7 @@ pub fn run_convert(
 
     // 3. Read markdown content
     let md_content: String = if is_file {
-        let path = Path::new(markdown);
-        if !path.exists() {
-            return Err(ToolErrorInfo::new(
-                "FILE_NOT_FOUND",
-                format!("Markdown file not found: {markdown}"),
-                "Check the file path and try again.",
-            ));
-        }
-        check_file_size(path)?;
-        std::fs::read_to_string(path).map_err(|e| {
-            ToolErrorInfo::new(
-                "READ_ERROR",
-                format!("Failed to read file: {e}"),
-                "Check file permissions.",
-            )
-        })?
+        read_file_string(markdown)?
     } else {
         if markdown.len() > MAX_INLINE_SIZE {
             return Err(ToolErrorInfo::new(
@@ -142,25 +125,7 @@ pub fn run_convert(
     })?;
 
     // 8. Write output file
-    let out = Path::new(output_path);
-    if let Some(parent) = out.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                ToolErrorInfo::new(
-                    "WRITE_ERROR",
-                    format!("Cannot create output directory: {e}"),
-                    "Check write permissions.",
-                )
-            })?;
-        }
-    }
-    std::fs::write(out, &hwpx_bytes).map_err(|e| {
-        ToolErrorInfo::new(
-            "WRITE_ERROR",
-            format!("Failed to write HWPX: {e}"),
-            "Check disk space and permissions.",
-        )
-    })?;
+    write_output_file(output_path, &hwpx_bytes)?;
 
     let size_bytes: u64 = hwpx_bytes.len() as u64;
 

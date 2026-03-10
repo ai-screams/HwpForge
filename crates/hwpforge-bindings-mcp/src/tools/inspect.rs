@@ -1,12 +1,10 @@
 //! `hwpforge_inspect` — HWPX document structure inspection tool.
 
-use std::path::Path;
-
 use serde::Serialize;
 
 use hwpforge_smithy_hwpx::HwpxDecoder;
 
-use crate::output::{check_file_size, ToolErrorInfo};
+use crate::output::{read_file_bytes, ToolErrorInfo};
 
 /// Summary of a single section.
 #[derive(Debug, Serialize)]
@@ -48,23 +46,7 @@ pub struct InspectData {
 
 /// Inspect an HWPX file and return structural summary.
 pub fn run_inspect(file_path: &str, _show_styles: bool) -> Result<InspectData, ToolErrorInfo> {
-    let path = Path::new(file_path);
-    if !path.exists() {
-        return Err(ToolErrorInfo::new(
-            "FILE_NOT_FOUND",
-            format!("HWPX file not found: {file_path}"),
-            "Check the file path and try again.",
-        ));
-    }
-
-    check_file_size(path)?;
-    let bytes = std::fs::read(path).map_err(|e| {
-        ToolErrorInfo::new(
-            "READ_ERROR",
-            format!("Failed to read file: {e}"),
-            "Check file permissions.",
-        )
-    })?;
+    let bytes = read_file_bytes(file_path)?;
 
     let hwpx_doc = HwpxDecoder::decode(&bytes).map_err(|e| {
         ToolErrorInfo::new(

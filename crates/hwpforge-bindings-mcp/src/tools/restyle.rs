@@ -1,13 +1,11 @@
 //! `hwpforge_restyle` — Apply a different style preset to an existing HWPX document.
 
-use std::path::Path;
-
 use serde::Serialize;
 
 use hwpforge_smithy_hwpx::presets::builtin_presets;
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
 
-use crate::output::{check_file_size, ToolErrorInfo};
+use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo};
 
 /// Output data from a successful restyle operation.
 #[derive(Debug, Serialize)]
@@ -49,22 +47,7 @@ pub fn run_restyle(
     let preset_font = preset_info.font.clone();
 
     // 3. Read and decode source HWPX
-    let path = Path::new(file_path);
-    if !path.exists() {
-        return Err(ToolErrorInfo::new(
-            "FILE_NOT_FOUND",
-            format!("HWPX file not found: {file_path}"),
-            "Check the file path and try again.",
-        ));
-    }
-    check_file_size(path)?;
-    let bytes = std::fs::read(path).map_err(|e| {
-        ToolErrorInfo::new(
-            "READ_ERROR",
-            format!("Failed to read file: {e}"),
-            "Check file permissions.",
-        )
-    })?;
+    let bytes = read_file_bytes(file_path)?;
 
     let hwpx_doc = HwpxDecoder::decode(&bytes).map_err(|e| {
         ToolErrorInfo::new(
@@ -106,25 +89,7 @@ pub fn run_restyle(
         })?;
 
     // 5. Write output
-    let out = Path::new(output_path);
-    if let Some(parent) = out.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                ToolErrorInfo::new(
-                    "WRITE_ERROR",
-                    format!("Cannot create output directory: {e}"),
-                    "Check write permissions.",
-                )
-            })?;
-        }
-    }
-    std::fs::write(out, &output_bytes).map_err(|e| {
-        ToolErrorInfo::new(
-            "WRITE_ERROR",
-            format!("Failed to write HWPX: {e}"),
-            "Check disk space and permissions.",
-        )
-    })?;
+    write_output_file(output_path, &output_bytes)?;
 
     let size_bytes = output_bytes.len() as u64;
 

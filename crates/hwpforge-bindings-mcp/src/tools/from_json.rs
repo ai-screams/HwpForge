@@ -1,14 +1,12 @@
 //! `hwpforge_from_json` — JSON → HWPX direct creation tool.
 
-use std::path::Path;
-
 use serde::Serialize;
 
 use hwpforge_core::image::ImageStore;
 use hwpforge_smithy_hwpx::presets::style_store_for_preset;
 use hwpforge_smithy_hwpx::{ExportedDocument, HwpxEncoder};
 
-use crate::output::{ToolErrorInfo, MAX_INLINE_SIZE};
+use crate::output::{write_output_file, ToolErrorInfo, MAX_INLINE_SIZE};
 
 /// Output data from a successful JSON → HWPX creation.
 #[derive(Debug, Serialize)]
@@ -92,25 +90,7 @@ pub fn run_from_json(structure: &str, output_path: &str) -> Result<FromJsonData,
     })?;
 
     // 8. Write output file
-    let out = Path::new(output_path);
-    if let Some(parent) = out.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                ToolErrorInfo::new(
-                    "WRITE_ERROR",
-                    format!("Cannot create output directory: {e}"),
-                    "Check write permissions.",
-                )
-            })?;
-        }
-    }
-    std::fs::write(out, &hwpx_bytes).map_err(|e| {
-        ToolErrorInfo::new(
-            "WRITE_ERROR",
-            format!("Failed to write HWPX: {e}"),
-            "Check disk space and permissions.",
-        )
-    })?;
+    write_output_file(output_path, &hwpx_bytes)?;
 
     let size_bytes = hwpx_bytes.len() as u64;
 

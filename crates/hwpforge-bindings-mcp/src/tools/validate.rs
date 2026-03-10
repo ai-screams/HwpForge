@@ -1,12 +1,10 @@
 //! `hwpforge_validate` — HWPX document validation tool.
 
-use std::path::Path;
-
 use serde::Serialize;
 
 use hwpforge_smithy_hwpx::HwpxDecoder;
 
-use crate::output::{check_file_size, ToolErrorInfo};
+use crate::output::{read_file_bytes, ToolErrorInfo};
 
 /// Output data from a validation check.
 #[derive(Debug, Serialize)]
@@ -23,23 +21,7 @@ pub struct ValidateData {
 
 /// Validate an HWPX file structure and integrity.
 pub fn run_validate(file_path: &str) -> Result<ValidateData, ToolErrorInfo> {
-    let path = Path::new(file_path);
-    if !path.exists() {
-        return Err(ToolErrorInfo::new(
-            "FILE_NOT_FOUND",
-            format!("HWPX file not found: {file_path}"),
-            "Check the file path and try again.",
-        ));
-    }
-
-    check_file_size(path)?;
-    let bytes = std::fs::read(path).map_err(|e| {
-        ToolErrorInfo::new(
-            "READ_ERROR",
-            format!("Failed to read file: {e}"),
-            "Check file permissions.",
-        )
-    })?;
+    let bytes = read_file_bytes(file_path)?;
 
     // Phase 1: Decode
     let hwpx_doc = match HwpxDecoder::decode(&bytes) {

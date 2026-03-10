@@ -1,11 +1,10 @@
 //! `hwpforge_patch` — JSON → HWPX section replacement tool.
 
-use std::path::Path;
-
 use serde::Serialize;
 
-use crate::output::{check_file_size, ToolErrorInfo};
 use hwpforge_smithy_hwpx::{ExportedSection, HwpxDecoder, HwpxEncoder};
+
+use crate::output::{read_file_bytes, read_file_string, write_output_file, ToolErrorInfo};
 
 /// Output data from a successful patch operation.
 #[derive(Debug, Serialize)]
@@ -28,22 +27,7 @@ pub fn run_patch(
     output_path: &str,
 ) -> Result<PatchData, ToolErrorInfo> {
     // 1. Read base HWPX
-    let base = Path::new(base_path);
-    if !base.exists() {
-        return Err(ToolErrorInfo::new(
-            "FILE_NOT_FOUND",
-            format!("Base HWPX file not found: {base_path}"),
-            "Check the file path and try again.",
-        ));
-    }
-    check_file_size(base)?;
-    let base_bytes = std::fs::read(base).map_err(|e| {
-        ToolErrorInfo::new(
-            "READ_ERROR",
-            format!("Failed to read base file: {e}"),
-            "Check file permissions.",
-        )
-    })?;
+    let base_bytes = read_file_bytes(base_path)?;
 
     let mut hwpx_doc = HwpxDecoder::decode(&base_bytes).map_err(|e| {
         ToolErrorInfo::new(
@@ -54,22 +38,7 @@ pub fn run_patch(
     })?;
 
     // 2. Read section JSON
-    let json_path = Path::new(section_json_path);
-    if !json_path.exists() {
-        return Err(ToolErrorInfo::new(
-            "FILE_NOT_FOUND",
-            format!("Section JSON file not found: {section_json_path}"),
-            "Check the file path and try again.",
-        ));
-    }
-    check_file_size(json_path)?;
-    let json_str = std::fs::read_to_string(json_path).map_err(|e| {
-        ToolErrorInfo::new(
-            "READ_ERROR",
-            format!("Failed to read JSON file: {e}"),
-            "Check file permissions.",
-        )
-    })?;
+    let json_str = read_file_string(section_json_path)?;
 
     let exported: ExportedSection = serde_json::from_str(&json_str).map_err(|e| {
         ToolErrorInfo::new(
@@ -130,25 +99,7 @@ pub fn run_patch(
         })?;
 
     // 7. Write output
-    let out = Path::new(output_path);
-    if let Some(parent) = out.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                ToolErrorInfo::new(
-                    "WRITE_ERROR",
-                    format!("Cannot create output directory: {e}"),
-                    "Check write permissions.",
-                )
-            })?;
-        }
-    }
-    std::fs::write(out, &bytes).map_err(|e| {
-        ToolErrorInfo::new(
-            "WRITE_ERROR",
-            format!("Failed to write HWPX: {e}"),
-            "Check disk space and permissions.",
-        )
-    })?;
+    write_output_file(output_path, &bytes)?;
 
     let size_bytes = bytes.len() as u64;
     let section_count = validated.section_count();
