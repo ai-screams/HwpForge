@@ -62,7 +62,7 @@ pub use default_styles::{DefaultStyleEntry, HancomStyleSet};
 pub use encoder::HwpxEncoder;
 pub use error::{HwpxError, HwpxErrorCode, HwpxResult};
 pub use exchange::{ExportedDocument, ExportedSection};
-pub use presets::{builtin_presets, PresetInfo};
+pub use presets::{builtin_presets, style_store_for_preset, PresetInfo};
 pub use style_store::{
     HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape, HwpxStyle, HwpxStyleStore,
 };

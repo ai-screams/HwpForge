@@ -3,12 +3,14 @@
 use rmcp::handler::server::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
-use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler};
+use rmcp::service::RequestContext;
+use rmcp::{tool, tool_handler, tool_router, ErrorData as McpError, RoleServer, ServerHandler};
 use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::output::{ToolErrorInfo, ToolOutput};
-use crate::tools::{convert, inspect, patch, templates, to_json};
+use crate::tools::{convert, from_json, inspect, patch, restyle, templates, to_json, validate};
+use crate::{prompts, resources};
 
 // ── MCP Request Types ────────────────────────────────────────────────────────
 
@@ -50,6 +52,16 @@ pub struct ToJsonRequest {
     pub output_path: Option<String>,
 }
 
+/// Request parameters for `hwpforge_from_json`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FromJsonRequest {
+    /// JSON string matching the ExportedDocument schema.
+    /// Use hwpforge_to_json output as a reference for the structure.
+    pub structure: String,
+    /// Output HWPX file path. Must end with `.hwpx`.
+    pub output_path: String,
+}
+
 /// Request parameters for `hwpforge_patch`.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct PatchRequest {
@@ -60,6 +72,24 @@ pub struct PatchRequest {
     /// Path to the JSON file containing the replacement section.
     pub section_json_path: String,
     /// Output HWPX file path.
+    pub output_path: String,
+}
+
+/// Request parameters for `hwpforge_validate`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ValidateRequest {
+    /// Path to the HWPX file to validate.
+    pub file_path: String,
+}
+
+/// Request parameters for `hwpforge_restyle`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct RestyleRequest {
+    /// Path to the source HWPX file.
+    pub file_path: String,
+    /// Style preset name to apply. Use hwpforge_templates to see available presets.
+    pub preset: String,
+    /// Output HWPX file path. Must end with `.hwpx`.
     pub output_path: String,
 }
 
@@ -90,7 +120,8 @@ fn tool_error_response(err: ToolErrorInfo) -> CallToolResult {
 
 /// HwpForge MCP server.
 ///
-/// Exposes document lifecycle tools: Create, Read, Update, Discover.
+/// Exposes document lifecycle tools: Create, Read, Update, Verify, Discover.
+/// Also provides style template resources and workflow prompts.
 /// All tools use the 3-layer output format: `{ data, summary, next }`.
 #[derive(Clone)]
 pub struct HwpForgeServer {
@@ -225,6 +256,42 @@ impl HwpForgeServer {
         }
     }
 
+    /// Create an HWPX document directly from a JSON structure.
+    /// Use when building documents programmatically without Markdown.
+    #[tool(
+        name = "hwpforge_from_json",
+        description = "Create an HWPX document directly from a JSON structure (ExportedDocument schema). Use when building documents programmatically without Markdown. Get the schema from hwpforge_to_json output."
+    )]
+    async fn hwpforge_from_json(
+        &self,
+        Parameters(req): Parameters<FromJsonRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = tokio::task::spawn_blocking(move || {
+            from_json::run_from_json(&req.structure, &req.output_path)
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?;
+
+        match result {
+            Ok(data) => {
+                let output = ToolOutput::new(
+                    &data,
+                    format!(
+                        "Created {} ({} bytes, {} sections, {} paragraphs)",
+                        data.output_path, data.size_bytes, data.sections, data.paragraphs,
+                    ),
+                    vec![
+                        "Use hwpforge_inspect to verify the output",
+                        "Use hwpforge_to_json + hwpforge_patch to edit",
+                        "Note: images are NOT preserved in JSON round-trip; use hwpforge_patch with base_path to keep images",
+                    ],
+                );
+                Ok(CallToolResult::success(vec![Content::text(output.to_json_string())]))
+            }
+            Err(err) => Ok(tool_error_response(err)),
+        }
+    }
+
     /// Replace a section in an existing HWPX file with edited JSON.
     /// Preserves images, styles, and binary content from the base file.
     #[tool(
@@ -257,6 +324,80 @@ impl HwpForgeServer {
         }
     }
 
+    /// Validate an HWPX file structure and integrity.
+    /// Returns validation status and any issues found.
+    #[tool(
+        name = "hwpforge_validate",
+        description = "Validate an HWPX file structure and integrity. Returns validation status, section/paragraph counts, and any issues found. Use to verify files before editing or after generation."
+    )]
+    async fn hwpforge_validate(
+        &self,
+        Parameters(req): Parameters<ValidateRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = tokio::task::spawn_blocking(move || validate::run_validate(&req.file_path))
+            .await
+            .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?;
+
+        match result {
+            Ok(data) => {
+                let summary = if data.valid {
+                    format!(
+                        "Valid HWPX: {} sections, {} paragraphs",
+                        data.sections, data.paragraphs
+                    )
+                } else {
+                    format!("Invalid HWPX: {} issues found", data.issues.len())
+                };
+                let next = if data.valid {
+                    vec!["Use hwpforge_to_json to export for editing"]
+                } else {
+                    vec![
+                        "Fix the issues and re-validate",
+                        "Use hwpforge_convert to create a new valid document",
+                    ]
+                };
+                let output = ToolOutput::new(&data, summary, next);
+                Ok(CallToolResult::success(vec![Content::text(output.to_json_string())]))
+            }
+            Err(err) => Ok(tool_error_response(err)),
+        }
+    }
+
+    /// Apply a different style template (preset) to an existing HWPX document.
+    /// Replaces fonts and styles while preserving document content.
+    #[tool(
+        name = "hwpforge_restyle",
+        description = "Apply a different style template (preset) to an existing HWPX document. Replaces fonts and paragraph styles while preserving document content and structure. Use hwpforge_templates to discover available presets."
+    )]
+    async fn hwpforge_restyle(
+        &self,
+        Parameters(req): Parameters<RestyleRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = tokio::task::spawn_blocking(move || {
+            restyle::run_restyle(&req.file_path, &req.preset, &req.output_path)
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?;
+
+        match result {
+            Ok(data) => {
+                let output = ToolOutput::new(
+                    &data,
+                    format!(
+                        "Restyled with '{}' → {} ({} bytes, {} sections)",
+                        data.applied_preset, data.output_path, data.size_bytes, data.sections,
+                    ),
+                    vec![
+                        "Use hwpforge_inspect to verify the output",
+                        "Use hwpforge_validate to check integrity",
+                    ],
+                );
+                Ok(CallToolResult::success(vec![Content::text(output.to_json_string())]))
+            }
+            Err(err) => Ok(tool_error_response(err)),
+        }
+    }
+
     /// List available style presets for document generation.
     /// Call this before hwpforge_convert to discover formatting options.
     #[tool(
@@ -278,7 +419,10 @@ impl HwpForgeServer {
                 let output = ToolOutput::new(
                     &data,
                     format!("Available presets: {}", names.join(", ")),
-                    vec!["Set preset parameter in hwpforge_convert"],
+                    vec![
+                        "Set preset parameter in hwpforge_convert",
+                        "Use hwpforge_restyle to change existing document styles",
+                    ],
                 );
                 Ok(CallToolResult::success(vec![Content::text(output.to_json_string())]))
             }
@@ -292,7 +436,11 @@ impl ServerHandler for HwpForgeServer {
     fn get_info(&self) -> ServerInfo {
         ServerInfo {
             protocol_version: ProtocolVersion::LATEST,
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
+            capabilities: ServerCapabilities::builder()
+                .enable_tools()
+                .enable_resources()
+                .enable_prompts()
+                .build(),
             server_info: Implementation {
                 name: "hwpforge-mcp".into(),
                 version: env!("CARGO_PKG_VERSION").into(),
@@ -307,9 +455,42 @@ impl ServerHandler for HwpForgeServer {
                 "HwpForge MCP server for Korean HWPX document generation and editing. \
                  Converts Markdown to HWPX, inspects document structure, and supports \
                  JSON round-trip editing. Use hwpforge_templates to discover available \
-                 style templates before creating documents."
+                 style templates before creating documents. Resources provide style template \
+                 details. Prompts guide document creation workflows."
                     .into(),
             ),
         }
+    }
+
+    async fn list_resources(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListResourcesResult, McpError> {
+        resources::list_resources()
+    }
+
+    async fn read_resource(
+        &self,
+        request: ReadResourceRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ReadResourceResult, McpError> {
+        resources::read_resource(&request.uri)
+    }
+
+    async fn list_prompts(
+        &self,
+        _request: Option<PaginatedRequestParams>,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<ListPromptsResult, McpError> {
+        prompts::list_prompts()
+    }
+
+    async fn get_prompt(
+        &self,
+        request: GetPromptRequestParams,
+        _context: RequestContext<RoleServer>,
+    ) -> Result<GetPromptResult, McpError> {
+        prompts::get_prompt(&request.name, request.arguments.as_ref())
     }
 }

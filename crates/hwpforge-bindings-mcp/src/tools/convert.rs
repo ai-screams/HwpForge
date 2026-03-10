@@ -5,6 +5,8 @@ use std::path::Path;
 use serde::Serialize;
 
 use hwpforge_core::image::ImageStore;
+use hwpforge_foundation::FontId;
+use hwpforge_smithy_hwpx::presets::builtin_presets;
 use hwpforge_smithy_hwpx::{HwpxEncoder, HwpxStyleStore};
 use hwpforge_smithy_md::MdDecoder;
 
@@ -33,13 +35,15 @@ pub fn run_convert(
     preset: &str,
 ) -> Result<ConvertData, ToolErrorInfo> {
     // 1. Validate preset
-    if preset != "default" {
-        return Err(ToolErrorInfo::new(
+    let presets = builtin_presets();
+    let preset_info = presets.iter().find(|p| p.name == preset).ok_or_else(|| {
+        ToolErrorInfo::new(
             "PRESET_NOT_FOUND",
             format!("Preset '{preset}' not found"),
-            "Available presets: default. Use hwpforge_templates to see all.",
-        ));
-    }
+            "Use hwpforge_templates to see available presets.",
+        )
+    })?;
+    let preset_font = preset_info.font.clone();
 
     // 2. Validate output extension
     if !output_path.ends_with(".hwpx") {
@@ -84,7 +88,7 @@ pub fn run_convert(
     };
 
     // 4. Decode Markdown → Core Document
-    let md_doc = MdDecoder::decode_with_default(&md_content).map_err(|e| {
+    let mut md_doc = MdDecoder::decode_with_default(&md_content).map_err(|e| {
         ToolErrorInfo::new(
             "MD_DECODE_ERROR",
             format!("Markdown decode failed: {e}"),
@@ -96,7 +100,17 @@ pub fn run_convert(
     let sections: usize = md_doc.document.sections().len();
     let paragraphs: usize = md_doc.document.sections().iter().map(|s| s.paragraphs.len()).sum();
 
-    // 6. Build style store and validate
+    // 6. Apply preset font to style registry, then build full style store.
+    //    from_registry() creates the complete store (char shapes, para shapes,
+    //    styles, border fills) unlike with_default_fonts() which only sets fonts.
+    let preset_font_id = FontId::new(&preset_font).map_err(|e| {
+        ToolErrorInfo::new("PRESET_ERROR", format!("Invalid preset font name: {e}"), "")
+    })?;
+    // Two font entries: default char shapes reference both FontIndex(0) and FontIndex(1).
+    md_doc.style_registry.fonts = vec![preset_font_id.clone(), preset_font_id];
+    for cs in &mut md_doc.style_registry.char_shapes {
+        cs.font.clone_from(&preset_font);
+    }
     let style_store = HwpxStyleStore::from_registry(&md_doc.style_registry);
     let image_store = ImageStore::new();
 

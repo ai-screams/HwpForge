@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document formats, designed with LLM-first principles. The goal is to enable AI agents (like Claude Code) to generate Korean government proposal documents using natural language + Markdown + YAML style templates.
 
-**Current Status**: Phase 0-5 + Wave 1-14 + Phase 6 CLI + Phase 7a MCP 완료
+**Current Status**: Phase 0-5 + Wave 1-14 + Phase 6 CLI + Phase 7a MCP + Phase 7b Dist 완료
 **Stats**: ~52,700 LOC, 1,602 tests (nextest), 116 .rs files, 10 crates, 92.65% coverage
 
 ---
@@ -527,8 +527,8 @@ landscape 반전(gotcha #2)과 동일한 패턴. `PatternType`의 `Display`/`Fro
 | 6 (CLI)       | bindings-cli (AI-first CLI, 78 integration tests) | ✅ Done           | 78    | 1,035  |
 | 6 (Python)    | bindings-py (PyO3)                                | 📋 Ready          | —     | —      |
 | 7a (MCP)      | bindings-mcp (5 MCP tools + SKILL.md)             | ✅ Done           | —     | 1,031  |
-| 7b (Dist)     | npm packaging, MCP Registry, Context7             | 📋 Ready          | —     | —      |
-| 7c (Ext)      | Tier 2/3 tools, workspace, resources, prompts     | 📋 Ready          | —     | —      |
+| 7b (Dist)     | npm packaging, CI, Registry 준비                  | ✅ Done           | —     | —      |
+| 7c (Ext)      | 3 new tools + 3 resources + 3 prompts             | 📋 Ready          | —     | —      |
 | 8             | Testing + Release v1.0                            | 📋 Ready          | —     | —      |
 
 **Totals**: ~52,700 LOC, 1,602 tests (nextest), 116 .rs files, 10 crates

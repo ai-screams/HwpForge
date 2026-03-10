@@ -90,6 +90,15 @@ pub struct StyleRegistry {
 }
 
 impl StyleRegistry {
+    /// Creates an empty StyleRegistry with only fonts.
+    ///
+    /// Useful when constructing a style store from preset fonts without a full
+    /// template. Pass this to [`HwpxStyleStore::from_registry`][crate] to produce a
+    /// complete style store with default char shapes, para shapes, and border fills.
+    pub fn with_fonts(fonts: Vec<FontId>) -> Self {
+        Self { fonts, char_shapes: vec![], para_shapes: vec![], style_entries: IndexMap::new() }
+    }
+
     /// Creates a StyleRegistry from a Template.
     ///
     /// This is the **final resolution step**:

@@ -22,7 +22,12 @@ pub fn check_file_size(path: &Path) -> Result<(), ToolErrorInfo> {
             ),
             "Use a smaller file or split the document into sections.",
         )),
-        _ => Ok(()),
+        Ok(_) => Ok(()),
+        Err(e) => Err(ToolErrorInfo::new(
+            "METADATA_ERROR",
+            format!("Cannot read file metadata for '{}': {e}", path.display()),
+            "Check file permissions.",
+        )),
     }
 }
 

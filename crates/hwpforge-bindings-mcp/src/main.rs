@@ -5,6 +5,8 @@
 #![deny(missing_docs)]
 
 mod output;
+mod prompts;
+mod resources;
 mod server;
 mod tools;
 
