@@ -1,3 +1,5 @@
+name: hwpforge
+description: AI-native Korean HWP/HWPX document generation, inspection, and editing tools
 startCommand:
   type: stdio
   configSchema: {}

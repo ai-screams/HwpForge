@@ -33,7 +33,7 @@ try {
 } catch {
   console.error(
     `Error: Platform package ${pkg} is not installed.\n` +
-    `Try: npm install @hwpforge/mcp --force\n\n` +
+    `Try: npm install ${pkg}\n\n` +
     `Alternative: cargo install hwpforge-bindings-mcp`
   );
   process.exit(1);

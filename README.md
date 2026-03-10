@@ -118,7 +118,13 @@ Claude Code, Codex CLI, ChatGPT, Cursor, Windsurf 등 [MCP](https://modelcontext
 
 #### 1단계: 설치
 
+npm (Node.js 20+) 또는 Cargo 중 하나를 선택합니다:
+
 ```bash
+# 방법 A: npm (권장 — Rust 툴체인 불필요)
+npx -y @hwpforge/mcp
+
+# 방법 B: Cargo (Rust 개발자용)
 cargo install hwpforge-bindings-mcp
 ```
 
@@ -128,11 +134,14 @@ cargo install hwpforge-bindings-mcp
 <summary><strong>Claude Code</strong> (터미널)</summary>
 
 ```bash
-# 현재 프로젝트에만
+# npm으로 설치한 경우
+claude mcp add hwpforge -- npx -y @hwpforge/mcp
+
+# cargo로 설치한 경우
 claude mcp add hwpforge hwpforge-mcp
 
 # 모든 프로젝트에서 사용 (글로벌)
-claude mcp add --global hwpforge hwpforge-mcp
+claude mcp add --global hwpforge -- npx -y @hwpforge/mcp
 ```
 
 </details>
@@ -144,13 +153,14 @@ claude mcp add --global hwpforge hwpforge-mcp
 
 ```toml
 [mcp_servers.hwpforge]
-command = "hwpforge-mcp"
+command = "npx"
+args = ["-y", "@hwpforge/mcp"]
 ```
 
 또는 CLI로:
 
 ```bash
-codex mcp add hwpforge hwpforge-mcp
+codex mcp add hwpforge -- npx -y @hwpforge/mcp
 ```
 
 </details>
@@ -167,7 +177,8 @@ codex mcp add hwpforge hwpforge-mcp
 {
   "mcpServers": {
     "hwpforge": {
-      "command": "hwpforge-mcp"
+      "command": "npx",
+      "args": ["-y", "@hwpforge/mcp"]
     }
   }
 }
@@ -181,7 +192,7 @@ codex mcp add hwpforge hwpforge-mcp
 Settings → Tools → Add MCP Server에서:
 
 - Name: `hwpforge`
-- Command: `hwpforge-mcp`
+- Command: `npx -y @hwpforge/mcp`
 
 또는 설정 파일을 직접 편집:
 
@@ -189,7 +200,8 @@ Settings → Tools → Add MCP Server에서:
 {
   "mcpServers": {
     "hwpforge": {
-      "command": "hwpforge-mcp"
+      "command": "npx",
+      "args": ["-y", "@hwpforge/mcp"]
     }
   }
 }
@@ -206,7 +218,8 @@ Settings → Tools → Add MCP Server에서:
 {
   "mcpServers": {
     "hwpforge": {
-      "command": "hwpforge-mcp"
+      "command": "npx",
+      "args": ["-y", "@hwpforge/mcp"]
     }
   }
 }
@@ -223,7 +236,8 @@ Settings → Tools → Add MCP Server에서:
 {
   "mcpServers": {
     "hwpforge": {
-      "command": "hwpforge-mcp"
+      "command": "npx",
+      "args": ["-y", "@hwpforge/mcp"]
     }
   }
 }
