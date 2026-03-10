@@ -63,6 +63,10 @@ pub fn run_restyle(
     //    intact and only swap font face names. This preserves all shape indices
     //    while applying the new font.
     let mut style_store = hwpx_doc.style_store;
+    // The first font in the store is the base/body font by encoder contract
+    // (HwpxStyleStore::push_font writes base font first). Third-party HWPX
+    // files may have a different ordering — a future improvement could resolve
+    // the base font from the default paragraph style instead.
     let original_base: Option<String> =
         style_store.iter_fonts().next().map(|f| f.face_name.clone());
     match original_base {

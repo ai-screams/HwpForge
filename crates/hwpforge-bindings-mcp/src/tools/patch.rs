@@ -26,6 +26,15 @@ pub fn run_patch(
     section_json_path: &str,
     output_path: &str,
 ) -> Result<PatchData, ToolErrorInfo> {
+    // 0. Validate output extension
+    if !output_path.ends_with(".hwpx") {
+        return Err(ToolErrorInfo::new(
+            "INVALID_EXTENSION",
+            format!("Output path must end with .hwpx: {output_path}"),
+            "Use a .hwpx extension for the output file.",
+        ));
+    }
+
     // 1. Read base HWPX
     let base_bytes = read_file_bytes(base_path)?;
 
@@ -72,7 +81,7 @@ pub fn run_patch(
                 "Section {section_idx} does not exist (document has {} sections)",
                 sections.len()
             ),
-            format!("Valid range: 0..{}", sections.len().saturating_sub(1)),
+            format!("Valid range: 0..={}", sections.len().saturating_sub(1)),
         ));
     }
     sections[section_idx] = exported.section;

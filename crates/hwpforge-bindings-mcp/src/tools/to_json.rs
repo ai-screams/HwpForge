@@ -44,7 +44,7 @@ pub fn run_to_json(
             return Err(ToolErrorInfo::new(
                 "SECTION_OUT_OF_RANGE",
                 format!("Section {idx} does not exist (document has {} sections)", sections.len()),
-                format!("Valid range: 0..{}", sections.len().saturating_sub(1)),
+                format!("Valid range: 0..={}", sections.len().saturating_sub(1)),
             ));
         }
         let exported =
