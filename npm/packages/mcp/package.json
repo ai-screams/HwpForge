@@ -20,7 +20,7 @@
     "document"
   ],
   "engines": {
-    "node": ">=18"
+    "node": ">=20"
   },
   "bin": {
     "hwpforge-mcp": "./bin/hwpforge-mcp.js"
