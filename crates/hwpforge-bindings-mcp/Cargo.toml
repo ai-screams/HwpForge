@@ -20,8 +20,8 @@ path = "src/main.rs"
 [dependencies]
 hwpforge-core = { path = "../hwpforge-core", version = "0.1.5" }
 hwpforge-foundation = { path = "../hwpforge-foundation", version = "0.1.5" }
-hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0.1.5" }
-hwpforge-smithy-md = { path = "../hwpforge-smithy-md", version = "0.1.5" }
+hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0.1.6" }
+hwpforge-smithy-md = { path = "../hwpforge-smithy-md", version = "0.1.6" }
 rmcp = { version = "0.16", features = ["server", "macros", "transport-io"] }
 schemars = { workspace = true }
 serde = { workspace = true }

@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6](https://github.com/ai-screams/HwpForge/compare/hwpforge-blueprint-v0.1.5...hwpforge-blueprint-v0.1.6) - 2026-03-10
+
+### Added
+
+- *(mcp)* Phase 7c MCP Extended — 3 tools + 4 resources + 3 prompts
+
+
+### Documentation
+
+- *(readme)* update stats and MCP tool list for Phase 7c
+
+- *(readme)* simplify MCP setup and update AI tool list
+
+
 ## [0.1.5](https://github.com/ai-screams/HwpForge/compare/hwpforge-blueprint-v0.1.4...hwpforge-blueprint-v0.1.5) - 2026-03-10
 
 ### Fixed
