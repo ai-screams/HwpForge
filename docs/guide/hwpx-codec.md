@@ -161,6 +161,115 @@ let bytes = HwpxEncoder::encode(
 std::fs::write("modified.hwpx", &bytes).unwrap();
 ```
 
+## 기존 텍스트 찾기 및 수정
+
+특정 텍스트를 찾아 수정하려면 `sections_mut()`으로 가변 접근 후 `RunContent::Text`를 패턴 매칭합니다.
+
+### 텍스트 치환 (find & replace)
+
+```rust,no_run
+use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
+use hwpforge_core::run::RunContent;
+
+// 1. 디코딩
+let mut result = HwpxDecoder::decode_file("template.hwpx").unwrap();
+
+// 2. 모든 섹션의 모든 문단을 순회하며 텍스트 치환
+for section in result.document.sections_mut() {
+    for paragraph in &mut section.paragraphs {
+        for run in &mut paragraph.runs {
+            if let RunContent::Text(ref mut text) = run.content {
+                if text.contains("{{회사명}}") {
+                    *text = text.replace("{{회사명}}", "한국테크");
+                }
+                if text.contains("{{날짜}}") {
+                    *text = text.replace("{{날짜}}", "2026년 3월 11일");
+                }
+            }
+        }
+    }
+}
+
+// 3. 검증 후 저장
+let validated = result.document.validate().unwrap();
+let bytes = HwpxEncoder::encode(&validated, &result.style_store, &result.image_store).unwrap();
+std::fs::write("output.hwpx", &bytes).unwrap();
+```
+
+### 재사용 가능한 치환 함수
+
+```rust,no_run
+use hwpforge_core::document::{Document, Draft};
+use hwpforge_core::run::RunContent;
+
+/// 문서 내 모든 텍스트에서 `from`을 `to`로 치환합니다.
+/// 치환된 횟수를 반환합니다.
+fn replace_text(doc: &mut Document<Draft>, from: &str, to: &str) -> usize {
+    let mut count = 0;
+    for section in doc.sections_mut() {
+        for paragraph in &mut section.paragraphs {
+            for run in &mut paragraph.runs {
+                if let RunContent::Text(ref mut text) = run.content {
+                    if text.contains(from) {
+                        *text = text.replace(from, to);
+                        count += 1;
+                    }
+                }
+            }
+        }
+    }
+    count
+}
+```
+
+### 완전한 읽기 → 수정 → 저장 예제
+
+```rust,no_run
+use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
+use hwpforge_core::run::{Run, RunContent};
+use hwpforge_core::paragraph::Paragraph;
+use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+
+fn modify_document(
+    input: &str,
+    output: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // 읽기
+    let mut result = HwpxDecoder::decode_file(input)
+        .map_err(|e| format!("디코딩 실패: {e}"))?;
+
+    let sections = result.document.sections_mut();
+
+    // 기존 텍스트 수정
+    for section in sections.iter_mut() {
+        for paragraph in &mut section.paragraphs {
+            for run in &mut paragraph.runs {
+                if let RunContent::Text(ref mut text) = run.content {
+                    *text = text.replace("초안", "최종본");
+                }
+            }
+        }
+    }
+
+    // 새 문단 추가
+    if let Some(first_section) = result.document.sections_mut().first_mut() {
+        first_section.paragraphs.push(Paragraph::with_runs(
+            vec![Run::text("— 이 문서는 자동으로 수정되었습니다.", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        ));
+    }
+
+    // 저장
+    let validated = result.document.validate()
+        .map_err(|e| format!("검증 실패: {e}"))?;
+    let bytes = HwpxEncoder::encode(&validated, &result.style_store, &result.image_store)
+        .map_err(|e| format!("인코딩 실패: {e}"))?;
+    std::fs::write(output, &bytes)?;
+
+    Ok(())
+}
+```
+
 ## 오류 처리
 
 모든 함수는 `HwpxResult<T>`를 반환합니다. `HwpxError`는 `HwpxErrorCode`와 메시지를 포함합니다.
