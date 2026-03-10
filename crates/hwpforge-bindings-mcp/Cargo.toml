@@ -21,7 +21,7 @@ path = "src/main.rs"
 hwpforge-core = { path = "../hwpforge-core", version = "0.1.5" }
 hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0.1.5" }
 hwpforge-smithy-md = { path = "../hwpforge-smithy-md", version = "0.1.5" }
-rmcp = { version = "0.16", features = ["server", "macros", "transport-io"] }
+rmcp = { version = "1.1", features = ["server", "macros", "transport-io"] }
 schemars = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
