@@ -52,6 +52,29 @@ let HwpxDocument { document, style_store, image_store } =
 | `style_store` | `HwpxStyleStore`  | 폰트/글자모양/문단모양/스타일 |
 | `image_store` | `ImageStore`      | 이미지 바이너리 저장소        |
 
+### 메타데이터 접근
+
+디코딩된 문서에서 `metadata()`로 제목, 작성자 등의 메타데이터에 접근합니다.
+
+```rust,no_run
+use hwpforge_smithy_hwpx::HwpxDecoder;
+
+let result = HwpxDecoder::decode_file("document.hwpx").unwrap();
+let meta = result.document.metadata();
+
+if let Some(title) = &meta.title {
+    println!("제목: {}", title);
+}
+if let Some(author) = &meta.author {
+    println!("작성자: {}", author);
+}
+if let Some(created) = &meta.created {
+    println!("작성일: {}", created);
+}
+```
+
+전체 메타데이터 필드 목록과 사용법은 [메타데이터 가이드](./metadata.md)를 참고하세요.
+
 ## 인코딩: Core → HWPX
 
 `HwpxEncoder::encode()`로 `Document<Validated>`를 HWPX 바이트 벡터로 직렬화합니다.

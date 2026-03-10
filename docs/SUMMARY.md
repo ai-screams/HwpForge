@@ -13,6 +13,7 @@
 # 사용 가이드
 
 - [HWPX 인코딩/디코딩](guide/hwpx-codec.md)
+- [메타데이터 (Metadata)](guide/metadata.md)
 - [Markdown에서 HWPX로](guide/markdown-bridge.md)
 - [스타일 템플릿 (YAML)](guide/style-templates.md)
 - [차트 생성](guide/charts.md)

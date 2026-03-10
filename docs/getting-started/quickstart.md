@@ -66,6 +66,15 @@ fn main() -> anyhow::Result<()> {
     // 섹션 수 출력
     println!("섹션 수: {}", doc.sections().len());
 
+    // 메타데이터 접근 (제목, 작성자, 작성일 등)
+    let meta = doc.metadata();
+    if let Some(title) = &meta.title {
+        println!("제목: {}", title);
+    }
+    if let Some(author) = &meta.author {
+        println!("작성자: {}", author);
+    }
+
     // 각 섹션의 문단과 텍스트 출력
     for (sec_idx, section) in doc.sections().iter().enumerate() {
         println!("--- 섹션 {} ---", sec_idx + 1);
@@ -84,7 +93,8 @@ fn main() -> anyhow::Result<()> {
 ```
 
 `HwpxDecoder::decode_file`은 경로를 받아 ZIP을 열고 XML을 파싱합니다.
-반환값에는 `document`(문서 구조)와 `style_store`(글꼴/문단 스타일)가 포함됩니다.
+반환값에는 `document`(문서 구조), `style_store`(글꼴/문단 스타일), `image_store`(이미지)가 포함됩니다.
+`document.metadata()`로 제목, 작성자 등의 메타데이터에 접근할 수 있습니다.
 
 ---
 

@@ -62,14 +62,33 @@ template: government      # 사용할 스타일 템플릿 이름 (옵션)
 
 지원 필드:
 
-| 필드       | 설명               |
-| ---------- | ------------------ |
-| `title`    | 문서 제목          |
-| `author`   | 작성자             |
-| `date`     | 작성일 (ISO 8601)  |
-| `template` | 스타일 템플릿 이름 |
+| 필드       | Metadata 필드 | 설명                      |
+| ---------- | ------------- | ------------------------- |
+| `title`    | `title`       | 문서 제목                 |
+| `author`   | `author`      | 작성자                    |
+| `date`     | `created`     | 작성일 (ISO 8601)         |
+| `subject`  | `subject`     | 주제/설명                 |
+| `keywords` | `keywords`    | 검색 키워드 (YAML 배열)   |
+| `modified` | `modified`    | 수정일 (ISO 8601)         |
+| `template` | _(스타일)_    | 스타일 템플릿 이름 (옵션) |
 
 Frontmatter 없이도 디코딩이 가능하며, 메타데이터 필드는 빈 값으로 처리됩니다.
+
+### 디코딩 후 메타데이터 확인
+
+```rust,no_run
+use hwpforge::md::{MdDecoder, MdDocument};
+
+let markdown = "---\ntitle: 보고서\nauthor: 홍길동\ndate: 2026-03-06\n---\n\n# 본문\n";
+let MdDocument { document, .. } = MdDecoder::decode_with_default(markdown).unwrap();
+
+let meta = document.metadata();
+assert_eq!(meta.title.as_deref(), Some("보고서"));
+assert_eq!(meta.author.as_deref(), Some("홍길동"));
+assert_eq!(meta.created.as_deref(), Some("2026-03-06"));
+```
+
+전체 메타데이터 필드와 프로그래밍 설정 방법은 [메타데이터 가이드](./metadata.md)를 참고하세요.
 
 ## 섹션 마커
 
