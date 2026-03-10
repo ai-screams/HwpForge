@@ -19,6 +19,9 @@
     "ai",
     "document"
   ],
+  "engines": {
+    "node": ">=18"
+  },
   "bin": {
     "hwpforge-mcp": "./bin/hwpforge-mcp.js"
   },

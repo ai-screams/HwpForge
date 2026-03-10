@@ -16,9 +16,6 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
-permissions:
-  contents: read
-
 concurrency:
   group: npm-publish-${{ github.ref }}
   cancel-in-progress: false
@@ -29,6 +26,9 @@ jobs:
     if: startsWith(github.ref_name, 'v')
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
+    permissions:
+      contents: read
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -61,7 +61,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install Rust toolchain
         run: rustup show
@@ -71,10 +71,12 @@ jobs:
 
       - name: Install cross-rs
         if: matrix.cross
-        uses: taiki-e/install-action@cross
+        uses: taiki-e/install-action@a37010ded18ff788be4440302bd6830b1ae50d8b # v2.68.25
 
       - name: Build (native)
         if: "!matrix.cross"
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "11.0"
         run: cargo build --release -p hwpforge-bindings-mcp --target ${{ matrix.target }}
 
       - name: Build (cross)
@@ -114,15 +116,25 @@ jobs:
         shell: bash
         run: chmod +x "npm/packages/mcp-${{ matrix.npm-suffix }}/bin/hwpforge-mcp"
 
+      - name: Validate binary is not placeholder
+        shell: bash
+        run: |
+          bin="npm/packages/mcp-${{ matrix.npm-suffix }}/bin/hwpforge-mcp${{ matrix.bin-ext }}"
+          size=$(wc -c < "$bin")
+          if [ "$size" -lt 1000 ]; then
+            echo "::error::Binary too small (${size} bytes) — likely a placeholder"
+            exit 1
+          fi
+
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
 
       - name: Publish platform package
         working-directory: npm/packages/mcp-${{ matrix.npm-suffix }}
-        run: npm publish --access public
+        run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -131,12 +143,16 @@ jobs:
     needs: [publish-platform]
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Extract and validate version from tag
         id: version
+        shell: bash
         run: |
           tag="${{ github.ref_name }}"
           version="${tag#v}"
@@ -147,9 +163,25 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       - name: Wait for npm registry propagation
-        run: sleep 30
+        shell: bash
+        run: |
+          version="${{ steps.version.outputs.version }}"
+          for pkg in mcp-darwin-arm64 mcp-darwin-x64 mcp-linux-x64 mcp-linux-arm64 mcp-win32-x64; do
+            for i in $(seq 1 18); do
+              if npm view "@hwpforge/${pkg}@${version}" version 2>/dev/null; then
+                echo "✓ @hwpforge/${pkg}@${version} available"
+                break
+              fi
+              if [ "$i" -eq 18 ]; then
+                echo "::warning::@hwpforge/${pkg}@${version} not yet visible after 3 min"
+              fi
+              echo "Waiting for @hwpforge/${pkg}@${version} (attempt ${i}/18)..."
+              sleep 10
+            done
+          done
 
       - name: Update base package.json version and optionalDependencies
+        shell: bash
         run: |
           pkg="npm/packages/mcp/package.json"
           v="${{ steps.version.outputs.version }}"
@@ -159,20 +191,40 @@ jobs:
           ' "$pkg" > "$pkg.tmp"
           mv "$pkg.tmp" "$pkg"
 
+      - name: Validate version was updated
+        shell: bash
+        run: |
+          actual=$(jq -r '.version' npm/packages/mcp/package.json)
+          expected="${{ steps.version.outputs.version }}"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "::error::Version mismatch: expected $expected, got $actual"
+            exit 1
+          fi
+
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
           node-version: "20"
           registry-url: "https://registry.npmjs.org"
 
       - name: Publish base package
         working-directory: npm/packages/mcp
-        run: npm publish --access public
+        run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+  refresh-context7:
+    name: "Context7 › Refresh"
+    needs: [publish-base]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
       - name: Refresh Context7 index
-        uses: rennf93/upsert-context7@v1
+        uses: rennf93/upsert-context7@c29ca04a37ecbab62635c0e94c3d8908049b9ed5 # 1.1
         continue-on-error: true
         with:
           library-name: HwpForge

@@ -44,5 +44,16 @@ try {
 } catch (e) {
   if (e.status !== null) process.exit(e.status);
   if (e.signal) process.kill(process.pid, e.signal);
+  if (e.code === "EACCES") {
+    console.error(`Error: Permission denied executing ${binPath}\nTry: chmod +x ${binPath}`);
+    process.exit(126);
+  }
+  if (e.code === "ENOENT") {
+    console.error(
+      `Error: Binary not executable (possible musl/glibc mismatch on Alpine).\n` +
+      `Alternative: cargo install hwpforge-bindings-mcp`
+    );
+    process.exit(1);
+  }
   throw e;
 }
