@@ -4,9 +4,14 @@
   "description": "AI-native Korean HWP/HWPX document generation, inspection, and editing tools",
   "packages": [
     {
-      "registry_name": "npm",
-      "name": "@hwpforge/mcp",
-      "version": "0.1.4"
+      "registry_type": "npm",
+      "identifier": "@hwpforge/mcp",
+      "version": "0.1.6",
+      "transport": {
+        "type": "stdio"
+      },
+      "runtime_hint": "npx",
+      "runtime_arguments": ["-y"]
     }
   ]
 }
