@@ -282,3 +282,48 @@ match HwpxDecoder::decode_file("missing.hwpx") {
     Err(e) => eprintln!("디코딩 실패: {e}"),
 }
 ```
+
+## 엣지 케이스 및 주의사항
+
+### 빈 문서
+
+`Document`는 최소 1개의 섹션이 있어야 `validate()`를 통과합니다.
+
+```rust,no_run
+use hwpforge::core::{Document, Draft, PageSettings, Paragraph, Section};
+use hwpforge::foundation::ParaShapeIndex;
+
+let mut doc = Document::<Draft>::new();
+
+// ❌ 빈 문서 — validate() 실패
+// let validated = doc.validate();  // Err: 섹션 없음
+
+// ✅ 빈 문단이라도 하나 추가
+doc.add_section(Section::with_paragraphs(
+    vec![Paragraph::new(ParaShapeIndex::new(0))],
+    PageSettings::a4(),
+));
+let validated = doc.validate().unwrap();  // OK
+```
+
+### 한국어/특수 문자
+
+HwpForge는 내부적으로 UTF-8을 사용합니다. 한국어, 이모지, 특수 기호를 포함한 모든 유니코드 문자를 지원합니다.
+
+```rust,no_run
+use hwpforge::core::run::Run;
+use hwpforge::foundation::CharShapeIndex;
+
+// 모두 정상 동작
+let run1 = Run::text("한글 텍스트 테스트", CharShapeIndex::new(0));
+let run2 = Run::text("특수문자: ©®™ §¶ ±×÷", CharShapeIndex::new(0));
+let run3 = Run::text("수학 기호: α β γ δ ∑ ∫", CharShapeIndex::new(0));
+```
+
+### 스타일 스토어 선택
+
+| 생성 방법                      | 용도               | 특징                         |
+| ------------------------------ | ------------------ | ---------------------------- |
+| `with_default_fonts("글꼴명")` | 빠른 프로토타이핑  | 한컴 Modern 22종 기본 스타일 |
+| `from_registry(&registry)`     | 커스텀 템플릿 적용 | YAML로 정의한 스타일 사용    |
+| 디코딩된 `result.style_store`  | 기존 문서 수정     | 원본 스타일 보존             |
