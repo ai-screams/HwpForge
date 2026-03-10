@@ -137,9 +137,16 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Publish platform package
+      - name: Publish platform package (skip if already published)
         working-directory: npm/packages/mcp-${{ matrix.npm-suffix }}
-        run: npm publish --access public --provenance
+        run: |
+          pkg_name=$(jq -r '.name' package.json)
+          pkg_ver=$(jq -r '.version' package.json)
+          if npm view "${pkg_name}@${pkg_ver}" version 2>/dev/null; then
+            echo "✓ ${pkg_name}@${pkg_ver} already published — skipping"
+          else
+            npm publish --access public --provenance
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
@@ -175,13 +182,13 @@ jobs:
         run: |
           version="${{ steps.version.outputs.version }}"
           for pkg in mcp-darwin-arm64 mcp-darwin-x64 mcp-linux-x64 mcp-linux-arm64 mcp-win32-x64; do
-            for i in $(seq 1 18); do
+            for i in $(seq 1 30); do
               if npm view "@hwpforge/${pkg}@${version}" version 2>/dev/null; then
                 echo "✓ @hwpforge/${pkg}@${version} available"
                 break
               fi
-              if [ "$i" -eq 18 ]; then
-                echo "::error::@hwpforge/${pkg}@${version} not visible after 3 min — aborting"
+              if [ "$i" -eq 30 ]; then
+                echo "::error::@hwpforge/${pkg}@${version} not visible after 5 min — aborting"
                 exit 1
               fi
               echo "Waiting for @hwpforge/${pkg}@${version} (attempt ${i}/18)..."
@@ -216,9 +223,16 @@ jobs:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Publish base package
+      - name: Publish base package (skip if already published)
         working-directory: npm/packages/mcp
-        run: npm publish --access public --provenance
+        run: |
+          pkg_name=$(jq -r '.name' package.json)
+          pkg_ver=$(jq -r '.version' package.json)
+          if npm view "${pkg_name}@${pkg_ver}" version 2>/dev/null; then
+            echo "✓ ${pkg_name}@${pkg_ver} already published — skipping"
+          else
+            npm publish --access public --provenance
+          fi
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
