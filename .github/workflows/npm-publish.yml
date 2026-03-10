@@ -29,6 +29,9 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    defaults:
+      run:
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
@@ -72,6 +75,8 @@ jobs:
       - name: Install cross-rs
         if: matrix.cross
         uses: taiki-e/install-action@a37010ded18ff788be4440302bd6830b1ae50d8b # v2.68.25
+        with:
+          tool: cross
 
       - name: Build (native)
         if: "!matrix.cross"
@@ -146,6 +151,9 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -173,7 +181,8 @@ jobs:
                 break
               fi
               if [ "$i" -eq 18 ]; then
-                echo "::warning::@hwpforge/${pkg}@${version} not yet visible after 3 min"
+                echo "::error::@hwpforge/${pkg}@${version} not visible after 3 min — aborting"
+                exit 1
               fi
               echo "Waiting for @hwpforge/${pkg}@${version} (attempt ${i}/18)..."
               sleep 10

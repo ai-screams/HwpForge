@@ -6,7 +6,7 @@
     {
       "registry_name": "npm",
       "name": "@hwpforge/mcp",
-      "version": "latest"
+      "version": "0.1.4"
     }
   ]
 }

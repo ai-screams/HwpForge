@@ -50,7 +50,7 @@ try {
   }
   if (e.code === "ENOENT") {
     console.error(
-      `Error: Binary not executable (possible musl/glibc mismatch on Alpine).\n` +
+      `Error: Binary not found or incompatible (possible musl/glibc mismatch on Alpine).\n` +
       `Alternative: cargo install hwpforge-bindings-mcp`
     );
     process.exit(1);
