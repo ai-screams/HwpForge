@@ -260,7 +260,7 @@ impl HwpForgeServer {
     /// Use when building documents programmatically without Markdown.
     #[tool(
         name = "hwpforge_from_json",
-        description = "Create an HWPX document directly from a JSON structure (ExportedDocument schema). Use when building documents programmatically without Markdown. Get the schema from hwpforge_to_json output."
+        description = "Create an HWPX document directly from a JSON structure (ExportedDocument schema). Use when building documents programmatically without Markdown. Get the schema from hwpforge_to_json output. For large documents, prefer hwpforge_to_json + hwpforge_patch workflow with file paths instead of inline JSON."
     )]
     async fn hwpforge_from_json(
         &self,

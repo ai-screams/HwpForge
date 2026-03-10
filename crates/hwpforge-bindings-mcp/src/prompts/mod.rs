@@ -185,7 +185,7 @@ mod tests {
     }
 
     #[test]
-    fn get_prompt_none_arguments() {
+    fn get_prompt_proposal_with_args() {
         let mut args = serde_json::Map::new();
         args.insert("topic".into(), serde_json::Value::String("test".into()));
         let result = get_prompt("generate_proposal", Some(&args)).unwrap();

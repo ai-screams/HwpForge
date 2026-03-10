@@ -239,4 +239,18 @@ mod tests {
         let err = read_resource("hwpforge://templates/unknown").unwrap_err();
         assert!(err.message.contains("Unknown resource"));
     }
+
+    #[test]
+    fn templates_match_builtin_presets() {
+        let presets = hwpforge_smithy_hwpx::presets::builtin_presets();
+        let resource_names: Vec<&str> = TEMPLATES
+            .iter()
+            .map(|t| t.uri.strip_prefix("hwpforge://templates/").unwrap())
+            .collect();
+        let preset_names: Vec<&str> = presets.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(
+            resource_names, preset_names,
+            "TEMPLATES URIs must match builtin_presets() names"
+        );
+    }
 }

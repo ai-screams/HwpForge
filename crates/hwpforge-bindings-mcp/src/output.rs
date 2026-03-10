@@ -16,6 +16,8 @@ pub const MAX_INLINE_SIZE: usize = 50 * 1024 * 1024;
 pub fn read_file_bytes(file_path: &str) -> Result<Vec<u8>, ToolErrorInfo> {
     let path = Path::new(file_path);
     check_file_size(path)?;
+    // Safety net: if the file disappears between metadata() and read() (TOCTOU),
+    // this match catches NotFound again. In normal flow, check_file_size handles it.
     std::fs::read(path).map_err(|e| match e.kind() {
         std::io::ErrorKind::NotFound => ToolErrorInfo::new(
             "FILE_NOT_FOUND",

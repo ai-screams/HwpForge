@@ -65,8 +65,15 @@ pub fn run_restyle(
     let mut style_store = hwpx_doc.style_store;
     let original_base: Option<String> =
         style_store.iter_fonts().next().map(|f| f.face_name.clone());
-    if let Some(ref base) = original_base {
-        style_store.replace_font(base, &preset_font);
+    match original_base {
+        Some(ref base) => style_store.replace_font(base, &preset_font),
+        None => {
+            return Err(ToolErrorInfo::new(
+                "NO_FONTS",
+                "Document has no fonts to restyle",
+                "The HWPX file may be malformed. Use hwpforge_validate to check.",
+            ));
+        }
     }
 
     let validated = hwpx_doc.document.validate().map_err(|e| {

@@ -62,6 +62,25 @@ mod tests {
     }
 
     #[test]
+    fn validate_valid_document() {
+        let dir = tempfile::tempdir().unwrap();
+        let hwpx_path = dir.path().join("valid.hwpx");
+        crate::tools::convert::run_convert(
+            "# Test\n\nParagraph.",
+            false,
+            hwpx_path.to_str().unwrap(),
+            "default",
+        )
+        .unwrap();
+
+        let data = run_validate(hwpx_path.to_str().unwrap()).unwrap();
+        assert!(data.valid);
+        assert!(data.sections >= 1);
+        assert!(data.paragraphs >= 1);
+        assert!(data.issues.is_empty());
+    }
+
+    #[test]
     fn validate_invalid_hwpx_bytes() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bad.hwpx");
