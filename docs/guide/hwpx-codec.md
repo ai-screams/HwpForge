@@ -52,6 +52,29 @@ let HwpxDocument { document, style_store, image_store } =
 | `style_store` | `HwpxStyleStore`  | 폰트/글자모양/문단모양/스타일 |
 | `image_store` | `ImageStore`      | 이미지 바이너리 저장소        |
 
+### 메타데이터 접근
+
+디코딩된 문서에서 `metadata()`로 제목, 작성자 등의 메타데이터에 접근합니다.
+
+```rust,no_run
+use hwpforge_smithy_hwpx::HwpxDecoder;
+
+let result = HwpxDecoder::decode_file("document.hwpx").unwrap();
+let meta = result.document.metadata();
+
+if let Some(title) = &meta.title {
+    println!("제목: {}", title);
+}
+if let Some(author) = &meta.author {
+    println!("작성자: {}", author);
+}
+if let Some(created) = &meta.created {
+    println!("작성일: {}", created);
+}
+```
+
+전체 메타데이터 필드 목록과 사용법은 [메타데이터 가이드](./metadata.md)를 참고하세요.
+
 ## 인코딩: Core → HWPX
 
 `HwpxEncoder::encode()`로 `Document<Validated>`를 HWPX 바이트 벡터로 직렬화합니다.
@@ -138,6 +161,115 @@ let bytes = HwpxEncoder::encode(
 std::fs::write("modified.hwpx", &bytes).unwrap();
 ```
 
+## 기존 텍스트 찾기 및 수정
+
+특정 텍스트를 찾아 수정하려면 `sections_mut()`으로 가변 접근 후 `RunContent::Text`를 패턴 매칭합니다.
+
+### 텍스트 치환 (find & replace)
+
+```rust,no_run
+use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
+use hwpforge_core::run::RunContent;
+
+// 1. 디코딩
+let mut result = HwpxDecoder::decode_file("template.hwpx").unwrap();
+
+// 2. 모든 섹션의 모든 문단을 순회하며 텍스트 치환
+for section in result.document.sections_mut() {
+    for paragraph in &mut section.paragraphs {
+        for run in &mut paragraph.runs {
+            if let RunContent::Text(ref mut text) = run.content {
+                if text.contains("{{회사명}}") {
+                    *text = text.replace("{{회사명}}", "한국테크");
+                }
+                if text.contains("{{날짜}}") {
+                    *text = text.replace("{{날짜}}", "2026년 3월 11일");
+                }
+            }
+        }
+    }
+}
+
+// 3. 검증 후 저장
+let validated = result.document.validate().unwrap();
+let bytes = HwpxEncoder::encode(&validated, &result.style_store, &result.image_store).unwrap();
+std::fs::write("output.hwpx", &bytes).unwrap();
+```
+
+### 재사용 가능한 치환 함수
+
+```rust,no_run
+use hwpforge_core::document::{Document, Draft};
+use hwpforge_core::run::RunContent;
+
+/// 문서 내 모든 텍스트에서 `from`을 `to`로 치환합니다.
+/// 치환된 횟수를 반환합니다.
+fn replace_text(doc: &mut Document<Draft>, from: &str, to: &str) -> usize {
+    let mut count = 0;
+    for section in doc.sections_mut() {
+        for paragraph in &mut section.paragraphs {
+            for run in &mut paragraph.runs {
+                if let RunContent::Text(ref mut text) = run.content {
+                    if text.contains(from) {
+                        *text = text.replace(from, to);
+                        count += 1;
+                    }
+                }
+            }
+        }
+    }
+    count
+}
+```
+
+### 완전한 읽기 → 수정 → 저장 예제
+
+```rust,no_run
+use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
+use hwpforge_core::run::{Run, RunContent};
+use hwpforge_core::paragraph::Paragraph;
+use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+
+fn modify_document(
+    input: &str,
+    output: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // 읽기
+    let mut result = HwpxDecoder::decode_file(input)
+        .map_err(|e| format!("디코딩 실패: {e}"))?;
+
+    let sections = result.document.sections_mut();
+
+    // 기존 텍스트 수정
+    for section in sections.iter_mut() {
+        for paragraph in &mut section.paragraphs {
+            for run in &mut paragraph.runs {
+                if let RunContent::Text(ref mut text) = run.content {
+                    *text = text.replace("초안", "최종본");
+                }
+            }
+        }
+    }
+
+    // 새 문단 추가
+    if let Some(first_section) = result.document.sections_mut().first_mut() {
+        first_section.paragraphs.push(Paragraph::with_runs(
+            vec![Run::text("— 이 문서는 자동으로 수정되었습니다.", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        ));
+    }
+
+    // 저장
+    let validated = result.document.validate()
+        .map_err(|e| format!("검증 실패: {e}"))?;
+    let bytes = HwpxEncoder::encode(&validated, &result.style_store, &result.image_store)
+        .map_err(|e| format!("인코딩 실패: {e}"))?;
+    std::fs::write(output, &bytes)?;
+
+    Ok(())
+}
+```
+
 ## 오류 처리
 
 모든 함수는 `HwpxResult<T>`를 반환합니다. `HwpxError`는 `HwpxErrorCode`와 메시지를 포함합니다.
@@ -150,3 +282,48 @@ match HwpxDecoder::decode_file("missing.hwpx") {
     Err(e) => eprintln!("디코딩 실패: {e}"),
 }
 ```
+
+## 엣지 케이스 및 주의사항
+
+### 빈 문서
+
+`Document`는 최소 1개의 섹션이 있어야 `validate()`를 통과합니다.
+
+```rust,no_run
+use hwpforge::core::{Document, Draft, PageSettings, Paragraph, Section};
+use hwpforge::foundation::ParaShapeIndex;
+
+let mut doc = Document::<Draft>::new();
+
+// ❌ 빈 문서 — validate() 실패
+// let validated = doc.validate();  // Err: 섹션 없음
+
+// ✅ 빈 문단이라도 하나 추가
+doc.add_section(Section::with_paragraphs(
+    vec![Paragraph::new(ParaShapeIndex::new(0))],
+    PageSettings::a4(),
+));
+let validated = doc.validate().unwrap();  // OK
+```
+
+### 한국어/특수 문자
+
+HwpForge는 내부적으로 UTF-8을 사용합니다. 한국어, 이모지, 특수 기호를 포함한 모든 유니코드 문자를 지원합니다.
+
+```rust,no_run
+use hwpforge::core::run::Run;
+use hwpforge::foundation::CharShapeIndex;
+
+// 모두 정상 동작
+let run1 = Run::text("한글 텍스트 테스트", CharShapeIndex::new(0));
+let run2 = Run::text("특수문자: ©®™ §¶ ±×÷", CharShapeIndex::new(0));
+let run3 = Run::text("수학 기호: α β γ δ ∑ ∫", CharShapeIndex::new(0));
+```
+
+### 스타일 스토어 선택
+
+| 생성 방법                      | 용도               | 특징                         |
+| ------------------------------ | ------------------ | ---------------------------- |
+| `with_default_fonts("글꼴명")` | 빠른 프로토타이핑  | 한컴 Modern 22종 기본 스타일 |
+| `from_registry(&registry)`     | 커스텀 템플릿 적용 | YAML로 정의한 스타일 사용    |
+| 디코딩된 `result.style_store`  | 기존 문서 수정     | 원본 스타일 보존             |

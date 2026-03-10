@@ -62,14 +62,33 @@ template: government      # 사용할 스타일 템플릿 이름 (옵션)
 
 지원 필드:
 
-| 필드       | 설명               |
-| ---------- | ------------------ |
-| `title`    | 문서 제목          |
-| `author`   | 작성자             |
-| `date`     | 작성일 (ISO 8601)  |
-| `template` | 스타일 템플릿 이름 |
+| 필드       | Metadata 필드 | 설명                      |
+| ---------- | ------------- | ------------------------- |
+| `title`    | `title`       | 문서 제목                 |
+| `author`   | `author`      | 작성자                    |
+| `date`     | `created`     | 작성일 (ISO 8601)         |
+| `subject`  | `subject`     | 주제/설명                 |
+| `keywords` | `keywords`    | 검색 키워드 (YAML 배열)   |
+| `modified` | `modified`    | 수정일 (ISO 8601)         |
+| `template` | _(스타일)_    | 스타일 템플릿 이름 (옵션) |
 
 Frontmatter 없이도 디코딩이 가능하며, 메타데이터 필드는 빈 값으로 처리됩니다.
+
+### 디코딩 후 메타데이터 확인
+
+```rust,no_run
+use hwpforge::md::{MdDecoder, MdDocument};
+
+let markdown = "---\ntitle: 보고서\nauthor: 홍길동\ndate: 2026-03-06\n---\n\n# 본문\n";
+let MdDocument { document, .. } = MdDecoder::decode_with_default(markdown).unwrap();
+
+let meta = document.metadata();
+assert_eq!(meta.title.as_deref(), Some("보고서"));
+assert_eq!(meta.author.as_deref(), Some("홍길동"));
+assert_eq!(meta.created.as_deref(), Some("2026-03-06"));
+```
+
+전체 메타데이터 필드와 프로그래밍 설정 방법은 [메타데이터 가이드](./metadata.md)를 참고하세요.
 
 ## 섹션 마커
 
@@ -171,3 +190,122 @@ date: 2026-03-06
     markdown_to_hwpx(md, "proposal.hwpx");
 }
 ```
+
+## HWPX → Markdown 변환 (RAG/LLM 활용)
+
+HWPX 문서를 Markdown으로 변환하면 LLM이나 RAG(Retrieval-Augmented Generation) 시스템에서 직접 활용할 수 있습니다.
+
+### 의존성 설정
+
+`Cargo.toml`에 `md` 기능을 활성화합니다:
+
+```toml
+[dependencies]
+hwpforge = { version = "0.1", features = ["md"] }
+```
+
+### Lossy vs Lossless 모드 선택
+
+| 기준          | Lossy (`encode_lossy`)      | Lossless (`encode_lossless`)   |
+| ------------- | --------------------------- | ------------------------------ |
+| **출력 형식** | 표준 GFM Markdown           | YAML frontmatter + HTML 마크업 |
+| **가독성**    | 높음 (사람/LLM 모두)        | 낮음 (기계 파싱용)             |
+| **정보 손실** | 스타일/레이아웃 일부 손실   | 구조 완전 보존                 |
+| **RAG 추천**  | **추천** — 청크 분할에 적합 | 원본 복원이 필요할 때만        |
+| **LLM 추천**  | **추천** — 토큰 효율적      | 라운드트립 편집 시             |
+
+**RAG 시스템에서는 `encode_lossy`를 권장합니다.** 표준 GFM으로 출력되어 청크 분할기(text splitter)와 호환성이 높고, 불필요한 마크업이 없어 토큰을 절약합니다.
+
+### 완전한 HWPX → Markdown 예제 (에러 처리 포함)
+
+```rust,no_run
+use hwpforge::hwpx::HwpxDecoder;
+use hwpforge::md::MdEncoder;
+use std::path::Path;
+
+fn hwpx_to_markdown(input_path: &str) -> Result<String, Box<dyn std::error::Error>> {
+    // 1. 파일 존재 여부 확인
+    let path = Path::new(input_path);
+    if !path.exists() {
+        return Err(format!("파일을 찾을 수 없습니다: {}", input_path).into());
+    }
+
+    // 2. HWPX 디코딩
+    let result = HwpxDecoder::decode_file(input_path)
+        .map_err(|e| format!("HWPX 디코딩 실패: {e}"))?;
+
+    // 3. 메타데이터 확인 (선택)
+    let meta = result.document.metadata();
+    if let Some(title) = &meta.title {
+        eprintln!("문서 제목: {}", title);
+    }
+
+    // 4. Draft → Validated 상태 전이
+    let validated = result.document.validate()
+        .map_err(|e| format!("문서 검증 실패: {e}"))?;
+
+    // 5. Markdown 변환 (RAG용 lossy 모드)
+    let markdown = MdEncoder::encode_lossy(&validated)
+        .map_err(|e| format!("Markdown 인코딩 실패: {e}"))?;
+
+    Ok(markdown)
+}
+
+fn main() {
+    match hwpx_to_markdown("document.hwpx") {
+        Ok(md) => {
+            std::fs::write("output.md", &md).expect("파일 저장 실패");
+            println!("변환 완료: {} bytes", md.len());
+        }
+        Err(e) => eprintln!("오류: {e}"),
+    }
+}
+```
+
+### 대량 파일 변환
+
+여러 HWPX 파일을 Markdown으로 일괄 변환합니다:
+
+```rust,no_run
+use hwpforge::hwpx::HwpxDecoder;
+use hwpforge::md::MdEncoder;
+use std::path::Path;
+
+fn batch_convert(input_dir: &str, output_dir: &str) -> Result<usize, Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(output_dir)?;
+    let mut count = 0;
+
+    for entry in std::fs::read_dir(input_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if path.extension().is_some_and(|ext| ext == "hwpx") {
+            let result = HwpxDecoder::decode_file(&path)?;
+            let validated = result.document.validate()?;
+            let markdown = MdEncoder::encode_lossy(&validated)?;
+
+            let out_name = path.file_stem().unwrap().to_string_lossy();
+            let out_path = Path::new(output_dir).join(format!("{}.md", out_name));
+            std::fs::write(&out_path, &markdown)?;
+
+            eprintln!("변환: {} → {}", path.display(), out_path.display());
+            count += 1;
+        }
+    }
+
+    Ok(count)
+}
+```
+
+### CLI로 변환
+
+```bash
+# Markdown → HWPX
+hwpforge convert report.md -o report.hwpx
+
+# HWPX 구조 확인 후 JSON으로 추출 (Markdown 변환 대안)
+hwpforge inspect document.hwpx --json
+hwpforge to-json document.hwpx -o document.json
+```
+
+> **참고**: CLI의 `convert` 명령은 현재 Markdown → HWPX 방향만 지원합니다. HWPX → Markdown 변환은 Rust API(`MdEncoder`)를 사용하세요.

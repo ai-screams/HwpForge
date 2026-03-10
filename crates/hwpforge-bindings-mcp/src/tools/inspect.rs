@@ -27,9 +27,32 @@ pub struct SectionDetail {
     pub has_page_number: bool,
 }
 
+/// Document metadata summary.
+#[derive(Debug, Serialize)]
+pub struct MetadataInfo {
+    /// Document title (empty string if not set).
+    pub title: String,
+    /// Document author (empty string if not set).
+    pub author: String,
+    /// Document subject (empty string if not set).
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub subject: String,
+    /// Creation date in ISO 8601 format.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created: Option<String>,
+    /// Last modification date in ISO 8601 format.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub modified: Option<String>,
+    /// Searchable keywords.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub keywords: Vec<String>,
+}
+
 /// Output data from a successful inspection.
 #[derive(Debug, Serialize)]
 pub struct InspectData {
+    /// Document metadata (title, author, dates, etc.).
+    pub metadata: MetadataInfo,
     /// Total number of sections.
     pub sections: usize,
     /// Total number of paragraphs across all sections.
@@ -57,6 +80,16 @@ pub fn run_inspect(file_path: &str, _show_styles: bool) -> Result<InspectData, T
     })?;
 
     let doc = &hwpx_doc.document;
+    let meta = doc.metadata();
+    let metadata = MetadataInfo {
+        title: meta.title.clone().unwrap_or_default(),
+        author: meta.author.clone().unwrap_or_default(),
+        subject: meta.subject.clone().unwrap_or_default(),
+        created: meta.created.clone(),
+        modified: meta.modified.clone(),
+        keywords: meta.keywords.clone(),
+    };
+
     let mut total_tables: usize = 0;
     let mut total_images: usize = 0;
     let mut total_charts: usize = 0;
@@ -88,6 +121,7 @@ pub fn run_inspect(file_path: &str, _show_styles: bool) -> Result<InspectData, T
         .collect();
 
     Ok(InspectData {
+        metadata,
         sections: section_details.len(),
         total_paragraphs,
         total_tables,

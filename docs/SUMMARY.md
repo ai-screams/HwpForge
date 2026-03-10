@@ -13,9 +13,13 @@
 # 사용 가이드
 
 - [HWPX 인코딩/디코딩](guide/hwpx-codec.md)
+- [메타데이터 (Metadata)](guide/metadata.md)
 - [Markdown에서 HWPX로](guide/markdown-bridge.md)
 - [스타일 템플릿 (YAML)](guide/style-templates.md)
 - [차트 생성](guide/charts.md)
+- [텍스트 추출 (Text Extraction)](guide/text-extraction.md)
+- [HWP5와 HWPX: 이중 포맷 파이프라인](guide/format-pipeline.md)
+- [대규모 HWP 아카이브 마이그레이션](guide/migration-strategy.md)
 
 # 레퍼런스
 
