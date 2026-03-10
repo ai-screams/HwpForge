@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.1.5...hwpforge-bindings-mcp-v0.1.6) - 2026-03-10
+
+### Added
+
+- *(mcp)* Phase 7c MCP Extended — 3 tools + 4 resources + 3 prompts
+
+
+### Changed
+
+- *(mcp)* extract shared I/O helpers and eliminate TOCTOU race condition
+
+
+### Fixed
+
+- *(mcp)* address quality review — font contract docs, extension guard, range format
+
+- *(mcp)* apply PR review fixes — TOCTOU comment, tests, error handling
+
+- *(mcp)* fix restyle index mismatch and convert font override bugs
+
+
 ## [0.1.4](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.1.3...hwpforge-bindings-mcp-v0.1.4) - 2026-03-09
 
 ### Added
