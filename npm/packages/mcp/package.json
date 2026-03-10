@@ -1,0 +1,37 @@
+{
+  "name": "@hwpforge/mcp",
+  "version": "0.0.1",
+  "description": "HwpForge MCP Server — AI-native Korean HWP/HWPX document tools",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ai-screams/HwpForge"
+  },
+  "homepage": "https://ai-screams.github.io/HwpForge/",
+  "keywords": [
+    "hwp",
+    "hwpx",
+    "hancom",
+    "hangul",
+    "korean",
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "document"
+  ],
+  "bin": {
+    "hwpforge-mcp": "./bin/hwpforge-mcp.js"
+  },
+  "files": [
+    "bin/",
+    "README.md"
+  ],
+  "optionalDependencies": {
+    "@hwpforge/mcp-darwin-arm64": "0.0.1",
+    "@hwpforge/mcp-darwin-x64": "0.0.1",
+    "@hwpforge/mcp-linux-x64": "0.0.1",
+    "@hwpforge/mcp-linux-arm64": "0.0.1",
+    "@hwpforge/mcp-win32-x64": "0.0.1"
+  },
+  "mcpName": "io.github.ai-screams/hwpforge"
+}

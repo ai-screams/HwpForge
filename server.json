@@ -1,0 +1,13 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
+  "name": "io.github.ai-screams/hwpforge",
+  "description": "AI-native Korean HWP/HWPX document generation, inspection, and editing tools",
+  "version": "0.1.4",
+  "packages": [
+    {
+      "registry_name": "npm",
+      "name": "@hwpforge/mcp",
+      "version": "0.1.4"
+    }
+  ]
+}

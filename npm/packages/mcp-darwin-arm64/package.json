@@ -1,0 +1,13 @@
+{
+  "name": "@hwpforge/mcp-darwin-arm64",
+  "version": "0.0.1",
+  "description": "HwpForge MCP Server — macOS Apple Silicon binary",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ai-screams/HwpForge"
+  },
+  "os": ["darwin"],
+  "cpu": ["arm64"],
+  "files": ["bin/", "README.md"]
+}

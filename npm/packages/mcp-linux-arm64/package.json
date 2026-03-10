@@ -1,0 +1,13 @@
+{
+  "name": "@hwpforge/mcp-linux-arm64",
+  "version": "0.0.1",
+  "description": "HwpForge MCP Server — Linux ARM64 binary",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ai-screams/HwpForge"
+  },
+  "os": ["linux"],
+  "cpu": ["arm64"],
+  "files": ["bin/", "README.md"]
+}

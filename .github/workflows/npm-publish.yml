@@ -1,0 +1,166 @@
+# =============================================================================
+# HwpForge npm publish — Binary distribution via npm
+# =============================================================================
+#
+# Triggered on GitHub Release creation (after release-plz publishes a release).
+# Builds hwpforge-mcp for 5 targets, publishes platform packages, then the
+# base @hwpforge/mcp package with updated optionalDependencies.
+# =============================================================================
+
+name: npm publish
+
+on:
+  release:
+    types: [published]
+
+env:
+  CARGO_TERM_COLOR: always
+
+permissions:
+  contents: read
+
+concurrency:
+  group: npm-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish-platform:
+    name: "npm › ${{ matrix.npm-suffix }}"
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            runner: macos-14
+            npm-suffix: darwin-arm64
+            cross: false
+            bin-ext: ""
+          - target: x86_64-apple-darwin
+            runner: macos-14
+            npm-suffix: darwin-x64
+            cross: false
+            bin-ext: ""
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-latest
+            npm-suffix: linux-x64
+            cross: false
+            bin-ext: ""
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-latest
+            npm-suffix: linux-arm64
+            cross: true
+            bin-ext: ""
+          - target: x86_64-pc-windows-msvc
+            runner: windows-latest
+            npm-suffix: win32-x64
+            cross: false
+            bin-ext: ".exe"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - name: Add cross-compilation target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Install cross-rs
+        if: matrix.cross
+        run: cargo install cross --locked
+
+      - name: Build (native)
+        if: "!matrix.cross"
+        run: cargo build --release -p hwpforge-bindings-mcp --target ${{ matrix.target }}
+
+      - name: Build (cross)
+        if: matrix.cross
+        run: cross build --release -p hwpforge-bindings-mcp --target ${{ matrix.target }}
+
+      - name: Extract version from tag
+        id: version
+        shell: bash
+        run: |
+          tag="${{ github.ref_name }}"
+          version="${tag#v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Update platform package.json version
+        shell: bash
+        run: |
+          pkg="npm/packages/mcp-${{ matrix.npm-suffix }}/package.json"
+          jq --arg v "${{ steps.version.outputs.version }}" '.version = $v' "$pkg" > "$pkg.tmp"
+          mv "$pkg.tmp" "$pkg"
+
+      - name: Copy binary to npm package
+        shell: bash
+        run: |
+          bin_dir="npm/packages/mcp-${{ matrix.npm-suffix }}/bin"
+          mkdir -p "$bin_dir"
+          src="target/${{ matrix.target }}/release/hwpforge-mcp${{ matrix.bin-ext }}"
+          dst="$bin_dir/hwpforge-mcp${{ matrix.bin-ext }}"
+          cp "$src" "$dst"
+
+      - name: Set executable permission
+        if: matrix.bin-ext == ''
+        shell: bash
+        run: chmod +x "npm/packages/mcp-${{ matrix.npm-suffix }}/bin/hwpforge-mcp"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Publish platform package
+        working-directory: npm/packages/mcp-${{ matrix.npm-suffix }}
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  publish-base:
+    name: "npm › @hwpforge/mcp (base)"
+    needs: [publish-platform]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          tag="${{ github.ref_name }}"
+          version="${tag#v}"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Update base package.json version and optionalDependencies
+        run: |
+          pkg="npm/packages/mcp/package.json"
+          v="${{ steps.version.outputs.version }}"
+          jq --arg v "$v" '
+            .version = $v |
+            .optionalDependencies |= with_entries(.value = $v)
+          ' "$pkg" > "$pkg.tmp"
+          mv "$pkg.tmp" "$pkg"
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Publish base package
+        working-directory: npm/packages/mcp
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Refresh Context7 index
+        uses: rennf93/upsert-context7@v1
+        continue-on-error: true
+        with:
+          library-name: HwpForge

@@ -1,0 +1,2 @@
+#!/bin/sh
+echo 'Placeholder — real binary will be provided by CI build'

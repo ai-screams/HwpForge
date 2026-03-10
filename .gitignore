@@ -475,6 +475,10 @@ $RECYCLE.BIN/
 # Share skills (agentskills.io standard — project-level AI instructions)
 !.claude/skills/
 
+# npm package bin/ directories (override global [Bb]in rule)
+!npm/packages/*/bin/
+!npm/packages/*/bin/**
+
 # MCP server config (local binary paths, user-specific)
 .mcp.json
 

@@ -1,0 +1,10 @@
+startCommand:
+  type: stdio
+  configSchema: {}
+  commandFunction: |-
+    (config) => ({
+      command: "npx",
+      args: ["-y", "@hwpforge/mcp"],
+      env: {}
+    })
+  exampleConfig: {}
