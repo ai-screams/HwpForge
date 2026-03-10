@@ -4,7 +4,7 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use hwpforge_smithy_hwpx::presets::style_store_for_preset;
+use hwpforge_smithy_hwpx::presets::builtin_presets;
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
 
 use crate::output::{check_file_size, ToolErrorInfo};
@@ -37,14 +37,16 @@ pub fn run_restyle(
         ));
     }
 
-    // 2. Look up preset
-    let style_store = style_store_for_preset(preset).ok_or_else(|| {
+    // 2. Look up preset font
+    let presets = builtin_presets();
+    let preset_info = presets.iter().find(|p| p.name == preset).ok_or_else(|| {
         ToolErrorInfo::new(
             "PRESET_NOT_FOUND",
             format!("Preset '{preset}' not found"),
             "Use hwpforge_templates to see available presets.",
         )
     })?;
+    let preset_font = preset_info.font.clone();
 
     // 3. Read and decode source HWPX
     let path = Path::new(file_path);
@@ -72,7 +74,18 @@ pub fn run_restyle(
         )
     })?;
 
-    // 4. Validate and encode with new style store
+    // 4. Replace base font in the decoded style store.
+    //    Instead of creating a new preset store (which would lose char/para shape
+    //    definitions the document references), we keep the original style store
+    //    intact and only swap font face names. This preserves all shape indices
+    //    while applying the new font.
+    let mut style_store = hwpx_doc.style_store;
+    let original_base: Option<String> =
+        style_store.iter_fonts().next().map(|f| f.face_name.clone());
+    if let Some(ref base) = original_base {
+        style_store.replace_font(base, &preset_font);
+    }
+
     let validated = hwpx_doc.document.validate().map_err(|e| {
         ToolErrorInfo::new(
             "VALIDATION_ERROR",
@@ -167,5 +180,31 @@ mod tests {
         assert_eq!(data.applied_preset, "modern");
         assert!(data.size_bytes > 0);
         assert!(data.sections >= 1);
+    }
+
+    #[test]
+    fn restyle_preserves_all_shape_indices_with_complex_doc() {
+        // Regression test: documents with code blocks reference higher char/para
+        // shape indices (7+/20+). The old implementation created a preset store
+        // with only 7+20 default shapes, causing index mismatch on encode.
+        let dir = tempfile::tempdir().unwrap();
+        let hwpx_path = dir.path().join("complex.hwpx");
+        let md = "# Heading\n\nBody text.\n\n```rust\nfn main() {}\n```\n\n> Blockquote\n";
+        crate::tools::convert::run_convert(md, false, hwpx_path.to_str().unwrap(), "default")
+            .unwrap();
+
+        // Restyle must not panic or produce corrupt output
+        let out_path = dir.path().join("restyled.hwpx");
+        let data = run_restyle(hwpx_path.to_str().unwrap(), "classic", out_path.to_str().unwrap())
+            .unwrap();
+
+        assert!(out_path.exists());
+        assert_eq!(data.applied_preset, "classic");
+        assert!(data.size_bytes > 0);
+
+        // Verify the restyled file can be decoded back (not corrupted)
+        let restyled_bytes = std::fs::read(&out_path).unwrap();
+        let restyled_doc = HwpxDecoder::decode(&restyled_bytes).unwrap();
+        assert!(!restyled_doc.document.sections().is_empty());
     }
 }

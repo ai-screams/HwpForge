@@ -103,13 +103,23 @@ pub fn run_convert(
     // 6. Apply preset font to style registry, then build full style store.
     //    from_registry() creates the complete store (char shapes, para shapes,
     //    styles, border fills) unlike with_default_fonts() which only sets fonts.
+    //    Only replace base font entries — preserve specialty fonts (e.g., D2Coding
+    //    for code blocks) by checking against the original base font name.
     let preset_font_id = FontId::new(&preset_font).map_err(|e| {
         ToolErrorInfo::new("PRESET_ERROR", format!("Invalid preset font name: {e}"), "")
     })?;
-    // Two font entries: default char shapes reference both FontIndex(0) and FontIndex(1).
-    md_doc.style_registry.fonts = vec![preset_font_id.clone(), preset_font_id];
+    let original_base =
+        md_doc.style_registry.fonts.first().map(|f| f.as_str().to_string()).unwrap_or_default();
+    md_doc.style_registry.fonts = md_doc
+        .style_registry
+        .fonts
+        .iter()
+        .map(|f| if f.as_str() == original_base { preset_font_id.clone() } else { f.clone() })
+        .collect();
     for cs in &mut md_doc.style_registry.char_shapes {
-        cs.font.clone_from(&preset_font);
+        if cs.font == original_base {
+            cs.font.clone_from(&preset_font);
+        }
     }
     let style_store = HwpxStyleStore::from_registry(&md_doc.style_registry);
     let image_store = ImageStore::new();

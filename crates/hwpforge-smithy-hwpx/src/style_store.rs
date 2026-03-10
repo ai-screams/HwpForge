@@ -963,6 +963,22 @@ impl HwpxStyleStore {
         self.fonts.len()
     }
 
+    /// Replaces all font entries matching `old_face` with `new_face`.
+    ///
+    /// This is used by the restyle tool to change the base font of a decoded
+    /// document without destroying char/para shape indices. Font entries are
+    /// replicated across 7 language groups, so all matching entries are updated.
+    ///
+    /// Specialty fonts (e.g., D2Coding for code blocks) are preserved because
+    /// they don't match `old_face`.
+    pub fn replace_font(&mut self, old_face: &str, new_face: &str) {
+        for font in &mut self.fonts {
+            if font.face_name == old_face {
+                font.face_name = new_face.to_string();
+            }
+        }
+    }
+
     // ── Character Shapes ─────────────────────────────────────────
 
     /// Adds a char shape and returns its index.
@@ -1983,5 +1999,32 @@ mod tests {
         assert_eq!(ps.alignment, Alignment::Justify);
         assert_eq!(ps.margin_left.as_i32(), 1000);
         assert_eq!(ps.line_spacing, 160);
+    }
+
+    #[test]
+    fn replace_font_swaps_matching_entries_only() {
+        let mut store = HwpxStyleStore::with_default_fonts("함초롬돋움");
+        // Add a second font (D2Coding) for all 7 lang groups
+        for lang in &["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
+            store.push_font(HwpxFont {
+                id: 1,
+                face_name: "D2Coding".to_string(),
+                lang: lang.to_string(),
+            });
+        }
+        assert_eq!(store.font_count(), 14); // 7 (함초롬돋움) + 7 (D2Coding)
+
+        store.replace_font("함초롬돋움", "맑은 고딕");
+
+        // 함초롬돋움 should be replaced
+        let first = store.iter_fonts().next().unwrap();
+        assert_eq!(first.face_name, "맑은 고딕");
+
+        // D2Coding should be preserved
+        let d2 = store.iter_fonts().find(|f| f.face_name == "D2Coding");
+        assert!(d2.is_some(), "D2Coding should not be replaced");
+
+        // Total count unchanged
+        assert_eq!(store.font_count(), 14);
     }
 }
