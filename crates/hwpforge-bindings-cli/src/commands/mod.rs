@@ -5,3 +5,4 @@ pub mod patch;
 pub mod schema;
 pub mod templates;
 pub mod to_json;
+pub mod to_md;

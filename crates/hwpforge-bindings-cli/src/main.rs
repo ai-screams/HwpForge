@@ -106,6 +106,16 @@ enum Commands {
         #[arg(default_value = "document")]
         type_name: String,
     },
+
+    /// Convert an HWPX file to Markdown.
+    ToMd {
+        /// Path to the input HWPX file.
+        input: PathBuf,
+
+        /// Output directory (defaults to same directory as input).
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -154,6 +164,9 @@ fn main() {
         },
         Commands::Schema { type_name } => {
             commands::schema::run(&type_name, cli.json);
+        }
+        Commands::ToMd { input, output } => {
+            commands::to_md::run(&input, &output, cli.json);
         }
     }
 }

@@ -9,7 +9,9 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 
 use crate::output::{ToolErrorInfo, ToolOutput};
-use crate::tools::{convert, from_json, inspect, patch, restyle, templates, to_json, validate};
+use crate::tools::{
+    convert, from_json, inspect, patch, restyle, templates, to_json, to_md, validate,
+};
 use crate::{prompts, resources};
 
 // ── MCP Request Types ────────────────────────────────────────────────────────
@@ -99,6 +101,17 @@ pub struct TemplatesRequest {
     /// Filter by preset name. Omit to list all presets.
     #[serde(default)]
     pub name: Option<String>,
+}
+
+/// Request parameters for `hwpforge_to_md`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ToMdRequest {
+    /// Path to the HWPX file to convert.
+    pub file_path: String,
+    /// Output directory for the generated Markdown and image files.
+    /// Defaults to the same directory as the input file.
+    #[serde(default)]
+    pub output_dir: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -422,6 +435,46 @@ impl HwpForgeServer {
                     vec![
                         "Set preset parameter in hwpforge_convert",
                         "Use hwpforge_restyle to change existing document styles",
+                    ],
+                );
+                Ok(CallToolResult::success(vec![Content::text(output.to_json_string())]))
+            }
+            Err(err) => Ok(tool_error_response(err)),
+        }
+    }
+
+    /// Convert an HWPX document to Markdown with extracted images.
+    /// Use to read or review HWPX content, or to convert for further editing.
+    #[tool(
+        name = "hwpforge_to_md",
+        description = "Convert an HWPX document to Markdown. Extracts text, headings, tables, and images from the HWPX file. Returns the path to the generated Markdown file and any extracted image files."
+    )]
+    async fn hwpforge_to_md(
+        &self,
+        Parameters(req): Parameters<ToMdRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = tokio::task::spawn_blocking(move || {
+            to_md::run_to_md(&req.file_path, req.output_dir.as_deref())
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?;
+
+        match result {
+            Ok(data) => {
+                let summary = if data.image_count > 0 {
+                    format!(
+                        "Converted to {} ({} bytes, {} images extracted)",
+                        data.markdown_path, data.size_bytes, data.image_count,
+                    )
+                } else {
+                    format!("Converted to {} ({} bytes)", data.markdown_path, data.size_bytes,)
+                };
+                let output = ToolOutput::new(
+                    &data,
+                    summary,
+                    vec![
+                        "Edit the Markdown and use hwpforge_convert to create a new HWPX",
+                        "Use hwpforge_inspect to review the original document structure",
                     ],
                 );
                 Ok(CallToolResult::success(vec![Content::text(output.to_json_string())]))
