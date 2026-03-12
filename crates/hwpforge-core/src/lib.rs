@@ -93,6 +93,7 @@ pub mod page;
 pub mod paragraph;
 pub mod run;
 pub mod section;
+pub mod style_lookup;
 pub mod tab;
 pub mod table;
 
@@ -118,5 +119,6 @@ pub use section::{
     BeginNum, ContentCounts, HeaderFooter, LineNumberShape, MasterPage, PageBorderFillEntry,
     PageNumber, Section, Visibility,
 };
+pub use style_lookup::StyleLookup;
 pub use tab::TabDef;
 pub use table::{Table, TableCell, TableRow};

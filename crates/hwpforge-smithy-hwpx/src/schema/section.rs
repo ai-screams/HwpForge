@@ -9,6 +9,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::deser_i32_or_u32;
+
 // Re-export shape types so `crate::schema::section::HxRect` etc. still resolve.
 // Re-export shape types so `crate::schema::section::HxRect` etc. still resolve.
 pub use super::shapes::{
@@ -211,10 +213,88 @@ pub struct HxRun {
 // ── Text ──────────────────────────────────────────────────────────
 
 /// `<hp:t>수학</hp:t>` or `<hp:t/>` (empty).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+///
+/// Supports mixed content: `<hp:t>text<hp:lineBreak/>more</hp:t>`.
+/// Use [`HxText::text()`] to get the combined text with `\n` for line breaks.
+///
+/// Deserialization uses `$value` to capture mixed text + element content.
+/// Serialization outputs plain concatenated text (line breaks become `\n`),
+/// which is fine because the encoder builds XML manually.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct HxText {
-    #[serde(rename = "$text", default)]
-    pub text: String,
+    /// Mixed content parts (text nodes and line breaks).
+    #[serde(rename = "$value", default)]
+    pub parts: Vec<HxTextPart>,
+}
+
+/// Serializes `HxText` as simple text content (`$text`), avoiding the
+/// quick-xml limitation where `$value` with mixed enum content fails.
+impl Serialize for HxText {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Helper {
+            #[serde(rename = "$text")]
+            text: String,
+        }
+        Helper { text: self.text() }.serialize(serializer)
+    }
+}
+
+impl HxText {
+    /// Creates a new `HxText` from a plain string.
+    pub fn new(text: impl Into<String>) -> Self {
+        let s = text.into();
+        if s.is_empty() {
+            Self { parts: Vec::new() }
+        } else {
+            Self { parts: vec![HxTextPart::Text(s)] }
+        }
+    }
+
+    /// Returns the combined text content, with `\n` for line breaks.
+    pub fn text(&self) -> String {
+        self.parts
+            .iter()
+            .map(|p| match p {
+                HxTextPart::Text(s) => s.as_str(),
+                HxTextPart::LineBreak {} => "\n",
+                HxTextPart::Tab {} => "\t",
+                HxTextPart::FwSpace {} => " ",
+                HxTextPart::NbSpace {} => "\u{00a0}",
+                HxTextPart::MarkpenBegin {} | HxTextPart::MarkpenEnd {} => "",
+                HxTextPart::Other => "",
+            })
+            .collect()
+    }
+}
+
+/// A part of mixed text content inside `<hp:t>`.
+#[derive(Debug, Clone, Deserialize, PartialEq)]
+pub enum HxTextPart {
+    /// Plain text content.
+    #[serde(rename = "$text")]
+    Text(String),
+    /// `<hp:lineBreak/>` — line break within a text run.
+    #[serde(rename(serialize = "hp:lineBreak", deserialize = "lineBreak"))]
+    LineBreak {},
+    /// `<hp:tab/>` — tab character within a text run.
+    #[serde(rename(serialize = "hp:tab", deserialize = "tab"))]
+    Tab {},
+    /// `<hp:fwSpace/>` — fixed-width space.
+    #[serde(rename(serialize = "hp:fwSpace", deserialize = "fwSpace"))]
+    FwSpace {},
+    /// `<hp:nbSpace/>` — non-breaking space.
+    #[serde(rename(serialize = "hp:nbSpace", deserialize = "nbSpace"))]
+    NbSpace {},
+    /// `<hp:markpenBegin/>` — highlight marker begin (no text output).
+    #[serde(rename(serialize = "hp:markpenBegin", deserialize = "markpenBegin"))]
+    MarkpenBegin {},
+    /// `<hp:markpenEnd/>` — highlight marker end (no text output).
+    #[serde(rename(serialize = "hp:markpenEnd", deserialize = "markpenEnd"))]
+    MarkpenEnd {},
+    /// Catch-all for unknown inline elements (titleMark, hyphen, etc.)
+    #[serde(other)]
+    Other,
 }
 
 // ── Title mark ────────────────────────────────────────────────────
@@ -271,7 +351,7 @@ pub struct HxCompose {
     #[serde(rename = "@circleType", default)]
     pub circle_type: String,
     /// Character size adjustment (typically -3).
-    #[serde(rename = "@charSz", default)]
+    #[serde(rename = "@charSz", default, deserialize_with = "deser_i32_or_u32")]
     pub char_sz: i32,
     /// Composition layout type (e.g. `"SPREAD"`).
     #[serde(rename = "@composeType", default)]
@@ -586,7 +666,7 @@ pub struct HxColPr {
     #[serde(rename = "@sameSz", default)]
     pub same_sz: u32,
     /// Gap between columns in HWPUNIT (only when sameSz=1).
-    #[serde(rename = "@sameGap", default)]
+    #[serde(rename = "@sameGap", default, deserialize_with = "deser_i32_or_u32")]
     pub same_gap: i32,
 
     /// Individual column definitions (only when sameSz=0).
@@ -602,10 +682,10 @@ pub struct HxColPr {
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxCol {
     /// Column width in HWPUNIT.
-    #[serde(rename = "@width", default)]
+    #[serde(rename = "@width", default, deserialize_with = "deser_i32_or_u32")]
     pub width: i32,
     /// Gap after this column in HWPUNIT (0 for last column).
-    #[serde(rename = "@gap", default)]
+    #[serde(rename = "@gap", default, deserialize_with = "deser_i32_or_u32")]
     pub gap: i32,
 }
 
@@ -684,10 +764,14 @@ pub struct HxCaption {
     #[serde(rename = "@fullSz", default)]
     pub full_sz: u32,
     /// Caption width in HWPUNIT.
-    #[serde(rename = "@width", default)]
+    #[serde(rename = "@width", default, deserialize_with = "deser_i32_or_u32")]
     pub width: i32,
     /// Gap between caption and object (default: 850 HWPUNIT ~= 3mm).
-    #[serde(rename = "@gap", default = "default_caption_gap")]
+    #[serde(
+        rename = "@gap",
+        default = "default_caption_gap",
+        deserialize_with = "deser_i32_or_u32"
+    )]
     pub gap: i32,
     /// Max text width = parent object width (HWPUNIT).
     #[serde(rename = "@lastWidth", default)]
@@ -798,7 +882,7 @@ pub struct HxLineNumberShape {
     #[serde(rename = "@countBy", default)]
     pub count_by: u16,
     /// Distance from text to line number (HwpUnit).
-    #[serde(rename = "@distance", default)]
+    #[serde(rename = "@distance", default, deserialize_with = "deser_i32_or_u32")]
     pub distance: i32,
     /// Starting line number.
     #[serde(rename = "@startNumber", default)]
@@ -859,16 +943,16 @@ pub struct HxPageBorderFill {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct HxPageBorderFillOffset {
     /// Left offset in HwpUnit.
-    #[serde(rename = "@left", default)]
+    #[serde(rename = "@left", default, deserialize_with = "deser_i32_or_u32")]
     pub left: i32,
     /// Right offset in HwpUnit.
-    #[serde(rename = "@right", default)]
+    #[serde(rename = "@right", default, deserialize_with = "deser_i32_or_u32")]
     pub right: i32,
     /// Top offset in HwpUnit.
-    #[serde(rename = "@top", default)]
+    #[serde(rename = "@top", default, deserialize_with = "deser_i32_or_u32")]
     pub top: i32,
     /// Bottom offset in HwpUnit.
-    #[serde(rename = "@bottom", default)]
+    #[serde(rename = "@bottom", default, deserialize_with = "deser_i32_or_u32")]
     pub bottom: i32,
 }
 
@@ -877,9 +961,9 @@ pub struct HxPageBorderFillOffset {
 pub struct HxPagePr {
     #[serde(rename = "@landscape", default)]
     pub landscape: String,
-    #[serde(rename = "@width", default)]
+    #[serde(rename = "@width", default, deserialize_with = "deser_i32_or_u32")]
     pub width: i32,
-    #[serde(rename = "@height", default)]
+    #[serde(rename = "@height", default, deserialize_with = "deser_i32_or_u32")]
     pub height: i32,
     #[serde(rename = "@gutterType", default)]
     pub gutter_type: String,
@@ -895,19 +979,19 @@ pub struct HxPagePr {
 /// `<hp:margin header="4252" footer="4252" gutter="0" left="8504" ...>`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct HxPageMargin {
-    #[serde(rename = "@header", default)]
+    #[serde(rename = "@header", default, deserialize_with = "deser_i32_or_u32")]
     pub header: i32,
-    #[serde(rename = "@footer", default)]
+    #[serde(rename = "@footer", default, deserialize_with = "deser_i32_or_u32")]
     pub footer: i32,
-    #[serde(rename = "@gutter", default)]
+    #[serde(rename = "@gutter", default, deserialize_with = "deser_i32_or_u32")]
     pub gutter: i32,
-    #[serde(rename = "@left", default)]
+    #[serde(rename = "@left", default, deserialize_with = "deser_i32_or_u32")]
     pub left: i32,
-    #[serde(rename = "@right", default)]
+    #[serde(rename = "@right", default, deserialize_with = "deser_i32_or_u32")]
     pub right: i32,
-    #[serde(rename = "@top", default)]
+    #[serde(rename = "@top", default, deserialize_with = "deser_i32_or_u32")]
     pub top: i32,
-    #[serde(rename = "@bottom", default)]
+    #[serde(rename = "@bottom", default, deserialize_with = "deser_i32_or_u32")]
     pub bottom: i32,
 }
 
@@ -932,25 +1016,25 @@ pub struct HxLineSeg {
     #[serde(rename = "@textpos", default)]
     pub textpos: u32,
     /// Vertical position from the top of the paragraph (HWPUNIT).
-    #[serde(rename = "@vertpos", default)]
+    #[serde(rename = "@vertpos", default, deserialize_with = "deser_i32_or_u32")]
     pub vertpos: i32,
     /// Vertical size of the line (HWPUNIT).
-    #[serde(rename = "@vertsize", default)]
+    #[serde(rename = "@vertsize", default, deserialize_with = "deser_i32_or_u32")]
     pub vertsize: i32,
     /// Text height within the line (HWPUNIT).
-    #[serde(rename = "@textheight", default)]
+    #[serde(rename = "@textheight", default, deserialize_with = "deser_i32_or_u32")]
     pub textheight: i32,
     /// Baseline position from the top of the line (HWPUNIT).
-    #[serde(rename = "@baseline", default)]
+    #[serde(rename = "@baseline", default, deserialize_with = "deser_i32_or_u32")]
     pub baseline: i32,
     /// Line spacing value (HWPUNIT).
-    #[serde(rename = "@spacing", default)]
+    #[serde(rename = "@spacing", default, deserialize_with = "deser_i32_or_u32")]
     pub spacing: i32,
     /// Horizontal position of the line start (HWPUNIT).
-    #[serde(rename = "@horzpos", default)]
+    #[serde(rename = "@horzpos", default, deserialize_with = "deser_i32_or_u32")]
     pub horzpos: i32,
     /// Horizontal size available for text (HWPUNIT).
-    #[serde(rename = "@horzsize", default)]
+    #[serde(rename = "@horzsize", default, deserialize_with = "deser_i32_or_u32")]
     pub horzsize: i32,
     /// Layout flags (393216 = standard value).
     #[serde(rename = "@flags", default)]
@@ -1037,11 +1121,11 @@ pub struct HxTable {
 /// `<hp:sz>` — table size specification.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxTableSz {
-    #[serde(rename = "@width", default)]
+    #[serde(rename = "@width", default, deserialize_with = "deser_i32_or_u32")]
     pub width: i32,
     #[serde(rename = "@widthRelTo", default)]
     pub width_rel_to: String,
-    #[serde(rename = "@height", default)]
+    #[serde(rename = "@height", default, deserialize_with = "deser_i32_or_u32")]
     pub height: i32,
     #[serde(rename = "@heightRelTo", default)]
     pub height_rel_to: String,
@@ -1070,22 +1154,22 @@ pub struct HxTablePos {
     pub vert_align: String,
     #[serde(rename = "@horzAlign", default)]
     pub horz_align: String,
-    #[serde(rename = "@vertOffset", default)]
+    #[serde(rename = "@vertOffset", default, deserialize_with = "deser_i32_or_u32")]
     pub vert_offset: i32,
-    #[serde(rename = "@horzOffset", default)]
+    #[serde(rename = "@horzOffset", default, deserialize_with = "deser_i32_or_u32")]
     pub horz_offset: i32,
 }
 
 /// `<hp:outMargin>` / `<hp:inMargin>` / `<hp:cellMargin>` — margin specification.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxTableMargin {
-    #[serde(rename = "@left", default)]
+    #[serde(rename = "@left", default, deserialize_with = "deser_i32_or_u32")]
     pub left: i32,
-    #[serde(rename = "@right", default)]
+    #[serde(rename = "@right", default, deserialize_with = "deser_i32_or_u32")]
     pub right: i32,
-    #[serde(rename = "@top", default)]
+    #[serde(rename = "@top", default, deserialize_with = "deser_i32_or_u32")]
     pub top: i32,
-    #[serde(rename = "@bottom", default)]
+    #[serde(rename = "@bottom", default, deserialize_with = "deser_i32_or_u32")]
     pub bottom: i32,
 }
 
@@ -1180,9 +1264,9 @@ fn default_one() -> u32 {
 /// `<hp:cellSz width="..." height="..."/>`.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxCellSz {
-    #[serde(rename = "@width", default)]
+    #[serde(rename = "@width", default, deserialize_with = "deser_i32_or_u32")]
     pub width: i32,
-    #[serde(rename = "@height", default)]
+    #[serde(rename = "@height", default, deserialize_with = "deser_i32_or_u32")]
     pub height: i32,
 }
 
@@ -1380,9 +1464,9 @@ pub struct HxPic {
 pub struct HxImg {
     #[serde(rename = "@binaryItemIDRef", default)]
     pub binary_item_id_ref: String,
-    #[serde(rename = "@bright", default)]
+    #[serde(rename = "@bright", default, deserialize_with = "deser_i32_or_u32")]
     pub bright: i32,
-    #[serde(rename = "@contrast", default)]
+    #[serde(rename = "@contrast", default, deserialize_with = "deser_i32_or_u32")]
     pub contrast: i32,
     /// Image effect type: REAL_PIC (original), etc.
     #[serde(rename = "@effect", default, skip_serializing_if = "String::is_empty")]
@@ -1395,9 +1479,9 @@ pub struct HxImg {
 /// Generic width/height attribute pair used in `<hp:orgSz>`, `<hp:curSz>`.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct HxSizeAttr {
-    #[serde(rename = "@width", default)]
+    #[serde(rename = "@width", default, deserialize_with = "deser_i32_or_u32")]
     pub width: i32,
-    #[serde(rename = "@height", default)]
+    #[serde(rename = "@height", default, deserialize_with = "deser_i32_or_u32")]
     pub height: i32,
 }
 
@@ -1406,9 +1490,9 @@ pub struct HxSizeAttr {
 /// `<hp:offset x="0" y="0"/>` — position offset for shapes.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxOffset {
-    #[serde(rename = "@x", default)]
+    #[serde(rename = "@x", default, deserialize_with = "deser_i32_or_u32")]
     pub x: i32,
-    #[serde(rename = "@y", default)]
+    #[serde(rename = "@y", default, deserialize_with = "deser_i32_or_u32")]
     pub y: i32,
 }
 
@@ -1424,11 +1508,11 @@ pub struct HxFlip {
 /// `<hp:rotationInfo angle="0" centerX="..." centerY="..." rotateimage="1"/>`.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxRotationInfo {
-    #[serde(rename = "@angle", default)]
+    #[serde(rename = "@angle", default, deserialize_with = "deser_i32_or_u32")]
     pub angle: i32,
-    #[serde(rename = "@centerX", default)]
+    #[serde(rename = "@centerX", default, deserialize_with = "deser_i32_or_u32")]
     pub center_x: i32,
-    #[serde(rename = "@centerY", default)]
+    #[serde(rename = "@centerY", default, deserialize_with = "deser_i32_or_u32")]
     pub center_y: i32,
     #[serde(rename = "@rotateimage", default)]
     pub rotate_image: u32,
@@ -1697,22 +1781,22 @@ pub struct HxImgRect {
 /// `<hp:imgClip left="0" right="..." top="0" bottom="..."/>` — image clipping region.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxImgClip {
-    #[serde(rename = "@left", default)]
+    #[serde(rename = "@left", default, deserialize_with = "deser_i32_or_u32")]
     pub left: i32,
-    #[serde(rename = "@right", default)]
+    #[serde(rename = "@right", default, deserialize_with = "deser_i32_or_u32")]
     pub right: i32,
-    #[serde(rename = "@top", default)]
+    #[serde(rename = "@top", default, deserialize_with = "deser_i32_or_u32")]
     pub top: i32,
-    #[serde(rename = "@bottom", default)]
+    #[serde(rename = "@bottom", default, deserialize_with = "deser_i32_or_u32")]
     pub bottom: i32,
 }
 
 /// `<hp:imgDim dimwidth="..." dimheight="..."/>` — original pixel dimensions.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxImgDim {
-    #[serde(rename = "@dimwidth", default)]
+    #[serde(rename = "@dimwidth", default, deserialize_with = "deser_i32_or_u32")]
     pub dim_width: i32,
-    #[serde(rename = "@dimheight", default)]
+    #[serde(rename = "@dimheight", default, deserialize_with = "deser_i32_or_u32")]
     pub dim_height: i32,
 }
 
@@ -1722,10 +1806,10 @@ pub struct HxImgDim {
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxPoint {
     /// X coordinate (HWPUNIT).
-    #[serde(rename = "@x", default)]
+    #[serde(rename = "@x", default, deserialize_with = "deser_i32_or_u32")]
     pub x: i32,
     /// Y coordinate (HWPUNIT).
-    #[serde(rename = "@y", default)]
+    #[serde(rename = "@y", default, deserialize_with = "deser_i32_or_u32")]
     pub y: i32,
 }
 
@@ -1766,7 +1850,7 @@ mod tests {
         assert_eq!(p.runs.len(), 1);
         assert_eq!(p.runs[0].char_pr_id_ref, 0);
         assert_eq!(p.runs[0].texts.len(), 1);
-        assert_eq!(p.runs[0].texts[0].text, "안녕하세요");
+        assert_eq!(p.runs[0].texts[0].text(), "안녕하세요");
     }
 
     #[test]
@@ -1785,9 +1869,9 @@ mod tests {
         let sec = parse_section(xml);
         let p = &sec.paragraphs[0];
         assert_eq!(p.runs.len(), 2);
-        assert_eq!(p.runs[0].texts[0].text, "Hello");
+        assert_eq!(p.runs[0].texts[0].text(), "Hello");
         assert_eq!(p.runs[1].char_pr_id_ref, 7);
-        assert_eq!(p.runs[1].texts[0].text, "World");
+        assert_eq!(p.runs[1].texts[0].text(), "World");
     }
 
     #[test]
@@ -1801,7 +1885,7 @@ mod tests {
           </hp:p>
         </hs:sec>"#;
         let sec = parse_section(xml);
-        assert_eq!(sec.paragraphs[0].runs[0].texts[0].text, "");
+        assert_eq!(sec.paragraphs[0].runs[0].texts[0].text(), "");
     }
 
     #[test]
@@ -1900,7 +1984,7 @@ mod tests {
         assert_eq!(tbl.rows[0].cells.len(), 2);
         let cell0 = &tbl.rows[0].cells[0];
         assert_eq!(cell0.name, "A1");
-        let text = &cell0.sub_list.as_ref().unwrap().paragraphs[0].runs[0].texts[0].text;
+        let text = cell0.sub_list.as_ref().unwrap().paragraphs[0].runs[0].texts[0].text();
         assert_eq!(text, "Cell 1");
     }
 
@@ -1941,7 +2025,7 @@ mod tests {
         </hs:sec>"#;
         let sec = parse_section(xml);
         let run = &sec.paragraphs[0].runs[0];
-        assert_eq!(run.texts[0].text, "text after ctrl");
+        assert_eq!(run.texts[0].text(), "text after ctrl");
     }
 
     #[test]
@@ -1958,7 +2042,7 @@ mod tests {
           </hp:p>
         </hs:sec>"#;
         let sec = parse_section(xml);
-        assert_eq!(sec.paragraphs[0].runs[0].texts[0].text, "text");
+        assert_eq!(sec.paragraphs[0].runs[0].texts[0].text(), "text");
     }
 
     #[test]
@@ -1977,9 +2061,9 @@ mod tests {
         </hs:sec>"#;
         let sec = parse_section(xml);
         assert_eq!(sec.paragraphs.len(), 3);
-        assert_eq!(sec.paragraphs[0].runs[0].texts[0].text, "First");
-        assert_eq!(sec.paragraphs[1].runs[0].texts[0].text, "Second");
-        assert_eq!(sec.paragraphs[2].runs[0].texts[0].text, "Third");
+        assert_eq!(sec.paragraphs[0].runs[0].texts[0].text(), "First");
+        assert_eq!(sec.paragraphs[1].runs[0].texts[0].text(), "Second");
+        assert_eq!(sec.paragraphs[2].runs[0].texts[0].text(), "Third");
     }
 
     // ── Caption tests ──
@@ -1994,7 +2078,7 @@ mod tests {
         assert_eq!(cap.gap, 850);
         assert_eq!(cap.last_width, 42520);
         assert_eq!(cap.sub_list.paragraphs.len(), 1);
-        assert_eq!(cap.sub_list.paragraphs[0].runs[0].texts[0].text, "Figure 1. Sample");
+        assert_eq!(cap.sub_list.paragraphs[0].runs[0].texts[0].text(), "Figure 1. Sample");
 
         // Roundtrip: serialize and deserialize
         let serialized = quick_xml::se::to_string(&cap).expect("serialize HxCaption");
@@ -2052,7 +2136,7 @@ mod tests {
         let cap = tbl.caption.as_ref().expect("table should have caption");
         assert_eq!(cap.side, "BOTTOM");
         assert_eq!(cap.width, 42520);
-        assert_eq!(cap.sub_list.paragraphs[0].runs[0].texts[0].text, "Table 1. Data");
+        assert_eq!(cap.sub_list.paragraphs[0].runs[0].texts[0].text(), "Table 1. Data");
         // Table data should still parse correctly
         assert_eq!(tbl.rows.len(), 1);
     }

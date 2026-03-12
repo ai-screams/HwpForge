@@ -288,7 +288,7 @@ fn build_runs(
 
         match &run.content {
             RunContent::Text(s) => {
-                texts.push(HxText { text: s.clone() });
+                texts.push(HxText::new(s.clone()));
             }
             RunContent::Table(t) => {
                 tables.push(build_table(t, depth, hyperlink_entries)?);
@@ -365,7 +365,7 @@ fn build_runs(
                             r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
                         );
                         hyperlink_entries.push((marker_run_xml, real_xml));
-                        texts.push(HxText { text: marker });
+                        texts.push(HxText::new(marker));
                     }
                     Control::Dutmal { main_text, sub_text, position, sz_ratio, align } => {
                         dutmals.push(encode_dutmal_to_hx(
@@ -400,7 +400,7 @@ fn build_runs(
                             r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
                         );
                         hyperlink_entries.push((marker_run_xml, real_xml));
-                        texts.push(HxText { text: marker });
+                        texts.push(HxText::new(marker));
                     }
                     Control::Bookmark { name, bookmark_type }
                         if *bookmark_type == BookmarkType::SpanEnd =>
@@ -413,7 +413,7 @@ fn build_runs(
                                 r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
                             );
                             hyperlink_entries.push((marker_run_xml, real_xml));
-                            texts.push(HxText { text: marker });
+                            texts.push(HxText::new(marker));
                         }
                         // Silently skip if no matching SpanStart found
                     }
@@ -437,7 +437,7 @@ fn build_runs(
                             r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
                         );
                         hyperlink_entries.push((marker_run_xml, real_xml));
-                        texts.push(HxText { text: marker });
+                        texts.push(HxText::new(marker));
                     }
                     Control::CrossRef { target_name, ref_type, content_type, as_hyperlink } => {
                         let field_id = hyperlink_entries.len();
@@ -454,7 +454,7 @@ fn build_runs(
                             r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
                         );
                         hyperlink_entries.push((marker_run_xml, real_xml));
-                        texts.push(HxText { text: marker });
+                        texts.push(HxText::new(marker));
                     }
                     Control::Memo { content, author, date } => {
                         let field_id = hyperlink_entries.len();
@@ -471,7 +471,7 @@ fn build_runs(
                             r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
                         );
                         hyperlink_entries.push((marker_run_xml, real_xml));
-                        texts.push(HxText { text: marker });
+                        texts.push(HxText::new(marker));
                     }
                     Control::Unknown { .. } => {
                         // Unknown controls are silently skipped

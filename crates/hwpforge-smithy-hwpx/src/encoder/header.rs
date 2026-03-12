@@ -149,7 +149,9 @@ fn build_border_fill_xml(bf: &HwpxBorderFill) -> String {
     xml.push_str(&build_border_line_xml("hh:rightBorder", &bf.right));
     xml.push_str(&build_border_line_xml("hh:topBorder", &bf.top));
     xml.push_str(&build_border_line_xml("hh:bottomBorder", &bf.bottom));
-    xml.push_str(&build_border_line_xml("hh:diagonal", &bf.diagonal));
+    if let Some(diag) = &bf.diagonal {
+        xml.push_str(&build_border_line_xml("hh:diagonal", diag));
+    }
     if let Some(fill) = &bf.fill {
         xml.push_str(&build_fill_brush_xml(fill));
     }

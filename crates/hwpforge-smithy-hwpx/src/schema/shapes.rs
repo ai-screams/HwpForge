@@ -9,6 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::deser_i32_or_u32;
 use super::section::{
     HxCaption, HxFlip, HxOffset, HxPoint, HxRenderingInfo, HxRotationInfo, HxSizeAttr, HxSubList,
     HxTableMargin, HxTablePos, HxTableSz,
@@ -26,7 +27,7 @@ pub struct HxLineShape {
     #[serde(rename = "@color", default)]
     pub color: String,
     /// Stroke width in HWPUNIT (33 ≈ 0.12mm, the standard thin border).
-    #[serde(rename = "@width", default)]
+    #[serde(rename = "@width", default, deserialize_with = "deser_i32_or_u32")]
     pub width: i32,
     /// Line style: SOLID, DASH, DOT, etc.
     #[serde(rename = "@style", default)]
@@ -56,7 +57,7 @@ pub struct HxLineShape {
     #[serde(rename = "@outlineStyle", default)]
     pub outline_style: String,
     /// Alpha transparency (0 = opaque).
-    #[serde(rename = "@alpha", default)]
+    #[serde(rename = "@alpha", default, deserialize_with = "deser_i32_or_u32")]
     pub alpha: i32,
 }
 
@@ -94,7 +95,7 @@ pub struct HxWinBrush {
     #[serde(rename = "@hatchStyle", default, skip_serializing_if = "Option::is_none")]
     pub hatch_style: Option<String>,
     /// Alpha transparency (0 = opaque).
-    #[serde(rename = "@alpha", default)]
+    #[serde(rename = "@alpha", default, deserialize_with = "deser_i32_or_u32")]
     pub alpha: i32,
 }
 
@@ -147,25 +148,25 @@ pub struct HxGradation {
     #[serde(rename = "@type", default)]
     pub gradation_type: String,
     /// Gradient angle in degrees (0-360).
-    #[serde(rename = "@angle", default)]
+    #[serde(rename = "@angle", default, deserialize_with = "deser_i32_or_u32")]
     pub angle: i32,
     /// Gradient center X (0-100, percentage).
-    #[serde(rename = "@centerX", default)]
+    #[serde(rename = "@centerX", default, deserialize_with = "deser_i32_or_u32")]
     pub center_x: i32,
     /// Gradient center Y (0-100, percentage).
-    #[serde(rename = "@centerY", default)]
+    #[serde(rename = "@centerY", default, deserialize_with = "deser_i32_or_u32")]
     pub center_y: i32,
     /// Number of interpolation steps (255 = smooth).
-    #[serde(rename = "@step", default)]
+    #[serde(rename = "@step", default, deserialize_with = "deser_i32_or_u32")]
     pub step: i32,
     /// Number of color stops.
-    #[serde(rename = "@colorNum", default)]
+    #[serde(rename = "@colorNum", default, deserialize_with = "deser_i32_or_u32")]
     pub color_num: i32,
     /// Step center position (0-100, default 50).
-    #[serde(rename = "@stepCenter", default)]
+    #[serde(rename = "@stepCenter", default, deserialize_with = "deser_i32_or_u32")]
     pub step_center: i32,
     /// Alpha transparency (0 = opaque).
-    #[serde(rename = "@alpha", default)]
+    #[serde(rename = "@alpha", default, deserialize_with = "deser_i32_or_u32")]
     pub alpha: i32,
     /// Color stop values.
     #[serde(rename(serialize = "hc:color", deserialize = "color"), default)]
@@ -192,13 +193,13 @@ pub struct HxShadow {
     #[serde(rename = "@color", default)]
     pub color: String,
     /// Horizontal shadow offset in HWPUNIT.
-    #[serde(rename = "@offsetX", default)]
+    #[serde(rename = "@offsetX", default, deserialize_with = "deser_i32_or_u32")]
     pub offset_x: i32,
     /// Vertical shadow offset in HWPUNIT.
-    #[serde(rename = "@offsetY", default)]
+    #[serde(rename = "@offsetY", default, deserialize_with = "deser_i32_or_u32")]
     pub offset_y: i32,
     /// Alpha transparency (0 = opaque).
-    #[serde(rename = "@alpha", default)]
+    #[serde(rename = "@alpha", default, deserialize_with = "deser_i32_or_u32")]
     pub alpha: i32,
 }
 
@@ -1178,16 +1179,16 @@ pub struct HxCurveSegment {
     #[serde(rename = "@type", default)]
     pub seg_type: String,
     /// Segment start x coordinate.
-    #[serde(rename = "@x1", default)]
+    #[serde(rename = "@x1", default, deserialize_with = "deser_i32_or_u32")]
     pub x1: i32,
     /// Segment start y coordinate.
-    #[serde(rename = "@y1", default)]
+    #[serde(rename = "@y1", default, deserialize_with = "deser_i32_or_u32")]
     pub y1: i32,
     /// Segment end x coordinate.
-    #[serde(rename = "@x2", default)]
+    #[serde(rename = "@x2", default, deserialize_with = "deser_i32_or_u32")]
     pub x2: i32,
     /// Segment end y coordinate.
-    #[serde(rename = "@y2", default)]
+    #[serde(rename = "@y2", default, deserialize_with = "deser_i32_or_u32")]
     pub y2: i32,
 }
 
@@ -1199,10 +1200,10 @@ pub struct HxCurveSegment {
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxConnectPoint {
     /// X coordinate.
-    #[serde(rename = "@x", default)]
+    #[serde(rename = "@x", default, deserialize_with = "deser_i32_or_u32")]
     pub x: i32,
     /// Y coordinate.
-    #[serde(rename = "@y", default)]
+    #[serde(rename = "@y", default, deserialize_with = "deser_i32_or_u32")]
     pub y: i32,
     /// Subject ID reference (connected shape ID, "0" if unconnected).
     #[serde(rename = "@subjectIDRef", default)]
@@ -1219,10 +1220,10 @@ pub struct HxConnectPoint {
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxControlPoint {
     /// X coordinate.
-    #[serde(rename = "@x", default)]
+    #[serde(rename = "@x", default, deserialize_with = "deser_i32_or_u32")]
     pub x: i32,
     /// Y coordinate.
-    #[serde(rename = "@y", default)]
+    #[serde(rename = "@y", default, deserialize_with = "deser_i32_or_u32")]
     pub y: i32,
     /// Point type (3=start, 2=intermediate, 26=end).
     #[serde(rename = "@type", default)]
