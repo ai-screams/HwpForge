@@ -65,17 +65,18 @@ HwpForge 사용 예제 모음
 
 ### HWPX → Markdown 변환 예제
 
-[`hwpx_md_convert.rs`][src-md-convert]로 생성. HWPX를 Lossy(읽기용 GFM)와 Lossless(라운드트립용 HTML) 마크다운으로 변환합니다.
+[`hwpx_md_convert.rs`][src-md-convert]로 생성하거나, CLI `hwpforge to-md`로 변환합니다. 이미지가 포함된 문서는 `images/` 디렉토리에 자동 추출됩니다.
 
-| 파일                                                                   | 설명                                             |
-| ---------------------------------------------------------------------- | ------------------------------------------------ |
-| [`hwpx2md/01_text.hwpx`](hwpx2md/01_text.hwpx)                         | 입력 — 텍스트 예제 원본                          |
-| [`hwpx2md/01_text.md`](hwpx2md/01_text.md)                             | 출력 — Lossy GFM (사람이 읽기 좋은 형태)         |
-| [`hwpx2md/01_text.lossless.md`](hwpx2md/01_text.lossless.md)           | 출력 — Lossless HTML (스타일/레이아웃 정보 보존) |
-| [`hwpx2md/hwpx_complete_guide.hwpx`](hwpx2md/hwpx_complete_guide.hwpx) | 입력 — 종합 가이드 (4섹션, 표/차트/수식/도형)    |
-| [`hwpx2md/hwpx_complete_guide.md`](hwpx2md/hwpx_complete_guide.md)     | 출력 — Lossy GFM (차트/수식/도형은 텍스트 추출)  |
-
-> **참고**: `hwpx_complete_guide`는 차트/수식/호/곡선 등 Lossless 미지원 요소를 포함하여 Lossy만 생성됩니다.
+| 파일                                                                                       | 설명                                               |
+| ------------------------------------------------------------------------------------------ | -------------------------------------------------- |
+| [`hwpx2md/01_text.hwpx`](hwpx2md/01_text.hwpx)                                             | 입력 — 텍스트 예제 원본                            |
+| [`hwpx2md/01_text.md`](hwpx2md/01_text.md)                                                 | 출력 — GFM Markdown                                |
+| [`hwpx2md/hwpx_complete_guide.hwpx`](hwpx2md/hwpx_complete_guide.hwpx)                     | 입력 — 종합 가이드 (4섹션, 표/차트/수식/도형)      |
+| [`hwpx2md/hwpx_complete_guide.md`](hwpx2md/hwpx_complete_guide.md)                         | 출력 — GFM Markdown (차트/수식/도형은 텍스트 추출) |
+| [`hwpx2md/full_report.hwpx`](hwpx2md/full_report.hwpx)                                     | 입력 — HWPX 포맷 분석 보고서 (4섹션)               |
+| [`hwpx2md/full_report.md`](hwpx2md/full_report.md)                                         | 출력 — GFM Markdown                                |
+| [`hwpx2md/붙임4-1_신청용_연구개발계획서.hwpx`](hwpx2md/붙임4-1_신청용_연구개발계획서.hwpx) | 입력 — 정부 R&D 계획서 실무 문서                   |
+| [`hwpx2md/붙임4-1_신청용_연구개발계획서.md`](hwpx2md/붙임4-1_신청용_연구개발계획서.md)     | 출력 — GFM Markdown                                |
 
 [src-md-convert]: ../crates/hwpforge-smithy-md/examples/hwpx_md_convert.rs
 

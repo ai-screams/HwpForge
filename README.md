@@ -97,8 +97,14 @@ hwpforge convert report.md -o report.hwpx
 # HWPX 구조 확인
 hwpforge inspect report.hwpx
 
+# HWPX → Markdown 변환 (AI가 한글 문서 읽기)
+hwpforge to-md report.hwpx -o report.md
+
 # HWPX → JSON 추출 (AI 편집용)
 hwpforge to-json report.hwpx --section 0 > section0.json
+
+# JSON → HWPX 직접 생성
+hwpforge from-json section0.json -o new.hwpx
 
 # JSON으로 섹션 교체
 hwpforge patch report.hwpx --section 0 < modified.json -o updated.hwpx
@@ -301,6 +307,19 @@ println!("섹션 수: {}", result.document.sections().len());
 ```
 
 ### ⚒️ HWPX → Markdown 변환 (AI가 한글 문서 읽기)
+
+<div align="center">
+<table>
+<tr>
+<td align="center"><strong>📄 한글 원본 (.hwpx)</strong></td>
+<td align="center"><strong>📝 Markdown 변환 결과</strong></td>
+</tr>
+<tr>
+<td><img src="https://raw.githubusercontent.com/ai-screams/HwpForge/main/assets/hwpx-original.png" width="400" alt="한글 원본 문서"></td>
+<td><img src="https://raw.githubusercontent.com/ai-screams/HwpForge/main/assets/hwpx-to-md-result.png" width="400" alt="Markdown 변환 결과"></td>
+</tr>
+</table>
+</div>
 
 ```rust
 use hwpforge::hwpx::HwpxDecoder;
