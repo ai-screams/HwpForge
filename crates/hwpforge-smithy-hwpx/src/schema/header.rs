@@ -9,6 +9,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use super::deser_i32_or_u32;
+
 // ── Root ──────────────────────────────────────────────────────────
 
 /// `<hh:head version="1.4" secCnt="1">`.
@@ -331,19 +333,19 @@ pub struct HxFontRef {
 /// Defaults: ratio=100, spacing=0, relSz=100, offset=0 for all languages.
 #[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
 pub struct HxLangValues {
-    #[serde(rename = "@hangul", default)]
+    #[serde(rename = "@hangul", default, deserialize_with = "deser_i32_or_u32")]
     pub hangul: i32,
-    #[serde(rename = "@latin", default)]
+    #[serde(rename = "@latin", default, deserialize_with = "deser_i32_or_u32")]
     pub latin: i32,
-    #[serde(rename = "@hanja", default)]
+    #[serde(rename = "@hanja", default, deserialize_with = "deser_i32_or_u32")]
     pub hanja: i32,
-    #[serde(rename = "@japanese", default)]
+    #[serde(rename = "@japanese", default, deserialize_with = "deser_i32_or_u32")]
     pub japanese: i32,
-    #[serde(rename = "@other", default)]
+    #[serde(rename = "@other", default, deserialize_with = "deser_i32_or_u32")]
     pub other: i32,
-    #[serde(rename = "@symbol", default)]
+    #[serde(rename = "@symbol", default, deserialize_with = "deser_i32_or_u32")]
     pub symbol: i32,
-    #[serde(rename = "@user", default)]
+    #[serde(rename = "@user", default, deserialize_with = "deser_i32_or_u32")]
     pub user: i32,
 }
 
@@ -387,9 +389,9 @@ pub struct HxShadow {
     pub shadow_type: String,
     #[serde(rename = "@color", default)]
     pub color: String,
-    #[serde(rename = "@offsetX", default)]
+    #[serde(rename = "@offsetX", default, deserialize_with = "deser_i32_or_u32")]
     pub offset_x: i32,
-    #[serde(rename = "@offsetY", default)]
+    #[serde(rename = "@offsetY", default, deserialize_with = "deser_i32_or_u32")]
     pub offset_y: i32,
 }
 
@@ -528,13 +530,13 @@ pub struct HxAutoSpacing {
 pub struct HxBorder {
     #[serde(rename = "@borderFillIDRef", default)]
     pub border_fill_id_ref: u32,
-    #[serde(rename = "@offsetLeft", default)]
+    #[serde(rename = "@offsetLeft", default, deserialize_with = "deser_i32_or_u32")]
     pub offset_left: i32,
-    #[serde(rename = "@offsetRight", default)]
+    #[serde(rename = "@offsetRight", default, deserialize_with = "deser_i32_or_u32")]
     pub offset_right: i32,
-    #[serde(rename = "@offsetTop", default)]
+    #[serde(rename = "@offsetTop", default, deserialize_with = "deser_i32_or_u32")]
     pub offset_top: i32,
-    #[serde(rename = "@offsetBottom", default)]
+    #[serde(rename = "@offsetBottom", default, deserialize_with = "deser_i32_or_u32")]
     pub offset_bottom: i32,
     /// Whether this border connects with adjacent paragraph borders.
     #[serde(rename = "@connect", default)]
@@ -644,7 +646,7 @@ pub struct HxMargin {
 /// `<hc:left value="0" unit="HWPUNIT"/>` — generic value+unit pair.
 #[derive(Debug, Serialize, Deserialize, PartialEq)]
 pub struct HxUnitValue {
-    #[serde(rename = "@value", default)]
+    #[serde(rename = "@value", default, deserialize_with = "deser_i32_or_u32")]
     pub value: i32,
     #[serde(rename = "@unit", default)]
     pub unit: String,
@@ -754,9 +756,13 @@ pub struct HxBorderFill {
     /// Bottom border line.
     #[serde(rename(serialize = "hh:bottomBorder", deserialize = "bottomBorder"))]
     pub bottom_border: HxBorderLine,
-    /// Diagonal border line.
-    #[serde(rename(serialize = "hh:diagonal", deserialize = "diagonal"))]
-    pub diagonal: HxBorderLine,
+    /// Diagonal border line (optional — omitted in some real-world HWPX files).
+    #[serde(
+        rename(serialize = "hh:diagonal", deserialize = "diagonal"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub diagonal: Option<HxBorderLine>,
 
     /// Fill brush (None = no fill / transparent).
     #[serde(

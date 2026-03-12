@@ -55,6 +55,7 @@ pub mod error;
 pub mod exchange;
 pub mod presets;
 mod schema;
+mod style_lookup_bridge;
 pub mod style_store;
 
 pub use decoder::{HwpxDecoder, HwpxDocument};
@@ -63,6 +64,7 @@ pub use encoder::HwpxEncoder;
 pub use error::{HwpxError, HwpxErrorCode, HwpxResult};
 pub use exchange::{ExportedDocument, ExportedSection};
 pub use presets::{builtin_presets, style_store_for_preset, PresetInfo};
+pub use style_lookup_bridge::HwpxStyleLookup;
 pub use style_store::{
     HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape, HwpxStyle, HwpxStyleStore,
 };

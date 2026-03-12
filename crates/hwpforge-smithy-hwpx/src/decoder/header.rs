@@ -491,7 +491,7 @@ fn convert_border_fill(hx: &HxBorderFill) -> HwpxBorderFill {
         right: convert_border_line(&hx.right_border),
         top: convert_border_line(&hx.top_border),
         bottom: convert_border_line(&hx.bottom_border),
-        diagonal: convert_border_line(&hx.diagonal),
+        diagonal: hx.diagonal.as_ref().map(convert_border_line),
         slash_type: hx.slash.border_type.clone(),
         back_slash_type: hx.back_slash.border_type.clone(),
         fill,

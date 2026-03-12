@@ -2,11 +2,14 @@
 
 mod lossless;
 mod lossy;
+mod styled;
 
 use hwpforge_blueprint::template::Template;
-use hwpforge_core::{Document, Validated};
+use hwpforge_core::{Document, StyleLookup, Validated};
 
 use crate::error::MdResult;
+
+pub use styled::MdOutput;
 
 /// Markdown encoder entrypoint.
 pub struct MdEncoder;
@@ -28,5 +31,14 @@ impl MdEncoder {
     /// Encodes a validated document into lossless markdown (frontmatter + HTML-like body).
     pub fn encode_lossless(document: &Document<Validated>) -> MdResult<String> {
         lossless::encode_lossless(document)
+    }
+
+    /// Encodes a validated document into style-aware markdown.
+    ///
+    /// Queries the provided [`StyleLookup`] for character/paragraph/style
+    /// properties to emit inline formatting (bold, italic, strikeout),
+    /// heading markers, and extracted images.
+    pub fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLookup) -> MdOutput {
+        styled::encode_styled(document, styles)
     }
 }

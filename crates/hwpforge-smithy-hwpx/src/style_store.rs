@@ -10,11 +10,11 @@
 use serde::{Deserialize, Serialize};
 
 use hwpforge_blueprint::registry::StyleRegistry;
-use hwpforge_core::{NumberingDef, TabDef};
+use hwpforge_core::{NumberingDef, StyleLookup, TabDef};
 use hwpforge_foundation::{
     Alignment, BorderFillIndex, BreakType, CharShapeIndex, Color, EmbossType, EmphasisType,
     EngraveType, FontIndex, HeadingType, HwpUnit, LineSpacingType, OutlineType, ParaShapeIndex,
-    ShadowType, StrikeoutShape, UnderlineType, VerticalPosition, WordBreakType,
+    ShadowType, StrikeoutShape, StyleIndex, UnderlineType, VerticalPosition, WordBreakType,
 };
 
 use crate::default_styles::HancomStyleSet;
@@ -300,8 +300,8 @@ pub struct HwpxBorderFill {
     pub top: HwpxBorderLine,
     /// Bottom border line.
     pub bottom: HwpxBorderLine,
-    /// Diagonal border line.
-    pub diagonal: HwpxBorderLine,
+    /// Diagonal border line (optional — omitted in some HWPX files).
+    pub diagonal: Option<HwpxBorderLine>,
     /// Slash diagonal type string.
     pub slash_type: String,
     /// Back-slash diagonal type string.
@@ -356,7 +356,10 @@ impl HwpxBorderFill {
             right: none_border.clone(),
             top: none_border.clone(),
             bottom: none_border.clone(),
-            diagonal: HwpxBorderLine { line_type: "SOLID".into(), ..HwpxBorderLine::default() },
+            diagonal: Some(HwpxBorderLine {
+                line_type: "SOLID".into(),
+                ..HwpxBorderLine::default()
+            }),
             slash_type: "NONE".into(),
             back_slash_type: "NONE".into(),
             fill: None,
@@ -378,7 +381,10 @@ impl HwpxBorderFill {
             right: none_border.clone(),
             top: none_border.clone(),
             bottom: none_border.clone(),
-            diagonal: HwpxBorderLine { line_type: "SOLID".into(), ..HwpxBorderLine::default() },
+            diagonal: Some(HwpxBorderLine {
+                line_type: "SOLID".into(),
+                ..HwpxBorderLine::default()
+            }),
             slash_type: "NONE".into(),
             back_slash_type: "NONE".into(),
             fill: Some(HwpxFill::WinBrush {
@@ -407,7 +413,10 @@ impl HwpxBorderFill {
             right: solid_border.clone(),
             top: solid_border.clone(),
             bottom: solid_border.clone(),
-            diagonal: HwpxBorderLine { line_type: "SOLID".into(), ..HwpxBorderLine::default() },
+            diagonal: Some(HwpxBorderLine {
+                line_type: "SOLID".into(),
+                ..HwpxBorderLine::default()
+            }),
             slash_type: "NONE".into(),
             back_slash_type: "NONE".into(),
             fill: None,
@@ -1145,6 +1154,116 @@ const _: () = {
     }
 };
 
+// ── StyleLookup implementation ───────────────────────────────────
+
+/// Parses a heading level from a Korean style name.
+///
+/// Recognizes the following patterns:
+/// - `"개요 N"` (Outline N) → level `N` (1–6, clamped)
+/// - `"+제목"`, `"타이들"`, `"큰제목"` → level 1
+///
+/// Returns `None` for non-heading style names.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_smithy_hwpx::style_store::parse_heading_level_from_name;
+///
+/// assert_eq!(parse_heading_level_from_name("개요 1"), Some(1));
+/// assert_eq!(parse_heading_level_from_name("개요 7"), Some(6));
+/// assert_eq!(parse_heading_level_from_name("+제목"), Some(1));
+/// assert_eq!(parse_heading_level_from_name("바탕글"), None);
+/// ```
+pub fn parse_heading_level_from_name(name: &str) -> Option<u8> {
+    let trimmed = name.trim();
+
+    // "개요 N" pattern
+    if let Some(suffix) = trimmed.strip_prefix("개요 ") {
+        if let Ok(n) = suffix.trim().parse::<u8>() {
+            // Clamp to Markdown's 1–6 range
+            return Some(n.clamp(1, 6));
+        }
+    }
+
+    // Known title-level style names → heading 1
+    // "제목" matches only the exact standalone name, not names that merely contain
+    // "제목" as a substring (e.g. "제목없음" must remain None).
+    match trimmed {
+        "+제목" | "제목" | "타이들" | "큰제목" => Some(1),
+        _ => None,
+    }
+}
+
+impl StyleLookup for HwpxStyleStore {
+    fn char_bold(&self, id: CharShapeIndex) -> Option<bool> {
+        self.char_shapes.get(id.get()).map(|cs| cs.bold)
+    }
+
+    fn char_italic(&self, id: CharShapeIndex) -> Option<bool> {
+        self.char_shapes.get(id.get()).map(|cs| cs.italic)
+    }
+
+    fn char_underline(&self, id: CharShapeIndex) -> Option<UnderlineType> {
+        self.char_shapes.get(id.get()).map(|cs| cs.underline_type)
+    }
+
+    fn char_strikeout(&self, id: CharShapeIndex) -> Option<bool> {
+        self.char_shapes.get(id.get()).map(|cs| cs.strikeout_shape != StrikeoutShape::None)
+    }
+
+    fn char_superscript(&self, id: CharShapeIndex) -> Option<bool> {
+        self.char_shapes
+            .get(id.get())
+            .map(|cs| cs.vertical_position == VerticalPosition::Superscript)
+    }
+
+    fn char_subscript(&self, id: CharShapeIndex) -> Option<bool> {
+        self.char_shapes.get(id.get()).map(|cs| cs.vertical_position == VerticalPosition::Subscript)
+    }
+
+    fn char_font_name(&self, id: CharShapeIndex) -> Option<&str> {
+        let cs = self.char_shapes.get(id.get())?;
+        let font = self.fonts.get(cs.font_ref.hangul.get())?;
+        Some(font.face_name.as_str())
+    }
+
+    fn char_font_size(&self, id: CharShapeIndex) -> Option<HwpUnit> {
+        self.char_shapes.get(id.get()).map(|cs| cs.height)
+    }
+
+    fn char_text_color(&self, id: CharShapeIndex) -> Option<Color> {
+        self.char_shapes.get(id.get()).map(|cs| cs.text_color)
+    }
+
+    fn para_alignment(&self, id: ParaShapeIndex) -> Option<Alignment> {
+        self.para_shapes.get(id.get()).map(|ps| ps.alignment)
+    }
+
+    fn para_list_type(&self, id: ParaShapeIndex) -> Option<&str> {
+        use hwpforge_foundation::HeadingType;
+        let ps = self.para_shapes.get(id.get())?;
+        match ps.heading_type {
+            HeadingType::Bullet => Some("BULLET"),
+            HeadingType::Number => Some("NUMBER"),
+            _ => None,
+        }
+    }
+
+    fn style_name(&self, id: StyleIndex) -> Option<&str> {
+        self.styles.get(id.get()).map(|s| s.name.as_str())
+    }
+
+    fn style_heading_level(&self, id: StyleIndex) -> Option<u8> {
+        let style = self.styles.get(id.get())?;
+        parse_heading_level_from_name(&style.name)
+    }
+
+    fn image_data(&self, _key: &str) -> Option<&[u8]> {
+        // ImageStore is separate from HwpxStyleStore; use HwpxStyleLookup bridge instead.
+        None
+    }
+}
+
 // ── Color parsing helper ─────────────────────────────────────────
 
 /// Parses a HWPX hex color string (`"#RRGGBB"`) into a [`Color`].
@@ -1754,7 +1873,7 @@ mod tests {
         assert_eq!(bf.right.line_type, "NONE");
         assert_eq!(bf.top.line_type, "NONE");
         assert_eq!(bf.bottom.line_type, "NONE");
-        assert_eq!(bf.diagonal.line_type, "SOLID");
+        assert_eq!(bf.diagonal.as_ref().unwrap().line_type, "SOLID");
         assert!(bf.fill.is_none());
     }
 
@@ -1783,8 +1902,8 @@ mod tests {
         assert_eq!(bf.right.line_type, "SOLID");
         assert_eq!(bf.top.line_type, "SOLID");
         assert_eq!(bf.bottom.line_type, "SOLID");
-        assert_eq!(bf.diagonal.line_type, "SOLID");
-        assert_eq!(bf.diagonal.width, "0.1 mm");
+        assert_eq!(bf.diagonal.as_ref().unwrap().line_type, "SOLID");
+        assert_eq!(bf.diagonal.as_ref().unwrap().width, "0.1 mm");
         assert!(bf.fill.is_none());
     }
 
@@ -1804,7 +1923,7 @@ mod tests {
             right: HwpxBorderLine::default(),
             top: HwpxBorderLine::default(),
             bottom: HwpxBorderLine::default(),
-            diagonal: HwpxBorderLine::default(),
+            diagonal: Some(HwpxBorderLine::default()),
             slash_type: "NONE".into(),
             back_slash_type: "NONE".into(),
             fill: None,
@@ -2026,5 +2145,219 @@ mod tests {
 
         // Total count unchanged
         assert_eq!(store.font_count(), 14);
+    }
+
+    // ── StyleLookup impl tests ──────────────────────────────────
+
+    /// Helper: build a minimal store with one font, one char shape, one para shape, one style.
+    fn style_lookup_test_store() -> HwpxStyleStore {
+        use hwpforge_foundation::StyleIndex;
+        let _ = StyleIndex::new(0); // silence unused import
+
+        let mut store = HwpxStyleStore::new();
+        // Font at index 0
+        store.push_font(HwpxFont::new(0, "함초롬돋움", "HANGUL"));
+        // Char shape at index 0: bold + italic + strikeout + superscript
+        store.push_char_shape(HwpxCharShape {
+            bold: true,
+            italic: true,
+            underline_type: UnderlineType::Bottom,
+            strikeout_shape: StrikeoutShape::Continuous,
+            vertical_position: VerticalPosition::Superscript,
+            height: HwpUnit::new(1200).unwrap(), // 12pt
+            text_color: Color::from_rgb(255, 0, 0),
+            font_ref: HwpxFontRef::default(), // hangul = FontIndex(0)
+            ..Default::default()
+        });
+        // Para shape at index 0: center
+        store.push_para_shape(HwpxParaShape { alignment: Alignment::Center, ..Default::default() });
+        // Style at index 0: "개요 2"
+        store.push_style(HwpxStyle {
+            id: 0,
+            style_type: "PARA".to_string(),
+            name: "개요 2".to_string(),
+            eng_name: "Outline 2".to_string(),
+            para_pr_id_ref: 0,
+            char_pr_id_ref: 0,
+            next_style_id_ref: 0,
+            lang_id: 1042,
+        });
+        store
+    }
+
+    #[test]
+    fn style_lookup_char_bold() {
+        use hwpforge_core::StyleLookup;
+        let store = style_lookup_test_store();
+        assert_eq!(store.char_bold(CharShapeIndex::new(0)), Some(true));
+    }
+
+    #[test]
+    fn style_lookup_char_italic() {
+        use hwpforge_core::StyleLookup;
+        let store = style_lookup_test_store();
+        assert_eq!(store.char_italic(CharShapeIndex::new(0)), Some(true));
+    }
+
+    #[test]
+    fn style_lookup_char_underline() {
+        use hwpforge_core::StyleLookup;
+        let store = style_lookup_test_store();
+        assert_eq!(store.char_underline(CharShapeIndex::new(0)), Some(UnderlineType::Bottom));
+    }
+
+    #[test]
+    fn style_lookup_char_strikeout() {
+        use hwpforge_core::StyleLookup;
+        let store = style_lookup_test_store();
+        assert_eq!(store.char_strikeout(CharShapeIndex::new(0)), Some(true));
+    }
+
+    #[test]
+    fn style_lookup_char_superscript() {
+        use hwpforge_core::StyleLookup;
+        let store = style_lookup_test_store();
+        assert_eq!(store.char_superscript(CharShapeIndex::new(0)), Some(true));
+        // Superscript is not subscript
+        assert_eq!(store.char_subscript(CharShapeIndex::new(0)), Some(false));
+    }
+
+    #[test]
+    fn style_lookup_char_subscript() {
+        use hwpforge_core::StyleLookup;
+        let mut store = HwpxStyleStore::new();
+        store.push_char_shape(HwpxCharShape {
+            vertical_position: VerticalPosition::Subscript,
+            ..Default::default()
+        });
+        assert_eq!(store.char_subscript(CharShapeIndex::new(0)), Some(true));
+        assert_eq!(store.char_superscript(CharShapeIndex::new(0)), Some(false));
+    }
+
+    #[test]
+    fn style_lookup_char_font_name() {
+        use hwpforge_core::StyleLookup;
+        let store = style_lookup_test_store();
+        assert_eq!(store.char_font_name(CharShapeIndex::new(0)), Some("함초롬돋움"));
+    }
+
+    #[test]
+    fn style_lookup_char_font_name_missing_font() {
+        use hwpforge_core::StyleLookup;
+        let mut store = HwpxStyleStore::new();
+        // Char shape referencing font index 5, but no fonts in store
+        store.push_char_shape(HwpxCharShape {
+            font_ref: HwpxFontRef { hangul: FontIndex::new(5), ..Default::default() },
+            ..Default::default()
+        });
+        assert!(store.char_font_name(CharShapeIndex::new(0)).is_none());
+    }
+
+    #[test]
+    fn style_lookup_char_font_size() {
+        use hwpforge_core::StyleLookup;
+        let store = style_lookup_test_store();
+        assert_eq!(store.char_font_size(CharShapeIndex::new(0)), Some(HwpUnit::new(1200).unwrap()));
+    }
+
+    #[test]
+    fn style_lookup_char_text_color() {
+        use hwpforge_core::StyleLookup;
+        let store = style_lookup_test_store();
+        let color = store.char_text_color(CharShapeIndex::new(0)).unwrap();
+        assert_eq!(color.red(), 255);
+        assert_eq!(color.green(), 0);
+        assert_eq!(color.blue(), 0);
+    }
+
+    #[test]
+    fn style_lookup_para_alignment() {
+        use hwpforge_core::StyleLookup;
+        let store = style_lookup_test_store();
+        assert_eq!(store.para_alignment(ParaShapeIndex::new(0)), Some(Alignment::Center));
+    }
+
+    #[test]
+    fn style_lookup_style_name() {
+        use hwpforge_core::StyleLookup;
+        use hwpforge_foundation::StyleIndex;
+        let store = style_lookup_test_store();
+        assert_eq!(store.style_name(StyleIndex::new(0)), Some("개요 2"));
+    }
+
+    #[test]
+    fn style_lookup_style_heading_level() {
+        use hwpforge_core::StyleLookup;
+        use hwpforge_foundation::StyleIndex;
+        let store = style_lookup_test_store();
+        assert_eq!(store.style_heading_level(StyleIndex::new(0)), Some(2));
+    }
+
+    #[test]
+    fn style_lookup_out_of_bounds_returns_none() {
+        use hwpforge_core::StyleLookup;
+        use hwpforge_foundation::StyleIndex;
+        let store = HwpxStyleStore::new();
+        assert!(store.char_bold(CharShapeIndex::new(99)).is_none());
+        assert!(store.para_alignment(ParaShapeIndex::new(99)).is_none());
+        assert!(store.style_name(StyleIndex::new(99)).is_none());
+        assert!(store.style_heading_level(StyleIndex::new(99)).is_none());
+    }
+
+    #[test]
+    fn style_lookup_image_data_always_none() {
+        use hwpforge_core::StyleLookup;
+        let store = style_lookup_test_store();
+        assert!(store.image_data("anything.png").is_none());
+    }
+
+    #[test]
+    fn style_lookup_default_char_shape_not_bold() {
+        use hwpforge_core::StyleLookup;
+        let mut store = HwpxStyleStore::new();
+        store.push_char_shape(HwpxCharShape::default());
+        assert_eq!(store.char_bold(CharShapeIndex::new(0)), Some(false));
+        assert_eq!(store.char_italic(CharShapeIndex::new(0)), Some(false));
+        assert_eq!(store.char_strikeout(CharShapeIndex::new(0)), Some(false));
+        assert_eq!(store.char_underline(CharShapeIndex::new(0)), Some(UnderlineType::None));
+    }
+
+    // ── parse_heading_level_from_name tests ─────────────────────
+
+    #[test]
+    fn heading_level_outline_1_to_6() {
+        assert_eq!(parse_heading_level_from_name("개요 1"), Some(1));
+        assert_eq!(parse_heading_level_from_name("개요 2"), Some(2));
+        assert_eq!(parse_heading_level_from_name("개요 3"), Some(3));
+        assert_eq!(parse_heading_level_from_name("개요 4"), Some(4));
+        assert_eq!(parse_heading_level_from_name("개요 5"), Some(5));
+        assert_eq!(parse_heading_level_from_name("개요 6"), Some(6));
+    }
+
+    #[test]
+    fn heading_level_outline_clamped() {
+        // 개요 7+ clamped to 6
+        assert_eq!(parse_heading_level_from_name("개요 7"), Some(6));
+        assert_eq!(parse_heading_level_from_name("개요 10"), Some(6));
+    }
+
+    #[test]
+    fn heading_level_title_styles() {
+        assert_eq!(parse_heading_level_from_name("+제목"), Some(1));
+        assert_eq!(parse_heading_level_from_name("타이들"), Some(1));
+        assert_eq!(parse_heading_level_from_name("큰제목"), Some(1));
+    }
+
+    #[test]
+    fn heading_level_non_heading() {
+        assert_eq!(parse_heading_level_from_name("바탕글"), None);
+        assert_eq!(parse_heading_level_from_name("본문"), None);
+        assert_eq!(parse_heading_level_from_name(""), None);
+    }
+
+    #[test]
+    fn heading_level_whitespace_trimmed() {
+        assert_eq!(parse_heading_level_from_name("  개요 3  "), Some(3));
+        assert_eq!(parse_heading_level_from_name("  +제목  "), Some(1));
     }
 }

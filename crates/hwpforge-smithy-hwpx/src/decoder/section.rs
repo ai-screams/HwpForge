@@ -283,8 +283,9 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
     // Text runs — skip if consumed by field controls
     if !has_field_pair {
         for text in &hx.texts {
-            if !text.text.is_empty() {
-                runs.push(Run { content: RunContent::Text(text.text.clone()), char_shape_id });
+            let text_content = text.text();
+            if !text_content.is_empty() {
+                runs.push(Run { content: RunContent::Text(text_content), char_shape_id });
             }
         }
     }
@@ -587,7 +588,7 @@ fn decode_indexmark(ctrl: &HxCtrl, char_shape_id: CharShapeIndex) -> Option<Run>
 fn collect_run_text(hx: &HxRun) -> String {
     let mut text = String::new();
     for t in &hx.texts {
-        text.push_str(&t.text);
+        text.push_str(&t.text());
     }
     text
 }

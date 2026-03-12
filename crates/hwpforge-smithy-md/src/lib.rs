@@ -28,11 +28,12 @@
 
 mod decoder;
 mod encoder;
+mod eqn;
 pub mod error;
 pub mod frontmatter;
 mod mapper;
 
 pub use decoder::{MdDecoder, MdDocument};
-pub use encoder::MdEncoder;
+pub use encoder::{MdEncoder, MdOutput};
 pub use error::{MdError, MdErrorCode, MdResult};
 pub use frontmatter::Frontmatter;
