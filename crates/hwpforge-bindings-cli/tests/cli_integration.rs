@@ -3,10 +3,13 @@
 //! 79 tests covering all 7 commands with output content verification.
 //! All fixtures are git-tracked — no silent skips in CI.
 
-use std::io::Write as _;
+use std::io::{Read as _, Write as _};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+use serde_json::json;
+use zip::ZipArchive;
 
 static COUNTER: AtomicUsize = AtomicUsize::new(0);
 
@@ -48,6 +51,114 @@ fn guide_hwpx_path() -> PathBuf {
     path
 }
 
+fn read_hwpx_entry(path: &Path, entry: &str) -> String {
+    let bytes = std::fs::read(path).expect("read hwpx");
+    let cursor = std::io::Cursor::new(bytes);
+    let mut archive = ZipArchive::new(cursor).expect("open hwpx zip");
+    let mut file = archive.by_name(entry).expect("zip entry exists");
+    let mut content = String::new();
+    file.read_to_string(&mut content).expect("read zip entry as string");
+    content
+}
+
+fn hwpx_has_entry(path: &Path, entry: &str) -> bool {
+    let bytes = std::fs::read(path).expect("read hwpx");
+    let cursor = std::io::Cursor::new(bytes);
+    let mut archive = ZipArchive::new(cursor).expect("open hwpx zip");
+    let exists = archive.by_name(entry).is_ok();
+    exists
+}
+
+fn extract_u32_attribute_values_after(
+    xml: &str,
+    scope_prefix: &str,
+    attribute: &str,
+) -> std::collections::BTreeSet<u32> {
+    let scope = format!("{scope_prefix}{attribute}=\"");
+    let mut values = std::collections::BTreeSet::new();
+    let mut search_from = 0usize;
+    while let Some(start) = xml[search_from..].find(&scope) {
+        let value_start = search_from + start + scope.len();
+        let Some(value_end_rel) = xml[value_start..].find('"') else {
+            break;
+        };
+        let value_end = value_start + value_end_rel;
+        if let Ok(value) = xml[value_start..value_end].parse::<u32>() {
+            values.insert(value);
+        }
+        search_from = value_end + 1;
+    }
+    values
+}
+
+fn extract_xml_u32_attribute_values(xml: &str, attribute: &str) -> std::collections::BTreeSet<u32> {
+    let needle = format!(r#"{attribute}=""#);
+    let mut values = std::collections::BTreeSet::new();
+    let mut search_from = 0usize;
+    while let Some(start) = xml[search_from..].find(&needle) {
+        let value_start = search_from + start + needle.len();
+        let Some(value_end_rel) = xml[value_start..].find('"') else {
+            break;
+        };
+        let value_end = value_start + value_end_rel;
+        if let Ok(value) = xml[value_start..value_end].parse::<u32>() {
+            values.insert(value);
+        }
+        search_from = value_end + 1;
+    }
+    values
+}
+
+fn assert_single_chart_ole_evidence(
+    value: &serde_json::Value,
+    expected_chart_xml: &str,
+    expected_source_ole_bindata: &str,
+    expected_companion_ole_bindata: &str,
+) {
+    assert_eq!(value["chart_evidence"]["assessment"], "ole-backed-gso-evidence");
+    assert_eq!(value["chart_evidence"]["source"]["gso_ctrl_count"], 1);
+    assert_eq!(value["chart_evidence"]["source"]["shape_component_ole_count"], 1);
+    assert_eq!(value["chart_evidence"]["source"]["chart_data_tag_count"], 0);
+
+    let source_ole_paths =
+        value["chart_evidence"]["source"]["ole_bin_data_paths"].as_array().unwrap();
+    assert_eq!(source_ole_paths.len(), 1);
+    assert_eq!(source_ole_paths[0], expected_source_ole_bindata);
+
+    let companion = &value["chart_evidence"]["companion"];
+    let chart_xml_paths = companion["chart_xml_paths"].as_array().unwrap();
+    assert_eq!(chart_xml_paths.len(), 1);
+    assert_eq!(chart_xml_paths[0], expected_chart_xml);
+
+    let ole_bindata_paths = companion["ole_bindata_paths"].as_array().unwrap();
+    assert_eq!(ole_bindata_paths.len(), 1);
+    assert_eq!(ole_bindata_paths[0], expected_companion_ole_bindata);
+
+    assert_eq!(companion["case_chart_count"], 1);
+    assert_eq!(companion["default_ole_count"], 1);
+    assert!(companion["switch_count"].as_u64().unwrap() >= 1);
+}
+
+fn comparison_verdict<'a>(value: &'a serde_json::Value, field: &str) -> Option<&'a str> {
+    value["comparisons"].as_array().and_then(|comparisons| {
+        comparisons.iter().find_map(|comparison| {
+            (comparison["field"].as_str() == Some(field)).then(|| comparison["verdict"].as_str())
+        })
+    })?
+}
+
+fn csv_to_json_array(csv: &str) -> serde_json::Value {
+    if csv.is_empty() {
+        return json!([]);
+    }
+
+    let values: Vec<i32> = csv
+        .split(',')
+        .map(|value| value.parse::<i32>().expect("csv sizing metric must be integer"))
+        .collect();
+    json!(values)
+}
+
 /// Create a temporary markdown file with given content. Returns path.
 fn create_test_md(dir: &Path, content: &str) -> PathBuf {
     let path = dir.join("input.md");
@@ -67,17 +178,23 @@ fn run(args: &[&str]) -> (String, String, i32) {
 
 /// Run hwpforge with --json flag prepended.
 fn run_json(args: &[&str]) -> (serde_json::Value, String, i32) {
+    let (_, value, stderr, code) = run_json_with_stdout(args);
+    (value, stderr, code)
+}
+
+/// Run hwpforge with --json flag prepended and return raw stdout too.
+fn run_json_with_stdout(args: &[&str]) -> (String, serde_json::Value, String, i32) {
     let mut full_args = vec!["--json"];
     full_args.extend_from_slice(args);
     let (stdout, stderr, code) = run(&full_args);
     if code == 0 {
         let value: serde_json::Value = serde_json::from_str(&stdout)
             .unwrap_or_else(|e| panic!("invalid JSON output: {e}\nstdout: {stdout}"));
-        (value, stderr, code)
+        (stdout, value, stderr, code)
     } else {
         // Try to parse stderr as JSON error
         let err_value = serde_json::from_str(&stderr).unwrap_or(serde_json::Value::Null);
-        (err_value, stderr, code)
+        (stdout, err_value, stderr, code)
     }
 }
 
@@ -106,6 +223,22 @@ fn run_with_stdin(args: &[&str], stdin_data: &str) -> (String, String, i32) {
 fn assert_valid_hwpx(path: &Path) {
     let (_, _, code) = run(&["inspect", path.to_str().unwrap()]);
     assert_eq!(code, 0, "inspect failed on {}", path.display());
+}
+
+fn convert_hwp5_fixture_and_audit_ok(
+    fixture_name: &str,
+    tmp: &Path,
+) -> (PathBuf, serde_json::Value) {
+    let source = fixture(fixture_name);
+    let output = tmp.join(fixture_name.replace(".hwp", ".hwpx"));
+    hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &output)
+        .expect("convert hwp5 fixture for CLI integration");
+
+    let (val, _, code) =
+        run_json(&["audit-hwp5", source.to_str().unwrap(), output.to_str().unwrap()]);
+    assert_eq!(code, 0, "audit exit code for {fixture_name}");
+    assert_eq!(val["status"], "ok", "audit status for {fixture_name}");
+    (output, val)
 }
 
 /// Standard test markdown content (Korean proposal).
@@ -397,12 +530,1114 @@ fn inspect_rect_styles() {
 }
 
 #[test]
+fn inspect_deep_counts_image_in_table_cell() {
+    let f = fixture("img_05_image_in_table_cell.hwpx");
+    let (val, _, code) = run_json(&["inspect", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let sec0 = &val["sections"][0];
+    assert_eq!(sec0["tables"], 1);
+    assert_eq!(sec0["images"], 1);
+    assert_eq!(sec0["text_boxes"], 0);
+    assert_eq!(sec0["deep_paragraphs"], 7);
+}
+
+#[test]
+fn inspect_deep_counts_header_footer_image_fixture() {
+    let f = fixture("mixed_02a_header_image_footer_text_real.hwpx");
+    let (val, _, code) = run_json(&["inspect", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let sec0 = &val["sections"][0];
+    assert_eq!(sec0["images"], 1);
+    assert_eq!(sec0["has_header"], true);
+    assert_eq!(sec0["has_footer"], true);
+    assert_eq!(sec0["deep_non_empty_paragraphs"], 1);
+}
+
+#[test]
+fn inspect_deep_counts_textbox_with_image_fixture() {
+    let f = fixture("mixed_02b_textbox_with_image_real.hwpx");
+    let (val, _, code) = run_json(&["inspect", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let sec0 = &val["sections"][0];
+    assert_eq!(sec0["images"], 1);
+    assert_eq!(sec0["text_boxes"], 1);
+    assert_eq!(sec0["deep_non_empty_paragraphs"], 3);
+}
+
+#[test]
+fn inspect_deep_counts_line_fixture() {
+    let f = fixture("line_simple.hwpx");
+    let (val, _, code) = run_json(&["inspect", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(val["sections"][0]["lines"], 1);
+    assert_eq!(val["sections"][0]["rectangles"], 0);
+    assert_eq!(val["sections"][0]["polygons"], 0);
+}
+
+#[test]
+fn inspect_deep_counts_rect_fixture() {
+    let f = fixture("rect_simple.hwpx");
+    let (val, _, code) = run_json(&["inspect", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(val["sections"][0]["rectangles"], 1);
+    assert_eq!(val["sections"][0]["text_boxes"], 0);
+}
+
+#[test]
+fn inspect_deep_counts_polygon_fixture() {
+    let f = fixture("polygon_simple.hwpx");
+    let (val, _, code) = run_json(&["inspect", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(val["sections"][0]["polygons"], 1);
+    assert_eq!(val["sections"][0]["lines"], 0);
+}
+
+#[test]
 fn inspect_json_error() {
     let (_, stderr, code) = run(&["--json", "inspect", "/nonexistent/file.hwpx"]);
     assert_ne!(code, 0);
     let err: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
     assert_eq!(err["status"], "error");
     assert!(err["code"].is_string());
+}
+
+#[test]
+fn audit_hwp5_human_report() {
+    let source = fixture("hwp5_01.hwp");
+    let tmp = test_tmp();
+    let out = tmp.join("hwp5_01.hwpx");
+    hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &out).expect("convert hwp5 fixture");
+
+    let (stdout, _, code) = run(&["audit-hwp5", source.to_str().unwrap(), out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Audit:"));
+    assert!(stdout.contains("Status:"));
+    assert!(stdout.contains("Source metrics come from parser-backed HWP5 semantic truth."));
+    assert!(stdout.contains("Visual Checklist:"));
+    assert!(stdout.contains("tables"));
+}
+
+#[test]
+fn audit_hwp5_json_report() {
+    let source = fixture("hwp5_02.hwp");
+    let tmp = test_tmp();
+    let out = tmp.join("hwp5_02.hwpx");
+    hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &out).expect("convert hwp5 fixture");
+
+    let (val, _, code) = run_json(&["audit-hwp5", source.to_str().unwrap(), out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(val["status"], "ok");
+    assert_eq!(val["source"]["format"], "HWP5");
+    assert_eq!(val["output"]["format"], "HWPX");
+    assert!(val["comparisons"].as_array().unwrap().len() >= 8);
+    assert!(!val["section_comparisons"].as_array().unwrap().is_empty());
+    assert!(val["checklist"].as_array().unwrap().len() >= 3);
+}
+
+#[test]
+fn audit_hwp5_chart_reports_ole_evidence_note() {
+    let source = fixture("chart_01_single_column.hwp");
+    let tmp = test_tmp();
+    let out = tmp.join("chart_01.hwpx");
+    hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &out).expect("convert hwp5 chart fixture");
+
+    let (val, _, code) = run_json(&["audit-hwp5", source.to_str().unwrap(), out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(val["status"], "mismatch");
+    assert!(val["source"]["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|note| note.as_str() == Some("ole-backed-gso-evidence: 1")));
+    assert_eq!(val["source"]["totals"]["ole_objects"], 1);
+    assert_eq!(val["output"]["totals"]["ole_objects"], 0);
+}
+
+#[test]
+fn audit_hwp5_chart_reports_ole_backed_source_evidence() {
+    let source = fixture("chart_01_single_column.hwp");
+    let companion = fixture("chart_01_single_column.hwpx");
+
+    let (val, _, code) =
+        run_json(&["audit-hwp5", source.to_str().unwrap(), companion.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let source_notes = val["source"]["notes"].as_array().unwrap();
+    let output_notes = val["output"]["notes"].as_array().unwrap();
+    assert!(source_notes.iter().any(|note| note == "ole-backed-gso-evidence: 1"));
+    assert!(source_notes.iter().any(|note| note == "ole-high-confidence: 1"));
+    assert!(output_notes.iter().any(|note| note == "hwpx-ole-fallback-present: 1"));
+    assert_eq!(val["source"]["totals"]["ole_objects"], 1);
+    assert_eq!(val["output"]["totals"]["ole_objects"], 1);
+}
+
+#[test]
+fn audit_hwp5_line_fixture_reports_line_metric() {
+    let source = fixture("line_simple.hwp");
+    let tmp = test_tmp();
+    let out = tmp.join("line_simple.hwpx");
+    hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &out).expect("convert hwp5 line fixture");
+
+    let (val, _, code) = run_json(&["audit-hwp5", source.to_str().unwrap(), out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(val["status"], "ok");
+    assert_eq!(val["source"]["totals"]["lines"], 1);
+    assert_eq!(val["output"]["totals"]["lines"], 1);
+    assert_eq!(val["source"]["totals"]["polygons"], 0);
+    assert_eq!(val["output"]["totals"]["polygons"], 0);
+}
+
+#[test]
+fn audit_hwp5_table_repeat_header_notes_source_truth() {
+    let source = fixture("table_06_repeat_header_row.hwp");
+    let companion = fixture("table_06_repeat_header_row.hwpx");
+
+    let (val, _, code) =
+        run_json(&["audit-hwp5", source.to_str().unwrap(), companion.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let source_notes = val["source"]["notes"].as_array().unwrap();
+    assert!(source_notes.iter().any(|note| note == "table-page-break-cell: 1"));
+    assert!(source_notes.iter().any(|note| note == "table-repeat-header-on: 1"));
+    assert_eq!(val["source"]["table_properties"]["repeat_header_tables"], 1);
+    assert_eq!(val["output"]["table_properties"]["repeat_header_tables"], 1);
+    assert_eq!(comparison_verdict(&val, "table_repeat_header_tables"), Some("MATCH"));
+    assert_eq!(comparison_verdict(&val, "table_page_break_cell"), Some("MATCH"));
+}
+
+#[test]
+fn audit_hwp5_table_repeat_header_multi_page_source_truth() {
+    let cases = [
+        ("table_06c_repeat_header_multi_page.hwp", "table_06c_repeat_header_multi_page.hwpx", 1),
+        (
+            "table_06d_no_repeat_header_multi_page.hwp",
+            "table_06d_no_repeat_header_multi_page.hwpx",
+            0,
+        ),
+    ];
+
+    for (source_name, companion_name, expected_repeat_header_tables) in cases {
+        let source = fixture(source_name);
+        let companion = fixture(companion_name);
+        let (val, _, code) =
+            run_json(&["audit-hwp5", source.to_str().unwrap(), companion.to_str().unwrap()]);
+        assert_eq!(code, 0, "audit exit code for {source_name}");
+        assert_eq!(val["status"], "ok", "audit status for {source_name}");
+        assert_eq!(val["source"]["table_properties"]["page_break_cell"], 1);
+        assert_eq!(val["output"]["table_properties"]["page_break_cell"], 1);
+        assert_eq!(val["source"]["table_properties"]["header_rows"], 1);
+        assert_eq!(val["output"]["table_properties"]["header_rows"], 1);
+        assert_eq!(
+            val["source"]["table_properties"]["repeat_header_tables"],
+            expected_repeat_header_tables
+        );
+        assert_eq!(
+            val["output"]["table_properties"]["repeat_header_tables"],
+            expected_repeat_header_tables
+        );
+        assert_eq!(comparison_verdict(&val, "table_page_break_cell"), Some("MATCH"));
+        assert_eq!(comparison_verdict(&val, "table_repeat_header_tables"), Some("MATCH"));
+        assert_eq!(comparison_verdict(&val, "table_header_rows"), Some("MATCH"));
+    }
+}
+
+#[test]
+fn audit_hwp5_table_page_break_modes_source_truth() {
+    let table_mode = fixture("table_09a_page_break_cell.hwp");
+    let none_mode = fixture("table_09c_page_break_none.hwp");
+    let cell_mode = fixture("table_09d_page_break_cell_explicit.hwp");
+
+    let (table_val, _, table_code) = run_json(&[
+        "audit-hwp5",
+        table_mode.to_str().unwrap(),
+        fixture("table_09a_page_break_cell.hwpx").to_str().unwrap(),
+    ]);
+    assert_eq!(table_code, 0);
+    let table_notes = table_val["source"]["notes"].as_array().unwrap();
+    assert!(table_notes.iter().any(|note| note == "table-page-break-table: 1"));
+    assert_eq!(table_val["source"]["table_properties"]["page_break_table"], 1);
+    assert_eq!(table_val["output"]["table_properties"]["page_break_table"], 1);
+    assert_eq!(comparison_verdict(&table_val, "table_page_break_table"), Some("MATCH"));
+
+    let (none_val, _, none_code) = run_json(&[
+        "audit-hwp5",
+        none_mode.to_str().unwrap(),
+        fixture("table_09c_page_break_none.hwpx").to_str().unwrap(),
+    ]);
+    assert_eq!(none_code, 0);
+    let none_notes = none_val["source"]["notes"].as_array().unwrap();
+    assert!(none_notes.iter().any(|note| note == "table-page-break-none: 1"));
+    assert_eq!(none_val["source"]["table_properties"]["page_break_none"], 1);
+    assert_eq!(none_val["output"]["table_properties"]["page_break_none"], 1);
+    assert_eq!(comparison_verdict(&none_val, "table_page_break_none"), Some("MATCH"));
+
+    let (cell_val, _, cell_code) = run_json(&[
+        "audit-hwp5",
+        cell_mode.to_str().unwrap(),
+        fixture("table_09d_page_break_cell_explicit.hwpx").to_str().unwrap(),
+    ]);
+    assert_eq!(cell_code, 0);
+    let cell_notes = cell_val["source"]["notes"].as_array().unwrap();
+    assert!(cell_notes.iter().any(|note| note == "table-page-break-cell: 1"));
+    assert_eq!(cell_val["source"]["table_properties"]["page_break_cell"], 1);
+    assert_eq!(cell_val["output"]["table_properties"]["page_break_cell"], 1);
+    assert_eq!(comparison_verdict(&cell_val, "table_page_break_cell"), Some("MATCH"));
+}
+
+#[test]
+fn audit_hwp5_table_border_fill_notes_source_truth() {
+    let source = fixture("table_03_border_fill_variants.hwp");
+    let companion = fixture("table_03_border_fill_variants.hwpx");
+
+    let (val, _, code) =
+        run_json(&["audit-hwp5", source.to_str().unwrap(), companion.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let source_notes = val["source"]["notes"].as_array().unwrap();
+    assert!(source_notes.iter().any(|note| {
+        note.as_str().is_some_and(|note| note.starts_with("table-cell-border-fill-ids: "))
+    }));
+    assert_eq!(val["source"]["table_properties"]["table_border_fill_ids"], json!([3]));
+    assert_eq!(val["output"]["table_properties"]["table_border_fill_ids"], json!([3]));
+    assert_eq!(val["source"]["table_properties"]["cell_border_fill_ids"], json!([4, 5, 6, 7]));
+    assert_eq!(val["output"]["table_properties"]["cell_border_fill_ids"], json!([4, 5, 6, 7]));
+    assert_eq!(comparison_verdict(&val, "table_border_fill_ids"), Some("MATCH"));
+    assert_eq!(comparison_verdict(&val, "table_cell_border_fill_ids"), Some("MATCH"));
+}
+
+#[test]
+fn convert_hwp5_table_page_break_and_repeat_header_parity() {
+    let cases = [
+        ("table_06_repeat_header_row.hwp", "table_repeat_header_tables", "MATCH"),
+        ("table_06b_no_repeat_header_row.hwp", "table_repeat_header_tables", "MATCH"),
+        ("table_09a_page_break_cell.hwp", "table_page_break_table", "MATCH"),
+        ("table_09c_page_break_none.hwp", "table_page_break_none", "MATCH"),
+        ("table_09d_page_break_cell_explicit.hwp", "table_page_break_cell", "MATCH"),
+    ];
+
+    let tmp = test_tmp();
+    for (fixture_name, field, expected_verdict) in cases {
+        let source = fixture(fixture_name);
+        let output = tmp.join(fixture_name.replace(".hwp", ".hwpx"));
+        hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &output).expect("convert hwp5 table fixture");
+
+        let (val, _, code) =
+            run_json(&["audit-hwp5", source.to_str().unwrap(), output.to_str().unwrap()]);
+        assert_eq!(code, 0, "audit exit code for {fixture_name}");
+        assert_eq!(
+            comparison_verdict(&val, field),
+            Some(expected_verdict),
+            "table parity field {field} for {fixture_name}"
+        );
+    }
+}
+
+#[test]
+fn convert_hwp5_table_repeat_header_multi_page_visual_gate() {
+    let cases = [
+        ("table_06c_repeat_header_multi_page.hwp", "repeatHeader=\"1\""),
+        ("table_06d_no_repeat_header_multi_page.hwp", "repeatHeader=\"0\""),
+    ];
+
+    let tmp = test_tmp();
+    for (fixture_name, expected_repeat_header_attr) in cases {
+        let source = fixture(fixture_name);
+        let output = tmp.join(fixture_name.replace(".hwp", ".hwpx"));
+        hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &output)
+            .expect("convert hwp5 repeat-header multi-page fixture");
+
+        let (val, _, code) =
+            run_json(&["audit-hwp5", source.to_str().unwrap(), output.to_str().unwrap()]);
+        assert_eq!(code, 0, "audit exit code for {fixture_name}");
+        assert_eq!(val["status"], "ok", "audit status for {fixture_name}");
+        assert_eq!(comparison_verdict(&val, "table_page_break_cell"), Some("MATCH"));
+        assert_eq!(comparison_verdict(&val, "table_repeat_header_tables"), Some("MATCH"));
+        assert_eq!(comparison_verdict(&val, "table_header_rows"), Some("MATCH"));
+
+        let section_xml = read_hwpx_entry(&output, "Contents/section0.xml");
+        assert!(
+            section_xml.contains("pageBreak=\"CELL\""),
+            "generated section0.xml must keep pageBreak=CELL for {fixture_name}"
+        );
+        assert!(
+            section_xml.contains(expected_repeat_header_attr),
+            "generated section0.xml must keep {expected_repeat_header_attr} for {fixture_name}"
+        );
+        assert_eq!(
+            section_xml.matches(" header=\"1\"").count(),
+            3,
+            "generated section0.xml must preserve first-row header markers for {fixture_name}"
+        );
+        assert!(
+            section_xml.contains("rowCnt=\"100\""),
+            "generated section0.xml must preserve multi-page row count for {fixture_name}"
+        );
+        assert!(
+            section_xml.contains("colCnt=\"3\""),
+            "generated section0.xml must preserve 3-column layout for {fixture_name}"
+        );
+    }
+}
+
+#[test]
+fn convert_hwp5_table_border_fill_and_cell_height_parity() {
+    let cases = [
+        (
+            "table_03_border_fill_variants.hwp",
+            "table_border_fill_ids",
+            json!([3]),
+            json!([4, 5, 6, 7]),
+            json!([282]),
+        ),
+        (
+            "table_04_vertical_align.hwp",
+            "table_cell_heights_hwp",
+            json!([3]),
+            json!([3]),
+            json!([7697]),
+        ),
+        (
+            "table_05_cell_margin_padding.hwp",
+            "table_cell_heights_hwp",
+            json!([3]),
+            json!([3]),
+            json!([282, 1281]),
+        ),
+    ];
+
+    let tmp = test_tmp();
+    for (fixture_name, focus_field, expected_table_ids, expected_cell_ids, expected_heights) in
+        cases
+    {
+        let source = fixture(fixture_name);
+        let output = tmp.join(fixture_name.replace(".hwp", ".hwpx"));
+        hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &output).expect("convert hwp5 table fixture");
+
+        let (val, _, code) =
+            run_json(&["audit-hwp5", source.to_str().unwrap(), output.to_str().unwrap()]);
+        assert_eq!(code, 0, "audit exit code for {fixture_name}");
+        assert_eq!(val["source"]["table_properties"]["table_border_fill_ids"], expected_table_ids);
+        assert_eq!(val["output"]["table_properties"]["table_border_fill_ids"], expected_table_ids);
+        assert_eq!(val["source"]["table_properties"]["cell_border_fill_ids"], expected_cell_ids);
+        assert_eq!(val["output"]["table_properties"]["cell_border_fill_ids"], expected_cell_ids);
+        assert_eq!(val["source"]["table_properties"]["cell_heights_hwp"], expected_heights);
+        assert_eq!(val["output"]["table_properties"]["cell_heights_hwp"], expected_heights);
+        assert_eq!(comparison_verdict(&val, "table_border_fill_ids"), Some("MATCH"));
+        assert_eq!(comparison_verdict(&val, "table_cell_border_fill_ids"), Some("MATCH"));
+        assert_eq!(comparison_verdict(&val, "table_cell_heights_hwp"), Some("MATCH"));
+        assert_eq!(comparison_verdict(&val, focus_field), Some("MATCH"));
+    }
+}
+
+#[test]
+fn convert_hwp5_table_border_fill_materializes_header_definitions() {
+    let source = fixture("table_03_border_fill_variants.hwp");
+    let output = test_tmp().join("table_03_border_fill_variants.hwpx");
+    hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &output).expect("convert hwp5 table fixture");
+
+    let header_xml = read_hwpx_entry(&output, "Contents/header.xml");
+    let section_xml = read_hwpx_entry(&output, "Contents/section0.xml");
+    assert!(
+        header_xml.contains(r#"<hh:borderFills itemCnt="7">"#),
+        "generated header.xml must materialize custom border fills 4..7"
+    );
+    assert!(
+        header_xml.contains(
+            r#"<hh:borderFill id="4" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0">"#
+        ),
+        "custom border fill id=4 must exist in header.xml"
+    );
+    assert!(
+        header_xml.contains(r##"<hh:bottomBorder type="SOLID" width="1.0 mm" color="#000000"/>"##),
+        "id=4 bottom border width must be emitted"
+    );
+    assert!(
+        header_xml
+            .contains(r##"<hc:winBrush faceColor="#CA56A7" hatchColor="#C0FFFFFF" alpha="0"/>"##),
+        "custom fill brush must be emitted"
+    );
+    assert!(
+        header_xml
+            .contains(r##"<hc:winBrush faceColor="#85BF4C" hatchColor="#C0FFFFFF" alpha="0"/>"##),
+        "second custom fill brush must be emitted"
+    );
+    let defined_ids = extract_u32_attribute_values_after(&header_xml, "<hh:borderFill ", "id");
+    let referenced_ids = extract_xml_u32_attribute_values(&section_xml, "borderFillIDRef");
+    let missing_ids: Vec<u32> =
+        referenced_ids.into_iter().filter(|id| !defined_ids.contains(id)).collect();
+    assert!(
+        missing_ids.is_empty(),
+        "every table/cell borderFillIDRef must have a header.xml definition, missing: {missing_ids:?}"
+    );
+}
+
+#[test]
+fn convert_hwp5_table_border_fill_phase2_materializes_gradient_image_and_diagonal() {
+    let cases = [
+        (
+            "table_15_gradient_fill.hwp",
+            Some(
+                r#"<hc:gradation type="LINEAR" angle="90" centerX="0" centerY="0" step="255" colorNum="2" stepCenter="50" alpha="0">"#,
+            ),
+            None,
+            None,
+            Some(r#"<hh:borderFill id="4""#),
+        ),
+        (
+            "table_16_image_fill.hwp",
+            None,
+            Some(r#"<hc:imgBrush mode="TOTAL"><hc:img binaryItemIDRef="BIN0001""#),
+            Some("BinData/BIN0001.png"),
+            Some(r#"<hh:borderFill id="4""#),
+        ),
+        (
+            "table_15b_gradient_fill_radial.hwp",
+            Some(
+                r#"<hc:gradation type="RADIAL" angle="90" centerX="0" centerY="0" step="255" colorNum="2" stepCenter="50" alpha="0">"#,
+            ),
+            None,
+            None,
+            Some(r#"<hh:borderFill id="4""#),
+        ),
+        (
+            "table_16b_image_fill_center.hwp",
+            None,
+            Some(r#"<hc:imgBrush mode="CENTER"><hc:img binaryItemIDRef="BIN0001""#),
+            Some("BinData/BIN0001.png"),
+            Some(r#"<hh:borderFill id="4""#),
+        ),
+        (
+            "table_16c_image_fill_tile.hwp",
+            None,
+            Some(r#"<hc:imgBrush mode="TILE"><hc:img binaryItemIDRef="BIN0001""#),
+            Some("BinData/BIN0001.jpg"),
+            Some(r#"<hh:borderFill id="4""#),
+        ),
+        (
+            "table_17_diagonal_border.hwp",
+            None,
+            None,
+            None,
+            Some(r#"<hh:backSlash type="CENTER" Crooked="0" isCounter="0"/>"#),
+        ),
+        (
+            "table_17b_diagonal_border_variant.hwp",
+            None,
+            None,
+            None,
+            Some(r#"<hh:slash type="CENTER" Crooked="0" isCounter="0"/>"#),
+        ),
+    ];
+
+    let tmp = test_tmp();
+    for (
+        fixture_name,
+        expected_gradation,
+        expected_img_brush,
+        expected_image_entry,
+        expected_xml,
+    ) in cases
+    {
+        let (output, _val) = convert_hwp5_fixture_and_audit_ok(fixture_name, &tmp);
+
+        let header_xml = read_hwpx_entry(&output, "Contents/header.xml");
+        let content_hpf = read_hwpx_entry(&output, "Contents/content.hpf");
+        if let Some(expected_gradation) = expected_gradation {
+            assert!(
+                header_xml.contains(expected_gradation),
+                "generated header.xml must materialize gradation fill for {fixture_name}"
+            );
+        }
+        if let Some(expected_img_brush) = expected_img_brush {
+            assert!(
+                header_xml.contains(expected_img_brush),
+                "generated header.xml must materialize image fill for {fixture_name}"
+            );
+        }
+        if let Some(expected_xml) = expected_xml {
+            assert!(
+                header_xml.contains(expected_xml),
+                "generated header.xml must preserve expected border/fill evidence for {fixture_name}"
+            );
+        }
+        if let Some(expected_image_entry) = expected_image_entry {
+            assert!(
+                hwpx_has_entry(&output, expected_image_entry),
+                "generated package must include {expected_image_entry} for {fixture_name}"
+            );
+            assert!(
+                content_hpf.contains(&format!(r#"href="{expected_image_entry}""#)),
+                "generated content.hpf must list {expected_image_entry} for {fixture_name}"
+            );
+        }
+    }
+}
+
+#[test]
+fn convert_hwp5_table_public_document_composite_preserves_border_fill_modes() {
+    let tmp = test_tmp();
+    let (output, _val) =
+        convert_hwp5_fixture_and_audit_ok("table_18_public_document_composite.hwp", &tmp);
+
+    let header_xml = read_hwpx_entry(&output, "Contents/header.xml");
+    assert!(
+        header_xml.contains(
+            r#"<hc:gradation type="LINEAR" angle="0" centerX="80" centerY="40" step="255" colorNum="2" stepCenter="50" alpha="0">"#
+        ),
+        "generated header.xml must preserve the composite gradient fill"
+    );
+    assert!(
+        header_xml.contains(r#"<hc:imgBrush mode="ZOOM"><hc:img binaryItemIDRef="BIN0001""#),
+        "generated header.xml must preserve the composite image fill mode"
+    );
+    assert!(
+        header_xml.contains(r#"<hh:slash type="CENTER" Crooked="0" isCounter="0"/>"#),
+        "generated header.xml must preserve the composite slash diagonal"
+    );
+    assert!(
+        header_xml.contains(r#"<hh:backSlash type="CENTER" Crooked="0" isCounter="0"/>"#),
+        "generated header.xml must preserve the composite backslash diagonal"
+    );
+    assert!(
+        hwpx_has_entry(&output, "BinData/BIN0001.jpg"),
+        "generated package must include composite image-fill bindata"
+    );
+}
+
+#[test]
+fn convert_hwp5_table_completion_representatives_hold_acceptance_parity() {
+    let cases = [
+        (
+            "table_19_public_document_multi_page_composite.hwp",
+            Some("MATCH"),
+            Some("MATCH"),
+            Some("MATCH"),
+            Some("MATCH"),
+        ),
+        (
+            "table_20_real_world_ministry_style.hwp",
+            Some("MATCH"),
+            Some("MATCH"),
+            Some("MATCH"),
+            Some("MATCH"),
+        ),
+    ];
+
+    let tmp = test_tmp();
+    for (
+        fixture_name,
+        expected_repeat_header,
+        expected_header_rows,
+        expected_structural_evidence,
+        expected_cell_evidence,
+    ) in cases
+    {
+        let (output, val) = convert_hwp5_fixture_and_audit_ok(fixture_name, &tmp);
+        assert_eq!(
+            comparison_verdict(&val, "table_repeat_header_tables"),
+            expected_repeat_header,
+            "repeat-header parity for {fixture_name}"
+        );
+        assert_eq!(
+            comparison_verdict(&val, "table_header_rows"),
+            expected_header_rows,
+            "header-row parity for {fixture_name}"
+        );
+        assert_eq!(
+            comparison_verdict(&val, "table_structural_evidence"),
+            expected_structural_evidence,
+            "structural evidence parity for {fixture_name}"
+        );
+        assert_eq!(
+            comparison_verdict(&val, "table_cell_evidence"),
+            expected_cell_evidence,
+            "cell evidence parity for {fixture_name}"
+        );
+
+        let (inspect, _, inspect_code) = run_json(&["inspect", "--json", output.to_str().unwrap()]);
+        assert_eq!(inspect_code, 0, "inspect exit code for {fixture_name}");
+        assert_eq!(inspect["status"], "ok", "inspect status for {fixture_name}");
+        assert_eq!(
+            inspect["sections"][0]["tables"].as_u64(),
+            Some(1),
+            "representative fixture {fixture_name} must remain a single top-level table"
+        );
+    }
+}
+
+#[test]
+fn convert_hwp5_table_cell_presentation_parity() {
+    let cases = [
+        (
+            "table_04_vertical_align.hwp",
+            "table_cell_evidence",
+            json!([
+                {
+                    "section_index": 0,
+                    "table_ordinal": 0,
+                    "row": 0,
+                    "column": 0,
+                    "col_span": 1,
+                    "row_span": 1,
+                    "border_fill_id": 3,
+                    "height_hwp": 7697,
+                    "width_hwp": 41954,
+                    "margin_hwp": { "left": 510, "right": 510, "top": 141, "bottom": 141 },
+                    "vertical_align": "top"
+                },
+                {
+                    "section_index": 0,
+                    "table_ordinal": 0,
+                    "row": 1,
+                    "column": 0,
+                    "col_span": 1,
+                    "row_span": 1,
+                    "border_fill_id": 3,
+                    "height_hwp": 7697,
+                    "width_hwp": 41954,
+                    "margin_hwp": { "left": 510, "right": 510, "top": 141, "bottom": 141 },
+                    "vertical_align": "center"
+                },
+                {
+                    "section_index": 0,
+                    "table_ordinal": 0,
+                    "row": 2,
+                    "column": 0,
+                    "col_span": 1,
+                    "row_span": 1,
+                    "border_fill_id": 3,
+                    "height_hwp": 7697,
+                    "width_hwp": 41954,
+                    "margin_hwp": { "left": 510, "right": 510, "top": 141, "bottom": 141 },
+                    "vertical_align": "bottom"
+                }
+            ]),
+        ),
+        (
+            "table_05_cell_margin_padding.hwp",
+            "table_cell_evidence",
+            json!([
+                {
+                    "section_index": 0,
+                    "table_ordinal": 0,
+                    "row": 0,
+                    "column": 0,
+                    "col_span": 1,
+                    "row_span": 1,
+                    "border_fill_id": 3,
+                    "height_hwp": 282,
+                    "width_hwp": 20977,
+                    "margin_hwp": { "left": 510, "right": 510, "top": 141, "bottom": 141 },
+                    "vertical_align": "center"
+                },
+                {
+                    "section_index": 0,
+                    "table_ordinal": 0,
+                    "row": 0,
+                    "column": 1,
+                    "col_span": 1,
+                    "row_span": 1,
+                    "border_fill_id": 3,
+                    "height_hwp": 1281,
+                    "width_hwp": 20977,
+                    "margin_hwp": { "left": 4251, "right": 5669, "top": 2834, "bottom": 1417 },
+                    "vertical_align": "center"
+                }
+            ]),
+        ),
+    ];
+
+    let tmp = test_tmp();
+    for (fixture_name, field, expected_cell_evidence) in cases {
+        let source = fixture(fixture_name);
+        let output = tmp.join(fixture_name.replace(".hwp", ".hwpx"));
+        hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &output).expect("convert hwp5 table fixture");
+
+        let (val, _, code) =
+            run_json(&["audit-hwp5", source.to_str().unwrap(), output.to_str().unwrap()]);
+        assert_eq!(code, 0, "audit exit code for {fixture_name}");
+        assert_eq!(val["source"]["table_properties"]["cell_evidence"], expected_cell_evidence);
+        assert_eq!(val["output"]["table_properties"]["cell_evidence"], expected_cell_evidence);
+        assert_eq!(comparison_verdict(&val, field), Some("MATCH"));
+    }
+}
+
+#[test]
+fn convert_hwp5_table_sizing_parity() {
+    let cases = [
+        ("table_10_row_height_fixed.hwp", "20977", "41954", "4317"),
+        ("table_11_row_height_mixed.hwp", "20977", "41954", "850,2834,9354"),
+        ("table_12_table_width_explicit.hwp", "6236", "18708", "1281"),
+        ("table_13_column_width_variants.hwp", "2947,15116,23889", "41952", "282"),
+        ("table_14_wrapped_text_height_growth.hwp", "41954", "41954", "282"),
+    ];
+
+    let tmp = test_tmp();
+    for (fixture_name, cell_widths, table_widths, row_max_cell_heights) in cases {
+        let source = fixture(fixture_name);
+        let output = tmp.join(fixture_name.replace(".hwp", ".hwpx"));
+        hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &output).expect("convert hwp5 table fixture");
+
+        let (val, _, code) =
+            run_json(&["audit-hwp5", source.to_str().unwrap(), output.to_str().unwrap()]);
+        assert_eq!(code, 0, "audit exit code for {fixture_name}");
+        assert_eq!(val["status"], "ok", "audit status for {fixture_name}");
+        assert_eq!(
+            val["source"]["table_properties"]["cell_widths_hwp"],
+            csv_to_json_array(cell_widths)
+        );
+        assert_eq!(
+            val["output"]["table_properties"]["cell_widths_hwp"],
+            csv_to_json_array(cell_widths)
+        );
+        assert_eq!(
+            val["source"]["table_properties"]["table_widths_hwp"],
+            csv_to_json_array(table_widths)
+        );
+        assert_eq!(
+            val["output"]["table_properties"]["table_widths_hwp"],
+            csv_to_json_array(table_widths)
+        );
+        assert_eq!(
+            val["source"]["table_properties"]["row_max_cell_heights_hwp"],
+            csv_to_json_array(row_max_cell_heights)
+        );
+        assert_eq!(
+            val["output"]["table_properties"]["row_max_cell_heights_hwp"],
+            csv_to_json_array(row_max_cell_heights)
+        );
+        assert_eq!(comparison_verdict(&val, "table_cell_widths_hwp"), Some("MATCH"));
+        assert_eq!(comparison_verdict(&val, "table_structural_widths_hwp"), Some("MATCH"));
+        assert_eq!(comparison_verdict(&val, "table_row_max_cell_heights_hwp"), Some("MATCH"));
+        assert_eq!(comparison_verdict(&val, "table_structural_evidence"), Some("MATCH"));
+    }
+}
+
+#[test]
+fn convert_hwp5_table_nested_table_parity() {
+    let source = fixture("table_08_nested_table.hwp");
+    let tmp = test_tmp();
+    let output = tmp.join("table_08_nested_table.hwpx");
+    hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &output).expect("convert nested table fixture");
+
+    let (audit_val, _, audit_code) =
+        run_json(&["audit-hwp5", source.to_str().unwrap(), output.to_str().unwrap()]);
+    assert_eq!(audit_code, 0);
+    assert_eq!(audit_val["status"], "ok");
+    assert_eq!(audit_val["source"]["totals"]["tables"], 2);
+    assert_eq!(audit_val["output"]["totals"]["tables"], 2);
+    assert_eq!(comparison_verdict(&audit_val, "table_structural_evidence"), Some("MATCH"));
+    assert_eq!(comparison_verdict(&audit_val, "table_cell_evidence"), Some("MATCH"));
+
+    let (inspect_val, _, inspect_code) = run_json(&["inspect", output.to_str().unwrap()]);
+    assert_eq!(inspect_code, 0);
+    let sec0 = &inspect_val["sections"][0];
+    assert_eq!(sec0["tables"], 2);
+    assert_eq!(sec0["deep_paragraphs"], 11);
+    assert_eq!(sec0["deep_non_empty_paragraphs"], 9);
+}
+
+#[test]
+fn audit_hwp5_rect_fixture_reports_mismatch_and_warning() {
+    let source = fixture("rect_simple.hwp");
+    let tmp = test_tmp();
+    let out = tmp.join("rect_simple.hwpx");
+    let warnings =
+        hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &out).expect("convert hwp5 rect fixture");
+    assert!(warnings.iter().any(|warning| matches!(
+        warning,
+        hwpforge_smithy_hwp5::Hwp5Warning::DroppedControl { control, reason }
+            if *control == "rect"
+                && reason == "pure_rect_projection_requires_core_hwpx_capability"
+    )));
+
+    let (val, _, code) = run_json(&["audit-hwp5", source.to_str().unwrap(), out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(val["status"], "mismatch");
+    assert_eq!(val["source"]["warning_count"], 1);
+    assert_eq!(val["source"]["totals"]["rectangles"], 1);
+    assert_eq!(val["output"]["totals"]["rectangles"], 0);
+}
+
+#[test]
+fn audit_hwp5_nonexistent_source() {
+    let tmp = test_tmp();
+    let out = tmp.join("output.hwpx");
+    let (_, _, code) = run(&["audit-hwp5", "/nonexistent/file.hwp", out.to_str().unwrap()]);
+    assert_eq!(code, 1);
+}
+
+#[test]
+fn convert_hwp5_fixture() {
+    let source = fixture("hwp5_01.hwp");
+    let tmp = test_tmp();
+    let out = tmp.join("hwp5_01.hwpx");
+
+    let (stdout, _, code) =
+        run(&["convert-hwp5", source.to_str().unwrap(), "-o", out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Converted"));
+    assert!(stdout.contains("HWP 5."));
+    assert!(out.exists());
+    assert_valid_hwpx(&out);
+}
+
+#[test]
+fn convert_hwp5_rect_fixture_reports_projection_warning_count() {
+    let source = fixture("rect_simple.hwp");
+    let tmp = test_tmp();
+    let out = tmp.join("rect_simple.hwpx");
+
+    let (stdout, _, code) =
+        run(&["convert-hwp5", source.to_str().unwrap(), "-o", out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Converted"));
+    assert!(stdout.contains("1 warnings"));
+    assert_valid_hwpx(&out);
+}
+
+#[test]
+fn convert_hwp5_json_mode() {
+    let source = fixture("hwp5_02.hwp");
+    let tmp = test_tmp();
+    let out = tmp.join("hwp5_02.hwpx");
+
+    let (val, _, code) =
+        run_json(&["convert-hwp5", source.to_str().unwrap(), "-o", out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(val["status"], "ok");
+    assert!(val["version"].as_str().unwrap().starts_with("5."));
+    assert!(val["warnings"].is_number());
+    assert!(val["size_bytes"].as_u64().unwrap() > 0);
+    assert!(out.exists());
+}
+
+#[test]
+fn convert_hwp5_nonexistent_file() {
+    let tmp = test_tmp();
+    let out = tmp.join("missing.hwpx");
+
+    let (_, _, code) = run(&["convert-hwp5", "/nonexistent/file.hwp", "-o", out.to_str().unwrap()]);
+    assert_eq!(code, 2);
+}
+
+#[test]
+fn census_hwp5_json_with_companion() {
+    let source = fixture("mixed_02b_textbox_with_image_real.hwp");
+    let companion = fixture("mixed_02b_textbox_with_image_real.hwpx");
+
+    let (val, _, code) = run_json(&[
+        "census-hwp5",
+        source.to_str().unwrap(),
+        "--companion",
+        companion.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+    assert_eq!(val["status"], "ok");
+    assert_eq!(val["hwp5"]["sections"][0]["index"], 0);
+    assert!(val["companion"]["path_inventory"].as_array().unwrap().iter().any(|entry| entry
+        ["path"]
+        .as_str()
+        .unwrap()
+        .contains("/rect/drawText/subList")));
+}
+
+#[test]
+fn census_hwp5_writes_output_file() {
+    let source = fixture("mixed_02a_header_image_footer_text_real.hwp");
+    let companion = fixture("mixed_02a_header_image_footer_text_real.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("census.json");
+    let canonical_path: &str = "/\\u0005HwpSummaryInformation";
+
+    let (_, _, code) = run(&[
+        "census-hwp5",
+        source.to_str().unwrap(),
+        "--companion",
+        companion.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+    assert!(out.exists());
+
+    let content = std::fs::read_to_string(&out).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+    assert_eq!(parsed["status"], "ok");
+    assert!(parsed["companion"]["path_inventory"].as_array().unwrap().iter().any(|entry| entry
+        ["path"]
+        .as_str()
+        .unwrap()
+        .contains("/header/subList")));
+    let package_entries = parsed["hwp5"]["package_entries"].as_array().unwrap();
+    assert!(package_entries.iter().any(|entry| entry["path"].as_str() == Some(canonical_path)));
+}
+
+#[test]
+fn census_hwp5_json_uses_canonical_escaped_paths_across_transports() {
+    let source = fixture("chart_01_single_column.hwp");
+    let companion = fixture("chart_01_single_column.hwpx");
+    let tmp = test_tmp();
+    let canonical_path: &str = "/\\u0005HwpSummaryInformation";
+    let (direct_json, _, direct_code) = run_json(&[
+        "census-hwp5",
+        source.to_str().unwrap(),
+        "--companion",
+        companion.to_str().unwrap(),
+    ]);
+    assert_eq!(direct_code, 0);
+    let direct_package_entries = direct_json["hwp5"]["package_entries"].as_array().unwrap();
+    assert!(direct_package_entries
+        .iter()
+        .any(|entry| entry["path"].as_str() == Some(canonical_path)));
+
+    let file_out = tmp.join("canonical.json");
+    let (_, _, file_code) = run(&[
+        "census-hwp5",
+        source.to_str().unwrap(),
+        "--companion",
+        companion.to_str().unwrap(),
+        "-o",
+        file_out.to_str().unwrap(),
+    ]);
+    assert_eq!(file_code, 0);
+    let file_content = std::fs::read_to_string(&file_out).unwrap();
+    let file_parsed: serde_json::Value = serde_json::from_str(&file_content).unwrap();
+    let file_package_entries = file_parsed["hwp5"]["package_entries"].as_array().unwrap();
+    assert!(file_package_entries
+        .iter()
+        .any(|entry| entry["path"].as_str() == Some(canonical_path)));
+
+    let out = tmp.join("aggregated.json");
+    let (json_stdout, aggregated_json, aggregated_stderr, aggregated_code) =
+        run_json_with_stdout(&[
+            "census-hwp5",
+            source.to_str().unwrap(),
+            "--companion",
+            companion.to_str().unwrap(),
+        ]);
+    assert_eq!(aggregated_code, 0, "stderr: {aggregated_stderr}");
+    std::fs::write(&out, &json_stdout).expect("write aggregated census json");
+    assert_eq!(
+        aggregated_json["hwp5"]["package_entries"].as_array().unwrap(),
+        direct_package_entries
+    );
+
+    let content = std::fs::read_to_string(&out).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+    let package_entries = parsed["hwp5"]["package_entries"].as_array().unwrap();
+    assert!(package_entries.iter().any(|entry| entry["path"].as_str() == Some(canonical_path)));
+    assert!(package_entries.iter().all(|entry| {
+        let path = entry["path"].as_str().unwrap();
+        !path.chars().any(char::is_control)
+    }));
+}
+
+#[test]
+fn census_hwp5_dataset_regeneration_preserves_canonical_escaped_paths() {
+    let first = fixture("chart_01_single_column.hwp");
+    let first_companion = fixture("chart_01_single_column.hwpx");
+    let second = fixture("mixed_02a_header_image_footer_text_real.hwp");
+    let second_companion = fixture("mixed_02a_header_image_footer_text_real.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("fixture-census.json");
+    let canonical_path: &str = "/\\u0005HwpSummaryInformation";
+    let (first_stdout, first_json, first_stderr, first_code) = run_json_with_stdout(&[
+        "census-hwp5",
+        first.to_str().unwrap(),
+        "--companion",
+        first_companion.to_str().unwrap(),
+    ]);
+    assert_eq!(first_code, 0, "stderr: {first_stderr}");
+    let (second_stdout, second_json, second_stderr, second_code) = run_json_with_stdout(&[
+        "census-hwp5",
+        second.to_str().unwrap(),
+        "--companion",
+        second_companion.to_str().unwrap(),
+    ]);
+    assert_eq!(second_code, 0, "stderr: {second_stderr}");
+    std::fs::write(&out, format!("[{first_stdout},{second_stdout}]"))
+        .expect("write fixture census json");
+
+    let content = std::fs::read_to_string(&out).unwrap();
+    let parsed: serde_json::Value = serde_json::from_str(&content).unwrap();
+    let reports = parsed.as_array().unwrap();
+    assert_eq!(reports.len(), 2);
+    assert_eq!(reports[0], first_json);
+    assert_eq!(reports[1], second_json);
+    assert!(reports.iter().all(|report| {
+        report["hwp5"]["package_entries"].as_array().unwrap().iter().all(|entry| {
+            let path = entry["path"].as_str().unwrap();
+            !path.chars().any(char::is_control)
+        })
+    }));
+    assert!(reports.iter().any(|report| {
+        report["hwp5"]["package_entries"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|entry| entry["path"].as_str() == Some(canonical_path))
+    }));
+}
+
+#[test]
+fn census_hwp5_chart_01_reports_ole_backed_chart_evidence() {
+    let source = fixture("chart_01_single_column.hwp");
+    let companion = fixture("chart_01_single_column.hwpx");
+
+    let (val, _, code) = run_json(&[
+        "census-hwp5",
+        source.to_str().unwrap(),
+        "--companion",
+        companion.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+    assert_eq!(val["status"], "ok");
+    assert_single_chart_ole_evidence(
+        &val,
+        "Chart/chart1.xml",
+        "BinData/BIN0001.OLE",
+        "BinData/ole1.ole",
+    );
+}
+
+#[test]
+fn census_hwp5_chart_02_reports_ole_backed_chart_evidence() {
+    let source = fixture("chart_02_single_pie.hwp");
+    let companion = fixture("chart_02_single_pie.hwpx");
+
+    let (val, _, code) = run_json(&[
+        "census-hwp5",
+        source.to_str().unwrap(),
+        "--companion",
+        companion.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+    assert_eq!(val["status"], "ok");
+    assert_single_chart_ole_evidence(
+        &val,
+        "Chart/chart1.xml",
+        "BinData/BIN0001.OLE",
+        "BinData/ole1.ole",
+    );
+}
+
+#[test]
+fn census_hwp5_chart_03_reports_ole_backed_chart_evidence() {
+    let source = fixture("chart_03_line_or_scatter.hwp");
+    let companion = fixture("chart_03_line_or_scatter.hwpx");
+
+    let (val, _, code) = run_json(&[
+        "census-hwp5",
+        source.to_str().unwrap(),
+        "--companion",
+        companion.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+    assert_eq!(val["status"], "ok");
+    assert_single_chart_ole_evidence(
+        &val,
+        "Chart/chart1.xml",
+        "BinData/BIN0001.OLE",
+        "BinData/ole1.ole",
+    );
 }
 
 // ═══════════════════════════════════════════════════════════════
