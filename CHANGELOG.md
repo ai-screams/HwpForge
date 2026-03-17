@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-03-17
+
+### Changed
+
+- Adopt the `hwpforge-core` v0.2.0 public DOM contract for richer table and image semantics.
+- Align the workspace release line and internal crate pins on `0.2.0`.
+
+### Migration
+
+- `Table`, `TableRow`, `TableCell`, and `Image` are now `#[non_exhaustive]` and should be constructed via `new`/`with_*` builders instead of struct literals.
+- Table DOM now carries page-break, repeat-header, cell-spacing, border/fill, header-row, cell margin, and vertical-alignment semantics directly in `hwpforge-core`.
+- Image DOM now carries placement metadata directly in `hwpforge-core`.
+- Validation now exposes `CoreErrorCode::NonLeadingTableHeaderRow`; downstream code that inspects validation codes should handle it explicitly.
+
 ## [0.1.0] - 2026-03-06
 
 ### Added

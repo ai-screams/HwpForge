@@ -8,8 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document formats, designed with LLM-first principles. The goal is to enable AI agents (like Claude Code) to generate Korean government proposal documents using natural language + Markdown + YAML style templates.
 
-**Current Status**: Phase 0-5 + Wave 1-14 + Phase 6 CLI + Phase 7a MCP + Phase 7b Dist + Phase 7c Extended 완료
-**Stats**: ~54,100 LOC, 1,645 tests (nextest), 96 .rs files, 10 crates, 92.65% coverage
+**Current Status**: Phase 0-7c complete, Phase 10 HWP5 reader/converter active; table T1/T2-a/T2-b/T2-c landed, next slice is broader table/public-document fidelity
+**Stats**: ~62,664 LOC, 1,881 nextest runnable cases, 144 .rs files, 10 crates, 90% CI coverage gate
 
 ---
 
@@ -94,6 +94,12 @@ bindings-py, bindings-cli, bindings-mcp (all smithy crates)
 ---
 
 ## Critical Design Patterns
+
+### Working Principles
+
+- **Warning-first for unknowns**: if source truth is missing or a value is unsupported, emit a warning or validation signal first.
+- **No fake support**: do not silently normalize unknown semantics into arbitrary defaults just to keep output green.
+- **Shared-model first**: if HWP5 discovers a semantic that Core/HWPX cannot carry, extend the shared representation first and wire HWP5 after.
 
 ### 1. Color is BGR (NOT RGB!)
 
@@ -180,7 +186,7 @@ cargo test -p hwpforge-foundation   # Specific crate
 cargo llvm-cov --html               # Coverage report
 ```
 
-Target: **95%+ coverage** per crate.
+Target: **90% line coverage in CI**.
 
 ---
 
@@ -492,53 +498,53 @@ landscape 반전(gotcha #2)과 동일한 패턴. `PatternType`의 `Display`/`Fro
 
 ### v1.0 (First Cycle: Core Pipeline)
 
-| Phase         | Crate                                             | Status            | Tests | LOC    |
-| ------------- | ------------------------------------------------- | ----------------- | ----- | ------ |
-| 0             | foundation                                        | ✅ Done (90+/100) | 224   | 4,432  |
-| 1             | core                                              | ✅ Done (94/100)  | 331   | 5,554  |
-| 2             | blueprint                                         | ✅ Done (90/100)  | 200   | 4,647  |
-| 3             | smithy-hwpx decoder                               | ✅ Done (96/100)  | 110   | 3,666  |
-| 4             | smithy-hwpx encoder                               | ✅ Done (95/100)  | 226   | 10,349 |
-| 4.1           | encoder improvements                              | ✅ Done           | —     | +104   |
-| 4.2           | table 한글 호환                                   | ✅ Done           | —     | +198   |
-| 5             | smithy-md                                         | ✅ Done (91/100)  | 73    | 3,757  |
-| 4.5 Wave 1    | 이미지/머리글/바닥글/페이지번호                   | ✅ Done           | —     | —      |
-| 4.5 Wave 2    | 각주/미주/글상자                                  | ✅ Done           | —     | —      |
-| 4.5 Wave 3    | 다단/도형 (선/타원/다각형)                        | ✅ Done           | —     | —      |
-| 4.5 Wave 4    | 캡션 (Caption on 6 shapes)                        | ✅ Done           | —     | —      |
-| 4.5 Wave 5    | 수식 (Equation)                                   | ✅ Done           | —     | —      |
-| 4.5 Wave 6    | 차트 (Chart)                                      | ✅ Done           | —     | —      |
-| —             | Bug fix (colPr/polygon/chart_offset)              | ✅ Done           | —     | —      |
-| —             | Linter setup (dprint + markdownlint)              | ✅ Done           | —     | —      |
-| Style Phase F | breakNonLatinWord fix                             | ✅ Done           | —     | —      |
-| Style Phase A | HancomStyleSet + default styles                   | ✅ Done           | —     | —      |
-| 5.5           | Write API Zero-Config 편의 생성자                 | ✅ Done           | —     | —      |
-| 5.5b          | Write API 100% Coverage                           | ✅ Done           | —     | —      |
-| 5.5c          | Hyperlink encoding (fieldBegin/End)               | ✅ Done           | —     | —      |
-| 5.5d          | Chart sub-variants + positioning + TOC            | ✅ Done           | —     | —      |
-| Wave 7        | Style Infrastructure                              | ✅ Done           | —     | ~1,750 |
-| Wave 8        | Paragraph Features (numbering/tabs/outline)       | ✅ Done           | —     | ~600   |
-| Wave 9        | Page Layout Completion                            | ✅ Done           | —     | ~800   |
-| Wave 10       | Character Enhancements (emphasis/charshape)       | ✅ Done           | —     | ~400   |
-| Wave 11       | Shape Completions (Arc/Curve/ConnectLine)         | ✅ Done           | —     | ~600   |
-| Wave 12       | References & Annotations                          | ✅ Done           | —     | ~500   |
-| Wave 13       | Remaining Content (Dutmal/Compose)                | ✅ Done           | —     | ~400   |
-| Wave 14       | Final Features (TextDirection/DropCap/page_break) | ✅ Done           | —     | ~200   |
-| 6 (CLI)       | bindings-cli (AI-first CLI, 79 integration tests) | ✅ Done           | 79    | 971    |
-| 6 (Python)    | bindings-py (PyO3)                                | 📋 Ready          | —     | —      |
-| 7a (MCP)      | bindings-mcp (5 MCP tools + SKILL.md)             | ✅ Done           | —     | 1,031  |
-| 7b (Dist)     | npm packaging, CI, Registry 준비                  | ✅ Done           | —     | —      |
-| 7c (Ext)      | 3 new tools + 4 resources + 3 prompts             | ✅ Done           | 43    | +1,277 |
-| 8             | Testing + Release v1.0                            | 📋 Ready          | —     | —      |
+| Phase         | Crate                                              | Status            | Tests | LOC    |
+| ------------- | -------------------------------------------------- | ----------------- | ----- | ------ |
+| 0             | foundation                                         | ✅ Done (90+/100) | 224   | 4,432  |
+| 1             | core                                               | ✅ Done (94/100)  | 331   | 5,554  |
+| 2             | blueprint                                          | ✅ Done (90/100)  | 200   | 4,647  |
+| 3             | smithy-hwpx decoder                                | ✅ Done (96/100)  | 110   | 3,666  |
+| 4             | smithy-hwpx encoder                                | ✅ Done (95/100)  | 226   | 10,349 |
+| 4.1           | encoder improvements                               | ✅ Done           | —     | +104   |
+| 4.2           | table 한글 호환                                    | ✅ Done           | —     | +198   |
+| 5             | smithy-md                                          | ✅ Done (91/100)  | 73    | 3,757  |
+| 4.5 Wave 1    | 이미지/머리글/바닥글/페이지번호                    | ✅ Done           | —     | —      |
+| 4.5 Wave 2    | 각주/미주/글상자                                   | ✅ Done           | —     | —      |
+| 4.5 Wave 3    | 다단/도형 (선/타원/다각형)                         | ✅ Done           | —     | —      |
+| 4.5 Wave 4    | 캡션 (Caption on 6 shapes)                         | ✅ Done           | —     | —      |
+| 4.5 Wave 5    | 수식 (Equation)                                    | ✅ Done           | —     | —      |
+| 4.5 Wave 6    | 차트 (Chart)                                       | ✅ Done           | —     | —      |
+| —             | Bug fix (colPr/polygon/chart_offset)               | ✅ Done           | —     | —      |
+| —             | Linter setup (dprint + markdownlint)               | ✅ Done           | —     | —      |
+| Style Phase F | breakNonLatinWord fix                              | ✅ Done           | —     | —      |
+| Style Phase A | HancomStyleSet + default styles                    | ✅ Done           | —     | —      |
+| 5.5           | Write API Zero-Config 편의 생성자                  | ✅ Done           | —     | —      |
+| 5.5b          | Write API 100% Coverage                            | ✅ Done           | —     | —      |
+| 5.5c          | Hyperlink encoding (fieldBegin/End)                | ✅ Done           | —     | —      |
+| 5.5d          | Chart sub-variants + positioning + TOC             | ✅ Done           | —     | —      |
+| Wave 7        | Style Infrastructure                               | ✅ Done           | —     | ~1,750 |
+| Wave 8        | Paragraph Features (numbering/tabs/outline)        | ✅ Done           | —     | ~600   |
+| Wave 9        | Page Layout Completion                             | ✅ Done           | —     | ~800   |
+| Wave 10       | Character Enhancements (emphasis/charshape)        | ✅ Done           | —     | ~400   |
+| Wave 11       | Shape Completions (Arc/Curve/ConnectLine)          | ✅ Done           | —     | ~600   |
+| Wave 12       | References & Annotations                           | ✅ Done           | —     | ~500   |
+| Wave 13       | Remaining Content (Dutmal/Compose)                 | ✅ Done           | —     | ~400   |
+| Wave 14       | Final Features (TextDirection/DropCap/page_break)  | ✅ Done           | —     | ~200   |
+| 6 (CLI)       | bindings-cli (AI-first CLI, 106 integration tests) | ✅ Done           | 106   | 971    |
+| 6 (Python)    | bindings-py (PyO3)                                 | 📋 Ready          | —     | —      |
+| 7a (MCP)      | bindings-mcp (5 MCP tools + SKILL.md)              | ✅ Done           | —     | 1,031  |
+| 7b (Dist)     | npm packaging, CI, Registry 준비                   | ✅ Done           | —     | —      |
+| 7c (Ext)      | 3 new tools + 4 resources + 3 prompts              | ✅ Done           | 43    | +1,277 |
+| 8             | Testing + Release v1.0                             | 📋 Ready          | —     | —      |
 
-**Totals**: ~54,100 LOC, 1,645 tests (nextest), 96 .rs files, 10 crates
+**Totals**: ~62,664 LOC, 1,881 tests (nextest), 144 .rs files, 10 crates
 
 ### v2.0 (Second Cycle: Full Compatibility)
 
-| Phase | Crate                                      | Status   |
-| ----- | ------------------------------------------ | -------- |
-| 9     | HWPX Full (OLE/양식컨트롤/변경추적/책갈피) | 📋 Ready |
-| 10    | smithy-hwp5 (HWP5 읽기)                    | 📋 Ready |
+| Phase | Crate                                      | Status                                                                                                                                                                   |
+| ----- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 9     | HWPX Full (OLE/양식컨트롤/변경추적/책갈피) | 📋 Ready                                                                                                                                                                 |
+| 10    | smithy-hwp5 staged reader/converter        | 🚧 Active (subtree + image v1/placement v1 + chart discovery v1 + non-image GSO baseline + table T1/T2-a/T2-b/T2-c landed; next: broader table/public-document fidelity) |
 
 ---
 

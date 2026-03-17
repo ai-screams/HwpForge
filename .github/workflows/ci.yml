@@ -44,9 +44,12 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
   COVERAGE_THRESHOLD: "90"
+  # Keep the docs toolchain on the mdBook 0.4 line until both preprocessors
+  # converge on the mdBook 0.5 API surface. mdbook-mermaid 0.16.2 matches
+  # mdBook 0.4.52, while mdbook-admonish 1.20.0 still trails by one patch.
   MDBOOK_VERSION: "0.4.52"
   MDBOOK_ADMONISH_VERSION: "1.20.0"
-  MDBOOK_MERMAID_VERSION: "0.14.0"
+  MDBOOK_MERMAID_VERSION: "0.16.2"
   DPRINT_VERSION: "0.50.1"
   MARKDOWNLINT_CLI2_VERSION: "0.18.1"
 

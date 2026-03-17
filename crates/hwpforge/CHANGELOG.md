@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0](https://github.com/ai-screams/HwpForge/compare/v0.1.5...v0.2.0) - 2026-03-17
+
+### Changed
+
+- Adopt the `hwpforge-core` v0.2.0 contract for richer table and image semantics across the umbrella crate feature surface.
+- Align workspace crate versions on the `0.2.0` release line.
+
+### Migration
+
+- Downstream code should stop constructing `Table`, `TableRow`, `TableCell`, and `Image` with struct literals and move to constructors/builders.
+- Consumers that inspect validation codes should handle `CoreErrorCode::NonLeadingTableHeaderRow`.
+
 ## [0.1.5](https://github.com/ai-screams/HwpForge/compare/v0.1.4...v0.1.5) - 2026-03-10
 
 ### Fixed
@@ -33,4 +45,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(readme)* replace broken Buy Me a Coffee button with stable CDN image
 
 - use absolute URLs for README images (crates.io compatibility)
-

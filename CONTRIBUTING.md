@@ -121,6 +121,7 @@ Keep it minimal.
 
 We use [Conventional Commits](https://www.conventionalcommits.org/).
 [release-plz](https://release-plz.ieni.dev/) uses these prefixes to determine release scope.
+If you need to force a breaking release on a non-standard type, use `type!:` in the subject.
 
 ### Release-triggering prefixes
 
@@ -130,6 +131,9 @@ We use [Conventional Commits](https://www.conventionalcommits.org/).
 | `fix`      | Bug fix                       | Patch         |
 | `perf`     | Performance improvement       | Patch         |
 | `refactor` | Code restructuring (no API Δ) | Patch         |
+
+Any conventional `type!:` commit is also treated as release-triggering so explicit breaking changes
+do not get filtered out when they use a non-standard type.
 
 ### Non-release prefixes
 

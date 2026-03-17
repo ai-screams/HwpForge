@@ -1,10 +1,14 @@
 [workspace]
-# Only release on meaningful changes
-release_commits = "^feat|^fix|^perf|^refactor"
+# Only release on meaningful changes.
+# Also allow any conventional `type!:` commit so explicit breaking changes
+# don't get filtered out when they use a non-standard type like `docs!`.
+release_commits = "^(feat|fix|perf|refactor)(\\([^)]+\\))?(!)?:|^[a-z]+(\\([^)]+\\))?!:"
 # Enable semver compatibility checking
 semver_check = true
 # Changelog settings
 changelog_update = true
+# Breaking release notes still depend on conventional commits.
+# For guaranteed release PR triggering on non-standard types, prefer `type!:` in the subject.
 # Disable GitHub Release at workspace level (only umbrella crate creates releases)
 git_release_enable = false
 git_release_draft = false
@@ -47,7 +51,7 @@ commit_parsers = [
   { message = "^build", skip = true },
 ]
 
-# Umbrella crate: creates GitHub Release + v0.1.0 tag (triggers pages.yml)
+# Umbrella crate: creates the GitHub Release + v{{ version }} tag (triggers pages.yml)
 [[package]]
 name = "hwpforge"
 git_release_enable = true
