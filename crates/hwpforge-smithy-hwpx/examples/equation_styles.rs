@@ -24,7 +24,7 @@ use hwpforge_core::run::Run;
 use hwpforge_core::section::Section;
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{CharShapeIndex, Color, HwpUnit, ParaShapeIndex};
-use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore};
+use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
 use hwpforge_smithy_hwpx::HwpxEncoder;
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -66,10 +66,7 @@ fn labeled_eq(label: &str, script: &str, w: i32, h: i32, bl: u32, color: Color) 
 }
 
 fn build_store() -> HwpxStyleStore {
-    let mut store = HwpxStyleStore::new();
-    for &lang in &["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
-        store.push_font(HwpxFont::new(0, "함초롬돋움", lang));
-    }
+    let mut store = HwpxStyleStore::with_default_fonts("함초롬돋움");
     store.push_char_shape(HwpxCharShape::default());
     store.push_para_shape(HwpxParaShape::default());
     store
@@ -82,27 +79,13 @@ const DARK_RED: Color = Color::from_rgb(0xCC, 0x00, 0x00);
 const DARK_GREEN: Color = Color::from_rgb(0x00, 0x66, 0x00);
 const PURPLE: Color = Color::from_rgb(0x80, 0x00, 0x80);
 
-// ── Main ─────────────────────────────────────────────────────────
-
-#[allow(clippy::vec_init_then_push)]
-fn main() {
-    println!("=== Equation Style Showcase ===\n");
-    std::fs::create_dir_all("temp").unwrap();
-
-    let store = build_store();
-    let images = ImageStore::new();
-    let mut paras: Vec<Paragraph> = Vec::new();
-
-    // ── Title ──
-    paras.push(text_para("HwpForge 수식(Equation) API 종합 데모"));
+fn push_heading(paras: &mut Vec<Paragraph>, heading: &str) {
+    paras.push(text_para(heading));
     paras.push(empty_para());
+}
 
-    // ════════════════════════════════════════════════════════════════
-    // 1. 기본 분수 (Fractions)
-    // ════════════════════════════════════════════════════════════════
-    paras.push(text_para("1. 기본 분수 (Fractions)"));
-    paras.push(empty_para());
-
+fn append_basic_fractions(paras: &mut Vec<Paragraph>) {
+    push_heading(paras, "1. 기본 분수 (Fractions)");
     paras.extend(labeled_eq("  단순 분수:", "{c+d} over {a+b}", 2467, 2250, 66, BLACK));
     paras.extend(labeled_eq(
         "  연분수:",
@@ -120,13 +103,10 @@ fn main() {
         66,
         BLACK,
     ));
+}
 
-    // ════════════════════════════════════════════════════════════════
-    // 2. 거듭제곱과 루트 (Powers & Roots)
-    // ════════════════════════════════════════════════════════════════
-    paras.push(text_para("2. 거듭제곱과 루트 (Powers & Roots)"));
-    paras.push(empty_para());
-
+fn append_powers_and_roots(paras: &mut Vec<Paragraph>) {
+    push_heading(paras, "2. 거듭제곱과 루트 (Powers & Roots)");
     paras.extend(labeled_eq("  제곱근:", "root {2} of {x ^{2} +`1}", 4020, 1308, 90, BLACK));
     paras.extend(labeled_eq("  세제곱근:", "root {3} of {(x ^{2} +1)}", 4020, 1308, 90, BLACK));
     paras.extend(labeled_eq(
@@ -145,14 +125,10 @@ fn main() {
         88,
         BLACK,
     ));
+}
 
-    // ════════════════════════════════════════════════════════════════
-    // 3. 유명한 공식 (Famous Formulas)
-    // ════════════════════════════════════════════════════════════════
-    paras.push(text_para("3. 유명한 공식 (Famous Formulas)"));
-    paras.push(empty_para());
-
-    // Euler's identity
+fn append_famous_formulas(paras: &mut Vec<Paragraph>) {
+    push_heading(paras, "3. 유명한 공식 (Famous Formulas)");
     paras.extend(labeled_eq(
         "  오일러 항등식 (Euler's Identity):",
         "e ^{(i pi  )} +`1`=`0",
@@ -161,8 +137,6 @@ fn main() {
         88,
         DARK_BLUE,
     ));
-
-    // Quadratic formula
     paras.extend(labeled_eq(
         "  근의 공식 (Quadratic Formula):",
         "x= {-b` +-  root {2} of {b ^{2} -`4ac}} over {2a}",
@@ -171,8 +145,6 @@ fn main() {
         71,
         DARK_RED,
     ));
-
-    // Pythagorean theorem
     paras.extend(labeled_eq(
         "  피타고라스 정리:",
         "a ^{2} +`b ^{2} =c ^{2}",
@@ -181,20 +153,12 @@ fn main() {
         88,
         DARK_GREEN,
     ));
-
-    // Area of circle
     paras.extend(labeled_eq("  원의 넓이:", "A= pi  r ^{2}", 3269, 1163, 89, BLACK));
-
-    // E=mc^2
     paras.extend(labeled_eq("  질량-에너지 등가:", "E`=`mc ^{2}", 3000, 1175, 88, PURPLE));
+}
 
-    // ════════════════════════════════════════════════════════════════
-    // 4. 미적분학 (Calculus)
-    // ════════════════════════════════════════════════════════════════
-    paras.push(text_para("4. 미적분학 (Calculus)"));
-    paras.push(empty_para());
-
-    // Definite integral
+fn append_calculus(paras: &mut Vec<Paragraph>) {
+    push_heading(paras, "4. 미적분학 (Calculus)");
     paras.extend(labeled_eq(
         "  정적분 (Definite Integral):",
         "int _{a} ^{b} f(x)`dx",
@@ -203,8 +167,6 @@ fn main() {
         62,
         BLACK,
     ));
-
-    // Gaussian integral
     paras.extend(labeled_eq(
         "  가우시안 적분:",
         "int _{0} ^{INF } {e ^{(-x ^{2} )}} dx = { root {2} of { pi }} over {2}",
@@ -213,8 +175,6 @@ fn main() {
         62,
         DARK_BLUE,
     ));
-
-    // Limit
     paras.extend(labeled_eq(
         "  극한 (Limit):",
         "lim _{x rarrow  0} {sin} (x)/x`=1",
@@ -223,8 +183,6 @@ fn main() {
         51,
         BLACK,
     ));
-
-    // Derivative limit definition
     paras.extend(labeled_eq(
         "  미분의 정의:",
         "f'(x)= lim _{h rarrow  0} {f(x+h)-f(x)} over {h}",
@@ -233,17 +191,11 @@ fn main() {
         60,
         DARK_RED,
     ));
-
-    // Partial derivative
     paras.extend(labeled_eq("  편미분:", "sigma  f/ sigma  x", 2496, 975, 86, BLACK));
+}
 
-    // ════════════════════════════════════════════════════════════════
-    // 5. 급수와 곱 (Series & Products)
-    // ════════════════════════════════════════════════════════════════
-    paras.push(text_para("5. 급수와 곱 (Series & Products)"));
-    paras.push(empty_para());
-
-    // Sum of squares
+fn append_series_and_products(paras: &mut Vec<Paragraph>) {
+    push_heading(paras, "5. 급수와 곱 (Series & Products)");
     paras.extend(labeled_eq(
         "  제곱의 합:",
         "sum _{k=1} ^{n} k ^{2} =n(n+1)(2n+1)/6",
@@ -252,8 +204,6 @@ fn main() {
         63,
         BLACK,
     ));
-
-    // Product
     paras.extend(labeled_eq(
         "  곱기호 (Product):",
         "prod _{i=0} ^{n} a _{i}",
@@ -262,8 +212,6 @@ fn main() {
         63,
         BLACK,
     ));
-
-    // Taylor series for e^x
     paras.extend(labeled_eq(
         "  테일러 급수 (e^x):",
         "e ^{x} =1+ {x} over {1!} + {x ^{2}} over {2!} + {x ^{3}} over {3!} +`...",
@@ -272,15 +220,14 @@ fn main() {
         69,
         DARK_GREEN,
     ));
-
-    // Fourier series
     paras.extend(labeled_eq(
         "  푸리에 급수:",
         "f(x)=a _{0} + sum _{n=1} ^{INF } `(a _{n} cos {n pi  x} over {L} +`b _{n} sin {n pi  x} over {L} )",
-        16876, 2700, 63, DARK_BLUE,
+        16876,
+        2700,
+        63,
+        DARK_BLUE,
     ));
-
-    // Geometric series
     paras.extend(labeled_eq(
         "  기하급수 (등비급수):",
         "sum _{k=0} ^{INF } r ^{k} = {1} over {1-r} ,```|r|<1",
@@ -289,20 +236,12 @@ fn main() {
         63,
         BLACK,
     ));
+}
 
-    // ════════════════════════════════════════════════════════════════
-    // 6. 행렬 (Matrices)
-    // ════════════════════════════════════════════════════════════════
-    paras.push(text_para("6. 행렬 (Matrices)"));
-    paras.push(empty_para());
-
-    // 2x2 matrix
+fn append_matrices(paras: &mut Vec<Paragraph>) {
+    push_heading(paras, "6. 행렬 (Matrices)");
     paras.extend(labeled_eq("  2x2 행렬:", "{matrix{1&2#3&4}}", 1144, 2100, 67, BLACK));
-
-    // Determinant
     paras.extend(labeled_eq("  행렬식:", "det(A)=`ad-bc", 7119, 1000, 86, BLACK));
-
-    // 3x3 identity matrix
     paras.extend(labeled_eq(
         "  3x3 단위행렬:",
         "I= {matrix{1&0&0#0&1&0#0&0&1}}",
@@ -311,19 +250,18 @@ fn main() {
         60,
         PURPLE,
     ));
+}
 
-    // ════════════════════════════════════════════════════════════════
-    // 7. 삼각함수 (Trigonometric)
-    // ════════════════════════════════════════════════════════════════
-    paras.push(text_para("7. 삼각함수 (Trigonometric)"));
-    paras.push(empty_para());
-
+fn append_trigonometric(paras: &mut Vec<Paragraph>) {
+    push_heading(paras, "7. 삼각함수 (Trigonometric)");
     paras.extend(labeled_eq(
         "  삼각함수 덧셈정리:",
         "cos` alpha  `+`cos` beta  =2`cos {1} over {2} ( alpha  `+` beta  )`cos {1} over {2} ( alpha  `-` beta  `)",
-        18199, 2250, 66, BLACK,
+        18199,
+        2250,
+        66,
+        BLACK,
     ));
-
     paras.extend(labeled_eq(
         "  사인 법칙:",
         "{a} over {sin`A} = {b} over {sin`B} = {c} over {sin`C} =`2R",
@@ -332,7 +270,6 @@ fn main() {
         66,
         DARK_RED,
     ));
-
     paras.extend(labeled_eq(
         "  기본 항등식:",
         "sin ^{2}  theta +`cos ^{2}  theta `=`1",
@@ -341,13 +278,10 @@ fn main() {
         88,
         BLACK,
     ));
+}
 
-    // ════════════════════════════════════════════════════════════════
-    // 8. 색상별 수식 (Colored Equations)
-    // ════════════════════════════════════════════════════════════════
-    paras.push(text_para("8. 색상별 수식 (Colored Equations)"));
-    paras.push(empty_para());
-
+fn append_colored_equations(paras: &mut Vec<Paragraph>) {
+    push_heading(paras, "8. 색상별 수식 (Colored Equations)");
     let colored: &[(&str, &str, Color)] = &[
         ("검정 (기본)", "a ^{2} +`b ^{2} =`c ^{2}", BLACK),
         ("빨강", "E`=`mc ^{2}", Color::from_rgb(0xFF, 0x00, 0x00)),
@@ -362,14 +296,10 @@ fn main() {
         paras.push(eq_para(script, 5000, 1175, 88, color));
         paras.push(empty_para());
     }
+}
 
-    // ════════════════════════════════════════════════════════════════
-    // 9. 인라인 수식 (Inline Equations with Text)
-    // ════════════════════════════════════════════════════════════════
-    paras.push(text_para("9. 인라인 수식 (Inline Equations with Text)"));
-    paras.push(empty_para());
-
-    // Paragraph with text + equation + text + equation + text
+fn append_inline_equations(paras: &mut Vec<Paragraph>) {
+    push_heading(paras, "9. 인라인 수식 (Inline Equations with Text)");
     paras.push(Paragraph::with_runs(
         vec![
             Run::text("원의 넓이는 ", CS0),
@@ -405,13 +335,10 @@ fn main() {
         PS0,
     ));
     paras.push(empty_para());
+}
 
-    // ════════════════════════════════════════════════════════════════
-    // 10. 그리스 문자 & 특수기호 (Greek & Special Symbols)
-    // ════════════════════════════════════════════════════════════════
-    paras.push(text_para("10. 그리스 문자 & 특수기호"));
-    paras.push(empty_para());
-
+fn append_greek_and_symbols(paras: &mut Vec<Paragraph>) {
+    push_heading(paras, "10. 그리스 문자 & 특수기호");
     paras.extend(labeled_eq(
         "  그리스 소문자:",
         "alpha  ` beta  ` gamma  ` delta  ` varepsilon  ` zeta  ` eta  ` theta",
@@ -444,13 +371,10 @@ fn main() {
         86,
         DARK_BLUE,
     ));
+}
 
-    // ════════════════════════════════════════════════════════════════
-    // 11. 물리학 공식 (Physics)
-    // ════════════════════════════════════════════════════════════════
-    paras.push(text_para("11. 물리학 공식 (Physics Formulas)"));
-    paras.push(empty_para());
-
+fn append_physics_formulas(paras: &mut Vec<Paragraph>) {
+    push_heading(paras, "11. 물리학 공식 (Physics Formulas)");
     paras.extend(labeled_eq(
         "  뉴턴의 만유인력:",
         "F`=`G {m _{1} m _{2}} over {r ^{2}}",
@@ -483,14 +407,10 @@ fn main() {
         66,
         PURPLE,
     ));
+}
 
-    // ════════════════════════════════════════════════════════════════
-    // 12. 큰 수식 모음 (Complex Formulas)
-    // ════════════════════════════════════════════════════════════════
-    paras.push(text_para("12. 복잡한 수식 (Complex Formulas)"));
-    paras.push(empty_para());
-
-    // Stirling's approximation
+fn append_complex_formulas(paras: &mut Vec<Paragraph>) {
+    push_heading(paras, "12. 복잡한 수식 (Complex Formulas)");
     paras.extend(labeled_eq(
         "  스털링 근사:",
         "n!` APPROX  root {2} of {2 pi  n}` ({ {n} over {e} }) ^{n}",
@@ -499,8 +419,6 @@ fn main() {
         62,
         BLACK,
     ));
-
-    // Basel problem
     paras.extend(labeled_eq(
         "  바젤 문제:",
         "sum _{n=1} ^{INF } {1} over {n ^{2}} = { pi  ^{2}} over {6}",
@@ -509,8 +427,6 @@ fn main() {
         63,
         DARK_RED,
     ));
-
-    // Binomial theorem
     paras.extend(labeled_eq(
         "  이항정리:",
         "(a+b) ^{n} = sum _{k=0} ^{n} {matrix{n#k}}`a ^{n-k} b ^{k}",
@@ -519,8 +435,6 @@ fn main() {
         63,
         DARK_BLUE,
     ));
-
-    // Cauchy-Schwarz inequality
     paras.extend(labeled_eq(
         "  코시-슈바르츠 부등식:",
         "|`X CDOT `Y`| <=  ||`X`||`||`Y`||",
@@ -529,13 +443,40 @@ fn main() {
         88,
         DARK_GREEN,
     ));
+}
 
-    // ── Done ──
+fn build_paragraphs() -> Vec<Paragraph> {
+    let mut paras: Vec<Paragraph> = Vec::new();
+    paras.push(text_para("HwpForge 수식(Equation) API 종합 데모"));
+    paras.push(empty_para());
+    append_basic_fractions(&mut paras);
+    append_powers_and_roots(&mut paras);
+    append_famous_formulas(&mut paras);
+    append_calculus(&mut paras);
+    append_series_and_products(&mut paras);
+    append_matrices(&mut paras);
+    append_trigonometric(&mut paras);
+    append_colored_equations(&mut paras);
+    append_inline_equations(&mut paras);
+    append_greek_and_symbols(&mut paras);
+    append_physics_formulas(&mut paras);
+    append_complex_formulas(&mut paras);
     paras.push(empty_para());
     paras.push(text_para("--- 수식 데모 끝 ---"));
+    paras
+}
 
-    // Build document
-    let mut doc = Document::new();
+// ── Main ─────────────────────────────────────────────────────────
+
+fn main() {
+    println!("=== Equation Style Showcase ===\n");
+    std::fs::create_dir_all("temp").unwrap();
+
+    let store: HwpxStyleStore = build_store();
+    let images: ImageStore = ImageStore::new();
+    let paras: Vec<Paragraph> = build_paragraphs();
+
+    let mut doc: Document = Document::new();
     doc.add_section(Section::with_paragraphs(paras, PageSettings::a4()));
 
     let validated = doc.validate().expect("validation failed");

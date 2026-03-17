@@ -20,7 +20,7 @@ use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{Alignment, CharShapeIndex, Color, HwpUnit, ParaShapeIndex, StyleIndex};
 use hwpforge_smithy_hwpx::style_store::{
-    HwpxBorderFill, HwpxBorderLine, HwpxCharShape, HwpxFill, HwpxParaShape, HwpxStyleStore,
+    HwpxBorderFill, HwpxBorderLine, HwpxCharShape, HwpxParaShape, HwpxStyleStore,
 };
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
 
@@ -122,11 +122,7 @@ fn build_style_store() -> HwpxStyleStore {
     user_bf.right = blue_border.clone();
     user_bf.top = blue_border.clone();
     user_bf.bottom = blue_border;
-    user_bf.fill = Some(HwpxFill::WinBrush {
-        face_color: "#E8F0FE".into(),
-        hatch_color: "#FF000000".into(),
-        alpha: "0".into(),
-    });
+    user_bf.set_win_brush_fill("#E8F0FE", "#FF000000", "0", None);
     store.push_border_fill(user_bf);
 
     store
