@@ -9,6 +9,13 @@ use crate::error::ValidationError;
 use crate::run::RunContent;
 use crate::section::Section;
 
+#[derive(Clone, Copy)]
+struct RunValidationContext {
+    section_index: usize,
+    paragraph_index: usize,
+    run_index: usize,
+}
+
 /// Validates the document structure.
 ///
 /// # Rules
@@ -42,7 +49,10 @@ pub(crate) fn validate_sections(sections: &[Section]) -> Result<(), ValidationEr
             }
 
             for (ri, run) in paragraph.runs.iter().enumerate() {
-                validate_run_content(&run.content, si, pi, ri)?;
+                validate_run_content(
+                    &run.content,
+                    RunValidationContext { section_index: si, paragraph_index: pi, run_index: ri },
+                )?;
             }
         }
     }
@@ -53,209 +63,273 @@ pub(crate) fn validate_sections(sections: &[Section]) -> Result<(), ValidationEr
 /// Validates a single run's content recursively.
 fn validate_run_content(
     content: &RunContent,
-    si: usize,
-    pi: usize,
-    ri: usize,
+    ctx: RunValidationContext,
 ) -> Result<(), ValidationError> {
     match content {
-        RunContent::Table(table) => {
-            if table.rows.is_empty() {
-                return Err(ValidationError::EmptyTable {
-                    section_index: si,
-                    paragraph_index: pi,
-                    run_index: ri,
-                });
-            }
-            for (row_i, row) in table.rows.iter().enumerate() {
-                if row.cells.is_empty() {
-                    return Err(ValidationError::EmptyTableRow {
-                        section_index: si,
-                        paragraph_index: pi,
-                        run_index: ri,
-                        row_index: row_i,
-                    });
-                }
-                for (cell_i, cell) in row.cells.iter().enumerate() {
-                    if cell.col_span == 0 {
-                        return Err(ValidationError::InvalidSpan {
-                            field: "col_span",
-                            value: 0,
-                            section_index: si,
-                            paragraph_index: pi,
-                            run_index: ri,
-                            row_index: row_i,
-                            cell_index: cell_i,
-                        });
-                    }
-                    if cell.row_span == 0 {
-                        return Err(ValidationError::InvalidSpan {
-                            field: "row_span",
-                            value: 0,
-                            section_index: si,
-                            paragraph_index: pi,
-                            run_index: ri,
-                            row_index: row_i,
-                            cell_index: cell_i,
-                        });
-                    }
-                    if cell.paragraphs.is_empty() {
-                        return Err(ValidationError::EmptyTableCell {
-                            section_index: si,
-                            paragraph_index: pi,
-                            run_index: ri,
-                            row_index: row_i,
-                            cell_index: cell_i,
-                        });
-                    }
-                }
-            }
-        }
-        RunContent::Control(control) => match control.as_ref() {
-            Control::TextBox { paragraphs, .. } => {
-                if paragraphs.is_empty() {
-                    return Err(ValidationError::EmptyTextBox {
-                        section_index: si,
-                        paragraph_index: pi,
-                        run_index: ri,
-                    });
-                }
-            }
-            Control::Footnote { paragraphs, .. } => {
-                if paragraphs.is_empty() {
-                    return Err(ValidationError::EmptyFootnote {
-                        section_index: si,
-                        paragraph_index: pi,
-                        run_index: ri,
-                    });
-                }
-            }
-            Control::Endnote { paragraphs, .. } => {
-                if paragraphs.is_empty() {
-                    return Err(ValidationError::EmptyEndnote {
-                        section_index: si,
-                        paragraph_index: pi,
-                        run_index: ri,
-                    });
-                }
-            }
-            Control::Line { .. } => {
-                // No structural validation needed for lines
-                // Lines can have zero height (horizontal) or zero width (vertical)
-            }
-            Control::Ellipse { width, height, .. } => {
-                // Ellipse must have non-zero dimensions
-                if width.as_i32() == 0 || height.as_i32() == 0 {
-                    return Err(ValidationError::InvalidShapeDimension {
-                        section_index: si,
-                        paragraph_index: pi,
-                        run_index: ri,
-                        shape_type: "Ellipse",
-                    });
-                }
-            }
-            Control::Polygon { vertices, width, height, .. } => {
-                // Polygon must have at least 3 vertices
-                if vertices.len() < 3 {
-                    return Err(ValidationError::InvalidPolygon {
-                        section_index: si,
-                        paragraph_index: pi,
-                        run_index: ri,
-                        vertex_count: vertices.len(),
-                    });
-                }
-                // Polygon must have non-zero dimensions
-                if width.as_i32() == 0 || height.as_i32() == 0 {
-                    return Err(ValidationError::InvalidShapeDimension {
-                        section_index: si,
-                        paragraph_index: pi,
-                        run_index: ri,
-                        shape_type: "Polygon",
-                    });
-                }
-            }
-            Control::Chart { data, width, height, .. } => {
-                // Chart must have non-empty data
-                if data.has_no_series() {
-                    return Err(ValidationError::EmptyChartData {
-                        section_index: si,
-                        paragraph_index: pi,
-                        run_index: ri,
-                    });
-                }
-                // Category charts must have category labels
-                if let crate::chart::ChartData::Category { categories, .. } = data {
-                    if categories.is_empty() {
-                        return Err(ValidationError::EmptyCategoryLabels {
-                            section_index: si,
-                            paragraph_index: pi,
-                            run_index: ri,
-                        });
-                    }
-                }
-                // XY series must have matching x/y lengths
-                if let crate::chart::ChartData::Xy { series } = data {
-                    for s in series {
-                        if s.x_values.len() != s.y_values.len() {
-                            return Err(ValidationError::MismatchedSeriesLengths {
-                                section_index: si,
-                                paragraph_index: pi,
-                                run_index: ri,
-                                series_name: s.name.clone(),
-                                x_len: s.x_values.len(),
-                                y_len: s.y_values.len(),
-                            });
-                        }
-                    }
-                }
-                // Chart must have non-zero dimensions
-                if width.as_i32() == 0 || height.as_i32() == 0 {
-                    return Err(ValidationError::InvalidShapeDimension {
-                        section_index: si,
-                        paragraph_index: pi,
-                        run_index: ri,
-                        shape_type: "Chart",
-                    });
-                }
-            }
-            Control::Equation { script, width, height, .. } => {
-                // Equation must have non-empty script
-                if script.is_empty() {
-                    return Err(ValidationError::EmptyEquation {
-                        section_index: si,
-                        paragraph_index: pi,
-                        run_index: ri,
-                    });
-                }
-                // Equation must have non-zero dimensions
-                if width.as_i32() == 0 || height.as_i32() == 0 {
-                    return Err(ValidationError::InvalidShapeDimension {
-                        section_index: si,
-                        paragraph_index: pi,
-                        run_index: ri,
-                        shape_type: "Equation",
-                    });
-                }
-            }
-            Control::Hyperlink { .. }
-            | Control::Unknown { .. }
-            | Control::Dutmal { .. }
-            | Control::Compose { .. }
-            | Control::Arc { .. }
-            | Control::Curve { .. }
-            | Control::ConnectLine { .. }
-            | Control::Bookmark { .. }
-            | Control::CrossRef { .. }
-            | Control::Field { .. }
-            | Control::Memo { .. }
-            | Control::IndexMark { .. } => {
-                // No structural validation needed for these variants
-            }
-        },
-        RunContent::Text(_) | RunContent::Image(_) => {
-            // No structural validation needed
-        }
+        RunContent::Table(table) => validate_table_run(table, ctx)?,
+        RunContent::Control(control) => validate_control_run(control.as_ref(), ctx)?,
+        RunContent::Text(_) | RunContent::Image(_) => {}
     }
     Ok(())
+}
+
+fn validate_table_run(
+    table: &crate::table::Table,
+    ctx: RunValidationContext,
+) -> Result<(), ValidationError> {
+    if table.rows.is_empty() {
+        return Err(ValidationError::EmptyTable {
+            section_index: ctx.section_index,
+            paragraph_index: ctx.paragraph_index,
+            run_index: ctx.run_index,
+        });
+    }
+
+    let mut seen_non_header_row: bool = false;
+    for (row_i, row) in table.rows.iter().enumerate() {
+        validate_table_row(row, ctx, row_i, &mut seen_non_header_row)?;
+    }
+
+    Ok(())
+}
+
+fn validate_table_row(
+    row: &crate::table::TableRow,
+    ctx: RunValidationContext,
+    row_i: usize,
+    seen_non_header_row: &mut bool,
+) -> Result<(), ValidationError> {
+    if row.cells.is_empty() {
+        return Err(ValidationError::EmptyTableRow {
+            section_index: ctx.section_index,
+            paragraph_index: ctx.paragraph_index,
+            run_index: ctx.run_index,
+            row_index: row_i,
+        });
+    }
+
+    if row.is_header {
+        if *seen_non_header_row {
+            return Err(ValidationError::NonLeadingTableHeaderRow {
+                section_index: ctx.section_index,
+                paragraph_index: ctx.paragraph_index,
+                run_index: ctx.run_index,
+                row_index: row_i,
+            });
+        }
+    } else {
+        *seen_non_header_row = true;
+    }
+
+    for (cell_i, cell) in row.cells.iter().enumerate() {
+        validate_table_cell(cell, ctx, row_i, cell_i)?;
+    }
+
+    Ok(())
+}
+
+fn validate_table_cell(
+    cell: &crate::table::TableCell,
+    ctx: RunValidationContext,
+    row_i: usize,
+    cell_i: usize,
+) -> Result<(), ValidationError> {
+    if cell.col_span == 0 {
+        return Err(ValidationError::InvalidSpan {
+            field: "col_span",
+            value: 0,
+            section_index: ctx.section_index,
+            paragraph_index: ctx.paragraph_index,
+            run_index: ctx.run_index,
+            row_index: row_i,
+            cell_index: cell_i,
+        });
+    }
+    if cell.row_span == 0 {
+        return Err(ValidationError::InvalidSpan {
+            field: "row_span",
+            value: 0,
+            section_index: ctx.section_index,
+            paragraph_index: ctx.paragraph_index,
+            run_index: ctx.run_index,
+            row_index: row_i,
+            cell_index: cell_i,
+        });
+    }
+    if cell.paragraphs.is_empty() {
+        return Err(ValidationError::EmptyTableCell {
+            section_index: ctx.section_index,
+            paragraph_index: ctx.paragraph_index,
+            run_index: ctx.run_index,
+            row_index: row_i,
+            cell_index: cell_i,
+        });
+    }
+
+    Ok(())
+}
+
+fn validate_control_run(
+    control: &Control,
+    ctx: RunValidationContext,
+) -> Result<(), ValidationError> {
+    match control {
+        Control::TextBox { paragraphs, .. } => validate_control_paragraphs(
+            paragraphs.is_empty(),
+            ValidationError::EmptyTextBox {
+                section_index: ctx.section_index,
+                paragraph_index: ctx.paragraph_index,
+                run_index: ctx.run_index,
+            },
+        ),
+        Control::Footnote { paragraphs, .. } => validate_control_paragraphs(
+            paragraphs.is_empty(),
+            ValidationError::EmptyFootnote {
+                section_index: ctx.section_index,
+                paragraph_index: ctx.paragraph_index,
+                run_index: ctx.run_index,
+            },
+        ),
+        Control::Endnote { paragraphs, .. } => validate_control_paragraphs(
+            paragraphs.is_empty(),
+            ValidationError::EmptyEndnote {
+                section_index: ctx.section_index,
+                paragraph_index: ctx.paragraph_index,
+                run_index: ctx.run_index,
+            },
+        ),
+        Control::Line { .. } => Ok(()),
+        Control::Ellipse { width, height, .. } => {
+            validate_shape_dimensions(width.as_i32(), height.as_i32(), "Ellipse", ctx)
+        }
+        Control::Polygon { vertices, width, height, .. } => {
+            validate_polygon_control(vertices.len(), width.as_i32(), height.as_i32(), ctx)
+        }
+        Control::Chart { data, width, height, .. } => {
+            validate_chart_control(data, width.as_i32(), height.as_i32(), ctx)
+        }
+        Control::Equation { script, width, height, .. } => {
+            validate_equation_control(script, width.as_i32(), height.as_i32(), ctx)
+        }
+        Control::Hyperlink { .. }
+        | Control::Unknown { .. }
+        | Control::Dutmal { .. }
+        | Control::Compose { .. }
+        | Control::Arc { .. }
+        | Control::Curve { .. }
+        | Control::ConnectLine { .. }
+        | Control::Bookmark { .. }
+        | Control::CrossRef { .. }
+        | Control::Field { .. }
+        | Control::Memo { .. }
+        | Control::IndexMark { .. } => Ok(()),
+    }
+}
+
+fn validate_control_paragraphs(
+    is_empty: bool,
+    err: ValidationError,
+) -> Result<(), ValidationError> {
+    if is_empty {
+        Err(err)
+    } else {
+        Ok(())
+    }
+}
+
+fn validate_shape_dimensions(
+    width: i32,
+    height: i32,
+    shape_type: &'static str,
+    ctx: RunValidationContext,
+) -> Result<(), ValidationError> {
+    if width == 0 || height == 0 {
+        return Err(ValidationError::InvalidShapeDimension {
+            section_index: ctx.section_index,
+            paragraph_index: ctx.paragraph_index,
+            run_index: ctx.run_index,
+            shape_type,
+        });
+    }
+
+    Ok(())
+}
+
+fn validate_polygon_control(
+    vertex_count: usize,
+    width: i32,
+    height: i32,
+    ctx: RunValidationContext,
+) -> Result<(), ValidationError> {
+    if vertex_count < 3 {
+        return Err(ValidationError::InvalidPolygon {
+            section_index: ctx.section_index,
+            paragraph_index: ctx.paragraph_index,
+            run_index: ctx.run_index,
+            vertex_count,
+        });
+    }
+
+    validate_shape_dimensions(width, height, "Polygon", ctx)
+}
+
+fn validate_chart_control(
+    data: &crate::chart::ChartData,
+    width: i32,
+    height: i32,
+    ctx: RunValidationContext,
+) -> Result<(), ValidationError> {
+    if data.has_no_series() {
+        return Err(ValidationError::EmptyChartData {
+            section_index: ctx.section_index,
+            paragraph_index: ctx.paragraph_index,
+            run_index: ctx.run_index,
+        });
+    }
+
+    if let crate::chart::ChartData::Category { categories, .. } = data {
+        if categories.is_empty() {
+            return Err(ValidationError::EmptyCategoryLabels {
+                section_index: ctx.section_index,
+                paragraph_index: ctx.paragraph_index,
+                run_index: ctx.run_index,
+            });
+        }
+    }
+
+    if let crate::chart::ChartData::Xy { series } = data {
+        for s in series {
+            if s.x_values.len() != s.y_values.len() {
+                return Err(ValidationError::MismatchedSeriesLengths {
+                    section_index: ctx.section_index,
+                    paragraph_index: ctx.paragraph_index,
+                    run_index: ctx.run_index,
+                    series_name: s.name.clone(),
+                    x_len: s.x_values.len(),
+                    y_len: s.y_values.len(),
+                });
+            }
+        }
+    }
+
+    validate_shape_dimensions(width, height, "Chart", ctx)
+}
+
+fn validate_equation_control(
+    script: &str,
+    width: i32,
+    height: i32,
+    ctx: RunValidationContext,
+) -> Result<(), ValidationError> {
+    if script.is_empty() {
+        return Err(ValidationError::EmptyEquation {
+            section_index: ctx.section_index,
+            paragraph_index: ctx.paragraph_index,
+            run_index: ctx.run_index,
+        });
+    }
+
+    validate_shape_dimensions(width, height, "Equation", ctx)
 }
 
 #[cfg(test)]
@@ -362,7 +436,7 @@ mod tests {
 
     #[test]
     fn empty_table_row_rejected() {
-        let table = Table::new(vec![TableRow { cells: vec![], height: None }]);
+        let table = Table::new(vec![TableRow::new(vec![])]);
         let table_run = Run::table(table, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
             vec![Paragraph::with_runs(vec![table_run], ParaShapeIndex::new(0))],
@@ -385,7 +459,7 @@ mod tests {
     #[test]
     fn empty_table_cell_rejected() {
         let cell = TableCell::new(vec![], HwpUnit::from_mm(50.0).unwrap());
-        let table = Table::new(vec![TableRow { cells: vec![cell], height: None }]);
+        let table = Table::new(vec![TableRow::new(vec![cell])]);
         let table_run = Run::table(table, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
             vec![Paragraph::with_runs(vec![table_run], ParaShapeIndex::new(0))],
@@ -414,7 +488,7 @@ mod tests {
             0, // invalid
             1,
         );
-        let table = Table::new(vec![TableRow { cells: vec![cell], height: None }]);
+        let table = Table::new(vec![TableRow::new(vec![cell])]);
         let table_run = Run::table(table, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
             vec![Paragraph::with_runs(vec![table_run], ParaShapeIndex::new(0))],
@@ -432,7 +506,7 @@ mod tests {
             1,
             0, // invalid
         );
-        let table = Table::new(vec![TableRow { cells: vec![cell], height: None }]);
+        let table = Table::new(vec![TableRow::new(vec![cell])]);
         let table_run = Run::table(table, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
             vec![Paragraph::with_runs(vec![table_run], ParaShapeIndex::new(0))],
@@ -482,7 +556,7 @@ mod tests {
 
     #[test]
     fn valid_table_accepted() {
-        let table = Table::new(vec![TableRow { cells: vec![simple_cell()], height: None }]);
+        let table = Table::new(vec![TableRow::new(vec![simple_cell()])]);
         let table_run = Run::table(table, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
             vec![Paragraph::with_runs(vec![table_run], ParaShapeIndex::new(0))],
@@ -558,13 +632,39 @@ mod tests {
             100, // large but valid
             50,
         );
-        let table = Table::new(vec![TableRow { cells: vec![cell], height: None }]);
+        let table = Table::new(vec![TableRow::new(vec![cell])]);
         let table_run = Run::table(table, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
             vec![Paragraph::with_runs(vec![table_run], ParaShapeIndex::new(0))],
             PageSettings::a4(),
         )];
         assert!(validate_sections(&sections).is_ok());
+    }
+
+    #[test]
+    fn non_leading_table_header_row_rejected() {
+        let header_cell = TableCell::new(vec![simple_paragraph()], HwpUnit::from_mm(50.0).unwrap());
+        let data_cell = TableCell::new(vec![simple_paragraph()], HwpUnit::from_mm(50.0).unwrap());
+        let table = Table::new(vec![
+            TableRow::new(vec![data_cell]),
+            TableRow::new(vec![header_cell]).with_header(true),
+        ]);
+        let table_run = Run::table(table, CharShapeIndex::new(0));
+        let sections = vec![Section::with_paragraphs(
+            vec![Paragraph::with_runs(vec![table_run], ParaShapeIndex::new(0))],
+            PageSettings::a4(),
+        )];
+
+        let result = validate_sections(&sections);
+        assert_eq!(
+            result,
+            Err(ValidationError::NonLeadingTableHeaderRow {
+                section_index: 0,
+                paragraph_index: 0,
+                run_index: 0,
+                row_index: 1,
+            })
+        );
     }
 
     // === Rule 9: Endnote has paragraphs ===

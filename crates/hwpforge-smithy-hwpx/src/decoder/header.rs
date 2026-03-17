@@ -14,8 +14,9 @@ use crate::schema::header::{
     HxBorderFill, HxCharPr, HxHead, HxNumbering, HxParaPr, HxStyle, HxTabPr,
 };
 use crate::style_store::{
-    parse_alignment, parse_hex_color, HwpxBorderFill, HwpxBorderLine, HwpxCharShape, HwpxFill,
-    HwpxFont, HwpxFontRef, HwpxParaShape, HwpxStyle, HwpxStyleStore,
+    parse_alignment, parse_hex_color, HwpxBorderFill, HwpxBorderLine, HwpxCharShape,
+    HwpxDiagonalLine, HwpxFill, HwpxFont, HwpxFontRef, HwpxGradientFill, HwpxImageFill,
+    HwpxParaShape, HwpxStyle, HwpxStyleStore,
 };
 use hwpforge_core::section::BeginNum;
 
@@ -422,6 +423,7 @@ fn convert_style(s: &HxStyle) -> HwpxStyle {
         char_pr_id_ref: s.char_pr_id_ref,
         next_style_id_ref: s.next_style_id_ref,
         lang_id: s.lang_id,
+        lock_form: s.lock_form,
     }
 }
 
@@ -474,28 +476,105 @@ fn extract_line_spacing(pp: &HxParaPr) -> (i32, hwpforge_foundation::LineSpacing
 
 /// Converts an `HxBorderFill` XML type into an `HwpxBorderFill`.
 fn convert_border_fill(hx: &HxBorderFill) -> HwpxBorderFill {
-    let fill = hx.fill_brush.as_ref().and_then(|fb| {
-        fb.win_brush.as_ref().map(|wb| HwpxFill::WinBrush {
-            face_color: wb.face_color.clone(),
-            hatch_color: wb.hatch_color.clone(),
-            alpha: wb.alpha.clone(),
-        })
-    });
+    let fill_projection = hx.fill_brush.as_ref().map(convert_fill_brush).unwrap_or_default();
+    let slash = convert_diagonal_border(&hx.slash);
+    let back_slash = convert_diagonal_border(&hx.back_slash);
+    let mut border_fill = HwpxBorderFill::new(
+        hx.id,
+        hx.three_d != 0,
+        hx.shadow != 0,
+        hx.center_line.clone(),
+        convert_border_line(&hx.left_border),
+        convert_border_line(&hx.right_border),
+        convert_border_line(&hx.top_border),
+        convert_border_line(&hx.bottom_border),
+        hx.diagonal.as_ref().map(convert_border_line),
+        slash,
+        back_slash,
+        None,
+    );
+    apply_fill_projection(&mut border_fill, fill_projection);
+    border_fill
+}
 
-    HwpxBorderFill {
-        id: hx.id,
-        three_d: hx.three_d != 0,
-        shadow: hx.shadow != 0,
-        center_line: hx.center_line.clone(),
-        left: convert_border_line(&hx.left_border),
-        right: convert_border_line(&hx.right_border),
-        top: convert_border_line(&hx.top_border),
-        bottom: convert_border_line(&hx.bottom_border),
-        diagonal: hx.diagonal.as_ref().map(convert_border_line),
-        slash_type: hx.slash.border_type.clone(),
-        back_slash_type: hx.back_slash.border_type.clone(),
-        fill,
+#[derive(Default)]
+struct BorderFillBrushProjection {
+    fill: Option<HwpxFill>,
+    fill_hatch_style: Option<String>,
+    gradient_fill: Option<HwpxGradientFill>,
+    image_fill: Option<HwpxImageFill>,
+}
+
+fn apply_fill_projection(border_fill: &mut HwpxBorderFill, projection: BorderFillBrushProjection) {
+    match projection {
+        BorderFillBrushProjection {
+            fill: Some(HwpxFill::WinBrush { face_color, hatch_color, alpha }),
+            fill_hatch_style,
+            ..
+        } => border_fill.set_win_brush_fill(face_color, hatch_color, alpha, fill_hatch_style),
+        BorderFillBrushProjection { gradient_fill: Some(fill), .. } => {
+            border_fill.set_gradient_fill(fill)
+        }
+        BorderFillBrushProjection { image_fill: Some(fill), .. } => {
+            border_fill.set_image_fill(fill)
+        }
+        BorderFillBrushProjection { .. } => border_fill.clear_fill_brush(),
     }
+}
+
+fn convert_fill_brush(
+    fill_brush: &crate::schema::header::HxFillBrush,
+) -> BorderFillBrushProjection {
+    if let Some(win_brush) = &fill_brush.win_brush {
+        return BorderFillBrushProjection {
+            fill: Some(HwpxFill::WinBrush {
+                face_color: win_brush.face_color.clone(),
+                hatch_color: win_brush.hatch_color.clone(),
+                alpha: win_brush.alpha.clone(),
+            }),
+            fill_hatch_style: win_brush.hatch_style.clone(),
+            ..BorderFillBrushProjection::default()
+        };
+    }
+    if let Some(gradation) = &fill_brush.gradation {
+        return BorderFillBrushProjection {
+            gradient_fill: Some(HwpxGradientFill {
+                gradient_type: gradation
+                    .gradation_type
+                    .parse()
+                    .unwrap_or(hwpforge_foundation::GradientType::Linear),
+                angle: gradation.angle,
+                center_x: gradation.center_x,
+                center_y: gradation.center_y,
+                step: gradation.step,
+                step_center: gradation.step_center,
+                alpha: gradation.alpha,
+                colors: gradation
+                    .colors
+                    .iter()
+                    .map(|color| parse_hex_color(&color.value))
+                    .collect(),
+            }),
+            ..BorderFillBrushProjection::default()
+        };
+    }
+    if let Some(img_brush) = &fill_brush.img_brush {
+        let Some(img) = &img_brush.img else {
+            return BorderFillBrushProjection::default();
+        };
+        return BorderFillBrushProjection {
+            image_fill: Some(HwpxImageFill {
+                mode: img_brush.mode.clone(),
+                binary_item_id_ref: img.binary_item_id_ref.clone(),
+                bright: img.bright,
+                contrast: img.contrast,
+                effect: img.effect.clone(),
+                alpha: img.alpha,
+            }),
+            ..BorderFillBrushProjection::default()
+        };
+    }
+    BorderFillBrushProjection::default()
 }
 
 /// Converts an `HxBorderLine` XML type into an `HwpxBorderLine`.
@@ -505,6 +584,18 @@ fn convert_border_line(hx: &crate::schema::header::HxBorderLine) -> HwpxBorderLi
         width: hx.width.clone(),
         color: hx.color.clone(),
     }
+}
+
+fn convert_diagonal_border(hx: &crate::schema::header::HxDiagonalBorder) -> HwpxDiagonalLine {
+    HwpxDiagonalLine {
+        border_type: hx.border_type.clone(),
+        crooked: parse_hwpx_boolish(&hx.crooked),
+        is_counter: parse_hwpx_boolish(&hx.is_counter),
+    }
+}
+
+fn parse_hwpx_boolish(value: &str) -> bool {
+    matches!(value.trim(), "1") || value.trim().eq_ignore_ascii_case("true")
 }
 
 // (parse_optional_hex_color is defined above with the HWPX parsing helpers)
@@ -549,6 +640,138 @@ mod tests {
         let f1 = store.font(FontIndex::new(1)).unwrap();
         assert_eq!(f1.face_name, "Times New Roman");
         assert_eq!(f1.lang, "LATIN");
+    }
+
+    #[test]
+    fn parse_header_border_fill_preserves_hatch_style() {
+        let xml = r##"<head version="1.4" secCnt="1">
+            <refList>
+                <borderFills itemCnt="1">
+                    <borderFill id="4" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0">
+                        <slash type="NONE" Crooked="0" isCounter="0"/>
+                        <backSlash type="NONE" Crooked="0" isCounter="0"/>
+                        <leftBorder type="NONE" width="0.1 mm" color="#000000"/>
+                        <rightBorder type="NONE" width="0.1 mm" color="#000000"/>
+                        <topBorder type="NONE" width="0.1 mm" color="#000000"/>
+                        <bottomBorder type="NONE" width="0.1 mm" color="#000000"/>
+                        <diagonal type="NONE" width="0.1 mm" color="#000000"/>
+                        <fillBrush>
+                            <winBrush faceColor="#FFD700" hatchColor="#000000" hatchStyle="HORIZONTAL" alpha="0"/>
+                        </fillBrush>
+                    </borderFill>
+                </borderFills>
+            </refList>
+        </head>"##;
+
+        let store = parse_header(xml).unwrap().style_store;
+        let border_fill = store.border_fill(4).unwrap();
+        assert!(matches!(border_fill.fill, Some(HwpxFill::WinBrush { .. })));
+        assert_eq!(border_fill.fill_hatch_style.as_deref(), Some("HORIZONTAL"));
+    }
+
+    #[test]
+    fn parse_header_border_fill_preserves_gradient_fill() {
+        let xml = r##"<head version="1.4" secCnt="1">
+            <refList>
+                <borderFills itemCnt="1">
+                    <borderFill id="4" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0">
+                        <slash type="NONE" Crooked="0" isCounter="0"/>
+                        <backSlash type="NONE" Crooked="0" isCounter="0"/>
+                        <leftBorder type="NONE" width="0.1 mm" color="#000000"/>
+                        <rightBorder type="NONE" width="0.1 mm" color="#000000"/>
+                        <topBorder type="NONE" width="0.1 mm" color="#000000"/>
+                        <bottomBorder type="NONE" width="0.1 mm" color="#000000"/>
+                        <diagonal type="NONE" width="0.1 mm" color="#000000"/>
+                        <fillBrush>
+                            <gradation type="LINEAR" angle="90" centerX="0" centerY="0" step="255" colorNum="2" stepCenter="50" alpha="0">
+                                <color value="#FF0000"/>
+                                <color value="#00FF00"/>
+                            </gradation>
+                        </fillBrush>
+                    </borderFill>
+                </borderFills>
+            </refList>
+        </head>"##;
+
+        let store = parse_header(xml).unwrap().style_store;
+        let border_fill = store.border_fill(4).unwrap();
+        assert!(matches!(
+            border_fill.gradient_fill,
+            Some(ref fill)
+                if fill.gradient_type == hwpforge_foundation::GradientType::Linear
+                    && fill.angle == 90
+                    && fill.step == 255
+                    && fill.step_center == 50
+                    && fill.alpha == 0
+                    && fill.colors == vec![Color::from_rgb(255, 0, 0), Color::from_rgb(0, 255, 0)]
+        ));
+        assert!(border_fill.fill.is_none());
+    }
+
+    #[test]
+    fn parse_header_border_fill_preserves_image_fill() {
+        let xml = r##"<head version="1.4" secCnt="1">
+            <refList>
+                <borderFills itemCnt="1">
+                    <borderFill id="4" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0">
+                        <slash type="NONE" Crooked="0" isCounter="0"/>
+                        <backSlash type="NONE" Crooked="0" isCounter="0"/>
+                        <leftBorder type="NONE" width="0.1 mm" color="#000000"/>
+                        <rightBorder type="NONE" width="0.1 mm" color="#000000"/>
+                        <topBorder type="NONE" width="0.1 mm" color="#000000"/>
+                        <bottomBorder type="NONE" width="0.1 mm" color="#000000"/>
+                        <diagonal type="NONE" width="0.1 mm" color="#000000"/>
+                        <fillBrush>
+                            <imgBrush mode="TOTAL">
+                                <img binaryItemIDRef="BIN0001" bright="0" contrast="0" effect="REAL_PIC" alpha="0"/>
+                            </imgBrush>
+                        </fillBrush>
+                    </borderFill>
+                </borderFills>
+            </refList>
+        </head>"##;
+
+        let store = parse_header(xml).unwrap().style_store;
+        let border_fill = store.border_fill(4).unwrap();
+        assert!(matches!(
+            border_fill.image_fill,
+            Some(ref fill)
+                if fill.mode == "TOTAL"
+                    && fill.binary_item_id_ref == "BIN0001"
+                    && fill.bright == 0
+                    && fill.contrast == 0
+                    && fill.effect == "REAL_PIC"
+                    && fill.alpha == 0
+        ));
+        assert!(border_fill.fill.is_none());
+    }
+
+    #[test]
+    fn parse_header_border_fill_preserves_diagonal_flags() {
+        let xml = r##"<head version="1.4" secCnt="1">
+            <refList>
+                <borderFills itemCnt="1">
+                    <borderFill id="4" threeD="0" shadow="0" centerLine="NONE" breakCellSeparateLine="0">
+                        <slash type="CENTER_BELOW" Crooked="1" isCounter="0"/>
+                        <backSlash type="ALL" Crooked="0" isCounter="1"/>
+                        <leftBorder type="NONE" width="0.1 mm" color="#000000"/>
+                        <rightBorder type="NONE" width="0.1 mm" color="#000000"/>
+                        <topBorder type="NONE" width="0.1 mm" color="#000000"/>
+                        <bottomBorder type="NONE" width="0.1 mm" color="#000000"/>
+                        <diagonal type="NONE" width="0.1 mm" color="#000000"/>
+                    </borderFill>
+                </borderFills>
+            </refList>
+        </head>"##;
+
+        let store = parse_header(xml).unwrap().style_store;
+        let border_fill = store.border_fill(4).unwrap();
+        assert_eq!(border_fill.slash.border_type, "CENTER_BELOW");
+        assert!(border_fill.slash.crooked);
+        assert!(!border_fill.slash.is_counter);
+        assert_eq!(border_fill.back_slash.border_type, "ALL");
+        assert!(!border_fill.back_slash.crooked);
+        assert!(border_fill.back_slash.is_counter);
     }
 
     // ── Character properties ─────────────────────────────────────

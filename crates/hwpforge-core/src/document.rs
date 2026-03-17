@@ -611,7 +611,7 @@ mod tests {
             )],
             HwpUnit::from_mm(50.0).unwrap(),
         );
-        let table = Table::new(vec![TableRow { cells: vec![cell], height: None }]);
+        let table = Table::new(vec![TableRow::new(vec![cell])]);
 
         let link = Control::Hyperlink {
             text: "click".to_string(),

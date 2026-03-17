@@ -9,12 +9,14 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::color::parse_hex_color_or_black;
 use hwpforge_blueprint::registry::StyleRegistry;
 use hwpforge_core::{NumberingDef, StyleLookup, TabDef};
 use hwpforge_foundation::{
     Alignment, BorderFillIndex, BreakType, CharShapeIndex, Color, EmbossType, EmphasisType,
-    EngraveType, FontIndex, HeadingType, HwpUnit, LineSpacingType, OutlineType, ParaShapeIndex,
-    ShadowType, StrikeoutShape, StyleIndex, UnderlineType, VerticalPosition, WordBreakType,
+    EngraveType, FontIndex, GradientType, HeadingType, HwpUnit, LineSpacingType, OutlineType,
+    ParaShapeIndex, ShadowType, StrikeoutShape, StyleIndex, UnderlineType, VerticalPosition,
+    WordBreakType,
 };
 
 use crate::default_styles::HancomStyleSet;
@@ -196,6 +198,36 @@ pub struct HwpxStyle {
     pub next_style_id_ref: u32,
     /// Language ID (from `langID`).
     pub lang_id: u32,
+    /// Form lock flag (from `lockForm`).
+    pub lock_form: u32,
+}
+
+impl HwpxStyle {
+    /// Creates a style definition with explicit HWPX ids and references.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        id: u32,
+        style_type: impl Into<String>,
+        name: impl Into<String>,
+        eng_name: impl Into<String>,
+        para_pr_id_ref: u32,
+        char_pr_id_ref: u32,
+        next_style_id_ref: u32,
+        lang_id: u32,
+        lock_form: u32,
+    ) -> Self {
+        Self {
+            id,
+            style_type: style_type.into(),
+            name: name.into(),
+            eng_name: eng_name.into(),
+            para_pr_id_ref,
+            char_pr_id_ref,
+            next_style_id_ref,
+            lang_id,
+            lock_form,
+        }
+    }
 }
 
 // ── Paragraph Shape ──────────────────────────────────────────────
@@ -306,8 +338,42 @@ pub struct HwpxBorderFill {
     pub slash_type: String,
     /// Back-slash diagonal type string.
     pub back_slash_type: String,
-    /// Fill brush configuration (None = no fill / transparent).
+    /// Slash diagonal metadata.
+    #[serde(default)]
+    pub slash: HwpxDiagonalLine,
+    /// Back-slash diagonal metadata.
+    #[serde(default)]
+    pub back_slash: HwpxDiagonalLine,
+    /// Legacy `winBrush` fill configuration.
+    ///
+    /// Gradient and image border fills use `gradient_fill` / `image_fill`.
     pub fill: Option<HwpxFill>,
+    /// Hatch pattern kind when `fill` uses `<hc:winBrush>`.
+    #[serde(default)]
+    pub fill_hatch_style: Option<String>,
+    /// Gradient fill payload when `<hc:gradation>` is present.
+    #[serde(default)]
+    pub gradient_fill: Option<HwpxGradientFill>,
+    /// Image fill payload when `<hc:imgBrush>` is present.
+    #[serde(default)]
+    pub image_fill: Option<HwpxImageFill>,
+}
+
+/// Resolved diagonal border metadata from `<hh:slash>` / `<hh:backSlash>`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HwpxDiagonalLine {
+    /// Border type string (for example, `"NONE"` or `"CENTER"`).
+    pub border_type: String,
+    /// Crooked diagonal flag.
+    pub crooked: bool,
+    /// Counter direction flag.
+    pub is_counter: bool,
+}
+
+impl Default for HwpxDiagonalLine {
+    fn default() -> Self {
+        Self { border_type: "NONE".into(), crooked: false, is_counter: false }
+    }
 }
 
 /// A single border line configuration.
@@ -341,7 +407,199 @@ pub enum HwpxFill {
     },
 }
 
+pub(crate) enum ActiveBorderFillBrush<'a> {
+    None,
+    WinBrush {
+        face_color: &'a str,
+        hatch_color: &'a str,
+        hatch_style: Option<&'a str>,
+        alpha: &'a str,
+    },
+    Gradient(&'a HwpxGradientFill),
+    Image(&'a HwpxImageFill),
+}
+
+/// Gradient fill payload for table border fills.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct HwpxGradientFill {
+    /// Gradient type.
+    pub gradient_type: GradientType,
+    /// Gradient angle in degrees.
+    pub angle: i32,
+    /// Gradient center X percentage.
+    pub center_x: i32,
+    /// Gradient center Y percentage.
+    pub center_y: i32,
+    /// Gradient step count.
+    pub step: i32,
+    /// Gradient step center percentage.
+    pub step_center: i32,
+    /// Alpha transparency.
+    pub alpha: i32,
+    /// Ordered gradient color stops.
+    pub colors: Vec<Color>,
+}
+
+/// Image fill payload for table border fills.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HwpxImageFill {
+    /// HWPX image fill mode string (for example, `TOTAL`).
+    pub mode: String,
+    /// `binaryItemIDRef` value without extension.
+    pub binary_item_id_ref: String,
+    /// Brightness adjustment.
+    pub bright: i32,
+    /// Contrast adjustment.
+    pub contrast: i32,
+    /// HWPX effect string (for example, `REAL_PIC`).
+    pub effect: String,
+    /// Alpha transparency.
+    pub alpha: i32,
+}
+
 impl HwpxBorderFill {
+    /// Creates a fully-specified resolved border fill.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        id: u32,
+        three_d: bool,
+        shadow: bool,
+        center_line: impl Into<String>,
+        left: HwpxBorderLine,
+        right: HwpxBorderLine,
+        top: HwpxBorderLine,
+        bottom: HwpxBorderLine,
+        diagonal: Option<HwpxBorderLine>,
+        slash: HwpxDiagonalLine,
+        back_slash: HwpxDiagonalLine,
+        fill: Option<HwpxFill>,
+    ) -> Self {
+        Self {
+            id,
+            three_d,
+            shadow,
+            center_line: center_line.into(),
+            left,
+            right,
+            top,
+            bottom,
+            diagonal,
+            slash_type: slash.border_type.clone(),
+            back_slash_type: back_slash.border_type.clone(),
+            slash,
+            back_slash,
+            fill,
+            fill_hatch_style: None,
+            gradient_fill: None,
+            image_fill: None,
+        }
+    }
+
+    /// Updates slash diagonal metadata and keeps the legacy type field in sync.
+    pub fn set_slash(&mut self, slash: HwpxDiagonalLine) {
+        self.slash_type = slash.border_type.clone();
+        self.slash = slash;
+    }
+
+    /// Updates back-slash diagonal metadata and keeps the legacy type field in sync.
+    pub fn set_back_slash(&mut self, back_slash: HwpxDiagonalLine) {
+        self.back_slash_type = back_slash.border_type.clone();
+        self.back_slash = back_slash;
+    }
+
+    /// Clears every mutually exclusive border-fill brush payload.
+    pub fn clear_fill_brush(&mut self) {
+        self.fill = None;
+        self.fill_hatch_style = None;
+        self.gradient_fill = None;
+        self.image_fill = None;
+    }
+
+    /// Sets a legacy `winBrush` fill and clears gradient/image payloads.
+    pub fn set_win_brush_fill(
+        &mut self,
+        face_color: impl Into<String>,
+        hatch_color: impl Into<String>,
+        alpha: impl Into<String>,
+        hatch_style: Option<String>,
+    ) {
+        self.clear_fill_brush();
+        self.fill = Some(HwpxFill::WinBrush {
+            face_color: face_color.into(),
+            hatch_color: hatch_color.into(),
+            alpha: alpha.into(),
+        });
+        self.fill_hatch_style = hatch_style;
+    }
+
+    /// Sets a gradient fill and clears competing border-fill brush payloads.
+    pub fn set_gradient_fill(&mut self, fill: HwpxGradientFill) {
+        self.clear_fill_brush();
+        self.gradient_fill = Some(fill);
+    }
+
+    /// Sets an image fill and clears competing border-fill brush payloads.
+    pub fn set_image_fill(&mut self, fill: HwpxImageFill) {
+        self.clear_fill_brush();
+        self.image_fill = Some(fill);
+    }
+
+    /// Returns the slash diagonal type after reconciling legacy and rich fields.
+    pub fn effective_slash_type(&self) -> &str {
+        self.effective_diagonal_type(&self.slash, &self.slash_type)
+    }
+
+    /// Returns the back-slash diagonal type after reconciling legacy and rich fields.
+    pub fn effective_back_slash_type(&self) -> &str {
+        self.effective_diagonal_type(&self.back_slash, &self.back_slash_type)
+    }
+
+    pub(crate) fn active_fill_brush(&self) -> ActiveBorderFillBrush<'_> {
+        debug_assert!(
+            self.fill_source_count() <= 1,
+            "HwpxBorderFill has conflicting fill payloads: fill={}, gradient_fill={}, image_fill={}",
+            self.fill.is_some(),
+            self.gradient_fill.is_some(),
+            self.image_fill.is_some()
+        );
+
+        if let Some(fill) = &self.image_fill {
+            return ActiveBorderFillBrush::Image(fill);
+        }
+        if let Some(fill) = &self.gradient_fill {
+            return ActiveBorderFillBrush::Gradient(fill);
+        }
+        match self.fill.as_ref() {
+            Some(HwpxFill::WinBrush { face_color, hatch_color, alpha }) => {
+                ActiveBorderFillBrush::WinBrush {
+                    face_color,
+                    hatch_color,
+                    hatch_style: self.fill_hatch_style.as_deref(),
+                    alpha,
+                }
+            }
+            None => ActiveBorderFillBrush::None,
+        }
+    }
+
+    pub(crate) fn fill_source_count(&self) -> usize {
+        usize::from(self.fill.is_some())
+            + usize::from(self.gradient_fill.is_some())
+            + usize::from(self.image_fill.is_some())
+    }
+
+    fn effective_diagonal_type<'a>(
+        &self,
+        diagonal: &'a HwpxDiagonalLine,
+        legacy_border_type: &'a str,
+    ) -> &'a str {
+        if diagonal.border_type != "NONE" {
+            diagonal.border_type.as_str()
+        } else {
+            legacy_border_type
+        }
+    }
+
     /// Default border fill id=1: empty borders, no fill (used for page borders).
     ///
     /// Matches the first entry of the legacy `BORDER_FILLS_XML` constant.
@@ -362,7 +620,12 @@ impl HwpxBorderFill {
             }),
             slash_type: "NONE".into(),
             back_slash_type: "NONE".into(),
+            slash: HwpxDiagonalLine::default(),
+            back_slash: HwpxDiagonalLine::default(),
             fill: None,
+            fill_hatch_style: None,
+            gradient_fill: None,
+            image_fill: None,
         }
     }
 
@@ -387,11 +650,16 @@ impl HwpxBorderFill {
             }),
             slash_type: "NONE".into(),
             back_slash_type: "NONE".into(),
+            slash: HwpxDiagonalLine::default(),
+            back_slash: HwpxDiagonalLine::default(),
             fill: Some(HwpxFill::WinBrush {
                 face_color: "none".into(),
                 hatch_color: "#FF000000".into(),
                 alpha: "0".into(),
             }),
+            fill_hatch_style: None,
+            gradient_fill: None,
+            image_fill: None,
         }
     }
 
@@ -419,7 +687,12 @@ impl HwpxBorderFill {
             }),
             slash_type: "NONE".into(),
             back_slash_type: "NONE".into(),
+            slash: HwpxDiagonalLine::default(),
+            back_slash: HwpxDiagonalLine::default(),
             fill: None,
+            fill_hatch_style: None,
+            gradient_fill: None,
+            image_fill: None,
         }
     }
 }
@@ -745,8 +1018,10 @@ impl HwpxStyleStore {
     pub fn with_default_fonts(font_name: &str) -> Self {
         let mut store: Self = Self::new();
         let langs: [&str; 7] = ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"];
-        for (idx, &lang) in langs.iter().enumerate() {
-            store.push_font(HwpxFont::new(idx as u32, font_name, lang));
+        for &lang in &langs {
+            // `fontRef` indices are group-local in HWPX, so a single default font
+            // per language group must always use local id 0.
+            store.push_font(HwpxFont::new(0, font_name, lang));
         }
         store
     }
@@ -926,6 +1201,7 @@ impl HwpxStyleStore {
                 char_pr_id_ref: entry.char_pr_group as u32,
                 next_style_id_ref,
                 lang_id: 1042, // Korean
+                lock_form: 0,
             });
         }
 
@@ -943,6 +1219,7 @@ impl HwpxStyleStore {
                 char_pr_id_ref: (entry.char_shape_id.get() + char_shape_offset) as u32,
                 next_style_id_ref: 0,
                 lang_id: 1042, // Korean
+                lock_form: 0,
             });
         }
 
@@ -1144,14 +1421,9 @@ impl HwpxStyleStore {
 
 // ── Thread safety assertions ─────────────────────────────────────
 
-#[allow(dead_code)]
 const _: () = {
-    fn assert_send<T: Send>() {}
-    fn assert_sync<T: Sync>() {}
-    fn assertions() {
-        assert_send::<HwpxStyleStore>();
-        assert_sync::<HwpxStyleStore>();
-    }
+    fn assert_send_sync<T: Send + Sync>() {}
+    let _ = assert_send_sync::<HwpxStyleStore>;
 };
 
 // ── StyleLookup implementation ───────────────────────────────────
@@ -1273,21 +1545,7 @@ impl StyleLookup for HwpxStyleStore {
 /// non-standard color values, and rejecting them would make the decoder
 /// unusable for slightly malformed documents.
 pub(crate) fn parse_hex_color(s: &str) -> Color {
-    let s = s.trim();
-    if s.is_empty() || s.eq_ignore_ascii_case("none") {
-        return Color::BLACK;
-    }
-    let hex = s.strip_prefix('#').unwrap_or(s);
-    if hex.len() != 6 {
-        return Color::BLACK;
-    }
-    let Ok(rgb) = u32::from_str_radix(hex, 16) else {
-        return Color::BLACK;
-    };
-    let r = ((rgb >> 16) & 0xFF) as u8;
-    let g = ((rgb >> 8) & 0xFF) as u8;
-    let b = (rgb & 0xFF) as u8;
-    Color::from_rgb(r, g, b)
+    parse_hex_color_or_black(s)
 }
 
 /// Parses a HWPX alignment string into an [`Alignment`].
@@ -1596,6 +1854,7 @@ mod tests {
             char_pr_id_ref: 0,
             next_style_id_ref: 0,
             lang_id: 1042,
+            lock_form: 0,
         };
         store.push_style(style);
         assert_eq!(store.style_count(), 1);
@@ -1631,6 +1890,7 @@ mod tests {
             char_pr_id_ref: 0,
             next_style_id_ref: 0,
             lang_id: 1042,
+            lock_form: 0,
         });
         store.push_style(HwpxStyle {
             id: 1,
@@ -1641,6 +1901,7 @@ mod tests {
             char_pr_id_ref: 1,
             next_style_id_ref: 1,
             lang_id: 1042,
+            lock_form: 0,
         });
         let names: Vec<&str> = store.iter_styles().map(|s| s.name.as_str()).collect();
         assert_eq!(names, vec!["바탕글", "본문"]);
@@ -1821,6 +2082,13 @@ mod tests {
     }
 
     #[test]
+    fn with_default_fonts_use_group_local_zero_ids() {
+        let store = HwpxStyleStore::with_default_fonts("함초롬바탕");
+        let ids: Vec<u32> = store.iter_fonts().map(|font| font.id).collect();
+        assert_eq!(ids, vec![0, 0, 0, 0, 0, 0, 0]);
+    }
+
+    #[test]
     fn from_registry_with_classic_style_set() {
         let registry: StyleRegistry = serde_json::from_str(
             r#"{"fonts":[],"char_shapes":[],"para_shapes":[],"style_entries":{}}"#,
@@ -1890,6 +2158,7 @@ mod tests {
                 assert_eq!(alpha, "0");
             }
         }
+        assert_eq!(bf.fill_hatch_style, None);
     }
 
     #[test]
@@ -1926,7 +2195,12 @@ mod tests {
             diagonal: Some(HwpxBorderLine::default()),
             slash_type: "NONE".into(),
             back_slash_type: "NONE".into(),
+            slash: HwpxDiagonalLine::default(),
+            back_slash: HwpxDiagonalLine::default(),
             fill: None,
+            fill_hatch_style: None,
+            gradient_fill: None,
+            image_fill: None,
         };
         let returned_id = store.push_border_fill(bf);
         assert_eq!(returned_id, 4);
@@ -1934,6 +2208,75 @@ mod tests {
         let fetched = store.border_fill(4).unwrap();
         assert_eq!(fetched.left.line_type, "DASH");
         assert_eq!(fetched.left.width, "0.2 mm");
+    }
+
+    #[test]
+    fn set_slash_and_back_slash_keep_legacy_fields_in_sync() {
+        let mut bf = HwpxBorderFill::default_page_border();
+        bf.set_slash(HwpxDiagonalLine {
+            border_type: "CENTER".into(),
+            crooked: true,
+            is_counter: false,
+        });
+        bf.set_back_slash(HwpxDiagonalLine {
+            border_type: "ALL".into(),
+            crooked: false,
+            is_counter: true,
+        });
+
+        assert_eq!(bf.slash_type, "CENTER");
+        assert_eq!(bf.back_slash_type, "ALL");
+        assert_eq!(bf.effective_slash_type(), "CENTER");
+        assert_eq!(bf.effective_back_slash_type(), "ALL");
+    }
+
+    #[test]
+    fn set_gradient_fill_clears_legacy_fill_fields() {
+        let mut bf = HwpxBorderFill::default_char_background();
+        bf.set_gradient_fill(HwpxGradientFill {
+            gradient_type: GradientType::Linear,
+            angle: 90,
+            center_x: 0,
+            center_y: 0,
+            step: 255,
+            step_center: 50,
+            alpha: 0,
+            colors: vec![Color::from_rgb(255, 0, 0), Color::from_rgb(0, 255, 0)],
+        });
+
+        assert!(bf.fill.is_none());
+        assert!(bf.fill_hatch_style.is_none());
+        assert!(bf.gradient_fill.is_some());
+        assert!(bf.image_fill.is_none());
+        assert_eq!(bf.fill_source_count(), 1);
+    }
+
+    #[test]
+    fn set_image_fill_clears_gradient_fill() {
+        let mut bf = HwpxBorderFill::default_page_border();
+        bf.set_gradient_fill(HwpxGradientFill {
+            gradient_type: GradientType::Linear,
+            angle: 90,
+            center_x: 0,
+            center_y: 0,
+            step: 255,
+            step_center: 50,
+            alpha: 0,
+            colors: vec![Color::from_rgb(255, 0, 0), Color::from_rgb(0, 255, 0)],
+        });
+        bf.set_image_fill(HwpxImageFill {
+            mode: "TOTAL".into(),
+            binary_item_id_ref: "BIN0001".into(),
+            bright: 0,
+            contrast: 0,
+            effect: "REAL_PIC".into(),
+            alpha: 0,
+        });
+
+        assert!(bf.fill.is_none());
+        assert!(bf.gradient_fill.is_none());
+        assert!(bf.image_fill.is_some());
+        assert_eq!(bf.fill_source_count(), 1);
     }
 
     #[test]
@@ -2181,6 +2524,7 @@ mod tests {
             char_pr_id_ref: 0,
             next_style_id_ref: 0,
             lang_id: 1042,
+            lock_form: 0,
         });
         store
     }

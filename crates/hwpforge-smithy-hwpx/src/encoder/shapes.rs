@@ -59,6 +59,43 @@ pub(crate) struct ShapeCommon {
     pub shadow: HxShadow,
 }
 
+fn shape_is_floating(horz_offset: i32, vert_offset: i32) -> bool {
+    horz_offset != 0 || vert_offset != 0
+}
+
+fn shape_numbering_type(horz_offset: i32, vert_offset: i32) -> String {
+    if shape_is_floating(horz_offset, vert_offset) {
+        "PICTURE".to_string()
+    } else {
+        "NONE".to_string()
+    }
+}
+
+fn shape_text_wrap(horz_offset: i32, vert_offset: i32) -> String {
+    if shape_is_floating(horz_offset, vert_offset) {
+        "IN_FRONT_OF_TEXT".to_string()
+    } else {
+        "TOP_AND_BOTTOM".to_string()
+    }
+}
+
+fn shape_position(horz_offset: i32, vert_offset: i32) -> HxTablePos {
+    let floating = shape_is_floating(horz_offset, vert_offset);
+    HxTablePos {
+        treat_as_char: if floating { 0 } else { 1 },
+        affect_l_spacing: 0,
+        flow_with_text: 0,
+        allow_overlap: if floating { 1 } else { 0 },
+        hold_anchor_and_so: 0,
+        vert_rel_to: if floating { "PAPER".to_string() } else { "PARA".to_string() },
+        horz_rel_to: if floating { "PAPER".to_string() } else { "PARA".to_string() },
+        vert_align: "TOP".to_string(),
+        horz_align: "LEFT".to_string(),
+        vert_offset,
+        horz_offset,
+    }
+}
+
 /// Builds the shape-common block for a drawing object of the given pixel size.
 ///
 /// Defaults match 한글's output for a newly created shape:
@@ -279,8 +316,8 @@ pub(crate) fn encode_textbox_to_rect(
     Ok(HxRect {
         id: generate_instid(),
         z_order: 0,
-        numbering_type: "NONE".to_string(),
-        text_wrap: "TOP_AND_BOTTOM".to_string(),
+        numbering_type: shape_numbering_type(horz_offset, vert_offset),
+        text_wrap: shape_text_wrap(horz_offset, vert_offset),
         text_flow: "BOTH_SIDES".to_string(),
         lock: 0,
         dropcap_style: dropcap_str(style),
@@ -307,19 +344,7 @@ pub(crate) fn encode_textbox_to_rect(
             protect: 0,
         }),
 
-        pos: Some(HxTablePos {
-            treat_as_char: if horz_offset == 0 && vert_offset == 0 { 1 } else { 0 },
-            affect_l_spacing: 0,
-            flow_with_text: 0,
-            allow_overlap: 0,
-            hold_anchor_and_so: 0,
-            vert_rel_to: "PARA".to_string(),
-            horz_rel_to: "PARA".to_string(),
-            vert_align: "TOP".to_string(),
-            horz_align: "LEFT".to_string(),
-            vert_offset,
-            horz_offset,
-        }),
+        pos: Some(shape_position(horz_offset, vert_offset)),
 
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
         caption: caption
@@ -368,8 +393,8 @@ pub(crate) fn encode_line_to_hx(
     Ok(HxLine {
         id: generate_instid(),
         z_order: 0,
-        numbering_type: "NONE".to_string(),
-        text_wrap: "TOP_AND_BOTTOM".to_string(),
+        numbering_type: shape_numbering_type(*horz_offset, *vert_offset),
+        text_wrap: shape_text_wrap(*horz_offset, *vert_offset),
         text_flow: "BOTH_SIDES".to_string(),
         lock: 0,
         dropcap_style: dropcap_str(style),
@@ -393,19 +418,7 @@ pub(crate) fn encode_line_to_hx(
             height_rel_to: "ABSOLUTE".to_string(),
             protect: 0,
         }),
-        pos: Some(HxTablePos {
-            treat_as_char: if *horz_offset == 0 && *vert_offset == 0 { 1 } else { 0 },
-            affect_l_spacing: 0,
-            flow_with_text: 0,
-            allow_overlap: 0,
-            hold_anchor_and_so: 0,
-            vert_rel_to: "PARA".to_string(),
-            horz_rel_to: "PARA".to_string(),
-            vert_align: "TOP".to_string(),
-            horz_align: "LEFT".to_string(),
-            vert_offset: *vert_offset,
-            horz_offset: *horz_offset,
-        }),
+        pos: Some(shape_position(*horz_offset, *vert_offset)),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
         shape_comment: Some(HxShapeComment { text: "선입니다.".to_string() }),
         caption: caption
@@ -571,8 +584,8 @@ pub(crate) fn encode_polygon_to_hx(
     Ok(HxPolygon {
         id: generate_instid(),
         z_order: 0,
-        numbering_type: "NONE".to_string(),
-        text_wrap: "TOP_AND_BOTTOM".to_string(),
+        numbering_type: shape_numbering_type(*horz_offset, *vert_offset),
+        text_wrap: shape_text_wrap(*horz_offset, *vert_offset),
         text_flow: "BOTH_SIDES".to_string(),
         lock: 0,
         dropcap_style: dropcap_str(style),
@@ -595,19 +608,7 @@ pub(crate) fn encode_polygon_to_hx(
             height_rel_to: "ABSOLUTE".to_string(),
             protect: 0,
         }),
-        pos: Some(HxTablePos {
-            treat_as_char: if *horz_offset == 0 && *vert_offset == 0 { 1 } else { 0 },
-            affect_l_spacing: 0,
-            flow_with_text: 0,
-            allow_overlap: 0,
-            hold_anchor_and_so: 0,
-            vert_rel_to: "PARA".to_string(),
-            horz_rel_to: "PARA".to_string(),
-            vert_align: "TOP".to_string(),
-            horz_align: "LEFT".to_string(),
-            vert_offset: *vert_offset,
-            horz_offset: *horz_offset,
-        }),
+        pos: Some(shape_position(*horz_offset, *vert_offset)),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
         shape_comment: Some(HxShapeComment { text: "다각형입니다.".to_string() }),
         caption: caption
@@ -1775,6 +1776,29 @@ mod tests {
         assert_eq!(result.end_pt.as_ref().unwrap().y, 200);
     }
 
+    #[test]
+    fn encode_line_non_zero_offset_uses_floating_shape_defaults() {
+        let ctrl = Control::Line {
+            start: ShapePoint::new(0, 0),
+            end: ShapePoint::new(100, 0),
+            width: HwpUnit::new(1000).unwrap(),
+            height: HwpUnit::new(100).unwrap(),
+            horz_offset: 50,
+            vert_offset: 60,
+            caption: None,
+            style: None,
+        };
+        let mut hl = empty_hyperlinks();
+        let result = encode_line_to_hx(&ctrl, 0, &mut hl).unwrap();
+        assert_eq!(result.numbering_type, "PICTURE");
+        assert_eq!(result.text_wrap, "IN_FRONT_OF_TEXT");
+        let pos = result.pos.as_ref().unwrap();
+        assert_eq!(pos.treat_as_char, 0);
+        assert_eq!(pos.allow_overlap, 1);
+        assert_eq!(pos.vert_rel_to, "PAPER");
+        assert_eq!(pos.horz_rel_to, "PAPER");
+    }
+
     // ── encode_ellipse_to_hx tests ───────────────────────────────────
 
     #[test]
@@ -1883,5 +1907,55 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_polygon_to_hx(&ctrl, 0, &mut hl).unwrap();
         assert_eq!(result.shape_comment.as_ref().unwrap().text, "다각형입니다.");
+    }
+
+    #[test]
+    fn encode_polygon_non_zero_offset_uses_floating_shape_defaults() {
+        let ctrl = Control::Polygon {
+            vertices: vec![
+                ShapePoint::new(0, 0),
+                ShapePoint::new(100, 0),
+                ShapePoint::new(50, 100),
+                ShapePoint::new(0, 0),
+            ],
+            width: HwpUnit::new(1000).unwrap(),
+            height: HwpUnit::new(1000).unwrap(),
+            horz_offset: 50,
+            vert_offset: 60,
+            paragraphs: vec![],
+            caption: None,
+            style: None,
+        };
+        let mut hl = empty_hyperlinks();
+        let result = encode_polygon_to_hx(&ctrl, 0, &mut hl).unwrap();
+        assert_eq!(result.numbering_type, "PICTURE");
+        assert_eq!(result.text_wrap, "IN_FRONT_OF_TEXT");
+        let pos = result.pos.as_ref().unwrap();
+        assert_eq!(pos.treat_as_char, 0);
+        assert_eq!(pos.allow_overlap, 1);
+        assert_eq!(pos.vert_rel_to, "PAPER");
+        assert_eq!(pos.horz_rel_to, "PAPER");
+    }
+
+    #[test]
+    fn encode_textbox_non_zero_offset_uses_floating_shape_defaults() {
+        let ctrl = Control::TextBox {
+            paragraphs: vec![],
+            width: HwpUnit::new(1000).unwrap(),
+            height: HwpUnit::new(1000).unwrap(),
+            horz_offset: 50,
+            vert_offset: 60,
+            caption: None,
+            style: None,
+        };
+        let mut hl = empty_hyperlinks();
+        let result = encode_textbox_to_rect(&ctrl, 0, &mut hl).unwrap();
+        assert_eq!(result.numbering_type, "PICTURE");
+        assert_eq!(result.text_wrap, "IN_FRONT_OF_TEXT");
+        let pos = result.pos.as_ref().unwrap();
+        assert_eq!(pos.treat_as_char, 0);
+        assert_eq!(pos.allow_overlap, 1);
+        assert_eq!(pos.vert_rel_to, "PAPER");
+        assert_eq!(pos.horz_rel_to, "PAPER");
     }
 }

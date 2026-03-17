@@ -326,44 +326,38 @@ mod tests {
         let paragraph = Paragraph::with_runs(
             vec![Run::table(
                 Table::new(vec![
-                    TableRow {
-                        cells: vec![
-                            TableCell::new(
-                                vec![Paragraph::with_runs(
-                                    vec![Run::text("A", CharShapeIndex::new(0))],
-                                    ParaShapeIndex::new(0),
-                                )],
-                                hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
-                            ),
-                            TableCell::new(
-                                vec![Paragraph::with_runs(
-                                    vec![Run::text("B", CharShapeIndex::new(0))],
-                                    ParaShapeIndex::new(0),
-                                )],
-                                hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
-                            ),
-                        ],
-                        height: None,
-                    },
-                    TableRow {
-                        cells: vec![
-                            TableCell::new(
-                                vec![Paragraph::with_runs(
-                                    vec![Run::text("1", CharShapeIndex::new(0))],
-                                    ParaShapeIndex::new(0),
-                                )],
-                                hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
-                            ),
-                            TableCell::new(
-                                vec![Paragraph::with_runs(
-                                    vec![Run::text("2", CharShapeIndex::new(0))],
-                                    ParaShapeIndex::new(0),
-                                )],
-                                hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
-                            ),
-                        ],
-                        height: None,
-                    },
+                    TableRow::new(vec![
+                        TableCell::new(
+                            vec![Paragraph::with_runs(
+                                vec![Run::text("A", CharShapeIndex::new(0))],
+                                ParaShapeIndex::new(0),
+                            )],
+                            hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+                        ),
+                        TableCell::new(
+                            vec![Paragraph::with_runs(
+                                vec![Run::text("B", CharShapeIndex::new(0))],
+                                ParaShapeIndex::new(0),
+                            )],
+                            hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+                        ),
+                    ]),
+                    TableRow::new(vec![
+                        TableCell::new(
+                            vec![Paragraph::with_runs(
+                                vec![Run::text("1", CharShapeIndex::new(0))],
+                                ParaShapeIndex::new(0),
+                            )],
+                            hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+                        ),
+                        TableCell::new(
+                            vec![Paragraph::with_runs(
+                                vec![Run::text("2", CharShapeIndex::new(0))],
+                                ParaShapeIndex::new(0),
+                            )],
+                            hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+                        ),
+                    ]),
                 ]),
                 CharShapeIndex::new(0),
             )],
@@ -380,16 +374,13 @@ mod tests {
     fn encode_table_escapes_pipe_in_cell() {
         let paragraph = Paragraph::with_runs(
             vec![Run::table(
-                Table::new(vec![TableRow {
-                    cells: vec![TableCell::new(
-                        vec![Paragraph::with_runs(
-                            vec![Run::text("A|B", CharShapeIndex::new(0))],
-                            ParaShapeIndex::new(0),
-                        )],
-                        hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+                Table::new(vec![TableRow::new(vec![TableCell::new(
+                    vec![Paragraph::with_runs(
+                        vec![Run::text("A|B", CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
                     )],
-                    height: None,
-                }]),
+                    hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+                )])]),
                 CharShapeIndex::new(0),
             )],
             ParaShapeIndex::new(0),
@@ -414,13 +405,10 @@ mod tests {
 
         let paragraph = Paragraph::with_runs(
             vec![Run::table(
-                Table::new(vec![TableRow {
-                    cells: vec![TableCell::new(
-                        vec![cell_paragraph],
-                        hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
-                    )],
-                    height: None,
-                }]),
+                Table::new(vec![TableRow::new(vec![TableCell::new(
+                    vec![cell_paragraph],
+                    hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+                )])]),
                 CharShapeIndex::new(0),
             )],
             ParaShapeIndex::new(0),
@@ -730,16 +718,13 @@ mod tests {
         // When paragraph has table run AND text runs before it,
         // table_to_markdown is called inline (pushed with newline)
         let text_run = Run::text("intro", CharShapeIndex::new(0));
-        let table = Table::new(vec![TableRow {
-            cells: vec![TableCell::new(
-                vec![Paragraph::with_runs(
-                    vec![Run::text("A", CharShapeIndex::new(0))],
-                    ParaShapeIndex::new(0),
-                )],
-                hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+        let table = Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![Paragraph::with_runs(
+                vec![Run::text("A", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
             )],
-            height: None,
-        }]);
+            hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+        )])]);
         let paragraph = Paragraph::with_runs(
             vec![text_run, Run::table(table, CharShapeIndex::new(0))],
             ParaShapeIndex::new(0),
@@ -766,17 +751,14 @@ mod tests {
     fn encode_table_with_empty_row_renders_placeholder() {
         use hwpforge_core::TableRow;
         let table = Table::new(vec![
-            TableRow {
-                cells: vec![TableCell::new(
-                    vec![Paragraph::with_runs(
-                        vec![Run::text("header", CharShapeIndex::new(0))],
-                        ParaShapeIndex::new(0),
-                    )],
-                    hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+            TableRow::new(vec![TableCell::new(
+                vec![Paragraph::with_runs(
+                    vec![Run::text("header", CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
                 )],
-                height: None,
-            },
-            TableRow { cells: vec![], height: None },
+                hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+            )]),
+            TableRow::new(vec![]),
         ]);
 
         let paragraph = Paragraph::with_runs(
@@ -793,16 +775,13 @@ mod tests {
     fn encode_table_cell_escapes_backslash() {
         let paragraph = Paragraph::with_runs(
             vec![Run::table(
-                Table::new(vec![TableRow {
-                    cells: vec![TableCell::new(
-                        vec![Paragraph::with_runs(
-                            vec![Run::text(r"path\to\file", CharShapeIndex::new(0))],
-                            ParaShapeIndex::new(0),
-                        )],
-                        hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+                Table::new(vec![TableRow::new(vec![TableCell::new(
+                    vec![Paragraph::with_runs(
+                        vec![Run::text(r"path\to\file", CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
                     )],
-                    height: None,
-                }]),
+                    hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+                )])]),
                 CharShapeIndex::new(0),
             )],
             ParaShapeIndex::new(0),
@@ -816,16 +795,13 @@ mod tests {
     fn encode_table_cell_escapes_newline_as_br() {
         let paragraph = Paragraph::with_runs(
             vec![Run::table(
-                Table::new(vec![TableRow {
-                    cells: vec![TableCell::new(
-                        vec![Paragraph::with_runs(
-                            vec![Run::text("line1\nline2", CharShapeIndex::new(0))],
-                            ParaShapeIndex::new(0),
-                        )],
-                        hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+                Table::new(vec![TableRow::new(vec![TableCell::new(
+                    vec![Paragraph::with_runs(
+                        vec![Run::text("line1\nline2", CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
                     )],
-                    height: None,
-                }]),
+                    hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+                )])]),
                 CharShapeIndex::new(0),
             )],
             ParaShapeIndex::new(0),

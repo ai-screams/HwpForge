@@ -12,19 +12,23 @@
 //! the **first paragraph**, not at the section level. This module reproduces
 //! that quirk so the output is compatible with the Hancom HWP editor.
 
+mod table;
+
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::{ColumnLayoutMode, ColumnSettings, ColumnType};
 use hwpforge_core::control::{Control, DutmalAlign, DutmalPosition};
-use hwpforge_core::image::Image;
+use hwpforge_core::image::{Image, ImagePlacement};
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::section::Section;
-use hwpforge_core::table::{Table, TableCell, TableRow};
+use hwpforge_core::table::{
+    Table, TableCell, TableMargin, TablePageBreak, TableRow, TableVerticalAlign,
+};
 use hwpforge_core::PageSettings;
 
 use crate::encoder::package::XMLNS_DECLS;
 use crate::error::{HwpxError, HwpxResult};
-use hwpforge_foundation::{BookmarkType, DropCapStyle, TextDirection};
+use hwpforge_foundation::{BookmarkType, DropCapStyle, HwpUnit, TextDirection};
 
 use crate::schema::section::{
     HxBookmark, HxCaption, HxCellAddr, HxCellSpan, HxCellSz, HxChart, HxCompose, HxComposeCharPr,
@@ -35,6 +39,7 @@ use crate::schema::section::{
     HxTableRow, HxTableSz, HxText, HxTitleMark,
 };
 
+use self::table::build_table;
 use super::chart::generate_chart_xml;
 use super::escape_xml;
 
@@ -55,6 +60,31 @@ fn next_marker(prefix: &str, field_id: usize) -> String {
 /// Mirrors the decoder's limit. Prevents stack overflow from deeply nested
 /// table structures (e.g. a table cell containing another table, ad infinitum).
 const MAX_NESTING_DEPTH: usize = 32;
+
+fn encode_table_page_break(value: TablePageBreak) -> &'static str {
+    match value {
+        TablePageBreak::Cell => "CELL",
+        TablePageBreak::Table => "TABLE",
+        TablePageBreak::None => "NONE",
+    }
+}
+
+fn encode_table_vertical_align(value: TableVerticalAlign) -> &'static str {
+    match value {
+        TableVerticalAlign::Top => "TOP",
+        TableVerticalAlign::Center => "CENTER",
+        TableVerticalAlign::Bottom => "BOTTOM",
+    }
+}
+
+fn encode_table_margin(value: TableMargin) -> HxTableMargin {
+    HxTableMargin {
+        left: value.left.as_i32(),
+        right: value.right.as_i32(),
+        top: value.top.as_i32(),
+        bottom: value.bottom.as_i32(),
+    }
+}
 
 /// Result of encoding a section, including chart and masterpage entries for ZIP packaging.
 #[derive(Debug)]
@@ -103,7 +133,7 @@ pub(crate) fn encode_section(
     let mut enriched = enrich_sec_pr(inner_content, section, masterpage_offset);
 
     // Inject header/footer/page number controls after colPr
-    inject_header_footer_pagenum(&mut enriched, section);
+    inject_header_footer_pagenum(&mut enriched, section, &mut hyperlink_entries)?;
 
     // Replace hyperlink placeholder runs with real interleaved XML.
     // Serde cannot express the ctrl-text-ctrl interleaving required by
@@ -587,6 +617,15 @@ pub(crate) fn encode_paragraphs_to_sublist(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
 ) -> HwpxResult<HxSubList> {
+    build_sublist(paragraphs, depth, "TOP", hyperlink_entries)
+}
+
+fn build_sublist(
+    paragraphs: &[Paragraph],
+    depth: usize,
+    vert_align: &str,
+    hyperlink_entries: &mut Vec<(String, String)>,
+) -> HwpxResult<HxSubList> {
     let mut sub_chart_entries = Vec::new();
     let hx_paragraphs = paragraphs
         .iter()
@@ -610,7 +649,7 @@ pub(crate) fn encode_paragraphs_to_sublist(
         id: String::new(),
         text_direction: "HORIZONTAL".to_string(),
         line_wrap: "BREAK".to_string(),
-        vert_align: "TOP".to_string(),
+        vert_align: vert_align.to_string(),
         link_list_id_ref: 0,
         link_list_next_id_ref: 0,
         text_width: 0,
@@ -1230,203 +1269,6 @@ const TABLE_BORDER_FILL_ID: u32 = 3;
 /// `hp:sz`, `hp:pos`, `hp:outMargin`, `hp:inMargin`, plus full
 /// attribute set on `<hp:tbl>`.
 ///
-/// # Errors
-///
-/// Returns [`HwpxError::InvalidStructure`] if nesting depth exceeds
-/// [`MAX_NESTING_DEPTH`].
-fn build_table(
-    table: &Table,
-    depth: usize,
-    hyperlink_entries: &mut Vec<(String, String)>,
-) -> HwpxResult<HxTable> {
-    if depth >= MAX_NESTING_DEPTH {
-        return Err(HwpxError::InvalidStructure {
-            detail: format!("table nesting depth {} exceeds limit of {}", depth, MAX_NESTING_DEPTH,),
-        });
-    }
-
-    // Build grid occupancy map to compute correct cellAddr for merged cells.
-    // Tracks which (row, col) positions are occupied by col_span/row_span.
-    let mut occupied = std::collections::HashSet::<(u32, u32)>::new();
-    let mut cell_addrs: Vec<Vec<u32>> = Vec::new();
-    let mut max_col: u32 = 0;
-
-    for (row_idx, row) in table.rows.iter().enumerate() {
-        let mut col_addr: u32 = 0;
-        let mut addrs = Vec::new();
-        for cell in &row.cells {
-            // Skip columns occupied by row_span from previous rows
-            while occupied.contains(&(row_idx as u32, col_addr)) {
-                col_addr += 1;
-            }
-            addrs.push(col_addr);
-            // Clamp spans to minimum 1 (API contract: col_span >= 1, row_span >= 1)
-            let col_span = (cell.col_span as u32).max(1);
-            let row_span = (cell.row_span as u32).max(1);
-            // Mark all grid positions covered by this cell's span
-            for dr in 0..row_span {
-                for dc in 0..col_span {
-                    occupied.insert((row_idx as u32 + dr, col_addr + dc));
-                }
-            }
-            col_addr += col_span;
-        }
-        if col_addr > max_col {
-            max_col = col_addr;
-        }
-        cell_addrs.push(addrs);
-    }
-    let col_cnt = max_col;
-
-    let rows = table
-        .rows
-        .iter()
-        .enumerate()
-        .map(|(row_idx, row)| {
-            build_table_row(row, row_idx as u32, &cell_addrs[row_idx], depth, hyperlink_entries)
-        })
-        .collect::<HwpxResult<Vec<_>>>()?;
-
-    // Table width: use explicit width or sum of first row's cell widths
-    let table_width = table.width.map(|w| w.as_i32()).unwrap_or_else(|| {
-        table
-            .rows
-            .first()
-            .map_or(DEFAULT_HORZ_SIZE, |r| r.cells.iter().map(|c| c.width.as_i32()).sum())
-    });
-
-    Ok(HxTable {
-        id: generate_instid(),
-        z_order: 0,
-        numbering_type: "TABLE".to_string(),
-        text_wrap: "TOP_AND_BOTTOM".to_string(),
-        text_flow: "BOTH_SIDES".to_string(),
-        lock: 0,
-        dropcap_style: DropCapStyle::None.to_string(),
-        page_break: "CELL".to_string(),
-        repeat_header: 1,
-        row_cnt: table.rows.len() as u32,
-        col_cnt,
-        cell_spacing: 0,
-        border_fill_id_ref: TABLE_BORDER_FILL_ID,
-        no_adjust: 0,
-        sz: Some(HxTableSz {
-            width: table_width,
-            width_rel_to: "ABSOLUTE".to_string(),
-            height: 0,
-            height_rel_to: "ABSOLUTE".to_string(),
-            protect: 0,
-        }),
-        pos: Some(HxTablePos {
-            treat_as_char: 0,
-            affect_l_spacing: 0,
-            flow_with_text: 1,
-            allow_overlap: 0,
-            hold_anchor_and_so: 0,
-            vert_rel_to: "PARA".to_string(),
-            horz_rel_to: "COLUMN".to_string(),
-            vert_align: "TOP".to_string(),
-            horz_align: "LEFT".to_string(),
-            vert_offset: 0,
-            horz_offset: 0,
-        }),
-        out_margin: Some(DEFAULT_OUT_MARGIN),
-        caption: table
-            .caption
-            .as_ref()
-            .map(|c| build_hx_caption(c, table_width, depth, hyperlink_entries))
-            .transpose()?,
-        in_margin: Some(DEFAULT_CELL_MARGIN),
-        rows,
-    })
-}
-
-/// Builds `HxTableRow` from a Core `TableRow`.
-///
-/// `col_addrs` contains the precomputed grid column address for each cell,
-/// accounting for col_span/row_span from this and previous rows.
-fn build_table_row(
-    row: &TableRow,
-    row_idx: u32,
-    col_addrs: &[u32],
-    depth: usize,
-    hyperlink_entries: &mut Vec<(String, String)>,
-) -> HwpxResult<HxTableRow> {
-    let cells = row
-        .cells
-        .iter()
-        .enumerate()
-        .map(|(i, cell)| {
-            let col_addr = col_addrs.get(i).copied().unwrap_or(i as u32);
-            build_table_cell(cell, col_addr, row_idx, depth, hyperlink_entries)
-        })
-        .collect::<HwpxResult<Vec<_>>>()?;
-
-    Ok(HxTableRow { cells })
-}
-
-/// Builds `HxTableCell` from a Core `TableCell`.
-///
-/// Cell paragraphs are built recursively at `depth + 1` to track nesting.
-/// `col_idx` and `row_idx` are used to populate `<hp:cellAddr>`.
-fn build_table_cell(
-    cell: &TableCell,
-    col_idx: u32,
-    row_idx: u32,
-    depth: usize,
-    hyperlink_entries: &mut Vec<(String, String)>,
-) -> HwpxResult<HxTableCell> {
-    let paragraphs = cell
-        .paragraphs
-        .iter()
-        .enumerate()
-        .map(|(idx, para)| {
-            let mut sub_chart_entries = Vec::new();
-            build_paragraph(
-                para,
-                false,
-                None,
-                TextDirection::Horizontal,
-                idx,
-                depth + 1,
-                &mut sub_chart_entries,
-                hyperlink_entries,
-                0,
-            )
-        })
-        .collect::<HwpxResult<Vec<_>>>()?;
-
-    Ok(HxTableCell {
-        name: String::new(),
-        header: 0,
-        has_margin: 0,
-        protect: 0,
-        editable: 0,
-        dirty: 0,
-        border_fill_id_ref: TABLE_BORDER_FILL_ID,
-        sub_list: Some(HxSubList {
-            id: String::new(),
-            text_direction: "HORIZONTAL".to_string(),
-            line_wrap: "BREAK".to_string(),
-            vert_align: "CENTER".to_string(),
-            link_list_id_ref: 0,
-            link_list_next_id_ref: 0,
-            text_width: 0,
-            text_height: 0,
-            has_text_ref: 0,
-            has_num_ref: 0,
-            paragraphs,
-        }),
-        cell_addr: Some(HxCellAddr { col_addr: col_idx, row_addr: row_idx }),
-        cell_span: Some(HxCellSpan {
-            col_span: cell.col_span as u32,
-            row_span: cell.row_span as u32,
-        }),
-        cell_sz: Some(HxCellSz { width: cell.width.as_i32(), height: 0 }),
-        cell_margin: Some(DEFAULT_CELL_MARGIN),
-    })
-}
-
 /// Builds `HxPic` from a Core `Image` with complete shape structure.
 ///
 /// The `BinData/` prefix and file extension are stripped from the path
@@ -1453,13 +1295,18 @@ fn build_picture(
     let h = img.height.as_i32();
     let half_w = w / 2;
     let half_h = h / 2;
+    let placement = img.placement.as_ref();
 
     Ok(HxPic {
         id: generate_instid(),
         z_order: 0,
         numbering_type: "PICTURE".to_string(),
-        text_wrap: "TOP_AND_BOTTOM".to_string(),
-        text_flow: "BOTH_SIDES".to_string(),
+        text_wrap: placement
+            .map(|value| value.text_wrap.as_hwpx_str().into_owned())
+            .unwrap_or_else(|| "TOP_AND_BOTTOM".to_string()),
+        text_flow: placement
+            .map(|value| value.text_flow.as_hwpx_str().into_owned())
+            .unwrap_or_else(|| "BOTH_SIDES".to_string()),
         lock: 0,
         dropcap_style: DropCapStyle::None.to_string(),
         href: String::new(),
@@ -1505,7 +1352,32 @@ fn build_picture(
             height_rel_to: "ABSOLUTE".to_string(),
             protect: 0,
         }),
-        pos: Some(HxTablePos {
+        pos: Some(build_picture_position(placement)),
+        out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+        caption: img
+            .caption
+            .as_ref()
+            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries))
+            .transpose()?,
+    })
+}
+
+fn build_picture_position(placement: Option<&ImagePlacement>) -> HxTablePos {
+    match placement {
+        Some(value) => HxTablePos {
+            treat_as_char: u32::from(value.treat_as_char),
+            affect_l_spacing: 0,
+            flow_with_text: u32::from(value.flow_with_text),
+            allow_overlap: u32::from(value.allow_overlap),
+            hold_anchor_and_so: 0,
+            vert_rel_to: value.vert_rel_to.as_hwpx_str().into_owned(),
+            horz_rel_to: value.horz_rel_to.as_hwpx_str().into_owned(),
+            vert_align: "TOP".to_string(),
+            horz_align: "LEFT".to_string(),
+            vert_offset: value.vert_offset.as_i32(),
+            horz_offset: value.horz_offset.as_i32(),
+        },
+        None => HxTablePos {
             treat_as_char: 1,
             affect_l_spacing: 0,
             flow_with_text: 0,
@@ -1517,14 +1389,8 @@ fn build_picture(
             horz_align: "LEFT".to_string(),
             vert_offset: 0,
             horz_offset: 0,
-        }),
-        out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
-        caption: img
-            .caption
-            .as_ref()
-            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries))
-            .transpose()?,
-    })
+        },
+    }
 }
 
 // ── Linesegarray placeholder ─────────────────────────────────────
@@ -1864,25 +1730,29 @@ fn enrich_sec_pr(xml: &str, section: &Section, masterpage_offset: usize) -> Stri
 /// - `<hp:ctrl><hp:header><hp:p>...</hp:p></hp:header></hp:ctrl>`
 /// - `<hp:ctrl><hp:footer><hp:p>...</hp:p></hp:footer></hp:ctrl>`
 /// - `<hp:ctrl><hp:autoNum numType="PAGE" ...></hp:ctrl>`
-fn inject_header_footer_pagenum(xml: &mut String, section: &Section) {
+fn inject_header_footer_pagenum(
+    xml: &mut String,
+    section: &Section,
+    hyperlink_entries: &mut Vec<(String, String)>,
+) -> HwpxResult<()> {
     // Find insertion point: after the last </hp:ctrl> that contains colPr
     // (or after </hp:secPr> if no colPr).
     // We inject after the colPr ctrl block.
     let insert_pos = find_ctrl_injection_point(xml);
     if insert_pos == 0 {
-        return; // no suitable injection point found
+        return Ok(()); // no suitable injection point found
     }
 
     let mut injection = String::new();
 
     // Header
     if let Some(ref header) = section.header {
-        injection.push_str(&build_header_xml(header, "header"));
+        injection.push_str(&build_header_xml(header, "header", hyperlink_entries)?);
     }
 
     // Footer
     if let Some(ref footer) = section.footer {
-        injection.push_str(&build_header_xml(footer, "footer"));
+        injection.push_str(&build_header_xml(footer, "footer", hyperlink_entries)?);
     }
 
     // Page number
@@ -1893,6 +1763,8 @@ fn inject_header_footer_pagenum(xml: &mut String, section: &Section) {
     if !injection.is_empty() {
         xml.insert_str(insert_pos, &injection);
     }
+
+    Ok(())
 }
 
 /// Finds the insertion point for header/footer/pagenum ctrl blocks.
@@ -1923,7 +1795,11 @@ fn find_ctrl_injection_point(xml: &str) -> usize {
 /// Builds `<hp:ctrl><hp:header>` or `<hp:ctrl><hp:footer>` XML.
 ///
 /// `tag_name` should be `"header"` or `"footer"`.
-fn build_header_xml(hf: &hwpforge_core::section::HeaderFooter, tag_name: &str) -> String {
+fn build_header_xml(
+    hf: &hwpforge_core::section::HeaderFooter,
+    tag_name: &str,
+    hyperlink_entries: &mut Vec<(String, String)>,
+) -> HwpxResult<String> {
     use std::fmt::Write as _;
 
     let apply_page = match hf.apply_page_type {
@@ -1937,41 +1813,9 @@ fn build_header_xml(hf: &hwpforge_core::section::HeaderFooter, tag_name: &str) -
     let mut xml = String::new();
     write!(xml, r#"<hp:ctrl><hp:{tag_name} applyPageType="{apply_page}" id="{hf_id}">"#,)
         .expect("write to String is infallible");
-
-    // Wrap paragraphs in <hp:subList> (required by HWPX schema)
-    // Note: subList id is empty string per reference files (NOT "0")
-    xml.push_str(
-        r#"<hp:subList id="" textDirection="HORIZONTAL" lineWrap="BREAK" vertAlign="TOP" linkListIDRef="0" linkListNextIDRef="0" textWidth="0" textHeight="0">"#,
-    );
-
-    // Encode each paragraph in the header/footer
-    for (idx, para) in hf.paragraphs.iter().enumerate() {
-        write!(
-            xml,
-            r#"<hp:p id="{idx}" paraPrIDRef="{}" styleIDRef="{}" pageBreak="0" columnBreak="0" merged="0">"#,
-            para.para_shape_id.get(),
-            para.style_id.map_or(0, |s| s.get()),
-        )
-        .expect("write to String is infallible");
-
-        for run in &para.runs {
-            if let hwpforge_core::run::RunContent::Text(text) = &run.content {
-                write!(
-                    xml,
-                    r#"<hp:run charPrIDRef="{}"><hp:t>{}</hp:t></hp:run>"#,
-                    run.char_shape_id.get(),
-                    escape_xml(text),
-                )
-                .expect("write to String is infallible");
-            }
-        }
-
-        xml.push_str("</hp:p>");
-    }
-
-    xml.push_str("</hp:subList>");
+    xml.push_str(&encode_memo_sublist(&hf.paragraphs, 0, hyperlink_entries)?);
     write!(xml, "</hp:{tag_name}></hp:ctrl>").expect("write to String is infallible");
-    xml
+    Ok(xml)
 }
 
 /// Builds `<hp:ctrl><hp:pageNum>` XML for page numbers.
@@ -2024,7 +1868,9 @@ fn build_page_number_xml(pn: &hwpforge_core::section::PageNumber) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hwpforge_core::image::ImageFormat;
+    use hwpforge_core::image::{
+        ImageFormat, ImagePlacement, ImageRelativeTo, ImageTextFlow, ImageTextWrap,
+    };
     use hwpforge_core::table::{Table, TableCell, TableRow};
     use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
 
@@ -2136,7 +1982,7 @@ mod tests {
             TableCell::new(vec![text_paragraph("Cell1", 0, 0)], HwpUnit::new(5000).unwrap());
         let cell2 =
             TableCell::new(vec![text_paragraph("Cell2", 0, 0)], HwpUnit::new(5000).unwrap());
-        let row = TableRow { cells: vec![cell1, cell2], height: None };
+        let row = TableRow::new(vec![cell1, cell2]);
         let table = Table::new(vec![row]);
 
         let section = Section::with_paragraphs(
@@ -2152,6 +1998,87 @@ mod tests {
         assert!(xml.contains(r#"colCnt="2""#), "missing colCnt");
         assert!(xml.contains("<hp:t>Cell1</hp:t>"), "missing Cell1 text");
         assert!(xml.contains("<hp:t>Cell2</hp:t>"), "missing Cell2 text");
+    }
+
+    #[test]
+    fn table_encoding_preserves_presentation_fields() {
+        let first = TableCell::new(vec![text_paragraph("A", 0, 0)], HwpUnit::new(10000).unwrap())
+            .with_height(HwpUnit::new(282).unwrap())
+            .with_border_fill_id(4)
+            .with_margin(TableMargin {
+                left: HwpUnit::new(4251).unwrap(),
+                right: HwpUnit::new(5669).unwrap(),
+                top: HwpUnit::new(2834).unwrap(),
+                bottom: HwpUnit::new(1417).unwrap(),
+            })
+            .with_vertical_align(TableVerticalAlign::Top);
+
+        let second = TableCell::new(vec![text_paragraph("B", 0, 0)], HwpUnit::new(10000).unwrap())
+            .with_height(HwpUnit::new(1281).unwrap())
+            .with_border_fill_id(7)
+            .with_vertical_align(TableVerticalAlign::Bottom);
+
+        let table = Table::new(vec![TableRow::new(vec![first, second]).with_header(true)])
+            .with_width(HwpUnit::new(20000).unwrap())
+            .with_page_break(TablePageBreak::Cell)
+            .with_cell_spacing(HwpUnit::new(120).unwrap())
+            .with_border_fill_id(9);
+
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::table(table, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+
+        assert!(xml.contains(r#"cellSpacing="120""#), "missing cellSpacing");
+        assert!(xml.contains(r#"borderFillIDRef="9""#), "missing table borderFillIDRef");
+        assert!(xml.contains(r#"borderFillIDRef="4""#), "missing first cell borderFillIDRef");
+        assert!(xml.contains(r#"borderFillIDRef="7""#), "missing second cell borderFillIDRef");
+        assert!(xml.contains(r#"vertAlign="TOP""#), "missing TOP vertical align");
+        assert!(xml.contains(r#"vertAlign="BOTTOM""#), "missing BOTTOM vertical align");
+        assert!(xml.contains(r#"cellMargin left="4251" right="5669" top="2834" bottom="1417""#));
+        assert!(xml.contains(r#"cellSz width="10000" height="282""#), "missing first cell height");
+        assert!(
+            xml.contains(r#"cellSz width="10000" height="1281""#),
+            "missing second cell height"
+        );
+    }
+
+    #[test]
+    fn table_encoding_does_not_spread_row_height_into_zero_height_cells() {
+        let first = TableCell::new(vec![text_paragraph("A", 0, 0)], HwpUnit::new(7777).unwrap())
+            .with_height(HwpUnit::new(1226).unwrap());
+
+        let second = TableCell::new(vec![text_paragraph("B", 0, 0)], HwpUnit::new(8888).unwrap());
+
+        let table = Table::new(vec![TableRow::with_height(
+            vec![first, second],
+            HwpUnit::new(1226).unwrap(),
+        )])
+        .with_width(HwpUnit::new(16665).unwrap())
+        .with_page_break(TablePageBreak::Cell)
+        .with_repeat_header(false);
+
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::table(table, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+
+        assert!(
+            xml.contains(r#"cellSz width="7777" height="1226""#),
+            "explicit-height cell should preserve its own height"
+        );
+        assert!(
+            xml.contains(r#"cellSz width="8888" height="0""#),
+            "mixed row should keep zero-height cell at 0 instead of inheriting row height"
+        );
     }
 
     // ── Test 5: Image encoding ───────────────────────────────────
@@ -2211,20 +2138,17 @@ mod tests {
         // Inner table
         let inner_cell =
             TableCell::new(vec![text_paragraph("Deep", 0, 0)], HwpUnit::new(3000).unwrap());
-        let inner_table = Table::new(vec![TableRow { cells: vec![inner_cell], height: None }]);
+        let inner_table = Table::new(vec![TableRow::new(vec![inner_cell])]);
 
         // Outer table: cell contains a paragraph with the inner table
-        let outer_cell = TableCell {
-            paragraphs: vec![Paragraph::with_runs(
+        let outer_cell = TableCell::new(
+            vec![Paragraph::with_runs(
                 vec![Run::table(inner_table, CharShapeIndex::new(0))],
                 ParaShapeIndex::new(0),
             )],
-            col_span: 1,
-            row_span: 1,
-            width: HwpUnit::new(8000).unwrap(),
-            background: None,
-        };
-        let outer_table = Table::new(vec![TableRow { cells: vec![outer_cell], height: None }]);
+            HwpUnit::new(8000).unwrap(),
+        );
+        let outer_table = Table::new(vec![TableRow::new(vec![outer_cell])]);
 
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
@@ -2400,6 +2324,61 @@ mod tests {
     }
 
     #[test]
+    fn image_with_explicit_placement_uses_override_values() {
+        let img = Image::new(
+            "BinData/image1.png",
+            HwpUnit::new(10000).unwrap(),
+            HwpUnit::new(5000).unwrap(),
+            ImageFormat::Png,
+        )
+        .with_placement(ImagePlacement {
+            text_wrap: ImageTextWrap::Square,
+            text_flow: ImageTextFlow::RightOnly,
+            treat_as_char: false,
+            flow_with_text: true,
+            allow_overlap: true,
+            vert_rel_to: ImageRelativeTo::Paper,
+            horz_rel_to: ImageRelativeTo::Page,
+            vert_offset: HwpUnit::new(1200).unwrap(),
+            horz_offset: HwpUnit::new(3400).unwrap(),
+        });
+
+        let hx = build_picture(&img, 0, &mut Vec::new()).unwrap();
+        assert_eq!(hx.text_wrap, "SQUARE");
+        assert_eq!(hx.text_flow, "RIGHT_ONLY");
+        let pos = hx.pos.expect("position should be present");
+        assert_eq!(pos.treat_as_char, 0);
+        assert_eq!(pos.flow_with_text, 1);
+        assert_eq!(pos.allow_overlap, 1);
+        assert_eq!(pos.vert_rel_to, "PAPER");
+        assert_eq!(pos.horz_rel_to, "PAGE");
+        assert_eq!(pos.vert_offset, 1200);
+        assert_eq!(pos.horz_offset, 3400);
+    }
+
+    #[test]
+    fn image_without_placement_keeps_legacy_defaults() {
+        let img = Image::new(
+            "BinData/photo.png",
+            HwpUnit::new(10000).unwrap(),
+            HwpUnit::new(5000).unwrap(),
+            ImageFormat::Png,
+        );
+        let hx = build_picture(&img, 0, &mut Vec::new()).unwrap();
+        let pos = hx.pos.expect("picture position should exist");
+
+        assert_eq!(hx.text_wrap, "TOP_AND_BOTTOM");
+        assert_eq!(hx.text_flow, "BOTH_SIDES");
+        assert_eq!(pos.treat_as_char, 1);
+        assert_eq!(pos.flow_with_text, 0);
+        assert_eq!(pos.allow_overlap, 0);
+        assert_eq!(pos.vert_rel_to, "PARA");
+        assert_eq!(pos.horz_rel_to, "PARA");
+        assert_eq!(pos.vert_offset, 0);
+        assert_eq!(pos.horz_offset, 0);
+    }
+
+    #[test]
     fn paragraph_shape_id_preserved_in_roundtrip() {
         let section = Section::with_paragraphs(
             vec![text_paragraph("p0", 3, 5), text_paragraph("p1", 7, 2)],
@@ -2419,7 +2398,7 @@ mod tests {
     #[test]
     fn table_roundtrip_via_decoder() {
         let cell = TableCell::new(vec![text_paragraph("Hello", 0, 0)], HwpUnit::new(5000).unwrap());
-        let table = Table::new(vec![TableRow { cells: vec![cell], height: None }]);
+        let table = Table::new(vec![TableRow::new(vec![cell])]);
 
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
@@ -2441,6 +2420,34 @@ mod tests {
             Some("Hello"),
         );
         assert_eq!(decoded_table.rows[0].cells[0].width.as_i32(), 5000);
+    }
+
+    #[test]
+    fn table_page_break_and_repeat_header_roundtrip() {
+        let cell = TableCell::new(vec![text_paragraph("Hello", 0, 0)], HwpUnit::new(5000).unwrap());
+        let table = Table::new(vec![TableRow::new(vec![cell]).with_header(true)])
+            .with_page_break(hwpforge_core::table::TablePageBreak::Table)
+            .with_repeat_header(false);
+
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::table(table, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains(r#"pageBreak="TABLE""#), "missing table pageBreak override");
+        assert!(xml.contains(r#"repeatHeader="0""#), "missing repeatHeader override");
+        assert!(xml.contains(r#"header="1""#), "missing header row marker");
+
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
+        let decoded_table = result.paragraphs[0].runs[0].content.as_table().unwrap();
+        assert_eq!(decoded_table.page_break, hwpforge_core::table::TablePageBreak::Table);
+        assert!(!decoded_table.repeat_header);
+        assert!(decoded_table.rows[0].is_header);
     }
 
     #[test]
@@ -2469,6 +2476,53 @@ mod tests {
         assert_eq!(decoded_img.path, "BinData/photo");
         assert_eq!(decoded_img.width.as_i32(), 10000);
         assert_eq!(decoded_img.height.as_i32(), 5000);
+        let placement = decoded_img.placement.as_ref().expect("placement should roundtrip");
+        assert!(placement.treat_as_char);
+        assert_eq!(placement.text_wrap.as_hwpx_str().as_ref(), "TOP_AND_BOTTOM");
+    }
+
+    #[test]
+    fn image_roundtrip_preserves_explicit_placement() {
+        let img = Image::new(
+            "BinData/photo.png",
+            HwpUnit::new(10000).unwrap(),
+            HwpUnit::new(5000).unwrap(),
+            ImageFormat::Png,
+        )
+        .with_placement(ImagePlacement {
+            text_wrap: ImageTextWrap::Square,
+            text_flow: ImageTextFlow::RightOnly,
+            treat_as_char: false,
+            flow_with_text: true,
+            allow_overlap: true,
+            vert_rel_to: ImageRelativeTo::Paper,
+            horz_rel_to: ImageRelativeTo::Page,
+            vert_offset: HwpUnit::new(1200).unwrap(),
+            horz_offset: HwpUnit::new(3400).unwrap(),
+        });
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::image(img, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let result =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
+
+        let decoded_img = result.paragraphs[0].runs[0].content.as_image().unwrap();
+        let placement = decoded_img.placement.as_ref().expect("placement should survive roundtrip");
+        assert_eq!(placement.text_wrap, ImageTextWrap::Square);
+        assert_eq!(placement.text_flow, ImageTextFlow::RightOnly);
+        assert!(!placement.treat_as_char);
+        assert!(placement.flow_with_text);
+        assert!(placement.allow_overlap);
+        assert_eq!(placement.vert_rel_to, ImageRelativeTo::Paper);
+        assert_eq!(placement.horz_rel_to, ImageRelativeTo::Page);
+        assert_eq!(placement.vert_offset.as_i32(), 1200);
+        assert_eq!(placement.horz_offset.as_i32(), 3400);
     }
 
     // ── Header / Footer / PageNum encoder roundtrip ─────────────
