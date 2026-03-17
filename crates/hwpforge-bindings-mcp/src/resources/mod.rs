@@ -160,7 +160,7 @@ pub fn read_resource(uri: &str) -> Result<ReadResourceResult, McpError> {
         _ => return Err(McpError::resource_not_found(format!("Unknown resource: {uri}"), None)),
     };
 
-    Ok(ReadResourceResult { contents: vec![ResourceContents::text(content, uri)] })
+    Ok(ReadResourceResult::new(vec![ResourceContents::text(content, uri)]))
 }
 
 #[cfg(test)]

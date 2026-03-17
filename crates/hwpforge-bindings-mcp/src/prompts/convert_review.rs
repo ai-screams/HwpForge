@@ -52,8 +52,6 @@ hwpforge_validate({{ file_path: "result.hwpx" }})
 - 큰 변경은 섹션 단위로 분할 편집 권장"#
     );
 
-    Ok(GetPromptResult {
-        description: Some("HWPX 문서 JSON round-trip 편집 워크플로우".into()),
-        messages: vec![PromptMessage::new_text(PromptMessageRole::User, text)],
-    })
+    Ok(GetPromptResult::new(vec![PromptMessage::new_text(PromptMessageRole::User, text)])
+        .with_description("HWPX 문서 JSON round-trip 편집 워크플로우"))
 }

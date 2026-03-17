@@ -46,8 +46,6 @@ pub fn get_prompt(
 hwpforge_convert({{ markdown: "<작성한_마크다운>", is_file: false, output_path: "proposal.hwpx", preset: "default" }})"#
     );
 
-    Ok(GetPromptResult {
-        description: Some("한국 정부 RFP 제안서 작성 워크플로우".into()),
-        messages: vec![PromptMessage::new_text(PromptMessageRole::User, text)],
-    })
+    Ok(GetPromptResult::new(vec![PromptMessage::new_text(PromptMessageRole::User, text)])
+        .with_description("한국 정부 RFP 제안서 작성 워크플로우"))
 }
