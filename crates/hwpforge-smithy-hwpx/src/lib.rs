@@ -46,8 +46,10 @@
 //! - OLE objects, form controls, change tracking
 
 #![deny(missing_docs)]
+#![deny(rustdoc::broken_intra_doc_links)]
 #![deny(unsafe_code)]
 
+mod color;
 pub mod decoder;
 pub mod default_styles;
 mod encoder;
@@ -58,6 +60,7 @@ mod schema;
 mod style_lookup_bridge;
 pub mod style_store;
 
+pub use decoder::package::{PackageEntryInfo, PackageReader};
 pub use decoder::{HwpxDecoder, HwpxDocument};
 pub use default_styles::{DefaultStyleEntry, HancomStyleSet};
 pub use encoder::HwpxEncoder;

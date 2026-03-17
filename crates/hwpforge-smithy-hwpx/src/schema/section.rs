@@ -33,6 +33,14 @@ pub struct HxSection {
     pub paragraphs: Vec<HxParagraph>,
 }
 
+fn default_table_page_break() -> String {
+    "CELL".to_string()
+}
+
+fn default_table_repeat_header() -> u32 {
+    1
+}
+
 // ── Paragraph ─────────────────────────────────────────────────────
 
 /// `<hp:p id="..." paraPrIDRef="3" styleIDRef="0" ...>`.
@@ -1064,9 +1072,9 @@ pub struct HxTable {
     pub lock: u32,
     #[serde(rename = "@dropcapstyle", default)]
     pub dropcap_style: String,
-    #[serde(rename = "@pageBreak", default)]
+    #[serde(rename = "@pageBreak", default = "default_table_page_break")]
     pub page_break: String,
-    #[serde(rename = "@repeatHeader", default)]
+    #[serde(rename = "@repeatHeader", default = "default_table_repeat_header")]
     pub repeat_header: u32,
     #[serde(rename = "@rowCnt", default)]
     pub row_cnt: u32,

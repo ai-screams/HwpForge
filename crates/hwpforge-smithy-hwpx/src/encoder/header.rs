@@ -19,8 +19,8 @@ use crate::schema::header::{
     HxUnitValue,
 };
 use crate::style_store::{
-    HwpxBorderFill, HwpxBorderLine, HwpxCharShape, HwpxFill, HwpxFont, HwpxParaShape, HwpxStyle,
-    HwpxStyleStore,
+    ActiveBorderFillBrush, HwpxBorderFill, HwpxBorderLine, HwpxCharShape, HwpxDiagonalLine,
+    HwpxFont, HwpxGradientFill, HwpxImageFill, HwpxParaShape, HwpxStyle, HwpxStyleStore,
 };
 
 // ── Public entry point ──────────────────────────────────────────
@@ -143,8 +143,12 @@ fn build_border_fill_xml(bf: &HwpxBorderFill) -> String {
         r##"<hh:borderFill id="{}" threeD="{three_d}" shadow="{shadow}" centerLine="{}" breakCellSeparateLine="0">"##,
         bf.id, bf.center_line,
     );
-    xml.push_str(&build_diagonal_xml("hh:slash", &bf.slash_type));
-    xml.push_str(&build_diagonal_xml("hh:backSlash", &bf.back_slash_type));
+    xml.push_str(&build_diagonal_xml("hh:slash", &bf.slash, bf.effective_slash_type()));
+    xml.push_str(&build_diagonal_xml(
+        "hh:backSlash",
+        &bf.back_slash,
+        bf.effective_back_slash_type(),
+    ));
     xml.push_str(&build_border_line_xml("hh:leftBorder", &bf.left));
     xml.push_str(&build_border_line_xml("hh:rightBorder", &bf.right));
     xml.push_str(&build_border_line_xml("hh:topBorder", &bf.top));
@@ -152,16 +156,26 @@ fn build_border_fill_xml(bf: &HwpxBorderFill) -> String {
     if let Some(diag) = &bf.diagonal {
         xml.push_str(&build_border_line_xml("hh:diagonal", diag));
     }
-    if let Some(fill) = &bf.fill {
-        xml.push_str(&build_fill_brush_xml(fill));
+    if has_fill_brush(bf) {
+        xml.push_str(&build_fill_brush_xml(bf));
     }
     xml.push_str("</hh:borderFill>");
     xml
 }
 
 /// Serializes a diagonal border element (`<hh:slash>` / `<hh:backSlash>`).
-fn build_diagonal_xml(tag: &str, border_type: &str) -> String {
-    format!(r##"<{tag} type="{border_type}" Crooked="0" isCounter="0"/>"##)
+fn build_diagonal_xml(tag: &str, diagonal: &HwpxDiagonalLine, legacy_border_type: &str) -> String {
+    let border_type = if diagonal.border_type == "NONE" && legacy_border_type != "NONE" {
+        legacy_border_type
+    } else {
+        diagonal.border_type.as_str()
+    };
+    format!(
+        r##"<{tag} type="{border_type}" Crooked="{crooked}" isCounter="{is_counter}"/>"##,
+        border_type = border_type,
+        crooked = u32::from(diagonal.crooked),
+        is_counter = u32::from(diagonal.is_counter),
+    )
 }
 
 /// Serializes a border line element.
@@ -170,12 +184,57 @@ fn build_border_line_xml(tag: &str, line: &HwpxBorderLine) -> String {
 }
 
 /// Serializes a fill brush element.
-fn build_fill_brush_xml(fill: &HwpxFill) -> String {
-    match fill {
-        HwpxFill::WinBrush { face_color, hatch_color, alpha } => format!(
-            r##"<hc:fillBrush><hc:winBrush faceColor="{face_color}" hatchColor="{hatch_color}" alpha="{alpha}"/></hc:fillBrush>"##
-        ),
+fn build_fill_brush_xml(border_fill: &HwpxBorderFill) -> String {
+    match border_fill.active_fill_brush() {
+        ActiveBorderFillBrush::Image(fill) => build_image_fill_brush_xml(fill),
+        ActiveBorderFillBrush::Gradient(fill) => build_gradient_fill_brush_xml(fill),
+        ActiveBorderFillBrush::WinBrush { face_color, hatch_color, hatch_style, alpha } => {
+            let hatch_style_attr =
+                hatch_style.map(|style| format!(r#" hatchStyle="{style}""#)).unwrap_or_default();
+            format!(
+                r##"<hc:fillBrush><hc:winBrush faceColor="{face_color}" hatchColor="{hatch_color}"{hatch_style_attr} alpha="{alpha}"/></hc:fillBrush>"##
+            )
+        }
+        ActiveBorderFillBrush::None => {
+            unreachable!("fill brush must exist when serializing border fill")
+        }
     }
+}
+
+fn has_fill_brush(border_fill: &HwpxBorderFill) -> bool {
+    !matches!(border_fill.active_fill_brush(), ActiveBorderFillBrush::None)
+}
+
+fn build_gradient_fill_brush_xml(fill: &HwpxGradientFill) -> String {
+    let colors = fill
+        .colors
+        .iter()
+        .map(|color| format!(r##"<hc:color value="{}"/>"##, color.to_hex_rgb()))
+        .collect::<String>();
+    format!(
+        r##"<hc:fillBrush><hc:gradation type="{gradient_type}" angle="{angle}" centerX="{center_x}" centerY="{center_y}" step="{step}" colorNum="{color_num}" stepCenter="{step_center}" alpha="{alpha}">{colors}</hc:gradation></hc:fillBrush>"##,
+        gradient_type = fill.gradient_type,
+        angle = fill.angle,
+        center_x = fill.center_x,
+        center_y = fill.center_y,
+        step = fill.step,
+        color_num = fill.colors.len(),
+        step_center = fill.step_center,
+        alpha = fill.alpha,
+        colors = colors,
+    )
+}
+
+fn build_image_fill_brush_xml(fill: &HwpxImageFill) -> String {
+    format!(
+        r##"<hc:fillBrush><hc:imgBrush mode="{mode}"><hc:img binaryItemIDRef="{binary_item_id_ref}" bright="{bright}" contrast="{contrast}" effect="{effect}" alpha="{alpha}"/></hc:imgBrush></hc:fillBrush>"##,
+        mode = fill.mode,
+        binary_item_id_ref = fill.binary_item_id_ref,
+        bright = fill.bright,
+        contrast = fill.contrast,
+        effect = fill.effect,
+        alpha = fill.alpha,
+    )
 }
 
 /// Builds `<hh:tabProperties>` XML from the store's tab definitions.
@@ -796,7 +855,7 @@ fn build_style(s: &HwpxStyle) -> HxStyle {
         char_pr_id_ref: s.char_pr_id_ref,
         next_style_id_ref: s.next_style_id_ref,
         lang_id: s.lang_id,
-        lock_form: 0,
+        lock_form: s.lock_form,
     }
 }
 
@@ -805,6 +864,7 @@ fn build_style(s: &HwpxStyle) -> HxStyle {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style_store::HwpxFill;
     use hwpforge_foundation::{CharShapeIndex, FontIndex, ParaShapeIndex};
 
     // ── Helper: build a minimal store ───────────────────────────
@@ -881,6 +941,24 @@ mod tests {
         assert_eq!(ps.alignment, Alignment::Left);
         assert_eq!(ps.line_spacing, 160);
         assert_eq!(ps.line_spacing_type, LineSpacingType::Percentage);
+    }
+
+    #[test]
+    fn test_with_default_fonts_emit_group_local_zero_ids() {
+        let mut store = HwpxStyleStore::with_default_fonts("함초롬돋움");
+        store.push_char_shape(HwpxCharShape::default());
+        store.push_para_shape(HwpxParaShape::default());
+        store.push_border_fill(HwpxBorderFill::default_page_border());
+        store.push_border_fill(HwpxBorderFill::default_char_background());
+        store.push_border_fill(HwpxBorderFill::default_table_border());
+
+        let xml = encode_header(&store, 1, None).unwrap();
+
+        assert!(xml.contains(r#"<hh:fontface lang="HANGUL" fontCnt="1"><hh:font id="0""#));
+        assert!(xml.contains(r#"<hh:fontface lang="LATIN" fontCnt="1"><hh:font id="0""#));
+        assert!(xml.contains(
+            r#"<hh:fontRef hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>"#
+        ));
     }
 
     // ── 3. Bold/italic presence ─────────────────────────────────
@@ -1125,6 +1203,7 @@ mod tests {
             char_pr_id_ref: 0,
             next_style_id_ref: 0,
             lang_id: 1042,
+            lock_form: 0,
         });
         store.push_style(crate::style_store::HwpxStyle {
             id: 1,
@@ -1135,6 +1214,7 @@ mod tests {
             char_pr_id_ref: 1,
             next_style_id_ref: 1,
             lang_id: 1042,
+            lock_form: 0,
         });
 
         let xml = encode_header(&store, 1, None).unwrap();
@@ -1242,6 +1322,7 @@ mod tests {
         assert!(xml.contains("<hc:fillBrush>"));
         assert!(xml.contains(r##"faceColor="none""##));
         assert!(xml.contains(r##"hatchColor="#FF000000""##));
+        assert!(!xml.contains(r##"hatchStyle=""##));
         // id=3 has SOLID borders
         assert!(xml.contains(r##"<hh:borderFill id="3""##));
         assert!(xml.contains(r##"<hh:leftBorder type="SOLID" width="0.12 mm""##));
@@ -1270,5 +1351,163 @@ mod tests {
         // Dynamic generation produces the same structure as the old constant
         assert!(xml.contains(r##"<hh:borderFills itemCnt="3">"##));
         assert!(xml.contains(r##"borderFillIDRef="2""##)); // charPr references fill id=2
+    }
+
+    #[test]
+    fn build_border_fill_xml_emits_hatch_style_when_present() {
+        let xml = build_border_fill_xml(&HwpxBorderFill {
+            id: 4,
+            three_d: false,
+            shadow: false,
+            center_line: "NONE".into(),
+            left: HwpxBorderLine::default(),
+            right: HwpxBorderLine::default(),
+            top: HwpxBorderLine::default(),
+            bottom: HwpxBorderLine::default(),
+            diagonal: Some(HwpxBorderLine::default()),
+            slash_type: "NONE".into(),
+            back_slash_type: "NONE".into(),
+            slash: HwpxDiagonalLine::default(),
+            back_slash: HwpxDiagonalLine::default(),
+            fill: Some(HwpxFill::WinBrush {
+                face_color: "#FFD700".into(),
+                hatch_color: "#000000".into(),
+                alpha: "0".into(),
+            }),
+            fill_hatch_style: Some("HORIZONTAL".into()),
+            gradient_fill: None,
+            image_fill: None,
+        });
+
+        assert!(xml.contains(r##"hatchStyle="HORIZONTAL""##));
+    }
+
+    #[test]
+    fn build_border_fill_xml_emits_gradient_fill() {
+        let xml = build_border_fill_xml(&HwpxBorderFill {
+            id: 4,
+            three_d: false,
+            shadow: false,
+            center_line: "NONE".into(),
+            left: HwpxBorderLine::default(),
+            right: HwpxBorderLine::default(),
+            top: HwpxBorderLine::default(),
+            bottom: HwpxBorderLine::default(),
+            diagonal: Some(HwpxBorderLine::default()),
+            slash_type: "NONE".into(),
+            back_slash_type: "NONE".into(),
+            slash: HwpxDiagonalLine::default(),
+            back_slash: HwpxDiagonalLine::default(),
+            fill: None,
+            fill_hatch_style: None,
+            gradient_fill: Some(HwpxGradientFill {
+                gradient_type: hwpforge_foundation::GradientType::Linear,
+                angle: 90,
+                center_x: 0,
+                center_y: 0,
+                step: 255,
+                step_center: 50,
+                alpha: 0,
+                colors: vec![Color::from_rgb(255, 0, 0), Color::from_rgb(0, 255, 0)],
+            }),
+            image_fill: None,
+        });
+
+        assert!(xml.contains(r##"<hc:gradation type="LINEAR" angle="90" centerX="0" centerY="0" step="255" colorNum="2" stepCenter="50" alpha="0">"##));
+        assert!(xml.contains(r##"<hc:color value="#FF0000"/>"##));
+        assert!(xml.contains(r##"<hc:color value="#00FF00"/>"##));
+    }
+
+    #[test]
+    fn build_border_fill_xml_emits_image_fill() {
+        let xml = build_border_fill_xml(&HwpxBorderFill {
+            id: 4,
+            three_d: false,
+            shadow: false,
+            center_line: "NONE".into(),
+            left: HwpxBorderLine::default(),
+            right: HwpxBorderLine::default(),
+            top: HwpxBorderLine::default(),
+            bottom: HwpxBorderLine::default(),
+            diagonal: Some(HwpxBorderLine::default()),
+            slash_type: "NONE".into(),
+            back_slash_type: "NONE".into(),
+            slash: HwpxDiagonalLine::default(),
+            back_slash: HwpxDiagonalLine::default(),
+            fill: None,
+            fill_hatch_style: None,
+            gradient_fill: None,
+            image_fill: Some(HwpxImageFill {
+                mode: "TOTAL".into(),
+                binary_item_id_ref: "BIN0001".into(),
+                bright: 0,
+                contrast: 0,
+                effect: "REAL_PIC".into(),
+                alpha: 0,
+            }),
+        });
+
+        assert!(xml.contains(r##"<hc:imgBrush mode="TOTAL">"##));
+        assert!(xml.contains(r##"<hc:img binaryItemIDRef="BIN0001" bright="0" contrast="0" effect="REAL_PIC" alpha="0"/>"##));
+    }
+
+    #[test]
+    fn build_border_fill_xml_preserves_diagonal_flags() {
+        let xml = build_border_fill_xml(&HwpxBorderFill {
+            id: 4,
+            three_d: false,
+            shadow: false,
+            center_line: "NONE".into(),
+            left: HwpxBorderLine::default(),
+            right: HwpxBorderLine::default(),
+            top: HwpxBorderLine::default(),
+            bottom: HwpxBorderLine::default(),
+            diagonal: Some(HwpxBorderLine::default()),
+            slash_type: "CENTER_BELOW".into(),
+            back_slash_type: "ALL".into(),
+            slash: HwpxDiagonalLine {
+                border_type: "CENTER_BELOW".into(),
+                crooked: true,
+                is_counter: false,
+            },
+            back_slash: HwpxDiagonalLine {
+                border_type: "ALL".into(),
+                crooked: false,
+                is_counter: true,
+            },
+            fill: None,
+            fill_hatch_style: None,
+            gradient_fill: None,
+            image_fill: None,
+        });
+
+        assert!(xml.contains(r##"<hh:slash type="CENTER_BELOW" Crooked="1" isCounter="0"/>"##));
+        assert!(xml.contains(r##"<hh:backSlash type="ALL" Crooked="0" isCounter="1"/>"##));
+    }
+
+    #[test]
+    fn build_border_fill_xml_falls_back_to_legacy_diagonal_type_fields() {
+        let xml = build_border_fill_xml(&HwpxBorderFill {
+            id: 4,
+            three_d: false,
+            shadow: false,
+            center_line: "NONE".into(),
+            left: HwpxBorderLine::default(),
+            right: HwpxBorderLine::default(),
+            top: HwpxBorderLine::default(),
+            bottom: HwpxBorderLine::default(),
+            diagonal: Some(HwpxBorderLine::default()),
+            slash_type: "CENTER".into(),
+            back_slash_type: "ALL".into(),
+            slash: HwpxDiagonalLine::default(),
+            back_slash: HwpxDiagonalLine::default(),
+            fill: None,
+            fill_hatch_style: None,
+            gradient_fill: None,
+            image_fill: None,
+        });
+
+        assert!(xml.contains(r##"<hh:slash type="CENTER" Crooked="0" isCounter="0"/>"##));
+        assert!(xml.contains(r##"<hh:backSlash type="ALL" Crooked="0" isCounter="0"/>"##));
     }
 }

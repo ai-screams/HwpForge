@@ -6,6 +6,7 @@ use serde::Serialize;
 
 use hwpforge_smithy_hwpx::HwpxDecoder;
 
+use crate::analysis::deep_counts::{summarize_hwpx_document, DeepSectionSummary};
 use crate::error::{check_file_size, CliError};
 
 #[derive(Serialize)]
@@ -27,9 +28,17 @@ struct MetadataInfo {
 struct SectionInfo {
     index: usize,
     paragraphs: usize,
+    deep_paragraphs: usize,
+    non_empty_paragraphs: usize,
+    deep_non_empty_paragraphs: usize,
     tables: usize,
     images: usize,
     charts: usize,
+    ole_objects: usize,
+    text_boxes: usize,
+    lines: usize,
+    rectangles: usize,
+    polygons: usize,
     has_header: bool,
     has_footer: bool,
     has_page_number: bool,
@@ -89,25 +98,15 @@ pub fn run(file: &PathBuf, show_styles: bool, json_mode: bool) {
     let doc = &hwpx_doc.document;
     let store = &hwpx_doc.style_store;
     let meta = doc.metadata();
+    let deep_summary = match summarize_hwpx_document(&bytes, &hwpx_doc) {
+        Ok(summary) => summary,
+        Err(err) => {
+            CliError::new("ANALYSIS_FAILED", format!("Cannot analyze '{}': {err}", file.display()))
+                .exit(json_mode, 2);
+        }
+    };
 
-    let sections: Vec<SectionInfo> = doc
-        .sections()
-        .iter()
-        .enumerate()
-        .map(|(i, sec)| {
-            let counts = sec.content_counts();
-            SectionInfo {
-                index: i,
-                paragraphs: sec.paragraphs.len(),
-                tables: counts.tables,
-                images: counts.images,
-                charts: counts.charts,
-                has_header: sec.header.is_some(),
-                has_footer: sec.footer.is_some(),
-                has_page_number: sec.page_number.is_some(),
-            }
-        })
-        .collect();
+    let sections: Vec<SectionInfo> = deep_summary.sections.iter().map(SectionInfo::from).collect();
 
     let styles = if show_styles {
         let mut seen_fonts = std::collections::HashSet::new();
@@ -177,10 +176,19 @@ pub fn run(file: &PathBuf, show_styles: bool, json_mode: bool) {
         println!("  Author: {}", result.metadata.author);
         println!("  Sections: {}", result.sections.len());
         for sec in &result.sections {
+            let extras: String = render_extra_control_counts(sec);
             println!(
-                "    [{}] {} paras, {} tables, {} images, {} charts | header={} footer={} pagenum={}",
-                sec.index, sec.paragraphs, sec.tables, sec.images, sec.charts,
-                sec.has_header, sec.has_footer, sec.has_page_number
+                "    [{}] {} paras (deep {}), {} tables, {} images, {} charts{} | header={} footer={} pagenum={}",
+                sec.index,
+                sec.paragraphs,
+                sec.deep_paragraphs,
+                sec.tables,
+                sec.images,
+                sec.charts,
+                extras,
+                sec.has_header,
+                sec.has_footer,
+                sec.has_page_number
             );
         }
         if let Some(styles) = &result.styles {
@@ -189,4 +197,47 @@ pub fn run(file: &PathBuf, show_styles: bool, json_mode: bool) {
             println!("  ParaShapes: {}", styles.para_shapes.len());
         }
     }
+}
+
+impl From<&DeepSectionSummary> for SectionInfo {
+    fn from(summary: &DeepSectionSummary) -> Self {
+        Self {
+            index: summary.index,
+            paragraphs: summary.paragraphs,
+            deep_paragraphs: summary.deep_paragraphs,
+            non_empty_paragraphs: summary.non_empty_paragraphs,
+            deep_non_empty_paragraphs: summary.deep_non_empty_paragraphs,
+            tables: summary.tables,
+            images: summary.images,
+            charts: summary.charts,
+            ole_objects: summary.ole_objects,
+            text_boxes: summary.text_boxes,
+            lines: summary.lines,
+            rectangles: summary.rectangles,
+            polygons: summary.polygons,
+            has_header: summary.has_header,
+            has_footer: summary.has_footer,
+            has_page_number: summary.has_page_number,
+        }
+    }
+}
+
+fn render_extra_control_counts(section: &SectionInfo) -> String {
+    let mut parts: Vec<String> = Vec::new();
+    if section.text_boxes > 0 {
+        parts.push(format!(" textboxes={}", section.text_boxes));
+    }
+    if section.ole_objects > 0 {
+        parts.push(format!(" ole={}", section.ole_objects));
+    }
+    if section.lines > 0 {
+        parts.push(format!(" lines={}", section.lines));
+    }
+    if section.rectangles > 0 {
+        parts.push(format!(" rects={}", section.rectangles));
+    }
+    if section.polygons > 0 {
+        parts.push(format!(" polygons={}", section.polygons));
+    }
+    parts.concat()
 }

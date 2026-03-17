@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.1.7...hwpforge-bindings-mcp-v0.2.0) - 2026-03-17
+
+### Changed
+
+- Align the MCP binding crate with the workspace-wide `0.2.0` release line.
+- Adopt the `hwpforge-core` `0.2.0` table and image construction contract in the shipped command surface.
+
 ## [0.1.7](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.1.6...hwpforge-bindings-mcp-v0.1.7) - 2026-03-12
 
 ### Added
@@ -70,4 +77,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(mcp)* harden security and correctness from audit
 
 - *(mcp)* address code review findings (P1-P3)
-

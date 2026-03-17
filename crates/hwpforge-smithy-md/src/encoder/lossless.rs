@@ -315,16 +315,13 @@ mod tests {
 
     #[test]
     fn lossless_encodes_table_markup() {
-        let table = hwpforge_core::Table::new(vec![TableRow {
-            cells: vec![TableCell::new(
-                vec![Paragraph::with_runs(
-                    vec![Run::text("A", CharShapeIndex::new(0))],
-                    ParaShapeIndex::new(0),
-                )],
-                HwpUnit::from_mm(20.0).unwrap(),
+        let table = hwpforge_core::Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![Paragraph::with_runs(
+                vec![Run::text("A", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
             )],
-            height: None,
-        }]);
+            HwpUnit::from_mm(20.0).unwrap(),
+        )])]);
 
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::table(table, CharShapeIndex::new(2))],
@@ -338,22 +335,19 @@ mod tests {
 
     #[test]
     fn lossless_table_cell_preserves_nested_hyperlink_markup() {
-        let table = hwpforge_core::Table::new(vec![TableRow {
-            cells: vec![TableCell::new(
-                vec![Paragraph::with_runs(
-                    vec![Run::control(
-                        Control::Hyperlink {
-                            text: "Rust".to_string(),
-                            url: "https://www.rust-lang.org".to_string(),
-                        },
-                        CharShapeIndex::new(0),
-                    )],
-                    ParaShapeIndex::new(0),
+        let table = hwpforge_core::Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![Paragraph::with_runs(
+                vec![Run::control(
+                    Control::Hyperlink {
+                        text: "Rust".to_string(),
+                        url: "https://www.rust-lang.org".to_string(),
+                    },
+                    CharShapeIndex::new(0),
                 )],
-                HwpUnit::from_mm(20.0).unwrap(),
+                ParaShapeIndex::new(0),
             )],
-            height: None,
-        }]);
+            HwpUnit::from_mm(20.0).unwrap(),
+        )])]);
 
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::table(table, CharShapeIndex::new(2))],
@@ -659,16 +653,16 @@ mod tests {
     #[test]
     fn lossless_encodes_table_with_row_height() {
         use hwpforge_core::TableRow;
-        let table = hwpforge_core::Table::new(vec![TableRow {
-            cells: vec![TableCell::new(
+        let table = hwpforge_core::Table::new(vec![TableRow::with_height(
+            vec![TableCell::new(
                 vec![Paragraph::with_runs(
                     vec![Run::text("cell", CharShapeIndex::new(0))],
                     ParaShapeIndex::new(0),
                 )],
                 HwpUnit::from_mm(40.0).unwrap(),
             )],
-            height: Some(HwpUnit::from_mm(15.0).unwrap()),
-        }]);
+            HwpUnit::from_mm(15.0).unwrap(),
+        )]);
 
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::table(table, CharShapeIndex::new(0))],
@@ -683,17 +677,14 @@ mod tests {
     #[test]
     fn lossless_encodes_table_with_caption() {
         use hwpforge_core::{caption::Caption, TableRow};
-        let mut table = hwpforge_core::Table::new(vec![TableRow {
-            cells: vec![TableCell::new(
-                vec![Paragraph::with_runs(
-                    vec![Run::text("data", CharShapeIndex::new(0))],
-                    ParaShapeIndex::new(0),
-                )],
-                HwpUnit::from_mm(40.0).unwrap(),
+        let table = hwpforge_core::Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![Paragraph::with_runs(
+                vec![Run::text("data", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
             )],
-            height: None,
-        }]);
-        table.caption = Some(Caption {
+            HwpUnit::from_mm(40.0).unwrap(),
+        )])])
+        .with_caption(Caption {
             paragraphs: vec![Paragraph::with_runs(
                 vec![Run::text("My Caption", CharShapeIndex::new(0))],
                 ParaShapeIndex::new(0),
@@ -713,17 +704,14 @@ mod tests {
     #[test]
     fn lossless_encodes_table_with_width() {
         use hwpforge_core::TableRow;
-        let mut table = hwpforge_core::Table::new(vec![TableRow {
-            cells: vec![TableCell::new(
-                vec![Paragraph::with_runs(
-                    vec![Run::text("data", CharShapeIndex::new(0))],
-                    ParaShapeIndex::new(0),
-                )],
-                HwpUnit::from_mm(40.0).unwrap(),
+        let table = hwpforge_core::Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![Paragraph::with_runs(
+                vec![Run::text("data", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
             )],
-            height: None,
-        }]);
-        table.width = Some(HwpUnit::from_mm(120.0).unwrap());
+            HwpUnit::from_mm(40.0).unwrap(),
+        )])])
+        .with_width(HwpUnit::from_mm(120.0).unwrap());
 
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::table(table, CharShapeIndex::new(0))],
@@ -738,16 +726,16 @@ mod tests {
     fn lossless_encodes_cell_with_background_color() {
         use hwpforge_core::TableRow;
         use hwpforge_foundation::Color;
-        let mut cell = TableCell::new(
+        let cell = TableCell::new(
             vec![Paragraph::with_runs(
                 vec![Run::text("colored", CharShapeIndex::new(0))],
                 ParaShapeIndex::new(0),
             )],
             HwpUnit::from_mm(40.0).unwrap(),
-        );
-        cell.background = Some(Color::from_rgb(255, 0, 0));
+        )
+        .with_background(Color::from_rgb(255, 0, 0));
 
-        let table = hwpforge_core::Table::new(vec![TableRow { cells: vec![cell], height: None }]);
+        let table = hwpforge_core::Table::new(vec![TableRow::new(vec![cell])]);
 
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::table(table, CharShapeIndex::new(0))],

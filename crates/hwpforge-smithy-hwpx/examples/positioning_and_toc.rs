@@ -18,7 +18,7 @@ use hwpforge_core::run::Run;
 use hwpforge_core::section::Section;
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{Alignment, CharShapeIndex, Color, HwpUnit, ParaShapeIndex};
-use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore};
+use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
 use hwpforge_smithy_hwpx::HwpxEncoder;
 
 // ── Style indices ──────────────────────────────────────────────
@@ -42,11 +42,7 @@ fn ctrl_para(ctrl: Control) -> Paragraph {
 }
 
 fn build_store() -> HwpxStyleStore {
-    let mut store = HwpxStyleStore::new();
-
-    for &lang in &["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
-        store.push_font(HwpxFont::new(0, "함초롬돋움", lang));
-    }
+    let mut store = HwpxStyleStore::with_default_fonts("함초롬돋움");
 
     // CS 0: normal (10pt, black)
     store.push_char_shape(HwpxCharShape::default());

@@ -1,6 +1,6 @@
 # MEMORY.md -- HwpForge Project Knowledge Base
 
-> Last Updated: 2026-03-07
+> Last Updated: 2026-03-15
 > Sections marked [stable] rarely change; [volatile] should be re-verified after major feature or workflow changes.
 
 ## Identity [stable]
@@ -9,11 +9,11 @@
 | ------------------ | ------------------------------------------------- | -------------------- | ------------------- |
 | Name               | HwpForge                                          | License              | MIT OR Apache-2.0   |
 | Purpose            | Programmatic control of Korean HWP/HWPX documents | Language             | Rust (edition 2021) |
-| Version            | 0.1.0                                             | MSRV / Dev Toolchain | 1.88 / 1.93         |
-| Workspace          | 9 Cargo packages                                  | Tracked Rust LOC     | 61,577              |
-| Tests              | 1,510 nextest / 1,702 cargo test-discovered       | Coverage Gate        | 90%+ in CI          |
-| Tracked Rust Files | 93                                                | Unsafe               | Forbidden           |
-| Design             | Clean Room (ideas only, no code copy)             | CI workflows         | 4                   |
+| Version            | 0.1.7                                             | MSRV / Dev Toolchain | 1.88 / 1.93         |
+| Workspace          | 10 Cargo packages                                 | Tracked Rust LOC     | ~62,664             |
+| Tests              | 1,881 nextest runnable                            | Coverage Gate        | 90%+ in CI          |
+| Tracked Rust Files | 144                                               | Unsafe               | Forbidden           |
+| Design             | Clean Room (ideas only, no code copy)             | CI workflows         | 5                   |
 
 ## Architecture [stable]
 
@@ -21,8 +21,8 @@
 Foundation (HwpUnit, Color, IDs)
   -> Core (document DOM, style references only)
   -> Blueprint (YAML styles and style registry)
-  -> Smithy (HWPX / Markdown compilers, HWP5 planned)
-  -> Bindings (CLI / Python planned, MCP planned)
+  -> Smithy (HWPX / Markdown compilers, HWP5 reader/converter)
+  -> Bindings (CLI / MCP shipped, Python planned)
 ```
 
 Key principle: **Structure** (Core) and **Style** (Blueprint) stay separate, like HTML + CSS.
@@ -31,17 +31,18 @@ Key principle: **Structure** (Core) and **Style** (Blueprint) stay separate, lik
 
 ## Workspace Packages [volatile]
 
-| Package                 | Role                                         | Status         |
-| ----------------------- | -------------------------------------------- | -------------- |
-| `hwpforge`              | Umbrella facade crate (`hwpx`, `md`, `full`) | ACTIVE         |
-| `hwpforge-foundation`   | Primitives, units, colors, branded indices   | COMPLETE       |
-| `hwpforge-core`         | Format-agnostic document model               | COMPLETE       |
-| `hwpforge-blueprint`    | YAML template/style system                   | COMPLETE       |
-| `hwpforge-smithy-hwpx`  | HWPX decoder/encoder                         | COMPLETE       |
-| `hwpforge-smithy-md`    | Markdown bridge                              | COMPLETE       |
-| `hwpforge-smithy-hwp5`  | HWP5 reader                                  | STUB / v2.0    |
-| `hwpforge-bindings-cli` | CLI entrypoint                               | STUB / Phase 6 |
-| `hwpforge-bindings-py`  | Python bindings                              | STUB / Phase 6 |
+| Package                 | Role                                         | Status            |
+| ----------------------- | -------------------------------------------- | ----------------- |
+| `hwpforge`              | Umbrella facade crate (`hwpx`, `md`, `full`) | ACTIVE            |
+| `hwpforge-foundation`   | Primitives, units, colors, branded indices   | COMPLETE          |
+| `hwpforge-core`         | Format-agnostic document model               | COMPLETE          |
+| `hwpforge-blueprint`    | YAML template/style system                   | COMPLETE          |
+| `hwpforge-smithy-hwpx`  | HWPX decoder/encoder                         | COMPLETE          |
+| `hwpforge-smithy-md`    | Markdown bridge                              | COMPLETE          |
+| `hwpforge-smithy-hwp5`  | HWP5 reader / converter path                 | ACTIVE / Phase 10 |
+| `hwpforge-bindings-cli` | CLI entrypoint                               | SHIPPED           |
+| `hwpforge-bindings-mcp` | MCP server                                   | SHIPPED           |
+| `hwpforge-bindings-py`  | Python bindings                              | STUB / planned    |
 
 Write-path completion status:
 
@@ -54,26 +55,26 @@ Write-path completion status:
 
 ## Roadmap Snapshot [volatile]
 
-|     Phase | Description                        | Status          |
-| --------: | ---------------------------------- | --------------- |
-|         0 | Foundation                         | DONE            |
-|         1 | Core DOM                           | DONE            |
-|         2 | Blueprint styles                   | DONE            |
-|       3-4 | Smithy-HWPX read/write             | DONE            |
-|       4.5 | Extended write features (Wave 1-6) | DONE            |
-|         5 | Smithy-MD                          | DONE            |
-|       5.5 | Zero-config write API              | DONE            |
-| Wave 7-14 | Remaining HWPX write surface       | DONE            |
-|         6 | CLI bindings                       | NEXT            |
-|         7 | MCP server                         | PLANNED         |
-|         8 | Testing + release hardening        | PLANNED         |
-|        10 | HWP5 reader                        | DEFERRED (v2.0) |
+|     Phase | Description                        | Status      |
+| --------: | ---------------------------------- | ----------- |
+|         0 | Foundation                         | DONE        |
+|         1 | Core DOM                           | DONE        |
+|         2 | Blueprint styles                   | DONE        |
+|       3-4 | Smithy-HWPX read/write             | DONE        |
+|       4.5 | Extended write features (Wave 1-6) | DONE        |
+|         5 | Smithy-MD                          | DONE        |
+|       5.5 | Zero-config write API              | DONE        |
+| Wave 7-14 | Remaining HWPX write surface       | DONE        |
+|         6 | CLI bindings                       | DONE        |
+|         7 | MCP server / distribution          | DONE        |
+|         8 | Testing + release hardening        | PLANNED     |
+|        10 | HWP5 reader / converter            | IN PROGRESS |
 
 Planning sources:
 
 - `.docs/planning/ROADMAP.md`
-- `.docs/planning/PHASE6_CLI_DETAILED.md`
-- `.docs/planning/PHASE7_MCP_SERVER_DETAILED.md`
+- `.docs/research/hwp5/HWP5_RESEARCH_EXECUTION_BLUEPRINT.md`
+- `.docs/research/hwp5/HWP5_RESEARCH_MASTER.md`
 
 ---
 
@@ -118,6 +119,18 @@ These are the facts most likely to cause subtle breakage if forgotten.
 
 **HWP5 field IDs**: real-world implementations diverge (`%dte`, `$dte`, `%dat`, `%smr`, `$smr`). Parser policy is alias normalization + unknown preservation.
 
+**HWP5 table page break**: current controlled fixture truth is `0=None`, `1=Table`, `2=Cell`. Hancom UI wording and some reference prose do not line up cleanly with the saved enum truth.
+
+**HWP5 BinData images**: `DocInfo/BinData compression=Default` entries require per-entry payload decompression before HWPX emission. Raw stream bytes are not always display-ready image bytes.
+
+**HWP5 table fixture labels**: `table_09a_page_break_cell` is misnamed; saved truth is `TABLE` mode. Trust emitted companion HWPX, not the filename.
+
+**HWP5 table parity**: `page_break`, `repeat_header`, `cell_margin`, `vertical_align`, table/cell `border_fill_id`, positive `cell.height`, and structured `table_cell_evidence` now round-trip through Core/HWPX/HWP5 for the current controlled fixtures. Remaining table presentation backlog is richer row/table sizing semantics and broader public-document border/fill fidelity.
+
+**HWPX table omitted/default handling**: missing `repeatHeader` now defaults to `true`; missing `pageBreak` now defaults to `CELL`. Explicit unknown `pageBreak` values are invalid structure, not silently normalized.
+
+**HWP5 unknown table page break**: unknown raw `page_break` values must surface as `ProjectionFallback` warning-first behavior. Silent normalization is forbidden.
+
 **Reusable workflow semantics**: `workflow_call` makes `github.event_name == 'workflow_call'`, so mode must be passed explicitly.
 
 **Pages handoff**: Pages deploy is called directly from `release-plz.yml`; it does not rely on tag-push fan-out anymore.
@@ -126,6 +139,8 @@ These are the facts most likely to cause subtle breakage if forgotten.
 
 **Workspace lockfile policy**: `Cargo.lock` is still ignored in `.gitignore`, so workspace-wide CI commands must not assume `--locked`.
 
+**`.docs` workflow rule**: `.docs/` is treated as local planning/research workspace in this repo workflow. Do not assume `git status` will surface `.docs` edits; operationally treat `.docs` updates as local memory/planning changes unless the user explicitly asks to promote them into tracked changes.
+
 ---
 
 ## Key Decisions [stable]
@@ -133,9 +148,12 @@ These are the facts most likely to cause subtle breakage if forgotten.
 - **TDD**: edge cases first, normal cases last
 - **YAGNI**: avoid speculative features
 - **100% rustdoc**: public APIs are documented
+- **Warning-first for unknowns**: unsupported or unknown source semantics must surface warnings or validation errors first
+- **No fake support**: silent normalization of unknown values into arbitrary defaults is forbidden
 - **Current dependency baseline**: quick-xml 0.39, zip 8.1, pulldown-cmark 0.13, schemars 1.2
 - **Release automation**: `release-plz` owns release PRs and publish flow
 - **MSRV policy**: stable minus 4 releases; source of truth is `Cargo.toml` `rust-version`
+- **HWP5 execution rule**: if HWP5 needs semantics that Core/HWPX cannot represent or round-trip, implement the HWPX/Core side first and wire HWP5 after the shared model is proven
 
 ## Documentation Map [stable]
 

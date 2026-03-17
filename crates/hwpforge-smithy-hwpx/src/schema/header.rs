@@ -811,14 +811,14 @@ pub struct HxFillBrush {
         skip_serializing_if = "Option::is_none"
     )]
     pub win_brush: Option<HxWinBrush>,
-    /// Gradient fill (future use).
+    /// Gradient fill.
     #[serde(
         rename(serialize = "hc:gradation", deserialize = "gradation"),
         default,
         skip_serializing_if = "Option::is_none"
     )]
     pub gradation: Option<HxGradation>,
-    /// Image fill (future use).
+    /// Image fill.
     #[serde(
         rename(serialize = "hc:imgBrush", deserialize = "imgBrush"),
         default,
@@ -845,35 +845,79 @@ pub struct HxWinBrush {
     pub alpha: String,
 }
 
-/// `<hc:gradation>` — gradient fill (placeholder, attributes parsed but not used).
+/// `<hc:gradation>` — gradient fill.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxGradation {
     /// Gradient type string.
     #[serde(rename = "@type", default)]
     pub gradation_type: String,
     /// Gradient angle in degrees.
-    #[serde(rename = "@angle", default)]
-    pub angle: String,
+    #[serde(rename = "@angle", default, deserialize_with = "deser_i32_or_u32")]
+    pub angle: i32,
     /// Gradient center X.
-    #[serde(rename = "@centerX", default)]
-    pub center_x: String,
+    #[serde(rename = "@centerX", default, deserialize_with = "deser_i32_or_u32")]
+    pub center_x: i32,
     /// Gradient center Y.
-    #[serde(rename = "@centerY", default)]
-    pub center_y: String,
+    #[serde(rename = "@centerY", default, deserialize_with = "deser_i32_or_u32")]
+    pub center_y: i32,
     /// Number of gradient steps.
-    #[serde(rename = "@step", default)]
-    pub step: String,
+    #[serde(rename = "@step", default, deserialize_with = "deser_i32_or_u32")]
+    pub step: i32,
     /// Number of colors.
-    #[serde(rename = "@colorNum", default)]
-    pub color_num: String,
+    #[serde(rename = "@colorNum", default, deserialize_with = "deser_i32_or_u32")]
+    pub color_num: i32,
+    /// Step center percentage.
+    #[serde(rename = "@stepCenter", default, deserialize_with = "deser_i32_or_u32")]
+    pub step_center: i32,
+    /// Alpha transparency.
+    #[serde(rename = "@alpha", default, deserialize_with = "deser_i32_or_u32")]
+    pub alpha: i32,
+    /// Gradient color list.
+    #[serde(rename(serialize = "hc:color", deserialize = "color"), default)]
+    pub colors: Vec<HxGradColor>,
 }
 
-/// `<hc:imgBrush>` — image pattern fill (placeholder).
+/// `<hc:imgBrush>` — image pattern fill.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxImgBrush {
     /// Image fill mode string.
     #[serde(rename = "@mode", default)]
     pub mode: String,
+    /// Nested image reference and tuning values.
+    #[serde(
+        rename(serialize = "hc:img", deserialize = "img"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub img: Option<HxImg>,
+}
+
+/// `<hc:color>` — a single gradient color stop.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxGradColor {
+    /// Color value as `#RRGGBB`.
+    #[serde(rename = "@value", default)]
+    pub value: String,
+}
+
+/// `<hc:img>` — referenced image payload for an image brush.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxImg {
+    /// Logical binary item reference without extension.
+    #[serde(rename = "@binaryItemIDRef", default)]
+    pub binary_item_id_ref: String,
+    /// Brightness adjustment.
+    #[serde(rename = "@bright", default, deserialize_with = "deser_i32_or_u32")]
+    pub bright: i32,
+    /// Contrast adjustment.
+    #[serde(rename = "@contrast", default, deserialize_with = "deser_i32_or_u32")]
+    pub contrast: i32,
+    /// Effect string.
+    #[serde(rename = "@effect", default)]
+    pub effect: String,
+    /// Alpha transparency.
+    #[serde(rename = "@alpha", default, deserialize_with = "deser_i32_or_u32")]
+    pub alpha: i32,
 }
 
 // ── Numberings ────────────────────────────────────────────────────

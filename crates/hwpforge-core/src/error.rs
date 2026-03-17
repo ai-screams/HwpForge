@@ -266,6 +266,19 @@ pub enum ValidationError {
         /// Zero-based cell index.
         cell_index: usize,
     },
+
+    /// A header row appears after a non-header row.
+    #[error("Table header row is not part of the leading header block (section {section_index}, paragraph {paragraph_index}, run {run_index}, row {row_index})")]
+    NonLeadingTableHeaderRow {
+        /// Zero-based section index.
+        section_index: usize,
+        /// Zero-based paragraph index.
+        paragraph_index: usize,
+        /// Zero-based run index.
+        run_index: usize,
+        /// Zero-based row index.
+        row_index: usize,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -318,6 +331,8 @@ pub enum CoreErrorCode {
     EmptyCategoryLabels = 2014,
     /// Mismatched x/y value lengths in an XY series.
     MismatchedSeriesLengths = 2015,
+    /// Non-leading table header row.
+    NonLeadingTableHeaderRow = 2016,
     /// Invalid document structure.
     InvalidStructure = 2100,
 }
@@ -338,6 +353,7 @@ impl ValidationError {
             Self::EmptyTable { .. } => CoreErrorCode::EmptyTable,
             Self::EmptyTableRow { .. } => CoreErrorCode::EmptyTableRow,
             Self::InvalidSpan { .. } => CoreErrorCode::InvalidSpan,
+            Self::NonLeadingTableHeaderRow { .. } => CoreErrorCode::NonLeadingTableHeaderRow,
             Self::EmptyTextBox { .. } => CoreErrorCode::EmptyTextBox,
             Self::EmptyFootnote { .. } => CoreErrorCode::EmptyFootnote,
             Self::EmptyTableCell { .. } => CoreErrorCode::EmptyTableCell,

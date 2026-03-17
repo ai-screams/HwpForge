@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-blueprint-v0.1.6...hwpforge-blueprint-v0.2.0) - 2026-03-17
+
+### Changed
+
+- Align the blueprint crate version with the workspace-wide `0.2.0` release line for consistent dependency pinning.
+
 ## [0.1.6](https://github.com/ai-screams/HwpForge/compare/hwpforge-blueprint-v0.1.5...hwpforge-blueprint-v0.1.6) - 2026-03-10
 
 ### Added
@@ -47,4 +53,3 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - *(readme)* replace broken Buy Me a Coffee button with stable CDN image
 
 - use absolute URLs for README images (crates.io compatibility)
-

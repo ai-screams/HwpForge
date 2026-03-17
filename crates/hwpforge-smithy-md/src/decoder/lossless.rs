@@ -392,36 +392,39 @@ fn attach_closed_node(
         }
         OpenNode::Table(table) => {
             let rows = if table.rows.is_empty() {
-                vec![TableRow {
-                    cells: vec![TableCell::new(
-                        vec![Paragraph::with_runs(
-                            vec![Run::text("", CharShapeIndex::new(0))],
-                            ParaShapeIndex::new(0),
-                        )],
-                        HwpUnit::from_mm(10.0)?,
+                vec![TableRow::new(vec![TableCell::new(
+                    vec![Paragraph::with_runs(
+                        vec![Run::text("", CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
                     )],
-                    height: None,
-                }]
+                    HwpUnit::from_mm(10.0)?,
+                )])]
             } else {
                 table.rows
             };
             let mut core_table = Table::new(rows);
-            core_table.width = table.width;
-            core_table.caption = table.caption.map(|text| {
+            if let Some(width) = table.width {
+                core_table = core_table.with_width(width);
+            }
+            if let Some(text) = table.caption {
                 use hwpforge_core::caption::Caption;
-                Caption {
+                core_table = core_table.with_caption(Caption {
                     paragraphs: vec![Paragraph::with_runs(
                         vec![Run::text(&text, CharShapeIndex::new(0))],
                         ParaShapeIndex::new(0),
                     )],
                     ..Caption::default()
-                }
-            });
+                });
+            }
             push_run_to_parent(stack, Run::table(core_table, table.char_shape_id))
         }
         OpenNode::Row(row) => {
             if let Some(OpenNode::Table(table)) = stack.last_mut() {
-                table.rows.push(TableRow { cells: row.cells, height: row.height });
+                let core_row = match row.height {
+                    Some(height) => TableRow::with_height(row.cells, height),
+                    None => TableRow::new(row.cells),
+                };
+                table.rows.push(core_row);
                 Ok(())
             } else {
                 Err(MdError::LosslessParse {
@@ -441,7 +444,9 @@ fn attach_closed_node(
 
             let mut table_cell =
                 TableCell::with_span(paragraphs, cell.width, cell.col_span, cell.row_span);
-            table_cell.background = cell.background;
+            if let Some(background) = cell.background {
+                table_cell = table_cell.with_background(background);
+            }
 
             if let Some(OpenNode::Row(row)) = stack.last_mut() {
                 row.cells.push(table_cell);

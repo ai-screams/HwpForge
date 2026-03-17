@@ -80,6 +80,17 @@ HwpForge 사용 예제 모음
 
 [src-md-convert]: ../crates/hwpforge-smithy-md/examples/hwpx_md_convert.rs
 
+### HWP5 → HWPX 변환 예제
+
+CLI `hwpforge convert-hwp5`로 생성합니다. 입력 `.hwp`와 HwpForge가 생성한 출력 `.hwpx`를 짝으로 둡니다.
+
+| 입력 파일                                                                                                | 출력 파일                                                                                                  | 설명                                           |
+| -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| [`hwp52hwpx/hwp5_01.hwp`](hwp52hwpx/hwp5_01.hwp)                                                         | [`hwp52hwpx/hwp5_01.hwpx`](hwp52hwpx/hwp5_01.hwpx)                                                         | 기본 변환 예제 — 간단한 HWP5 텍스트 문서       |
+| [`hwp52hwpx/mixed_02a_header_image_footer_text.hwp`](hwp52hwpx/mixed_02a_header_image_footer_text.hwp)   | [`hwp52hwpx/mixed_02a_header_image_footer_text.hwpx`](hwp52hwpx/mixed_02a_header_image_footer_text.hwpx)   | 복합 예제 — 머리글/바닥글, 이미지, 일반 텍스트 |
+| [`hwp52hwpx/table_20_real_world_ministry_style.hwp`](hwp52hwpx/table_20_real_world_ministry_style.hwp)   | [`hwp52hwpx/table_20_real_world_ministry_style.hwpx`](hwp52hwpx/table_20_real_world_ministry_style.hwpx)   | 실무형 표 예제 — 대표 기관 문서 스타일 표      |
+| [`hwp52hwpx/table_20_real_world_ministry_stress.hwp`](hwp52hwpx/table_20_real_world_ministry_stress.hwp) | [`hwp52hwpx/table_20_real_world_ministry_stress.hwpx`](hwp52hwpx/table_20_real_world_ministry_stress.hwpx) | 스트레스 예제 — 복잡한 실문서 양식형 병합 표   |
+
 ## 실행 방법
 
 ```bash
@@ -100,6 +111,13 @@ cargo run -p hwpforge-smithy-md --example hwpx_md_convert
 
 # Markdown → HWPX
 cargo run -p hwpforge-smithy-md --example gen_hwpx
+
+# HWP5 → HWPX
+mkdir -p examples/hwp52hwpx
+cargo run -p hwpforge-bindings-cli -- convert-hwp5 tests/fixtures/hwp5_01.hwp -o examples/hwp52hwpx/hwp5_01.hwpx
+cargo run -p hwpforge-bindings-cli -- convert-hwp5 tests/fixtures/mixed_02a_header_image_footer_text.hwp -o examples/hwp52hwpx/mixed_02a_header_image_footer_text.hwpx
+cargo run -p hwpforge-bindings-cli -- convert-hwp5 tests/fixtures/table_20_real_world_ministry_style.hwp -o examples/hwp52hwpx/table_20_real_world_ministry_style.hwpx
+cargo run -p hwpforge-bindings-cli -- convert-hwp5 tests/fixtures/table_20_real_world_ministry_stress.hwp -o examples/hwp52hwpx/table_20_real_world_ministry_stress.hwpx
 ```
 
-기능별/종합 가이드는 `temp/`에, round-trip 예제는 `examples/hwpx2json/`과 `examples/json2hwpx/`에, MD 변환은 `examples/hwpx2md/`에 생성됩니다.
+기능별/종합 가이드는 `temp/`에, round-trip 예제는 `examples/hwpx2json/`과 `examples/json2hwpx/`에, MD 변환은 `examples/hwpx2md/`에, HWP5 변환 예제는 `examples/hwp52hwpx/`에 생성됩니다.

@@ -52,6 +52,17 @@ pub struct PackageReader<'a> {
     total_read: u64,
 }
 
+/// Metadata about a single ZIP entry inside an HWPX package.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageEntryInfo {
+    /// Full archive path (for example, `Contents/section0.xml`).
+    pub path: String,
+    /// Uncompressed size reported by the ZIP entry header.
+    pub size: u64,
+    /// Compressed size reported by the ZIP entry header.
+    pub compressed_size: u64,
+}
+
 impl<'a> PackageReader<'a> {
     /// Opens an HWPX archive from raw bytes.
     ///
@@ -117,6 +128,31 @@ impl<'a> PackageReader<'a> {
         self.section_count
     }
 
+    /// Returns metadata for every entry in the archive.
+    ///
+    /// Entries are returned in ZIP order so callers can compare package
+    /// structure directly against a fixture.
+    pub fn list_entries(&mut self) -> HwpxResult<Vec<PackageEntryInfo>> {
+        let mut entries = Vec::with_capacity(self.archive.len());
+        for index in 0..self.archive.len() {
+            let file = self.archive.by_index(index).map_err(|e| HwpxError::Zip(e.to_string()))?;
+            entries.push(PackageEntryInfo {
+                path: file.name().to_string(),
+                size: file.size(),
+                compressed_size: file.compressed_size(),
+            });
+        }
+        Ok(entries)
+    }
+
+    /// Reads an arbitrary archive entry as UTF-8 text.
+    ///
+    /// This is primarily useful for package-census tooling that needs raw
+    /// access to files such as `Contents/content.hpf`.
+    pub fn read_text_entry(&mut self, path: &str) -> HwpxResult<String> {
+        self.read_entry(path)
+    }
+
     /// Reads all `Contents/masterpage*.xml` entries from the archive.
     ///
     /// Returns a map from masterpage index to XML content.
@@ -161,7 +197,8 @@ impl<'a> PackageReader<'a> {
         Ok(map)
     }
 
-    /// Reads all `BinData/*` entries from the archive into an [`ImageStore`].
+    /// Reads all `BinData/*` entries from the archive into an
+    /// [`hwpforge_core::image::ImageStore`].
     ///
     /// Each entry's filename (without the `BinData/` prefix) becomes the
     /// key in the store, and the raw bytes become the value.

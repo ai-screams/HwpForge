@@ -18,7 +18,7 @@ use hwpforge_core::image::ImageStore;
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::Run;
 use hwpforge_core::section::Section;
-use hwpforge_core::table::{Table, TableCell, TableRow};
+use hwpforge_core::table::{Table, TableCell, TablePageBreak, TableRow};
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
     Alignment, CharShapeIndex, Color, HwpUnit, LineSpacingType, ParaShapeIndex,
@@ -134,9 +134,7 @@ fn cell_lines(text: &str, width: HwpUnit, cs: usize, ps: usize) -> TableCell {
 
 /// Header cell with gray background.
 fn header_cell(text: &str, width: HwpUnit) -> TableCell {
-    let mut c = cell_lines(text, width, CS_HEADER, PS_CENTER);
-    c.background = Some(Color::from_rgb(220, 220, 220));
-    c
+    cell_lines(text, width, CS_HEADER, PS_CENTER).with_background(Color::from_rgb(220, 220, 220))
 }
 
 // ── Data ────────────────────────────────────────────────────────
@@ -518,7 +516,7 @@ fn build_table_for_page(
         .zip(widths_hwp.iter())
         .map(|(&idx, &w)| header_cell(columns[idx].name, w))
         .collect();
-    let header: TableRow = TableRow { cells: header_cells, height: None };
+    let header: TableRow = TableRow::new(header_cells).with_header(true);
 
     // Data rows with synchronized heights
     let mut rows: Vec<TableRow> = vec![header];
@@ -531,10 +529,16 @@ fn build_table_for_page(
             cells.push(cell_lines(text, w, cs, ps));
         }
         let h: Option<HwpUnit> = row_heights_mm.get(i).map(|&mm| HwpUnit::from_mm(mm).unwrap());
-        rows.push(TableRow { cells, height: h });
+        let row: TableRow = match h {
+            Some(height) => TableRow::with_height(cells, height),
+            None => TableRow::new(cells),
+        };
+        rows.push(row);
     }
 
-    Table { rows, width: Some(HwpUnit::from_mm(table_width_mm).unwrap()), caption: None }
+    Table::new(rows)
+        .with_width(HwpUnit::from_mm(table_width_mm).unwrap())
+        .with_page_break(TablePageBreak::Cell)
 }
 
 fn main() {

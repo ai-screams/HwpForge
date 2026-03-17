@@ -509,7 +509,7 @@ mod tests {
             )],
             HwpUnit::new(5000).unwrap(),
         );
-        let table = Table::new(vec![TableRow { cells: vec![cell1, cell2], height: None }]);
+        let table = Table::new(vec![TableRow::new(vec![cell1, cell2])]);
 
         let mut doc = Document::new();
         doc.add_section(Section::with_paragraphs(

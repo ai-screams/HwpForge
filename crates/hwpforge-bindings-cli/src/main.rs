@@ -1,5 +1,6 @@
 //! HwpForge CLI — AI-first document generation and editing.
 
+mod analysis;
 mod commands;
 mod error;
 
@@ -21,6 +22,39 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Audit a converted HWPX file against its original HWP5 source.
+    AuditHwp5 {
+        /// Original HWP5 (`.hwp`) file.
+        source: PathBuf,
+
+        /// Converted HWPX (`.hwpx`) result to compare against.
+        result: PathBuf,
+    },
+
+    /// Build a raw fixture census for an HWP5 file and optional HWPX companion.
+    CensusHwp5 {
+        /// Input HWP5 (`.hwp`) file.
+        input: PathBuf,
+
+        /// Optional HWPX companion fixture for nested XML/path census.
+        #[arg(long)]
+        companion: Option<PathBuf>,
+
+        /// Optional JSON output path for saving the census dataset.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Convert an HWP5 file to HWPX.
+    ConvertHwp5 {
+        /// Input HWP5 file.
+        input: PathBuf,
+
+        /// Output HWPX file path.
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+
     /// Convert Markdown to HWPX.
     Convert {
         /// Input markdown file (use '-' for stdin).
@@ -143,6 +177,15 @@ fn main() {
     let cli = Cli::parse();
 
     match cli.command {
+        Commands::AuditHwp5 { source, result } => {
+            commands::audit_hwp5::run(&source, &result, cli.json);
+        }
+        Commands::CensusHwp5 { input, companion, output } => {
+            commands::census_hwp5::run(&input, &companion, &output, cli.json);
+        }
+        Commands::ConvertHwp5 { input, output } => {
+            commands::convert_hwp5::run(&input, &output, cli.json);
+        }
         Commands::Convert { input, output, preset } => {
             commands::convert::run(&input, &output, &preset, cli.json);
         }

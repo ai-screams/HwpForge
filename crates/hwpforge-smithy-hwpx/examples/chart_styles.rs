@@ -18,7 +18,7 @@ use hwpforge_core::run::Run;
 use hwpforge_core::section::{PageNumber, Section};
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{CharShapeIndex, NumberFormatType, PageNumberPosition, ParaShapeIndex};
-use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore};
+use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
 use hwpforge_smithy_hwpx::HwpxEncoder;
 
 // ── Helpers ──────────────────────────────────────────────────────
@@ -39,10 +39,7 @@ fn chart_para(ctrl: Control) -> Paragraph {
 }
 
 fn build_store() -> HwpxStyleStore {
-    let mut store = HwpxStyleStore::new();
-    for &lang in &["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"] {
-        store.push_font(HwpxFont::new(0, "함초롬돋움", lang));
-    }
+    let mut store = HwpxStyleStore::with_default_fonts("함초롬돋움");
     store.push_char_shape(HwpxCharShape::default());
     store.push_para_shape(HwpxParaShape::default());
     store

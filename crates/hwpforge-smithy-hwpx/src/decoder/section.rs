@@ -8,11 +8,15 @@ use std::collections::HashMap;
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::{ColumnDef, ColumnLayoutMode, ColumnSettings, ColumnType};
 use hwpforge_core::control::{Control, DutmalAlign, DutmalPosition};
-use hwpforge_core::image::{Image, ImageFormat};
+use hwpforge_core::image::{
+    Image, ImageFormat, ImagePlacement, ImageRelativeTo, ImageTextFlow, ImageTextWrap,
+};
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::section::{HeaderFooter, PageNumber};
-use hwpforge_core::table::{Table, TableCell, TableRow};
+use hwpforge_core::table::{
+    Table, TableCell, TableMargin, TablePageBreak, TableRow, TableVerticalAlign,
+};
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
     ApplyPageType, CharShapeIndex, Color, HwpUnit, PageNumberPosition, ParaShapeIndex, StyleIndex,
@@ -20,11 +24,12 @@ use hwpforge_foundation::{
 };
 use quick_xml::de::from_str;
 
+use crate::color::parse_hex_color_raw;
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
     HxCaption, HxChart, HxCompose, HxCtrl, HxDutmal, HxEquation, HxFieldBegin, HxFootNote,
     HxHeaderFooter, HxPageNum, HxParagraph, HxPic, HxRun, HxSection, HxSubList, HxTable,
-    HxTableCell,
+    HxTableCell, HxTableRow,
 };
 
 /// Maximum nesting depth for tables-within-tables.
@@ -33,6 +38,62 @@ use crate::schema::section::{
 /// deeply nested table structures. 32 levels is far beyond any
 /// legitimate document.
 const MAX_NESTING_DEPTH: usize = 32;
+
+fn decode_table_page_break(value: &str) -> HwpxResult<TablePageBreak> {
+    match value {
+        "" | "CELL" => Ok(TablePageBreak::Cell),
+        "TABLE" => Ok(TablePageBreak::Table),
+        "NONE" => Ok(TablePageBreak::None),
+        other => Err(HwpxError::InvalidStructure {
+            detail: format!("unsupported table pageBreak value: {other}"),
+        }),
+    }
+}
+
+fn decode_table_vertical_align(value: &str) -> HwpxResult<Option<TableVerticalAlign>> {
+    match value {
+        "" => Ok(None),
+        "TOP" => Ok(Some(TableVerticalAlign::Top)),
+        "CENTER" => Ok(Some(TableVerticalAlign::Center)),
+        "BOTTOM" => Ok(Some(TableVerticalAlign::Bottom)),
+        other => Err(HwpxError::InvalidStructure {
+            detail: format!("unsupported table cell vertAlign value: {other}"),
+        }),
+    }
+}
+
+fn decode_table_margin(
+    margin: Option<&crate::schema::section::HxTableMargin>,
+) -> HwpxResult<Option<TableMargin>> {
+    let Some(margin) = margin else {
+        return Ok(None);
+    };
+
+    Ok(Some(TableMargin {
+        left: HwpUnit::new(margin.left).map_err(|_| HwpxError::InvalidStructure {
+            detail: format!("invalid table margin left: {}", margin.left),
+        })?,
+        right: HwpUnit::new(margin.right).map_err(|_| HwpxError::InvalidStructure {
+            detail: format!("invalid table margin right: {}", margin.right),
+        })?,
+        top: HwpUnit::new(margin.top).map_err(|_| HwpxError::InvalidStructure {
+            detail: format!("invalid table margin top: {}", margin.top),
+        })?,
+        bottom: HwpUnit::new(margin.bottom).map_err(|_| HwpxError::InvalidStructure {
+            detail: format!("invalid table margin bottom: {}", margin.bottom),
+        })?,
+    }))
+}
+
+fn decode_optional_hwp_unit(value: i32, field_name: &str) -> HwpxResult<Option<HwpUnit>> {
+    if value <= 0 {
+        return Ok(None);
+    }
+
+    HwpUnit::new(value).map(Some).map_err(|_| HwpxError::InvalidStructure {
+        detail: format!("invalid {field_name}: {value}"),
+    })
+}
 
 /// Result of parsing a section XML file.
 #[derive(Debug)]
@@ -440,9 +501,16 @@ fn convert_table(hx: &HxTable, depth: usize) -> HwpxResult<Table> {
                 .iter()
                 .map(|cell| convert_table_cell(cell, depth))
                 .collect::<HwpxResult<Vec<_>>>()?;
-            Ok(TableRow { cells, height: None })
+            let height: Option<HwpUnit> = cells.iter().filter_map(|cell| cell.height).max();
+            let row: TableRow = match height {
+                Some(value) => TableRow::with_height(cells, value),
+                None => TableRow::new(cells),
+            };
+            let is_header: bool = decode_table_row_header(hx_row)?;
+            Ok(row.with_header(is_header))
         })
         .collect::<HwpxResult<Vec<_>>>()?;
+    validate_leading_header_rows(&rows)?;
 
     // Validate declared row count matches actual row count
     if hx.rows.len() != hx.row_cnt as usize {
@@ -457,7 +525,37 @@ fn convert_table(hx: &HxTable, depth: usize) -> HwpxResult<Table> {
 
     let caption = hx.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
 
-    Ok(Table { rows, width: None, caption })
+    let page_break: TablePageBreak = decode_table_page_break(&hx.page_break)?;
+    let width: Option<HwpUnit> = match hx.sz.as_ref() {
+        Some(sz) if sz.width > 0 => HwpUnit::new(sz.width).map(Some).map_err(|_| {
+            HwpxError::InvalidStructure { detail: format!("invalid table width: {}", sz.width) }
+        })?,
+        _ => None,
+    };
+    let cell_spacing: Option<HwpUnit> = match i32::try_from(hx.cell_spacing) {
+        Ok(value) => decode_optional_hwp_unit(value, "table cellSpacing")?,
+        Err(_) => {
+            return Err(HwpxError::InvalidStructure {
+                detail: format!("table cellSpacing out of range: {}", hx.cell_spacing),
+            });
+        }
+    };
+
+    let mut table: Table =
+        Table::new(rows).with_page_break(page_break).with_repeat_header(hx.repeat_header != 0);
+    if let Some(value) = width {
+        table = table.with_width(value);
+    }
+    if let Some(value) = caption {
+        table = table.with_caption(value);
+    }
+    if let Some(value) = cell_spacing {
+        table = table.with_cell_spacing(value);
+    }
+    if hx.border_fill_id_ref > 0 {
+        table = table.with_border_fill_id(hx.border_fill_id_ref);
+    }
+    Ok(table)
 }
 
 /// Converts an `HxTableCell` into a Core `TableCell`.
@@ -480,8 +578,69 @@ fn convert_table_cell(hx: &HxTableCell, depth: usize) -> HwpxResult<TableCell> {
 
     let width =
         hx.cell_sz.as_ref().and_then(|sz| HwpUnit::new(sz.width).ok()).unwrap_or(HwpUnit::ZERO);
+    let height: Option<HwpUnit> = match hx.cell_sz.as_ref() {
+        Some(sz) => decode_optional_hwp_unit(sz.height, "table cell height")?,
+        None => None,
+    };
+    let margin: Option<TableMargin> = decode_table_margin(hx.cell_margin.as_ref())?;
+    let vertical_align: Option<TableVerticalAlign> = match hx.sub_list.as_ref() {
+        Some(sub_list) => decode_table_vertical_align(&sub_list.vert_align)?,
+        None => None,
+    };
 
-    Ok(TableCell { paragraphs, col_span, row_span, width, background: None })
+    let mut cell: TableCell = TableCell::with_span(paragraphs, width, col_span, row_span);
+    if let Some(value) = height {
+        cell = cell.with_height(value);
+    }
+    if hx.border_fill_id_ref > 0 {
+        cell = cell.with_border_fill_id(hx.border_fill_id_ref);
+    }
+    if let Some(value) = margin {
+        cell = cell.with_margin(value);
+    }
+    if let Some(value) = vertical_align {
+        cell = cell.with_vertical_align(value);
+    }
+    Ok(cell)
+}
+
+fn decode_table_row_header(hx: &HxTableRow) -> HwpxResult<bool> {
+    if hx.cells.is_empty() {
+        return Ok(false);
+    }
+
+    let header_count = hx.cells.iter().filter(|cell| cell.header != 0).count();
+    if header_count == 0 {
+        Ok(false)
+    } else if header_count == hx.cells.len() {
+        Ok(true)
+    } else {
+        Err(HwpxError::InvalidStructure {
+            detail: format!(
+                "mixed table header markers within a row: header_cells={} total_cells={}",
+                header_count,
+                hx.cells.len()
+            ),
+        })
+    }
+}
+
+fn validate_leading_header_rows(rows: &[TableRow]) -> HwpxResult<()> {
+    let mut seen_non_header_row: bool = false;
+    for (row_index, row) in rows.iter().enumerate() {
+        if row.is_header {
+            if seen_non_header_row {
+                return Err(HwpxError::InvalidStructure {
+                    detail: format!(
+                        "non-leading table header row at index {row_index}; header rows must form a leading block"
+                    ),
+                });
+            }
+        } else {
+            seen_non_header_row = true;
+        }
+    }
+    Ok(())
 }
 
 /// Converts an `HxPic` into a Core `Image`, if it has a valid image reference.
@@ -507,8 +666,48 @@ fn convert_picture(hx: &HxPic, depth: usize) -> HwpxResult<Option<Image>> {
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
     let caption = hx.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
+    let placement = decode_image_placement(hx);
 
-    Ok(Some(Image { path, width, height, format, caption }))
+    let mut image: Image = Image::new(path, width, height, format);
+    if let Some(value) = caption {
+        image = image.with_caption(value);
+    }
+    if let Some(value) = placement {
+        image = image.with_placement(value);
+    }
+    Ok(Some(image))
+}
+
+fn decode_image_placement(hx: &HxPic) -> Option<ImagePlacement> {
+    let pos = hx.pos.as_ref()?;
+
+    Some(ImagePlacement {
+        text_wrap: if hx.text_wrap.is_empty() {
+            ImageTextWrap::TopAndBottom
+        } else {
+            ImageTextWrap::from_hwpx(&hx.text_wrap)
+        },
+        text_flow: if hx.text_flow.is_empty() {
+            ImageTextFlow::BothSides
+        } else {
+            ImageTextFlow::from_hwpx(&hx.text_flow)
+        },
+        treat_as_char: pos.treat_as_char != 0,
+        flow_with_text: pos.flow_with_text != 0,
+        allow_overlap: pos.allow_overlap != 0,
+        vert_rel_to: if pos.vert_rel_to.is_empty() {
+            ImageRelativeTo::Para
+        } else {
+            ImageRelativeTo::from_hwpx(&pos.vert_rel_to)
+        },
+        horz_rel_to: if pos.horz_rel_to.is_empty() {
+            ImageRelativeTo::Para
+        } else {
+            ImageRelativeTo::from_hwpx(&pos.horz_rel_to)
+        },
+        vert_offset: HwpUnit::new(pos.vert_offset).unwrap_or(HwpUnit::ZERO),
+        horz_offset: HwpUnit::new(pos.horz_offset).unwrap_or(HwpUnit::ZERO),
+    })
 }
 
 // ── Footnote / Endnote / TextBox decoding ────────────────────────
@@ -813,14 +1012,7 @@ fn decode_chart(
 
 /// Parses a `#RRGGBB` hex string into a [`Color`].
 pub(crate) fn parse_hex_color(s: &str) -> Option<Color> {
-    let s = s.strip_prefix('#').unwrap_or(s);
-    if s.len() != 6 {
-        return None;
-    }
-    let r = u8::from_str_radix(&s[0..2], 16).ok()?;
-    let g = u8::from_str_radix(&s[2..4], 16).ok()?;
-    let b = u8::from_str_radix(&s[4..6], 16).ok()?;
-    Some(Color::from_rgb(r, g, b))
+    parse_hex_color_raw(s)
 }
 
 /// Converts paragraphs from an `HxSubList` into Core `Paragraph`s.
@@ -1396,6 +1588,39 @@ mod tests {
     }
 
     #[test]
+    fn parse_picture_with_object_placement() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <pic id="pic1" textWrap="SQUARE" textFlow="RIGHT_ONLY">
+                        <img binaryItemIDRef="logo.png" bright="0" contrast="0"/>
+                        <curSz width="10000" height="5000"/>
+                        <pos treatAsChar="0" affectLSpacing="0" flowWithText="1" allowOverlap="1"
+                             holdAnchorAndSO="0" vertRelTo="PAPER" horzRelTo="PAGE"
+                             vertAlign="TOP" horzAlign="LEFT" vertOffset="1200" horzOffset="3400"/>
+                    </pic>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        match &result.paragraphs[0].runs[0].content {
+            RunContent::Image(img) => {
+                let placement = img.placement.as_ref().expect("placement should be decoded");
+                assert_eq!(placement.text_wrap, ImageTextWrap::Square);
+                assert_eq!(placement.text_flow, ImageTextFlow::RightOnly);
+                assert!(!placement.treat_as_char);
+                assert!(placement.flow_with_text);
+                assert!(placement.allow_overlap);
+                assert_eq!(placement.vert_rel_to, ImageRelativeTo::Paper);
+                assert_eq!(placement.horz_rel_to, ImageRelativeTo::Page);
+                assert_eq!(placement.vert_offset.as_i32(), 1200);
+                assert_eq!(placement.horz_offset.as_i32(), 3400);
+            }
+            _ => panic!("expected Image"),
+        }
+    }
+
+    #[test]
     fn picture_without_img_child_is_normalized() {
         let xml = r#"<sec>
             <p paraPrIDRef="0">
@@ -1489,6 +1714,185 @@ mod tests {
             }
             _ => panic!("expected InvalidStructure, got: {err:?}"),
         }
+    }
+
+    #[test]
+    fn table_page_break_and_repeat_header_decode() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <tbl rowCnt="1" colCnt="1" pageBreak="TABLE" repeatHeader="0">
+                        <tr><tc name="A1">
+                            <subList><p paraPrIDRef="0"><run charPrIDRef="0"><t>x</t></run></p></subList>
+                        </tc></tr>
+                    </tbl>
+                </run>
+            </p>
+        </sec>"#;
+
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let table = result.paragraphs[0].runs[0].content.as_table().unwrap();
+        assert_eq!(table.page_break, TablePageBreak::Table);
+        assert!(!table.repeat_header);
+    }
+
+    #[test]
+    fn table_decode_defaults_missing_page_break_and_repeat_header() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <tbl rowCnt="1" colCnt="1">
+                        <tr><tc name="A1">
+                            <subList><p paraPrIDRef="0"><run charPrIDRef="0"><t>x</t></run></p></subList>
+                        </tc></tr>
+                    </tbl>
+                </run>
+            </p>
+        </sec>"#;
+
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let table = result.paragraphs[0].runs[0].content.as_table().unwrap();
+        assert_eq!(table.page_break, TablePageBreak::Cell);
+        assert!(table.repeat_header);
+    }
+
+    #[test]
+    fn table_decode_preserves_row_header_markers() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <tbl rowCnt="2" colCnt="1" repeatHeader="1">
+                        <tr>
+                            <tc name="A1" header="1">
+                                <subList><p paraPrIDRef="0"><run charPrIDRef="0"><t>x</t></run></p></subList>
+                            </tc>
+                        </tr>
+                        <tr>
+                            <tc name="A2">
+                                <subList><p paraPrIDRef="0"><run charPrIDRef="0"><t>y</t></run></p></subList>
+                            </tc>
+                        </tr>
+                    </tbl>
+                </run>
+            </p>
+        </sec>"#;
+
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let table = result.paragraphs[0].runs[0].content.as_table().unwrap();
+        assert!(table.rows[0].is_header);
+        assert!(!table.rows[1].is_header);
+    }
+
+    #[test]
+    fn table_decode_rejects_non_leading_header_rows() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <tbl rowCnt="2" colCnt="1">
+                        <tr>
+                            <tc name="A1">
+                                <subList><p paraPrIDRef="0"><run charPrIDRef="0"><t>x</t></run></p></subList>
+                            </tc>
+                        </tr>
+                        <tr>
+                            <tc name="A2" header="1">
+                                <subList><p paraPrIDRef="0"><run charPrIDRef="0"><t>y</t></run></p></subList>
+                            </tc>
+                        </tr>
+                    </tbl>
+                </run>
+            </p>
+        </sec>"#;
+
+        let err =
+            parse_section(xml, 0, &HashMap::new()).expect_err("non-leading header rows must fail");
+        match err {
+            HwpxError::InvalidStructure { detail } => {
+                assert!(detail.contains("non-leading table header row"));
+            }
+            other => panic!("expected InvalidStructure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn table_decode_rejects_unknown_page_break_value() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <tbl rowCnt="1" colCnt="1" pageBreak="MYSTERY">
+                        <tr><tc name="A1">
+                            <subList><p paraPrIDRef="0"><run charPrIDRef="0"><t>x</t></run></p></subList>
+                        </tc></tr>
+                    </tbl>
+                </run>
+            </p>
+        </sec>"#;
+
+        let err = parse_section(xml, 0, &HashMap::new()).expect_err("unknown pageBreak must fail");
+        match err {
+            HwpxError::InvalidStructure { detail } => {
+                assert!(detail.contains("unsupported table pageBreak value: MYSTERY"));
+            }
+            other => panic!("expected InvalidStructure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn table_decode_preserves_presentation_fields() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <tbl rowCnt="1" colCnt="2" cellSpacing="120" borderFillIDRef="9">
+                        <tr>
+                            <tc name="A1" borderFillIDRef="4" hasMargin="1">
+                                <subList vertAlign="TOP">
+                                    <p paraPrIDRef="0"><run charPrIDRef="0"><t>a</t></run></p>
+                                </subList>
+                                <cellAddr colAddr="0" rowAddr="0"/>
+                                <cellSpan colSpan="1" rowSpan="1"/>
+                                <cellSz width="10000" height="282"/>
+                                <cellMargin left="4251" right="5669" top="2834" bottom="1417"/>
+                            </tc>
+                            <tc name="B1" borderFillIDRef="7">
+                                <subList vertAlign="BOTTOM">
+                                    <p paraPrIDRef="0"><run charPrIDRef="0"><t>b</t></run></p>
+                                </subList>
+                                <cellAddr colAddr="1" rowAddr="0"/>
+                                <cellSpan colSpan="1" rowSpan="1"/>
+                                <cellSz width="10000" height="1281"/>
+                                <cellMargin left="510" right="510" top="141" bottom="141"/>
+                            </tc>
+                        </tr>
+                    </tbl>
+                </run>
+            </p>
+        </sec>"#;
+
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let table = result.paragraphs[0].runs[0].content.as_table().unwrap();
+
+        assert_eq!(table.cell_spacing, Some(HwpUnit::new(120).unwrap()));
+        assert_eq!(table.border_fill_id, Some(9));
+        assert_eq!(table.rows[0].height, Some(HwpUnit::new(1281).unwrap()));
+
+        let first = &table.rows[0].cells[0];
+        assert_eq!(first.height, Some(HwpUnit::new(282).unwrap()));
+        assert_eq!(first.border_fill_id, Some(4));
+        assert_eq!(first.vertical_align, Some(TableVerticalAlign::Top));
+        assert_eq!(
+            first.margin,
+            Some(TableMargin {
+                left: HwpUnit::new(4251).unwrap(),
+                right: HwpUnit::new(5669).unwrap(),
+                top: HwpUnit::new(2834).unwrap(),
+                bottom: HwpUnit::new(1417).unwrap(),
+            }),
+        );
+
+        let second = &table.rows[0].cells[1];
+        assert_eq!(second.height, Some(HwpUnit::new(1281).unwrap()));
+        assert_eq!(second.border_fill_id, Some(7));
+        assert_eq!(second.vertical_align, Some(TableVerticalAlign::Bottom));
     }
 
     // ── Korean text preservation ─────────────────────────────────

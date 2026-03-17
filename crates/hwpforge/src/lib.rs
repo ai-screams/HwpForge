@@ -17,14 +17,16 @@
 //! # Quick Start
 //!
 //! ```no_run
-//! use hwpforge::core::{Document, Draft, Paragraph, Run, Section};
-//! use hwpforge::foundation::HwpUnit;
+//! use hwpforge::core::{Document, Draft, PageSettings, Paragraph, Run, Section};
+//! use hwpforge::foundation::{CharShapeIndex, ParaShapeIndex};
 //!
 //! // Build a document programmatically
 //! let mut doc = Document::<Draft>::new();
-//! let section = Section::new(vec![
-//!     Paragraph::new("Hello, 한글!", Default::default()),
-//! ]);
+//! let paragraph = Paragraph::with_runs(
+//!     vec![Run::text("Hello, 한글!", CharShapeIndex::new(0))],
+//!     ParaShapeIndex::new(0),
+//! );
+//! let section = Section::with_paragraphs(vec![paragraph], PageSettings::a4());
 //! doc.add_section(section);
 //! ```
 //!

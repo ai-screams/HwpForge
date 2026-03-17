@@ -1201,44 +1201,38 @@ mod tests {
     #[test]
     fn table_simple_gfm() {
         let table = Table::new(vec![
-            TableRow {
-                cells: vec![
-                    TableCell::new(
-                        vec![Paragraph::with_runs(
-                            vec![Run::text("A", CharShapeIndex::new(0))],
-                            ParaShapeIndex::new(0),
-                        )],
-                        HwpUnit::from_mm(30.0).unwrap(),
-                    ),
-                    TableCell::new(
-                        vec![Paragraph::with_runs(
-                            vec![Run::text("B", CharShapeIndex::new(0))],
-                            ParaShapeIndex::new(0),
-                        )],
-                        HwpUnit::from_mm(30.0).unwrap(),
-                    ),
-                ],
-                height: None,
-            },
-            TableRow {
-                cells: vec![
-                    TableCell::new(
-                        vec![Paragraph::with_runs(
-                            vec![Run::text("1", CharShapeIndex::new(0))],
-                            ParaShapeIndex::new(0),
-                        )],
-                        HwpUnit::from_mm(30.0).unwrap(),
-                    ),
-                    TableCell::new(
-                        vec![Paragraph::with_runs(
-                            vec![Run::text("2", CharShapeIndex::new(0))],
-                            ParaShapeIndex::new(0),
-                        )],
-                        HwpUnit::from_mm(30.0).unwrap(),
-                    ),
-                ],
-                height: None,
-            },
+            TableRow::new(vec![
+                TableCell::new(
+                    vec![Paragraph::with_runs(
+                        vec![Run::text("A", CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
+                    )],
+                    HwpUnit::from_mm(30.0).unwrap(),
+                ),
+                TableCell::new(
+                    vec![Paragraph::with_runs(
+                        vec![Run::text("B", CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
+                    )],
+                    HwpUnit::from_mm(30.0).unwrap(),
+                ),
+            ]),
+            TableRow::new(vec![
+                TableCell::new(
+                    vec![Paragraph::with_runs(
+                        vec![Run::text("1", CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
+                    )],
+                    HwpUnit::from_mm(30.0).unwrap(),
+                ),
+                TableCell::new(
+                    vec![Paragraph::with_runs(
+                        vec![Run::text("2", CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
+                    )],
+                    HwpUnit::from_mm(30.0).unwrap(),
+                ),
+            ]),
         ]);
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::table(table, CharShapeIndex::new(0))],
@@ -1255,37 +1249,31 @@ mod tests {
     #[test]
     fn table_with_colspan_renders_html() {
         let table = Table::new(vec![
-            TableRow {
-                cells: vec![TableCell::with_span(
+            TableRow::new(vec![TableCell::with_span(
+                vec![Paragraph::with_runs(
+                    vec![Run::text("merged", CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )],
+                HwpUnit::from_mm(60.0).unwrap(),
+                2, // col_span
+                1,
+            )]),
+            TableRow::new(vec![
+                TableCell::new(
                     vec![Paragraph::with_runs(
-                        vec![Run::text("merged", CharShapeIndex::new(0))],
+                        vec![Run::text("A", CharShapeIndex::new(0))],
                         ParaShapeIndex::new(0),
                     )],
-                    HwpUnit::from_mm(60.0).unwrap(),
-                    2, // col_span
-                    1,
-                )],
-                height: None,
-            },
-            TableRow {
-                cells: vec![
-                    TableCell::new(
-                        vec![Paragraph::with_runs(
-                            vec![Run::text("A", CharShapeIndex::new(0))],
-                            ParaShapeIndex::new(0),
-                        )],
-                        HwpUnit::from_mm(30.0).unwrap(),
-                    ),
-                    TableCell::new(
-                        vec![Paragraph::with_runs(
-                            vec![Run::text("B", CharShapeIndex::new(0))],
-                            ParaShapeIndex::new(0),
-                        )],
-                        HwpUnit::from_mm(30.0).unwrap(),
-                    ),
-                ],
-                height: None,
-            },
+                    HwpUnit::from_mm(30.0).unwrap(),
+                ),
+                TableCell::new(
+                    vec![Paragraph::with_runs(
+                        vec![Run::text("B", CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
+                    )],
+                    HwpUnit::from_mm(30.0).unwrap(),
+                ),
+            ]),
         ]);
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::table(table, CharShapeIndex::new(0))],
@@ -1302,37 +1290,31 @@ mod tests {
     #[test]
     fn table_with_rowspan_renders_html() {
         let table = Table::new(vec![
-            TableRow {
-                cells: vec![
-                    TableCell::with_span(
-                        vec![Paragraph::with_runs(
-                            vec![Run::text("spans", CharShapeIndex::new(0))],
-                            ParaShapeIndex::new(0),
-                        )],
-                        HwpUnit::from_mm(30.0).unwrap(),
-                        1,
-                        2, // row_span
-                    ),
-                    TableCell::new(
-                        vec![Paragraph::with_runs(
-                            vec![Run::text("X", CharShapeIndex::new(0))],
-                            ParaShapeIndex::new(0),
-                        )],
-                        HwpUnit::from_mm(30.0).unwrap(),
-                    ),
-                ],
-                height: None,
-            },
-            TableRow {
-                cells: vec![TableCell::new(
+            TableRow::new(vec![
+                TableCell::with_span(
                     vec![Paragraph::with_runs(
-                        vec![Run::text("Y", CharShapeIndex::new(0))],
+                        vec![Run::text("spans", CharShapeIndex::new(0))],
                         ParaShapeIndex::new(0),
                     )],
                     HwpUnit::from_mm(30.0).unwrap(),
+                    1,
+                    2, // row_span
+                ),
+                TableCell::new(
+                    vec![Paragraph::with_runs(
+                        vec![Run::text("X", CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
+                    )],
+                    HwpUnit::from_mm(30.0).unwrap(),
+                ),
+            ]),
+            TableRow::new(vec![TableCell::new(
+                vec![Paragraph::with_runs(
+                    vec![Run::text("Y", CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
                 )],
-                height: None,
-            },
+                HwpUnit::from_mm(30.0).unwrap(),
+            )]),
         ]);
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::table(table, CharShapeIndex::new(0))],
@@ -1347,18 +1329,15 @@ mod tests {
 
     #[test]
     fn table_bold_cell_in_html_uses_strong() {
-        let table = Table::new(vec![TableRow {
-            cells: vec![TableCell::with_span(
-                vec![Paragraph::with_runs(
-                    vec![Run::text("bold", CharShapeIndex::new(1))],
-                    ParaShapeIndex::new(0),
-                )],
-                HwpUnit::from_mm(60.0).unwrap(),
-                2,
-                1,
+        let table = Table::new(vec![TableRow::new(vec![TableCell::with_span(
+            vec![Paragraph::with_runs(
+                vec![Run::text("bold", CharShapeIndex::new(1))],
+                ParaShapeIndex::new(0),
             )],
-            height: None,
-        }]);
+            HwpUnit::from_mm(60.0).unwrap(),
+            2,
+            1,
+        )])]);
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::table(table, CharShapeIndex::new(0))],
             ParaShapeIndex::new(0),
@@ -1383,16 +1362,13 @@ mod tests {
 
     #[test]
     fn table_pipe_in_cell_escaped_gfm() {
-        let table = Table::new(vec![TableRow {
-            cells: vec![TableCell::new(
-                vec![Paragraph::with_runs(
-                    vec![Run::text("A|B", CharShapeIndex::new(0))],
-                    ParaShapeIndex::new(0),
-                )],
-                HwpUnit::from_mm(30.0).unwrap(),
+        let table = Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![Paragraph::with_runs(
+                vec![Run::text("A|B", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
             )],
-            height: None,
-        }]);
+            HwpUnit::from_mm(30.0).unwrap(),
+        )])]);
         let doc = validated_document(vec![Paragraph::with_runs(
             vec![Run::table(table, CharShapeIndex::new(0))],
             ParaShapeIndex::new(0),
@@ -1755,27 +1731,21 @@ mod tests {
 
     #[test]
     fn has_merge_false_for_simple_table() {
-        let table = Table::new(vec![TableRow {
-            cells: vec![TableCell::new(
-                vec![Paragraph::new(ParaShapeIndex::new(0))],
-                HwpUnit::from_mm(30.0).unwrap(),
-            )],
-            height: None,
-        }]);
+        let table = Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![Paragraph::new(ParaShapeIndex::new(0))],
+            HwpUnit::from_mm(30.0).unwrap(),
+        )])]);
         assert!(!has_merge(&table));
     }
 
     #[test]
     fn has_merge_true_for_colspan() {
-        let table = Table::new(vec![TableRow {
-            cells: vec![TableCell::with_span(
-                vec![Paragraph::new(ParaShapeIndex::new(0))],
-                HwpUnit::from_mm(60.0).unwrap(),
-                2,
-                1,
-            )],
-            height: None,
-        }]);
+        let table = Table::new(vec![TableRow::new(vec![TableCell::with_span(
+            vec![Paragraph::new(ParaShapeIndex::new(0))],
+            HwpUnit::from_mm(60.0).unwrap(),
+            2,
+            1,
+        )])]);
         assert!(has_merge(&table));
     }
 }

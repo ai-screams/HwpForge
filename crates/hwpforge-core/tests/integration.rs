@@ -12,7 +12,7 @@ use hwpforge_core::page::PageSettings;
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::Run;
 use hwpforge_core::section::Section;
-use hwpforge_core::table::{Table, TableCell, TableRow};
+use hwpforge_core::table::{Table, TableCell, TablePageBreak, TableRow};
 use hwpforge_foundation::{CharShapeIndex, Color, HwpUnit, ParaShapeIndex};
 
 // ==========================================================================
@@ -83,17 +83,12 @@ fn lifecycle_complex_document_with_all_content_types() {
     // Section 1: Mixed content
     let cell =
         TableCell::new(vec![simple_paragraph("Cell content")], HwpUnit::from_mm(70.0).unwrap());
-    let table = Table {
-        rows: vec![
-            TableRow { cells: vec![cell.clone(), cell.clone()], height: None },
-            TableRow {
-                cells: vec![cell.clone(), cell],
-                height: Some(HwpUnit::from_mm(15.0).unwrap()),
-            },
-        ],
-        width: Some(HwpUnit::from_mm(140.0).unwrap()),
-        caption: None,
-    };
+    let table = Table::new(vec![
+        TableRow::new(vec![cell.clone(), cell.clone()]),
+        TableRow::with_height(vec![cell.clone(), cell], HwpUnit::from_mm(15.0).unwrap()),
+    ])
+    .with_width(HwpUnit::from_mm(140.0).unwrap())
+    .with_page_break(TablePageBreak::Cell);
 
     let image = Image::new(
         "BinData/chart.png",
@@ -204,7 +199,7 @@ fn validation_rejects_table_with_zero_col_span() {
         0, // invalid!
         1,
     );
-    let table = Table::new(vec![TableRow { cells: vec![cell], height: None }]);
+    let table = Table::new(vec![TableRow::new(vec![cell])]);
 
     let mut doc = Document::new();
     doc.add_section(Section::with_paragraphs(
@@ -263,13 +258,10 @@ fn text_extraction_multi_run_paragraph() {
         vec![
             text_run("Hello "),
             Run::table(
-                Table::new(vec![TableRow {
-                    cells: vec![TableCell::new(
-                        vec![simple_paragraph("ignored")],
-                        HwpUnit::from_mm(50.0).unwrap(),
-                    )],
-                    height: None,
-                }]),
+                Table::new(vec![TableRow::new(vec![TableCell::new(
+                    vec![simple_paragraph("ignored")],
+                    HwpUnit::from_mm(50.0).unwrap(),
+                )])]),
                 CharShapeIndex::new(0),
             ),
             text_run("world"),
@@ -357,10 +349,8 @@ fn merged_cell_table_validates() {
     );
     let regular_cell =
         TableCell::new(vec![simple_paragraph("normal")], HwpUnit::from_mm(50.0).unwrap());
-    let table = Table::new(vec![
-        TableRow { cells: vec![merged_cell], height: None },
-        TableRow { cells: vec![regular_cell], height: None },
-    ]);
+    let table =
+        Table::new(vec![TableRow::new(vec![merged_cell]), TableRow::new(vec![regular_cell])]);
 
     let mut doc = Document::new();
     doc.add_section(Section::with_paragraphs(
@@ -375,11 +365,10 @@ fn merged_cell_table_validates() {
 
 #[test]
 fn table_cell_with_background_color() {
-    let mut cell =
-        TableCell::new(vec![simple_paragraph("colored")], HwpUnit::from_mm(50.0).unwrap());
-    cell.background = Some(Color::from_rgb(255, 200, 200));
+    let cell = TableCell::new(vec![simple_paragraph("colored")], HwpUnit::from_mm(50.0).unwrap())
+        .with_background(Color::from_rgb(255, 200, 200));
 
-    let table = Table::new(vec![TableRow { cells: vec![cell], height: None }]);
+    let table = Table::new(vec![TableRow::new(vec![cell])]);
 
     let mut doc = Document::new();
     doc.add_section(Section::with_paragraphs(

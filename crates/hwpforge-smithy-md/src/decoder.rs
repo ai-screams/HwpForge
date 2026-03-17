@@ -357,7 +357,7 @@ impl TableBuilder {
                     })
                     .collect();
 
-                TableRow { cells, height: None }
+                TableRow::new(cells)
             })
             .collect();
 
