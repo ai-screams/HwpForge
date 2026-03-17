@@ -487,32 +487,27 @@ impl HwpForgeServer {
 #[tool_handler]
 impl ServerHandler for HwpForgeServer {
     fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::LATEST,
-            capabilities: ServerCapabilities::builder()
+        ServerInfo::new(
+            ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()
                 .enable_prompts()
                 .build(),
-            server_info: Implementation {
-                name: "hwpforge-mcp".into(),
-                version: env!("CARGO_PKG_VERSION").into(),
-                title: Some("HwpForge MCP Server".into()),
-                description: Some(
-                    "AI-first Korean HWPX document generation and editing tools".into(),
-                ),
-                icons: None,
-                website_url: Some("https://github.com/ai-screams/HwpForge".into()),
-            },
-            instructions: Some(
-                "HwpForge MCP server for Korean HWPX document generation and editing. \
-                 Converts Markdown to HWPX, inspects document structure, and supports \
-                 JSON round-trip editing. Use hwpforge_templates to discover available \
-                 style templates before creating documents. Resources provide style template \
-                 details. Prompts guide document creation workflows."
-                    .into(),
-            ),
-        }
+        )
+        .with_protocol_version(ProtocolVersion::LATEST)
+        .with_server_info(
+            Implementation::new("hwpforge-mcp", env!("CARGO_PKG_VERSION"))
+                .with_title("HwpForge MCP Server")
+                .with_description("AI-first Korean HWPX document generation and editing tools")
+                .with_website_url("https://github.com/ai-screams/HwpForge"),
+        )
+        .with_instructions(
+            "HwpForge MCP server for Korean HWPX document generation and editing. \
+             Converts Markdown to HWPX, inspects document structure, and supports \
+             JSON round-trip editing. Use hwpforge_templates to discover available \
+             style templates before creating documents. Resources provide style template \
+             details. Prompts guide document creation workflows.",
+        )
     }
 
     async fn list_resources(

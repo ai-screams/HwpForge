@@ -127,7 +127,7 @@ Claude Code, Codex CLI, Claude, ChatGPT, Cursor, Antigravity 등 [MCP](https://m
 한 줄이면 설치 + 등록이 끝납니다. npm은 `npx -y`가 자동으로 바이너리를 다운로드합니다.
 
 <details>
-<summary>&amp;amp;amp;amp;amp;amp;lt;strong&amp;amp;amp;amp;amp;amp;gt;Claude Code&amp;amp;amp;amp;amp;amp;lt;/strong&amp;amp;amp;amp;amp;amp;gt; (터미널)</summary>
+<summary><strong>Claude Code</strong> (터미널)</summary>
 
 ```
 # npm (권장 — Rust 툴체인 불필요)
@@ -143,7 +143,7 @@ claude mcp add --global hwpforge -- npx -y @hwpforge/mcp
 </details>
 
 <details>
-<summary>&amp;amp;amp;amp;amp;amp;lt;strong&amp;amp;amp;amp;amp;amp;gt;Codex CLI&amp;amp;amp;amp;amp;amp;lt;/strong&amp;amp;amp;amp;amp;amp;gt; (터미널)</summary>
+<summary><strong>Codex CLI</strong> (터미널)</summary>
 
 `~/.codex/config.toml`에 추가:
 
@@ -162,7 +162,7 @@ codex mcp add hwpforge -- npx -y @hwpforge/mcp
 </details>
 
 <details>
-<summary>&amp;amp;amp;amp;amp;amp;lt;strong&amp;amp;amp;amp;amp;amp;gt;Claude Desktop&amp;amp;amp;amp;amp;amp;lt;/strong&amp;amp;amp;amp;amp;amp;gt; (앱)</summary>
+<summary><strong>Claude Desktop</strong> (앱)</summary>
 
 설정 파일을 편집합니다:
 
@@ -183,7 +183,7 @@ codex mcp add hwpforge -- npx -y @hwpforge/mcp
 </details>
 
 <details>
-<summary>&amp;amp;amp;amp;amp;amp;lt;strong&amp;amp;amp;amp;amp;amp;gt;ChatGPT Desktop&amp;amp;amp;amp;amp;amp;lt;/strong&amp;amp;amp;amp;amp;amp;gt; (앱)</summary>
+<summary><strong>ChatGPT Desktop</strong> (앱)</summary>
 
 Settings → Tools → Add MCP Server에서:
 
@@ -206,7 +206,7 @@ Settings → Tools → Add MCP Server에서:
 </details>
 
 <details>
-<summary>&amp;amp;amp;amp;amp;amp;lt;strong&amp;amp;amp;amp;amp;amp;gt;Cursor&amp;amp;amp;amp;amp;amp;lt;/strong&amp;amp;amp;amp;amp;amp;gt; (에디터)</summary>
+<summary><strong>Cursor</strong> (에디터)</summary>
 
 프로젝트 루트에 `.cursor/mcp.json` 생성:
 
@@ -224,7 +224,7 @@ Settings → Tools → Add MCP Server에서:
 </details>
 
 <details>
-<summary>&amp;amp;amp;amp;amp;amp;lt;strong&amp;amp;amp;amp;amp;amp;gt;Antigravity&amp;amp;amp;amp;amp;amp;lt;/strong&amp;amp;amp;amp;amp;amp;gt; (에디터)</summary>
+<summary><strong>Antigravity</strong> (에디터)</summary>
 
 `...` 드롭다운 → MCP Store → Manage MCP Servers → View raw config (`mcp_config.json`)에 추가:
 
