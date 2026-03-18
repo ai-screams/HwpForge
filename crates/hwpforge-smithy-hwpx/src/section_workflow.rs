@@ -90,19 +90,6 @@ pub enum SectionWorkflowError {
     PreservingPatch(#[from] HwpxError),
 }
 
-impl SectionWorkflowError {
-    /// Stable machine-readable error code.
-    #[must_use]
-    pub fn code(&self) -> &'static str {
-        match self {
-            Self::Decode { .. } => "DECODE_FAILED",
-            Self::SectionOutOfRange { .. } => "SECTION_OUT_OF_RANGE",
-            Self::SectionIndexMismatch { .. } => "SECTION_INDEX_MISMATCH",
-            Self::PreservingPatch(_) => "PATCH_FAILED",
-        }
-    }
-}
-
 impl HwpxPatcher {
     /// Export a single section plus optional preservation metadata for editing.
     pub fn export_section_for_edit(

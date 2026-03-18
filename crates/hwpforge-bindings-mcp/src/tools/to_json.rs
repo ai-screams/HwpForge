@@ -2,9 +2,11 @@
 
 use serde::Serialize;
 
-use hwpforge_smithy_hwpx::{ExportedDocument, HwpxDecoder, HwpxPatcher, SectionWorkflowError};
+use hwpforge_smithy_hwpx::{
+    ExportedDocument, HwpxDecoder, HwpxPatcher, SectionWorkflowError, SectionWorkflowWarning,
+};
 
-use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo};
+use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo, ToolWarningInfo};
 
 /// Output data from a successful JSON export.
 #[derive(Debug, Serialize)]
@@ -18,6 +20,9 @@ pub struct ToJsonData {
     /// The JSON string (returned inline when no output_path).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub json_content: Option<String>,
+    /// Non-fatal warnings encountered during export.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<ToolWarningInfo>,
 }
 
 /// Export HWPX to JSON (full document or single section).
@@ -27,10 +32,14 @@ pub fn run_to_json(
     output_path: Option<&str>,
 ) -> Result<ToJsonData, ToolErrorInfo> {
     let bytes = read_file_bytes(file_path)?;
+    let mut warnings: Vec<ToolWarningInfo> = Vec::new();
 
     let json_string = if let Some(idx) = section_idx {
         let outcome = HwpxPatcher::export_section_for_edit(&bytes, idx, true)
             .map_err(map_section_workflow_error_for_to_json)?;
+        if let Some(warning) = outcome.warning {
+            warnings.push(map_section_workflow_warning_for_to_json(warning));
+        }
         let exported = outcome.exported;
         serde_json::to_string_pretty(&exported).map_err(|e| {
             ToolErrorInfo::new(
@@ -68,6 +77,7 @@ pub fn run_to_json(
             size_bytes,
             section_only: section_idx.is_some(),
             json_content: None,
+            warnings,
         })
     } else {
         // Warn if inline response is very large (> 1 MB)
@@ -84,7 +94,21 @@ pub fn run_to_json(
             size_bytes,
             section_only: section_idx.is_some(),
             json_content: Some(json_string),
+            warnings,
         })
+    }
+}
+
+fn map_section_workflow_warning_for_to_json(warning: SectionWorkflowWarning) -> ToolWarningInfo {
+    match warning {
+        SectionWorkflowWarning::PreservationMetadataUnavailable { detail } => ToolWarningInfo::new(
+            "PRESERVATION_METADATA_UNAVAILABLE",
+            format!("Preserving patch metadata unavailable: {detail}"),
+        )
+        .with_hint(
+            "This JSON export may inspect correctly, but later hwpforge_patch can fail until preservation metadata is available. Re-export with the current tool after simplifying unsupported mixed-content edits.",
+        ),
+        _ => ToolWarningInfo::new("SECTION_WORKFLOW_WARNING", warning.message()),
     }
 }
 
@@ -124,6 +148,7 @@ fn map_section_workflow_error_for_to_json(error: SectionWorkflowError) -> ToolEr
 mod tests {
     use super::*;
     use hwpforge_smithy_hwpx::ExportedSection;
+    use hwpforge_smithy_hwpx::SectionWorkflowWarning;
     use hwpforge_smithy_hwpx::SECTION_PRESERVATION_VERSION;
 
     #[test]
@@ -147,5 +172,18 @@ mod tests {
         let preservation = exported.preservation.unwrap();
         assert_eq!(preservation.preservation_version, SECTION_PRESERVATION_VERSION);
         assert!(!preservation.text_slots.is_empty());
+        assert!(data.warnings.is_empty());
+    }
+
+    #[test]
+    fn to_json_maps_preservation_warning_for_machine_consumers() {
+        let warning = SectionWorkflowWarning::PreservationMetadataUnavailable {
+            detail: "raw/semantic mismatch".to_string(),
+        };
+
+        let mapped = map_section_workflow_warning_for_to_json(warning);
+        assert_eq!(mapped.code, "PRESERVATION_METADATA_UNAVAILABLE");
+        assert!(mapped.message.contains("raw/semantic mismatch"));
+        assert!(mapped.hint.as_deref().unwrap().contains("hwpforge_patch"));
     }
 }

@@ -2156,7 +2156,7 @@ fn patch_section() {
 }
 
 #[test]
-fn patch_section_index_mismatch_warns() {
+fn patch_matching_section_index_has_no_warning() {
     let f = fixture("rect.hwpx");
     let tmp = test_tmp();
     let json_out = tmp.join("section.json");
@@ -2180,7 +2180,7 @@ fn patch_section_index_mismatch_warns() {
 }
 
 #[test]
-fn patch_section_index_mismatch_emits_warning() {
+fn patch_section_index_mismatch_fails_fast() {
     let f = fixture("rect.hwpx");
     let tmp = test_tmp();
     let json_out = tmp.join("section.json");
@@ -2204,8 +2204,10 @@ fn patch_section_index_mismatch_emits_warning() {
         "-o",
         patched.to_str().unwrap(),
     ]);
-    assert_eq!(code, 0);
-    assert!(stderr.contains("Warning:"), "Expected mismatch warning, got: {stderr}");
+    assert_ne!(code, 0);
+    assert!(stderr.contains("SECTION_INDEX_MISMATCH"), "Expected mismatch error, got: {stderr}");
+    assert!(stderr.contains("Use --section 5"), "Expected corrective hint, got: {stderr}");
+    assert!(!patched.exists(), "patch output should not be written on mismatch");
 }
 
 #[test]
@@ -2244,6 +2246,9 @@ fn patch_out_of_range() {
     let (_, _, code) =
         run(&["to-json", f.to_str().unwrap(), "-o", json_out.to_str().unwrap(), "--section", "0"]);
     assert_eq!(code, 0);
+    let content = std::fs::read_to_string(&json_out).unwrap();
+    let modified = content.replacen("\"section_index\": 0", "\"section_index\": 999", 1);
+    std::fs::write(&json_out, modified).unwrap();
 
     let (_, _, code) = run(&[
         "patch",
@@ -2267,6 +2272,9 @@ fn patch_out_of_range_hint() {
     let (_, _, code) =
         run(&["to-json", f.to_str().unwrap(), "-o", json_out.to_str().unwrap(), "--section", "0"]);
     assert_eq!(code, 0);
+    let content = std::fs::read_to_string(&json_out).unwrap();
+    let modified = content.replacen("\"section_index\": 0", "\"section_index\": 999", 1);
+    std::fs::write(&json_out, modified).unwrap();
 
     let (_, stderr, code) = run(&[
         "--json",
@@ -2279,9 +2287,7 @@ fn patch_out_of_range_hint() {
         patched.to_str().unwrap(),
     ]);
     assert_eq!(code, 1);
-    // stderr may contain both a warning and an error JSON (one per line); parse the last line.
-    let last_line = stderr.trim().lines().last().expect("no stderr output");
-    let err: serde_json::Value = serde_json::from_str(last_line).unwrap();
+    let err: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
     assert!(
         err["hint"].as_str().unwrap().contains("Valid range"),
         "expected 'Valid range' in hint"
@@ -2597,7 +2603,7 @@ fn patch_rejects_legacy_section_preservation_metadata() {
 }
 
 #[test]
-fn patch_json_warning() {
+fn patch_json_mismatch_errors() {
     let f = fixture("rect.hwpx");
     let tmp = test_tmp();
     let json_out = tmp.join("section.json");
@@ -2622,10 +2628,11 @@ fn patch_json_warning() {
         "-o",
         patched.to_str().unwrap(),
     ]);
-    assert_eq!(code, 0);
-    let warn: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
-    assert_eq!(warn["status"], "warning");
-    assert_eq!(warn["code"], "SECTION_INDEX_MISMATCH");
+    assert_ne!(code, 0);
+    let err: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
+    assert_eq!(err["status"], "error");
+    assert_eq!(err["code"], "SECTION_INDEX_MISMATCH");
+    assert!(err["hint"].as_str().unwrap().contains("Use --section 5"));
 }
 
 #[test]

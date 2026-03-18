@@ -28,7 +28,6 @@ pub fn run_patch(
     section_json_path: &str,
     output_path: &str,
 ) -> Result<PatchData, ToolErrorInfo> {
-    // 0. Validate output extension
     if !output_path.ends_with(".hwpx") {
         return Err(ToolErrorInfo::new(
             "INVALID_EXTENSION",
@@ -37,10 +36,7 @@ pub fn run_patch(
         ));
     }
 
-    // 1. Read base HWPX
     let base_bytes = read_file_bytes(base_path)?;
-
-    // 2. Read section JSON
     let json_str = read_file_string(section_json_path)?;
 
     let exported: ExportedSection = serde_json::from_str(&json_str).map_err(|e| {
@@ -51,12 +47,10 @@ pub fn run_patch(
         )
     })?;
 
-    // 3. Preserve-first patch
     let outcome = HwpxPatcher::patch_exported_section(&base_bytes, section_idx, &exported)
         .map_err(map_section_workflow_error_for_patch)?;
     let SectionPatchOutcome { bytes, patched_section, sections } = outcome;
 
-    // 7. Write output
     write_output_file(output_path, &bytes)?;
 
     let size_bytes = bytes.len() as u64;

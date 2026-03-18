@@ -2,10 +2,10 @@
 
 use std::path::PathBuf;
 
-use hwpforge_smithy_hwpx::{HwpxPatcher, SectionPatchOutcome, SectionWorkflowError};
-
-use crate::commands::to_json::ExportedSection;
 use crate::error::{check_file_size, CliError};
+use hwpforge_smithy_hwpx::{
+    ExportedSection, HwpxPatcher, SectionPatchOutcome, SectionWorkflowError,
+};
 
 /// Run the patch command.
 pub fn run(
@@ -45,38 +45,11 @@ pub fn run(
         }
     };
 
-    if exported_section.section_index != section_idx {
-        if json_mode {
-            let warn = serde_json::json!({
-                "status": "warning",
-                "code": "SECTION_INDEX_MISMATCH",
-                "message": format!(
-                    "--section {} does not match JSON section_index {}; using --section value",
-                    section_idx, exported_section.section_index
-                ),
-            });
-            eprintln!("{}", serde_json::to_string(&warn).unwrap());
-        } else {
-            eprintln!(
-                "Warning: --section {} does not match JSON section_index {}; using --section value",
-                section_idx, exported_section.section_index
-            );
-        }
-    }
-
-    let mut effective_exported_section = exported_section;
-    if effective_exported_section.section_index != section_idx {
-        effective_exported_section.section_index = section_idx;
-    }
-
-    let outcome = match HwpxPatcher::patch_exported_section(
-        &base_bytes,
-        section_idx,
-        &effective_exported_section,
-    ) {
-        Ok(outcome) => outcome,
-        Err(error) => exit_section_patch_error(error, json_mode),
-    };
+    let outcome =
+        match HwpxPatcher::patch_exported_section(&base_bytes, section_idx, &exported_section) {
+            Ok(outcome) => outcome,
+            Err(error) => exit_section_patch_error(error, json_mode),
+        };
     let SectionPatchOutcome { bytes, patched_section, sections } = outcome;
 
     if let Err(e) = std::fs::write(output, &bytes) {
@@ -121,10 +94,11 @@ fn exit_section_patch_error(error: SectionWorkflowError, json_mode: bool) -> ! {
         SectionWorkflowError::SectionIndexMismatch { requested, actual } => {
             CliError::new(
                 "SECTION_INDEX_MISMATCH",
-                format!(
-                    "--section {requested} does not match JSON section_index {actual}; using --section value"
-                ),
+                format!("Requested section {requested} but JSON contains section {actual} data"),
             )
+            .with_hint(format!(
+                "Use --section {actual} to match the JSON, or re-export section {requested} with this version of hwpforge."
+            ))
             .exit(json_mode, 2);
         }
         SectionWorkflowError::PreservingPatch(error) => {
