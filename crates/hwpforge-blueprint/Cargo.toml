@@ -14,8 +14,8 @@ rust-version.workspace = true
 description = "YAML-based style template system for HwpForge (Figma Design Token pattern)"
 
 [dependencies]
-hwpforge-core = { path = "../hwpforge-core", version = "0.2.0" }
-hwpforge-foundation = { path = "../hwpforge-foundation", version = "0.2.0" }
+hwpforge-core = { path = "../hwpforge-core", version = "0.2.1" }
+hwpforge-foundation = { path = "../hwpforge-foundation", version = "0.2.1" }
 indexmap = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
