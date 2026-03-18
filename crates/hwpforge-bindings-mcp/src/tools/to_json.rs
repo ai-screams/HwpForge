@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 
-use hwpforge_smithy_hwpx::{ExportedDocument, ExportedSection, HwpxDecoder};
+use hwpforge_smithy_hwpx::{ExportedDocument, ExportedSection, HwpxDecoder, HwpxPatcher};
 
 use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo};
 
@@ -47,8 +47,14 @@ pub fn run_to_json(
                 format!("Valid range: 0..={}", sections.len().saturating_sub(1)),
             ));
         }
-        let exported =
-            ExportedSection { section_index: idx, section: sections[idx].clone(), styles };
+        let preservation =
+            HwpxPatcher::export_section_preservation(&bytes, idx, &sections[idx]).ok();
+        let exported = ExportedSection {
+            section_index: idx,
+            section: sections[idx].clone(),
+            styles,
+            preservation,
+        };
         serde_json::to_string_pretty(&exported).map_err(|e| {
             ToolErrorInfo::new(
                 "SERIALIZE_ERROR",
@@ -94,5 +100,31 @@ pub fn run_to_json(
             section_only: section_idx.is_some(),
             json_content: Some(json_string),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn to_json_section_embeds_preservation_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let hwpx_path = dir.path().join("source.hwpx");
+        crate::tools::convert::run_convert(
+            "# 제목\n\n본문 문단입니다.",
+            false,
+            hwpx_path.to_str().unwrap(),
+            "default",
+        )
+        .unwrap();
+
+        let data = run_to_json(hwpx_path.to_str().unwrap(), Some(0), None).unwrap();
+        assert!(data.section_only);
+        let json = data.json_content.expect("inline section json expected");
+        let exported: ExportedSection = serde_json::from_str(&json).unwrap();
+        assert_eq!(exported.section_index, 0);
+        assert!(exported.preservation.is_some(), "section export must embed preservation metadata");
+        assert!(!exported.preservation.unwrap().text_slots.is_empty());
     }
 }

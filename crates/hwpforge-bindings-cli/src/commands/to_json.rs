@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use hwpforge_smithy_hwpx::HwpxDecoder;
+use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxPatcher};
 
 use crate::error::{check_file_size, CliError};
 
@@ -45,8 +45,29 @@ pub fn run(
             .with_hint(format!("Valid range: 0..{}", sections.len().saturating_sub(1)))
             .exit(json_mode, 1);
         }
-        let exported =
-            ExportedSection { section_index: idx, section: sections[idx].clone(), styles };
+        let preservation =
+            match HwpxPatcher::export_section_preservation(&bytes, idx, &sections[idx]) {
+                Ok(metadata) => Some(metadata),
+                Err(error) => {
+                    if json_mode {
+                        let warn = serde_json::json!({
+                            "status": "warning",
+                            "code": "PRESERVATION_METADATA_UNAVAILABLE",
+                            "message": format!("Preserving patch metadata unavailable: {error}"),
+                        });
+                        eprintln!("{}", serde_json::to_string(&warn).unwrap());
+                    } else {
+                        eprintln!("Warning: preserving patch metadata unavailable: {error}");
+                    }
+                    None
+                }
+            };
+        let exported = ExportedSection {
+            section_index: idx,
+            section: sections[idx].clone(),
+            styles,
+            preservation,
+        };
         match serde_json::to_string_pretty(&exported) {
             Ok(s) => s,
             Err(e) => {

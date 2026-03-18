@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
+use hwpforge_smithy_hwpx::{HwpxPatcher, PackageReader};
 
 use crate::commands::to_json::ExportedSection;
 use crate::error::{check_file_size, CliError};
@@ -24,9 +24,8 @@ pub fn run(
                 .exit(json_mode, 1);
         }
     };
-
-    let mut hwpx_doc = match HwpxDecoder::decode(&base_bytes) {
-        Ok(d) => d,
+    let section_count = match PackageReader::new(&base_bytes) {
+        Ok(pkg) => pkg.section_count(),
         Err(e) => {
             CliError::new("DECODE_FAILED", format!("HWPX decode error: {e}")).exit(json_mode, 2);
         }
@@ -72,37 +71,32 @@ pub fn run(
         }
     }
 
-    // Replace section in document
-    let sections = hwpx_doc.document.sections_mut();
-    if section_idx >= sections.len() {
+    if section_idx >= section_count {
         CliError::new(
             "SECTION_OUT_OF_RANGE",
             format!(
                 "Section {section_idx} does not exist (document has {} sections)",
-                sections.len()
+                section_count
             ),
         )
-        .with_hint(format!("Valid range: 0..{}", sections.len().saturating_sub(1)))
+        .with_hint(format!("Valid range: 0..{}", section_count.saturating_sub(1)))
         .exit(json_mode, 1);
     }
-    sections[section_idx] = exported_section.section;
 
-    // If the patch JSON included styles, use those; otherwise keep base styles
-    let style_store = exported_section.styles.unwrap_or(hwpx_doc.style_store);
-
-    // Validate and encode
-    let validated = match hwpx_doc.document.validate() {
-        Ok(v) => v,
-        Err(e) => {
-            CliError::new("VALIDATION_FAILED", format!("Validation error after patch: {e}"))
-                .exit(json_mode, 2);
-        }
-    };
-
-    let bytes = match HwpxEncoder::encode(&validated, &style_store, &hwpx_doc.image_store) {
+    let bytes = match HwpxPatcher::patch_section_preserving(
+        &base_bytes,
+        section_idx,
+        &exported_section.section,
+        exported_section.styles.as_ref(),
+        exported_section.preservation.as_ref(),
+    ) {
         Ok(b) => b,
         Err(e) => {
-            CliError::new("ENCODE_FAILED", format!("HWPX encode error: {e}")).exit(json_mode, 2);
+            CliError::new("PATCH_FAILED", format!("Preserving patch error: {e}"))
+                .with_hint(
+                    "Re-export the target section with this version of hwpforge so the JSON contains preservation metadata. Structural or style changes still require a broader rebuild workflow.",
+                )
+                .exit(json_mode, 2);
         }
     };
 
@@ -115,7 +109,7 @@ pub fn run(
         "status": "ok",
         "output": output.display().to_string(),
         "patched_section": section_idx,
-        "sections": validated.section_count(),
+        "sections": section_count,
         "size_bytes": bytes.len(),
     });
 
