@@ -2512,6 +2512,91 @@ fn patch_rejects_editing_plain_paragraph_tab_slot() {
 }
 
 #[test]
+fn patch_rejects_tampered_preservation_locator_metadata() {
+    let base = fixture("user_samples/sample-table-cell.hwpx");
+    let tmp = test_tmp();
+    let json_out = tmp.join("section0.json");
+    let patched = tmp.join("patched.hwpx");
+
+    let (_, _, code) = run(&[
+        "to-json",
+        base.to_str().unwrap(),
+        "-o",
+        json_out.to_str().unwrap(),
+        "--section",
+        "0",
+    ]);
+    assert_eq!(code, 0);
+
+    let content = std::fs::read_to_string(&json_out).expect("read exported section");
+    let mut exported: serde_json::Value =
+        serde_json::from_str(&content).expect("deserialize exported section as value");
+    exported["preservation"]["text_slots"][0]["locator"]["TextElement"]["element_start"] =
+        serde_json::json!(0);
+    std::fs::write(
+        &json_out,
+        serde_json::to_string_pretty(&exported).expect("serialize tampered section"),
+    )
+    .expect("write tampered section");
+
+    let (_, stderr, code) = run(&[
+        "patch",
+        base.to_str().unwrap(),
+        "--section",
+        "0",
+        json_out.to_str().unwrap(),
+        "-o",
+        patched.to_str().unwrap(),
+    ]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("stale or tampered preservation metadata"));
+}
+
+#[test]
+fn patch_rejects_legacy_section_preservation_metadata() {
+    let base = fixture("user_samples/sample-table-cell.hwpx");
+    let tmp = test_tmp();
+    let json_out = tmp.join("section0.json");
+    let patched = tmp.join("patched.hwpx");
+
+    let (_, _, code) = run(&[
+        "to-json",
+        base.to_str().unwrap(),
+        "-o",
+        json_out.to_str().unwrap(),
+        "--section",
+        "0",
+    ]);
+    assert_eq!(code, 0);
+
+    let content = std::fs::read_to_string(&json_out).expect("read exported section");
+    let mut exported: serde_json::Value =
+        serde_json::from_str(&content).expect("deserialize exported section as value");
+    exported["preservation"]
+        .as_object_mut()
+        .expect("preservation object")
+        .remove("preservation_version");
+    std::fs::write(
+        &json_out,
+        serde_json::to_string_pretty(&exported).expect("serialize legacy section"),
+    )
+    .expect("write legacy section");
+
+    let (_, stderr, code) = run(&[
+        "patch",
+        base.to_str().unwrap(),
+        "--section",
+        "0",
+        json_out.to_str().unwrap(),
+        "-o",
+        patched.to_str().unwrap(),
+    ]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("re-export the section with the current to-json command"));
+    assert!(stderr.contains("preservation metadata version"));
+}
+
+#[test]
 fn patch_json_warning() {
     let f = fixture("rect.hwpx");
     let tmp = test_tmp();

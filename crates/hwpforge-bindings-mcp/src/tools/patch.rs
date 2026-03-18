@@ -2,7 +2,9 @@
 
 use serde::Serialize;
 
-use hwpforge_smithy_hwpx::{ExportedSection, HwpxPatcher, PackageReader};
+use hwpforge_smithy_hwpx::{
+    ExportedSection, HwpxPatcher, SectionPatchOutcome, SectionWorkflowError,
+};
 
 use crate::output::{read_file_bytes, read_file_string, write_output_file, ToolErrorInfo};
 
@@ -38,16 +40,6 @@ pub fn run_patch(
     // 1. Read base HWPX
     let base_bytes = read_file_bytes(base_path)?;
 
-    let section_count = PackageReader::new(&base_bytes)
-        .map_err(|e| {
-            ToolErrorInfo::new(
-                "DECODE_ERROR",
-                format!("HWPX decode failed: {e}"),
-                "Check that the base file is valid HWPX.",
-            )
-        })?
-        .section_count();
-
     // 2. Read section JSON
     let json_str = read_file_string(section_json_path)?;
 
@@ -59,59 +51,48 @@ pub fn run_patch(
         )
     })?;
 
-    // 3. Warn if section index in JSON doesn't match request
-    if exported.section_index != section_idx {
-        return Err(ToolErrorInfo::new(
-            "SECTION_INDEX_MISMATCH",
-            format!(
-                "Requested section {} but JSON contains section {} data",
-                section_idx, exported.section_index,
-            ),
-            format!(
-                "Use section: {} to match the JSON, or re-export section {} with hwpforge_to_json.",
-                exported.section_index, section_idx,
-            ),
-        ));
-    }
-
-    // 4. Validate section index before patching
-    if section_idx >= section_count {
-        return Err(ToolErrorInfo::new(
-            "SECTION_OUT_OF_RANGE",
-            format!(
-                "Section {section_idx} does not exist (document has {} sections)",
-                section_count
-            ),
-            format!("Valid range: 0..={}", section_count.saturating_sub(1)),
-        ));
-    }
-
-    // 5. Preserve-first patch
-    let bytes = HwpxPatcher::patch_section_preserving(
-        &base_bytes,
-        section_idx,
-        &exported.section,
-        exported.styles.as_ref(),
-        exported.preservation.as_ref(),
-    )
-    .map_err(|e| {
-        ToolErrorInfo::new(
-            "PATCH_ERROR",
-            format!("Preserving patch failed: {e}"),
-            "Re-export the target section with the current hwpforge_to_json tool so preservation metadata is embedded. Structural/style changes still require a broader rebuild workflow.",
-        )
-    })?;
+    // 3. Preserve-first patch
+    let outcome = HwpxPatcher::patch_exported_section(&base_bytes, section_idx, &exported)
+        .map_err(map_section_workflow_error_for_patch)?;
+    let SectionPatchOutcome { bytes, patched_section, sections } = outcome;
 
     // 7. Write output
     write_output_file(output_path, &bytes)?;
 
     let size_bytes = bytes.len() as u64;
-    Ok(PatchData {
-        output_path: output_path.to_string(),
-        patched_section: section_idx,
-        sections: section_count,
-        size_bytes,
-    })
+    Ok(PatchData { output_path: output_path.to_string(), patched_section, sections, size_bytes })
+}
+
+fn map_section_workflow_error_for_patch(error: SectionWorkflowError) -> ToolErrorInfo {
+    match error {
+        SectionWorkflowError::Decode { detail } => ToolErrorInfo::new(
+            "DECODE_ERROR",
+            format!("HWPX decode failed: {detail}"),
+            "Check that the base file is valid HWPX.",
+        ),
+        SectionWorkflowError::SectionOutOfRange { requested, sections } => ToolErrorInfo::new(
+            "SECTION_OUT_OF_RANGE",
+            format!("Section {requested} does not exist (document has {sections} sections)"),
+            format!("Valid range: 0..={}", sections.saturating_sub(1)),
+        ),
+        SectionWorkflowError::SectionIndexMismatch { requested, actual } => ToolErrorInfo::new(
+            "SECTION_INDEX_MISMATCH",
+            format!("Requested section {requested} but JSON contains section {actual} data"),
+            format!(
+                "Use section: {actual} to match the JSON, or re-export section {requested} with hwpforge_to_json."
+            ),
+        ),
+        SectionWorkflowError::PreservingPatch(error) => ToolErrorInfo::new(
+            "PATCH_ERROR",
+            format!("Preserving patch failed: {error}"),
+            "Re-export the target section with the current hwpforge_to_json tool so preservation metadata is embedded. Structural/style changes still require a broader rebuild workflow.",
+        ),
+        _ => ToolErrorInfo::new(
+            "SECTION_WORKFLOW_ERROR",
+            error.to_string(),
+            "Update hwpforge so this MCP binding understands the newer section workflow error.",
+        ),
+    }
 }
 
 #[cfg(test)]
@@ -179,5 +160,86 @@ mod tests {
             .as_text()
             .expect("first run text");
         assert_eq!(first_text, "[TEST] preserving patch");
+    }
+
+    #[test]
+    fn patch_rejects_legacy_preservation_metadata() {
+        let dir = tempfile::tempdir().unwrap();
+        let hwpx_path = dir.path().join("source.hwpx");
+        crate::tools::convert::run_convert(
+            "# 제목\n\n본문 문단입니다.",
+            false,
+            hwpx_path.to_str().unwrap(),
+            "default",
+        )
+        .unwrap();
+
+        let json_data =
+            crate::tools::to_json::run_to_json(hwpx_path.to_str().unwrap(), Some(0), None).unwrap();
+        let json = json_data.json_content.expect("inline section json expected");
+        let mut exported: serde_json::Value = serde_json::from_str(&json).unwrap();
+        exported["preservation"]
+            .as_object_mut()
+            .expect("preservation object")
+            .remove("preservation_version");
+
+        let section_json_path = dir.path().join("section.json");
+        std::fs::write(
+            &section_json_path,
+            serde_json::to_vec_pretty(&exported).expect("serialize legacy section"),
+        )
+        .unwrap();
+
+        let patched_path = dir.path().join("patched.hwpx");
+        let error = run_patch(
+            hwpx_path.to_str().unwrap(),
+            0,
+            section_json_path.to_str().unwrap(),
+            patched_path.to_str().unwrap(),
+        )
+        .expect_err("legacy preservation metadata must be rejected");
+
+        assert_eq!(error.code, "PATCH_ERROR");
+        assert!(error.message.contains("preservation metadata version"));
+        assert!(error.hint.contains("Re-export the target section"));
+    }
+
+    #[test]
+    fn patch_rejects_section_index_mismatch() {
+        let dir = tempfile::tempdir().unwrap();
+        let hwpx_path = dir.path().join("source.hwpx");
+        crate::tools::convert::run_convert(
+            "# 제목\n\n본문 문단입니다.",
+            false,
+            hwpx_path.to_str().unwrap(),
+            "default",
+        )
+        .unwrap();
+
+        let json_data =
+            crate::tools::to_json::run_to_json(hwpx_path.to_str().unwrap(), Some(0), None).unwrap();
+        let json = json_data.json_content.expect("inline section json expected");
+        let mut exported: ExportedSection = serde_json::from_str(&json).unwrap();
+        exported.section_index = 1;
+
+        let section_json_path = dir.path().join("section.json");
+        std::fs::write(
+            &section_json_path,
+            serde_json::to_vec_pretty(&exported).expect("serialize mismatched section"),
+        )
+        .unwrap();
+
+        let patched_path = dir.path().join("patched.hwpx");
+        let error = run_patch(
+            hwpx_path.to_str().unwrap(),
+            0,
+            section_json_path.to_str().unwrap(),
+            patched_path.to_str().unwrap(),
+        )
+        .expect_err("section mismatch must be rejected");
+
+        assert_eq!(error.code, "SECTION_INDEX_MISMATCH");
+        assert!(error.message.contains("Requested section 0 but JSON contains section 1 data"));
+        assert!(error.hint.contains("Use section: 1"));
     }
 }

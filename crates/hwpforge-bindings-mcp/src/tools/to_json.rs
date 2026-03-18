@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 
-use hwpforge_smithy_hwpx::{ExportedDocument, ExportedSection, HwpxDecoder, HwpxPatcher};
+use hwpforge_smithy_hwpx::{ExportedDocument, HwpxDecoder, HwpxPatcher, SectionWorkflowError};
 
 use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo};
 
@@ -28,33 +28,10 @@ pub fn run_to_json(
 ) -> Result<ToJsonData, ToolErrorInfo> {
     let bytes = read_file_bytes(file_path)?;
 
-    let hwpx_doc = HwpxDecoder::decode(&bytes).map_err(|e| {
-        ToolErrorInfo::new(
-            "DECODE_ERROR",
-            format!("HWPX decode failed: {e}"),
-            "Check that the file is a valid HWPX document.",
-        )
-    })?;
-
-    let styles = Some(hwpx_doc.style_store);
-
     let json_string = if let Some(idx) = section_idx {
-        let sections = hwpx_doc.document.sections();
-        if idx >= sections.len() {
-            return Err(ToolErrorInfo::new(
-                "SECTION_OUT_OF_RANGE",
-                format!("Section {idx} does not exist (document has {} sections)", sections.len()),
-                format!("Valid range: 0..={}", sections.len().saturating_sub(1)),
-            ));
-        }
-        let preservation =
-            HwpxPatcher::export_section_preservation(&bytes, idx, &sections[idx]).ok();
-        let exported = ExportedSection {
-            section_index: idx,
-            section: sections[idx].clone(),
-            styles,
-            preservation,
-        };
+        let outcome = HwpxPatcher::export_section_for_edit(&bytes, idx, true)
+            .map_err(map_section_workflow_error_for_to_json)?;
+        let exported = outcome.exported;
         serde_json::to_string_pretty(&exported).map_err(|e| {
             ToolErrorInfo::new(
                 "SERIALIZE_ERROR",
@@ -63,6 +40,14 @@ pub fn run_to_json(
             )
         })?
     } else {
+        let hwpx_doc = HwpxDecoder::decode(&bytes).map_err(|e| {
+            ToolErrorInfo::new(
+                "DECODE_ERROR",
+                format!("HWPX decode failed: {e}"),
+                "Check that the file is a valid HWPX document.",
+            )
+        })?;
+        let styles = Some(hwpx_doc.style_store);
         let exported = ExportedDocument { document: hwpx_doc.document, styles };
         serde_json::to_string_pretty(&exported).map_err(|e| {
             ToolErrorInfo::new(
@@ -103,9 +88,43 @@ pub fn run_to_json(
     }
 }
 
+fn map_section_workflow_error_for_to_json(error: SectionWorkflowError) -> ToolErrorInfo {
+    match error {
+        SectionWorkflowError::Decode { detail } => ToolErrorInfo::new(
+            "DECODE_ERROR",
+            format!("HWPX decode failed: {detail}"),
+            "Check that the file is a valid HWPX document.",
+        ),
+        SectionWorkflowError::SectionOutOfRange { requested, sections } => ToolErrorInfo::new(
+            "SECTION_OUT_OF_RANGE",
+            format!("Section {requested} does not exist (document has {sections} sections)"),
+            format!("Valid range: 0..={}", sections.saturating_sub(1)),
+        ),
+        SectionWorkflowError::SectionIndexMismatch { requested, actual } => ToolErrorInfo::new(
+            "SECTION_INDEX_MISMATCH",
+            format!("Requested section {requested} but JSON contains section {actual} data"),
+            format!(
+                "Use section: {actual} to match the JSON, or re-export section {requested} with hwpforge_to_json."
+            ),
+        ),
+        SectionWorkflowError::PreservingPatch(error) => ToolErrorInfo::new(
+            "PATCH_ERROR",
+            format!("Preserving patch failed: {error}"),
+            "Re-export the target section with the current hwpforge_to_json tool so preservation metadata is embedded. Structural/style changes still require a broader rebuild workflow.",
+        ),
+        _ => ToolErrorInfo::new(
+            "SECTION_WORKFLOW_ERROR",
+            error.to_string(),
+            "Update hwpforge so this MCP binding understands the newer section workflow error.",
+        ),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hwpforge_smithy_hwpx::ExportedSection;
+    use hwpforge_smithy_hwpx::SECTION_PRESERVATION_VERSION;
 
     #[test]
     fn to_json_section_embeds_preservation_metadata() {
@@ -125,6 +144,8 @@ mod tests {
         let exported: ExportedSection = serde_json::from_str(&json).unwrap();
         assert_eq!(exported.section_index, 0);
         assert!(exported.preservation.is_some(), "section export must embed preservation metadata");
-        assert!(!exported.preservation.unwrap().text_slots.is_empty());
+        let preservation = exported.preservation.unwrap();
+        assert_eq!(preservation.preservation_version, SECTION_PRESERVATION_VERSION);
+        assert!(!preservation.text_slots.is_empty());
     }
 }

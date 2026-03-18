@@ -27,7 +27,9 @@ use hwpforge_core::table::{Table, TableCell, TableRow};
 use crate::decoder::package::PackageReader;
 use crate::encoder::escape_xml;
 use crate::error::{HwpxError, HwpxResult};
-use crate::exchange::{PreservedTextSlot, SectionPreservation, TextLocator};
+use crate::exchange::{
+    PreservedTextSlot, SectionPreservation, TextLocator, SECTION_PRESERVATION_VERSION,
+};
 use crate::schema::section::{
     HxCaption, HxFieldBegin, HxFootNote, HxHeaderFooter, HxParagraph, HxPic, HxRun, HxSection,
     HxSubList, HxTable, HxTableCell, HxTableRow,
@@ -83,6 +85,15 @@ impl HwpxPatcher {
                 detail: format!(
                     "preservation metadata targets '{}' but patch requested '{}'",
                     preservation.section_path, expected_section_path
+                ),
+            });
+        }
+
+        if preservation.preservation_version != SECTION_PRESERVATION_VERSION {
+            return Err(HwpxError::InvalidStructure {
+                detail: format!(
+                    "preservation metadata version {} is unsupported; re-export the section with the current to-json command",
+                    preservation.preservation_version
                 ),
             });
         }
@@ -143,22 +154,29 @@ impl HwpxPatcher {
             });
         }
 
-        let base_slots = collect_semantic_text_slots(&base_section);
-        validate_preservation_slots(preservation, &base_slots)?;
+        let rebuilt_preservation =
+            build_section_preservation(&base_section_xml, &expected_section_path, &base_section)?;
+        if preservation != &rebuilt_preservation {
+            return Err(HwpxError::InvalidStructure {
+                detail:
+                    "stale or tampered preservation metadata; re-export the section with the current to-json command"
+                        .into(),
+            });
+        }
 
         let replacement_slots = collect_semantic_text_slots(replacement);
-        if replacement_slots.len() != preservation.text_slots.len() {
+        if replacement_slots.len() != rebuilt_preservation.text_slots.len() {
             return Err(HwpxError::InvalidStructure {
                 detail: format!(
                     "replacement semantic text-slot count mismatch: expected {} actual {}",
-                    preservation.text_slots.len(),
+                    rebuilt_preservation.text_slots.len(),
                     replacement_slots.len()
                 ),
             });
         }
 
         for (index, (replacement_slot, preserved_slot)) in
-            replacement_slots.iter().zip(&preservation.text_slots).enumerate()
+            replacement_slots.iter().zip(&rebuilt_preservation.text_slots).enumerate()
         {
             if replacement_slot.path != preserved_slot.path {
                 return Err(HwpxError::InvalidStructure {
@@ -172,7 +190,7 @@ impl HwpxPatcher {
 
         let mut patched_section_xml = base_section_xml.clone();
         for (replacement_slot, preserved_slot) in
-            replacement_slots.iter().zip(&preservation.text_slots).rev()
+            replacement_slots.iter().zip(&rebuilt_preservation.text_slots).rev()
         {
             if replacement_slot.text == preserved_slot.original_text {
                 continue;
@@ -350,48 +368,11 @@ fn build_section_preservation(
     }
 
     Ok(SectionPreservation {
+        preservation_version: SECTION_PRESERVATION_VERSION,
         section_path: section_path.to_string(),
         section_sha256: sha256_hex(section_xml.as_bytes()),
         text_slots,
     })
-}
-
-fn validate_preservation_slots(
-    preservation: &SectionPreservation,
-    semantic_slots: &[SemanticTextSlot],
-) -> HwpxResult<()> {
-    if preservation.text_slots.len() != semantic_slots.len() {
-        return Err(HwpxError::InvalidStructure {
-            detail: format!(
-                "preservation metadata text-slot count mismatch: expected {} actual {}",
-                preservation.text_slots.len(),
-                semantic_slots.len()
-            ),
-        });
-    }
-
-    for (index, (preserved_slot, semantic_slot)) in
-        preservation.text_slots.iter().zip(semantic_slots).enumerate()
-    {
-        if preserved_slot.path != semantic_slot.path {
-            return Err(HwpxError::InvalidStructure {
-                detail: format!(
-                    "preservation metadata path mismatch at index {index}: expected '{}' actual '{}'",
-                    preserved_slot.path, semantic_slot.path
-                ),
-            });
-        }
-        if preserved_slot.original_text != semantic_slot.text {
-            return Err(HwpxError::InvalidStructure {
-                detail: format!(
-                    "preservation metadata original_text mismatch at index {index} path '{}': expected '{}' actual '{}'",
-                    preserved_slot.path, preserved_slot.original_text, semantic_slot.text
-                ),
-            });
-        }
-    }
-
-    Ok(())
 }
 
 fn collect_semantic_text_slots(section: &Section) -> Vec<SemanticTextSlot> {
@@ -1789,6 +1770,7 @@ mod tests {
 
         let preservation =
             build_section_preservation(xml, "Contents/section0.xml", &section).unwrap();
+        assert_eq!(preservation.preservation_version, SECTION_PRESERVATION_VERSION);
         assert_eq!(preservation.text_slots.len(), 1);
         assert_eq!(
             preservation.text_slots[0].path,
@@ -1850,6 +1832,7 @@ mod tests {
 
         let preservation =
             build_section_preservation(xml, "Contents/section0.xml", &section).unwrap();
+        assert_eq!(preservation.preservation_version, SECTION_PRESERVATION_VERSION);
         assert_eq!(preservation.text_slots.len(), 1);
         assert_eq!(
             preservation.text_slots[0].path,
@@ -1903,6 +1886,7 @@ mod tests {
 
         let preservation =
             build_section_preservation(xml, "Contents/section0.xml", &section).unwrap();
+        assert_eq!(preservation.preservation_version, SECTION_PRESERVATION_VERSION);
         assert_eq!(preservation.text_slots.len(), 1);
         assert_eq!(
             preservation.text_slots[0].path,

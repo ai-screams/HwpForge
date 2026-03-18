@@ -58,6 +58,7 @@ pub mod exchange;
 mod patch;
 pub mod presets;
 mod schema;
+mod section_workflow;
 mod style_lookup_bridge;
 pub mod style_store;
 
@@ -68,9 +69,13 @@ pub use encoder::HwpxEncoder;
 pub use error::{HwpxError, HwpxErrorCode, HwpxResult};
 pub use exchange::{
     ExportedDocument, ExportedSection, PreservedTextSlot, SectionPreservation, TextLocator,
+    SECTION_PRESERVATION_VERSION,
 };
 pub use patch::HwpxPatcher;
 pub use presets::{builtin_presets, style_store_for_preset, PresetInfo};
+pub use section_workflow::{
+    SectionExportOutcome, SectionPatchOutcome, SectionWorkflowError, SectionWorkflowWarning,
+};
 pub use style_lookup_bridge::HwpxStyleLookup;
 pub use style_store::{
     HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape, HwpxStyle, HwpxStyleStore,

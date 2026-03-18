@@ -12,10 +12,13 @@ use hwpforge_core::Draft;
 
 use crate::HwpxStyleStore;
 
+/// Current version of section preservation metadata embedded in section JSON exports.
+pub const SECTION_PRESERVATION_VERSION: u32 = 1;
+
 /// Full document export for JSON round-trip.
 ///
 /// Produced by `to-json` (without `--section`) and consumed by `from-json`.
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ExportedDocument {
     /// The Core document in Draft state.
@@ -34,6 +37,9 @@ pub struct ExportedDocument {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct SectionPreservation {
+    /// Version of the preservation metadata contract.
+    #[serde(default)]
+    pub preservation_version: u32,
     /// Archive path of the source section entry (for example `Contents/section0.xml`).
     pub section_path: String,
     /// SHA-256 digest of the original section XML bytes in lowercase hex.
@@ -87,7 +93,7 @@ pub enum TextLocator {
 /// Section-only export for targeted editing.
 ///
 /// Produced by `to-json --section N` and consumed by `patch`.
-#[derive(Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct ExportedSection {
     /// Which section index this was extracted from.
