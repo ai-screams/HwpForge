@@ -983,7 +983,7 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
 /// let store = HwpxStyleStore::new();
 /// assert!(store.char_shape(CharShapeIndex::new(0)).is_err());
 /// ```
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct HwpxStyleStore {
     /// The 한글 version style set used when injecting default styles.
     style_set: HancomStyleSet,

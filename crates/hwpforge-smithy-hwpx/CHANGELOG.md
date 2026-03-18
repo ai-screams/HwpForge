@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.2.1...hwpforge-smithy-hwpx-v0.3.0) - 2026-03-19
+
+### Changed
+
+- Add preservation metadata to `ExportedSection` so section JSON exports can drive byte-preserving patch workflows across CLI and MCP.
+- Harden preserving section patching with canonical preservation validation, stale metadata rejection, and explicit mixed-content fail-fast behavior.
+
+### Migration
+
+- Downstream code that constructs `ExportedSection` with a struct literal must initialize the new `preservation` field.
+- Consumers should re-export section JSON with the current `to-json --section` flow before patching; legacy exports are intentionally rejected.
+
 ## [0.2.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.2.0...hwpforge-smithy-hwpx-v0.2.1) - 2026-03-17
 
 ### Fixed

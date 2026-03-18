@@ -154,6 +154,31 @@ impl ToolErrorInfo {
     }
 }
 
+/// Structured non-fatal warning for MCP tool responses.
+#[derive(Debug, Serialize, Clone, PartialEq, Eq)]
+pub struct ToolWarningInfo {
+    /// Machine-readable warning code.
+    pub code: String,
+    /// Human-readable warning message.
+    pub message: String,
+    /// Optional actionable hint for the caller.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub hint: Option<String>,
+}
+
+impl ToolWarningInfo {
+    /// Create a new structured warning.
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self { code: code.into(), message: message.into(), hint: None }
+    }
+
+    /// Add an optional hint to the warning.
+    pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
+        self.hint = Some(hint.into());
+        self
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

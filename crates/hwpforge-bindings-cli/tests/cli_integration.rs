@@ -8,6 +8,10 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use hwpforge_core::control::Control;
+use hwpforge_core::paragraph::Paragraph;
+use hwpforge_core::run::RunContent;
+use hwpforge_smithy_hwpx::ExportedSection;
 use serde_json::json;
 use zip::ZipArchive;
 
@@ -67,6 +71,97 @@ fn hwpx_has_entry(path: &Path, entry: &str) -> bool {
     let mut archive = ZipArchive::new(cursor).expect("open hwpx zip");
     let exists = archive.by_name(entry).is_ok();
     exists
+}
+
+fn hwpx_changed_entries(base: &Path, patched: &Path) -> Vec<String> {
+    let base_bytes = std::fs::read(base).expect("read base hwpx");
+    let patched_bytes = std::fs::read(patched).expect("read patched hwpx");
+    let mut base_zip = ZipArchive::new(std::io::Cursor::new(base_bytes)).expect("open base zip");
+    let mut patched_zip =
+        ZipArchive::new(std::io::Cursor::new(patched_bytes)).expect("open patched zip");
+
+    let mut changed: Vec<String> = Vec::new();
+    for index in 0..base_zip.len() {
+        let name = {
+            let file = base_zip.by_index(index).expect("base entry by index");
+            file.name().to_string()
+        };
+        let mut base_file = base_zip.by_name(&name).expect("base entry exists");
+        let mut patched_file = patched_zip.by_name(&name).expect("patched entry exists");
+        let mut base_data = Vec::new();
+        let mut patched_data = Vec::new();
+        base_file.read_to_end(&mut base_data).expect("read base entry");
+        patched_file.read_to_end(&mut patched_data).expect("read patched entry");
+        if base_data != patched_data {
+            changed.push(name);
+        }
+    }
+    changed
+}
+
+fn replace_first_table_text_in_section(exported: &mut ExportedSection, replacement: &str) -> bool {
+    replace_first_table_text_in_paragraphs(&mut exported.section.paragraphs, replacement)
+}
+
+fn replace_first_text_in_section(exported: &mut ExportedSection, replacement: &str) -> bool {
+    replace_first_text_run(&mut exported.section.paragraphs, replacement)
+}
+
+fn replace_first_table_text_in_paragraphs(paragraphs: &mut [Paragraph], replacement: &str) -> bool {
+    for paragraph in paragraphs {
+        if replace_first_table_text_in_runs(&mut paragraph.runs, replacement) {
+            return true;
+        }
+    }
+    false
+}
+
+fn replace_first_table_text_in_runs(
+    runs: &mut [hwpforge_core::run::Run],
+    replacement: &str,
+) -> bool {
+    for run in runs {
+        match &mut run.content {
+            RunContent::Table(table) => {
+                for row in &mut table.rows {
+                    for cell in &mut row.cells {
+                        if replace_first_text_run(&mut cell.paragraphs, replacement) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            RunContent::Control(control) => {
+                let paragraphs: Option<&mut Vec<Paragraph>> = match control.as_mut() {
+                    Control::TextBox { paragraphs, .. }
+                    | Control::Footnote { paragraphs, .. }
+                    | Control::Endnote { paragraphs, .. }
+                    | Control::Ellipse { paragraphs, .. }
+                    | Control::Polygon { paragraphs, .. } => Some(paragraphs),
+                    _ => None,
+                };
+                if let Some(paragraphs) = paragraphs {
+                    if replace_first_table_text_in_paragraphs(paragraphs, replacement) {
+                        return true;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn replace_first_text_run(paragraphs: &mut [Paragraph], replacement: &str) -> bool {
+    for paragraph in paragraphs {
+        for run in &mut paragraph.runs {
+            if let RunContent::Text(text) = &mut run.content {
+                *text = replacement.to_string();
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn extract_u32_attribute_values_after(
@@ -2061,7 +2156,7 @@ fn patch_section() {
 }
 
 #[test]
-fn patch_section_index_mismatch_warns() {
+fn patch_matching_section_index_has_no_warning() {
     let f = fixture("rect.hwpx");
     let tmp = test_tmp();
     let json_out = tmp.join("section.json");
@@ -2085,7 +2180,7 @@ fn patch_section_index_mismatch_warns() {
 }
 
 #[test]
-fn patch_section_index_mismatch_emits_warning() {
+fn patch_section_index_mismatch_fails_fast() {
     let f = fixture("rect.hwpx");
     let tmp = test_tmp();
     let json_out = tmp.join("section.json");
@@ -2109,8 +2204,10 @@ fn patch_section_index_mismatch_emits_warning() {
         "-o",
         patched.to_str().unwrap(),
     ]);
-    assert_eq!(code, 0);
-    assert!(stderr.contains("Warning:"), "Expected mismatch warning, got: {stderr}");
+    assert_ne!(code, 0);
+    assert!(stderr.contains("SECTION_INDEX_MISMATCH"), "Expected mismatch error, got: {stderr}");
+    assert!(stderr.contains("Use --section 5"), "Expected corrective hint, got: {stderr}");
+    assert!(!patched.exists(), "patch output should not be written on mismatch");
 }
 
 #[test]
@@ -2149,6 +2246,9 @@ fn patch_out_of_range() {
     let (_, _, code) =
         run(&["to-json", f.to_str().unwrap(), "-o", json_out.to_str().unwrap(), "--section", "0"]);
     assert_eq!(code, 0);
+    let content = std::fs::read_to_string(&json_out).unwrap();
+    let modified = content.replacen("\"section_index\": 0", "\"section_index\": 999", 1);
+    std::fs::write(&json_out, modified).unwrap();
 
     let (_, _, code) = run(&[
         "patch",
@@ -2172,6 +2272,9 @@ fn patch_out_of_range_hint() {
     let (_, _, code) =
         run(&["to-json", f.to_str().unwrap(), "-o", json_out.to_str().unwrap(), "--section", "0"]);
     assert_eq!(code, 0);
+    let content = std::fs::read_to_string(&json_out).unwrap();
+    let modified = content.replacen("\"section_index\": 0", "\"section_index\": 999", 1);
+    std::fs::write(&json_out, modified).unwrap();
 
     let (_, stderr, code) = run(&[
         "--json",
@@ -2184,9 +2287,7 @@ fn patch_out_of_range_hint() {
         patched.to_str().unwrap(),
     ]);
     assert_eq!(code, 1);
-    // stderr may contain both a warning and an error JSON (one per line); parse the last line.
-    let last_line = stderr.trim().lines().last().expect("no stderr output");
-    let err: serde_json::Value = serde_json::from_str(last_line).unwrap();
+    let err: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
     assert!(
         err["hint"].as_str().unwrap().contains("Valid range"),
         "expected 'Valid range' in hint"
@@ -2251,7 +2352,258 @@ fn patch_result_is_valid_hwpx() {
 }
 
 #[test]
-fn patch_json_warning() {
+fn patch_text_only_edit_preserves_untouched_package_entries() {
+    let base = guide_hwpx_path();
+    let tmp = test_tmp();
+    let json_out = tmp.join("section0.json");
+    let patched = tmp.join("patched.hwpx");
+
+    let (_, _, code) = run(&[
+        "to-json",
+        base.to_str().unwrap(),
+        "-o",
+        json_out.to_str().unwrap(),
+        "--section",
+        "0",
+    ]);
+    assert_eq!(code, 0);
+
+    let content = std::fs::read_to_string(&json_out).expect("read exported section");
+    let mut exported: ExportedSection =
+        serde_json::from_str(&content).expect("deserialize exported section");
+    assert!(
+        replace_first_table_text_in_section(&mut exported, "[TEST] preserving patch"),
+        "expected at least one text run inside a table",
+    );
+    std::fs::write(
+        &json_out,
+        serde_json::to_string_pretty(&exported).expect("serialize edited section"),
+    )
+    .expect("write edited section");
+
+    let (_, _, code) = run(&[
+        "patch",
+        base.to_str().unwrap(),
+        "--section",
+        "0",
+        json_out.to_str().unwrap(),
+        "-o",
+        patched.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+
+    let changed = hwpx_changed_entries(&base, &patched);
+    assert_eq!(changed, vec!["Contents/section0.xml".to_string()]);
+    assert_eq!(read_hwpx_entry(&base, "version.xml"), read_hwpx_entry(&patched, "version.xml"));
+    assert_eq!(
+        read_hwpx_entry(&base, "Contents/content.hpf"),
+        read_hwpx_entry(&patched, "Contents/content.hpf")
+    );
+    assert_eq!(read_hwpx_entry(&base, "settings.xml"), read_hwpx_entry(&patched, "settings.xml"));
+    assert_eq!(
+        read_hwpx_entry(&base, "Contents/header.xml"),
+        read_hwpx_entry(&patched, "Contents/header.xml")
+    );
+}
+
+#[test]
+fn patch_noop_preserves_tab_markup_in_plain_paragraph_sample() {
+    let base = fixture("user_samples/sample-tab.hwpx");
+    let tmp = test_tmp();
+    let json_out = tmp.join("section0.json");
+    let patched = tmp.join("patched.hwpx");
+
+    let (_, _, code) = run(&[
+        "to-json",
+        base.to_str().unwrap(),
+        "-o",
+        json_out.to_str().unwrap(),
+        "--section",
+        "0",
+    ]);
+    assert_eq!(code, 0);
+
+    let (_, _, code) = run(&[
+        "patch",
+        base.to_str().unwrap(),
+        "--section",
+        "0",
+        json_out.to_str().unwrap(),
+        "-o",
+        patched.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+
+    let base_section = read_hwpx_entry(&base, "Contents/section0.xml");
+    let patched_section = read_hwpx_entry(&patched, "Contents/section0.xml");
+    assert!(base_section.contains("<hp:tab "));
+    assert_eq!(patched_section, base_section);
+}
+
+#[test]
+fn patch_noop_preserves_tab_markup_in_table_cell_sample() {
+    let base = fixture("user_samples/sample-table-tab.hwpx");
+    let tmp = test_tmp();
+    let json_out = tmp.join("section0.json");
+    let patched = tmp.join("patched.hwpx");
+
+    let (_, _, code) = run(&[
+        "to-json",
+        base.to_str().unwrap(),
+        "-o",
+        json_out.to_str().unwrap(),
+        "--section",
+        "0",
+    ]);
+    assert_eq!(code, 0);
+
+    let (_, _, code) = run(&[
+        "patch",
+        base.to_str().unwrap(),
+        "--section",
+        "0",
+        json_out.to_str().unwrap(),
+        "-o",
+        patched.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+
+    let base_section = read_hwpx_entry(&base, "Contents/section0.xml");
+    let patched_section = read_hwpx_entry(&patched, "Contents/section0.xml");
+    assert!(base_section.contains("<hp:tab "));
+    assert_eq!(patched_section, base_section);
+}
+
+#[test]
+fn patch_rejects_editing_plain_paragraph_tab_slot() {
+    let base = fixture("user_samples/sample-tab.hwpx");
+    let tmp = test_tmp();
+    let json_out = tmp.join("section0.json");
+    let patched = tmp.join("patched.hwpx");
+
+    let (_, _, code) = run(&[
+        "to-json",
+        base.to_str().unwrap(),
+        "-o",
+        json_out.to_str().unwrap(),
+        "--section",
+        "0",
+    ]);
+    assert_eq!(code, 0);
+
+    let content = std::fs::read_to_string(&json_out).expect("read exported section");
+    let mut exported: ExportedSection =
+        serde_json::from_str(&content).expect("deserialize exported section");
+    assert!(
+        replace_first_text_in_section(&mut exported, "LEFT CHANGED RIGHT"),
+        "expected at least one text run",
+    );
+    std::fs::write(
+        &json_out,
+        serde_json::to_string_pretty(&exported).expect("serialize edited section"),
+    )
+    .expect("write edited section");
+
+    let (_, stderr, code) = run(&[
+        "patch",
+        base.to_str().unwrap(),
+        "--section",
+        "0",
+        json_out.to_str().unwrap(),
+        "-o",
+        patched.to_str().unwrap(),
+    ]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("inline HWPX markup"));
+}
+
+#[test]
+fn patch_rejects_tampered_preservation_locator_metadata() {
+    let base = fixture("user_samples/sample-table-cell.hwpx");
+    let tmp = test_tmp();
+    let json_out = tmp.join("section0.json");
+    let patched = tmp.join("patched.hwpx");
+
+    let (_, _, code) = run(&[
+        "to-json",
+        base.to_str().unwrap(),
+        "-o",
+        json_out.to_str().unwrap(),
+        "--section",
+        "0",
+    ]);
+    assert_eq!(code, 0);
+
+    let content = std::fs::read_to_string(&json_out).expect("read exported section");
+    let mut exported: serde_json::Value =
+        serde_json::from_str(&content).expect("deserialize exported section as value");
+    exported["preservation"]["text_slots"][0]["locator"]["TextElement"]["element_start"] =
+        serde_json::json!(0);
+    std::fs::write(
+        &json_out,
+        serde_json::to_string_pretty(&exported).expect("serialize tampered section"),
+    )
+    .expect("write tampered section");
+
+    let (_, stderr, code) = run(&[
+        "patch",
+        base.to_str().unwrap(),
+        "--section",
+        "0",
+        json_out.to_str().unwrap(),
+        "-o",
+        patched.to_str().unwrap(),
+    ]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("stale or tampered preservation metadata"));
+}
+
+#[test]
+fn patch_rejects_legacy_section_preservation_metadata() {
+    let base = fixture("user_samples/sample-table-cell.hwpx");
+    let tmp = test_tmp();
+    let json_out = tmp.join("section0.json");
+    let patched = tmp.join("patched.hwpx");
+
+    let (_, _, code) = run(&[
+        "to-json",
+        base.to_str().unwrap(),
+        "-o",
+        json_out.to_str().unwrap(),
+        "--section",
+        "0",
+    ]);
+    assert_eq!(code, 0);
+
+    let content = std::fs::read_to_string(&json_out).expect("read exported section");
+    let mut exported: serde_json::Value =
+        serde_json::from_str(&content).expect("deserialize exported section as value");
+    exported["preservation"]
+        .as_object_mut()
+        .expect("preservation object")
+        .remove("preservation_version");
+    std::fs::write(
+        &json_out,
+        serde_json::to_string_pretty(&exported).expect("serialize legacy section"),
+    )
+    .expect("write legacy section");
+
+    let (_, stderr, code) = run(&[
+        "patch",
+        base.to_str().unwrap(),
+        "--section",
+        "0",
+        json_out.to_str().unwrap(),
+        "-o",
+        patched.to_str().unwrap(),
+    ]);
+    assert_ne!(code, 0);
+    assert!(stderr.contains("re-export the section with the current to-json command"));
+    assert!(stderr.contains("preservation metadata version"));
+}
+
+#[test]
+fn patch_json_mismatch_errors() {
     let f = fixture("rect.hwpx");
     let tmp = test_tmp();
     let json_out = tmp.join("section.json");
@@ -2276,10 +2628,11 @@ fn patch_json_warning() {
         "-o",
         patched.to_str().unwrap(),
     ]);
-    assert_eq!(code, 0);
-    let warn: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
-    assert_eq!(warn["status"], "warning");
-    assert_eq!(warn["code"], "SECTION_INDEX_MISMATCH");
+    assert_ne!(code, 0);
+    let err: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
+    assert_eq!(err["status"], "error");
+    assert_eq!(err["code"], "SECTION_INDEX_MISMATCH");
+    assert!(err["hint"].as_str().unwrap().contains("Use --section 5"));
 }
 
 #[test]

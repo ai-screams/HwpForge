@@ -255,14 +255,19 @@ impl HwpForgeServer {
                         if data.section_only { ", section only" } else { "" }
                     )
                 };
-                let output = ToolOutput::new(
-                    &data,
-                    summary,
-                    vec![
-                        "Edit the JSON and use hwpforge_patch to apply changes",
-                        "Use hwpforge_inspect to understand structure first",
-                    ],
-                );
+                let summary = if data.warnings.is_empty() {
+                    summary
+                } else {
+                    format!("{summary}, {} warning(s)", data.warnings.len())
+                };
+                let mut next = vec![
+                    "Edit the JSON and use hwpforge_patch to apply changes".to_string(),
+                    "Use hwpforge_inspect to understand structure first".to_string(),
+                ];
+                if let Some(warning) = data.warnings.first() {
+                    next.insert(0, format!("Warning: {}", warning.message));
+                }
+                let output = ToolOutput { data: &data, summary, next };
                 Ok(CallToolResult::success(vec![Content::text(output.to_json_string())]))
             }
             Err(err) => Ok(tool_error_response(err)),
