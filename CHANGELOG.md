@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-03-20
+
+### Changed
+
+- Promote the workspace release line to `0.4.0` for the breaking tab semantics contract in `hwpforge-core` and `hwpforge-blueprint`.
+- Add shared tab-stop semantics across the IR stack so HWPX/HWP5 codecs can preserve explicit tab definitions and paragraph tab references.
+
+### Migration
+
+- `hwpforge_core::TabDef` now includes explicit `stops`; downstream struct literals must initialize the new field.
+- `hwpforge_blueprint::Template`, `ParaShape`, and `PartialParaShape` now carry tab definition references/collections directly.
+- Consumers matching on `BlueprintErrorCode` should handle the new tab-related error codes explicitly.
+
 ## [0.3.0] - 2026-03-19
 
 ### Changed

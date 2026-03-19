@@ -19,9 +19,9 @@ byteorder = { workspace = true }
 cfb = { workspace = true }
 encoding_rs = { workspace = true }
 flate2 = { workspace = true }
-hwpforge-blueprint = { path = "../hwpforge-blueprint", version = "0.3.0" }
-hwpforge-core = { path = "../hwpforge-core", version = "0.3.0" }
-hwpforge-foundation = { path = "../hwpforge-foundation", version = "0.3.0" }
-hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0.3.0" }
+hwpforge-blueprint = { path = "../hwpforge-blueprint", version = "0.4.0" }
+hwpforge-core = { path = "../hwpforge-core", version = "0.4.0" }
+hwpforge-foundation = { path = "../hwpforge-foundation", version = "0.4.0" }
+hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0.4.0" }
 serde = { workspace = true }
 thiserror = { workspace = true }

@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-blueprint-v0.3.0...hwpforge-blueprint-v0.4.0) - 2026-03-20
+
+### Changed
+
+- Extend blueprint templates and paragraph-shape IR with explicit tab definition collections and `tab_def_id` references.
+- Add dedicated blueprint error codes for invalid, duplicate, and unknown tab references.
+
+### Migration
+
+- `Template`, `ParaShape`, and `PartialParaShape` struct literals must initialize the new tab-related fields.
+- Exhaustive matches on `BlueprintErrorCode` must handle `InvalidTabReference`, `DuplicateTabDefinition`, and `InvalidTabDefinition`.
+
 ## [0.3.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-blueprint-v0.2.1...hwpforge-blueprint-v0.3.0) - 2026-03-18
 
 ### Chore
