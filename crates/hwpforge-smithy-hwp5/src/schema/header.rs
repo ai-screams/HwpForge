@@ -712,6 +712,129 @@ impl Hwp5RawParaShape {
 
 // ---------------------------------------------------------------------------
 
+/// A single explicit HWP5 tab stop inside a `TabDef` record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hwp5RawTabStop {
+    /// Stop position in HWPUNIT.
+    pub position: u32,
+    /// Alignment code (0=left, 1=right, 2=center, 3=decimal).
+    pub tab_type: u8,
+    /// Leader/fill code.
+    pub fill_type: u8,
+}
+
+/// Parsed from a `TabDef` record (TagId 0x16).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hwp5RawTabDef {
+    /// Raw property bitfield.
+    pub property: u32,
+    /// Explicit tab stops in record order.
+    pub tab_stops: Vec<Hwp5RawTabStop>,
+}
+
+impl Hwp5RawTabDef {
+    /// Parse a `TabDef` record from its raw payload bytes.
+    ///
+    /// Layout:
+    /// - `u32 property`
+    /// - `i32 tab_count`
+    /// - repeated tab entries: `u32 position`, `u8 tab_type`, `u8 fill_type`, `u16 reserved`
+    pub fn parse(data: &[u8]) -> Hwp5Result<Self> {
+        const HEADER_SIZE: usize = 8;
+        const TAB_STOP_SIZE: usize = 8;
+
+        if data.len() < HEADER_SIZE {
+            return Err(Hwp5Error::RecordParse {
+                offset: 0,
+                detail: format!(
+                    "TabDef too short: {} bytes (expected >= {HEADER_SIZE})",
+                    data.len()
+                ),
+            });
+        }
+
+        let mut cur = Cursor::new(data);
+        let property = cur.read_u32::<LittleEndian>()?;
+        let tab_count = cur.read_i32::<LittleEndian>()?;
+        if tab_count < 0 {
+            return Err(Hwp5Error::RecordParse {
+                offset: 4,
+                detail: format!("TabDef has negative tab_count: {tab_count}"),
+            });
+        }
+
+        let tab_count = tab_count as usize;
+        let expected_len = HEADER_SIZE + (tab_count * TAB_STOP_SIZE);
+        if data.len() < expected_len {
+            return Err(Hwp5Error::RecordParse {
+                offset: HEADER_SIZE,
+                detail: format!(
+                    "TabDef truncated: {} bytes (need {expected_len} for {tab_count} tab stops)",
+                    data.len()
+                ),
+            });
+        }
+
+        let mut tab_stops = Vec::with_capacity(tab_count);
+        for _ in 0..tab_count {
+            let position = cur.read_u32::<LittleEndian>()?;
+            let tab_type = cur.read_u8()?;
+            let fill_type = cur.read_u8()?;
+            let _reserved = cur.read_u16::<LittleEndian>()?;
+            tab_stops.push(Hwp5RawTabStop { position, tab_type, fill_type });
+        }
+
+        if data.len() != expected_len {
+            return Err(Hwp5Error::RecordParse {
+                offset: expected_len,
+                detail: format!(
+                    "TabDef has {} unexpected trailing bytes after {tab_count} tab stops",
+                    data.len() - expected_len
+                ),
+            });
+        }
+
+        Ok(Self { property, tab_stops })
+    }
+
+    /// Whether this definition enables auto tab at paragraph left end.
+    pub fn auto_tab_left(&self) -> bool {
+        (self.property & 0b1) != 0
+    }
+
+    /// Whether this definition enables auto tab at paragraph right end.
+    pub fn auto_tab_right(&self) -> bool {
+        (self.property & 0b10) != 0
+    }
+}
+
+/// A `TabDef` slot preserved from DocInfo record order.
+///
+/// `raw_id` matches the original HWP5 tab definition id used by paragraph
+/// shapes. `tab_def = None` means the slot existed in DocInfo but could not be
+/// parsed, so callers must preserve the index without trusting the payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hwp5TabDefSlot {
+    /// Raw 0-based tab definition id from DocInfo order.
+    pub raw_id: u32,
+    /// Parsed definition payload, if decoding succeeded.
+    pub tab_def: Option<Hwp5RawTabDef>,
+}
+
+impl Hwp5TabDefSlot {
+    /// Construct a successfully parsed tab definition slot.
+    pub fn parsed(raw_id: u32, tab_def: Hwp5RawTabDef) -> Self {
+        Self { raw_id, tab_def: Some(tab_def) }
+    }
+
+    /// Construct a placeholder slot for a tab definition that failed to parse.
+    pub fn invalid(raw_id: u32) -> Self {
+        Self { raw_id, tab_def: None }
+    }
+}
+
+// ---------------------------------------------------------------------------
+
 /// Reads a length-prefixed UTF-16LE string from a `Cursor<&[u8]>`.
 ///
 /// Format: `u16` length (in UTF-16 code units) followed by that many u16 LE
@@ -1102,6 +1225,57 @@ mod tests {
             Hwp5RawParaShape::parse(&data).unwrap_err(),
             Hwp5Error::RecordParse { .. }
         ));
+    }
+
+    #[test]
+    fn parse_tab_def_with_two_stops() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&0b11u32.to_le_bytes());
+        data.extend_from_slice(&2i32.to_le_bytes());
+        data.extend_from_slice(&4000u32.to_le_bytes());
+        data.push(0);
+        data.push(3);
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.extend_from_slice(&8000u32.to_le_bytes());
+        data.push(3);
+        data.push(0);
+        data.extend_from_slice(&0u16.to_le_bytes());
+
+        let tab_def = Hwp5RawTabDef::parse(&data).unwrap();
+        assert!(tab_def.auto_tab_left());
+        assert!(tab_def.auto_tab_right());
+        assert_eq!(tab_def.tab_stops.len(), 2);
+        assert_eq!(tab_def.tab_stops[0].position, 4000);
+        assert_eq!(tab_def.tab_stops[0].tab_type, 0);
+        assert_eq!(tab_def.tab_stops[0].fill_type, 3);
+        assert_eq!(tab_def.tab_stops[1].position, 8000);
+        assert_eq!(tab_def.tab_stops[1].tab_type, 3);
+        assert_eq!(tab_def.tab_stops[1].fill_type, 0);
+    }
+
+    #[test]
+    fn reject_tab_def_with_negative_count() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&0u32.to_le_bytes());
+        data.extend_from_slice(&(-1i32).to_le_bytes());
+
+        let err = Hwp5RawTabDef::parse(&data).unwrap_err();
+        assert!(matches!(err, Hwp5Error::RecordParse { .. }));
+    }
+
+    #[test]
+    fn reject_tab_def_with_trailing_bytes() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&0u32.to_le_bytes());
+        data.extend_from_slice(&1i32.to_le_bytes());
+        data.extend_from_slice(&4000u32.to_le_bytes());
+        data.push(0);
+        data.push(3);
+        data.extend_from_slice(&0u16.to_le_bytes());
+        data.push(0xAA);
+
+        let err = Hwp5RawTabDef::parse(&data).unwrap_err();
+        assert!(matches!(err, Hwp5Error::RecordParse { .. }));
     }
 
     #[test]

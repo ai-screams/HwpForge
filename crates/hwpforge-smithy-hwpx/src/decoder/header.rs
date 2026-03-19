@@ -5,13 +5,14 @@
 
 use hwpforge_foundation::{
     Color, EmbossType, EmphasisType, EngraveType, FontIndex, HeadingType, HwpUnit, LineSpacingType,
-    OutlineType, ShadowType, StrikeoutShape, UnderlineType, VerticalPosition, WordBreakType,
+    OutlineType, ShadowType, StrikeoutShape, TabAlign, TabLeader, UnderlineType, VerticalPosition,
+    WordBreakType,
 };
 use quick_xml::de::from_str;
 
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::header::{
-    HxBorderFill, HxCharPr, HxHead, HxNumbering, HxParaPr, HxStyle, HxTabPr,
+    HxBorderFill, HxCharPr, HxHead, HxNumbering, HxParaPr, HxStyle, HxTabItem, HxTabPr,
 };
 use crate::style_store::{
     parse_alignment, parse_hex_color, HwpxBorderFill, HwpxBorderLine, HwpxCharShape,
@@ -164,6 +165,60 @@ fn convert_tab(hx: &HxTabPr) -> hwpforge_core::TabDef {
         id: hx.id,
         auto_tab_left: hx.auto_tab_left != 0,
         auto_tab_right: hx.auto_tab_right != 0,
+        stops: collect_tab_items(hx),
+    }
+}
+
+fn collect_tab_items(hx: &HxTabPr) -> Vec<hwpforge_core::TabStop> {
+    if !hx.items.is_empty() {
+        return convert_tab_items(&hx.items, false);
+    }
+
+    if let Some(items) = hx
+        .switches
+        .iter()
+        .find_map(|switch| switch.case.as_ref().filter(|case| !case.items.is_empty()))
+        .map(|case| &case.items)
+    {
+        return convert_tab_items(items, false);
+    }
+
+    if let Some(items) = hx
+        .switches
+        .iter()
+        .find_map(|switch| switch.default.as_ref().filter(|default| !default.items.is_empty()))
+        .map(|default| &default.items)
+    {
+        return convert_tab_items(items, true);
+    }
+
+    Vec::new()
+}
+
+fn convert_tab_items(
+    items: &[HxTabItem],
+    legacy_default_units: bool,
+) -> Vec<hwpforge_core::TabStop> {
+    items
+        .iter()
+        .filter_map(|item| {
+            HwpUnit::new(normalize_tab_pos(item, legacy_default_units)).ok().map(|position| {
+                hwpforge_core::TabStop {
+                    position,
+                    align: TabAlign::from_hwpx_str(&item.tab_type),
+                    leader: TabLeader::from_hwpx_str(&item.leader),
+                }
+            })
+        })
+        .collect()
+}
+
+fn normalize_tab_pos(item: &HxTabItem, legacy_default_units: bool) -> i32 {
+    let raw = item.pos as i32;
+    if legacy_default_units && item.unit.is_empty() {
+        raw / 2
+    } else {
+        raw
     }
 }
 
@@ -640,6 +695,38 @@ mod tests {
         let f1 = store.font(FontIndex::new(1)).unwrap();
         assert_eq!(f1.face_name, "Times New Roman");
         assert_eq!(f1.lang, "LATIN");
+    }
+
+    #[test]
+    fn parse_header_tab_properties_with_explicit_switch_items() {
+        let xml = r##"<head version="1.4" secCnt="1">
+            <refList>
+                <tabProperties itemCnt="4">
+                    <tabPr id="0" autoTabLeft="0" autoTabRight="0"/>
+                    <tabPr id="1" autoTabLeft="1" autoTabRight="0"/>
+                    <tabPr id="2" autoTabLeft="0" autoTabRight="1"/>
+                    <tabPr id="3" autoTabLeft="0" autoTabRight="0">
+                        <switch>
+                            <case required-namespace="http://www.hancom.co.kr/hwpml/2016/HwpUnitChar">
+                                <tabItem pos="15000" type="LEFT" leader="DASH" unit="HWPUNIT"/>
+                            </case>
+                            <default>
+                                <tabItem pos="30000" type="LEFT" leader="DASH"/>
+                            </default>
+                        </switch>
+                    </tabPr>
+                </tabProperties>
+            </refList>
+        </head>"##;
+
+        let store = parse_header(xml).unwrap().style_store;
+        let tabs: Vec<_> = store.iter_tabs().cloned().collect();
+        assert_eq!(tabs.len(), 4);
+        assert_eq!(tabs[3].id, 3);
+        assert_eq!(tabs[3].stops.len(), 1);
+        assert_eq!(tabs[3].stops[0].position, HwpUnit::new(15000).unwrap());
+        assert_eq!(tabs[3].stops[0].align, TabAlign::Left);
+        assert_eq!(tabs[3].stops[0].leader.as_hwpx_str(), "DASH");
     }
 
     #[test]

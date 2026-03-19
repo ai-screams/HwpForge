@@ -354,6 +354,9 @@ pub struct PartialParaShape {
     /// Border/fill reference (for paragraph borders and backgrounds).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub border_fill_id: Option<BorderFillIndex>,
+    /// Tab definition reference (`0` = default/no explicit custom stops).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tab_def_id: Option<u32>,
     /// Heading type for outline/numbering styles.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heading_type: Option<HeadingType>,
@@ -439,6 +442,9 @@ impl PartialParaShape {
         if other.border_fill_id.is_some() {
             self.border_fill_id = other.border_fill_id;
         }
+        if other.tab_def_id.is_some() {
+            self.tab_def_id = other.tab_def_id;
+        }
         if other.heading_type.is_some() {
             self.heading_type = other.heading_type;
         }
@@ -463,6 +469,7 @@ impl PartialParaShape {
             keep_lines_together: self.keep_lines_together.unwrap_or(false),
             widow_orphan: self.widow_orphan.unwrap_or(true), // Enabled by default in HWPX
             border_fill_id: self.border_fill_id,
+            tab_def_id: self.tab_def_id.unwrap_or(0),
             heading_type: self.heading_type.unwrap_or(HeadingType::None),
         }
     }
@@ -612,6 +619,9 @@ pub struct ParaShape {
     /// Border/fill reference (None = no border/fill).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub border_fill_id: Option<BorderFillIndex>,
+    /// Tab definition reference (`0` = default/no explicit custom stops).
+    #[serde(default)]
+    pub tab_def_id: u32,
     /// Heading type (None, Outline, Number, Bullet). Default: None.
     #[serde(default)]
     pub heading_type: HeadingType,
@@ -893,11 +903,33 @@ mod tests {
             keep_lines_together: false,
             widow_orphan: true,
             border_fill_id: None,
+            tab_def_id: 0,
             heading_type: HeadingType::None,
         };
         let yaml = serde_yaml::to_string(&original).unwrap();
         let back: ParaShape = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(original, back);
+    }
+
+    #[test]
+    fn para_shape_yaml_defaults_missing_tab_def_id_to_zero() {
+        let yaml = r#"
+alignment: Justify
+line_spacing_type: Percentage
+line_spacing_value: 160.0
+space_before: 0pt
+space_after: 0pt
+indent_left: 0pt
+indent_right: 0pt
+indent_first_line: 0pt
+break_type: None
+keep_with_next: false
+keep_lines_together: false
+widow_orphan: true
+heading_type: None
+"#;
+        let parsed: ParaShape = serde_yaml::from_str(yaml).unwrap();
+        assert_eq!(parsed.tab_def_id, 0);
     }
 
     #[test]

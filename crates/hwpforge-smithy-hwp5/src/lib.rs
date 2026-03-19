@@ -1694,4 +1694,71 @@ mod tests {
 
         let _ = std::fs::remove_file(&out);
     }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_tab_preserves_inline_tab_text_and_custom_tab_def() {
+        let source = fixture_path("user_samples/sample-tab.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-tab.hwpx");
+        let warnings =
+            hwp5_to_hwpx(&source, &out).expect("user sample tab conversion should succeed");
+        assert!(warnings.is_empty(), "controlled tab fixture should convert without warnings");
+
+        assert_valid_hwpx(&out);
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        assert!(
+            decoded.style_store.iter_tabs().any(|tab| tab.id > 2 && !tab.stops.is_empty()),
+            "converted HWP5 tab fixture should keep an explicit custom tab definition"
+        );
+
+        let para = &decoded.document.sections()[0].paragraphs[0];
+        assert_eq!(para.runs[0].content.as_text(), Some("LEFT\tRIGHT"));
+
+        let para_shape =
+            decoded.style_store.para_shape(para.para_shape_id).expect("para shape should exist");
+        assert!(
+            para_shape.tab_pr_id_ref > 2,
+            "paragraph should reference a converted custom tab definition"
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_table_tab_preserves_inline_tab_text_in_cell() {
+        let source = fixture_path("user_samples/sample-table-tab.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-table-tab.hwpx");
+        let warnings =
+            hwp5_to_hwpx(&source, &out).expect("user sample table tab conversion should succeed");
+        assert!(
+            warnings.is_empty(),
+            "controlled table-tab fixture should convert without warnings"
+        );
+
+        assert_valid_hwpx(&out);
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let table = decoded.document.sections()[0]
+            .paragraphs
+            .iter()
+            .flat_map(|para| &para.runs)
+            .find_map(|run| run.content.as_table())
+            .expect("expected a table");
+        assert_eq!(
+            table.rows[0].cells[0].paragraphs[0].runs[0].content.as_text(),
+            Some("CELLLEFT\tCELLRIGHT")
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
 }

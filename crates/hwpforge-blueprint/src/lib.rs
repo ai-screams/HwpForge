@@ -1,7 +1,7 @@
 //! HwpForge Blueprint: YAML-based style template system.
 //!
 //! Blueprint is the **design pattern** layer in the Forge metaphor.
-//! It defines style templates (fonts, sizes, colors, spacing) in
+//! It defines style templates (fonts, sizes, colors, spacing, tab stops) in
 //! human-readable YAML that can be applied to Core documents.
 //!
 //! # Architecture
@@ -13,7 +13,7 @@
 //! core (Document, Section, Paragraph, Run)
 //!     |
 //!     v
-//! blueprint (THIS CRATE: Template, StyleRegistry, CharShape, ParaShape)
+//! blueprint (THIS CRATE: Template, StyleRegistry, CharShape, ParaShape, TabDef)
 //!     |
 //!     v
 //! smithy-* (HWPX, HWP5, Markdown codecs)
@@ -48,7 +48,7 @@
 //!   -> Template::from_yaml()
 //!     -> Inheritance resolution (DFS merge)
 //!       -> StyleRegistry::from_template()
-//!         -> Indexed CharShape/ParaShape collections
+//!         -> Indexed CharShape/ParaShape/Tab collections
 //! ```
 
 #![deny(missing_docs)]

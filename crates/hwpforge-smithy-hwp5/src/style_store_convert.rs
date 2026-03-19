@@ -1,8 +1,10 @@
 use crate::schema::header::{
     Hwp5RawCharShape, Hwp5RawFaceName, Hwp5RawIdMappings, Hwp5RawParaShape, Hwp5RawStyle,
+    Hwp5RawTabDef,
 };
 use crate::style_store::Hwp5StyleStore;
-use hwpforge_foundation::{Alignment, Color, FontIndex, HwpUnit};
+use hwpforge_core::{TabDef, TabStop};
+use hwpforge_foundation::{Alignment, Color, FontIndex, HwpUnit, TabAlign, TabLeader};
 use hwpforge_smithy_hwpx::{
     HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape, HwpxStyle, HwpxStyleStore,
 };
@@ -101,7 +103,15 @@ pub(crate) fn hwp5_char_shape_to_hwpx_with_counts(
     shape
 }
 
+#[cfg(test)]
 pub(crate) fn hwp5_para_shape_to_hwpx(raw: &Hwp5RawParaShape) -> HwpxParaShape {
+    hwp5_para_shape_to_hwpx_with_tab_id(raw, raw.tab_def_id as u32)
+}
+
+pub(crate) fn hwp5_para_shape_to_hwpx_with_tab_id(
+    raw: &Hwp5RawParaShape,
+    tab_pr_id_ref: u32,
+) -> HwpxParaShape {
     let alignment = match (raw.property1 >> 2) & 0b111 {
         0 => Alignment::Justify,
         1 => Alignment::Left,
@@ -120,7 +130,64 @@ pub(crate) fn hwp5_para_shape_to_hwpx(raw: &Hwp5RawParaShape) -> HwpxParaShape {
     shape.spacing_before = to_unit(raw.space_before);
     shape.spacing_after = to_unit(raw.space_after);
     shape.line_spacing = raw.line_spacing;
+    shape.tab_pr_id_ref = tab_pr_id_ref;
     shape
+}
+
+fn hwp5_tab_align_to_foundation(tab_type: u8) -> TabAlign {
+    match tab_type {
+        1 => TabAlign::Right,
+        2 => TabAlign::Center,
+        3 => TabAlign::Decimal,
+        _ => TabAlign::Left,
+    }
+}
+
+fn hwp5_fill_type_to_tab_leader(fill_type: u8) -> TabLeader {
+    let leader = match fill_type {
+        0 => "SOLID",
+        1 => "DASH",
+        2 => "DOT",
+        3 => "DASH_DOT",
+        4 => "DASH_DOT_DOT",
+        5 => "LONG_DASH",
+        6 => "CIRCLE",
+        7 => "DOUBLE_SLIM",
+        8 => "SLIM_THICK",
+        9 => "THICK_SLIM",
+        10 => "SLIM_THICK_SLIM",
+        11 => "WAVE",
+        12 => "DOUBLEWAVE",
+        13 => "THICK_3D",
+        14 => "THICK_3D_REVERSE_LIGHTING",
+        15 => "SOLID_3D",
+        16 => "SOLID_3D_REVERSE_LIGHTING",
+        _ => "SOLID",
+    };
+    TabLeader::from_hwpx_str(leader)
+}
+
+pub(crate) fn hwp5_tab_def_to_hwpx(id: u32, raw: &Hwp5RawTabDef) -> TabDef {
+    TabDef {
+        id,
+        auto_tab_left: raw.auto_tab_left(),
+        auto_tab_right: raw.auto_tab_right(),
+        stops: raw
+            .tab_stops
+            .iter()
+            .map(|stop| TabStop {
+                position: hwp5_tab_position_to_hwp_unit(stop.position),
+                align: hwp5_tab_align_to_foundation(stop.tab_type),
+                leader: hwp5_fill_type_to_tab_leader(stop.fill_type),
+            })
+            .collect(),
+    }
+}
+
+fn hwp5_tab_position_to_hwp_unit(position: u32) -> HwpUnit {
+    let clamped =
+        i32::try_from(position).unwrap_or(i32::MAX).clamp(HwpUnit::MIN_VALUE, HwpUnit::MAX_VALUE);
+    HwpUnit::new(clamped).expect("tab stop position should be clamped into valid HwpUnit range")
 }
 
 pub(crate) fn hwp5_style_to_hwpx(id: u32, raw: &Hwp5RawStyle, style_count: usize) -> HwpxStyle {

@@ -34,8 +34,8 @@ pub use enums::{
     BreakType, CurveSegmentType, DropCapStyle, EmbossType, EmphasisType, EngraveType, FieldType,
     FillBrushType, Flip, GradientType, GutterType, HeadingType, ImageFillMode, Language,
     LineSpacingType, NumberFormatType, OutlineType, PageNumberPosition, PatternType,
-    RefContentType, RefType, RestartType, ShadowType, ShowMode, StrikeoutShape, TextBorderType,
-    TextDirection, UnderlineType, VerticalPosition, WordBreakType,
+    RefContentType, RefType, RestartType, ShadowType, ShowMode, StrikeoutShape, TabAlign,
+    TabLeader, TextBorderType, TextDirection, UnderlineType, VerticalPosition, WordBreakType,
 };
 pub use error::{ErrorCode, ErrorCodeExt, FoundationError, FoundationResult};
 pub use ids::{FontId, StyleName, TemplateName};

@@ -9,7 +9,7 @@ use crate::error::Hwp5Result;
 use crate::schema::border_fill::Hwp5RawBorderFill;
 use crate::schema::header::{
     Hwp5RawCharShape, Hwp5RawFaceName, Hwp5RawIdMappings, Hwp5RawParaShape, Hwp5RawStyle,
-    HwpVersion,
+    Hwp5RawTabDef, Hwp5TabDefSlot, HwpVersion,
 };
 use crate::schema::record::{Record, TagId};
 
@@ -33,6 +33,8 @@ pub(crate) struct DocInfoResult {
     pub char_shapes: Vec<Hwp5RawCharShape>,
     /// Paragraph shape records.
     pub para_shapes: Vec<Hwp5RawParaShape>,
+    /// Tab definition slots preserved in DocInfo order.
+    pub tab_defs: Vec<Hwp5TabDefSlot>,
     /// Named style records.
     pub styles: Vec<Hwp5RawStyle>,
     /// Border/fill record slots preserved in DocInfo order.
@@ -43,10 +45,10 @@ pub(crate) struct DocInfoResult {
 
 /// Parse the decompressed `DocInfo` stream bytes into style definitions.
 ///
-/// Iterates every record in the stream and dispatches by tag ID. Unknown or
-/// unprocessable records are recorded as [`Hwp5Warning::UnsupportedTag`]
-/// warnings rather than hard errors so that partially-supported files can
-/// still be read.
+/// Iterates every record in the stream and dispatches by tag ID. Unknown tags
+/// become [`Hwp5Warning::UnsupportedTag`], while malformed-but-known records
+/// degrade into more specific fallback warnings so partially-supported files
+/// can still be read without silently reindexing raw slots.
 ///
 /// # Errors
 ///
@@ -60,6 +62,7 @@ pub(crate) fn parse_doc_info(data: &[u8], _version: &HwpVersion) -> Hwp5Result<D
         fonts: Vec::new(),
         char_shapes: Vec::new(),
         para_shapes: Vec::new(),
+        tab_defs: Vec::new(),
         styles: Vec::new(),
         border_fills: Vec::new(),
         warnings: Vec::new(),
@@ -92,6 +95,20 @@ pub(crate) fn parse_doc_info(data: &[u8], _version: &HwpVersion) -> Hwp5Result<D
                     .warnings
                     .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
             },
+            TagId::TabDef => match Hwp5RawTabDef::parse(&record.data) {
+                Ok(tab_def) => {
+                    let raw_id = result.tab_defs.len() as u32;
+                    result.tab_defs.push(Hwp5TabDefSlot::parsed(raw_id, tab_def));
+                }
+                Err(err) => {
+                    let raw_id = result.tab_defs.len() as u32;
+                    result.tab_defs.push(Hwp5TabDefSlot::invalid(raw_id));
+                    result.warnings.push(Hwp5Warning::ParserFallback {
+                        subject: "tab_def.parse",
+                        reason: format!("tab definition slot {raw_id} could not be parsed: {err}"),
+                    });
+                }
+            },
             TagId::Style => match Hwp5RawStyle::parse(&record.data) {
                 Ok(s) => result.styles.push(s),
                 Err(_) => result
@@ -116,7 +133,7 @@ pub(crate) fn parse_doc_info(data: &[u8], _version: &HwpVersion) -> Hwp5Result<D
             TagId::Unknown(id) => {
                 result.warnings.push(Hwp5Warning::UnsupportedTag { tag_id: id, offset: 0 });
             }
-            // Other known tags (DocumentProperties, BinData, TabDef, etc.) — silently skip.
+            // Other known tags (DocumentProperties, BinData, etc.) — silently skip.
             _ => {}
         }
     }
@@ -200,6 +217,20 @@ mod tests {
         data
     }
 
+    fn make_tab_def_data(tab_count: i32) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(&0u32.to_le_bytes());
+        data.extend_from_slice(&tab_count.to_le_bytes());
+        for idx in 0..tab_count.max(0) {
+            let position = 4000u32 + (idx as u32 * 4000);
+            data.extend_from_slice(&position.to_le_bytes());
+            data.push(0);
+            data.push(3);
+            data.extend_from_slice(&0u16.to_le_bytes());
+        }
+        data
+    }
+
     #[test]
     fn parse_doc_info_empty() {
         let result = parse_doc_info(&[], &HwpVersion::new(5, 0, 2, 5)).unwrap();
@@ -255,6 +286,33 @@ mod tests {
         assert_eq!(result.border_fills[2].id, 3);
         assert!(result.border_fills[2].fill.is_some());
         assert_eq!(result.warnings.len(), 1);
+    }
+
+    #[test]
+    fn parse_doc_info_preserves_tab_def_slots_when_middle_record_fails() {
+        let valid = make_tab_def_data(1);
+        let mut invalid = make_tab_def_data(1);
+        invalid.push(0xAA);
+
+        let mut stream = Vec::new();
+        stream.extend(make_record_bytes(0x16, &valid));
+        stream.extend(make_record_bytes(0x16, &invalid));
+        stream.extend(make_record_bytes(0x16, &valid));
+
+        let result = parse_doc_info(&stream, &HwpVersion::new(5, 0, 2, 5)).unwrap();
+        assert_eq!(result.tab_defs.len(), 3);
+        assert_eq!(result.tab_defs[0].raw_id, 0);
+        assert!(result.tab_defs[0].tab_def.is_some());
+        assert_eq!(result.tab_defs[1].raw_id, 1);
+        assert!(result.tab_defs[1].tab_def.is_none());
+        assert_eq!(result.tab_defs[2].raw_id, 2);
+        assert!(result.tab_defs[2].tab_def.is_some());
+        assert!(result.warnings.iter().any(|warning| matches!(
+            warning,
+            Hwp5Warning::ParserFallback { subject, reason }
+                if *subject == "tab_def.parse"
+                    && reason.contains("slot 1")
+        )));
     }
 
     #[test]

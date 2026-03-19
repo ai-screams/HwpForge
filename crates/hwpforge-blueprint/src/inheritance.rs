@@ -41,6 +41,7 @@
 //!
 //! - **Styles**: Field-level merge (child fields override parent fields)
 //! - **Page**: Child's page entirely replaces parent's (if present)
+//! - **Tabs**: Child tab definitions override parent definitions by id
 //! - **Markdown mapping**: Field-level merge (child entries override parent)
 
 use std::collections::{HashMap, HashSet};
@@ -49,7 +50,7 @@ use indexmap::IndexMap;
 
 use crate::error::{BlueprintError, BlueprintResult};
 use crate::style::PartialStyle;
-use crate::template::{MarkdownMapping, Template};
+use crate::template::{MarkdownMapping, Template, TemplateTabDef};
 
 /// Maximum inheritance depth to prevent infinite recursion.
 pub const MAX_INHERITANCE_DEPTH: usize = 10;
@@ -178,6 +179,9 @@ fn merge_templates(base: &Template, child: &Template) -> Template {
     // Page: child replaces base entirely
     let merged_page = child.page.clone().or_else(|| base.page.clone());
 
+    // Tabs: child overrides parent definitions by id
+    let merged_tabs = merge_tabs(&base.tabs, &child.tabs);
+
     // Markdown mapping: field-level merge
     let merged_md =
         merge_markdown_mappings(base.markdown_mapping.as_ref(), child.markdown_mapping.as_ref());
@@ -186,8 +190,22 @@ fn merge_templates(base: &Template, child: &Template) -> Template {
         meta: child.meta.clone(), // Child's meta takes precedence
         page: merged_page,
         styles: merged_styles,
+        tabs: merged_tabs,
         markdown_mapping: merged_md,
     }
+}
+
+fn merge_tabs(base: &[TemplateTabDef], child: &[TemplateTabDef]) -> Vec<TemplateTabDef> {
+    let mut merged = base.to_vec();
+    for tab in child {
+        if let Some(existing) = merged.iter_mut().find(|candidate| candidate.id == tab.id) {
+            *existing = tab.clone();
+        } else {
+            merged.push(tab.clone());
+        }
+    }
+    merged.sort_by_key(|tab| tab.id);
+    merged
 }
 
 /// Merges two MarkdownMapping structs (base + child override).
@@ -264,6 +282,7 @@ mod tests {
             },
             page: None,
             styles: styles.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
+            tabs: vec![],
             markdown_mapping: None,
         }
     }
@@ -515,6 +534,7 @@ mod tests {
             },
             page: Some(PageStyle::a4()),
             styles: IndexMap::new(),
+            tabs: vec![],
             markdown_mapping: None,
         };
 
@@ -527,6 +547,7 @@ mod tests {
             },
             page: Some(PageStyle::default()),
             styles: IndexMap::new(),
+            tabs: vec![],
             markdown_mapping: None,
         };
 
@@ -552,6 +573,7 @@ mod tests {
             },
             page: Some(PageStyle::a4()),
             styles: IndexMap::new(),
+            tabs: vec![],
             markdown_mapping: None,
         };
 
@@ -564,6 +586,7 @@ mod tests {
             },
             page: None, // No page in child
             styles: IndexMap::new(),
+            tabs: vec![],
             markdown_mapping: None,
         };
 
@@ -587,6 +610,7 @@ mod tests {
             },
             page: None,
             styles: IndexMap::new(),
+            tabs: vec![],
             markdown_mapping: Some(MarkdownMapping {
                 heading1: Some("heading1".to_string()),
                 heading2: Some("heading2".to_string()),
@@ -603,6 +627,7 @@ mod tests {
             },
             page: None,
             styles: IndexMap::new(),
+            tabs: vec![],
             markdown_mapping: Some(MarkdownMapping {
                 heading1: Some("custom_h1".to_string()), // Override
                 heading3: Some("heading3".to_string()),  // Add new
@@ -685,6 +710,72 @@ mod tests {
         assert_eq!(s.char_shape.as_ref().unwrap().font, Some("A".to_string()));
         assert_eq!(s.char_shape.as_ref().unwrap().size, Some(HwpUnit::from_pt(10.0).unwrap()));
         assert_eq!(s.para_shape.as_ref().unwrap().alignment, Some(Alignment::Right));
+    }
+
+    #[test]
+    fn tabs_are_inherited_and_child_overrides_by_id() {
+        let parent = Template {
+            meta: TemplateMeta {
+                name: "parent".into(),
+                version: "1.0.0".into(),
+                description: None,
+                extends: None,
+            },
+            page: None,
+            styles: IndexMap::new(),
+            tabs: vec![TemplateTabDef {
+                id: 3,
+                auto_tab_left: false,
+                auto_tab_right: false,
+                stops: vec![crate::template::TemplateTabStop {
+                    position: HwpUnit::new(7000).unwrap(),
+                    align: hwpforge_foundation::TabAlign::Left,
+                    leader: hwpforge_foundation::TabLeader::dot(),
+                }],
+            }],
+            markdown_mapping: None,
+        };
+        let child = Template {
+            meta: TemplateMeta {
+                name: "child".into(),
+                version: "1.0.0".into(),
+                description: None,
+                extends: Some("parent".into()),
+            },
+            page: None,
+            styles: IndexMap::new(),
+            tabs: vec![
+                TemplateTabDef {
+                    id: 3,
+                    auto_tab_left: false,
+                    auto_tab_right: false,
+                    stops: vec![crate::template::TemplateTabStop {
+                        position: HwpUnit::new(9000).unwrap(),
+                        align: hwpforge_foundation::TabAlign::Right,
+                        leader: hwpforge_foundation::TabLeader::none(),
+                    }],
+                },
+                TemplateTabDef {
+                    id: 4,
+                    auto_tab_left: false,
+                    auto_tab_right: false,
+                    stops: vec![crate::template::TemplateTabStop {
+                        position: HwpUnit::new(12000).unwrap(),
+                        align: hwpforge_foundation::TabAlign::Center,
+                        leader: hwpforge_foundation::TabLeader::dot(),
+                    }],
+                },
+            ],
+            markdown_mapping: None,
+        };
+        let provider =
+            HashMap::from([("parent".to_string(), parent), ("child".to_string(), child.clone())]);
+
+        let resolved = resolve_template(&child, &provider).unwrap();
+        assert_eq!(resolved.tabs.len(), 2);
+        assert_eq!(resolved.tabs[0].id, 3);
+        assert_eq!(resolved.tabs[0].stops[0].position, HwpUnit::new(9000).unwrap());
+        assert_eq!(resolved.tabs[1].id, 4);
     }
 
     #[test]

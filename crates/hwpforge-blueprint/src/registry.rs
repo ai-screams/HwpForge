@@ -9,7 +9,7 @@
 //! StyleRegistry::from_template()
 //!     |
 //!     v
-//! StyleRegistry (indexed Vecs: fonts, char_shapes, para_shapes)
+//! StyleRegistry (indexed Vecs: fonts, char_shapes, para_shapes, tabs)
 //! ```
 //!
 //! This separation mirrors the **HTML + CSS** model:
@@ -26,11 +26,12 @@ use indexmap::IndexMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use hwpforge_core::TabDef;
 use hwpforge_foundation::{CharShapeIndex, FontId, FontIndex, ParaShapeIndex};
 
 use crate::error::{BlueprintError, BlueprintResult};
 use crate::style::{CharShape, ParaShape};
-use crate::template::Template;
+use crate::template::{Template, TemplateTabDef};
 
 /// A resolved style entry with allocated indices.
 ///
@@ -85,6 +86,9 @@ pub struct StyleRegistry {
     pub char_shapes: Vec<CharShape>,
     /// All resolved paragraph shapes.
     pub para_shapes: Vec<ParaShape>,
+    /// Shared tab definitions referenced by paragraph shapes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tabs: Vec<TabDef>,
     /// Mapping from style name to its indices (insertion-order preserved).
     pub style_entries: IndexMap<String, StyleEntry>,
 }
@@ -96,7 +100,13 @@ impl StyleRegistry {
     /// template. Pass this to [`HwpxStyleStore::from_registry`][crate] to produce a
     /// complete style store with default char shapes, para shapes, and border fills.
     pub fn with_fonts(fonts: Vec<FontId>) -> Self {
-        Self { fonts, char_shapes: vec![], para_shapes: vec![], style_entries: IndexMap::new() }
+        Self {
+            fonts,
+            char_shapes: vec![],
+            para_shapes: vec![],
+            tabs: vec![],
+            style_entries: IndexMap::new(),
+        }
     }
 
     /// Creates a StyleRegistry from a Template.
@@ -139,6 +149,7 @@ impl StyleRegistry {
         let mut char_shapes = Vec::new();
         let mut para_shapes = Vec::new();
         let mut style_entries = IndexMap::new();
+        let tabs = validate_tabs(&template.tabs)?;
 
         // Font name → FontIndex mapping for deduplication
         let mut font_indices: BTreeMap<String, FontIndex> = BTreeMap::new();
@@ -178,6 +189,8 @@ impl StyleRegistry {
                 |p| p.resolve(),
             );
 
+            validate_tab_reference(style_name, para_shape.tab_def_id, &tabs)?;
+
             let para_shape_id = ParaShapeIndex::new(para_shapes.len());
             para_shapes.push(para_shape);
 
@@ -193,7 +206,7 @@ impl StyleRegistry {
             validate_mapping_references(md, &style_entries)?;
         }
 
-        Ok(StyleRegistry { fonts, char_shapes, para_shapes, style_entries })
+        Ok(StyleRegistry { fonts, char_shapes, para_shapes, tabs, style_entries })
     }
 
     /// Looks up a style by name.
@@ -237,6 +250,11 @@ impl StyleRegistry {
     /// Returns the number of paragraph shapes.
     pub fn para_shape_count(&self) -> usize {
         self.para_shapes.len()
+    }
+
+    /// Returns the number of shared tab definitions.
+    pub fn tab_count(&self) -> usize {
+        self.tabs.len()
     }
 
     /// Returns the number of named styles.
@@ -298,11 +316,69 @@ fn validate_mapping_references(
     Ok(())
 }
 
+fn validate_tabs(tabs: &[TemplateTabDef]) -> BlueprintResult<Vec<TabDef>> {
+    let mut seen = BTreeMap::new();
+    for tab in tabs {
+        if TabDef::is_builtin_id(tab.id) {
+            return Err(BlueprintError::InvalidTabDefinition {
+                id: tab.id,
+                reason: format!(
+                    "ids 0..={} are reserved for built-in 한글 tab definitions",
+                    TabDef::BUILTIN_COUNT - 1
+                ),
+            });
+        }
+        if seen.insert(tab.id, ()).is_some() {
+            return Err(BlueprintError::DuplicateTabDefinition { id: tab.id });
+        }
+        validate_tab_stops(tab)?;
+    }
+    Ok(tabs.iter().map(Into::into).collect())
+}
+
+fn validate_tab_stops(tab: &TemplateTabDef) -> BlueprintResult<()> {
+    let mut previous: Option<i32> = None;
+    for (idx, stop) in tab.stops.iter().enumerate() {
+        let position = stop.position.as_i32();
+        if let Some(prev) = previous {
+            if position <= prev {
+                return Err(BlueprintError::InvalidTabDefinition {
+                    id: tab.id,
+                    reason: format!(
+                        "tab stop {} at {} must be strictly greater than previous stop at {}",
+                        idx, position, prev
+                    ),
+                });
+            }
+        }
+        previous = Some(position);
+    }
+    Ok(())
+}
+
+fn validate_tab_reference(
+    style_name: &str,
+    tab_def_id: u32,
+    tabs: &[TabDef],
+) -> BlueprintResult<()> {
+    if TabDef::is_builtin_id(tab_def_id) {
+        return Ok(());
+    }
+    if tabs.iter().any(|tab| tab.id == tab_def_id) {
+        return Ok(());
+    }
+    Err(BlueprintError::InvalidTabReference {
+        style_name: style_name.to_string(),
+        tab_id: tab_def_id,
+        reason: "no matching tab definition exists in template.tabs".to_string(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::style::PartialStyle;
-    use crate::template::TemplateMeta;
+    use crate::template::{TemplateMeta, TemplateTabDef, TemplateTabStop};
     use hwpforge_foundation::{Alignment, HwpUnit, LineSpacingType};
     use pretty_assertions::assert_eq;
 
@@ -329,6 +405,7 @@ mod tests {
             },
             page: None,
             styles,
+            tabs: vec![],
             markdown_mapping: None,
         }
     }
@@ -660,6 +737,7 @@ mod tests {
             },
             page: None,
             styles,
+            tabs: vec![],
             markdown_mapping: Some(crate::template::MarkdownMapping {
                 body: Some("body".to_string()),
                 heading1: Some("heading".to_string()),
@@ -670,6 +748,209 @@ mod tests {
         // Should succeed — all references are valid
         let registry = StyleRegistry::from_template(&template).unwrap();
         assert_eq!(registry.style_count(), 2);
+    }
+
+    #[test]
+    fn registry_carries_template_tabs() {
+        let mut styles = IndexMap::new();
+        styles.insert(
+            "body".to_string(),
+            PartialStyle {
+                char_shape: Some(crate::style::PartialCharShape {
+                    font: Some("Batang".to_string()),
+                    size: Some(HwpUnit::from_pt(10.0).unwrap()),
+                    ..Default::default()
+                }),
+                para_shape: Some(crate::style::PartialParaShape {
+                    tab_def_id: Some(3),
+                    ..Default::default()
+                }),
+            },
+        );
+        let template = Template {
+            meta: TemplateMeta {
+                name: "test".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                extends: None,
+            },
+            page: None,
+            styles,
+            tabs: vec![TemplateTabDef {
+                id: 3,
+                auto_tab_left: false,
+                auto_tab_right: false,
+                stops: vec![TemplateTabStop {
+                    position: HwpUnit::new(8000).unwrap(),
+                    align: hwpforge_foundation::TabAlign::Left,
+                    leader: hwpforge_foundation::TabLeader::dot(),
+                }],
+            }],
+            markdown_mapping: None,
+        };
+
+        let registry = StyleRegistry::from_template(&template).unwrap();
+        assert_eq!(registry.tab_count(), 1);
+        assert_eq!(registry.tabs[0].id, 3);
+        assert_eq!(registry.para_shapes[0].tab_def_id, 3);
+    }
+
+    #[test]
+    fn template_rejects_missing_custom_tab_definition() {
+        let mut styles = IndexMap::new();
+        styles.insert(
+            "body".to_string(),
+            PartialStyle {
+                char_shape: Some(crate::style::PartialCharShape {
+                    font: Some("Batang".to_string()),
+                    size: Some(HwpUnit::from_pt(10.0).unwrap()),
+                    ..Default::default()
+                }),
+                para_shape: Some(crate::style::PartialParaShape {
+                    tab_def_id: Some(3),
+                    ..Default::default()
+                }),
+            },
+        );
+
+        let template = make_template(styles);
+        let err = StyleRegistry::from_template(&template).unwrap_err();
+        assert!(matches!(err, BlueprintError::InvalidTabReference { .. }));
+    }
+
+    #[test]
+    fn template_rejects_reserved_tab_definition_ids() {
+        let mut styles = IndexMap::new();
+        styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
+        let template = Template {
+            meta: TemplateMeta {
+                name: "test".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                extends: None,
+            },
+            page: None,
+            styles,
+            tabs: vec![TemplateTabDef {
+                id: 1,
+                auto_tab_left: false,
+                auto_tab_right: false,
+                stops: vec![TemplateTabStop {
+                    position: HwpUnit::new(8000).unwrap(),
+                    align: hwpforge_foundation::TabAlign::Left,
+                    leader: hwpforge_foundation::TabLeader::dot(),
+                }],
+            }],
+            markdown_mapping: None,
+        };
+
+        let err = StyleRegistry::from_template(&template).unwrap_err();
+        assert!(matches!(err, BlueprintError::InvalidTabDefinition { .. }));
+    }
+
+    #[test]
+    fn template_rejects_duplicate_tab_definition_ids() {
+        let mut styles = IndexMap::new();
+        styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
+        let mk_tab = || TemplateTabDef {
+            id: 3,
+            auto_tab_left: false,
+            auto_tab_right: false,
+            stops: vec![TemplateTabStop {
+                position: HwpUnit::new(8000).unwrap(),
+                align: hwpforge_foundation::TabAlign::Left,
+                leader: hwpforge_foundation::TabLeader::dot(),
+            }],
+        };
+        let template = Template {
+            meta: TemplateMeta {
+                name: "test".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                extends: None,
+            },
+            page: None,
+            styles,
+            tabs: vec![mk_tab(), mk_tab()],
+            markdown_mapping: None,
+        };
+
+        let err = StyleRegistry::from_template(&template).unwrap_err();
+        assert!(matches!(err, BlueprintError::DuplicateTabDefinition { .. }));
+    }
+
+    #[test]
+    fn template_rejects_out_of_order_tab_stops() {
+        let mut styles = IndexMap::new();
+        styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
+        let template = Template {
+            meta: TemplateMeta {
+                name: "test".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                extends: None,
+            },
+            page: None,
+            styles,
+            tabs: vec![TemplateTabDef {
+                id: 3,
+                auto_tab_left: false,
+                auto_tab_right: false,
+                stops: vec![
+                    TemplateTabStop {
+                        position: HwpUnit::new(8000).unwrap(),
+                        align: hwpforge_foundation::TabAlign::Left,
+                        leader: hwpforge_foundation::TabLeader::none(),
+                    },
+                    TemplateTabStop {
+                        position: HwpUnit::new(4000).unwrap(),
+                        align: hwpforge_foundation::TabAlign::Right,
+                        leader: hwpforge_foundation::TabLeader::from_hwpx_str("DASH"),
+                    },
+                ],
+            }],
+            markdown_mapping: None,
+        };
+
+        let err = StyleRegistry::from_template(&template).unwrap_err();
+        assert!(matches!(err, BlueprintError::InvalidTabDefinition { .. }));
+    }
+
+    #[test]
+    fn template_rejects_duplicate_tab_stop_positions() {
+        let mut styles = IndexMap::new();
+        styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
+        let template = Template {
+            meta: TemplateMeta {
+                name: "test".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                extends: None,
+            },
+            page: None,
+            styles,
+            tabs: vec![TemplateTabDef {
+                id: 3,
+                auto_tab_left: false,
+                auto_tab_right: false,
+                stops: vec![
+                    TemplateTabStop {
+                        position: HwpUnit::new(4000).unwrap(),
+                        align: hwpforge_foundation::TabAlign::Left,
+                        leader: hwpforge_foundation::TabLeader::none(),
+                    },
+                    TemplateTabStop {
+                        position: HwpUnit::new(4000).unwrap(),
+                        align: hwpforge_foundation::TabAlign::Center,
+                        leader: hwpforge_foundation::TabLeader::dot(),
+                    },
+                ],
+            }],
+            markdown_mapping: None,
+        };
+
+        let err = StyleRegistry::from_template(&template).unwrap_err();
+        assert!(matches!(err, BlueprintError::InvalidTabDefinition { .. }));
     }
 
     #[test]
@@ -686,6 +967,7 @@ mod tests {
             },
             page: None,
             styles,
+            tabs: vec![],
             markdown_mapping: Some(crate::template::MarkdownMapping {
                 body: Some("body".to_string()),
                 heading1: Some("nonexistent".to_string()), // Invalid!

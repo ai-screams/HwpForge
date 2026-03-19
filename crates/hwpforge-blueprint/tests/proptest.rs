@@ -295,6 +295,7 @@ proptest! {
             keep_lines_together: false,
             widow_orphan: true,
             border_fill_id: None,
+            tab_def_id: 0,
             heading_type: hwpforge_foundation::HeadingType::None,
         };
         let yaml = serde_yaml::to_string(&original).unwrap();
