@@ -134,6 +134,11 @@ pub(crate) enum TextSegment {
         extra: [u8; 14],
     },
     /// Field end marker (U+0004).
+    ///
+    /// HWP5 stores this as an inline control: one control code unit plus
+    /// seven extra UTF-16 code units of payload. The payload is currently
+    /// consumed and discarded because Core does not model field-end inline
+    /// metadata yet.
     FieldEnd,
     /// Non-breaking space (U+001E).
     NonBreakingSpace,
@@ -194,8 +199,8 @@ impl Hwp5ParaText {
 
         // Helper: read 7 more u16 values (14 bytes) as extra data.
         //
-        // HWP5 "extended" control characters (0x01-0x03, 0x0B-0x0C, 0x0E-0x17)
-        // occupy 8 wchars total: the control code itself plus 7 extra u16 values.
+        // HWP5 "inline" and "extended" control characters occupy 8 UTF-16
+        // code units total: the control code itself plus 7 extra u16 values.
         macro_rules! read_extra {
             ($offset:expr) => {{
                 if i + 7 > code_units.len() {
@@ -223,8 +228,8 @@ impl Hwp5ParaText {
             i += 1;
 
             match cp {
-                // Reserved — skip silently (single-wchar controls).
-                0x00 | 0x05 | 0x06 | 0x07 | 0x08 => {}
+                // Reserved single-wchar control.
+                0x00 => {}
 
                 // Extended controls: 8 wchars total (1 control + 7 extra u16).
                 // 0x01 = reserved extended control.
@@ -253,6 +258,11 @@ impl Hwp5ParaText {
                     let extra = read_extra!(i - 1);
                     segments.push(TextSegment::ExtendedControlRef { extra });
                 }
+                0x13 | 0x14 => {
+                    flush_text!();
+                    let _extra = read_extra!(i - 1);
+                    // Unsupported inline control — consumed silently.
+                }
                 // 0x0E-0x17: extended controls (bookmarks, change tracking, etc.)
                 // All consume 7 extra u16 values.
                 0x0E..=0x17 => {
@@ -261,15 +271,29 @@ impl Hwp5ParaText {
                     // No segment emitted — consumed silently.
                 }
 
-                // Single-wchar control chars.
+                // Inline controls: 8 wchars total (1 control + 7 extra u16).
                 0x04 => {
                     flush_text!();
+                    let _extra = read_extra!(i - 1);
                     segments.push(TextSegment::FieldEnd);
+                }
+                0x05..=0x07 => {
+                    flush_text!();
+                    let _extra = read_extra!(i - 1);
+                    // Unsupported inline control — consumed silently.
+                }
+                0x08 => {
+                    flush_text!();
+                    let _extra = read_extra!(i - 1);
+                    // Title mark is not modeled in Core IR yet.
                 }
                 0x09 => {
                     flush_text!();
+                    let _extra = read_extra!(i - 1);
                     segments.push(TextSegment::Tab);
                 }
+
+                // Single-wchar control chars.
                 0x0A => {
                     flush_text!();
                     segments.push(TextSegment::LineBreak);
@@ -789,6 +813,14 @@ mod tests {
         cp.to_le_bytes().to_vec()
     }
 
+    fn inline_control_bytes(cp: u16, extra_words: [u16; 7]) -> Vec<u8> {
+        let mut data = cp_bytes(cp);
+        for word in extra_words {
+            data.extend_from_slice(&word.to_le_bytes());
+        }
+        data
+    }
+
     #[test]
     fn para_text_empty_data() {
         let pt = Hwp5ParaText::parse(&[]).unwrap();
@@ -813,7 +845,7 @@ mod tests {
     #[test]
     fn para_text_tab() {
         let mut data = utf16le("A");
-        data.extend_from_slice(&cp_bytes(0x09));
+        data.extend_from_slice(&inline_control_bytes(0x09, [1, 2, 3, 4, 5, 6, 7]));
         data.extend_from_slice(&utf16le("B"));
         let pt = Hwp5ParaText::parse(&data).unwrap();
         assert_eq!(
@@ -839,7 +871,7 @@ mod tests {
 
     #[test]
     fn para_text_field_end() {
-        let data = cp_bytes(0x04);
+        let data = inline_control_bytes(0x04, [1, 2, 3, 4, 5, 6, 7]);
         let pt = Hwp5ParaText::parse(&data).unwrap();
         assert_eq!(pt.segments, vec![TextSegment::FieldEnd]);
     }
@@ -998,10 +1030,19 @@ mod tests {
 
     #[test]
     fn para_text_reserved_chars_skipped() {
-        // Codes 0x00, 0x05-0x08 should not produce segments (single-wchar skips).
+        // 0x00 is a single-wchar reserved control and should not produce a segment.
         let mut data = Vec::new();
-        for cp in [0x00u16, 0x05, 0x06, 0x07, 0x08] {
-            data.extend_from_slice(&cp.to_le_bytes());
+        data.extend_from_slice(&cp_bytes(0x00));
+        data.extend_from_slice(&utf16le("ok"));
+        let pt = Hwp5ParaText::parse(&data).unwrap();
+        assert_eq!(pt.segments, vec![TextSegment::Text("ok".into())]);
+    }
+
+    #[test]
+    fn para_text_inline_controls_with_payload_are_consumed() {
+        let mut data = Vec::new();
+        for cp in [0x05u16, 0x06, 0x07, 0x08, 0x13, 0x14] {
+            data.extend_from_slice(&inline_control_bytes(cp, [0, 0, 0, 0, 0, 0, 0]));
         }
         data.extend_from_slice(&utf16le("ok"));
         let pt = Hwp5ParaText::parse(&data).unwrap();
@@ -1035,7 +1076,7 @@ mod tests {
     #[test]
     fn para_text_multiple_segments() {
         let mut data = utf16le("hi");
-        data.extend_from_slice(&cp_bytes(0x09)); // tab
+        data.extend_from_slice(&inline_control_bytes(0x09, [1, 2, 3, 4, 5, 6, 7])); // tab
         data.extend_from_slice(&utf16le("there"));
         data.extend_from_slice(&cp_bytes(0x0D)); // para break
         let pt = Hwp5ParaText::parse(&data).unwrap();
@@ -1048,6 +1089,18 @@ mod tests {
                 TextSegment::ParaBreak,
             ]
         );
+    }
+
+    #[test]
+    fn para_text_tab_missing_inline_payload_returns_error() {
+        let data = cp_bytes(0x09);
+        assert!(matches!(Hwp5ParaText::parse(&data).unwrap_err(), Hwp5Error::RecordParse { .. }));
+    }
+
+    #[test]
+    fn para_text_field_end_missing_inline_payload_returns_error() {
+        let data = cp_bytes(0x04);
+        assert!(matches!(Hwp5ParaText::parse(&data).unwrap_err(), Hwp5Error::RecordParse { .. }));
     }
 
     // -----------------------------------------------------------------------

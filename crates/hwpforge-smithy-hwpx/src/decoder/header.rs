@@ -5,13 +5,14 @@
 
 use hwpforge_foundation::{
     Color, EmbossType, EmphasisType, EngraveType, FontIndex, HeadingType, HwpUnit, LineSpacingType,
-    OutlineType, ShadowType, StrikeoutShape, UnderlineType, VerticalPosition, WordBreakType,
+    OutlineType, ShadowType, StrikeoutShape, TabAlign, TabLeader, UnderlineType, VerticalPosition,
+    WordBreakType,
 };
 use quick_xml::de::from_str;
 
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::header::{
-    HxBorderFill, HxCharPr, HxHead, HxNumbering, HxParaPr, HxStyle, HxTabPr,
+    HxBorderFill, HxCharPr, HxHead, HxNumbering, HxParaPr, HxRefList, HxStyle, HxTabItem, HxTabPr,
 };
 use crate::style_store::{
     parse_alignment, parse_hex_color, HwpxBorderFill, HwpxBorderLine, HwpxCharShape,
@@ -46,80 +47,101 @@ pub struct HeaderParseResult {
 pub fn parse_header(xml: &str) -> HwpxResult<HeaderParseResult> {
     let head: HxHead = from_str(xml)
         .map_err(|e| HwpxError::XmlParse { file: "header.xml".into(), detail: e.to_string() })?;
+    let begin_num = parse_begin_num(&head);
 
-    let begin_num = head.begin_num.map(|bn| BeginNum {
+    let mut store = HwpxStyleStore::new();
+    if let Some(ref_list) = &head.ref_list {
+        populate_store_from_ref_list(&mut store, ref_list);
+    }
+
+    Ok(HeaderParseResult { style_store: store, begin_num })
+}
+
+fn parse_begin_num(head: &HxHead) -> Option<BeginNum> {
+    head.begin_num.map(|bn| BeginNum {
         page: bn.page,
         footnote: bn.footnote,
         endnote: bn.endnote,
         pic: bn.pic,
         tbl: bn.tbl,
         equation: bn.equation,
-    });
+    })
+}
 
-    let mut store = HwpxStyleStore::new();
+fn populate_store_from_ref_list(store: &mut HwpxStyleStore, ref_list: &HxRefList) {
+    load_fonts(store, ref_list);
+    load_border_fills(store, ref_list);
+    load_char_shapes(store, ref_list);
+    load_para_shapes(store, ref_list);
+    load_tab_properties(store, ref_list);
+    load_numberings(store, ref_list);
+    load_styles(store, ref_list);
+}
 
-    if let Some(ref_list) = &head.ref_list {
-        // ── Fonts ────────────────────────────────────────────
-        // NOTE: Fonts from all language groups are flattened into a single Vec.
-        // This works because 한글 mirrors identical fonts across all groups,
-        // making group-local indices equivalent to flat indices.
-        // See the ASSUMPTION comment in convert_char_pr() for details.
-        if let Some(fontfaces) = &ref_list.fontfaces {
-            for group in &fontfaces.groups {
-                for font in &group.fonts {
-                    store.push_font(HwpxFont {
-                        id: font.id,
-                        face_name: font.face.clone(),
-                        lang: group.lang.clone(),
-                    });
-                }
-            }
-        }
-
-        // ── Border Fills ─────────────────────────────────────
-        if let Some(border_fills) = &ref_list.border_fills {
-            for bf in &border_fills.items {
-                store.push_border_fill(convert_border_fill(bf));
-            }
-        }
-
-        // ── Character Shapes ─────────────────────────────────
-        if let Some(char_props) = &ref_list.char_properties {
-            for cp in &char_props.items {
-                store.push_char_shape(convert_char_pr(cp));
-            }
-        }
-
-        // ── Paragraph Shapes ─────────────────────────────────
-        if let Some(para_props) = &ref_list.para_properties {
-            for pp in &para_props.items {
-                store.push_para_shape(convert_para_pr(pp));
-            }
-        }
-
-        // ── Tab Properties ───────────────────────────────────
-        if let Some(tab_props) = &ref_list.tab_properties {
-            for tp in &tab_props.items {
-                store.push_tab(convert_tab(tp));
-            }
-        }
-
-        // ── Numberings ───────────────────────────────────────
-        if let Some(numberings) = &ref_list.numberings {
-            for ndef in &numberings.items {
-                store.push_numbering(convert_numbering(ndef));
-            }
-        }
-
-        // ── Styles ───────────────────────────────────────────
-        if let Some(styles) = &ref_list.styles {
-            for style in &styles.items {
-                store.push_style(convert_style(style));
+fn load_fonts(store: &mut HwpxStyleStore, ref_list: &HxRefList) {
+    // NOTE: Fonts from all language groups are flattened into a single Vec.
+    // This works because 한글 mirrors identical fonts across all groups,
+    // making group-local indices equivalent to flat indices.
+    // See the ASSUMPTION comment in convert_char_pr() for details.
+    if let Some(fontfaces) = &ref_list.fontfaces {
+        for group in &fontfaces.groups {
+            for font in &group.fonts {
+                store.push_font(HwpxFont {
+                    id: font.id,
+                    face_name: font.face.clone(),
+                    lang: group.lang.clone(),
+                });
             }
         }
     }
+}
 
-    Ok(HeaderParseResult { style_store: store, begin_num })
+fn load_border_fills(store: &mut HwpxStyleStore, ref_list: &HxRefList) {
+    if let Some(border_fills) = &ref_list.border_fills {
+        for bf in &border_fills.items {
+            store.push_border_fill(convert_border_fill(bf));
+        }
+    }
+}
+
+fn load_char_shapes(store: &mut HwpxStyleStore, ref_list: &HxRefList) {
+    if let Some(char_props) = &ref_list.char_properties {
+        for cp in &char_props.items {
+            store.push_char_shape(convert_char_pr(cp));
+        }
+    }
+}
+
+fn load_para_shapes(store: &mut HwpxStyleStore, ref_list: &HxRefList) {
+    if let Some(para_props) = &ref_list.para_properties {
+        for pp in &para_props.items {
+            store.push_para_shape(convert_para_pr(pp));
+        }
+    }
+}
+
+fn load_tab_properties(store: &mut HwpxStyleStore, ref_list: &HxRefList) {
+    if let Some(tab_props) = &ref_list.tab_properties {
+        for tp in &tab_props.items {
+            store.push_tab(convert_tab(tp));
+        }
+    }
+}
+
+fn load_numberings(store: &mut HwpxStyleStore, ref_list: &HxRefList) {
+    if let Some(numberings) = &ref_list.numberings {
+        for ndef in &numberings.items {
+            store.push_numbering(convert_numbering(ndef));
+        }
+    }
+}
+
+fn load_styles(store: &mut HwpxStyleStore, ref_list: &HxRefList) {
+    if let Some(styles) = &ref_list.styles {
+        for style in &styles.items {
+            store.push_style(convert_style(style));
+        }
+    }
 }
 
 /// Converts an [`HxNumbering`] XML type into a [`hwpforge_core::NumberingDef`].
@@ -164,7 +186,54 @@ fn convert_tab(hx: &HxTabPr) -> hwpforge_core::TabDef {
         id: hx.id,
         auto_tab_left: hx.auto_tab_left != 0,
         auto_tab_right: hx.auto_tab_right != 0,
+        stops: collect_tab_items(hx),
     }
+}
+
+fn collect_tab_items(hx: &HxTabPr) -> Vec<hwpforge_core::TabStop> {
+    if !hx.items.is_empty() {
+        return convert_tab_items(&hx.items, false);
+    }
+
+    if let Some(items) = hx
+        .switches
+        .iter()
+        .find_map(|switch| switch.case.as_ref().filter(|case| !case.items.is_empty()))
+        .map(|case| &case.items)
+    {
+        return convert_tab_items(items, false);
+    }
+
+    if let Some(items) = hx
+        .switches
+        .iter()
+        .find_map(|switch| switch.default.as_ref().filter(|default| !default.items.is_empty()))
+        .map(|default| &default.items)
+    {
+        return convert_tab_items(items, true);
+    }
+
+    Vec::new()
+}
+
+fn convert_tab_items(
+    items: &[HxTabItem],
+    legacy_default_units: bool,
+) -> Vec<hwpforge_core::TabStop> {
+    items
+        .iter()
+        .map(|item| hwpforge_core::TabStop {
+            position: normalize_tab_pos(item, legacy_default_units),
+            align: TabAlign::from_hwpx_str(&item.tab_type),
+            leader: TabLeader::from_hwpx_str(&item.leader),
+        })
+        .collect()
+}
+
+fn normalize_tab_pos(item: &HxTabItem, legacy_default_units: bool) -> HwpUnit {
+    let raw = u64::from(item.pos);
+    let normalized = if legacy_default_units && item.unit.is_empty() { raw / 2 } else { raw };
+    hwpforge_core::TabDef::clamp_position_from_unsigned(normalized)
 }
 
 // ── HWPX string → enum parsing helpers ──────────────────────────
@@ -640,6 +709,66 @@ mod tests {
         let f1 = store.font(FontIndex::new(1)).unwrap();
         assert_eq!(f1.face_name, "Times New Roman");
         assert_eq!(f1.lang, "LATIN");
+    }
+
+    #[test]
+    fn parse_header_tab_properties_with_explicit_switch_items() {
+        let xml = r##"<head version="1.4" secCnt="1">
+            <refList>
+                <tabProperties itemCnt="4">
+                    <tabPr id="0" autoTabLeft="0" autoTabRight="0"/>
+                    <tabPr id="1" autoTabLeft="1" autoTabRight="0"/>
+                    <tabPr id="2" autoTabLeft="0" autoTabRight="1"/>
+                    <tabPr id="3" autoTabLeft="0" autoTabRight="0">
+                        <switch>
+                            <case required-namespace="http://www.hancom.co.kr/hwpml/2016/HwpUnitChar">
+                                <tabItem pos="15000" type="LEFT" leader="DASH" unit="HWPUNIT"/>
+                            </case>
+                            <default>
+                                <tabItem pos="30000" type="LEFT" leader="DASH"/>
+                            </default>
+                        </switch>
+                    </tabPr>
+                </tabProperties>
+            </refList>
+        </head>"##;
+
+        let store = parse_header(xml).unwrap().style_store;
+        let tabs: Vec<_> = store.iter_tabs().cloned().collect();
+        assert_eq!(tabs.len(), 4);
+        assert_eq!(tabs[3].id, 3);
+        assert_eq!(tabs[3].stops.len(), 1);
+        assert_eq!(tabs[3].stops[0].position, HwpUnit::new(15000).unwrap());
+        assert_eq!(tabs[3].stops[0].align, TabAlign::Left);
+        assert_eq!(tabs[3].stops[0].leader.as_hwpx_str(), "DASH");
+    }
+
+    #[test]
+    fn parse_header_tab_properties_clamps_oversized_positions_without_wrap() {
+        let xml = r##"<head version="1.4" secCnt="1">
+            <refList>
+                <tabProperties itemCnt="4">
+                    <tabPr id="0" autoTabLeft="0" autoTabRight="0"/>
+                    <tabPr id="1" autoTabLeft="1" autoTabRight="0"/>
+                    <tabPr id="2" autoTabLeft="0" autoTabRight="1"/>
+                    <tabPr id="3" autoTabLeft="0" autoTabRight="0">
+                        <switch>
+                            <case required-namespace="http://www.hancom.co.kr/hwpml/2016/HwpUnitChar">
+                                <tabItem pos="4000000000" type="LEFT" leader="DASH" unit="HWPUNIT"/>
+                            </case>
+                            <default>
+                                <tabItem pos="4000000000" type="LEFT" leader="DASH"/>
+                            </default>
+                        </switch>
+                    </tabPr>
+                </tabProperties>
+            </refList>
+        </head>"##;
+
+        let store = parse_header(xml).unwrap().style_store;
+        let tabs: Vec<_> = store.iter_tabs().cloned().collect();
+        assert_eq!(tabs[3].stops.len(), 1);
+        assert_eq!(tabs[3].stops[0].position, HwpUnit::new(HwpUnit::MAX_VALUE).unwrap());
     }
 
     #[test]

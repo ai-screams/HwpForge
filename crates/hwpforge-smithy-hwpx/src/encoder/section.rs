@@ -28,6 +28,7 @@ use hwpforge_core::PageSettings;
 
 use crate::encoder::package::XMLNS_DECLS;
 use crate::error::{HwpxError, HwpxResult};
+use crate::inline_text::{build_text_element_xml, requires_inline_text_markup};
 use hwpforge_foundation::{BookmarkType, DropCapStyle, HwpUnit, TextDirection};
 
 use crate::schema::section::{
@@ -117,9 +118,11 @@ pub(crate) fn encode_section(
     masterpage_offset: usize,
 ) -> HwpxResult<SectionEncodeResult> {
     let mut chart_entries: Vec<(String, String)> = Vec::new();
-    let mut hyperlink_entries: Vec<(String, String)> = Vec::new();
+    // Replacement list for run-level XML fragments that serde cannot express
+    // directly, such as interleaved hyperlink controls and mixed-content `<hp:t>`.
+    let mut run_xml_replacements: Vec<(String, String)> = Vec::new();
     let hx_section =
-        build_section(section, &mut chart_entries, &mut hyperlink_entries, chart_offset)?;
+        build_section(section, &mut chart_entries, &mut run_xml_replacements, chart_offset)?;
     let inner_xml = quick_xml::se::to_string(&hx_section)
         .map_err(|e| HwpxError::XmlSerialize { detail: e.to_string() })?;
 
@@ -133,12 +136,12 @@ pub(crate) fn encode_section(
     let mut enriched = enrich_sec_pr(inner_content, section, masterpage_offset);
 
     // Inject header/footer/page number controls after colPr
-    inject_header_footer_pagenum(&mut enriched, section, &mut hyperlink_entries)?;
+    inject_header_footer_pagenum(&mut enriched, section, &mut run_xml_replacements)?;
 
     // Replace hyperlink placeholder runs with real interleaved XML.
     // Serde cannot express the ctrl-text-ctrl interleaving required by
     // HWPX fieldBegin/fieldEnd, so we serialize a marker and swap it here.
-    for (marker_xml, real_xml) in &hyperlink_entries {
+    for (marker_xml, real_xml) in &run_xml_replacements {
         enriched = enriched.replacen(marker_xml, real_xml, 1);
     }
 
@@ -318,7 +321,15 @@ fn build_runs(
 
         match &run.content {
             RunContent::Text(s) => {
-                texts.push(HxText::new(s.clone()));
+                if requires_inline_text_markup(s) {
+                    let marker = next_marker("HWPTXT", char_pr_id_ref as usize);
+                    let marker_xml = format!(r#"<hp:t>{marker}</hp:t>"#);
+                    let real_xml = build_text_element_xml(s);
+                    hyperlink_entries.push((marker_xml, real_xml));
+                    texts.push(HxText::new(marker));
+                } else {
+                    texts.push(HxText::new(s.clone()));
+                }
             }
             RunContent::Table(t) => {
                 tables.push(build_table(t, depth, hyperlink_entries)?);
@@ -804,7 +815,7 @@ fn encode_compose_to_hx(
 /// serde's field-order-based serialization, hence the manual XML generation.
 fn build_hyperlink_run_xml(text: &str, url: &str, char_pr_id_ref: u32, field_id: usize) -> String {
     let escaped_url = escape_xml(url);
-    let escaped_text = escape_xml(text);
+    let text_xml = build_text_element_xml(text);
     // Unique begin_id per field instance (matches build_field_run_xml pattern).
     // beginIDRef must reference this id, NOT the fieldid.
     let begin_id = 2_000_000_000_u64 + field_id as u64;
@@ -828,7 +839,7 @@ fn build_hyperlink_run_xml(text: &str, url: &str, char_pr_id_ref: u32, field_id:
             r#"</hp:parameters>"#,
             r#"</hp:fieldBegin>"#,
             r#"</hp:ctrl>"#,
-            r#"<hp:t>{txt}</hp:t>"#,
+            r#"{txt}"#,
             r#"<hp:ctrl>"#,
             r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="{fid}"/>"#,
             r#"</hp:ctrl>"#,
@@ -839,7 +850,7 @@ fn build_hyperlink_run_xml(text: &str, url: &str, char_pr_id_ref: u32, field_id:
         fid = field_id,
         url = escaped_url,
         cat = category,
-        txt = escaped_text,
+        txt = text_xml,
     )
 }
 
@@ -927,7 +938,7 @@ fn build_field_run_xml(
                     r#"</hp:parameters>"#,
                     r#"</hp:fieldBegin>"#,
                     r#"</hp:ctrl>"#,
-                    r#"<hp:t>{display}</hp:t>"#,
+                    r#"{display}"#,
                     r#"<hp:ctrl>"#,
                     r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="627272811"/>"#,
                     r#"</hp:ctrl>"#,
@@ -937,7 +948,7 @@ fn build_field_run_xml(
                 bid = begin_id,
                 cmd = command,
                 hint = escaped_hint,
-                display = escaped_hint,
+                display = build_text_element_xml(hint),
             )
         }
         FieldType::Date | FieldType::Time | FieldType::DocSummary | FieldType::UserInfo => {
@@ -955,13 +966,11 @@ fn build_field_run_xml(
                 }
                 FieldType::Time => ("$createtime".to_string(), " ".to_string()),
                 FieldType::DocSummary => {
-                    let text =
-                        if !hint.is_empty() { escaped_hint.clone() } else { " ".to_string() };
+                    let text = if !hint.is_empty() { hint.to_string() } else { " ".to_string() };
                     ("$author".to_string(), text)
                 }
                 FieldType::UserInfo => {
-                    let text =
-                        if !hint.is_empty() { escaped_hint.clone() } else { " ".to_string() };
+                    let text = if !hint.is_empty() { hint.to_string() } else { " ".to_string() };
                     ("$lastsaveby".to_string(), text)
                 }
                 _ => unreachable!("outer match arm already guards Date|Time|DocSummary|UserInfo"),
@@ -979,7 +988,7 @@ fn build_field_run_xml(
                     r#"</hp:parameters>"#,
                     r#"</hp:fieldBegin>"#,
                     r#"</hp:ctrl>"#,
-                    r#"<hp:t>{display}</hp:t>"#,
+                    r#"{display}"#,
                     r#"<hp:ctrl>"#,
                     r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="628321650"/>"#,
                     r#"</hp:ctrl>"#,
@@ -988,7 +997,7 @@ fn build_field_run_xml(
                 cpr = char_pr_id_ref,
                 bid = begin_id,
                 cmd = command,
-                display = display_text,
+                display = build_text_element_xml(&display_text),
             )
         }
         _ => {
@@ -1063,7 +1072,7 @@ fn build_crossref_run_xml(
             r#"</hp:parameters>"#,
             r#"</hp:fieldBegin>"#,
             r#"</hp:ctrl>"#,
-            r#"<hp:t>{name}</hp:t>"#,
+            r#"{name}"#,
             r#"<hp:ctrl>"#,
             r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="{fid}"/>"#,
             r#"</hp:ctrl>"#,
@@ -1076,7 +1085,7 @@ fn build_crossref_run_xml(
         ref_type = ref_type_str,
         content_type = content_type_str,
         hyperlink = hyperlink_val,
-        name = escaped_name,
+        name = build_text_element_xml(target_name),
     )
 }
 
@@ -1914,6 +1923,22 @@ mod tests {
         assert!(xml.contains("<hp:run "), "missing <hp:run>");
         assert!(xml.contains("<hp:t>텍스트</hp:t>"), "missing text content");
         assert!(xml.contains(r#"xmlns:hp="#), "missing xmlns:hp namespace");
+    }
+
+    #[test]
+    fn encode_text_paragraph_with_tab_emits_hp_tab_and_roundtrips() {
+        let section = simple_section("LEFT\tRIGHT");
+        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+
+        assert!(
+            xml.contains("<hp:t>LEFT<hp:tab/>RIGHT</hp:t>"),
+            "tab text must be emitted as mixed-content hp:tab"
+        );
+
+        let decoded =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .unwrap();
+        assert_eq!(decoded.paragraphs[0].runs[0].content.as_text(), Some("LEFT\tRIGHT"));
     }
 
     // ── Test 2: Section roundtrip via decoder ────────────────────

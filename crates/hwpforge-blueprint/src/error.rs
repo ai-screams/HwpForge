@@ -44,6 +44,12 @@ pub enum BlueprintErrorCode {
     InvalidMappingReference = 3010,
     /// Invalid style name.
     InvalidStyleName = 3011,
+    /// Paragraph references an unknown or reserved tab definition.
+    InvalidTabReference = 3012,
+    /// Duplicate tab definition id.
+    DuplicateTabDefinition = 3013,
+    /// Tab definition contains invalid stop ordering or duplicate positions.
+    InvalidTabDefinition = 3014,
 }
 
 impl fmt::Display for BlueprintErrorCode {
@@ -145,6 +151,33 @@ pub enum BlueprintError {
         reason: String,
     },
 
+    /// Paragraph references an unknown or reserved tab definition.
+    #[error("style '{style_name}' references invalid tab definition {tab_id}: {reason}")]
+    InvalidTabReference {
+        /// Style name that contains the invalid tab reference.
+        style_name: String,
+        /// Referenced tab definition id.
+        tab_id: u32,
+        /// Why the reference is invalid.
+        reason: String,
+    },
+
+    /// Multiple tab definitions share the same id.
+    #[error("duplicate tab definition id {id}")]
+    DuplicateTabDefinition {
+        /// The duplicated id.
+        id: u32,
+    },
+
+    /// A tab definition contains invalid stop ordering or duplicate positions.
+    #[error("tab definition {id} is invalid: {reason}")]
+    InvalidTabDefinition {
+        /// The invalid tab definition id.
+        id: u32,
+        /// Why it is invalid.
+        reason: String,
+    },
+
     /// Propagated Foundation error.
     #[error(transparent)]
     Foundation(#[from] FoundationError),
@@ -183,6 +216,9 @@ impl BlueprintError {
             Self::DuplicateStyleName { .. } => BlueprintErrorCode::DuplicateStyleName,
             Self::InvalidMappingReference { .. } => BlueprintErrorCode::InvalidMappingReference,
             Self::InvalidStyleName { .. } => BlueprintErrorCode::InvalidStyleName,
+            Self::InvalidTabReference { .. } => BlueprintErrorCode::InvalidTabReference,
+            Self::DuplicateTabDefinition { .. } => BlueprintErrorCode::DuplicateTabDefinition,
+            Self::InvalidTabDefinition { .. } => BlueprintErrorCode::InvalidTabDefinition,
             Self::Foundation(_) => BlueprintErrorCode::YamlParse, // fallback
         }
     }

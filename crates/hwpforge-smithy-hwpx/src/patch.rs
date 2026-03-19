@@ -25,11 +25,11 @@ use hwpforge_core::section::{HeaderFooter, Section};
 use hwpforge_core::table::{Table, TableCell, TableRow};
 
 use crate::decoder::package::PackageReader;
-use crate::encoder::escape_xml;
 use crate::error::{HwpxError, HwpxResult};
 use crate::exchange::{
     PreservedTextSlot, SectionPreservation, TextLocator, SECTION_PRESERVATION_VERSION,
 };
+use crate::inline_text::encode_inline_text_xml;
 use crate::schema::section::{
     HxCaption, HxFieldBegin, HxFootNote, HxHeaderFooter, HxParagraph, HxPic, HxRun, HxSection,
     HxSubList, HxTable, HxTableCell, HxTableRow,
@@ -1501,18 +1501,7 @@ fn apply_text_locator(xml: &str, locator: &TextLocator, new_text: &str) -> HwpxR
 }
 
 fn encode_text_inner(text: &str) -> String {
-    if text.is_empty() {
-        return String::new();
-    }
-
-    let mut encoded = String::new();
-    for (index, part) in text.split('\n').enumerate() {
-        if index > 0 {
-            encoded.push_str("<hp:lineBreak/>");
-        }
-        encoded.push_str(&escape_xml(part));
-    }
-    encoded
+    encode_inline_text_xml(text)
 }
 
 fn patch_text_element_xml(element_xml: &str, new_text: &str) -> HwpxResult<String> {
@@ -1711,10 +1700,10 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    fn encode_text_inner_converts_newlines_to_line_breaks() {
+    fn encode_text_inner_converts_inline_text_to_hpx_mixed_content() {
         assert_eq!(
-            encode_text_inner("line 1\nline 2 & < 3"),
-            "line 1<hp:lineBreak/>line 2 &amp; &lt; 3"
+            encode_text_inner("line 1\tline 2\nline 3\u{00A0}& < 4"),
+            "line 1<hp:tab/>line 2<hp:lineBreak/>line 3<hp:nbSpace/>&amp; &lt; 4"
         );
     }
 

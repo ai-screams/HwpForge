@@ -57,6 +57,10 @@ fn one() -> u32 {
     1
 }
 
+fn default_hwpunit() -> String {
+    "HWPUNIT".to_string()
+}
+
 // ── RefList ───────────────────────────────────────────────────────
 
 /// `<hh:refList>` — container for all shared definitions.
@@ -1013,6 +1017,65 @@ pub struct HxTabPr {
     /// Auto-insert tab at right margin (0/1).
     #[serde(rename = "@autoTabRight", default)]
     pub auto_tab_right: u32,
+    /// Explicit tab stops.
+    #[serde(rename(serialize = "hh:tabItem", deserialize = "tabItem"), default)]
+    pub items: Vec<HxTabItem>,
+    /// Version-specific explicit tab stops wrapped in `<hp:switch>`.
+    #[serde(rename(serialize = "hp:switch", deserialize = "switch"), default)]
+    pub switches: Vec<HxTabSwitch>,
+}
+
+/// `<hh:tabItem pos="8000" type="LEFT" leader="NONE" unit="HWPUNIT"/>`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxTabItem {
+    /// Tab stop position.
+    #[serde(rename = "@pos")]
+    pub pos: u32,
+    /// Alignment type (`LEFT`, `RIGHT`, `CENTER`, `DECIMAL`).
+    #[serde(rename = "@type", default)]
+    pub tab_type: String,
+    /// Leader line type.
+    #[serde(rename = "@leader", default)]
+    pub leader: String,
+    /// Position unit (`HWPUNIT` in practice).
+    #[serde(rename = "@unit", default = "default_hwpunit")]
+    pub unit: String,
+}
+
+/// `<hp:switch>` wrapper used by Hancom-authored explicit tab stops.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxTabSwitch {
+    #[serde(
+        rename(serialize = "hp:case", deserialize = "case"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub case: Option<HxTabSwitchCase>,
+    #[serde(
+        rename(serialize = "hp:default", deserialize = "default"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub default: Option<HxTabSwitchDefault>,
+}
+
+/// `<hp:case hp:required-namespace="...HwpUnitChar">`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxTabSwitchCase {
+    #[serde(
+        rename(serialize = "@hp:required-namespace", deserialize = "@required-namespace"),
+        default
+    )]
+    pub required_namespace: String,
+    #[serde(rename(serialize = "hh:tabItem", deserialize = "tabItem"), default)]
+    pub items: Vec<HxTabItem>,
+}
+
+/// `<hp:default>` fallback tab stop list.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxTabSwitchDefault {
+    #[serde(rename(serialize = "hh:tabItem", deserialize = "tabItem"), default)]
+    pub items: Vec<HxTabItem>,
 }
 
 // ── Tests ─────────────────────────────────────────────────────────
@@ -1210,6 +1273,42 @@ mod tests {
         assert_eq!(styles.items[0].para_pr_id_ref, 3);
         assert_eq!(styles.items[0].char_pr_id_ref, 0);
         assert_eq!(styles.items[1].name, "본문");
+    }
+
+    #[test]
+    fn parse_tab_pr_with_switch_items() {
+        let xml = r#"
+        <hh:head version="1.4" secCnt="1">
+          <hh:refList>
+            <hh:tabProperties itemCnt="4">
+              <hh:tabPr id="3" autoTabLeft="0" autoTabRight="0">
+                <hp:switch>
+                  <hp:case hp:required-namespace="http://www.hancom.co.kr/hwpml/2016/HwpUnitChar">
+                    <hh:tabItem pos="15000" type="LEFT" leader="DASH" unit="HWPUNIT"/>
+                  </hp:case>
+                  <hp:default>
+                    <hh:tabItem pos="30000" type="LEFT" leader="DASH"/>
+                  </hp:default>
+                </hp:switch>
+              </hh:tabPr>
+            </hh:tabProperties>
+          </hh:refList>
+        </hh:head>"#;
+        let head = parse_head(xml);
+        let tab_pr = &head.ref_list.unwrap().tab_properties.unwrap().items[0];
+        assert_eq!(tab_pr.id, 3);
+        assert!(tab_pr.items.is_empty());
+        assert_eq!(tab_pr.switches.len(), 1);
+
+        let switch = &tab_pr.switches[0];
+        let case = switch.case.as_ref().unwrap();
+        assert_eq!(case.required_namespace, "http://www.hancom.co.kr/hwpml/2016/HwpUnitChar");
+        assert_eq!(case.items[0].pos, 15000);
+        assert_eq!(case.items[0].unit, "HWPUNIT");
+
+        let default = switch.default.as_ref().unwrap();
+        assert_eq!(default.items[0].pos, 30000);
+        assert_eq!(default.items[0].unit, "HWPUNIT");
     }
 
     #[test]

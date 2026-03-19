@@ -120,5 +120,5 @@ pub use section::{
     PageNumber, Section, Visibility,
 };
 pub use style_lookup::StyleLookup;
-pub use tab::TabDef;
+pub use tab::{TabDef, TabStop};
 pub use table::{Table, TableCell, TableRow};

@@ -4,6 +4,7 @@
 //! - Metadata (name, version, parent template reference)
 //! - Page settings (dimensions, margins)
 //! - Style definitions (character and paragraph styles)
+//! - Shared tab definitions
 //! - Markdown-to-style mappings
 //!
 //! Templates support inheritance via the `extends` field, allowing
@@ -11,13 +12,13 @@
 
 use indexmap::IndexMap;
 
-use hwpforge_core::PageSettings;
-use hwpforge_foundation::HwpUnit;
+use hwpforge_core::{PageSettings, TabDef, TabStop};
+use hwpforge_foundation::{HwpUnit, TabAlign, TabLeader};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{BlueprintError, BlueprintResult};
-use crate::serde_helpers::{de_dim_opt, ser_dim_opt};
+use crate::serde_helpers::{de_dim, de_dim_opt, ser_dim, ser_dim_opt};
 use crate::style::PartialStyle;
 
 // ---------------------------------------------------------------------------
@@ -130,6 +131,72 @@ pub struct PageStyle {
     pub footer_margin: Option<HwpUnit>,
 }
 
+// ---------------------------------------------------------------------------
+// TemplateTabDef
+// ---------------------------------------------------------------------------
+
+/// A human-friendly YAML tab stop definition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TemplateTabStop {
+    /// Stop position from the paragraph start.
+    #[serde(serialize_with = "ser_dim", deserialize_with = "de_dim")]
+    pub position: HwpUnit,
+    /// Alignment mode at this stop.
+    pub align: TabAlign,
+    /// Leader style used to fill the gap before the stop.
+    pub leader: TabLeader,
+}
+
+impl From<TemplateTabStop> for TabStop {
+    fn from(value: TemplateTabStop) -> Self {
+        Self { position: value.position, align: value.align, leader: value.leader }
+    }
+}
+
+impl From<&TemplateTabStop> for TabStop {
+    fn from(value: &TemplateTabStop) -> Self {
+        Self { position: value.position, align: value.align, leader: value.leader.clone() }
+    }
+}
+
+/// A human-friendly YAML tab definition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct TemplateTabDef {
+    /// Tab property ID.
+    pub id: u32,
+    /// Auto-insert tab at left margin.
+    #[serde(default)]
+    pub auto_tab_left: bool,
+    /// Auto-insert tab at right margin.
+    #[serde(default)]
+    pub auto_tab_right: bool,
+    /// Explicit tab stops.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stops: Vec<TemplateTabStop>,
+}
+
+impl From<TemplateTabDef> for TabDef {
+    fn from(value: TemplateTabDef) -> Self {
+        Self {
+            id: value.id,
+            auto_tab_left: value.auto_tab_left,
+            auto_tab_right: value.auto_tab_right,
+            stops: value.stops.into_iter().map(Into::into).collect(),
+        }
+    }
+}
+
+impl From<&TemplateTabDef> for TabDef {
+    fn from(value: &TemplateTabDef) -> Self {
+        Self {
+            id: value.id,
+            auto_tab_left: value.auto_tab_left,
+            auto_tab_right: value.auto_tab_right,
+            stops: value.stops.iter().map(Into::into).collect(),
+        }
+    }
+}
+
 impl PageStyle {
     /// A4 page settings for templates.
     pub fn a4() -> Self {
@@ -225,7 +292,8 @@ pub struct MarkdownMapping {
 
 /// A complete YAML template.
 ///
-/// Contains metadata, page settings, style definitions, and markdown mappings.
+/// Contains metadata, page settings, style definitions, shared tab definitions,
+/// and markdown mappings.
 ///
 /// # Example YAML
 ///
@@ -251,6 +319,15 @@ pub struct MarkdownMapping {
 ///     para_shape:
 ///       alignment: Left
 ///
+/// tabs:
+///   - id: 3
+///     auto_tab_left: false
+///     auto_tab_right: false
+///     stops:
+///       - position: 75pt
+///         align: Left
+///         leader: DOT
+///
 /// markdown_mapping:
 ///   body: body
 ///   heading1: h1
@@ -267,6 +344,13 @@ pub struct Template {
     /// Style definitions (name → PartialStyle).
     #[serde(default)]
     pub styles: IndexMap<String, PartialStyle>,
+
+    /// Shared tab definitions referenced by paragraph styles.
+    ///
+    /// IDs `0..=2` are reserved for built-in 한글 defaults and must not be
+    /// declared by Blueprint templates.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tabs: Vec<TemplateTabDef>,
 
     /// Markdown element mappings (optional).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -466,6 +550,7 @@ meta:
         assert_eq!(tmpl.meta.version, "1.0.0");
         assert!(tmpl.page.is_none());
         assert!(tmpl.styles.is_empty());
+        assert!(tmpl.tabs.is_empty());
         assert!(tmpl.markdown_mapping.is_none());
     }
 
@@ -523,6 +608,33 @@ markdown_mapping:
         let mapping = tmpl.markdown_mapping.as_ref().unwrap();
         assert_eq!(mapping.body, Some("body".to_string()));
         assert_eq!(mapping.heading1, Some("heading1".to_string()));
+    }
+
+    #[test]
+    fn template_from_yaml_with_tabs() {
+        let yaml = r#"
+meta:
+  name: tabbed
+styles:
+  body:
+    char_shape:
+      font: 한컴바탕
+      size: 10pt
+    para_shape:
+      tab_def_id: 3
+tabs:
+  - id: 3
+    auto_tab_left: false
+    auto_tab_right: false
+    stops:
+      - position: 75pt
+        align: Left
+        leader: DOT
+"#;
+        let tmpl = Template::from_yaml(yaml).unwrap();
+        assert_eq!(tmpl.tabs.len(), 1);
+        assert_eq!(tmpl.tabs[0].id, 3);
+        assert_eq!(tmpl.tabs[0].stops.len(), 1);
     }
 
     #[test]
@@ -606,6 +718,16 @@ styles:
             },
             page: None, // Skip page to avoid floating-point rounding
             styles,
+            tabs: vec![TemplateTabDef {
+                id: 3,
+                auto_tab_left: false,
+                auto_tab_right: false,
+                stops: vec![TemplateTabStop {
+                    position: HwpUnit::from_pt(75.0).unwrap(),
+                    align: hwpforge_foundation::TabAlign::Left,
+                    leader: hwpforge_foundation::TabLeader::dot(),
+                }],
+            }],
             markdown_mapping: Some(MarkdownMapping {
                 body: Some("body".to_string()),
                 ..Default::default()

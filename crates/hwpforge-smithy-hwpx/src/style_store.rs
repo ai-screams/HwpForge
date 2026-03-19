@@ -1176,9 +1176,17 @@ impl HwpxStyleStore {
                 heading_type: HeadingType::None,
                 heading_id_ref: 0,
                 heading_level: 0,
-                tab_pr_id_ref: 0,
+                tab_pr_id_ref: ps.tab_def_id,
                 condense: 0,
             });
+        }
+
+        // Step 4.25: Push shared tab definitions from Blueprint.
+        //
+        // The encoder merges these with the canonical 한글 defaults (id=0..2)
+        // so user registries only need to provide explicit custom tab stops.
+        for tab in &registry.tabs {
+            store.push_tab(tab.clone());
         }
 
         // Step 4.5: Inject 3 default border fills for backward compatibility.
@@ -1573,7 +1581,12 @@ pub(crate) fn parse_alignment(s: &str) -> Alignment {
 mod tests {
     use super::*;
     use hwpforge_blueprint::builtins::builtin_default;
-    use hwpforge_foundation::{CharShapeIndex, FontIndex, ParaShapeIndex};
+    use hwpforge_blueprint::{registry::StyleRegistry, style::ParaShape};
+    use hwpforge_core::TabStop;
+    use hwpforge_foundation::{
+        Alignment, CharShapeIndex, FontIndex, HeadingType, HwpUnit, LineSpacingType,
+        ParaShapeIndex, TabAlign, TabLeader,
+    };
 
     // ── HwpxStyleStore basic operations ──────────────────────────
 
@@ -2003,6 +2016,49 @@ mod tests {
             assert_eq!(hwpx_ps.spacing_after, bp_ps.space_after);
             assert_eq!(hwpx_ps.line_spacing, bp_ps.line_spacing_value.round() as i32);
         }
+    }
+
+    #[test]
+    fn from_registry_carries_custom_tab_definitions_and_refs() {
+        let mut registry = StyleRegistry::with_fonts(vec![]);
+        registry.para_shapes.push(ParaShape {
+            alignment: Alignment::Left,
+            line_spacing_type: LineSpacingType::Percentage,
+            line_spacing_value: 160.0,
+            space_before: HwpUnit::ZERO,
+            space_after: HwpUnit::ZERO,
+            indent_left: HwpUnit::ZERO,
+            indent_right: HwpUnit::ZERO,
+            indent_first_line: HwpUnit::ZERO,
+            break_type: hwpforge_foundation::BreakType::None,
+            keep_with_next: false,
+            keep_lines_together: false,
+            widow_orphan: true,
+            border_fill_id: None,
+            tab_def_id: 3,
+            heading_type: HeadingType::None,
+        });
+        registry.tabs.push(TabDef {
+            id: 3,
+            auto_tab_left: false,
+            auto_tab_right: false,
+            stops: vec![TabStop {
+                position: HwpUnit::new(15000).unwrap(),
+                align: TabAlign::Left,
+                leader: TabLeader::dot(),
+            }],
+        });
+
+        let store = HwpxStyleStore::from_registry(&registry);
+
+        let hwpx_ps = store.para_shape(ParaShapeIndex::new(20)).unwrap();
+        assert_eq!(hwpx_ps.tab_pr_id_ref, 3);
+
+        let tabs: Vec<_> = store.iter_tabs().cloned().collect();
+        assert_eq!(tabs.len(), 1);
+        assert_eq!(tabs[0].id, 3);
+        assert_eq!(tabs[0].stops.len(), 1);
+        assert_eq!(tabs[0].stops[0].position, HwpUnit::new(15000).unwrap());
     }
 
     #[test]
@@ -2494,9 +2550,6 @@ mod tests {
 
     /// Helper: build a minimal store with one font, one char shape, one para shape, one style.
     fn style_lookup_test_store() -> HwpxStyleStore {
-        use hwpforge_foundation::StyleIndex;
-        let _ = StyleIndex::new(0); // silence unused import
-
         let mut store = HwpxStyleStore::new();
         // Font at index 0
         store.push_font(HwpxFont::new(0, "함초롬돋움", "HANGUL"));

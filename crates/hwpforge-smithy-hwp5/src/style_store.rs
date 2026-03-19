@@ -9,14 +9,16 @@ use crate::decoder::header::{DocInfoResult, Hwp5DocInfoBorderFillSlot};
 use crate::decoder::Hwp5Warning;
 use crate::schema::header::{
     Hwp5RawCharShape, Hwp5RawFaceName, Hwp5RawIdMappings, Hwp5RawParaShape, Hwp5RawStyle,
+    Hwp5RawTabDef, Hwp5TabDefSlot,
 };
 use crate::style_store_border_fill::{
     collect_hwp5_border_fill_image_binary_ids, push_hwp5_border_fills, push_required_border_fills,
 };
 use crate::style_store_convert::{
-    hwp5_char_shape_to_hwpx_with_counts, hwp5_para_shape_to_hwpx, hwp5_style_to_hwpx, push_fonts,
-    resolved_font_group_counts,
+    hwp5_char_shape_to_hwpx_with_counts, hwp5_para_shape_to_hwpx_with_tab_id, hwp5_style_to_hwpx,
+    hwp5_tab_def_to_hwpx, push_fonts, resolved_font_group_counts,
 };
+use hwpforge_core::TabDef;
 use hwpforge_smithy_hwpx::HwpxStyleStore;
 use std::collections::BTreeSet;
 
@@ -34,6 +36,8 @@ pub struct Hwp5StyleStore {
     pub char_shapes: Vec<Hwp5RawCharShape>,
     /// Paragraph shape records.
     pub para_shapes: Vec<Hwp5RawParaShape>,
+    /// Tab definition slots preserved in DocInfo order.
+    pub tab_defs: Vec<Hwp5TabDefSlot>,
     /// Named style records.
     pub styles: Vec<Hwp5RawStyle>,
     /// Border/fill records.
@@ -48,6 +52,7 @@ impl Hwp5StyleStore {
             fonts: doc_info.fonts.clone(),
             char_shapes: doc_info.char_shapes.clone(),
             para_shapes: doc_info.para_shapes.clone(),
+            tab_defs: doc_info.tab_defs.clone(),
             styles: doc_info.styles.clone(),
             border_fills: doc_info.border_fills.clone(),
         }
@@ -74,6 +79,7 @@ impl Hwp5StyleStore {
         }
         push_fonts(&mut store, self);
         let font_group_counts = resolved_font_group_counts(self);
+        let tab_id_map = Hwp5TabIdMap::from_doc_info(&self.tab_defs);
 
         // Map character shapes.
         for raw in &self.char_shapes {
@@ -82,7 +88,28 @@ impl Hwp5StyleStore {
 
         // Map paragraph shapes.
         for raw in &self.para_shapes {
-            store.push_para_shape(hwp5_para_shape_to_hwpx(raw));
+            let tab_pr_id_ref = tab_id_map.map_para_shape_ref(raw.tab_def_id, &mut warnings);
+            store.push_para_shape(hwp5_para_shape_to_hwpx_with_tab_id(raw, tab_pr_id_ref));
+        }
+
+        append_tab_definition_integrity_warning(self, &mut warnings);
+        for slot in &self.tab_defs {
+            match slot.tab_def.as_ref() {
+                Some(raw) => {
+                    append_tab_projection_warnings(slot.raw_id, raw, &mut warnings);
+                    store.push_tab(hwp5_tab_def_to_hwpx(slot.raw_id, raw));
+                }
+                None => {
+                    warnings.push(Hwp5Warning::ParserFallback {
+                        subject: "tab_def.slot",
+                        reason: format!(
+                            "tab definition slot {} failed to parse earlier; emitting empty placeholder to preserve raw ids",
+                            slot.raw_id
+                        ),
+                    });
+                    store.push_tab(empty_placeholder_tab_def(slot.raw_id));
+                }
+            }
         }
 
         for (idx, raw) in self.styles.iter().enumerate() {
@@ -95,6 +122,89 @@ impl Hwp5StyleStore {
     pub(crate) fn border_fill_image_binary_ids(&self) -> BTreeSet<u16> {
         collect_hwp5_border_fill_image_binary_ids(&self.border_fills)
     }
+}
+
+#[derive(Debug, Clone)]
+struct Hwp5TabIdMap {
+    known_slots: BTreeSet<u32>,
+}
+
+impl Hwp5TabIdMap {
+    fn from_doc_info(tab_defs: &[Hwp5TabDefSlot]) -> Self {
+        let known_slots = tab_defs.iter().map(|slot| slot.raw_id).collect();
+        Self { known_slots }
+    }
+
+    fn map_para_shape_ref(&self, raw_id: u16, warnings: &mut Vec<Hwp5Warning>) -> u32 {
+        let raw_id = raw_id as u32;
+        if TabDef::reference_is_known(raw_id, self.known_slots.iter().copied()) {
+            return raw_id;
+        }
+        warnings.push(Hwp5Warning::ProjectionFallback {
+            subject: "tab_def.ref",
+            reason: format!(
+                "paragraph references missing tab definition id {}; defaulting to built-in tab definition 0",
+                raw_id
+            ),
+        });
+        0
+    }
+}
+
+fn append_tab_definition_integrity_warning(
+    store: &Hwp5StyleStore,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    let Some(id_mappings) = store.id_mappings.as_ref() else {
+        return;
+    };
+    let declared = id_mappings.tab_def_count.max(0) as usize;
+    let actual = store.tab_defs.len();
+    if declared != actual {
+        warnings.push(Hwp5Warning::ProjectionFallback {
+            subject: "tab_def.count",
+            reason: format!(
+                "IdMappings declares {declared} tab definitions, but DocInfo parsed {actual}; preserving raw record order"
+            ),
+        });
+    }
+}
+
+fn append_tab_projection_warnings(id: u32, raw: &Hwp5RawTabDef, warnings: &mut Vec<Hwp5Warning>) {
+    for (stop_idx, stop) in raw.tab_stops.iter().enumerate() {
+        if stop.position > hwpforge_foundation::HwpUnit::MAX_VALUE as u32 {
+            warnings.push(Hwp5Warning::ProjectionFallback {
+                subject: "tab_def.position",
+                reason: format!(
+                    "tab definition {id} stop {stop_idx} uses out-of-range position {}; clamping to {}",
+                    stop.position,
+                    hwpforge_foundation::HwpUnit::MAX_VALUE
+                ),
+            });
+        }
+        if !matches!(stop.tab_type, 0..=3) {
+            warnings.push(Hwp5Warning::ProjectionFallback {
+                subject: "tab_def.align",
+                reason: format!(
+                    "tab definition {id} stop {stop_idx} uses unknown tab_type {}; defaulting to LEFT",
+                    stop.tab_type
+                ),
+            });
+        }
+        if stop.fill_type > 16 {
+            warnings.push(Hwp5Warning::ProjectionFallback {
+                subject: "tab_def.leader",
+                reason: format!(
+                    "tab definition {id} stop {stop_idx} uses unknown fill_type {}; defaulting to SOLID",
+                    stop.fill_type
+                ),
+            });
+        }
+    }
+}
+
+fn empty_placeholder_tab_def(id: u32) -> TabDef {
+    TabDef { id, auto_tab_left: false, auto_tab_right: false, stops: Vec::new() }
 }
 
 // ---------------------------------------------------------------------------

@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.3.0...hwpforge-core-v0.4.0) - 2026-03-20
+
+### Changed
+
+- Extend `TabDef` with explicit `TabStop` semantics so tab definitions can carry stop position, alignment, and leader data through the shared IR.
+- Add shared helpers for default-tab merging, reference validation, and tab-position clamping used by HWPX/HWP5 bridges.
+
+### Migration
+
+- `TabDef` struct literals must now initialize the `stops` field.
+- Consumers that duplicated tab-default merge or reference-validation logic should move to the shared helpers on `TabDef`.
+
 ## [0.3.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.2.1...hwpforge-core-v0.3.0) - 2026-03-18
 
 ### Chore

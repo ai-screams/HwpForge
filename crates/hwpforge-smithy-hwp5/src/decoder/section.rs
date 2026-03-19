@@ -1983,7 +1983,10 @@ mod tests {
         data.extend_from_slice(
             &"A".encode_utf16().flat_map(|c| c.to_le_bytes()).collect::<Vec<_>>(),
         );
-        data.extend_from_slice(&0x09u16.to_le_bytes()); // Tab
+        data.extend_from_slice(&0x09u16.to_le_bytes()); // Tab control
+        for extra in [1u16, 2, 3, 4, 5, 6, 7] {
+            data.extend_from_slice(&extra.to_le_bytes());
+        }
         data.extend_from_slice(
             &"B".encode_utf16().flat_map(|c| c.to_le_bytes()).collect::<Vec<_>>(),
         );

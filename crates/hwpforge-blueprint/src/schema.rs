@@ -56,6 +56,12 @@ mod tests {
     }
 
     #[test]
+    fn schema_contains_tabs_property() {
+        let json = template_schema_json();
+        assert!(json.contains("\"tabs\""), "Schema should reference 'tabs' property");
+    }
+
+    #[test]
     fn schema_contains_page_property() {
         let json = template_schema_json();
         assert!(json.contains("\"page\""), "Schema should reference 'page' property");

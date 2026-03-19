@@ -4,12 +4,13 @@
 //! it converts Foundation types (`Color`, `HwpUnit`, `Alignment`) back
 //! into the `Hx*` schema types and serializes them to XML via quick-xml.
 
-use hwpforge_core::{NumberingDef, TabDef};
+use hwpforge_core::NumberingDef;
 use hwpforge_foundation::{
     Alignment, Color, EmphasisType, HwpUnit, LineSpacingType, NumberFormatType, OutlineType,
     ShadowType, StrikeoutShape, UnderlineType,
 };
 
+use super::header_tabs::build_tab_properties_xml;
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::header::{
     HxAlign, HxAutoSpacing, HxBorder, HxBreakSetting, HxCharPr, HxCharProperties, HxFont,
@@ -47,7 +48,7 @@ pub(crate) fn encode_header(
     // We need to extract the inner content and wrap it in our xmlns-decorated
     // root element instead.
     let inner = extract_inner_content(&head_xml);
-    Ok(wrap_header_xml(inner, sec_cnt, store, begin_num))
+    wrap_header_xml(inner, sec_cnt, store, begin_num)
 }
 
 // ── XML wrapper ─────────────────────────────────────────────────
@@ -82,14 +83,14 @@ fn wrap_header_xml(
     sec_cnt: u32,
     store: &HwpxStyleStore,
     begin_num: Option<&hwpforge_core::section::BeginNum>,
-) -> String {
-    let enriched = enrich_ref_list(inner_xml, store);
+) -> HwpxResult<String> {
+    let enriched = enrich_ref_list(inner_xml, store)?;
     let begin_num_xml = build_begin_num_xml(begin_num);
-    format!(
+    Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><hh:head{xmlns} version="1.4" secCnt="{sec_cnt}">{begin_num_xml}{enriched}{post_reflist}</hh:head>"#,
         xmlns = crate::encoder::package::XMLNS_DECLS,
         post_reflist = POST_REFLIST_XML,
-    )
+    ))
 }
 
 // ── 한글 compatibility defaults ─────────────────────────────────
@@ -237,31 +238,6 @@ fn build_image_fill_brush_xml(fill: &HwpxImageFill) -> String {
     )
 }
 
-/// Builds `<hh:tabProperties>` XML from the store's tab definitions.
-///
-/// If no tab definitions exist in the store, emits the 3 defaults
-/// (id=0 no auto tabs, id=1 autoTabLeft, id=2 autoTabRight).
-fn build_tab_properties_xml(store: &HwpxStyleStore) -> String {
-    let tabs: Vec<TabDef> = if store.tab_count() == 0 {
-        TabDef::defaults().to_vec()
-    } else {
-        store.iter_tabs().cloned().collect()
-    };
-
-    let count = tabs.len();
-    let mut xml = format!(r#"<hh:tabProperties itemCnt="{count}">"#);
-    for tab in &tabs {
-        let atl = u32::from(tab.auto_tab_left);
-        let atr = u32::from(tab.auto_tab_right);
-        xml.push_str(&format!(
-            r#"<hh:tabPr id="{}" autoTabLeft="{atl}" autoTabRight="{atr}"/>"#,
-            tab.id,
-        ));
-    }
-    xml.push_str("</hh:tabProperties>");
-    xml
-}
-
 /// Builds `<hh:numberings>` XML from the store's numbering definitions.
 ///
 /// If no numberings exist in the store, emits the default 10-level outline
@@ -324,16 +300,16 @@ fn number_format_to_hwpx(nf: NumberFormatType) -> &'static str {
 ///
 /// Element order inside `<hh:refList>`:
 /// fontfaces → **borderFills** → charProperties → **tabProperties** → **numberings** → paraProperties → styles
-fn enrich_ref_list(inner_xml: &str, store: &HwpxStyleStore) -> String {
+fn enrich_ref_list(inner_xml: &str, store: &HwpxStyleStore) -> HwpxResult<String> {
     let border_fills_xml = build_border_fills_xml(store);
-    let tab_properties_xml = build_tab_properties_xml(store);
+    let tab_properties_xml = build_tab_properties_xml(store)?;
     let numberings_xml = build_numberings_xml(store);
 
     // If no refList exists, nothing to enrich
     if !inner_xml.contains("<hh:refList>") {
-        return format!(
+        return Ok(format!(
             "<hh:refList>{border_fills_xml}{tab_properties_xml}{numberings_xml}</hh:refList>{inner_xml}"
-        );
+        ));
     }
 
     let extra_len = border_fills_xml.len() + tab_properties_xml.len() + numberings_xml.len();
@@ -373,7 +349,7 @@ fn enrich_ref_list(inner_xml: &str, store: &HwpxStyleStore) -> String {
         result.push_str(rest);
     }
 
-    result
+    Ok(result)
 }
 
 /// Builds a complete `HxHead` from the store data.

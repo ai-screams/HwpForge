@@ -10,6 +10,15 @@ fn fixture_path(name: &str) -> PathBuf {
     p
 }
 
+fn workspace_fixture_path(name: &str) -> PathBuf {
+    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    p.pop();
+    p.pop();
+    p.push("tests/fixtures");
+    p.push(name);
+    p
+}
+
 // ════════════════════════════════════════════════════════════════
 // Phase 3: Decode-only golden tests
 // ════════════════════════════════════════════════════════════════
@@ -104,6 +113,81 @@ fn decode_page_size_margin() {
     let ps = &result.document.sections()[0].page_settings;
     assert!(ps.width.as_i32() > 0);
     assert!(ps.height.as_i32() > 0);
+}
+
+#[test]
+fn decode_user_sample_tab_preserves_custom_tab_def_and_inline_tab() {
+    let path = workspace_fixture_path("user_samples/sample-tab.hwpx");
+    let result = HwpxDecoder::decode_file(&path).unwrap();
+
+    assert!(
+        result.style_store.iter_tabs().any(|tab| tab.id > 2 && !tab.stops.is_empty()),
+        "expected at least one custom tab definition with explicit tab stops"
+    );
+
+    let para = &result.document.sections()[0].paragraphs[0];
+    assert_eq!(para.runs[0].content.as_text(), Some("LEFT\tRIGHT"));
+
+    let para_shape = result.style_store.para_shape(para.para_shape_id).unwrap();
+    assert!(para_shape.tab_pr_id_ref > 2, "paragraph should reference a custom tab definition");
+}
+
+#[test]
+fn roundtrip_user_sample_tab_preserves_custom_tab_def_and_inline_tab() {
+    let bytes = std::fs::read(workspace_fixture_path("user_samples/sample-tab.hwpx")).unwrap();
+    let original = HwpxDecoder::decode(&bytes).unwrap();
+    let validated = original.document.validate().unwrap();
+    let encoded =
+        HwpxEncoder::encode(&validated, &original.style_store, &original.image_store).unwrap();
+    let roundtripped = HwpxDecoder::decode(&encoded).unwrap();
+
+    assert!(
+        roundtripped.style_store.iter_tabs().any(|tab| tab.id > 2 && !tab.stops.is_empty()),
+        "custom tab definitions should survive a full HWPX roundtrip"
+    );
+    assert_eq!(
+        roundtripped.document.sections()[0].paragraphs[0].runs[0].content.as_text(),
+        Some("LEFT\tRIGHT")
+    );
+}
+
+#[test]
+fn decode_user_sample_table_tab_preserves_inline_tab_in_cell_text() {
+    let path = workspace_fixture_path("user_samples/sample-table-tab.hwpx");
+    let result = HwpxDecoder::decode_file(&path).unwrap();
+
+    let table = result.document.sections()[0]
+        .paragraphs
+        .iter()
+        .flat_map(|para| &para.runs)
+        .find_map(|run| run.content.as_table())
+        .expect("expected a table");
+    assert_eq!(
+        table.rows[0].cells[0].paragraphs[0].runs[0].content.as_text(),
+        Some("CELLLEFT\tCELLRIGHT")
+    );
+}
+
+#[test]
+fn roundtrip_user_sample_table_tab_preserves_inline_tab_in_cell_text() {
+    let bytes =
+        std::fs::read(workspace_fixture_path("user_samples/sample-table-tab.hwpx")).unwrap();
+    let original = HwpxDecoder::decode(&bytes).unwrap();
+    let validated = original.document.validate().unwrap();
+    let encoded =
+        HwpxEncoder::encode(&validated, &original.style_store, &original.image_store).unwrap();
+    let roundtripped = HwpxDecoder::decode(&encoded).unwrap();
+
+    let table = roundtripped.document.sections()[0]
+        .paragraphs
+        .iter()
+        .flat_map(|para| &para.runs)
+        .find_map(|run| run.content.as_table())
+        .expect("expected a table");
+    assert_eq!(
+        table.rows[0].cells[0].paragraphs[0].runs[0].content.as_text(),
+        Some("CELLLEFT\tCELLRIGHT")
+    );
 }
 
 // ════════════════════════════════════════════════════════════════
