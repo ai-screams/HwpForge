@@ -4,18 +4,19 @@
 //! it converts Foundation types (`Color`, `HwpUnit`, `Alignment`) back
 //! into the `Hx*` schema types and serializes them to XML via quick-xml.
 
-use hwpforge_core::{NumberingDef, TabDef, TabStop};
+use hwpforge_core::NumberingDef;
 use hwpforge_foundation::{
     Alignment, Color, EmphasisType, HwpUnit, LineSpacingType, NumberFormatType, OutlineType,
     ShadowType, StrikeoutShape, UnderlineType,
 };
 
+use super::header_tabs::build_tab_properties_xml;
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::header::{
     HxAlign, HxAutoSpacing, HxBorder, HxBreakSetting, HxCharPr, HxCharProperties, HxFont,
     HxFontFaceGroup, HxFontFaces, HxFontRef, HxHead, HxHeading, HxLangValues, HxLineSpacing,
     HxMargin, HxOutline, HxParaPr, HxParaProperties, HxPresence, HxRefList, HxShadow, HxStrikeout,
-    HxStyle, HxStyles, HxSwitch, HxSwitchCase, HxSwitchDefault, HxTabItem, HxTypeInfo, HxUnderline,
+    HxStyle, HxStyles, HxSwitch, HxSwitchCase, HxSwitchDefault, HxTypeInfo, HxUnderline,
     HxUnitValue,
 };
 use crate::style_store::{
@@ -47,7 +48,7 @@ pub(crate) fn encode_header(
     // We need to extract the inner content and wrap it in our xmlns-decorated
     // root element instead.
     let inner = extract_inner_content(&head_xml);
-    Ok(wrap_header_xml(inner, sec_cnt, store, begin_num))
+    wrap_header_xml(inner, sec_cnt, store, begin_num)
 }
 
 // ── XML wrapper ─────────────────────────────────────────────────
@@ -82,14 +83,14 @@ fn wrap_header_xml(
     sec_cnt: u32,
     store: &HwpxStyleStore,
     begin_num: Option<&hwpforge_core::section::BeginNum>,
-) -> String {
-    let enriched = enrich_ref_list(inner_xml, store);
+) -> HwpxResult<String> {
+    let enriched = enrich_ref_list(inner_xml, store)?;
     let begin_num_xml = build_begin_num_xml(begin_num);
-    format!(
+    Ok(format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?><hh:head{xmlns} version="1.4" secCnt="{sec_cnt}">{begin_num_xml}{enriched}{post_reflist}</hh:head>"#,
         xmlns = crate::encoder::package::XMLNS_DECLS,
         post_reflist = POST_REFLIST_XML,
-    )
+    ))
 }
 
 // ── 한글 compatibility defaults ─────────────────────────────────
@@ -237,87 +238,6 @@ fn build_image_fill_brush_xml(fill: &HwpxImageFill) -> String {
     )
 }
 
-/// Builds `<hh:tabProperties>` XML from the store's tab definitions.
-///
-/// If no tab definitions exist in the store, emits the 3 defaults
-/// (id=0 no auto tabs, id=1 autoTabLeft, id=2 autoTabRight).
-fn build_tab_properties_xml(store: &HwpxStyleStore) -> String {
-    let mut tabs = TabDef::defaults().to_vec();
-    for tab in store.iter_tabs() {
-        if let Some(existing) = tabs.iter_mut().find(|candidate| candidate.id == tab.id) {
-            *existing = tab.clone();
-        } else {
-            tabs.push(tab.clone());
-        }
-    }
-    tabs.sort_by_key(|tab| tab.id);
-
-    let count = tabs.len();
-    let mut xml = format!(r#"<hh:tabProperties itemCnt="{count}">"#);
-    for tab in &tabs {
-        let atl = u32::from(tab.auto_tab_left);
-        let atr = u32::from(tab.auto_tab_right);
-        if tab.stops.is_empty() {
-            xml.push_str(&format!(
-                r#"<hh:tabPr id="{}" autoTabLeft="{atl}" autoTabRight="{atr}"/>"#,
-                tab.id,
-            ));
-            continue;
-        }
-
-        xml.push_str(&format!(
-            r#"<hh:tabPr id="{}" autoTabLeft="{atl}" autoTabRight="{atr}">"#,
-            tab.id,
-        ));
-        xml.push_str("<hp:switch>");
-        xml.push_str(
-            r#"<hp:case hp:required-namespace="http://www.hancom.co.kr/hwpml/2016/HwpUnitChar">"#,
-        );
-        for stop in &tab.stops {
-            xml.push_str(&build_tab_item_xml(stop, false));
-        }
-        xml.push_str("</hp:case>");
-        xml.push_str("<hp:default>");
-        for stop in &tab.stops {
-            xml.push_str(&build_tab_item_xml(stop, true));
-        }
-        xml.push_str("</hp:default>");
-        xml.push_str("</hp:switch>");
-        xml.push_str("</hh:tabPr>");
-    }
-    xml.push_str("</hh:tabProperties>");
-    xml
-}
-
-fn build_tab_item(stop: &TabStop, legacy_default_units: bool) -> HxTabItem {
-    let pos = if legacy_default_units {
-        stop.position.as_i32().saturating_mul(2)
-    } else {
-        stop.position.as_i32()
-    };
-    HxTabItem {
-        pos: u32::try_from(pos).unwrap_or_default(),
-        tab_type: stop.align.to_hwpx_str().to_string(),
-        leader: stop.leader.as_hwpx_str().to_string(),
-        unit: if legacy_default_units { String::new() } else { "HWPUNIT".to_string() },
-    }
-}
-
-fn build_tab_item_xml(stop: &TabStop, legacy_default_units: bool) -> String {
-    let item = build_tab_item(stop, legacy_default_units);
-    if item.unit.is_empty() {
-        format!(
-            r#"<hh:tabItem pos="{}" type="{}" leader="{}"/>"#,
-            item.pos, item.tab_type, item.leader,
-        )
-    } else {
-        format!(
-            r#"<hh:tabItem pos="{}" type="{}" leader="{}" unit="{}"/>"#,
-            item.pos, item.tab_type, item.leader, item.unit,
-        )
-    }
-}
-
 /// Builds `<hh:numberings>` XML from the store's numbering definitions.
 ///
 /// If no numberings exist in the store, emits the default 10-level outline
@@ -380,16 +300,16 @@ fn number_format_to_hwpx(nf: NumberFormatType) -> &'static str {
 ///
 /// Element order inside `<hh:refList>`:
 /// fontfaces → **borderFills** → charProperties → **tabProperties** → **numberings** → paraProperties → styles
-fn enrich_ref_list(inner_xml: &str, store: &HwpxStyleStore) -> String {
+fn enrich_ref_list(inner_xml: &str, store: &HwpxStyleStore) -> HwpxResult<String> {
     let border_fills_xml = build_border_fills_xml(store);
-    let tab_properties_xml = build_tab_properties_xml(store);
+    let tab_properties_xml = build_tab_properties_xml(store)?;
     let numberings_xml = build_numberings_xml(store);
 
     // If no refList exists, nothing to enrich
     if !inner_xml.contains("<hh:refList>") {
-        return format!(
+        return Ok(format!(
             "<hh:refList>{border_fills_xml}{tab_properties_xml}{numberings_xml}</hh:refList>{inner_xml}"
-        );
+        ));
     }
 
     let extra_len = border_fills_xml.len() + tab_properties_xml.len() + numberings_xml.len();
@@ -429,7 +349,7 @@ fn enrich_ref_list(inner_xml: &str, store: &HwpxStyleStore) -> String {
         result.push_str(rest);
     }
 
-    result
+    Ok(result)
 }
 
 /// Builds a complete `HxHead` from the store data.
@@ -921,9 +841,7 @@ fn build_style(s: &HwpxStyle) -> HxStyle {
 mod tests {
     use super::*;
     use crate::style_store::HwpxFill;
-    use hwpforge_blueprint::registry::StyleRegistry;
-    use hwpforge_blueprint::template::Template;
-    use hwpforge_foundation::{CharShapeIndex, FontIndex, ParaShapeIndex, TabAlign, TabLeader};
+    use hwpforge_foundation::{CharShapeIndex, FontIndex, ParaShapeIndex};
 
     // ── Helper: build a minimal store ───────────────────────────
 
@@ -1358,71 +1276,6 @@ mod tests {
         );
         assert!(xml.contains("widthAdjust=\"0\""), "paraHead must have widthAdjust attr");
         assert!(xml.contains("checkable=\"0\""), "paraHead must have checkable attr");
-    }
-
-    #[test]
-    fn build_tab_properties_xml_merges_defaults_and_explicit_switch_items() {
-        let mut store = HwpxStyleStore::new();
-        store.push_tab(TabDef {
-            id: 3,
-            auto_tab_left: false,
-            auto_tab_right: false,
-            stops: vec![TabStop {
-                position: HwpUnit::new(15000).unwrap(),
-                align: TabAlign::Left,
-                leader: TabLeader::from_hwpx_str("DASH"),
-            }],
-        });
-
-        let xml = build_tab_properties_xml(&store);
-
-        assert!(xml.contains(r#"<hh:tabProperties itemCnt="4">"#));
-        assert!(xml.contains(r#"<hh:tabPr id="0" autoTabLeft="0" autoTabRight="0"/>"#));
-        assert!(xml.contains(r#"<hh:tabPr id="1" autoTabLeft="1" autoTabRight="0"/>"#));
-        assert!(xml.contains(r#"<hh:tabPr id="2" autoTabLeft="0" autoTabRight="1"/>"#));
-        assert!(xml.contains(r#"<hh:tabPr id="3" autoTabLeft="0" autoTabRight="0">"#));
-        assert!(xml.contains(
-            r#"<hp:case hp:required-namespace="http://www.hancom.co.kr/hwpml/2016/HwpUnitChar"><hh:tabItem pos="15000" type="LEFT" leader="DASH" unit="HWPUNIT"/></hp:case>"#
-        ));
-        assert!(xml.contains(
-            r#"<hp:default><hh:tabItem pos="30000" type="LEFT" leader="DASH"/></hp:default>"#
-        ));
-    }
-
-    #[test]
-    fn build_tab_properties_xml_from_template_tabs_reaches_header() {
-        let yaml = r#"
-meta:
-  name: tabbed
-styles:
-  body:
-    char_shape:
-      font: 한컴바탕
-      size: 10pt
-    para_shape:
-      tab_def_id: 3
-tabs:
-  - id: 3
-    auto_tab_left: false
-    auto_tab_right: false
-    stops:
-      - position: 75pt
-        align: Left
-        leader: DASH
-"#;
-        let template = Template::from_yaml(yaml).unwrap();
-        let registry = StyleRegistry::from_template(&template).unwrap();
-        let store = HwpxStyleStore::from_registry(&registry);
-
-        let xml = build_tab_properties_xml(&store);
-
-        assert!(xml.contains(r#"<hh:tabPr id="3" autoTabLeft="0" autoTabRight="0">"#));
-        assert!(
-            xml.contains(r#"<hh:tabItem pos="7500" type="LEFT" leader="DASH" unit="HWPUNIT"/>"#)
-        );
-        assert!(xml.contains(
-            r#"<hp:default><hh:tabItem pos="15000" type="LEFT" leader="DASH"/></hp:default>"#
-        ));
     }
 
     // ── Border fill XML generation ───────────────────────────────

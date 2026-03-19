@@ -185,9 +185,7 @@ pub(crate) fn hwp5_tab_def_to_hwpx(id: u32, raw: &Hwp5RawTabDef) -> TabDef {
 }
 
 fn hwp5_tab_position_to_hwp_unit(position: u32) -> HwpUnit {
-    let clamped =
-        i32::try_from(position).unwrap_or(i32::MAX).clamp(HwpUnit::MIN_VALUE, HwpUnit::MAX_VALUE);
-    HwpUnit::new(clamped).expect("tab stop position should be clamped into valid HwpUnit range")
+    TabDef::clamp_position_from_unsigned(u64::from(position))
 }
 
 pub(crate) fn hwp5_style_to_hwpx(id: u32, raw: &Hwp5RawStyle, style_count: usize) -> HwpxStyle {

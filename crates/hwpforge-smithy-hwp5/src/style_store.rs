@@ -137,10 +137,7 @@ impl Hwp5TabIdMap {
 
     fn map_para_shape_ref(&self, raw_id: u16, warnings: &mut Vec<Hwp5Warning>) -> u32 {
         let raw_id = raw_id as u32;
-        if TabDef::is_builtin_id(raw_id) {
-            return raw_id;
-        }
-        if self.known_slots.contains(&raw_id) {
+        if TabDef::reference_is_known(raw_id, self.known_slots.iter().copied()) {
             return raw_id;
         }
         warnings.push(Hwp5Warning::ProjectionFallback {

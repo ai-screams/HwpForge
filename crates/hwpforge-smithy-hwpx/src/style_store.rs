@@ -2550,9 +2550,6 @@ mod tests {
 
     /// Helper: build a minimal store with one font, one char shape, one para shape, one style.
     fn style_lookup_test_store() -> HwpxStyleStore {
-        use hwpforge_foundation::StyleIndex;
-        let _ = StyleIndex::new(0); // silence unused import
-
         let mut store = HwpxStyleStore::new();
         // Font at index 0
         store.push_font(HwpxFont::new(0, "함초롬돋움", "HANGUL"));

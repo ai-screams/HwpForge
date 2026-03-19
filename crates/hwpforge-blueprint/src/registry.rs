@@ -30,7 +30,7 @@ use hwpforge_core::TabDef;
 use hwpforge_foundation::{CharShapeIndex, FontId, FontIndex, ParaShapeIndex};
 
 use crate::error::{BlueprintError, BlueprintResult};
-use crate::style::{CharShape, ParaShape};
+use crate::style::{CharShape, ParaShape, PartialStyle};
 use crate::template::{Template, TemplateTabDef};
 
 /// A resolved style entry with allocated indices.
@@ -140,65 +140,26 @@ impl StyleRegistry {
             return Err(BlueprintError::EmptyStyleMap);
         }
 
-        // Validate style names
-        for name in template.styles.keys() {
-            validate_style_name(name)?;
-        }
+        validate_template_style_names(&template.styles)?;
 
         let mut fonts = Vec::new();
         let mut char_shapes = Vec::new();
         let mut para_shapes = Vec::new();
         let mut style_entries = IndexMap::new();
         let tabs = validate_tabs(&template.tabs)?;
-
-        // Font name → FontIndex mapping for deduplication
         let mut font_indices: BTreeMap<String, FontIndex> = BTreeMap::new();
 
         for (style_name, partial_style) in &template.styles {
-            // Resolve character shape (may fail if font/size missing)
-            let partial_char = partial_style.char_shape.as_ref().ok_or_else(|| {
-                BlueprintError::StyleResolution {
-                    style_name: style_name.clone(),
-                    field: "char_shape".to_string(),
-                }
-            })?;
-
-            let char_shape = partial_char.resolve(style_name)?;
-
-            // Deduplicate font: find or allocate FontIndex
-            let font_idx = if let Some(&existing_idx) = font_indices.get(&char_shape.font) {
-                existing_idx
-            } else {
-                let font_id = FontId::new(char_shape.font.clone())?;
-                let new_idx = FontIndex::new(fonts.len());
-                fonts.push(font_id);
-                font_indices.insert(char_shape.font.clone(), new_idx);
-                new_idx
-            };
-
-            let char_shape_id = CharShapeIndex::new(char_shapes.len());
-            char_shapes.push(char_shape);
-
-            // Resolve paragraph shape (always succeeds with defaults)
-            let partial_para = partial_style.para_shape.as_ref();
-            let para_shape = partial_para.map_or_else(
-                || {
-                    // No para_shape specified → use all defaults
-                    crate::style::PartialParaShape::default().resolve()
-                },
-                |p| p.resolve(),
-            );
-
-            validate_tab_reference(style_name, para_shape.tab_def_id, &tabs)?;
-
-            let para_shape_id = ParaShapeIndex::new(para_shapes.len());
-            para_shapes.push(para_shape);
-
-            // Create style entry
-            style_entries.insert(
-                style_name.clone(),
-                StyleEntry { char_shape_id, para_shape_id, font_id: font_idx },
-            );
+            let style_entry = build_style_entry(
+                style_name,
+                partial_style,
+                &tabs,
+                &mut fonts,
+                &mut char_shapes,
+                &mut para_shapes,
+                &mut font_indices,
+            )?;
+            style_entries.insert(style_name.clone(), style_entry);
         }
 
         // Validate markdown mapping references
@@ -261,6 +222,74 @@ impl StyleRegistry {
     pub fn style_count(&self) -> usize {
         self.style_entries.len()
     }
+}
+
+fn validate_template_style_names(styles: &IndexMap<String, PartialStyle>) -> BlueprintResult<()> {
+    for name in styles.keys() {
+        validate_style_name(name)?;
+    }
+    Ok(())
+}
+
+fn build_style_entry(
+    style_name: &str,
+    partial_style: &PartialStyle,
+    tabs: &[TabDef],
+    fonts: &mut Vec<FontId>,
+    char_shapes: &mut Vec<CharShape>,
+    para_shapes: &mut Vec<ParaShape>,
+    font_indices: &mut BTreeMap<String, FontIndex>,
+) -> BlueprintResult<StyleEntry> {
+    let char_shape = resolve_char_shape(style_name, partial_style)?;
+    let para_shape = resolve_para_shape(partial_style)?;
+    validate_tab_reference(style_name, para_shape.tab_def_id, tabs)?;
+
+    let font_id = intern_font(fonts, font_indices, &char_shape.font)?;
+    let char_shape_id = CharShapeIndex::new(char_shapes.len());
+    char_shapes.push(char_shape);
+
+    let para_shape_id = ParaShapeIndex::new(para_shapes.len());
+    para_shapes.push(para_shape);
+
+    Ok(StyleEntry { char_shape_id, para_shape_id, font_id })
+}
+
+fn resolve_char_shape(
+    style_name: &str,
+    partial_style: &PartialStyle,
+) -> BlueprintResult<CharShape> {
+    partial_style
+        .char_shape
+        .as_ref()
+        .ok_or_else(|| BlueprintError::StyleResolution {
+            style_name: style_name.to_string(),
+            field: "char_shape".to_string(),
+        })?
+        .resolve(style_name)
+}
+
+fn resolve_para_shape(partial_style: &PartialStyle) -> BlueprintResult<ParaShape> {
+    Ok(partial_style
+        .para_shape
+        .as_ref()
+        .map_or_else(crate::style::PartialParaShape::default, Clone::clone)
+        .resolve())
+}
+
+fn intern_font(
+    fonts: &mut Vec<FontId>,
+    font_indices: &mut BTreeMap<String, FontIndex>,
+    font_name: &str,
+) -> BlueprintResult<FontIndex> {
+    if let Some(&existing_idx) = font_indices.get(font_name) {
+        return Ok(existing_idx);
+    }
+
+    let font_id = FontId::new(font_name.to_string())?;
+    let new_idx = FontIndex::new(fonts.len());
+    fonts.push(font_id);
+    font_indices.insert(font_name.to_string(), new_idx);
+    Ok(new_idx)
 }
 
 /// Validates a style name: must be non-empty, alphanumeric + underscore, start with letter/underscore.
@@ -340,6 +369,12 @@ fn validate_tab_stops(tab: &TemplateTabDef) -> BlueprintResult<()> {
     let mut previous: Option<i32> = None;
     for (idx, stop) in tab.stops.iter().enumerate() {
         let position = stop.position.as_i32();
+        if position < 0 {
+            return Err(BlueprintError::InvalidTabDefinition {
+                id: tab.id,
+                reason: format!("tab stop {} has negative position {}", idx, position),
+            });
+        }
         if let Some(prev) = previous {
             if position <= prev {
                 return Err(BlueprintError::InvalidTabDefinition {
@@ -361,10 +396,7 @@ fn validate_tab_reference(
     tab_def_id: u32,
     tabs: &[TabDef],
 ) -> BlueprintResult<()> {
-    if TabDef::is_builtin_id(tab_def_id) {
-        return Ok(());
-    }
-    if tabs.iter().any(|tab| tab.id == tab_def_id) {
+    if TabDef::reference_is_known(tab_def_id, tabs.iter().map(|tab| tab.id)) {
         return Ok(());
     }
     Err(BlueprintError::InvalidTabReference {
@@ -945,6 +977,36 @@ mod tests {
                         leader: hwpforge_foundation::TabLeader::dot(),
                     },
                 ],
+            }],
+            markdown_mapping: None,
+        };
+
+        let err = StyleRegistry::from_template(&template).unwrap_err();
+        assert!(matches!(err, BlueprintError::InvalidTabDefinition { .. }));
+    }
+
+    #[test]
+    fn template_rejects_negative_tab_stop_positions() {
+        let mut styles = IndexMap::new();
+        styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
+        let template = Template {
+            meta: TemplateMeta {
+                name: "test".to_string(),
+                version: "1.0.0".to_string(),
+                description: None,
+                extends: None,
+            },
+            page: None,
+            styles,
+            tabs: vec![TemplateTabDef {
+                id: 3,
+                auto_tab_left: false,
+                auto_tab_right: false,
+                stops: vec![TemplateTabStop {
+                    position: HwpUnit::new(-100).unwrap(),
+                    align: hwpforge_foundation::TabAlign::Left,
+                    leader: hwpforge_foundation::TabLeader::none(),
+                }],
             }],
             markdown_mapping: None,
         };

@@ -10,6 +10,7 @@
 
 pub(crate) mod chart;
 pub(crate) mod header;
+pub(crate) mod header_tabs;
 pub(crate) mod package;
 pub(crate) mod section;
 pub(crate) mod shapes;
