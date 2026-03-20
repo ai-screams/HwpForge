@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use serde::Serialize;
 
 use hwpforge_core::image::ImageStore;
-use hwpforge_smithy_hwpx::HwpxEncoder;
+use hwpforge_smithy_hwpx::{HwpxEncoder, HwpxRegistryBridge};
 use hwpforge_smithy_md::MdDecoder;
 
 use crate::error::{check_file_size, CliError, MAX_STDIN_SIZE};
@@ -66,18 +66,24 @@ pub fn run(input: &str, output: &PathBuf, preset: &str, json_mode: bool) {
         }
     };
 
-    // Build style store from registry
-    let style_store =
-        match hwpforge_smithy_hwpx::HwpxStyleStore::from_registry(&md_doc.style_registry) {
-            Ok(store) => store,
-            Err(e) => {
-                CliError::new("STYLE_STORE_FAILED", format!("Style store error: {e}"))
-                    .exit(json_mode, 2);
-            }
-        };
+    let bridge = match HwpxRegistryBridge::from_registry(&md_doc.style_registry) {
+        Ok(bridge) => bridge,
+        Err(e) => {
+            CliError::new("STYLE_STORE_FAILED", format!("Style store error: {e}"))
+                .exit(json_mode, 2);
+        }
+    };
+
+    let rebound = match bridge.rebind_draft_document(md_doc.document) {
+        Ok(document) => document,
+        Err(e) => {
+            CliError::new("STYLE_REBIND_FAILED", format!("Style rebind error: {e}"))
+                .exit(json_mode, 2);
+        }
+    };
 
     // Validate
-    let validated = match md_doc.document.validate() {
+    let validated = match rebound.validate() {
         Ok(v) => v,
         Err(e) => {
             CliError::new("VALIDATION_FAILED", format!("Document validation error: {e}"))
@@ -89,7 +95,7 @@ pub fn run(input: &str, output: &PathBuf, preset: &str, json_mode: bool) {
 
     // Encode Core → HWPX
     let image_store = ImageStore::new();
-    let bytes = match HwpxEncoder::encode(&validated, &style_store, &image_store) {
+    let bytes = match HwpxEncoder::encode(&validated, bridge.style_store(), &image_store) {
         Ok(b) => b,
         Err(e) => {
             CliError::new("ENCODE_FAILED", format!("HWPX encode error: {e}")).exit(json_mode, 2);

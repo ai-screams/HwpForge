@@ -44,17 +44,19 @@ fn is_safe_url(url: &str) -> bool {
 ///
 /// ```rust,ignore
 /// use hwpforge_blueprint::builtins::builtin_default;
-/// use hwpforge_smithy_hwpx::HwpxStyleStore;
+/// use hwpforge_smithy_hwpx::HwpxRegistryBridge;
 /// use hwpforge_smithy_md::MdDecoder;
 ///
 /// let template = builtin_default().unwrap();
 /// let result = MdDecoder::decode("# Title\n\nBody text", &template).unwrap();
 ///
 /// // Access the document
-/// let doc = result.document.validate().unwrap();
+/// let bridge = HwpxRegistryBridge::from_registry(&result.style_registry).unwrap();
+/// let rebound = bridge.rebind_draft_document(result.document).unwrap();
+/// let doc = rebound.validate().unwrap();
 ///
-/// // Bridge styles to HWPX encoder
-/// let store = HwpxStyleStore::from_registry(&result.style_registry);
+/// // Use the bridge-built store for HWPX encode
+/// let store = bridge.style_store();
 /// ```
 #[derive(Debug)]
 pub struct MdDocument {

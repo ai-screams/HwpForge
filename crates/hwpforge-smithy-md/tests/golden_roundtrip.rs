@@ -2,7 +2,7 @@
 
 use hwpforge_blueprint::builtins::builtin_default;
 use hwpforge_core::{Control, Paragraph, RunContent};
-use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder, HwpxStyleStore};
+use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder, HwpxRegistryBridge};
 use hwpforge_smithy_md::{MdDecoder, MdEncoder};
 
 fn fixture_path(name: &str) -> std::path::PathBuf {
@@ -19,11 +19,18 @@ fn roundtrip_fixture(
 ) -> (hwpforge_smithy_md::MdDocument, hwpforge_smithy_hwpx::HwpxDocument) {
     let template = builtin_default().unwrap();
     let md_result = MdDecoder::decode_file(fixture_path(name), &template).unwrap();
-    let validated = md_result.document.clone().validate().unwrap();
-    let store = HwpxStyleStore::from_registry(&md_result.style_registry)
-        .expect("Style store construction should succeed");
-    let hwpx_bytes =
-        HwpxEncoder::encode(&validated, &store, &hwpforge_core::image::ImageStore::new()).unwrap();
+    let bridge = HwpxRegistryBridge::from_registry(&md_result.style_registry)
+        .expect("bridge should succeed");
+    let rebound = bridge
+        .rebind_draft_document(md_result.document.clone())
+        .expect("style rebind should succeed");
+    let validated = rebound.validate().unwrap();
+    let hwpx_bytes = HwpxEncoder::encode(
+        &validated,
+        bridge.style_store(),
+        &hwpforge_core::image::ImageStore::new(),
+    )
+    .unwrap();
     let hwpx_result = HwpxDecoder::decode(&hwpx_bytes).unwrap();
     (md_result, hwpx_result)
 }

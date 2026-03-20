@@ -3,7 +3,7 @@
 //! Run: `cargo run -p hwpforge-smithy-md --example gen_hwpx`
 
 use hwpforge_blueprint::builtins::builtin_default;
-use hwpforge_smithy_hwpx::{HwpxEncoder, HwpxStyleStore};
+use hwpforge_smithy_hwpx::{HwpxEncoder, HwpxRegistryBridge};
 use hwpforge_smithy_md::MdDecoder;
 
 fn main() {
@@ -120,11 +120,13 @@ date: "2026-02-17"
 
     let template = builtin_default().expect("builtin_default failed");
     let md_doc = MdDecoder::decode(&markdown_for_encode, &template).expect("MD decode failed");
-    let validated = md_doc.document.validate().expect("validation failed");
-    let store = HwpxStyleStore::from_registry(&md_doc.style_registry)
-        .expect("style store construction failed");
+    let bridge = HwpxRegistryBridge::from_registry(&md_doc.style_registry)
+        .expect("bridge construction failed");
+    let rebound = bridge.rebind_draft_document(md_doc.document).expect("style rebind failed");
+    let validated = rebound.validate().expect("validation failed");
     let images = hwpforge_core::image::ImageStore::new();
-    let hwpx_bytes = HwpxEncoder::encode(&validated, &store, &images).expect("HWPX encode failed");
+    let hwpx_bytes =
+        HwpxEncoder::encode(&validated, bridge.style_store(), &images).expect("HWPX encode failed");
 
     let out_path = "/Users/hanyul/Works/AiScream/HwpForge/Phase4_1_Improvements_Test.hwpx";
     std::fs::write(out_path, &hwpx_bytes).expect("file write failed");

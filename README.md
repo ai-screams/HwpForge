@@ -338,13 +338,14 @@ println!("{}", markdown); // LLM이 바로 이해할 수 있는 Markdown
 
 ```rust
 use hwpforge::md::MdDecoder;
-use hwpforge::hwpx::{HwpxEncoder, HwpxStyleStore};
+use hwpforge::hwpx::{HwpxEncoder, HwpxRegistryBridge};
 
 let md_doc = MdDecoder::decode_with_default("# 제목\n\nMarkdown에서 변환!").unwrap();
-let validated = md_doc.document.validate().unwrap();
-let style_store = HwpxStyleStore::from_registry(&md_doc.style_registry);
+let bridge = HwpxRegistryBridge::from_registry(&md_doc.style_registry).unwrap();
+let rebound = bridge.rebind_draft_document(md_doc.document).unwrap();
+let validated = rebound.validate().unwrap();
 let image_store = hwpforge::core::ImageStore::new();
-let bytes = HwpxEncoder::encode(&validated, &style_store, &image_store).unwrap();
+let bytes = HwpxEncoder::encode(&validated, bridge.style_store(), &image_store).unwrap();
 ```
 
 ## Feature Flags

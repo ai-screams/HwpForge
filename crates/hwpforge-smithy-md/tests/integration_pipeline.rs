@@ -3,14 +3,14 @@
 //! Tests the complete flow:
 //! 1. MdDecoder::decode(markdown, &template) → MdDocument { document, style_registry }
 //! 2. document.validate() → Document<Validated>
-//! 3. HwpxStyleStore::from_registry(&style_registry) → HwpxStyleStore
-//! 4. HwpxEncoder::encode(&validated, &store) → Vec<u8> (HWPX ZIP bytes)
+//! 3. HwpxRegistryBridge::from_registry(&style_registry) → rebind Draft → store-local ids
+//! 4. HwpxEncoder::encode(&validated, bridge.style_store()) → Vec<u8> (HWPX ZIP bytes)
 //! 5. HwpxDecoder::decode(&bytes) → HwpxDocument { document, style_store }
 
 use hwpforge_blueprint::builtins::{builtin_default, builtin_gov_proposal};
 use hwpforge_blueprint::template::Template;
 use hwpforge_core::{Document, Draft, RunContent};
-use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder, HwpxStyleStore};
+use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder, HwpxRegistryBridge};
 use hwpforge_smithy_md::MdDecoder;
 use pretty_assertions::assert_eq;
 
@@ -19,17 +19,21 @@ fn run_full_pipeline(markdown: &str, template: &Template) -> (Vec<u8>, Document<
     // 1. Decode markdown
     let md_doc = MdDecoder::decode(markdown, template).expect("MD decode should succeed");
 
-    // 2. Validate Core document
-    let validated = md_doc.document.validate().expect("Validation should succeed");
+    let bridge =
+        HwpxRegistryBridge::from_registry(&md_doc.style_registry).expect("bridge should succeed");
+    let rebound =
+        bridge.rebind_draft_document(md_doc.document).expect("style rebind should succeed");
 
-    // 3. Convert StyleRegistry to HwpxStyleStore
-    let style_store = HwpxStyleStore::from_registry(&md_doc.style_registry)
-        .expect("Style store construction should succeed");
+    // 2. Validate Core document
+    let validated = rebound.validate().expect("Validation should succeed");
 
     // 4. Encode to HWPX
-    let hwpx_bytes =
-        HwpxEncoder::encode(&validated, &style_store, &hwpforge_core::image::ImageStore::new())
-            .expect("HWPX encode should succeed");
+    let hwpx_bytes = HwpxEncoder::encode(
+        &validated,
+        bridge.style_store(),
+        &hwpforge_core::image::ImageStore::new(),
+    )
+    .expect("HWPX encode should succeed");
 
     // 5. Decode HWPX back (returns Document<Draft>)
     let hwpx_doc = HwpxDecoder::decode(&hwpx_bytes).expect("HWPX decode should succeed");
@@ -175,14 +179,18 @@ fn pipeline_frontmatter_preserved() {
     // For now, just verify title and author work
 
     // Continue with full pipeline
-    let validated = md_doc.document.validate().expect("Validation should succeed");
+    let bridge =
+        HwpxRegistryBridge::from_registry(&md_doc.style_registry).expect("bridge should succeed");
+    let rebound =
+        bridge.rebind_draft_document(md_doc.document).expect("style rebind should succeed");
+    let validated = rebound.validate().expect("Validation should succeed");
 
-    let style_store = HwpxStyleStore::from_registry(&md_doc.style_registry)
-        .expect("Style store construction should succeed");
-
-    let hwpx_bytes =
-        HwpxEncoder::encode(&validated, &style_store, &hwpforge_core::image::ImageStore::new())
-            .expect("HWPX encode should succeed");
+    let hwpx_bytes = HwpxEncoder::encode(
+        &validated,
+        bridge.style_store(),
+        &hwpforge_core::image::ImageStore::new(),
+    )
+    .expect("HWPX encode should succeed");
 
     let hwpx_doc = HwpxDecoder::decode(&hwpx_bytes).expect("HWPX decode should succeed");
 
@@ -242,9 +250,9 @@ fn pipeline_style_store_counts_match_registry() {
     // Decode simple MD → get style_registry
     let md_doc = MdDecoder::decode(markdown, &template).expect("MD decode should succeed");
 
-    // Create HwpxStyleStore::from_registry(&registry)
-    let store = HwpxStyleStore::from_registry(&md_doc.style_registry)
-        .expect("Style store construction should succeed");
+    let bridge =
+        HwpxRegistryBridge::from_registry(&md_doc.style_registry).expect("bridge should succeed");
+    let store = bridge.style_store();
 
     // Assert: store counts match registry counts
     // Fonts are mirrored across 7 language groups (HANGUL, LATIN, HANJA, JAPANESE, OTHER, SYMBOL, USER)

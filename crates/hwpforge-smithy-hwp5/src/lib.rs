@@ -1837,7 +1837,7 @@ mod tests {
         let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
         let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
         let headings = collect_decoded_body_heading_triples(&decoded);
-        assert!(headings.contains(&(HeadingType::Outline, 0, 1)));
+        assert!(headings.contains(&(HeadingType::Outline, 0, 0)));
         assert!(headings.contains(&(HeadingType::Bullet, 1, 0)));
         assert!(headings.contains(&(HeadingType::Number, 2, 0)));
         assert!(headings.contains(&(HeadingType::Number, 3, 0)));
@@ -1909,9 +1909,9 @@ mod tests {
             outline_levels.len() >= 2,
             "fixture should project at least two outline paragraphs"
         );
-        assert!(outline_levels.contains(&1), "fixture should preserve first outline level as 1");
+        assert!(outline_levels.contains(&0), "fixture should preserve first outline level as 0");
         assert!(
-            outline_levels.iter().any(|level| *level > 1),
+            outline_levels.iter().any(|level| *level > 0),
             "fixture should preserve nested outline levels"
         );
 

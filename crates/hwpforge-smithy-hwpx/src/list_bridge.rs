@@ -18,10 +18,11 @@ pub(crate) fn list_ref_to_wire_parts(
     bullets: &[BulletDef],
 ) -> HwpxResult<(HeadingType, u32, u32)> {
     match list_ref {
+        // HWPX `paraPr/heading(level)` is zero-based for outline as well.
+        // Only `<hh:numbering>/<hh:paraHead level="...">` uses one-based
+        // numbering levels.
         Some(ParagraphListRef::Outline { level }) => {
-            // HWPX stores outline heading levels as one-based values, while the
-            // shared IR is zero-based for all list kinds.
-            Ok((HeadingType::Outline, 0, u32::from(level) + 1))
+            Ok((HeadingType::Outline, 0, u32::from(level)))
         }
         Some(ParagraphListRef::Number { numbering_id, level }) => Ok((
             HeadingType::Number,
@@ -194,7 +195,7 @@ mod tests {
                 &bullets,
             )
             .unwrap(),
-            (HeadingType::Outline, 0, 1),
+            (HeadingType::Outline, 0, 0),
         );
         assert_eq!(
             list_ref_to_wire_parts(

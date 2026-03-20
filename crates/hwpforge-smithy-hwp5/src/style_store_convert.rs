@@ -141,9 +141,9 @@ pub(crate) fn hwp5_para_shape_to_hwpx_with_tab_id(
 fn hwp5_heading_wire_parts(raw: &Hwp5RawParaShape) -> (HeadingType, u32, u32) {
     let heading_type = raw.heading_kind();
     let heading_level = match heading_type {
-        // HWPX stores outline heading levels as one-based values even though
-        // HWP5 heading bits and the shared IR are normalized to zero-based.
-        HeadingType::Outline => u32::from(raw.heading_level()) + 1,
+        // HWP5 heading bits and HWPX `paraPr/heading(level)` are both
+        // normalized to zero-based values for shared list semantics.
+        HeadingType::Outline => u32::from(raw.heading_level()),
         HeadingType::Number | HeadingType::Bullet | HeadingType::None => {
             u32::from(raw.heading_level())
         }

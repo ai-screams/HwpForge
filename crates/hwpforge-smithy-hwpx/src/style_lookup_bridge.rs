@@ -106,7 +106,7 @@ mod tests {
         store.push_char_shape(HwpxCharShape { bold: true, ..Default::default() });
         store.push_para_shape(HwpxParaShape {
             heading_type: HeadingType::Outline,
-            heading_level: 2,
+            heading_level: 1,
             ..Default::default()
         });
 

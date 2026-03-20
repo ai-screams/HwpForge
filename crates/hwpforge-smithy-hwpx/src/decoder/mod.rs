@@ -592,8 +592,8 @@ mod tests {
         let decoded = decode_fixture("user_samples/sample-mixed-lists-with-outline.hwpx");
         let headings = collect_body_heading_triples(&decoded);
 
+        assert!(headings.contains(&(HeadingType::Outline, 0, 0)));
         assert!(headings.contains(&(HeadingType::Outline, 0, 1)));
-        assert!(headings.contains(&(HeadingType::Outline, 0, 2)));
         assert!(headings.contains(&(HeadingType::Bullet, 1, 0)));
         assert!(headings.contains(&(HeadingType::Number, 2, 0)));
         assert!(headings.contains(&(HeadingType::Number, 3, 0)));

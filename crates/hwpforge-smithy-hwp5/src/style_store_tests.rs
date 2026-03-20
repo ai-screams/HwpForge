@@ -563,7 +563,7 @@ fn hwp5_para_shape_heading_bits_map_to_kind_level_and_ref() {
     let hwpx = hwp5_para_shape_to_hwpx(&raw);
     assert_eq!(hwpx.heading_type, HeadingType::Outline);
     assert_eq!(hwpx.heading_id_ref, 0);
-    assert_eq!(hwpx.heading_level, 5);
+    assert_eq!(hwpx.heading_level, 4);
 
     raw.property1 = (2 << 23) | (3 << 25);
     assert_eq!(raw.heading_kind(), HeadingType::Number);
