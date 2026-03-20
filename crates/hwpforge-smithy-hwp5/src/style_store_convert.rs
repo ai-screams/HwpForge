@@ -4,7 +4,7 @@ use crate::schema::header::{
 };
 use crate::style_store::Hwp5StyleStore;
 use hwpforge_core::{TabDef, TabStop};
-use hwpforge_foundation::{Alignment, Color, FontIndex, HwpUnit, TabAlign, TabLeader};
+use hwpforge_foundation::{Alignment, Color, FontIndex, HeadingType, HwpUnit, TabAlign, TabLeader};
 use hwpforge_smithy_hwpx::{
     HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape, HwpxStyle, HwpxStyleStore,
 };
@@ -121,6 +121,7 @@ pub(crate) fn hwp5_para_shape_to_hwpx_with_tab_id(
     };
 
     let to_unit = |v: i32| HwpUnit::new(v).unwrap_or(HwpUnit::ZERO);
+    let (heading_type, heading_id_ref, heading_level) = hwp5_heading_wire_parts(raw);
 
     let mut shape = HwpxParaShape::default();
     shape.alignment = alignment;
@@ -130,8 +131,31 @@ pub(crate) fn hwp5_para_shape_to_hwpx_with_tab_id(
     shape.spacing_before = to_unit(raw.space_before);
     shape.spacing_after = to_unit(raw.space_after);
     shape.line_spacing = raw.line_spacing;
+    shape.heading_type = heading_type;
+    shape.heading_level = heading_level;
+    shape.heading_id_ref = heading_id_ref;
     shape.tab_pr_id_ref = tab_pr_id_ref;
     shape
+}
+
+fn hwp5_heading_wire_parts(raw: &Hwp5RawParaShape) -> (HeadingType, u32, u32) {
+    let heading_type = raw.heading_kind();
+    let heading_level = match heading_type {
+        // HWPX stores outline heading levels as one-based values even though
+        // HWP5 heading bits and the shared IR are normalized to zero-based.
+        HeadingType::Outline => u32::from(raw.heading_level()) + 1,
+        HeadingType::Number | HeadingType::Bullet | HeadingType::None => {
+            u32::from(raw.heading_level())
+        }
+        _ => 0,
+    };
+    let heading_id_ref = match heading_type {
+        HeadingType::Number | HeadingType::Bullet => raw.list_ref_id(),
+        HeadingType::Outline | HeadingType::None => 0,
+        _ => 0,
+    };
+
+    (heading_type, heading_id_ref, heading_level)
 }
 
 fn hwp5_tab_align_to_foundation(tab_type: u8) -> TabAlign {

@@ -74,7 +74,7 @@ pub fn style_store_for_preset(name: &str) -> Option<HwpxStyleStore> {
     // Two font entries satisfy FontIndex(0) and FontIndex(1) in default char shapes.
     let font_id = FontId::new(&preset.font).ok()?;
     let registry = StyleRegistry::with_fonts(vec![font_id.clone(), font_id]);
-    Some(HwpxStyleStore::from_registry(&registry))
+    HwpxStyleStore::from_registry(&registry).ok()
 }
 
 #[cfg(test)]

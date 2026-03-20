@@ -1858,6 +1858,7 @@ fn build_page_number_xml(pn: &hwpforge_core::section::PageNumber) -> String {
         hwpforge_foundation::NumberFormatType::RomanSmall => "ROMAN_SMALL",
         hwpforge_foundation::NumberFormatType::LatinCapital => "LATIN_CAPITAL",
         hwpforge_foundation::NumberFormatType::LatinSmall => "LATIN_SMALL",
+        hwpforge_foundation::NumberFormatType::CircledLatinSmall => "CIRCLED_LATIN_SMALL",
         hwpforge_foundation::NumberFormatType::HangulSyllable => "HANGUL_SYLLABLE",
         hwpforge_foundation::NumberFormatType::HangulJamo => "HANGUL_JAMO",
         hwpforge_foundation::NumberFormatType::HanjaDigit => "HANJA_DIGIT",

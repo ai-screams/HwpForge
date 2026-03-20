@@ -295,7 +295,9 @@ fn extract_master_page_cnt(section_xml: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hwpforge_foundation::{HeadingType, NumberFormatType};
     use std::io::{Cursor, Write};
+    use std::path::PathBuf;
     use zip::write::SimpleFileOptions;
     use zip::ZipWriter;
 
@@ -321,6 +323,32 @@ mod tests {
         }
 
         zip.finish().unwrap().into_inner()
+    }
+
+    fn fixture_path(name: &str) -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures").join(name)
+    }
+
+    fn decode_fixture(name: &str) -> HwpxDocument {
+        let path = fixture_path(name);
+        let bytes =
+            std::fs::read(&path).unwrap_or_else(|_| panic!("fixture should exist: {path:?}"));
+        HwpxDecoder::decode(&bytes).unwrap_or_else(|_| panic!("fixture should decode: {path:?}"))
+    }
+
+    fn collect_body_heading_triples(doc: &HwpxDocument) -> Vec<(HeadingType, u32, u32)> {
+        doc.document
+            .sections()
+            .iter()
+            .flat_map(|section| section.paragraphs.iter())
+            .map(|paragraph| {
+                let shape = doc
+                    .style_store
+                    .para_shape(paragraph.para_shape_id)
+                    .expect("paragraph para shape should exist");
+                (shape.heading_type, shape.heading_id_ref, shape.heading_level)
+            })
+            .collect()
     }
 
     const HEADER: &str = r##"<head version="1.4" secCnt="1">
@@ -537,5 +565,54 @@ mod tests {
         assert!(!result.image_store.is_empty(), "image store should contain extracted images");
         let data = result.image_store.get("logo.png").expect("should find logo.png");
         assert_eq!(data, &fake_png);
+    }
+
+    #[test]
+    fn decode_user_sample_bullet_list_preserves_bullet_semantics() {
+        let decoded = decode_fixture("user_samples/sample-bullet-list.hwpx");
+        let headings = collect_body_heading_triples(&decoded);
+
+        assert!(headings.contains(&(HeadingType::Bullet, 1, 0)));
+        assert_eq!(decoded.style_store.bullet_count(), 1);
+        assert_eq!(decoded.style_store.numbering_count(), 1);
+        assert_eq!(decoded.style_store.iter_bullets().next().map(|bullet| bullet.id), Some(1));
+    }
+
+    #[test]
+    fn decode_user_sample_numbered_list_preserves_numbering_semantics() {
+        let decoded = decode_fixture("user_samples/sample-numbered-list.hwpx");
+        let headings = collect_body_heading_triples(&decoded);
+
+        assert!(headings.contains(&(HeadingType::Number, 2, 0)));
+        assert!(decoded.style_store.numbering_count() >= 2);
+    }
+
+    #[test]
+    fn decode_user_sample_mixed_lists_with_outline_preserves_all_list_kinds() {
+        let decoded = decode_fixture("user_samples/sample-mixed-lists-with-outline.hwpx");
+        let headings = collect_body_heading_triples(&decoded);
+
+        assert!(headings.contains(&(HeadingType::Outline, 0, 1)));
+        assert!(headings.contains(&(HeadingType::Outline, 0, 2)));
+        assert!(headings.contains(&(HeadingType::Bullet, 1, 0)));
+        assert!(headings.contains(&(HeadingType::Number, 2, 0)));
+        assert!(headings.contains(&(HeadingType::Number, 3, 0)));
+        assert_eq!(decoded.style_store.bullet_count(), 1);
+        assert!(decoded.style_store.numbering_count() >= 3);
+    }
+
+    #[test]
+    fn decode_user_sample_numbered_custom_formats_preserves_distinct_numbering_ids() {
+        let decoded = decode_fixture("user_samples/sample-numbered-list-custom-formats.hwpx");
+        let headings = collect_body_heading_triples(&decoded);
+
+        for id_ref in [2, 3, 4, 5] {
+            assert!(headings.contains(&(HeadingType::Number, id_ref, 0)));
+        }
+        assert!(decoded.style_store.numbering_count() >= 5);
+        let numberings: Vec<_> = decoded.style_store.iter_numberings().collect();
+        assert_eq!(numberings[1].levels[0].text, "^1)");
+        assert_eq!(numberings[2].levels[0].text, "(^1)");
+        assert_eq!(numberings[4].levels[6].num_format, NumberFormatType::CircledLatinSmall);
     }
 }

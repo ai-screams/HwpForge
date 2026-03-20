@@ -67,7 +67,14 @@ pub fn run(input: &str, output: &PathBuf, preset: &str, json_mode: bool) {
     };
 
     // Build style store from registry
-    let style_store = hwpforge_smithy_hwpx::HwpxStyleStore::from_registry(&md_doc.style_registry);
+    let style_store =
+        match hwpforge_smithy_hwpx::HwpxStyleStore::from_registry(&md_doc.style_registry) {
+            Ok(store) => store,
+            Err(e) => {
+                CliError::new("STYLE_STORE_FAILED", format!("Style store error: {e}"))
+                    .exit(json_mode, 2);
+            }
+        };
 
     // Validate
     let validated = match md_doc.document.validate() {

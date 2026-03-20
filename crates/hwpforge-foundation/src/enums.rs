@@ -1285,6 +1285,8 @@ pub enum NumberFormatType {
     HanjaDigit = 8,
     /// Circled Hangul syllable: ㉮, ㉯, ㉰, ... (used for outline level 8).
     CircledHangulSyllable = 9,
+    /// Circled Latin lowercase: ⓐ, ⓑ, ⓒ, ...
+    CircledLatinSmall = 10,
 }
 
 impl fmt::Display for NumberFormatType {
@@ -1300,6 +1302,7 @@ impl fmt::Display for NumberFormatType {
             Self::HangulJamo => f.write_str("HangulJamo"),
             Self::HanjaDigit => f.write_str("HanjaDigit"),
             Self::CircledHangulSyllable => f.write_str("CircledHangulSyllable"),
+            Self::CircledLatinSmall => f.write_str("CircledLatinSmall"),
         }
     }
 }
@@ -1321,10 +1324,13 @@ impl std::str::FromStr for NumberFormatType {
             "CircledHangulSyllable" | "circledhangulsyllable" | "CIRCLED_HANGUL_SYLLABLE" => {
                 Ok(Self::CircledHangulSyllable)
             }
+            "CircledLatinSmall" | "circledlatinsmall" | "CIRCLED_LATIN_SMALL" => {
+                Ok(Self::CircledLatinSmall)
+            }
             _ => Err(FoundationError::ParseError {
                 type_name: "NumberFormatType".to_string(),
                 value: s.to_string(),
-                valid_values: "Digit, CircledDigit, RomanCapital, RomanSmall, LatinCapital, LatinSmall, HangulSyllable, HangulJamo, HanjaDigit, CircledHangulSyllable".to_string(),
+                valid_values: "Digit, CircledDigit, RomanCapital, RomanSmall, LatinCapital, LatinSmall, HangulSyllable, HangulJamo, HanjaDigit, CircledHangulSyllable, CircledLatinSmall".to_string(),
             }),
         }
     }
@@ -1345,10 +1351,11 @@ impl TryFrom<u8> for NumberFormatType {
             7 => Ok(Self::HangulJamo),
             8 => Ok(Self::HanjaDigit),
             9 => Ok(Self::CircledHangulSyllable),
+            10 => Ok(Self::CircledLatinSmall),
             _ => Err(FoundationError::ParseError {
                 type_name: "NumberFormatType".to_string(),
                 value: value.to_string(),
-                valid_values: "0-9 (Digit, CircledDigit, RomanCapital, RomanSmall, LatinCapital, LatinSmall, HangulSyllable, HangulJamo, HanjaDigit, CircledHangulSyllable)".to_string(),
+                valid_values: "0-10 (Digit, CircledDigit, RomanCapital, RomanSmall, LatinCapital, LatinSmall, HangulSyllable, HangulJamo, HanjaDigit, CircledHangulSyllable, CircledLatinSmall)".to_string(),
             }),
         }
     }
@@ -4268,7 +4275,8 @@ mod tests {
             NumberFormatType::try_from(9u8).unwrap(),
             NumberFormatType::CircledHangulSyllable
         );
-        assert!(NumberFormatType::try_from(10u8).is_err());
+        assert_eq!(NumberFormatType::try_from(10u8).unwrap(), NumberFormatType::CircledLatinSmall);
+        assert!(NumberFormatType::try_from(11u8).is_err());
     }
 
     #[test]
@@ -4297,6 +4305,7 @@ mod tests {
             NumberFormatType::HangulJamo,
             NumberFormatType::HanjaDigit,
             NumberFormatType::CircledHangulSyllable,
+            NumberFormatType::CircledLatinSmall,
         ] {
             let s = v.to_string();
             let back = NumberFormatType::from_str(&s).unwrap();

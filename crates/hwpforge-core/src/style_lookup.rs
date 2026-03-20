@@ -93,6 +93,25 @@ pub trait StyleLookup {
         None
     }
 
+    /// Returns the zero-based list nesting level for a paragraph shape.
+    ///
+    /// This is only meaningful for numbered/bulleted list semantics. Outline
+    /// headings should use [`para_heading_level`](Self::para_heading_level)
+    /// instead.
+    fn para_list_level(&self, _id: ParaShapeIndex) -> Option<u8> {
+        None
+    }
+
+    /// Returns the heading level (1–6) implied by the paragraph shape at `id`.
+    ///
+    /// This is the format-agnostic truth source for paragraph-level outline
+    /// semantics. Implementors that can inspect real paragraph-shape outline
+    /// metadata should override this method; downstream styled export paths use
+    /// it before style-name heuristics whenever both are available.
+    fn para_heading_level(&self, _id: ParaShapeIndex) -> Option<u8> {
+        None
+    }
+
     /// Returns the Korean name of the style at `id`.
     fn style_name(&self, _id: StyleIndex) -> Option<&str> {
         None
@@ -148,6 +167,8 @@ mod tests {
         assert!(store.char_text_color(cs).is_none());
         assert!(store.para_alignment(ps).is_none());
         assert!(store.para_list_type(ps).is_none());
+        assert!(store.para_list_level(ps).is_none());
+        assert!(store.para_heading_level(ps).is_none());
         assert!(store.style_name(si).is_none());
         assert!(store.style_heading_level(si).is_none());
         assert!(store.image_data("image1.jpg").is_none());

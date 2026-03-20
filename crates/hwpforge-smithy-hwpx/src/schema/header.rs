@@ -66,7 +66,7 @@ fn default_hwpunit() -> String {
 /// `<hh:refList>` — container for all shared definitions.
 ///
 /// Field order matches HWPX element order:
-/// fontfaces → borderFills → charProperties → tabProperties → numberings → paraProperties → styles
+/// fontfaces → borderFills → charProperties → tabProperties → numberings → bullets → paraProperties → styles
 #[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
 pub struct HxRefList {
     #[serde(
@@ -102,6 +102,13 @@ pub struct HxRefList {
         skip_serializing_if = "Option::is_none"
     )]
     pub numberings: Option<HxNumberings>,
+    /// Bullet definitions.
+    #[serde(
+        rename(serialize = "hh:bullets", deserialize = "bullets"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub bullets: Option<HxBullets>,
     #[serde(
         rename(serialize = "hh:paraProperties", deserialize = "paraProperties"),
         default,
@@ -949,6 +956,72 @@ pub struct HxNumbering {
     /// Level definitions.
     #[serde(rename(serialize = "hh:paraHead", deserialize = "paraHead"), default)]
     pub para_heads: Vec<HxParaHead>,
+}
+
+/// `<hh:bullets itemCnt="1">` — collection of bullet definitions.
+#[derive(Debug, Serialize, Deserialize, Default, PartialEq)]
+pub struct HxBullets {
+    /// Number of bullet entries.
+    #[serde(rename = "@itemCnt", default)]
+    pub item_cnt: u32,
+    /// Bullet definition list.
+    #[serde(rename(serialize = "hh:bullet", deserialize = "bullet"), default)]
+    pub items: Vec<HxBullet>,
+}
+
+/// `<hh:bullet id="1" char="" useImage="0">`.
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub struct HxBullet {
+    /// Bullet ID (1-based).
+    #[serde(rename = "@id")]
+    pub id: u32,
+    /// Bullet glyph.
+    #[serde(rename = "@char", default)]
+    pub bullet_char: String,
+    /// Whether this bullet uses an image.
+    #[serde(rename = "@useImage", default)]
+    pub use_image: u32,
+    /// Bullet paragraph head definitions.
+    #[serde(rename(serialize = "hh:paraHead", deserialize = "paraHead"), default)]
+    pub para_heads: Vec<HxBulletParaHead>,
+}
+
+/// `<hh:paraHead level="0" align="LEFT" .../>` under a bullet definition.
+#[derive(Debug, Serialize, Deserialize, PartialEq)]
+pub struct HxBulletParaHead {
+    /// Bullet level (typically 0).
+    #[serde(rename = "@level", default)]
+    pub level: u32,
+    /// Alignment (e.g. "LEFT").
+    #[serde(rename = "@align", default)]
+    pub align: String,
+    /// Whether to use the bullet instance width.
+    #[serde(rename = "@useInstWidth", default)]
+    pub use_inst_width: u32,
+    /// Whether to auto-indent.
+    #[serde(rename = "@autoIndent", default)]
+    pub auto_indent: u32,
+    /// Width adjustment.
+    #[serde(rename = "@widthAdjust", default)]
+    pub width_adjust: u32,
+    /// Text offset type (e.g. "PERCENT").
+    #[serde(rename = "@textOffsetType", default)]
+    pub text_offset_type: String,
+    /// Text offset value.
+    #[serde(rename = "@textOffset", default)]
+    pub text_offset: u32,
+    /// Number format string.
+    #[serde(rename = "@numFormat", default)]
+    pub num_format: String,
+    /// Character property ID reference (u32::MAX = no override).
+    #[serde(rename = "@charPrIDRef", default)]
+    pub char_pr_id_ref: u32,
+    /// Whether this level is checkable.
+    #[serde(rename = "@checkable", default)]
+    pub checkable: u32,
+    /// Text content of the paraHead.
+    #[serde(rename = "$text", default, skip_serializing_if = "String::is_empty")]
+    pub text: String,
 }
 
 /// `<hh:paraHead start="1" level="1" numFormat="DIGIT" ...>^1.</hh:paraHead>`.

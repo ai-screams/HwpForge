@@ -838,6 +838,8 @@ mod tests {
             fonts: Vec::new(),
             char_shapes: Vec::new(),
             para_shapes: Vec::new(),
+            numberings: Vec::new(),
+            bullets: Vec::new(),
             tab_defs: Vec::new(),
             styles: Vec::new(),
             border_fills: Vec::new(),
@@ -1171,6 +1173,8 @@ mod tests {
             }],
             char_shapes: vec![crate::schema::header::Hwp5RawCharShape::parse(&[0u8; 68]).unwrap()],
             para_shapes: vec![crate::schema::header::Hwp5RawParaShape::parse(&[0u8; 42]).unwrap()],
+            numberings: Vec::new(),
+            bullets: Vec::new(),
             tab_defs: Vec::new(),
             styles: vec![crate::schema::header::Hwp5RawStyle {
                 name: "본문".to_string(),

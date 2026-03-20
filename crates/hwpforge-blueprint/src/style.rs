@@ -10,6 +10,7 @@
 //! This mirrors CSS inheritance: a child template can override only the
 //! fields it cares about, inheriting the rest from the parent.
 
+use hwpforge_core::{BulletDef, NumberingDef, ParagraphListRef};
 use hwpforge_foundation::{
     Alignment, BorderFillIndex, BreakType, Color, EmbossType, EmphasisType, EngraveType,
     HeadingType, HwpUnit, LineSpacingType, OutlineType, ShadowType, StrikeoutShape, UnderlineType,
@@ -209,6 +210,89 @@ pub struct PartialCharShape {
     pub char_border_fill_id: Option<u32>,
 }
 
+/// Paragraph list semantics with unresolved definition ids.
+///
+/// Blueprint templates reference numbering/bullet definitions by their
+/// declared ids. During registry construction those ids are resolved into the
+/// branded shared IR indices stored by [`ParagraphListRef`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PartialParagraphListRef {
+    /// Outline heading semantics.
+    Outline {
+        /// Zero-based outline level (`0..=9`).
+        level: u8,
+    },
+    /// Numbered list semantics.
+    Number {
+        /// Declared numbering definition id from the template.
+        numbering_id: u32,
+        /// Zero-based paragraph list level (`0..=9`).
+        level: u8,
+    },
+    /// Bullet list semantics.
+    Bullet {
+        /// Declared bullet definition id from the template.
+        bullet_id: u32,
+        /// Zero-based paragraph list level (`0..=9`).
+        level: u8,
+    },
+}
+
+impl PartialParagraphListRef {
+    fn resolve(
+        self,
+        style_name: &str,
+        numberings: &[NumberingDef],
+        bullets: &[BulletDef],
+    ) -> BlueprintResult<ParagraphListRef> {
+        let level = match self {
+            Self::Outline { level } | Self::Number { level, .. } | Self::Bullet { level, .. } => {
+                level
+            }
+        };
+        if level > ParagraphListRef::MAX_LEVEL {
+            return Err(BlueprintError::InvalidListLevel {
+                style_name: style_name.to_string(),
+                level,
+                max: ParagraphListRef::MAX_LEVEL,
+            });
+        }
+
+        match self {
+            Self::Outline { level } => Ok(ParagraphListRef::Outline { level }),
+            Self::Number { numbering_id, level } => {
+                let numbering_index = numberings
+                    .iter()
+                    .position(|numbering| numbering.id == numbering_id)
+                    .ok_or_else(|| BlueprintError::InvalidListReference {
+                        style_name: style_name.to_string(),
+                        kind: "numbering".to_string(),
+                        id: numbering_id,
+                    })?;
+                Ok(ParagraphListRef::Number {
+                    numbering_id: hwpforge_foundation::NumberingIndex::new(numbering_index),
+                    level,
+                })
+            }
+            Self::Bullet { bullet_id, level } => {
+                let bullet_index = bullets
+                    .iter()
+                    .position(|bullet| bullet.id == bullet_id)
+                    .ok_or_else(|| BlueprintError::InvalidListReference {
+                        style_name: style_name.to_string(),
+                        kind: "bullet".to_string(),
+                        id: bullet_id,
+                    })?;
+                Ok(ParagraphListRef::Bullet {
+                    bullet_id: hwpforge_foundation::BulletIndex::new(bullet_index),
+                    level,
+                })
+            }
+        }
+    }
+}
+
 impl PartialCharShape {
     /// Merges `other` into `self` (child overrides parent).
     /// Fields in `other` with `Some` value override `self`.
@@ -357,6 +441,9 @@ pub struct PartialParaShape {
     /// Tab definition reference (`0` = default/no explicit custom stops).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tab_def_id: Option<u32>,
+    /// Shared paragraph list semantics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list: Option<PartialParagraphListRef>,
     /// Heading type for outline/numbering styles.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub heading_type: Option<HeadingType>,
@@ -445,14 +532,22 @@ impl PartialParaShape {
         if other.tab_def_id.is_some() {
             self.tab_def_id = other.tab_def_id;
         }
+        if other.list.is_some() {
+            self.list = other.list;
+        }
         if other.heading_type.is_some() {
             self.heading_type = other.heading_type;
         }
     }
 
     /// Resolves into a fully-specified [`ParaShape`] with defaults.
-    pub fn resolve(&self) -> ParaShape {
-        ParaShape {
+    pub fn resolve(
+        &self,
+        style_name: &str,
+        numberings: &[NumberingDef],
+        bullets: &[BulletDef],
+    ) -> BlueprintResult<ParaShape> {
+        Ok(ParaShape {
             alignment: self.alignment.unwrap_or(Alignment::Left),
             line_spacing_type: self
                 .line_spacing
@@ -470,7 +565,35 @@ impl PartialParaShape {
             widow_orphan: self.widow_orphan.unwrap_or(true), // Enabled by default in HWPX
             border_fill_id: self.border_fill_id,
             tab_def_id: self.tab_def_id.unwrap_or(0),
-            heading_type: self.heading_type.unwrap_or(HeadingType::None),
+            list: self.resolve_list(style_name, numberings, bullets)?,
+        })
+    }
+
+    fn resolve_list(
+        &self,
+        style_name: &str,
+        numberings: &[NumberingDef],
+        bullets: &[BulletDef],
+    ) -> BlueprintResult<Option<ParagraphListRef>> {
+        if let Some(list) = self.list {
+            if matches!(
+                self.heading_type,
+                Some(HeadingType::Outline | HeadingType::Number | HeadingType::Bullet)
+            ) {
+                return Err(BlueprintError::ConflictingListSpecification {
+                    style_name: style_name.to_string(),
+                });
+            }
+            return list.resolve(style_name, numberings, bullets).map(Some);
+        }
+
+        match self.heading_type.unwrap_or(HeadingType::None) {
+            HeadingType::None => Ok(None),
+            HeadingType::Outline => Ok(Some(ParagraphListRef::Outline { level: 0 })),
+            heading_type => Err(BlueprintError::UnsupportedLegacyHeadingType {
+                style_name: style_name.to_string(),
+                heading_type,
+            }),
         }
     }
 }
@@ -622,15 +745,46 @@ pub struct ParaShape {
     /// Tab definition reference (`0` = default/no explicit custom stops).
     #[serde(default)]
     pub tab_def_id: u32,
-    /// Heading type (None, Outline, Number, Bullet). Default: None.
-    #[serde(default)]
-    pub heading_type: HeadingType,
+    /// Shared paragraph list semantics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub list: Option<ParagraphListRef>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hwpforge_core::ParaHead;
+    use hwpforge_foundation::{BulletIndex, NumberFormatType, NumberingIndex};
     use pretty_assertions::assert_eq;
+
+    fn test_numbering_def(id: u32) -> NumberingDef {
+        NumberingDef {
+            id,
+            start: 1,
+            levels: vec![ParaHead {
+                start: 1,
+                level: 1,
+                num_format: NumberFormatType::Digit,
+                text: "^1.".into(),
+                checkable: false,
+            }],
+        }
+    }
+
+    fn test_bullet_def(id: u32) -> BulletDef {
+        BulletDef {
+            id,
+            bullet_char: "•".into(),
+            use_image: false,
+            para_head: ParaHead {
+                start: 0,
+                level: 1,
+                num_format: NumberFormatType::Digit,
+                text: String::new(),
+                checkable: false,
+            },
+        }
+    }
 
     #[test]
     fn partial_char_shape_default_is_all_none() {
@@ -776,12 +930,92 @@ mod tests {
     #[test]
     fn partial_para_shape_resolve_defaults() {
         let partial = PartialParaShape::default();
-        let resolved = partial.resolve();
+        let resolved = partial.resolve("body", &[], &[]).unwrap();
         assert_eq!(resolved.alignment, Alignment::Left);
         assert_eq!(resolved.line_spacing_type, LineSpacingType::Percentage);
         assert_eq!(resolved.line_spacing_value, 160.0);
         assert_eq!(resolved.space_before, HwpUnit::ZERO);
         assert_eq!(resolved.indent_left, HwpUnit::ZERO);
+    }
+
+    #[test]
+    fn partial_para_shape_resolve_list_number_reference() {
+        let partial = PartialParaShape {
+            list: Some(PartialParagraphListRef::Number { numbering_id: 42, level: 2 }),
+            ..Default::default()
+        };
+
+        let resolved = partial.resolve("body", &[test_numbering_def(42)], &[]).unwrap();
+        assert_eq!(
+            resolved.list,
+            Some(ParagraphListRef::Number { numbering_id: NumberingIndex::new(0), level: 2 })
+        );
+    }
+
+    #[test]
+    fn partial_para_shape_resolve_list_bullet_reference() {
+        let partial = PartialParaShape {
+            list: Some(PartialParagraphListRef::Bullet { bullet_id: 7, level: 0 }),
+            ..Default::default()
+        };
+
+        let resolved = partial.resolve("body", &[], &[test_bullet_def(7)]).unwrap();
+        assert_eq!(
+            resolved.list,
+            Some(ParagraphListRef::Bullet { bullet_id: BulletIndex::new(0), level: 0 })
+        );
+    }
+
+    #[test]
+    fn partial_para_shape_resolve_legacy_outline_heading_type_migrates_to_list() {
+        let partial =
+            PartialParaShape { heading_type: Some(HeadingType::Outline), ..Default::default() };
+
+        let resolved = partial.resolve("body", &[], &[]).unwrap();
+        assert_eq!(resolved.list, Some(ParagraphListRef::Outline { level: 0 }));
+    }
+
+    #[test]
+    fn partial_para_shape_resolve_rejects_conflicting_legacy_heading_and_list() {
+        let partial = PartialParaShape {
+            list: Some(PartialParagraphListRef::Outline { level: 1 }),
+            heading_type: Some(HeadingType::Outline),
+            ..Default::default()
+        };
+
+        let err = partial.resolve("body", &[], &[]).unwrap_err();
+        assert!(matches!(err, BlueprintError::ConflictingListSpecification { .. }));
+    }
+
+    #[test]
+    fn partial_para_shape_resolve_rejects_unsupported_legacy_number_heading_type() {
+        let partial =
+            PartialParaShape { heading_type: Some(HeadingType::Number), ..Default::default() };
+
+        let err = partial.resolve("body", &[], &[]).unwrap_err();
+        assert!(matches!(err, BlueprintError::UnsupportedLegacyHeadingType { .. }));
+    }
+
+    #[test]
+    fn partial_para_shape_resolve_rejects_invalid_list_reference() {
+        let partial = PartialParaShape {
+            list: Some(PartialParagraphListRef::Number { numbering_id: 999, level: 0 }),
+            ..Default::default()
+        };
+
+        let err = partial.resolve("body", &[test_numbering_def(42)], &[]).unwrap_err();
+        assert!(matches!(err, BlueprintError::InvalidListReference { .. }));
+    }
+
+    #[test]
+    fn partial_para_shape_resolve_rejects_invalid_list_level() {
+        let partial = PartialParaShape {
+            list: Some(PartialParagraphListRef::Outline { level: ParagraphListRef::MAX_LEVEL + 1 }),
+            ..Default::default()
+        };
+
+        let err = partial.resolve("body", &[], &[]).unwrap_err();
+        assert!(matches!(err, BlueprintError::InvalidListLevel { .. }));
     }
 
     #[test]
@@ -904,7 +1138,7 @@ mod tests {
             widow_orphan: true,
             border_fill_id: None,
             tab_def_id: 0,
-            heading_type: HeadingType::None,
+            list: None,
         };
         let yaml = serde_yaml::to_string(&original).unwrap();
         let back: ParaShape = serde_yaml::from_str(&yaml).unwrap();
@@ -926,10 +1160,10 @@ break_type: None
 keep_with_next: false
 keep_lines_together: false
 widow_orphan: true
-heading_type: None
 "#;
         let parsed: ParaShape = serde_yaml::from_str(yaml).unwrap();
         assert_eq!(parsed.tab_def_id, 0);
+        assert_eq!(parsed.list, None);
     }
 
     #[test]

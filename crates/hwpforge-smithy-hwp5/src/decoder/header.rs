@@ -8,8 +8,8 @@ use crate::decoder::Hwp5Warning;
 use crate::error::Hwp5Result;
 use crate::schema::border_fill::Hwp5RawBorderFill;
 use crate::schema::header::{
-    Hwp5RawCharShape, Hwp5RawFaceName, Hwp5RawIdMappings, Hwp5RawParaShape, Hwp5RawStyle,
-    Hwp5RawTabDef, Hwp5TabDefSlot, HwpVersion,
+    Hwp5RawBulletDef, Hwp5RawCharShape, Hwp5RawFaceName, Hwp5RawIdMappings, Hwp5RawNumberingDef,
+    Hwp5RawParaShape, Hwp5RawStyle, Hwp5RawTabDef, Hwp5TabDefSlot, HwpVersion,
 };
 use crate::schema::record::{Record, TagId};
 
@@ -20,6 +20,25 @@ pub(crate) struct Hwp5DocInfoBorderFillSlot {
     pub id: u32,
     /// Parsed border fill payload. `None` means the slot existed but parse failed.
     pub fill: Option<Hwp5RawBorderFill>,
+}
+
+/// Result of parsing a numbering definition slot from DocInfo.
+#[derive(Debug, Clone)]
+pub struct Hwp5DocInfoNumberingSlot {
+    /// 1-based numbering ID preserved from DocInfo record order.
+    pub id: u32,
+    /// Parsed numbering payload. `None` means the slot existed but parse failed.
+    pub numbering: Option<Hwp5RawNumberingDef>,
+}
+
+/// Result of parsing a bullet definition slot from DocInfo.
+#[derive(Debug, Clone)]
+pub struct Hwp5DocInfoBulletSlot {
+    /// 1-based bullet ID preserved from DocInfo record order.
+    pub id: u32,
+    /// Raw bullet payload. `None` means the slot existed but the parser had to
+    /// drop the record.
+    pub bullet: Option<Hwp5RawBulletDef>,
 }
 
 /// Result of parsing the DocInfo stream.
@@ -33,6 +52,10 @@ pub(crate) struct DocInfoResult {
     pub char_shapes: Vec<Hwp5RawCharShape>,
     /// Paragraph shape records.
     pub para_shapes: Vec<Hwp5RawParaShape>,
+    /// Numbering definition slots preserved in DocInfo order.
+    pub numberings: Vec<Hwp5DocInfoNumberingSlot>,
+    /// Bullet definition slots preserved in DocInfo order.
+    pub bullets: Vec<Hwp5DocInfoBulletSlot>,
     /// Tab definition slots preserved in DocInfo order.
     pub tab_defs: Vec<Hwp5TabDefSlot>,
     /// Named style records.
@@ -62,6 +85,8 @@ pub(crate) fn parse_doc_info(data: &[u8], _version: &HwpVersion) -> Hwp5Result<D
         fonts: Vec::new(),
         char_shapes: Vec::new(),
         para_shapes: Vec::new(),
+        numberings: Vec::new(),
+        bullets: Vec::new(),
         tab_defs: Vec::new(),
         styles: Vec::new(),
         border_fills: Vec::new(),
@@ -95,6 +120,37 @@ pub(crate) fn parse_doc_info(data: &[u8], _version: &HwpVersion) -> Hwp5Result<D
                     .warnings
                     .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
             },
+            TagId::NumberingDef => match Hwp5RawNumberingDef::parse(&record.data, _version) {
+                Ok(numbering) => {
+                    let id = (result.numberings.len() as u32) + 1;
+                    result
+                        .numberings
+                        .push(Hwp5DocInfoNumberingSlot { id, numbering: Some(numbering) });
+                }
+                Err(err) => {
+                    let id = (result.numberings.len() as u32) + 1;
+                    result.numberings.push(Hwp5DocInfoNumberingSlot { id, numbering: None });
+                    result.warnings.push(Hwp5Warning::ParserFallback {
+                        subject: "numbering.parse",
+                        reason: format!("numbering slot {id} could not be parsed: {err}"),
+                    });
+                }
+            },
+            TagId::Bullet => {
+                let id = (result.bullets.len() as u32) + 1;
+                match Hwp5RawBulletDef::parse(&record.data) {
+                    Ok(bullet) => {
+                        result.bullets.push(Hwp5DocInfoBulletSlot { id, bullet: Some(bullet) });
+                    }
+                    Err(err) => {
+                        result.bullets.push(Hwp5DocInfoBulletSlot { id, bullet: None });
+                        result.warnings.push(Hwp5Warning::ParserFallback {
+                            subject: "bullet.parse",
+                            reason: format!("bullet slot {id} could not be parsed: {err}"),
+                        });
+                    }
+                }
+            }
             TagId::TabDef => match Hwp5RawTabDef::parse(&record.data) {
                 Ok(tab_def) => {
                     let raw_id = result.tab_defs.len() as u32;

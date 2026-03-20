@@ -40,7 +40,7 @@ pub use enums::{
 pub use error::{ErrorCode, ErrorCodeExt, FoundationError, FoundationResult};
 pub use ids::{FontId, StyleName, TemplateName};
 pub use index::{
-    BorderFillIndex, CharShapeIndex, FontIndex, Index, NumberingIndex, ParaShapeIndex, StyleIndex,
-    TabIndex,
+    BorderFillIndex, BulletIndex, CharShapeIndex, FontIndex, Index, NumberingIndex, ParaShapeIndex,
+    StyleIndex, TabIndex,
 };
 pub use units::{HwpUnit, Insets, Point, Rect, Size};

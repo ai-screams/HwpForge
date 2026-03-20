@@ -23,7 +23,8 @@ fn run_full_pipeline(markdown: &str, template: &Template) -> (Vec<u8>, Document<
     let validated = md_doc.document.validate().expect("Validation should succeed");
 
     // 3. Convert StyleRegistry to HwpxStyleStore
-    let style_store = HwpxStyleStore::from_registry(&md_doc.style_registry);
+    let style_store = HwpxStyleStore::from_registry(&md_doc.style_registry)
+        .expect("Style store construction should succeed");
 
     // 4. Encode to HWPX
     let hwpx_bytes =
@@ -176,7 +177,8 @@ fn pipeline_frontmatter_preserved() {
     // Continue with full pipeline
     let validated = md_doc.document.validate().expect("Validation should succeed");
 
-    let style_store = HwpxStyleStore::from_registry(&md_doc.style_registry);
+    let style_store = HwpxStyleStore::from_registry(&md_doc.style_registry)
+        .expect("Style store construction should succeed");
 
     let hwpx_bytes =
         HwpxEncoder::encode(&validated, &style_store, &hwpforge_core::image::ImageStore::new())
@@ -241,7 +243,8 @@ fn pipeline_style_store_counts_match_registry() {
     let md_doc = MdDecoder::decode(markdown, &template).expect("MD decode should succeed");
 
     // Create HwpxStyleStore::from_registry(&registry)
-    let store = HwpxStyleStore::from_registry(&md_doc.style_registry);
+    let store = HwpxStyleStore::from_registry(&md_doc.style_registry)
+        .expect("Style store construction should succeed");
 
     // Assert: store counts match registry counts
     // Fonts are mirrored across 7 language groups (HANGUL, LATIN, HANJA, JAPANESE, OTHER, SYMBOL, USER)

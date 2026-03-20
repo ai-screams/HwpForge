@@ -14,7 +14,10 @@
 
 use std::fmt;
 
-use hwpforge_foundation::error::{ErrorCode, ErrorCodeExt, FoundationError};
+use hwpforge_foundation::{
+    error::{ErrorCode, ErrorCodeExt, FoundationError},
+    HeadingType,
+};
 
 /// Numeric error codes for Blueprint (3000-3999).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -50,6 +53,18 @@ pub enum BlueprintErrorCode {
     DuplicateTabDefinition = 3013,
     /// Tab definition contains invalid stop ordering or duplicate positions.
     InvalidTabDefinition = 3014,
+    /// Duplicate numbering definition id.
+    DuplicateNumberingDefinition = 3015,
+    /// Duplicate bullet definition id.
+    DuplicateBulletDefinition = 3016,
+    /// Paragraph list level is outside the supported range.
+    InvalidListLevel = 3017,
+    /// Paragraph references an unknown numbering/bullet definition.
+    InvalidListReference = 3018,
+    /// Paragraph mixes legacy heading_type with explicit list semantics.
+    ConflictingListSpecification = 3019,
+    /// Legacy heading_type cannot be migrated safely.
+    UnsupportedLegacyHeadingType = 3020,
 }
 
 impl fmt::Display for BlueprintErrorCode {
@@ -178,6 +193,61 @@ pub enum BlueprintError {
         reason: String,
     },
 
+    /// Multiple numbering definitions share the same id.
+    #[error("duplicate numbering definition id {id}")]
+    DuplicateNumberingDefinition {
+        /// The duplicated numbering definition id.
+        id: u32,
+    },
+
+    /// Multiple bullet definitions share the same id.
+    #[error("duplicate bullet definition id {id}")]
+    DuplicateBulletDefinition {
+        /// The duplicated bullet definition id.
+        id: u32,
+    },
+
+    /// A paragraph list level is outside the supported shared IR range.
+    #[error("style '{style_name}' uses invalid list level {level}: expected 0..={max}")]
+    InvalidListLevel {
+        /// Style name that contains the invalid level.
+        style_name: String,
+        /// Invalid level value.
+        level: u8,
+        /// Highest supported level.
+        max: u8,
+    },
+
+    /// A paragraph references a numbering/bullet definition that does not exist.
+    #[error("style '{style_name}' references unknown {kind} definition {id}")]
+    InvalidListReference {
+        /// Style name that contains the bad reference.
+        style_name: String,
+        /// Referenced list kind (`numbering` or `bullet`).
+        kind: String,
+        /// Referenced definition id.
+        id: u32,
+    },
+
+    /// A paragraph tries to use both legacy and explicit list syntax.
+    #[error("style '{style_name}' mixes legacy heading_type with explicit para_shape.list")]
+    ConflictingListSpecification {
+        /// Style name that contains the conflict.
+        style_name: String,
+    },
+
+    /// A legacy heading type was supplied without enough information to build
+    /// a shared list reference.
+    #[error(
+        "style '{style_name}' uses unsupported legacy heading_type '{heading_type:?}'; use para_shape.list instead"
+    )]
+    UnsupportedLegacyHeadingType {
+        /// Style name that contains the legacy field.
+        style_name: String,
+        /// The unsupported legacy heading type.
+        heading_type: HeadingType,
+    },
+
     /// Propagated Foundation error.
     #[error(transparent)]
     Foundation(#[from] FoundationError),
@@ -219,6 +289,18 @@ impl BlueprintError {
             Self::InvalidTabReference { .. } => BlueprintErrorCode::InvalidTabReference,
             Self::DuplicateTabDefinition { .. } => BlueprintErrorCode::DuplicateTabDefinition,
             Self::InvalidTabDefinition { .. } => BlueprintErrorCode::InvalidTabDefinition,
+            Self::DuplicateNumberingDefinition { .. } => {
+                BlueprintErrorCode::DuplicateNumberingDefinition
+            }
+            Self::DuplicateBulletDefinition { .. } => BlueprintErrorCode::DuplicateBulletDefinition,
+            Self::InvalidListLevel { .. } => BlueprintErrorCode::InvalidListLevel,
+            Self::InvalidListReference { .. } => BlueprintErrorCode::InvalidListReference,
+            Self::ConflictingListSpecification { .. } => {
+                BlueprintErrorCode::ConflictingListSpecification
+            }
+            Self::UnsupportedLegacyHeadingType { .. } => {
+                BlueprintErrorCode::UnsupportedLegacyHeadingType
+            }
             Self::Foundation(_) => BlueprintErrorCode::YamlParse, // fallback
         }
     }

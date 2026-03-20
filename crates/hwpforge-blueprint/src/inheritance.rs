@@ -181,6 +181,9 @@ fn merge_templates(base: &Template, child: &Template) -> Template {
 
     // Tabs: child overrides parent definitions by id
     let merged_tabs = merge_tabs(&base.tabs, &child.tabs);
+    // Numberings/Bullets: child overrides parent definitions by id
+    let merged_numberings = merge_numberings(&base.numberings, &child.numberings);
+    let merged_bullets = merge_bullets(&base.bullets, &child.bullets);
 
     // Markdown mapping: field-level merge
     let merged_md =
@@ -191,6 +194,8 @@ fn merge_templates(base: &Template, child: &Template) -> Template {
         page: merged_page,
         styles: merged_styles,
         tabs: merged_tabs,
+        numberings: merged_numberings,
+        bullets: merged_bullets,
         markdown_mapping: merged_md,
     }
 }
@@ -205,6 +210,38 @@ fn merge_tabs(base: &[TemplateTabDef], child: &[TemplateTabDef]) -> Vec<Template
         }
     }
     merged.sort_by_key(|tab| tab.id);
+    merged
+}
+
+fn merge_numberings(
+    base: &[hwpforge_core::NumberingDef],
+    child: &[hwpforge_core::NumberingDef],
+) -> Vec<hwpforge_core::NumberingDef> {
+    let mut merged = base.to_vec();
+    for numbering in child {
+        if let Some(existing) = merged.iter_mut().find(|candidate| candidate.id == numbering.id) {
+            *existing = numbering.clone();
+        } else {
+            merged.push(numbering.clone());
+        }
+    }
+    merged.sort_by_key(|numbering| numbering.id);
+    merged
+}
+
+fn merge_bullets(
+    base: &[hwpforge_core::BulletDef],
+    child: &[hwpforge_core::BulletDef],
+) -> Vec<hwpforge_core::BulletDef> {
+    let mut merged = base.to_vec();
+    for bullet in child {
+        if let Some(existing) = merged.iter_mut().find(|candidate| candidate.id == bullet.id) {
+            *existing = bullet.clone();
+        } else {
+            merged.push(bullet.clone());
+        }
+    }
+    merged.sort_by_key(|bullet| bullet.id);
     merged
 }
 
@@ -283,6 +320,8 @@ mod tests {
             page: None,
             styles: styles.into_iter().map(|(k, v)| (k.to_string(), v)).collect(),
             tabs: vec![],
+            numberings: vec![],
+            bullets: vec![],
             markdown_mapping: None,
         }
     }
@@ -535,6 +574,8 @@ mod tests {
             page: Some(PageStyle::a4()),
             styles: IndexMap::new(),
             tabs: vec![],
+            numberings: vec![],
+            bullets: vec![],
             markdown_mapping: None,
         };
 
@@ -548,6 +589,8 @@ mod tests {
             page: Some(PageStyle::default()),
             styles: IndexMap::new(),
             tabs: vec![],
+            numberings: vec![],
+            bullets: vec![],
             markdown_mapping: None,
         };
 
@@ -574,6 +617,8 @@ mod tests {
             page: Some(PageStyle::a4()),
             styles: IndexMap::new(),
             tabs: vec![],
+            numberings: vec![],
+            bullets: vec![],
             markdown_mapping: None,
         };
 
@@ -587,6 +632,8 @@ mod tests {
             page: None, // No page in child
             styles: IndexMap::new(),
             tabs: vec![],
+            numberings: vec![],
+            bullets: vec![],
             markdown_mapping: None,
         };
 
@@ -611,6 +658,8 @@ mod tests {
             page: None,
             styles: IndexMap::new(),
             tabs: vec![],
+            numberings: vec![],
+            bullets: vec![],
             markdown_mapping: Some(MarkdownMapping {
                 heading1: Some("heading1".to_string()),
                 heading2: Some("heading2".to_string()),
@@ -628,6 +677,8 @@ mod tests {
             page: None,
             styles: IndexMap::new(),
             tabs: vec![],
+            numberings: vec![],
+            bullets: vec![],
             markdown_mapping: Some(MarkdownMapping {
                 heading1: Some("custom_h1".to_string()), // Override
                 heading3: Some("heading3".to_string()),  // Add new
@@ -733,6 +784,8 @@ mod tests {
                     leader: hwpforge_foundation::TabLeader::dot(),
                 }],
             }],
+            numberings: vec![],
+            bullets: vec![],
             markdown_mapping: None,
         };
         let child = Template {
@@ -766,6 +819,8 @@ mod tests {
                     }],
                 },
             ],
+            numberings: vec![],
+            bullets: vec![],
             markdown_mapping: None,
         };
         let provider =

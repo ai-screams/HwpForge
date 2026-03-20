@@ -104,7 +104,13 @@ pub fn run_convert(
             cs.font.clone_from(&preset_font);
         }
     }
-    let style_store = HwpxStyleStore::from_registry(&md_doc.style_registry);
+    let style_store = HwpxStyleStore::from_registry(&md_doc.style_registry).map_err(|e| {
+        ToolErrorInfo::new(
+            "STYLE_STORE_ERROR",
+            format!("Style store construction failed: {e}"),
+            "Check paragraph list references in the resolved style registry.",
+        )
+    })?;
     let image_store = ImageStore::new();
 
     let validated = md_doc.document.validate().map_err(|e| {

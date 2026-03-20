@@ -121,7 +121,8 @@ date: "2026-02-17"
     let template = builtin_default().expect("builtin_default failed");
     let md_doc = MdDecoder::decode(&markdown_for_encode, &template).expect("MD decode failed");
     let validated = md_doc.document.validate().expect("validation failed");
-    let store = HwpxStyleStore::from_registry(&md_doc.style_registry);
+    let store = HwpxStyleStore::from_registry(&md_doc.style_registry)
+        .expect("style store construction failed");
     let images = hwpforge_core::image::ImageStore::new();
     let hwpx_bytes = HwpxEncoder::encode(&validated, &store, &images).expect("HWPX encode failed");
 

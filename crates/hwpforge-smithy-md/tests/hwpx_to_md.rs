@@ -17,79 +17,113 @@ use zip::ZipWriter;
 
 // ── HWPX byte builders ────────────────────────────────────────────────────────
 
-/// Minimal `header.xml` with one font, one charPr, one paraPr.
-const MINIMAL_HEADER: &str = r##"<head version="1.4" secCnt="1">
-    <refList>
+const FONTFACES_XML: &str = r#"
         <fontfaces itemCnt="1">
             <fontface lang="HANGUL" fontCnt="1">
                 <font id="0" face="함초롬돋움" type="TTF" isEmbedded="0"/>
             </fontface>
         </fontfaces>
-        <charProperties itemCnt="1">
-            <charPr id="0" height="1000" textColor="#000000" shadeColor="none"
+"#;
+
+const DEFAULT_CHAR_PR_BODY: &str = r##"
+                    textColor="#000000" shadeColor="none"
                     useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="0">
                 <fontRef hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>
-            </charPr>
-        </charProperties>
-        <paraProperties itemCnt="1">
-            <paraPr id="0">
+"##;
+
+fn char_pr_xml(id: u32, height: u32) -> String {
+    format!(r#"<charPr id="{id}" height="{height}"{DEFAULT_CHAR_PR_BODY}</charPr>"#,)
+}
+
+fn para_pr_xml(id: u32, heading_xml: Option<&str>) -> String {
+    let heading = heading_xml.unwrap_or("");
+    format!(
+        r#"<paraPr id="{id}">
                 <align horizontal="LEFT" vertical="BASELINE"/>
+                {heading}
                 <switch><default>
                     <lineSpacing type="PERCENT" value="160"/>
                 </default></switch>
-            </paraPr>
-        </paraProperties>
+            </paraPr>"#,
+    )
+}
+
+fn style_xml(
+    id: u32,
+    name: &str,
+    eng_name: &str,
+    para_pr_id_ref: u32,
+    char_pr_id_ref: u32,
+    next_style_id_ref: u32,
+) -> String {
+    format!(
+        r#"<style id="{id}" type="PARA" name="{name}" engName="{eng_name}"
+                   paraPrIDRef="{para_pr_id_ref}" charPrIDRef="{char_pr_id_ref}"
+                   nextStyleIDRef="{next_style_id_ref}" lockForm="0"/>"#,
+    )
+}
+
+fn build_header_xml(char_prs: &[String], para_prs: &[String], styles: &[String]) -> String {
+    let char_properties = format!(
+        "<charProperties itemCnt=\"{}\">{}</charProperties>",
+        char_prs.len(),
+        char_prs.join("")
+    );
+    let para_properties = format!(
+        "<paraProperties itemCnt=\"{}\">{}</paraProperties>",
+        para_prs.len(),
+        para_prs.join("")
+    );
+    let styles_xml = if styles.is_empty() {
+        String::new()
+    } else {
+        format!("<styles itemCnt=\"{}\">{}</styles>", styles.len(), styles.join(""))
+    };
+
+    format!(
+        r#"<head version="1.4" secCnt="1">
+    <refList>{FONTFACES_XML}
+        {char_properties}
+        {para_properties}
+        {styles_xml}
     </refList>
-</head>"##;
+</head>"#,
+    )
+}
+
+/// Minimal `header.xml` with one font, one charPr, one paraPr.
+fn minimal_header() -> String {
+    let char_prs = vec![char_pr_xml(0, 1000)];
+    let para_prs = vec![para_pr_xml(0, None)];
+    build_header_xml(&char_prs, &para_prs, &[])
+}
 
 /// `header.xml` with heading styles (level 1 and 2) so `style_heading_level` is non-None.
-const HEADING_HEADER: &str = r##"<head version="1.4" secCnt="1">
-    <refList>
-        <fontfaces itemCnt="1">
-            <fontface lang="HANGUL" fontCnt="1">
-                <font id="0" face="함초롬돋움" type="TTF" isEmbedded="0"/>
-            </fontface>
-        </fontfaces>
-        <charProperties itemCnt="2">
-            <charPr id="0" height="1400" textColor="#000000" shadeColor="none"
-                    useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="0">
-                <fontRef hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>
-            </charPr>
-            <charPr id="1" height="1200" textColor="#000000" shadeColor="none"
-                    useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="0">
-                <fontRef hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>
-            </charPr>
-        </charProperties>
-        <paraProperties itemCnt="3">
-            <paraPr id="0">
-                <align horizontal="LEFT" vertical="BASELINE"/>
-                <switch><default>
-                    <lineSpacing type="PERCENT" value="160"/>
-                </default></switch>
-            </paraPr>
-            <paraPr id="1">
-                <align horizontal="LEFT" vertical="BASELINE"/>
-                <switch><default>
-                    <lineSpacing type="PERCENT" value="160"/>
-                </default></switch>
-            </paraPr>
-            <paraPr id="2">
-                <align horizontal="LEFT" vertical="BASELINE"/>
-                <switch><default>
-                    <lineSpacing type="PERCENT" value="160"/>
-                </default></switch>
-            </paraPr>
-        </paraProperties>
-        <styles itemCnt="3">
-            <style id="0" type="PARA" name="본문" engName="Normal"
-                   paraPrIDRef="0" charPrIDRef="0" nextStyleIDRef="0" lockForm="0"/>
-            <style id="1" type="PARA" name="개요 1" engName="Outline 1"
-                   paraPrIDRef="1" charPrIDRef="0" nextStyleIDRef="0" lockForm="0"/>
-            <style id="2" type="PARA" name="개요 2" engName="Outline 2"
-                   paraPrIDRef="2" charPrIDRef="1" nextStyleIDRef="0" lockForm="0"/>
-        </styles>
-    </refList>
-</head>"##;
+fn heading_header() -> String {
+    let char_prs = vec![char_pr_xml(0, 1400), char_pr_xml(1, 1200)];
+    let para_prs = vec![para_pr_xml(0, None), para_pr_xml(1, None), para_pr_xml(2, None)];
+    let styles = vec![
+        style_xml(0, "본문", "Normal", 0, 0, 0),
+        style_xml(1, "개요 1", "Outline 1", 1, 0, 0),
+        style_xml(2, "개요 2", "Outline 2", 2, 1, 0),
+    ];
+    build_header_xml(&char_prs, &para_prs, &styles)
+}
+
+/// `header.xml` with a custom-named style whose referenced paraPr carries
+/// explicit outline semantics.
+fn custom_outline_header() -> String {
+    let char_prs = vec![char_pr_xml(0, 1400)];
+    let para_prs = vec![
+        para_pr_xml(0, Some(r#"<heading type="OUTLINE" idRef="0" level="3"/>"#)),
+        para_pr_xml(1, None),
+    ];
+    let styles = vec![
+        style_xml(0, "맞춤 제목", "Custom Heading", 0, 0, 1),
+        style_xml(1, "본문", "Normal", 1, 0, 1),
+    ];
+    build_header_xml(&char_prs, &para_prs, &styles)
+}
 
 /// Builds a minimal HWPX ZIP from `header_xml` and a slice of section XML strings.
 fn make_hwpx(header_xml: &str, section_xmls: &[&str]) -> Vec<u8> {
@@ -163,18 +197,19 @@ fn basic_conversion_non_empty_output() {
         </p>
     </sec>"#;
 
-    let bytes = make_hwpx(MINIMAL_HEADER, &[section]);
+    let header = minimal_header();
+    let bytes = make_hwpx(&header, &[section]);
     let output = decode_and_convert(&bytes);
 
     assert!(!output.markdown.is_empty(), "markdown should not be empty");
     assert!(output.markdown.contains("안녕하세요"), "markdown should contain the paragraph text");
 }
 
-/// Heading detection: paragraphs whose style maps to a heading level emit `#` markers.
+/// Heading detection: paragraphs whose para-shape or style implies a heading
+/// level emit `#` markers.
 ///
-/// The styled encoder calls `style_heading_level(style_id)` via the lookup bridge.
-/// The `HwpxStyleStore` detects heading level from style names containing "개요 N"
-/// (Korean outline styles used by 한글 software for headings 1–6).
+/// The styled encoder prefers actual outline semantics on the referenced
+/// `paraPr`, then falls back to style-name heuristics like "개요 N".
 #[test]
 fn heading_detection_emits_hash_markers() {
     // Paragraph with styleIDRef="1" → "개요 1" → heading level 1 → "# ..."
@@ -187,7 +222,8 @@ fn heading_detection_emits_hash_markers() {
         </p>
     </sec>"#;
 
-    let bytes = make_hwpx(HEADING_HEADER, &[section]);
+    let header = heading_header();
+    let bytes = make_hwpx(&header, &[section]);
     let output = decode_and_convert(&bytes);
 
     assert!(
@@ -209,6 +245,74 @@ fn heading_detection_emits_hash_markers() {
             );
         }
     }
+}
+
+#[test]
+fn heading_detection_uses_outline_para_shape_even_for_custom_style_names() {
+    let section = r#"<sec>
+        <p paraPrIDRef="0" styleIDRef="0">
+            <run charPrIDRef="0"><t>맞춤 개요 제목</t></run>
+        </p>
+        <p paraPrIDRef="1" styleIDRef="1">
+            <run charPrIDRef="0"><t>본문입니다</t></run>
+        </p>
+    </sec>"#;
+
+    let header = custom_outline_header();
+    let bytes = make_hwpx(&header, &[section]);
+    let output = decode_and_convert(&bytes);
+
+    assert!(
+        output.markdown.contains("### 맞춤 개요 제목"),
+        "outline paraPr should produce heading markdown even with custom style name; got:\n{}",
+        output.markdown
+    );
+    assert!(
+        output.markdown.contains("본문입니다"),
+        "body paragraph should still be preserved; got:\n{}",
+        output.markdown
+    );
+}
+
+#[test]
+fn numbered_para_shape_beats_heading_like_style_name() {
+    let char_prs = vec![char_pr_xml(0, 1000)];
+    let para_prs = vec![
+        para_pr_xml(0, Some(r#"<heading type="NUMBER" idRef="2" level="0"/>"#)),
+        para_pr_xml(1, None),
+    ];
+    let styles =
+        vec![style_xml(0, "개요 2", "Outline 2", 0, 0, 1), style_xml(1, "본문", "Normal", 1, 0, 1)];
+    let header = build_header_xml(&char_prs, &para_prs, &styles);
+    let section = r#"<sec>
+        <p paraPrIDRef="0" styleIDRef="0">
+            <run charPrIDRef="0"><t>번호 문단</t></run>
+        </p>
+    </sec>"#;
+
+    let output = decode_and_convert(&make_hwpx(&header, &[section]));
+    assert_eq!(output.markdown.trim(), "1. 번호 문단");
+}
+
+#[test]
+fn nested_bullet_para_shape_preserves_indentation() {
+    let char_prs = vec![char_pr_xml(0, 1000)];
+    let para_prs = vec![
+        para_pr_xml(0, Some(r#"<heading type="BULLET" idRef="1" level="0"/>"#)),
+        para_pr_xml(1, Some(r#"<heading type="BULLET" idRef="1" level="2"/>"#)),
+    ];
+    let header = build_header_xml(&char_prs, &para_prs, &[]);
+    let section = r#"<sec>
+        <p paraPrIDRef="0">
+            <run charPrIDRef="0"><t>상위</t></run>
+        </p>
+        <p paraPrIDRef="1">
+            <run charPrIDRef="0"><t>하위</t></run>
+        </p>
+    </sec>"#;
+
+    let output = decode_and_convert(&make_hwpx(&header, &[section]));
+    assert_eq!(output.markdown, "- 상위\n\n    - 하위");
 }
 
 /// Table conversion: a table run should produce GFM table syntax or HTML table markup.
@@ -251,7 +355,8 @@ fn table_conversion_produces_table_output() {
         </p>
     </sec>"#;
 
-    let bytes = make_hwpx(MINIMAL_HEADER, &[section]);
+    let header = minimal_header();
+    let bytes = make_hwpx(&header, &[section]);
     let output = decode_and_convert(&bytes);
 
     // The styled encoder emits GFM pipe tables (no merges) or HTML <table>.
@@ -286,7 +391,8 @@ fn image_extraction_populates_images_map() {
         </p>
     </sec>"#;
 
-    let bytes = make_hwpx_with_image(MINIMAL_HEADER, &[section], "logo.png", &fake_png);
+    let header = minimal_header();
+    let bytes = make_hwpx_with_image(&header, &[section], "logo.png", &fake_png);
     let output = decode_and_convert(&bytes);
 
     // The styled encoder extracts images via `lookup.image_data(key)` and places them
@@ -335,7 +441,8 @@ fn multi_section_produces_section_markers() {
         <p paraPrIDRef="0"><run charPrIDRef="0"><t>두 번째 섹션</t></run></p>
     </sec>"#;
 
-    let bytes = make_hwpx(MINIMAL_HEADER, &[s0, s1]);
+    let header = minimal_header();
+    let bytes = make_hwpx(&header, &[s0, s1]);
     let output = decode_and_convert(&bytes);
 
     assert!(
@@ -420,7 +527,8 @@ fn empty_text_does_not_panic() {
         </p>
     </sec>"#;
 
-    let bytes = make_hwpx(MINIMAL_HEADER, &[section]);
+    let header = minimal_header();
+    let bytes = make_hwpx(&header, &[section]);
     // Should not panic.
     let output = decode_and_convert(&bytes);
     // The markdown may be empty or contain only whitespace/newlines for an empty paragraph.

@@ -911,7 +911,7 @@ mod tests {
     use hwpforge_core::paragraph::Paragraph;
     use hwpforge_core::run::Run;
     use hwpforge_core::table::Table;
-    use hwpforge_foundation::HwpUnit;
+    use hwpforge_foundation::{HeadingType, HwpUnit, NumberFormatType};
     use hwpforge_smithy_hwpx::HwpxDecoder;
 
     #[derive(Debug, Clone, Copy)]
@@ -1179,6 +1179,24 @@ mod tests {
                 count_shapes_in_run(run, layout);
             }
         }
+    }
+
+    fn collect_decoded_body_heading_triples(
+        decoded: &hwpforge_smithy_hwpx::HwpxDocument,
+    ) -> Vec<(HeadingType, u32, u32)> {
+        decoded
+            .document
+            .sections()
+            .iter()
+            .flat_map(|section| section.paragraphs.iter())
+            .map(|paragraph| {
+                let shape = decoded
+                    .style_store
+                    .para_shape(paragraph.para_shape_id)
+                    .expect("paragraph para shape should exist");
+                (shape.heading_type, shape.heading_id_ref, shape.heading_level)
+            })
+            .collect()
     }
 
     fn count_shapes_in_run(run: &Run, layout: &mut DecodedShapeLayout) {
@@ -1757,6 +1775,144 @@ mod tests {
         assert_eq!(
             table.rows[0].cells[0].paragraphs[0].runs[0].content.as_text(),
             Some("CELLLEFT\tCELLRIGHT")
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_bullet_list_preserves_bullet_semantics() {
+        let source = fixture_path("user_samples/sample-bullet-list.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-bullet-list.hwpx");
+        let warnings =
+            hwp5_to_hwpx(&source, &out).expect("user sample bullet list conversion should succeed");
+        assert!(warnings.is_empty(), "bullet list fixture should convert without warnings");
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let headings = collect_decoded_body_heading_triples(&decoded);
+        assert!(headings.contains(&(HeadingType::Bullet, 1, 0)));
+        assert_eq!(decoded.style_store.bullet_count(), 1);
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_numbered_list_preserves_numbering_semantics() {
+        let source = fixture_path("user_samples/sample-numbered-list.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-numbered-list.hwpx");
+        let warnings = hwp5_to_hwpx(&source, &out)
+            .expect("user sample numbered list conversion should succeed");
+        assert!(warnings.is_empty(), "numbered list fixture should convert without warnings");
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let headings = collect_decoded_body_heading_triples(&decoded);
+        assert!(headings.contains(&(HeadingType::Number, 2, 0)));
+        assert!(decoded.style_store.numbering_count() >= 2);
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_mixed_lists_preserves_all_list_kinds() {
+        let source = fixture_path("user_samples/sample-mixed-lists-with-outline.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-mixed-lists.hwpx");
+        let warnings =
+            hwp5_to_hwpx(&source, &out).expect("user sample mixed list conversion should succeed");
+        assert!(warnings.is_empty(), "mixed list fixture should convert without warnings");
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let headings = collect_decoded_body_heading_triples(&decoded);
+        assert!(headings.contains(&(HeadingType::Outline, 0, 1)));
+        assert!(headings.contains(&(HeadingType::Bullet, 1, 0)));
+        assert!(headings.contains(&(HeadingType::Number, 2, 0)));
+        assert!(headings.contains(&(HeadingType::Number, 3, 0)));
+        assert_eq!(decoded.style_store.bullet_count(), 1);
+        assert!(decoded.style_store.numbering_count() >= 3);
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_custom_number_formats_keep_distinct_ids() {
+        let source = fixture_path("user_samples/sample-numbered-list-custom-formats.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-numbered-custom-formats.hwpx");
+        let warnings = hwp5_to_hwpx(&source, &out)
+            .expect("user sample custom numbering conversion should succeed");
+        assert!(warnings.is_empty(), "custom numbering fixture should convert without warnings");
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let headings = collect_decoded_body_heading_triples(&decoded);
+        for id_ref in [2, 3, 4, 5] {
+            assert!(headings.contains(&(HeadingType::Number, id_ref, 0)));
+        }
+        assert!(decoded.style_store.numbering_count() >= 5);
+        let numberings: Vec<_> = decoded.style_store.iter_numberings().collect();
+        assert_eq!(numberings[1].levels[0].text, "^1)");
+        assert_eq!(numberings[2].levels[0].text, "(^1)");
+        assert_eq!(numberings[3].levels[2].text, "(^3)");
+        assert_eq!(numberings[4].levels[0].num_format, NumberFormatType::LatinCapital);
+        assert_eq!(numberings[4].levels[6].num_format, NumberFormatType::CircledLatinSmall);
+        assert_eq!(numberings[4].levels[6].text, "^7");
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_multilevel_list_projects_as_outline_levels() {
+        let source = fixture_path("user_samples/sample-numbered-list-multilevel.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-numbered-multilevel.hwpx");
+        let warnings = hwp5_to_hwpx(&source, &out)
+            .expect("user sample multilevel numbering conversion should succeed");
+        assert!(
+            warnings.is_empty(),
+            "multilevel numbering fixture should convert without warnings"
+        );
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let headings = collect_decoded_body_heading_triples(&decoded);
+        let outline_levels: Vec<_> = headings
+            .iter()
+            .filter_map(|(heading_type, id_ref, level)| {
+                if *heading_type == HeadingType::Outline && *id_ref == 0 {
+                    Some(*level)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert!(
+            outline_levels.len() >= 2,
+            "fixture should project at least two outline paragraphs"
+        );
+        assert!(outline_levels.contains(&1), "fixture should preserve first outline level as 1");
+        assert!(
+            outline_levels.iter().any(|level| *level > 1),
+            "fixture should preserve nested outline levels"
         );
 
         let _ = std::fs::remove_file(&out);

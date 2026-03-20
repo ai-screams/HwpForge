@@ -26,8 +26,10 @@ use indexmap::IndexMap;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use hwpforge_core::TabDef;
-use hwpforge_foundation::{CharShapeIndex, FontId, FontIndex, ParaShapeIndex};
+use hwpforge_core::{BulletDef, NumberingDef, TabDef};
+use hwpforge_foundation::{
+    BulletIndex, CharShapeIndex, FontId, FontIndex, NumberingIndex, ParaShapeIndex,
+};
 
 use crate::error::{BlueprintError, BlueprintResult};
 use crate::style::{CharShape, ParaShape, PartialStyle};
@@ -89,6 +91,12 @@ pub struct StyleRegistry {
     /// Shared tab definitions referenced by paragraph shapes.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tabs: Vec<TabDef>,
+    /// Shared numbering definitions referenced by paragraph shapes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub numberings: Vec<NumberingDef>,
+    /// Shared bullet definitions referenced by paragraph shapes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bullets: Vec<BulletDef>,
     /// Mapping from style name to its indices (insertion-order preserved).
     pub style_entries: IndexMap<String, StyleEntry>,
 }
@@ -105,6 +113,8 @@ impl StyleRegistry {
             char_shapes: vec![],
             para_shapes: vec![],
             tabs: vec![],
+            numberings: vec![],
+            bullets: vec![],
             style_entries: IndexMap::new(),
         }
     }
@@ -141,24 +151,29 @@ impl StyleRegistry {
         }
 
         validate_template_style_names(&template.styles)?;
+        validate_numbering_definitions(&template.numberings)?;
+        validate_bullet_definitions(&template.bullets)?;
 
         let mut fonts = Vec::new();
         let mut char_shapes = Vec::new();
         let mut para_shapes = Vec::new();
         let mut style_entries = IndexMap::new();
         let tabs = validate_tabs(&template.tabs)?;
+        let numberings = template.numberings.clone();
+        let bullets = template.bullets.clone();
         let mut font_indices: BTreeMap<String, FontIndex> = BTreeMap::new();
+        let mut build_ctx = RegistryBuildCtx {
+            tabs: &tabs,
+            numberings: &numberings,
+            bullets: &bullets,
+            fonts: &mut fonts,
+            char_shapes: &mut char_shapes,
+            para_shapes: &mut para_shapes,
+            font_indices: &mut font_indices,
+        };
 
         for (style_name, partial_style) in &template.styles {
-            let style_entry = build_style_entry(
-                style_name,
-                partial_style,
-                &tabs,
-                &mut fonts,
-                &mut char_shapes,
-                &mut para_shapes,
-                &mut font_indices,
-            )?;
+            let style_entry = build_style_entry(&mut build_ctx, style_name, partial_style)?;
             style_entries.insert(style_name.clone(), style_entry);
         }
 
@@ -167,7 +182,15 @@ impl StyleRegistry {
             validate_mapping_references(md, &style_entries)?;
         }
 
-        Ok(StyleRegistry { fonts, char_shapes, para_shapes, tabs, style_entries })
+        Ok(StyleRegistry {
+            fonts,
+            char_shapes,
+            para_shapes,
+            tabs,
+            numberings,
+            bullets,
+            style_entries,
+        })
     }
 
     /// Looks up a style by name.
@@ -198,6 +221,16 @@ impl StyleRegistry {
         self.fonts.get(idx.get())
     }
 
+    /// Retrieves a numbering definition by index.
+    pub fn numbering(&self, idx: NumberingIndex) -> Option<&NumberingDef> {
+        self.numberings.get(idx.get())
+    }
+
+    /// Retrieves a bullet definition by index.
+    pub fn bullet(&self, idx: BulletIndex) -> Option<&BulletDef> {
+        self.bullets.get(idx.get())
+    }
+
     /// Returns the number of unique fonts.
     pub fn font_count(&self) -> usize {
         self.fonts.len()
@@ -218,6 +251,16 @@ impl StyleRegistry {
         self.tabs.len()
     }
 
+    /// Returns the number of shared numbering definitions.
+    pub fn numbering_count(&self) -> usize {
+        self.numberings.len()
+    }
+
+    /// Returns the number of shared bullet definitions.
+    pub fn bullet_count(&self) -> usize {
+        self.bullets.len()
+    }
+
     /// Returns the number of named styles.
     pub fn style_count(&self) -> usize {
         self.style_entries.len()
@@ -231,25 +274,31 @@ fn validate_template_style_names(styles: &IndexMap<String, PartialStyle>) -> Blu
     Ok(())
 }
 
+struct RegistryBuildCtx<'a> {
+    tabs: &'a [TabDef],
+    numberings: &'a [NumberingDef],
+    bullets: &'a [BulletDef],
+    fonts: &'a mut Vec<FontId>,
+    char_shapes: &'a mut Vec<CharShape>,
+    para_shapes: &'a mut Vec<ParaShape>,
+    font_indices: &'a mut BTreeMap<String, FontIndex>,
+}
+
 fn build_style_entry(
+    ctx: &mut RegistryBuildCtx<'_>,
     style_name: &str,
     partial_style: &PartialStyle,
-    tabs: &[TabDef],
-    fonts: &mut Vec<FontId>,
-    char_shapes: &mut Vec<CharShape>,
-    para_shapes: &mut Vec<ParaShape>,
-    font_indices: &mut BTreeMap<String, FontIndex>,
 ) -> BlueprintResult<StyleEntry> {
     let char_shape = resolve_char_shape(style_name, partial_style)?;
-    let para_shape = resolve_para_shape(partial_style)?;
-    validate_tab_reference(style_name, para_shape.tab_def_id, tabs)?;
+    let para_shape = resolve_para_shape(style_name, partial_style, ctx.numberings, ctx.bullets)?;
+    validate_tab_reference(style_name, para_shape.tab_def_id, ctx.tabs)?;
 
-    let font_id = intern_font(fonts, font_indices, &char_shape.font)?;
-    let char_shape_id = CharShapeIndex::new(char_shapes.len());
-    char_shapes.push(char_shape);
+    let font_id = intern_font(ctx.fonts, ctx.font_indices, &char_shape.font)?;
+    let char_shape_id = CharShapeIndex::new(ctx.char_shapes.len());
+    ctx.char_shapes.push(char_shape);
 
-    let para_shape_id = ParaShapeIndex::new(para_shapes.len());
-    para_shapes.push(para_shape);
+    let para_shape_id = ParaShapeIndex::new(ctx.para_shapes.len());
+    ctx.para_shapes.push(para_shape);
 
     Ok(StyleEntry { char_shape_id, para_shape_id, font_id })
 }
@@ -268,12 +317,17 @@ fn resolve_char_shape(
         .resolve(style_name)
 }
 
-fn resolve_para_shape(partial_style: &PartialStyle) -> BlueprintResult<ParaShape> {
-    Ok(partial_style
+fn resolve_para_shape(
+    style_name: &str,
+    partial_style: &PartialStyle,
+    numberings: &[NumberingDef],
+    bullets: &[BulletDef],
+) -> BlueprintResult<ParaShape> {
+    partial_style
         .para_shape
         .as_ref()
         .map_or_else(crate::style::PartialParaShape::default, Clone::clone)
-        .resolve())
+        .resolve(style_name, numberings, bullets)
 }
 
 fn intern_font(
@@ -365,6 +419,26 @@ fn validate_tabs(tabs: &[TemplateTabDef]) -> BlueprintResult<Vec<TabDef>> {
     Ok(tabs.iter().map(Into::into).collect())
 }
 
+fn validate_numbering_definitions(numberings: &[NumberingDef]) -> BlueprintResult<()> {
+    let mut seen = BTreeMap::new();
+    for numbering in numberings {
+        if seen.insert(numbering.id, ()).is_some() {
+            return Err(BlueprintError::DuplicateNumberingDefinition { id: numbering.id });
+        }
+    }
+    Ok(())
+}
+
+fn validate_bullet_definitions(bullets: &[BulletDef]) -> BlueprintResult<()> {
+    let mut seen = BTreeMap::new();
+    for bullet in bullets {
+        if seen.insert(bullet.id, ()).is_some() {
+            return Err(BlueprintError::DuplicateBulletDefinition { id: bullet.id });
+        }
+    }
+    Ok(())
+}
+
 fn validate_tab_stops(tab: &TemplateTabDef) -> BlueprintResult<()> {
     let mut previous: Option<i32> = None;
     for (idx, stop) in tab.stops.iter().enumerate() {
@@ -438,6 +512,8 @@ mod tests {
             page: None,
             styles,
             tabs: vec![],
+            numberings: vec![],
+            bullets: vec![],
             markdown_mapping: None,
         }
     }
@@ -770,6 +846,8 @@ mod tests {
             page: None,
             styles,
             tabs: vec![],
+            numberings: vec![],
+            bullets: vec![],
             markdown_mapping: Some(crate::template::MarkdownMapping {
                 body: Some("body".to_string()),
                 heading1: Some("heading".to_string()),
@@ -818,6 +896,8 @@ mod tests {
                     leader: hwpforge_foundation::TabLeader::dot(),
                 }],
             }],
+            numberings: vec![],
+            bullets: vec![],
             markdown_mapping: None,
         };
 
@@ -873,6 +953,8 @@ mod tests {
                     leader: hwpforge_foundation::TabLeader::dot(),
                 }],
             }],
+            numberings: vec![],
+            bullets: vec![],
             markdown_mapping: None,
         };
 
@@ -904,6 +986,8 @@ mod tests {
             page: None,
             styles,
             tabs: vec![mk_tab(), mk_tab()],
+            numberings: vec![],
+            bullets: vec![],
             markdown_mapping: None,
         };
 
@@ -941,6 +1025,8 @@ mod tests {
                     },
                 ],
             }],
+            numberings: vec![],
+            bullets: vec![],
             markdown_mapping: None,
         };
 
@@ -978,6 +1064,8 @@ mod tests {
                     },
                 ],
             }],
+            numberings: vec![],
+            bullets: vec![],
             markdown_mapping: None,
         };
 
@@ -1008,6 +1096,8 @@ mod tests {
                     leader: hwpforge_foundation::TabLeader::none(),
                 }],
             }],
+            numberings: vec![],
+            bullets: vec![],
             markdown_mapping: None,
         };
 
@@ -1030,6 +1120,8 @@ mod tests {
             page: None,
             styles,
             tabs: vec![],
+            numberings: vec![],
+            bullets: vec![],
             markdown_mapping: Some(crate::template::MarkdownMapping {
                 body: Some("body".to_string()),
                 heading1: Some("nonexistent".to_string()), // Invalid!

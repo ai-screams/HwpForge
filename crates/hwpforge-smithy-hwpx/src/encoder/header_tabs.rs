@@ -145,7 +145,7 @@ tabs:
 "#;
         let template = Template::from_yaml(yaml).unwrap();
         let registry = StyleRegistry::from_template(&template).unwrap();
-        let store = HwpxStyleStore::from_registry(&registry);
+        let store = HwpxStyleStore::from_registry(&registry).unwrap();
 
         let xml = build_tab_properties_xml(&store).unwrap();
 

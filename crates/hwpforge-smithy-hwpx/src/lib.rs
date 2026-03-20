@@ -56,6 +56,7 @@ mod encoder;
 pub mod error;
 pub mod exchange;
 mod inline_text;
+mod list_bridge;
 mod patch;
 pub mod presets;
 mod schema;

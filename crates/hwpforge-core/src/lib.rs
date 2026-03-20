@@ -111,7 +111,7 @@ pub use document::{Document, Draft, Validated};
 pub use error::{CoreError, CoreErrorCode, CoreResult, ValidationError};
 pub use image::{Image, ImageFormat, ImageStore};
 pub use metadata::Metadata;
-pub use numbering::{NumberingDef, ParaHead};
+pub use numbering::{BulletDef, NumberingDef, ParaHead, ParagraphListRef};
 pub use page::PageSettings;
 pub use paragraph::Paragraph;
 pub use run::{Run, RunContent};
