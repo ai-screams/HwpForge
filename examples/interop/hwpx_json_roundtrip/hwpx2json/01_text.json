@@ -1,0 +1,955 @@
+{
+  "document": {
+    "sections": [
+      {
+        "paragraphs": [
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "01. 기본 텍스트"
+                },
+                "char_shape_id": 2
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Image": {
+                    "path": "BinData/image1",
+                    "width": 17008,
+                    "height": 17008,
+                    "format": {
+                      "Unknown": "image1"
+                    },
+                    "caption": {
+                      "side": "Bottom",
+                      "width": 17008,
+                      "gap": 850,
+                      "paragraphs": [
+                        {
+                          "runs": [
+                            {
+                              "content": {
+                                "Text": "쇠부리 (SoeBuri) — 한컴 문서를 불에 달구어 단단하게 벨려내는 대장장이 오리너구리"
+                              },
+                              "char_shape_id": 5
+                            }
+                          ],
+                          "para_shape_id": 1,
+                          "column_break": false,
+                          "page_break": false
+                        }
+                      ]
+                    },
+                    "placement": {
+                      "text_wrap": "TopAndBottom",
+                      "text_flow": "BothSides",
+                      "treat_as_char": true,
+                      "flow_with_text": false,
+                      "allow_overlap": false,
+                      "vert_rel_to": "Para",
+                      "horz_rel_to": "Para",
+                      "vert_offset": 0,
+                      "horz_offset": 0
+                    }
+                  }
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 1,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "기본 텍스트 출력 기능을 확인합니다."
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "첫 번째 문단입니다. 한글 문서의 기본 텍스트 출력을 테스트합니다."
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "두 번째 문단입니다. 오른쪽 정렬을 적용했습니다."
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 2,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "한글 English 漢字 혼합 텍스트: Mixed-language text 테스트입니다."
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": ""
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "이것은 매우 긴 문단입니다. 워드랩 기능을 테스트하기 위해 작성되었습니다. HwpForge는 Rust로 작성된 한글 문서 생성 라이브러리입니다. AI 에이전트가 한글 문서를 프로그래매틱하게 생성할 수 있도록 설계되었습니다. 이 문단은 150자 이상으로 작성되어 자동 줄바꾼이 정상적으로 동작하는지 확인합니다."
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "이 문단은 새 페이지에서 시작됩니다. page_break = true 설정."
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": true
+          },
+          {
+            "runs": [
+              {
+                "content": {
+                  "Text": "페이지 브레이크 이후의 추가 내용입니다."
+                },
+                "char_shape_id": 0
+              }
+            ],
+            "para_shape_id": 0,
+            "column_break": false,
+            "page_break": false
+          }
+        ],
+        "page_settings": {
+          "width": 59528,
+          "height": 84189,
+          "margin_left": 5669,
+          "margin_right": 5669,
+          "margin_top": 5669,
+          "margin_bottom": 5669,
+          "header_margin": 2835,
+          "footer_margin": 2835,
+          "gutter_type": "LeftOnly",
+          "mirror_margins": false,
+          "landscape": false
+        },
+        "visibility": {
+          "hide_first_header": false,
+          "hide_first_footer": false,
+          "hide_first_master_page": false,
+          "hide_first_page_num": false,
+          "hide_first_empty_line": false,
+          "show_line_number": false,
+          "border": "ShowAll",
+          "fill": "ShowAll"
+        },
+        "line_number_shape": {
+          "restart_type": 0,
+          "count_by": 0,
+          "distance": 0,
+          "start_number": 0
+        },
+        "page_border_fills": [
+          {
+            "apply_type": "BOTH",
+            "border_fill_id": 1,
+            "text_border": "PAPER",
+            "header_inside": false,
+            "footer_inside": false,
+            "fill_area": "PAPER",
+            "offset": [
+              1417,
+              1417,
+              1417,
+              1417
+            ]
+          },
+          {
+            "apply_type": "EVEN",
+            "border_fill_id": 1,
+            "text_border": "PAPER",
+            "header_inside": false,
+            "footer_inside": false,
+            "fill_area": "PAPER",
+            "offset": [
+              1417,
+              1417,
+              1417,
+              1417
+            ]
+          },
+          {
+            "apply_type": "ODD",
+            "border_fill_id": 1,
+            "text_border": "PAPER",
+            "header_inside": false,
+            "footer_inside": false,
+            "fill_area": "PAPER",
+            "offset": [
+              1417,
+              1417,
+              1417,
+              1417
+            ]
+          }
+        ],
+        "begin_num": {
+          "page": 0,
+          "footnote": 1,
+          "endnote": 1,
+          "pic": 0,
+          "tbl": 0,
+          "equation": 0
+        },
+        "text_direction": "Horizontal"
+      }
+    ],
+    "metadata": {
+      "title": null,
+      "author": null,
+      "subject": null,
+      "keywords": [],
+      "created": null,
+      "modified": null
+    }
+  },
+  "styles": {
+    "style_set": "Modern",
+    "fonts": [
+      {
+        "id": 0,
+        "face_name": "함초롬바탕",
+        "lang": "HANGUL"
+      },
+      {
+        "id": 0,
+        "face_name": "함초롬바탕",
+        "lang": "LATIN"
+      },
+      {
+        "id": 0,
+        "face_name": "함초롬바탕",
+        "lang": "HANJA"
+      },
+      {
+        "id": 0,
+        "face_name": "함초롬바탕",
+        "lang": "JAPANESE"
+      },
+      {
+        "id": 0,
+        "face_name": "함초롬바탕",
+        "lang": "OTHER"
+      },
+      {
+        "id": 0,
+        "face_name": "함초롬바탕",
+        "lang": "SYMBOL"
+      },
+      {
+        "id": 0,
+        "face_name": "함초롬바탕",
+        "lang": "USER"
+      }
+    ],
+    "char_shapes": [
+      {
+        "font_ref": {
+          "hangul": 0,
+          "latin": 0,
+          "hanja": 0,
+          "japanese": 0,
+          "other": 0,
+          "symbol": 0,
+          "user": 0
+        },
+        "height": 1000,
+        "text_color": 0,
+        "shade_color": null,
+        "bold": false,
+        "italic": false,
+        "underline_type": "None",
+        "underline_color": null,
+        "strikeout_shape": "None",
+        "strikeout_color": null,
+        "vertical_position": "Normal",
+        "outline_type": "None",
+        "shadow_type": "None",
+        "emboss_type": "None",
+        "engrave_type": "None",
+        "emphasis": "None",
+        "ratio": 100,
+        "spacing": 0,
+        "rel_sz": 100,
+        "char_offset": 0,
+        "use_kerning": false,
+        "use_font_space": false,
+        "border_fill_id": null
+      },
+      {
+        "font_ref": {
+          "hangul": 0,
+          "latin": 0,
+          "hanja": 0,
+          "japanese": 0,
+          "other": 0,
+          "symbol": 0,
+          "user": 0
+        },
+        "height": 1200,
+        "text_color": 0,
+        "shade_color": null,
+        "bold": true,
+        "italic": false,
+        "underline_type": "None",
+        "underline_color": null,
+        "strikeout_shape": "None",
+        "strikeout_color": null,
+        "vertical_position": "Normal",
+        "outline_type": "None",
+        "shadow_type": "None",
+        "emboss_type": "None",
+        "engrave_type": "None",
+        "emphasis": "None",
+        "ratio": 100,
+        "spacing": 0,
+        "rel_sz": 100,
+        "char_offset": 0,
+        "use_kerning": false,
+        "use_font_space": false,
+        "border_fill_id": null
+      },
+      {
+        "font_ref": {
+          "hangul": 0,
+          "latin": 0,
+          "hanja": 0,
+          "japanese": 0,
+          "other": 0,
+          "symbol": 0,
+          "user": 0
+        },
+        "height": 1600,
+        "text_color": 0,
+        "shade_color": null,
+        "bold": true,
+        "italic": false,
+        "underline_type": "None",
+        "underline_color": null,
+        "strikeout_shape": "None",
+        "strikeout_color": null,
+        "vertical_position": "Normal",
+        "outline_type": "None",
+        "shadow_type": "None",
+        "emboss_type": "None",
+        "engrave_type": "None",
+        "emphasis": "None",
+        "ratio": 100,
+        "spacing": 0,
+        "rel_sz": 100,
+        "char_offset": 0,
+        "use_kerning": false,
+        "use_font_space": false,
+        "border_fill_id": null
+      },
+      {
+        "font_ref": {
+          "hangul": 0,
+          "latin": 0,
+          "hanja": 0,
+          "japanese": 0,
+          "other": 0,
+          "symbol": 0,
+          "user": 0
+        },
+        "height": 1000,
+        "text_color": 200,
+        "shade_color": null,
+        "bold": false,
+        "italic": false,
+        "underline_type": "None",
+        "underline_color": null,
+        "strikeout_shape": "None",
+        "strikeout_color": null,
+        "vertical_position": "Normal",
+        "outline_type": "None",
+        "shadow_type": "None",
+        "emboss_type": "None",
+        "engrave_type": "None",
+        "emphasis": "None",
+        "ratio": 100,
+        "spacing": 0,
+        "rel_sz": 100,
+        "char_offset": 0,
+        "use_kerning": false,
+        "use_font_space": false,
+        "border_fill_id": null
+      },
+      {
+        "font_ref": {
+          "hangul": 0,
+          "latin": 0,
+          "hanja": 0,
+          "japanese": 0,
+          "other": 0,
+          "symbol": 0,
+          "user": 0
+        },
+        "height": 1000,
+        "text_color": 13107200,
+        "shade_color": null,
+        "bold": false,
+        "italic": false,
+        "underline_type": "None",
+        "underline_color": null,
+        "strikeout_shape": "None",
+        "strikeout_color": null,
+        "vertical_position": "Normal",
+        "outline_type": "None",
+        "shadow_type": "None",
+        "emboss_type": "None",
+        "engrave_type": "None",
+        "emphasis": "None",
+        "ratio": 100,
+        "spacing": 0,
+        "rel_sz": 100,
+        "char_offset": 0,
+        "use_kerning": false,
+        "use_font_space": false,
+        "border_fill_id": null
+      },
+      {
+        "font_ref": {
+          "hangul": 0,
+          "latin": 0,
+          "hanja": 0,
+          "japanese": 0,
+          "other": 0,
+          "symbol": 0,
+          "user": 0
+        },
+        "height": 800,
+        "text_color": 8421504,
+        "shade_color": null,
+        "bold": false,
+        "italic": false,
+        "underline_type": "None",
+        "underline_color": null,
+        "strikeout_shape": "None",
+        "strikeout_color": null,
+        "vertical_position": "Normal",
+        "outline_type": "None",
+        "shadow_type": "None",
+        "emboss_type": "None",
+        "engrave_type": "None",
+        "emphasis": "None",
+        "ratio": 100,
+        "spacing": 0,
+        "rel_sz": 100,
+        "char_offset": 0,
+        "use_kerning": false,
+        "use_font_space": false,
+        "border_fill_id": null
+      },
+      {
+        "font_ref": {
+          "hangul": 0,
+          "latin": 0,
+          "hanja": 0,
+          "japanese": 0,
+          "other": 0,
+          "symbol": 0,
+          "user": 0
+        },
+        "height": 1000,
+        "text_color": 12673797,
+        "shade_color": null,
+        "bold": false,
+        "italic": false,
+        "underline_type": "Bottom",
+        "underline_color": 12673797,
+        "strikeout_shape": "None",
+        "strikeout_color": null,
+        "vertical_position": "Normal",
+        "outline_type": "None",
+        "shadow_type": "None",
+        "emboss_type": "None",
+        "engrave_type": "None",
+        "emphasis": "None",
+        "ratio": 100,
+        "spacing": 0,
+        "rel_sz": 100,
+        "char_offset": 0,
+        "use_kerning": false,
+        "use_font_space": false,
+        "border_fill_id": null
+      },
+      {
+        "font_ref": {
+          "hangul": 0,
+          "latin": 0,
+          "hanja": 0,
+          "japanese": 0,
+          "other": 0,
+          "symbol": 0,
+          "user": 0
+        },
+        "height": 1000,
+        "text_color": 16777215,
+        "shade_color": null,
+        "bold": true,
+        "italic": false,
+        "underline_type": "None",
+        "underline_color": null,
+        "strikeout_shape": "None",
+        "strikeout_color": null,
+        "vertical_position": "Normal",
+        "outline_type": "None",
+        "shadow_type": "None",
+        "emboss_type": "None",
+        "engrave_type": "None",
+        "emphasis": "None",
+        "ratio": 100,
+        "spacing": 0,
+        "rel_sz": 100,
+        "char_offset": 0,
+        "use_kerning": false,
+        "use_font_space": false,
+        "border_fill_id": null
+      }
+    ],
+    "para_shapes": [
+      {
+        "alignment": "Left",
+        "margin_left": 0,
+        "margin_right": 0,
+        "indent": 0,
+        "spacing_before": 0,
+        "spacing_after": 0,
+        "line_spacing": 160,
+        "line_spacing_type": "Percentage",
+        "break_type": "None",
+        "keep_with_next": false,
+        "keep_lines_together": false,
+        "widow_orphan": true,
+        "break_latin_word": "KeepWord",
+        "break_non_latin_word": "KeepWord",
+        "border_fill_id": null,
+        "heading_type": "None",
+        "heading_id_ref": 0,
+        "heading_level": 0,
+        "checked": false,
+        "tab_pr_id_ref": 0,
+        "condense": 0
+      },
+      {
+        "alignment": "Center",
+        "margin_left": 0,
+        "margin_right": 0,
+        "indent": 0,
+        "spacing_before": 0,
+        "spacing_after": 0,
+        "line_spacing": 160,
+        "line_spacing_type": "Percentage",
+        "break_type": "None",
+        "keep_with_next": false,
+        "keep_lines_together": false,
+        "widow_orphan": true,
+        "break_latin_word": "KeepWord",
+        "break_non_latin_word": "KeepWord",
+        "border_fill_id": null,
+        "heading_type": "None",
+        "heading_id_ref": 0,
+        "heading_level": 0,
+        "checked": false,
+        "tab_pr_id_ref": 0,
+        "condense": 0
+      },
+      {
+        "alignment": "Right",
+        "margin_left": 0,
+        "margin_right": 0,
+        "indent": 0,
+        "spacing_before": 0,
+        "spacing_after": 0,
+        "line_spacing": 160,
+        "line_spacing_type": "Percentage",
+        "break_type": "None",
+        "keep_with_next": false,
+        "keep_lines_together": false,
+        "widow_orphan": true,
+        "break_latin_word": "KeepWord",
+        "break_non_latin_word": "KeepWord",
+        "border_fill_id": null,
+        "heading_type": "None",
+        "heading_id_ref": 0,
+        "heading_level": 0,
+        "checked": false,
+        "tab_pr_id_ref": 0,
+        "condense": 0
+      }
+    ],
+    "styles": [
+      {
+        "id": 0,
+        "style_type": "PARA",
+        "name": "바탕글",
+        "eng_name": "Normal",
+        "para_pr_id_ref": 0,
+        "char_pr_id_ref": 0,
+        "next_style_id_ref": 0,
+        "lang_id": 1042,
+        "lock_form": 0
+      }
+    ],
+    "border_fills": [
+      {
+        "id": 1,
+        "three_d": false,
+        "shadow": false,
+        "center_line": "NONE",
+        "left": {
+          "line_type": "NONE",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "right": {
+          "line_type": "NONE",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "top": {
+          "line_type": "NONE",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "bottom": {
+          "line_type": "NONE",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "diagonal": {
+          "line_type": "SOLID",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "slash_type": "NONE",
+        "back_slash_type": "NONE",
+        "slash": {
+          "border_type": "NONE",
+          "crooked": false,
+          "is_counter": false
+        },
+        "back_slash": {
+          "border_type": "NONE",
+          "crooked": false,
+          "is_counter": false
+        },
+        "fill": null,
+        "fill_hatch_style": null,
+        "gradient_fill": null,
+        "image_fill": null
+      },
+      {
+        "id": 2,
+        "three_d": false,
+        "shadow": false,
+        "center_line": "NONE",
+        "left": {
+          "line_type": "NONE",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "right": {
+          "line_type": "NONE",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "top": {
+          "line_type": "NONE",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "bottom": {
+          "line_type": "NONE",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "diagonal": {
+          "line_type": "SOLID",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "slash_type": "NONE",
+        "back_slash_type": "NONE",
+        "slash": {
+          "border_type": "NONE",
+          "crooked": false,
+          "is_counter": false
+        },
+        "back_slash": {
+          "border_type": "NONE",
+          "crooked": false,
+          "is_counter": false
+        },
+        "fill": {
+          "WinBrush": {
+            "face_color": "none",
+            "hatch_color": "#FF000000",
+            "alpha": "0"
+          }
+        },
+        "fill_hatch_style": null,
+        "gradient_fill": null,
+        "image_fill": null
+      },
+      {
+        "id": 3,
+        "three_d": false,
+        "shadow": false,
+        "center_line": "NONE",
+        "left": {
+          "line_type": "SOLID",
+          "width": "0.12 mm",
+          "color": "#000000"
+        },
+        "right": {
+          "line_type": "SOLID",
+          "width": "0.12 mm",
+          "color": "#000000"
+        },
+        "top": {
+          "line_type": "SOLID",
+          "width": "0.12 mm",
+          "color": "#000000"
+        },
+        "bottom": {
+          "line_type": "SOLID",
+          "width": "0.12 mm",
+          "color": "#000000"
+        },
+        "diagonal": {
+          "line_type": "SOLID",
+          "width": "0.1 mm",
+          "color": "#000000"
+        },
+        "slash_type": "NONE",
+        "back_slash_type": "NONE",
+        "slash": {
+          "border_type": "NONE",
+          "crooked": false,
+          "is_counter": false
+        },
+        "back_slash": {
+          "border_type": "NONE",
+          "crooked": false,
+          "is_counter": false
+        },
+        "fill": null,
+        "fill_hatch_style": null,
+        "gradient_fill": null,
+        "image_fill": null
+      }
+    ],
+    "numberings": [
+      {
+        "id": 1,
+        "start": 0,
+        "levels": [
+          {
+            "start": 1,
+            "level": 1,
+            "num_format": "Digit",
+            "text": "^1.",
+            "checkable": false
+          },
+          {
+            "start": 1,
+            "level": 2,
+            "num_format": "HangulSyllable",
+            "text": "^2.",
+            "checkable": false
+          },
+          {
+            "start": 1,
+            "level": 3,
+            "num_format": "Digit",
+            "text": "^3)",
+            "checkable": false
+          },
+          {
+            "start": 1,
+            "level": 4,
+            "num_format": "HangulSyllable",
+            "text": "^4)",
+            "checkable": false
+          },
+          {
+            "start": 1,
+            "level": 5,
+            "num_format": "Digit",
+            "text": "(^5)",
+            "checkable": false
+          },
+          {
+            "start": 1,
+            "level": 6,
+            "num_format": "HangulSyllable",
+            "text": "(^6)",
+            "checkable": false
+          },
+          {
+            "start": 1,
+            "level": 7,
+            "num_format": "CircledDigit",
+            "text": "^7",
+            "checkable": true
+          },
+          {
+            "start": 1,
+            "level": 8,
+            "num_format": "CircledHangulSyllable",
+            "text": "^8",
+            "checkable": true
+          },
+          {
+            "start": 1,
+            "level": 9,
+            "num_format": "HangulJamo",
+            "text": "",
+            "checkable": false
+          },
+          {
+            "start": 1,
+            "level": 10,
+            "num_format": "RomanSmall",
+            "text": "",
+            "checkable": true
+          }
+        ]
+      }
+    ],
+    "bullets": [],
+    "tabs": [
+      {
+        "id": 0,
+        "auto_tab_left": false,
+        "auto_tab_right": false
+      },
+      {
+        "id": 1,
+        "auto_tab_left": true,
+        "auto_tab_right": false
+      },
+      {
+        "id": 2,
+        "auto_tab_left": false,
+        "auto_tab_right": true
+      }
+    ]
+  }
+}

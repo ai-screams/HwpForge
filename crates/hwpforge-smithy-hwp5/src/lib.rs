@@ -49,6 +49,9 @@ mod style_store_border_fill;
 mod style_store_convert;
 mod table_cell_vertical_align;
 mod table_page_break;
+#[cfg(test)]
+/// Test-only helpers for resolving shared workspace fixtures.
+pub(crate) mod test_support;
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -956,7 +959,7 @@ mod tests {
     }
 
     fn fixture_path(name: &str) -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures").join(name)
+        crate::test_support::workspace_fixture_path(name)
     }
 
     fn unique_temp_path(file_name: &str) -> PathBuf {
@@ -1715,7 +1718,7 @@ mod tests {
 
     #[test]
     fn hwp5_to_hwpx_user_sample_tab_preserves_inline_tab_text_and_custom_tab_def() {
-        let source = fixture_path("user_samples/sample-tab.hwp");
+        let source = fixture_path("user_samples/tabs/sample-tab.hwp");
         if !source.exists() {
             return;
         }
@@ -1749,7 +1752,7 @@ mod tests {
 
     #[test]
     fn hwp5_to_hwpx_user_sample_table_tab_preserves_inline_tab_text_in_cell() {
-        let source = fixture_path("user_samples/sample-table-tab.hwp");
+        let source = fixture_path("user_samples/tabs/sample-table-tab.hwp");
         if !source.exists() {
             return;
         }
@@ -1782,7 +1785,7 @@ mod tests {
 
     #[test]
     fn hwp5_to_hwpx_user_sample_bullet_list_preserves_bullet_semantics() {
-        let source = fixture_path("user_samples/sample-bullet-list.hwp");
+        let source = fixture_path("user_samples/lists/sample-bullet-list.hwp");
         if !source.exists() {
             return;
         }
@@ -1803,7 +1806,7 @@ mod tests {
 
     #[test]
     fn hwp5_to_hwpx_user_sample_numbered_list_preserves_numbering_semantics() {
-        let source = fixture_path("user_samples/sample-numbered-list.hwp");
+        let source = fixture_path("user_samples/lists/sample-numbered-list.hwp");
         if !source.exists() {
             return;
         }
@@ -1824,7 +1827,7 @@ mod tests {
 
     #[test]
     fn hwp5_to_hwpx_user_sample_mixed_lists_preserves_all_list_kinds() {
-        let source = fixture_path("user_samples/sample-mixed-lists-with-outline.hwp");
+        let source = fixture_path("user_samples/lists/sample-mixed-lists-with-outline.hwp");
         if !source.exists() {
             return;
         }
@@ -1849,7 +1852,7 @@ mod tests {
 
     #[test]
     fn hwp5_to_hwpx_user_sample_custom_number_formats_keep_distinct_ids() {
-        let source = fixture_path("user_samples/sample-numbered-list-custom-formats.hwp");
+        let source = fixture_path("user_samples/lists/sample-numbered-list-custom-formats.hwp");
         if !source.exists() {
             return;
         }
@@ -1879,7 +1882,7 @@ mod tests {
 
     #[test]
     fn hwp5_to_hwpx_user_sample_multilevel_list_projects_as_outline_levels() {
-        let source = fixture_path("user_samples/sample-numbered-list-multilevel.hwp");
+        let source = fixture_path("user_samples/lists/sample-numbered-list-multilevel.hwp");
         if !source.exists() {
             return;
         }

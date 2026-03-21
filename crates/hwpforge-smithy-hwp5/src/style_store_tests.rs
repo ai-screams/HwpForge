@@ -19,7 +19,6 @@ use crate::style_store_convert::{
 };
 use hwpforge_foundation::{Color, GradientType, HeadingType, ParaShapeIndex, TabAlign};
 use hwpforge_smithy_hwpx::style_store::HwpxFill;
-use std::path::PathBuf;
 
 fn border_fill_slot(id: u32, fill: Hwp5RawBorderFill) -> Hwp5DocInfoBorderFillSlot {
     Hwp5DocInfoBorderFillSlot { id, fill: Some(fill) }
@@ -42,7 +41,7 @@ fn bullet_slot(id: u32, bullet: Hwp5RawBulletDef) -> Hwp5DocInfoBulletSlot {
 }
 
 fn fixture_doc_info(name: &str) -> DocInfoResult {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures").join(name);
+    let path = crate::test_support::workspace_fixture_path(name);
     assert!(path.exists(), "fixture must exist at {:?}", path);
     let bytes = std::fs::read(&path).expect("read hwp fixture");
     let package = PackageReader::open(&bytes).expect("open hwp package");
@@ -782,7 +781,7 @@ fn to_hwpx_style_store_warns_on_unknown_tab_codes() {
 
 #[test]
 fn fixture_sample_tab_hwp_has_expected_raw_custom_tab_def() {
-    let doc_info = fixture_doc_info("user_samples/sample-tab.hwp");
+    let doc_info = fixture_doc_info("user_samples/tabs/sample-tab.hwp");
     assert_eq!(doc_info.tab_defs.len(), 4);
 
     let custom = doc_info.tab_defs[3].tab_def.as_ref().expect("custom slot should parse");
@@ -795,7 +794,7 @@ fn fixture_sample_tab_hwp_has_expected_raw_custom_tab_def() {
 
 #[test]
 fn fixture_mixed_lists_preserve_numbering_and_bullet_slots() {
-    let doc_info = fixture_doc_info("user_samples/sample-mixed-lists-with-outline.hwp");
+    let doc_info = fixture_doc_info("user_samples/lists/sample-mixed-lists-with-outline.hwp");
     assert!(!doc_info.numberings.is_empty(), "fixture must expose numbering slots");
     assert!(!doc_info.bullets.is_empty(), "fixture must expose bullet slots");
 

@@ -1568,7 +1568,7 @@ mod tests {
     }
 
     fn fixture_path(name: &str) -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures").join(name)
+        crate::test_support::workspace_fixture_path(name)
     }
 
     fn table_cell_list_header_properties_from_fixture(name: &str) -> Vec<u32> {

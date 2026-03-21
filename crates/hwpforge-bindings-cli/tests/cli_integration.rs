@@ -32,14 +32,66 @@ fn test_tmp() -> PathBuf {
     dir
 }
 
+fn resolve_workspace_fixture_path(name: &str) -> PathBuf {
+    let root = {
+        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        path.pop();
+        path.pop();
+        path.push("tests");
+        path.push("fixtures");
+        path
+    };
+    let direct = root.join(name);
+    if direct.exists() {
+        return direct;
+    }
+
+    let file_name = Path::new(name)
+        .file_name()
+        .unwrap_or_else(|| panic!("fixture name must include a file name: {name}"));
+
+    let mut stack = vec![root.clone()];
+    let mut matches = Vec::new();
+    while let Some(dir) = stack.pop() {
+        let entries = std::fs::read_dir(&dir).unwrap_or_else(|err| {
+            panic!("failed to read fixture directory {}: {err}", dir.display())
+        });
+        for entry in entries {
+            let entry = entry.unwrap_or_else(|err| {
+                panic!("failed to read fixture entry under {}: {err}", dir.display())
+            });
+            let path = entry.path();
+            let file_type = entry.file_type().unwrap_or_else(|err| {
+                panic!("failed to stat fixture entry {}: {err}", path.display())
+            });
+            if file_type.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.file_name() == Some(file_name) {
+                matches.push(path);
+            }
+        }
+    }
+
+    match matches.len() {
+        0 => direct,
+        1 => matches.pop().expect("one match implies pop succeeds"),
+        _ => {
+            matches.sort();
+            let paths = matches
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ");
+            panic!("fixture name is ambiguous: {name} -> [{paths}]");
+        }
+    }
+}
+
 /// Path to any fixture in tests/fixtures/ by name.
 fn fixture(name: &str) -> PathBuf {
-    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    path.pop();
-    path.pop();
-    path.push("tests");
-    path.push("fixtures");
-    path.push(name);
+    let path = resolve_workspace_fixture_path(name);
     assert!(path.exists(), "fixture not found: {}", path.display());
     path
 }
@@ -2408,7 +2460,7 @@ fn patch_text_only_edit_preserves_untouched_package_entries() {
 
 #[test]
 fn patch_noop_preserves_tab_markup_in_plain_paragraph_sample() {
-    let base = fixture("user_samples/sample-tab.hwpx");
+    let base = fixture("user_samples/tabs/sample-tab.hwpx");
     let tmp = test_tmp();
     let json_out = tmp.join("section0.json");
     let patched = tmp.join("patched.hwpx");
@@ -2442,7 +2494,7 @@ fn patch_noop_preserves_tab_markup_in_plain_paragraph_sample() {
 
 #[test]
 fn patch_noop_preserves_tab_markup_in_table_cell_sample() {
-    let base = fixture("user_samples/sample-table-tab.hwpx");
+    let base = fixture("user_samples/tabs/sample-table-tab.hwpx");
     let tmp = test_tmp();
     let json_out = tmp.join("section0.json");
     let patched = tmp.join("patched.hwpx");
@@ -2476,7 +2528,7 @@ fn patch_noop_preserves_tab_markup_in_table_cell_sample() {
 
 #[test]
 fn patch_rejects_editing_plain_paragraph_tab_slot() {
-    let base = fixture("user_samples/sample-tab.hwpx");
+    let base = fixture("user_samples/tabs/sample-tab.hwpx");
     let tmp = test_tmp();
     let json_out = tmp.join("section0.json");
     let patched = tmp.join("patched.hwpx");
@@ -2519,7 +2571,7 @@ fn patch_rejects_editing_plain_paragraph_tab_slot() {
 
 #[test]
 fn patch_rejects_tampered_preservation_locator_metadata() {
-    let base = fixture("user_samples/sample-table-cell.hwpx");
+    let base = fixture("user_samples/tables/sample-table-cell.hwpx");
     let tmp = test_tmp();
     let json_out = tmp.join("section0.json");
     let patched = tmp.join("patched.hwpx");
@@ -2560,7 +2612,7 @@ fn patch_rejects_tampered_preservation_locator_metadata() {
 
 #[test]
 fn patch_rejects_legacy_section_preservation_metadata() {
-    let base = fixture("user_samples/sample-table-cell.hwpx");
+    let base = fixture("user_samples/tables/sample-table-cell.hwpx");
     let tmp = test_tmp();
     let json_out = tmp.join("section0.json");
     let patched = tmp.join("patched.hwpx");

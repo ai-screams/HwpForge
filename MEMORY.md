@@ -86,9 +86,9 @@ Remaining structural backlog:
 
 Verified local research fixtures:
 
-- `tests/fixtures/user_samples/sample-numbered-list-custom-formats.{hwp,hwpx}`
-- `tests/fixtures/user_samples/sample-numbered-list-multilevel.{hwp,hwpx}`
-- `tests/fixtures/user_samples/sample-mixed-lists-with-outline.{hwp,hwpx}`
+- `tests/fixtures/user_samples/lists/sample-numbered-list-custom-formats.{hwp,hwpx}`
+- `tests/fixtures/user_samples/lists/sample-numbered-list-multilevel.{hwp,hwpx}`
+- `tests/fixtures/user_samples/lists/sample-mixed-lists-with-outline.{hwp,hwpx}`
 
 Working rules for this slice:
 

@@ -117,7 +117,7 @@ fn decode_page_size_margin() {
 
 #[test]
 fn decode_user_sample_tab_preserves_custom_tab_def_and_inline_tab() {
-    let path = workspace_fixture_path("user_samples/sample-tab.hwpx");
+    let path = workspace_fixture_path("user_samples/tabs/sample-tab.hwpx");
     let result = HwpxDecoder::decode_file(&path).unwrap();
 
     assert!(
@@ -134,7 +134,7 @@ fn decode_user_sample_tab_preserves_custom_tab_def_and_inline_tab() {
 
 #[test]
 fn roundtrip_user_sample_tab_preserves_custom_tab_def_and_inline_tab() {
-    let bytes = std::fs::read(workspace_fixture_path("user_samples/sample-tab.hwpx")).unwrap();
+    let bytes = std::fs::read(workspace_fixture_path("user_samples/tabs/sample-tab.hwpx")).unwrap();
     let original = HwpxDecoder::decode(&bytes).unwrap();
     let validated = original.document.validate().unwrap();
     let encoded =
@@ -153,7 +153,7 @@ fn roundtrip_user_sample_tab_preserves_custom_tab_def_and_inline_tab() {
 
 #[test]
 fn decode_user_sample_table_tab_preserves_inline_tab_in_cell_text() {
-    let path = workspace_fixture_path("user_samples/sample-table-tab.hwpx");
+    let path = workspace_fixture_path("user_samples/tabs/sample-table-tab.hwpx");
     let result = HwpxDecoder::decode_file(&path).unwrap();
 
     let table = result.document.sections()[0]
@@ -171,7 +171,7 @@ fn decode_user_sample_table_tab_preserves_inline_tab_in_cell_text() {
 #[test]
 fn roundtrip_user_sample_table_tab_preserves_inline_tab_in_cell_text() {
     let bytes =
-        std::fs::read(workspace_fixture_path("user_samples/sample-table-tab.hwpx")).unwrap();
+        std::fs::read(workspace_fixture_path("user_samples/tabs/sample-table-tab.hwpx")).unwrap();
     let original = HwpxDecoder::decode(&bytes).unwrap();
     let validated = original.document.validate().unwrap();
     let encoded =
@@ -192,9 +192,10 @@ fn roundtrip_user_sample_table_tab_preserves_inline_tab_in_cell_text() {
 
 #[test]
 fn roundtrip_user_sample_checkable_bullet_basic_preserves_checkable_semantics() {
-    let bytes =
-        std::fs::read(workspace_fixture_path("user_samples/sample-checkable-bullet-basic.hwpx"))
-            .unwrap();
+    let bytes = std::fs::read(workspace_fixture_path(
+        "user_samples/lists/sample-checkable-bullet-basic.hwpx",
+    ))
+    .unwrap();
     let original = HwpxDecoder::decode(&bytes).unwrap();
     let validated = original.document.validate().unwrap();
     let encoded =
