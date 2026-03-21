@@ -8,9 +8,9 @@
 
 ![CI](https://img.shields.io/github/actions/workflow/status/ai-screams/HwpForge/ci.yml?branch=main\&label=CI\&logo=github)
 ![codecov](https://img.shields.io/badge/coverage-92.65%25-brightgreen.svg?logo=codecov)
-![Tests](https://img.shields.io/badge/tests-1%2C645_passed-success.svg?logo=checkmarx)
+![Tests](https://img.shields.io/badge/tests-2%2C207_passed-success.svg?logo=checkmarx)
 ![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg?logo=rust)
-![Lines of Code](https://img.shields.io/badge/LOC-~54%2C100-informational.svg)
+![Lines of Code](https://img.shields.io/badge/LOC-~83%2C962-informational.svg)
 
 ![crates.io](https://img.shields.io/crates/v/hwpforge.svg?logo=rust)
 ![docs.rs](https://img.shields.io/docsrs/hwpforge?logo=docs.rs)
@@ -56,7 +56,7 @@ HwpForge는 HWPX 문서(ZIP + XML, KS X 6101)를 다루기 위한 **오픈소스
 
 **LLM-first 설계** 🔥 — AI 친화적인 Markdown과 공식 한글 문서 포맷(HWPX), 두 세계를 자연스럽게 잇습니다. LLM이 Markdown으로 작성한 내용은 공문서 규격의 HWPX로 컴파일되고 📜, 반대로 기존 HWPX 문서는 AI가 쉽게 읽을 수 있는 구조로 꺼낼 수 있습니다 ⚒️.
 
-- **📄&#x20;**&#x20;[**HWPX 완전 가이드 다운로드**](examples/hwpx_complete_guide.hwpx) — HwpForge API로 생성한 4섹션 데모 문서 (한글에서 열어보세요)
+- **📄&#x20;**&#x20;[**HWPX 완전 가이드 다운로드**](examples/showcase/guides/hwpx_complete_guide/hwpx_complete_guide.hwpx) — HwpForge API로 생성한 4섹션 데모 문서 (한글에서 열어보세요)
 - **HWPX Reader for AI** — 기존 한글 문서(.hwpx)를 Markdown으로 변환하여 LLM이 즉시 이해 가능
 - **Full HWPX codec** — HWPX 파일을 손실 없이 디코딩/인코딩 (lossless roundtrip)
 - **Markdown bridge** — GFM Markdown과 HWPX 간 양방향 변환 (읽기 + 쓰기)
@@ -79,7 +79,7 @@ cargo add hwpforge --features full
 
 ```cpp
 [dependencies]
-hwpforge = "0.1"
+hwpforge = "0.5"
 ```
 
 ### 🔨 Hammer — CLI로 시작하기
@@ -358,7 +358,7 @@ let bytes = HwpxEncoder::encode(&validated, bridge.style_store(), &image_store).
 
 ```toml
 # Markdown 지원 포함
-hwpforge = { version = "0.1", features = ["full"] }
+hwpforge = { version = "0.5", features = ["full"] }
 ```
 
 ## 📜 지원 콘텐츠
@@ -379,33 +379,32 @@ hwpforge = { version = "0.1", features = ["full"] }
 
 ## 아키텍처
 
-HwpForge는 `foundation -> core -> blueprint -> smithy-* -> bindings-*` 계층으로 나뉩니다.
+HwpForge는 레이어를 나눠서 생각하는 프로젝트입니다.
 
 - `foundation`: 공통 primitive, unit, index, error
-- `core`: 포맷 독립 문서 모델과 validation
+- `core`: 포맷 독립 문서 모델과 shared semantics
 - `blueprint`: 스타일 정의와 템플릿 계층
 - `smithy-*`: 포맷별 codec과 bridge
-- `bindings-*`: CLI/MCP/Python 진입점
+- `bindings-*`: CLI / MCP / Python 진입점
 
 ### 레이어 구조
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': {'fontSize': '14px', 'lineColor': '#BDBDBD'}}}%%
 flowchart TB
-    F["foundation<br/>primitive types, units, indices, errors"]:::foundation
-    C["core<br/>format-agnostic document model<br/>draft / validated DOM"]:::core
-    B["blueprint<br/>style registry<br/>template layer"]:::blueprint
+    F["foundation<br/>primitive types<br/>units / indices / errors"]:::foundation
+    C["core<br/>shared document model<br/>list / tab / paragraph semantics"]:::core
+    B["blueprint<br/>style registry<br/>template authoring"]:::blueprint
 
-    SHX["smithy-hwpx<br/>HWPX encoder / decoder"]:::smithy
-    SH5["smithy-hwp5<br/>HWP5 decode<br/>semantic audit<br/>HWPX re-emission support"]:::smithy
+    SHX["smithy-hwpx<br/>HWPX read/write"]:::smithy
+    SH5["smithy-hwp5<br/>HWP5 read / audit / re-emission path"]:::smithy
     SMD["smithy-md<br/>Markdown bridge"]:::smithy
 
-    CLI["bindings-cli<br/>Hammer CLI"]:::binding
-    MCP["bindings-mcp<br/>Anvil MCP Server (Beta)"]:::binding
+    CLI["bindings-cli<br/>Hammer"]:::binding
+    MCP["bindings-mcp<br/>Anvil MCP Server"]:::binding
     PY["bindings-py<br/>stub"]:::binding
 
     F --> C
-    F --> B
     C --> B
     C --> SHX
     C --> SH5
@@ -419,33 +418,32 @@ flowchart TB
     SMD --> MCP
     SHX --> PY
 
-    classDef file     fill:#FFFDE7,stroke:#F9A825,color:#5D4037
-    classDef smithy   fill:#FFF3E0,stroke:#FB8C00,color:#E65100
-    classDef core     fill:#E3F2FD,stroke:#42A5F5,color:#0D47A1
+    classDef file fill:#FFFDE7,stroke:#F9A825,color:#5D4037
+    classDef smithy fill:#FFF3E0,stroke:#FB8C00,color:#E65100
+    classDef core fill:#E3F2FD,stroke:#42A5F5,color:#0D47A1
     classDef blueprint fill:#F3E5F5,stroke:#AB47BC,color:#4A148C
     classDef foundation fill:#FAFAFA,stroke:#BDBDBD,color:#424242
     classDef binding fill:#E8F5E9,stroke:#43A047,color:#1B5E20
 ```
 
-### 주요 데이터 흐름
+### 데이터 흐름
 
 ```mermaid
 %%{init: {'theme': 'base', 'themeVariables': {'fontSize': '14px', 'lineColor': '#BDBDBD'}}}%%
 flowchart LR
     HWP5[".hwp"]:::file --> SH5["smithy-hwp5"]:::smithy
-    SH5 --> CORE["core document"]:::core
-    CORE --> SHX["smithy-hwpx"]:::smithy
-    SHX --> HWPX[".hwpx"]:::file
+    MD[".md"]:::file --> SMD["smithy-md"]:::smithy
+    HWPX[".hwpx"]:::file <--> SHX["smithy-hwpx"]:::smithy
 
-    HWPX <--> SHX
-    MD[".md"]:::file <--> SMD["smithy-md"]:::smithy
+    SH5 --> CORE["core document"]:::core
+    SHX <--> CORE
     SMD <--> CORE
+    CORE --> SHX
 
     CLI["CLI"]:::binding --> SH5
     CLI --> SHX
     CLI --> SMD
-
-    MCP["MCP (Beta)"]:::binding --> SHX
+    MCP["MCP"]:::binding --> SHX
     MCP --> SMD
 
     classDef file fill:#FFFDE7,stroke:#F9A825,color:#5D4037
@@ -454,13 +452,7 @@ flowchart LR
     classDef binding fill:#E8F5E9,stroke:#43A047,color:#1B5E20
 ```
 
-**핵심 원칙**: 구조(Structure)와 스타일(Style)의 분리입니다.
-`core`는 스타일 *참조*만 가지고, `blueprint`는 스타일 *정의*를 관리합니다.
-`smithy-*` 계층이 `core`와 스타일 정보를 각 포맷 surface로 연결합니다.
-
-> HWP5는 현재 CLI 중심 workflow가 강합니다.
-> 대표 경로는 `convert-hwp5 -> audit-hwp5 -> inspect --json` 입니다.
-> MCP는 현재 HWP5 tool surface를 직접 노출하지 않습니다.
+**핵심 원칙**: 구조(Structure)와 스타일(Style)을 분리합니다. `core`는 shared semantics와 스타일 참조를 들고, `blueprint`는 스타일 정의를 관리합니다. `smithy-*` 계층이 포맷 surface를 연결합니다.
 
 실전에서 가장 자주 쓰는 경로는 다음 셋입니다.
 
@@ -470,15 +462,15 @@ flowchart LR
 
 ## 프로젝트 현황
 
-| 지표        | 값                      |
-| ----------- | ----------------------- |
-| 총 LOC      | \~54,100                |
-| 테스트      | 1,645개 (cargo-nextest) |
-| 소스 파일   | 96 .rs                  |
-| Crate 수    | 10개 (7개 배포)         |
-| 커버리지    | 92.65%                  |
-| Clippy 경고 | 0                       |
-| Unsafe 코드 | 0                       |
+| 지표                   | 값                      |
+| ---------------------- | ----------------------- |
+| Tracked Rust `src` LOC | ~83,962                 |
+| 테스트                 | 2,207개 (cargo-nextest) |
+| 소스 파일              | 137 .rs                 |
+| Crate 수               | 10개                    |
+| 커버리지               | 92.65%                  |
+| Clippy 경고            | 0                       |
+| Unsafe 코드            | 0                       |
 
 ## 개발
 
@@ -523,7 +515,9 @@ HwpForge/
 │   ├── hwpforge-bindings-cli/    # CLI 도구 (hwpforge)
 │   └── hwpforge-bindings-mcp/    # MCP Server (hwpforge-mcp)
 ├── tests/                        # 통합 테스트 + golden fixture
-└── examples/                     # 📜 사용 예제 + 생성된 HWPX 파일
+└── examples/                     # curated showcase + interop artifacts
+    ├── showcase/
+    └── interop/
 ```
 
 ## 기여

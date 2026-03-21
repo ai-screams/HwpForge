@@ -5,21 +5,21 @@
 
 ## Identity
 
-| Field | Value |
-| --- | --- |
-| Name | HwpForge |
-| Purpose | Programmatic control of Korean HWP/HWPX documents |
-| Language | Rust (edition 2021) |
-| License | MIT OR Apache-2.0 |
-| Workspace version | `0.4.0` |
-| MSRV / Dev Toolchain | `1.88 / 1.93` |
-| Workspace packages | `10` |
-| Tracked Rust `src` files under `crates/` | `137` |
-| Tracked Rust `src` LOC under `crates/` | `83,962` |
-| Example artifact files under `examples/` | `47` |
-| GitHub workflow files | `5` |
-| Coverage gate | 90%+ in CI |
-| Design | Layered shared-IR architecture, warning-first for unknown semantics |
+| Field                                    | Value                                                               |
+| ---------------------------------------- | ------------------------------------------------------------------- |
+| Name                                     | HwpForge                                                            |
+| Purpose                                  | Programmatic control of Korean HWP/HWPX documents                   |
+| Language                                 | Rust (edition 2021)                                                 |
+| License                                  | MIT OR Apache-2.0                                                   |
+| Workspace version                        | `0.4.0`                                                             |
+| MSRV / Dev Toolchain                     | `1.88 / 1.93`                                                       |
+| Workspace packages                       | `10`                                                                |
+| Tracked Rust `src` files under `crates/` | `137`                                                               |
+| Tracked Rust `src` LOC under `crates/`   | `83,962`                                                            |
+| Example artifact files under `examples/` | `47`                                                                |
+| GitHub workflow files                    | `5`                                                                 |
+| Coverage gate                            | 90%+ in CI                                                          |
+| Design                                   | Layered shared-IR architecture, warning-first for unknown semantics |
 
 ## Architecture
 
@@ -40,18 +40,18 @@ Key principle:
 
 ## Workspace Packages
 
-| Package | Role | Current state |
-| --- | --- | --- |
-| `hwpforge` | Umbrella facade crate | ACTIVE |
-| `hwpforge-foundation` | Units, colors, indices, low-level primitives | SHIPPED |
-| `hwpforge-core` | Shared document model | SHIPPED |
-| `hwpforge-blueprint` | YAML template/style system | SHIPPED |
-| `hwpforge-smithy-hwpx` | HWPX codec | SHIPPED |
-| `hwpforge-smithy-md` | Markdown bridge | SHIPPED |
-| `hwpforge-smithy-hwp5` | HWP5 reader / converter path | ACTIVE |
-| `hwpforge-bindings-cli` | CLI | SHIPPED |
-| `hwpforge-bindings-mcp` | MCP server | SHIPPED |
-| `hwpforge-bindings-py` | Python bindings | STUB |
+| Package                 | Role                                         | Current state |
+| ----------------------- | -------------------------------------------- | ------------- |
+| `hwpforge`              | Umbrella facade crate                        | ACTIVE        |
+| `hwpforge-foundation`   | Units, colors, indices, low-level primitives | SHIPPED       |
+| `hwpforge-core`         | Shared document model                        | SHIPPED       |
+| `hwpforge-blueprint`    | YAML template/style system                   | SHIPPED       |
+| `hwpforge-smithy-hwpx`  | HWPX codec                                   | SHIPPED       |
+| `hwpforge-smithy-md`    | Markdown bridge                              | SHIPPED       |
+| `hwpforge-smithy-hwp5`  | HWP5 reader / converter path                 | ACTIVE        |
+| `hwpforge-bindings-cli` | CLI                                          | SHIPPED       |
+| `hwpforge-bindings-mcp` | MCP server                                   | SHIPPED       |
+| `hwpforge-bindings-py`  | Python bindings                              | STUB          |
 
 ## Current Engineering State
 
@@ -132,19 +132,19 @@ Working rules for this slice:
 
 ## Documentation Map
 
-| Path | Purpose |
-| --- | --- |
-| `AGENTS.md` | Root agent guidance and current repo facts |
-| `CLAUDE.md` | Claude-specific repo guidance |
-| `MEMORY.md` | This current project snapshot |
-| `crates/AGENTS.md` | Crate-layer guidance |
-| `crates/*/AGENTS.md` | Crate-local gotchas and responsibilities |
-| `.docs/planning/ROADMAP.md` | Current roadmap snapshot |
-| `.docs/planning/2026-03-20-list-shared-semantics-plan.md` | Current list implementation plan |
-| `.docs/research/2026-03-20_list_shared_semantics_handoff.md` | Current list handoff note |
+| Path                                                                 | Purpose                                                   |
+| -------------------------------------------------------------------- | --------------------------------------------------------- |
+| `AGENTS.md`                                                          | Root agent guidance and current repo facts                |
+| `CLAUDE.md`                                                          | Claude-specific repo guidance                             |
+| `MEMORY.md`                                                          | This current project snapshot                             |
+| `crates/AGENTS.md`                                                   | Crate-layer guidance                                      |
+| `crates/*/AGENTS.md`                                                 | Crate-local gotchas and responsibilities                  |
+| `.docs/planning/ROADMAP.md`                                          | Current roadmap snapshot                                  |
+| `.docs/planning/2026-03-20-list-shared-semantics-plan.md`            | Current list implementation plan                          |
+| `.docs/research/2026-03-20_list_shared_semantics_handoff.md`         | Current list handoff note                                 |
 | `.docs/research/hwp5/HWP_LIST_STRUCTURE_RELATION_TREE_2026-03-21.md` | HWP/HWPX list relation tree + post-implementation gotchas |
-| `.docs/research/` | Local research logs |
-| `.docs/references/openhwp/docs/hwpx/` | Local HWPX reference set |
+| `.docs/research/`                                                    | Local research logs                                       |
+| `.docs/references/openhwp/docs/hwpx/`                                | Local HWPX reference set                                  |
 
 ## Dev Commands
 

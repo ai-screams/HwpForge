@@ -25,7 +25,7 @@ tests/
         └── user-authored and promoted research fixtures grouped by feature
 ```
 
-## What does *not* live here
+## What does _not_ live here
 
 - the main unit/integration test source files
 - a runnable `tests/` crate hierarchy

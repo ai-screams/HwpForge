@@ -31,6 +31,7 @@
     ".serena/**",
     ".github/PULL_REQUEST_TEMPLATE.md",
     "**/CHANGELOG.md",
-    "examples/hwpx2md/**"
+    "examples/hwpx2md/**",
+    "examples/interop/hwpx_md_convert/hwpx2md/**"
   ]
 }

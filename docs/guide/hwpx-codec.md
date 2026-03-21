@@ -130,7 +130,7 @@ let bridge = HwpxRegistryBridge::from_registry(&registry).unwrap();
 let style_store = bridge.style_store();
 ```
 
-`HwpxStyleStore::from_registry()` 자체는 HWPX style table만 만듭니다.  
+`HwpxStyleStore::from_registry()` 자체는 HWPX style table만 만듭니다.\
 Blueprint/Markdown 경로에서 만든 문서는 registry-local `CharShapeIndex` / `ParaShapeIndex`
 를 들고 있으므로, encode 직전에는 `HwpxRegistryBridge`로 rebinding 해야 합니다.
 

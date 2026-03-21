@@ -86,11 +86,11 @@ header.xml에는 문서 전체의 스타일 정의가 담깁니다: <strong>font
 
 덧말은 한자 위나 아래에 한글 읽기를 표시하는 기능입니다:
 
-위쪽 덧말: 大韓民國(대한민국)    아래쪽 덧말: 漢字(한자)    오른쪽 덧말: 情報(정보)
+위쪽 덧말: 大韓民國(대한민국) 아래쪽 덧말: 漢字(한자) 오른쪽 덧말: 情報(정보)
 
 <strong>3. 글자겹침 (Compose)</strong>
 
-글자겹침 기능: 12  (숫자 1과 2를 겹침)
+글자겹침 기능: 12 (숫자 1과 2를 겹침)
 
 <strong>4. 필드 (Field)</strong>
 
@@ -114,7 +114,7 @@ HWPX 문서 정의는 섹션 1의 [HWPX정의]쪽을 참조하세요. ZIP 파일
 
 **8. 글자 서식 변화 시연**
 
-기본 **굵게** 파랑 *기울임 녹색* 작은 글씨 **제목 크기** 회색 워터마크
+기본 **굵게** 파랑 _기울임 녹색_ 작은 글씨 **제목 크기** 회색 워터마크
 
 <!-- hwpforge:section -->
 
@@ -296,5 +296,7 @@ HWPX는 OOXML(Office Open XML) 차트 형식을 사용합니다. Chart XML은 ZI
 <strong>=== HWPX 문서 구조 완전 가이드 끝 ===</strong>
 
 [^1]: KS X 6101: 한국산업표준(Korean Industrial Standards)에서 제정한 문서 파일 형식 표준. 2014년 최초 제정, 2021년 개정.
+
 [^2]: 한글 2022(Modern 스타일셋)의 기본 스타일: charShape 0-6 (바탕\~개요10), paraShape 0-19 (바탕\~개요10). 사용자 정의 스타일은 이후 인덱스부터 시작합니다.
+
 [^e1]: charShape 속성 목록: height(크기), textColor(색상), bold(굵기), italic(기울임), underlineType(밑줄), strikeoutShape(취소선), emphasis(강조점), ratio(장평), spacing(자간), relSz(상대크기), offset(세로위치), useKerning(커닝), useFontSpace(폰트 자간).
