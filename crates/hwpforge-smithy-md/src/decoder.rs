@@ -34,6 +34,14 @@ fn is_safe_url(url: &str) -> bool {
     lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("mailto:")
 }
 
+fn encode_pending_link_url(url: &str) -> String {
+    if is_safe_url(url) {
+        url.to_string()
+    } else {
+        format!("\x00{url}")
+    }
+}
+
 /// Result of decoding markdown, containing both the document and the
 /// [`StyleRegistry`] resolved from the template.
 ///
@@ -475,26 +483,12 @@ impl<'a> DecoderState<'a> {
             Event::Text(text) => self.push_text(text.as_ref())?,
             Event::Code(code) => self.push_inline_code(code.as_ref())?,
             Event::InlineMath(math) | Event::DisplayMath(math) => self.push_text(math.as_ref())?,
-            Event::Html(html) | Event::InlineHtml(html) => {
-                let raw = html.as_ref().trim();
-                if raw == SECTION_MARKER_COMMENT && !self.is_in_table_cell() {
-                    self.push_section_marker();
-                } else {
-                    return Err(unsupported_markdown_feature("raw HTML"));
-                }
-            }
-            Event::FootnoteReference(label) => {
-                return Err(unsupported_markdown_feature(&format!(
-                    "footnote reference '[^{}]'",
-                    label.as_ref()
-                )));
-            }
+            Event::Html(html) | Event::InlineHtml(html) => self.handle_html_event(html.as_ref())?,
+            Event::FootnoteReference(label) => self.handle_footnote_reference(label.as_ref())?,
             Event::SoftBreak => self.push_soft_break()?,
             Event::HardBreak => self.push_hard_break()?,
             Event::Rule => self.push_rule(),
-            Event::TaskListMarker(checked) => {
-                self.mark_task_list_item(checked);
-            }
+            Event::TaskListMarker(checked) => self.mark_task_list_item(checked),
         }
 
         Ok(())
@@ -502,75 +496,18 @@ impl<'a> DecoderState<'a> {
 
     fn start_tag(&mut self, tag: Tag<'_>) -> MdResult<()> {
         match tag {
-            Tag::Paragraph => {
-                self.ensure_paragraph();
-            }
-            Tag::Heading { level, .. } => {
-                let lvl = level_to_u32(level);
-                self.start_paragraph(self.mapping.heading(lvl));
-                if let Some(current) = self.current.as_mut() {
-                    current.heading_level = Some(lvl as u8);
-                }
-            }
-            Tag::BlockQuote(_) => {
-                self.blockquote_depth += 1;
-            }
-            Tag::CodeBlock(_) => {
-                self.in_code_block = true;
-                self.start_paragraph(self.mapping.code);
-            }
-            Tag::List(start) => {
-                self.list_stack.push(ListState::new(start));
-            }
-            Tag::Item => {
-                self.finalize_paragraph();
-                self.in_item = true;
-                let prefix = self.next_item_prefix();
-                self.pending_items.push(PendingItem::new(prefix));
-            }
-            Tag::Table(_) => {
-                self.materialize_pending_item_paragraph_if_needed();
-                self.finalize_paragraph();
-                self.table = Some(TableBuilder::new());
-            }
+            Tag::Paragraph => self.start_paragraph_tag(),
+            Tag::Heading { level, .. } => self.start_heading_tag(level),
+            Tag::BlockQuote(_) => self.start_blockquote_tag(),
+            Tag::CodeBlock(_) => self.start_code_block_tag(),
+            Tag::List(start) => self.start_list_tag(start),
+            Tag::Item => self.start_item_tag(),
+            Tag::Table(_) => self.start_table_tag(),
             Tag::TableHead => {}
-            Tag::TableRow => {
-                if let Some(table) = self.table.as_mut() {
-                    table.start_row();
-                }
-            }
-            Tag::TableCell => {
-                if let Some(table) = self.table.as_mut() {
-                    table.start_cell();
-                }
-            }
-            Tag::Link { dest_url, .. } => {
-                if !self.is_in_table_cell() {
-                    self.ensure_paragraph();
-                }
-                // Only create a hyperlink for safe URL schemes. Unsafe URLs
-                // (javascript:, data:, file:, etc.) are emitted as plain text
-                // by leaving pending_link as None and letting the text pass through.
-                if is_safe_url(&dest_url) {
-                    self.pending_link =
-                        Some(PendingLink { dest_url: dest_url.to_string(), text: String::new() });
-                } else {
-                    // Store the URL in pending_link with an empty sentinel so
-                    // we can still collect the link text, but mark it unsafe
-                    // by prefixing with '\0' (never a valid URL character).
-                    self.pending_link = Some(PendingLink {
-                        dest_url: format!("\x00{}", dest_url),
-                        text: String::new(),
-                    });
-                }
-            }
-            Tag::Image { dest_url, .. } => {
-                if !self.is_in_table_cell() {
-                    self.ensure_paragraph();
-                }
-                self.pending_image =
-                    Some(PendingImage { dest_url: dest_url.to_string(), alt: String::new() });
-            }
+            Tag::TableRow => self.start_table_row_tag(),
+            Tag::TableCell => self.start_table_cell_tag(),
+            Tag::Link { dest_url, .. } => self.start_link_tag(&dest_url),
+            Tag::Image { dest_url, .. } => self.start_image_tag(&dest_url),
             Tag::Emphasis
             | Tag::Strong
             | Tag::Strikethrough
@@ -578,20 +515,16 @@ impl<'a> DecoderState<'a> {
             | Tag::Superscript
             | Tag::Subscript => {}
             Tag::FootnoteDefinition(_) => {
-                return Err(unsupported_markdown_feature("footnote definition"));
+                return Err(unsupported_markdown_feature("footnote definition"))
             }
-            Tag::DefinitionList => {
-                return Err(unsupported_markdown_feature("definition list"));
-            }
+            Tag::DefinitionList => return Err(unsupported_markdown_feature("definition list")),
             Tag::DefinitionListTitle => {
                 return Err(unsupported_markdown_feature("definition list title"));
             }
             Tag::DefinitionListDefinition => {
                 return Err(unsupported_markdown_feature("definition list definition"));
             }
-            Tag::MetadataBlock(_) => {
-                return Err(unsupported_markdown_feature("metadata block"));
-            }
+            Tag::MetadataBlock(_) => return Err(unsupported_markdown_feature("metadata block")),
         }
         Ok(())
     }
@@ -600,70 +533,16 @@ impl<'a> DecoderState<'a> {
         match tag_end {
             TagEnd::Paragraph => self.finalize_paragraph(),
             TagEnd::Heading(_) => self.finalize_paragraph(),
-            TagEnd::BlockQuote(_) => {
-                self.blockquote_depth = self.blockquote_depth.saturating_sub(1);
-            }
-            TagEnd::CodeBlock => {
-                self.in_code_block = false;
-                self.finalize_paragraph();
-            }
-            TagEnd::List(_) => {
-                self.list_stack.pop();
-            }
-            TagEnd::Item => {
-                self.finalize_paragraph();
-                if let Some(item) = self.pending_items.pop() {
-                    if !item.emitted_paragraph {
-                        let mut paragraph = ParagraphBuilder::new(self.item_style_for(&item));
-                        if item.task_checked.is_none() {
-                            paragraph.push_text(item.prefix.trim_end());
-                        }
-                        self.paragraphs.push(paragraph.build());
-                    }
-                }
-                self.in_item = !self.pending_items.is_empty();
-            }
+            TagEnd::BlockQuote(_) => self.end_blockquote_tag(),
+            TagEnd::CodeBlock => self.end_code_block_tag(),
+            TagEnd::List(_) => self.end_list_tag(),
+            TagEnd::Item => self.end_item_tag(),
             TagEnd::Table => self.finalize_table()?,
             TagEnd::TableHead => {}
-            TagEnd::TableRow => {
-                if let Some(table) = self.table.as_mut() {
-                    table.end_row();
-                }
-            }
-            TagEnd::TableCell => {
-                if let Some(table) = self.table.as_mut() {
-                    table.end_cell();
-                }
-            }
-            TagEnd::Link => {
-                if let Some(link) = self.pending_link.take() {
-                    let char_shape_id = self.current_char_shape_id();
-                    if link.dest_url.starts_with('\x00') {
-                        // Unsafe URL: emit the link text as plain text only.
-                        if !link.text.is_empty() {
-                            self.push_run_to_active_context(Run::text(link.text, char_shape_id));
-                        }
-                    } else {
-                        self.push_run_to_active_context(Run::control(
-                            Control::Hyperlink { text: link.text, url: link.dest_url },
-                            char_shape_id,
-                        ));
-                    }
-                }
-            }
-            TagEnd::Image => {
-                if let Some(image) = self.pending_image.take() {
-                    let format = image_format_from_path(&image.dest_url);
-                    let image = Image::new(
-                        image.dest_url,
-                        HwpUnit::from_mm(50.0)?,
-                        HwpUnit::from_mm(30.0)?,
-                        format,
-                    );
-                    let char_shape_id = self.current_char_shape_id();
-                    self.push_run_to_active_context(Run::image(image, char_shape_id));
-                }
-            }
+            TagEnd::TableRow => self.end_table_row_tag(),
+            TagEnd::TableCell => self.end_table_cell_tag(),
+            TagEnd::Link => self.end_link_tag(),
+            TagEnd::Image => self.end_image_tag()?,
             TagEnd::Emphasis
             | TagEnd::Strong
             | TagEnd::Strikethrough
@@ -671,22 +550,167 @@ impl<'a> DecoderState<'a> {
             | TagEnd::Superscript
             | TagEnd::Subscript => {}
             TagEnd::FootnoteDefinition => {
-                return Err(unsupported_markdown_feature("footnote definition"));
+                return Err(unsupported_markdown_feature("footnote definition"))
             }
-            TagEnd::DefinitionList => {
-                return Err(unsupported_markdown_feature("definition list"));
-            }
+            TagEnd::DefinitionList => return Err(unsupported_markdown_feature("definition list")),
             TagEnd::DefinitionListTitle => {
                 return Err(unsupported_markdown_feature("definition list title"));
             }
             TagEnd::DefinitionListDefinition => {
                 return Err(unsupported_markdown_feature("definition list definition"));
             }
-            TagEnd::MetadataBlock(_) => {
-                return Err(unsupported_markdown_feature("metadata block"));
-            }
+            TagEnd::MetadataBlock(_) => return Err(unsupported_markdown_feature("metadata block")),
         }
 
+        Ok(())
+    }
+
+    fn handle_html_event(&mut self, html: &str) -> MdResult<()> {
+        let raw = html.trim();
+        if raw == SECTION_MARKER_COMMENT && !self.is_in_table_cell() {
+            self.push_section_marker();
+            return Ok(());
+        }
+        Err(unsupported_markdown_feature("raw HTML"))
+    }
+
+    fn handle_footnote_reference(&mut self, label: &str) -> MdResult<()> {
+        Err(unsupported_markdown_feature(&format!("footnote reference '[^{label}]'")))
+    }
+
+    fn start_paragraph_tag(&mut self) {
+        self.ensure_paragraph();
+    }
+
+    fn start_heading_tag(&mut self, level: HeadingLevel) {
+        let lvl = level_to_u32(level);
+        self.start_paragraph(self.mapping.heading(lvl));
+        if let Some(current) = self.current.as_mut() {
+            current.heading_level = Some(lvl as u8);
+        }
+    }
+
+    fn start_blockquote_tag(&mut self) {
+        self.blockquote_depth += 1;
+    }
+
+    fn start_code_block_tag(&mut self) {
+        self.in_code_block = true;
+        self.start_paragraph(self.mapping.code);
+    }
+
+    fn start_list_tag(&mut self, start: Option<u64>) {
+        self.list_stack.push(ListState::new(start));
+    }
+
+    fn start_item_tag(&mut self) {
+        self.finalize_paragraph();
+        self.in_item = true;
+        let prefix = self.next_item_prefix();
+        self.pending_items.push(PendingItem::new(prefix));
+    }
+
+    fn start_table_tag(&mut self) {
+        self.materialize_pending_item_paragraph_if_needed();
+        self.finalize_paragraph();
+        self.table = Some(TableBuilder::new());
+    }
+
+    fn start_table_row_tag(&mut self) {
+        if let Some(table) = self.table.as_mut() {
+            table.start_row();
+        }
+    }
+
+    fn start_table_cell_tag(&mut self) {
+        if let Some(table) = self.table.as_mut() {
+            table.start_cell();
+        }
+    }
+
+    fn start_link_tag(&mut self, dest_url: &str) {
+        if !self.is_in_table_cell() {
+            self.ensure_paragraph();
+        }
+        self.pending_link =
+            Some(PendingLink { dest_url: encode_pending_link_url(dest_url), text: String::new() });
+    }
+
+    fn start_image_tag(&mut self, dest_url: &str) {
+        if !self.is_in_table_cell() {
+            self.ensure_paragraph();
+        }
+        self.pending_image =
+            Some(PendingImage { dest_url: dest_url.to_string(), alt: String::new() });
+    }
+
+    fn end_blockquote_tag(&mut self) {
+        self.blockquote_depth = self.blockquote_depth.saturating_sub(1);
+    }
+
+    fn end_code_block_tag(&mut self) {
+        self.in_code_block = false;
+        self.finalize_paragraph();
+    }
+
+    fn end_list_tag(&mut self) {
+        self.list_stack.pop();
+    }
+
+    fn end_item_tag(&mut self) {
+        self.finalize_paragraph();
+        if let Some(item) = self.pending_items.pop() {
+            if !item.emitted_paragraph {
+                let mut paragraph = ParagraphBuilder::new(self.item_style_for(&item));
+                if item.task_checked.is_none() {
+                    paragraph.push_text(item.prefix.trim_end());
+                }
+                self.paragraphs.push(paragraph.build());
+            }
+        }
+        self.in_item = !self.pending_items.is_empty();
+    }
+
+    fn end_table_row_tag(&mut self) {
+        if let Some(table) = self.table.as_mut() {
+            table.end_row();
+        }
+    }
+
+    fn end_table_cell_tag(&mut self) {
+        if let Some(table) = self.table.as_mut() {
+            table.end_cell();
+        }
+    }
+
+    fn end_link_tag(&mut self) {
+        if let Some(link) = self.pending_link.take() {
+            let char_shape_id = self.current_char_shape_id();
+            if link.dest_url.starts_with('\x00') {
+                if !link.text.is_empty() {
+                    self.push_run_to_active_context(Run::text(link.text, char_shape_id));
+                }
+            } else {
+                self.push_run_to_active_context(Run::control(
+                    Control::Hyperlink { text: link.text, url: link.dest_url },
+                    char_shape_id,
+                ));
+            }
+        }
+    }
+
+    fn end_image_tag(&mut self) -> MdResult<()> {
+        if let Some(image) = self.pending_image.take() {
+            let format = image_format_from_path(&image.dest_url);
+            let image = Image::new(
+                image.dest_url,
+                HwpUnit::from_mm(50.0)?,
+                HwpUnit::from_mm(30.0)?,
+                format,
+            );
+            let char_shape_id = self.current_char_shape_id();
+            self.push_run_to_active_context(Run::image(image, char_shape_id));
+        }
         Ok(())
     }
 
@@ -712,11 +736,9 @@ impl<'a> DecoderState<'a> {
             }
         }
 
-        self.ensure_paragraph();
-        self.materialize_current_item_prefix_if_needed();
-        if let Some(current) = self.current.as_mut() {
+        self.with_materialized_paragraph(|current| {
             current.push_text(text);
-        }
+        });
 
         Ok(())
     }
@@ -741,13 +763,11 @@ impl<'a> DecoderState<'a> {
             return Ok(());
         }
 
-        self.ensure_paragraph();
-        self.materialize_current_item_prefix_if_needed();
-        if let Some(current) = self.current.as_mut() {
+        self.with_materialized_paragraph(|current| {
             current.push_text("`");
             current.push_text(code);
             current.push_text("`");
-        }
+        });
         Ok(())
     }
 
@@ -827,11 +847,9 @@ impl<'a> DecoderState<'a> {
             return;
         }
 
-        self.ensure_paragraph();
-        self.materialize_current_item_prefix_if_needed();
-        if let Some(current) = self.current.as_mut() {
+        self.with_materialized_paragraph(|current| {
             current.push_run(run);
-        }
+        });
     }
 
     fn ensure_paragraph(&mut self) {
@@ -842,6 +860,14 @@ impl<'a> DecoderState<'a> {
                 self.style_for_context()
             };
             self.current = Some(ParagraphBuilder::new(style));
+        }
+    }
+
+    fn with_materialized_paragraph(&mut self, apply: impl FnOnce(&mut ParagraphBuilder)) {
+        self.ensure_paragraph();
+        self.materialize_current_item_prefix_if_needed();
+        if let Some(current) = self.current.as_mut() {
+            apply(current);
         }
     }
 

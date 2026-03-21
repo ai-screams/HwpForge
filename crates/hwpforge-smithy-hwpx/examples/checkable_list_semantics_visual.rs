@@ -6,25 +6,28 @@
 //! Usage:
 //!   cargo run -p hwpforge-smithy-hwpx --example checkable_list_semantics_visual
 
+#[path = "_support/list_visual.rs"]
+mod list_visual;
+
 use std::fs;
 use std::path::Path;
 
 use hwpforge_blueprint::builtins::builtin_default;
 use hwpforge_blueprint::registry::StyleRegistry;
-use hwpforge_blueprint::style::{CharShape, ParaShape};
 use hwpforge_core::document::Document;
 use hwpforge_core::image::ImageStore;
 use hwpforge_core::metadata::Metadata;
-use hwpforge_core::numbering::{BulletDef, NumberingDef, ParaHead, ParagraphListRef};
+use hwpforge_core::numbering::{NumberingDef, ParagraphListRef};
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::Run;
 use hwpforge_core::section::Section;
 use hwpforge_core::PageSettings;
-use hwpforge_foundation::{
-    Alignment, BreakType, BulletIndex, CharShapeIndex, Color, HwpUnit, NumberFormatType,
-    NumberingIndex, ParaShapeIndex,
-};
+use hwpforge_foundation::{CharShapeIndex, NumberFormatType, ParaShapeIndex};
 use hwpforge_smithy_hwpx::{HwpxEncoder, HwpxRegistryBridge};
+use list_visual::{
+    build_base_visual_style_ids, build_list_shape_array, bullet_def, checkable_bullet_def,
+    para_head, push_bullet, push_numbering, BaseVisualStyleIds,
+};
 
 const OUT_DIR: &str = "temp/checkable_list_semantics_visual";
 
@@ -92,35 +95,8 @@ fn build_visual_registry() -> VisualRegistry {
     let template = builtin_default().expect("builtin default template");
     let mut registry = StyleRegistry::from_template(&template).expect("default style registry");
 
-    let body_entry = *registry.get_style("body").expect("body style");
-    let heading_entry = *registry.get_style("heading1").expect("heading1 style");
-
-    let body_cs = body_entry.char_shape_id;
-    let title_cs = heading_entry.char_shape_id;
-    let body_ps = body_entry.para_shape_id;
-
-    let note_cs = {
-        let mut note = registry.char_shape(body_cs).expect("body char shape").clone();
-        note.size = HwpUnit::from_pt(9.0).expect("9pt");
-        note.color = Color::from_rgb(90, 90, 90);
-        note.italic = true;
-        push_char_shape(&mut registry, note)
-    };
-
-    let title_ps = {
-        let mut title = registry.para_shape(body_ps).expect("body para shape").clone();
-        title.alignment = Alignment::Left;
-        title.space_before = HwpUnit::from_mm(4.0).expect("4mm");
-        title.space_after = HwpUnit::from_mm(2.5).expect("2.5mm");
-        title.keep_with_next = true;
-        push_para_shape(&mut registry, title)
-    };
-
-    let note_ps = {
-        let mut note = registry.para_shape(body_ps).expect("body para shape").clone();
-        note.space_after = HwpUnit::from_mm(1.5).expect("1.5mm");
-        push_para_shape(&mut registry, note)
-    };
+    let BaseVisualStyleIds { body_cs, title_cs, note_cs, body_ps, title_ps, note_ps } =
+        build_base_visual_style_ids(&mut registry);
 
     let numbering = push_numbering(&mut registry, numbering_def(10));
     let plain_bullet = push_bullet(&mut registry, bullet_def(1, ""));
@@ -159,89 +135,6 @@ fn build_visual_registry() -> VisualRegistry {
     }
 }
 
-fn build_list_shape_array<const N: usize>(
-    registry: &mut StyleRegistry,
-    base_para: ParaShapeIndex,
-    make_ref: impl Fn(u8) -> ParagraphListRef,
-) -> [ParaShapeIndex; N] {
-    std::array::from_fn(|idx| {
-        let level = idx as u8;
-        let base = registry.para_shape(base_para).expect("base para shape").clone();
-        let list_shape = list_para_shape(base, make_ref(level), level);
-        push_para_shape(registry, list_shape)
-    })
-}
-
-fn list_para_shape(mut base: ParaShape, list: ParagraphListRef, level: u8) -> ParaShape {
-    let left_mm = 8.0 + f64::from(level) * 6.5;
-    base.indent_left = HwpUnit::from_mm(left_mm).expect("left indent");
-    base.indent_first_line = HwpUnit::from_mm(-5.5).expect("hanging indent");
-    base.space_before = HwpUnit::ZERO;
-    base.space_after = HwpUnit::from_mm(0.8).expect("after spacing");
-    base.break_type = BreakType::None;
-    base.keep_with_next = false;
-    base.keep_lines_together = false;
-    base.widow_orphan = true;
-    base.list = Some(list);
-    base
-}
-
-fn push_char_shape(registry: &mut StyleRegistry, shape: CharShape) -> CharShapeIndex {
-    let idx = CharShapeIndex::new(registry.char_shapes.len());
-    registry.char_shapes.push(shape);
-    idx
-}
-
-fn push_para_shape(registry: &mut StyleRegistry, shape: ParaShape) -> ParaShapeIndex {
-    let idx = ParaShapeIndex::new(registry.para_shapes.len());
-    registry.para_shapes.push(shape);
-    idx
-}
-
-fn push_numbering(registry: &mut StyleRegistry, numbering: NumberingDef) -> NumberingIndex {
-    let idx = NumberingIndex::new(registry.numberings.len());
-    registry.numberings.push(numbering);
-    idx
-}
-
-fn push_bullet(registry: &mut StyleRegistry, bullet: BulletDef) -> BulletIndex {
-    let idx = BulletIndex::new(registry.bullets.len());
-    registry.bullets.push(bullet);
-    idx
-}
-
-fn bullet_def(id: u32, bullet_char: &str) -> BulletDef {
-    BulletDef {
-        id,
-        bullet_char: bullet_char.to_string(),
-        checked_char: None,
-        use_image: false,
-        para_head: ParaHead {
-            start: 0,
-            level: 1,
-            num_format: NumberFormatType::Digit,
-            text: String::new(),
-            checkable: false,
-        },
-    }
-}
-
-fn checkable_bullet_def(id: u32, bullet_char: &str, checked_char: &str) -> BulletDef {
-    BulletDef {
-        id,
-        bullet_char: bullet_char.to_string(),
-        checked_char: Some(checked_char.to_string()),
-        use_image: false,
-        para_head: ParaHead {
-            start: 0,
-            level: 1,
-            num_format: NumberFormatType::Digit,
-            text: String::new(),
-            checkable: true,
-        },
-    }
-}
-
 fn numbering_def(id: u32) -> NumberingDef {
     NumberingDef {
         id,
@@ -252,10 +145,6 @@ fn numbering_def(id: u32) -> NumberingDef {
             para_head(1, 3, NumberFormatType::RomanSmall, "^3)"),
         ],
     }
-}
-
-fn para_head(start: u32, level: u32, num_format: NumberFormatType, text: &str) -> ParaHead {
-    ParaHead { start, level, num_format, text: text.to_string(), checkable: false }
 }
 
 fn title(text: &str, styles: &VisualStyles) -> Paragraph {
