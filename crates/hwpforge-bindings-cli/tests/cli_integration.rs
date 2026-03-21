@@ -96,12 +96,15 @@ fn fixture(name: &str) -> PathBuf {
     path
 }
 
-/// Path to hwpx_complete_guide.hwpx in examples/.
+/// Path to the curated hwpx_complete_guide showcase artifact in examples/.
 fn guide_hwpx_path() -> PathBuf {
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.pop();
     path.pop();
     path.push("examples");
+    path.push("showcase");
+    path.push("guides");
+    path.push("hwpx_complete_guide");
     path.push("hwpx_complete_guide.hwpx");
     assert!(path.exists(), "guide fixture not found: {}", path.display());
     path
