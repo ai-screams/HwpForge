@@ -839,12 +839,12 @@ impl<'a> DecoderState<'a> {
 
     fn ensure_paragraph(&mut self) {
         if self.current.is_none() {
-            if self.in_item {
-                if let Some(item) = self.pending_items.last_mut() {
-                    item.emitted_paragraph = true;
-                }
-            }
-            self.current = Some(ParagraphBuilder::new(self.style_for_context()));
+            let style = if self.in_item {
+                self.start_next_item_paragraph()
+            } else {
+                self.style_for_context()
+            };
+            self.current = Some(ParagraphBuilder::new(style));
         }
     }
 
@@ -899,9 +899,27 @@ impl<'a> DecoderState<'a> {
     }
 
     fn item_style_for(&self, item: &PendingItem) -> MdStyleRef {
-        item.task_checked
+        self.item_style_for_state(item.task_checked, item.emitted_paragraph)
+    }
+
+    fn item_style_for_state(&self, task_checked: Option<bool>, continuation: bool) -> MdStyleRef {
+        if continuation {
+            return self.mapping.list_continuation(self.current_item_level());
+        }
+
+        task_checked
             .map(|checked| self.mapping.task_list(checked, self.current_item_level()))
             .unwrap_or(self.mapping.list_item)
+    }
+
+    fn start_next_item_paragraph(&mut self) -> MdStyleRef {
+        let continuation =
+            self.pending_items.last().map(|item| item.emitted_paragraph).unwrap_or(false);
+        let task_checked = self.pending_items.last().and_then(|item| item.task_checked);
+        if let Some(item) = self.pending_items.last_mut() {
+            item.emitted_paragraph = true;
+        }
+        self.item_style_for_state(task_checked, continuation)
     }
 
     fn materialize_current_item_prefix_if_needed(&mut self) {
@@ -922,15 +940,12 @@ impl<'a> DecoderState<'a> {
             return;
         }
 
-        let Some(style) = self.pending_items.last().map(|item| self.item_style_for(item)) else {
+        if self.pending_items.last().is_some_and(|item| item.emitted_paragraph) {
             return;
-        };
-        let prefix = if let Some(item) = self.pending_items.last_mut() {
-            item.emitted_paragraph = true;
-            item.take_prefix()
-        } else {
-            None
-        };
+        }
+
+        let style = self.start_next_item_paragraph();
+        let prefix = self.pending_items.last_mut().and_then(PendingItem::take_prefix);
 
         let mut paragraph = ParagraphBuilder::new(style);
         if let Some(prefix) = prefix {
@@ -1256,6 +1271,39 @@ mod tests {
             child_shape.list,
             Some(ParagraphListRef::CheckBullet { level: 1, checked: true, .. })
         ));
+    }
+
+    #[test]
+    fn decode_multi_paragraph_task_item_uses_continuation_shape() {
+        use hwpforge_core::ParagraphListRef;
+        use hwpforge_foundation::HwpUnit;
+
+        let template = default_template();
+        let markdown = "- [ ] first paragraph of the same task item\n\n  second paragraph of the same task item\n\n- [x] next real task item";
+        let result = MdDecoder::decode(markdown, &template).unwrap();
+        let paragraphs = &result.document.sections()[0].paragraphs;
+
+        assert_eq!(paragraphs.len(), 3);
+        assert_eq!(paragraphs[0].text_content(), "first paragraph of the same task item");
+        assert_eq!(paragraphs[1].text_content(), "second paragraph of the same task item");
+        assert_eq!(paragraphs[2].text_content(), "next real task item");
+
+        let first_shape = result
+            .style_registry
+            .para_shape(paragraphs[0].para_shape_id)
+            .expect("first para shape");
+        let continuation_shape = result
+            .style_registry
+            .para_shape(paragraphs[1].para_shape_id)
+            .expect("continuation para shape");
+
+        assert!(matches!(
+            first_shape.list,
+            Some(ParagraphListRef::CheckBullet { level: 0, checked: false, .. })
+        ));
+        assert_eq!(continuation_shape.list, None);
+        assert_eq!(continuation_shape.indent_left, first_shape.indent_left);
+        assert_eq!(continuation_shape.indent_first_line, HwpUnit::ZERO);
     }
 
     #[test]

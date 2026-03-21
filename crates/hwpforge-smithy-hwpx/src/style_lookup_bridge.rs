@@ -71,6 +71,7 @@ impl StyleLookup for HwpxStyleLookup<'_> {
         fn para_list_type(&self, id: ParaShapeIndex) -> Option<&str>;
         fn para_list_level(&self, id: ParaShapeIndex) -> Option<u8>;
         fn para_checked_state(&self, id: ParaShapeIndex) -> Option<bool>;
+        fn para_style_name(&self, id: ParaShapeIndex) -> Option<&str>;
         fn para_heading_level(&self, id: ParaShapeIndex) -> Option<u8>;
         fn style_name(&self, id: StyleIndex) -> Option<&str>;
         fn style_heading_level(&self, id: StyleIndex) -> Option<u8>;

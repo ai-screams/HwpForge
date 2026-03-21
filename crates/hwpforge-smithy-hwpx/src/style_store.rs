@@ -1609,6 +1609,14 @@ impl StyleLookup for HwpxStyleStore {
         bullet.is_checkable().then_some(ps.checked)
     }
 
+    fn para_style_name(&self, id: ParaShapeIndex) -> Option<&str> {
+        let para_id = u32::try_from(id.get()).ok()?;
+        self.styles
+            .iter()
+            .find(|style| style.style_type == "PARA" && style.para_pr_id_ref == para_id)
+            .map(|style| style.name.as_str())
+    }
+
     fn para_heading_level(&self, id: ParaShapeIndex) -> Option<u8> {
         let ps = self.para_shapes.get(id.get())?;
         heading_level_from_para_shape(ps)
@@ -2956,6 +2964,30 @@ mod tests {
         use hwpforge_foundation::StyleIndex;
         let store = style_lookup_test_store();
         assert_eq!(store.style_name(StyleIndex::new(0)), Some("개요 2"));
+    }
+
+    #[test]
+    fn style_lookup_para_style_name() {
+        use hwpforge_core::StyleLookup;
+
+        let mut store = HwpxStyleStore::new();
+        store.push_para_shape(HwpxParaShape::default());
+        store.push_style(HwpxStyle::new(
+            0,
+            "PARA",
+            "__hwpforge_md_list_continuation_level_0",
+            "__hwpforge_md_list_continuation_level_0",
+            0,
+            0,
+            0,
+            1042,
+            0,
+        ));
+
+        assert_eq!(
+            store.para_style_name(ParaShapeIndex::new(0)),
+            Some("__hwpforge_md_list_continuation_level_0")
+        );
     }
 
     #[test]

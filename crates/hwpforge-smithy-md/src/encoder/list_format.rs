@@ -14,3 +14,11 @@ pub(super) fn format_list_item(
         format!("{indent}- {text}")
     }
 }
+
+pub(super) fn format_list_continuation(text: &str, level: u8) -> String {
+    let indent = "  ".repeat(level as usize + 1);
+    text.lines()
+        .map(|line| if line.is_empty() { String::new() } else { format!("{indent}{line}") })
+        .collect::<Vec<_>>()
+        .join("\n")
+}

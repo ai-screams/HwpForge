@@ -50,6 +50,17 @@ pub struct StyleEntry {
     pub font_id: FontIndex,
 }
 
+impl StyleEntry {
+    /// Creates a resolved style entry with explicit indices.
+    pub fn new(
+        char_shape_id: CharShapeIndex,
+        para_shape_id: ParaShapeIndex,
+        font_id: FontIndex,
+    ) -> Self {
+        Self { char_shape_id, para_shape_id, font_id }
+    }
+}
+
 /// A registry of resolved styles with index-based access.
 ///
 /// After inheritance resolution, the Template is converted into a

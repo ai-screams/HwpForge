@@ -9,8 +9,9 @@ use std::collections::HashMap;
 use hwpforge_core::{Control, Document, Paragraph, RunContent, StyleLookup, Table, Validated};
 use hwpforge_foundation::UnderlineType;
 
-use super::list_format::format_list_item;
+use super::list_format::{format_list_continuation, format_list_item};
 use crate::eqn::eqn_to_latex;
+use crate::internal_styles::parse_list_continuation_style_name;
 
 /// Output of style-aware markdown encoding.
 ///
@@ -25,6 +26,11 @@ pub struct MdOutput {
 }
 
 const SECTION_MARKER_COMMENT: &str = "<!-- hwpforge:section -->";
+
+#[derive(Debug, Clone, Copy)]
+struct ListContinuationContext {
+    level: u8,
+}
 
 // ---------------------------------------------------------------------------
 // Footnote/Endnote collector
@@ -84,6 +90,7 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
         }
 
         let mut code_block_lines: Vec<String> = Vec::new();
+        let mut continuation: Option<ListContinuationContext> = None;
 
         for paragraph in &section.paragraphs {
             // Page break
@@ -94,6 +101,7 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
                     code_block_lines.clear();
                 }
                 blocks.push("---".to_string());
+                continuation = None;
             }
 
             // Code block detection: all text runs with code font
@@ -110,6 +118,7 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
                     })
                     .collect::<String>();
                 code_block_lines.push(text);
+                continuation = None;
                 continue;
             }
 
@@ -119,12 +128,28 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
                 code_block_lines.clear();
             }
 
+            let continuation_level = continuation
+                .and_then(|ctx| continuation_level_for_paragraph(paragraph, styles, ctx));
             let (markdown, para_images) =
                 encode_paragraph_styled(paragraph, styles, &mut footnotes);
             if !markdown.trim().is_empty() {
-                blocks.push(markdown);
+                if let Some(level) = continuation_level {
+                    let indented = format_list_continuation(&markdown, level);
+                    if let Some(last) = blocks.last_mut() {
+                        last.push_str("\n\n");
+                        last.push_str(&indented);
+                    } else {
+                        blocks.push(indented);
+                    }
+                } else {
+                    blocks.push(markdown);
+                }
             }
             images.extend(para_images);
+
+            if continuation_level.is_none() {
+                continuation = list_context_for_paragraph(paragraph, styles);
+            }
         }
 
         // Flush remaining code block at section end
@@ -219,6 +244,34 @@ fn encode_paragraph_styled(
     }
 
     (text.trim_start().to_string(), images)
+}
+
+fn list_context_for_paragraph(
+    paragraph: &Paragraph,
+    styles: &dyn StyleLookup,
+) -> Option<ListContinuationContext> {
+    let para_shape_id = paragraph.para_shape_id;
+    let _list_type = styles.para_list_type(para_shape_id)?;
+    let level = styles.para_list_level(para_shape_id).unwrap_or(0);
+    Some(ListContinuationContext { level })
+}
+
+fn continuation_level_for_paragraph(
+    paragraph: &Paragraph,
+    styles: &dyn StyleLookup,
+    context: ListContinuationContext,
+) -> Option<u8> {
+    let para_shape_id = paragraph.para_shape_id;
+    if styles.para_heading_level(para_shape_id).is_some()
+        || styles.para_list_type(para_shape_id).is_some()
+    {
+        return None;
+    }
+
+    styles
+        .para_style_name(para_shape_id)
+        .and_then(parse_list_continuation_style_name)
+        .filter(|level| *level == context.level)
 }
 
 /// Extracts text from a paragraph with inline formatting applied.
@@ -911,6 +964,7 @@ mod tests {
         heading_paras: HashMap<usize, u8>,
         heading_styles: HashMap<usize, u8>,
         style_names: HashMap<usize, String>,
+        para_style_names: HashMap<usize, String>,
         image_data: HashMap<String, Vec<u8>>,
     }
 
@@ -926,6 +980,7 @@ mod tests {
                 heading_paras: HashMap::new(),
                 heading_styles: HashMap::new(),
                 style_names: HashMap::new(),
+                para_style_names: HashMap::new(),
                 image_data: HashMap::new(),
             }
         }
@@ -958,6 +1013,10 @@ mod tests {
 
         fn para_checked_state(&self, id: ParaShapeIndex) -> Option<bool> {
             self.list_para_checked.get(&id.get()).copied()
+        }
+
+        fn para_style_name(&self, id: ParaShapeIndex) -> Option<&str> {
+            self.para_style_names.get(&id.get()).map(String::as_str)
         }
 
         fn style_name(&self, id: StyleIndex) -> Option<&str> {
@@ -1318,6 +1377,38 @@ mod tests {
 
         let output = encode_styled(&doc, &styles);
         assert_eq!(output.markdown, "- [ ] Todo\n\n  - [x] Done");
+    }
+
+    #[test]
+    fn continuation_paragraph_after_checkable_item_stays_in_same_markdown_item() {
+        let doc = validated_document(vec![
+            Paragraph::with_runs(
+                vec![Run::text("first paragraph of the same task item", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(1),
+            ),
+            Paragraph::with_runs(
+                vec![Run::text("second paragraph of the same task item", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(2),
+            ),
+            Paragraph::with_runs(
+                vec![Run::text("next real task item", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(3),
+            ),
+        ]);
+        let mut styles = MockStyles::new();
+        styles.list_para_types.insert(1, "BULLET");
+        styles.list_para_levels.insert(1, 0);
+        styles.list_para_checked.insert(1, false);
+        styles.para_style_names.insert(2, "__hwpforge_md_list_continuation_level_0".to_string());
+        styles.list_para_types.insert(3, "BULLET");
+        styles.list_para_levels.insert(3, 0);
+        styles.list_para_checked.insert(3, true);
+
+        let output = encode_styled(&doc, &styles);
+        assert_eq!(
+            output.markdown,
+            "- [ ] first paragraph of the same task item\n\n  second paragraph of the same task item\n\n- [x] next real task item"
+        );
     }
 
     #[test]

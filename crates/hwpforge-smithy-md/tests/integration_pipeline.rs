@@ -10,7 +10,7 @@
 use hwpforge_blueprint::builtins::{builtin_default, builtin_gov_proposal};
 use hwpforge_blueprint::template::Template;
 use hwpforge_core::{Document, Draft, RunContent};
-use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder, HwpxRegistryBridge};
+use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder, HwpxRegistryBridge, HwpxStyleLookup};
 use hwpforge_smithy_md::{MdDecoder, MdEncoder};
 use pretty_assertions::assert_eq;
 
@@ -298,6 +298,42 @@ fn pipeline_task_list_lossy_encode_uses_gfm_syntax() {
 
     assert!(encoded.contains("- [ ] todo"));
     assert!(encoded.contains("- [x] done"));
+}
+
+#[test]
+fn pipeline_multi_paragraph_task_item_preserves_continuation_across_roundtrip() {
+    let markdown = "- [ ] first paragraph of the same task item\n\n  second paragraph of the same task item\n\n- [x] next real task item";
+    let template = builtin_default().expect("builtin_default should succeed");
+
+    let md_doc = MdDecoder::decode(markdown, &template).expect("MD decode should succeed");
+    let template_validated =
+        md_doc.document.clone().validate().expect("Template validate should succeed");
+    let lossy =
+        MdEncoder::encode(&template_validated, &template).expect("lossy encode should succeed");
+    assert!(lossy.contains("- [ ] first paragraph of the same task item"));
+    assert!(lossy.contains("\n\n  second paragraph of the same task item"));
+    assert!(lossy.contains("- [x] next real task item"));
+
+    let rebound_doc = md_doc.document.clone();
+    let bridge =
+        HwpxRegistryBridge::from_registry(&md_doc.style_registry).expect("bridge should succeed");
+    let rebound = bridge.rebind_draft_document(rebound_doc).expect("style rebind should succeed");
+    let validated = rebound.validate().expect("Validation should succeed");
+
+    let hwpx_bytes = HwpxEncoder::encode(
+        &validated,
+        bridge.style_store(),
+        &hwpforge_core::image::ImageStore::new(),
+    )
+    .expect("HWPX encode should succeed");
+
+    let decoded = HwpxDecoder::decode(&hwpx_bytes).expect("HWPX decode should succeed");
+    let validated_roundtrip =
+        decoded.document.validate().expect("Roundtrip validate should succeed");
+    let lookup = HwpxStyleLookup::new(&decoded.style_store, &decoded.image_store);
+    let styled = MdEncoder::encode_styled(&validated_roundtrip, &lookup);
+
+    assert_eq!(styled.markdown.trim(), markdown);
 }
 
 #[test]

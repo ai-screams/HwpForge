@@ -4,7 +4,7 @@ use hwpforge_blueprint::registry::StyleRegistry;
 use hwpforge_blueprint::template::Template;
 use hwpforge_core::{Control, Document, Paragraph, ParagraphListRef, RunContent, Table, Validated};
 
-use super::list_format::format_list_item;
+use super::list_format::{format_list_continuation, format_list_item};
 use crate::error::MdResult;
 use crate::frontmatter::{from_metadata, render_frontmatter};
 use crate::mapper::{resolve_mapping, MdMapping, ParagraphKind};
@@ -38,16 +38,37 @@ fn encode_body(
     registry: Option<&StyleRegistry>,
 ) -> String {
     let mut blocks = Vec::new();
+    let mut continuation_level: Option<u8> = None;
 
     for (section_index, section) in document.sections().iter().enumerate() {
         if section_index > 0 {
             blocks.push(SECTION_MARKER_COMMENT.to_string());
+            continuation_level = None;
         }
 
         for paragraph in &section.paragraphs {
+            let current_continuation_level = mapping
+                .and_then(|mapping| mapping.continuation_level(paragraph.para_shape_id))
+                .filter(|level| continuation_level == Some(*level));
             let markdown = encode_paragraph(paragraph, mapping, registry);
             if !markdown.trim().is_empty() {
-                blocks.push(markdown);
+                if let Some(level) = current_continuation_level {
+                    let indented = format_list_continuation(&markdown, level);
+                    if let Some(last) = blocks.last_mut() {
+                        last.push_str("\n\n");
+                        last.push_str(&indented);
+                    } else {
+                        blocks.push(indented);
+                    }
+                } else {
+                    blocks.push(markdown);
+                }
+            }
+
+            if current_continuation_level.is_none() {
+                continuation_level = registry
+                    .and_then(|registry| format_registry_list_level(paragraph, registry))
+                    .or_else(|| mapping.and_then(|mapping| mapping_list_level(paragraph, mapping)));
             }
         }
     }
@@ -98,6 +119,7 @@ fn encode_paragraph(
                     format!("- {trimmed}")
                 }
             }
+            ParagraphKind::ListContinuation(_) => text,
             ParagraphKind::Body => text,
         }
     } else {
@@ -122,6 +144,23 @@ fn format_registry_list_item(
         ParagraphListRef::CheckBullet { level, checked, .. } => {
             Some(format_list_item(text, "BULLET", level, Some(checked)))
         }
+    }
+}
+
+fn format_registry_list_level(paragraph: &Paragraph, registry: &StyleRegistry) -> Option<u8> {
+    let list = registry.para_shape(paragraph.para_shape_id)?.list?;
+    match list {
+        ParagraphListRef::Outline { .. } => None,
+        ParagraphListRef::Number { level, .. }
+        | ParagraphListRef::Bullet { level, .. }
+        | ParagraphListRef::CheckBullet { level, .. } => Some(level),
+    }
+}
+
+fn mapping_list_level(paragraph: &Paragraph, mapping: &MdMapping) -> Option<u8> {
+    match mapping.classify_para_shape(paragraph.para_shape_id) {
+        ParagraphKind::ListItem => Some(0),
+        _ => None,
     }
 }
 

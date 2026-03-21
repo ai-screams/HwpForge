@@ -31,6 +31,7 @@ mod encoder;
 mod eqn;
 pub mod error;
 pub mod frontmatter;
+mod internal_styles;
 mod mapper;
 
 pub use decoder::{MdDecoder, MdDocument};
