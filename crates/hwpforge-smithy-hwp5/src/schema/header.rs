@@ -428,6 +428,7 @@ impl Hwp5RawBulletDef {
         hwpforge_core::BulletDef {
             id,
             bullet_char: self.bullet_char.clone(),
+            checked_char: self.check_bullet_char.clone(),
             use_image: self.use_image,
             para_head: hwpforge_core::ParaHead {
                 start: 0,

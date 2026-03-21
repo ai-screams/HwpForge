@@ -11,22 +11,34 @@ use hwpforge_foundation::{HeadingType, NumberFormatType};
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::header::{HxBullet, HxBulletParaHead, HxHeading};
 
-/// Converts shared list semantics into a HWPX wire triple.
+/// Shared paragraph-list wire components stored on `hh:paraPr`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct WireListParts {
+    pub heading_type: HeadingType,
+    pub id_ref: u32,
+    pub level: u32,
+    pub checked: bool,
+}
+
+/// Converts shared list semantics into HWPX wire components.
 pub(crate) fn list_ref_to_wire_parts(
     list_ref: Option<ParagraphListRef>,
     numberings: &[NumberingDef],
     bullets: &[BulletDef],
-) -> HwpxResult<(HeadingType, u32, u32)> {
+) -> HwpxResult<WireListParts> {
     match list_ref {
         // HWPX `paraPr/heading(level)` is zero-based for outline as well.
         // Only `<hh:numbering>/<hh:paraHead level="...">` uses one-based
         // numbering levels.
-        Some(ParagraphListRef::Outline { level }) => {
-            Ok((HeadingType::Outline, 0, u32::from(level)))
-        }
-        Some(ParagraphListRef::Number { numbering_id, level }) => Ok((
-            HeadingType::Number,
-            numberings
+        Some(ParagraphListRef::Outline { level }) => Ok(WireListParts {
+            heading_type: HeadingType::Outline,
+            id_ref: 0,
+            level: u32::from(level),
+            checked: false,
+        }),
+        Some(ParagraphListRef::Number { numbering_id, level }) => Ok(WireListParts {
+            heading_type: HeadingType::Number,
+            id_ref: numberings
                 .get(numbering_id.get())
                 .ok_or_else(|| HwpxError::IndexOutOfBounds {
                     kind: "numbering definition",
@@ -34,21 +46,38 @@ pub(crate) fn list_ref_to_wire_parts(
                     max: numberings.len() as u32,
                 })?
                 .id,
-            u32::from(level),
-        )),
-        Some(ParagraphListRef::Bullet { bullet_id, level }) => Ok((
-            HeadingType::Bullet,
-            bullets
-                .get(bullet_id.get())
-                .ok_or_else(|| HwpxError::IndexOutOfBounds {
-                    kind: "bullet definition",
-                    index: bullet_id.get() as u32,
-                    max: bullets.len() as u32,
-                })?
-                .id,
-            u32::from(level),
-        )),
-        None => Ok((HeadingType::None, 0, 0)),
+            level: u32::from(level),
+            checked: false,
+        }),
+        Some(ParagraphListRef::Bullet { bullet_id, level }) => Ok(WireListParts {
+            heading_type: HeadingType::Bullet,
+            id_ref: resolve_bullet(bullets, bullet_id)?.id,
+            level: u32::from(level),
+            checked: false,
+        }),
+        Some(ParagraphListRef::CheckBullet { bullet_id, level, checked }) => {
+            let bullet = resolve_bullet(bullets, bullet_id)?;
+            if !bullet.is_checkable() {
+                return Err(HwpxError::InvalidStructure {
+                    detail: format!(
+                        "checkable bullet paragraph references non-checkable bullet definition {}",
+                        bullet.id
+                    ),
+                });
+            }
+            Ok(WireListParts {
+                heading_type: HeadingType::Bullet,
+                id_ref: bullet.id,
+                level: u32::from(level),
+                checked,
+            })
+        }
+        None => Ok(WireListParts {
+            heading_type: HeadingType::None,
+            id_ref: 0,
+            level: 0,
+            checked: false,
+        }),
     }
 }
 
@@ -76,8 +105,9 @@ pub(crate) fn bullet_def_to_hwpx(bullet: &BulletDef) -> HxBullet {
     HxBullet {
         id: bullet.id,
         bullet_char: bullet.bullet_char.clone(),
+        checked_char: bullet.checked_char.clone(),
         use_image: u32::from(bullet.use_image),
-        para_heads: vec![para_head_to_hwpx(&bullet.para_head)],
+        para_heads: vec![para_head_to_hwpx(&bullet.para_head, bullet.is_checkable())],
     }
 }
 
@@ -89,12 +119,13 @@ pub(crate) fn bullet_def_from_hwpx(bullet: &HxBullet) -> BulletDef {
     BulletDef {
         id: bullet.id,
         bullet_char: bullet.bullet_char.clone(),
+        checked_char: bullet.checked_char.clone(),
         use_image: bullet.use_image != 0,
         para_head,
     }
 }
 
-fn para_head_to_hwpx(para_head: &ParaHead) -> HxBulletParaHead {
+fn para_head_to_hwpx(para_head: &ParaHead, is_checkable: bool) -> HxBulletParaHead {
     HxBulletParaHead {
         level: para_head.level.saturating_sub(1),
         align: "LEFT".into(),
@@ -105,7 +136,7 @@ fn para_head_to_hwpx(para_head: &ParaHead) -> HxBulletParaHead {
         text_offset: 50,
         num_format: number_format_to_hwpx(para_head.num_format).into(),
         char_pr_id_ref: u32::MAX,
-        checkable: u32::from(para_head.checkable),
+        checkable: u32::from(is_checkable),
         text: para_head.text.clone(),
     }
 }
@@ -128,6 +159,17 @@ fn default_bullet_para_head() -> ParaHead {
         text: String::new(),
         checkable: false,
     }
+}
+
+fn resolve_bullet(
+    bullets: &[BulletDef],
+    bullet_id: hwpforge_foundation::BulletIndex,
+) -> HwpxResult<&BulletDef> {
+    bullets.get(bullet_id.get()).ok_or_else(|| HwpxError::IndexOutOfBounds {
+        kind: "bullet definition",
+        index: bullet_id.get() as u32,
+        max: bullets.len() as u32,
+    })
 }
 
 fn number_format_to_hwpx(format: NumberFormatType) -> &'static str {
@@ -184,8 +226,9 @@ mod tests {
         let bullets = vec![BulletDef {
             id: 7,
             bullet_char: "•".into(),
+            checked_char: Some("☑".into()),
             use_image: false,
-            para_head: default_bullet_para_head(),
+            para_head: ParaHead { checkable: true, ..default_bullet_para_head() },
         }];
 
         assert_eq!(
@@ -195,7 +238,12 @@ mod tests {
                 &bullets,
             )
             .unwrap(),
-            (HeadingType::Outline, 0, 0),
+            WireListParts {
+                heading_type: HeadingType::Outline,
+                id_ref: 0,
+                level: 0,
+                checked: false
+            },
         );
         assert_eq!(
             list_ref_to_wire_parts(
@@ -204,7 +252,12 @@ mod tests {
                 &bullets,
             )
             .unwrap(),
-            (HeadingType::Number, 42, 2),
+            WireListParts {
+                heading_type: HeadingType::Number,
+                id_ref: 42,
+                level: 2,
+                checked: false
+            },
         );
         assert_eq!(
             list_ref_to_wire_parts(
@@ -213,7 +266,25 @@ mod tests {
                 &bullets,
             )
             .unwrap(),
-            (HeadingType::Bullet, 7, 0),
+            WireListParts {
+                heading_type: HeadingType::Bullet,
+                id_ref: 7,
+                level: 0,
+                checked: false
+            },
+        );
+        assert_eq!(
+            list_ref_to_wire_parts(
+                Some(ParagraphListRef::CheckBullet {
+                    bullet_id: BulletIndex::new(0),
+                    level: 1,
+                    checked: true,
+                }),
+                &numberings,
+                &bullets,
+            )
+            .unwrap(),
+            WireListParts { heading_type: HeadingType::Bullet, id_ref: 7, level: 1, checked: true },
         );
     }
 
@@ -241,6 +312,7 @@ mod tests {
         let bullet = BulletDef {
             id: 1,
             bullet_char: "".into(),
+            checked_char: Some("☑".into()),
             use_image: true,
             para_head: ParaHead {
                 start: 0,
@@ -256,7 +328,9 @@ mod tests {
 
         assert_eq!(roundtrip.id, 1);
         assert_eq!(roundtrip.bullet_char, "");
+        assert_eq!(roundtrip.checked_char.as_deref(), Some("☑"));
         assert!(roundtrip.use_image);
         assert_eq!(roundtrip.para_head.level, 1);
+        assert!(roundtrip.para_head.checkable);
     }
 }

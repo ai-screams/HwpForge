@@ -237,6 +237,15 @@ pub enum PartialParagraphListRef {
         /// Zero-based paragraph list level (`0..=9`).
         level: u8,
     },
+    /// Checkable bullet list semantics.
+    CheckBullet {
+        /// Declared bullet definition id from the template.
+        bullet_id: u32,
+        /// Zero-based paragraph list level (`0..=9`).
+        level: u8,
+        /// Whether the checkbox is currently checked.
+        checked: bool,
+    },
 }
 
 impl PartialParagraphListRef {
@@ -247,9 +256,10 @@ impl PartialParagraphListRef {
         bullets: &[BulletDef],
     ) -> BlueprintResult<ParagraphListRef> {
         let level = match self {
-            Self::Outline { level } | Self::Number { level, .. } | Self::Bullet { level, .. } => {
-                level
-            }
+            Self::Outline { level }
+            | Self::Number { level, .. }
+            | Self::Bullet { level, .. }
+            | Self::CheckBullet { level, .. } => level,
         };
         if level > ParagraphListRef::MAX_LEVEL {
             return Err(BlueprintError::InvalidListLevel {
@@ -287,6 +297,28 @@ impl PartialParagraphListRef {
                 Ok(ParagraphListRef::Bullet {
                     bullet_id: hwpforge_foundation::BulletIndex::new(bullet_index),
                     level,
+                })
+            }
+            Self::CheckBullet { bullet_id, level, checked } => {
+                let bullet_index = bullets
+                    .iter()
+                    .position(|bullet| bullet.id == bullet_id)
+                    .ok_or_else(|| BlueprintError::InvalidListReference {
+                        style_name: style_name.to_string(),
+                        kind: "bullet".to_string(),
+                        id: bullet_id,
+                    })?;
+                let bullet = &bullets[bullet_index];
+                if !bullet.is_checkable() {
+                    return Err(BlueprintError::InvalidCheckableBulletDefinition {
+                        style_name: style_name.to_string(),
+                        bullet_id,
+                    });
+                }
+                Ok(ParagraphListRef::CheckBullet {
+                    bullet_id: hwpforge_foundation::BulletIndex::new(bullet_index),
+                    level,
+                    checked,
                 })
             }
         }
@@ -775,6 +807,7 @@ mod tests {
         BulletDef {
             id,
             bullet_char: "•".into(),
+            checked_char: None,
             use_image: false,
             para_head: ParaHead {
                 start: 0,
@@ -964,6 +997,49 @@ mod tests {
             resolved.list,
             Some(ParagraphListRef::Bullet { bullet_id: BulletIndex::new(0), level: 0 })
         );
+    }
+
+    #[test]
+    fn partial_para_shape_resolve_list_check_bullet_reference() {
+        let partial = PartialParaShape {
+            list: Some(PartialParagraphListRef::CheckBullet {
+                bullet_id: 7,
+                level: 1,
+                checked: true,
+            }),
+            ..Default::default()
+        };
+        let mut bullet = test_bullet_def(7);
+        bullet.checked_char = Some("☑".into());
+        bullet.para_head.checkable = true;
+
+        let resolved = partial.resolve("body", &[], &[bullet]).unwrap();
+        assert_eq!(
+            resolved.list,
+            Some(ParagraphListRef::CheckBullet {
+                bullet_id: BulletIndex::new(0),
+                level: 1,
+                checked: true,
+            })
+        );
+    }
+
+    #[test]
+    fn partial_para_shape_resolve_rejects_non_checkable_check_bullet_reference() {
+        let partial = PartialParaShape {
+            list: Some(PartialParagraphListRef::CheckBullet {
+                bullet_id: 7,
+                level: 0,
+                checked: false,
+            }),
+            ..Default::default()
+        };
+
+        let err = partial.resolve("body", &[], &[test_bullet_def(7)]).unwrap_err();
+        assert!(matches!(
+            err,
+            BlueprintError::InvalidCheckableBulletDefinition { bullet_id: 7, .. }
+        ));
     }
 
     #[test]

@@ -419,6 +419,7 @@ fn to_hwpx_style_store_projects_numberings_and_warns_on_bullets() {
     let bullet = hwpx_store.iter_bullets().next().unwrap();
     assert_eq!(bullet.id, 1);
     assert_eq!(bullet.bullet_char, "●");
+    assert_eq!(bullet.checked_char.as_deref(), Some("☑"));
     assert!(!bullet.use_image);
     assert!(!warnings.iter().any(|warning| matches!(
         warning,

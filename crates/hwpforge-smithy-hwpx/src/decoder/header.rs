@@ -461,6 +461,7 @@ fn convert_para_pr(pp: &HxParaPr) -> HwpxParaShape {
         .map_or(HeadingType::None, |heading| HeadingType::from_hwpx_str(&heading.heading_type));
     let heading_id_ref = pp.heading.as_ref().map_or(0, |heading| heading.id_ref);
     let heading_level = pp.heading.as_ref().map_or(0, |heading| heading.level);
+    let checked = pp.checked != 0;
     let tab_pr_id_ref = pp.tab_pr_id_ref;
     let condense = pp.condense;
 
@@ -478,6 +479,7 @@ fn convert_para_pr(pp: &HxParaPr) -> HwpxParaShape {
         heading_type,
         heading_id_ref,
         heading_level,
+        checked,
         tab_pr_id_ref,
         condense,
         ..Default::default()

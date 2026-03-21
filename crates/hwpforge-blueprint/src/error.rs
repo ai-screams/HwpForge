@@ -65,6 +65,10 @@ pub enum BlueprintErrorCode {
     ConflictingListSpecification = 3019,
     /// Legacy heading_type cannot be migrated safely.
     UnsupportedLegacyHeadingType = 3020,
+    /// Style references a non-checkable bullet as a checkable list.
+    InvalidCheckableBulletDefinition = 3021,
+    /// Bullet definition mixes checkbox fields incoherently.
+    InvalidBulletDefinition = 3022,
 }
 
 impl fmt::Display for BlueprintErrorCode {
@@ -248,6 +252,24 @@ pub enum BlueprintError {
         heading_type: HeadingType,
     },
 
+    /// A style references a bullet definition that cannot represent checkbox state.
+    #[error("style '{style_name}' references non-checkable bullet definition {bullet_id}")]
+    InvalidCheckableBulletDefinition {
+        /// Style name that contains the invalid checkable list reference.
+        style_name: String,
+        /// Referenced bullet definition id.
+        bullet_id: u32,
+    },
+
+    /// A bullet definition is internally inconsistent for authoring.
+    #[error("bullet definition {id} is invalid: {reason}")]
+    InvalidBulletDefinition {
+        /// The invalid bullet definition id.
+        id: u32,
+        /// Why it is invalid.
+        reason: String,
+    },
+
     /// Propagated Foundation error.
     #[error(transparent)]
     Foundation(#[from] FoundationError),
@@ -301,6 +323,10 @@ impl BlueprintError {
             Self::UnsupportedLegacyHeadingType { .. } => {
                 BlueprintErrorCode::UnsupportedLegacyHeadingType
             }
+            Self::InvalidCheckableBulletDefinition { .. } => {
+                BlueprintErrorCode::InvalidCheckableBulletDefinition
+            }
+            Self::InvalidBulletDefinition { .. } => BlueprintErrorCode::InvalidBulletDefinition,
             Self::Foundation(_) => BlueprintErrorCode::YamlParse, // fallback
         }
     }
@@ -436,6 +462,10 @@ mod tests {
             (
                 BlueprintError::InvalidStyleName { name: String::new(), reason: String::new() },
                 BlueprintErrorCode::InvalidStyleName,
+            ),
+            (
+                BlueprintError::InvalidBulletDefinition { id: 0, reason: String::new() },
+                BlueprintErrorCode::InvalidBulletDefinition,
             ),
         ];
 

@@ -192,7 +192,8 @@ fn encode_paragraph_styled(
     if !trimmed.is_empty() {
         if let Some(list_type) = styles.para_list_type(paragraph.para_shape_id) {
             let level = styles.para_list_level(paragraph.para_shape_id).unwrap_or(0);
-            return (format_list_item(trimmed, list_type, level), images);
+            let checked = styles.para_checked_state(paragraph.para_shape_id);
+            return (format_list_item(trimmed, list_type, level, checked), images);
         }
     }
 
@@ -886,10 +887,13 @@ fn format_as_list(text: &str, style_name: &str) -> Option<String> {
     }
 }
 
-fn format_list_item(text: &str, list_type: &str, level: u8) -> String {
+fn format_list_item(text: &str, list_type: &str, level: u8, checked: Option<bool>) -> String {
     let indent = "  ".repeat(level as usize);
     if list_type == "NUMBER" {
         format!("{indent}1. {text}")
+    } else if let Some(checked) = checked {
+        let marker = if checked { "x" } else { " " };
+        format!("{indent}- [{marker}] {text}")
     } else {
         format!("{indent}- {text}")
     }
@@ -914,6 +918,7 @@ mod tests {
         strikeout_ids: Vec<usize>,
         list_para_types: HashMap<usize, &'static str>,
         list_para_levels: HashMap<usize, u8>,
+        list_para_checked: HashMap<usize, bool>,
         heading_paras: HashMap<usize, u8>,
         heading_styles: HashMap<usize, u8>,
         style_names: HashMap<usize, String>,
@@ -928,6 +933,7 @@ mod tests {
                 strikeout_ids: Vec::new(),
                 list_para_types: HashMap::new(),
                 list_para_levels: HashMap::new(),
+                list_para_checked: HashMap::new(),
                 heading_paras: HashMap::new(),
                 heading_styles: HashMap::new(),
                 style_names: HashMap::new(),
@@ -959,6 +965,10 @@ mod tests {
 
         fn para_list_level(&self, id: ParaShapeIndex) -> Option<u8> {
             self.list_para_levels.get(&id.get()).copied()
+        }
+
+        fn para_checked_state(&self, id: ParaShapeIndex) -> Option<bool> {
+            self.list_para_checked.get(&id.get()).copied()
         }
 
         fn style_name(&self, id: StyleIndex) -> Option<&str> {
@@ -1295,6 +1305,45 @@ mod tests {
 
         let output = encode_styled(&doc, &styles);
         assert_eq!(output.markdown, "- Top\n\n    - Nested");
+    }
+
+    #[test]
+    fn para_shape_checkable_bullet_formats_as_task_list() {
+        let doc = validated_document(vec![
+            Paragraph::with_runs(
+                vec![Run::text("Todo", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(1),
+            ),
+            Paragraph::with_runs(
+                vec![Run::text("Done", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(2),
+            ),
+        ]);
+        let mut styles = MockStyles::new();
+        styles.list_para_types.insert(1, "BULLET");
+        styles.list_para_levels.insert(1, 0);
+        styles.list_para_checked.insert(1, false);
+        styles.list_para_types.insert(2, "BULLET");
+        styles.list_para_levels.insert(2, 1);
+        styles.list_para_checked.insert(2, true);
+
+        let output = encode_styled(&doc, &styles);
+        assert_eq!(output.markdown, "- [ ] Todo\n\n  - [x] Done");
+    }
+
+    #[test]
+    fn numbered_list_ignores_checked_state() {
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::text("Numbered", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(3),
+        )]);
+        let mut styles = MockStyles::new();
+        styles.list_para_types.insert(3, "NUMBER");
+        styles.list_para_levels.insert(3, 0);
+        styles.list_para_checked.insert(3, true);
+
+        let output = encode_styled(&doc, &styles);
+        assert_eq!(output.markdown, "1. Numbered");
     }
 
     // -----------------------------------------------------------------------

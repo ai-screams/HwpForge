@@ -616,4 +616,57 @@ mod tests {
         assert_eq!(numberings[2].levels[0].text, "(^1)");
         assert_eq!(numberings[4].levels[6].num_format, NumberFormatType::CircledLatinSmall);
     }
+
+    #[test]
+    fn decode_user_sample_checkable_bullet_basic_preserves_checked_glyph_and_item_state() {
+        let decoded = decode_fixture("user_samples/sample-checkable-bullet-basic.hwpx");
+        let paragraphs = &decoded.document.sections()[0].paragraphs;
+
+        let unchecked = paragraphs
+            .iter()
+            .find(|paragraph| paragraph.text_content().contains("unchecked item A"))
+            .expect("fixture should contain unchecked item A");
+        let checked = paragraphs
+            .iter()
+            .find(|paragraph| paragraph.text_content().contains("checked item B"))
+            .expect("fixture should contain checked item B");
+
+        let unchecked_shape = decoded.style_store.para_shape(unchecked.para_shape_id).unwrap();
+        let checked_shape = decoded.style_store.para_shape(checked.para_shape_id).unwrap();
+        let bullet = decoded
+            .style_store
+            .iter_bullets()
+            .find(|bullet| bullet.id == unchecked_shape.heading_id_ref)
+            .expect("checkable bullet definition should exist");
+
+        assert_eq!(unchecked_shape.heading_type, HeadingType::Bullet);
+        assert_eq!(checked_shape.heading_type, HeadingType::Bullet);
+        assert!(bullet.is_checkable());
+        assert_eq!(bullet.checked_char.as_deref(), Some("☑"));
+        assert!(!unchecked_shape.checked);
+        assert!(checked_shape.checked);
+    }
+
+    #[test]
+    fn decode_user_sample_checkable_bullet_nested_preserves_depth() {
+        let decoded = decode_fixture("user_samples/sample-checkable-bullet-nested.hwpx");
+        let paragraphs = &decoded.document.sections()[0].paragraphs;
+
+        let level1 = paragraphs
+            .iter()
+            .find(|paragraph| paragraph.text_content().contains("level 1 unchecked"))
+            .expect("fixture should contain level 1 item");
+        let level2 = paragraphs
+            .iter()
+            .find(|paragraph| paragraph.text_content().contains("level 2 checked"))
+            .expect("fixture should contain level 2 item");
+        let level3 = paragraphs
+            .iter()
+            .find(|paragraph| paragraph.text_content().contains("level 3 unchecked"))
+            .expect("fixture should contain level 3 item");
+
+        assert_eq!(decoded.style_store.para_shape(level1.para_shape_id).unwrap().heading_level, 0);
+        assert_eq!(decoded.style_store.para_shape(level2.para_shape_id).unwrap().heading_level, 1);
+        assert_eq!(decoded.style_store.para_shape(level3.para_shape_id).unwrap().heading_level, 2);
+    }
 }

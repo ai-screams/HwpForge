@@ -752,6 +752,7 @@ styles:
             bullets: vec![BulletDef {
                 id: 7,
                 bullet_char: "•".into(),
+                checked_char: None,
                 use_image: false,
                 para_head: ParaHead {
                     start: 0,

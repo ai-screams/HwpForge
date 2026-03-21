@@ -978,6 +978,9 @@ pub struct HxBullet {
     /// Bullet glyph.
     #[serde(rename = "@char", default)]
     pub bullet_char: String,
+    /// Checked bullet glyph when this bullet is checkable.
+    #[serde(rename = "@checkedChar", default, skip_serializing_if = "Option::is_none")]
+    pub checked_char: Option<String>,
     /// Whether this bullet uses an image.
     #[serde(rename = "@useImage", default)]
     pub use_image: u32,

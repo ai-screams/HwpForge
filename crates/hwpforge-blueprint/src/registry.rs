@@ -435,6 +435,21 @@ fn validate_bullet_definitions(bullets: &[BulletDef]) -> BlueprintResult<()> {
         if seen.insert(bullet.id, ()).is_some() {
             return Err(BlueprintError::DuplicateBulletDefinition { id: bullet.id });
         }
+        match (bullet.checked_char.is_some(), bullet.para_head.checkable) {
+            (true, false) => {
+                return Err(BlueprintError::InvalidBulletDefinition {
+                    id: bullet.id,
+                    reason: "checked_char requires para_head.checkable=true".to_string(),
+                });
+            }
+            (false, true) => {
+                return Err(BlueprintError::InvalidBulletDefinition {
+                    id: bullet.id,
+                    reason: "checkable bullet definitions must provide checked_char".to_string(),
+                });
+            }
+            (false, false) | (true, true) => {}
+        }
     }
     Ok(())
 }
@@ -484,8 +499,10 @@ fn validate_tab_reference(
 mod tests {
     use super::*;
     use crate::style::PartialStyle;
+    use crate::template::Template;
     use crate::template::{TemplateMeta, TemplateTabDef, TemplateTabStop};
-    use hwpforge_foundation::{Alignment, HwpUnit, LineSpacingType};
+    use hwpforge_core::{BulletDef, ParaHead};
+    use hwpforge_foundation::{Alignment, HwpUnit, LineSpacingType, NumberFormatType};
     use pretty_assertions::assert_eq;
 
     // Helper: create a minimal PartialStyle with font + size
@@ -556,6 +573,60 @@ mod tests {
 
         assert_eq!(body.char_shape_id, CharShapeIndex::new(0));
         assert_eq!(heading.char_shape_id, CharShapeIndex::new(1));
+    }
+
+    #[test]
+    fn template_rejects_checkable_bullet_without_checked_char() {
+        let mut styles = IndexMap::new();
+        styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
+        let template = Template {
+            bullets: vec![BulletDef {
+                id: 7,
+                bullet_char: "☐".into(),
+                checked_char: None,
+                use_image: false,
+                para_head: ParaHead {
+                    start: 0,
+                    level: 1,
+                    num_format: NumberFormatType::Digit,
+                    text: String::new(),
+                    checkable: true,
+                },
+            }],
+            ..make_template(styles)
+        };
+
+        assert!(matches!(
+            StyleRegistry::from_template(&template),
+            Err(BlueprintError::InvalidBulletDefinition { id: 7, .. })
+        ));
+    }
+
+    #[test]
+    fn template_rejects_checked_char_without_checkable_flag() {
+        let mut styles = IndexMap::new();
+        styles.insert("body".to_string(), make_partial_style("Batang", 10.0));
+        let template = Template {
+            bullets: vec![BulletDef {
+                id: 7,
+                bullet_char: "☐".into(),
+                checked_char: Some("☑".into()),
+                use_image: false,
+                para_head: ParaHead {
+                    start: 0,
+                    level: 1,
+                    num_format: NumberFormatType::Digit,
+                    text: String::new(),
+                    checkable: false,
+                },
+            }],
+            ..make_template(styles)
+        };
+
+        assert!(matches!(
+            StyleRegistry::from_template(&template),
+            Err(BlueprintError::InvalidBulletDefinition { id: 7, .. })
+        ));
     }
 
     #[test]

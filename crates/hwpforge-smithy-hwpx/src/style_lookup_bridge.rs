@@ -70,6 +70,7 @@ impl StyleLookup for HwpxStyleLookup<'_> {
         fn para_alignment(&self, id: ParaShapeIndex) -> Option<Alignment>;
         fn para_list_type(&self, id: ParaShapeIndex) -> Option<&str>;
         fn para_list_level(&self, id: ParaShapeIndex) -> Option<u8>;
+        fn para_checked_state(&self, id: ParaShapeIndex) -> Option<bool>;
         fn para_heading_level(&self, id: ParaShapeIndex) -> Option<u8>;
         fn style_name(&self, id: StyleIndex) -> Option<&str>;
         fn style_heading_level(&self, id: StyleIndex) -> Option<u8>;
@@ -97,7 +98,7 @@ mod tests {
     use super::*;
     use crate::style_store::{HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore};
     use hwpforge_core::ImageStore;
-    use hwpforge_foundation::{CharShapeIndex, HeadingType, ParaShapeIndex};
+    use hwpforge_foundation::{CharShapeIndex, HeadingType, NumberFormatType, ParaShapeIndex};
 
     #[test]
     fn bridge_delegates_style_queries() {
@@ -109,6 +110,25 @@ mod tests {
             heading_level: 1,
             ..Default::default()
         });
+        store.push_bullet(hwpforge_core::BulletDef {
+            id: 7,
+            bullet_char: "☐".into(),
+            checked_char: Some("☑".into()),
+            use_image: false,
+            para_head: hwpforge_core::ParaHead {
+                start: 0,
+                level: 1,
+                num_format: NumberFormatType::Digit,
+                text: String::new(),
+                checkable: true,
+            },
+        });
+        store.push_para_shape(HwpxParaShape {
+            heading_type: HeadingType::Bullet,
+            heading_id_ref: 7,
+            checked: true,
+            ..Default::default()
+        });
 
         let images = ImageStore::new();
         let lookup = HwpxStyleLookup::new(&store, &images);
@@ -116,6 +136,7 @@ mod tests {
         assert_eq!(lookup.char_bold(CharShapeIndex::new(0)), Some(true));
         assert_eq!(lookup.char_font_name(CharShapeIndex::new(0)), Some("함초롬돋움"));
         assert_eq!(lookup.para_heading_level(ParaShapeIndex::new(0)), Some(2));
+        assert_eq!(lookup.para_checked_state(ParaShapeIndex::new(1)), Some(true));
     }
 
     #[test]

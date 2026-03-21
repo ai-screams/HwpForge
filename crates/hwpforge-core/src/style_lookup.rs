@@ -102,6 +102,15 @@ pub trait StyleLookup {
         None
     }
 
+    /// Returns the checkbox state for a paragraph shape when it is a checkable bullet.
+    ///
+    /// `Some(true)` means a checked checkbox item, `Some(false)` means an
+    /// unchecked checkbox item, and `None` means the paragraph is not a
+    /// checkable bullet.
+    fn para_checked_state(&self, _id: ParaShapeIndex) -> Option<bool> {
+        None
+    }
+
     /// Returns the heading level (1–6) implied by the paragraph shape at `id`.
     ///
     /// This is the format-agnostic truth source for paragraph-level outline
@@ -168,6 +177,7 @@ mod tests {
         assert!(store.para_alignment(ps).is_none());
         assert!(store.para_list_type(ps).is_none());
         assert!(store.para_list_level(ps).is_none());
+        assert!(store.para_checked_state(ps).is_none());
         assert!(store.para_heading_level(ps).is_none());
         assert!(store.style_name(si).is_none());
         assert!(store.style_heading_level(si).is_none());

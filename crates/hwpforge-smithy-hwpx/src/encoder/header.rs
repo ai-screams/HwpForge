@@ -299,10 +299,16 @@ fn build_bullets_xml(store: &HwpxStyleStore) -> String {
 
 /// Serializes a single bullet definition to XML.
 fn build_bullet_xml(bullet: &HxBullet) -> String {
+    let checked_char_attr = bullet
+        .checked_char
+        .as_ref()
+        .map(|checked_char| format!(r#" checkedChar="{}""#, escape_xml(checked_char)))
+        .unwrap_or_default();
     let mut xml = format!(
-        r#"<hh:bullet id="{}" char="{}" useImage="{use_image}">"#,
+        r#"<hh:bullet id="{}" char="{}"{} useImage="{use_image}">"#,
         bullet.id,
         escape_xml(&bullet.bullet_char),
+        checked_char_attr,
         use_image = bullet.use_image,
     );
     for para_head in &bullet.para_heads {
@@ -707,7 +713,7 @@ fn build_para_pr(id: u32, ps: &HwpxParaShape) -> HxParaPr {
         font_line_height: 0,
         snap_to_grid: 1,
         suppress_line_numbers: 0,
-        checked: 0,
+        checked: u32::from(ps.checked),
         align: Some(HxAlign {
             horizontal: alignment_to_str(ps.alignment).into(),
             vertical: "BASELINE".into(),
@@ -1130,6 +1136,7 @@ mod tests {
         store.push_bullet(hwpforge_core::BulletDef {
             id: 1,
             bullet_char: "".into(),
+            checked_char: None,
             use_image: false,
             para_head: hwpforge_core::ParaHead {
                 start: 0,
@@ -1178,6 +1185,7 @@ mod tests {
         store.push_bullet(hwpforge_core::BulletDef {
             id: 1,
             bullet_char: r#"<"&"#.into(),
+            checked_char: None,
             use_image: false,
             para_head: hwpforge_core::ParaHead {
                 start: 0,

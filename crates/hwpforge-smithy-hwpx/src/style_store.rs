@@ -280,6 +280,8 @@ pub struct HwpxParaShape {
     /// - number/bullet: `0..=9`
     /// - none: `0`
     pub heading_level: u32,
+    /// Checkbox state stored on `paraPr@checked` for checkable bullets.
+    pub checked: bool,
     /// Tab property reference (tabPrIDRef, 0 = default).
     pub tab_pr_id_ref: u32,
     /// Condense value for tight outline spacing.
@@ -307,6 +309,7 @@ impl Default for HwpxParaShape {
             heading_type: HeadingType::None,
             heading_id_ref: 0,
             heading_level: 0,
+            checked: false,
             tab_pr_id_ref: 0,
             condense: 0,
         }
@@ -821,6 +824,7 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         heading_type: HeadingType::None,
         heading_id_ref: 0,
         heading_level: 0,
+        checked: false,
         tab_pr_id_ref: 0,
         condense: 0,
     };
@@ -1400,8 +1404,7 @@ fn build_store_from_registry_with(
 
     let mut para_shape_map = Vec::with_capacity(registry.para_shapes.len());
     for ps in &registry.para_shapes {
-        let (heading_type, heading_id_ref, heading_level) =
-            list_ref_to_wire_parts(ps.list, &registry.numberings, &registry.bullets)?;
+        let wire_parts = list_ref_to_wire_parts(ps.list, &registry.numberings, &registry.bullets)?;
         para_shape_map.push(store.push_para_shape(HwpxParaShape {
             alignment: ps.alignment,
             margin_left: ps.indent_left,
@@ -1418,9 +1421,10 @@ fn build_store_from_registry_with(
             break_latin_word: WordBreakType::KeepWord,
             break_non_latin_word: WordBreakType::KeepWord,
             border_fill_id: ps.border_fill_id,
-            heading_type,
-            heading_id_ref,
-            heading_level,
+            heading_type: wire_parts.heading_type,
+            heading_id_ref: wire_parts.id_ref,
+            heading_level: wire_parts.level,
+            checked: wire_parts.checked,
             tab_pr_id_ref: ps.tab_def_id,
             condense: 0,
         }));
@@ -1596,6 +1600,15 @@ impl StyleLookup for HwpxStyleStore {
         list_level_from_para_shape(ps)
     }
 
+    fn para_checked_state(&self, id: ParaShapeIndex) -> Option<bool> {
+        let ps = self.para_shapes.get(id.get())?;
+        if ps.heading_type != HeadingType::Bullet {
+            return None;
+        }
+        let bullet = self.iter_bullets().find(|bullet| bullet.id == ps.heading_id_ref)?;
+        bullet.is_checkable().then_some(ps.checked)
+    }
+
     fn para_heading_level(&self, id: ParaShapeIndex) -> Option<u8> {
         let ps = self.para_shapes.get(id.get())?;
         heading_level_from_para_shape(ps)
@@ -1723,6 +1736,7 @@ mod tests {
         let bullet = BulletDef {
             id: 1,
             bullet_char: "".into(),
+            checked_char: None,
             use_image: false,
             para_head: hwpforge_core::ParaHead {
                 start: 0,
@@ -2885,6 +2899,55 @@ mod tests {
         use hwpforge_core::StyleLookup;
         let store = style_lookup_test_store();
         assert_eq!(store.para_alignment(ParaShapeIndex::new(0)), Some(Alignment::Center));
+    }
+
+    #[test]
+    fn style_lookup_para_checked_state_reads_checkable_bullets_only() {
+        use hwpforge_core::{BulletDef, ParaHead, StyleLookup};
+        use hwpforge_foundation::NumberFormatType;
+
+        let mut store = HwpxStyleStore::new();
+        store.push_bullet(BulletDef {
+            id: 7,
+            bullet_char: "☐".into(),
+            checked_char: Some("☑".into()),
+            use_image: false,
+            para_head: ParaHead {
+                start: 0,
+                level: 1,
+                num_format: NumberFormatType::Digit,
+                text: String::new(),
+                checkable: true,
+            },
+        });
+        store.push_bullet(BulletDef {
+            id: 8,
+            bullet_char: "•".into(),
+            checked_char: None,
+            use_image: false,
+            para_head: ParaHead {
+                start: 0,
+                level: 1,
+                num_format: NumberFormatType::Digit,
+                text: String::new(),
+                checkable: false,
+            },
+        });
+        store.push_para_shape(HwpxParaShape {
+            heading_type: HeadingType::Bullet,
+            heading_id_ref: 7,
+            checked: true,
+            ..Default::default()
+        });
+        store.push_para_shape(HwpxParaShape {
+            heading_type: HeadingType::Bullet,
+            heading_id_ref: 8,
+            checked: true,
+            ..Default::default()
+        });
+
+        assert_eq!(store.para_checked_state(ParaShapeIndex::new(0)), Some(true));
+        assert_eq!(store.para_checked_state(ParaShapeIndex::new(1)), None);
     }
 
     #[test]

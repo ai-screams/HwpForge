@@ -190,6 +190,39 @@ fn roundtrip_user_sample_table_tab_preserves_inline_tab_in_cell_text() {
     );
 }
 
+#[test]
+fn roundtrip_user_sample_checkable_bullet_basic_preserves_checkable_semantics() {
+    let bytes =
+        std::fs::read(workspace_fixture_path("user_samples/sample-checkable-bullet-basic.hwpx"))
+            .unwrap();
+    let original = HwpxDecoder::decode(&bytes).unwrap();
+    let validated = original.document.validate().unwrap();
+    let encoded =
+        HwpxEncoder::encode(&validated, &original.style_store, &original.image_store).unwrap();
+    let roundtripped = HwpxDecoder::decode(&encoded).unwrap();
+
+    let paragraphs = &roundtripped.document.sections()[0].paragraphs;
+    let unchecked = paragraphs
+        .iter()
+        .find(|paragraph| paragraph.text_content().contains("unchecked item A"))
+        .expect("fixture should contain unchecked task item");
+    let checked = paragraphs
+        .iter()
+        .find(|paragraph| paragraph.text_content().contains("checked item B"))
+        .expect("fixture should contain checked task item");
+    let unchecked_shape = roundtripped.style_store.para_shape(unchecked.para_shape_id).unwrap();
+    let checked_shape = roundtripped.style_store.para_shape(checked.para_shape_id).unwrap();
+    let bullet = roundtripped
+        .style_store
+        .iter_bullets()
+        .find(|bullet| bullet.id == unchecked_shape.heading_id_ref)
+        .expect("roundtripped bullet definition should exist");
+
+    assert_eq!(bullet.checked_char.as_deref(), Some("☑"));
+    assert!(!unchecked_shape.checked);
+    assert!(checked_shape.checked);
+}
+
 // ════════════════════════════════════════════════════════════════
 // Phase 4: Encode→Decode round-trip golden tests
 // ════════════════════════════════════════════════════════════════

@@ -262,6 +262,7 @@ fn bullet_def(id: u32, bullet_char: &str) -> BulletDef {
     BulletDef {
         id,
         bullet_char: bullet_char.to_string(),
+        checked_char: None,
         use_image: false,
         para_head: ParaHead {
             start: 0,
