@@ -710,7 +710,7 @@ impl HwpxBorderFill {
 
 /// Returns the 7 default character shapes for Modern (한글 2022+).
 ///
-/// Extracted from golden fixture `tests/fixtures/textbox.hwpx` `Contents/header.xml`.
+/// Extracted from golden fixture `tests/fixtures/shapes/textbox.hwpx` `Contents/header.xml`.
 ///
 /// ```text
 /// id=0: 함초롬바탕 10pt #000000  (바탕글/본문/개요1-7/캡션)
@@ -797,7 +797,7 @@ pub(crate) fn default_char_shapes_modern() -> [HwpxCharShape; 7] {
 
 /// Returns the 20 default paragraph shapes for Modern (한글 2022+).
 ///
-/// Extracted from golden fixture `tests/fixtures/textbox.hwpx` `Contents/header.xml`.
+/// Extracted from golden fixture `tests/fixtures/shapes/textbox.hwpx` `Contents/header.xml`.
 ///
 /// Values are in HWPUNIT (1pt = 100 HWPUNIT).
 pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
@@ -2392,7 +2392,7 @@ mod tests {
 
     #[test]
     fn modern_styles_match_golden_fixture() {
-        // Verified from golden fixture tests/fixtures/textbox.hwpx (한글 2022+)
+        // Verified from golden fixture tests/fixtures/shapes/textbox.hwpx (한글 2022+)
         let styles = HancomStyleSet::Modern.default_styles();
         // 개요 8-10 inserted at 9-11
         assert_eq!(styles[9].name, "개요 8");

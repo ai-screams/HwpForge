@@ -953,7 +953,7 @@ fn build_field_run_xml(
         }
         FieldType::Date | FieldType::Time | FieldType::DocSummary | FieldType::UserInfo => {
             // SUMMERY fields (한글 internal type for document summary/date/time).
-            // Reference: tests/fixtures/date_field.hwpx
+            // Reference: tests/fixtures/fields/date_field.hwpx
             let (command, display_text) = match field_type {
                 FieldType::Date => {
                     let now = std::time::SystemTime::now()
@@ -1010,7 +1010,7 @@ fn build_field_run_xml(
 /// Builds a `<hp:run>` XML string for an inline page number (`<hp:autoNum>`).
 ///
 /// Page numbers within body text use `<hp:autoNum numType="PAGE">` — NOT
-/// fieldBegin/fieldEnd. Reference: tests/fixtures/date_field.hwpx
+/// fieldBegin/fieldEnd. Reference: tests/fixtures/fields/date_field.hwpx
 fn build_autonum_run_xml(char_pr_id_ref: u32) -> String {
     format!(
         concat!(

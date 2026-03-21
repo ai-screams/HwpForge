@@ -569,7 +569,7 @@ mod tests {
 
     #[test]
     fn decode_user_sample_bullet_list_preserves_bullet_semantics() {
-        let decoded = decode_fixture("user_samples/sample-bullet-list.hwpx");
+        let decoded = decode_fixture("user_samples/lists/sample-bullet-list.hwpx");
         let headings = collect_body_heading_triples(&decoded);
 
         assert!(headings.contains(&(HeadingType::Bullet, 1, 0)));
@@ -580,7 +580,7 @@ mod tests {
 
     #[test]
     fn decode_user_sample_numbered_list_preserves_numbering_semantics() {
-        let decoded = decode_fixture("user_samples/sample-numbered-list.hwpx");
+        let decoded = decode_fixture("user_samples/lists/sample-numbered-list.hwpx");
         let headings = collect_body_heading_triples(&decoded);
 
         assert!(headings.contains(&(HeadingType::Number, 2, 0)));
@@ -589,7 +589,7 @@ mod tests {
 
     #[test]
     fn decode_user_sample_mixed_lists_with_outline_preserves_all_list_kinds() {
-        let decoded = decode_fixture("user_samples/sample-mixed-lists-with-outline.hwpx");
+        let decoded = decode_fixture("user_samples/lists/sample-mixed-lists-with-outline.hwpx");
         let headings = collect_body_heading_triples(&decoded);
 
         assert!(headings.contains(&(HeadingType::Outline, 0, 0)));
@@ -604,7 +604,7 @@ mod tests {
 
     #[test]
     fn decode_user_sample_numbered_custom_formats_preserves_distinct_numbering_ids() {
-        let decoded = decode_fixture("user_samples/sample-numbered-list-custom-formats.hwpx");
+        let decoded = decode_fixture("user_samples/lists/sample-numbered-list-custom-formats.hwpx");
         let headings = collect_body_heading_triples(&decoded);
 
         for id_ref in [2, 3, 4, 5] {
@@ -619,7 +619,7 @@ mod tests {
 
     #[test]
     fn decode_user_sample_checkable_bullet_basic_preserves_checked_glyph_and_item_state() {
-        let decoded = decode_fixture("user_samples/sample-checkable-bullet-basic.hwpx");
+        let decoded = decode_fixture("user_samples/lists/sample-checkable-bullet-basic.hwpx");
         let paragraphs = &decoded.document.sections()[0].paragraphs;
 
         let unchecked = paragraphs
@@ -649,7 +649,7 @@ mod tests {
 
     #[test]
     fn decode_user_sample_checkable_bullet_nested_preserves_depth() {
-        let decoded = decode_fixture("user_samples/sample-checkable-bullet-nested.hwpx");
+        let decoded = decode_fixture("user_samples/lists/sample-checkable-bullet-nested.hwpx");
         let paragraphs = &decoded.document.sections()[0].paragraphs;
 
         let level1 = paragraphs
