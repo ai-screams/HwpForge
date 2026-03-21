@@ -594,6 +594,7 @@ mod tests {
 
         assert!(headings.contains(&(HeadingType::Outline, 0, 0)));
         assert!(headings.contains(&(HeadingType::Outline, 0, 1)));
+        assert!(headings.contains(&(HeadingType::Outline, 0, 2)));
         assert!(headings.contains(&(HeadingType::Bullet, 1, 0)));
         assert!(headings.contains(&(HeadingType::Number, 2, 0)));
         assert!(headings.contains(&(HeadingType::Number, 3, 0)));

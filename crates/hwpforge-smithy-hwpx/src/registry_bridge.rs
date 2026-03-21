@@ -61,8 +61,11 @@ impl HwpxRegistryBridge {
     /// - `Paragraph.para_shape_id`
     /// - `Run.char_shape_id`
     ///
-    /// Paragraph `style_id` is intentionally left untouched because Core uses
-    /// HWPX style-space ids there already.
+    /// Paragraph `style_id` is intentionally left untouched because current
+    /// Core producers store direct HWPX `styleIDRef` values there already.
+    /// HWPX/HWP5 decode round-trip style ids verbatim, Markdown headings target
+    /// the built-in Hancom style ids, and registry/template rendering does not
+    /// assign registry-local custom style indices to `Paragraph.style_id`.
     pub fn rebind_draft_document(
         &self,
         mut document: Document<Draft>,
@@ -221,6 +224,7 @@ mod tests {
     use hwpforge_core::section::{HeaderFooter, MasterPage, Section};
     use hwpforge_core::table::{Table, TableCell, TableRow};
     use hwpforge_core::PageSettings;
+    use hwpforge_core::StyleLookup;
     use hwpforge_foundation::{ApplyPageType, HwpUnit, StyleIndex};
 
     fn body_registry() -> (StyleRegistry, CharShapeIndex, ParaShapeIndex) {
@@ -347,6 +351,27 @@ mod tests {
         assert_eq!(
             rebound.sections()[0].paragraphs[0].para_shape_id,
             bridge.para_shape_map[body_ps.get()]
+        );
+    }
+
+    #[test]
+    fn registry_bridge_preserves_builtin_style_id_space() {
+        let (mut registry, _, _) = body_registry();
+        let body = *registry.get_style("body").unwrap();
+        registry.style_entries.insert("custom-body-copy".to_string(), body);
+
+        let bridge = HwpxRegistryBridge::from_registry(&registry).unwrap();
+        let default_style_count = HancomStyleSet::default().default_styles().len();
+        let custom_style_id = default_style_count + registry.style_entries.len() - 1;
+
+        assert_eq!(bridge.style_store().style_name(StyleIndex::new(2)), Some("개요 1"));
+        assert_eq!(
+            bridge.style_store().style_name(StyleIndex::new(default_style_count)),
+            Some("body")
+        );
+        assert_eq!(
+            bridge.style_store().style_name(StyleIndex::new(custom_style_id)),
+            Some("custom-body-copy")
         );
     }
 }
