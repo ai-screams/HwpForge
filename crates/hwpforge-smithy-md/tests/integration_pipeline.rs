@@ -301,6 +301,21 @@ fn pipeline_task_list_lossy_encode_uses_gfm_syntax() {
 }
 
 #[test]
+fn pipeline_ordered_task_list_normalizes_to_unordered_checkable_markdown() {
+    let markdown = "1. [ ] todo\n2. [x] done";
+    let template = builtin_default().expect("builtin_default should succeed");
+
+    let md_doc = MdDecoder::decode(markdown, &template).expect("MD decode should succeed");
+    let validated = md_doc.document.validate().expect("Validation should succeed");
+    let encoded = MdEncoder::encode(&validated, &template).expect("lossy encode should succeed");
+
+    assert!(encoded.contains("- [ ] todo"));
+    assert!(encoded.contains("- [x] done"));
+    assert!(!encoded.contains("1. [ ]"));
+    assert!(!encoded.contains("2. [x]"));
+}
+
+#[test]
 fn pipeline_multi_paragraph_task_item_preserves_continuation_across_roundtrip() {
     let markdown = "- [ ] first paragraph of the same task item\n\n  second paragraph of the same task item\n\n- [x] next real task item";
     let template = builtin_default().expect("builtin_default should succeed");

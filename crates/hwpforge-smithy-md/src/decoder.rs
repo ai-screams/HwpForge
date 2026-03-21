@@ -493,9 +493,6 @@ impl<'a> DecoderState<'a> {
             Event::HardBreak => self.push_hard_break()?,
             Event::Rule => self.push_rule(),
             Event::TaskListMarker(checked) => {
-                if self.current_list_is_ordered() {
-                    return Err(unsupported_markdown_feature("ordered task list"));
-                }
                 self.mark_task_list_item(checked);
             }
         }
@@ -892,10 +889,6 @@ impl<'a> DecoderState<'a> {
 
     fn current_item_level(&self) -> u8 {
         u8::try_from(self.list_stack.len().saturating_sub(1)).unwrap_or(u8::MAX)
-    }
-
-    fn current_list_is_ordered(&self) -> bool {
-        self.list_stack.last().map(|state| state.ordered).unwrap_or(false)
     }
 
     fn item_style_for(&self, item: &PendingItem) -> MdStyleRef {
@@ -1307,13 +1300,25 @@ mod tests {
     }
 
     #[test]
-    fn decode_ordered_task_list_returns_unsupported_structure_error() {
-        let template = default_template();
-        let err = MdDecoder::decode("1. [x] done", &template).unwrap_err();
+    fn decode_ordered_task_list_normalizes_to_checkable_bullet() {
+        use hwpforge_core::ParagraphListRef;
 
-        assert!(
-            matches!(err, MdError::UnsupportedStructure { detail } if detail.contains("ordered task list"))
-        );
+        let template = default_template();
+        let result = MdDecoder::decode("1. [x] done", &template).unwrap();
+        let paragraphs = &result.document.sections()[0].paragraphs;
+
+        assert_eq!(paragraphs.len(), 1);
+        assert_eq!(paragraphs[0].text_content(), "done");
+
+        let shape = result
+            .style_registry
+            .para_shape(paragraphs[0].para_shape_id)
+            .expect("ordered-task para shape");
+
+        assert!(matches!(
+            shape.list,
+            Some(ParagraphListRef::CheckBullet { level: 0, checked: true, .. })
+        ));
     }
 
     #[test]
