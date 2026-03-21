@@ -49,12 +49,23 @@ pub(crate) fn list_ref_to_wire_parts(
             level: u32::from(level),
             checked: false,
         }),
-        Some(ParagraphListRef::Bullet { bullet_id, level }) => Ok(WireListParts {
-            heading_type: HeadingType::Bullet,
-            id_ref: resolve_bullet(bullets, bullet_id)?.id,
-            level: u32::from(level),
-            checked: false,
-        }),
+        Some(ParagraphListRef::Bullet { bullet_id, level }) => {
+            let bullet = resolve_bullet(bullets, bullet_id)?;
+            if bullet.is_checkable() {
+                return Err(HwpxError::InvalidStructure {
+                    detail: format!(
+                        "plain bullet paragraph references checkable bullet definition {}; use CheckBullet semantics",
+                        bullet.id
+                    ),
+                });
+            }
+            Ok(WireListParts {
+                heading_type: HeadingType::Bullet,
+                id_ref: bullet.id,
+                level: u32::from(level),
+                checked: false,
+            })
+        }
         Some(ParagraphListRef::CheckBullet { bullet_id, level, checked }) => {
             let bullet = resolve_bullet(bullets, bullet_id)?;
             if !bullet.is_checkable() {
@@ -223,13 +234,22 @@ mod tests {
                 checkable: false,
             }],
         }];
-        let bullets = vec![BulletDef {
-            id: 7,
-            bullet_char: "•".into(),
-            checked_char: Some("☑".into()),
-            use_image: false,
-            para_head: ParaHead { checkable: true, ..default_bullet_para_head() },
-        }];
+        let bullets = vec![
+            BulletDef {
+                id: 7,
+                bullet_char: "•".into(),
+                checked_char: None,
+                use_image: false,
+                para_head: default_bullet_para_head(),
+            },
+            BulletDef {
+                id: 8,
+                bullet_char: "☐".into(),
+                checked_char: Some("☑".into()),
+                use_image: false,
+                para_head: ParaHead { checkable: true, ..default_bullet_para_head() },
+            },
+        ];
 
         assert_eq!(
             list_ref_to_wire_parts(
@@ -276,7 +296,7 @@ mod tests {
         assert_eq!(
             list_ref_to_wire_parts(
                 Some(ParagraphListRef::CheckBullet {
-                    bullet_id: BulletIndex::new(0),
+                    bullet_id: BulletIndex::new(1),
                     level: 1,
                     checked: true,
                 }),
@@ -284,7 +304,7 @@ mod tests {
                 &bullets,
             )
             .unwrap(),
-            WireListParts { heading_type: HeadingType::Bullet, id_ref: 7, level: 1, checked: true },
+            WireListParts { heading_type: HeadingType::Bullet, id_ref: 8, level: 1, checked: true },
         );
     }
 
@@ -305,6 +325,25 @@ mod tests {
         )
         .unwrap_err();
         assert!(matches!(err, HwpxError::IndexOutOfBounds { kind: "bullet definition", .. }));
+    }
+
+    #[test]
+    fn list_ref_to_wire_parts_rejects_plain_bullet_against_checkable_definition() {
+        let bullets = vec![BulletDef {
+            id: 7,
+            bullet_char: "☐".into(),
+            checked_char: Some("☑".into()),
+            use_image: false,
+            para_head: ParaHead { checkable: true, ..default_bullet_para_head() },
+        }];
+
+        let err = list_ref_to_wire_parts(
+            Some(ParagraphListRef::Bullet { bullet_id: BulletIndex::new(0), level: 0 }),
+            &[],
+            &bullets,
+        )
+        .unwrap_err();
+        assert!(matches!(err, HwpxError::InvalidStructure { .. }));
     }
 
     #[test]

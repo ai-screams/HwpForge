@@ -294,6 +294,13 @@ impl PartialParagraphListRef {
                         kind: "bullet".to_string(),
                         id: bullet_id,
                     })?;
+                let bullet = &bullets[bullet_index];
+                if bullet.is_checkable() {
+                    return Err(BlueprintError::InvalidPlainBulletDefinition {
+                        style_name: style_name.to_string(),
+                        bullet_id,
+                    });
+                }
                 Ok(ParagraphListRef::Bullet {
                     bullet_id: hwpforge_foundation::BulletIndex::new(bullet_index),
                     level,
@@ -997,6 +1004,20 @@ mod tests {
             resolved.list,
             Some(ParagraphListRef::Bullet { bullet_id: BulletIndex::new(0), level: 0 })
         );
+    }
+
+    #[test]
+    fn partial_para_shape_resolve_rejects_checkable_bullet_as_plain_bullet_reference() {
+        let partial = PartialParaShape {
+            list: Some(PartialParagraphListRef::Bullet { bullet_id: 7, level: 0 }),
+            ..Default::default()
+        };
+        let mut bullet = test_bullet_def(7);
+        bullet.checked_char = Some("☑".into());
+        bullet.para_head.checkable = true;
+
+        let err = partial.resolve("body", &[], &[bullet]).unwrap_err();
+        assert!(matches!(err, BlueprintError::InvalidPlainBulletDefinition { bullet_id: 7, .. }));
     }
 
     #[test]

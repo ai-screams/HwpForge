@@ -69,6 +69,8 @@ pub enum BlueprintErrorCode {
     InvalidCheckableBulletDefinition = 3021,
     /// Bullet definition mixes checkbox fields incoherently.
     InvalidBulletDefinition = 3022,
+    /// Style references a checkable bullet as a plain bullet list.
+    InvalidPlainBulletDefinition = 3023,
 }
 
 impl fmt::Display for BlueprintErrorCode {
@@ -261,6 +263,17 @@ pub enum BlueprintError {
         bullet_id: u32,
     },
 
+    /// A style references a checkable bullet definition through plain bullet semantics.
+    #[error(
+        "style '{style_name}' references checkable bullet definition {bullet_id} as a plain bullet"
+    )]
+    InvalidPlainBulletDefinition {
+        /// Style name that contains the invalid plain bullet reference.
+        style_name: String,
+        /// Referenced bullet definition id.
+        bullet_id: u32,
+    },
+
     /// A bullet definition is internally inconsistent for authoring.
     #[error("bullet definition {id} is invalid: {reason}")]
     InvalidBulletDefinition {
@@ -327,6 +340,9 @@ impl BlueprintError {
                 BlueprintErrorCode::InvalidCheckableBulletDefinition
             }
             Self::InvalidBulletDefinition { .. } => BlueprintErrorCode::InvalidBulletDefinition,
+            Self::InvalidPlainBulletDefinition { .. } => {
+                BlueprintErrorCode::InvalidPlainBulletDefinition
+            }
             Self::Foundation(_) => BlueprintErrorCode::YamlParse, // fallback
         }
     }
@@ -466,6 +482,13 @@ mod tests {
             (
                 BlueprintError::InvalidBulletDefinition { id: 0, reason: String::new() },
                 BlueprintErrorCode::InvalidBulletDefinition,
+            ),
+            (
+                BlueprintError::InvalidPlainBulletDefinition {
+                    style_name: String::new(),
+                    bullet_id: 0,
+                },
+                BlueprintErrorCode::InvalidPlainBulletDefinition,
             ),
         ];
 

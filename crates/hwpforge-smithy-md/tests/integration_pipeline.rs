@@ -11,7 +11,7 @@ use hwpforge_blueprint::builtins::{builtin_default, builtin_gov_proposal};
 use hwpforge_blueprint::template::Template;
 use hwpforge_core::{Document, Draft, RunContent};
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder, HwpxRegistryBridge};
-use hwpforge_smithy_md::MdDecoder;
+use hwpforge_smithy_md::{MdDecoder, MdEncoder};
 use pretty_assertions::assert_eq;
 
 /// Helper function to run the full pipeline and return decoded HWPX document (still Draft).
@@ -240,6 +240,64 @@ fn pipeline_ordered_and_unordered_lists() {
     assert!(combined.contains("item2"));
     assert!(combined.contains("first"));
     assert!(combined.contains("second"));
+}
+
+#[test]
+fn pipeline_task_list_preserves_checkable_hwpx_semantics() {
+    let markdown = "- [ ] todo\n- [x] done";
+    let template = builtin_default().expect("builtin_default should succeed");
+
+    let md_doc = MdDecoder::decode(markdown, &template).expect("MD decode should succeed");
+    let bridge =
+        HwpxRegistryBridge::from_registry(&md_doc.style_registry).expect("bridge should succeed");
+    let rebound =
+        bridge.rebind_draft_document(md_doc.document).expect("style rebind should succeed");
+    let validated = rebound.validate().expect("Validation should succeed");
+
+    let hwpx_bytes = HwpxEncoder::encode(
+        &validated,
+        bridge.style_store(),
+        &hwpforge_core::image::ImageStore::new(),
+    )
+    .expect("HWPX encode should succeed");
+
+    let decoded = HwpxDecoder::decode(&hwpx_bytes).expect("HWPX decode should succeed");
+    let section = &decoded.document.sections()[0];
+    let todo_para = section
+        .paragraphs
+        .iter()
+        .find(|paragraph| paragraph.text_content() == "todo")
+        .expect("todo paragraph");
+    let done_para = section
+        .paragraphs
+        .iter()
+        .find(|paragraph| paragraph.text_content() == "done")
+        .expect("done paragraph");
+    let todo_shape = decoded.style_store.para_shape(todo_para.para_shape_id).expect("todo shape");
+    let done_shape = decoded.style_store.para_shape(done_para.para_shape_id).expect("done shape");
+    let bullet = decoded
+        .style_store
+        .iter_bullets()
+        .find(|bullet| bullet.id == todo_shape.heading_id_ref)
+        .expect("task bullet");
+
+    assert!(bullet.is_checkable());
+    assert_eq!(bullet.checked_char.as_deref(), Some("☑"));
+    assert!(!todo_shape.checked);
+    assert!(done_shape.checked);
+}
+
+#[test]
+fn pipeline_task_list_lossy_encode_uses_gfm_syntax() {
+    let markdown = "- [ ] todo\n- [x] done";
+    let template = builtin_default().expect("builtin_default should succeed");
+
+    let md_doc = MdDecoder::decode(markdown, &template).expect("MD decode should succeed");
+    let validated = md_doc.document.validate().expect("Validation should succeed");
+    let encoded = MdEncoder::encode(&validated, &template).expect("lossy encode should succeed");
+
+    assert!(encoded.contains("- [ ] todo"));
+    assert!(encoded.contains("- [x] done"));
 }
 
 #[test]

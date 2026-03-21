@@ -177,6 +177,33 @@ impl ListState {
 }
 
 #[derive(Debug, Clone)]
+struct PendingItem {
+    prefix: String,
+    prefix_pending: bool,
+    task_checked: Option<bool>,
+    emitted_paragraph: bool,
+}
+
+impl PendingItem {
+    fn new(prefix: String) -> Self {
+        Self { prefix, prefix_pending: true, task_checked: None, emitted_paragraph: false }
+    }
+
+    fn mark_task(&mut self, checked: bool) {
+        self.task_checked = Some(checked);
+        self.prefix_pending = false;
+    }
+
+    fn take_prefix(&mut self) -> Option<String> {
+        if self.prefix_pending && self.task_checked.is_none() {
+            self.prefix_pending = false;
+            return Some(self.prefix.clone());
+        }
+        None
+    }
+}
+
+#[derive(Debug, Clone)]
 struct PendingLink {
     dest_url: String,
     text: String,
@@ -219,6 +246,10 @@ impl ParagraphBuilder {
 
     fn push_run(&mut self, run: Run) {
         self.runs.push(run);
+    }
+
+    fn set_style(&mut self, style: MdStyleRef) {
+        self.style = style;
     }
 
     fn build(mut self) -> Paragraph {
@@ -376,7 +407,7 @@ struct DecoderState<'a> {
     blockquote_depth: usize,
     in_code_block: bool,
     in_item: bool,
-    pending_item_prefixes: Vec<Option<String>>,
+    pending_items: Vec<PendingItem>,
     list_stack: Vec<ListState>,
     pending_link: Option<PendingLink>,
     pending_image: Option<PendingImage>,
@@ -399,7 +430,7 @@ impl<'a> DecoderState<'a> {
             blockquote_depth: 0,
             in_code_block: false,
             in_item: false,
-            pending_item_prefixes: Vec::new(),
+            pending_items: Vec::new(),
             list_stack: Vec::new(),
             pending_link: None,
             pending_image: None,
@@ -462,7 +493,10 @@ impl<'a> DecoderState<'a> {
             Event::HardBreak => self.push_hard_break()?,
             Event::Rule => self.push_rule(),
             Event::TaskListMarker(checked) => {
-                self.push_text(if checked { "[x] " } else { "[ ] " })?;
+                if self.current_list_is_ordered() {
+                    return Err(unsupported_markdown_feature("ordered task list"));
+                }
+                self.mark_task_list_item(checked);
             }
         }
 
@@ -495,10 +529,10 @@ impl<'a> DecoderState<'a> {
                 self.finalize_paragraph();
                 self.in_item = true;
                 let prefix = self.next_item_prefix();
-                self.pending_item_prefixes.push(Some(prefix));
+                self.pending_items.push(PendingItem::new(prefix));
             }
             Tag::Table(_) => {
-                self.materialize_pending_item_prefix_if_needed();
+                self.materialize_pending_item_paragraph_if_needed();
                 self.finalize_paragraph();
                 self.table = Some(TableBuilder::new());
             }
@@ -581,12 +615,16 @@ impl<'a> DecoderState<'a> {
             }
             TagEnd::Item => {
                 self.finalize_paragraph();
-                if let Some(Some(prefix)) = self.pending_item_prefixes.pop() {
-                    let mut paragraph = ParagraphBuilder::new(self.mapping.list_item);
-                    paragraph.push_text(prefix.trim_end());
-                    self.paragraphs.push(paragraph.build());
+                if let Some(item) = self.pending_items.pop() {
+                    if !item.emitted_paragraph {
+                        let mut paragraph = ParagraphBuilder::new(self.item_style_for(&item));
+                        if item.task_checked.is_none() {
+                            paragraph.push_text(item.prefix.trim_end());
+                        }
+                        self.paragraphs.push(paragraph.build());
+                    }
                 }
-                self.in_item = !self.pending_item_prefixes.is_empty();
+                self.in_item = !self.pending_items.is_empty();
             }
             TagEnd::Table => self.finalize_table()?,
             TagEnd::TableHead => {}
@@ -678,6 +716,7 @@ impl<'a> DecoderState<'a> {
         }
 
         self.ensure_paragraph();
+        self.materialize_current_item_prefix_if_needed();
         if let Some(current) = self.current.as_mut() {
             current.push_text(text);
         }
@@ -706,6 +745,7 @@ impl<'a> DecoderState<'a> {
         }
 
         self.ensure_paragraph();
+        self.materialize_current_item_prefix_if_needed();
         if let Some(current) = self.current.as_mut() {
             current.push_text("`");
             current.push_text(code);
@@ -760,6 +800,9 @@ impl<'a> DecoderState<'a> {
             return self.mapping.code;
         }
         if self.in_item {
+            if let Some(item) = self.pending_items.last() {
+                return self.item_style_for(item);
+            }
             return self.mapping.list_item;
         }
         if self.blockquote_depth > 0 {
@@ -788,44 +831,31 @@ impl<'a> DecoderState<'a> {
         }
 
         self.ensure_paragraph();
+        self.materialize_current_item_prefix_if_needed();
         if let Some(current) = self.current.as_mut() {
             current.push_run(run);
         }
     }
 
-    fn take_pending_item_prefix(&mut self) -> Option<String> {
-        self.pending_item_prefixes.last_mut().and_then(Option::take)
-    }
-
-    fn materialize_pending_item_prefix_if_needed(&mut self) {
-        if self.current.is_some() {
-            return;
-        }
-
-        if let Some(prefix) = self.take_pending_item_prefix() {
-            let mut paragraph = ParagraphBuilder::new(self.mapping.list_item);
-            paragraph.push_text(&prefix);
-            self.paragraphs.push(paragraph.build());
-        }
-    }
-
     fn ensure_paragraph(&mut self) {
         if self.current.is_none() {
-            let mut paragraph = ParagraphBuilder::new(self.style_for_context());
-            if let Some(prefix) = self.take_pending_item_prefix() {
-                paragraph.push_text(&prefix);
+            if self.in_item {
+                if let Some(item) = self.pending_items.last_mut() {
+                    item.emitted_paragraph = true;
+                }
             }
-            self.current = Some(paragraph);
+            self.current = Some(ParagraphBuilder::new(self.style_for_context()));
         }
     }
 
     fn start_paragraph(&mut self, style: MdStyleRef) {
         self.finalize_paragraph();
-        let mut paragraph = ParagraphBuilder::new(style);
-        if let Some(prefix) = self.take_pending_item_prefix() {
-            paragraph.push_text(&prefix);
+        if self.in_item {
+            if let Some(item) = self.pending_items.last_mut() {
+                item.emitted_paragraph = true;
+            }
         }
-        self.current = Some(paragraph);
+        self.current = Some(ParagraphBuilder::new(style));
     }
 
     fn finalize_paragraph(&mut self) {
@@ -858,6 +888,65 @@ impl<'a> DecoderState<'a> {
             return "- ".to_string();
         }
         "- ".to_string()
+    }
+
+    fn current_item_level(&self) -> u8 {
+        u8::try_from(self.list_stack.len().saturating_sub(1)).unwrap_or(u8::MAX)
+    }
+
+    fn current_list_is_ordered(&self) -> bool {
+        self.list_stack.last().map(|state| state.ordered).unwrap_or(false)
+    }
+
+    fn item_style_for(&self, item: &PendingItem) -> MdStyleRef {
+        item.task_checked
+            .map(|checked| self.mapping.task_list(checked, self.current_item_level()))
+            .unwrap_or(self.mapping.list_item)
+    }
+
+    fn materialize_current_item_prefix_if_needed(&mut self) {
+        if !self.in_item {
+            return;
+        }
+
+        let prefix = self.pending_items.last_mut().and_then(PendingItem::take_prefix);
+        if let (Some(prefix), Some(current)) = (prefix, self.current.as_mut()) {
+            if current.runs.is_empty() {
+                current.push_text(&prefix);
+            }
+        }
+    }
+
+    fn materialize_pending_item_paragraph_if_needed(&mut self) {
+        if !self.in_item || self.current.is_some() {
+            return;
+        }
+
+        let Some(style) = self.pending_items.last().map(|item| self.item_style_for(item)) else {
+            return;
+        };
+        let prefix = if let Some(item) = self.pending_items.last_mut() {
+            item.emitted_paragraph = true;
+            item.take_prefix()
+        } else {
+            None
+        };
+
+        let mut paragraph = ParagraphBuilder::new(style);
+        if let Some(prefix) = prefix {
+            paragraph.push_text(&prefix);
+        }
+        self.paragraphs.push(paragraph.build());
+    }
+
+    fn mark_task_list_item(&mut self, checked: bool) {
+        if let Some(item) = self.pending_items.last_mut() {
+            item.mark_task(checked);
+        }
+        let task_style = self.mapping.task_list(checked, self.current_item_level());
+        if let Some(current) = self.current.as_mut() {
+            current.set_style(task_style);
+        }
     }
 }
 
@@ -1104,6 +1193,101 @@ mod tests {
             doc.sections()[0].paragraphs.iter().map(Paragraph::text_content).collect();
 
         assert_eq!(texts, vec!["1. alpha", "2. beta"]);
+    }
+
+    #[test]
+    fn decode_task_list_restores_checkable_list_semantics() {
+        use hwpforge_core::ParagraphListRef;
+
+        let template = default_template();
+        let result = MdDecoder::decode("- [ ] todo\n- [x] done", &template).unwrap();
+        let paragraphs = &result.document.sections()[0].paragraphs;
+
+        assert_eq!(paragraphs[0].text_content(), "todo");
+        assert_eq!(paragraphs[1].text_content(), "done");
+
+        let unchecked_shape = result
+            .style_registry
+            .para_shape(paragraphs[0].para_shape_id)
+            .expect("unchecked para shape");
+        let checked_shape = result
+            .style_registry
+            .para_shape(paragraphs[1].para_shape_id)
+            .expect("checked para shape");
+
+        let unchecked_bullet = match unchecked_shape.list {
+            Some(ParagraphListRef::CheckBullet { bullet_id, level: 0, checked: false }) => {
+                bullet_id
+            }
+            other => panic!("expected unchecked task list semantics, got {other:?}"),
+        };
+        assert!(matches!(
+            checked_shape.list,
+            Some(ParagraphListRef::CheckBullet {
+                bullet_id,
+                level: 0,
+                checked: true,
+            }) if bullet_id == unchecked_bullet
+        ));
+    }
+
+    #[test]
+    fn decode_nested_task_list_restores_nested_checkable_levels() {
+        use hwpforge_core::ParagraphListRef;
+
+        let template = default_template();
+        let result = MdDecoder::decode("- [ ] parent\n  - [x] child", &template).unwrap();
+        let paragraphs = &result.document.sections()[0].paragraphs;
+
+        let parent_shape = result
+            .style_registry
+            .para_shape(paragraphs[0].para_shape_id)
+            .expect("parent para shape");
+        let child_shape = result
+            .style_registry
+            .para_shape(paragraphs[1].para_shape_id)
+            .expect("child para shape");
+
+        assert!(matches!(
+            parent_shape.list,
+            Some(ParagraphListRef::CheckBullet { level: 0, checked: false, .. })
+        ));
+        assert!(matches!(
+            child_shape.list,
+            Some(ParagraphListRef::CheckBullet { level: 1, checked: true, .. })
+        ));
+    }
+
+    #[test]
+    fn decode_ordered_task_list_returns_unsupported_structure_error() {
+        let template = default_template();
+        let err = MdDecoder::decode("1. [x] done", &template).unwrap_err();
+
+        assert!(
+            matches!(err, MdError::UnsupportedStructure { detail } if detail.contains("ordered task list"))
+        );
+    }
+
+    #[test]
+    fn decode_unordered_task_list_nested_under_ordered_parent_is_allowed() {
+        use hwpforge_core::ParagraphListRef;
+
+        let template = default_template();
+        let result = MdDecoder::decode("1. parent\n   - [x] child", &template).unwrap();
+        let paragraphs = &result.document.sections()[0].paragraphs;
+
+        assert_eq!(paragraphs[0].text_content(), "1. parent");
+        assert_eq!(paragraphs[1].text_content(), "child");
+
+        let child_shape = result
+            .style_registry
+            .para_shape(paragraphs[1].para_shape_id)
+            .expect("child para shape");
+
+        assert!(matches!(
+            child_shape.list,
+            Some(ParagraphListRef::CheckBullet { level: 1, checked: true, .. })
+        ));
     }
 
     #[test]

@@ -1,8 +1,10 @@
 //! Readable (lossy) markdown encoder.
 
+use hwpforge_blueprint::registry::StyleRegistry;
 use hwpforge_blueprint::template::Template;
-use hwpforge_core::{Control, Document, Paragraph, RunContent, Table, Validated};
+use hwpforge_core::{Control, Document, Paragraph, ParagraphListRef, RunContent, Table, Validated};
 
+use super::list_format::format_list_item;
 use crate::error::MdResult;
 use crate::frontmatter::{from_metadata, render_frontmatter};
 use crate::mapper::{resolve_mapping, MdMapping, ParagraphKind};
@@ -13,8 +15,8 @@ pub(crate) fn encode_with_template(
     document: &Document<Validated>,
     template: &Template,
 ) -> MdResult<String> {
-    let (mapping, _registry) = resolve_mapping(template)?;
-    let body = encode_body(document, Some(&mapping));
+    let (mapping, registry) = resolve_mapping(template)?;
+    let body = encode_body(document, Some(&mapping), Some(&registry));
 
     let frontmatter = from_metadata(document.metadata(), Some(template.meta.name.as_str()));
     let rendered = render_frontmatter(&frontmatter)?;
@@ -27,10 +29,14 @@ pub(crate) fn encode_with_template(
 }
 
 pub(crate) fn encode_without_template(document: &Document<Validated>) -> MdResult<String> {
-    Ok(encode_body(document, None))
+    Ok(encode_body(document, None, None))
 }
 
-fn encode_body(document: &Document<Validated>, mapping: Option<&MdMapping>) -> String {
+fn encode_body(
+    document: &Document<Validated>,
+    mapping: Option<&MdMapping>,
+    registry: Option<&StyleRegistry>,
+) -> String {
     let mut blocks = Vec::new();
 
     for (section_index, section) in document.sections().iter().enumerate() {
@@ -39,7 +45,7 @@ fn encode_body(document: &Document<Validated>, mapping: Option<&MdMapping>) -> S
         }
 
         for paragraph in &section.paragraphs {
-            let markdown = encode_paragraph(paragraph, mapping);
+            let markdown = encode_paragraph(paragraph, mapping, registry);
             if !markdown.trim().is_empty() {
                 blocks.push(markdown);
             }
@@ -49,7 +55,11 @@ fn encode_body(document: &Document<Validated>, mapping: Option<&MdMapping>) -> S
     blocks.join("\n\n")
 }
 
-fn encode_paragraph(paragraph: &Paragraph, mapping: Option<&MdMapping>) -> String {
+fn encode_paragraph(
+    paragraph: &Paragraph,
+    mapping: Option<&MdMapping>,
+    registry: Option<&StyleRegistry>,
+) -> String {
     if paragraph.runs.len() == 1 {
         match &paragraph.runs[0].content {
             RunContent::Table(table) => return table_to_markdown(table),
@@ -61,10 +71,20 @@ fn encode_paragraph(paragraph: &Paragraph, mapping: Option<&MdMapping>) -> Strin
     }
 
     let text = paragraph_text_markdown(paragraph);
+    let trimmed = text.trim();
+
+    if !trimmed.is_empty() {
+        if let Some(markdown) =
+            registry.and_then(|registry| format_registry_list_item(trimmed, paragraph, registry))
+        {
+            return markdown;
+        }
+    }
+
     if let Some(mapping) = mapping {
         match mapping.classify_para_shape(paragraph.para_shape_id) {
             ParagraphKind::Heading(level) => {
-                format!("{} {}", "#".repeat(level as usize), text.trim())
+                format!("{} {}", "#".repeat(level as usize), trimmed)
             }
             ParagraphKind::Code => format!("```\n{}\n```", text),
             ParagraphKind::BlockQuote => {
@@ -82,6 +102,26 @@ fn encode_paragraph(paragraph: &Paragraph, mapping: Option<&MdMapping>) -> Strin
         }
     } else {
         text
+    }
+}
+
+fn format_registry_list_item(
+    text: &str,
+    paragraph: &Paragraph,
+    registry: &StyleRegistry,
+) -> Option<String> {
+    let list = registry.para_shape(paragraph.para_shape_id)?.list?;
+    match list {
+        ParagraphListRef::Outline { .. } => None,
+        ParagraphListRef::Number { level, .. } => {
+            Some(format_list_item(text, "NUMBER", level, None))
+        }
+        ParagraphListRef::Bullet { level, .. } => {
+            Some(format_list_item(text, "BULLET", level, None))
+        }
+        ParagraphListRef::CheckBullet { level, checked, .. } => {
+            Some(format_list_item(text, "BULLET", level, Some(checked)))
+        }
     }
 }
 
@@ -364,7 +404,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None);
+        let md = encode_paragraph(&paragraph, None, None);
         assert!(md.contains("| A | B |"));
         assert!(md.contains("| --- | --- |"));
         assert!(md.contains("| 1 | 2 |"));
@@ -386,7 +426,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None);
+        let md = encode_paragraph(&paragraph, None, None);
         assert!(md.contains("A\\|B"));
     }
 
@@ -414,7 +454,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None);
+        let md = encode_paragraph(&paragraph, None, None);
         assert!(md.contains("[Rust](https://www.rust-lang.org)"));
     }
 
@@ -666,7 +706,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None);
+        let md = encode_paragraph(&paragraph, None, None);
         assert_eq!(md, "![photo](path/to/photo.jpg)");
     }
 
@@ -685,7 +725,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None);
+        let md = encode_paragraph(&paragraph, None, None);
         assert!(md.contains("![figure_1]"));
     }
 
@@ -743,7 +783,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None);
+        let md = encode_paragraph(&paragraph, None, None);
         assert_eq!(md, "| |\n| --- |");
     }
 
@@ -766,7 +806,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None);
+        let md = encode_paragraph(&paragraph, None, None);
         // An empty row renders as "| |"
         assert!(md.contains("| |"));
     }
@@ -787,7 +827,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None);
+        let md = encode_paragraph(&paragraph, None, None);
         assert!(md.contains(r"path\\to\\file"));
     }
 
@@ -807,7 +847,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None);
+        let md = encode_paragraph(&paragraph, None, None);
         assert!(md.contains("<br>"));
     }
 
@@ -864,9 +904,27 @@ mod tests {
             code_para_shape,
         );
 
-        let md = encode_paragraph(&paragraph, Some(&mapping));
+        let md = encode_paragraph(&paragraph, Some(&mapping), None);
         assert!(md.starts_with("```\n"));
         assert!(md.ends_with("\n```"));
         assert!(md.contains("let x = 1;"));
+    }
+
+    #[test]
+    fn encode_task_list_paragraph_with_registry_uses_gfm_marker() {
+        let template = builtin_default().unwrap();
+        let (mapping, registry) = resolve_mapping(&template).unwrap();
+
+        let unchecked = Paragraph::with_runs(
+            vec![Run::text("todo", CharShapeIndex::new(0))],
+            mapping.task_list.unchecked[0],
+        );
+        let checked = Paragraph::with_runs(
+            vec![Run::text("done", CharShapeIndex::new(0))],
+            mapping.task_list.checked[1],
+        );
+
+        assert_eq!(encode_paragraph(&unchecked, Some(&mapping), Some(&registry)), "- [ ] todo");
+        assert_eq!(encode_paragraph(&checked, Some(&mapping), Some(&registry)), "  - [x] done");
     }
 }

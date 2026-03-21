@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use hwpforge_core::{Control, Document, Paragraph, RunContent, StyleLookup, Table, Validated};
 use hwpforge_foundation::UnderlineType;
 
+use super::list_format::format_list_item;
 use crate::eqn::eqn_to_latex;
 
 /// Output of style-aware markdown encoding.
@@ -884,18 +885,6 @@ fn format_as_list(text: &str, style_name: &str) -> Option<String> {
         Some(format!("1. {text}"))
     } else {
         None
-    }
-}
-
-fn format_list_item(text: &str, list_type: &str, level: u8, checked: Option<bool>) -> String {
-    let indent = "  ".repeat(level as usize);
-    if list_type == "NUMBER" {
-        format!("{indent}1. {text}")
-    } else if let Some(checked) = checked {
-        let marker = if checked { "x" } else { " " };
-        format!("{indent}- [{marker}] {text}")
-    } else {
-        format!("{indent}- {text}")
     }
 }
 

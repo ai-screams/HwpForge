@@ -1,5 +1,6 @@
 //! Core -> Markdown encoders.
 
+mod list_format;
 mod lossless;
 mod lossy;
 mod styled;
