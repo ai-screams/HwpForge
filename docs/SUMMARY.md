@@ -23,8 +23,7 @@
 
 # 레퍼런스
 
-- [HWPX 포맷 주의사항 (Gotchas)](reference/gotchas.md)
-- [API 레퍼런스 (rustdoc)](reference/api.md)
+- [API 레퍼런스 (rustdoc)](https://docs.rs/hwpforge)
 
 ---
 
