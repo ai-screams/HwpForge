@@ -88,20 +88,25 @@ let cs = registry.char_shape(body.char_shape_id).unwrap();
 assert_eq!(cs.font, "한컴바탕");
 ```
 
-## HwpxStyleStore 변환: from_registry()
+## HwpxRegistryBridge 변환: from_registry()
 
-Blueprint의 `StyleRegistry`를 HWPX 인코더가 사용하는 `HwpxStyleStore`로 변환합니다.
+Blueprint의 `StyleRegistry`를 HWPX 인코더 경계에서 안전하게 쓰기 위한 bridge를 만듭니다.
+이 bridge는 두 가지를 함께 맡습니다.
+
+- `HwpxStyleStore` 생성
+- registry-local `CharShapeIndex` / `ParaShapeIndex`를 store-local HWPX id로 rebinding
 
 ```rust,no_run
 use hwpforge_blueprint::builtins::builtin_default;
 use hwpforge_blueprint::registry::StyleRegistry;
-use hwpforge_smithy_hwpx::HwpxStyleStore;
+use hwpforge_smithy_hwpx::HwpxRegistryBridge;
 
 let template = builtin_default().unwrap();
 let registry = StyleRegistry::from_template(&template).unwrap();
 
-// Blueprint StyleRegistry → HWPX 전용 스타일 저장소
-let style_store = HwpxStyleStore::from_registry(&registry);
+// Blueprint StyleRegistry → HWPX encode bridge
+let bridge = HwpxRegistryBridge::from_registry(&registry).unwrap();
+let style_store = bridge.style_store();
 ```
 
 ## 한컴 스타일셋: Classic / Modern / Latest
@@ -131,7 +136,7 @@ let modern = HwpxStyleStore::with_default_fonts("함초롬바탕");
 ```rust,no_run
 use hwpforge_blueprint::template::Template;
 use hwpforge_blueprint::registry::StyleRegistry;
-use hwpforge_smithy_hwpx::{HwpxEncoder, HwpxStyleStore};
+use hwpforge_smithy_hwpx::{HwpxEncoder, HwpxRegistryBridge};
 use hwpforge_core::{Document, Section, Paragraph, PageSettings};
 use hwpforge_core::run::Run;
 use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
@@ -156,7 +161,7 @@ styles:
 // 스타일 빌드
 let template = Template::from_yaml(yaml).unwrap();
 let registry = StyleRegistry::from_template(&template).unwrap();
-let style_store = HwpxStyleStore::from_registry(&registry);
+let bridge = HwpxRegistryBridge::from_registry(&registry).unwrap();
 
 // 문서 구성 (스타일 인덱스는 레지스트리에서 조회)
 let mut doc = Document::new();
@@ -176,8 +181,9 @@ doc.add_section(Section::with_paragraphs(
     PageSettings::a4(),
 ));
 
-let validated = doc.validate().unwrap();
+let rebound = bridge.rebind_draft_document(doc).unwrap();
+let validated = rebound.validate().unwrap();
 let image_store = Default::default();
-let bytes = HwpxEncoder::encode(&validated, &style_store, &image_store).unwrap();
+let bytes = HwpxEncoder::encode(&validated, bridge.style_store(), &image_store).unwrap();
 std::fs::write("report.hwpx", &bytes).unwrap();
 ```

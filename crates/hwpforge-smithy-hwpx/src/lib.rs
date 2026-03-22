@@ -56,8 +56,10 @@ mod encoder;
 pub mod error;
 pub mod exchange;
 mod inline_text;
+mod list_bridge;
 mod patch;
 pub mod presets;
+mod registry_bridge;
 mod schema;
 mod section_workflow;
 mod style_lookup_bridge;
@@ -74,6 +76,7 @@ pub use exchange::{
 };
 pub use patch::HwpxPatcher;
 pub use presets::{builtin_presets, style_store_for_preset, PresetInfo};
+pub use registry_bridge::HwpxRegistryBridge;
 pub use section_workflow::{
     SectionExportOutcome, SectionPatchOutcome, SectionWorkflowError, SectionWorkflowWarning,
 };

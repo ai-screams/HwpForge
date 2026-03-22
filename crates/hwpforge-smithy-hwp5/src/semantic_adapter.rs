@@ -838,6 +838,8 @@ mod tests {
             fonts: Vec::new(),
             char_shapes: Vec::new(),
             para_shapes: Vec::new(),
+            numberings: Vec::new(),
+            bullets: Vec::new(),
             tab_defs: Vec::new(),
             styles: Vec::new(),
             border_fills: Vec::new(),
@@ -846,7 +848,7 @@ mod tests {
     }
 
     fn fixture_path(name: &str) -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures").join(name)
+        crate::test_support::workspace_fixture_path(name)
     }
 
     fn semantic_fixture(name: &str) -> Option<Hwp5SemanticDocument> {
@@ -1171,6 +1173,8 @@ mod tests {
             }],
             char_shapes: vec![crate::schema::header::Hwp5RawCharShape::parse(&[0u8; 68]).unwrap()],
             para_shapes: vec![crate::schema::header::Hwp5RawParaShape::parse(&[0u8; 42]).unwrap()],
+            numberings: Vec::new(),
+            bullets: Vec::new(),
             tab_defs: Vec::new(),
             styles: vec![crate::schema::header::Hwp5RawStyle {
                 name: "본문".to_string(),

@@ -7,10 +7,11 @@ use hwpforge_blueprint::error::BlueprintError;
 use hwpforge_blueprint::inheritance::resolve_template;
 use hwpforge_blueprint::registry::{StyleEntry, StyleRegistry};
 use hwpforge_blueprint::template::Template;
-use hwpforge_core::{ImageFormat, PageSettings};
-use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+use hwpforge_core::{BulletDef, ImageFormat, PageSettings, ParaHead, ParagraphListRef};
+use hwpforge_foundation::{BulletIndex, CharShapeIndex, HwpUnit, NumberFormatType, ParaShapeIndex};
 
 use crate::error::{MdError, MdResult};
+use crate::internal_styles::list_continuation_style_name;
 
 /// Resolved style indices for a markdown semantic element.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -24,6 +25,50 @@ pub struct MdStyleRef {
 impl MdStyleRef {
     fn from_entry(entry: &StyleEntry) -> Self {
         Self { para_shape_id: entry.para_shape_id, char_shape_id: entry.char_shape_id }
+    }
+}
+
+const TASK_LIST_LEVELS: usize = ParagraphListRef::MAX_LEVEL as usize + 1;
+
+/// Resolved paragraph styles for list-item continuation paragraphs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MdListContinuationMapping {
+    /// Para shapes for continuation paragraphs, indexed by zero-based nesting level.
+    pub levels: [ParaShapeIndex; TASK_LIST_LEVELS],
+    /// Shared character shape used for continuation text.
+    pub char_shape_id: CharShapeIndex,
+}
+
+impl MdListContinuationMapping {
+    fn style_for(self, level: u8) -> MdStyleRef {
+        let idx = usize::from(level.min(ParagraphListRef::MAX_LEVEL));
+        MdStyleRef { para_shape_id: self.levels[idx], char_shape_id: self.char_shape_id }
+    }
+
+    /// Returns the continuation nesting level for the given para shape.
+    pub fn level_for(self, para_shape_id: ParaShapeIndex) -> Option<u8> {
+        self.levels.iter().position(|candidate| *candidate == para_shape_id).map(|idx| idx as u8)
+    }
+}
+
+/// Resolved paragraph styles for GFM task-list items.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MdTaskListMapping {
+    /// Para shapes for unchecked task items, indexed by zero-based nesting level.
+    pub unchecked: [ParaShapeIndex; TASK_LIST_LEVELS],
+    /// Para shapes for checked task items, indexed by zero-based nesting level.
+    pub checked: [ParaShapeIndex; TASK_LIST_LEVELS],
+    /// Shared character shape used for both checked and unchecked task items.
+    pub char_shape_id: CharShapeIndex,
+}
+
+impl MdTaskListMapping {
+    fn style_for(self, checked: bool, level: u8) -> MdStyleRef {
+        let idx = usize::from(level.min(ParagraphListRef::MAX_LEVEL));
+        MdStyleRef {
+            para_shape_id: if checked { self.checked[idx] } else { self.unchecked[idx] },
+            char_shape_id: self.char_shape_id,
+        }
     }
 }
 
@@ -50,6 +95,10 @@ pub struct MdMapping {
     pub blockquote: MdStyleRef,
     /// List item style.
     pub list_item: MdStyleRef,
+    /// List-item continuation styles.
+    pub list_continuation: MdListContinuationMapping,
+    /// Task-list item styles.
+    pub task_list: MdTaskListMapping,
     /// Page settings used when creating sections.
     pub page_settings: PageSettings,
 }
@@ -66,6 +115,22 @@ impl MdMapping {
             6.. => self.heading6,
             0 => self.body,
         }
+    }
+
+    /// Returns the task-list style for the given checked state and nesting level.
+    pub fn task_list(&self, checked: bool, level: u8) -> MdStyleRef {
+        self.task_list.style_for(checked, level)
+    }
+
+    /// Returns the continuation-paragraph style for the given nesting level.
+    pub fn list_continuation(&self, level: u8) -> MdStyleRef {
+        self.list_continuation.style_for(level)
+    }
+
+    /// Returns the continuation nesting level for the para shape, if it is one
+    /// of the markdown-generated continuation paragraph shapes.
+    pub fn continuation_level(&self, para_shape_id: ParaShapeIndex) -> Option<u8> {
+        self.list_continuation.level_for(para_shape_id)
     }
 
     /// Classifies paragraph shape IDs for markdown encoding.
@@ -97,6 +162,9 @@ impl MdMapping {
         if para_shape_id == self.list_item.para_shape_id {
             return ParagraphKind::ListItem;
         }
+        if let Some(level) = self.continuation_level(para_shape_id) {
+            return ParagraphKind::ListContinuation(level);
+        }
         ParagraphKind::Body
     }
 }
@@ -114,6 +182,8 @@ pub enum ParagraphKind {
     BlockQuote,
     /// List item paragraph.
     ListItem,
+    /// Continuation paragraph within a list item.
+    ListContinuation(u8),
 }
 
 /// Resolves template inheritance and compiles markdown mapping style indices.
@@ -122,7 +192,7 @@ pub enum ParagraphKind {
 /// downstream (e.g. to the HWPX encoder) without re-resolving the template.
 pub fn resolve_mapping(template: &Template) -> MdResult<(MdMapping, StyleRegistry)> {
     let resolved = resolve_template_with_builtins(template)?;
-    let registry = StyleRegistry::from_template(&resolved)?;
+    let mut registry = StyleRegistry::from_template(&resolved)?;
     let fallback = fallback_style(&registry)?;
 
     let md = resolved.markdown_mapping.as_ref();
@@ -145,6 +215,8 @@ pub fn resolve_mapping(template: &Template) -> MdResult<(MdMapping, StyleRegistr
         resolve_style(&registry, md.and_then(|m| m.blockquote.as_deref()), "blockquote", body);
     let list_item =
         resolve_style(&registry, md.and_then(|m| m.list_item.as_deref()), "list_item", body);
+    let list_continuation = install_list_continuation_mapping(&mut registry, list_item)?;
+    let task_list = install_task_list_mapping(&mut registry, list_item)?;
 
     let page_settings = resolved
         .page
@@ -164,10 +236,151 @@ pub fn resolve_mapping(template: &Template) -> MdResult<(MdMapping, StyleRegistr
             code,
             blockquote,
             list_item,
+            list_continuation,
+            task_list,
             page_settings,
         },
         registry,
     ))
+}
+
+fn install_list_continuation_mapping(
+    registry: &mut StyleRegistry,
+    list_item: MdStyleRef,
+) -> MdResult<MdListContinuationMapping> {
+    let base_entry = registry
+        .style_entries
+        .values()
+        .find(|entry| {
+            entry.para_shape_id == list_item.para_shape_id
+                && entry.char_shape_id == list_item.char_shape_id
+        })
+        .copied()
+        .ok_or_else(|| MdError::TemplateResolution {
+            detail: format!(
+                "list continuation base style ({}, {}) is missing from registry",
+                list_item.para_shape_id.get(),
+                list_item.char_shape_id.get()
+            ),
+        })?;
+    let base_para = registry.para_shape(list_item.para_shape_id).cloned().ok_or_else(|| {
+        MdError::TemplateResolution {
+            detail: format!(
+                "list continuation base para shape {} is missing from registry",
+                list_item.para_shape_id.get()
+            ),
+        }
+    })?;
+    let indent_step = if base_para.indent_left.as_i32() > 0 {
+        base_para.indent_left
+    } else {
+        HwpUnit::from_pt(20.0)?
+    };
+
+    Ok(MdListContinuationMapping {
+        levels: push_list_continuation_para_shapes(
+            registry,
+            &base_para,
+            list_item.char_shape_id,
+            base_entry.font_id,
+            indent_step,
+        ),
+        char_shape_id: list_item.char_shape_id,
+    })
+}
+
+fn install_task_list_mapping(
+    registry: &mut StyleRegistry,
+    list_item: MdStyleRef,
+) -> MdResult<MdTaskListMapping> {
+    let bullet_id = ensure_task_list_bullet(registry);
+    let base_para = registry.para_shape(list_item.para_shape_id).cloned().ok_or_else(|| {
+        MdError::TemplateResolution {
+            detail: format!(
+                "task list base para shape {} is missing from registry",
+                list_item.para_shape_id.get()
+            ),
+        }
+    })?;
+    let indent_step = if base_para.indent_left.as_i32() > 0 {
+        base_para.indent_left
+    } else {
+        HwpUnit::from_pt(20.0)?
+    };
+
+    Ok(MdTaskListMapping {
+        unchecked: push_task_list_para_shapes(registry, &base_para, bullet_id, false, indent_step),
+        checked: push_task_list_para_shapes(registry, &base_para, bullet_id, true, indent_step),
+        char_shape_id: list_item.char_shape_id,
+    })
+}
+
+fn ensure_task_list_bullet(registry: &mut StyleRegistry) -> BulletIndex {
+    if let Some(idx) = registry.bullets.iter().position(|bullet| {
+        bullet.bullet_char == "☐"
+            && bullet.checked_char.as_deref() == Some("☑")
+            && bullet.para_head.checkable
+            && !bullet.use_image
+    }) {
+        return BulletIndex::new(idx);
+    }
+
+    let id = registry.bullets.iter().map(|bullet| bullet.id).max().unwrap_or(0).saturating_add(1);
+    registry.bullets.push(BulletDef {
+        id,
+        bullet_char: "☐".into(),
+        checked_char: Some("☑".into()),
+        use_image: false,
+        para_head: ParaHead {
+            start: 0,
+            level: 1,
+            num_format: NumberFormatType::Digit,
+            text: String::new(),
+            checkable: true,
+        },
+    });
+    BulletIndex::new(registry.bullets.len() - 1)
+}
+
+fn push_task_list_para_shapes(
+    registry: &mut StyleRegistry,
+    base_para: &hwpforge_blueprint::style::ParaShape,
+    bullet_id: BulletIndex,
+    checked: bool,
+    indent_step: HwpUnit,
+) -> [ParaShapeIndex; TASK_LIST_LEVELS] {
+    std::array::from_fn(|idx| {
+        let level = idx as u8;
+        let mut para = base_para.clone();
+        para.indent_left = base_para.indent_left + indent_step * i32::from(level);
+        para.list = Some(ParagraphListRef::CheckBullet { bullet_id, level, checked });
+        let para_shape_id = ParaShapeIndex::new(registry.para_shapes.len());
+        registry.para_shapes.push(para);
+        para_shape_id
+    })
+}
+
+fn push_list_continuation_para_shapes(
+    registry: &mut StyleRegistry,
+    base_para: &hwpforge_blueprint::style::ParaShape,
+    char_shape_id: CharShapeIndex,
+    font_id: hwpforge_foundation::FontIndex,
+    indent_step: HwpUnit,
+) -> [ParaShapeIndex; TASK_LIST_LEVELS] {
+    std::array::from_fn(|idx| {
+        let level = idx as i32;
+        let mut para = base_para.clone();
+        para.indent_left = base_para.indent_left + indent_step * level;
+        para.indent_first_line = HwpUnit::ZERO;
+        para.list = None;
+        let para_shape_id = ParaShapeIndex::new(registry.para_shapes.len());
+        registry.para_shapes.push(para);
+        registry.style_entries.insert(
+            list_continuation_style_name(idx as u8),
+            StyleEntry::new(char_shape_id, para_shape_id, font_id),
+        );
+        para_shape_id
+    })
 }
 
 fn resolve_template_with_builtins(template: &Template) -> MdResult<Template> {

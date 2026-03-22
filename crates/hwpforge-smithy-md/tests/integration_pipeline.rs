@@ -3,15 +3,15 @@
 //! Tests the complete flow:
 //! 1. MdDecoder::decode(markdown, &template) → MdDocument { document, style_registry }
 //! 2. document.validate() → Document<Validated>
-//! 3. HwpxStyleStore::from_registry(&style_registry) → HwpxStyleStore
-//! 4. HwpxEncoder::encode(&validated, &store) → Vec<u8> (HWPX ZIP bytes)
+//! 3. HwpxRegistryBridge::from_registry(&style_registry) → rebind Draft → store-local ids
+//! 4. HwpxEncoder::encode(&validated, bridge.style_store()) → Vec<u8> (HWPX ZIP bytes)
 //! 5. HwpxDecoder::decode(&bytes) → HwpxDocument { document, style_store }
 
 use hwpforge_blueprint::builtins::{builtin_default, builtin_gov_proposal};
 use hwpforge_blueprint::template::Template;
 use hwpforge_core::{Document, Draft, RunContent};
-use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder, HwpxStyleStore};
-use hwpforge_smithy_md::MdDecoder;
+use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder, HwpxRegistryBridge, HwpxStyleLookup};
+use hwpforge_smithy_md::{MdDecoder, MdEncoder};
 use pretty_assertions::assert_eq;
 
 /// Helper function to run the full pipeline and return decoded HWPX document (still Draft).
@@ -19,16 +19,21 @@ fn run_full_pipeline(markdown: &str, template: &Template) -> (Vec<u8>, Document<
     // 1. Decode markdown
     let md_doc = MdDecoder::decode(markdown, template).expect("MD decode should succeed");
 
-    // 2. Validate Core document
-    let validated = md_doc.document.validate().expect("Validation should succeed");
+    let bridge =
+        HwpxRegistryBridge::from_registry(&md_doc.style_registry).expect("bridge should succeed");
+    let rebound =
+        bridge.rebind_draft_document(md_doc.document).expect("style rebind should succeed");
 
-    // 3. Convert StyleRegistry to HwpxStyleStore
-    let style_store = HwpxStyleStore::from_registry(&md_doc.style_registry);
+    // 2. Validate Core document
+    let validated = rebound.validate().expect("Validation should succeed");
 
     // 4. Encode to HWPX
-    let hwpx_bytes =
-        HwpxEncoder::encode(&validated, &style_store, &hwpforge_core::image::ImageStore::new())
-            .expect("HWPX encode should succeed");
+    let hwpx_bytes = HwpxEncoder::encode(
+        &validated,
+        bridge.style_store(),
+        &hwpforge_core::image::ImageStore::new(),
+    )
+    .expect("HWPX encode should succeed");
 
     // 5. Decode HWPX back (returns Document<Draft>)
     let hwpx_doc = HwpxDecoder::decode(&hwpx_bytes).expect("HWPX decode should succeed");
@@ -174,13 +179,18 @@ fn pipeline_frontmatter_preserved() {
     // For now, just verify title and author work
 
     // Continue with full pipeline
-    let validated = md_doc.document.validate().expect("Validation should succeed");
+    let bridge =
+        HwpxRegistryBridge::from_registry(&md_doc.style_registry).expect("bridge should succeed");
+    let rebound =
+        bridge.rebind_draft_document(md_doc.document).expect("style rebind should succeed");
+    let validated = rebound.validate().expect("Validation should succeed");
 
-    let style_store = HwpxStyleStore::from_registry(&md_doc.style_registry);
-
-    let hwpx_bytes =
-        HwpxEncoder::encode(&validated, &style_store, &hwpforge_core::image::ImageStore::new())
-            .expect("HWPX encode should succeed");
+    let hwpx_bytes = HwpxEncoder::encode(
+        &validated,
+        bridge.style_store(),
+        &hwpforge_core::image::ImageStore::new(),
+    )
+    .expect("HWPX encode should succeed");
 
     let hwpx_doc = HwpxDecoder::decode(&hwpx_bytes).expect("HWPX decode should succeed");
 
@@ -233,6 +243,115 @@ fn pipeline_ordered_and_unordered_lists() {
 }
 
 #[test]
+fn pipeline_task_list_preserves_checkable_hwpx_semantics() {
+    let markdown = "- [ ] todo\n- [x] done";
+    let template = builtin_default().expect("builtin_default should succeed");
+
+    let md_doc = MdDecoder::decode(markdown, &template).expect("MD decode should succeed");
+    let bridge =
+        HwpxRegistryBridge::from_registry(&md_doc.style_registry).expect("bridge should succeed");
+    let rebound =
+        bridge.rebind_draft_document(md_doc.document).expect("style rebind should succeed");
+    let validated = rebound.validate().expect("Validation should succeed");
+
+    let hwpx_bytes = HwpxEncoder::encode(
+        &validated,
+        bridge.style_store(),
+        &hwpforge_core::image::ImageStore::new(),
+    )
+    .expect("HWPX encode should succeed");
+
+    let decoded = HwpxDecoder::decode(&hwpx_bytes).expect("HWPX decode should succeed");
+    let section = &decoded.document.sections()[0];
+    let todo_para = section
+        .paragraphs
+        .iter()
+        .find(|paragraph| paragraph.text_content() == "todo")
+        .expect("todo paragraph");
+    let done_para = section
+        .paragraphs
+        .iter()
+        .find(|paragraph| paragraph.text_content() == "done")
+        .expect("done paragraph");
+    let todo_shape = decoded.style_store.para_shape(todo_para.para_shape_id).expect("todo shape");
+    let done_shape = decoded.style_store.para_shape(done_para.para_shape_id).expect("done shape");
+    let bullet = decoded
+        .style_store
+        .iter_bullets()
+        .find(|bullet| bullet.id == todo_shape.heading_id_ref)
+        .expect("task bullet");
+
+    assert!(bullet.is_checkable());
+    assert_eq!(bullet.checked_char.as_deref(), Some("☑"));
+    assert!(!todo_shape.checked);
+    assert!(done_shape.checked);
+}
+
+#[test]
+fn pipeline_task_list_lossy_encode_uses_gfm_syntax() {
+    let markdown = "- [ ] todo\n- [x] done";
+    let template = builtin_default().expect("builtin_default should succeed");
+
+    let md_doc = MdDecoder::decode(markdown, &template).expect("MD decode should succeed");
+    let validated = md_doc.document.validate().expect("Validation should succeed");
+    let encoded = MdEncoder::encode(&validated, &template).expect("lossy encode should succeed");
+
+    assert!(encoded.contains("- [ ] todo"));
+    assert!(encoded.contains("- [x] done"));
+}
+
+#[test]
+fn pipeline_ordered_task_list_normalizes_to_unordered_checkable_markdown() {
+    let markdown = "1. [ ] todo\n2. [x] done";
+    let template = builtin_default().expect("builtin_default should succeed");
+
+    let md_doc = MdDecoder::decode(markdown, &template).expect("MD decode should succeed");
+    let validated = md_doc.document.validate().expect("Validation should succeed");
+    let encoded = MdEncoder::encode(&validated, &template).expect("lossy encode should succeed");
+
+    assert!(encoded.contains("- [ ] todo"));
+    assert!(encoded.contains("- [x] done"));
+    assert!(!encoded.contains("1. [ ]"));
+    assert!(!encoded.contains("2. [x]"));
+}
+
+#[test]
+fn pipeline_multi_paragraph_task_item_preserves_continuation_across_roundtrip() {
+    let markdown = "- [ ] first paragraph of the same task item\n\n  second paragraph of the same task item\n\n- [x] next real task item";
+    let template = builtin_default().expect("builtin_default should succeed");
+
+    let md_doc = MdDecoder::decode(markdown, &template).expect("MD decode should succeed");
+    let template_validated =
+        md_doc.document.clone().validate().expect("Template validate should succeed");
+    let lossy =
+        MdEncoder::encode(&template_validated, &template).expect("lossy encode should succeed");
+    assert!(lossy.contains("- [ ] first paragraph of the same task item"));
+    assert!(lossy.contains("\n\n  second paragraph of the same task item"));
+    assert!(lossy.contains("- [x] next real task item"));
+
+    let rebound_doc = md_doc.document.clone();
+    let bridge =
+        HwpxRegistryBridge::from_registry(&md_doc.style_registry).expect("bridge should succeed");
+    let rebound = bridge.rebind_draft_document(rebound_doc).expect("style rebind should succeed");
+    let validated = rebound.validate().expect("Validation should succeed");
+
+    let hwpx_bytes = HwpxEncoder::encode(
+        &validated,
+        bridge.style_store(),
+        &hwpforge_core::image::ImageStore::new(),
+    )
+    .expect("HWPX encode should succeed");
+
+    let decoded = HwpxDecoder::decode(&hwpx_bytes).expect("HWPX decode should succeed");
+    let validated_roundtrip =
+        decoded.document.validate().expect("Roundtrip validate should succeed");
+    let lookup = HwpxStyleLookup::new(&decoded.style_store, &decoded.image_store);
+    let styled = MdEncoder::encode_styled(&validated_roundtrip, &lookup);
+
+    assert_eq!(styled.markdown.trim(), markdown);
+}
+
+#[test]
 fn pipeline_style_store_counts_match_registry() {
     let markdown = "# 제목\n\n본문입니다.";
     let template = builtin_default().expect("builtin_default should succeed");
@@ -240,8 +359,9 @@ fn pipeline_style_store_counts_match_registry() {
     // Decode simple MD → get style_registry
     let md_doc = MdDecoder::decode(markdown, &template).expect("MD decode should succeed");
 
-    // Create HwpxStyleStore::from_registry(&registry)
-    let store = HwpxStyleStore::from_registry(&md_doc.style_registry);
+    let bridge =
+        HwpxRegistryBridge::from_registry(&md_doc.style_registry).expect("bridge should succeed");
+    let store = bridge.style_store();
 
     // Assert: store counts match registry counts
     // Fonts are mirrored across 7 language groups (HANGUL, LATIN, HANJA, JAPANESE, OTHER, SYMBOL, USER)

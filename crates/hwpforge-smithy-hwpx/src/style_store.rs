@@ -10,8 +10,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::color::parse_hex_color_or_black;
+use crate::list_bridge::{heading_type_to_para_list_type, list_ref_to_wire_parts};
 use hwpforge_blueprint::registry::StyleRegistry;
-use hwpforge_core::{NumberingDef, StyleLookup, TabDef};
+use hwpforge_core::{BulletDef, NumberingDef, StyleLookup, TabDef};
 use hwpforge_foundation::{
     Alignment, BorderFillIndex, BreakType, CharShapeIndex, Color, EmbossType, EmphasisType,
     EngraveType, FontIndex, GradientType, HeadingType, HwpUnit, LineSpacingType, OutlineType,
@@ -272,8 +273,15 @@ pub struct HwpxParaShape {
     pub heading_type: HeadingType,
     /// Heading numbering reference (idRef in heading element, 0 = none).
     pub heading_id_ref: u32,
-    /// Heading outline level (0 = none, 1-10 for outline levels).
+    /// Heading list level stored on `paraPr/heading(level)`.
+    ///
+    /// HWPX uses zero-based values for paragraph heading/list state:
+    /// - outline: `0..=9`
+    /// - number/bullet: `0..=9`
+    /// - none: `0`
     pub heading_level: u32,
+    /// Checkbox state stored on `paraPr@checked` for checkable bullets.
+    pub checked: bool,
     /// Tab property reference (tabPrIDRef, 0 = default).
     pub tab_pr_id_ref: u32,
     /// Condense value for tight outline spacing.
@@ -301,6 +309,7 @@ impl Default for HwpxParaShape {
             heading_type: HeadingType::None,
             heading_id_ref: 0,
             heading_level: 0,
+            checked: false,
             tab_pr_id_ref: 0,
             condense: 0,
         }
@@ -701,7 +710,7 @@ impl HwpxBorderFill {
 
 /// Returns the 7 default character shapes for Modern (한글 2022+).
 ///
-/// Extracted from golden fixture `tests/fixtures/textbox.hwpx` `Contents/header.xml`.
+/// Extracted from golden fixture `tests/fixtures/shapes/textbox.hwpx` `Contents/header.xml`.
 ///
 /// ```text
 /// id=0: 함초롬바탕 10pt #000000  (바탕글/본문/개요1-7/캡션)
@@ -788,7 +797,7 @@ pub(crate) fn default_char_shapes_modern() -> [HwpxCharShape; 7] {
 
 /// Returns the 20 default paragraph shapes for Modern (한글 2022+).
 ///
-/// Extracted from golden fixture `tests/fixtures/textbox.hwpx` `Contents/header.xml`.
+/// Extracted from golden fixture `tests/fixtures/shapes/textbox.hwpx` `Contents/header.xml`.
 ///
 /// Values are in HWPUNIT (1pt = 100 HWPUNIT).
 pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
@@ -815,6 +824,7 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         heading_type: HeadingType::None,
         heading_id_ref: 0,
         heading_level: 0,
+        checked: false,
         tab_pr_id_ref: 0,
         condense: 0,
     };
@@ -824,72 +834,72 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         base.clone(),
         //  1: 본문 — JUSTIFY left=1500 160%
         HwpxParaShape { margin_left: HwpUnit::new(1500).unwrap(), ..base.clone() },
-        //  2: 개요 1 — JUSTIFY left=1000 160% OUTLINE level=1
+        //  2: 개요 1 — JUSTIFY left=1000 160% OUTLINE level=0
         HwpxParaShape {
             margin_left: HwpUnit::new(1000).unwrap(),
             heading_type: HeadingType::Outline,
-            heading_id_ref: 1,
+            heading_id_ref: 0,
+            heading_level: 0,
+            tab_pr_id_ref: 1,
+            condense: 20,
+            ..base.clone()
+        },
+        //  3: 개요 2 — JUSTIFY left=2000 160% OUTLINE level=1
+        HwpxParaShape {
+            margin_left: HwpUnit::new(2000).unwrap(),
+            heading_type: HeadingType::Outline,
+            heading_id_ref: 0,
             heading_level: 1,
             tab_pr_id_ref: 1,
             condense: 20,
             ..base.clone()
         },
-        //  3: 개요 2 — JUSTIFY left=2000 160% OUTLINE level=2
+        //  4: 개요 3 — JUSTIFY left=3000 160% OUTLINE level=2
         HwpxParaShape {
-            margin_left: HwpUnit::new(2000).unwrap(),
+            margin_left: HwpUnit::new(3000).unwrap(),
             heading_type: HeadingType::Outline,
-            heading_id_ref: 1,
+            heading_id_ref: 0,
             heading_level: 2,
             tab_pr_id_ref: 1,
             condense: 20,
             ..base.clone()
         },
-        //  4: 개요 3 — JUSTIFY left=3000 160% OUTLINE level=3
+        //  5: 개요 4 — JUSTIFY left=4000 160% OUTLINE level=3
         HwpxParaShape {
-            margin_left: HwpUnit::new(3000).unwrap(),
+            margin_left: HwpUnit::new(4000).unwrap(),
             heading_type: HeadingType::Outline,
-            heading_id_ref: 1,
+            heading_id_ref: 0,
             heading_level: 3,
             tab_pr_id_ref: 1,
             condense: 20,
             ..base.clone()
         },
-        //  5: 개요 4 — JUSTIFY left=4000 160% OUTLINE level=4
+        //  6: 개요 5 — JUSTIFY left=5000 160% OUTLINE level=4
         HwpxParaShape {
-            margin_left: HwpUnit::new(4000).unwrap(),
+            margin_left: HwpUnit::new(5000).unwrap(),
             heading_type: HeadingType::Outline,
-            heading_id_ref: 1,
+            heading_id_ref: 0,
             heading_level: 4,
             tab_pr_id_ref: 1,
             condense: 20,
             ..base.clone()
         },
-        //  6: 개요 5 — JUSTIFY left=5000 160% OUTLINE level=5
+        //  7: 개요 6 — JUSTIFY left=6000 160% OUTLINE level=5
         HwpxParaShape {
-            margin_left: HwpUnit::new(5000).unwrap(),
+            margin_left: HwpUnit::new(6000).unwrap(),
             heading_type: HeadingType::Outline,
-            heading_id_ref: 1,
+            heading_id_ref: 0,
             heading_level: 5,
             tab_pr_id_ref: 1,
             condense: 20,
             ..base.clone()
         },
-        //  7: 개요 6 — JUSTIFY left=6000 160% OUTLINE level=6
-        HwpxParaShape {
-            margin_left: HwpUnit::new(6000).unwrap(),
-            heading_type: HeadingType::Outline,
-            heading_id_ref: 1,
-            heading_level: 6,
-            tab_pr_id_ref: 1,
-            condense: 20,
-            ..base.clone()
-        },
-        //  8: 개요 7 — JUSTIFY left=7000 160% OUTLINE level=7
+        //  8: 개요 7 — JUSTIFY left=7000 160% OUTLINE level=6
         HwpxParaShape {
             margin_left: HwpUnit::new(7000).unwrap(),
             heading_type: HeadingType::Outline,
-            heading_id_ref: 1,
-            heading_level: 7,
+            heading_id_ref: 0,
+            heading_level: 6,
             tab_pr_id_ref: 1,
             condense: 20,
             ..base.clone()
@@ -927,32 +937,32 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
             spacing_after: HwpUnit::new(700).unwrap(),
             ..base.clone()
         },
-        // 16: 개요 9 (style 10→paraPr 16) — JUSTIFY left=9000 160% OUTLINE level=9
+        // 16: 개요 9 (style 10→paraPr 16) — JUSTIFY left=9000 160% OUTLINE level=8
         HwpxParaShape {
             margin_left: HwpUnit::new(9000).unwrap(),
             heading_type: HeadingType::Outline,
-            heading_id_ref: 1,
+            heading_id_ref: 0,
+            heading_level: 8,
+            tab_pr_id_ref: 1,
+            condense: 20,
+            ..base.clone()
+        },
+        // 17: 개요 10 (style 11→paraPr 17) — JUSTIFY left=10000 160% OUTLINE level=9
+        HwpxParaShape {
+            margin_left: HwpUnit::new(10000).unwrap(),
+            heading_type: HeadingType::Outline,
+            heading_id_ref: 0,
             heading_level: 9,
             tab_pr_id_ref: 1,
             condense: 20,
             ..base.clone()
         },
-        // 17: 개요 10 (style 11→paraPr 17) — JUSTIFY left=10000 160% OUTLINE level=10
-        HwpxParaShape {
-            margin_left: HwpUnit::new(10000).unwrap(),
-            heading_type: HeadingType::Outline,
-            heading_id_ref: 1,
-            heading_level: 10,
-            tab_pr_id_ref: 1,
-            condense: 20,
-            ..base.clone()
-        },
-        // 18: 개요 8 (style 9→paraPr 18) — JUSTIFY left=8000 160% OUTLINE level=8
+        // 18: 개요 8 (style 9→paraPr 18) — JUSTIFY left=8000 160% OUTLINE level=7
         HwpxParaShape {
             margin_left: HwpUnit::new(8000).unwrap(),
             heading_type: HeadingType::Outline,
-            heading_id_ref: 1,
-            heading_level: 8,
+            heading_id_ref: 0,
+            heading_level: 7,
             tab_pr_id_ref: 1,
             condense: 20,
             ..base.clone()
@@ -993,7 +1003,15 @@ pub struct HwpxStyleStore {
     styles: Vec<HwpxStyle>,
     border_fills: Vec<HwpxBorderFill>,
     numberings: Vec<NumberingDef>,
+    bullets: Vec<BulletDef>,
     tabs: Vec<TabDef>,
+}
+
+#[derive(Debug)]
+pub(crate) struct RegistryStoreBuild {
+    pub(crate) store: HwpxStyleStore,
+    pub(crate) char_shape_map: Vec<CharShapeIndex>,
+    pub(crate) para_shape_map: Vec<ParaShapeIndex>,
 }
 
 impl HwpxStyleStore {
@@ -1037,8 +1055,14 @@ impl HwpxStyleStore {
     /// This is the **bridge** that lets the MD → Core → HWPX pipeline
     /// carry resolved styles all the way through to the HWPX encoder.
     ///
+    /// This method only builds the HWPX-side style store. Callers with a
+    /// registry-backed `Document` must rebind its registry-local char/para
+    /// shape indices to store-local ids before encoding; otherwise `section*.xml`
+    /// can point at the wrong shape definitions. Use [`crate::HwpxRegistryBridge`]
+    /// for that boundary.
+    ///
     /// To target a specific 한글 version, use [`from_registry_with`][Self::from_registry_with].
-    pub fn from_registry(registry: &StyleRegistry) -> Self {
+    pub fn from_registry(registry: &StyleRegistry) -> HwpxResult<Self> {
         Self::from_registry_with(registry, HancomStyleSet::default())
     }
 
@@ -1054,184 +1078,18 @@ impl HwpxStyleStore {
     /// - `registry.char_shapes` → [`HwpxCharShape`] (font ref mirrors same index for all lang groups)
     /// - `registry.para_shapes` → [`HwpxParaShape`]
     /// - `registry.style_entries` → [`HwpxStyle`] (PARA type, Korean langID)
-    pub fn from_registry_with(registry: &StyleRegistry, style_set: HancomStyleSet) -> Self {
-        let mut store = Self { style_set, ..Self::default() };
+    pub fn from_registry_with(
+        registry: &StyleRegistry,
+        style_set: HancomStyleSet,
+    ) -> HwpxResult<Self> {
+        Ok(Self::from_registry_with_mappings(registry, style_set)?.store)
+    }
 
-        // Step 1: Ensure 한글-compatible fonts exist
-        // If registry has no fonts, inject default Korean fonts
-        let has_fonts = !registry.fonts.is_empty();
-        let default_font = if has_fonts {
-            registry.fonts[0].as_str()
-        } else {
-            "함초롬바탕" // Fallback if no fonts in registry
-        };
-
-        // Fonts: FontId → HwpxFont (mirrored across all 7 language groups)
-        // 한글 expects identical font entries for each language group.
-        const FONT_LANGS: &[&str] =
-            &["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"];
-
-        if has_fonts {
-            for &lang in FONT_LANGS {
-                for (i, font_id) in registry.fonts.iter().enumerate() {
-                    store.push_font(HwpxFont {
-                        id: i as u32,
-                        face_name: font_id.as_str().to_string(),
-                        lang: lang.to_string(),
-                    });
-                }
-            }
-        } else {
-            // No fonts in registry - inject minimal default
-            for &lang in FONT_LANGS {
-                store.push_font(HwpxFont {
-                    id: 0,
-                    face_name: default_font.to_string(),
-                    lang: lang.to_string(),
-                });
-            }
-        }
-
-        // Step 2: Inject 7 default charShapes and 20 default paraShapes (Modern).
-        //
-        // These MUST come first so that default styles can reference them by
-        // group index (char_pr_group / para_pr_group from DefaultStyleEntry).
-        // User shapes are pushed after and start at offset 7 / 20.
-        //
-        // Classic and Latest share the same shape definitions (only the style
-        // table and its charPr/paraPr references differ).
-        for cs in default_char_shapes_modern() {
-            store.push_char_shape(cs);
-        }
-        for ps in default_para_shapes_modern() {
-            store.push_para_shape(ps);
-        }
-
-        // Offsets for user-defined shapes (placed after the 7+20 defaults).
-        let char_shape_offset = store.char_shape_count(); // 7
-        let para_shape_offset = store.para_shape_count(); // 20
-
-        // Step 3: Push user charShapes from Blueprint (indices start at offset).
-        for cs in &registry.char_shapes {
-            let font_idx = registry
-                .fonts
-                .iter()
-                .position(|f| f.as_str() == cs.font)
-                .map(FontIndex::new)
-                .unwrap_or(FontIndex::new(0));
-            let font_ref = HwpxFontRef {
-                hangul: font_idx,
-                latin: font_idx,
-                hanja: font_idx,
-                japanese: font_idx,
-                other: font_idx,
-                symbol: font_idx,
-                user: font_idx,
-            };
-            store.push_char_shape(HwpxCharShape {
-                font_ref,
-                height: cs.size,
-                text_color: cs.color,
-                shade_color: cs.shade_color,
-                bold: cs.bold,
-                italic: cs.italic,
-                underline_type: cs.underline_type,
-                underline_color: cs.underline_color,
-                strikeout_shape: cs.strikeout_shape,
-                strikeout_color: cs.strikeout_color,
-                vertical_position: cs.vertical_position,
-                outline_type: cs.outline,
-                shadow_type: cs.shadow,
-                emboss_type: cs.emboss,
-                engrave_type: cs.engrave,
-                emphasis: cs.emphasis,
-                ratio: cs.ratio,
-                spacing: cs.spacing,
-                rel_sz: cs.rel_sz,
-                char_offset: cs.offset,
-                use_kerning: cs.use_kerning,
-                use_font_space: cs.use_font_space,
-                border_fill_id: cs.char_border_fill_id,
-            });
-        }
-
-        // Step 4: Push user paraShapes from Blueprint (indices start at offset).
-        for ps in &registry.para_shapes {
-            store.push_para_shape(HwpxParaShape {
-                alignment: ps.alignment,
-                margin_left: ps.indent_left,
-                margin_right: ps.indent_right,
-                indent: ps.indent_first_line,
-                spacing_before: ps.space_before,
-                spacing_after: ps.space_after,
-                line_spacing: ps.line_spacing_value.round() as i32,
-                line_spacing_type: ps.line_spacing_type,
-                break_type: ps.break_type,
-                keep_with_next: ps.keep_with_next,
-                keep_lines_together: ps.keep_lines_together,
-                widow_orphan: ps.widow_orphan,
-                break_latin_word: WordBreakType::KeepWord,
-                break_non_latin_word: WordBreakType::KeepWord,
-                border_fill_id: ps.border_fill_id,
-                heading_type: HeadingType::None,
-                heading_id_ref: 0,
-                heading_level: 0,
-                tab_pr_id_ref: ps.tab_def_id,
-                condense: 0,
-            });
-        }
-
-        // Step 4.25: Push shared tab definitions from Blueprint.
-        //
-        // The encoder merges these with the canonical 한글 defaults (id=0..2)
-        // so user registries only need to provide explicit custom tab stops.
-        for tab in &registry.tabs {
-            store.push_tab(tab.clone());
-        }
-
-        // Step 4.5: Inject 3 default border fills for backward compatibility.
-        // These must always be present; user-defined fills get id=4+.
-        store.push_border_fill(HwpxBorderFill::default_page_border()); // id=1
-        store.push_border_fill(HwpxBorderFill::default_char_background()); // id=2
-        store.push_border_fill(HwpxBorderFill::default_table_border()); // id=3
-
-        // Step 5: Inject default styles with per-style charPr/paraPr group refs.
-        // The group indices are verified against golden fixture textbox.hwpx.
-        let defaults = store.style_set.default_styles();
-        for (idx, entry) in defaults.iter().enumerate() {
-            let next_style_id_ref = if entry.is_char_style() { 0 } else { idx as u32 };
-            store.push_style(HwpxStyle {
-                id: idx as u32,
-                style_type: entry.style_type.to_string(),
-                name: entry.name.to_string(),
-                eng_name: entry.eng_name.to_string(),
-                para_pr_id_ref: entry.para_pr_group as u32,
-                char_pr_id_ref: entry.char_pr_group as u32,
-                next_style_id_ref,
-                lang_id: 1042, // Korean
-                lock_form: 0,
-            });
-        }
-
-        // Step 6: Add user's styles from registry (starting after defaults).
-        // User charPr/paraPr refs are offset-adjusted so they point at the
-        // user shapes in the store (which start after the 7/20 defaults).
-        let style_offset = defaults.len();
-        for (i, (name, entry)) in registry.style_entries.iter().enumerate() {
-            store.push_style(HwpxStyle {
-                id: (style_offset + i) as u32,
-                style_type: "PARA".to_string(),
-                name: name.clone(),
-                eng_name: name.clone(),
-                para_pr_id_ref: (entry.para_shape_id.get() + para_shape_offset) as u32,
-                char_pr_id_ref: (entry.char_shape_id.get() + char_shape_offset) as u32,
-                next_style_id_ref: 0,
-                lang_id: 1042, // Korean
-                lock_form: 0,
-            });
-        }
-
-        store
+    pub(crate) fn from_registry_with_mappings(
+        registry: &StyleRegistry,
+        style_set: HancomStyleSet,
+    ) -> HwpxResult<RegistryStoreBuild> {
+        build_store_from_registry_with(registry, style_set)
     }
 
     // ── Fonts ────────────────────────────────────────────────────
@@ -1401,19 +1259,29 @@ impl HwpxStyleStore {
         self.numberings.push(ndef);
     }
 
+    /// Adds a bullet definition to the store.
+    pub fn push_bullet(&mut self, bullet: BulletDef) {
+        self.bullets.push(bullet);
+    }
+
     /// Adds a tab property definition to the store.
     pub fn push_tab(&mut self, tab: TabDef) {
         self.tabs.push(tab);
     }
 
     /// Returns the number of numbering definitions in the store.
-    pub fn numbering_count(&self) -> u32 {
-        self.numberings.len() as u32
+    pub fn numbering_count(&self) -> usize {
+        self.numberings.len()
+    }
+
+    /// Returns the number of bullet definitions in the store.
+    pub fn bullet_count(&self) -> usize {
+        self.bullets.len()
     }
 
     /// Returns the number of tab property definitions in the store.
-    pub fn tab_count(&self) -> u32 {
-        self.tabs.len() as u32
+    pub fn tab_count(&self) -> usize {
+        self.tabs.len()
     }
 
     /// Returns an iterator over all numbering definitions in the store.
@@ -1421,10 +1289,197 @@ impl HwpxStyleStore {
         self.numberings.iter()
     }
 
+    /// Returns an iterator over all bullet definitions in the store.
+    pub fn iter_bullets(&self) -> impl Iterator<Item = &BulletDef> {
+        self.bullets.iter()
+    }
+
     /// Returns an iterator over all tab property definitions in the store.
     pub fn iter_tabs(&self) -> impl Iterator<Item = &TabDef> {
         self.tabs.iter()
     }
+}
+
+fn registry_shape_map_entry<T: Copy>(
+    entries: &[T],
+    index: usize,
+    kind: &'static str,
+) -> HwpxResult<T> {
+    entries.get(index).copied().ok_or(HwpxError::IndexOutOfBounds {
+        kind,
+        index: index as u32,
+        max: entries.len() as u32,
+    })
+}
+
+fn build_store_from_registry_with(
+    registry: &StyleRegistry,
+    style_set: HancomStyleSet,
+) -> HwpxResult<RegistryStoreBuild> {
+    let mut store = HwpxStyleStore { style_set, ..HwpxStyleStore::default() };
+
+    let has_fonts = !registry.fonts.is_empty();
+    let default_font = if has_fonts { registry.fonts[0].as_str() } else { "함초롬바탕" };
+
+    const FONT_LANGS: &[&str] =
+        &["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"];
+
+    if has_fonts {
+        for &lang in FONT_LANGS {
+            for (i, font_id) in registry.fonts.iter().enumerate() {
+                store.push_font(HwpxFont {
+                    id: i as u32,
+                    face_name: font_id.as_str().to_string(),
+                    lang: lang.to_string(),
+                });
+            }
+        }
+    } else {
+        for &lang in FONT_LANGS {
+            store.push_font(HwpxFont {
+                id: 0,
+                face_name: default_font.to_string(),
+                lang: lang.to_string(),
+            });
+        }
+    }
+
+    for cs in default_char_shapes_modern() {
+        store.push_char_shape(cs);
+    }
+    for ps in default_para_shapes_modern() {
+        store.push_para_shape(ps);
+    }
+
+    let mut char_shape_map = Vec::with_capacity(registry.char_shapes.len());
+    for cs in &registry.char_shapes {
+        let font_idx = registry
+            .fonts
+            .iter()
+            .position(|f| f.as_str() == cs.font)
+            .map(FontIndex::new)
+            .unwrap_or(FontIndex::new(0));
+        let font_ref = HwpxFontRef {
+            hangul: font_idx,
+            latin: font_idx,
+            hanja: font_idx,
+            japanese: font_idx,
+            other: font_idx,
+            symbol: font_idx,
+            user: font_idx,
+        };
+        char_shape_map.push(store.push_char_shape(HwpxCharShape {
+            font_ref,
+            height: cs.size,
+            text_color: cs.color,
+            shade_color: cs.shade_color,
+            bold: cs.bold,
+            italic: cs.italic,
+            underline_type: cs.underline_type,
+            underline_color: cs.underline_color,
+            strikeout_shape: cs.strikeout_shape,
+            strikeout_color: cs.strikeout_color,
+            vertical_position: cs.vertical_position,
+            outline_type: cs.outline,
+            shadow_type: cs.shadow,
+            emboss_type: cs.emboss,
+            engrave_type: cs.engrave,
+            emphasis: cs.emphasis,
+            ratio: cs.ratio,
+            spacing: cs.spacing,
+            rel_sz: cs.rel_sz,
+            char_offset: cs.offset,
+            use_kerning: cs.use_kerning,
+            use_font_space: cs.use_font_space,
+            border_fill_id: cs.char_border_fill_id,
+        }));
+    }
+
+    for numbering in &registry.numberings {
+        store.push_numbering(numbering.clone());
+    }
+    for bullet in &registry.bullets {
+        store.push_bullet(bullet.clone());
+    }
+
+    let mut para_shape_map = Vec::with_capacity(registry.para_shapes.len());
+    for ps in &registry.para_shapes {
+        let wire_parts = list_ref_to_wire_parts(ps.list, &registry.numberings, &registry.bullets)?;
+        para_shape_map.push(store.push_para_shape(HwpxParaShape {
+            alignment: ps.alignment,
+            margin_left: ps.indent_left,
+            margin_right: ps.indent_right,
+            indent: ps.indent_first_line,
+            spacing_before: ps.space_before,
+            spacing_after: ps.space_after,
+            line_spacing: ps.line_spacing_value.round() as i32,
+            line_spacing_type: ps.line_spacing_type,
+            break_type: ps.break_type,
+            keep_with_next: ps.keep_with_next,
+            keep_lines_together: ps.keep_lines_together,
+            widow_orphan: ps.widow_orphan,
+            break_latin_word: WordBreakType::KeepWord,
+            break_non_latin_word: WordBreakType::KeepWord,
+            border_fill_id: ps.border_fill_id,
+            heading_type: wire_parts.heading_type,
+            heading_id_ref: wire_parts.id_ref,
+            heading_level: wire_parts.level,
+            checked: wire_parts.checked,
+            tab_pr_id_ref: ps.tab_def_id,
+            condense: 0,
+        }));
+    }
+
+    for tab in &registry.tabs {
+        store.push_tab(tab.clone());
+    }
+
+    store.push_border_fill(HwpxBorderFill::default_page_border());
+    store.push_border_fill(HwpxBorderFill::default_char_background());
+    store.push_border_fill(HwpxBorderFill::default_table_border());
+
+    let defaults = store.style_set.default_styles();
+    for (idx, entry) in defaults.iter().enumerate() {
+        let next_style_id_ref = if entry.is_char_style() { 0 } else { idx as u32 };
+        store.push_style(HwpxStyle {
+            id: idx as u32,
+            style_type: entry.style_type.to_string(),
+            name: entry.name.to_string(),
+            eng_name: entry.eng_name.to_string(),
+            para_pr_id_ref: entry.para_pr_group as u32,
+            char_pr_id_ref: entry.char_pr_group as u32,
+            next_style_id_ref,
+            lang_id: 1042,
+            lock_form: 0,
+        });
+    }
+
+    let style_offset = defaults.len();
+    for (i, (name, entry)) in registry.style_entries.iter().enumerate() {
+        let para_shape_id = registry_shape_map_entry(
+            &para_shape_map,
+            entry.para_shape_id.get(),
+            "registry para_shape",
+        )?;
+        let char_shape_id = registry_shape_map_entry(
+            &char_shape_map,
+            entry.char_shape_id.get(),
+            "registry char_shape",
+        )?;
+        store.push_style(HwpxStyle {
+            id: (style_offset + i) as u32,
+            style_type: "PARA".to_string(),
+            name: name.clone(),
+            eng_name: name.clone(),
+            para_pr_id_ref: para_shape_id.get() as u32,
+            char_pr_id_ref: char_shape_id.get() as u32,
+            next_style_id_ref: 0,
+            lang_id: 1042,
+            lock_form: 0,
+        });
+    }
+
+    Ok(RegistryStoreBuild { store, char_shape_map, para_shape_map })
 }
 
 // ── Thread safety assertions ─────────────────────────────────────
@@ -1470,6 +1525,22 @@ pub fn parse_heading_level_from_name(name: &str) -> Option<u8> {
     // "제목" as a substring (e.g. "제목없음" must remain None).
     match trimmed {
         "+제목" | "제목" | "타이들" | "큰제목" => Some(1),
+        _ => None,
+    }
+}
+
+fn heading_level_from_para_shape(ps: &HwpxParaShape) -> Option<u8> {
+    if ps.heading_type == HeadingType::Outline {
+        Some((ps.heading_level as u8).saturating_add(1).clamp(1, 6))
+    } else {
+        None
+    }
+}
+
+fn list_level_from_para_shape(ps: &HwpxParaShape) -> Option<u8> {
+    match ps.heading_type {
+        HeadingType::Number | HeadingType::Bullet => u8::try_from(ps.heading_level).ok(),
+        HeadingType::Outline | HeadingType::None => None,
         _ => None,
     }
 }
@@ -1520,13 +1591,35 @@ impl StyleLookup for HwpxStyleStore {
     }
 
     fn para_list_type(&self, id: ParaShapeIndex) -> Option<&str> {
-        use hwpforge_foundation::HeadingType;
         let ps = self.para_shapes.get(id.get())?;
-        match ps.heading_type {
-            HeadingType::Bullet => Some("BULLET"),
-            HeadingType::Number => Some("NUMBER"),
-            _ => None,
+        heading_type_to_para_list_type(ps.heading_type)
+    }
+
+    fn para_list_level(&self, id: ParaShapeIndex) -> Option<u8> {
+        let ps = self.para_shapes.get(id.get())?;
+        list_level_from_para_shape(ps)
+    }
+
+    fn para_checked_state(&self, id: ParaShapeIndex) -> Option<bool> {
+        let ps = self.para_shapes.get(id.get())?;
+        if ps.heading_type != HeadingType::Bullet {
+            return None;
         }
+        let bullet = self.iter_bullets().find(|bullet| bullet.id == ps.heading_id_ref)?;
+        bullet.is_checkable().then_some(ps.checked)
+    }
+
+    fn para_style_name(&self, id: ParaShapeIndex) -> Option<&str> {
+        let para_id = u32::try_from(id.get()).ok()?;
+        self.styles
+            .iter()
+            .find(|style| style.style_type == "PARA" && style.para_pr_id_ref == para_id)
+            .map(|style| style.name.as_str())
+    }
+
+    fn para_heading_level(&self, id: ParaShapeIndex) -> Option<u8> {
+        let ps = self.para_shapes.get(id.get())?;
+        heading_level_from_para_shape(ps)
     }
 
     fn style_name(&self, id: StyleIndex) -> Option<&str> {
@@ -1535,6 +1628,11 @@ impl StyleLookup for HwpxStyleStore {
 
     fn style_heading_level(&self, id: StyleIndex) -> Option<u8> {
         let style = self.styles.get(id.get())?;
+        if let Some(para_shape) = self.para_shapes.get(style.para_pr_id_ref as usize) {
+            if let Some(level) = heading_level_from_para_shape(para_shape) {
+                return Some(level);
+            }
+        }
         parse_heading_level_from_name(&style.name)
     }
 
@@ -1582,10 +1680,10 @@ mod tests {
     use super::*;
     use hwpforge_blueprint::builtins::builtin_default;
     use hwpforge_blueprint::{registry::StyleRegistry, style::ParaShape};
-    use hwpforge_core::TabStop;
+    use hwpforge_core::{ParagraphListRef, TabStop};
     use hwpforge_foundation::{
         Alignment, CharShapeIndex, FontIndex, HeadingType, HwpUnit, LineSpacingType,
-        ParaShapeIndex, TabAlign, TabLeader,
+        NumberFormatType, ParaShapeIndex, TabAlign, TabLeader,
     };
 
     // ── HwpxStyleStore basic operations ──────────────────────────
@@ -1638,6 +1736,31 @@ mod tests {
         let ps = store.para_shape(idx).unwrap();
         assert_eq!(ps.alignment, Alignment::Center);
         assert_eq!(ps.line_spacing, 200);
+    }
+
+    #[test]
+    fn push_and_get_bullet() {
+        let mut store = HwpxStyleStore::new();
+        let bullet = BulletDef {
+            id: 1,
+            bullet_char: "".into(),
+            checked_char: None,
+            use_image: false,
+            para_head: hwpforge_core::ParaHead {
+                start: 0,
+                level: 1,
+                num_format: NumberFormatType::Digit,
+                text: String::new(),
+                checkable: false,
+            },
+        };
+        store.push_bullet(bullet);
+
+        assert_eq!(store.bullet_count(), 1);
+        let fetched = store.iter_bullets().next().unwrap();
+        assert_eq!(fetched.id, 1);
+        assert_eq!(fetched.bullet_char, "");
+        assert!(!fetched.use_image);
     }
 
     #[test]
@@ -1928,7 +2051,7 @@ mod tests {
             r#"{"fonts":[],"char_shapes":[],"para_shapes":[],"style_entries":{}}"#,
         )
         .unwrap();
-        let store = HwpxStyleStore::from_registry(&registry);
+        let store = HwpxStyleStore::from_registry(&registry).unwrap();
 
         // Empty registry injects 한글-compatible defaults:
         // 1 font × 7 language groups, 7 default charShapes, 20 default paraShapes,
@@ -1943,7 +2066,7 @@ mod tests {
     fn from_registry_preserves_counts() {
         let template = builtin_default().unwrap();
         let registry = StyleRegistry::from_template(&template).unwrap();
-        let store = HwpxStyleStore::from_registry(&registry);
+        let store = HwpxStyleStore::from_registry(&registry).unwrap();
 
         // Fonts are mirrored across 7 language groups (HANGUL, LATIN, HANJA, JAPANESE, OTHER, SYMBOL, USER)
         assert_eq!(store.font_count(), registry.font_count() * 7);
@@ -1958,7 +2081,7 @@ mod tests {
     fn from_registry_font_face_names_match() {
         let template = builtin_default().unwrap();
         let registry = StyleRegistry::from_template(&template).unwrap();
-        let store = HwpxStyleStore::from_registry(&registry);
+        let store = HwpxStyleStore::from_registry(&registry).unwrap();
 
         let font_count = registry.font_count();
         let langs = ["HANGUL", "LATIN", "HANJA", "JAPANESE", "OTHER", "SYMBOL", "USER"];
@@ -1977,7 +2100,7 @@ mod tests {
     fn from_registry_char_shape_properties() {
         let template = builtin_default().unwrap();
         let registry = StyleRegistry::from_template(&template).unwrap();
-        let store = HwpxStyleStore::from_registry(&registry);
+        let store = HwpxStyleStore::from_registry(&registry).unwrap();
 
         // User charShapes start at index 7 (after 7 default charPr groups)
         for (i, bp_cs) in registry.char_shapes.iter().enumerate() {
@@ -2003,7 +2126,7 @@ mod tests {
     fn from_registry_para_shape_properties() {
         let template = builtin_default().unwrap();
         let registry = StyleRegistry::from_template(&template).unwrap();
-        let store = HwpxStyleStore::from_registry(&registry);
+        let store = HwpxStyleStore::from_registry(&registry).unwrap();
 
         // User paraShapes start at index 20 (after 20 default paraPr groups)
         for (i, bp_ps) in registry.para_shapes.iter().enumerate() {
@@ -2021,6 +2144,17 @@ mod tests {
     #[test]
     fn from_registry_carries_custom_tab_definitions_and_refs() {
         let mut registry = StyleRegistry::with_fonts(vec![]);
+        registry.numberings.push(NumberingDef {
+            id: 42,
+            start: 0,
+            levels: vec![hwpforge_core::ParaHead {
+                start: 1,
+                level: 1,
+                num_format: NumberFormatType::Digit,
+                text: "^1.".into(),
+                checkable: false,
+            }],
+        });
         registry.para_shapes.push(ParaShape {
             alignment: Alignment::Left,
             line_spacing_type: LineSpacingType::Percentage,
@@ -2036,7 +2170,7 @@ mod tests {
             widow_orphan: true,
             border_fill_id: None,
             tab_def_id: 3,
-            heading_type: HeadingType::None,
+            list: None,
         });
         registry.tabs.push(TabDef {
             id: 3,
@@ -2049,7 +2183,7 @@ mod tests {
             }],
         });
 
-        let store = HwpxStyleStore::from_registry(&registry);
+        let store = HwpxStyleStore::from_registry(&registry).unwrap();
 
         let hwpx_ps = store.para_shape(ParaShapeIndex::new(20)).unwrap();
         assert_eq!(hwpx_ps.tab_pr_id_ref, 3);
@@ -2062,10 +2196,108 @@ mod tests {
     }
 
     #[test]
+    fn from_registry_lowers_shared_list_ref_into_wire_triple() {
+        let mut registry = StyleRegistry::with_fonts(vec![]);
+        registry.numberings.push(NumberingDef {
+            id: 42,
+            start: 0,
+            levels: vec![hwpforge_core::ParaHead {
+                start: 1,
+                level: 1,
+                num_format: NumberFormatType::Digit,
+                text: "^1.".into(),
+                checkable: false,
+            }],
+        });
+        registry.para_shapes.push(ParaShape {
+            alignment: Alignment::Left,
+            line_spacing_type: LineSpacingType::Percentage,
+            line_spacing_value: 160.0,
+            space_before: HwpUnit::ZERO,
+            space_after: HwpUnit::ZERO,
+            indent_left: HwpUnit::ZERO,
+            indent_right: HwpUnit::ZERO,
+            indent_first_line: HwpUnit::ZERO,
+            break_type: hwpforge_foundation::BreakType::None,
+            keep_with_next: false,
+            keep_lines_together: false,
+            widow_orphan: true,
+            border_fill_id: None,
+            tab_def_id: 0,
+            list: Some(ParagraphListRef::Number {
+                numbering_id: hwpforge_foundation::NumberingIndex::new(0),
+                level: 2,
+            }),
+        });
+
+        let store = HwpxStyleStore::from_registry(&registry).unwrap();
+        let hwpx_ps = store.para_shape(ParaShapeIndex::new(20)).unwrap();
+        assert_eq!(hwpx_ps.heading_type, HeadingType::Number);
+        assert_eq!(hwpx_ps.heading_id_ref, 42);
+        assert_eq!(hwpx_ps.heading_level, 2);
+    }
+
+    #[test]
+    fn from_registry_lowers_outline_list_ref_using_zero_based_hwpx_level() {
+        let mut registry = StyleRegistry::with_fonts(vec![]);
+        registry.para_shapes.push(ParaShape {
+            alignment: Alignment::Left,
+            line_spacing_type: LineSpacingType::Percentage,
+            line_spacing_value: 160.0,
+            space_before: HwpUnit::ZERO,
+            space_after: HwpUnit::ZERO,
+            indent_left: HwpUnit::ZERO,
+            indent_right: HwpUnit::ZERO,
+            indent_first_line: HwpUnit::ZERO,
+            break_type: hwpforge_foundation::BreakType::None,
+            keep_with_next: false,
+            keep_lines_together: false,
+            widow_orphan: true,
+            border_fill_id: None,
+            tab_def_id: 0,
+            list: Some(ParagraphListRef::Outline { level: 0 }),
+        });
+
+        let store = HwpxStyleStore::from_registry(&registry).unwrap();
+        let hwpx_ps = store.para_shape(ParaShapeIndex::new(20)).unwrap();
+        assert_eq!(hwpx_ps.heading_type, HeadingType::Outline);
+        assert_eq!(hwpx_ps.heading_id_ref, 0);
+        assert_eq!(hwpx_ps.heading_level, 0);
+    }
+
+    #[test]
+    fn from_registry_rejects_invalid_shared_list_definition_indices() {
+        let mut registry = StyleRegistry::with_fonts(vec![]);
+        registry.para_shapes.push(ParaShape {
+            alignment: Alignment::Left,
+            line_spacing_type: LineSpacingType::Percentage,
+            line_spacing_value: 160.0,
+            space_before: HwpUnit::ZERO,
+            space_after: HwpUnit::ZERO,
+            indent_left: HwpUnit::ZERO,
+            indent_right: HwpUnit::ZERO,
+            indent_first_line: HwpUnit::ZERO,
+            break_type: hwpforge_foundation::BreakType::None,
+            keep_with_next: false,
+            keep_lines_together: false,
+            widow_orphan: true,
+            border_fill_id: None,
+            tab_def_id: 0,
+            list: Some(ParagraphListRef::Number {
+                numbering_id: hwpforge_foundation::NumberingIndex::new(99),
+                level: 0,
+            }),
+        });
+
+        let err = HwpxStyleStore::from_registry(&registry).unwrap_err();
+        assert!(matches!(err, HwpxError::IndexOutOfBounds { kind: "numbering definition", .. }));
+    }
+
+    #[test]
     fn from_registry_style_entries_reference_valid_indices() {
         let template = builtin_default().unwrap();
         let registry = StyleRegistry::from_template(&template).unwrap();
-        let store = HwpxStyleStore::from_registry(&registry);
+        let store = HwpxStyleStore::from_registry(&registry).unwrap();
 
         for i in 0..store.style_count() {
             let style = store.style(i).unwrap();
@@ -2150,7 +2382,7 @@ mod tests {
             r#"{"fonts":[],"char_shapes":[],"para_shapes":[],"style_entries":{}}"#,
         )
         .unwrap();
-        let store = HwpxStyleStore::from_registry_with(&registry, HancomStyleSet::Classic);
+        let store = HwpxStyleStore::from_registry_with(&registry, HancomStyleSet::Classic).unwrap();
         assert_eq!(store.style_set(), HancomStyleSet::Classic);
         // Classic injects exactly 18 default styles
         assert_eq!(store.style_count(), 18);
@@ -2160,7 +2392,7 @@ mod tests {
 
     #[test]
     fn modern_styles_match_golden_fixture() {
-        // Verified from golden fixture tests/fixtures/textbox.hwpx (한글 2022+)
+        // Verified from golden fixture tests/fixtures/shapes/textbox.hwpx (한글 2022+)
         let styles = HancomStyleSet::Modern.default_styles();
         // 개요 8-10 inserted at 9-11
         assert_eq!(styles[9].name, "개요 8");
@@ -2181,7 +2413,7 @@ mod tests {
         use hwpforge_blueprint::{builtins::builtin_default, registry::StyleRegistry};
         let template = builtin_default().unwrap();
         let registry = StyleRegistry::from_template(&template).unwrap();
-        let store = HwpxStyleStore::from_registry(&registry);
+        let store = HwpxStyleStore::from_registry(&registry).unwrap();
         assert_eq!(store.border_fill_count(), 3, "from_registry produces exactly 3 default fills");
     }
 
@@ -2346,7 +2578,7 @@ mod tests {
         use hwpforge_blueprint::{builtins::builtin_default, registry::StyleRegistry};
         let template = builtin_default().unwrap();
         let registry = StyleRegistry::from_template(&template).unwrap();
-        let store = HwpxStyleStore::from_registry(&registry);
+        let store = HwpxStyleStore::from_registry(&registry).unwrap();
         // IDs are 1-based
         assert_eq!(store.border_fill(1).unwrap().id, 1);
         assert_eq!(store.border_fill(2).unwrap().id, 2);
@@ -2361,7 +2593,7 @@ mod tests {
             r#"{"fonts":[],"char_shapes":[],"para_shapes":[],"style_entries":{}}"#,
         )
         .unwrap();
-        let store = HwpxStyleStore::from_registry(&registry);
+        let store = HwpxStyleStore::from_registry(&registry).unwrap();
         assert_eq!(store.char_shape_count(), 7, "must have exactly 7 default charPr groups");
     }
 
@@ -2371,7 +2603,7 @@ mod tests {
             r#"{"fonts":[],"char_shapes":[],"para_shapes":[],"style_entries":{}}"#,
         )
         .unwrap();
-        let store = HwpxStyleStore::from_registry(&registry);
+        let store = HwpxStyleStore::from_registry(&registry).unwrap();
         assert_eq!(store.para_shape_count(), 20, "must have exactly 20 default paraPr groups");
     }
 
@@ -2382,7 +2614,7 @@ mod tests {
             r#"{"fonts":[],"char_shapes":[],"para_shapes":[],"style_entries":{}}"#,
         )
         .unwrap();
-        let store = HwpxStyleStore::from_registry(&registry);
+        let store = HwpxStyleStore::from_registry(&registry).unwrap();
         let cs = store.char_shape(CharShapeIndex::new(0)).unwrap();
         assert_eq!(cs.height.as_i32(), 1000); // 10pt
         assert_eq!(cs.text_color, Color::BLACK);
@@ -2397,7 +2629,7 @@ mod tests {
             r#"{"fonts":[],"char_shapes":[],"para_shapes":[],"style_entries":{}}"#,
         )
         .unwrap();
-        let store = HwpxStyleStore::from_registry(&registry);
+        let store = HwpxStyleStore::from_registry(&registry).unwrap();
         let cs = store.char_shape(CharShapeIndex::new(5)).unwrap();
         assert_eq!(cs.height.as_i32(), 1600); // 16pt
         assert_eq!(cs.text_color, Color::from_rgb(0x2E, 0x74, 0xB5));
@@ -2408,7 +2640,7 @@ mod tests {
         // User charShapes must start at index 7, user paraShapes at index 20
         let template = builtin_default().unwrap();
         let registry = StyleRegistry::from_template(&template).unwrap();
-        let store = HwpxStyleStore::from_registry(&registry);
+        let store = HwpxStyleStore::from_registry(&registry).unwrap();
         // First user charShape is at index 7
         assert!(store.char_shape(CharShapeIndex::new(7)).is_ok());
         // First user paraShape is at index 20
@@ -2422,7 +2654,7 @@ mod tests {
             r#"{"fonts":[],"char_shapes":[],"para_shapes":[],"style_entries":{}}"#,
         )
         .unwrap();
-        let store = HwpxStyleStore::from_registry(&registry);
+        let store = HwpxStyleStore::from_registry(&registry).unwrap();
         let defaults = HancomStyleSet::Modern.default_styles();
         for (idx, entry) in defaults.iter().enumerate() {
             let style = store.style(idx).unwrap();
@@ -2474,7 +2706,7 @@ mod tests {
         // User styles' charPr/paraPr refs must be offset by 7/20
         let template = builtin_default().unwrap();
         let registry = StyleRegistry::from_template(&template).unwrap();
-        let store = HwpxStyleStore::from_registry(&registry);
+        let store = HwpxStyleStore::from_registry(&registry).unwrap();
         let defaults_len = HancomStyleSet::Modern.count();
         for (i, (_, entry)) in registry.style_entries.iter().enumerate() {
             let style = store.style(defaults_len + i).unwrap();
@@ -2498,7 +2730,7 @@ mod tests {
             r#"{"fonts":[],"char_shapes":[],"para_shapes":[],"style_entries":{}}"#,
         )
         .unwrap();
-        let store = HwpxStyleStore::from_registry(&registry);
+        let store = HwpxStyleStore::from_registry(&registry).unwrap();
         let ps = store.para_shape(ParaShapeIndex::new(0)).unwrap();
         assert_eq!(ps.alignment, Alignment::Justify);
         assert_eq!(ps.margin_left.as_i32(), 0);
@@ -2512,10 +2744,13 @@ mod tests {
             r#"{"fonts":[],"char_shapes":[],"para_shapes":[],"style_entries":{}}"#,
         )
         .unwrap();
-        let store = HwpxStyleStore::from_registry(&registry);
+        let store = HwpxStyleStore::from_registry(&registry).unwrap();
         let ps = store.para_shape(ParaShapeIndex::new(2)).unwrap();
         assert_eq!(ps.alignment, Alignment::Justify);
         assert_eq!(ps.margin_left.as_i32(), 1000);
+        assert_eq!(ps.heading_type, HeadingType::Outline);
+        assert_eq!(ps.heading_id_ref, 0);
+        assert_eq!(ps.heading_level, 0);
         assert_eq!(ps.line_spacing, 160);
     }
 
@@ -2675,6 +2910,55 @@ mod tests {
     }
 
     #[test]
+    fn style_lookup_para_checked_state_reads_checkable_bullets_only() {
+        use hwpforge_core::{BulletDef, ParaHead, StyleLookup};
+        use hwpforge_foundation::NumberFormatType;
+
+        let mut store = HwpxStyleStore::new();
+        store.push_bullet(BulletDef {
+            id: 7,
+            bullet_char: "☐".into(),
+            checked_char: Some("☑".into()),
+            use_image: false,
+            para_head: ParaHead {
+                start: 0,
+                level: 1,
+                num_format: NumberFormatType::Digit,
+                text: String::new(),
+                checkable: true,
+            },
+        });
+        store.push_bullet(BulletDef {
+            id: 8,
+            bullet_char: "•".into(),
+            checked_char: None,
+            use_image: false,
+            para_head: ParaHead {
+                start: 0,
+                level: 1,
+                num_format: NumberFormatType::Digit,
+                text: String::new(),
+                checkable: false,
+            },
+        });
+        store.push_para_shape(HwpxParaShape {
+            heading_type: HeadingType::Bullet,
+            heading_id_ref: 7,
+            checked: true,
+            ..Default::default()
+        });
+        store.push_para_shape(HwpxParaShape {
+            heading_type: HeadingType::Bullet,
+            heading_id_ref: 8,
+            checked: true,
+            ..Default::default()
+        });
+
+        assert_eq!(store.para_checked_state(ParaShapeIndex::new(0)), Some(true));
+        assert_eq!(store.para_checked_state(ParaShapeIndex::new(1)), None);
+    }
+
+    #[test]
     fn style_lookup_style_name() {
         use hwpforge_core::StyleLookup;
         use hwpforge_foundation::StyleIndex;
@@ -2683,11 +2967,60 @@ mod tests {
     }
 
     #[test]
+    fn style_lookup_para_style_name() {
+        use hwpforge_core::StyleLookup;
+
+        let mut store = HwpxStyleStore::new();
+        store.push_para_shape(HwpxParaShape::default());
+        store.push_style(HwpxStyle::new(
+            0,
+            "PARA",
+            "__hwpforge_md_list_continuation_level_0",
+            "__hwpforge_md_list_continuation_level_0",
+            0,
+            0,
+            0,
+            1042,
+            0,
+        ));
+
+        assert_eq!(
+            store.para_style_name(ParaShapeIndex::new(0)),
+            Some("__hwpforge_md_list_continuation_level_0")
+        );
+    }
+
+    #[test]
     fn style_lookup_style_heading_level() {
         use hwpforge_core::StyleLookup;
         use hwpforge_foundation::StyleIndex;
         let store = style_lookup_test_store();
         assert_eq!(store.style_heading_level(StyleIndex::new(0)), Some(2));
+    }
+
+    #[test]
+    fn style_lookup_para_heading_level_reads_outline_para_shape() {
+        use hwpforge_core::StyleLookup;
+        use hwpforge_foundation::ParaShapeIndex;
+
+        let mut store = style_lookup_test_store();
+        store.para_shapes[0].heading_type = HeadingType::Outline;
+        store.para_shapes[0].heading_level = 4;
+
+        assert_eq!(store.para_heading_level(ParaShapeIndex::new(0)), Some(5));
+    }
+
+    #[test]
+    fn style_lookup_style_heading_level_prefers_outline_para_shape() {
+        use hwpforge_core::StyleLookup;
+        use hwpforge_foundation::StyleIndex;
+
+        let mut store = style_lookup_test_store();
+        store.styles[0].name = "맞춤 제목".to_string();
+        store.para_shapes[0].heading_type = HeadingType::Outline;
+        store.para_shapes[0].heading_level = 3;
+
+        assert_eq!(store.style_heading_level(StyleIndex::new(0)), Some(4));
     }
 
     #[test]

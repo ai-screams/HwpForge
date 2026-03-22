@@ -1,11 +1,13 @@
 //! HWP5 style store — parsed style definitions from the `DocInfo` stream.
 //!
 //! [`Hwp5StyleStore`] holds font tables, character property arrays, paragraph
-//! property arrays, and named styles extracted from the HWP5 `DocInfo`
-//! binary stream.  It provides a best-effort conversion to [`HwpxStyleStore`]
-//! for use with the HWPX encoder.
+//! property arrays, list definitions, and named styles extracted from the HWP5
+//! `DocInfo` binary stream.  It provides a best-effort conversion to
+//! [`HwpxStyleStore`] for use with the HWPX encoder.
 
-use crate::decoder::header::{DocInfoResult, Hwp5DocInfoBorderFillSlot};
+use crate::decoder::header::{
+    DocInfoResult, Hwp5DocInfoBorderFillSlot, Hwp5DocInfoBulletSlot, Hwp5DocInfoNumberingSlot,
+};
 use crate::decoder::Hwp5Warning;
 use crate::schema::header::{
     Hwp5RawCharShape, Hwp5RawFaceName, Hwp5RawIdMappings, Hwp5RawParaShape, Hwp5RawStyle,
@@ -36,6 +38,13 @@ pub struct Hwp5StyleStore {
     pub char_shapes: Vec<Hwp5RawCharShape>,
     /// Paragraph shape records.
     pub para_shapes: Vec<Hwp5RawParaShape>,
+    /// Numbering definition slots.
+    ///
+    /// These are projected into shared `NumberingDef` entries before HWPX
+    /// header serialization.
+    pub numberings: Vec<Hwp5DocInfoNumberingSlot>,
+    /// Bullet definition slots.
+    pub bullets: Vec<Hwp5DocInfoBulletSlot>,
     /// Tab definition slots preserved in DocInfo order.
     pub tab_defs: Vec<Hwp5TabDefSlot>,
     /// Named style records.
@@ -52,6 +61,8 @@ impl Hwp5StyleStore {
             fonts: doc_info.fonts.clone(),
             char_shapes: doc_info.char_shapes.clone(),
             para_shapes: doc_info.para_shapes.clone(),
+            numberings: doc_info.numberings.clone(),
+            bullets: doc_info.bullets.clone(),
             tab_defs: doc_info.tab_defs.clone(),
             styles: doc_info.styles.clone(),
             border_fills: doc_info.border_fills.clone(),
@@ -84,6 +95,41 @@ impl Hwp5StyleStore {
         // Map character shapes.
         for raw in &self.char_shapes {
             store.push_char_shape(hwp5_char_shape_to_hwpx_with_counts(raw, font_group_counts));
+        }
+
+        // Map numbering definitions before paragraph shapes so references are stable.
+        append_numbering_definition_integrity_warning(self, &mut warnings);
+        for slot in &self.numberings {
+            match slot.numbering.as_ref() {
+                Some(raw) => store.push_numbering(raw.to_core_numbering_def(slot.id)),
+                None => {
+                    warnings.push(Hwp5Warning::ParserFallback {
+                        subject: "numbering.slot",
+                        reason: format!(
+                            "numbering definition slot {} failed to parse earlier; emitting no numbering entry",
+                            slot.id
+                        ),
+                    });
+                }
+            }
+        }
+
+        // Map bullet definitions before paragraph shapes so bullet references
+        // can resolve to stable shared ids.
+        append_bullet_definition_integrity_warning(self, &mut warnings);
+        for slot in &self.bullets {
+            match slot.bullet.as_ref() {
+                Some(raw) => store.push_bullet(raw.to_core_bullet_def(slot.id)),
+                None => {
+                    warnings.push(Hwp5Warning::ParserFallback {
+                        subject: "bullet.slot",
+                        reason: format!(
+                            "bullet definition slot {} failed to parse earlier; emitting no bullet entry",
+                            slot.id
+                        ),
+                    });
+                }
+            }
         }
 
         // Map paragraph shapes.
@@ -165,6 +211,44 @@ fn append_tab_definition_integrity_warning(
             subject: "tab_def.count",
             reason: format!(
                 "IdMappings declares {declared} tab definitions, but DocInfo parsed {actual}; preserving raw record order"
+            ),
+        });
+    }
+}
+
+fn append_numbering_definition_integrity_warning(
+    store: &Hwp5StyleStore,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    let Some(id_mappings) = store.id_mappings.as_ref() else {
+        return;
+    };
+    let declared = id_mappings.numbering_def_count.max(0) as usize;
+    let actual = store.numberings.len();
+    if declared != actual {
+        warnings.push(Hwp5Warning::ProjectionFallback {
+            subject: "numbering.count",
+            reason: format!(
+                "IdMappings declares {declared} numbering definitions, but DocInfo parsed {actual}; preserving raw record order"
+            ),
+        });
+    }
+}
+
+fn append_bullet_definition_integrity_warning(
+    store: &Hwp5StyleStore,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    let Some(id_mappings) = store.id_mappings.as_ref() else {
+        return;
+    };
+    let declared = id_mappings.bullet_def_count.max(0) as usize;
+    let actual = store.bullets.len();
+    if declared != actual {
+        warnings.push(Hwp5Warning::ProjectionFallback {
+            subject: "bullet.count",
+            reason: format!(
+                "IdMappings declares {declared} bullet definitions, but DocInfo parsed {actual}; preserving raw record order"
             ),
         });
     }

@@ -1,28 +1,44 @@
-# Tests
+# Tests Fixture Warehouse
 
-HwpForge 테스트 구조
+`tests/` is primarily a shared fixture warehouse.
+It is **not** the main Rust test crate layout.
 
-## Structure
+## What lives here
 
-```
+```text
 tests/
-├── unit/           # 단위 테스트 (각 크레이트)
-├── integration/    # 통합 테스트 (크레이트 간)
-└── golden/         # Golden 테스트 (실제 파일)
-    ├── hwpx/       # 한글 생성 HWPX 파일
-    ├── hwp5/       # 한글 생성 HWP5 파일
-    └── expected/   # 예상 결과
+├── README.md
+└── fixtures/
+    ├── hwp5/
+    ├── tables/
+    ├── images/
+    ├── charts/
+    ├── mixed/
+    ├── shapes/
+    ├── layout/
+    ├── fields/
+    └── user_samples/
+        ├── lists/
+        ├── tabs/
+        ├── tables/
+        ├── text/
+        └── user-authored and promoted research fixtures grouped by feature
 ```
 
-## Running
+## What does _not_ live here
 
-```bash
-# 전체
-cargo nextest run
+- the main unit/integration test source files
+- a runnable `tests/` crate hierarchy
+- arbitrary local conversion outputs that should have stayed in `temp/`
 
-# 단위만
-cargo nextest run --lib
+Actual tests run from:
 
-# Golden만
-cargo nextest run --test golden
-```
+- `crates/*/src/**` inline tests
+- `crates/*/tests/*.rs` integration tests
+- some crate `examples/*.rs` used as verification helpers
+
+## Working rules
+
+- before deleting a fixture, check whether code references it directly
+- fixture filenames are hints, not truth; trust code/tests/parity checks first
+- local repro artifacts should not accumulate here unless they are promoted into tracked regression inputs

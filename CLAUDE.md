@@ -8,8 +8,32 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document formats, designed with LLM-first principles. The goal is to enable AI agents (like Claude Code) to generate Korean government proposal documents using natural language + Markdown + YAML style templates.
 
-**Current Status**: Phase 0-7c complete, Phase 10 HWP5 reader/converter active; table T1/T2-a/T2-b/T2-c landed, next slice is broader table/public-document fidelity
-**Stats**: ~62,664 LOC, 1,881 nextest runnable cases, 144 .rs files, 10 crates, 90% CI coverage gate
+**Current Status**:
+
+- HWPX codec: read/write shipped
+- Markdown bridge: read/write shipped
+- HWP5 converter path: active (Phase 10 line)
+- CLI bindings: shipped
+- MCP bindings: shipped
+- Python bindings: stub
+- Shared tab semantics: landed on `main`
+- Shared `ordered / bullet / outline` semantics: implemented on local `feat/list-shared-semantics`
+- Checkable bullet semantics: implemented on local `feat/list-shared-semantics`
+- HWP5 checkable support: definition-level parity only; paragraph item checked-state decode is still backlog
+- Markdown task lists normalize to HWPX-first checkable semantics; ordered task lists intentionally lose numbering
+
+**Workspace Facts (code-grounded)**:
+
+- Cargo packages: `10`
+- Workspace version: `0.4.0`
+- Tracked Rust `src` files under `crates/`: `137`
+- Tracked Rust `src` LOC under `crates/`: `83,962`
+- Example artifact files under `examples/`: `47`
+- GitHub workflow files: `5`
+- MSRV: `1.88`
+- Dev toolchain: Rust `1.93`
+
+Treat these as code-derived facts, not roadmap promises.
 
 ---
 
@@ -44,19 +68,21 @@ This enables:
 ### Build & Test
 
 ```bash
-cargo build                                  # Build all crates
-cargo test -p hwpforge-foundation            # Test specific crate
-make test                                    # cargo-nextest (parallel)
-make ci                                      # Full CI: fmt + clippy + test + deny
+cargo build --workspace
+cargo nextest run --workspace --all-features
+cargo test -p hwpforge-foundation
+make test
+make ci-fast
+make ci-full
 ```
 
 ### Lint & Format
 
 ```bash
-cargo clippy -p hwpforge-foundation -- -D warnings  # Specific crate
-make clippy                                         # All crates
-make fmt                                            # Check formatting
-make fmt-fix                                        # Auto-fix
+cargo clippy -p hwpforge-foundation -- -D warnings
+make clippy
+make fmt
+make fmt-fix
 ```
 
 ### Watch Mode
@@ -69,8 +95,8 @@ bacon test    # Auto-run tests
 ### Documentation & Coverage
 
 ```bash
-make doc      # Generate rustdoc (opens in browser)
-make cov      # Code coverage HTML report (llvm-cov)
+make doc
+make cov
 ```
 
 ---
@@ -100,6 +126,7 @@ bindings-py, bindings-cli, bindings-mcp (all smithy crates)
 - **Warning-first for unknowns**: if source truth is missing or a value is unsupported, emit a warning or validation signal first.
 - **No fake support**: do not silently normalize unknown semantics into arbitrary defaults just to keep output green.
 - **Shared-model first**: if HWP5 discovers a semantic that Core/HWPX cannot carry, extend the shared representation first and wire HWP5 after.
+- **Semver-first for public API**: if a design touches public structs, enums, or externally constructible types, surface the breakage before implementation and get approval first.
 
 ### 1. Color is BGR (NOT RGB!)
 
@@ -157,6 +184,53 @@ let resolved = resolve_template(&template, &provider)?;
 let registry = StyleRegistry::from_template(&resolved)?;
 let entry = registry.get_style("body").unwrap();
 ```
+
+### 7. Paragraph heading vs list semantics are NOT the same axis
+
+- `Paragraph.heading_level` is currently closer to `titleMark` / TOC marker semantics.
+- HWPX ordered / bullet / outline lists live in `paraPr/heading(type,idRef,level)`.
+- Do not stuff list semantics into `Paragraph.heading_level` just because the names are similar.
+
+### 8. Checkable bullet is still `BULLET`, not a new heading kind
+
+In HWPX, checkable bullet still lowers as:
+
+```text
+heading(type="BULLET", idRef="...", level="...")
+```
+
+with three separate truth locations:
+
+- `bullet.checkedChar` → definition-level checked glyph
+- `bullet.paraHead.checkable` → checkable family marker
+- `paraPr.checked` → per-item checked state
+
+Wire only one of those and you did not implement checkable bullet. You painted the dashboard and left the engine block open.
+
+### 9. Bullet `level` and glyph selection are different axes
+
+- `level` controls nesting depth
+- bullet glyph is selected by `bullet_id`
+
+So leveled bullet glyph switching is not automatic numbered-style behavior. If a caller wants `level -> glyph` changes, that mapping must be explicit.
+
+### 10. Markdown task lists are normalized to HWP semantics
+
+- unordered task list (`- [ ] foo`) → `CheckBullet`
+- ordered task list (`1. [ ] foo`) → numbering is intentionally discarded and normalized to `CheckBullet`
+
+Do not invent `CheckNumber` or preserve Markdown-only semantics unless the shared HWP model can actually carry them.
+
+### 11. Multi-paragraph task item continuation is a bridge concern
+
+Markdown task items can contain continuation paragraphs. That does **not** mean HWPX/HWP gained a new list kind.
+
+The correct interpretation is:
+
+- first paragraph = actual `CheckBullet` item
+- following paragraphs = same item continuation paragraphs
+
+This is decoder/encoder bridge logic, not shared list-kind proliferation.
 
 ---
 
@@ -225,40 +299,54 @@ These were planned but **removed as unnecessary** (keep it simple):
 
 ## Important Files & Directories
 
-### Internal Docs (.docs/ - git excluded)
+### `crates/`
 
-- `.docs/architecture/CRATE_ROLES.md` — Each crate's responsibility
-- `.docs/architecture/TDD_GUIDELINES.md` — Edge-first TDD process
-- `.docs/architecture/ADVANCED_TYPE_SYSTEM.md` — Type innovations
-- `.docs/research/SYNTHESIS.md` — Analysis of 5 reference projects
+Actual implementation lives here. Read `crates/AGENTS.md` and any crate-local `AGENTS.md` before changing a crate boundary.
 
-### Plans (.docs/planning/)
+### `examples/`
 
-- `ROADMAP.md` — 로드맵 SSoT (최신 Phase 상태)
-- `phase1_core_detailed.md` ~ `phase4_smithy_hwpx_encoder_detailed.md` — Phase별 상세 계획
-- `v1.0_decisions.md`, `v1.0_learnings.md` — 초기 의사결정/학습 기록
-- `BACKLOG_SMITHY_MD.md` — Phase 5 백로그
-- `2026-03-09-plugin-trinity-design.md` — Plugin Trinity (SKILL.md + MCP + Context7) 설계
-- `2026-03-09-plugin-trinity-implementation-plan.md` — Phase 7a 구현 계획
+Generated artifacts and sample converters live here. `hwpx2md/images/` is a helper output directory for Markdown conversion artifacts.
 
-### Reference Projects (.docs/references/ - git excluded)
+### `tests/`
 
-- `openhwp/` (Rust) — Architecture inspiration
-- `hwpxlib/` (Java) — Most mature HWPX implementation
-- `hwpx-owpml-model/` (C++) — Official Hancom model
-- `hwp.js/` (TypeScript) — HWP5 format gotchas
-- `hwpers/` (Rust) — HWP5 Rust patterns
+Root `tests/` is primarily a fixture warehouse. It is not itself the main Rust integration-test crate.
+
+### `.docs/`
+
+Local planning and research workspace. It may be git-excluded in this repository setup, so never assume "not in git status" means "does not exist".
+
+### Reference docs
+
+- `.docs/references/openhwp/docs/hwpx/` — local KS X 6101 markdownized reference
+- `.docs/research/` — local research logs and workstream notes
+- `.docs/architecture/` — crate-role and design notes when present
 
 ---
 
-## Working on a New Phase
+## Current Engineering State
+
+- Phase 10 HWP5 line is active.
+- Shared tab semantics already landed on `main`.
+- Table integration gates are concentrated in `crates/hwpforge-bindings-cli/tests/cli_integration.rs`.
+- Stress or real-world table fixtures are not the same thing as committed regression gates.
+- On local `feat/list-shared-semantics`, shared `ordered / bullet / outline` semantics are wired through `core -> blueprint -> smithy-hwpx`, with Markdown bridge integration.
+- Checkable bullet semantics are also wired on the local branch.
+- HWP5 remains the partial leg for this slice:
+  - bullet/checkable definition parity is present
+  - paragraph-level checked item state is not fully decoded yet
+- Do not confuse local branch completion with `main` branch state.
+
+---
+
+## Working on a New Slice
 
 ### Before Starting
 
-1. Read `.docs/planning/phaseN_*_detailed.md` (if exists)
-2. Read `crates/hwpforge-{crate}/AGENTS.md` (if exists)
-3. Read `.docs/architecture/CRATE_ROLES.md` for role definition
-4. Review completed phases for patterns (e.g., Phase 3 decoder architecture)
+1. Read root `AGENTS.md`.
+2. Read `crates/AGENTS.md` and the target crate's local `AGENTS.md` if present.
+3. Check code, manifests, and entrypoints before trusting roadmap prose.
+4. If HWP5 reveals a new semantic, confirm the shared model can carry it before wiring format-specific code.
+5. If the change may break public API or semver, stop and get approval first.
 
 ### During Implementation
 
@@ -269,9 +357,9 @@ These were planned but **removed as unnecessary** (keep it simple):
 
 ### After Implementation
 
-1. Run `make ci` (fmt + clippy + test + deny)
-2. Request Oracle review for 90+/100 score
-3. Update Serena memory: `phase{N}_completion_summary`
+1. Run `make ci-fast` (or stricter checks if the slice warrants it)
+2. Re-check public API / semver impact before release-facing actions
+3. Update local research or Serena memory only if it materially changes the working model
 
 ---
 
@@ -491,60 +579,6 @@ landscape 반전(gotcha #2)과 동일한 패턴. `PatternType`의 `Display`/`Fro
 
 패턴 채우기 시 `hatchStyle` 속성 필수. 없으면 한글이 솔리드 채우기로 렌더링.
 유효값: `HORIZONTAL`, `VERTICAL`, `BACK_SLASH`, `SLASH`, `CROSS`, `CROSS_DIAGONAL`
-
----
-
-## Phase Status
-
-### v1.0 (First Cycle: Core Pipeline)
-
-| Phase         | Crate                                              | Status            | Tests | LOC    |
-| ------------- | -------------------------------------------------- | ----------------- | ----- | ------ |
-| 0             | foundation                                         | ✅ Done (90+/100) | 224   | 4,432  |
-| 1             | core                                               | ✅ Done (94/100)  | 331   | 5,554  |
-| 2             | blueprint                                          | ✅ Done (90/100)  | 200   | 4,647  |
-| 3             | smithy-hwpx decoder                                | ✅ Done (96/100)  | 110   | 3,666  |
-| 4             | smithy-hwpx encoder                                | ✅ Done (95/100)  | 226   | 10,349 |
-| 4.1           | encoder improvements                               | ✅ Done           | —     | +104   |
-| 4.2           | table 한글 호환                                    | ✅ Done           | —     | +198   |
-| 5             | smithy-md                                          | ✅ Done (91/100)  | 73    | 3,757  |
-| 4.5 Wave 1    | 이미지/머리글/바닥글/페이지번호                    | ✅ Done           | —     | —      |
-| 4.5 Wave 2    | 각주/미주/글상자                                   | ✅ Done           | —     | —      |
-| 4.5 Wave 3    | 다단/도형 (선/타원/다각형)                         | ✅ Done           | —     | —      |
-| 4.5 Wave 4    | 캡션 (Caption on 6 shapes)                         | ✅ Done           | —     | —      |
-| 4.5 Wave 5    | 수식 (Equation)                                    | ✅ Done           | —     | —      |
-| 4.5 Wave 6    | 차트 (Chart)                                       | ✅ Done           | —     | —      |
-| —             | Bug fix (colPr/polygon/chart_offset)               | ✅ Done           | —     | —      |
-| —             | Linter setup (dprint + markdownlint)               | ✅ Done           | —     | —      |
-| Style Phase F | breakNonLatinWord fix                              | ✅ Done           | —     | —      |
-| Style Phase A | HancomStyleSet + default styles                    | ✅ Done           | —     | —      |
-| 5.5           | Write API Zero-Config 편의 생성자                  | ✅ Done           | —     | —      |
-| 5.5b          | Write API 100% Coverage                            | ✅ Done           | —     | —      |
-| 5.5c          | Hyperlink encoding (fieldBegin/End)                | ✅ Done           | —     | —      |
-| 5.5d          | Chart sub-variants + positioning + TOC             | ✅ Done           | —     | —      |
-| Wave 7        | Style Infrastructure                               | ✅ Done           | —     | ~1,750 |
-| Wave 8        | Paragraph Features (numbering/tabs/outline)        | ✅ Done           | —     | ~600   |
-| Wave 9        | Page Layout Completion                             | ✅ Done           | —     | ~800   |
-| Wave 10       | Character Enhancements (emphasis/charshape)        | ✅ Done           | —     | ~400   |
-| Wave 11       | Shape Completions (Arc/Curve/ConnectLine)          | ✅ Done           | —     | ~600   |
-| Wave 12       | References & Annotations                           | ✅ Done           | —     | ~500   |
-| Wave 13       | Remaining Content (Dutmal/Compose)                 | ✅ Done           | —     | ~400   |
-| Wave 14       | Final Features (TextDirection/DropCap/page_break)  | ✅ Done           | —     | ~200   |
-| 6 (CLI)       | bindings-cli (AI-first CLI, 106 integration tests) | ✅ Done           | 106   | 971    |
-| 6 (Python)    | bindings-py (PyO3)                                 | 📋 Ready          | —     | —      |
-| 7a (MCP)      | bindings-mcp (5 MCP tools + SKILL.md)              | ✅ Done           | —     | 1,031  |
-| 7b (Dist)     | npm packaging, CI, Registry 준비                   | ✅ Done           | —     | —      |
-| 7c (Ext)      | 3 new tools + 4 resources + 3 prompts              | ✅ Done           | 43    | +1,277 |
-| 8             | Testing + Release v1.0                             | 📋 Ready          | —     | —      |
-
-**Totals**: ~62,664 LOC, 1,881 tests (nextest), 144 .rs files, 10 crates
-
-### v2.0 (Second Cycle: Full Compatibility)
-
-| Phase | Crate                                      | Status                                                                                                                                                                   |
-| ----- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 9     | HWPX Full (OLE/양식컨트롤/변경추적/책갈피) | 📋 Ready                                                                                                                                                                 |
-| 10    | smithy-hwp5 staged reader/converter        | 🚧 Active (subtree + image v1/placement v1 + chart discovery v1 + non-image GSO baseline + table T1/T2-a/T2-b/T2-c landed; next: broader table/public-document fidelity) |
 
 ---
 

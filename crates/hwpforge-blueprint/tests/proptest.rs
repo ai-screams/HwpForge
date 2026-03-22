@@ -212,7 +212,7 @@ proptest! {
             ..Default::default()
         };
 
-        let resolved = partial.resolve();
+        let resolved = partial.resolve("test", &[], &[]).unwrap();
         // Should always succeed since ParaShape has defaults for all fields
         if let Some(a) = alignment {
             prop_assert_eq!(resolved.alignment, a);
@@ -296,7 +296,7 @@ proptest! {
             widow_orphan: true,
             border_fill_id: None,
             tab_def_id: 0,
-            heading_type: hwpforge_foundation::HeadingType::None,
+            list: None,
         };
         let yaml = serde_yaml::to_string(&original).unwrap();
         let back: ParaShape = serde_yaml::from_str(&yaml).unwrap();

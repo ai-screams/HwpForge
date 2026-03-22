@@ -4,14 +4,14 @@
 //! each defining the number format, prefix/suffix, and display template
 //! for that outline level.
 
-use hwpforge_foundation::NumberFormatType;
+use hwpforge_foundation::{BulletIndex, HeadingType, NumberFormatType, NumberingIndex};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// A single level definition within a numbering scheme.
 ///
 /// Maps to HWPX `<hh:paraHead>` inside `<hh:numbering>`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ParaHead {
     /// Starting number for this level.
     pub start: u32,
@@ -39,10 +39,98 @@ pub struct NumberingDef {
     pub levels: Vec<ParaHead>,
 }
 
+/// A bullet list definition.
+///
+/// Maps to HWPX `<hh:bullet>` inside `<hh:bullets>`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+pub struct BulletDef {
+    /// Bullet definition ID (1-based on the wire).
+    pub id: u32,
+    /// Bullet glyph string.
+    pub bullet_char: String,
+    /// Checked bullet glyph string when this bullet is checkable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checked_char: Option<String>,
+    /// Whether this bullet uses an image marker.
+    pub use_image: bool,
+    /// Bullet paragraph-head metadata.
+    pub para_head: ParaHead,
+}
+
+/// Shared paragraph list semantics.
+///
+/// This is the format-independent IR carried by paragraph styles. It stores the
+/// resolved list kind plus the branded definition index when a shared numbering
+/// or bullet definition is required.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ParagraphListRef {
+    /// Outline heading semantics.
+    Outline {
+        /// Zero-based outline level (`0..=9`).
+        level: u8,
+    },
+    /// Numbered list semantics.
+    Number {
+        /// Branded index into the shared numbering definition table.
+        numbering_id: NumberingIndex,
+        /// Zero-based paragraph list level (`0..=9`).
+        level: u8,
+    },
+    /// Bullet list semantics.
+    Bullet {
+        /// Branded index into the shared bullet definition table.
+        bullet_id: BulletIndex,
+        /// Zero-based paragraph list level (`0..=9`).
+        level: u8,
+    },
+    /// Checkable bullet list semantics.
+    CheckBullet {
+        /// Branded index into the shared bullet definition table.
+        bullet_id: BulletIndex,
+        /// Zero-based paragraph list level (`0..=9`).
+        level: u8,
+        /// Whether the checkbox is currently checked.
+        checked: bool,
+    },
+}
+
+impl ParagraphListRef {
+    /// Highest supported shared paragraph list level.
+    pub const MAX_LEVEL: u8 = 9;
+
+    /// Returns the shared list level.
+    pub const fn level(self) -> u8 {
+        match self {
+            Self::Outline { level }
+            | Self::Number { level, .. }
+            | Self::Bullet { level, .. }
+            | Self::CheckBullet { level, .. } => level,
+        }
+    }
+
+    /// Returns the corresponding heading type for HWP-family wire formats.
+    pub const fn heading_type(self) -> HeadingType {
+        match self {
+            Self::Outline { .. } => HeadingType::Outline,
+            Self::Number { .. } => HeadingType::Number,
+            Self::Bullet { .. } | Self::CheckBullet { .. } => HeadingType::Bullet,
+        }
+    }
+
+    /// Returns the checkbox state when this is a checkable bullet paragraph.
+    pub const fn checked(self) -> Option<bool> {
+        match self {
+            Self::CheckBullet { checked, .. } => Some(checked),
+            Self::Outline { .. } | Self::Number { .. } | Self::Bullet { .. } => None,
+        }
+    }
+}
+
 impl NumberingDef {
     /// Creates the default 10-level outline numbering (한글 Modern default).
     ///
-    /// Matches golden fixture `tests/fixtures/textbox.hwpx`:
+    /// Matches golden fixture `tests/fixtures/shapes/textbox.hwpx`:
     ///
     /// - Level 1: DIGIT `^1.` checkable=false
     /// - Level 2: HANGUL_SYLLABLE `^2.` checkable=false
@@ -131,6 +219,18 @@ impl NumberingDef {
                 },
             ],
         }
+    }
+
+    /// Returns the paragraph-head definition for a zero-based shared list level.
+    pub fn para_head(&self, level: u8) -> Option<&ParaHead> {
+        self.levels.get(level as usize)
+    }
+}
+
+impl BulletDef {
+    /// Returns whether this bullet definition can represent checkbox state.
+    pub fn is_checkable(&self) -> bool {
+        self.para_head.checkable || self.checked_char.is_some()
     }
 }
 

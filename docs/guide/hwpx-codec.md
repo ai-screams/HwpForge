@@ -122,12 +122,17 @@ let style_store = HwpxStyleStore::with_default_fonts("함초롬바탕");
 ```rust,no_run
 use hwpforge::blueprint::builtins::builtin_default;
 use hwpforge::blueprint::registry::StyleRegistry;
-use hwpforge::hwpx::HwpxStyleStore;
+use hwpforge::hwpx::HwpxRegistryBridge;
 
 let template = builtin_default().unwrap();
 let registry = StyleRegistry::from_template(&template).unwrap();
-let style_store = HwpxStyleStore::from_registry(&registry);
+let bridge = HwpxRegistryBridge::from_registry(&registry).unwrap();
+let style_store = bridge.style_store();
 ```
+
+`HwpxStyleStore::from_registry()` 자체는 HWPX style table만 만듭니다.\
+Blueprint/Markdown 경로에서 만든 문서는 registry-local `CharShapeIndex` / `ParaShapeIndex`
+를 들고 있으므로, encode 직전에는 `HwpxRegistryBridge`로 rebinding 해야 합니다.
 
 ## 라운드트립 예제 (decode → modify → encode)
 

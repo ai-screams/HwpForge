@@ -294,8 +294,7 @@ mod tests {
     /// bold, italic, and underline formatting.
     #[test]
     fn golden_hwp5_00_lorem_ipsum() {
-        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures/hwp5_00.hwp");
+        let fixture = crate::test_support::workspace_fixture_path("hwp5_00.hwp");
         if !fixture.exists() {
             eprintln!("Skipping: fixture not found at {:?}", fixture);
             return;
@@ -337,9 +336,7 @@ mod tests {
 
     // ── Helper: load fixture, skip if missing ─────────────────────────
     fn load_fixture(name: &str) -> Option<Hwp5Document> {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures")
-            .join(name);
+        let path = crate::test_support::workspace_fixture_path(name);
         if !path.exists() {
             eprintln!("Skipping: fixture not found at {:?}", path);
             return None;
@@ -464,8 +461,7 @@ mod tests {
     /// hwp5_04 intermediate: verify PageDef landscape and margins via parse_body_text.
     #[test]
     fn golden_hwp5_04_page_def() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures/hwp5_04.hwp");
+        let path = crate::test_support::workspace_fixture_path("hwp5_04.hwp");
         if !path.exists() {
             return;
         }
@@ -507,36 +503,6 @@ mod tests {
         }
     }
 
-    /// Convert all hwp5 fixtures to HWPX for visual verification in 한글.
-    /// Run with: cargo test -p hwpforge-smithy-hwp5 convert_all_to_hwpx -- --nocapture --ignored
-    #[test]
-    #[ignore] // Manual test — run explicitly to generate HWPX files.
-    fn convert_all_to_hwpx() {
-        let base = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures");
-        let out_dir = base.join("hwp5_to_hwpx_output");
-        std::fs::create_dir_all(&out_dir).unwrap();
-
-        for i in 0..=5 {
-            let input = base.join(format!("hwp5_{i:02}.hwp"));
-            let output = out_dir.join(format!("hwp5_{i:02}.hwpx"));
-            if !input.exists() {
-                continue;
-            }
-            match crate::hwp5_to_hwpx(&input, &output) {
-                Ok(warnings) => {
-                    eprintln!(
-                        "✅ hwp5_{i:02}.hwp → hwp5_{i:02}.hwpx ({} warnings)",
-                        warnings.len()
-                    );
-                }
-                Err(e) => {
-                    eprintln!("❌ hwp5_{i:02}.hwp → FAILED: {e:?}");
-                }
-            }
-        }
-        eprintln!("\nOutput: {}", out_dir.display());
-    }
-
     /// hwp5_05: Empty document — new file saved immediately.
     #[test]
     fn golden_hwp5_05_empty() {
@@ -553,8 +519,7 @@ mod tests {
 
     #[test]
     fn golden_hwp5_02_doc_info_preserves_font_buckets_and_style_fields() {
-        let fixture = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../tests/fixtures/hwp5_02.hwp");
+        let fixture = crate::test_support::workspace_fixture_path("hwp5_02.hwp");
         if !fixture.exists() {
             return;
         }

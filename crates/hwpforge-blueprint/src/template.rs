@@ -12,7 +12,7 @@
 
 use indexmap::IndexMap;
 
-use hwpforge_core::{PageSettings, TabDef, TabStop};
+use hwpforge_core::{BulletDef, NumberingDef, PageSettings, TabDef, TabStop};
 use hwpforge_foundation::{HwpUnit, TabAlign, TabLeader};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -352,6 +352,14 @@ pub struct Template {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tabs: Vec<TemplateTabDef>,
 
+    /// Shared numbering definitions referenced by paragraph styles.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub numberings: Vec<NumberingDef>,
+
+    /// Shared bullet definitions referenced by paragraph styles.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bullets: Vec<BulletDef>,
+
     /// Markdown element mappings (optional).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub markdown_mapping: Option<MarkdownMapping>,
@@ -371,10 +379,11 @@ impl Template {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hwpforge_foundation::{Alignment, Color};
+    use hwpforge_core::{BulletDef, NumberingDef, ParaHead};
+    use hwpforge_foundation::{Alignment, Color, NumberFormatType};
     use pretty_assertions::assert_eq;
 
-    use crate::style::{PartialCharShape, PartialParaShape};
+    use crate::style::{PartialCharShape, PartialParaShape, PartialParagraphListRef};
 
     // -----------------------------------------------------------------------
     // TemplateMeta
@@ -704,6 +713,7 @@ styles:
                 }),
                 para_shape: Some(PartialParaShape {
                     alignment: Some(Alignment::Justify),
+                    list: Some(PartialParagraphListRef::Number { numbering_id: 2, level: 0 }),
                     ..Default::default()
                 }),
             },
@@ -727,6 +737,30 @@ styles:
                     align: hwpforge_foundation::TabAlign::Left,
                     leader: hwpforge_foundation::TabLeader::dot(),
                 }],
+            }],
+            numberings: vec![NumberingDef {
+                id: 2,
+                start: 1,
+                levels: vec![ParaHead {
+                    start: 1,
+                    level: 1,
+                    num_format: NumberFormatType::Digit,
+                    text: "^1.".into(),
+                    checkable: false,
+                }],
+            }],
+            bullets: vec![BulletDef {
+                id: 7,
+                bullet_char: "•".into(),
+                checked_char: None,
+                use_image: false,
+                para_head: ParaHead {
+                    start: 0,
+                    level: 1,
+                    num_format: NumberFormatType::Digit,
+                    text: String::new(),
+                    checkable: false,
+                },
             }],
             markdown_mapping: Some(MarkdownMapping {
                 body: Some("body".to_string()),

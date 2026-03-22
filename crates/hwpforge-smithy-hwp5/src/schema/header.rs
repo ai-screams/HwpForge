@@ -8,7 +8,10 @@
 
 use byteorder::{ByteOrder, LittleEndian, ReadBytesExt};
 use std::fmt;
-use std::io::Cursor;
+use std::io::{Cursor, Read};
+use std::str::FromStr;
+
+use hwpforge_foundation::{HeadingType, NumberFormatType};
 
 use crate::error::{Hwp5Error, Hwp5Result};
 
@@ -276,6 +279,170 @@ impl Hwp5RawIdMappings {
                 None
             },
         })
+    }
+}
+
+// ---------------------------------------------------------------------------
+
+/// Parsed from a `NumberingDef` record (TagId 0x17).
+///
+/// HWP5 stores the semantic list identity here: a shared numbering ID with up
+/// to 10 paragraph heads. Only the fields needed to preserve ordered-list
+/// semantics are retained; layout-only attributes are parsed and discarded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hwp5RawNumberingParaHead {
+    /// Start number for this level.
+    pub start_number: u32,
+    /// Zero-based list level within the numbering definition.
+    pub level: u8,
+    /// Number format string normalized to HWPX-style terms.
+    pub num_format: String,
+    /// Display template text as stored in the HWP5 numbering definition.
+    pub text: String,
+    /// Checkable flag.
+    pub checkable: bool,
+}
+
+/// Parsed numbering definition from DocInfo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hwp5RawNumberingDef {
+    /// Numbering start offset.
+    pub start: u16,
+    /// Paragraph-head definitions in record order.
+    pub paragraph_heads: Vec<Hwp5RawNumberingParaHead>,
+}
+
+impl Hwp5RawNumberingDef {
+    /// Parse a `NumberingDef` record from its raw payload bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Hwp5Error::RecordParse`] when the record is truncated or has
+    /// unsupported version-dependent layout.
+    pub fn parse(data: &[u8], version: &HwpVersion) -> Hwp5Result<Self> {
+        let mut cur = Cursor::new(data);
+        let mut paragraph_heads = Vec::with_capacity(10);
+
+        for level in 0..7u8 {
+            paragraph_heads.push(parse_numbering_para_head(&mut cur, level, true)?);
+        }
+
+        let start = cur.read_u16::<LittleEndian>()?;
+
+        if *version >= HwpVersion::new(5, 0, 2, 5) {
+            for head in paragraph_heads.iter_mut().take(7) {
+                head.start_number = cur.read_u32::<LittleEndian>()?;
+            }
+        }
+
+        if *version >= HwpVersion::new(5, 1, 0, 0) && cur.position() < data.len() as u64 {
+            for level in 7..10u8 {
+                paragraph_heads.push(parse_numbering_para_head(&mut cur, level, true)?);
+            }
+
+            for head in paragraph_heads.iter_mut().skip(7).take(3) {
+                head.start_number = cur.read_u32::<LittleEndian>()?;
+            }
+        }
+
+        if cur.position() != data.len() as u64 {
+            return Err(Hwp5Error::RecordParse {
+                offset: cur.position() as usize,
+                detail: format!(
+                    "NumberingDef parsed {} of {} bytes; trailing bytes are not supported",
+                    cur.position(),
+                    data.len()
+                ),
+            });
+        }
+
+        Ok(Self { start, paragraph_heads })
+    }
+
+    /// Convert to the shared Core numbering definition.
+    pub fn to_core_numbering_def(&self, id: u32) -> hwpforge_core::NumberingDef {
+        let levels = self
+            .paragraph_heads
+            .iter()
+            .map(|head| hwpforge_core::ParaHead {
+                start: head.start_number,
+                level: u32::from(head.level) + 1,
+                num_format: NumberFormatType::from_str(&head.num_format).unwrap_or_default(),
+                text: head.text.clone(),
+                checkable: head.checkable,
+            })
+            .collect();
+        hwpforge_core::NumberingDef { id, start: u32::from(self.start), levels }
+    }
+}
+
+/// Parsed bullet definition from DocInfo.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hwp5RawBulletDef {
+    /// Bullet paragraph-head metadata.
+    pub paragraph_head: Hwp5RawNumberingParaHead,
+    /// Bullet glyph string.
+    pub bullet_char: String,
+    /// Whether this bullet uses an image marker.
+    pub use_image: bool,
+    /// Image bullet id when `use_image` is set.
+    pub image_id: Option<u32>,
+    /// Check-mark glyph, when present.
+    pub check_bullet_char: Option<String>,
+}
+
+impl Hwp5RawBulletDef {
+    /// Parse a bullet record from its raw payload bytes.
+    pub fn parse(data: &[u8]) -> Hwp5Result<Self> {
+        const MIN_SIZE: usize = 18;
+        if data.len() < MIN_SIZE {
+            return Err(Hwp5Error::RecordParse {
+                offset: 0,
+                detail: format!("Bullet too short: {} bytes (expected >= {MIN_SIZE})", data.len()),
+            });
+        }
+
+        let mut cur = Cursor::new(data);
+        let paragraph_head = parse_numbering_para_head(&mut cur, 0, false)?;
+        let bullet_char = decode_utf16_code_unit(cur.read_u16::<LittleEndian>()?);
+        let image_bullet_flag = cur.read_i32::<LittleEndian>()?;
+        let use_image = image_bullet_flag != 0;
+        let image_id = use_image.then_some(image_bullet_flag as u32);
+
+        if use_image && (data.len() as u64).saturating_sub(cur.position()) >= 4 {
+            let mut ignored = [0u8; 4];
+            cur.read_exact(&mut ignored)?;
+        }
+
+        let check_bullet_char = if (data.len() as u64).saturating_sub(cur.position()) >= 2 {
+            Some(decode_utf16_code_unit(cur.read_u16::<LittleEndian>()?))
+        } else {
+            None
+        };
+
+        Ok(Self { paragraph_head, bullet_char, use_image, image_id, check_bullet_char })
+    }
+
+    /// Convert to the shared Core bullet definition.
+    pub fn to_core_bullet_def(&self, id: u32) -> hwpforge_core::BulletDef {
+        hwpforge_core::BulletDef {
+            id,
+            bullet_char: self.bullet_char.clone(),
+            checked_char: self.check_bullet_char.clone(),
+            use_image: self.use_image,
+            para_head: hwpforge_core::ParaHead {
+                start: 0,
+                level: u32::from(self.paragraph_head.level) + 1,
+                num_format: if self.paragraph_head.num_format.is_empty() {
+                    NumberFormatType::Digit
+                } else {
+                    NumberFormatType::from_str(&self.paragraph_head.num_format)
+                        .unwrap_or(NumberFormatType::Digit)
+                },
+                text: self.paragraph_head.text.clone(),
+                checkable: self.paragraph_head.checkable,
+            },
+        }
     }
 }
 
@@ -649,6 +816,34 @@ pub struct Hwp5RawParaShape {
 }
 
 impl Hwp5RawParaShape {
+    /// Returns the list family encoded in `property1` bits 23-24.
+    ///
+    /// This is the authoritative source of paragraph list semantics; the raw
+    /// `numbering_bullet_id` is only the referenced definition slot.
+    pub fn heading_kind(&self) -> HeadingType {
+        match (self.property1 >> 23) & 0b11 {
+            1 => HeadingType::Outline,
+            2 => HeadingType::Number,
+            3 => HeadingType::Bullet,
+            _ => HeadingType::None,
+        }
+    }
+
+    /// Returns the zero-based paragraph list level encoded in `property1`
+    /// bits 25-27.
+    ///
+    /// HWP5 stores these bits as one-based values (`1..=7`) for outline,
+    /// numbering, and bullet paragraphs. The shared IR and HWPX wire heading
+    /// level are zero-based, so this helper normalizes the value.
+    pub fn heading_level(&self) -> u8 {
+        (((self.property1 >> 25) & 0b111) as u8).saturating_sub(1)
+    }
+
+    /// Returns the raw HWP5 list-definition slot index.
+    pub fn list_ref_id(&self) -> u32 {
+        u32::from(self.numbering_bullet_id)
+    }
+
     /// Parse a `ParaShape` record from its raw payload bytes.
     ///
     /// # Errors
@@ -711,6 +906,52 @@ impl Hwp5RawParaShape {
 }
 
 // ---------------------------------------------------------------------------
+
+fn parse_numbering_para_head(
+    cur: &mut Cursor<&[u8]>,
+    level: u8,
+    numbering: bool,
+) -> Hwp5Result<Hwp5RawNumberingParaHead> {
+    let attribute = cur.read_u32::<LittleEndian>()?;
+    let _align_bits = (attribute & 0b11) as u8;
+    let _use_instance_width = (attribute >> 2) & 1 != 0;
+    let _auto_indent = (attribute >> 3) & 1 != 0;
+    let _text_offset_kind = ((attribute >> 4) & 0b11) as u8;
+    let _width_adjust = cur.read_i16::<LittleEndian>()?;
+    let _text_offset = cur.read_i16::<LittleEndian>()?;
+    let _char_shape_id = cur.read_u32::<LittleEndian>()?;
+    let (num_format, text) = if numbering {
+        (numbering_attr_num_format(attribute).to_string(), read_utf16le_string(cur)?)
+    } else {
+        (String::new(), String::new())
+    };
+
+    // HWP5 numbering paragraphs do not expose a stable checkable bit in the
+    // raw record layout we currently preserve here, so keep the semantic slot
+    // but mark it false instead of guessing.
+    Ok(Hwp5RawNumberingParaHead { start_number: 1, level, num_format, text, checkable: false })
+}
+
+fn numbering_attr_num_format(attribute: u32) -> &'static str {
+    match (attribute >> 5) & 0x1F {
+        0 => "DIGIT",
+        1 => "CIRCLED_DIGIT",
+        2 => "ROMAN_CAPITAL",
+        3 => "ROMAN_SMALL",
+        4 => "LATIN_CAPITAL",
+        5 => "LATIN_SMALL",
+        7 => "CIRCLED_LATIN_SMALL",
+        8 => "HANGUL_SYLLABLE",
+        9 => "CIRCLED_HANGUL_SYLLABLE",
+        10 => "HANGUL_JAMO",
+        11 => "HANJA_DIGIT",
+        _ => "DIGIT",
+    }
+}
+
+fn decode_utf16_code_unit(code_unit: u16) -> String {
+    char::from_u32(u32::from(code_unit)).unwrap_or('\u{25CF}').to_string()
+}
 
 /// A single explicit HWP5 tab stop inside a `TabDef` record.
 #[derive(Debug, Clone, PartialEq, Eq)]

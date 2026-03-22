@@ -34,6 +34,14 @@ fn is_safe_url(url: &str) -> bool {
     lower.starts_with("http://") || lower.starts_with("https://") || lower.starts_with("mailto:")
 }
 
+fn encode_pending_link_url(url: &str) -> String {
+    if is_safe_url(url) {
+        url.to_string()
+    } else {
+        format!("\x00{url}")
+    }
+}
+
 /// Result of decoding markdown, containing both the document and the
 /// [`StyleRegistry`] resolved from the template.
 ///
@@ -44,17 +52,19 @@ fn is_safe_url(url: &str) -> bool {
 ///
 /// ```rust,ignore
 /// use hwpforge_blueprint::builtins::builtin_default;
-/// use hwpforge_smithy_hwpx::HwpxStyleStore;
+/// use hwpforge_smithy_hwpx::HwpxRegistryBridge;
 /// use hwpforge_smithy_md::MdDecoder;
 ///
 /// let template = builtin_default().unwrap();
 /// let result = MdDecoder::decode("# Title\n\nBody text", &template).unwrap();
 ///
 /// // Access the document
-/// let doc = result.document.validate().unwrap();
+/// let bridge = HwpxRegistryBridge::from_registry(&result.style_registry).unwrap();
+/// let rebound = bridge.rebind_draft_document(result.document).unwrap();
+/// let doc = rebound.validate().unwrap();
 ///
-/// // Bridge styles to HWPX encoder
-/// let store = HwpxStyleStore::from_registry(&result.style_registry);
+/// // Use the bridge-built store for HWPX encode
+/// let store = bridge.style_store();
 /// ```
 #[derive(Debug)]
 pub struct MdDocument {
@@ -175,6 +185,33 @@ impl ListState {
 }
 
 #[derive(Debug, Clone)]
+struct PendingItem {
+    prefix: String,
+    prefix_pending: bool,
+    task_checked: Option<bool>,
+    emitted_paragraph: bool,
+}
+
+impl PendingItem {
+    fn new(prefix: String) -> Self {
+        Self { prefix, prefix_pending: true, task_checked: None, emitted_paragraph: false }
+    }
+
+    fn mark_task(&mut self, checked: bool) {
+        self.task_checked = Some(checked);
+        self.prefix_pending = false;
+    }
+
+    fn take_prefix(&mut self) -> Option<String> {
+        if self.prefix_pending && self.task_checked.is_none() {
+            self.prefix_pending = false;
+            return Some(self.prefix.clone());
+        }
+        None
+    }
+}
+
+#[derive(Debug, Clone)]
 struct PendingLink {
     dest_url: String,
     text: String,
@@ -217,6 +254,10 @@ impl ParagraphBuilder {
 
     fn push_run(&mut self, run: Run) {
         self.runs.push(run);
+    }
+
+    fn set_style(&mut self, style: MdStyleRef) {
+        self.style = style;
     }
 
     fn build(mut self) -> Paragraph {
@@ -374,7 +415,7 @@ struct DecoderState<'a> {
     blockquote_depth: usize,
     in_code_block: bool,
     in_item: bool,
-    pending_item_prefixes: Vec<Option<String>>,
+    pending_items: Vec<PendingItem>,
     list_stack: Vec<ListState>,
     pending_link: Option<PendingLink>,
     pending_image: Option<PendingImage>,
@@ -397,7 +438,7 @@ impl<'a> DecoderState<'a> {
             blockquote_depth: 0,
             in_code_block: false,
             in_item: false,
-            pending_item_prefixes: Vec::new(),
+            pending_items: Vec::new(),
             list_stack: Vec::new(),
             pending_link: None,
             pending_image: None,
@@ -442,26 +483,12 @@ impl<'a> DecoderState<'a> {
             Event::Text(text) => self.push_text(text.as_ref())?,
             Event::Code(code) => self.push_inline_code(code.as_ref())?,
             Event::InlineMath(math) | Event::DisplayMath(math) => self.push_text(math.as_ref())?,
-            Event::Html(html) | Event::InlineHtml(html) => {
-                let raw = html.as_ref().trim();
-                if raw == SECTION_MARKER_COMMENT && !self.is_in_table_cell() {
-                    self.push_section_marker();
-                } else {
-                    return Err(unsupported_markdown_feature("raw HTML"));
-                }
-            }
-            Event::FootnoteReference(label) => {
-                return Err(unsupported_markdown_feature(&format!(
-                    "footnote reference '[^{}]'",
-                    label.as_ref()
-                )));
-            }
+            Event::Html(html) | Event::InlineHtml(html) => self.handle_html_event(html.as_ref())?,
+            Event::FootnoteReference(label) => self.handle_footnote_reference(label.as_ref())?,
             Event::SoftBreak => self.push_soft_break()?,
             Event::HardBreak => self.push_hard_break()?,
             Event::Rule => self.push_rule(),
-            Event::TaskListMarker(checked) => {
-                self.push_text(if checked { "[x] " } else { "[ ] " })?;
-            }
+            Event::TaskListMarker(checked) => self.mark_task_list_item(checked),
         }
 
         Ok(())
@@ -469,75 +496,18 @@ impl<'a> DecoderState<'a> {
 
     fn start_tag(&mut self, tag: Tag<'_>) -> MdResult<()> {
         match tag {
-            Tag::Paragraph => {
-                self.ensure_paragraph();
-            }
-            Tag::Heading { level, .. } => {
-                let lvl = level_to_u32(level);
-                self.start_paragraph(self.mapping.heading(lvl));
-                if let Some(current) = self.current.as_mut() {
-                    current.heading_level = Some(lvl as u8);
-                }
-            }
-            Tag::BlockQuote(_) => {
-                self.blockquote_depth += 1;
-            }
-            Tag::CodeBlock(_) => {
-                self.in_code_block = true;
-                self.start_paragraph(self.mapping.code);
-            }
-            Tag::List(start) => {
-                self.list_stack.push(ListState::new(start));
-            }
-            Tag::Item => {
-                self.finalize_paragraph();
-                self.in_item = true;
-                let prefix = self.next_item_prefix();
-                self.pending_item_prefixes.push(Some(prefix));
-            }
-            Tag::Table(_) => {
-                self.materialize_pending_item_prefix_if_needed();
-                self.finalize_paragraph();
-                self.table = Some(TableBuilder::new());
-            }
+            Tag::Paragraph => self.start_paragraph_tag(),
+            Tag::Heading { level, .. } => self.start_heading_tag(level),
+            Tag::BlockQuote(_) => self.start_blockquote_tag(),
+            Tag::CodeBlock(_) => self.start_code_block_tag(),
+            Tag::List(start) => self.start_list_tag(start),
+            Tag::Item => self.start_item_tag(),
+            Tag::Table(_) => self.start_table_tag(),
             Tag::TableHead => {}
-            Tag::TableRow => {
-                if let Some(table) = self.table.as_mut() {
-                    table.start_row();
-                }
-            }
-            Tag::TableCell => {
-                if let Some(table) = self.table.as_mut() {
-                    table.start_cell();
-                }
-            }
-            Tag::Link { dest_url, .. } => {
-                if !self.is_in_table_cell() {
-                    self.ensure_paragraph();
-                }
-                // Only create a hyperlink for safe URL schemes. Unsafe URLs
-                // (javascript:, data:, file:, etc.) are emitted as plain text
-                // by leaving pending_link as None and letting the text pass through.
-                if is_safe_url(&dest_url) {
-                    self.pending_link =
-                        Some(PendingLink { dest_url: dest_url.to_string(), text: String::new() });
-                } else {
-                    // Store the URL in pending_link with an empty sentinel so
-                    // we can still collect the link text, but mark it unsafe
-                    // by prefixing with '\0' (never a valid URL character).
-                    self.pending_link = Some(PendingLink {
-                        dest_url: format!("\x00{}", dest_url),
-                        text: String::new(),
-                    });
-                }
-            }
-            Tag::Image { dest_url, .. } => {
-                if !self.is_in_table_cell() {
-                    self.ensure_paragraph();
-                }
-                self.pending_image =
-                    Some(PendingImage { dest_url: dest_url.to_string(), alt: String::new() });
-            }
+            Tag::TableRow => self.start_table_row_tag(),
+            Tag::TableCell => self.start_table_cell_tag(),
+            Tag::Link { dest_url, .. } => self.start_link_tag(&dest_url),
+            Tag::Image { dest_url, .. } => self.start_image_tag(&dest_url),
             Tag::Emphasis
             | Tag::Strong
             | Tag::Strikethrough
@@ -545,20 +515,16 @@ impl<'a> DecoderState<'a> {
             | Tag::Superscript
             | Tag::Subscript => {}
             Tag::FootnoteDefinition(_) => {
-                return Err(unsupported_markdown_feature("footnote definition"));
+                return Err(unsupported_markdown_feature("footnote definition"))
             }
-            Tag::DefinitionList => {
-                return Err(unsupported_markdown_feature("definition list"));
-            }
+            Tag::DefinitionList => return Err(unsupported_markdown_feature("definition list")),
             Tag::DefinitionListTitle => {
                 return Err(unsupported_markdown_feature("definition list title"));
             }
             Tag::DefinitionListDefinition => {
                 return Err(unsupported_markdown_feature("definition list definition"));
             }
-            Tag::MetadataBlock(_) => {
-                return Err(unsupported_markdown_feature("metadata block"));
-            }
+            Tag::MetadataBlock(_) => return Err(unsupported_markdown_feature("metadata block")),
         }
         Ok(())
     }
@@ -567,66 +533,16 @@ impl<'a> DecoderState<'a> {
         match tag_end {
             TagEnd::Paragraph => self.finalize_paragraph(),
             TagEnd::Heading(_) => self.finalize_paragraph(),
-            TagEnd::BlockQuote(_) => {
-                self.blockquote_depth = self.blockquote_depth.saturating_sub(1);
-            }
-            TagEnd::CodeBlock => {
-                self.in_code_block = false;
-                self.finalize_paragraph();
-            }
-            TagEnd::List(_) => {
-                self.list_stack.pop();
-            }
-            TagEnd::Item => {
-                self.finalize_paragraph();
-                if let Some(Some(prefix)) = self.pending_item_prefixes.pop() {
-                    let mut paragraph = ParagraphBuilder::new(self.mapping.list_item);
-                    paragraph.push_text(prefix.trim_end());
-                    self.paragraphs.push(paragraph.build());
-                }
-                self.in_item = !self.pending_item_prefixes.is_empty();
-            }
+            TagEnd::BlockQuote(_) => self.end_blockquote_tag(),
+            TagEnd::CodeBlock => self.end_code_block_tag(),
+            TagEnd::List(_) => self.end_list_tag(),
+            TagEnd::Item => self.end_item_tag(),
             TagEnd::Table => self.finalize_table()?,
             TagEnd::TableHead => {}
-            TagEnd::TableRow => {
-                if let Some(table) = self.table.as_mut() {
-                    table.end_row();
-                }
-            }
-            TagEnd::TableCell => {
-                if let Some(table) = self.table.as_mut() {
-                    table.end_cell();
-                }
-            }
-            TagEnd::Link => {
-                if let Some(link) = self.pending_link.take() {
-                    let char_shape_id = self.current_char_shape_id();
-                    if link.dest_url.starts_with('\x00') {
-                        // Unsafe URL: emit the link text as plain text only.
-                        if !link.text.is_empty() {
-                            self.push_run_to_active_context(Run::text(link.text, char_shape_id));
-                        }
-                    } else {
-                        self.push_run_to_active_context(Run::control(
-                            Control::Hyperlink { text: link.text, url: link.dest_url },
-                            char_shape_id,
-                        ));
-                    }
-                }
-            }
-            TagEnd::Image => {
-                if let Some(image) = self.pending_image.take() {
-                    let format = image_format_from_path(&image.dest_url);
-                    let image = Image::new(
-                        image.dest_url,
-                        HwpUnit::from_mm(50.0)?,
-                        HwpUnit::from_mm(30.0)?,
-                        format,
-                    );
-                    let char_shape_id = self.current_char_shape_id();
-                    self.push_run_to_active_context(Run::image(image, char_shape_id));
-                }
-            }
+            TagEnd::TableRow => self.end_table_row_tag(),
+            TagEnd::TableCell => self.end_table_cell_tag(),
+            TagEnd::Link => self.end_link_tag(),
+            TagEnd::Image => self.end_image_tag()?,
             TagEnd::Emphasis
             | TagEnd::Strong
             | TagEnd::Strikethrough
@@ -634,22 +550,167 @@ impl<'a> DecoderState<'a> {
             | TagEnd::Superscript
             | TagEnd::Subscript => {}
             TagEnd::FootnoteDefinition => {
-                return Err(unsupported_markdown_feature("footnote definition"));
+                return Err(unsupported_markdown_feature("footnote definition"))
             }
-            TagEnd::DefinitionList => {
-                return Err(unsupported_markdown_feature("definition list"));
-            }
+            TagEnd::DefinitionList => return Err(unsupported_markdown_feature("definition list")),
             TagEnd::DefinitionListTitle => {
                 return Err(unsupported_markdown_feature("definition list title"));
             }
             TagEnd::DefinitionListDefinition => {
                 return Err(unsupported_markdown_feature("definition list definition"));
             }
-            TagEnd::MetadataBlock(_) => {
-                return Err(unsupported_markdown_feature("metadata block"));
-            }
+            TagEnd::MetadataBlock(_) => return Err(unsupported_markdown_feature("metadata block")),
         }
 
+        Ok(())
+    }
+
+    fn handle_html_event(&mut self, html: &str) -> MdResult<()> {
+        let raw = html.trim();
+        if raw == SECTION_MARKER_COMMENT && !self.is_in_table_cell() {
+            self.push_section_marker();
+            return Ok(());
+        }
+        Err(unsupported_markdown_feature("raw HTML"))
+    }
+
+    fn handle_footnote_reference(&mut self, label: &str) -> MdResult<()> {
+        Err(unsupported_markdown_feature(&format!("footnote reference '[^{label}]'")))
+    }
+
+    fn start_paragraph_tag(&mut self) {
+        self.ensure_paragraph();
+    }
+
+    fn start_heading_tag(&mut self, level: HeadingLevel) {
+        let lvl = level_to_u32(level);
+        self.start_paragraph(self.mapping.heading(lvl));
+        if let Some(current) = self.current.as_mut() {
+            current.heading_level = Some(lvl as u8);
+        }
+    }
+
+    fn start_blockquote_tag(&mut self) {
+        self.blockquote_depth += 1;
+    }
+
+    fn start_code_block_tag(&mut self) {
+        self.in_code_block = true;
+        self.start_paragraph(self.mapping.code);
+    }
+
+    fn start_list_tag(&mut self, start: Option<u64>) {
+        self.list_stack.push(ListState::new(start));
+    }
+
+    fn start_item_tag(&mut self) {
+        self.finalize_paragraph();
+        self.in_item = true;
+        let prefix = self.next_item_prefix();
+        self.pending_items.push(PendingItem::new(prefix));
+    }
+
+    fn start_table_tag(&mut self) {
+        self.materialize_pending_item_paragraph_if_needed();
+        self.finalize_paragraph();
+        self.table = Some(TableBuilder::new());
+    }
+
+    fn start_table_row_tag(&mut self) {
+        if let Some(table) = self.table.as_mut() {
+            table.start_row();
+        }
+    }
+
+    fn start_table_cell_tag(&mut self) {
+        if let Some(table) = self.table.as_mut() {
+            table.start_cell();
+        }
+    }
+
+    fn start_link_tag(&mut self, dest_url: &str) {
+        if !self.is_in_table_cell() {
+            self.ensure_paragraph();
+        }
+        self.pending_link =
+            Some(PendingLink { dest_url: encode_pending_link_url(dest_url), text: String::new() });
+    }
+
+    fn start_image_tag(&mut self, dest_url: &str) {
+        if !self.is_in_table_cell() {
+            self.ensure_paragraph();
+        }
+        self.pending_image =
+            Some(PendingImage { dest_url: dest_url.to_string(), alt: String::new() });
+    }
+
+    fn end_blockquote_tag(&mut self) {
+        self.blockquote_depth = self.blockquote_depth.saturating_sub(1);
+    }
+
+    fn end_code_block_tag(&mut self) {
+        self.in_code_block = false;
+        self.finalize_paragraph();
+    }
+
+    fn end_list_tag(&mut self) {
+        self.list_stack.pop();
+    }
+
+    fn end_item_tag(&mut self) {
+        self.finalize_paragraph();
+        if let Some(item) = self.pending_items.pop() {
+            if !item.emitted_paragraph {
+                let mut paragraph = ParagraphBuilder::new(self.item_style_for(&item));
+                if item.task_checked.is_none() {
+                    paragraph.push_text(item.prefix.trim_end());
+                }
+                self.paragraphs.push(paragraph.build());
+            }
+        }
+        self.in_item = !self.pending_items.is_empty();
+    }
+
+    fn end_table_row_tag(&mut self) {
+        if let Some(table) = self.table.as_mut() {
+            table.end_row();
+        }
+    }
+
+    fn end_table_cell_tag(&mut self) {
+        if let Some(table) = self.table.as_mut() {
+            table.end_cell();
+        }
+    }
+
+    fn end_link_tag(&mut self) {
+        if let Some(link) = self.pending_link.take() {
+            let char_shape_id = self.current_char_shape_id();
+            if link.dest_url.starts_with('\x00') {
+                if !link.text.is_empty() {
+                    self.push_run_to_active_context(Run::text(link.text, char_shape_id));
+                }
+            } else {
+                self.push_run_to_active_context(Run::control(
+                    Control::Hyperlink { text: link.text, url: link.dest_url },
+                    char_shape_id,
+                ));
+            }
+        }
+    }
+
+    fn end_image_tag(&mut self) -> MdResult<()> {
+        if let Some(image) = self.pending_image.take() {
+            let format = image_format_from_path(&image.dest_url);
+            let image = Image::new(
+                image.dest_url,
+                HwpUnit::from_mm(50.0)?,
+                HwpUnit::from_mm(30.0)?,
+                format,
+            );
+            let char_shape_id = self.current_char_shape_id();
+            self.push_run_to_active_context(Run::image(image, char_shape_id));
+        }
         Ok(())
     }
 
@@ -675,10 +736,9 @@ impl<'a> DecoderState<'a> {
             }
         }
 
-        self.ensure_paragraph();
-        if let Some(current) = self.current.as_mut() {
+        self.with_materialized_paragraph(|current| {
             current.push_text(text);
-        }
+        });
 
         Ok(())
     }
@@ -703,12 +763,11 @@ impl<'a> DecoderState<'a> {
             return Ok(());
         }
 
-        self.ensure_paragraph();
-        if let Some(current) = self.current.as_mut() {
+        self.with_materialized_paragraph(|current| {
             current.push_text("`");
             current.push_text(code);
             current.push_text("`");
-        }
+        });
         Ok(())
     }
 
@@ -758,6 +817,9 @@ impl<'a> DecoderState<'a> {
             return self.mapping.code;
         }
         if self.in_item {
+            if let Some(item) = self.pending_items.last() {
+                return self.item_style_for(item);
+            }
             return self.mapping.list_item;
         }
         if self.blockquote_depth > 0 {
@@ -785,45 +847,38 @@ impl<'a> DecoderState<'a> {
             return;
         }
 
-        self.ensure_paragraph();
-        if let Some(current) = self.current.as_mut() {
+        self.with_materialized_paragraph(|current| {
             current.push_run(run);
-        }
-    }
-
-    fn take_pending_item_prefix(&mut self) -> Option<String> {
-        self.pending_item_prefixes.last_mut().and_then(Option::take)
-    }
-
-    fn materialize_pending_item_prefix_if_needed(&mut self) {
-        if self.current.is_some() {
-            return;
-        }
-
-        if let Some(prefix) = self.take_pending_item_prefix() {
-            let mut paragraph = ParagraphBuilder::new(self.mapping.list_item);
-            paragraph.push_text(&prefix);
-            self.paragraphs.push(paragraph.build());
-        }
+        });
     }
 
     fn ensure_paragraph(&mut self) {
         if self.current.is_none() {
-            let mut paragraph = ParagraphBuilder::new(self.style_for_context());
-            if let Some(prefix) = self.take_pending_item_prefix() {
-                paragraph.push_text(&prefix);
-            }
-            self.current = Some(paragraph);
+            let style = if self.in_item {
+                self.start_next_item_paragraph()
+            } else {
+                self.style_for_context()
+            };
+            self.current = Some(ParagraphBuilder::new(style));
+        }
+    }
+
+    fn with_materialized_paragraph(&mut self, apply: impl FnOnce(&mut ParagraphBuilder)) {
+        self.ensure_paragraph();
+        self.materialize_current_item_prefix_if_needed();
+        if let Some(current) = self.current.as_mut() {
+            apply(current);
         }
     }
 
     fn start_paragraph(&mut self, style: MdStyleRef) {
         self.finalize_paragraph();
-        let mut paragraph = ParagraphBuilder::new(style);
-        if let Some(prefix) = self.take_pending_item_prefix() {
-            paragraph.push_text(&prefix);
+        if self.in_item {
+            if let Some(item) = self.pending_items.last_mut() {
+                item.emitted_paragraph = true;
+            }
         }
-        self.current = Some(paragraph);
+        self.current = Some(ParagraphBuilder::new(style));
     }
 
     fn finalize_paragraph(&mut self) {
@@ -856,6 +911,76 @@ impl<'a> DecoderState<'a> {
             return "- ".to_string();
         }
         "- ".to_string()
+    }
+
+    fn current_item_level(&self) -> u8 {
+        u8::try_from(self.list_stack.len().saturating_sub(1)).unwrap_or(u8::MAX)
+    }
+
+    fn item_style_for(&self, item: &PendingItem) -> MdStyleRef {
+        self.item_style_for_state(item.task_checked, item.emitted_paragraph)
+    }
+
+    fn item_style_for_state(&self, task_checked: Option<bool>, continuation: bool) -> MdStyleRef {
+        if continuation {
+            return self.mapping.list_continuation(self.current_item_level());
+        }
+
+        task_checked
+            .map(|checked| self.mapping.task_list(checked, self.current_item_level()))
+            .unwrap_or(self.mapping.list_item)
+    }
+
+    fn start_next_item_paragraph(&mut self) -> MdStyleRef {
+        let continuation =
+            self.pending_items.last().map(|item| item.emitted_paragraph).unwrap_or(false);
+        let task_checked = self.pending_items.last().and_then(|item| item.task_checked);
+        if let Some(item) = self.pending_items.last_mut() {
+            item.emitted_paragraph = true;
+        }
+        self.item_style_for_state(task_checked, continuation)
+    }
+
+    fn materialize_current_item_prefix_if_needed(&mut self) {
+        if !self.in_item {
+            return;
+        }
+
+        let prefix = self.pending_items.last_mut().and_then(PendingItem::take_prefix);
+        if let (Some(prefix), Some(current)) = (prefix, self.current.as_mut()) {
+            if current.runs.is_empty() {
+                current.push_text(&prefix);
+            }
+        }
+    }
+
+    fn materialize_pending_item_paragraph_if_needed(&mut self) {
+        if !self.in_item || self.current.is_some() {
+            return;
+        }
+
+        if self.pending_items.last().is_some_and(|item| item.emitted_paragraph) {
+            return;
+        }
+
+        let style = self.start_next_item_paragraph();
+        let prefix = self.pending_items.last_mut().and_then(PendingItem::take_prefix);
+
+        let mut paragraph = ParagraphBuilder::new(style);
+        if let Some(prefix) = prefix {
+            paragraph.push_text(&prefix);
+        }
+        self.paragraphs.push(paragraph.build());
+    }
+
+    fn mark_task_list_item(&mut self, checked: bool) {
+        if let Some(item) = self.pending_items.last_mut() {
+            item.mark_task(checked);
+        }
+        let task_style = self.mapping.task_list(checked, self.current_item_level());
+        if let Some(current) = self.current.as_mut() {
+            current.set_style(task_style);
+        }
     }
 }
 
@@ -1102,6 +1227,146 @@ mod tests {
             doc.sections()[0].paragraphs.iter().map(Paragraph::text_content).collect();
 
         assert_eq!(texts, vec!["1. alpha", "2. beta"]);
+    }
+
+    #[test]
+    fn decode_task_list_restores_checkable_list_semantics() {
+        use hwpforge_core::ParagraphListRef;
+
+        let template = default_template();
+        let result = MdDecoder::decode("- [ ] todo\n- [x] done", &template).unwrap();
+        let paragraphs = &result.document.sections()[0].paragraphs;
+
+        assert_eq!(paragraphs[0].text_content(), "todo");
+        assert_eq!(paragraphs[1].text_content(), "done");
+
+        let unchecked_shape = result
+            .style_registry
+            .para_shape(paragraphs[0].para_shape_id)
+            .expect("unchecked para shape");
+        let checked_shape = result
+            .style_registry
+            .para_shape(paragraphs[1].para_shape_id)
+            .expect("checked para shape");
+
+        let unchecked_bullet = match unchecked_shape.list {
+            Some(ParagraphListRef::CheckBullet { bullet_id, level: 0, checked: false }) => {
+                bullet_id
+            }
+            other => panic!("expected unchecked task list semantics, got {other:?}"),
+        };
+        assert!(matches!(
+            checked_shape.list,
+            Some(ParagraphListRef::CheckBullet {
+                bullet_id,
+                level: 0,
+                checked: true,
+            }) if bullet_id == unchecked_bullet
+        ));
+    }
+
+    #[test]
+    fn decode_nested_task_list_restores_nested_checkable_levels() {
+        use hwpforge_core::ParagraphListRef;
+
+        let template = default_template();
+        let result = MdDecoder::decode("- [ ] parent\n  - [x] child", &template).unwrap();
+        let paragraphs = &result.document.sections()[0].paragraphs;
+
+        let parent_shape = result
+            .style_registry
+            .para_shape(paragraphs[0].para_shape_id)
+            .expect("parent para shape");
+        let child_shape = result
+            .style_registry
+            .para_shape(paragraphs[1].para_shape_id)
+            .expect("child para shape");
+
+        assert!(matches!(
+            parent_shape.list,
+            Some(ParagraphListRef::CheckBullet { level: 0, checked: false, .. })
+        ));
+        assert!(matches!(
+            child_shape.list,
+            Some(ParagraphListRef::CheckBullet { level: 1, checked: true, .. })
+        ));
+    }
+
+    #[test]
+    fn decode_multi_paragraph_task_item_uses_continuation_shape() {
+        use hwpforge_core::ParagraphListRef;
+        use hwpforge_foundation::HwpUnit;
+
+        let template = default_template();
+        let markdown = "- [ ] first paragraph of the same task item\n\n  second paragraph of the same task item\n\n- [x] next real task item";
+        let result = MdDecoder::decode(markdown, &template).unwrap();
+        let paragraphs = &result.document.sections()[0].paragraphs;
+
+        assert_eq!(paragraphs.len(), 3);
+        assert_eq!(paragraphs[0].text_content(), "first paragraph of the same task item");
+        assert_eq!(paragraphs[1].text_content(), "second paragraph of the same task item");
+        assert_eq!(paragraphs[2].text_content(), "next real task item");
+
+        let first_shape = result
+            .style_registry
+            .para_shape(paragraphs[0].para_shape_id)
+            .expect("first para shape");
+        let continuation_shape = result
+            .style_registry
+            .para_shape(paragraphs[1].para_shape_id)
+            .expect("continuation para shape");
+
+        assert!(matches!(
+            first_shape.list,
+            Some(ParagraphListRef::CheckBullet { level: 0, checked: false, .. })
+        ));
+        assert_eq!(continuation_shape.list, None);
+        assert_eq!(continuation_shape.indent_left, first_shape.indent_left);
+        assert_eq!(continuation_shape.indent_first_line, HwpUnit::ZERO);
+    }
+
+    #[test]
+    fn decode_ordered_task_list_normalizes_to_checkable_bullet() {
+        use hwpforge_core::ParagraphListRef;
+
+        let template = default_template();
+        let result = MdDecoder::decode("1. [x] done", &template).unwrap();
+        let paragraphs = &result.document.sections()[0].paragraphs;
+
+        assert_eq!(paragraphs.len(), 1);
+        assert_eq!(paragraphs[0].text_content(), "done");
+
+        let shape = result
+            .style_registry
+            .para_shape(paragraphs[0].para_shape_id)
+            .expect("ordered-task para shape");
+
+        assert!(matches!(
+            shape.list,
+            Some(ParagraphListRef::CheckBullet { level: 0, checked: true, .. })
+        ));
+    }
+
+    #[test]
+    fn decode_unordered_task_list_nested_under_ordered_parent_is_allowed() {
+        use hwpforge_core::ParagraphListRef;
+
+        let template = default_template();
+        let result = MdDecoder::decode("1. parent\n   - [x] child", &template).unwrap();
+        let paragraphs = &result.document.sections()[0].paragraphs;
+
+        assert_eq!(paragraphs[0].text_content(), "1. parent");
+        assert_eq!(paragraphs[1].text_content(), "child");
+
+        let child_shape = result
+            .style_registry
+            .para_shape(paragraphs[1].para_shape_id)
+            .expect("child para shape");
+
+        assert!(matches!(
+            child_shape.list,
+            Some(ParagraphListRef::CheckBullet { level: 1, checked: true, .. })
+        ));
     }
 
     #[test]

@@ -5,7 +5,7 @@ use serde::Serialize;
 use hwpforge_core::image::ImageStore;
 use hwpforge_foundation::FontId;
 use hwpforge_smithy_hwpx::presets::builtin_presets;
-use hwpforge_smithy_hwpx::{HwpxEncoder, HwpxStyleStore};
+use hwpforge_smithy_hwpx::{HwpxEncoder, HwpxRegistryBridge};
 use hwpforge_smithy_md::MdDecoder;
 
 use crate::output::{read_file_string, write_output_file, ToolErrorInfo, MAX_INLINE_SIZE};
@@ -83,9 +83,9 @@ pub fn run_convert(
     let sections: usize = md_doc.document.sections().len();
     let paragraphs: usize = md_doc.document.sections().iter().map(|s| s.paragraphs.len()).sum();
 
-    // 6. Apply preset font to style registry, then build full style store.
-    //    from_registry() creates the complete store (char shapes, para shapes,
-    //    styles, border fills) unlike with_default_fonts() which only sets fonts.
+    // 6. Apply preset font to style registry, then build the registry bridge.
+    //    The bridge owns the store-local style table and rebinds registry-local
+    //    char/para shape ids before encode.
     //    Only replace base font entries — preserve specialty fonts (e.g., D2Coding
     //    for code blocks) by checking against the original base font name.
     let preset_font_id = FontId::new(&preset_font).map_err(|e| {
@@ -104,10 +104,24 @@ pub fn run_convert(
             cs.font.clone_from(&preset_font);
         }
     }
-    let style_store = HwpxStyleStore::from_registry(&md_doc.style_registry);
+    let bridge = HwpxRegistryBridge::from_registry(&md_doc.style_registry).map_err(|e| {
+        ToolErrorInfo::new(
+            "STYLE_STORE_ERROR",
+            format!("Style store construction failed: {e}"),
+            "Check paragraph list references in the resolved style registry.",
+        )
+    })?;
     let image_store = ImageStore::new();
 
-    let validated = md_doc.document.validate().map_err(|e| {
+    let rebound = bridge.rebind_draft_document(md_doc.document).map_err(|e| {
+        ToolErrorInfo::new(
+            "STYLE_REBIND_ERROR",
+            format!("Style rebind failed: {e}"),
+            "Document style indices do not match the generated HWPX style store.",
+        )
+    })?;
+
+    let validated = rebound.validate().map_err(|e| {
         ToolErrorInfo::new(
             "VALIDATION_ERROR",
             format!("Document validation failed: {e}"),
@@ -116,13 +130,14 @@ pub fn run_convert(
     })?;
 
     // 7. Encode to HWPX bytes
-    let hwpx_bytes = HwpxEncoder::encode(&validated, &style_store, &image_store).map_err(|e| {
-        ToolErrorInfo::new(
-            "ENCODE_ERROR",
-            format!("HWPX encoding failed: {e}"),
-            "This may be a bug. Please report at https://github.com/ai-screams/HwpForge/issues",
-        )
-    })?;
+    let hwpx_bytes =
+        HwpxEncoder::encode(&validated, bridge.style_store(), &image_store).map_err(|e| {
+            ToolErrorInfo::new(
+                "ENCODE_ERROR",
+                format!("HWPX encoding failed: {e}"),
+                "This may be a bug. Please report at https://github.com/ai-screams/HwpForge/issues",
+            )
+        })?;
 
     // 8. Write output file
     write_output_file(output_path, &hwpx_bytes)?;

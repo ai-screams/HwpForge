@@ -85,11 +85,58 @@ pub trait StyleLookup {
         None
     }
 
+    /// Returns the left indent of the paragraph shape at `id`.
+    fn para_indent_left(&self, _id: ParaShapeIndex) -> Option<HwpUnit> {
+        None
+    }
+
+    /// Returns the first-line indent of the paragraph shape at `id`.
+    fn para_indent_first_line(&self, _id: ParaShapeIndex) -> Option<HwpUnit> {
+        None
+    }
+
     /// Returns the list type for a paragraph shape: `"BULLET"`, `"NUMBER"`, or `None`.
     ///
     /// Returns `None` if the paragraph has no list heading or if the heading
     /// type is `NONE` / `OUTLINE`.
     fn para_list_type(&self, _id: ParaShapeIndex) -> Option<&str> {
+        None
+    }
+
+    /// Returns the zero-based list nesting level for a paragraph shape.
+    ///
+    /// This is only meaningful for numbered/bulleted list semantics. Outline
+    /// headings should use [`para_heading_level`](Self::para_heading_level)
+    /// instead.
+    fn para_list_level(&self, _id: ParaShapeIndex) -> Option<u8> {
+        None
+    }
+
+    /// Returns the checkbox state for a paragraph shape when it is a checkable bullet.
+    ///
+    /// `Some(true)` means a checked checkbox item, `Some(false)` means an
+    /// unchecked checkbox item, and `None` means the paragraph is not a
+    /// checkable bullet.
+    fn para_checked_state(&self, _id: ParaShapeIndex) -> Option<bool> {
+        None
+    }
+
+    /// Returns the preferred style name associated with the paragraph shape.
+    ///
+    /// This is useful for encoders that need to recover semantics carried by a
+    /// dedicated paragraph shape even when the paragraph itself has no explicit
+    /// `style_id`.
+    fn para_style_name(&self, _id: ParaShapeIndex) -> Option<&str> {
+        None
+    }
+
+    /// Returns the heading level (1–6) implied by the paragraph shape at `id`.
+    ///
+    /// This is the format-agnostic truth source for paragraph-level outline
+    /// semantics. Implementors that can inspect real paragraph-shape outline
+    /// metadata should override this method; downstream styled export paths use
+    /// it before style-name heuristics whenever both are available.
+    fn para_heading_level(&self, _id: ParaShapeIndex) -> Option<u8> {
         None
     }
 
@@ -147,7 +194,13 @@ mod tests {
         assert!(store.char_font_size(cs).is_none());
         assert!(store.char_text_color(cs).is_none());
         assert!(store.para_alignment(ps).is_none());
+        assert!(store.para_indent_left(ps).is_none());
+        assert!(store.para_indent_first_line(ps).is_none());
         assert!(store.para_list_type(ps).is_none());
+        assert!(store.para_list_level(ps).is_none());
+        assert!(store.para_checked_state(ps).is_none());
+        assert!(store.para_style_name(ps).is_none());
+        assert!(store.para_heading_level(ps).is_none());
         assert!(store.style_name(si).is_none());
         assert!(store.style_heading_level(si).is_none());
         assert!(store.image_data("image1.jpg").is_none());

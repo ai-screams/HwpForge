@@ -105,7 +105,7 @@ GFM(GitHub Flavored Markdown) 텍스트를 HWPX 파일로 변환합니다.
 
 ```rust,no_run
 use hwpforge::core::ImageStore;
-use hwpforge::hwpx::{HwpxEncoder, HwpxStyleStore};
+use hwpforge::hwpx::{HwpxEncoder, HwpxRegistryBridge};
 use hwpforge::md::MdDecoder;
 
 fn main() -> anyhow::Result<()> {
@@ -135,17 +135,18 @@ date: 2026-03-06
     //    MdDecoder::decode_with_default는 document + style_registry(스타일 매핑)를 반환
     let md_doc = MdDecoder::decode_with_default(markdown)?;
 
-    // 3. Draft → Validated 상태 전이
-    let validated = md_doc.document.validate()?;
+    // 3. registry-local 스타일 인덱스를 HWPX store-local 인덱스로 rebinding
+    let bridge = HwpxRegistryBridge::from_registry(&md_doc.style_registry)?;
+    let rebound = bridge.rebind_draft_document(md_doc.document)?;
 
-    // 4. Markdown 헤딩(H1-H6)이 한컴 개요 1-6 스타일로 자동 매핑된 스타일 스토어 생성
-    let style_store = HwpxStyleStore::from_registry(&md_doc.style_registry);
+    // 4. Draft → Validated 상태 전이
+    let validated = rebound.validate()?;
 
     // 5. 이미지 없음
     let image_store = ImageStore::new();
 
     // 6. HWPX 인코딩 후 저장
-    let bytes = HwpxEncoder::encode(&validated, &style_store, &image_store)?;
+    let bytes = HwpxEncoder::encode(&validated, bridge.style_store(), &image_store)?;
     std::fs::write("report.hwpx", &bytes)?;
 
     println!("report.hwpx 저장 완료");

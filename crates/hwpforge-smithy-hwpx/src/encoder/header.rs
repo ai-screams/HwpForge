@@ -10,14 +10,15 @@ use hwpforge_foundation::{
     ShadowType, StrikeoutShape, UnderlineType,
 };
 
-use super::header_tabs::build_tab_properties_xml;
+use super::{escape_xml, header_tabs::build_tab_properties_xml};
 use crate::error::{HwpxError, HwpxResult};
+use crate::list_bridge::{bullet_def_to_hwpx, wire_parts_to_heading};
 use crate::schema::header::{
-    HxAlign, HxAutoSpacing, HxBorder, HxBreakSetting, HxCharPr, HxCharProperties, HxFont,
-    HxFontFaceGroup, HxFontFaces, HxFontRef, HxHead, HxHeading, HxLangValues, HxLineSpacing,
-    HxMargin, HxOutline, HxParaPr, HxParaProperties, HxPresence, HxRefList, HxShadow, HxStrikeout,
-    HxStyle, HxStyles, HxSwitch, HxSwitchCase, HxSwitchDefault, HxTypeInfo, HxUnderline,
-    HxUnitValue,
+    HxAlign, HxAutoSpacing, HxBorder, HxBreakSetting, HxBullet, HxBulletParaHead, HxCharPr,
+    HxCharProperties, HxFont, HxFontFaceGroup, HxFontFaces, HxFontRef, HxHead, HxLangValues,
+    HxLineSpacing, HxMargin, HxOutline, HxParaPr, HxParaProperties, HxPresence, HxRefList,
+    HxShadow, HxStrikeout, HxStyle, HxStyles, HxSwitch, HxSwitchCase, HxSwitchDefault, HxTypeInfo,
+    HxUnderline, HxUnitValue,
 };
 use crate::style_store::{
     ActiveBorderFillBrush, HwpxBorderFill, HwpxBorderLine, HwpxCharShape, HwpxDiagonalLine,
@@ -268,13 +269,88 @@ fn build_numberings_xml(store: &HwpxStyleStore) -> String {
             } else {
                 xml.push_str(&format!(
                     r#"<hh:paraHead start="{}" level="{}" align="LEFT" useInstWidth="1" autoIndent="1" widthAdjust="0" textOffsetType="PERCENT" textOffset="50" numFormat="{num_format}" charPrIDRef="4294967295" checkable="{checkable}">{}</hh:paraHead>"#,
-                    lvl.start, lvl.level, lvl.text,
+                    lvl.start,
+                    lvl.level,
+                    escape_xml(&lvl.text),
                 ));
             }
         }
         xml.push_str("</hh:numbering>");
     }
     xml.push_str("</hh:numberings>");
+    xml
+}
+
+/// Builds `<hh:bullets>` XML from the store's bullet definitions.
+fn build_bullets_xml(store: &HwpxStyleStore) -> String {
+    if store.bullet_count() == 0 {
+        return String::new();
+    }
+
+    let items: Vec<HxBullet> = store.iter_bullets().map(bullet_def_to_hwpx).collect();
+    let count = items.len() as u32;
+    let mut xml = format!(r#"<hh:bullets itemCnt="{count}">"#);
+    for bullet in &items {
+        xml.push_str(&build_bullet_xml(bullet));
+    }
+    xml.push_str("</hh:bullets>");
+    xml
+}
+
+/// Serializes a single bullet definition to XML.
+fn build_bullet_xml(bullet: &HxBullet) -> String {
+    let checked_char_attr = bullet
+        .checked_char
+        .as_ref()
+        .map(|checked_char| format!(r#" checkedChar="{}""#, escape_xml(checked_char)))
+        .unwrap_or_default();
+    let mut xml = format!(
+        r#"<hh:bullet id="{}" char="{}"{} useImage="{use_image}">"#,
+        bullet.id,
+        escape_xml(&bullet.bullet_char),
+        checked_char_attr,
+        use_image = bullet.use_image,
+    );
+    for para_head in &bullet.para_heads {
+        xml.push_str(&build_bullet_para_head_xml(para_head));
+    }
+    xml.push_str("</hh:bullet>");
+    xml
+}
+
+/// Serializes a bullet paraHead to XML.
+fn build_bullet_para_head_xml(para_head: &HxBulletParaHead) -> String {
+    if para_head.text.is_empty() {
+        return format!(
+            r#"<hh:paraHead level="{}" align="{}" useInstWidth="{}" autoIndent="{}" widthAdjust="{}" textOffsetType="{}" textOffset="{}" numFormat="{}" charPrIDRef="{}" checkable="{}"/>"#,
+            para_head.level,
+            para_head.align,
+            para_head.use_inst_width,
+            para_head.auto_indent,
+            para_head.width_adjust,
+            para_head.text_offset_type,
+            para_head.text_offset,
+            para_head.num_format,
+            para_head.char_pr_id_ref,
+            para_head.checkable,
+        );
+    }
+
+    let mut xml = format!(
+        r#"<hh:paraHead level="{}" align="{}" useInstWidth="{}" autoIndent="{}" widthAdjust="{}" textOffsetType="{}" textOffset="{}" numFormat="{}" charPrIDRef="{}" checkable="{}">"#,
+        para_head.level,
+        para_head.align,
+        para_head.use_inst_width,
+        para_head.auto_indent,
+        para_head.width_adjust,
+        para_head.text_offset_type,
+        para_head.text_offset,
+        para_head.num_format,
+        para_head.char_pr_id_ref,
+        para_head.checkable,
+    );
+    xml.push_str(&escape_xml(&para_head.text));
+    xml.push_str("</hh:paraHead>");
     xml
 }
 
@@ -287,6 +363,7 @@ fn number_format_to_hwpx(nf: NumberFormatType) -> &'static str {
         NumberFormatType::RomanSmall => "ROMAN_SMALL",
         NumberFormatType::LatinCapital => "LATIN_CAPITAL",
         NumberFormatType::LatinSmall => "LATIN_SMALL",
+        NumberFormatType::CircledLatinSmall => "CIRCLED_LATIN_SMALL",
         NumberFormatType::HangulSyllable => "HANGUL_SYLLABLE",
         NumberFormatType::HangulJamo => "HANGUL_JAMO",
         NumberFormatType::HanjaDigit => "HANJA_DIGIT",
@@ -299,20 +376,24 @@ fn number_format_to_hwpx(nf: NumberFormatType) -> &'static str {
 /// into the serialized refList XML at the correct positions.
 ///
 /// Element order inside `<hh:refList>`:
-/// fontfaces → **borderFills** → charProperties → **tabProperties** → **numberings** → paraProperties → styles
+/// fontfaces → **borderFills** → charProperties → **tabProperties** → **numberings** → **bullets** → paraProperties → styles
 fn enrich_ref_list(inner_xml: &str, store: &HwpxStyleStore) -> HwpxResult<String> {
     let border_fills_xml = build_border_fills_xml(store);
     let tab_properties_xml = build_tab_properties_xml(store)?;
     let numberings_xml = build_numberings_xml(store);
+    let bullets_xml = build_bullets_xml(store);
 
     // If no refList exists, nothing to enrich
     if !inner_xml.contains("<hh:refList>") {
         return Ok(format!(
-            "<hh:refList>{border_fills_xml}{tab_properties_xml}{numberings_xml}</hh:refList>{inner_xml}"
+            "<hh:refList>{border_fills_xml}{tab_properties_xml}{numberings_xml}{bullets_xml}</hh:refList>{inner_xml}"
         ));
     }
 
-    let extra_len = border_fills_xml.len() + tab_properties_xml.len() + numberings_xml.len();
+    let extra_len = border_fills_xml.len()
+        + tab_properties_xml.len()
+        + numberings_xml.len()
+        + bullets_xml.len();
     let mut result = String::with_capacity(inner_xml.len() + extra_len);
     let ref_open = "<hh:refList>";
     let ref_open_pos =
@@ -330,22 +411,27 @@ fn enrich_ref_list(inner_xml: &str, store: &HwpxStyleStore) -> HwpxResult<String
         result.push_str(&border_fills_xml);
 
         let rest2 = &rest[cp_pos..];
-        // Insert tabProperties + numberings before <hh:paraProperties>
-        if let Some(pp_pos) = rest2.find("<hh:paraProperties") {
-            result.push_str(&rest2[..pp_pos]);
+        // Insert tabProperties + numberings + bullets before paraProperties or styles.
+        if let Some(insert_pos) =
+            rest2.find("<hh:paraProperties").or_else(|| rest2.find("<hh:styles"))
+        {
+            result.push_str(&rest2[..insert_pos]);
             result.push_str(&tab_properties_xml);
             result.push_str(&numberings_xml);
-            result.push_str(&rest2[pp_pos..]);
+            result.push_str(&bullets_xml);
+            result.push_str(&rest2[insert_pos..]);
         } else {
             result.push_str(rest2);
             result.push_str(&tab_properties_xml);
             result.push_str(&numberings_xml);
+            result.push_str(&bullets_xml);
         }
     } else {
         // No charProperties — insert all defaults after fontfaces
         result.push_str(&border_fills_xml);
         result.push_str(&tab_properties_xml);
         result.push_str(&numberings_xml);
+        result.push_str(&bullets_xml);
         result.push_str(rest);
     }
 
@@ -396,10 +482,12 @@ fn build_ref_list(store: &HwpxStyleStore) -> HxRefList {
         } else {
             Some(char_properties)
         },
-        // tabProperties and numberings are injected via enrich_ref_list (string manipulation)
-        // to ensure correct element ordering within <hh:refList>. Serde emits None here.
+        // tabProperties, numberings, and bullets are injected via enrich_ref_list
+        // (string manipulation) to ensure correct element ordering within <hh:refList>.
+        // Serde emits None here.
         tab_properties: None,
         numberings: None,
+        bullets: None,
         para_properties: if para_properties.items.is_empty() {
             None
         } else {
@@ -625,16 +713,12 @@ fn build_para_pr(id: u32, ps: &HwpxParaShape) -> HxParaPr {
         font_line_height: 0,
         snap_to_grid: 1,
         suppress_line_numbers: 0,
-        checked: 0,
+        checked: u32::from(ps.checked),
         align: Some(HxAlign {
             horizontal: alignment_to_str(ps.alignment).into(),
             vertical: "BASELINE".into(),
         }),
-        heading: Some(HxHeading {
-            heading_type: ps.heading_type.to_hwpx_str().into(),
-            id_ref: ps.heading_id_ref,
-            level: ps.heading_level,
-        }),
+        heading: Some(wire_parts_to_heading(ps.heading_type, ps.heading_id_ref, ps.heading_level)),
         break_setting: Some(HxBreakSetting {
             break_latin_word: ps.break_latin_word.to_string(),
             break_non_latin_word: ps.break_non_latin_word.to_string(),
@@ -1038,6 +1122,92 @@ mod tests {
         assert_eq!(def_margin.indent.as_ref().unwrap().value, 200);
         let def_ls = default.line_spacing.as_ref().unwrap();
         assert_eq!(def_ls.value, 200);
+    }
+
+    #[test]
+    fn test_bullet_roundtrip_emits_bullets_section() {
+        let mut store = HwpxStyleStore::new();
+        store.push_font(HwpxFont::new(0, "함초롬돋움", "HANGUL"));
+        store.push_char_shape(HwpxCharShape::default());
+        store.push_para_shape(HwpxParaShape::default());
+        store.push_border_fill(HwpxBorderFill::default_page_border());
+        store.push_border_fill(HwpxBorderFill::default_char_background());
+        store.push_border_fill(HwpxBorderFill::default_table_border());
+        store.push_bullet(hwpforge_core::BulletDef {
+            id: 1,
+            bullet_char: "".into(),
+            checked_char: None,
+            use_image: false,
+            para_head: hwpforge_core::ParaHead {
+                start: 0,
+                level: 1,
+                num_format: NumberFormatType::Digit,
+                text: String::new(),
+                checkable: false,
+            },
+        });
+
+        let xml = encode_header(&store, 1, None).unwrap();
+        assert!(xml.contains(r#"<hh:bullets itemCnt="1">"#));
+        assert!(xml.contains(r#"char="""#));
+        assert!(xml.contains(r#"useImage="0""#));
+        assert!(xml.contains(r#"<hh:paraHead level="0""#));
+
+        let decoded = crate::decoder::header::parse_header(&xml).unwrap().style_store;
+        assert_eq!(decoded.bullet_count(), 1);
+        let bullet = decoded.iter_bullets().next().unwrap();
+        assert_eq!(bullet.id, 1);
+        assert_eq!(bullet.bullet_char, "");
+        assert!(!bullet.use_image);
+        assert_eq!(bullet.para_head.level, 1);
+    }
+
+    #[test]
+    fn test_list_text_is_xml_escaped_and_roundtrips() {
+        let mut store = HwpxStyleStore::new();
+        store.push_font(HwpxFont::new(0, "함초롬돋움", "HANGUL"));
+        store.push_char_shape(HwpxCharShape::default());
+        store.push_para_shape(HwpxParaShape::default());
+        store.push_border_fill(HwpxBorderFill::default_page_border());
+        store.push_border_fill(HwpxBorderFill::default_char_background());
+        store.push_border_fill(HwpxBorderFill::default_table_border());
+        store.push_numbering(NumberingDef {
+            id: 9,
+            start: 0,
+            levels: vec![hwpforge_core::ParaHead {
+                start: 1,
+                level: 1,
+                num_format: NumberFormatType::Digit,
+                text: r#"A&B<"C""#.into(),
+                checkable: false,
+            }],
+        });
+        store.push_bullet(hwpforge_core::BulletDef {
+            id: 1,
+            bullet_char: r#"<"&"#.into(),
+            checked_char: None,
+            use_image: false,
+            para_head: hwpforge_core::ParaHead {
+                start: 0,
+                level: 1,
+                num_format: NumberFormatType::Digit,
+                text: r#"X&Y<"Z""#.into(),
+                checkable: false,
+            },
+        });
+
+        let xml = encode_header(&store, 1, None).unwrap();
+        assert!(xml.contains(r#"char="&lt;&quot;&amp;""#));
+        assert!(xml.contains(r#"A&amp;B&lt;&quot;C&quot;"#));
+        assert!(xml.contains(r#"X&amp;Y&lt;&quot;Z&quot;"#));
+
+        let decoded = crate::decoder::header::parse_header(&xml).unwrap().style_store;
+        let numbering = decoded.iter_numberings().find(|numbering| numbering.id == 9).unwrap();
+        assert_eq!(numbering.levels[0].text, r#"A&B<"C""#);
+
+        let bullet = decoded.iter_bullets().next().unwrap();
+        assert_eq!(bullet.bullet_char, r#"<"&"#);
+        assert_eq!(bullet.para_head.text, r#"X&Y<"Z""#);
     }
 
     // ── 9. Empty store ──────────────────────────────────────────

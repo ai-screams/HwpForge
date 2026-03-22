@@ -1,17 +1,24 @@
 use super::*;
-use crate::decoder::header::parse_doc_info;
+use crate::decoder::header::{
+    parse_doc_info, DocInfoResult, Hwp5DocInfoBorderFillSlot, Hwp5DocInfoBulletSlot,
+    Hwp5DocInfoNumberingSlot,
+};
 use crate::decoder::package::PackageReader;
 use crate::schema::border_fill::{
     Hwp5BorderLineKind, Hwp5FillImageEffect, Hwp5FillImageMode, Hwp5FillPatternKind,
     Hwp5GradationType, Hwp5RawBorderFill, Hwp5RawBorderFillFill, Hwp5RawBorderLine,
     Hwp5RawColorFill, Hwp5RawGradationFill, Hwp5RawImageFill,
 };
+use crate::schema::header::{
+    Hwp5RawBulletDef, Hwp5RawCharShape, Hwp5RawFaceName, Hwp5RawIdMappings, Hwp5RawNumberingDef,
+    Hwp5RawNumberingParaHead, Hwp5RawParaShape, Hwp5RawStyle, Hwp5RawTabDef, Hwp5TabDefSlot,
+    HwpVersion,
+};
 use crate::style_store_convert::{
     bgr_colorref_to_color, hwp5_char_shape_to_hwpx, hwp5_para_shape_to_hwpx, hwp5_tab_def_to_hwpx,
 };
-use hwpforge_foundation::{Color, GradientType, ParaShapeIndex, TabAlign};
+use hwpforge_foundation::{Color, GradientType, HeadingType, ParaShapeIndex, TabAlign};
 use hwpforge_smithy_hwpx::style_store::HwpxFill;
-use std::path::PathBuf;
 
 fn border_fill_slot(id: u32, fill: Hwp5RawBorderFill) -> Hwp5DocInfoBorderFillSlot {
     Hwp5DocInfoBorderFillSlot { id, fill: Some(fill) }
@@ -25,8 +32,16 @@ fn invalid_tab_slot(raw_id: u32) -> Hwp5TabDefSlot {
     Hwp5TabDefSlot::invalid(raw_id)
 }
 
+fn numbering_slot(id: u32, numbering: Hwp5RawNumberingDef) -> Hwp5DocInfoNumberingSlot {
+    Hwp5DocInfoNumberingSlot { id, numbering: Some(numbering) }
+}
+
+fn bullet_slot(id: u32, bullet: Hwp5RawBulletDef) -> Hwp5DocInfoBulletSlot {
+    Hwp5DocInfoBulletSlot { id, bullet: Some(bullet) }
+}
+
 fn fixture_doc_info(name: &str) -> DocInfoResult {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures").join(name);
+    let path = crate::test_support::workspace_fixture_path(name);
     assert!(path.exists(), "fixture must exist at {:?}", path);
     let bytes = std::fs::read(&path).expect("read hwp fixture");
     let package = PackageReader::open(&bytes).expect("open hwp package");
@@ -47,6 +62,82 @@ fn fixture_image_fill(name: &str) -> Hwp5RawImageFill {
 
 fn none_border_line() -> Hwp5RawBorderLine {
     Hwp5RawBorderLine { kind: Hwp5BorderLineKind::None, width: 0, color: 0x00000000 }
+}
+
+fn utf16le_string_bytes(text: &str) -> Vec<u8> {
+    let u16s: Vec<u16> = text.encode_utf16().collect();
+    let mut data = Vec::with_capacity(2 + u16s.len() * 2);
+    data.extend_from_slice(&(u16s.len() as u16).to_le_bytes());
+    for ch in u16s {
+        data.extend_from_slice(&ch.to_le_bytes());
+    }
+    data
+}
+
+fn numbering_attr_for_format(num_format: &str) -> u32 {
+    match num_format {
+        "DIGIT" => 0x0C,
+        "CIRCLED_DIGIT" => 0x2C,
+        "ROMAN_CAPITAL" => 0x4C,
+        "ROMAN_SMALL" => 0x6C,
+        "LATIN_CAPITAL" => 0x8C,
+        "LATIN_SMALL" => 0xAC,
+        "CIRCLED_LATIN_SMALL" => 0xEC,
+        "HANGUL_SYLLABLE" => 0x10C,
+        "CIRCLED_HANGUL_SYLLABLE" => 0x12C,
+        "HANGUL_JAMO" => 0x14C,
+        "HANJA_DIGIT" => 0x16C,
+        _ => 0x0C,
+    }
+}
+
+fn make_numbering_para_head_bytes(num_format: &str, text: &str) -> Vec<u8> {
+    let mut data = Vec::new();
+    data.extend_from_slice(&numbering_attr_for_format(num_format).to_le_bytes());
+    data.extend_from_slice(&0i16.to_le_bytes());
+    data.extend_from_slice(&50i16.to_le_bytes());
+    data.extend_from_slice(&0u32.to_le_bytes());
+    data.extend_from_slice(&utf16le_string_bytes(text));
+    data
+}
+
+fn make_numbering_def_bytes(version: HwpVersion, levels: &[(&str, &str)], start: u16) -> Vec<u8> {
+    let mut data = Vec::new();
+    for idx in 0..7 {
+        let (num_format, text) = levels.get(idx).copied().unwrap_or(("DIGIT", ""));
+        data.extend_from_slice(&make_numbering_para_head_bytes(num_format, text));
+    }
+    data.extend_from_slice(&start.to_le_bytes());
+    if version >= HwpVersion::new(5, 0, 2, 5) {
+        for _ in 0..7 {
+            data.extend_from_slice(&1u32.to_le_bytes());
+        }
+    }
+    if version >= HwpVersion::new(5, 1, 0, 0) {
+        for idx in 7..10 {
+            let (num_format, text) = levels.get(idx).copied().unwrap_or(("DIGIT", ""));
+            data.extend_from_slice(&make_numbering_para_head_bytes(num_format, text));
+        }
+        for _ in 7..10 {
+            data.extend_from_slice(&1u32.to_le_bytes());
+        }
+    }
+    data
+}
+
+fn make_bullet_def_bytes(use_image: bool) -> Vec<u8> {
+    let mut data = Vec::new();
+    data.extend_from_slice(&0u32.to_le_bytes()); // paragraph head properties
+    data.extend_from_slice(&0i16.to_le_bytes()); // width adjust
+    data.extend_from_slice(&0i16.to_le_bytes()); // text offset
+    data.extend_from_slice(&0u32.to_le_bytes()); // char shape id
+    data.extend_from_slice(&(0x25CFu16).to_le_bytes()); // bullet char: ●
+    data.extend_from_slice(&(if use_image { 1i32 } else { 0i32 }).to_le_bytes());
+    if use_image {
+        data.extend_from_slice(&0u32.to_le_bytes()); // skipped image metadata
+    }
+    data.extend_from_slice(&(0x2611u16).to_le_bytes()); // check bullet char: ☑
+    data
 }
 
 impl Hwp5RawCharShape {
@@ -103,6 +194,8 @@ fn empty_doc_info() -> DocInfoResult {
         fonts: vec![],
         char_shapes: vec![],
         para_shapes: vec![],
+        numberings: vec![],
+        bullets: vec![],
         tab_defs: vec![],
         styles: vec![],
         border_fills: vec![],
@@ -144,6 +237,8 @@ fn from_doc_info_with_data() {
         ],
         char_shapes: vec![Hwp5RawCharShape::default_for_test()],
         para_shapes: vec![Hwp5RawParaShape::default_for_test()],
+        numberings: vec![],
+        bullets: vec![],
         tab_defs: vec![],
         styles: vec![],
         border_fills: vec![border_fill_slot(
@@ -201,6 +296,8 @@ fn to_hwpx_style_store_empty_fonts_returns_preset() {
         fonts: vec![],
         char_shapes: vec![],
         para_shapes: vec![],
+        numberings: vec![],
+        bullets: vec![],
         tab_defs: vec![],
         styles: vec![],
         border_fills: vec![],
@@ -245,6 +342,8 @@ fn to_hwpx_style_store_preserves_hwp5_indices() {
         }],
         char_shapes: vec![Hwp5RawCharShape::default_for_test()],
         para_shapes: vec![Hwp5RawParaShape::default_for_test()],
+        numberings: vec![],
+        bullets: vec![],
         tab_defs: vec![],
         styles: vec![Hwp5RawStyle {
             name: "본문".into(),
@@ -264,6 +363,67 @@ fn to_hwpx_style_store_preserves_hwp5_indices() {
     assert_eq!(hwpx_store.para_shape_count(), 1);
     assert_eq!(hwpx_store.style_count(), 1);
     assert_eq!(hwpx_store.style(0).unwrap().name, "본문");
+}
+
+#[test]
+fn to_hwpx_style_store_projects_numberings_and_warns_on_bullets() {
+    let numbering = Hwp5RawNumberingDef {
+        start: 1,
+        paragraph_heads: vec![Hwp5RawNumberingParaHead {
+            start_number: 1,
+            level: 0,
+            num_format: "DIGIT".into(),
+            text: String::new(),
+            checkable: false,
+        }],
+    };
+
+    let store = Hwp5StyleStore {
+        id_mappings: Some(Hwp5RawIdMappings {
+            bin_data_count: 0,
+            hangul_font_count: 0,
+            english_font_count: 0,
+            hanja_font_count: 0,
+            japanese_font_count: 0,
+            other_font_count: 0,
+            symbol_font_count: 0,
+            user_font_count: 0,
+            border_fill_count: 0,
+            char_shape_count: 0,
+            tab_def_count: 0,
+            numbering_def_count: 1,
+            bullet_def_count: 1,
+            para_shape_count: 0,
+            style_count: 0,
+            memo_shape_count: None,
+            change_tracking_count: None,
+            change_tracking_author_count: None,
+        }),
+        fonts: vec![],
+        char_shapes: vec![],
+        para_shapes: vec![],
+        numberings: vec![numbering_slot(1, numbering)],
+        bullets: vec![bullet_slot(
+            1,
+            Hwp5RawBulletDef::parse(&make_bullet_def_bytes(false)).unwrap(),
+        )],
+        tab_defs: vec![],
+        styles: vec![],
+        border_fills: vec![],
+    };
+
+    let (hwpx_store, warnings) = store.to_hwpx_style_store_with_warnings();
+    assert_eq!(hwpx_store.numbering_count(), 1);
+    assert_eq!(hwpx_store.bullet_count(), 1);
+    let bullet = hwpx_store.iter_bullets().next().unwrap();
+    assert_eq!(bullet.id, 1);
+    assert_eq!(bullet.bullet_char, "●");
+    assert_eq!(bullet.checked_char.as_deref(), Some("☑"));
+    assert!(!bullet.use_image);
+    assert!(!warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, .. } if *subject == "bullet.projection"
+    )));
 }
 
 #[test]
@@ -320,6 +480,8 @@ fn to_hwpx_style_store_uses_id_mappings_font_buckets() {
         ],
         char_shapes: vec![raw],
         para_shapes: vec![],
+        numberings: vec![],
+        bullets: vec![],
         tab_defs: vec![],
         styles: vec![],
         border_fills: vec![],
@@ -391,6 +553,77 @@ fn hwp5_para_shape_alignment_center() {
 }
 
 #[test]
+fn hwp5_para_shape_heading_bits_map_to_kind_level_and_ref() {
+    let mut raw = Hwp5RawParaShape::default_for_test();
+    raw.property1 = (1 << 23) | (5 << 25);
+    raw.numbering_bullet_id = 7;
+    assert_eq!(raw.heading_kind(), HeadingType::Outline);
+    assert_eq!(raw.heading_level(), 4);
+    assert_eq!(raw.list_ref_id(), 7);
+    let hwpx = hwp5_para_shape_to_hwpx(&raw);
+    assert_eq!(hwpx.heading_type, HeadingType::Outline);
+    assert_eq!(hwpx.heading_id_ref, 0);
+    assert_eq!(hwpx.heading_level, 4);
+
+    raw.property1 = (2 << 23) | (3 << 25);
+    assert_eq!(raw.heading_kind(), HeadingType::Number);
+    assert_eq!(raw.heading_level(), 2);
+
+    raw.property1 = (3 << 23) | (1 << 25);
+    assert_eq!(raw.heading_kind(), HeadingType::Bullet);
+    assert_eq!(raw.heading_level(), 0);
+
+    raw.property1 = 0;
+    assert_eq!(raw.heading_kind(), HeadingType::None);
+    assert_eq!(raw.heading_level(), 0);
+
+    let mut raw = Hwp5RawParaShape::default_for_test();
+    raw.property1 = (3 << 23) | (2 << 25);
+    raw.numbering_bullet_id = 4;
+    let hwpx = hwp5_para_shape_to_hwpx(&raw);
+    assert_eq!(hwpx.heading_type, HeadingType::Bullet);
+    assert_eq!(hwpx.heading_id_ref, 4);
+    assert_eq!(hwpx.heading_level, 1);
+}
+
+#[test]
+fn hwp5_numbering_def_parse_preserves_core_list_semantics() {
+    let data = make_numbering_def_bytes(
+        HwpVersion::new(5, 1, 0, 0),
+        &[
+            ("DIGIT", "^1."),
+            ("HANGUL_SYLLABLE", "^2."),
+            ("DIGIT", "^3)"),
+            ("DIGIT", "(^4)"),
+            ("DIGIT", "(^5)"),
+            ("DIGIT", "^6"),
+            ("DIGIT", ""),
+            ("CIRCLED_DIGIT", "^8"),
+            ("HANGUL_JAMO", ""),
+            ("ROMAN_SMALL", ""),
+        ],
+        2,
+    );
+    let numbering = Hwp5RawNumberingDef::parse(&data, &HwpVersion::new(5, 1, 0, 0)).unwrap();
+    assert_eq!(numbering.start, 2);
+    assert_eq!(numbering.paragraph_heads.len(), 10);
+    assert_eq!(numbering.paragraph_heads[0].level, 0);
+    assert_eq!(numbering.paragraph_heads[0].start_number, 1);
+    assert_eq!(numbering.paragraph_heads[1].num_format, "HANGUL_SYLLABLE");
+    assert_eq!(numbering.paragraph_heads[0].text, "^1.");
+    assert_eq!(numbering.paragraph_heads[7].num_format, "CIRCLED_DIGIT");
+    assert_eq!(numbering.paragraph_heads[7].text, "^8");
+    let core = numbering.to_core_numbering_def(1);
+    assert_eq!(core.id, 1);
+    assert_eq!(core.start, 2);
+    assert_eq!(core.levels.len(), 10);
+    assert_eq!(core.levels[0].level, 1);
+    assert_eq!(core.levels[0].start, 1);
+    assert_eq!(core.levels[0].text, "^1.");
+    assert_eq!(core.levels[1].num_format, hwpforge_foundation::NumberFormatType::HangulSyllable);
+}
+
+#[test]
 fn hwp5_para_shape_keeps_builtin_tab_ids() {
     for tab_def_id in 0..=2 {
         let mut raw = Hwp5RawParaShape::default_for_test();
@@ -437,6 +670,8 @@ fn to_hwpx_style_store_carries_tab_defs() {
         fonts: vec![],
         char_shapes: vec![],
         para_shapes: vec![],
+        numberings: vec![],
+        bullets: vec![],
         tab_defs: vec![parsed_tab_slot(
             0,
             Hwp5RawTabDef {
@@ -488,6 +723,8 @@ fn to_hwpx_style_store_warns_when_id_mappings_tab_count_disagrees() {
         fonts: vec![],
         char_shapes: vec![],
         para_shapes: vec![],
+        numberings: vec![],
+        bullets: vec![],
         tab_defs: vec![parsed_tab_slot(0, Hwp5RawTabDef { property: 0, tab_stops: vec![] })],
         styles: vec![],
         border_fills: vec![],
@@ -510,6 +747,8 @@ fn to_hwpx_style_store_warns_on_unknown_tab_codes() {
         fonts: vec![],
         char_shapes: vec![],
         para_shapes: vec![],
+        numberings: vec![],
+        bullets: vec![],
         tab_defs: vec![parsed_tab_slot(
             0,
             Hwp5RawTabDef {
@@ -542,7 +781,7 @@ fn to_hwpx_style_store_warns_on_unknown_tab_codes() {
 
 #[test]
 fn fixture_sample_tab_hwp_has_expected_raw_custom_tab_def() {
-    let doc_info = fixture_doc_info("user_samples/sample-tab.hwp");
+    let doc_info = fixture_doc_info("user_samples/tabs/sample-tab.hwp");
     assert_eq!(doc_info.tab_defs.len(), 4);
 
     let custom = doc_info.tab_defs[3].tab_def.as_ref().expect("custom slot should parse");
@@ -551,6 +790,22 @@ fn fixture_sample_tab_hwp_has_expected_raw_custom_tab_def() {
     assert_eq!(custom.tab_stops[0].position, 30000);
     assert_eq!(custom.tab_stops[0].tab_type, 0);
     assert_eq!(custom.tab_stops[0].fill_type, 3);
+}
+
+#[test]
+fn fixture_mixed_lists_preserve_numbering_and_bullet_slots() {
+    let doc_info = fixture_doc_info("user_samples/lists/sample-mixed-lists-with-outline.hwp");
+    assert!(!doc_info.numberings.is_empty(), "fixture must expose numbering slots");
+    assert!(!doc_info.bullets.is_empty(), "fixture must expose bullet slots");
+
+    let store = Hwp5StyleStore::from_doc_info(&doc_info);
+    let (hwpx_store, warnings) = store.to_hwpx_style_store_with_warnings();
+    assert!(hwpx_store.numbering_count() >= 1);
+    assert!(hwpx_store.bullet_count() >= 1);
+    assert!(!warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, .. } if *subject == "bullet.projection"
+    )));
 }
 
 #[test]
@@ -563,6 +818,8 @@ fn to_hwpx_style_store_warns_when_para_shape_references_missing_custom_tab_def()
         fonts: vec![],
         char_shapes: vec![],
         para_shapes: vec![para],
+        numberings: vec![],
+        bullets: vec![],
         tab_defs: vec![parsed_tab_slot(0, Hwp5RawTabDef { property: 0, tab_stops: vec![] })],
         styles: vec![],
         border_fills: vec![],
@@ -588,6 +845,8 @@ fn to_hwpx_style_store_emits_placeholder_for_invalid_tab_slot() {
         fonts: vec![],
         char_shapes: vec![],
         para_shapes: vec![para],
+        numberings: vec![],
+        bullets: vec![],
         tab_defs: vec![invalid_tab_slot(3)],
         styles: vec![],
         border_fills: vec![],
@@ -614,6 +873,8 @@ fn to_hwpx_style_store_warns_and_clamps_out_of_range_tab_position() {
         fonts: vec![],
         char_shapes: vec![],
         para_shapes: vec![],
+        numberings: vec![],
+        bullets: vec![],
         tab_defs: vec![parsed_tab_slot(
             3,
             Hwp5RawTabDef {
@@ -650,6 +911,8 @@ fn to_hwpx_style_store_preserves_builtin_para_shape_tab_refs_without_warning() {
         fonts: vec![],
         char_shapes: vec![],
         para_shapes: vec![para],
+        numberings: vec![],
+        bullets: vec![],
         tab_defs: vec![],
         styles: vec![],
         border_fills: vec![],
@@ -670,6 +933,8 @@ fn to_hwpx_style_store_materializes_custom_border_fills() {
         fonts: vec![],
         char_shapes: vec![],
         para_shapes: vec![],
+        numberings: vec![],
+        bullets: vec![],
         tab_defs: vec![],
         styles: vec![],
         border_fills: vec![
@@ -784,6 +1049,8 @@ fn to_hwpx_style_store_preserves_border_fill_ids_when_middle_slot_is_missing() {
         fonts: vec![],
         char_shapes: vec![],
         para_shapes: vec![],
+        numberings: vec![],
+        bullets: vec![],
         tab_defs: vec![],
         styles: vec![],
         border_fills: vec![
@@ -884,6 +1151,8 @@ fn to_hwpx_style_store_materializes_pattern_fill_hatch_style() {
         fonts: vec![],
         char_shapes: vec![],
         para_shapes: vec![],
+        numberings: vec![],
+        bullets: vec![],
         tab_defs: vec![],
         styles: vec![],
         border_fills: vec![border_fill_slot(
@@ -943,6 +1212,8 @@ fn to_hwpx_style_store_materializes_gradient_fill() {
         fonts: vec![],
         char_shapes: vec![],
         para_shapes: vec![],
+        numberings: vec![],
+        bullets: vec![],
         tab_defs: vec![],
         styles: vec![],
         border_fills: vec![border_fill_slot(
@@ -997,6 +1268,8 @@ fn to_hwpx_style_store_materializes_image_fill() {
         fonts: vec![],
         char_shapes: vec![],
         para_shapes: vec![],
+        numberings: vec![],
+        bullets: vec![],
         tab_defs: vec![],
         styles: vec![],
         border_fills: vec![border_fill_slot(
@@ -1088,6 +1361,8 @@ fn to_hwpx_style_store_unsupported_image_fill_mode_emits_warning_and_drops_fill(
         fonts: vec![],
         char_shapes: vec![],
         para_shapes: vec![],
+        numberings: vec![],
+        bullets: vec![],
         tab_defs: vec![],
         styles: vec![],
         border_fills: vec![border_fill_slot(

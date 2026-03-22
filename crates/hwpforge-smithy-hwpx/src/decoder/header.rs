@@ -11,6 +11,7 @@ use hwpforge_foundation::{
 use quick_xml::de::from_str;
 
 use crate::error::{HwpxError, HwpxResult};
+use crate::list_bridge::bullet_def_from_hwpx;
 use crate::schema::header::{
     HxBorderFill, HxCharPr, HxHead, HxNumbering, HxParaPr, HxRefList, HxStyle, HxTabItem, HxTabPr,
 };
@@ -75,6 +76,7 @@ fn populate_store_from_ref_list(store: &mut HwpxStyleStore, ref_list: &HxRefList
     load_para_shapes(store, ref_list);
     load_tab_properties(store, ref_list);
     load_numberings(store, ref_list);
+    load_bullets(store, ref_list);
     load_styles(store, ref_list);
 }
 
@@ -136,6 +138,14 @@ fn load_numberings(store: &mut HwpxStyleStore, ref_list: &HxRefList) {
     }
 }
 
+fn load_bullets(store: &mut HwpxStyleStore, ref_list: &HxRefList) {
+    if let Some(bullets) = &ref_list.bullets {
+        for bullet in &bullets.items {
+            store.push_bullet(bullet_def_from_hwpx(bullet));
+        }
+    }
+}
+
 fn load_styles(store: &mut HwpxStyleStore, ref_list: &HxRefList) {
     if let Some(styles) = &ref_list.styles {
         for style in &styles.items {
@@ -172,6 +182,7 @@ pub(crate) fn parse_number_format(s: &str) -> hwpforge_foundation::NumberFormatT
         "ROMAN_SMALL" => NumberFormatType::RomanSmall,
         "LATIN_CAPITAL" => NumberFormatType::LatinCapital,
         "LATIN_SMALL" => NumberFormatType::LatinSmall,
+        "CIRCLED_LATIN_SMALL" => NumberFormatType::CircledLatinSmall,
         "HANGUL_SYLLABLE" => NumberFormatType::HangulSyllable,
         "HANGUL_JAMO" => NumberFormatType::HangulJamo,
         "HANJA_DIGIT" => NumberFormatType::HanjaDigit,
@@ -447,9 +458,10 @@ fn convert_para_pr(pp: &HxParaPr) -> HwpxParaShape {
     let heading_type = pp
         .heading
         .as_ref()
-        .map_or(HeadingType::None, |h| HeadingType::from_hwpx_str(&h.heading_type));
-    let heading_id_ref = pp.heading.as_ref().map_or(0, |h| h.id_ref);
-    let heading_level = pp.heading.as_ref().map_or(0, |h| h.level);
+        .map_or(HeadingType::None, |heading| HeadingType::from_hwpx_str(&heading.heading_type));
+    let heading_id_ref = pp.heading.as_ref().map_or(0, |heading| heading.id_ref);
+    let heading_level = pp.heading.as_ref().map_or(0, |heading| heading.level);
+    let checked = pp.checked != 0;
     let tab_pr_id_ref = pp.tab_pr_id_ref;
     let condense = pp.condense;
 
@@ -467,6 +479,7 @@ fn convert_para_pr(pp: &HxParaPr) -> HwpxParaShape {
         heading_type,
         heading_id_ref,
         heading_level,
+        checked,
         tab_pr_id_ref,
         condense,
         ..Default::default()
@@ -1121,6 +1134,48 @@ mod tests {
         let cs = store.char_shape(hwpforge_foundation::CharShapeIndex::new(0)).unwrap();
         assert_eq!(cs.font_ref.hangul.get(), 0);
         assert_eq!(cs.font_ref.latin.get(), 0);
+    }
+
+    #[test]
+    fn parse_header_loads_bullets() {
+        let xml = r##"<head version="1.4" secCnt="1">
+            <refList>
+                <numberings itemCnt="1">
+                    <numbering id="1" start="0">
+                        <paraHead start="1" level="1" align="LEFT" useInstWidth="1" autoIndent="1"
+                            widthAdjust="0" textOffsetType="PERCENT" textOffset="50"
+                            numFormat="DIGIT" charPrIDRef="4294967295" checkable="0">^1.</paraHead>
+                    </numbering>
+                </numberings>
+                <bullets itemCnt="1">
+                    <bullet id="1" char="" useImage="1">
+                        <paraHead level="0" align="LEFT" useInstWidth="0" autoIndent="1"
+                            widthAdjust="0" textOffsetType="PERCENT" textOffset="50"
+                            numFormat="DIGIT" charPrIDRef="4294967295" checkable="0"/>
+                    </bullet>
+                </bullets>
+                <paraProperties itemCnt="1">
+                    <paraPr id="0" tabPrIDRef="0" condense="0" fontLineHeight="0" snapToGrid="1"
+                        suppressLineNumbers="0" checked="0">
+                        <align horizontal="JUSTIFY" vertical="BASELINE"/>
+                        <heading type="BULLET" idRef="1" level="0"/>
+                        <breakSetting breakLatinWord="KEEP_WORD" breakNonLatinWord="KEEP_WORD"
+                            widowOrphan="0" keepWithNext="0" keepLines="0" pageBreakBefore="0"
+                            lineWrap="BREAK"/>
+                    </paraPr>
+                </paraProperties>
+            </refList>
+        </head>"##;
+
+        let store = parse_header(xml).unwrap().style_store;
+        assert_eq!(store.numbering_count(), 1);
+        assert_eq!(store.bullet_count(), 1);
+
+        let bullet = store.iter_bullets().next().unwrap();
+        assert_eq!(bullet.id, 1);
+        assert_eq!(bullet.bullet_char, "");
+        assert!(bullet.use_image);
+        assert_eq!(bullet.para_head.level, 1);
     }
 
     // ── Styles ───────────────────────────────────────────────────

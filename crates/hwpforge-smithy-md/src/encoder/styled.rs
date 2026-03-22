@@ -9,7 +9,9 @@ use std::collections::HashMap;
 use hwpforge_core::{Control, Document, Paragraph, RunContent, StyleLookup, Table, Validated};
 use hwpforge_foundation::UnderlineType;
 
+use super::list_format::{format_list_continuation, format_list_item};
 use crate::eqn::eqn_to_latex;
+use crate::internal_styles::parse_list_continuation_style_name;
 
 /// Output of style-aware markdown encoding.
 ///
@@ -24,6 +26,11 @@ pub struct MdOutput {
 }
 
 const SECTION_MARKER_COMMENT: &str = "<!-- hwpforge:section -->";
+
+#[derive(Debug, Clone, Copy)]
+struct ListContinuationContext {
+    level: u8,
+}
 
 // ---------------------------------------------------------------------------
 // Footnote/Endnote collector
@@ -83,6 +90,7 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
         }
 
         let mut code_block_lines: Vec<String> = Vec::new();
+        let mut continuation: Option<ListContinuationContext> = None;
 
         for paragraph in &section.paragraphs {
             // Page break
@@ -93,6 +101,7 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
                     code_block_lines.clear();
                 }
                 blocks.push("---".to_string());
+                continuation = None;
             }
 
             // Code block detection: all text runs with code font
@@ -109,6 +118,7 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
                     })
                     .collect::<String>();
                 code_block_lines.push(text);
+                continuation = None;
                 continue;
             }
 
@@ -118,14 +128,28 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
                 code_block_lines.clear();
             }
 
+            let continuation_level = continuation
+                .and_then(|ctx| continuation_level_for_paragraph(paragraph, styles, ctx));
             let (markdown, para_images) =
                 encode_paragraph_styled(paragraph, styles, &mut footnotes);
             if !markdown.trim().is_empty() {
-                // Strip leading whitespace: HWPX indentation (tabs/fwSpace)
-                // becomes raw spaces which trigger CommonMark code blocks at 4+.
-                blocks.push(markdown.trim_start().to_string());
+                if let Some(level) = continuation_level {
+                    let indented = format_list_continuation(&markdown, level);
+                    if let Some(last) = blocks.last_mut() {
+                        last.push_str("\n\n");
+                        last.push_str(&indented);
+                    } else {
+                        blocks.push(indented);
+                    }
+                } else {
+                    blocks.push(markdown);
+                }
             }
             images.extend(para_images);
+
+            if continuation_level.is_none() {
+                continuation = list_context_for_paragraph(paragraph, styles);
+            }
         }
 
         // Flush remaining code block at section end
@@ -178,43 +202,76 @@ fn encode_paragraph_styled(
     let (text, para_images) = paragraph_text_styled(paragraph, styles, footnotes);
     images.extend(para_images);
 
-    // Check for heading via style_id → style_heading_level.
-    if let Some(style_id) = paragraph.style_id {
-        if let Some(level) = styles.style_heading_level(style_id) {
-            let clamped = level.clamp(1, 6);
-            // Headings must be single-line: collapse lineBreak-originated newlines.
-            let heading_text = text.trim().replace('\n', " ");
-            if heading_text.is_empty() {
-                return (String::new(), images);
-            }
-            return (format!("{} {}", "#".repeat(clamped as usize), heading_text), images);
+    // Outline semantics on the paragraph shape are the truth source for headings.
+    if let Some(level) = styles.para_heading_level(paragraph.para_shape_id) {
+        let clamped = level.clamp(1, 6);
+        // Headings must be single-line: collapse lineBreak-originated newlines.
+        let heading_text = text.trim().replace('\n', " ");
+        if heading_text.is_empty() {
+            return (String::new(), images);
+        }
+        return (format!("{} {}", "#".repeat(clamped as usize), heading_text), images);
+    }
+
+    // Real paragraph list semantics take priority over style-name heuristics.
+    let trimmed = text.trim();
+    if !trimmed.is_empty() {
+        if let Some(list_type) = styles.para_list_type(paragraph.para_shape_id) {
+            let level = styles.para_list_level(paragraph.para_shape_id).unwrap_or(0);
+            let checked = styles.para_checked_state(paragraph.para_shape_id);
+            return (format_list_item(trimmed, list_type, level, checked), images);
         }
     }
 
-    // Check for list via paraPr heading property (takes priority over style name).
+    if let Some(level) =
+        paragraph.style_id.and_then(|style_id| styles.style_heading_level(style_id))
     {
-        let trimmed = text.trim();
-        if !trimmed.is_empty() {
-            if let Some(lt) = styles.para_list_type(paragraph.para_shape_id) {
-                if lt == "NUMBER" {
-                    return (format!("1. {trimmed}"), images);
-                } else {
-                    return (format!("- {trimmed}"), images);
-                }
-            }
+        let clamped = level.clamp(1, 6);
+        let heading_text = trimmed.replace('\n', " ");
+        if heading_text.is_empty() {
+            return (String::new(), images);
         }
+        return (format!("{} {}", "#".repeat(clamped as usize), heading_text), images);
     }
 
     if let Some(style_id) = paragraph.style_id {
         // Check for list style by style name (fallback).
         if let Some(style_name) = styles.style_name(style_id) {
-            if let Some(list_md) = format_as_list(text.trim(), style_name) {
+            if let Some(list_md) = format_as_list(trimmed, style_name) {
                 return (list_md, images);
             }
         }
     }
 
-    (text, images)
+    (text.trim_start().to_string(), images)
+}
+
+fn list_context_for_paragraph(
+    paragraph: &Paragraph,
+    styles: &dyn StyleLookup,
+) -> Option<ListContinuationContext> {
+    let para_shape_id = paragraph.para_shape_id;
+    let _list_type = styles.para_list_type(para_shape_id)?;
+    let level = styles.para_list_level(para_shape_id).unwrap_or(0);
+    Some(ListContinuationContext { level })
+}
+
+fn continuation_level_for_paragraph(
+    paragraph: &Paragraph,
+    styles: &dyn StyleLookup,
+    context: ListContinuationContext,
+) -> Option<u8> {
+    let para_shape_id = paragraph.para_shape_id;
+    if styles.para_heading_level(para_shape_id).is_some()
+        || styles.para_list_type(para_shape_id).is_some()
+    {
+        return None;
+    }
+
+    styles
+        .para_style_name(para_shape_id)
+        .and_then(parse_list_continuation_style_name)
+        .filter(|level| *level == context.level)
 }
 
 /// Extracts text from a paragraph with inline formatting applied.
@@ -901,7 +958,13 @@ mod tests {
         bold_ids: Vec<usize>,
         italic_ids: Vec<usize>,
         strikeout_ids: Vec<usize>,
+        list_para_types: HashMap<usize, &'static str>,
+        list_para_levels: HashMap<usize, u8>,
+        list_para_checked: HashMap<usize, bool>,
+        heading_paras: HashMap<usize, u8>,
         heading_styles: HashMap<usize, u8>,
+        style_names: HashMap<usize, String>,
+        para_style_names: HashMap<usize, String>,
         image_data: HashMap<String, Vec<u8>>,
     }
 
@@ -911,7 +974,13 @@ mod tests {
                 bold_ids: Vec::new(),
                 italic_ids: Vec::new(),
                 strikeout_ids: Vec::new(),
+                list_para_types: HashMap::new(),
+                list_para_levels: HashMap::new(),
+                list_para_checked: HashMap::new(),
+                heading_paras: HashMap::new(),
                 heading_styles: HashMap::new(),
+                style_names: HashMap::new(),
+                para_style_names: HashMap::new(),
                 image_data: HashMap::new(),
             }
         }
@@ -928,6 +997,30 @@ mod tests {
 
         fn char_strikeout(&self, id: CharShapeIndex) -> Option<bool> {
             Some(self.strikeout_ids.contains(&id.get()))
+        }
+
+        fn para_heading_level(&self, id: ParaShapeIndex) -> Option<u8> {
+            self.heading_paras.get(&id.get()).copied()
+        }
+
+        fn para_list_type(&self, id: ParaShapeIndex) -> Option<&str> {
+            self.list_para_types.get(&id.get()).copied()
+        }
+
+        fn para_list_level(&self, id: ParaShapeIndex) -> Option<u8> {
+            self.list_para_levels.get(&id.get()).copied()
+        }
+
+        fn para_checked_state(&self, id: ParaShapeIndex) -> Option<bool> {
+            self.list_para_checked.get(&id.get()).copied()
+        }
+
+        fn para_style_name(&self, id: ParaShapeIndex) -> Option<&str> {
+            self.para_style_names.get(&id.get()).map(String::as_str)
+        }
+
+        fn style_name(&self, id: StyleIndex) -> Option<&str> {
+            self.style_names.get(&id.get()).map(String::as_str)
         }
 
         fn style_heading_level(&self, id: StyleIndex) -> Option<u8> {
@@ -1164,6 +1257,35 @@ mod tests {
     }
 
     #[test]
+    fn para_shape_heading_without_style_id_emits_heading() {
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::text("Outline only", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(7),
+        )]);
+        let mut styles = MockStyles::new();
+        styles.heading_paras.insert(7, 3);
+
+        let output = encode_styled(&doc, &styles);
+        assert_eq!(output.markdown, "### Outline only");
+    }
+
+    #[test]
+    fn para_shape_heading_takes_priority_over_style_fallback() {
+        let para = Paragraph::with_runs(
+            vec![Run::text("Priority", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(7),
+        )
+        .with_style(StyleIndex::new(2));
+        let doc = validated_document(vec![para]);
+        let mut styles = MockStyles::new();
+        styles.heading_paras.insert(7, 4);
+        styles.heading_styles.insert(2, 1);
+
+        let output = encode_styled(&doc, &styles);
+        assert_eq!(output.markdown, "#### Priority");
+    }
+
+    #[test]
     fn heading_with_bold_text() {
         let para = Paragraph::with_runs(
             vec![Run::text("bold heading", CharShapeIndex::new(1))],
@@ -1192,6 +1314,116 @@ mod tests {
 
         let output = encode_styled(&doc, &styles);
         assert_eq!(output.markdown, "###### Deep");
+    }
+
+    #[test]
+    fn para_shape_list_takes_priority_over_style_heading_fallback() {
+        let para = Paragraph::with_runs(
+            vec![Run::text("Still a list", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(9),
+        )
+        .with_style(StyleIndex::new(2));
+        let doc = validated_document(vec![para]);
+        let mut styles = MockStyles::new();
+        styles.list_para_types.insert(9, "NUMBER");
+        styles.list_para_levels.insert(9, 0);
+        styles.heading_styles.insert(2, 2);
+
+        let output = encode_styled(&doc, &styles);
+        assert_eq!(output.markdown, "1. Still a list");
+    }
+
+    #[test]
+    fn para_shape_list_preserves_nested_depth() {
+        let doc = validated_document(vec![
+            Paragraph::with_runs(
+                vec![Run::text("Top", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(1),
+            ),
+            Paragraph::with_runs(
+                vec![Run::text("Nested", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(2),
+            ),
+        ]);
+        let mut styles = MockStyles::new();
+        styles.list_para_types.insert(1, "BULLET");
+        styles.list_para_levels.insert(1, 0);
+        styles.list_para_types.insert(2, "BULLET");
+        styles.list_para_levels.insert(2, 2);
+
+        let output = encode_styled(&doc, &styles);
+        assert_eq!(output.markdown, "- Top\n\n    - Nested");
+    }
+
+    #[test]
+    fn para_shape_checkable_bullet_formats_as_task_list() {
+        let doc = validated_document(vec![
+            Paragraph::with_runs(
+                vec![Run::text("Todo", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(1),
+            ),
+            Paragraph::with_runs(
+                vec![Run::text("Done", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(2),
+            ),
+        ]);
+        let mut styles = MockStyles::new();
+        styles.list_para_types.insert(1, "BULLET");
+        styles.list_para_levels.insert(1, 0);
+        styles.list_para_checked.insert(1, false);
+        styles.list_para_types.insert(2, "BULLET");
+        styles.list_para_levels.insert(2, 1);
+        styles.list_para_checked.insert(2, true);
+
+        let output = encode_styled(&doc, &styles);
+        assert_eq!(output.markdown, "- [ ] Todo\n\n  - [x] Done");
+    }
+
+    #[test]
+    fn continuation_paragraph_after_checkable_item_stays_in_same_markdown_item() {
+        let doc = validated_document(vec![
+            Paragraph::with_runs(
+                vec![Run::text("first paragraph of the same task item", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(1),
+            ),
+            Paragraph::with_runs(
+                vec![Run::text("second paragraph of the same task item", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(2),
+            ),
+            Paragraph::with_runs(
+                vec![Run::text("next real task item", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(3),
+            ),
+        ]);
+        let mut styles = MockStyles::new();
+        styles.list_para_types.insert(1, "BULLET");
+        styles.list_para_levels.insert(1, 0);
+        styles.list_para_checked.insert(1, false);
+        styles.para_style_names.insert(2, "__hwpforge_md_list_continuation_level_0".to_string());
+        styles.list_para_types.insert(3, "BULLET");
+        styles.list_para_levels.insert(3, 0);
+        styles.list_para_checked.insert(3, true);
+
+        let output = encode_styled(&doc, &styles);
+        assert_eq!(
+            output.markdown,
+            "- [ ] first paragraph of the same task item\n\n  second paragraph of the same task item\n\n- [x] next real task item"
+        );
+    }
+
+    #[test]
+    fn numbered_list_ignores_checked_state() {
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::text("Numbered", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(3),
+        )]);
+        let mut styles = MockStyles::new();
+        styles.list_para_types.insert(3, "NUMBER");
+        styles.list_para_levels.insert(3, 0);
+        styles.list_para_checked.insert(3, true);
+
+        let output = encode_styled(&doc, &styles);
+        assert_eq!(output.markdown, "1. Numbered");
     }
 
     // -----------------------------------------------------------------------

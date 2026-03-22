@@ -30,7 +30,7 @@
 ///
 /// `char_pr_group` and `para_pr_group` are indices into the default charPr
 /// and paraPr arrays injected at the front of the store by `from_registry_with()`.
-/// Extracted from golden fixture `tests/fixtures/textbox.hwpx` `Contents/header.xml`.
+/// Extracted from golden fixture `tests/fixtures/shapes/textbox.hwpx` `Contents/header.xml`.
 ///
 /// Modern (22 styles) mapping:
 ///
@@ -217,7 +217,7 @@ const CLASSIC_STYLES: [DefaultStyleEntry; 18] = [
 /// all subsequent IDs up by 3 compared to Classic. 쪽 번호 moves from
 /// Classic ID 9 to Modern ID 12.
 ///
-/// Verified against golden fixture `tests/fixtures/textbox.hwpx`.
+/// Verified against golden fixture `tests/fixtures/shapes/textbox.hwpx`.
 const MODERN_STYLES: [DefaultStyleEntry; 22] = [
     entry!("바탕글", "Normal", "PARA", 0, 0), //  0  charPr=0 paraPr=0
     entry!("본문", "Body", "PARA", 0, 1),     //  1  charPr=0 paraPr=1

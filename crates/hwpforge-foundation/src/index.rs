@@ -200,6 +200,8 @@ pub struct BorderFillMarker;
 pub struct StyleMarker;
 /// Phantom marker for numbering definition indices.
 pub struct NumberingMarker;
+/// Phantom marker for bullet definition indices.
+pub struct BulletMarker;
 /// Phantom marker for tab property indices.
 pub struct TabMarker;
 
@@ -215,6 +217,8 @@ pub type BorderFillIndex = Index<BorderFillMarker>;
 pub type StyleIndex = Index<StyleMarker>;
 /// Index into the numbering definition list.
 pub type NumberingIndex = Index<NumberingMarker>;
+/// Index into the bullet definition list.
+pub type BulletIndex = Index<BulletMarker>;
 /// Index into the tab properties list.
 pub type TabIndex = Index<TabMarker>;
 

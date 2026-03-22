@@ -46,57 +46,35 @@ impl<'a> HwpxStyleLookup<'a> {
     }
 }
 
+macro_rules! delegate_style_lookup_to_store {
+    ($(fn $name:ident(&self, $arg:ident : $arg_ty:ty) -> $ret:ty;)+) => {
+        $(
+            fn $name(&self, $arg: $arg_ty) -> $ret {
+                self.styles.$name($arg)
+            }
+        )+
+    };
+}
+
 impl StyleLookup for HwpxStyleLookup<'_> {
-    fn char_bold(&self, id: CharShapeIndex) -> Option<bool> {
-        self.styles.char_bold(id)
-    }
-
-    fn char_italic(&self, id: CharShapeIndex) -> Option<bool> {
-        self.styles.char_italic(id)
-    }
-
-    fn char_underline(&self, id: CharShapeIndex) -> Option<UnderlineType> {
-        self.styles.char_underline(id)
-    }
-
-    fn char_strikeout(&self, id: CharShapeIndex) -> Option<bool> {
-        self.styles.char_strikeout(id)
-    }
-
-    fn char_superscript(&self, id: CharShapeIndex) -> Option<bool> {
-        self.styles.char_superscript(id)
-    }
-
-    fn char_subscript(&self, id: CharShapeIndex) -> Option<bool> {
-        self.styles.char_subscript(id)
-    }
-
-    fn char_font_name(&self, id: CharShapeIndex) -> Option<&str> {
-        self.styles.char_font_name(id)
-    }
-
-    fn char_font_size(&self, id: CharShapeIndex) -> Option<HwpUnit> {
-        self.styles.char_font_size(id)
-    }
-
-    fn char_text_color(&self, id: CharShapeIndex) -> Option<Color> {
-        self.styles.char_text_color(id)
-    }
-
-    fn para_alignment(&self, id: ParaShapeIndex) -> Option<Alignment> {
-        self.styles.para_alignment(id)
-    }
-
-    fn para_list_type(&self, id: ParaShapeIndex) -> Option<&str> {
-        self.styles.para_list_type(id)
-    }
-
-    fn style_name(&self, id: StyleIndex) -> Option<&str> {
-        self.styles.style_name(id)
-    }
-
-    fn style_heading_level(&self, id: StyleIndex) -> Option<u8> {
-        self.styles.style_heading_level(id)
+    delegate_style_lookup_to_store! {
+        fn char_bold(&self, id: CharShapeIndex) -> Option<bool>;
+        fn char_italic(&self, id: CharShapeIndex) -> Option<bool>;
+        fn char_underline(&self, id: CharShapeIndex) -> Option<UnderlineType>;
+        fn char_strikeout(&self, id: CharShapeIndex) -> Option<bool>;
+        fn char_superscript(&self, id: CharShapeIndex) -> Option<bool>;
+        fn char_subscript(&self, id: CharShapeIndex) -> Option<bool>;
+        fn char_font_name(&self, id: CharShapeIndex) -> Option<&str>;
+        fn char_font_size(&self, id: CharShapeIndex) -> Option<HwpUnit>;
+        fn char_text_color(&self, id: CharShapeIndex) -> Option<Color>;
+        fn para_alignment(&self, id: ParaShapeIndex) -> Option<Alignment>;
+        fn para_list_type(&self, id: ParaShapeIndex) -> Option<&str>;
+        fn para_list_level(&self, id: ParaShapeIndex) -> Option<u8>;
+        fn para_checked_state(&self, id: ParaShapeIndex) -> Option<bool>;
+        fn para_style_name(&self, id: ParaShapeIndex) -> Option<&str>;
+        fn para_heading_level(&self, id: ParaShapeIndex) -> Option<u8>;
+        fn style_name(&self, id: StyleIndex) -> Option<&str>;
+        fn style_heading_level(&self, id: StyleIndex) -> Option<u8>;
     }
 
     fn image_resolve_filename(&self, key: &str) -> Option<&str> {
@@ -119,21 +97,47 @@ impl StyleLookup for HwpxStyleLookup<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style_store::{HwpxCharShape, HwpxFont, HwpxStyleStore};
+    use crate::style_store::{HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore};
     use hwpforge_core::ImageStore;
-    use hwpforge_foundation::CharShapeIndex;
+    use hwpforge_foundation::{CharShapeIndex, HeadingType, NumberFormatType, ParaShapeIndex};
 
     #[test]
     fn bridge_delegates_style_queries() {
         let mut store = HwpxStyleStore::new();
         store.push_font(HwpxFont::new(0, "함초롬돋움", "HANGUL"));
         store.push_char_shape(HwpxCharShape { bold: true, ..Default::default() });
+        store.push_para_shape(HwpxParaShape {
+            heading_type: HeadingType::Outline,
+            heading_level: 1,
+            ..Default::default()
+        });
+        store.push_bullet(hwpforge_core::BulletDef {
+            id: 7,
+            bullet_char: "☐".into(),
+            checked_char: Some("☑".into()),
+            use_image: false,
+            para_head: hwpforge_core::ParaHead {
+                start: 0,
+                level: 1,
+                num_format: NumberFormatType::Digit,
+                text: String::new(),
+                checkable: true,
+            },
+        });
+        store.push_para_shape(HwpxParaShape {
+            heading_type: HeadingType::Bullet,
+            heading_id_ref: 7,
+            checked: true,
+            ..Default::default()
+        });
 
         let images = ImageStore::new();
         let lookup = HwpxStyleLookup::new(&store, &images);
 
         assert_eq!(lookup.char_bold(CharShapeIndex::new(0)), Some(true));
         assert_eq!(lookup.char_font_name(CharShapeIndex::new(0)), Some("함초롬돋움"));
+        assert_eq!(lookup.para_heading_level(ParaShapeIndex::new(0)), Some(2));
+        assert_eq!(lookup.para_checked_state(ParaShapeIndex::new(1)), Some(true));
     }
 
     #[test]

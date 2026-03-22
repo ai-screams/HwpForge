@@ -158,7 +158,7 @@ fn build_style_store() -> HwpxStyleStore {
     let mut ps_ol1 = HwpxParaShape::default();
     ps_ol1.alignment = Alignment::Left;
     ps_ol1.heading_type = HeadingType::Outline;
-    ps_ol1.heading_id_ref = 1; // references numbering def id=1
+    ps_ol1.heading_id_ref = 0; // outline headings use idRef=0 in HWPX
     ps_ol1.heading_level = 1;
     ps_ol1.tab_pr_id_ref = 1; // auto left tab
     ps_ol1.spacing_after = HwpUnit::new(200).unwrap();
@@ -170,7 +170,7 @@ fn build_style_store() -> HwpxStyleStore {
     let mut ps_ol2 = HwpxParaShape::default();
     ps_ol2.alignment = Alignment::Left;
     ps_ol2.heading_type = HeadingType::Outline;
-    ps_ol2.heading_id_ref = 1;
+    ps_ol2.heading_id_ref = 0;
     ps_ol2.heading_level = 2;
     ps_ol2.tab_pr_id_ref = 1;
     ps_ol2.margin_left = HwpUnit::new(800).unwrap();
@@ -183,7 +183,7 @@ fn build_style_store() -> HwpxStyleStore {
     let mut ps_ol3 = HwpxParaShape::default();
     ps_ol3.alignment = Alignment::Left;
     ps_ol3.heading_type = HeadingType::Outline;
-    ps_ol3.heading_id_ref = 1;
+    ps_ol3.heading_id_ref = 0;
     ps_ol3.heading_level = 3;
     ps_ol3.tab_pr_id_ref = 1;
     ps_ol3.margin_left = HwpUnit::new(1600).unwrap();
