@@ -310,6 +310,30 @@ pub struct HxCharPr {
     )]
     pub outline: Option<HxOutline>,
     #[serde(
+        rename(serialize = "hh:emboss", deserialize = "emboss"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub emboss: Option<HxPresence>,
+    #[serde(
+        rename(serialize = "hh:engrave", deserialize = "engrave"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub engrave: Option<HxPresence>,
+    #[serde(
+        rename(serialize = "hh:supscript", deserialize = "supscript"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub supscript: Option<HxPresence>,
+    #[serde(
+        rename(serialize = "hh:subscript", deserialize = "subscript"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub subscript: Option<HxPresence>,
+    #[serde(
         rename(serialize = "hh:shadow", deserialize = "shadow"),
         default,
         skip_serializing_if = "Option::is_none"

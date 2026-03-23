@@ -6,8 +6,9 @@
 
 use hwpforge_core::NumberingDef;
 use hwpforge_foundation::{
-    Alignment, BreakType, Color, EmphasisType, HwpUnit, LineSpacingType, NumberFormatType,
-    OutlineType, ShadowType, StrikeoutShape, UnderlineType, WordBreakType,
+    Alignment, BreakType, Color, EmbossType, EmphasisType, EngraveType, HwpUnit, LineSpacingType,
+    NumberFormatType, OutlineType, ShadowType, StrikeoutShape, UnderlineType, VerticalPosition,
+    WordBreakType,
 };
 
 use super::{escape_xml, header_tabs::build_tab_properties_xml};
@@ -632,6 +633,18 @@ fn build_char_pr(id: u32, cs: &HwpxCharShape) -> HxCharPr {
             color: cs.strikeout_color.as_ref().map_or_else(|| "#000000".into(), |c| c.to_hex_rgb()),
         }),
         outline: Some(HxOutline { outline_type: outline_type_to_hwpx(cs.outline_type).into() }),
+        emboss: if cs.emboss_type == EmbossType::Emboss { Some(HxPresence) } else { None },
+        engrave: if cs.engrave_type == EngraveType::Engrave { Some(HxPresence) } else { None },
+        supscript: if cs.vertical_position == VerticalPosition::Superscript {
+            Some(HxPresence)
+        } else {
+            None
+        },
+        subscript: if cs.vertical_position == VerticalPosition::Subscript {
+            Some(HxPresence)
+        } else {
+            None
+        },
         shadow: Some(HxShadow {
             shadow_type: shadow_type_to_hwpx(cs.shadow_type).into(),
             color: "#B2B2B2".into(),
@@ -979,7 +992,9 @@ fn build_style(s: &HwpxStyle) -> HxStyle {
 mod tests {
     use super::*;
     use crate::style_store::HwpxFill;
-    use hwpforge_foundation::{CharShapeIndex, FontIndex, ParaShapeIndex};
+    use hwpforge_foundation::{
+        CharShapeIndex, EmbossType, EngraveType, FontIndex, ParaShapeIndex, VerticalPosition,
+    };
 
     // ── Helper: build a minimal store ───────────────────────────
 
@@ -1329,6 +1344,8 @@ mod tests {
             italic: true,
             underline_type: UnderlineType::Bottom,
             strikeout_shape: StrikeoutShape::Continuous,
+            vertical_position: VerticalPosition::Superscript,
+            emboss_type: EmbossType::Emboss,
             ..Default::default()
         });
 
@@ -1368,6 +1385,9 @@ mod tests {
         assert_eq!(cs.font_ref.latin.get(), 2);
         assert_eq!(cs.underline_type, UnderlineType::Bottom);
         assert_eq!(cs.strikeout_shape, StrikeoutShape::Continuous);
+        assert_eq!(cs.vertical_position, VerticalPosition::Superscript);
+        assert_eq!(cs.emboss_type, EmbossType::Emboss);
+        assert_eq!(cs.engrave_type, EngraveType::None);
 
         // Para shape
         let ps = decoded.para_shape(ParaShapeIndex::new(0)).unwrap();
@@ -1408,6 +1428,22 @@ mod tests {
         assert!(decoded.char_shape(CharShapeIndex::new(1)).unwrap().italic);
         assert!(!decoded.char_shape(CharShapeIndex::new(2)).unwrap().bold);
         assert!(!decoded.char_shape(CharShapeIndex::new(2)).unwrap().italic);
+    }
+
+    #[test]
+    fn build_char_pr_serializes_relief_and_vertical_position() {
+        let mut store = HwpxStyleStore::new();
+        store.push_char_shape(HwpxCharShape {
+            vertical_position: VerticalPosition::Subscript,
+            engrave_type: EngraveType::Engrave,
+            ..Default::default()
+        });
+
+        let xml = encode_header(&store, 1, None).unwrap();
+        assert!(xml.contains("<hh:engrave/>"));
+        assert!(xml.contains("<hh:subscript/>"));
+        assert!(!xml.contains("<hh:emboss/>"));
+        assert!(!xml.contains("<hh:supscript/>"));
     }
 
     // ── 13. Styles roundtrip ────────────────────────────────────

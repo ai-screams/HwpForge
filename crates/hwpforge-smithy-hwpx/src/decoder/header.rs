@@ -385,7 +385,7 @@ fn convert_char_pr(cp: &HxCharPr) -> HwpxCharShape {
                 Some(c)
             }
         }),
-        vertical_position: VerticalPosition::Normal, // TODO(v2.0): Parse from XML
+        vertical_position: parse_vertical_position(cp),
         outline_type: cp
             .outline
             .as_ref()
@@ -396,8 +396,8 @@ fn convert_char_pr(cp: &HxCharPr) -> HwpxCharShape {
             .as_ref()
             .map(|s| parse_shadow_type(&s.shadow_type))
             .unwrap_or(ShadowType::None),
-        emboss_type: EmbossType::None,   // TODO(v2.0): Parse from XML
-        engrave_type: EngraveType::None, // TODO(v2.0): Parse from XML
+        emboss_type: if cp.emboss.is_some() { EmbossType::Emboss } else { EmbossType::None },
+        engrave_type: if cp.engrave.is_some() { EngraveType::Engrave } else { EngraveType::None },
         emphasis: parse_emphasis_type(&cp.sym_mark),
         ratio: cp.ratio.as_ref().map_or(100, |r| r.hangul),
         spacing: cp.spacing.as_ref().map_or(0, |s| s.hangul),
@@ -406,6 +406,16 @@ fn convert_char_pr(cp: &HxCharPr) -> HwpxCharShape {
         use_kerning: cp.use_kerning != 0,
         use_font_space: cp.use_font_space != 0,
         border_fill_id: if cp.border_fill_id_ref == 2 { None } else { Some(cp.border_fill_id_ref) },
+    }
+}
+
+fn parse_vertical_position(cp: &HxCharPr) -> VerticalPosition {
+    if cp.supscript.is_some() {
+        VerticalPosition::Superscript
+    } else if cp.subscript.is_some() {
+        VerticalPosition::Subscript
+    } else {
+        VerticalPosition::Normal
     }
 }
 
@@ -1032,6 +1042,48 @@ mod tests {
         assert_eq!(cs.font_ref.latin.get(), 2);
         assert_eq!(cs.underline_type, UnderlineType::Bottom);
         assert_eq!(cs.strikeout_shape, StrikeoutShape::Continuous);
+    }
+
+    #[test]
+    fn parse_char_pr_with_relief_and_vertical_position() {
+        let xml = r##"<head version="1.4" secCnt="1">
+            <refList>
+                <charProperties itemCnt="2">
+                    <charPr id="17" height="900" textColor="#0D0D0D" shadeColor="none"
+                            useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="3">
+                        <fontRef hangul="1" latin="1" hanja="1" japanese="1" other="1" symbol="1" user="1"/>
+                        <underline type="NONE" shape="SOLID" color="#000000"/>
+                        <strikeout shape="NONE" color="#000000"/>
+                        <outline type="NONE"/>
+                        <shadow type="NONE" color="#C0C0C0" offsetX="10" offsetY="10"/>
+                        <emboss/>
+                        <supscript/>
+                    </charPr>
+                    <charPr id="18" height="900" textColor="#0D0D0D" shadeColor="none"
+                            useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="3">
+                        <fontRef hangul="1" latin="1" hanja="1" japanese="1" other="1" symbol="1" user="1"/>
+                        <underline type="NONE" shape="SOLID" color="#000000"/>
+                        <strikeout shape="NONE" color="#000000"/>
+                        <outline type="NONE"/>
+                        <shadow type="NONE" color="#C0C0C0" offsetX="10" offsetY="10"/>
+                        <engrave/>
+                        <subscript/>
+                    </charPr>
+                </charProperties>
+            </refList>
+        </head>"##;
+
+        let store = parse_header(xml).unwrap().style_store;
+
+        let superscript = store.char_shape(hwpforge_foundation::CharShapeIndex::new(0)).unwrap();
+        assert_eq!(superscript.vertical_position, VerticalPosition::Superscript);
+        assert_eq!(superscript.emboss_type, EmbossType::Emboss);
+        assert_eq!(superscript.engrave_type, EngraveType::None);
+
+        let subscript = store.char_shape(hwpforge_foundation::CharShapeIndex::new(1)).unwrap();
+        assert_eq!(subscript.vertical_position, VerticalPosition::Subscript);
+        assert_eq!(subscript.emboss_type, EmbossType::None);
+        assert_eq!(subscript.engrave_type, EngraveType::Engrave);
     }
 
     // ── Paragraph properties ─────────────────────────────────────

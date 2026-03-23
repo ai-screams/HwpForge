@@ -7,8 +7,8 @@ use crate::style_store::Hwp5StyleStore;
 use crate::warning_utils::push_projection_fallback;
 use hwpforge_core::{TabDef, TabStop};
 use hwpforge_foundation::{
-    BorderFillIndex, Color, FontIndex, HeadingType, HwpUnit, StrikeoutShape, TabAlign, TabLeader,
-    UnderlineType,
+    BorderFillIndex, Color, EmbossType, EngraveType, FontIndex, HeadingType, HwpUnit,
+    StrikeoutShape, TabAlign, TabLeader, UnderlineType, VerticalPosition,
 };
 use hwpforge_smithy_hwpx::{
     HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape, HwpxStyle, HwpxStyleStore,
@@ -93,8 +93,17 @@ pub(crate) fn hwp5_char_shape_to_hwpx(raw: &Hwp5RawCharShape) -> HwpxCharShape {
         StrikeoutShape::None => None,
         _ => raw.strike_color.and_then(optional_non_black_color),
     };
+    shape.vertical_position = if raw.superscript() {
+        VerticalPosition::Superscript
+    } else if raw.subscript() {
+        VerticalPosition::Subscript
+    } else {
+        VerticalPosition::Normal
+    };
     shape.outline_type = raw.outline_type();
     shape.shadow_type = raw.shadow_type();
+    shape.emboss_type = if raw.emboss() { EmbossType::Emboss } else { EmbossType::None };
+    shape.engrave_type = if raw.engrave() { EngraveType::Engrave } else { EngraveType::None };
     shape.emphasis = raw.emphasis();
     shape.ratio = raw.primary_ratio();
     shape.spacing = raw.primary_spacing();
@@ -206,8 +215,6 @@ fn append_char_shape_projection_warnings(
     warn_on_char_outline_kind(raw, raw_id, warnings);
     warn_on_char_shadow_kind(raw, raw_id, warnings);
     warn_on_char_strike_shape(raw, raw_id, warnings);
-    warn_on_char_dropped_relief_effects(raw, raw_id, warnings);
-    warn_on_char_vertical_position(raw, raw_id, warnings);
     warn_on_char_script_scalar_collapse(raw, raw_id, warnings);
 }
 
@@ -293,49 +300,6 @@ fn warn_on_char_strike_shape(
         format!(
             "char shape {raw_id} strike shape {} collapsed to Continuous because the shared IR does not support that line family",
             raw.strike_shape_raw()
-        ),
-    );
-}
-
-fn warn_on_char_dropped_relief_effects(
-    raw: &Hwp5RawCharShape,
-    raw_id: usize,
-    warnings: &mut Vec<Hwp5Warning>,
-) {
-    if raw.emboss() {
-        push_projection_fallback(
-            warnings,
-            "style.char_shape.emboss",
-            format!(
-                "char shape {raw_id} emboss effect was dropped because the current HWPX codec does not serialize emboss"
-            ),
-        );
-    }
-    if raw.engrave() {
-        push_projection_fallback(
-            warnings,
-            "style.char_shape.engrave",
-            format!(
-                "char shape {raw_id} engrave effect was dropped because the current HWPX codec does not serialize engrave"
-            ),
-        );
-    }
-}
-
-fn warn_on_char_vertical_position(
-    raw: &Hwp5RawCharShape,
-    raw_id: usize,
-    warnings: &mut Vec<Hwp5Warning>,
-) {
-    if !raw.superscript() && !raw.subscript() {
-        return;
-    }
-    let mode = if raw.superscript() { "superscript" } else { "subscript" };
-    push_projection_fallback(
-        warnings,
-        "style.char_shape.vertical_position",
-        format!(
-            "char shape {raw_id} {mode} flag was dropped because the current HWPX codec does not serialize vertical_position"
         ),
     );
 }

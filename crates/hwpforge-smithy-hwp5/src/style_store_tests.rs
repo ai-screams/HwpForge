@@ -18,9 +18,9 @@ use crate::style_store_convert::{
     bgr_colorref_to_color, hwp5_char_shape_to_hwpx, hwp5_para_shape_to_hwpx, hwp5_tab_def_to_hwpx,
 };
 use hwpforge_foundation::{
-    Alignment, BorderFillIndex, BreakType, Color, EmphasisType, GradientType, HeadingType,
-    LineSpacingType, OutlineType, ParaShapeIndex, ShadowType, StrikeoutShape, TabAlign,
-    UnderlineType, WordBreakType,
+    Alignment, BorderFillIndex, BreakType, Color, EmbossType, EmphasisType, EngraveType,
+    GradientType, HeadingType, LineSpacingType, OutlineType, ParaShapeIndex, ShadowType,
+    StrikeoutShape, TabAlign, UnderlineType, VerticalPosition, WordBreakType,
 };
 use hwpforge_smithy_hwpx::style_store::HwpxFill;
 
@@ -555,6 +555,8 @@ fn hwp5_char_shape_maps_supported_style_surface() {
         | (1 << 2)
         | (1 << 8)
         | (1 << 11)
+        | (1 << 13)
+        | (1 << 15)
         | (1 << 18)
         | (1 << 21)
         | (1 << 25)
@@ -576,8 +578,11 @@ fn hwp5_char_shape_maps_supported_style_surface() {
     assert_eq!(hwpx.underline_color, Some(bgr_colorref_to_color(0x00112233)));
     assert_eq!(hwpx.strikeout_shape, StrikeoutShape::Dot);
     assert_eq!(hwpx.strikeout_color, Some(bgr_colorref_to_color(0x00332211)));
+    assert_eq!(hwpx.vertical_position, VerticalPosition::Superscript);
     assert_eq!(hwpx.outline_type, OutlineType::Solid);
     assert_eq!(hwpx.shadow_type, ShadowType::Drop);
+    assert_eq!(hwpx.emboss_type, EmbossType::Emboss);
+    assert_eq!(hwpx.engrave_type, EngraveType::None);
     assert_eq!(hwpx.emphasis, EmphasisType::DotAbove);
     assert_eq!(hwpx.ratio, 80);
     assert_eq!(hwpx.spacing, 10);
@@ -586,6 +591,18 @@ fn hwp5_char_shape_maps_supported_style_surface() {
     assert!(hwpx.use_font_space);
     assert!(hwpx.use_kerning);
     assert_eq!(hwpx.border_fill_id, Some(7));
+}
+
+#[test]
+fn hwp5_char_shape_maps_engrave_and_subscript() {
+    let mut raw = Hwp5RawCharShape::default_for_test();
+    raw.property = (1 << 14) | (1 << 16);
+
+    let hwpx = hwp5_char_shape_to_hwpx(&raw);
+
+    assert_eq!(hwpx.vertical_position, VerticalPosition::Subscript);
+    assert_eq!(hwpx.emboss_type, EmbossType::None);
+    assert_eq!(hwpx.engrave_type, EngraveType::Engrave);
 }
 
 #[test]
@@ -631,12 +648,17 @@ fn hwp5_char_shape_warns_on_projection_collapses() {
         Hwp5Warning::ProjectionFallback { subject, .. }
             if *subject == "style.char_shape.strike_shape"
     )));
-    assert!(warnings.iter().any(|warning| matches!(
+    assert!(!warnings.iter().any(|warning| matches!(
         warning,
         Hwp5Warning::ProjectionFallback { subject, .. }
             if *subject == "style.char_shape.emboss"
     )));
-    assert!(warnings.iter().any(|warning| matches!(
+    assert!(!warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, .. }
+            if *subject == "style.char_shape.engrave"
+    )));
+    assert!(!warnings.iter().any(|warning| matches!(
         warning,
         Hwp5Warning::ProjectionFallback { subject, .. }
             if *subject == "style.char_shape.vertical_position"
