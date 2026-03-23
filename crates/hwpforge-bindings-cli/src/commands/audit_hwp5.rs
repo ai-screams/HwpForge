@@ -204,7 +204,7 @@ pub fn run(source: &Path, result: &Path, json_mode: bool) {
 
     let report = AuditResult {
         status: if mismatch_found { "mismatch" } else { "ok" },
-        scope_note: "Source metrics come from parser-backed HWP5 semantic truth. DocInfo style counts and warning count still come from the current decode summary. Output metrics come from recursive HWPX XML/package analysis, not top-level body-only counts.",
+        scope_note: "This is a structural/semantic audit, not a pixel-perfect visual guarantee. Source metrics come from parser-backed HWP5 semantic truth. DocInfo style counts and warning count still come from the current decode summary. Output metrics come from recursive HWPX XML/package analysis, not top-level body-only counts.",
         source: source_side,
         output: output_side,
         comparisons,
@@ -837,6 +837,7 @@ fn print_human_report(source: &Path, result: &Path, report: &AuditResult) {
     println!("Audit: {} vs {}", source.display(), result.display());
     println!("Status: {}", report.status.to_uppercase());
     println!("Note: {}", report.scope_note);
+    println!("Visual parity is not fully audited here; confirm layout and pagination in Hancom when fidelity matters.");
     if let Some(version) = &report.source.version {
         println!("Source Version: {}", version);
     }

@@ -16,6 +16,12 @@ pub(crate) struct SectionLayoutHints {
     tables: VecDeque<TableLayoutHint>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ScopeLayoutHints {
+    paragraphs: VecDeque<ParagraphLayoutHint>,
+    tables: VecDeque<TableLayoutHint>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ParagraphLayoutHint {
     line_segments: Vec<Hwp5ParaLineSeg>,
@@ -23,7 +29,7 @@ struct ParagraphLayoutHint {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct TableLayoutHint {
-    height: i32,
+    height: Option<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -128,42 +134,50 @@ impl RawPackage {
 }
 
 fn collect_section_layout_hints(section: &SectionResult) -> SectionLayoutHints {
-    let mut paragraphs = VecDeque::new();
-    let mut tables = VecDeque::new();
+    let mut body = ScopeLayoutHints::default();
+    let mut header = ScopeLayoutHints::default();
+    let mut footer = ScopeLayoutHints::default();
+
     for paragraph in &section.paragraphs {
-        collect_paragraph_layout_hints(paragraph, &mut paragraphs, &mut tables);
+        collect_flow_paragraph_layout_hints(paragraph, &mut body, &mut header, &mut footer);
     }
-    SectionLayoutHints { paragraphs, tables }
+
+    body.append(&mut header);
+    body.append(&mut footer);
+
+    SectionLayoutHints { paragraphs: body.paragraphs, tables: body.tables }
 }
 
-fn collect_paragraph_layout_hints(
+impl ScopeLayoutHints {
+    fn push_paragraph(&mut self, paragraph: &Hwp5Paragraph) {
+        self.paragraphs
+            .push_back(ParagraphLayoutHint { line_segments: paragraph.line_segments.clone() });
+    }
+
+    fn push_table(&mut self, table: &Hwp5Table) {
+        self.tables.push_back(TableLayoutHint { height: derive_table_height(table) });
+    }
+
+    fn append(&mut self, other: &mut Self) {
+        self.paragraphs.append(&mut other.paragraphs);
+        self.tables.append(&mut other.tables);
+    }
+}
+
+fn collect_flow_paragraph_layout_hints(
     paragraph: &Hwp5Paragraph,
-    paragraphs: &mut VecDeque<ParagraphLayoutHint>,
-    tables: &mut VecDeque<TableLayoutHint>,
+    body: &mut ScopeLayoutHints,
+    header: &mut ScopeLayoutHints,
+    footer: &mut ScopeLayoutHints,
 ) {
-    paragraphs.push_back(ParagraphLayoutHint { line_segments: paragraph.line_segments.clone() });
+    body.push_paragraph(paragraph);
 
     for control in &paragraph.controls {
         match control {
-            Hwp5Control::Table(table) => {
-                tables
-                    .push_back(TableLayoutHint { height: derive_table_height(table).unwrap_or(0) });
-                for cell in &table.cells {
-                    for paragraph in &cell.paragraphs {
-                        collect_paragraph_layout_hints(paragraph, paragraphs, tables);
-                    }
-                }
-            }
-            Hwp5Control::Header(subtree) | Hwp5Control::Footer(subtree) => {
-                for paragraph in &subtree.paragraphs {
-                    collect_paragraph_layout_hints(paragraph, paragraphs, tables);
-                }
-            }
-            Hwp5Control::TextBox(textbox) => {
-                for paragraph in &textbox.paragraphs {
-                    collect_paragraph_layout_hints(paragraph, paragraphs, tables);
-                }
-            }
+            Hwp5Control::Table(table) => collect_table_layout_hints(table, body),
+            Hwp5Control::Header(subtree) => collect_scope_paragraphs(&subtree.paragraphs, header),
+            Hwp5Control::Footer(subtree) => collect_scope_paragraphs(&subtree.paragraphs, footer),
+            Hwp5Control::TextBox(textbox) => collect_scope_paragraphs(&textbox.paragraphs, body),
             Hwp5Control::Image(_)
             | Hwp5Control::Line(_)
             | Hwp5Control::Rect(_)
@@ -171,6 +185,38 @@ fn collect_paragraph_layout_hints(
             | Hwp5Control::OleObject(_)
             | Hwp5Control::Unknown { .. } => {}
         }
+    }
+}
+
+fn collect_scope_paragraphs(paragraphs: &[Hwp5Paragraph], scope: &mut ScopeLayoutHints) {
+    for paragraph in paragraphs {
+        collect_scope_paragraph_layout_hints(paragraph, scope);
+    }
+}
+
+fn collect_scope_paragraph_layout_hints(paragraph: &Hwp5Paragraph, scope: &mut ScopeLayoutHints) {
+    scope.push_paragraph(paragraph);
+
+    for control in &paragraph.controls {
+        match control {
+            Hwp5Control::Table(table) => collect_table_layout_hints(table, scope),
+            Hwp5Control::TextBox(textbox) => collect_scope_paragraphs(&textbox.paragraphs, scope),
+            Hwp5Control::Header(_)
+            | Hwp5Control::Footer(_)
+            | Hwp5Control::Image(_)
+            | Hwp5Control::Line(_)
+            | Hwp5Control::Rect(_)
+            | Hwp5Control::Polygon(_)
+            | Hwp5Control::OleObject(_)
+            | Hwp5Control::Unknown { .. } => {}
+        }
+    }
+}
+
+fn collect_table_layout_hints(table: &Hwp5Table, scope: &mut ScopeLayoutHints) {
+    scope.push_table(table);
+    for cell in &table.cells {
+        collect_scope_paragraphs(&cell.paragraphs, scope);
     }
 }
 
@@ -209,90 +255,176 @@ fn paragraph_layout_height(paragraph: &Hwp5Paragraph) -> i32 {
         .unwrap_or(0)
 }
 
-fn patch_section_xml(xml: &str, mut hints: SectionLayoutHints) -> Hwp5Result<String> {
+#[derive(Debug)]
+struct SectionXmlPatchState {
+    hints: SectionLayoutHints,
+    element_stack: Vec<Vec<u8>>,
+    paragraph_stack: Vec<ParagraphLayoutHint>,
+    table_stack: Vec<TableLayoutHint>,
+}
+
+impl SectionXmlPatchState {
+    fn new(hints: SectionLayoutHints) -> Self {
+        Self {
+            hints,
+            element_stack: Vec::new(),
+            paragraph_stack: Vec::new(),
+            table_stack: Vec::new(),
+        }
+    }
+
+    fn handle_start<W: Write>(
+        &mut self,
+        event: BytesStart<'_>,
+        writer: &mut Writer<W>,
+    ) -> Hwp5Result<()> {
+        let local = local_name(event.name().as_ref()).to_vec();
+        if local.as_slice() == b"p" {
+            self.push_paragraph_hint()?;
+        } else if local.as_slice() == b"tbl" {
+            self.push_table_hint()?;
+        }
+
+        let event = self.patch_table_size_event(local.as_slice(), event.into_owned())?;
+        writer
+            .write_event(Event::Start(event))
+            .map_err(|e| Hwp5Error::Cfb { detail: format!("write patched section xml: {e}") })?;
+        self.element_stack.push(local);
+        Ok(())
+    }
+
+    fn handle_empty<W: Write>(
+        &mut self,
+        event: BytesStart<'_>,
+        writer: &mut Writer<W>,
+    ) -> Hwp5Result<()> {
+        let local = local_name(event.name().as_ref()).to_vec();
+        let event = self.patch_table_size_event(local.as_slice(), event.into_owned())?;
+        writer
+            .write_event(Event::Empty(event))
+            .map_err(|e| Hwp5Error::Cfb { detail: format!("write patched section xml: {e}") })?;
+        Ok(())
+    }
+
+    fn handle_end<W: Write>(
+        &mut self,
+        event: BytesEnd<'_>,
+        writer: &mut Writer<W>,
+    ) -> Hwp5Result<()> {
+        let local = local_name(event.name().as_ref()).to_vec();
+        if local.as_slice() == b"p" {
+            let hint = self.pop_paragraph_hint()?;
+            write_linesegarray(writer, &hint.line_segments)?;
+        }
+
+        writer
+            .write_event(Event::End(event.into_owned()))
+            .map_err(|e| Hwp5Error::Cfb { detail: format!("write patched section xml: {e}") })?;
+
+        self.pop_element(local.as_slice())?;
+        if local.as_slice() == b"tbl" {
+            self.table_stack.pop();
+        }
+        Ok(())
+    }
+
+    fn finish(self) -> Hwp5Result<()> {
+        if !self.hints.paragraphs.is_empty()
+            || !self.hints.tables.is_empty()
+            || !self.paragraph_stack.is_empty()
+        {
+            return Err(Hwp5Error::Cfb {
+                detail: "layout hint patch left unconsumed hints".into(),
+            });
+        }
+        Ok(())
+    }
+
+    fn patch_table_size_event(
+        &self,
+        local: &[u8],
+        event: BytesStart<'static>,
+    ) -> Hwp5Result<BytesStart<'static>> {
+        if !self.is_active_table_size_element(local) {
+            return Ok(event);
+        }
+
+        let Some(height) = self.active_table_height()? else {
+            return Ok(event);
+        };
+        rewrite_element_attr(event, "height", &height.to_string())
+    }
+
+    fn is_active_table_size_element(&self, local: &[u8]) -> bool {
+        local == b"sz"
+            && self.element_stack.last().is_some_and(|parent| parent.as_slice() == b"tbl")
+    }
+
+    fn active_table_height(&self) -> Hwp5Result<Option<i32>> {
+        self.table_stack
+            .last()
+            .copied()
+            .ok_or_else(|| Hwp5Error::Cfb {
+                detail: "table size encountered without active table hint".into(),
+            })
+            .map(|hint| hint.height)
+    }
+
+    fn push_paragraph_hint(&mut self) -> Hwp5Result<()> {
+        let hint = self.hints.paragraphs.pop_front().ok_or_else(|| Hwp5Error::Cfb {
+            detail: "paragraph layout hint count underflow".into(),
+        })?;
+        self.paragraph_stack.push(hint);
+        Ok(())
+    }
+
+    fn push_table_hint(&mut self) -> Hwp5Result<()> {
+        let hint =
+            self.hints.tables.pop_front().ok_or_else(|| Hwp5Error::Cfb {
+                detail: "table layout hint count underflow".into(),
+            })?;
+        self.table_stack.push(hint);
+        Ok(())
+    }
+
+    fn pop_paragraph_hint(&mut self) -> Hwp5Result<ParagraphLayoutHint> {
+        self.paragraph_stack.pop().ok_or_else(|| Hwp5Error::Cfb {
+            detail: "paragraph layout hint stack underflow".into(),
+        })
+    }
+
+    fn pop_element(&mut self, local: &[u8]) -> Hwp5Result<()> {
+        let popped = self
+            .element_stack
+            .pop()
+            .ok_or_else(|| Hwp5Error::Cfb { detail: "xml element stack underflow".into() })?;
+        if popped != local {
+            return Err(Hwp5Error::Cfb {
+                detail: format!(
+                    "xml element stack mismatch: opened '{}' closed '{}'",
+                    String::from_utf8_lossy(&popped),
+                    String::from_utf8_lossy(local)
+                ),
+            });
+        }
+        Ok(())
+    }
+}
+
+fn patch_section_xml(xml: &str, hints: SectionLayoutHints) -> Hwp5Result<String> {
     let mut reader = Reader::from_str(xml);
     let mut writer = Writer::new(Cursor::new(Vec::with_capacity(xml.len() + 1024)));
     let mut buf = Vec::new();
-    let mut element_stack: Vec<Vec<u8>> = Vec::new();
-    let mut paragraph_stack: Vec<ParagraphLayoutHint> = Vec::new();
-    let mut table_stack: Vec<TableLayoutHint> = Vec::new();
+    let mut state = SectionXmlPatchState::new(hints);
 
     loop {
         match reader
             .read_event_into(&mut buf)
             .map_err(|e| Hwp5Error::Cfb { detail: format!("parse generated section xml: {e}") })?
         {
-            Event::Start(event) => {
-                let local = local_name(event.name().as_ref()).to_vec();
-                let mut event = event.into_owned();
-                if local.as_slice() == b"p" {
-                    let hint = hints.paragraphs.pop_front().ok_or_else(|| Hwp5Error::Cfb {
-                        detail: "paragraph layout hint count underflow".into(),
-                    })?;
-                    paragraph_stack.push(hint);
-                } else if local.as_slice() == b"tbl" {
-                    let hint = hints.tables.pop_front().ok_or_else(|| Hwp5Error::Cfb {
-                        detail: "table layout hint count underflow".into(),
-                    })?;
-                    table_stack.push(hint);
-                } else if local.as_slice() == b"sz"
-                    && element_stack.last().is_some_and(|parent| parent.as_slice() == b"tbl")
-                {
-                    let current = table_stack.last().copied().ok_or_else(|| Hwp5Error::Cfb {
-                        detail: "table size encountered without active table hint".into(),
-                    })?;
-                    event = rewrite_element_attr(event, "height", &current.height.to_string())?;
-                }
-
-                writer.write_event(Event::Start(event)).map_err(|e| Hwp5Error::Cfb {
-                    detail: format!("write patched section xml: {e}"),
-                })?;
-                element_stack.push(local);
-            }
-            Event::Empty(event) => {
-                let local = local_name(event.name().as_ref()).to_vec();
-                let mut event = event.into_owned();
-                if local.as_slice() == b"sz"
-                    && element_stack.last().is_some_and(|parent| parent.as_slice() == b"tbl")
-                {
-                    let current = table_stack.last().copied().ok_or_else(|| Hwp5Error::Cfb {
-                        detail: "table size encountered without active table hint".into(),
-                    })?;
-                    event = rewrite_element_attr(event, "height", &current.height.to_string())?;
-                }
-                writer.write_event(Event::Empty(event)).map_err(|e| Hwp5Error::Cfb {
-                    detail: format!("write patched section xml: {e}"),
-                })?;
-            }
-            Event::End(event) => {
-                let local = local_name(event.name().as_ref()).to_vec();
-                if local.as_slice() == b"p" {
-                    let hint = paragraph_stack.pop().ok_or_else(|| Hwp5Error::Cfb {
-                        detail: "paragraph layout hint stack underflow".into(),
-                    })?;
-                    write_linesegarray(&mut writer, &hint.line_segments)?;
-                }
-
-                writer.write_event(Event::End(event.into_owned())).map_err(|e| Hwp5Error::Cfb {
-                    detail: format!("write patched section xml: {e}"),
-                })?;
-
-                let popped = element_stack.pop().ok_or_else(|| Hwp5Error::Cfb {
-                    detail: "xml element stack underflow".into(),
-                })?;
-                if popped != local {
-                    return Err(Hwp5Error::Cfb {
-                        detail: format!(
-                            "xml element stack mismatch: opened '{}' closed '{}'",
-                            String::from_utf8_lossy(&popped),
-                            String::from_utf8_lossy(&local)
-                        ),
-                    });
-                }
-                if local.as_slice() == b"tbl" {
-                    table_stack.pop();
-                }
-            }
+            Event::Start(event) => state.handle_start(event, &mut writer)?,
+            Event::Empty(event) => state.handle_empty(event, &mut writer)?,
+            Event::End(event) => state.handle_end(event, &mut writer)?,
             Event::Eof => break,
             event => {
                 writer.write_event(event.into_owned()).map_err(|e| Hwp5Error::Cfb {
@@ -303,9 +435,7 @@ fn patch_section_xml(xml: &str, mut hints: SectionLayoutHints) -> Hwp5Result<Str
         buf.clear();
     }
 
-    if !hints.paragraphs.is_empty() || !hints.tables.is_empty() || !paragraph_stack.is_empty() {
-        return Err(Hwp5Error::Cfb { detail: "layout hint patch left unconsumed hints".into() });
-    }
+    state.finish()?;
 
     let bytes = writer.into_inner().into_inner();
     String::from_utf8(bytes).map_err(|e| Hwp5Error::Cfb {
@@ -399,6 +529,22 @@ fn local_name(name: &[u8]) -> &[u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::decoder::section::Hwp5NestedSubtree;
+
+    fn paragraph(
+        text: &str,
+        line_segments: Vec<Hwp5ParaLineSeg>,
+        controls: Vec<Hwp5Control>,
+    ) -> Hwp5Paragraph {
+        Hwp5Paragraph {
+            text: text.into(),
+            para_shape_id: 0,
+            style_id: 0,
+            char_shape_runs: Vec::new(),
+            line_segments,
+            controls,
+        }
+    }
 
     fn line_segment(
         text_start_position: u32,
@@ -483,12 +629,77 @@ mod tests {
                     ],
                 },
             ]),
-            tables: VecDeque::from(vec![TableLayoutHint { height: 4482 }]),
+            tables: VecDeque::from(vec![TableLayoutHint { height: Some(4482) }]),
         };
 
         let patched = patch_section_xml(xml, hints).expect("section xml should patch");
         assert!(patched
             .contains(r#"<hp:linesegarray><hp:lineseg textpos="0" vertpos="0" vertsize="1000""#));
         assert!(patched.contains(r#"height="4482""#));
+    }
+
+    #[test]
+    fn collect_section_layout_hints_orders_body_before_header_and_footer() {
+        let section = SectionResult {
+            paragraphs: vec![
+                paragraph(
+                    "body-a",
+                    vec![line_segment(10, 0, 1000)],
+                    vec![Hwp5Control::Header(Hwp5NestedSubtree {
+                        ctrl_id: 0x6865_6164,
+                        paragraphs: vec![paragraph(
+                            "header",
+                            vec![line_segment(30, 0, 1000)],
+                            Vec::new(),
+                        )],
+                    })],
+                ),
+                paragraph(
+                    "body-b",
+                    vec![line_segment(20, 0, 1000)],
+                    vec![Hwp5Control::Footer(Hwp5NestedSubtree {
+                        ctrl_id: 0x666F_6F74,
+                        paragraphs: vec![paragraph(
+                            "footer",
+                            vec![line_segment(40, 0, 1000)],
+                            Vec::new(),
+                        )],
+                    })],
+                ),
+            ],
+            page_def: None,
+            warnings: Vec::new(),
+        };
+
+        let hints = collect_section_layout_hints(&section);
+        let order = hints
+            .paragraphs
+            .iter()
+            .map(|hint| hint.line_segments[0].text_start_position)
+            .collect::<Vec<_>>();
+
+        assert_eq!(order, vec![10, 20, 30, 40]);
+    }
+
+    #[test]
+    fn patch_section_xml_skips_table_height_when_hint_is_unknown() {
+        let xml = concat!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>"#,
+            r#"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">"#,
+            r#"<hp:p id="0" paraPrIDRef="0" styleIDRef="0"><hp:run charPrIDRef="0"><hp:tbl id="1" rowCnt="2" colCnt="1" cellSpacing="0" borderFillIDRef="2"><hp:sz width="1000" widthRelTo="ABSOLUTE" height="7777" heightRelTo="ABSOLUTE" protect="0"/><hp:tr><hp:tc borderFillIDRef="2"><hp:subList><hp:p id="1" paraPrIDRef="0" styleIDRef="0"><hp:run charPrIDRef="0"><hp:t>CELL</hp:t></hp:run></hp:p></hp:subList></hp:tc></hp:tr></hp:tbl></hp:run></hp:p>"#,
+            r#"</hs:sec>"#
+        );
+
+        let hints = SectionLayoutHints {
+            paragraphs: VecDeque::from(vec![
+                ParagraphLayoutHint { line_segments: vec![line_segment(0, 0, 1000)] },
+                ParagraphLayoutHint { line_segments: vec![line_segment(0, 0, 1000)] },
+            ]),
+            tables: VecDeque::from(vec![TableLayoutHint { height: None }]),
+        };
+
+        let patched = patch_section_xml(xml, hints).expect("section xml should patch");
+        assert!(patched.contains(r#"height="7777""#));
+        assert!(!patched.contains(r#"height="0""#));
     }
 }

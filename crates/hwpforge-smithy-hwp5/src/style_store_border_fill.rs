@@ -4,6 +4,7 @@ use crate::schema::border_fill::{
     Hwp5BorderLineKind, Hwp5FillImageEffect, Hwp5FillImageMode, Hwp5FillPatternKind,
     Hwp5GradationType, Hwp5RawBorderFill, Hwp5RawBorderFillFill,
 };
+use crate::warning_utils::push_projection_fallback;
 use hwpforge_foundation::{Color, GradientType, PatternType};
 use hwpforge_smithy_hwpx::{
     style_store::{
@@ -174,13 +175,14 @@ fn hwp5_fill_to_hwpx(
         },
         Hwp5RawBorderFillFill::Image(fill) => {
             let Some(mode) = hwp5_image_fill_mode_to_hwpx(fill.mode) else {
-                warnings.push(Hwp5Warning::ProjectionFallback {
-                    subject: "style.border_fill.image_fill_mode",
-                    reason: format!(
+                push_projection_fallback(
+                    warnings,
+                    "style.border_fill.image_fill_mode",
+                    format!(
                         "border_fill_id={border_fill_id}, raw_mode={:?}, bindata_id={}",
                         fill.mode, fill.bindata_id
                     ),
-                });
+                );
                 return BorderFillFillProjection::default();
             };
             BorderFillFillProjection {

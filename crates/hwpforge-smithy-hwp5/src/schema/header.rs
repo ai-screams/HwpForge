@@ -1082,6 +1082,17 @@ impl Hwp5RawParaShape {
         self.property1 & (1 << 8) != 0
     }
 
+    /// Returns the paragraph vertical-alignment mode encoded in `property1`
+    /// bits 20-21.
+    pub fn vertical_align_raw(&self) -> u32 {
+        (self.property1 >> 20) & 0b11
+    }
+
+    /// Returns `true` if font-based line height calculation (bit 22) is enabled.
+    pub fn font_line_height(&self) -> bool {
+        self.property1 & (1 << 22) != 0
+    }
+
     /// Returns `true` if widow/orphan protection (bit 16) is enabled.
     pub fn widow_orphan(&self) -> bool {
         self.property1 & (1 << 16) != 0
@@ -1104,6 +1115,29 @@ impl Hwp5RawParaShape {
         } else {
             BreakType::None
         }
+    }
+
+    /// Returns `true` if paragraph borders connect across adjacent paragraphs
+    /// (bit 28).
+    pub fn border_connect(&self) -> bool {
+        self.property1 & (1 << 28) != 0
+    }
+
+    /// Returns `true` if paragraph border drawing ignores margins (bit 29).
+    pub fn border_ignore_margin(&self) -> bool {
+        self.property1 & (1 << 29) != 0
+    }
+
+    /// Returns `true` if Korean/English auto-spacing is enabled
+    /// (`property2` bit 4).
+    pub fn auto_spacing_kr_eng(&self) -> bool {
+        self.property2.is_some_and(|property2| property2 & (1 << 4) != 0)
+    }
+
+    /// Returns `true` if Korean/number auto-spacing is enabled
+    /// (`property2` bit 5).
+    pub fn auto_spacing_kr_num(&self) -> bool {
+        self.property2.is_some_and(|property2| property2 & (1 << 5) != 0)
     }
 
     pub(crate) fn line_spacing_kind_raw(&self) -> u32 {

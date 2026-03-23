@@ -762,6 +762,68 @@ fn hwp5_para_shape_warns_on_unsupported_line_spacing_and_latin_hyphenation() {
 }
 
 #[test]
+fn hwp5_para_shape_warns_on_dropped_border_and_spacing_flags() {
+    let mut raw = Hwp5RawParaShape::default_for_test();
+    raw.property1 = (2 << 20) | (1 << 22) | (1 << 28) | (1 << 29);
+    raw.property2 = Some((1 << 4) | (1 << 5));
+    raw.border_offset_left = 10;
+    raw.border_offset_right = -20;
+    raw.border_offset_top = 30;
+    raw.border_offset_bottom = -40;
+
+    let store = Hwp5StyleStore {
+        id_mappings: None,
+        fonts: vec![],
+        char_shapes: vec![],
+        para_shapes: vec![raw],
+        numberings: vec![],
+        bullets: vec![],
+        tab_defs: vec![],
+        styles: vec![],
+        border_fills: vec![],
+    };
+
+    let (_, warnings) = store.to_hwpx_style_store_with_warnings();
+
+    assert!(warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, .. }
+            if *subject == "style.para_shape.vertical_align"
+    )));
+    assert!(warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, .. }
+            if *subject == "style.para_shape.font_line_height"
+    )));
+    assert!(warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, reason }
+            if *subject == "style.para_shape.auto_spacing"
+                && reason.contains("kr_eng")
+                && reason.contains("kr_num")
+    )));
+    assert!(warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, reason }
+            if *subject == "style.para_shape.border_offsets"
+                && reason.contains("10")
+                && reason.contains("-20")
+                && reason.contains("30")
+                && reason.contains("-40")
+    )));
+    assert!(warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, .. }
+            if *subject == "style.para_shape.border_connect"
+    )));
+    assert!(warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, .. }
+            if *subject == "style.para_shape.border_ignore_margin"
+    )));
+}
+
+#[test]
 fn hwp5_para_shape_heading_bits_map_to_kind_level_and_ref() {
     let mut raw = Hwp5RawParaShape::default_for_test();
     raw.property1 = (1 << 23) | (5 << 25);

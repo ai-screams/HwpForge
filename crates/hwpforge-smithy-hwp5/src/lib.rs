@@ -53,6 +53,7 @@ mod table_page_break;
 #[cfg(test)]
 /// Test-only helpers for resolving shared workspace fixtures.
 pub(crate) mod test_support;
+mod warning_utils;
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -60,6 +61,7 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::numeric::positive_i32_from_u32;
+use crate::warning_utils::push_projection_fallback;
 use hwpforge_core::document::{Document, Draft};
 use hwpforge_core::image::ImageStore;
 
@@ -605,10 +607,11 @@ fn supplement_border_fill_image_assets(
 ) {
     for binary_data_id in hwp5_styles.border_fill_image_binary_ids() {
         let Some(asset) = image_assets.asset_for_binary_data_id(binary_data_id) else {
-            warnings.push(Hwp5Warning::ProjectionFallback {
-                subject: "style.border_fill.image",
-                reason: format!("missing_image_asset_for_binary_data_id={binary_data_id}"),
-            });
+            push_projection_fallback(
+                warnings,
+                "style.border_fill.image",
+                format!("missing_image_asset_for_binary_data_id={binary_data_id}"),
+            );
             continue;
         };
         image_store.insert(asset.payload.storage_name.clone(), asset.bytes.clone());

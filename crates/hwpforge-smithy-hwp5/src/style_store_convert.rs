@@ -4,6 +4,7 @@ use crate::schema::header::{
     Hwp5RawTabDef,
 };
 use crate::style_store::Hwp5StyleStore;
+use crate::warning_utils::push_projection_fallback;
 use hwpforge_core::{TabDef, TabStop};
 use hwpforge_foundation::{
     BorderFillIndex, Color, FontIndex, HeadingType, HwpUnit, StrikeoutShape, TabAlign, TabLeader,
@@ -201,74 +202,149 @@ fn append_char_shape_projection_warnings(
     raw_id: usize,
     warnings: &mut Vec<Hwp5Warning>,
 ) {
-    if raw.underline_type() != UnderlineType::None && raw.underline_shape_raw() != 0 {
-        warnings.push(Hwp5Warning::ProjectionFallback {
-            subject: "style.char_shape.underline_shape",
-            reason: format!(
-                "char shape {raw_id} underline shape {} collapsed to SOLID because the shared IR does not carry underline line families",
-                raw.underline_shape_raw()
-            ),
-        });
-    }
+    warn_on_char_underline_shape(raw, raw_id, warnings);
+    warn_on_char_outline_kind(raw, raw_id, warnings);
+    warn_on_char_shadow_kind(raw, raw_id, warnings);
+    warn_on_char_strike_shape(raw, raw_id, warnings);
+    warn_on_char_dropped_relief_effects(raw, raw_id, warnings);
+    warn_on_char_vertical_position(raw, raw_id, warnings);
+    warn_on_char_script_scalar_collapse(raw, raw_id, warnings);
+}
 
-    if raw.outline_kind_raw() != 0 {
-        warnings.push(Hwp5Warning::ProjectionFallback {
-            subject: "style.char_shape.outline_kind",
-            reason: format!(
-                "char shape {raw_id} outline kind {} collapsed to Solid because the shared IR only carries None vs Solid",
-                raw.outline_kind_raw()
-            ),
-        });
-    }
+fn append_para_shape_projection_warnings(
+    raw: &Hwp5RawParaShape,
+    raw_id: usize,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    warn_on_para_line_spacing_kind(raw, raw_id, warnings);
+    warn_on_para_break_latin_word(raw, raw_id, warnings);
+    warn_on_para_vertical_align(raw, raw_id, warnings);
+    warn_on_para_font_line_height(raw, raw_id, warnings);
+    warn_on_para_auto_spacing(raw, raw_id, warnings);
+    warn_on_para_border_offsets(raw, raw_id, warnings);
+    warn_on_para_border_flags(raw, raw_id, warnings);
+}
 
-    if raw.shadow_kind_raw() != 0 {
-        warnings.push(Hwp5Warning::ProjectionFallback {
-            subject: "style.char_shape.shadow_kind",
-            reason: format!(
-                "char shape {raw_id} shadow kind {} collapsed to Drop because the shared IR only carries None vs Drop",
-                raw.shadow_kind_raw()
-            ),
-        });
+fn warn_on_char_underline_shape(
+    raw: &Hwp5RawCharShape,
+    raw_id: usize,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    if raw.underline_type() == UnderlineType::None || raw.underline_shape_raw() == 0 {
+        return;
     }
+    push_projection_fallback(
+        warnings,
+        "style.char_shape.underline_shape",
+        format!(
+            "char shape {raw_id} underline shape {} collapsed to SOLID because the shared IR does not carry underline line families",
+            raw.underline_shape_raw()
+        ),
+    );
+}
 
-    if raw.has_strikeout() && raw.strike_shape_raw() > 4 {
-        warnings.push(Hwp5Warning::ProjectionFallback {
-            subject: "style.char_shape.strike_shape",
-            reason: format!(
-                "char shape {raw_id} strike shape {} collapsed to Continuous because the shared IR does not support that line family",
-                raw.strike_shape_raw()
-            ),
-        });
+fn warn_on_char_outline_kind(
+    raw: &Hwp5RawCharShape,
+    raw_id: usize,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    if raw.outline_kind_raw() == 0 {
+        return;
     }
+    push_projection_fallback(
+        warnings,
+        "style.char_shape.outline_kind",
+        format!(
+            "char shape {raw_id} outline kind {} collapsed to Solid because the shared IR only carries None vs Solid",
+            raw.outline_kind_raw()
+        ),
+    );
+}
 
+fn warn_on_char_shadow_kind(
+    raw: &Hwp5RawCharShape,
+    raw_id: usize,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    if raw.shadow_kind_raw() == 0 {
+        return;
+    }
+    push_projection_fallback(
+        warnings,
+        "style.char_shape.shadow_kind",
+        format!(
+            "char shape {raw_id} shadow kind {} collapsed to Drop because the shared IR only carries None vs Drop",
+            raw.shadow_kind_raw()
+        ),
+    );
+}
+
+fn warn_on_char_strike_shape(
+    raw: &Hwp5RawCharShape,
+    raw_id: usize,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    if !raw.has_strikeout() || raw.strike_shape_raw() <= 4 {
+        return;
+    }
+    push_projection_fallback(
+        warnings,
+        "style.char_shape.strike_shape",
+        format!(
+            "char shape {raw_id} strike shape {} collapsed to Continuous because the shared IR does not support that line family",
+            raw.strike_shape_raw()
+        ),
+    );
+}
+
+fn warn_on_char_dropped_relief_effects(
+    raw: &Hwp5RawCharShape,
+    raw_id: usize,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
     if raw.emboss() {
-        warnings.push(Hwp5Warning::ProjectionFallback {
-            subject: "style.char_shape.emboss",
-            reason: format!(
+        push_projection_fallback(
+            warnings,
+            "style.char_shape.emboss",
+            format!(
                 "char shape {raw_id} emboss effect was dropped because the current HWPX codec does not serialize emboss"
             ),
-        });
+        );
     }
-
     if raw.engrave() {
-        warnings.push(Hwp5Warning::ProjectionFallback {
-            subject: "style.char_shape.engrave",
-            reason: format!(
+        push_projection_fallback(
+            warnings,
+            "style.char_shape.engrave",
+            format!(
                 "char shape {raw_id} engrave effect was dropped because the current HWPX codec does not serialize engrave"
             ),
-        });
+        );
     }
+}
 
-    if raw.superscript() || raw.subscript() {
-        let mode = if raw.superscript() { "superscript" } else { "subscript" };
-        warnings.push(Hwp5Warning::ProjectionFallback {
-            subject: "style.char_shape.vertical_position",
-            reason: format!(
-                "char shape {raw_id} {mode} flag was dropped because the current HWPX codec does not serialize vertical_position"
-            ),
-        });
+fn warn_on_char_vertical_position(
+    raw: &Hwp5RawCharShape,
+    raw_id: usize,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    if !raw.superscript() && !raw.subscript() {
+        return;
     }
+    let mode = if raw.superscript() { "superscript" } else { "subscript" };
+    push_projection_fallback(
+        warnings,
+        "style.char_shape.vertical_position",
+        format!(
+            "char shape {raw_id} {mode} flag was dropped because the current HWPX codec does not serialize vertical_position"
+        ),
+    );
+}
 
+fn warn_on_char_script_scalar_collapse(
+    raw: &Hwp5RawCharShape,
+    raw_id: usize,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
     let mut divergent_fields: Vec<&'static str> = Vec::new();
     if !raw.ratio_is_uniform() {
         divergent_fields.push("ratio");
@@ -282,46 +358,168 @@ fn append_char_shape_projection_warnings(
     if !raw.offset_is_uniform() {
         divergent_fields.push("char_offset");
     }
-    if !divergent_fields.is_empty() {
-        warnings.push(Hwp5Warning::ProjectionFallback {
-            subject: "style.char_shape.script_scalars",
-            reason: format!(
-                "char shape {raw_id} has script-specific {} values; collapsing to the hangul slot because the shared IR stores a single scalar per field",
-                divergent_fields.join(", ")
-            ),
-        });
+    if divergent_fields.is_empty() {
+        return;
     }
+    push_projection_fallback(
+        warnings,
+        "style.char_shape.script_scalars",
+        format!(
+            "char shape {raw_id} has script-specific {} values; collapsing to the hangul slot because the shared IR stores a single scalar per field",
+            divergent_fields.join(", ")
+        ),
+    );
 }
 
-fn append_para_shape_projection_warnings(
+fn warn_on_para_line_spacing_kind(
     raw: &Hwp5RawParaShape,
     raw_id: usize,
     warnings: &mut Vec<Hwp5Warning>,
 ) {
-    if raw.line_spacing_kind_raw() > 2 {
-        warnings.push(Hwp5Warning::ProjectionFallback {
-            subject: "style.para_shape.line_spacing",
-            reason: format!(
-                "para shape {raw_id} line spacing kind {} collapsed to Percentage because the shared IR only supports Percentage, Fixed, and BetweenLines",
-                raw.line_spacing_kind_raw()
-            ),
-        });
+    if raw.line_spacing_kind_raw() <= 2 {
+        return;
     }
+    push_projection_fallback(
+        warnings,
+        "style.para_shape.line_spacing",
+        format!(
+            "para shape {raw_id} line spacing kind {} collapsed to Percentage because the shared IR only supports Percentage, Fixed, and BetweenLines",
+            raw.line_spacing_kind_raw()
+        ),
+    );
+}
 
+fn warn_on_para_break_latin_word(
+    raw: &Hwp5RawParaShape,
+    raw_id: usize,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
     match raw.break_latin_word_raw() {
-        1 => warnings.push(Hwp5Warning::ProjectionFallback {
-            subject: "style.para_shape.break_latin_word",
-            reason: format!(
+        1 => push_projection_fallback(
+            warnings,
+            "style.para_shape.break_latin_word",
+            format!(
                 "para shape {raw_id} latin hyphenation collapsed to KEEP_WORD because the shared IR has no HYPHENATION variant"
             ),
-        }),
-        3 => warnings.push(Hwp5Warning::ProjectionFallback {
-            subject: "style.para_shape.break_latin_word",
-            reason: format!(
-                "para shape {raw_id} latin break mode 3 is unknown and collapsed to KEEP_WORD"
-            ),
-        }),
+        ),
+        3 => push_projection_fallback(
+            warnings,
+            "style.para_shape.break_latin_word",
+            format!("para shape {raw_id} latin break mode 3 is unknown and collapsed to KEEP_WORD"),
+        ),
         _ => {}
+    }
+}
+
+fn warn_on_para_vertical_align(
+    raw: &Hwp5RawParaShape,
+    raw_id: usize,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    if raw.vertical_align_raw() == 0 {
+        return;
+    }
+    push_projection_fallback(
+        warnings,
+        "style.para_shape.vertical_align",
+        format!(
+            "para shape {raw_id} vertical align mode {} was dropped because the current style surface only carries horizontal alignment",
+            raw.vertical_align_raw()
+        ),
+    );
+}
+
+fn warn_on_para_font_line_height(
+    raw: &Hwp5RawParaShape,
+    raw_id: usize,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    if !raw.font_line_height() {
+        return;
+    }
+    push_projection_fallback(
+        warnings,
+        "style.para_shape.font_line_height",
+        format!(
+            "para shape {raw_id} font-line-height flag was dropped because the current style surface does not carry that switch"
+        ),
+    );
+}
+
+fn warn_on_para_auto_spacing(
+    raw: &Hwp5RawParaShape,
+    raw_id: usize,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    if !raw.auto_spacing_kr_eng() && !raw.auto_spacing_kr_num() {
+        return;
+    }
+    let mut enabled: Vec<&str> = Vec::new();
+    if raw.auto_spacing_kr_eng() {
+        enabled.push("kr_eng");
+    }
+    if raw.auto_spacing_kr_num() {
+        enabled.push("kr_num");
+    }
+    push_projection_fallback(
+        warnings,
+        "style.para_shape.auto_spacing",
+        format!(
+            "para shape {raw_id} auto-spacing [{}] was dropped because the current style surface does not carry those flags",
+            enabled.join(", ")
+        ),
+    );
+}
+
+fn warn_on_para_border_offsets(
+    raw: &Hwp5RawParaShape,
+    raw_id: usize,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    let border_offsets = [
+        raw.border_offset_left,
+        raw.border_offset_right,
+        raw.border_offset_top,
+        raw.border_offset_bottom,
+    ];
+    if !border_offsets.into_iter().any(|offset| offset != 0) {
+        return;
+    }
+    push_projection_fallback(
+        warnings,
+        "style.para_shape.border_offsets",
+        format!(
+            "para shape {raw_id} border offsets [{}, {}, {}, {}] were dropped because the current style surface only carries borderFill references",
+            raw.border_offset_left,
+            raw.border_offset_right,
+            raw.border_offset_top,
+            raw.border_offset_bottom
+        ),
+    );
+}
+
+fn warn_on_para_border_flags(
+    raw: &Hwp5RawParaShape,
+    raw_id: usize,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    if raw.border_connect() {
+        push_projection_fallback(
+            warnings,
+            "style.para_shape.border_connect",
+            format!(
+                "para shape {raw_id} border-connect flag was dropped because the current style surface does not carry paragraph border adjacency semantics"
+            ),
+        );
+    }
+    if raw.border_ignore_margin() {
+        push_projection_fallback(
+            warnings,
+            "style.para_shape.border_ignore_margin",
+            format!(
+                "para shape {raw_id} border-ignore-margin flag was dropped because the current style surface does not carry that rendering mode"
+            ),
+        );
     }
 }
 

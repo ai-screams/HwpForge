@@ -30,6 +30,7 @@ use crate::table_cell_vertical_align::{
     core_table_cell_vertical_align, unknown_hwp5_table_cell_vertical_align_raw,
 };
 use crate::table_page_break::{core_table_page_break, unknown_hwp5_table_page_break_raw};
+use crate::warning_utils::push_projection_fallback;
 use crate::{Hwp5JoinedImageAsset, Hwp5JoinedImageAssetPlan};
 
 // ---------------------------------------------------------------------------
@@ -739,15 +740,16 @@ fn projected_row_is_header(cells: &[&Hwp5TableCell], warnings: &mut Vec<Hwp5Warn
     } else if header_count == cells.len() {
         true
     } else {
-        warnings.push(Hwp5Warning::ProjectionFallback {
-            subject: "table.header_row",
-            reason: format!(
+        push_projection_fallback(
+            warnings,
+            "table.header_row",
+            format!(
                 "mixed_hwp5_table_header_cells row={} header_cells={} total_cells={}; defaulting_to=non_header_row",
                 cells[0].row,
                 header_count,
                 cells.len()
             ),
-        });
+        );
         false
     }
 }
@@ -766,14 +768,15 @@ fn apply_table_projection_metadata(
 
     match core_table_page_break(table.page_break) {
         Some(page_break) => core_table.page_break = page_break,
-        None => warnings.push(Hwp5Warning::ProjectionFallback {
-            subject: "table.page_break",
-            reason: format!(
+        None => push_projection_fallback(
+            warnings,
+            "table.page_break",
+            format!(
                 "unknown_hwp5_table_page_break_raw={}; defaulting_to=cell",
                 unknown_hwp5_table_page_break_raw(table.page_break)
                     .expect("known table page-break values must not use projection fallback",),
             ),
-        }),
+        ),
     }
 }
 
@@ -810,9 +813,10 @@ fn project_table_cell_with_images(
     });
     match core_table_cell_vertical_align(cell.vertical_align) {
         Some(vertical_align) => core_cell.vertical_align = Some(vertical_align),
-        None => projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
-            subject: "table.cell.vertical_align",
-            reason: format!(
+        None => push_projection_fallback(
+            &mut projection_images.warnings,
+            "table.cell.vertical_align",
+            format!(
                 "row={} col={} unknown_hwp5_table_cell_vertical_align_raw={}; dropping_vertical_align",
                 cell.row,
                 cell.column,
@@ -820,7 +824,7 @@ fn project_table_cell_with_images(
                     "known table cell vertical-align values must not use projection fallback",
                 ),
             ),
-        }),
+        ),
     }
     core_cell
 }

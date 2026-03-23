@@ -22,7 +22,10 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Audit a converted HWPX file against its original HWP5 source.
+    /// Audit structural/semantic parity between HWP5 source and converted HWPX output.
+    #[command(
+        long_about = "Audit structural and semantic parity between an HWP5 source and a converted HWPX result.\n\nThis command compares parser-backed semantic metrics and recursive package analysis. It does not guarantee pixel-perfect visual or pagination parity; use the checklist in the report for follow-up visual verification."
+    )]
     AuditHwp5 {
         /// Original HWP5 (`.hwp`) file.
         source: PathBuf,
@@ -70,6 +73,9 @@ enum Commands {
     },
 
     /// Inspect HWPX document structure.
+    #[command(
+        long_about = "Inspect decoded HWPX document structure.\n\nThis command accepts HWPX files only. For HWP5 sources, use `convert-hwp5` to generate HWPX first, or `audit-hwp5` to compare a converted HWPX result against the original HWP5 source."
+    )]
     Inspect {
         /// HWPX file to inspect.
         file: PathBuf,
