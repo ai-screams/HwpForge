@@ -11,9 +11,9 @@ use crate::error::Hwp5Result;
 use crate::schema::header::HwpVersion;
 use crate::schema::record::{Record, TagId};
 use crate::schema::section::{
-    Hwp5CharShapeRun, Hwp5PageDef, Hwp5ParaHeader, Hwp5ParaText, Hwp5ShapeComponentGeometry,
-    Hwp5ShapeComponentLine, Hwp5ShapeComponentOle, Hwp5ShapeComponentPolygon, Hwp5ShapePicture,
-    Hwp5ShapePoint, TextSegment,
+    Hwp5CharShapeRun, Hwp5PageDef, Hwp5ParaHeader, Hwp5ParaLineSeg, Hwp5ParaText,
+    Hwp5ShapeComponentGeometry, Hwp5ShapeComponentLine, Hwp5ShapeComponentOle,
+    Hwp5ShapeComponentPolygon, Hwp5ShapePicture, Hwp5ShapePoint, TextSegment,
 };
 
 // ---------------------------------------------------------------------------
@@ -33,6 +33,8 @@ pub(crate) struct Hwp5Paragraph {
     pub style_id: u8,
     /// Character shape runs: (position, char_shape_id) pairs.
     pub char_shape_runs: Vec<Hwp5CharShapeRun>,
+    /// Format-local line layout cache entries from `ParaLineSeg`.
+    pub line_segments: Vec<Hwp5ParaLineSeg>,
     /// Inline control objects found in this paragraph (table refs, footnote refs, etc.).
     pub controls: Vec<Hwp5Control>,
 }
@@ -270,12 +272,19 @@ struct ParaBuf {
     header: Hwp5ParaHeader,
     text: Option<Hwp5ParaText>,
     char_shape_runs: Vec<Hwp5CharShapeRun>,
+    line_segments: Vec<Hwp5ParaLineSeg>,
     controls: Vec<Hwp5Control>,
 }
 
 impl ParaBuf {
     fn new(header: Hwp5ParaHeader) -> Self {
-        Self { header, text: None, char_shape_runs: Vec::new(), controls: Vec::new() }
+        Self {
+            header,
+            text: None,
+            char_shape_runs: Vec::new(),
+            line_segments: Vec::new(),
+            controls: Vec::new(),
+        }
     }
 
     /// Build the final `Hwp5Paragraph`, consuming this buffer.
@@ -289,6 +298,7 @@ impl ParaBuf {
             para_shape_id: self.header.para_shape_id,
             style_id: self.header.style_id,
             char_shape_runs: self.char_shape_runs,
+            line_segments: self.line_segments,
             controls: self.controls,
         }
     }
@@ -820,7 +830,19 @@ impl BodyTextParserState {
                     }
                 }
             }
-            TagId::ParaLineSeg => {}
+            TagId::ParaLineSeg => {
+                if let Some(buf) =
+                    self.table_stack.last_mut().and_then(|ctx| ctx.current_cell_para.as_mut())
+                {
+                    if let Some(segments) = Self::parse_para_line_segments(
+                        record.header.tag_id,
+                        &record.data,
+                        &mut self.warnings,
+                    ) {
+                        buf.line_segments = segments;
+                    }
+                }
+            }
             TagId::CtrlHeader => {
                 if let Some(ctx) = self.table_stack.last_mut() {
                     let ctrl_id = parse_ctrl_id(&record.data);
@@ -947,7 +969,17 @@ impl BodyTextParserState {
                     }
                 }
             }
-            TagId::ParaLineSeg => {}
+            TagId::ParaLineSeg => {
+                if let Some(buf) = self.current_subtree_para.as_mut() {
+                    if let Some(segments) = Self::parse_para_line_segments(
+                        record.header.tag_id,
+                        &record.data,
+                        &mut self.warnings,
+                    ) {
+                        buf.line_segments = segments;
+                    }
+                }
+            }
             TagId::CtrlHeader => {
                 if let Some(buf) = self.current_subtree_para.as_mut() {
                     let ctrl_id = parse_ctrl_id(&record.data);
@@ -1005,7 +1037,17 @@ impl BodyTextParserState {
                     }
                 }
             }
-            TagId::ParaLineSeg => {}
+            TagId::ParaLineSeg => {
+                if let Some(buf) = self.current.as_mut() {
+                    if let Some(segments) = Self::parse_para_line_segments(
+                        record.header.tag_id,
+                        &record.data,
+                        &mut self.warnings,
+                    ) {
+                        buf.line_segments = segments;
+                    }
+                }
+            }
             TagId::PageDef => match Hwp5PageDef::parse(&record.data) {
                 Ok(pd) => self.page_def = Some(pd),
                 Err(_) => self.push_unsupported_tag(record.header.tag_id),
@@ -1100,6 +1142,20 @@ impl BodyTextParserState {
     ) -> Option<Vec<Hwp5CharShapeRun>> {
         match Hwp5CharShapeRun::parse_all(data) {
             Ok(runs) => Some(runs),
+            Err(_) => {
+                warnings.push(Hwp5Warning::UnsupportedTag { tag_id, offset: 0 });
+                None
+            }
+        }
+    }
+
+    fn parse_para_line_segments(
+        tag_id: u16,
+        data: &[u8],
+        warnings: &mut Vec<Hwp5Warning>,
+    ) -> Option<Vec<Hwp5ParaLineSeg>> {
+        match Hwp5ParaLineSeg::parse_all(data) {
+            Ok(segments) => Some(segments),
             Err(_) => {
                 warnings.push(Hwp5Warning::UnsupportedTag { tag_id, offset: 0 });
                 None
@@ -1396,6 +1452,22 @@ mod tests {
 
     fn para_text_data(s: &str) -> Vec<u8> {
         s.encode_utf16().flat_map(|c| c.to_le_bytes()).collect()
+    }
+
+    fn para_line_seg_data(segments: &[(u32, i32, i32)]) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(segments.len() * 36);
+        for &(textpos, vertpos, vertsize) in segments {
+            buf.extend_from_slice(&textpos.to_le_bytes());
+            buf.extend_from_slice(&vertpos.to_le_bytes());
+            buf.extend_from_slice(&vertsize.to_le_bytes());
+            buf.extend_from_slice(&1000i32.to_le_bytes());
+            buf.extend_from_slice(&850i32.to_le_bytes());
+            buf.extend_from_slice(&600i32.to_le_bytes());
+            buf.extend_from_slice(&0i32.to_le_bytes());
+            buf.extend_from_slice(&20272i32.to_le_bytes());
+            buf.extend_from_slice(&393216u32.to_le_bytes());
+        }
+        buf
     }
 
     fn para_text_with_control_ref(prefix: &str, suffix: &str) -> Vec<u8> {
@@ -1963,16 +2035,22 @@ mod tests {
     }
 
     #[test]
-    fn para_line_seg_is_silently_skipped() {
+    fn para_line_seg_is_parsed_into_paragraph_layout_cache() {
         let mut stream = Vec::new();
         stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
         stream.extend(make_record(TagId::ParaText, 0, &para_text_data("ok")));
-        // ParaLineSeg should be silently skipped.
-        stream.extend(make_record(TagId::ParaLineSeg, 0, &[0u8; 16]));
+        stream.extend(make_record(
+            TagId::ParaLineSeg,
+            0,
+            &para_line_seg_data(&[(0, 0, 1000), (2, 1600, 1000)]),
+        ));
 
         let result = parse_body_text(&stream, &version()).unwrap();
         assert_eq!(result.paragraphs.len(), 1);
         assert_eq!(result.paragraphs[0].text, "ok");
+        assert_eq!(result.paragraphs[0].line_segments.len(), 2);
+        assert_eq!(result.paragraphs[0].line_segments[1].text_start_position, 2);
+        assert_eq!(result.paragraphs[0].line_segments[1].vertical_position, 1600);
         assert!(result.warnings.is_empty());
     }
 

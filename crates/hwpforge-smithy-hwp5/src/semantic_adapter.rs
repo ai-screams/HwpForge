@@ -1011,6 +1011,7 @@ mod tests {
                     para_shape_id: 2,
                     style_id: 1,
                     char_shape_runs: Vec::new(),
+                    line_segments: Vec::new(),
                     controls: vec![
                         Hwp5Control::Table(Hwp5Table {
                             rows: 1,
@@ -1040,6 +1041,7 @@ mod tests {
                                     para_shape_id: 4,
                                     style_id: 0,
                                     char_shape_runs: Vec::new(),
+                                    line_segments: Vec::new(),
                                     controls: vec![Hwp5Control::Unknown { ctrl_id: 0x6865_6164 }],
                                 }],
                             }],
@@ -1230,6 +1232,7 @@ mod tests {
                     para_shape_id: 0,
                     style_id: 0,
                     char_shape_runs: Vec::new(),
+                    line_segments: Vec::new(),
                     controls: vec![Hwp5Control::Unknown { ctrl_id: 0x6865_6164 }],
                 }],
                 page_def: None,
@@ -1260,6 +1263,7 @@ mod tests {
                     para_shape_id: 0,
                     style_id: 0,
                     char_shape_runs: Vec::new(),
+                    line_segments: Vec::new(),
                     controls: vec![Hwp5Control::Image(Hwp5ImageControl {
                         ctrl_id: 0x6773_6F20,
                         geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
@@ -1335,6 +1339,7 @@ mod tests {
                     para_shape_id: 0,
                     style_id: 0,
                     char_shape_runs: Vec::new(),
+                    line_segments: Vec::new(),
                     controls: vec![Hwp5Control::OleObject(Hwp5OleObjectControl {
                         ctrl_id: 0x6773_6F20,
                         geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
@@ -1382,6 +1387,7 @@ mod tests {
                     para_shape_id: 0,
                     style_id: 0,
                     char_shape_runs: Vec::new(),
+                    line_segments: Vec::new(),
                     controls: vec![Hwp5Control::TextBox(Hwp5TextBoxControl {
                         ctrl_id: 0x6773_6F20,
                         geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
@@ -1395,6 +1401,7 @@ mod tests {
                             para_shape_id: 1,
                             style_id: 0,
                             char_shape_runs: Vec::new(),
+                            line_segments: Vec::new(),
                             controls: vec![Hwp5Control::Unknown { ctrl_id: 0x6773_6F20 }],
                         }],
                     })],

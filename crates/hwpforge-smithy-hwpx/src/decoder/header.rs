@@ -448,8 +448,8 @@ fn convert_para_pr(pp: &HxParaPr) -> HwpxParaShape {
         .as_ref()
         .map(|bs| {
             (
-                parse_word_break_type(&bs.break_latin_word),
-                parse_word_break_type(&bs.break_non_latin_word),
+                parse_latin_word_break_type(&bs.break_latin_word),
+                parse_non_latin_word_break_type(&bs.break_non_latin_word),
                 normalize_line_wrap(&bs.line_wrap),
             )
         })
@@ -522,11 +522,22 @@ fn convert_para_pr(pp: &HxParaPr) -> HwpxParaShape {
     }
 }
 
-/// Parses a `breakLatinWord` / `breakNonLatinWord` attribute string into a [`WordBreakType`].
-fn parse_word_break_type(s: &str) -> WordBreakType {
+/// Parses `breakLatinWord` wire values into a [`WordBreakType`].
+fn parse_latin_word_break_type(s: &str) -> WordBreakType {
     match s {
         "BREAK_WORD" => WordBreakType::BreakWord,
         _ => WordBreakType::KeepWord,
+    }
+}
+
+/// Parses `breakNonLatinWord` wire values into a [`WordBreakType`].
+///
+/// Hancom HWPX stores the non-Latin labels opposite to the shared semantic
+/// meaning, so the inversion stays local to this codec boundary.
+fn parse_non_latin_word_break_type(s: &str) -> WordBreakType {
+    match s {
+        "BREAK_WORD" => WordBreakType::KeepWord,
+        _ => WordBreakType::BreakWord,
     }
 }
 
@@ -1106,7 +1117,7 @@ mod tests {
                 <paraProperties itemCnt="1">
                     <paraPr id="0" tabPrIDRef="3" condense="20" snapToGrid="0" checked="1">
                         <align horizontal="LEFT" vertical="BASELINE"/>
-                        <breakSetting breakLatinWord="BREAK_WORD" breakNonLatinWord="BREAK_WORD"
+                        <breakSetting breakLatinWord="BREAK_WORD" breakNonLatinWord="KEEP_WORD"
                             widowOrphan="1" keepWithNext="1" keepLines="1" pageBreakBefore="1"
                             lineWrap="SQUEEZE"/>
                         <border borderFillIDRef="5" offsetLeft="0" offsetRight="0" offsetTop="0"
@@ -1131,6 +1142,28 @@ mod tests {
         assert!(ps.checked);
         assert_eq!(ps.tab_pr_id_ref, 3);
         assert_eq!(ps.condense, 20);
+    }
+
+    #[test]
+    fn parse_para_pr_inverts_hancom_non_latin_break_wire() {
+        let xml = r#"<head version="1.4" secCnt="1">
+            <refList>
+                <paraProperties itemCnt="1">
+                    <paraPr id="0">
+                        <align horizontal="LEFT" vertical="BASELINE"/>
+                        <breakSetting breakLatinWord="KEEP_WORD" breakNonLatinWord="BREAK_WORD"
+                            widowOrphan="0" keepWithNext="0" keepLines="0" pageBreakBefore="0"
+                            lineWrap="BREAK"/>
+                    </paraPr>
+                </paraProperties>
+            </refList>
+        </head>"#;
+
+        let store = parse_header(xml).unwrap().style_store;
+        let ps = store.para_shape(hwpforge_foundation::ParaShapeIndex::new(0)).unwrap();
+
+        assert_eq!(ps.break_latin_word, WordBreakType::KeepWord);
+        assert_eq!(ps.break_non_latin_word, WordBreakType::KeepWord);
     }
 
     // ── Full header ──────────────────────────────────────────────

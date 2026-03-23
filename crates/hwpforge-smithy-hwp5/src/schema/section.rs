@@ -381,6 +381,73 @@ impl Hwp5CharShapeRun {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Hwp5ParaLineSeg
+// ---------------------------------------------------------------------------
+
+/// A single line layout segment from a `ParaLineSeg` (tag `0x45`) record.
+///
+/// This is format-local layout cache data. It must not leak into Core, but
+/// HWP5 → HWPX conversion can preserve it as a fidelity hint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Hwp5ParaLineSeg {
+    /// Character position where the line starts.
+    pub text_start_position: u32,
+    /// Vertical offset from the paragraph top in HWPUNIT.
+    pub vertical_position: i32,
+    /// Full line box height in HWPUNIT.
+    pub line_height: i32,
+    /// Text glyph box height in HWPUNIT.
+    pub text_height: i32,
+    /// Baseline position in HWPUNIT.
+    pub baseline_distance: i32,
+    /// Line spacing in HWPUNIT.
+    pub line_spacing: i32,
+    /// Horizontal start offset in HWPUNIT.
+    pub column_start_position: i32,
+    /// Available horizontal width in HWPUNIT.
+    pub segment_width: i32,
+    /// Layout flags bitfield.
+    pub tag: u32,
+}
+
+impl Hwp5ParaLineSeg {
+    /// Byte size of a single line segment entry.
+    const SEGMENT_SIZE: usize = 36;
+
+    /// Parse all line segment entries from a `ParaLineSeg` record payload.
+    pub(crate) fn parse_all(data: &[u8]) -> Hwp5Result<Vec<Self>> {
+        if !data.len().is_multiple_of(Self::SEGMENT_SIZE) {
+            return Err(Hwp5Error::RecordParse {
+                offset: 0,
+                detail: format!(
+                    "ParaLineSeg data length {} is not a multiple of {}",
+                    data.len(),
+                    Self::SEGMENT_SIZE
+                ),
+            });
+        }
+
+        let count = data.len() / Self::SEGMENT_SIZE;
+        let mut cur = Cursor::new(data);
+        let mut segments = Vec::with_capacity(count);
+        for _ in 0..count {
+            segments.push(Self {
+                text_start_position: cur.read_u32::<LittleEndian>()?,
+                vertical_position: cur.read_i32::<LittleEndian>()?,
+                line_height: cur.read_i32::<LittleEndian>()?,
+                text_height: cur.read_i32::<LittleEndian>()?,
+                baseline_distance: cur.read_i32::<LittleEndian>()?,
+                line_spacing: cur.read_i32::<LittleEndian>()?,
+                column_start_position: cur.read_i32::<LittleEndian>()?,
+                segment_width: cur.read_i32::<LittleEndian>()?,
+                tag: cur.read_u32::<LittleEndian>()?,
+            });
+        }
+        Ok(segments)
+    }
+}
+
 /// Minimal common geometry recovered from a `gso ` common-control payload.
 ///
 /// The signed offsets and size fields live inside the owning `CtrlHeader`

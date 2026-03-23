@@ -1680,7 +1680,9 @@ pub(crate) fn parse_alignment(s: &str) -> Alignment {
         Alignment::Right
     } else if s.eq_ignore_ascii_case("DISTRIBUTE") {
         Alignment::Distribute
-    } else if s.eq_ignore_ascii_case("DISTRIBUTE_FLUSH") {
+    } else if s.eq_ignore_ascii_case("DISTRIBUTE_SPACE")
+        || s.eq_ignore_ascii_case("DISTRIBUTE_FLUSH")
+    {
         Alignment::DistributeFlush
     } else {
         Alignment::Left
@@ -1978,6 +1980,8 @@ mod tests {
     fn parse_alignment_distribute() {
         assert_eq!(parse_alignment("DISTRIBUTE"), Alignment::Distribute);
         assert_eq!(parse_alignment("distribute"), Alignment::Distribute);
+        assert_eq!(parse_alignment("DISTRIBUTE_SPACE"), Alignment::DistributeFlush);
+        assert_eq!(parse_alignment("distribute_space"), Alignment::DistributeFlush);
         assert_eq!(parse_alignment("DISTRIBUTE_FLUSH"), Alignment::DistributeFlush);
         assert_eq!(parse_alignment("distribute_flush"), Alignment::DistributeFlush);
     }

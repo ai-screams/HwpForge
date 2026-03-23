@@ -7,7 +7,7 @@
 use hwpforge_core::NumberingDef;
 use hwpforge_foundation::{
     Alignment, BreakType, Color, EmphasisType, HwpUnit, LineSpacingType, NumberFormatType,
-    OutlineType, ShadowType, StrikeoutShape, UnderlineType,
+    OutlineType, ShadowType, StrikeoutShape, UnderlineType, WordBreakType,
 };
 
 use super::{escape_xml, header_tabs::build_tab_properties_xml};
@@ -725,13 +725,13 @@ fn build_para_pr(id: u32, ps: &HwpxParaShape) -> HxParaPr {
         suppress_line_numbers: 0,
         checked: u32::from(ps.checked),
         align: Some(HxAlign {
-            horizontal: alignment_to_str(ps.alignment).into(),
+            horizontal: alignment_to_hwpx(ps.alignment).into(),
             vertical: "BASELINE".into(),
         }),
         heading: Some(wire_parts_to_heading(ps.heading_type, ps.heading_id_ref, ps.heading_level)),
         break_setting: Some(HxBreakSetting {
-            break_latin_word: ps.break_latin_word.to_string(),
-            break_non_latin_word: ps.break_non_latin_word.to_string(),
+            break_latin_word: latin_word_break_type_to_hwpx(ps.break_latin_word).into(),
+            break_non_latin_word: non_latin_word_break_type_to_hwpx(ps.break_non_latin_word).into(),
             widow_orphan: u32::from(ps.widow_orphan),
             keep_with_next: u32::from(ps.keep_with_next),
             keep_lines: u32::from(ps.keep_lines_together),
@@ -746,14 +746,15 @@ fn build_para_pr(id: u32, ps: &HwpxParaShape) -> HxParaPr {
 
 /// Builds the `<hp:switch>` block with both `<hp:case>` and `<hp:default>`.
 ///
-/// Both branches carry identical margin and line-spacing values, which is
-/// the standard pattern emitted by the 한글 word processor.
+/// Hancom emits the `HwpUnitChar` case branch using half-scale values while
+/// the default branch keeps the regular HWP unit magnitudes. Mirroring that
+/// wire shape keeps paragraph layout stable when 한글 prefers the case branch.
 fn build_margin_switch(ps: &HwpxParaShape) -> HxSwitch {
     HxSwitch {
         case: Some(HxSwitchCase {
             required_namespace: "http://www.hancom.co.kr/hwpml/2016/HwpUnitChar".into(),
-            margin: Some(build_margin(ps)),
-            line_spacing: Some(build_line_spacing(ps)),
+            margin: Some(build_margin_case(ps)),
+            line_spacing: Some(build_line_spacing_case(ps)),
         }),
         default: Some(HxSwitchDefault {
             margin: Some(build_margin(ps)),
@@ -773,6 +774,19 @@ fn build_margin(ps: &HwpxParaShape) -> HxMargin {
     }
 }
 
+/// Builds the `HwpUnitChar` case-branch margin payload.
+///
+/// Hancom stores these values at half the default HWP unit scale.
+fn build_margin_case(ps: &HwpxParaShape) -> HxMargin {
+    HxMargin {
+        indent: Some(hwpunit_char_case_value(ps.indent)),
+        left: Some(hwpunit_char_case_value(ps.margin_left)),
+        right: Some(hwpunit_char_case_value(ps.margin_right)),
+        prev: Some(hwpunit_char_case_value(ps.spacing_before)),
+        next: Some(hwpunit_char_case_value(ps.spacing_after)),
+    }
+}
+
 /// Builds an `HxLineSpacing` from a para shape's line-spacing fields.
 fn build_line_spacing(ps: &HwpxParaShape) -> HxLineSpacing {
     HxLineSpacing {
@@ -782,9 +796,28 @@ fn build_line_spacing(ps: &HwpxParaShape) -> HxLineSpacing {
     }
 }
 
+/// Builds the `HwpUnitChar` case-branch line spacing payload.
+///
+/// Hancom stores these values at half the default HWP unit scale.
+fn build_line_spacing_case(ps: &HwpxParaShape) -> HxLineSpacing {
+    let value = match ps.line_spacing_type {
+        LineSpacingType::Percentage => ps.line_spacing.max(0) as u32,
+        _ => (ps.line_spacing.max(0) / 2) as u32,
+    };
+    HxLineSpacing {
+        spacing_type: line_spacing_type_to_hwpx(ps.line_spacing_type).into(),
+        value,
+        unit: "HWPUNIT".into(),
+    }
+}
+
 /// Creates an `HxUnitValue` from an `HwpUnit`.
 fn hwpunit_value(u: HwpUnit) -> HxUnitValue {
     HxUnitValue { value: u.as_i32(), unit: "HWPUNIT".into() }
+}
+
+fn hwpunit_char_case_value(u: HwpUnit) -> HxUnitValue {
+    HxUnitValue { value: u.as_i32() / 2, unit: "HWPUNIT".into() }
 }
 
 // ── Color / alignment helpers ───────────────────────────────────
@@ -802,16 +835,37 @@ fn shade_color_to_str(c: Option<&Color>) -> String {
 }
 
 /// Converts an [`Alignment`] to the HWPX uppercase string.
-fn alignment_to_str(a: Alignment) -> &'static str {
+fn alignment_to_hwpx(a: Alignment) -> &'static str {
     match a {
         Alignment::Left => "LEFT",
         Alignment::Center => "CENTER",
         Alignment::Right => "RIGHT",
         Alignment::Justify => "JUSTIFY",
         Alignment::Distribute => "DISTRIBUTE",
-        Alignment::DistributeFlush => "DISTRIBUTE_FLUSH",
+        Alignment::DistributeFlush => "DISTRIBUTE_SPACE",
         // non_exhaustive: default to LEFT for future variants
         _ => "LEFT",
+    }
+}
+
+/// Converts a semantic Latin word-break policy into HWPX wire labels.
+fn latin_word_break_type_to_hwpx(word_break: WordBreakType) -> &'static str {
+    match word_break {
+        WordBreakType::KeepWord => "KEEP_WORD",
+        WordBreakType::BreakWord => "BREAK_WORD",
+        _ => "KEEP_WORD",
+    }
+}
+
+/// Converts a semantic non-Latin word-break policy into HWPX wire labels.
+///
+/// Hancom HWPX stores the non-Latin labels opposite to the shared semantic
+/// meaning, so the inversion stays local to this codec boundary.
+fn non_latin_word_break_type_to_hwpx(word_break: WordBreakType) -> &'static str {
+    match word_break {
+        WordBreakType::KeepWord => "BREAK_WORD",
+        WordBreakType::BreakWord => "KEEP_WORD",
+        _ => "BREAK_WORD",
     }
 }
 
@@ -1043,16 +1097,16 @@ mod tests {
         assert_eq!(shade_color_to_str(Some(&Color::WHITE)), "#FFFFFF");
     }
 
-    // ── 6. alignment_to_str ─────────────────────────────────────
+    // ── 6. alignment_to_hwpx ────────────────────────────────────
 
     #[test]
-    fn test_alignment_to_str() {
-        assert_eq!(alignment_to_str(Alignment::Left), "LEFT");
-        assert_eq!(alignment_to_str(Alignment::Center), "CENTER");
-        assert_eq!(alignment_to_str(Alignment::Right), "RIGHT");
-        assert_eq!(alignment_to_str(Alignment::Justify), "JUSTIFY");
-        assert_eq!(alignment_to_str(Alignment::Distribute), "DISTRIBUTE");
-        assert_eq!(alignment_to_str(Alignment::DistributeFlush), "DISTRIBUTE_FLUSH");
+    fn test_alignment_to_hwpx() {
+        assert_eq!(alignment_to_hwpx(Alignment::Left), "LEFT");
+        assert_eq!(alignment_to_hwpx(Alignment::Center), "CENTER");
+        assert_eq!(alignment_to_hwpx(Alignment::Right), "RIGHT");
+        assert_eq!(alignment_to_hwpx(Alignment::Justify), "JUSTIFY");
+        assert_eq!(alignment_to_hwpx(Alignment::Distribute), "DISTRIBUTE");
+        assert_eq!(alignment_to_hwpx(Alignment::DistributeFlush), "DISTRIBUTE_SPACE");
     }
 
     // ── 7. Font grouping ────────────────────────────────────────
@@ -1106,22 +1160,39 @@ mod tests {
         let case = switch.case.as_ref().expect("case must be present");
         assert_eq!(case.required_namespace, "http://www.hancom.co.kr/hwpml/2016/HwpUnitChar");
         let case_margin = case.margin.as_ref().unwrap();
-        assert_eq!(case_margin.left.as_ref().unwrap().value, 100);
-        assert_eq!(case_margin.right.as_ref().unwrap().value, 50);
-        assert_eq!(case_margin.indent.as_ref().unwrap().value, 200);
-        assert_eq!(case_margin.prev.as_ref().unwrap().value, 300);
-        assert_eq!(case_margin.next.as_ref().unwrap().value, 150);
+        assert_eq!(case_margin.left.as_ref().unwrap().value, 50);
+        assert_eq!(case_margin.right.as_ref().unwrap().value, 25);
+        assert_eq!(case_margin.indent.as_ref().unwrap().value, 100);
+        assert_eq!(case_margin.prev.as_ref().unwrap().value, 150);
+        assert_eq!(case_margin.next.as_ref().unwrap().value, 75);
         let case_ls = case.line_spacing.as_ref().unwrap();
         assert_eq!(case_ls.value, 200);
         assert_eq!(case_ls.spacing_type, "PERCENT");
 
-        // Default must be present with identical values
+        // Default must keep the full HWP-unit values.
         let default = switch.default.as_ref().expect("default must be present");
         let def_margin = default.margin.as_ref().unwrap();
         assert_eq!(def_margin.left.as_ref().unwrap().value, 100);
         assert_eq!(def_margin.indent.as_ref().unwrap().value, 200);
         let def_ls = default.line_spacing.as_ref().unwrap();
         assert_eq!(def_ls.value, 200);
+    }
+
+    #[test]
+    fn test_margin_switch_halves_non_percentage_case_line_spacing() {
+        let ps = HwpxParaShape {
+            line_spacing: 4000,
+            line_spacing_type: LineSpacingType::Fixed,
+            ..Default::default()
+        };
+
+        let switch = build_margin_switch(&ps);
+        let case_ls = switch.case.as_ref().unwrap().line_spacing.as_ref().unwrap();
+        let def_ls = switch.default.as_ref().unwrap().line_spacing.as_ref().unwrap();
+
+        assert_eq!(case_ls.spacing_type, "FIXED");
+        assert_eq!(case_ls.value, 2000);
+        assert_eq!(def_ls.value, 4000);
     }
 
     #[test]
@@ -1514,10 +1585,25 @@ mod tests {
 
         let xml = encode_header(&store, 1, None).unwrap();
         assert!(xml.contains(
-            r#"<hh:breakSetting breakLatinWord="BREAK_WORD" breakNonLatinWord="BREAK_WORD" widowOrphan="1" keepWithNext="1" keepLines="1" pageBreakBefore="1""#
+            r#"<hh:breakSetting breakLatinWord="BREAK_WORD" breakNonLatinWord="KEEP_WORD" widowOrphan="1" keepWithNext="1" keepLines="1" pageBreakBefore="1""#
         ));
         assert!(xml.contains(r#"<hh:border borderFillIDRef="5""#));
         assert!(xml.contains(r#"condense="20""#));
+    }
+
+    #[test]
+    fn test_para_pr_emits_hancom_non_latin_break_wire_labels() {
+        let mut store = HwpxStyleStore::new();
+        store.push_para_shape(HwpxParaShape {
+            break_latin_word: hwpforge_foundation::WordBreakType::KeepWord,
+            break_non_latin_word: hwpforge_foundation::WordBreakType::KeepWord,
+            ..Default::default()
+        });
+
+        let xml = encode_header(&store, 1, None).unwrap();
+        assert!(xml.contains(
+            r#"<hh:breakSetting breakLatinWord="KEEP_WORD" breakNonLatinWord="BREAK_WORD""#
+        ));
     }
 
     #[test]
