@@ -12,7 +12,7 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 
 - HWPX codec: read/write shipped
 - Markdown bridge: read/write shipped
-- HWP5 converter path: active (Phase 10 line)
+- HWP5 converter path: active with style/layout fidelity line in progress
 - CLI bindings: shipped
 - MCP bindings: shipped
 - Python bindings: stub
@@ -21,14 +21,19 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 - Checkable bullet semantics: implemented on local `feat/list-shared-semantics`
 - HWP5 checkable support: definition-level parity only; paragraph item checked-state decode is still backlog
 - Markdown task lists normalize to HWPX-first checkable semantics; ordered task lists intentionally lose numbering
+- HWP5 char/para style bridge now preserves the main supported style surface
+- HWP5 layout hint patch injects `linesegarray` and safe table height hints for better visual parity
+- `convert-hwp5` / `audit-hwp5` warning counts are aligned for style projection fallbacks
+- HWP5/HWPX char effects now preserve `emboss`, `engrave`, `superscript`, and `subscript`
+- Known style-fidelity gaps still deferred: `breakLatinWord=HYPHENATION`, richer strike/underline line families
 
 **Workspace Facts (code-grounded)**:
 
 - Cargo packages: `10`
-- Workspace version: `0.4.0`
-- Tracked Rust `src` files under `crates/`: `137`
-- Tracked Rust `src` LOC under `crates/`: `83,962`
-- Example artifact files under `examples/`: `47`
+- Workspace version: `0.5.0`
+- Tracked Rust `src` files under `crates/`: `144`
+- Tracked Rust `src` LOC under `crates/`: `90,629`
+- Example artifact files under `examples/`: `67`
 - GitHub workflow files: `5`
 - MSRV: `1.88`
 - Dev toolchain: Rust `1.93`
