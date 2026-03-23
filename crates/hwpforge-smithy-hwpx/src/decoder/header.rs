@@ -4,9 +4,9 @@
 //! Foundation types (`Color`, `HwpUnit`, `Alignment`) for the store.
 
 use hwpforge_foundation::{
-    Color, EmbossType, EmphasisType, EngraveType, FontIndex, HeadingType, HwpUnit, LineSpacingType,
-    OutlineType, ShadowType, StrikeoutShape, TabAlign, TabLeader, UnderlineType, VerticalPosition,
-    WordBreakType,
+    BorderFillIndex, BreakType, Color, EmbossType, EmphasisType, EngraveType, FontIndex,
+    HeadingType, HwpUnit, LineSpacingType, OutlineType, ShadowType, StrikeoutShape, TabAlign,
+    TabLeader, UnderlineType, VerticalPosition, WordBreakType,
 };
 use quick_xml::de::from_str;
 
@@ -265,12 +265,10 @@ fn parse_underline_type(s: &str) -> UnderlineType {
 }
 
 /// Parses a HWPX strikeout shape string to [`StrikeoutShape`].
-///
-/// Note: HWPX uses `"SLASH"` for [`StrikeoutShape::Continuous`].
 fn parse_strikeout_shape(s: &str) -> StrikeoutShape {
     match s.to_ascii_uppercase().as_str() {
         "NONE" => StrikeoutShape::None,
-        "SLASH" => StrikeoutShape::Continuous,
+        "SOLID" | "SLASH" => StrikeoutShape::Continuous,
         "DASH" => StrikeoutShape::Dash,
         "DOT" => StrikeoutShape::Dot,
         "DASH_DOT" => StrikeoutShape::DashDot,
@@ -433,27 +431,59 @@ fn parse_emphasis_type(s: &str) -> EmphasisType {
 
 /// Converts an `HxParaPr` XML type into an `HwpxParaShape`.
 fn convert_para_pr(pp: &HxParaPr) -> HwpxParaShape {
+    let default_para_shape = HwpxParaShape::default();
     let alignment = pp
         .align
         .as_ref()
         .map(|a| parse_alignment(&a.horizontal))
-        .unwrap_or(hwpforge_foundation::Alignment::Left);
+        .unwrap_or(default_para_shape.alignment);
 
     // Margin and line spacing come from hp:switch/hp:default
     let (margin_left, margin_right, indent, spacing_before, spacing_after) = extract_margins(pp);
 
     let (line_spacing, line_spacing_type) = extract_line_spacing(pp);
 
-    let (break_latin_word, break_non_latin_word) = pp
+    let (break_latin_word, break_non_latin_word, line_wrap) = pp
         .break_setting
         .as_ref()
         .map(|bs| {
             (
                 parse_word_break_type(&bs.break_latin_word),
                 parse_word_break_type(&bs.break_non_latin_word),
+                normalize_line_wrap(&bs.line_wrap),
             )
         })
-        .unwrap_or_default();
+        .unwrap_or((
+            default_para_shape.break_latin_word,
+            default_para_shape.break_non_latin_word,
+            default_para_shape.line_wrap.clone(),
+        ));
+    let break_type = pp.break_setting.as_ref().map_or(default_para_shape.break_type, |bs| {
+        if bs.page_break_before != 0 {
+            BreakType::Page
+        } else {
+            BreakType::None
+        }
+    });
+    let keep_with_next = pp
+        .break_setting
+        .as_ref()
+        .map(|bs| bs.keep_with_next != 0)
+        .unwrap_or(default_para_shape.keep_with_next);
+    let keep_lines_together = pp
+        .break_setting
+        .as_ref()
+        .map(|bs| bs.keep_lines != 0)
+        .unwrap_or(default_para_shape.keep_lines_together);
+    let widow_orphan = pp
+        .break_setting
+        .as_ref()
+        .map(|bs| bs.widow_orphan != 0)
+        .unwrap_or(default_para_shape.widow_orphan);
+    let border_fill_id = pp.border.as_ref().and_then(|border| {
+        (border.border_fill_id_ref != 0)
+            .then(|| BorderFillIndex::new(border.border_fill_id_ref as usize))
+    });
 
     let heading_type = pp
         .heading
@@ -474,15 +504,21 @@ fn convert_para_pr(pp: &HxParaPr) -> HwpxParaShape {
         spacing_after,
         line_spacing,
         line_spacing_type,
+        snap_to_grid: pp.snap_to_grid.unwrap_or(u32::from(default_para_shape.snap_to_grid)) != 0,
+        break_type,
+        keep_with_next,
+        keep_lines_together,
+        widow_orphan,
         break_latin_word,
         break_non_latin_word,
+        line_wrap,
+        border_fill_id,
         heading_type,
         heading_id_ref,
         heading_level,
         checked,
         tab_pr_id_ref,
         condense,
-        ..Default::default()
     }
 }
 
@@ -491,6 +527,15 @@ fn parse_word_break_type(s: &str) -> WordBreakType {
     match s {
         "BREAK_WORD" => WordBreakType::BreakWord,
         _ => WordBreakType::KeepWord,
+    }
+}
+
+fn normalize_line_wrap(s: &str) -> String {
+    let normalized = s.trim().to_ascii_uppercase();
+    if normalized.is_empty() {
+        HwpxParaShape::default().line_wrap
+    } else {
+        normalized
     }
 }
 
@@ -685,7 +730,10 @@ fn parse_hwpx_boolish(value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hwpforge_foundation::{Alignment, Color, LineSpacingType, StrikeoutShape, UnderlineType};
+    use hwpforge_foundation::{
+        Alignment, BorderFillIndex, BreakType, Color, LineSpacingType, StrikeoutShape,
+        UnderlineType, WordBreakType,
+    };
 
     // ── Minimal header ───────────────────────────────────────────
 
@@ -957,7 +1005,7 @@ mod tests {
                         <bold/>
                         <italic/>
                         <underline type="BOTTOM" shape="SOLID" color="#000000"/>
-                        <strikeout shape="SLASH" color="#000000"/>
+                        <strikeout shape="SOLID" color="#000000"/>
                     </charPr>
                 </charProperties>
             </refList>
@@ -1046,6 +1094,43 @@ mod tests {
         assert_eq!(ps.margin_left, HwpUnit::ZERO);
         assert_eq!(ps.line_spacing, 160);
         assert_eq!(ps.line_spacing_type, LineSpacingType::Percentage);
+        assert!(ps.snap_to_grid);
+        assert!(ps.widow_orphan);
+        assert_eq!(ps.line_wrap, "BREAK");
+    }
+
+    #[test]
+    fn parse_para_pr_preserves_supported_break_flags_and_border_fill() {
+        let xml = r#"<head version="1.4" secCnt="1">
+            <refList>
+                <paraProperties itemCnt="1">
+                    <paraPr id="0" tabPrIDRef="3" condense="20" snapToGrid="0" checked="1">
+                        <align horizontal="LEFT" vertical="BASELINE"/>
+                        <breakSetting breakLatinWord="BREAK_WORD" breakNonLatinWord="BREAK_WORD"
+                            widowOrphan="1" keepWithNext="1" keepLines="1" pageBreakBefore="1"
+                            lineWrap="SQUEEZE"/>
+                        <border borderFillIDRef="5" offsetLeft="0" offsetRight="0" offsetTop="0"
+                            offsetBottom="0" connect="0" ignoreMargin="0"/>
+                    </paraPr>
+                </paraProperties>
+            </refList>
+        </head>"#;
+
+        let store = parse_header(xml).unwrap().style_store;
+        let ps = store.para_shape(hwpforge_foundation::ParaShapeIndex::new(0)).unwrap();
+
+        assert_eq!(ps.break_latin_word, WordBreakType::BreakWord);
+        assert_eq!(ps.break_non_latin_word, WordBreakType::BreakWord);
+        assert_eq!(ps.break_type, BreakType::Page);
+        assert!(ps.keep_with_next);
+        assert!(ps.keep_lines_together);
+        assert!(ps.widow_orphan);
+        assert!(!ps.snap_to_grid);
+        assert_eq!(ps.line_wrap, "SQUEEZE");
+        assert_eq!(ps.border_fill_id, Some(BorderFillIndex::new(5)));
+        assert!(ps.checked);
+        assert_eq!(ps.tab_pr_id_ref, 3);
+        assert_eq!(ps.condense, 20);
     }
 
     // ── Full header ──────────────────────────────────────────────

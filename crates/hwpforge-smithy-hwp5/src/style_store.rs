@@ -17,8 +17,9 @@ use crate::style_store_border_fill::{
     collect_hwp5_border_fill_image_binary_ids, push_hwp5_border_fills, push_required_border_fills,
 };
 use crate::style_store_convert::{
-    hwp5_char_shape_to_hwpx_with_counts, hwp5_para_shape_to_hwpx_with_tab_id, hwp5_style_to_hwpx,
-    hwp5_tab_def_to_hwpx, push_fonts, resolved_font_group_counts,
+    hwp5_char_shape_to_hwpx_with_counts_and_warnings,
+    hwp5_para_shape_to_hwpx_with_tab_id_and_warnings, hwp5_style_to_hwpx, hwp5_tab_def_to_hwpx,
+    push_fonts, resolved_font_group_counts,
 };
 use hwpforge_core::TabDef;
 use hwpforge_smithy_hwpx::HwpxStyleStore;
@@ -93,8 +94,13 @@ impl Hwp5StyleStore {
         let tab_id_map = Hwp5TabIdMap::from_doc_info(&self.tab_defs);
 
         // Map character shapes.
-        for raw in &self.char_shapes {
-            store.push_char_shape(hwp5_char_shape_to_hwpx_with_counts(raw, font_group_counts));
+        for (raw_id, raw) in self.char_shapes.iter().enumerate() {
+            store.push_char_shape(hwp5_char_shape_to_hwpx_with_counts_and_warnings(
+                raw,
+                font_group_counts,
+                raw_id,
+                &mut warnings,
+            ));
         }
 
         // Map numbering definitions before paragraph shapes so references are stable.
@@ -133,9 +139,14 @@ impl Hwp5StyleStore {
         }
 
         // Map paragraph shapes.
-        for raw in &self.para_shapes {
+        for (raw_id, raw) in self.para_shapes.iter().enumerate() {
             let tab_pr_id_ref = tab_id_map.map_para_shape_ref(raw.tab_def_id, &mut warnings);
-            store.push_para_shape(hwp5_para_shape_to_hwpx_with_tab_id(raw, tab_pr_id_ref));
+            store.push_para_shape(hwp5_para_shape_to_hwpx_with_tab_id_and_warnings(
+                raw,
+                tab_pr_id_ref,
+                raw_id,
+                &mut warnings,
+            ));
         }
 
         append_tab_definition_integrity_warning(self, &mut warnings);

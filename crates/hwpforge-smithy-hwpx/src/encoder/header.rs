@@ -6,8 +6,8 @@
 
 use hwpforge_core::NumberingDef;
 use hwpforge_foundation::{
-    Alignment, Color, EmphasisType, HwpUnit, LineSpacingType, NumberFormatType, OutlineType,
-    ShadowType, StrikeoutShape, UnderlineType,
+    Alignment, BreakType, Color, EmphasisType, HwpUnit, LineSpacingType, NumberFormatType,
+    OutlineType, ShadowType, StrikeoutShape, UnderlineType,
 };
 
 use super::{escape_xml, header_tabs::build_tab_properties_xml};
@@ -704,14 +704,24 @@ fn build_para_properties(store: &HwpxStyleStore) -> HxParaProperties {
 ///
 /// Emits all child elements expected by 한글: heading (NONE default),
 /// breakSetting, autoSpacing, margin/lineSpacing (inside hp:switch),
-/// and border (referencing borderFill id=2).
+/// and an optional border block when the shared model references one.
 fn build_para_pr(id: u32, ps: &HwpxParaShape) -> HxParaPr {
+    let border = ps.border_fill_id.map(|border_fill_id| HxBorder {
+        border_fill_id_ref: border_fill_id.get() as u32,
+        offset_left: 0,
+        offset_right: 0,
+        offset_top: 0,
+        offset_bottom: 0,
+        connect: 0,
+        ignore_margin: 0,
+    });
+
     HxParaPr {
         id,
         tab_pr_id_ref: ps.tab_pr_id_ref,
         condense: ps.condense,
         font_line_height: 0,
-        snap_to_grid: 1,
+        snap_to_grid: Some(u32::from(ps.snap_to_grid)),
         suppress_line_numbers: 0,
         checked: u32::from(ps.checked),
         align: Some(HxAlign {
@@ -722,23 +732,15 @@ fn build_para_pr(id: u32, ps: &HwpxParaShape) -> HxParaPr {
         break_setting: Some(HxBreakSetting {
             break_latin_word: ps.break_latin_word.to_string(),
             break_non_latin_word: ps.break_non_latin_word.to_string(),
-            widow_orphan: 0,
-            keep_with_next: 0,
-            keep_lines: 0,
-            page_break_before: 0,
-            line_wrap: "BREAK".into(),
+            widow_orphan: u32::from(ps.widow_orphan),
+            keep_with_next: u32::from(ps.keep_with_next),
+            keep_lines: u32::from(ps.keep_lines_together),
+            page_break_before: u32::from(matches!(ps.break_type, BreakType::Page)),
+            line_wrap: ps.line_wrap.clone(),
         }),
         auto_spacing: Some(HxAutoSpacing { e_asian_eng: 0, e_asian_num: 0 }),
         switches: vec![build_margin_switch(ps)],
-        border: Some(HxBorder {
-            border_fill_id_ref: 2,
-            offset_left: 0,
-            offset_right: 0,
-            offset_top: 0,
-            offset_bottom: 0,
-            connect: 0,
-            ignore_margin: 0,
-        }),
+        border,
     }
 }
 
@@ -832,12 +834,10 @@ fn underline_type_to_hwpx(ut: UnderlineType) -> &'static str {
 }
 
 /// Converts a [`StrikeoutShape`] to its HWPX string representation.
-///
-/// Note: HWPX uses `"SLASH"` for [`StrikeoutShape::Continuous`].
 fn strikeout_shape_to_hwpx(ss: StrikeoutShape) -> &'static str {
     match ss {
         StrikeoutShape::None => "NONE",
-        StrikeoutShape::Continuous => "SLASH",
+        StrikeoutShape::Continuous => "SOLID",
         StrikeoutShape::Dash => "DASH",
         StrikeoutShape::Dot => "DOT",
         StrikeoutShape::DashDot => "DASH_DOT",
@@ -1271,6 +1271,8 @@ mod tests {
             spacing_after: HwpUnit::new(150).unwrap(),
             line_spacing: 200,
             line_spacing_type: LineSpacingType::Percentage,
+            snap_to_grid: false,
+            line_wrap: "SQUEEZE".into(),
             ..Default::default()
         });
 
@@ -1305,6 +1307,8 @@ mod tests {
         assert_eq!(ps.spacing_before.as_i32(), 300);
         assert_eq!(ps.spacing_after.as_i32(), 150);
         assert_eq!(ps.line_spacing, 200);
+        assert!(!ps.snap_to_grid);
+        assert_eq!(ps.line_wrap, "SQUEEZE");
     }
 
     // ── 11. sec_cnt propagation ─────────────────────────────────
@@ -1414,7 +1418,10 @@ mod tests {
             "paraPr must have breakSetting"
         );
         assert!(xml.contains("<hh:autoSpacing eAsianEng=\"0\""), "paraPr must have autoSpacing");
-        assert!(xml.contains("<hh:border borderFillIDRef=\"2\""), "paraPr must have border");
+        assert!(
+            !xml.contains("<hh:border borderFillIDRef=\"2\""),
+            "default paraPr must omit border"
+        );
 
         // Gap 3: borderFill id=2 fillBrush
         assert!(xml.contains("<hc:fillBrush>"), "borderFill id=2 must have fillBrush");
@@ -1488,6 +1495,29 @@ mod tests {
         assert!(xml.contains(r##"<hh:borderFill id="1""##));
         assert!(xml.contains(r##"<hh:borderFill id="2""##));
         assert!(xml.contains(r##"<hh:borderFill id="3""##));
+    }
+
+    #[test]
+    fn test_para_pr_emits_supported_break_flags_and_optional_border() {
+        let mut store = HwpxStyleStore::new();
+        store.push_para_shape(HwpxParaShape {
+            break_type: BreakType::Page,
+            keep_with_next: true,
+            keep_lines_together: true,
+            widow_orphan: true,
+            break_latin_word: hwpforge_foundation::WordBreakType::BreakWord,
+            break_non_latin_word: hwpforge_foundation::WordBreakType::BreakWord,
+            border_fill_id: Some(hwpforge_foundation::BorderFillIndex::new(5)),
+            condense: 20,
+            ..Default::default()
+        });
+
+        let xml = encode_header(&store, 1, None).unwrap();
+        assert!(xml.contains(
+            r#"<hh:breakSetting breakLatinWord="BREAK_WORD" breakNonLatinWord="BREAK_WORD" widowOrphan="1" keepWithNext="1" keepLines="1" pageBreakBefore="1""#
+        ));
+        assert!(xml.contains(r#"<hh:border borderFillIDRef="5""#));
+        assert!(xml.contains(r#"condense="20""#));
     }
 
     #[test]

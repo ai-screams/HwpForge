@@ -253,6 +253,8 @@ pub struct HwpxParaShape {
     pub line_spacing: i32,
     /// Line spacing type.
     pub line_spacing_type: LineSpacingType,
+    /// Whether the paragraph snaps to the document line grid.
+    pub snap_to_grid: bool,
 
     // Advanced paragraph controls (NEW - Phase 6.2)
     /// Page/column break type before paragraph.
@@ -267,6 +269,10 @@ pub struct HwpxParaShape {
     pub break_latin_word: WordBreakType,
     /// Word-breaking rule for non-Latin text including Korean (default: KeepWord).
     pub break_non_latin_word: WordBreakType,
+    /// Raw HWPX line-wrap policy stored on `breakSetting@lineWrap`.
+    ///
+    /// Known values include `BREAK`, `SQUEEZE`, and `KEEP`.
+    pub line_wrap: String,
     /// Border/fill reference (None = no border/fill).
     pub border_fill_id: Option<BorderFillIndex>,
     /// Heading type for this paragraph.
@@ -299,12 +305,14 @@ impl Default for HwpxParaShape {
             spacing_after: HwpUnit::ZERO,
             line_spacing: 160,
             line_spacing_type: LineSpacingType::Percentage,
+            snap_to_grid: true,
             break_type: BreakType::None,
             keep_with_next: false,
             keep_lines_together: false,
             widow_orphan: true, // Enabled by default in HWPX
             break_latin_word: WordBreakType::KeepWord,
             break_non_latin_word: WordBreakType::KeepWord,
+            line_wrap: "BREAK".to_string(),
             border_fill_id: None,
             heading_type: HeadingType::None,
             heading_id_ref: 0,
@@ -814,12 +822,14 @@ pub(crate) fn default_para_shapes_modern() -> [HwpxParaShape; 20] {
         spacing_after: HwpUnit::ZERO,
         line_spacing: 160,
         line_spacing_type: LineSpacingType::Percentage,
+        snap_to_grid: true,
         break_type: BreakType::None,
         keep_with_next: false,
         keep_lines_together: false,
         widow_orphan: false,
         break_latin_word: WordBreakType::KeepWord,
         break_non_latin_word: WordBreakType::KeepWord,
+        line_wrap: "BREAK".to_string(),
         border_fill_id: None,
         heading_type: HeadingType::None,
         heading_id_ref: 0,
@@ -1414,12 +1424,14 @@ fn build_store_from_registry_with(
             spacing_after: ps.space_after,
             line_spacing: ps.line_spacing_value.round() as i32,
             line_spacing_type: ps.line_spacing_type,
+            snap_to_grid: true,
             break_type: ps.break_type,
             keep_with_next: ps.keep_with_next,
             keep_lines_together: ps.keep_lines_together,
             widow_orphan: ps.widow_orphan,
             break_latin_word: WordBreakType::KeepWord,
             break_non_latin_word: WordBreakType::KeepWord,
+            line_wrap: "BREAK".to_string(),
             border_fill_id: ps.border_fill_id,
             heading_type: wire_parts.heading_type,
             heading_id_ref: wire_parts.id_ref,

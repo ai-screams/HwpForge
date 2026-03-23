@@ -915,7 +915,7 @@ mod tests {
     use hwpforge_core::run::Run;
     use hwpforge_core::table::Table;
     use hwpforge_foundation::{HeadingType, HwpUnit, NumberFormatType};
-    use hwpforge_smithy_hwpx::HwpxDecoder;
+    use hwpforge_smithy_hwpx::{HwpxDecoder, PackageReader};
 
     #[derive(Debug, Clone, Copy)]
     struct ImageFixtureExpectation {
@@ -1158,6 +1158,24 @@ mod tests {
             !decoded.document.sections().is_empty(),
             "converted hwpx should contain at least one section"
         );
+
+        let mut package = PackageReader::new(&bytes).expect("converted hwpx should be a package");
+        let entry_paths: Vec<String> = package
+            .list_entries()
+            .expect("list hwpx entries")
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect();
+        for path in entry_paths {
+            if !(path.ends_with(".xml") || path.ends_with(".hpf")) {
+                continue;
+            }
+
+            let content = package
+                .read_text_entry(&path)
+                .unwrap_or_else(|err| panic!("read xml-ish zip entry {path}: {err}"));
+            assert!(!content.contains('\0'), "xml entry {} contains NUL byte", path);
+        }
     }
 
     fn collect_decoded_shape_layout(

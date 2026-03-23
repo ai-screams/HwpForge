@@ -434,8 +434,8 @@ pub struct HxParaPr {
     #[serde(rename = "@fontLineHeight", default)]
     pub font_line_height: u32,
     /// Snap paragraph to document grid.
-    #[serde(rename = "@snapToGrid", default)]
-    pub snap_to_grid: u32,
+    #[serde(rename = "@snapToGrid", default, skip_serializing_if = "Option::is_none")]
+    pub snap_to_grid: Option<u32>,
     /// Whether line numbers are suppressed for this paragraph.
     #[serde(rename = "@suppressLineNumbers", default)]
     pub suppress_line_numbers: u32,
