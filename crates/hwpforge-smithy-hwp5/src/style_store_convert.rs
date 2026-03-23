@@ -211,6 +211,7 @@ fn append_char_shape_projection_warnings(
     raw_id: usize,
     warnings: &mut Vec<Hwp5Warning>,
 ) {
+    warn_on_char_vertical_position_conflict(raw, raw_id, warnings);
     warn_on_char_underline_shape(raw, raw_id, warnings);
     warn_on_char_outline_kind(raw, raw_id, warnings);
     warn_on_char_shadow_kind(raw, raw_id, warnings);
@@ -246,6 +247,23 @@ fn warn_on_char_underline_shape(
         format!(
             "char shape {raw_id} underline shape {} collapsed to SOLID because the shared IR does not carry underline line families",
             raw.underline_shape_raw()
+        ),
+    );
+}
+
+fn warn_on_char_vertical_position_conflict(
+    raw: &Hwp5RawCharShape,
+    raw_id: usize,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    if !raw.superscript() || !raw.subscript() {
+        return;
+    }
+    push_projection_fallback(
+        warnings,
+        "style.char_shape.vertical_position",
+        format!(
+            "char shape {raw_id} enabled both superscript and subscript; normalized to Superscript because the shared IR stores a single vertical_position"
         ),
     );
 }

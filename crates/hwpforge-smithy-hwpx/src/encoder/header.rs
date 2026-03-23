@@ -1446,6 +1446,20 @@ mod tests {
         assert!(!xml.contains("<hh:supscript/>"));
     }
 
+    #[test]
+    fn build_char_pr_serializes_both_relief_effects_when_requested() {
+        let mut store = HwpxStyleStore::new();
+        store.push_char_shape(HwpxCharShape {
+            emboss_type: EmbossType::Emboss,
+            engrave_type: EngraveType::Engrave,
+            ..Default::default()
+        });
+
+        let xml = encode_header(&store, 1, None).unwrap();
+        assert!(xml.contains("<hh:emboss/>"));
+        assert!(xml.contains("<hh:engrave/>"));
+    }
+
     // ── 13. Styles roundtrip ────────────────────────────────────
 
     #[test]

@@ -410,6 +410,8 @@ fn convert_char_pr(cp: &HxCharPr) -> HwpxCharShape {
 }
 
 fn parse_vertical_position(cp: &HxCharPr) -> VerticalPosition {
+    // Legacy payloads can set both flags. Shared IR intentionally normalizes to
+    // one vertical-position enum and keeps superscript precedence.
     if cp.supscript.is_some() {
         VerticalPosition::Superscript
     } else if cp.subscript.is_some() {
@@ -1084,6 +1086,30 @@ mod tests {
         assert_eq!(subscript.vertical_position, VerticalPosition::Subscript);
         assert_eq!(subscript.emboss_type, EmbossType::None);
         assert_eq!(subscript.engrave_type, EngraveType::Engrave);
+    }
+
+    #[test]
+    fn parse_char_pr_with_conflicting_vertical_position_prefers_superscript() {
+        let xml = r##"<head version="1.4" secCnt="1">
+            <refList>
+                <charProperties itemCnt="1">
+                    <charPr id="17" height="900" textColor="#0D0D0D" shadeColor="none"
+                            useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="3">
+                        <fontRef hangul="1" latin="1" hanja="1" japanese="1" other="1" symbol="1" user="1"/>
+                        <underline type="NONE" shape="SOLID" color="#000000"/>
+                        <strikeout shape="NONE" color="#000000"/>
+                        <outline type="NONE"/>
+                        <shadow type="NONE" color="#C0C0C0" offsetX="10" offsetY="10"/>
+                        <supscript/>
+                        <subscript/>
+                    </charPr>
+                </charProperties>
+            </refList>
+        </head>"##;
+
+        let store = parse_header(xml).unwrap().style_store;
+        let cs = store.char_shape(hwpforge_foundation::CharShapeIndex::new(0)).unwrap();
+        assert_eq!(cs.vertical_position, VerticalPosition::Superscript);
     }
 
     // ── Paragraph properties ─────────────────────────────────────

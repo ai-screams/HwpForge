@@ -18,9 +18,9 @@ use crate::style_store_convert::{
     bgr_colorref_to_color, hwp5_char_shape_to_hwpx, hwp5_para_shape_to_hwpx, hwp5_tab_def_to_hwpx,
 };
 use hwpforge_foundation::{
-    Alignment, BorderFillIndex, BreakType, Color, EmbossType, EmphasisType, EngraveType,
-    GradientType, HeadingType, LineSpacingType, OutlineType, ParaShapeIndex, ShadowType,
-    StrikeoutShape, TabAlign, UnderlineType, VerticalPosition, WordBreakType,
+    Alignment, BorderFillIndex, BreakType, CharShapeIndex, Color, EmbossType, EmphasisType,
+    EngraveType, GradientType, HeadingType, LineSpacingType, OutlineType, ParaShapeIndex,
+    ShadowType, StrikeoutShape, TabAlign, UnderlineType, VerticalPosition, WordBreakType,
 };
 use hwpforge_smithy_hwpx::style_store::HwpxFill;
 
@@ -603,6 +603,55 @@ fn hwp5_char_shape_maps_engrave_and_subscript() {
     assert_eq!(hwpx.vertical_position, VerticalPosition::Subscript);
     assert_eq!(hwpx.emboss_type, EmbossType::None);
     assert_eq!(hwpx.engrave_type, EngraveType::Engrave);
+}
+
+#[test]
+fn hwp5_char_shape_preserves_emboss_and_engrave_together() {
+    let mut raw = Hwp5RawCharShape::default_for_test();
+    raw.property = (1 << 13) | (1 << 14);
+
+    let hwpx = hwp5_char_shape_to_hwpx(&raw);
+
+    assert_eq!(hwpx.emboss_type, EmbossType::Emboss);
+    assert_eq!(hwpx.engrave_type, EngraveType::Engrave);
+}
+
+#[test]
+fn hwp5_char_shape_warns_on_conflicting_vertical_position_bits() {
+    let mut raw = Hwp5RawCharShape::default_for_test();
+    raw.property = (1 << 15) | (1 << 16);
+
+    let store = Hwp5StyleStore {
+        id_mappings: None,
+        fonts: vec![Hwp5RawFaceName {
+            property: 0,
+            face_name: "함초롬바탕".into(),
+            alternate_font_type: None,
+            alternate_font_name: None,
+            panose1: None,
+            default_font_name: None,
+        }],
+        char_shapes: vec![raw],
+        para_shapes: vec![],
+        numberings: vec![],
+        bullets: vec![],
+        tab_defs: vec![],
+        styles: vec![],
+        border_fills: vec![],
+    };
+
+    let (hwpx_store, warnings) = store.to_hwpx_style_store_with_warnings();
+
+    assert_eq!(
+        hwpx_store.char_shape(CharShapeIndex::new(0)).unwrap().vertical_position,
+        VerticalPosition::Superscript
+    );
+    assert!(warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, reason }
+            if *subject == "style.char_shape.vertical_position"
+                && reason.contains("both superscript and subscript")
+    )));
 }
 
 #[test]
