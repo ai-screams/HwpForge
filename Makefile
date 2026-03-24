@@ -1,5 +1,9 @@
 .PHONY: help install-tools check test test-ci clippy fmt fmt-fix lint-md lint-md-fix doc cov deny machete msrv ci ci-fast ci-full clean
 
+MDBOOK_VERSION ?= 0.4.52
+MDBOOK_ADMONISH_VERSION ?= 1.20.0
+MDBOOK_MERMAID_VERSION ?= 0.16.2
+
 help:
 	@echo "HwpForge Development Commands"
 	@echo ""
@@ -37,6 +41,9 @@ install-tools:
 	cargo install cargo-deny
 	cargo install cargo-machete
 	cargo install dprint
+	cargo install --locked --version $(MDBOOK_VERSION) mdbook
+	cargo install --locked --version $(MDBOOK_ADMONISH_VERSION) mdbook-admonish
+	cargo install --locked --version $(MDBOOK_MERMAID_VERSION) mdbook-mermaid
 	@echo "Installing lint/format tools..."
 	@if command -v npm >/dev/null 2>&1; then \
 		npm install -g markdownlint-cli2; \

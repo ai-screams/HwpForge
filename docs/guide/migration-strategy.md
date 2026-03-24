@@ -87,9 +87,9 @@ fn detect_format(path: &Path) -> DocFormat {
 }
 ```
 
-## 2단계: 변환 (HWPX → Markdown)
+## 2단계: 변환 (HWPX 중심 + HWP5 별도 경로)
 
-현재 HwpForge는 HWPX 파일의 변환을 지원합니다. HWP5 파일은 사전 변환이 필요합니다.
+기본 migration sample은 HWPX를 중심으로 설명합니다. 다만 현재는 HWP5도 전용 crate와 CLI로 decode, audit, HWPX re-emission 경로를 사용할 수 있습니다.
 
 ### HWPX 파일 변환
 
@@ -163,19 +163,19 @@ fn convert_hwpx(input: &Path) -> ConvertResult {
 }
 ```
 
-### HWP5 파일 사전 처리
+### HWP5 파일 처리
 
-레거시 HWP5(`.hwp`) 파일은 현재 직접 변환이 불가능합니다. 다음 전략을 사용합니다:
+레거시 HWP5(`.hwp`) 파일도 현재 다룰 수 있습니다. 다만 대규모 migration에서는 HWPX 중심 파이프라인과 HWP5 전용 파이프라인을 분리하는 편이 운영이 쉽습니다.
 
-| 전략               | 설명                                                         | 자동화    |
-| ------------------ | ------------------------------------------------------------ | --------- |
-| **한글 배치 변환** | 한글 프로그램의 매크로/스크립트로 `.hwp` → `.hwpx` 일괄 변환 | 반자동    |
-| **한컴독스 API**   | 한컴독스 클라우드 API로 변환 (유료)                          | 완전 자동 |
-| **별도 분류**      | HWP5 파일만 분리하여 v2.0 지원 후 처리                       | 수동      |
+| 전략             | 설명                                                             | 자동화    |
+| ---------------- | ---------------------------------------------------------------- | --------- |
+| **HwpForge CLI** | `convert-hwp5`, `audit-hwp5`, `census-hwp5`로 decode/점검/재출력 | 완전 자동 |
+| **전용 crate**   | `hwpforge-smithy-hwp5`로 HWP5 decode 후 Core/HWPX 경로 재사용    | 자동      |
+| **별도 분류**    | HWP5 파일만 분리해 별도 queue로 처리                             | 수동      |
 
 ```rust,no_run,ignore
-// v2.0 이후 — HWP5 직접 변환
-// use hwpforge::hwp5::Hwp5Decoder;
+// 현재 — HWP5 직접 decode 후 기존 pipeline에 연결
+// use hwpforge_smithy_hwp5::Hwp5Decoder;
 //
 // let result = Hwp5Decoder::decode_file("legacy.hwp")?;
 // let validated = result.document.validate()?;
@@ -243,7 +243,7 @@ fn run_migration(config: &MigrationConfig) -> MigrationReport {
             eprintln!("[{}/{}] 처리 중...", i + 1, report.total);
         }
 
-        // HWP5 건너뛰기
+        // 예시 단순화를 위해 HWP5는 별도 queue로 분리
         if path.extension().is_some_and(|ext| ext == "hwp") {
             report.skipped_hwp5 += 1;
             continue;
@@ -390,7 +390,7 @@ fn write_report(report: &MigrationReport, path: &str) {
     lines.push(format!("- 총 파일: {}", report.total));
     lines.push(format!("- 성공: {}", report.success));
     lines.push(format!("- 실패: {}", report.failed));
-    lines.push(format!("- HWP5 건너뜀: {}", report.skipped_hwp5));
+    lines.push(format!("- HWP5 별도 처리: {}", report.skipped_hwp5));
     lines.push(format!("- 크기 초과: {}", report.skipped_too_large));
 
     if !report.errors.is_empty() {

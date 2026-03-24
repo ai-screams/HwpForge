@@ -2,7 +2,7 @@
 //!
 //! Submodules define the typed record structures that map onto the
 //! HWP5 tag-length-value binary format:
-//! - `record` — [`RecordHeader`] and [`TagId`] primitives
+//! - `record` — [`record::RecordHeader`] and [`record::TagId`] primitives
 //! - `header` — `FileHeader` and `DocInfo` record types
 //! - `section` — `BodyText` paragraph and run record types
 

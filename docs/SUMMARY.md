@@ -23,7 +23,7 @@
 
 # 레퍼런스
 
-- [API 레퍼런스 (rustdoc)](https://docs.rs/hwpforge)
+- [API 레퍼런스 (rustdoc)](reference/api.md)
 
 ---
 

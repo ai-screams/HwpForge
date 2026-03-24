@@ -13,6 +13,7 @@ description = "Hammer — AI-first CLI for HwpForge document generation and edit
 [[bin]]
 name = "hwpforge"
 path = "src/main.rs"
+doc = false
 
 [dependencies]
 clap = { workspace = true }

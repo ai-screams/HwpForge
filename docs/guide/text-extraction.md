@@ -2,7 +2,7 @@
 
 HwpForge의 Core DOM을 활용하여 문서에서 텍스트를 추출하고, 문서 구조(섹션, 문단, 표, 각주 등)를 보존하는 방법을 설명합니다.
 
-> **포맷 지원 현황**: 현재 HWPX(`.hwpx`)와 Markdown(`.md`) 파일에서 텍스트를 추출할 수 있습니다. 레거시 HWP5(`.hwp`) 파일은 v2.0에서 지원 예정입니다. 자세한 내용은 [이중 포맷 파이프라인](./format-pipeline.md)을 참고하세요.
+> **포맷 지원 현황**: 현재 HWPX(`.hwpx`)와 Markdown(`.md`)는 이 가이드의 예제대로 바로 텍스트 추출할 수 있습니다. 레거시 HWP5(`.hwp`)는 전용 crate/CLI 경로가 이미 존재하지만, top-level guide는 아직 HWPX/Markdown 중심으로 설명합니다. 자세한 내용은 [이중 포맷 파이프라인](./format-pipeline.md)을 참고하세요.
 
 ## 문서 구조 개요
 
@@ -226,19 +226,37 @@ println!("{}", markdown);
 
 ## 레거시 HWP5 파일 처리
 
-레거시 HWP5(`.hwp`) 파일의 텍스트 추출은 현재 직접 지원하지 않습니다 (v2.0 예정).
+레거시 HWP5(`.hwp`) 파일은 현재도 다룰 수 있습니다. 다만 public guide의 중심 경로는 아직 HWPX/Markdown 쪽입니다.
 
-현재 대안:
+현재 선택지는 이렇습니다.
 
-1. **한글 프로그램에서 HWPX로 변환**: `다른 이름으로 저장 → HWPX` 후 HwpForge로 처리
-2. **한컴 뷰어 API**: 한컴독스 등 서드파티 변환 도구 활용
-3. **v2.0 대기**: `hwpforge-smithy-hwp5` 크레이트가 HWP5 → Core DOM 디코딩을 지원할 예정
+1. **CLI workflow 사용**: `convert-hwp5`, `audit-hwp5`, `census-hwp5`
+2. **전용 crate 사용**: `hwpforge-smithy-hwp5`의 `Hwp5Decoder`
+3. **HWPX로 재출력 후 기존 guide 재사용**: 변환 결과를 HWPX guide와 같은 방식으로 처리
 
-HWP5 디코더가 추가되면 위의 모든 텍스트 추출 코드가 그대로 동작합니다. Core DOM이 포맷에 독립적이기 때문입니다.
+전용 crate 경로 예시는 다음과 같습니다.
 
-```rust,no_run,ignore
-// v2.0 예정 — HWP5에서도 동일한 Core DOM API 사용
-// let result = Hwp5Decoder::decode_file("legacy.hwp")?;
-// let doc = result.document;  // Document<Draft> — HWPX와 동일한 타입
-// for section in doc.sections() { ... }  // 동일한 추출 코드
+```rust,no_run
+use hwpforge_smithy_hwp5::Hwp5Decoder;
+use hwpforge_core::run::RunContent;
+
+let result = Hwp5Decoder::decode_file("legacy.hwp").unwrap();
+let doc = &result.document;
+
+for section in doc.sections() {
+    for paragraph in &section.paragraphs {
+        for run in &paragraph.runs {
+            if let RunContent::Text(ref text) = run.content {
+                print!("{}", text);
+            }
+        }
+        println!();
+    }
+}
 ```
+
+주의:
+
+- HWP5 경로는 warning-first가 기본입니다.
+- visual parity나 layout fidelity는 HWPX path보다 더 까다롭습니다.
+- stable top-level facade는 여전히 HWPX/Markdown 중심이므로, HWP5는 전용 crate 또는 CLI를 우선 보십시오.
