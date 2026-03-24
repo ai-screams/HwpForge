@@ -17,7 +17,11 @@ use crate::schema::header::{
 use crate::style_store_convert::{
     bgr_colorref_to_color, hwp5_char_shape_to_hwpx, hwp5_para_shape_to_hwpx, hwp5_tab_def_to_hwpx,
 };
-use hwpforge_foundation::{Color, GradientType, HeadingType, ParaShapeIndex, TabAlign};
+use hwpforge_foundation::{
+    Alignment, BorderFillIndex, BreakType, CharShapeIndex, Color, EmbossType, EmphasisType,
+    EngraveType, GradientType, HeadingType, LineSpacingType, OutlineType, ParaShapeIndex,
+    ShadowType, StrikeoutShape, TabAlign, UnderlineType, VerticalPosition, WordBreakType,
+};
 use hwpforge_smithy_hwpx::style_store::HwpxFill;
 
 fn border_fill_slot(id: u32, fill: Hwp5RawBorderFill) -> Hwp5DocInfoBorderFillSlot {
@@ -530,10 +534,196 @@ fn hwp5_char_shape_not_bold_not_italic() {
 }
 
 #[test]
+fn hwp5_char_shape_single_bit_bold_italic_order() {
+    let mut italic_only = Hwp5RawCharShape::default_for_test();
+    italic_only.property = 1 << 0;
+    let italic_hwpx = hwp5_char_shape_to_hwpx(&italic_only);
+    assert!(!italic_hwpx.bold);
+    assert!(italic_hwpx.italic);
+
+    let mut bold_only = Hwp5RawCharShape::default_for_test();
+    bold_only.property = 1 << 1;
+    let bold_hwpx = hwp5_char_shape_to_hwpx(&bold_only);
+    assert!(bold_hwpx.bold);
+    assert!(!bold_hwpx.italic);
+}
+
+#[test]
+fn hwp5_char_shape_maps_supported_style_surface() {
+    let mut raw = Hwp5RawCharShape::default_for_test();
+    raw.property = (1 << 1)
+        | (1 << 2)
+        | (1 << 8)
+        | (1 << 11)
+        | (1 << 13)
+        | (1 << 15)
+        | (1 << 18)
+        | (1 << 21)
+        | (1 << 25)
+        | (2 << 26)
+        | (1 << 30);
+    raw.underline_color = 0x00112233;
+    raw.strike_color = Some(0x00332211);
+    raw.border_fill_id = Some(7);
+    raw.font_ratios[0] = 80;
+    raw.font_spacings[0] = 10;
+    raw.font_rel_sizes[0] = 90;
+    raw.font_offsets[0] = 15;
+
+    let hwpx = hwp5_char_shape_to_hwpx(&raw);
+
+    assert!(hwpx.bold);
+    assert!(!hwpx.italic);
+    assert_eq!(hwpx.underline_type, UnderlineType::Bottom);
+    assert_eq!(hwpx.underline_color, Some(bgr_colorref_to_color(0x00112233)));
+    assert_eq!(hwpx.strikeout_shape, StrikeoutShape::Dot);
+    assert_eq!(hwpx.strikeout_color, Some(bgr_colorref_to_color(0x00332211)));
+    assert_eq!(hwpx.vertical_position, VerticalPosition::Superscript);
+    assert_eq!(hwpx.outline_type, OutlineType::Solid);
+    assert_eq!(hwpx.shadow_type, ShadowType::Drop);
+    assert_eq!(hwpx.emboss_type, EmbossType::Emboss);
+    assert_eq!(hwpx.engrave_type, EngraveType::None);
+    assert_eq!(hwpx.emphasis, EmphasisType::DotAbove);
+    assert_eq!(hwpx.ratio, 80);
+    assert_eq!(hwpx.spacing, 10);
+    assert_eq!(hwpx.rel_sz, 90);
+    assert_eq!(hwpx.char_offset, 15);
+    assert!(hwpx.use_font_space);
+    assert!(hwpx.use_kerning);
+    assert_eq!(hwpx.border_fill_id, Some(7));
+}
+
+#[test]
+fn hwp5_char_shape_maps_engrave_and_subscript() {
+    let mut raw = Hwp5RawCharShape::default_for_test();
+    raw.property = (1 << 14) | (1 << 16);
+
+    let hwpx = hwp5_char_shape_to_hwpx(&raw);
+
+    assert_eq!(hwpx.vertical_position, VerticalPosition::Subscript);
+    assert_eq!(hwpx.emboss_type, EmbossType::None);
+    assert_eq!(hwpx.engrave_type, EngraveType::Engrave);
+}
+
+#[test]
+fn hwp5_char_shape_preserves_emboss_and_engrave_together() {
+    let mut raw = Hwp5RawCharShape::default_for_test();
+    raw.property = (1 << 13) | (1 << 14);
+
+    let hwpx = hwp5_char_shape_to_hwpx(&raw);
+
+    assert_eq!(hwpx.emboss_type, EmbossType::Emboss);
+    assert_eq!(hwpx.engrave_type, EngraveType::Engrave);
+}
+
+#[test]
+fn hwp5_char_shape_warns_on_conflicting_vertical_position_bits() {
+    let mut raw = Hwp5RawCharShape::default_for_test();
+    raw.property = (1 << 15) | (1 << 16);
+
+    let store = Hwp5StyleStore {
+        id_mappings: None,
+        fonts: vec![Hwp5RawFaceName {
+            property: 0,
+            face_name: "함초롬바탕".into(),
+            alternate_font_type: None,
+            alternate_font_name: None,
+            panose1: None,
+            default_font_name: None,
+        }],
+        char_shapes: vec![raw],
+        para_shapes: vec![],
+        numberings: vec![],
+        bullets: vec![],
+        tab_defs: vec![],
+        styles: vec![],
+        border_fills: vec![],
+    };
+
+    let (hwpx_store, warnings) = store.to_hwpx_style_store_with_warnings();
+
+    assert_eq!(
+        hwpx_store.char_shape(CharShapeIndex::new(0)).unwrap().vertical_position,
+        VerticalPosition::Superscript
+    );
+    assert!(warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, reason }
+            if *subject == "style.char_shape.vertical_position"
+                && reason.contains("both superscript and subscript")
+    )));
+}
+
+#[test]
+fn hwp5_char_shape_warns_on_projection_collapses() {
+    let mut raw = Hwp5RawCharShape::default_for_test();
+    raw.property = (1 << 2) | (1 << 4) | (2 << 11) | (1 << 13) | (1 << 15) | (1 << 18) | (7 << 26);
+    raw.font_ratios[1] = 90;
+    raw.font_spacings[2] = 5;
+
+    let store = Hwp5StyleStore {
+        id_mappings: None,
+        fonts: vec![Hwp5RawFaceName {
+            property: 0,
+            face_name: "함초롬바탕".into(),
+            alternate_font_type: None,
+            alternate_font_name: None,
+            panose1: None,
+            default_font_name: None,
+        }],
+        char_shapes: vec![raw],
+        para_shapes: vec![],
+        numberings: vec![],
+        bullets: vec![],
+        tab_defs: vec![],
+        styles: vec![],
+        border_fills: vec![],
+    };
+
+    let (_, warnings) = store.to_hwpx_style_store_with_warnings();
+
+    assert!(warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, .. }
+            if *subject == "style.char_shape.underline_shape"
+    )));
+    assert!(warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, .. }
+            if *subject == "style.char_shape.shadow_kind"
+    )));
+    assert!(warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, .. }
+            if *subject == "style.char_shape.strike_shape"
+    )));
+    assert!(!warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, .. }
+            if *subject == "style.char_shape.emboss"
+    )));
+    assert!(!warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, .. }
+            if *subject == "style.char_shape.engrave"
+    )));
+    assert!(!warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, .. }
+            if *subject == "style.char_shape.vertical_position"
+    )));
+    assert!(warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, reason }
+            if *subject == "style.char_shape.script_scalars" && reason.contains("ratio") && reason.contains("spacing")
+    )));
+}
+
+#[test]
 fn hwp5_para_shape_alignment_justify() {
     let raw = Hwp5RawParaShape::default_for_test(); // property1 bits 2-4 = 0 => Justify
     let hwpx = hwp5_para_shape_to_hwpx(&raw);
-    assert_eq!(hwpx.alignment, hwpforge_foundation::Alignment::Justify);
+    assert_eq!(hwpx.alignment, Alignment::Justify);
 }
 
 #[test]
@@ -541,7 +731,7 @@ fn hwp5_para_shape_alignment_left() {
     let mut raw = Hwp5RawParaShape::default_for_test();
     raw.property1 = 1 << 2; // bits 2-4 = 1 => Left
     let hwpx = hwp5_para_shape_to_hwpx(&raw);
-    assert_eq!(hwpx.alignment, hwpforge_foundation::Alignment::Left);
+    assert_eq!(hwpx.alignment, Alignment::Left);
 }
 
 #[test]
@@ -549,7 +739,159 @@ fn hwp5_para_shape_alignment_center() {
     let mut raw = Hwp5RawParaShape::default_for_test();
     raw.property1 = 3 << 2; // bits 2-4 = 3 => Center
     let hwpx = hwp5_para_shape_to_hwpx(&raw);
-    assert_eq!(hwpx.alignment, hwpforge_foundation::Alignment::Center);
+    assert_eq!(hwpx.alignment, Alignment::Center);
+}
+
+#[test]
+fn hwp5_para_shape_alignment_distribute_and_flush() {
+    let mut distribute = Hwp5RawParaShape::default_for_test();
+    distribute.property1 = 4 << 2;
+    let distribute_hwpx = hwp5_para_shape_to_hwpx(&distribute);
+    assert_eq!(distribute_hwpx.alignment, Alignment::Distribute);
+
+    let mut distribute_flush = Hwp5RawParaShape::default_for_test();
+    distribute_flush.property1 = 5 << 2;
+    let distribute_flush_hwpx = hwp5_para_shape_to_hwpx(&distribute_flush);
+    assert_eq!(distribute_flush_hwpx.alignment, Alignment::DistributeFlush);
+}
+
+#[test]
+fn hwp5_para_shape_maps_line_spacing_types_and_values() {
+    let mut fixed_old = Hwp5RawParaShape::default_for_test();
+    fixed_old.property1 = 1;
+    fixed_old.line_spacing = 240;
+    let fixed_old_hwpx = hwp5_para_shape_to_hwpx(&fixed_old);
+    assert_eq!(fixed_old_hwpx.line_spacing_type, LineSpacingType::Fixed);
+    assert_eq!(fixed_old_hwpx.line_spacing, 240);
+
+    let mut between_old = Hwp5RawParaShape::default_for_test();
+    between_old.property1 = 2;
+    between_old.line_spacing = 333;
+    let between_old_hwpx = hwp5_para_shape_to_hwpx(&between_old);
+    assert_eq!(between_old_hwpx.line_spacing_type, LineSpacingType::BetweenLines);
+    assert_eq!(between_old_hwpx.line_spacing, 333);
+
+    let mut fixed_new = Hwp5RawParaShape::default_for_test();
+    fixed_new.property3 = Some(1);
+    fixed_new.line_spacing2 = Some(2500);
+    fixed_new.line_spacing = 160;
+    let fixed_new_hwpx = hwp5_para_shape_to_hwpx(&fixed_new);
+    assert_eq!(fixed_new_hwpx.line_spacing_type, LineSpacingType::Fixed);
+    assert_eq!(fixed_new_hwpx.line_spacing, 2500);
+}
+
+#[test]
+fn hwp5_para_shape_maps_break_flags_condense_and_border_fill() {
+    let mut raw = Hwp5RawParaShape::default_for_test();
+    raw.property1 =
+        (2 << 5) | (1 << 7) | (1 << 8) | (20 << 9) | (1 << 16) | (1 << 17) | (1 << 18) | (1 << 19);
+    raw.border_fill_id = 5;
+
+    let hwpx = hwp5_para_shape_to_hwpx(&raw);
+
+    assert_eq!(hwpx.break_latin_word, WordBreakType::BreakWord);
+    assert_eq!(hwpx.break_non_latin_word, WordBreakType::BreakWord);
+    assert!(hwpx.snap_to_grid);
+    assert_eq!(hwpx.condense, 20);
+    assert!(hwpx.widow_orphan);
+    assert!(hwpx.keep_with_next);
+    assert!(hwpx.keep_lines_together);
+    assert_eq!(hwpx.break_type, BreakType::Page);
+    assert_eq!(hwpx.border_fill_id, Some(BorderFillIndex::new(5)));
+}
+
+#[test]
+fn hwp5_para_shape_warns_on_unsupported_line_spacing_and_latin_hyphenation() {
+    let mut raw = Hwp5RawParaShape::default_for_test();
+    raw.property1 = 1 << 5;
+    raw.property3 = Some(3);
+
+    let store = Hwp5StyleStore {
+        id_mappings: None,
+        fonts: vec![],
+        char_shapes: vec![],
+        para_shapes: vec![raw],
+        numberings: vec![],
+        bullets: vec![],
+        tab_defs: vec![],
+        styles: vec![],
+        border_fills: vec![],
+    };
+
+    let (_, warnings) = store.to_hwpx_style_store_with_warnings();
+
+    assert!(warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, .. }
+            if *subject == "style.para_shape.line_spacing"
+    )));
+    assert!(warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, reason }
+            if *subject == "style.para_shape.break_latin_word" && reason.contains("hyphenation")
+    )));
+}
+
+#[test]
+fn hwp5_para_shape_warns_on_dropped_border_and_spacing_flags() {
+    let mut raw = Hwp5RawParaShape::default_for_test();
+    raw.property1 = (2 << 20) | (1 << 22) | (1 << 28) | (1 << 29);
+    raw.property2 = Some((1 << 4) | (1 << 5));
+    raw.border_offset_left = 10;
+    raw.border_offset_right = -20;
+    raw.border_offset_top = 30;
+    raw.border_offset_bottom = -40;
+
+    let store = Hwp5StyleStore {
+        id_mappings: None,
+        fonts: vec![],
+        char_shapes: vec![],
+        para_shapes: vec![raw],
+        numberings: vec![],
+        bullets: vec![],
+        tab_defs: vec![],
+        styles: vec![],
+        border_fills: vec![],
+    };
+
+    let (_, warnings) = store.to_hwpx_style_store_with_warnings();
+
+    assert!(warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, .. }
+            if *subject == "style.para_shape.vertical_align"
+    )));
+    assert!(warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, .. }
+            if *subject == "style.para_shape.font_line_height"
+    )));
+    assert!(warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, reason }
+            if *subject == "style.para_shape.auto_spacing"
+                && reason.contains("kr_eng")
+                && reason.contains("kr_num")
+    )));
+    assert!(warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, reason }
+            if *subject == "style.para_shape.border_offsets"
+                && reason.contains("10")
+                && reason.contains("-20")
+                && reason.contains("30")
+                && reason.contains("-40")
+    )));
+    assert!(warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, .. }
+            if *subject == "style.para_shape.border_connect"
+    )));
+    assert!(warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, .. }
+            if *subject == "style.para_shape.border_ignore_margin"
+    )));
 }
 
 #[test]

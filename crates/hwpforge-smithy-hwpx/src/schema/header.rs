@@ -310,6 +310,30 @@ pub struct HxCharPr {
     )]
     pub outline: Option<HxOutline>,
     #[serde(
+        rename(serialize = "hh:emboss", deserialize = "emboss"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub emboss: Option<HxPresence>,
+    #[serde(
+        rename(serialize = "hh:engrave", deserialize = "engrave"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub engrave: Option<HxPresence>,
+    #[serde(
+        rename(serialize = "hh:supscript", deserialize = "supscript"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub supscript: Option<HxPresence>,
+    #[serde(
+        rename(serialize = "hh:subscript", deserialize = "subscript"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub subscript: Option<HxPresence>,
+    #[serde(
         rename(serialize = "hh:shadow", deserialize = "shadow"),
         default,
         skip_serializing_if = "Option::is_none"
@@ -434,8 +458,8 @@ pub struct HxParaPr {
     #[serde(rename = "@fontLineHeight", default)]
     pub font_line_height: u32,
     /// Snap paragraph to document grid.
-    #[serde(rename = "@snapToGrid", default)]
-    pub snap_to_grid: u32,
+    #[serde(rename = "@snapToGrid", default, skip_serializing_if = "Option::is_none")]
+    pub snap_to_grid: Option<u32>,
     /// Whether line numbers are suppressed for this paragraph.
     #[serde(rename = "@suppressLineNumbers", default)]
     pub suppress_line_numbers: u32,

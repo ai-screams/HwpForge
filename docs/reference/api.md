@@ -1,26 +1,11 @@
-# API 레퍼런스
+# API 레퍼런스 (rustdoc)
 
-HwpForge의 전체 공개 API 문서는 rustdoc으로 자동 생성됩니다.
+HwpForge의 전체 공개 API 문서는 docs.rs에서 확인할 수 있습니다.
 
-**[API 레퍼런스 열기 (rustdoc) →](../api/hwpforge/index.html)**
+- [docs.rs/hwpforge](https://docs.rs/hwpforge)
 
-## 크레이트 구조
+## 참고
 
-| 크레이트               | 역할                          | rustdoc                                                        |
-| ---------------------- | ----------------------------- | -------------------------------------------------------------- |
-| `hwpforge`             | 우산 크레이트 (re-export)     | [hwpforge](../api/hwpforge/index.html)                         |
-| `hwpforge-foundation`  | 기본 타입 (HwpUnit, Color)    | [hwpforge_foundation](../api/hwpforge_foundation/index.html)   |
-| `hwpforge-core`        | 문서 구조 (Document, Section) | [hwpforge_core](../api/hwpforge_core/index.html)               |
-| `hwpforge-blueprint`   | 스타일 템플릿 (YAML)          | [hwpforge_blueprint](../api/hwpforge_blueprint/index.html)     |
-| `hwpforge-smithy-hwpx` | HWPX 인코더/디코더            | [hwpforge_smithy_hwpx](../api/hwpforge_smithy_hwpx/index.html) |
-| `hwpforge-smithy-md`   | Markdown 인코더/디코더        | [hwpforge_smithy_md](../api/hwpforge_smithy_md/index.html)     |
-
-## 로컬에서 보기
-
-```bash
-cargo doc --open --no-deps --all-features
-```
-
-## crates.io 퍼블리시 후
-
-퍼블리시 이후에는 [docs.rs/hwpforge](https://docs.rs/hwpforge)에서도 확인할 수 있습니다.
+- 이 mdBook는 개념 설명과 사용 가이드 중심입니다.
+- trait, struct, enum, function의 상세 시그니처는 rustdoc이 진실입니다.
+- docs.rs와 저장소 문서가 어긋나면, 공개 API 계약은 rustdoc 쪽을 먼저 확인하십시오.

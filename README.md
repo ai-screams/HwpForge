@@ -510,9 +510,9 @@ HwpForge/
 │   ├── hwpforge-blueprint/       # YAML 템플릿 (Figma 패턴)
 │   ├── hwpforge-smithy-hwpx/     # HWPX codec (ZIP+XML ↔ Core)
 │   ├── hwpforge-smithy-md/       # Markdown codec (MD ↔ Core)
-│   ├── hwpforge-smithy-hwp5/     # HWP5 decoder (예정)
-│   ├── hwpforge-bindings-py/     # Python bindings (예정)
-│   ├── hwpforge-bindings-cli/    # CLI 도구 (hwpforge)
+│   ├── hwpforge-smithy-hwp5/     # HWP5 decode/projection + inspect/convert helpers
+│   ├── hwpforge-bindings-py/     # Python bindings (stub)
+│   ├── hwpforge-bindings-cli/    # CLI 도구 (hwpforge, shipped)
 │   └── hwpforge-bindings-mcp/    # MCP Server (hwpforge-mcp)
 ├── tests/                        # 통합 테스트 + golden fixture
 └── examples/                     # curated showcase + interop artifacts
@@ -528,13 +528,15 @@ HwpForge/
 - 특히 확인할 것: release-plz가 쓰는 커밋 prefix (`feat`, `fix`, `perf`, `refactor`)
 - 특히 확인할 것: MSRV 정책과 dependency/MSRV 상승 기준
 - 특히 확인할 것: 문서 변경 시 `mdbook build`와 markdown lint 검증
+- 특히 확인할 것: 로컬 docs toolchain은 CI와 같은 pinned 버전(`mdbook 0.4.52`, `mdbook-admonish 1.20.0`, `mdbook-mermaid 0.16.2`)을 쓰는 편이 낫습니다. 가장 쉬운 방법은 `make install-tools`
 - 특히 확인할 것: CI required checks를 깨지 않는 범위에서의 변경 분리
 
 ## 로드맵
 
-### 출시 예정
+### 현재 상태와 다음 단계
 
-- [ ] HWP5 읽기 — 구형 바이너리 포맷(`.hwp`) 디코더
+- [x] HWP5 읽기/점검/재출력 경로 — `convert-hwp5`, `audit-hwp5`, `census-hwp5`
+- [ ] HWP5 public API 확대 — umbrella crate surface와 broader parity 정리
 - [x] MCP 서버 — Claude, Cursor 등 AI 도구가 tool로 직접 HWPX 생성·검증·편집 (8개 도구 + 4 리소스 + 3 프롬프트)
 - [x] CLI 도구 — `hwpforge convert doc.md doc.hwpx` 한 줄 변환 (7개 명령어)
 - [ ] HWPX 완전 지원 — 양식 컨트롤, 변경 추적, OLE 객체

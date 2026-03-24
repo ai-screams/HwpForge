@@ -39,6 +39,7 @@
 
 pub mod decoder;
 pub mod error;
+mod layout_hint_patch;
 mod numeric;
 pub mod projection;
 pub mod schema;
@@ -52,6 +53,7 @@ mod table_page_break;
 #[cfg(test)]
 /// Test-only helpers for resolving shared workspace fixtures.
 pub(crate) mod test_support;
+mod warning_utils;
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -59,6 +61,7 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::numeric::positive_i32_from_u32;
+use crate::warning_utils::push_projection_fallback;
 use hwpforge_core::document::{Document, Draft};
 use hwpforge_core::image::ImageStore;
 
@@ -111,7 +114,8 @@ impl Hwp5JoinedImageAssetPlan {
 pub struct Hwp5InspectSummary {
     /// HWP5 file format version (for example, `5.0.2.5`).
     pub version: String,
-    /// Number of non-fatal warnings emitted while decoding.
+    /// Number of non-fatal warnings emitted while decoding and projecting
+    /// inspectable style/Core semantics.
     pub warning_count: usize,
     /// Validation issue encountered after projection, if any.
     pub validation_error: Option<String>,
@@ -331,9 +335,17 @@ pub struct Hwp5BinDataRecordSummary {
 /// compound document or any required stream cannot be decoded.
 pub fn inspect_hwp5(bytes: &[u8]) -> Hwp5Result<Hwp5InspectSummary> {
     let intermediate = decoder::decode_intermediate(bytes)?;
+    inspect_decoded_hwp5_intermediate(intermediate)
+}
+
+fn inspect_decoded_hwp5_intermediate(
+    intermediate: decoder::DecodedHwp5Intermediate,
+) -> Hwp5Result<Hwp5InspectSummary> {
     let crate::decoder::DecodedHwp5Intermediate { version, sections, doc_info, warnings, .. } =
         intermediate;
     let mut warnings = warnings;
+    let (_, _, style_warnings) = project_doc_info_styles_with_warnings(&doc_info);
+    warnings.extend(style_warnings);
 
     let (document, projection_warnings) = projection::project_to_core(sections)?;
     warnings.extend(projection_warnings);
@@ -365,6 +377,14 @@ pub fn inspect_hwp5(bytes: &[u8]) -> Hwp5Result<Hwp5InspectSummary> {
         totals,
         sections,
     })
+}
+
+fn project_doc_info_styles_with_warnings(
+    doc_info: &crate::decoder::header::DocInfoResult,
+) -> (style_store::Hwp5StyleStore, hwpforge_smithy_hwpx::HwpxStyleStore, Vec<Hwp5Warning>) {
+    let hwp5_styles = style_store::Hwp5StyleStore::from_doc_info(doc_info);
+    let (hwpx_style_store, style_warnings) = hwp5_styles.to_hwpx_style_store_with_warnings();
+    (hwp5_styles, hwpx_style_store, style_warnings)
 }
 
 /// Builds a raw fixture census for an HWP5 document.
@@ -547,15 +567,14 @@ pub fn hwp5_to_hwpx(
     input: impl AsRef<Path>,
     output: impl AsRef<Path>,
 ) -> Hwp5Result<Vec<Hwp5Warning>> {
-    use style_store::Hwp5StyleStore;
-
     let bytes = std::fs::read(input.as_ref()).map_err(Hwp5Error::Io)?;
     let intermediate = decoder::decode_intermediate(&bytes)?;
     let image_assets = join_hwp5_image_assets(&bytes, &intermediate)?;
+    let layout_hints = layout_hint_patch::capture_layout_hints(&intermediate.sections);
     let mut warnings = intermediate.warnings;
 
-    let hwp5_styles = Hwp5StyleStore::from_doc_info(&intermediate.doc_info);
-    let (hwpx_style_store, style_warnings) = hwp5_styles.to_hwpx_style_store_with_warnings();
+    let (hwp5_styles, hwpx_style_store, style_warnings) =
+        project_doc_info_styles_with_warnings(&intermediate.doc_info);
     warnings.extend(style_warnings);
 
     // Stage 4: Projection
@@ -574,6 +593,7 @@ pub fn hwp5_to_hwpx(
     let hwpx_bytes =
         hwpforge_smithy_hwpx::HwpxEncoder::encode(&validated, &hwpx_style_store, &image_store)
             .map_err(|e| Hwp5Error::Cfb { detail: format!("HWPX encoding failed: {e}") })?;
+    let hwpx_bytes = layout_hint_patch::patch_hwpx_layout_hints(&hwpx_bytes, &layout_hints)?;
     std::fs::write(output.as_ref(), hwpx_bytes).map_err(Hwp5Error::Io)?;
 
     Ok(warnings)
@@ -587,10 +607,11 @@ fn supplement_border_fill_image_assets(
 ) {
     for binary_data_id in hwp5_styles.border_fill_image_binary_ids() {
         let Some(asset) = image_assets.asset_for_binary_data_id(binary_data_id) else {
-            warnings.push(Hwp5Warning::ProjectionFallback {
-                subject: "style.border_fill.image",
-                reason: format!("missing_image_asset_for_binary_data_id={binary_data_id}"),
-            });
+            push_projection_fallback(
+                warnings,
+                "style.border_fill.image",
+                format!("missing_image_asset_for_binary_data_id={binary_data_id}"),
+            );
             continue;
         };
         image_store.insert(asset.payload.storage_name.clone(), asset.bytes.clone());
@@ -915,7 +936,55 @@ mod tests {
     use hwpforge_core::run::Run;
     use hwpforge_core::table::Table;
     use hwpforge_foundation::{HeadingType, HwpUnit, NumberFormatType};
-    use hwpforge_smithy_hwpx::HwpxDecoder;
+    use hwpforge_smithy_hwpx::{HwpxDecoder, PackageReader};
+
+    fn default_test_char_shape() -> crate::schema::header::Hwp5RawCharShape {
+        crate::schema::header::Hwp5RawCharShape {
+            font_ids: [0; 7],
+            font_ratios: [100; 7],
+            font_spacings: [0; 7],
+            font_rel_sizes: [100; 7],
+            font_offsets: [0; 7],
+            height: 1000,
+            property: 0,
+            shadow_gap_x: 0,
+            shadow_gap_y: 0,
+            text_color: 0x000000,
+            underline_color: 0x000000,
+            shade_color: 0xFFFF_FFFF,
+            shadow_color: 0x000000,
+            border_fill_id: None,
+            strike_color: None,
+        }
+    }
+
+    fn doc_info_with_style_projection_warning() -> crate::decoder::header::DocInfoResult {
+        let mut raw = default_test_char_shape();
+        raw.property =
+            (1 << 2) | (1 << 4) | (2 << 11) | (1 << 13) | (1 << 15) | (1 << 18) | (7 << 26);
+        raw.font_ratios[1] = 90;
+        raw.font_spacings[2] = 5;
+
+        crate::decoder::header::DocInfoResult {
+            id_mappings: None,
+            fonts: vec![crate::schema::header::Hwp5RawFaceName {
+                property: 0,
+                face_name: "함초롬바탕".into(),
+                alternate_font_type: None,
+                alternate_font_name: None,
+                panose1: None,
+                default_font_name: None,
+            }],
+            char_shapes: vec![raw],
+            para_shapes: vec![],
+            numberings: vec![],
+            bullets: vec![],
+            tab_defs: vec![],
+            styles: vec![],
+            border_fills: vec![],
+            warnings: vec![],
+        }
+    }
 
     #[derive(Debug, Clone, Copy)]
     struct ImageFixtureExpectation {
@@ -968,6 +1037,39 @@ mod tests {
             .expect("system time should be after unix epoch")
             .as_nanos();
         std::env::temp_dir().join(format!("hwpforge-hwp5-image-slice-{stamp}-{file_name}"))
+    }
+
+    #[test]
+    fn inspect_summary_counts_style_projection_warnings() {
+        let doc_info = doc_info_with_style_projection_warning();
+        let (_, _, style_warnings) = project_doc_info_styles_with_warnings(&doc_info);
+        assert!(
+            !style_warnings.is_empty(),
+            "synthetic doc info must trigger style projection warnings"
+        );
+
+        let intermediate = crate::decoder::DecodedHwp5Intermediate {
+            version: "5.0.2.5".to_string(),
+            compressed: false,
+            package_entries: vec![],
+            bin_data_records: vec![],
+            bin_data_streams: vec![],
+            doc_info,
+            sections: vec![crate::decoder::section::SectionResult {
+                paragraphs: vec![],
+                page_def: None,
+                warnings: vec![],
+            }],
+            warnings: vec![],
+        };
+
+        let summary =
+            inspect_decoded_hwp5_intermediate(intermediate).expect("inspect summary should build");
+        assert_eq!(
+            summary.warning_count,
+            style_warnings.len(),
+            "inspect must count the same style projection warnings as conversion"
+        );
     }
 
     fn shape_picture_count(report: &Hwp5CensusReport) -> usize {
@@ -1158,6 +1260,24 @@ mod tests {
             !decoded.document.sections().is_empty(),
             "converted hwpx should contain at least one section"
         );
+
+        let mut package = PackageReader::new(&bytes).expect("converted hwpx should be a package");
+        let entry_paths: Vec<String> = package
+            .list_entries()
+            .expect("list hwpx entries")
+            .into_iter()
+            .map(|entry| entry.path)
+            .collect();
+        for path in entry_paths {
+            if !(path.ends_with(".xml") || path.ends_with(".hpf")) {
+                continue;
+            }
+
+            let content = package
+                .read_text_entry(&path)
+                .unwrap_or_else(|err| panic!("read xml-ish zip entry {path}: {err}"));
+            assert!(!content.contains('\0'), "xml entry {} contains NUL byte", path);
+        }
     }
 
     fn collect_decoded_shape_layout(

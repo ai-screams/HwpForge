@@ -17,9 +17,11 @@ use crate::style_store_border_fill::{
     collect_hwp5_border_fill_image_binary_ids, push_hwp5_border_fills, push_required_border_fills,
 };
 use crate::style_store_convert::{
-    hwp5_char_shape_to_hwpx_with_counts, hwp5_para_shape_to_hwpx_with_tab_id, hwp5_style_to_hwpx,
-    hwp5_tab_def_to_hwpx, push_fonts, resolved_font_group_counts,
+    hwp5_char_shape_to_hwpx_with_counts_and_warnings,
+    hwp5_para_shape_to_hwpx_with_tab_id_and_warnings, hwp5_style_to_hwpx, hwp5_tab_def_to_hwpx,
+    push_fonts, resolved_font_group_counts,
 };
+use crate::warning_utils::push_projection_fallback;
 use hwpforge_core::TabDef;
 use hwpforge_smithy_hwpx::HwpxStyleStore;
 use std::collections::BTreeSet;
@@ -93,8 +95,13 @@ impl Hwp5StyleStore {
         let tab_id_map = Hwp5TabIdMap::from_doc_info(&self.tab_defs);
 
         // Map character shapes.
-        for raw in &self.char_shapes {
-            store.push_char_shape(hwp5_char_shape_to_hwpx_with_counts(raw, font_group_counts));
+        for (raw_id, raw) in self.char_shapes.iter().enumerate() {
+            store.push_char_shape(hwp5_char_shape_to_hwpx_with_counts_and_warnings(
+                raw,
+                font_group_counts,
+                raw_id,
+                &mut warnings,
+            ));
         }
 
         // Map numbering definitions before paragraph shapes so references are stable.
@@ -133,9 +140,14 @@ impl Hwp5StyleStore {
         }
 
         // Map paragraph shapes.
-        for raw in &self.para_shapes {
+        for (raw_id, raw) in self.para_shapes.iter().enumerate() {
             let tab_pr_id_ref = tab_id_map.map_para_shape_ref(raw.tab_def_id, &mut warnings);
-            store.push_para_shape(hwp5_para_shape_to_hwpx_with_tab_id(raw, tab_pr_id_ref));
+            store.push_para_shape(hwp5_para_shape_to_hwpx_with_tab_id_and_warnings(
+                raw,
+                tab_pr_id_ref,
+                raw_id,
+                &mut warnings,
+            ));
         }
 
         append_tab_definition_integrity_warning(self, &mut warnings);
@@ -186,13 +198,14 @@ impl Hwp5TabIdMap {
         if TabDef::reference_is_known(raw_id, self.known_slots.iter().copied()) {
             return raw_id;
         }
-        warnings.push(Hwp5Warning::ProjectionFallback {
-            subject: "tab_def.ref",
-            reason: format!(
+        push_projection_fallback(
+            warnings,
+            "tab_def.ref",
+            format!(
                 "paragraph references missing tab definition id {}; defaulting to built-in tab definition 0",
                 raw_id
             ),
-        });
+        );
         0
     }
 }
@@ -207,12 +220,13 @@ fn append_tab_definition_integrity_warning(
     let declared = id_mappings.tab_def_count.max(0) as usize;
     let actual = store.tab_defs.len();
     if declared != actual {
-        warnings.push(Hwp5Warning::ProjectionFallback {
-            subject: "tab_def.count",
-            reason: format!(
+        push_projection_fallback(
+            warnings,
+            "tab_def.count",
+            format!(
                 "IdMappings declares {declared} tab definitions, but DocInfo parsed {actual}; preserving raw record order"
             ),
-        });
+        );
     }
 }
 
@@ -226,12 +240,13 @@ fn append_numbering_definition_integrity_warning(
     let declared = id_mappings.numbering_def_count.max(0) as usize;
     let actual = store.numberings.len();
     if declared != actual {
-        warnings.push(Hwp5Warning::ProjectionFallback {
-            subject: "numbering.count",
-            reason: format!(
+        push_projection_fallback(
+            warnings,
+            "numbering.count",
+            format!(
                 "IdMappings declares {declared} numbering definitions, but DocInfo parsed {actual}; preserving raw record order"
             ),
-        });
+        );
     }
 }
 
@@ -245,44 +260,48 @@ fn append_bullet_definition_integrity_warning(
     let declared = id_mappings.bullet_def_count.max(0) as usize;
     let actual = store.bullets.len();
     if declared != actual {
-        warnings.push(Hwp5Warning::ProjectionFallback {
-            subject: "bullet.count",
-            reason: format!(
+        push_projection_fallback(
+            warnings,
+            "bullet.count",
+            format!(
                 "IdMappings declares {declared} bullet definitions, but DocInfo parsed {actual}; preserving raw record order"
             ),
-        });
+        );
     }
 }
 
 fn append_tab_projection_warnings(id: u32, raw: &Hwp5RawTabDef, warnings: &mut Vec<Hwp5Warning>) {
     for (stop_idx, stop) in raw.tab_stops.iter().enumerate() {
         if stop.position > hwpforge_foundation::HwpUnit::MAX_VALUE as u32 {
-            warnings.push(Hwp5Warning::ProjectionFallback {
-                subject: "tab_def.position",
-                reason: format!(
+            push_projection_fallback(
+                warnings,
+                "tab_def.position",
+                format!(
                     "tab definition {id} stop {stop_idx} uses out-of-range position {}; clamping to {}",
                     stop.position,
                     hwpforge_foundation::HwpUnit::MAX_VALUE
                 ),
-            });
+            );
         }
         if !matches!(stop.tab_type, 0..=3) {
-            warnings.push(Hwp5Warning::ProjectionFallback {
-                subject: "tab_def.align",
-                reason: format!(
+            push_projection_fallback(
+                warnings,
+                "tab_def.align",
+                format!(
                     "tab definition {id} stop {stop_idx} uses unknown tab_type {}; defaulting to LEFT",
                     stop.tab_type
                 ),
-            });
+            );
         }
         if stop.fill_type > 16 {
-            warnings.push(Hwp5Warning::ProjectionFallback {
-                subject: "tab_def.leader",
-                reason: format!(
+            push_projection_fallback(
+                warnings,
+                "tab_def.leader",
+                format!(
                     "tab definition {id} stop {stop_idx} uses unknown fill_type {}; defaulting to SOLID",
                     stop.fill_type
                 ),
-            });
+            );
         }
     }
 }

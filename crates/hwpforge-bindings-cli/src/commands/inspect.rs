@@ -1,4 +1,7 @@
 //! Inspect HWPX document structure.
+//!
+//! This command is intentionally HWPX-only. HWP5 sources should flow through
+//! `convert-hwp5` or `audit-hwp5` first.
 
 use std::path::PathBuf;
 

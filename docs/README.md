@@ -10,11 +10,12 @@
 
 ## HwpForge란?
 
-HwpForge는 [한컴 한글](https://www.hancom.com/)의 HWPX 문서(ZIP + XML, KS X 6101)를 Rust로 읽고, 쓰고, 변환할 수 있는 라이브러리입니다.
+HwpForge는 [한컴 한글](https://www.hancom.com/)의 HWP/HWPX 문서를 Rust로 읽고, 쓰고, 변환할 수 있는 라이브러리입니다. public guide와 umbrella crate surface는 여전히 HWPX/Markdown 중심이지만, HWP5는 전용 crate와 CLI를 통해 decode, audit, re-emission 경로를 제공합니다.
 
 ### 주요 기능
 
 - **HWPX 풀 코덱** — HWPX 파일 디코딩/인코딩 + 무손실 라운드트립
+- **HWP5 읽기/점검 경로** — legacy `.hwp` decode, audit, HWPX re-emission
 - **Markdown 브릿지** — GFM Markdown ↔ HWPX 변환
 - **YAML 스타일 템플릿** — 재사용 가능한 디자인 토큰 (Figma 패턴)
 - **타입 안전 API** — 브랜드 인덱스, 타입스테이트 검증, unsafe 코드 0

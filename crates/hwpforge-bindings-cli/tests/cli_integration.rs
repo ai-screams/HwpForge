@@ -373,6 +373,25 @@ fn run_with_stdin(args: &[&str], stdin_data: &str) -> (String, String, i32) {
 fn assert_valid_hwpx(path: &Path) {
     let (_, _, code) = run(&["inspect", path.to_str().unwrap()]);
     assert_eq!(code, 0, "inspect failed on {}", path.display());
+
+    let bytes = std::fs::read(path).expect("read hwpx");
+    let cursor = std::io::Cursor::new(bytes);
+    let mut archive = ZipArchive::new(cursor).expect("open hwpx zip");
+    for index in 0..archive.len() {
+        let mut file = archive.by_index(index).expect("zip entry by index");
+        if !(file.name().ends_with(".xml") || file.name().ends_with(".hpf")) {
+            continue;
+        }
+
+        let mut content = Vec::new();
+        file.read_to_end(&mut content).expect("read xml-ish zip entry");
+        assert!(
+            !content.contains(&0),
+            "xml entry {} contains NUL byte in {}",
+            file.name(),
+            path.display()
+        );
+    }
 }
 
 fn convert_hwp5_fixture_and_audit_ok(

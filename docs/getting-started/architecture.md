@@ -21,12 +21,12 @@ graph TD
     C --> B[hwpforge-blueprint<br/>스타일 템플릿]
     B --> SH[hwpforge-smithy-hwpx<br/>HWPX 코덱]
     B --> SM[hwpforge-smithy-md<br/>Markdown 코덱]
-    B --> S5[hwpforge-smithy-hwp5<br/>HWP5 디코더 (예정)]
+    B --> S5[hwpforge-smithy-hwp5<br/>HWP5 decode/projection]
     SH --> U[hwpforge<br/>umbrella crate]
     SM --> U
     S5 --> U
-    U --> PY[hwpforge-bindings-py<br/>Python (예정)]
-    U --> CLI[hwpforge-bindings-cli<br/>CLI (예정)]
+    U --> PY[hwpforge-bindings-py<br/>Python (stub)]
+    U --> CLI[hwpforge-bindings-cli<br/>CLI (shipped)]
 ```
 
 > **규칙**: 의존성은 위에서 아래로만 흐릅니다. `foundation`을 수정하면 모든 크레이트가 재빌드됩니다.
@@ -93,6 +93,8 @@ HWPX (.hwpx) ──decode──▶ │  (포맷 독립 IR)    │ ──encode�
 ```
 
 모든 Smithy 크레이트는 Core DOM으로/에서 변환만 수행합니다. 비즈니스 로직은 Core에만 의존하므로, 새 포맷(예: smithy-odt)을 추가해도 기존 코드를 수정할 필요가 없습니다.
+
+현재 HWP5 경로는 `hwpforge-smithy-hwp5`와 CLI surface에서 실사용 가능하며, umbrella crate 중심 예제는 여전히 HWPX/Markdown 쪽이 먼저 소개됩니다.
 
 > 자세한 내용은 [HWP5와 HWPX: 이중 포맷 파이프라인](../guide/format-pipeline.md)을 참고하세요.
 

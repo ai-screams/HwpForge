@@ -11,7 +11,10 @@ use std::fmt;
 use std::io::{Cursor, Read};
 use std::str::FromStr;
 
-use hwpforge_foundation::{HeadingType, NumberFormatType};
+use hwpforge_foundation::{
+    Alignment, BreakType, EmphasisType, HeadingType, LineSpacingType, NumberFormatType,
+    OutlineType, ShadowType, StrikeoutShape, UnderlineType, WordBreakType,
+};
 
 use crate::error::{Hwp5Error, Hwp5Result};
 
@@ -415,7 +418,8 @@ impl Hwp5RawBulletDef {
         }
 
         let check_bullet_char = if (data.len() as u64).saturating_sub(cur.position()) >= 2 {
-            Some(decode_utf16_code_unit(cur.read_u16::<LittleEndian>()?))
+            let code_unit = cur.read_u16::<LittleEndian>()?;
+            (code_unit != 0).then(|| decode_utf16_code_unit(code_unit))
         } else {
             None
         };
@@ -663,8 +667,8 @@ pub struct Hwp5RawCharShape {
     pub font_offsets: [i8; 7],
     /// Character height in HwpUnit.
     pub height: i32,
-    /// Property bitfield (bold = bit 0, italic = bit 1, underline type = bits
-    /// 2–4, etc.).
+    /// Property bitfield (italic = bit 0, bold = bit 1, underline kind = bits
+    /// 2-3, etc.).
     pub property: u32,
     /// Shadow gap X.
     pub shadow_gap_x: i8,
@@ -760,14 +764,178 @@ impl Hwp5RawCharShape {
         })
     }
 
-    /// Returns `true` if the bold flag (bit 0) is set in `property`.
+    /// Returns `true` if the bold flag (bit 1) is set in `property`.
     pub fn is_bold(&self) -> bool {
-        self.property & 1 != 0
+        self.property & (1 << 1) != 0
     }
 
-    /// Returns `true` if the italic flag (bit 1) is set in `property`.
+    /// Returns `true` if the italic flag (bit 0) is set in `property`.
     pub fn is_italic(&self) -> bool {
-        self.property & 2 != 0
+        self.property & (1 << 0) != 0
+    }
+
+    /// Returns the underline position encoded in bits 2-3.
+    pub fn underline_type(&self) -> UnderlineType {
+        match (self.property >> 2) & 0b11 {
+            1 => UnderlineType::Bottom,
+            3 => UnderlineType::Top,
+            _ => UnderlineType::None,
+        }
+    }
+
+    /// Returns the raw underline line-family value encoded in bits 4-7.
+    pub fn underline_shape_raw(&self) -> u32 {
+        (self.property >> 4) & 0b1111
+    }
+
+    /// Returns the raw outline-kind value encoded in bits 8-10.
+    pub fn outline_kind_raw(&self) -> u32 {
+        (self.property >> 8) & 0b111
+    }
+
+    /// Returns the outline effect encoded in bits 8-10.
+    ///
+    /// The shared IR only distinguishes `None` vs `Solid`, so all non-zero
+    /// HWP5 outline kinds collapse to `Solid`.
+    pub fn outline_type(&self) -> OutlineType {
+        if self.outline_kind_raw() == 0 {
+            OutlineType::None
+        } else {
+            OutlineType::Solid
+        }
+    }
+
+    /// Returns the raw shadow-kind value encoded in bits 11-12.
+    pub fn shadow_kind_raw(&self) -> u32 {
+        (self.property >> 11) & 0b11
+    }
+
+    /// Returns the shadow effect encoded in bits 11-12.
+    ///
+    /// HWP5 distinguishes discrete vs continuous shadows; the current shared
+    /// IR only carries `None` vs `Drop`.
+    pub fn shadow_type(&self) -> ShadowType {
+        if self.shadow_kind_raw() == 0 {
+            ShadowType::None
+        } else {
+            ShadowType::Drop
+        }
+    }
+
+    /// Returns the emphasis mark encoded in bits 21-24.
+    pub fn emphasis(&self) -> EmphasisType {
+        match (self.property >> 21) & 0b1111 {
+            1 => EmphasisType::DotAbove,
+            2 => EmphasisType::RingAbove,
+            3 => EmphasisType::Caron,
+            4 => EmphasisType::Tilde,
+            5 => EmphasisType::Side,
+            6 => EmphasisType::Colon,
+            _ => EmphasisType::None,
+        }
+    }
+
+    /// Returns the strikethrough shape encoded in bits 26-29.
+    ///
+    /// HWP5 can carry more line variants than the current shared IR. When a
+    /// strike is enabled but the exact line family is unsupported, collapse to
+    /// `Continuous` so the semantic "struck through" survives.
+    pub fn strikeout_shape(&self) -> StrikeoutShape {
+        if !self.has_strikeout() {
+            return StrikeoutShape::None;
+        }
+
+        match self.strike_shape_raw() {
+            1 => StrikeoutShape::Dash,
+            2 => StrikeoutShape::Dot,
+            3 => StrikeoutShape::DashDot,
+            4 => StrikeoutShape::DashDotDot,
+            _ => StrikeoutShape::Continuous,
+        }
+    }
+
+    /// Returns `true` if any strikethrough family is enabled in bits 18-20.
+    pub fn has_strikeout(&self) -> bool {
+        ((self.property >> 18) & 0b111) != 0
+    }
+
+    /// Returns the raw strikethrough line-family value encoded in bits 26-29.
+    pub fn strike_shape_raw(&self) -> u32 {
+        (self.property >> 26) & 0b1111
+    }
+
+    /// Returns `true` if emboss (bit 13) is enabled.
+    pub fn emboss(&self) -> bool {
+        self.property & (1 << 13) != 0
+    }
+
+    /// Returns `true` if engrave (bit 14) is enabled.
+    pub fn engrave(&self) -> bool {
+        self.property & (1 << 14) != 0
+    }
+
+    /// Returns `true` if superscript (bit 15) is enabled.
+    pub fn superscript(&self) -> bool {
+        self.property & (1 << 15) != 0
+    }
+
+    /// Returns `true` if subscript (bit 16) is enabled.
+    pub fn subscript(&self) -> bool {
+        self.property & (1 << 16) != 0
+    }
+
+    /// Returns `true` if the font-space flag (bit 25) is set.
+    pub fn use_font_space(&self) -> bool {
+        self.property & (1 << 25) != 0
+    }
+
+    /// Returns `true` if the kerning flag (bit 30) is set.
+    pub fn use_kerning(&self) -> bool {
+        self.property & (1 << 30) != 0
+    }
+
+    /// Returns the primary width ratio used by the current shared IR.
+    ///
+    /// HWP5 stores ratios per script group; the shared style IR is still
+    /// scalar here, so we currently follow the same hangul-slot collapse used
+    /// by the HWPX decoder.
+    pub fn primary_ratio(&self) -> i32 {
+        i32::from(self.font_ratios[0])
+    }
+
+    /// Returns the primary inter-character spacing used by the shared IR.
+    pub fn primary_spacing(&self) -> i32 {
+        i32::from(self.font_spacings[0])
+    }
+
+    /// Returns the primary relative size used by the shared IR.
+    pub fn primary_rel_size(&self) -> i32 {
+        i32::from(self.font_rel_sizes[0])
+    }
+
+    /// Returns the primary vertical offset used by the shared IR.
+    pub fn primary_offset(&self) -> i32 {
+        i32::from(self.font_offsets[0])
+    }
+
+    /// Returns `true` if width ratio values differ across script buckets.
+    pub fn ratio_is_uniform(&self) -> bool {
+        self.font_ratios.iter().all(|value| *value == self.font_ratios[0])
+    }
+
+    /// Returns `true` if spacing values differ across script buckets.
+    pub fn spacing_is_uniform(&self) -> bool {
+        self.font_spacings.iter().all(|value| *value == self.font_spacings[0])
+    }
+
+    /// Returns `true` if relative size values differ across script buckets.
+    pub fn rel_size_is_uniform(&self) -> bool {
+        self.font_rel_sizes.iter().all(|value| *value == self.font_rel_sizes[0])
+    }
+
+    /// Returns `true` if vertical offset values differ across script buckets.
+    pub fn offset_is_uniform(&self) -> bool {
+        self.font_offsets.iter().all(|value| *value == self.font_offsets[0])
     }
 }
 
@@ -816,6 +984,19 @@ pub struct Hwp5RawParaShape {
 }
 
 impl Hwp5RawParaShape {
+    /// Returns the horizontal alignment encoded in `property1` bits 2-4.
+    pub fn alignment(&self) -> Alignment {
+        match (self.property1 >> 2) & 0b111 {
+            0 => Alignment::Justify,
+            1 => Alignment::Left,
+            2 => Alignment::Right,
+            3 => Alignment::Center,
+            4 => Alignment::Distribute,
+            5 => Alignment::DistributeFlush,
+            _ => Alignment::Left,
+        }
+    }
+
     /// Returns the list family encoded in `property1` bits 23-24.
     ///
     /// This is the authoritative source of paragraph list semantics; the raw
@@ -842,6 +1023,125 @@ impl Hwp5RawParaShape {
     /// Returns the raw HWP5 list-definition slot index.
     pub fn list_ref_id(&self) -> u32 {
         u32::from(self.numbering_bullet_id)
+    }
+
+    /// Returns the normalized line-spacing type represented by this raw
+    /// paragraph shape.
+    pub fn line_spacing_type(&self) -> LineSpacingType {
+        match self.line_spacing_kind_raw() {
+            1 => LineSpacingType::Fixed,
+            2 => LineSpacingType::BetweenLines,
+            _ => LineSpacingType::Percentage,
+        }
+    }
+
+    /// Returns the line-spacing value corresponding to [`Self::line_spacing_type`].
+    pub fn line_spacing_value(&self) -> i32 {
+        if matches!(self.line_spacing_kind_raw(), 0..=2) {
+            self.line_spacing2
+                .and_then(|value| i32::try_from(value).ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(self.line_spacing)
+        } else {
+            self.line_spacing
+        }
+    }
+
+    /// Returns the Latin word-break policy encoded in `property1` bits 5-6.
+    ///
+    /// HWP5 supports a third hyphenation mode which the current shared IR
+    /// cannot represent; that mode currently collapses to `KeepWord`.
+    pub fn break_latin_word(&self) -> WordBreakType {
+        match self.break_latin_word_raw() {
+            2 => WordBreakType::BreakWord,
+            _ => WordBreakType::KeepWord,
+        }
+    }
+
+    /// Returns the raw Latin word-break mode encoded in `property1` bits 5-6.
+    pub fn break_latin_word_raw(&self) -> u32 {
+        (self.property1 >> 5) & 0b11
+    }
+
+    /// Returns the non-Latin word-break policy encoded in `property1` bit 7.
+    pub fn break_non_latin_word(&self) -> WordBreakType {
+        if self.property1 & (1 << 7) != 0 {
+            WordBreakType::BreakWord
+        } else {
+            WordBreakType::KeepWord
+        }
+    }
+
+    /// Returns the condense percentage encoded in `property1` bits 9-15.
+    pub fn condense(&self) -> u32 {
+        (self.property1 >> 9) & 0x7F
+    }
+
+    /// Returns `true` if snapping to the document grid (bit 8) is enabled.
+    pub fn snap_to_grid(&self) -> bool {
+        self.property1 & (1 << 8) != 0
+    }
+
+    /// Returns the paragraph vertical-alignment mode encoded in `property1`
+    /// bits 20-21.
+    pub fn vertical_align_raw(&self) -> u32 {
+        (self.property1 >> 20) & 0b11
+    }
+
+    /// Returns `true` if font-based line height calculation (bit 22) is enabled.
+    pub fn font_line_height(&self) -> bool {
+        self.property1 & (1 << 22) != 0
+    }
+
+    /// Returns `true` if widow/orphan protection (bit 16) is enabled.
+    pub fn widow_orphan(&self) -> bool {
+        self.property1 & (1 << 16) != 0
+    }
+
+    /// Returns `true` if keep-with-next (bit 17) is enabled.
+    pub fn keep_with_next(&self) -> bool {
+        self.property1 & (1 << 17) != 0
+    }
+
+    /// Returns `true` if keep-lines-together (bit 18) is enabled.
+    pub fn keep_lines_together(&self) -> bool {
+        self.property1 & (1 << 18) != 0
+    }
+
+    /// Returns the paragraph break behavior encoded in `property1` bit 19.
+    pub fn break_type(&self) -> BreakType {
+        if self.property1 & (1 << 19) != 0 {
+            BreakType::Page
+        } else {
+            BreakType::None
+        }
+    }
+
+    /// Returns `true` if paragraph borders connect across adjacent paragraphs
+    /// (bit 28).
+    pub fn border_connect(&self) -> bool {
+        self.property1 & (1 << 28) != 0
+    }
+
+    /// Returns `true` if paragraph border drawing ignores margins (bit 29).
+    pub fn border_ignore_margin(&self) -> bool {
+        self.property1 & (1 << 29) != 0
+    }
+
+    /// Returns `true` if Korean/English auto-spacing is enabled
+    /// (`property2` bit 4).
+    pub fn auto_spacing_kr_eng(&self) -> bool {
+        self.property2.is_some_and(|property2| property2 & (1 << 4) != 0)
+    }
+
+    /// Returns `true` if Korean/number auto-spacing is enabled
+    /// (`property2` bit 5).
+    pub fn auto_spacing_kr_num(&self) -> bool {
+        self.property2.is_some_and(|property2| property2 & (1 << 5) != 0)
+    }
+
+    pub(crate) fn line_spacing_kind_raw(&self) -> u32 {
+        self.property3.map_or(self.property1 & 0b11, |property3| property3 & 0x1F)
     }
 
     /// Parse a `ParaShape` record from its raw payload bytes.
@@ -1164,6 +1464,26 @@ impl Hwp5RawStyle {
 mod tests {
     use super::*;
 
+    fn make_bullet_def_bytes_with_checked_char(
+        use_image: bool,
+        checked_char: Option<u16>,
+    ) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(&0u32.to_le_bytes()); // paragraph head properties
+        data.extend_from_slice(&0i16.to_le_bytes()); // width adjust
+        data.extend_from_slice(&0i16.to_le_bytes()); // text offset
+        data.extend_from_slice(&0u32.to_le_bytes()); // char shape id
+        data.extend_from_slice(&(0x25CFu16).to_le_bytes()); // bullet char: ●
+        data.extend_from_slice(&(if use_image { 1i32 } else { 0i32 }).to_le_bytes());
+        if use_image {
+            data.extend_from_slice(&0u32.to_le_bytes()); // skipped image metadata
+        }
+        if let Some(checked_char) = checked_char {
+            data.extend_from_slice(&checked_char.to_le_bytes());
+        }
+        data
+    }
+
     fn make_file_header_bytes(version: u32, flags: u32) -> Vec<u8> {
         let mut buf = vec![0u8; 256];
         let sig = b"HWP Document File";
@@ -1396,8 +1716,8 @@ mod tests {
         let mut data = vec![0u8; 68];
         // height at offset 42 = 1200 (12pt)
         data[42..46].copy_from_slice(&1200i32.to_le_bytes());
-        // property at offset 46: bold (bit 0)
-        data[46..50].copy_from_slice(&1u32.to_le_bytes());
+        // property at offset 46: bold (bit 1)
+        data[46..50].copy_from_slice(&(1u32 << 1).to_le_bytes());
         // text_color at offset 50 = 0x000000 (black)
         data[50..54].copy_from_slice(&0x000000u32.to_le_bytes());
         let cs = Hwp5RawCharShape::parse(&data).unwrap();
@@ -1549,5 +1869,22 @@ mod tests {
         assert_eq!(style.para_shape_id, 0);
         assert_eq!(style.char_shape_id, 0);
         assert_eq!(style.lock_form, 1);
+    }
+
+    #[test]
+    fn parse_bullet_def_zero_checked_char_becomes_none() {
+        let bullet =
+            Hwp5RawBulletDef::parse(&make_bullet_def_bytes_with_checked_char(false, Some(0)))
+                .expect("bullet parse should succeed");
+        assert_eq!(bullet.bullet_char, "●");
+        assert_eq!(bullet.check_bullet_char, None);
+    }
+
+    #[test]
+    fn parse_bullet_def_nonzero_checked_char_is_preserved() {
+        let bullet =
+            Hwp5RawBulletDef::parse(&make_bullet_def_bytes_with_checked_char(false, Some(0x2611)))
+                .expect("bullet parse should succeed");
+        assert_eq!(bullet.check_bullet_char.as_deref(), Some("☑"));
     }
 }

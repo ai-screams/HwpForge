@@ -40,7 +40,7 @@ HwpForge의 핵심 설계 원칙은 **Core DOM이 포맷에 독립적**이라는
            ▼               ▼               ▼
     ┌──────────┐    ┌──────────┐    ┌──────────┐
     │ HWP5     │    │ HWPX     │    │ Markdown │
-    │ (예정)   │    │ ✅ 구현   │    │ ✅ 구현   │
+    │ CLI/전용 │    │ ✅ 구현   │    │ ✅ 구현   │
     └──────────┘    └──────────┘    └──────────┘
 ```
 
@@ -139,19 +139,29 @@ let markdown_out = MdEncoder::encode_lossy(&validated).unwrap();
 std::fs::write("output.md", &markdown_out).unwrap();
 ```
 
-### 미래: HWP5 포함 통합 파이프라인 (v2.0)
+### 현재: HWP5 전용 crate / CLI 경로
 
-```rust,no_run,ignore
-// v2.0에서 추가될 HWP5 디코더 (예시)
-// use hwpforge::hwp5::Hwp5Decoder;
-//
-// let hwp5_result = Hwp5Decoder::decode_file("legacy.hwp")?;
-// let doc: Document<Draft> = hwp5_result.document;
-//
-// // Core DOM을 경유하여 HWP5 → HWPX 변환
-// let validated = doc.validate()?;
-// let bytes = HwpxEncoder::encode(&validated, &style_store, &image_store)?;
-// std::fs::write("converted.hwpx", &bytes)?;
+```rust,no_run
+use hwpforge_smithy_hwp5::Hwp5Decoder;
+use hwpforge::hwpx::{HwpxEncoder, HwpxStyleStore};
+use hwpforge::core::ImageStore;
+
+let hwp5_result = Hwp5Decoder::decode_file("legacy.hwp").unwrap();
+let doc: Document<Draft> = hwp5_result.document;
+
+// Core DOM을 경유하여 HWP5 → HWPX 변환
+let validated = doc.validate().unwrap();
+let style_store = HwpxStyleStore::with_default_fonts("함초롬바탕");
+let bytes = HwpxEncoder::encode(&validated, &style_store, &ImageStore::new()).unwrap();
+std::fs::write("converted.hwpx", &bytes).unwrap();
+```
+
+CLI만 필요하다면 전용 명령도 이미 있습니다.
+
+```bash
+hwpforge convert-hwp5 legacy.hwp -o converted.hwpx
+hwpforge audit-hwp5 legacy.hwp converted.hwpx
+hwpforge census-hwp5 legacy.hwp --json
 ```
 
 ## CLI에서 포맷 처리
@@ -176,14 +186,14 @@ hwpforge from-json report.json -o updated.hwpx
 
 ## 크레이트 역할 분담
 
-| 크레이트               | 역할                              | 포맷 의존성       |
-| ---------------------- | --------------------------------- | ----------------- |
-| `hwpforge-foundation`  | 원시 타입 (HwpUnit, Color, Index) | 없음              |
-| `hwpforge-core`        | 포맷 독립 문서 모델 (IR)          | 없음              |
-| `hwpforge-blueprint`   | YAML 스타일 템플릿                | 없음              |
-| `hwpforge-smithy-hwpx` | HWPX ↔ Core 코덱                  | HWPX (ZIP+XML)    |
-| `hwpforge-smithy-hwp5` | HWP5 → Core 디코더 (v2.0 예정)    | HWP5 (OLE/CFB)    |
-| `hwpforge-smithy-md`   | Markdown ↔ Core 코덱              | Markdown (텍스트) |
+| 크레이트               | 역할                                   | 포맷 의존성       |
+| ---------------------- | -------------------------------------- | ----------------- |
+| `hwpforge-foundation`  | 원시 타입 (HwpUnit, Color, Index)      | 없음              |
+| `hwpforge-core`        | 포맷 독립 문서 모델 (IR)               | 없음              |
+| `hwpforge-blueprint`   | YAML 스타일 템플릿                     | 없음              |
+| `hwpforge-smithy-hwpx` | HWPX ↔ Core 코덱                       | HWPX (ZIP+XML)    |
+| `hwpforge-smithy-hwp5` | HWP5 decode/projection + audit helpers | HWP5 (OLE/CFB)    |
+| `hwpforge-smithy-md`   | Markdown ↔ Core 코덱                   | Markdown (텍스트) |
 
 **핵심 원칙**: Core 이하 계층은 어떤 파일 포맷도 모릅니다. Smithy 계층만 특정 포맷을 이해합니다.
 
@@ -215,13 +225,13 @@ HWP5 파일 (OLE2 CFB)
 
 ## 현재 지원 상태
 
-| 기능                | HWPX                 | HWP5         | Markdown            |
-| ------------------- | -------------------- | ------------ | ------------------- |
-| **읽기 (Decode)**   | ✅ 완전 지원         | 📋 v2.0 예정 | ✅ 완전 지원        |
-| **쓰기 (Encode)**   | ✅ 완전 지원         | —            | ✅ 완전 지원        |
-| **메타데이터 추출** | ✅ Core DOM          | 📋 v2.0 예정 | ✅ YAML Frontmatter |
-| **이미지 추출**     | ✅ ImageStore        | 📋 v2.0 예정 | —                   |
-| **스타일 보존**     | ✅ HwpxStyleStore    | 📋 v2.0 예정 | ✅ StyleRegistry    |
-| **JSON 라운드트립** | ✅ to-json/from-json | —            | —                   |
+| 기능                | HWPX                 | HWP5                                           | Markdown            |
+| ------------------- | -------------------- | ---------------------------------------------- | ------------------- |
+| **읽기 (Decode)**   | ✅ 완전 지원         | 🟡 전용 crate/CLI 경로                         | ✅ 완전 지원        |
+| **쓰기 (Encode)**   | ✅ 완전 지원         | —                                              | ✅ 완전 지원        |
+| **메타데이터 추출** | ✅ Core DOM          | 🟡 inspect/census summary                      | ✅ YAML Frontmatter |
+| **이미지 추출**     | ✅ ImageStore        | 🟡 decode/projection path                      | —                   |
+| **스타일 보존**     | ✅ HwpxStyleStore    | 🟡 warning-first projection + HWPX re-emission | ✅ StyleRegistry    |
+| **JSON 라운드트립** | ✅ to-json/from-json | —                                              | —                   |
 
-HWP5 읽기 지원은 v2.0 (Phase 10)에서 `hwpforge-smithy-hwp5` 크레이트로 구현될 예정입니다. Core DOM이 포맷 독립적이므로, HWP5 디코더가 추가되면 기존의 모든 Core/Blueprint/HWPX/Markdown 코드가 그대로 동작합니다.
+HWP5 읽기 자체는 더 이상 future tense가 아니다. 지금도 `hwpforge-smithy-hwp5`와 CLI를 통해 decode / inspect / convert / audit 경로를 사용할 수 있다. 다만 umbrella crate와 일부 top-level guide는 여전히 HWPX/Markdown 중심이며, HWP5 parity는 warning-first로 점진적으로 넓혀 가는 중이다.

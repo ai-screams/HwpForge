@@ -12,7 +12,7 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 
 - HWPX codec: read/write shipped
 - Markdown bridge: read/write shipped
-- HWP5 converter path: active (Phase 10 line)
+- HWP5 converter path: active with style/layout fidelity line in progress
 - CLI bindings: shipped
 - MCP bindings: shipped
 - Python bindings: stub
@@ -21,14 +21,19 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 - Checkable bullet semantics: implemented on local `feat/list-shared-semantics`
 - HWP5 checkable support: definition-level parity only; paragraph item checked-state decode is still backlog
 - Markdown task lists normalize to HWPX-first checkable semantics; ordered task lists intentionally lose numbering
+- HWP5 char/para style bridge now preserves the main supported style surface
+- HWP5 layout hint patch injects `linesegarray` and safe table height hints for better visual parity
+- `convert-hwp5` / `audit-hwp5` warning counts are aligned for style projection fallbacks
+- HWP5/HWPX char effects now preserve `emboss`, `engrave`, `superscript`, and `subscript`
+- Known style-fidelity gaps still deferred: `breakLatinWord=HYPHENATION`, richer strike/underline line families
 
 **Workspace Facts (code-grounded)**:
 
 - Cargo packages: `10`
-- Workspace version: `0.4.0`
-- Tracked Rust `src` files under `crates/`: `137`
-- Tracked Rust `src` LOC under `crates/`: `83,962`
-- Example artifact files under `examples/`: `47`
+- Workspace version: `0.5.0`
+- Tracked Rust `src` files under `crates/`: `144`
+- Tracked Rust `src` LOC under `crates/`: `90,629`
+- Example artifact files under `examples/`: `67`
 - GitHub workflow files: `5`
 - MSRV: `1.88`
 - Dev toolchain: Rust `1.93`
@@ -365,220 +370,30 @@ Local planning and research workspace. It may be git-excluded in this repository
 
 ## Gotchas & Common Mistakes
 
-### 1. HWP5 TagID Offset
+> **상세 내용 (코드 예제 포함)**: `.docs/references/gotchas.md` (35항목)
 
-Section records have +16 offset from official spec: `PARA_HEADER` = 0x42 (66), not 0x32 (50).
-
-### 2. HWPX landscape values (spec 반전!)
-
-`WIDELY` = 세로(portrait), `NARROWLY` = 가로(landscape) — KS X 6101 스펙과 반대!
-width/height는 항상 세로 기준 유지 (A4 = 210x297). **`PageSettings.landscape: bool` 사용**.
-
-```rust
-// ❌ width/height 교환 → 이중 회전 발생
-// ✅ landscape: true, 치수는 세로 기준 유지
-let landscape = PageSettings { landscape: true, ..PageSettings::a4() };
-```
-
-### 3. Geometry namespace: ALL use `hc:` (NOT `hp:`)
-
-Line endpoints(`hc:startPt`), polygon vertices(`hc:pt`), textbox corners(`hc:pt0`~`hc:pt3`) 모두 `hc:` namespace. `hp:` 사용 시 한글 parse error 또는 "파일을 읽거나 저장하는데 오류".
-
-### 4. TextBox = `hp:rect` + `hp:drawText` (NOT control element)
-
-```xml
-<hp:rect ...><hp:drawText>...</hp:drawText></hp:rect>
-```
-
-핵심 규칙:
-
-1. Element order: shape-common → drawText → caption → hc:pt0-3 → sz → pos → outMargin → shapeComment
-2. lastWidth = 전체 width (margin 차감 안 함), shadow alpha = 178
-3. `<hp:shapeComment>사각형입니다.</hp:shapeComment>` 필수
-4. Shape run 후 `<hp:t/>` marker 필수
-
-### 5. Chart encoding rules
-
-1. **No manifest**: Chart/*.xml은 ZIP에만 존재, content.hpf에 등록 금지 (한글 크래시)
-2. **`<c:f>` 필수**: 더미 formula라도 포함 (`Sheet1!$A$2:$A$5`). 없으면 빈 차트.
-3. **`<c:tx>` 직접값만**: `<c:tx><c:v>시리즈명</c:v></c:tx>` (strRef 사용 시 크래시)
-4. **`dropcapstyle="None"` 필수**, `horzRelTo="COLUMN"` (PARA 아님)
-5. **VHLC/VOHLC**: 4축 combo layout 필수 (각 chart type이 자체 catAx+valAx 쌍 보유, secondary catAx는 `delete="1"`)
-
-### 6. Multiple switches per paraPr
-
-`Vec<HxSwitch>` 사용 (NOT `Option<HxSwitch>`). 실제 한글 파일은 `<hh:paraPr>` 당 2개 이상 `<hp:switch>` 포함.
-
-### 7. Equation: NO shape common block
-
-도형과 달리 offset, orgSz, curSz, flip, rotation, lineShape, fillBrush, shadow가 없음.
-`flowWithText="1"` (도형은 0), `outMargin` left/right=56 (도형은 0 또는 283).
-
-### 8. Self-closing colPr
-
-```rust
-// ❌ xml.find("</hp:colPr>")  — self-closing 태그 누락
-// ✅ xml.find("<hp:colPr")    — 양쪽 형태 모두 매칭
-```
-
-### 9. Polygon vertex closure
-
-첫 꼭짓점을 마지막에 반복해야 path가 닫힘. 한글은 자동으로 닫지 않음.
-
-### 10. breakNonLatinWord = KEEP_WORD
-
-`BREAK_WORD` 사용 시 양쪽 정렬에서 글자 사이 공간이 균등 분배되어 퍼짐. `KEEP_WORD`(한글 기본값)가 자연스러움.
-
-### 11. Field encoding patterns
-
-- **하이퍼링크**: `fieldBegin type="HYPERLINK"` + `fieldEnd` pair (NOT `<hp:hyperlink>`)
-- **날짜/시간/문서요약**: `type="SUMMERY"` (한글 내부 오타 14년간 유지), `Prop=8`, `fieldid=628321650`
-- **CLICK_HERE**: `Prop=9`, `fieldid=627272811`, `editable="1"`
-- **본문 쪽번호**: `<hp:autoNum numType="PAGE">` (NOT fieldBegin). 머리글/바닥글은 `<hp:pageNum>`.
-
-### 12. 각주/미주: inline Run 필수
-
-별도 문단으로 만들면 각주 번호가 단독 줄에 표시됨. 같은 문단의 Run에 포함해야 함.
-
-```rust
-Paragraph::with_runs(vec![
-    Run::text("본문 텍스트.", cs),
-    Run::control(Control::footnote(notes), cs),
-], ps);
-```
-
-### 13. Style system gotchas
-
-- **개요 8/9/10 paraPr**: Non-sequential (18/16/17, NOT 순차)
-- **User paraShapes**: Modern style set에서 index 20부터 시작
-- **DropCapStyle**: PascalCase (`DoubleLine`, NOT `DOUBLE_LINE`), 도형 속성 (문단 속성 아님)
-
-### 14. ArrowType: EMPTY_ 형태만 사용
-
-한글은 `FILLED_DIAMOND/CIRCLE/BOX`를 무시. `EMPTY_*` + `headfill="1"`로 채움 제어.
-
-### 15. MasterPage XML
-
-1. 루트: `<masterPage>` (prefix 없음, NOT `<hm:masterPage>`)
-2. 15개 xmlns 전체 선언 필수
-3. `<hp:subList>` 사용 (NOT `<hm:subList>`)
-
-### 16. Dependency versions
-
-- **schemars 1.x**: `schema_name()` → `Cow<'static, str>` (NOT `String`)
-- **quick-xml 0.39**: `unescape()` 제거됨 → `decoder().decode()` 사용. `Event::GeneralRef` 처리 필수.
-
-### 17. page_break encoding
-
-`page_break: u32::from(para.page_break)` — hardcoded 0이 아닌 실제 필드값 사용.
-
-### 18. Flip은 `rotMatrix`에 인코딩 — scaMatrix/transMatrix는 identity 유지
-
-```xml
-<!-- ❌ WRONG — scaMatrix에 flip 저장 → 드래그 잔영이 원본, 회전/대칭 메뉴 비활성화 -->
-<hp:flip horizontal="1" vertical="0"/>
-<hp:renderingInfo>
-  <hc:transMatrix e1="1" e2="0" e3="{width}" e4="0" e5="1" e6="0"/>
-  <hc:scaMatrix e1="-1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
-  <hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
-</hp:renderingInfo>
-
-<!-- ✅ CORRECT — rotMatrix에 flip + 보정 이동, scaMatrix/transMatrix는 identity -->
-<hp:flip horizontal="1" vertical="0"/>
-<hp:renderingInfo>
-  <hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
-  <hc:scaMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
-  <hc:rotMatrix e1="-1" e2="0" e3="{width}" e4="0" e5="1" e6="0"/>
-</hp:renderingInfo>
-```
-
-한글은 flip을 `rotMatrix`에서 읽음. `scaMatrix`에 넣으면 수학적으로 동일하지만:
-
-- 드래그 시 잔영(ghost)이 원본(반전 전) 모양으로 표시됨
-- 우클릭 메뉴의 회전/대칭 기능이 비활성화됨
-
-### 19. fillBrush는 xs:choice — winBrush/gradation/imgBrush 중 하나만
-
-```xml
-<!-- ❌ WRONG — winBrush와 gradation 동시 출력 (xs:choice 위반) -->
-<hc:fillBrush>
-  <hc:winBrush faceColor="none" hatchColor="#000000" alpha="0"/>
-  <hc:gradation type="LINEAR" angle="0" ...>
-    <hc:color value="#FF0000"/><hc:color value="#0000FF"/>
-  </hc:gradation>
-</hc:fillBrush>
-
-<!-- ✅ CORRECT — gradation만 (winBrush 없음) -->
-<hc:fillBrush>
-  <hc:gradation type="LINEAR" angle="0" centerX="0" centerY="0"
-    step="255" colorNum="2" stepCenter="50" alpha="0">
-    <hc:color value="#FF0000"/>
-    <hc:color value="#0000FF"/>
-  </hc:gradation>
-</hc:fillBrush>
-```
-
-KS X 6101 스펙: "`<fillBrush>` 요소는 세 개의 하위 요소 중 **하나의 요소**를 가질 수 있다(choice)."
-hwpxlib(Java)도 세 필드 모두 nullable. 도형(DrawingObject)과 borderFill이 동일한 `hc:FillBrushType` 사용.
-`gradation` 필수 속성: type, angle, centerX, centerY, step, colorNum, stepCenter, alpha + `<hc:color>` 자식.
-
-- **Horizontal flip**: `rotMatrix e1="-1"`, `e3=width`
-- **Vertical flip**: `rotMatrix e5="-1"`, `e6=height`
-- **Both**: 양쪽 모두 적용
-- **Pipeline**: `point' = transMatrix × rotMatrix × scaMatrix × point`
-- **검증**: `15_shapes_advanced.hwpx` Section 6 — 비대칭 깃발 도형으로 4방향 반전 확인
-- **적용 대상**: 모든 도형 (Polygon, Ellipse, Line, Arc, Curve, ConnectLine, TextBox)
-
-### 20. Rotation은 정수 degrees + CCW 방향 + 중심 이동 포함
-
-```xml
-<!-- ❌ WRONG — centidegrees, CW 방향, 이동 없음 → 도형이 원점 기준 회전 -->
-<hp:rotationInfo angle="9000" centerX="3000" centerY="2000" rotateimage="1"/>
-<hc:rotMatrix e1="0" e2="1" e3="0" e4="-1" e5="0" e6="0"/>
-
-<!-- ✅ CORRECT — 정수 degrees, CCW 방향, 중심 기준 이동 포함 -->
-<hp:rotationInfo angle="90" centerX="3000" centerY="2000" rotateimage="1"/>
-<hc:rotMatrix e1="0" e2="-1" e3="5000" e4="1" e5="0" e6="-1000"/>
-```
-
-한글 회전 인코딩 규칙:
-
-- **angle 단위**: 정수 degrees (NOT centidegrees). 90° = `angle="90"` (NOT `"9000"`)
-- **rotMatrix 방향**: `[cos θ, -sin θ; sin θ, cos θ]` (CCW, 화면 좌표계에서 시계방향)
-- **rotMatrix 이동**: 중심 기준 회전을 위한 보정 필수
-  - `e3 = cx*(1-cos) + cy*sin`
-  - `e6 = cy*(1-cos) - cx*sin`
-  - `cx = width/2, cy = height/2`
-- **이동 없으면**: 도형이 바운딩 박스 원점(0,0) 기준으로 회전 → 위치 이탈
-- **scaMatrix, transMatrix**: 순수 회전 시 identity 유지
-
-### 21. PatternType BACK_SLASH/SLASH 반전 (spec 반전!)
-
-```rust
-// ❌ WRONG — spec대로 매핑하면 한글에서 역사선(\)과 사선(/)이 반대로 렌더링됨
-PatternType::BackSlash => "BACK_SLASH"  // 한글이 `/`로 렌더링
-PatternType::Slash => "SLASH"           // 한글이 `\`로 렌더링
-
-// ✅ CORRECT — 스왑하여 실제 렌더링과 일치
-PatternType::BackSlash => "SLASH"       // 한글이 `\`로 렌더링 ✓
-PatternType::Slash => "BACK_SLASH"      // 한글이 `/`로 렌더링 ✓
-```
-
-KS X 6101 XSD 문서에는 `BACK_SLASH = \\\\`, `SLASH = ////`이지만, 한글은 반대로 렌더링합니다.
-landscape 반전(gotcha #2)과 동일한 패턴. `PatternType`의 `Display`/`FromStr`에서 스왑 처리됨.
-
-### 22. 패턴 채우기는 winBrush + hatchStyle 필수
-
-```xml
-<!-- ❌ WRONG — hatchStyle 없으면 솔리드 채우기로 표시됨 -->
-<hc:winBrush faceColor="#FFD700" hatchColor="#000000" alpha="0"/>
-
-<!-- ✅ CORRECT — hatchStyle로 패턴 종류 지정 -->
-<hc:winBrush faceColor="#FFD700" hatchColor="#000000" hatchStyle="HORIZONTAL" alpha="0"/>
-```
-
-패턴 채우기 시 `hatchStyle` 속성 필수. 없으면 한글이 솔리드 채우기로 렌더링.
-유효값: `HORIZONTAL`, `VERTICAL`, `BACK_SLASH`, `SLASH`, `CROSS`, `CROSS_DIAGONAL`
+1. HWP5 TagID +16 오프셋 — `PARA_HEADER` = 0x42 (66), not 0x32 (50)
+2. landscape 스펙 반전 — `WIDELY`=세로, `NARROWLY`=가로. width/height 교환 금지
+3. 기하 좌표는 모두 `hc:` namespace (`hp:` 사용 시 한글 parse error)
+4. TextBox = `hp:rect` + `hp:drawText` (control 요소 아님). 요소 순서/shapeComment 필수
+5. Chart: manifest 등록 금지, `<c:f>` 필수, `<c:tx>`는 직접값만, `dropcapstyle="None"` 필수
+6. paraPr 당 `Vec<HxSwitch>` (NOT `Option`) — 2개 이상 switch 가능
+7. Equation: shape common 블록 없음 (`flowWithText="1"`, `outMargin` left/right=56)
+8. colPr self-closing 태그 — `xml.find("<hp:colPr")` 로 매칭
+9. Polygon 꼭짓점 닫힘 — 첫 꼭짓점을 마지막에 반복 필수
+10. `breakNonLatinWord` = `KEEP_WORD` (BREAK_WORD 시 글자 퍼짐)
+11. Field: 하이퍼링크=`fieldBegin/End`, 날짜=`type="SUMMERY"` (오타), 쪽번호=`autoNum`
+12. 각주/미주: 같은 문단의 inline Run에 포함 (별도 문단 금지)
+13. Style: 개요 8/9/10 paraPr 비순차(18/16/17), DropCapStyle은 PascalCase
+14. ArrowType: `EMPTY_*` + `headfill` 조합만 (FILLED_* 무시됨)
+15. MasterPage: prefix 없는 `<masterPage>` 루트, 15개 xmlns, `<hp:subList>`
+16. schemars 1.x: `Cow<'static, str>` 반환. quick-xml 0.39: `decoder().decode()` 사용
+17. `page_break`: `u32::from(para.page_break)` — hardcoded 0 금지
+18. Flip은 `rotMatrix`에 인코딩 — scaMatrix/transMatrix는 identity 유지
+19. `fillBrush`는 xs:choice — winBrush/gradation/imgBrush 중 하나만
+20. Rotation: 정수 degrees + CCW 방향 + 중심 이동 보정 필수
+21. PatternType `BACK_SLASH`/`SLASH` 스펙 반전 — Display/FromStr에서 스왑
+22. 패턴 채우기: `hatchStyle` 속성 필수 (없으면 솔리드로 렌더링)
 
 ---
 
