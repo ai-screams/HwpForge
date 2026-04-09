@@ -1,17 +1,16 @@
 //! `to-md` subcommand: convert HWPX to Markdown.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxStyleLookup};
 use hwpforge_smithy_md::MdEncoder;
 
 use crate::error::{check_file_size, CliError};
+use crate::MdMode;
 
 /// Run the to-md command.
-///
-/// Decodes the HWPX file, encodes it as Markdown with style information,
-/// then writes the `.md` file and any embedded images to the output directory.
-pub fn run(input: &PathBuf, output: &Option<PathBuf>, json_mode: bool) {
+pub fn run(input: &PathBuf, output: &Option<PathBuf>, mode: &MdMode, json_mode: bool) {
     check_file_size(input, json_mode);
 
     // 1. Decode HWPX
@@ -31,14 +30,30 @@ pub fn run(input: &PathBuf, output: &Option<PathBuf>, json_mode: bool) {
         }
     };
 
-    // 3. Create style lookup bridge
-    let lookup = HwpxStyleLookup::new(&hwpx_doc.style_store, &hwpx_doc.image_store);
+    // 3. Encode to Markdown based on mode
+    let (markdown, images) = match mode {
+        MdMode::Styled => {
+            let lookup = HwpxStyleLookup::new(&hwpx_doc.style_store, &hwpx_doc.image_store);
+            let md_output = MdEncoder::encode_styled(&document, &lookup);
+            (md_output.markdown, md_output.images)
+        }
+        MdMode::Lossy => match MdEncoder::encode_lossy(&document) {
+            Ok(md) => (md, HashMap::new()),
+            Err(e) => {
+                CliError::new("ENCODE_FAILED", format!("Markdown encode error: {e}"))
+                    .exit(json_mode, 2);
+            }
+        },
+        MdMode::Lossless => match MdEncoder::encode_lossless(&document) {
+            Ok(md) => (md, HashMap::new()),
+            Err(e) => {
+                CliError::new("ENCODE_FAILED", format!("Markdown encode error: {e}"))
+                    .exit(json_mode, 2);
+            }
+        },
+    };
 
-    // 4. Encode to Markdown
-    let md_output = MdEncoder::encode_styled(&document, &lookup);
-
-    // 5. Determine output paths
-    //    If -o ends with .md, treat as file path; otherwise treat as directory.
+    // 4. Determine output paths
     let (out_dir, md_path) = match output {
         Some(p) if p.extension().and_then(|e| e.to_str()) == Some("md") => {
             let dir = p.parent().unwrap_or_else(|| std::path::Path::new(".")).to_path_buf();
@@ -55,20 +70,20 @@ pub fn run(input: &PathBuf, output: &Option<PathBuf>, json_mode: bool) {
         }
     };
 
-    // 6. Create output directory if needed
+    // 5. Create output directory if needed
     if let Err(e) = std::fs::create_dir_all(&out_dir) {
         CliError::new("DIR_CREATE_FAILED", format!("Cannot create '{}': {e}", out_dir.display()))
             .exit(json_mode, 1);
     }
 
-    // 7. Write markdown
-    if let Err(e) = std::fs::write(&md_path, &md_output.markdown) {
+    // 6. Write markdown
+    if let Err(e) = std::fs::write(&md_path, &markdown) {
         CliError::new("FILE_WRITE_FAILED", format!("Cannot write '{}': {e}", md_path.display()))
             .exit(json_mode, 1);
     }
 
-    // 8. Write images
-    let image_count = md_output.images.len();
+    // 7. Write images (styled mode only)
+    let image_count = images.len();
     if image_count > 0 {
         let images_dir = out_dir.join("images");
         if let Err(e) = std::fs::create_dir_all(&images_dir) {
@@ -78,7 +93,7 @@ pub fn run(input: &PathBuf, output: &Option<PathBuf>, json_mode: bool) {
             )
             .exit(json_mode, 1);
         }
-        for (rel_path, data) in &md_output.images {
+        for (rel_path, data) in &images {
             let img_filename = std::path::Path::new(rel_path.as_str())
                 .file_name()
                 .and_then(|n| n.to_str())
@@ -94,7 +109,7 @@ pub fn run(input: &PathBuf, output: &Option<PathBuf>, json_mode: bool) {
         }
     }
 
-    // 9. Print result
+    // 8. Print result
     let result = serde_json::json!({
         "status": "ok",
         "output": md_path.display().to_string(),
