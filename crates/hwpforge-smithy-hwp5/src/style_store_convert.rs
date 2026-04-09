@@ -182,6 +182,7 @@ pub(crate) fn hwp5_para_shape_to_hwpx_with_tab_id(
     shape.heading_type = heading_type;
     shape.heading_level = heading_level;
     shape.heading_id_ref = heading_id_ref;
+    shape.checked = raw.checked();
     shape.tab_pr_id_ref = tab_pr_id_ref;
     shape.condense = raw.condense();
     shape

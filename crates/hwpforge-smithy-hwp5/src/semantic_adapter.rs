@@ -20,6 +20,7 @@ use crate::decoder::section::{
     SectionResult,
 };
 use crate::decoder::DecodedHwp5Intermediate;
+use crate::schema::section::TextSegment;
 use crate::semantic::{
     Hwp5SemanticConfidence, Hwp5SemanticContainerKind, Hwp5SemanticContainerPath,
     Hwp5SemanticControlId, Hwp5SemanticControlKind, Hwp5SemanticControlNode,
@@ -200,7 +201,12 @@ fn adapt_paragraph(
         control_ids.push(control_id);
     }
 
-    populate_inline_items(&paragraph.text, &control_ids, &mut inline_items);
+    populate_inline_items(
+        &paragraph.text,
+        &paragraph.text_segments,
+        &control_ids,
+        &mut inline_items,
+    );
 
     build.paragraphs[paragraph_slot_index] = Hwp5SemanticParagraph {
         paragraph_id,
@@ -267,7 +273,7 @@ fn adapt_control(
         Hwp5Control::TextBox(textbox) => {
             adapt_textbox_control(textbox, container, paragraph_id, build, support, ids)
         }
-        Hwp5Control::Unknown { ctrl_id } => {
+        Hwp5Control::Unknown { ctrl_id, .. } => {
             let node_id = ids.next_control_id();
             let literal = crate::ctrl_id_ascii(*ctrl_id);
             build.controls.push(Hwp5SemanticControlNode {
@@ -775,6 +781,80 @@ fn adapt_page_def(page_def: &crate::schema::section::Hwp5PageDef) -> Hwp5Semanti
 }
 
 fn populate_inline_items(
+    fallback_text: &str,
+    text_segments: &[TextSegment],
+    control_ids: &[Hwp5SemanticControlId],
+    inline_items: &mut Vec<Hwp5SemanticInlineItem>,
+) {
+    if text_segments.is_empty() {
+        populate_inline_items_from_flat_text(fallback_text, control_ids, inline_items);
+        return;
+    }
+
+    let placeholder: char = '\u{FFFC}';
+    let mut remaining_controls = control_ids.iter().copied();
+    let mut buffer = String::new();
+
+    let flush_text = |buffer: &mut String, inline_items: &mut Vec<Hwp5SemanticInlineItem>| {
+        if !buffer.is_empty() {
+            inline_items.push(Hwp5SemanticInlineItem::Text { text: std::mem::take(buffer) });
+        }
+    };
+
+    for segment in text_segments {
+        match segment {
+            TextSegment::Text(text) => buffer.push_str(text),
+            TextSegment::Tab => {
+                flush_text(&mut buffer, inline_items);
+                inline_items.push(Hwp5SemanticInlineItem::Tab);
+            }
+            TextSegment::LineBreak => {
+                flush_text(&mut buffer, inline_items);
+                inline_items.push(Hwp5SemanticInlineItem::LineBreak);
+            }
+            TextSegment::NonBreakingSpace => {
+                flush_text(&mut buffer, inline_items);
+                inline_items.push(Hwp5SemanticInlineItem::NonBreakingSpace);
+            }
+            TextSegment::ControlRef { .. } | TextSegment::ExtendedControlRef { .. } => {
+                buffer.push(placeholder);
+                flush_text(&mut buffer, inline_items);
+                if let Some(control_id) = remaining_controls.next() {
+                    inline_items.push(Hwp5SemanticInlineItem::Control { control_id });
+                }
+            }
+            TextSegment::FieldBegin { extra } => {
+                flush_text(&mut buffer, inline_items);
+                inline_items.push(Hwp5SemanticInlineItem::FieldBegin { extra: *extra });
+            }
+            TextSegment::FieldEnd => {
+                flush_text(&mut buffer, inline_items);
+                inline_items.push(Hwp5SemanticInlineItem::FieldEnd);
+            }
+            TextSegment::SectionColumnDef { extra } => {
+                flush_text(&mut buffer, inline_items);
+                inline_items.push(Hwp5SemanticInlineItem::SectionColumnDef { extra: *extra });
+            }
+            TextSegment::ParaBreak => {}
+        }
+    }
+
+    flush_text(&mut buffer, inline_items);
+
+    for control_id in remaining_controls {
+        inline_items.push(Hwp5SemanticInlineItem::Control { control_id });
+    }
+
+    if inline_items.is_empty() && text_segments.is_empty() {
+        return;
+    }
+
+    if inline_items.iter().all(|item| matches!(item, Hwp5SemanticInlineItem::Control { .. })) {
+        inline_items.insert(0, Hwp5SemanticInlineItem::Text { text: String::new() });
+    }
+}
+
+fn populate_inline_items_from_flat_text(
     text: &str,
     control_ids: &[Hwp5SemanticControlId],
     inline_items: &mut Vec<Hwp5SemanticInlineItem>,
@@ -1008,6 +1088,7 @@ mod tests {
             sections: vec![SectionResult {
                 paragraphs: vec![Hwp5Paragraph {
                     text: "\u{fffc}본문".to_string(),
+                    text_segments: Vec::new(),
                     para_shape_id: 2,
                     style_id: 1,
                     char_shape_runs: Vec::new(),
@@ -1038,15 +1119,19 @@ mod tests {
                                 border_fill_id: Some(3),
                                 paragraphs: vec![Hwp5Paragraph {
                                     text: "cell".to_string(),
+                                    text_segments: Vec::new(),
                                     para_shape_id: 4,
                                     style_id: 0,
                                     char_shape_runs: Vec::new(),
                                     line_segments: Vec::new(),
-                                    controls: vec![Hwp5Control::Unknown { ctrl_id: 0x6865_6164 }],
+                                    controls: vec![Hwp5Control::Unknown {
+                                        ctrl_id: 0x6865_6164,
+                                        header_data: Vec::new(),
+                                    }],
                                 }],
                             }],
                         }),
-                        Hwp5Control::Unknown { ctrl_id: 0x666F_6F74 },
+                        Hwp5Control::Unknown { ctrl_id: 0x666F_6F74, header_data: Vec::new() },
                     ],
                 }],
                 page_def: Some(Hwp5PageDef {
@@ -1229,11 +1314,15 @@ mod tests {
             sections: vec![SectionResult {
                 paragraphs: vec![Hwp5Paragraph {
                     text: "앞\u{fffc}뒤".to_string(),
+                    text_segments: Vec::new(),
                     para_shape_id: 0,
                     style_id: 0,
                     char_shape_runs: Vec::new(),
                     line_segments: Vec::new(),
-                    controls: vec![Hwp5Control::Unknown { ctrl_id: 0x6865_6164 }],
+                    controls: vec![Hwp5Control::Unknown {
+                        ctrl_id: 0x6865_6164,
+                        header_data: Vec::new(),
+                    }],
                 }],
                 page_def: None,
                 warnings: Vec::new(),
@@ -1260,6 +1349,7 @@ mod tests {
             sections: vec![SectionResult {
                 paragraphs: vec![Hwp5Paragraph {
                     text: "앞\u{fffc}뒤".to_string(),
+                    text_segments: Vec::new(),
                     para_shape_id: 0,
                     style_id: 0,
                     char_shape_runs: Vec::new(),
@@ -1336,6 +1426,7 @@ mod tests {
             sections: vec![SectionResult {
                 paragraphs: vec![Hwp5Paragraph {
                     text: "\u{fffc}".to_string(),
+                    text_segments: Vec::new(),
                     para_shape_id: 0,
                     style_id: 0,
                     char_shape_runs: Vec::new(),
@@ -1384,6 +1475,7 @@ mod tests {
             sections: vec![SectionResult {
                 paragraphs: vec![Hwp5Paragraph {
                     text: "\u{fffc}".to_string(),
+                    text_segments: Vec::new(),
                     para_shape_id: 0,
                     style_id: 0,
                     char_shape_runs: Vec::new(),
@@ -1398,11 +1490,15 @@ mod tests {
                         },
                         paragraphs: vec![Hwp5Paragraph {
                             text: "글상자 시작.\u{fffc}글상자 끝.".to_string(),
+                            text_segments: Vec::new(),
                             para_shape_id: 1,
                             style_id: 0,
                             char_shape_runs: Vec::new(),
                             line_segments: Vec::new(),
-                            controls: vec![Hwp5Control::Unknown { ctrl_id: 0x6773_6F20 }],
+                            controls: vec![Hwp5Control::Unknown {
+                                ctrl_id: 0x6773_6F20,
+                                header_data: Vec::new(),
+                            }],
                         }],
                     })],
                 }],
@@ -1458,6 +1554,98 @@ mod tests {
                 count: semantic.sections[0].paragraphs.len(),
             }]
         );
+    }
+
+    #[test]
+    fn fixture_user_sample_text_tab_linebreak_semantic_slice_preserves_inline_segments() {
+        let Some(semantic) = semantic_fixture("user_samples/sample-text-tab-linebreak-basic.hwp")
+        else {
+            return;
+        };
+
+        assert!(semantic.graph_is_coherent());
+        let paragraph = &semantic.sections[0].paragraphs[0];
+        assert_eq!(paragraph.text, "LEFT\tRIGHT\nNEXT-LINE");
+        assert_eq!(paragraph.inline_text_summary(), paragraph.text);
+        assert_eq!(paragraph.inline_items.len(), 9);
+        assert!(matches!(
+            paragraph.inline_items[0],
+            Hwp5SemanticInlineItem::SectionColumnDef { .. }
+        ));
+        assert!(matches!(
+            paragraph.inline_items[1],
+            Hwp5SemanticInlineItem::SectionColumnDef { .. }
+        ));
+        assert_eq!(
+            paragraph.inline_items[2],
+            Hwp5SemanticInlineItem::Text { text: "LEFT".to_string() }
+        );
+        assert_eq!(paragraph.inline_items[3], Hwp5SemanticInlineItem::Tab);
+        assert_eq!(
+            paragraph.inline_items[4],
+            Hwp5SemanticInlineItem::Text { text: "RIGHT".to_string() }
+        );
+        assert_eq!(paragraph.inline_items[5], Hwp5SemanticInlineItem::LineBreak);
+        assert_eq!(
+            paragraph.inline_items[6],
+            Hwp5SemanticInlineItem::Text { text: "NEXT-LINE".to_string() }
+        );
+        assert_eq!(paragraph.inline_control_ids().len(), 2);
+    }
+
+    #[test]
+    fn fixture_user_sample_hyperlink_semantic_slice_preserves_field_boundaries() {
+        let Some(semantic) = semantic_fixture("user_samples/sample-field-hyperlink-basic.hwp")
+        else {
+            return;
+        };
+
+        assert!(semantic.graph_is_coherent());
+        let paragraph = &semantic.sections[0].paragraphs[0];
+        assert_eq!(paragraph.text, "OpenAI");
+        assert_eq!(paragraph.inline_text_summary(), paragraph.text);
+        assert_eq!(paragraph.inline_items.len(), 8);
+        assert!(matches!(
+            paragraph.inline_items[0],
+            Hwp5SemanticInlineItem::SectionColumnDef { .. }
+        ));
+        assert!(matches!(
+            paragraph.inline_items[1],
+            Hwp5SemanticInlineItem::SectionColumnDef { .. }
+        ));
+        assert!(matches!(paragraph.inline_items[2], Hwp5SemanticInlineItem::FieldBegin { .. }));
+        assert_eq!(
+            paragraph.inline_items[3],
+            Hwp5SemanticInlineItem::Text { text: "OpenAI".to_string() }
+        );
+        assert!(matches!(paragraph.inline_items[4], Hwp5SemanticInlineItem::FieldEnd));
+        assert_eq!(paragraph.inline_control_ids().len(), 3);
+    }
+
+    #[test]
+    fn fixture_user_sample_crossref_semantic_slice_preserves_field_boundaries() {
+        let Some(semantic) =
+            semantic_fixture("user_samples/sample-field-bookmark-crossref-basic.hwp")
+        else {
+            return;
+        };
+
+        assert!(semantic.graph_is_coherent());
+        let paragraph = &semantic.sections[0].paragraphs[1];
+        assert_eq!(paragraph.text, "참조: 1");
+        assert_eq!(paragraph.inline_text_summary(), paragraph.text);
+        assert_eq!(paragraph.inline_items.len(), 5);
+        assert_eq!(
+            paragraph.inline_items[0],
+            Hwp5SemanticInlineItem::Text { text: "참조: ".to_string() }
+        );
+        assert!(matches!(paragraph.inline_items[1], Hwp5SemanticInlineItem::FieldBegin { .. }));
+        assert_eq!(
+            paragraph.inline_items[2],
+            Hwp5SemanticInlineItem::Text { text: "1".to_string() }
+        );
+        assert!(matches!(paragraph.inline_items[3], Hwp5SemanticInlineItem::FieldEnd));
+        assert_eq!(paragraph.inline_control_ids().len(), 1);
     }
 
     #[test]

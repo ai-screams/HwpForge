@@ -622,8 +622,15 @@ impl Hwp5SemanticParagraph {
     pub fn inline_text_summary(&self) -> String {
         let mut summary = String::new();
         for item in &self.inline_items {
-            if let Hwp5SemanticInlineItem::Text { text } = item {
-                summary.push_str(text);
+            match item {
+                Hwp5SemanticInlineItem::Text { text } => summary.push_str(text),
+                Hwp5SemanticInlineItem::Tab => summary.push('\t'),
+                Hwp5SemanticInlineItem::LineBreak => summary.push('\n'),
+                Hwp5SemanticInlineItem::NonBreakingSpace => summary.push(' '),
+                Hwp5SemanticInlineItem::FieldBegin { .. }
+                | Hwp5SemanticInlineItem::FieldEnd
+                | Hwp5SemanticInlineItem::SectionColumnDef { .. }
+                | Hwp5SemanticInlineItem::Control { .. } => {}
             }
         }
         summary
@@ -636,7 +643,13 @@ impl Hwp5SemanticParagraph {
             .iter()
             .filter_map(|item| match item {
                 Hwp5SemanticInlineItem::Control { control_id } => Some(*control_id),
-                Hwp5SemanticInlineItem::Text { .. } => None,
+                Hwp5SemanticInlineItem::Text { .. }
+                | Hwp5SemanticInlineItem::Tab
+                | Hwp5SemanticInlineItem::LineBreak
+                | Hwp5SemanticInlineItem::NonBreakingSpace
+                | Hwp5SemanticInlineItem::FieldBegin { .. }
+                | Hwp5SemanticInlineItem::FieldEnd
+                | Hwp5SemanticInlineItem::SectionColumnDef { .. } => None,
             })
             .collect()
     }
@@ -649,6 +662,24 @@ pub enum Hwp5SemanticInlineItem {
     Text {
         /// Text segment content.
         text: String,
+    },
+    /// Inline tab preserved as a structural separator.
+    Tab,
+    /// Inline line break preserved inside one paragraph.
+    LineBreak,
+    /// Inline non-breaking space preserved distinctly from plain text.
+    NonBreakingSpace,
+    /// Opaque field-begin marker preserved at the semantic boundary.
+    FieldBegin {
+        /// Raw 14-byte payload following the control code in `ParaText`.
+        extra: [u8; 14],
+    },
+    /// Opaque field-end marker preserved at the semantic boundary.
+    FieldEnd,
+    /// Opaque section/column boundary marker preserved at the semantic boundary.
+    SectionColumnDef {
+        /// Raw 14-byte payload following the control code in `ParaText`.
+        extra: [u8; 14],
     },
     /// Inline control reference in paragraph order.
     Control {

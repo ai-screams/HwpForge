@@ -1151,6 +1151,30 @@ fn fixture_mixed_lists_preserve_numbering_and_bullet_slots() {
 }
 
 #[test]
+fn fixture_checkable_multiline_para_shapes_preserve_checked_item_state() {
+    let doc_info = fixture_doc_info("user_samples/sample-checkable-bullet-multiline.hwp");
+    assert!(!doc_info.para_shapes[20].checked(), "unchecked task paragraph should stay unchecked");
+    assert!(
+        doc_info.para_shapes[21].checked(),
+        "checked task paragraph should expose the item bit"
+    );
+    assert!(
+        !doc_info.para_shapes[22].checked(),
+        "continuation paragraph must not be treated as checked"
+    );
+
+    let store = Hwp5StyleStore::from_doc_info(&doc_info);
+    let (hwpx_store, warnings) = store.to_hwpx_style_store_with_warnings();
+    assert!(!warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, .. } if *subject == "bullet.projection"
+    )));
+    assert!(!hwpx_store.para_shape(ParaShapeIndex::new(20)).unwrap().checked);
+    assert!(hwpx_store.para_shape(ParaShapeIndex::new(21)).unwrap().checked);
+    assert!(!hwpx_store.para_shape(ParaShapeIndex::new(22)).unwrap().checked);
+}
+
+#[test]
 fn to_hwpx_style_store_warns_when_para_shape_references_missing_custom_tab_def() {
     let mut para = Hwp5RawParaShape::default_for_test();
     para.tab_def_id = 9;

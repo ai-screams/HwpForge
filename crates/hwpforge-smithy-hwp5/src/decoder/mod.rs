@@ -194,6 +194,7 @@ impl Hwp5Decoder {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::schema::section::TextSegment;
     use std::io::Write;
 
     /// Build a minimal valid CFB file with FileHeader + DocInfo + Section0.
@@ -347,6 +348,19 @@ mod tests {
         )
     }
 
+    fn load_intermediate_fixture(name: &str) -> Option<DecodedHwp5Intermediate> {
+        let path = crate::test_support::workspace_fixture_path(name);
+        if !path.exists() {
+            eprintln!("Skipping: fixture not found at {:?}", path);
+            return None;
+        }
+        let bytes = std::fs::read(&path).expect("read hwp fixture");
+        Some(
+            decode_intermediate(&bytes)
+                .unwrap_or_else(|error| panic!("Failed to decode intermediate {name}: {error:?}")),
+        )
+    }
+
     fn assert_no_para_header_warnings(warnings: &[Hwp5Warning]) {
         for w in warnings {
             if let Hwp5Warning::UnsupportedTag { tag_id, .. } = w {
@@ -414,6 +428,62 @@ mod tests {
         assert!(texts[2].contains("맑은고딕"));
         assert!(texts[3].contains("기타등등"));
         assert_no_para_header_warnings(&doc.warnings);
+    }
+
+    #[test]
+    fn decode_intermediate_user_sample_text_tab_linebreak_preserves_raw_segments() {
+        let decoded =
+            match load_intermediate_fixture("user_samples/sample-text-tab-linebreak-basic.hwp") {
+                Some(decoded) => decoded,
+                None => return,
+            };
+
+        let paragraph = &decoded.sections[0].paragraphs[0];
+        assert_eq!(paragraph.text, "LEFT\tRIGHT\nNEXT-LINE");
+        let text_runs: Vec<&str> = paragraph
+            .text_segments
+            .iter()
+            .filter_map(|segment| match segment {
+                TextSegment::Text(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(text_runs, vec!["LEFT", "RIGHT", "NEXT-LINE"]);
+        assert!(paragraph.text_segments.iter().any(|segment| matches!(segment, TextSegment::Tab)));
+        assert!(paragraph
+            .text_segments
+            .iter()
+            .any(|segment| matches!(segment, TextSegment::LineBreak)));
+    }
+
+    #[test]
+    fn decode_intermediate_user_sample_hyperlink_preserves_field_markers() {
+        let decoded =
+            match load_intermediate_fixture("user_samples/sample-field-hyperlink-basic.hwp") {
+                Some(decoded) => decoded,
+                None => return,
+            };
+
+        let paragraph = &decoded.sections[0].paragraphs[0];
+        assert_eq!(paragraph.text, "OpenAI");
+        assert_eq!(
+            paragraph
+                .text_segments
+                .iter()
+                .filter(|segment| matches!(segment, TextSegment::FieldBegin { .. }))
+                .count(),
+            1,
+            "hyperlink paragraph should preserve one field-begin marker",
+        );
+        assert_eq!(
+            paragraph
+                .text_segments
+                .iter()
+                .filter(|segment| matches!(segment, TextSegment::FieldEnd))
+                .count(),
+            1,
+            "hyperlink paragraph should preserve one field-end marker",
+        );
     }
 
     /// hwp5_03: 5 paragraphs with different alignments (left/center/right/distribute/split).
