@@ -12,7 +12,10 @@ all-features = false
 
 [advisories]
 unmaintained = "workspace"
-ignore = []
+ignore = [
+  # rand unsoundness only with custom logger + thread_rng reseed; not applicable to HwpForge
+  "RUSTSEC-2026-0097",
+]
 
 [bans]
 multiple-versions = "warn"
