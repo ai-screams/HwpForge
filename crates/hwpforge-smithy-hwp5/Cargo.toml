@@ -22,7 +22,7 @@ flate2 = { workspace = true }
 hwpforge-blueprint = { path = "../hwpforge-blueprint", version = "0.5.0" }
 hwpforge-core = { path = "../hwpforge-core", version = "0.5.0" }
 hwpforge-foundation = { path = "../hwpforge-foundation", version = "0.5.0" }
-hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0.5.1" }
+hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0.5.2" }
 quick-xml = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
