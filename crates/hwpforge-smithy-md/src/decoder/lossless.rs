@@ -6,6 +6,7 @@ use hwpforge_core::{
 use hwpforge_foundation::{CharShapeIndex, Color, HwpUnit, ParaShapeIndex};
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::reader::Reader;
+use quick_xml::XmlVersion;
 
 use crate::error::{MdError, MdResult};
 
@@ -678,11 +679,11 @@ fn attr_value(
         })?;
 
         if attr.key.as_ref() == attribute.as_bytes() {
-            let value = attr.decode_and_unescape_value(reader.decoder()).map_err(|err| {
-                MdError::LosslessParse {
+            let value = attr
+                .decoded_and_normalized_value(XmlVersion::Explicit1_0, reader.decoder())
+                .map_err(|err| MdError::LosslessParse {
                     detail: format!("attribute value decode error ({attribute}): {err}"),
-                }
-            })?;
+                })?;
             return Ok(Some(value.into_owned()));
         }
     }

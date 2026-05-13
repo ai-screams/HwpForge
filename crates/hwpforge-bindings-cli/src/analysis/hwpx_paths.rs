@@ -2,6 +2,7 @@ use std::collections::BTreeMap;
 
 use quick_xml::events::{BytesStart, Event};
 use quick_xml::reader::Reader;
+use quick_xml::XmlVersion;
 use serde::Serialize;
 
 use hwpforge_smithy_hwpx::{HwpxResult, PackageReader};
@@ -77,7 +78,7 @@ pub(crate) fn scan_section_xml(section_index: usize, xml: &str) -> Vec<HwpxPathO
             }
             Ok(Event::Text(text)) => {
                 if stack.last().is_some_and(|name| name == "t") {
-                    if let Ok(decoded_text) = text.xml_content() {
+                    if let Ok(decoded_text) = text.xml_content(XmlVersion::Explicit1_0) {
                         let trimmed: &str = decoded_text.trim();
                         if !trimmed.is_empty() {
                             occurrences.push(HwpxPathOccurrence {
@@ -121,7 +122,9 @@ fn record_element_occurrence(
     for attribute in element.attributes().with_checks(false).flatten() {
         let key: String = local_name(attribute.key.as_ref());
         if matches!(key.as_str(), "binaryItemIDRef" | "chartIDRef") {
-            if let Ok(value) = attribute.decode_and_unescape_value(decoder) {
+            if let Ok(value) =
+                attribute.decoded_and_normalized_value(XmlVersion::Explicit1_0, decoder)
+            {
                 refs.insert(key, value.into_owned());
             }
         }
