@@ -538,6 +538,7 @@ mod tests {
     ) -> Hwp5Paragraph {
         Hwp5Paragraph {
             text: text.into(),
+            text_segments: Vec::new(),
             para_shape_id: 0,
             style_id: 0,
             char_shape_runs: Vec::new(),
@@ -591,6 +592,7 @@ mod tests {
                 border_fill_id: None,
                 paragraphs: vec![Hwp5Paragraph {
                     text: "cell".into(),
+                    text_segments: Vec::new(),
                     para_shape_id: 0,
                     style_id: 0,
                     char_shape_runs: Vec::new(),

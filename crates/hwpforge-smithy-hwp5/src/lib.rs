@@ -935,7 +935,9 @@ mod tests {
     use hwpforge_core::paragraph::Paragraph;
     use hwpforge_core::run::Run;
     use hwpforge_core::table::Table;
-    use hwpforge_foundation::{HeadingType, HwpUnit, NumberFormatType};
+    use hwpforge_foundation::{
+        BookmarkType, HeadingType, HwpUnit, NumberFormatType, PageNumberPosition,
+    };
     use hwpforge_smithy_hwpx::{HwpxDecoder, PackageReader};
 
     fn default_test_char_shape() -> crate::schema::header::Hwp5RawCharShape {
@@ -1037,6 +1039,17 @@ mod tests {
             .expect("system time should be after unix epoch")
             .as_nanos();
         std::env::temp_dir().join(format!("hwpforge-hwp5-image-slice-{stamp}-{file_name}"))
+    }
+
+    fn read_section_xml(path: &Path, index: usize) -> String {
+        let bytes = std::fs::read(path).expect("converted hwpx should be readable");
+        let mut package =
+            PackageReader::new(&bytes).expect("converted hwpx should open as package");
+        package.read_section_xml(index).expect("section xml should exist")
+    }
+
+    fn joined_text_runs<'a>(runs: impl IntoIterator<Item = &'a Run>) -> String {
+        runs.into_iter().filter_map(|run| run.content.as_text()).collect()
     }
 
     #[test]
@@ -1925,6 +1938,56 @@ mod tests {
     }
 
     #[test]
+    fn hwp5_to_hwpx_user_sample_checkable_multiline_preserves_item_state_and_continuation() {
+        let source = fixture_path("user_samples/sample-checkable-bullet-multiline.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-checkable-bullet-multiline.hwpx");
+        let warnings = hwp5_to_hwpx(&source, &out)
+            .expect("user sample checkable multiline conversion should succeed");
+        assert!(warnings.is_empty(), "checkable multiline fixture should convert without warnings");
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let paragraphs = &decoded.document.sections()[0].paragraphs;
+        assert_eq!(paragraphs.len(), 3, "fixture should stay as exactly 3 body paragraphs");
+
+        let unchecked = paragraphs
+            .iter()
+            .find(|paragraph| paragraph.text_content().contains("unchecked item A first paragraph"))
+            .expect("fixture should contain unchecked task item");
+        let continuation = paragraphs
+            .iter()
+            .find(|paragraph| {
+                paragraph.text_content().contains("second paragraph of the same item")
+            })
+            .expect("fixture should contain continuation paragraph");
+        let checked = paragraphs
+            .iter()
+            .find(|paragraph| paragraph.text_content().contains("checked item B"))
+            .expect("fixture should contain checked task item");
+
+        let unchecked_shape = decoded.style_store.para_shape(unchecked.para_shape_id).unwrap();
+        let continuation_shape =
+            decoded.style_store.para_shape(continuation.para_shape_id).unwrap();
+        let checked_shape = decoded.style_store.para_shape(checked.para_shape_id).unwrap();
+        assert_eq!(unchecked_shape.heading_type, HeadingType::Bullet);
+        assert_eq!(unchecked_shape.heading_level, 0);
+        assert!(!unchecked_shape.checked);
+        assert_eq!(checked_shape.heading_type, HeadingType::Bullet);
+        assert_eq!(checked_shape.heading_level, 0);
+        assert!(checked_shape.checked);
+        assert_eq!(continuation_shape.heading_type, HeadingType::None);
+        assert_eq!(continuation_shape.heading_id_ref, 0);
+        assert!(!continuation_shape.checked);
+        assert!(continuation_shape.margin_left.as_i32() > 0);
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
     fn hwp5_to_hwpx_user_sample_numbered_list_preserves_numbering_semantics() {
         let source = fixture_path("user_samples/lists/sample-numbered-list.hwp");
         if !source.exists() {
@@ -1941,6 +2004,192 @@ mod tests {
         let headings = collect_decoded_body_heading_triples(&decoded);
         assert!(headings.contains(&(HeadingType::Number, 2, 0)));
         assert!(decoded.style_store.numbering_count() >= 2);
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_hyperlink_preserves_field_control_and_surrounding_text() {
+        let source = fixture_path("user_samples/sample-field-hyperlink-surrounding-text-basic.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-field-hyperlink-surrounding-text-basic.hwpx");
+        let warnings = hwp5_to_hwpx(&source, &out)
+            .expect("user sample hyperlink surrounding text conversion should succeed");
+        assert!(
+            warnings.is_empty(),
+            "hyperlink surrounding text fixture should convert without warnings: {warnings:?}"
+        );
+
+        assert_valid_hwpx(&out);
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let hyperlink_paragraph = decoded.document.sections()[0]
+            .paragraphs
+            .iter()
+            .find(|paragraph| {
+                paragraph.runs.iter().any(|run| {
+                    matches!(
+                        run.content.as_control(),
+                        Some(Control::Hyperlink { text, url })
+                            if text == "OpenAI" && url == "https://openai.com"
+                    )
+                })
+            })
+            .expect("fixture should produce a hyperlink control paragraph");
+        let hyperlink_index = hyperlink_paragraph
+            .runs
+            .iter()
+            .position(|run| {
+                matches!(
+                    run.content.as_control(),
+                    Some(Control::Hyperlink { text, url })
+                        if text == "OpenAI" && url == "https://openai.com"
+                )
+            })
+            .expect("paragraph must contain the hyperlink control");
+        assert_eq!(
+            joined_text_runs(hyperlink_paragraph.runs[..hyperlink_index].iter()),
+            "링크: ",
+            "plain text before the hyperlink must remain outside the field control"
+        );
+        assert_eq!(
+            joined_text_runs(hyperlink_paragraph.runs[hyperlink_index + 1..].iter()),
+            " 바로가기",
+            "plain text after the hyperlink must remain outside the field control"
+        );
+
+        let section_xml = read_section_xml(&out, 0);
+        assert!(
+            section_xml.contains("<hp:fieldBegin") && section_xml.contains(r#"type="HYPERLINK""#),
+            "converted section xml must carry an HYPERLINK fieldBegin"
+        );
+        assert!(
+            section_xml.contains("<hp:t>OpenAI</hp:t>"),
+            "converted section xml must keep hyperlink display text"
+        );
+        assert!(
+            section_xml
+                .contains(r#"<hp:stringParam name="Path">https://openai.com</hp:stringParam>"#,),
+            "converted section xml must keep hyperlink url"
+        );
+        assert!(
+            section_xml.contains("<hp:fieldBegin")
+                && section_xml.contains(r#"type="BOOKMARK""#)
+                && section_xml.contains(r#"name="target_span_1""#),
+            "combined fixture must preserve the span bookmark field begin"
+        );
+        assert!(
+            section_xml.contains("<hp:fieldBegin") && section_xml.contains(r#"type="CROSSREF""#),
+            "combined fixture must preserve the cross-reference field"
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_bookmark_crossref_preserves_controls() {
+        let source = fixture_path("user_samples/sample-field-bookmark-crossref-basic.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-field-bookmark-crossref-basic.hwpx");
+        let warnings = hwp5_to_hwpx(&source, &out)
+            .expect("user sample bookmark/crossref conversion should succeed");
+        assert!(
+            warnings.is_empty(),
+            "bookmark/crossref fixture should convert without warnings: {warnings:?}"
+        );
+
+        assert_valid_hwpx(&out);
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let controls: Vec<&Control> = decoded.document.sections()[0]
+            .paragraphs
+            .iter()
+            .flat_map(|paragraph| &paragraph.runs)
+            .filter_map(|run| run.content.as_control())
+            .collect();
+        assert!(
+            controls.iter().any(|control| {
+                matches!(
+                    control,
+                    Control::Bookmark {
+                        name,
+                        bookmark_type: BookmarkType::Point,
+                    } if name == "target1"
+                )
+            }),
+            "fixture should produce a point bookmark control named target1"
+        );
+        let section_xml = read_section_xml(&out, 0);
+        assert!(
+            section_xml.contains(r#"<hp:bookmark name="target1"/>"#),
+            "converted section xml must keep the point bookmark"
+        );
+        assert!(
+            section_xml.contains("<hp:fieldBegin") && section_xml.contains(r#"type="CROSSREF""#),
+            "converted section xml must keep the cross-reference field"
+        );
+        assert!(
+            section_xml.contains(r#"<hp:stringParam name="RefPath">?target1;</hp:stringParam>"#),
+            "converted cross-reference must target the bookmark name"
+        );
+        assert!(
+            section_xml
+                .contains(r#"<hp:stringParam name="RefType">TARGET_BOOKMARK</hp:stringParam>"#),
+            "converted cross-reference must keep bookmark reference type"
+        );
+        assert!(
+            section_xml.contains(
+                r#"<hp:stringParam name="RefContentType">OBJECT_TYPE_PAGE</hp:stringParam>"#,
+            ),
+            "converted cross-reference must keep page content type"
+        );
+        assert!(
+            section_xml.contains("<hp:t>1</hp:t>"),
+            "converted cross-reference must keep its visible text"
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_page_number_preserves_section_page_number() {
+        let source = fixture_path("user_samples/sample-field-page-number-basic.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-field-page-number-basic.hwpx");
+        let warnings =
+            hwp5_to_hwpx(&source, &out).expect("user sample page number conversion should succeed");
+        assert!(
+            warnings.is_empty(),
+            "page number fixture should convert without warnings: {warnings:?}"
+        );
+
+        assert_valid_hwpx(&out);
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let section = &decoded.document.sections()[0];
+        let page_number = section.page_number.as_ref().expect("section must carry a page number");
+        assert_eq!(page_number.position, PageNumberPosition::BottomCenter);
+        assert_eq!(page_number.number_format, NumberFormatType::Digit);
+        assert_eq!(page_number.decoration, "-");
+
+        let section_xml = read_section_xml(&out, 0);
+        assert!(
+            section_xml
+                .contains(r#"<hp:pageNum pos="BOTTOM_CENTER" formatType="DIGIT" sideChar="-""#),
+            "converted section xml must inject a page number control"
+        );
 
         let _ = std::fs::remove_file(&out);
     }

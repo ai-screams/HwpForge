@@ -4,17 +4,22 @@
 //! (parsed records, style tables) into HwpForge Core's `Document<Draft>`
 //! structure, bridging the format-specific layer to the format-agnostic core.
 
+use std::collections::{BTreeSet, VecDeque};
+
 use hwpforge_core::document::{Document, Draft};
 use hwpforge_core::image::{
     Image, ImageFormat, ImagePlacement, ImageRelativeTo, ImageStore, ImageTextFlow, ImageTextWrap,
 };
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::Run;
-use hwpforge_core::section::{HeaderFooter, Section};
+use hwpforge_core::section::{HeaderFooter, PageNumber, Section};
 use hwpforge_core::table::{Table, TableCell, TableMargin, TableRow};
 use hwpforge_core::Control;
 use hwpforge_core::PageSettings;
-use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex, StyleIndex};
+use hwpforge_foundation::{
+    BookmarkType, CharShapeIndex, HwpUnit, NumberFormatType, PageNumberPosition, ParaShapeIndex,
+    RefContentType, RefType, StyleIndex,
+};
 
 use crate::decoder::section::{
     Hwp5Control, Hwp5ImageControl, Hwp5LineControl, Hwp5Paragraph, Hwp5PolygonControl, Hwp5Table,
@@ -32,6 +37,76 @@ use crate::table_cell_vertical_align::{
 use crate::table_page_break::{core_table_page_break, unknown_hwp5_table_page_break_raw};
 use crate::warning_utils::push_projection_fallback;
 use crate::{Hwp5JoinedImageAsset, Hwp5JoinedImageAssetPlan};
+
+const CTRL_ID_SECTION_DEF: u32 = 0x7365_6364; // "secd"
+const CTRL_ID_COLUMN_DEF: u32 = 0x636F_6C64; // "cold"
+const CTRL_ID_PAGE_NUMBER: u32 = 0x7067_6E70; // "pgnp"
+const CTRL_ID_BOOKMARK_SPAN: u32 = 0x2562_6D6B; // "%bmk"
+const CTRL_ID_HYPERLINK: u32 = 0x2568_6C6B; // "%hlk"
+const CTRL_ID_CROSSREF: u32 = 0x2578_7266; // "%xrf"
+const CTRL_ID_BOOKMARK_POINT: u32 = 0x626F_6B6D; // "bokm"
+const HWP5_CROSSREF_UNKNOWN_TAG: &str = "hwp5.crossref";
+
+#[derive(Debug, Default)]
+struct SectionProjectionHints {
+    unresolved_bookmark_names: VecDeque<String>,
+}
+
+impl SectionProjectionHints {
+    fn from_paragraphs(paragraphs: &[Hwp5Paragraph]) -> Self {
+        let mut seen = BTreeSet::new();
+        let mut unresolved_bookmark_names = VecDeque::new();
+        for paragraph in paragraphs {
+            for control in &paragraph.controls {
+                let Some(unknown) = unknown_control_header(control) else {
+                    continue;
+                };
+                if unknown.ctrl_id != CTRL_ID_CROSSREF {
+                    continue;
+                }
+                let Some(target_name) = parse_crossref_target_name(unknown.header_data) else {
+                    continue;
+                };
+                if seen.insert(target_name.clone()) {
+                    unresolved_bookmark_names.push_back(target_name);
+                }
+            }
+        }
+        Self { unresolved_bookmark_names }
+    }
+
+    fn take_bookmark_name(&mut self) -> Option<String> {
+        self.unresolved_bookmark_names.pop_front()
+    }
+}
+
+#[derive(Debug)]
+struct ProjectedParagraph {
+    paragraph: Paragraph,
+    page_number: Option<PageNumber>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct UnknownControlHeader<'a> {
+    ctrl_id: u32,
+    header_data: &'a [u8],
+}
+
+#[derive(Debug)]
+struct ParagraphProjectionQueues<'a> {
+    marker_headers: VecDeque<UnknownControlHeader<'a>>,
+    object_controls: VecDeque<&'a Hwp5Control>,
+    point_bookmark_names: VecDeque<String>,
+    page_number: Option<PageNumber>,
+}
+
+#[derive(Debug)]
+enum ActiveField {
+    Hyperlink { url: String, start_utf16: u32, display_text: String },
+    BookmarkSpan { name: String, start_utf16: u32 },
+    CrossRef { target_name: String, start_utf16: u32, display_text: String },
+    PlainTextFallback { start_utf16: u32 },
+}
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -75,6 +150,8 @@ fn project_to_core_internal(
             .unwrap_or_else(PageSettings::a4);
 
         let mut section = Section::new(page_settings);
+        let mut section_field_hints =
+            SectionProjectionHints::from_paragraphs(&section_result.paragraphs);
         let mut header_paragraphs: Vec<Paragraph> = Vec::new();
         let mut footer_paragraphs: Vec<Paragraph> = Vec::new();
 
@@ -83,12 +160,16 @@ fn project_to_core_internal(
             header_paragraphs.extend(collect_header_paragraphs(&hwp_para, &mut projection_images));
             footer_paragraphs.extend(collect_footer_paragraphs(&hwp_para, &mut projection_images));
 
-            let para = project_paragraph_with_images(
+            let projected = project_paragraph_with_images(
                 &hwp_para,
                 &mut projection_images,
                 ImageProjectionContext::Flow,
+                Some(&mut section_field_hints),
             );
-            section.add_paragraph(para);
+            if section.page_number.is_none() {
+                section.page_number = projected.page_number;
+            }
+            section.add_paragraph(projected.paragraph);
         }
 
         if !header_paragraphs.is_empty() {
@@ -254,6 +335,31 @@ fn project_paragraph_with_images(
     hwp_para: &Hwp5Paragraph,
     projection_images: &mut ProjectionImageState<'_>,
     image_context: ImageProjectionContext,
+    field_hints: Option<&mut SectionProjectionHints>,
+) -> ProjectedParagraph {
+    if !paragraph_needs_structural_projection(hwp_para) {
+        return ProjectedParagraph {
+            paragraph: project_paragraph_with_images_flat(
+                hwp_para,
+                projection_images,
+                image_context,
+            ),
+            page_number: None,
+        };
+    }
+
+    project_paragraph_with_images_structural(
+        hwp_para,
+        projection_images,
+        image_context,
+        field_hints,
+    )
+}
+
+fn project_paragraph_with_images_flat(
+    hwp_para: &Hwp5Paragraph,
+    projection_images: &mut ProjectionImageState<'_>,
+    image_context: ImageProjectionContext,
 ) -> Paragraph {
     let mut runs: Vec<Run> = Vec::new();
     let mut control_iter = hwp_para.controls.iter();
@@ -309,6 +415,362 @@ fn project_paragraph_with_images(
     paragraph
 }
 
+fn project_paragraph_with_images_structural(
+    hwp_para: &Hwp5Paragraph,
+    projection_images: &mut ProjectionImageState<'_>,
+    image_context: ImageProjectionContext,
+    mut field_hints: Option<&mut SectionProjectionHints>,
+) -> ProjectedParagraph {
+    let mut queues =
+        build_paragraph_projection_queues(hwp_para, projection_images, field_hints.as_deref_mut());
+    let mut runs: Vec<Run> = Vec::new();
+    let mut visible_utf16: u32 = 0;
+    let mut active_field: Option<ActiveField> = None;
+
+    for segment in &hwp_para.text_segments {
+        match segment {
+            crate::schema::section::TextSegment::Text(text) => {
+                let len = text.encode_utf16().count() as u32;
+                if let Some(active) = active_field.as_mut() {
+                    match active {
+                        ActiveField::Hyperlink { display_text, .. }
+                        | ActiveField::CrossRef { display_text, .. } => display_text.push_str(text),
+                        ActiveField::BookmarkSpan { .. }
+                        | ActiveField::PlainTextFallback { .. } => {}
+                    }
+                } else {
+                    runs.extend(project_text_segment(
+                        &hwp_para.text,
+                        &hwp_para.char_shape_runs,
+                        visible_utf16,
+                        visible_utf16 + len,
+                    ));
+                }
+                visible_utf16 += len;
+            }
+            crate::schema::section::TextSegment::Tab => {
+                append_visible_unit(
+                    hwp_para,
+                    &mut runs,
+                    &mut active_field,
+                    &mut visible_utf16,
+                    '\t',
+                );
+            }
+            crate::schema::section::TextSegment::LineBreak => {
+                append_visible_unit(
+                    hwp_para,
+                    &mut runs,
+                    &mut active_field,
+                    &mut visible_utf16,
+                    '\n',
+                );
+            }
+            crate::schema::section::TextSegment::NonBreakingSpace => {
+                append_visible_unit(
+                    hwp_para,
+                    &mut runs,
+                    &mut active_field,
+                    &mut visible_utf16,
+                    ' ',
+                );
+            }
+            crate::schema::section::TextSegment::ControlRef { .. }
+            | crate::schema::section::TextSegment::ExtendedControlRef { .. } => {
+                if active_field.is_none() {
+                    if let Some(control) = queues.object_controls.pop_front() {
+                        if let Some(run) =
+                            project_control_run(control, projection_images, image_context)
+                        {
+                            runs.push(run);
+                        }
+                    }
+                }
+                visible_utf16 += 1;
+            }
+            crate::schema::section::TextSegment::SectionColumnDef { extra } => {
+                let ctrl_id = ctrl_id_from_inline_extra(extra);
+                let _ = consume_marker_header(&mut queues.marker_headers, ctrl_id);
+            }
+            crate::schema::section::TextSegment::FieldBegin { extra } => {
+                let ctrl_id = ctrl_id_from_inline_extra(extra);
+                let header = consume_marker_header(&mut queues.marker_headers, ctrl_id);
+                active_field = Some(start_active_field(
+                    ctrl_id,
+                    header,
+                    visible_utf16,
+                    projection_images,
+                    field_hints.as_deref_mut(),
+                ));
+            }
+            crate::schema::section::TextSegment::FieldEnd => {
+                if let Some(field) = active_field.take() {
+                    finish_active_field(
+                        field,
+                        hwp_para,
+                        visible_utf16,
+                        &mut runs,
+                        projection_images,
+                    );
+                }
+            }
+            crate::schema::section::TextSegment::ParaBreak => {}
+        }
+    }
+
+    if let Some(field) = active_field.take() {
+        finish_active_field(field, hwp_para, visible_utf16, &mut runs, projection_images);
+    }
+
+    for bookmark_name in queues.point_bookmark_names {
+        let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
+            &hwp_para.char_shape_runs,
+            visible_utf16,
+        ) as usize);
+        runs.push(Run::control(
+            Control::Bookmark { name: bookmark_name, bookmark_type: BookmarkType::Point },
+            char_shape_id,
+        ));
+    }
+
+    for control in queues.object_controls {
+        if let Some(run) = project_control_run(control, projection_images, image_context) {
+            runs.push(run);
+        }
+    }
+
+    if runs.is_empty() {
+        runs.push(Run::text("", CharShapeIndex::new(0)));
+    }
+
+    let mut paragraph =
+        Paragraph::with_runs(runs, ParaShapeIndex::new(hwp_para.para_shape_id as usize));
+    if hwp_para.style_id > 0 {
+        paragraph = paragraph.with_style(StyleIndex::new(hwp_para.style_id as usize));
+    }
+
+    ProjectedParagraph { paragraph, page_number: queues.page_number }
+}
+
+fn append_visible_unit(
+    hwp_para: &Hwp5Paragraph,
+    runs: &mut Vec<Run>,
+    active_field: &mut Option<ActiveField>,
+    visible_utf16: &mut u32,
+    ch: char,
+) {
+    if let Some(active) = active_field.as_mut() {
+        match active {
+            ActiveField::Hyperlink { display_text, .. }
+            | ActiveField::CrossRef { display_text, .. } => display_text.push(ch),
+            ActiveField::BookmarkSpan { .. } | ActiveField::PlainTextFallback { .. } => {}
+        }
+    } else {
+        runs.extend(project_text_segment(
+            &hwp_para.text,
+            &hwp_para.char_shape_runs,
+            *visible_utf16,
+            *visible_utf16 + 1,
+        ));
+    }
+    *visible_utf16 += 1;
+}
+
+fn paragraph_needs_structural_projection(hwp_para: &Hwp5Paragraph) -> bool {
+    hwp_para
+        .text_segments
+        .iter()
+        .any(|segment| matches!(segment, crate::schema::section::TextSegment::FieldBegin { .. }))
+        || hwp_para.controls.iter().any(|control| {
+            matches!(
+                control,
+                Hwp5Control::Unknown { ctrl_id: CTRL_ID_PAGE_NUMBER | CTRL_ID_BOOKMARK_POINT, .. }
+            )
+        })
+}
+
+fn build_paragraph_projection_queues<'a>(
+    hwp_para: &'a Hwp5Paragraph,
+    projection_images: &mut ProjectionImageState<'_>,
+    field_hints: Option<&mut SectionProjectionHints>,
+) -> ParagraphProjectionQueues<'a> {
+    let mut marker_headers = VecDeque::new();
+    let mut object_controls = VecDeque::new();
+    let mut point_bookmark_names = VecDeque::new();
+    let mut page_number = None;
+    let mut field_hints = field_hints;
+
+    for control in &hwp_para.controls {
+        let Some(unknown) = unknown_control_header(control) else {
+            object_controls.push_back(control);
+            continue;
+        };
+
+        match unknown.ctrl_id {
+            CTRL_ID_SECTION_DEF
+            | CTRL_ID_COLUMN_DEF
+            | CTRL_ID_BOOKMARK_SPAN
+            | CTRL_ID_HYPERLINK
+            | CTRL_ID_CROSSREF => marker_headers.push_back(unknown),
+            CTRL_ID_PAGE_NUMBER => {
+                page_number = parse_page_number_control(unknown.header_data).or_else(|| {
+                    projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                        subject: "field.page_number",
+                        reason: "falling back to BOTTOM_CENTER digit page number".to_string(),
+                    });
+                    Some(PageNumber::with_decoration(
+                        PageNumberPosition::BottomCenter,
+                        NumberFormatType::Digit,
+                        "-".to_string(),
+                    ))
+                });
+            }
+            CTRL_ID_BOOKMARK_POINT => {
+                if let Some(name) =
+                    field_hints.as_deref_mut().and_then(SectionProjectionHints::take_bookmark_name)
+                {
+                    point_bookmark_names.push_back(name);
+                } else {
+                    projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                        subject: "field.bookmark_point",
+                        reason: "bookmark point name unavailable; dropping bookmark control"
+                            .to_string(),
+                    });
+                }
+            }
+            _ => object_controls.push_back(control),
+        }
+    }
+
+    ParagraphProjectionQueues { marker_headers, object_controls, point_bookmark_names, page_number }
+}
+
+fn start_active_field(
+    ctrl_id: u32,
+    header: Option<UnknownControlHeader<'_>>,
+    start_utf16: u32,
+    projection_images: &mut ProjectionImageState<'_>,
+    field_hints: Option<&mut SectionProjectionHints>,
+) -> ActiveField {
+    match ctrl_id {
+        CTRL_ID_HYPERLINK => {
+            if let Some(url) = header.and_then(|header| parse_hyperlink_url(header.header_data)) {
+                ActiveField::Hyperlink { url, start_utf16, display_text: String::new() }
+            } else {
+                projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "field.hyperlink",
+                    reason: "hyperlink url unavailable; preserving only visible text".to_string(),
+                });
+                ActiveField::PlainTextFallback { start_utf16 }
+            }
+        }
+        CTRL_ID_BOOKMARK_SPAN => {
+            if let Some(name) = field_hints.and_then(SectionProjectionHints::take_bookmark_name) {
+                ActiveField::BookmarkSpan { name, start_utf16 }
+            } else {
+                projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "field.bookmark_span",
+                    reason: "bookmark span name unavailable; preserving only visible text"
+                        .to_string(),
+                });
+                ActiveField::PlainTextFallback { start_utf16 }
+            }
+        }
+        CTRL_ID_CROSSREF => {
+            if let Some(target_name) =
+                header.and_then(|header| parse_crossref_target_name(header.header_data))
+            {
+                ActiveField::CrossRef { target_name, start_utf16, display_text: String::new() }
+            } else {
+                projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "field.crossref",
+                    reason: "cross-reference target unavailable; preserving only visible text"
+                        .to_string(),
+                });
+                ActiveField::PlainTextFallback { start_utf16 }
+            }
+        }
+        _ => ActiveField::PlainTextFallback { start_utf16 },
+    }
+}
+
+fn finish_active_field(
+    field: ActiveField,
+    hwp_para: &Hwp5Paragraph,
+    end_utf16: u32,
+    runs: &mut Vec<Run>,
+    _projection_images: &mut ProjectionImageState<'_>,
+) {
+    match field {
+        ActiveField::Hyperlink { url, start_utf16, display_text } => {
+            if display_text.is_empty() {
+                return;
+            }
+            let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
+                &hwp_para.char_shape_runs,
+                start_utf16,
+            ) as usize);
+            runs.push(Run::control(Control::Hyperlink { text: display_text, url }, char_shape_id));
+        }
+        ActiveField::BookmarkSpan { name, start_utf16 } => {
+            let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
+                &hwp_para.char_shape_runs,
+                start_utf16,
+            ) as usize);
+            runs.push(Run::control(
+                Control::Bookmark { name: name.clone(), bookmark_type: BookmarkType::SpanStart },
+                char_shape_id,
+            ));
+            runs.extend(project_text_segment(
+                &hwp_para.text,
+                &hwp_para.char_shape_runs,
+                start_utf16,
+                end_utf16,
+            ));
+            runs.push(Run::control(
+                Control::Bookmark { name, bookmark_type: BookmarkType::SpanEnd },
+                char_shape_id,
+            ));
+        }
+        ActiveField::CrossRef { target_name, start_utf16, display_text } => {
+            let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
+                &hwp_para.char_shape_runs,
+                start_utf16,
+            ) as usize);
+            if display_text.is_empty() {
+                runs.extend(project_text_segment(
+                    &hwp_para.text,
+                    &hwp_para.char_shape_runs,
+                    start_utf16,
+                    end_utf16,
+                ));
+                return;
+            }
+            runs.push(Run::control(
+                Control::Unknown {
+                    tag: HWP5_CROSSREF_UNKNOWN_TAG.to_string(),
+                    data: Some(encode_hwp5_crossref_unknown_data(
+                        &target_name,
+                        &display_text,
+                        RefType::Bookmark,
+                        RefContentType::Page,
+                        false,
+                    )),
+                },
+                char_shape_id,
+            ));
+        }
+        ActiveField::PlainTextFallback { start_utf16 } => {
+            runs.extend(project_text_segment(
+                &hwp_para.text,
+                &hwp_para.char_shape_runs,
+                start_utf16,
+                end_utf16,
+            ));
+        }
+    }
+}
+
 fn collect_header_paragraphs(
     paragraph: &Hwp5Paragraph,
     projection_images: &mut ProjectionImageState<'_>,
@@ -357,8 +819,108 @@ fn project_nested_paragraphs(
 ) -> Vec<Paragraph> {
     paragraphs
         .iter()
-        .map(|nested| project_paragraph_with_images(nested, projection_images, image_context))
+        .map(|nested| {
+            project_paragraph_with_images(nested, projection_images, image_context, None).paragraph
+        })
         .collect()
+}
+
+fn unknown_control_header(control: &Hwp5Control) -> Option<UnknownControlHeader<'_>> {
+    match control {
+        Hwp5Control::Unknown { ctrl_id, header_data } => {
+            Some(UnknownControlHeader { ctrl_id: *ctrl_id, header_data })
+        }
+        _ => None,
+    }
+}
+
+fn ctrl_id_from_inline_extra(extra: &[u8; 14]) -> u32 {
+    u32::from_be_bytes([extra[3], extra[2], extra[1], extra[0]])
+}
+
+fn consume_marker_header<'a>(
+    marker_headers: &mut VecDeque<UnknownControlHeader<'a>>,
+    expected_ctrl_id: u32,
+) -> Option<UnknownControlHeader<'a>> {
+    let front = marker_headers.front().copied()?;
+    if front.ctrl_id == expected_ctrl_id {
+        return marker_headers.pop_front();
+    }
+    None
+}
+
+fn parse_utf16_command_string(header_data: &[u8]) -> Option<String> {
+    if header_data.len() < 10 {
+        return None;
+    }
+    let char_len = u16::from_be_bytes([header_data[8], header_data[9]]) as usize;
+    let byte_len = char_len.checked_mul(2)?;
+    let end = 10usize.checked_add(byte_len)?;
+    if header_data.len() < end {
+        return None;
+    }
+    let units: Vec<u16> = header_data[10..end]
+        .chunks_exact(2)
+        .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+        .collect();
+    String::from_utf16(&units).ok()
+}
+
+fn parse_hyperlink_url(header_data: &[u8]) -> Option<String> {
+    let command = parse_utf16_command_string(header_data)?;
+    let raw_url =
+        command.split('|').next().unwrap_or(&command).split(';').next().unwrap_or(&command);
+    Some(raw_url.replace("\\:", ":"))
+}
+
+fn parse_crossref_target_name(header_data: &[u8]) -> Option<String> {
+    let command = parse_utf16_command_string(header_data)?;
+    let target = command.strip_prefix('?').unwrap_or(&command).split(';').next()?;
+    (!target.is_empty()).then(|| target.to_string())
+}
+
+fn parse_page_number_control(header_data: &[u8]) -> Option<PageNumber> {
+    let pos_code = *header_data.get(5)?;
+    let position = match pos_code {
+        0 => PageNumberPosition::None,
+        1 => PageNumberPosition::TopLeft,
+        2 => PageNumberPosition::TopCenter,
+        3 => PageNumberPosition::TopRight,
+        4 => PageNumberPosition::BottomLeft,
+        5 => PageNumberPosition::BottomCenter,
+        6 => PageNumberPosition::BottomRight,
+        7 => PageNumberPosition::OutsideTop,
+        8 => PageNumberPosition::OutsideBottom,
+        9 => PageNumberPosition::InsideTop,
+        10 => PageNumberPosition::InsideBottom,
+        _ => PageNumberPosition::BottomCenter,
+    };
+    let decoration = header_data
+        .iter()
+        .rev()
+        .find(|byte| **byte != 0)
+        .copied()
+        .filter(|byte| byte.is_ascii())
+        .map(|byte| char::from(byte).to_string())
+        .unwrap_or_else(|| "-".to_string());
+    Some(PageNumber::with_decoration(position, NumberFormatType::Digit, decoration))
+}
+
+fn char_shape_id_for_visible_position(runs: &[Hwp5CharShapeRun], position: u32) -> u32 {
+    if position == 0 {
+        return char_shape_id_at_position(runs, 0);
+    }
+    char_shape_id_at_position(runs, position.saturating_sub(1))
+}
+
+fn encode_hwp5_crossref_unknown_data(
+    target_name: &str,
+    display_text: &str,
+    ref_type: RefType,
+    content_type: RefContentType,
+    as_hyperlink: bool,
+) -> String {
+    format!("{target_name}\n{display_text}\n{ref_type}\n{content_type}\n{as_hyperlink}",)
 }
 
 // ---------------------------------------------------------------------------
@@ -795,7 +1357,9 @@ fn project_table_cell_with_images(
                     paragraph,
                     projection_images,
                     ImageProjectionContext::Flow,
+                    None,
                 )
+                .paragraph
             })
             .collect()
     };
@@ -887,6 +1451,7 @@ mod tests {
     fn make_paragraph(text: &str, para_shape_id: u16, style_id: u8) -> Hwp5Paragraph {
         Hwp5Paragraph {
             text: text.to_string(),
+            text_segments: Vec::new(),
             para_shape_id,
             style_id,
             char_shape_runs: vec![],
@@ -898,6 +1463,7 @@ mod tests {
     fn _make_paragraph_with_runs(text: &str, runs: Vec<Hwp5CharShapeRun>) -> Hwp5Paragraph {
         Hwp5Paragraph {
             text: text.to_string(),
+            text_segments: Vec::new(),
             para_shape_id: 0,
             style_id: 0,
             char_shape_runs: runs,
@@ -1049,6 +1615,7 @@ mod tests {
         let section = make_section(
             vec![Hwp5Paragraph {
                 text: "앞\u{fffc}뒤".to_string(),
+                text_segments: Vec::new(),
                 para_shape_id: 3,
                 style_id: 0,
                 char_shape_runs: Vec::new(),
@@ -1103,6 +1670,7 @@ mod tests {
         let section = make_section(
             vec![Hwp5Paragraph {
                 text: "\u{fffc}\u{fffc}".to_string(),
+                text_segments: Vec::new(),
                 para_shape_id: 0,
                 style_id: 0,
                 char_shape_runs: Vec::new(),
@@ -1112,6 +1680,7 @@ mod tests {
                         ctrl_id: 0x6865_6164,
                         paragraphs: vec![Hwp5Paragraph {
                             text: "\u{fffc}".to_string(),
+                            text_segments: Vec::new(),
                             para_shape_id: 0,
                             style_id: 0,
                             char_shape_runs: Vec::new(),
@@ -1166,6 +1735,7 @@ mod tests {
             },
             paragraphs: vec![Hwp5Paragraph {
                 text: "앞\u{fffc}뒤".to_string(),
+                text_segments: Vec::new(),
                 para_shape_id: 1,
                 style_id: 0,
                 char_shape_runs: Vec::new(),
@@ -1176,6 +1746,7 @@ mod tests {
         let section = make_section(
             vec![Hwp5Paragraph {
                 text: "\u{fffc}".to_string(),
+                text_segments: Vec::new(),
                 para_shape_id: 0,
                 style_id: 0,
                 char_shape_runs: Vec::new(),
@@ -1237,6 +1808,7 @@ mod tests {
         let section = make_section(
             vec![Hwp5Paragraph {
                 text: "\u{fffc}".to_string(),
+                text_segments: Vec::new(),
                 para_shape_id: 0,
                 style_id: 0,
                 char_shape_runs: Vec::new(),
@@ -1274,6 +1846,7 @@ mod tests {
         let section = make_section(
             vec![Hwp5Paragraph {
                 text: "\u{fffc}".to_string(),
+                text_segments: Vec::new(),
                 para_shape_id: 0,
                 style_id: 0,
                 char_shape_runs: Vec::new(),
@@ -1317,6 +1890,7 @@ mod tests {
         let section = make_section(
             vec![Hwp5Paragraph {
                 text: "\u{fffc}".to_string(),
+                text_segments: Vec::new(),
                 para_shape_id: 0,
                 style_id: 0,
                 char_shape_runs: Vec::new(),
@@ -1481,6 +2055,7 @@ mod tests {
     fn table_control_becomes_run_table() {
         let para = Hwp5Paragraph {
             text: String::new(),
+            text_segments: Vec::new(),
             para_shape_id: 0,
             style_id: 0,
             char_shape_runs: vec![],
@@ -1513,6 +2088,7 @@ mod tests {
     fn table_cell_text_is_projected() {
         let para = Hwp5Paragraph {
             text: "\u{FFFC}".to_string(),
+            text_segments: Vec::new(),
             para_shape_id: 0,
             style_id: 0,
             char_shape_runs: vec![],
@@ -1542,6 +2118,7 @@ mod tests {
                     border_fill_id: Some(3),
                     paragraphs: vec![Hwp5Paragraph {
                         text: "셀".to_string(),
+                        text_segments: Vec::new(),
                         para_shape_id: 0,
                         style_id: 0,
                         char_shape_runs: vec![],
@@ -1581,6 +2158,7 @@ mod tests {
     fn unknown_table_cell_vertical_align_emits_projection_fallback_warning() {
         let para = Hwp5Paragraph {
             text: "\u{FFFC}".to_string(),
+            text_segments: Vec::new(),
             para_shape_id: 0,
             style_id: 0,
             char_shape_runs: vec![],
@@ -1610,6 +2188,7 @@ mod tests {
                     border_fill_id: Some(3),
                     paragraphs: vec![Hwp5Paragraph {
                         text: "셀".to_string(),
+                        text_segments: Vec::new(),
                         para_shape_id: 0,
                         style_id: 0,
                         char_shape_runs: vec![],
@@ -1648,6 +2227,7 @@ mod tests {
     fn mixed_table_header_cells_emit_warning_and_do_not_promote_header_row() {
         let para = Hwp5Paragraph {
             text: "\u{FFFC}".to_string(),
+            text_segments: Vec::new(),
             para_shape_id: 0,
             style_id: 0,
             char_shape_runs: vec![],
@@ -1678,6 +2258,7 @@ mod tests {
                         border_fill_id: Some(3),
                         paragraphs: vec![Hwp5Paragraph {
                             text: "head".to_string(),
+                            text_segments: Vec::new(),
                             para_shape_id: 0,
                             style_id: 0,
                             char_shape_runs: vec![],
@@ -1703,6 +2284,7 @@ mod tests {
                         border_fill_id: Some(3),
                         paragraphs: vec![Hwp5Paragraph {
                             text: "body".to_string(),
+                            text_segments: Vec::new(),
                             para_shape_id: 0,
                             style_id: 0,
                             char_shape_runs: vec![],
@@ -1734,6 +2316,7 @@ mod tests {
     fn line_control_becomes_visible_core_line() {
         let para = Hwp5Paragraph {
             text: "\u{FFFC}".to_string(),
+            text_segments: Vec::new(),
             para_shape_id: 0,
             style_id: 0,
             char_shape_runs: vec![],
@@ -1771,6 +2354,7 @@ mod tests {
     fn polygon_control_becomes_visible_core_polygon() {
         let para = Hwp5Paragraph {
             text: "\u{FFFC}".to_string(),
+            text_segments: Vec::new(),
             para_shape_id: 0,
             style_id: 0,
             char_shape_runs: vec![],
@@ -1824,6 +2408,7 @@ mod tests {
     fn rect_control_emits_projection_warning_and_stays_invisible() {
         let para = Hwp5Paragraph {
             text: "\u{FFFC}".to_string(),
+            text_segments: Vec::new(),
             para_shape_id: 0,
             style_id: 0,
             char_shape_runs: vec![],
@@ -1855,11 +2440,12 @@ mod tests {
     fn unknown_control_is_ignored() {
         let para = Hwp5Paragraph {
             text: "text".to_string(),
+            text_segments: Vec::new(),
             para_shape_id: 0,
             style_id: 0,
             char_shape_runs: vec![],
             line_segments: Vec::new(),
-            controls: vec![Hwp5Control::Unknown { ctrl_id: 0xDEAD_BEEF }],
+            controls: vec![Hwp5Control::Unknown { ctrl_id: 0xDEAD_BEEF, header_data: Vec::new() }],
         };
         let section = make_section(vec![para], None);
         let (doc, _) = project_to_core(vec![section]).unwrap();

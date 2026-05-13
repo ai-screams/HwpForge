@@ -27,6 +27,8 @@ pub(crate) struct Hwp5Paragraph {
     /// The paragraph's text content (all Text segments concatenated, with
     /// tab/space/newline substituted for control codes).
     pub text: String,
+    /// The raw decoded text segments in paragraph order before flattening.
+    pub text_segments: Vec<TextSegment>,
     /// Paragraph shape ID (index into DocInfo para_shapes).
     pub para_shape_id: u16,
     /// Style ID (index into DocInfo styles).
@@ -65,6 +67,8 @@ pub(crate) enum Hwp5Control {
     Unknown {
         /// Four-byte control ID (big-endian ASCII, e.g. 0x74626C20 = 'tbl ').
         ctrl_id: u32,
+        /// Raw `CtrlHeader` payload bytes for fixture-driven future decoding.
+        header_data: Vec<u8>,
     },
 }
 
@@ -289,12 +293,12 @@ impl ParaBuf {
 
     /// Build the final `Hwp5Paragraph`, consuming this buffer.
     fn finish(self) -> Hwp5Paragraph {
-        let text = match self.text {
-            Some(pt) => segments_to_string(&pt.segments),
-            None => String::new(),
-        };
+        let text_segments =
+            self.text.map_or_else(Vec::new, |paragraph_text| paragraph_text.segments);
+        let text = segments_to_string(&text_segments);
         Hwp5Paragraph {
             text,
+            text_segments,
             para_shape_id: self.header.para_shape_id,
             style_id: self.header.style_id,
             char_shape_runs: self.char_shape_runs,
@@ -475,7 +479,7 @@ impl NestedSubtreeContext {
                     geometry,
                     paragraphs: self.paragraphs,
                 }),
-                None => Hwp5Control::Unknown { ctrl_id: self.ctrl_id },
+                None => Hwp5Control::Unknown { ctrl_id: self.ctrl_id, header_data: Vec::new() },
             },
             _ => classify_gso_control(GsoClassificationInput {
                 ctrl_id: self.ctrl_id,
@@ -570,7 +574,7 @@ impl InlineGsoContext {
 
 fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
     if input.ctrl_id != CTRL_ID_GSO || !input.saw_shape_component {
-        return Hwp5Control::Unknown { ctrl_id: input.ctrl_id };
+        return Hwp5Control::Unknown { ctrl_id: input.ctrl_id, header_data: Vec::new() };
     }
 
     let payload_count = usize::from(input.picture.is_some())
@@ -579,7 +583,7 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
         + usize::from(input.line.is_some())
         + usize::from(input.polygon.is_some());
     if payload_count != 1 {
-        return Hwp5Control::Unknown { ctrl_id: input.ctrl_id };
+        return Hwp5Control::Unknown { ctrl_id: input.ctrl_id, header_data: Vec::new() };
     }
 
     match (input.geometry, input.picture, input.ole, input.line, input.polygon) {
@@ -613,7 +617,7 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
                 points: polygon.points,
             })
         }
-        _ => Hwp5Control::Unknown { ctrl_id: input.ctrl_id },
+        _ => Hwp5Control::Unknown { ctrl_id: input.ctrl_id, header_data: Vec::new() },
     }
 }
 
@@ -855,7 +859,10 @@ impl BodyTextParserState {
                             Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).ok(),
                         ));
                     } else if let Some(buf) = ctx.current_cell_para.as_mut() {
-                        buf.controls.push(Hwp5Control::Unknown { ctrl_id });
+                        buf.controls.push(Hwp5Control::Unknown {
+                            ctrl_id,
+                            header_data: record.data.clone(),
+                        });
                     }
                 }
             }
@@ -990,7 +997,10 @@ impl BodyTextParserState {
                             Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).ok(),
                         ));
                     } else {
-                        buf.controls.push(Hwp5Control::Unknown { ctrl_id });
+                        buf.controls.push(Hwp5Control::Unknown {
+                            ctrl_id,
+                            header_data: record.data.clone(),
+                        });
                     }
                 }
             }
@@ -1064,7 +1074,8 @@ impl BodyTextParserState {
                     };
                     self.subtree_ctx = Some(NestedSubtreeContext::new(level, ctrl_id, geometry));
                 } else if let Some(buf) = self.current.as_mut() {
-                    buf.controls.push(Hwp5Control::Unknown { ctrl_id });
+                    buf.controls
+                        .push(Hwp5Control::Unknown { ctrl_id, header_data: record.data.clone() });
                 }
             }
             TagId::ListHeader => {}
@@ -1794,7 +1805,7 @@ mod tests {
         let para = &result.paragraphs[0];
         assert_eq!(para.controls.len(), 1);
         match &para.controls[0] {
-            Hwp5Control::Unknown { ctrl_id: id } => assert_eq!(*id, ctrl_id),
+            Hwp5Control::Unknown { ctrl_id: id, .. } => assert_eq!(*id, ctrl_id),
             other => panic!("expected Unknown, got {:?}", other),
         }
     }
@@ -1879,7 +1890,7 @@ mod tests {
         let result = parse_body_text(&stream, &version()).unwrap();
         let para = &result.paragraphs[0];
         match &para.controls[0] {
-            Hwp5Control::Unknown { ctrl_id } => assert_eq!(*ctrl_id, CTRL_ID_GSO),
+            Hwp5Control::Unknown { ctrl_id, .. } => assert_eq!(*ctrl_id, CTRL_ID_GSO),
             other => panic!("expected Unknown, got {:?}", other),
         }
     }
@@ -2412,7 +2423,7 @@ mod tests {
         );
 
         match ctx.into_control() {
-            Hwp5Control::Unknown { ctrl_id } => assert_eq!(ctrl_id, CTRL_ID_GSO),
+            Hwp5Control::Unknown { ctrl_id, .. } => assert_eq!(ctrl_id, CTRL_ID_GSO),
             other => panic!("expected Unknown for ambiguous gso payload, got {:?}", other),
         }
     }
@@ -2433,7 +2444,7 @@ mod tests {
         );
 
         match ctx.into_control() {
-            Hwp5Control::Unknown { ctrl_id } => assert_eq!(ctrl_id, CTRL_ID_GSO),
+            Hwp5Control::Unknown { ctrl_id, .. } => assert_eq!(ctrl_id, CTRL_ID_GSO),
             other => panic!("expected Unknown for ambiguous subtree gso payload, got {:?}", other),
         }
     }

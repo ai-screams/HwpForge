@@ -49,6 +49,7 @@ use super::escape_xml;
 /// Using a single module-level counter prevents duplicate marker strings
 /// even when multiple Control variants are encoded in the same document.
 static MARKER_NONCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+const HWP5_CROSSREF_UNKNOWN_TAG: &str = "hwp5.crossref";
 
 /// Returns a unique marker string for placeholder run injection.
 fn next_marker(prefix: &str, field_id: usize) -> String {
@@ -485,9 +486,36 @@ fn build_runs(
                         let marker = next_marker("HWPXR", field_id);
                         let real_xml = build_crossref_run_xml(
                             target_name,
+                            target_name,
                             ref_type,
                             content_type,
                             *as_hyperlink,
+                            char_pr_id_ref,
+                            field_id,
+                        );
+                        let marker_run_xml = format!(
+                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
+                        );
+                        hyperlink_entries.push((marker_run_xml, real_xml));
+                        texts.push(HxText::new(marker));
+                    }
+                    Control::Unknown { tag, data }
+                        if tag == HWP5_CROSSREF_UNKNOWN_TAG
+                            && data
+                                .as_deref()
+                                .and_then(parse_hwp5_crossref_unknown_data)
+                                .is_some() =>
+                    {
+                        let payload = parse_hwp5_crossref_unknown_data(data.as_deref().unwrap())
+                            .expect("guard already parsed hwp5 crossref payload");
+                        let field_id = hyperlink_entries.len();
+                        let marker = next_marker("HWPXH5XRF", field_id);
+                        let real_xml = build_hwp5_crossref_run_xml(
+                            payload.target_name,
+                            payload.display_text,
+                            payload.ref_type,
+                            payload.content_type,
+                            payload.as_hyperlink,
                             char_pr_id_ref,
                             field_id,
                         );
@@ -1045,6 +1073,7 @@ fn days_to_ymd(days_since_epoch: u64) -> (u64, u64, u64) {
 /// Builds a `<hp:run>` XML string for a cross-reference (상호참조).
 fn build_crossref_run_xml(
     target_name: &str,
+    display_text: &str,
     ref_type: &hwpforge_foundation::RefType,
     content_type: &hwpforge_foundation::RefContentType,
     as_hyperlink: bool,
@@ -1085,7 +1114,82 @@ fn build_crossref_run_xml(
         ref_type = ref_type_str,
         content_type = content_type_str,
         hyperlink = hyperlink_val,
-        name = build_text_element_xml(target_name),
+        name = build_text_element_xml(display_text),
+    )
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Hwp5CrossRefUnknownPayload<'a> {
+    target_name: &'a str,
+    display_text: &'a str,
+    ref_type: hwpforge_foundation::RefType,
+    content_type: hwpforge_foundation::RefContentType,
+    as_hyperlink: bool,
+}
+
+fn parse_hwp5_crossref_unknown_data(data: &str) -> Option<Hwp5CrossRefUnknownPayload<'_>> {
+    let mut lines = data.splitn(5, '\n');
+    let target_name = lines.next()?;
+    let display_text = lines.next()?;
+    let ref_type = lines.next()?.parse().ok()?;
+    let content_type = lines.next()?.parse().ok()?;
+    let as_hyperlink = matches!(lines.next()?, "true" | "1");
+    Some(Hwp5CrossRefUnknownPayload {
+        target_name,
+        display_text,
+        ref_type,
+        content_type,
+        as_hyperlink,
+    })
+}
+
+fn build_hwp5_crossref_run_xml(
+    target_name: &str,
+    display_text: &str,
+    ref_type: hwpforge_foundation::RefType,
+    content_type: hwpforge_foundation::RefContentType,
+    as_hyperlink: bool,
+    char_pr_id_ref: u32,
+    field_id: usize,
+) -> String {
+    let escaped_target_name = escape_xml(target_name);
+    let escaped_display_text = build_text_element_xml(display_text);
+    let ref_type_str = ref_type.to_string();
+    let content_type_str = content_type.to_string();
+    let hyperlink_val = if as_hyperlink { "true" } else { "false" };
+    let begin_id = 4_100_000_000_u64 + field_id as u64;
+    format!(
+        concat!(
+            r#"<hp:run charPrIDRef="{cpr}">"#,
+            r#"<hp:ctrl>"#,
+            r#"<hp:fieldBegin id="{bid}" type="CROSSREF" name="" editable="0" dirty="0" "#,
+            r#"zorder="-1" fieldid="{fid}" metaTag="">"#,
+            r#"<hp:parameters cnt="8" name="">"#,
+            r#"<hp:booleanParam name="Fiexde">1</hp:booleanParam>"#,
+            r#"<hp:integerParam name="Prop">0</hp:integerParam>"#,
+            r#"<hp:stringParam name="Command">?{target};6;0;0;0;</hp:stringParam>"#,
+            r#"<hp:stringParam name="RefPath">?{target};</hp:stringParam>"#,
+            r#"<hp:stringParam name="RefType">{ref_type}</hp:stringParam>"#,
+            r#"<hp:stringParam name="RefContentType">{content_type}</hp:stringParam>"#,
+            r#"<hp:booleanParam name="RefHyperLink">{hyperlink}</hp:booleanParam>"#,
+            r#"<hp:stringParam name="RefOpenType">HWPHYPERLINK_JUMP_CURRENTTAB</hp:stringParam>"#,
+            r#"</hp:parameters>"#,
+            r#"</hp:fieldBegin>"#,
+            r#"</hp:ctrl>"#,
+            r#"{display_text}"#,
+            r#"<hp:ctrl>"#,
+            r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="{fid}"/>"#,
+            r#"</hp:ctrl>"#,
+            r#"</hp:run>"#,
+        ),
+        cpr = char_pr_id_ref,
+        bid = begin_id,
+        fid = field_id,
+        target = escaped_target_name,
+        ref_type = ref_type_str,
+        content_type = content_type_str,
+        hyperlink = hyperlink_val,
+        display_text = escaped_display_text,
     )
 }
 

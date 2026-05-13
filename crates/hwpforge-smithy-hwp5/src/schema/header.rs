@@ -1140,6 +1140,14 @@ impl Hwp5RawParaShape {
         self.property2.is_some_and(|property2| property2 & (1 << 5) != 0)
     }
 
+    /// Returns the paragraph-level checked-item state (`property2` bit 7).
+    ///
+    /// User fixtures show checkable bullet items toggling this bit while
+    /// sharing the same bullet definition and heading metadata.
+    pub fn checked(&self) -> bool {
+        self.property2.is_some_and(|property2| property2 & (1 << 7) != 0)
+    }
+
     pub(crate) fn line_spacing_kind_raw(&self) -> u32 {
         self.property3.map_or(self.property1 & 0b11, |property3| property3 & 0x1F)
     }

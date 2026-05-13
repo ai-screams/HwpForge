@@ -6,7 +6,18 @@ mod error;
 
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
+
+/// Markdown conversion mode.
+#[derive(Clone, Debug, ValueEnum)]
+pub enum MdMode {
+    /// Style-aware conversion with images (default).
+    Styled,
+    /// Readable markdown without style information.
+    Lossy,
+    /// Round-trip-safe markdown with YAML frontmatter.
+    Lossless,
+}
 
 /// AI-first CLI for Korean HWP/HWPX document generation.
 #[derive(Parser)]
@@ -155,6 +166,10 @@ enum Commands {
         /// Output directory (defaults to same directory as input).
         #[arg(short, long)]
         output: Option<PathBuf>,
+
+        /// Conversion mode: styled (default), lossy, or lossless.
+        #[arg(long, value_enum, default_value_t = MdMode::Styled)]
+        mode: MdMode,
     },
 }
 
@@ -214,8 +229,8 @@ fn main() {
         Commands::Schema { type_name } => {
             commands::schema::run(&type_name, cli.json);
         }
-        Commands::ToMd { input, output } => {
-            commands::to_md::run(&input, &output, cli.json);
+        Commands::ToMd { input, output, mode } => {
+            commands::to_md::run(&input, &output, &mode, cli.json);
         }
     }
 }
