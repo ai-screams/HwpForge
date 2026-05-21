@@ -837,20 +837,29 @@ impl Hwp5RawCharShape {
 
     /// Returns the strikethrough shape encoded in bits 26-29.
     ///
-    /// HWP5 can carry more line variants than the current shared IR. When a
-    /// strike is enabled but the exact line family is unsupported, collapse to
-    /// `Continuous` so the semantic "struck through" survives.
+    /// After Wave 1c the shared IR mirrors the full OWPML strike-shape
+    /// vocabulary, so HWP5 raw values 0..=12 carry directly. Out-of-range
+    /// values still fall back to `Solid` so the "struck through" semantic
+    /// survives.
     pub fn strikeout_shape(&self) -> StrikeoutShape {
         if !self.has_strikeout() {
             return StrikeoutShape::None;
         }
 
         match self.strike_shape_raw() {
+            0 => StrikeoutShape::Solid,
             1 => StrikeoutShape::Dash,
             2 => StrikeoutShape::Dot,
             3 => StrikeoutShape::DashDot,
             4 => StrikeoutShape::DashDotDot,
-            _ => StrikeoutShape::Continuous,
+            5 => StrikeoutShape::LongDash,
+            6 => StrikeoutShape::Circle,
+            7 => StrikeoutShape::DoubleSlim,
+            8 => StrikeoutShape::SlimThick,
+            9 => StrikeoutShape::ThickSlim,
+            10 => StrikeoutShape::ThickSlimThick,
+            11 => StrikeoutShape::Wave,
+            _ => StrikeoutShape::Solid,
         }
     }
 

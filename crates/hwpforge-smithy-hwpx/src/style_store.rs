@@ -2814,7 +2814,7 @@ mod tests {
             bold: true,
             italic: true,
             underline_type: UnderlineType::Bottom,
-            strikeout_shape: StrikeoutShape::Continuous,
+            strikeout_shape: StrikeoutShape::Solid,
             vertical_position: VerticalPosition::Superscript,
             height: HwpUnit::new(1200).unwrap(), // 12pt
             text_color: Color::from_rgb(255, 0, 0),

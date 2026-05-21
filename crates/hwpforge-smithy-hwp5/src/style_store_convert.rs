@@ -235,7 +235,6 @@ fn append_char_shape_projection_warnings(
     warn_on_char_shadow_kind(raw, raw_id, warnings);
     warn_on_char_shadow_color(raw, raw_id, warnings);
     warn_on_char_shadow_offset(raw, raw_id, warnings);
-    warn_on_char_strike_shape(raw, raw_id, warnings);
     warn_on_char_script_scalar_collapse(raw, raw_id, warnings);
 }
 
@@ -341,24 +340,6 @@ fn warn_on_char_shadow_offset(
         format!(
             "char shape {raw_id} shadow offset (dx={}, dy={}) is not carried because HwpxCharShape does not store shadow gaps",
             raw.shadow_gap_x, raw.shadow_gap_y
-        ),
-    );
-}
-
-fn warn_on_char_strike_shape(
-    raw: &Hwp5RawCharShape,
-    raw_id: usize,
-    warnings: &mut Vec<Hwp5Warning>,
-) {
-    if !raw.has_strikeout() || raw.strike_shape_raw() <= 4 {
-        return;
-    }
-    push_projection_fallback(
-        warnings,
-        "style.char_shape.strike_shape",
-        format!(
-            "char shape {raw_id} strike shape {} collapsed to Continuous because the shared IR does not support that line family",
-            raw.strike_shape_raw()
         ),
     );
 }

@@ -692,7 +692,9 @@ fn hwp5_char_shape_warns_on_projection_collapses() {
         Hwp5Warning::ProjectionFallback { subject, .. }
             if *subject == "style.char_shape.shadow_kind"
     )));
-    assert!(warnings.iter().any(|warning| matches!(
+    // Wave 1c: the strike line family is now carried, so the fallback warning
+    // must not fire.
+    assert!(!warnings.iter().any(|warning| matches!(
         warning,
         Hwp5Warning::ProjectionFallback { subject, .. }
             if *subject == "style.char_shape.strike_shape"

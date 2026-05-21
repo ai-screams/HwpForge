@@ -2370,6 +2370,63 @@ mod tests {
     }
 
     #[test]
+    fn hwp5_to_hwpx_user_sample_strike_variants_preserves_line_family() {
+        use hwpforge_foundation::StrikeoutShape;
+
+        let source = fixture_path("user_samples/sample-char-strike-variants.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-strike-variants.hwpx");
+        let warnings =
+            hwp5_to_hwpx(&source, &out).expect("strike variants conversion should succeed");
+
+        // Wave 1c: the strike line family is now carried, so the projection
+        // fallback warning for strike_shape must not fire.
+        assert!(
+            !warnings.iter().any(|w| matches!(
+                w,
+                crate::decoder::Hwp5Warning::ProjectionFallback { subject, .. }
+                    if *subject == "style.char_shape.strike_shape"
+            )),
+            "style.char_shape.strike_shape ProjectionFallback must not fire after Wave 1c carry"
+        );
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+
+        // The fixture defines three strike variants on char shapes 7/8/9:
+        //   charPr 7 = "단일선" → SOLID
+        //   charPr 8 = "이중선" → DOUBLE_SLIM (HWP5 raw shape = 7)
+        //   charPr 9 = "빨간선" → SOLID with non-black strike_color
+        // Verify the style store carries the line family for each.
+        let cs7 = decoded
+            .style_store
+            .char_shape(hwpforge_foundation::CharShapeIndex::new(7))
+            .expect("char shape 7 must exist");
+        assert_eq!(cs7.strikeout_shape, StrikeoutShape::Solid);
+
+        let cs8 = decoded
+            .style_store
+            .char_shape(hwpforge_foundation::CharShapeIndex::new(8))
+            .expect("char shape 8 must exist");
+        assert_eq!(
+            cs8.strikeout_shape,
+            StrikeoutShape::DoubleSlim,
+            "char shape 8 should carry DoubleSlim (raw=7) after Wave 1c"
+        );
+
+        let cs9 = decoded
+            .style_store
+            .char_shape(hwpforge_foundation::CharShapeIndex::new(9))
+            .expect("char shape 9 must exist");
+        assert_eq!(cs9.strikeout_shape, StrikeoutShape::Solid);
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
     fn hwp5_to_hwpx_user_sample_breakwordlatin_variants_preserves_hyphenation() {
         use hwpforge_foundation::{ParaShapeIndex, WordBreakType};
 

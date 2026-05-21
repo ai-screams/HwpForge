@@ -905,11 +905,18 @@ fn underline_type_to_hwpx(ut: UnderlineType) -> &'static str {
 fn strikeout_shape_to_hwpx(ss: StrikeoutShape) -> &'static str {
     match ss {
         StrikeoutShape::None => "NONE",
-        StrikeoutShape::Continuous => "SOLID",
+        StrikeoutShape::Solid => "SOLID",
         StrikeoutShape::Dash => "DASH",
         StrikeoutShape::Dot => "DOT",
         StrikeoutShape::DashDot => "DASH_DOT",
         StrikeoutShape::DashDotDot => "DASH_DOT_DOT",
+        StrikeoutShape::LongDash => "LONG_DASH",
+        StrikeoutShape::Circle => "CIRCLE",
+        StrikeoutShape::DoubleSlim => "DOUBLE_SLIM",
+        StrikeoutShape::SlimThick => "SLIM_THICK",
+        StrikeoutShape::ThickSlim => "THICK_SLIM",
+        StrikeoutShape::ThickSlimThick => "THICK_SLIM_THICK",
+        StrikeoutShape::Wave => "WAVE",
         _ => "NONE",
     }
 }
@@ -1344,7 +1351,7 @@ mod tests {
             bold: true,
             italic: true,
             underline_type: UnderlineType::Bottom,
-            strikeout_shape: StrikeoutShape::Continuous,
+            strikeout_shape: StrikeoutShape::Solid,
             vertical_position: VerticalPosition::Superscript,
             emboss_type: EmbossType::Emboss,
             ..Default::default()
@@ -1385,7 +1392,7 @@ mod tests {
         assert_eq!(cs.font_ref.hangul.get(), 1);
         assert_eq!(cs.font_ref.latin.get(), 2);
         assert_eq!(cs.underline_type, UnderlineType::Bottom);
-        assert_eq!(cs.strikeout_shape, StrikeoutShape::Continuous);
+        assert_eq!(cs.strikeout_shape, StrikeoutShape::Solid);
         assert_eq!(cs.vertical_position, VerticalPosition::Superscript);
         assert_eq!(cs.emboss_type, EmbossType::Emboss);
         assert_eq!(cs.engrave_type, EngraveType::None);
@@ -1656,6 +1663,52 @@ mod tests {
             xml.contains(r#"breakLatinWord="HYPHENATION""#),
             "encoded header should preserve HYPHENATION wire label: {xml}"
         );
+    }
+
+    #[test]
+    fn test_char_pr_emits_strike_double_slim_wire_label() {
+        let mut store = HwpxStyleStore::new();
+        store.push_char_shape(HwpxCharShape {
+            strikeout_shape: StrikeoutShape::DoubleSlim,
+            ..Default::default()
+        });
+
+        let xml = encode_header(&store, 1, None).unwrap();
+        assert!(
+            xml.contains(r#"<hh:strikeout shape="DOUBLE_SLIM""#),
+            "encoded header should preserve DOUBLE_SLIM wire label: {xml}"
+        );
+    }
+
+    #[test]
+    fn test_char_pr_strike_line_family_roundtrip() {
+        // Every Wave 1c strike variant must roundtrip through encode/decode.
+        let variants = [
+            StrikeoutShape::Solid,
+            StrikeoutShape::Dash,
+            StrikeoutShape::Dot,
+            StrikeoutShape::DashDot,
+            StrikeoutShape::DashDotDot,
+            StrikeoutShape::LongDash,
+            StrikeoutShape::Circle,
+            StrikeoutShape::DoubleSlim,
+            StrikeoutShape::SlimThick,
+            StrikeoutShape::ThickSlim,
+            StrikeoutShape::ThickSlimThick,
+            StrikeoutShape::Wave,
+        ];
+        for v in variants {
+            let mut store = HwpxStyleStore::new();
+            store.push_char_shape(HwpxCharShape {
+                strikeout_shape: v,
+                ..Default::default()
+            });
+
+            let xml = encode_header(&store, 1, None).unwrap();
+            let decoded = crate::decoder::header::parse_header(&xml).unwrap().style_store;
+            let cs = decoded.char_shape(CharShapeIndex::new(0)).unwrap();
+            assert_eq!(cs.strikeout_shape, v, "strike shape {v:?} must roundtrip");
+        }
     }
 
     #[test]

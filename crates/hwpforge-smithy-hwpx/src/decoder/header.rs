@@ -276,11 +276,18 @@ fn parse_underline_shape(s: &str) -> UnderlineShape {
 fn parse_strikeout_shape(s: &str) -> StrikeoutShape {
     match s.to_ascii_uppercase().as_str() {
         "NONE" => StrikeoutShape::None,
-        "SOLID" | "SLASH" => StrikeoutShape::Continuous,
+        "SOLID" | "SLASH" => StrikeoutShape::Solid,
         "DASH" => StrikeoutShape::Dash,
         "DOT" => StrikeoutShape::Dot,
         "DASH_DOT" => StrikeoutShape::DashDot,
         "DASH_DOT_DOT" => StrikeoutShape::DashDotDot,
+        "LONG_DASH" => StrikeoutShape::LongDash,
+        "CIRCLE" => StrikeoutShape::Circle,
+        "DOUBLE_SLIM" => StrikeoutShape::DoubleSlim,
+        "SLIM_THICK" => StrikeoutShape::SlimThick,
+        "THICK_SLIM" => StrikeoutShape::ThickSlim,
+        "THICK_SLIM_THICK" => StrikeoutShape::ThickSlimThick,
+        "WAVE" => StrikeoutShape::Wave,
         _ => StrikeoutShape::None,
     }
 }
@@ -1056,7 +1063,7 @@ mod tests {
         assert_eq!(cs.font_ref.hangul.get(), 1);
         assert_eq!(cs.font_ref.latin.get(), 2);
         assert_eq!(cs.underline_type, UnderlineType::Bottom);
-        assert_eq!(cs.strikeout_shape, StrikeoutShape::Continuous);
+        assert_eq!(cs.strikeout_shape, StrikeoutShape::Solid);
     }
 
     #[test]

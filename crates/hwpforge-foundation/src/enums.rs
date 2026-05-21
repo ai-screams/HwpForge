@@ -621,6 +621,12 @@ impl schemars::JsonSchema for UnderlineShape {
 
 /// Strikeout line shape.
 ///
+/// This selects the line *family* used by a strikeout. After Wave 1c the
+/// shared IR mirrors the full OWPML strike-shape vocabulary so the HWP5
+/// projection can carry the entire line family rather than collapsing to
+/// `Solid`. The naming aligns with [`UnderlineShape`] so both axes share
+/// vocabulary.
+///
 /// # Examples
 ///
 /// ```
@@ -635,8 +641,8 @@ pub enum StrikeoutShape {
     /// No strikeout (default).
     #[default]
     None = 0,
-    /// Continuous straight line.
-    Continuous = 1,
+    /// Solid continuous line (formerly named `Continuous`).
+    Solid = 1,
     /// Dashed line.
     Dash = 2,
     /// Dotted line.
@@ -645,17 +651,38 @@ pub enum StrikeoutShape {
     DashDot = 4,
     /// Dash-dot-dot pattern.
     DashDotDot = 5,
+    /// Long dash pattern.
+    LongDash = 6,
+    /// Repeating small circles.
+    Circle = 7,
+    /// Double thin line.
+    DoubleSlim = 8,
+    /// Thin then thick double line.
+    SlimThick = 9,
+    /// Thick then thin double line.
+    ThickSlim = 10,
+    /// Thick-thin-thick triple line.
+    ThickSlimThick = 11,
+    /// Wavy line.
+    Wave = 12,
 }
 
 impl fmt::Display for StrikeoutShape {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::None => f.write_str("None"),
-            Self::Continuous => f.write_str("Continuous"),
-            Self::Dash => f.write_str("Dash"),
-            Self::Dot => f.write_str("Dot"),
-            Self::DashDot => f.write_str("DashDot"),
-            Self::DashDotDot => f.write_str("DashDotDot"),
+            Self::None => f.write_str("NONE"),
+            Self::Solid => f.write_str("SOLID"),
+            Self::Dash => f.write_str("DASH"),
+            Self::Dot => f.write_str("DOT"),
+            Self::DashDot => f.write_str("DASH_DOT"),
+            Self::DashDotDot => f.write_str("DASH_DOT_DOT"),
+            Self::LongDash => f.write_str("LONG_DASH"),
+            Self::Circle => f.write_str("CIRCLE"),
+            Self::DoubleSlim => f.write_str("DOUBLE_SLIM"),
+            Self::SlimThick => f.write_str("SLIM_THICK"),
+            Self::ThickSlim => f.write_str("THICK_SLIM"),
+            Self::ThickSlimThick => f.write_str("THICK_SLIM_THICK"),
+            Self::Wave => f.write_str("WAVE"),
         }
     }
 }
@@ -665,16 +692,23 @@ impl std::str::FromStr for StrikeoutShape {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "None" | "none" => Ok(Self::None),
-            "Continuous" | "continuous" => Ok(Self::Continuous),
-            "Dash" | "dash" => Ok(Self::Dash),
-            "Dot" | "dot" => Ok(Self::Dot),
-            "DashDot" | "dashdot" | "dash_dot" => Ok(Self::DashDot),
-            "DashDotDot" | "dashdotdot" | "dash_dot_dot" => Ok(Self::DashDotDot),
+            "NONE" | "None" | "none" => Ok(Self::None),
+            "SOLID" | "Solid" | "solid" | "Continuous" | "continuous" => Ok(Self::Solid),
+            "DASH" | "Dash" | "dash" => Ok(Self::Dash),
+            "DOT" | "Dot" | "dot" => Ok(Self::Dot),
+            "DASH_DOT" | "DashDot" | "dashdot" | "dash_dot" => Ok(Self::DashDot),
+            "DASH_DOT_DOT" | "DashDotDot" | "dashdotdot" | "dash_dot_dot" => Ok(Self::DashDotDot),
+            "LONG_DASH" | "LongDash" | "long_dash" => Ok(Self::LongDash),
+            "CIRCLE" | "Circle" | "circle" => Ok(Self::Circle),
+            "DOUBLE_SLIM" | "DoubleSlim" | "double_slim" => Ok(Self::DoubleSlim),
+            "SLIM_THICK" | "SlimThick" | "slim_thick" => Ok(Self::SlimThick),
+            "THICK_SLIM" | "ThickSlim" | "thick_slim" => Ok(Self::ThickSlim),
+            "THICK_SLIM_THICK" | "ThickSlimThick" | "thick_slim_thick" => Ok(Self::ThickSlimThick),
+            "WAVE" | "Wave" | "wave" => Ok(Self::Wave),
             _ => Err(FoundationError::ParseError {
                 type_name: "StrikeoutShape".to_string(),
                 value: s.to_string(),
-                valid_values: "None, Continuous, Dash, Dot, DashDot, DashDotDot".to_string(),
+                valid_values: "NONE, SOLID, DASH, DOT, DASH_DOT, DASH_DOT_DOT, LONG_DASH, CIRCLE, DOUBLE_SLIM, SLIM_THICK, THICK_SLIM, THICK_SLIM_THICK, WAVE".to_string(),
             }),
         }
     }
@@ -686,15 +720,22 @@ impl TryFrom<u8> for StrikeoutShape {
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(Self::None),
-            1 => Ok(Self::Continuous),
+            1 => Ok(Self::Solid),
             2 => Ok(Self::Dash),
             3 => Ok(Self::Dot),
             4 => Ok(Self::DashDot),
             5 => Ok(Self::DashDotDot),
+            6 => Ok(Self::LongDash),
+            7 => Ok(Self::Circle),
+            8 => Ok(Self::DoubleSlim),
+            9 => Ok(Self::SlimThick),
+            10 => Ok(Self::ThickSlim),
+            11 => Ok(Self::ThickSlimThick),
+            12 => Ok(Self::Wave),
             _ => Err(FoundationError::ParseError {
                 type_name: "StrikeoutShape".to_string(),
                 value: value.to_string(),
-                valid_values: "0-5 (None, Continuous, Dash, Dot, DashDot, DashDotDot)".to_string(),
+                valid_values: "0-12 (NONE, SOLID, DASH, DOT, DASH_DOT, DASH_DOT_DOT, LONG_DASH, CIRCLE, DOUBLE_SLIM, SLIM_THICK, THICK_SLIM, THICK_SLIM_THICK, WAVE)".to_string(),
             }),
         }
     }
@@ -4066,37 +4107,59 @@ mod tests {
 
     #[test]
     fn strikeout_shape_display() {
-        assert_eq!(StrikeoutShape::None.to_string(), "None");
-        assert_eq!(StrikeoutShape::Continuous.to_string(), "Continuous");
-        assert_eq!(StrikeoutShape::Dash.to_string(), "Dash");
-        assert_eq!(StrikeoutShape::DashDotDot.to_string(), "DashDotDot");
+        assert_eq!(StrikeoutShape::None.to_string(), "NONE");
+        assert_eq!(StrikeoutShape::Solid.to_string(), "SOLID");
+        assert_eq!(StrikeoutShape::Dash.to_string(), "DASH");
+        assert_eq!(StrikeoutShape::Dot.to_string(), "DOT");
+        assert_eq!(StrikeoutShape::DashDot.to_string(), "DASH_DOT");
+        assert_eq!(StrikeoutShape::DashDotDot.to_string(), "DASH_DOT_DOT");
+        assert_eq!(StrikeoutShape::LongDash.to_string(), "LONG_DASH");
+        assert_eq!(StrikeoutShape::Circle.to_string(), "CIRCLE");
+        assert_eq!(StrikeoutShape::DoubleSlim.to_string(), "DOUBLE_SLIM");
+        assert_eq!(StrikeoutShape::SlimThick.to_string(), "SLIM_THICK");
+        assert_eq!(StrikeoutShape::ThickSlim.to_string(), "THICK_SLIM");
+        assert_eq!(StrikeoutShape::ThickSlimThick.to_string(), "THICK_SLIM_THICK");
+        assert_eq!(StrikeoutShape::Wave.to_string(), "WAVE");
     }
 
     #[test]
     fn strikeout_shape_from_str() {
-        assert_eq!(StrikeoutShape::from_str("None").unwrap(), StrikeoutShape::None);
-        assert_eq!(StrikeoutShape::from_str("continuous").unwrap(), StrikeoutShape::Continuous);
+        assert_eq!(StrikeoutShape::from_str("NONE").unwrap(), StrikeoutShape::None);
+        assert_eq!(StrikeoutShape::from_str("SOLID").unwrap(), StrikeoutShape::Solid);
+        // Backward-compatible alias for the pre-Wave-1c name.
+        assert_eq!(StrikeoutShape::from_str("Continuous").unwrap(), StrikeoutShape::Solid);
         assert_eq!(StrikeoutShape::from_str("dash_dot").unwrap(), StrikeoutShape::DashDot);
+        assert_eq!(StrikeoutShape::from_str("DOUBLE_SLIM").unwrap(), StrikeoutShape::DoubleSlim);
+        assert_eq!(StrikeoutShape::from_str("WAVE").unwrap(), StrikeoutShape::Wave);
         assert!(StrikeoutShape::from_str("invalid").is_err());
     }
 
     #[test]
     fn strikeout_shape_try_from_u8() {
         assert_eq!(StrikeoutShape::try_from(0u8).unwrap(), StrikeoutShape::None);
-        assert_eq!(StrikeoutShape::try_from(1u8).unwrap(), StrikeoutShape::Continuous);
+        assert_eq!(StrikeoutShape::try_from(1u8).unwrap(), StrikeoutShape::Solid);
         assert_eq!(StrikeoutShape::try_from(5u8).unwrap(), StrikeoutShape::DashDotDot);
-        assert!(StrikeoutShape::try_from(6u8).is_err());
+        assert_eq!(StrikeoutShape::try_from(8u8).unwrap(), StrikeoutShape::DoubleSlim);
+        assert_eq!(StrikeoutShape::try_from(12u8).unwrap(), StrikeoutShape::Wave);
+        assert!(StrikeoutShape::try_from(13u8).is_err());
     }
 
     #[test]
     fn strikeout_shape_str_roundtrip() {
         for v in &[
             StrikeoutShape::None,
-            StrikeoutShape::Continuous,
+            StrikeoutShape::Solid,
             StrikeoutShape::Dash,
             StrikeoutShape::Dot,
             StrikeoutShape::DashDot,
             StrikeoutShape::DashDotDot,
+            StrikeoutShape::LongDash,
+            StrikeoutShape::Circle,
+            StrikeoutShape::DoubleSlim,
+            StrikeoutShape::SlimThick,
+            StrikeoutShape::ThickSlim,
+            StrikeoutShape::ThickSlimThick,
+            StrikeoutShape::Wave,
         ] {
             let s = v.to_string();
             let back = StrikeoutShape::from_str(&s).unwrap();
