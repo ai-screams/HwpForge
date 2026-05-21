@@ -720,6 +720,87 @@ fn hwp5_char_shape_warns_on_projection_collapses() {
 }
 
 #[test]
+fn hwp5_char_shape_warns_on_shadow_color_and_offset_when_active() {
+    let mut raw = Hwp5RawCharShape::default_for_test();
+    raw.property = 1 << 21; // shadow active (shadow_kind = 1)
+    raw.shadow_color = 0x0011_2233;
+    raw.shadow_gap_x = 5;
+    raw.shadow_gap_y = -2;
+
+    let store = Hwp5StyleStore {
+        id_mappings: None,
+        fonts: vec![Hwp5RawFaceName {
+            property: 0,
+            face_name: "함초롬바탕".into(),
+            alternate_font_type: None,
+            alternate_font_name: None,
+            panose1: None,
+            default_font_name: None,
+        }],
+        char_shapes: vec![raw],
+        para_shapes: vec![],
+        numberings: vec![],
+        bullets: vec![],
+        tab_defs: vec![],
+        styles: vec![],
+        border_fills: vec![],
+    };
+
+    let (_, warnings) = store.to_hwpx_style_store_with_warnings();
+
+    assert!(warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, reason }
+            if *subject == "style.char_shape.shadow_color"
+                && reason.contains("0x00112233")
+    )));
+    assert!(warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, reason }
+            if *subject == "style.char_shape.shadow_offset"
+                && reason.contains("dx=5")
+                && reason.contains("dy=-2")
+    )));
+}
+
+#[test]
+fn hwp5_char_shape_skips_shadow_warnings_when_inactive() {
+    let mut raw = Hwp5RawCharShape::default_for_test();
+    // shadow_kind stays 0 => shadow is inactive
+    raw.shadow_color = 0x00FF_0000;
+    raw.shadow_gap_x = 10;
+    raw.shadow_gap_y = 7;
+
+    let store = Hwp5StyleStore {
+        id_mappings: None,
+        fonts: vec![Hwp5RawFaceName {
+            property: 0,
+            face_name: "함초롬바탕".into(),
+            alternate_font_type: None,
+            alternate_font_name: None,
+            panose1: None,
+            default_font_name: None,
+        }],
+        char_shapes: vec![raw],
+        para_shapes: vec![],
+        numberings: vec![],
+        bullets: vec![],
+        tab_defs: vec![],
+        styles: vec![],
+        border_fills: vec![],
+    };
+
+    let (_, warnings) = store.to_hwpx_style_store_with_warnings();
+
+    assert!(!warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, .. }
+            if *subject == "style.char_shape.shadow_color"
+                || *subject == "style.char_shape.shadow_offset"
+    )));
+}
+
+#[test]
 fn hwp5_para_shape_alignment_justify() {
     let raw = Hwp5RawParaShape::default_for_test(); // property1 bits 2-4 = 0 => Justify
     let hwpx = hwp5_para_shape_to_hwpx(&raw);

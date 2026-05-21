@@ -216,6 +216,8 @@ fn append_char_shape_projection_warnings(
     warn_on_char_underline_shape(raw, raw_id, warnings);
     warn_on_char_outline_kind(raw, raw_id, warnings);
     warn_on_char_shadow_kind(raw, raw_id, warnings);
+    warn_on_char_shadow_color(raw, raw_id, warnings);
+    warn_on_char_shadow_offset(raw, raw_id, warnings);
     warn_on_char_strike_shape(raw, raw_id, warnings);
     warn_on_char_script_scalar_collapse(raw, raw_id, warnings);
 }
@@ -301,6 +303,45 @@ fn warn_on_char_shadow_kind(
         format!(
             "char shape {raw_id} shadow kind {} collapsed to Drop because the shared IR only carries None vs Drop",
             raw.shadow_kind_raw()
+        ),
+    );
+}
+
+fn warn_on_char_shadow_color(
+    raw: &Hwp5RawCharShape,
+    raw_id: usize,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    if raw.shadow_kind_raw() == 0 {
+        return;
+    }
+    push_projection_fallback(
+        warnings,
+        "style.char_shape.shadow_color",
+        format!(
+            "char shape {raw_id} shadow color 0x{:08X} is not carried because HwpxCharShape does not store shadow_color",
+            raw.shadow_color
+        ),
+    );
+}
+
+fn warn_on_char_shadow_offset(
+    raw: &Hwp5RawCharShape,
+    raw_id: usize,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    if raw.shadow_kind_raw() == 0 {
+        return;
+    }
+    if raw.shadow_gap_x == 0 && raw.shadow_gap_y == 0 {
+        return;
+    }
+    push_projection_fallback(
+        warnings,
+        "style.char_shape.shadow_offset",
+        format!(
+            "char shape {raw_id} shadow offset (dx={}, dy={}) is not carried because HwpxCharShape does not store shadow gaps",
+            raw.shadow_gap_x, raw.shadow_gap_y
         ),
     );
 }

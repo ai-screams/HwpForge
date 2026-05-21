@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
-  "fixtures_scanned": 79,
-  "fixtures_decoded": 79,
+  "fixtures_scanned": 80,
+  "fixtures_decoded": 80,
   "fixtures_failed": 0,
-  "total_warnings": 9,
+  "total_warnings": 13,
   "categories": {
     "DroppedControl:ole_object": {
       "count": 8,
@@ -19,6 +19,12 @@
       "count": 1,
       "fixtures": {
         "tests/fixtures/shapes/rect_simple.hwp": 1
+      }
+    },
+    "ProjectionFallback:style.char_shape.underline_shape": {
+      "count": 4,
+      "fixtures": {
+        "tests/fixtures/user_samples/sample-char-underline-variants.hwp": 4
       }
     }
   },
