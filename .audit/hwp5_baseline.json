@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
-  "fixtures_scanned": 80,
-  "fixtures_decoded": 80,
+  "fixtures_scanned": 81,
+  "fixtures_decoded": 81,
   "fixtures_failed": 0,
   "total_warnings": 9,
   "categories": {

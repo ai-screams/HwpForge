@@ -866,6 +866,7 @@ fn latin_word_break_type_to_hwpx(word_break: WordBreakType) -> &'static str {
     match word_break {
         WordBreakType::KeepWord => "KEEP_WORD",
         WordBreakType::BreakWord => "BREAK_WORD",
+        WordBreakType::Hyphenation => "HYPHENATION",
         _ => "KEEP_WORD",
     }
 }
@@ -1639,6 +1640,22 @@ mod tests {
         ));
         assert!(xml.contains(r#"<hh:border borderFillIDRef="5""#));
         assert!(xml.contains(r#"condense="20""#));
+    }
+
+    #[test]
+    fn test_para_pr_emits_latin_hyphenation_wire_label() {
+        let mut store = HwpxStyleStore::new();
+        store.push_para_shape(HwpxParaShape {
+            break_latin_word: hwpforge_foundation::WordBreakType::Hyphenation,
+            break_non_latin_word: hwpforge_foundation::WordBreakType::KeepWord,
+            ..Default::default()
+        });
+
+        let xml = encode_header(&store, 1, None).unwrap();
+        assert!(
+            xml.contains(r#"breakLatinWord="HYPHENATION""#),
+            "encoded header should preserve HYPHENATION wire label: {xml}"
+        );
     }
 
     #[test]

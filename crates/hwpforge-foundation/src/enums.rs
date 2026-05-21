@@ -1656,6 +1656,8 @@ pub enum WordBreakType {
     KeepWord = 0,
     /// Allow breaking at any character — distribute space between all characters.
     BreakWord = 1,
+    /// Allow hyphenation at line breaks (Latin scripts only).
+    Hyphenation = 2,
 }
 
 impl fmt::Display for WordBreakType {
@@ -1663,6 +1665,7 @@ impl fmt::Display for WordBreakType {
         match self {
             Self::KeepWord => f.write_str("KEEP_WORD"),
             Self::BreakWord => f.write_str("BREAK_WORD"),
+            Self::Hyphenation => f.write_str("HYPHENATION"),
         }
     }
 }
@@ -1674,10 +1677,11 @@ impl std::str::FromStr for WordBreakType {
         match s {
             "KEEP_WORD" | "KeepWord" | "keep_word" => Ok(Self::KeepWord),
             "BREAK_WORD" | "BreakWord" | "break_word" => Ok(Self::BreakWord),
+            "HYPHENATION" | "Hyphenation" | "hyphenation" => Ok(Self::Hyphenation),
             _ => Err(FoundationError::ParseError {
                 type_name: "WordBreakType".to_string(),
                 value: s.to_string(),
-                valid_values: "KEEP_WORD, BREAK_WORD".to_string(),
+                valid_values: "KEEP_WORD, BREAK_WORD, HYPHENATION".to_string(),
             }),
         }
     }
@@ -1690,10 +1694,11 @@ impl TryFrom<u8> for WordBreakType {
         match value {
             0 => Ok(Self::KeepWord),
             1 => Ok(Self::BreakWord),
+            2 => Ok(Self::Hyphenation),
             _ => Err(FoundationError::ParseError {
                 type_name: "WordBreakType".to_string(),
                 value: value.to_string(),
-                valid_values: "0 (KeepWord), 1 (BreakWord)".to_string(),
+                valid_values: "0 (KeepWord), 1 (BreakWord), 2 (Hyphenation)".to_string(),
             }),
         }
     }
@@ -4584,6 +4589,7 @@ mod tests {
     fn word_break_type_display() {
         assert_eq!(WordBreakType::KeepWord.to_string(), "KEEP_WORD");
         assert_eq!(WordBreakType::BreakWord.to_string(), "BREAK_WORD");
+        assert_eq!(WordBreakType::Hyphenation.to_string(), "HYPHENATION");
     }
 
     #[test]
@@ -4594,6 +4600,9 @@ mod tests {
         assert_eq!(WordBreakType::from_str("BREAK_WORD").unwrap(), WordBreakType::BreakWord);
         assert_eq!(WordBreakType::from_str("BreakWord").unwrap(), WordBreakType::BreakWord);
         assert_eq!(WordBreakType::from_str("break_word").unwrap(), WordBreakType::BreakWord);
+        assert_eq!(WordBreakType::from_str("HYPHENATION").unwrap(), WordBreakType::Hyphenation);
+        assert_eq!(WordBreakType::from_str("Hyphenation").unwrap(), WordBreakType::Hyphenation);
+        assert_eq!(WordBreakType::from_str("hyphenation").unwrap(), WordBreakType::Hyphenation);
         assert!(WordBreakType::from_str("invalid").is_err());
     }
 
@@ -4601,12 +4610,13 @@ mod tests {
     fn word_break_type_try_from_u8() {
         assert_eq!(WordBreakType::try_from(0u8).unwrap(), WordBreakType::KeepWord);
         assert_eq!(WordBreakType::try_from(1u8).unwrap(), WordBreakType::BreakWord);
-        assert!(WordBreakType::try_from(2u8).is_err());
+        assert_eq!(WordBreakType::try_from(2u8).unwrap(), WordBreakType::Hyphenation);
+        assert!(WordBreakType::try_from(3u8).is_err());
     }
 
     #[test]
     fn word_break_type_serde_roundtrip() {
-        for v in &[WordBreakType::KeepWord, WordBreakType::BreakWord] {
+        for v in &[WordBreakType::KeepWord, WordBreakType::BreakWord, WordBreakType::Hyphenation] {
             let json = serde_json::to_string(v).unwrap();
             let back: WordBreakType = serde_json::from_str(&json).unwrap();
             assert_eq!(&back, v);
@@ -4615,7 +4625,7 @@ mod tests {
 
     #[test]
     fn word_break_type_str_roundtrip() {
-        for v in &[WordBreakType::KeepWord, WordBreakType::BreakWord] {
+        for v in &[WordBreakType::KeepWord, WordBreakType::BreakWord, WordBreakType::Hyphenation] {
             let s = v.to_string();
             let back = WordBreakType::from_str(&s).unwrap();
             assert_eq!(&back, v);

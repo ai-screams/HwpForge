@@ -417,20 +417,14 @@ fn warn_on_para_break_latin_word(
     raw_id: usize,
     warnings: &mut Vec<Hwp5Warning>,
 ) {
-    match raw.break_latin_word_raw() {
-        1 => push_projection_fallback(
-            warnings,
-            "style.para_shape.break_latin_word",
-            format!(
-                "para shape {raw_id} latin hyphenation collapsed to KEEP_WORD because the shared IR has no HYPHENATION variant"
-            ),
-        ),
-        3 => push_projection_fallback(
+    // Raw 0/1/2 are carried (KEEP_WORD/HYPHENATION/BREAK_WORD); raw 3 is
+    // unspecified and collapses to KEEP_WORD by the projection's fallback arm.
+    if raw.break_latin_word_raw() == 3 {
+        push_projection_fallback(
             warnings,
             "style.para_shape.break_latin_word",
             format!("para shape {raw_id} latin break mode 3 is unknown and collapsed to KEEP_WORD"),
-        ),
-        _ => {}
+        );
     }
 }
 

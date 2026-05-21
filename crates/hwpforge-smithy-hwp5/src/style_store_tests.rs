@@ -882,8 +882,9 @@ fn hwp5_para_shape_maps_break_flags_condense_and_border_fill() {
 }
 
 #[test]
-fn hwp5_para_shape_warns_on_unsupported_line_spacing_and_latin_hyphenation() {
+fn hwp5_para_shape_warns_on_unsupported_line_spacing_and_carries_latin_hyphenation() {
     let mut raw = Hwp5RawParaShape::default_for_test();
+    // bits 5-6 = 1 → HYPHENATION (Wave 1d carry)
     raw.property1 = 1 << 5;
     raw.property3 = Some(3);
 
@@ -899,18 +900,57 @@ fn hwp5_para_shape_warns_on_unsupported_line_spacing_and_latin_hyphenation() {
         border_fills: vec![],
     };
 
-    let (_, warnings) = store.to_hwpx_style_store_with_warnings();
+    let (hwpx_store, warnings) = store.to_hwpx_style_store_with_warnings();
 
     assert!(warnings.iter().any(|warning| matches!(
         warning,
         Hwp5Warning::ProjectionFallback { subject, .. }
             if *subject == "style.para_shape.line_spacing"
     )));
+    // After Wave 1d the HYPHENATION case is carried, not warned.
+    assert!(
+        !warnings.iter().any(|warning| matches!(
+            warning,
+            Hwp5Warning::ProjectionFallback { subject, .. }
+                if *subject == "style.para_shape.break_latin_word"
+        )),
+        "break_latin_word projection fallback must not fire for raw=1 (HYPHENATION) after Wave 1d"
+    );
+    let hwpx = hwpx_store
+        .para_shape(hwpforge_foundation::ParaShapeIndex::new(0))
+        .expect("projected para shape 0 must exist");
+    assert_eq!(hwpx.break_latin_word, WordBreakType::Hyphenation);
+}
+
+#[test]
+fn hwp5_para_shape_warns_on_unknown_latin_break_mode_3() {
+    let mut raw = Hwp5RawParaShape::default_for_test();
+    // bits 5-6 = 3 → unspecified, still warns + collapses to KEEP_WORD
+    raw.property1 = 3 << 5;
+
+    let store = Hwp5StyleStore {
+        id_mappings: None,
+        fonts: vec![],
+        char_shapes: vec![],
+        para_shapes: vec![raw],
+        numberings: vec![],
+        bullets: vec![],
+        tab_defs: vec![],
+        styles: vec![],
+        border_fills: vec![],
+    };
+
+    let (hwpx_store, warnings) = store.to_hwpx_style_store_with_warnings();
+
     assert!(warnings.iter().any(|warning| matches!(
         warning,
         Hwp5Warning::ProjectionFallback { subject, reason }
-            if *subject == "style.para_shape.break_latin_word" && reason.contains("hyphenation")
+            if *subject == "style.para_shape.break_latin_word" && reason.contains("mode 3")
     )));
+    let hwpx = hwpx_store
+        .para_shape(hwpforge_foundation::ParaShapeIndex::new(0))
+        .expect("projected para shape 0 must exist");
+    assert_eq!(hwpx.break_latin_word, WordBreakType::KeepWord);
 }
 
 #[test]

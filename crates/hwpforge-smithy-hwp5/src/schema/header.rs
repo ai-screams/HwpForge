@@ -1049,10 +1049,17 @@ impl Hwp5RawParaShape {
 
     /// Returns the Latin word-break policy encoded in `property1` bits 5-6.
     ///
-    /// HWP5 supports a third hyphenation mode which the current shared IR
-    /// cannot represent; that mode currently collapses to `KeepWord`.
+    /// HWP5 bits 5-6 encode the Latin line-break unit per the openhwp / HWP5
+    /// spec (see `EnglishLineBreakUnit` in `docs/office/LAYOUT.md`):
+    ///
+    /// - `0` = Word (KEEP_WORD)
+    /// - `1` = Hyphenate (HYPHENATION)
+    /// - `2` = Character (BREAK_WORD)
+    /// - `3` = unknown / fallback to KEEP_WORD (covered by
+    ///   `warn_on_para_break_latin_word`)
     pub fn break_latin_word(&self) -> WordBreakType {
         match self.break_latin_word_raw() {
+            1 => WordBreakType::Hyphenation,
             2 => WordBreakType::BreakWord,
             _ => WordBreakType::KeepWord,
         }

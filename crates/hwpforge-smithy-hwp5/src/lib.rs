@@ -2357,16 +2357,64 @@ mod tests {
         for (i, expected) in expected_shapes.iter().enumerate() {
             let para = &paragraphs[i];
             let run = para.runs.first().expect("paragraph must have at least one run");
-            let cs = decoded
-                .style_store
-                .char_shape(run.char_shape_id)
-                .expect("char shape must exist");
+            let cs =
+                decoded.style_store.char_shape(run.char_shape_id).expect("char shape must exist");
             assert_eq!(
                 cs.underline_shape, *expected,
                 "paragraph {} (0-based) expected underline_shape {:?}, got {:?}",
                 i, expected, cs.underline_shape
             );
         }
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_breakwordlatin_variants_preserves_hyphenation() {
+        use hwpforge_foundation::{ParaShapeIndex, WordBreakType};
+
+        let source = fixture_path("user_samples/sample-char-breakwordlatin-variants.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-breakwordlatin-variants.hwpx");
+        let warnings =
+            hwp5_to_hwpx(&source, &out).expect("breakwordlatin variants conversion should succeed");
+
+        // After Wave 1d carry, the break_latin_word projection warning is gone
+        // for the raw=1 (HYPHENATION) and raw=2 (BREAK_WORD) cases.
+        assert!(
+            !warnings.iter().any(|w| matches!(
+                w,
+                crate::decoder::Hwp5Warning::ProjectionFallback { subject, .. }
+                    if *subject == "style.para_shape.break_latin_word"
+            )),
+            "style.para_shape.break_latin_word ProjectionFallback must not fire after Wave 1d carry"
+        );
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+
+        // The .hwp fixture defines 21 paragraph shapes:
+        //   - indices 0..=19 carry the default raw=0 (KEEP_WORD)
+        //   - index 20 carries raw=2 (BREAK_WORD per the HWP5 spec bits 5-6:
+        //     0=Word, 1=Hyphenate, 2=Character)
+        // Raw=1 (HYPHENATION) is therefore not exercised by this fixture's
+        // HWP5 body, but the projection now carries it through whenever a
+        // raw=1 shape appears (the foundation enum and HWPX encoder/decoder
+        // are wired end-to-end and covered by the foundation unit tests).
+        let shape_19 = decoded
+            .style_store
+            .para_shape(ParaShapeIndex::new(19))
+            .expect("para shape 19 must exist");
+        assert_eq!(shape_19.break_latin_word, WordBreakType::KeepWord);
+
+        let shape_20 = decoded
+            .style_store
+            .para_shape(ParaShapeIndex::new(20))
+            .expect("para shape 20 must exist");
+        assert_eq!(shape_20.break_latin_word, WordBreakType::BreakWord);
 
         let _ = std::fs::remove_file(&out);
     }

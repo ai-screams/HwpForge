@@ -550,6 +550,7 @@ fn convert_para_pr(pp: &HxParaPr) -> HwpxParaShape {
 fn parse_latin_word_break_type(s: &str) -> WordBreakType {
     match s {
         "BREAK_WORD" => WordBreakType::BreakWord,
+        "HYPHENATION" => WordBreakType::Hyphenation,
         _ => WordBreakType::KeepWord,
     }
 }
@@ -1232,6 +1233,27 @@ mod tests {
         assert!(ps.checked);
         assert_eq!(ps.tab_pr_id_ref, 3);
         assert_eq!(ps.condense, 20);
+    }
+
+    #[test]
+    fn parse_para_pr_carries_latin_hyphenation() {
+        let xml = r#"<head version="1.4" secCnt="1">
+            <refList>
+                <paraProperties itemCnt="1">
+                    <paraPr id="0">
+                        <align horizontal="LEFT" vertical="BASELINE"/>
+                        <breakSetting breakLatinWord="HYPHENATION" breakNonLatinWord="KEEP_WORD"
+                            widowOrphan="0" keepWithNext="0" keepLines="0" pageBreakBefore="0"
+                            lineWrap="BREAK"/>
+                    </paraPr>
+                </paraProperties>
+            </refList>
+        </head>"#;
+
+        let store = parse_header(xml).unwrap().style_store;
+        let ps = store.para_shape(hwpforge_foundation::ParaShapeIndex::new(0)).unwrap();
+
+        assert_eq!(ps.break_latin_word, WordBreakType::Hyphenation);
     }
 
     #[test]
