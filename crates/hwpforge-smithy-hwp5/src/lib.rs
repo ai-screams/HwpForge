@@ -568,8 +568,31 @@ pub fn hwp5_to_hwpx(
     output: impl AsRef<Path>,
 ) -> Hwp5Result<Vec<Hwp5Warning>> {
     let bytes = std::fs::read(input.as_ref()).map_err(Hwp5Error::Io)?;
-    let intermediate = decoder::decode_intermediate(&bytes)?;
-    let image_assets = join_hwp5_image_assets(&bytes, &intermediate)?;
+    let (hwpx_bytes, warnings) = hwp5_to_hwpx_bytes(&bytes)?;
+    std::fs::write(output.as_ref(), hwpx_bytes).map_err(Hwp5Error::Io)?;
+    Ok(warnings)
+}
+
+/// Convert HWP5 bytes to HWPX bytes in memory.
+///
+/// In-memory variant of [`hwp5_to_hwpx`]. Useful for chaining conversions
+/// (e.g. HWP5 -> HWPX -> Markdown) without touching the filesystem.
+///
+/// Returns the HWPX bytes alongside any non-fatal warnings encountered during
+/// decoding, projection, and style mapping.
+///
+/// # Examples
+///
+/// ```no_run
+/// use hwpforge_smithy_hwp5::hwp5_to_hwpx_bytes;
+///
+/// let hwp5_bytes = std::fs::read("input.hwp").unwrap();
+/// let (hwpx_bytes, warnings) = hwp5_to_hwpx_bytes(&hwp5_bytes).unwrap();
+/// println!("Produced {} bytes with {} warnings", hwpx_bytes.len(), warnings.len());
+/// ```
+pub fn hwp5_to_hwpx_bytes(bytes: &[u8]) -> Hwp5Result<(Vec<u8>, Vec<Hwp5Warning>)> {
+    let intermediate = decoder::decode_intermediate(bytes)?;
+    let image_assets = join_hwp5_image_assets(bytes, &intermediate)?;
     let layout_hints = layout_hint_patch::capture_layout_hints(&intermediate.sections);
     let mut warnings = intermediate.warnings;
 
@@ -577,7 +600,6 @@ pub fn hwp5_to_hwpx(
         project_doc_info_styles_with_warnings(&intermediate.doc_info);
     warnings.extend(style_warnings);
 
-    // Stage 4: Projection
     let (document, mut image_store, proj_warnings) =
         projection::project_to_core_with_images(intermediate.sections, &image_assets)?;
     warnings.extend(proj_warnings);
@@ -588,15 +610,13 @@ pub fn hwp5_to_hwpx(
         &mut warnings,
     );
 
-    // Stage 5: Validate + encode as HWPX
     let validated = document.validate().map_err(Hwp5Error::Core)?;
     let hwpx_bytes =
         hwpforge_smithy_hwpx::HwpxEncoder::encode(&validated, &hwpx_style_store, &image_store)
             .map_err(|e| Hwp5Error::Cfb { detail: format!("HWPX encoding failed: {e}") })?;
     let hwpx_bytes = layout_hint_patch::patch_hwpx_layout_hints(&hwpx_bytes, &layout_hints)?;
-    std::fs::write(output.as_ref(), hwpx_bytes).map_err(Hwp5Error::Io)?;
 
-    Ok(warnings)
+    Ok((hwpx_bytes, warnings))
 }
 
 fn supplement_border_fill_image_assets(
@@ -2288,5 +2308,36 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_bytes_matches_file_based_api() {
+        let source = fixture_path("sample-text-char-runs-basic.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let bytes = std::fs::read(&source).expect("source bytes should be readable");
+        let (inmem_bytes, inmem_warnings) =
+            hwp5_to_hwpx_bytes(&bytes).expect("in-memory conversion should succeed");
+
+        let file_out = unique_temp_path("inmem_compare.hwpx");
+        let file_warnings =
+            hwp5_to_hwpx(&source, &file_out).expect("file-based conversion should succeed");
+        let file_bytes = std::fs::read(&file_out).expect("file output should be readable");
+
+        assert_eq!(
+            inmem_bytes, file_bytes,
+            "in-memory and file-based hwp5_to_hwpx should produce identical bytes"
+        );
+        assert_eq!(
+            inmem_warnings.len(),
+            file_warnings.len(),
+            "in-memory and file-based variants should emit the same warning count"
+        );
+        HwpxDecoder::decode(&inmem_bytes)
+            .expect("in-memory hwpx bytes should round-trip through HwpxDecoder");
+
+        let _ = std::fs::remove_file(&file_out);
     }
 }

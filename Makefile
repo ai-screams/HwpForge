@@ -1,4 +1,8 @@
-.PHONY: help install-tools check test test-ci clippy fmt fmt-fix lint-md lint-md-fix doc cov deny machete msrv ci ci-fast ci-full clean
+.PHONY: help install-tools check test test-ci clippy fmt fmt-fix lint-md lint-md-fix doc cov deny machete msrv ci ci-fast ci-full clean audit-hwp5 audit-hwp5-baseline audit-hwp5-gate
+
+AUDIT_HWP5_FIXTURE_DIRS ?= tests/fixtures crates/hwpforge-smithy-hwp5/tests/fixtures crates/hwpforge-smithy-hwpx/tests/fixtures
+AUDIT_HWP5_BASELINE   ?= .audit/hwp5_baseline.json
+AUDIT_HWP5_CURRENT    ?= .audit/hwp5_current.json
 
 MDBOOK_VERSION ?= 0.4.52
 MDBOOK_ADMONISH_VERSION ?= 1.20.0
@@ -111,6 +115,18 @@ ci-full: ci-fast cov msrv
 
 ci: ci-fast
 	@echo "✅ CI checks passed!"
+
+audit-hwp5:
+	@mkdir -p .audit
+	cargo run -q -p hwpforge-smithy-hwp5 --example audit_batch -- $(AUDIT_HWP5_FIXTURE_DIRS) > $(AUDIT_HWP5_CURRENT)
+	@echo "audit-hwp5 → $(AUDIT_HWP5_CURRENT)"
+
+audit-hwp5-baseline: audit-hwp5
+	cp $(AUDIT_HWP5_CURRENT) $(AUDIT_HWP5_BASELINE)
+	@echo "audit-hwp5 baseline refreshed → $(AUDIT_HWP5_BASELINE)"
+
+audit-hwp5-gate: audit-hwp5
+	python3 scripts/audit_hwp5_gate.py --baseline $(AUDIT_HWP5_BASELINE) --current $(AUDIT_HWP5_CURRENT)
 
 clean:
 	cargo clean
