@@ -8,7 +8,7 @@ use crate::warning_utils::push_projection_fallback;
 use hwpforge_core::{TabDef, TabStop};
 use hwpforge_foundation::{
     BorderFillIndex, Color, EmbossType, EngraveType, FontIndex, HeadingType, HwpUnit,
-    StrikeoutShape, TabAlign, TabLeader, UnderlineType, VerticalPosition,
+    StrikeoutShape, TabAlign, TabLeader, UnderlineShape, UnderlineType, VerticalPosition,
 };
 use hwpforge_smithy_hwpx::{
     HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape, HwpxStyle, HwpxStyleStore,
@@ -84,6 +84,24 @@ pub(crate) fn hwp5_char_shape_to_hwpx(raw: &Hwp5RawCharShape) -> HwpxCharShape {
     shape.bold = raw.is_bold();
     shape.italic = raw.is_italic();
     shape.underline_type = raw.underline_type();
+    shape.underline_shape = match raw.underline_type() {
+        UnderlineType::None => UnderlineShape::Solid,
+        _ => match raw.underline_shape_raw() {
+            0 => UnderlineShape::Solid,
+            1 => UnderlineShape::Dash,
+            2 => UnderlineShape::Dot,
+            3 => UnderlineShape::DashDot,
+            4 => UnderlineShape::DashDotDot,
+            5 => UnderlineShape::LongDash,
+            6 => UnderlineShape::Circle,
+            7 => UnderlineShape::DoubleSlim,
+            8 => UnderlineShape::SlimThick,
+            9 => UnderlineShape::ThickSlim,
+            10 => UnderlineShape::ThickSlimThick,
+            11 => UnderlineShape::Wave,
+            _ => UnderlineShape::Solid,
+        },
+    };
     shape.underline_color = match raw.underline_type() {
         UnderlineType::None => None,
         _ => optional_non_black_color(raw.underline_color),
@@ -213,7 +231,6 @@ fn append_char_shape_projection_warnings(
     warnings: &mut Vec<Hwp5Warning>,
 ) {
     warn_on_char_vertical_position_conflict(raw, raw_id, warnings);
-    warn_on_char_underline_shape(raw, raw_id, warnings);
     warn_on_char_outline_kind(raw, raw_id, warnings);
     warn_on_char_shadow_kind(raw, raw_id, warnings);
     warn_on_char_shadow_color(raw, raw_id, warnings);
@@ -234,24 +251,6 @@ fn append_para_shape_projection_warnings(
     warn_on_para_auto_spacing(raw, raw_id, warnings);
     warn_on_para_border_offsets(raw, raw_id, warnings);
     warn_on_para_border_flags(raw, raw_id, warnings);
-}
-
-fn warn_on_char_underline_shape(
-    raw: &Hwp5RawCharShape,
-    raw_id: usize,
-    warnings: &mut Vec<Hwp5Warning>,
-) {
-    if raw.underline_type() == UnderlineType::None || raw.underline_shape_raw() == 0 {
-        return;
-    }
-    push_projection_fallback(
-        warnings,
-        "style.char_shape.underline_shape",
-        format!(
-            "char shape {raw_id} underline shape {} collapsed to SOLID because the shared IR does not carry underline line families",
-            raw.underline_shape_raw()
-        ),
-    );
 }
 
 fn warn_on_char_vertical_position_conflict(

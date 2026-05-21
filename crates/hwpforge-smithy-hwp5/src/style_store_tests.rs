@@ -682,7 +682,7 @@ fn hwp5_char_shape_warns_on_projection_collapses() {
 
     let (_, warnings) = store.to_hwpx_style_store_with_warnings();
 
-    assert!(warnings.iter().any(|warning| matches!(
+    assert!(!warnings.iter().any(|warning| matches!(
         warning,
         Hwp5Warning::ProjectionFallback { subject, .. }
             if *subject == "style.char_shape.underline_shape"
@@ -722,7 +722,7 @@ fn hwp5_char_shape_warns_on_projection_collapses() {
 #[test]
 fn hwp5_char_shape_warns_on_shadow_color_and_offset_when_active() {
     let mut raw = Hwp5RawCharShape::default_for_test();
-    raw.property = 1 << 21; // shadow active (shadow_kind = 1)
+    raw.property = 1 << 11; // shadow active (bits 11-12 carry shadow_kind_raw)
     raw.shadow_color = 0x0011_2233;
     raw.shadow_gap_x = 5;
     raw.shadow_gap_y = -2;

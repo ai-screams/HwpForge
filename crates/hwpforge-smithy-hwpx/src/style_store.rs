@@ -16,8 +16,8 @@ use hwpforge_core::{BulletDef, NumberingDef, StyleLookup, TabDef};
 use hwpforge_foundation::{
     Alignment, BorderFillIndex, BreakType, CharShapeIndex, Color, EmbossType, EmphasisType,
     EngraveType, FontIndex, GradientType, HeadingType, HwpUnit, LineSpacingType, OutlineType,
-    ParaShapeIndex, ShadowType, StrikeoutShape, StyleIndex, UnderlineType, VerticalPosition,
-    WordBreakType,
+    ParaShapeIndex, ShadowType, StrikeoutShape, StyleIndex, UnderlineShape, UnderlineType,
+    VerticalPosition, WordBreakType,
 };
 
 use crate::default_styles::HancomStyleSet;
@@ -106,6 +106,8 @@ pub struct HwpxCharShape {
     pub italic: bool,
     /// Underline type (e.g. `None`, `Bottom`).
     pub underline_type: UnderlineType,
+    /// Underline line family (e.g. SOLID, DOUBLE_SLIM, DASH, WAVE).
+    pub underline_shape: UnderlineShape,
     /// Underline color (None = inherit text color).
     pub underline_color: Option<Color>,
     /// Strikeout shape (e.g. `None`, `Continuous`).
@@ -153,6 +155,7 @@ impl Default for HwpxCharShape {
             bold: false,
             italic: false,
             underline_type: UnderlineType::None,
+            underline_shape: UnderlineShape::Solid,
             underline_color: None,
             strikeout_shape: StrikeoutShape::None,
             strikeout_color: None,
@@ -762,6 +765,7 @@ pub(crate) fn default_char_shapes_modern() -> [HwpxCharShape; 7] {
         bold: false,
         italic: false,
         underline_type: UnderlineType::None,
+        underline_shape: UnderlineShape::Solid,
         underline_color: None,
         strikeout_shape: StrikeoutShape::None,
         strikeout_color: None,
@@ -1386,6 +1390,7 @@ fn build_store_from_registry_with(
             bold: cs.bold,
             italic: cs.italic,
             underline_type: cs.underline_type,
+            underline_shape: UnderlineShape::Solid,
             underline_color: cs.underline_color,
             strikeout_shape: cs.strikeout_shape,
             strikeout_color: cs.strikeout_color,

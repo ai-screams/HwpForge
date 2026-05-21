@@ -486,6 +486,136 @@ impl schemars::JsonSchema for UnderlineType {
 }
 
 // ---------------------------------------------------------------------------
+// UnderlineShape
+// ---------------------------------------------------------------------------
+
+/// Underline line family (e.g. SOLID, DASH, WAVE).
+///
+/// This selects the line *style* used by an underline; the position
+/// (Bottom/Center/Top) is carried separately by [`UnderlineType`].
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_foundation::UnderlineShape;
+///
+/// assert_eq!(UnderlineShape::default(), UnderlineShape::Solid);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[non_exhaustive]
+#[repr(u8)]
+pub enum UnderlineShape {
+    /// Solid continuous line (default).
+    #[default]
+    Solid = 0,
+    /// Dashed line.
+    Dash = 1,
+    /// Dotted line.
+    Dot = 2,
+    /// Dash-dot pattern.
+    DashDot = 3,
+    /// Dash-dot-dot pattern.
+    DashDotDot = 4,
+    /// Long dash pattern.
+    LongDash = 5,
+    /// Repeating small circles.
+    Circle = 6,
+    /// Double thin line.
+    DoubleSlim = 7,
+    /// Thin then thick double line.
+    SlimThick = 8,
+    /// Thick then thin double line.
+    ThickSlim = 9,
+    /// Thick-thin-thick triple line.
+    ThickSlimThick = 10,
+    /// Wavy line.
+    Wave = 11,
+}
+
+impl fmt::Display for UnderlineShape {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Solid => f.write_str("SOLID"),
+            Self::Dash => f.write_str("DASH"),
+            Self::Dot => f.write_str("DOT"),
+            Self::DashDot => f.write_str("DASH_DOT"),
+            Self::DashDotDot => f.write_str("DASH_DOT_DOT"),
+            Self::LongDash => f.write_str("LONG_DASH"),
+            Self::Circle => f.write_str("CIRCLE"),
+            Self::DoubleSlim => f.write_str("DOUBLE_SLIM"),
+            Self::SlimThick => f.write_str("SLIM_THICK"),
+            Self::ThickSlim => f.write_str("THICK_SLIM"),
+            Self::ThickSlimThick => f.write_str("THICK_SLIM_THICK"),
+            Self::Wave => f.write_str("WAVE"),
+        }
+    }
+}
+
+impl std::str::FromStr for UnderlineShape {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "SOLID" | "Solid" | "solid" => Ok(Self::Solid),
+            "DASH" | "Dash" | "dash" => Ok(Self::Dash),
+            "DOT" | "Dot" | "dot" => Ok(Self::Dot),
+            "DASH_DOT" | "DashDot" | "dash_dot" => Ok(Self::DashDot),
+            "DASH_DOT_DOT" | "DashDotDot" | "dash_dot_dot" => Ok(Self::DashDotDot),
+            "LONG_DASH" | "LongDash" | "long_dash" => Ok(Self::LongDash),
+            "CIRCLE" | "Circle" | "circle" => Ok(Self::Circle),
+            "DOUBLE_SLIM" | "DoubleSlim" | "double_slim" => Ok(Self::DoubleSlim),
+            "SLIM_THICK" | "SlimThick" | "slim_thick" => Ok(Self::SlimThick),
+            "THICK_SLIM" | "ThickSlim" | "thick_slim" => Ok(Self::ThickSlim),
+            "THICK_SLIM_THICK" | "ThickSlimThick" | "thick_slim_thick" => {
+                Ok(Self::ThickSlimThick)
+            }
+            "WAVE" | "Wave" | "wave" => Ok(Self::Wave),
+            _ => Err(FoundationError::ParseError {
+                type_name: "UnderlineShape".to_string(),
+                value: s.to_string(),
+                valid_values: "SOLID, DASH, DOT, DASH_DOT, DASH_DOT_DOT, LONG_DASH, CIRCLE, DOUBLE_SLIM, SLIM_THICK, THICK_SLIM, THICK_SLIM_THICK, WAVE".to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<u8> for UnderlineShape {
+    type Error = FoundationError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Solid),
+            1 => Ok(Self::Dash),
+            2 => Ok(Self::Dot),
+            3 => Ok(Self::DashDot),
+            4 => Ok(Self::DashDotDot),
+            5 => Ok(Self::LongDash),
+            6 => Ok(Self::Circle),
+            7 => Ok(Self::DoubleSlim),
+            8 => Ok(Self::SlimThick),
+            9 => Ok(Self::ThickSlim),
+            10 => Ok(Self::ThickSlimThick),
+            11 => Ok(Self::Wave),
+            _ => Err(FoundationError::ParseError {
+                type_name: "UnderlineShape".to_string(),
+                value: value.to_string(),
+                valid_values: "0-11 (SOLID, DASH, DOT, DASH_DOT, DASH_DOT_DOT, LONG_DASH, CIRCLE, DOUBLE_SLIM, SLIM_THICK, THICK_SLIM, THICK_SLIM_THICK, WAVE)".to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for UnderlineShape {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("UnderlineShape")
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // StrikeoutShape
 // ---------------------------------------------------------------------------
 
@@ -3433,6 +3563,7 @@ const _: () = assert!(std::mem::size_of::<LineSpacingType>() == 1);
 const _: () = assert!(std::mem::size_of::<BreakType>() == 1);
 const _: () = assert!(std::mem::size_of::<Language>() == 1);
 const _: () = assert!(std::mem::size_of::<UnderlineType>() == 1);
+const _: () = assert!(std::mem::size_of::<UnderlineShape>() == 1);
 const _: () = assert!(std::mem::size_of::<StrikeoutShape>() == 1);
 const _: () = assert!(std::mem::size_of::<OutlineType>() == 1);
 const _: () = assert!(std::mem::size_of::<ShadowType>() == 1);
@@ -3850,6 +3981,71 @@ mod tests {
         {
             let s = v.to_string();
             let back = UnderlineType::from_str(&s).unwrap();
+            assert_eq!(&back, v);
+        }
+    }
+
+    // ===================================================================
+    // UnderlineShape
+    // ===================================================================
+
+    #[test]
+    fn underline_shape_default_is_solid() {
+        assert_eq!(UnderlineShape::default(), UnderlineShape::Solid);
+    }
+
+    #[test]
+    fn underline_shape_display_screaming_snake_case() {
+        assert_eq!(UnderlineShape::Solid.to_string(), "SOLID");
+        assert_eq!(UnderlineShape::Dash.to_string(), "DASH");
+        assert_eq!(UnderlineShape::Dot.to_string(), "DOT");
+        assert_eq!(UnderlineShape::DashDot.to_string(), "DASH_DOT");
+        assert_eq!(UnderlineShape::DashDotDot.to_string(), "DASH_DOT_DOT");
+        assert_eq!(UnderlineShape::LongDash.to_string(), "LONG_DASH");
+        assert_eq!(UnderlineShape::Circle.to_string(), "CIRCLE");
+        assert_eq!(UnderlineShape::DoubleSlim.to_string(), "DOUBLE_SLIM");
+        assert_eq!(UnderlineShape::SlimThick.to_string(), "SLIM_THICK");
+        assert_eq!(UnderlineShape::ThickSlim.to_string(), "THICK_SLIM");
+        assert_eq!(UnderlineShape::ThickSlimThick.to_string(), "THICK_SLIM_THICK");
+        assert_eq!(UnderlineShape::Wave.to_string(), "WAVE");
+    }
+
+    #[test]
+    fn underline_shape_from_str_variants() {
+        assert_eq!(UnderlineShape::from_str("SOLID").unwrap(), UnderlineShape::Solid);
+        assert_eq!(UnderlineShape::from_str("dash").unwrap(), UnderlineShape::Dash);
+        assert_eq!(UnderlineShape::from_str("DOUBLE_SLIM").unwrap(), UnderlineShape::DoubleSlim);
+        assert_eq!(UnderlineShape::from_str("WAVE").unwrap(), UnderlineShape::Wave);
+        assert!(UnderlineShape::from_str("invalid").is_err());
+    }
+
+    #[test]
+    fn underline_shape_try_from_u8() {
+        assert_eq!(UnderlineShape::try_from(0u8).unwrap(), UnderlineShape::Solid);
+        assert_eq!(UnderlineShape::try_from(1u8).unwrap(), UnderlineShape::Dash);
+        assert_eq!(UnderlineShape::try_from(7u8).unwrap(), UnderlineShape::DoubleSlim);
+        assert_eq!(UnderlineShape::try_from(11u8).unwrap(), UnderlineShape::Wave);
+        assert!(UnderlineShape::try_from(12u8).is_err());
+    }
+
+    #[test]
+    fn underline_shape_str_roundtrip() {
+        for v in &[
+            UnderlineShape::Solid,
+            UnderlineShape::Dash,
+            UnderlineShape::Dot,
+            UnderlineShape::DashDot,
+            UnderlineShape::DashDotDot,
+            UnderlineShape::LongDash,
+            UnderlineShape::Circle,
+            UnderlineShape::DoubleSlim,
+            UnderlineShape::SlimThick,
+            UnderlineShape::ThickSlim,
+            UnderlineShape::ThickSlimThick,
+            UnderlineShape::Wave,
+        ] {
+            let s = v.to_string();
+            let back = UnderlineShape::from_str(&s).unwrap();
             assert_eq!(&back, v);
         }
     }

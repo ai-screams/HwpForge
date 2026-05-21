@@ -625,7 +625,7 @@ fn build_char_pr(id: u32, cs: &HwpxCharShape) -> HxCharPr {
         italic: if cs.italic { Some(HxPresence) } else { None },
         underline: Some(HxUnderline {
             underline_type: underline_type_to_hwpx(cs.underline_type).into(),
-            shape: "SOLID".into(),
+            shape: cs.underline_shape.to_string(),
             color: cs.underline_color.as_ref().map_or_else(|| "#000000".into(), |c| c.to_hex_rgb()),
         }),
         strikeout: Some(HxStrikeout {

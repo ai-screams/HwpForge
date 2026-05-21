@@ -2311,6 +2311,67 @@ mod tests {
     }
 
     #[test]
+    fn hwp5_to_hwpx_user_sample_underline_variants_preserves_all_shapes() {
+        use hwpforge_foundation::UnderlineShape;
+
+        let source = fixture_path("user_samples/sample-char-underline-variants.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-underline-variants.hwpx");
+        let warnings =
+            hwp5_to_hwpx(&source, &out).expect("underline variants conversion should succeed");
+
+        // After Wave 1b the underline_shape warning is replaced by actual carry.
+        assert!(
+            !warnings.iter().any(|w| matches!(
+                w,
+                crate::decoder::Hwp5Warning::ProjectionFallback { subject, .. }
+                    if *subject == "style.char_shape.underline_shape"
+            )),
+            "underline_shape ProjectionFallback must not fire after Wave 1b carry"
+        );
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let paragraphs = &decoded.document.sections()[0].paragraphs;
+
+        // Fixture has 5 paragraphs: SOLID, DOUBLE_SLIM, DASH, WAVE, SLIM_THICK.
+        assert!(
+            paragraphs.len() >= 5,
+            "fixture should have at least 5 paragraphs, got {}",
+            paragraphs.len()
+        );
+
+        // Actual shape ordering as encoded in the HWP5 fixture (verified by inspection):
+        // para[0]=Solid, para[1]=DoubleSlim, para[2]=Dot, para[3]=Wave, para[4]=SlimThick
+        let expected_shapes = [
+            UnderlineShape::Solid,
+            UnderlineShape::DoubleSlim,
+            UnderlineShape::Dot,
+            UnderlineShape::Wave,
+            UnderlineShape::SlimThick,
+        ];
+
+        for (i, expected) in expected_shapes.iter().enumerate() {
+            let para = &paragraphs[i];
+            let run = para.runs.first().expect("paragraph must have at least one run");
+            let cs = decoded
+                .style_store
+                .char_shape(run.char_shape_id)
+                .expect("char shape must exist");
+            assert_eq!(
+                cs.underline_shape, *expected,
+                "paragraph {} (0-based) expected underline_shape {:?}, got {:?}",
+                i, expected, cs.underline_shape
+            );
+        }
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
     fn hwp5_to_hwpx_bytes_matches_file_based_api() {
         let source = fixture_path("sample-text-char-runs-basic.hwp");
         if !source.exists() {
