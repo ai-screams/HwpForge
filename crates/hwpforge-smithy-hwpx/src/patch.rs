@@ -499,6 +499,9 @@ fn collect_semantic_control_slots(
                 collect_semantic_caption_slots(caption, &format!("{prefix}.polygon"), slots);
             }
         }
+        Control::Rect { caption: Some(caption), .. } => {
+            collect_semantic_caption_slots(caption, &format!("{prefix}.rect"), slots);
+        }
         Control::Line { caption: Some(caption), .. } => {
             collect_semantic_caption_slots(caption, &format!("{prefix}.line"), slots);
         }
@@ -1681,7 +1684,8 @@ fn redact_control(control: &mut Control) {
                 redact_caption(caption);
             }
         }
-        Control::Line { caption, .. }
+        Control::Rect { caption, .. }
+        | Control::Line { caption, .. }
         | Control::Arc { caption, .. }
         | Control::Curve { caption, .. }
         | Control::ConnectLine { caption, .. } => {

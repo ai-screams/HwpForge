@@ -22,8 +22,8 @@ use hwpforge_foundation::{
 };
 
 use crate::decoder::section::{
-    Hwp5Control, Hwp5ImageControl, Hwp5LineControl, Hwp5Paragraph, Hwp5PolygonControl, Hwp5Table,
-    Hwp5TableCell, Hwp5TextBoxControl, SectionResult,
+    Hwp5Control, Hwp5ImageControl, Hwp5LineControl, Hwp5Paragraph, Hwp5PolygonControl,
+    Hwp5RectControl, Hwp5Table, Hwp5TableCell, Hwp5TextBoxControl, SectionResult,
 };
 use crate::decoder::Hwp5Warning;
 use crate::error::Hwp5Result;
@@ -941,13 +941,7 @@ fn project_control_run(
             .build_image(image, image_context)
             .map(|core_image| Run::image(core_image, CharShapeIndex::new(0))),
         Hwp5Control::Line(line) => Some(project_line_run(line)),
-        Hwp5Control::Rect(_) => {
-            projection_images.warnings.push(Hwp5Warning::DroppedControl {
-                control: "rect",
-                reason: "pure_rect_projection_requires_core_hwpx_capability".to_string(),
-            });
-            None
-        }
+        Hwp5Control::Rect(rect) => project_rect_run(rect),
         Hwp5Control::Polygon(polygon) => Some(project_polygon_run(polygon)),
         Hwp5Control::TextBox(textbox) => Some(project_textbox_run(textbox, projection_images)),
         Hwp5Control::Header(_) | Hwp5Control::Footer(_) | Hwp5Control::Unknown { .. } => None,
@@ -1028,6 +1022,17 @@ fn project_line_run(line: &Hwp5LineControl) -> Run {
         *vert_offset = line.geometry.y;
     }
     Run::control(control, CharShapeIndex::new(0))
+}
+
+fn project_rect_run(rect: &Hwp5RectControl) -> Option<Run> {
+    let width = HwpUnit::new(positive_i32_from_u32(rect.geometry.width)?).ok()?;
+    let height = HwpUnit::new(positive_i32_from_u32(rect.geometry.height)?).ok()?;
+    let mut control = hwpforge_core::control::Control::rect(width, height).ok()?;
+    if let Control::Rect { horz_offset, vert_offset, .. } = &mut control {
+        *horz_offset = rect.geometry.x;
+        *vert_offset = rect.geometry.y;
+    }
+    Some(Run::control(control, CharShapeIndex::new(0)))
 }
 
 fn project_polygon_run(polygon: &Hwp5PolygonControl) -> Run {
@@ -2405,7 +2410,7 @@ mod tests {
     }
 
     #[test]
-    fn rect_control_emits_projection_warning_and_stays_invisible() {
+    fn rect_control_carries_into_core_rect_without_warning() {
         let para = Hwp5Paragraph {
             text: "\u{FFFC}".to_string(),
             text_segments: Vec::new(),
@@ -2426,14 +2431,23 @@ mod tests {
         let section = make_section(vec![para], None);
         let (doc, warnings) = project_to_core(vec![section]).unwrap();
         let paragraph = &doc.sections()[0].paragraphs[0];
-        assert!(paragraph.runs.iter().all(|run| run.content.is_text()));
-        assert_eq!(paragraph.text_content(), "");
-        assert!(warnings.iter().any(|warning| matches!(
-            warning,
-            Hwp5Warning::DroppedControl { control, reason }
-                if *control == "rect"
-                    && reason == "pure_rect_projection_requires_core_hwpx_capability"
-        )));
+        let control = paragraph.runs[0].content.as_control().expect("expected control run");
+        match control {
+            Control::Rect { width, height, horz_offset, vert_offset, .. } => {
+                assert_eq!(*width, HwpUnit::new(10_020).unwrap());
+                assert_eq!(*height, HwpUnit::new(8_000).unwrap());
+                assert_eq!(*horz_offset, 13_200);
+                assert_eq!(*vert_offset, 14_280);
+            }
+            other => panic!("expected Control::Rect, got {:?}", other),
+        }
+        assert!(
+            !warnings.iter().any(|warning| matches!(
+                warning,
+                Hwp5Warning::DroppedControl { control, .. } if *control == "rect"
+            )),
+            "rect projection should no longer emit a DroppedControl warning"
+        );
     }
 
     #[test]

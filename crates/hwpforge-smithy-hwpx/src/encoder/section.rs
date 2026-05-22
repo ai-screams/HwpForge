@@ -350,6 +350,9 @@ fn build_runs(
                     Control::TextBox { .. } => {
                         rects.push(encode_textbox_to_rect(ctrl, depth, hyperlink_entries)?);
                     }
+                    Control::Rect { .. } => {
+                        rects.push(encode_rect_to_hx(ctrl, depth, hyperlink_entries)?);
+                    }
                     Control::Line { .. } => {
                         lines.push(encode_line_to_hx(ctrl, depth, hyperlink_entries)?);
                     }
@@ -702,7 +705,7 @@ fn build_sublist(
 // Shape encoding functions are defined in `super::shapes`.
 use super::shapes::{
     encode_arc_to_hx, encode_connect_line_to_hx, encode_curve_to_hx, encode_ellipse_to_hx,
-    encode_line_to_hx, encode_polygon_to_hx, encode_textbox_to_rect,
+    encode_line_to_hx, encode_polygon_to_hx, encode_rect_to_hx, encode_textbox_to_rect,
 };
 
 /// Encodes a Core `Control::Equation` into `HxEquation`.

@@ -1038,6 +1038,7 @@ mod tests {
         lines: usize,
         polygons: usize,
         textboxes: usize,
+        rects: usize,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1374,6 +1375,7 @@ mod tests {
     fn count_shapes_in_control(control: &Control, layout: &mut DecodedShapeLayout) {
         match control {
             Control::Line { .. } => layout.lines += 1,
+            Control::Rect { .. } => layout.rects += 1,
             Control::Polygon { .. } => layout.polygons += 1,
             Control::TextBox { paragraphs, .. } => {
                 layout.textboxes += 1;
@@ -1839,7 +1841,7 @@ mod tests {
     }
 
     #[test]
-    fn hwp5_to_hwpx_rect_fixture_emits_warning_and_no_visible_rect() {
+    fn hwp5_to_hwpx_rect_fixture_carries_rect_without_warning() {
         let source = fixture_path("rect_simple.hwp");
         if !source.exists() {
             return;
@@ -1848,13 +1850,11 @@ mod tests {
         let out = unique_temp_path("rect_simple.hwpx");
         let warnings = hwp5_to_hwpx(&source, &out).expect("fixture conversion should succeed");
         assert!(
-            warnings.iter().any(|warning| matches!(
+            !warnings.iter().any(|warning| matches!(
                 warning,
-                Hwp5Warning::DroppedControl { control, reason }
-                    if *control == "rect"
-                        && reason == "pure_rect_projection_requires_core_hwpx_capability"
+                Hwp5Warning::DroppedControl { control, .. } if *control == "rect"
             )),
-            "pure rect fixture should surface an explicit projection warning"
+            "rect projection should no longer surface a DroppedControl:rect warning: {warnings:?}"
         );
 
         assert_valid_hwpx(&out);
@@ -1865,6 +1865,7 @@ mod tests {
         assert_eq!(layout.lines, 0);
         assert_eq!(layout.polygons, 0);
         assert_eq!(layout.textboxes, 0);
+        assert!(layout.rects >= 1, "expected at least one decoded Control::Rect in section runs");
 
         let _ = std::fs::remove_file(&out);
     }
@@ -2543,8 +2544,7 @@ mod tests {
         }
 
         let out = unique_temp_path("user-sample-alignments-all.hwpx");
-        let _warnings =
-            hwp5_to_hwpx(&source, &out).expect("alignment conversion should succeed");
+        let _warnings = hwp5_to_hwpx(&source, &out).expect("alignment conversion should succeed");
 
         let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
         let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
@@ -2562,9 +2562,7 @@ mod tests {
             let shape = decoded
                 .style_store
                 .para_shape(ParaShapeIndex::new(*idx))
-                .unwrap_or_else(|err| {
-                    panic!("para shape {idx} must exist after Wave 2b: {err}")
-                });
+                .unwrap_or_else(|err| panic!("para shape {idx} must exist after Wave 2b: {err}"));
             assert_eq!(
                 shape.alignment, *exp,
                 "para shape {idx} expected {:?}, got {:?}",
@@ -2591,10 +2589,7 @@ mod tests {
         let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
 
         // paraPr 20: 왼쪽 들여쓰기 (margin_left > 0, others 0)
-        let s20 = decoded
-            .style_store
-            .para_shape(ParaShapeIndex::new(20))
-            .expect("para shape 20");
+        let s20 = decoded.style_store.para_shape(ParaShapeIndex::new(20)).expect("para shape 20");
         assert!(
             s20.margin_left.as_i32() > 0,
             "para 20 (왼쪽) expects positive margin_left, got {}",
@@ -2603,10 +2598,7 @@ mod tests {
         assert_eq!(s20.indent.as_i32(), 0, "para 20 indent should be 0");
 
         // paraPr 21: 오른쪽 들여쓰기 (margin_right > 0)
-        let s21 = decoded
-            .style_store
-            .para_shape(ParaShapeIndex::new(21))
-            .expect("para shape 21");
+        let s21 = decoded.style_store.para_shape(ParaShapeIndex::new(21)).expect("para shape 21");
         assert!(
             s21.margin_right.as_i32() > 0,
             "para 21 (오른쪽) expects positive margin_right, got {}",
@@ -2614,10 +2606,7 @@ mod tests {
         );
 
         // paraPr 22: 첫 줄 들여쓰기 (indent > 0)
-        let s22 = decoded
-            .style_store
-            .para_shape(ParaShapeIndex::new(22))
-            .expect("para shape 22");
+        let s22 = decoded.style_store.para_shape(ParaShapeIndex::new(22)).expect("para shape 22");
         assert!(
             s22.indent.as_i32() > 0,
             "para 22 (첫 줄) expects positive indent, got {}",
@@ -2625,10 +2614,7 @@ mod tests {
         );
 
         // paraPr 23: 내어쓰기 (indent < 0 / hanging)
-        let s23 = decoded
-            .style_store
-            .para_shape(ParaShapeIndex::new(23))
-            .expect("para shape 23");
+        let s23 = decoded.style_store.para_shape(ParaShapeIndex::new(23)).expect("para shape 23");
         assert!(
             s23.indent.as_i32() < 0,
             "para 23 (내어쓰기) expects negative hanging indent, got {}",
@@ -2654,10 +2640,7 @@ mod tests {
         let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
 
         // paraPr 20: 다음 쪽에서 시작 (page break before)
-        let s20 = decoded
-            .style_store
-            .para_shape(ParaShapeIndex::new(20))
-            .expect("para shape 20");
+        let s20 = decoded.style_store.para_shape(ParaShapeIndex::new(20)).expect("para shape 20");
         assert_eq!(
             s20.break_type,
             BreakType::Page,
@@ -2666,20 +2649,11 @@ mod tests {
         );
 
         // paraPr 21: 다음 문단과 함께 (keep with next)
-        let s21 = decoded
-            .style_store
-            .para_shape(ParaShapeIndex::new(21))
-            .expect("para shape 21");
-        assert!(
-            s21.keep_with_next,
-            "para 21 (다음 문단과 함께) expects keep_with_next = true"
-        );
+        let s21 = decoded.style_store.para_shape(ParaShapeIndex::new(21)).expect("para shape 21");
+        assert!(s21.keep_with_next, "para 21 (다음 문단과 함께) expects keep_with_next = true");
 
         // paraPr 22: 같은 쪽에 두기 (keep lines together)
-        let s22 = decoded
-            .style_store
-            .para_shape(ParaShapeIndex::new(22))
-            .expect("para shape 22");
+        let s22 = decoded.style_store.para_shape(ParaShapeIndex::new(22)).expect("para shape 22");
         assert!(
             s22.keep_lines_together,
             "para 22 (같은 쪽에 두기) expects keep_lines_together = true"
@@ -2740,8 +2714,8 @@ mod tests {
         }
 
         let out = unique_temp_path("user-sample-checkable-bullet-basic.hwpx");
-        let _warnings = hwp5_to_hwpx(&source, &out)
-            .expect("checkable-bullet-basic conversion should succeed");
+        let _warnings =
+            hwp5_to_hwpx(&source, &out).expect("checkable-bullet-basic conversion should succeed");
 
         let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
         let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
@@ -2749,19 +2723,10 @@ mod tests {
         // Wave 3 — Per-paragraph checked state must decode end-to-end.
         // The HWPX fixture defines paraPr 20 (unchecked) and paraPr 21 (checked)
         // both pointing at the same BULLET heading definition.
-        let s20 = decoded
-            .style_store
-            .para_shape(ParaShapeIndex::new(20))
-            .expect("para shape 20");
-        assert!(
-            !s20.checked,
-            "para 20 (unchecked bullet) expects checked = false, got true"
-        );
+        let s20 = decoded.style_store.para_shape(ParaShapeIndex::new(20)).expect("para shape 20");
+        assert!(!s20.checked, "para 20 (unchecked bullet) expects checked = false, got true");
 
-        let s21 = decoded
-            .style_store
-            .para_shape(ParaShapeIndex::new(21))
-            .expect("para shape 21");
+        let s21 = decoded.style_store.para_shape(ParaShapeIndex::new(21)).expect("para shape 21");
         assert!(
             s21.checked,
             "para 21 (checked bullet) expects checked = true — \

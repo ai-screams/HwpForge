@@ -2177,7 +2177,7 @@ mod tests {
     }
 
     #[test]
-    fn rect_without_draw_text_is_skipped() {
+    fn rect_without_draw_text_decodes_to_control_rect() {
         let xml = r#"<sec>
             <p paraPrIDRef="0">
                 <run charPrIDRef="0">
@@ -2189,9 +2189,19 @@ mod tests {
             </p>
         </sec>"#;
         let result = parse_section(xml, 0, &HashMap::new()).unwrap();
-        // The rect without drawText should be skipped, only text run present
-        assert_eq!(result.paragraphs[0].runs.len(), 1);
-        assert_eq!(result.paragraphs[0].runs[0].content.as_text(), Some("Main text"));
+        // The rect without drawText now produces a Control::Rect run alongside the text run.
+        assert_eq!(result.paragraphs[0].runs.len(), 2);
+        let texts: Vec<_> =
+            result.paragraphs[0].runs.iter().filter_map(|r| r.content.as_text()).collect();
+        assert_eq!(texts, vec!["Main text"]);
+        let rect_runs: usize = result.paragraphs[0]
+            .runs
+            .iter()
+            .filter(|r| {
+                matches!(r.content.as_control(), Some(hwpforge_core::control::Control::Rect { .. }))
+            })
+            .count();
+        assert_eq!(rect_runs, 1, "expected one Control::Rect run");
     }
 
     #[test]

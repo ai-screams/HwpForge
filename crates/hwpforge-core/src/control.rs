@@ -368,6 +368,27 @@ pub enum Control {
         style: Option<ShapeStyle>,
     },
 
+    /// A pure rectangle drawing object (no embedded text).
+    ///
+    /// Distinct from [`Control::TextBox`], which uses `<hp:rect>` with a
+    /// `<hp:drawText>` child for inline text. A pure `Rect` carries only the
+    /// rectangle geometry and visual style and emits `<hp:rect>` without
+    /// `<hp:drawText>`.
+    Rect {
+        /// Bounding box width (HWPUNIT).
+        width: HwpUnit,
+        /// Bounding box height (HWPUNIT).
+        height: HwpUnit,
+        /// Horizontal offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
+        horz_offset: i32,
+        /// Vertical offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
+        vert_offset: i32,
+        /// Optional caption attached to this rectangle.
+        caption: Option<Caption>,
+        /// Optional visual style overrides (border color, fill, line width).
+        style: Option<ShapeStyle>,
+    },
+
     /// A polygon drawing object (3+ vertices).
     /// Maps to HWPX `<hp:polygon>`.
     Polygon {
@@ -680,6 +701,11 @@ impl Control {
     /// Returns `true` if this is a [`Control::Ellipse`].
     pub fn is_ellipse(&self) -> bool {
         matches!(self, Self::Ellipse { .. })
+    }
+
+    /// Returns `true` if this is a [`Control::Rect`].
+    pub fn is_rect(&self) -> bool {
+        matches!(self, Self::Rect { .. })
     }
 
     /// Returns `true` if this is a [`Control::Polygon`].
@@ -1076,6 +1102,41 @@ impl Control {
         }
     }
 
+    /// Creates a pure rectangle control with the given bounding box dimensions.
+    ///
+    /// Pure rectangle means no embedded text content; for a textbox-style rect with
+    /// inline paragraphs, use [`Control::text_box`].
+    /// Defaults: inline positioning (horz_offset=0, vert_offset=0), no caption, no style.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CoreError::InvalidStructure`] if either dimension is zero.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::Control;
+    /// use hwpforge_foundation::HwpUnit;
+    ///
+    /// let width = HwpUnit::from_mm(40.0).unwrap();
+    /// let height = HwpUnit::from_mm(20.0).unwrap();
+    /// let ctrl = Control::rect(width, height).unwrap();
+    /// assert!(ctrl.is_rect());
+    /// ```
+    pub fn rect(width: HwpUnit, height: HwpUnit) -> CoreResult<Self> {
+        if width.as_i32() == 0 || height.as_i32() == 0 {
+            return Err(CoreError::InvalidStructure {
+                context: "Control::rect".to_string(),
+                reason: format!(
+                    "rectangle requires non-zero dimensions, got {}x{}",
+                    width.as_i32(),
+                    height.as_i32()
+                ),
+            });
+        }
+        Ok(Self::Rect { width, height, horz_offset: 0, vert_offset: 0, caption: None, style: None })
+    }
+
     /// Creates a polygon control from the given vertices.
     ///
     /// The bounding box is auto-derived from the min/max of vertex coordinates.
@@ -1465,6 +1526,9 @@ impl std::fmt::Display for Control {
                 let n = paragraphs.len();
                 let word = if n == 1 { "paragraph" } else { "paragraphs" };
                 write!(f, "Ellipse({n} {word})")
+            }
+            Self::Rect { width, height, .. } => {
+                write!(f, "Rect({}x{})", width.as_i32(), height.as_i32())
             }
             Self::Polygon { vertices, paragraphs, .. } => {
                 let nv = vertices.len();
@@ -2056,6 +2120,33 @@ mod tests {
             }
             _ => panic!("expected Ellipse"),
         }
+    }
+
+    #[test]
+    fn rect_constructor_basic_geometry() {
+        let width = HwpUnit::from_mm(40.0).unwrap();
+        let height = HwpUnit::from_mm(20.0).unwrap();
+        let ctrl = Control::rect(width, height).unwrap();
+        assert!(ctrl.is_rect());
+        match ctrl {
+            Control::Rect { width: w, height: h, horz_offset, vert_offset, caption, style } => {
+                assert_eq!(w, width);
+                assert_eq!(h, height);
+                assert_eq!(horz_offset, 0);
+                assert_eq!(vert_offset, 0);
+                assert!(caption.is_none());
+                assert!(style.is_none());
+            }
+            _ => panic!("expected Rect"),
+        }
+    }
+
+    #[test]
+    fn rect_constructor_zero_dimension_errors() {
+        let zero = HwpUnit::new(0).unwrap();
+        let nonzero = HwpUnit::from_mm(10.0).unwrap();
+        assert!(Control::rect(zero, nonzero).is_err());
+        assert!(Control::rect(nonzero, zero).is_err());
     }
 
     #[test]

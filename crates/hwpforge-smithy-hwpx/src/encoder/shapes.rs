@@ -373,6 +373,72 @@ pub(crate) fn encode_textbox_to_rect(
     })
 }
 
+/// Encodes a Core `Control::Rect` into `HxRect`.
+///
+/// Pure rectangle (no `<hp:drawText>` child). Distinct from `encode_textbox_to_rect`
+/// which encodes `Control::TextBox` as a rect with embedded text.
+pub(crate) fn encode_rect_to_hx(
+    ctrl: &Control,
+    depth: usize,
+    hyperlink_entries: &mut Vec<(String, String)>,
+) -> HwpxResult<HxRect> {
+    let (width, height, horz_offset, vert_offset, caption, style) = match ctrl {
+        Control::Rect { width, height, horz_offset, vert_offset, caption, style } => {
+            (*width, *height, *horz_offset, *vert_offset, caption, style)
+        }
+        _ => unreachable!("encode_rect_to_hx called with non-Rect"),
+    };
+
+    let width_hwp = width.as_i32();
+    let height_hwp = height.as_i32();
+    let sc = build_shape_common(width_hwp, height_hwp, style.as_ref());
+
+    Ok(HxRect {
+        id: generate_instid(),
+        z_order: 0,
+        numbering_type: shape_numbering_type(horz_offset, vert_offset),
+        text_wrap: shape_text_wrap(horz_offset, vert_offset),
+        text_flow: "BOTH_SIDES".to_string(),
+        lock: 0,
+        dropcap_style: dropcap_str(style),
+        href: String::new(),
+        group_level: 0,
+        instid: generate_instid(),
+        ratio: 0,
+
+        offset: Some(sc.offset),
+        org_sz: Some(sc.org_sz),
+        cur_sz: Some(sc.cur_sz),
+        flip: Some(sc.flip),
+        rotation_info: Some(sc.rotation_info),
+        rendering_info: Some(sc.rendering_info),
+        line_shape: Some(sc.line_shape),
+        fill_brush: Some(sc.fill_brush),
+        shadow: Some(sc.shadow),
+
+        sz: Some(HxTableSz {
+            width: width_hwp,
+            width_rel_to: "ABSOLUTE".to_string(),
+            height: height_hwp,
+            height_rel_to: "ABSOLUTE".to_string(),
+            protect: 0,
+        }),
+        pos: Some(shape_position(horz_offset, vert_offset)),
+        out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
+        caption: caption
+            .as_ref()
+            .map(|c| build_hx_caption(c, width_hwp, depth, hyperlink_entries))
+            .transpose()?,
+        // Pure rect: no embedded text content.
+        draw_text: None,
+        pt0: Some(HxPoint { x: 0, y: 0 }),
+        pt1: Some(HxPoint { x: width_hwp, y: 0 }),
+        pt2: Some(HxPoint { x: width_hwp, y: height_hwp }),
+        pt3: Some(HxPoint { x: 0, y: height_hwp }),
+        shape_comment: Some(HxShapeComment { text: "사각형입니다.".to_string() }),
+    })
+}
+
 /// Encodes a Core `Control::Line` into `HxLine`.
 pub(crate) fn encode_line_to_hx(
     ctrl: &Control,
@@ -1935,6 +2001,31 @@ mod tests {
         assert_eq!(pos.allow_overlap, 1);
         assert_eq!(pos.vert_rel_to, "PAPER");
         assert_eq!(pos.horz_rel_to, "PAPER");
+    }
+
+    #[test]
+    fn encode_rect_pure_emits_no_draw_text() {
+        let ctrl = Control::rect(HwpUnit::new(8000).unwrap(), HwpUnit::new(4000).unwrap()).unwrap();
+        let mut hl = empty_hyperlinks();
+        let result = encode_rect_to_hx(&ctrl, 0, &mut hl).unwrap();
+        assert!(result.draw_text.is_none(), "pure rect must not emit <hp:drawText>");
+        let sz = result.sz.as_ref().unwrap();
+        assert_eq!(sz.width, 8000);
+        assert_eq!(sz.height, 4000);
+        // Inline positioning (treat_as_char=1) when offsets are zero.
+        assert_eq!(result.pos.as_ref().unwrap().treat_as_char, 1);
+    }
+
+    #[test]
+    fn encode_rect_serializes_to_hp_rect_element() {
+        let ctrl = Control::rect(HwpUnit::new(5000).unwrap(), HwpUnit::new(3000).unwrap()).unwrap();
+        let mut hl = empty_hyperlinks();
+        let rect = encode_rect_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let mut buf = String::new();
+        let ser = quick_xml::se::Serializer::with_root(&mut buf, Some("hp:rect")).unwrap();
+        serde::Serialize::serialize(&rect, ser).unwrap();
+        assert!(buf.contains("<hp:rect"), "encoded XML should contain <hp:rect: {buf}");
+        assert!(!buf.contains("<hp:drawText"), "pure rect must not contain <hp:drawText>: {buf}");
     }
 
     #[test]

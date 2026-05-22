@@ -164,7 +164,8 @@ impl HwpxRegistryBridge {
                 self.rebind_paragraphs(paragraphs)?;
                 self.rebind_caption(caption.as_mut())?;
             }
-            Control::Line { caption, .. }
+            Control::Rect { caption, .. }
+            | Control::Line { caption, .. }
             | Control::Arc { caption, .. }
             | Control::Curve { caption, .. }
             | Control::ConnectLine { caption, .. } => {

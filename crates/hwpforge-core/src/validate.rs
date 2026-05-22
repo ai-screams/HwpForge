@@ -199,6 +199,9 @@ fn validate_control_run(
             },
         ),
         Control::Line { .. } => Ok(()),
+        Control::Rect { width, height, .. } => {
+            validate_shape_dimensions(width.as_i32(), height.as_i32(), "Rect", ctx)
+        }
         Control::Ellipse { width, height, .. } => {
             validate_shape_dimensions(width.as_i32(), height.as_i32(), "Ellipse", ctx)
         }
