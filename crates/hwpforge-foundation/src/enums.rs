@@ -143,6 +143,9 @@ pub enum LineSpacingType {
     Fixed = 1,
     /// Space between the bottom of one line and top of the next.
     BetweenLines = 2,
+    /// Minimum spacing in HwpUnit; line height expands when content
+    /// requires more room (HWPX wire form `AT_LEAST`).
+    AtLeast = 3,
 }
 
 impl fmt::Display for LineSpacingType {
@@ -151,6 +154,7 @@ impl fmt::Display for LineSpacingType {
             Self::Percentage => f.write_str("Percentage"),
             Self::Fixed => f.write_str("Fixed"),
             Self::BetweenLines => f.write_str("BetweenLines"),
+            Self::AtLeast => f.write_str("AtLeast"),
         }
     }
 }
@@ -163,10 +167,11 @@ impl std::str::FromStr for LineSpacingType {
             "Percentage" | "percentage" => Ok(Self::Percentage),
             "Fixed" | "fixed" => Ok(Self::Fixed),
             "BetweenLines" | "betweenlines" | "between_lines" => Ok(Self::BetweenLines),
+            "AtLeast" | "atleast" | "at_least" => Ok(Self::AtLeast),
             _ => Err(FoundationError::ParseError {
                 type_name: "LineSpacingType".to_string(),
                 value: s.to_string(),
-                valid_values: "Percentage, Fixed, BetweenLines".to_string(),
+                valid_values: "Percentage, Fixed, BetweenLines, AtLeast".to_string(),
             }),
         }
     }
@@ -180,10 +185,12 @@ impl TryFrom<u8> for LineSpacingType {
             0 => Ok(Self::Percentage),
             1 => Ok(Self::Fixed),
             2 => Ok(Self::BetweenLines),
+            3 => Ok(Self::AtLeast),
             _ => Err(FoundationError::ParseError {
                 type_name: "LineSpacingType".to_string(),
                 value: value.to_string(),
-                valid_values: "0 (Percentage), 1 (Fixed), 2 (BetweenLines)".to_string(),
+                valid_values: "0 (Percentage), 1 (Fixed), 2 (BetweenLines), 3 (AtLeast)"
+                    .to_string(),
             }),
         }
     }
@@ -3841,6 +3848,7 @@ mod tests {
         assert_eq!(LineSpacingType::Percentage.to_string(), "Percentage");
         assert_eq!(LineSpacingType::Fixed.to_string(), "Fixed");
         assert_eq!(LineSpacingType::BetweenLines.to_string(), "BetweenLines");
+        assert_eq!(LineSpacingType::AtLeast.to_string(), "AtLeast");
     }
 
     #[test]
@@ -3851,6 +3859,8 @@ mod tests {
             LineSpacingType::from_str("BetweenLines").unwrap(),
             LineSpacingType::BetweenLines
         );
+        assert_eq!(LineSpacingType::from_str("AtLeast").unwrap(), LineSpacingType::AtLeast);
+        assert_eq!(LineSpacingType::from_str("at_least").unwrap(), LineSpacingType::AtLeast);
         assert!(LineSpacingType::from_str("invalid").is_err());
     }
 
@@ -3859,14 +3869,18 @@ mod tests {
         assert_eq!(LineSpacingType::try_from(0u8).unwrap(), LineSpacingType::Percentage);
         assert_eq!(LineSpacingType::try_from(1u8).unwrap(), LineSpacingType::Fixed);
         assert_eq!(LineSpacingType::try_from(2u8).unwrap(), LineSpacingType::BetweenLines);
-        assert!(LineSpacingType::try_from(3u8).is_err());
+        assert_eq!(LineSpacingType::try_from(3u8).unwrap(), LineSpacingType::AtLeast);
+        assert!(LineSpacingType::try_from(4u8).is_err());
     }
 
     #[test]
     fn line_spacing_str_roundtrip() {
-        for v in
-            &[LineSpacingType::Percentage, LineSpacingType::Fixed, LineSpacingType::BetweenLines]
-        {
+        for v in &[
+            LineSpacingType::Percentage,
+            LineSpacingType::Fixed,
+            LineSpacingType::BetweenLines,
+            LineSpacingType::AtLeast,
+        ] {
             let s = v.to_string();
             let back = LineSpacingType::from_str(&s).unwrap();
             assert_eq!(&back, v);

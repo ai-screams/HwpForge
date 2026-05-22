@@ -2477,6 +2477,63 @@ mod tests {
     }
 
     #[test]
+    fn hwp5_to_hwpx_user_sample_line_spacing_preserves_all_modes() {
+        use hwpforge_foundation::{LineSpacingType, ParaShapeIndex};
+
+        let source = fixture_path("user_samples/sample-para-line-spacing.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-line-spacing.hwpx");
+        let warnings = hwp5_to_hwpx(&source, &out).expect("line-spacing conversion should succeed");
+
+        // Wave 2a: AtLeast is now a first-class variant, so the
+        // ProjectionFallback warning for raw=3 must no longer fire.
+        assert!(
+            !warnings.iter().any(|w| matches!(
+                w,
+                crate::decoder::Hwp5Warning::ProjectionFallback { subject, .. }
+                    if *subject == "style.para_shape.line_spacing"
+            )),
+            "style.para_shape.line_spacing ProjectionFallback must not fire after Wave 2a carry"
+        );
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+
+        // The HWPX fixture defines paraPr entries with three distinct line
+        // spacing modes:
+        //   paraPr  0 → PERCENT 160 (default)
+        //   paraPr 20 → FIXED 2000  (20pt)
+        //   paraPr 21 → AT_LEAST 2400 (24pt minimum)
+        // The new AtLeast variant must round-trip through the encoder.
+        let shape_0 = decoded
+            .style_store
+            .para_shape(ParaShapeIndex::new(0))
+            .expect("para shape 0 must exist");
+        assert_eq!(shape_0.line_spacing_type, LineSpacingType::Percentage);
+
+        let shape_20 = decoded
+            .style_store
+            .para_shape(ParaShapeIndex::new(20))
+            .expect("para shape 20 must exist");
+        assert_eq!(shape_20.line_spacing_type, LineSpacingType::Fixed);
+
+        let shape_21 = decoded
+            .style_store
+            .para_shape(ParaShapeIndex::new(21))
+            .expect("para shape 21 must exist");
+        assert_eq!(
+            shape_21.line_spacing_type,
+            LineSpacingType::AtLeast,
+            "para shape 21 should carry AtLeast (HWP5 raw=3) after Wave 2a"
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
     fn hwp5_to_hwpx_bytes_matches_file_based_api() {
         let source = fixture_path("sample-text-char-runs-basic.hwp");
         if !source.exists() {

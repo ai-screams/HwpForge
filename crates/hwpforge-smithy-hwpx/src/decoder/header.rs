@@ -300,6 +300,7 @@ fn parse_line_spacing_type(s: &str) -> LineSpacingType {
         "PERCENT" => LineSpacingType::Percentage,
         "FIXED" => LineSpacingType::Fixed,
         "BETWEEN_LINES" => LineSpacingType::BetweenLines,
+        "AT_LEAST" => LineSpacingType::AtLeast,
         _ => LineSpacingType::Percentage,
     }
 }

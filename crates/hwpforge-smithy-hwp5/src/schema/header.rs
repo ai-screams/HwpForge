@@ -1040,13 +1040,14 @@ impl Hwp5RawParaShape {
         match self.line_spacing_kind_raw() {
             1 => LineSpacingType::Fixed,
             2 => LineSpacingType::BetweenLines,
+            3 => LineSpacingType::AtLeast,
             _ => LineSpacingType::Percentage,
         }
     }
 
     /// Returns the line-spacing value corresponding to [`Self::line_spacing_type`].
     pub fn line_spacing_value(&self) -> i32 {
-        if matches!(self.line_spacing_kind_raw(), 0..=2) {
+        if matches!(self.line_spacing_kind_raw(), 0..=3) {
             self.line_spacing2
                 .and_then(|value| i32::try_from(value).ok())
                 .filter(|value| *value > 0)

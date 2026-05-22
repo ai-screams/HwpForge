@@ -380,7 +380,7 @@ fn warn_on_para_line_spacing_kind(
     raw_id: usize,
     warnings: &mut Vec<Hwp5Warning>,
 ) {
-    if raw.line_spacing_kind_raw() <= 2 {
+    if raw.line_spacing_kind_raw() <= 3 {
         return;
     }
     push_projection_fallback(

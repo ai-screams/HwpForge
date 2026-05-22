@@ -886,9 +886,13 @@ fn hwp5_para_shape_maps_break_flags_condense_and_border_fill() {
 #[test]
 fn hwp5_para_shape_warns_on_unsupported_line_spacing_and_carries_latin_hyphenation() {
     let mut raw = Hwp5RawParaShape::default_for_test();
-    // bits 5-6 = 1 → HYPHENATION (Wave 1d carry)
+    // bits 5-6 = 1 → HYPHENATION (Wave 1d carry).
+    // property3 = 4 → an unknown line-spacing kind (raw > 3) so the
+    // projection fallback warning still fires (Wave 2a moved raw=3
+    // out of "unsupported" into AtLeast — see the AtLeast carry test
+    // below).
     raw.property1 = 1 << 5;
-    raw.property3 = Some(3);
+    raw.property3 = Some(4);
 
     let store = Hwp5StyleStore {
         id_mappings: None,
@@ -922,6 +926,47 @@ fn hwp5_para_shape_warns_on_unsupported_line_spacing_and_carries_latin_hyphenati
         .para_shape(hwpforge_foundation::ParaShapeIndex::new(0))
         .expect("projected para shape 0 must exist");
     assert_eq!(hwpx.break_latin_word, WordBreakType::Hyphenation);
+}
+
+#[test]
+fn hwp5_para_shape_carries_at_least_line_spacing_without_warning() {
+    use hwpforge_foundation::LineSpacingType;
+
+    let mut raw = Hwp5RawParaShape::default_for_test();
+    // property3 = 3 → AT_LEAST (Wave 2a carry, was previously
+    // collapsed to Percentage with a ProjectionFallback warning).
+    raw.property3 = Some(3);
+    raw.line_spacing = 2400;
+    raw.line_spacing2 = Some(2400);
+
+    let store = Hwp5StyleStore {
+        id_mappings: None,
+        fonts: vec![],
+        char_shapes: vec![],
+        para_shapes: vec![raw],
+        numberings: vec![],
+        bullets: vec![],
+        tab_defs: vec![],
+        styles: vec![],
+        border_fills: vec![],
+    };
+
+    let (hwpx_store, warnings) = store.to_hwpx_style_store_with_warnings();
+
+    assert!(
+        !warnings.iter().any(|warning| matches!(
+            warning,
+            Hwp5Warning::ProjectionFallback { subject, .. }
+                if *subject == "style.para_shape.line_spacing"
+        )),
+        "line_spacing projection fallback must not fire for raw=3 (AT_LEAST) after Wave 2a"
+    );
+
+    let hwpx = hwpx_store
+        .para_shape(hwpforge_foundation::ParaShapeIndex::new(0))
+        .expect("projected para shape 0 must exist");
+    assert_eq!(hwpx.line_spacing_type, LineSpacingType::AtLeast);
+    assert_eq!(hwpx.line_spacing, 2400);
 }
 
 #[test]

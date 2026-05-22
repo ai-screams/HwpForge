@@ -929,6 +929,7 @@ fn line_spacing_type_to_hwpx(lst: LineSpacingType) -> &'static str {
         LineSpacingType::Percentage => "PERCENT",
         LineSpacingType::Fixed => "FIXED",
         LineSpacingType::BetweenLines => "BETWEEN_LINES",
+        LineSpacingType::AtLeast => "AT_LEAST",
         _ => "PERCENT",
     }
 }
@@ -1699,10 +1700,7 @@ mod tests {
         ];
         for v in variants {
             let mut store = HwpxStyleStore::new();
-            store.push_char_shape(HwpxCharShape {
-                strikeout_shape: v,
-                ..Default::default()
-            });
+            store.push_char_shape(HwpxCharShape { strikeout_shape: v, ..Default::default() });
 
             let xml = encode_header(&store, 1, None).unwrap();
             let decoded = crate::decoder::header::parse_header(&xml).unwrap().style_store;
