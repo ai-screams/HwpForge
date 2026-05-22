@@ -129,6 +129,9 @@ fn make_numbering_def_bytes(version: HwpVersion, levels: &[(&str, &str)], start:
     data
 }
 
+/// Build a 25-byte `HWPTAG_BULLET` payload matching the real Hancom layout:
+/// 12-byte paragraph head + bullet glyph (2) + image flag (4) + fixed 5-byte
+/// image block + check glyph (2).
 fn make_bullet_def_bytes(use_image: bool) -> Vec<u8> {
     let mut data = Vec::new();
     data.extend_from_slice(&0u32.to_le_bytes()); // paragraph head properties
@@ -137,9 +140,7 @@ fn make_bullet_def_bytes(use_image: bool) -> Vec<u8> {
     data.extend_from_slice(&0u32.to_le_bytes()); // char shape id
     data.extend_from_slice(&(0x25CFu16).to_le_bytes()); // bullet char: ●
     data.extend_from_slice(&(if use_image { 1i32 } else { 0i32 }).to_le_bytes());
-    if use_image {
-        data.extend_from_slice(&0u32.to_le_bytes()); // skipped image metadata
-    }
+    data.extend_from_slice(&[0u8; 5]); // image block: always 5 bytes
     data.extend_from_slice(&(0x2611u16).to_le_bytes()); // check bullet char: ☑
     data
 }

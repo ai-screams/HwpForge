@@ -2784,6 +2784,40 @@ mod tests {
     }
 
     #[test]
+    fn hwp5_to_hwpx_user_sample_checkable_bullet_basic_carries_definition_level_checkable() {
+        let source = fixture_path("user_samples/lists/sample-checkable-bullet-basic.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-checkable-bullet-basic-defn.hwpx");
+        let _warnings =
+            hwp5_to_hwpx(&source, &out).expect("checkable-bullet-basic conversion should succeed");
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+
+        // Definition-level checkable truth: CLAUDE.md gotcha #8 requires both
+        // `bullet.checkedChar` and `bullet.paraHead.checkable` to carry through.
+        let bullet = decoded
+            .style_store
+            .iter_bullets()
+            .next()
+            .expect("converted hwpx should contain a bullet definition");
+        assert_eq!(
+            bullet.checked_char.as_deref(),
+            Some("☑"),
+            "bullet definition must carry checkedChar from the HWP5 record"
+        );
+        assert!(
+            bullet.para_head.checkable,
+            "bullet paraHead must carry checkable=true from the HWP5 attribute bit"
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
     fn hwp5_to_hwpx_bytes_matches_file_based_api() {
         let source = fixture_path("sample-text-char-runs-basic.hwp");
         if !source.exists() {
