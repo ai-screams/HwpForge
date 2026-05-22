@@ -2689,6 +2689,48 @@ mod tests {
     }
 
     #[test]
+    fn hwp5_to_hwpx_user_sample_border_shading_carries_border_fill_per_paragraph() {
+        use hwpforge_foundation::ParaShapeIndex;
+
+        let source = fixture_path("user_samples/sample-para-border-shading.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-border-shading.hwpx");
+        let _warnings =
+            hwp5_to_hwpx(&source, &out).expect("border-shading conversion should succeed");
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+
+        // Each of the three used paraPrs (20=사방 / 21=위아래 / 22=배경) must
+        // reference a non-default borderFill (id 0/1/2 are the built-in defaults
+        // for page / char-background / table; user borderFills start at id 3+).
+        for (idx, label) in &[(20, "사방"), (21, "위아래"), (22, "배경")] {
+            let shape = decoded
+                .style_store
+                .para_shape(ParaShapeIndex::new(*idx))
+                .unwrap_or_else(|err| panic!("para shape {idx} ({label}) must exist: {err}"));
+            let border_fill_id = shape
+                .border_fill_id
+                .unwrap_or_else(|| panic!("para {idx} ({label}) must carry a borderFillIDRef"));
+            let raw = border_fill_id.get();
+            assert!(
+                raw >= 3,
+                "para {idx} ({label}) expected non-default borderFillIDRef (>= 3), got {raw}"
+            );
+            // The referenced BorderFill must be resolvable via style_store.
+            let _ = decoded
+                .style_store
+                .border_fill(raw as u32)
+                .unwrap_or_else(|err| panic!("borderFill {raw} must resolve: {err}"));
+        }
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
     fn hwp5_to_hwpx_bytes_matches_file_based_api() {
         let source = fixture_path("sample-text-char-runs-basic.hwp");
         if !source.exists() {
