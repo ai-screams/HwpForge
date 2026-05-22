@@ -2576,6 +2576,119 @@ mod tests {
     }
 
     #[test]
+    fn hwp5_to_hwpx_user_sample_indent_preserves_four_variants() {
+        use hwpforge_foundation::ParaShapeIndex;
+
+        let source = fixture_path("user_samples/sample-para-indent-variants.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-indent-variants.hwpx");
+        let _warnings = hwp5_to_hwpx(&source, &out).expect("indent conversion should succeed");
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+
+        // paraPr 20: 왼쪽 들여쓰기 (margin_left > 0, others 0)
+        let s20 = decoded
+            .style_store
+            .para_shape(ParaShapeIndex::new(20))
+            .expect("para shape 20");
+        assert!(
+            s20.margin_left.as_i32() > 0,
+            "para 20 (왼쪽) expects positive margin_left, got {}",
+            s20.margin_left.as_i32()
+        );
+        assert_eq!(s20.indent.as_i32(), 0, "para 20 indent should be 0");
+
+        // paraPr 21: 오른쪽 들여쓰기 (margin_right > 0)
+        let s21 = decoded
+            .style_store
+            .para_shape(ParaShapeIndex::new(21))
+            .expect("para shape 21");
+        assert!(
+            s21.margin_right.as_i32() > 0,
+            "para 21 (오른쪽) expects positive margin_right, got {}",
+            s21.margin_right.as_i32()
+        );
+
+        // paraPr 22: 첫 줄 들여쓰기 (indent > 0)
+        let s22 = decoded
+            .style_store
+            .para_shape(ParaShapeIndex::new(22))
+            .expect("para shape 22");
+        assert!(
+            s22.indent.as_i32() > 0,
+            "para 22 (첫 줄) expects positive indent, got {}",
+            s22.indent.as_i32()
+        );
+
+        // paraPr 23: 내어쓰기 (indent < 0 / hanging)
+        let s23 = decoded
+            .style_store
+            .para_shape(ParaShapeIndex::new(23))
+            .expect("para shape 23");
+        assert!(
+            s23.indent.as_i32() < 0,
+            "para 23 (내어쓰기) expects negative hanging indent, got {}",
+            s23.indent.as_i32()
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_page_break_preserves_break_and_keep_flags() {
+        use hwpforge_foundation::{BreakType, ParaShapeIndex};
+
+        let source = fixture_path("user_samples/sample-para-page-break.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-page-break.hwpx");
+        let _warnings = hwp5_to_hwpx(&source, &out).expect("page-break conversion should succeed");
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+
+        // paraPr 20: 다음 쪽에서 시작 (page break before)
+        let s20 = decoded
+            .style_store
+            .para_shape(ParaShapeIndex::new(20))
+            .expect("para shape 20");
+        assert_eq!(
+            s20.break_type,
+            BreakType::Page,
+            "para 20 (다음 쪽에서 시작) expects BreakType::Page, got {:?}",
+            s20.break_type
+        );
+
+        // paraPr 21: 다음 문단과 함께 (keep with next)
+        let s21 = decoded
+            .style_store
+            .para_shape(ParaShapeIndex::new(21))
+            .expect("para shape 21");
+        assert!(
+            s21.keep_with_next,
+            "para 21 (다음 문단과 함께) expects keep_with_next = true"
+        );
+
+        // paraPr 22: 같은 쪽에 두기 (keep lines together)
+        let s22 = decoded
+            .style_store
+            .para_shape(ParaShapeIndex::new(22))
+            .expect("para shape 22");
+        assert!(
+            s22.keep_lines_together,
+            "para 22 (같은 쪽에 두기) expects keep_lines_together = true"
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
     fn hwp5_to_hwpx_bytes_matches_file_based_api() {
         let source = fixture_path("sample-text-char-runs-basic.hwp");
         if !source.exists() {
