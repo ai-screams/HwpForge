@@ -19,7 +19,7 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 - Shared tab semantics: landed on `main`
 - Shared `ordered / bullet / outline` semantics: implemented on local `feat/list-shared-semantics`
 - Checkable bullet semantics: implemented on local `feat/list-shared-semantics`
-- HWP5 checkable support: definition-level parity only; paragraph item checked-state decode is still backlog
+- HWP5 checkable support: definition-level + paragraph-level checked state decode end-to-end
 - Markdown task lists normalize to HWPX-first checkable semantics; ordered task lists intentionally lose numbering
 - HWP5 char/para style bridge now preserves the main supported style surface
 - HWP5 layout hint patch injects `linesegarray` and safe table height hints for better visual parity

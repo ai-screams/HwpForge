@@ -2731,6 +2731,47 @@ mod tests {
     }
 
     #[test]
+    fn hwp5_to_hwpx_user_sample_checkable_bullet_basic_decodes_per_paragraph_checked_state() {
+        use hwpforge_foundation::ParaShapeIndex;
+
+        let source = fixture_path("user_samples/lists/sample-checkable-bullet-basic.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-checkable-bullet-basic.hwpx");
+        let _warnings = hwp5_to_hwpx(&source, &out)
+            .expect("checkable-bullet-basic conversion should succeed");
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+
+        // Wave 3 — Per-paragraph checked state must decode end-to-end.
+        // The HWPX fixture defines paraPr 20 (unchecked) and paraPr 21 (checked)
+        // both pointing at the same BULLET heading definition.
+        let s20 = decoded
+            .style_store
+            .para_shape(ParaShapeIndex::new(20))
+            .expect("para shape 20");
+        assert!(
+            !s20.checked,
+            "para 20 (unchecked bullet) expects checked = false, got true"
+        );
+
+        let s21 = decoded
+            .style_store
+            .para_shape(ParaShapeIndex::new(21))
+            .expect("para shape 21");
+        assert!(
+            s21.checked,
+            "para 21 (checked bullet) expects checked = true — \
+             per-paragraph checked state must round-trip through HWP5 → HWPX"
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
     fn hwp5_to_hwpx_bytes_matches_file_based_api() {
         let source = fixture_path("sample-text-char-runs-basic.hwp");
         if !source.exists() {
