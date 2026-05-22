@@ -849,7 +849,9 @@ fn build_hyperlink_run_xml(text: &str, url: &str, char_pr_id_ref: u32, field_id:
     let text_xml = build_text_element_xml(text);
     // Unique begin_id per field instance (matches build_field_run_xml pattern).
     // beginIDRef must reference this id, NOT the fieldid.
-    let begin_id = 2_000_000_000_u64 + field_id as u64;
+    // Hancom reads `fieldBegin id` as a signed 32-bit int; this base + field_id
+    // must stay well below i32::MAX (2_147_483_647). Distinct per builder.
+    let begin_id = 1_100_000_000_u64 + field_id as u64;
     // `fieldid` is a Hancom field instance id and must be a non-zero 32-bit
     // value; `fieldid="0"` is treated as an invalid instance. Distinct base
     // keeps it unique vs other field types and stays under 2^31.
@@ -896,7 +898,9 @@ fn build_hyperlink_run_xml(text: &str, url: &str, char_pr_id_ref: u32, field_id:
 /// Text between them (in separate runs) is covered by the bookmark span.
 fn build_bookmark_span_start_run_xml(name: &str, char_pr_id_ref: u32, field_id: usize) -> String {
     let escaped_name = escape_xml(name);
-    let begin_id = 3_000_000_000_u64 + field_id as u64;
+    // Signed-32-bit-safe base; MUST match `build_bookmark_span_end_run_xml`
+    // so the paired fieldEnd `beginIDRef` references this `id`.
+    let begin_id = 1_200_000_000_u64 + field_id as u64;
     // Non-zero 32-bit field instance id; must match the paired fieldEnd.
     let field_uid = 1_728_000_000_u64 + field_id as u64;
     format!(
@@ -917,7 +921,8 @@ fn build_bookmark_span_start_run_xml(name: &str, char_pr_id_ref: u32, field_id: 
 
 /// Builds a `<hp:run>` containing only `<hp:fieldEnd>` for bookmark span end.
 fn build_bookmark_span_end_run_xml(char_pr_id_ref: u32, field_id: usize) -> String {
-    let begin_id = 3_000_000_000_u64 + field_id as u64;
+    // Signed-32-bit-safe base; MUST match `build_bookmark_span_start_run_xml`.
+    let begin_id = 1_200_000_000_u64 + field_id as u64;
     // Non-zero 32-bit field instance id; must match the paired fieldBegin.
     let field_uid = 1_728_000_000_u64 + field_id as u64;
     format!(
@@ -1096,7 +1101,8 @@ fn build_crossref_run_xml(
     let ref_type_str = ref_type.to_string();
     let content_type_str = content_type.to_string();
     let hyperlink_val = if as_hyperlink { "true" } else { "false" };
-    let begin_id = 4_000_000_000_u64 + field_id as u64;
+    // Signed-32-bit-safe begin_id base; distinct from other field builders.
+    let begin_id = 1_300_000_000_u64 + field_id as u64;
     // Non-zero 32-bit field instance id (see `build_hwp5_crossref_run_xml`).
     // Distinct base from the HWP5 crossref builder to avoid fieldid collisions.
     let field_uid = 1_828_000_000_u64 + field_id as u64;
@@ -1171,7 +1177,10 @@ fn build_hwp5_crossref_run_xml(
     let ref_type_str = ref_type.to_string();
     let content_type_str = content_type.to_string();
     let hyperlink_val = if as_hyperlink { "true" } else { "false" };
-    let begin_id = 4_100_000_000_u64 + field_id as u64;
+    // Signed-32-bit-safe begin_id base; distinct from other field builders.
+    // Hancom reads `fieldBegin id` as i32; a base >= 2^31 wraps negative and
+    // the field is no longer recognized (click / F9 / Ctrl+click jump fail).
+    let begin_id = 1_400_000_000_u64 + field_id as u64;
     // `fieldid` is a Hancom field instance id and must be a non-zero 32-bit
     // value. A raw 0-based `field_id` would emit `fieldid="0"`, which Hancom
     // treats as an invalid instance (F9 refresh / Ctrl+click jump break).
@@ -1221,7 +1230,8 @@ fn build_memo_run_xml(
     char_pr_id_ref: u32,
     field_id: usize,
 ) -> String {
-    let begin_id = 5_000_000_000_u64 + field_id as u64;
+    // Signed-32-bit-safe begin_id base; distinct from other field builders.
+    let begin_id = 1_500_000_000_u64 + field_id as u64;
     // Non-zero 32-bit field instance id; `fieldid="0"` is invalid in Hancom.
     let field_uid = 2_028_000_000_u64 + field_id as u64;
     format!(
@@ -2348,10 +2358,10 @@ mod tests {
         // fieldBegin must have unique id and a non-zero fieldid
         assert!(xml.contains(r#"fieldid="1628000000""#), "fieldBegin must have non-zero fieldid");
         assert!(!xml.contains(r#"fieldid="0""#), "fieldid must never be 0 (invalid in Hancom)");
-        assert!(xml.contains(r#"id="2000000000""#), "fieldBegin must have unique id");
+        assert!(xml.contains(r#"id="1100000000""#), "fieldBegin must have unique id");
         // fieldEnd.beginIDRef must reference fieldBegin.id (NOT fieldid)
         assert!(
-            xml.contains(r#"beginIDRef="2000000000""#),
+            xml.contains(r#"beginIDRef="1100000000""#),
             "fieldEnd must reference fieldBegin id via beginIDRef"
         );
 
@@ -3066,7 +3076,7 @@ mod tests {
         let xml = build_hyperlink_run_xml("Click here", "https://example.com", 0, 0);
         assert!(xml.starts_with(r#"<hp:run charPrIDRef="0">"#));
         assert!(xml.contains(r#"type="HYPERLINK""#));
-        assert!(xml.contains(r#"id="2000000000""#), "must have unique id");
+        assert!(xml.contains(r#"id="1100000000""#), "must have unique id");
         assert!(xml.contains(r#"fieldid="1628000000""#), "fieldid must be non-zero");
         assert!(!xml.contains(r#"fieldid="0""#), "fieldid must never be 0");
         assert!(xml.contains(r#"editable="0""#), "editable must be numeric");
@@ -3074,7 +3084,7 @@ mod tests {
         assert!(xml.contains(r#"metaTag="""#));
         assert!(xml.contains(r#"<hp:stringParam name="Path">https://example.com</hp:stringParam>"#));
         assert!(xml.contains("<hp:t>Click here</hp:t>"));
-        assert!(xml.contains(r#"<hp:fieldEnd beginIDRef="2000000000" fieldid="1628000000"/>"#));
+        assert!(xml.contains(r#"<hp:fieldEnd beginIDRef="1100000000" fieldid="1628000000"/>"#));
         assert!(xml.ends_with("</hp:run>"));
     }
 
@@ -3082,7 +3092,7 @@ mod tests {
     fn build_hyperlink_run_xml_escapes_special_chars() {
         let xml = build_hyperlink_run_xml("A & B < C", "https://example.com?a=1&b=2", 2, 5);
         assert!(xml.contains(r#"charPrIDRef="2""#));
-        assert!(xml.contains(r#"id="2000000005""#), "unique id for field_id=5");
+        assert!(xml.contains(r#"id="1100000005""#), "unique id for field_id=5");
         assert!(xml.contains(r#"fieldid="1628000005""#), "non-zero fieldid for field_id=5");
         assert!(xml.contains("https://example.com?a=1&amp;b=2"), "URL ampersand must be escaped");
         assert!(
@@ -3113,10 +3123,10 @@ mod tests {
         );
         let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
 
-        // First hyperlink: id=2000000000, fieldid=1628000000
-        assert!(xml.contains(r#"<hp:fieldEnd beginIDRef="2000000000" fieldid="1628000000"/>"#));
-        // Second hyperlink: id=2000000001, fieldid=1628000001
-        assert!(xml.contains(r#"<hp:fieldEnd beginIDRef="2000000001" fieldid="1628000001"/>"#));
+        // First hyperlink: id=1100000000, fieldid=1628000000
+        assert!(xml.contains(r#"<hp:fieldEnd beginIDRef="1100000000" fieldid="1628000000"/>"#));
+        // Second hyperlink: id=1100000001, fieldid=1628000001
+        assert!(xml.contains(r#"<hp:fieldEnd beginIDRef="1100000001" fieldid="1628000001"/>"#));
         // Both URLs present
         assert!(xml.contains("https://one.com"));
         assert!(xml.contains("https://two.com"));
@@ -3796,11 +3806,11 @@ mod tests {
         );
         // beginIDRef must reference the `id` (begin_id), NOT the fieldid.
         assert!(
-            hwp5_xml.contains(r#"<hp:fieldBegin id="4100000000""#),
+            hwp5_xml.contains(r#"<hp:fieldBegin id="1400000000""#),
             "HWP5 CROSSREF fieldBegin id must be the derived begin_id"
         );
         assert!(
-            hwp5_xml.contains(r#"<hp:fieldEnd beginIDRef="4100000000" fieldid="1928000000"/>"#),
+            hwp5_xml.contains(r#"<hp:fieldEnd beginIDRef="1400000000" fieldid="1928000000"/>"#),
             "fieldEnd beginIDRef must reference id, not fieldid"
         );
 
@@ -3825,7 +3835,7 @@ mod tests {
             "fieldBegin and fieldEnd must share the same non-zero fieldid"
         );
         assert!(
-            core_xml.contains(r#"<hp:fieldEnd beginIDRef="4000000000" fieldid="1828000000"/>"#),
+            core_xml.contains(r#"<hp:fieldEnd beginIDRef="1300000000" fieldid="1828000000"/>"#),
             "fieldEnd beginIDRef must reference id, not fieldid"
         );
     }
@@ -4195,10 +4205,84 @@ mod tests {
         let xml = build_bookmark_span_end_run_xml(1, 3);
         assert!(xml.contains(r#"charPrIDRef="1""#));
         assert!(xml.contains("<hp:fieldEnd"));
-        // beginIDRef references the unique id (3_000_000_000 + field_id)
-        assert!(xml.contains(r#"beginIDRef="3000000003""#));
+        // beginIDRef references the unique id (1_200_000_000 + field_id)
+        assert!(xml.contains(r#"beginIDRef="1200000003""#));
         assert!(xml.contains(r#"fieldid="1728000003""#), "non-zero fieldid for field_id=3");
         assert!(xml.ends_with("</hp:run>"));
+    }
+
+    /// Hancom reads `<hp:fieldBegin id="...">` as a signed 32-bit integer.
+    /// Every field builder's `id` (and the paired `beginIDRef`) must stay below
+    /// `i32::MAX + 1` (2_147_483_648); a larger value wraps negative and the
+    /// field is no longer recognized as a valid instance.
+    #[test]
+    fn all_field_builders_emit_signed_i32_safe_begin_id() {
+        use hwpforge_foundation::{FieldType, RefContentType, RefType};
+
+        const I32_LIMIT: u64 = 2_147_483_648; // i32::MAX + 1
+
+        // Parse every `id="..."` / `beginIDRef="..."` integer in `xml` and
+        // assert each fits in a positive signed 32-bit range.
+        fn assert_ids_under_limit(xml: &str, builder: &str) {
+            for attr in ["id=\"", "beginIDRef=\""] {
+                let mut rest = xml;
+                while let Some(start) = rest.find(attr) {
+                    let after = &rest[start + attr.len()..];
+                    let end = after.find('"').expect("unterminated id attribute");
+                    let value: u64 = after[..end].parse().unwrap_or_else(|_| {
+                        panic!("{builder}: non-numeric id `{}`", &after[..end])
+                    });
+                    assert!(value < I32_LIMIT, "{builder}: {attr}{value} exceeds signed i32 range");
+                    rest = &after[end..];
+                }
+            }
+        }
+
+        // Exercise a large field_id so base + counter is checked, not just base.
+        let big = 1_000_000_usize;
+
+        assert_ids_under_limit(
+            &build_field_run_xml(&FieldType::ClickHere, "", "", 0, big),
+            "field_run/CLICK_HERE",
+        );
+        assert_ids_under_limit(
+            &build_field_run_xml(&FieldType::Date, "", "", 0, big),
+            "field_run/SUMMERY",
+        );
+        assert_ids_under_limit(
+            &build_hyperlink_run_xml("text", "https://example.com", 0, big),
+            "hyperlink",
+        );
+        assert_ids_under_limit(
+            &build_bookmark_span_start_run_xml("mark", 0, big),
+            "bookmark_span_start",
+        );
+        assert_ids_under_limit(&build_bookmark_span_end_run_xml(0, big), "bookmark_span_end");
+        assert_ids_under_limit(
+            &build_crossref_run_xml(
+                "bookmark1",
+                "see bookmark1",
+                &RefType::default(),
+                &RefContentType::default(),
+                true,
+                0,
+                big,
+            ),
+            "crossref",
+        );
+        assert_ids_under_limit(
+            &build_hwp5_crossref_run_xml(
+                "bookmark1",
+                "see bookmark1",
+                RefType::default(),
+                RefContentType::default(),
+                true,
+                0,
+                big,
+            ),
+            "hwp5_crossref",
+        );
+        assert_ids_under_limit(&build_memo_run_xml("", "author", "date", 0, big), "memo");
     }
 
     // ── Heading level (titleMark) encoding ───────────────────────

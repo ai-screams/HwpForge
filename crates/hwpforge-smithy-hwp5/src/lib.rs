@@ -2288,6 +2288,37 @@ mod tests {
             "CROSSREF fieldBegin and fieldEnd must share the same fieldid"
         );
 
+        // Hancom reads `fieldBegin id` as a signed 32-bit integer. A value at
+        // or above 2^31 wraps negative and the field is no longer recognized
+        // (click / F9 refresh / Ctrl+click jump silently fail). The id must be
+        // a positive integer strictly below i32::MAX + 1.
+        let extract_attr = |tag: &str, attr: &str| -> String {
+            let needle = format!("{attr}=\"");
+            let start =
+                tag.find(&needle).unwrap_or_else(|| panic!("tag must carry a {attr} attribute"))
+                    + needle.len();
+            let end =
+                tag[start..].find('"').unwrap_or_else(|| panic!("{attr} attribute must be quoted"))
+                    + start;
+            tag[start..end].to_string()
+        };
+
+        let begin_id: i64 = extract_attr(begin_tag, "id")
+            .parse()
+            .expect("CROSSREF fieldBegin id must be an integer");
+        assert!(begin_id > 0, "CROSSREF fieldBegin id must be a positive integer: {begin_id}");
+        assert!(
+            begin_id < 2_147_483_648,
+            "CROSSREF fieldBegin id must be below 2^31 (signed i32 range): {begin_id}"
+        );
+
+        let begin_id_ref = extract_attr(end_tag, "beginIDRef");
+        assert_eq!(
+            begin_id_ref,
+            begin_id.to_string(),
+            "CROSSREF fieldEnd beginIDRef must reference the fieldBegin id"
+        );
+
         let _ = std::fs::remove_file(&out);
     }
 
