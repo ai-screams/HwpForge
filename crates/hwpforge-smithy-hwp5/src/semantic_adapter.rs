@@ -270,6 +270,30 @@ fn adapt_control(
             support,
             ids,
         ),
+        Hwp5Control::Footnote(subtree) => adapt_nested_subtree_control(
+            subtree,
+            container,
+            paragraph_id,
+            NestedSubtreeSemanticSpec {
+                kind: Hwp5SemanticControlKind::Footnote,
+                subtree_container: Hwp5SemanticContainerKind::FootnoteSubList,
+            },
+            build,
+            support,
+            ids,
+        ),
+        Hwp5Control::Endnote(subtree) => adapt_nested_subtree_control(
+            subtree,
+            container,
+            paragraph_id,
+            NestedSubtreeSemanticSpec {
+                kind: Hwp5SemanticControlKind::Endnote,
+                subtree_container: Hwp5SemanticContainerKind::EndnoteSubList,
+            },
+            build,
+            support,
+            ids,
+        ),
         Hwp5Control::TextBox(textbox) => {
             adapt_textbox_control(textbox, container, paragraph_id, build, support, ids)
         }

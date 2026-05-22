@@ -733,7 +733,9 @@ fn collect_image_geometry_hints_in_controls(
                 }
             }
             decoder::section::Hwp5Control::Header(subtree)
-            | decoder::section::Hwp5Control::Footer(subtree) => {
+            | decoder::section::Hwp5Control::Footer(subtree)
+            | decoder::section::Hwp5Control::Footnote(subtree)
+            | decoder::section::Hwp5Control::Endnote(subtree) => {
                 collect_image_geometry_hints_in_paragraphs(&subtree.paragraphs, hints);
             }
             decoder::section::Hwp5Control::TextBox(textbox) => {
@@ -2106,6 +2108,51 @@ mod tests {
         assert!(
             section_xml.contains("<hp:fieldBegin") && section_xml.contains(r#"type="CROSSREF""#),
             "combined fixture must preserve the cross-reference field"
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_footnote_carries_four_footnotes() {
+        let source = fixture_path("user_samples/sample-field-footnote.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-field-footnote.hwpx");
+        let warnings =
+            hwp5_to_hwpx(&source, &out).expect("user sample footnote conversion should succeed");
+        assert!(
+            warnings.is_empty(),
+            "footnote fixture should convert without warnings: {warnings:?}"
+        );
+
+        assert_valid_hwpx(&out);
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+
+        // Count Control::Footnote instances across the projected Core document.
+        let footnote_count: usize = decoded.document.sections()[0]
+            .paragraphs
+            .iter()
+            .flat_map(|paragraph| &paragraph.runs)
+            .filter(|run| matches!(run.content.as_control(), Some(Control::Footnote { .. })))
+            .count();
+        assert_eq!(
+            footnote_count, 4,
+            "fixture sample-field-footnote.hwp should round-trip exactly four footnote controls"
+        );
+
+        // Also assert the encoded HWPX carries four <hp:footNote> elements
+        // (separate from the <hp:footNotePr> section property).
+        let section_xml = read_section_xml(&out, 0);
+        let footnote_element_count = section_xml.matches("<hp:footNote ").count()
+            + section_xml.matches("<hp:footNote>").count();
+        assert_eq!(
+            footnote_element_count, 4,
+            "converted hwpx must emit four <hp:footNote> elements"
         );
 
         let _ = std::fs::remove_file(&out);

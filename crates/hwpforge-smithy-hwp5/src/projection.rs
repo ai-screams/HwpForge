@@ -22,8 +22,9 @@ use hwpforge_foundation::{
 };
 
 use crate::decoder::section::{
-    Hwp5Control, Hwp5ImageControl, Hwp5LineControl, Hwp5Paragraph, Hwp5PolygonControl,
-    Hwp5RectControl, Hwp5Table, Hwp5TableCell, Hwp5TextBoxControl, SectionResult,
+    Hwp5Control, Hwp5ImageControl, Hwp5LineControl, Hwp5NestedSubtree, Hwp5Paragraph,
+    Hwp5PolygonControl, Hwp5RectControl, Hwp5Table, Hwp5TableCell, Hwp5TextBoxControl,
+    SectionResult,
 };
 use crate::decoder::Hwp5Warning;
 use crate::error::Hwp5Result;
@@ -944,6 +945,8 @@ fn project_control_run(
         Hwp5Control::Rect(rect) => project_rect_run(rect),
         Hwp5Control::Polygon(polygon) => Some(project_polygon_run(polygon)),
         Hwp5Control::TextBox(textbox) => Some(project_textbox_run(textbox, projection_images)),
+        Hwp5Control::Footnote(subtree) => Some(project_footnote_run(subtree, projection_images)),
+        Hwp5Control::Endnote(subtree) => Some(project_endnote_run(subtree, projection_images)),
         Hwp5Control::Header(_) | Hwp5Control::Footer(_) | Hwp5Control::Unknown { .. } => None,
         Hwp5Control::OleObject(_) => {
             projection_images.warnings.push(Hwp5Warning::DroppedControl {
@@ -976,6 +979,41 @@ fn project_textbox_run(
         },
         CharShapeIndex::new(0),
     )
+}
+
+/// Projects a HWP5 footnote subtree into a Core `Run` carrying `Control::Footnote`.
+///
+/// HWP5 does not carry a stable `instId` for footnotes the way HWPX does; the
+/// surrounding `CtrlHeader`/inline 0x06 marker does not expose one to the
+/// decoder layer. We therefore leave `inst_id` as `None` and let the HWPX
+/// encoder generate placement-specific ids if it needs to (its existing
+/// encoder uses `Option<u32>` and serializes the attribute only when set).
+fn project_footnote_run(
+    subtree: &Hwp5NestedSubtree,
+    projection_images: &mut ProjectionImageState<'_>,
+) -> Run {
+    let paragraphs = project_nested_paragraphs(
+        &subtree.paragraphs,
+        projection_images,
+        ImageProjectionContext::Flow,
+    );
+    Run::control(Control::Footnote { inst_id: None, paragraphs }, CharShapeIndex::new(0))
+}
+
+/// Projects a HWP5 endnote subtree into a Core `Run` carrying `Control::Endnote`.
+///
+/// Same caveat as [`project_footnote_run`]: HWP5 ctrl payload does not surface
+/// an `instId`, so we leave it `None`.
+fn project_endnote_run(
+    subtree: &Hwp5NestedSubtree,
+    projection_images: &mut ProjectionImageState<'_>,
+) -> Run {
+    let paragraphs = project_nested_paragraphs(
+        &subtree.paragraphs,
+        projection_images,
+        ImageProjectionContext::Flow,
+    );
+    Run::control(Control::Endnote { inst_id: None, paragraphs }, CharShapeIndex::new(0))
 }
 
 fn project_line_run(line: &Hwp5LineControl) -> Run {

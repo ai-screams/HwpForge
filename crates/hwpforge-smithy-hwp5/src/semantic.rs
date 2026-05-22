@@ -1082,6 +1082,10 @@ pub enum Hwp5SemanticControlKind {
     Header,
     /// Footer control.
     Footer,
+    /// Footnote control with nested paragraphs.
+    Footnote,
+    /// Endnote control with nested paragraphs.
+    Endnote,
     /// Textbox or draw-text shape.
     TextBox,
     /// Page number or auto-numbering control.

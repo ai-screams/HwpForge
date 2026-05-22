@@ -177,6 +177,9 @@ fn collect_flow_paragraph_layout_hints(
             Hwp5Control::Table(table) => collect_table_layout_hints(table, body),
             Hwp5Control::Header(subtree) => collect_scope_paragraphs(&subtree.paragraphs, header),
             Hwp5Control::Footer(subtree) => collect_scope_paragraphs(&subtree.paragraphs, footer),
+            Hwp5Control::Footnote(subtree) | Hwp5Control::Endnote(subtree) => {
+                collect_scope_paragraphs(&subtree.paragraphs, body);
+            }
             Hwp5Control::TextBox(textbox) => collect_scope_paragraphs(&textbox.paragraphs, body),
             Hwp5Control::Image(_)
             | Hwp5Control::Line(_)
@@ -201,6 +204,9 @@ fn collect_scope_paragraph_layout_hints(paragraph: &Hwp5Paragraph, scope: &mut S
         match control {
             Hwp5Control::Table(table) => collect_table_layout_hints(table, scope),
             Hwp5Control::TextBox(textbox) => collect_scope_paragraphs(&textbox.paragraphs, scope),
+            Hwp5Control::Footnote(subtree) | Hwp5Control::Endnote(subtree) => {
+                collect_scope_paragraphs(&subtree.paragraphs, scope);
+            }
             Hwp5Control::Header(_)
             | Hwp5Control::Footer(_)
             | Hwp5Control::Image(_)

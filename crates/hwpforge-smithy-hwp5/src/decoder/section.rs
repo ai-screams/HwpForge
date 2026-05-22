@@ -59,6 +59,18 @@ pub(crate) enum Hwp5Control {
     Header(Hwp5NestedSubtree),
     /// Footer control with nested subtree paragraphs.
     Footer(Hwp5NestedSubtree),
+    /// Footnote control with nested subtree paragraphs.
+    ///
+    /// HWP5 encodes footnotes as an inline `0x06` control-char marker in the
+    /// paragraph text stream followed by a `CtrlHeader` carrying ctrl_id
+    /// `"fn  "` (`0x666E2020`). The subtree mirrors the header/footer layout
+    /// (`ListHeader` → nested `ParaHeader`s).
+    Footnote(Hwp5NestedSubtree),
+    /// Endnote control with nested subtree paragraphs.
+    ///
+    /// Same structure as [`Hwp5Control::Footnote`] but with ctrl_id `"en  "`
+    /// (`0x656E2020`).
+    Endnote(Hwp5NestedSubtree),
     /// Textbox-like shape with nested subtree paragraphs.
     TextBox(Hwp5TextBoxControl),
     /// Embedded OLE object evidence resolved from `gso ` + `ShapeComponent` + `ShapeComponentOle`.
@@ -264,6 +276,10 @@ const CTRL_ID_TABLE: u32 = 0x7462_6C20;
 const CTRL_ID_HEADER: u32 = 0x6865_6164;
 /// ctrl_id for footer control: ASCII `foot` as big-endian u32.
 const CTRL_ID_FOOTER: u32 = 0x666F_6F74;
+/// ctrl_id for footnote control: ASCII `fn  ` as big-endian u32.
+const CTRL_ID_FOOTNOTE: u32 = 0x666E_2020;
+/// ctrl_id for endnote control: ASCII `en  ` as big-endian u32.
+const CTRL_ID_ENDNOTE: u32 = 0x656E_2020;
 /// ctrl_id for generic shape object control: ASCII `gso ` as big-endian u32.
 const CTRL_ID_GSO: u32 = 0x6773_6F20;
 
@@ -380,6 +396,8 @@ struct ActiveTableCell {
 enum NestedSubtreeKind {
     Header,
     Footer,
+    Footnote,
+    Endnote,
     TextBox,
 }
 
@@ -445,7 +463,9 @@ impl NestedSubtreeContext {
 
     fn allows_nested_paragraphs(&self) -> bool {
         match self.ctrl_id {
-            CTRL_ID_HEADER | CTRL_ID_FOOTER | CTRL_ID_GSO => self.saw_list_header,
+            CTRL_ID_HEADER | CTRL_ID_FOOTER | CTRL_ID_FOOTNOTE | CTRL_ID_ENDNOTE | CTRL_ID_GSO => {
+                self.saw_list_header
+            }
             _ => false,
         }
     }
@@ -454,6 +474,8 @@ impl NestedSubtreeContext {
         match self.ctrl_id {
             CTRL_ID_HEADER => Some(NestedSubtreeKind::Header),
             CTRL_ID_FOOTER => Some(NestedSubtreeKind::Footer),
+            CTRL_ID_FOOTNOTE => Some(NestedSubtreeKind::Footnote),
+            CTRL_ID_ENDNOTE => Some(NestedSubtreeKind::Endnote),
             CTRL_ID_GSO if self.saw_shape_rectangle => Some(NestedSubtreeKind::TextBox),
             _ => None,
         }
@@ -469,6 +491,18 @@ impl NestedSubtreeContext {
             }
             Some(NestedSubtreeKind::Footer) if self.saw_list_header => {
                 Hwp5Control::Footer(Hwp5NestedSubtree {
+                    ctrl_id: self.ctrl_id,
+                    paragraphs: self.paragraphs,
+                })
+            }
+            Some(NestedSubtreeKind::Footnote) if self.saw_list_header => {
+                Hwp5Control::Footnote(Hwp5NestedSubtree {
+                    ctrl_id: self.ctrl_id,
+                    paragraphs: self.paragraphs,
+                })
+            }
+            Some(NestedSubtreeKind::Endnote) if self.saw_list_header => {
+                Hwp5Control::Endnote(Hwp5NestedSubtree {
                     ctrl_id: self.ctrl_id,
                     paragraphs: self.paragraphs,
                 })
@@ -1066,7 +1100,14 @@ impl BodyTextParserState {
                 let ctrl_id = parse_ctrl_id(&record.data);
                 if ctrl_id == CTRL_ID_TABLE {
                     self.table_stack.push(TableContext::new(level));
-                } else if matches!(ctrl_id, CTRL_ID_HEADER | CTRL_ID_FOOTER | CTRL_ID_GSO) {
+                } else if matches!(
+                    ctrl_id,
+                    CTRL_ID_HEADER
+                        | CTRL_ID_FOOTER
+                        | CTRL_ID_FOOTNOTE
+                        | CTRL_ID_ENDNOTE
+                        | CTRL_ID_GSO
+                ) {
                     let geometry = if ctrl_id == CTRL_ID_GSO {
                         Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).ok()
                     } else {
@@ -1849,6 +1890,48 @@ mod tests {
                 assert_eq!(subtree.paragraphs[0].text, "footer text");
             }
             other => panic!("expected Footer, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn footnote_control_captures_nested_paragraphs_after_list_header() {
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &ctrl_header_data(CTRL_ID_FOOTNOTE)));
+        stream.extend(make_record(TagId::ListHeader, 1, &[0u8; 4]));
+        stream.extend(make_record(TagId::ParaHeader, 1, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 2, &para_text_data("footnote body")));
+
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let para = &result.paragraphs[0];
+        match &para.controls[0] {
+            Hwp5Control::Footnote(subtree) => {
+                assert_eq!(subtree.ctrl_id, CTRL_ID_FOOTNOTE);
+                assert_eq!(subtree.paragraphs.len(), 1);
+                assert_eq!(subtree.paragraphs[0].text, "footnote body");
+            }
+            other => panic!("expected Footnote, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn endnote_control_captures_nested_paragraphs_after_list_header() {
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &ctrl_header_data(CTRL_ID_ENDNOTE)));
+        stream.extend(make_record(TagId::ListHeader, 1, &[0u8; 4]));
+        stream.extend(make_record(TagId::ParaHeader, 1, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 2, &para_text_data("endnote body")));
+
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let para = &result.paragraphs[0];
+        match &para.controls[0] {
+            Hwp5Control::Endnote(subtree) => {
+                assert_eq!(subtree.ctrl_id, CTRL_ID_ENDNOTE);
+                assert_eq!(subtree.paragraphs.len(), 1);
+                assert_eq!(subtree.paragraphs[0].text, "endnote body");
+            }
+            other => panic!("expected Endnote, got {:?}", other),
         }
     }
 
