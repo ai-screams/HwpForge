@@ -2228,6 +2228,70 @@ mod tests {
     }
 
     #[test]
+    fn hwp5_to_hwpx_user_sample_crossref_emits_nonzero_fieldid() {
+        let source = fixture_path("user_samples/sample-field-bookmark-crossref-basic.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-crossref-nonzero-fieldid.hwpx");
+        let warnings = hwp5_to_hwpx(&source, &out)
+            .expect("user sample bookmark/crossref conversion should succeed");
+        assert!(
+            warnings.is_empty(),
+            "bookmark/crossref fixture should convert without warnings: {warnings:?}"
+        );
+
+        let section_xml = read_section_xml(&out, 0);
+
+        // fieldid="0" makes Hancom treat the CROSSREF as an invalid instance
+        // (F9 refresh / Ctrl+click jump break). It must never be emitted.
+        assert!(
+            !section_xml.contains(r#"fieldid="0""#),
+            "converted section xml must not emit fieldid=0 anywhere"
+        );
+
+        // The CROSSREF fieldBegin and its matching fieldEnd must carry the
+        // same non-zero fieldid.
+        let begin_marker = "<hp:fieldBegin ";
+        let begin_pos =
+            section_xml.find(begin_marker).expect("section xml must contain a fieldBegin");
+        let begin_tag_end = section_xml[begin_pos..]
+            .find('>')
+            .map(|rel| begin_pos + rel)
+            .expect("fieldBegin tag must be terminated");
+        let begin_tag = &section_xml[begin_pos..=begin_tag_end];
+        assert!(begin_tag.contains(r#"type="CROSSREF""#), "first field must be CROSSREF");
+
+        let extract_fieldid = |tag: &str| -> String {
+            let needle = r#"fieldid=""#;
+            let start =
+                tag.find(needle).expect("tag must carry a fieldid attribute") + needle.len();
+            let end = tag[start..].find('"').expect("fieldid attribute must be quoted") + start;
+            tag[start..end].to_string()
+        };
+
+        let begin_fieldid = extract_fieldid(begin_tag);
+        assert_ne!(begin_fieldid, "0", "CROSSREF fieldBegin fieldid must be non-zero");
+
+        let end_marker = "<hp:fieldEnd ";
+        let end_pos = section_xml.find(end_marker).expect("section xml must contain a fieldEnd");
+        let end_tag_end = section_xml[end_pos..]
+            .find('>')
+            .map(|rel| end_pos + rel)
+            .expect("fieldEnd tag must be terminated");
+        let end_tag = &section_xml[end_pos..=end_tag_end];
+        let end_fieldid = extract_fieldid(end_tag);
+
+        assert_eq!(
+            begin_fieldid, end_fieldid,
+            "CROSSREF fieldBegin and fieldEnd must share the same fieldid"
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
     fn hwp5_to_hwpx_user_sample_page_number_preserves_section_page_number() {
         let source = fixture_path("user_samples/sample-field-page-number-basic.hwp");
         if !source.exists() {
