@@ -2534,6 +2534,48 @@ mod tests {
     }
 
     #[test]
+    fn hwp5_to_hwpx_user_sample_alignment_preserves_all_six_variants() {
+        use hwpforge_foundation::{Alignment, ParaShapeIndex};
+
+        let source = fixture_path("user_samples/sample-para-alignments-all.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-alignments-all.hwpx");
+        let _warnings =
+            hwp5_to_hwpx(&source, &out).expect("alignment conversion should succeed");
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+
+        // HWPX fixture paraPr id → expected Alignment (verified by header.xml inspection).
+        let expected: &[(usize, Alignment)] = &[
+            (20, Alignment::Justify),
+            (21, Alignment::Left),
+            (22, Alignment::Right),
+            (23, Alignment::Center),
+            (24, Alignment::Distribute),
+            (25, Alignment::DistributeFlush),
+        ];
+        for (idx, exp) in expected {
+            let shape = decoded
+                .style_store
+                .para_shape(ParaShapeIndex::new(*idx))
+                .unwrap_or_else(|err| {
+                    panic!("para shape {idx} must exist after Wave 2b: {err}")
+                });
+            assert_eq!(
+                shape.alignment, *exp,
+                "para shape {idx} expected {:?}, got {:?}",
+                exp, shape.alignment
+            );
+        }
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
     fn hwp5_to_hwpx_bytes_matches_file_based_api() {
         let source = fixture_path("sample-text-char-runs-basic.hwp");
         if !source.exists() {
