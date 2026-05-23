@@ -468,12 +468,27 @@ fn project_paragraph_with_images_structural(
                 );
             }
             crate::schema::section::TextSegment::NonBreakingSpace => {
+                // Sentinel: U+00A0 is the canonical NBSP code-point and is
+                // what `inline_text::encode_inline_text_xml` translates back
+                // into `<hp:nbSpace/>` on HWPX emit.
                 append_visible_unit(
                     hwp_para,
                     &mut runs,
                     &mut active_field,
                     &mut visible_utf16,
-                    ' ',
+                    '\u{00A0}',
+                );
+            }
+            crate::schema::section::TextSegment::FwSpace => {
+                // Sentinel: U+001F mirrors the HWP5 wire control byte for
+                // fixed-width space and is what `inline_text` translates back
+                // into `<hp:fwSpace/>` on HWPX emit.
+                append_visible_unit(
+                    hwp_para,
+                    &mut runs,
+                    &mut active_field,
+                    &mut visible_utf16,
+                    '\u{001F}',
                 );
             }
             crate::schema::section::TextSegment::ControlRef { .. }

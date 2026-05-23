@@ -840,6 +840,10 @@ fn populate_inline_items(
                 flush_text(&mut buffer, inline_items);
                 inline_items.push(Hwp5SemanticInlineItem::NonBreakingSpace);
             }
+            TextSegment::FwSpace => {
+                flush_text(&mut buffer, inline_items);
+                inline_items.push(Hwp5SemanticInlineItem::FwSpace);
+            }
             TextSegment::ControlRef { .. } | TextSegment::ExtendedControlRef { .. } => {
                 buffer.push(placeholder);
                 flush_text(&mut buffer, inline_items);

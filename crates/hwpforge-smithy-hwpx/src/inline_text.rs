@@ -11,7 +11,7 @@ use crate::encoder::escape_xml;
 /// Returns `true` when a plain-text payload requires inline HWPX child
 /// elements inside `<hp:t>`.
 pub(crate) fn requires_inline_text_markup(text: &str) -> bool {
-    text.chars().any(|ch| matches!(ch, '\n' | '\t' | '\u{00A0}'))
+    text.chars().any(|ch| matches!(ch, '\n' | '\t' | '\u{00A0}' | '\u{001F}'))
 }
 
 /// Encodes plain-text content into the inner XML for an `<hp:t>` element.
@@ -22,6 +22,8 @@ pub(crate) fn requires_inline_text_markup(text: &str) -> bool {
 /// - `\n` → `<hp:lineBreak/>`
 /// - `\t` → `<hp:tab/>`
 /// - `U+00A0` → `<hp:nbSpace/>`
+/// - `U+001F` → `<hp:fwSpace/>` (mirrors the HWP5 wire control byte for the
+///   "fixed-width space" so the round-trip through Core is lossless)
 pub(crate) fn encode_inline_text_xml(text: &str) -> String {
     if text.is_empty() {
         return String::new();
@@ -52,6 +54,10 @@ pub(crate) fn encode_inline_text_xml(text: &str) -> String {
                 flush_plain(&mut plain, &mut encoded);
                 encoded.push_str("<hp:nbSpace/>");
             }
+            '\u{001F}' => {
+                flush_plain(&mut plain, &mut encoded);
+                encoded.push_str("<hp:fwSpace/>");
+            }
             _ => plain.push(ch),
         }
     }
@@ -79,14 +85,15 @@ mod tests {
         assert!(requires_inline_text_markup("left\tright"));
         assert!(requires_inline_text_markup("line1\nline2"));
         assert!(requires_inline_text_markup("a\u{00A0}b"));
+        assert!(requires_inline_text_markup("a\u{001F}b"));
         assert!(!requires_inline_text_markup("plain text"));
     }
 
     #[test]
     fn encode_inline_text_xml_emits_mixed_content_tokens() {
         assert_eq!(
-            encode_inline_text_xml("line 1\tline 2\nnext\u{00A0}keep"),
-            "line 1<hp:tab/>line 2<hp:lineBreak/>next<hp:nbSpace/>keep"
+            encode_inline_text_xml("line 1\tline 2\nnext\u{00A0}keep\u{001F}fw"),
+            "line 1<hp:tab/>line 2<hp:lineBreak/>next<hp:nbSpace/>keep<hp:fwSpace/>fw"
         );
     }
 
@@ -94,5 +101,9 @@ mod tests {
     fn build_text_element_xml_handles_empty_and_special_text() {
         assert_eq!(build_text_element_xml(""), "<hp:t/>");
         assert_eq!(build_text_element_xml("LEFT\tRIGHT"), "<hp:t>LEFT<hp:tab/>RIGHT</hp:t>");
+        assert_eq!(
+            build_text_element_xml("FWLEFT\u{001F}FWRIGHT"),
+            "<hp:t>FWLEFT<hp:fwSpace/>FWRIGHT</hp:t>"
+        );
     }
 }

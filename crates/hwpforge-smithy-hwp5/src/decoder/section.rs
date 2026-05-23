@@ -664,7 +664,9 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
 /// - `Text(s)` — appended verbatim
 /// - `Tab` — replaced with `\t`
 /// - `LineBreak` — replaced with `\n`
-/// - `NonBreakingSpace` — replaced with a regular space
+/// - `NonBreakingSpace` — replaced with `\u{00A0}` (canonical NBSP sentinel)
+/// - `FwSpace` — replaced with `\u{001F}` (fixed-width space sentinel; mirrors
+///   the HWP5 wire control byte so the round-trip through Core is lossless)
 /// - `ControlRef` / `ExtendedControlRef` — replaced with `\u{FFFC}` (object replacement)
 /// - All other segments (ParaBreak, FieldBegin, FieldEnd, SectionColumnDef) — ignored
 fn segments_to_string(segments: &[TextSegment]) -> String {
@@ -674,7 +676,8 @@ fn segments_to_string(segments: &[TextSegment]) -> String {
             TextSegment::Text(s) => out.push_str(s),
             TextSegment::Tab => out.push('\t'),
             TextSegment::LineBreak => out.push('\n'),
-            TextSegment::NonBreakingSpace => out.push(' '),
+            TextSegment::NonBreakingSpace => out.push('\u{00A0}'),
+            TextSegment::FwSpace => out.push('\u{001F}'),
             TextSegment::ControlRef { .. } | TextSegment::ExtendedControlRef { .. } => {
                 out.push('\u{FFFC}');
             }
@@ -2150,7 +2153,7 @@ mod tests {
 
     #[test]
     fn text_segments_rendering() {
-        // Tab → \t, NonBreakingSpace → ' ', LineBreak → \n
+        // Tab → \t, NonBreakingSpace (0x18) → \u{00A0}, FwSpace (0x1F) → \u{001F}
         let mut data: Vec<u8> = Vec::new();
         data.extend_from_slice(
             &"A".encode_utf16().flat_map(|c| c.to_le_bytes()).collect::<Vec<_>>(),
@@ -2162,9 +2165,13 @@ mod tests {
         data.extend_from_slice(
             &"B".encode_utf16().flat_map(|c| c.to_le_bytes()).collect::<Vec<_>>(),
         );
-        data.extend_from_slice(&0x1Eu16.to_le_bytes()); // NonBreakingSpace
+        data.extend_from_slice(&0x18u16.to_le_bytes()); // NonBreakingSpace (per HWP5 spec)
         data.extend_from_slice(
             &"C".encode_utf16().flat_map(|c| c.to_le_bytes()).collect::<Vec<_>>(),
+        );
+        data.extend_from_slice(&0x1Fu16.to_le_bytes()); // FwSpace (per HWP5 spec)
+        data.extend_from_slice(
+            &"D".encode_utf16().flat_map(|c| c.to_le_bytes()).collect::<Vec<_>>(),
         );
 
         let mut stream = Vec::new();
@@ -2172,7 +2179,7 @@ mod tests {
         stream.extend(make_record(TagId::ParaText, 0, &data));
 
         let result = parse_body_text(&stream, &version()).unwrap();
-        assert_eq!(result.paragraphs[0].text, "A\tB C");
+        assert_eq!(result.paragraphs[0].text, "A\tB\u{00A0}C\u{001F}D");
     }
 
     #[test]

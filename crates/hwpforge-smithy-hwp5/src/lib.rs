@@ -1873,6 +1873,53 @@ mod tests {
     }
 
     #[test]
+    fn hwp5_to_hwpx_user_sample_fwspace_carries_fixed_width_space() {
+        // Truth fixture is a single paragraph: FWLEFT<hp:fwSpace/>FWRIGHT.
+        // Before the fix, the HWP5 wire-byte 0x1F was silently consumed and
+        // the surrounding text was concatenated into "FWLEFTFWRIGHT".
+        let source = fixture_path("user_samples/text/sample-fwspace-fixed.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-fwspace.hwpx");
+        let warnings =
+            hwp5_to_hwpx(&source, &out).expect("user sample fwspace conversion should succeed");
+        assert!(
+            warnings.is_empty(),
+            "fwspace fixture should convert without warnings: {warnings:?}",
+        );
+
+        assert_valid_hwpx(&out);
+
+        // Round-trip through the Core DOM: text run must carry the U+001F
+        // sentinel between the two marker strings.
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let para = &decoded.document.sections()[0].paragraphs[0];
+        let visible_text: String =
+            para.runs.iter().filter_map(|r| r.content.as_text()).collect();
+        assert_eq!(
+            visible_text, "FWLEFT\u{001F}FWRIGHT",
+            "Core text must carry the U+001F sentinel between the markers"
+        );
+
+        // Wire-level check: exactly one `<hp:fwSpace/>` is emitted inline.
+        let section_xml = read_section_xml(&out, 0);
+        let fwspace_count = section_xml.matches("<hp:fwSpace").count();
+        assert_eq!(
+            fwspace_count, 1,
+            "expected exactly 1 <hp:fwSpace/> element to match the truth fixture; got {fwspace_count} in:\n{section_xml}"
+        );
+        assert!(
+            section_xml.contains("<hp:t>FWLEFT<hp:fwSpace/>FWRIGHT</hp:t>"),
+            "fwSpace must be emitted inline inside the same <hp:t> as the surrounding text"
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
     fn hwp5_to_hwpx_user_sample_tab_preserves_inline_tab_text_and_custom_tab_def() {
         let source = fixture_path("user_samples/tabs/sample-tab.hwp");
         if !source.exists() {

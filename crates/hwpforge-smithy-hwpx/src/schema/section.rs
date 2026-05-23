@@ -260,6 +260,15 @@ impl HxText {
     }
 
     /// Returns the combined text content, with `\n` for line breaks.
+    ///
+    /// Inline markup elements that Core carries through `RunContent::Text`
+    /// are projected onto sentinel code-points so the round-trip through
+    /// the encoder (`inline_text::encode_inline_text_xml`) is lossless:
+    ///
+    /// - `<hp:lineBreak/>` → `\n`
+    /// - `<hp:tab/>` → `\t`
+    /// - `<hp:nbSpace/>` → `U+00A0`
+    /// - `<hp:fwSpace/>` → `U+001F` (mirrors the HWP5 wire control byte)
     pub fn text(&self) -> String {
         self.parts
             .iter()
@@ -267,7 +276,7 @@ impl HxText {
                 HxTextPart::Text(s) => s.as_str(),
                 HxTextPart::LineBreak {} => "\n",
                 HxTextPart::Tab {} => "\t",
-                HxTextPart::FwSpace {} => " ",
+                HxTextPart::FwSpace {} => "\u{001F}",
                 HxTextPart::NbSpace {} => "\u{00a0}",
                 HxTextPart::MarkpenBegin {} | HxTextPart::MarkpenEnd {} => "",
                 HxTextPart::Other => "",
