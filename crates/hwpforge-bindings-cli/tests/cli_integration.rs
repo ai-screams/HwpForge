@@ -1504,25 +1504,31 @@ fn convert_hwp5_table_nested_table_parity() {
 }
 
 #[test]
-fn audit_hwp5_rect_fixture_reports_mismatch_and_warning() {
+fn audit_hwp5_rect_fixture_now_matches_after_carry() {
+    // After Wave 4a's Rect carry (commit 86b99c8), the pure-rect projection
+    // no longer emits the DroppedControl{"rect", ..} warning and the
+    // converted HWPX preserves the rectangle. Audit therefore reports a
+    // clean match instead of the prior mismatch.
     let source = fixture("rect_simple.hwp");
     let tmp = test_tmp();
     let out = tmp.join("rect_simple.hwpx");
     let warnings =
         hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &out).expect("convert hwp5 rect fixture");
-    assert!(warnings.iter().any(|warning| matches!(
-        warning,
-        hwpforge_smithy_hwp5::Hwp5Warning::DroppedControl { control, reason }
-            if *control == "rect"
-                && reason == "pure_rect_projection_requires_core_hwpx_capability"
-    )));
+    assert!(
+        !warnings.iter().any(|warning| matches!(
+            warning,
+            hwpforge_smithy_hwp5::Hwp5Warning::DroppedControl { control, .. }
+                if *control == "rect"
+        )),
+        "Wave 4a Rect carry should suppress the DroppedControl{{\"rect\", ..}} warning"
+    );
 
     let (val, _, code) = run_json(&["audit-hwp5", source.to_str().unwrap(), out.to_str().unwrap()]);
     assert_eq!(code, 0);
-    assert_eq!(val["status"], "mismatch");
-    assert_eq!(val["source"]["warning_count"], 1);
+    assert_eq!(val["status"], "ok");
+    assert_eq!(val["source"]["warning_count"], 0);
     assert_eq!(val["source"]["totals"]["rectangles"], 1);
-    assert_eq!(val["output"]["totals"]["rectangles"], 0);
+    assert_eq!(val["output"]["totals"]["rectangles"], 1);
 }
 
 #[test]
@@ -1549,7 +1555,10 @@ fn convert_hwp5_fixture() {
 }
 
 #[test]
-fn convert_hwp5_rect_fixture_reports_projection_warning_count() {
+fn convert_hwp5_rect_fixture_reports_no_warnings_after_carry() {
+    // After Wave 4a's Rect carry, converting the rect fixture no longer
+    // emits a projection warning. The CLI must therefore report
+    // "0 warnings" — anything else is a regression.
     let source = fixture("rect_simple.hwp");
     let tmp = test_tmp();
     let out = tmp.join("rect_simple.hwpx");
@@ -1558,7 +1567,7 @@ fn convert_hwp5_rect_fixture_reports_projection_warning_count() {
         run(&["convert-hwp5", source.to_str().unwrap(), "-o", out.to_str().unwrap()]);
     assert_eq!(code, 0);
     assert!(stdout.contains("Converted"));
-    assert!(stdout.contains("1 warnings"));
+    assert!(stdout.contains("0 warnings"));
     assert_valid_hwpx(&out);
 }
 
