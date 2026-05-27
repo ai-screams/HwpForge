@@ -188,11 +188,19 @@ fn project_to_core_internal(
             section.add_paragraph(projected.paragraph);
         }
 
+        // ADR-002: collect into Vec to preserve HWPX multi-cardinality
+        // (`<hp:header>` × N with distinct `applyPageType`). The
+        // applyPageType per-ctrl decode (HWP5 spec §4.3.10.3 표 141:
+        // bit 0~1 of properties_raw) is wired in the dedicated slice
+        // — for now `all_pages()` (BOTH) is preserved as the default,
+        // matching previous behavior. Slice "apply_page_type carry"
+        // (gap A in `.docs/debug/2026-05-27_hwp5_page_features_lost.md`)
+        // promotes per-ctrl decoding into this Vec.
         if !header_paragraphs.is_empty() {
-            section.header = Some(HeaderFooter::all_pages(header_paragraphs));
+            section.headers.push(HeaderFooter::all_pages(header_paragraphs));
         }
         if !footer_paragraphs.is_empty() {
-            section.footer = Some(HeaderFooter::all_pages(footer_paragraphs));
+            section.footers.push(HeaderFooter::all_pages(footer_paragraphs));
         }
 
         // Ensure every section has at least one paragraph (validation requirement).
@@ -1986,8 +1994,8 @@ mod tests {
         let (document, image_store, _) =
             project_to_core_with_images(vec![section], &image_assets).unwrap();
         let section = &document.sections()[0];
-        let header = section.header.as_ref().expect("header should be projected");
-        let footer = section.footer.as_ref().expect("footer should be projected");
+        let header = section.headers.first().expect("header should be projected");
+        let footer = section.footers.first().expect("footer should be projected");
 
         assert_eq!(image_store.get("BIN0007.png"), Some(&[1, 2, 3, 4][..]));
         assert_eq!(header.paragraphs.len(), 1);

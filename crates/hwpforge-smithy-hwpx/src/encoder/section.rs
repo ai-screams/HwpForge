@@ -2088,13 +2088,14 @@ fn inject_header_footer_pagenum(
 
     let mut injection = String::new();
 
-    // Header
-    if let Some(ref header) = section.header {
+    // Header — emit each `<hp:header>` element preserving the HWPX
+    // multi-cardinality wire shape (ADR-002).
+    for header in &section.headers {
         injection.push_str(&build_header_xml(header, "header", hyperlink_entries)?);
     }
 
-    // Footer
-    if let Some(ref footer) = section.footer {
+    // Footer — same cardinality model.
+    for footer in &section.footers {
         injection.push_str(&build_header_xml(footer, "footer", hyperlink_entries)?);
     }
 
@@ -2894,7 +2895,7 @@ mod tests {
         use hwpforge_foundation::ApplyPageType;
 
         let mut section = simple_section("Body text");
-        section.header = Some(HeaderFooter::new(
+        section.headers.push(HeaderFooter::new(
             vec![text_paragraph("Header Content", 0, 0)],
             ApplyPageType::Both,
         ));
@@ -2918,7 +2919,7 @@ mod tests {
         use hwpforge_foundation::ApplyPageType;
 
         let mut section = simple_section("Body text");
-        section.footer = Some(HeaderFooter::new(
+        section.footers.push(HeaderFooter::new(
             vec![text_paragraph("Footer Content", 0, 0)],
             ApplyPageType::Even,
         ));
@@ -3011,10 +3012,12 @@ mod tests {
         use hwpforge_foundation::ApplyPageType;
 
         let mut section = simple_section("Main body");
-        section.header =
-            Some(HeaderFooter::new(vec![text_paragraph("My Header", 0, 0)], ApplyPageType::Both));
-        section.footer =
-            Some(HeaderFooter::new(vec![text_paragraph("My Footer", 0, 0)], ApplyPageType::Odd));
+        section
+            .headers
+            .push(HeaderFooter::new(vec![text_paragraph("My Header", 0, 0)], ApplyPageType::Both));
+        section
+            .footers
+            .push(HeaderFooter::new(vec![text_paragraph("My Footer", 0, 0)], ApplyPageType::Odd));
 
         let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
 
@@ -3252,7 +3255,7 @@ mod tests {
         use hwpforge_foundation::ApplyPageType;
 
         let mut section = simple_section("Body");
-        section.header = Some(HeaderFooter::new(
+        section.headers.push(HeaderFooter::new(
             vec![text_paragraph("A & B < C > D", 0, 0)],
             ApplyPageType::Both,
         ));

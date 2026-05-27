@@ -527,7 +527,7 @@ fn gen_04_header_footer() {
 
     // Section 1: Header + Footer + PageNumber BottomCenter
     let mut sec1 = Section::with_paragraphs(paras1, PageSettings::a4());
-    sec1.header = Some(HeaderFooter::new(
+    sec1.headers.push(HeaderFooter::new(
         vec![p(
             "\u{c139}\u{c158} 1 \u{ba38}\u{b9ac}\u{ae00} \u{2014} HwpForge \u{ae30}\u{b2a5} \u{c2dc}\u{c5f0}",
             CS_SMALL,
@@ -535,7 +535,7 @@ fn gen_04_header_footer() {
         )],
         ApplyPageType::Both,
     ));
-    sec1.footer = Some(HeaderFooter::new(
+    sec1.footers.push(HeaderFooter::new(
         vec![p("Copyright 2026 HwpForge", CS_SMALL, PS_CENTER)],
         ApplyPageType::Both,
     ));
@@ -560,7 +560,7 @@ fn gen_04_header_footer() {
         ],
         PageSettings::a4(),
     );
-    sec2.header = Some(HeaderFooter::new(
+    sec2.headers.push(HeaderFooter::new(
         vec![p(
             "\u{c139}\u{c158} 2 \u{ba38}\u{b9ac}\u{ae00} \u{2014} \u{b2e4}\u{b978} \u{b0b4}\u{c6a9}",
             CS_SMALL,
@@ -587,11 +587,11 @@ fn gen_04_header_footer() {
         ],
         PageSettings::a4(),
     );
-    sec3.header = Some(HeaderFooter::new(
+    sec3.headers.push(HeaderFooter::new(
         vec![p("HwpForge Documentation", CS_SMALL, PS_LEFT)],
         ApplyPageType::Both,
     ));
-    sec3.footer = Some(HeaderFooter::new(
+    sec3.footers.push(HeaderFooter::new(
         vec![p("\u{bc14}\u{b2e5}\u{ae00} \u{c139}\u{c158} 3", CS_SMALL, PS_RIGHT)],
         ApplyPageType::Both,
     ));

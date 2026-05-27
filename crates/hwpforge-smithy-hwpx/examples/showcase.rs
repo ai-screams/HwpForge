@@ -184,12 +184,12 @@ fn build_section1() -> Section {
     // Build section with header, footer, page number
     let mut section: Section = Section::with_paragraphs(paragraphs, PageSettings::a4());
 
-    section.header = Some(HeaderFooter::new(
+    section.headers.push(HeaderFooter::new(
         vec![text_para("HwpForge 쇼케이스 — 머리글", 0, 1)],
         ApplyPageType::Both,
     ));
 
-    section.footer = Some(HeaderFooter::new(
+    section.footers.push(HeaderFooter::new(
         vec![text_para("Copyright © 2026 HwpForge Project", 0, 1)],
         ApplyPageType::Both,
     ));
@@ -337,15 +337,15 @@ fn main() {
     );
     println!(
         "    S1: header={}, footer={}, page_num={}, columns={}",
-        sec1.header.is_some(),
-        sec1.footer.is_some(),
+        !sec1.headers.is_empty(),
+        !sec1.footers.is_empty(),
         sec1.page_number.is_some(),
         sec1.column_settings.is_some(),
     );
     println!(
         "    S2: header={}, footer={}, page_num={}, columns={}",
-        sec2.header.is_some(),
-        sec2.footer.is_some(),
+        !sec2.headers.is_empty(),
+        !sec2.footers.is_empty(),
         sec2.page_number.is_some(),
         sec2.column_settings.is_some(),
     );
@@ -371,8 +371,8 @@ fn main() {
     let s1: &Section = &d.sections()[0];
     println!("    Section 1:");
     println!("      Paragraphs: {}", s1.paragraphs.len());
-    println!("      Header: {}", s1.header.is_some());
-    println!("      Footer: {}", s1.footer.is_some());
+    println!("      Header: {}", !s1.headers.is_empty());
+    println!("      Footer: {}", !s1.footers.is_empty());
     println!("      PageNumber: {}", s1.page_number.is_some());
 
     // Check first paragraph text

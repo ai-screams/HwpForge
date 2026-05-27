@@ -113,8 +113,8 @@ pub fn run_inspect(file_path: &str, _show_styles: bool) -> Result<InspectData, T
                 tables: counts.tables,
                 images: counts.images,
                 charts: counts.charts,
-                has_header: sec.header.is_some(),
-                has_footer: sec.footer.is_some(),
+                has_header: !sec.headers.is_empty(),
+                has_footer: !sec.footers.is_empty(),
                 has_page_number: sec.page_number.is_some(),
             }
         })

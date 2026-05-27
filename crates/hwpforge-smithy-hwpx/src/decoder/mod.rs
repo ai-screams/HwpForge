@@ -112,8 +112,14 @@ impl HwpxDecoder {
             let section = Section {
                 paragraphs: result.paragraphs,
                 page_settings,
-                header: result.header,
-                footer: result.footer,
+                // ADR-002: Section now holds `Vec<HeaderFooter>`. The
+                // section parser still returns single Option slots
+                // (one section can only have one `<hp:header>` per
+                // applyPageType in the decoder's current shape);
+                // collect them into the Vec so multi-cardinality is
+                // representable end-to-end.
+                headers: result.header.into_iter().collect(),
+                footers: result.footer.into_iter().collect(),
                 page_number: result.page_number,
                 column_settings: result.column_settings,
                 visibility: result.visibility,
@@ -492,7 +498,7 @@ mod tests {
         let result = HwpxDecoder::decode(&bytes).unwrap();
 
         let sec = &result.document.sections()[0];
-        let header = sec.header.as_ref().expect("section should have header");
+        let header = sec.headers.first().expect("section should have header");
         assert_eq!(header.apply_page_type, hwpforge_foundation::ApplyPageType::Both);
         assert_eq!(header.paragraphs.len(), 1);
         assert_eq!(header.paragraphs[0].runs[0].content.as_text(), Some("Page Header"));
@@ -524,7 +530,7 @@ mod tests {
         let result = HwpxDecoder::decode(&bytes).unwrap();
 
         let sec = &result.document.sections()[0];
-        let footer = sec.footer.as_ref().expect("section should have footer");
+        let footer = sec.footers.first().expect("section should have footer");
         assert_eq!(footer.apply_page_type, hwpforge_foundation::ApplyPageType::Odd);
         assert_eq!(footer.paragraphs[0].runs[0].content.as_text(), Some("Footer"));
 
