@@ -11,7 +11,7 @@ use hwpforge_core::image::{
     Image, ImageFormat, ImagePlacement, ImageRelativeTo, ImageStore, ImageTextFlow, ImageTextWrap,
 };
 use hwpforge_core::paragraph::Paragraph;
-use hwpforge_core::run::Run;
+use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::section::{HeaderFooter, PageNumber, Section};
 use hwpforge_core::table::{Table, TableCell, TableMargin, TableRow};
 use hwpforge_core::Control;
@@ -21,10 +21,11 @@ use hwpforge_foundation::{
     RefContentType, RefType, StyleIndex,
 };
 
+use crate::decoder::chart_ole::{extract_chart_payload, ChartOleError};
 use crate::decoder::section::{
-    Hwp5Control, Hwp5ImageControl, Hwp5LineControl, Hwp5NestedSubtree, Hwp5Paragraph,
-    Hwp5PolygonControl, Hwp5RectControl, Hwp5Table, Hwp5TableCell, Hwp5TextBoxControl,
-    SectionResult,
+    Hwp5Control, Hwp5ImageControl, Hwp5LineControl, Hwp5NestedSubtree, Hwp5OleObjectControl,
+    Hwp5Paragraph, Hwp5PolygonControl, Hwp5RectControl, Hwp5Table, Hwp5TableCell,
+    Hwp5TextBoxControl, SectionResult,
 };
 use crate::decoder::Hwp5Warning;
 use crate::error::Hwp5Result;
@@ -37,7 +38,7 @@ use crate::table_cell_vertical_align::{
 };
 use crate::table_page_break::{core_table_page_break, unknown_hwp5_table_page_break_raw};
 use crate::warning_utils::push_projection_fallback;
-use crate::{Hwp5JoinedImageAsset, Hwp5JoinedImageAssetPlan};
+use crate::{Hwp5JoinedImageAsset, Hwp5JoinedImageAssetPlan, Hwp5OleAssetPlan};
 
 const CTRL_ID_SECTION_DEF: u32 = 0x7365_6364; // "secd"
 const CTRL_ID_COLUMN_DEF: u32 = 0x636F_6C64; // "cold"
@@ -119,7 +120,7 @@ enum ActiveField {
 pub(crate) fn project_to_core(
     sections: Vec<SectionResult>,
 ) -> Hwp5Result<(Document<Draft>, Vec<Hwp5Warning>)> {
-    let (document, _image_store, warnings) = project_to_core_internal(sections, None)?;
+    let (document, _image_store, warnings) = project_to_core_internal(sections, None, None)?;
     Ok((document, warnings))
 }
 
@@ -128,16 +129,30 @@ pub(crate) fn project_to_core_with_images(
     sections: Vec<SectionResult>,
     image_assets: &Hwp5JoinedImageAssetPlan,
 ) -> Hwp5Result<(Document<Draft>, ImageStore, Vec<Hwp5Warning>)> {
-    project_to_core_internal(sections, Some(image_assets))
+    project_to_core_internal(sections, Some(image_assets), None)
+}
+
+/// Project decoded HWP5 sections into Core with both image and OLE asset plans.
+///
+/// Used by [`crate::hwp5_to_hwpx_bytes`] so the projection layer can attempt
+/// chart payload extraction from `/BinData/BIN*.OLE` entries and emit
+/// [`hwpforge_core::Control::EmbeddedChart`] runs (Wave 4c carry).
+pub(crate) fn project_to_core_with_images_and_ole(
+    sections: Vec<SectionResult>,
+    image_assets: &Hwp5JoinedImageAssetPlan,
+    ole_assets: &Hwp5OleAssetPlan,
+) -> Hwp5Result<(Document<Draft>, ImageStore, Vec<Hwp5Warning>)> {
+    project_to_core_internal(sections, Some(image_assets), Some(ole_assets))
 }
 
 fn project_to_core_internal(
     sections: Vec<SectionResult>,
     image_assets: Option<&Hwp5JoinedImageAssetPlan>,
+    ole_assets: Option<&Hwp5OleAssetPlan>,
 ) -> Hwp5Result<(Document<Draft>, ImageStore, Vec<Hwp5Warning>)> {
     let mut doc = Document::<Draft>::new();
     let mut all_warnings: Vec<Hwp5Warning> = Vec::new();
-    let mut projection_images = ProjectionImageState::new(image_assets);
+    let mut projection_images = ProjectionImageState::new(image_assets, ole_assets);
 
     for section_result in sections {
         // Collect warnings from decoding.
@@ -211,6 +226,7 @@ fn project_to_core_internal(
 
 struct ProjectionImageState<'a> {
     image_assets: Option<&'a Hwp5JoinedImageAssetPlan>,
+    ole_assets: Option<&'a Hwp5OleAssetPlan>,
     image_store: ImageStore,
     warnings: Vec<Hwp5Warning>,
 }
@@ -222,8 +238,17 @@ enum ImageProjectionContext {
 }
 
 impl<'a> ProjectionImageState<'a> {
-    fn new(image_assets: Option<&'a Hwp5JoinedImageAssetPlan>) -> Self {
-        Self { image_assets, image_store: ImageStore::new(), warnings: Vec::new() }
+    fn new(
+        image_assets: Option<&'a Hwp5JoinedImageAssetPlan>,
+        ole_assets: Option<&'a Hwp5OleAssetPlan>,
+    ) -> Self {
+        Self { image_assets, ole_assets, image_store: ImageStore::new(), warnings: Vec::new() }
+    }
+
+    /// Look up raw `/BinData/BIN*.OLE` bytes by `binary_data_id`, if a plan
+    /// was supplied. `None` means no OLE plan is wired (e.g. inspect path).
+    fn ole_bytes_for_binary_data_id(&self, binary_data_id: u16) -> Option<&[u8]> {
+        self.ole_assets.and_then(|plan| plan.bytes_for_binary_data_id(binary_data_id))
     }
 
     fn build_image(
@@ -338,23 +363,133 @@ fn project_paragraph_with_images(
     image_context: ImageProjectionContext,
     field_hints: Option<&mut SectionProjectionHints>,
 ) -> ProjectedParagraph {
-    if !paragraph_needs_structural_projection(hwp_para) {
-        return ProjectedParagraph {
+    let mut projected = if !paragraph_needs_structural_projection(hwp_para) {
+        ProjectedParagraph {
             paragraph: project_paragraph_with_images_flat(
                 hwp_para,
                 projection_images,
                 image_context,
             ),
             page_number: None,
-        };
+        }
+    } else {
+        project_paragraph_with_images_structural(
+            hwp_para,
+            projection_images,
+            image_context,
+            field_hints,
+        )
+    };
+
+    // Carry inline `<hp:tab>` attributes (width / leader / type) by
+    // lifting `RunContent::Text(String)` runs that contain `\t` into
+    // `RunContent::InlineText(InlineText)` whenever the matching tab
+    // metadata is non-default. The flat and structural projection
+    // paths both leave tabs as plain `\t` chars, so this is the one
+    // place that bridges to the rich inline representation.
+    //
+    // Any tab metadata that isn't carried (because the corresponding
+    // tab character was consumed by a hyperlink display or field
+    // begin/end pair) still falls through to the warning below, so the
+    // audit baseline keeps a foothold on the silent loss.
+    let unconsumed = carry_inline_tab_attrs(&mut projected.paragraph, &hwp_para.text_segments);
+    for (width, leader, tab_type) in unconsumed {
+        projection_images.warnings.push(crate::decoder::Hwp5Warning::ProjectionFallback {
+            subject: "inline_tab.attributes",
+            reason: format!(
+                "inline <hp:tab> attributes dropped (no run carrier): width={width} leader={leader} tab_type={tab_type}"
+            ),
+        });
     }
 
-    project_paragraph_with_images_structural(
-        hwp_para,
-        projection_images,
-        image_context,
-        field_hints,
-    )
+    projected
+}
+
+/// Walks `text_segments` collecting non-default inline tab attributes
+/// in order, then upgrades each `Text(String)` run that contains `\t`
+/// into `InlineText(InlineText)` with the corresponding tab attributes
+/// substituted at each `\t` position.
+///
+/// Returns the list of `(width, leader, tab_type)` tuples for tabs
+/// that could not be associated with any text run (e.g. tabs consumed
+/// inside a hyperlink display or by a field begin/end pair). Callers
+/// turn these into warnings so the audit baseline still surfaces the
+/// loss.
+fn carry_inline_tab_attrs(
+    paragraph: &mut Paragraph,
+    text_segments: &[crate::schema::section::TextSegment],
+) -> Vec<(u32, u8, u8)> {
+    use hwpforge_core::inline::{InlineSegment, InlineTabAttr, InlineText};
+    use hwpforge_core::tab::TabDef;
+    use hwpforge_foundation::HwpUnit;
+    use std::collections::VecDeque;
+
+    let mut attrs_q: VecDeque<InlineTabAttr> = VecDeque::new();
+    for seg in text_segments {
+        let crate::schema::section::TextSegment::Tab { extra } = seg else {
+            continue;
+        };
+        let width = u32::from_le_bytes([extra[0], extra[1], extra[2], extra[3]]);
+        let leader = extra[4];
+        let tab_type = extra[5];
+        attrs_q.push_back(InlineTabAttr {
+            // HWP5 stores raw HwpUnit; cap by the same helper that
+            // backs `TabStop.position` so the value always fits Core's
+            // ±100M `HwpUnit` range without losing the inline tab.
+            width: TabDef::clamp_position_from_unsigned(u64::from(width)),
+            leader,
+            tab_type,
+        });
+    }
+    if attrs_q.is_empty() {
+        return Vec::new();
+    }
+
+    for run in &mut paragraph.runs {
+        let text = match &run.content {
+            RunContent::Text(s) if s.contains('\t') => s.clone(),
+            _ => continue,
+        };
+        let tab_count = text.chars().filter(|&c| c == '\t').count();
+        let mut run_attrs: Vec<InlineTabAttr> = Vec::with_capacity(tab_count);
+        for _ in 0..tab_count {
+            run_attrs.push(attrs_q.pop_front().unwrap_or(InlineTabAttr {
+                width: HwpUnit::ZERO,
+                leader: 0,
+                tab_type: 0,
+            }));
+        }
+        // Skip the upgrade when every tab is the default — keeps the
+        // common `Text(String)` representation for plain `\t` runs.
+        if run_attrs.iter().all(InlineTabAttr::is_default) {
+            continue;
+        }
+        let mut segments: Vec<InlineSegment> = Vec::new();
+        let mut current = String::new();
+        let mut iter = run_attrs.into_iter();
+        for ch in text.chars() {
+            if ch == '\t' {
+                if !current.is_empty() {
+                    segments.push(InlineSegment::Plain(std::mem::take(&mut current)));
+                }
+                if let Some(attr) = iter.next() {
+                    segments.push(InlineSegment::Tab(attr));
+                }
+            } else {
+                current.push(ch);
+            }
+        }
+        if !current.is_empty() {
+            segments.push(InlineSegment::Plain(current));
+        }
+        run.content = RunContent::InlineText(InlineText::from_segments(segments));
+    }
+
+    attrs_q
+        .into_iter()
+        .filter(|a| !a.is_default())
+        .map(|a| (a.width.as_i32() as u32, a.leader, a.tab_type))
+        .collect()
 }
 
 fn project_paragraph_with_images_flat(
@@ -449,7 +584,11 @@ fn project_paragraph_with_images_structural(
                 }
                 visible_utf16 += len;
             }
-            crate::schema::section::TextSegment::Tab => {
+            crate::schema::section::TextSegment::Tab { .. } => {
+                // Inline tab metadata is dropped here; `<hp:tab>`
+                // attribute carry is tracked separately by
+                // `warn_on_inline_tab_attributes` to cover both the
+                // flat and structural projection branches uniformly.
                 append_visible_unit(
                     hwp_para,
                     &mut runs,
@@ -963,14 +1102,101 @@ fn project_control_run(
         Hwp5Control::Footnote(subtree) => Some(project_footnote_run(subtree, projection_images)),
         Hwp5Control::Endnote(subtree) => Some(project_endnote_run(subtree, projection_images)),
         Hwp5Control::Header(_) | Hwp5Control::Footer(_) | Hwp5Control::Unknown { .. } => None,
-        Hwp5Control::OleObject(_) => {
+        Hwp5Control::OleObject(ole) => project_ole_object_run(ole, projection_images),
+    }
+}
+
+/// Projects a HWP5 OLE object control into a Core run.
+///
+/// HWP5 represents charts as OLE-backed BinData blobs (DEFLATE-compressed
+/// `.OLE` streams whose inner OLE2 carries `/OOXMLChartContents`). When the
+/// payload is recognizable as a chart we carry it as
+/// [`Control::EmbeddedChart`] (Wave 4c); otherwise we fall back to a
+/// `DroppedControl:ole_object` warning whose reason explains why.
+///
+/// Requires a populated [`Hwp5OleAssetPlan`] in `projection_images`; if no
+/// plan is wired (e.g. inspect-only paths), we drop with a clear reason.
+fn project_ole_object_run(
+    ole: &Hwp5OleObjectControl,
+    projection_images: &mut ProjectionImageState<'_>,
+) -> Option<Run> {
+    let Some(raw_bytes) = projection_images.ole_bytes_for_binary_data_id(ole.binary_data_id) else {
+        projection_images.warnings.push(Hwp5Warning::DroppedControl {
+            control: "ole_object",
+            reason: format!("ole_bin_data_unavailable binary_data_id={}", ole.binary_data_id),
+        });
+        return None;
+    };
+
+    match extract_chart_payload(raw_bytes) {
+        Ok(payload) => {
+            // Dimensions come from the `ShapeComponentOle` extent fields,
+            // which the HWP5 decoder already stored as i32 HWPUNIT. The
+            // geometry x/y mirror the placement convention used by the
+            // other shape projections (zero-offset == inline).
+            let Some(width) = chart_dimension(ole.extent_width) else {
+                projection_images.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "ole_object",
+                    reason: format!(
+                        "ole_chart_invalid_width binary_data_id={} width={}",
+                        ole.binary_data_id, ole.extent_width
+                    ),
+                });
+                return None;
+            };
+            let Some(height) = chart_dimension(ole.extent_height) else {
+                projection_images.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "ole_object",
+                    reason: format!(
+                        "ole_chart_invalid_height binary_data_id={} height={}",
+                        ole.binary_data_id, ole.extent_height
+                    ),
+                });
+                return None;
+            };
+
+            Some(Run::control(
+                Control::EmbeddedChart {
+                    chart_xml: payload.chart_xml,
+                    ole_bytes: payload.ole_bytes,
+                    width,
+                    height,
+                    horz_offset: ole.geometry.x,
+                    vert_offset: ole.geometry.y,
+                },
+                CharShapeIndex::new(0),
+            ))
+        }
+        Err(ChartOleError::NotChart) => {
+            // Genuine non-chart OLE (e.g. embedded HWP table, Excel sheet).
+            // We do not yet have a passthrough story for those — keep
+            // the drop warning but with a more specific reason than before.
             projection_images.warnings.push(Hwp5Warning::DroppedControl {
                 control: "ole_object",
-                reason: "ole_projection_not_implemented".to_string(),
+                reason: format!("ole_payload_not_chart binary_data_id={}", ole.binary_data_id),
+            });
+            None
+        }
+        Err(err) => {
+            projection_images.warnings.push(Hwp5Warning::DroppedControl {
+                control: "ole_object",
+                reason: format!(
+                    "ole_extract_failed binary_data_id={} detail={}",
+                    ole.binary_data_id, err
+                ),
             });
             None
         }
     }
+}
+
+/// Convert HWP5 OLE extent (i32 HWPUNIT, possibly zero) into a strictly
+/// positive [`HwpUnit`] suitable for [`Control::EmbeddedChart`].
+fn chart_dimension(value: i32) -> Option<HwpUnit> {
+    if value <= 0 {
+        return None;
+    }
+    HwpUnit::new(value).ok()
 }
 
 fn project_textbox_run(

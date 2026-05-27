@@ -263,21 +263,27 @@ impl HwpxEncoder {
         let header_xml = encode_header(style_store, sec_cnt, begin_num)?;
 
         // Step 2: Encode sections (each produces XML + chart + masterpage entries)
-        // chart_offset and masterpage_offset track global indices across sections
-        // to avoid duplicate filenames in the ZIP archive.
+        // chart_offset / masterpage_offset / embedded_ole_offset track global
+        // indices across sections to avoid duplicate filenames or item ids in
+        // the ZIP archive and content.hpf manifest.
         let mut chart_offset = 0usize;
         let mut masterpage_offset = 0usize;
+        let mut embedded_ole_offset = 0usize;
         let mut section_results = Vec::with_capacity(sections.len());
         for (i, section) in sections.iter().enumerate() {
-            let result = encode_section(section, i, chart_offset, masterpage_offset)?;
+            let result =
+                encode_section(section, i, chart_offset, masterpage_offset, embedded_ole_offset)?;
             chart_offset += result.charts.len();
             masterpage_offset += result.master_pages.len();
+            embedded_ole_offset += result.embedded_oles.len();
             section_results.push(result);
         }
 
         let section_xmls: Vec<String> = section_results.iter().map(|r| r.xml.clone()).collect();
         let charts: Vec<(String, String)> =
             section_results.iter().flat_map(|r| r.charts.clone()).collect();
+        let embedded_oles: Vec<(String, Vec<u8>)> =
+            section_results.iter().flat_map(|r| r.embedded_oles.clone()).collect();
         let master_pages: Vec<(String, String)> =
             section_results.into_iter().flat_map(|r| r.master_pages).collect();
 
@@ -285,8 +291,16 @@ impl HwpxEncoder {
         let images: Vec<(String, Vec<u8>)> =
             image_store.iter().map(|(key, data)| (key.to_string(), data.to_vec())).collect();
 
-        // Step 4: Package into ZIP with images, charts, and master pages
-        PackageWriter::write_hwpx(&header_xml, &section_xmls, &images, &charts, &master_pages)
+        // Step 4: Package into ZIP with images, charts, master pages, and
+        // embedded-chart OLE blobs.
+        PackageWriter::write_hwpx(
+            &header_xml,
+            &section_xmls,
+            &images,
+            &charts,
+            &master_pages,
+            &embedded_oles,
+        )
     }
 
     /// Encodes a validated document and writes it to a file.

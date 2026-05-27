@@ -104,18 +104,16 @@ pub(crate) fn encode_styled(document: &Document<Validated>, styles: &dyn StyleLo
                 continuation = None;
             }
 
-            // Code block detection: all text runs with code font
+            // Code block detection: all text runs with code font.
+            // InlineText runs (post-Phase-3 inline-tab carry) fold to
+            // their `\t`-bearing plain string — see debug doc
+            // §3a-B13.
             if is_code_paragraph(paragraph, styles) {
                 let text = paragraph
                     .runs
                     .iter()
-                    .filter_map(|r| {
-                        if let RunContent::Text(t) = &r.content {
-                            Some(t.as_str())
-                        } else {
-                            None
-                        }
-                    })
+                    .filter_map(|r| r.content.plain_text())
+                    .map(|cow| cow.into_owned())
                     .collect::<String>();
                 code_block_lines.push(text);
                 continuation = None;
@@ -289,10 +287,19 @@ fn paragraph_text_styled(
 
     for run in &paragraph.runs {
         match &run.content {
-            RunContent::Text(text) => {
+            // InlineText folds to the same `\t`-bearing string via
+            // `plain_text()` because Markdown styling has no
+            // representation for `<hp:tab>` attributes. The
+            // formatting group key still uses `char_shape_id`, so the
+            // run gets wrapped exactly like a plain `Text(String)` run
+            // — see debug doc §3a-A5.
+            RunContent::Text(_) | RunContent::InlineText(_) => {
+                let Some(cow) = run.content.plain_text() else {
+                    continue;
+                };
                 let fmt = InlineFormat::from_style(run.char_shape_id, styles);
                 if fmt == current_format {
-                    current_text.push_str(text);
+                    current_text.push_str(&cow);
                 } else {
                     // Flush previous group.
                     if !current_text.is_empty() {
@@ -300,7 +307,7 @@ fn paragraph_text_styled(
                         current_text.clear();
                     }
                     current_format = fmt;
-                    current_text.push_str(text);
+                    current_text.push_str(&cow);
                 }
             }
             RunContent::Image(image) => {
@@ -748,17 +755,23 @@ fn extract_paragraph_text_html(
 
     for run in &paragraph.runs {
         match &run.content {
-            RunContent::Text(text) => {
+            // Same as the Markdown styled path (debug doc §3a-A6):
+            // `InlineText` folds to its `\t`-bearing plain string via
+            // `plain_text()` so HTML output stays consistent.
+            RunContent::Text(_) | RunContent::InlineText(_) => {
+                let Some(cow) = run.content.plain_text() else {
+                    continue;
+                };
                 let fmt = InlineFormat::from_style(run.char_shape_id, styles);
                 if fmt == current_format {
-                    current_text.push_str(text);
+                    current_text.push_str(&cow);
                 } else {
                     if !current_text.is_empty() {
                         output.push_str(&current_format.wrap_html(&current_text));
                         current_text.clear();
                     }
                     current_format = fmt;
-                    current_text.push_str(text);
+                    current_text.push_str(&cow);
                 }
             }
             RunContent::Control(control) => {
@@ -911,8 +924,11 @@ const CODE_FONTS: &[&str] = &[
 
 /// Returns true if all text runs in the paragraph use a monospace/code font.
 fn is_code_paragraph(paragraph: &Paragraph, styles: &dyn StyleLookup) -> bool {
-    let text_runs: Vec<_> =
-        paragraph.runs.iter().filter(|r| matches!(&r.content, RunContent::Text(_))).collect();
+    // `carries_text()` matches both `Text(String)` and `InlineText(...)`
+    // so a paragraph that picked up `InlineText` after the HWPX
+    // decoder Phase 3 carry is still detected as code if it would
+    // have qualified before — see debug doc §3a-B13.
+    let text_runs: Vec<_> = paragraph.runs.iter().filter(|r| r.content.carries_text()).collect();
     if text_runs.is_empty() {
         return false;
     }

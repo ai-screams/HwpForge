@@ -674,7 +674,7 @@ fn segments_to_string(segments: &[TextSegment]) -> String {
     for seg in segments {
         match seg {
             TextSegment::Text(s) => out.push_str(s),
-            TextSegment::Tab => out.push('\t'),
+            TextSegment::Tab { .. } => out.push('\t'),
             TextSegment::LineBreak => out.push('\n'),
             TextSegment::NonBreakingSpace => out.push('\u{00A0}'),
             TextSegment::FwSpace => out.push('\u{001F}'),

@@ -6,6 +6,8 @@
 //! is responsible for translating between the plain-text view and the HWPX
 //! mixed-content view.
 
+use hwpforge_core::inline::{InlineSegment, InlineText};
+
 use crate::encoder::escape_xml;
 
 /// Returns `true` when a plain-text payload requires inline HWPX child
@@ -74,6 +76,40 @@ pub(crate) fn build_text_element_xml(text: &str) -> String {
     } else {
         format!("<hp:t>{}</hp:t>", encode_inline_text_xml(text))
     }
+}
+
+/// Wraps an [`InlineText`] in an `<hp:t>` element.
+///
+/// Differs from [`build_text_element_xml`] in that
+/// [`InlineSegment::Tab`] segments emit
+/// `<hp:tab width="..." leader="..." type="..."/>` with the raw HWP5
+/// attribute integers preserved (Hancom uses raw numbers for inline
+/// `<hp:tab>` even though the header-level `<hh:tabItem>` uses enum
+/// strings). Plain text segments still go through the standard
+/// character-sentinel encoding (`\n` / NBSP / fwSpace).
+pub(crate) fn build_inline_text_element_xml(it: &InlineText) -> String {
+    if it.segments.is_empty() {
+        return "<hp:t/>".to_string();
+    }
+    let mut body = String::new();
+    for seg in &it.segments {
+        match seg {
+            InlineSegment::Plain(s) => body.push_str(&encode_inline_text_xml(s)),
+            InlineSegment::Tab(attr) => {
+                body.push_str(&format!(
+                    r#"<hp:tab width="{}" leader="{}" type="{}"/>"#,
+                    attr.width.as_i32(),
+                    attr.leader,
+                    attr.tab_type,
+                ));
+            }
+            // `InlineSegment` is `#[non_exhaustive]` — fall back to
+            // attribute-less emission for any future variant a caller
+            // may add before this encoder learns about it.
+            _ => body.push_str("<hp:t/>"),
+        }
+    }
+    format!("<hp:t>{body}</hp:t>")
 }
 
 #[cfg(test)]

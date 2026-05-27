@@ -341,12 +341,24 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
     let has_field_pair = hx.ctrls.iter().any(|c| c.field_begin.is_some())
         && hx.ctrls.iter().any(|c| c.field_end.is_some());
 
-    // Text runs — skip if consumed by field controls
+    // Text runs — skip if consumed by field controls.
+    //
+    // `HxText::to_run_content` preserves any `<hp:tab>` attribute payload
+    // (`width` / `leader` / `tab_type`) as `RunContent::InlineText`,
+    // falling back to the existing `RunContent::Text(String)` when every
+    // tab is attribute-less. This closes the HWPX-decode side of the
+    // inline tab carry — see
+    // `.docs/debug/2026-05-27_hwpx_decoder_inline_tab_attrs_lost.md`.
     if !has_field_pair {
         for text in &hx.texts {
-            let text_content = text.text();
-            if !text_content.is_empty() {
-                runs.push(Run { content: RunContent::Text(text_content), char_shape_id });
+            let content = text.to_run_content();
+            let keep = match &content {
+                RunContent::Text(s) => !s.is_empty(),
+                RunContent::InlineText(it) => !it.segments.is_empty(),
+                _ => true,
+            };
+            if keep {
+                runs.push(Run { content, char_shape_id });
             }
         }
     }

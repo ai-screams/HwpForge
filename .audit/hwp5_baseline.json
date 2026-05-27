@@ -1,20 +1,9 @@
 {
   "schema_version": 1,
-  "fixtures_scanned": 87,
-  "fixtures_decoded": 87,
+  "fixtures_scanned": 90,
+  "fixtures_decoded": 90,
   "fixtures_failed": 0,
-  "total_warnings": 8,
-  "categories": {
-    "DroppedControl:ole_object": {
-      "count": 8,
-      "fixtures": {
-        "tests/fixtures/charts/chart_01_single_column.hwp": 1,
-        "tests/fixtures/charts/chart_02_single_pie.hwp": 1,
-        "tests/fixtures/charts/chart_03_line_or_scatter.hwp": 1,
-        "tests/fixtures/mixed/full_report.hwp": 4,
-        "tests/fixtures/mixed/mixed_01_image_and_chart_same_doc.hwp": 1
-      }
-    }
-  },
+  "total_warnings": 0,
+  "categories": {},
   "failures": []
 }

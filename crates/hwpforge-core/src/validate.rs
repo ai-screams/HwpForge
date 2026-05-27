@@ -68,7 +68,7 @@ fn validate_run_content(
     match content {
         RunContent::Table(table) => validate_table_run(table, ctx)?,
         RunContent::Control(control) => validate_control_run(control.as_ref(), ctx)?,
-        RunContent::Text(_) | RunContent::Image(_) => {}
+        RunContent::Text(_) | RunContent::InlineText(_) | RunContent::Image(_) => {}
     }
     Ok(())
 }
@@ -211,6 +211,15 @@ fn validate_control_run(
         Control::Chart { data, width, height, .. } => {
             validate_chart_control(data, width.as_i32(), height.as_i32(), ctx)
         }
+        Control::EmbeddedChart { chart_xml, ole_bytes, width, height, .. } => {
+            validate_embedded_chart_control(
+                chart_xml,
+                ole_bytes,
+                width.as_i32(),
+                height.as_i32(),
+                ctx,
+            )
+        }
         Control::Equation { script, width, height, .. } => {
             validate_equation_control(script, width.as_i32(), height.as_i32(), ctx)
         }
@@ -316,6 +325,28 @@ fn validate_chart_control(
     }
 
     validate_shape_dimensions(width, height, "Chart", ctx)
+}
+
+fn validate_embedded_chart_control(
+    chart_xml: &str,
+    ole_bytes: &[u8],
+    width: i32,
+    height: i32,
+    ctx: RunValidationContext,
+) -> Result<(), ValidationError> {
+    // Wave 4c passthrough: chart XML and OLE bytes are opaque blobs we
+    // do not introspect. Treat empty payload as the same failure mode as
+    // EmptyChartData / EmptyEquation so downstream encoders never have to
+    // emit an empty <hp:chart>/<hp:ole> pair.
+    if chart_xml.is_empty() || ole_bytes.is_empty() {
+        return Err(ValidationError::EmptyChartData {
+            section_index: ctx.section_index,
+            paragraph_index: ctx.paragraph_index,
+            run_index: ctx.run_index,
+        });
+    }
+
+    validate_shape_dimensions(width, height, "EmbeddedChart", ctx)
 }
 
 fn validate_equation_control(

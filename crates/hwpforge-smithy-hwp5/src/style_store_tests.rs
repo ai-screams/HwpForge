@@ -1154,10 +1154,22 @@ fn hwp5_para_shape_preserves_custom_tab_ids() {
 
 #[test]
 fn hwp5_tab_def_maps_stops_and_auto_flags() {
+    // Coverage matrix below mirrors what 한컴 actually writes (Wave 4
+    // tab-fidelity hotfix). `position` is halved on the way through
+    // `hwp5_tab_position_to_hwp_unit` because the HWPX encoder treats
+    // `TabStop.position` as HwpUnitChar (= HWP5 raw HwpUnit / 2). The
+    // leader mapping was rebuilt from openhwp + the
+    // `tests/fixtures/user_samples/tabs/sample-tab.hwp{,x}` truth pair
+    // — see `.docs/research/2026-05-26_tab_fidelity_bugs.md` (Bug B1+B2)
+    // for the empirical evidence.
     let raw = Hwp5RawTabDef {
         property: 0b11,
         tab_stops: vec![
+            // fill_type=2 → openhwp IR LongDash → HWPX "DASH_DOT_DOT"
             crate::schema::header::Hwp5RawTabStop { position: 4000, tab_type: 0, fill_type: 2 },
+            // fill_type=5 is undefined in the empirical mapping → falls
+            // back to "NONE" (was "LONG_DASH" before the fix; that was
+            // incorrect — see Bug B2)
             crate::schema::header::Hwp5RawTabStop { position: 8000, tab_type: 3, fill_type: 5 },
         ],
     };
@@ -1167,11 +1179,12 @@ fn hwp5_tab_def_maps_stops_and_auto_flags() {
     assert!(hwpx.auto_tab_left);
     assert!(hwpx.auto_tab_right);
     assert_eq!(hwpx.stops.len(), 2);
-    assert_eq!(hwpx.stops[0].position.as_i32(), 4000);
+    assert_eq!(hwpx.stops[0].position.as_i32(), 2000, "raw 4000 HwpUnit → 2000 HwpUnitChar");
     assert_eq!(hwpx.stops[0].align, TabAlign::Left);
-    assert_eq!(hwpx.stops[0].leader.as_hwpx_str(), "DOT");
+    assert_eq!(hwpx.stops[0].leader.as_hwpx_str(), "DASH_DOT_DOT");
+    assert_eq!(hwpx.stops[1].position.as_i32(), 4000, "raw 8000 HwpUnit → 4000 HwpUnitChar");
     assert_eq!(hwpx.stops[1].align, TabAlign::Decimal);
-    assert_eq!(hwpx.stops[1].leader.as_hwpx_str(), "LONG_DASH");
+    assert_eq!(hwpx.stops[1].leader.as_hwpx_str(), "NONE");
 }
 
 #[test]
@@ -1205,7 +1218,10 @@ fn to_hwpx_style_store_carries_tab_defs() {
     assert!(tabs[0].auto_tab_left);
     assert_eq!(tabs[0].stops.len(), 1);
     assert_eq!(tabs[0].stops[0].align, TabAlign::Right);
-    assert_eq!(tabs[0].stops[0].leader.as_hwpx_str(), "DASH");
+    // HWP5 fill_type=1 → openhwp IR Dot → HWPX "DOT" (Bug B2 fix).
+    assert_eq!(tabs[0].stops[0].leader.as_hwpx_str(), "DOT");
+    // HWP5 raw position 12000 HwpUnit halves to 6000 HwpUnitChar (Bug B1 fix).
+    assert_eq!(tabs[0].stops[0].position.as_i32(), 6000);
 }
 
 #[test]
@@ -1403,6 +1419,11 @@ fn to_hwpx_style_store_emits_placeholder_for_invalid_tab_slot() {
 
 #[test]
 fn to_hwpx_style_store_warns_and_clamps_out_of_range_tab_position() {
+    // Threshold doubles after Bug B1: the HWP5 raw position is halved
+    // before clamping into `HwpUnit::MAX_VALUE`, so to keep this test
+    // exercising the clamp path the input must be > 2 * MAX_VALUE.
+    let oversize =
+        (hwpforge_foundation::HwpUnit::MAX_VALUE as u32).saturating_mul(2).saturating_add(2);
     let store = Hwp5StyleStore {
         id_mappings: None,
         fonts: vec![],
@@ -1415,7 +1436,7 @@ fn to_hwpx_style_store_warns_and_clamps_out_of_range_tab_position() {
             Hwp5RawTabDef {
                 property: 0,
                 tab_stops: vec![crate::schema::header::Hwp5RawTabStop {
-                    position: (hwpforge_foundation::HwpUnit::MAX_VALUE as u32) + 1,
+                    position: oversize,
                     tab_type: 0,
                     fill_type: 0,
                 }],

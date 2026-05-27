@@ -131,7 +131,12 @@ impl HwpxRegistryBridge {
             RunContent::Table(table) => self.rebind_table(table)?,
             RunContent::Image(image) => self.rebind_image(image)?,
             RunContent::Control(control) => self.rebind_control(control)?,
-            RunContent::Text(_) => {}
+            // Text-bearing variants carry no style refs themselves
+            // — the run's `char_shape_id` is rebound above and the
+            // text payload (including `InlineText` segments) is
+            // self-contained. Explicit no-op rather than `_` wildcard
+            // so the intent stays visible; see debug doc §3a-A8.
+            RunContent::Text(_) | RunContent::InlineText(_) => {}
             _ => {}
         }
         Ok(())

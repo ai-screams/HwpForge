@@ -5,6 +5,7 @@
 //! - `header` — `DocInfo` stream parsing → [`crate::style_store::Hwp5StyleStore`]
 //! - `section` — `BodyText/Section{N}` stream parsing → paragraphs
 
+pub(crate) mod chart_ole;
 pub(crate) mod header;
 pub(crate) mod package;
 pub(crate) mod section;
@@ -449,7 +450,10 @@ mod tests {
             })
             .collect();
         assert_eq!(text_runs, vec!["LEFT", "RIGHT", "NEXT-LINE"]);
-        assert!(paragraph.text_segments.iter().any(|segment| matches!(segment, TextSegment::Tab)));
+        assert!(paragraph
+            .text_segments
+            .iter()
+            .any(|segment| matches!(segment, TextSegment::Tab { .. })));
         assert!(paragraph
             .text_segments
             .iter()

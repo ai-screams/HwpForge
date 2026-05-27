@@ -437,7 +437,10 @@ fn count_non_empty_paragraphs_recursive(paragraphs: &[Paragraph]) -> usize {
 
 fn count_runs_paragraphs(run: &hwpforge_core::run::Run) -> usize {
     match &run.content {
-        RunContent::Text(_) | RunContent::Image(_) => 0,
+        // Text-bearing variants have no nested paragraph children — see
+        // `.docs/debug/2026-05-27_hwpx_decoder_inline_tab_attrs_lost.md`
+        // §3a-A for the per-site classification.
+        RunContent::Text(_) | RunContent::InlineText(_) | RunContent::Image(_) => 0,
         RunContent::Table(table) => table
             .rows
             .iter()
@@ -451,7 +454,7 @@ fn count_runs_paragraphs(run: &hwpforge_core::run::Run) -> usize {
 
 fn count_runs_non_empty_paragraphs(run: &hwpforge_core::run::Run) -> usize {
     match &run.content {
-        RunContent::Text(_) | RunContent::Image(_) => 0,
+        RunContent::Text(_) | RunContent::InlineText(_) | RunContent::Image(_) => 0,
         RunContent::Table(table) => table
             .rows
             .iter()
@@ -501,8 +504,14 @@ fn first_visible_text_in_paragraph_deep(paragraph: &Paragraph) -> Option<String>
 
 fn first_visible_text_in_run_deep(run: &hwpforge_core::run::Run) -> Option<String> {
     match &run.content {
-        RunContent::Text(text) => {
-            let trimmed: &str = text.trim();
+        // Both text-bearing variants share the same "trim & probe"
+        // semantic — `plain_text()` returns the tab-equivalent string
+        // for `InlineText` so the visible-text count stays accurate
+        // when a paragraph carries `RunContent::InlineText` after the
+        // HWPX decoder InlineText carry (Phase 3 of Wave 4 tab fixes).
+        RunContent::Text(_) | RunContent::InlineText(_) => {
+            let cow = run.content.plain_text()?;
+            let trimmed = cow.trim();
             if trimmed.is_empty() {
                 None
             } else {

@@ -26,6 +26,7 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 - `convert-hwp5` / `audit-hwp5` warning counts are aligned for style projection fallbacks
 - HWP5/HWPX char effects now preserve `emboss`, `engrave`, `superscript`, and `subscript`
 - HWP5/HWPX paragraph `breakLatinWord=HYPHENATION` is now carried end-to-end (Wave 1d)
+- HWP5 chart objects (OLE-backed BinData) now carry end-to-end as `Control::EmbeddedChart` passthrough — emits `Chart/chartN.xml` + `BinData/oleN.ole` + `<hp:switch>` block (Wave 4c, closes `DroppedControl:ole_object`)
 - Known style-fidelity gaps still deferred: richer strike/underline line families
 
 **Workspace Facts (code-grounded)**:

@@ -368,6 +368,34 @@ pub enum Control {
         style: Option<ShapeStyle>,
     },
 
+    /// A HWP5 chart carried as opaque OOXML + OLE blob passthrough.
+    ///
+    /// Used when chart data is extracted from a HWP5 BinData OLE container
+    /// and emitted to HWPX without round-tripping through the structured
+    /// [`Control::Chart`] data model. Renders in 한컴 via the `<hp:switch>`
+    /// block with full OOXML chart inside `<hp:case>` and an OLE fallback
+    /// inside `<hp:default>`.
+    ///
+    /// Wave 4c passthrough: the chart XML and OLE bytes are carried as-is
+    /// from the source HWP5 file. The encoder writes:
+    /// - `Chart/chartN.xml` (NOT registered in manifest — gotcha #5)
+    /// - `BinData/oleN.ole` (registered in `content.hpf` as `application/ole`)
+    /// - section `<hp:switch>` with `<hp:case>` chart + `<hp:default>` ole
+    EmbeddedChart {
+        /// Full OOXML chart XML (starts with `<?xml`, contains `<c:chartSpace>`).
+        chart_xml: String,
+        /// Raw OLE2 compound file bytes for `<hp:ole>` fallback rendering.
+        ole_bytes: Vec<u8>,
+        /// Chart width (HWPUNIT).
+        width: HwpUnit,
+        /// Chart height (HWPUNIT).
+        height: HwpUnit,
+        /// Horizontal offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
+        horz_offset: i32,
+        /// Vertical offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
+        vert_offset: i32,
+    },
+
     /// A pure rectangle drawing object (no embedded text).
     ///
     /// Distinct from [`Control::TextBox`], which uses `<hp:rect>` with a
@@ -721,6 +749,11 @@ impl Control {
     /// Returns `true` if this is a [`Control::Chart`].
     pub fn is_chart(&self) -> bool {
         matches!(self, Self::Chart { .. })
+    }
+
+    /// Returns `true` if this is a [`Control::EmbeddedChart`].
+    pub fn is_embedded_chart(&self) -> bool {
+        matches!(self, Self::EmbeddedChart { .. })
     }
 
     /// Returns `true` if this is a [`Control::Unknown`].
@@ -1543,6 +1576,16 @@ impl std::fmt::Display for Control {
                     ChartData::Xy { series } => series.len(),
                 };
                 write!(f, "Chart({chart_type:?}, {series_count} series)")
+            }
+            Self::EmbeddedChart { chart_xml, ole_bytes, width, height, .. } => {
+                write!(
+                    f,
+                    "EmbeddedChart(xml={} bytes, ole={} bytes, {}x{})",
+                    chart_xml.len(),
+                    ole_bytes.len(),
+                    width.as_i32(),
+                    height.as_i32()
+                )
             }
             Self::Equation { script, .. } => {
                 let preview: String = if script.len() > 30 {

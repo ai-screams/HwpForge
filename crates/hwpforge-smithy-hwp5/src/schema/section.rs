@@ -106,7 +106,21 @@ pub(crate) enum TextSegment {
     /// Normal Unicode text content.
     Text(String),
     /// Horizontal tab character (U+0009).
-    Tab,
+    ///
+    /// The 7 u16 (14 bytes) of inline payload carry the tab's
+    /// `width` (HwpUnit, u32 LE), `leader` (u8), and `tab_type` (u8)
+    /// followed by 8 reserved bytes. Core's inline text model cannot
+    /// currently carry these per-tab attributes, so the projection
+    /// stage records the payload here and emits a warning when any of
+    /// them are non-zero (see Bug A in
+    /// `.docs/research/2026-05-26_tab_fidelity_bugs.md`).
+    Tab {
+        /// Fourteen bytes of inline tab metadata. All-zero for the
+        /// "default" tab — non-zero values are silently lost on emit
+        /// until the Core inline-tab carry slice (Phase 2 in the issue
+        /// doc) lands.
+        extra: [u8; 14],
+    },
     /// Soft line break (U+000A).
     LineBreak,
     /// Drawing/table/control object embedded in the text stream (U+000B).
@@ -293,8 +307,8 @@ impl Hwp5ParaText {
                 }
                 0x09 => {
                     flush_text!();
-                    let _extra = read_extra!(i - 1);
-                    segments.push(TextSegment::Tab);
+                    let extra = read_extra!(i - 1);
+                    segments.push(TextSegment::Tab { extra });
                 }
 
                 // Single-wchar control chars.
@@ -928,7 +942,13 @@ mod tests {
         let pt = Hwp5ParaText::parse(&data).unwrap();
         assert_eq!(
             pt.segments,
-            vec![TextSegment::Text("A".into()), TextSegment::Tab, TextSegment::Text("B".into()),]
+            vec![
+                TextSegment::Text("A".into()),
+                // `inline_control_bytes(0x09, [1, 2, 3, 4, 5, 6, 7])`
+                // emits each u16 as little-endian bytes.
+                TextSegment::Tab { extra: [1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0] },
+                TextSegment::Text("B".into()),
+            ]
         );
     }
 
@@ -996,10 +1016,7 @@ mod tests {
         data.extend_from_slice(&cp_bytes(0x1E));
         data.extend_from_slice(&utf16le("B"));
         let pt = Hwp5ParaText::parse(&data).unwrap();
-        assert_eq!(
-            pt.segments,
-            vec![TextSegment::Text("A".into()), TextSegment::Text("B".into())]
-        );
+        assert_eq!(pt.segments, vec![TextSegment::Text("A".into()), TextSegment::Text("B".into())]);
     }
 
     #[test]
@@ -1203,7 +1220,7 @@ mod tests {
             pt.segments,
             vec![
                 TextSegment::Text("hi".into()),
-                TextSegment::Tab,
+                TextSegment::Tab { extra: [1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0] },
                 TextSegment::Text("there".into()),
                 TextSegment::ParaBreak,
             ]

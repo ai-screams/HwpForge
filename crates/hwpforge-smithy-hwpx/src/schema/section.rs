@@ -7,6 +7,9 @@
 //! Fields are used by serde deserialization even if not directly accessed.
 #![allow(dead_code)]
 
+use hwpforge_core::inline::{InlineSegment, InlineTabAttr, InlineText};
+use hwpforge_core::run::RunContent;
+use hwpforge_foundation::HwpUnit;
 use serde::{Deserialize, Serialize};
 
 use super::deser_i32_or_u32;
@@ -275,13 +278,68 @@ impl HxText {
             .map(|p| match p {
                 HxTextPart::Text(s) => s.as_str(),
                 HxTextPart::LineBreak {} => "\n",
-                HxTextPart::Tab {} => "\t",
+                HxTextPart::Tab { .. } => "\t",
                 HxTextPart::FwSpace {} => "\u{001F}",
                 HxTextPart::NbSpace {} => "\u{00a0}",
                 HxTextPart::MarkpenBegin {} | HxTextPart::MarkpenEnd {} => "",
                 HxTextPart::Other => "",
             })
             .collect()
+    }
+
+    /// Returns a `RunContent` that preserves inline tab attributes
+    /// (`width` / `leader` / `tab_type`) when present.
+    ///
+    /// Falls back to `RunContent::Text(String)` — preserving the
+    /// existing surface for the 18+ consumer sites that match
+    /// `RunContent::Text` directly — when every `<hp:tab>` in the
+    /// part list either:
+    ///
+    /// - has no attributes (`<hp:tab/>`), or
+    /// - has all-zero attribute values (semantically equivalent to a
+    ///   bare tab).
+    ///
+    /// Otherwise returns `RunContent::InlineText(InlineText)` with one
+    /// `InlineSegment::Tab(InlineTabAttr { .. })` per attribute-rich
+    /// tab and `InlineSegment::Plain` for everything else. Other
+    /// inline parts (`<hp:lineBreak/>`, `<hp:nbSpace/>`,
+    /// `<hp:fwSpace/>`) flatten into `Plain` with the same sentinel
+    /// characters `text()` uses, so the HWPX encoder restores them
+    /// via `encode_inline_text_xml` without loss.
+    ///
+    /// See `.docs/debug/2026-05-27_hwpx_decoder_inline_tab_attrs_lost.md`
+    /// for the algorithm and side-effect analysis.
+    pub fn to_run_content(&self) -> RunContent {
+        let needs_inline = self.parts.iter().any(|p| {
+            matches!(
+                p,
+                HxTextPart::Tab { width, leader, tab_type }
+                if width.unwrap_or(0) != 0
+                    || leader.unwrap_or(0) != 0
+                    || tab_type.unwrap_or(0) != 0
+            )
+        });
+        if !needs_inline {
+            return RunContent::Text(self.text());
+        }
+
+        let segments = self.parts.iter().filter_map(|p| match p {
+            HxTextPart::Text(s) if s.is_empty() => None,
+            HxTextPart::Text(s) => Some(InlineSegment::Plain(s.clone())),
+            HxTextPart::Tab { width, leader, tab_type } => {
+                Some(InlineSegment::Tab(InlineTabAttr {
+                    width: HwpUnit::new(width.unwrap_or(0)).unwrap_or(HwpUnit::ZERO),
+                    leader: leader.unwrap_or(0),
+                    tab_type: tab_type.unwrap_or(0),
+                }))
+            }
+            HxTextPart::LineBreak {} => Some(InlineSegment::Plain("\n".into())),
+            HxTextPart::FwSpace {} => Some(InlineSegment::Plain("\u{001F}".into())),
+            HxTextPart::NbSpace {} => Some(InlineSegment::Plain("\u{00A0}".into())),
+            HxTextPart::MarkpenBegin {} | HxTextPart::MarkpenEnd {} | HxTextPart::Other => None,
+        });
+
+        RunContent::InlineText(InlineText::from_segments(segments))
     }
 }
 
@@ -295,8 +353,32 @@ pub enum HxTextPart {
     #[serde(rename(serialize = "hp:lineBreak", deserialize = "lineBreak"))]
     LineBreak {},
     /// `<hp:tab/>` — tab character within a text run.
+    ///
+    /// Carries the optional per-occurrence attributes Hancom emits for
+    /// rich tabs (`width` in HwpUnit, `leader` as raw HWP5 fill_type,
+    /// `tab_type` as raw HWP5 tab type). Bare `<hp:tab/>` (the common
+    /// case from HWP5 default tabs) parses with all three as `None`
+    /// and round-trips through `HxText::to_run_content` as
+    /// `RunContent::Text("\t")` — keeping the existing
+    /// `Text(String)` surface in place for the common path.
+    ///
+    /// See `.docs/debug/2026-05-27_hwpx_decoder_inline_tab_attrs_lost.md`
+    /// for the algorithm and side-effect analysis.
     #[serde(rename(serialize = "hp:tab", deserialize = "tab"))]
-    Tab {},
+    Tab {
+        /// Inline tab stop position (HwpUnit). `None` when the
+        /// element was emitted without the `width` attribute.
+        #[serde(rename = "@width", default, skip_serializing_if = "Option::is_none")]
+        width: Option<i32>,
+        /// Raw HWP5 fill_type byte (0..=4 known: 0=None, 1=Dot,
+        /// 2=LongDash, 3=Dash, 4=Underscore).
+        #[serde(rename = "@leader", default, skip_serializing_if = "Option::is_none")]
+        leader: Option<u8>,
+        /// Raw HWP5 tab_type byte (0=Left, 1=Right, 2=Center,
+        /// 3=Decimal).
+        #[serde(rename = "@type", default, skip_serializing_if = "Option::is_none")]
+        tab_type: Option<u8>,
+    },
     /// `<hp:fwSpace/>` — fixed-width space.
     #[serde(rename(serialize = "hp:fwSpace", deserialize = "fwSpace"))]
     FwSpace {},

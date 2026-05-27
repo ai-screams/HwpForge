@@ -828,7 +828,7 @@ fn populate_inline_items(
     for segment in text_segments {
         match segment {
             TextSegment::Text(text) => buffer.push_str(text),
-            TextSegment::Tab => {
+            TextSegment::Tab { .. } => {
                 flush_text(&mut buffer, inline_items);
                 inline_items.push(Hwp5SemanticInlineItem::Tab);
             }

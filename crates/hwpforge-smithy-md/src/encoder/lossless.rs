@@ -58,11 +58,22 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
 
     for run in &paragraph.runs {
         match &run.content {
-            RunContent::Text(text) => {
+            // For both text-bearing variants we serialize the plain
+            // text payload. `RunContent::InlineText` loses its
+            // per-tab `width`/`leader`/`tab_type` attributes on this
+            // path — Markdown has no native representation for them
+            // and this lossless encoder targets MD round-trip, not
+            // HWPX-attribute preservation. Use the HWPX→HWPX path
+            // (Wave 4 Phase 3) when those attributes matter. See
+            // debug doc §3a-A7.
+            RunContent::Text(_) | RunContent::InlineText(_) => {
+                let Some(cow) = run.content.plain_text() else {
+                    continue;
+                };
                 out.push_str(&format!(
                     "<span data-char-shape=\"{}\">{}</span>",
                     run.char_shape_id.get(),
-                    escape_html(text)
+                    escape_html(&cow)
                 ));
             }
             RunContent::Image(image) => {

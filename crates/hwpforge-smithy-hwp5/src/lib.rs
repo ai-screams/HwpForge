@@ -109,6 +109,26 @@ impl Hwp5JoinedImageAssetPlan {
     }
 }
 
+/// Per-document plan of OLE-backed BinData entries, keyed by `binary_data_id`.
+///
+/// This carries the raw (still DEFLATE-compressed) `/BinData/BIN*.OLE` bytes
+/// so the projection layer can attempt chart extraction without re-opening
+/// the source CFB. Non-OLE entries are excluded; image entries are handled
+/// separately via [`Hwp5JoinedImageAssetPlan`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Hwp5OleAssetPlan {
+    /// Raw `/BinData/*` bytes by `binary_data_id`. Always DEFLATE-compressed
+    /// (HWP5 OLE entries set `should_decompress=true`); the consumer
+    /// (`decoder::chart_ole::extract_chart_payload`) handles inflation.
+    pub assets_by_binary_data_id: BTreeMap<u16, Vec<u8>>,
+}
+
+impl Hwp5OleAssetPlan {
+    pub(crate) fn bytes_for_binary_data_id(&self, binary_data_id: u16) -> Option<&[u8]> {
+        self.assets_by_binary_data_id.get(&binary_data_id).map(|v| v.as_slice())
+    }
+}
+
 /// Inspect summary for an HWP5 source document.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hwp5InspectSummary {
@@ -593,6 +613,7 @@ pub fn hwp5_to_hwpx(
 pub fn hwp5_to_hwpx_bytes(bytes: &[u8]) -> Hwp5Result<(Vec<u8>, Vec<Hwp5Warning>)> {
     let intermediate = decoder::decode_intermediate(bytes)?;
     let image_assets = join_hwp5_image_assets(bytes, &intermediate)?;
+    let ole_assets = join_hwp5_ole_assets(bytes, &intermediate)?;
     let layout_hints = layout_hint_patch::capture_layout_hints(&intermediate.sections);
     let mut warnings = intermediate.warnings;
 
@@ -601,7 +622,11 @@ pub fn hwp5_to_hwpx_bytes(bytes: &[u8]) -> Hwp5Result<(Vec<u8>, Vec<Hwp5Warning>
     warnings.extend(style_warnings);
 
     let (document, mut image_store, proj_warnings) =
-        projection::project_to_core_with_images(intermediate.sections, &image_assets)?;
+        projection::project_to_core_with_images_and_ole(
+            intermediate.sections,
+            &image_assets,
+            &ole_assets,
+        )?;
     warnings.extend(proj_warnings);
     supplement_border_fill_image_assets(
         &hwp5_styles,
@@ -677,6 +702,27 @@ fn join_hwp5_image_assets(
     }
 
     Ok(Hwp5JoinedImageAssetPlan { ordered_assets, assets_by_binary_data_id })
+}
+
+fn join_hwp5_ole_assets(
+    bytes: &[u8],
+    intermediate: &decoder::DecodedHwp5Intermediate,
+) -> Hwp5Result<Hwp5OleAssetPlan> {
+    use decoder::package::PackageReader;
+
+    let pkg = PackageReader::open(bytes)?;
+    let mut assets_by_binary_data_id: BTreeMap<u16, Vec<u8>> = BTreeMap::new();
+    for record in &intermediate.bin_data_records {
+        let extension = record.extension.to_ascii_lowercase();
+        if extension != "ole" {
+            continue;
+        }
+        let Some(raw_data) = pkg.bin_data().get(&record.storage_name) else {
+            continue;
+        };
+        assets_by_binary_data_id.insert(record.binary_data_id, raw_data.clone());
+    }
+    Ok(Hwp5OleAssetPlan { assets_by_binary_data_id })
 }
 
 fn decode_bin_data_payload(
@@ -913,8 +959,12 @@ fn first_visible_text_in_paragraphs(
 
 fn first_visible_text_in_paragraph(para: &hwpforge_core::paragraph::Paragraph) -> Option<String> {
     para.runs.iter().find_map(|run| match &run.content {
-        hwpforge_core::run::RunContent::Text(text) => {
-            let trimmed = text.trim();
+        // Text + InlineText share the "first visible trimmed text"
+        // semantic via the unified `plain_text()` accessor — see
+        // debug doc §3a-A9.
+        hwpforge_core::run::RunContent::Text(_) | hwpforge_core::run::RunContent::InlineText(_) => {
+            let cow = run.content.plain_text()?;
+            let trimmed = cow.trim();
             if trimmed.is_empty() {
                 None
             } else {
@@ -1208,7 +1258,11 @@ mod tests {
         layout: &mut DecodedImageLayout,
     ) {
         match &run.content {
-            hwpforge_core::run::RunContent::Text(_) => {}
+            // Image counters skip text-bearing runs entirely; both
+            // variants carry no images. Explicit list rather than `_`
+            // wildcard to keep intent visible (debug doc §3a-A10).
+            hwpforge_core::run::RunContent::Text(_)
+            | hwpforge_core::run::RunContent::InlineText(_) => {}
             hwpforge_core::run::RunContent::Image(_) => match location {
                 DecodedImageLocation::Body => layout.body_images += 1,
                 DecodedImageLocation::Header => layout.header_images += 1,
@@ -1615,7 +1669,15 @@ mod tests {
         let first_body_image = first_image_in_paragraphs(&section0.paragraphs)
             .expect("section 0 should contain an image");
 
-        assert_eq!(decoded_image_store_names(&decoded), vec!["BIN0001.png".to_string()]);
+        // The HWPX decoder's `image_store` returns every `BinData/*` entry,
+        // which now legitimately includes the Wave 4c chart-carry OLE blobs
+        // (`ole{N}.ole`). Assert only on image (`BIN*.png`/`.jpg`/…) names
+        // here; the OLE entries are exercised by the chart-carry golden test.
+        let image_only_names: Vec<String> = decoded_image_store_names(&decoded)
+            .into_iter()
+            .filter(|name| !name.to_ascii_lowercase().ends_with(".ole"))
+            .collect();
+        assert_eq!(image_only_names, vec!["BIN0001.png".to_string()]);
         assert_eq!(layout.body_images, 1);
         assert_eq!(layout.header_images, 0);
         assert_eq!(layout.footer_images, 0);
@@ -1897,8 +1959,7 @@ mod tests {
         let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
         let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
         let para = &decoded.document.sections()[0].paragraphs[0];
-        let visible_text: String =
-            para.runs.iter().filter_map(|r| r.content.as_text()).collect();
+        let visible_text: String = para.runs.iter().filter_map(|r| r.content.as_text()).collect();
         assert_eq!(
             visible_text, "FWLEFT\u{001F}FWRIGHT",
             "Core text must carry the U+001F sentinel between the markers"
@@ -1929,7 +1990,14 @@ mod tests {
         let out = unique_temp_path("user-sample-tab.hwpx");
         let warnings =
             hwp5_to_hwpx(&source, &out).expect("user sample tab conversion should succeed");
-        assert!(warnings.is_empty(), "controlled tab fixture should convert without warnings");
+        // Phase 2 closes the inline-tab carry: every `<hp:tab>` with
+        // non-default `width` / `leader` / `tab_type` now rides through
+        // Core via `RunContent::InlineText`, so the conversion should
+        // produce zero warnings again.
+        assert!(
+            warnings.is_empty(),
+            "controlled tab fixture should convert without warnings, saw {warnings:?}"
+        );
 
         assert_valid_hwpx(&out);
 
@@ -1941,7 +2009,27 @@ mod tests {
         );
 
         let para = &decoded.document.sections()[0].paragraphs[0];
-        assert_eq!(para.runs[0].content.as_text(), Some("LEFT\tRIGHT"));
+        // Wave 4 Phase 3: HWP5→HWPX→Core round-trip now upgrades the
+        // run to `InlineText` because the tab carries non-default
+        // attributes. Use `plain_text()` to validate the visible
+        // string and `as_inline_text()` to confirm the attributes
+        // survive both encode and decode steps.
+        assert_eq!(para.runs[0].content.plain_text().as_deref(), Some("LEFT\tRIGHT"));
+        let inline = para.runs[0]
+            .content
+            .as_inline_text()
+            .expect("non-default inline tab should land in `RunContent::InlineText`");
+        let tab = inline
+            .segments
+            .iter()
+            .find_map(|seg| match seg {
+                hwpforge_core::inline::InlineSegment::Tab(attr) => Some(attr),
+                _ => None,
+            })
+            .expect("InlineText should keep a Tab segment");
+        assert_eq!(tab.width.as_i32(), 12488, "inline tab width should round-trip");
+        assert_eq!(tab.leader, 3, "inline tab leader should round-trip");
+        assert_eq!(tab.tab_type, 1, "inline tab type should round-trip");
 
         let para_shape =
             decoded.style_store.para_shape(para.para_shape_id).expect("para shape should exist");
@@ -1963,9 +2051,10 @@ mod tests {
         let out = unique_temp_path("user-sample-table-tab.hwpx");
         let warnings =
             hwp5_to_hwpx(&source, &out).expect("user sample table tab conversion should succeed");
+        // Phase 2: inline tab carry restored full parity here too.
         assert!(
             warnings.is_empty(),
-            "controlled table-tab fixture should convert without warnings"
+            "controlled table-tab fixture should convert without warnings, saw {warnings:?}"
         );
 
         assert_valid_hwpx(&out);
@@ -1978,8 +2067,9 @@ mod tests {
             .flat_map(|para| &para.runs)
             .find_map(|run| run.content.as_table())
             .expect("expected a table");
+        // Wave 4 Phase 3 round-trip parity for cell-level inline tabs.
         assert_eq!(
-            table.rows[0].cells[0].paragraphs[0].runs[0].content.as_text(),
+            table.rows[0].cells[0].paragraphs[0].runs[0].content.plain_text().as_deref(),
             Some("CELLLEFT\tCELLRIGHT")
         );
 
@@ -2955,6 +3045,126 @@ mod tests {
             bullet.para_head.checkable,
             "bullet paraHead must carry checkable=true from the HWP5 attribute bit"
         );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_chart_fixture_emits_embedded_chart_switch_block() {
+        // Wave 4c carry: a HWP5 chart-bearing fixture must round-trip as
+        //   * `Control::EmbeddedChart` run in the projected Core document
+        //   * `Chart/chart1.xml` ZIP entry containing the OOXML chartSpace
+        //   * `BinData/ole1.ole` ZIP entry containing the inner OLE2 bytes
+        //   * `Contents/content.hpf` opf:manifest entry for the OLE blob
+        //   * `Contents/section0.xml` with `<hp:switch>` carrying both a
+        //     `<hp:case>` chart reference and `<hp:default>` OLE fallback
+        let source = fixture_path("charts/chart_01_single_column.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("chart_01_single_column.hwpx");
+        let warnings =
+            hwp5_to_hwpx(&source, &out).expect("chart fixture conversion should succeed");
+        assert!(
+            !warnings.iter().any(|warning| matches!(
+                warning,
+                Hwp5Warning::DroppedControl { control, .. } if *control == "ole_object"
+            )),
+            "chart fixture should no longer surface DroppedControl:ole_object: {warnings:?}"
+        );
+
+        assert_valid_hwpx(&out);
+
+        // Inspect ZIP contents directly: 한글 needs Chart/chart1.xml and
+        // BinData/ole1.ole side-by-side and a matching opf:item entry.
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes))
+            .expect("converted hwpx should open as zip");
+        let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
+        assert!(
+            names.iter().any(|n| n == "Chart/chart1.xml"),
+            "expected Chart/chart1.xml in zip, got {names:?}"
+        );
+        assert!(
+            names.iter().any(|n| n == "BinData/ole1.ole"),
+            "expected BinData/ole1.ole in zip, got {names:?}"
+        );
+
+        let mut chart_xml = String::new();
+        {
+            use std::io::Read;
+            archive
+                .by_name("Chart/chart1.xml")
+                .expect("Chart/chart1.xml should be present")
+                .read_to_string(&mut chart_xml)
+                .expect("Chart/chart1.xml should be UTF-8");
+        }
+        assert!(
+            chart_xml.contains("<c:chartSpace"),
+            "Chart/chart1.xml should carry an OOXML <c:chartSpace> root"
+        );
+
+        let mut ole_bytes: Vec<u8> = Vec::new();
+        {
+            use std::io::Read;
+            archive
+                .by_name("BinData/ole1.ole")
+                .expect("BinData/ole1.ole should be present")
+                .read_to_end(&mut ole_bytes)
+                .expect("BinData/ole1.ole should be readable");
+        }
+        assert!(
+            ole_bytes.len() > 1024,
+            "BinData/ole1.ole should carry a non-trivial OLE2 payload, got {} bytes",
+            ole_bytes.len()
+        );
+        assert_eq!(
+            &ole_bytes[..4],
+            b"\xD0\xCF\x11\xE0",
+            "BinData/ole1.ole must start with OLE2 magic"
+        );
+
+        let mut hpf_xml = String::new();
+        {
+            use std::io::Read;
+            archive
+                .by_name("Contents/content.hpf")
+                .expect("Contents/content.hpf should be present")
+                .read_to_string(&mut hpf_xml)
+                .expect("content.hpf should be UTF-8");
+        }
+        assert!(
+            hpf_xml.contains(r#"href="BinData/ole1.ole""#)
+                && hpf_xml.contains(r#"media-type="application/ole""#),
+            "content.hpf must register BinData/ole1.ole as application/ole"
+        );
+
+        let section_xml = read_section_xml(&out, 0);
+        assert!(section_xml.contains("<hp:switch"), "section must contain <hp:switch>");
+        assert!(section_xml.contains("<hp:chart"), "section must contain <hp:chart> in case arm");
+        assert!(
+            section_xml.contains("<hp:default>") && section_xml.contains("<hp:ole "),
+            "section must contain <hp:default><hp:ole …> fallback"
+        );
+        assert!(
+            section_xml.contains(r#"chartIDRef="Chart/chart1.xml""#),
+            "section chart must reference Chart/chart1.xml"
+        );
+        assert!(
+            section_xml.contains(r#"binaryItemIDRef="ole1""#),
+            "section OLE fallback must reference ole1 binary item id"
+        );
+
+        // Decode round-trip: the HWPX decoder's structured Chart parser does
+        // not know about the EmbeddedChart variant, so the chart shows up as
+        // Control::Chart there. We only assert the OLE binary made it into
+        // the decoded image_store, since that proves the manifest+BinData
+        // wiring is consistent.
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let has_ole_in_store =
+            decoded.image_store.iter().any(|(name, _)| name.eq_ignore_ascii_case("ole1.ole"));
+        assert!(has_ole_in_store, "decoded image_store should retain ole1.ole binary entry");
 
         let _ = std::fs::remove_file(&out);
     }

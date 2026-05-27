@@ -210,9 +210,18 @@ fn replace_first_table_text_in_runs(
 fn replace_first_text_run(paragraphs: &mut [Paragraph], replacement: &str) -> bool {
     for paragraph in paragraphs {
         for run in &mut paragraph.runs {
-            if let RunContent::Text(text) = &mut run.content {
-                *text = replacement.to_string();
-                return true;
+            match &mut run.content {
+                RunContent::Text(text) => {
+                    *text = replacement.to_string();
+                    return true;
+                }
+                // Downgrade-on-modify: same policy as the MCP patch
+                // helper. See debug doc §3a-C19.
+                RunContent::InlineText(_) => {
+                    run.content = RunContent::Text(replacement.to_string());
+                    return true;
+                }
+                _ => {}
             }
         }
     }
@@ -805,6 +814,11 @@ fn audit_hwp5_json_report() {
 
 #[test]
 fn audit_hwp5_chart_reports_ole_evidence_note() {
+    // Wave 4c (chart-as-OLE carry) inverted this test's expectations:
+    // the converter now carries the chart through as an HWPX OLE fallback
+    // (`<hp:default><hp:ole …>`), so the output side reports an OLE object
+    // matching the source. Status flips from `mismatch` (drop) to `ok`
+    // (parity).
     let source = fixture("chart_01_single_column.hwp");
     let tmp = test_tmp();
     let out = tmp.join("chart_01.hwpx");
@@ -812,14 +826,14 @@ fn audit_hwp5_chart_reports_ole_evidence_note() {
 
     let (val, _, code) = run_json(&["audit-hwp5", source.to_str().unwrap(), out.to_str().unwrap()]);
     assert_eq!(code, 0);
-    assert_eq!(val["status"], "mismatch");
+    assert_eq!(val["status"], "ok");
     assert!(val["source"]["notes"]
         .as_array()
         .unwrap()
         .iter()
         .any(|note| note.as_str() == Some("ole-backed-gso-evidence: 1")));
     assert_eq!(val["source"]["totals"]["ole_objects"], 1);
-    assert_eq!(val["output"]["totals"]["ole_objects"], 0);
+    assert_eq!(val["output"]["totals"]["ole_objects"], 1);
 }
 
 #[test]

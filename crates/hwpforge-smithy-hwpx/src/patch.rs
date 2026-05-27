@@ -419,6 +419,17 @@ fn collect_semantic_paragraph_slots(
                     path: format!("{run_prefix}.text"),
                     text: text.clone(),
                 }),
+                // `RunContent::InlineText` carries `<hp:tab>`
+                // attributes that the slot model cannot represent;
+                // expose the tab-equivalent plain string so the slot
+                // is still discoverable and editable. Editing through
+                // the slot interface downgrades the run to plain
+                // `Text(String)` on apply — see the
+                // `apply_*_slot` helpers and debug doc §3a-C16.
+                RunContent::InlineText(it) => slots.push(SemanticTextSlot {
+                    path: format!("{run_prefix}.text"),
+                    text: it.plain_text(),
+                }),
                 RunContent::Table(table) => {
                     collect_semantic_table_slots(table, &format!("{run_prefix}.table"), slots);
                 }
@@ -1633,6 +1644,13 @@ fn redact_runs(runs: &mut [Run]) {
     for run in runs {
         match &mut run.content {
             RunContent::Text(text) => text.clear(),
+            // Redaction wipes visible payload only. Downgrade
+            // `InlineText` to an empty `Text(String)` — the tab
+            // attributes are intentionally lost because keeping a
+            // structured `<hp:tab>` next to redacted text would leak
+            // structure that the redactor is trying to remove. See
+            // debug doc §3a-C17.
+            RunContent::InlineText(_) => run.content = RunContent::Text(String::new()),
             RunContent::Table(table) => redact_table(table),
             RunContent::Image(image) => redact_image(image),
             RunContent::Control(control) => redact_control(control),
