@@ -846,8 +846,8 @@ fn summarize_sections(document: &Document<Draft>) -> Vec<Hwp5SectionSummary> {
                 paragraphs: section.paragraphs.len(),
                 non_empty_paragraphs,
                 tables: counts.tables,
-                has_header: section.header.is_some(),
-                has_footer: section.footer.is_some(),
+                has_header: !section.headers.is_empty(),
+                has_footer: !section.footers.is_empty(),
                 has_page_number: section.page_number.is_some(),
                 landscape: section.page_settings.landscape,
                 first_non_empty_text,
@@ -1221,14 +1221,15 @@ mod tests {
                 DecodedImageLocation::Body,
                 &mut layout,
             );
-            if let Some(header) = section.header.as_ref() {
+            // ADR-002: walk every header/footer in the multi-cardinality Vec.
+            for header in &section.headers {
                 count_images_in_paragraphs(
                     &header.paragraphs,
                     DecodedImageLocation::Header,
                     &mut layout,
                 );
             }
-            if let Some(footer) = section.footer.as_ref() {
+            for footer in &section.footers {
                 count_images_in_paragraphs(
                     &footer.paragraphs,
                     DecodedImageLocation::Footer,
@@ -1376,10 +1377,11 @@ mod tests {
         let mut layout = DecodedShapeLayout::default();
         for section in decoded.document.sections() {
             count_shapes_in_paragraphs(&section.paragraphs, &mut layout);
-            if let Some(header) = section.header.as_ref() {
+            // ADR-002: same multi-cardinality walk for shape counters.
+            for header in &section.headers {
                 count_shapes_in_paragraphs(&header.paragraphs, &mut layout);
             }
-            if let Some(footer) = section.footer.as_ref() {
+            for footer in &section.footers {
                 count_shapes_in_paragraphs(&footer.paragraphs, &mut layout);
             }
         }
@@ -1683,8 +1685,8 @@ mod tests {
         assert_eq!(layout.footer_images, 0);
         assert_eq!(shape_layout.lines, 4);
         assert_eq!(shape_layout.polygons, 1);
-        assert!(section0.header.is_some(), "full_report should keep header");
-        assert!(section0.footer.is_some(), "full_report should keep footer");
+        assert!(!section0.headers.is_empty(), "full_report should keep header");
+        assert!(!section0.footers.is_empty(), "full_report should keep footer");
         assert_eq!(first_body_image.path, "BinData/BIN0001");
         assert_ne!(first_body_image.width, HwpUnit::ZERO);
         assert_ne!(first_body_image.height, HwpUnit::ZERO);

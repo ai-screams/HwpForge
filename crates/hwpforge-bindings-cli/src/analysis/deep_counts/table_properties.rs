@@ -212,7 +212,8 @@ pub(crate) fn summarize_hwpx_table_properties(sections: &[Section]) -> DeepTable
             &mut summary,
             &mut next_table_ordinal,
         );
-        if let Some(header) = &section.header {
+        // ADR-002: scan every header/footer variant for table properties.
+        for header in &section.headers {
             accumulate_table_properties_from_paragraphs(
                 &header.paragraphs,
                 section_index,
@@ -220,7 +221,7 @@ pub(crate) fn summarize_hwpx_table_properties(sections: &[Section]) -> DeepTable
                 &mut next_table_ordinal,
             );
         }
-        if let Some(footer) = &section.footer {
+        for footer in &section.footers {
             accumulate_table_properties_from_paragraphs(
                 &footer.paragraphs,
                 section_index,

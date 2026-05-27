@@ -295,11 +295,11 @@ fn build_section_0() -> Section {
     // bottom_center도 생성하여 비교 후 with_side_char 결과를 채택
     let _pn_simple = PageNumber::bottom_center(); // constructor #21 사용 증명
     let mut sec = Section::with_paragraphs(paras, PageSettings::a4());
-    sec.header = Some(HeaderFooter::all_pages(vec![mixed_para(
+    sec.headers.push(HeaderFooter::all_pages(vec![mixed_para(
         &[("HWPX 아키텍처 가이드", CS_BOLD), ("  |  HwpForge", CS_ITALIC)],
         PS_LEFT,
     )]));
-    sec.footer = Some(HeaderFooter::all_pages(vec![text_para(
+    sec.footers.push(HeaderFooter::all_pages(vec![text_para(
         "Copyright \u{00A9} 2026 HwpForge Project. Apache-2.0 / MIT",
         CS_ITALIC,
         PS_CENTER,
@@ -748,8 +748,8 @@ fn main() {
             "    S{}: {} paras, h={}, f={}, pn={}, col={}",
             i + 1,
             sec.paragraphs.len(),
-            sec.header.is_some(),
-            sec.footer.is_some(),
+            !sec.headers.is_empty(),
+            !sec.footers.is_empty(),
             sec.page_number.is_some(),
             sec.column_settings.is_some(),
         );

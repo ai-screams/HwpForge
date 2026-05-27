@@ -449,12 +449,20 @@ pub struct Section {
     pub paragraphs: Vec<Paragraph>,
     /// Page dimensions and margins for this section.
     pub page_settings: PageSettings,
-    /// Optional header for this section.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub header: Option<HeaderFooter>,
-    /// Optional footer for this section.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub footer: Option<HeaderFooter>,
+    /// Headers for this section, ordered as in HWPX wire (`<hp:header>` × N).
+    ///
+    /// HWPX allows multiple `<hp:header>` elements in a single section,
+    /// differentiated by `applyPageType` (`BOTH` / `ODD` / `EVEN`). HWP5
+    /// stores the same information as multiple `head` ctrl records.
+    /// Empty `Vec` = "no header on this section". See
+    /// [ADR-002](../../../.docs/architecture/adr/ADR-002-section-multi-header-footer-cardinality.md)
+    /// for the cardinality decision.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub headers: Vec<HeaderFooter>,
+    /// Footers for this section, ordered as in HWPX wire (`<hp:footer>` × N).
+    /// See `headers` for the cardinality rationale.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub footers: Vec<HeaderFooter>,
     /// Optional page number settings for this section.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub page_number: Option<PageNumber>,
@@ -501,8 +509,8 @@ impl Section {
         Self {
             paragraphs: Vec::new(),
             page_settings,
-            header: None,
-            footer: None,
+            headers: Vec::new(),
+            footers: Vec::new(),
             page_number: None,
             column_settings: None,
             visibility: None,
@@ -534,8 +542,8 @@ impl Section {
         Self {
             paragraphs,
             page_settings,
-            header: None,
-            footer: None,
+            headers: Vec::new(),
+            footers: Vec::new(),
             page_number: None,
             column_settings: None,
             visibility: None,
@@ -874,10 +882,10 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn section_new_has_none_fields() {
+    fn section_new_has_empty_header_footer_vecs() {
         let section = Section::new(PageSettings::a4());
-        assert!(section.header.is_none());
-        assert!(section.footer.is_none());
+        assert!(section.headers.is_empty());
+        assert!(section.footers.is_empty());
         assert!(section.page_number.is_none());
         assert!(section.column_settings.is_none());
     }
@@ -885,22 +893,22 @@ mod tests {
     #[test]
     fn section_with_header_footer() {
         let mut section = Section::new(PageSettings::a4());
-        section.header = Some(HeaderFooter::new(
+        section.headers.push(HeaderFooter::new(
             vec![Paragraph::with_runs(
                 vec![Run::text("Header", CharShapeIndex::new(0))],
                 ParaShapeIndex::new(0),
             )],
             ApplyPageType::Both,
         ));
-        section.footer = Some(HeaderFooter::new(
+        section.footers.push(HeaderFooter::new(
             vec![Paragraph::with_runs(
                 vec![Run::text("Footer", CharShapeIndex::new(0))],
                 ParaShapeIndex::new(0),
             )],
             ApplyPageType::Both,
         ));
-        assert!(section.header.is_some());
-        assert!(section.footer.is_some());
+        assert_eq!(section.headers.len(), 1);
+        assert_eq!(section.footers.len(), 1);
     }
 
     #[test]
@@ -914,7 +922,7 @@ mod tests {
     #[test]
     fn section_serde_with_optional_fields() {
         let mut section = Section::new(PageSettings::a4());
-        section.header = Some(HeaderFooter::new(vec![], ApplyPageType::Both));
+        section.headers.push(HeaderFooter::new(vec![], ApplyPageType::Both));
         section.page_number =
             Some(PageNumber::new(PageNumberPosition::BottomCenter, NumberFormatType::Digit));
         let json = serde_json::to_string(&section).unwrap();
@@ -1002,8 +1010,8 @@ mod tests {
         let a4 = PageSettings::a4();
         let json = serde_json::to_string(&Section::with_paragraphs(vec![], a4)).unwrap();
         let section: Section = serde_json::from_str(&json).unwrap();
-        assert!(section.header.is_none());
-        assert!(section.footer.is_none());
+        assert!(section.headers.is_empty());
+        assert!(section.footers.is_empty());
         assert!(section.page_number.is_none());
     }
 

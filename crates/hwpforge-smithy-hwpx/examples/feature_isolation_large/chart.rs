@@ -1072,11 +1072,11 @@ pub(crate) fn gen_14_chart() {
     append_employment_report(&mut paras, sizes);
 
     let mut section = Section::with_paragraphs(paras, PageSettings::a4());
-    section.header = Some(HeaderFooter::new(
+    section.headers.push(HeaderFooter::new(
         vec![p("14. 차트 쇼케이스 — HwpForge", CS_SMALL, PS_LEFT)],
         ApplyPageType::Both,
     ));
-    section.footer = Some(HeaderFooter::new(
+    section.footers.push(HeaderFooter::new(
         vec![p("생성일: 2026-03-08", CS_SMALL, PS_RIGHT)],
         ApplyPageType::Both,
     ));
