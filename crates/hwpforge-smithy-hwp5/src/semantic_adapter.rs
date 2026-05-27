@@ -578,8 +578,13 @@ fn adapt_textbox_control(
     support: SemanticSupport<'_>,
     ids: &mut SemanticIdAlloc,
 ) -> Hwp5SemanticControlId {
-    let subtree =
-        Hwp5NestedSubtree { ctrl_id: textbox.ctrl_id, paragraphs: textbox.paragraphs.clone() };
+    let subtree = Hwp5NestedSubtree {
+        ctrl_id: textbox.ctrl_id,
+        // textbox carries no header/footer applyPageType bits — set to
+        // 0 so projection treats it as default (BOTH).
+        properties_raw: 0,
+        paragraphs: textbox.paragraphs.clone(),
+    };
 
     adapt_nested_subtree_control(
         &subtree,
