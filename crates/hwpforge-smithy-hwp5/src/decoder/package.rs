@@ -36,6 +36,34 @@ pub(crate) struct PackageReader {
     bin_data: HashMap<String, Vec<u8>>,
 }
 
+/// Detects common file signatures that prove the input is not an HWP5 OLE2/CFB
+/// document, returning an actionable explanation.
+///
+/// HWP5 files are CFB containers whose first bytes are the magic
+/// `D0 CF 11 E0 A1 B1 1A E1`. Government corpora frequently contain `.hwp`
+/// files that are really HWPX (a ZIP) or a Hancom secured/DRM container; the
+/// raw CFB error for those is just a byte dump, so we translate the most common
+/// cases into guidance.
+fn detect_non_hwp5_signature(bytes: &[u8]) -> Option<String> {
+    // ZIP local-file ("PK\x03\x04") or empty-archive ("PK\x05\x06") header.
+    if bytes.starts_with(b"PK\x03\x04") || bytes.starts_with(b"PK\x05\x06") {
+        return Some(
+            "input has a ZIP signature (PK..), not an HWP5 OLE2/CFB container; \
+             it looks like an HWPX file saved with a .hwp extension — open it through the HWPX path instead"
+                .to_string(),
+        );
+    }
+    // Hancom secured/DRM document container ("SCDS..").
+    if bytes.starts_with(b"SCDS") {
+        return Some(
+            "input has a Hancom secured-document signature (SCDS..), not a plain HWP5 \
+             OLE2/CFB container; remove the document protection in 한글 and re-save as HWP before converting"
+                .to_string(),
+        );
+    }
+    None
+}
+
 impl PackageReader {
     /// Open an HWP5 file from raw bytes.
     ///
@@ -45,6 +73,12 @@ impl PackageReader {
     /// 4. Enumerates `/BodyText/Section{N}` for N = 0..`MAX_SECTIONS`.
     /// 5. Reads all `/BinData/*` entries.
     pub(crate) fn open(bytes: &[u8]) -> Hwp5Result<Self> {
+        // Surface a clear, actionable error for inputs that are obviously not
+        // HWP5 OLE2/CFB containers before the raw CFB magic-number failure.
+        if let Some(detail) = detect_non_hwp5_signature(bytes) {
+            return Err(Hwp5Error::Cfb { detail });
+        }
+
         let cursor = Cursor::new(bytes);
         let mut comp = CompoundFile::open(cursor)
             .map_err(|e| Hwp5Error::Cfb { detail: format!("open: {e}") })?;
@@ -210,6 +244,31 @@ mod tests {
 
     use super::*;
     use crate::schema::header::HwpVersion;
+
+    #[test]
+    fn zip_signature_gets_actionable_error() {
+        // A real corpus case: an HWPX file saved with a .hwp extension.
+        let zip = b"PK\x03\x04\x14\x00\x00\x00";
+        let err = PackageReader::open(zip).expect_err("ZIP must be rejected");
+        let msg = err.to_string();
+        assert!(msg.contains("ZIP signature"), "got: {msg}");
+        assert!(msg.contains("HWPX"), "error should point at the HWPX path, got: {msg}");
+    }
+
+    #[test]
+    fn secured_document_signature_gets_actionable_error() {
+        let scds = b"SCDSA004";
+        let err = PackageReader::open(scds).expect_err("secured doc must be rejected");
+        let msg = err.to_string();
+        assert!(msg.contains("secured-document"), "got: {msg}");
+    }
+
+    #[test]
+    fn plain_garbage_falls_through_to_cfb_error() {
+        // Non-signature garbage still hits the underlying CFB magic check.
+        let garbage = [0u8; 16];
+        assert!(PackageReader::open(&garbage).is_err());
+    }
 
     /// Build a minimal valid CFB file with FileHeader + DocInfo + Section0.
     fn make_test_cfb(version: u32, flags: u32, doc_info: &[u8], section0: &[u8]) -> Vec<u8> {
