@@ -81,6 +81,29 @@ encode/decode paths were already verified by existing golden tests.
   `.docs/debug/2026-05-27_hwp5_page_features_lost.md` for full probe
   results. Resume when a PC-한컴 fixture is available.
 
+#### Fixed — Wave 6 (corpus-driven conversion robustness)
+
+Measured by extending the `audit-hwp5` signal source from synthetic
+fixtures to the real government-document corpus and clustering the
+pre-categorized conversion failures. The two real bugs recovered all
+29 `hwp5_convert_failed` documents (plus one more from `탈락`); the
+remaining failures are inputs that are genuinely not HWP5.
+
+- Schemeless hyperlink URLs (e.g. `www.motie.go.kr`) are normalized to
+  `http://` instead of aborting the whole conversion. The HWPX encoder
+  previously rejected any URL outside the `http://` / `https://` /
+  `mailto:` allowlist; explicit unsafe schemes (`javascript:`, `data:`,
+  `file:`, …) are still rejected. (16 corpus docs)
+- Non-leading table header rows are demoted to normal rows (with a
+  warning) in HWP5 projection instead of failing Core validation with
+  `NonLeadingTableHeaderRow`. Real 한글 tables sometimes restate a
+  header row mid-table; the leading header block is preserved and the
+  stray header row is demoted so the document still converts.
+  (14 corpus docs)
+- `.hwp` inputs that are actually ZIP (`PK..`, i.e. an HWPX saved with a
+  `.hwp` extension) or a Hancom secured/DRM container (`SCDS..`) now
+  fail with an actionable message instead of a raw CFB byte dump.
+
 ### Changed — Breaking
 
 - **ADR-002**: `hwpforge_core::Section.header: Option<HeaderFooter>` →
