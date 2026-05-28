@@ -472,17 +472,21 @@ fn build_runs(
                         // cannot express this ordering, so we emit a placeholder
                         // run with a unique marker and replace it after
                         // serialization in `encode_section`.
-                        // Validate URL scheme before encoding
-                        if !super::is_safe_url(url) {
+                        // Normalize the URL scheme before encoding. Schemeless
+                        // bare domains (e.g. `www.go.kr`) are promoted to
+                        // `http://`; only explicitly unsafe schemes
+                        // (`javascript:`, `data:`, `file:`, …) are rejected.
+                        let Some(safe_url) = super::normalize_hyperlink_url(url) else {
                             return Err(crate::error::HwpxError::InvalidStructure {
                                 detail: format!(
                                     "Unsafe URL scheme in hyperlink: '{url}'. Only http://, https://, and mailto: are allowed."
                                 ),
                             });
-                        }
+                        };
                         let field_id = hyperlink_entries.len();
                         let marker = next_marker("HWPHL", field_id);
-                        let real_xml = build_hyperlink_run_xml(text, url, char_pr_id_ref, field_id);
+                        let real_xml =
+                            build_hyperlink_run_xml(text, &safe_url, char_pr_id_ref, field_id);
                         // The marker run will serialize to something like
                         // <hp:run charPrIDRef="N"><hp:t>__HWPFORGE_HYPERLINK_0__</hp:t></hp:run>
                         // We record the full serialized marker run pattern so the
@@ -4313,6 +4317,31 @@ mod tests {
         );
         let result = encode_section(&section, 0, 0, 0, 0);
         assert!(result.is_ok(), "mailto: URL must be accepted");
+    }
+
+    #[test]
+    fn schemeless_url_is_normalized_to_http() {
+        use hwpforge_core::control::Control;
+        // Real-world corpus case: 한글 stores schemeless government domains.
+        // The encoder must not abort the whole document; it promotes the URL
+        // to an http:// link instead.
+        let ctrl = Control::Hyperlink {
+            text: "산업부".to_string(),
+            url: "www.motie.go.kr".to_string(),
+        };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let result = encode_section(&section, 0, 0, 0, 0).expect("schemeless URL must be accepted");
+        assert!(
+            result.xml.contains("http://www.motie.go.kr"),
+            "schemeless URL must be promoted to http://, got: {}",
+            result.xml
+        );
     }
 
     // ── Chart encoding ────────────────────────────────────────────
