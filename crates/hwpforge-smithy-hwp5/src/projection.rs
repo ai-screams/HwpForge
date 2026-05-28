@@ -166,6 +166,15 @@ fn project_to_core_internal(
             .unwrap_or_else(PageSettings::a4);
 
         let mut section = Section::new(page_settings);
+        // Gap B: decode the `secd` ctrl property word (HWP 5.0 spec
+        // §4.3.10.1 표 130) into Core's `Visibility`. Bits 0~5 + 8/9 +
+        // 19 map 1:1 to the HWPX `<hp:visibility>` element. `None` →
+        // don't override the Core default (matches pre-Wave-5
+        // behavior). See
+        // `.docs/debug/2026-05-27_hwp5_page_features_lost.md` (gap B).
+        if let Some(properties) = section_result.section_def_properties {
+            section.visibility = Some(hwp5_section_properties_to_visibility(properties));
+        }
         let mut section_field_hints =
             SectionProjectionHints::from_paragraphs(&section_result.paragraphs);
         // ADR-002 + gap A: collect per-ctrl subtrees instead of
@@ -982,6 +991,35 @@ fn hwp5_header_property_to_apply_page_type(
         2 => ApplyPageType::Odd,
         // 0 (BOTH) and any unspecified/extension bits default to Both.
         _ => ApplyPageType::Both,
+    }
+}
+
+/// Decode the `secd` ctrl property word (HWP 5.0 spec §4.3.10.1
+/// 표 130) into Core's [`Visibility`](hwpforge_core::section::Visibility).
+///
+/// Bit-to-field mapping (matches HWPX `<hp:visibility>` 1:1):
+///
+/// | bit | spec gloss | Core field |
+/// |----:|------------|------------|
+/// | 0 | 머리말을 감출지 여부 | `hide_first_header` |
+/// | 1 | 꼬리말을 감출지 여부 | `hide_first_footer` |
+/// | 2 | 바탕쪽을 감출지 여부 | `hide_first_master_page` |
+/// | 3 | 테두리를 감출지 여부 | (informational; Core `border` enum is `ShowMode`) |
+/// | 4 | 배경을 감출지 여부   | (informational; `fill` is `ShowMode`) |
+/// | 5 | 쪽 번호 위치를 감출지 여부 | `hide_first_page_num` |
+/// | 19 | 빈 줄 감춤 여부 | `hide_first_empty_line` |
+///
+/// `border` / `fill` themselves stay at their `ShowMode::ShowAll`
+/// default — these are full-section visibility, not first-page-only,
+/// and a separate slice promotes them.
+fn hwp5_section_properties_to_visibility(properties: u32) -> hwpforge_core::section::Visibility {
+    hwpforge_core::section::Visibility {
+        hide_first_header: (properties & 1) != 0,
+        hide_first_footer: (properties & (1 << 1)) != 0,
+        hide_first_master_page: (properties & (1 << 2)) != 0,
+        hide_first_page_num: (properties & (1 << 5)) != 0,
+        hide_first_empty_line: (properties & (1 << 19)) != 0,
+        ..hwpforge_core::section::Visibility::default()
     }
 }
 
@@ -1804,7 +1842,7 @@ mod tests {
         paragraphs: Vec<Hwp5Paragraph>,
         page_def: Option<Hwp5PageDef>,
     ) -> SectionResult {
-        SectionResult { paragraphs, page_def, warnings: vec![] }
+        SectionResult { paragraphs, page_def, section_def_properties: None, warnings: vec![] }
     }
 
     fn hwp5_char_run(position: u32, char_shape_id: u32) -> Hwp5CharShapeRun {
@@ -1922,6 +1960,7 @@ mod tests {
         let section = SectionResult {
             paragraphs: vec![make_paragraph("x", 0, 0)],
             page_def: None,
+            section_def_properties: None,
             warnings: vec![warn],
         };
         let (_, warnings) = project_to_core(vec![section]).unwrap();

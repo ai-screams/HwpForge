@@ -678,6 +678,7 @@ mod tests {
                 ),
             ],
             page_def: None,
+            section_def_properties: None,
             warnings: Vec::new(),
         };
 
