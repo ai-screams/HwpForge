@@ -1144,6 +1144,7 @@ mod tests {
             sections: vec![crate::decoder::section::SectionResult {
                 paragraphs: vec![],
                 page_def: None,
+                section_def_properties: None,
                 warnings: vec![],
             }],
             warnings: vec![],

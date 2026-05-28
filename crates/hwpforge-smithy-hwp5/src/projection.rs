@@ -166,15 +166,28 @@ fn project_to_core_internal(
             .unwrap_or_else(PageSettings::a4);
 
         let mut section = Section::new(page_settings);
+        // Gap B: decode the `secd` ctrl property word (HWP 5.0 spec
+        // §4.3.10.1 표 130) into Core's `Visibility`. Bits 0~5 + 8/9 +
+        // 19 map 1:1 to the HWPX `<hp:visibility>` element. `None` →
+        // don't override the Core default (matches pre-Wave-5
+        // behavior). See
+        // `.docs/debug/2026-05-27_hwp5_page_features_lost.md` (gap B).
+        if let Some(properties) = section_result.section_def_properties {
+            section.visibility = Some(hwp5_section_properties_to_visibility(properties));
+        }
         let mut section_field_hints =
             SectionProjectionHints::from_paragraphs(&section_result.paragraphs);
-        let mut header_paragraphs: Vec<Paragraph> = Vec::new();
-        let mut footer_paragraphs: Vec<Paragraph> = Vec::new();
+        // ADR-002 + gap A: collect per-ctrl subtrees instead of
+        // flattening all headers/footers into one. Each tuple is
+        // `(projected paragraphs, raw 4-byte property field)` so the
+        // applyPageType bits survive (HWP 5.0 spec §4.3.10.3 표 141).
+        let mut header_subtrees: Vec<(Vec<Paragraph>, u32)> = Vec::new();
+        let mut footer_subtrees: Vec<(Vec<Paragraph>, u32)> = Vec::new();
 
         // Project each paragraph.
         for hwp_para in section_result.paragraphs {
-            header_paragraphs.extend(collect_header_paragraphs(&hwp_para, &mut projection_images));
-            footer_paragraphs.extend(collect_footer_paragraphs(&hwp_para, &mut projection_images));
+            header_subtrees.extend(collect_header_subtrees(&hwp_para, &mut projection_images));
+            footer_subtrees.extend(collect_footer_subtrees(&hwp_para, &mut projection_images));
 
             let projected = project_paragraph_with_images(
                 &hwp_para,
@@ -188,19 +201,25 @@ fn project_to_core_internal(
             section.add_paragraph(projected.paragraph);
         }
 
-        // ADR-002: collect into Vec to preserve HWPX multi-cardinality
-        // (`<hp:header>` × N with distinct `applyPageType`). The
-        // applyPageType per-ctrl decode (HWP5 spec §4.3.10.3 표 141:
-        // bit 0~1 of properties_raw) is wired in the dedicated slice
-        // — for now `all_pages()` (BOTH) is preserved as the default,
-        // matching previous behavior. Slice "apply_page_type carry"
-        // (gap A in `.docs/debug/2026-05-27_hwp5_page_features_lost.md`)
-        // promotes per-ctrl decoding into this Vec.
-        if !header_paragraphs.is_empty() {
-            section.headers.push(HeaderFooter::all_pages(header_paragraphs));
+        // ADR-002 + gap A: per-ctrl applyPageType carry.
+        //
+        // HWP 5.0 spec §4.3.10.3 표 141: header/footer ctrl payload's
+        // bytes [4..8] hold a property word whose bit 0~1 encode the
+        // page-type scope (0=BOTH, 1=EVEN, 2=ODD). The decoder
+        // preserved this as `Hwp5NestedSubtree.properties_raw`; here
+        // each subtree becomes its own `HeaderFooter` entry so HWPX
+        // emits matching `<hp:header applyPageType="..."/>` × N.
+        for (paragraphs, properties_raw) in header_subtrees {
+            section.headers.push(HeaderFooter::new(
+                paragraphs,
+                hwp5_header_property_to_apply_page_type(properties_raw),
+            ));
         }
-        if !footer_paragraphs.is_empty() {
-            section.footers.push(HeaderFooter::all_pages(footer_paragraphs));
+        for (paragraphs, properties_raw) in footer_subtrees {
+            section.footers.push(HeaderFooter::new(
+                paragraphs,
+                hwp5_header_property_to_apply_page_type(properties_raw),
+            ));
         }
 
         // Ensure every section has at least one paragraph (validation requirement).
@@ -934,45 +953,100 @@ fn finish_active_field(
     }
 }
 
-fn collect_header_paragraphs(
+/// Gathers each `Hwp5Control::Header` subtree separately, returning a
+/// `(projected paragraphs, raw 4-byte properties)` tuple per ctrl.
+///
+/// ADR-002 + gap A: cardinality is preserved (one tuple per `head`
+/// ctrl) so projection can map each ctrl to its own `<hp:header
+/// applyPageType="..."/>` element.
+fn collect_header_subtrees(
     paragraph: &Hwp5Paragraph,
     projection_images: &mut ProjectionImageState<'_>,
-) -> Vec<Paragraph> {
-    collect_subtree_paragraphs(paragraph, projection_images, |control| match control {
-        Hwp5Control::Header(subtree) => Some(&subtree.paragraphs),
+) -> Vec<(Vec<Paragraph>, u32)> {
+    collect_subtree_units(paragraph, projection_images, |control| match control {
+        Hwp5Control::Header(subtree) => Some((&subtree.paragraphs, subtree.properties_raw)),
         _ => None,
     })
 }
 
-fn collect_footer_paragraphs(
+/// Mirror of [`collect_header_subtrees`] for `Hwp5Control::Footer`.
+fn collect_footer_subtrees(
     paragraph: &Hwp5Paragraph,
     projection_images: &mut ProjectionImageState<'_>,
-) -> Vec<Paragraph> {
-    collect_subtree_paragraphs(paragraph, projection_images, |control| match control {
-        Hwp5Control::Footer(subtree) => Some(&subtree.paragraphs),
+) -> Vec<(Vec<Paragraph>, u32)> {
+    collect_subtree_units(paragraph, projection_images, |control| match control {
+        Hwp5Control::Footer(subtree) => Some((&subtree.paragraphs, subtree.properties_raw)),
         _ => None,
     })
 }
 
-fn collect_subtree_paragraphs<F>(
+/// Decode the `applyPageType` semantic from a HWP5 head/foot ctrl's
+/// raw property word (HWP 5.0 spec §4.3.10.3 표 141).
+fn hwp5_header_property_to_apply_page_type(
+    properties_raw: u32,
+) -> hwpforge_foundation::ApplyPageType {
+    use hwpforge_foundation::ApplyPageType;
+    match properties_raw & 0b11 {
+        1 => ApplyPageType::Even,
+        2 => ApplyPageType::Odd,
+        // 0 (BOTH) and any unspecified/extension bits default to Both.
+        _ => ApplyPageType::Both,
+    }
+}
+
+/// Decode the `secd` ctrl property word (HWP 5.0 spec §4.3.10.1
+/// 표 130) into Core's [`Visibility`](hwpforge_core::section::Visibility).
+///
+/// Bit-to-field mapping (matches HWPX `<hp:visibility>` 1:1):
+///
+/// | bit | spec gloss | Core field |
+/// |----:|------------|------------|
+/// | 0 | 머리말을 감출지 여부 | `hide_first_header` |
+/// | 1 | 꼬리말을 감출지 여부 | `hide_first_footer` |
+/// | 2 | 바탕쪽을 감출지 여부 | `hide_first_master_page` |
+/// | 3 | 테두리를 감출지 여부 | (informational; Core `border` enum is `ShowMode`) |
+/// | 4 | 배경을 감출지 여부   | (informational; `fill` is `ShowMode`) |
+/// | 5 | 쪽 번호 위치를 감출지 여부 | `hide_first_page_num` |
+/// | 19 | 빈 줄 감춤 여부 | `hide_first_empty_line` |
+///
+/// `border` / `fill` themselves stay at their `ShowMode::ShowAll`
+/// default — these are full-section visibility, not first-page-only,
+/// and a separate slice promotes them.
+fn hwp5_section_properties_to_visibility(properties: u32) -> hwpforge_core::section::Visibility {
+    hwpforge_core::section::Visibility {
+        hide_first_header: (properties & 1) != 0,
+        hide_first_footer: (properties & (1 << 1)) != 0,
+        hide_first_master_page: (properties & (1 << 2)) != 0,
+        hide_first_page_num: (properties & (1 << 5)) != 0,
+        hide_first_empty_line: (properties & (1 << 19)) != 0,
+        ..hwpforge_core::section::Visibility::default()
+    }
+}
+
+/// Cardinality-preserving collector for header/footer-style ctrls:
+/// returns one `(projected paragraphs, extra)` tuple per matching ctrl
+/// instead of flattening across all ctrls. Used by gap A to keep each
+/// `head`/`foot` ctrl separable for `applyPageType` decoding.
+fn collect_subtree_units<F, X>(
     paragraph: &Hwp5Paragraph,
     projection_images: &mut ProjectionImageState<'_>,
-    paragraphs_for_control: F,
-) -> Vec<Paragraph>
+    unit_for_control: F,
+) -> Vec<(Vec<Paragraph>, X)>
 where
-    F: Fn(&Hwp5Control) -> Option<&Vec<Hwp5Paragraph>>,
+    F: Fn(&Hwp5Control) -> Option<(&Vec<Hwp5Paragraph>, X)>,
 {
-    let mut projected: Vec<Paragraph> = Vec::new();
+    let mut units: Vec<(Vec<Paragraph>, X)> = Vec::new();
     for control in &paragraph.controls {
-        if let Some(nested_paragraphs) = paragraphs_for_control(control) {
-            projected.extend(project_nested_paragraphs(
+        if let Some((nested_paragraphs, extra)) = unit_for_control(control) {
+            let projected = project_nested_paragraphs(
                 nested_paragraphs,
                 projection_images,
                 ImageProjectionContext::Flow,
-            ));
+            );
+            units.push((projected, extra));
         }
     }
-    projected
+    units
 }
 
 fn project_nested_paragraphs(
@@ -1768,7 +1842,7 @@ mod tests {
         paragraphs: Vec<Hwp5Paragraph>,
         page_def: Option<Hwp5PageDef>,
     ) -> SectionResult {
-        SectionResult { paragraphs, page_def, warnings: vec![] }
+        SectionResult { paragraphs, page_def, section_def_properties: None, warnings: vec![] }
     }
 
     fn hwp5_char_run(position: u32, char_shape_id: u32) -> Hwp5CharShapeRun {
@@ -1886,6 +1960,7 @@ mod tests {
         let section = SectionResult {
             paragraphs: vec![make_paragraph("x", 0, 0)],
             page_def: None,
+            section_def_properties: None,
             warnings: vec![warn],
         };
         let (_, warnings) = project_to_core(vec![section]).unwrap();
@@ -1970,6 +2045,7 @@ mod tests {
                 controls: vec![
                     Hwp5Control::Header(crate::decoder::section::Hwp5NestedSubtree {
                         ctrl_id: 0x6865_6164,
+                        properties_raw: 0,
                         paragraphs: vec![Hwp5Paragraph {
                             text: "\u{fffc}".to_string(),
                             text_segments: Vec::new(),
@@ -1982,6 +2058,7 @@ mod tests {
                     }),
                     Hwp5Control::Footer(crate::decoder::section::Hwp5NestedSubtree {
                         ctrl_id: 0x666F_6F74,
+                        properties_raw: 0,
                         paragraphs: vec![make_paragraph("꼬리말 테스트", 0, 0)],
                     }),
                 ],

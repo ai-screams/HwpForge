@@ -250,6 +250,16 @@ const TABLE_CELL_HEADER_FLAG: u32 = 0x0004_0000;
 pub(crate) struct Hwp5NestedSubtree {
     /// Original control identifier that owns the subtree.
     pub ctrl_id: u32,
+    /// Raw 4-byte property field that follows `ctrl_id` in the
+    /// `CtrlHeader` payload (HWP 5.0 spec §4.3.10.3 표 140·141 for
+    /// header/footer ctrls). Projection decodes per-ctrl semantics
+    /// from this value (e.g. bit 0~1 → header `applyPageType` —
+    /// 0=BOTH, 1=EVEN, 2=ODD).
+    ///
+    /// Decoder stores the raw bytes verbatim and lets projection do
+    /// the semantic split so the decoder stays format-agnostic
+    /// (single source of payload, easy to extend for new bits).
+    pub properties_raw: u32,
     /// Nested paragraphs captured under the subtree.
     pub paragraphs: Vec<Hwp5Paragraph>,
 }
@@ -262,6 +272,11 @@ pub(crate) struct SectionResult {
     pub paragraphs: Vec<Hwp5Paragraph>,
     /// Page definition, if a PageDef record was found.
     pub page_def: Option<Hwp5PageDef>,
+    /// Raw 4-byte property word from the `secd` ctrl (HWP 5.0 spec
+    /// §4.3.10.1 표 130). `None` when no `secd` ctrl was encountered
+    /// (e.g. truncated fixtures); bits 0~5 + 8/9 + 19 are decoded by
+    /// projection into `Section.visibility` (gap B).
+    pub section_def_properties: Option<u32>,
     /// Non-fatal warnings.
     pub warnings: Vec<Hwp5Warning>,
 }
@@ -276,6 +291,10 @@ const CTRL_ID_TABLE: u32 = 0x7462_6C20;
 const CTRL_ID_HEADER: u32 = 0x6865_6164;
 /// ctrl_id for footer control: ASCII `foot` as big-endian u32.
 const CTRL_ID_FOOTER: u32 = 0x666F_6F74;
+/// ctrl_id for section definition control: ASCII `secd` as big-endian u32.
+/// Holds page-level visibility / column-spacing / paper-spec metadata
+/// (HWP 5.0 spec §4.3.10.1 표 129·130).
+const CTRL_ID_SECD: u32 = 0x7365_6364;
 /// ctrl_id for footnote control: ASCII `fn  ` as big-endian u32.
 const CTRL_ID_FOOTNOTE: u32 = 0x666E_2020;
 /// ctrl_id for endnote control: ASCII `en  ` as big-endian u32.
@@ -405,6 +424,9 @@ enum NestedSubtreeKind {
 struct NestedSubtreeContext {
     ctrl_depth: u16,
     ctrl_id: u32,
+    /// Bytes [4..8] of the `CtrlHeader` payload (see
+    /// [`Hwp5NestedSubtree::properties_raw`]).
+    properties_raw: u32,
     saw_list_header: bool,
     saw_shape_rectangle: bool,
     saw_shape_component: bool,
@@ -417,10 +439,16 @@ struct NestedSubtreeContext {
 }
 
 impl NestedSubtreeContext {
-    fn new(ctrl_depth: u16, ctrl_id: u32, geometry: Option<Hwp5ShapeComponentGeometry>) -> Self {
+    fn new(
+        ctrl_depth: u16,
+        ctrl_id: u32,
+        properties_raw: u32,
+        geometry: Option<Hwp5ShapeComponentGeometry>,
+    ) -> Self {
         Self {
             ctrl_depth,
             ctrl_id,
+            properties_raw,
             saw_list_header: false,
             saw_shape_rectangle: false,
             saw_shape_component: false,
@@ -486,24 +514,28 @@ impl NestedSubtreeContext {
             Some(NestedSubtreeKind::Header) if self.saw_list_header => {
                 Hwp5Control::Header(Hwp5NestedSubtree {
                     ctrl_id: self.ctrl_id,
+                    properties_raw: self.properties_raw,
                     paragraphs: self.paragraphs,
                 })
             }
             Some(NestedSubtreeKind::Footer) if self.saw_list_header => {
                 Hwp5Control::Footer(Hwp5NestedSubtree {
                     ctrl_id: self.ctrl_id,
+                    properties_raw: self.properties_raw,
                     paragraphs: self.paragraphs,
                 })
             }
             Some(NestedSubtreeKind::Footnote) if self.saw_list_header => {
                 Hwp5Control::Footnote(Hwp5NestedSubtree {
                     ctrl_id: self.ctrl_id,
+                    properties_raw: self.properties_raw,
                     paragraphs: self.paragraphs,
                 })
             }
             Some(NestedSubtreeKind::Endnote) if self.saw_list_header => {
                 Hwp5Control::Endnote(Hwp5NestedSubtree {
                     ctrl_id: self.ctrl_id,
+                    properties_raw: self.properties_raw,
                     paragraphs: self.paragraphs,
                 })
             }
@@ -717,6 +749,8 @@ pub(crate) fn parse_body_text(data: &[u8], _version: &HwpVersion) -> Hwp5Result<
 struct BodyTextParserState {
     paragraphs: Vec<Hwp5Paragraph>,
     page_def: Option<Hwp5PageDef>,
+    /// Captured `secd` ctrl property word (HWP 5.0 spec §4.3.10.1 표 130).
+    section_def_properties: Option<u32>,
     warnings: Vec<Hwp5Warning>,
     current: Option<ParaBuf>,
     table_stack: Vec<TableContext>,
@@ -1116,8 +1150,43 @@ impl BodyTextParserState {
                     } else {
                         None
                     };
-                    self.subtree_ctx = Some(NestedSubtreeContext::new(level, ctrl_id, geometry));
+                    // HWP 5.0 spec §4.3.10.3 표 140: bytes [4..8] of
+                    // the ctrl_header payload are the property field
+                    // (e.g. header/footer applyPageType in bits 0~1).
+                    // Header is 4 bytes, so falling back to 0 keeps
+                    // pre-spec defaults consistent.
+                    let properties_raw = if record.data.len() >= 8 {
+                        u32::from_le_bytes([
+                            record.data[4],
+                            record.data[5],
+                            record.data[6],
+                            record.data[7],
+                        ])
+                    } else {
+                        0
+                    };
+                    self.subtree_ctx =
+                        Some(NestedSubtreeContext::new(level, ctrl_id, properties_raw, geometry));
                 } else if let Some(buf) = self.current.as_mut() {
+                    // Snapshot the `secd` ctrl property word for
+                    // projection-level Visibility decoding (gap B,
+                    // HWP 5.0 spec §4.3.10.1 표 130). The ctrl
+                    // continues to flow through the Unknown path so
+                    // downstream semantic adapter still emits the
+                    // SectionColumnDef inline item from the inline
+                    // 0x02 control byte; the property word is just an
+                    // additional sidecar capture.
+                    if ctrl_id == CTRL_ID_SECD
+                        && self.section_def_properties.is_none()
+                        && record.data.len() >= 8
+                    {
+                        self.section_def_properties = Some(u32::from_le_bytes([
+                            record.data[4],
+                            record.data[5],
+                            record.data[6],
+                            record.data[7],
+                        ]));
+                    }
                     buf.controls
                         .push(Hwp5Control::Unknown { ctrl_id, header_data: record.data.clone() });
                 }
@@ -1154,6 +1223,7 @@ impl BodyTextParserState {
         SectionResult {
             paragraphs: self.paragraphs,
             page_def: self.page_def,
+            section_def_properties: self.section_def_properties,
             warnings: self.warnings,
         }
     }
@@ -2526,7 +2596,7 @@ mod tests {
             width: 5_000,
             height: 6_000,
         };
-        let mut ctx = NestedSubtreeContext::new(0, CTRL_ID_GSO, Some(geometry));
+        let mut ctx = NestedSubtreeContext::new(0, CTRL_ID_GSO, 0, Some(geometry));
         ctx.note_shape_component();
         ctx.note_shape_picture(Hwp5ShapePicture::parse(&shape_picture_data(1)).unwrap());
         ctx.note_shape_ole(
