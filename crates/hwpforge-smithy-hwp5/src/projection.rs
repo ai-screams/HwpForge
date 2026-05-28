@@ -1628,7 +1628,7 @@ fn build_table_with_images(
         grouped[row_idx].push(cell);
     }
 
-    let rows = grouped
+    let mut rows: Vec<TableRow> = grouped
         .into_iter()
         .map(|mut cells| {
             cells.sort_by_key(|cell| cell.column);
@@ -1652,9 +1652,44 @@ fn build_table_with_images(
         })
         .collect();
 
+    demote_non_leading_header_rows(&mut rows, &mut projection_images.warnings);
+
     let mut core_table = Table::new(rows);
     apply_table_projection_metadata(table, &mut core_table, &mut projection_images.warnings);
     core_table
+}
+
+/// Enforces the Core/HWPX invariant that header rows form a single leading
+/// contiguous block.
+///
+/// Real 한글 documents sometimes mark a repeat-header row in the middle of a
+/// table (for example a column header restated after a sectioning row).
+/// `hwpforge_core` validation rejects such a layout
+/// ([`ValidationError::NonLeadingTableHeaderRow`]), which previously aborted
+/// the whole `convert-hwp5` run. We keep the leading header block and demote
+/// any later header row to a normal row, emitting a warning so the dropped
+/// repeat-header semantic is surfaced rather than silently lost.
+///
+/// The traversal mirrors `hwpforge_core::validate`'s `seen_non_header_row`
+/// logic exactly, so the demoted result is guaranteed to pass validation.
+fn demote_non_leading_header_rows(rows: &mut [TableRow], warnings: &mut Vec<Hwp5Warning>) {
+    let mut seen_non_header = false;
+    for (row_idx, row) in rows.iter_mut().enumerate() {
+        if row.is_header {
+            if seen_non_header {
+                row.is_header = false;
+                push_projection_fallback(
+                    warnings,
+                    "table.header_row",
+                    format!(
+                        "non_leading_hwp5_table_header_row row={row_idx}; demoting_to=non_header_row (HWPX requires a single leading header block)"
+                    ),
+                );
+            }
+        } else {
+            seen_non_header = true;
+        }
+    }
 }
 
 fn projected_row_is_header(cells: &[&Hwp5TableCell], warnings: &mut Vec<Hwp5Warning>) -> bool {
@@ -2679,6 +2714,86 @@ mod tests {
                 if *subject == "table.header_row"
                     && reason == "mixed_hwp5_table_header_cells row=0 header_cells=1 total_cells=2; defaulting_to=non_header_row"
         )));
+    }
+
+    #[test]
+    fn non_leading_header_row_is_demoted_and_warns() {
+        // A real 한글 layout: header row (0), body row (1), then a *second*
+        // header row (2). Core validation requires header rows to form a single
+        // leading block, so the trailing header row must be demoted instead of
+        // aborting the whole conversion.
+        fn header_cell(row: u16, is_header: bool, text: &str) -> Hwp5TableCell {
+            Hwp5TableCell {
+                column: 0,
+                row,
+                col_span: 1,
+                row_span: 1,
+                width: 4000,
+                height: 1000,
+                is_header,
+                margin: crate::decoder::section::Hwp5TableCellMargin {
+                    left: 0,
+                    right: 0,
+                    top: 0,
+                    bottom: 0,
+                },
+                vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Center,
+                border_fill_id: Some(3),
+                paragraphs: vec![Hwp5Paragraph {
+                    text: text.to_string(),
+                    text_segments: Vec::new(),
+                    para_shape_id: 0,
+                    style_id: 0,
+                    char_shape_runs: vec![],
+                    line_segments: Vec::new(),
+                    controls: vec![],
+                }],
+            }
+        }
+
+        let para = Hwp5Paragraph {
+            text: "\u{FFFC}".to_string(),
+            text_segments: Vec::new(),
+            para_shape_id: 0,
+            style_id: 0,
+            char_shape_runs: vec![],
+            line_segments: Vec::new(),
+            controls: vec![Hwp5Control::Table(Hwp5Table {
+                rows: 3,
+                cols: 1,
+                page_break: Hwp5TablePageBreak::Cell,
+                repeat_header: true,
+                cell_spacing: 0,
+                border_fill_id: None,
+                cells: vec![
+                    header_cell(0, true, "head"),
+                    header_cell(1, false, "body"),
+                    header_cell(2, true, "restated-head"),
+                ],
+            })],
+        };
+
+        let section = make_section(vec![para], None);
+        let (doc, warnings) = project_to_core(vec![section]).unwrap();
+        let table = doc.sections()[0].paragraphs[0]
+            .runs
+            .iter()
+            .find_map(|run| run.content.as_table())
+            .expect("expected table run");
+
+        assert!(table.rows[0].is_header, "leading header row must be kept");
+        assert!(!table.rows[1].is_header, "body row stays non-header");
+        assert!(!table.rows[2].is_header, "trailing header row must be demoted");
+        assert!(warnings.iter().any(|warning| matches!(
+            warning,
+            Hwp5Warning::ProjectionFallback { subject, reason }
+                if *subject == "table.header_row"
+                    && reason.starts_with("non_leading_hwp5_table_header_row row=2")
+        )));
+
+        // The demoted layout must now pass Core validation (previously aborted
+        // with NonLeadingTableHeaderRow).
+        assert!(doc.validate().is_ok(), "demoted table must satisfy Core validation");
     }
 
     #[test]
