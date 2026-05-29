@@ -85,9 +85,13 @@ impl Hwp5BorderLineKind {
     /// In particular codes 2 and 3 are `Dot`/`Dash` (not `Dash`/`Dot`).
     fn from_raw(raw: u8) -> Self {
         match raw {
+            // 0/1/2 and 8 are fixture-confirmed (None/Solid/Dot/DoubleSlim).
             0 => Self::None,
             1 => Self::Solid,
             2 => Self::Dot,
+            // 3..=7 are inferred from the contiguous run between the confirmed
+            // endpoints 2 (Dot) and 8 (DoubleSlim); their relative order is not
+            // yet fixture-verified.
             3 => Self::Dash,
             4 => Self::DashDot,
             5 => Self::DashDotDot,

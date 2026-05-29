@@ -2992,6 +2992,78 @@ mod tests {
     }
 
     #[test]
+    fn page_number_resolves_in_document_order_across_table_and_body() {
+        // When a page-number control sits both inside a table cell (earlier in
+        // document order) and as a later top-level paragraph, the section-level
+        // scan returns the first in document order — the table-cell one. This
+        // locks the ordering the page_number SSOT refactor introduced (the old
+        // body-only scan would have returned the later top-level control).
+        fn pgnp_para(pos_byte: u8) -> Hwp5Paragraph {
+            Hwp5Paragraph {
+                text: "\u{FFFC}".to_string(),
+                text_segments: Vec::new(),
+                para_shape_id: 0,
+                style_id: 0,
+                char_shape_runs: vec![],
+                line_segments: Vec::new(),
+                controls: vec![Hwp5Control::Unknown {
+                    ctrl_id: CTRL_ID_PAGE_NUMBER,
+                    header_data: vec![0, 0, 0, 0, 0, pos_byte],
+                }],
+            }
+        }
+        fn table_cell_pgnp_para(pos_byte: u8) -> Hwp5Paragraph {
+            let cell = Hwp5TableCell {
+                column: 0,
+                row: 0,
+                col_span: 1,
+                row_span: 1,
+                width: 4000,
+                height: 1000,
+                is_header: false,
+                margin: crate::decoder::section::Hwp5TableCellMargin {
+                    left: 0,
+                    right: 0,
+                    top: 0,
+                    bottom: 0,
+                },
+                vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Center,
+                border_fill_id: None,
+                paragraphs: vec![pgnp_para(pos_byte)],
+            };
+            Hwp5Paragraph {
+                text: "\u{FFFC}".to_string(),
+                text_segments: Vec::new(),
+                para_shape_id: 0,
+                style_id: 0,
+                char_shape_runs: vec![],
+                line_segments: Vec::new(),
+                controls: vec![Hwp5Control::Table(Hwp5Table {
+                    rows: 1,
+                    cols: 1,
+                    page_break: Hwp5TablePageBreak::Cell,
+                    repeat_header: false,
+                    cell_spacing: 0,
+                    border_fill_id: None,
+                    cells: vec![cell],
+                })],
+            }
+        }
+
+        // para 0 = table-cell pgnp at TopLeft (pos 1); para 1 = top-level pgnp
+        // at BottomCenter (pos 5). Document order picks the table-cell one.
+        let section = make_section(vec![table_cell_pgnp_para(1), pgnp_para(5)], None);
+        let (doc, _) = project_to_core(vec![section]).unwrap();
+        let page_number =
+            doc.sections()[0].page_number.as_ref().expect("a page number must be resolved");
+        assert_eq!(
+            page_number.position,
+            PageNumberPosition::TopLeft,
+            "the first page number in document order (the table cell) must win"
+        );
+    }
+
+    #[test]
     fn line_control_becomes_visible_core_line() {
         let para = Hwp5Paragraph {
             text: "\u{FFFC}".to_string(),
