@@ -35,7 +35,7 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 **Workspace Facts (code-grounded)**:
 
 - Cargo packages: `10`
-- Workspace version: `0.5.2` (next release targets `0.6.0` per ADR-002 breaking)
+- Workspace version: `0.6.0` (bumped from `0.5.2` for the ADR-002 breaking change)
 - Tracked Rust `src` files under `crates/`: `144`
 - Tracked Rust `src` LOC under `crates/`: `90,629`
 - Example artifact files under `examples/`: `67`
