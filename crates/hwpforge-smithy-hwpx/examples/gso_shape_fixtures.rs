@@ -1,14 +1,16 @@
-//! Minimal single-object GSO shape fixtures for Phase 12a (HWP5 shape carry).
+//! Minimal single-object GSO shape fixtures for Phase 12 (HWP5 shape carry).
 //!
-//! Each generated HWPX holds exactly ONE drawing object (ellipse, arc, or
-//! curve) on a single page, with one short label paragraph above it. The
-//! point is to keep the file tiny so it can be opened in 한컴 Office, re-saved
-//! as `.hwp` (HWP5), and its `gso ` shape sub-record hex-inspected without any
-//! surrounding noise.
+//! Each generated HWPX holds exactly ONE drawing object (ellipse, arc, curve,
+//! or connect line) on a single page, with one short label paragraph above it.
+//! The point is to keep the file tiny so it can be opened in 한컴 Office,
+//! re-saved as `.hwp` (HWP5), and its `gso ` shape sub-record hex-inspected
+//! without any surrounding noise.
 //!
 //! These are *staging* inputs only. The authoritative fixtures committed under
 //! `tests/fixtures/user_samples/` are the 한컴-produced `.hwp`/`.hwpx` pair, not
-//! the files this generator emits.
+//! the files this generator emits. (The connect-line case in particular needs
+//! a natively-drawn 한컴 connector — see `sample-gso-connectline-native` — to
+//! exercise the real connector encoding rather than a demoted plain line.)
 //!
 //! Usage:
 //!   cargo run -p hwpforge-smithy-hwpx --example gso_shape_fixtures
@@ -17,6 +19,7 @@
 //!   examples/hwp5_review/sample-gso-ellipse.hwpx
 //!   examples/hwp5_review/sample-gso-arc.hwpx
 //!   examples/hwp5_review/sample-gso-curve.hwpx
+//!   examples/hwp5_review/sample-gso-connectline.hwpx
 
 use std::path::Path;
 
@@ -95,4 +98,12 @@ fn main() {
             vec![CurveSegmentType::Curve, CurveSegmentType::Curve, CurveSegmentType::Curve];
     }
     save("sample-gso-curve.hwpx", "GSO 곡선(Curve, 베지어) 단일 객체", curve);
+
+    // Wave 12b probe: HWP5 has no dedicated connect-line sub-tag, so this
+    // fixture exists only to discover how 한컴 stores a <hp:connectLine> on the
+    // HWP5 side before deciding whether/how to decode it.
+    let connect_line =
+        Control::connect_line(ShapePoint::new(0, 2000), ShapePoint::new(14000, 2000))
+            .expect("2-point connect line is valid");
+    save("sample-gso-connectline.hwpx", "GSO 연결선(ConnectLine) 단일 객체", connect_line);
 }
