@@ -1082,6 +1082,12 @@ pub enum Hwp5SemanticControlKind {
     Rect,
     /// Polygon shape object.
     Polygon,
+    /// Ellipse shape object.
+    Ellipse,
+    /// Arc shape object (an ellipse record carrying arc fields).
+    Arc,
+    /// Curve (bezier/polyline) shape object.
+    Curve,
     /// Header control.
     Header,
     /// Footer control.

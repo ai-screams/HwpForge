@@ -790,6 +790,9 @@ fn collect_image_geometry_hints_in_controls(
             decoder::section::Hwp5Control::Line(_)
             | decoder::section::Hwp5Control::Rect(_)
             | decoder::section::Hwp5Control::Polygon(_)
+            | decoder::section::Hwp5Control::Ellipse(_)
+            | decoder::section::Hwp5Control::Arc(_)
+            | decoder::section::Hwp5Control::Curve(_)
             | decoder::section::Hwp5Control::OleObject(_)
             | decoder::section::Hwp5Control::Unknown { .. } => {}
         }
@@ -1091,6 +1094,9 @@ mod tests {
         polygons: usize,
         textboxes: usize,
         rects: usize,
+        ellipses: usize,
+        arcs: usize,
+        curves: usize,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1437,6 +1443,9 @@ mod tests {
             Control::Line { .. } => layout.lines += 1,
             Control::Rect { .. } => layout.rects += 1,
             Control::Polygon { .. } => layout.polygons += 1,
+            Control::Ellipse { .. } => layout.ellipses += 1,
+            Control::Arc { .. } => layout.arcs += 1,
+            Control::Curve { .. } => layout.curves += 1,
             Control::TextBox { paragraphs, .. } => {
                 layout.textboxes += 1;
                 count_shapes_in_paragraphs(paragraphs, layout);
@@ -1934,6 +1943,103 @@ mod tests {
         assert_eq!(layout.polygons, 0);
         assert_eq!(layout.textboxes, 0);
         assert!(layout.rects >= 1, "expected at least one decoded Control::Rect in section runs");
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_gso_ellipse_carries_ellipse() {
+        // Wave 12a: a plain ellipse (gso ShapeComponentEllipse 0x50, property 0)
+        // used to fall through to Hwp5Control::Unknown and silently empty its
+        // paragraph. It must now carry as Control::Ellipse → <hp:ellipse>.
+        let source = fixture_path("user_samples/sample-gso-ellipse.hwp");
+        if !source.exists() {
+            return;
+        }
+        let out = unique_temp_path("user-sample-gso-ellipse.hwpx");
+        let warnings = hwp5_to_hwpx(&source, &out).expect("ellipse conversion should succeed");
+        assert!(
+            !warnings.iter().any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
+            "gso ellipse must not drop any control: {warnings:?}"
+        );
+        assert_valid_hwpx(&out);
+
+        let section_xml = read_section_xml(&out, 0);
+        assert!(section_xml.contains("<hp:ellipse"), "converted xml must emit <hp:ellipse>");
+        assert!(
+            section_xml.contains(r#"hasArcPr="0""#),
+            "a plain ellipse must not advertise arc properties"
+        );
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let layout = collect_decoded_shape_layout(&decoded);
+        assert_eq!(layout.ellipses, 1, "exactly one Control::Ellipse should round-trip");
+        assert_eq!(layout.arcs, 0);
+        assert_eq!(layout.curves, 0);
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_gso_arc_carries_arc() {
+        // Wave 12a: 한컴 stores arcs in the same ShapeComponentEllipse (0x50)
+        // record with arc fields set, so the arc must carry as Control::Arc →
+        // <hp:ellipse hasArcPr="1">.
+        let source = fixture_path("user_samples/sample-gso-arc.hwp");
+        if !source.exists() {
+            return;
+        }
+        let out = unique_temp_path("user-sample-gso-arc.hwpx");
+        let warnings = hwp5_to_hwpx(&source, &out).expect("arc conversion should succeed");
+        assert!(
+            !warnings.iter().any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
+            "gso arc must not drop any control: {warnings:?}"
+        );
+        assert_valid_hwpx(&out);
+
+        let section_xml = read_section_xml(&out, 0);
+        assert!(section_xml.contains("<hp:ellipse"), "an arc is emitted as <hp:ellipse>");
+        assert!(
+            section_xml.contains(r#"hasArcPr="1""#),
+            "an arc must advertise arc properties via hasArcPr=1"
+        );
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let layout = collect_decoded_shape_layout(&decoded);
+        assert_eq!(layout.arcs, 1, "exactly one Control::Arc should round-trip");
+        assert_eq!(layout.ellipses, 0);
+        assert_eq!(layout.curves, 0);
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_gso_curve_carries_curve() {
+        // Wave 12a: a bezier curve (gso ShapeComponentCurve 0x53) must carry as
+        // Control::Curve → <hp:curve> instead of being dropped.
+        let source = fixture_path("user_samples/sample-gso-curve.hwp");
+        if !source.exists() {
+            return;
+        }
+        let out = unique_temp_path("user-sample-gso-curve.hwpx");
+        let warnings = hwp5_to_hwpx(&source, &out).expect("curve conversion should succeed");
+        assert!(
+            !warnings.iter().any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
+            "gso curve must not drop any control: {warnings:?}"
+        );
+        assert_valid_hwpx(&out);
+
+        let section_xml = read_section_xml(&out, 0);
+        assert!(section_xml.contains("<hp:curve"), "converted xml must emit <hp:curve>");
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let layout = collect_decoded_shape_layout(&decoded);
+        assert_eq!(layout.curves, 1, "exactly one Control::Curve should round-trip");
+        assert_eq!(layout.ellipses, 0);
+        assert_eq!(layout.arcs, 0);
 
         let _ = std::fs::remove_file(&out);
     }

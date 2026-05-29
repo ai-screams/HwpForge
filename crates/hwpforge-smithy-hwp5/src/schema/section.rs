@@ -638,6 +638,171 @@ impl Hwp5ShapeComponentPolygon {
     }
 }
 
+/// Minimal `ShapeComponentEllipse` (tag `0x50`) payload.
+///
+/// 한컴 stores **both** plain ellipses and arcs in this 60-byte record — it does
+/// not emit a separate `ShapeComponentArc` (`0x51`) for arcs (empirically
+/// confirmed from 한컴 output). The discriminator is content: a plain ellipse
+/// leaves `property` at zero and all four arc endpoints at the origin, while an
+/// arc carries a non-zero `property` and real arc endpoints.
+///
+/// Layout (15 little-endian words; the first read as `u32`, the rest as `i32`):
+///
+/// ```text
+/// property | center(x,y) | axis1(x,y) | axis2(x,y)
+///          | start1(x,y) | end1(x,y) | start2(x,y) | end2(x,y)
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Hwp5ShapeComponentEllipse {
+    /// Raw property bitfield (`0` for a plain ellipse; non-zero marks an arc).
+    pub property: u32,
+    /// Ellipse center in local object coordinates.
+    pub center: Hwp5ShapePoint,
+    /// First-axis reference point.
+    pub axis1: Hwp5ShapePoint,
+    /// Second-axis reference point.
+    pub axis2: Hwp5ShapePoint,
+    /// Arc start point 1 (origin for a plain ellipse).
+    pub start1: Hwp5ShapePoint,
+    /// Arc end point 1 (origin for a plain ellipse).
+    pub end1: Hwp5ShapePoint,
+    /// Arc start point 2 (origin for a plain ellipse).
+    pub start2: Hwp5ShapePoint,
+    /// Arc end point 2 (origin for a plain ellipse).
+    pub end2: Hwp5ShapePoint,
+}
+
+impl Hwp5ShapeComponentEllipse {
+    /// Exact payload size: `property` (4) + 7 point pairs (56) = 60 bytes.
+    const MIN_SIZE: usize = 60;
+
+    /// Parse the ellipse/arc geometry from a `ShapeComponentEllipse` payload.
+    pub(crate) fn parse(data: &[u8]) -> Hwp5Result<Self> {
+        if data.len() < Self::MIN_SIZE {
+            return Err(Hwp5Error::RecordParse {
+                offset: 0,
+                detail: format!(
+                    "ShapeComponentEllipse too short: {} bytes (expected >= {})",
+                    data.len(),
+                    Self::MIN_SIZE
+                ),
+            });
+        }
+
+        let mut cur = Cursor::new(data);
+        let property = cur.read_u32::<LittleEndian>()?;
+        let center = read_point(&mut cur)?;
+        let axis1 = read_point(&mut cur)?;
+        let axis2 = read_point(&mut cur)?;
+        let start1 = read_point(&mut cur)?;
+        let end1 = read_point(&mut cur)?;
+        let start2 = read_point(&mut cur)?;
+        let end2 = read_point(&mut cur)?;
+        Ok(Self { property, center, axis1, axis2, start1, end1, start2, end2 })
+    }
+
+    /// Whether this record describes an arc rather than a plain ellipse.
+    ///
+    /// True when the property bitfield is set or any arc endpoint is non-origin.
+    /// This content-based check is robust against unknown `property` bits.
+    pub(crate) fn is_arc(&self) -> bool {
+        let arc_points_present =
+            [self.start1, self.end1, self.start2, self.end2].iter().any(|p| p.x != 0 || p.y != 0);
+        self.property != 0 || arc_points_present
+    }
+}
+
+/// Minimal `ShapeComponentCurve` (tag `0x53`) payload.
+///
+/// Layout: `count` (`u32`) followed by `count` × (`i32` x, `i32` y) control
+/// points, then `count - 1` `UINT8` segment-type bytes (`0` = straight line,
+/// `1` = curve) plus trailing reserved bytes we ignore.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Hwp5ShapeComponentCurve {
+    /// Ordered curve control points in local object coordinates.
+    pub points: Vec<Hwp5ShapePoint>,
+    /// Per-segment type bytes (`0` = line, `1` = curve); one per point gap.
+    pub segment_types: Vec<u8>,
+}
+
+impl Hwp5ShapeComponentCurve {
+    /// Minimum payload size required to recover the point count.
+    const MIN_SIZE: usize = 4;
+    /// Serialized size of one point pair.
+    const POINT_SIZE: usize = 8;
+
+    /// Parse the point list and segment types from a `ShapeComponentCurve` payload.
+    pub(crate) fn parse(data: &[u8]) -> Hwp5Result<Self> {
+        if data.len() < Self::MIN_SIZE {
+            return Err(Hwp5Error::RecordParse {
+                offset: 0,
+                detail: format!(
+                    "ShapeComponentCurve too short: {} bytes (expected >= {})",
+                    data.len(),
+                    Self::MIN_SIZE
+                ),
+            });
+        }
+
+        let mut cur = Cursor::new(data);
+        let point_count_u32 = cur.read_u32::<LittleEndian>()?;
+        let point_count: usize =
+            usize::try_from(point_count_u32).map_err(|_| Hwp5Error::RecordParse {
+                offset: 0,
+                detail: format!(
+                    "ShapeComponentCurve point count does not fit usize: {point_count_u32}"
+                ),
+            })?;
+        let points_size =
+            point_count.checked_mul(Self::POINT_SIZE).ok_or_else(|| Hwp5Error::RecordParse {
+                offset: 0,
+                detail: format!(
+                    "ShapeComponentCurve point count overflows payload size: {point_count_u32}"
+                ),
+            })?;
+        let required_size =
+            Self::MIN_SIZE.checked_add(points_size).ok_or_else(|| Hwp5Error::RecordParse {
+                offset: 0,
+                detail: format!(
+                    "ShapeComponentCurve payload size overflows for point count: {point_count_u32}"
+                ),
+            })?;
+        if data.len() < required_size {
+            return Err(Hwp5Error::RecordParse {
+                offset: 0,
+                detail: format!(
+                    "ShapeComponentCurve too short for {} points: {} bytes (expected >= {})",
+                    point_count_u32,
+                    data.len(),
+                    required_size
+                ),
+            });
+        }
+
+        let mut points = Vec::with_capacity(point_count);
+        for _ in 0..point_count {
+            points.push(read_point(&mut cur)?);
+        }
+        // Segment types: one per gap between points; best-effort if truncated.
+        let segment_count = point_count.saturating_sub(1);
+        let mut segment_types = Vec::with_capacity(segment_count);
+        for _ in 0..segment_count {
+            match cur.read_u8() {
+                Ok(byte) => segment_types.push(byte),
+                Err(_) => break,
+            }
+        }
+        Ok(Self { points, segment_types })
+    }
+}
+
+/// Read one little-endian `(i32 x, i32 y)` point pair from a cursor.
+fn read_point(cur: &mut Cursor<&[u8]>) -> Hwp5Result<Hwp5ShapePoint> {
+    let x = cur.read_i32::<LittleEndian>()?;
+    let y = cur.read_i32::<LittleEndian>()?;
+    Ok(Hwp5ShapePoint { x, y })
+}
+
 // ---------------------------------------------------------------------------
 // Hwp5ShapePicture
 // ---------------------------------------------------------------------------
@@ -1096,6 +1261,122 @@ mod tests {
 
         assert!(matches!(
             Hwp5ShapeComponentPolygon::parse(&data).unwrap_err(),
+            Hwp5Error::RecordParse { .. }
+        ));
+    }
+
+    /// Build a 60-byte `ShapeComponentEllipse` payload from a property word and
+    /// the seven `(x, y)` point pairs in record order.
+    fn ellipse_bytes(property: u32, points: [(i32, i32); 7]) -> Vec<u8> {
+        let mut data = Vec::with_capacity(Hwp5ShapeComponentEllipse::MIN_SIZE);
+        data.extend_from_slice(&property.to_le_bytes());
+        for (x, y) in points {
+            data.extend_from_slice(&x.to_le_bytes());
+            data.extend_from_slice(&y.to_le_bytes());
+        }
+        data
+    }
+
+    #[test]
+    fn shape_component_ellipse_parses_plain_ellipse() {
+        // Mirrors the 한컴 plain-ellipse layout: property 0, real center/axes,
+        // arc endpoints left at the origin.
+        let data = ellipse_bytes(
+            0,
+            [(7086, 4252), (14173, 4252), (7086, 8504), (0, 0), (0, 0), (0, 0), (0, 0)],
+        );
+        let ellipse = Hwp5ShapeComponentEllipse::parse(&data).unwrap();
+        assert_eq!(ellipse.property, 0);
+        assert_eq!(ellipse.center, Hwp5ShapePoint { x: 7086, y: 4252 });
+        assert_eq!(ellipse.axis1, Hwp5ShapePoint { x: 14173, y: 4252 });
+        assert_eq!(ellipse.axis2, Hwp5ShapePoint { x: 7086, y: 8504 });
+        assert!(!ellipse.is_arc(), "zero property + origin arc points is a plain ellipse");
+    }
+
+    #[test]
+    fn shape_component_ellipse_with_property_is_arc() {
+        // 한컴 normal arc: property 2, arc endpoints populated.
+        let data = ellipse_bytes(
+            2,
+            [
+                (5669, 4252),
+                (11339, 4252),
+                (5669, 8504),
+                (11339, 4252),
+                (5669, 0),
+                (11349, 4265),
+                (5671, 27),
+            ],
+        );
+        let arc = Hwp5ShapeComponentEllipse::parse(&data).unwrap();
+        assert_eq!(arc.property, 2);
+        assert_eq!(arc.start1, Hwp5ShapePoint { x: 11339, y: 4252 });
+        assert_eq!(arc.end2, Hwp5ShapePoint { x: 5671, y: 27 });
+        assert!(arc.is_arc(), "non-zero property marks an arc");
+    }
+
+    #[test]
+    fn shape_component_ellipse_arc_points_alone_mark_arc() {
+        // Even with property 0, a non-origin arc endpoint means an arc.
+        let data = ellipse_bytes(0, [(10, 10), (20, 10), (10, 20), (5, 5), (0, 0), (0, 0), (0, 0)]);
+        let parsed = Hwp5ShapeComponentEllipse::parse(&data).unwrap();
+        assert!(parsed.is_arc(), "content-based arc detection ignores unknown property bits");
+    }
+
+    #[test]
+    fn shape_component_ellipse_too_short() {
+        assert!(matches!(
+            Hwp5ShapeComponentEllipse::parse(&[0u8; 59]).unwrap_err(),
+            Hwp5Error::RecordParse { .. }
+        ));
+    }
+
+    #[test]
+    fn shape_component_curve_parses_points_and_segments() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&4u32.to_le_bytes());
+        for (x, y) in [(0i32, 5000i32), (3000, 0), (6000, 10000), (9000, 5000)] {
+            data.extend_from_slice(&x.to_le_bytes());
+            data.extend_from_slice(&y.to_le_bytes());
+        }
+        // count - 1 = 3 segment bytes, then trailing reserved bytes we ignore.
+        data.extend_from_slice(&[1u8, 0u8, 1u8, 0u8, 0u8, 0u8, 0u8]);
+
+        let curve = Hwp5ShapeComponentCurve::parse(&data).unwrap();
+        assert_eq!(
+            curve.points,
+            vec![
+                Hwp5ShapePoint { x: 0, y: 5000 },
+                Hwp5ShapePoint { x: 3000, y: 0 },
+                Hwp5ShapePoint { x: 6000, y: 10000 },
+                Hwp5ShapePoint { x: 9000, y: 5000 },
+            ]
+        );
+        assert_eq!(curve.segment_types, vec![1, 0, 1]);
+    }
+
+    #[test]
+    fn shape_component_curve_tolerates_missing_segment_bytes() {
+        // Points present but no trailing segment bytes — best-effort, no panic.
+        let mut data = Vec::new();
+        data.extend_from_slice(&2u32.to_le_bytes());
+        for (x, y) in [(0i32, 0i32), (100, 200)] {
+            data.extend_from_slice(&x.to_le_bytes());
+            data.extend_from_slice(&y.to_le_bytes());
+        }
+        let curve = Hwp5ShapeComponentCurve::parse(&data).unwrap();
+        assert_eq!(curve.points.len(), 2);
+        assert!(curve.segment_types.is_empty());
+    }
+
+    #[test]
+    fn shape_component_curve_too_short_for_points() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&5u32.to_le_bytes());
+        data.extend_from_slice(&1i32.to_le_bytes());
+
+        assert!(matches!(
+            Hwp5ShapeComponentCurve::parse(&data).unwrap_err(),
             Hwp5Error::RecordParse { .. }
         ));
     }

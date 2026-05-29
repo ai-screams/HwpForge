@@ -249,6 +249,30 @@ fn adapt_control(
         Hwp5Control::Polygon(polygon) => {
             adapt_polygon_control(polygon, container, paragraph_id, build, ids)
         }
+        Hwp5Control::Ellipse(ellipse) => adapt_shape_control(
+            ellipse.ctrl_id,
+            Hwp5SemanticControlKind::Ellipse,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
+        Hwp5Control::Arc(arc) => adapt_shape_control(
+            arc.ctrl_id,
+            Hwp5SemanticControlKind::Arc,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
+        Hwp5Control::Curve(curve) => adapt_shape_control(
+            curve.ctrl_id,
+            Hwp5SemanticControlKind::Curve,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
         Hwp5Control::OleObject(ole) => {
             adapt_ole_object_control(ole, container, paragraph_id, build, support, ids)
         }
@@ -405,6 +429,32 @@ fn adapt_ole_object_control(
         anchor_paragraph_id: Some(paragraph_id),
         confidence,
         notes,
+    });
+    node_id
+}
+
+/// Adapt a geometry-only GSO shape (ellipse/arc/curve) into a semantic control
+/// node. These carry no nested content or binary reference, so the audit only
+/// needs the kind and the raw ctrl_id for source-side counting.
+fn adapt_shape_control(
+    ctrl_id: u32,
+    kind: Hwp5SemanticControlKind,
+    container: &Hwp5SemanticContainerPath,
+    paragraph_id: Hwp5SemanticParagraphId,
+    build: &mut SectionBuildState,
+    ids: &mut SemanticIdAlloc,
+) -> Hwp5SemanticControlId {
+    let node_id = ids.next_control_id();
+    let literal = crate::ctrl_id_ascii(ctrl_id);
+    build.controls.push(Hwp5SemanticControlNode {
+        node_id,
+        kind,
+        payload: Hwp5SemanticControlPayload::None,
+        container: container.clone(),
+        literal_ctrl_id: Some(literal),
+        anchor_paragraph_id: Some(paragraph_id),
+        confidence: Hwp5SemanticConfidence::High,
+        notes: vec![format!("raw_ctrl_id=0x{ctrl_id:08X}")],
     });
     node_id
 }

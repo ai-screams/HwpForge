@@ -12,8 +12,9 @@ use crate::schema::header::HwpVersion;
 use crate::schema::record::{Record, TagId};
 use crate::schema::section::{
     Hwp5CharShapeRun, Hwp5PageDef, Hwp5ParaHeader, Hwp5ParaLineSeg, Hwp5ParaText,
-    Hwp5ShapeComponentGeometry, Hwp5ShapeComponentLine, Hwp5ShapeComponentOle,
-    Hwp5ShapeComponentPolygon, Hwp5ShapePicture, Hwp5ShapePoint, TextSegment,
+    Hwp5ShapeComponentCurve, Hwp5ShapeComponentEllipse, Hwp5ShapeComponentGeometry,
+    Hwp5ShapeComponentLine, Hwp5ShapeComponentOle, Hwp5ShapeComponentPolygon, Hwp5ShapePicture,
+    Hwp5ShapePoint, TextSegment,
 };
 
 // ---------------------------------------------------------------------------
@@ -55,6 +56,13 @@ pub(crate) enum Hwp5Control {
     Rect(Hwp5RectControl),
     /// Polygon evidence resolved from `gso ` + `ShapeComponent` + `ShapeComponentPolygon`.
     Polygon(Hwp5PolygonControl),
+    /// Ellipse evidence resolved from `gso ` + `ShapeComponent` + `ShapeComponentEllipse`.
+    Ellipse(Hwp5EllipseControl),
+    /// Arc evidence resolved from the same `ShapeComponentEllipse` (`0x50`) record
+    /// with arc fields populated — 한컴 does not emit a separate arc sub-record.
+    Arc(Hwp5ArcControl),
+    /// Curve evidence resolved from `gso ` + `ShapeComponent` + `ShapeComponentCurve`.
+    Curve(Hwp5CurveControl),
     /// Header control with nested subtree paragraphs.
     Header(Hwp5NestedSubtree),
     /// Footer control with nested subtree paragraphs.
@@ -129,6 +137,51 @@ pub(crate) struct Hwp5PolygonControl {
     pub geometry: Hwp5ShapeComponentGeometry,
     /// Ordered polygon vertices in local object coordinates.
     pub points: Vec<Hwp5ShapePoint>,
+}
+
+/// Parsed plain-ellipse evidence from a `gso ` scope.
+///
+/// Only geometry (placement + extent) is carried: projection derives the
+/// ellipse center/axes from the bounding box via `Control::ellipse`. The
+/// precise center/axis points decoded in [`Hwp5ShapeComponentEllipse`] are
+/// not needed downstream yet (they would only matter for exact-geometry
+/// fidelity, a future refinement).
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5EllipseControl {
+    /// Owning control identifier, currently always `gso `.
+    #[allow(dead_code)] // reserved for semantic/control-audit slices
+    pub ctrl_id: u32,
+    /// Minimal recovered geometry (placement + extent).
+    pub geometry: Hwp5ShapeComponentGeometry,
+}
+
+/// Parsed arc evidence from a `gso ` scope (a `ShapeComponentEllipse` with arc fields).
+///
+/// Carries geometry only for now. We emit a `Normal` arc sized from the
+/// bounding box; exact arc-sweep endpoints and pie/chord arc types are a
+/// future refinement that needs dedicated fixtures, so the decoded arc points
+/// are intentionally not propagated here.
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5ArcControl {
+    /// Owning control identifier, currently always `gso `.
+    #[allow(dead_code)] // reserved for semantic/control-audit slices
+    pub ctrl_id: u32,
+    /// Minimal recovered geometry (placement + extent).
+    pub geometry: Hwp5ShapeComponentGeometry,
+}
+
+/// Parsed curve evidence from a `gso ` scope.
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5CurveControl {
+    /// Owning control identifier, currently always `gso `.
+    #[allow(dead_code)] // reserved for semantic/control-audit slices
+    pub ctrl_id: u32,
+    /// Minimal recovered geometry (placement + extent).
+    pub geometry: Hwp5ShapeComponentGeometry,
+    /// Ordered curve control points in local object coordinates.
+    pub points: Vec<Hwp5ShapePoint>,
+    /// Per-gap segment type bytes (`0` = line, `1` = curve).
+    pub segment_types: Vec<u8>,
 }
 
 /// Parsed textbox evidence from a `gso ` scope carrying `drawText/subList`.
@@ -486,6 +539,8 @@ struct NestedSubtreeContext {
     ole: Option<Hwp5ShapeComponentOle>,
     line: Option<Hwp5ShapeComponentLine>,
     polygon: Option<Hwp5ShapeComponentPolygon>,
+    ellipse: Option<Hwp5ShapeComponentEllipse>,
+    curve: Option<Hwp5ShapeComponentCurve>,
     paragraphs: Vec<Hwp5Paragraph>,
 }
 
@@ -508,6 +563,8 @@ impl NestedSubtreeContext {
             ole: None,
             line: None,
             polygon: None,
+            ellipse: None,
+            curve: None,
             paragraphs: Vec::new(),
         }
     }
@@ -538,6 +595,14 @@ impl NestedSubtreeContext {
 
     fn note_shape_polygon(&mut self, polygon: Hwp5ShapeComponentPolygon) {
         self.polygon = Some(polygon);
+    }
+
+    fn note_shape_ellipse(&mut self, ellipse: Hwp5ShapeComponentEllipse) {
+        self.ellipse = Some(ellipse);
+    }
+
+    fn note_shape_curve(&mut self, curve: Hwp5ShapeComponentCurve) {
+        self.curve = Some(curve);
     }
 
     fn allows_nested_paragraphs(&self) -> bool {
@@ -607,6 +672,8 @@ impl NestedSubtreeContext {
                 ole: self.ole,
                 line: self.line,
                 polygon: self.polygon,
+                ellipse: self.ellipse,
+                curve: self.curve,
             }),
         }
     }
@@ -623,6 +690,8 @@ struct InlineGsoContext {
     ole: Option<Hwp5ShapeComponentOle>,
     line: Option<Hwp5ShapeComponentLine>,
     polygon: Option<Hwp5ShapeComponentPolygon>,
+    ellipse: Option<Hwp5ShapeComponentEllipse>,
+    curve: Option<Hwp5ShapeComponentCurve>,
 }
 
 struct GsoClassificationInput {
@@ -634,6 +703,8 @@ struct GsoClassificationInput {
     ole: Option<Hwp5ShapeComponentOle>,
     line: Option<Hwp5ShapeComponentLine>,
     polygon: Option<Hwp5ShapeComponentPolygon>,
+    ellipse: Option<Hwp5ShapeComponentEllipse>,
+    curve: Option<Hwp5ShapeComponentCurve>,
 }
 
 impl InlineGsoContext {
@@ -648,6 +719,8 @@ impl InlineGsoContext {
             ole: None,
             line: None,
             polygon: None,
+            ellipse: None,
+            curve: None,
         }
     }
 
@@ -675,6 +748,14 @@ impl InlineGsoContext {
         self.polygon = Some(polygon);
     }
 
+    fn note_shape_ellipse(&mut self, ellipse: Hwp5ShapeComponentEllipse) {
+        self.ellipse = Some(ellipse);
+    }
+
+    fn note_shape_curve(&mut self, curve: Hwp5ShapeComponentCurve) {
+        self.curve = Some(curve);
+    }
+
     fn into_control(self) -> Hwp5Control {
         classify_gso_control(GsoClassificationInput {
             ctrl_id: self.ctrl_id,
@@ -685,6 +766,8 @@ impl InlineGsoContext {
             ole: self.ole,
             line: self.line,
             polygon: self.polygon,
+            ellipse: self.ellipse,
+            curve: self.curve,
         })
     }
 }
@@ -698,9 +781,37 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
         + usize::from(input.ole.is_some())
         + usize::from(input.saw_shape_rectangle)
         + usize::from(input.line.is_some())
-        + usize::from(input.polygon.is_some());
+        + usize::from(input.polygon.is_some())
+        + usize::from(input.ellipse.is_some())
+        + usize::from(input.curve.is_some());
     if payload_count != 1 {
         return Hwp5Control::Unknown { ctrl_id: input.ctrl_id, header_data: Vec::new() };
+    }
+
+    // Ellipse (0x50) doubles as the arc carrier — split on its arc fields.
+    // Both ellipse/arc/curve need geometry for placement; without it we drop
+    // to Unknown rather than fabricate a zero-size shape.
+    if let Some(ellipse) = input.ellipse {
+        let ctrl_id = input.ctrl_id;
+        return match input.geometry {
+            Some(geometry) if ellipse.is_arc() => {
+                Hwp5Control::Arc(Hwp5ArcControl { ctrl_id, geometry })
+            }
+            Some(geometry) => Hwp5Control::Ellipse(Hwp5EllipseControl { ctrl_id, geometry }),
+            None => Hwp5Control::Unknown { ctrl_id, header_data: Vec::new() },
+        };
+    }
+    if let Some(curve) = input.curve {
+        let ctrl_id = input.ctrl_id;
+        return match input.geometry {
+            Some(geometry) => Hwp5Control::Curve(Hwp5CurveControl {
+                ctrl_id,
+                geometry,
+                points: curve.points,
+                segment_types: curve.segment_types,
+            }),
+            None => Hwp5Control::Unknown { ctrl_id, header_data: Vec::new() },
+        };
     }
 
     match (input.geometry, input.picture, input.ole, input.line, input.polygon) {
@@ -1045,6 +1156,22 @@ impl BodyTextParserState {
                 }
                 Err(_) => self.push_unsupported_tag(record.header.tag_id),
             },
+            TagId::ShapeComponentEllipse => match Hwp5ShapeComponentEllipse::parse(&record.data) {
+                Ok(ellipse) => {
+                    if let Some(ctx) = self.subtree_ctx.as_mut() {
+                        ctx.note_shape_ellipse(ellipse);
+                    }
+                }
+                Err(_) => self.push_unsupported_tag(record.header.tag_id),
+            },
+            TagId::ShapeComponentCurve => match Hwp5ShapeComponentCurve::parse(&record.data) {
+                Ok(curve) => {
+                    if let Some(ctx) = self.subtree_ctx.as_mut() {
+                        ctx.note_shape_curve(curve);
+                    }
+                }
+                Err(_) => self.push_unsupported_tag(record.header.tag_id),
+            },
             TagId::ShapePicture => match Hwp5ShapePicture::parse(&record.data) {
                 Ok(picture) => {
                     if let Some(ctx) = self.subtree_ctx.as_mut() {
@@ -1366,6 +1493,16 @@ impl BodyTextParserState {
             },
             TagId::ShapeComponentPolygon => match Hwp5ShapeComponentPolygon::parse(&record.data) {
                 Ok(polygon) => ctx.note_shape_polygon(polygon),
+                Err(_) => warnings
+                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
+            },
+            TagId::ShapeComponentEllipse => match Hwp5ShapeComponentEllipse::parse(&record.data) {
+                Ok(ellipse) => ctx.note_shape_ellipse(ellipse),
+                Err(_) => warnings
+                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
+            },
+            TagId::ShapeComponentCurve => match Hwp5ShapeComponentCurve::parse(&record.data) {
+                Ok(curve) => ctx.note_shape_curve(curve),
                 Err(_) => warnings
                     .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
             },

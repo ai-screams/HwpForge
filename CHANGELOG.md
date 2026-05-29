@@ -7,6 +7,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Phase 12 (HWP5 drawing-object carry)
+
+Continues the Phase 11 line: HWP5 drawing objects the decoder previously
+skipped now carry through Core to HWPX instead of silently emptying their
+host paragraph. No Core or HWPX API changes — these shape variants already
+existed in the shared model; only the HWP5 leg was missing.
+
+#### Added — Wave 12a (GSO ellipse / arc / curve)
+
+- Decode `gso ` `ShapeComponentEllipse` (`0x50`) and `ShapeComponentCurve`
+  (`0x53`) sub-records and project them to `Control::Ellipse`,
+  `Control::Arc`, and `Control::Curve`. Previously these fell through to
+  `Hwp5Control::Unknown` and were dropped, emptying the host paragraph.
+- 한컴 stores arcs inside the ellipse (`0x50`) record with arc fields set —
+  it does **not** emit a separate `ShapeComponentArc` (`0x51`). An arc is
+  now distinguished by content and carried as `Control::Arc` →
+  `<hp:ellipse hasArcPr="1">`.
+- Classify ellipse/arc/curve in the audit semantic model
+  (`Hwp5SemanticControlKind::{Ellipse, Arc, Curve}`) so source-side control
+  counts match converted output.
+- Binary layouts confirmed empirically from 한컴 truth fixtures
+  (`sample-gso-{ellipse,arc,curve}`); golden tests assert end-to-end carry.
+- Known limitation: arcs carry as the `Normal` arc type sized from the
+  bounding box. Pie/chord arc types and exact arc-sweep endpoints are
+  deferred until dedicated fixtures exist.
+
 ### Phase 11 (HWP5 → HWPX silent-gap closure)
 
 This release closes the largest batch of "HWP5 decoder has the bytes, but

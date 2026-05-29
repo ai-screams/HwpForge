@@ -17,15 +17,16 @@ use hwpforge_core::table::{Table, TableCell, TableMargin, TableRow};
 use hwpforge_core::Control;
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
-    BookmarkType, CharShapeIndex, HwpUnit, NumberFormatType, PageNumberPosition, ParaShapeIndex,
-    RefContentType, RefType, StyleIndex,
+    ArcType, BookmarkType, CharShapeIndex, CurveSegmentType, HwpUnit, NumberFormatType,
+    PageNumberPosition, ParaShapeIndex, RefContentType, RefType, StyleIndex,
 };
 
 use crate::decoder::chart_ole::{extract_chart_payload, ChartOleError};
 use crate::decoder::section::{
-    Hwp5Control, Hwp5ImageControl, Hwp5LineControl, Hwp5NestedSubtree, Hwp5OleObjectControl,
-    Hwp5PageBorderFill, Hwp5Paragraph, Hwp5PolygonControl, Hwp5RectControl, Hwp5Table,
-    Hwp5TableCell, Hwp5TextBoxControl, SectionResult,
+    Hwp5ArcControl, Hwp5Control, Hwp5CurveControl, Hwp5EllipseControl, Hwp5ImageControl,
+    Hwp5LineControl, Hwp5NestedSubtree, Hwp5OleObjectControl, Hwp5PageBorderFill, Hwp5Paragraph,
+    Hwp5PolygonControl, Hwp5RectControl, Hwp5Table, Hwp5TableCell, Hwp5TextBoxControl,
+    SectionResult,
 };
 use crate::decoder::Hwp5Warning;
 use crate::error::Hwp5Result;
@@ -1304,6 +1305,9 @@ fn project_control_run(
         Hwp5Control::Line(line) => Some(project_line_run(line)),
         Hwp5Control::Rect(rect) => project_rect_run(rect),
         Hwp5Control::Polygon(polygon) => Some(project_polygon_run(polygon)),
+        Hwp5Control::Ellipse(ellipse) => project_ellipse_run(ellipse),
+        Hwp5Control::Arc(arc) => project_arc_run(arc),
+        Hwp5Control::Curve(curve) => project_curve_run(curve),
         Hwp5Control::TextBox(textbox) => Some(project_textbox_run(textbox, projection_images)),
         Hwp5Control::Footnote(subtree) => Some(project_footnote_run(subtree, projection_images)),
         Hwp5Control::Endnote(subtree) => Some(project_endnote_run(subtree, projection_images)),
@@ -1529,6 +1533,58 @@ fn project_polygon_run(polygon: &Hwp5PolygonControl) -> Run {
         *vert_offset = polygon.geometry.y;
     }
     Run::control(control, CharShapeIndex::new(0))
+}
+
+/// Project a plain ellipse. Center/axes are derived from the bounding box
+/// (`Control::ellipse`), which matches how a HWP5 plain ellipse is defined.
+fn project_ellipse_run(ellipse: &Hwp5EllipseControl) -> Option<Run> {
+    let width = HwpUnit::new(positive_i32_from_u32(ellipse.geometry.width)?).ok()?;
+    let height = HwpUnit::new(positive_i32_from_u32(ellipse.geometry.height)?).ok()?;
+    let mut control = hwpforge_core::control::Control::ellipse(width, height);
+    if let Control::Ellipse { horz_offset, vert_offset, .. } = &mut control {
+        *horz_offset = ellipse.geometry.x;
+        *vert_offset = ellipse.geometry.y;
+    }
+    Some(Run::control(control, CharShapeIndex::new(0)))
+}
+
+/// Project an arc. 한컴 stores arcs inside the ellipse (`0x50`) record; we have
+/// verified the `Normal` open-arc shape end to end. Pie/chord arc types and
+/// exact arc-sweep endpoints are a future refinement that needs dedicated
+/// fixtures, so we carry a `Normal` arc sized from the bounding box rather than
+/// guess a sweep we cannot yet validate.
+fn project_arc_run(arc: &Hwp5ArcControl) -> Option<Run> {
+    let width = HwpUnit::new(positive_i32_from_u32(arc.geometry.width)?).ok()?;
+    let height = HwpUnit::new(positive_i32_from_u32(arc.geometry.height)?).ok()?;
+    let mut control = hwpforge_core::control::Control::arc(ArcType::Normal, width, height);
+    if let Control::Arc { horz_offset, vert_offset, .. } = &mut control {
+        *horz_offset = arc.geometry.x;
+        *vert_offset = arc.geometry.y;
+    }
+    Some(Run::control(control, CharShapeIndex::new(0)))
+}
+
+/// Project a curve, scaling its control points into the bounding box like a
+/// polygon and mapping the decoded per-segment type bytes onto the Core enum.
+fn project_curve_run(curve: &Hwp5CurveControl) -> Option<Run> {
+    let vertices = scale_polygon_points(&curve.points, &curve.geometry);
+    let mut control = hwpforge_core::control::Control::curve(vertices).ok()?;
+    if let Control::Curve { horz_offset, vert_offset, segment_types, .. } = &mut control {
+        *horz_offset = curve.geometry.x;
+        *vert_offset = curve.geometry.y;
+        let decoded: Vec<CurveSegmentType> = curve
+            .segment_types
+            .iter()
+            .map(|byte| match byte {
+                0 => CurveSegmentType::Line,
+                _ => CurveSegmentType::Curve,
+            })
+            .collect();
+        if !decoded.is_empty() {
+            *segment_types = decoded;
+        }
+    }
+    Some(Run::control(control, CharShapeIndex::new(0)))
 }
 
 #[derive(Debug, Clone, Copy)]
