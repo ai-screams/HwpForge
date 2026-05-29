@@ -803,6 +803,55 @@ fn read_point(cur: &mut Cursor<&[u8]>) -> Hwp5Result<Hwp5ShapePoint> {
     Ok(Hwp5ShapePoint { x, y })
 }
 
+/// Minimal `HWPTAG_EQEDIT` (`0x58`) payload: the equation script.
+///
+/// Layout (confirmed from 한컴 output): `UINT32` property, then the script as a
+/// `UINT16` WCHAR-count length prefix followed by that many little-endian
+/// UTF-16 code units. Trailing fields (version string, font name) are ignored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Hwp5EqEdit {
+    /// HancomEQN script text, e.g. `"{a + b} over {c + d}"`.
+    pub script: String,
+}
+
+impl Hwp5EqEdit {
+    /// Byte offset of the script length word: after the 4-byte property field.
+    const SCRIPT_LEN_OFFSET: usize = 4;
+
+    /// Parse the equation script from a `HWPTAG_EQEDIT` payload.
+    pub(crate) fn parse(data: &[u8]) -> Hwp5Result<Self> {
+        let len_at = Self::SCRIPT_LEN_OFFSET;
+        if data.len() < len_at + 2 {
+            return Err(Hwp5Error::RecordParse {
+                offset: 0,
+                detail: format!("EQEDIT too short for script length: {} bytes", data.len()),
+            });
+        }
+        let char_count = usize::from(u16::from_le_bytes([data[len_at], data[len_at + 1]]));
+        let start = len_at + 2;
+        let byte_len = char_count.checked_mul(2).ok_or_else(|| Hwp5Error::RecordParse {
+            offset: 0,
+            detail: format!("EQEDIT script length overflows: {char_count}"),
+        })?;
+        let end = start.checked_add(byte_len).ok_or_else(|| Hwp5Error::RecordParse {
+            offset: 0,
+            detail: format!("EQEDIT script range overflows: {char_count}"),
+        })?;
+        if data.len() < end {
+            return Err(Hwp5Error::RecordParse {
+                offset: 0,
+                detail: format!(
+                    "EQEDIT too short for {char_count}-char script: {} bytes (expected >= {end})",
+                    data.len()
+                ),
+            });
+        }
+        let units: Vec<u16> =
+            data[start..end].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+        Ok(Self { script: String::from_utf16_lossy(&units) })
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Hwp5ShapePicture
 // ---------------------------------------------------------------------------
@@ -1379,6 +1428,33 @@ mod tests {
             Hwp5ShapeComponentCurve::parse(&data).unwrap_err(),
             Hwp5Error::RecordParse { .. }
         ));
+    }
+
+    #[test]
+    fn eqedit_parses_script_after_property_and_length() {
+        let script = "{a + b} over {c + d}";
+        let units: Vec<u16> = script.encode_utf16().collect();
+        let mut data = Vec::new();
+        data.extend_from_slice(&0u32.to_le_bytes()); // property
+        data.extend_from_slice(&(units.len() as u16).to_le_bytes()); // WCHAR count
+        for u in &units {
+            data.extend_from_slice(&u.to_le_bytes());
+        }
+        // Trailing version/font fields are present in real records; ignored here.
+        data.extend_from_slice(&[0xDE, 0xAD]);
+
+        let parsed = Hwp5EqEdit::parse(&data).unwrap();
+        assert_eq!(parsed.script, script);
+    }
+
+    #[test]
+    fn eqedit_too_short_for_declared_script() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&0u32.to_le_bytes());
+        data.extend_from_slice(&10u16.to_le_bytes()); // claims 10 chars
+        data.extend_from_slice(&[0x41, 0x00]); // but only 1 provided
+
+        assert!(matches!(Hwp5EqEdit::parse(&data).unwrap_err(), Hwp5Error::RecordParse { .. }));
     }
 
     #[test]

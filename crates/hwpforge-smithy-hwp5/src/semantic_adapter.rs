@@ -281,6 +281,14 @@ fn adapt_control(
             build,
             ids,
         ),
+        Hwp5Control::Equation(equation) => adapt_shape_control(
+            equation.ctrl_id,
+            Hwp5SemanticControlKind::Equation,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
         Hwp5Control::OleObject(ole) => {
             adapt_ole_object_control(ole, container, paragraph_id, build, support, ids)
         }

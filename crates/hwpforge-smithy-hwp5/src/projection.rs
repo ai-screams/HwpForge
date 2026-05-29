@@ -24,9 +24,9 @@ use hwpforge_foundation::{
 use crate::decoder::chart_ole::{extract_chart_payload, ChartOleError};
 use crate::decoder::section::{
     Hwp5ArcControl, Hwp5ConnectLineControl, Hwp5Control, Hwp5CurveControl, Hwp5EllipseControl,
-    Hwp5ImageControl, Hwp5LineControl, Hwp5NestedSubtree, Hwp5OleObjectControl, Hwp5PageBorderFill,
-    Hwp5Paragraph, Hwp5PolygonControl, Hwp5RectControl, Hwp5Table, Hwp5TableCell,
-    Hwp5TextBoxControl, SectionResult,
+    Hwp5EquationControl, Hwp5ImageControl, Hwp5LineControl, Hwp5NestedSubtree,
+    Hwp5OleObjectControl, Hwp5PageBorderFill, Hwp5Paragraph, Hwp5PolygonControl, Hwp5RectControl,
+    Hwp5Table, Hwp5TableCell, Hwp5TextBoxControl, SectionResult,
 };
 use crate::decoder::Hwp5Warning;
 use crate::error::Hwp5Result;
@@ -1309,6 +1309,7 @@ fn project_control_run(
         Hwp5Control::Arc(arc) => project_arc_run(arc),
         Hwp5Control::Curve(curve) => project_curve_run(curve),
         Hwp5Control::ConnectLine(connect_line) => project_connectline_run(connect_line),
+        Hwp5Control::Equation(equation) => Some(project_equation_run(equation)),
         Hwp5Control::TextBox(textbox) => Some(project_textbox_run(textbox, projection_images)),
         Hwp5Control::Footnote(subtree) => Some(project_footnote_run(subtree, projection_images)),
         Hwp5Control::Endnote(subtree) => Some(project_endnote_run(subtree, projection_images)),
@@ -1640,6 +1641,26 @@ fn project_connectline_run(connect_line: &Hwp5ConnectLineControl) -> Option<Run>
         *vert_offset = connect_line.geometry.y;
     }
     Some(Run::control(control, CharShapeIndex::new(0)))
+}
+
+/// Project an equation. The HancomEQN script is carried verbatim; the box size
+/// comes from the `eqed` ctrl-header geometry when positive (equations are
+/// always inline, so there is no offset to set).
+fn project_equation_run(equation: &Hwp5EquationControl) -> Run {
+    let mut control = hwpforge_core::control::Control::equation(&equation.script);
+    if let Control::Equation { width, height, .. } = &mut control {
+        if let Some(w) =
+            positive_i32_from_u32(equation.geometry.width).and_then(|v| HwpUnit::new(v).ok())
+        {
+            *width = w;
+        }
+        if let Some(h) =
+            positive_i32_from_u32(equation.geometry.height).and_then(|v| HwpUnit::new(v).ok())
+        {
+            *height = h;
+        }
+    }
+    Run::control(control, CharShapeIndex::new(0))
 }
 
 #[derive(Debug, Clone, Copy)]

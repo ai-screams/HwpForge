@@ -61,6 +61,21 @@ existed in the shared model; only the HWP5 leg was missing.
   `PAPER` as `PICTURE`/`IN_FRONT_OF_TEXT` (matching 한컴) while inline shapes
   (zero offset) are unchanged. Exposed by Wave 12b's first floating connector.
 
+#### Added — Wave 12d (equation)
+
+- Carry equations as `Control::Equation` → `<hp:equation>` with the HancomEQN
+  script preserved. The `eqed` ctrl used to fall through to
+  `Hwp5Control::Unknown` and was dropped. The decoder now recognizes the
+  `eqed` ctrl, parses the script from its child `HWPTAG_EQEDIT` (`0x58`)
+  record (`UINT32` property, then a `UINT16` WCHAR-count length prefix + UTF-16
+  script), and projects it to `Control::Equation` sized from the ctrl-header
+  geometry.
+- Classify equations in the audit semantic model
+  (`Hwp5SemanticControlKind::Equation`).
+- Confirmed end to end against a 한컴 equation fixture
+  (`sample-equation-basic`: `{a + b} over {c + d}`); golden test asserts both
+  `<hp:equation>` emission and verbatim `<hp:script>` carry.
+
 ### Phase 11 (HWP5 → HWPX silent-gap closure)
 
 This release closes the largest batch of "HWP5 decoder has the bytes, but

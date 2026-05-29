@@ -1090,6 +1090,8 @@ pub enum Hwp5SemanticControlKind {
     Curve,
     /// Connect-line (connector) shape object.
     ConnectLine,
+    /// Equation editor object.
+    Equation,
     /// Header control.
     Header,
     /// Footer control.

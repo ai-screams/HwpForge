@@ -11,7 +11,7 @@ use crate::error::Hwp5Result;
 use crate::schema::header::HwpVersion;
 use crate::schema::record::{Record, TagId};
 use crate::schema::section::{
-    Hwp5CharShapeRun, Hwp5PageDef, Hwp5ParaHeader, Hwp5ParaLineSeg, Hwp5ParaText,
+    Hwp5CharShapeRun, Hwp5EqEdit, Hwp5PageDef, Hwp5ParaHeader, Hwp5ParaLineSeg, Hwp5ParaText,
     Hwp5ShapeComponentCurve, Hwp5ShapeComponentEllipse, Hwp5ShapeComponentGeometry,
     Hwp5ShapeComponentLine, Hwp5ShapeComponentOle, Hwp5ShapeComponentPolygon, Hwp5ShapePicture,
     Hwp5ShapePoint, TextSegment,
@@ -67,6 +67,8 @@ pub(crate) enum Hwp5Control {
     /// `ShapeComponentLine` (`0x4E`) sub-record as a plain line, distinguished
     /// only by the `ShapeComponent` type tag `"$col"`.
     ConnectLine(Hwp5ConnectLineControl),
+    /// Equation editor control (`eqed`) carrying a HancomEQN script.
+    Equation(Hwp5EquationControl),
     /// Header control with nested subtree paragraphs.
     Header(Hwp5NestedSubtree),
     /// Footer control with nested subtree paragraphs.
@@ -191,6 +193,18 @@ pub(crate) struct Hwp5ConnectLineControl {
     pub start: Hwp5ShapePoint,
     /// Connector end point in local object coordinates.
     pub end: Hwp5ShapePoint,
+}
+
+/// Parsed equation evidence from an `eqed` ctrl + `HWPTAG_EQEDIT` child record.
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5EquationControl {
+    /// Owning control identifier, always `eqed`.
+    #[allow(dead_code)] // reserved for semantic/control-audit slices
+    pub ctrl_id: u32,
+    /// Minimal recovered geometry (equation box extent) from the ctrl header.
+    pub geometry: Hwp5ShapeComponentGeometry,
+    /// HancomEQN script text recovered from the `HWPTAG_EQEDIT` record.
+    pub script: String,
 }
 
 /// Parsed curve evidence from a `gso ` scope.
@@ -435,6 +449,9 @@ const CTRL_ID_GSO: u32 = 0x6773_6F20;
 /// in the `ShapeComponent` header is the only discriminator (confirmed against
 /// `$rec`/`$ell`/`$cur` for rect/ellipse/curve from 한컴 truth fixtures).
 const SHAPE_COMPONENT_TYPE_CONNECT_LINE: [u8; 4] = [0x6C, 0x6F, 0x63, 0x24];
+
+/// ctrl_id for the equation editor control: ASCII `eqed` as big-endian u32.
+const CTRL_ID_EQED: u32 = 0x6571_6564;
 
 // ---------------------------------------------------------------------------
 // Parser state
@@ -984,6 +1001,8 @@ struct BodyTextParserState {
     subtree_ctx: Option<NestedSubtreeContext>,
     current_subtree_para: Option<ParaBuf>,
     inline_subtree_gso_ctx: Option<InlineGsoContext>,
+    /// Geometry of an `eqed` ctrl awaiting its `HWPTAG_EQEDIT` script child.
+    eqed_pending: Option<Hwp5ShapeComponentGeometry>,
 }
 
 impl BodyTextParserState {
@@ -1414,6 +1433,15 @@ impl BodyTextParserState {
                     };
                     self.subtree_ctx =
                         Some(NestedSubtreeContext::new(level, ctrl_id, properties_raw, geometry));
+                } else if ctrl_id == CTRL_ID_EQED {
+                    // The `eqed` ctrl carries only geometry; its HancomEQN
+                    // script lives in the child `HWPTAG_EQEDIT` (0x58) record.
+                    // Stash the geometry and finalize when that child arrives.
+                    self.eqed_pending = Some(
+                        Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).unwrap_or(
+                            Hwp5ShapeComponentGeometry { x: 0, y: 0, width: 0, height: 0 },
+                        ),
+                    );
                 } else if let Some(buf) = self.current.as_mut() {
                     // Snapshot the `secd` ctrl property word for
                     // projection-level Visibility decoding (gap B,
@@ -1436,6 +1464,23 @@ impl BodyTextParserState {
                     }
                     buf.controls
                         .push(Hwp5Control::Unknown { ctrl_id, header_data: record.data.clone() });
+                }
+            }
+            TagId::EqEdit => {
+                // Finalize the equation started by the preceding `eqed` ctrl.
+                if let Some(geometry) = self.eqed_pending.take() {
+                    match Hwp5EqEdit::parse(&record.data) {
+                        Ok(eqedit) => {
+                            if let Some(buf) = self.current.as_mut() {
+                                buf.controls.push(Hwp5Control::Equation(Hwp5EquationControl {
+                                    ctrl_id: CTRL_ID_EQED,
+                                    geometry,
+                                    script: eqedit.script,
+                                }));
+                            }
+                        }
+                        Err(_) => self.push_unsupported_tag(record.header.tag_id),
+                    }
                 }
             }
             TagId::ListHeader => {}
