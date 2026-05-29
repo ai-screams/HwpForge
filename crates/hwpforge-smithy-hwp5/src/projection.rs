@@ -85,7 +85,6 @@ impl SectionProjectionHints {
 #[derive(Debug)]
 struct ProjectedParagraph {
     paragraph: Paragraph,
-    page_number: Option<PageNumber>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -99,7 +98,6 @@ struct ParagraphProjectionQueues<'a> {
     marker_headers: VecDeque<UnknownControlHeader<'a>>,
     object_controls: VecDeque<&'a Hwp5Control>,
     point_bookmark_names: VecDeque<String>,
-    page_number: Option<PageNumber>,
 }
 
 #[derive(Debug)]
@@ -196,6 +194,13 @@ fn project_to_core_internal(
         let mut header_subtrees: Vec<(Vec<Paragraph>, u32)> = Vec::new();
         let mut footer_subtrees: Vec<(Vec<Paragraph>, u32)> = Vec::new();
 
+        // The page number is a section-level property. 한글 stores its `pgnp`
+        // control in a top-level body paragraph OR inside a layout table cell,
+        // so resolve it once by scanning the whole body (recursing into table
+        // cells) rather than treating it as a per-paragraph output.
+        section.page_number =
+            find_section_page_number(&section_result.paragraphs, &mut projection_images.warnings);
+
         // Project each paragraph.
         for hwp_para in section_result.paragraphs {
             header_subtrees.extend(collect_header_subtrees(&hwp_para, &mut projection_images));
@@ -207,9 +212,6 @@ fn project_to_core_internal(
                 ImageProjectionContext::Flow,
                 Some(&mut section_field_hints),
             );
-            if section.page_number.is_none() {
-                section.page_number = projected.page_number;
-            }
             section.add_paragraph(projected.paragraph);
         }
 
@@ -409,7 +411,6 @@ fn project_paragraph_with_images(
                 projection_images,
                 image_context,
             ),
-            page_number: None,
         }
     } else {
         project_paragraph_with_images_structural(
@@ -743,7 +744,7 @@ fn project_paragraph_with_images_structural(
         paragraph = paragraph.with_style(StyleIndex::new(hwp_para.style_id as usize));
     }
 
-    ProjectedParagraph { paragraph, page_number: queues.page_number }
+    ProjectedParagraph { paragraph }
 }
 
 fn append_visible_unit(
@@ -791,7 +792,6 @@ fn build_paragraph_projection_queues<'a>(
     let mut marker_headers = VecDeque::new();
     let mut object_controls = VecDeque::new();
     let mut point_bookmark_names = VecDeque::new();
-    let mut page_number = None;
     let mut field_hints = field_hints;
 
     for control in &hwp_para.controls {
@@ -806,19 +806,11 @@ fn build_paragraph_projection_queues<'a>(
             | CTRL_ID_BOOKMARK_SPAN
             | CTRL_ID_HYPERLINK
             | CTRL_ID_CROSSREF => marker_headers.push_back(unknown),
-            CTRL_ID_PAGE_NUMBER => {
-                page_number = parse_page_number_control(unknown.header_data).or_else(|| {
-                    projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
-                        subject: "field.page_number",
-                        reason: "falling back to BOTTOM_CENTER digit page number".to_string(),
-                    });
-                    Some(PageNumber::with_decoration(
-                        PageNumberPosition::BottomCenter,
-                        NumberFormatType::Digit,
-                        "-".to_string(),
-                    ))
-                });
-            }
+            // Page numbers are resolved at section level by
+            // `find_section_page_number` (which also reaches `pgnp` controls
+            // inside table cells). Skip here so it is not mistaken for a
+            // generic object control.
+            CTRL_ID_PAGE_NUMBER => {}
             CTRL_ID_BOOKMARK_POINT => {
                 if let Some(name) =
                     field_hints.as_deref_mut().and_then(SectionProjectionHints::take_bookmark_name)
@@ -836,7 +828,7 @@ fn build_paragraph_projection_queues<'a>(
         }
     }
 
-    ParagraphProjectionQueues { marker_headers, object_controls, point_bookmark_names, page_number }
+    ParagraphProjectionQueues { marker_headers, object_controls, point_bookmark_names }
 }
 
 fn start_active_field(
@@ -1197,6 +1189,55 @@ fn parse_crossref_target_name(header_data: &[u8]) -> Option<String> {
     let command = parse_utf16_command_string(header_data)?;
     let target = command.strip_prefix('?').unwrap_or(&command).split(';').next()?;
     (!target.is_empty()).then(|| target.to_string())
+}
+
+/// Resolves a `pgnp` (page-number) control header into a [`PageNumber`],
+/// falling back to a BOTTOM_CENTER digit page number (with a warning) when the
+/// decoration payload can't be parsed.
+fn page_number_from_pgnp_header(header_data: &[u8], warnings: &mut Vec<Hwp5Warning>) -> PageNumber {
+    parse_page_number_control(header_data).unwrap_or_else(|| {
+        warnings.push(Hwp5Warning::ProjectionFallback {
+            subject: "field.page_number",
+            reason: "falling back to BOTTOM_CENTER digit page number".to_string(),
+        });
+        PageNumber::with_decoration(
+            PageNumberPosition::BottomCenter,
+            NumberFormatType::Digit,
+            "-".to_string(),
+        )
+    })
+}
+
+/// Finds the section's page number: the first `pgnp` control anywhere in the
+/// section body, including inside layout-table cells (recursively).
+///
+/// A page number is a section-level property even when 한글 stores its control
+/// inside a table cell, so a body-paragraph-only scan misses those. The search
+/// short-circuits on the first match. Header/footer/note subtrees are
+/// intentionally excluded — those carry their own content and are projected
+/// separately.
+fn find_section_page_number(
+    paragraphs: &[Hwp5Paragraph],
+    warnings: &mut Vec<Hwp5Warning>,
+) -> Option<PageNumber> {
+    for paragraph in paragraphs {
+        for control in &paragraph.controls {
+            match control {
+                Hwp5Control::Unknown { ctrl_id: CTRL_ID_PAGE_NUMBER, header_data } => {
+                    return Some(page_number_from_pgnp_header(header_data, warnings));
+                }
+                Hwp5Control::Table(table) => {
+                    for cell in &table.cells {
+                        if let Some(found) = find_section_page_number(&cell.paragraphs, warnings) {
+                            return Some(found);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
 }
 
 fn parse_page_number_control(header_data: &[u8]) -> Option<PageNumber> {
@@ -2884,6 +2925,70 @@ mod tests {
         // The demoted layout must now pass Core validation (previously aborted
         // with NonLeadingTableHeaderRow).
         assert!(doc.validate().is_ok(), "demoted table must satisfy Core validation");
+    }
+
+    #[test]
+    fn page_number_inside_table_cell_is_carried_to_section() {
+        // 한글 government layouts often put the page-number control (`pgnp`)
+        // inside a layout table cell. The section-level scan must reach it;
+        // a body-paragraph-only scan would drop it.
+        fn pgnp_cell() -> Hwp5TableCell {
+            Hwp5TableCell {
+                column: 0,
+                row: 0,
+                col_span: 1,
+                row_span: 1,
+                width: 4000,
+                height: 1000,
+                is_header: false,
+                margin: crate::decoder::section::Hwp5TableCellMargin {
+                    left: 0,
+                    right: 0,
+                    top: 0,
+                    bottom: 0,
+                },
+                vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Center,
+                border_fill_id: None,
+                paragraphs: vec![Hwp5Paragraph {
+                    text: String::new(),
+                    text_segments: Vec::new(),
+                    para_shape_id: 0,
+                    style_id: 0,
+                    char_shape_runs: vec![],
+                    line_segments: Vec::new(),
+                    // pgnp control with a valid BOTTOM_CENTER (pos byte 5 = 5).
+                    controls: vec![Hwp5Control::Unknown {
+                        ctrl_id: CTRL_ID_PAGE_NUMBER,
+                        header_data: vec![0, 0, 0, 0, 0, 5],
+                    }],
+                }],
+            }
+        }
+
+        let para = Hwp5Paragraph {
+            text: "\u{FFFC}".to_string(),
+            text_segments: Vec::new(),
+            para_shape_id: 0,
+            style_id: 0,
+            char_shape_runs: vec![],
+            line_segments: Vec::new(),
+            controls: vec![Hwp5Control::Table(Hwp5Table {
+                rows: 1,
+                cols: 1,
+                page_break: Hwp5TablePageBreak::Cell,
+                repeat_header: false,
+                cell_spacing: 0,
+                border_fill_id: None,
+                cells: vec![pgnp_cell()],
+            })],
+        };
+
+        let section = make_section(vec![para], None);
+        let (doc, _) = project_to_core(vec![section]).unwrap();
+        assert!(
+            doc.sections()[0].page_number.is_some(),
+            "page number inside a table cell must be carried to the section"
+        );
     }
 
     #[test]
