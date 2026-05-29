@@ -49,6 +49,18 @@ existed in the shared model; only the HWP5 leg was missing.
   the source connector's object-link references have no `<hp:connectLine>`
   representation and are dropped.
 
+#### Fixed — floating ellipse/arc/curve/connect-line positioning (HWPX encoder)
+
+- `<hp:ellipse>`, `<hp:curve>`, and `<hp:connectLine>` hardcoded inline
+  positioning (`numberingType="NONE"`, `textWrap="TOP_AND_BOTTOM"`,
+  `vertRelTo/horzRelTo="PARA"`) instead of using the shared offset-aware
+  helpers that `<hp:line>`/`<hp:rect>` already used. A **floating** shape
+  (non-zero offset) was therefore mis-anchored to the paragraph and rendered
+  in the wrong place in 한컴. They now route through `shape_position` /
+  `shape_numbering_type` / `shape_text_wrap`, so a floating shape anchors to
+  `PAPER` as `PICTURE`/`IN_FRONT_OF_TEXT` (matching 한컴) while inline shapes
+  (zero offset) are unchanged. Exposed by Wave 12b's first floating connector.
+
 ### Phase 11 (HWP5 → HWPX silent-gap closure)
 
 This release closes the largest batch of "HWP5 decoder has the bytes, but

@@ -550,8 +550,8 @@ pub(crate) fn encode_ellipse_to_hx(
     Ok(HxEllipse {
         id: generate_instid(),
         z_order: 0,
-        numbering_type: "NONE".to_string(),
-        text_wrap: "TOP_AND_BOTTOM".to_string(),
+        numbering_type: shape_numbering_type(*horz_offset, *vert_offset),
+        text_wrap: shape_text_wrap(*horz_offset, *vert_offset),
         text_flow: "BOTH_SIDES".to_string(),
         lock: 0,
         dropcap_style: dropcap_str(style),
@@ -577,19 +577,7 @@ pub(crate) fn encode_ellipse_to_hx(
             height_rel_to: "ABSOLUTE".to_string(),
             protect: 0,
         }),
-        pos: Some(HxTablePos {
-            treat_as_char: if *horz_offset == 0 && *vert_offset == 0 { 1 } else { 0 },
-            affect_l_spacing: 0,
-            flow_with_text: 0,
-            allow_overlap: 0,
-            hold_anchor_and_so: 0,
-            vert_rel_to: "PARA".to_string(),
-            horz_rel_to: "PARA".to_string(),
-            vert_align: "TOP".to_string(),
-            horz_align: "LEFT".to_string(),
-            vert_offset: *vert_offset,
-            horz_offset: *horz_offset,
-        }),
+        pos: Some(shape_position(*horz_offset, *vert_offset)),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
         shape_comment: Some(HxShapeComment { text: "타원입니다.".to_string() }),
         caption: caption
@@ -751,8 +739,8 @@ pub(crate) fn encode_arc_to_hx(
     Ok(HxEllipse {
         id: generate_instid(),
         z_order: 0,
-        numbering_type: "NONE".to_string(),
-        text_wrap: "TOP_AND_BOTTOM".to_string(),
+        numbering_type: shape_numbering_type(*horz_offset, *vert_offset),
+        text_wrap: shape_text_wrap(*horz_offset, *vert_offset),
         text_flow: "BOTH_SIDES".to_string(),
         lock: 0,
         dropcap_style: dropcap_str(style),
@@ -778,19 +766,7 @@ pub(crate) fn encode_arc_to_hx(
             height_rel_to: "ABSOLUTE".to_string(),
             protect: 0,
         }),
-        pos: Some(HxTablePos {
-            treat_as_char: if *horz_offset == 0 && *vert_offset == 0 { 1 } else { 0 },
-            affect_l_spacing: 0,
-            flow_with_text: 0,
-            allow_overlap: 0,
-            hold_anchor_and_so: 0,
-            vert_rel_to: "PARA".to_string(),
-            horz_rel_to: "PARA".to_string(),
-            vert_align: "TOP".to_string(),
-            horz_align: "LEFT".to_string(),
-            vert_offset: *vert_offset,
-            horz_offset: *horz_offset,
-        }),
+        pos: Some(shape_position(*horz_offset, *vert_offset)),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
         shape_comment: Some(HxShapeComment { text: "호입니다.".to_string() }),
         caption: caption
@@ -854,8 +830,8 @@ pub(crate) fn encode_curve_to_hx(
     Ok(HxCurve {
         id: generate_instid(),
         z_order: 0,
-        numbering_type: "NONE".to_string(),
-        text_wrap: "TOP_AND_BOTTOM".to_string(),
+        numbering_type: shape_numbering_type(*horz_offset, *vert_offset),
+        text_wrap: shape_text_wrap(*horz_offset, *vert_offset),
         text_flow: "BOTH_SIDES".to_string(),
         lock: 0,
         dropcap_style: dropcap_str(style),
@@ -878,19 +854,7 @@ pub(crate) fn encode_curve_to_hx(
             height_rel_to: "ABSOLUTE".to_string(),
             protect: 0,
         }),
-        pos: Some(HxTablePos {
-            treat_as_char: if *horz_offset == 0 && *vert_offset == 0 { 1 } else { 0 },
-            affect_l_spacing: 0,
-            flow_with_text: 0,
-            allow_overlap: 0,
-            hold_anchor_and_so: 0,
-            vert_rel_to: "PARA".to_string(),
-            horz_rel_to: "PARA".to_string(),
-            vert_align: "TOP".to_string(),
-            horz_align: "LEFT".to_string(),
-            vert_offset: *vert_offset,
-            horz_offset: *horz_offset,
-        }),
+        pos: Some(shape_position(*horz_offset, *vert_offset)),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
         shape_comment: Some(HxShapeComment { text: "곡선입니다.".to_string() }),
         caption: caption
@@ -962,8 +926,8 @@ pub(crate) fn encode_connect_line_to_hx(
     Ok(HxConnectLine {
         id: generate_instid(),
         z_order: 0,
-        numbering_type: "NONE".to_string(),
-        text_wrap: "TOP_AND_BOTTOM".to_string(),
+        numbering_type: shape_numbering_type(*horz_offset, *vert_offset),
+        text_wrap: shape_text_wrap(*horz_offset, *vert_offset),
         text_flow: "BOTH_SIDES".to_string(),
         lock: 0,
         dropcap_style: dropcap_str(style),
@@ -1000,19 +964,7 @@ pub(crate) fn encode_connect_line_to_hx(
             height_rel_to: "ABSOLUTE".to_string(),
             protect: 0,
         }),
-        pos: Some(HxTablePos {
-            treat_as_char: if *horz_offset == 0 && *vert_offset == 0 { 1 } else { 0 },
-            affect_l_spacing: 0,
-            flow_with_text: 0,
-            allow_overlap: 0,
-            hold_anchor_and_so: 0,
-            vert_rel_to: "PARA".to_string(),
-            horz_rel_to: "PARA".to_string(),
-            vert_align: "TOP".to_string(),
-            horz_align: "LEFT".to_string(),
-            vert_offset: *vert_offset,
-            horz_offset: *horz_offset,
-        }),
+        pos: Some(shape_position(*horz_offset, *vert_offset)),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
         shape_comment: Some(HxShapeComment { text: "연결선입니다.".to_string() }),
         caption: caption
@@ -1724,6 +1676,58 @@ mod tests {
         let mut hl = empty_hyperlinks();
         let result = encode_connect_line_to_hx(&ctrl, 0, &mut hl).unwrap();
         assert!(result.fill_brush.is_none(), "connect lines must have no fill_brush");
+    }
+
+    #[test]
+    fn encode_connect_line_floating_offset_uses_paper_relative_positioning() {
+        // A floating connector (non-zero offset) must anchor to PAPER as
+        // PICTURE/IN_FRONT_OF_TEXT, exactly like a floating line/rect — not the
+        // inline PARA/TOP_AND_BOTTOM defaults this encoder used to hardcode,
+        // which mis-placed 한컴-sourced connectors.
+        let ctrl = Control::ConnectLine {
+            start: ShapePoint::new(0, 0),
+            end: ShapePoint::new(14000, 0),
+            control_points: vec![],
+            connect_type: "STRAIGHT".to_string(),
+            width: HwpUnit::new(14000).unwrap(),
+            height: HwpUnit::new(0).unwrap(),
+            horz_offset: 17657,
+            vert_offset: 14057,
+            caption: None,
+            style: None,
+        };
+        let mut hl = empty_hyperlinks();
+        let result = encode_connect_line_to_hx(&ctrl, 0, &mut hl).unwrap();
+        assert_eq!(result.numbering_type, "PICTURE");
+        assert_eq!(result.text_wrap, "IN_FRONT_OF_TEXT");
+        let pos = result.pos.as_ref().expect("connect line should carry a pos block");
+        assert_eq!(pos.treat_as_char, 0);
+        assert_eq!(pos.vert_rel_to, "PAPER");
+        assert_eq!(pos.horz_rel_to, "PAPER");
+    }
+
+    #[test]
+    fn encode_connect_line_inline_offset_zero_keeps_para_relative_positioning() {
+        // Inline connectors (zero offset) keep treat-as-char PARA positioning.
+        let ctrl = Control::ConnectLine {
+            start: ShapePoint::new(0, 0),
+            end: ShapePoint::new(100, 100),
+            control_points: vec![],
+            connect_type: "STRAIGHT".to_string(),
+            width: HwpUnit::new(1000).unwrap(),
+            height: HwpUnit::new(1000).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
+            caption: None,
+            style: None,
+        };
+        let mut hl = empty_hyperlinks();
+        let result = encode_connect_line_to_hx(&ctrl, 0, &mut hl).unwrap();
+        assert_eq!(result.numbering_type, "NONE");
+        assert_eq!(result.text_wrap, "TOP_AND_BOTTOM");
+        let pos = result.pos.as_ref().expect("connect line should carry a pos block");
+        assert_eq!(pos.treat_as_char, 1);
+        assert_eq!(pos.vert_rel_to, "PARA");
     }
 
     #[test]
