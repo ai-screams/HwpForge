@@ -1977,6 +1977,87 @@ mod tests {
     }
 
     #[test]
+    fn hwp5_to_hwpx_user_sample_page_border_odd_even_distinct_line_types() {
+        // Locks two things at once:
+        // 1. EVEN/ODD page-border-fill records are mapped in the right order
+        //    (the truth has EVEN = dotted, ODD = solid — distinct, so a swap
+        //    would be caught).
+        // 2. The HWP5 border line kind 2 = 점선 decodes to DOT, not DASH
+        //    (from_raw codes 2/3 were swapped). See task #41.
+        let source = fixture_path("user_samples/pages/sample-page-border-odd-even.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-page-border-odd-even.hwpx");
+        hwp5_to_hwpx(&source, &out).expect("odd/even border conversion should succeed");
+        assert_valid_hwpx(&out);
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let entries = decoded.document.sections()[0]
+            .page_border_fills
+            .as_ref()
+            .expect("section should carry page border fills");
+
+        let line_type_of = |apply: &str| -> String {
+            let entry =
+                entries.iter().find(|e| e.apply_type == apply).expect("apply_type entry exists");
+            decoded
+                .style_store
+                .border_fill(entry.border_fill_id)
+                .expect("referenced border fill exists")
+                .top
+                .line_type
+                .clone()
+        };
+
+        assert_eq!(line_type_of("EVEN"), "DOT", "EVEN page border must be dotted (점선 → DOT)");
+        assert_eq!(line_type_of("ODD"), "SOLID", "ODD page border must be solid (실선)");
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_page_border_pattern_carries_double_line_and_gradient() {
+        // Regression lock: a double-line (이중선) border + gradient background
+        // carry through DocInfo borderFill decode (line family + gradient fill).
+        let source = fixture_path("user_samples/pages/sample-page-border-pattern.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-page-border-pattern.hwpx");
+        hwp5_to_hwpx(&source, &out).expect("pattern border conversion should succeed");
+        assert_valid_hwpx(&out);
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let entries = decoded.document.sections()[0]
+            .page_border_fills
+            .as_ref()
+            .expect("section should carry page border fills");
+        let both = entries
+            .iter()
+            .find(|e| e.apply_type == "BOTH")
+            .expect("a BOTH page border fill entry should exist");
+        let border_fill = decoded
+            .style_store
+            .border_fill(both.border_fill_id)
+            .expect("referenced border fill exists");
+        assert_eq!(
+            border_fill.top.line_type, "DOUBLE_SLIM",
+            "double-line border (이중선) must carry as DOUBLE_SLIM"
+        );
+        assert!(
+            border_fill.gradient_fill.is_some(),
+            "gradient background must carry as a gradient fill: {border_fill:?}"
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
     fn hwp5_to_hwpx_user_sample_multi_section_preserves_sections_and_orientation() {
         // Regression lock: HWP5 multi-section already carries (two sections,
         // second one landscape). Keep it that way.
