@@ -2117,6 +2117,45 @@ mod tests {
     }
 
     #[test]
+    fn hwp5_to_hwpx_user_sample_equation_native_carries_complex_scripts() {
+        // Wave 12d: a richer, natively-authored 한컴 document with TWO equations
+        // (Fourier series + binomial expansion). Stresses sum/subscript/
+        // superscript/fraction syntax, backtick spacing markers, and the U+2026
+        // ellipsis — confirming the EQEDIT script parse holds for native
+        // authoring and special characters, not just our round-tripped fixture.
+        let source = fixture_path("user_samples/sample-equation-native.hwp");
+        if !source.exists() {
+            return;
+        }
+        let out = unique_temp_path("user-sample-equation-native.hwpx");
+        let warnings =
+            hwp5_to_hwpx(&source, &out).expect("native equation conversion should succeed");
+        assert!(
+            !warnings.iter().any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
+            "native equations must not drop any control: {warnings:?}"
+        );
+        assert_valid_hwpx(&out);
+
+        let section_xml = read_section_xml(&out, 0);
+        assert!(
+            section_xml.contains("sum _{n=1} ^{INF"),
+            "sum + subscript + superscript script must carry"
+        );
+        assert!(section_xml.contains("over {L}"), "fraction script must carry");
+        assert!(
+            section_xml.contains('…'),
+            "the U+2026 ellipsis must survive the UTF-16 → UTF-8 round trip"
+        );
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let layout = collect_decoded_shape_layout(&decoded);
+        assert_eq!(layout.equations, 2, "both native equations should round-trip");
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
     fn hwp5_to_hwpx_user_sample_page_border_fill_references_visible_border() {
         // Wave 7: the section's BOTH page border must reference the real
         // (solid) borderFill, not the invisible default (id=1) the encoder
