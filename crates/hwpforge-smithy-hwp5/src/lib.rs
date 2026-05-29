@@ -1145,6 +1145,7 @@ mod tests {
                 paragraphs: vec![],
                 page_def: None,
                 section_def_properties: None,
+                page_border_fills: Vec::new(),
                 warnings: vec![],
             }],
             warnings: vec![],
@@ -1933,6 +1934,104 @@ mod tests {
         assert_eq!(layout.polygons, 0);
         assert_eq!(layout.textboxes, 0);
         assert!(layout.rects >= 1, "expected at least one decoded Control::Rect in section runs");
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_page_border_fill_references_visible_border() {
+        // Wave 7: the section's BOTH page border must reference the real
+        // (solid) borderFill, not the invisible default (id=1) the encoder
+        // fabricated before the secd HWPTAG_PAGE_BORDER_FILL records were
+        // carried. See `.docs/debug/2026-05-29_hwp5_page_border_fill.md`.
+        let source = fixture_path("user_samples/pages/sample-page-border-fill.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-page-border-fill.hwpx");
+        hwp5_to_hwpx(&source, &out).expect("page border fill conversion should succeed");
+        assert_valid_hwpx(&out);
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let section = &decoded.document.sections()[0];
+        let entries =
+            section.page_border_fills.as_ref().expect("section should carry page border fills");
+        let both = entries
+            .iter()
+            .find(|entry| entry.apply_type == "BOTH")
+            .expect("a BOTH page border fill entry should exist");
+        let border_fill = decoded
+            .style_store
+            .border_fill(both.border_fill_id)
+            .expect("the referenced page border fill must exist in the style store");
+        assert!(
+            [&border_fill.left, &border_fill.right, &border_fill.top, &border_fill.bottom]
+                .iter()
+                .any(|side| side.line_type != "NONE"),
+            "BOTH page border must reference a visible (non-NONE) border fill: {border_fill:?}"
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_multi_section_preserves_sections_and_orientation() {
+        // Regression lock: HWP5 multi-section already carries (two sections,
+        // second one landscape). Keep it that way.
+        let source = fixture_path("user_samples/pages/sample-multi-section.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-multi-section.hwpx");
+        hwp5_to_hwpx(&source, &out).expect("multi-section conversion should succeed");
+        assert_valid_hwpx(&out);
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let sections = decoded.document.sections();
+        assert_eq!(sections.len(), 2, "expected two sections");
+        assert!(!sections[0].page_settings.landscape, "first section should stay portrait");
+        assert!(sections[1].page_settings.landscape, "second section should be landscape");
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_char_line_variants_carry_line_families() {
+        // Regression lock: underline/strikeout line families (double, wave,
+        // dot, dash) already carry through HwpxCharShape. Keep it that way.
+        use hwpforge_foundation::{StrikeoutShape, UnderlineShape};
+
+        let source = fixture_path("user_samples/sample-char-line-variants.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-char-line-variants.hwpx");
+        hwp5_to_hwpx(&source, &out).expect("char line variants conversion should succeed");
+        assert_valid_hwpx(&out);
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let underline_shapes: Vec<UnderlineShape> =
+            decoded.style_store.iter_char_shapes().map(|cs| cs.underline_shape).collect();
+        let strikeout_shapes: Vec<StrikeoutShape> =
+            decoded.style_store.iter_char_shapes().map(|cs| cs.strikeout_shape).collect();
+        assert!(
+            underline_shapes.contains(&UnderlineShape::DoubleSlim),
+            "double underline must carry: {underline_shapes:?}"
+        );
+        assert!(
+            underline_shapes.contains(&UnderlineShape::Wave),
+            "wave underline must carry: {underline_shapes:?}"
+        );
+        assert!(
+            strikeout_shapes.contains(&StrikeoutShape::DoubleSlim),
+            "double strikeout must carry: {strikeout_shapes:?}"
+        );
 
         let _ = std::fs::remove_file(&out);
     }

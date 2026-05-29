@@ -12,7 +12,7 @@ use hwpforge_core::image::{
 };
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::{Run, RunContent};
-use hwpforge_core::section::{HeaderFooter, PageNumber, Section};
+use hwpforge_core::section::{HeaderFooter, PageBorderFillEntry, PageNumber, Section};
 use hwpforge_core::table::{Table, TableCell, TableMargin, TableRow};
 use hwpforge_core::Control;
 use hwpforge_core::PageSettings;
@@ -24,8 +24,8 @@ use hwpforge_foundation::{
 use crate::decoder::chart_ole::{extract_chart_payload, ChartOleError};
 use crate::decoder::section::{
     Hwp5Control, Hwp5ImageControl, Hwp5LineControl, Hwp5NestedSubtree, Hwp5OleObjectControl,
-    Hwp5Paragraph, Hwp5PolygonControl, Hwp5RectControl, Hwp5Table, Hwp5TableCell,
-    Hwp5TextBoxControl, SectionResult,
+    Hwp5PageBorderFill, Hwp5Paragraph, Hwp5PolygonControl, Hwp5RectControl, Hwp5Table,
+    Hwp5TableCell, Hwp5TextBoxControl, SectionResult,
 };
 use crate::decoder::Hwp5Warning;
 use crate::error::Hwp5Result;
@@ -174,6 +174,16 @@ fn project_to_core_internal(
         // `.docs/debug/2026-05-27_hwp5_page_features_lost.md` (gap B).
         if let Some(properties) = section_result.section_def_properties {
             section.visibility = Some(hwp5_section_properties_to_visibility(properties));
+        }
+        // Wave 7: carry the section's page border/fill references
+        // (HWPTAG_PAGE_BORDER_FILL, 0x4B). The borderFill *definitions*
+        // already reach the HWPX style store; without this the encoder
+        // fabricates a default `borderFillIDRef="1"` (an invisible
+        // border). 한글 emits exactly three records in [BOTH, EVEN, ODD]
+        // order. See `.docs/debug/2026-05-29_hwp5_page_border_fill.md`.
+        if !section_result.page_border_fills.is_empty() {
+            section.page_border_fills =
+                Some(hwp5_page_border_fills_to_entries(&section_result.page_border_fills));
         }
         let mut section_field_hints =
             SectionProjectionHints::from_paragraphs(&section_result.paragraphs);
@@ -1021,6 +1031,52 @@ fn hwp5_section_properties_to_visibility(properties: u32) -> hwpforge_core::sect
         hide_first_empty_line: (properties & (1 << 19)) != 0,
         ..hwpforge_core::section::Visibility::default()
     }
+}
+
+/// Maps decoded `HWPTAG_PAGE_BORDER_FILL` records to Core
+/// [`PageBorderFillEntry`] values.
+///
+/// 한글 emits the records in `[BOTH, EVEN, ODD]` order, so the index
+/// selects `apply_type`. `border_fill_id` indexes the HWPX style store
+/// directly (1-based, no remapping — the borderFill definitions decode
+/// into the store with matching ids).
+///
+/// `properties` bit semantics (verified against the
+/// `sample-page-border-fill` 한글 fixture; only this fixture so far, so
+/// the bit-0 → text-border mapping is asserted from observed truth):
+/// - bit 0: border base — set → `"PAPER"` (paper edge), clear →
+///   `"CONTENT"` (text area)
+/// - bit 1 / 2: include header / footer in the border area
+/// - bit 3: fill area — set → `"PAGE"`, clear → `"PAPER"`
+fn hwp5_page_border_fills_to_entries(records: &[Hwp5PageBorderFill]) -> Vec<PageBorderFillEntry> {
+    records
+        .iter()
+        .enumerate()
+        .map(|(idx, rec)| {
+            let apply_type = match idx {
+                0 => "BOTH",
+                1 => "EVEN",
+                _ => "ODD",
+            };
+            let text_border = if rec.properties & 0b1 != 0 { "PAPER" } else { "CONTENT" };
+            let fill_area = if rec.properties & 0b1000 != 0 { "PAGE" } else { "PAPER" };
+            let offset = |raw: u16| HwpUnit::new(i32::from(raw)).unwrap_or_default();
+            PageBorderFillEntry {
+                apply_type: apply_type.to_string(),
+                border_fill_id: u32::from(rec.border_fill_id),
+                text_border: text_border.to_string(),
+                header_inside: rec.properties & 0b10 != 0,
+                footer_inside: rec.properties & 0b100 != 0,
+                fill_area: fill_area.to_string(),
+                offset: [
+                    offset(rec.offsets[0]),
+                    offset(rec.offsets[1]),
+                    offset(rec.offsets[2]),
+                    offset(rec.offsets[3]),
+                ],
+            }
+        })
+        .collect()
 }
 
 /// Cardinality-preserving collector for header/footer-style ctrls:
@@ -1877,7 +1933,13 @@ mod tests {
         paragraphs: Vec<Hwp5Paragraph>,
         page_def: Option<Hwp5PageDef>,
     ) -> SectionResult {
-        SectionResult { paragraphs, page_def, section_def_properties: None, warnings: vec![] }
+        SectionResult {
+            paragraphs,
+            page_def,
+            section_def_properties: None,
+            page_border_fills: Vec::new(),
+            warnings: vec![],
+        }
     }
 
     fn hwp5_char_run(position: u32, char_shape_id: u32) -> Hwp5CharShapeRun {
@@ -1996,6 +2058,7 @@ mod tests {
             paragraphs: vec![make_paragraph("x", 0, 0)],
             page_def: None,
             section_def_properties: None,
+            page_border_fills: Vec::new(),
             warnings: vec![warn],
         };
         let (_, warnings) = project_to_core(vec![section]).unwrap();

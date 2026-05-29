@@ -277,8 +277,59 @@ pub(crate) struct SectionResult {
     /// (e.g. truncated fixtures); bits 0~5 + 8/9 + 19 are decoded by
     /// projection into `Section.visibility` (gap B).
     pub section_def_properties: Option<u32>,
+    /// Page border/fill records (`HWPTAG_PAGE_BORDER_FILL`, 0x4B) that
+    /// follow the `secd` ctrl. 한글 emits them in `[BOTH, EVEN, ODD]`
+    /// order; projection maps each to a `PageBorderFillEntry`.
+    pub page_border_fills: Vec<Hwp5PageBorderFill>,
     /// Non-fatal warnings.
     pub warnings: Vec<Hwp5Warning>,
+}
+
+/// A decoded `HWPTAG_PAGE_BORDER_FILL` (0x4B) record.
+///
+/// 14-byte layout (empirically verified against 한글 fixtures; note the
+/// `borderFillId` trails the offsets, unlike some references):
+///
+/// | bytes | field |
+/// |-------|-------|
+/// | 0..4  | `properties` (UINT32) |
+/// | 4..6  | `offset_left` (UINT16, HWPUNIT16) |
+/// | 6..8  | `offset_right` |
+/// | 8..10 | `offset_top` |
+/// | 10..12| `offset_bottom` |
+/// | 12..14| `border_fill_id` (UINT16, 1-based DocInfo index) |
+///
+/// `properties` bit 0 selects the border base (1 → paper edge, 0 → text
+/// content), bit 1/2 include header/footer in the border area, bit 3
+/// fills behind the page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Hwp5PageBorderFill {
+    /// Raw property word.
+    pub properties: u32,
+    /// Offsets from the page edge, `[left, right, top, bottom]` in HWPUNIT16.
+    pub offsets: [u16; 4],
+    /// Referenced DocInfo border-fill id (1-based).
+    pub border_fill_id: u16,
+}
+
+impl Hwp5PageBorderFill {
+    /// Parses a 14-byte `HWPTAG_PAGE_BORDER_FILL` record body. Returns
+    /// `None` when the record is shorter than the fixed layout.
+    pub(crate) fn parse(data: &[u8]) -> Option<Self> {
+        if data.len() < 14 {
+            return None;
+        }
+        Some(Self {
+            properties: u32::from_le_bytes([data[0], data[1], data[2], data[3]]),
+            offsets: [
+                u16::from_le_bytes([data[4], data[5]]),
+                u16::from_le_bytes([data[6], data[7]]),
+                u16::from_le_bytes([data[8], data[9]]),
+                u16::from_le_bytes([data[10], data[11]]),
+            ],
+            border_fill_id: u16::from_le_bytes([data[12], data[13]]),
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -751,6 +802,8 @@ struct BodyTextParserState {
     page_def: Option<Hwp5PageDef>,
     /// Captured `secd` ctrl property word (HWP 5.0 spec §4.3.10.1 표 130).
     section_def_properties: Option<u32>,
+    /// Page border/fill records collected in document order.
+    page_border_fills: Vec<Hwp5PageBorderFill>,
     warnings: Vec<Hwp5Warning>,
     current: Option<ParaBuf>,
     table_stack: Vec<TableContext>,
@@ -1133,6 +1186,10 @@ impl BodyTextParserState {
                 Ok(pd) => self.page_def = Some(pd),
                 Err(_) => self.push_unsupported_tag(record.header.tag_id),
             },
+            TagId::PageBorderFill => match Hwp5PageBorderFill::parse(&record.data) {
+                Some(pbf) => self.page_border_fills.push(pbf),
+                None => self.push_unsupported_tag(record.header.tag_id),
+            },
             TagId::CtrlHeader => {
                 let ctrl_id = parse_ctrl_id(&record.data);
                 if ctrl_id == CTRL_ID_TABLE {
@@ -1224,6 +1281,7 @@ impl BodyTextParserState {
             paragraphs: self.paragraphs,
             page_def: self.page_def,
             section_def_properties: self.section_def_properties,
+            page_border_fills: self.page_border_fills,
             warnings: self.warnings,
         }
     }
