@@ -182,8 +182,10 @@ fn project_to_core_internal(
         // border). 한글 emits exactly three records in [BOTH, EVEN, ODD]
         // order. See `.docs/debug/2026-05-29_hwp5_page_border_fill.md`.
         if !section_result.page_border_fills.is_empty() {
-            section.page_border_fills =
-                Some(hwp5_page_border_fills_to_entries(&section_result.page_border_fills));
+            section.page_border_fills = Some(hwp5_page_border_fills_to_entries(
+                &section_result.page_border_fills,
+                &mut projection_images.warnings,
+            ));
         }
         let mut section_field_hints =
             SectionProjectionHints::from_paragraphs(&section_result.paragraphs);
@@ -1036,10 +1038,21 @@ fn hwp5_section_properties_to_visibility(properties: u32) -> hwpforge_core::sect
 /// Maps decoded `HWPTAG_PAGE_BORDER_FILL` records to Core
 /// [`PageBorderFillEntry`] values.
 ///
-/// 한글 emits the records in `[BOTH, EVEN, ODD]` order, so the index
-/// selects `apply_type`. `border_fill_id` indexes the HWPX style store
-/// directly (1-based, no remapping — the borderFill definitions decode
-/// into the store with matching ids).
+/// `apply_type` (`BOTH` / `EVEN` / `ODD`) is **not** carried inside each
+/// record — it is purely positional. 한글 writes exactly three records in
+/// `[BOTH, EVEN, ODD]` order, so the index selects `apply_type`. (The
+/// EVEN/ODD records are byte-identical in the common "no border" case, so
+/// only the leading `BOTH` slot has been empirically confirmed; see the
+/// backlog note in `.docs/debug/2026-05-29_hwp5_page_border_fill.md`.)
+///
+/// Per the project's "warning-first for unknowns" rule, a record count
+/// other than three is surfaced as a `ProjectionFallback` warning and the
+/// mapping is bounded to the three known slots so we never silently emit a
+/// duplicate `ODD` entry.
+///
+/// `border_fill_id` indexes the HWPX style store directly (1-based, no
+/// remapping — the borderFill definitions decode into the store with
+/// matching ids).
 ///
 /// `properties` bit semantics (verified against the
 /// `sample-page-border-fill` 한글 fixture; only this fixture so far, so
@@ -1048,9 +1061,23 @@ fn hwp5_section_properties_to_visibility(properties: u32) -> hwpforge_core::sect
 ///   `"CONTENT"` (text area)
 /// - bit 1 / 2: include header / footer in the border area
 /// - bit 3: fill area — set → `"PAGE"`, clear → `"PAPER"`
-fn hwp5_page_border_fills_to_entries(records: &[Hwp5PageBorderFill]) -> Vec<PageBorderFillEntry> {
+fn hwp5_page_border_fills_to_entries(
+    records: &[Hwp5PageBorderFill],
+    warnings: &mut Vec<Hwp5Warning>,
+) -> Vec<PageBorderFillEntry> {
+    if records.len() != 3 {
+        warnings.push(Hwp5Warning::ProjectionFallback {
+            subject: "page_border_fill.count",
+            reason: format!(
+                "expected 3 page border fill records ([BOTH, EVEN, ODD]); found {}. \
+                 apply_type is positional, so mapping the first 3 by index",
+                records.len()
+            ),
+        });
+    }
     records
         .iter()
+        .take(3)
         .enumerate()
         .map(|(idx, rec)| {
             let apply_type = match idx {
