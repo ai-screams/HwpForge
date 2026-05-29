@@ -31,6 +31,17 @@ pub fn run_to_json(
     section_idx: Option<usize>,
     output_path: Option<&str>,
 ) -> Result<ToJsonData, ToolErrorInfo> {
+    // Guard the output extension (matches the .hwpx guard on convert/patch).
+    // Inline mode (no output_path) writes nothing, so it needs no guard.
+    if let Some(out_path) = output_path {
+        if !out_path.ends_with(".json") {
+            return Err(ToolErrorInfo::new(
+                "INVALID_EXTENSION",
+                format!("Output path must end with .json: {out_path}"),
+                "Use a .json output_path, or omit output_path to receive the JSON inline.",
+            ));
+        }
+    }
     let bytes = read_file_bytes(file_path)?;
     let mut warnings: Vec<ToolWarningInfo> = Vec::new();
 
@@ -185,5 +196,24 @@ mod tests {
         assert_eq!(mapped.code, "PRESERVATION_METADATA_UNAVAILABLE");
         assert!(mapped.message.contains("raw/semantic mismatch"));
         assert!(mapped.hint.as_deref().unwrap().contains("hwpforge_patch"));
+    }
+
+    #[test]
+    fn to_json_rejects_non_json_output_path() {
+        // The extension guard runs before any file access, so the input path
+        // doesn't need to exist for this check.
+        let err = run_to_json("ignored.hwpx", None, Some("out.txt"))
+            .expect_err("non-.json output_path must be rejected");
+        assert_eq!(err.code, "INVALID_EXTENSION");
+        assert!(err.message.contains(".json"), "message should mention the .json requirement");
+    }
+
+    #[test]
+    fn to_json_inline_mode_skips_extension_guard() {
+        // No output_path → inline mode → guard must not fire on a missing
+        // file; it should fail later with a read error instead.
+        let err = run_to_json("/nonexistent/file.hwpx", None, None)
+            .expect_err("missing input must still error");
+        assert_ne!(err.code, "INVALID_EXTENSION", "inline mode must not hit the extension guard");
     }
 }

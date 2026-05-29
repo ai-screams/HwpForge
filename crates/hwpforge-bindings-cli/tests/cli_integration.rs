@@ -780,6 +780,23 @@ fn inspect_json_error() {
 }
 
 #[test]
+fn to_json_rejects_non_json_output_extension() {
+    // to-json must guard its output extension like convert/patch guard .hwpx.
+    let source = fixture("hwp5_01.hwp");
+    let tmp = test_tmp();
+    let hwpx = tmp.join("to_json_guard.hwpx");
+    hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &hwpx).expect("convert hwp5 fixture");
+    let bad_out = tmp.join("export.txt");
+
+    let (_, stderr, code) =
+        run(&["--json", "to-json", hwpx.to_str().unwrap(), "-o", bad_out.to_str().unwrap()]);
+    assert_ne!(code, 0, "non-.json output must be rejected");
+    let err: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
+    assert_eq!(err["code"], "INVALID_EXTENSION");
+    assert!(!bad_out.exists(), "no file should be written when the extension is rejected");
+}
+
+#[test]
 fn audit_hwp5_human_report() {
     let source = fixture("hwp5_01.hwp");
     let tmp = test_tmp();
