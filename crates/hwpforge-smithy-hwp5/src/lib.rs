@@ -793,6 +793,7 @@ fn collect_image_geometry_hints_in_controls(
             | decoder::section::Hwp5Control::Ellipse(_)
             | decoder::section::Hwp5Control::Arc(_)
             | decoder::section::Hwp5Control::Curve(_)
+            | decoder::section::Hwp5Control::ConnectLine(_)
             | decoder::section::Hwp5Control::OleObject(_)
             | decoder::section::Hwp5Control::Unknown { .. } => {}
         }
@@ -1097,6 +1098,7 @@ mod tests {
         ellipses: usize,
         arcs: usize,
         curves: usize,
+        connect_lines: usize,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1446,6 +1448,7 @@ mod tests {
             Control::Ellipse { .. } => layout.ellipses += 1,
             Control::Arc { .. } => layout.arcs += 1,
             Control::Curve { .. } => layout.curves += 1,
+            Control::ConnectLine { .. } => layout.connect_lines += 1,
             Control::TextBox { paragraphs, .. } => {
                 layout.textboxes += 1;
                 count_shapes_in_paragraphs(paragraphs, layout);
@@ -2040,6 +2043,40 @@ mod tests {
         assert_eq!(layout.curves, 1, "exactly one Control::Curve should round-trip");
         assert_eq!(layout.ellipses, 0);
         assert_eq!(layout.arcs, 0);
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_gso_connectline_carries_connect_line() {
+        // Wave 12b: 한컴 stores a connector in the same 0x4E ShapeComponentLine
+        // record as a plain line; only the ShapeComponent "$col" type tag tells
+        // them apart. The connector must carry as Control::ConnectLine →
+        // <hp:connectLine>, while its two anchor rectangles stay Control::Rect.
+        let source = fixture_path("user_samples/sample-gso-connectline-native.hwp");
+        if !source.exists() {
+            return;
+        }
+        let out = unique_temp_path("user-sample-gso-connectline-native.hwpx");
+        let warnings = hwp5_to_hwpx(&source, &out).expect("connect-line conversion should succeed");
+        assert!(
+            !warnings.iter().any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
+            "connect line must not drop any control: {warnings:?}"
+        );
+        assert_valid_hwpx(&out);
+
+        let section_xml = read_section_xml(&out, 0);
+        assert!(
+            section_xml.contains("<hp:connectLine"),
+            "the connector must emit <hp:connectLine>, not a plain <hp:line>"
+        );
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let layout = collect_decoded_shape_layout(&decoded);
+        assert_eq!(layout.connect_lines, 1, "exactly one Control::ConnectLine should round-trip");
+        assert_eq!(layout.lines, 0, "the connector must not be reclassified as a plain line");
+        assert_eq!(layout.rects, 2, "the two anchor rectangles must carry as Control::Rect");
 
         let _ = std::fs::remove_file(&out);
     }

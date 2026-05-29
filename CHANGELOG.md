@@ -33,6 +33,22 @@ existed in the shared model; only the HWP5 leg was missing.
   bounding box. Pie/chord arc types and exact arc-sweep endpoints are
   deferred until dedicated fixtures exist.
 
+#### Added — Wave 12b (GSO connect line)
+
+- Carry connectors as `Control::ConnectLine` → `<hp:connectLine>` instead of
+  demoting them to a plain `<hp:line>`. 한컴 stores a connector in the **same**
+  `ShapeComponentLine` (`0x4E`) sub-record as a plain line; the only
+  discriminator is the `ShapeComponent` (`0x4C`) type tag `"$col"` (confirmed
+  against `$rec`/`$ell`/`$cur`). A conservative guard upgrades **only** an
+  exact `"$col"` match, so plain lines are never reclassified.
+- Classify connectors in the audit semantic model
+  (`Hwp5SemanticControlKind::ConnectLine`).
+- Confirmed end to end against a natively-drawn 한컴 connector fixture
+  (`sample-gso-connectline-native`: two rectangles + one connector).
+- Known limitation: only a straight connector with its endpoints is carried;
+  the source connector's object-link references have no `<hp:connectLine>`
+  representation and are dropped.
+
 ### Phase 11 (HWP5 → HWPX silent-gap closure)
 
 This release closes the largest batch of "HWP5 decoder has the bytes, but

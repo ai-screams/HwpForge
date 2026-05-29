@@ -188,6 +188,7 @@ fn collect_flow_paragraph_layout_hints(
             | Hwp5Control::Ellipse(_)
             | Hwp5Control::Arc(_)
             | Hwp5Control::Curve(_)
+            | Hwp5Control::ConnectLine(_)
             | Hwp5Control::OleObject(_)
             | Hwp5Control::Unknown { .. } => {}
         }
@@ -219,6 +220,7 @@ fn collect_scope_paragraph_layout_hints(paragraph: &Hwp5Paragraph, scope: &mut S
             | Hwp5Control::Ellipse(_)
             | Hwp5Control::Arc(_)
             | Hwp5Control::Curve(_)
+            | Hwp5Control::ConnectLine(_)
             | Hwp5Control::OleObject(_)
             | Hwp5Control::Unknown { .. } => {}
         }

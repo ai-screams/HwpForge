@@ -63,6 +63,10 @@ pub(crate) enum Hwp5Control {
     Arc(Hwp5ArcControl),
     /// Curve evidence resolved from `gso ` + `ShapeComponent` + `ShapeComponentCurve`.
     Curve(Hwp5CurveControl),
+    /// Connect-line evidence. 한컴 stores connectors in the same
+    /// `ShapeComponentLine` (`0x4E`) sub-record as a plain line, distinguished
+    /// only by the `ShapeComponent` type tag `"$col"`.
+    ConnectLine(Hwp5ConnectLineControl),
     /// Header control with nested subtree paragraphs.
     Header(Hwp5NestedSubtree),
     /// Footer control with nested subtree paragraphs.
@@ -168,6 +172,25 @@ pub(crate) struct Hwp5ArcControl {
     pub ctrl_id: u32,
     /// Minimal recovered geometry (placement + extent).
     pub geometry: Hwp5ShapeComponentGeometry,
+}
+
+/// Parsed connect-line evidence from a `gso ` scope.
+///
+/// Shares the `ShapeComponentLine` (`0x4E`) sub-record with a plain line; the
+/// distinction comes from the `ShapeComponent` type tag. Only the endpoints and
+/// geometry are carried — the connector's object-link references map to no HWPX
+/// `<hp:connectLine>` attribute, so they are intentionally dropped.
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5ConnectLineControl {
+    /// Owning control identifier, currently always `gso `.
+    #[allow(dead_code)] // reserved for semantic/control-audit slices
+    pub ctrl_id: u32,
+    /// Minimal recovered geometry (placement + extent).
+    pub geometry: Hwp5ShapeComponentGeometry,
+    /// Connector start point in local object coordinates.
+    pub start: Hwp5ShapePoint,
+    /// Connector end point in local object coordinates.
+    pub end: Hwp5ShapePoint,
 }
 
 /// Parsed curve evidence from a `gso ` scope.
@@ -406,6 +429,13 @@ const CTRL_ID_ENDNOTE: u32 = 0x656E_2020;
 /// ctrl_id for generic shape object control: ASCII `gso ` as big-endian u32.
 const CTRL_ID_GSO: u32 = 0x6773_6F20;
 
+/// `ShapeComponent` (`0x4C`) type tag identifying a connect line, stored as the
+/// little-endian bytes for `"$col"`. 한컴 reuses the `ShapeComponentLine`
+/// (`0x4E`) sub-record for both plain lines and connectors, so this 4-byte tag
+/// in the `ShapeComponent` header is the only discriminator (confirmed against
+/// `$rec`/`$ell`/`$cur` for rect/ellipse/curve from 한컴 truth fixtures).
+const SHAPE_COMPONENT_TYPE_CONNECT_LINE: [u8; 4] = [0x6C, 0x6F, 0x63, 0x24];
+
 // ---------------------------------------------------------------------------
 // Parser state
 // ---------------------------------------------------------------------------
@@ -541,6 +571,9 @@ struct NestedSubtreeContext {
     polygon: Option<Hwp5ShapeComponentPolygon>,
     ellipse: Option<Hwp5ShapeComponentEllipse>,
     curve: Option<Hwp5ShapeComponentCurve>,
+    /// Leading 4-byte type tag from the `ShapeComponent` (`0x4C`) record, used
+    /// to tell a connect line apart from a plain line (both use `0x4E`).
+    shape_component_kind: Option<[u8; 4]>,
     paragraphs: Vec<Hwp5Paragraph>,
 }
 
@@ -565,6 +598,7 @@ impl NestedSubtreeContext {
             polygon: None,
             ellipse: None,
             curve: None,
+            shape_component_kind: None,
             paragraphs: Vec::new(),
         }
     }
@@ -577,8 +611,11 @@ impl NestedSubtreeContext {
         self.saw_shape_rectangle = true;
     }
 
-    fn note_shape_component(&mut self) {
+    fn note_shape_component(&mut self, data: &[u8]) {
         self.saw_shape_component = true;
+        if let Some(code) = data.get(..4) {
+            self.shape_component_kind = Some([code[0], code[1], code[2], code[3]]);
+        }
     }
 
     fn note_shape_picture(&mut self, picture: Hwp5ShapePicture) {
@@ -674,6 +711,7 @@ impl NestedSubtreeContext {
                 polygon: self.polygon,
                 ellipse: self.ellipse,
                 curve: self.curve,
+                shape_component_kind: self.shape_component_kind,
             }),
         }
     }
@@ -692,6 +730,8 @@ struct InlineGsoContext {
     polygon: Option<Hwp5ShapeComponentPolygon>,
     ellipse: Option<Hwp5ShapeComponentEllipse>,
     curve: Option<Hwp5ShapeComponentCurve>,
+    /// Leading 4-byte type tag from the `ShapeComponent` (`0x4C`) record.
+    shape_component_kind: Option<[u8; 4]>,
 }
 
 struct GsoClassificationInput {
@@ -705,6 +745,8 @@ struct GsoClassificationInput {
     polygon: Option<Hwp5ShapeComponentPolygon>,
     ellipse: Option<Hwp5ShapeComponentEllipse>,
     curve: Option<Hwp5ShapeComponentCurve>,
+    /// Leading 4-byte type tag from the `ShapeComponent` (`0x4C`) record.
+    shape_component_kind: Option<[u8; 4]>,
 }
 
 impl InlineGsoContext {
@@ -721,11 +763,15 @@ impl InlineGsoContext {
             polygon: None,
             ellipse: None,
             curve: None,
+            shape_component_kind: None,
         }
     }
 
-    fn note_shape_component(&mut self) {
+    fn note_shape_component(&mut self, data: &[u8]) {
         self.saw_shape_component = true;
+        if let Some(code) = data.get(..4) {
+            self.shape_component_kind = Some([code[0], code[1], code[2], code[3]]);
+        }
     }
 
     fn note_shape_rectangle(&mut self) {
@@ -768,6 +814,7 @@ impl InlineGsoContext {
             polygon: self.polygon,
             ellipse: self.ellipse,
             curve: self.curve,
+            shape_component_kind: self.shape_component_kind,
         })
     }
 }
@@ -812,6 +859,22 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
             }),
             None => Hwp5Control::Unknown { ctrl_id, header_data: Vec::new() },
         };
+    }
+
+    // Connect line shares the 0x4E ShapeComponentLine sub-record with a plain
+    // line; the only discriminator is the ShapeComponent "$col" type tag.
+    // Conservative: only an exact "$col" match upgrades to a connect line, so a
+    // plain line is never reclassified (uses `as_ref` so the fall-through tuple
+    // match below still owns geometry/line for the plain-line case).
+    if input.shape_component_kind == Some(SHAPE_COMPONENT_TYPE_CONNECT_LINE) {
+        if let (Some(geometry), Some(line)) = (input.geometry.as_ref(), input.line.as_ref()) {
+            return Hwp5Control::ConnectLine(Hwp5ConnectLineControl {
+                ctrl_id: input.ctrl_id,
+                geometry: geometry.clone(),
+                start: line.start,
+                end: line.end,
+            });
+        }
     }
 
     match (input.geometry, input.picture, input.ole, input.line, input.polygon) {
@@ -1132,7 +1195,7 @@ impl BodyTextParserState {
             }
             TagId::ShapeComponent => {
                 if let Some(ctx) = self.subtree_ctx.as_mut() {
-                    ctx.note_shape_component();
+                    ctx.note_shape_component(&record.data);
                 }
             }
             TagId::ShapeComponentLine => match Hwp5ShapeComponentLine::parse(&record.data) {
@@ -1484,7 +1547,7 @@ impl BodyTextParserState {
         };
 
         match tag {
-            TagId::ShapeComponent => ctx.note_shape_component(),
+            TagId::ShapeComponent => ctx.note_shape_component(&record.data),
             TagId::ShapeComponentRect => ctx.note_shape_rectangle(),
             TagId::ShapeComponentLine => match Hwp5ShapeComponentLine::parse(&record.data) {
                 Ok(line) => ctx.note_shape_line(line),
@@ -2771,7 +2834,7 @@ mod tests {
             height: 6_000,
         };
         let mut ctx = InlineGsoContext::new(0, CTRL_ID_GSO, Some(geometry));
-        ctx.note_shape_component();
+        ctx.note_shape_component(&[]);
         ctx.note_shape_picture(Hwp5ShapePicture::parse(&shape_picture_data(1)).unwrap());
         ctx.note_shape_ole(
             Hwp5ShapeComponentOle::parse(&shape_component_ole_data(1, 9000, 8000)).unwrap(),
@@ -2792,7 +2855,7 @@ mod tests {
             height: 6_000,
         };
         let mut ctx = NestedSubtreeContext::new(0, CTRL_ID_GSO, 0, Some(geometry));
-        ctx.note_shape_component();
+        ctx.note_shape_component(&[]);
         ctx.note_shape_picture(Hwp5ShapePicture::parse(&shape_picture_data(1)).unwrap());
         ctx.note_shape_ole(
             Hwp5ShapeComponentOle::parse(&shape_component_ole_data(1, 9000, 8000)).unwrap(),
@@ -2801,6 +2864,54 @@ mod tests {
         match ctx.into_control() {
             Hwp5Control::Unknown { ctrl_id, .. } => assert_eq!(ctrl_id, CTRL_ID_GSO),
             other => panic!("expected Unknown for ambiguous subtree gso payload, got {:?}", other),
+        }
+    }
+
+    fn line_gso_input(shape_component_kind: Option<[u8; 4]>) -> GsoClassificationInput {
+        GsoClassificationInput {
+            ctrl_id: CTRL_ID_GSO,
+            saw_shape_component: true,
+            saw_shape_rectangle: false,
+            geometry: Some(crate::schema::section::Hwp5ShapeComponentGeometry {
+                x: 1,
+                y: 2,
+                width: 100,
+                height: 50,
+            }),
+            picture: None,
+            ole: None,
+            line: Some(crate::schema::section::Hwp5ShapeComponentLine {
+                start: Hwp5ShapePoint { x: 0, y: 0 },
+                end: Hwp5ShapePoint { x: 100, y: 0 },
+            }),
+            polygon: None,
+            ellipse: None,
+            curve: None,
+            shape_component_kind,
+        }
+    }
+
+    #[test]
+    fn gso_line_with_connect_line_tag_classifies_as_connect_line() {
+        let input = line_gso_input(Some(SHAPE_COMPONENT_TYPE_CONNECT_LINE));
+        match classify_gso_control(input) {
+            Hwp5Control::ConnectLine(connect_line) => {
+                assert_eq!(connect_line.end.x, 100);
+                assert_eq!(connect_line.geometry.width, 100);
+            }
+            other => panic!("expected ConnectLine for the $col tag, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gso_line_without_connect_line_tag_stays_line() {
+        // Conservative guard: a plain line (no tag, or any non-$col tag) must
+        // never be reclassified as a connect line.
+        for kind in [None, Some(*b"$rec"), Some(*b"$lin")] {
+            match classify_gso_control(line_gso_input(kind)) {
+                Hwp5Control::Line(_) => {}
+                other => panic!("expected Line for shape_component_kind={kind:?}, got {other:?}"),
+            }
         }
     }
 }

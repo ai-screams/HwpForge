@@ -23,10 +23,10 @@ use hwpforge_foundation::{
 
 use crate::decoder::chart_ole::{extract_chart_payload, ChartOleError};
 use crate::decoder::section::{
-    Hwp5ArcControl, Hwp5Control, Hwp5CurveControl, Hwp5EllipseControl, Hwp5ImageControl,
-    Hwp5LineControl, Hwp5NestedSubtree, Hwp5OleObjectControl, Hwp5PageBorderFill, Hwp5Paragraph,
-    Hwp5PolygonControl, Hwp5RectControl, Hwp5Table, Hwp5TableCell, Hwp5TextBoxControl,
-    SectionResult,
+    Hwp5ArcControl, Hwp5ConnectLineControl, Hwp5Control, Hwp5CurveControl, Hwp5EllipseControl,
+    Hwp5ImageControl, Hwp5LineControl, Hwp5NestedSubtree, Hwp5OleObjectControl, Hwp5PageBorderFill,
+    Hwp5Paragraph, Hwp5PolygonControl, Hwp5RectControl, Hwp5Table, Hwp5TableCell,
+    Hwp5TextBoxControl, SectionResult,
 };
 use crate::decoder::Hwp5Warning;
 use crate::error::Hwp5Result;
@@ -1308,6 +1308,7 @@ fn project_control_run(
         Hwp5Control::Ellipse(ellipse) => project_ellipse_run(ellipse),
         Hwp5Control::Arc(arc) => project_arc_run(arc),
         Hwp5Control::Curve(curve) => project_curve_run(curve),
+        Hwp5Control::ConnectLine(connect_line) => project_connectline_run(connect_line),
         Hwp5Control::TextBox(textbox) => Some(project_textbox_run(textbox, projection_images)),
         Hwp5Control::Footnote(subtree) => Some(project_footnote_run(subtree, projection_images)),
         Hwp5Control::Endnote(subtree) => Some(project_endnote_run(subtree, projection_images)),
@@ -1583,6 +1584,60 @@ fn project_curve_run(curve: &Hwp5CurveControl) -> Option<Run> {
         if !decoded.is_empty() {
             *segment_types = decoded;
         }
+    }
+    Some(Run::control(control, CharShapeIndex::new(0)))
+}
+
+/// Project a connect line. 한컴 stores it in the same `ShapeComponentLine`
+/// record as a plain line, so endpoints are scaled into the bounding box the
+/// same way; only a straight connector is carried (the source object-link
+/// references have no `<hp:connectLine>` representation).
+fn project_connectline_run(connect_line: &Hwp5ConnectLineControl) -> Option<Run> {
+    let min_x = connect_line.start.x.min(connect_line.end.x);
+    let max_x = connect_line.start.x.max(connect_line.end.x);
+    let min_y = connect_line.start.y.min(connect_line.end.y);
+    let max_y = connect_line.start.y.max(connect_line.end.y);
+    let scaled_start = hwpforge_core::control::ShapePoint {
+        x: scale_point_into_geometry(
+            connect_line.start,
+            min_x,
+            max_x,
+            connect_line.geometry.width,
+            100,
+            Axis::Horizontal,
+        ),
+        y: scale_point_into_geometry(
+            connect_line.start,
+            min_y,
+            max_y,
+            connect_line.geometry.height,
+            100,
+            Axis::Vertical,
+        ),
+    };
+    let scaled_end = hwpforge_core::control::ShapePoint {
+        x: scale_point_into_geometry(
+            connect_line.end,
+            min_x,
+            max_x,
+            connect_line.geometry.width,
+            100,
+            Axis::Horizontal,
+        ),
+        y: scale_point_into_geometry(
+            connect_line.end,
+            min_y,
+            max_y,
+            connect_line.geometry.height,
+            100,
+            Axis::Vertical,
+        ),
+    };
+    let mut control =
+        hwpforge_core::control::Control::connect_line(scaled_start, scaled_end).ok()?;
+    if let Control::ConnectLine { horz_offset, vert_offset, .. } = &mut control {
+        *horz_offset = connect_line.geometry.x;
+        *vert_offset = connect_line.geometry.y;
     }
     Some(Run::control(control, CharShapeIndex::new(0)))
 }

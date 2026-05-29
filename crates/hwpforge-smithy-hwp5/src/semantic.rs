@@ -1088,6 +1088,8 @@ pub enum Hwp5SemanticControlKind {
     Arc,
     /// Curve (bezier/polyline) shape object.
     Curve,
+    /// Connect-line (connector) shape object.
+    ConnectLine,
     /// Header control.
     Header,
     /// Footer control.
