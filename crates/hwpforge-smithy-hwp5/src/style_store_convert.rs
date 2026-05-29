@@ -8,7 +8,7 @@ use crate::warning_utils::push_projection_fallback;
 use hwpforge_core::{TabDef, TabStop};
 use hwpforge_foundation::{
     BorderFillIndex, Color, EmbossType, EngraveType, FontIndex, HeadingType, HwpUnit,
-    StrikeoutShape, TabAlign, TabLeader, UnderlineType, VerticalPosition,
+    StrikeoutShape, TabAlign, TabLeader, UnderlineShape, UnderlineType, VerticalPosition,
 };
 use hwpforge_smithy_hwpx::{
     HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape, HwpxStyle, HwpxStyleStore,
@@ -84,6 +84,24 @@ pub(crate) fn hwp5_char_shape_to_hwpx(raw: &Hwp5RawCharShape) -> HwpxCharShape {
     shape.bold = raw.is_bold();
     shape.italic = raw.is_italic();
     shape.underline_type = raw.underline_type();
+    shape.underline_shape = match raw.underline_type() {
+        UnderlineType::None => UnderlineShape::Solid,
+        _ => match raw.underline_shape_raw() {
+            0 => UnderlineShape::Solid,
+            1 => UnderlineShape::Dash,
+            2 => UnderlineShape::Dot,
+            3 => UnderlineShape::DashDot,
+            4 => UnderlineShape::DashDotDot,
+            5 => UnderlineShape::LongDash,
+            6 => UnderlineShape::Circle,
+            7 => UnderlineShape::DoubleSlim,
+            8 => UnderlineShape::SlimThick,
+            9 => UnderlineShape::ThickSlim,
+            10 => UnderlineShape::ThickSlimThick,
+            11 => UnderlineShape::Wave,
+            _ => UnderlineShape::Solid,
+        },
+    };
     shape.underline_color = match raw.underline_type() {
         UnderlineType::None => None,
         _ => optional_non_black_color(raw.underline_color),
@@ -213,10 +231,10 @@ fn append_char_shape_projection_warnings(
     warnings: &mut Vec<Hwp5Warning>,
 ) {
     warn_on_char_vertical_position_conflict(raw, raw_id, warnings);
-    warn_on_char_underline_shape(raw, raw_id, warnings);
     warn_on_char_outline_kind(raw, raw_id, warnings);
     warn_on_char_shadow_kind(raw, raw_id, warnings);
-    warn_on_char_strike_shape(raw, raw_id, warnings);
+    warn_on_char_shadow_color(raw, raw_id, warnings);
+    warn_on_char_shadow_offset(raw, raw_id, warnings);
     warn_on_char_script_scalar_collapse(raw, raw_id, warnings);
 }
 
@@ -232,24 +250,6 @@ fn append_para_shape_projection_warnings(
     warn_on_para_auto_spacing(raw, raw_id, warnings);
     warn_on_para_border_offsets(raw, raw_id, warnings);
     warn_on_para_border_flags(raw, raw_id, warnings);
-}
-
-fn warn_on_char_underline_shape(
-    raw: &Hwp5RawCharShape,
-    raw_id: usize,
-    warnings: &mut Vec<Hwp5Warning>,
-) {
-    if raw.underline_type() == UnderlineType::None || raw.underline_shape_raw() == 0 {
-        return;
-    }
-    push_projection_fallback(
-        warnings,
-        "style.char_shape.underline_shape",
-        format!(
-            "char shape {raw_id} underline shape {} collapsed to SOLID because the shared IR does not carry underline line families",
-            raw.underline_shape_raw()
-        ),
-    );
 }
 
 fn warn_on_char_vertical_position_conflict(
@@ -305,20 +305,41 @@ fn warn_on_char_shadow_kind(
     );
 }
 
-fn warn_on_char_strike_shape(
+fn warn_on_char_shadow_color(
     raw: &Hwp5RawCharShape,
     raw_id: usize,
     warnings: &mut Vec<Hwp5Warning>,
 ) {
-    if !raw.has_strikeout() || raw.strike_shape_raw() <= 4 {
+    if raw.shadow_kind_raw() == 0 {
         return;
     }
     push_projection_fallback(
         warnings,
-        "style.char_shape.strike_shape",
+        "style.char_shape.shadow_color",
         format!(
-            "char shape {raw_id} strike shape {} collapsed to Continuous because the shared IR does not support that line family",
-            raw.strike_shape_raw()
+            "char shape {raw_id} shadow color 0x{:08X} is not carried because HwpxCharShape does not store shadow_color",
+            raw.shadow_color
+        ),
+    );
+}
+
+fn warn_on_char_shadow_offset(
+    raw: &Hwp5RawCharShape,
+    raw_id: usize,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    if raw.shadow_kind_raw() == 0 {
+        return;
+    }
+    if raw.shadow_gap_x == 0 && raw.shadow_gap_y == 0 {
+        return;
+    }
+    push_projection_fallback(
+        warnings,
+        "style.char_shape.shadow_offset",
+        format!(
+            "char shape {raw_id} shadow offset (dx={}, dy={}) is not carried because HwpxCharShape does not store shadow gaps",
+            raw.shadow_gap_x, raw.shadow_gap_y
         ),
     );
 }
@@ -359,7 +380,7 @@ fn warn_on_para_line_spacing_kind(
     raw_id: usize,
     warnings: &mut Vec<Hwp5Warning>,
 ) {
-    if raw.line_spacing_kind_raw() <= 2 {
+    if raw.line_spacing_kind_raw() <= 3 {
         return;
     }
     push_projection_fallback(
@@ -377,20 +398,14 @@ fn warn_on_para_break_latin_word(
     raw_id: usize,
     warnings: &mut Vec<Hwp5Warning>,
 ) {
-    match raw.break_latin_word_raw() {
-        1 => push_projection_fallback(
-            warnings,
-            "style.para_shape.break_latin_word",
-            format!(
-                "para shape {raw_id} latin hyphenation collapsed to KEEP_WORD because the shared IR has no HYPHENATION variant"
-            ),
-        ),
-        3 => push_projection_fallback(
+    // Raw 0/1/2 are carried (KEEP_WORD/HYPHENATION/BREAK_WORD); raw 3 is
+    // unspecified and collapses to KEEP_WORD by the projection's fallback arm.
+    if raw.break_latin_word_raw() == 3 {
+        push_projection_fallback(
             warnings,
             "style.para_shape.break_latin_word",
             format!("para shape {raw_id} latin break mode 3 is unknown and collapsed to KEEP_WORD"),
-        ),
-        _ => {}
+        );
     }
 }
 
@@ -535,26 +550,35 @@ fn hwp5_tab_align_to_foundation(tab_type: u8) -> TabAlign {
     }
 }
 
+/// Maps a HWP5 TabDef `fill_type` to the HWPX `<hh:tabItem leader>` string.
+///
+/// **This is NOT the table 25 (border line types) mapping**, despite the
+/// HWP 5.0 spec §4.2.7 referencing table 25 verbatim. Empirical evidence
+/// from 한컴-authored truth fixtures (see
+/// `examples/probe_tabdef.rs` against `sample-tab.hwpx`) and openhwp's
+/// reference encoder (`crates/hwp/src/convert/to_ir.rs:521-527` joined
+/// with `crates/hwpx/src/convert/from_ir.rs:2286-2290`) confirm a
+/// dedicated tab-leader enum:
+///
+/// | HWP5 fill_type | HWPX leader  | openhwp IR  |
+/// |---------------:|--------------|-------------|
+/// | 0              | `NONE`       | None        |
+/// | 1              | `DOT`        | Dot         |
+/// | 2              | `DASH_DOT_DOT` | LongDash  |
+/// | 3              | `DASH`       | Dash        |
+/// | 4              | `SOLID`      | Underscore  |
+/// | 5+             | `NONE`       | None (fallback) |
+///
+/// See `.docs/research/2026-05-26_tab_fidelity_bugs.md` (Bug B2) for
+/// the investigation log.
 fn hwp5_fill_type_to_tab_leader(fill_type: u8) -> TabLeader {
     let leader = match fill_type {
-        0 => "SOLID",
-        1 => "DASH",
-        2 => "DOT",
-        3 => "DASH_DOT",
-        4 => "DASH_DOT_DOT",
-        5 => "LONG_DASH",
-        6 => "CIRCLE",
-        7 => "DOUBLE_SLIM",
-        8 => "SLIM_THICK",
-        9 => "THICK_SLIM",
-        10 => "SLIM_THICK_SLIM",
-        11 => "WAVE",
-        12 => "DOUBLEWAVE",
-        13 => "THICK_3D",
-        14 => "THICK_3D_REVERSE_LIGHTING",
-        15 => "SOLID_3D",
-        16 => "SOLID_3D_REVERSE_LIGHTING",
-        _ => "SOLID",
+        0 => "NONE",
+        1 => "DOT",
+        2 => "DASH_DOT_DOT",
+        3 => "DASH",
+        4 => "SOLID",
+        _ => "NONE",
     };
     TabLeader::from_hwpx_str(leader)
 }
@@ -576,8 +600,20 @@ pub(crate) fn hwp5_tab_def_to_hwpx(id: u32, raw: &Hwp5RawTabDef) -> TabDef {
     }
 }
 
+/// Converts a HWP5 raw tab stop position (HwpUnit) into the value
+/// expected by `crates/hwpforge-smithy-hwpx/src/encoder/header_tabs.rs`.
+///
+/// The HWPX encoder treats `TabStop.position` as **HwpUnitChar**: it emits
+/// the value as-is into the `HwpUnitChar` switch branch and doubles it
+/// into the legacy default branch. HWP5 stores the position in HwpUnit
+/// (per HWP 5.0 spec §4.2.7), so we halve here to land in the encoder's
+/// HwpUnitChar convention. Confirmed against the
+/// `sample-tab.hwp{,x}` truth pair: HWP5 raw `30000` → HWPX
+/// `pos="15000"` (HwpUnitChar) / `pos="30000"` (default).
+///
+/// See `.docs/research/2026-05-26_tab_fidelity_bugs.md` (Bug B1).
 fn hwp5_tab_position_to_hwp_unit(position: u32) -> HwpUnit {
-    TabDef::clamp_position_from_unsigned(u64::from(position))
+    TabDef::clamp_position_from_unsigned(u64::from(position) / 2)
 }
 
 pub(crate) fn hwp5_style_to_hwpx(id: u32, raw: &Hwp5RawStyle, style_count: usize) -> HwpxStyle {

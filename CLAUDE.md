@@ -19,18 +19,23 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 - Shared tab semantics: landed on `main`
 - Shared `ordered / bullet / outline` semantics: implemented on local `feat/list-shared-semantics`
 - Checkable bullet semantics: implemented on local `feat/list-shared-semantics`
-- HWP5 checkable support: definition-level parity only; paragraph item checked-state decode is still backlog
+- HWP5 checkable support: all three gotcha-#8 truth locations now carry end-to-end — `bullet.checkedChar`, `bullet.paraHead.checkable` (definition-level), and `paraPr.checked` (paragraph-level)
 - Markdown task lists normalize to HWPX-first checkable semantics; ordered task lists intentionally lose numbering
 - HWP5 char/para style bridge now preserves the main supported style surface
 - HWP5 layout hint patch injects `linesegarray` and safe table height hints for better visual parity
 - `convert-hwp5` / `audit-hwp5` warning counts are aligned for style projection fallbacks
 - HWP5/HWPX char effects now preserve `emboss`, `engrave`, `superscript`, and `subscript`
-- Known style-fidelity gaps still deferred: `breakLatinWord=HYPHENATION`, richer strike/underline line families
+- HWP5/HWPX paragraph `breakLatinWord=HYPHENATION` is now carried end-to-end (Wave 1d)
+- HWP5 chart objects (OLE-backed BinData) now carry end-to-end as `Control::EmbeddedChart` passthrough — emits `Chart/chartN.xml` + `BinData/oleN.ole` + `<hp:switch>` block (Wave 4c, closes `DroppedControl:ole_object`)
+- HWP5 tab fidelity end-to-end: inline `<hp:tab width/leader/type>` attributes carried via new `RunContent::InlineText` variant (Wave 4 tab Phase 2+3, additive `#[non_exhaustive]`)
+- HWP5 header/footer per-ctrl `applyPageType` (BOTH/ODD/EVEN) now carry as multiple `<hp:header>` / `<hp:footer>` elements (Wave 5 gap A; **breaking** ADR-002: `Section.header: Option<HeaderFooter>` → `Section.headers: Vec<HeaderFooter>`, footer 동일)
+- HWP5 `secd` ctrl property bits (0/1/2/5/19) carry into `Section.visibility.hide_first_*` (Wave 5 gap B)
+- Known still-deferred: richer strike/underline line families; Wave 5 gap C (masterPage carry — macOS 한컴 fixture 비대칭, PC 한컴 fixture 대기, task #33); multi-section / page-border-fill (fixture 미작성)
 
 **Workspace Facts (code-grounded)**:
 
 - Cargo packages: `10`
-- Workspace version: `0.5.0`
+- Workspace version: `0.6.0` (bumped from `0.5.2` for the ADR-002 breaking change)
 - Tracked Rust `src` files under `crates/`: `144`
 - Tracked Rust `src` LOC under `crates/`: `90,629`
 - Example artifact files under `examples/`: `67`

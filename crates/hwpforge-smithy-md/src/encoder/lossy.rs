@@ -169,7 +169,17 @@ fn paragraph_text_markdown(paragraph: &Paragraph) -> String {
 
     for run in &paragraph.runs {
         match &run.content {
-            RunContent::Text(text) => output.push_str(text),
+            // Markdown cannot represent inline tab attributes, so any
+            // `<hp:tab width=... leader=... type=.../>` collapses back
+            // to a literal `\t` via `plain_text()` — same effective
+            // output the `Text(String)` arm would produce. See
+            // `.docs/debug/2026-05-27_hwpx_decoder_inline_tab_attrs_lost.md`
+            // §3a-A4.
+            RunContent::Text(_) | RunContent::InlineText(_) => {
+                if let Some(cow) = run.content.plain_text() {
+                    output.push_str(&cow);
+                }
+            }
             RunContent::Image(image) => {
                 if !output.is_empty() {
                     output.push(' ');

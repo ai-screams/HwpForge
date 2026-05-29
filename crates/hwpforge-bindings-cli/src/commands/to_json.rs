@@ -17,6 +17,15 @@ pub fn run(
     no_styles: bool,
     json_mode: bool,
 ) {
+    // Guard the output extension up front (same `extension()` idiom as the
+    // `to-md` command), so a mistyped path fails before any work is done.
+    if output.extension().and_then(|e| e.to_str()) != Some("json") {
+        CliError::new(
+            "INVALID_EXTENSION",
+            format!("Output path must end with .json: {}", output.display()),
+        )
+        .exit(json_mode, 1);
+    }
     check_file_size(file, json_mode);
     let bytes = match std::fs::read(file) {
         Ok(b) => b,

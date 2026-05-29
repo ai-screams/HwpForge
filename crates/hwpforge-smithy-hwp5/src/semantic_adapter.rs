@@ -36,6 +36,12 @@ use crate::table_cell_vertical_align::semantic_table_cell_vertical_align;
 use crate::table_page_break::semantic_table_page_break;
 use crate::{Hwp5BinDataRecordSummary, Hwp5BinDataStream, Hwp5JoinedImageAssetPlan};
 
+/// ctrl_id for the page-number control: ASCII `pgnp` as a big-endian u32.
+/// Mirrors `projection::CTRL_ID_PAGE_NUMBER`; the page-number control flows
+/// through `Hwp5Control::Unknown`, so the semantic model recognizes it here
+/// to keep `audit-hwp5`'s source-side page-number count accurate.
+const CTRL_ID_PAGE_NUMBER: u32 = 0x7067_6E70;
+
 #[derive(Debug, Default)]
 struct SemanticIdAlloc {
     next_section: usize,
@@ -270,15 +276,48 @@ fn adapt_control(
             support,
             ids,
         ),
+        Hwp5Control::Footnote(subtree) => adapt_nested_subtree_control(
+            subtree,
+            container,
+            paragraph_id,
+            NestedSubtreeSemanticSpec {
+                kind: Hwp5SemanticControlKind::Footnote,
+                subtree_container: Hwp5SemanticContainerKind::FootnoteSubList,
+            },
+            build,
+            support,
+            ids,
+        ),
+        Hwp5Control::Endnote(subtree) => adapt_nested_subtree_control(
+            subtree,
+            container,
+            paragraph_id,
+            NestedSubtreeSemanticSpec {
+                kind: Hwp5SemanticControlKind::Endnote,
+                subtree_container: Hwp5SemanticContainerKind::EndnoteSubList,
+            },
+            build,
+            support,
+            ids,
+        ),
         Hwp5Control::TextBox(textbox) => {
             adapt_textbox_control(textbox, container, paragraph_id, build, support, ids)
         }
         Hwp5Control::Unknown { ctrl_id, .. } => {
             let node_id = ids.next_control_id();
             let literal = crate::ctrl_id_ascii(*ctrl_id);
+            // The page-number control (`pgnp`) reaches us via the Unknown
+            // path. Classify it as PageNumber so the audit's source-side
+            // page-number count matches what projection actually emits;
+            // everything else stays Unknown.
+            let kind = if *ctrl_id == CTRL_ID_PAGE_NUMBER {
+                Hwp5SemanticControlKind::PageNumber
+            } else {
+                Hwp5SemanticControlKind::Unknown(literal.clone())
+            };
             build.controls.push(Hwp5SemanticControlNode {
                 node_id,
-                kind: Hwp5SemanticControlKind::Unknown(literal.clone()),
+                kind,
                 payload: Hwp5SemanticControlPayload::None,
                 container: container.clone(),
                 literal_ctrl_id: Some(literal),
@@ -554,8 +593,13 @@ fn adapt_textbox_control(
     support: SemanticSupport<'_>,
     ids: &mut SemanticIdAlloc,
 ) -> Hwp5SemanticControlId {
-    let subtree =
-        Hwp5NestedSubtree { ctrl_id: textbox.ctrl_id, paragraphs: textbox.paragraphs.clone() };
+    let subtree = Hwp5NestedSubtree {
+        ctrl_id: textbox.ctrl_id,
+        // textbox carries no header/footer applyPageType bits — set to
+        // 0 so projection treats it as default (BOTH).
+        properties_raw: 0,
+        paragraphs: textbox.paragraphs.clone(),
+    };
 
     adapt_nested_subtree_control(
         &subtree,
@@ -804,7 +848,7 @@ fn populate_inline_items(
     for segment in text_segments {
         match segment {
             TextSegment::Text(text) => buffer.push_str(text),
-            TextSegment::Tab => {
+            TextSegment::Tab { .. } => {
                 flush_text(&mut buffer, inline_items);
                 inline_items.push(Hwp5SemanticInlineItem::Tab);
             }
@@ -815,6 +859,10 @@ fn populate_inline_items(
             TextSegment::NonBreakingSpace => {
                 flush_text(&mut buffer, inline_items);
                 inline_items.push(Hwp5SemanticInlineItem::NonBreakingSpace);
+            }
+            TextSegment::FwSpace => {
+                flush_text(&mut buffer, inline_items);
+                inline_items.push(Hwp5SemanticInlineItem::FwSpace);
             }
             TextSegment::ControlRef { .. } | TextSegment::ExtendedControlRef { .. } => {
                 buffer.push(placeholder);
@@ -1146,6 +1194,8 @@ mod tests {
                     gutter: 700,
                     landscape: true,
                 }),
+                section_def_properties: None,
+                page_border_fills: Vec::new(),
                 warnings: Vec::new(),
             }],
             warnings: Vec::new(),
@@ -1287,6 +1337,8 @@ mod tests {
             sections: vec![SectionResult {
                 paragraphs: Vec::new(),
                 page_def: None,
+                section_def_properties: None,
+                page_border_fills: Vec::new(),
                 warnings: Vec::new(),
             }],
             warnings: Vec::new(),
@@ -1325,6 +1377,8 @@ mod tests {
                     }],
                 }],
                 page_def: None,
+                section_def_properties: None,
+                page_border_fills: Vec::new(),
                 warnings: Vec::new(),
             }],
             warnings: Vec::new(),
@@ -1335,6 +1389,57 @@ mod tests {
         assert_eq!(paragraph.inline_text_summary(), paragraph.text);
         assert_eq!(paragraph.inline_control_ids(), paragraph.control_ids);
         assert_eq!(paragraph.owner_control_id, None);
+    }
+
+    #[test]
+    fn adapter_classifies_pgnp_control_as_page_number() {
+        // The page-number control `pgnp` arrives as Hwp5Control::Unknown.
+        // It must be classified as PageNumber so audit-hwp5's source-side
+        // page-number count matches what projection emits (otherwise every
+        // page-numbered document reports a false source=0 / output=1 DIFF).
+        let decoded = DecodedHwp5Intermediate {
+            version: "5.1.1.0".to_string(),
+            compressed: false,
+            package_entries: Vec::new(),
+            bin_data_records: Vec::new(),
+            bin_data_streams: Vec::new(),
+            doc_info: empty_doc_info(),
+            sections: vec![SectionResult {
+                paragraphs: vec![Hwp5Paragraph {
+                    text: "\u{fffc}".to_string(),
+                    text_segments: Vec::new(),
+                    para_shape_id: 0,
+                    style_id: 0,
+                    char_shape_runs: Vec::new(),
+                    line_segments: Vec::new(),
+                    controls: vec![Hwp5Control::Unknown {
+                        ctrl_id: CTRL_ID_PAGE_NUMBER,
+                        header_data: Vec::new(),
+                    }],
+                }],
+                page_def: None,
+                section_def_properties: None,
+                page_border_fills: Vec::new(),
+                warnings: Vec::new(),
+            }],
+            warnings: Vec::new(),
+        };
+
+        let semantic = adapt_to_semantic(&decoded, &empty_image_plan());
+        let section = &semantic.sections[0];
+        assert!(
+            section.controls.iter().any(|c| c.kind == Hwp5SemanticControlKind::PageNumber),
+            "pgnp control must be classified as PageNumber: {:?}",
+            section.controls.iter().map(|c| &c.kind).collect::<Vec<_>>()
+        );
+        // And it must NOT also linger as Unknown("pgnp").
+        assert!(
+            !section
+                .controls
+                .iter()
+                .any(|c| c.kind == Hwp5SemanticControlKind::Unknown("pgnp".to_string())),
+            "pgnp must not also be reported as Unknown"
+        );
     }
 
     #[test]
@@ -1366,6 +1471,8 @@ mod tests {
                     })],
                 }],
                 page_def: None,
+                section_def_properties: None,
+                page_border_fills: Vec::new(),
                 warnings: Vec::new(),
             }],
             warnings: Vec::new(),
@@ -1445,6 +1552,8 @@ mod tests {
                     })],
                 }],
                 page_def: None,
+                section_def_properties: None,
+                page_border_fills: Vec::new(),
                 warnings: Vec::new(),
             }],
             warnings: Vec::new(),
@@ -1503,6 +1612,8 @@ mod tests {
                     })],
                 }],
                 page_def: None,
+                section_def_properties: None,
+                page_border_fills: Vec::new(),
                 warnings: Vec::new(),
             }],
             warnings: Vec::new(),

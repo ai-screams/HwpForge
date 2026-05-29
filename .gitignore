@@ -413,7 +413,13 @@ tags
 [Ll]ib64
 [Ll]ocal
 [Ss]cripts
+!scripts/
 pyvenv.cfg
+
+# HWP5 audit gate
+/.audit/hwp5_current.json
+/.audit/*.stderr
+/.audit/*.tmp
 pip-selfcheck.json
 
 ### VisualStudioCode ###

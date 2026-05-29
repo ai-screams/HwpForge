@@ -59,6 +59,18 @@ pub(crate) enum Hwp5Control {
     Header(Hwp5NestedSubtree),
     /// Footer control with nested subtree paragraphs.
     Footer(Hwp5NestedSubtree),
+    /// Footnote control with nested subtree paragraphs.
+    ///
+    /// HWP5 encodes footnotes as an inline `0x06` control-char marker in the
+    /// paragraph text stream followed by a `CtrlHeader` carrying ctrl_id
+    /// `"fn  "` (`0x666E2020`). The subtree mirrors the header/footer layout
+    /// (`ListHeader` → nested `ParaHeader`s).
+    Footnote(Hwp5NestedSubtree),
+    /// Endnote control with nested subtree paragraphs.
+    ///
+    /// Same structure as [`Hwp5Control::Footnote`] but with ctrl_id `"en  "`
+    /// (`0x656E2020`).
+    Endnote(Hwp5NestedSubtree),
     /// Textbox-like shape with nested subtree paragraphs.
     TextBox(Hwp5TextBoxControl),
     /// Embedded OLE object evidence resolved from `gso ` + `ShapeComponent` + `ShapeComponentOle`.
@@ -238,6 +250,16 @@ const TABLE_CELL_HEADER_FLAG: u32 = 0x0004_0000;
 pub(crate) struct Hwp5NestedSubtree {
     /// Original control identifier that owns the subtree.
     pub ctrl_id: u32,
+    /// Raw 4-byte property field that follows `ctrl_id` in the
+    /// `CtrlHeader` payload (HWP 5.0 spec §4.3.10.3 표 140·141 for
+    /// header/footer ctrls). Projection decodes per-ctrl semantics
+    /// from this value (e.g. bit 0~1 → header `applyPageType` —
+    /// 0=BOTH, 1=EVEN, 2=ODD).
+    ///
+    /// Decoder stores the raw bytes verbatim and lets projection do
+    /// the semantic split so the decoder stays format-agnostic
+    /// (single source of payload, easy to extend for new bits).
+    pub properties_raw: u32,
     /// Nested paragraphs captured under the subtree.
     pub paragraphs: Vec<Hwp5Paragraph>,
 }
@@ -250,8 +272,64 @@ pub(crate) struct SectionResult {
     pub paragraphs: Vec<Hwp5Paragraph>,
     /// Page definition, if a PageDef record was found.
     pub page_def: Option<Hwp5PageDef>,
+    /// Raw 4-byte property word from the `secd` ctrl (HWP 5.0 spec
+    /// §4.3.10.1 표 130). `None` when no `secd` ctrl was encountered
+    /// (e.g. truncated fixtures); bits 0~5 + 8/9 + 19 are decoded by
+    /// projection into `Section.visibility` (gap B).
+    pub section_def_properties: Option<u32>,
+    /// Page border/fill records (`HWPTAG_PAGE_BORDER_FILL`, 0x4B) that
+    /// follow the `secd` ctrl. 한글 emits them in `[BOTH, EVEN, ODD]`
+    /// order; projection maps each to a `PageBorderFillEntry`.
+    pub page_border_fills: Vec<Hwp5PageBorderFill>,
     /// Non-fatal warnings.
     pub warnings: Vec<Hwp5Warning>,
+}
+
+/// A decoded `HWPTAG_PAGE_BORDER_FILL` (0x4B) record.
+///
+/// 14-byte layout (empirically verified against 한글 fixtures; note the
+/// `borderFillId` trails the offsets, unlike some references):
+///
+/// | bytes | field |
+/// |-------|-------|
+/// | 0..4  | `properties` (UINT32) |
+/// | 4..6  | `offset_left` (UINT16, HWPUNIT16) |
+/// | 6..8  | `offset_right` |
+/// | 8..10 | `offset_top` |
+/// | 10..12| `offset_bottom` |
+/// | 12..14| `border_fill_id` (UINT16, 1-based DocInfo index) |
+///
+/// `properties` bit 0 selects the border base (1 → paper edge, 0 → text
+/// content), bit 1/2 include header/footer in the border area, bit 3
+/// fills behind the page.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Hwp5PageBorderFill {
+    /// Raw property word.
+    pub properties: u32,
+    /// Offsets from the page edge, `[left, right, top, bottom]` in HWPUNIT16.
+    pub offsets: [u16; 4],
+    /// Referenced DocInfo border-fill id (1-based).
+    pub border_fill_id: u16,
+}
+
+impl Hwp5PageBorderFill {
+    /// Parses a 14-byte `HWPTAG_PAGE_BORDER_FILL` record body. Returns
+    /// `None` when the record is shorter than the fixed layout.
+    pub(crate) fn parse(data: &[u8]) -> Option<Self> {
+        if data.len() < 14 {
+            return None;
+        }
+        Some(Self {
+            properties: u32::from_le_bytes([data[0], data[1], data[2], data[3]]),
+            offsets: [
+                u16::from_le_bytes([data[4], data[5]]),
+                u16::from_le_bytes([data[6], data[7]]),
+                u16::from_le_bytes([data[8], data[9]]),
+                u16::from_le_bytes([data[10], data[11]]),
+            ],
+            border_fill_id: u16::from_le_bytes([data[12], data[13]]),
+        })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -264,6 +342,14 @@ const CTRL_ID_TABLE: u32 = 0x7462_6C20;
 const CTRL_ID_HEADER: u32 = 0x6865_6164;
 /// ctrl_id for footer control: ASCII `foot` as big-endian u32.
 const CTRL_ID_FOOTER: u32 = 0x666F_6F74;
+/// ctrl_id for section definition control: ASCII `secd` as big-endian u32.
+/// Holds page-level visibility / column-spacing / paper-spec metadata
+/// (HWP 5.0 spec §4.3.10.1 표 129·130).
+const CTRL_ID_SECD: u32 = 0x7365_6364;
+/// ctrl_id for footnote control: ASCII `fn  ` as big-endian u32.
+const CTRL_ID_FOOTNOTE: u32 = 0x666E_2020;
+/// ctrl_id for endnote control: ASCII `en  ` as big-endian u32.
+const CTRL_ID_ENDNOTE: u32 = 0x656E_2020;
 /// ctrl_id for generic shape object control: ASCII `gso ` as big-endian u32.
 const CTRL_ID_GSO: u32 = 0x6773_6F20;
 
@@ -380,6 +466,8 @@ struct ActiveTableCell {
 enum NestedSubtreeKind {
     Header,
     Footer,
+    Footnote,
+    Endnote,
     TextBox,
 }
 
@@ -387,6 +475,9 @@ enum NestedSubtreeKind {
 struct NestedSubtreeContext {
     ctrl_depth: u16,
     ctrl_id: u32,
+    /// Bytes [4..8] of the `CtrlHeader` payload (see
+    /// [`Hwp5NestedSubtree::properties_raw`]).
+    properties_raw: u32,
     saw_list_header: bool,
     saw_shape_rectangle: bool,
     saw_shape_component: bool,
@@ -399,10 +490,16 @@ struct NestedSubtreeContext {
 }
 
 impl NestedSubtreeContext {
-    fn new(ctrl_depth: u16, ctrl_id: u32, geometry: Option<Hwp5ShapeComponentGeometry>) -> Self {
+    fn new(
+        ctrl_depth: u16,
+        ctrl_id: u32,
+        properties_raw: u32,
+        geometry: Option<Hwp5ShapeComponentGeometry>,
+    ) -> Self {
         Self {
             ctrl_depth,
             ctrl_id,
+            properties_raw,
             saw_list_header: false,
             saw_shape_rectangle: false,
             saw_shape_component: false,
@@ -445,7 +542,9 @@ impl NestedSubtreeContext {
 
     fn allows_nested_paragraphs(&self) -> bool {
         match self.ctrl_id {
-            CTRL_ID_HEADER | CTRL_ID_FOOTER | CTRL_ID_GSO => self.saw_list_header,
+            CTRL_ID_HEADER | CTRL_ID_FOOTER | CTRL_ID_FOOTNOTE | CTRL_ID_ENDNOTE | CTRL_ID_GSO => {
+                self.saw_list_header
+            }
             _ => false,
         }
     }
@@ -454,6 +553,8 @@ impl NestedSubtreeContext {
         match self.ctrl_id {
             CTRL_ID_HEADER => Some(NestedSubtreeKind::Header),
             CTRL_ID_FOOTER => Some(NestedSubtreeKind::Footer),
+            CTRL_ID_FOOTNOTE => Some(NestedSubtreeKind::Footnote),
+            CTRL_ID_ENDNOTE => Some(NestedSubtreeKind::Endnote),
             CTRL_ID_GSO if self.saw_shape_rectangle => Some(NestedSubtreeKind::TextBox),
             _ => None,
         }
@@ -464,12 +565,28 @@ impl NestedSubtreeContext {
             Some(NestedSubtreeKind::Header) if self.saw_list_header => {
                 Hwp5Control::Header(Hwp5NestedSubtree {
                     ctrl_id: self.ctrl_id,
+                    properties_raw: self.properties_raw,
                     paragraphs: self.paragraphs,
                 })
             }
             Some(NestedSubtreeKind::Footer) if self.saw_list_header => {
                 Hwp5Control::Footer(Hwp5NestedSubtree {
                     ctrl_id: self.ctrl_id,
+                    properties_raw: self.properties_raw,
+                    paragraphs: self.paragraphs,
+                })
+            }
+            Some(NestedSubtreeKind::Footnote) if self.saw_list_header => {
+                Hwp5Control::Footnote(Hwp5NestedSubtree {
+                    ctrl_id: self.ctrl_id,
+                    properties_raw: self.properties_raw,
+                    paragraphs: self.paragraphs,
+                })
+            }
+            Some(NestedSubtreeKind::Endnote) if self.saw_list_header => {
+                Hwp5Control::Endnote(Hwp5NestedSubtree {
+                    ctrl_id: self.ctrl_id,
+                    properties_raw: self.properties_raw,
                     paragraphs: self.paragraphs,
                 })
             }
@@ -630,7 +747,9 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
 /// - `Text(s)` — appended verbatim
 /// - `Tab` — replaced with `\t`
 /// - `LineBreak` — replaced with `\n`
-/// - `NonBreakingSpace` — replaced with a regular space
+/// - `NonBreakingSpace` — replaced with `\u{00A0}` (canonical NBSP sentinel)
+/// - `FwSpace` — replaced with `\u{001F}` (fixed-width space sentinel; mirrors
+///   the HWP5 wire control byte so the round-trip through Core is lossless)
 /// - `ControlRef` / `ExtendedControlRef` — replaced with `\u{FFFC}` (object replacement)
 /// - All other segments (ParaBreak, FieldBegin, FieldEnd, SectionColumnDef) — ignored
 fn segments_to_string(segments: &[TextSegment]) -> String {
@@ -638,9 +757,10 @@ fn segments_to_string(segments: &[TextSegment]) -> String {
     for seg in segments {
         match seg {
             TextSegment::Text(s) => out.push_str(s),
-            TextSegment::Tab => out.push('\t'),
+            TextSegment::Tab { .. } => out.push('\t'),
             TextSegment::LineBreak => out.push('\n'),
-            TextSegment::NonBreakingSpace => out.push(' '),
+            TextSegment::NonBreakingSpace => out.push('\u{00A0}'),
+            TextSegment::FwSpace => out.push('\u{001F}'),
             TextSegment::ControlRef { .. } | TextSegment::ExtendedControlRef { .. } => {
                 out.push('\u{FFFC}');
             }
@@ -680,6 +800,10 @@ pub(crate) fn parse_body_text(data: &[u8], _version: &HwpVersion) -> Hwp5Result<
 struct BodyTextParserState {
     paragraphs: Vec<Hwp5Paragraph>,
     page_def: Option<Hwp5PageDef>,
+    /// Captured `secd` ctrl property word (HWP 5.0 spec §4.3.10.1 표 130).
+    section_def_properties: Option<u32>,
+    /// Page border/fill records collected in document order.
+    page_border_fills: Vec<Hwp5PageBorderFill>,
     warnings: Vec<Hwp5Warning>,
     current: Option<ParaBuf>,
     table_stack: Vec<TableContext>,
@@ -1062,18 +1186,64 @@ impl BodyTextParserState {
                 Ok(pd) => self.page_def = Some(pd),
                 Err(_) => self.push_unsupported_tag(record.header.tag_id),
             },
+            TagId::PageBorderFill => match Hwp5PageBorderFill::parse(&record.data) {
+                Some(pbf) => self.page_border_fills.push(pbf),
+                None => self.push_unsupported_tag(record.header.tag_id),
+            },
             TagId::CtrlHeader => {
                 let ctrl_id = parse_ctrl_id(&record.data);
                 if ctrl_id == CTRL_ID_TABLE {
                     self.table_stack.push(TableContext::new(level));
-                } else if matches!(ctrl_id, CTRL_ID_HEADER | CTRL_ID_FOOTER | CTRL_ID_GSO) {
+                } else if matches!(
+                    ctrl_id,
+                    CTRL_ID_HEADER
+                        | CTRL_ID_FOOTER
+                        | CTRL_ID_FOOTNOTE
+                        | CTRL_ID_ENDNOTE
+                        | CTRL_ID_GSO
+                ) {
                     let geometry = if ctrl_id == CTRL_ID_GSO {
                         Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).ok()
                     } else {
                         None
                     };
-                    self.subtree_ctx = Some(NestedSubtreeContext::new(level, ctrl_id, geometry));
+                    // HWP 5.0 spec §4.3.10.3 표 140: bytes [4..8] of
+                    // the ctrl_header payload are the property field
+                    // (e.g. header/footer applyPageType in bits 0~1).
+                    // Header is 4 bytes, so falling back to 0 keeps
+                    // pre-spec defaults consistent.
+                    let properties_raw = if record.data.len() >= 8 {
+                        u32::from_le_bytes([
+                            record.data[4],
+                            record.data[5],
+                            record.data[6],
+                            record.data[7],
+                        ])
+                    } else {
+                        0
+                    };
+                    self.subtree_ctx =
+                        Some(NestedSubtreeContext::new(level, ctrl_id, properties_raw, geometry));
                 } else if let Some(buf) = self.current.as_mut() {
+                    // Snapshot the `secd` ctrl property word for
+                    // projection-level Visibility decoding (gap B,
+                    // HWP 5.0 spec §4.3.10.1 표 130). The ctrl
+                    // continues to flow through the Unknown path so
+                    // downstream semantic adapter still emits the
+                    // SectionColumnDef inline item from the inline
+                    // 0x02 control byte; the property word is just an
+                    // additional sidecar capture.
+                    if ctrl_id == CTRL_ID_SECD
+                        && self.section_def_properties.is_none()
+                        && record.data.len() >= 8
+                    {
+                        self.section_def_properties = Some(u32::from_le_bytes([
+                            record.data[4],
+                            record.data[5],
+                            record.data[6],
+                            record.data[7],
+                        ]));
+                    }
                     buf.controls
                         .push(Hwp5Control::Unknown { ctrl_id, header_data: record.data.clone() });
                 }
@@ -1110,6 +1280,8 @@ impl BodyTextParserState {
         SectionResult {
             paragraphs: self.paragraphs,
             page_def: self.page_def,
+            section_def_properties: self.section_def_properties,
+            page_border_fills: self.page_border_fills,
             warnings: self.warnings,
         }
     }
@@ -1853,6 +2025,48 @@ mod tests {
     }
 
     #[test]
+    fn footnote_control_captures_nested_paragraphs_after_list_header() {
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &ctrl_header_data(CTRL_ID_FOOTNOTE)));
+        stream.extend(make_record(TagId::ListHeader, 1, &[0u8; 4]));
+        stream.extend(make_record(TagId::ParaHeader, 1, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 2, &para_text_data("footnote body")));
+
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let para = &result.paragraphs[0];
+        match &para.controls[0] {
+            Hwp5Control::Footnote(subtree) => {
+                assert_eq!(subtree.ctrl_id, CTRL_ID_FOOTNOTE);
+                assert_eq!(subtree.paragraphs.len(), 1);
+                assert_eq!(subtree.paragraphs[0].text, "footnote body");
+            }
+            other => panic!("expected Footnote, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn endnote_control_captures_nested_paragraphs_after_list_header() {
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &ctrl_header_data(CTRL_ID_ENDNOTE)));
+        stream.extend(make_record(TagId::ListHeader, 1, &[0u8; 4]));
+        stream.extend(make_record(TagId::ParaHeader, 1, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 2, &para_text_data("endnote body")));
+
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let para = &result.paragraphs[0];
+        match &para.controls[0] {
+            Hwp5Control::Endnote(subtree) => {
+                assert_eq!(subtree.ctrl_id, CTRL_ID_ENDNOTE);
+                assert_eq!(subtree.paragraphs.len(), 1);
+                assert_eq!(subtree.paragraphs[0].text, "endnote body");
+            }
+            other => panic!("expected Endnote, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn textbox_control_requires_shape_rectangle_and_list_header() {
         let mut stream = Vec::new();
         stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
@@ -2067,7 +2281,7 @@ mod tests {
 
     #[test]
     fn text_segments_rendering() {
-        // Tab → \t, NonBreakingSpace → ' ', LineBreak → \n
+        // Tab → \t, NonBreakingSpace (0x18) → \u{00A0}, FwSpace (0x1F) → \u{001F}
         let mut data: Vec<u8> = Vec::new();
         data.extend_from_slice(
             &"A".encode_utf16().flat_map(|c| c.to_le_bytes()).collect::<Vec<_>>(),
@@ -2079,9 +2293,13 @@ mod tests {
         data.extend_from_slice(
             &"B".encode_utf16().flat_map(|c| c.to_le_bytes()).collect::<Vec<_>>(),
         );
-        data.extend_from_slice(&0x1Eu16.to_le_bytes()); // NonBreakingSpace
+        data.extend_from_slice(&0x18u16.to_le_bytes()); // NonBreakingSpace (per HWP5 spec)
         data.extend_from_slice(
             &"C".encode_utf16().flat_map(|c| c.to_le_bytes()).collect::<Vec<_>>(),
+        );
+        data.extend_from_slice(&0x1Fu16.to_le_bytes()); // FwSpace (per HWP5 spec)
+        data.extend_from_slice(
+            &"D".encode_utf16().flat_map(|c| c.to_le_bytes()).collect::<Vec<_>>(),
         );
 
         let mut stream = Vec::new();
@@ -2089,7 +2307,7 @@ mod tests {
         stream.extend(make_record(TagId::ParaText, 0, &data));
 
         let result = parse_body_text(&stream, &version()).unwrap();
-        assert_eq!(result.paragraphs[0].text, "A\tB C");
+        assert_eq!(result.paragraphs[0].text, "A\tB\u{00A0}C\u{001F}D");
     }
 
     #[test]
@@ -2436,7 +2654,7 @@ mod tests {
             width: 5_000,
             height: 6_000,
         };
-        let mut ctx = NestedSubtreeContext::new(0, CTRL_ID_GSO, Some(geometry));
+        let mut ctx = NestedSubtreeContext::new(0, CTRL_ID_GSO, 0, Some(geometry));
         ctx.note_shape_component();
         ctx.note_shape_picture(Hwp5ShapePicture::parse(&shape_picture_data(1)).unwrap());
         ctx.note_shape_ole(

@@ -76,12 +76,23 @@ pub enum Hwp5BorderLineKind {
 }
 
 impl Hwp5BorderLineKind {
+    /// Maps the raw HWP5 border-line code to a kind.
+    ///
+    /// The codes follow 한글's real encoding, which differs from spec table 25
+    /// (the spec omits the `0 = 없음` slot and lists `점선`/`파선` in a
+    /// different order). Verified empirically against 한글 fixtures:
+    /// `0 → 없음`, `1 → 실선`, `2 → 점선(Dot)`, `8 → 이중선(DoubleSlim)`.
+    /// In particular codes 2 and 3 are `Dot`/`Dash` (not `Dash`/`Dot`).
     fn from_raw(raw: u8) -> Self {
         match raw {
+            // 0/1/2 and 8 are fixture-confirmed (None/Solid/Dot/DoubleSlim).
             0 => Self::None,
             1 => Self::Solid,
-            2 => Self::Dash,
-            3 => Self::Dot,
+            2 => Self::Dot,
+            // 3..=7 are inferred from the contiguous run between the confirmed
+            // endpoints 2 (Dot) and 8 (DoubleSlim); their relative order is not
+            // yet fixture-verified.
+            3 => Self::Dash,
             4 => Self::DashDot,
             5 => Self::DashDotDot,
             6 => Self::LongDash,

@@ -97,9 +97,21 @@ mod tests {
     fn replace_first_text(exported: &mut ExportedSection, replacement: &str) {
         for paragraph in &mut exported.section.paragraphs {
             for run in &mut paragraph.runs {
-                if let RunContent::Text(text) = &mut run.content {
-                    *text = replacement.to_string();
-                    return;
+                match &mut run.content {
+                    RunContent::Text(text) => {
+                        *text = replacement.to_string();
+                        return;
+                    }
+                    // Downgrade-on-modify: replacing the visible
+                    // string of an `InlineText` run collapses the
+                    // structure to plain `Text(String)`. Documented
+                    // policy in debug doc §3a-C18 — substitution is
+                    // a plain-text operation.
+                    RunContent::InlineText(_) => {
+                        run.content = RunContent::Text(replacement.to_string());
+                        return;
+                    }
+                    _ => {}
                 }
             }
         }

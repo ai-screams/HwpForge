@@ -106,7 +106,21 @@ pub(crate) enum TextSegment {
     /// Normal Unicode text content.
     Text(String),
     /// Horizontal tab character (U+0009).
-    Tab,
+    ///
+    /// The 7 u16 (14 bytes) of inline payload carry the tab's
+    /// `width` (HwpUnit, u32 LE), `leader` (u8), and `tab_type` (u8)
+    /// followed by 8 reserved bytes. Core's inline text model cannot
+    /// currently carry these per-tab attributes, so the projection
+    /// stage records the payload here and emits a warning when any of
+    /// them are non-zero (see Bug A in
+    /// `.docs/research/2026-05-26_tab_fidelity_bugs.md`).
+    Tab {
+        /// Fourteen bytes of inline tab metadata. All-zero for the
+        /// "default" tab — non-zero values are silently lost on emit
+        /// until the Core inline-tab carry slice (Phase 2 in the issue
+        /// doc) lands.
+        extra: [u8; 14],
+    },
     /// Soft line break (U+000A).
     LineBreak,
     /// Drawing/table/control object embedded in the text stream (U+000B).
@@ -140,8 +154,12 @@ pub(crate) enum TextSegment {
     /// consumed and discarded because Core does not model field-end inline
     /// metadata yet.
     FieldEnd,
-    /// Non-breaking space (U+001E).
+    /// Non-breaking space (HWP5 control code `0x18`, emitted as
+    /// `<hp:nbSpace/>` in HWPX).
     NonBreakingSpace,
+    /// Fixed-width space (HWP5 control code `0x1F`, emitted as
+    /// `<hp:fwSpace/>` in HWPX).
+    FwSpace,
 }
 
 /// Parsed from a `ParaText` (tag `0x43`) record in a BodyText section.
@@ -289,8 +307,8 @@ impl Hwp5ParaText {
                 }
                 0x09 => {
                     flush_text!();
-                    let _extra = read_extra!(i - 1);
-                    segments.push(TextSegment::Tab);
+                    let extra = read_extra!(i - 1);
+                    segments.push(TextSegment::Tab { extra });
                 }
 
                 // Single-wchar control chars.
@@ -302,15 +320,22 @@ impl Hwp5ParaText {
                     flush_text!();
                     segments.push(TextSegment::ParaBreak);
                 }
-                // 0x18 is "keep" (word-joiner), 0x1F is "optional hyphen" —
-                // both are single-char control codes, skip them.
-                0x18 | 0x1F => {
+                // Per HWP 5.0 spec (rev 1.3) and the openhwp reference
+                // (`paragraph.rs::to_plain_text`):
+                //   0x18 → non-breaking space (`<hp:nbSpace/>`)
+                //   0x1E → non-breaking / hard hyphen (not modeled in Core yet)
+                //   0x1F → fixed-width space (`<hp:fwSpace/>`)
+                0x18 => {
                     flush_text!();
-                    // No segment emitted — consumed silently.
+                    segments.push(TextSegment::NonBreakingSpace);
+                }
+                0x1F => {
+                    flush_text!();
+                    segments.push(TextSegment::FwSpace);
                 }
                 0x1E => {
                     flush_text!();
-                    segments.push(TextSegment::NonBreakingSpace);
+                    // Hard hyphen — not modeled in Core yet; consumed silently.
                 }
 
                 // Everything else: normal character.
@@ -917,7 +942,13 @@ mod tests {
         let pt = Hwp5ParaText::parse(&data).unwrap();
         assert_eq!(
             pt.segments,
-            vec![TextSegment::Text("A".into()), TextSegment::Tab, TextSegment::Text("B".into()),]
+            vec![
+                TextSegment::Text("A".into()),
+                // `inline_control_bytes(0x09, [1, 2, 3, 4, 5, 6, 7])`
+                // emits each u16 as little-endian bytes.
+                TextSegment::Tab { extra: [1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0] },
+                TextSegment::Text("B".into()),
+            ]
         );
     }
 
@@ -945,9 +976,47 @@ mod tests {
 
     #[test]
     fn para_text_non_breaking_space() {
-        let data = cp_bytes(0x1E);
+        // HWP5 control code 0x18 = non-breaking space (per openhwp reference).
+        let data = cp_bytes(0x18);
         let pt = Hwp5ParaText::parse(&data).unwrap();
         assert_eq!(pt.segments, vec![TextSegment::NonBreakingSpace]);
+    }
+
+    #[test]
+    fn para_text_fixed_width_space() {
+        // HWP5 control code 0x1F = fixed-width space (per openhwp reference).
+        let data = cp_bytes(0x1F);
+        let pt = Hwp5ParaText::parse(&data).unwrap();
+        assert_eq!(pt.segments, vec![TextSegment::FwSpace]);
+    }
+
+    #[test]
+    fn para_text_fwspace_between_text_runs() {
+        // Mirrors the Hancom-authored `sample-fwspace-fixed.hwp` wire shape:
+        // FWLEFT<U+001F>FWRIGHT
+        let mut data = utf16le("FWLEFT");
+        data.extend_from_slice(&cp_bytes(0x1F));
+        data.extend_from_slice(&utf16le("FWRIGHT"));
+        let pt = Hwp5ParaText::parse(&data).unwrap();
+        assert_eq!(
+            pt.segments,
+            vec![
+                TextSegment::Text("FWLEFT".into()),
+                TextSegment::FwSpace,
+                TextSegment::Text("FWRIGHT".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn para_text_hard_hyphen_is_consumed_silently_without_breaking_surrounding_text() {
+        // 0x1E (hard-hyphen) is not modeled in Core yet — must not be confused
+        // with non-breaking space and must not get appended to surrounding text.
+        let mut data = utf16le("A");
+        data.extend_from_slice(&cp_bytes(0x1E));
+        data.extend_from_slice(&utf16le("B"));
+        let pt = Hwp5ParaText::parse(&data).unwrap();
+        assert_eq!(pt.segments, vec![TextSegment::Text("A".into()), TextSegment::Text("B".into())]);
     }
 
     #[test]
@@ -1151,7 +1220,7 @@ mod tests {
             pt.segments,
             vec![
                 TextSegment::Text("hi".into()),
-                TextSegment::Tab,
+                TextSegment::Tab { extra: [1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0] },
                 TextSegment::Text("there".into()),
                 TextSegment::ParaBreak,
             ]

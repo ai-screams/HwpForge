@@ -65,6 +65,7 @@ fn generate_content_hpf(
     image_paths: &[String],
     chart_paths: &[String],
     masterpage_paths: &[String],
+    embedded_ole_ids: &[String],
 ) -> String {
     let mut manifest_items = String::from(
         r#"<opf:item id="header" href="Contents/header.xml" media-type="application/xml"/>"#,
@@ -122,6 +123,19 @@ fn generate_content_hpf(
     // NOTE: Chart XML files are NOT listed in the manifest.
     // 한글 expects Chart/*.xml in the ZIP only, not in content.hpf.
     let _ = chart_paths;
+
+    // Embedded-chart OLE blobs (Wave 4c). 한글 expects each `BinData/{id}.ole`
+    // to be listed with `media-type="application/ole"` and `isEmbeded="0"`
+    // (truth output from Hancom uses the "0" form; the typo `isEmbeded`
+    // matches Hancom's own attribute name).
+    for ole_id in embedded_ole_ids {
+        use std::fmt::Write as _;
+        write!(
+            manifest_items,
+            r#"<opf:item id="{ole_id}" href="BinData/{ole_id}.ole" media-type="application/ole" isEmbeded="0"/>"#,
+        )
+        .expect("write to String is infallible");
+    }
 
     format!(
         concat!(
@@ -188,6 +202,7 @@ impl PackageWriter {
         images: &[(String, Vec<u8>)],
         charts: &[(String, String)],
         master_pages: &[(String, String)],
+        embedded_oles: &[(String, Vec<u8>)],
     ) -> HwpxResult<Vec<u8>> {
         let buf: Vec<u8> = Vec::new();
         let cursor = Cursor::new(buf);
@@ -222,8 +237,15 @@ impl PackageWriter {
         let image_paths: Vec<String> = images.iter().map(|(path, _)| path.clone()).collect();
         let chart_paths: Vec<String> = charts.iter().map(|(path, _)| path.clone()).collect();
         let mp_paths: Vec<String> = master_pages.iter().map(|(path, _)| path.clone()).collect();
-        let content_hpf =
-            generate_content_hpf(section_xmls.len(), &image_paths, &chart_paths, &mp_paths);
+        let embedded_ole_ids: Vec<String> =
+            embedded_oles.iter().map(|(id, _)| id.clone()).collect();
+        let content_hpf = generate_content_hpf(
+            section_xmls.len(),
+            &image_paths,
+            &chart_paths,
+            &mp_paths,
+            &embedded_ole_ids,
+        );
         zip.write_all(content_hpf.as_bytes()).map_err(|e| HwpxError::Zip(e.to_string()))?;
 
         // 6. settings.xml
@@ -264,6 +286,17 @@ impl PackageWriter {
             zip.write_all(xml.as_bytes()).map_err(|e| HwpxError::Zip(e.to_string()))?;
         }
 
+        // 12. BinData/{ole_id}.ole — embedded-chart OLE blobs (Wave 4c).
+        // Store uncompressed, matching how image binaries are written: the
+        // payload is already a tightly-packed OLE2 compound file, and
+        // 한글 reads it raw via `binaryItemIDRef` from content.hpf.
+        for (ole_id, data) in embedded_oles {
+            let safe_id = super::sanitize_zip_entry_name(ole_id);
+            zip.start_file(format!("BinData/{safe_id}.ole"), stored_opts)
+                .map_err(|e| HwpxError::Zip(e.to_string()))?;
+            zip.write_all(data).map_err(|e| HwpxError::Zip(e.to_string()))?;
+        }
+
         let cursor = zip.finish().map_err(|e| HwpxError::Zip(e.to_string()))?;
         Ok(cursor.into_inner())
     }
@@ -284,7 +317,7 @@ mod tests {
 
     /// Helper: write a minimal HWPX and return the raw bytes.
     fn write_minimal(sections: &[String]) -> Vec<u8> {
-        PackageWriter::write_hwpx(MINIMAL_HEADER, sections, &[], &[], &[]).unwrap()
+        PackageWriter::write_hwpx(MINIMAL_HEADER, sections, &[], &[], &[], &[]).unwrap()
     }
 
     /// Helper: open a ZipArchive from raw bytes.
@@ -350,13 +383,13 @@ mod tests {
     #[test]
     fn content_hpf_lists_all_sections() {
         // Single section
-        let hpf1 = generate_content_hpf(1, &[], &[], &[]);
+        let hpf1 = generate_content_hpf(1, &[], &[], &[], &[]);
         assert!(hpf1.contains(r#"id="section0""#));
         assert!(hpf1.contains(r#"idref="section0""#));
         assert!(!hpf1.contains(r#"id="section1""#));
 
         // Three sections
-        let hpf3 = generate_content_hpf(3, &[], &[], &[]);
+        let hpf3 = generate_content_hpf(3, &[], &[], &[], &[]);
         for i in 0..3 {
             assert!(hpf3.contains(&format!(r#"id="section{i}""#)), "manifest missing section{i}");
             assert!(hpf3.contains(&format!(r#"idref="section{i}""#)), "spine missing section{i}");
@@ -369,7 +402,7 @@ mod tests {
     #[test]
     fn content_hpf_includes_images() {
         let images = vec!["photo.jpg".to_string(), "logo.png".to_string()];
-        let hpf = generate_content_hpf(1, &images, &[], &[]);
+        let hpf = generate_content_hpf(1, &images, &[], &[], &[]);
         // id must match binaryItemIDRef (filename stem, no extension)
         assert!(hpf.contains(r#"id="photo""#), "missing photo manifest entry");
         assert!(hpf.contains(r#"href="BinData/photo.jpg""#), "missing image href");
@@ -386,7 +419,8 @@ mod tests {
 
     #[test]
     fn write_empty_header_succeeds() {
-        let result = PackageWriter::write_hwpx("", &[MINIMAL_SECTION.to_string()], &[], &[], &[]);
+        let result =
+            PackageWriter::write_hwpx("", &[MINIMAL_SECTION.to_string()], &[], &[], &[], &[]);
         assert!(result.is_ok());
         let bytes = result.unwrap();
         let archive = open_zip(&bytes);
@@ -398,7 +432,8 @@ mod tests {
     #[test]
     fn multi_section_creates_multiple_entries() {
         let sections: Vec<String> = (0..3).map(|i| format!(r#"<sec>section{i}</sec>"#)).collect();
-        let bytes = PackageWriter::write_hwpx(MINIMAL_HEADER, &sections, &[], &[], &[]).unwrap();
+        let bytes =
+            PackageWriter::write_hwpx(MINIMAL_HEADER, &sections, &[], &[], &[], &[]).unwrap();
         let mut archive = open_zip(&bytes);
 
         for i in 0..3 {
@@ -433,7 +468,7 @@ mod tests {
 
     #[test]
     fn write_zero_sections_succeeds() {
-        let result = PackageWriter::write_hwpx(MINIMAL_HEADER, &[], &[], &[], &[]);
+        let result = PackageWriter::write_hwpx(MINIMAL_HEADER, &[], &[], &[], &[], &[]);
         assert!(result.is_ok());
         let bytes = result.unwrap();
         let archive = open_zip(&bytes);
@@ -447,7 +482,8 @@ mod tests {
     #[test]
     fn large_section_count() {
         let sections: Vec<String> = (0..100).map(|i| format!(r#"<sec>s{i}</sec>"#)).collect();
-        let bytes = PackageWriter::write_hwpx(MINIMAL_HEADER, &sections, &[], &[], &[]).unwrap();
+        let bytes =
+            PackageWriter::write_hwpx(MINIMAL_HEADER, &sections, &[], &[], &[], &[]).unwrap();
         let archive = open_zip(&bytes);
 
         let section_entries = archive
@@ -493,6 +529,7 @@ mod tests {
             MINIMAL_HEADER,
             &[MINIMAL_SECTION.to_string()],
             &images,
+            &[],
             &[],
             &[],
         )

@@ -143,6 +143,9 @@ pub enum LineSpacingType {
     Fixed = 1,
     /// Space between the bottom of one line and top of the next.
     BetweenLines = 2,
+    /// Minimum spacing in HwpUnit; line height expands when content
+    /// requires more room (HWPX wire form `AT_LEAST`).
+    AtLeast = 3,
 }
 
 impl fmt::Display for LineSpacingType {
@@ -151,6 +154,7 @@ impl fmt::Display for LineSpacingType {
             Self::Percentage => f.write_str("Percentage"),
             Self::Fixed => f.write_str("Fixed"),
             Self::BetweenLines => f.write_str("BetweenLines"),
+            Self::AtLeast => f.write_str("AtLeast"),
         }
     }
 }
@@ -163,10 +167,11 @@ impl std::str::FromStr for LineSpacingType {
             "Percentage" | "percentage" => Ok(Self::Percentage),
             "Fixed" | "fixed" => Ok(Self::Fixed),
             "BetweenLines" | "betweenlines" | "between_lines" => Ok(Self::BetweenLines),
+            "AtLeast" | "atleast" | "at_least" => Ok(Self::AtLeast),
             _ => Err(FoundationError::ParseError {
                 type_name: "LineSpacingType".to_string(),
                 value: s.to_string(),
-                valid_values: "Percentage, Fixed, BetweenLines".to_string(),
+                valid_values: "Percentage, Fixed, BetweenLines, AtLeast".to_string(),
             }),
         }
     }
@@ -180,10 +185,12 @@ impl TryFrom<u8> for LineSpacingType {
             0 => Ok(Self::Percentage),
             1 => Ok(Self::Fixed),
             2 => Ok(Self::BetweenLines),
+            3 => Ok(Self::AtLeast),
             _ => Err(FoundationError::ParseError {
                 type_name: "LineSpacingType".to_string(),
                 value: value.to_string(),
-                valid_values: "0 (Percentage), 1 (Fixed), 2 (BetweenLines)".to_string(),
+                valid_values: "0 (Percentage), 1 (Fixed), 2 (BetweenLines), 3 (AtLeast)"
+                    .to_string(),
             }),
         }
     }
@@ -486,10 +493,146 @@ impl schemars::JsonSchema for UnderlineType {
 }
 
 // ---------------------------------------------------------------------------
+// UnderlineShape
+// ---------------------------------------------------------------------------
+
+/// Underline line family (e.g. SOLID, DASH, WAVE).
+///
+/// This selects the line *style* used by an underline; the position
+/// (Bottom/Center/Top) is carried separately by [`UnderlineType`].
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_foundation::UnderlineShape;
+///
+/// assert_eq!(UnderlineShape::default(), UnderlineShape::Solid);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[non_exhaustive]
+#[repr(u8)]
+pub enum UnderlineShape {
+    /// Solid continuous line (default).
+    #[default]
+    Solid = 0,
+    /// Dashed line.
+    Dash = 1,
+    /// Dotted line.
+    Dot = 2,
+    /// Dash-dot pattern.
+    DashDot = 3,
+    /// Dash-dot-dot pattern.
+    DashDotDot = 4,
+    /// Long dash pattern.
+    LongDash = 5,
+    /// Repeating small circles.
+    Circle = 6,
+    /// Double thin line.
+    DoubleSlim = 7,
+    /// Thin then thick double line.
+    SlimThick = 8,
+    /// Thick then thin double line.
+    ThickSlim = 9,
+    /// Thick-thin-thick triple line.
+    ThickSlimThick = 10,
+    /// Wavy line.
+    Wave = 11,
+}
+
+impl fmt::Display for UnderlineShape {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Solid => f.write_str("SOLID"),
+            Self::Dash => f.write_str("DASH"),
+            Self::Dot => f.write_str("DOT"),
+            Self::DashDot => f.write_str("DASH_DOT"),
+            Self::DashDotDot => f.write_str("DASH_DOT_DOT"),
+            Self::LongDash => f.write_str("LONG_DASH"),
+            Self::Circle => f.write_str("CIRCLE"),
+            Self::DoubleSlim => f.write_str("DOUBLE_SLIM"),
+            Self::SlimThick => f.write_str("SLIM_THICK"),
+            Self::ThickSlim => f.write_str("THICK_SLIM"),
+            Self::ThickSlimThick => f.write_str("THICK_SLIM_THICK"),
+            Self::Wave => f.write_str("WAVE"),
+        }
+    }
+}
+
+impl std::str::FromStr for UnderlineShape {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "SOLID" | "Solid" | "solid" => Ok(Self::Solid),
+            "DASH" | "Dash" | "dash" => Ok(Self::Dash),
+            "DOT" | "Dot" | "dot" => Ok(Self::Dot),
+            "DASH_DOT" | "DashDot" | "dash_dot" => Ok(Self::DashDot),
+            "DASH_DOT_DOT" | "DashDotDot" | "dash_dot_dot" => Ok(Self::DashDotDot),
+            "LONG_DASH" | "LongDash" | "long_dash" => Ok(Self::LongDash),
+            "CIRCLE" | "Circle" | "circle" => Ok(Self::Circle),
+            "DOUBLE_SLIM" | "DoubleSlim" | "double_slim" => Ok(Self::DoubleSlim),
+            "SLIM_THICK" | "SlimThick" | "slim_thick" => Ok(Self::SlimThick),
+            "THICK_SLIM" | "ThickSlim" | "thick_slim" => Ok(Self::ThickSlim),
+            "THICK_SLIM_THICK" | "ThickSlimThick" | "thick_slim_thick" => {
+                Ok(Self::ThickSlimThick)
+            }
+            "WAVE" | "Wave" | "wave" => Ok(Self::Wave),
+            _ => Err(FoundationError::ParseError {
+                type_name: "UnderlineShape".to_string(),
+                value: s.to_string(),
+                valid_values: "SOLID, DASH, DOT, DASH_DOT, DASH_DOT_DOT, LONG_DASH, CIRCLE, DOUBLE_SLIM, SLIM_THICK, THICK_SLIM, THICK_SLIM_THICK, WAVE".to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<u8> for UnderlineShape {
+    type Error = FoundationError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Solid),
+            1 => Ok(Self::Dash),
+            2 => Ok(Self::Dot),
+            3 => Ok(Self::DashDot),
+            4 => Ok(Self::DashDotDot),
+            5 => Ok(Self::LongDash),
+            6 => Ok(Self::Circle),
+            7 => Ok(Self::DoubleSlim),
+            8 => Ok(Self::SlimThick),
+            9 => Ok(Self::ThickSlim),
+            10 => Ok(Self::ThickSlimThick),
+            11 => Ok(Self::Wave),
+            _ => Err(FoundationError::ParseError {
+                type_name: "UnderlineShape".to_string(),
+                value: value.to_string(),
+                valid_values: "0-11 (SOLID, DASH, DOT, DASH_DOT, DASH_DOT_DOT, LONG_DASH, CIRCLE, DOUBLE_SLIM, SLIM_THICK, THICK_SLIM, THICK_SLIM_THICK, WAVE)".to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for UnderlineShape {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("UnderlineShape")
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
+// ---------------------------------------------------------------------------
 // StrikeoutShape
 // ---------------------------------------------------------------------------
 
 /// Strikeout line shape.
+///
+/// This selects the line *family* used by a strikeout. After Wave 1c the
+/// shared IR mirrors the full OWPML strike-shape vocabulary so the HWP5
+/// projection can carry the entire line family rather than collapsing to
+/// `Solid`. The naming aligns with [`UnderlineShape`] so both axes share
+/// vocabulary.
 ///
 /// # Examples
 ///
@@ -505,8 +648,8 @@ pub enum StrikeoutShape {
     /// No strikeout (default).
     #[default]
     None = 0,
-    /// Continuous straight line.
-    Continuous = 1,
+    /// Solid continuous line (formerly named `Continuous`).
+    Solid = 1,
     /// Dashed line.
     Dash = 2,
     /// Dotted line.
@@ -515,17 +658,38 @@ pub enum StrikeoutShape {
     DashDot = 4,
     /// Dash-dot-dot pattern.
     DashDotDot = 5,
+    /// Long dash pattern.
+    LongDash = 6,
+    /// Repeating small circles.
+    Circle = 7,
+    /// Double thin line.
+    DoubleSlim = 8,
+    /// Thin then thick double line.
+    SlimThick = 9,
+    /// Thick then thin double line.
+    ThickSlim = 10,
+    /// Thick-thin-thick triple line.
+    ThickSlimThick = 11,
+    /// Wavy line.
+    Wave = 12,
 }
 
 impl fmt::Display for StrikeoutShape {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::None => f.write_str("None"),
-            Self::Continuous => f.write_str("Continuous"),
-            Self::Dash => f.write_str("Dash"),
-            Self::Dot => f.write_str("Dot"),
-            Self::DashDot => f.write_str("DashDot"),
-            Self::DashDotDot => f.write_str("DashDotDot"),
+            Self::None => f.write_str("NONE"),
+            Self::Solid => f.write_str("SOLID"),
+            Self::Dash => f.write_str("DASH"),
+            Self::Dot => f.write_str("DOT"),
+            Self::DashDot => f.write_str("DASH_DOT"),
+            Self::DashDotDot => f.write_str("DASH_DOT_DOT"),
+            Self::LongDash => f.write_str("LONG_DASH"),
+            Self::Circle => f.write_str("CIRCLE"),
+            Self::DoubleSlim => f.write_str("DOUBLE_SLIM"),
+            Self::SlimThick => f.write_str("SLIM_THICK"),
+            Self::ThickSlim => f.write_str("THICK_SLIM"),
+            Self::ThickSlimThick => f.write_str("THICK_SLIM_THICK"),
+            Self::Wave => f.write_str("WAVE"),
         }
     }
 }
@@ -535,16 +699,23 @@ impl std::str::FromStr for StrikeoutShape {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "None" | "none" => Ok(Self::None),
-            "Continuous" | "continuous" => Ok(Self::Continuous),
-            "Dash" | "dash" => Ok(Self::Dash),
-            "Dot" | "dot" => Ok(Self::Dot),
-            "DashDot" | "dashdot" | "dash_dot" => Ok(Self::DashDot),
-            "DashDotDot" | "dashdotdot" | "dash_dot_dot" => Ok(Self::DashDotDot),
+            "NONE" | "None" | "none" => Ok(Self::None),
+            "SOLID" | "Solid" | "solid" | "Continuous" | "continuous" => Ok(Self::Solid),
+            "DASH" | "Dash" | "dash" => Ok(Self::Dash),
+            "DOT" | "Dot" | "dot" => Ok(Self::Dot),
+            "DASH_DOT" | "DashDot" | "dashdot" | "dash_dot" => Ok(Self::DashDot),
+            "DASH_DOT_DOT" | "DashDotDot" | "dashdotdot" | "dash_dot_dot" => Ok(Self::DashDotDot),
+            "LONG_DASH" | "LongDash" | "long_dash" => Ok(Self::LongDash),
+            "CIRCLE" | "Circle" | "circle" => Ok(Self::Circle),
+            "DOUBLE_SLIM" | "DoubleSlim" | "double_slim" => Ok(Self::DoubleSlim),
+            "SLIM_THICK" | "SlimThick" | "slim_thick" => Ok(Self::SlimThick),
+            "THICK_SLIM" | "ThickSlim" | "thick_slim" => Ok(Self::ThickSlim),
+            "THICK_SLIM_THICK" | "ThickSlimThick" | "thick_slim_thick" => Ok(Self::ThickSlimThick),
+            "WAVE" | "Wave" | "wave" => Ok(Self::Wave),
             _ => Err(FoundationError::ParseError {
                 type_name: "StrikeoutShape".to_string(),
                 value: s.to_string(),
-                valid_values: "None, Continuous, Dash, Dot, DashDot, DashDotDot".to_string(),
+                valid_values: "NONE, SOLID, DASH, DOT, DASH_DOT, DASH_DOT_DOT, LONG_DASH, CIRCLE, DOUBLE_SLIM, SLIM_THICK, THICK_SLIM, THICK_SLIM_THICK, WAVE".to_string(),
             }),
         }
     }
@@ -556,15 +727,22 @@ impl TryFrom<u8> for StrikeoutShape {
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(Self::None),
-            1 => Ok(Self::Continuous),
+            1 => Ok(Self::Solid),
             2 => Ok(Self::Dash),
             3 => Ok(Self::Dot),
             4 => Ok(Self::DashDot),
             5 => Ok(Self::DashDotDot),
+            6 => Ok(Self::LongDash),
+            7 => Ok(Self::Circle),
+            8 => Ok(Self::DoubleSlim),
+            9 => Ok(Self::SlimThick),
+            10 => Ok(Self::ThickSlim),
+            11 => Ok(Self::ThickSlimThick),
+            12 => Ok(Self::Wave),
             _ => Err(FoundationError::ParseError {
                 type_name: "StrikeoutShape".to_string(),
                 value: value.to_string(),
-                valid_values: "0-5 (None, Continuous, Dash, Dot, DashDot, DashDotDot)".to_string(),
+                valid_values: "0-12 (NONE, SOLID, DASH, DOT, DASH_DOT, DASH_DOT_DOT, LONG_DASH, CIRCLE, DOUBLE_SLIM, SLIM_THICK, THICK_SLIM, THICK_SLIM_THICK, WAVE)".to_string(),
             }),
         }
     }
@@ -1526,6 +1704,8 @@ pub enum WordBreakType {
     KeepWord = 0,
     /// Allow breaking at any character — distribute space between all characters.
     BreakWord = 1,
+    /// Allow hyphenation at line breaks (Latin scripts only).
+    Hyphenation = 2,
 }
 
 impl fmt::Display for WordBreakType {
@@ -1533,6 +1713,7 @@ impl fmt::Display for WordBreakType {
         match self {
             Self::KeepWord => f.write_str("KEEP_WORD"),
             Self::BreakWord => f.write_str("BREAK_WORD"),
+            Self::Hyphenation => f.write_str("HYPHENATION"),
         }
     }
 }
@@ -1544,10 +1725,11 @@ impl std::str::FromStr for WordBreakType {
         match s {
             "KEEP_WORD" | "KeepWord" | "keep_word" => Ok(Self::KeepWord),
             "BREAK_WORD" | "BreakWord" | "break_word" => Ok(Self::BreakWord),
+            "HYPHENATION" | "Hyphenation" | "hyphenation" => Ok(Self::Hyphenation),
             _ => Err(FoundationError::ParseError {
                 type_name: "WordBreakType".to_string(),
                 value: s.to_string(),
-                valid_values: "KEEP_WORD, BREAK_WORD".to_string(),
+                valid_values: "KEEP_WORD, BREAK_WORD, HYPHENATION".to_string(),
             }),
         }
     }
@@ -1560,10 +1742,11 @@ impl TryFrom<u8> for WordBreakType {
         match value {
             0 => Ok(Self::KeepWord),
             1 => Ok(Self::BreakWord),
+            2 => Ok(Self::Hyphenation),
             _ => Err(FoundationError::ParseError {
                 type_name: "WordBreakType".to_string(),
                 value: value.to_string(),
-                valid_values: "0 (KeepWord), 1 (BreakWord)".to_string(),
+                valid_values: "0 (KeepWord), 1 (BreakWord), 2 (Hyphenation)".to_string(),
             }),
         }
     }
@@ -3433,6 +3616,7 @@ const _: () = assert!(std::mem::size_of::<LineSpacingType>() == 1);
 const _: () = assert!(std::mem::size_of::<BreakType>() == 1);
 const _: () = assert!(std::mem::size_of::<Language>() == 1);
 const _: () = assert!(std::mem::size_of::<UnderlineType>() == 1);
+const _: () = assert!(std::mem::size_of::<UnderlineShape>() == 1);
 const _: () = assert!(std::mem::size_of::<StrikeoutShape>() == 1);
 const _: () = assert!(std::mem::size_of::<OutlineType>() == 1);
 const _: () = assert!(std::mem::size_of::<ShadowType>() == 1);
@@ -3664,6 +3848,7 @@ mod tests {
         assert_eq!(LineSpacingType::Percentage.to_string(), "Percentage");
         assert_eq!(LineSpacingType::Fixed.to_string(), "Fixed");
         assert_eq!(LineSpacingType::BetweenLines.to_string(), "BetweenLines");
+        assert_eq!(LineSpacingType::AtLeast.to_string(), "AtLeast");
     }
 
     #[test]
@@ -3674,6 +3859,8 @@ mod tests {
             LineSpacingType::from_str("BetweenLines").unwrap(),
             LineSpacingType::BetweenLines
         );
+        assert_eq!(LineSpacingType::from_str("AtLeast").unwrap(), LineSpacingType::AtLeast);
+        assert_eq!(LineSpacingType::from_str("at_least").unwrap(), LineSpacingType::AtLeast);
         assert!(LineSpacingType::from_str("invalid").is_err());
     }
 
@@ -3682,14 +3869,18 @@ mod tests {
         assert_eq!(LineSpacingType::try_from(0u8).unwrap(), LineSpacingType::Percentage);
         assert_eq!(LineSpacingType::try_from(1u8).unwrap(), LineSpacingType::Fixed);
         assert_eq!(LineSpacingType::try_from(2u8).unwrap(), LineSpacingType::BetweenLines);
-        assert!(LineSpacingType::try_from(3u8).is_err());
+        assert_eq!(LineSpacingType::try_from(3u8).unwrap(), LineSpacingType::AtLeast);
+        assert!(LineSpacingType::try_from(4u8).is_err());
     }
 
     #[test]
     fn line_spacing_str_roundtrip() {
-        for v in
-            &[LineSpacingType::Percentage, LineSpacingType::Fixed, LineSpacingType::BetweenLines]
-        {
+        for v in &[
+            LineSpacingType::Percentage,
+            LineSpacingType::Fixed,
+            LineSpacingType::BetweenLines,
+            LineSpacingType::AtLeast,
+        ] {
             let s = v.to_string();
             let back = LineSpacingType::from_str(&s).unwrap();
             assert_eq!(&back, v);
@@ -3855,6 +4046,71 @@ mod tests {
     }
 
     // ===================================================================
+    // UnderlineShape
+    // ===================================================================
+
+    #[test]
+    fn underline_shape_default_is_solid() {
+        assert_eq!(UnderlineShape::default(), UnderlineShape::Solid);
+    }
+
+    #[test]
+    fn underline_shape_display_screaming_snake_case() {
+        assert_eq!(UnderlineShape::Solid.to_string(), "SOLID");
+        assert_eq!(UnderlineShape::Dash.to_string(), "DASH");
+        assert_eq!(UnderlineShape::Dot.to_string(), "DOT");
+        assert_eq!(UnderlineShape::DashDot.to_string(), "DASH_DOT");
+        assert_eq!(UnderlineShape::DashDotDot.to_string(), "DASH_DOT_DOT");
+        assert_eq!(UnderlineShape::LongDash.to_string(), "LONG_DASH");
+        assert_eq!(UnderlineShape::Circle.to_string(), "CIRCLE");
+        assert_eq!(UnderlineShape::DoubleSlim.to_string(), "DOUBLE_SLIM");
+        assert_eq!(UnderlineShape::SlimThick.to_string(), "SLIM_THICK");
+        assert_eq!(UnderlineShape::ThickSlim.to_string(), "THICK_SLIM");
+        assert_eq!(UnderlineShape::ThickSlimThick.to_string(), "THICK_SLIM_THICK");
+        assert_eq!(UnderlineShape::Wave.to_string(), "WAVE");
+    }
+
+    #[test]
+    fn underline_shape_from_str_variants() {
+        assert_eq!(UnderlineShape::from_str("SOLID").unwrap(), UnderlineShape::Solid);
+        assert_eq!(UnderlineShape::from_str("dash").unwrap(), UnderlineShape::Dash);
+        assert_eq!(UnderlineShape::from_str("DOUBLE_SLIM").unwrap(), UnderlineShape::DoubleSlim);
+        assert_eq!(UnderlineShape::from_str("WAVE").unwrap(), UnderlineShape::Wave);
+        assert!(UnderlineShape::from_str("invalid").is_err());
+    }
+
+    #[test]
+    fn underline_shape_try_from_u8() {
+        assert_eq!(UnderlineShape::try_from(0u8).unwrap(), UnderlineShape::Solid);
+        assert_eq!(UnderlineShape::try_from(1u8).unwrap(), UnderlineShape::Dash);
+        assert_eq!(UnderlineShape::try_from(7u8).unwrap(), UnderlineShape::DoubleSlim);
+        assert_eq!(UnderlineShape::try_from(11u8).unwrap(), UnderlineShape::Wave);
+        assert!(UnderlineShape::try_from(12u8).is_err());
+    }
+
+    #[test]
+    fn underline_shape_str_roundtrip() {
+        for v in &[
+            UnderlineShape::Solid,
+            UnderlineShape::Dash,
+            UnderlineShape::Dot,
+            UnderlineShape::DashDot,
+            UnderlineShape::DashDotDot,
+            UnderlineShape::LongDash,
+            UnderlineShape::Circle,
+            UnderlineShape::DoubleSlim,
+            UnderlineShape::SlimThick,
+            UnderlineShape::ThickSlim,
+            UnderlineShape::ThickSlimThick,
+            UnderlineShape::Wave,
+        ] {
+            let s = v.to_string();
+            let back = UnderlineShape::from_str(&s).unwrap();
+            assert_eq!(&back, v);
+        }
+    }
+
+    // ===================================================================
     // StrikeoutShape
     // ===================================================================
 
@@ -3865,37 +4121,59 @@ mod tests {
 
     #[test]
     fn strikeout_shape_display() {
-        assert_eq!(StrikeoutShape::None.to_string(), "None");
-        assert_eq!(StrikeoutShape::Continuous.to_string(), "Continuous");
-        assert_eq!(StrikeoutShape::Dash.to_string(), "Dash");
-        assert_eq!(StrikeoutShape::DashDotDot.to_string(), "DashDotDot");
+        assert_eq!(StrikeoutShape::None.to_string(), "NONE");
+        assert_eq!(StrikeoutShape::Solid.to_string(), "SOLID");
+        assert_eq!(StrikeoutShape::Dash.to_string(), "DASH");
+        assert_eq!(StrikeoutShape::Dot.to_string(), "DOT");
+        assert_eq!(StrikeoutShape::DashDot.to_string(), "DASH_DOT");
+        assert_eq!(StrikeoutShape::DashDotDot.to_string(), "DASH_DOT_DOT");
+        assert_eq!(StrikeoutShape::LongDash.to_string(), "LONG_DASH");
+        assert_eq!(StrikeoutShape::Circle.to_string(), "CIRCLE");
+        assert_eq!(StrikeoutShape::DoubleSlim.to_string(), "DOUBLE_SLIM");
+        assert_eq!(StrikeoutShape::SlimThick.to_string(), "SLIM_THICK");
+        assert_eq!(StrikeoutShape::ThickSlim.to_string(), "THICK_SLIM");
+        assert_eq!(StrikeoutShape::ThickSlimThick.to_string(), "THICK_SLIM_THICK");
+        assert_eq!(StrikeoutShape::Wave.to_string(), "WAVE");
     }
 
     #[test]
     fn strikeout_shape_from_str() {
-        assert_eq!(StrikeoutShape::from_str("None").unwrap(), StrikeoutShape::None);
-        assert_eq!(StrikeoutShape::from_str("continuous").unwrap(), StrikeoutShape::Continuous);
+        assert_eq!(StrikeoutShape::from_str("NONE").unwrap(), StrikeoutShape::None);
+        assert_eq!(StrikeoutShape::from_str("SOLID").unwrap(), StrikeoutShape::Solid);
+        // Backward-compatible alias for the pre-Wave-1c name.
+        assert_eq!(StrikeoutShape::from_str("Continuous").unwrap(), StrikeoutShape::Solid);
         assert_eq!(StrikeoutShape::from_str("dash_dot").unwrap(), StrikeoutShape::DashDot);
+        assert_eq!(StrikeoutShape::from_str("DOUBLE_SLIM").unwrap(), StrikeoutShape::DoubleSlim);
+        assert_eq!(StrikeoutShape::from_str("WAVE").unwrap(), StrikeoutShape::Wave);
         assert!(StrikeoutShape::from_str("invalid").is_err());
     }
 
     #[test]
     fn strikeout_shape_try_from_u8() {
         assert_eq!(StrikeoutShape::try_from(0u8).unwrap(), StrikeoutShape::None);
-        assert_eq!(StrikeoutShape::try_from(1u8).unwrap(), StrikeoutShape::Continuous);
+        assert_eq!(StrikeoutShape::try_from(1u8).unwrap(), StrikeoutShape::Solid);
         assert_eq!(StrikeoutShape::try_from(5u8).unwrap(), StrikeoutShape::DashDotDot);
-        assert!(StrikeoutShape::try_from(6u8).is_err());
+        assert_eq!(StrikeoutShape::try_from(8u8).unwrap(), StrikeoutShape::DoubleSlim);
+        assert_eq!(StrikeoutShape::try_from(12u8).unwrap(), StrikeoutShape::Wave);
+        assert!(StrikeoutShape::try_from(13u8).is_err());
     }
 
     #[test]
     fn strikeout_shape_str_roundtrip() {
         for v in &[
             StrikeoutShape::None,
-            StrikeoutShape::Continuous,
+            StrikeoutShape::Solid,
             StrikeoutShape::Dash,
             StrikeoutShape::Dot,
             StrikeoutShape::DashDot,
             StrikeoutShape::DashDotDot,
+            StrikeoutShape::LongDash,
+            StrikeoutShape::Circle,
+            StrikeoutShape::DoubleSlim,
+            StrikeoutShape::SlimThick,
+            StrikeoutShape::ThickSlim,
+            StrikeoutShape::ThickSlimThick,
+            StrikeoutShape::Wave,
         ] {
             let s = v.to_string();
             let back = StrikeoutShape::from_str(&s).unwrap();
@@ -4388,6 +4666,7 @@ mod tests {
     fn word_break_type_display() {
         assert_eq!(WordBreakType::KeepWord.to_string(), "KEEP_WORD");
         assert_eq!(WordBreakType::BreakWord.to_string(), "BREAK_WORD");
+        assert_eq!(WordBreakType::Hyphenation.to_string(), "HYPHENATION");
     }
 
     #[test]
@@ -4398,6 +4677,9 @@ mod tests {
         assert_eq!(WordBreakType::from_str("BREAK_WORD").unwrap(), WordBreakType::BreakWord);
         assert_eq!(WordBreakType::from_str("BreakWord").unwrap(), WordBreakType::BreakWord);
         assert_eq!(WordBreakType::from_str("break_word").unwrap(), WordBreakType::BreakWord);
+        assert_eq!(WordBreakType::from_str("HYPHENATION").unwrap(), WordBreakType::Hyphenation);
+        assert_eq!(WordBreakType::from_str("Hyphenation").unwrap(), WordBreakType::Hyphenation);
+        assert_eq!(WordBreakType::from_str("hyphenation").unwrap(), WordBreakType::Hyphenation);
         assert!(WordBreakType::from_str("invalid").is_err());
     }
 
@@ -4405,12 +4687,13 @@ mod tests {
     fn word_break_type_try_from_u8() {
         assert_eq!(WordBreakType::try_from(0u8).unwrap(), WordBreakType::KeepWord);
         assert_eq!(WordBreakType::try_from(1u8).unwrap(), WordBreakType::BreakWord);
-        assert!(WordBreakType::try_from(2u8).is_err());
+        assert_eq!(WordBreakType::try_from(2u8).unwrap(), WordBreakType::Hyphenation);
+        assert!(WordBreakType::try_from(3u8).is_err());
     }
 
     #[test]
     fn word_break_type_serde_roundtrip() {
-        for v in &[WordBreakType::KeepWord, WordBreakType::BreakWord] {
+        for v in &[WordBreakType::KeepWord, WordBreakType::BreakWord, WordBreakType::Hyphenation] {
             let json = serde_json::to_string(v).unwrap();
             let back: WordBreakType = serde_json::from_str(&json).unwrap();
             assert_eq!(&back, v);
@@ -4419,7 +4702,7 @@ mod tests {
 
     #[test]
     fn word_break_type_str_roundtrip() {
-        for v in &[WordBreakType::KeepWord, WordBreakType::BreakWord] {
+        for v in &[WordBreakType::KeepWord, WordBreakType::BreakWord, WordBreakType::Hyphenation] {
             let s = v.to_string();
             let back = WordBreakType::from_str(&s).unwrap();
             assert_eq!(&back, v);

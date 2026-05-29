@@ -28,7 +28,9 @@ use hwpforge_core::PageSettings;
 
 use crate::encoder::package::XMLNS_DECLS;
 use crate::error::{HwpxError, HwpxResult};
-use crate::inline_text::{build_text_element_xml, requires_inline_text_markup};
+use crate::inline_text::{
+    build_inline_text_element_xml, build_text_element_xml, requires_inline_text_markup,
+};
 use hwpforge_foundation::{BookmarkType, DropCapStyle, HwpUnit, TextDirection};
 
 use crate::schema::section::{
@@ -97,6 +99,13 @@ pub(crate) struct SectionEncodeResult {
     pub charts: Vec<(String, String)>,
     /// Master page entries: (ZIP path, masterpage XML content).
     pub master_pages: Vec<(String, String)>,
+    /// Embedded-chart OLE blob entries: (item id, raw OLE2 bytes).
+    ///
+    /// Each entry produces a `BinData/{item_id}.ole` file in the ZIP and a
+    /// matching `<opf:item id="{item_id}" href="BinData/{item_id}.ole"
+    /// media-type="application/ole" isEmbeded="0"/>` line in `content.hpf`.
+    /// Populated by [`Control::EmbeddedChart`] (Wave 4c HWP5 chart carry).
+    pub embedded_oles: Vec<(String, Vec<u8>)>,
 }
 
 /// Encodes a Core [`Section`] into a complete HWPX section XML string.
@@ -117,13 +126,21 @@ pub(crate) fn encode_section(
     _section_index: usize,
     chart_offset: usize,
     masterpage_offset: usize,
+    embedded_ole_offset: usize,
 ) -> HwpxResult<SectionEncodeResult> {
     let mut chart_entries: Vec<(String, String)> = Vec::new();
+    let mut embedded_oles: Vec<(String, Vec<u8>)> = Vec::new();
     // Replacement list for run-level XML fragments that serde cannot express
     // directly, such as interleaved hyperlink controls and mixed-content `<hp:t>`.
     let mut run_xml_replacements: Vec<(String, String)> = Vec::new();
-    let hx_section =
-        build_section(section, &mut chart_entries, &mut run_xml_replacements, chart_offset)?;
+    let hx_section = build_section(
+        section,
+        &mut chart_entries,
+        &mut embedded_oles,
+        &mut run_xml_replacements,
+        chart_offset,
+        embedded_ole_offset,
+    )?;
     let inner_xml = quick_xml::se::to_string(&hx_section)
         .map_err(|e| HwpxError::XmlSerialize { detail: e.to_string() })?;
 
@@ -153,6 +170,7 @@ pub(crate) fn encode_section(
         xml: wrap_section_xml(&enriched),
         charts: chart_entries,
         master_pages,
+        embedded_oles,
     })
 }
 
@@ -187,8 +205,10 @@ fn strip_root_element(xml: &str) -> &str {
 fn build_section(
     section: &Section,
     chart_entries: &mut Vec<(String, String)>,
+    embedded_oles: &mut Vec<(String, Vec<u8>)>,
     hyperlink_entries: &mut Vec<(String, String)>,
     chart_offset: usize,
+    embedded_ole_offset: usize,
 ) -> HwpxResult<HxSection> {
     let paragraphs = section
         .paragraphs
@@ -205,9 +225,12 @@ fn build_section(
                 idx,
                 0,
                 chart_entries,
+                embedded_oles,
                 hyperlink_entries,
                 chart_offset,
+                embedded_ole_offset,
             )
+            // (signature already plumbs embedded chart OLE state through)
         })
         .collect::<HwpxResult<Vec<_>>>()?;
 
@@ -228,8 +251,10 @@ fn build_paragraph(
     para_idx: usize,
     depth: usize,
     chart_entries: &mut Vec<(String, String)>,
+    embedded_oles: &mut Vec<(String, Vec<u8>)>,
     hyperlink_entries: &mut Vec<(String, String)>,
     chart_offset: usize,
+    embedded_ole_offset: usize,
 ) -> HwpxResult<HxParagraph> {
     let mut runs = build_runs(
         &para.runs,
@@ -238,8 +263,10 @@ fn build_paragraph(
         text_direction,
         depth,
         chart_entries,
+        embedded_oles,
         hyperlink_entries,
         chart_offset,
+        embedded_ole_offset,
     )?;
 
     // Inject <hp:titleMark ignore="false"/> into the first run when the
@@ -286,8 +313,10 @@ fn build_runs(
     text_direction: TextDirection,
     depth: usize,
     chart_entries: &mut Vec<(String, String)>,
+    embedded_oles: &mut Vec<(String, Vec<u8>)>,
     hyperlink_entries: &mut Vec<(String, String)>,
     chart_offset: usize,
+    embedded_ole_offset: usize,
 ) -> HwpxResult<Vec<HxRun>> {
     let mut result = Vec::new();
     let mut sec_pr_injected = false;
@@ -332,6 +361,16 @@ fn build_runs(
                     texts.push(HxText::new(s.clone()));
                 }
             }
+            RunContent::InlineText(it) => {
+                // Always route through the marker-substitution path
+                // because InlineText carries `<hp:tab>` mixed content
+                // that the plain-string serializer cannot represent.
+                let marker = next_marker("HWPTXT", char_pr_id_ref as usize);
+                let marker_xml = format!(r#"<hp:t>{marker}</hp:t>"#);
+                let real_xml = build_inline_text_element_xml(it);
+                hyperlink_entries.push((marker_xml, real_xml));
+                texts.push(HxText::new(marker));
+            }
             RunContent::Table(t) => {
                 tables.push(build_table(t, depth, hyperlink_entries)?);
             }
@@ -349,6 +388,9 @@ fn build_runs(
                     }
                     Control::TextBox { .. } => {
                         rects.push(encode_textbox_to_rect(ctrl, depth, hyperlink_entries)?);
+                    }
+                    Control::Rect { .. } => {
+                        rects.push(encode_rect_to_hx(ctrl, depth, hyperlink_entries)?);
                     }
                     Control::Line { .. } => {
                         lines.push(encode_line_to_hx(ctrl, depth, hyperlink_entries)?);
@@ -382,23 +424,69 @@ fn build_runs(
                         chart_entries.push((chart_ref.clone(), chart_xml));
                         switches.push(encode_chart_switch(ctrl, &chart_ref));
                     }
+                    Control::EmbeddedChart {
+                        chart_xml,
+                        ole_bytes,
+                        width,
+                        height,
+                        horz_offset,
+                        vert_offset,
+                    } => {
+                        // Allocate stable per-document ids for the new chart
+                        // XML file and the OLE blob. Both lists are
+                        // section-global; we add `*_offset` to keep ids
+                        // unique across sections (parallel to the Chart arm).
+                        let chart_idx = chart_offset + chart_entries.len() + 1;
+                        let chart_ref = format!("Chart/chart{chart_idx}.xml");
+                        chart_entries.push((chart_ref.clone(), chart_xml.clone()));
+
+                        let ole_idx = embedded_ole_offset + embedded_oles.len() + 1;
+                        let ole_item_id = format!("ole{ole_idx}");
+                        embedded_oles.push((ole_item_id.clone(), ole_bytes.clone()));
+
+                        // Serde cannot express the `<hp:switch><hp:case>…
+                        // </hp:case><hp:default>…</hp:default></hp:switch>`
+                        // shape (HxRunSwitch only models the `<hp:case>`
+                        // arm). Emit the full switch as a marker-replaced
+                        // run XML, mirroring the Hyperlink pattern.
+                        let field_id = hyperlink_entries.len();
+                        let marker = next_marker("HWPECH", field_id);
+                        let real_xml = build_embedded_chart_run_xml(
+                            char_pr_id_ref,
+                            &chart_ref,
+                            &ole_item_id,
+                            width.as_i32(),
+                            height.as_i32(),
+                            *horz_offset,
+                            *vert_offset,
+                        );
+                        let marker_run_xml = format!(
+                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
+                        );
+                        hyperlink_entries.push((marker_run_xml, real_xml));
+                        texts.push(HxText::new(marker));
+                    }
                     Control::Hyperlink { text, url } => {
                         // Hyperlinks require interleaved ctrl-text-ctrl inside a
                         // single <hp:run> (fieldBegin → text → fieldEnd). Serde
                         // cannot express this ordering, so we emit a placeholder
                         // run with a unique marker and replace it after
                         // serialization in `encode_section`.
-                        // Validate URL scheme before encoding
-                        if !super::is_safe_url(url) {
+                        // Normalize the URL scheme before encoding. Schemeless
+                        // bare domains (e.g. `www.go.kr`) are promoted to
+                        // `http://`; only explicitly unsafe schemes
+                        // (`javascript:`, `data:`, `file:`, …) are rejected.
+                        let Some(safe_url) = super::normalize_hyperlink_url(url) else {
                             return Err(crate::error::HwpxError::InvalidStructure {
                                 detail: format!(
                                     "Unsafe URL scheme in hyperlink: '{url}'. Only http://, https://, and mailto: are allowed."
                                 ),
                             });
-                        }
+                        };
                         let field_id = hyperlink_entries.len();
                         let marker = next_marker("HWPHL", field_id);
-                        let real_xml = build_hyperlink_run_xml(text, url, char_pr_id_ref, field_id);
+                        let real_xml =
+                            build_hyperlink_run_xml(text, &safe_url, char_pr_id_ref, field_id);
                         // The marker run will serialize to something like
                         // <hp:run charPrIDRef="N"><hp:t>__HWPFORGE_HYPERLINK_0__</hp:t></hp:run>
                         // We record the full serialized marker run pattern so the
@@ -666,6 +754,7 @@ fn build_sublist(
     hyperlink_entries: &mut Vec<(String, String)>,
 ) -> HwpxResult<HxSubList> {
     let mut sub_chart_entries = Vec::new();
+    let mut sub_embedded_oles: Vec<(String, Vec<u8>)> = Vec::new();
     let hx_paragraphs = paragraphs
         .iter()
         .enumerate()
@@ -678,7 +767,9 @@ fn build_sublist(
                 idx,
                 depth + 1,
                 &mut sub_chart_entries,
+                &mut sub_embedded_oles,
                 hyperlink_entries,
+                0,
                 0,
             )
         })
@@ -702,7 +793,7 @@ fn build_sublist(
 // Shape encoding functions are defined in `super::shapes`.
 use super::shapes::{
     encode_arc_to_hx, encode_connect_line_to_hx, encode_curve_to_hx, encode_ellipse_to_hx,
-    encode_line_to_hx, encode_polygon_to_hx, encode_textbox_to_rect,
+    encode_line_to_hx, encode_polygon_to_hx, encode_rect_to_hx, encode_textbox_to_rect,
 };
 
 /// Encodes a Core `Control::Equation` into `HxEquation`.
@@ -846,7 +937,13 @@ fn build_hyperlink_run_xml(text: &str, url: &str, char_pr_id_ref: u32, field_id:
     let text_xml = build_text_element_xml(text);
     // Unique begin_id per field instance (matches build_field_run_xml pattern).
     // beginIDRef must reference this id, NOT the fieldid.
-    let begin_id = 2_000_000_000_u64 + field_id as u64;
+    // Hancom reads `fieldBegin id` as a signed 32-bit int; this base + field_id
+    // must stay well below i32::MAX (2_147_483_647). Distinct per builder.
+    let begin_id = 1_100_000_000_u64 + field_id as u64;
+    // `fieldid` is a Hancom field instance id and must be a non-zero 32-bit
+    // value; `fieldid="0"` is treated as an invalid instance. Distinct base
+    // keeps it unique vs other field types and stays under 2^31.
+    let field_uid = 1_628_000_000_u64 + field_id as u64;
     // KS X 6101: mailto: → HWPHYPERLINK_TYPE_EMAIL, others → HWPHYPERLINK_TYPE_URL
     let category = if url.starts_with("mailto:") {
         "HWPHYPERLINK_TYPE_EMAIL"
@@ -875,7 +972,7 @@ fn build_hyperlink_run_xml(text: &str, url: &str, char_pr_id_ref: u32, field_id:
         ),
         cpr = char_pr_id_ref,
         bid = begin_id,
-        fid = field_id,
+        fid = field_uid,
         url = escaped_url,
         cat = category,
         txt = text_xml,
@@ -889,7 +986,11 @@ fn build_hyperlink_run_xml(text: &str, url: &str, char_pr_id_ref: u32, field_id:
 /// Text between them (in separate runs) is covered by the bookmark span.
 fn build_bookmark_span_start_run_xml(name: &str, char_pr_id_ref: u32, field_id: usize) -> String {
     let escaped_name = escape_xml(name);
-    let begin_id = 3_000_000_000_u64 + field_id as u64;
+    // Signed-32-bit-safe base; MUST match `build_bookmark_span_end_run_xml`
+    // so the paired fieldEnd `beginIDRef` references this `id`.
+    let begin_id = 1_200_000_000_u64 + field_id as u64;
+    // Non-zero 32-bit field instance id; must match the paired fieldEnd.
+    let field_uid = 1_728_000_000_u64 + field_id as u64;
     format!(
         concat!(
             r#"<hp:run charPrIDRef="{cpr}">"#,
@@ -901,14 +1002,17 @@ fn build_bookmark_span_start_run_xml(name: &str, char_pr_id_ref: u32, field_id: 
         ),
         cpr = char_pr_id_ref,
         bid = begin_id,
-        fid = field_id,
+        fid = field_uid,
         name = escaped_name,
     )
 }
 
 /// Builds a `<hp:run>` containing only `<hp:fieldEnd>` for bookmark span end.
 fn build_bookmark_span_end_run_xml(char_pr_id_ref: u32, field_id: usize) -> String {
-    let begin_id = 3_000_000_000_u64 + field_id as u64;
+    // Signed-32-bit-safe base; MUST match `build_bookmark_span_start_run_xml`.
+    let begin_id = 1_200_000_000_u64 + field_id as u64;
+    // Non-zero 32-bit field instance id; must match the paired fieldBegin.
+    let field_uid = 1_728_000_000_u64 + field_id as u64;
     format!(
         concat!(
             r#"<hp:run charPrIDRef="{cpr}">"#,
@@ -919,7 +1023,7 @@ fn build_bookmark_span_end_run_xml(char_pr_id_ref: u32, field_id: usize) -> Stri
         ),
         cpr = char_pr_id_ref,
         bid = begin_id,
-        fid = field_id,
+        fid = field_uid,
     )
 }
 
@@ -1085,7 +1189,11 @@ fn build_crossref_run_xml(
     let ref_type_str = ref_type.to_string();
     let content_type_str = content_type.to_string();
     let hyperlink_val = if as_hyperlink { "true" } else { "false" };
-    let begin_id = 4_000_000_000_u64 + field_id as u64;
+    // Signed-32-bit-safe begin_id base; distinct from other field builders.
+    let begin_id = 1_300_000_000_u64 + field_id as u64;
+    // Non-zero 32-bit field instance id (see `build_hwp5_crossref_run_xml`).
+    // Distinct base from the HWP5 crossref builder to avoid fieldid collisions.
+    let field_uid = 1_828_000_000_u64 + field_id as u64;
     format!(
         concat!(
             r#"<hp:run charPrIDRef="{cpr}">"#,
@@ -1109,7 +1217,7 @@ fn build_crossref_run_xml(
         ),
         cpr = char_pr_id_ref,
         bid = begin_id,
-        fid = field_id,
+        fid = field_uid,
         ref_path = ref_path,
         ref_type = ref_type_str,
         content_type = content_type_str,
@@ -1157,7 +1265,16 @@ fn build_hwp5_crossref_run_xml(
     let ref_type_str = ref_type.to_string();
     let content_type_str = content_type.to_string();
     let hyperlink_val = if as_hyperlink { "true" } else { "false" };
-    let begin_id = 4_100_000_000_u64 + field_id as u64;
+    // Signed-32-bit-safe begin_id base; distinct from other field builders.
+    // Hancom reads `fieldBegin id` as i32; a base >= 2^31 wraps negative and
+    // the field is no longer recognized (click / F9 / Ctrl+click jump fail).
+    let begin_id = 1_400_000_000_u64 + field_id as u64;
+    // `fieldid` is a Hancom field instance id and must be a non-zero 32-bit
+    // value. A raw 0-based `field_id` would emit `fieldid="0"`, which Hancom
+    // treats as an invalid instance (F9 refresh / Ctrl+click jump break).
+    // Distinct base keeps it unique vs other field types' fieldid id-space
+    // and stays under 2^31 (truth fixtures use values < 2^31).
+    let field_uid = 1_928_000_000_u64 + field_id as u64;
     format!(
         concat!(
             r#"<hp:run charPrIDRef="{cpr}">"#,
@@ -1184,7 +1301,7 @@ fn build_hwp5_crossref_run_xml(
         ),
         cpr = char_pr_id_ref,
         bid = begin_id,
-        fid = field_id,
+        fid = field_uid,
         target = escaped_target_name,
         ref_type = ref_type_str,
         content_type = content_type_str,
@@ -1201,7 +1318,10 @@ fn build_memo_run_xml(
     char_pr_id_ref: u32,
     field_id: usize,
 ) -> String {
-    let begin_id = 5_000_000_000_u64 + field_id as u64;
+    // Signed-32-bit-safe begin_id base; distinct from other field builders.
+    let begin_id = 1_500_000_000_u64 + field_id as u64;
+    // Non-zero 32-bit field instance id; `fieldid="0"` is invalid in Hancom.
+    let field_uid = 2_028_000_000_u64 + field_id as u64;
     format!(
         concat!(
             r#"<hp:run charPrIDRef="{cpr}">"#,
@@ -1223,7 +1343,7 @@ fn build_memo_run_xml(
         ),
         cpr = char_pr_id_ref,
         bid = begin_id,
-        fid = field_id,
+        fid = field_uid,
         sublist = sublist_xml,
     )
 }
@@ -1245,6 +1365,103 @@ fn encode_memo_sublist(
     let xml = xml.replacen("<HxSubList", "<hp:subList", 1);
     let xml = xml.replacen("</HxSubList>", "</hp:subList>", 1);
     Ok(xml)
+}
+
+/// Builds the full `<hp:run>` XML for a [`Control::EmbeddedChart`] (Wave 4c).
+///
+/// Emits the marker-replaced run that 한컴 expects for a HWP5-sourced
+/// chart carry:
+///
+/// ```xml
+/// <hp:run charPrIDRef="N">
+///   <hp:switch>
+///     <hp:case hp:required-namespace="...">
+///       <hp:chart id="..." chartIDRef="Chart/chartN.xml">…</hp:chart>
+///     </hp:case>
+///     <hp:default>
+///       <hp:ole id="..." binaryItemIDRef="oleN" …>…</hp:ole>
+///     </hp:default>
+///   </hp:switch>
+///   <hp:t/>
+/// </hp:run>
+/// ```
+///
+/// `HxRunSwitch` only models the `<hp:case>` arm, so we cannot reuse the
+/// serde path used by the structured [`Control::Chart`] arm. The OPF
+/// manifest entry for `BinData/{ole_item_id}.ole` is registered by the
+/// `PackageWriter` callsite via [`SectionEncodeResult::embedded_oles`].
+#[allow(clippy::too_many_arguments)]
+fn build_embedded_chart_run_xml(
+    char_pr_id_ref: u32,
+    chart_ref: &str,
+    ole_item_id: &str,
+    width: i32,
+    height: i32,
+    horz_offset: i32,
+    vert_offset: i32,
+) -> String {
+    // The `id` attributes are render-time instance identifiers; they only
+    // need to be unique within the document and stay below i32::MAX (the
+    // attribute is read as a signed 32-bit int by Hancom). `generate_instid`
+    // already enforces both for us.
+    let shared_id = generate_instid();
+    format!(
+        concat!(
+            r#"<hp:run charPrIDRef="{cpr}">"#,
+            r#"<hp:switch>"#,
+            // ── <hp:case> with the OOXML chart reference ────────────────
+            r#"<hp:case hp:required-namespace="http://www.hancom.co.kr/hwpml/2016/ooxmlchart">"#,
+            r#"<hp:chart id="{id}" zOrder="0" numberingType="PICTURE" "#,
+            r#"textWrap="SQUARE" textFlow="BOTH_SIDES" lock="0" "#,
+            r#"dropcapstyle="None" chartIDRef="{chart_ref}">"#,
+            r#"<hp:sz width="{w}" widthRelTo="ABSOLUTE" height="{h}" heightRelTo="ABSOLUTE" protect="0"/>"#,
+            r#"<hp:pos treatAsChar="0" affectLSpacing="0" flowWithText="1" "#,
+            r#"allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" "#,
+            r#"vertAlign="TOP" horzAlign="LEFT" vertOffset="{vo}" horzOffset="{ho}"/>"#,
+            r#"<hp:outMargin left="0" right="0" top="0" bottom="0"/>"#,
+            r#"</hp:chart>"#,
+            r#"</hp:case>"#,
+            // ── <hp:default> with the OLE fallback ──────────────────────
+            r#"<hp:default>"#,
+            r#"<hp:ole id="{id}" zOrder="0" numberingType="PICTURE" "#,
+            r#"textWrap="SQUARE" textFlow="BOTH_SIDES" lock="0" "#,
+            r#"dropcapstyle="None" href="" groupLevel="0" instid="0" "#,
+            r#"objectType="UNKNOWN" binaryItemIDRef="{ole}" hasMoniker="0" "#,
+            r#"drawAspect="CONTENT" eqBaseLine="0">"#,
+            r#"<hp:offset x="0" y="0"/>"#,
+            r#"<hp:orgSz width="7200" height="7200"/>"#,
+            r#"<hp:curSz width="0" height="0"/>"#,
+            r#"<hp:flip horizontal="0" vertical="0"/>"#,
+            r#"<hp:rotationInfo angle="0" centerX="0" centerY="0" rotateimage="1"/>"#,
+            r#"<hp:renderingInfo>"#,
+            r#"<hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>"#,
+            r#"<hc:scaMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>"#,
+            r#"<hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>"#,
+            r#"</hp:renderingInfo>"#,
+            r#"<hc:extent x="7200" y="7200"/>"#,
+            r##"<hp:lineShape color="#000000" width="0" style="NONE" endCap="ROUND" "##,
+            r#"headStyle="NORMAL" tailStyle="NORMAL" headfill="0" tailfill="0" "#,
+            r#"headSz="SMALL_SMALL" tailSz="SMALL_SMALL" outlineStyle="NORMAL" alpha="0"/>"#,
+            r#"<hp:sz width="{w}" widthRelTo="ABSOLUTE" height="{h}" heightRelTo="ABSOLUTE" protect="0"/>"#,
+            r#"<hp:pos treatAsChar="0" affectLSpacing="0" flowWithText="1" "#,
+            r#"allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" "#,
+            r#"vertAlign="TOP" horzAlign="LEFT" vertOffset="{vo}" horzOffset="{ho}"/>"#,
+            r#"<hp:outMargin left="0" right="0" top="0" bottom="0"/>"#,
+            r#"</hp:ole>"#,
+            r#"</hp:default>"#,
+            r#"</hp:switch>"#,
+            r#"<hp:t/>"#,
+            r#"</hp:run>"#,
+        ),
+        cpr = char_pr_id_ref,
+        id = shared_id,
+        chart_ref = chart_ref,
+        ole = ole_item_id,
+        w = width,
+        h = height,
+        vo = vert_offset,
+        ho = horz_offset,
+    )
 }
 
 /// Encodes a Core `Control::Chart` into an `HxRunSwitch` wrapping `HxChart`.
@@ -1717,13 +1934,30 @@ fn build_masterpage_entries(section: &Section, masterpage_offset: usize) -> Vec<
                     para.style_id.map_or(0, |s| s.get()),
                 );
                 for run in &para.runs {
-                    if let RunContent::Text(text) = &run.content {
-                        let _ = write!(
-                            xml,
-                            r#"<hp:run charPrIDRef="{}"><hp:t>{}</hp:t></hp:run>"#,
-                            run.char_shape_id.get(),
-                            super::escape_xml(text),
-                        );
+                    // Master page paragraphs emit a stripped-down
+                    // run-with-text element. `InlineText` falls
+                    // through to its tab-attribute-preserving builder
+                    // so a master page that contains rich tabs (rare
+                    // but possible after the HWPX decoder Phase 3
+                    // carry) survives encode. See debug doc §3a-B11.
+                    match &run.content {
+                        RunContent::Text(text) => {
+                            let _ = write!(
+                                xml,
+                                r#"<hp:run charPrIDRef="{}"><hp:t>{}</hp:t></hp:run>"#,
+                                run.char_shape_id.get(),
+                                super::escape_xml(text),
+                            );
+                        }
+                        RunContent::InlineText(it) => {
+                            let _ = write!(
+                                xml,
+                                r#"<hp:run charPrIDRef="{}">{}</hp:run>"#,
+                                run.char_shape_id.get(),
+                                build_inline_text_element_xml(it),
+                            );
+                        }
+                        _ => {}
                     }
                 }
                 xml.push_str("</hp:p>");
@@ -1858,13 +2092,14 @@ fn inject_header_footer_pagenum(
 
     let mut injection = String::new();
 
-    // Header
-    if let Some(ref header) = section.header {
+    // Header — emit each `<hp:header>` element preserving the HWPX
+    // multi-cardinality wire shape (ADR-002).
+    for header in &section.headers {
         injection.push_str(&build_header_xml(header, "header", hyperlink_entries)?);
     }
 
-    // Footer
-    if let Some(ref footer) = section.footer {
+    // Footer — same cardinality model.
+    for footer in &section.footers {
         injection.push_str(&build_header_xml(footer, "footer", hyperlink_entries)?);
     }
 
@@ -2006,7 +2241,7 @@ mod tests {
     #[test]
     fn encode_single_text_paragraph() {
         let section = simple_section("텍스트");
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
 
         assert!(xml.contains("<?xml version="), "missing XML declaration");
         assert!(xml.contains("<hs:sec"), "missing <hs:sec> root");
@@ -2033,7 +2268,7 @@ mod tests {
     #[test]
     fn encode_text_paragraph_with_tab_emits_hp_tab_and_roundtrips() {
         let section = simple_section("LEFT\tRIGHT");
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
 
         assert!(
             xml.contains("<hp:t>LEFT<hp:tab/>RIGHT</hp:t>"),
@@ -2051,7 +2286,7 @@ mod tests {
     #[test]
     fn encode_section_roundtrip() {
         let section = simple_section("안녕하세요 round-trip test");
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
 
         // Parse back with the decoder
         let result =
@@ -2081,7 +2316,7 @@ mod tests {
             ..PageSettings::a4()
         };
         let section = Section::with_paragraphs(vec![text_paragraph("Content", 0, 0)], ps);
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
 
         assert!(xml.contains("<hp:secPr"), "missing secPr");
         assert!(xml.contains(r#"textDirection="HORIZONTAL""#), "missing textDirection");
@@ -2122,7 +2357,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
 
         assert!(xml.contains(r#"rowCnt="1""#), "missing rowCnt");
         assert!(xml.contains(r#"colCnt="2""#), "missing colCnt");
@@ -2161,7 +2396,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
 
         assert!(xml.contains(r#"cellSpacing="120""#), "missing cellSpacing");
         assert!(xml.contains(r#"borderFillIDRef="9""#), "missing table borderFillIDRef");
@@ -2199,7 +2434,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
 
         assert!(
             xml.contains(r#"cellSz width="7777" height="1226""#),
@@ -2228,7 +2463,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
 
         assert!(
             xml.contains(r#"binaryItemIDRef="logo""#),
@@ -2250,7 +2485,7 @@ mod tests {
             ],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
 
         assert!(xml.contains("<hp:t>First</hp:t>"), "missing First");
         assert!(xml.contains("<hp:t>Second</hp:t>"), "missing Second");
@@ -2289,7 +2524,7 @@ mod tests {
         );
 
         // Should succeed within nesting limit
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains("<hp:t>Deep</hp:t>"), "missing nested text");
     }
 
@@ -2312,7 +2547,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
 
         assert!(xml.contains("<hp:t>before</hp:t>"), "missing 'before' text");
         assert!(xml.contains("<hp:t>after</hp:t>"), "missing 'after' text");
@@ -2323,12 +2558,13 @@ mod tests {
         assert!(xml.contains("<hp:t>link</hp:t>"), "missing hyperlink display text");
         assert!(xml.contains("<hp:fieldEnd"), "missing fieldEnd closing element");
 
-        // fieldBegin must have unique id and fieldid
-        assert!(xml.contains(r#"fieldid="0""#), "fieldBegin must have fieldid=0");
-        assert!(xml.contains(r#"id="2000000000""#), "fieldBegin must have unique id");
+        // fieldBegin must have unique id and a non-zero fieldid
+        assert!(xml.contains(r#"fieldid="1628000000""#), "fieldBegin must have non-zero fieldid");
+        assert!(!xml.contains(r#"fieldid="0""#), "fieldid must never be 0 (invalid in Hancom)");
+        assert!(xml.contains(r#"id="1100000000""#), "fieldBegin must have unique id");
         // fieldEnd.beginIDRef must reference fieldBegin.id (NOT fieldid)
         assert!(
-            xml.contains(r#"beginIDRef="2000000000""#),
+            xml.contains(r#"beginIDRef="1100000000""#),
             "fieldEnd must reference fieldBegin id via beginIDRef"
         );
 
@@ -2357,7 +2593,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
 
         assert!(xml.contains("<hp:t>before</hp:t>"), "missing 'before' text");
         assert!(xml.contains("<hp:t>after</hp:t>"), "missing 'after' text");
@@ -2375,7 +2611,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
 
         // Should parse without error
         assert!(xml.contains("<hs:sec"), "missing root element");
@@ -2388,7 +2624,7 @@ mod tests {
     fn korean_text_preservation() {
         let korean = "우리는 수학을 공부한다.";
         let section = simple_section(korean);
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
 
         // Roundtrip through decoder
         let result =
@@ -2402,7 +2638,7 @@ mod tests {
     #[test]
     fn empty_section_produces_valid_xml() {
         let section = Section::new(PageSettings::a4());
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
 
         assert!(xml.contains("<hs:sec"), "missing root element");
         assert!(xml.contains("</hs:sec>"), "missing close tag");
@@ -2514,7 +2750,7 @@ mod tests {
             vec![text_paragraph("p0", 3, 5), text_paragraph("p1", 7, 2)],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         let result =
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
                 .unwrap();
@@ -2537,7 +2773,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         let result =
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
                 .unwrap();
@@ -2566,7 +2802,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains(r#"pageBreak="TABLE""#), "missing table pageBreak override");
         assert!(xml.contains(r#"repeatHeader="0""#), "missing repeatHeader override");
         assert!(xml.contains(r#"header="1""#), "missing header row marker");
@@ -2595,7 +2831,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         let result =
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
                 .unwrap();
@@ -2637,7 +2873,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         let result =
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
                 .unwrap();
@@ -2663,12 +2899,12 @@ mod tests {
         use hwpforge_foundation::ApplyPageType;
 
         let mut section = simple_section("Body text");
-        section.header = Some(HeaderFooter::new(
+        section.headers.push(HeaderFooter::new(
             vec![text_paragraph("Header Content", 0, 0)],
             ApplyPageType::Both,
         ));
 
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains("<hp:header"), "XML should contain header element");
         assert!(xml.contains("Header Content"), "XML should contain header text");
 
@@ -2687,12 +2923,12 @@ mod tests {
         use hwpforge_foundation::ApplyPageType;
 
         let mut section = simple_section("Body text");
-        section.footer = Some(HeaderFooter::new(
+        section.footers.push(HeaderFooter::new(
             vec![text_paragraph("Footer Content", 0, 0)],
             ApplyPageType::Even,
         ));
 
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains("<hp:footer"), "XML should contain footer element");
 
         let result =
@@ -2716,7 +2952,7 @@ mod tests {
             "- ".to_string(),
         ));
 
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains("<hp:pageNum"), "XML should contain pageNum element");
         assert!(xml.contains(r#"pos="BOTTOM_CENTER""#), "XML should contain pos attribute");
         assert!(xml.contains(r#"formatType="DIGIT""#), "XML should contain formatType");
@@ -2758,7 +2994,7 @@ mod tests {
             "".to_string(),
         ));
 
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
 
         let sec_pr_end = xml.find("</hp:secPr>").expect("secPr must be present");
         let col_pr_pos = xml.find("<hp:colPr").expect("colPr must be present");
@@ -2780,12 +3016,14 @@ mod tests {
         use hwpforge_foundation::ApplyPageType;
 
         let mut section = simple_section("Main body");
-        section.header =
-            Some(HeaderFooter::new(vec![text_paragraph("My Header", 0, 0)], ApplyPageType::Both));
-        section.footer =
-            Some(HeaderFooter::new(vec![text_paragraph("My Footer", 0, 0)], ApplyPageType::Odd));
+        section
+            .headers
+            .push(HeaderFooter::new(vec![text_paragraph("My Header", 0, 0)], ApplyPageType::Both));
+        section
+            .footers
+            .push(HeaderFooter::new(vec![text_paragraph("My Footer", 0, 0)], ApplyPageType::Odd));
 
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
 
         let result =
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
@@ -2819,7 +3057,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
 
         assert!(xml.contains("<hp:ctrl>"), "missing ctrl wrapper");
         assert!(xml.contains("<hp:footNote"), "missing footNote element");
@@ -2842,7 +3080,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
 
         assert!(xml.contains("<hp:endNote"), "missing endNote element");
         assert!(xml.contains("<hp:t>End note</hp:t>"), "missing endnote text");
@@ -2871,7 +3109,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
 
         assert!(xml.contains("<hp:rect"), "missing rect element");
         assert!(xml.contains("<hp:drawText"), "missing drawText element");
@@ -2900,7 +3138,7 @@ mod tests {
             PageSettings::a4(),
         );
 
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         let result =
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
                 .unwrap();
@@ -2941,7 +3179,7 @@ mod tests {
             PageSettings::a4(),
         );
 
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         let result =
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
                 .unwrap();
@@ -2987,7 +3225,7 @@ mod tests {
             PageSettings::a4(),
         );
 
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         let result =
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
                 .unwrap();
@@ -3021,12 +3259,12 @@ mod tests {
         use hwpforge_foundation::ApplyPageType;
 
         let mut section = simple_section("Body");
-        section.header = Some(HeaderFooter::new(
+        section.headers.push(HeaderFooter::new(
             vec![text_paragraph("A & B < C > D", 0, 0)],
             ApplyPageType::Both,
         ));
 
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains("A &amp; B &lt; C &gt; D"), "special chars must be escaped");
 
         let result =
@@ -3043,14 +3281,15 @@ mod tests {
         let xml = build_hyperlink_run_xml("Click here", "https://example.com", 0, 0);
         assert!(xml.starts_with(r#"<hp:run charPrIDRef="0">"#));
         assert!(xml.contains(r#"type="HYPERLINK""#));
-        assert!(xml.contains(r#"id="2000000000""#), "must have unique id");
-        assert!(xml.contains(r#"fieldid="0""#));
+        assert!(xml.contains(r#"id="1100000000""#), "must have unique id");
+        assert!(xml.contains(r#"fieldid="1628000000""#), "fieldid must be non-zero");
+        assert!(!xml.contains(r#"fieldid="0""#), "fieldid must never be 0");
         assert!(xml.contains(r#"editable="0""#), "editable must be numeric");
         assert!(xml.contains(r#"dirty="0""#), "dirty must be numeric");
         assert!(xml.contains(r#"metaTag="""#));
         assert!(xml.contains(r#"<hp:stringParam name="Path">https://example.com</hp:stringParam>"#));
         assert!(xml.contains("<hp:t>Click here</hp:t>"));
-        assert!(xml.contains(r#"<hp:fieldEnd beginIDRef="2000000000" fieldid="0"/>"#));
+        assert!(xml.contains(r#"<hp:fieldEnd beginIDRef="1100000000" fieldid="1628000000"/>"#));
         assert!(xml.ends_with("</hp:run>"));
     }
 
@@ -3058,8 +3297,8 @@ mod tests {
     fn build_hyperlink_run_xml_escapes_special_chars() {
         let xml = build_hyperlink_run_xml("A & B < C", "https://example.com?a=1&b=2", 2, 5);
         assert!(xml.contains(r#"charPrIDRef="2""#));
-        assert!(xml.contains(r#"id="2000000005""#), "unique id for field_id=5");
-        assert!(xml.contains(r#"fieldid="5""#));
+        assert!(xml.contains(r#"id="1100000005""#), "unique id for field_id=5");
+        assert!(xml.contains(r#"fieldid="1628000005""#), "non-zero fieldid for field_id=5");
         assert!(xml.contains("https://example.com?a=1&amp;b=2"), "URL ampersand must be escaped");
         assert!(
             xml.contains("<hp:t>A &amp; B &lt; C</hp:t>"),
@@ -3087,12 +3326,12 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
 
-        // First hyperlink: id=2000000000, fieldid=0
-        assert!(xml.contains(r#"<hp:fieldEnd beginIDRef="2000000000" fieldid="0"/>"#));
-        // Second hyperlink: id=2000000001, fieldid=1
-        assert!(xml.contains(r#"<hp:fieldEnd beginIDRef="2000000001" fieldid="1"/>"#));
+        // First hyperlink: id=1100000000, fieldid=1628000000
+        assert!(xml.contains(r#"<hp:fieldEnd beginIDRef="1100000000" fieldid="1628000000"/>"#));
+        // Second hyperlink: id=1100000001, fieldid=1628000001
+        assert!(xml.contains(r#"<hp:fieldEnd beginIDRef="1100000001" fieldid="1628000001"/>"#));
         // Both URLs present
         assert!(xml.contains("https://one.com"));
         assert!(xml.contains("https://two.com"));
@@ -3108,7 +3347,7 @@ mod tests {
     #[test]
     fn style_id_none_encodes_as_zero() {
         let section = simple_section("body text");
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains(r#"styleIDRef="0""#), "None style_id should encode as styleIDRef=0");
     }
 
@@ -3121,7 +3360,7 @@ mod tests {
         )
         .with_style(StyleIndex::new(2));
         let section = Section::with_paragraphs(vec![para], PageSettings::a4());
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(
             xml.contains(r#"styleIDRef="2""#),
             "style_id=Some(2) should encode as styleIDRef=2"
@@ -3137,7 +3376,7 @@ mod tests {
         )
         .with_style(StyleIndex::new(3));
         let section = Section::with_paragraphs(vec![para], PageSettings::a4());
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
 
         let result =
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
@@ -3148,7 +3387,7 @@ mod tests {
     #[test]
     fn decoder_zero_style_id_ref_gives_none() {
         let section = simple_section("normal");
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
 
         let result =
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
@@ -3161,7 +3400,7 @@ mod tests {
     #[test]
     fn text_direction_horizontal_is_default() {
         let section = simple_section("가로쓰기");
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(
             xml.contains(r#"textDirection="HORIZONTAL""#),
             "default section should use HORIZONTAL"
@@ -3177,7 +3416,7 @@ mod tests {
         let section =
             Section::with_paragraphs(vec![text_paragraph("세로쓰기", 0, 0)], PageSettings::a4())
                 .with_text_direction(TextDirection::Vertical);
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(
             xml.contains(r#"textDirection="VERTICAL""#),
             "vertical section should use VERTICAL"
@@ -3195,7 +3434,7 @@ mod tests {
             PageSettings::a4(),
         )
         .with_text_direction(TextDirection::VerticalAll);
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(
             xml.contains(r#"textDirection="VERTICALALL""#),
             "verticalall section should use VERTICALALL"
@@ -3213,7 +3452,7 @@ mod tests {
             PageSettings::a4(),
         )
         .with_text_direction(TextDirection::Vertical);
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         let result =
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
                 .unwrap();
@@ -3226,7 +3465,7 @@ mod tests {
     fn landscape_encodes_as_narrowly() {
         let ps = PageSettings { landscape: true, ..PageSettings::a4() };
         let section = Section::with_paragraphs(vec![text_paragraph("landscape", 0, 0)], ps);
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains(r#"landscape="NARROWLY""#), "landscape=true must encode as NARROWLY");
     }
 
@@ -3234,7 +3473,7 @@ mod tests {
     fn portrait_encodes_as_widely() {
         let ps = PageSettings { landscape: false, ..PageSettings::a4() };
         let section = Section::with_paragraphs(vec![text_paragraph("portrait", 0, 0)], ps);
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains(r#"landscape="WIDELY""#), "landscape=false must encode as WIDELY");
     }
 
@@ -3242,7 +3481,7 @@ mod tests {
     fn landscape_roundtrips() {
         let ps = PageSettings { landscape: true, ..PageSettings::a4() };
         let section = Section::with_paragraphs(vec![text_paragraph("land", 0, 0)], ps);
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         let result =
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
                 .unwrap();
@@ -3254,7 +3493,7 @@ mod tests {
         use hwpforge_foundation::GutterType;
         let ps = PageSettings { gutter_type: GutterType::LeftRight, ..PageSettings::a4() };
         let section = Section::with_paragraphs(vec![text_paragraph("gutter", 0, 0)], ps);
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains(r#"gutterType="LEFT_RIGHT""#));
     }
 
@@ -3263,7 +3502,7 @@ mod tests {
         use hwpforge_foundation::GutterType;
         let ps = PageSettings { gutter_type: GutterType::TopOnly, ..PageSettings::a4() };
         let section = Section::with_paragraphs(vec![text_paragraph("gutter", 0, 0)], ps);
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains(r#"gutterType="TOP_ONLY""#));
     }
 
@@ -3272,7 +3511,7 @@ mod tests {
     #[test]
     fn visibility_defaults_encode() {
         let section = simple_section("text");
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         // Default visibility: all zeros, SHOW_ALL
         assert!(xml.contains(r#"hideFirstHeader="0""#));
         assert!(xml.contains(r#"hideFirstFooter="0""#));
@@ -3296,7 +3535,7 @@ mod tests {
             border: ShowMode::HideAll,
             fill: ShowMode::ShowOdd,
         });
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains(r#"hideFirstHeader="1""#));
         assert!(xml.contains(r#"hideFirstFooter="1""#));
         assert!(xml.contains(r#"hideFirstMasterPage="0""#));
@@ -3327,7 +3566,7 @@ mod tests {
             distance: HwpUnit::new(1000).unwrap(),
             start_number: 3,
         });
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains(r#"restartType="1""#));
         assert!(xml.contains(r#"countBy="5""#));
         assert!(xml.contains(r#"distance="1000""#));
@@ -3338,7 +3577,7 @@ mod tests {
     fn line_number_shape_defaults_encode() {
         // Section with no line_number_shape uses all-zero defaults
         let section = simple_section("text");
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains(r#"restartType="0""#));
         assert!(xml.contains(r#"countBy="0""#));
         assert!(xml.contains(r#"startNumber="0""#));
@@ -3349,7 +3588,7 @@ mod tests {
     #[test]
     fn page_border_fill_defaults_encode_three_entries() {
         let section = simple_section("text");
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         // Default: BOTH, EVEN, ODD entries
         assert!(xml.contains(r#"type="BOTH""#));
         assert!(xml.contains(r#"type="EVEN""#));
@@ -3375,7 +3614,7 @@ mod tests {
                 HwpUnit::new(800).unwrap(),
             ],
         }]);
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains(r#"borderFillIDRef="5""#));
         assert!(xml.contains(r#"textBorder="PAGE""#));
         assert!(xml.contains(r#"headerInside="1""#));
@@ -3393,7 +3632,7 @@ mod tests {
         let mut section = simple_section("text");
         section.begin_num =
             Some(BeginNum { page: 3, footnote: 2, endnote: 1, pic: 4, tbl: 5, equation: 6 });
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains(r#"page="3""#));
         assert!(xml.contains(r#"pic="4""#));
         assert!(xml.contains(r#"tbl="5""#));
@@ -3406,7 +3645,7 @@ mod tests {
     #[test]
     fn begin_num_none_defaults_to_zero_in_startnum() {
         let section = simple_section("text");
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         // When begin_num is None, startNum defaults page/pic/tbl/equation to 0
         assert!(xml.contains(r#"<hp:startNum pageStartsOn="BOTH" page="0""#));
     }
@@ -3420,7 +3659,7 @@ mod tests {
         let mut section = simple_section("body");
         section.master_pages =
             Some(vec![MasterPage::new(ApplyPageType::Both, vec![text_paragraph("bg text", 0, 0)])]);
-        let result = encode_section(&section, 0, 0, 0).unwrap();
+        let result = encode_section(&section, 0, 0, 0, 0).unwrap();
         assert_eq!(result.master_pages.len(), 1);
         let (path, xml) = &result.master_pages[0];
         assert_eq!(path, "Contents/masterpage0.xml");
@@ -3438,7 +3677,7 @@ mod tests {
         section.master_pages =
             Some(vec![MasterPage::new(ApplyPageType::Even, vec![text_paragraph("mp", 0, 0)])]);
         // offset=5 → masterpage5
-        let result = encode_section(&section, 0, 0, 5).unwrap();
+        let result = encode_section(&section, 0, 0, 5, 0).unwrap();
         let (path, xml) = &result.master_pages[0];
         assert_eq!(path, "Contents/masterpage5.xml");
         assert!(xml.contains(r#"id="masterpage5""#));
@@ -3452,7 +3691,7 @@ mod tests {
         let mut section = simple_section("body");
         section.master_pages =
             Some(vec![MasterPage::new(ApplyPageType::Both, vec![text_paragraph("mp", 0, 0)])]);
-        let result = encode_section(&section, 0, 0, 0).unwrap();
+        let result = encode_section(&section, 0, 0, 0, 0).unwrap();
         assert!(
             result.xml.contains(r#"<hp:masterPage idRef="masterpage0"/>"#),
             "secPr must reference the master page"
@@ -3467,7 +3706,7 @@ mod tests {
         para.page_break = true;
         let section =
             Section::with_paragraphs(vec![text_paragraph("first", 0, 0), para], PageSettings::a4());
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains(r#"pageBreak="1""#), "page_break=true must encode as pageBreak=1");
     }
 
@@ -3477,7 +3716,7 @@ mod tests {
         para.column_break = true;
         let section =
             Section::with_paragraphs(vec![text_paragraph("first", 0, 0), para], PageSettings::a4());
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains(r#"columnBreak="1""#));
     }
 
@@ -3487,7 +3726,7 @@ mod tests {
         para.page_break = true;
         let section =
             Section::with_paragraphs(vec![text_paragraph("first", 0, 0), para], PageSettings::a4());
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         let result =
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
                 .unwrap();
@@ -3510,7 +3749,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains("<hp:bookmark"), "must emit bookmark element");
         assert!(xml.contains(r#"name="mymark""#));
     }
@@ -3544,7 +3783,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         // SpanStart produces fieldBegin type="BOOKMARK"
         assert!(xml.contains(r#"type="BOOKMARK""#), "BOOKMARK fieldBegin required");
         assert!(xml.contains(r#"name="span1""#));
@@ -3576,7 +3815,7 @@ mod tests {
             PageSettings::a4(),
         );
         // Should not panic or error
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains("<hp:t>text</hp:t>"), "text must still be present");
     }
 
@@ -3596,7 +3835,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains("<hp:indexmark"), "indexmark element required");
         assert!(xml.contains("색인항목"), "primary key must be present");
         assert!(xml.contains("부항목"), "secondary key must be present");
@@ -3617,7 +3856,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains(r#"<hp:autoNum num="1" numType="PAGE">"#), "autoNum for PageNum");
         assert!(xml.contains("<hp:autoNumFormat"), "autoNumFormat required");
     }
@@ -3634,7 +3873,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         // Date uses SUMMERY type (한글 typo)
         assert!(xml.contains(r#"type="SUMMERY""#), "Date field must use SUMMERY type");
         assert!(xml.contains(r#"fieldid="628321650""#), "Date field must use fieldid 628321650");
@@ -3653,7 +3892,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains(r#"type="SUMMERY""#));
         assert!(xml.contains("$createtime"));
     }
@@ -3671,7 +3910,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains(r#"type="SUMMERY""#));
         assert!(xml.contains("$author"));
     }
@@ -3689,7 +3928,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains(r#"type="SUMMERY""#));
         assert!(xml.contains("$lastsaveby"));
     }
@@ -3710,7 +3949,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains(r#"type="CLICK_HERE""#), "ClickHere field type");
         assert!(xml.contains(r#"fieldid="627272811""#), "ClickHere fieldid");
         assert!(xml.contains("클릭하세요"), "hint text must appear");
@@ -3735,11 +3974,75 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains(r#"type="CROSSREF""#), "CROSSREF fieldBegin type");
         assert!(xml.contains("bookmark1"), "target name must appear");
         assert!(xml.contains("RefHyperLink"), "RefHyperLink param required");
         assert!(!xml.contains("__HWPXR_"), "no leftover CrossRef marker");
+    }
+
+    #[test]
+    fn crossref_builders_emit_nonzero_matching_fieldid() {
+        use hwpforge_foundation::{RefContentType, RefType};
+
+        // HWP5 path: field_id=0 must NOT produce fieldid="0".
+        let hwp5_xml = build_hwp5_crossref_run_xml(
+            "bookmark1",
+            "see bookmark1",
+            RefType::default(),
+            RefContentType::default(),
+            true,
+            0,
+            0,
+        );
+        assert!(
+            !hwp5_xml.contains(r#"fieldid="0""#),
+            "HWP5 CROSSREF must never emit fieldid=0 (invalid in Hancom)"
+        );
+        assert!(
+            hwp5_xml.contains(r#"fieldid="1928000000""#),
+            "HWP5 CROSSREF fieldid must be the non-zero derived value"
+        );
+        // fieldBegin and fieldEnd fieldid must match each other.
+        assert_eq!(
+            hwp5_xml.matches(r#"fieldid="1928000000""#).count(),
+            2,
+            "fieldBegin and fieldEnd must share the same non-zero fieldid"
+        );
+        // beginIDRef must reference the `id` (begin_id), NOT the fieldid.
+        assert!(
+            hwp5_xml.contains(r#"<hp:fieldBegin id="1400000000""#),
+            "HWP5 CROSSREF fieldBegin id must be the derived begin_id"
+        );
+        assert!(
+            hwp5_xml.contains(r#"<hp:fieldEnd beginIDRef="1400000000" fieldid="1928000000"/>"#),
+            "fieldEnd beginIDRef must reference id, not fieldid"
+        );
+
+        // Non-HWP5 path: same guarantees with its own distinct base.
+        let core_xml = build_crossref_run_xml(
+            "bookmark1",
+            "see bookmark1",
+            &RefType::default(),
+            &RefContentType::default(),
+            true,
+            0,
+            0,
+        );
+        assert!(!core_xml.contains(r#"fieldid="0""#), "Core CROSSREF must never emit fieldid=0");
+        assert!(
+            core_xml.contains(r#"fieldid="1828000000""#),
+            "Core CROSSREF fieldid must be the non-zero derived value"
+        );
+        assert_eq!(
+            core_xml.matches(r#"fieldid="1828000000""#).count(),
+            2,
+            "fieldBegin and fieldEnd must share the same non-zero fieldid"
+        );
+        assert!(
+            core_xml.contains(r#"<hp:fieldEnd beginIDRef="1300000000" fieldid="1828000000"/>"#),
+            "fieldEnd beginIDRef must reference id, not fieldid"
+        );
     }
 
     // ── Memo encoding ─────────────────────────────────────────────
@@ -3759,7 +4062,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains(r#"type="MEMO""#), "MEMO fieldBegin type");
         assert!(xml.contains("MemoShapeID"), "MemoShapeID param required");
         assert!(!xml.contains("__HWPME_"), "no leftover Memo marker");
@@ -3783,7 +4086,7 @@ mod tests {
             vec![Paragraph::with_runs(vec![Run::control(ctrl, CSI::new(0))], PSI::new(0))],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains("<hp:dutmal"), "dutmal element required");
         assert!(xml.contains("漢"), "main text required");
         assert!(xml.contains("한"), "sub text required");
@@ -3844,7 +4147,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains("<hp:compose"), "compose element required");
         assert!(xml.contains(r#"charPrCnt="10""#), "10 charPr entries required");
         assert!(xml.contains("AB"), "compose text required");
@@ -3881,7 +4184,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains("<hp:equation"), "equation element required");
         assert!(xml.contains("{a} over {b}"), "equation script required");
         assert!(xml.contains(r#"width="10000""#));
@@ -3907,7 +4210,7 @@ mod tests {
                 ColumnDef { width: HwpUnit::ZERO, gap: HwpUnit::ZERO },
             ],
         });
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains(r#"colCount="2""#));
         assert!(xml.contains(r#"sameSz="1""#));
         assert!(xml.contains(r#"sameGap="1134""#));
@@ -3932,7 +4235,7 @@ mod tests {
                 ColumnDef { width: HwpUnit::new(10000).unwrap(), gap: HwpUnit::ZERO },
             ],
         });
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains(r#"colCount="3""#));
         assert!(xml.contains(r#"sameSz="0""#), "variable width must use sameSz=0");
         // Explicit hp:col children required
@@ -3988,7 +4291,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let result = encode_section(&section, 0, 0, 0);
+        let result = encode_section(&section, 0, 0, 0, 0);
         assert!(result.is_err(), "javascript: URL must be rejected");
         match result.unwrap_err() {
             crate::error::HwpxError::InvalidStructure { detail } => {
@@ -4012,8 +4315,33 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let result = encode_section(&section, 0, 0, 0);
+        let result = encode_section(&section, 0, 0, 0, 0);
         assert!(result.is_ok(), "mailto: URL must be accepted");
+    }
+
+    #[test]
+    fn schemeless_url_is_normalized_to_http() {
+        use hwpforge_core::control::Control;
+        // Real-world corpus case: 한글 stores schemeless government domains.
+        // The encoder must not abort the whole document; it promotes the URL
+        // to an http:// link instead.
+        let ctrl = Control::Hyperlink {
+            text: "산업부".to_string(),
+            url: "www.motie.go.kr".to_string(),
+        };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let result = encode_section(&section, 0, 0, 0, 0).expect("schemeless URL must be accepted");
+        assert!(
+            result.xml.contains("http://www.motie.go.kr"),
+            "schemeless URL must be promoted to http://, got: {}",
+            result.xml
+        );
     }
 
     // ── Chart encoding ────────────────────────────────────────────
@@ -4047,7 +4375,7 @@ mod tests {
             )],
             PageSettings::a4(),
         );
-        let result = encode_section(&section, 0, 0, 0).unwrap();
+        let result = encode_section(&section, 0, 0, 0, 0).unwrap();
         assert_eq!(result.charts.len(), 1, "one chart entry expected");
         let (path, xml) = &result.charts[0];
         assert!(path.starts_with("Chart/chart"), "chart path format");
@@ -4085,7 +4413,7 @@ mod tests {
             PageSettings::a4(),
         );
         // chart_offset=5 → chart1 index becomes 5+1=6 → chart6.xml
-        let result = encode_section(&section, 0, 5, 0).unwrap();
+        let result = encode_section(&section, 0, 5, 0, 0).unwrap();
         assert_eq!(result.charts.len(), 1);
         assert_eq!(result.charts[0].0, "Chart/chart6.xml");
     }
@@ -4098,7 +4426,7 @@ mod tests {
         assert!(xml.contains(r#"charPrIDRef="2""#));
         assert!(xml.contains(r#"type="BOOKMARK""#));
         assert!(xml.contains(r#"name="mymark""#));
-        assert!(xml.contains(r#"fieldid="7""#));
+        assert!(xml.contains(r#"fieldid="1728000007""#), "non-zero fieldid for field_id=7");
         assert!(xml.ends_with("</hp:run>"));
     }
 
@@ -4107,10 +4435,84 @@ mod tests {
         let xml = build_bookmark_span_end_run_xml(1, 3);
         assert!(xml.contains(r#"charPrIDRef="1""#));
         assert!(xml.contains("<hp:fieldEnd"));
-        // beginIDRef references the unique id (3_000_000_000 + field_id)
-        assert!(xml.contains(r#"beginIDRef="3000000003""#));
-        assert!(xml.contains(r#"fieldid="3""#));
+        // beginIDRef references the unique id (1_200_000_000 + field_id)
+        assert!(xml.contains(r#"beginIDRef="1200000003""#));
+        assert!(xml.contains(r#"fieldid="1728000003""#), "non-zero fieldid for field_id=3");
         assert!(xml.ends_with("</hp:run>"));
+    }
+
+    /// Hancom reads `<hp:fieldBegin id="...">` as a signed 32-bit integer.
+    /// Every field builder's `id` (and the paired `beginIDRef`) must stay below
+    /// `i32::MAX + 1` (2_147_483_648); a larger value wraps negative and the
+    /// field is no longer recognized as a valid instance.
+    #[test]
+    fn all_field_builders_emit_signed_i32_safe_begin_id() {
+        use hwpforge_foundation::{FieldType, RefContentType, RefType};
+
+        const I32_LIMIT: u64 = 2_147_483_648; // i32::MAX + 1
+
+        // Parse every `id="..."` / `beginIDRef="..."` integer in `xml` and
+        // assert each fits in a positive signed 32-bit range.
+        fn assert_ids_under_limit(xml: &str, builder: &str) {
+            for attr in ["id=\"", "beginIDRef=\""] {
+                let mut rest = xml;
+                while let Some(start) = rest.find(attr) {
+                    let after = &rest[start + attr.len()..];
+                    let end = after.find('"').expect("unterminated id attribute");
+                    let value: u64 = after[..end].parse().unwrap_or_else(|_| {
+                        panic!("{builder}: non-numeric id `{}`", &after[..end])
+                    });
+                    assert!(value < I32_LIMIT, "{builder}: {attr}{value} exceeds signed i32 range");
+                    rest = &after[end..];
+                }
+            }
+        }
+
+        // Exercise a large field_id so base + counter is checked, not just base.
+        let big = 1_000_000_usize;
+
+        assert_ids_under_limit(
+            &build_field_run_xml(&FieldType::ClickHere, "", "", 0, big),
+            "field_run/CLICK_HERE",
+        );
+        assert_ids_under_limit(
+            &build_field_run_xml(&FieldType::Date, "", "", 0, big),
+            "field_run/SUMMERY",
+        );
+        assert_ids_under_limit(
+            &build_hyperlink_run_xml("text", "https://example.com", 0, big),
+            "hyperlink",
+        );
+        assert_ids_under_limit(
+            &build_bookmark_span_start_run_xml("mark", 0, big),
+            "bookmark_span_start",
+        );
+        assert_ids_under_limit(&build_bookmark_span_end_run_xml(0, big), "bookmark_span_end");
+        assert_ids_under_limit(
+            &build_crossref_run_xml(
+                "bookmark1",
+                "see bookmark1",
+                &RefType::default(),
+                &RefContentType::default(),
+                true,
+                0,
+                big,
+            ),
+            "crossref",
+        );
+        assert_ids_under_limit(
+            &build_hwp5_crossref_run_xml(
+                "bookmark1",
+                "see bookmark1",
+                RefType::default(),
+                RefContentType::default(),
+                true,
+                0,
+                big,
+            ),
+            "hwp5_crossref",
+        );
+        assert_ids_under_limit(&build_memo_run_xml("", "author", "date", 0, big), "memo");
     }
 
     // ── Heading level (titleMark) encoding ───────────────────────
@@ -4120,7 +4522,7 @@ mod tests {
         let mut para = text_paragraph("Heading", 0, 0);
         para.heading_level = Some(1);
         let section = Section::with_paragraphs(vec![para], PageSettings::a4());
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains("<hp:titleMark"), "titleMark required for headings");
         assert!(xml.contains(r#"ignore="false""#));
     }
@@ -4128,7 +4530,7 @@ mod tests {
     #[test]
     fn no_heading_level_no_title_mark() {
         let section = simple_section("Normal paragraph");
-        let xml = encode_section(&section, 0, 0, 0).unwrap().xml;
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(!xml.contains("<hp:titleMark"), "non-heading must NOT have titleMark");
     }
 }

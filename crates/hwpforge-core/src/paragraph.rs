@@ -33,7 +33,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{CoreError, CoreResult};
-use crate::run::{Run, RunContent};
+use crate::run::Run;
 
 /// A paragraph: an ordered sequence of runs sharing a paragraph shape.
 ///
@@ -258,18 +258,16 @@ impl Paragraph {
     /// assert_eq!(para.text_content(), "Hello world");
     /// ```
     pub fn text_content(&self) -> String {
-        self.runs
-            .iter()
-            .filter_map(
-                |r| {
-                    if let RunContent::Text(s) = &r.content {
-                        Some(s.as_str())
-                    } else {
-                        None
-                    }
-                },
-            )
-            .collect()
+        // Use the unified `plain_text` accessor so `RunContent::InlineText`
+        // (Wave 4 Phase 2 carry — attribute-rich inline tabs) is folded
+        // back into a tab-containing plain string the way callers expect.
+        self.runs.iter().filter_map(|r| r.content.plain_text()).fold(
+            String::new(),
+            |mut acc, cow| {
+                acc.push_str(&cow);
+                acc
+            },
+        )
     }
 
     /// Returns the number of runs.

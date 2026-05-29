@@ -6,7 +6,7 @@
 use hwpforge_foundation::{
     BorderFillIndex, BreakType, Color, EmbossType, EmphasisType, EngraveType, FontIndex,
     HeadingType, HwpUnit, LineSpacingType, OutlineType, ShadowType, StrikeoutShape, TabAlign,
-    TabLeader, UnderlineType, VerticalPosition, WordBreakType,
+    TabLeader, UnderlineShape, UnderlineType, VerticalPosition, WordBreakType,
 };
 use quick_xml::de::from_str;
 
@@ -264,15 +264,30 @@ fn parse_underline_type(s: &str) -> UnderlineType {
     }
 }
 
+/// Parses a HWPX underline shape string to [`UnderlineShape`].
+///
+/// Unknown values fall back to [`UnderlineShape::Solid`] (warning-first principle:
+/// non-recognized shapes are tolerated rather than causing a fatal error).
+fn parse_underline_shape(s: &str) -> UnderlineShape {
+    s.parse::<UnderlineShape>().unwrap_or(UnderlineShape::Solid)
+}
+
 /// Parses a HWPX strikeout shape string to [`StrikeoutShape`].
 fn parse_strikeout_shape(s: &str) -> StrikeoutShape {
     match s.to_ascii_uppercase().as_str() {
         "NONE" => StrikeoutShape::None,
-        "SOLID" | "SLASH" => StrikeoutShape::Continuous,
+        "SOLID" | "SLASH" => StrikeoutShape::Solid,
         "DASH" => StrikeoutShape::Dash,
         "DOT" => StrikeoutShape::Dot,
         "DASH_DOT" => StrikeoutShape::DashDot,
         "DASH_DOT_DOT" => StrikeoutShape::DashDotDot,
+        "LONG_DASH" => StrikeoutShape::LongDash,
+        "CIRCLE" => StrikeoutShape::Circle,
+        "DOUBLE_SLIM" => StrikeoutShape::DoubleSlim,
+        "SLIM_THICK" => StrikeoutShape::SlimThick,
+        "THICK_SLIM" => StrikeoutShape::ThickSlim,
+        "THICK_SLIM_THICK" => StrikeoutShape::ThickSlimThick,
+        "WAVE" => StrikeoutShape::Wave,
         _ => StrikeoutShape::None,
     }
 }
@@ -285,6 +300,7 @@ fn parse_line_spacing_type(s: &str) -> LineSpacingType {
         "PERCENT" => LineSpacingType::Percentage,
         "FIXED" => LineSpacingType::Fixed,
         "BETWEEN_LINES" => LineSpacingType::BetweenLines,
+        "AT_LEAST" => LineSpacingType::AtLeast,
         _ => LineSpacingType::Percentage,
     }
 }
@@ -352,61 +368,65 @@ fn convert_char_pr(cp: &HxCharPr) -> HwpxCharShape {
     let height =
         i32::try_from(cp.height).ok().and_then(|h| HwpUnit::new(h).ok()).unwrap_or(HwpUnit::ZERO);
 
-    HwpxCharShape {
-        font_ref,
-        height,
-        text_color: parse_hex_color(&cp.text_color),
-        shade_color: parse_optional_hex_color(&cp.shade_color),
-        bold: cp.bold.is_some(),
-        italic: cp.italic.is_some(),
-        underline_type: cp
-            .underline
-            .as_ref()
-            .map(|u| parse_underline_type(&u.underline_type))
-            .unwrap_or(UnderlineType::None),
-        underline_color: cp.underline.as_ref().and_then(|u| {
-            let c = parse_hex_color(&u.color);
-            if c == Color::BLACK {
-                None
-            } else {
-                Some(c)
-            }
-        }),
-        strikeout_shape: cp
-            .strikeout
-            .as_ref()
-            .map(|s| parse_strikeout_shape(&s.shape))
-            .unwrap_or(StrikeoutShape::None),
-        strikeout_color: cp.strikeout.as_ref().and_then(|s| {
-            let c = parse_hex_color(&s.color);
-            if c == Color::BLACK {
-                None
-            } else {
-                Some(c)
-            }
-        }),
-        vertical_position: parse_vertical_position(cp),
-        outline_type: cp
-            .outline
-            .as_ref()
-            .map(|o| parse_outline_type(&o.outline_type))
-            .unwrap_or(OutlineType::None),
-        shadow_type: cp
-            .shadow
-            .as_ref()
-            .map(|s| parse_shadow_type(&s.shadow_type))
-            .unwrap_or(ShadowType::None),
-        emboss_type: if cp.emboss.is_some() { EmbossType::Emboss } else { EmbossType::None },
-        engrave_type: if cp.engrave.is_some() { EngraveType::Engrave } else { EngraveType::None },
-        emphasis: parse_emphasis_type(&cp.sym_mark),
-        ratio: cp.ratio.as_ref().map_or(100, |r| r.hangul),
-        spacing: cp.spacing.as_ref().map_or(0, |s| s.hangul),
-        rel_sz: cp.rel_sz.as_ref().map_or(100, |r| r.hangul),
-        char_offset: cp.offset.as_ref().map_or(0, |o| o.hangul),
-        use_kerning: cp.use_kerning != 0,
-        use_font_space: cp.use_font_space != 0,
-        border_fill_id: if cp.border_fill_id_ref == 2 { None } else { Some(cp.border_fill_id_ref) },
-    }
+    let mut shape = HwpxCharShape::default();
+    shape.font_ref = font_ref;
+    shape.height = height;
+    shape.text_color = parse_hex_color(&cp.text_color);
+    shape.shade_color = parse_optional_hex_color(&cp.shade_color);
+    shape.bold = cp.bold.is_some();
+    shape.italic = cp.italic.is_some();
+    shape.underline_type = cp
+        .underline
+        .as_ref()
+        .map(|u| parse_underline_type(&u.underline_type))
+        .unwrap_or(UnderlineType::None);
+    shape.underline_shape = cp
+        .underline
+        .as_ref()
+        .map(|u| parse_underline_shape(&u.shape))
+        .unwrap_or(UnderlineShape::Solid);
+    shape.underline_color = cp.underline.as_ref().and_then(|u| {
+        let c = parse_hex_color(&u.color);
+        if c == Color::BLACK {
+            None
+        } else {
+            Some(c)
+        }
+    });
+    shape.strikeout_shape = cp
+        .strikeout
+        .as_ref()
+        .map(|s| parse_strikeout_shape(&s.shape))
+        .unwrap_or(StrikeoutShape::None);
+    shape.strikeout_color = cp.strikeout.as_ref().and_then(|s| {
+        let c = parse_hex_color(&s.color);
+        if c == Color::BLACK {
+            None
+        } else {
+            Some(c)
+        }
+    });
+    shape.vertical_position = parse_vertical_position(cp);
+    shape.outline_type = cp
+        .outline
+        .as_ref()
+        .map(|o| parse_outline_type(&o.outline_type))
+        .unwrap_or(OutlineType::None);
+    shape.shadow_type =
+        cp.shadow.as_ref().map(|s| parse_shadow_type(&s.shadow_type)).unwrap_or(ShadowType::None);
+    shape.emboss_type = if cp.emboss.is_some() { EmbossType::Emboss } else { EmbossType::None };
+    shape.engrave_type =
+        if cp.engrave.is_some() { EngraveType::Engrave } else { EngraveType::None };
+    shape.emphasis = parse_emphasis_type(&cp.sym_mark);
+    shape.ratio = cp.ratio.as_ref().map_or(100, |r| r.hangul);
+    shape.spacing = cp.spacing.as_ref().map_or(0, |s| s.hangul);
+    shape.rel_sz = cp.rel_sz.as_ref().map_or(100, |r| r.hangul);
+    shape.char_offset = cp.offset.as_ref().map_or(0, |o| o.hangul);
+    shape.use_kerning = cp.use_kerning != 0;
+    shape.use_font_space = cp.use_font_space != 0;
+    shape.border_fill_id =
+        if cp.border_fill_id_ref == 2 { None } else { Some(cp.border_fill_id_ref) };
+    shape
 }
 
 fn parse_vertical_position(cp: &HxCharPr) -> VerticalPosition {
@@ -538,6 +558,7 @@ fn convert_para_pr(pp: &HxParaPr) -> HwpxParaShape {
 fn parse_latin_word_break_type(s: &str) -> WordBreakType {
     match s {
         "BREAK_WORD" => WordBreakType::BreakWord,
+        "HYPHENATION" => WordBreakType::Hyphenation,
         _ => WordBreakType::KeepWord,
     }
 }
@@ -1043,7 +1064,7 @@ mod tests {
         assert_eq!(cs.font_ref.hangul.get(), 1);
         assert_eq!(cs.font_ref.latin.get(), 2);
         assert_eq!(cs.underline_type, UnderlineType::Bottom);
-        assert_eq!(cs.strikeout_shape, StrikeoutShape::Continuous);
+        assert_eq!(cs.strikeout_shape, StrikeoutShape::Solid);
     }
 
     #[test]
@@ -1220,6 +1241,27 @@ mod tests {
         assert!(ps.checked);
         assert_eq!(ps.tab_pr_id_ref, 3);
         assert_eq!(ps.condense, 20);
+    }
+
+    #[test]
+    fn parse_para_pr_carries_latin_hyphenation() {
+        let xml = r#"<head version="1.4" secCnt="1">
+            <refList>
+                <paraProperties itemCnt="1">
+                    <paraPr id="0">
+                        <align horizontal="LEFT" vertical="BASELINE"/>
+                        <breakSetting breakLatinWord="HYPHENATION" breakNonLatinWord="KEEP_WORD"
+                            widowOrphan="0" keepWithNext="0" keepLines="0" pageBreakBefore="0"
+                            lineWrap="BREAK"/>
+                    </paraPr>
+                </paraProperties>
+            </refList>
+        </head>"#;
+
+        let store = parse_header(xml).unwrap().style_store;
+        let ps = store.para_shape(hwpforge_foundation::ParaShapeIndex::new(0)).unwrap();
+
+        assert_eq!(ps.break_latin_word, WordBreakType::Hyphenation);
     }
 
     #[test]

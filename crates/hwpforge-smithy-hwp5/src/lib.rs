@@ -109,6 +109,26 @@ impl Hwp5JoinedImageAssetPlan {
     }
 }
 
+/// Per-document plan of OLE-backed BinData entries, keyed by `binary_data_id`.
+///
+/// This carries the raw (still DEFLATE-compressed) `/BinData/BIN*.OLE` bytes
+/// so the projection layer can attempt chart extraction without re-opening
+/// the source CFB. Non-OLE entries are excluded; image entries are handled
+/// separately via [`Hwp5JoinedImageAssetPlan`].
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct Hwp5OleAssetPlan {
+    /// Raw `/BinData/*` bytes by `binary_data_id`. Always DEFLATE-compressed
+    /// (HWP5 OLE entries set `should_decompress=true`); the consumer
+    /// (`decoder::chart_ole::extract_chart_payload`) handles inflation.
+    pub assets_by_binary_data_id: BTreeMap<u16, Vec<u8>>,
+}
+
+impl Hwp5OleAssetPlan {
+    pub(crate) fn bytes_for_binary_data_id(&self, binary_data_id: u16) -> Option<&[u8]> {
+        self.assets_by_binary_data_id.get(&binary_data_id).map(|v| v.as_slice())
+    }
+}
+
 /// Inspect summary for an HWP5 source document.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hwp5InspectSummary {
@@ -568,8 +588,32 @@ pub fn hwp5_to_hwpx(
     output: impl AsRef<Path>,
 ) -> Hwp5Result<Vec<Hwp5Warning>> {
     let bytes = std::fs::read(input.as_ref()).map_err(Hwp5Error::Io)?;
-    let intermediate = decoder::decode_intermediate(&bytes)?;
-    let image_assets = join_hwp5_image_assets(&bytes, &intermediate)?;
+    let (hwpx_bytes, warnings) = hwp5_to_hwpx_bytes(&bytes)?;
+    std::fs::write(output.as_ref(), hwpx_bytes).map_err(Hwp5Error::Io)?;
+    Ok(warnings)
+}
+
+/// Convert HWP5 bytes to HWPX bytes in memory.
+///
+/// In-memory variant of [`hwp5_to_hwpx`]. Useful for chaining conversions
+/// (e.g. HWP5 -> HWPX -> Markdown) without touching the filesystem.
+///
+/// Returns the HWPX bytes alongside any non-fatal warnings encountered during
+/// decoding, projection, and style mapping.
+///
+/// # Examples
+///
+/// ```no_run
+/// use hwpforge_smithy_hwp5::hwp5_to_hwpx_bytes;
+///
+/// let hwp5_bytes = std::fs::read("input.hwp").unwrap();
+/// let (hwpx_bytes, warnings) = hwp5_to_hwpx_bytes(&hwp5_bytes).unwrap();
+/// println!("Produced {} bytes with {} warnings", hwpx_bytes.len(), warnings.len());
+/// ```
+pub fn hwp5_to_hwpx_bytes(bytes: &[u8]) -> Hwp5Result<(Vec<u8>, Vec<Hwp5Warning>)> {
+    let intermediate = decoder::decode_intermediate(bytes)?;
+    let image_assets = join_hwp5_image_assets(bytes, &intermediate)?;
+    let ole_assets = join_hwp5_ole_assets(bytes, &intermediate)?;
     let layout_hints = layout_hint_patch::capture_layout_hints(&intermediate.sections);
     let mut warnings = intermediate.warnings;
 
@@ -577,9 +621,12 @@ pub fn hwp5_to_hwpx(
         project_doc_info_styles_with_warnings(&intermediate.doc_info);
     warnings.extend(style_warnings);
 
-    // Stage 4: Projection
     let (document, mut image_store, proj_warnings) =
-        projection::project_to_core_with_images(intermediate.sections, &image_assets)?;
+        projection::project_to_core_with_images_and_ole(
+            intermediate.sections,
+            &image_assets,
+            &ole_assets,
+        )?;
     warnings.extend(proj_warnings);
     supplement_border_fill_image_assets(
         &hwp5_styles,
@@ -588,15 +635,13 @@ pub fn hwp5_to_hwpx(
         &mut warnings,
     );
 
-    // Stage 5: Validate + encode as HWPX
     let validated = document.validate().map_err(Hwp5Error::Core)?;
     let hwpx_bytes =
         hwpforge_smithy_hwpx::HwpxEncoder::encode(&validated, &hwpx_style_store, &image_store)
             .map_err(|e| Hwp5Error::Cfb { detail: format!("HWPX encoding failed: {e}") })?;
     let hwpx_bytes = layout_hint_patch::patch_hwpx_layout_hints(&hwpx_bytes, &layout_hints)?;
-    std::fs::write(output.as_ref(), hwpx_bytes).map_err(Hwp5Error::Io)?;
 
-    Ok(warnings)
+    Ok((hwpx_bytes, warnings))
 }
 
 fn supplement_border_fill_image_assets(
@@ -659,6 +704,27 @@ fn join_hwp5_image_assets(
     Ok(Hwp5JoinedImageAssetPlan { ordered_assets, assets_by_binary_data_id })
 }
 
+fn join_hwp5_ole_assets(
+    bytes: &[u8],
+    intermediate: &decoder::DecodedHwp5Intermediate,
+) -> Hwp5Result<Hwp5OleAssetPlan> {
+    use decoder::package::PackageReader;
+
+    let pkg = PackageReader::open(bytes)?;
+    let mut assets_by_binary_data_id: BTreeMap<u16, Vec<u8>> = BTreeMap::new();
+    for record in &intermediate.bin_data_records {
+        let extension = record.extension.to_ascii_lowercase();
+        if extension != "ole" {
+            continue;
+        }
+        let Some(raw_data) = pkg.bin_data().get(&record.storage_name) else {
+            continue;
+        };
+        assets_by_binary_data_id.insert(record.binary_data_id, raw_data.clone());
+    }
+    Ok(Hwp5OleAssetPlan { assets_by_binary_data_id })
+}
+
 fn decode_bin_data_payload(
     raw_data: &[u8],
     record: &Hwp5BinDataRecordSummary,
@@ -713,7 +779,9 @@ fn collect_image_geometry_hints_in_controls(
                 }
             }
             decoder::section::Hwp5Control::Header(subtree)
-            | decoder::section::Hwp5Control::Footer(subtree) => {
+            | decoder::section::Hwp5Control::Footer(subtree)
+            | decoder::section::Hwp5Control::Footnote(subtree)
+            | decoder::section::Hwp5Control::Endnote(subtree) => {
                 collect_image_geometry_hints_in_paragraphs(&subtree.paragraphs, hints);
             }
             decoder::section::Hwp5Control::TextBox(textbox) => {
@@ -778,8 +846,8 @@ fn summarize_sections(document: &Document<Draft>) -> Vec<Hwp5SectionSummary> {
                 paragraphs: section.paragraphs.len(),
                 non_empty_paragraphs,
                 tables: counts.tables,
-                has_header: section.header.is_some(),
-                has_footer: section.footer.is_some(),
+                has_header: !section.headers.is_empty(),
+                has_footer: !section.footers.is_empty(),
                 has_page_number: section.page_number.is_some(),
                 landscape: section.page_settings.landscape,
                 first_non_empty_text,
@@ -891,8 +959,12 @@ fn first_visible_text_in_paragraphs(
 
 fn first_visible_text_in_paragraph(para: &hwpforge_core::paragraph::Paragraph) -> Option<String> {
     para.runs.iter().find_map(|run| match &run.content {
-        hwpforge_core::run::RunContent::Text(text) => {
-            let trimmed = text.trim();
+        // Text + InlineText share the "first visible trimmed text"
+        // semantic via the unified `plain_text()` accessor — see
+        // debug doc §3a-A9.
+        hwpforge_core::run::RunContent::Text(_) | hwpforge_core::run::RunContent::InlineText(_) => {
+            let cow = run.content.plain_text()?;
+            let trimmed = cow.trim();
             if trimmed.is_empty() {
                 None
             } else {
@@ -1018,6 +1090,7 @@ mod tests {
         lines: usize,
         polygons: usize,
         textboxes: usize,
+        rects: usize,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1071,6 +1144,8 @@ mod tests {
             sections: vec![crate::decoder::section::SectionResult {
                 paragraphs: vec![],
                 page_def: None,
+                section_def_properties: None,
+                page_border_fills: Vec::new(),
                 warnings: vec![],
             }],
             warnings: vec![],
@@ -1148,14 +1223,15 @@ mod tests {
                 DecodedImageLocation::Body,
                 &mut layout,
             );
-            if let Some(header) = section.header.as_ref() {
+            // ADR-002: walk every header/footer in the multi-cardinality Vec.
+            for header in &section.headers {
                 count_images_in_paragraphs(
                     &header.paragraphs,
                     DecodedImageLocation::Header,
                     &mut layout,
                 );
             }
-            if let Some(footer) = section.footer.as_ref() {
+            for footer in &section.footers {
                 count_images_in_paragraphs(
                     &footer.paragraphs,
                     DecodedImageLocation::Footer,
@@ -1185,7 +1261,11 @@ mod tests {
         layout: &mut DecodedImageLayout,
     ) {
         match &run.content {
-            hwpforge_core::run::RunContent::Text(_) => {}
+            // Image counters skip text-bearing runs entirely; both
+            // variants carry no images. Explicit list rather than `_`
+            // wildcard to keep intent visible (debug doc §3a-A10).
+            hwpforge_core::run::RunContent::Text(_)
+            | hwpforge_core::run::RunContent::InlineText(_) => {}
             hwpforge_core::run::RunContent::Image(_) => match location {
                 DecodedImageLocation::Body => layout.body_images += 1,
                 DecodedImageLocation::Header => layout.header_images += 1,
@@ -1299,10 +1379,11 @@ mod tests {
         let mut layout = DecodedShapeLayout::default();
         for section in decoded.document.sections() {
             count_shapes_in_paragraphs(&section.paragraphs, &mut layout);
-            if let Some(header) = section.header.as_ref() {
+            // ADR-002: same multi-cardinality walk for shape counters.
+            for header in &section.headers {
                 count_shapes_in_paragraphs(&header.paragraphs, &mut layout);
             }
-            if let Some(footer) = section.footer.as_ref() {
+            for footer in &section.footers {
                 count_shapes_in_paragraphs(&footer.paragraphs, &mut layout);
             }
         }
@@ -1354,6 +1435,7 @@ mod tests {
     fn count_shapes_in_control(control: &Control, layout: &mut DecodedShapeLayout) {
         match control {
             Control::Line { .. } => layout.lines += 1,
+            Control::Rect { .. } => layout.rects += 1,
             Control::Polygon { .. } => layout.polygons += 1,
             Control::TextBox { paragraphs, .. } => {
                 layout.textboxes += 1;
@@ -1591,14 +1673,22 @@ mod tests {
         let first_body_image = first_image_in_paragraphs(&section0.paragraphs)
             .expect("section 0 should contain an image");
 
-        assert_eq!(decoded_image_store_names(&decoded), vec!["BIN0001.png".to_string()]);
+        // The HWPX decoder's `image_store` returns every `BinData/*` entry,
+        // which now legitimately includes the Wave 4c chart-carry OLE blobs
+        // (`ole{N}.ole`). Assert only on image (`BIN*.png`/`.jpg`/…) names
+        // here; the OLE entries are exercised by the chart-carry golden test.
+        let image_only_names: Vec<String> = decoded_image_store_names(&decoded)
+            .into_iter()
+            .filter(|name| !name.to_ascii_lowercase().ends_with(".ole"))
+            .collect();
+        assert_eq!(image_only_names, vec!["BIN0001.png".to_string()]);
         assert_eq!(layout.body_images, 1);
         assert_eq!(layout.header_images, 0);
         assert_eq!(layout.footer_images, 0);
         assert_eq!(shape_layout.lines, 4);
         assert_eq!(shape_layout.polygons, 1);
-        assert!(section0.header.is_some(), "full_report should keep header");
-        assert!(section0.footer.is_some(), "full_report should keep footer");
+        assert!(!section0.headers.is_empty(), "full_report should keep header");
+        assert!(!section0.footers.is_empty(), "full_report should keep footer");
         assert_eq!(first_body_image.path, "BinData/BIN0001");
         assert_ne!(first_body_image.width, HwpUnit::ZERO);
         assert_ne!(first_body_image.height, HwpUnit::ZERO);
@@ -1819,7 +1909,7 @@ mod tests {
     }
 
     #[test]
-    fn hwp5_to_hwpx_rect_fixture_emits_warning_and_no_visible_rect() {
+    fn hwp5_to_hwpx_rect_fixture_carries_rect_without_warning() {
         let source = fixture_path("rect_simple.hwp");
         if !source.exists() {
             return;
@@ -1828,13 +1918,11 @@ mod tests {
         let out = unique_temp_path("rect_simple.hwpx");
         let warnings = hwp5_to_hwpx(&source, &out).expect("fixture conversion should succeed");
         assert!(
-            warnings.iter().any(|warning| matches!(
+            !warnings.iter().any(|warning| matches!(
                 warning,
-                Hwp5Warning::DroppedControl { control, reason }
-                    if *control == "rect"
-                        && reason == "pure_rect_projection_requires_core_hwpx_capability"
+                Hwp5Warning::DroppedControl { control, .. } if *control == "rect"
             )),
-            "pure rect fixture should surface an explicit projection warning"
+            "rect projection should no longer surface a DroppedControl:rect warning: {warnings:?}"
         );
 
         assert_valid_hwpx(&out);
@@ -1845,6 +1933,232 @@ mod tests {
         assert_eq!(layout.lines, 0);
         assert_eq!(layout.polygons, 0);
         assert_eq!(layout.textboxes, 0);
+        assert!(layout.rects >= 1, "expected at least one decoded Control::Rect in section runs");
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_page_border_fill_references_visible_border() {
+        // Wave 7: the section's BOTH page border must reference the real
+        // (solid) borderFill, not the invisible default (id=1) the encoder
+        // fabricated before the secd HWPTAG_PAGE_BORDER_FILL records were
+        // carried. See `.docs/debug/2026-05-29_hwp5_page_border_fill.md`.
+        let source = fixture_path("user_samples/pages/sample-page-border-fill.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-page-border-fill.hwpx");
+        hwp5_to_hwpx(&source, &out).expect("page border fill conversion should succeed");
+        assert_valid_hwpx(&out);
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let section = &decoded.document.sections()[0];
+        let entries =
+            section.page_border_fills.as_ref().expect("section should carry page border fills");
+        let both = entries
+            .iter()
+            .find(|entry| entry.apply_type == "BOTH")
+            .expect("a BOTH page border fill entry should exist");
+        let border_fill = decoded
+            .style_store
+            .border_fill(both.border_fill_id)
+            .expect("the referenced page border fill must exist in the style store");
+        assert!(
+            [&border_fill.left, &border_fill.right, &border_fill.top, &border_fill.bottom]
+                .iter()
+                .any(|side| side.line_type != "NONE"),
+            "BOTH page border must reference a visible (non-NONE) border fill: {border_fill:?}"
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_page_border_odd_even_distinct_line_types() {
+        // Locks two things at once:
+        // 1. EVEN/ODD page-border-fill records are mapped in the right order
+        //    (the truth has EVEN = dotted, ODD = solid — distinct, so a swap
+        //    would be caught).
+        // 2. The HWP5 border line kind 2 = 점선 decodes to DOT, not DASH
+        //    (from_raw codes 2/3 were swapped). See task #41.
+        let source = fixture_path("user_samples/pages/sample-page-border-odd-even.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-page-border-odd-even.hwpx");
+        hwp5_to_hwpx(&source, &out).expect("odd/even border conversion should succeed");
+        assert_valid_hwpx(&out);
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let entries = decoded.document.sections()[0]
+            .page_border_fills
+            .as_ref()
+            .expect("section should carry page border fills");
+
+        let line_type_of = |apply: &str| -> String {
+            let entry =
+                entries.iter().find(|e| e.apply_type == apply).expect("apply_type entry exists");
+            decoded
+                .style_store
+                .border_fill(entry.border_fill_id)
+                .expect("referenced border fill exists")
+                .top
+                .line_type
+                .clone()
+        };
+
+        assert_eq!(line_type_of("EVEN"), "DOT", "EVEN page border must be dotted (점선 → DOT)");
+        assert_eq!(line_type_of("ODD"), "SOLID", "ODD page border must be solid (실선)");
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_page_border_pattern_carries_double_line_and_gradient() {
+        // Regression lock: a double-line (이중선) border + gradient background
+        // carry through DocInfo borderFill decode (line family + gradient fill).
+        let source = fixture_path("user_samples/pages/sample-page-border-pattern.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-page-border-pattern.hwpx");
+        hwp5_to_hwpx(&source, &out).expect("pattern border conversion should succeed");
+        assert_valid_hwpx(&out);
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let entries = decoded.document.sections()[0]
+            .page_border_fills
+            .as_ref()
+            .expect("section should carry page border fills");
+        let both = entries
+            .iter()
+            .find(|e| e.apply_type == "BOTH")
+            .expect("a BOTH page border fill entry should exist");
+        let border_fill = decoded
+            .style_store
+            .border_fill(both.border_fill_id)
+            .expect("referenced border fill exists");
+        assert_eq!(
+            border_fill.top.line_type, "DOUBLE_SLIM",
+            "double-line border (이중선) must carry as DOUBLE_SLIM"
+        );
+        assert!(
+            border_fill.gradient_fill.is_some(),
+            "gradient background must carry as a gradient fill: {border_fill:?}"
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_multi_section_preserves_sections_and_orientation() {
+        // Regression lock: HWP5 multi-section already carries (two sections,
+        // second one landscape). Keep it that way.
+        let source = fixture_path("user_samples/pages/sample-multi-section.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-multi-section.hwpx");
+        hwp5_to_hwpx(&source, &out).expect("multi-section conversion should succeed");
+        assert_valid_hwpx(&out);
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let sections = decoded.document.sections();
+        assert_eq!(sections.len(), 2, "expected two sections");
+        assert!(!sections[0].page_settings.landscape, "first section should stay portrait");
+        assert!(sections[1].page_settings.landscape, "second section should be landscape");
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_char_line_variants_carry_line_families() {
+        // Regression lock: underline/strikeout line families (double, wave,
+        // dot, dash) already carry through HwpxCharShape. Keep it that way.
+        use hwpforge_foundation::{StrikeoutShape, UnderlineShape};
+
+        let source = fixture_path("user_samples/sample-char-line-variants.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-char-line-variants.hwpx");
+        hwp5_to_hwpx(&source, &out).expect("char line variants conversion should succeed");
+        assert_valid_hwpx(&out);
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let underline_shapes: Vec<UnderlineShape> =
+            decoded.style_store.iter_char_shapes().map(|cs| cs.underline_shape).collect();
+        let strikeout_shapes: Vec<StrikeoutShape> =
+            decoded.style_store.iter_char_shapes().map(|cs| cs.strikeout_shape).collect();
+        assert!(
+            underline_shapes.contains(&UnderlineShape::DoubleSlim),
+            "double underline must carry: {underline_shapes:?}"
+        );
+        assert!(
+            underline_shapes.contains(&UnderlineShape::Wave),
+            "wave underline must carry: {underline_shapes:?}"
+        );
+        assert!(
+            strikeout_shapes.contains(&StrikeoutShape::DoubleSlim),
+            "double strikeout must carry: {strikeout_shapes:?}"
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_fwspace_carries_fixed_width_space() {
+        // Truth fixture is a single paragraph: FWLEFT<hp:fwSpace/>FWRIGHT.
+        // Before the fix, the HWP5 wire-byte 0x1F was silently consumed and
+        // the surrounding text was concatenated into "FWLEFTFWRIGHT".
+        let source = fixture_path("user_samples/text/sample-fwspace-fixed.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-fwspace.hwpx");
+        let warnings =
+            hwp5_to_hwpx(&source, &out).expect("user sample fwspace conversion should succeed");
+        assert!(
+            warnings.is_empty(),
+            "fwspace fixture should convert without warnings: {warnings:?}",
+        );
+
+        assert_valid_hwpx(&out);
+
+        // Round-trip through the Core DOM: text run must carry the U+001F
+        // sentinel between the two marker strings.
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let para = &decoded.document.sections()[0].paragraphs[0];
+        let visible_text: String = para.runs.iter().filter_map(|r| r.content.as_text()).collect();
+        assert_eq!(
+            visible_text, "FWLEFT\u{001F}FWRIGHT",
+            "Core text must carry the U+001F sentinel between the markers"
+        );
+
+        // Wire-level check: exactly one `<hp:fwSpace/>` is emitted inline.
+        let section_xml = read_section_xml(&out, 0);
+        let fwspace_count = section_xml.matches("<hp:fwSpace").count();
+        assert_eq!(
+            fwspace_count, 1,
+            "expected exactly 1 <hp:fwSpace/> element to match the truth fixture; got {fwspace_count} in:\n{section_xml}"
+        );
+        assert!(
+            section_xml.contains("<hp:t>FWLEFT<hp:fwSpace/>FWRIGHT</hp:t>"),
+            "fwSpace must be emitted inline inside the same <hp:t> as the surrounding text"
+        );
 
         let _ = std::fs::remove_file(&out);
     }
@@ -1859,7 +2173,14 @@ mod tests {
         let out = unique_temp_path("user-sample-tab.hwpx");
         let warnings =
             hwp5_to_hwpx(&source, &out).expect("user sample tab conversion should succeed");
-        assert!(warnings.is_empty(), "controlled tab fixture should convert without warnings");
+        // Phase 2 closes the inline-tab carry: every `<hp:tab>` with
+        // non-default `width` / `leader` / `tab_type` now rides through
+        // Core via `RunContent::InlineText`, so the conversion should
+        // produce zero warnings again.
+        assert!(
+            warnings.is_empty(),
+            "controlled tab fixture should convert without warnings, saw {warnings:?}"
+        );
 
         assert_valid_hwpx(&out);
 
@@ -1871,7 +2192,27 @@ mod tests {
         );
 
         let para = &decoded.document.sections()[0].paragraphs[0];
-        assert_eq!(para.runs[0].content.as_text(), Some("LEFT\tRIGHT"));
+        // Wave 4 Phase 3: HWP5→HWPX→Core round-trip now upgrades the
+        // run to `InlineText` because the tab carries non-default
+        // attributes. Use `plain_text()` to validate the visible
+        // string and `as_inline_text()` to confirm the attributes
+        // survive both encode and decode steps.
+        assert_eq!(para.runs[0].content.plain_text().as_deref(), Some("LEFT\tRIGHT"));
+        let inline = para.runs[0]
+            .content
+            .as_inline_text()
+            .expect("non-default inline tab should land in `RunContent::InlineText`");
+        let tab = inline
+            .segments
+            .iter()
+            .find_map(|seg| match seg {
+                hwpforge_core::inline::InlineSegment::Tab(attr) => Some(attr),
+                _ => None,
+            })
+            .expect("InlineText should keep a Tab segment");
+        assert_eq!(tab.width.as_i32(), 12488, "inline tab width should round-trip");
+        assert_eq!(tab.leader, 3, "inline tab leader should round-trip");
+        assert_eq!(tab.tab_type, 1, "inline tab type should round-trip");
 
         let para_shape =
             decoded.style_store.para_shape(para.para_shape_id).expect("para shape should exist");
@@ -1893,9 +2234,10 @@ mod tests {
         let out = unique_temp_path("user-sample-table-tab.hwpx");
         let warnings =
             hwp5_to_hwpx(&source, &out).expect("user sample table tab conversion should succeed");
+        // Phase 2: inline tab carry restored full parity here too.
         assert!(
             warnings.is_empty(),
-            "controlled table-tab fixture should convert without warnings"
+            "controlled table-tab fixture should convert without warnings, saw {warnings:?}"
         );
 
         assert_valid_hwpx(&out);
@@ -1908,8 +2250,9 @@ mod tests {
             .flat_map(|para| &para.runs)
             .find_map(|run| run.content.as_table())
             .expect("expected a table");
+        // Wave 4 Phase 3 round-trip parity for cell-level inline tabs.
         assert_eq!(
-            table.rows[0].cells[0].paragraphs[0].runs[0].content.as_text(),
+            table.rows[0].cells[0].paragraphs[0].runs[0].content.plain_text().as_deref(),
             Some("CELLLEFT\tCELLRIGHT")
         );
 
@@ -2091,6 +2434,51 @@ mod tests {
     }
 
     #[test]
+    fn hwp5_to_hwpx_user_sample_footnote_carries_four_footnotes() {
+        let source = fixture_path("user_samples/sample-field-footnote.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-field-footnote.hwpx");
+        let warnings =
+            hwp5_to_hwpx(&source, &out).expect("user sample footnote conversion should succeed");
+        assert!(
+            warnings.is_empty(),
+            "footnote fixture should convert without warnings: {warnings:?}"
+        );
+
+        assert_valid_hwpx(&out);
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+
+        // Count Control::Footnote instances across the projected Core document.
+        let footnote_count: usize = decoded.document.sections()[0]
+            .paragraphs
+            .iter()
+            .flat_map(|paragraph| &paragraph.runs)
+            .filter(|run| matches!(run.content.as_control(), Some(Control::Footnote { .. })))
+            .count();
+        assert_eq!(
+            footnote_count, 4,
+            "fixture sample-field-footnote.hwp should round-trip exactly four footnote controls"
+        );
+
+        // Also assert the encoded HWPX carries four <hp:footNote> elements
+        // (separate from the <hp:footNotePr> section property).
+        let section_xml = read_section_xml(&out, 0);
+        let footnote_element_count = section_xml.matches("<hp:footNote ").count()
+            + section_xml.matches("<hp:footNote>").count();
+        assert_eq!(
+            footnote_element_count, 4,
+            "converted hwpx must emit four <hp:footNote> elements"
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
     fn hwp5_to_hwpx_user_sample_bookmark_crossref_preserves_controls() {
         let source = fixture_path("user_samples/sample-field-bookmark-crossref-basic.hwp");
         if !source.exists() {
@@ -2154,6 +2542,101 @@ mod tests {
         assert!(
             section_xml.contains("<hp:t>1</hp:t>"),
             "converted cross-reference must keep its visible text"
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_crossref_emits_nonzero_fieldid() {
+        let source = fixture_path("user_samples/sample-field-bookmark-crossref-basic.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-crossref-nonzero-fieldid.hwpx");
+        let warnings = hwp5_to_hwpx(&source, &out)
+            .expect("user sample bookmark/crossref conversion should succeed");
+        assert!(
+            warnings.is_empty(),
+            "bookmark/crossref fixture should convert without warnings: {warnings:?}"
+        );
+
+        let section_xml = read_section_xml(&out, 0);
+
+        // fieldid="0" makes Hancom treat the CROSSREF as an invalid instance
+        // (F9 refresh / Ctrl+click jump break). It must never be emitted.
+        assert!(
+            !section_xml.contains(r#"fieldid="0""#),
+            "converted section xml must not emit fieldid=0 anywhere"
+        );
+
+        // The CROSSREF fieldBegin and its matching fieldEnd must carry the
+        // same non-zero fieldid.
+        let begin_marker = "<hp:fieldBegin ";
+        let begin_pos =
+            section_xml.find(begin_marker).expect("section xml must contain a fieldBegin");
+        let begin_tag_end = section_xml[begin_pos..]
+            .find('>')
+            .map(|rel| begin_pos + rel)
+            .expect("fieldBegin tag must be terminated");
+        let begin_tag = &section_xml[begin_pos..=begin_tag_end];
+        assert!(begin_tag.contains(r#"type="CROSSREF""#), "first field must be CROSSREF");
+
+        let extract_fieldid = |tag: &str| -> String {
+            let needle = r#"fieldid=""#;
+            let start =
+                tag.find(needle).expect("tag must carry a fieldid attribute") + needle.len();
+            let end = tag[start..].find('"').expect("fieldid attribute must be quoted") + start;
+            tag[start..end].to_string()
+        };
+
+        let begin_fieldid = extract_fieldid(begin_tag);
+        assert_ne!(begin_fieldid, "0", "CROSSREF fieldBegin fieldid must be non-zero");
+
+        let end_marker = "<hp:fieldEnd ";
+        let end_pos = section_xml.find(end_marker).expect("section xml must contain a fieldEnd");
+        let end_tag_end = section_xml[end_pos..]
+            .find('>')
+            .map(|rel| end_pos + rel)
+            .expect("fieldEnd tag must be terminated");
+        let end_tag = &section_xml[end_pos..=end_tag_end];
+        let end_fieldid = extract_fieldid(end_tag);
+
+        assert_eq!(
+            begin_fieldid, end_fieldid,
+            "CROSSREF fieldBegin and fieldEnd must share the same fieldid"
+        );
+
+        // Hancom reads `fieldBegin id` as a signed 32-bit integer. A value at
+        // or above 2^31 wraps negative and the field is no longer recognized
+        // (click / F9 refresh / Ctrl+click jump silently fail). The id must be
+        // a positive integer strictly below i32::MAX + 1.
+        let extract_attr = |tag: &str, attr: &str| -> String {
+            let needle = format!("{attr}=\"");
+            let start =
+                tag.find(&needle).unwrap_or_else(|| panic!("tag must carry a {attr} attribute"))
+                    + needle.len();
+            let end =
+                tag[start..].find('"').unwrap_or_else(|| panic!("{attr} attribute must be quoted"))
+                    + start;
+            tag[start..end].to_string()
+        };
+
+        let begin_id: i64 = extract_attr(begin_tag, "id")
+            .parse()
+            .expect("CROSSREF fieldBegin id must be an integer");
+        assert!(begin_id > 0, "CROSSREF fieldBegin id must be a positive integer: {begin_id}");
+        assert!(
+            begin_id < 2_147_483_648,
+            "CROSSREF fieldBegin id must be below 2^31 (signed i32 range): {begin_id}"
+        );
+
+        let begin_id_ref = extract_attr(end_tag, "beginIDRef");
+        assert_eq!(
+            begin_id_ref,
+            begin_id.to_string(),
+            "CROSSREF fieldEnd beginIDRef must reference the fieldBegin id"
         );
 
         let _ = std::fs::remove_file(&out);
@@ -2288,5 +2771,615 @@ mod tests {
         );
 
         let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_underline_variants_preserves_all_shapes() {
+        use hwpforge_foundation::UnderlineShape;
+
+        let source = fixture_path("user_samples/sample-char-underline-variants.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-underline-variants.hwpx");
+        let warnings =
+            hwp5_to_hwpx(&source, &out).expect("underline variants conversion should succeed");
+
+        // After Wave 1b the underline_shape warning is replaced by actual carry.
+        assert!(
+            !warnings.iter().any(|w| matches!(
+                w,
+                crate::decoder::Hwp5Warning::ProjectionFallback { subject, .. }
+                    if *subject == "style.char_shape.underline_shape"
+            )),
+            "underline_shape ProjectionFallback must not fire after Wave 1b carry"
+        );
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let paragraphs = &decoded.document.sections()[0].paragraphs;
+
+        // Fixture has 5 paragraphs: SOLID, DOUBLE_SLIM, DASH, WAVE, SLIM_THICK.
+        assert!(
+            paragraphs.len() >= 5,
+            "fixture should have at least 5 paragraphs, got {}",
+            paragraphs.len()
+        );
+
+        // Actual shape ordering as encoded in the HWP5 fixture (verified by inspection):
+        // para[0]=Solid, para[1]=DoubleSlim, para[2]=Dot, para[3]=Wave, para[4]=SlimThick
+        let expected_shapes = [
+            UnderlineShape::Solid,
+            UnderlineShape::DoubleSlim,
+            UnderlineShape::Dot,
+            UnderlineShape::Wave,
+            UnderlineShape::SlimThick,
+        ];
+
+        for (i, expected) in expected_shapes.iter().enumerate() {
+            let para = &paragraphs[i];
+            let run = para.runs.first().expect("paragraph must have at least one run");
+            let cs =
+                decoded.style_store.char_shape(run.char_shape_id).expect("char shape must exist");
+            assert_eq!(
+                cs.underline_shape, *expected,
+                "paragraph {} (0-based) expected underline_shape {:?}, got {:?}",
+                i, expected, cs.underline_shape
+            );
+        }
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_strike_variants_preserves_line_family() {
+        use hwpforge_foundation::StrikeoutShape;
+
+        let source = fixture_path("user_samples/sample-char-strike-variants.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-strike-variants.hwpx");
+        let warnings =
+            hwp5_to_hwpx(&source, &out).expect("strike variants conversion should succeed");
+
+        // Wave 1c: the strike line family is now carried, so the projection
+        // fallback warning for strike_shape must not fire.
+        assert!(
+            !warnings.iter().any(|w| matches!(
+                w,
+                crate::decoder::Hwp5Warning::ProjectionFallback { subject, .. }
+                    if *subject == "style.char_shape.strike_shape"
+            )),
+            "style.char_shape.strike_shape ProjectionFallback must not fire after Wave 1c carry"
+        );
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+
+        // The fixture defines three strike variants on char shapes 7/8/9:
+        //   charPr 7 = "단일선" → SOLID
+        //   charPr 8 = "이중선" → DOUBLE_SLIM (HWP5 raw shape = 7)
+        //   charPr 9 = "빨간선" → SOLID with non-black strike_color
+        // Verify the style store carries the line family for each.
+        let cs7 = decoded
+            .style_store
+            .char_shape(hwpforge_foundation::CharShapeIndex::new(7))
+            .expect("char shape 7 must exist");
+        assert_eq!(cs7.strikeout_shape, StrikeoutShape::Solid);
+
+        let cs8 = decoded
+            .style_store
+            .char_shape(hwpforge_foundation::CharShapeIndex::new(8))
+            .expect("char shape 8 must exist");
+        assert_eq!(
+            cs8.strikeout_shape,
+            StrikeoutShape::DoubleSlim,
+            "char shape 8 should carry DoubleSlim (raw=7) after Wave 1c"
+        );
+
+        let cs9 = decoded
+            .style_store
+            .char_shape(hwpforge_foundation::CharShapeIndex::new(9))
+            .expect("char shape 9 must exist");
+        assert_eq!(cs9.strikeout_shape, StrikeoutShape::Solid);
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_breakwordlatin_variants_preserves_hyphenation() {
+        use hwpforge_foundation::{ParaShapeIndex, WordBreakType};
+
+        let source = fixture_path("user_samples/sample-char-breakwordlatin-variants.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-breakwordlatin-variants.hwpx");
+        let warnings =
+            hwp5_to_hwpx(&source, &out).expect("breakwordlatin variants conversion should succeed");
+
+        // After Wave 1d carry, the break_latin_word projection warning is gone
+        // for the raw=1 (HYPHENATION) and raw=2 (BREAK_WORD) cases.
+        assert!(
+            !warnings.iter().any(|w| matches!(
+                w,
+                crate::decoder::Hwp5Warning::ProjectionFallback { subject, .. }
+                    if *subject == "style.para_shape.break_latin_word"
+            )),
+            "style.para_shape.break_latin_word ProjectionFallback must not fire after Wave 1d carry"
+        );
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+
+        // The .hwp fixture defines 21 paragraph shapes:
+        //   - indices 0..=19 carry the default raw=0 (KEEP_WORD)
+        //   - index 20 carries raw=2 (BREAK_WORD per the HWP5 spec bits 5-6:
+        //     0=Word, 1=Hyphenate, 2=Character)
+        // Raw=1 (HYPHENATION) is therefore not exercised by this fixture's
+        // HWP5 body, but the projection now carries it through whenever a
+        // raw=1 shape appears (the foundation enum and HWPX encoder/decoder
+        // are wired end-to-end and covered by the foundation unit tests).
+        let shape_19 = decoded
+            .style_store
+            .para_shape(ParaShapeIndex::new(19))
+            .expect("para shape 19 must exist");
+        assert_eq!(shape_19.break_latin_word, WordBreakType::KeepWord);
+
+        let shape_20 = decoded
+            .style_store
+            .para_shape(ParaShapeIndex::new(20))
+            .expect("para shape 20 must exist");
+        assert_eq!(shape_20.break_latin_word, WordBreakType::BreakWord);
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_line_spacing_preserves_all_modes() {
+        use hwpforge_foundation::{LineSpacingType, ParaShapeIndex};
+
+        let source = fixture_path("user_samples/sample-para-line-spacing.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-line-spacing.hwpx");
+        let warnings = hwp5_to_hwpx(&source, &out).expect("line-spacing conversion should succeed");
+
+        // Wave 2a: AtLeast is now a first-class variant, so the
+        // ProjectionFallback warning for raw=3 must no longer fire.
+        assert!(
+            !warnings.iter().any(|w| matches!(
+                w,
+                crate::decoder::Hwp5Warning::ProjectionFallback { subject, .. }
+                    if *subject == "style.para_shape.line_spacing"
+            )),
+            "style.para_shape.line_spacing ProjectionFallback must not fire after Wave 2a carry"
+        );
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+
+        // The HWPX fixture defines paraPr entries with three distinct line
+        // spacing modes:
+        //   paraPr  0 → PERCENT 160 (default)
+        //   paraPr 20 → FIXED 2000  (20pt)
+        //   paraPr 21 → AT_LEAST 2400 (24pt minimum)
+        // The new AtLeast variant must round-trip through the encoder.
+        let shape_0 = decoded
+            .style_store
+            .para_shape(ParaShapeIndex::new(0))
+            .expect("para shape 0 must exist");
+        assert_eq!(shape_0.line_spacing_type, LineSpacingType::Percentage);
+
+        let shape_20 = decoded
+            .style_store
+            .para_shape(ParaShapeIndex::new(20))
+            .expect("para shape 20 must exist");
+        assert_eq!(shape_20.line_spacing_type, LineSpacingType::Fixed);
+
+        let shape_21 = decoded
+            .style_store
+            .para_shape(ParaShapeIndex::new(21))
+            .expect("para shape 21 must exist");
+        assert_eq!(
+            shape_21.line_spacing_type,
+            LineSpacingType::AtLeast,
+            "para shape 21 should carry AtLeast (HWP5 raw=3) after Wave 2a"
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_alignment_preserves_all_six_variants() {
+        use hwpforge_foundation::{Alignment, ParaShapeIndex};
+
+        let source = fixture_path("user_samples/sample-para-alignments-all.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-alignments-all.hwpx");
+        let _warnings = hwp5_to_hwpx(&source, &out).expect("alignment conversion should succeed");
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+
+        // HWPX fixture paraPr id → expected Alignment (verified by header.xml inspection).
+        let expected: &[(usize, Alignment)] = &[
+            (20, Alignment::Justify),
+            (21, Alignment::Left),
+            (22, Alignment::Right),
+            (23, Alignment::Center),
+            (24, Alignment::Distribute),
+            (25, Alignment::DistributeFlush),
+        ];
+        for (idx, exp) in expected {
+            let shape = decoded
+                .style_store
+                .para_shape(ParaShapeIndex::new(*idx))
+                .unwrap_or_else(|err| panic!("para shape {idx} must exist after Wave 2b: {err}"));
+            assert_eq!(
+                shape.alignment, *exp,
+                "para shape {idx} expected {:?}, got {:?}",
+                exp, shape.alignment
+            );
+        }
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_indent_preserves_four_variants() {
+        use hwpforge_foundation::ParaShapeIndex;
+
+        let source = fixture_path("user_samples/sample-para-indent-variants.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-indent-variants.hwpx");
+        let _warnings = hwp5_to_hwpx(&source, &out).expect("indent conversion should succeed");
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+
+        // paraPr 20: 왼쪽 들여쓰기 (margin_left > 0, others 0)
+        let s20 = decoded.style_store.para_shape(ParaShapeIndex::new(20)).expect("para shape 20");
+        assert!(
+            s20.margin_left.as_i32() > 0,
+            "para 20 (왼쪽) expects positive margin_left, got {}",
+            s20.margin_left.as_i32()
+        );
+        assert_eq!(s20.indent.as_i32(), 0, "para 20 indent should be 0");
+
+        // paraPr 21: 오른쪽 들여쓰기 (margin_right > 0)
+        let s21 = decoded.style_store.para_shape(ParaShapeIndex::new(21)).expect("para shape 21");
+        assert!(
+            s21.margin_right.as_i32() > 0,
+            "para 21 (오른쪽) expects positive margin_right, got {}",
+            s21.margin_right.as_i32()
+        );
+
+        // paraPr 22: 첫 줄 들여쓰기 (indent > 0)
+        let s22 = decoded.style_store.para_shape(ParaShapeIndex::new(22)).expect("para shape 22");
+        assert!(
+            s22.indent.as_i32() > 0,
+            "para 22 (첫 줄) expects positive indent, got {}",
+            s22.indent.as_i32()
+        );
+
+        // paraPr 23: 내어쓰기 (indent < 0 / hanging)
+        let s23 = decoded.style_store.para_shape(ParaShapeIndex::new(23)).expect("para shape 23");
+        assert!(
+            s23.indent.as_i32() < 0,
+            "para 23 (내어쓰기) expects negative hanging indent, got {}",
+            s23.indent.as_i32()
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_page_break_preserves_break_and_keep_flags() {
+        use hwpforge_foundation::{BreakType, ParaShapeIndex};
+
+        let source = fixture_path("user_samples/sample-para-page-break.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-page-break.hwpx");
+        let _warnings = hwp5_to_hwpx(&source, &out).expect("page-break conversion should succeed");
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+
+        // paraPr 20: 다음 쪽에서 시작 (page break before)
+        let s20 = decoded.style_store.para_shape(ParaShapeIndex::new(20)).expect("para shape 20");
+        assert_eq!(
+            s20.break_type,
+            BreakType::Page,
+            "para 20 (다음 쪽에서 시작) expects BreakType::Page, got {:?}",
+            s20.break_type
+        );
+
+        // paraPr 21: 다음 문단과 함께 (keep with next)
+        let s21 = decoded.style_store.para_shape(ParaShapeIndex::new(21)).expect("para shape 21");
+        assert!(s21.keep_with_next, "para 21 (다음 문단과 함께) expects keep_with_next = true");
+
+        // paraPr 22: 같은 쪽에 두기 (keep lines together)
+        let s22 = decoded.style_store.para_shape(ParaShapeIndex::new(22)).expect("para shape 22");
+        assert!(
+            s22.keep_lines_together,
+            "para 22 (같은 쪽에 두기) expects keep_lines_together = true"
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_border_shading_carries_border_fill_per_paragraph() {
+        use hwpforge_foundation::ParaShapeIndex;
+
+        let source = fixture_path("user_samples/sample-para-border-shading.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-border-shading.hwpx");
+        let _warnings =
+            hwp5_to_hwpx(&source, &out).expect("border-shading conversion should succeed");
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+
+        // Each of the three used paraPrs (20=사방 / 21=위아래 / 22=배경) must
+        // reference a non-default borderFill (id 0/1/2 are the built-in defaults
+        // for page / char-background / table; user borderFills start at id 3+).
+        for (idx, label) in &[(20, "사방"), (21, "위아래"), (22, "배경")] {
+            let shape = decoded
+                .style_store
+                .para_shape(ParaShapeIndex::new(*idx))
+                .unwrap_or_else(|err| panic!("para shape {idx} ({label}) must exist: {err}"));
+            let border_fill_id = shape
+                .border_fill_id
+                .unwrap_or_else(|| panic!("para {idx} ({label}) must carry a borderFillIDRef"));
+            let raw = border_fill_id.get();
+            assert!(
+                raw >= 3,
+                "para {idx} ({label}) expected non-default borderFillIDRef (>= 3), got {raw}"
+            );
+            // The referenced BorderFill must be resolvable via style_store.
+            let _ = decoded
+                .style_store
+                .border_fill(raw as u32)
+                .unwrap_or_else(|err| panic!("borderFill {raw} must resolve: {err}"));
+        }
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_checkable_bullet_basic_decodes_per_paragraph_checked_state() {
+        use hwpforge_foundation::ParaShapeIndex;
+
+        let source = fixture_path("user_samples/lists/sample-checkable-bullet-basic.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-checkable-bullet-basic.hwpx");
+        let _warnings =
+            hwp5_to_hwpx(&source, &out).expect("checkable-bullet-basic conversion should succeed");
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+
+        // Wave 3 — Per-paragraph checked state must decode end-to-end.
+        // The HWPX fixture defines paraPr 20 (unchecked) and paraPr 21 (checked)
+        // both pointing at the same BULLET heading definition.
+        let s20 = decoded.style_store.para_shape(ParaShapeIndex::new(20)).expect("para shape 20");
+        assert!(!s20.checked, "para 20 (unchecked bullet) expects checked = false, got true");
+
+        let s21 = decoded.style_store.para_shape(ParaShapeIndex::new(21)).expect("para shape 21");
+        assert!(
+            s21.checked,
+            "para 21 (checked bullet) expects checked = true — \
+             per-paragraph checked state must round-trip through HWP5 → HWPX"
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_checkable_bullet_basic_carries_definition_level_checkable() {
+        let source = fixture_path("user_samples/lists/sample-checkable-bullet-basic.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("user-sample-checkable-bullet-basic-defn.hwpx");
+        let _warnings =
+            hwp5_to_hwpx(&source, &out).expect("checkable-bullet-basic conversion should succeed");
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+
+        // Definition-level checkable truth: CLAUDE.md gotcha #8 requires both
+        // `bullet.checkedChar` and `bullet.paraHead.checkable` to carry through.
+        let bullet = decoded
+            .style_store
+            .iter_bullets()
+            .next()
+            .expect("converted hwpx should contain a bullet definition");
+        assert_eq!(
+            bullet.checked_char.as_deref(),
+            Some("☑"),
+            "bullet definition must carry checkedChar from the HWP5 record"
+        );
+        assert!(
+            bullet.para_head.checkable,
+            "bullet paraHead must carry checkable=true from the HWP5 attribute bit"
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_chart_fixture_emits_embedded_chart_switch_block() {
+        // Wave 4c carry: a HWP5 chart-bearing fixture must round-trip as
+        //   * `Control::EmbeddedChart` run in the projected Core document
+        //   * `Chart/chart1.xml` ZIP entry containing the OOXML chartSpace
+        //   * `BinData/ole1.ole` ZIP entry containing the inner OLE2 bytes
+        //   * `Contents/content.hpf` opf:manifest entry for the OLE blob
+        //   * `Contents/section0.xml` with `<hp:switch>` carrying both a
+        //     `<hp:case>` chart reference and `<hp:default>` OLE fallback
+        let source = fixture_path("charts/chart_01_single_column.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let out = unique_temp_path("chart_01_single_column.hwpx");
+        let warnings =
+            hwp5_to_hwpx(&source, &out).expect("chart fixture conversion should succeed");
+        assert!(
+            !warnings.iter().any(|warning| matches!(
+                warning,
+                Hwp5Warning::DroppedControl { control, .. } if *control == "ole_object"
+            )),
+            "chart fixture should no longer surface DroppedControl:ole_object: {warnings:?}"
+        );
+
+        assert_valid_hwpx(&out);
+
+        // Inspect ZIP contents directly: 한글 needs Chart/chart1.xml and
+        // BinData/ole1.ole side-by-side and a matching opf:item entry.
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes))
+            .expect("converted hwpx should open as zip");
+        let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
+        assert!(
+            names.iter().any(|n| n == "Chart/chart1.xml"),
+            "expected Chart/chart1.xml in zip, got {names:?}"
+        );
+        assert!(
+            names.iter().any(|n| n == "BinData/ole1.ole"),
+            "expected BinData/ole1.ole in zip, got {names:?}"
+        );
+
+        let mut chart_xml = String::new();
+        {
+            use std::io::Read;
+            archive
+                .by_name("Chart/chart1.xml")
+                .expect("Chart/chart1.xml should be present")
+                .read_to_string(&mut chart_xml)
+                .expect("Chart/chart1.xml should be UTF-8");
+        }
+        assert!(
+            chart_xml.contains("<c:chartSpace"),
+            "Chart/chart1.xml should carry an OOXML <c:chartSpace> root"
+        );
+
+        let mut ole_bytes: Vec<u8> = Vec::new();
+        {
+            use std::io::Read;
+            archive
+                .by_name("BinData/ole1.ole")
+                .expect("BinData/ole1.ole should be present")
+                .read_to_end(&mut ole_bytes)
+                .expect("BinData/ole1.ole should be readable");
+        }
+        assert!(
+            ole_bytes.len() > 1024,
+            "BinData/ole1.ole should carry a non-trivial OLE2 payload, got {} bytes",
+            ole_bytes.len()
+        );
+        assert_eq!(
+            &ole_bytes[..4],
+            b"\xD0\xCF\x11\xE0",
+            "BinData/ole1.ole must start with OLE2 magic"
+        );
+
+        let mut hpf_xml = String::new();
+        {
+            use std::io::Read;
+            archive
+                .by_name("Contents/content.hpf")
+                .expect("Contents/content.hpf should be present")
+                .read_to_string(&mut hpf_xml)
+                .expect("content.hpf should be UTF-8");
+        }
+        assert!(
+            hpf_xml.contains(r#"href="BinData/ole1.ole""#)
+                && hpf_xml.contains(r#"media-type="application/ole""#),
+            "content.hpf must register BinData/ole1.ole as application/ole"
+        );
+
+        let section_xml = read_section_xml(&out, 0);
+        assert!(section_xml.contains("<hp:switch"), "section must contain <hp:switch>");
+        assert!(section_xml.contains("<hp:chart"), "section must contain <hp:chart> in case arm");
+        assert!(
+            section_xml.contains("<hp:default>") && section_xml.contains("<hp:ole "),
+            "section must contain <hp:default><hp:ole …> fallback"
+        );
+        assert!(
+            section_xml.contains(r#"chartIDRef="Chart/chart1.xml""#),
+            "section chart must reference Chart/chart1.xml"
+        );
+        assert!(
+            section_xml.contains(r#"binaryItemIDRef="ole1""#),
+            "section OLE fallback must reference ole1 binary item id"
+        );
+
+        // Decode round-trip: the HWPX decoder's structured Chart parser does
+        // not know about the EmbeddedChart variant, so the chart shows up as
+        // Control::Chart there. We only assert the OLE binary made it into
+        // the decoded image_store, since that proves the manifest+BinData
+        // wiring is consistent.
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let has_ole_in_store =
+            decoded.image_store.iter().any(|(name, _)| name.eq_ignore_ascii_case("ole1.ole"));
+        assert!(has_ole_in_store, "decoded image_store should retain ole1.ole binary entry");
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_bytes_matches_file_based_api() {
+        let source = fixture_path("sample-text-char-runs-basic.hwp");
+        if !source.exists() {
+            return;
+        }
+
+        let bytes = std::fs::read(&source).expect("source bytes should be readable");
+        let (inmem_bytes, inmem_warnings) =
+            hwp5_to_hwpx_bytes(&bytes).expect("in-memory conversion should succeed");
+
+        let file_out = unique_temp_path("inmem_compare.hwpx");
+        let file_warnings =
+            hwp5_to_hwpx(&source, &file_out).expect("file-based conversion should succeed");
+        let file_bytes = std::fs::read(&file_out).expect("file output should be readable");
+
+        assert_eq!(
+            inmem_bytes, file_bytes,
+            "in-memory and file-based hwp5_to_hwpx should produce identical bytes"
+        );
+        assert_eq!(
+            inmem_warnings.len(),
+            file_warnings.len(),
+            "in-memory and file-based variants should emit the same warning count"
+        );
+        HwpxDecoder::decode(&inmem_bytes)
+            .expect("in-memory hwpx bytes should round-trip through HwpxDecoder");
+
+        let _ = std::fs::remove_file(&file_out);
     }
 }

@@ -626,7 +626,8 @@ impl Hwp5SemanticParagraph {
                 Hwp5SemanticInlineItem::Text { text } => summary.push_str(text),
                 Hwp5SemanticInlineItem::Tab => summary.push('\t'),
                 Hwp5SemanticInlineItem::LineBreak => summary.push('\n'),
-                Hwp5SemanticInlineItem::NonBreakingSpace => summary.push(' '),
+                Hwp5SemanticInlineItem::NonBreakingSpace => summary.push('\u{00A0}'),
+                Hwp5SemanticInlineItem::FwSpace => summary.push('\u{001F}'),
                 Hwp5SemanticInlineItem::FieldBegin { .. }
                 | Hwp5SemanticInlineItem::FieldEnd
                 | Hwp5SemanticInlineItem::SectionColumnDef { .. }
@@ -647,6 +648,7 @@ impl Hwp5SemanticParagraph {
                 | Hwp5SemanticInlineItem::Tab
                 | Hwp5SemanticInlineItem::LineBreak
                 | Hwp5SemanticInlineItem::NonBreakingSpace
+                | Hwp5SemanticInlineItem::FwSpace
                 | Hwp5SemanticInlineItem::FieldBegin { .. }
                 | Hwp5SemanticInlineItem::FieldEnd
                 | Hwp5SemanticInlineItem::SectionColumnDef { .. } => None,
@@ -669,6 +671,8 @@ pub enum Hwp5SemanticInlineItem {
     LineBreak,
     /// Inline non-breaking space preserved distinctly from plain text.
     NonBreakingSpace,
+    /// Inline fixed-width space preserved distinctly from plain text.
+    FwSpace,
     /// Opaque field-begin marker preserved at the semantic boundary.
     FieldBegin {
         /// Raw 14-byte payload following the control code in `ParaText`.
@@ -1082,6 +1086,10 @@ pub enum Hwp5SemanticControlKind {
     Header,
     /// Footer control.
     Footer,
+    /// Footnote control with nested paragraphs.
+    Footnote,
+    /// Endnote control with nested paragraphs.
+    Endnote,
     /// Textbox or draw-text shape.
     TextBox,
     /// Page number or auto-numbering control.

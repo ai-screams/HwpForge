@@ -126,7 +126,9 @@ fn decode_user_sample_tab_preserves_custom_tab_def_and_inline_tab() {
     );
 
     let para = &result.document.sections()[0].paragraphs[0];
-    assert_eq!(para.runs[0].content.as_text(), Some("LEFT\tRIGHT"));
+    // Wave 4 Phase 3: rich inline tab now decodes as
+    // `RunContent::InlineText`; `plain_text()` covers both shapes.
+    assert_eq!(para.runs[0].content.plain_text().as_deref(), Some("LEFT\tRIGHT"));
 
     let para_shape = result.style_store.para_shape(para.para_shape_id).unwrap();
     assert!(para_shape.tab_pr_id_ref > 2, "paragraph should reference a custom tab definition");
@@ -145,10 +147,29 @@ fn roundtrip_user_sample_tab_preserves_custom_tab_def_and_inline_tab() {
         roundtripped.style_store.iter_tabs().any(|tab| tab.id > 2 && !tab.stops.is_empty()),
         "custom tab definitions should survive a full HWPX roundtrip"
     );
+
+    // After Wave 4 Phase 3 (HWPX decoder InlineText carry), the run
+    // upgrades to `RunContent::InlineText` because the inline tab
+    // carries non-default `width`/`leader`/`tab_type`. Verify both
+    // the plain-text equivalent AND the attribute payload survive
+    // the full HWPX → Core → HWPX → Core round-trip.
+    let content = &roundtripped.document.sections()[0].paragraphs[0].runs[0].content;
     assert_eq!(
-        roundtripped.document.sections()[0].paragraphs[0].runs[0].content.as_text(),
-        Some("LEFT\tRIGHT")
+        content.plain_text().as_deref(),
+        Some("LEFT\tRIGHT"),
+        "tab character should survive as `\\t` in plain-text view"
     );
+    let inline = content
+        .as_inline_text()
+        .expect("non-default inline tab should keep `RunContent::InlineText` shape");
+    let tab = inline.segments.iter().find_map(|seg| match seg {
+        hwpforge_core::inline::InlineSegment::Tab(attr) => Some(attr),
+        _ => None,
+    });
+    let tab = tab.expect("InlineText should contain a Tab segment");
+    assert_eq!(tab.width.as_i32(), 12488, "tab width attribute should round-trip");
+    assert_eq!(tab.leader, 3, "tab leader attribute should round-trip");
+    assert_eq!(tab.tab_type, 1, "tab type attribute should round-trip");
 }
 
 #[test]
@@ -162,8 +183,11 @@ fn decode_user_sample_table_tab_preserves_inline_tab_in_cell_text() {
         .flat_map(|para| &para.runs)
         .find_map(|run| run.content.as_table())
         .expect("expected a table");
+    // Wave 4 Phase 3: cell content with rich inline tabs is now
+    // `RunContent::InlineText`. `plain_text()` gives the same
+    // tab-character view either way.
     assert_eq!(
-        table.rows[0].cells[0].paragraphs[0].runs[0].content.as_text(),
+        table.rows[0].cells[0].paragraphs[0].runs[0].content.plain_text().as_deref(),
         Some("CELLLEFT\tCELLRIGHT")
     );
 }
@@ -184,8 +208,9 @@ fn roundtrip_user_sample_table_tab_preserves_inline_tab_in_cell_text() {
         .flat_map(|para| &para.runs)
         .find_map(|run| run.content.as_table())
         .expect("expected a table");
+    // Wave 4 Phase 3 round-trip parity for cell-level inline tabs.
     assert_eq!(
-        table.rows[0].cells[0].paragraphs[0].runs[0].content.as_text(),
+        table.rows[0].cells[0].paragraphs[0].runs[0].content.plain_text().as_deref(),
         Some("CELLLEFT\tCELLRIGHT")
     );
 }

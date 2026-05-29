@@ -396,8 +396,29 @@ pub struct Hwp5RawBulletDef {
 
 impl Hwp5RawBulletDef {
     /// Parse a bullet record from its raw payload bytes.
+    ///
+    /// # Record layout (verified against real Hancom `HWPTAG_BULLET` records)
+    ///
+    /// The published KS X 6101 / HWP5 spec (table 42) is incomplete here. Real
+    /// records are 25 bytes:
+    ///
+    /// | offset | bytes | field                                            |
+    /// |--------|-------|--------------------------------------------------|
+    /// | 0..12  | 12    | paragraph-head info (attribute u32 + i16 + i16 + char-shape u32) |
+    /// | 12..14 | 2     | bullet glyph (WCHAR)                              |
+    /// | 14..18 | 4     | image-bullet flag (INT32; 0 = glyph bullet)       |
+    /// | 18..23 | 5     | image-bullet block (bright/contrast/effect u8 + bin-item u16) — ALWAYS present |
+    /// | 23..25 | 2     | check-bullet glyph (WCHAR)                        |
+    ///
+    /// The image-bullet block is a fixed 5 bytes regardless of the flag value,
+    /// so `check_bullet_char` always sits at offset 23, not at a flag-dependent
+    /// offset. The previous code read the block as 4 bytes and only when the
+    /// flag was set, which silently dropped `checkedChar` for glyph bullets.
     pub fn parse(data: &[u8]) -> Hwp5Result<Self> {
-        const MIN_SIZE: usize = 18;
+        const IMAGE_BLOCK_LEN: usize = 5;
+        // 12 (para head) + 2 (bullet char) + 4 (image flag) + 5 (image block)
+        // + 2 (check char) = 25.
+        const MIN_SIZE: usize = 25;
         if data.len() < MIN_SIZE {
             return Err(Hwp5Error::RecordParse {
                 offset: 0,
@@ -412,17 +433,13 @@ impl Hwp5RawBulletDef {
         let use_image = image_bullet_flag != 0;
         let image_id = use_image.then_some(image_bullet_flag as u32);
 
-        if use_image && (data.len() as u64).saturating_sub(cur.position()) >= 4 {
-            let mut ignored = [0u8; 4];
-            cur.read_exact(&mut ignored)?;
-        }
+        // The 5-byte image-bullet block is always present; skip it regardless
+        // of `use_image` so the check glyph offset stays correct.
+        let mut _image_block = [0u8; IMAGE_BLOCK_LEN];
+        cur.read_exact(&mut _image_block)?;
 
-        let check_bullet_char = if (data.len() as u64).saturating_sub(cur.position()) >= 2 {
-            let code_unit = cur.read_u16::<LittleEndian>()?;
-            (code_unit != 0).then(|| decode_utf16_code_unit(code_unit))
-        } else {
-            None
-        };
+        let code_unit = cur.read_u16::<LittleEndian>()?;
+        let check_bullet_char = (code_unit != 0).then(|| decode_utf16_code_unit(code_unit));
 
         Ok(Self { paragraph_head, bullet_char, use_image, image_id, check_bullet_char })
     }
@@ -837,20 +854,29 @@ impl Hwp5RawCharShape {
 
     /// Returns the strikethrough shape encoded in bits 26-29.
     ///
-    /// HWP5 can carry more line variants than the current shared IR. When a
-    /// strike is enabled but the exact line family is unsupported, collapse to
-    /// `Continuous` so the semantic "struck through" survives.
+    /// After Wave 1c the shared IR mirrors the full OWPML strike-shape
+    /// vocabulary, so HWP5 raw values 0..=12 carry directly. Out-of-range
+    /// values still fall back to `Solid` so the "struck through" semantic
+    /// survives.
     pub fn strikeout_shape(&self) -> StrikeoutShape {
         if !self.has_strikeout() {
             return StrikeoutShape::None;
         }
 
         match self.strike_shape_raw() {
+            0 => StrikeoutShape::Solid,
             1 => StrikeoutShape::Dash,
             2 => StrikeoutShape::Dot,
             3 => StrikeoutShape::DashDot,
             4 => StrikeoutShape::DashDotDot,
-            _ => StrikeoutShape::Continuous,
+            5 => StrikeoutShape::LongDash,
+            6 => StrikeoutShape::Circle,
+            7 => StrikeoutShape::DoubleSlim,
+            8 => StrikeoutShape::SlimThick,
+            9 => StrikeoutShape::ThickSlim,
+            10 => StrikeoutShape::ThickSlimThick,
+            11 => StrikeoutShape::Wave,
+            _ => StrikeoutShape::Solid,
         }
     }
 
@@ -1031,13 +1057,14 @@ impl Hwp5RawParaShape {
         match self.line_spacing_kind_raw() {
             1 => LineSpacingType::Fixed,
             2 => LineSpacingType::BetweenLines,
+            3 => LineSpacingType::AtLeast,
             _ => LineSpacingType::Percentage,
         }
     }
 
     /// Returns the line-spacing value corresponding to [`Self::line_spacing_type`].
     pub fn line_spacing_value(&self) -> i32 {
-        if matches!(self.line_spacing_kind_raw(), 0..=2) {
+        if matches!(self.line_spacing_kind_raw(), 0..=3) {
             self.line_spacing2
                 .and_then(|value| i32::try_from(value).ok())
                 .filter(|value| *value > 0)
@@ -1049,10 +1076,17 @@ impl Hwp5RawParaShape {
 
     /// Returns the Latin word-break policy encoded in `property1` bits 5-6.
     ///
-    /// HWP5 supports a third hyphenation mode which the current shared IR
-    /// cannot represent; that mode currently collapses to `KeepWord`.
+    /// HWP5 bits 5-6 encode the Latin line-break unit per the openhwp / HWP5
+    /// spec (see `EnglishLineBreakUnit` in `docs/office/LAYOUT.md`):
+    ///
+    /// - `0` = Word (KEEP_WORD)
+    /// - `1` = Hyphenate (HYPHENATION)
+    /// - `2` = Character (BREAK_WORD)
+    /// - `3` = unknown / fallback to KEEP_WORD (covered by
+    ///   `warn_on_para_break_latin_word`)
     pub fn break_latin_word(&self) -> WordBreakType {
         match self.break_latin_word_raw() {
+            1 => WordBreakType::Hyphenation,
             2 => WordBreakType::BreakWord,
             _ => WordBreakType::KeepWord,
         }
@@ -1224,7 +1258,14 @@ fn parse_numbering_para_head(
     let _align_bits = (attribute & 0b11) as u8;
     let _use_instance_width = (attribute >> 2) & 1 != 0;
     let _auto_indent = (attribute >> 3) & 1 != 0;
-    let _text_offset_kind = ((attribute >> 4) & 0b11) as u8;
+    let _text_offset_kind = ((attribute >> 4) & 1) as u8;
+    // Bit 5 of the paragraph-head attribute is the checkable (checkbox bullet)
+    // flag. It is only meaningful for BULLET records — NUMBERING records leave
+    // it clear — so reading it unconditionally is safe: numbering and
+    // non-checkable bullets simply yield `false`. Verified against real Hancom
+    // BULLET records (`sample-checkable-bullet-*.hwp` carry attribute 0x28 with
+    // bit 5 set; `sample-bullet-list.hwp` carries 0x08 with bit 5 clear).
+    let checkable = (attribute >> 5) & 1 != 0;
     let _width_adjust = cur.read_i16::<LittleEndian>()?;
     let _text_offset = cur.read_i16::<LittleEndian>()?;
     let _char_shape_id = cur.read_u32::<LittleEndian>()?;
@@ -1234,10 +1275,7 @@ fn parse_numbering_para_head(
         (String::new(), String::new())
     };
 
-    // HWP5 numbering paragraphs do not expose a stable checkable bit in the
-    // raw record layout we currently preserve here, so keep the semantic slot
-    // but mark it false instead of guessing.
-    Ok(Hwp5RawNumberingParaHead { start_number: 1, level, num_format, text, checkable: false })
+    Ok(Hwp5RawNumberingParaHead { start_number: 1, level, num_format, text, checkable })
 }
 
 fn numbering_attr_num_format(attribute: u32) -> &'static str {
@@ -1472,24 +1510,24 @@ impl Hwp5RawStyle {
 mod tests {
     use super::*;
 
-    fn make_bullet_def_bytes_with_checked_char(
-        use_image: bool,
-        checked_char: Option<u16>,
-    ) -> Vec<u8> {
+    /// Build a 25-byte `HWPTAG_BULLET` payload matching the real Hancom layout:
+    /// 12-byte paragraph head + bullet glyph (2) + image flag (4) + fixed
+    /// 5-byte image block + check glyph (2).
+    fn make_bullet_def_bytes_full(use_image: bool, checked_char: u16, attribute: u32) -> Vec<u8> {
         let mut data = Vec::new();
-        data.extend_from_slice(&0u32.to_le_bytes()); // paragraph head properties
+        data.extend_from_slice(&attribute.to_le_bytes()); // paragraph head properties
         data.extend_from_slice(&0i16.to_le_bytes()); // width adjust
         data.extend_from_slice(&0i16.to_le_bytes()); // text offset
         data.extend_from_slice(&0u32.to_le_bytes()); // char shape id
         data.extend_from_slice(&(0x25CFu16).to_le_bytes()); // bullet char: ●
         data.extend_from_slice(&(if use_image { 1i32 } else { 0i32 }).to_le_bytes());
-        if use_image {
-            data.extend_from_slice(&0u32.to_le_bytes()); // skipped image metadata
-        }
-        if let Some(checked_char) = checked_char {
-            data.extend_from_slice(&checked_char.to_le_bytes());
-        }
+        data.extend_from_slice(&[0u8; 5]); // image block: always 5 bytes
+        data.extend_from_slice(&checked_char.to_le_bytes());
         data
+    }
+
+    fn make_bullet_def_bytes_with_checked_char(use_image: bool, checked_char: u16) -> Vec<u8> {
+        make_bullet_def_bytes_full(use_image, checked_char, 0)
     }
 
     fn make_file_header_bytes(version: u32, flags: u32) -> Vec<u8> {
@@ -1881,18 +1919,56 @@ mod tests {
 
     #[test]
     fn parse_bullet_def_zero_checked_char_becomes_none() {
-        let bullet =
-            Hwp5RawBulletDef::parse(&make_bullet_def_bytes_with_checked_char(false, Some(0)))
-                .expect("bullet parse should succeed");
+        let bullet = Hwp5RawBulletDef::parse(&make_bullet_def_bytes_with_checked_char(false, 0))
+            .expect("bullet parse should succeed");
         assert_eq!(bullet.bullet_char, "●");
         assert_eq!(bullet.check_bullet_char, None);
+        assert!(!bullet.paragraph_head.checkable);
     }
 
     #[test]
     fn parse_bullet_def_nonzero_checked_char_is_preserved() {
         let bullet =
-            Hwp5RawBulletDef::parse(&make_bullet_def_bytes_with_checked_char(false, Some(0x2611)))
+            Hwp5RawBulletDef::parse(&make_bullet_def_bytes_with_checked_char(false, 0x2611))
                 .expect("bullet parse should succeed");
         assert_eq!(bullet.check_bullet_char.as_deref(), Some("☑"));
+    }
+
+    #[test]
+    fn parse_bullet_def_checked_char_preserved_when_image_flag_set() {
+        // Regression: the image-bullet block is a fixed 5 bytes regardless of
+        // the image flag, so the check glyph must still be read at offset 23.
+        let bullet =
+            Hwp5RawBulletDef::parse(&make_bullet_def_bytes_with_checked_char(true, 0x2611))
+                .expect("bullet parse should succeed");
+        assert!(bullet.use_image);
+        assert_eq!(bullet.check_bullet_char.as_deref(), Some("☑"));
+    }
+
+    #[test]
+    fn parse_bullet_def_checkable_bit_is_decoded() {
+        // Bit 5 of the paragraph-head attribute is the checkable flag.
+        // Attribute 0x28 = bit 3 (auto-indent) + bit 5 (checkable), matching
+        // real `sample-checkable-bullet-*.hwp` records.
+        let checkable = Hwp5RawBulletDef::parse(&make_bullet_def_bytes_full(false, 0x2611, 0x28))
+            .expect("bullet parse should succeed");
+        assert!(checkable.paragraph_head.checkable);
+        assert_eq!(checkable.check_bullet_char.as_deref(), Some("☑"));
+
+        // Attribute 0x08 = bit 3 only (auto-indent), bit 5 clear → not
+        // checkable, matching real `sample-bullet-list.hwp`.
+        let plain = Hwp5RawBulletDef::parse(&make_bullet_def_bytes_full(false, 0x20, 0x08))
+            .expect("bullet parse should succeed");
+        assert!(!plain.paragraph_head.checkable);
+    }
+
+    #[test]
+    fn parse_bullet_def_rejects_record_shorter_than_25_bytes() {
+        // The real Hancom record is always 25 bytes; a 20-byte record (the old
+        // incorrect minimum) must now be rejected rather than silently
+        // mis-parsing the check glyph offset.
+        let mut short = make_bullet_def_bytes_with_checked_char(false, 0x2611);
+        short.truncate(20);
+        assert!(Hwp5RawBulletDef::parse(&short).is_err());
     }
 }

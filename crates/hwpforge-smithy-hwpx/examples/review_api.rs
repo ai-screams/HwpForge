@@ -176,13 +176,16 @@ fn build_section_0() -> Section {
     // [API #4] HeaderFooter::all_pages() — 새 API
     // [API #5] PageNumber::with_decoration() — 새 API
     let mut sec: Section = Section::with_paragraphs(paras, PageSettings::a4());
-    sec.header = Some(HeaderFooter::all_pages(vec![text_para(
+    sec.headers.push(HeaderFooter::all_pages(vec![text_para(
         "PR #14 Review — API 변경사항 검증 문서",
         CS_ITALIC,
         PS_LEFT,
     )]));
-    sec.footer =
-        Some(HeaderFooter::all_pages(vec![text_para("HwpForge © 2026", CS_ITALIC, PS_CENTER)]));
+    sec.footers.push(HeaderFooter::all_pages(vec![text_para(
+        "HwpForge © 2026",
+        CS_ITALIC,
+        PS_CENTER,
+    )]));
     sec.page_number = Some(PageNumber::with_decoration(
         PageNumberPosition::BottomCenter,
         NumberFormatType::Digit,
@@ -556,8 +559,8 @@ fn main() {
             "    S{}: {} paras, header={}, footer={}, page_num={}",
             i + 1,
             sec.paragraphs.len(),
-            sec.header.is_some(),
-            sec.footer.is_some(),
+            !sec.headers.is_empty(),
+            !sec.footers.is_empty(),
             sec.page_number.is_some(),
         );
     }

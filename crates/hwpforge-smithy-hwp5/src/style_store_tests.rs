@@ -129,6 +129,9 @@ fn make_numbering_def_bytes(version: HwpVersion, levels: &[(&str, &str)], start:
     data
 }
 
+/// Build a 25-byte `HWPTAG_BULLET` payload matching the real Hancom layout:
+/// 12-byte paragraph head + bullet glyph (2) + image flag (4) + fixed 5-byte
+/// image block + check glyph (2).
 fn make_bullet_def_bytes(use_image: bool) -> Vec<u8> {
     let mut data = Vec::new();
     data.extend_from_slice(&0u32.to_le_bytes()); // paragraph head properties
@@ -137,9 +140,7 @@ fn make_bullet_def_bytes(use_image: bool) -> Vec<u8> {
     data.extend_from_slice(&0u32.to_le_bytes()); // char shape id
     data.extend_from_slice(&(0x25CFu16).to_le_bytes()); // bullet char: ●
     data.extend_from_slice(&(if use_image { 1i32 } else { 0i32 }).to_le_bytes());
-    if use_image {
-        data.extend_from_slice(&0u32.to_le_bytes()); // skipped image metadata
-    }
+    data.extend_from_slice(&[0u8; 5]); // image block: always 5 bytes
     data.extend_from_slice(&(0x2611u16).to_le_bytes()); // check bullet char: ☑
     data
 }
@@ -682,7 +683,7 @@ fn hwp5_char_shape_warns_on_projection_collapses() {
 
     let (_, warnings) = store.to_hwpx_style_store_with_warnings();
 
-    assert!(warnings.iter().any(|warning| matches!(
+    assert!(!warnings.iter().any(|warning| matches!(
         warning,
         Hwp5Warning::ProjectionFallback { subject, .. }
             if *subject == "style.char_shape.underline_shape"
@@ -692,7 +693,9 @@ fn hwp5_char_shape_warns_on_projection_collapses() {
         Hwp5Warning::ProjectionFallback { subject, .. }
             if *subject == "style.char_shape.shadow_kind"
     )));
-    assert!(warnings.iter().any(|warning| matches!(
+    // Wave 1c: the strike line family is now carried, so the fallback warning
+    // must not fire.
+    assert!(!warnings.iter().any(|warning| matches!(
         warning,
         Hwp5Warning::ProjectionFallback { subject, .. }
             if *subject == "style.char_shape.strike_shape"
@@ -716,6 +719,87 @@ fn hwp5_char_shape_warns_on_projection_collapses() {
         warning,
         Hwp5Warning::ProjectionFallback { subject, reason }
             if *subject == "style.char_shape.script_scalars" && reason.contains("ratio") && reason.contains("spacing")
+    )));
+}
+
+#[test]
+fn hwp5_char_shape_warns_on_shadow_color_and_offset_when_active() {
+    let mut raw = Hwp5RawCharShape::default_for_test();
+    raw.property = 1 << 11; // shadow active (bits 11-12 carry shadow_kind_raw)
+    raw.shadow_color = 0x0011_2233;
+    raw.shadow_gap_x = 5;
+    raw.shadow_gap_y = -2;
+
+    let store = Hwp5StyleStore {
+        id_mappings: None,
+        fonts: vec![Hwp5RawFaceName {
+            property: 0,
+            face_name: "함초롬바탕".into(),
+            alternate_font_type: None,
+            alternate_font_name: None,
+            panose1: None,
+            default_font_name: None,
+        }],
+        char_shapes: vec![raw],
+        para_shapes: vec![],
+        numberings: vec![],
+        bullets: vec![],
+        tab_defs: vec![],
+        styles: vec![],
+        border_fills: vec![],
+    };
+
+    let (_, warnings) = store.to_hwpx_style_store_with_warnings();
+
+    assert!(warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, reason }
+            if *subject == "style.char_shape.shadow_color"
+                && reason.contains("0x00112233")
+    )));
+    assert!(warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, reason }
+            if *subject == "style.char_shape.shadow_offset"
+                && reason.contains("dx=5")
+                && reason.contains("dy=-2")
+    )));
+}
+
+#[test]
+fn hwp5_char_shape_skips_shadow_warnings_when_inactive() {
+    let mut raw = Hwp5RawCharShape::default_for_test();
+    // shadow_kind stays 0 => shadow is inactive
+    raw.shadow_color = 0x00FF_0000;
+    raw.shadow_gap_x = 10;
+    raw.shadow_gap_y = 7;
+
+    let store = Hwp5StyleStore {
+        id_mappings: None,
+        fonts: vec![Hwp5RawFaceName {
+            property: 0,
+            face_name: "함초롬바탕".into(),
+            alternate_font_type: None,
+            alternate_font_name: None,
+            panose1: None,
+            default_font_name: None,
+        }],
+        char_shapes: vec![raw],
+        para_shapes: vec![],
+        numberings: vec![],
+        bullets: vec![],
+        tab_defs: vec![],
+        styles: vec![],
+        border_fills: vec![],
+    };
+
+    let (_, warnings) = store.to_hwpx_style_store_with_warnings();
+
+    assert!(!warnings.iter().any(|warning| matches!(
+        warning,
+        Hwp5Warning::ProjectionFallback { subject, .. }
+            if *subject == "style.char_shape.shadow_color"
+                || *subject == "style.char_shape.shadow_offset"
     )));
 }
 
@@ -801,10 +885,15 @@ fn hwp5_para_shape_maps_break_flags_condense_and_border_fill() {
 }
 
 #[test]
-fn hwp5_para_shape_warns_on_unsupported_line_spacing_and_latin_hyphenation() {
+fn hwp5_para_shape_warns_on_unsupported_line_spacing_and_carries_latin_hyphenation() {
     let mut raw = Hwp5RawParaShape::default_for_test();
+    // bits 5-6 = 1 → HYPHENATION (Wave 1d carry).
+    // property3 = 4 → an unknown line-spacing kind (raw > 3) so the
+    // projection fallback warning still fires (Wave 2a moved raw=3
+    // out of "unsupported" into AtLeast — see the AtLeast carry test
+    // below).
     raw.property1 = 1 << 5;
-    raw.property3 = Some(3);
+    raw.property3 = Some(4);
 
     let store = Hwp5StyleStore {
         id_mappings: None,
@@ -818,18 +907,98 @@ fn hwp5_para_shape_warns_on_unsupported_line_spacing_and_latin_hyphenation() {
         border_fills: vec![],
     };
 
-    let (_, warnings) = store.to_hwpx_style_store_with_warnings();
+    let (hwpx_store, warnings) = store.to_hwpx_style_store_with_warnings();
 
     assert!(warnings.iter().any(|warning| matches!(
         warning,
         Hwp5Warning::ProjectionFallback { subject, .. }
             if *subject == "style.para_shape.line_spacing"
     )));
+    // After Wave 1d the HYPHENATION case is carried, not warned.
+    assert!(
+        !warnings.iter().any(|warning| matches!(
+            warning,
+            Hwp5Warning::ProjectionFallback { subject, .. }
+                if *subject == "style.para_shape.break_latin_word"
+        )),
+        "break_latin_word projection fallback must not fire for raw=1 (HYPHENATION) after Wave 1d"
+    );
+    let hwpx = hwpx_store
+        .para_shape(hwpforge_foundation::ParaShapeIndex::new(0))
+        .expect("projected para shape 0 must exist");
+    assert_eq!(hwpx.break_latin_word, WordBreakType::Hyphenation);
+}
+
+#[test]
+fn hwp5_para_shape_carries_at_least_line_spacing_without_warning() {
+    use hwpforge_foundation::LineSpacingType;
+
+    let mut raw = Hwp5RawParaShape::default_for_test();
+    // property3 = 3 → AT_LEAST (Wave 2a carry, was previously
+    // collapsed to Percentage with a ProjectionFallback warning).
+    raw.property3 = Some(3);
+    raw.line_spacing = 2400;
+    raw.line_spacing2 = Some(2400);
+
+    let store = Hwp5StyleStore {
+        id_mappings: None,
+        fonts: vec![],
+        char_shapes: vec![],
+        para_shapes: vec![raw],
+        numberings: vec![],
+        bullets: vec![],
+        tab_defs: vec![],
+        styles: vec![],
+        border_fills: vec![],
+    };
+
+    let (hwpx_store, warnings) = store.to_hwpx_style_store_with_warnings();
+
+    assert!(
+        !warnings.iter().any(|warning| matches!(
+            warning,
+            Hwp5Warning::ProjectionFallback { subject, .. }
+                if *subject == "style.para_shape.line_spacing"
+        )),
+        "line_spacing projection fallback must not fire for raw=3 (AT_LEAST) after Wave 2a"
+    );
+
+    let hwpx = hwpx_store
+        .para_shape(hwpforge_foundation::ParaShapeIndex::new(0))
+        .expect("projected para shape 0 must exist");
+    assert_eq!(hwpx.line_spacing_type, LineSpacingType::AtLeast);
+    assert_eq!(hwpx.line_spacing, 2400);
+}
+
+#[test]
+fn hwp5_para_shape_warns_on_unknown_latin_break_mode_3() {
+    let mut raw = Hwp5RawParaShape::default_for_test();
+    // bits 5-6 = 3 → unspecified, still warns + collapses to KEEP_WORD
+    raw.property1 = 3 << 5;
+
+    let store = Hwp5StyleStore {
+        id_mappings: None,
+        fonts: vec![],
+        char_shapes: vec![],
+        para_shapes: vec![raw],
+        numberings: vec![],
+        bullets: vec![],
+        tab_defs: vec![],
+        styles: vec![],
+        border_fills: vec![],
+    };
+
+    let (hwpx_store, warnings) = store.to_hwpx_style_store_with_warnings();
+
     assert!(warnings.iter().any(|warning| matches!(
         warning,
         Hwp5Warning::ProjectionFallback { subject, reason }
-            if *subject == "style.para_shape.break_latin_word" && reason.contains("hyphenation")
+            if *subject == "style.para_shape.break_latin_word" && reason.contains("mode 3")
     )));
+    let hwpx = hwpx_store
+        .para_shape(hwpforge_foundation::ParaShapeIndex::new(0))
+        .expect("projected para shape 0 must exist");
+    assert_eq!(hwpx.break_latin_word, WordBreakType::KeepWord);
 }
 
 #[test]
@@ -985,10 +1154,22 @@ fn hwp5_para_shape_preserves_custom_tab_ids() {
 
 #[test]
 fn hwp5_tab_def_maps_stops_and_auto_flags() {
+    // Coverage matrix below mirrors what 한컴 actually writes (Wave 4
+    // tab-fidelity hotfix). `position` is halved on the way through
+    // `hwp5_tab_position_to_hwp_unit` because the HWPX encoder treats
+    // `TabStop.position` as HwpUnitChar (= HWP5 raw HwpUnit / 2). The
+    // leader mapping was rebuilt from openhwp + the
+    // `tests/fixtures/user_samples/tabs/sample-tab.hwp{,x}` truth pair
+    // — see `.docs/research/2026-05-26_tab_fidelity_bugs.md` (Bug B1+B2)
+    // for the empirical evidence.
     let raw = Hwp5RawTabDef {
         property: 0b11,
         tab_stops: vec![
+            // fill_type=2 → openhwp IR LongDash → HWPX "DASH_DOT_DOT"
             crate::schema::header::Hwp5RawTabStop { position: 4000, tab_type: 0, fill_type: 2 },
+            // fill_type=5 is undefined in the empirical mapping → falls
+            // back to "NONE" (was "LONG_DASH" before the fix; that was
+            // incorrect — see Bug B2)
             crate::schema::header::Hwp5RawTabStop { position: 8000, tab_type: 3, fill_type: 5 },
         ],
     };
@@ -998,11 +1179,12 @@ fn hwp5_tab_def_maps_stops_and_auto_flags() {
     assert!(hwpx.auto_tab_left);
     assert!(hwpx.auto_tab_right);
     assert_eq!(hwpx.stops.len(), 2);
-    assert_eq!(hwpx.stops[0].position.as_i32(), 4000);
+    assert_eq!(hwpx.stops[0].position.as_i32(), 2000, "raw 4000 HwpUnit → 2000 HwpUnitChar");
     assert_eq!(hwpx.stops[0].align, TabAlign::Left);
-    assert_eq!(hwpx.stops[0].leader.as_hwpx_str(), "DOT");
+    assert_eq!(hwpx.stops[0].leader.as_hwpx_str(), "DASH_DOT_DOT");
+    assert_eq!(hwpx.stops[1].position.as_i32(), 4000, "raw 8000 HwpUnit → 4000 HwpUnitChar");
     assert_eq!(hwpx.stops[1].align, TabAlign::Decimal);
-    assert_eq!(hwpx.stops[1].leader.as_hwpx_str(), "LONG_DASH");
+    assert_eq!(hwpx.stops[1].leader.as_hwpx_str(), "NONE");
 }
 
 #[test]
@@ -1036,7 +1218,10 @@ fn to_hwpx_style_store_carries_tab_defs() {
     assert!(tabs[0].auto_tab_left);
     assert_eq!(tabs[0].stops.len(), 1);
     assert_eq!(tabs[0].stops[0].align, TabAlign::Right);
-    assert_eq!(tabs[0].stops[0].leader.as_hwpx_str(), "DASH");
+    // HWP5 fill_type=1 → openhwp IR Dot → HWPX "DOT" (Bug B2 fix).
+    assert_eq!(tabs[0].stops[0].leader.as_hwpx_str(), "DOT");
+    // HWP5 raw position 12000 HwpUnit halves to 6000 HwpUnitChar (Bug B1 fix).
+    assert_eq!(tabs[0].stops[0].position.as_i32(), 6000);
 }
 
 #[test]
@@ -1234,6 +1419,11 @@ fn to_hwpx_style_store_emits_placeholder_for_invalid_tab_slot() {
 
 #[test]
 fn to_hwpx_style_store_warns_and_clamps_out_of_range_tab_position() {
+    // Threshold doubles after Bug B1: the HWP5 raw position is halved
+    // before clamping into `HwpUnit::MAX_VALUE`, so to keep this test
+    // exercising the clamp path the input must be > 2 * MAX_VALUE.
+    let oversize =
+        (hwpforge_foundation::HwpUnit::MAX_VALUE as u32).saturating_mul(2).saturating_add(2);
     let store = Hwp5StyleStore {
         id_mappings: None,
         fonts: vec![],
@@ -1246,7 +1436,7 @@ fn to_hwpx_style_store_warns_and_clamps_out_of_range_tab_position() {
             Hwp5RawTabDef {
                 property: 0,
                 tab_stops: vec![crate::schema::header::Hwp5RawTabStop {
-                    position: (hwpforge_foundation::HwpUnit::MAX_VALUE as u32) + 1,
+                    position: oversize,
                     tab_type: 0,
                     fill_type: 0,
                 }],

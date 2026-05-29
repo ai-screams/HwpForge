@@ -17,22 +17,16 @@ use crate::schema::section::{
 
 use super::section::{convert_hx_caption, decode_sublist_paragraphs, parse_hex_color};
 
-/// Decodes an `HxRect`'s draw text into a Core `Run` with `Control::TextBox`, if present.
+/// Decodes an `HxRect` into a Core `Run`.
 ///
-/// Only rects with `<hp:drawText>` are treated as textboxes; rects without
-/// text content (pure shapes) are silently skipped.
+/// Rects with `<hp:drawText>` become [`Control::TextBox`] (textbox with embedded
+/// paragraphs). Rects without `<hp:drawText>` become [`Control::Rect`] (pure
+/// rectangle shape).
 pub(crate) fn decode_textbox(
     rect: &HxRect,
     char_shape_id: CharShapeIndex,
     depth: usize,
 ) -> HwpxResult<Option<Run>> {
-    let draw_text = match &rect.draw_text {
-        Some(dt) => dt,
-        None => return Ok(None),
-    };
-
-    let paragraphs = decode_sublist_paragraphs(&draw_text.sub_list, depth)?;
-
     // Extract width/height from sz, falling back to zero
     let (width, height) = rect
         .sz
@@ -59,18 +53,15 @@ pub(crate) fn decode_textbox(
         &rect.dropcap_style,
     );
 
-    Ok(Some(Run {
-        content: RunContent::Control(Box::new(Control::TextBox {
-            paragraphs,
-            width,
-            height,
-            horz_offset,
-            vert_offset,
-            caption,
-            style,
-        })),
-        char_shape_id,
-    }))
+    let control = match &rect.draw_text {
+        Some(draw_text) => {
+            let paragraphs = decode_sublist_paragraphs(&draw_text.sub_list, depth)?;
+            Control::TextBox { paragraphs, width, height, horz_offset, vert_offset, caption, style }
+        }
+        None => Control::Rect { width, height, horz_offset, vert_offset, caption, style },
+    };
+
+    Ok(Some(Run { content: RunContent::Control(Box::new(control)), char_shape_id }))
 }
 
 /// Decodes an `HxLine` into a Core `Run` with `Control::Line`.
@@ -1489,6 +1480,63 @@ mod tests {
             assert_eq!(height, hwpforge_foundation::HwpUnit::ZERO);
         } else {
             panic!("expected Control::Line");
+        }
+    }
+
+    fn default_rect(width: i32, height: i32) -> HxRect {
+        HxRect {
+            id: String::new(),
+            z_order: 0,
+            numbering_type: "NONE".to_string(),
+            text_wrap: "TOP_AND_BOTTOM".to_string(),
+            text_flow: "BOTH_SIDES".to_string(),
+            lock: 0,
+            dropcap_style: "None".to_string(),
+            href: String::new(),
+            group_level: 0,
+            instid: String::new(),
+            ratio: 0,
+            offset: None,
+            org_sz: None,
+            cur_sz: None,
+            flip: None,
+            rotation_info: None,
+            rendering_info: None,
+            line_shape: None,
+            fill_brush: None,
+            shadow: None,
+            sz: Some(crate::schema::section::HxTableSz {
+                width,
+                width_rel_to: "ABSOLUTE".to_string(),
+                height,
+                height_rel_to: "ABSOLUTE".to_string(),
+                protect: 0,
+            }),
+            pos: None,
+            out_margin: None,
+            shape_comment: None,
+            caption: None,
+            draw_text: None,
+            pt0: None,
+            pt1: None,
+            pt2: None,
+            pt3: None,
+        }
+    }
+
+    #[test]
+    fn decode_rect_without_draw_text_produces_control_rect() {
+        let rect = default_rect(8000, 4000);
+        let cs = CharShapeIndex::new(0);
+        let run = decode_textbox(&rect, cs, 0).unwrap().expect("pure rect must decode to a Run");
+        match run.content.as_control().unwrap().clone() {
+            Control::Rect { width, height, horz_offset, vert_offset, .. } => {
+                assert_eq!(width, hwpforge_foundation::HwpUnit::new(8000).unwrap());
+                assert_eq!(height, hwpforge_foundation::HwpUnit::new(4000).unwrap());
+                assert_eq!(horz_offset, 0);
+                assert_eq!(vert_offset, 0);
+            }
+            other => panic!("expected Control::Rect, got {other:?}"),
         }
     }
 

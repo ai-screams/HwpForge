@@ -11,8 +11,8 @@ use hwpforge_core::image::{
     Image, ImageFormat, ImagePlacement, ImageRelativeTo, ImageStore, ImageTextFlow, ImageTextWrap,
 };
 use hwpforge_core::paragraph::Paragraph;
-use hwpforge_core::run::Run;
-use hwpforge_core::section::{HeaderFooter, PageNumber, Section};
+use hwpforge_core::run::{Run, RunContent};
+use hwpforge_core::section::{HeaderFooter, PageBorderFillEntry, PageNumber, Section};
 use hwpforge_core::table::{Table, TableCell, TableMargin, TableRow};
 use hwpforge_core::Control;
 use hwpforge_core::PageSettings;
@@ -21,8 +21,10 @@ use hwpforge_foundation::{
     RefContentType, RefType, StyleIndex,
 };
 
+use crate::decoder::chart_ole::{extract_chart_payload, ChartOleError};
 use crate::decoder::section::{
-    Hwp5Control, Hwp5ImageControl, Hwp5LineControl, Hwp5Paragraph, Hwp5PolygonControl, Hwp5Table,
+    Hwp5Control, Hwp5ImageControl, Hwp5LineControl, Hwp5NestedSubtree, Hwp5OleObjectControl,
+    Hwp5PageBorderFill, Hwp5Paragraph, Hwp5PolygonControl, Hwp5RectControl, Hwp5Table,
     Hwp5TableCell, Hwp5TextBoxControl, SectionResult,
 };
 use crate::decoder::Hwp5Warning;
@@ -36,7 +38,7 @@ use crate::table_cell_vertical_align::{
 };
 use crate::table_page_break::{core_table_page_break, unknown_hwp5_table_page_break_raw};
 use crate::warning_utils::push_projection_fallback;
-use crate::{Hwp5JoinedImageAsset, Hwp5JoinedImageAssetPlan};
+use crate::{Hwp5JoinedImageAsset, Hwp5JoinedImageAssetPlan, Hwp5OleAssetPlan};
 
 const CTRL_ID_SECTION_DEF: u32 = 0x7365_6364; // "secd"
 const CTRL_ID_COLUMN_DEF: u32 = 0x636F_6C64; // "cold"
@@ -83,7 +85,6 @@ impl SectionProjectionHints {
 #[derive(Debug)]
 struct ProjectedParagraph {
     paragraph: Paragraph,
-    page_number: Option<PageNumber>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -97,7 +98,6 @@ struct ParagraphProjectionQueues<'a> {
     marker_headers: VecDeque<UnknownControlHeader<'a>>,
     object_controls: VecDeque<&'a Hwp5Control>,
     point_bookmark_names: VecDeque<String>,
-    page_number: Option<PageNumber>,
 }
 
 #[derive(Debug)]
@@ -118,7 +118,7 @@ enum ActiveField {
 pub(crate) fn project_to_core(
     sections: Vec<SectionResult>,
 ) -> Hwp5Result<(Document<Draft>, Vec<Hwp5Warning>)> {
-    let (document, _image_store, warnings) = project_to_core_internal(sections, None)?;
+    let (document, _image_store, warnings) = project_to_core_internal(sections, None, None)?;
     Ok((document, warnings))
 }
 
@@ -127,16 +127,30 @@ pub(crate) fn project_to_core_with_images(
     sections: Vec<SectionResult>,
     image_assets: &Hwp5JoinedImageAssetPlan,
 ) -> Hwp5Result<(Document<Draft>, ImageStore, Vec<Hwp5Warning>)> {
-    project_to_core_internal(sections, Some(image_assets))
+    project_to_core_internal(sections, Some(image_assets), None)
+}
+
+/// Project decoded HWP5 sections into Core with both image and OLE asset plans.
+///
+/// Used by [`crate::hwp5_to_hwpx_bytes`] so the projection layer can attempt
+/// chart payload extraction from `/BinData/BIN*.OLE` entries and emit
+/// [`hwpforge_core::Control::EmbeddedChart`] runs (Wave 4c carry).
+pub(crate) fn project_to_core_with_images_and_ole(
+    sections: Vec<SectionResult>,
+    image_assets: &Hwp5JoinedImageAssetPlan,
+    ole_assets: &Hwp5OleAssetPlan,
+) -> Hwp5Result<(Document<Draft>, ImageStore, Vec<Hwp5Warning>)> {
+    project_to_core_internal(sections, Some(image_assets), Some(ole_assets))
 }
 
 fn project_to_core_internal(
     sections: Vec<SectionResult>,
     image_assets: Option<&Hwp5JoinedImageAssetPlan>,
+    ole_assets: Option<&Hwp5OleAssetPlan>,
 ) -> Hwp5Result<(Document<Draft>, ImageStore, Vec<Hwp5Warning>)> {
     let mut doc = Document::<Draft>::new();
     let mut all_warnings: Vec<Hwp5Warning> = Vec::new();
-    let mut projection_images = ProjectionImageState::new(image_assets);
+    let mut projection_images = ProjectionImageState::new(image_assets, ole_assets);
 
     for section_result in sections {
         // Collect warnings from decoding.
@@ -150,15 +164,47 @@ fn project_to_core_internal(
             .unwrap_or_else(PageSettings::a4);
 
         let mut section = Section::new(page_settings);
+        // Gap B: decode the `secd` ctrl property word (HWP 5.0 spec
+        // §4.3.10.1 표 130) into Core's `Visibility`. Bits 0~5 + 8/9 +
+        // 19 map 1:1 to the HWPX `<hp:visibility>` element. `None` →
+        // don't override the Core default (matches pre-Wave-5
+        // behavior). See
+        // `.docs/debug/2026-05-27_hwp5_page_features_lost.md` (gap B).
+        if let Some(properties) = section_result.section_def_properties {
+            section.visibility = Some(hwp5_section_properties_to_visibility(properties));
+        }
+        // Wave 7: carry the section's page border/fill references
+        // (HWPTAG_PAGE_BORDER_FILL, 0x4B). The borderFill *definitions*
+        // already reach the HWPX style store; without this the encoder
+        // fabricates a default `borderFillIDRef="1"` (an invisible
+        // border). 한글 emits exactly three records in [BOTH, EVEN, ODD]
+        // order. See `.docs/debug/2026-05-29_hwp5_page_border_fill.md`.
+        if !section_result.page_border_fills.is_empty() {
+            section.page_border_fills = Some(hwp5_page_border_fills_to_entries(
+                &section_result.page_border_fills,
+                &mut projection_images.warnings,
+            ));
+        }
         let mut section_field_hints =
             SectionProjectionHints::from_paragraphs(&section_result.paragraphs);
-        let mut header_paragraphs: Vec<Paragraph> = Vec::new();
-        let mut footer_paragraphs: Vec<Paragraph> = Vec::new();
+        // ADR-002 + gap A: collect per-ctrl subtrees instead of
+        // flattening all headers/footers into one. Each tuple is
+        // `(projected paragraphs, raw 4-byte property field)` so the
+        // applyPageType bits survive (HWP 5.0 spec §4.3.10.3 표 141).
+        let mut header_subtrees: Vec<(Vec<Paragraph>, u32)> = Vec::new();
+        let mut footer_subtrees: Vec<(Vec<Paragraph>, u32)> = Vec::new();
+
+        // The page number is a section-level property. 한글 stores its `pgnp`
+        // control in a top-level body paragraph OR inside a layout table cell,
+        // so resolve it once by scanning the whole body (recursing into table
+        // cells) rather than treating it as a per-paragraph output.
+        section.page_number =
+            find_section_page_number(&section_result.paragraphs, &mut projection_images.warnings);
 
         // Project each paragraph.
         for hwp_para in section_result.paragraphs {
-            header_paragraphs.extend(collect_header_paragraphs(&hwp_para, &mut projection_images));
-            footer_paragraphs.extend(collect_footer_paragraphs(&hwp_para, &mut projection_images));
+            header_subtrees.extend(collect_header_subtrees(&hwp_para, &mut projection_images));
+            footer_subtrees.extend(collect_footer_subtrees(&hwp_para, &mut projection_images));
 
             let projected = project_paragraph_with_images(
                 &hwp_para,
@@ -166,17 +212,28 @@ fn project_to_core_internal(
                 ImageProjectionContext::Flow,
                 Some(&mut section_field_hints),
             );
-            if section.page_number.is_none() {
-                section.page_number = projected.page_number;
-            }
             section.add_paragraph(projected.paragraph);
         }
 
-        if !header_paragraphs.is_empty() {
-            section.header = Some(HeaderFooter::all_pages(header_paragraphs));
+        // ADR-002 + gap A: per-ctrl applyPageType carry.
+        //
+        // HWP 5.0 spec §4.3.10.3 표 141: header/footer ctrl payload's
+        // bytes [4..8] hold a property word whose bit 0~1 encode the
+        // page-type scope (0=BOTH, 1=EVEN, 2=ODD). The decoder
+        // preserved this as `Hwp5NestedSubtree.properties_raw`; here
+        // each subtree becomes its own `HeaderFooter` entry so HWPX
+        // emits matching `<hp:header applyPageType="..."/>` × N.
+        for (paragraphs, properties_raw) in header_subtrees {
+            section.headers.push(HeaderFooter::new(
+                paragraphs,
+                hwp5_header_property_to_apply_page_type(properties_raw),
+            ));
         }
-        if !footer_paragraphs.is_empty() {
-            section.footer = Some(HeaderFooter::all_pages(footer_paragraphs));
+        for (paragraphs, properties_raw) in footer_subtrees {
+            section.footers.push(HeaderFooter::new(
+                paragraphs,
+                hwp5_header_property_to_apply_page_type(properties_raw),
+            ));
         }
 
         // Ensure every section has at least one paragraph (validation requirement).
@@ -210,6 +267,7 @@ fn project_to_core_internal(
 
 struct ProjectionImageState<'a> {
     image_assets: Option<&'a Hwp5JoinedImageAssetPlan>,
+    ole_assets: Option<&'a Hwp5OleAssetPlan>,
     image_store: ImageStore,
     warnings: Vec<Hwp5Warning>,
 }
@@ -221,8 +279,17 @@ enum ImageProjectionContext {
 }
 
 impl<'a> ProjectionImageState<'a> {
-    fn new(image_assets: Option<&'a Hwp5JoinedImageAssetPlan>) -> Self {
-        Self { image_assets, image_store: ImageStore::new(), warnings: Vec::new() }
+    fn new(
+        image_assets: Option<&'a Hwp5JoinedImageAssetPlan>,
+        ole_assets: Option<&'a Hwp5OleAssetPlan>,
+    ) -> Self {
+        Self { image_assets, ole_assets, image_store: ImageStore::new(), warnings: Vec::new() }
+    }
+
+    /// Look up raw `/BinData/BIN*.OLE` bytes by `binary_data_id`, if a plan
+    /// was supplied. `None` means no OLE plan is wired (e.g. inspect path).
+    fn ole_bytes_for_binary_data_id(&self, binary_data_id: u16) -> Option<&[u8]> {
+        self.ole_assets.and_then(|plan| plan.bytes_for_binary_data_id(binary_data_id))
     }
 
     fn build_image(
@@ -337,23 +404,132 @@ fn project_paragraph_with_images(
     image_context: ImageProjectionContext,
     field_hints: Option<&mut SectionProjectionHints>,
 ) -> ProjectedParagraph {
-    if !paragraph_needs_structural_projection(hwp_para) {
-        return ProjectedParagraph {
+    let mut projected = if !paragraph_needs_structural_projection(hwp_para) {
+        ProjectedParagraph {
             paragraph: project_paragraph_with_images_flat(
                 hwp_para,
                 projection_images,
                 image_context,
             ),
-            page_number: None,
-        };
+        }
+    } else {
+        project_paragraph_with_images_structural(
+            hwp_para,
+            projection_images,
+            image_context,
+            field_hints,
+        )
+    };
+
+    // Carry inline `<hp:tab>` attributes (width / leader / type) by
+    // lifting `RunContent::Text(String)` runs that contain `\t` into
+    // `RunContent::InlineText(InlineText)` whenever the matching tab
+    // metadata is non-default. The flat and structural projection
+    // paths both leave tabs as plain `\t` chars, so this is the one
+    // place that bridges to the rich inline representation.
+    //
+    // Any tab metadata that isn't carried (because the corresponding
+    // tab character was consumed by a hyperlink display or field
+    // begin/end pair) still falls through to the warning below, so the
+    // audit baseline keeps a foothold on the silent loss.
+    let unconsumed = carry_inline_tab_attrs(&mut projected.paragraph, &hwp_para.text_segments);
+    for (width, leader, tab_type) in unconsumed {
+        projection_images.warnings.push(crate::decoder::Hwp5Warning::ProjectionFallback {
+            subject: "inline_tab.attributes",
+            reason: format!(
+                "inline <hp:tab> attributes dropped (no run carrier): width={width} leader={leader} tab_type={tab_type}"
+            ),
+        });
     }
 
-    project_paragraph_with_images_structural(
-        hwp_para,
-        projection_images,
-        image_context,
-        field_hints,
-    )
+    projected
+}
+
+/// Walks `text_segments` collecting non-default inline tab attributes
+/// in order, then upgrades each `Text(String)` run that contains `\t`
+/// into `InlineText(InlineText)` with the corresponding tab attributes
+/// substituted at each `\t` position.
+///
+/// Returns the list of `(width, leader, tab_type)` tuples for tabs
+/// that could not be associated with any text run (e.g. tabs consumed
+/// inside a hyperlink display or by a field begin/end pair). Callers
+/// turn these into warnings so the audit baseline still surfaces the
+/// loss.
+fn carry_inline_tab_attrs(
+    paragraph: &mut Paragraph,
+    text_segments: &[crate::schema::section::TextSegment],
+) -> Vec<(u32, u8, u8)> {
+    use hwpforge_core::inline::{InlineSegment, InlineTabAttr, InlineText};
+    use hwpforge_core::tab::TabDef;
+    use hwpforge_foundation::HwpUnit;
+    use std::collections::VecDeque;
+
+    let mut attrs_q: VecDeque<InlineTabAttr> = VecDeque::new();
+    for seg in text_segments {
+        let crate::schema::section::TextSegment::Tab { extra } = seg else {
+            continue;
+        };
+        let width = u32::from_le_bytes([extra[0], extra[1], extra[2], extra[3]]);
+        let leader = extra[4];
+        let tab_type = extra[5];
+        attrs_q.push_back(InlineTabAttr {
+            // HWP5 stores raw HwpUnit; cap by the same helper that
+            // backs `TabStop.position` so the value always fits Core's
+            // ±100M `HwpUnit` range without losing the inline tab.
+            width: TabDef::clamp_position_from_unsigned(u64::from(width)),
+            leader,
+            tab_type,
+        });
+    }
+    if attrs_q.is_empty() {
+        return Vec::new();
+    }
+
+    for run in &mut paragraph.runs {
+        let text = match &run.content {
+            RunContent::Text(s) if s.contains('\t') => s.clone(),
+            _ => continue,
+        };
+        let tab_count = text.chars().filter(|&c| c == '\t').count();
+        let mut run_attrs: Vec<InlineTabAttr> = Vec::with_capacity(tab_count);
+        for _ in 0..tab_count {
+            run_attrs.push(attrs_q.pop_front().unwrap_or(InlineTabAttr {
+                width: HwpUnit::ZERO,
+                leader: 0,
+                tab_type: 0,
+            }));
+        }
+        // Skip the upgrade when every tab is the default — keeps the
+        // common `Text(String)` representation for plain `\t` runs.
+        if run_attrs.iter().all(InlineTabAttr::is_default) {
+            continue;
+        }
+        let mut segments: Vec<InlineSegment> = Vec::new();
+        let mut current = String::new();
+        let mut iter = run_attrs.into_iter();
+        for ch in text.chars() {
+            if ch == '\t' {
+                if !current.is_empty() {
+                    segments.push(InlineSegment::Plain(std::mem::take(&mut current)));
+                }
+                if let Some(attr) = iter.next() {
+                    segments.push(InlineSegment::Tab(attr));
+                }
+            } else {
+                current.push(ch);
+            }
+        }
+        if !current.is_empty() {
+            segments.push(InlineSegment::Plain(current));
+        }
+        run.content = RunContent::InlineText(InlineText::from_segments(segments));
+    }
+
+    attrs_q
+        .into_iter()
+        .filter(|a| !a.is_default())
+        .map(|a| (a.width.as_i32() as u32, a.leader, a.tab_type))
+        .collect()
 }
 
 fn project_paragraph_with_images_flat(
@@ -448,7 +624,11 @@ fn project_paragraph_with_images_structural(
                 }
                 visible_utf16 += len;
             }
-            crate::schema::section::TextSegment::Tab => {
+            crate::schema::section::TextSegment::Tab { .. } => {
+                // Inline tab metadata is dropped here; `<hp:tab>`
+                // attribute carry is tracked separately by
+                // `warn_on_inline_tab_attributes` to cover both the
+                // flat and structural projection branches uniformly.
                 append_visible_unit(
                     hwp_para,
                     &mut runs,
@@ -467,12 +647,27 @@ fn project_paragraph_with_images_structural(
                 );
             }
             crate::schema::section::TextSegment::NonBreakingSpace => {
+                // Sentinel: U+00A0 is the canonical NBSP code-point and is
+                // what `inline_text::encode_inline_text_xml` translates back
+                // into `<hp:nbSpace/>` on HWPX emit.
                 append_visible_unit(
                     hwp_para,
                     &mut runs,
                     &mut active_field,
                     &mut visible_utf16,
-                    ' ',
+                    '\u{00A0}',
+                );
+            }
+            crate::schema::section::TextSegment::FwSpace => {
+                // Sentinel: U+001F mirrors the HWP5 wire control byte for
+                // fixed-width space and is what `inline_text` translates back
+                // into `<hp:fwSpace/>` on HWPX emit.
+                append_visible_unit(
+                    hwp_para,
+                    &mut runs,
+                    &mut active_field,
+                    &mut visible_utf16,
+                    '\u{001F}',
                 );
             }
             crate::schema::section::TextSegment::ControlRef { .. }
@@ -549,7 +744,7 @@ fn project_paragraph_with_images_structural(
         paragraph = paragraph.with_style(StyleIndex::new(hwp_para.style_id as usize));
     }
 
-    ProjectedParagraph { paragraph, page_number: queues.page_number }
+    ProjectedParagraph { paragraph }
 }
 
 fn append_visible_unit(
@@ -597,7 +792,6 @@ fn build_paragraph_projection_queues<'a>(
     let mut marker_headers = VecDeque::new();
     let mut object_controls = VecDeque::new();
     let mut point_bookmark_names = VecDeque::new();
-    let mut page_number = None;
     let mut field_hints = field_hints;
 
     for control in &hwp_para.controls {
@@ -612,19 +806,11 @@ fn build_paragraph_projection_queues<'a>(
             | CTRL_ID_BOOKMARK_SPAN
             | CTRL_ID_HYPERLINK
             | CTRL_ID_CROSSREF => marker_headers.push_back(unknown),
-            CTRL_ID_PAGE_NUMBER => {
-                page_number = parse_page_number_control(unknown.header_data).or_else(|| {
-                    projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
-                        subject: "field.page_number",
-                        reason: "falling back to BOTTOM_CENTER digit page number".to_string(),
-                    });
-                    Some(PageNumber::with_decoration(
-                        PageNumberPosition::BottomCenter,
-                        NumberFormatType::Digit,
-                        "-".to_string(),
-                    ))
-                });
-            }
+            // Page numbers are resolved at section level by
+            // `find_section_page_number` (which also reaches `pgnp` controls
+            // inside table cells). Skip here so it is not mistaken for a
+            // generic object control.
+            CTRL_ID_PAGE_NUMBER => {}
             CTRL_ID_BOOKMARK_POINT => {
                 if let Some(name) =
                     field_hints.as_deref_mut().and_then(SectionProjectionHints::take_bookmark_name)
@@ -642,7 +828,7 @@ fn build_paragraph_projection_queues<'a>(
         }
     }
 
-    ParagraphProjectionQueues { marker_headers, object_controls, point_bookmark_names, page_number }
+    ParagraphProjectionQueues { marker_headers, object_controls, point_bookmark_names }
 }
 
 fn start_active_field(
@@ -771,45 +957,171 @@ fn finish_active_field(
     }
 }
 
-fn collect_header_paragraphs(
+/// Gathers each `Hwp5Control::Header` subtree separately, returning a
+/// `(projected paragraphs, raw 4-byte properties)` tuple per ctrl.
+///
+/// ADR-002 + gap A: cardinality is preserved (one tuple per `head`
+/// ctrl) so projection can map each ctrl to its own `<hp:header
+/// applyPageType="..."/>` element.
+fn collect_header_subtrees(
     paragraph: &Hwp5Paragraph,
     projection_images: &mut ProjectionImageState<'_>,
-) -> Vec<Paragraph> {
-    collect_subtree_paragraphs(paragraph, projection_images, |control| match control {
-        Hwp5Control::Header(subtree) => Some(&subtree.paragraphs),
+) -> Vec<(Vec<Paragraph>, u32)> {
+    collect_subtree_units(paragraph, projection_images, |control| match control {
+        Hwp5Control::Header(subtree) => Some((&subtree.paragraphs, subtree.properties_raw)),
         _ => None,
     })
 }
 
-fn collect_footer_paragraphs(
+/// Mirror of [`collect_header_subtrees`] for `Hwp5Control::Footer`.
+fn collect_footer_subtrees(
     paragraph: &Hwp5Paragraph,
     projection_images: &mut ProjectionImageState<'_>,
-) -> Vec<Paragraph> {
-    collect_subtree_paragraphs(paragraph, projection_images, |control| match control {
-        Hwp5Control::Footer(subtree) => Some(&subtree.paragraphs),
+) -> Vec<(Vec<Paragraph>, u32)> {
+    collect_subtree_units(paragraph, projection_images, |control| match control {
+        Hwp5Control::Footer(subtree) => Some((&subtree.paragraphs, subtree.properties_raw)),
         _ => None,
     })
 }
 
-fn collect_subtree_paragraphs<F>(
+/// Decode the `applyPageType` semantic from a HWP5 head/foot ctrl's
+/// raw property word (HWP 5.0 spec §4.3.10.3 표 141).
+fn hwp5_header_property_to_apply_page_type(
+    properties_raw: u32,
+) -> hwpforge_foundation::ApplyPageType {
+    use hwpforge_foundation::ApplyPageType;
+    match properties_raw & 0b11 {
+        1 => ApplyPageType::Even,
+        2 => ApplyPageType::Odd,
+        // 0 (BOTH) and any unspecified/extension bits default to Both.
+        _ => ApplyPageType::Both,
+    }
+}
+
+/// Decode the `secd` ctrl property word (HWP 5.0 spec §4.3.10.1
+/// 표 130) into Core's [`Visibility`](hwpforge_core::section::Visibility).
+///
+/// Bit-to-field mapping (matches HWPX `<hp:visibility>` 1:1):
+///
+/// | bit | spec gloss | Core field |
+/// |----:|------------|------------|
+/// | 0 | 머리말을 감출지 여부 | `hide_first_header` |
+/// | 1 | 꼬리말을 감출지 여부 | `hide_first_footer` |
+/// | 2 | 바탕쪽을 감출지 여부 | `hide_first_master_page` |
+/// | 3 | 테두리를 감출지 여부 | (informational; Core `border` enum is `ShowMode`) |
+/// | 4 | 배경을 감출지 여부   | (informational; `fill` is `ShowMode`) |
+/// | 5 | 쪽 번호 위치를 감출지 여부 | `hide_first_page_num` |
+/// | 19 | 빈 줄 감춤 여부 | `hide_first_empty_line` |
+///
+/// `border` / `fill` themselves stay at their `ShowMode::ShowAll`
+/// default — these are full-section visibility, not first-page-only,
+/// and a separate slice promotes them.
+fn hwp5_section_properties_to_visibility(properties: u32) -> hwpforge_core::section::Visibility {
+    hwpforge_core::section::Visibility {
+        hide_first_header: (properties & 1) != 0,
+        hide_first_footer: (properties & (1 << 1)) != 0,
+        hide_first_master_page: (properties & (1 << 2)) != 0,
+        hide_first_page_num: (properties & (1 << 5)) != 0,
+        hide_first_empty_line: (properties & (1 << 19)) != 0,
+        ..hwpforge_core::section::Visibility::default()
+    }
+}
+
+/// Maps decoded `HWPTAG_PAGE_BORDER_FILL` records to Core
+/// [`PageBorderFillEntry`] values.
+///
+/// `apply_type` (`BOTH` / `EVEN` / `ODD`) is **not** carried inside each
+/// record — it is purely positional. 한글 writes exactly three records in
+/// `[BOTH, EVEN, ODD]` order, so the index selects `apply_type`. (The
+/// EVEN/ODD records are byte-identical in the common "no border" case, so
+/// only the leading `BOTH` slot has been empirically confirmed; see the
+/// backlog note in `.docs/debug/2026-05-29_hwp5_page_border_fill.md`.)
+///
+/// Per the project's "warning-first for unknowns" rule, a record count
+/// other than three is surfaced as a `ProjectionFallback` warning and the
+/// mapping is bounded to the three known slots so we never silently emit a
+/// duplicate `ODD` entry.
+///
+/// `border_fill_id` indexes the HWPX style store directly (1-based, no
+/// remapping — the borderFill definitions decode into the store with
+/// matching ids).
+///
+/// `properties` bit semantics (verified against the
+/// `sample-page-border-fill` 한글 fixture; only this fixture so far, so
+/// the bit-0 → text-border mapping is asserted from observed truth):
+/// - bit 0: border base — set → `"PAPER"` (paper edge), clear →
+///   `"CONTENT"` (text area)
+/// - bit 1 / 2: include header / footer in the border area
+/// - bit 3: fill area — set → `"PAGE"`, clear → `"PAPER"`
+fn hwp5_page_border_fills_to_entries(
+    records: &[Hwp5PageBorderFill],
+    warnings: &mut Vec<Hwp5Warning>,
+) -> Vec<PageBorderFillEntry> {
+    if records.len() != 3 {
+        warnings.push(Hwp5Warning::ProjectionFallback {
+            subject: "page_border_fill.count",
+            reason: format!(
+                "expected 3 page border fill records ([BOTH, EVEN, ODD]); found {}. \
+                 apply_type is positional, so mapping the first 3 by index",
+                records.len()
+            ),
+        });
+    }
+    records
+        .iter()
+        .take(3)
+        .enumerate()
+        .map(|(idx, rec)| {
+            let apply_type = match idx {
+                0 => "BOTH",
+                1 => "EVEN",
+                _ => "ODD",
+            };
+            let text_border = if rec.properties & 0b1 != 0 { "PAPER" } else { "CONTENT" };
+            let fill_area = if rec.properties & 0b1000 != 0 { "PAGE" } else { "PAPER" };
+            let offset = |raw: u16| HwpUnit::new(i32::from(raw)).unwrap_or_default();
+            PageBorderFillEntry {
+                apply_type: apply_type.to_string(),
+                border_fill_id: u32::from(rec.border_fill_id),
+                text_border: text_border.to_string(),
+                header_inside: rec.properties & 0b10 != 0,
+                footer_inside: rec.properties & 0b100 != 0,
+                fill_area: fill_area.to_string(),
+                offset: [
+                    offset(rec.offsets[0]),
+                    offset(rec.offsets[1]),
+                    offset(rec.offsets[2]),
+                    offset(rec.offsets[3]),
+                ],
+            }
+        })
+        .collect()
+}
+
+/// Cardinality-preserving collector for header/footer-style ctrls:
+/// returns one `(projected paragraphs, extra)` tuple per matching ctrl
+/// instead of flattening across all ctrls. Used by gap A to keep each
+/// `head`/`foot` ctrl separable for `applyPageType` decoding.
+fn collect_subtree_units<F, X>(
     paragraph: &Hwp5Paragraph,
     projection_images: &mut ProjectionImageState<'_>,
-    paragraphs_for_control: F,
-) -> Vec<Paragraph>
+    unit_for_control: F,
+) -> Vec<(Vec<Paragraph>, X)>
 where
-    F: Fn(&Hwp5Control) -> Option<&Vec<Hwp5Paragraph>>,
+    F: Fn(&Hwp5Control) -> Option<(&Vec<Hwp5Paragraph>, X)>,
 {
-    let mut projected: Vec<Paragraph> = Vec::new();
+    let mut units: Vec<(Vec<Paragraph>, X)> = Vec::new();
     for control in &paragraph.controls {
-        if let Some(nested_paragraphs) = paragraphs_for_control(control) {
-            projected.extend(project_nested_paragraphs(
+        if let Some((nested_paragraphs, extra)) = unit_for_control(control) {
+            let projected = project_nested_paragraphs(
                 nested_paragraphs,
                 projection_images,
                 ImageProjectionContext::Flow,
-            ));
+            );
+            units.push((projected, extra));
         }
     }
-    projected
+    units
 }
 
 fn project_nested_paragraphs(
@@ -879,6 +1191,55 @@ fn parse_crossref_target_name(header_data: &[u8]) -> Option<String> {
     (!target.is_empty()).then(|| target.to_string())
 }
 
+/// Resolves a `pgnp` (page-number) control header into a [`PageNumber`],
+/// falling back to a BOTTOM_CENTER digit page number (with a warning) when the
+/// decoration payload can't be parsed.
+fn page_number_from_pgnp_header(header_data: &[u8], warnings: &mut Vec<Hwp5Warning>) -> PageNumber {
+    parse_page_number_control(header_data).unwrap_or_else(|| {
+        warnings.push(Hwp5Warning::ProjectionFallback {
+            subject: "field.page_number",
+            reason: "falling back to BOTTOM_CENTER digit page number".to_string(),
+        });
+        PageNumber::with_decoration(
+            PageNumberPosition::BottomCenter,
+            NumberFormatType::Digit,
+            "-".to_string(),
+        )
+    })
+}
+
+/// Finds the section's page number: the first `pgnp` control anywhere in the
+/// section body, including inside layout-table cells (recursively).
+///
+/// A page number is a section-level property even when 한글 stores its control
+/// inside a table cell, so a body-paragraph-only scan misses those. The search
+/// short-circuits on the first match. Header/footer/note subtrees are
+/// intentionally excluded — those carry their own content and are projected
+/// separately.
+fn find_section_page_number(
+    paragraphs: &[Hwp5Paragraph],
+    warnings: &mut Vec<Hwp5Warning>,
+) -> Option<PageNumber> {
+    for paragraph in paragraphs {
+        for control in &paragraph.controls {
+            match control {
+                Hwp5Control::Unknown { ctrl_id: CTRL_ID_PAGE_NUMBER, header_data } => {
+                    return Some(page_number_from_pgnp_header(header_data, warnings));
+                }
+                Hwp5Control::Table(table) => {
+                    for cell in &table.cells {
+                        if let Some(found) = find_section_page_number(&cell.paragraphs, warnings) {
+                            return Some(found);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    None
+}
+
 fn parse_page_number_control(header_data: &[u8]) -> Option<PageNumber> {
     let pos_code = *header_data.get(5)?;
     let position = match pos_code {
@@ -941,24 +1302,107 @@ fn project_control_run(
             .build_image(image, image_context)
             .map(|core_image| Run::image(core_image, CharShapeIndex::new(0))),
         Hwp5Control::Line(line) => Some(project_line_run(line)),
-        Hwp5Control::Rect(_) => {
+        Hwp5Control::Rect(rect) => project_rect_run(rect),
+        Hwp5Control::Polygon(polygon) => Some(project_polygon_run(polygon)),
+        Hwp5Control::TextBox(textbox) => Some(project_textbox_run(textbox, projection_images)),
+        Hwp5Control::Footnote(subtree) => Some(project_footnote_run(subtree, projection_images)),
+        Hwp5Control::Endnote(subtree) => Some(project_endnote_run(subtree, projection_images)),
+        Hwp5Control::Header(_) | Hwp5Control::Footer(_) | Hwp5Control::Unknown { .. } => None,
+        Hwp5Control::OleObject(ole) => project_ole_object_run(ole, projection_images),
+    }
+}
+
+/// Projects a HWP5 OLE object control into a Core run.
+///
+/// HWP5 represents charts as OLE-backed BinData blobs (DEFLATE-compressed
+/// `.OLE` streams whose inner OLE2 carries `/OOXMLChartContents`). When the
+/// payload is recognizable as a chart we carry it as
+/// [`Control::EmbeddedChart`] (Wave 4c); otherwise we fall back to a
+/// `DroppedControl:ole_object` warning whose reason explains why.
+///
+/// Requires a populated [`Hwp5OleAssetPlan`] in `projection_images`; if no
+/// plan is wired (e.g. inspect-only paths), we drop with a clear reason.
+fn project_ole_object_run(
+    ole: &Hwp5OleObjectControl,
+    projection_images: &mut ProjectionImageState<'_>,
+) -> Option<Run> {
+    let Some(raw_bytes) = projection_images.ole_bytes_for_binary_data_id(ole.binary_data_id) else {
+        projection_images.warnings.push(Hwp5Warning::DroppedControl {
+            control: "ole_object",
+            reason: format!("ole_bin_data_unavailable binary_data_id={}", ole.binary_data_id),
+        });
+        return None;
+    };
+
+    match extract_chart_payload(raw_bytes) {
+        Ok(payload) => {
+            // Dimensions come from the `ShapeComponentOle` extent fields,
+            // which the HWP5 decoder already stored as i32 HWPUNIT. The
+            // geometry x/y mirror the placement convention used by the
+            // other shape projections (zero-offset == inline).
+            let Some(width) = chart_dimension(ole.extent_width) else {
+                projection_images.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "ole_object",
+                    reason: format!(
+                        "ole_chart_invalid_width binary_data_id={} width={}",
+                        ole.binary_data_id, ole.extent_width
+                    ),
+                });
+                return None;
+            };
+            let Some(height) = chart_dimension(ole.extent_height) else {
+                projection_images.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "ole_object",
+                    reason: format!(
+                        "ole_chart_invalid_height binary_data_id={} height={}",
+                        ole.binary_data_id, ole.extent_height
+                    ),
+                });
+                return None;
+            };
+
+            Some(Run::control(
+                Control::EmbeddedChart {
+                    chart_xml: payload.chart_xml,
+                    ole_bytes: payload.ole_bytes,
+                    width,
+                    height,
+                    horz_offset: ole.geometry.x,
+                    vert_offset: ole.geometry.y,
+                },
+                CharShapeIndex::new(0),
+            ))
+        }
+        Err(ChartOleError::NotChart) => {
+            // Genuine non-chart OLE (e.g. embedded HWP table, Excel sheet).
+            // We do not yet have a passthrough story for those — keep
+            // the drop warning but with a more specific reason than before.
             projection_images.warnings.push(Hwp5Warning::DroppedControl {
-                control: "rect",
-                reason: "pure_rect_projection_requires_core_hwpx_capability".to_string(),
+                control: "ole_object",
+                reason: format!("ole_payload_not_chart binary_data_id={}", ole.binary_data_id),
             });
             None
         }
-        Hwp5Control::Polygon(polygon) => Some(project_polygon_run(polygon)),
-        Hwp5Control::TextBox(textbox) => Some(project_textbox_run(textbox, projection_images)),
-        Hwp5Control::Header(_) | Hwp5Control::Footer(_) | Hwp5Control::Unknown { .. } => None,
-        Hwp5Control::OleObject(_) => {
+        Err(err) => {
             projection_images.warnings.push(Hwp5Warning::DroppedControl {
                 control: "ole_object",
-                reason: "ole_projection_not_implemented".to_string(),
+                reason: format!(
+                    "ole_extract_failed binary_data_id={} detail={}",
+                    ole.binary_data_id, err
+                ),
             });
             None
         }
     }
+}
+
+/// Convert HWP5 OLE extent (i32 HWPUNIT, possibly zero) into a strictly
+/// positive [`HwpUnit`] suitable for [`Control::EmbeddedChart`].
+fn chart_dimension(value: i32) -> Option<HwpUnit> {
+    if value <= 0 {
+        return None;
+    }
+    HwpUnit::new(value).ok()
 }
 
 fn project_textbox_run(
@@ -982,6 +1426,41 @@ fn project_textbox_run(
         },
         CharShapeIndex::new(0),
     )
+}
+
+/// Projects a HWP5 footnote subtree into a Core `Run` carrying `Control::Footnote`.
+///
+/// HWP5 does not carry a stable `instId` for footnotes the way HWPX does; the
+/// surrounding `CtrlHeader`/inline 0x06 marker does not expose one to the
+/// decoder layer. We therefore leave `inst_id` as `None` and let the HWPX
+/// encoder generate placement-specific ids if it needs to (its existing
+/// encoder uses `Option<u32>` and serializes the attribute only when set).
+fn project_footnote_run(
+    subtree: &Hwp5NestedSubtree,
+    projection_images: &mut ProjectionImageState<'_>,
+) -> Run {
+    let paragraphs = project_nested_paragraphs(
+        &subtree.paragraphs,
+        projection_images,
+        ImageProjectionContext::Flow,
+    );
+    Run::control(Control::Footnote { inst_id: None, paragraphs }, CharShapeIndex::new(0))
+}
+
+/// Projects a HWP5 endnote subtree into a Core `Run` carrying `Control::Endnote`.
+///
+/// Same caveat as [`project_footnote_run`]: HWP5 ctrl payload does not surface
+/// an `instId`, so we leave it `None`.
+fn project_endnote_run(
+    subtree: &Hwp5NestedSubtree,
+    projection_images: &mut ProjectionImageState<'_>,
+) -> Run {
+    let paragraphs = project_nested_paragraphs(
+        &subtree.paragraphs,
+        projection_images,
+        ImageProjectionContext::Flow,
+    );
+    Run::control(Control::Endnote { inst_id: None, paragraphs }, CharShapeIndex::new(0))
 }
 
 fn project_line_run(line: &Hwp5LineControl) -> Run {
@@ -1028,6 +1507,17 @@ fn project_line_run(line: &Hwp5LineControl) -> Run {
         *vert_offset = line.geometry.y;
     }
     Run::control(control, CharShapeIndex::new(0))
+}
+
+fn project_rect_run(rect: &Hwp5RectControl) -> Option<Run> {
+    let width = HwpUnit::new(positive_i32_from_u32(rect.geometry.width)?).ok()?;
+    let height = HwpUnit::new(positive_i32_from_u32(rect.geometry.height)?).ok()?;
+    let mut control = hwpforge_core::control::Control::rect(width, height).ok()?;
+    if let Control::Rect { horz_offset, vert_offset, .. } = &mut control {
+        *horz_offset = rect.geometry.x;
+        *vert_offset = rect.geometry.y;
+    }
+    Some(Run::control(control, CharShapeIndex::new(0)))
 }
 
 fn project_polygon_run(polygon: &Hwp5PolygonControl) -> Run {
@@ -1262,7 +1752,7 @@ fn build_table_with_images(
         grouped[row_idx].push(cell);
     }
 
-    let rows = grouped
+    let mut rows: Vec<TableRow> = grouped
         .into_iter()
         .map(|mut cells| {
             cells.sort_by_key(|cell| cell.column);
@@ -1286,9 +1776,44 @@ fn build_table_with_images(
         })
         .collect();
 
+    demote_non_leading_header_rows(&mut rows, &mut projection_images.warnings);
+
     let mut core_table = Table::new(rows);
     apply_table_projection_metadata(table, &mut core_table, &mut projection_images.warnings);
     core_table
+}
+
+/// Enforces the Core/HWPX invariant that header rows form a single leading
+/// contiguous block.
+///
+/// Real 한글 documents sometimes mark a repeat-header row in the middle of a
+/// table (for example a column header restated after a sectioning row).
+/// `hwpforge_core` validation rejects such a layout
+/// ([`ValidationError::NonLeadingTableHeaderRow`]), which previously aborted
+/// the whole `convert-hwp5` run. We keep the leading header block and demote
+/// any later header row to a normal row, emitting a warning so the dropped
+/// repeat-header semantic is surfaced rather than silently lost.
+///
+/// The traversal mirrors `hwpforge_core::validate`'s `seen_non_header_row`
+/// logic exactly, so the demoted result is guaranteed to pass validation.
+fn demote_non_leading_header_rows(rows: &mut [TableRow], warnings: &mut Vec<Hwp5Warning>) {
+    let mut seen_non_header = false;
+    for (row_idx, row) in rows.iter_mut().enumerate() {
+        if row.is_header {
+            if seen_non_header {
+                row.is_header = false;
+                push_projection_fallback(
+                    warnings,
+                    "table.header_row",
+                    format!(
+                        "non_leading_hwp5_table_header_row row={row_idx}; demoting_to=non_header_row (HWPX requires a single leading header block)"
+                    ),
+                );
+            }
+        } else {
+            seen_non_header = true;
+        }
+    }
 }
 
 fn projected_row_is_header(cells: &[&Hwp5TableCell], warnings: &mut Vec<Hwp5Warning>) -> bool {
@@ -1476,7 +2001,13 @@ mod tests {
         paragraphs: Vec<Hwp5Paragraph>,
         page_def: Option<Hwp5PageDef>,
     ) -> SectionResult {
-        SectionResult { paragraphs, page_def, warnings: vec![] }
+        SectionResult {
+            paragraphs,
+            page_def,
+            section_def_properties: None,
+            page_border_fills: Vec::new(),
+            warnings: vec![],
+        }
     }
 
     fn hwp5_char_run(position: u32, char_shape_id: u32) -> Hwp5CharShapeRun {
@@ -1594,6 +2125,8 @@ mod tests {
         let section = SectionResult {
             paragraphs: vec![make_paragraph("x", 0, 0)],
             page_def: None,
+            section_def_properties: None,
+            page_border_fills: Vec::new(),
             warnings: vec![warn],
         };
         let (_, warnings) = project_to_core(vec![section]).unwrap();
@@ -1678,6 +2211,7 @@ mod tests {
                 controls: vec![
                     Hwp5Control::Header(crate::decoder::section::Hwp5NestedSubtree {
                         ctrl_id: 0x6865_6164,
+                        properties_raw: 0,
                         paragraphs: vec![Hwp5Paragraph {
                             text: "\u{fffc}".to_string(),
                             text_segments: Vec::new(),
@@ -1690,6 +2224,7 @@ mod tests {
                     }),
                     Hwp5Control::Footer(crate::decoder::section::Hwp5NestedSubtree {
                         ctrl_id: 0x666F_6F74,
+                        properties_raw: 0,
                         paragraphs: vec![make_paragraph("꼬리말 테스트", 0, 0)],
                     }),
                 ],
@@ -1702,8 +2237,8 @@ mod tests {
         let (document, image_store, _) =
             project_to_core_with_images(vec![section], &image_assets).unwrap();
         let section = &document.sections()[0];
-        let header = section.header.as_ref().expect("header should be projected");
-        let footer = section.footer.as_ref().expect("footer should be projected");
+        let header = section.headers.first().expect("header should be projected");
+        let footer = section.footers.first().expect("footer should be projected");
 
         assert_eq!(image_store.get("BIN0007.png"), Some(&[1, 2, 3, 4][..]));
         assert_eq!(header.paragraphs.len(), 1);
@@ -2313,6 +2848,222 @@ mod tests {
     }
 
     #[test]
+    fn non_leading_header_row_is_demoted_and_warns() {
+        // A real 한글 layout: header row (0), body row (1), then a *second*
+        // header row (2). Core validation requires header rows to form a single
+        // leading block, so the trailing header row must be demoted instead of
+        // aborting the whole conversion.
+        fn header_cell(row: u16, is_header: bool, text: &str) -> Hwp5TableCell {
+            Hwp5TableCell {
+                column: 0,
+                row,
+                col_span: 1,
+                row_span: 1,
+                width: 4000,
+                height: 1000,
+                is_header,
+                margin: crate::decoder::section::Hwp5TableCellMargin {
+                    left: 0,
+                    right: 0,
+                    top: 0,
+                    bottom: 0,
+                },
+                vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Center,
+                border_fill_id: Some(3),
+                paragraphs: vec![Hwp5Paragraph {
+                    text: text.to_string(),
+                    text_segments: Vec::new(),
+                    para_shape_id: 0,
+                    style_id: 0,
+                    char_shape_runs: vec![],
+                    line_segments: Vec::new(),
+                    controls: vec![],
+                }],
+            }
+        }
+
+        let para = Hwp5Paragraph {
+            text: "\u{FFFC}".to_string(),
+            text_segments: Vec::new(),
+            para_shape_id: 0,
+            style_id: 0,
+            char_shape_runs: vec![],
+            line_segments: Vec::new(),
+            controls: vec![Hwp5Control::Table(Hwp5Table {
+                rows: 3,
+                cols: 1,
+                page_break: Hwp5TablePageBreak::Cell,
+                repeat_header: true,
+                cell_spacing: 0,
+                border_fill_id: None,
+                cells: vec![
+                    header_cell(0, true, "head"),
+                    header_cell(1, false, "body"),
+                    header_cell(2, true, "restated-head"),
+                ],
+            })],
+        };
+
+        let section = make_section(vec![para], None);
+        let (doc, warnings) = project_to_core(vec![section]).unwrap();
+        let table = doc.sections()[0].paragraphs[0]
+            .runs
+            .iter()
+            .find_map(|run| run.content.as_table())
+            .expect("expected table run");
+
+        assert!(table.rows[0].is_header, "leading header row must be kept");
+        assert!(!table.rows[1].is_header, "body row stays non-header");
+        assert!(!table.rows[2].is_header, "trailing header row must be demoted");
+        assert!(warnings.iter().any(|warning| matches!(
+            warning,
+            Hwp5Warning::ProjectionFallback { subject, reason }
+                if *subject == "table.header_row"
+                    && reason.starts_with("non_leading_hwp5_table_header_row row=2")
+        )));
+
+        // The demoted layout must now pass Core validation (previously aborted
+        // with NonLeadingTableHeaderRow).
+        assert!(doc.validate().is_ok(), "demoted table must satisfy Core validation");
+    }
+
+    #[test]
+    fn page_number_inside_table_cell_is_carried_to_section() {
+        // 한글 government layouts often put the page-number control (`pgnp`)
+        // inside a layout table cell. The section-level scan must reach it;
+        // a body-paragraph-only scan would drop it.
+        fn pgnp_cell() -> Hwp5TableCell {
+            Hwp5TableCell {
+                column: 0,
+                row: 0,
+                col_span: 1,
+                row_span: 1,
+                width: 4000,
+                height: 1000,
+                is_header: false,
+                margin: crate::decoder::section::Hwp5TableCellMargin {
+                    left: 0,
+                    right: 0,
+                    top: 0,
+                    bottom: 0,
+                },
+                vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Center,
+                border_fill_id: None,
+                paragraphs: vec![Hwp5Paragraph {
+                    text: String::new(),
+                    text_segments: Vec::new(),
+                    para_shape_id: 0,
+                    style_id: 0,
+                    char_shape_runs: vec![],
+                    line_segments: Vec::new(),
+                    // pgnp control with a valid BOTTOM_CENTER (pos byte 5 = 5).
+                    controls: vec![Hwp5Control::Unknown {
+                        ctrl_id: CTRL_ID_PAGE_NUMBER,
+                        header_data: vec![0, 0, 0, 0, 0, 5],
+                    }],
+                }],
+            }
+        }
+
+        let para = Hwp5Paragraph {
+            text: "\u{FFFC}".to_string(),
+            text_segments: Vec::new(),
+            para_shape_id: 0,
+            style_id: 0,
+            char_shape_runs: vec![],
+            line_segments: Vec::new(),
+            controls: vec![Hwp5Control::Table(Hwp5Table {
+                rows: 1,
+                cols: 1,
+                page_break: Hwp5TablePageBreak::Cell,
+                repeat_header: false,
+                cell_spacing: 0,
+                border_fill_id: None,
+                cells: vec![pgnp_cell()],
+            })],
+        };
+
+        let section = make_section(vec![para], None);
+        let (doc, _) = project_to_core(vec![section]).unwrap();
+        assert!(
+            doc.sections()[0].page_number.is_some(),
+            "page number inside a table cell must be carried to the section"
+        );
+    }
+
+    #[test]
+    fn page_number_resolves_in_document_order_across_table_and_body() {
+        // When a page-number control sits both inside a table cell (earlier in
+        // document order) and as a later top-level paragraph, the section-level
+        // scan returns the first in document order — the table-cell one. This
+        // locks the ordering the page_number SSOT refactor introduced (the old
+        // body-only scan would have returned the later top-level control).
+        fn pgnp_para(pos_byte: u8) -> Hwp5Paragraph {
+            Hwp5Paragraph {
+                text: "\u{FFFC}".to_string(),
+                text_segments: Vec::new(),
+                para_shape_id: 0,
+                style_id: 0,
+                char_shape_runs: vec![],
+                line_segments: Vec::new(),
+                controls: vec![Hwp5Control::Unknown {
+                    ctrl_id: CTRL_ID_PAGE_NUMBER,
+                    header_data: vec![0, 0, 0, 0, 0, pos_byte],
+                }],
+            }
+        }
+        fn table_cell_pgnp_para(pos_byte: u8) -> Hwp5Paragraph {
+            let cell = Hwp5TableCell {
+                column: 0,
+                row: 0,
+                col_span: 1,
+                row_span: 1,
+                width: 4000,
+                height: 1000,
+                is_header: false,
+                margin: crate::decoder::section::Hwp5TableCellMargin {
+                    left: 0,
+                    right: 0,
+                    top: 0,
+                    bottom: 0,
+                },
+                vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Center,
+                border_fill_id: None,
+                paragraphs: vec![pgnp_para(pos_byte)],
+            };
+            Hwp5Paragraph {
+                text: "\u{FFFC}".to_string(),
+                text_segments: Vec::new(),
+                para_shape_id: 0,
+                style_id: 0,
+                char_shape_runs: vec![],
+                line_segments: Vec::new(),
+                controls: vec![Hwp5Control::Table(Hwp5Table {
+                    rows: 1,
+                    cols: 1,
+                    page_break: Hwp5TablePageBreak::Cell,
+                    repeat_header: false,
+                    cell_spacing: 0,
+                    border_fill_id: None,
+                    cells: vec![cell],
+                })],
+            }
+        }
+
+        // para 0 = table-cell pgnp at TopLeft (pos 1); para 1 = top-level pgnp
+        // at BottomCenter (pos 5). Document order picks the table-cell one.
+        let section = make_section(vec![table_cell_pgnp_para(1), pgnp_para(5)], None);
+        let (doc, _) = project_to_core(vec![section]).unwrap();
+        let page_number =
+            doc.sections()[0].page_number.as_ref().expect("a page number must be resolved");
+        assert_eq!(
+            page_number.position,
+            PageNumberPosition::TopLeft,
+            "the first page number in document order (the table cell) must win"
+        );
+    }
+
+    #[test]
     fn line_control_becomes_visible_core_line() {
         let para = Hwp5Paragraph {
             text: "\u{FFFC}".to_string(),
@@ -2405,7 +3156,7 @@ mod tests {
     }
 
     #[test]
-    fn rect_control_emits_projection_warning_and_stays_invisible() {
+    fn rect_control_carries_into_core_rect_without_warning() {
         let para = Hwp5Paragraph {
             text: "\u{FFFC}".to_string(),
             text_segments: Vec::new(),
@@ -2426,14 +3177,23 @@ mod tests {
         let section = make_section(vec![para], None);
         let (doc, warnings) = project_to_core(vec![section]).unwrap();
         let paragraph = &doc.sections()[0].paragraphs[0];
-        assert!(paragraph.runs.iter().all(|run| run.content.is_text()));
-        assert_eq!(paragraph.text_content(), "");
-        assert!(warnings.iter().any(|warning| matches!(
-            warning,
-            Hwp5Warning::DroppedControl { control, reason }
-                if *control == "rect"
-                    && reason == "pure_rect_projection_requires_core_hwpx_capability"
-        )));
+        let control = paragraph.runs[0].content.as_control().expect("expected control run");
+        match control {
+            Control::Rect { width, height, horz_offset, vert_offset, .. } => {
+                assert_eq!(*width, HwpUnit::new(10_020).unwrap());
+                assert_eq!(*height, HwpUnit::new(8_000).unwrap());
+                assert_eq!(*horz_offset, 13_200);
+                assert_eq!(*vert_offset, 14_280);
+            }
+            other => panic!("expected Control::Rect, got {:?}", other),
+        }
+        assert!(
+            !warnings.iter().any(|warning| matches!(
+                warning,
+                Hwp5Warning::DroppedControl { control, .. } if *control == "rect"
+            )),
+            "rect projection should no longer emit a DroppedControl warning"
+        );
     }
 
     #[test]

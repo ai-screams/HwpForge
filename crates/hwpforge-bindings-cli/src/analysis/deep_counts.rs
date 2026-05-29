@@ -191,25 +191,22 @@ fn summarize_hwpx_section(
         .iter()
         .filter(|paragraph| paragraph_has_visible_text_deep(paragraph))
         .count();
+    // ADR-002: sum across every `<hp:header>` / `<hp:footer>` in the Vec.
     let deep_paragraphs: usize = count_paragraphs_recursive(&section.paragraphs)
-        + section
-            .header
-            .as_ref()
-            .map_or(0, |header| count_paragraphs_recursive(&header.paragraphs))
-        + section
-            .footer
-            .as_ref()
-            .map_or(0, |footer| count_paragraphs_recursive(&footer.paragraphs));
+        + section.headers.iter().map(|h| count_paragraphs_recursive(&h.paragraphs)).sum::<usize>()
+        + section.footers.iter().map(|f| count_paragraphs_recursive(&f.paragraphs)).sum::<usize>();
     let deep_non_empty_paragraphs: usize =
         count_non_empty_paragraphs_recursive(&section.paragraphs)
             + section
-                .header
-                .as_ref()
-                .map_or(0, |header| count_non_empty_paragraphs_recursive(&header.paragraphs))
+                .headers
+                .iter()
+                .map(|h| count_non_empty_paragraphs_recursive(&h.paragraphs))
+                .sum::<usize>()
             + section
-                .footer
-                .as_ref()
-                .map_or(0, |footer| count_non_empty_paragraphs_recursive(&footer.paragraphs));
+                .footers
+                .iter()
+                .map(|f| count_non_empty_paragraphs_recursive(&f.paragraphs))
+                .sum::<usize>();
 
     let raw_rectangles: usize = count_occurrences(occurrences, "rect");
     let text_boxes: usize = count_occurrences(occurrences, "drawText");
@@ -228,8 +225,8 @@ fn summarize_hwpx_section(
         lines: count_occurrences(occurrences, "line"),
         rectangles: raw_rectangles.saturating_sub(text_boxes),
         polygons: count_occurrences(occurrences, "polygon"),
-        has_header: section.header.is_some(),
-        has_footer: section.footer.is_some(),
+        has_header: !section.headers.is_empty(),
+        has_footer: !section.footers.is_empty(),
         has_page_number: section.page_number.is_some(),
         landscape: section.page_settings.landscape,
         first_non_empty_text: first_visible_text_in_paragraphs_deep(&section.paragraphs),
@@ -437,7 +434,10 @@ fn count_non_empty_paragraphs_recursive(paragraphs: &[Paragraph]) -> usize {
 
 fn count_runs_paragraphs(run: &hwpforge_core::run::Run) -> usize {
     match &run.content {
-        RunContent::Text(_) | RunContent::Image(_) => 0,
+        // Text-bearing variants have no nested paragraph children — see
+        // `.docs/debug/2026-05-27_hwpx_decoder_inline_tab_attrs_lost.md`
+        // §3a-A for the per-site classification.
+        RunContent::Text(_) | RunContent::InlineText(_) | RunContent::Image(_) => 0,
         RunContent::Table(table) => table
             .rows
             .iter()
@@ -451,7 +451,7 @@ fn count_runs_paragraphs(run: &hwpforge_core::run::Run) -> usize {
 
 fn count_runs_non_empty_paragraphs(run: &hwpforge_core::run::Run) -> usize {
     match &run.content {
-        RunContent::Text(_) | RunContent::Image(_) => 0,
+        RunContent::Text(_) | RunContent::InlineText(_) | RunContent::Image(_) => 0,
         RunContent::Table(table) => table
             .rows
             .iter()
@@ -501,8 +501,14 @@ fn first_visible_text_in_paragraph_deep(paragraph: &Paragraph) -> Option<String>
 
 fn first_visible_text_in_run_deep(run: &hwpforge_core::run::Run) -> Option<String> {
     match &run.content {
-        RunContent::Text(text) => {
-            let trimmed: &str = text.trim();
+        // Both text-bearing variants share the same "trim & probe"
+        // semantic — `plain_text()` returns the tab-equivalent string
+        // for `InlineText` so the visible-text count stays accurate
+        // when a paragraph carries `RunContent::InlineText` after the
+        // HWPX decoder InlineText carry (Phase 3 of Wave 4 tab fixes).
+        RunContent::Text(_) | RunContent::InlineText(_) => {
+            let cow = run.content.plain_text()?;
+            let trimmed = cow.trim();
             if trimmed.is_empty() {
                 None
             } else {

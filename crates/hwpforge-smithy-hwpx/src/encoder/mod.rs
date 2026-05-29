@@ -50,6 +50,61 @@ pub(crate) fn is_safe_url(url: &str) -> bool {
         || url.is_empty()
 }
 
+/// Detects an explicit URL scheme per the RFC 3986 grammar
+/// (`ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) ":"`).
+///
+/// Returns the scheme substring when `url` begins with one, or `None` when
+/// `url` is schemeless (a bare domain like `www.go.kr`). A bare `host:port`
+/// (digits after the colon, e.g. `example.com:8080`) is intentionally **not**
+/// treated as a scheme, since the colon there denotes a port.
+fn explicit_scheme(url: &str) -> Option<&str> {
+    let colon = url.find(':')?;
+    let scheme = &url[..colon];
+    let mut chars = scheme.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() => {}
+        _ => return None,
+    }
+    if !chars.all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.') {
+        return None;
+    }
+    let rest = &url[colon + 1..];
+    // `scheme://...` (authority form) is unambiguously a scheme.
+    if rest.starts_with("//") {
+        return Some(scheme);
+    }
+    // `host:port` — everything up to the next `/` is digits → it is a port,
+    // not a scheme, so the whole thing is a schemeless bare URL.
+    let port_part = rest.split('/').next().unwrap_or("");
+    if !port_part.is_empty() && port_part.chars().all(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    Some(scheme)
+}
+
+/// Normalizes a hyperlink URL for safe embedding in HWPX.
+///
+/// - Empty URLs and URLs already using a safe scheme (`http://`, `https://`,
+///   `mailto:`) pass through unchanged.
+/// - Schemeless URLs (bare domains such as `www.motie.go.kr` or
+///   `example.com:8080/path`) are normalized by prepending `http://`, matching
+///   how 한글 treats schemeless hyperlinks. This prevents a single schemeless
+///   link from aborting the conversion of an entire document.
+/// - URLs with an explicit but unsafe scheme (`javascript:`, `data:`, `file:`,
+///   …) are rejected (returns `None`) to preserve the XSS / local-file
+///   boundary enforced by [`is_safe_url`].
+pub(crate) fn normalize_hyperlink_url(url: &str) -> Option<String> {
+    if is_safe_url(url) {
+        return Some(url.to_string());
+    }
+    match explicit_scheme(url) {
+        // Explicit scheme that is not in the safe allowlist → reject.
+        Some(_) => None,
+        // Schemeless bare URL → normalize to an http:// web link.
+        None => Some(format!("http://{url}")),
+    }
+}
+
 /// Sanitizes a filename for safe use as a ZIP archive entry.
 ///
 /// Strips leading slashes and rejects `..` path components to prevent
@@ -153,6 +208,92 @@ mod is_safe_url_tests {
     #[test]
     fn bare_path_rejected() {
         assert!(!is_safe_url("/etc/passwd"));
+    }
+}
+
+#[cfg(test)]
+mod normalize_hyperlink_url_tests {
+    use super::normalize_hyperlink_url;
+
+    #[test]
+    fn http_passes_through() {
+        assert_eq!(
+            normalize_hyperlink_url("http://example.com").as_deref(),
+            Some("http://example.com")
+        );
+    }
+
+    #[test]
+    fn https_passes_through() {
+        assert_eq!(
+            normalize_hyperlink_url("https://example.com/path?q=1").as_deref(),
+            Some("https://example.com/path?q=1")
+        );
+    }
+
+    #[test]
+    fn mailto_passes_through() {
+        assert_eq!(
+            normalize_hyperlink_url("mailto:user@example.com").as_deref(),
+            Some("mailto:user@example.com")
+        );
+    }
+
+    #[test]
+    fn empty_passes_through() {
+        assert_eq!(normalize_hyperlink_url("").as_deref(), Some(""));
+    }
+
+    #[test]
+    fn bare_domain_gets_http_prefix() {
+        // The real-world corpus case: 한글 stores schemeless government domains.
+        assert_eq!(
+            normalize_hyperlink_url("www.motie.go.kr").as_deref(),
+            Some("http://www.motie.go.kr")
+        );
+    }
+
+    #[test]
+    fn bare_domain_without_www_gets_http_prefix() {
+        assert_eq!(normalize_hyperlink_url("motie.go.kr").as_deref(), Some("http://motie.go.kr"));
+    }
+
+    #[test]
+    fn bare_domain_with_path_gets_http_prefix() {
+        assert_eq!(
+            normalize_hyperlink_url("www.kotra.or.kr/opengallery").as_deref(),
+            Some("http://www.kotra.or.kr/opengallery")
+        );
+    }
+
+    #[test]
+    fn host_with_port_is_treated_as_bare_url() {
+        // The colon here is a port separator, not a scheme.
+        assert_eq!(
+            normalize_hyperlink_url("example.com:8080/path").as_deref(),
+            Some("http://example.com:8080/path")
+        );
+    }
+
+    #[test]
+    fn javascript_scheme_rejected() {
+        assert_eq!(normalize_hyperlink_url("javascript:alert(1)"), None);
+    }
+
+    #[test]
+    fn data_uri_rejected() {
+        assert_eq!(normalize_hyperlink_url("data:text/html,<script>"), None);
+    }
+
+    #[test]
+    fn file_uri_rejected() {
+        assert_eq!(normalize_hyperlink_url("file:///etc/passwd"), None);
+    }
+
+    #[test]
+    fn ftp_scheme_rejected() {
+        // ftp is an explicit scheme outside the safe allowlist.
+        assert_eq!(normalize_hyperlink_url("ftp://example.com"), None);
     }
 }
 
@@ -263,21 +404,27 @@ impl HwpxEncoder {
         let header_xml = encode_header(style_store, sec_cnt, begin_num)?;
 
         // Step 2: Encode sections (each produces XML + chart + masterpage entries)
-        // chart_offset and masterpage_offset track global indices across sections
-        // to avoid duplicate filenames in the ZIP archive.
+        // chart_offset / masterpage_offset / embedded_ole_offset track global
+        // indices across sections to avoid duplicate filenames or item ids in
+        // the ZIP archive and content.hpf manifest.
         let mut chart_offset = 0usize;
         let mut masterpage_offset = 0usize;
+        let mut embedded_ole_offset = 0usize;
         let mut section_results = Vec::with_capacity(sections.len());
         for (i, section) in sections.iter().enumerate() {
-            let result = encode_section(section, i, chart_offset, masterpage_offset)?;
+            let result =
+                encode_section(section, i, chart_offset, masterpage_offset, embedded_ole_offset)?;
             chart_offset += result.charts.len();
             masterpage_offset += result.master_pages.len();
+            embedded_ole_offset += result.embedded_oles.len();
             section_results.push(result);
         }
 
         let section_xmls: Vec<String> = section_results.iter().map(|r| r.xml.clone()).collect();
         let charts: Vec<(String, String)> =
             section_results.iter().flat_map(|r| r.charts.clone()).collect();
+        let embedded_oles: Vec<(String, Vec<u8>)> =
+            section_results.iter().flat_map(|r| r.embedded_oles.clone()).collect();
         let master_pages: Vec<(String, String)> =
             section_results.into_iter().flat_map(|r| r.master_pages).collect();
 
@@ -285,8 +432,16 @@ impl HwpxEncoder {
         let images: Vec<(String, Vec<u8>)> =
             image_store.iter().map(|(key, data)| (key.to_string(), data.to_vec())).collect();
 
-        // Step 4: Package into ZIP with images, charts, and master pages
-        PackageWriter::write_hwpx(&header_xml, &section_xmls, &images, &charts, &master_pages)
+        // Step 4: Package into ZIP with images, charts, master pages, and
+        // embedded-chart OLE blobs.
+        PackageWriter::write_hwpx(
+            &header_xml,
+            &section_xmls,
+            &images,
+            &charts,
+            &master_pages,
+            &embedded_oles,
+        )
     }
 
     /// Encodes a validated document and writes it to a file.

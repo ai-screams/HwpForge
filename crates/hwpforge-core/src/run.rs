@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::control::Control;
 use crate::image::Image;
+use crate::inline::InlineText;
 use crate::table::Table;
 
 /// A run: a segment of content with a single character shape reference.
@@ -162,6 +163,14 @@ impl std::fmt::Display for Run {
 pub enum RunContent {
     /// Plain text.
     Text(String),
+    /// Rich inline text that needs per-segment attributes (e.g. an
+    /// inline `<hp:tab width="..." leader="..." type="..."/>`). Used
+    /// only when `Text(String)` cannot represent the payload —
+    /// projection still prefers `Text` for the common plain-string
+    /// case to keep the audit baseline and downstream encoders simple.
+    ///
+    /// See [`crate::inline::InlineText`] for the design notes.
+    InlineText(InlineText),
     /// An inline table (boxed for enum size optimization).
     Table(Box<Table>),
     /// An inline image.
@@ -187,6 +196,29 @@ impl RunContent {
     pub fn as_text(&self) -> Option<&str> {
         match self {
             Self::Text(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Returns the [`InlineText`] if this is an `InlineText` variant.
+    pub fn as_inline_text(&self) -> Option<&InlineText> {
+        match self {
+            Self::InlineText(it) => Some(it),
+            _ => None,
+        }
+    }
+
+    /// Returns the plain-text equivalent of any text-bearing variant
+    /// (`Text` or `InlineText`). For [`RunContent::InlineText`], each
+    /// `Tab` segment renders as `\t`. Returns `None` for `Table`,
+    /// `Image`, and `Control` variants.
+    ///
+    /// Use this from callers (Markdown bridge, CLI search, etc.) that
+    /// need text payload without inspecting per-segment attributes.
+    pub fn plain_text(&self) -> Option<std::borrow::Cow<'_, str>> {
+        match self {
+            Self::Text(s) => Some(std::borrow::Cow::Borrowed(s)),
+            Self::InlineText(it) => Some(std::borrow::Cow::Owned(it.plain_text())),
             _ => None,
         }
     }
@@ -220,6 +252,16 @@ impl RunContent {
         matches!(self, Self::Text(_))
     }
 
+    /// Returns `true` if this is an `InlineText` variant.
+    pub fn is_inline_text(&self) -> bool {
+        matches!(self, Self::InlineText(_))
+    }
+
+    /// Returns `true` for any text-bearing variant (`Text` or `InlineText`).
+    pub fn carries_text(&self) -> bool {
+        matches!(self, Self::Text(_) | Self::InlineText(_))
+    }
+
     /// Returns `true` if this is a `Table` variant.
     pub fn is_table(&self) -> bool {
         matches!(self, Self::Table(_))
@@ -245,6 +287,20 @@ impl std::fmt::Display for RunContent {
                 } else {
                     let truncated: String = s.chars().take(50).collect();
                     write!(f, "Text(\"{truncated}...\")")
+                }
+            }
+            Self::InlineText(it) => {
+                let plain = it.plain_text();
+                let tabs = it
+                    .segments
+                    .iter()
+                    .filter(|s| matches!(s, crate::inline::InlineSegment::Tab(_)))
+                    .count();
+                if plain.len() <= 50 {
+                    write!(f, "InlineText(\"{plain}\", tabs={tabs})")
+                } else {
+                    let truncated: String = plain.chars().take(50).collect();
+                    write!(f, "InlineText(\"{truncated}...\", tabs={tabs})")
                 }
             }
             Self::Table(t) => write!(f, "{t}"),

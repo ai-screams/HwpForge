@@ -341,12 +341,24 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
     let has_field_pair = hx.ctrls.iter().any(|c| c.field_begin.is_some())
         && hx.ctrls.iter().any(|c| c.field_end.is_some());
 
-    // Text runs — skip if consumed by field controls
+    // Text runs — skip if consumed by field controls.
+    //
+    // `HxText::to_run_content` preserves any `<hp:tab>` attribute payload
+    // (`width` / `leader` / `tab_type`) as `RunContent::InlineText`,
+    // falling back to the existing `RunContent::Text(String)` when every
+    // tab is attribute-less. This closes the HWPX-decode side of the
+    // inline tab carry — see
+    // `.docs/debug/2026-05-27_hwpx_decoder_inline_tab_attrs_lost.md`.
     if !has_field_pair {
         for text in &hx.texts {
-            let text_content = text.text();
-            if !text_content.is_empty() {
-                runs.push(Run { content: RunContent::Text(text_content), char_shape_id });
+            let content = text.to_run_content();
+            let keep = match &content {
+                RunContent::Text(s) => !s.is_empty(),
+                RunContent::InlineText(it) => !it.segments.is_empty(),
+                _ => true,
+            };
+            if keep {
+                runs.push(Run { content, char_shape_id });
             }
         }
     }
@@ -2177,7 +2189,7 @@ mod tests {
     }
 
     #[test]
-    fn rect_without_draw_text_is_skipped() {
+    fn rect_without_draw_text_decodes_to_control_rect() {
         let xml = r#"<sec>
             <p paraPrIDRef="0">
                 <run charPrIDRef="0">
@@ -2189,9 +2201,19 @@ mod tests {
             </p>
         </sec>"#;
         let result = parse_section(xml, 0, &HashMap::new()).unwrap();
-        // The rect without drawText should be skipped, only text run present
-        assert_eq!(result.paragraphs[0].runs.len(), 1);
-        assert_eq!(result.paragraphs[0].runs[0].content.as_text(), Some("Main text"));
+        // The rect without drawText now produces a Control::Rect run alongside the text run.
+        assert_eq!(result.paragraphs[0].runs.len(), 2);
+        let texts: Vec<_> =
+            result.paragraphs[0].runs.iter().filter_map(|r| r.content.as_text()).collect();
+        assert_eq!(texts, vec!["Main text"]);
+        let rect_runs: usize = result.paragraphs[0]
+            .runs
+            .iter()
+            .filter(|r| {
+                matches!(r.content.as_control(), Some(hwpforge_core::control::Control::Rect { .. }))
+            })
+            .count();
+        assert_eq!(rect_runs, 1, "expected one Control::Rect run");
     }
 
     #[test]

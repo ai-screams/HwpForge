@@ -210,9 +210,18 @@ fn replace_first_table_text_in_runs(
 fn replace_first_text_run(paragraphs: &mut [Paragraph], replacement: &str) -> bool {
     for paragraph in paragraphs {
         for run in &mut paragraph.runs {
-            if let RunContent::Text(text) = &mut run.content {
-                *text = replacement.to_string();
-                return true;
+            match &mut run.content {
+                RunContent::Text(text) => {
+                    *text = replacement.to_string();
+                    return true;
+                }
+                // Downgrade-on-modify: same policy as the MCP patch
+                // helper. See debug doc §3a-C19.
+                RunContent::InlineText(_) => {
+                    run.content = RunContent::Text(replacement.to_string());
+                    return true;
+                }
+                _ => {}
             }
         }
     }
@@ -771,6 +780,23 @@ fn inspect_json_error() {
 }
 
 #[test]
+fn to_json_rejects_non_json_output_extension() {
+    // to-json must guard its output extension like convert/patch guard .hwpx.
+    let source = fixture("hwp5_01.hwp");
+    let tmp = test_tmp();
+    let hwpx = tmp.join("to_json_guard.hwpx");
+    hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &hwpx).expect("convert hwp5 fixture");
+    let bad_out = tmp.join("export.txt");
+
+    let (_, stderr, code) =
+        run(&["--json", "to-json", hwpx.to_str().unwrap(), "-o", bad_out.to_str().unwrap()]);
+    assert_ne!(code, 0, "non-.json output must be rejected");
+    let err: serde_json::Value = serde_json::from_str(stderr.trim()).unwrap();
+    assert_eq!(err["code"], "INVALID_EXTENSION");
+    assert!(!bad_out.exists(), "no file should be written when the extension is rejected");
+}
+
+#[test]
 fn audit_hwp5_human_report() {
     let source = fixture("hwp5_01.hwp");
     let tmp = test_tmp();
@@ -805,6 +831,11 @@ fn audit_hwp5_json_report() {
 
 #[test]
 fn audit_hwp5_chart_reports_ole_evidence_note() {
+    // Wave 4c (chart-as-OLE carry) inverted this test's expectations:
+    // the converter now carries the chart through as an HWPX OLE fallback
+    // (`<hp:default><hp:ole …>`), so the output side reports an OLE object
+    // matching the source. Status flips from `mismatch` (drop) to `ok`
+    // (parity).
     let source = fixture("chart_01_single_column.hwp");
     let tmp = test_tmp();
     let out = tmp.join("chart_01.hwpx");
@@ -812,14 +843,14 @@ fn audit_hwp5_chart_reports_ole_evidence_note() {
 
     let (val, _, code) = run_json(&["audit-hwp5", source.to_str().unwrap(), out.to_str().unwrap()]);
     assert_eq!(code, 0);
-    assert_eq!(val["status"], "mismatch");
+    assert_eq!(val["status"], "ok");
     assert!(val["source"]["notes"]
         .as_array()
         .unwrap()
         .iter()
         .any(|note| note.as_str() == Some("ole-backed-gso-evidence: 1")));
     assert_eq!(val["source"]["totals"]["ole_objects"], 1);
-    assert_eq!(val["output"]["totals"]["ole_objects"], 0);
+    assert_eq!(val["output"]["totals"]["ole_objects"], 1);
 }
 
 #[test]
@@ -1504,25 +1535,31 @@ fn convert_hwp5_table_nested_table_parity() {
 }
 
 #[test]
-fn audit_hwp5_rect_fixture_reports_mismatch_and_warning() {
+fn audit_hwp5_rect_fixture_now_matches_after_carry() {
+    // After Wave 4a's Rect carry (commit 86b99c8), the pure-rect projection
+    // no longer emits the DroppedControl{"rect", ..} warning and the
+    // converted HWPX preserves the rectangle. Audit therefore reports a
+    // clean match instead of the prior mismatch.
     let source = fixture("rect_simple.hwp");
     let tmp = test_tmp();
     let out = tmp.join("rect_simple.hwpx");
     let warnings =
         hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &out).expect("convert hwp5 rect fixture");
-    assert!(warnings.iter().any(|warning| matches!(
-        warning,
-        hwpforge_smithy_hwp5::Hwp5Warning::DroppedControl { control, reason }
-            if *control == "rect"
-                && reason == "pure_rect_projection_requires_core_hwpx_capability"
-    )));
+    assert!(
+        !warnings.iter().any(|warning| matches!(
+            warning,
+            hwpforge_smithy_hwp5::Hwp5Warning::DroppedControl { control, .. }
+                if *control == "rect"
+        )),
+        "Wave 4a Rect carry should suppress the DroppedControl{{\"rect\", ..}} warning"
+    );
 
     let (val, _, code) = run_json(&["audit-hwp5", source.to_str().unwrap(), out.to_str().unwrap()]);
     assert_eq!(code, 0);
-    assert_eq!(val["status"], "mismatch");
-    assert_eq!(val["source"]["warning_count"], 1);
+    assert_eq!(val["status"], "ok");
+    assert_eq!(val["source"]["warning_count"], 0);
     assert_eq!(val["source"]["totals"]["rectangles"], 1);
-    assert_eq!(val["output"]["totals"]["rectangles"], 0);
+    assert_eq!(val["output"]["totals"]["rectangles"], 1);
 }
 
 #[test]
@@ -1549,7 +1586,10 @@ fn convert_hwp5_fixture() {
 }
 
 #[test]
-fn convert_hwp5_rect_fixture_reports_projection_warning_count() {
+fn convert_hwp5_rect_fixture_reports_no_warnings_after_carry() {
+    // After Wave 4a's Rect carry, converting the rect fixture no longer
+    // emits a projection warning. The CLI must therefore report
+    // "0 warnings" — anything else is a regression.
     let source = fixture("rect_simple.hwp");
     let tmp = test_tmp();
     let out = tmp.join("rect_simple.hwpx");
@@ -1558,7 +1598,7 @@ fn convert_hwp5_rect_fixture_reports_projection_warning_count() {
         run(&["convert-hwp5", source.to_str().unwrap(), "-o", out.to_str().unwrap()]);
     assert_eq!(code, 0);
     assert!(stdout.contains("Converted"));
-    assert!(stdout.contains("1 warnings"));
+    assert!(stdout.contains("0 warnings"));
     assert_valid_hwpx(&out);
 }
 

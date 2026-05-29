@@ -96,10 +96,12 @@ impl HwpxRegistryBridge {
 
     fn rebind_section(&self, section: &mut Section) -> HwpxResult<()> {
         self.rebind_paragraphs(&mut section.paragraphs)?;
-        if let Some(header) = section.header.as_mut() {
+        // ADR-002: each `<hp:header>` / `<hp:footer>` is independently
+        // rebound to keep all multi-cardinality variants consistent.
+        for header in section.headers.iter_mut() {
             self.rebind_paragraphs(&mut header.paragraphs)?;
         }
-        if let Some(footer) = section.footer.as_mut() {
+        for footer in section.footers.iter_mut() {
             self.rebind_paragraphs(&mut footer.paragraphs)?;
         }
         if let Some(master_pages) = section.master_pages.as_mut() {
@@ -131,7 +133,12 @@ impl HwpxRegistryBridge {
             RunContent::Table(table) => self.rebind_table(table)?,
             RunContent::Image(image) => self.rebind_image(image)?,
             RunContent::Control(control) => self.rebind_control(control)?,
-            RunContent::Text(_) => {}
+            // Text-bearing variants carry no style refs themselves
+            // — the run's `char_shape_id` is rebound above and the
+            // text payload (including `InlineText` segments) is
+            // self-contained. Explicit no-op rather than `_` wildcard
+            // so the intent stays visible; see debug doc §3a-A8.
+            RunContent::Text(_) | RunContent::InlineText(_) => {}
             _ => {}
         }
         Ok(())
@@ -164,7 +171,8 @@ impl HwpxRegistryBridge {
                 self.rebind_paragraphs(paragraphs)?;
                 self.rebind_caption(caption.as_mut())?;
             }
-            Control::Line { caption, .. }
+            Control::Rect { caption, .. }
+            | Control::Line { caption, .. }
             | Control::Arc { caption, .. }
             | Control::Curve { caption, .. }
             | Control::ConnectLine { caption, .. } => {
@@ -286,8 +294,8 @@ mod tests {
         ));
 
         let mut section = Section::with_paragraphs(vec![root], PageSettings::a4());
-        section.header = Some(HeaderFooter::all_pages(vec![simple_paragraph(body_cs, body_ps)]));
-        section.footer = Some(HeaderFooter::all_pages(vec![simple_paragraph(body_cs, body_ps)]));
+        section.headers.push(HeaderFooter::all_pages(vec![simple_paragraph(body_cs, body_ps)]));
+        section.footers.push(HeaderFooter::all_pages(vec![simple_paragraph(body_cs, body_ps)]));
         section.master_pages = Some(vec![MasterPage::new(
             ApplyPageType::Both,
             vec![simple_paragraph(body_cs, body_ps)],
@@ -325,8 +333,8 @@ mod tests {
             other => panic!("expected memo, got {other:?}"),
         }
 
-        assert_eq!(section.header.as_ref().unwrap().paragraphs[0].para_shape_id, expected_para);
-        assert_eq!(section.footer.as_ref().unwrap().paragraphs[0].para_shape_id, expected_para);
+        assert_eq!(section.headers.first().unwrap().paragraphs[0].para_shape_id, expected_para);
+        assert_eq!(section.footers.first().unwrap().paragraphs[0].para_shape_id, expected_para);
         assert_eq!(
             section.master_pages.as_ref().unwrap()[0].paragraphs[0].para_shape_id,
             expected_para

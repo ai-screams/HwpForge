@@ -378,11 +378,24 @@ fn build_section_preservation(
 fn collect_semantic_text_slots(section: &Section) -> Vec<SemanticTextSlot> {
     let mut slots: Vec<SemanticTextSlot> = Vec::new();
     collect_semantic_paragraph_slots(&section.paragraphs, "paragraphs", &mut slots);
-    if let Some(header) = &section.header {
-        collect_semantic_header_footer_slots(header, "header", &mut slots);
+    // ADR-002: emit a slot per `<hp:header>` / `<hp:footer>` so multi-
+    // cardinality page features (ODD/EVEN/BOTH) are addressable. Path
+    // is indexed by position to keep stable identity across patches.
+    for (idx, header) in section.headers.iter().enumerate() {
+        let prefix = if section.headers.len() == 1 {
+            "header".to_string()
+        } else {
+            format!("headers[{idx}]")
+        };
+        collect_semantic_header_footer_slots(header, &prefix, &mut slots);
     }
-    if let Some(footer) = &section.footer {
-        collect_semantic_header_footer_slots(footer, "footer", &mut slots);
+    for (idx, footer) in section.footers.iter().enumerate() {
+        let prefix = if section.footers.len() == 1 {
+            "footer".to_string()
+        } else {
+            format!("footers[{idx}]")
+        };
+        collect_semantic_header_footer_slots(footer, &prefix, &mut slots);
     }
     slots
 }
@@ -418,6 +431,17 @@ fn collect_semantic_paragraph_slots(
                 RunContent::Text(text) => slots.push(SemanticTextSlot {
                     path: format!("{run_prefix}.text"),
                     text: text.clone(),
+                }),
+                // `RunContent::InlineText` carries `<hp:tab>`
+                // attributes that the slot model cannot represent;
+                // expose the tab-equivalent plain string so the slot
+                // is still discoverable and editable. Editing through
+                // the slot interface downgrades the run to plain
+                // `Text(String)` on apply — see the
+                // `apply_*_slot` helpers and debug doc §3a-C16.
+                RunContent::InlineText(it) => slots.push(SemanticTextSlot {
+                    path: format!("{run_prefix}.text"),
+                    text: it.plain_text(),
                 }),
                 RunContent::Table(table) => {
                     collect_semantic_table_slots(table, &format!("{run_prefix}.table"), slots);
@@ -498,6 +522,9 @@ fn collect_semantic_control_slots(
             if let Some(caption) = caption {
                 collect_semantic_caption_slots(caption, &format!("{prefix}.polygon"), slots);
             }
+        }
+        Control::Rect { caption: Some(caption), .. } => {
+            collect_semantic_caption_slots(caption, &format!("{prefix}.rect"), slots);
         }
         Control::Line { caption: Some(caption), .. } => {
             collect_semantic_caption_slots(caption, &format!("{prefix}.line"), slots);
@@ -1604,10 +1631,11 @@ fn sha256_hex(bytes: &[u8]) -> String {
 
 fn redact_section_texts(section: &mut Section) {
     redact_paragraphs(&mut section.paragraphs);
-    if let Some(header) = section.header.as_mut() {
+    // Redact every header/footer in the Vec (ADR-002 multi-cardinality).
+    for header in section.headers.iter_mut() {
         redact_header_footer(header);
     }
-    if let Some(footer) = section.footer.as_mut() {
+    for footer in section.footers.iter_mut() {
         redact_header_footer(footer);
     }
 }
@@ -1630,6 +1658,13 @@ fn redact_runs(runs: &mut [Run]) {
     for run in runs {
         match &mut run.content {
             RunContent::Text(text) => text.clear(),
+            // Redaction wipes visible payload only. Downgrade
+            // `InlineText` to an empty `Text(String)` — the tab
+            // attributes are intentionally lost because keeping a
+            // structured `<hp:tab>` next to redacted text would leak
+            // structure that the redactor is trying to remove. See
+            // debug doc §3a-C17.
+            RunContent::InlineText(_) => run.content = RunContent::Text(String::new()),
             RunContent::Table(table) => redact_table(table),
             RunContent::Image(image) => redact_image(image),
             RunContent::Control(control) => redact_control(control),
@@ -1681,7 +1716,8 @@ fn redact_control(control: &mut Control) {
                 redact_caption(caption);
             }
         }
-        Control::Line { caption, .. }
+        Control::Rect { caption, .. }
+        | Control::Line { caption, .. }
         | Control::Arc { caption, .. }
         | Control::Curve { caption, .. }
         | Control::ConnectLine { caption, .. } => {
@@ -1745,8 +1781,8 @@ mod tests {
         let section = Section {
             paragraphs: parsed.paragraphs,
             page_settings: parsed.page_settings.unwrap_or_default(),
-            header: parsed.header,
-            footer: parsed.footer,
+            headers: parsed.header.into_iter().collect(),
+            footers: parsed.footer.into_iter().collect(),
             page_number: parsed.page_number,
             column_settings: parsed.column_settings,
             visibility: parsed.visibility,
@@ -1807,8 +1843,8 @@ mod tests {
         let section = Section {
             paragraphs: parsed.paragraphs,
             page_settings: parsed.page_settings.unwrap_or_default(),
-            header: parsed.header,
-            footer: parsed.footer,
+            headers: parsed.header.into_iter().collect(),
+            footers: parsed.footer.into_iter().collect(),
             page_number: parsed.page_number,
             column_settings: parsed.column_settings,
             visibility: parsed.visibility,
@@ -1861,8 +1897,8 @@ mod tests {
         let section = Section {
             paragraphs: parsed.paragraphs,
             page_settings: parsed.page_settings.unwrap_or_default(),
-            header: parsed.header,
-            footer: parsed.footer,
+            headers: parsed.header.into_iter().collect(),
+            footers: parsed.footer.into_iter().collect(),
             page_number: parsed.page_number,
             column_settings: parsed.column_settings,
             visibility: parsed.visibility,
