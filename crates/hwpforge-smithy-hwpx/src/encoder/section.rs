@@ -613,17 +613,11 @@ fn build_runs(
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
-                    Control::Memo { content, author, date } => {
+                    Control::Memo { content } => {
                         let field_id = hyperlink_entries.len();
                         let marker = next_marker("HWPME", field_id);
                         let sublist_xml = encode_memo_sublist(content, depth, hyperlink_entries)?;
-                        let real_xml = build_memo_run_xml(
-                            &sublist_xml,
-                            author,
-                            date,
-                            char_pr_id_ref,
-                            field_id,
-                        );
+                        let real_xml = build_memo_run_xml(&sublist_xml, char_pr_id_ref, field_id);
                         let marker_run_xml = format!(
                             r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
                         );
@@ -1311,13 +1305,7 @@ fn build_hwp5_crossref_run_xml(
 }
 
 /// Builds a `<hp:run>` XML string for a memo annotation.
-fn build_memo_run_xml(
-    sublist_xml: &str,
-    _author: &str,
-    _date: &str,
-    char_pr_id_ref: u32,
-    field_id: usize,
-) -> String {
+fn build_memo_run_xml(sublist_xml: &str, char_pr_id_ref: u32, field_id: usize) -> String {
     // Signed-32-bit-safe begin_id base; distinct from other field builders.
     let begin_id = 1_500_000_000_u64 + field_id as u64;
     // Non-zero 32-bit field instance id; `fieldid="0"` is invalid in Hancom.
@@ -4050,11 +4038,7 @@ mod tests {
     #[test]
     fn memo_encoding() {
         use hwpforge_core::control::Control;
-        let ctrl = Control::Memo {
-            content: vec![text_paragraph("Memo note", 0, 0)],
-            author: "Author".to_string(),
-            date: "2026-01-01".to_string(),
-        };
+        let ctrl = Control::Memo { content: vec![text_paragraph("Memo note", 0, 0)] };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
                 vec![Run::control(ctrl, CharShapeIndex::new(0))],
@@ -4512,7 +4496,7 @@ mod tests {
             ),
             "hwp5_crossref",
         );
-        assert_ids_under_limit(&build_memo_run_xml("", "author", "date", 0, big), "memo");
+        assert_ids_under_limit(&build_memo_run_xml("", 0, big), "memo");
     }
 
     // ── Heading level (titleMark) encoding ───────────────────────

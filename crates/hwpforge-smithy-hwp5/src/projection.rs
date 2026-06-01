@@ -24,7 +24,7 @@ use hwpforge_foundation::{
 use crate::decoder::chart_ole::{extract_chart_payload, ChartOleError};
 use crate::decoder::section::{
     Hwp5ArcControl, Hwp5ConnectLineControl, Hwp5Control, Hwp5CurveControl, Hwp5EllipseControl,
-    Hwp5EquationControl, Hwp5ImageControl, Hwp5LineControl, Hwp5NestedSubtree,
+    Hwp5EquationControl, Hwp5ImageControl, Hwp5LineControl, Hwp5MemoControl, Hwp5NestedSubtree,
     Hwp5OleObjectControl, Hwp5PageBorderFill, Hwp5Paragraph, Hwp5PolygonControl, Hwp5RectControl,
     Hwp5Table, Hwp5TableCell, Hwp5TextBoxControl, SectionResult,
 };
@@ -48,6 +48,10 @@ const CTRL_ID_BOOKMARK_SPAN: u32 = 0x2562_6D6B; // "%bmk"
 const CTRL_ID_HYPERLINK: u32 = 0x2568_6C6B; // "%hlk"
 const CTRL_ID_CROSSREF: u32 = 0x2578_7266; // "%xrf"
 const CTRL_ID_BOOKMARK_POINT: u32 = 0x626F_6B6D; // "bokm"
+/// Memo placeholder ctrl id (`%unk` BE-ascii). Matches the decoder-side
+/// `CTRL_ID_MEMO`; only `%unk` ctrls whose command string starts with
+/// `"MEMO/"` arrive here as `Hwp5Control::Memo` (others stay `Unknown`).
+const CTRL_ID_MEMO: u32 = 0x2575_6E6B;
 const HWP5_CROSSREF_UNKNOWN_TAG: &str = "hwp5.crossref";
 
 #[derive(Debug, Default)]
@@ -98,15 +102,41 @@ struct UnknownControlHeader<'a> {
 struct ParagraphProjectionQueues<'a> {
     marker_headers: VecDeque<UnknownControlHeader<'a>>,
     object_controls: VecDeque<&'a Hwp5Control>,
+    /// Pending memo placeholders in document order. Consumed by
+    /// `FieldBegin %unk MEMO` inline segments via `start_active_field`;
+    /// any leftovers are drained at end-of-paragraph as a safety net.
+    memo_controls: VecDeque<Hwp5MemoControl>,
     point_bookmark_names: VecDeque<String>,
 }
 
 #[derive(Debug)]
 enum ActiveField {
-    Hyperlink { url: String, start_utf16: u32, display_text: String },
-    BookmarkSpan { name: String, start_utf16: u32 },
-    CrossRef { target_name: String, start_utf16: u32, display_text: String },
-    PlainTextFallback { start_utf16: u32 },
+    Hyperlink {
+        url: String,
+        start_utf16: u32,
+        display_text: String,
+    },
+    BookmarkSpan {
+        name: String,
+        start_utf16: u32,
+    },
+    CrossRef {
+        target_name: String,
+        start_utf16: u32,
+        display_text: String,
+    },
+    PlainTextFallback {
+        start_utf16: u32,
+    },
+    /// Memo anchor: the inline `FieldBegin %unk MEMO` to `FieldEnd` span
+    /// whose anchor text flows directly into `runs` (not dropped). The
+    /// `Hwp5Control::Memo` run is emitted at `FieldEnd` after the anchor
+    /// text. Memo body is cloned at queue-build time to avoid leaking a
+    /// borrow into `ActiveField`.
+    MemoAnchor {
+        start_utf16: u32,
+        memo: Hwp5MemoControl,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -612,8 +642,13 @@ fn project_paragraph_with_images_structural(
                     match active {
                         ActiveField::Hyperlink { display_text, .. }
                         | ActiveField::CrossRef { display_text, .. } => display_text.push_str(text),
+                        // BookmarkSpan / PlainTextFallback / MemoAnchor all emit
+                        // their anchor text in `finish_active_field` via
+                        // `project_text_segment(start, end)`, so silently
+                        // advance the visible cursor here.
                         ActiveField::BookmarkSpan { .. }
-                        | ActiveField::PlainTextFallback { .. } => {}
+                        | ActiveField::PlainTextFallback { .. }
+                        | ActiveField::MemoAnchor { .. } => {}
                     }
                 } else {
                     runs.extend(project_text_segment(
@@ -691,9 +726,12 @@ fn project_paragraph_with_images_structural(
             crate::schema::section::TextSegment::FieldBegin { extra } => {
                 let ctrl_id = ctrl_id_from_inline_extra(extra);
                 let header = consume_marker_header(&mut queues.marker_headers, ctrl_id);
+                let memo =
+                    if ctrl_id == CTRL_ID_MEMO { queues.memo_controls.pop_front() } else { None };
                 active_field = Some(start_active_field(
                     ctrl_id,
                     header,
+                    memo,
                     visible_utf16,
                     projection_images,
                     field_hints.as_deref_mut(),
@@ -735,6 +773,24 @@ fn project_paragraph_with_images_structural(
         }
     }
 
+    // Drain any memo placeholders that did not get consumed by a matching
+    // `FieldBegin %unk MEMO` inline segment. This is defensive — properly
+    // anchored memos always consume their queue entry — but it preserves
+    // memo body content rather than silently dropping it.
+    for memo in queues.memo_controls {
+        if !memo.paragraphs.is_empty() {
+            projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                subject: "field.memo",
+                reason: format!(
+                    "memo_id={} had no matching FieldBegin anchor; \
+                     emitting Run at end of paragraph",
+                    memo.memo_id
+                ),
+            });
+            runs.push(project_memo_run(&memo, projection_images, CharShapeIndex::new(0)));
+        }
+    }
+
     if runs.is_empty() {
         runs.push(Run::text("", CharShapeIndex::new(0)));
     }
@@ -759,7 +815,9 @@ fn append_visible_unit(
         match active {
             ActiveField::Hyperlink { display_text, .. }
             | ActiveField::CrossRef { display_text, .. } => display_text.push(ch),
-            ActiveField::BookmarkSpan { .. } | ActiveField::PlainTextFallback { .. } => {}
+            ActiveField::BookmarkSpan { .. }
+            | ActiveField::PlainTextFallback { .. }
+            | ActiveField::MemoAnchor { .. } => {}
         }
     } else {
         runs.extend(project_text_segment(
@@ -781,7 +839,7 @@ fn paragraph_needs_structural_projection(hwp_para: &Hwp5Paragraph) -> bool {
             matches!(
                 control,
                 Hwp5Control::Unknown { ctrl_id: CTRL_ID_PAGE_NUMBER | CTRL_ID_BOOKMARK_POINT, .. }
-            )
+            ) || matches!(control, Hwp5Control::Memo(_))
         })
 }
 
@@ -792,10 +850,18 @@ fn build_paragraph_projection_queues<'a>(
 ) -> ParagraphProjectionQueues<'a> {
     let mut marker_headers = VecDeque::new();
     let mut object_controls = VecDeque::new();
+    let mut memo_controls = VecDeque::new();
     let mut point_bookmark_names = VecDeque::new();
     let mut field_hints = field_hints;
 
     for control in &hwp_para.controls {
+        // Memos consume a dedicated queue so the `FieldBegin %unk MEMO`
+        // inline segment can pull the matching placeholder without
+        // entangling object/marker dispatch.
+        if let Hwp5Control::Memo(memo) = control {
+            memo_controls.push_back(memo.clone());
+            continue;
+        }
         let Some(unknown) = unknown_control_header(control) else {
             object_controls.push_back(control);
             continue;
@@ -829,17 +895,39 @@ fn build_paragraph_projection_queues<'a>(
         }
     }
 
-    ParagraphProjectionQueues { marker_headers, object_controls, point_bookmark_names }
+    ParagraphProjectionQueues {
+        marker_headers,
+        object_controls,
+        memo_controls,
+        point_bookmark_names,
+    }
 }
 
 fn start_active_field(
     ctrl_id: u32,
     header: Option<UnknownControlHeader<'_>>,
+    memo: Option<Hwp5MemoControl>,
     start_utf16: u32,
     projection_images: &mut ProjectionImageState<'_>,
     field_hints: Option<&mut SectionProjectionHints>,
 ) -> ActiveField {
     match ctrl_id {
+        CTRL_ID_MEMO => {
+            // Anchor body is preserved via the BookmarkSpan/PlainTextFallback
+            // pattern; the memo Run is emitted in `finish_active_field` after
+            // the anchor text.
+            if let Some(memo) = memo {
+                ActiveField::MemoAnchor { start_utf16, memo }
+            } else {
+                projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "field.memo",
+                    reason: "memo placeholder unavailable for inline anchor; \
+                             preserving only visible text"
+                        .to_string(),
+                });
+                ActiveField::PlainTextFallback { start_utf16 }
+            }
+        }
         CTRL_ID_HYPERLINK => {
             if let Some(url) = header.and_then(|header| parse_hyperlink_url(header.header_data)) {
                 ActiveField::Hyperlink { url, start_utf16, display_text: String::new() }
@@ -886,7 +974,7 @@ fn finish_active_field(
     hwp_para: &Hwp5Paragraph,
     end_utf16: u32,
     runs: &mut Vec<Run>,
-    _projection_images: &mut ProjectionImageState<'_>,
+    projection_images: &mut ProjectionImageState<'_>,
 ) {
     match field {
         ActiveField::Hyperlink { url, start_utf16, display_text } => {
@@ -955,7 +1043,39 @@ fn finish_active_field(
                 end_utf16,
             ));
         }
+        ActiveField::MemoAnchor { start_utf16, memo } => {
+            // Emit anchor text first so the field span text isn't dropped,
+            // then attach the memo Run at the anchor's start position.
+            runs.extend(project_text_segment(
+                &hwp_para.text,
+                &hwp_para.char_shape_runs,
+                start_utf16,
+                end_utf16,
+            ));
+            let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
+                &hwp_para.char_shape_runs,
+                start_utf16,
+            ) as usize);
+            runs.push(project_memo_run(&memo, projection_images, char_shape_id));
+        }
     }
+}
+
+/// Projects a HWP5 memo placeholder into a Core `Run` carrying
+/// `Control::Memo`. Body paragraphs come from the joined
+/// `HWPTAG_MEMO_LIST` cluster (filled by the decoder during `finish`);
+/// they are projected with the standard `Flow` context.
+fn project_memo_run(
+    memo: &Hwp5MemoControl,
+    projection_images: &mut ProjectionImageState<'_>,
+    char_shape_id: CharShapeIndex,
+) -> Run {
+    let paragraphs = project_nested_paragraphs(
+        &memo.paragraphs,
+        projection_images,
+        ImageProjectionContext::Flow,
+    );
+    Run::control(Control::Memo { content: paragraphs }, char_shape_id)
 }
 
 /// Gathers each `Hwp5Control::Header` subtree separately, returning a
@@ -1313,7 +1433,14 @@ fn project_control_run(
         Hwp5Control::TextBox(textbox) => Some(project_textbox_run(textbox, projection_images)),
         Hwp5Control::Footnote(subtree) => Some(project_footnote_run(subtree, projection_images)),
         Hwp5Control::Endnote(subtree) => Some(project_endnote_run(subtree, projection_images)),
-        Hwp5Control::Header(_) | Hwp5Control::Footer(_) | Hwp5Control::Unknown { .. } => None,
+        // Memo emission flows through the `FieldBegin`/`MemoAnchor` machinery in
+        // `project_paragraph_with_images_structural`, not through this dispatch.
+        // If a Memo control ever reaches here (no matching FieldBegin in text
+        // segments), prefer dropping over silently double-emitting.
+        Hwp5Control::Memo(_)
+        | Hwp5Control::Header(_)
+        | Hwp5Control::Footer(_)
+        | Hwp5Control::Unknown { .. } => None,
         Hwp5Control::OleObject(ole) => project_ole_object_run(ole, projection_images),
     }
 }

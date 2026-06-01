@@ -4,6 +4,8 @@
 //! producing an intermediate representation that the projection layer
 //! converts into Core's `Section` and `Paragraph` types.
 
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 use std::io::Cursor;
 
 use crate::decoder::Hwp5Warning;
@@ -69,6 +71,12 @@ pub(crate) enum Hwp5Control {
     ConnectLine(Hwp5ConnectLineControl),
     /// Equation editor control (`eqed`) carrying a HancomEQN script.
     Equation(Hwp5EquationControl),
+    /// Memo (메모) annotation control. The HWP5 ctrl carries only a
+    /// placeholder (`%unk` ctrl with command `"MEMO/{shapeId}/{memo_id}/{instId}"`);
+    /// the memo body content lives in a separate `HWPTAG_MEMO_LIST` (0x5D)
+    /// cluster at the section's last body paragraph and is joined back by
+    /// `memo_id` during `BodyTextParserState::finish`.
+    Memo(Hwp5MemoControl),
     /// Header control with nested subtree paragraphs.
     Header(Hwp5NestedSubtree),
     /// Footer control with nested subtree paragraphs.
@@ -205,6 +213,29 @@ pub(crate) struct Hwp5EquationControl {
     pub geometry: Hwp5ShapeComponentGeometry,
     /// HancomEQN script text recovered from the `HWPTAG_EQEDIT` record.
     pub script: String,
+}
+
+/// Parsed memo placeholder from a `%unk` ctrl with command `"MEMO/.../.../..."`.
+///
+/// The decoder pushes this placeholder with `paragraphs: vec![]` when it sees
+/// the inline ctrl, then fills `paragraphs` from
+/// [`BodyTextParserState::memo_contents`] during `finish()` once the matching
+/// `HWPTAG_MEMO_LIST` cluster at the end of the section's last body paragraph
+/// has been captured. Matching is keyed by `memo_id`, not by document position —
+/// see `phase12e_memo_design.md` for the cluster wire layout.
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5MemoControl {
+    /// Owning control identifier, always `%unk` (0x2575_6E6B BE-ascii).
+    #[allow(dead_code)] // reserved for semantic/control-audit slices
+    pub ctrl_id: u32,
+    /// HWP5 memo identifier: second numeric slash-field of the
+    /// `"MEMO/{shapeId}/{memo_id}/{instId}"` command and the 4-byte payload of
+    /// `HWPTAG_MEMO_LIST` (0x5D) that hosts the body.
+    pub memo_id: u32,
+    /// Memo body paragraphs. Empty after the inline-ctrl push; filled by
+    /// `attach_memo_contents_to_placeholders` during `finish()`. Stays empty
+    /// when the matching cluster is missing (warning surfaced).
+    pub paragraphs: Vec<Hwp5Paragraph>,
 }
 
 /// Parsed curve evidence from a `gso ` scope.
@@ -453,6 +484,18 @@ const SHAPE_COMPONENT_TYPE_CONNECT_LINE: [u8; 4] = [0x6C, 0x6F, 0x63, 0x24];
 /// ctrl_id for the equation editor control: ASCII `eqed` as big-endian u32.
 const CTRL_ID_EQED: u32 = 0x6571_6564;
 
+/// ctrl_id for memo placeholder controls: ASCII `%unk` as big-endian u32.
+///
+/// 한컴 stores both memo annotations (with command `"MEMO/.../.../..."`) and
+/// other user-unknown controls under this id; we recognize memos by the
+/// `"MEMO/"` command prefix. Other `%unk` payloads continue to flow through
+/// the `Hwp5Control::Unknown` fallback.
+const CTRL_ID_MEMO: u32 = 0x2575_6E6B;
+
+/// Prefix of the memo command string carried inside the `%unk` ctrl_header
+/// command field. Full layout: `"MEMO/{shapeId}/{memo_id}/{instId}"`.
+const MEMO_COMMAND_PREFIX: &str = "MEMO/";
+
 // ---------------------------------------------------------------------------
 // Parser state
 // ---------------------------------------------------------------------------
@@ -491,6 +534,41 @@ impl ParaBuf {
             line_segments: self.line_segments,
             controls: self.controls,
         }
+    }
+}
+
+/// In-progress capture state for one `HWPTAG_MEMO_LIST` (0x5D) cluster.
+///
+/// The decoder enters capture mode when it sees `MemoList` at level 1 and
+/// stays in it until either the next `MemoList` arrives (start of the next
+/// memo) or a body `ParaHeader` at level 0 arrives (start of the next body
+/// paragraph), at which point the captured paragraphs are flushed to
+/// [`BodyTextParserState::memo_contents`].
+///
+/// The cluster wire is (records at level 1 are siblings of the body
+/// paragraph's `ParaText`):
+///
+/// ```text
+/// MemoList    lvl=1   (4-byte LE memo_id payload)
+/// ListHeader  lvl=1
+/// ParaHeader  lvl=1   (memo body content para — *not* a body paragraph)
+/// ParaText    lvl=2
+/// ParaCharShape lvl=2
+/// ...
+/// ```
+struct MemoContentCapture {
+    memo_id: u32,
+    saw_list_header: bool,
+    current_para: Option<ParaBuf>,
+    paragraphs: Vec<Hwp5Paragraph>,
+}
+
+impl MemoContentCapture {
+    fn into_paragraphs(mut self) -> Vec<Hwp5Paragraph> {
+        if let Some(buf) = self.current_para.take() {
+            self.paragraphs.push(buf.finish());
+        }
+        self.paragraphs
     }
 }
 
@@ -1003,6 +1081,14 @@ struct BodyTextParserState {
     inline_subtree_gso_ctx: Option<InlineGsoContext>,
     /// Geometry of an `eqed` ctrl awaiting its `HWPTAG_EQEDIT` script child.
     eqed_pending: Option<Hwp5ShapeComponentGeometry>,
+    /// `HWPTAG_MEMO_LIST` clusters collected from the section, keyed by
+    /// memo_id. Filled while parsing the cluster region at the section end;
+    /// consumed in `finish` to merge into the matching `Hwp5Control::Memo`
+    /// placeholders.
+    memo_contents: HashMap<u32, Vec<Hwp5Paragraph>>,
+    /// Active capture state for the memo-content cluster currently being
+    /// absorbed. `Some` while inside a `HWPTAG_MEMO_LIST` region.
+    memo_content_capture: Option<MemoContentCapture>,
 }
 
 impl BodyTextParserState {
@@ -1347,6 +1433,41 @@ impl BodyTextParserState {
     }
 
     fn handle_top_level_record(&mut self, record: &Record, tag: TagId, level: u16) {
+        // ── Memo content-cluster state machine ──────────────────────
+        //
+        // `HWPTAG_MEMO_LIST` clusters appear at the end of the section's
+        // last body paragraph as a sequence of (MemoList, ListHeader,
+        // ParaHeader, ParaText, CharShape...) records at lvl=1/2. We
+        // intercept them *before* the normal arms so the body paragraph's
+        // `self.current` text/char_shape stay untouched — without this,
+        // the cluster's lvl=2 ParaText would fall into the existing
+        // `ParaText` arm and overwrite the body text (Wave 12e-Memo
+        // corruption root cause).
+        if matches!(tag, TagId::MemoList) && level == 1 {
+            if let Some(memo_id) = parse_memo_list_id(&record.data) {
+                self.flush_memo_content_capture();
+                self.memo_content_capture = Some(MemoContentCapture {
+                    memo_id,
+                    saw_list_header: false,
+                    current_para: None,
+                    paragraphs: Vec::new(),
+                });
+                return;
+            }
+            self.push_unsupported_tag(record.header.tag_id);
+            return;
+        }
+        if self.memo_content_capture.is_some() {
+            if matches!(tag, TagId::ParaHeader) && level == 0 {
+                // Body paragraph boundary closes the cluster region; fall
+                // through to the normal `ParaHeader` arm so the next body
+                // para is opened cleanly.
+                self.flush_memo_content_capture();
+            } else if self.try_capture_memo_record(record, tag, level) {
+                return;
+            }
+        }
+
         match tag {
             TagId::ParaHeader if level == 0 => {
                 if let Some(buf) = self.current.take() {
@@ -1442,6 +1563,25 @@ impl BodyTextParserState {
                             Hwp5ShapeComponentGeometry { x: 0, y: 0, width: 0, height: 0 },
                         ),
                     );
+                } else if let Some(memo_id) =
+                    (ctrl_id == CTRL_ID_MEMO).then(|| parse_memo_command_id(&record.data)).flatten()
+                {
+                    // Push a placeholder `Hwp5Control::Memo` now; its content
+                    // paragraphs get filled in `finish()` by matching this
+                    // `memo_id` against the captured `HWPTAG_MEMO_LIST`
+                    // clusters. The `%unk` ctrl_id is shared with other
+                    // user-defined controls, so we only treat it as a memo
+                    // when the command string starts with `"MEMO/"` (the
+                    // `parse_memo_command_id` discriminator); non-memo
+                    // `%unk` payloads keep falling through to the Unknown
+                    // arm below for round-trip preservation.
+                    if let Some(buf) = self.current.as_mut() {
+                        buf.controls.push(Hwp5Control::Memo(Hwp5MemoControl {
+                            ctrl_id: CTRL_ID_MEMO,
+                            memo_id,
+                            paragraphs: Vec::new(),
+                        }));
+                    }
                 } else if let Some(buf) = self.current.as_mut() {
                     // Snapshot the `secd` ctrl property word for
                     // projection-level Visibility decoding (gap B,
@@ -1491,6 +1631,123 @@ impl BodyTextParserState {
         }
     }
 
+    /// Absorbs a record into the active memo-content cluster capture.
+    ///
+    /// Returns `true` if the record belongs to the cluster (regardless of
+    /// whether it was structurally usable), so the caller can short-circuit
+    /// the normal record dispatch. The cluster region carries the same
+    /// `ParaText`/`ParaCharShape`/`ParaLineSeg` records as a normal body
+    /// paragraph; isolating them here keeps body-paragraph fields untouched.
+    fn try_capture_memo_record(&mut self, record: &Record, tag: TagId, level: u16) -> bool {
+        let Some(capture) = self.memo_content_capture.as_mut() else {
+            return false;
+        };
+        match (tag, level) {
+            (TagId::ListHeader, 1) => {
+                capture.saw_list_header = true;
+                true
+            }
+            (TagId::ParaHeader, 1) if capture.saw_list_header => {
+                if let Some(buf) = capture.current_para.take() {
+                    capture.paragraphs.push(buf.finish());
+                }
+                capture.current_para = Self::parse_para_header_buf(
+                    record.header.tag_id,
+                    &record.data,
+                    &mut self.warnings,
+                );
+                true
+            }
+            (TagId::ParaText, 2) => {
+                if let Some(buf) = capture.current_para.as_mut() {
+                    if let Some(text) = Self::parse_para_text_value(
+                        record.header.tag_id,
+                        &record.data,
+                        &mut self.warnings,
+                    ) {
+                        buf.text = Some(text);
+                    }
+                }
+                true
+            }
+            (TagId::ParaCharShape, 2) => {
+                if let Some(buf) = capture.current_para.as_mut() {
+                    if let Some(runs) = Self::parse_para_char_shape_runs(
+                        record.header.tag_id,
+                        &record.data,
+                        &mut self.warnings,
+                    ) {
+                        buf.char_shape_runs = runs;
+                    }
+                }
+                true
+            }
+            (TagId::ParaLineSeg, 2) => {
+                if let Some(buf) = capture.current_para.as_mut() {
+                    if let Some(segments) = Self::parse_para_line_segments(
+                        record.header.tag_id,
+                        &record.data,
+                        &mut self.warnings,
+                    ) {
+                        buf.line_segments = segments;
+                    }
+                }
+                true
+            }
+            _ => {
+                // Unknown record inside the cluster region: swallow rather
+                // than letting the normal arms touch body-paragraph state.
+                true
+            }
+        }
+    }
+
+    /// Commits the active memo-content capture (if any) into
+    /// `memo_contents`. First cluster wins on duplicate `memo_id` (warning
+    /// surfaced); zero-content clusters insert an empty entry so the
+    /// matching placeholder still resolves cleanly.
+    fn flush_memo_content_capture(&mut self) {
+        if let Some(capture) = self.memo_content_capture.take() {
+            let memo_id = capture.memo_id;
+            let paragraphs = capture.into_paragraphs();
+            match self.memo_contents.entry(memo_id) {
+                Entry::Vacant(slot) => {
+                    slot.insert(paragraphs);
+                }
+                Entry::Occupied(_) => {
+                    self.warnings.push(Hwp5Warning::DroppedControl {
+                        control: "memo_content_cluster",
+                        reason: format!("duplicate cluster for memo_id={memo_id}; keeping first"),
+                    });
+                }
+            }
+        }
+    }
+
+    /// Joins captured memo-content clusters to their inline `Memo`
+    /// placeholders by `memo_id`. Called once from `finish()` after the
+    /// last body paragraph is committed.
+    fn attach_memo_contents_to_placeholders(&mut self) {
+        if !self.memo_contents.is_empty() {
+            fill_memo_placeholders(
+                &mut self.paragraphs,
+                &mut self.memo_contents,
+                &mut self.warnings,
+            );
+            for orphan_id in self.memo_contents.keys() {
+                self.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "memo_content_cluster",
+                    reason: format!(
+                        "orphan content cluster for memo_id={orphan_id}; no matching MEMO ctrl"
+                    ),
+                });
+            }
+            self.memo_contents.clear();
+        } else {
+            warn_unfilled_memo_placeholders(&self.paragraphs, &mut self.warnings);
+        }
+    }
+
     fn finish(mut self) -> SectionResult {
         while let Some(ctx) = self.table_stack.pop() {
             let finished = ctx.finalize();
@@ -1508,9 +1765,15 @@ impl BodyTextParserState {
         flush_subtree_paragraph(&mut self.current_subtree_para, self.subtree_ctx.as_mut());
         attach_finished_subtree(&mut self.current, self.subtree_ctx.take());
 
-        if let Some(buf) = self.current {
+        if let Some(buf) = self.current.take() {
             self.paragraphs.push(buf.finish());
         }
+
+        // Flush any in-flight memo-content capture (cluster at end-of-stream)
+        // then join captured clusters to inline `Memo` placeholders by
+        // `memo_id`. See `phase12e_memo_design.md` for the wire layout.
+        self.flush_memo_content_capture();
+        self.attach_memo_contents_to_placeholders();
 
         SectionResult {
             paragraphs: self.paragraphs,
@@ -1643,6 +1906,142 @@ impl BodyTextParserState {
 /// The stored bytes are little-endian in the record payload, so the raw
 /// sequence `[0x20, 0x6C, 0x62, 0x74]` decodes to `0x74626C20` (`"tbl "`).
 /// Returns 0 on short data.
+/// Parses the 4-byte payload of a `HWPTAG_MEMO_LIST` (0x5D) record as a
+/// little-endian u32 memo identifier. The same id appears at slash index 2
+/// of the matching `%unk MEMO/{shapeId}/{memo_id}/{instId}` command string.
+fn parse_memo_list_id(data: &[u8]) -> Option<u32> {
+    if data.len() >= 4 {
+        Some(u32::from_le_bytes([data[0], data[1], data[2], data[3]]))
+    } else {
+        None
+    }
+}
+
+/// Discriminates a `%unk` ctrl_header as a memo and extracts its `memo_id`.
+///
+/// `%unk` is shared with other user-unknown controls, so we only treat it as
+/// a memo when the command string starts with `"MEMO/"`. The id returned is
+/// the second slash-separated numeric field, matching the 4-byte payload of
+/// the corresponding `HWPTAG_MEMO_LIST` cluster.
+fn parse_memo_command_id(header_data: &[u8]) -> Option<u32> {
+    let command = parse_ctrl_header_command_string(header_data)?;
+    let rest = command.strip_prefix(MEMO_COMMAND_PREFIX)?;
+    let mut parts = rest.split('/');
+    parts.next()?; // shapeId
+    parts.next()?.parse::<u32>().ok()
+}
+
+/// Parses the UTF-16 command string in a CtrlHeader payload after the
+/// `ctrl_id` (4) + `properties` (4) + UINT16 char-count prefix
+/// (HWP 5.0 spec §4.3.10.3 표 140).
+///
+/// Tries little-endian first (the HWP5 spec default for record fields);
+/// falls back to big-endian if the LE char-count would overrun the record.
+/// The fallback exists because `hwpforge-smithy-hwp5/src/projection.rs`
+/// observed BE-coded command strings in some hyperlink fixtures.
+fn parse_ctrl_header_command_string(header_data: &[u8]) -> Option<String> {
+    if header_data.len() < 10 {
+        return None;
+    }
+    let le_char_len = u16::from_le_bytes([header_data[8], header_data[9]]) as usize;
+    let le_end = 10usize.checked_add(le_char_len.checked_mul(2)?)?;
+    if le_end <= header_data.len() {
+        let units: Vec<u16> = header_data[10..le_end]
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect();
+        if let Ok(decoded) = String::from_utf16(&units) {
+            return Some(decoded);
+        }
+    }
+    let be_char_len = u16::from_be_bytes([header_data[8], header_data[9]]) as usize;
+    let be_end = 10usize.checked_add(be_char_len.checked_mul(2)?)?;
+    if be_end <= header_data.len() {
+        let units: Vec<u16> = header_data[10..be_end]
+            .chunks_exact(2)
+            .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
+            .collect();
+        if let Ok(decoded) = String::from_utf16(&units) {
+            return Some(decoded);
+        }
+    }
+    None
+}
+
+/// Walks paragraphs (recursively into table cells / nested subtrees) and
+/// fills every empty `Hwp5Control::Memo` placeholder whose `memo_id`
+/// matches an entry in `memo_contents`. Entries are removed as they are
+/// consumed so the caller can surface remaining orphans as warnings.
+fn fill_memo_placeholders(
+    paragraphs: &mut [Hwp5Paragraph],
+    memo_contents: &mut HashMap<u32, Vec<Hwp5Paragraph>>,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    for para in paragraphs {
+        for control in &mut para.controls {
+            match control {
+                Hwp5Control::Memo(memo) if memo.paragraphs.is_empty() => {
+                    if let Some(content) = memo_contents.remove(&memo.memo_id) {
+                        memo.paragraphs = content;
+                    } else {
+                        warnings.push(Hwp5Warning::DroppedControl {
+                            control: "memo",
+                            reason: format!("no content cluster for memo_id={}", memo.memo_id),
+                        });
+                    }
+                }
+                Hwp5Control::Table(table) => {
+                    for cell in &mut table.cells {
+                        fill_memo_placeholders(&mut cell.paragraphs, memo_contents, warnings);
+                    }
+                }
+                Hwp5Control::Header(subtree)
+                | Hwp5Control::Footer(subtree)
+                | Hwp5Control::Footnote(subtree)
+                | Hwp5Control::Endnote(subtree) => {
+                    fill_memo_placeholders(&mut subtree.paragraphs, memo_contents, warnings);
+                }
+                Hwp5Control::TextBox(textbox) => {
+                    fill_memo_placeholders(&mut textbox.paragraphs, memo_contents, warnings);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Walks paragraphs and surfaces a warning for every empty `Memo`
+/// placeholder. Used in the no-clusters fast path.
+fn warn_unfilled_memo_placeholders(paragraphs: &[Hwp5Paragraph], warnings: &mut Vec<Hwp5Warning>) {
+    for para in paragraphs {
+        for control in &para.controls {
+            match control {
+                Hwp5Control::Memo(memo) if memo.paragraphs.is_empty() => {
+                    warnings.push(Hwp5Warning::DroppedControl {
+                        control: "memo",
+                        reason: format!("no content cluster for memo_id={}", memo.memo_id),
+                    });
+                }
+                Hwp5Control::Table(table) => {
+                    for cell in &table.cells {
+                        warn_unfilled_memo_placeholders(&cell.paragraphs, warnings);
+                    }
+                }
+                Hwp5Control::Header(subtree)
+                | Hwp5Control::Footer(subtree)
+                | Hwp5Control::Footnote(subtree)
+                | Hwp5Control::Endnote(subtree) => {
+                    warn_unfilled_memo_placeholders(&subtree.paragraphs, warnings);
+                }
+                Hwp5Control::TextBox(textbox) => {
+                    warn_unfilled_memo_placeholders(&textbox.paragraphs, warnings);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 fn parse_ctrl_id(data: &[u8]) -> u32 {
     if data.len() < 4 {
         return 0;

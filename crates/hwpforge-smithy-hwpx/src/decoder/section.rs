@@ -889,7 +889,7 @@ fn decode_field_control(
             } else {
                 Vec::new()
             };
-            Control::Memo { content, author: String::new(), date: String::new() }
+            Control::Memo { content }
         }
         _ => return Ok(None),
     };

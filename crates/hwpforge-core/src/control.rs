@@ -642,13 +642,15 @@ pub enum Control {
 
     /// A memo (메모) annotation attached to text.
     /// Maps to HWPX `fieldBegin type="MEMO"` with `<hp:subList>` body inside.
+    ///
+    /// Wave 12e-Memo: the `author`/`date` fields were removed because no
+    /// supported wire format actually carried non-empty values — HWPX
+    /// `<hp:fieldBegin type="MEMO">` only emits `MemoShapeID` /`MemoType`
+    /// parameters, and HWP5's `%unk MEMO/.../.../...` command exposes no
+    /// author or date metadata.
     Memo {
         /// Paragraphs forming the memo body content.
         content: Vec<Paragraph>,
-        /// Author name.
-        author: String,
-        /// Date string (e.g. `"2026-03-05"`).
-        date: String,
     },
 
     /// An index mark for building a document index (찾아보기).
@@ -857,7 +859,7 @@ impl Control {
         Self::IndexMark { primary: primary.to_string(), secondary: None }
     }
 
-    /// Creates a memo annotation with the given text content.
+    /// Creates a memo annotation with the given paragraph body.
     ///
     /// # Examples
     ///
@@ -867,11 +869,11 @@ impl Control {
     /// use hwpforge_foundation::ParaShapeIndex;
     ///
     /// let para = Paragraph::new(ParaShapeIndex::new(0));
-    /// let memo = Control::memo(vec![para], "Author", "2026-03-05");
+    /// let memo = Control::memo(vec![para]);
     /// assert!(memo.is_memo());
     /// ```
-    pub fn memo(content: Vec<Paragraph>, author: &str, date: &str) -> Self {
-        Self::Memo { content, author: author.to_string(), date: date.to_string() }
+    pub fn memo(content: Vec<Paragraph>) -> Self {
+        Self::Memo { content }
     }
 
     /// Creates a cross-reference to a bookmark target.
@@ -1620,10 +1622,10 @@ impl std::fmt::Display for Control {
                 let hint = hint_text.as_deref().unwrap_or("");
                 write!(f, "Field({field_type}, \"{hint}\")")
             }
-            Self::Memo { content, author, .. } => {
+            Self::Memo { content } => {
                 let n = content.len();
                 let word = if n == 1 { "paragraph" } else { "paragraphs" };
-                write!(f, "Memo({n} {word}, by {author})")
+                write!(f, "Memo({n} {word})")
             }
             Self::IndexMark { primary, secondary } => {
                 if let Some(sec) = secondary {

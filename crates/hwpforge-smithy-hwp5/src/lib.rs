@@ -795,6 +795,7 @@ fn collect_image_geometry_hints_in_controls(
             | decoder::section::Hwp5Control::Curve(_)
             | decoder::section::Hwp5Control::ConnectLine(_)
             | decoder::section::Hwp5Control::Equation(_)
+            | decoder::section::Hwp5Control::Memo(_)
             | decoder::section::Hwp5Control::OleObject(_)
             | decoder::section::Hwp5Control::Unknown { .. } => {}
         }
@@ -1101,6 +1102,7 @@ mod tests {
         curves: usize,
         connect_lines: usize,
         equations: usize,
+        memos: usize,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1452,6 +1454,10 @@ mod tests {
             Control::Curve { .. } => layout.curves += 1,
             Control::ConnectLine { .. } => layout.connect_lines += 1,
             Control::Equation { .. } => layout.equations += 1,
+            Control::Memo { content } => {
+                layout.memos += 1;
+                count_shapes_in_paragraphs(content, layout);
+            }
             Control::TextBox { paragraphs, .. } => {
                 layout.textboxes += 1;
                 count_shapes_in_paragraphs(paragraphs, layout);
@@ -2112,6 +2118,99 @@ mod tests {
         let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
         let layout = collect_decoded_shape_layout(&decoded);
         assert_eq!(layout.equations, 1, "exactly one Control::Equation should round-trip");
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_memo_basic_preserves_body_and_carries_memo() {
+        // Wave 12e-Memo: the inline `%unk MEMO/.../.../...` ctrl + its
+        // `HWPTAG_MEMO_LIST` (0x5D) cluster at the section's last body
+        // paragraph must carry as `Control::Memo` instead of falling through
+        // to `Unknown` (which previously let the cluster's lvl=2 ParaText
+        // overwrite the body text — corpus corruption bug).
+        let source = fixture_path("user_samples/sample-memo-basic.hwp");
+        if !source.exists() {
+            return;
+        }
+        let out = unique_temp_path("user-sample-memo-basic.hwpx");
+        let warnings = hwp5_to_hwpx(&source, &out).expect("memo conversion should succeed");
+        assert!(
+            !warnings.iter().any(|warning| matches!(
+                warning,
+                Hwp5Warning::DroppedControl { control: "memo" | "memo_content_cluster", .. }
+            )),
+            "memo must not drop placeholder or cluster: {warnings:?}"
+        );
+        assert_valid_hwpx(&out);
+
+        let section_xml = read_section_xml(&out, 0);
+        // The body text is split across two runs in the encoded HWPX
+        // (`메모 대상 문장` + `입니다.`) because 한컴 changed char shape mid-line;
+        // assert both fragments exist rather than the joined string.
+        assert!(
+            section_xml.contains("메모 대상 문장") && section_xml.contains("입니다"),
+            "body anchor text must survive the memo cluster (not be overwritten by lvl=2 ParaText): {section_xml}"
+        );
+        assert!(
+            section_xml.contains(r#"<hp:fieldBegin"#) && section_xml.contains(r#"type="MEMO""#),
+            "memo must emit <hp:fieldBegin type=\"MEMO\"> in HWPX"
+        );
+        assert!(
+            section_xml.contains("Claude야 여기가 메모야"),
+            "memo body content must carry into the <hp:subList>"
+        );
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let layout = collect_decoded_shape_layout(&decoded);
+        assert_eq!(layout.memos, 1, "exactly one Control::Memo should round-trip");
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_memo_multiple_matches_clusters_by_id() {
+        // Wave 12e-Memo: multiple memos in the same section. Content clusters
+        // are stored *together* at the end of the last body paragraph and are
+        // matched back to each inline placeholder by `memo_id` (not document
+        // position). This catches accidental position-based matching that
+        // would only surface when there is more than one memo.
+        let source = fixture_path("user_samples/sample-memo-multiple.hwp");
+        if !source.exists() {
+            return;
+        }
+        let out = unique_temp_path("user-sample-memo-multiple.hwpx");
+        let warnings = hwp5_to_hwpx(&source, &out).expect("multi-memo conversion should succeed");
+        assert!(
+            !warnings.iter().any(|warning| matches!(
+                warning,
+                Hwp5Warning::DroppedControl { control: "memo" | "memo_content_cluster", .. }
+            )),
+            "multi-memo must not drop placeholder or cluster: {warnings:?}"
+        );
+        assert_valid_hwpx(&out);
+
+        let section_xml = read_section_xml(&out, 0);
+        // Body anchors of both memos must survive.
+        assert!(
+            section_xml.contains("이 단어에") && section_xml.contains("메모1"),
+            "first memo anchor body text must survive"
+        );
+        assert!(
+            section_xml.contains("저 단어에") && section_xml.contains("메모2"),
+            "second memo anchor body text must survive"
+        );
+        // Each cluster is matched to the right placeholder by memo_id — if
+        // matching were positional, swapping the cluster order would silently
+        // mislabel the bodies.
+        assert!(section_xml.contains("첫 번째"), "first memo body content must carry");
+        assert!(section_xml.contains("두번째"), "second memo body content must carry");
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let layout = collect_decoded_shape_layout(&decoded);
+        assert_eq!(layout.memos, 2, "both memos should round-trip");
 
         let _ = std::fs::remove_file(&out);
     }

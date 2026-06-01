@@ -76,6 +76,48 @@ existed in the shared model; only the HWP5 leg was missing.
   (`sample-equation-basic`: `{a + b} over {c + d}`); golden test asserts both
   `<hp:equation>` emission and verbatim `<hp:script>` carry.
 
+#### Added — Wave 12e-Memo (memo annotation carry + body corruption fix)
+
+- Carry memo annotations as `Control::Memo` → HWPX `<hp:fieldBegin type="MEMO">`
+  with the body paragraphs in `<hp:subList>`. The HWP5 `%unk` ctrl with command
+  `"MEMO/{shapeId}/{memo_id}/{instId}"` used to fall through to
+  `Hwp5Control::Unknown`, so the matching `HWPTAG_MEMO_LIST` (`0x5D`) cluster's
+  level-2 `ParaText` records would fall into the body-paragraph `ParaText` arm
+  and **overwrite the body text** — the visible "memo content replaces body
+  text" corpus bug.
+- Decoder now recognises the `%unk MEMO/...` placeholder, captures the matching
+  cluster region at the end of the section's last body paragraph (records at
+  level 1/2: `MemoList`, `ListHeader`, content `ParaHeader`, `ParaText`,
+  `CharShape`, …), and joins clusters back to placeholders by `memo_id` (not
+  by document position) during `BodyTextParserState::finish`. Multi-memo
+  fixtures confirmed both happy path and id-keyed matching.
+- Projection adds an `ActiveField::MemoAnchor` so the anchor text inside the
+  `FieldBegin %unk MEMO` / `FieldEnd` span flows into `runs` (no drop) and the
+  memo `Run` is emitted at the anchor's start position.
+- `layout_hint_patch` now folds memo body paragraphs into the body scope so the
+  HWPX patcher does not underflow the paragraph-hint queue.
+- Classify memos in the audit semantic model (`Hwp5SemanticControlKind::Memo`).
+- Golden tests confirmed against two 한컴 fixtures: `sample-memo-basic` (one
+  memo, body anchor + body content preservation) and `sample-memo-multiple`
+  (two memos, id-keyed cluster matching).
+
+#### Changed — Wave 12e-Memo (Core API breaking, semver-deliberate)
+
+- `Control::Memo` no longer carries `author` / `date` — the variant is now
+  `Control::Memo { content: Vec<Paragraph> }`. Neither field was actually
+  populated by any wire path: the HWPX `<hp:fieldBegin type="MEMO">` only
+  exposes `MemoShapeID` / `MemoType` parameters, and HWP5's `%unk MEMO/...`
+  command exposes no author/date metadata. Holding the fields encouraged
+  callers to pass dummy values that never round-tripped.
+- `Control::memo(content)` helper drops the corresponding `author`/`date`
+  parameters; call sites in `smithy-hwpx` examples (`shapes_and_references`,
+  `hwpx_complete_guide_parts/section2`) and tests
+  (`smithy-hwpx/src/registry_bridge.rs`,
+  `smithy-hwpx/src/encoder/section.rs`) updated.
+- `smithy-md` markdown encoder emits `<!-- memo: body -->` instead of
+  `<!-- memo(author): body -->` (the author segment was always blank in
+  practice).
+
 ### Phase 11 (HWP5 → HWPX silent-gap closure)
 
 This release closes the largest batch of "HWP5 decoder has the bytes, but

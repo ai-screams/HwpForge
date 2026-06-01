@@ -1092,6 +1092,8 @@ pub enum Hwp5SemanticControlKind {
     ConnectLine,
     /// Equation editor object.
     Equation,
+    /// Memo (메모) annotation control.
+    Memo,
     /// Header control.
     Header,
     /// Footer control.

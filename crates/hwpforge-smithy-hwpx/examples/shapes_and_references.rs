@@ -657,23 +657,15 @@ fn section_bookmarks_refs_fields() -> Section {
 
 fn section_memo_indexmark() -> Section {
     // Memo 1: 간단한 메모
-    let memo_simple = Control::memo(
-        vec![text_para("이 부분을 검토해주세요.", CS_NORMAL, PS_BODY)],
-        "김검토",
-        "2026-03-05",
-    );
+    let memo_simple = Control::memo(vec![text_para("이 부분을 검토해주세요.", CS_NORMAL, PS_BODY)]);
 
     // Memo 2: 긴 메모
-    let memo_long = Control::memo(
-        vec![
-            text_para("수정 필요 사항:", CS_RED, PS_LEFT),
-            text_para("1. 수치 데이터 재확인 필요", CS_NORMAL, PS_LEFT),
-            text_para("2. 참고문헌 추가 필요", CS_NORMAL, PS_LEFT),
-            text_para("3. 그래프 업데이트 요청", CS_NORMAL, PS_LEFT),
-        ],
-        "박수정",
-        "2026-03-05",
-    );
+    let memo_long = Control::memo(vec![
+        text_para("수정 필요 사항:", CS_RED, PS_LEFT),
+        text_para("1. 수치 데이터 재확인 필요", CS_NORMAL, PS_LEFT),
+        text_para("2. 참고문헌 추가 필요", CS_NORMAL, PS_LEFT),
+        text_para("3. 그래프 업데이트 요청", CS_NORMAL, PS_LEFT),
+    ]);
 
     // IndexMark 1: primary only
     let idx1 = Control::index_mark("한글문서");

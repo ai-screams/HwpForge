@@ -289,6 +289,14 @@ fn adapt_control(
             build,
             ids,
         ),
+        Hwp5Control::Memo(memo) => adapt_shape_control(
+            memo.ctrl_id,
+            Hwp5SemanticControlKind::Memo,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
         Hwp5Control::OleObject(ole) => {
             adapt_ole_object_control(ole, container, paragraph_id, build, support, ids)
         }

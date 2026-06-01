@@ -170,15 +170,11 @@ pub(crate) fn section2_text_formatting() -> Section {
         vec![
             Run::text("이 문단에는 검토 메모가 첨부되어 있습니다.", csi(CS_NORMAL)),
             Run::control(
-                Control::memo(
-                    vec![
-                        p("검토 의견:", CS_RED_BOLD, PS_LEFT),
-                        p("charShape 설명을 표 형태로 정리하면 더 좋겠습니다.", CS_NORMAL, PS_LEFT),
-                        p("다음 버전에 반영 부탁드립니다.", CS_NORMAL, PS_LEFT),
-                    ],
-                    "김검토",
-                    "2026-03-06",
-                ),
+                Control::memo(vec![
+                    p("검토 의견:", CS_RED_BOLD, PS_LEFT),
+                    p("charShape 설명을 표 형태로 정리하면 더 좋겠습니다.", CS_NORMAL, PS_LEFT),
+                    p("다음 버전에 반영 부탁드립니다.", CS_NORMAL, PS_LEFT),
+                ]),
                 csi(CS_NORMAL),
             ),
         ],

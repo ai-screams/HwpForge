@@ -181,6 +181,11 @@ fn collect_flow_paragraph_layout_hints(
                 collect_scope_paragraphs(&subtree.paragraphs, body);
             }
             Hwp5Control::TextBox(textbox) => collect_scope_paragraphs(&textbox.paragraphs, body),
+            // Memo body paragraphs are emitted as `<hp:subList>` children of
+            // the body paragraph in HWPX, so the patcher consumes layout
+            // hints for them from the body scope — same pattern as
+            // Footnote/Endnote.
+            Hwp5Control::Memo(memo) => collect_scope_paragraphs(&memo.paragraphs, body),
             Hwp5Control::Image(_)
             | Hwp5Control::Line(_)
             | Hwp5Control::Rect(_)
@@ -212,6 +217,7 @@ fn collect_scope_paragraph_layout_hints(paragraph: &Hwp5Paragraph, scope: &mut S
             Hwp5Control::Footnote(subtree) | Hwp5Control::Endnote(subtree) => {
                 collect_scope_paragraphs(&subtree.paragraphs, scope);
             }
+            Hwp5Control::Memo(memo) => collect_scope_paragraphs(&memo.paragraphs, scope),
             Hwp5Control::Header(_)
             | Hwp5Control::Footer(_)
             | Hwp5Control::Image(_)

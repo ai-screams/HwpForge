@@ -439,7 +439,7 @@ fn encode_control_styled(
             // Bookmarks are invisible anchors — emit nothing.
             String::new()
         }
-        Control::Memo { content, author, .. } => {
+        Control::Memo { content } => {
             let body = content
                 .iter()
                 .map(|p| extract_paragraph_text(p, styles))
@@ -449,10 +449,11 @@ fn encode_control_styled(
             if trimmed.is_empty() {
                 String::new()
             } else {
-                // Sanitize author and body to prevent HTML comment breakout via `-->`
-                let safe_author = author.replace("--", "\\-\\-");
+                // Sanitize body to prevent HTML comment breakout via `-->`.
+                // Author/date are no longer carried (Wave 12e-Memo): HWPX wire
+                // never surfaced them, so omit the `(author)` segment.
                 let safe_body = trimmed.replace("--", "\\-\\-");
-                format!("<!-- memo({safe_author}): {safe_body} -->")
+                format!("<!-- memo: {safe_body} -->")
             }
         }
         Control::IndexMark { .. } => {
