@@ -497,9 +497,21 @@ fn build_runs(
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
-                    Control::Dutmal { main_text, sub_text, position, sz_ratio, align } => {
+                    Control::Dutmal {
+                        main_text,
+                        sub_text,
+                        position,
+                        sz_ratio,
+                        align,
+                        metadata,
+                    } => {
                         dutmals.push(encode_dutmal_to_hx(
-                            main_text, sub_text, *position, *sz_ratio, *align,
+                            main_text,
+                            sub_text,
+                            *position,
+                            *sz_ratio,
+                            *align,
+                            metadata.option,
                         ));
                     }
                     Control::Compose { compose_text, circle_type, char_sz, compose_type } => {
@@ -863,6 +875,7 @@ fn encode_dutmal_to_hx(
     position: DutmalPosition,
     sz_ratio: u32,
     align: DutmalAlign,
+    option: u32,
 ) -> HxDutmal {
     let pos_type = match position {
         DutmalPosition::Top => "TOP",
@@ -880,7 +893,7 @@ fn encode_dutmal_to_hx(
     HxDutmal {
         pos_type: pos_type.to_string(),
         sz_ratio,
-        option: 0,
+        option,
         style_id_ref: 0,
         align: align_str.to_string(),
         main_text: main_text.to_string(),
@@ -4224,6 +4237,7 @@ mod tests {
             position: DutmalPosition::Top,
             sz_ratio: 50,
             align: DutmalAlign::Center,
+            metadata: hwpforge_core::DutmalMetadata::default(),
         };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(vec![Run::control(ctrl, CSI::new(0))], PSI::new(0))],
@@ -4248,9 +4262,10 @@ mod tests {
             position: DutmalPosition::Bottom,
             sz_ratio: 75,
             align: DutmalAlign::Right,
+            metadata: hwpforge_core::DutmalMetadata::default(),
         };
         let xml_result =
-            encode_dutmal_to_hx("A", "a", DutmalPosition::Bottom, 75, DutmalAlign::Right);
+            encode_dutmal_to_hx("A", "a", DutmalPosition::Bottom, 75, DutmalAlign::Right, 0);
         assert_eq!(xml_result.pos_type, "BOTTOM");
         assert_eq!(xml_result.align, "RIGHT");
         assert_eq!(xml_result.sz_ratio, 75);
@@ -4260,7 +4275,7 @@ mod tests {
     #[test]
     fn dutmal_position_left_encodes() {
         use hwpforge_core::control::{DutmalAlign, DutmalPosition};
-        let hx = encode_dutmal_to_hx("X", "x", DutmalPosition::Left, 60, DutmalAlign::Left);
+        let hx = encode_dutmal_to_hx("X", "x", DutmalPosition::Left, 60, DutmalAlign::Left, 0);
         assert_eq!(hx.pos_type, "LEFT");
         assert_eq!(hx.align, "LEFT");
     }
@@ -4268,7 +4283,7 @@ mod tests {
     #[test]
     fn dutmal_position_right_encodes() {
         use hwpforge_core::control::{DutmalAlign, DutmalPosition};
-        let hx = encode_dutmal_to_hx("X", "x", DutmalPosition::Right, 60, DutmalAlign::Center);
+        let hx = encode_dutmal_to_hx("X", "x", DutmalPosition::Right, 60, DutmalAlign::Center, 0);
         assert_eq!(hx.pos_type, "RIGHT");
     }
 

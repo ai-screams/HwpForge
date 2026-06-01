@@ -297,6 +297,14 @@ fn adapt_control(
             build,
             ids,
         ),
+        Hwp5Control::Dutmal(dutmal) => adapt_shape_control(
+            dutmal.ctrl_id,
+            Hwp5SemanticControlKind::Dutmal,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
         Hwp5Control::OleObject(ole) => {
             adapt_ole_object_control(ole, container, paragraph_id, build, support, ids)
         }

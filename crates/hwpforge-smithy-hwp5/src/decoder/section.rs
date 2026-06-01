@@ -13,10 +13,10 @@ use crate::error::Hwp5Result;
 use crate::schema::header::HwpVersion;
 use crate::schema::record::{Record, TagId};
 use crate::schema::section::{
-    Hwp5CharShapeRun, Hwp5EqEdit, Hwp5MemoCommand, Hwp5PageDef, Hwp5ParaHeader, Hwp5ParaLineSeg,
-    Hwp5ParaText, Hwp5ShapeComponentCurve, Hwp5ShapeComponentEllipse, Hwp5ShapeComponentGeometry,
-    Hwp5ShapeComponentLine, Hwp5ShapeComponentOle, Hwp5ShapeComponentPolygon, Hwp5ShapePicture,
-    Hwp5ShapePoint, TextSegment,
+    Hwp5CharShapeRun, Hwp5DutmalControl, Hwp5EqEdit, Hwp5MemoCommand, Hwp5PageDef, Hwp5ParaHeader,
+    Hwp5ParaLineSeg, Hwp5ParaText, Hwp5ShapeComponentCurve, Hwp5ShapeComponentEllipse,
+    Hwp5ShapeComponentGeometry, Hwp5ShapeComponentLine, Hwp5ShapeComponentOle,
+    Hwp5ShapeComponentPolygon, Hwp5ShapePicture, Hwp5ShapePoint, TextSegment,
 };
 
 // ---------------------------------------------------------------------------
@@ -77,6 +77,12 @@ pub(crate) enum Hwp5Control {
     /// cluster at the section's last body paragraph and is joined back by
     /// `memo_id` during `BodyTextParserState::finish`.
     Memo(Hwp5MemoControl),
+    /// Dutmal (덧말) — small ruby-style annotation that prints
+    /// `main_text` in the body run and `sub_text` above/below it. Wire
+    /// pairs an inline `0x17` marker in the body's `ParaText` stream
+    /// with a `tdut` CtrlHeader carrying the actual strings — see
+    /// `schema::section::Hwp5DutmalControl` for the payload layout.
+    Dutmal(Hwp5DutmalControl),
     /// Header control with nested subtree paragraphs.
     Header(Hwp5NestedSubtree),
     /// Footer control with nested subtree paragraphs.
@@ -493,6 +499,14 @@ const CTRL_ID_EQED: u32 = 0x6571_6564;
 /// `"MEMO/"` command prefix. Other `%unk` payloads continue to flow through
 /// the `Hwp5Control::Unknown` fallback.
 const CTRL_ID_MEMO: u32 = 0x2575_6E6B;
+
+/// ctrl_id for the dutmal (덧말) control: ASCII `tdut` as big-endian u32.
+///
+/// Paired wire artifacts: an inline `0x17` marker in the body's
+/// `ParaText` stream (carries the LE-stored ctrl_id as `"tudt"` in
+/// `extra[0..4]`) plus this CtrlHeader carrying the actual
+/// `mainText` / `subText` strings.
+const CTRL_ID_DUTMAL: u32 = 0x7464_7574;
 
 // Memo wire command parsing now lives on `Hwp5MemoCommand::parse` in
 // `crate::schema::section` — shared with the slash-command util that future
@@ -1565,6 +1579,19 @@ impl BodyTextParserState {
                             Hwp5ShapeComponentGeometry { x: 0, y: 0, width: 0, height: 0 },
                         ),
                     );
+                } else if ctrl_id == CTRL_ID_DUTMAL {
+                    // `tdut` ctrl carries the dutmal (덧말) main/sub text
+                    // strings + posType. The paired inline `0x17` marker
+                    // in the body's `ParaText` decides the visible
+                    // position; this push keeps the projected Control in
+                    // doc order via `current.controls`.
+                    if let Some(dutmal) = Hwp5DutmalControl::parse(ctrl_id, &record.data) {
+                        if let Some(buf) = self.current.as_mut() {
+                            buf.controls.push(Hwp5Control::Dutmal(dutmal));
+                        }
+                    } else {
+                        self.push_unsupported_tag(record.header.tag_id);
+                    }
                 } else if let Some(command) = (ctrl_id == CTRL_ID_MEMO)
                     .then(|| Hwp5MemoCommand::parse(&record.data))
                     .flatten()

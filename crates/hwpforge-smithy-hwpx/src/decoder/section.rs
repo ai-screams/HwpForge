@@ -958,6 +958,11 @@ fn decode_dutmal(dutmal: &HxDutmal, char_shape_id: CharShapeIndex) -> Run {
             position,
             sz_ratio: dutmal.sz_ratio,
             align,
+            metadata: {
+                let mut m = hwpforge_core::DutmalMetadata::default();
+                m.option = dutmal.option;
+                m
+            },
         })),
         char_shape_id,
     }

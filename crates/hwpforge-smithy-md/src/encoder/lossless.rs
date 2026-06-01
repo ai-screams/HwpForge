@@ -174,7 +174,7 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                     }
                     out.push_str("</polygon>");
                 }
-                Control::Dutmal { main_text, sub_text, sz_ratio, position, align } => {
+                Control::Dutmal { main_text, sub_text, sz_ratio, position, align, .. } => {
                     out.push_str(&format!(
                         "<dutmal data-char-shape=\"{}\" data-sz-ratio=\"{}\" data-position=\"{:?}\" data-align=\"{:?}\">{}</dutmal>",
                         run.char_shape_id.get(),
@@ -799,6 +799,7 @@ mod tests {
                     sz_ratio: 50,
                     position: DutmalPosition::Top,
                     align: DutmalAlign::Center,
+                    metadata: hwpforge_core::DutmalMetadata::default(),
                 },
                 CharShapeIndex::new(0),
             )],

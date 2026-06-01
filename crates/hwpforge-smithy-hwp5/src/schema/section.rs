@@ -284,9 +284,20 @@ impl Hwp5ParaText {
                     let _extra = read_extra!(i - 1);
                     // Unsupported inline control — consumed silently.
                 }
-                // 0x0E-0x17: extended controls (bookmarks, change tracking, etc.)
-                // All consume 7 extra u16 values.
-                0x0E..=0x17 => {
+                // 0x17: dutmal (덧말) inline marker.
+                // `extra[0..4]` carries the BE-ascii ctrl_id `tdut` for the
+                // corresponding `Hwp5Control::Dutmal`; the projection layer
+                // pops it from the paragraph's control queue the same way
+                // it handles a `0x0B` ControlRef.
+                0x17 => {
+                    flush_text!();
+                    let extra = read_extra!(i - 1);
+                    segments.push(TextSegment::ControlRef { extra });
+                }
+                // 0x0E-0x16: extended controls (bookmarks, change tracking, etc.)
+                // All consume 7 extra u16 values. Still silently consumed
+                // until a future slice promotes them to a typed variant.
+                0x0E..=0x16 => {
                     flush_text!();
                     let _extra = read_extra!(i - 1);
                     // No segment emitted — consumed silently.
@@ -931,6 +942,125 @@ pub(crate) struct Hwp5MemoCommand {
     /// rationale as `hancom_inst_a` — carried inside `raw` verbatim.
     #[allow(dead_code)]
     pub terminator: String,
+}
+
+/// Dutmal (덧말) control parsed from a `tdut` CtrlHeader (`0x74647574`
+/// BE-ascii).
+///
+/// Wire layout observed on 한컴-authored fixtures:
+///
+/// | offset | field | encoding |
+/// |---:|---|---|
+/// | `[4..6]` | `main_len` | LE u16 (number of chars in `main_text`) |
+/// | `[6..8]` | `main_text[0]` | LE u16 (first char — wire packs it into the high half of the `properties` word) |
+/// | `[8..8 + 2*(main_len-1)]` | `main_text[1..]` | LE UTF-16 |
+/// | next 2 bytes | `sub_len` | LE u16 |
+/// | next `2 * sub_len` bytes | `sub_text` | LE UTF-16 |
+/// | tail `[0..4]` | `pos_type_raw` | LE u32 (0 = TOP, 1 = BOTTOM, …) |
+/// | tail remainder | option / sz_ratio / align / styleIDRef | reserved for fidelity work |
+///
+/// The first `main_text` char is folded into the same 32-bit word as the
+/// length on the wire — packing them together saves a u16 over the more
+/// natural "header (len) → body (chars)" layout. Other dutmal options
+/// (`align`, `sz_ratio`, `option`, `styleIDRef`) are observed but not
+/// promoted to fields yet: every 한컴 fixture we've inspected leaves
+/// them at default values, so the encoder writes defaults until a
+/// future fixture forces fidelity work. See
+/// `.docs/algorithms/2026-06-01_memo_anchor_serialization.md` (general
+/// "carry wire metadata only when the source actually populates it"
+/// rule).
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5DutmalControl {
+    /// Owning control identifier, always `tdut` (`0x7464_7574` BE-ascii).
+    #[allow(dead_code)]
+    pub ctrl_id: u32,
+    /// Visible body text (`<hp:mainText>`).
+    pub main_text: String,
+    /// Annotation text (`<hp:subText>`).
+    pub sub_text: String,
+    /// Raw `pos_type` word from the wire — meaning is mapped on the
+    /// projection side (`0 = Top`, `1 = Bottom`, others reserved).
+    pub pos_type_raw: u32,
+    /// Raw `option` word from the wire. Mirrored verbatim into the
+    /// HWPX `<hp:dutmal option=…>` attribute — the precise meaning is
+    /// not pinned down (see
+    /// `.docs/algorithms/2026-06-01_dutmal_carry.md`), but mirroring it
+    /// preserves fidelity round-trip without needing to know.
+    pub option_raw: u32,
+}
+
+impl Hwp5DutmalControl {
+    /// Decodes a `tdut` CtrlHeader payload into a `Hwp5DutmalControl`.
+    /// Returns `None` on malformed or truncated payloads — the decoder
+    /// falls back to `Hwp5Control::Unknown` so the rest of the section
+    /// keeps round-tripping.
+    pub(crate) fn parse(ctrl_id: u32, data: &[u8]) -> Option<Self> {
+        if data.len() < 8 {
+            return None;
+        }
+        let main_len = u16::from_le_bytes([data[4], data[5]]) as usize;
+        if main_len == 0 {
+            return None;
+        }
+        let main_first = u16::from_le_bytes([data[6], data[7]]);
+
+        let mut main_units: Vec<u16> = Vec::with_capacity(main_len);
+        main_units.push(main_first);
+        let main_tail_bytes = (main_len - 1).checked_mul(2)?;
+        let main_tail_end = 8usize.checked_add(main_tail_bytes)?;
+        if data.len() < main_tail_end {
+            return None;
+        }
+        for chunk in data[8..main_tail_end].chunks_exact(2) {
+            main_units.push(u16::from_le_bytes([chunk[0], chunk[1]]));
+        }
+        let main_text = String::from_utf16(&main_units).ok()?;
+
+        let sub_len_off = main_tail_end;
+        if data.len() < sub_len_off + 2 {
+            return None;
+        }
+        let sub_len = u16::from_le_bytes([data[sub_len_off], data[sub_len_off + 1]]) as usize;
+        let sub_bytes = sub_len.checked_mul(2)?;
+        let sub_off = sub_len_off + 2;
+        let sub_end = sub_off.checked_add(sub_bytes)?;
+        if data.len() < sub_end {
+            return None;
+        }
+        let sub_units: Vec<u16> = data[sub_off..sub_end]
+            .chunks_exact(2)
+            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .collect();
+        let sub_text = String::from_utf16(&sub_units).ok()?;
+
+        let pos_type_raw = if data.len() >= sub_end + 4 {
+            u32::from_le_bytes([
+                data[sub_end],
+                data[sub_end + 1],
+                data[sub_end + 2],
+                data[sub_end + 3],
+            ])
+        } else {
+            0
+        };
+        // `option_raw` sits at tail offset [8..12] (see
+        // `.docs/algorithms/2026-06-01_dutmal_carry.md` for the full tail
+        // table). Missing/truncated tails default to 0 — round-trip
+        // accuracy degrades to "no option" but the body still carries.
+        let option_off = sub_end + 8;
+        let option_raw = if data.len() >= option_off + 4 {
+            u32::from_le_bytes([
+                data[option_off],
+                data[option_off + 1],
+                data[option_off + 2],
+                data[option_off + 3],
+            ])
+        } else {
+            0
+        };
+
+        Some(Self { ctrl_id, main_text, sub_text, pos_type_raw, option_raw })
+    }
 }
 
 impl Hwp5MemoCommand {

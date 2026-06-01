@@ -796,6 +796,7 @@ fn collect_image_geometry_hints_in_controls(
             | decoder::section::Hwp5Control::ConnectLine(_)
             | decoder::section::Hwp5Control::Equation(_)
             | decoder::section::Hwp5Control::Memo(_)
+            | decoder::section::Hwp5Control::Dutmal(_)
             | decoder::section::Hwp5Control::OleObject(_)
             | decoder::section::Hwp5Control::Unknown { .. } => {}
         }
@@ -1103,6 +1104,7 @@ mod tests {
         connect_lines: usize,
         equations: usize,
         memos: usize,
+        dutmals: usize,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1458,6 +1460,7 @@ mod tests {
                 layout.memos += 1;
                 count_shapes_in_paragraphs(content, layout);
             }
+            Control::Dutmal { .. } => layout.dutmals += 1,
             Control::TextBox { paragraphs, .. } => {
                 layout.textboxes += 1;
                 count_shapes_in_paragraphs(paragraphs, layout);
@@ -2258,6 +2261,91 @@ mod tests {
         let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
         let layout = collect_decoded_shape_layout(&decoded);
         assert_eq!(layout.memos, 2, "both memos should round-trip");
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_dutmal_basic_carries_option_and_preserves_spacing() {
+        // Wave 12i covers two bugs that surface on a section-leading paragraph
+        // with two adjacent dutmals separated by a body-text space.
+        //
+        // Bug A — option attribute carry. HWP5 stores `option_raw` at
+        //   `tail[8..12]` of the `tdut` ctrl payload (see
+        //   `.docs/algorithms/2026-06-01_dutmal_carry.md`); 한컴 emits the same
+        //   integer back into `<hp:dutmal option=…>`. The encoder previously
+        //   hard-coded `option="0"` so a fixture with `option="4"` lost
+        //   fidelity.
+        //
+        // Bug B — flat projection `control_iter` filter. The flat paragraph
+        //   projection path used to iterate every control (including the
+        //   `secd`/`cold` Unknown ctrls that lead every first-section
+        //   paragraph); each inline `\u{FFFC}` ControlRef position then
+        //   popped the *wrong* control, dropping it. The real dutmal/shape
+        //   controls leaked to the end-of-paragraph drain loop, reordering
+        //   any text node that sat *between* two inline controls.
+        let source = fixture_path("user_samples/sample-dutmal-basic.hwp");
+        if !source.exists() {
+            return;
+        }
+        let out = unique_temp_path("user-sample-dutmal-basic.hwpx");
+        let warnings = hwp5_to_hwpx(&source, &out).expect("dutmal conversion should succeed");
+        assert!(
+            !warnings.iter().any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
+            "dutmal must not drop any control: {warnings:?}"
+        );
+        assert_valid_hwpx(&out);
+
+        let section_xml = read_section_xml(&out, 0);
+
+        // Both dutmals must reach HWPX with their main/sub text intact.
+        assert!(
+            section_xml.contains("<hp:mainText>한국어</hp:mainText>")
+                && section_xml.contains("<hp:subText>Korean</hp:subText>"),
+            "first dutmal main/sub text must carry: {section_xml}"
+        );
+        assert!(
+            section_xml.contains("<hp:mainText>韓字</hp:mainText>")
+                && section_xml.contains("<hp:subText>한자</hp:subText>"),
+            "second dutmal main/sub text must carry: {section_xml}"
+        );
+
+        // Bug A: `option_raw` must round-trip verbatim. The fixture has
+        // option=0 on the first dutmal and option=4 on the second.
+        assert!(
+            section_xml.contains(r#"posType="TOP""#) && section_xml.contains(r#"option="0""#),
+            "TOP dutmal must keep option=0 (Wave 12i Bug A): {section_xml}"
+        );
+        assert!(
+            section_xml.contains(r#"posType="BOTTOM""#) && section_xml.contains(r#"option="4""#),
+            "BOTTOM dutmal must carry option=4 verbatim (Wave 12i Bug A): {section_xml}"
+        );
+
+        // Bug B: the wire layout is `[TOP-marker][space][BOTTOM-marker]`,
+        // so the body text space must remain *between* the two dutmals,
+        // not jump ahead of the first one. Match the literal element
+        // ordering on the wire — failing the order check is exactly the
+        // visual regression the flat-path filter was added to prevent.
+        let top_pos =
+            section_xml.find(r#"<hp:dutmal posType="TOP""#).expect("TOP dutmal element must exist");
+        let bottom_pos = section_xml
+            .find(r#"<hp:dutmal posType="BOTTOM""#)
+            .expect("BOTTOM dutmal element must exist");
+        let space_pos = section_xml[top_pos..bottom_pos]
+            .find("<hp:t> </hp:t>")
+            .map(|rel| rel + top_pos)
+            .expect("body space <hp:t> </hp:t> must sit between the two dutmals");
+        assert!(
+            top_pos < space_pos && space_pos < bottom_pos,
+            "element order must be TOP-dutmal → space → BOTTOM-dutmal (Wave 12i Bug B)"
+        );
+
+        // HWPX → Core round-trip preserves both dutmals (counter added to
+        // `DecodedShapeLayout` alongside this test).
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let layout = collect_decoded_shape_layout(&decoded);
+        assert_eq!(layout.dutmals, 2, "both dutmals should round-trip");
 
         let _ = std::fs::remove_file(&out);
     }

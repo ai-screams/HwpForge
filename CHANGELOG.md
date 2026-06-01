@@ -170,6 +170,46 @@ existed in the shared model; only the HWP5 leg was missing.
   `<hp:parameters>` builder for future field types that need the same
   structure (hyperlink / cross-reference fidelity work).
 
+#### Added / Changed — Wave 12i (dutmal carry + flat-path control filter)
+
+- Carry dutmal (덧말) annotations as `Control::Dutmal` →
+  `<hp:dutmal>` with `main_text` / `sub_text` / `posType` /
+  **`option`**. The decoder now reads `option_raw` from
+  `tail[8..12]` of the `tdut` ctrl payload (`Hwp5DutmalControl`); the
+  HWPX encoder previously hard-coded `option="0"` and the HWPX
+  decoder discarded the value, so any non-default `option=4` 한컴
+  fixture lost fidelity end to end. Both legs now mirror the integer
+  verbatim. Semantics of `option` are intentionally not pinned —
+  the bit/enum meaning is undocumented and produces no visible
+  rendering difference in our truth fixture; see
+  `.docs/algorithms/2026-06-01_dutmal_carry.md`.
+- New `Control::Dutmal { metadata: DutmalMetadata, … }` field
+  (Core API breaking, semver-deliberate). `DutmalMetadata` carries
+  `option: u32` and is `#[non_exhaustive]` so future
+  `sz_ratio` / `align` / `style_id_ref` decode work is additive.
+
+#### Fixed — Wave 12i flat-path projection `control_iter` filter
+
+- `project_paragraph_with_images_flat` used to iterate **every**
+  control in `Hwp5Paragraph.controls` (including the
+  `secd` / `cold` / `%bmk` / `%hlk` / `%xrf` / `bokm` / `pgnp`
+  Unknown markers that lead a first-section paragraph) when matching
+  inline `\u{FFFC}` `ControlRef` positions to runs. Each FFFC
+  popped the *wrong* control — the marker-header Unknowns returned
+  `None` from `project_control_run` and got dropped, while the real
+  inline controls leaked to the end-of-paragraph drain. The
+  observable symptom on Wave 12i's two-dutmals-with-space fixture
+  was the body space `<hp:t> </hp:t>` getting pulled in front of
+  both dutmals (`한국어 韓字` → `한국어韓字`). The structural
+  projection path was unaffected because it already separated those
+  controls into `marker_headers` vs. `object_controls` queues. The
+  flat path now applies the same filter so its FFFC iterator only
+  sees object controls. Any first-section paragraph that combines
+  `secd` / `cold` with **any** inline shape (rect, polygon,
+  ellipse, image, table, equation, dutmal) is covered, not just
+  dutmal. See `.docs/algorithms/2026-06-01_dutmal_carry.md`
+  (companion-fix section) for the full root-cause + rationale.
+
 ### Phase 11 (HWP5 → HWPX silent-gap closure)
 
 This release closes the largest batch of "HWP5 decoder has the bytes, but

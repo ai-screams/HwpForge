@@ -1725,6 +1725,7 @@ mod tests {
                     sz_ratio: 50,
                     position: DutmalPosition::Top,
                     align: DutmalAlign::Center,
+                    metadata: hwpforge_core::DutmalMetadata::default(),
                 },
                 CharShapeIndex::new(0),
             )],

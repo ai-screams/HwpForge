@@ -514,6 +514,11 @@ pub enum Control {
         sz_ratio: u32,
         /// Alignment of the annotation text.
         align: DutmalAlign,
+        /// Optional metadata that mirrors HWPX `<hp:dutmal>` attributes
+        /// HwpForge doesn't promote to typed fields yet — currently
+        /// carries `option` verbatim so HWP5↔HWPX round-trips preserve
+        /// it. `#[non_exhaustive]` so future fields are additive.
+        metadata: DutmalMetadata,
     },
 
     /// Compose (글자겹침): overlaid/combined characters.
@@ -753,6 +758,27 @@ impl MemoMetadata {
             self.id.clone()
         }
     }
+}
+
+/// Wire-mirrored metadata attached to a `Control::Dutmal`.
+///
+/// Carries HWPX `<hp:dutmal>` attributes that HwpForge does not yet
+/// model as typed fields — currently just `option`. Field is mirrored
+/// verbatim from HWP5 wire / HWPX `option=` attribute and emitted
+/// verbatim on encode so round-trips preserve the value even when the
+/// semantics aren't pinned down (see
+/// `.docs/algorithms/2026-06-01_dutmal_carry.md`).
+///
+/// `#[non_exhaustive]` — additions like `style_id_ref` or the two
+/// reserved tail words are additive and don't break existing
+/// destructure / pattern-match sites.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub struct DutmalMetadata {
+    /// `<hp:dutmal option=…>` value mirrored verbatim. Likely a
+    /// bit-field or enum on the HWPX side; HwpForge treats it as an
+    /// opaque u32 until the spec is confirmed.
+    pub option: u32,
 }
 
 /// Position of dutmal annotation text relative to the main text.
@@ -1442,6 +1468,7 @@ impl Control {
             position: DutmalPosition::Top,
             sz_ratio: 0,
             align: DutmalAlign::Center,
+            metadata: DutmalMetadata::default(),
         }
     }
 
@@ -2608,7 +2635,7 @@ mod tests {
         let ctrl = Control::dutmal("본문", "주석");
         assert!(ctrl.is_dutmal());
         match ctrl {
-            Control::Dutmal { main_text, sub_text, position, sz_ratio, align } => {
+            Control::Dutmal { main_text, sub_text, position, sz_ratio, align, .. } => {
                 assert_eq!(main_text, "본문");
                 assert_eq!(sub_text, "주석");
                 assert_eq!(position, DutmalPosition::Top);
@@ -2643,6 +2670,7 @@ mod tests {
             position: DutmalPosition::Bottom,
             sz_ratio: 50,
             align: DutmalAlign::Right,
+            metadata: DutmalMetadata::default(),
         };
         let json = serde_json::to_string(&ctrl).unwrap();
         let decoded: Control = serde_json::from_str(&json).unwrap();

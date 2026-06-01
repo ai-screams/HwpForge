@@ -31,6 +31,7 @@ use crate::decoder::section::{
 use crate::decoder::Hwp5Warning;
 use crate::error::Hwp5Result;
 use crate::numeric::positive_i32_from_u32;
+use crate::schema::section::Hwp5DutmalControl;
 use crate::schema::section::{
     Hwp5CharShapeRun, Hwp5PageDef, Hwp5ShapeComponentGeometry, Hwp5ShapePoint,
 };
@@ -580,7 +581,30 @@ fn project_paragraph_with_images_flat(
     image_context: ImageProjectionContext,
 ) -> Paragraph {
     let mut runs: Vec<Run> = Vec::new();
-    let mut control_iter = hwp_para.controls.iter();
+    // Marker-header controls (secd / cold / %bmk / %hlk / %xrf / bokm /
+    // pgnp) are consumed by `SectionColumnDef` / `FieldBegin` text
+    // segments in the structural path, never by `ControlRef`
+    // (`\u{FFFC}`) markers. The flat path historically iterated *all*
+    // controls and so mis-aligned the FFFC↔control pairing for first
+    // section paragraphs (which always carry `secd`/`cold`). Filter
+    // them out here so the FFFC iterator only sees object controls.
+    // See `.docs/algorithms/2026-06-01_dutmal_carry.md` (companion-fix
+    // section) for the full root-cause + rationale.
+    let mut control_iter = hwp_para.controls.iter().filter(|control| {
+        !matches!(
+            control,
+            Hwp5Control::Unknown {
+                ctrl_id: CTRL_ID_SECTION_DEF
+                    | CTRL_ID_COLUMN_DEF
+                    | CTRL_ID_BOOKMARK_SPAN
+                    | CTRL_ID_HYPERLINK
+                    | CTRL_ID_CROSSREF
+                    | CTRL_ID_BOOKMARK_POINT
+                    | CTRL_ID_PAGE_NUMBER,
+                ..
+            }
+        )
+    });
     let mut segment_start_utf16: u32 = 0;
     let mut current_utf16: u32 = 0;
 
@@ -1116,6 +1140,35 @@ fn project_memo_run(
     Run::control(Control::Memo { content: paragraphs, anchor_runs, metadata }, char_shape_id)
 }
 
+/// Projects a HWP5 dutmal (덧말) control into a Core `Run` carrying
+/// `Control::Dutmal`. Position is mapped from the wire's raw u32; other
+/// metadata (align/sz_ratio/option/styleIDRef) defaults — every 한컴
+/// fixture we've inspected leaves these at their default value, so we
+/// don't promote them to fields until a future fixture forces fidelity
+/// work. See `schema::section::Hwp5DutmalControl` for the wire layout.
+fn project_dutmal_run(dutmal: &Hwp5DutmalControl) -> Run {
+    let position = match dutmal.pos_type_raw {
+        0 => hwpforge_core::control::DutmalPosition::Top,
+        1 => hwpforge_core::control::DutmalPosition::Bottom,
+        2 => hwpforge_core::control::DutmalPosition::Right,
+        3 => hwpforge_core::control::DutmalPosition::Left,
+        _ => hwpforge_core::control::DutmalPosition::Top,
+    };
+    let mut metadata = hwpforge_core::DutmalMetadata::default();
+    metadata.option = dutmal.option_raw;
+    Run::control(
+        Control::Dutmal {
+            main_text: dutmal.main_text.clone(),
+            sub_text: dutmal.sub_text.clone(),
+            position,
+            sz_ratio: 0,
+            align: hwpforge_core::control::DutmalAlign::Center,
+            metadata,
+        },
+        CharShapeIndex::new(0),
+    )
+}
+
 /// Gathers each `Hwp5Control::Header` subtree separately, returning a
 /// `(projected paragraphs, raw 4-byte properties)` tuple per ctrl.
 ///
@@ -1479,6 +1532,7 @@ fn project_control_run(
         | Hwp5Control::Header(_)
         | Hwp5Control::Footer(_)
         | Hwp5Control::Unknown { .. } => None,
+        Hwp5Control::Dutmal(dutmal) => Some(project_dutmal_run(dutmal)),
         Hwp5Control::OleObject(ole) => project_ole_object_run(ole, projection_images),
     }
 }
