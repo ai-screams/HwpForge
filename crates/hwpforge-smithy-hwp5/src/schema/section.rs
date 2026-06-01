@@ -147,6 +147,9 @@ pub(crate) enum TextSegment {
         /// Fourteen bytes of opaque field metadata (7 u16 values).
         extra: [u8; 14],
     },
+    // (insert order: FieldBegin/FieldEnd remain stable for downstream pattern
+    // matches; do not reorder TextSegment variants without an audit of the
+    // decoder/projection match arms.)
     /// Field end marker (U+0004).
     ///
     /// HWP5 stores this as an inline control: one control code unit plus
@@ -812,6 +815,150 @@ fn read_point(cur: &mut Cursor<&[u8]>) -> Hwp5Result<Hwp5ShapePoint> {
 pub(crate) struct Hwp5EqEdit {
     /// HancomEQN script text, e.g. `"{a + b} over {c + d}"`.
     pub script: String,
+}
+
+// ---------------------------------------------------------------------------
+// CtrlHeader command-string utilities
+// ---------------------------------------------------------------------------
+
+/// Decodes the UTF-16 BE command string embedded in a `%`-class CtrlHeader
+/// payload (`%hlk` hyperlink, `%bmk` bookmark, `%xrf` cross-reference,
+/// `%unk` memo, …).
+///
+/// HWP 5.0 spec §4.3.10.3 표 140 layout for the `extended-ctrl` family:
+///
+/// | byte range | meaning |
+/// |-----------:|---------|
+/// | `[0..4]`   | ctrl_id (little-endian u32 of BE-ascii name) |
+/// | `[4..8]`   | properties (u32 LE) |
+/// | `[8..10]`  | command char count (UINT16 **big-endian**) |
+/// | `[10..]`   | UTF-16 **big-endian** code units (`char_count` of them) |
+///
+/// The BE encoding inside the LE wire is observed on 한컴-authored
+/// fixtures; the format-spec wording is ambiguous so we keep one BE
+/// fallback for record robustness. Returns `None` for payloads that fail
+/// either length or UTF-16 decode.
+pub(crate) fn parse_ctrl_header_command_string(header_data: &[u8]) -> Option<String> {
+    if header_data.len() < 10 {
+        return None;
+    }
+    // BE char_count + BE u16 chars (한컴 default).
+    let be_char_len = u16::from_be_bytes([header_data[8], header_data[9]]) as usize;
+    if let Some(s) = decode_command(header_data, be_char_len, /*be_chars=*/ true) {
+        return Some(s);
+    }
+    // LE fallback — older or fuzzed payloads.
+    let le_char_len = u16::from_le_bytes([header_data[8], header_data[9]]) as usize;
+    decode_command(header_data, le_char_len, /*be_chars=*/ false)
+}
+
+fn decode_command(header_data: &[u8], char_count: usize, be_chars: bool) -> Option<String> {
+    if char_count == 0 {
+        return None;
+    }
+    let byte_len = char_count.checked_mul(2)?;
+    let end = 10usize.checked_add(byte_len)?;
+    if end > header_data.len() {
+        return None;
+    }
+    let units: Vec<u16> = header_data[10..end]
+        .chunks_exact(2)
+        .map(|c| {
+            if be_chars {
+                u16::from_be_bytes([c[0], c[1]])
+            } else {
+                u16::from_le_bytes([c[0], c[1]])
+            }
+        })
+        .collect();
+    String::from_utf16(&units).ok()
+}
+
+/// Splits a slash-delimited HWP5 wire command into its fields and verifies
+/// the leading element matches `expected_prefix` (e.g. `"MEMO"` for memos,
+/// `"%hlk"` is *not* part of the slash payload — it's the ctrl_id).
+///
+/// Returns `None` if the prefix doesn't match. Callers index the remaining
+/// fields positionally — the slash layout is part of HWP5 spec for each
+/// command family.
+pub(crate) fn split_slash_command<'a>(
+    command: &'a str,
+    expected_prefix: &str,
+) -> Option<Vec<&'a str>> {
+    let parts: Vec<&'a str> = command.split('/').collect();
+    if parts.first().copied()? != expected_prefix {
+        return None;
+    }
+    Some(parts)
+}
+
+/// Memo wire command parsed from a `%unk` CtrlHeader.
+///
+/// Format observed on 한컴-authored fixtures: `"MEMO/{shape_id}/{memo_id}/{hancom_inst_a}/{hancom_inst_b}/{author}/{terminator}"`.
+///
+/// `hancom_inst_a` and `hancom_inst_b` are 한컴-internal instance
+/// identifiers that 한컴 re-derives on HWPX save (the HWPX
+/// `<hp:fieldBegin id>` and `fieldid` attributes do *not* equal these); we
+/// carry them so the round-tripped HWPX can mirror 한컴's Command
+/// parameter verbatim.
+///
+/// `terminator` is the trailing slash segment (usually `"\;;"`); we keep it
+/// for the same Command-parameter mirroring.
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5MemoCommand {
+    /// Raw command string ("MEMO/65535/1/.../.../hanyul/\;;"). Mirrored
+    /// verbatim into the HWPX `Command` parameter.
+    pub raw: String,
+    /// Memo-shape table reference (slash[1]); 한컴 default is `65535`.
+    pub shape_id: u32,
+    /// Memo identifier (slash[2]); equals the `HWPTAG_MEMO_LIST` payload.
+    pub memo_id: u32,
+    /// 한컴-internal instance id A (slash[3]).
+    ///
+    /// Not consumed directly today — the HWPX encoder mirrors the whole
+    /// `raw` command verbatim into the `Command` parameter, so these
+    /// 한컴-internal ids ride along inside that string. Kept as
+    /// dedicated fields so audit / round-trip code can read them without
+    /// re-splitting `raw`.
+    #[allow(dead_code)]
+    pub hancom_inst_a: u32,
+    /// 한컴-internal instance id B (slash[4]). See `hancom_inst_a`.
+    #[allow(dead_code)]
+    pub hancom_inst_b: u32,
+    /// Author name (slash[5]).
+    pub author: String,
+    /// Trailing terminator segment (slash[6], typically `"\;;"`). Same
+    /// rationale as `hancom_inst_a` — carried inside `raw` verbatim.
+    #[allow(dead_code)]
+    pub terminator: String,
+}
+
+impl Hwp5MemoCommand {
+    /// Decodes a `%unk` CtrlHeader payload into a `Hwp5MemoCommand`.
+    ///
+    /// Returns `None` if the payload doesn't carry a `"MEMO/…"` command —
+    /// `%unk` is the catch-all ctrl_id and only commands with the `MEMO/`
+    /// prefix are memo placeholders. Numeric fields that don't parse as
+    /// `u32` default to `0` (HWP5 spec doesn't promise their numeric
+    /// range; the wire is `String` from 한컴's side).
+    pub(crate) fn parse(header_data: &[u8]) -> Option<Self> {
+        let raw = parse_ctrl_header_command_string(header_data)?;
+        let parts = split_slash_command(&raw, "MEMO")?;
+        if parts.len() < 7 {
+            // Spec allows trailing segments; require at least 7 (MEMO + 6
+            // value slots). Shorter strings are malformed and dropped.
+            return None;
+        }
+        Some(Self {
+            raw: raw.clone(),
+            shape_id: parts[1].parse().unwrap_or(0),
+            memo_id: parts[2].parse().unwrap_or(0),
+            hancom_inst_a: parts[3].parse().unwrap_or(0),
+            hancom_inst_b: parts[4].parse().unwrap_or(0),
+            author: parts[5].to_string(),
+            terminator: parts[6].to_string(),
+        })
+    }
 }
 
 impl Hwp5EqEdit {

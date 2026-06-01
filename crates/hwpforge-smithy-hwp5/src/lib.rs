@@ -1454,7 +1454,7 @@ mod tests {
             Control::Curve { .. } => layout.curves += 1,
             Control::ConnectLine { .. } => layout.connect_lines += 1,
             Control::Equation { .. } => layout.equations += 1,
-            Control::Memo { content } => {
+            Control::Memo { content, .. } => {
                 layout.memos += 1;
                 count_shapes_in_paragraphs(content, layout);
             }
@@ -2161,6 +2161,41 @@ mod tests {
             "memo body content must carry into the <hp:subList>"
         );
 
+        // Wave 12h: full 7-parameter `<hp:parameters cnt="7">` block.
+        // Without these 한컴 mis-classifies the field and renders
+        // `[메모 시작][필드 끝]` in 조판부호 view.
+        assert!(
+            section_xml.contains(r#"<hp:parameters cnt="7""#),
+            "memo must emit the 7-parameter block (Wave 12h)"
+        );
+        assert!(
+            section_xml.contains(r#"editable="1""#)
+                && section_xml.contains(r#"dirty="1""#)
+                && section_xml.contains(r#"zorder="1""#),
+            "fieldBegin must carry editable/dirty/zorder = 1 (Wave 12h)"
+        );
+        assert!(
+            section_xml.contains(r#"<hp:stringParam name="Command">MEMO/65535/1/"#),
+            "Command parameter must mirror wire command verbatim (Wave 12h)"
+        );
+        assert!(
+            section_xml.contains(r#"<hp:stringParam name="ID">memo1</hp:stringParam>"#),
+            "ID parameter must derive `memo{{number}}` from wire memo_id (Wave 12h)"
+        );
+        assert!(
+            section_xml.contains(r#"<hp:stringParam name="Author">hanyul</hp:stringParam>"#),
+            "Author parameter must come from wire slash[5] (Wave 12h)"
+        );
+        assert!(
+            section_xml.contains(r#"<hp:stringParam name="MemoShapeIDRef">65535</hp:stringParam>"#),
+            "MemoShapeIDRef parameter must come from wire slash[1] (Wave 12h)"
+        );
+        assert!(
+            section_xml.contains(r#"<hp:stringParam name="CreateDateTime">"#)
+                && section_xml.contains("Z</hp:stringParam>"),
+            "CreateDateTime auto-generated as ISO 8601 UTC (Wave 12h)"
+        );
+
         let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
         let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
         let layout = collect_decoded_shape_layout(&decoded);
@@ -2206,6 +2241,18 @@ mod tests {
         // mislabel the bodies.
         assert!(section_xml.contains("첫 번째"), "first memo body content must carry");
         assert!(section_xml.contains("두번째"), "second memo body content must carry");
+
+        // Wave 12h: both memos emit full 7-parameter blocks with distinct
+        // ID/Number derived from each wire `memo_id`.
+        assert!(
+            section_xml.matches(r#"<hp:parameters cnt="7""#).count() == 2,
+            "each memo must emit a 7-parameter block (Wave 12h)"
+        );
+        assert!(
+            section_xml.contains(r#"<hp:stringParam name="ID">memo1</hp:stringParam>"#)
+                && section_xml.contains(r#"<hp:stringParam name="ID">memo2</hp:stringParam>"#),
+            "ID parameters derive from wire memo_id distinctly (memo1, memo2)"
+        );
 
         let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
         let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");

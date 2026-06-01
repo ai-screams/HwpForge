@@ -36,6 +36,7 @@ use crate::chart::{
 };
 use crate::error::{CoreError, CoreResult};
 use crate::paragraph::Paragraph;
+use crate::run::Run;
 
 /// A 2D point in raw HWPUNIT coordinates for shape geometry.
 ///
@@ -641,16 +642,37 @@ pub enum Control {
     },
 
     /// A memo (메모) annotation attached to text.
-    /// Maps to HWPX `fieldBegin type="MEMO"` with `<hp:subList>` body inside.
     ///
-    /// Wave 12e-Memo: the `author`/`date` fields were removed because no
-    /// supported wire format actually carried non-empty values — HWPX
-    /// `<hp:fieldBegin type="MEMO">` only emits `MemoShapeID` /`MemoType`
-    /// parameters, and HWP5's `%unk MEMO/.../.../...` command exposes no
-    /// author or date metadata.
+    /// Maps to HWPX `fieldBegin type="MEMO"` + anchor body runs +
+    /// `fieldEnd` flat inside one `<hp:run>`. The memo's body lives inside
+    /// `fieldBegin`'s `<hp:subList>`; the *anchor* runs sit between
+    /// `fieldBegin` and `fieldEnd` so 한컴 can pair the markers and render
+    /// the `[메모 시작]…[메모 끝]` UI labels instead of generic
+    /// `[메모 시작]…[필드 끝]`.
+    ///
+    /// Wave 12e: `author`/`date` fields removed (no wire path populated
+    /// them).
+    ///
+    /// Wave 12f: `anchor_runs` added. Without it, the encoder produced an
+    /// empty `<hp:t/>` between `fieldBegin` and `fieldEnd`, which 한컴 reads
+    /// as an unpaired field — visible bug.
     Memo {
-        /// Paragraphs forming the memo body content.
+        /// Paragraphs forming the memo body content (rendered in
+        /// `<hp:subList>`).
         content: Vec<Paragraph>,
+        /// Runs that form the visible *anchor* text — the body span the memo
+        /// is attached to. Encoders interleave these between `fieldBegin`
+        /// and `fieldEnd` inside one `<hp:run>`. Should normally hold only
+        /// `RunContent::Text`; other variants are downgraded by the encoder
+        /// with a warning (memos cannot anchor on tables/images/nested
+        /// controls in HWPX).
+        anchor_runs: Vec<Run>,
+        /// HWPX `<hp:parameters>` for the memo. Carrying these as a
+        /// dedicated [`MemoMetadata`] (instead of half-empty hard-coded
+        /// values) keeps the metadata format-agnostic — encoders for HWPX
+        /// (and any future format with similar metadata) consume the same
+        /// struct.
+        metadata: MemoMetadata,
     },
 
     /// An index mark for building a document index (찾아보기).
@@ -672,6 +694,65 @@ pub enum Control {
         /// Optional serialized data for round-trip preservation.
         data: Option<String>,
     },
+}
+
+/// Metadata associated with a memo annotation (HWPX `<hp:parameters>`).
+///
+/// Carries the seven HWPX memo parameters (`Prop`, `Command`, `ID`, `Number`,
+/// `Author`, `MemoShapeIDRef`, `CreateDateTime`). Empty / default values are
+/// rendered by encoders as sensible defaults: `Prop` is always `0` on
+/// 한컴-authored fixtures so the field is omitted on the Core side, and
+/// `CreateDateTime` is auto-generated at encode time if blank (a 한컴-native
+/// memo always has a timestamp).
+///
+/// Other format encoders (Markdown, future ODT) can ignore the
+/// HWPX-specific fields and just use `author` if useful.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub struct MemoMetadata {
+    /// Reference to the `MemoShape` table entry. 한컴 default is `65535`.
+    pub shape_id_ref: u32,
+    /// Memo number (`<hp:integerParam name="Number">`). Equals the HWP5
+    /// `memo_id`. Encoders normally also derive the HWPX `ID` parameter
+    /// from this value (`"memo{number}"`).
+    pub number: u32,
+    /// HWPX `ID` parameter (typically `"memo{number}"`). Encoders may
+    /// auto-derive from `number` when blank.
+    pub id: String,
+    /// Memo author (`Author` parameter). Empty when unknown.
+    pub author: String,
+    /// HWPX `CreateDateTime` parameter (ISO 8601 UTC). Empty triggers
+    /// encoder-side auto-generation at write time.
+    pub create_datetime: String,
+    /// Raw wire `Command` parameter (`"MEMO/{shape}/{number}/…"` from HWP5).
+    /// Empty for HwpForge-authored memos — encoders synthesise a minimum
+    /// `MEMO/{shape}/{number}/` form in that case.
+    pub command: String,
+}
+
+impl Default for MemoMetadata {
+    fn default() -> Self {
+        Self {
+            shape_id_ref: 65535,
+            number: 0,
+            id: String::new(),
+            author: String::new(),
+            create_datetime: String::new(),
+            command: String::new(),
+        }
+    }
+}
+
+impl MemoMetadata {
+    /// Returns the HWPX `ID` parameter, deriving `"memo{number}"` when the
+    /// explicit field is blank.
+    pub fn hwpx_id(&self) -> String {
+        if self.id.is_empty() {
+            format!("memo{}", self.number)
+        } else {
+            self.id.clone()
+        }
+    }
 }
 
 /// Position of dutmal annotation text relative to the main text.
@@ -873,7 +954,30 @@ impl Control {
     /// assert!(memo.is_memo());
     /// ```
     pub fn memo(content: Vec<Paragraph>) -> Self {
-        Self::Memo { content }
+        Self::Memo { content, anchor_runs: Vec::new(), metadata: MemoMetadata::default() }
+    }
+
+    /// Creates a memo annotation with both body content and anchor runs.
+    ///
+    /// `anchor_runs` are the visible body span the memo is attached to (the
+    /// text between HWPX `<hp:fieldBegin type="MEMO">` and `<hp:fieldEnd>`);
+    /// `content` is the memo body inside `<hp:subList>`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::Control;
+    /// use hwpforge_core::paragraph::Paragraph;
+    /// use hwpforge_core::run::Run;
+    /// use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+    ///
+    /// let body = vec![Paragraph::new(ParaShapeIndex::new(0))];
+    /// let anchor = vec![Run::text("hello", CharShapeIndex::new(0))];
+    /// let memo = Control::memo_with_anchor(body, anchor);
+    /// assert!(memo.is_memo());
+    /// ```
+    pub fn memo_with_anchor(content: Vec<Paragraph>, anchor_runs: Vec<Run>) -> Self {
+        Self::Memo { content, anchor_runs, metadata: MemoMetadata::default() }
     }
 
     /// Creates a cross-reference to a bookmark target.
@@ -1622,10 +1726,11 @@ impl std::fmt::Display for Control {
                 let hint = hint_text.as_deref().unwrap_or("");
                 write!(f, "Field({field_type}, \"{hint}\")")
             }
-            Self::Memo { content } => {
+            Self::Memo { content, anchor_runs, .. } => {
                 let n = content.len();
                 let word = if n == 1 { "paragraph" } else { "paragraphs" };
-                write!(f, "Memo({n} {word})")
+                let anchor_len = anchor_runs.len();
+                write!(f, "Memo({n} {word}, anchor={anchor_len} runs)")
             }
             Self::IndexMark { primary, secondary } => {
                 if let Some(sec) = secondary {

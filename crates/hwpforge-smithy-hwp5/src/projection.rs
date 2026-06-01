@@ -48,10 +48,21 @@ const CTRL_ID_BOOKMARK_SPAN: u32 = 0x2562_6D6B; // "%bmk"
 const CTRL_ID_HYPERLINK: u32 = 0x2568_6C6B; // "%hlk"
 const CTRL_ID_CROSSREF: u32 = 0x2578_7266; // "%xrf"
 const CTRL_ID_BOOKMARK_POINT: u32 = 0x626F_6B6D; // "bokm"
-/// Memo placeholder ctrl id (`%unk` BE-ascii). Matches the decoder-side
-/// `CTRL_ID_MEMO`; only `%unk` ctrls whose command string starts with
-/// `"MEMO/"` arrive here as `Hwp5Control::Memo` (others stay `Unknown`).
-const CTRL_ID_MEMO: u32 = 0x2575_6E6B;
+/// Inline `FieldBegin` ctrl_id for memo anchors (`%%me` BE-ascii).
+///
+/// In the HWP5 body text stream, memos are embedded as `FieldBegin` /
+/// `FieldEnd` markers whose `extra[0..4]` raw bytes are
+/// `65 6D 25 25` (ASCII `e m % %` — same "LE-stored u32 of BE-ascii name"
+/// convention as `%bmk` / `%hlk` / `%xrf` above). After
+/// `ctrl_id_from_inline_extra` reverses + reads BE, that yields
+/// `0x2525_6D65`.
+///
+/// This is *not* the same identifier as the `CtrlHeader` ctrl_id for memo
+/// placeholders — that one is `%unk` (`0x2575_6E6B`), defined in the
+/// decoder. HWP5 uses one ID for the inline anchor and another for the
+/// `CtrlHeader` placeholder; only the inline id is needed here, where we
+/// translate `FieldBegin` markers into `ActiveField::MemoAnchor`.
+const CTRL_ID_MEMO_INLINE: u32 = 0x2525_6D65;
 const HWP5_CROSSREF_UNKNOWN_TAG: &str = "hwp5.crossref";
 
 #[derive(Debug, Default)]
@@ -726,8 +737,11 @@ fn project_paragraph_with_images_structural(
             crate::schema::section::TextSegment::FieldBegin { extra } => {
                 let ctrl_id = ctrl_id_from_inline_extra(extra);
                 let header = consume_marker_header(&mut queues.marker_headers, ctrl_id);
-                let memo =
-                    if ctrl_id == CTRL_ID_MEMO { queues.memo_controls.pop_front() } else { None };
+                let memo = if ctrl_id == CTRL_ID_MEMO_INLINE {
+                    queues.memo_controls.pop_front()
+                } else {
+                    None
+                };
                 active_field = Some(start_active_field(
                     ctrl_id,
                     header,
@@ -784,10 +798,15 @@ fn project_paragraph_with_images_structural(
                 reason: format!(
                     "memo_id={} had no matching FieldBegin anchor; \
                      emitting Run at end of paragraph",
-                    memo.memo_id
+                    memo.command.memo_id
                 ),
             });
-            runs.push(project_memo_run(&memo, projection_images, CharShapeIndex::new(0)));
+            runs.push(project_memo_run(
+                &memo,
+                projection_images,
+                CharShapeIndex::new(0),
+                Vec::new(),
+            ));
         }
     }
 
@@ -912,7 +931,7 @@ fn start_active_field(
     field_hints: Option<&mut SectionProjectionHints>,
 ) -> ActiveField {
     match ctrl_id {
-        CTRL_ID_MEMO => {
+        CTRL_ID_MEMO_INLINE => {
             // Anchor body is preserved via the BookmarkSpan/PlainTextFallback
             // pattern; the memo Run is emitted in `finish_active_field` after
             // the anchor text.
@@ -1044,19 +1063,25 @@ fn finish_active_field(
             ));
         }
         ActiveField::MemoAnchor { start_utf16, memo } => {
-            // Emit anchor text first so the field span text isn't dropped,
-            // then attach the memo Run at the anchor's start position.
-            runs.extend(project_text_segment(
+            // Capture the FieldBegin..FieldEnd span as `anchor_runs` *inside*
+            // `Control::Memo`. The HWPX encoder then emits them between
+            // `<hp:fieldBegin>` and `<hp:fieldEnd>` in the same `<hp:run>` —
+            // the layout 한컴 uses for `[메모 시작]anchor[메모 끝]`. Emitting
+            // anchor text as a separate Run *outside* the memo, as we did in
+            // Wave 12e/12f-pre-fix, made 한컴 mis-render the end marker as
+            // generic `[필드 끝]` because the field span was effectively
+            // empty.
+            let anchor_runs = project_text_segment(
                 &hwp_para.text,
                 &hwp_para.char_shape_runs,
                 start_utf16,
                 end_utf16,
-            ));
+            );
             let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
                 &hwp_para.char_shape_runs,
                 start_utf16,
             ) as usize);
-            runs.push(project_memo_run(&memo, projection_images, char_shape_id));
+            runs.push(project_memo_run(&memo, projection_images, char_shape_id, anchor_runs));
         }
     }
 }
@@ -1069,13 +1094,26 @@ fn project_memo_run(
     memo: &Hwp5MemoControl,
     projection_images: &mut ProjectionImageState<'_>,
     char_shape_id: CharShapeIndex,
+    anchor_runs: Vec<Run>,
 ) -> Run {
     let paragraphs = project_nested_paragraphs(
         &memo.paragraphs,
         projection_images,
         ImageProjectionContext::Flow,
     );
-    Run::control(Control::Memo { content: paragraphs }, char_shape_id)
+    // Map the parsed wire command onto the format-agnostic
+    // `MemoMetadata`. `id` and `create_datetime` are left at their default
+    // (empty) so the HWPX encoder derives `"memo{number}"` and a current-UTC
+    // timestamp at emit time — wire never carried either field. We go
+    // through `Default::default()` because `MemoMetadata` is
+    // `#[non_exhaustive]` and can't be constructed positionally outside
+    // `hwpforge-core`.
+    let mut metadata = hwpforge_core::MemoMetadata::default();
+    metadata.shape_id_ref = memo.command.shape_id;
+    metadata.number = memo.command.memo_id;
+    metadata.author = memo.command.author.clone();
+    metadata.command = memo.command.raw.clone();
+    Run::control(Control::Memo { content: paragraphs, anchor_runs, metadata }, char_shape_id)
 }
 
 /// Gathers each `Hwp5Control::Header` subtree separately, returning a

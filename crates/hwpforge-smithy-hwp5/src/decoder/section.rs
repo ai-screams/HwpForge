@@ -13,8 +13,8 @@ use crate::error::Hwp5Result;
 use crate::schema::header::HwpVersion;
 use crate::schema::record::{Record, TagId};
 use crate::schema::section::{
-    Hwp5CharShapeRun, Hwp5EqEdit, Hwp5PageDef, Hwp5ParaHeader, Hwp5ParaLineSeg, Hwp5ParaText,
-    Hwp5ShapeComponentCurve, Hwp5ShapeComponentEllipse, Hwp5ShapeComponentGeometry,
+    Hwp5CharShapeRun, Hwp5EqEdit, Hwp5MemoCommand, Hwp5PageDef, Hwp5ParaHeader, Hwp5ParaLineSeg,
+    Hwp5ParaText, Hwp5ShapeComponentCurve, Hwp5ShapeComponentEllipse, Hwp5ShapeComponentGeometry,
     Hwp5ShapeComponentLine, Hwp5ShapeComponentOle, Hwp5ShapeComponentPolygon, Hwp5ShapePicture,
     Hwp5ShapePoint, TextSegment,
 };
@@ -217,21 +217,23 @@ pub(crate) struct Hwp5EquationControl {
 
 /// Parsed memo placeholder from a `%unk` ctrl with command `"MEMO/.../.../..."`.
 ///
-/// The decoder pushes this placeholder with `paragraphs: vec![]` when it sees
-/// the inline ctrl, then fills `paragraphs` from
+/// Wire metadata (shape_id / hancom_inst_* / author / terminator) lives in
+/// `command`. The decoder pushes this placeholder with `paragraphs: vec![]`
+/// when it sees the inline ctrl, then fills `paragraphs` from
 /// [`BodyTextParserState::memo_contents`] during `finish()` once the matching
 /// `HWPTAG_MEMO_LIST` cluster at the end of the section's last body paragraph
-/// has been captured. Matching is keyed by `memo_id`, not by document position —
-/// see `phase12e_memo_design.md` for the cluster wire layout.
+/// has been captured. Cluster matching is keyed by `command.memo_id`, not by
+/// document position — see `phase12e_memo_design.md` for the wire layout.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5MemoControl {
     /// Owning control identifier, always `%unk` (0x2575_6E6B BE-ascii).
     #[allow(dead_code)] // reserved for semantic/control-audit slices
     pub ctrl_id: u32,
-    /// HWP5 memo identifier: second numeric slash-field of the
-    /// `"MEMO/{shapeId}/{memo_id}/{instId}"` command and the 4-byte payload of
-    /// `HWPTAG_MEMO_LIST` (0x5D) that hosts the body.
-    pub memo_id: u32,
+    /// Full wire command — shape_id / memo_id / author / etc. The
+    /// downstream HWPX encoder uses these fields to emit the seven
+    /// `<hp:parameters>` 한컴 needs for correct memo classification (see
+    /// `.docs/algorithms/2026-06-01_memo_anchor_serialization.md`).
+    pub command: Hwp5MemoCommand,
     /// Memo body paragraphs. Empty after the inline-ctrl push; filled by
     /// `attach_memo_contents_to_placeholders` during `finish()`. Stays empty
     /// when the matching cluster is missing (warning surfaced).
@@ -492,9 +494,9 @@ const CTRL_ID_EQED: u32 = 0x6571_6564;
 /// the `Hwp5Control::Unknown` fallback.
 const CTRL_ID_MEMO: u32 = 0x2575_6E6B;
 
-/// Prefix of the memo command string carried inside the `%unk` ctrl_header
-/// command field. Full layout: `"MEMO/{shapeId}/{memo_id}/{instId}"`.
-const MEMO_COMMAND_PREFIX: &str = "MEMO/";
+// Memo wire command parsing now lives on `Hwp5MemoCommand::parse` in
+// `crate::schema::section` — shared with the slash-command util that future
+// `%hlk` / `%xrf` / `%bmk` parsers can reuse.
 
 // ---------------------------------------------------------------------------
 // Parser state
@@ -1563,8 +1565,9 @@ impl BodyTextParserState {
                             Hwp5ShapeComponentGeometry { x: 0, y: 0, width: 0, height: 0 },
                         ),
                     );
-                } else if let Some(memo_id) =
-                    (ctrl_id == CTRL_ID_MEMO).then(|| parse_memo_command_id(&record.data)).flatten()
+                } else if let Some(command) = (ctrl_id == CTRL_ID_MEMO)
+                    .then(|| Hwp5MemoCommand::parse(&record.data))
+                    .flatten()
                 {
                     // Push a placeholder `Hwp5Control::Memo` now; its content
                     // paragraphs get filled in `finish()` by matching this
@@ -1578,7 +1581,7 @@ impl BodyTextParserState {
                     if let Some(buf) = self.current.as_mut() {
                         buf.controls.push(Hwp5Control::Memo(Hwp5MemoControl {
                             ctrl_id: CTRL_ID_MEMO,
-                            memo_id,
+                            command,
                             paragraphs: Vec::new(),
                         }));
                     }
@@ -1917,57 +1920,6 @@ fn parse_memo_list_id(data: &[u8]) -> Option<u32> {
     }
 }
 
-/// Discriminates a `%unk` ctrl_header as a memo and extracts its `memo_id`.
-///
-/// `%unk` is shared with other user-unknown controls, so we only treat it as
-/// a memo when the command string starts with `"MEMO/"`. The id returned is
-/// the second slash-separated numeric field, matching the 4-byte payload of
-/// the corresponding `HWPTAG_MEMO_LIST` cluster.
-fn parse_memo_command_id(header_data: &[u8]) -> Option<u32> {
-    let command = parse_ctrl_header_command_string(header_data)?;
-    let rest = command.strip_prefix(MEMO_COMMAND_PREFIX)?;
-    let mut parts = rest.split('/');
-    parts.next()?; // shapeId
-    parts.next()?.parse::<u32>().ok()
-}
-
-/// Parses the UTF-16 command string in a CtrlHeader payload after the
-/// `ctrl_id` (4) + `properties` (4) + UINT16 char-count prefix
-/// (HWP 5.0 spec §4.3.10.3 표 140).
-///
-/// Tries little-endian first (the HWP5 spec default for record fields);
-/// falls back to big-endian if the LE char-count would overrun the record.
-/// The fallback exists because `hwpforge-smithy-hwp5/src/projection.rs`
-/// observed BE-coded command strings in some hyperlink fixtures.
-fn parse_ctrl_header_command_string(header_data: &[u8]) -> Option<String> {
-    if header_data.len() < 10 {
-        return None;
-    }
-    let le_char_len = u16::from_le_bytes([header_data[8], header_data[9]]) as usize;
-    let le_end = 10usize.checked_add(le_char_len.checked_mul(2)?)?;
-    if le_end <= header_data.len() {
-        let units: Vec<u16> = header_data[10..le_end]
-            .chunks_exact(2)
-            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-            .collect();
-        if let Ok(decoded) = String::from_utf16(&units) {
-            return Some(decoded);
-        }
-    }
-    let be_char_len = u16::from_be_bytes([header_data[8], header_data[9]]) as usize;
-    let be_end = 10usize.checked_add(be_char_len.checked_mul(2)?)?;
-    if be_end <= header_data.len() {
-        let units: Vec<u16> = header_data[10..be_end]
-            .chunks_exact(2)
-            .map(|chunk| u16::from_be_bytes([chunk[0], chunk[1]]))
-            .collect();
-        if let Ok(decoded) = String::from_utf16(&units) {
-            return Some(decoded);
-        }
-    }
-    None
-}
-
 /// Walks paragraphs (recursively into table cells / nested subtrees) and
 /// fills every empty `Hwp5Control::Memo` placeholder whose `memo_id`
 /// matches an entry in `memo_contents`. Entries are removed as they are
@@ -1981,12 +1933,15 @@ fn fill_memo_placeholders(
         for control in &mut para.controls {
             match control {
                 Hwp5Control::Memo(memo) if memo.paragraphs.is_empty() => {
-                    if let Some(content) = memo_contents.remove(&memo.memo_id) {
+                    if let Some(content) = memo_contents.remove(&memo.command.memo_id) {
                         memo.paragraphs = content;
                     } else {
                         warnings.push(Hwp5Warning::DroppedControl {
                             control: "memo",
-                            reason: format!("no content cluster for memo_id={}", memo.memo_id),
+                            reason: format!(
+                                "no content cluster for memo_id={}",
+                                memo.command.memo_id
+                            ),
                         });
                     }
                 }
@@ -2019,7 +1974,7 @@ fn warn_unfilled_memo_placeholders(paragraphs: &[Hwp5Paragraph], warnings: &mut 
                 Hwp5Control::Memo(memo) if memo.paragraphs.is_empty() => {
                     warnings.push(Hwp5Warning::DroppedControl {
                         control: "memo",
-                        reason: format!("no content cluster for memo_id={}", memo.memo_id),
+                        reason: format!("no content cluster for memo_id={}", memo.command.memo_id),
                     });
                 }
                 Hwp5Control::Table(table) => {

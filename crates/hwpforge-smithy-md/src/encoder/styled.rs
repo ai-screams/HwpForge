@@ -439,7 +439,7 @@ fn encode_control_styled(
             // Bookmarks are invisible anchors — emit nothing.
             String::new()
         }
-        Control::Memo { content } => {
+        Control::Memo { content, .. } => {
             let body = content
                 .iter()
                 .map(|p| extract_paragraph_text(p, styles))

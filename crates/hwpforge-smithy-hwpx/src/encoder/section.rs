@@ -613,11 +613,18 @@ fn build_runs(
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
-                    Control::Memo { content } => {
+                    Control::Memo { content, anchor_runs, metadata } => {
                         let field_id = hyperlink_entries.len();
                         let marker = next_marker("HWPME", field_id);
                         let sublist_xml = encode_memo_sublist(content, depth, hyperlink_entries)?;
-                        let real_xml = build_memo_run_xml(&sublist_xml, char_pr_id_ref, field_id);
+                        let anchor_xml = build_memo_anchor_xml(anchor_runs);
+                        let real_xml = build_memo_run_xml(
+                            &sublist_xml,
+                            &anchor_xml,
+                            metadata,
+                            char_pr_id_ref,
+                            field_id,
+                        );
                         let marker_run_xml = format!(
                             r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
                         );
@@ -1305,25 +1312,61 @@ fn build_hwp5_crossref_run_xml(
 }
 
 /// Builds a `<hp:run>` XML string for a memo annotation.
-fn build_memo_run_xml(sublist_xml: &str, char_pr_id_ref: u32, field_id: usize) -> String {
+///
+/// `anchor_xml` is the inline `<hp:t>…</hp:t>` sequence representing the
+/// visible body span the memo is attached to; it is placed *between*
+/// `<hp:fieldBegin>` and `<hp:fieldEnd>` in the same `<hp:run>`. An empty
+/// `anchor_xml` reproduces the pre-Wave-12f point-anchored layout, which
+/// 한컴 renders as `[메모 시작][필드 끝]` (the memo end marker is
+/// unpaired); see `.docs/algorithms/2026-06-01_memo_anchor_serialization.md`
+/// for why we collapse anchor_runs to a single `<hp:t>` element here.
+fn build_memo_run_xml(
+    sublist_xml: &str,
+    anchor_xml: &str,
+    metadata: &hwpforge_core::MemoMetadata,
+    char_pr_id_ref: u32,
+    field_id: usize,
+) -> String {
     // Signed-32-bit-safe begin_id base; distinct from other field builders.
     let begin_id = 1_500_000_000_u64 + field_id as u64;
     // Non-zero 32-bit field instance id; `fieldid="0"` is invalid in Hancom.
     let field_uid = 2_028_000_000_u64 + field_id as u64;
+
+    let id = metadata.hwpx_id();
+    let command = if metadata.command.is_empty() {
+        // HwpForge-authored memos synthesise a minimal Command string so
+        // 한컴 still pairs the field markers correctly. Format mirrors what
+        // 한컴 writes for a wire-less memo.
+        format!("MEMO/{}/{}/0/0/{}/\\;;", metadata.shape_id_ref, metadata.number, metadata.author)
+    } else {
+        metadata.command.clone()
+    };
+    let create_datetime = if metadata.create_datetime.is_empty() {
+        iso8601_utc_now()
+    } else {
+        metadata.create_datetime.clone()
+    };
+
+    let parameters = build_memo_parameters_xml(
+        metadata.shape_id_ref,
+        &command,
+        &id,
+        metadata.number,
+        &metadata.author,
+        &create_datetime,
+    );
+
     format!(
         concat!(
             r#"<hp:run charPrIDRef="{cpr}">"#,
             r#"<hp:ctrl>"#,
-            r#"<hp:fieldBegin id="{bid}" type="MEMO" name="" editable="0" dirty="0" "#,
-            r#"zorder="-1" fieldid="{fid}" metaTag="">"#,
-            r#"<hp:parameters cnt="2" name="">"#,
-            r#"<hp:integerParam name="MemoShapeID">0</hp:integerParam>"#,
-            r#"<hp:stringParam name="MemoType">DEFAULT</hp:stringParam>"#,
-            r#"</hp:parameters>"#,
+            r#"<hp:fieldBegin id="{bid}" type="MEMO" name="" editable="1" dirty="1" "#,
+            r#"zorder="1" fieldid="{fid}" metaTag="">"#,
+            r#"{params}"#,
             r#"{sublist}"#,
             r#"</hp:fieldBegin>"#,
             r#"</hp:ctrl>"#,
-            r#"<hp:t/>"#,
+            r#"{anchor}"#,
             r#"<hp:ctrl>"#,
             r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="{fid}"/>"#,
             r#"</hp:ctrl>"#,
@@ -1332,8 +1375,120 @@ fn build_memo_run_xml(sublist_xml: &str, char_pr_id_ref: u32, field_id: usize) -
         cpr = char_pr_id_ref,
         bid = begin_id,
         fid = field_uid,
+        params = parameters,
         sublist = sublist_xml,
+        anchor = anchor_xml,
     )
+}
+
+/// Builds the 7-parameter `<hp:parameters>` block 한컴 writes for a memo
+/// fieldBegin. Extracted from `build_memo_run_xml` so the same structure
+/// is easy to find when other field types need similar parameter blocks
+/// (hyperlink/crossref already use a 4-parameter analogue inside
+/// `build_hyperlink_run_xml`; that one can converge on this helper when
+/// it gains parity with 한컴 truth).
+fn build_memo_parameters_xml(
+    shape_id_ref: u32,
+    command: &str,
+    id: &str,
+    number: u32,
+    author: &str,
+    create_datetime: &str,
+) -> String {
+    let command_esc = escape_xml(command);
+    let id_esc = escape_xml(id);
+    let author_esc = escape_xml(author);
+    let dt_esc = escape_xml(create_datetime);
+    format!(
+        concat!(
+            r#"<hp:parameters cnt="7" name="">"#,
+            r#"<hp:integerParam name="Prop">0</hp:integerParam>"#,
+            r#"<hp:stringParam name="Command">{cmd}</hp:stringParam>"#,
+            r#"<hp:stringParam name="ID">{id}</hp:stringParam>"#,
+            r#"<hp:integerParam name="Number">{num}</hp:integerParam>"#,
+            r#"<hp:stringParam name="Author">{author}</hp:stringParam>"#,
+            r#"<hp:stringParam name="MemoShapeIDRef">{shape}</hp:stringParam>"#,
+            r#"<hp:stringParam name="CreateDateTime">{dt}</hp:stringParam>"#,
+            r#"</hp:parameters>"#,
+        ),
+        cmd = command_esc,
+        id = id_esc,
+        num = number,
+        author = author_esc,
+        shape = shape_id_ref,
+        dt = dt_esc,
+    )
+}
+
+/// Returns the current UTC time as an ISO 8601 timestamp
+/// (`"YYYY-MM-DDTHH:MM:SSZ"`). Used as a sensible default for
+/// `<hp:parameters name="CreateDateTime">` when callers don't supply one.
+///
+/// Implemented against `std::time` so the encoder stays dependency-free.
+/// Algorithm is Howard Hinnant's civil-from-days conversion; see
+/// <https://howardhinnant.github.io/date_algorithms.html>.
+fn iso8601_utc_now() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let (y, mo, d, h, mi, s) = unix_to_ymdhms(secs);
+    format!("{y:04}-{mo:02}-{d:02}T{h:02}:{mi:02}:{s:02}Z")
+}
+
+fn unix_to_ymdhms(secs: u64) -> (i64, u32, u32, u32, u32, u32) {
+    let total_days = (secs / 86_400) as i64;
+    let tod = secs % 86_400;
+    let hour = (tod / 3_600) as u32;
+    let minute = ((tod % 3_600) / 60) as u32;
+    let second = (tod % 60) as u32;
+    // 1970-01-01 → days since 0000-03-01 (era anchor) = 719468.
+    let z = total_days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64; // [0, 146097)
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 400)
+    let y0 = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 366)
+    let mp = (5 * doy + 2) / 153; // [0, 12)
+    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let month_civil = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    let year_civil = if month_civil <= 2 { y0 + 1 } else { y0 };
+    (year_civil, month_civil, day, hour, minute, second)
+}
+
+/// Serializes a memo's `anchor_runs` into an inline `<hp:t>…</hp:t>` sequence
+/// that lives between `<hp:fieldBegin type="MEMO">` and `<hp:fieldEnd>`.
+///
+/// Lossy by design: every `RunContent::Text` is concatenated into a single
+/// `<hp:t>` element; non-text runs are skipped; the per-run `char_shape_id`
+/// is *not* preserved (the surrounding `<hp:run>` already carries a single
+/// `charPrIDRef`). 한컴's own HWPX output is the same shape — a memo's
+/// anchor is a single `<hp:t>` per `<hp:run>` even when the source HWP5
+/// stream split it across char_shape changes.
+///
+/// Returns `<hp:t/>` for an empty anchor; that path reproduces the
+/// pre-Wave-12f point-anchored layout, which 한컴 mis-renders, so the
+/// projection layer should always populate `anchor_runs` when a memo's
+/// HWP5 `FieldBegin..FieldEnd` span contains text.
+///
+/// See `.docs/algorithms/2026-06-01_memo_anchor_serialization.md` for the
+/// fidelity tradeoff and why we accept it.
+fn build_memo_anchor_xml(anchor_runs: &[hwpforge_core::run::Run]) -> String {
+    use hwpforge_core::run::RunContent;
+    let mut text = String::new();
+    for run in anchor_runs {
+        if let RunContent::Text(s) = &run.content {
+            text.push_str(s);
+        }
+        // Non-text variants are dropped; a memo anchor cannot wrap
+        // tables/images/nested controls in HWPX, and 한컴 does not produce
+        // such anchors. If they ever appear, the lossy collapse here is
+        // strictly preferable to emitting an empty anchor (the old buggy
+        // path) — both bug 1 (wrong anchor position) and bug 2 (`[필드 끝]`
+        // mis-label) regress if the anchor is empty.
+    }
+    if text.is_empty() {
+        return "<hp:t/>".to_string();
+    }
+    build_text_element_xml(&text)
 }
 
 /// Encodes memo body paragraphs as an XML string for embedding inside fieldBegin.
@@ -4038,7 +4193,11 @@ mod tests {
     #[test]
     fn memo_encoding() {
         use hwpforge_core::control::Control;
-        let ctrl = Control::Memo { content: vec![text_paragraph("Memo note", 0, 0)] };
+        let ctrl = Control::Memo {
+            content: vec![text_paragraph("Memo note", 0, 0)],
+            anchor_runs: vec![Run::text("anchor", CharShapeIndex::new(0))],
+            metadata: hwpforge_core::MemoMetadata::default(),
+        };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
                 vec![Run::control(ctrl, CharShapeIndex::new(0))],
@@ -4496,7 +4655,16 @@ mod tests {
             ),
             "hwp5_crossref",
         );
-        assert_ids_under_limit(&build_memo_run_xml("", 0, big), "memo");
+        assert_ids_under_limit(
+            &build_memo_run_xml(
+                "",
+                "<hp:t>x</hp:t>",
+                &hwpforge_core::MemoMetadata::default(),
+                0,
+                big,
+            ),
+            "memo",
+        );
     }
 
     // ── Heading level (titleMark) encoding ───────────────────────

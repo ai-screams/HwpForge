@@ -118,6 +118,58 @@ existed in the shared model; only the HWP5 leg was missing.
   `<!-- memo(author): body -->` (the author segment was always blank in
   practice).
 
+#### Fixed — Wave 12f (memo anchor position)
+
+- HWP5 stores the memo *inline* `FieldBegin` marker with `extra[0..4] = %%me`
+  (`0x2525_6D65`), which is **not** the same id as the `CtrlHeader` ctrl_id
+  `%unk` (`0x2575_6E6B`). Wave 12e matched only the latter, so the inline
+  anchor was never recognised and the memo `Run` ended up drained at the
+  end of the paragraph as a point-anchored field — 한컴 rendered it as
+  `메모 대상 문장입니다.[메모 시작][필드 끝]`.
+- `projection.rs::start_active_field` now recognises both ids: the inline
+  marker activates `ActiveField::MemoAnchor`, which positions the memo
+  `Run` at the correct anchor offset (`vis=2` in the basic fixture).
+
+#### Changed — Wave 12g (Core API breaking, semver-deliberate)
+
+- `Control::Memo` gains `anchor_runs: Vec<Run>`. The anchor body sits
+  *inside* the same `<hp:run>` as `fieldBegin`/`fieldEnd` in 한컴
+  truth fixtures; the previous Wave-12f layout placed the anchor as a
+  separate Run before the memo and 한컴 mis-rendered the end marker as
+  generic `[필드 끝]`.
+- HWPX encoder now serializes memos as a flat
+  `[fieldBegin][anchor_xml][fieldEnd]` `<hp:run>` via
+  `build_memo_anchor_xml`. See
+  `.docs/algorithms/2026-06-01_memo_anchor_serialization.md` for the
+  anchor-body collapse heuristic (single `<hp:t>` per anchor) and why
+  we accept the per-run char-shape fidelity loss.
+- `Control::memo_with_anchor(content, anchor_runs)` helper added.
+
+#### Added / Changed — Wave 12h (full `<hp:parameters>` carry)
+
+- HWPX `<hp:parameters>` now emits the full 한컴-standard `cnt="7"`
+  block (`Prop`, `Command`, `ID`, `Number`, `Author`, `MemoShapeIDRef`,
+  `CreateDateTime`) plus `editable="1" dirty="1" zorder="1"`. The
+  pre-12h `cnt="2"` block (`MemoShapeID` + `MemoType` only) made
+  한컴 mis-classify the field — the memo body rendered correctly, but
+  the end marker fell back to generic `[필드 끝]` in 조판부호 view.
+- New schema struct `Hwp5MemoCommand` parses the wire's
+  `"MEMO/{shape_id}/{memo_id}/{hancom_inst_a}/{hancom_inst_b}/{author}/{terminator}"`
+  command string. Reusable wire-string utilities
+  (`parse_ctrl_header_command_string`, `split_slash_command`) added to
+  `schema/section.rs` for future `%hlk` / `%xrf` / `%bmk` work.
+- New `Control::Memo { metadata: MemoMetadata, … }` field (Core API
+  breaking, semver-deliberate). `MemoMetadata` carries `shape_id_ref`,
+  `number`, `id`, `author`, `create_datetime`, `command` — wire
+  values flow through `projection.rs` verbatim.
+- `CreateDateTime` has no HWP5 wire source (verified via DOC_PROPERTIES
+  `0x10`, TRACKCHANGE `0x20`, MemoShape `0x5E` dumps). Encoder fills it
+  with `iso8601_utc_now()` (std-only Howard-Hinnant civil-from-days) at
+  write time — matching 한컴's own behaviour on fresh saves.
+- `build_memo_parameters_xml` extracted as a re-usable HWPX
+  `<hp:parameters>` builder for future field types that need the same
+  structure (hyperlink / cross-reference fidelity work).
+
 ### Phase 11 (HWP5 → HWPX silent-gap closure)
 
 This release closes the largest batch of "HWP5 decoder has the bytes, but

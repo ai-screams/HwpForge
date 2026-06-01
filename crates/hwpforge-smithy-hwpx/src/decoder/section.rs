@@ -889,7 +889,11 @@ fn decode_field_control(
             } else {
                 Vec::new()
             };
-            Control::Memo { content }
+            Control::Memo {
+                content,
+                anchor_runs: Vec::new(),
+                metadata: hwpforge_core::MemoMetadata::default(),
+            }
         }
         _ => return Ok(None),
     };
