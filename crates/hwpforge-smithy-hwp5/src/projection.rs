@@ -1544,7 +1544,7 @@ fn project_control_run(
 /// == 0` case is decoded as `None` rather than `Some("")` — 한컴
 /// HWP5 cannot distinguish the two on save, so the decode matches
 /// 한컴's intent. See
-/// `.docs/algorithms/2026-06-01_indexmark_carry.md` for the
+/// `.docs/algorithms/2026-06-02_indexmark_carry.md` for the
 /// Codex-reviewed empty-secondary discussion.
 fn project_indexmark_run(indexmark: &crate::schema::section::Hwp5IndexMarkControl) -> Run {
     Run::control(

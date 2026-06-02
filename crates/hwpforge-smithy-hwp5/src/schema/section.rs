@@ -1281,7 +1281,7 @@ impl Hwp5ComposeControl {
 /// corresponding `<hp:indexmark>` field and Wave 12k is HWP5 →
 /// HWPX carry only. Their presence is still required (a truncated
 /// trailer means we no longer know the record boundary). See
-/// `.docs/algorithms/2026-06-01_indexmark_carry.md` for the
+/// `.docs/algorithms/2026-06-02_indexmark_carry.md` for the
 /// Codex-reviewed rationale.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5IndexMarkControl {
