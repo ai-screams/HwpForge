@@ -532,6 +532,11 @@ pub enum Control {
         char_sz: i32,
         /// Composition layout type.
         compose_type: String,
+        /// 10 `<hp:charPr prIDRef="N"/>` references (HWPX `charPrCnt` is
+        /// fixed at 10). `u32::MAX` is the "no override" sentinel —
+        /// 한컴 emits it for unused slots. A `Vec` shorter or longer
+        /// than 10 is normalized by the HWPX encoder (pad / truncate).
+        char_pr_ids: Vec<u32>,
     },
 
     /// An arc (partial ellipse) drawing object.
@@ -1491,6 +1496,8 @@ impl Control {
             circle_type: "SHAPE_REVERSAL_TIRANGLE".to_string(), // official spec typo preserved
             char_sz: -3,
             compose_type: "SPREAD".to_string(),
+            // 10 × no-override sentinel (HWPX `charPrCnt` is fixed at 10).
+            char_pr_ids: vec![u32::MAX; 10],
         }
     }
 
@@ -2694,11 +2701,12 @@ mod tests {
         let ctrl = Control::compose("가");
         assert!(ctrl.is_compose());
         match ctrl {
-            Control::Compose { compose_text, circle_type, char_sz, compose_type } => {
+            Control::Compose { compose_text, circle_type, char_sz, compose_type, char_pr_ids } => {
                 assert_eq!(compose_text, "가");
                 assert_eq!(circle_type, "SHAPE_REVERSAL_TIRANGLE");
                 assert_eq!(char_sz, -3);
                 assert_eq!(compose_type, "SPREAD");
+                assert_eq!(char_pr_ids, vec![u32::MAX; 10]);
             }
             _ => panic!("expected Compose"),
         }
@@ -2727,6 +2735,7 @@ mod tests {
             circle_type: "SHAPE_REVERSAL_TIRANGLE".to_string(),
             char_sz: -3,
             compose_type: "SPREAD".to_string(),
+            char_pr_ids: vec![u32::MAX; 10],
         };
         let json = serde_json::to_string(&ctrl).unwrap();
         let decoded: Control = serde_json::from_str(&json).unwrap();

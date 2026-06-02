@@ -514,12 +514,19 @@ fn build_runs(
                             metadata.option,
                         ));
                     }
-                    Control::Compose { compose_text, circle_type, char_sz, compose_type } => {
+                    Control::Compose {
+                        compose_text,
+                        circle_type,
+                        char_sz,
+                        compose_type,
+                        char_pr_ids,
+                    } => {
                         composes.push(encode_compose_to_hx(
                             compose_text,
                             circle_type,
                             *char_sz,
                             compose_type,
+                            char_pr_ids,
                         ));
                     }
                     Control::IndexMark { .. }
@@ -903,15 +910,21 @@ fn encode_dutmal_to_hx(
 
 /// Encodes a Core `Control::Compose` into `HxCompose`.
 ///
-/// Always emits 10 `<hp:charPr>` entries with `prIDRef = u32::MAX`
-/// (the HWPX sentinel meaning "no override"), as required by KS X 6101.
+/// Always emits 10 `<hp:charPr>` entries — KS X 6101 fixes
+/// `charPrCnt` at 10. `char_pr_ids` from the Core variant is
+/// padded with `u32::MAX` ("no override" sentinel) if shorter than
+/// 10 and truncated if longer; the resulting slice maps 1:1 onto
+/// the `<hp:charPr prIDRef="…"/>` children.
 fn encode_compose_to_hx(
     compose_text: &str,
     circle_type: &str,
     char_sz: i32,
     compose_type: &str,
+    char_pr_ids: &[u32],
 ) -> HxCompose {
-    let char_prs = (0..10).map(|_| HxComposeCharPr { pr_id_ref: u32::MAX }).collect();
+    let char_prs = (0..10)
+        .map(|i| HxComposeCharPr { pr_id_ref: char_pr_ids.get(i).copied().unwrap_or(u32::MAX) })
+        .collect();
     HxCompose {
         circle_type: circle_type.to_string(),
         char_sz,
@@ -4297,6 +4310,7 @@ mod tests {
             circle_type: "CIRCLE".to_string(),
             char_sz: 100,
             compose_type: "COMPOSE".to_string(),
+            char_pr_ids: vec![u32::MAX; 10],
         };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
@@ -4313,7 +4327,7 @@ mod tests {
 
     #[test]
     fn encode_compose_has_ten_charpr_entries() {
-        let hx = encode_compose_to_hx("AB", "CIRCLE", 100, "COMPOSE");
+        let hx = encode_compose_to_hx("AB", "CIRCLE", 100, "COMPOSE", &[u32::MAX; 10]);
         assert_eq!(hx.char_prs.len(), 10, "always 10 charPr entries");
         // All must have pr_id_ref = u32::MAX (HWPX sentinel)
         for cp in &hx.char_prs {

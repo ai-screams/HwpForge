@@ -1746,6 +1746,7 @@ mod tests {
                     circle_type: "CIRCLE".to_string(),
                     char_sz: -3,
                     compose_type: "COMPOSED".to_string(),
+                    char_pr_ids: vec![u32::MAX; 10],
                 },
                 CharShapeIndex::new(0),
             )],

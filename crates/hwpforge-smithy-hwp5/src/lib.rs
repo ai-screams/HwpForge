@@ -797,6 +797,7 @@ fn collect_image_geometry_hints_in_controls(
             | decoder::section::Hwp5Control::Equation(_)
             | decoder::section::Hwp5Control::Memo(_)
             | decoder::section::Hwp5Control::Dutmal(_)
+            | decoder::section::Hwp5Control::Compose(_)
             | decoder::section::Hwp5Control::OleObject(_)
             | decoder::section::Hwp5Control::Unknown { .. } => {}
         }
@@ -1105,6 +1106,7 @@ mod tests {
         equations: usize,
         memos: usize,
         dutmals: usize,
+        composes: usize,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1461,6 +1463,7 @@ mod tests {
                 count_shapes_in_paragraphs(content, layout);
             }
             Control::Dutmal { .. } => layout.dutmals += 1,
+            Control::Compose { .. } => layout.composes += 1,
             Control::TextBox { paragraphs, .. } => {
                 layout.textboxes += 1;
                 count_shapes_in_paragraphs(paragraphs, layout);
@@ -2346,6 +2349,132 @@ mod tests {
         let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
         let layout = collect_decoded_shape_layout(&decoded);
         assert_eq!(layout.dutmals, 2, "both dutmals should round-trip");
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_compose_basic_carries_composetext_and_char_pr_overrides() {
+        // Wave 12j: a natively-authored 한컴 fixture with a single compose
+        // (글자겹침) — `composeText="한韓"`, `circleType="SHAPE_CIRCLE"`,
+        // `charSz="-3"`, `composeType="SPREAD"`, and 10 `<hp:charPr>` slots
+        // with the first one carrying `prIDRef="7"` (a real override) and
+        // the remaining 9 holding `u32::MAX` (the "no override" sentinel).
+        //
+        // This guards two earlier gaps that Wave 12j closed:
+        //   1. The HWP5 leg used to drop `tcps` ctrls silently because they
+        //      fell through to `Hwp5Control::Unknown`; the host paragraph
+        //      ended up empty.
+        //   2. The Core `Control::Compose` variant did not carry
+        //      `char_pr_ids`, so even with the HWP5 leg working, the first
+        //      slot's `prIDRef=7` was overwritten with `u32::MAX` at HWPX
+        //      emit time.
+        let source = fixture_path("user_samples/sample-compose-basic.hwp");
+        if !source.exists() {
+            return;
+        }
+        let out = unique_temp_path("user-sample-compose-basic.hwpx");
+        let warnings = hwp5_to_hwpx(&source, &out).expect("compose conversion should succeed");
+        assert!(
+            !warnings.iter().any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
+            "compose must not drop any control: {warnings:?}"
+        );
+        assert_valid_hwpx(&out);
+
+        let section_xml = read_section_xml(&out, 0);
+        assert!(
+            section_xml.contains(r#"<hp:compose circleType="SHAPE_CIRCLE""#),
+            "compose must emit circleType=SHAPE_CIRCLE: {section_xml}"
+        );
+        assert!(
+            section_xml.contains(r#"charSz="-3""#)
+                && section_xml.contains(r#"composeType="SPREAD""#)
+                && section_xml.contains(r#"charPrCnt="10""#),
+            "compose metadata attributes must carry: {section_xml}"
+        );
+        assert!(
+            section_xml.contains(r#"composeText="한韓""#),
+            "compose body text must carry verbatim: {section_xml}"
+        );
+        // Wave 12j Phase 2: char_pr_ids round-trip. The first slot was
+        // `prIDRef="7"` in the truth fixture; the encoder used to emit
+        // 10 × `u32::MAX` regardless of input.
+        assert!(
+            section_xml.contains(r#"<hp:charPr prIDRef="7"/>"#),
+            "first charPr override (prIDRef=7) must round-trip: {section_xml}"
+        );
+        let placeholder_count = section_xml.matches(r#"<hp:charPr prIDRef="4294967295"/>"#).count();
+        assert_eq!(
+            placeholder_count, 9,
+            "remaining 9 charPr slots must stay at u32::MAX: {section_xml}"
+        );
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let layout = collect_decoded_shape_layout(&decoded);
+        assert_eq!(layout.composes, 1, "exactly one Control::Compose should round-trip");
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_compose_all_shapes_handles_packed_wire_variant() {
+        // Wave 12j Phase 3 regression gate. The `gen_compose_variants`
+        // example authored an HWPX with every OWPML `circleType × composeType`
+        // combination (14 × 2 = 28 compose elements, all sharing
+        // `composeText="한韓"`); 한컴 saved that HWPX back to HWP5 round-trip.
+        //
+        // 27 of the 28 wire entries use the "unpacked" `tcps` layout
+        // (composeText fully in `data[8..]`, `properties.low = 0x0003`).
+        // The **CHAR + OVERLAP** combination is the only one 한컴 emitted
+        // with the "packed" layout: `composeText[0]` is in
+        // `properties.high` and `properties.low = 0x0002` doubles as the
+        // text length. See
+        // `.docs/algorithms/2026-06-01_compose_carry.md` for the full
+        // discriminator table.
+        //
+        // Before the discriminator was added, the parser treated the
+        // packed variant as unpacked and silently lost the first char
+        // ("한" missing → `composeText="韓"`). This test asserts every
+        // 28 entry round-trips its full `composeText="한韓"`, which
+        // exactly catches that regression.
+        let source = fixture_path("user_samples/sample-compose-all-shapes.hwp");
+        if !source.exists() {
+            return;
+        }
+        let out = unique_temp_path("user-sample-compose-all-shapes.hwpx");
+        let warnings =
+            hwp5_to_hwpx(&source, &out).expect("all-shapes compose conversion should succeed");
+        assert!(
+            !warnings.iter().any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
+            "no compose variant must drop: {warnings:?}"
+        );
+        assert_valid_hwpx(&out);
+
+        let section_xml = read_section_xml(&out, 0);
+        let compose_count = section_xml.matches("<hp:compose ").count();
+        assert_eq!(compose_count, 28, "all 28 circleType × composeType variants must round-trip");
+
+        // The packed-variant fix means *every* compose must keep the
+        // full composeText. A single "한韓" miss would fail this check.
+        let full_text_count = section_xml.matches(r#"composeText="한韓""#).count();
+        assert_eq!(
+            full_text_count, 28,
+            "every compose must keep composeText=\"한韓\" (packed-variant regression gate)"
+        );
+        // Inverse check: zero variants should be stripped to single-char
+        // "韓" (the pre-fix bug only affected the CHAR + OVERLAP entry).
+        assert_eq!(
+            section_xml.matches(r#"composeText="韓""#).count(),
+            0,
+            "no compose should be reduced to just \"韓\" (lost-first-char bug signature)"
+        );
+
+        // Round-trip through HWPX decoder confirms Core sees all 28 too.
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let layout = collect_decoded_shape_layout(&decoded);
+        assert_eq!(layout.composes, 28, "all 28 composes should reach Core::Compose");
 
         let _ = std::fs::remove_file(&out);
     }

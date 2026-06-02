@@ -1063,6 +1063,160 @@ impl Hwp5DutmalControl {
     }
 }
 
+/// Compose (글자겹침) control parsed from a `tcps` CtrlHeader
+/// (`0x74637073` BE-ascii).
+///
+/// Wire layout observed on a 한컴-authored fixture
+/// (`sample-compose-basic` — composeText = `"한韓"`):
+///
+/// | offset | bytes | field | encoding |
+/// |---:|---|---|---|
+/// | `[0..N]` | `5C D5 D3 97` | `compose_text` | `N/2` LE UTF-16 code units |
+/// | `[N..N+1]` | `01` | `circle_type_raw` | u8 — `0=CHAR`, `1=SHAPE_CIRCLE`, … (OWPML `SHAPECIRCLETYPE`) |
+/// | `[N+1..N+2]` | `FD` | `char_sz` | i8 — `-3` in the fixture |
+/// | `[N+2..N+3]` | `00` | `compose_type_raw` | u8 — `0=SPREAD`, `1=OVERLAP` (OWPML `COMPOSETYPE`) |
+/// | `[N+3..N+4]` | `0A` | `char_pr_cnt` | u8 — fixed `10` per HWPX schema |
+/// | `[N+4..N+4+40]` | `07 00 00 00 …` | `char_pr_ids[0..10]` | 10 × LE u32 (`u32::MAX` = no-override sentinel) |
+///
+/// `compose_text` has no length prefix on the wire. We infer
+/// `N = payload_len - 44` (4 metadata bytes + 40 charPr bytes) given the
+/// `charPrCnt = 10` invariant. If the result is negative, odd, or
+/// `char_pr_cnt` is not exactly `10`, the payload is treated as
+/// malformed and the decoder falls back to `Hwp5Control::Unknown`.
+///
+/// `circle_type` and `compose_type` are kept as raw `u8` values so the
+/// projection layer can map them to the OWPML enum strings — same
+/// strategy `Hwp5DutmalControl` uses for `pos_type_raw`.
+///
+/// See `.docs/algorithms/2026-06-01_compose_carry.md` for the longer
+/// rationale (including why the layout is inferred from total payload
+/// size rather than a length prefix, and which fields we deliberately
+/// do not promote to typed enums yet).
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5ComposeControl {
+    /// Owning control identifier, always `tcps` (`0x7463_7073` BE-ascii).
+    #[allow(dead_code)]
+    pub ctrl_id: u32,
+    /// Overlaid characters (`<hp:compose composeText="…">`).
+    pub compose_text: String,
+    /// Raw circleType byte (mapped to OWPML enum on the projection side).
+    pub circle_type_raw: u8,
+    /// charSz adjustment as signed i8 (HWPX `<hp:compose charSz="…">`).
+    pub char_sz: i8,
+    /// Raw composeType byte (mapped to OWPML enum on the projection side).
+    pub compose_type_raw: u8,
+    /// 10 charPr `prIDRef` values (`u32::MAX` = no override).
+    pub char_pr_ids: Vec<u32>,
+}
+
+impl Hwp5ComposeControl {
+    /// HWPX schema fixes `charPrCnt` at 10; the wire is rejected when
+    /// this byte holds anything else (see struct doc for full rationale).
+    const CHAR_PR_CNT: usize = 10;
+    /// Bytes after the inferred `compose_text` region: 4 metadata
+    /// (circleType + charSz + composeType + charPrCnt) + 10 × u32.
+    const FIXED_TRAILER: usize = 4 + Self::CHAR_PR_CNT * 4;
+
+    /// Decodes a `tcps` CtrlHeader payload into a `Hwp5ComposeControl`.
+    /// Returns `None` on malformed or truncated payloads — the decoder
+    /// falls back to `Hwp5Control::Unknown` so the rest of the section
+    /// keeps round-tripping.
+    ///
+    /// The wire has two observed layouts discriminated by the
+    /// `properties` low half (`data[4..6]` as LE u16):
+    ///
+    /// - **`0x0003` (unpacked)** — `composeText` is fully in the body
+    ///   (`data[8..]`). `properties[2..4]` is a shape glyph (e.g.
+    ///   `U+25EF` ◯ for `SHAPE_CIRCLE`) that the decoder ignores —
+    ///   the actual `circleType` enum is in the body trailer. This is
+    ///   what 한컴 emits natively and for almost every HWPX→HWP5
+    ///   round-tripped variant.
+    /// - **`0x0002` (packed)** — `composeText[0]` is in
+    ///   `properties[2..4]` (LE u16), the rest in the body, and the
+    ///   low half (`0x0002`) doubles as `composeText.len()`. Observed
+    ///   exclusively on the `CHAR + OVERLAP` variant when 한컴 saved
+    ///   an HWPX → HWP5 — presumably because `CHAR` has no decoration
+    ///   glyph to put in `properties[2..4]`, so 한컴 packs the first
+    ///   text char there instead. The body trailer layout is
+    ///   unchanged; only the leading char-region shrinks by one
+    ///   `u16`.
+    ///
+    /// Any other `properties.low` value falls through to `None`
+    /// (treated as malformed) — clamp-style guessing risks silently
+    /// inventing characters from unrelated bits.
+    pub(crate) fn parse(ctrl_id: u32, data: &[u8]) -> Option<Self> {
+        // CtrlHeader payload is `[0..8] = ctrl_id + properties`, then
+        // the compose-specific data lives in `[8..]`. We mirror the
+        // calling convention used by `Hwp5DutmalControl::parse`.
+        if data.len() < 8 {
+            return None;
+        }
+        let props_low = u16::from_le_bytes([data[4], data[5]]);
+        let props_high = u16::from_le_bytes([data[6], data[7]]);
+        let body = &data[8..];
+        if body.len() < Self::FIXED_TRAILER {
+            return None;
+        }
+        let text_bytes_end = body.len() - Self::FIXED_TRAILER;
+        if !text_bytes_end.is_multiple_of(2) {
+            return None;
+        }
+
+        // Layout discriminator: `0x0003` = unpacked (default), `0x0002`
+        // = packed (one char carried in properties.high; len encoded
+        // in properties.low). See struct doc for the empirical
+        // rationale and which fixture surfaced the variant.
+        let packed_first_char: Option<u16> = match props_low {
+            0x0003 => None,
+            0x0002 => Some(props_high),
+            _ => return None,
+        };
+
+        let body_chars = text_bytes_end / 2;
+        let total_chars = body_chars + packed_first_char.map_or(0, |_| 1);
+        let mut compose_units: Vec<u16> = Vec::with_capacity(total_chars);
+        if let Some(first) = packed_first_char {
+            compose_units.push(first);
+        }
+        for chunk in body[..text_bytes_end].chunks_exact(2) {
+            compose_units.push(u16::from_le_bytes([chunk[0], chunk[1]]));
+        }
+        let compose_text = String::from_utf16(&compose_units).ok()?;
+
+        let meta_off = text_bytes_end;
+        let circle_type_raw = body[meta_off];
+        let char_sz = body[meta_off + 1] as i8;
+        let compose_type_raw = body[meta_off + 2];
+        let char_pr_cnt = body[meta_off + 3] as usize;
+        if char_pr_cnt != Self::CHAR_PR_CNT {
+            // 한컴이 HWPX에서 항상 10을 emit한다는 invariant가 깨지면
+            // 알려진 layout이 더 이상 안전하지 않으니 Unknown으로 후퇴.
+            return None;
+        }
+
+        let mut char_pr_ids = Vec::with_capacity(Self::CHAR_PR_CNT);
+        let charpr_off = meta_off + 4;
+        for i in 0..Self::CHAR_PR_CNT {
+            let off = charpr_off + i * 4;
+            char_pr_ids.push(u32::from_le_bytes([
+                body[off],
+                body[off + 1],
+                body[off + 2],
+                body[off + 3],
+            ]));
+        }
+
+        Some(Self {
+            ctrl_id,
+            compose_text,
+            circle_type_raw,
+            char_sz,
+            compose_type_raw,
+            char_pr_ids,
+        })
+    }
+}
+
 impl Hwp5MemoCommand {
     /// Decodes a `%unk` CtrlHeader payload into a `Hwp5MemoCommand`.
     ///

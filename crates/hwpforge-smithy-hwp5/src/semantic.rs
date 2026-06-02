@@ -1096,6 +1096,8 @@ pub enum Hwp5SemanticControlKind {
     Memo,
     /// Dutmal (덧말) annotation control.
     Dutmal,
+    /// Compose (글자겹침) annotation control.
+    Compose,
     /// Header control.
     Header,
     /// Footer control.

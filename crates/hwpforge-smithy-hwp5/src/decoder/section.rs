@@ -83,6 +83,12 @@ pub(crate) enum Hwp5Control {
     /// with a `tdut` CtrlHeader carrying the actual strings — see
     /// `schema::section::Hwp5DutmalControl` for the payload layout.
     Dutmal(Hwp5DutmalControl),
+    /// Compose (글자겹침) — overlaid/combined characters in one cell
+    /// position. Wire pairs an inline `0x17` marker in the body's
+    /// `ParaText` stream with a `tcps` CtrlHeader carrying the
+    /// composed text and 10 charPr references — see
+    /// `schema::section::Hwp5ComposeControl` for the payload layout.
+    Compose(crate::schema::section::Hwp5ComposeControl),
     /// Header control with nested subtree paragraphs.
     Header(Hwp5NestedSubtree),
     /// Footer control with nested subtree paragraphs.
@@ -507,6 +513,12 @@ const CTRL_ID_MEMO: u32 = 0x2575_6E6B;
 /// `extra[0..4]`) plus this CtrlHeader carrying the actual
 /// `mainText` / `subText` strings.
 const CTRL_ID_DUTMAL: u32 = 0x7464_7574;
+
+/// ctrl_id for the compose (글자겹침) control: ASCII `tcps` as
+/// big-endian u32. Paired with an inline `0x17` marker whose
+/// `extra[0..4]` carries the LE-stored ctrl_id `"spct"`. Payload
+/// layout lives on `crate::schema::section::Hwp5ComposeControl`.
+const CTRL_ID_COMPOSE: u32 = 0x7463_7073;
 
 // Memo wire command parsing now lives on `Hwp5MemoCommand::parse` in
 // `crate::schema::section` — shared with the slash-command util that future
@@ -1588,6 +1600,21 @@ impl BodyTextParserState {
                     if let Some(dutmal) = Hwp5DutmalControl::parse(ctrl_id, &record.data) {
                         if let Some(buf) = self.current.as_mut() {
                             buf.controls.push(Hwp5Control::Dutmal(dutmal));
+                        }
+                    } else {
+                        self.push_unsupported_tag(record.header.tag_id);
+                    }
+                } else if ctrl_id == CTRL_ID_COMPOSE {
+                    // `tcps` ctrl carries the compose (글자겹침) text,
+                    // circleType/composeType enums, and 10 charPr refs.
+                    // Layout assumes `charPrCnt == 10` per HWPX schema;
+                    // malformed payloads fall through to Unknown so the
+                    // surrounding section keeps round-tripping.
+                    if let Some(compose) =
+                        crate::schema::section::Hwp5ComposeControl::parse(ctrl_id, &record.data)
+                    {
+                        if let Some(buf) = self.current.as_mut() {
+                            buf.controls.push(Hwp5Control::Compose(compose));
                         }
                     } else {
                         self.push_unsupported_tag(record.header.tag_id);

@@ -210,6 +210,53 @@ existed in the shared model; only the HWP5 leg was missing.
   dutmal. See `.docs/algorithms/2026-06-01_dutmal_carry.md`
   (companion-fix section) for the full root-cause + rationale.
 
+#### Added / Changed — Wave 12j (compose carry + char_pr_ids fidelity)
+
+- Carry compose (글자겹침) annotations end-to-end through the HWP5 leg
+  — `Hwp5ComposeControl` schema struct, `tcps` CtrlHeader decode,
+  `Hwp5Control::Compose` variant, and a `project_compose_run` that
+  emits `Control::Compose` with circleType / composeType mapped from
+  raw enum bytes to the OWPML attribute strings (14 `SHAPECIRCLETYPE`
+  values + 2 `COMPOSETYPE` values, including the spec-typo
+  `SHAPE_REVERSAL_TIRANGLE`). HWPX→Core and Core→HWPX both already
+  existed prior to this wave; only HWP5→Core was missing and `tcps`
+  was silently dropped to `Hwp5Control::Unknown`.
+- New `Control::Compose { char_pr_ids: Vec<u32>, … }` field (Core API
+  breaking, semver-deliberate). HWPX schema fixes `<hp:compose
+  charPrCnt>` at 10, but the existing encoder hard-coded all 10 slots
+  to `u32::MAX` ("no override" sentinel) and the existing decoder
+  discarded `<hp:charPr prIDRef>` children entirely. The new field
+  threads the 10 LE u32 charPr IDs verbatim through Core so a `HWPX
+  → Core → HWPX` round-trip preserves which slots carry a real
+  `prIDRef` override (e.g. `7`) vs. the `u32::MAX` placeholder.
+  Encoder pads / truncates to 10 slots.
+- Compose wire layout discriminator. The `tcps` CtrlHeader payload
+  has two empirically-observed forms, discriminated by the low half
+  of `properties` (`data[4..6]` as LE u16):
+  - `0x0003` (unpacked) — `composeText` is fully in `data[8..]`,
+    body trailer carries the 4 metadata bytes + 10 × u32 charPrs.
+    27 of 28 round-tripped variants and every native 한컴 fixture
+    use this layout.
+  - `0x0002` (packed) — `composeText[0]` is in `properties[2..4]`,
+    `composeText[1..N]` is at the start of the body; the body
+    trailer layout is unchanged. Observed exclusively on the
+    `CHAR + OVERLAP` combination when 한컴 saved an HWPX → HWP5.
+    The parser detects this via `properties.low == 0x0002` and
+    prepends the packed char to the body region before decoding.
+- Any other `properties.low` value falls through to
+  `Hwp5Control::Unknown`. No clamp; no guessing. See
+  `.docs/algorithms/2026-06-01_compose_carry.md` for the full
+  discriminator table, the shape-glyph table for `properties.high`,
+  and the validation policy rationale (Codex-reviewed).
+- The packed variant was discovered only through a 14 × 2 = 28
+  `circleType × composeType` combinatorial fixture
+  (`gen_compose_variants` example) — single-shape native fixtures
+  never trigger it. The lesson is captured in
+  `.docs/learnings/2026-06-01_hwp5_ctrl_header_properties_overloaded.md`:
+  HWP5's CtrlHeader `properties` word is **not** a generic bitfield —
+  each ctrl_id can repurpose it for ctrl-specific data, and the same
+  ctrl can switch layouts within a single document.
+
 ### Phase 11 (HWP5 → HWPX silent-gap closure)
 
 This release closes the largest batch of "HWP5 decoder has the bytes, but

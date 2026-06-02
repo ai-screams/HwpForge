@@ -969,6 +969,10 @@ fn decode_dutmal(dutmal: &HxDutmal, char_shape_id: CharShapeIndex) -> Run {
 }
 
 /// Decodes an `HxCompose` into a Core `Run` with `Control::Compose`.
+///
+/// Carries all 10 `<hp:charPr prIDRef="N"/>` references verbatim so a
+/// `HWPX → Core → HWPX` round-trip preserves which slots have actual
+/// overrides vs. the `u32::MAX` "no override" sentinel.
 fn decode_compose(compose: &HxCompose, char_shape_id: CharShapeIndex) -> Run {
     Run {
         content: RunContent::Control(Box::new(Control::Compose {
@@ -976,6 +980,7 @@ fn decode_compose(compose: &HxCompose, char_shape_id: CharShapeIndex) -> Run {
             circle_type: compose.circle_type.clone(),
             char_sz: compose.char_sz,
             compose_type: compose.compose_type.clone(),
+            char_pr_ids: compose.char_prs.iter().map(|cp| cp.pr_id_ref).collect(),
         })),
         char_shape_id,
     }
@@ -2618,6 +2623,7 @@ mod tests {
                     circle_type,
                     char_sz,
                     compose_type,
+                    ..
                 } => {
                     assert_eq!(compose_text, "AB");
                     assert_eq!(circle_type, "CIRCLE");

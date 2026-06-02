@@ -196,6 +196,7 @@ fn collect_flow_paragraph_layout_hints(
             | Hwp5Control::ConnectLine(_)
             | Hwp5Control::Equation(_)
             | Hwp5Control::Dutmal(_)
+            | Hwp5Control::Compose(_)
             | Hwp5Control::OleObject(_)
             | Hwp5Control::Unknown { .. } => {}
         }
@@ -231,6 +232,7 @@ fn collect_scope_paragraph_layout_hints(paragraph: &Hwp5Paragraph, scope: &mut S
             | Hwp5Control::ConnectLine(_)
             | Hwp5Control::Equation(_)
             | Hwp5Control::Dutmal(_)
+            | Hwp5Control::Compose(_)
             | Hwp5Control::OleObject(_)
             | Hwp5Control::Unknown { .. } => {}
         }

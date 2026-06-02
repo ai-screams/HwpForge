@@ -305,6 +305,14 @@ fn adapt_control(
             build,
             ids,
         ),
+        Hwp5Control::Compose(compose) => adapt_shape_control(
+            compose.ctrl_id,
+            Hwp5SemanticControlKind::Compose,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
         Hwp5Control::OleObject(ole) => {
             adapt_ole_object_control(ole, container, paragraph_id, build, support, ids)
         }

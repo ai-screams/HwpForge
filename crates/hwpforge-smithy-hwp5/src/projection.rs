@@ -1533,7 +1533,67 @@ fn project_control_run(
         | Hwp5Control::Footer(_)
         | Hwp5Control::Unknown { .. } => None,
         Hwp5Control::Dutmal(dutmal) => Some(project_dutmal_run(dutmal)),
+        Hwp5Control::Compose(compose) => Some(project_compose_run(compose)),
         Hwp5Control::OleObject(ole) => project_ole_object_run(ole, projection_images),
+    }
+}
+
+/// Projects a HWP5 compose (글자겹침) control into a Core `Run`
+/// carrying `Control::Compose`. Raw `circle_type` and `compose_type`
+/// bytes are mapped to the OWPML enum strings 한컴 expects on the
+/// HWPX side; unknown values fall back to the spec defaults so the
+/// HWPX encoder always emits a well-formed `<hp:compose>` element.
+/// See `.docs/algorithms/2026-06-01_compose_carry.md` for the layout
+/// rationale and enum-mapping tables.
+fn project_compose_run(compose: &crate::schema::section::Hwp5ComposeControl) -> Run {
+    let circle_type = compose_circle_type_label(compose.circle_type_raw);
+    let compose_type = compose_compose_type_label(compose.compose_type_raw);
+    Run::control(
+        Control::Compose {
+            compose_text: compose.compose_text.clone(),
+            circle_type: circle_type.to_string(),
+            char_sz: i32::from(compose.char_sz),
+            compose_type: compose_type.to_string(),
+            char_pr_ids: compose.char_pr_ids.clone(),
+        },
+        CharShapeIndex::new(0),
+    )
+}
+
+/// Maps the OWPML `SHAPECIRCLETYPE` enum (defined in
+/// `.docs/references/hwpx-owpml-model/OWPML/Class/enumdef.h` lines
+/// 623-639) from the raw wire byte to the HWPX attribute string.
+fn compose_circle_type_label(raw: u8) -> &'static str {
+    match raw {
+        0 => "CHAR",
+        1 => "SHAPE_CIRCLE",
+        2 => "SHAPE_REVERSAL_CIRCLE",
+        3 => "SHAPE_RECTANGLE",
+        4 => "SHAPE_REVERSAL_RECTANGLE",
+        5 => "SHAPE_TRIANGLE",
+        // 한컴의 공식 spec 오타 — `TIRANGLE` (not TRIANGLE) 그대로 보존해야
+        // HWPX truth와 round-trip이 닫힌다.
+        6 => "SHAPE_REVERSAL_TIRANGLE",
+        7 => "SHAPE_LIGHT",
+        8 => "SHAPE_RHOMBUS",
+        9 => "SHAPE_REVERSAL_RHOMBUS",
+        10 => "SHAPE_ROUNDED_RECTANGLE",
+        11 => "SHAPE_EMPTY_CIRCULATE_TRIANGLE",
+        12 => "SHAPE_THIN_CIRCULATE_TRIANGLE",
+        13 => "SHAPE_THICK_CIRCULATE_TRIANGLE",
+        // Unknown values fall back to the spec default ("CHAR"). 한컴이
+        // verify 단계에서 unknown을 받으면 거부할 수 있으니 안전 기본값.
+        _ => "CHAR",
+    }
+}
+
+/// Maps the OWPML `COMPOSETYPE` enum (`enumdef.h` lines 661-665) from
+/// the raw wire byte to the HWPX attribute string.
+fn compose_compose_type_label(raw: u8) -> &'static str {
+    match raw {
+        0 => "SPREAD",
+        1 => "OVERLAP",
+        _ => "SPREAD",
     }
 }
 
