@@ -7,6 +7,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Phase 12l — Control::Field `name` carry (Core + HWPX + HWP5)
+
+#### Changed (BREAKING — public API)
+
+- `Control::Field` gains a `name: Option<String>` field carrying the form-mode
+  identifier (HWPX `<hp:fieldBegin name="...">`). Existing callers that
+  construct `Control::Field` with a field-record literal must add `name:
+  None`. Pattern matches with `..` are unaffected. Required because the
+  prior model silently dropped the form-mode identifier on every
+  HWPX↔Core↔HWP5 roundtrip.
+- `Control::field()` convenience constructor unchanged in signature; the
+  produced `Control::Field` now has `name: None`.
+- `Display` impl for `Control::Field` now prints `name="…"` only when present.
+- `Serialize`/`Deserialize`/`JsonSchema` representations of `Control::Field`
+  gain the new field; consumers that round-trip JSON of `Control::Field`
+  must accept the new key (it is optional / defaults to `null`).
+
+#### Fixed — HWPX encoder
+
+- `build_field_run_xml` now emits the real `name` attribute on
+  `<hp:fieldBegin>` for both `CLICK_HERE` and `SUMMERY` (automatic) fields
+  instead of the hardcoded `name=""`.
+- `Clickhere:set:N:` now uses a fixed-point computed `N` (self-referential
+  UTF-16 code unit count) instead of the literal `43` that did not match
+  the real command string length and was a wire-truth lie even before name
+  carry.
+- `build_field_run_xml` signature gains `name: &str`.
+
+#### Fixed — HWPX decoder
+
+- Both `CLICK_HERE`/automatic-field branches and the `SUMMERY` branch in
+  `decode_field_control` now carry `fb.name` into `Control::Field.name`
+  (with `Some("") -> None` normalisation, matching the indexmark/dutmal
+  pattern).
+
+#### Added — HWP5 leg
+
+- HWP5 `%clk` CtrlHeader parser (`Hwp5ClickHereControl::parse`) carries
+  the press-field's `hint_text` / `help_text` / `field_unique_id` from
+  the wire's UTF-16LE Command string. Parser is length-driven (no
+  `:`-delimiter split) and UTF-16 code unit cursor based, so embedded
+  colons in hint/help and surrogate-pair input do not corrupt decoding.
+- HWP5 `0x57` (`TagId::CtrlData`) sub-record parser
+  (`Hwp5ClickHereControl::parse_name_subrecord`) carries the form-mode
+  `name`. The `%clk` → `0x57` pairing is held by
+  `BodyTextParserState.pending_clickhere` (mirrors the `eqed` →
+  `EqEdit` pattern used in Wave 12d) and flushed at orphan boundaries
+  with a targeted `ProjectionFallback` warning.
+- Projection has a dedicated `clickhere_controls` queue + new
+  `ActiveField::ClickHere` variant. `start_active_field` /
+  `finish_active_field` emit a single `Control::Field` Run with all
+  four metadata fields populated; the HWPX encoder rebuilds the visible
+  placeholder from `hint_text`, so the span between the `FIELD_BEGIN` /
+  `FIELD_END` markers is intentionally not double-emitted.
+- Audit semantic model gains `Hwp5SemanticControlKind::ClickHere` so
+  press-field counts attribute correctly in the audit-batch output.
+
+#### Fixed — HWPX encoder Command N
+
+- `Clickhere:set:43:` was a wire-truth lie (the literal `43` did not
+  match any real-fixture command length, even before name carry).
+  Replaced by `clickhere_command_string`, which uses the
+  empirically-derived formula `N = utf16_len(rest_of_command) - 1`
+  (verified against the seven press-field instances across five
+  fixtures). The formula is `digits(N)`-independent, so no fixed-point
+  iteration is required.
+
+#### Notes
+
+- See `.docs/algorithms/2026-06-02_clickhere_field_carry.md` for the
+  full algorithm + Codex review resolution table.
+- See `.docs/research/2026-06-02_clickhere_wire_dump.md` for the wire
+  layout derivation.
+
 ### Phase 12 (HWP5 drawing-object carry)
 
 Continues the Phase 11 line: HWP5 drawing objects the decoder previously

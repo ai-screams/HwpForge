@@ -321,6 +321,14 @@ fn adapt_control(
             build,
             ids,
         ),
+        Hwp5Control::ClickHere(clickhere) => adapt_shape_control(
+            clickhere.ctrl_id,
+            Hwp5SemanticControlKind::ClickHere,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
         Hwp5Control::OleObject(ole) => {
             adapt_ole_object_control(ole, container, paragraph_id, build, support, ids)
         }

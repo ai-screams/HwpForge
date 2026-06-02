@@ -649,6 +649,10 @@ pub enum Control {
         hint_text: Option<String>,
         /// Help text shown when hovering or clicking the field.
         help_text: Option<String>,
+        /// Form-mode identifier used to reference the field programmatically.
+        /// Maps to HWPX `fieldBegin name="..."` attribute. `None` represents
+        /// the empty string convention (한컴 wire stores it as a 0-length BSTR).
+        name: Option<String>,
     },
 
     /// A memo (메모) annotation attached to text.
@@ -954,6 +958,7 @@ impl Control {
             field_type: FieldType::ClickHere,
             hint_text: Some(hint.to_string()),
             help_text: None,
+            name: None,
         }
     }
 
@@ -1756,9 +1761,12 @@ impl std::fmt::Display for Control {
             Self::CrossRef { target_name, ref_type, .. } => {
                 write!(f, "CrossRef(\"{target_name}\", {ref_type})")
             }
-            Self::Field { field_type, hint_text, .. } => {
+            Self::Field { field_type, hint_text, name, .. } => {
                 let hint = hint_text.as_deref().unwrap_or("");
-                write!(f, "Field({field_type}, \"{hint}\")")
+                match name.as_deref().filter(|s| !s.is_empty()) {
+                    Some(n) => write!(f, "Field({field_type}, name=\"{n}\", \"{hint}\")"),
+                    None => write!(f, "Field({field_type}, \"{hint}\")"),
+                }
             }
             Self::Memo { content, anchor_runs, .. } => {
                 let n = content.len();

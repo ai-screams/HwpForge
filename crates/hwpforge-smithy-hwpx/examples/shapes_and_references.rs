@@ -584,11 +584,16 @@ fn section_bookmarks_refs_fields() -> Section {
         field_type: FieldType::Date,
         hint_text: Some("날짜".to_string()),
         help_text: Some("문서 작성일".to_string()),
+        name: None,
     };
 
     // Field: PageNumber (쪽번호)
-    let field_page =
-        Control::Field { field_type: FieldType::PageNum, hint_text: None, help_text: None };
+    let field_page = Control::Field {
+        field_type: FieldType::PageNum,
+        hint_text: None,
+        help_text: None,
+        name: None,
+    };
 
     Section::with_paragraphs(
         vec![

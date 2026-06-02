@@ -103,6 +103,15 @@ impl Hwp5ParaHeader {
 /// shares the same numeric ctrl_id (`Hwp5Control::IndexMark`).
 const CTRL_ID_INDEXMARK_INLINE: u32 = 0x6964_786D;
 
+// `CTRL_ID_CLICK_HERE = 0x2563_6C6B` ("%clk", Wave 12l) is defined in
+// `decoder/section.rs`. The schema crate does not currently dispatch
+// on this id (the inline-marker discriminator path used by IndexMark
+// goes through `Hwp5ParaText::parse`'s separate 0x16 vs 0x0E..=0x15
+// split, not through a ctrl_id constant). If a future schema-side
+// parser needs the value it should be re-introduced here, or — better —
+// the constants should be consolidated into a single `ctrl_ids`
+// module (backlog #94).
+
 /// Reads the LE-stored ctrl_id from the first four bytes of an
 /// inline-marker's `extra` block and returns it as the BE-ascii u32
 /// HWP5 uses for CtrlHeader matching. Wave 12k's `0x16` arm calls
@@ -1362,6 +1371,231 @@ impl Hwp5IndexMarkControl {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Hwp5ClickHereControl (Wave 12l)
+// ---------------------------------------------------------------------------
+
+/// HWP5 representation of the `%clk` (CLICK_HERE / 누름틀) press-field.
+///
+/// Wire layout (CtrlHeader, ctrl_id=`0x2563_6C6B`, properties=`0x0000_0001`):
+///
+/// | offset | bytes | field | encoding |
+/// |---|---|---|---|
+/// | `body[0]` | `09` | flag (`Prop` integer param value) | u8 constant |
+/// | `body[1..3]` | LE u16 | command UTF-16 code unit count `N` | u16 LE |
+/// | `body[3..3+2N]` | UTF-16LE | command string (`Clickhere:set:N:Direction:wstring:H:<hint> HelpState:wstring:E:<help>  `) | UTF-16LE |
+/// | `body[3+2N..3+2N+4]` | LE u32 | field unique id (smithy-local — discarded by Core) | u32 LE |
+/// | `body[3+2N+4..3+2N+8]` | `00 00 00 00` | trailer padding | u32 LE |
+///
+/// `name` (양식 모드 식별자) is **not** carried in the CtrlHeader payload;
+/// it lives in the immediately following `0x57 lvl=2` sub-record parsed
+/// by `Hwp5ClickHereControl::parse_name_subrecord` and merged at the
+/// decoder boundary.
+///
+/// Command parser is length-driven (not delimiter split) so embedded
+/// colons in hint/help do not break decoding. Lengths are UTF-16 code
+/// unit counts — Codex review explicitly required this so surrogate
+/// pairs (Wave 12k learning) decode correctly.
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5ClickHereControl {
+    /// Owning control identifier, always `0x2563_6C6B` (`"%clk"` BE-ascii).
+    #[allow(dead_code)]
+    pub ctrl_id: u32,
+    /// Hint text shown as visible placeholder (`<hp:stringParam name="Direction">`).
+    /// `None` when the wire encoded an empty hint (Hancom collapses
+    /// `Some("")` and `None` to the same wire form).
+    pub hint_text: Option<String>,
+    /// Help text shown as tooltip (`<hp:stringParam name="HelpState">`).
+    /// `None` when the wire encoded an empty help string.
+    pub help_text: Option<String>,
+    /// Form-mode identifier filled in by `merge_name_subrecord` after
+    /// decoding the trailing `0x57 lvl=2` sub-record. Construction
+    /// always starts as `None`.
+    pub name: Option<String>,
+    /// Field unique id pulled from the trailer u32; smithy-local fidelity
+    /// only — Core never sees this value (the encoder reallocates ids).
+    #[allow(dead_code)]
+    pub field_unique_id: u32,
+}
+
+/// Defence-in-depth allocation cap for the `%clk` Command UTF-16
+/// payload (Wave 12l security review MEDIUM). The largest observed
+/// command across the five Wave 12l fixtures is 107 UTF-16 units; 32 K
+/// is roughly two orders of magnitude over the realistic ceiling
+/// while keeping a single hostile record under 64 KB. The cap is
+/// applied **before** any `Vec::with_capacity`, so the decoder cannot
+/// be coerced into allocating a 130 KB intermediate per malformed
+/// record on top of the bytes already present in the input.
+const MAX_CLICKHERE_COMMAND_UNITS: usize = 32 * 1024;
+
+/// Same cap applied to the trailing `0x57` name sub-record. Realistic
+/// form-field identifiers are short; 2 K UTF-16 units (≈ 4 KB) is
+/// already absurd for an HTML-input-name-style identifier.
+const MAX_CLICKHERE_NAME_UNITS: usize = 2 * 1024;
+
+impl Hwp5ClickHereControl {
+    /// Decodes a `%clk` CtrlHeader payload (the raw record `data`
+    /// excluding the 4-byte CtrlHeader prefix the dispatcher already
+    /// matched). Returns `None` on truncation or malformed command
+    /// string — the decoder reports those as a targeted
+    /// `Hwp5Warning::DroppedControl { control: "clickhere", … }` so
+    /// the lossy path is auditable.
+    ///
+    /// `name` is left `None`; the dispatcher merges it from the
+    /// following `0x57` sub-record once parsed.
+    pub(crate) fn parse(ctrl_id: u32, data: &[u8]) -> Option<Self> {
+        // Need: 4 (ctrl_id) + 4 (properties) + 1 (flag) + 2 (count)
+        // + 0 (command) + 8 (trailer) = 19 bytes minimum.
+        if data.len() < 19 {
+            return None;
+        }
+        // Skip the 8-byte CtrlHeader prefix (ctrl_id + properties).
+        let body = &data[8..];
+        // Command char count at body[1..3]; body[0] is the 0x09 flag
+        // (validated softly — codex review: warning on mismatch but
+        // continue, so we accept any value here and trust the count).
+        let command_units = usize::from(u16::from_le_bytes([body[1], body[2]]));
+        if command_units > MAX_CLICKHERE_COMMAND_UNITS {
+            return None;
+        }
+        let command_bytes = command_units.checked_mul(2)?;
+        let command_end = 3usize.checked_add(command_bytes)?;
+        // Trailer is 8 bytes (u32 field id + u32 padding).
+        let trailer_end = command_end.checked_add(8)?;
+        if body.len() < trailer_end {
+            return None;
+        }
+
+        let mut command_units_vec: Vec<u16> = Vec::with_capacity(command_units);
+        for chunk in body[3..command_end].chunks_exact(2) {
+            command_units_vec.push(u16::from_le_bytes([chunk[0], chunk[1]]));
+        }
+
+        let (hint_text, help_text) = parse_clickhere_command(&command_units_vec)?;
+
+        let field_unique_id = u32::from_le_bytes([
+            body[command_end],
+            body[command_end + 1],
+            body[command_end + 2],
+            body[command_end + 3],
+        ]);
+        // body[command_end+4..command_end+8] is the 4-byte zero pad —
+        // intentionally not validated; Codex review (medium severity)
+        // recommended warning-not-error on mismatch which the decoder
+        // does at the dispatch layer.
+
+        Some(Self { ctrl_id, hint_text, help_text, name: None, field_unique_id })
+    }
+
+    /// Decodes a `0x57 lvl=2` sub-record's `data` into the field
+    /// `name`. Returns `None` on truncation or impossible length;
+    /// callers should treat `None` as "name not recoverable, keep the
+    /// rest of the press-field" (codex review medium: don't drop the
+    /// entire clickhere just because the name sub-record is bad).
+    pub(crate) fn parse_name_subrecord(data: &[u8]) -> Option<Option<String>> {
+        // 12-byte constant header observed: 1B 02 01 00 00 00 00 40 01 00 LL LL
+        // We tolerate constant-prefix mismatch (codex: "부분 strict"):
+        // the only field we strictly need is the u16 LE name length at
+        // [10..12]. Lengths above that bound the body.
+        if data.len() < 12 {
+            return None;
+        }
+        let name_units = usize::from(u16::from_le_bytes([data[10], data[11]]));
+        if name_units > MAX_CLICKHERE_NAME_UNITS {
+            return None;
+        }
+        let body_bytes = name_units.checked_mul(2)?;
+        let body_end = 12usize.checked_add(body_bytes)?;
+        if data.len() < body_end {
+            return None;
+        }
+        if name_units == 0 {
+            // Some("") and None are indistinguishable on the wire.
+            return Some(None);
+        }
+        let mut units: Vec<u16> = Vec::with_capacity(name_units);
+        for chunk in data[12..body_end].chunks_exact(2) {
+            units.push(u16::from_le_bytes([chunk[0], chunk[1]]));
+        }
+        let name = String::from_utf16(&units).ok()?;
+        Some(Some(name))
+    }
+}
+
+/// Parses the `Clickhere:set:N:Direction:wstring:H:<hint> HelpState:wstring:E:<help>  `
+/// command string into `(hint, help)` Options. Returns `None` if the
+/// structure cannot be matched.
+///
+/// Length-driven (not delimiter split) so embedded `:` characters in
+/// hint/help do not break decoding. UTF-16 code-unit aware throughout —
+/// surrogate-pair safe per the Codex review.
+fn parse_clickhere_command(units: &[u16]) -> Option<(Option<String>, Option<String>)> {
+    let mut cursor = 0usize;
+    // Helper: try to match an ASCII literal at the current cursor.
+    let match_literal = |units: &[u16], cursor: &mut usize, lit: &str| -> bool {
+        let lit_units: Vec<u16> = lit.encode_utf16().collect();
+        if cursor.checked_add(lit_units.len()).is_none_or(|end| end > units.len()) {
+            return false;
+        }
+        if units[*cursor..*cursor + lit_units.len()] != lit_units[..] {
+            return false;
+        }
+        *cursor += lit_units.len();
+        true
+    };
+    // Helper: parse decimal digits up to a terminator ':'.
+    let parse_decimal_until_colon = |units: &[u16], cursor: &mut usize| -> Option<usize> {
+        let mut n: usize = 0;
+        let mut consumed = 0usize;
+        while *cursor < units.len() {
+            let u = units[*cursor];
+            if u == u16::from(b':') {
+                *cursor += 1;
+                if consumed == 0 {
+                    return None;
+                }
+                return Some(n);
+            }
+            if !(u16::from(b'0')..=u16::from(b'9')).contains(&u) {
+                return None;
+            }
+            n = n.checked_mul(10)?.checked_add(usize::from(u - u16::from(b'0')))?;
+            consumed += 1;
+            *cursor += 1;
+        }
+        None
+    };
+
+    if !match_literal(units, &mut cursor, "Clickhere:set:") {
+        return None;
+    }
+    let _command_n = parse_decimal_until_colon(units, &mut cursor)?;
+    if !match_literal(units, &mut cursor, "Direction:wstring:") {
+        return None;
+    }
+    let hint_len = parse_decimal_until_colon(units, &mut cursor)?;
+    if cursor.checked_add(hint_len).is_none_or(|end| end > units.len()) {
+        return None;
+    }
+    let hint_units = &units[cursor..cursor + hint_len];
+    let hint = String::from_utf16(hint_units).ok()?;
+    cursor += hint_len;
+    if !match_literal(units, &mut cursor, " HelpState:wstring:") {
+        return None;
+    }
+    let help_len = parse_decimal_until_colon(units, &mut cursor)?;
+    if cursor.checked_add(help_len).is_none_or(|end| end > units.len()) {
+        return None;
+    }
+    let help_units = &units[cursor..cursor + help_len];
+    let help = String::from_utf16(help_units).ok()?;
+
+    Some((
+        if hint.is_empty() { None } else { Some(hint) },
+        if help.is_empty() { None } else { Some(help) },
+    ))
+}
+
 impl Hwp5MemoCommand {
     /// Decodes a `%unk` CtrlHeader payload into a `Hwp5MemoCommand`.
     ///
@@ -2489,5 +2723,127 @@ mod tests {
         // Cut off the trailing trailer bytes.
         let truncated = &data[..data.len() - 4];
         assert!(Hwp5IndexMarkControl::parse(IDXM_CTRL_ID, truncated).is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // Hwp5ClickHereControl (Wave 12l)
+    // -----------------------------------------------------------------------
+
+    const CLK_CTRL_ID: u32 = 0x2563_6C6B;
+
+    /// Builds a synthetic `%clk` CtrlHeader payload mirroring the
+    /// observed 한컴 wire layout — see
+    /// `.docs/research/2026-06-02_clickhere_wire_dump.md`.
+    fn make_clk(hint: &str, help: &str, field_id: u32) -> Vec<u8> {
+        let hint_units = hint.encode_utf16().count();
+        let help_units = help.encode_utf16().count();
+        let command =
+            format!("Clickhere:set:0:Direction:wstring:{hint_units}:{hint} HelpState:wstring:{help_units}:{help}  ");
+        let command_units: Vec<u16> = command.encode_utf16().collect();
+
+        let mut data = Vec::new();
+        data.extend_from_slice(&CLK_CTRL_ID.to_be_bytes());
+        data.extend_from_slice(&0x0000_0001u32.to_le_bytes()); // properties
+        data.push(0x09); // flag byte
+        data.extend_from_slice(&(command_units.len() as u16).to_le_bytes());
+        for unit in &command_units {
+            data.extend_from_slice(&unit.to_le_bytes());
+        }
+        data.extend_from_slice(&field_id.to_le_bytes());
+        data.extend_from_slice(&[0, 0, 0, 0]); // pad
+        data
+    }
+
+    /// Builds a synthetic `0x57` field-name sub-record body.
+    fn make_clk_name(name: &str) -> Vec<u8> {
+        let mut data = vec![0x1B, 0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x40, 0x01, 0x00];
+        let units: Vec<u16> = name.encode_utf16().collect();
+        data.extend_from_slice(&(units.len() as u16).to_le_bytes());
+        for unit in &units {
+            data.extend_from_slice(&unit.to_le_bytes());
+        }
+        data
+    }
+
+    #[test]
+    fn clickhere_parse_hint_only_carries_hint_and_drops_help() {
+        let data = make_clk("이곳에 입력", "", 0x41A4_AD66);
+        let parsed =
+            Hwp5ClickHereControl::parse(CLK_CTRL_ID, &data).expect("valid %clk must parse");
+        assert_eq!(parsed.hint_text.as_deref(), Some("이곳에 입력"));
+        assert_eq!(parsed.help_text, None, "empty help must normalize to None");
+        assert_eq!(parsed.field_unique_id, 0x41A4_AD66);
+        assert_eq!(parsed.name, None, "name is populated only after merge_name_subrecord");
+    }
+
+    #[test]
+    fn clickhere_parse_hint_and_help_carries_both() {
+        let data = make_clk("이메일 입력", "회사 이메일", 1);
+        let parsed = Hwp5ClickHereControl::parse(CLK_CTRL_ID, &data).expect("parse");
+        assert_eq!(parsed.hint_text.as_deref(), Some("이메일 입력"));
+        assert_eq!(parsed.help_text.as_deref(), Some("회사 이메일"));
+    }
+
+    #[test]
+    fn clickhere_parse_empty_hint_returns_none() {
+        // `Direction:wstring:0:` matches an empty hint — decoder must
+        // normalize that to `None`, matching the indexmark/dutmal
+        // convention (wire cannot distinguish `Some("")` from `None`).
+        let data = make_clk("", "", 0);
+        let parsed = Hwp5ClickHereControl::parse(CLK_CTRL_ID, &data).expect("parse");
+        assert_eq!(parsed.hint_text, None);
+        assert_eq!(parsed.help_text, None);
+    }
+
+    #[test]
+    fn clickhere_parse_hint_with_embedded_colon() {
+        // hint contains ':' — length-driven parser must not split on
+        // colon (Codex review HIGH).
+        let data = make_clk("scheme://host:port", "tip: read this", 0);
+        let parsed = Hwp5ClickHereControl::parse(CLK_CTRL_ID, &data).expect("parse");
+        assert_eq!(parsed.hint_text.as_deref(), Some("scheme://host:port"));
+        assert_eq!(parsed.help_text.as_deref(), Some("tip: read this"));
+    }
+
+    #[test]
+    fn clickhere_parse_rejects_truncated_command() {
+        let mut data = make_clk("hi", "", 0);
+        data.truncate(data.len() - 4);
+        assert!(Hwp5ClickHereControl::parse(CLK_CTRL_ID, &data).is_none());
+    }
+
+    #[test]
+    fn clickhere_name_subrecord_carries_ascii_name() {
+        let data = make_clk_name("user_email");
+        let name = Hwp5ClickHereControl::parse_name_subrecord(&data).expect("decode");
+        assert_eq!(name.as_deref(), Some("user_email"));
+    }
+
+    #[test]
+    fn clickhere_name_subrecord_carries_korean_name() {
+        let data = make_clk_name("입력필드");
+        let name = Hwp5ClickHereControl::parse_name_subrecord(&data).expect("decode");
+        assert_eq!(name.as_deref(), Some("입력필드"));
+    }
+
+    #[test]
+    fn clickhere_name_subrecord_empty_returns_some_none() {
+        // Some("") and None are wire-indistinguishable; per Wave 12l
+        // contract, length=0 normalizes to None (Some(None) at the
+        // parser layer to differentiate "parsed cleanly, no name" from
+        // "parse failure").
+        let data = make_clk_name("");
+        let name = Hwp5ClickHereControl::parse_name_subrecord(&data).expect("decode");
+        assert_eq!(name, None);
+    }
+
+    #[test]
+    fn clickhere_name_subrecord_truncated_returns_none() {
+        // 12-byte header but LL claims 5 chars (10 bytes), data only
+        // has the header — must fail.
+        let mut data = vec![0x1B, 0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x40, 0x01, 0x00];
+        data.extend_from_slice(&5u16.to_le_bytes());
+        // intentionally no body bytes
+        assert!(Hwp5ClickHereControl::parse_name_subrecord(&data).is_none());
     }
 }

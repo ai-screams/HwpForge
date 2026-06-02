@@ -97,6 +97,13 @@ pub(crate) enum Hwp5Control {
     /// `schema::section::Hwp5IndexMarkControl` for the payload
     /// layout. (Wave 12k.)
     IndexMark(crate::schema::section::Hwp5IndexMarkControl),
+    /// ClickHere (누름틀, CLICK_HERE press-field) — interactive form
+    /// placeholder. Wire pairs an inline `0x03` (FIELD_BEGIN) marker in
+    /// the body's `ParaText` stream with a `%clk` CtrlHeader carrying
+    /// hint/help text + a following `0x57 lvl=2` sub-record carrying the
+    /// form-mode name — see `schema::section::Hwp5ClickHereControl` for
+    /// the payload layout. (Wave 12l.)
+    ClickHere(crate::schema::section::Hwp5ClickHereControl),
     /// Header control with nested subtree paragraphs.
     Header(Hwp5NestedSubtree),
     /// Footer control with nested subtree paragraphs.
@@ -534,6 +541,15 @@ const CTRL_ID_COMPOSE: u32 = 0x7463_7073;
 /// (`6D 78 64 69`). Payload layout lives on
 /// `crate::schema::section::Hwp5IndexMarkControl`.
 const CTRL_ID_INDEXMARK: u32 = 0x6964_786D;
+
+/// ctrl_id for the ClickHere (누름틀) press-field: ASCII `%clk` as
+/// big-endian u32. Wave 12l.
+const CTRL_ID_CLICK_HERE: u32 = 0x2563_6C6B;
+
+// The `0x57 lvl=2` sub-record that follows every `%clk` CtrlHeader
+// carries the form-mode field name and HWP5 names it `CtrlData`. The
+// dispatch arm matches `TagId::CtrlData` directly (no numeric constant
+// needed) — keeping a parallel constant would only invite drift.
 
 // Memo wire command parsing now lives on `Hwp5MemoCommand::parse` in
 // `crate::schema::section` — shared with the slash-command util that future
@@ -1124,6 +1140,12 @@ struct BodyTextParserState {
     inline_subtree_gso_ctx: Option<InlineGsoContext>,
     /// Geometry of an `eqed` ctrl awaiting its `HWPTAG_EQEDIT` script child.
     eqed_pending: Option<Hwp5ShapeComponentGeometry>,
+    /// `%clk` CtrlHeader awaiting its trailing `0x57 lvl=2` sub-record
+    /// for the form-mode field name (Wave 12l). If the next top-level
+    /// record is not the expected sub-record, the press-field is
+    /// finalized with `name=None` and a targeted warning so the rest
+    /// of the section keeps round-tripping.
+    pending_clickhere: Option<crate::schema::section::Hwp5ClickHereControl>,
     /// `HWPTAG_MEMO_LIST` clusters collected from the section, keyed by
     /// memo_id. Filled while parsing the cluster region at the section end;
     /// consumed in `finish` to merge into the matching `Hwp5Control::Memo`
@@ -1511,6 +1533,51 @@ impl BodyTextParserState {
             }
         }
 
+        // ── ClickHere name sub-record pairing (Wave 12l) ───────────
+        //
+        // A `%clk` CtrlHeader is always followed by a `0x57 lvl=2`
+        // sub-record carrying the form-mode `name`. We intercept the
+        // sub-record here so it does not emit a generic
+        // `UnsupportedTag(0x57)` warning, merge the parsed name into
+        // the pending press-field, and push it as `Hwp5Control::ClickHere`
+        // on the current paragraph.
+        //
+        // If the next top-level record is *not* the expected 0x57, the
+        // pending press-field is finalized with `name=None` and the
+        // current record falls through to the normal dispatch — this
+        // keeps the rest of the section round-tripping (Codex review:
+        // grace-degrade rather than drop).
+        if self.pending_clickhere.is_some() {
+            if matches!(tag, TagId::CtrlData) && level == 2 {
+                let mut clickhere = self
+                    .pending_clickhere
+                    .take()
+                    .expect("pending_clickhere checked Some at the start of this matched arm");
+                match crate::schema::section::Hwp5ClickHereControl::parse_name_subrecord(
+                    &record.data,
+                ) {
+                    Some(name) => clickhere.name = name,
+                    None => {
+                        self.warnings.push(Hwp5Warning::ProjectionFallback {
+                            subject: "field.clickhere",
+                            reason: "malformed %clk name sub-record (0x57); \
+                                     keeping the press-field with name=None"
+                                .to_string(),
+                        });
+                    }
+                }
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls.push(Hwp5Control::ClickHere(clickhere));
+                } else if let Some(buf) = self.current_subtree_para.as_mut() {
+                    buf.controls.push(Hwp5Control::ClickHere(clickhere));
+                }
+                return;
+            }
+            // Anything else: finalize with name=None and fall through to
+            // the normal dispatch so the current record can be processed.
+            self.flush_pending_clickhere();
+        }
+
         match tag {
             TagId::ParaHeader if level == 0 => {
                 if let Some(buf) = self.current.take() {
@@ -1633,6 +1700,26 @@ impl BodyTextParserState {
                         }
                     } else {
                         self.push_unsupported_tag(record.header.tag_id);
+                    }
+                } else if ctrl_id == CTRL_ID_CLICK_HERE {
+                    // `%clk` ctrl carries the CLICK_HERE (누름틀) press-field
+                    // hint/help text. The form-mode `name` lives in the
+                    // immediately following `0x57 lvl=2` sub-record. Flush
+                    // any orphaned pending first (defensive), then store
+                    // the parsed control so the next `0x57` can attach the
+                    // name. (Wave 12l.)
+                    self.flush_pending_clickhere();
+                    if let Some(clickhere) =
+                        crate::schema::section::Hwp5ClickHereControl::parse(ctrl_id, &record.data)
+                    {
+                        self.pending_clickhere = Some(clickhere);
+                    } else {
+                        self.warnings.push(Hwp5Warning::DroppedControl {
+                            control: "clickhere",
+                            reason:
+                                "malformed %clk CtrlHeader payload; dropping press-field metadata"
+                                    .to_string(),
+                        });
                     }
                 } else if ctrl_id == CTRL_ID_INDEXMARK {
                     // `idxm` ctrl carries the IndexMark (찾아보기 표시)
@@ -1795,6 +1882,49 @@ impl BodyTextParserState {
         }
     }
 
+    /// Finalizes a pending `%clk` ClickHere control whose trailing
+    /// `0x57` name sub-record never arrived (Wave 12l). Pushes it onto
+    /// the current paragraph with `name=None` and emits a warning so
+    /// the audit baseline can attribute the form-mode identifier loss
+    /// to the ClickHere code path instead of a generic
+    /// `UnsupportedTag(0x47)` bucket.
+    fn flush_pending_clickhere(&mut self) {
+        let Some(clickhere) = self.pending_clickhere.take() else {
+            return;
+        };
+        // Exactly one warning per orphan: ProjectionFallback when we
+        // *can* still attach (partial loss), DroppedControl when we
+        // cannot (full loss). Emitting both would double-count the same
+        // event in audit baselines.
+        if let Some(buf) = self.current.as_mut() {
+            buf.controls.push(Hwp5Control::ClickHere(clickhere));
+            self.warnings.push(Hwp5Warning::ProjectionFallback {
+                subject: "field.clickhere",
+                reason: "%clk press-field missing its trailing 0x57 name sub-record; \
+                         keeping the field with name=None"
+                    .to_string(),
+            });
+        } else if let Some(buf) = self.current_subtree_para.as_mut() {
+            buf.controls.push(Hwp5Control::ClickHere(clickhere));
+            self.warnings.push(Hwp5Warning::ProjectionFallback {
+                subject: "field.clickhere",
+                reason: "%clk press-field missing its trailing 0x57 name sub-record; \
+                         keeping the field with name=None"
+                    .to_string(),
+            });
+        } else {
+            // No paragraph buffer to attach to (e.g. malformed
+            // ParaHeader caused `parse_para_header_buf` to return None
+            // earlier). Surface the silent data loss with a targeted
+            // DroppedControl warning instead of a silent drop — per
+            // Wave 12l quality review (HIGH).
+            self.warnings.push(Hwp5Warning::DroppedControl {
+                control: "clickhere",
+                reason: "no active paragraph buffer to attach orphan %clk press-field".to_string(),
+            });
+        }
+    }
+
     /// Commits the active memo-content capture (if any) into
     /// `memo_contents`. First cluster wins on duplicate `memo_id` (warning
     /// surfaced); zero-content clusters insert an empty entry so the
@@ -1842,6 +1972,9 @@ impl BodyTextParserState {
     }
 
     fn finish(mut self) -> SectionResult {
+        // Drain any orphan `%clk` whose `0x57` name sub-record was
+        // missing or replaced by another top-level record (Wave 12l).
+        self.flush_pending_clickhere();
         while let Some(ctx) = self.table_stack.pop() {
             let finished = ctx.finalize();
             attach_finished_table(

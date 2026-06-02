@@ -566,7 +566,7 @@ fn build_runs(
                         }
                         // Silently skip if no matching SpanStart found
                     }
-                    Control::Field { field_type, hint_text, help_text } => {
+                    Control::Field { field_type, hint_text, help_text, name } => {
                         let field_id = hyperlink_entries.len();
                         let marker = next_marker("HWPFD", field_id);
                         let hint = hint_text.as_deref().unwrap_or("");
@@ -578,6 +578,7 @@ fn build_runs(
                                 field_type,
                                 hint,
                                 help_text.as_deref().unwrap_or(""),
+                                name.as_deref().unwrap_or(""),
                                 char_pr_id_ref,
                                 field_id,
                             )
@@ -1054,116 +1055,165 @@ fn build_bookmark_span_end_run_xml(char_pr_id_ref: u32, field_id: usize) -> Stri
     )
 }
 
-/// Builds a `<hp:run>` XML string for a field control.
+/// Dispatches a `Control::Field` to the right HWPX `<hp:run>` builder
+/// based on the field family.
 ///
-/// # Encoding rules (from reference files):
+/// # Field families:
 ///
-/// - **CLICK_HERE**: `type="CLICK_HERE"`, `fieldid=627272811`, `Command=Clickhere:set:43:...`
-/// - **Date/Time/DocSummary/UserInfo**: `type="SUMMERY"` (한글 typo for "Summary"),
-///   `fieldid=628321650`, `Command=$modifiedtime`/`$createtime`/`$author`/`$lastsaveby`
+/// - **CLICK_HERE** (`build_clickhere_field_xml`): editable press-field
+///   (누름틀). `type="CLICK_HERE"`, `fieldid=627272811`,
+///   `Command=Clickhere:set:N:...`.
+/// - **Date/Time/DocSummary/UserInfo** (`build_summery_field_xml`):
+///   `type="SUMMERY"` (한글 typo for "Summary"), `fieldid=628321650`,
+///   `Command=$modifiedtime`/`$createtime`/`$author`/`$lastsaveby`.
 /// - **PageNum**: NOT handled here — uses `build_autonum_run_xml()` instead.
 fn build_field_run_xml(
     field_type: &hwpforge_foundation::FieldType,
     hint: &str,
     help: &str,
+    name: &str,
     char_pr_id_ref: u32,
     field_id: usize,
 ) -> String {
     use hwpforge_foundation::FieldType;
-
-    let escaped_hint = escape_xml(hint);
     let begin_id = 1_000_000_000_u64 + field_id as u64;
-
     match field_type {
         FieldType::ClickHere => {
-            // CLICK_HERE: editable press-field (누름틀)
-            let escaped_help = escape_xml(help);
-            // Lengths must match the escaped strings embedded in the Command attribute.
-            let hint_len = escaped_hint.chars().count();
-            let help_len = escaped_help.chars().count();
-            let command = format!(
-                "Clickhere:set:43:Direction:wstring:{hint_len}:{escaped_hint} HelpState:wstring:{help_len}:{escaped_help}  ",
-            );
-            format!(
-                concat!(
-                    r#"<hp:run charPrIDRef="{cpr}">"#,
-                    r#"<hp:ctrl>"#,
-                    r#"<hp:fieldBegin id="{bid}" type="CLICK_HERE" name="" editable="1" dirty="0" "#,
-                    r#"zorder="-1" fieldid="627272811" metaTag="">"#,
-                    r#"<hp:parameters cnt="3" name="">"#,
-                    r#"<hp:integerParam name="Prop">9</hp:integerParam>"#,
-                    r#"<hp:stringParam name="Command" xml:space="preserve">{cmd}</hp:stringParam>"#,
-                    r#"<hp:stringParam name="Direction">{hint}</hp:stringParam>"#,
-                    r#"</hp:parameters>"#,
-                    r#"</hp:fieldBegin>"#,
-                    r#"</hp:ctrl>"#,
-                    r#"{display}"#,
-                    r#"<hp:ctrl>"#,
-                    r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="627272811"/>"#,
-                    r#"</hp:ctrl>"#,
-                    r#"</hp:run>"#,
-                ),
-                cpr = char_pr_id_ref,
-                bid = begin_id,
-                cmd = command,
-                hint = escaped_hint,
-                display = build_text_element_xml(hint),
-            )
+            build_clickhere_field_xml(hint, help, name, char_pr_id_ref, begin_id)
         }
         FieldType::Date | FieldType::Time | FieldType::DocSummary | FieldType::UserInfo => {
-            // SUMMERY fields (한글 internal type for document summary/date/time).
-            // Reference: tests/fixtures/fields/date_field.hwpx
-            let (command, display_text) = match field_type {
-                FieldType::Date => {
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_secs();
-                    let days = now / 86400;
-                    let (y, m, d) = days_to_ymd(days);
-                    ("$modifiedtime".to_string(), format!("{y}-{m:02}-{d:02}"))
-                }
-                FieldType::Time => ("$createtime".to_string(), " ".to_string()),
-                FieldType::DocSummary => {
-                    let text = if !hint.is_empty() { hint.to_string() } else { " ".to_string() };
-                    ("$author".to_string(), text)
-                }
-                FieldType::UserInfo => {
-                    let text = if !hint.is_empty() { hint.to_string() } else { " ".to_string() };
-                    ("$lastsaveby".to_string(), text)
-                }
-                _ => unreachable!("outer match arm already guards Date|Time|DocSummary|UserInfo"),
-            };
-            format!(
-                concat!(
-                    r#"<hp:run charPrIDRef="{cpr}">"#,
-                    r#"<hp:ctrl>"#,
-                    r#"<hp:fieldBegin id="{bid}" type="SUMMERY" name="" editable="1" dirty="0" "#,
-                    r#"zorder="-1" fieldid="628321650" metaTag="">"#,
-                    r#"<hp:parameters cnt="3" name="">"#,
-                    r#"<hp:integerParam name="Prop">8</hp:integerParam>"#,
-                    r#"<hp:stringParam name="Command">{cmd}</hp:stringParam>"#,
-                    r#"<hp:stringParam name="Property">{cmd}</hp:stringParam>"#,
-                    r#"</hp:parameters>"#,
-                    r#"</hp:fieldBegin>"#,
-                    r#"</hp:ctrl>"#,
-                    r#"{display}"#,
-                    r#"<hp:ctrl>"#,
-                    r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="628321650"/>"#,
-                    r#"</hp:ctrl>"#,
-                    r#"</hp:run>"#,
-                ),
-                cpr = char_pr_id_ref,
-                bid = begin_id,
-                cmd = command,
-                display = build_text_element_xml(&display_text),
-            )
+            build_summery_field_xml(field_type, hint, name, char_pr_id_ref, begin_id)
         }
         _ => {
             // Fallback: encode as CLICK_HERE for any unknown/future field types.
-            build_field_run_xml(&FieldType::ClickHere, hint, help, char_pr_id_ref, field_id)
+            build_clickhere_field_xml(hint, help, name, char_pr_id_ref, begin_id)
         }
     }
+}
+
+/// Builds the CLICK_HERE (누름틀) `<hp:run>` XML.
+///
+/// Wire convention: `hint_len`/`help_len` are UTF-16 code unit counts of the
+/// *decoded* strings. `Command N` is computed by `clickhere_command_string`
+/// from the empirically-derived formula (see that function's doc comment).
+fn build_clickhere_field_xml(
+    hint: &str,
+    help: &str,
+    name: &str,
+    char_pr_id_ref: u32,
+    begin_id: u64,
+) -> String {
+    let escaped_hint = escape_xml(hint);
+    let escaped_name = escape_xml(name);
+    let hint_len = hint.encode_utf16().count();
+    let help_len = help.encode_utf16().count();
+    let command = clickhere_command_string(hint, help, hint_len, help_len);
+    format!(
+        concat!(
+            r#"<hp:run charPrIDRef="{cpr}">"#,
+            r#"<hp:ctrl>"#,
+            r#"<hp:fieldBegin id="{bid}" type="CLICK_HERE" name="{name}" editable="1" dirty="0" "#,
+            r#"zorder="-1" fieldid="627272811" metaTag="">"#,
+            r#"<hp:parameters cnt="3" name="">"#,
+            r#"<hp:integerParam name="Prop">9</hp:integerParam>"#,
+            r#"<hp:stringParam name="Command" xml:space="preserve">{cmd}</hp:stringParam>"#,
+            r#"<hp:stringParam name="Direction">{hint}</hp:stringParam>"#,
+            r#"</hp:parameters>"#,
+            r#"</hp:fieldBegin>"#,
+            r#"</hp:ctrl>"#,
+            r#"{display}"#,
+            r#"<hp:ctrl>"#,
+            r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="627272811"/>"#,
+            r#"</hp:ctrl>"#,
+            r#"</hp:run>"#,
+        ),
+        cpr = char_pr_id_ref,
+        bid = begin_id,
+        name = escaped_name,
+        cmd = escape_xml(&command),
+        hint = escaped_hint,
+        display = build_text_element_xml(hint),
+    )
+}
+
+/// Builds a SUMMERY (Date/Time/DocSummary/UserInfo) `<hp:run>` XML.
+///
+/// Reference: `tests/fixtures/fields/date_field.hwpx`. The wire-level field
+/// type is shared with all four auto-fields; we discriminate by the `Command`
+/// stringParam (`$modifiedtime` / `$createtime` / `$author` / `$lastsaveby`).
+fn build_summery_field_xml(
+    field_type: &hwpforge_foundation::FieldType,
+    hint: &str,
+    name: &str,
+    char_pr_id_ref: u32,
+    begin_id: u64,
+) -> String {
+    use hwpforge_foundation::FieldType;
+    let escaped_name = escape_xml(name);
+    let (command, display_text) = match field_type {
+        FieldType::Date => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let days = now / 86400;
+            let (y, m, d) = days_to_ymd(days);
+            ("$modifiedtime".to_string(), format!("{y}-{m:02}-{d:02}"))
+        }
+        FieldType::Time => ("$createtime".to_string(), " ".to_string()),
+        FieldType::DocSummary => {
+            let text = if !hint.is_empty() { hint.to_string() } else { " ".to_string() };
+            ("$author".to_string(), text)
+        }
+        FieldType::UserInfo => {
+            let text = if !hint.is_empty() { hint.to_string() } else { " ".to_string() };
+            ("$lastsaveby".to_string(), text)
+        }
+        _ => unreachable!("caller already guards Date|Time|DocSummary|UserInfo"),
+    };
+    format!(
+        concat!(
+            r#"<hp:run charPrIDRef="{cpr}">"#,
+            r#"<hp:ctrl>"#,
+            r#"<hp:fieldBegin id="{bid}" type="SUMMERY" name="{name}" editable="1" dirty="0" "#,
+            r#"zorder="-1" fieldid="628321650" metaTag="">"#,
+            r#"<hp:parameters cnt="3" name="">"#,
+            r#"<hp:integerParam name="Prop">8</hp:integerParam>"#,
+            r#"<hp:stringParam name="Command">{cmd}</hp:stringParam>"#,
+            r#"<hp:stringParam name="Property">{cmd}</hp:stringParam>"#,
+            r#"</hp:parameters>"#,
+            r#"</hp:fieldBegin>"#,
+            r#"</hp:ctrl>"#,
+            r#"{display}"#,
+            r#"<hp:ctrl>"#,
+            r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="628321650"/>"#,
+            r#"</hp:ctrl>"#,
+            r#"</hp:run>"#,
+        ),
+        cpr = char_pr_id_ref,
+        bid = begin_id,
+        name = escaped_name,
+        cmd = command,
+        display = build_text_element_xml(&display_text),
+    )
+}
+
+/// Builds the `Clickhere:set:N:...` command string.
+///
+/// `N` is **not** the total UTF-16 length of the command — empirically (verified
+/// against five 한컴-authored fixtures including `basic`, `with-help`,
+/// `empty-hint`, `multi`, and `named`) it equals the UTF-16 length of the
+/// substring after `"Clickhere:set:N:"` minus one (one of the two trailing
+/// spaces is excluded from `N`). The encoder can compute this directly
+/// without iteration because the formula does not depend on `digits(N)`.
+///
+/// See `.docs/research/2026-06-02_clickhere_wire_dump.md` for the empirical
+/// derivation.
+fn clickhere_command_string(hint: &str, help: &str, hint_len: usize, help_len: usize) -> String {
+    let rest =
+        format!("Direction:wstring:{hint_len}:{hint} HelpState:wstring:{help_len}:{help}  ",);
+    let n = rest.encode_utf16().count().saturating_sub(1);
+    format!("Clickhere:set:{n}:{rest}")
 }
 
 /// Builds a `<hp:run>` XML string for an inline page number (`<hp:autoNum>`).
@@ -4016,8 +4066,12 @@ mod tests {
     fn field_pagenum_produces_autonum() {
         use hwpforge_core::control::Control;
         use hwpforge_foundation::FieldType;
-        let ctrl =
-            Control::Field { field_type: FieldType::PageNum, hint_text: None, help_text: None };
+        let ctrl = Control::Field {
+            field_type: FieldType::PageNum,
+            hint_text: None,
+            help_text: None,
+            name: None,
+        };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
                 vec![Run::control(ctrl, CharShapeIndex::new(0))],
@@ -4034,7 +4088,12 @@ mod tests {
     fn field_date_produces_summery_type() {
         use hwpforge_core::control::Control;
         use hwpforge_foundation::FieldType;
-        let ctrl = Control::Field { field_type: FieldType::Date, hint_text: None, help_text: None };
+        let ctrl = Control::Field {
+            field_type: FieldType::Date,
+            hint_text: None,
+            help_text: None,
+            name: None,
+        };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
                 vec![Run::control(ctrl, CharShapeIndex::new(0))],
@@ -4053,7 +4112,12 @@ mod tests {
     fn field_time_produces_summery_createtime() {
         use hwpforge_core::control::Control;
         use hwpforge_foundation::FieldType;
-        let ctrl = Control::Field { field_type: FieldType::Time, hint_text: None, help_text: None };
+        let ctrl = Control::Field {
+            field_type: FieldType::Time,
+            hint_text: None,
+            help_text: None,
+            name: None,
+        };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
                 vec![Run::control(ctrl, CharShapeIndex::new(0))],
@@ -4070,8 +4134,12 @@ mod tests {
     fn field_docsummary_produces_summery_author() {
         use hwpforge_core::control::Control;
         use hwpforge_foundation::FieldType;
-        let ctrl =
-            Control::Field { field_type: FieldType::DocSummary, hint_text: None, help_text: None };
+        let ctrl = Control::Field {
+            field_type: FieldType::DocSummary,
+            hint_text: None,
+            help_text: None,
+            name: None,
+        };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
                 vec![Run::control(ctrl, CharShapeIndex::new(0))],
@@ -4088,8 +4156,12 @@ mod tests {
     fn field_userinfo_produces_summery_lastsaveby() {
         use hwpforge_core::control::Control;
         use hwpforge_foundation::FieldType;
-        let ctrl =
-            Control::Field { field_type: FieldType::UserInfo, hint_text: None, help_text: None };
+        let ctrl = Control::Field {
+            field_type: FieldType::UserInfo,
+            hint_text: None,
+            help_text: None,
+            name: None,
+        };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
                 vec![Run::control(ctrl, CharShapeIndex::new(0))],
@@ -4110,6 +4182,7 @@ mod tests {
             field_type: FieldType::ClickHere,
             hint_text: Some("클릭하세요".to_string()),
             help_text: Some("도움말".to_string()),
+            name: None,
         };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
@@ -4122,6 +4195,44 @@ mod tests {
         assert!(xml.contains(r#"type="CLICK_HERE""#), "ClickHere field type");
         assert!(xml.contains(r#"fieldid="627272811""#), "ClickHere fieldid");
         assert!(xml.contains("클릭하세요"), "hint text must appear");
+    }
+
+    /// Pins the `Clickhere:set:N:` self-referential N formula against
+    /// the seven press-field instances observed across Wave 12l native
+    /// fixtures. If the formula or the `rest` template ever drifts,
+    /// this test catches it before HWPX→한컴 round-trip breaks
+    /// silently.
+    ///
+    /// Expected N comes from `.docs/research/2026-06-02_clickhere_wire_dump.md`.
+    #[test]
+    fn clickhere_command_string_matches_hancom_fixture_n() {
+        // (hint, help, hint_len, help_len, expected_N)
+        let cases: &[(&str, &str, usize, usize, usize)] = &[
+            // basic: hint-only, 23 한글 chars
+            ("이곳을 마우스로 누르고 내용을 입력하세요.", "", 23, 0, 66),
+            // with-help
+            ("이메일 주소를 입력하세요", "예: user@example.com - 회사 이메일로 입력", 13, 32, 89),
+            // empty-hint
+            ("", "", 0, 0, 42),
+            // multi #1
+            ("이름 입력", "", 5, 0, 47),
+            // multi #3 (with help)
+            ("email@company.com", "회사 이메일을 입력하세요", 17, 13, 74),
+            // named
+            ("회사 이메일을 입력하세요", "user@company.com", 13, 16, 73),
+        ];
+        for (hint, help, hint_len, help_len, expected_n) in cases {
+            let cmd = clickhere_command_string(hint, help, *hint_len, *help_len);
+            assert!(
+                cmd.starts_with(&format!("Clickhere:set:{expected_n}:")),
+                "expected N={expected_n} for hint={hint:?} help={help:?}, got: {cmd:?}",
+            );
+            // Sanity: re-parse the embedded N to catch leading-zero or
+            // off-by-one regressions in `saturating_sub`.
+            let n_str = cmd.strip_prefix("Clickhere:set:").unwrap().split(':').next().unwrap();
+            let n: usize = n_str.parse().expect("N must be a decimal integer");
+            assert_eq!(n, *expected_n, "embedded N digits must match expected");
+        }
     }
 
     // ── CrossRef encoding ─────────────────────────────────────────
@@ -4644,11 +4755,11 @@ mod tests {
         let big = 1_000_000_usize;
 
         assert_ids_under_limit(
-            &build_field_run_xml(&FieldType::ClickHere, "", "", 0, big),
+            &build_field_run_xml(&FieldType::ClickHere, "", "", "", 0, big),
             "field_run/CLICK_HERE",
         );
         assert_ids_under_limit(
-            &build_field_run_xml(&FieldType::Date, "", "", 0, big),
+            &build_field_run_xml(&FieldType::Date, "", "", "", 0, big),
             "field_run/SUMMERY",
         );
         assert_ids_under_limit(

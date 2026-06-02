@@ -49,6 +49,11 @@ const CTRL_ID_BOOKMARK_SPAN: u32 = 0x2562_6D6B; // "%bmk"
 const CTRL_ID_HYPERLINK: u32 = 0x2568_6C6B; // "%hlk"
 const CTRL_ID_CROSSREF: u32 = 0x2578_7266; // "%xrf"
 const CTRL_ID_BOOKMARK_POINT: u32 = 0x626F_6B6D; // "bokm"
+/// Wave 12l: ClickHere (누름틀) inline `FieldBegin` ctrl_id `%clk`.
+/// Hint/help live in the matching `%clk` CtrlHeader payload and the
+/// form-mode `name` lives in the trailing `0x57 lvl=2` sub-record —
+/// see `schema::section::Hwp5ClickHereControl`.
+const CTRL_ID_CLICK_HERE: u32 = 0x2563_6C6B; // "%clk"
 /// Inline `FieldBegin` ctrl_id for memo anchors (`%%me` BE-ascii).
 ///
 /// In the HWP5 body text stream, memos are embedded as `FieldBegin` /
@@ -118,6 +123,11 @@ struct ParagraphProjectionQueues<'a> {
     /// `FieldBegin %unk MEMO` inline segments via `start_active_field`;
     /// any leftovers are drained at end-of-paragraph as a safety net.
     memo_controls: VecDeque<Hwp5MemoControl>,
+    /// Pending ClickHere (`%clk`) press-fields in document order
+    /// (Wave 12l). Consumed by `FieldBegin %clk` inline segments via
+    /// `start_active_field`. Like `memo_controls`, leftovers do not
+    /// emit visible runs — they only carry metadata.
+    clickhere_controls: VecDeque<crate::schema::section::Hwp5ClickHereControl>,
     point_bookmark_names: VecDeque<String>,
 }
 
@@ -148,6 +158,20 @@ enum ActiveField {
     MemoAnchor {
         start_utf16: u32,
         memo: Hwp5MemoControl,
+    },
+    /// ClickHere (누름틀, CLICK_HERE press-field) — Wave 12l. The
+    /// inline `FieldBegin %clk` to `FieldEnd` span is rendered as a
+    /// single `Control::Field { field_type: ClickHere, hint_text,
+    /// help_text, name }` Run emitted at `FieldEnd`. Per Codex review
+    /// the span text between the markers is *not* accumulated: in
+    /// HWP5 wire that span is empty, and HWPX renders `hint_text` as
+    /// the visible placeholder, so accumulating display text would
+    /// risk double-emitting it.
+    ClickHere {
+        start_utf16: u32,
+        hint_text: Option<String>,
+        help_text: Option<String>,
+        name: Option<String>,
     },
 }
 
@@ -683,7 +707,8 @@ fn project_paragraph_with_images_structural(
                         // advance the visible cursor here.
                         ActiveField::BookmarkSpan { .. }
                         | ActiveField::PlainTextFallback { .. }
-                        | ActiveField::MemoAnchor { .. } => {}
+                        | ActiveField::MemoAnchor { .. }
+                        | ActiveField::ClickHere { .. } => {}
                     }
                 } else {
                     runs.extend(project_text_segment(
@@ -766,10 +791,16 @@ fn project_paragraph_with_images_structural(
                 } else {
                     None
                 };
+                let clickhere = if ctrl_id == CTRL_ID_CLICK_HERE {
+                    queues.clickhere_controls.pop_front()
+                } else {
+                    None
+                };
                 active_field = Some(start_active_field(
                     ctrl_id,
                     header,
                     memo,
+                    clickhere,
                     visible_utf16,
                     projection_images,
                     field_hints.as_deref_mut(),
@@ -860,7 +891,8 @@ fn append_visible_unit(
             | ActiveField::CrossRef { display_text, .. } => display_text.push(ch),
             ActiveField::BookmarkSpan { .. }
             | ActiveField::PlainTextFallback { .. }
-            | ActiveField::MemoAnchor { .. } => {}
+            | ActiveField::MemoAnchor { .. }
+            | ActiveField::ClickHere { .. } => {}
         }
     } else {
         runs.extend(project_text_segment(
@@ -883,6 +915,7 @@ fn paragraph_needs_structural_projection(hwp_para: &Hwp5Paragraph) -> bool {
                 control,
                 Hwp5Control::Unknown { ctrl_id: CTRL_ID_PAGE_NUMBER | CTRL_ID_BOOKMARK_POINT, .. }
             ) || matches!(control, Hwp5Control::Memo(_))
+                || matches!(control, Hwp5Control::ClickHere(_))
         })
 }
 
@@ -894,6 +927,7 @@ fn build_paragraph_projection_queues<'a>(
     let mut marker_headers = VecDeque::new();
     let mut object_controls = VecDeque::new();
     let mut memo_controls = VecDeque::new();
+    let mut clickhere_controls = VecDeque::new();
     let mut point_bookmark_names = VecDeque::new();
     let mut field_hints = field_hints;
 
@@ -903,6 +937,14 @@ fn build_paragraph_projection_queues<'a>(
         // entangling object/marker dispatch.
         if let Hwp5Control::Memo(memo) = control {
             memo_controls.push_back(memo.clone());
+            continue;
+        }
+        // ClickHere press-fields (Wave 12l) — same dedicated-queue
+        // pattern as memos. Hint/help/name live in the parsed control;
+        // the inline `FieldBegin %clk` marker pulls the next entry off
+        // this queue in `start_active_field`.
+        if let Hwp5Control::ClickHere(clickhere) = control {
+            clickhere_controls.push_back(clickhere.clone());
             continue;
         }
         let Some(unknown) = unknown_control_header(control) else {
@@ -942,6 +984,7 @@ fn build_paragraph_projection_queues<'a>(
         marker_headers,
         object_controls,
         memo_controls,
+        clickhere_controls,
         point_bookmark_names,
     }
 }
@@ -950,6 +993,7 @@ fn start_active_field(
     ctrl_id: u32,
     header: Option<UnknownControlHeader<'_>>,
     memo: Option<Hwp5MemoControl>,
+    clickhere: Option<crate::schema::section::Hwp5ClickHereControl>,
     start_utf16: u32,
     projection_images: &mut ProjectionImageState<'_>,
     field_hints: Option<&mut SectionProjectionHints>,
@@ -1003,6 +1047,27 @@ fn start_active_field(
                 projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
                     subject: "field.crossref",
                     reason: "cross-reference target unavailable; preserving only visible text"
+                        .to_string(),
+                });
+                ActiveField::PlainTextFallback { start_utf16 }
+            }
+        }
+        CTRL_ID_CLICK_HERE => {
+            if let Some(clickhere) = clickhere {
+                // hint/help/name pulled from the decoded
+                // `Hwp5ClickHereControl` (which already merged the
+                // trailing 0x57 sub-record at the decoder boundary).
+                ActiveField::ClickHere {
+                    start_utf16,
+                    hint_text: clickhere.hint_text,
+                    help_text: clickhere.help_text,
+                    name: clickhere.name,
+                }
+            } else {
+                projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "field.clickhere",
+                    reason: "click-here press-field metadata unavailable; \
+                             preserving only visible text"
                         .to_string(),
                 });
                 ActiveField::PlainTextFallback { start_utf16 }
@@ -1106,6 +1171,28 @@ fn finish_active_field(
                 start_utf16,
             ) as usize);
             runs.push(project_memo_run(&memo, projection_images, char_shape_id, anchor_runs));
+        }
+        ActiveField::ClickHere { start_utf16, hint_text, help_text, name } => {
+            // Emit a single Control::Field Run at the span start. The
+            // HWPX encoder builds `<fieldBegin> + visible hint + <fieldEnd>`
+            // from this control, so we must *not* additionally project
+            // the span text (HWP5 wire span is empty between
+            // FIELD_BEGIN/FIELD_END; double-emitting would duplicate
+            // hint as both placeholder and run text in HWPX).
+            let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
+                &hwp_para.char_shape_runs,
+                start_utf16,
+            ) as usize);
+            let _ = end_utf16; // span text intentionally not consumed
+            runs.push(Run::control(
+                Control::Field {
+                    field_type: hwpforge_foundation::FieldType::ClickHere,
+                    hint_text,
+                    help_text,
+                    name,
+                },
+                char_shape_id,
+            ));
         }
     }
 }
@@ -1535,6 +1622,12 @@ fn project_control_run(
         Hwp5Control::Dutmal(dutmal) => Some(project_dutmal_run(dutmal)),
         Hwp5Control::Compose(compose) => Some(project_compose_run(compose)),
         Hwp5Control::IndexMark(indexmark) => Some(project_indexmark_run(indexmark)),
+        // ClickHere emission flows through the `FieldBegin`/`ActiveField::ClickHere`
+        // machinery in `project_paragraph_with_images_structural` (mirroring the
+        // Memo dispatch above). If a ClickHere ever reaches this flat dispatch
+        // path it means the structural pairing failed — drop rather than
+        // silently emit a free-floating field run.
+        Hwp5Control::ClickHere(_) => None,
         Hwp5Control::OleObject(ole) => project_ole_object_run(ole, projection_images),
     }
 }

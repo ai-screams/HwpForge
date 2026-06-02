@@ -1100,6 +1100,8 @@ pub enum Hwp5SemanticControlKind {
     Compose,
     /// IndexMark (찾아보기 표시) annotation control.
     IndexMark,
+    /// ClickHere (누름틀, CLICK_HERE press-field) form control.
+    ClickHere,
     /// Header control.
     Header,
     /// Footer control.

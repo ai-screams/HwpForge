@@ -422,6 +422,7 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
                         field_type: hwpforge_foundation::FieldType::PageNum,
                         hint_text: None,
                         help_text: None,
+                        name: None,
                     })),
                     char_shape_id,
                 });
@@ -849,6 +850,7 @@ fn decode_field_control(
                 field_type: ft,
                 hint_text: get_field_param(fb, "Direction"),
                 help_text: get_field_param(fb, "HelpState"),
+                name: Some(fb.name.clone()).filter(|s| !s.is_empty()),
             }
         }
         "SUMMERY" => {
@@ -862,7 +864,12 @@ fn decode_field_control(
                 "$lastsaveby" => hwpforge_foundation::FieldType::UserInfo,
                 _ => hwpforge_foundation::FieldType::DocSummary,
             };
-            Control::Field { field_type: ft, hint_text: None, help_text: None }
+            Control::Field {
+                field_type: ft,
+                hint_text: None,
+                help_text: None,
+                name: Some(fb.name.clone()).filter(|s| !s.is_empty()),
+            }
         }
         "CROSSREF" => {
             let target = get_field_param(fb, "RefPath")

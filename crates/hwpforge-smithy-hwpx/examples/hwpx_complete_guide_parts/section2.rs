@@ -117,6 +117,7 @@ pub(crate) fn section2_text_formatting() -> Section {
                     field_type: FieldType::Date,
                     hint_text: Some("날짜".to_string()),
                     help_text: Some("문서 작성 날짜를 표시합니다.".to_string()),
+                    name: None,
                 },
                 csi(CS_BLUE),
             ),
@@ -129,7 +130,12 @@ pub(crate) fn section2_text_formatting() -> Section {
         vec![
             Run::text("쪽 번호 필드(autoNum): 현재 ", csi(CS_NORMAL)),
             Run::control(
-                Control::Field { field_type: FieldType::PageNum, hint_text: None, help_text: None },
+                Control::Field {
+                    field_type: FieldType::PageNum,
+                    hint_text: None,
+                    help_text: None,
+                    name: None,
+                },
                 csi(CS_BLUE),
             ),
             Run::text("쪽", csi(CS_NORMAL)),
