@@ -30,15 +30,25 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 - HWP5 tab fidelity end-to-end: inline `<hp:tab width/leader/type>` attributes carried via new `RunContent::InlineText` variant (Wave 4 tab Phase 2+3, additive `#[non_exhaustive]`)
 - HWP5 header/footer per-ctrl `applyPageType` (BOTH/ODD/EVEN) now carry as multiple `<hp:header>` / `<hp:footer>` elements (Wave 5 gap A; **breaking** ADR-002: `Section.header: Option<HeaderFooter>` → `Section.headers: Vec<HeaderFooter>`, footer 동일)
 - HWP5 `secd` ctrl property bits (0/1/2/5/19) carry into `Section.visibility.hide_first_*` (Wave 5 gap B)
-- Known still-deferred: richer strike/underline line families; Wave 5 gap C (masterPage carry — macOS 한컴 fixture 비대칭, PC 한컴 fixture 대기, task #33); multi-section / page-border-fill (fixture 미작성)
+- **Phase 12 HWP5 carry series complete** (active branch `feat/phase12-hwp5-gso-shapes`, 21 commits ahead of `main`, 2026-06-02):
+  - Wave 12a: GSO `Ellipse`/`Arc`/`Curve` carry (`0x50`/`0x53` sub-records, arc inferred from ellipse)
+  - Wave 12b: GSO `ConnectLine` carry (`$col` discriminator on `ShapeComponentLine`)
+  - Wave 12d: `Equation` carry (`eqed` + `HWPTAG_EQEDIT` script pairing)
+  - Wave 12e/f/g/h: `Memo` carry — body content + anchor positioning + 7 wire parameters (`editable`/`dirty`/`zorder`/`field_id`/`begin_id_ref`/`name`/`meta_tag`)
+  - Wave 12i: `Dutmal` (덧말) `option` carry + flat-path `control_iter` filter (Core breaking: `option_raw`)
+  - Wave 12j: `Compose` (글자겹침) carry + `char_pr_ids` fidelity + packed-variant 지원 (Core breaking)
+  - Wave 12k: `IndexMark` (찾아보기) carry + `0x16` 인라인 marker 보존
+  - Wave 12l (latest): `Control::Field` (CLICK_HERE / 누름틀) carry + form-mode `name` 메타 carry — `Control::Field`에 `name: Option<String>` 추가 (Core breaking), HWP5 `%clk` ctrl_id + 트레일링 `0x57` (`TagId::CtrlData`) sub-record 페어링, HWPX encoder `Clickhere:set:N:` 자기 참조 N 공식 empirical 도출 (이전 하드코딩 `43` 수정), 32K command + 2K name allocation cap (DoS 방어)
+- Known still-deferred: richer strike/underline line families; Wave 5 gap C (masterPage carry — macOS 한컴 fixture 비대칭, PC 한컴 fixture 대기, task #33); multi-section / page-border-fill (fixture 미작성); 한컴-authored .hwpx의 multi-run span 디코딩 (편집 알고리즘 prerequisite, task #96)
 
-**Workspace Facts (code-grounded)**:
+**Workspace Facts (code-grounded, 2026-06-02)**:
 
 - Cargo packages: `10`
-- Workspace version: `0.6.0` (bumped from `0.5.2` for the ADR-002 breaking change)
-- Tracked Rust `src` files under `crates/`: `144`
-- Tracked Rust `src` LOC under `crates/`: `90,629`
-- Example artifact files under `examples/`: `67`
+- Workspace version: `0.6.0` (Unreleased — bumped from `0.5.2` for ADR-002 breaking + Wave 12 series breakings)
+- Tracked Rust `src` files under `crates/`: `146`
+- Tracked Rust `src` LOC under `crates/`: `100,796`
+- Workspace nextest count: `2,365` (passed) + `2` skipped
+- Example artifact files under `examples/`: `67`+ (gitignored `examples/hwp5_review/` 리뷰 영역 별도)
 - GitHub workflow files: `5`
 - MSRV: `1.88`
 - Dev toolchain: Rust `1.93`
