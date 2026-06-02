@@ -798,6 +798,7 @@ fn collect_image_geometry_hints_in_controls(
             | decoder::section::Hwp5Control::Memo(_)
             | decoder::section::Hwp5Control::Dutmal(_)
             | decoder::section::Hwp5Control::Compose(_)
+            | decoder::section::Hwp5Control::IndexMark(_)
             | decoder::section::Hwp5Control::OleObject(_)
             | decoder::section::Hwp5Control::Unknown { .. } => {}
         }
@@ -1107,6 +1108,7 @@ mod tests {
         memos: usize,
         dutmals: usize,
         composes: usize,
+        index_marks: usize,
     }
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1464,6 +1466,7 @@ mod tests {
             }
             Control::Dutmal { .. } => layout.dutmals += 1,
             Control::Compose { .. } => layout.composes += 1,
+            Control::IndexMark { .. } => layout.index_marks += 1,
             Control::TextBox { paragraphs, .. } => {
                 layout.textboxes += 1;
                 count_shapes_in_paragraphs(paragraphs, layout);
@@ -2477,6 +2480,140 @@ mod tests {
         assert_eq!(layout.composes, 28, "all 28 composes should reach Core::Compose");
 
         let _ = std::fs::remove_file(&out);
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_indexmark_basic_carries_primary_only_entries() {
+        // Wave 12k: a natively-authored 한컴 fixture with 2 IndexMarks,
+        // both primary-only ("테스트" and "문장"). Guards three earlier
+        // gaps Wave 12k closed in lock-step:
+        //   1. `0x16` inline marker was silently consumed in
+        //      `Hwp5ParaText::parse` — the indexmark Run would have
+        //      ended up drained to end-of-paragraph instead of sitting
+        //      at the body anchor.
+        //   2. `idxm` CtrlHeader fell through to `Hwp5Control::Unknown`,
+        //      so the projection had nothing to dispatch even when the
+        //      marker reached it.
+        //   3. Malformed `idxm` payloads used to bubble up as the
+        //      generic `UnsupportedTag(0x47)` warning; the new path
+        //      emits `DroppedControl { control: "indexmark", … }`
+        //      instead (asserted indirectly by the absence of dropped
+        //      controls on well-formed input).
+        let source = fixture_path("user_samples/sample-indexmark-basic.hwp");
+        if !source.exists() {
+            return;
+        }
+        let out = unique_temp_path("user-sample-indexmark-basic.hwpx");
+        let warnings = hwp5_to_hwpx(&source, &out).expect("indexmark conversion should succeed");
+        assert!(
+            !warnings.iter().any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
+            "indexmark must not drop any control: {warnings:?}"
+        );
+        assert_valid_hwpx(&out);
+
+        let section_xml = read_section_xml(&out, 0);
+        assert!(
+            section_xml.contains("<hp:indexmark><hp:firstKey>테스트</hp:firstKey></hp:indexmark>"),
+            "first indexmark primary must carry verbatim: {section_xml}"
+        );
+        assert!(
+            section_xml.contains("<hp:indexmark><hp:firstKey>문장</hp:firstKey></hp:indexmark>"),
+            "second indexmark primary must carry verbatim: {section_xml}"
+        );
+        // Neither indexmark has a secondary in the truth fixture.
+        assert!(
+            !section_xml.contains("<hp:secondKey>"),
+            "neither indexmark should emit <hp:secondKey>: {section_xml}"
+        );
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let layout = collect_decoded_shape_layout(&decoded);
+        assert_eq!(layout.index_marks, 2, "both indexmarks should round-trip");
+    }
+
+    #[test]
+    fn hwp5_to_hwpx_user_sample_indexmark_multi_preserves_order_and_secondary_keys() {
+        // Wave 12k Phase 2 regression gate. The `gen_indexmark_variants`
+        // example authored an HWPX with 8 IndexMarks across 7
+        // paragraphs covering all the wire shapes that could regress:
+        //   * primary-only / primary+secondary
+        //   * 한글 / 영문 / 한자 / 혼합 키워드
+        //   * two IndexMarks in the same paragraph (order regression
+        //     for `0x16` ParaText + object_controls queue alignment)
+        //   * source `Some("")` secondary normalized by 한컴 to None
+        //     on HWP5 save
+        // 한컴 saved that HWPX as HWP5; the assertions below confirm
+        // every variant reaches HWPX intact and that the
+        // CPU-then-GPU order survives the round trip.
+        let source = fixture_path("user_samples/sample-indexmark-multi.hwp");
+        if !source.exists() {
+            return;
+        }
+        let out = unique_temp_path("user-sample-indexmark-multi.hwpx");
+        let warnings =
+            hwp5_to_hwpx(&source, &out).expect("multi indexmark conversion should succeed");
+        assert!(
+            !warnings.iter().any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
+            "no indexmark variant must drop: {warnings:?}"
+        );
+        assert_valid_hwpx(&out);
+
+        let section_xml = read_section_xml(&out, 0);
+        let indexmark_count = section_xml.matches("<hp:indexmark>").count();
+        assert_eq!(indexmark_count, 8, "all 8 indexmark variants must round-trip");
+
+        // Primary-only entries.
+        for primary in ["컴퓨터", "韓國", "CPU", "GPU", "네트워크"] {
+            let needle = format!("<hp:firstKey>{primary}</hp:firstKey>");
+            assert!(
+                section_xml.contains(&needle),
+                "primary '{primary}' must reach HWPX: {section_xml}"
+            );
+        }
+
+        // Primary + secondary pairings carry both keys.
+        for (primary, secondary) in [("컴퓨터", "하드웨어"), ("Memory", "RAM"), ("운영체제", "OS")]
+        {
+            let needle = format!(
+                "<hp:firstKey>{primary}</hp:firstKey><hp:secondKey>{secondary}</hp:secondKey>"
+            );
+            assert!(
+                section_xml.contains(&needle),
+                "primary+secondary pair '{primary}/{secondary}' must carry: {section_xml}"
+            );
+        }
+
+        // The source for "네트워크" was `Some("")`; 한컴 normalized it
+        // to `None` on save, so the output must NOT contain a
+        // `<hp:secondKey>` for that primary.
+        let net_idx = section_xml
+            .find(r#"<hp:firstKey>네트워크</hp:firstKey>"#)
+            .expect("네트워크 indexmark must exist");
+        let after_net = &section_xml[net_idx..];
+        let close_tag = after_net.find("</hp:indexmark>").expect("close tag");
+        let net_element = &after_net[..close_tag];
+        assert!(
+            !net_element.contains("<hp:secondKey>"),
+            "Some(\"\") secondary should normalize to absent <hp:secondKey>: {net_element}"
+        );
+
+        // Order regression: CPU-then-GPU on the same paragraph. If
+        // the `0x16` marker handling or the projection queue dispatch
+        // drifts, those two would swap or collapse onto end-of-paragraph.
+        let cpu_pos =
+            section_xml.find("<hp:firstKey>CPU</hp:firstKey>").expect("CPU indexmark must exist");
+        let gpu_pos =
+            section_xml.find("<hp:firstKey>GPU</hp:firstKey>").expect("GPU indexmark must exist");
+        assert!(
+            cpu_pos < gpu_pos,
+            "CPU indexmark must appear before GPU (queue-order regression gate)"
+        );
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let layout = collect_decoded_shape_layout(&decoded);
+        assert_eq!(layout.index_marks, 8, "all 8 indexmarks must reach Core");
     }
 
     #[test]

@@ -257,6 +257,52 @@ existed in the shared model; only the HWP5 leg was missing.
   each ctrl_id can repurpose it for ctrl-specific data, and the same
   ctrl can switch layouts within a single document.
 
+#### Added — Wave 12k (IndexMark carry + `0x16` inline marker promotion)
+
+- Carry IndexMark (찾아보기 표시) annotations end-to-end through the
+  HWP5 leg — `Hwp5IndexMarkControl` schema struct, `idxm` CtrlHeader
+  decode, `Hwp5Control::IndexMark` variant, and a
+  `project_indexmark_run` that emits `Control::IndexMark { primary,
+  secondary }`. The HWPX encoder + decoder + Core variant all
+  existed prior to Wave 12k; only the HWP5 leg was missing and
+  `idxm` was silently dropped to `Hwp5Control::Unknown`.
+- **`0x16` ParaText inline-marker promotion (Codex 🟠 HIGH).**
+  `Hwp5ParaText::parse` used to consume the entire `0x0E..=0x16`
+  byte range silently. Adding a CtrlHeader dispatch alone would
+  have left every IndexMark `Run` drained to end-of-paragraph
+  instead of anchored at the inline marker. The fix carves `0x16`
+  out of the silent-consume range and promotes it to
+  `TextSegment::ControlRef` only when `extra[0..4]` matches the
+  LE-stored ctrl_id for `idxm`. The discrimination keeps every
+  unknown `0x16` owner falling through the silent path so we don't
+  alias unrelated control families.
+- Targeted parser warning. Malformed `idxm` payloads emit
+  `Hwp5Warning::DroppedControl { control: "indexmark", … }` rather
+  than the generic `UnsupportedTag(0x47)` fallback — audit
+  baselines can attribute the loss to the IndexMark code path
+  specifically.
+- Trailer 4 bytes deliberately discarded. The trailer is
+  `0xFFFF_FFFF` on native 한컴 authoring and `0x00000000` on HWPX→
+  HWP5 round-trip via 한컴 save; HWPX has no corresponding
+  attribute, so carrying it into Core would be a format leak. The
+  4 bytes are still required to be present — a truncated trailer
+  means the record boundary is no longer trustworthy.
+- Empty-secondary normalization. The source `Some("")` for one
+  fixture entry comes back from 한컴 as `secondary_units_len = 0`;
+  the decoder reflects 한컴's intent by returning `None`. HWP5
+  wire cannot distinguish the two states once 한컴 has saved.
+- Golden tests cover (a) the native two-IndexMark fixture, (b) the
+  8-IndexMark combinatorial fixture (every primary-only and
+  primary+secondary combination + the `CPU` / `GPU` same-paragraph
+  order regression gate that Codex specifically called out). The
+  schema layer adds five focused unit tests (real native bytes,
+  real multi bytes with secondary, `primary_units_len == 1` edge
+  case, `primary_units_len == 0` rejection, truncated-trailer
+  rejection). See
+  `.docs/algorithms/2026-06-02_indexmark_carry.md` for the full
+  layout table, Codex-review rationale, and validation policy
+  notes.
+
 ### Phase 11 (HWP5 → HWPX silent-gap closure)
 
 This release closes the largest batch of "HWP5 decoder has the bytes, but

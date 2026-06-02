@@ -1098,6 +1098,8 @@ pub enum Hwp5SemanticControlKind {
     Dutmal,
     /// Compose (글자겹침) annotation control.
     Compose,
+    /// IndexMark (찾아보기 표시) annotation control.
+    IndexMark,
     /// Header control.
     Header,
     /// Footer control.

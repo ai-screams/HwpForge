@@ -313,6 +313,14 @@ fn adapt_control(
             build,
             ids,
         ),
+        Hwp5Control::IndexMark(indexmark) => adapt_shape_control(
+            indexmark.ctrl_id,
+            Hwp5SemanticControlKind::IndexMark,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
         Hwp5Control::OleObject(ole) => {
             adapt_ole_object_control(ole, container, paragraph_id, build, support, ids)
         }

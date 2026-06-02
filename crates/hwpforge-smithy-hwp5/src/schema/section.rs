@@ -93,6 +93,26 @@ impl Hwp5ParaHeader {
 }
 
 // ---------------------------------------------------------------------------
+// IndexMark inline-marker discriminator (Wave 12k)
+// ---------------------------------------------------------------------------
+
+/// ctrl_id for the IndexMark (찾아보기 표시) inline marker, BE-ascii
+/// `"idxm"`. Used by `Hwp5ParaText::parse` to discriminate which
+/// `0x16` inline markers represent an IndexMark vs. an unknown
+/// `0x0E..=0x16` extended control. The corresponding CtrlHeader
+/// shares the same numeric ctrl_id (`Hwp5Control::IndexMark`).
+const CTRL_ID_INDEXMARK_INLINE: u32 = 0x6964_786D;
+
+/// Reads the LE-stored ctrl_id from the first four bytes of an
+/// inline-marker's `extra` block and returns it as the BE-ascii u32
+/// HWP5 uses for CtrlHeader matching. Wave 12k's `0x16` arm calls
+/// this to decide whether to promote a marker to `TextSegment::
+/// ControlRef`.
+fn ctrl_id_from_inline_extra_bytes(extra: &[u8; 14]) -> u32 {
+    u32::from_be_bytes([extra[3], extra[2], extra[1], extra[0]])
+}
+
+// ---------------------------------------------------------------------------
 // Hwp5ParaText / TextSegment
 // ---------------------------------------------------------------------------
 
@@ -294,10 +314,25 @@ impl Hwp5ParaText {
                     let extra = read_extra!(i - 1);
                     segments.push(TextSegment::ControlRef { extra });
                 }
-                // 0x0E-0x16: extended controls (bookmarks, change tracking, etc.)
+                // 0x16: IndexMark (찾아보기) inline marker (Wave 12k).
+                // `extra[0..4]` carries the LE-stored ctrl_id `idxm`.
+                // Only `idxm`-tagged `0x16` markers are promoted to a
+                // `ControlRef`; other 0x16 owners (unknown extended
+                // controls) keep falling through to the silent-consume
+                // arm below so we don't accidentally promote a control
+                // family whose CtrlHeader we don't yet decode.
+                0x16 => {
+                    flush_text!();
+                    let extra = read_extra!(i - 1);
+                    if ctrl_id_from_inline_extra_bytes(&extra) == CTRL_ID_INDEXMARK_INLINE {
+                        segments.push(TextSegment::ControlRef { extra });
+                    }
+                    // Else: consumed silently, same as 0x0E..=0x15 below.
+                }
+                // 0x0E-0x15: extended controls (bookmarks, change tracking, etc.)
                 // All consume 7 extra u16 values. Still silently consumed
                 // until a future slice promotes them to a typed variant.
-                0x0E..=0x16 => {
+                0x0E..=0x15 => {
                     flush_text!();
                     let _extra = read_extra!(i - 1);
                     // No segment emitted — consumed silently.
@@ -1214,6 +1249,116 @@ impl Hwp5ComposeControl {
             compose_type_raw,
             char_pr_ids,
         })
+    }
+}
+
+/// IndexMark (찾아보기 표시) control parsed from an `idxm`
+/// CtrlHeader (`0x6964_786D` BE-ascii).
+///
+/// Wire layout observed across 10 한컴-authored entries (2 native +
+/// 8 from an HWPX → HWP5 round-trip). The layout mirrors Wave 12i's
+/// `Hwp5DutmalControl` — the first `primary` char is packed into
+/// the `properties` word, then the rest of the body follows.
+///
+/// Word/offset table (`primary="컴퓨터"`, `secondary="하드웨어"`
+/// shown as a worked example):
+///
+/// | word/offset | bytes | field | encoding |
+/// |---|---|---|---|
+/// | `properties[0..2]` | `03 00` | `primary_units_len` | LE u16 — UTF-16 code-unit count for primary |
+/// | `properties[2..4]` | `F4 CE` | `primary[0]` | LE u16 (first char, folded into the high half of `properties`) |
+/// | `payload[0..(primary_units_len-1)*2]` | `E8 D4 30 D1` | `primary[1..N]` | LE UTF-16 (may be empty when primary is one unit) |
+/// | next 2 bytes | `04 00` | `secondary_units_len` | LE u16 — 0 means "no secondary" |
+/// | next `2 * secondary_units_len` bytes | `58 D5 DC B4 E8 C6 B4 C5` | `secondary` | LE UTF-16 |
+/// | trailing 4 bytes | `00 00 00 00` (round-trip) / `FF FF FF FF` (native) | trailer | observed but discarded |
+///
+/// `secondary_units_len == 0` is the only "no secondary" signal on
+/// the wire; 한컴 normalizes a source `Some("")` to no secondary
+/// when it saves an HWPX as HWP5. The decoder reflects that by
+/// returning `Option<String>` and treating `0` as `None`.
+///
+/// The trailing 4 bytes are deliberately discarded — HWPX has no
+/// corresponding `<hp:indexmark>` field and Wave 12k is HWP5 →
+/// HWPX carry only. Their presence is still required (a truncated
+/// trailer means we no longer know the record boundary). See
+/// `.docs/algorithms/2026-06-01_indexmark_carry.md` for the
+/// Codex-reviewed rationale.
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5IndexMarkControl {
+    /// Owning control identifier, always `idxm` (`0x6964_786D`
+    /// BE-ascii).
+    #[allow(dead_code)]
+    pub ctrl_id: u32,
+    /// Primary index key (`<hp:firstKey>`).
+    pub primary: String,
+    /// Secondary index key (`<hp:secondKey>`). `None` when the
+    /// wire has `secondary_units_len == 0` — Hancom-saved HWP5
+    /// cannot distinguish `Some("")` from `None`.
+    pub secondary: Option<String>,
+}
+
+impl Hwp5IndexMarkControl {
+    /// Decodes an `idxm` CtrlHeader payload into a
+    /// `Hwp5IndexMarkControl`. Returns `None` on malformed or
+    /// truncated payloads — the decoder converts that into a
+    /// targeted `Hwp5Warning::DroppedControl { control: "indexmark", … }`
+    /// rather than the generic `UnsupportedTag` so audit baselines
+    /// can attribute the loss to the IndexMark codepath.
+    pub(crate) fn parse(ctrl_id: u32, data: &[u8]) -> Option<Self> {
+        if data.len() < 8 {
+            return None;
+        }
+        // `properties.low` is the primary's UTF-16 code-unit count
+        // (not Unicode scalar count); naming reflects what the wire
+        // is actually carrying.
+        let primary_units_len = usize::from(u16::from_le_bytes([data[4], data[5]]));
+        if primary_units_len == 0 {
+            return None;
+        }
+        let primary_first = u16::from_le_bytes([data[6], data[7]]);
+
+        let mut primary_units: Vec<u16> = Vec::with_capacity(primary_units_len);
+        primary_units.push(primary_first);
+        let primary_tail_bytes = (primary_units_len - 1).checked_mul(2)?;
+        let primary_end = 8usize.checked_add(primary_tail_bytes)?;
+        if data.len() < primary_end {
+            return None;
+        }
+        for chunk in data[8..primary_end].chunks_exact(2) {
+            primary_units.push(u16::from_le_bytes([chunk[0], chunk[1]]));
+        }
+        let primary = String::from_utf16(&primary_units).ok()?;
+
+        // Secondary length lives at `primary_end..primary_end+2`.
+        let secondary_len_end = primary_end.checked_add(2)?;
+        if data.len() < secondary_len_end {
+            return None;
+        }
+        let secondary_units_len =
+            usize::from(u16::from_le_bytes([data[primary_end], data[primary_end + 1]]));
+        let secondary_bytes = secondary_units_len.checked_mul(2)?;
+        let secondary_end = secondary_len_end.checked_add(secondary_bytes)?;
+        // Require the trailing 4 bytes to be present — a truncated
+        // record means the boundary is no longer trustworthy.
+        let trailer_end = secondary_end.checked_add(4)?;
+        if data.len() < trailer_end {
+            return None;
+        }
+
+        let secondary = if secondary_units_len == 0 {
+            None
+        } else {
+            let mut units: Vec<u16> = Vec::with_capacity(secondary_units_len);
+            for chunk in data[secondary_len_end..secondary_end].chunks_exact(2) {
+                units.push(u16::from_le_bytes([chunk[0], chunk[1]]));
+            }
+            Some(String::from_utf16(&units).ok()?)
+        };
+
+        // Trailer u32 observed = 0x0000_0000 (round-trip) or
+        // 0xFFFF_FFFF (native). HWPX has no field that carries it,
+        // so it is intentionally discarded at the HWP5 boundary.
+        Some(Self { ctrl_id, primary, secondary })
     }
 }
 
@@ -2223,5 +2368,126 @@ mod tests {
         let pd = Hwp5PageDef::parse(&data).unwrap();
         assert!(pd.landscape);
         assert_eq!(pd.width, 100);
+    }
+
+    // -----------------------------------------------------------------------
+    // Hwp5IndexMarkControl (Wave 12k)
+    // -----------------------------------------------------------------------
+
+    const IDXM_CTRL_ID: u32 = 0x6964_786D;
+
+    /// Builds a synthetic `idxm` CtrlHeader payload (ctrl_id +
+    /// properties + body) for `Hwp5IndexMarkControl::parse`.
+    fn make_idxm(primary: &str, secondary: Option<&str>, trailer: u32) -> Vec<u8> {
+        let primary_units: Vec<u16> = primary.encode_utf16().collect();
+        assert!(!primary_units.is_empty(), "primary must have at least one unit");
+        let primary_units_len = u16::try_from(primary_units.len()).expect("primary too long");
+        let primary_first = primary_units[0];
+
+        let mut data = Vec::new();
+        // ctrl_id (BE bytes mirror the on-wire LE storage for `idxm`).
+        data.extend_from_slice(&IDXM_CTRL_ID.to_be_bytes());
+        // properties.low = primary_units_len, .high = primary[0].
+        data.extend_from_slice(&primary_units_len.to_le_bytes());
+        data.extend_from_slice(&primary_first.to_le_bytes());
+        // primary[1..].
+        for &unit in &primary_units[1..] {
+            data.extend_from_slice(&unit.to_le_bytes());
+        }
+        // secondary_units_len + secondary text (UTF-16LE).
+        let secondary_units: Vec<u16> =
+            secondary.map(|s| s.encode_utf16().collect()).unwrap_or_default();
+        let secondary_units_len = u16::try_from(secondary_units.len()).expect("secondary too long");
+        data.extend_from_slice(&secondary_units_len.to_le_bytes());
+        for &unit in &secondary_units {
+            data.extend_from_slice(&unit.to_le_bytes());
+        }
+        // 4-byte trailer (observed as 0x0000_0000 / 0xFFFF_FFFF).
+        data.extend_from_slice(&trailer.to_le_bytes());
+        data
+    }
+
+    #[test]
+    fn indexmark_parse_primary_units_len_eq_one_edge_case() {
+        // Wave 12k: 한컴 단일-char primary는 fixture로 관찰되지 않았지만,
+        // 파서 산수는 char[0]을 properties에 두고 body[0..0]을 비우는
+        // 형태로 그대로 통과한다. 회귀를 막으려면 명시적 단위 테스트가
+        // 필요하다 (Codex 검토 권고).
+        let data = make_idxm("A", None, 0x0000_0000);
+        let parsed = Hwp5IndexMarkControl::parse(IDXM_CTRL_ID, &data)
+            .expect("primary_units_len == 1 must decode");
+        assert_eq!(parsed.primary, "A");
+        assert_eq!(parsed.secondary, None);
+    }
+
+    #[test]
+    fn indexmark_parse_native_wire_bytes_match() {
+        // Reuses the raw native fixture bytes from `wire-native.txt`
+        // (entry [012], primary="테스트", no secondary, trailer
+        // 0xFFFF_FFFF). The exact-byte assertion catches offset
+        // drift better than synthetic-only coverage.
+        let mut data = Vec::new();
+        data.extend_from_slice(&IDXM_CTRL_ID.to_be_bytes());
+        // properties = 0xD14C_0003 (primary_units_len=3, primary[0]="테").
+        data.extend_from_slice(&[0x03, 0x00, 0x4C, 0xD1]);
+        // body: "스" + "트" + secondary_len=0 + trailer (native pattern).
+        data.extend_from_slice(&[0xA4, 0xC2, 0xB8, 0xD2, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF]);
+        let parsed = Hwp5IndexMarkControl::parse(IDXM_CTRL_ID, &data)
+            .expect("real native idxm bytes must decode");
+        assert_eq!(parsed.primary, "테스트");
+        assert_eq!(parsed.secondary, None);
+    }
+
+    #[test]
+    fn indexmark_parse_multi_with_secondary_match() {
+        // Round-trip fixture entry [017]: primary="컴퓨터",
+        // secondary="하드웨어", trailer 0x0000_0000.
+        let mut data = Vec::new();
+        data.extend_from_slice(&IDXM_CTRL_ID.to_be_bytes());
+        // properties = 0xCEF4_0003 (primary_units_len=3, primary[0]="컴").
+        data.extend_from_slice(&[0x03, 0x00, 0xF4, 0xCE]);
+        // body: "퓨터" + secondary_len=4 + "하드웨어" + trailer (round-trip pattern).
+        data.extend_from_slice(&[
+            0xE8, 0xD4, 0x30, 0xD1, 0x04, 0x00, 0x58, 0xD5, 0xDC, 0xB4, 0xE8, 0xC6, 0xB4, 0xC5,
+            0x00, 0x00, 0x00, 0x00,
+        ]);
+        let parsed = Hwp5IndexMarkControl::parse(IDXM_CTRL_ID, &data)
+            .expect("real multi idxm bytes must decode");
+        assert_eq!(parsed.primary, "컴퓨터");
+        assert_eq!(parsed.secondary.as_deref(), Some("하드웨어"));
+    }
+
+    #[test]
+    fn indexmark_parse_secondary_len_zero_returns_none() {
+        let data = make_idxm("AB", Some(""), 0x0000_0000);
+        let parsed = Hwp5IndexMarkControl::parse(IDXM_CTRL_ID, &data).expect("decode");
+        // Empty-string secondary in our builder is materially the same as
+        // secondary_len=0 on the wire — the decoder normalizes it to None.
+        assert_eq!(parsed.secondary, None);
+    }
+
+    #[test]
+    fn indexmark_parse_rejects_primary_units_len_zero() {
+        // properties.low = 0 means "no primary"; HWPX `firstKey` is
+        // semantic payload that cannot be empty without breaking the
+        // index entry. Reject so projection emits a typed warning
+        // rather than fabricating an empty key.
+        let mut data = Vec::new();
+        data.extend_from_slice(&IDXM_CTRL_ID.to_be_bytes());
+        data.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // properties = 0
+        data.extend_from_slice(&[0x00, 0x00]); // secondary_len = 0
+        data.extend_from_slice(&[0; 4]); // trailer
+        assert!(Hwp5IndexMarkControl::parse(IDXM_CTRL_ID, &data).is_none());
+    }
+
+    #[test]
+    fn indexmark_parse_rejects_truncated_trailer() {
+        // The 4-byte trailer must be present even though the decoder
+        // discards its value — a truncated record means the boundary
+        // is no longer trustworthy.
+        let data = make_idxm("A", None, 0);
+        // Cut off the trailing trailer bytes.
+        let truncated = &data[..data.len() - 4];
+        assert!(Hwp5IndexMarkControl::parse(IDXM_CTRL_ID, truncated).is_none());
     }
 }

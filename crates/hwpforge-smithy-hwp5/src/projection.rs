@@ -1534,8 +1534,26 @@ fn project_control_run(
         | Hwp5Control::Unknown { .. } => None,
         Hwp5Control::Dutmal(dutmal) => Some(project_dutmal_run(dutmal)),
         Hwp5Control::Compose(compose) => Some(project_compose_run(compose)),
+        Hwp5Control::IndexMark(indexmark) => Some(project_indexmark_run(indexmark)),
         Hwp5Control::OleObject(ole) => project_ole_object_run(ole, projection_images),
     }
+}
+
+/// Projects a HWP5 IndexMark (찾아보기 표시) control into a Core
+/// `Run` carrying `Control::IndexMark`. The wire's `secondary_units_len
+/// == 0` case is decoded as `None` rather than `Some("")` — 한컴
+/// HWP5 cannot distinguish the two on save, so the decode matches
+/// 한컴's intent. See
+/// `.docs/algorithms/2026-06-01_indexmark_carry.md` for the
+/// Codex-reviewed empty-secondary discussion.
+fn project_indexmark_run(indexmark: &crate::schema::section::Hwp5IndexMarkControl) -> Run {
+    Run::control(
+        Control::IndexMark {
+            primary: indexmark.primary.clone(),
+            secondary: indexmark.secondary.clone(),
+        },
+        CharShapeIndex::new(0),
+    )
 }
 
 /// Projects a HWP5 compose (글자겹침) control into a Core `Run`

@@ -89,6 +89,14 @@ pub(crate) enum Hwp5Control {
     /// composed text and 10 charPr references — see
     /// `schema::section::Hwp5ComposeControl` for the payload layout.
     Compose(crate::schema::section::Hwp5ComposeControl),
+    /// IndexMark (찾아보기 표시) — inline marker that names a
+    /// document-level index entry. Wire pairs an inline `0x16`
+    /// marker (extra carries the LE-stored ctrl_id `idxm`) in the
+    /// body's `ParaText` with an `idxm` CtrlHeader carrying the
+    /// `primary` text and an optional `secondary` text — see
+    /// `schema::section::Hwp5IndexMarkControl` for the payload
+    /// layout. (Wave 12k.)
+    IndexMark(crate::schema::section::Hwp5IndexMarkControl),
     /// Header control with nested subtree paragraphs.
     Header(Hwp5NestedSubtree),
     /// Footer control with nested subtree paragraphs.
@@ -519,6 +527,13 @@ const CTRL_ID_DUTMAL: u32 = 0x7464_7574;
 /// `extra[0..4]` carries the LE-stored ctrl_id `"spct"`. Payload
 /// layout lives on `crate::schema::section::Hwp5ComposeControl`.
 const CTRL_ID_COMPOSE: u32 = 0x7463_7073;
+
+/// ctrl_id for the IndexMark (찾아보기 표시) control: ASCII `idxm`
+/// as big-endian u32. Paired with an inline `0x16` marker whose
+/// `extra[0..4]` carries the LE-stored ctrl_id `"mxdi"`
+/// (`6D 78 64 69`). Payload layout lives on
+/// `crate::schema::section::Hwp5IndexMarkControl`.
+const CTRL_ID_INDEXMARK: u32 = 0x6964_786D;
 
 // Memo wire command parsing now lives on `Hwp5MemoCommand::parse` in
 // `crate::schema::section` — shared with the slash-command util that future
@@ -1618,6 +1633,27 @@ impl BodyTextParserState {
                         }
                     } else {
                         self.push_unsupported_tag(record.header.tag_id);
+                    }
+                } else if ctrl_id == CTRL_ID_INDEXMARK {
+                    // `idxm` ctrl carries the IndexMark (찾아보기 표시)
+                    // `primary` text and optional `secondary` text. A
+                    // malformed payload emits a targeted
+                    // `DroppedControl` warning (per Codex review) so
+                    // audit baselines can attribute the loss to the
+                    // IndexMark code path instead of the generic
+                    // `UnsupportedTag(0x47)` bucket. (Wave 12k.)
+                    if let Some(indexmark) =
+                        crate::schema::section::Hwp5IndexMarkControl::parse(ctrl_id, &record.data)
+                    {
+                        if let Some(buf) = self.current.as_mut() {
+                            buf.controls.push(Hwp5Control::IndexMark(indexmark));
+                        }
+                    } else {
+                        self.warnings.push(Hwp5Warning::DroppedControl {
+                            control: "indexmark",
+                            reason: "malformed idxm CtrlHeader payload; dropping index mark"
+                                .to_string(),
+                        });
                     }
                 } else if let Some(command) = (ctrl_id == CTRL_ID_MEMO)
                     .then(|| Hwp5MemoCommand::parse(&record.data))
