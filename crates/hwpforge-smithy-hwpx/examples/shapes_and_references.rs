@@ -579,20 +579,18 @@ fn section_bookmarks_refs_fields() -> Section {
     // Field: ClickHere (누름틀)
     let field_click = Control::field("여기를 클릭하세요");
 
-    // Field: Date
+    // Field: Date — SUMMERY $modifiedtime (Wave 12n: was FieldType::Date)
     let field_date = Control::Field {
-        field_type: FieldType::Date,
+        field_type: FieldType::ModifiedTime,
         hint_text: Some("날짜".to_string()),
         help_text: Some("문서 작성일".to_string()),
         name: None,
     };
 
-    // Field: PageNumber (쪽번호)
-    let field_page = Control::Field {
-        field_type: FieldType::PageNum,
-        hint_text: None,
-        help_text: None,
-        name: None,
+    // Field: PageNumber (쪽번호) — Wave 12n: moved out of Control::Field
+    let field_page = Control::InlinePageNumber {
+        kind: hwpforge_core::control::InlinePageKind::CurrentPage,
+        raw_flag: 0,
     };
 
     Section::with_paragraphs(

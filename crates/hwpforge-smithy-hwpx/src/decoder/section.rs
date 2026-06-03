@@ -414,15 +414,21 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
                 }
             }
         }
-        // AutoNum (inline page number)
+        // AutoNum (inline page number) — Wave 12n: routed to
+        // Control::InlinePageNumber. Architect review CRITICAL: keep
+        // current-page (`PAGE`) and total-page (`TOTAL_PAGE`) distinct;
+        // collapsing them would lose user-visible semantics.
         if let Some(an) = &ctrl.auto_num {
-            if an.num_type == "PAGE" {
+            let kind_and_flag = match an.num_type.as_str() {
+                "PAGE" => Some((hwpforge_core::control::InlinePageKind::CurrentPage, 0)),
+                "TOTAL_PAGE" => Some((hwpforge_core::control::InlinePageKind::TotalPages, 0x06)),
+                _ => None,
+            };
+            if let Some((kind, raw_flag)) = kind_and_flag {
                 runs.push(Run {
-                    content: RunContent::Control(Box::new(Control::Field {
-                        field_type: hwpforge_foundation::FieldType::PageNum,
-                        hint_text: None,
-                        help_text: None,
-                        name: None,
+                    content: RunContent::Control(Box::new(Control::InlinePageNumber {
+                        kind,
+                        raw_flag,
                     })),
                     char_shape_id,
                 });
@@ -854,21 +860,18 @@ fn decode_field_control(
             }
         }
         "SUMMERY" => {
-            // 한글 uses type="SUMMERY" (typo for Summary) for
-            // date/time/author fields. Map to FieldType via Command param.
+            // 한글 uses type="SUMMERY" (typo for Summary) for SUMMERY auto-fields.
+            // Map Command $token to semantic FieldType (Wave 12n). Unknown tokens
+            // are preserved verbatim as Control::UnknownSummery.
             let cmd = get_field_param(fb, "Command").unwrap_or_default();
-            let ft = match cmd.as_str() {
-                "$modifiedtime" => hwpforge_foundation::FieldType::Date,
-                "$createtime" => hwpforge_foundation::FieldType::Time,
-                "$author" | "$title" => hwpforge_foundation::FieldType::DocSummary,
-                "$lastsaveby" => hwpforge_foundation::FieldType::UserInfo,
-                _ => hwpforge_foundation::FieldType::DocSummary,
-            };
-            Control::Field {
-                field_type: ft,
-                hint_text: None,
-                help_text: None,
-                name: Some(fb.name.clone()).filter(|s| !s.is_empty()),
+            match hwpforge_foundation::FieldType::from_summery_token(&cmd) {
+                Some(ft) => Control::Field {
+                    field_type: ft,
+                    hint_text: None,
+                    help_text: None,
+                    name: Some(fb.name.clone()).filter(|s| !s.is_empty()),
+                },
+                None => Control::UnknownSummery { token: cmd },
             }
         }
         "CROSSREF" => {
@@ -2673,11 +2676,12 @@ mod tests {
         </sec>"#;
         let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         let controls = find_controls(&result);
-        let page_num = controls.iter().find(|c| {
-            matches!(c, hwpforge_core::Control::Field { field_type, .. }
-                if *field_type == hwpforge_foundation::FieldType::PageNum)
-        });
-        assert!(page_num.is_some(), "autoNum PAGE must produce Field PageNum control");
+        let page_num =
+            controls.iter().find(|c| matches!(c, hwpforge_core::Control::InlinePageNumber { .. }));
+        assert!(
+            page_num.is_some(),
+            "autoNum PAGE must produce InlinePageNumber control (Wave 12n)"
+        );
     }
 
     #[test]
@@ -2703,9 +2707,12 @@ mod tests {
         let controls = find_controls(&result);
         let date_ctrl = controls.iter().find(|c| {
             matches!(c, hwpforge_core::Control::Field { field_type, .. }
-                if *field_type == hwpforge_foundation::FieldType::Date)
+                if *field_type == hwpforge_foundation::FieldType::ModifiedTime)
         });
-        assert!(date_ctrl.is_some(), "SUMMERY/$modifiedtime must decode as FieldType::Date");
+        assert!(
+            date_ctrl.is_some(),
+            "SUMMERY/$modifiedtime must decode as FieldType::ModifiedTime"
+        );
     }
 
     #[test]
@@ -2731,9 +2738,9 @@ mod tests {
         let controls = find_controls(&result);
         let time_ctrl = controls.iter().find(|c| {
             matches!(c, hwpforge_core::Control::Field { field_type, .. }
-                if *field_type == hwpforge_foundation::FieldType::Time)
+                if *field_type == hwpforge_foundation::FieldType::CreatedTime)
         });
-        assert!(time_ctrl.is_some(), "SUMMERY/$createtime must decode as FieldType::Time");
+        assert!(time_ctrl.is_some(), "SUMMERY/$createtime must decode as FieldType::CreatedTime");
     }
 
     #[test]
@@ -2759,9 +2766,9 @@ mod tests {
         let controls = find_controls(&result);
         let doc_ctrl = controls.iter().find(|c| {
             matches!(c, hwpforge_core::Control::Field { field_type, .. }
-                if *field_type == hwpforge_foundation::FieldType::DocSummary)
+                if *field_type == hwpforge_foundation::FieldType::Author)
         });
-        assert!(doc_ctrl.is_some(), "SUMMERY/$author must decode as FieldType::DocSummary");
+        assert!(doc_ctrl.is_some(), "SUMMERY/$author must decode as FieldType::Author");
     }
 
     #[test]
@@ -2787,9 +2794,9 @@ mod tests {
         let controls = find_controls(&result);
         let ui_ctrl = controls.iter().find(|c| {
             matches!(c, hwpforge_core::Control::Field { field_type, .. }
-                if *field_type == hwpforge_foundation::FieldType::UserInfo)
+                if *field_type == hwpforge_foundation::FieldType::LastSavedBy)
         });
-        assert!(ui_ctrl.is_some(), "SUMMERY/$lastsaveby must decode as FieldType::UserInfo");
+        assert!(ui_ctrl.is_some(), "SUMMERY/$lastsaveby must decode as FieldType::LastSavedBy");
     }
 
     #[test]

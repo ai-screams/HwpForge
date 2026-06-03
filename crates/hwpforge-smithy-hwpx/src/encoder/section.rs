@@ -570,19 +570,101 @@ fn build_runs(
                         let field_id = hyperlink_entries.len();
                         let marker = next_marker("HWPFD", field_id);
                         let hint = hint_text.as_deref().unwrap_or("");
-                        // PageNum uses <hp:autoNum> (NOT fieldBegin/fieldEnd).
-                        let real_xml = if *field_type == hwpforge_foundation::FieldType::PageNum {
-                            build_autonum_run_xml(char_pr_id_ref)
-                        } else {
-                            build_field_run_xml(
-                                field_type,
-                                hint,
-                                help_text.as_deref().unwrap_or(""),
-                                name.as_deref().unwrap_or(""),
-                                char_pr_id_ref,
-                                field_id,
-                            )
+                        let real_xml = build_field_run_xml(
+                            field_type,
+                            hint,
+                            help_text.as_deref().unwrap_or(""),
+                            name.as_deref().unwrap_or(""),
+                            char_pr_id_ref,
+                            field_id,
+                        );
+                        let marker_run_xml = format!(
+                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
+                        );
+                        hyperlink_entries.push((marker_run_xml, real_xml));
+                        texts.push(HxText::new(marker));
+                    }
+                    // LOSSY (Wave 12n architect review): The three arms below
+                    // emit SUMMERY-shaped XML as a *best-effort* HWPX surrogate.
+                    // HWPX has no native counterpart for `%smr` unknown tokens,
+                    // `%dte` format patterns, or `%pat` path commands. Round-tripping
+                    // through HWPX → Core decoder normalises these back as
+                    // `Field(ModifiedTime/CreatedTime)` (for DateCodeField),
+                    // `UnknownSummery` (for PathField / UnknownSummery), so the
+                    // original Core variant is NOT preserved. A future wave with
+                    // confirmed Hancom HWPX encodings should replace this
+                    // best-effort emission.
+                    Control::UnknownSummery { token } => {
+                        let field_id = hyperlink_entries.len();
+                        let marker = next_marker("HWPFD", field_id);
+                        let real_xml = build_summery_run_xml_raw(
+                            token,
+                            "",
+                            "",
+                            char_pr_id_ref,
+                            1_000_000_000_u64 + field_id as u64,
+                        );
+                        let marker_run_xml = format!(
+                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
+                        );
+                        hyperlink_entries.push((marker_run_xml, real_xml));
+                        texts.push(HxText::new(marker));
+                    }
+                    Control::DateCodeField { raw_command, is_time_mode, .. } => {
+                        // LOSSY: %dte → SUMMERY mapping; raw_trailer is discarded.
+                        // Round-trip through HWPX comes back as `Field(ModifiedTime)`
+                        // or `Field(CreatedTime)` — proven by
+                        // `lossy_roundtrip_datecodefield_{date,time}_becomes_*` tests.
+                        let field_id = hyperlink_entries.len();
+                        let marker = next_marker("HWPFD", field_id);
+                        let token: &str =
+                            if *is_time_mode { "$createtime" } else { "$modifiedtime" };
+                        let display = raw_command.as_str();
+                        let real_xml = build_summery_run_xml_raw(
+                            token,
+                            display,
+                            "",
+                            char_pr_id_ref,
+                            1_000_000_000_u64 + field_id as u64,
+                        );
+                        let marker_run_xml = format!(
+                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
+                        );
+                        hyperlink_entries.push((marker_run_xml, real_xml));
+                        texts.push(HxText::new(marker));
+                    }
+                    Control::PathField { command } => {
+                        // LOSSY: %pat → SUMMERY mapping with the raw `$P`/`$F`/`$P$F`
+                        // command parked as the SUMMERY `$token`. Round-trip
+                        // through HWPX comes back as `UnknownSummery` (the SUMMERY
+                        // decoder cannot recognise the path tokens) — proven by
+                        // `lossy_roundtrip_pathfield_becomes_unknown_summery`.
+                        let field_id = hyperlink_entries.len();
+                        let marker = next_marker("HWPFD", field_id);
+                        let real_xml = build_summery_run_xml_raw(
+                            command.wire_command(),
+                            command.wire_command(),
+                            "",
+                            char_pr_id_ref,
+                            1_000_000_000_u64 + field_id as u64,
+                        );
+                        let marker_run_xml = format!(
+                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
+                        );
+                        hyperlink_entries.push((marker_run_xml, real_xml));
+                        texts.push(HxText::new(marker));
+                    }
+                    Control::InlinePageNumber { kind, .. } => {
+                        // atno inline page number renders as <hp:autoNum
+                        // numType="PAGE"|"TOTAL_PAGE">. Unknown flag values are
+                        // skipped to avoid fabricating semantics (Wave 12n
+                        // architect review CRITICAL: TotalPages/Unknown must not
+                        // collapse to CurrentPage).
+                        let Some(real_xml) = build_autonum_run_xml(char_pr_id_ref, *kind) else {
+                            continue;
                         };
+                        let field_id = hyperlink_entries.len();
+                        let marker = next_marker("HWPFD", field_id);
                         let marker_run_xml = format!(
                             r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
                         );
@@ -1058,15 +1140,14 @@ fn build_bookmark_span_end_run_xml(char_pr_id_ref: u32, field_id: usize) -> Stri
 /// Dispatches a `Control::Field` to the right HWPX `<hp:run>` builder
 /// based on the field family.
 ///
-/// # Field families:
+/// # Field families
 ///
 /// - **CLICK_HERE** (`build_clickhere_field_xml`): editable press-field
 ///   (누름틀). `type="CLICK_HERE"`, `fieldid=627272811`,
 ///   `Command=Clickhere:set:N:...`.
-/// - **Date/Time/DocSummary/UserInfo** (`build_summery_field_xml`):
-///   `type="SUMMERY"` (한글 typo for "Summary"), `fieldid=628321650`,
-///   `Command=$modifiedtime`/`$createtime`/`$author`/`$lastsaveby`.
-/// - **PageNum**: NOT handled here — uses `build_autonum_run_xml()` instead.
+/// - **SUMMERY** (`build_summery_field_xml`): `$author`, `$lastsaveby`,
+///   `$createtime`, `$modifiedtime`, `$title`. `type="SUMMERY"` (한글 typo),
+///   `fieldid=628321650`.
 fn build_field_run_xml(
     field_type: &hwpforge_foundation::FieldType,
     hint: &str,
@@ -1081,13 +1162,21 @@ fn build_field_run_xml(
         FieldType::ClickHere => {
             build_clickhere_field_xml(hint, help, name, char_pr_id_ref, begin_id)
         }
-        FieldType::Date | FieldType::Time | FieldType::DocSummary | FieldType::UserInfo => {
+        FieldType::Author
+        | FieldType::LastSavedBy
+        | FieldType::CreatedTime
+        | FieldType::ModifiedTime
+        | FieldType::Title => {
             build_summery_field_xml(field_type, hint, name, char_pr_id_ref, begin_id)
         }
-        _ => {
-            // Fallback: encode as CLICK_HERE for any unknown/future field types.
-            build_clickhere_field_xml(hint, help, name, char_pr_id_ref, begin_id)
-        }
+        // `FieldType` is `#[non_exhaustive]`. We intentionally do NOT collapse
+        // future variants into ClickHere (Wave 12n architect review): silently
+        // mis-encoding a future SUMMERY/auto-field token as CLICK_HERE would
+        // create a stealth corruption path. New variants must explicitly extend
+        // this match.
+        _ => unreachable!(
+            "FieldType variant added without an HWPX encoder branch — extend build_field_run_xml first"
+        ),
     }
 }
 
@@ -1136,11 +1225,12 @@ fn build_clickhere_field_xml(
     )
 }
 
-/// Builds a SUMMERY (Date/Time/DocSummary/UserInfo) `<hp:run>` XML.
+/// Builds a SUMMERY (Author/LastSavedBy/CreatedTime/ModifiedTime/Title) `<hp:run>` XML.
 ///
-/// Reference: `tests/fixtures/fields/date_field.hwpx`. The wire-level field
-/// type is shared with all four auto-fields; we discriminate by the `Command`
-/// stringParam (`$modifiedtime` / `$createtime` / `$author` / `$lastsaveby`).
+/// Reference: `tests/fixtures/fields/date_field.hwpx`. The HWP5 ctrl_id `%smr`
+/// is shared by all SUMMERY auto-fields; discrimination is via the `Command`
+/// `$token`. Token mapping verified against 한컴 native fixtures in Wave 12n
+/// (see `.docs/research/2026-06-02_auto_field_wire_dump.md`).
 fn build_summery_field_xml(
     field_type: &hwpforge_foundation::FieldType,
     hint: &str,
@@ -1149,28 +1239,45 @@ fn build_summery_field_xml(
     begin_id: u64,
 ) -> String {
     use hwpforge_foundation::FieldType;
-    let escaped_name = escape_xml(name);
-    let (command, display_text) = match field_type {
-        FieldType::Date => {
+    let command = field_type.summery_token().expect("caller guards SUMMERY variants");
+    let display_text = match field_type {
+        FieldType::ModifiedTime => {
             let now = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .as_secs();
             let days = now / 86400;
             let (y, m, d) = days_to_ymd(days);
-            ("$modifiedtime".to_string(), format!("{y}-{m:02}-{d:02}"))
+            format!("{y}-{m:02}-{d:02}")
         }
-        FieldType::Time => ("$createtime".to_string(), " ".to_string()),
-        FieldType::DocSummary => {
-            let text = if !hint.is_empty() { hint.to_string() } else { " ".to_string() };
-            ("$author".to_string(), text)
+        FieldType::CreatedTime => " ".to_string(),
+        FieldType::Author | FieldType::LastSavedBy | FieldType::Title => {
+            if !hint.is_empty() {
+                hint.to_string()
+            } else {
+                " ".to_string()
+            }
         }
-        FieldType::UserInfo => {
-            let text = if !hint.is_empty() { hint.to_string() } else { " ".to_string() };
-            ("$lastsaveby".to_string(), text)
-        }
-        _ => unreachable!("caller already guards Date|Time|DocSummary|UserInfo"),
+        FieldType::ClickHere => unreachable!("caller already routed ClickHere elsewhere"),
+        _ => " ".to_string(),
     };
+    build_summery_run_xml_raw(command, &display_text, name, char_pr_id_ref, begin_id)
+}
+
+/// Lowest-level SUMMERY `<hp:run>` builder — emits a `type="SUMMERY"`
+/// `fieldBegin`/`fieldEnd` pair with the caller-supplied `command` token
+/// and `display` text. Used by [`build_summery_field_xml`] for typed
+/// [`hwpforge_foundation::FieldType`] variants and by Wave 12n
+/// `UnknownSummery`/`DateCodeField`/`PathField` fallback paths.
+fn build_summery_run_xml_raw(
+    command: &str,
+    display: &str,
+    name: &str,
+    char_pr_id_ref: u32,
+    begin_id: u64,
+) -> String {
+    let escaped_name = escape_xml(name);
+    let escaped_cmd = escape_xml(command);
     format!(
         concat!(
             r#"<hp:run charPrIDRef="{cpr}">"#,
@@ -1193,8 +1300,8 @@ fn build_summery_field_xml(
         cpr = char_pr_id_ref,
         bid = begin_id,
         name = escaped_name,
-        cmd = command,
-        display = build_text_element_xml(&display_text),
+        cmd = escaped_cmd,
+        display = build_text_element_xml(display),
     )
 }
 
@@ -1218,21 +1325,40 @@ fn clickhere_command_string(hint: &str, help: &str, hint_len: usize, help_len: u
 
 /// Builds a `<hp:run>` XML string for an inline page number (`<hp:autoNum>`).
 ///
-/// Page numbers within body text use `<hp:autoNum numType="PAGE">` — NOT
-/// fieldBegin/fieldEnd. Reference: tests/fixtures/fields/date_field.hwpx
-fn build_autonum_run_xml(char_pr_id_ref: u32) -> String {
-    format!(
+/// Page numbers within body text use `<hp:autoNum numType="PAGE">` (current
+/// page) or `numType="TOTAL_PAGE"` (total pages) — NOT fieldBegin/fieldEnd.
+/// HWPX 스펙: `paralist.xsd` (`numType` enumeration includes
+/// `PAGE`/`TOTAL_PAGE`/`FOOTNOTE`/...).
+///
+/// Returns `None` for [`hwpforge_core::control::InlinePageKind::Unknown`] —
+/// the caller is expected to skip and emit a warning rather than fabricate
+/// a `numType`. Wave 12n architect review CRITICAL: do not collapse
+/// `TotalPages`/`Unknown` to `CurrentPage`.
+fn build_autonum_run_xml(
+    char_pr_id_ref: u32,
+    kind: hwpforge_core::control::InlinePageKind,
+) -> Option<String> {
+    let num_type = match kind {
+        hwpforge_core::control::InlinePageKind::CurrentPage => "PAGE",
+        hwpforge_core::control::InlinePageKind::TotalPages => "TOTAL_PAGE",
+        hwpforge_core::control::InlinePageKind::Unknown => return None,
+        // `InlinePageKind` is `#[non_exhaustive]`. Skip future kinds instead of
+        // fabricating a numType — match the Unknown policy.
+        _ => return None,
+    };
+    Some(format!(
         concat!(
             r#"<hp:run charPrIDRef="{cpr}">"#,
             r#"<hp:ctrl>"#,
-            r#"<hp:autoNum num="1" numType="PAGE">"#,
+            r#"<hp:autoNum num="1" numType="{nt}">"#,
             r#"<hp:autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar="" supscript="0"/>"#,
             r#"</hp:autoNum>"#,
             r#"</hp:ctrl>"#,
             r#"</hp:run>"#,
         ),
         cpr = char_pr_id_ref,
-    )
+        nt = num_type,
+    ))
 }
 
 /// Simple days-since-epoch to (year, month, day) conversion.
@@ -4064,14 +4190,9 @@ mod tests {
 
     #[test]
     fn field_pagenum_produces_autonum() {
-        use hwpforge_core::control::Control;
-        use hwpforge_foundation::FieldType;
-        let ctrl = Control::Field {
-            field_type: FieldType::PageNum,
-            hint_text: None,
-            help_text: None,
-            name: None,
-        };
+        // Wave 12n: PageNum moved from FieldType::PageNum to Control::InlinePageNumber.
+        use hwpforge_core::control::{Control, InlinePageKind};
+        let ctrl = Control::InlinePageNumber { kind: InlinePageKind::CurrentPage, raw_flag: 0 };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
                 vec![Run::control(ctrl, CharShapeIndex::new(0))],
@@ -4080,7 +4201,10 @@ mod tests {
             PageSettings::a4(),
         );
         let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
-        assert!(xml.contains(r#"<hp:autoNum num="1" numType="PAGE">"#), "autoNum for PageNum");
+        assert!(
+            xml.contains(r#"<hp:autoNum num="1" numType="PAGE">"#),
+            "autoNum for InlinePageNumber"
+        );
         assert!(xml.contains("<hp:autoNumFormat"), "autoNumFormat required");
     }
 
@@ -4089,7 +4213,7 @@ mod tests {
         use hwpforge_core::control::Control;
         use hwpforge_foundation::FieldType;
         let ctrl = Control::Field {
-            field_type: FieldType::Date,
+            field_type: FieldType::ModifiedTime,
             hint_text: None,
             help_text: None,
             name: None,
@@ -4113,7 +4237,7 @@ mod tests {
         use hwpforge_core::control::Control;
         use hwpforge_foundation::FieldType;
         let ctrl = Control::Field {
-            field_type: FieldType::Time,
+            field_type: FieldType::CreatedTime,
             hint_text: None,
             help_text: None,
             name: None,
@@ -4135,7 +4259,7 @@ mod tests {
         use hwpforge_core::control::Control;
         use hwpforge_foundation::FieldType;
         let ctrl = Control::Field {
-            field_type: FieldType::DocSummary,
+            field_type: FieldType::Author,
             hint_text: None,
             help_text: None,
             name: None,
@@ -4157,7 +4281,7 @@ mod tests {
         use hwpforge_core::control::Control;
         use hwpforge_foundation::FieldType;
         let ctrl = Control::Field {
-            field_type: FieldType::UserInfo,
+            field_type: FieldType::LastSavedBy,
             hint_text: None,
             help_text: None,
             name: None,
@@ -4195,6 +4319,169 @@ mod tests {
         assert!(xml.contains(r#"type="CLICK_HERE""#), "ClickHere field type");
         assert!(xml.contains(r#"fieldid="627272811""#), "ClickHere fieldid");
         assert!(xml.contains("클릭하세요"), "hint text must appear");
+    }
+
+    // ── Wave 12n LOSSY-policy round-trip tests ──────────────────────
+    //
+    // These tests pin the *intentional* lossy mapping documented in the
+    // encoder arms for DateCodeField / PathField / UnknownSummery. They
+    // exist so a future encoder change that silently fixes round-trip
+    // (e.g. switching to a different HWPX representation) is caught and
+    // the lossy-policy comments can be updated rather than left stale.
+
+    #[test]
+    fn lossy_datecodefield_emits_summery_token() {
+        // %dte time-mode → $createtime SUMMERY (lossy; raw_command kept as display).
+        use hwpforge_core::control::Control;
+        let ctrl = Control::DateCodeField {
+            raw_command: "T\\:H:mm;0;".to_string(),
+            is_time_mode: true,
+            raw_trailer: [0; 8],
+        };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains(r#"type="SUMMERY""#), "DateCodeField surrogates SUMMERY");
+        assert!(xml.contains("$createtime"), "time-mode → $createtime token");
+    }
+
+    #[test]
+    fn lossy_pathfield_emits_summery_with_raw_command() {
+        // %pat → SUMMERY with raw command parked as $token (lossy).
+        use hwpforge_core::control::{Control, PathFieldCommand};
+        let ctrl = Control::PathField { command: PathFieldCommand::PathAndFileName };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains(r#"type="SUMMERY""#), "PathField surrogates SUMMERY");
+        assert!(xml.contains("$P$F"), "raw $P$F command must appear as SUMMERY token");
+    }
+
+    #[test]
+    fn lossy_unknown_summery_carries_raw_token() {
+        use hwpforge_core::control::Control;
+        let ctrl = Control::UnknownSummery { token: "$company".to_string() };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains(r#"type="SUMMERY""#));
+        assert!(xml.contains("$company"), "unknown raw token must surface in SUMMERY");
+    }
+
+    // ── Wave 12n Phase 2 Medium 2 — actual encoder→decoder round-trip
+    // assertions for the lossy policy. The three `lossy_*` tests above
+    // only inspect the emission XML; these tests close the loop by
+    // decoding the emitted XML and asserting what the encoder comments
+    // claim the round-trip yields. If any of these flip, the lossy
+    // comments need to be updated.
+
+    /// Helper: encode a single-control section, decode it back, return
+    /// the first decoded `Control`. Panics if shape changed.
+    fn lossy_roundtrip_decode_first_control(
+        ctrl: hwpforge_core::control::Control,
+    ) -> hwpforge_core::control::Control {
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
+        let parsed =
+            crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                .expect("decoder must accept its own encoder output");
+        for para in &parsed.paragraphs {
+            for run in &para.runs {
+                if let RunContent::Control(c) = &run.content {
+                    return (**c).clone();
+                }
+            }
+        }
+        panic!("no decoded Control in round-trip output");
+    }
+
+    #[test]
+    fn lossy_roundtrip_datecodefield_time_becomes_createdtime() {
+        use hwpforge_core::control::Control;
+        let ctrl = Control::DateCodeField {
+            raw_command: "T\\:H:mm;0;".to_string(),
+            is_time_mode: true,
+            raw_trailer: [0; 8],
+        };
+        let decoded = lossy_roundtrip_decode_first_control(ctrl);
+        match decoded {
+            Control::Field { field_type, .. } => {
+                assert_eq!(
+                    field_type,
+                    hwpforge_foundation::FieldType::CreatedTime,
+                    "%dte time-mode lossy round-trip must decode as CreatedTime",
+                );
+            }
+            other => panic!("expected Field(CreatedTime), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lossy_roundtrip_datecodefield_date_becomes_modifiedtime() {
+        use hwpforge_core::control::Control;
+        let ctrl = Control::DateCodeField {
+            raw_command: "\\:1년 2월 3일;0;".to_string(),
+            is_time_mode: false,
+            raw_trailer: [0; 8],
+        };
+        let decoded = lossy_roundtrip_decode_first_control(ctrl);
+        match decoded {
+            Control::Field { field_type, .. } => {
+                assert_eq!(
+                    field_type,
+                    hwpforge_foundation::FieldType::ModifiedTime,
+                    "%dte date-mode lossy round-trip must decode as ModifiedTime",
+                );
+            }
+            other => panic!("expected Field(ModifiedTime), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lossy_roundtrip_pathfield_becomes_unknown_summery() {
+        use hwpforge_core::control::{Control, PathFieldCommand};
+        let ctrl = Control::PathField { command: PathFieldCommand::PathAndFileName };
+        let decoded = lossy_roundtrip_decode_first_control(ctrl);
+        match decoded {
+            Control::UnknownSummery { token } => {
+                assert_eq!(token, "$P$F", "%pat lossy round-trip must preserve raw command");
+            }
+            other => panic!("expected UnknownSummery($P$F), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn lossy_roundtrip_unknown_summery_preserves_token() {
+        use hwpforge_core::control::Control;
+        let ctrl = Control::UnknownSummery { token: "$company".to_string() };
+        let decoded = lossy_roundtrip_decode_first_control(ctrl);
+        match decoded {
+            Control::UnknownSummery { token } => {
+                assert_eq!(token, "$company", "unknown $token must round-trip verbatim");
+            }
+            other => panic!("expected UnknownSummery($company), got {other:?}"),
+        }
     }
 
     /// Pins the `Clickhere:set:N:` self-referential N formula against
@@ -4551,13 +4838,34 @@ mod tests {
     // ── build_autonum_run_xml ─────────────────────────────────────
 
     #[test]
-    fn build_autonum_run_xml_structure() {
-        let xml = build_autonum_run_xml(3);
+    fn build_autonum_run_xml_current_page() {
+        let xml = build_autonum_run_xml(3, hwpforge_core::control::InlinePageKind::CurrentPage)
+            .expect("CurrentPage must encode");
         assert!(xml.contains(r#"charPrIDRef="3""#));
         assert!(xml.contains(r#"<hp:autoNum num="1" numType="PAGE">"#));
         assert!(xml.contains("<hp:autoNumFormat"));
         assert!(xml.contains(r#"type="DIGIT""#));
         assert!(xml.ends_with("</hp:run>"));
+    }
+
+    #[test]
+    fn build_autonum_run_xml_total_pages() {
+        // Wave 12n architect review CRITICAL: TotalPages must NOT collapse to PAGE.
+        let xml = build_autonum_run_xml(3, hwpforge_core::control::InlinePageKind::TotalPages)
+            .expect("TotalPages must encode");
+        assert!(
+            xml.contains(r#"numType="TOTAL_PAGE""#),
+            "TotalPages must emit numType=TOTAL_PAGE, not PAGE"
+        );
+    }
+
+    #[test]
+    fn build_autonum_run_xml_unknown_skipped() {
+        // Unknown flag values must not fabricate a numType.
+        assert!(
+            build_autonum_run_xml(3, hwpforge_core::control::InlinePageKind::Unknown).is_none(),
+            "Unknown InlinePageKind must return None (caller skips)"
+        );
     }
 
     // ── Hyperlink unsafe URL rejection ───────────────────────────
@@ -4759,7 +5067,7 @@ mod tests {
             "field_run/CLICK_HERE",
         );
         assert_ids_under_limit(
-            &build_field_run_xml(&FieldType::Date, "", "", "", 0, big),
+            &build_field_run_xml(&FieldType::ModifiedTime, "", "", "", 0, big),
             "field_run/SUMMERY",
         );
         assert_ids_under_limit(

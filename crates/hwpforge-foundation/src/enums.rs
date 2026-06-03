@@ -3273,37 +3273,76 @@ impl schemars::JsonSchema for BookmarkType {
 // FieldType
 // ---------------------------------------------------------------------------
 
-/// Type of a press-field (누름틀) in an HWPX document.
+/// Type of a press-field (누름틀) or SUMMERY auto-field carried in
+/// [`Control::Field`].
 ///
-/// Press-fields are interactive form fields that users can click to fill in.
+/// `ClickHere` is the press-field (user-fillable form). The rest are
+/// SUMMERY-family auto-fields (HWPX `<hp:fieldBegin type="SUMMERY">`,
+/// HWP5 `%smr` ctrl_id) that resolve to document metadata at render time.
+///
+/// Wave 12n (2026-06-02) breaking: legacy `Date`/`Time`/`DocSummary`/`UserInfo`
+/// variants were renamed to match the actual HWPX `Command` token and 한컴
+/// menu item, and `PageNum` was moved out to [`Control::InlinePageNumber`]
+/// because the wire family is `atno`, not SUMMERY/fieldBegin.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[non_exhaustive]
 #[repr(u8)]
 pub enum FieldType {
-    /// Click-here placeholder field (default).
+    /// Click-here placeholder press-field (default). 한컴 누름틀. HWP5 `%clk`.
     #[default]
     ClickHere = 0,
-    /// Automatic date field.
-    Date = 1,
-    /// Automatic time field.
-    Time = 2,
-    /// Page number field.
-    PageNum = 3,
-    /// Document summary field.
-    DocSummary = 4,
-    /// User information field.
-    UserInfo = 5,
+    /// SUMMERY `$author` — 만든 사람 (was [`FieldType::DocSummary`]).
+    Author = 1,
+    /// SUMMERY `$lastsaveby` — 마지막 저장한 사람 (was [`FieldType::UserInfo`]).
+    LastSavedBy = 2,
+    /// SUMMERY `$createtime` — 만든 날짜 (was [`FieldType::Time`]).
+    CreatedTime = 3,
+    /// SUMMERY `$modifiedtime` — 마지막 저장한 날짜 (was [`FieldType::Date`]).
+    ModifiedTime = 4,
+    /// SUMMERY `$title` — 문서 제목 (NEW in Wave 12n).
+    Title = 5,
+}
+
+impl FieldType {
+    /// Returns the HWPX `Command` `$token` for SUMMERY variants, or `None`
+    /// for non-SUMMERY (`ClickHere`).
+    #[must_use]
+    pub fn summery_token(self) -> Option<&'static str> {
+        match self {
+            Self::ClickHere => None,
+            Self::Author => Some("$author"),
+            Self::LastSavedBy => Some("$lastsaveby"),
+            Self::CreatedTime => Some("$createtime"),
+            Self::ModifiedTime => Some("$modifiedtime"),
+            Self::Title => Some("$title"),
+        }
+    }
+
+    /// Parses a SUMMERY `$token` (`$author`, `$createtime`, …) into a
+    /// matching [`FieldType`]. Returns `None` for unknown tokens; callers
+    /// should carry the raw token via [`Control::UnknownSummery`] instead.
+    #[must_use]
+    pub fn from_summery_token(token: &str) -> Option<Self> {
+        match token {
+            "$author" => Some(Self::Author),
+            "$lastsaveby" => Some(Self::LastSavedBy),
+            "$createtime" => Some(Self::CreatedTime),
+            "$modifiedtime" => Some(Self::ModifiedTime),
+            "$title" => Some(Self::Title),
+            _ => None,
+        }
+    }
 }
 
 impl fmt::Display for FieldType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::ClickHere => f.write_str("CLICK_HERE"),
-            Self::Date => f.write_str("DATE"),
-            Self::Time => f.write_str("TIME"),
-            Self::PageNum => f.write_str("PAGE_NUM"),
-            Self::DocSummary => f.write_str("DOC_SUMMARY"),
-            Self::UserInfo => f.write_str("USER_INFO"),
+            Self::Author => f.write_str("AUTHOR"),
+            Self::LastSavedBy => f.write_str("LAST_SAVED_BY"),
+            Self::CreatedTime => f.write_str("CREATED_TIME"),
+            Self::ModifiedTime => f.write_str("MODIFIED_TIME"),
+            Self::Title => f.write_str("TITLE"),
         }
     }
 }
@@ -3314,16 +3353,25 @@ impl std::str::FromStr for FieldType {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "CLICK_HERE" | "ClickHere" | "click_here" => Ok(Self::ClickHere),
-            "DATE" | "Date" | "date" => Ok(Self::Date),
-            "TIME" | "Time" | "time" => Ok(Self::Time),
-            "PAGE_NUM" | "PageNum" | "page_num" => Ok(Self::PageNum),
-            "DOC_SUMMARY" | "DocSummary" | "doc_summary" => Ok(Self::DocSummary),
-            "USER_INFO" | "UserInfo" | "user_info" => Ok(Self::UserInfo),
+            "AUTHOR" | "Author" | "author"
+            // legacy Wave 12l alias: DocSummary used to emit $author
+            | "DOC_SUMMARY" | "DocSummary" | "doc_summary" => Ok(Self::Author),
+            "LAST_SAVED_BY" | "LastSavedBy" | "last_saved_by"
+            // legacy alias: UserInfo used to emit $lastsaveby
+            | "USER_INFO" | "UserInfo" | "user_info" => Ok(Self::LastSavedBy),
+            "CREATED_TIME" | "CreatedTime" | "created_time"
+            // legacy alias: Time used to emit $createtime
+            | "TIME" | "Time" | "time" => Ok(Self::CreatedTime),
+            "MODIFIED_TIME" | "ModifiedTime" | "modified_time"
+            // legacy alias: Date used to emit $modifiedtime
+            | "DATE" | "Date" | "date" => Ok(Self::ModifiedTime),
+            "TITLE" | "Title" | "title" => Ok(Self::Title),
             _ => Err(FoundationError::ParseError {
                 type_name: "FieldType".to_string(),
                 value: s.to_string(),
-                valid_values: "CLICK_HERE, DATE, TIME, PAGE_NUM, DOC_SUMMARY, USER_INFO"
-                    .to_string(),
+                valid_values:
+                    "CLICK_HERE, AUTHOR, LAST_SAVED_BY, CREATED_TIME, MODIFIED_TIME, TITLE"
+                        .to_string(),
             }),
         }
     }
@@ -3335,15 +3383,15 @@ impl TryFrom<u8> for FieldType {
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
             0 => Ok(Self::ClickHere),
-            1 => Ok(Self::Date),
-            2 => Ok(Self::Time),
-            3 => Ok(Self::PageNum),
-            4 => Ok(Self::DocSummary),
-            5 => Ok(Self::UserInfo),
+            1 => Ok(Self::Author),
+            2 => Ok(Self::LastSavedBy),
+            3 => Ok(Self::CreatedTime),
+            4 => Ok(Self::ModifiedTime),
+            5 => Ok(Self::Title),
             _ => Err(FoundationError::ParseError {
                 type_name: "FieldType".to_string(),
                 value: value.to_string(),
-                valid_values: "0..5 (ClickHere..UserInfo)".to_string(),
+                valid_values: "0..5 (ClickHere..Title)".to_string(),
             }),
         }
     }

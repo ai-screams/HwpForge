@@ -698,6 +698,67 @@ pub enum Control {
         secondary: Option<String>,
     },
 
+    /// An unknown SUMMERY (`%smr`) `$token` carried verbatim for forward
+    /// compatibility (Wave 12n).
+    ///
+    /// Wave 12n only models the five HwpForge-observed tokens (`$author`,
+    /// `$lastsaveby`, `$createtime`, `$modifiedtime`, `$title`) as typed
+    /// [`FieldType`] variants. Any other `%smr` Command (e.g. additional
+    /// 한컴 metadata tokens not yet measured) is preserved here instead of
+    /// being silently coerced to `ClickHere`.
+    UnknownSummery {
+        /// Raw `Command` string after envelope (e.g. `"$company"`).
+        token: String,
+    },
+
+    /// A `%dte` date/time **format-pattern** field (Wave 12n).
+    ///
+    /// HWP5 family `%dte` (ctrl_id `0x2564_7465`) used by 한컴
+    /// `입력 → 날짜/시간/파일 이름 → 날짜/시간 코드` menu. Unlike SUMMERY
+    /// (which carries semantic tokens like `$createtime`), `%dte` carries
+    /// a raw format pattern string (e.g. `"\:1년 2월 3일 (6);0;"` for date,
+    /// `"T\:;0;"` for time-only). The grammar is under-measured so the
+    /// raw command is preserved verbatim; `is_time_mode` is a derived
+    /// helper based on the `T` prefix.
+    DateCodeField {
+        /// Full Command string from the wire, including the `T` prefix
+        /// for time mode and the `\:format;options;` body.
+        raw_command: String,
+        /// Helper view: `true` when [`Self::DateCodeField::raw_command`]
+        /// starts with `T` (time-only format).
+        is_time_mode: bool,
+        /// Opaque 8-byte trailer (instance ID + flags) carried for
+        /// round-trip fidelity. The semantics are not pinned down.
+        raw_trailer: [u8; 8],
+    },
+
+    /// A `%pat` path / file-name field (Wave 12n).
+    ///
+    /// HWP5 family `%pat` (ctrl_id `0x2570_6174`) emitted by 한컴
+    /// `상용구 → 파일 이름 / 파일 이름과 경로`. Uses `$P` (path) and
+    /// `$F` (file name) format codes.
+    PathField {
+        /// Typed variant of the observed `Command` pattern.
+        command: PathFieldCommand,
+    },
+
+    /// An `atno` **inline** page number control (Wave 12n).
+    ///
+    /// HWP5 family `atno` (ctrl_id `0x6174_6E6F`) used by 한컴
+    /// `상용구 → 현재 쪽 번호 / 전체 쪽수 / 현재 쪽/전체 쪽수`. Distinct
+    /// from `pgnp` (section-level page numbering control already modeled
+    /// as `Section.page_number`). Inline `atno` renders to HWPX
+    /// `<hp:autoNum>` inside a `<hp:run>`.
+    ///
+    /// The 16-byte wire envelope carries a single 4-byte flag that
+    /// distinguishes current-page from total-pages.
+    InlinePageNumber {
+        /// Typed variant of the observed `flag` byte.
+        kind: InlinePageKind,
+        /// Raw `flag` bytes (LE u32) carried for unknown values.
+        raw_flag: u32,
+    },
+
     /// An unrecognized control element preserved for round-trip fidelity.
     ///
     /// `tag` holds the element's tag name or type identifier.
@@ -708,6 +769,86 @@ pub enum Control {
         /// Optional serialized data for round-trip preservation.
         data: Option<String>,
     },
+}
+
+/// Typed variant of the HWP5 `%pat` Command string (Wave 12n).
+///
+/// Observed forms are `$F` (file name only), `$P` (path only), and `$P$F`
+/// (full path). Anything else is preserved as [`PathFieldCommand::Unknown`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub enum PathFieldCommand {
+    /// `$F` — file name only.
+    FileName,
+    /// `$P` — folder path only (no file name).
+    Path,
+    /// `$P$F` — full path including file name.
+    PathAndFileName,
+    /// Any other Command form, preserved verbatim.
+    Unknown(String),
+}
+
+impl PathFieldCommand {
+    /// Returns the canonical wire Command string for typed variants.
+    /// For [`Self::Unknown`], returns the carried raw string.
+    pub fn wire_command(&self) -> &str {
+        match self {
+            Self::FileName => "$F",
+            Self::Path => "$P",
+            Self::PathAndFileName => "$P$F",
+            Self::Unknown(s) => s.as_str(),
+        }
+    }
+
+    /// Parses a wire Command string into a typed variant. Unknown forms
+    /// are preserved as [`Self::Unknown`].
+    pub fn from_wire(cmd: &str) -> Self {
+        match cmd {
+            "$F" => Self::FileName,
+            "$P" => Self::Path,
+            "$P$F" => Self::PathAndFileName,
+            other => Self::Unknown(other.to_string()),
+        }
+    }
+}
+
+/// Typed variant of the HWP5 `atno` inline page-number `flag` byte
+/// (Wave 12n).
+///
+/// Observed values: `0x00` = current page, `0x06` = total page count.
+/// Other values surface as [`InlinePageKind::Unknown`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub enum InlinePageKind {
+    /// Flag `0x00` — current page number.
+    CurrentPage,
+    /// Flag `0x06` — total page count.
+    TotalPages,
+    /// Any other flag value, carried verbatim via
+    /// [`Control::InlinePageNumber::raw_flag`].
+    Unknown,
+}
+
+impl InlinePageKind {
+    /// Returns the canonical raw flag value for typed variants.
+    /// For [`Self::Unknown`], callers must use the
+    /// [`Control::InlinePageNumber::raw_flag`] field directly.
+    pub fn raw_flag(self) -> Option<u32> {
+        match self {
+            Self::CurrentPage => Some(0x00),
+            Self::TotalPages => Some(0x06),
+            Self::Unknown => None,
+        }
+    }
+
+    /// Maps an observed raw flag value to a typed variant.
+    pub fn from_raw_flag(flag: u32) -> Self {
+        match flag {
+            0x00 => Self::CurrentPage,
+            0x06 => Self::TotalPages,
+            _ => Self::Unknown,
+        }
+    }
 }
 
 /// Metadata associated with a memo annotation (HWPX `<hp:parameters>`).
@@ -1781,6 +1922,23 @@ impl std::fmt::Display for Control {
                     write!(f, "IndexMark(\"{primary}\")")
                 }
             }
+            Self::UnknownSummery { token } => {
+                write!(f, "UnknownSummery({token})")
+            }
+            Self::DateCodeField { raw_command, is_time_mode, .. } => {
+                let mode = if *is_time_mode { "time" } else { "date" };
+                write!(f, "DateCodeField({mode}, \"{raw_command}\")")
+            }
+            Self::PathField { command } => {
+                write!(f, "PathField({})", command.wire_command())
+            }
+            Self::InlinePageNumber { kind, raw_flag } => match kind {
+                InlinePageKind::CurrentPage => write!(f, "InlinePageNumber(current)"),
+                InlinePageKind::TotalPages => write!(f, "InlinePageNumber(total)"),
+                InlinePageKind::Unknown => {
+                    write!(f, "InlinePageNumber(unknown, raw=0x{raw_flag:08X})")
+                }
+            },
             Self::Unknown { tag, .. } => {
                 write!(f, "Unknown({tag})")
             }

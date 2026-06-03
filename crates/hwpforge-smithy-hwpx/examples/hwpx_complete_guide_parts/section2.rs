@@ -108,15 +108,15 @@ pub(crate) fn section2_text_formatting() -> Section {
         PS_BODY,
     ));
 
-    // Date 필드
+    // ModifiedTime 필드 (Wave 12n: was FieldType::Date → $modifiedtime)
     paras.push(runs_p(
         vec![
-            Run::text("날짜 필드(Date): ", csi(CS_NORMAL)),
+            Run::text("날짜 필드(ModifiedTime): ", csi(CS_NORMAL)),
             Run::control(
                 Control::Field {
-                    field_type: FieldType::Date,
+                    field_type: FieldType::ModifiedTime,
                     hint_text: Some("날짜".to_string()),
-                    help_text: Some("문서 작성 날짜를 표시합니다.".to_string()),
+                    help_text: Some("마지막 저장한 날짜를 표시합니다.".to_string()),
                     name: None,
                 },
                 csi(CS_BLUE),
@@ -125,16 +125,14 @@ pub(crate) fn section2_text_formatting() -> Section {
         PS_BODY,
     ));
 
-    // PageNum 필드
+    // InlinePageNumber (Wave 12n: was FieldType::PageNum → autoNum)
     paras.push(runs_p(
         vec![
             Run::text("쪽 번호 필드(autoNum): 현재 ", csi(CS_NORMAL)),
             Run::control(
-                Control::Field {
-                    field_type: FieldType::PageNum,
-                    hint_text: None,
-                    help_text: None,
-                    name: None,
+                Control::InlinePageNumber {
+                    kind: hwpforge_core::control::InlinePageKind::CurrentPage,
+                    raw_flag: 0,
                 },
                 csi(CS_BLUE),
             ),
