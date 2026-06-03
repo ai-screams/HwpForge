@@ -3123,4 +3123,161 @@ mod tests {
         // intentionally no body bytes
         assert!(Hwp5ClickHereControl::parse_name_subrecord(&data).is_none());
     }
+
+    // ── Wave 12n — auto-field parsers ────────────────────────────────
+
+    /// Builds a `%smr` / `%dte` / `%pat` CtrlHeader payload — they share
+    /// the same outer envelope (8 prefix + flag + u16 cmd-len + UTF-16LE
+    /// command + 8 trailer).
+    fn make_envelope(ctrl_id: u32, properties: u32, command: &str, trailer_id: u32) -> Vec<u8> {
+        let units: Vec<u16> = command.encode_utf16().collect();
+        let mut data = Vec::new();
+        data.extend_from_slice(&ctrl_id.to_be_bytes());
+        data.extend_from_slice(&properties.to_le_bytes());
+        data.push(0x08); // flag
+        data.extend_from_slice(&(units.len() as u16).to_le_bytes());
+        for unit in &units {
+            data.extend_from_slice(&unit.to_le_bytes());
+        }
+        data.extend_from_slice(&trailer_id.to_le_bytes());
+        data.extend_from_slice(&[0, 0, 0, 0]);
+        data
+    }
+
+    const SMR_CTRL_ID: u32 = 0x2573_6D72; // "%smr"
+    const DTE_CTRL_ID: u32 = 0x2564_7465; // "%dte"
+    const PAT_CTRL_ID: u32 = 0x2570_6174; // "%pat"
+    const ATNO_CTRL_ID: u32 = 0x6174_6E6F; // "atno"
+
+    #[test]
+    fn summery_parse_known_token_carries_command() {
+        for token in ["$author", "$lastsaveby", "$createtime", "$modifiedtime", "$title"] {
+            let data = make_envelope(SMR_CTRL_ID, 0x0000_0001, token, 0x41A4_AD76);
+            let parsed = Hwp5SummeryControl::parse(SMR_CTRL_ID, &data)
+                .unwrap_or_else(|| panic!("token {token} must parse"));
+            assert_eq!(parsed.command_token, token);
+            assert_eq!(parsed.field_unique_id, 0x41A4_AD76);
+        }
+    }
+
+    #[test]
+    fn summery_parse_unknown_token_still_carried() {
+        // Forward-compat: parser does not gate on known $X — projection layer
+        // routes unknown tokens to Control::UnknownSummery.
+        let data = make_envelope(SMR_CTRL_ID, 0x0000_0001, "$company", 0);
+        let parsed = Hwp5SummeryControl::parse(SMR_CTRL_ID, &data).expect("parse");
+        assert_eq!(parsed.command_token, "$company");
+    }
+
+    #[test]
+    fn summery_parse_rejects_oversized_command() {
+        // command_units > MAX_SUMMERY_COMMAND_UNITS (1024) must return None
+        // without attempting allocation.
+        let mut data = Vec::new();
+        data.extend_from_slice(&SMR_CTRL_ID.to_be_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        data.push(0x08);
+        data.extend_from_slice(&(MAX_SUMMERY_COMMAND_UNITS as u16 + 1).to_le_bytes());
+        // intentionally no further bytes
+        assert!(Hwp5SummeryControl::parse(SMR_CTRL_ID, &data).is_none());
+    }
+
+    #[test]
+    fn summery_parse_rejects_truncated() {
+        let mut data = make_envelope(SMR_CTRL_ID, 0, "$author", 0);
+        data.truncate(data.len() - 4);
+        assert!(Hwp5SummeryControl::parse(SMR_CTRL_ID, &data).is_none());
+    }
+
+    #[test]
+    fn datecode_parse_date_pattern_preserves_raw() {
+        let data = make_envelope(DTE_CTRL_ID, 0, "\\:1년 2월 3일 (6);0;", 0x41A4_AD6F);
+        let parsed = Hwp5DateCodeControl::parse(DTE_CTRL_ID, &data).expect("parse");
+        assert_eq!(parsed.raw_command, "\\:1년 2월 3일 (6);0;");
+    }
+
+    #[test]
+    fn datecode_parse_time_pattern_starts_with_t() {
+        let data = make_envelope(DTE_CTRL_ID, 0, "T\\:;0;", 0);
+        let parsed = Hwp5DateCodeControl::parse(DTE_CTRL_ID, &data).expect("parse");
+        assert!(parsed.raw_command.starts_with('T'), "time mode wire begins with T");
+    }
+
+    #[test]
+    fn datecode_parse_carries_trailer_verbatim() {
+        let data = make_envelope(DTE_CTRL_ID, 0, "\\:;0;", 0xDEAD_BEEF);
+        let parsed = Hwp5DateCodeControl::parse(DTE_CTRL_ID, &data).expect("parse");
+        assert_eq!(&parsed.raw_trailer[0..4], &0xDEAD_BEEFu32.to_le_bytes());
+        assert_eq!(&parsed.raw_trailer[4..8], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn datecode_parse_rejects_truncated() {
+        let mut data = make_envelope(DTE_CTRL_ID, 0, "\\:;0;", 0);
+        data.truncate(data.len() - 2);
+        assert!(Hwp5DateCodeControl::parse(DTE_CTRL_ID, &data).is_none());
+    }
+
+    #[test]
+    fn pathfield_parse_pf_command() {
+        let data = make_envelope(PAT_CTRL_ID, 0, "$P$F", 0x41A4_AD7E);
+        let parsed = Hwp5PathFieldControl::parse(PAT_CTRL_ID, &data).expect("parse");
+        assert_eq!(parsed.raw_command, "$P$F");
+    }
+
+    #[test]
+    fn pathfield_parse_rejects_oversized() {
+        let mut data = Vec::new();
+        data.extend_from_slice(&PAT_CTRL_ID.to_be_bytes());
+        data.extend_from_slice(&0u32.to_le_bytes());
+        data.push(0x08);
+        data.extend_from_slice(&(MAX_PATHFIELD_COMMAND_UNITS as u16 + 1).to_le_bytes());
+        assert!(Hwp5PathFieldControl::parse(PAT_CTRL_ID, &data).is_none());
+    }
+
+    #[test]
+    fn pathfield_parse_rejects_truncated() {
+        let mut data = make_envelope(PAT_CTRL_ID, 0, "$F", 0);
+        data.truncate(data.len() - 4);
+        assert!(Hwp5PathFieldControl::parse(PAT_CTRL_ID, &data).is_none());
+    }
+
+    /// Builds a synthetic `atno` 16-byte CtrlHeader payload.
+    fn make_atno(flag: u32) -> Vec<u8> {
+        let mut data = Vec::new();
+        data.extend_from_slice(&ATNO_CTRL_ID.to_be_bytes());
+        data.extend_from_slice(&flag.to_le_bytes());
+        data.extend_from_slice(&[0x01, 0, 0, 0, 0, 0, 0, 0]);
+        data
+    }
+
+    #[test]
+    fn atno_parse_current_page_flag() {
+        let data = make_atno(0x00);
+        let parsed = Hwp5InlinePageNumberControl::parse(ATNO_CTRL_ID, &data).expect("parse");
+        assert_eq!(parsed.raw_flag, 0x00);
+    }
+
+    #[test]
+    fn atno_parse_total_pages_flag() {
+        let data = make_atno(0x06);
+        let parsed = Hwp5InlinePageNumberControl::parse(ATNO_CTRL_ID, &data).expect("parse");
+        assert_eq!(parsed.raw_flag, 0x06);
+    }
+
+    #[test]
+    fn atno_parse_unknown_flag_still_carries_raw() {
+        // Forward-compat: unknown flags must surface so the projection
+        // layer can preserve them via InlinePageKind::Unknown + raw_flag.
+        let data = make_atno(0xABCD_1234);
+        let parsed = Hwp5InlinePageNumberControl::parse(ATNO_CTRL_ID, &data).expect("parse");
+        assert_eq!(parsed.raw_flag, 0xABCD_1234);
+    }
+
+    #[test]
+    fn atno_parse_rejects_truncated() {
+        let mut data = make_atno(0);
+        data.truncate(8);
+        assert!(Hwp5InlinePageNumberControl::parse(ATNO_CTRL_ID, &data).is_none());
+    }
 }
