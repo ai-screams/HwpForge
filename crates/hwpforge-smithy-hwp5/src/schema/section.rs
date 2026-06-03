@@ -103,6 +103,12 @@ impl Hwp5ParaHeader {
 /// shares the same numeric ctrl_id (`Hwp5Control::IndexMark`).
 const CTRL_ID_INDEXMARK_INLINE: u32 = 0x6964_786D;
 
+/// LE-stored ctrl_id `atno` inside a `0x12` inline marker's `extra[0..4]`
+/// (Wave 12n). Promotes the marker to a `TextSegment::ControlRef` so the
+/// projection layer can emit `Control::InlinePageNumber` at the right
+/// visible position. The CtrlHeader (also `atno`) is `Hwp5Control::InlinePageNumber`.
+const CTRL_ID_INLINE_AUTONUM: u32 = 0x6174_6E6F;
+
 // `CTRL_ID_CLICK_HERE = 0x2563_6C6B` ("%clk", Wave 12l) is defined in
 // `decoder/section.rs`. The schema crate does not currently dispatch
 // on this id (the inline-marker discriminator path used by IndexMark
@@ -338,10 +344,25 @@ impl Hwp5ParaText {
                     }
                     // Else: consumed silently, same as 0x0E..=0x15 below.
                 }
-                // 0x0E-0x15: extended controls (bookmarks, change tracking, etc.)
-                // All consume 7 extra u16 values. Still silently consumed
-                // until a future slice promotes them to a typed variant.
-                0x0E..=0x15 => {
+                // 0x12: extended control — Wave 12n discovered that
+                // `atno` inline page-number markers ride this control
+                // code (extra[0..4] = LE-stored `atno`). Promote only
+                // `atno`-tagged 0x12 to a `ControlRef`; other 0x12 owners
+                // keep falling through to silent-consume to avoid
+                // accidentally promoting an unknown control family.
+                0x12 => {
+                    flush_text!();
+                    let extra = read_extra!(i - 1);
+                    if ctrl_id_from_inline_extra_bytes(&extra) == CTRL_ID_INLINE_AUTONUM {
+                        segments.push(TextSegment::ControlRef { extra });
+                    }
+                    // Else: consumed silently, same as 0x0E..=0x11 / 0x13..=0x15 below.
+                }
+                // 0x0E-0x15 (except 0x12): extended controls (bookmarks,
+                // change tracking, etc.). All consume 7 extra u16 values.
+                // Still silently consumed until a future slice promotes
+                // them to a typed variant.
+                0x0E..=0x11 | 0x13..=0x15 => {
                     flush_text!();
                     let _extra = read_extra!(i - 1);
                     // No segment emitted — consumed silently.
@@ -1594,6 +1615,262 @@ fn parse_clickhere_command(units: &[u16]) -> Option<(Option<String>, Option<Stri
         if hint.is_empty() { None } else { Some(hint) },
         if help.is_empty() { None } else { Some(help) },
     ))
+}
+
+// ---------------------------------------------------------------------------
+// Hwp5SummeryControl (Wave 12n)
+// ---------------------------------------------------------------------------
+
+/// Defence-in-depth allocation cap for the `%smr` Command UTF-16 payload
+/// (Wave 12n architect review). The longest observed SUMMERY token across
+/// the Wave 12n native fixtures is 13 UTF-16 units (`$modifiedtime`). A
+/// 1024-unit cap is roughly two orders of magnitude over the realistic
+/// ceiling while keeping a single hostile record well under 4 KB.
+const MAX_SUMMERY_COMMAND_UNITS: usize = 1024;
+
+/// HWP5 representation of a `%smr` SUMMERY auto-field control.
+///
+/// Wire layout (CtrlHeader, ctrl_id=`0x2573_6D72`, observed properties
+/// `01 00 00 00` on native fixtures):
+///
+/// | offset | bytes | field | encoding |
+/// |---|---|---|---|
+/// | `body[0]` | `08` | flag (`Prop` integer param value) | u8 constant |
+/// | `body[1..3]` | LE u16 | command UTF-16 code unit count `N` | u16 LE |
+/// | `body[3..3+2N]` | UTF-16LE | command string (e.g. `"$author"`, `"$modifiedtime"`) | UTF-16LE |
+/// | `body[3+2N..3+2N+4]` | LE u32 | field unique id (smithy-local, discarded by Core) | u32 LE |
+/// | `body[3+2N+4..3+2N+8]` | `00 00 00 00` | trailer padding | u32 LE |
+///
+/// Token meanings (Wave 12n native fixture analysis,
+/// `.docs/research/2026-06-02_auto_field_wire_dump.md`):
+/// - `$author` → 만든 사람 → `FieldType::Author`
+/// - `$lastsaveby` → 마지막 저장한 사람 → `FieldType::LastSavedBy`
+/// - `$createtime` → 만든 날짜 → `FieldType::CreatedTime`
+/// - `$modifiedtime` → 마지막 저장한 날짜 → `FieldType::ModifiedTime`
+/// - `$title` → 문서 제목 → `FieldType::Title`
+/// - 기타 `$X` → `Control::UnknownSummery { token }` carry
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5SummeryControl {
+    /// Owning control identifier, always `0x2573_6D72` (`"%smr"` BE-ascii).
+    #[allow(dead_code)]
+    pub ctrl_id: u32,
+    /// Decoded Command token (e.g. `"$author"`). Forwarded verbatim to
+    /// the projection layer for typed vs unknown dispatch.
+    pub command_token: String,
+    /// Field unique id pulled from the trailer u32; smithy-local fidelity
+    /// only — Core never sees this value (the encoder reallocates ids).
+    #[allow(dead_code)]
+    pub field_unique_id: u32,
+}
+
+/// Defence-in-depth allocation cap for the `%dte` Command UTF-16 payload
+/// (Wave 12n). The longest observed `%dte` Command across the Wave 12n
+/// native fixtures is 17 code units (`"\:1년 2월 3일 (6);0;"`). A 1024-unit
+/// cap matches `MAX_SUMMERY_COMMAND_UNITS` (same family of CtrlHeader).
+const MAX_DATECODE_COMMAND_UNITS: usize = 1024;
+
+/// HWP5 representation of a `%dte` date/time format-code field
+/// (Wave 12n).
+///
+/// Wire envelope is identical to [`Hwp5SummeryControl`] / [`Hwp5ClickHereControl`]:
+///
+/// | offset | bytes | field |
+/// |---|---|---|
+/// | `body[0]` | `08` | flag |
+/// | `body[1..3]` | LE u16 | command UTF-16 code unit count `N` |
+/// | `body[3..3+2N]` | UTF-16LE | format-code Command (e.g. `"\:1년 2월 3일 (6);0;"`, `"T\:;0;"`) |
+/// | `body[3+2N..3+2N+8]` | 8 bytes | trailer (`[instance_id u32, padding u32]`) |
+///
+/// Unlike SUMMERY, the Command is a raw format pattern — the grammar
+/// (`\:` header, positional codes `1`/`2`/`3`/`6`, `;0;` options,
+/// optional `T` prefix for time-only) is not parsed into structured
+/// fields. The trailer is preserved verbatim so a future encoder can
+/// round-trip the instance id if needed.
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5DateCodeControl {
+    /// Owning control identifier, always `0x2564_7465` (`"%dte"` BE-ascii).
+    #[allow(dead_code)]
+    pub ctrl_id: u32,
+    /// Raw Command string as recovered from the wire.
+    pub raw_command: String,
+    /// 8-byte trailer carried verbatim for round-trip fidelity.
+    pub raw_trailer: [u8; 8],
+}
+
+impl Hwp5DateCodeControl {
+    /// Decodes a `%dte` CtrlHeader payload. Returns `None` on truncation
+    /// or malformed UTF-16; the decoder converts that into a targeted
+    /// `Hwp5Warning::DroppedControl { control: "date_code_field", … }`.
+    pub(crate) fn parse(ctrl_id: u32, data: &[u8]) -> Option<Self> {
+        if data.len() < 19 {
+            return None;
+        }
+        let body = &data[8..];
+        let command_units = usize::from(u16::from_le_bytes([body[1], body[2]]));
+        if command_units > MAX_DATECODE_COMMAND_UNITS {
+            return None;
+        }
+        let command_bytes = command_units.checked_mul(2)?;
+        let command_end = 3usize.checked_add(command_bytes)?;
+        let trailer_end = command_end.checked_add(8)?;
+        if body.len() < trailer_end {
+            return None;
+        }
+        let mut units: Vec<u16> = Vec::with_capacity(command_units);
+        for chunk in body[3..command_end].chunks_exact(2) {
+            units.push(u16::from_le_bytes([chunk[0], chunk[1]]));
+        }
+        let raw_command = String::from_utf16(&units).ok()?;
+        let mut raw_trailer = [0u8; 8];
+        raw_trailer.copy_from_slice(&body[command_end..trailer_end]);
+        Some(Self { ctrl_id, raw_command, raw_trailer })
+    }
+}
+
+/// Defence-in-depth allocation cap for the `%pat` Command UTF-16
+/// payload (Wave 12n). Observed Command strings are `$P`, `$F`, `$P$F` —
+/// well under the cap. 256 units leaves ample headroom for future path
+/// format codes without inviting allocator abuse.
+const MAX_PATHFIELD_COMMAND_UNITS: usize = 256;
+
+/// HWP5 representation of a `%pat` path / file-name field (Wave 12n).
+///
+/// Wire envelope is identical to [`Hwp5SummeryControl`] / [`Hwp5DateCodeControl`]:
+/// the 1-byte flag + u16 LE command count + UTF-16LE Command + 8-byte
+/// trailer. The Command is a path-format-code string (`$P` = path,
+/// `$F` = file name, `$P$F` = both).
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5PathFieldControl {
+    /// Owning control identifier, always `0x2570_6174` (`"%pat"` BE-ascii).
+    #[allow(dead_code)]
+    pub ctrl_id: u32,
+    /// Raw Command string (`"$P"`, `"$F"`, or `"$P$F"`; unknown forms
+    /// preserved verbatim).
+    pub raw_command: String,
+}
+
+impl Hwp5PathFieldControl {
+    /// Decodes a `%pat` CtrlHeader payload. Returns `None` on truncation
+    /// or malformed UTF-16; the decoder emits a targeted
+    /// `Hwp5Warning::DroppedControl { control: "path_field", … }`.
+    pub(crate) fn parse(ctrl_id: u32, data: &[u8]) -> Option<Self> {
+        if data.len() < 19 {
+            return None;
+        }
+        let body = &data[8..];
+        let command_units = usize::from(u16::from_le_bytes([body[1], body[2]]));
+        if command_units > MAX_PATHFIELD_COMMAND_UNITS {
+            return None;
+        }
+        let command_bytes = command_units.checked_mul(2)?;
+        let command_end = 3usize.checked_add(command_bytes)?;
+        let trailer_end = command_end.checked_add(8)?;
+        if body.len() < trailer_end {
+            return None;
+        }
+        let mut units: Vec<u16> = Vec::with_capacity(command_units);
+        for chunk in body[3..command_end].chunks_exact(2) {
+            units.push(u16::from_le_bytes([chunk[0], chunk[1]]));
+        }
+        let raw_command = String::from_utf16(&units).ok()?;
+        Some(Self { ctrl_id, raw_command })
+    }
+}
+
+/// HWP5 representation of an `atno` inline page-number control
+/// (Wave 12n).
+///
+/// Unlike the SUMMERY-family controls, `atno` is a fixed 16-byte record
+/// with no Command string and no 8-byte trailer. The single 4-byte flag
+/// at `body[0..4]` distinguishes current-page (`0x00`) from total-page
+/// (`0x06`); other values are preserved verbatim via
+/// [`Control::InlinePageNumber::raw_flag`].
+///
+/// Wire layout:
+///
+/// | offset | bytes | field |
+/// |---|---|---|
+/// | `body[0..4]` | LE u32 | kind flag (`0x00` current / `0x06` total) |
+/// | `body[4..12]` | `01 00 00 00 00 00 00 00` | constant tail observed across fixtures |
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5InlinePageNumberControl {
+    /// Owning control identifier, always `0x6174_6E6F` (`"atno"`).
+    #[allow(dead_code)]
+    pub ctrl_id: u32,
+    /// Raw kind flag (`0x00` = current page, `0x06` = total pages,
+    /// other values preserved for forward compatibility).
+    pub raw_flag: u32,
+}
+
+impl Hwp5InlinePageNumberControl {
+    /// Decodes an `atno` CtrlHeader payload. Returns `None` if the
+    /// envelope is truncated.
+    ///
+    /// Wire layout (from Wave 12n native fixture analysis):
+    ///
+    /// | offset | bytes | meaning |
+    /// |---|---|---|
+    /// | `[0..4]` | ctrl_id | `"atno"` (LE bytes) |
+    /// | `[4..8]` | LE u32 flag | `0x00` current page / `0x06` total pages |
+    /// | `[8..16]` | constant tail | `01 00 00 00 00 00 00 00` |
+    ///
+    /// Unlike the `%clk`/`%smr`/`%dte`/`%pat` family this control does
+    /// not have a separate 4-byte properties word — the flag sits in
+    /// the slot that the other families use for properties.
+    pub(crate) fn parse(ctrl_id: u32, data: &[u8]) -> Option<Self> {
+        if data.len() < 16 {
+            return None;
+        }
+        let raw_flag = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+        Some(Self { ctrl_id, raw_flag })
+    }
+}
+
+impl Hwp5SummeryControl {
+    /// Decodes a `%smr` CtrlHeader payload (the raw record `data`
+    /// excluding the 4-byte CtrlHeader prefix the dispatcher already
+    /// matched). Returns `None` on truncation or malformed UTF-16 — the
+    /// decoder reports those as a targeted
+    /// `Hwp5Warning::DroppedControl { control: "summery_field", … }` so
+    /// the lossy path is auditable.
+    pub(crate) fn parse(ctrl_id: u32, data: &[u8]) -> Option<Self> {
+        // Need: 4 (ctrl_id) + 4 (properties) + 1 (flag) + 2 (count)
+        // + 0 (command) + 8 (trailer) = 19 bytes minimum.
+        if data.len() < 19 {
+            return None;
+        }
+        // Skip the 8-byte CtrlHeader prefix (ctrl_id + properties).
+        let body = &data[8..];
+        // body[0] is the 0x08 flag (validated softly — Wave 12l pattern).
+        let command_units = usize::from(u16::from_le_bytes([body[1], body[2]]));
+        if command_units > MAX_SUMMERY_COMMAND_UNITS {
+            return None;
+        }
+        let command_bytes = command_units.checked_mul(2)?;
+        let command_end = 3usize.checked_add(command_bytes)?;
+        // Trailer is 8 bytes (u32 field id + u32 padding).
+        let trailer_end = command_end.checked_add(8)?;
+        if body.len() < trailer_end {
+            return None;
+        }
+
+        let mut units: Vec<u16> = Vec::with_capacity(command_units);
+        for chunk in body[3..command_end].chunks_exact(2) {
+            units.push(u16::from_le_bytes([chunk[0], chunk[1]]));
+        }
+        let command_token = String::from_utf16(&units).ok()?;
+
+        let field_unique_id = u32::from_le_bytes([
+            body[command_end],
+            body[command_end + 1],
+            body[command_end + 2],
+            body[command_end + 3],
+        ]);
+        // body[command_end+4..command_end+8] is the 4-byte zero pad —
+        // intentionally not validated (Wave 12l convention).
+
+        Some(Self { ctrl_id, command_token, field_unique_id })
+    }
 }
 
 impl Hwp5MemoCommand {

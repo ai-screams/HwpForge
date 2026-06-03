@@ -199,6 +199,10 @@ fn collect_flow_paragraph_layout_hints(
             | Hwp5Control::Compose(_)
             | Hwp5Control::IndexMark(_)
             | Hwp5Control::ClickHere(_)
+            | Hwp5Control::SummeryField(_)
+            | Hwp5Control::DateCodeField(_)
+            | Hwp5Control::PathField(_)
+            | Hwp5Control::InlinePageNumber(_)
             | Hwp5Control::OleObject(_)
             | Hwp5Control::Unknown { .. } => {}
         }
@@ -237,6 +241,10 @@ fn collect_scope_paragraph_layout_hints(paragraph: &Hwp5Paragraph, scope: &mut S
             | Hwp5Control::Compose(_)
             | Hwp5Control::IndexMark(_)
             | Hwp5Control::ClickHere(_)
+            | Hwp5Control::SummeryField(_)
+            | Hwp5Control::DateCodeField(_)
+            | Hwp5Control::PathField(_)
+            | Hwp5Control::InlinePageNumber(_)
             | Hwp5Control::OleObject(_)
             | Hwp5Control::Unknown { .. } => {}
         }

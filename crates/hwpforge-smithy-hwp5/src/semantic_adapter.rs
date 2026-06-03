@@ -329,6 +329,38 @@ fn adapt_control(
             build,
             ids,
         ),
+        Hwp5Control::SummeryField(summery) => adapt_shape_control(
+            summery.ctrl_id,
+            Hwp5SemanticControlKind::SummeryField,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
+        Hwp5Control::DateCodeField(date_code) => adapt_shape_control(
+            date_code.ctrl_id,
+            Hwp5SemanticControlKind::DateCodeField,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
+        Hwp5Control::PathField(pat) => adapt_shape_control(
+            pat.ctrl_id,
+            Hwp5SemanticControlKind::PathField,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
+        Hwp5Control::InlinePageNumber(atno) => adapt_shape_control(
+            atno.ctrl_id,
+            Hwp5SemanticControlKind::InlinePageNumber,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
         Hwp5Control::OleObject(ole) => {
             adapt_ole_object_control(ole, container, paragraph_id, build, support, ids)
         }

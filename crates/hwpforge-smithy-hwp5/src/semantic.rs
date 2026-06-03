@@ -1102,6 +1102,15 @@ pub enum Hwp5SemanticControlKind {
     IndexMark,
     /// ClickHere (누름틀, CLICK_HERE press-field) form control.
     ClickHere,
+    /// SUMMERY auto-field (`%smr`): Author / LastSavedBy / CreatedTime /
+    /// ModifiedTime / Title (Wave 12n).
+    SummeryField,
+    /// `%dte` date/time format-code field (Wave 12n).
+    DateCodeField,
+    /// `%pat` path / file-name field (Wave 12n).
+    PathField,
+    /// `atno` inline page-number control (Wave 12n).
+    InlinePageNumber,
     /// Header control.
     Header,
     /// Footer control.

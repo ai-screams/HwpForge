@@ -104,6 +104,28 @@ pub(crate) enum Hwp5Control {
     /// form-mode name — see `schema::section::Hwp5ClickHereControl` for
     /// the payload layout. (Wave 12l.)
     ClickHere(crate::schema::section::Hwp5ClickHereControl),
+    /// SUMMERY auto-field — `%smr` ctrl_id. Carries the Command `$token`
+    /// (e.g. `$author`, `$modifiedtime`) that the projection layer maps
+    /// to a typed `FieldType` or, for unknown tokens, to
+    /// `Control::UnknownSummery`. See
+    /// `schema::section::Hwp5SummeryControl`. (Wave 12n.)
+    SummeryField(crate::schema::section::Hwp5SummeryControl),
+    /// `%dte` date/time format-code field — carries a raw format pattern
+    /// (e.g. `"\:1년 2월 3일 (6);0;"` or `"T\:;0;"`). The projection
+    /// layer surfaces it as `Control::DateCodeField` with `raw_command`,
+    /// `is_time_mode` (derived from `T` prefix), and the 8-byte trailer
+    /// preserved verbatim. See `schema::section::Hwp5DateCodeControl`.
+    /// (Wave 12n.)
+    DateCodeField(crate::schema::section::Hwp5DateCodeControl),
+    /// `%pat` path/file-name field — carries a path format-code
+    /// Command (`"$P"`, `"$F"`, `"$P$F"`). See
+    /// `schema::section::Hwp5PathFieldControl`. (Wave 12n.)
+    PathField(crate::schema::section::Hwp5PathFieldControl),
+    /// `atno` inline page-number control — carries a 4-byte kind flag
+    /// (`0x00` current page, `0x06` total pages, other values forward
+    /// preserved). See `schema::section::Hwp5InlinePageNumberControl`.
+    /// (Wave 12n.)
+    InlinePageNumber(crate::schema::section::Hwp5InlinePageNumberControl),
     /// Header control with nested subtree paragraphs.
     Header(Hwp5NestedSubtree),
     /// Footer control with nested subtree paragraphs.
@@ -545,6 +567,27 @@ const CTRL_ID_INDEXMARK: u32 = 0x6964_786D;
 /// ctrl_id for the ClickHere (누름틀) press-field: ASCII `%clk` as
 /// big-endian u32. Wave 12l.
 const CTRL_ID_CLICK_HERE: u32 = 0x2563_6C6B;
+
+/// ctrl_id for the SUMMERY auto-field family (`$author`, `$lastsaveby`,
+/// `$createtime`, `$modifiedtime`, `$title`, …): ASCII `%smr` as
+/// big-endian u32. Wave 12n. Payload layout lives on
+/// `crate::schema::section::Hwp5SummeryControl`.
+const CTRL_ID_FIELD_SUMMERY: u32 = 0x2573_6D72;
+
+/// ctrl_id for the `%dte` date/time format-code field: ASCII `%dte` as
+/// big-endian u32. Wave 12n. Payload layout lives on
+/// `crate::schema::section::Hwp5DateCodeControl`.
+const CTRL_ID_FIELD_DATE_CODE: u32 = 0x2564_7465;
+
+/// ctrl_id for the `%pat` path/file-name field: ASCII `%pat` as
+/// big-endian u32. Wave 12n. Payload layout lives on
+/// `crate::schema::section::Hwp5PathFieldControl`.
+const CTRL_ID_FIELD_PATH: u32 = 0x2570_6174;
+
+/// ctrl_id for the `atno` inline page-number control: ASCII `atno` as
+/// big-endian u32. Wave 12n. Payload layout lives on
+/// `crate::schema::section::Hwp5InlinePageNumberControl`.
+const CTRL_ID_FIELD_INLINE_PAGE: u32 = 0x6174_6E6F;
 
 // The `0x57 lvl=2` sub-record that follows every `%clk` CtrlHeader
 // carries the form-mode field name and HWP5 names it `CtrlData`. The
@@ -1739,6 +1782,77 @@ impl BodyTextParserState {
                         self.warnings.push(Hwp5Warning::DroppedControl {
                             control: "indexmark",
                             reason: "malformed idxm CtrlHeader payload; dropping index mark"
+                                .to_string(),
+                        });
+                    }
+                } else if ctrl_id == CTRL_ID_FIELD_SUMMERY {
+                    // `%smr` ctrl carries a SUMMERY auto-field Command
+                    // `$token` (e.g. `$author`, `$modifiedtime`). The
+                    // projection layer dispatches the token to a typed
+                    // `FieldType` or `Control::UnknownSummery`. No
+                    // follow-up sub-record (Wave 12n).
+                    if let Some(summery) =
+                        crate::schema::section::Hwp5SummeryControl::parse(ctrl_id, &record.data)
+                    {
+                        if let Some(buf) = self.current.as_mut() {
+                            buf.controls.push(Hwp5Control::SummeryField(summery));
+                        }
+                    } else {
+                        self.warnings.push(Hwp5Warning::DroppedControl {
+                            control: "summery_field",
+                            reason: "malformed %smr CtrlHeader payload; dropping auto-field"
+                                .to_string(),
+                        });
+                    }
+                } else if ctrl_id == CTRL_ID_FIELD_DATE_CODE {
+                    // `%dte` ctrl carries a raw date/time format-code
+                    // (e.g. `"\:1년 2월 3일 (6);0;"`, `"T\:;0;"`). The
+                    // projection layer wraps it in `Control::DateCodeField`
+                    // with `is_time_mode` derived from the `T` prefix.
+                    // (Wave 12n.)
+                    if let Some(date_code) =
+                        crate::schema::section::Hwp5DateCodeControl::parse(ctrl_id, &record.data)
+                    {
+                        if let Some(buf) = self.current.as_mut() {
+                            buf.controls.push(Hwp5Control::DateCodeField(date_code));
+                        }
+                    } else {
+                        self.warnings.push(Hwp5Warning::DroppedControl {
+                            control: "date_code_field",
+                            reason: "malformed %dte CtrlHeader payload; dropping date-code field"
+                                .to_string(),
+                        });
+                    }
+                } else if ctrl_id == CTRL_ID_FIELD_PATH {
+                    // `%pat` ctrl carries a path/file-name format-code
+                    // Command (`"$P"`, `"$F"`, `"$P$F"`). Wave 12n.
+                    if let Some(pat) =
+                        crate::schema::section::Hwp5PathFieldControl::parse(ctrl_id, &record.data)
+                    {
+                        if let Some(buf) = self.current.as_mut() {
+                            buf.controls.push(Hwp5Control::PathField(pat));
+                        }
+                    } else {
+                        self.warnings.push(Hwp5Warning::DroppedControl {
+                            control: "path_field",
+                            reason: "malformed %pat CtrlHeader payload; dropping path field"
+                                .to_string(),
+                        });
+                    }
+                } else if ctrl_id == CTRL_ID_FIELD_INLINE_PAGE {
+                    // `atno` ctrl carries a single 4-byte kind flag
+                    // (`0x00`/`0x06`). No Command/trailer. Wave 12n.
+                    if let Some(atno) = crate::schema::section::Hwp5InlinePageNumberControl::parse(
+                        ctrl_id,
+                        &record.data,
+                    ) {
+                        if let Some(buf) = self.current.as_mut() {
+                            buf.controls.push(Hwp5Control::InlinePageNumber(atno));
+                        }
+                    } else {
+                        self.warnings.push(Hwp5Warning::DroppedControl {
+                            control: "inline_page_number",
+                            reason: "malformed atno CtrlHeader payload; dropping inline page"
                                 .to_string(),
                         });
                     }

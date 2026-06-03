@@ -54,6 +54,14 @@ const CTRL_ID_BOOKMARK_POINT: u32 = 0x626F_6B6D; // "bokm"
 /// form-mode `name` lives in the trailing `0x57 lvl=2` sub-record —
 /// see `schema::section::Hwp5ClickHereControl`.
 const CTRL_ID_CLICK_HERE: u32 = 0x2563_6C6B; // "%clk"
+/// SUMMERY auto-field ctrl_id (Wave 12n). Matches the inline `FieldBegin`
+/// `extra` bytes so the projection layer can pop the parsed payload from
+/// `summery_fields` when this id arrives.
+const CTRL_ID_FIELD_SUMMERY: u32 = 0x2573_6D72; // "%smr"
+/// `%dte` date/time format-code ctrl_id (Wave 12n).
+const CTRL_ID_FIELD_DATE_CODE: u32 = 0x2564_7465; // "%dte"
+/// `%pat` path/file-name ctrl_id (Wave 12n).
+const CTRL_ID_FIELD_PATH: u32 = 0x2570_6174; // "%pat"
 /// Inline `FieldBegin` ctrl_id for memo anchors (`%%me` BE-ascii).
 ///
 /// In the HWP5 body text stream, memos are embedded as `FieldBegin` /
@@ -128,6 +136,16 @@ struct ParagraphProjectionQueues<'a> {
     /// `start_active_field`. Like `memo_controls`, leftovers do not
     /// emit visible runs — they only carry metadata.
     clickhere_controls: VecDeque<crate::schema::section::Hwp5ClickHereControl>,
+    /// Pending SUMMERY (`%smr`) auto-fields in document order (Wave 12n).
+    /// Consumed by `FieldBegin %smr` inline segments via `start_active_field`.
+    /// Same lifecycle as `clickhere_controls`.
+    summery_fields: VecDeque<crate::schema::section::Hwp5SummeryControl>,
+    /// Pending `%dte` date/time format-code fields in document order
+    /// (Wave 12n). Consumed by `FieldBegin %dte` inline segments.
+    datecode_fields: VecDeque<crate::schema::section::Hwp5DateCodeControl>,
+    /// Pending `%pat` path/file-name fields in document order (Wave 12n).
+    /// Consumed by `FieldBegin %pat` inline segments.
+    pathfield_controls: VecDeque<crate::schema::section::Hwp5PathFieldControl>,
     point_bookmark_names: VecDeque<String>,
 }
 
@@ -172,6 +190,33 @@ enum ActiveField {
         hint_text: Option<String>,
         help_text: Option<String>,
         name: Option<String>,
+    },
+    /// SUMMERY auto-field (Wave 12n). `command_token` carries the wire
+    /// `$X` token (e.g. `$author`, `$modifiedtime`). On `FieldEnd` the
+    /// token is mapped to a typed [`hwpforge_foundation::FieldType`] or,
+    /// for unknown tokens, surfaced as `Control::UnknownSummery { token }`.
+    /// The inline span text is not accumulated: HWP5 wire leaves it
+    /// empty and HWPX renders the field value at display time.
+    SummeryField {
+        start_utf16: u32,
+        command_token: String,
+    },
+    /// `%dte` date/time format-code field (Wave 12n). Carries the raw
+    /// Command pattern + 8-byte trailer for round-trip fidelity. On
+    /// `FieldEnd` the projection emits `Control::DateCodeField` with
+    /// `is_time_mode` derived from the `T` prefix.
+    DateCodeField {
+        start_utf16: u32,
+        raw_command: String,
+        raw_trailer: [u8; 8],
+    },
+    /// `%pat` path/file-name field (Wave 12n). On `FieldEnd` the
+    /// projection maps the raw Command to a typed `PathFieldCommand`
+    /// (or `Unknown` for forward compatibility) and emits
+    /// `Control::PathField`.
+    PathField {
+        start_utf16: u32,
+        raw_command: String,
     },
 }
 
@@ -708,7 +753,10 @@ fn project_paragraph_with_images_structural(
                         ActiveField::BookmarkSpan { .. }
                         | ActiveField::PlainTextFallback { .. }
                         | ActiveField::MemoAnchor { .. }
-                        | ActiveField::ClickHere { .. } => {}
+                        | ActiveField::ClickHere { .. }
+                        | ActiveField::SummeryField { .. }
+                        | ActiveField::DateCodeField { .. }
+                        | ActiveField::PathField { .. } => {}
                     }
                 } else {
                     runs.extend(project_text_segment(
@@ -796,11 +844,29 @@ fn project_paragraph_with_images_structural(
                 } else {
                     None
                 };
+                let summery = if ctrl_id == CTRL_ID_FIELD_SUMMERY {
+                    queues.summery_fields.pop_front()
+                } else {
+                    None
+                };
+                let datecode = if ctrl_id == CTRL_ID_FIELD_DATE_CODE {
+                    queues.datecode_fields.pop_front()
+                } else {
+                    None
+                };
+                let pathfield = if ctrl_id == CTRL_ID_FIELD_PATH {
+                    queues.pathfield_controls.pop_front()
+                } else {
+                    None
+                };
                 active_field = Some(start_active_field(
                     ctrl_id,
                     header,
                     memo,
                     clickhere,
+                    summery,
+                    datecode,
+                    pathfield,
                     visible_utf16,
                     projection_images,
                     field_hints.as_deref_mut(),
@@ -892,7 +958,10 @@ fn append_visible_unit(
             ActiveField::BookmarkSpan { .. }
             | ActiveField::PlainTextFallback { .. }
             | ActiveField::MemoAnchor { .. }
-            | ActiveField::ClickHere { .. } => {}
+            | ActiveField::ClickHere { .. }
+            | ActiveField::SummeryField { .. }
+            | ActiveField::DateCodeField { .. }
+            | ActiveField::PathField { .. } => {}
         }
     } else {
         runs.extend(project_text_segment(
@@ -916,6 +985,10 @@ fn paragraph_needs_structural_projection(hwp_para: &Hwp5Paragraph) -> bool {
                 Hwp5Control::Unknown { ctrl_id: CTRL_ID_PAGE_NUMBER | CTRL_ID_BOOKMARK_POINT, .. }
             ) || matches!(control, Hwp5Control::Memo(_))
                 || matches!(control, Hwp5Control::ClickHere(_))
+                || matches!(control, Hwp5Control::SummeryField(_))
+                || matches!(control, Hwp5Control::DateCodeField(_))
+                || matches!(control, Hwp5Control::PathField(_))
+                || matches!(control, Hwp5Control::InlinePageNumber(_))
         })
 }
 
@@ -928,6 +1001,9 @@ fn build_paragraph_projection_queues<'a>(
     let mut object_controls = VecDeque::new();
     let mut memo_controls = VecDeque::new();
     let mut clickhere_controls = VecDeque::new();
+    let mut summery_fields = VecDeque::new();
+    let mut datecode_fields = VecDeque::new();
+    let mut pathfield_controls = VecDeque::new();
     let mut point_bookmark_names = VecDeque::new();
     let mut field_hints = field_hints;
 
@@ -947,6 +1023,30 @@ fn build_paragraph_projection_queues<'a>(
             clickhere_controls.push_back(clickhere.clone());
             continue;
         }
+        // SUMMERY auto-fields (Wave 12n) — same pattern. The Command
+        // token lives in the parsed control; `FieldBegin %smr` pulls the
+        // next entry off this queue.
+        if let Hwp5Control::SummeryField(summery) = control {
+            summery_fields.push_back(summery.clone());
+            continue;
+        }
+        // `%dte` date/time format-code fields (Wave 12n) — same pattern.
+        if let Hwp5Control::DateCodeField(date_code) = control {
+            datecode_fields.push_back(date_code.clone());
+            continue;
+        }
+        // `%pat` path fields (Wave 12n) — same pattern.
+        if let Hwp5Control::PathField(pat) = control {
+            pathfield_controls.push_back(pat.clone());
+            continue;
+        }
+        // `atno` inline page-number controls (Wave 12n) intentionally
+        // fall through to `object_controls`. Codex 4차 review: atno's
+        // ParaText marker is `0x12 ControlRef`, not `0x03 FieldBegin`,
+        // and atno has no `FieldEnd`. The TextSegment::ControlRef arm
+        // in `project_paragraph_with_images_structural` pops the next
+        // `object_controls` entry and routes typed
+        // `Hwp5Control::InlinePageNumber` through `project_control_run`.
         let Some(unknown) = unknown_control_header(control) else {
             object_controls.push_back(control);
             continue;
@@ -985,15 +1085,27 @@ fn build_paragraph_projection_queues<'a>(
         object_controls,
         memo_controls,
         clickhere_controls,
+        summery_fields,
+        datecode_fields,
+        pathfield_controls,
         point_bookmark_names,
     }
 }
 
+// Wave 12n added 3 more optional carriers (summery/datecode/pathfield) on
+// top of the existing memo/clickhere set. Refactoring into a struct here
+// would add boilerplate without solving anything — each carrier is
+// independently `None` for every other CTRL_ID. Tracked as follow-up
+// backlog refactor #90 (handle_top_level_record helper extraction).
+#[allow(clippy::too_many_arguments)]
 fn start_active_field(
     ctrl_id: u32,
     header: Option<UnknownControlHeader<'_>>,
     memo: Option<Hwp5MemoControl>,
     clickhere: Option<crate::schema::section::Hwp5ClickHereControl>,
+    summery: Option<crate::schema::section::Hwp5SummeryControl>,
+    datecode: Option<crate::schema::section::Hwp5DateCodeControl>,
+    pathfield: Option<crate::schema::section::Hwp5PathFieldControl>,
     start_utf16: u32,
     projection_images: &mut ProjectionImageState<'_>,
     field_hints: Option<&mut SectionProjectionHints>,
@@ -1067,6 +1179,49 @@ fn start_active_field(
                 projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
                     subject: "field.clickhere",
                     reason: "click-here press-field metadata unavailable; \
+                             preserving only visible text"
+                        .to_string(),
+                });
+                ActiveField::PlainTextFallback { start_utf16 }
+            }
+        }
+        CTRL_ID_FIELD_SUMMERY => {
+            if let Some(summery) = summery {
+                ActiveField::SummeryField { start_utf16, command_token: summery.command_token }
+            } else {
+                projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "field.summery",
+                    reason: "summery auto-field metadata unavailable; \
+                             preserving only visible text"
+                        .to_string(),
+                });
+                ActiveField::PlainTextFallback { start_utf16 }
+            }
+        }
+        CTRL_ID_FIELD_DATE_CODE => {
+            if let Some(date_code) = datecode {
+                ActiveField::DateCodeField {
+                    start_utf16,
+                    raw_command: date_code.raw_command,
+                    raw_trailer: date_code.raw_trailer,
+                }
+            } else {
+                projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "field.date_code",
+                    reason: "date-code field metadata unavailable; \
+                             preserving only visible text"
+                        .to_string(),
+                });
+                ActiveField::PlainTextFallback { start_utf16 }
+            }
+        }
+        CTRL_ID_FIELD_PATH => {
+            if let Some(pat) = pathfield {
+                ActiveField::PathField { start_utf16, raw_command: pat.raw_command }
+            } else {
+                projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "field.path",
+                    reason: "path field metadata unavailable; \
                              preserving only visible text"
                         .to_string(),
                 });
@@ -1193,6 +1348,53 @@ fn finish_active_field(
                 },
                 char_shape_id,
             ));
+        }
+        ActiveField::SummeryField { start_utf16, command_token } => {
+            // Emit a single Run carrying either typed `Control::Field`
+            // (for known `$X` tokens) or `Control::UnknownSummery` for
+            // future-compat raw carry. The HWPX encoder renders the
+            // value at display time, so the span text between
+            // FIELD_BEGIN/FIELD_END is intentionally dropped (Wave 12n).
+            let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
+                &hwp_para.char_shape_runs,
+                start_utf16,
+            ) as usize);
+            let _ = end_utf16;
+            let control = match hwpforge_foundation::FieldType::from_summery_token(&command_token) {
+                Some(field_type) => {
+                    Control::Field { field_type, hint_text: None, help_text: None, name: None }
+                }
+                None => Control::UnknownSummery { token: command_token },
+            };
+            runs.push(Run::control(control, char_shape_id));
+        }
+        ActiveField::DateCodeField { start_utf16, raw_command, raw_trailer } => {
+            // Emit Control::DateCodeField with `is_time_mode` derived
+            // from the `T` prefix convention. The 8-byte trailer is
+            // preserved verbatim for future round-trip fidelity. Span
+            // text is intentionally dropped (Wave 12n).
+            let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
+                &hwp_para.char_shape_runs,
+                start_utf16,
+            ) as usize);
+            let _ = end_utf16;
+            let is_time_mode = raw_command.starts_with('T');
+            runs.push(Run::control(
+                Control::DateCodeField { raw_command, is_time_mode, raw_trailer },
+                char_shape_id,
+            ));
+        }
+        ActiveField::PathField { start_utf16, raw_command } => {
+            // Map raw `$P`/`$F`/`$P$F` to a typed PathFieldCommand
+            // (Unknown for forward compatibility). Wave 12n.
+            let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
+                &hwp_para.char_shape_runs,
+                start_utf16,
+            ) as usize);
+            let _ = end_utf16;
+            use hwpforge_core::control::PathFieldCommand;
+            let command = PathFieldCommand::from_wire(&raw_command);
+            runs.push(Run::control(Control::PathField { command }, char_shape_id));
         }
     }
 }
@@ -1628,6 +1830,25 @@ fn project_control_run(
         // path it means the structural pairing failed — drop rather than
         // silently emit a free-floating field run.
         Hwp5Control::ClickHere(_) => None,
+        // SUMMERY auto-fields (Wave 12n) follow the same structural-pairing
+        // pattern as ClickHere. Free-floating SummeryField means the inline
+        // FieldBegin marker did not pair with this CtrlHeader; drop.
+        Hwp5Control::SummeryField(_) => None,
+        // %dte date/time format-code fields (Wave 12n) — same pattern.
+        Hwp5Control::DateCodeField(_) => None,
+        // %pat path fields (Wave 12n) — same pattern.
+        Hwp5Control::PathField(_) => None,
+        // atno inline page-number controls (Wave 12n) emit immediately.
+        // The 0x12 inline marker is a ControlRef (no FieldEnd), so the
+        // emission flows through the object-control queue, not an
+        // ActiveField/FieldBegin pair.
+        Hwp5Control::InlinePageNumber(atno) => {
+            let kind = hwpforge_core::control::InlinePageKind::from_raw_flag(atno.raw_flag);
+            Some(Run::control(
+                Control::InlinePageNumber { kind, raw_flag: atno.raw_flag },
+                CharShapeIndex::new(0),
+            ))
+        }
         Hwp5Control::OleObject(ole) => project_ole_object_run(ole, projection_images),
     }
 }

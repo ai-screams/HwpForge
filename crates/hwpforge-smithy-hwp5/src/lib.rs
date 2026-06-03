@@ -800,6 +800,10 @@ fn collect_image_geometry_hints_in_controls(
             | decoder::section::Hwp5Control::Compose(_)
             | decoder::section::Hwp5Control::IndexMark(_)
             | decoder::section::Hwp5Control::ClickHere(_)
+            | decoder::section::Hwp5Control::SummeryField(_)
+            | decoder::section::Hwp5Control::DateCodeField(_)
+            | decoder::section::Hwp5Control::PathField(_)
+            | decoder::section::Hwp5Control::InlinePageNumber(_)
             | decoder::section::Hwp5Control::OleObject(_)
             | decoder::section::Hwp5Control::Unknown { .. } => {}
         }
