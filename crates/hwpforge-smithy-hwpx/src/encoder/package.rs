@@ -5,10 +5,12 @@
 
 use std::io::{Cursor, Write};
 
+use hwpforge_core::metadata::Metadata;
 use zip::write::SimpleFileOptions;
 use zip::CompressionMethod;
 use zip::ZipWriter;
 
+use crate::encoder::escape_xml_text_safe;
 use crate::error::{HwpxError, HwpxResult};
 
 // ── HWPX constants ───────────────────────────────────────────────
@@ -60,7 +62,16 @@ const SETTINGS_XML: &str = r#"<?xml version="1.0" encoding="UTF-8" standalone="y
 /// Matches the structure produced by 한글: full namespace declarations,
 /// metadata section, header + sections + settings + images in manifest,
 /// and header + sections in spine (images are NOT in spine).
+///
+/// **Wave 12o**: The `metadata` argument populates the `<opf:metadata>`
+/// block. All slots Hancom emits (title/language/creator/subject/
+/// description/lastsaveby/CreatedDate/ModifiedDate/date/keyword) are
+/// **always** emitted to preserve byte-parity with Hancom output —
+/// `None` values self-close, populated values are sanitized and
+/// XML-escaped. Unknown entries in `metadata.extras` are emitted in
+/// `BTreeMap` (alphabetical) order so output is deterministic.
 fn generate_content_hpf(
+    metadata: &Metadata,
     section_count: usize,
     image_paths: &[String],
     chart_paths: &[String],
@@ -137,22 +148,117 @@ fn generate_content_hpf(
         .expect("write to String is infallible");
     }
 
+    let metadata_block = build_metadata_block(metadata);
+
     format!(
         concat!(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>"#,
             r#"<opf:package{xmlns} version="" unique-identifier="" id="">"#,
-            r#"<opf:metadata>"#,
-            r#"<opf:title/>"#,
-            r#"<opf:language>ko</opf:language>"#,
-            r#"</opf:metadata>"#,
+            r#"{metadata_block}"#,
             r#"<opf:manifest>{manifest_items}</opf:manifest>"#,
             r#"<opf:spine>{spine_refs}</opf:spine>"#,
             r#"</opf:package>"#,
         ),
         xmlns = XMLNS_DECLS,
+        metadata_block = metadata_block,
         manifest_items = manifest_items,
         spine_refs = spine_refs,
     )
+}
+
+/// Builds the `<opf:metadata>` block matching Hancom byte-parity.
+///
+/// Slot order is fixed (title, language, creator, subject, description,
+/// lastsaveby, CreatedDate, ModifiedDate, date, keyword, extras). `None`
+/// typed slots self-close (`<opf:title/>` and
+/// `<opf:meta name="..." content="text"/>`). Populated slots use
+/// `<opf:title>value</opf:title>` / `<opf:meta name="..."
+/// content="text">value</opf:meta>` form. The `date` slot is intentionally
+/// left empty so Hancom recomputes the human-readable Korean locale string
+/// on save (Wave 12o §11.3 Q2). Keywords join with `";"` (Q3).
+fn build_metadata_block(meta: &Metadata) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::with_capacity(384);
+    out.push_str("<opf:metadata>");
+
+    // <opf:title>
+    match &meta.title {
+        Some(t) => {
+            let _ = write!(out, "<opf:title>{}</opf:title>", escape_xml_text_safe(t));
+        }
+        None => out.push_str("<opf:title/>"),
+    }
+
+    out.push_str("<opf:language>ko</opf:language>");
+
+    push_meta(&mut out, "creator", meta.author.as_deref());
+    push_meta(&mut out, "subject", meta.subject.as_deref());
+    push_meta(&mut out, "description", meta.description.as_deref());
+    push_meta(&mut out, "lastsaveby", meta.last_saved_by.as_deref());
+    push_meta(&mut out, "CreatedDate", meta.created.as_deref());
+    push_meta(&mut out, "ModifiedDate", meta.modified.as_deref());
+
+    // date — always empty; Hancom recomputes on save.
+    out.push_str(r#"<opf:meta name="date" content="text"/>"#);
+
+    // keyword — semicolon-joined into a single element.
+    if meta.keywords.is_empty() {
+        out.push_str(r#"<opf:meta name="keyword" content="text"/>"#);
+    } else {
+        let joined = meta.keywords.join(";");
+        let _ = write!(
+            out,
+            r#"<opf:meta name="keyword" content="text">{}</opf:meta>"#,
+            escape_xml_text_safe(&joined),
+        );
+    }
+
+    // extras — BTreeMap ordering (alphabetical). Slot guard: reject any
+    // key that collides with a typed slot (defense in depth — decoder
+    // promotes known names to typed fields).
+    for (k, v) in &meta.extras {
+        if matches!(
+            k.as_str(),
+            "creator"
+                | "subject"
+                | "description"
+                | "lastsaveby"
+                | "CreatedDate"
+                | "ModifiedDate"
+                | "date"
+                | "keyword"
+        ) {
+            continue;
+        }
+        let safe_key = escape_xml_text_safe(k);
+        let safe_val = escape_xml_text_safe(v);
+        if v.is_empty() {
+            let _ = write!(out, r#"<opf:meta name="{safe_key}" content="text"/>"#);
+        } else {
+            let _ =
+                write!(out, r#"<opf:meta name="{safe_key}" content="text">{safe_val}</opf:meta>"#,);
+        }
+    }
+
+    out.push_str("</opf:metadata>");
+    out
+}
+
+fn push_meta(out: &mut String, name: &'static str, value: Option<&str>) {
+    use std::fmt::Write as _;
+    match value {
+        Some(v) => {
+            let _ = write!(
+                out,
+                r#"<opf:meta name="{name}" content="text">{}</opf:meta>"#,
+                escape_xml_text_safe(v),
+            );
+        }
+        None => {
+            let _ = write!(out, r#"<opf:meta name="{name}" content="text"/>"#);
+        }
+    }
 }
 
 /// Guesses the MIME type for an image based on file extension.
@@ -197,6 +303,7 @@ impl PackageWriter {
     ///
     /// Returns [`HwpxError::Zip`] if the ZIP writer fails at any stage.
     pub fn write_hwpx(
+        metadata: &Metadata,
         header_xml: &str,
         section_xmls: &[String],
         images: &[(String, Vec<u8>)],
@@ -240,6 +347,7 @@ impl PackageWriter {
         let embedded_ole_ids: Vec<String> =
             embedded_oles.iter().map(|(id, _)| id.clone()).collect();
         let content_hpf = generate_content_hpf(
+            metadata,
             section_xmls.len(),
             &image_paths,
             &chart_paths,
@@ -317,7 +425,16 @@ mod tests {
 
     /// Helper: write a minimal HWPX and return the raw bytes.
     fn write_minimal(sections: &[String]) -> Vec<u8> {
-        PackageWriter::write_hwpx(MINIMAL_HEADER, sections, &[], &[], &[], &[]).unwrap()
+        PackageWriter::write_hwpx(
+            &Metadata::default(),
+            MINIMAL_HEADER,
+            sections,
+            &[],
+            &[],
+            &[],
+            &[],
+        )
+        .unwrap()
     }
 
     /// Helper: open a ZipArchive from raw bytes.
@@ -382,14 +499,16 @@ mod tests {
 
     #[test]
     fn content_hpf_lists_all_sections() {
+        let meta = Metadata::default();
+
         // Single section
-        let hpf1 = generate_content_hpf(1, &[], &[], &[], &[]);
+        let hpf1 = generate_content_hpf(&meta, 1, &[], &[], &[], &[]);
         assert!(hpf1.contains(r#"id="section0""#));
         assert!(hpf1.contains(r#"idref="section0""#));
         assert!(!hpf1.contains(r#"id="section1""#));
 
         // Three sections
-        let hpf3 = generate_content_hpf(3, &[], &[], &[], &[]);
+        let hpf3 = generate_content_hpf(&meta, 3, &[], &[], &[], &[]);
         for i in 0..3 {
             assert!(hpf3.contains(&format!(r#"id="section{i}""#)), "manifest missing section{i}");
             assert!(hpf3.contains(&format!(r#"idref="section{i}""#)), "spine missing section{i}");
@@ -402,7 +521,7 @@ mod tests {
     #[test]
     fn content_hpf_includes_images() {
         let images = vec!["photo.jpg".to_string(), "logo.png".to_string()];
-        let hpf = generate_content_hpf(1, &images, &[], &[], &[]);
+        let hpf = generate_content_hpf(&Metadata::default(), 1, &images, &[], &[], &[]);
         // id must match binaryItemIDRef (filename stem, no extension)
         assert!(hpf.contains(r#"id="photo""#), "missing photo manifest entry");
         assert!(hpf.contains(r#"href="BinData/photo.jpg""#), "missing image href");
@@ -419,8 +538,15 @@ mod tests {
 
     #[test]
     fn write_empty_header_succeeds() {
-        let result =
-            PackageWriter::write_hwpx("", &[MINIMAL_SECTION.to_string()], &[], &[], &[], &[]);
+        let result = PackageWriter::write_hwpx(
+            &Metadata::default(),
+            "",
+            &[MINIMAL_SECTION.to_string()],
+            &[],
+            &[],
+            &[],
+            &[],
+        );
         assert!(result.is_ok());
         let bytes = result.unwrap();
         let archive = open_zip(&bytes);
@@ -432,8 +558,16 @@ mod tests {
     #[test]
     fn multi_section_creates_multiple_entries() {
         let sections: Vec<String> = (0..3).map(|i| format!(r#"<sec>section{i}</sec>"#)).collect();
-        let bytes =
-            PackageWriter::write_hwpx(MINIMAL_HEADER, &sections, &[], &[], &[], &[]).unwrap();
+        let bytes = PackageWriter::write_hwpx(
+            &Metadata::default(),
+            MINIMAL_HEADER,
+            &sections,
+            &[],
+            &[],
+            &[],
+            &[],
+        )
+        .unwrap();
         let mut archive = open_zip(&bytes);
 
         for i in 0..3 {
@@ -468,7 +602,15 @@ mod tests {
 
     #[test]
     fn write_zero_sections_succeeds() {
-        let result = PackageWriter::write_hwpx(MINIMAL_HEADER, &[], &[], &[], &[], &[]);
+        let result = PackageWriter::write_hwpx(
+            &Metadata::default(),
+            MINIMAL_HEADER,
+            &[],
+            &[],
+            &[],
+            &[],
+            &[],
+        );
         assert!(result.is_ok());
         let bytes = result.unwrap();
         let archive = open_zip(&bytes);
@@ -482,8 +624,16 @@ mod tests {
     #[test]
     fn large_section_count() {
         let sections: Vec<String> = (0..100).map(|i| format!(r#"<sec>s{i}</sec>"#)).collect();
-        let bytes =
-            PackageWriter::write_hwpx(MINIMAL_HEADER, &sections, &[], &[], &[], &[]).unwrap();
+        let bytes = PackageWriter::write_hwpx(
+            &Metadata::default(),
+            MINIMAL_HEADER,
+            &sections,
+            &[],
+            &[],
+            &[],
+            &[],
+        )
+        .unwrap();
         let archive = open_zip(&bytes);
 
         let section_entries = archive
@@ -526,6 +676,7 @@ mod tests {
         let image_data = vec![0xFFu8, 0xD8, 0xFF, 0xE0]; // fake JPEG header
         let images = vec![("photo.jpg".to_string(), image_data.clone())];
         let bytes = PackageWriter::write_hwpx(
+            &Metadata::default(),
             MINIMAL_HEADER,
             &[MINIMAL_SECTION.to_string()],
             &images,
@@ -541,5 +692,109 @@ mod tests {
         let mut buf = Vec::new();
         entry.read_to_end(&mut buf).unwrap();
         assert_eq!(buf, image_data);
+    }
+
+    // ── Wave 12o Phase 1 — metadata emit gates ──────────────────
+
+    /// Default Metadata: every slot self-closes; Hancom byte parity rules
+    /// (always 9 slots + always `content="text"` on `<opf:meta>`).
+    #[test]
+    fn metadata_default_emits_all_self_closing_slots() {
+        let hpf = generate_content_hpf(&Metadata::default(), 1, &[], &[], &[], &[]);
+        assert!(hpf.contains("<opf:title/>"), "title must self-close when None");
+        assert!(hpf.contains("<opf:language>ko</opf:language>"));
+        for name in [
+            "creator",
+            "subject",
+            "description",
+            "lastsaveby",
+            "CreatedDate",
+            "ModifiedDate",
+            "date",
+            "keyword",
+        ] {
+            let expected = format!(r#"<opf:meta name="{name}" content="text"/>"#);
+            assert!(
+                hpf.contains(&expected),
+                "missing self-closing slot for {name}: looked for {expected}"
+            );
+        }
+    }
+
+    /// Populated Metadata: every typed field surfaces in the matching slot
+    /// with content="text" intact.
+    #[test]
+    fn metadata_populated_emits_typed_values() {
+        let meta = Metadata::new()
+            .with_title("Wave 12o 데모")
+            .with_author("홍길동")
+            .with_subject("자동 필드 진단")
+            .with_description("longer description")
+            .with_last_saved_by("김편집")
+            .with_keywords(["alpha", "beta"])
+            .with_created("2026-06-04T09:00:00Z")
+            .with_modified("2026-06-04T11:20:00Z");
+        let hpf = generate_content_hpf(&meta, 1, &[], &[], &[], &[]);
+        assert!(hpf.contains("<opf:title>Wave 12o 데모</opf:title>"));
+        assert!(hpf.contains(r#"<opf:meta name="creator" content="text">홍길동</opf:meta>"#));
+        assert!(
+            hpf.contains(r#"<opf:meta name="subject" content="text">자동 필드 진단</opf:meta>"#)
+        );
+        assert!(hpf.contains(
+            r#"<opf:meta name="description" content="text">longer description</opf:meta>"#
+        ));
+        assert!(hpf.contains(r#"<opf:meta name="lastsaveby" content="text">김편집</opf:meta>"#));
+        assert!(hpf.contains(
+            r#"<opf:meta name="CreatedDate" content="text">2026-06-04T09:00:00Z</opf:meta>"#
+        ));
+        assert!(hpf.contains(
+            r#"<opf:meta name="ModifiedDate" content="text">2026-06-04T11:20:00Z</opf:meta>"#
+        ));
+        // date is always self-closing (Hancom recomputes on save).
+        assert!(hpf.contains(r#"<opf:meta name="date" content="text"/>"#));
+        // keywords semicolon-joined into a single element (Q3 architect ans).
+        assert!(hpf.contains(r#"<opf:meta name="keyword" content="text">alpha;beta</opf:meta>"#));
+    }
+
+    /// `extras` entries emit in BTreeMap (alphabetical) order so encoder
+    /// output is byte-stable for round-trip diffs. Typed-slot collisions
+    /// (e.g. extras key "creator") are dropped — typed field is authoritative.
+    #[test]
+    fn metadata_extras_emit_alphabetical_and_skip_typed_collisions() {
+        let meta = Metadata::new()
+            .with_extra("zeta", "z")
+            .with_extra("alpha", "a")
+            .with_extra("creator", "should-not-overwrite-typed"); // typed-slot collision
+        let hpf = generate_content_hpf(&meta, 1, &[], &[], &[], &[]);
+        // creator extra is dropped — typed `author` (None) controls the slot.
+        assert!(hpf.contains(r#"<opf:meta name="creator" content="text"/>"#));
+        assert!(!hpf.contains("should-not-overwrite-typed"));
+        // alphabetical: alpha before zeta
+        let pos_alpha = hpf.find(r#"<opf:meta name="alpha""#).expect("alpha extra emitted");
+        let pos_zeta = hpf.find(r#"<opf:meta name="zeta""#).expect("zeta extra emitted");
+        assert!(pos_alpha < pos_zeta, "extras must emit in BTreeMap (alphabetical) order");
+        assert!(hpf.contains(r#"<opf:meta name="alpha" content="text">a</opf:meta>"#));
+        assert!(hpf.contains(r#"<opf:meta name="zeta" content="text">z</opf:meta>"#));
+    }
+
+    /// XML metacharacters in metadata values must be escaped, not raw.
+    /// Prevents XML injection through user-controlled metadata.
+    #[test]
+    fn metadata_escapes_xml_metacharacters() {
+        let meta = Metadata::new().with_title("<script>&amp;</script>");
+        let hpf = generate_content_hpf(&meta, 1, &[], &[], &[], &[]);
+        assert!(hpf.contains("&lt;script&gt;&amp;amp;&lt;/script&gt;"));
+        // Raw `<script>` must NOT leak through.
+        assert!(!hpf.contains("<script>"));
+    }
+
+    /// C0 control characters (other than tab/LF/CR) must be stripped
+    /// before escape. XML 1.0 rejects them entirely.
+    #[test]
+    fn metadata_strips_xml1_illegal_chars() {
+        let meta = Metadata::new().with_title("safe\u{0001}\u{0008}body\u{000B}more\u{FFFE}");
+        let hpf = generate_content_hpf(&meta, 1, &[], &[], &[], &[]);
+        // The control chars are gone, leaving the legitimate text.
+        assert!(hpf.contains("<opf:title>safebodymore</opf:title>"));
     }
 }

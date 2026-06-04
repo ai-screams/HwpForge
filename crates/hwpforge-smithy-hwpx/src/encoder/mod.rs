@@ -36,6 +36,52 @@ pub(crate) fn escape_xml(s: &str) -> String {
     result
 }
 
+/// Strips Unicode code points that are illegal in XML 1.0 character content.
+///
+/// Removes:
+/// - **C0 control characters** (U+0000 – U+001F) except `\t` (U+0009),
+///   `\n` (U+000A), and `\r` (U+000D)
+/// - **Unicode non-characters** U+FFFE / U+FFFF, which are explicitly
+///   forbidden by the XML 1.0 Character Range production
+///   (`#x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]`)
+/// - **Surrogate code points** U+D800 – U+DFFF cannot occur in a
+///   well-formed `&str` (Rust enforces valid UTF-8), so they are not
+///   explicitly checked but the documentation calls out the rejection
+///   contract.
+///
+/// This is a **separate** stage from [`escape_xml`]: escaping only handles
+/// metacharacters that have meaning inside well-formed XML, while this
+/// sanitizer rejects bytes that the parser would reject *before* any
+/// escaping applied. Apply this first when user-controlled string values
+/// flow into XML text content (e.g. document metadata).
+///
+/// Wave 12o architect review S1: separating concerns prevents the common
+/// foot-gun where `escape_xml` produces well-formed-looking output that a
+/// strict downstream parser still rejects.
+pub(crate) fn sanitize_xml_text(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\t' | '\n' | '\r' => result.push(ch),
+            '\u{0001}'..='\u{0008}'
+            | '\u{000B}'
+            | '\u{000C}'
+            | '\u{000E}'..='\u{001F}'
+            | '\u{FFFE}'
+            | '\u{FFFF}' => { /* strip */ }
+            _ => result.push(ch),
+        }
+    }
+    result
+}
+
+/// Convenience: sanitize then escape. Used by metadata writers where
+/// values flow straight from user-controlled `Metadata` fields into XML
+/// text content.
+pub(crate) fn escape_xml_text_safe(s: &str) -> String {
+    escape_xml(&sanitize_xml_text(s))
+}
+
 /// Returns `true` if the URL uses a safe scheme for hyperlinks.
 ///
 /// Only `http://`, `https://`, `mailto:`, and empty URLs are accepted.
@@ -111,6 +157,39 @@ pub(crate) fn normalize_hyperlink_url(url: &str) -> Option<String> {
 /// path traversal attacks (CWE-22) when the ZIP is extracted.
 pub(crate) fn sanitize_zip_entry_name(name: &str) -> String {
     name.split('/').filter(|c| !c.is_empty() && *c != "..").collect::<Vec<_>>().join("/")
+}
+
+#[cfg(test)]
+mod sanitize_xml_text_tests {
+    use super::sanitize_xml_text;
+
+    #[test]
+    fn allows_tab_lf_cr() {
+        assert_eq!(sanitize_xml_text("a\tb\nc\rd"), "a\tb\nc\rd");
+    }
+
+    #[test]
+    fn strips_c0_controls_except_tab_lf_cr() {
+        // U+0001 .. U+0008, U+000B, U+000C, U+000E .. U+001F all stripped.
+        let input = "x\u{0001}y\u{0008}z\u{000B}w\u{000C}v\u{000E}u\u{001F}t";
+        assert_eq!(sanitize_xml_text(input), "xyzwvut");
+    }
+
+    #[test]
+    fn strips_non_characters_fffe_ffff() {
+        assert_eq!(sanitize_xml_text("a\u{FFFE}b\u{FFFF}c"), "abc");
+    }
+
+    #[test]
+    fn preserves_korean_text() {
+        assert_eq!(sanitize_xml_text("안녕하세요 Wave 12o"), "안녕하세요 Wave 12o");
+    }
+
+    #[test]
+    fn preserves_xml_metachars() {
+        // Sanitization does NOT escape — that's escape_xml's job.
+        assert_eq!(sanitize_xml_text("<a&b>"), "<a&b>");
+    }
 }
 
 #[cfg(test)]
@@ -433,8 +512,10 @@ impl HwpxEncoder {
             image_store.iter().map(|(key, data)| (key.to_string(), data.to_vec())).collect();
 
         // Step 4: Package into ZIP with images, charts, master pages, and
-        // embedded-chart OLE blobs.
+        // embedded-chart OLE blobs. Document.metadata flows into content.hpf
+        // <opf:metadata> (Wave 12o Phase 1).
         PackageWriter::write_hwpx(
+            document.metadata(),
             &header_xml,
             &section_xmls,
             &images,
