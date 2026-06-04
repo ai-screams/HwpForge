@@ -38,16 +38,16 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
   - Wave 12i: `Dutmal` (덧말) `option` carry + flat-path `control_iter` filter (Core breaking: `option_raw`)
   - Wave 12j: `Compose` (글자겹침) carry + `char_pr_ids` fidelity + packed-variant 지원 (Core breaking)
   - Wave 12k: `IndexMark` (찾아보기) carry + `0x16` 인라인 marker 보존
-  - Wave 12l (latest): `Control::Field` (CLICK_HERE / 누름틀) carry + form-mode `name` 메타 carry — `Control::Field`에 `name: Option<String>` 추가 (Core breaking), HWP5 `%clk` ctrl_id + 트레일링 `0x57` (`TagId::CtrlData`) sub-record 페어링, HWPX encoder `Clickhere:set:N:` 자기 참조 N 공식 empirical 도출 (이전 하드코딩 `43` 수정), 32K command + 2K name allocation cap (DoS 방어)
-- Known still-deferred: richer strike/underline line families; Wave 5 gap C (masterPage carry — macOS 한컴 fixture 비대칭, PC 한컴 fixture 대기, task #33); multi-section / page-border-fill (fixture 미작성); 한컴-authored .hwpx의 multi-run span 디코딩 (편집 알고리즘 prerequisite, task #96)
+  - Wave 12l: `Control::Field` (CLICK_HERE / 누름틀) carry + form-mode `name` 메타 carry — `Control::Field`에 `name: Option<String>` 추가 (Core breaking), HWP5 `%clk` ctrl_id + 트레일링 `0x57` (`TagId::CtrlData`) sub-record 페어링, HWPX encoder `Clickhere:set:N:` 자기 참조 N 공식 empirical 도출 (이전 하드코딩 `43` 수정), 32K command + 2K name allocation cap (DoS 방어)
+  - Wave 12o (latest, 2026-06-04): Document metadata end-to-end carry — `Core::Metadata`에 `description`/`last_saved_by`/`extras: BTreeMap` 추가 + `#[non_exhaustive]` (Core breaking, builder API `Metadata::new().with_*()`), HWPX encoder가 `content.hpf <opf:metadata>` 9-slot byte-parity 형식 emit, HWPX decoder가 `Contents/content.hpf` 파싱하고 `Document.metadata` 채움 (XXE/billion-laughs/depth-cap 방어), HWP5 decoder가 `\x05HwpSummaryInformation` OLE2 PropertySet 디코딩 (VT_LPSTR/VT_LPWSTR/VT_FILETIME + Hancom custom PID 0x14/0x15, FILETIME→ISO 8601 hand-rolled). 검증: `$title`/`$author`/`$createtime`/`$modifiedtime`/`$lastsaveby` 모두 한컴 저장 시 재평가되어 native 값 표시 확인 (G6/G7 PASS).
+- Known still-deferred: richer strike/underline line families; Wave 5 gap C (masterPage carry — macOS 한컴 fixture 비대칭, PC 한컴 fixture 대기, task #33); multi-section / page-border-fill (fixture 미작성); 한컴-authored .hwpx의 multi-run span 디코딩 (편집 알고리즘 prerequisite, task #96); Wave 12n leftover ($P$F PATH 필드, outline level off-by-1, linesegarray drop, editable bit propagation — tasks #120~#124, 한컴 '낮은 보안수준 복구' 경고의 보조 트리거)
 
-**Workspace Facts (code-grounded, 2026-06-02)**:
+**Workspace Facts (code-grounded, 2026-06-04 Wave 12o)**:
 
 - Cargo packages: `10`
-- Workspace version: `0.6.0` (Unreleased — bumped from `0.5.2` for ADR-002 breaking + Wave 12 series breakings)
-- Tracked Rust `src` files under `crates/`: `146`
-- Tracked Rust `src` LOC under `crates/`: `100,796`
-- Workspace nextest count: `2,365` (passed) + `2` skipped
+- Workspace version: `0.6.0` (Unreleased — bumped from `0.5.2` for ADR-002 + Wave 12 series + Wave 12o `#[non_exhaustive] Metadata` breaking)
+- Tracked Rust `src` files under `crates/`: `147` (+1: `summary_info.rs`)
+- Workspace nextest count: `2,441` (passed) + `2` skipped (+76 from Wave 12o phases)
 - Example artifact files under `examples/`: `67`+ (gitignored `examples/hwp5_review/` 리뷰 영역 별도)
 - GitHub workflow files: `5`
 - MSRV: `1.88`
