@@ -2799,6 +2799,132 @@ mod tests {
         assert!(ui_ctrl.is_some(), "SUMMERY/$lastsaveby must decode as FieldType::LastSavedBy");
     }
 
+    // ── Wave 12n Phase 2 Step 7 — decoder fallback / Title gates ────
+
+    #[test]
+    fn serde_field_summery_title() {
+        // Wave 12n new token: $title → FieldType::Title. Without this
+        // gate, a future decoder refactor could silently drop the
+        // mapping and downgrade titles to UnknownSummery.
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <fieldBegin id="0" type="SUMMERY" name="" editable="1" dirty="0" zorder="-1" fieldid="628321650" metaTag="">
+                            <parameters cnt="3" name="">
+                                <integerParam name="Prop">8</integerParam>
+                                <stringParam name="Command">$title</stringParam>
+                                <stringParam name="Property">$title</stringParam>
+                            </parameters>
+                        </fieldBegin>
+                    </ctrl>
+                    <t> </t>
+                    <ctrl><fieldEnd beginIDRef="0" fieldid="628321650"/></ctrl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let controls = find_controls(&result);
+        let title_ctrl = controls.iter().find(|c| {
+            matches!(c, hwpforge_core::Control::Field { field_type, .. }
+                if *field_type == hwpforge_foundation::FieldType::Title)
+        });
+        assert!(title_ctrl.is_some(), "SUMMERY/$title must decode as FieldType::Title");
+    }
+
+    #[test]
+    fn serde_field_summery_unknown_token_falls_back() {
+        // Unknown SUMMERY tokens must NOT be silently dropped — they
+        // carry through as UnknownSummery so round-trips preserve the
+        // original $token (see encoder/section.rs lossy_unknown_summery_*).
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <fieldBegin id="0" type="SUMMERY" name="" editable="1" dirty="0" zorder="-1" fieldid="628321650" metaTag="">
+                            <parameters cnt="3" name="">
+                                <integerParam name="Prop">8</integerParam>
+                                <stringParam name="Command">$company</stringParam>
+                                <stringParam name="Property">$company</stringParam>
+                            </parameters>
+                        </fieldBegin>
+                    </ctrl>
+                    <t> </t>
+                    <ctrl><fieldEnd beginIDRef="0" fieldid="628321650"/></ctrl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let controls = find_controls(&result);
+        let unknown =
+            controls.iter().find(|c| matches!(c, hwpforge_core::Control::UnknownSummery { .. }));
+        assert!(unknown.is_some(), "unknown SUMMERY token must fall back to UnknownSummery");
+        if let Some(hwpforge_core::Control::UnknownSummery { token }) = unknown {
+            assert_eq!(token, "$company", "raw $token must be preserved verbatim");
+        }
+    }
+
+    #[test]
+    fn serde_field_autonum_total_page() {
+        // Wave 12n architect review CRITICAL gate: numType="TOTAL_PAGE"
+        // must NOT collapse to CurrentPage. raw_flag mirrors the
+        // hardcoded mapping (0x06) so encoder→decoder lossless tests
+        // can pin equality.
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <autoNum num="2" numType="TOTAL_PAGE">
+                            <autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar="" supscript="0"/>
+                        </autoNum>
+                    </ctrl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let controls = find_controls(&result);
+        let total = controls.iter().find(|c| {
+            matches!(
+                c,
+                hwpforge_core::Control::InlinePageNumber {
+                    kind: hwpforge_core::control::InlinePageKind::TotalPages,
+                    ..
+                }
+            )
+        });
+        assert!(
+            total.is_some(),
+            "autoNum TOTAL_PAGE must produce InlinePageNumber{{TotalPages}} (NOT CurrentPage)"
+        );
+    }
+
+    #[test]
+    fn serde_field_autonum_unknown_num_type_skipped() {
+        // Unknown numType (e.g. FOOTNOTE) must not fabricate a
+        // CurrentPage InlinePageNumber. Decoder silently skips so the
+        // semantic is not invented; matches the encoder skip path for
+        // InlinePageKind::Unknown.
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <autoNum num="3" numType="FOOTNOTE">
+                            <autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar="" supscript="0"/>
+                        </autoNum>
+                    </ctrl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let controls = find_controls(&result);
+        let page =
+            controls.iter().find(|c| matches!(c, hwpforge_core::Control::InlinePageNumber { .. }));
+        assert!(
+            page.is_none(),
+            "unknown autoNum numType must not produce InlinePageNumber (no fabrication)"
+        );
+    }
+
     #[test]
     fn serde_field_crossref() {
         let xml = r#"<sec>

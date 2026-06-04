@@ -4484,6 +4484,140 @@ mod tests {
         }
     }
 
+    // ── Wave 12n Phase 2 Step 7 — LOSSLESS round-trip gates ────────
+    //
+    // These pin the lossless-by-design path for the 5 SUMMERY tokens
+    // and the 2 inline page-number kinds. They force the encoder
+    // emission and the decoder parse to agree on the wire format —
+    // if either side desyncs (e.g. encoder emits a new SUMMERY token
+    // the decoder does not recognize, or decoder maps autoNum
+    // numType="TOTAL_PAGE" to the wrong kind), one of these flips
+    // before the encoder/decoder ship as a pair.
+    //
+    // `raw_flag` values mirror the decoder's hardcoded mapping
+    // (PAGE → 0, TOTAL_PAGE → 0x06 — see decoder/section.rs around
+    // line 423). The encoder discards `raw_flag` on emission, so the
+    // round-trip is lossless only when the input matches what the
+    // decoder fabricates on parse.
+
+    #[test]
+    fn roundtrip_summery_author_lossless() {
+        use hwpforge_core::control::Control;
+        use hwpforge_foundation::FieldType;
+        let ctrl = Control::Field {
+            field_type: FieldType::Author,
+            hint_text: None,
+            help_text: None,
+            name: None,
+        };
+        let decoded = lossy_roundtrip_decode_first_control(ctrl.clone());
+        assert_eq!(decoded, ctrl, "SUMMERY $author must round-trip lossless");
+    }
+
+    #[test]
+    fn roundtrip_summery_lastsavedby_lossless() {
+        use hwpforge_core::control::Control;
+        use hwpforge_foundation::FieldType;
+        let ctrl = Control::Field {
+            field_type: FieldType::LastSavedBy,
+            hint_text: None,
+            help_text: None,
+            name: None,
+        };
+        let decoded = lossy_roundtrip_decode_first_control(ctrl.clone());
+        assert_eq!(decoded, ctrl, "SUMMERY $lastsaveby must round-trip lossless");
+    }
+
+    #[test]
+    fn roundtrip_summery_createdtime_lossless() {
+        use hwpforge_core::control::Control;
+        use hwpforge_foundation::FieldType;
+        let ctrl = Control::Field {
+            field_type: FieldType::CreatedTime,
+            hint_text: None,
+            help_text: None,
+            name: None,
+        };
+        let decoded = lossy_roundtrip_decode_first_control(ctrl.clone());
+        assert_eq!(decoded, ctrl, "SUMMERY $createtime must round-trip lossless");
+    }
+
+    #[test]
+    fn roundtrip_summery_modifiedtime_lossless() {
+        use hwpforge_core::control::Control;
+        use hwpforge_foundation::FieldType;
+        let ctrl = Control::Field {
+            field_type: FieldType::ModifiedTime,
+            hint_text: None,
+            help_text: None,
+            name: None,
+        };
+        let decoded = lossy_roundtrip_decode_first_control(ctrl.clone());
+        assert_eq!(decoded, ctrl, "SUMMERY $modifiedtime must round-trip lossless");
+    }
+
+    #[test]
+    fn roundtrip_summery_title_lossless() {
+        // Wave 12n new: Title was added to FieldType in Step 1.
+        // No emission-only or parse-only test covers it; this is the
+        // sole gate ensuring encoder ↔ decoder agree on `$title`.
+        use hwpforge_core::control::Control;
+        use hwpforge_foundation::FieldType;
+        let ctrl = Control::Field {
+            field_type: FieldType::Title,
+            hint_text: None,
+            help_text: None,
+            name: None,
+        };
+        let decoded = lossy_roundtrip_decode_first_control(ctrl.clone());
+        assert_eq!(decoded, ctrl, "SUMMERY $title must round-trip lossless");
+    }
+
+    #[test]
+    fn roundtrip_inline_pagenumber_currentpage_lossless() {
+        use hwpforge_core::control::{Control, InlinePageKind};
+        let ctrl = Control::InlinePageNumber { kind: InlinePageKind::CurrentPage, raw_flag: 0 };
+        let decoded = lossy_roundtrip_decode_first_control(ctrl.clone());
+        assert_eq!(decoded, ctrl, "autoNum PAGE must round-trip lossless");
+    }
+
+    #[test]
+    fn roundtrip_inline_pagenumber_totalpages_lossless() {
+        // Wave 12n architect review CRITICAL gate: TotalPages must not
+        // collapse to CurrentPage in either direction. Encoder emits
+        // numType="TOTAL_PAGE"; decoder maps it back to TotalPages
+        // with raw_flag 0x06.
+        use hwpforge_core::control::{Control, InlinePageKind};
+        let ctrl = Control::InlinePageNumber { kind: InlinePageKind::TotalPages, raw_flag: 0x06 };
+        let decoded = lossy_roundtrip_decode_first_control(ctrl.clone());
+        assert_eq!(decoded, ctrl, "autoNum TOTAL_PAGE must round-trip lossless");
+    }
+
+    #[test]
+    fn roundtrip_inline_pagenumber_unknown_emits_no_autonum() {
+        // Encoder skip path: InlinePageNumber{Unknown} must not
+        // fabricate an autoNum. Decoder therefore sees no control.
+        // If anyone collapses Unknown → CurrentPage, this flips.
+        use hwpforge_core::control::{Control, InlinePageKind};
+        let ctrl = Control::InlinePageNumber { kind: InlinePageKind::Unknown, raw_flag: 0 };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
+        // Note: `<hp:autoNumFormat>` is emitted unconditionally inside
+        // `<hp:footNotePr>` / `<hp:endNotePr>` and is unrelated to
+        // inline page numbers. Match the exact inline element form
+        // `<hp:autoNum num=…>` instead.
+        assert!(
+            !xml.contains("<hp:autoNum num="),
+            "InlinePageNumber{{Unknown}} must NOT emit <hp:autoNum num=...> (no fabrication)",
+        );
+    }
+
     /// Pins the `Clickhere:set:N:` self-referential N formula against
     /// the seven press-field instances observed across Wave 12l native
     /// fixtures. If the formula or the `rest` template ever drifts,
