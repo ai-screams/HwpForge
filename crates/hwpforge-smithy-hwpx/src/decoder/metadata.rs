@@ -160,19 +160,29 @@ impl ParserState {
 
     /// S3 — namespace confusion: any element inside `<opf:metadata>`
     /// must use the `opf` prefix.
+    ///
+    /// Codex(architect) Wave 12o-fixup §S3-namespace-guard: the prior
+    /// implementation used `if let Some(p) = name.prefix()` which only
+    /// triggered when a prefix was present. Bare `<title>` / `<meta>`
+    /// elements (no prefix) bypassed the gate entirely, so a hostile
+    /// `content.hpf` could shadow the `<opf:title>` slot with an
+    /// unprefixed sibling and still pass the typed-name router. Reject
+    /// any non-`opf` prefix, including the absent-prefix case.
     fn enforce_namespace(&self, name: QName) -> HwpxResult<()> {
         if !self.stack.iter().any(|k| matches!(k, ElementKind::Metadata)) {
             return Ok(());
         }
-        if let Some(p) = name.prefix().map(|p| p.into_inner()) {
-            if p != b"opf" {
-                return Err(structure(format!(
-                    "content.hpf: unexpected namespace prefix {:?} inside <opf:metadata>",
-                    std::str::from_utf8(p).unwrap_or("?"),
-                )));
-            }
+        match name.prefix().map(|p| p.into_inner()) {
+            Some(b"opf") => Ok(()),
+            Some(p) => Err(structure(format!(
+                "content.hpf: unexpected namespace prefix {:?} inside <opf:metadata>",
+                std::str::from_utf8(p).unwrap_or("?"),
+            ))),
+            None => Err(structure(format!(
+                "content.hpf: missing `opf:` prefix on {:?} inside <opf:metadata>",
+                std::str::from_utf8(name.local_name().into_inner()).unwrap_or("?"),
+            ))),
         }
-        Ok(())
     }
 
     fn on_text(&mut self, text: &str) -> HwpxResult<()> {
@@ -443,6 +453,53 @@ mod tests {
         );
         let err = parse_content_hpf_metadata(&xml).unwrap_err();
         assert!(format!("{err}").contains("namespace prefix"));
+    }
+
+    /// Codex(architect) Wave 12o-fixup §S3-namespace-guard: unprefixed
+    /// elements inside `<opf:metadata>` (e.g. `<title>` without the
+    /// `opf:` prefix) used to bypass the typed-name router. Reject
+    /// them so a hostile / malformed `content.hpf` cannot shadow the
+    /// typed slots.
+    #[test]
+    fn unprefixed_element_inside_metadata_rejected() {
+        let xml =
+            format!("{WRAPPER_START}<opf:metadata><title>x</title></opf:metadata>{WRAPPER_END}");
+        let err = parse_content_hpf_metadata(&xml).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("missing `opf:` prefix") || msg.contains("opf"),
+            "expected unprefixed reject, got: {msg}",
+        );
+    }
+
+    /// Codex(architect) Wave 12o-fixup §Top-2: a Hancom-authored
+    /// `content.hpf` that emits a populated `<opf:meta name="date">`
+    /// must round-trip through the encoder without the value being
+    /// dropped at the typed-collision guard. The encoder now emits
+    /// `extras["date"]` at the canonical 9-slot position rather than
+    /// (a) always self-closing and (b) silently dropping the carry.
+    #[test]
+    fn date_extras_roundtrip_preserves_value() {
+        use crate::encoder::package as enc;
+        let xml = format!(
+            "{WRAPPER_START}<opf:metadata><opf:meta name=\"date\" content=\"text\">2026년 6월 4일 목요일 오후 4:47:38</opf:meta></opf:metadata>{WRAPPER_END}",
+        );
+        let decoded = parse_content_hpf_metadata(&xml).unwrap();
+        assert_eq!(
+            decoded.extras.get("date").map(String::as_str),
+            Some("2026년 6월 4일 목요일 오후 4:47:38"),
+        );
+        let block = enc::build_metadata_block_for_test(&decoded);
+        assert!(
+            block.contains(
+                r#"<opf:meta name="date" content="text">2026년 6월 4일 목요일 오후 4:47:38</opf:meta>"#
+            ),
+            "encoder must emit extras['date'] at canonical slot, got: {block}",
+        );
+        // And the second decode must observe the same value (no drift).
+        let xml2 = format!("{WRAPPER_START}{block}{WRAPPER_END}");
+        let decoded2 = parse_content_hpf_metadata(&xml2).unwrap();
+        assert_eq!(decoded2.extras.get("date"), decoded.extras.get("date"));
     }
 
     #[test]

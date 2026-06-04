@@ -199,8 +199,14 @@ fn build_metadata_block(meta: &Metadata) -> String {
     push_meta(&mut out, "CreatedDate", meta.created.as_deref());
     push_meta(&mut out, "ModifiedDate", meta.modified.as_deref());
 
-    // date — always empty; Hancom recomputes on save.
-    out.push_str(r#"<opf:meta name="date" content="text"/>"#);
+    // date — Hancom recomputes on save for most flows, but if a decoder
+    //         (HWPX → HWPX round-trip) parked a non-empty value in
+    //         extras["date"], honor it at the canonical 9-slot position
+    //         rather than dropping it through the typed-collision guard
+    //         below (Codex(architect) Wave 12o-fixup §Top-2, Option A
+    //         수정형). `creator`/`subject`/... stay reserved for the
+    //         typed `Metadata` fields.
+    push_meta(&mut out, "date", meta.extras.get("date").map(String::as_str));
 
     // keyword — semicolon-joined into a single element.
     if meta.keywords.is_empty() {
@@ -217,6 +223,13 @@ fn build_metadata_block(meta: &Metadata) -> String {
     // extras — BTreeMap ordering (alphabetical). Slot guard: reject any
     // key that collides with a typed slot (defense in depth — decoder
     // promotes known names to typed fields).
+    //
+    // Codex(architect) Wave 12o-fixup §Top-2: `date` is intentionally
+    // NOT in the reserved list — extras["date"] is the canonical
+    // carry slot for the Hancom display-date string and is already
+    // emitted at the fixed 9-slot position above. Including it here
+    // would cause a duplicate `<opf:meta name="date">` element and
+    // break 9-slot byte parity.
     for (k, v) in &meta.extras {
         if matches!(
             k.as_str(),
@@ -226,9 +239,11 @@ fn build_metadata_block(meta: &Metadata) -> String {
                 | "lastsaveby"
                 | "CreatedDate"
                 | "ModifiedDate"
-                | "date"
                 | "keyword"
         ) {
+            continue;
+        }
+        if k == "date" {
             continue;
         }
         let safe_key = escape_xml_text_safe(k);

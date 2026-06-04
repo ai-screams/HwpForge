@@ -117,10 +117,19 @@ pub fn parse_summary_information(bytes: &[u8]) -> Hwp5Result<Metadata> {
         });
     }
 
-    // 3. Section start offset (typically 0x30).
+    // 3. Section start offset (typically 0x30). Codex(architect) Wave
+    //    12o-fixup §Top-1: `sec_start + 8` was unchecked `usize` add — on
+    //    32-bit/wasm targets a `u32`-derived `sec_start >= 0xFFFFFFF8`
+    //    wraps before the bounds check fires and lands in a panicking
+    //    slice. Use `checked_add` + `bytes.get(..)` so a malformed
+    //    OLE2 header always exits via `Hwp5Error::RecordParse`.
     let sec_start =
         u32::from_le_bytes([bytes[0x2c], bytes[0x2d], bytes[0x2e], bytes[0x2f]]) as usize;
-    if sec_start + 8 > bytes.len() {
+    let sec_end = sec_start.checked_add(8).ok_or_else(|| Hwp5Error::RecordParse {
+        offset: 0,
+        detail: format!("HwpSummaryInformation: section start {sec_start:#x} overflow"),
+    })?;
+    if sec_end > bytes.len() {
         return Err(Hwp5Error::RecordParse {
             offset: 0,
             detail: format!(
@@ -129,8 +138,13 @@ pub fn parse_summary_information(bytes: &[u8]) -> Hwp5Result<Metadata> {
             ),
         });
     }
-
-    let section = &bytes[sec_start..];
+    let section = bytes.get(sec_start..).ok_or_else(|| Hwp5Error::RecordParse {
+        offset: 0,
+        detail: format!(
+            "HwpSummaryInformation: section slice {sec_start:#x} past stream end {}",
+            bytes.len()
+        ),
+    })?;
     parse_section(section)
 }
 
@@ -491,6 +505,30 @@ mod tests {
         buf[1] = 0xBB;
         let err = parse_summary_information(&buf).unwrap_err();
         assert!(format!("{err}").contains("BOM"));
+    }
+
+    /// Codex(architect) Wave 12o-fixup §Top-1: a `u32`-derived `sec_start`
+    /// near `usize::MAX` (only possible on 32-bit/wasm targets) must
+    /// exit via `Hwp5Error::RecordParse` rather than panic on
+    /// `checked_add` or slice-index overflow. We can't actually
+    /// reproduce the 32-bit wrap path on a 64-bit host, but we can
+    /// still verify that a `sec_start` past `bytes.len()` is rejected
+    /// before any slice op — the same guard catches both cases.
+    #[test]
+    fn section_start_past_eof_rejected() {
+        // Minimal 0x30-byte header with section_count=1 and
+        // sec_start=0xDEAD (well past the 0x30 buffer length).
+        let mut buf = vec![0u8; 0x30];
+        buf[0] = (BOM_LE & 0xff) as u8;
+        buf[1] = (BOM_LE >> 8) as u8;
+        buf[0x18..0x1c].copy_from_slice(&1u32.to_le_bytes());
+        buf[0x2c..0x30].copy_from_slice(&0xDEADu32.to_le_bytes());
+        let err = parse_summary_information(&buf).unwrap_err();
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("past stream end") || msg.contains("overflow"),
+            "expected overflow guard, got: {msg}",
+        );
     }
 
     /// Builds a minimal valid PropertySet stream carrying the supplied

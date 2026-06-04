@@ -202,11 +202,20 @@ impl Hwp5Decoder {
         let intermediate = decode_intermediate(bytes)?;
         let image_assets = crate::join_hwp5_image_assets(bytes, &intermediate)?;
         let mut warnings = intermediate.warnings;
+        let metadata = intermediate.metadata;
 
         // Stage 4: Projection — HWP5 IR → Core Document
-        let (document, image_store, proj_warnings) =
+        let (mut document, image_store, proj_warnings) =
             crate::projection::project_to_core_with_images(intermediate.sections, &image_assets)?;
         warnings.extend(proj_warnings);
+
+        // Codex(architect) Wave 12o-fixup §Top-4: forward
+        // `\x05HwpSummaryInformation` derived metadata so the canonical
+        // entry point honors the same wire contract as
+        // `decode_hwp5_with_images` / `hwp5_to_hwpx_bytes`. Without
+        // this the public API silently dropped metadata for any
+        // caller using `Hwp5Decoder::decode` directly (CLI/MCP/tests).
+        document.set_metadata(metadata);
 
         Ok(Hwp5Document { document, image_store, warnings })
     }
