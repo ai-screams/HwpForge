@@ -547,8 +547,10 @@ pub fn decode_hwp5_with_images(bytes: &[u8]) -> Hwp5Result<Hwp5Document> {
     let intermediate = decoder::decode_intermediate(bytes)?;
     let image_assets = join_hwp5_image_assets(bytes, &intermediate)?;
     let mut warnings = intermediate.warnings;
-    let (document, image_store, proj_warnings) =
+    let metadata = intermediate.metadata;
+    let (mut document, image_store, proj_warnings) =
         projection::project_to_core_with_images(intermediate.sections, &image_assets)?;
+    document.set_metadata(metadata);
     warnings.extend(proj_warnings);
 
     Ok(Hwp5Document { document, image_store, warnings })
@@ -616,17 +618,22 @@ pub fn hwp5_to_hwpx_bytes(bytes: &[u8]) -> Hwp5Result<(Vec<u8>, Vec<Hwp5Warning>
     let ole_assets = join_hwp5_ole_assets(bytes, &intermediate)?;
     let layout_hints = layout_hint_patch::capture_layout_hints(&intermediate.sections);
     let mut warnings = intermediate.warnings;
+    // Wave 12o Phase 3 — forward HWP5 SummaryInformation metadata into
+    // the projected Core Document so the downstream HWPX encoder emits
+    // a populated `<opf:metadata>` block.
+    let metadata = intermediate.metadata;
 
     let (hwp5_styles, hwpx_style_store, style_warnings) =
         project_doc_info_styles_with_warnings(&intermediate.doc_info);
     warnings.extend(style_warnings);
 
-    let (document, mut image_store, proj_warnings) =
+    let (mut document, mut image_store, proj_warnings) =
         projection::project_to_core_with_images_and_ole(
             intermediate.sections,
             &image_assets,
             &ole_assets,
         )?;
+    document.set_metadata(metadata);
     warnings.extend(proj_warnings);
     supplement_border_fill_image_assets(
         &hwp5_styles,
@@ -1171,6 +1178,7 @@ mod tests {
                 page_border_fills: Vec::new(),
                 warnings: vec![],
             }],
+            metadata: hwpforge_core::metadata::Metadata::default(),
             warnings: vec![],
         };
 

@@ -105,6 +105,10 @@ pub(crate) struct DecodedHwp5Intermediate {
     pub doc_info: DocInfoResult,
     /// Parsed `BodyText/Section{N}` results.
     pub sections: Vec<SectionResult>,
+    /// Document metadata parsed from `\x05HwpSummaryInformation`
+    /// (Wave 12o Phase 3). Empty `Metadata::default()` when the stream
+    /// is absent or undecodable.
+    pub metadata: hwpforge_core::metadata::Metadata,
     /// Non-fatal warnings collected during parsing.
     pub warnings: Vec<Hwp5Warning>,
 }
@@ -135,6 +139,27 @@ pub(crate) fn decode_intermediate(bytes: &[u8]) -> Hwp5Result<DecodedHwp5Interme
         sections.push(result);
     }
 
+    // Wave 12o Phase 3: parse \x05HwpSummaryInformation PropertySet
+    // when present. Errors are demoted to warnings + empty metadata so
+    // a malformed summary stream cannot break the body-text decode
+    // path (the user-visible content is far more important than the
+    // metadata sidecar).
+    let metadata = match pkg.summary_info_data() {
+        Some(raw) => match crate::schema::summary_info::parse_summary_information(raw) {
+            Ok(m) => m,
+            Err(e) => {
+                warnings.push(Hwp5Warning::ParserFallback {
+                    subject: "hwp_summary_information",
+                    reason: format!(
+                        "HwpSummaryInformation parse failed ({e}); using default metadata"
+                    ),
+                });
+                hwpforge_core::metadata::Metadata::default()
+            }
+        },
+        None => hwpforge_core::metadata::Metadata::default(),
+    };
+
     Ok(DecodedHwp5Intermediate {
         version: pkg.file_header().version.to_string(),
         compressed: pkg.file_header().flags.compressed,
@@ -143,6 +168,7 @@ pub(crate) fn decode_intermediate(bytes: &[u8]) -> Hwp5Result<DecodedHwp5Interme
         bin_data_streams,
         doc_info,
         sections,
+        metadata,
         warnings,
     })
 }

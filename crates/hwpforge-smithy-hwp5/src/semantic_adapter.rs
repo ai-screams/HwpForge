@@ -1336,6 +1336,7 @@ mod tests {
                 page_border_fills: Vec::new(),
                 warnings: Vec::new(),
             }],
+            metadata: hwpforge_core::metadata::Metadata::default(),
             warnings: Vec::new(),
         };
 
@@ -1479,6 +1480,7 @@ mod tests {
                 page_border_fills: Vec::new(),
                 warnings: Vec::new(),
             }],
+            metadata: hwpforge_core::metadata::Metadata::default(),
             warnings: Vec::new(),
         };
 
@@ -1519,6 +1521,7 @@ mod tests {
                 page_border_fills: Vec::new(),
                 warnings: Vec::new(),
             }],
+            metadata: hwpforge_core::metadata::Metadata::default(),
             warnings: Vec::new(),
         };
 
@@ -1560,6 +1563,7 @@ mod tests {
                 page_border_fills: Vec::new(),
                 warnings: Vec::new(),
             }],
+            metadata: hwpforge_core::metadata::Metadata::default(),
             warnings: Vec::new(),
         };
 
@@ -1613,6 +1617,7 @@ mod tests {
                 page_border_fills: Vec::new(),
                 warnings: Vec::new(),
             }],
+            metadata: hwpforge_core::metadata::Metadata::default(),
             warnings: Vec::new(),
         };
 
@@ -1694,6 +1699,7 @@ mod tests {
                 page_border_fills: Vec::new(),
                 warnings: Vec::new(),
             }],
+            metadata: hwpforge_core::metadata::Metadata::default(),
             warnings: Vec::new(),
         };
 
@@ -1754,6 +1760,7 @@ mod tests {
                 page_border_fills: Vec::new(),
                 warnings: Vec::new(),
             }],
+            metadata: hwpforge_core::metadata::Metadata::default(),
             warnings: Vec::new(),
         };
 

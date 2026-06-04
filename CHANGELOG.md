@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Wave 12o Phase 3 — HWP5 SummaryInformation OLE2 PropertySet decoder
+
+#### Added — HWP5 decoder
+
+- New module `crate::schema::summary_info` parses the
+  `\x05HwpSummaryInformation` OLE2 PropertySet stream (standard MS
+  Office layout) into a populated [`Metadata`](Phase 0) struct.
+- `PackageReader` now reads the summary stream alongside the other
+  OLE2 sub-streams. Missing or undecodable summary downgrades to
+  `Metadata::default()` with a `ParserFallback` warning (never fatal).
+- `DecodedHwp5Intermediate` gains a `metadata` field; both
+  `decode_hwp5_with_images` and `hwp5_to_hwpx_bytes` forward it into
+  the projected `Document` via `Document::set_metadata`.
+
+#### Wire mapping (PropertySet PIDs → Core Metadata)
+
+- PID 2 (TITLE) → `title`
+- PID 3 (SUBJECT) → `subject`
+- PID 4 (AUTHOR) → `author`
+- PID 5 (KEYWORDS) → `keywords` (semicolon-split)
+- PID 6 (COMMENTS) → `description`
+- PID 8 (LASTAUTHOR) → `last_saved_by`
+- PID 0x0C (LASTSAVEDTIME, VT_FILETIME) → `modified` (ISO 8601)
+- PID 0x0D (CREATEDTIME, VT_FILETIME) → `created` (ISO 8601)
+- PID 0x14 (Hancom custom date display string) → `extras["date"]`
+- PID 0x15 (Hancom custom app name) → `extras["appname"]`
+- Unknown PIDs → `extras["pid_<hex>"]` (preserves wire bytes)
+
+#### Security (Wave 12o architect review §11.2 M3/M4 + §11.4 S2/S7)
+
+- M3 — slots into Schema stage (no new pipeline stage).
+- M4 — FILETIME → ISO 8601 hand-rolled (no `chrono` dependency added).
+  Sub-second precision discarded to match Hancom wire (seconds).
+  Year > 9999 and FILETIME = 0 yield `None`.
+- S2 — property table monotonic-offset enforcement rejects classic
+  PropertySet payload-cycle DoS.
+- S7 — explicit UTF-16LE BOM strip from VT_LPWSTR payloads.
+- Allocation caps: per-property body ≤ 64 KiB, property count ≤ 256.
+
 ### Wave 12o Phase 2 — HWPX decoder `content.hpf` metadata parser + XXE/DoS defenses
 
 #### Added — HWPX decoder

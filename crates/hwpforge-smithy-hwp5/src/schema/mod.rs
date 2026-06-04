@@ -10,3 +10,4 @@ pub mod border_fill;
 pub mod header;
 pub mod record;
 pub mod section;
+pub mod summary_info;
