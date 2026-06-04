@@ -279,8 +279,7 @@ fn write_case(
     registry: &StyleRegistry,
     image_store: &ImageStore,
 ) {
-    let mut doc =
-        Document::with_metadata(Metadata { title: Some(title.to_string()), ..Metadata::default() });
+    let mut doc = Document::with_metadata(Metadata::new().with_title(title));
     doc.add_section(Section::with_paragraphs(paragraphs, PageSettings::a4()));
     let bridge = HwpxRegistryBridge::from_registry(registry).expect("build registry bridge");
     let rebound = bridge.rebind_draft_document(doc).expect("rebind generated document");

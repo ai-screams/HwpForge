@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Wave 12o Phase 0 — Document Metadata Core breaking
+
+#### Changed (BREAKING — public API)
+
+- `core::metadata::Metadata` gains three new fields and is now annotated
+  `#[non_exhaustive]`. This is ADR-003 in the 0.6.0 break window. External
+  callers can no longer construct `Metadata` with a struct literal; use the
+  new `Metadata::new()` seed plus the chainable
+  `.with_title()`/`.with_author()`/`.with_subject()`/`.with_description()`/
+  `.with_last_saved_by()`/`.with_keywords()`/`.with_created()`/
+  `.with_modified()`/`.with_extra()` builder methods.
+- New `Metadata::description: Option<String>` — corresponds to HWPX
+  `<opf:meta name="description">`. Distinct from `subject` (Hancom stores
+  them in separate slots).
+- New `Metadata::last_saved_by: Option<String>` — corresponds to HWPX
+  `<opf:meta name="lastsaveby">` and the `$lastsaveby` SUMMERY auto-field
+  (Wave 12n). Distinct from `author` (`creator`).
+- New `Metadata::extras: BTreeMap<String, String>` — lossless carry slot
+  for `<opf:meta>` keys not yet promoted to typed fields. Deterministic
+  ordering for byte-stable encoder output.
+- Rationale: HwpForge-emitted `content.hpf` had hardcoded `<opf:title/>`
+  with all other metadata fields empty, causing Hancom Office to overwrite
+  SUMMERY auto-field values (e.g. `$title`) with fallback text on save.
+  Wave 12n's `Control::Field` (Author/LastSavedBy/CreatedTime/
+  ModifiedTime/Title) auto-fields need a populated metadata source to
+  resolve to user-intended values. Phases 1–4 (HWPX encoder/decoder,
+  HWP5 SummaryInformation) wire the carry end-to-end.
+
 ### Phase 12l — Control::Field `name` carry (Core + HWPX + HWP5)
 
 #### Changed (BREAKING — public API)

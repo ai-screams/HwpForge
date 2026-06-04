@@ -44,11 +44,9 @@ fn minimal_valid_document() -> Document<Draft> {
 #[test]
 fn lifecycle_create_validate_serialize_deserialize_revalidate() {
     // Create
-    let mut doc = Document::with_metadata(Metadata {
-        title: Some("Lifecycle Test".to_string()),
-        author: Some("Test Author".to_string()),
-        ..Metadata::default()
-    });
+    let mut doc = Document::with_metadata(
+        Metadata::new().with_title("Lifecycle Test").with_author("Test Author"),
+    );
     doc.add_section(simple_section("First section"));
     doc.add_section(simple_section("Second section"));
 
@@ -73,12 +71,12 @@ fn lifecycle_create_validate_serialize_deserialize_revalidate() {
 
 #[test]
 fn lifecycle_complex_document_with_all_content_types() {
-    let mut doc = Document::with_metadata(Metadata {
-        title: Some("Complex Document".to_string()),
-        keywords: vec!["test".to_string(), "complex".to_string()],
-        created: Some("2026-02-07T10:00:00Z".to_string()),
-        ..Metadata::default()
-    });
+    let mut doc = Document::with_metadata(
+        Metadata::new()
+            .with_title("Complex Document")
+            .with_keywords(["test", "complex"])
+            .with_created("2026-02-07T10:00:00Z"),
+    );
 
     // Section 1: Mixed content
     let cell =
@@ -277,11 +275,8 @@ fn text_extraction_multi_run_paragraph() {
 
 #[test]
 fn korean_document_lifecycle() {
-    let mut doc = Document::with_metadata(Metadata {
-        title: Some("한글 문서".to_string()),
-        author: Some("김철수".to_string()),
-        ..Metadata::default()
-    });
+    let mut doc =
+        Document::with_metadata(Metadata::new().with_title("한글 문서").with_author("김철수"));
     doc.add_section(Section::with_paragraphs(
         vec![Paragraph::with_runs(
             vec![
