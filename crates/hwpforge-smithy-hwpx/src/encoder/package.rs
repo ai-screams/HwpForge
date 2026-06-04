@@ -245,6 +245,14 @@ fn build_metadata_block(meta: &Metadata) -> String {
     out
 }
 
+/// Test hook: exposes [`build_metadata_block`] across module boundaries
+/// so the decoder round-trip gates can exercise the canonical encoder
+/// output without duplicating the format string.
+#[cfg(test)]
+pub(crate) fn build_metadata_block_for_test(meta: &Metadata) -> String {
+    build_metadata_block(meta)
+}
+
 fn push_meta(out: &mut String, name: &'static str, value: Option<&str>) {
     use std::fmt::Write as _;
     match value {

@@ -7,6 +7,7 @@
 
 pub(crate) mod chart;
 pub(crate) mod header;
+pub(crate) mod metadata;
 pub(crate) mod package;
 pub(crate) mod section;
 pub(crate) mod shapes;
@@ -73,6 +74,15 @@ impl HwpxDecoder {
         let style_store = header_result.style_store;
         let begin_num = header_result.begin_num;
 
+        // Step 2b (Wave 12o): Parse Contents/content.hpf metadata.
+        // Missing or malformed metadata downgrades to default rather
+        // than failing the whole decode — Hancom-emitted XML always
+        // has a metadata block, but third-party authoring tools may not.
+        let metadata = match pkg.read_text_entry("Contents/content.hpf") {
+            Ok(xml) => metadata::parse_content_hpf_metadata(&xml).unwrap_or_default(),
+            Err(_) => hwpforge_core::metadata::Metadata::default(),
+        };
+
         // Step 3: Extract chart XMLs from ZIP
         let chart_xmls = pkg.read_chart_xmls()?;
 
@@ -81,7 +91,7 @@ impl HwpxDecoder {
         let parsed_masterpages = parse_masterpages(masterpage_xmls);
 
         // Step 5: Parse sections
-        let mut document = Document::<Draft>::new();
+        let mut document = Document::<Draft>::with_metadata(metadata);
         let section_count = pkg.section_count();
         // Track how many masterpages have been assigned across sections
         let mut masterpage_cursor = 0usize;

@@ -7,6 +7,57 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Wave 12o Phase 2 — HWPX decoder `content.hpf` metadata parser + XXE/DoS defenses
+
+#### Added — HWPX decoder
+
+- New module `crate::decoder::metadata` parses
+  `Contents/content.hpf` `<opf:metadata>` into the Core
+  [`Metadata`](Phase 0) struct, symmetric with Phase 1's encoder
+  output.
+- `HwpxDecoder::decode` now reads metadata before constructing the
+  `Document`, so a Hancom-emitted file's `$title`/`$author`/etc.
+  values resolve correctly on the next encode.
+- Missing or malformed `content.hpf` metadata downgrades to
+  `Metadata::default()` (third-party HWPX authors may omit the
+  block).
+
+#### Security (Wave 12o architect review §11.1 B3 / §11.4 S1–S3)
+
+- `<!DOCTYPE>` events are rejected explicitly — defeats XXE and
+  billion-laughs vectors before quick-xml's default parser path.
+- CDATA inside `<opf:metadata>` is rejected.
+- Allocation caps: depth ≤ 16, `<opf:meta>` count ≤ 256,
+  per-text body ≤ 64 KiB, attribute value ≤ 64 KiB.
+- S3 namespace confusion guard: any child of `<opf:metadata>` must
+  use the `opf` prefix; `<hp:title>` and friends are rejected.
+- S1 illegal-XML-char sanitizer is applied to all decoded text
+  before it enters `Metadata`.
+
+### Wave 12o Phase 1 — HWPX encoder `content.hpf` metadata emit
+
+#### Changed (BREAKING — public API)
+
+- `HwpxEncoder::encode` now consults `document.metadata()` and
+  forwards it to the package writer.
+- `package::generate_content_hpf` / `PackageWriter::write_hwpx`
+  signatures gain a leading `metadata: &Metadata` parameter
+  (internal `pub(crate)`; not part of the public surface).
+
+#### Added — wire format
+
+- `content.hpf` `<opf:metadata>` is always emitted with the full
+  nine-slot Hancom byte-parity layout
+  (`title`/`language`/`creator`/`subject`/`description`/`lastsaveby`/
+  `CreatedDate`/`ModifiedDate`/`date`/`keyword`) plus alphabetical
+  `extras`. `None` slots self-close; populated slots use the
+  `content="text"` attribute.
+- `date` always self-closes (Hancom recomputes on save —
+  Wave 12o §11.3 Q2). `keywords` are joined with `;` into a
+  single element (§11.3 Q3).
+- Defense in depth: every text body flows through
+  `sanitize_xml_text` (Wave 12o §11.4 S1) before `escape_xml`.
+
 ### Wave 12o Phase 0 — Document Metadata Core breaking
 
 #### Changed (BREAKING — public API)
