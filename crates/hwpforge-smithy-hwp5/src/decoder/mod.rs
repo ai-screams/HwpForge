@@ -371,6 +371,80 @@ mod tests {
         }
     }
 
+    /// Wave 12n Step 8 — end-to-end regression gate for the five
+    /// auto-field variants. `sample-field-docsummary.hwp` is a 한컴
+    /// Office-authored fixture (macOS 12.30) that exercises:
+    ///
+    /// - `%smr` SUMMERY → `Control::Field { field_type: ModifiedTime
+    ///   / LastSavedBy / CreatedTime / Author / Title }`
+    /// - `%pat` PATH → `Control::PathField`
+    /// - `atno` inline page-number → `Control::InlinePageNumber`
+    ///
+    /// The fixture was the driver for the Wave 12n Phase 2 wire dump
+    /// (`.docs/research/2026-06-02_auto_field_wire_dump.md`) and is
+    /// the same one used for the Step 6 PATH wire byte-parity test
+    /// against `sample-field-docsummary.hwpx`.
+    #[test]
+    fn golden_sample_field_docsummary_decodes_all_auto_field_variants() {
+        use hwpforge_core::control::{Control, InlinePageKind};
+        use hwpforge_core::run::RunContent;
+        use hwpforge_foundation::FieldType;
+
+        let Some(doc) = load_fixture("sample-field-docsummary.hwp") else {
+            return;
+        };
+
+        // Collect every Control variant across all paragraphs/runs.
+        let mut field_modified = 0usize;
+        let mut field_last_saved = 0usize;
+        let mut field_created = 0usize;
+        let mut field_author = 0usize;
+        let mut field_title = 0usize;
+        let mut path_field = 0usize;
+        let mut autonum_current = 0usize;
+        let mut autonum_total = 0usize;
+
+        for section in doc.document.sections() {
+            for paragraph in &section.paragraphs {
+                for run in &paragraph.runs {
+                    let RunContent::Control(ctrl) = &run.content else {
+                        continue;
+                    };
+                    match ctrl.as_ref() {
+                        Control::Field { field_type, .. } => match field_type {
+                            FieldType::ModifiedTime => field_modified += 1,
+                            FieldType::LastSavedBy => field_last_saved += 1,
+                            FieldType::CreatedTime => field_created += 1,
+                            FieldType::Author => field_author += 1,
+                            FieldType::Title => field_title += 1,
+                            _ => {}
+                        },
+                        Control::PathField { .. } => path_field += 1,
+                        Control::InlinePageNumber { kind, .. } => match kind {
+                            InlinePageKind::CurrentPage => autonum_current += 1,
+                            InlinePageKind::TotalPages => autonum_total += 1,
+                            _ => {}
+                        },
+                        _ => {}
+                    }
+                }
+            }
+        }
+
+        // Counts derived from the fixture's section0.xml wire dump.
+        assert_eq!(field_modified, 1, "$modifiedtime (Field::ModifiedTime)");
+        assert_eq!(field_last_saved, 1, "$lastsaveby (Field::LastSavedBy)");
+        assert_eq!(field_created, 2, "$createtime (Field::CreatedTime, standalone + inline)");
+        assert_eq!(field_author, 2, "$author (Field::Author, standalone + inline)");
+        assert_eq!(field_title, 1, "$title (Field::Title)");
+        assert_eq!(path_field, 1, "$P$F (PathField)");
+        assert!(
+            autonum_current >= 2,
+            "1[쪽 번호] (InlinePageNumber::CurrentPage), got {autonum_current}"
+        );
+        assert_eq!(autonum_total, 1, "1[전체 쪽수] (InlinePageNumber::TotalPages)");
+    }
+
     // ── Helper: load fixture, skip if missing ─────────────────────────
     fn load_fixture(name: &str) -> Option<Hwp5Document> {
         let path = crate::test_support::workspace_fixture_path(name);
