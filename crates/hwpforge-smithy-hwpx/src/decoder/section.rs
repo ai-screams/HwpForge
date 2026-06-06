@@ -874,6 +874,19 @@ fn decode_field_control(
                 None => Control::UnknownSummery { token: cmd },
             }
         }
+        "PATH" => {
+            // Wave 12n Step 6 — Hancom-native `<hp:fieldBegin type="PATH">` carries
+            // the path/file-name format code in the `Format` parameter (NOT
+            // `Property` like SUMMERY). Round-trips back to `Control::PathField`.
+            // Falls back to the raw Command string via
+            // `PathFieldCommand::Unknown` for any non-canonical token.
+            let cmd = get_field_param(fb, "Format")
+                .or_else(|| get_field_param(fb, "Command"))
+                .unwrap_or_default();
+            Control::PathField {
+                command: hwpforge_core::control::PathFieldCommand::from_wire(&cmd),
+            }
+        }
         "CROSSREF" => {
             let target = get_field_param(fb, "RefPath")
                 .map(|p| p.trim_start_matches("?#").to_string())

@@ -584,16 +584,18 @@ fn build_runs(
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
-                    // LOSSY (Wave 12n architect review): The three arms below
-                    // emit SUMMERY-shaped XML as a *best-effort* HWPX surrogate.
-                    // HWPX has no native counterpart for `%smr` unknown tokens,
-                    // `%dte` format patterns, or `%pat` path commands. Round-tripping
-                    // through HWPX → Core decoder normalises these back as
-                    // `Field(ModifiedTime/CreatedTime)` (for DateCodeField),
-                    // `UnknownSummery` (for PathField / UnknownSummery), so the
-                    // original Core variant is NOT preserved. A future wave with
-                    // confirmed Hancom HWPX encodings should replace this
-                    // best-effort emission.
+                    // LOSSY (Wave 12n architect review): The DateCodeField and
+                    // UnknownSummery arms below emit SUMMERY-shaped XML as a
+                    // *best-effort* HWPX surrogate. HWPX has no native counterpart
+                    // for `%smr` unknown tokens or `%dte` format patterns.
+                    // Round-tripping through HWPX → Core decoder normalises these
+                    // back as `Field(ModifiedTime/CreatedTime)` (for
+                    // DateCodeField) or `UnknownSummery` (for UnknownSummery), so
+                    // the original Core variant is NOT preserved.
+                    //
+                    // PathField is NO LONGER LOSSY (Wave 12n Step 6) — see the
+                    // arm further below which emits Hancom-native
+                    // `type="PATH"` with `Format=` param and a distinct fieldid.
                     Control::UnknownSummery { token } => {
                         let field_id = hyperlink_entries.len();
                         let marker = next_marker("HWPFD", field_id);
@@ -634,17 +636,19 @@ fn build_runs(
                         texts.push(HxText::new(marker));
                     }
                     Control::PathField { command } => {
-                        // LOSSY: %pat → SUMMERY mapping with the raw `$P`/`$F`/`$P$F`
-                        // command parked as the SUMMERY `$token`. Round-trip
-                        // through HWPX comes back as `UnknownSummery` (the SUMMERY
-                        // decoder cannot recognise the path tokens) — proven by
-                        // `lossy_roundtrip_pathfield_becomes_unknown_summery`.
+                        // Wave 12n Step 6 — LOSSLESS emit. The prior SUMMERY
+                        // surrogate (mapped %pat → type="SUMMERY") triggered the
+                        // Hancom "low security level — content recovered"
+                        // warning (#120) because native files emit
+                        // type="PATH" with `Format=` param, `fieldid=628121972`,
+                        // and `editable="0"`. We now emit the wire shape
+                        // directly. Body is left empty so Hancom recomputes
+                        // `$P$F` against the file's actual on-disk path the
+                        // same way `<opf:meta name="date"/>` is recomputed.
                         let field_id = hyperlink_entries.len();
                         let marker = next_marker("HWPFD", field_id);
-                        let real_xml = build_summery_run_xml_raw(
+                        let real_xml = build_path_field_run_xml_raw(
                             command.wire_command(),
-                            command.wire_command(),
-                            "",
                             char_pr_id_ref,
                             1_000_000_000_u64 + field_id as u64,
                         );
@@ -1268,7 +1272,10 @@ fn build_summery_field_xml(
 /// `fieldBegin`/`fieldEnd` pair with the caller-supplied `command` token
 /// and `display` text. Used by [`build_summery_field_xml`] for typed
 /// [`hwpforge_foundation::FieldType`] variants and by Wave 12n
-/// `UnknownSummery`/`DateCodeField`/`PathField` fallback paths.
+/// `UnknownSummery` / `DateCodeField` fallback paths.
+///
+/// Wave 12n Step 6: `Control::PathField` no longer uses this builder.
+/// See [`build_path_field_run_xml_raw`] for the native PATH wire shape.
 fn build_summery_run_xml_raw(
     command: &str,
     display: &str,
@@ -1302,6 +1309,47 @@ fn build_summery_run_xml_raw(
         name = escaped_name,
         cmd = escaped_cmd,
         display = build_text_element_xml(display),
+    )
+}
+
+/// Lowest-level PATH `<hp:run>` builder — emits a `type="PATH"`
+/// `fieldBegin`/`fieldEnd` pair carrying a `$P`/`$F`/`$P$F` format code
+/// in the `Format` parameter. Wave 12n Step 6 — replaces the prior
+/// SUMMERY surrogate for `Control::PathField`.
+///
+/// Wire shape (empirically derived from Hancom Office native
+/// `sample-field-docsummary.hwp` → `.hwpx` conversion):
+///
+/// - `type="PATH"` (not SUMMERY — different field semantics)
+/// - `fieldid="628121972"` (distinct from the SUMMERY `628321650`)
+/// - `editable="0"` (PATH fields are read-only — Hancom recomputes)
+/// - `<hp:parameters cnt="3">` with `Prop` / `Command` / **`Format`**
+///   (NOT the SUMMERY `Property`)
+/// - empty body (Hancom evaluates `$P$F` to the absolute path on save,
+///   the same way `date` is recomputed)
+fn build_path_field_run_xml_raw(command: &str, char_pr_id_ref: u32, begin_id: u64) -> String {
+    let escaped_cmd = escape_xml(command);
+    format!(
+        concat!(
+            r#"<hp:run charPrIDRef="{cpr}">"#,
+            r#"<hp:ctrl>"#,
+            r#"<hp:fieldBegin id="{bid}" type="PATH" name="" editable="0" dirty="0" "#,
+            r#"zorder="-1" fieldid="628121972" metaTag="">"#,
+            r#"<hp:parameters cnt="3" name="">"#,
+            r#"<hp:integerParam name="Prop">8</hp:integerParam>"#,
+            r#"<hp:stringParam name="Command">{cmd}</hp:stringParam>"#,
+            r#"<hp:stringParam name="Format">{cmd}</hp:stringParam>"#,
+            r#"</hp:parameters>"#,
+            r#"</hp:fieldBegin>"#,
+            r#"</hp:ctrl>"#,
+            r#"<hp:ctrl>"#,
+            r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="628121972"/>"#,
+            r#"</hp:ctrl>"#,
+            r#"</hp:run>"#,
+        ),
+        cpr = char_pr_id_ref,
+        bid = begin_id,
+        cmd = escaped_cmd,
     )
 }
 
@@ -4351,8 +4399,11 @@ mod tests {
     }
 
     #[test]
-    fn lossy_pathfield_emits_summery_with_raw_command() {
-        // %pat → SUMMERY with raw command parked as $token (lossy).
+    fn pathfield_emits_native_path_wire() {
+        // Wave 12n Step 6 — PathField now emits Hancom-native
+        // `type="PATH"` with `Format=` param, distinct `fieldid`, and
+        // `editable="0"`. Replaces the prior LOSSY SUMMERY surrogate
+        // (`lossy_pathfield_emits_summery_with_raw_command`).
         use hwpforge_core::control::{Control, PathFieldCommand};
         let ctrl = Control::PathField { command: PathFieldCommand::PathAndFileName };
         let section = Section::with_paragraphs(
@@ -4363,8 +4414,24 @@ mod tests {
             PageSettings::a4(),
         );
         let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
-        assert!(xml.contains(r#"type="SUMMERY""#), "PathField surrogates SUMMERY");
-        assert!(xml.contains("$P$F"), "raw $P$F command must appear as SUMMERY token");
+        assert!(xml.contains(r#"type="PATH""#), "PathField must emit type=\"PATH\"");
+        assert!(
+            xml.contains(r#"fieldid="628121972""#),
+            "PathField must use PATH fieldid 628121972 (not SUMMERY's 628321650)",
+        );
+        assert!(xml.contains(r#"editable="0""#), "PathField must be editable=\"0\"");
+        assert!(
+            xml.contains(r#"<hp:stringParam name="Format">$P$F</hp:stringParam>"#),
+            "PathField must carry the command in the Format param (not Property)",
+        );
+        assert!(
+            xml.contains(r#"<hp:stringParam name="Command">$P$F</hp:stringParam>"#),
+            "PathField must also surface Command",
+        );
+        assert!(
+            !xml.contains(r#"<hp:stringParam name="Property">$P$F</hp:stringParam>"#),
+            "PathField must NOT emit the SUMMERY-style Property param",
+        );
     }
 
     #[test]
@@ -4459,15 +4526,42 @@ mod tests {
     }
 
     #[test]
-    fn lossy_roundtrip_pathfield_becomes_unknown_summery() {
+    fn pathfield_roundtrip_preserves_command_lossless() {
+        // Wave 12n Step 6 — replaces the prior LOSSY round-trip
+        // (`lossy_roundtrip_pathfield_becomes_unknown_summery`). With
+        // the new `type="PATH"` builder + decoder arm, all three typed
+        // PathFieldCommand variants round-trip without value loss.
         use hwpforge_core::control::{Control, PathFieldCommand};
-        let ctrl = Control::PathField { command: PathFieldCommand::PathAndFileName };
+        for cmd in
+            [PathFieldCommand::PathAndFileName, PathFieldCommand::Path, PathFieldCommand::FileName]
+        {
+            let decoded =
+                lossy_roundtrip_decode_first_control(Control::PathField { command: cmd.clone() });
+            match decoded {
+                Control::PathField { command } => {
+                    assert_eq!(command, cmd, "PathField command must round-trip lossless");
+                }
+                other => {
+                    panic!("expected Control::PathField({cmd:?}), got {other:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pathfield_unknown_command_roundtrips_as_unknown() {
+        // A non-canonical `$X` Command should round-trip as
+        // `PathFieldCommand::Unknown("$X")` (no silent collapse to
+        // `UnknownSummery` like the prior LOSSY policy).
+        use hwpforge_core::control::{Control, PathFieldCommand};
+        let ctrl = Control::PathField { command: PathFieldCommand::Unknown("$X".to_string()) };
         let decoded = lossy_roundtrip_decode_first_control(ctrl);
         match decoded {
-            Control::UnknownSummery { token } => {
-                assert_eq!(token, "$P$F", "%pat lossy round-trip must preserve raw command");
-            }
-            other => panic!("expected UnknownSummery($P$F), got {other:?}"),
+            Control::PathField { command } => match command {
+                PathFieldCommand::Unknown(s) => assert_eq!(s, "$X"),
+                other => panic!("expected PathFieldCommand::Unknown(\"$X\"), got {other:?}"),
+            },
+            other => panic!("expected Control::PathField, got {other:?}"),
         }
     }
 

@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Wave 12n Step 6 — `%pat` PATH 필드 lossless HWPX carry
+
+Wave 12n Step 3 에서 placeholder 로 남겨두었던 `Control::PathField` 의
+HWPX wire 매핑을 native 형식으로 완성. #120 (한컴 "낮은 보안수준 복구"
+경고의 가장 강한 트리거) 해소.
+
+#### Fixed — HWPX encoder
+
+- `Control::PathField { command }` arm 이 더 이상 LOSSY SUMMERY
+  surrogate 를 emit 하지 않고 `<hp:fieldBegin type="PATH" name=""
+  editable="0" dirty="0" zorder="-1" fieldid="628121972" metaTag="">`
+  + `<hp:stringParam name="Format">$P|$F|$P$F</hp:stringParam>` 를
+  직접 emit. 한컴 native 와 byte-identical (단 `id` 카운터 제외).
+  Body 는 empty — 한컴이 저장 시 `$P` / `$F` / `$P$F` 를 실제
+  on-disk 경로 / 파일명으로 재평가.
+
+#### Added — HWPX decoder
+
+- `<hp:fieldBegin type="PATH">` 인식 분기 신설. `Format` param 우선,
+  없으면 `Command` 로 fallback. `PathFieldCommand::from_wire(&cmd)` 로
+  typed variant (`Path` / `FileName` / `PathAndFileName`) 또는
+  `Unknown(s)` 로 carry.
+
+#### Regression gates (+2, -1)
+
+- 신규: `pathfield_emits_native_path_wire` — encoder wire 형식 검증
+  (`type="PATH"` / `fieldid="628121972"` / `editable="0"` / `Format` 사용
+  / `Property` 미사용)
+- 신규: `pathfield_roundtrip_preserves_command_lossless` —
+  `PathAndFileName` / `Path` / `FileName` 세 variant 모두 lossless
+  round-trip 검증
+- 신규: `pathfield_unknown_command_roundtrips_as_unknown` — 비표준
+  `$X` Command 도 `PathFieldCommand::Unknown("$X")` 로 carry
+- 제거: 기존 `lossy_roundtrip_pathfield_becomes_unknown_summery` —
+  이제 lossless 이므로 의도 상충. lossy 사실을 확정하던 단언이 모두
+  lossless 단언으로 대체됨.
+- 제거: 기존 `lossy_pathfield_emits_summery_with_raw_command` —
+  마찬가지 이유.
+
+검증:
+- workspace nextest: 2,444 → **2,445 passed** + 2 skipped (+3 신규, -2 폐기)
+- end-to-end: `sample-field-docsummary.hwp` 변환 결과의 PATH 필드 wire
+  가 한컴 native `sample-field-docsummary.hwpx` 와 byte-identical
+  (single field id 카운터 차이만 존재).
+
+#### Note — #120 보안 경고 보조 트리거 잔존
+
+PATH 필드 오분류는 #120 의 가장 강한 트리거이나 #121 (outline level
+off-by-1), #123 (linesegarray 누락), #124 (editable bit 강제) 등 다른
+트리거가 잔존. Step 6 만으로 보안 경고가 완전 사라지는지는 사용자
+시각 검증 (한컴 열기 후 확인) 에 의존.
+
 ### Wave 12o-fixup — Codex(architect) Top-5 리뷰 4건 + 종료 정직성
 
 Codex(architect) Wave 12o post-completion 리뷰에서 발견된 P0/P1 4건의
