@@ -1302,6 +1302,11 @@ fn build_summery_run_xml_raw(
             r#"<hp:ctrl>"#,
             r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="628321650"/>"#,
             r#"</hp:ctrl>"#,
+            // Wave 12n Step 6.5: trailing `<hp:t/>` matches Hancom native
+            // wire shape — its absence triggers the "low-security recovery"
+            // warning on open (verified against sample-field-docsummary
+            // wire diff). Same structural requirement as PATH runs.
+            r#"<hp:t/>"#,
             r#"</hp:run>"#,
         ),
         cpr = char_pr_id_ref,
@@ -1329,6 +1334,12 @@ fn build_summery_run_xml_raw(
 ///   the same way `date` is recomputed)
 fn build_path_field_run_xml_raw(command: &str, char_pr_id_ref: u32, begin_id: u64) -> String {
     let escaped_cmd = escape_xml(command);
+    // Wave 12n Step 6.5: Hancom-native PATH runs include a `<hp:t/>`
+    // placeholder between fieldBegin/fieldEnd (recomputed to the
+    // absolute path on save) AND a trailing `<hp:t/>` after fieldEnd.
+    // Without the trailing element Hancom flags the file as
+    // "low-security recovery" and rebuilds the run — verified against
+    // `sample-field-docsummary.hwpx` wire diff after Step 6.
     format!(
         concat!(
             r#"<hp:run charPrIDRef="{cpr}">"#,
@@ -1342,9 +1353,11 @@ fn build_path_field_run_xml_raw(command: &str, char_pr_id_ref: u32, begin_id: u6
             r#"</hp:parameters>"#,
             r#"</hp:fieldBegin>"#,
             r#"</hp:ctrl>"#,
+            r#"<hp:t/>"#,
             r#"<hp:ctrl>"#,
             r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="628121972"/>"#,
             r#"</hp:ctrl>"#,
+            r#"<hp:t/>"#,
             r#"</hp:run>"#,
         ),
         cpr = char_pr_id_ref,
