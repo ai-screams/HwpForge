@@ -1244,26 +1244,27 @@ fn build_summery_field_xml(
 ) -> String {
     use hwpforge_foundation::FieldType;
     let command = field_type.summery_token().expect("caller guards SUMMERY variants");
+    // Wave 12n Step 6.6: emit empty body for typed SUMMERY fields.
+    //
+    // The previous implementation computed today's ISO date for
+    // ModifiedTime and parked single-space placeholders for the rest.
+    // Empirically (sample-field-docsummary 검증, 2026-06-06):
+    // Hancom Office discards mismatched display text and rebuilds the
+    // field on save anyway, while triggering the "low-security
+    // recovery" warning on open because our locale-mismatched values
+    // (ISO `2026-06-06` vs native Korean `2026년 6월 4일 …`) are
+    // treated as corrupted content. Letting Hancom recompute from
+    // metadata avoids the warning entirely.
+    //
+    // For Author/LastSavedBy/Title the hint string (if supplied)
+    // still carries through — it's caller-provided display text
+    // rather than a computed placeholder.
     let display_text = match field_type {
-        FieldType::ModifiedTime => {
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs();
-            let days = now / 86400;
-            let (y, m, d) = days_to_ymd(days);
-            format!("{y}-{m:02}-{d:02}")
-        }
-        FieldType::CreatedTime => " ".to_string(),
-        FieldType::Author | FieldType::LastSavedBy | FieldType::Title => {
-            if !hint.is_empty() {
-                hint.to_string()
-            } else {
-                " ".to_string()
-            }
+        FieldType::Author | FieldType::LastSavedBy | FieldType::Title if !hint.is_empty() => {
+            hint.to_string()
         }
         FieldType::ClickHere => unreachable!("caller already routed ClickHere elsewhere"),
-        _ => " ".to_string(),
+        _ => String::new(),
     };
     build_summery_run_xml_raw(command, &display_text, name, char_pr_id_ref, begin_id)
 }
@@ -1423,6 +1424,12 @@ fn build_autonum_run_xml(
 }
 
 /// Simple days-since-epoch to (year, month, day) conversion.
+///
+/// Wave 12n Step 6.6: no longer called by `build_summery_field_xml`
+/// (SUMMERY body is now empty so Hancom recomputes from metadata).
+/// Retained for the existing unit tests and possible future date
+/// emit paths.
+#[cfg_attr(not(test), allow(dead_code))]
 fn days_to_ymd(days_since_epoch: u64) -> (u64, u64, u64) {
     // Simplified civil calendar calculation.
     let z = days_since_epoch + 719_468;
