@@ -7,6 +7,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Wave 12o-fixup — Codex(architect) Top-5 리뷰 4건 + 종료 정직성
+
+Codex(architect) Wave 12o post-completion 리뷰에서 발견된 P0/P1 4건의
+fast-follow fix + 종료 노트 정직성 보정. Wave 12o 종료 commit (`8aa47f9`)
+은 revert/amend 하지 않음 (감사 추적성 보존).
+
+#### Security (Top-1 P0)
+
+- `hwpforge-smithy-hwp5::schema::summary_info::parse_summary_information`
+  의 `sec_start + 8` unchecked `usize` add 가 32-bit / wasm 타깃에서
+  `u32`-derived `sec_start >= 0xFFFFFFF8` 일 때 wrap 후 panicking
+  슬라이스 인덱스로 진입할 수 있었음. `checked_add` +
+  `bytes.get(..)` 패턴으로 항상 `Hwp5Error::RecordParse` 경로 보장.
+  악성 .hwp 만으로 트리거 가능한 DoS 봉쇄.
+
+#### Fixed (Top-2 P0 — data carry)
+
+- HWPX decoder 가 한컴 emit `<opf:meta name="date">2026년 …</opf:meta>`
+  값을 `extras["date"]` 로 carry 하지만 HWPX encoder 의 typed-collision
+  guard 가 이를 drop 해서 HWPX → HwpForge → HWPX 1-cycle round-trip
+  에서 silent data loss 발생. typed-collision 리스트에서 `date` 만
+  예외 처리하고 9-slot canonical 위치에서 `extras["date"]` 값을 그대로
+  emit. `creator` / `subject` 등 진짜 typed slot 은 계속 drop.
+
+#### Fixed (Top-4 P1 — API 일관성)
+
+- `Hwp5Decoder::decode` (canonical public entry) 가 `decode_intermediate`
+  에서 생성한 `intermediate.metadata` 를 받았지만 projection 결과
+  `document` 에 `set_metadata` 하지 않아 silently drop. 한 줄 추가로
+  `decode_hwp5_with_images` / `hwp5_to_hwpx_bytes` 와 일관성 확보.
+
+#### Fixed (S3 namespace guard — P1 신규 발견)
+
+- `hwpforge-smithy-hwpx::decoder::metadata::enforce_namespace` 가
+  `if let Some(p) = name.prefix()` 패턴이어서 unprefixed `<title>` /
+  `<meta>` (prefix 누락) 가 S3 (namespace confusion) 가드를 통과.
+  `match` 표현으로 변환해서 prefix 누락 케이스도 reject. 하스타일
+  metadata 슬롯 shadow 가능성 차단.
+
+#### Regression gates (+3 tests)
+
+- `summary_info::section_start_past_eof_rejected` — Top-1
+- `decoder::metadata::date_extras_roundtrip_preserves_value` — Top-2
+- `decoder::metadata::unprefixed_element_inside_metadata_rejected` — S3
+
+Workspace nextest: 2,441 → **2,444 passed** + 2 skipped.
+
+#### Process integrity (Top-5)
+
+- Wave 12o 종료 commit 의 G6/G7 PASS 표기 뒤에 G2 (native byte-parity
+  xmllint diff), G4 (HWP5→HWPX e2e 자동 게이트), G8b (저장 후 fallback
+  거동) 가 미평가 상태로 묻혀 있던 사실을 CLAUDE.md 종료 노트에
+  명시. 후속 wave 에서 자동 게이트로 승격 약속.
+
+#### Visual verification example
+
+- 신규 `crates/hwpforge-smithy-hwpx/examples/probe_date_carry_wave12o_fixup.rs`
+  — 한컴 저장본 HWPX 를 HwpForge 가 decode → encode → 재decode 한 결과
+  metadata 가 동일한지 자동 검증 + content.hpf 비교 명령 출력.
+
 ### Wave 12o Phase 3 — HWP5 SummaryInformation OLE2 PropertySet decoder
 
 #### Added — HWP5 decoder
