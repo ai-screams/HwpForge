@@ -1873,6 +1873,158 @@ impl Hwp5SummeryControl {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Hwp5CrossRefControl (Wave 12m Phase 2)
+// ---------------------------------------------------------------------------
+
+/// Defence-in-depth allocation cap for the `%xrf` cross-reference Command
+/// UTF-16 payload (Wave 12m). Observed Command strings range from 17 to 21
+/// units (`?<target>;N1;N2;N3;N4;`); 1024 leaves ample headroom for
+/// pathological inputs without inviting allocator abuse.
+///
+/// Cap is applied **immediately after reading the length-prefix**, before
+/// any allocation occurs (Codex(architect) Wave 12m §UTF-16 cap timing).
+#[allow(dead_code)] // Step 4 (decoder/projection wire-up) will reference this.
+const MAX_CROSSREF_COMMAND_UNITS: usize = 1024;
+
+/// HWP5 representation of a `%xrf` cross-reference control (Wave 12m
+/// Phase 2).
+///
+/// Wire envelope (verified against 12 한컴 native fixtures in
+/// `tests/fixtures/hwp5/crossref/`):
+///
+/// | offset | bytes | meaning |
+/// |---|---|---|
+/// | `data[0..4]` | ctrl_id | `"%xrf"` (LE bytes `66 72 78 25`) |
+/// | `data[4..8]` | LE u32 | properties bitfield (always `0x0000_0002`) |
+/// | `data[8]` | flag byte | always `0x00` |
+/// | `data[9..11]` | LE u16 | UTF-16 command-unit count |
+/// | `data[11..N]` | UTF-16LE | Command string `?<target>;N1;N2;N3;N4;` |
+/// | `data[N..N+8]` | 8 bytes | trailer (begin_id u32 + field_id u32) |
+///
+/// The Command's semicolon-separated suffix encodes:
+/// - `N1` = RefType (Table=0, Figure=1, Equation=2, Footnote=3,
+///   Endnote=4, Outline=5, Bookmark=6)
+/// - `N2` = ContentType (RefType-relative; Page=0, Number/Contents=1,
+///   Contents/BookmarkName=2, UpDownPos=3)
+/// - `N3` = as_hyperlink (0 / 1)
+/// - `N4` = currently unidentified (all observed = 0)
+///
+/// Schema preserves **all wire fidelity** — semantic interpretation
+/// (RefType / RefContentType enums, RefTarget normalization) happens at
+/// the projection boundary in `smithy-hwp5/src/projection.rs`.
+#[derive(Debug, Clone, PartialEq)]
+#[allow(dead_code)] // Step 4 (decoder + projection) will construct + read these.
+pub(crate) struct Hwp5CrossRefControl {
+    /// Owning control identifier, always `0x2578_7266` (`"%xrf"` LE-ascii).
+    #[allow(dead_code)]
+    pub ctrl_id: u32,
+    /// Full raw Command UTF-16LE-decoded string
+    /// (`?<target>;N1;N2;N3;N4;`).
+    pub command_raw: String,
+    /// `?<target>` 의 target 부분만 — `#<system_id>` 의 `#` 도 포함된 raw.
+    /// Bookmark refs 는 사용자 지정 string, 그 외 RefType 은 `#<id>` 형식.
+    pub target_raw: String,
+    /// N1 raw byte — RefType code.
+    pub ref_type_code: u8,
+    /// N2 raw byte — ContentType code (RefType-relative).
+    pub content_type_code: u8,
+    /// N3 raw byte — as_hyperlink code (0/1 observed; raw u8 preserved).
+    pub hyperlink_code: u8,
+    /// N4 raw byte — unidentified (all observed fixtures = 0; preserved
+    /// for forward compatibility).
+    pub param4_raw: u8,
+    /// `data[8]` flag byte (always 0x00 observed).
+    pub header_flag_raw: u8,
+    /// Trailer 8-byte `begin_id` (first u32).
+    pub trailer_begin_id: u32,
+    /// Trailer 8-byte `field_id` (second u32).
+    pub trailer_field_id: u32,
+}
+
+impl Hwp5CrossRefControl {
+    #[allow(dead_code)] // Step 4 (decoder dispatch) will call this.
+    /// Decodes a `%xrf` CtrlHeader payload. Returns `None` on:
+    /// - truncated envelope (< 19 bytes minimum)
+    /// - oversized command (> `MAX_CROSSREF_COMMAND_UNITS`)
+    /// - malformed UTF-16
+    /// - missing trailing semicolon on `?<target>;N1;N2;N3;N4;`
+    /// - command lacks 5 semicolon-separated fields
+    /// - N1/N2/N3/N4 fail to parse as `u8`
+    ///
+    /// All allocation caps are applied **before** any `Vec`/`String`
+    /// allocation (Codex(architect) Wave 12m §UTF-16 cap timing CRITICAL).
+    pub(crate) fn parse(ctrl_id: u32, data: &[u8]) -> Option<Self> {
+        if data.len() < 19 {
+            return None;
+        }
+        let body = &data[8..];
+        let header_flag_raw = body[0];
+        let command_units = usize::from(u16::from_le_bytes([body[1], body[2]]));
+        // CRITICAL: cap check BEFORE allocation
+        if command_units > MAX_CROSSREF_COMMAND_UNITS {
+            return None;
+        }
+        let command_bytes = command_units.checked_mul(2)?;
+        let command_end = 3usize.checked_add(command_bytes)?;
+        let trailer_end = command_end.checked_add(8)?;
+        if body.len() < trailer_end {
+            return None;
+        }
+
+        let mut units: Vec<u16> = Vec::with_capacity(command_units);
+        for chunk in body[3..command_end].chunks_exact(2) {
+            units.push(u16::from_le_bytes([chunk[0], chunk[1]]));
+        }
+        let command_raw = String::from_utf16(&units).ok()?;
+
+        // Parse "?<target>;N1;N2;N3;N4;" — require leading `?`, trailing `;`,
+        // and exactly 5 semicolon-separated fields after the `?` prefix.
+        let stripped = command_raw.strip_prefix('?')?;
+        if !stripped.ends_with(';') {
+            return None;
+        }
+        // strip_suffix the trailing `;` so split doesn't yield empty final
+        // segment, then expect target + 4 numeric fields = 5 fields.
+        let inner = stripped.strip_suffix(';')?;
+        let parts: Vec<&str> = inner.split(';').collect();
+        if parts.len() != 5 {
+            return None;
+        }
+        let target_raw = parts[0].to_string();
+        let ref_type_code: u8 = parts[1].parse().ok()?;
+        let content_type_code: u8 = parts[2].parse().ok()?;
+        let hyperlink_code: u8 = parts[3].parse().ok()?;
+        let param4_raw: u8 = parts[4].parse().ok()?;
+
+        let trailer_begin_id = u32::from_le_bytes([
+            body[command_end],
+            body[command_end + 1],
+            body[command_end + 2],
+            body[command_end + 3],
+        ]);
+        let trailer_field_id = u32::from_le_bytes([
+            body[command_end + 4],
+            body[command_end + 5],
+            body[command_end + 6],
+            body[command_end + 7],
+        ]);
+
+        Some(Self {
+            ctrl_id,
+            command_raw,
+            target_raw,
+            ref_type_code,
+            content_type_code,
+            hyperlink_code,
+            param4_raw,
+            header_flag_raw,
+            trailer_begin_id,
+            trailer_field_id,
+        })
+    }
+}
+
 impl Hwp5MemoCommand {
     /// Decodes a `%unk` CtrlHeader payload into a `Hwp5MemoCommand`.
     ///
@@ -3216,6 +3368,170 @@ mod tests {
         let mut data = make_envelope(DTE_CTRL_ID, 0, "\\:;0;", 0);
         data.truncate(data.len() - 2);
         assert!(Hwp5DateCodeControl::parse(DTE_CTRL_ID, &data).is_none());
+    }
+
+    // ── Wave 12m Phase 2 Step 2 — Hwp5CrossRefControl tests ──────────
+
+    const XRF_CTRL_ID: u32 = 0x2578_7266; // "%xrf"
+
+    /// Builds a synthetic `%xrf` CtrlHeader payload. Wire envelope:
+    /// 4-byte ctrl_id + 4-byte properties + 1-byte flag (0x00 for xrf,
+    /// distinct from 0x08 used by %smr/%dte/%pat) + 2-byte u16 cmd-len
+    /// + UTF-16LE command + 8-byte trailer (begin_id u32 + field_id u32).
+    fn make_xrf_envelope(command: &str, begin_id: u32, field_id: u32) -> Vec<u8> {
+        let units: Vec<u16> = command.encode_utf16().collect();
+        let mut data = Vec::new();
+        data.extend_from_slice(&XRF_CTRL_ID.to_be_bytes()); // ctrl_id
+        data.extend_from_slice(&0x0000_0002u32.to_le_bytes()); // properties
+        data.push(0x00); // xrf flag is 0x00 (not 0x08)
+        data.extend_from_slice(&(units.len() as u16).to_le_bytes());
+        for unit in &units {
+            data.extend_from_slice(&unit.to_le_bytes());
+        }
+        data.extend_from_slice(&begin_id.to_le_bytes());
+        data.extend_from_slice(&field_id.to_le_bytes());
+        data
+    }
+
+    #[test]
+    fn crossref_parse_bookmark_page_baseline() {
+        // Wave 12m Phase 1 fixture #1 (sample-bookmark-page.hwp):
+        //   "?target1;6;0;0;0;" → Bookmark + Page, no hyperlink
+        let data = make_xrf_envelope("?target1;6;0;0;0;", 0x420D_43BE, 0);
+        let parsed = Hwp5CrossRefControl::parse(XRF_CTRL_ID, &data).expect("parse");
+        assert_eq!(parsed.command_raw, "?target1;6;0;0;0;");
+        assert_eq!(parsed.target_raw, "target1");
+        assert_eq!(parsed.ref_type_code, 6); // Bookmark
+        assert_eq!(parsed.content_type_code, 0); // Page
+        assert_eq!(parsed.hyperlink_code, 0);
+        assert_eq!(parsed.param4_raw, 0);
+        assert_eq!(parsed.header_flag_raw, 0x00);
+        assert_eq!(parsed.trailer_begin_id, 0x420D_43BE);
+        assert_eq!(parsed.trailer_field_id, 0);
+    }
+
+    #[test]
+    fn crossref_parse_all_ref_types_carry_n1() {
+        // Wave 12m Phase 1 — all 7 RefType codes observed in 한컴 native
+        // fixtures. Parser is RefType-agnostic; semantics applied at
+        // projection boundary in smithy-hwp5/src/projection.rs.
+        for (label, n1) in [
+            ("Table", 0u8),
+            ("Figure", 1),
+            ("Equation", 2),
+            ("Footnote", 3),
+            ("Endnote", 4),
+            ("Outline", 5),
+            ("Bookmark", 6),
+        ] {
+            let target = if n1 == 6 { "target1".to_string() } else { "#1108165575".to_string() };
+            let command = format!("?{target};{n1};0;0;0;");
+            let data = make_xrf_envelope(&command, 0, 0);
+            let parsed = Hwp5CrossRefControl::parse(XRF_CTRL_ID, &data)
+                .unwrap_or_else(|| panic!("{label} (N1={n1}) must parse"));
+            assert_eq!(parsed.ref_type_code, n1, "{label} N1 carry");
+            assert_eq!(parsed.target_raw, target, "{label} target");
+        }
+    }
+
+    #[test]
+    fn crossref_parse_all_content_types_carry_n2() {
+        // ContentType is RefType-relative (Wave 12m Phase 1). Parser
+        // only carries the raw u8 — projection interprets.
+        for n2 in 0..=3u8 {
+            let command = format!("?target1;6;{n2};0;0;");
+            let data = make_xrf_envelope(&command, 0, 0);
+            let parsed = Hwp5CrossRefControl::parse(XRF_CTRL_ID, &data)
+                .unwrap_or_else(|| panic!("N2={n2} must parse"));
+            assert_eq!(parsed.content_type_code, n2);
+        }
+    }
+
+    #[test]
+    fn crossref_parse_hyperlink_toggle_carries_n3() {
+        // N3 = 0 (no hyperlink) and 1 (hyperlink) — observed in
+        // sample-bookmark-page.hwp (N3=0) and
+        // sample-bookmark-page-hyperlink.hwp (N3=1).
+        for n3 in 0..=1u8 {
+            let command = format!("?target1;6;0;{n3};0;");
+            let data = make_xrf_envelope(&command, 0, 0);
+            let parsed = Hwp5CrossRefControl::parse(XRF_CTRL_ID, &data)
+                .unwrap_or_else(|| panic!("N3={n3} must parse"));
+            assert_eq!(parsed.hyperlink_code, n3);
+        }
+    }
+
+    #[test]
+    fn crossref_parse_carries_n4_raw() {
+        // N4 is currently always 0 in observed fixtures, but parser must
+        // preserve any u8 value for forward compatibility.
+        let data = make_xrf_envelope("?target1;6;0;0;42;", 0, 0);
+        let parsed = Hwp5CrossRefControl::parse(XRF_CTRL_ID, &data).expect("parse");
+        assert_eq!(parsed.param4_raw, 42);
+    }
+
+    #[test]
+    fn crossref_parse_carries_hash_prefix_target() {
+        // Footnote/Endnote/Caption/Outline targets use `#<system_id>`
+        // form (한컴 자동 생성 ID). Raw form preserved including `#`.
+        let data = make_xrf_envelope("?#1108165575;3;0;0;0;", 0, 0);
+        let parsed = Hwp5CrossRefControl::parse(XRF_CTRL_ID, &data).expect("parse");
+        assert_eq!(parsed.target_raw, "#1108165575");
+    }
+
+    #[test]
+    fn crossref_parse_carries_trailer_ids() {
+        let data = make_xrf_envelope("?target1;6;0;0;0;", 0xDEAD_BEEF, 0xCAFE_F00D);
+        let parsed = Hwp5CrossRefControl::parse(XRF_CTRL_ID, &data).expect("parse");
+        assert_eq!(parsed.trailer_begin_id, 0xDEAD_BEEF);
+        assert_eq!(parsed.trailer_field_id, 0xCAFE_F00D);
+    }
+
+    #[test]
+    fn crossref_parse_rejects_oversized_command() {
+        // CRITICAL: cap (MAX_CROSSREF_COMMAND_UNITS = 1024) is applied
+        // BEFORE allocation (Codex(architect) §UTF-16 cap timing).
+        let mut data = Vec::new();
+        data.extend_from_slice(&XRF_CTRL_ID.to_be_bytes());
+        data.extend_from_slice(&0x0000_0002u32.to_le_bytes());
+        data.push(0x00);
+        data.extend_from_slice(&(MAX_CROSSREF_COMMAND_UNITS as u16 + 1).to_le_bytes());
+        // intentionally no further bytes
+        assert!(Hwp5CrossRefControl::parse(XRF_CTRL_ID, &data).is_none());
+    }
+
+    #[test]
+    fn crossref_parse_rejects_truncated() {
+        let mut data = make_xrf_envelope("?target1;6;0;0;0;", 0, 0);
+        data.truncate(data.len() - 4);
+        assert!(Hwp5CrossRefControl::parse(XRF_CTRL_ID, &data).is_none());
+    }
+
+    #[test]
+    fn crossref_parse_rejects_missing_question_mark() {
+        // Command must start with `?`.
+        let data = make_xrf_envelope("target1;6;0;0;0;", 0, 0);
+        assert!(Hwp5CrossRefControl::parse(XRF_CTRL_ID, &data).is_none());
+    }
+
+    #[test]
+    fn crossref_parse_rejects_missing_trailing_semicolon() {
+        // Command must end with `;` after the last numeric field.
+        let data = make_xrf_envelope("?target1;6;0;0;0", 0, 0);
+        assert!(Hwp5CrossRefControl::parse(XRF_CTRL_ID, &data).is_none());
+    }
+
+    #[test]
+    fn crossref_parse_rejects_wrong_field_count() {
+        // Only 3 numeric fields instead of expected 4 (target + 4).
+        let data = make_xrf_envelope("?target1;6;0;0;", 0, 0);
+        assert!(Hwp5CrossRefControl::parse(XRF_CTRL_ID, &data).is_none());
+    }
+
+    #[test]
+    fn crossref_parse_rejects_non_numeric_field() {
+        let data = make_xrf_envelope("?target1;6;abc;0;0;", 0, 0);
+        assert!(Hwp5CrossRefControl::parse(XRF_CTRL_ID, &data).is_none());
     }
 
     #[test]
