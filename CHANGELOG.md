@@ -7,6 +7,119 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Wave 12m Phase 2 — `Control::CrossRef` HWP5 leg structured upgrade (BREAKING)
+
+HWP5 `%xrf` 상호참조 필드를 `Control::Unknown(tag="hwp5.crossref")`
+surrogate (Wave 12 이전 lossy 경로) 대신 typed `Hwp5CrossRefControl`
+schema → boundary functions → native `Control::CrossRef` 로 end-to-end
+carry. 사용자 시각 검증 가능한 12 한컴 native fixture
+(`tests/fixtures/hwp5/crossref/`) e2e 회귀 게이트 동반.
+
+ADR 참조: `.docs/architecture/adr/ADR-004-wave12m-crossref-structured-upgrade.md`
+(내부 문서).
+
+#### Breaking — `hwpforge-foundation`
+
+- `RefType` (enum) — `#[repr(u8)]` 제거 + `#[non_exhaustive]` 추가.
+  신규 variants: `Footnote`, `Endnote`, `Outline`, `Unknown(u8)`.
+  기존 `TryFrom<u8>` impl 제거 (boundary 책임을 smithy-hwp5 로 이동).
+  `RefType` 크기 1 byte → 2 bytes (variant + discriminant).
+- `RefContentType` (enum) — `#[repr(u8)]` 제거 + `#[non_exhaustive]`
+  추가. 신규 variants: `BookmarkName`, `Unknown(u8)`. 동일 크기 변화.
+
+#### Breaking — `hwpforge-core`
+
+- `Control::CrossRef` — `target_name: String` 필드를 type-safe
+  `target: RefTarget` 로 교체. 신규 `RefTarget` 열거형 (`Name(String)`
+  for Bookmark, `SystemId(u64)` for `#<id>` refs, `Raw(String)` for
+  unparseable fallback). `Control::cross_ref(...)` 생성자 시그니처도
+  연동 변경.
+- `Control::CrossRef` 에 `display_text: String` 필드 추가. HWPX wire 는
+  `<hp:fieldBegin>` / `<hp:fieldEnd>` 사이 visible run 으로 display
+  text 를 embedding 한다. HWP5 `%xrf` wire 는 display text 를 직접
+  carry 하지 않고 ParaText 본문에 풀어 두지만, projection 이
+  FieldBegin..FieldEnd span 을 읽어 이 필드에 채워 넣는다. 빈 문자열은
+  "display text 없음" 의미.
+- JSON 호환성: 의도된 clean break. 기존 `target_name` / surrogate
+  JSON 도 마이그레이션 없이 변경.
+
+#### Added — `hwpforge-smithy-hwp5`
+
+- `schema::section::Hwp5CrossRefControl` — 9-field wire-fidelity 구조
+  (`ctrl_id`, `command_raw`, `target_raw`, `ref_type_code`,
+  `content_type_code`, `hyperlink_code`, `param4_raw`,
+  `header_flag_raw`, `trailer_begin_id`, `trailer_field_id`).
+  `MAX_CROSSREF_COMMAND_UNITS = 1024` cap 으로 할당 전 차단. 13 unit
+  tests (security gates 포함).
+- `decoder::section::Hwp5Control::CrossRef(Hwp5CrossRefControl)` variant
+  + `CTRL_ID_FIELD_CROSSREF = 0x2578_7266` ("%xrf") dispatch. malformed
+  payload 는 `Hwp5Warning::DroppedControl{control: "crossref"}` 로
+  떨어진다 (silent skip 금지).
+- `projection::` Boundary functions: `decode_hwp5_crossref_ref_type`
+  (0~6 + `Unknown(u8)`), `decode_hwp5_crossref_content_type`
+  (RefType-relative: Bookmark=1→Contents/2→BookmarkName, 그 외는
+  1→Number/2→Contents, 3→UpDownPos), `decode_hwp5_crossref_target`
+  (Bookmark→Name, `#<u64>`→SystemId, 실패→Raw).
+- `semantic::Hwp5SemanticControlKind::CrossRef` 신규 variant +
+  `semantic_adapter` 매핑.
+
+#### Added — `hwpforge-smithy-hwpx`
+
+- Reverse boundary helpers: `ref_type_wire_code(&RefType) -> u8`,
+  `ref_content_type_wire_code(&RefType, &RefContentType) -> u8`,
+  `crossref_target_for_command(&RefTarget, &RefType) -> String`.
+- `build_crossref_run_xml` 가 Hancom-canonical 8-parameter form
+  (`Fiexde=1` / `Prop=0` / `Command=?{target};N1;N2;N3;0;` /
+  `RefPath=?{target};` / `RefType` / `RefContentType` / `RefHyperLink` /
+  `RefOpenType=HWPHYPERLINK_JUMP_CURRENTTAB`) 직접 emit. 시그니처:
+  1번 인자 `target_name: &str` → `target: &RefTarget` (target 종류별
+  정확한 emit).
+
+#### Changed — `hwpforge-smithy-md`
+
+- Markdown encoder 의 `Control::CrossRef` arm 이 `display_text` 가
+  비어 있지 않으면 그대로 emit (사용자가 본 visible 문자열). 비어
+  있을 때만 `target.as_display()` 로 fallback (Name → "bookmark1",
+  SystemId → "#5") 하고 `[...]` anchor brackets 로 wrap.
+
+#### Removed (clean break)
+
+- `hwpforge-smithy-hwp5::projection::HWP5_CROSSREF_UNKNOWN_TAG`
+  constant (`"hwp5.crossref"`)
+- `parse_crossref_target_name`, `encode_hwp5_crossref_unknown_data`
+  (smithy-hwp5 projection)
+- `parse_hwp5_crossref_unknown_data`, `Hwp5CrossRefUnknownPayload`
+  (smithy-hwpx encoder), `HWP5_CROSSREF_UNKNOWN_TAG` const
+- HWPX encoder 의 `Control::Unknown { tag == HWP5_CROSSREF_UNKNOWN_TAG }`
+  branch — projection 이 더 이상 emit 하지 않음.
+- `build_hwp5_crossref_run_xml` 는 fieldid 회귀 게이트 목적으로
+  `#[cfg(test)]` 유지.
+
+#### Decoder — HWPX (Wave 12m Phase 2 Step 4)
+
+- `<hp:fieldBegin type="CROSSREF">` 가 `RefPath` 의 `#<u64>` 를
+  `RefTarget::SystemId` 로 정규화, Bookmark refs (`ref_type ==
+  Bookmark`) 는 `RefTarget::Name`, 그 외는 `RefTarget::Raw` fallback.
+  `display_text` capture 는 후속 wave (FieldBegin/FieldEnd 사이
+  sibling run 누적).
+
+#### Regression gates
+
+- 신규 (Step 2): 12 fixture parse 회귀 게이트
+  (`schema::section::tests::crossref_parse_*`) — 모든 wire 변형의
+  Command 파싱 검증.
+- 신규 (Step 6): `hwp5_to_hwpx_crossref_12_fixture_matrix_emits_typed_control_and_canonical_wire`
+  — 12 한컴 native fixture 의 end-to-end 변환 검증
+  (RefType / Hancom-canonical 8-param form / fieldid 양수).
+
+#### 검증
+
+- `cargo nextest run --workspace --all-features`: 2,463 passed, 2 skipped
+  (Wave 12n Step 6 baseline 2,445 → 2,463, Wave 12m Phase 2 +18 신규
+  게이트).
+- `cargo clippy --workspace --all-features --all-targets -D warnings`:
+  clean.
+
 ### Wave 12n Step 6 — `%pat` PATH 필드 lossless HWPX carry
 
 Wave 12n Step 3 에서 placeholder 로 남겨두었던 `Control::PathField` 의
