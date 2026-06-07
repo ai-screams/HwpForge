@@ -627,11 +627,18 @@ pub enum Control {
         bookmark_type: BookmarkType,
     },
 
-    /// A cross-reference (상호참조) to a bookmark, table, figure, or equation.
+    /// A cross-reference (상호참조) to a bookmark, footnote, endnote,
+    /// outline heading, table/figure/equation caption.
+    ///
     /// Maps to HWPX `fieldBegin type="CROSSREF"` with parameters.
+    ///
+    /// Wave 12m Phase 2: `target_name: String` 가 `target: RefTarget` 로
+    /// 변경 (breaking). 책갈피 이름과 한컴 자동 ID (#<id>) 가 타입으로
+    /// 구분되어 caller 가 의미를 정확히 알 수 있음.
     CrossRef {
-        /// Target bookmark or object name (e.g. `"bookmark1"`, `"table23"`).
-        target_name: String,
+        /// Reference target — Bookmark name (`Name(String)`) or system
+        /// id (`SystemId(u64)`) or unparseable raw (`Raw(String)`).
+        target: RefTarget,
         /// What kind of target is being referenced.
         ref_type: RefType,
         /// What content to display at the reference site.
@@ -808,6 +815,49 @@ impl PathFieldCommand {
             "$P" => Self::Path,
             "$P$F" => Self::PathAndFileName,
             other => Self::Unknown(other.to_string()),
+        }
+    }
+}
+
+/// Cross-reference target identifier (Wave 12m Phase 2).
+///
+/// Replaces the previous `target_name: String` field on
+/// [`Control::CrossRef`] with a type-safe enum that distinguishes the
+/// three observed wire forms in HWP5 `%xrf` Command strings:
+///
+/// - **`Name(String)`** — 사용자 지정 책갈피 이름 (Bookmark 전용).
+///   한컴 fixture 의 `?target1;6;0;0;0;` 형식에서 `target1` 부분.
+/// - **`SystemId(u64)`** — 한컴 자동 생성 정수 ID (Footnote / Endnote /
+///   Caption / Outline). 한컴 fixture 의 `?#1108165575;3;0;0;0;` 형식에서
+///   `#` 접두사를 떼고 정수로 파싱한 값.
+/// - **`Raw(String)`** — 위 두 형식 어느쪽으로도 파싱이 안 된 wire 값.
+///   silent fallback 위조 금지 원칙 (Codex(architect)) — 의미를
+///   모르면 raw 보존.
+///
+/// 변환은 `smithy-hwp5/src/projection.rs::decode_hwp5_target` 의
+/// boundary 함수에서 수행 (Core 는 wire-agnostic).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub enum RefTarget {
+    /// 사용자 지정 책갈피 이름 (Bookmark 전용).
+    Name(String),
+    /// 한컴 자동 생성 정수 ID (Footnote / Endnote / Caption / Outline).
+    SystemId(u64),
+    /// 위 형식 어느쪽으로도 정규화되지 않은 raw 값 — fallback 위조 금지.
+    Raw(String),
+}
+
+impl RefTarget {
+    /// Returns the displayable name for this target.
+    ///
+    /// - `Name(s)` → `s`
+    /// - `SystemId(id)` → `"#{id}"` 형식 (한컴 wire 와 동일)
+    /// - `Raw(s)` → `s`
+    pub fn as_display(&self) -> String {
+        match self {
+            Self::Name(s) => s.clone(),
+            Self::SystemId(id) => format!("#{id}"),
+            Self::Raw(s) => s.clone(),
         }
     }
 }
@@ -1157,24 +1207,27 @@ impl Control {
         Self::Memo { content, anchor_runs, metadata: MemoMetadata::default() }
     }
 
-    /// Creates a cross-reference to a bookmark target.
+    /// Creates a cross-reference to a bookmark target (convenience helper).
+    ///
+    /// Wave 12m Phase 2: 인자 타입이 `&str` 에서 `RefTarget` 로 변경
+    /// (breaking). 책갈피 이름이라면 `RefTarget::Name(...)`, 한컴 시스템
+    /// ID 라면 `RefTarget::SystemId(...)` 를 명시.
     ///
     /// # Examples
     ///
     /// ```
-    /// use hwpforge_core::control::Control;
+    /// use hwpforge_core::control::{Control, RefTarget};
     /// use hwpforge_foundation::{RefType, RefContentType};
     ///
-    /// let xref = Control::cross_ref("section1", RefType::Bookmark, RefContentType::Page);
+    /// let xref = Control::cross_ref(
+    ///     RefTarget::Name("section1".to_string()),
+    ///     RefType::Bookmark,
+    ///     RefContentType::Page,
+    /// );
     /// assert!(xref.is_cross_ref());
     /// ```
-    pub fn cross_ref(target: &str, ref_type: RefType, content_type: RefContentType) -> Self {
-        Self::CrossRef {
-            target_name: target.to_string(),
-            ref_type,
-            content_type,
-            as_hyperlink: false,
-        }
+    pub fn cross_ref(target: RefTarget, ref_type: RefType, content_type: RefContentType) -> Self {
+        Self::CrossRef { target, ref_type, content_type, as_hyperlink: false }
     }
 
     /// Creates a chart control with default dimensions and settings.
@@ -1899,8 +1952,8 @@ impl std::fmt::Display for Control {
             Self::Bookmark { name, bookmark_type } => {
                 write!(f, "Bookmark(\"{name}\", {bookmark_type})")
             }
-            Self::CrossRef { target_name, ref_type, .. } => {
-                write!(f, "CrossRef(\"{target_name}\", {ref_type})")
+            Self::CrossRef { target, ref_type, .. } => {
+                write!(f, "CrossRef({:?}, {ref_type})", target.as_display())
             }
             Self::Field { field_type, hint_text, name, .. } => {
                 let hint = hint_text.as_deref().unwrap_or("");

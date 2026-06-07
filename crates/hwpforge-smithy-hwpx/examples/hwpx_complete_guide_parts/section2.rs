@@ -194,13 +194,17 @@ pub(crate) fn section2_text_formatting() -> Section {
         vec![
             Run::text("HWPX 문서 정의는 섹션 1의 ", csi(CS_NORMAL)),
             Run::control(
-                Control::cross_ref("HWPX정의", RefType::Bookmark, RefContentType::Page),
+                Control::cross_ref(
+                    hwpforge_core::control::RefTarget::Name("HWPX정의".to_string()),
+                    RefType::Bookmark,
+                    RefContentType::Page,
+                ),
                 csi(CS_BLUE),
             ),
             Run::text("쪽을 참조하세요. ZIP 파일 구조는 ", csi(CS_NORMAL)),
             Run::control(
                 Control::CrossRef {
-                    target_name: "헤더구조".to_string(),
+                    target: hwpforge_core::control::RefTarget::Name("헤더구조".to_string()),
                     ref_type: RefType::Bookmark,
                     content_type: RefContentType::Page,
                     as_hyperlink: true,

@@ -675,12 +675,17 @@ fn build_runs(
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
-                    Control::CrossRef { target_name, ref_type, content_type, as_hyperlink } => {
+                    Control::CrossRef { target, ref_type, content_type, as_hyperlink } => {
+                        // Wave 12m Phase 2 Step 3: target_name → target: RefTarget.
+                        // Legacy path 가 String 을 기대하므로 boundary 에서
+                        // as_display() 로 normalize. Step 4 의 Native HWPX wire
+                        // 정확 emit 으로 교체 예정.
+                        let target_str = target.as_display();
                         let field_id = hyperlink_entries.len();
                         let marker = next_marker("HWPXR", field_id);
                         let real_xml = build_crossref_run_xml(
-                            target_name,
-                            target_name,
+                            &target_str,
+                            &target_str,
                             ref_type,
                             content_type,
                             *as_hyperlink,
@@ -1497,7 +1502,10 @@ fn build_crossref_run_xml(
     )
 }
 
-#[derive(Debug, Clone, Copy)]
+// Wave 12m Phase 2 Step 3: Copy removed — `RefType` / `RefContentType` 가
+// `Unknown(u8)` tuple variant 도입으로 더 이상 Copy 가 아님.
+// 이 struct 는 Step 4 의 wire-up 교체에서 완전히 제거될 예정.
+#[derive(Debug, Clone)]
 struct Hwp5CrossRefUnknownPayload<'a> {
     target_name: &'a str,
     display_text: &'a str,
@@ -4774,10 +4782,10 @@ mod tests {
 
     #[test]
     fn crossref_encoding() {
-        use hwpforge_core::control::Control;
+        use hwpforge_core::control::{Control, RefTarget};
         use hwpforge_foundation::{RefContentType, RefType};
         let ctrl = Control::CrossRef {
-            target_name: "bookmark1".to_string(),
+            target: RefTarget::Name("bookmark1".to_string()),
             ref_type: RefType::default(),
             content_type: RefContentType::default(),
             as_hyperlink: true,

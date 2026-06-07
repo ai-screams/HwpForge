@@ -573,8 +573,12 @@ fn section_bookmarks_refs_fields() -> Section {
         bookmark_type: BookmarkType::SpanEnd,
     };
 
-    // CrossRef (참조)
-    let cross_ref = Control::cross_ref("중요위치", RefType::Bookmark, RefContentType::Page);
+    // CrossRef (참조) — Wave 12m Phase 2: RefTarget enum 명시
+    let cross_ref = Control::cross_ref(
+        hwpforge_core::control::RefTarget::Name("중요위치".to_string()),
+        RefType::Bookmark,
+        RefContentType::Page,
+    );
 
     // Field: ClickHere (누름틀)
     let field_click = Control::field("여기를 클릭하세요");

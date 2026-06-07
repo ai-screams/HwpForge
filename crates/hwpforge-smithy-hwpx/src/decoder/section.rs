@@ -898,8 +898,11 @@ fn decode_field_control(
                 .and_then(|s| s.parse::<hwpforge_foundation::RefContentType>().ok())
                 .unwrap_or_default();
             let hl = get_field_param(fb, "RefHyperLink").map(|s| s == "true").unwrap_or(false);
+            // Wave 12m Phase 2 Step 3: HWPX wire 가 parsed string 만
+            // 제공하므로 `RefTarget::Raw` 로 보존. Step 4 의 boundary
+            // 변환에서 `#<id>` 형식이면 SystemId 로 정규화 예정.
             Control::CrossRef {
-                target_name: target,
+                target: hwpforge_core::control::RefTarget::Raw(target),
                 ref_type: rt,
                 content_type: ct,
                 as_hyperlink: hl,
@@ -2964,8 +2967,8 @@ mod tests {
         let crossref =
             controls.iter().find(|c| matches!(c, hwpforge_core::Control::CrossRef { .. }));
         assert!(crossref.is_some(), "CROSSREF field must produce CrossRef control");
-        if let Some(hwpforge_core::Control::CrossRef { target_name, as_hyperlink, .. }) = crossref {
-            assert_eq!(target_name, "mybook", "target_name must strip ?# prefix");
+        if let Some(hwpforge_core::Control::CrossRef { target, as_hyperlink, .. }) = crossref {
+            assert_eq!(target.as_display(), "mybook", "target.as_display() must strip ?# prefix");
             assert!(*as_hyperlink, "RefHyperLink=true must decode as as_hyperlink=true");
         }
     }

@@ -431,8 +431,11 @@ fn encode_control_styled(
             format!("{main_text}({sub_text})")
         }
         Control::Compose { compose_text, .. } => compose_text.clone(),
-        Control::CrossRef { target_name, .. } => {
-            format!("[{target_name}]")
+        Control::CrossRef { target, .. } => {
+            // Wave 12m Phase 2 Step 3: target_name: String → target: RefTarget.
+            // Markdown bridge 는 사용자에게 보이는 텍스트만 필요하므로
+            // as_display() 로 normalize.
+            format!("[{}]", target.as_display())
         }
         Control::Field { hint_text, .. } => hint_text.as_deref().unwrap_or("____").to_string(),
         Control::Bookmark { .. } => {

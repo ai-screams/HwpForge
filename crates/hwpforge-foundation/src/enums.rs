@@ -3412,19 +3412,38 @@ impl schemars::JsonSchema for FieldType {
 // ---------------------------------------------------------------------------
 
 /// Target type of a cross-reference (상호참조).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+///
+/// Wave 12m Phase 2 (Codex(architect+critic) review 반영):
+/// - `#[repr(u8)]` 제거 — HWP5 wire 코드는 boundary 에서 매핑 (Core/foundation
+///   은 wire-agnostic 의미 모델만 유지).
+/// - `Footnote` / `Endnote` / `Outline` 추가 (한컴 native dropdown 7 종 완비).
+/// - `Unknown(u8)` tuple variant 추가 — silent fallback 위조 방지 (Codex HIGH).
+///
+/// HWP5 `%xrf` Command N1 코드 → `RefType` 변환은
+/// `smithy-hwp5/src/projection.rs::decode_hwp5_ref_type` 에서 수행.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[non_exhaustive]
-#[repr(u8)]
 pub enum RefType {
-    /// Reference to a bookmark target.
+    /// Reference to a bookmark target. 한컴: "책갈피"
     #[default]
-    Bookmark = 0,
-    /// Reference to a table caption number.
-    Table = 1,
-    /// Reference to a figure/image caption number.
-    Figure = 2,
-    /// Reference to an equation number.
-    Equation = 3,
+    Bookmark,
+    /// Reference to a table caption number. 한컴: "표"
+    Table,
+    /// Reference to a figure/image caption number. 한컴: "그림"
+    Figure,
+    /// Reference to an equation caption number. 한컴: "수식"
+    Equation,
+    /// Reference to a footnote (각주).
+    Footnote,
+    /// Reference to an endnote (미주).
+    Endnote,
+    /// Reference to an outline heading (개요).
+    Outline,
+    /// Unrecognized RefType code preserved from wire for forward
+    /// compatibility. Carriers MUST NOT silently fallback to a known
+    /// variant — the unknown code is preserved so future Hancom
+    /// extensions don't get silently lost.
+    Unknown(u8),
 }
 
 impl fmt::Display for RefType {
@@ -3434,6 +3453,10 @@ impl fmt::Display for RefType {
             Self::Table => f.write_str("TARGET_TABLE"),
             Self::Figure => f.write_str("TARGET_FIGURE"),
             Self::Equation => f.write_str("TARGET_EQUATION"),
+            Self::Footnote => f.write_str("TARGET_FOOTNOTE"),
+            Self::Endnote => f.write_str("TARGET_ENDNOTE"),
+            Self::Outline => f.write_str("TARGET_OUTLINE"),
+            Self::Unknown(code) => write!(f, "TARGET_UNKNOWN({code})"),
         }
     }
 }
@@ -3447,29 +3470,15 @@ impl std::str::FromStr for RefType {
             "TARGET_TABLE" | "Table" | "table" => Ok(Self::Table),
             "TARGET_FIGURE" | "Figure" | "figure" => Ok(Self::Figure),
             "TARGET_EQUATION" | "Equation" | "equation" => Ok(Self::Equation),
+            "TARGET_FOOTNOTE" | "Footnote" | "footnote" => Ok(Self::Footnote),
+            "TARGET_ENDNOTE" | "Endnote" | "endnote" => Ok(Self::Endnote),
+            "TARGET_OUTLINE" | "Outline" | "outline" => Ok(Self::Outline),
             _ => Err(FoundationError::ParseError {
                 type_name: "RefType".to_string(),
                 value: s.to_string(),
-                valid_values: "TARGET_BOOKMARK, TARGET_TABLE, TARGET_FIGURE, TARGET_EQUATION"
+                valid_values: "TARGET_BOOKMARK, TARGET_TABLE, TARGET_FIGURE, TARGET_EQUATION, \
+                    TARGET_FOOTNOTE, TARGET_ENDNOTE, TARGET_OUTLINE"
                     .to_string(),
-            }),
-        }
-    }
-}
-
-impl TryFrom<u8> for RefType {
-    type Error = FoundationError;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Self::Bookmark),
-            1 => Ok(Self::Table),
-            2 => Ok(Self::Figure),
-            3 => Ok(Self::Equation),
-            _ => Err(FoundationError::ParseError {
-                type_name: "RefType".to_string(),
-                value: value.to_string(),
-                valid_values: "0..3 (Bookmark..Equation)".to_string(),
             }),
         }
     }
@@ -3490,19 +3499,37 @@ impl schemars::JsonSchema for RefType {
 // ---------------------------------------------------------------------------
 
 /// Content display type for a cross-reference (what to show at the reference site).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+///
+/// Wave 12m Phase 2 (Codex(architect+critic) review 반영):
+/// - `#[repr(u8)]` 제거 — N2 wire 코드는 boundary 에서 매핑.
+/// - `BookmarkName` 추가 — Bookmark 전용 ContentType "책갈피 이름" (한컴
+///   dropdown N2=2 Bookmark 전용 의미). 다른 RefType 에서는 의미가 다름.
+/// - `Unknown(u8)` 추가 — silent fallback 위조 방지.
+///
+/// HWP5 N2 코드 → `RefContentType` 변환은 RefType-relative
+/// 매핑이며 `smithy-hwp5/src/projection.rs::decode_hwp5_content_type`
+/// 에서 수행.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[non_exhaustive]
-#[repr(u8)]
 pub enum RefContentType {
-    /// Show page number where the target appears.
+    /// Show page number where the target appears. 한컴: "쪽 번호" (모든 RefType 공통)
     #[default]
-    Page = 0,
-    /// Show the target's numbering (e.g. "표 3", "그림 2").
-    Number = 1,
-    /// Show the target's content text.
-    Contents = 2,
-    /// Show relative position ("위" / "아래").
-    UpDownPos = 3,
+    Page,
+    /// Show the target's numbering (e.g. "표 3", "그림 2", 각주 번호).
+    /// 한컴: "주 번호" / "표 번호" / "그림 번호" / "개요 번호" 등 (N2=1 for
+    /// Footnote/Endnote/Caption/Outline).
+    Number,
+    /// Show the target's content/body text. 한컴: "캡션 내용" /
+    /// "개요 내용" / "책갈피 내용" (Bookmark N2=1; Caption/Outline N2=2).
+    Contents,
+    /// Show the bookmark's name (Bookmark 전용). 한컴: "책갈피 이름"
+    /// (Bookmark N2=2 전용).
+    BookmarkName,
+    /// Show relative position ("위" / "아래"). 한컴: "위/아래" (N2=3).
+    UpDownPos,
+    /// Unrecognized ContentType code preserved from wire for forward
+    /// compatibility.
+    Unknown(u8),
 }
 
 impl fmt::Display for RefContentType {
@@ -3511,7 +3538,9 @@ impl fmt::Display for RefContentType {
             Self::Page => f.write_str("OBJECT_TYPE_PAGE"),
             Self::Number => f.write_str("OBJECT_TYPE_NUMBER"),
             Self::Contents => f.write_str("OBJECT_TYPE_CONTENTS"),
+            Self::BookmarkName => f.write_str("OBJECT_TYPE_BOOKMARK_NAME"),
             Self::UpDownPos => f.write_str("OBJECT_TYPE_UPDOWNPOS"),
+            Self::Unknown(code) => write!(f, "OBJECT_TYPE_UNKNOWN({code})"),
         }
     }
 }
@@ -3524,31 +3553,16 @@ impl std::str::FromStr for RefContentType {
             "OBJECT_TYPE_PAGE" | "Page" | "page" => Ok(Self::Page),
             "OBJECT_TYPE_NUMBER" | "Number" | "number" => Ok(Self::Number),
             "OBJECT_TYPE_CONTENTS" | "Contents" | "contents" => Ok(Self::Contents),
+            "OBJECT_TYPE_BOOKMARK_NAME" | "BookmarkName" | "bookmark_name" => {
+                Ok(Self::BookmarkName)
+            }
             "OBJECT_TYPE_UPDOWNPOS" | "UpDownPos" | "updownpos" => Ok(Self::UpDownPos),
             _ => Err(FoundationError::ParseError {
                 type_name: "RefContentType".to_string(),
                 value: s.to_string(),
-                valid_values:
-                    "OBJECT_TYPE_PAGE, OBJECT_TYPE_NUMBER, OBJECT_TYPE_CONTENTS, OBJECT_TYPE_UPDOWNPOS"
-                        .to_string(),
-            }),
-        }
-    }
-}
-
-impl TryFrom<u8> for RefContentType {
-    type Error = FoundationError;
-
-    fn try_from(value: u8) -> Result<Self, Self::Error> {
-        match value {
-            0 => Ok(Self::Page),
-            1 => Ok(Self::Number),
-            2 => Ok(Self::Contents),
-            3 => Ok(Self::UpDownPos),
-            _ => Err(FoundationError::ParseError {
-                type_name: "RefContentType".to_string(),
-                value: value.to_string(),
-                valid_values: "0..3 (Page..UpDownPos)".to_string(),
+                valid_values: "OBJECT_TYPE_PAGE, OBJECT_TYPE_NUMBER, OBJECT_TYPE_CONTENTS, \
+                    OBJECT_TYPE_BOOKMARK_NAME, OBJECT_TYPE_UPDOWNPOS"
+                    .to_string(),
             }),
         }
     }
@@ -3693,8 +3707,11 @@ const _: () = assert!(std::mem::size_of::<ImageFillMode>() == 1);
 const _: () = assert!(std::mem::size_of::<CurveSegmentType>() == 1);
 const _: () = assert!(std::mem::size_of::<BookmarkType>() == 1);
 const _: () = assert!(std::mem::size_of::<FieldType>() == 1);
-const _: () = assert!(std::mem::size_of::<RefType>() == 1);
-const _: () = assert!(std::mem::size_of::<RefContentType>() == 1);
+// Wave 12m Phase 2: RefType / RefContentType 의 `#[repr(u8)]` 제거 + Unknown(u8)
+// tuple variant 추가로 size 가 1 byte 에서 2 bytes (discriminant + u8 payload) 로
+// 증가. trade-off: type-safe forward-compat carry > 1 byte memory.
+const _: () = assert!(std::mem::size_of::<RefType>() == 2);
+const _: () = assert!(std::mem::size_of::<RefContentType>() == 2);
 
 // ---------------------------------------------------------------------------
 // TextDirection
