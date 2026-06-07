@@ -888,7 +888,7 @@ fn decode_field_control(
             }
         }
         "CROSSREF" => {
-            let target = get_field_param(fb, "RefPath")
+            let target_str = get_field_param(fb, "RefPath")
                 .map(|p| p.trim_start_matches("?#").to_string())
                 .unwrap_or_default();
             let rt = get_field_param(fb, "RefType")
@@ -898,14 +898,31 @@ fn decode_field_control(
                 .and_then(|s| s.parse::<hwpforge_foundation::RefContentType>().ok())
                 .unwrap_or_default();
             let hl = get_field_param(fb, "RefHyperLink").map(|s| s == "true").unwrap_or(false);
-            // Wave 12m Phase 2 Step 3: HWPX wire 가 parsed string 만
-            // 제공하므로 `RefTarget::Raw` 로 보존. Step 4 의 boundary
-            // 변환에서 `#<id>` 형식이면 SystemId 로 정규화 예정.
+            // Wave 12m Phase 2 Step 4: boundary-decode the parsed target.
+            // For Bookmark refs (ref_type == Bookmark) treat the path as
+            // a name; otherwise look for `#<u64>` and lift to SystemId.
+            // Failure preserves Raw so caller still sees the wire value.
+            let target = if matches!(rt, hwpforge_foundation::RefType::Bookmark) {
+                hwpforge_core::control::RefTarget::Name(target_str.clone())
+            } else if let Some(rest) = target_str.strip_prefix('#') {
+                if let Ok(id) = rest.parse::<u64>() {
+                    hwpforge_core::control::RefTarget::SystemId(id)
+                } else {
+                    hwpforge_core::control::RefTarget::Raw(target_str.clone())
+                }
+            } else {
+                hwpforge_core::control::RefTarget::Raw(target_str.clone())
+            };
+            // Display text capture from fieldBegin/fieldEnd body siblings
+            // is a follow-up. HWPX-native decode currently leaves it
+            // empty; the HWPX encoder falls back to target.as_display()
+            // for an empty display_text so round-trip stays readable.
             Control::CrossRef {
-                target: hwpforge_core::control::RefTarget::Raw(target),
+                target,
                 ref_type: rt,
                 content_type: ct,
                 as_hyperlink: hl,
+                display_text: String::new(),
             }
         }
         "MEMO" => {

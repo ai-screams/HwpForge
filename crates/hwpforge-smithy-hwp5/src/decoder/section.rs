@@ -126,6 +126,13 @@ pub(crate) enum Hwp5Control {
     /// preserved). See `schema::section::Hwp5InlinePageNumberControl`.
     /// (Wave 12n.)
     InlinePageNumber(crate::schema::section::Hwp5InlinePageNumberControl),
+    /// `%xrf` cross-reference control — carries the structured
+    /// `?<target>;N1;N2;N3;N4;` Command with raw RefType / ContentType /
+    /// hyperlink codes. The projection layer maps these to typed
+    /// `Control::CrossRef` via boundary functions in
+    /// `smithy-hwp5/src/projection.rs`. See
+    /// `schema::section::Hwp5CrossRefControl`. (Wave 12m Phase 2.)
+    CrossRef(crate::schema::section::Hwp5CrossRefControl),
     /// Header control with nested subtree paragraphs.
     Header(Hwp5NestedSubtree),
     /// Footer control with nested subtree paragraphs.
@@ -583,6 +590,11 @@ const CTRL_ID_FIELD_DATE_CODE: u32 = 0x2564_7465;
 /// big-endian u32. Wave 12n. Payload layout lives on
 /// `crate::schema::section::Hwp5PathFieldControl`.
 const CTRL_ID_FIELD_PATH: u32 = 0x2570_6174;
+
+/// ctrl_id for the `%xrf` cross-reference field: ASCII `%xrf` as
+/// big-endian bytes (`0x25 0x78 0x72 0x66`). See
+/// `crate::schema::section::Hwp5CrossRefControl`. (Wave 12m Phase 2.)
+const CTRL_ID_FIELD_CROSSREF: u32 = 0x2578_7266;
 
 /// ctrl_id for the `atno` inline page-number control: ASCII `atno` as
 /// big-endian u32. Wave 12n. Payload layout lives on
@@ -1836,6 +1848,25 @@ impl BodyTextParserState {
                         self.warnings.push(Hwp5Warning::DroppedControl {
                             control: "path_field",
                             reason: "malformed %pat CtrlHeader payload; dropping path field"
+                                .to_string(),
+                        });
+                    }
+                } else if ctrl_id == CTRL_ID_FIELD_CROSSREF {
+                    // `%xrf` ctrl carries a structured cross-reference Command
+                    // `?<target>;N1;N2;N3;N4;` + 8-byte trailer. Wave 12m
+                    // Phase 2. Schema preserves raw N1/N2/N3 codes;
+                    // projection boundary maps them to typed RefType /
+                    // RefContentType / RefTarget.
+                    if let Some(xrf) =
+                        crate::schema::section::Hwp5CrossRefControl::parse(ctrl_id, &record.data)
+                    {
+                        if let Some(buf) = self.current.as_mut() {
+                            buf.controls.push(Hwp5Control::CrossRef(xrf));
+                        }
+                    } else {
+                        self.warnings.push(Hwp5Warning::DroppedControl {
+                            control: "crossref",
+                            reason: "malformed %xrf CtrlHeader payload; dropping cross-reference"
                                 .to_string(),
                         });
                     }

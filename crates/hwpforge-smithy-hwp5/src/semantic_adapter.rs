@@ -353,6 +353,17 @@ fn adapt_control(
             build,
             ids,
         ),
+        // %xrf cross-reference (Wave 12m). We classify it as `CrossRef`
+        // through the existing shape-control adapter so the audit
+        // counts match what projection emits via the FieldBegin pair.
+        Hwp5Control::CrossRef(xrf) => adapt_shape_control(
+            xrf.ctrl_id,
+            Hwp5SemanticControlKind::CrossRef,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
         Hwp5Control::InlinePageNumber(atno) => adapt_shape_control(
             atno.ctrl_id,
             Hwp5SemanticControlKind::InlinePageNumber,

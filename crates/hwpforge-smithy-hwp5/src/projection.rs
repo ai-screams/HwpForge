@@ -14,6 +14,7 @@ use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::section::{HeaderFooter, PageBorderFillEntry, PageNumber, Section};
 use hwpforge_core::table::{Table, TableCell, TableMargin, TableRow};
+use hwpforge_core::control::RefTarget;
 use hwpforge_core::Control;
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
@@ -48,6 +49,22 @@ const CTRL_ID_PAGE_NUMBER: u32 = 0x7067_6E70; // "pgnp"
 const CTRL_ID_BOOKMARK_SPAN: u32 = 0x2562_6D6B; // "%bmk"
 const CTRL_ID_HYPERLINK: u32 = 0x2568_6C6B; // "%hlk"
 const CTRL_ID_CROSSREF: u32 = 0x2578_7266; // "%xrf"
+/// Wire code for the Bookmark `RefType` variant (Wave 12m Phase 2). The
+/// HWP5 `%xrf` Command's N1 slot uses these codes; boundary functions
+/// in this file map them to typed [`RefType`].
+const HWP5_CROSSREF_REF_TYPE_TABLE: u8 = 0;
+/// Wire code for the Figure `RefType` variant (Wave 12m).
+const HWP5_CROSSREF_REF_TYPE_FIGURE: u8 = 1;
+/// Wire code for the Equation `RefType` variant (Wave 12m).
+const HWP5_CROSSREF_REF_TYPE_EQUATION: u8 = 2;
+/// Wire code for the Footnote `RefType` variant (Wave 12m).
+const HWP5_CROSSREF_REF_TYPE_FOOTNOTE: u8 = 3;
+/// Wire code for the Endnote `RefType` variant (Wave 12m).
+const HWP5_CROSSREF_REF_TYPE_ENDNOTE: u8 = 4;
+/// Wire code for the Outline `RefType` variant (Wave 12m).
+const HWP5_CROSSREF_REF_TYPE_OUTLINE: u8 = 5;
+/// Wire code for the Bookmark `RefType` variant (Wave 12m).
+const HWP5_CROSSREF_REF_TYPE_BOOKMARK: u8 = 6;
 const CTRL_ID_BOOKMARK_POINT: u32 = 0x626F_6B6D; // "bokm"
 /// Wave 12l: ClickHere (누름틀) inline `FieldBegin` ctrl_id `%clk`.
 /// Hint/help live in the matching `%clk` CtrlHeader payload and the
@@ -77,7 +94,6 @@ const CTRL_ID_FIELD_PATH: u32 = 0x2570_6174; // "%pat"
 /// `CtrlHeader` placeholder; only the inline id is needed here, where we
 /// translate `FieldBegin` markers into `ActiveField::MemoAnchor`.
 const CTRL_ID_MEMO_INLINE: u32 = 0x2525_6D65;
-const HWP5_CROSSREF_UNKNOWN_TAG: &str = "hwp5.crossref";
 
 #[derive(Debug, Default)]
 struct SectionProjectionHints {
@@ -86,19 +102,26 @@ struct SectionProjectionHints {
 
 impl SectionProjectionHints {
     fn from_paragraphs(paragraphs: &[Hwp5Paragraph]) -> Self {
+        // Wave 12m Phase 2 Step 4: %xrf is now `Hwp5Control::CrossRef`
+        // (typed schema). Only Bookmark cross-refs (ref_type_code == 6)
+        // carry a bookmark NAME in `target_raw`; other ref types use
+        // `#<id>` SystemIds and won't resolve to a bookmark span, so
+        // they are skipped here. Preserves the previous behavior of
+        // back-feeding bookmark span names from forward cross-refs.
         let mut seen = BTreeSet::new();
         let mut unresolved_bookmark_names = VecDeque::new();
         for paragraph in paragraphs {
             for control in &paragraph.controls {
-                let Some(unknown) = unknown_control_header(control) else {
+                let Hwp5Control::CrossRef(xrf) = control else {
                     continue;
                 };
-                if unknown.ctrl_id != CTRL_ID_CROSSREF {
+                if xrf.ref_type_code != HWP5_CROSSREF_REF_TYPE_BOOKMARK {
                     continue;
                 }
-                let Some(target_name) = parse_crossref_target_name(unknown.header_data) else {
+                let target_name = xrf.target_raw.clone();
+                if target_name.is_empty() {
                     continue;
-                };
+                }
                 if seen.insert(target_name.clone()) {
                     unresolved_bookmark_names.push_back(target_name);
                 }
@@ -146,6 +169,11 @@ struct ParagraphProjectionQueues<'a> {
     /// Pending `%pat` path/file-name fields in document order (Wave 12n).
     /// Consumed by `FieldBegin %pat` inline segments.
     pathfield_controls: VecDeque<crate::schema::section::Hwp5PathFieldControl>,
+    /// Pending `%xrf` cross-reference controls in document order
+    /// (Wave 12m Phase 2 Step 4). Consumed by `FieldBegin %xrf` inline
+    /// segments via `start_active_field`. Same lifecycle as the other
+    /// CtrlHeader-backed field queues above.
+    crossref_controls: VecDeque<crate::schema::section::Hwp5CrossRefControl>,
     point_bookmark_names: VecDeque<String>,
 }
 
@@ -160,8 +188,13 @@ enum ActiveField {
         name: String,
         start_utf16: u32,
     },
+    /// `%xrf` cross-reference field span (Wave 12m Phase 2 Step 4).
+    /// Carries the structured wire payload parsed at the decoder
+    /// boundary. `display_text` accumulates body chars between
+    /// `FieldBegin` and `FieldEnd` so the HWPX encoder can embed it
+    /// between `<hp:fieldBegin>` and `<hp:fieldEnd>`.
     CrossRef {
-        target_name: String,
+        control: crate::schema::section::Hwp5CrossRefControl,
         start_utf16: u32,
         display_text: String,
     },
@@ -746,6 +779,8 @@ fn project_paragraph_with_images_structural(
                     match active {
                         ActiveField::Hyperlink { display_text, .. }
                         | ActiveField::CrossRef { display_text, .. } => display_text.push_str(text),
+                        // (Wave 12m Phase 2 Step 4: control field carries
+                        //  the structured payload; display_text is body-only.)
                         // BookmarkSpan / PlainTextFallback / MemoAnchor all emit
                         // their anchor text in `finish_active_field` via
                         // `project_text_segment(start, end)`, so silently
@@ -859,6 +894,11 @@ fn project_paragraph_with_images_structural(
                 } else {
                     None
                 };
+                let crossref = if ctrl_id == CTRL_ID_CROSSREF {
+                    queues.crossref_controls.pop_front()
+                } else {
+                    None
+                };
                 active_field = Some(start_active_field(
                     ctrl_id,
                     header,
@@ -867,6 +907,7 @@ fn project_paragraph_with_images_structural(
                     summery,
                     datecode,
                     pathfield,
+                    crossref,
                     visible_utf16,
                     projection_images,
                     field_hints.as_deref_mut(),
@@ -988,6 +1029,7 @@ fn paragraph_needs_structural_projection(hwp_para: &Hwp5Paragraph) -> bool {
                 || matches!(control, Hwp5Control::SummeryField(_))
                 || matches!(control, Hwp5Control::DateCodeField(_))
                 || matches!(control, Hwp5Control::PathField(_))
+                || matches!(control, Hwp5Control::CrossRef(_))
                 || matches!(control, Hwp5Control::InlinePageNumber(_))
         })
 }
@@ -1004,6 +1046,7 @@ fn build_paragraph_projection_queues<'a>(
     let mut summery_fields = VecDeque::new();
     let mut datecode_fields = VecDeque::new();
     let mut pathfield_controls = VecDeque::new();
+    let mut crossref_controls = VecDeque::new();
     let mut point_bookmark_names = VecDeque::new();
     let mut field_hints = field_hints;
 
@@ -1040,6 +1083,14 @@ fn build_paragraph_projection_queues<'a>(
             pathfield_controls.push_back(pat.clone());
             continue;
         }
+        // `%xrf` cross-reference fields (Wave 12m Phase 2 Step 4) — same
+        // dedicated-queue pattern. The structured Command (RefType /
+        // ContentType / hyperlink / target) lives in the parsed control;
+        // `FieldBegin %xrf` pulls the next entry off this queue.
+        if let Hwp5Control::CrossRef(xrf) = control {
+            crossref_controls.push_back(xrf.clone());
+            continue;
+        }
         // `atno` inline page-number controls (Wave 12n) intentionally
         // fall through to `object_controls`. Codex 4차 review: atno's
         // ParaText marker is `0x12 ControlRef`, not `0x03 FieldBegin`,
@@ -1056,8 +1107,7 @@ fn build_paragraph_projection_queues<'a>(
             CTRL_ID_SECTION_DEF
             | CTRL_ID_COLUMN_DEF
             | CTRL_ID_BOOKMARK_SPAN
-            | CTRL_ID_HYPERLINK
-            | CTRL_ID_CROSSREF => marker_headers.push_back(unknown),
+            | CTRL_ID_HYPERLINK => marker_headers.push_back(unknown),
             // Page numbers are resolved at section level by
             // `find_section_page_number` (which also reaches `pgnp` controls
             // inside table cells). Skip here so it is not mistaken for a
@@ -1088,6 +1138,7 @@ fn build_paragraph_projection_queues<'a>(
         summery_fields,
         datecode_fields,
         pathfield_controls,
+        crossref_controls,
         point_bookmark_names,
     }
 }
@@ -1106,6 +1157,7 @@ fn start_active_field(
     summery: Option<crate::schema::section::Hwp5SummeryControl>,
     datecode: Option<crate::schema::section::Hwp5DateCodeControl>,
     pathfield: Option<crate::schema::section::Hwp5PathFieldControl>,
+    crossref: Option<crate::schema::section::Hwp5CrossRefControl>,
     start_utf16: u32,
     projection_images: &mut ProjectionImageState<'_>,
     field_hints: Option<&mut SectionProjectionHints>,
@@ -1151,14 +1203,19 @@ fn start_active_field(
             }
         }
         CTRL_ID_CROSSREF => {
-            if let Some(target_name) =
-                header.and_then(|header| parse_crossref_target_name(header.header_data))
-            {
-                ActiveField::CrossRef { target_name, start_utf16, display_text: String::new() }
+            // Wave 12m Phase 2 Step 4: %xrf now flows through the typed
+            // `Hwp5Control::CrossRef` schema, not `Unknown`. The structured
+            // Command (target / N1..N4) lives in `crossref`; legacy
+            // `header` (UnknownControlHeader) never arrives anymore for
+            // %xrf and is ignored here.
+            let _ = header;
+            if let Some(control) = crossref {
+                ActiveField::CrossRef { control, start_utf16, display_text: String::new() }
             } else {
                 projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
                     subject: "field.crossref",
-                    reason: "cross-reference target unavailable; preserving only visible text"
+                    reason: "cross-reference payload unavailable for inline anchor; \
+                             preserving only visible text"
                         .to_string(),
                 });
                 ActiveField::PlainTextFallback { start_utf16 }
@@ -1270,12 +1327,19 @@ fn finish_active_field(
                 char_shape_id,
             ));
         }
-        ActiveField::CrossRef { target_name, start_utf16, display_text } => {
+        ActiveField::CrossRef { control, start_utf16, display_text } => {
+            // Wave 12m Phase 2 Step 4: emit native `Control::CrossRef`.
+            // Boundary functions decode the wire codes into typed
+            // `RefType` / `RefContentType` / `RefTarget`. The HWPX
+            // encoder embeds `display_text` between fieldBegin/fieldEnd.
             let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
                 &hwp_para.char_shape_runs,
                 start_utf16,
             ) as usize);
             if display_text.is_empty() {
+                // No visible body between FieldBegin/FieldEnd — preserve
+                // any latent body text so users at least see the source
+                // span. This mirrors the pre-Step-4 fallback.
                 runs.extend(project_text_segment(
                     &hwp_para.text,
                     &hwp_para.char_shape_runs,
@@ -1284,17 +1348,13 @@ fn finish_active_field(
                 ));
                 return;
             }
+            let ref_type = decode_hwp5_crossref_ref_type(control.ref_type_code);
+            let content_type =
+                decode_hwp5_crossref_content_type(control.ref_type_code, control.content_type_code);
+            let target = decode_hwp5_crossref_target(&control.target_raw, control.ref_type_code);
+            let as_hyperlink = control.hyperlink_code != 0;
             runs.push(Run::control(
-                Control::Unknown {
-                    tag: HWP5_CROSSREF_UNKNOWN_TAG.to_string(),
-                    data: Some(encode_hwp5_crossref_unknown_data(
-                        &target_name,
-                        &display_text,
-                        RefType::Bookmark,
-                        RefContentType::Page,
-                        false,
-                    )),
-                },
+                Control::CrossRef { target, ref_type, content_type, as_hyperlink, display_text },
                 char_shape_id,
             ));
         }
@@ -1686,10 +1746,55 @@ fn parse_hyperlink_url(header_data: &[u8]) -> Option<String> {
     Some(raw_url.replace("\\:", ":"))
 }
 
-fn parse_crossref_target_name(header_data: &[u8]) -> Option<String> {
-    let command = parse_utf16_command_string(header_data)?;
-    let target = command.strip_prefix('?').unwrap_or(&command).split(';').next()?;
-    (!target.is_empty()).then(|| target.to_string())
+/// Wave 12m Phase 2 Step 4 boundary: HWP5 `%xrf` N1 (RefType) wire code
+/// → typed [`RefType`]. Unknown codes are preserved as
+/// `RefType::Unknown(u8)`. Keeps the projection layer free from raw
+/// `u8`-vs-enum knowledge.
+fn decode_hwp5_crossref_ref_type(code: u8) -> RefType {
+    match code {
+        HWP5_CROSSREF_REF_TYPE_TABLE => RefType::Table,
+        HWP5_CROSSREF_REF_TYPE_FIGURE => RefType::Figure,
+        HWP5_CROSSREF_REF_TYPE_EQUATION => RefType::Equation,
+        HWP5_CROSSREF_REF_TYPE_FOOTNOTE => RefType::Footnote,
+        HWP5_CROSSREF_REF_TYPE_ENDNOTE => RefType::Endnote,
+        HWP5_CROSSREF_REF_TYPE_OUTLINE => RefType::Outline,
+        HWP5_CROSSREF_REF_TYPE_BOOKMARK => RefType::Bookmark,
+        other => RefType::Unknown(other),
+    }
+}
+
+/// Wave 12m Phase 2 Step 4 boundary: HWP5 `%xrf` N2 (ContentType) is
+/// RefType-relative. For Bookmark refs, slot `1` means `Contents` and
+/// slot `2` means `BookmarkName`; for everything else, slot `1` means
+/// `Number` and slot `2` means `Contents`. Slot `0` is always `Page`
+/// and `3` is always `UpDownPos`. Unknown codes fall back to
+/// `RefContentType::Unknown(u8)`.
+fn decode_hwp5_crossref_content_type(ref_type_code: u8, code: u8) -> RefContentType {
+    match (ref_type_code, code) {
+        (_, 0) => RefContentType::Page,
+        (HWP5_CROSSREF_REF_TYPE_BOOKMARK, 1) => RefContentType::Contents,
+        (HWP5_CROSSREF_REF_TYPE_BOOKMARK, 2) => RefContentType::BookmarkName,
+        (_, 1) => RefContentType::Number,
+        (_, 2) => RefContentType::Contents,
+        (_, 3) => RefContentType::UpDownPos,
+        (_, other) => RefContentType::Unknown(other),
+    }
+}
+
+/// Wave 12m Phase 2 Step 4 boundary: HWP5 `%xrf` Command's target slot
+/// → typed [`RefTarget`]. Bookmark refs (`ref_type_code == 6`) carry a
+/// raw bookmark NAME; other refs carry a `#<u64>` SystemId. Anything
+/// else lands in `RefTarget::Raw` (no fabrication).
+fn decode_hwp5_crossref_target(target_raw: &str, ref_type_code: u8) -> RefTarget {
+    if ref_type_code == HWP5_CROSSREF_REF_TYPE_BOOKMARK {
+        return RefTarget::Name(target_raw.to_string());
+    }
+    if let Some(rest) = target_raw.strip_prefix('#') {
+        if let Ok(id) = rest.parse::<u64>() {
+            return RefTarget::SystemId(id);
+        }
+    }
+    RefTarget::Raw(target_raw.to_string())
 }
 
 /// Resolves a `pgnp` (page-number) control header into a [`PageNumber`],
@@ -1775,15 +1880,6 @@ fn char_shape_id_for_visible_position(runs: &[Hwp5CharShapeRun], position: u32) 
     char_shape_id_at_position(runs, position.saturating_sub(1))
 }
 
-fn encode_hwp5_crossref_unknown_data(
-    target_name: &str,
-    display_text: &str,
-    ref_type: RefType,
-    content_type: RefContentType,
-    as_hyperlink: bool,
-) -> String {
-    format!("{target_name}\n{display_text}\n{ref_type}\n{content_type}\n{as_hyperlink}",)
-}
 
 // ---------------------------------------------------------------------------
 // Text splitting
@@ -1850,6 +1946,13 @@ fn project_control_run(
             ))
         }
         Hwp5Control::OleObject(ole) => project_ole_object_run(ole, projection_images),
+        // %xrf cross-reference fields (Wave 12m) flow through the
+        // `FieldBegin`/`ActiveField::CrossRef` machinery in
+        // `project_paragraph_with_images_structural` — same pattern as
+        // ClickHere / SummeryField / DateCodeField / PathField. A
+        // free-floating CrossRef CtrlHeader means the inline `FieldBegin`
+        // marker did not pair with it; drop rather than silently emit.
+        Hwp5Control::CrossRef(_) => None,
     }
 }
 

@@ -51,7 +51,6 @@ use super::escape_xml;
 /// Using a single module-level counter prevents duplicate marker strings
 /// even when multiple Control variants are encoded in the same document.
 static MARKER_NONCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-const HWP5_CROSSREF_UNKNOWN_TAG: &str = "hwp5.crossref";
 
 /// Returns a unique marker string for placeholder run injection.
 fn next_marker(prefix: &str, field_id: usize) -> String {
@@ -675,46 +674,32 @@ fn build_runs(
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
-                    Control::CrossRef { target, ref_type, content_type, as_hyperlink } => {
-                        // Wave 12m Phase 2 Step 3: target_name → target: RefTarget.
-                        // Legacy path 가 String 을 기대하므로 boundary 에서
-                        // as_display() 로 normalize. Step 4 의 Native HWPX wire
-                        // 정확 emit 으로 교체 예정.
-                        let target_str = target.as_display();
+                    Control::CrossRef {
+                        target,
+                        ref_type,
+                        content_type,
+                        as_hyperlink,
+                        display_text,
+                    } => {
+                        // Wave 12m Phase 2 Step 4: display_text 는 caller 가
+                        // 채워야 하는 visible body. 비어 있으면 target 의
+                        // as_display() 로 fallback 하여 사용자가 직접 build 한
+                        // CrossRef (no body) 도 한컴이 인식할 최소 text 를 갖
+                        // 도록 한다.
+                        let fallback_text = target.as_display();
+                        let visible_text = if display_text.is_empty() {
+                            fallback_text.as_str()
+                        } else {
+                            display_text.as_str()
+                        };
                         let field_id = hyperlink_entries.len();
                         let marker = next_marker("HWPXR", field_id);
                         let real_xml = build_crossref_run_xml(
-                            &target_str,
-                            &target_str,
+                            target,
+                            visible_text,
                             ref_type,
                             content_type,
                             *as_hyperlink,
-                            char_pr_id_ref,
-                            field_id,
-                        );
-                        let marker_run_xml = format!(
-                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
-                        );
-                        hyperlink_entries.push((marker_run_xml, real_xml));
-                        texts.push(HxText::new(marker));
-                    }
-                    Control::Unknown { tag, data }
-                        if tag == HWP5_CROSSREF_UNKNOWN_TAG
-                            && data
-                                .as_deref()
-                                .and_then(parse_hwp5_crossref_unknown_data)
-                                .is_some() =>
-                    {
-                        let payload = parse_hwp5_crossref_unknown_data(data.as_deref().unwrap())
-                            .expect("guard already parsed hwp5 crossref payload");
-                        let field_id = hyperlink_entries.len();
-                        let marker = next_marker("HWPXH5XRF", field_id);
-                        let real_xml = build_hwp5_crossref_run_xml(
-                            payload.target_name,
-                            payload.display_text,
-                            payload.ref_type,
-                            payload.content_type,
-                            payload.as_hyperlink,
                             char_pr_id_ref,
                             field_id,
                         );
@@ -1450,9 +1435,86 @@ fn days_to_ymd(days_since_epoch: u64) -> (u64, u64, u64) {
     (y, m, d)
 }
 
+/// Wave 12m Phase 2 Step 4 boundary: typed [`RefType`] → HWP5 `%xrf`
+/// N1 wire code. Returns the canonical code for known variants and
+/// `Unknown(code)` preserves the original byte.
+fn ref_type_wire_code(ref_type: &hwpforge_foundation::RefType) -> u8 {
+    use hwpforge_foundation::RefType::*;
+    match ref_type {
+        Table => 0,
+        Figure => 1,
+        Equation => 2,
+        Footnote => 3,
+        Endnote => 4,
+        Outline => 5,
+        Bookmark => 6,
+        Unknown(other) => *other,
+        // Foundation RefType is `#[non_exhaustive]`; future variants
+        // default to the Table wire code (the most common non-Bookmark
+        // case) so Hancom still sees a parsable Command.
+        _ => 0,
+    }
+}
+
+/// Wave 12m Phase 2 Step 4 boundary: typed [`RefContentType`] → HWP5
+/// `%xrf` N2 wire code, RefType-relative.
+fn ref_content_type_wire_code(
+    ref_type: &hwpforge_foundation::RefType,
+    content: &hwpforge_foundation::RefContentType,
+) -> u8 {
+    use hwpforge_foundation::{RefContentType::*, RefType};
+    match content {
+        Page => 0,
+        UpDownPos => 3,
+        Number => 1,
+        Contents => {
+            if matches!(ref_type, RefType::Bookmark) {
+                1
+            } else {
+                2
+            }
+        }
+        BookmarkName => 2,
+        Unknown(other) => *other,
+        // Foundation RefContentType is `#[non_exhaustive]`; future
+        // variants default to Page (slot 0).
+        _ => 0,
+    }
+}
+
+/// Builds the `?<target>;` form used by Hancom for both `Command` and
+/// `RefPath` parameters. Bookmark refs use the raw name; non-Bookmark
+/// refs prepend `#` to a SystemId. `RefTarget::Raw` is passed through.
+fn crossref_target_for_command(
+    target: &hwpforge_core::control::RefTarget,
+    ref_type: &hwpforge_foundation::RefType,
+) -> String {
+    use hwpforge_core::control::RefTarget;
+    match target {
+        RefTarget::Name(name) => name.clone(),
+        RefTarget::SystemId(id) => format!("#{id}"),
+        RefTarget::Raw(raw) => {
+            // Heuristic: Bookmark refs treat raw as a name; others treat
+            // it as a pre-formatted `#<id>` style token. Preserves the
+            // input verbatim.
+            let _ = ref_type;
+            raw.clone()
+        }
+        // Core `RefTarget` is `#[non_exhaustive]`; future variants
+        // fall back to empty (caller can warn separately).
+        _ => String::new(),
+    }
+}
+
 /// Builds a `<hp:run>` XML string for a cross-reference (상호참조).
+///
+/// Wave 12m Phase 2 Step 4: unified Hancom-canonical 8-parameter form
+/// (`Fiexde`/`Prop`/`Command`/`RefPath`/`RefType`/`RefContentType`/
+/// `RefHyperLink`/`RefOpenType=HWPHYPERLINK_JUMP_CURRENTTAB`). The
+/// pre-Step-4 5-param form did not round-trip through 한컴; the 8-param
+/// form matches what 한컴 itself emits when authoring CROSSREF.
 fn build_crossref_run_xml(
-    target_name: &str,
+    target: &hwpforge_core::control::RefTarget,
     display_text: &str,
     ref_type: &hwpforge_foundation::RefType,
     content_type: &hwpforge_foundation::RefContentType,
@@ -1460,32 +1522,40 @@ fn build_crossref_run_xml(
     char_pr_id_ref: u32,
     field_id: usize,
 ) -> String {
-    let escaped_name = escape_xml(target_name);
-    let ref_path = format!("?#{escaped_name}");
+    let target_token = escape_xml(&crossref_target_for_command(target, ref_type));
     let ref_type_str = ref_type.to_string();
     let content_type_str = content_type.to_string();
+    let n1 = ref_type_wire_code(ref_type);
+    let n2 = ref_content_type_wire_code(ref_type, content_type);
+    let n3: u8 = if as_hyperlink { 1 } else { 0 };
     let hyperlink_val = if as_hyperlink { "true" } else { "false" };
     // Signed-32-bit-safe begin_id base; distinct from other field builders.
+    // Hancom reads `fieldBegin id` as i32; a base >= 2^31 wraps negative
+    // and the field is no longer recognized.
     let begin_id = 1_300_000_000_u64 + field_id as u64;
-    // Non-zero 32-bit field instance id (see `build_hwp5_crossref_run_xml`).
-    // Distinct base from the HWP5 crossref builder to avoid fieldid collisions.
+    // `fieldid` is a Hancom field instance id and must be a non-zero 32-bit
+    // value. Distinct base from other field types' fieldid id-space.
     let field_uid = 1_828_000_000_u64 + field_id as u64;
+    let display_text_xml = build_text_element_xml(display_text);
     format!(
         concat!(
             r#"<hp:run charPrIDRef="{cpr}">"#,
             r#"<hp:ctrl>"#,
             r#"<hp:fieldBegin id="{bid}" type="CROSSREF" name="" editable="0" dirty="0" "#,
             r#"zorder="-1" fieldid="{fid}" metaTag="">"#,
-            r#"<hp:parameters cnt="5" name="">"#,
-            r#"<hp:stringParam name="RefPath">{ref_path}</hp:stringParam>"#,
+            r#"<hp:parameters cnt="8" name="">"#,
+            r#"<hp:booleanParam name="Fiexde">1</hp:booleanParam>"#,
+            r#"<hp:integerParam name="Prop">0</hp:integerParam>"#,
+            r#"<hp:stringParam name="Command">?{target};{n1};{n2};{n3};0;</hp:stringParam>"#,
+            r#"<hp:stringParam name="RefPath">?{target};</hp:stringParam>"#,
             r#"<hp:stringParam name="RefType">{ref_type}</hp:stringParam>"#,
             r#"<hp:stringParam name="RefContentType">{content_type}</hp:stringParam>"#,
             r#"<hp:booleanParam name="RefHyperLink">{hyperlink}</hp:booleanParam>"#,
-            r#"<hp:stringParam name="RefOpenType">HYPERLINK_JUMP_DONTCARE</hp:stringParam>"#,
+            r#"<hp:stringParam name="RefOpenType">HWPHYPERLINK_JUMP_CURRENTTAB</hp:stringParam>"#,
             r#"</hp:parameters>"#,
             r#"</hp:fieldBegin>"#,
             r#"</hp:ctrl>"#,
-            r#"{name}"#,
+            r#"{display_text_xml}"#,
             r#"<hp:ctrl>"#,
             r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="{fid}"/>"#,
             r#"</hp:ctrl>"#,
@@ -1494,42 +1564,23 @@ fn build_crossref_run_xml(
         cpr = char_pr_id_ref,
         bid = begin_id,
         fid = field_uid,
-        ref_path = ref_path,
+        target = target_token,
+        n1 = n1,
+        n2 = n2,
+        n3 = n3,
         ref_type = ref_type_str,
         content_type = content_type_str,
         hyperlink = hyperlink_val,
-        name = build_text_element_xml(display_text),
+        display_text_xml = display_text_xml,
     )
 }
 
-// Wave 12m Phase 2 Step 3: Copy removed — `RefType` / `RefContentType` 가
-// `Unknown(u8)` tuple variant 도입으로 더 이상 Copy 가 아님.
-// 이 struct 는 Step 4 의 wire-up 교체에서 완전히 제거될 예정.
-#[derive(Debug, Clone)]
-struct Hwp5CrossRefUnknownPayload<'a> {
-    target_name: &'a str,
-    display_text: &'a str,
-    ref_type: hwpforge_foundation::RefType,
-    content_type: hwpforge_foundation::RefContentType,
-    as_hyperlink: bool,
-}
-
-fn parse_hwp5_crossref_unknown_data(data: &str) -> Option<Hwp5CrossRefUnknownPayload<'_>> {
-    let mut lines = data.splitn(5, '\n');
-    let target_name = lines.next()?;
-    let display_text = lines.next()?;
-    let ref_type = lines.next()?.parse().ok()?;
-    let content_type = lines.next()?.parse().ok()?;
-    let as_hyperlink = matches!(lines.next()?, "true" | "1");
-    Some(Hwp5CrossRefUnknownPayload {
-        target_name,
-        display_text,
-        ref_type,
-        content_type,
-        as_hyperlink,
-    })
-}
-
+/// Legacy Hancom-format CROSSREF builder retained for fieldid regression
+/// gates. The production encoder routes everything through
+/// [`build_crossref_run_xml`] after Wave 12m Step 4; this stays only as
+/// a stable target for guarantees about fieldid range and pairing
+/// invariants.
+#[cfg(test)]
 fn build_hwp5_crossref_run_xml(
     target_name: &str,
     display_text: &str,
@@ -4789,6 +4840,7 @@ mod tests {
             ref_type: RefType::default(),
             content_type: RefContentType::default(),
             as_hyperlink: true,
+            display_text: String::new(),
         };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
@@ -4844,7 +4896,7 @@ mod tests {
 
         // Non-HWP5 path: same guarantees with its own distinct base.
         let core_xml = build_crossref_run_xml(
-            "bookmark1",
+            &hwpforge_core::control::RefTarget::Name("bookmark1".to_string()),
             "see bookmark1",
             &RefType::default(),
             &RefContentType::default(),
@@ -5337,7 +5389,7 @@ mod tests {
         assert_ids_under_limit(&build_bookmark_span_end_run_xml(0, big), "bookmark_span_end");
         assert_ids_under_limit(
             &build_crossref_run_xml(
-                "bookmark1",
+                &hwpforge_core::control::RefTarget::Name("bookmark1".to_string()),
                 "see bookmark1",
                 &RefType::default(),
                 &RefContentType::default(),

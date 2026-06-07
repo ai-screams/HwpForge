@@ -202,6 +202,7 @@ fn collect_flow_paragraph_layout_hints(
             | Hwp5Control::SummeryField(_)
             | Hwp5Control::DateCodeField(_)
             | Hwp5Control::PathField(_)
+            | Hwp5Control::CrossRef(_)
             | Hwp5Control::InlinePageNumber(_)
             | Hwp5Control::OleObject(_)
             | Hwp5Control::Unknown { .. } => {}
@@ -244,6 +245,7 @@ fn collect_scope_paragraph_layout_hints(paragraph: &Hwp5Paragraph, scope: &mut S
             | Hwp5Control::SummeryField(_)
             | Hwp5Control::DateCodeField(_)
             | Hwp5Control::PathField(_)
+            | Hwp5Control::CrossRef(_)
             | Hwp5Control::InlinePageNumber(_)
             | Hwp5Control::OleObject(_)
             | Hwp5Control::Unknown { .. } => {}

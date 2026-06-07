@@ -635,6 +635,13 @@ pub enum Control {
     /// Wave 12m Phase 2: `target_name: String` 가 `target: RefTarget` 로
     /// 변경 (breaking). 책갈피 이름과 한컴 자동 ID (#<id>) 가 타입으로
     /// 구분되어 caller 가 의미를 정확히 알 수 있음.
+    ///
+    /// Wave 12m Phase 2 Step 4 (breaking): `display_text: String` 추가.
+    /// HWPX wire 는 `<hp:fieldBegin>` 과 `<hp:fieldEnd>` 사이의 visible run
+    /// 으로 display text 를 embedding 한다. HWP5 `%xrf` wire 는 display
+    /// text 를 직접 carry 하지 않고 ParaText 본문에 풀어 두지만, projection
+    /// 이 FieldBegin..FieldEnd span 을 읽어 이 필드에 채워 넣는다.
+    /// 빈 문자열은 "display text 없음" 의미 (Hyperlink::text 와 동일).
     CrossRef {
         /// Reference target — Bookmark name (`Name(String)`) or system
         /// id (`SystemId(u64)`) or unparseable raw (`Raw(String)`).
@@ -645,6 +652,10 @@ pub enum Control {
         content_type: RefContentType,
         /// Whether to render the reference as a clickable hyperlink.
         as_hyperlink: bool,
+        /// Visible body text shown between `fieldBegin` and `fieldEnd`
+        /// in the encoded wire. HWP5 sources this from the FieldBegin
+        /// span; native builders may leave this empty.
+        display_text: String,
     },
 
     /// A press-field (누름틀) — an interactive form field.
@@ -1227,7 +1238,13 @@ impl Control {
     /// assert!(xref.is_cross_ref());
     /// ```
     pub fn cross_ref(target: RefTarget, ref_type: RefType, content_type: RefContentType) -> Self {
-        Self::CrossRef { target, ref_type, content_type, as_hyperlink: false }
+        Self::CrossRef {
+            target,
+            ref_type,
+            content_type,
+            as_hyperlink: false,
+            display_text: String::new(),
+        }
     }
 
     /// Creates a chart control with default dimensions and settings.

@@ -208,6 +208,7 @@ pub(crate) fn section2_text_formatting() -> Section {
                     ref_type: RefType::Bookmark,
                     content_type: RefContentType::Page,
                     as_hyperlink: true,
+                    display_text: String::new(),
                 },
                 csi(CS_BLUE),
             ),

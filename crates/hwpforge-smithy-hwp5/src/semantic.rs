@@ -1111,6 +1111,8 @@ pub enum Hwp5SemanticControlKind {
     PathField,
     /// `atno` inline page-number control (Wave 12n).
     InlinePageNumber,
+    /// `%xrf` cross-reference field (Wave 12m).
+    CrossRef,
     /// Header control.
     Header,
     /// Footer control.
