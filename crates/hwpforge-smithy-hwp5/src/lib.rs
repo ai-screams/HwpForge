@@ -3373,6 +3373,105 @@ mod tests {
         let _ = std::fs::remove_file(&out);
     }
 
+    /// Wave 12m Phase 2 Step 6 — 12 한컴 native crossref fixture e2e gate.
+    ///
+    /// Each fixture covers a distinct (RefType, ContentType, hyperlink)
+    /// permutation. The matrix asserts the typed `Hwp5Control::CrossRef`
+    /// → `Control::CrossRef` pipeline emits the Hancom-canonical wire
+    /// (`type="CROSSREF"` + correct `RefType` + non-zero `fieldid`) and
+    /// that the projection captures the expected number of cross-ref
+    /// fields from the source paragraphs.
+    #[test]
+    fn hwp5_to_hwpx_crossref_12_fixture_matrix_emits_typed_control_and_canonical_wire() {
+        // (fixture_path_relative_to_workspace_fixture_root, expected
+        //  RefType string, minimum expected cross-ref count).
+        let cases: &[(&str, &str, usize)] = &[
+            ("hwp5/crossref/sample-bookmark-page.hwp", "TARGET_BOOKMARK", 1),
+            ("hwp5/crossref/sample-bookmark-contents.hwp", "TARGET_BOOKMARK", 1),
+            ("hwp5/crossref/sample-bookmark-name.hwp", "TARGET_BOOKMARK", 1),
+            ("hwp5/crossref/sample-bookmark-abovebelow.hwp", "TARGET_BOOKMARK", 1),
+            ("hwp5/crossref/sample-bookmark-page-hyperlink.hwp", "TARGET_BOOKMARK", 1),
+            ("hwp5/crossref/sample-footnote-page.hwp", "TARGET_FOOTNOTE", 1),
+            ("hwp5/crossref/sample-footnote-number.hwp", "TARGET_FOOTNOTE", 1),
+            ("hwp5/crossref/sample-endnote-page-and-number.hwp", "TARGET_ENDNOTE", 2),
+            ("hwp5/crossref/sample-figure-caption-4-refs.hwp", "TARGET_FIGURE", 4),
+            ("hwp5/crossref/sample-table-caption-4-refs.hwp", "TARGET_TABLE", 4),
+            ("hwp5/crossref/sample-eq-caption-4-refs.hwp", "TARGET_EQUATION", 4),
+            ("hwp5/crossref/sample-outline-4-refs.hwp", "TARGET_OUTLINE", 4),
+        ];
+
+        let mut seen_any = false;
+        for (relative, expected_ref_type, expected_min_count) in cases {
+            let source = fixture_path(relative);
+            if !source.exists() {
+                // Fixtures live in tests/fixtures/hwp5/crossref/. If a
+                // tree is cloned without LFS or the fixture set is
+                // intentionally trimmed, skip the case rather than fail
+                // (matches existing user_samples convention above).
+                continue;
+            }
+            seen_any = true;
+
+            let stem = source
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .expect("fixture path must have a stem");
+            let out = unique_temp_path(&format!("crossref-matrix-{stem}.hwpx"));
+
+            let warnings = hwp5_to_hwpx(&source, &out)
+                .unwrap_or_else(|err| panic!("conversion failed for {relative}: {err:?}"));
+            assert!(
+                warnings.is_empty(),
+                "{relative} should convert without warnings: {warnings:?}"
+            );
+
+            assert_valid_hwpx(&out);
+
+            let section_xml = read_section_xml(&out, 0);
+            assert!(
+                section_xml.contains(r#"type="CROSSREF""#),
+                "{relative}: converted section must contain at least one CROSSREF field"
+            );
+
+            let expected_ref_type_param = format!(
+                "<hp:stringParam name=\"RefType\">{expected_ref_type}</hp:stringParam>",
+            );
+            assert!(
+                section_xml.contains(&expected_ref_type_param),
+                "{relative}: converted section must carry RefType={expected_ref_type}\nbody: {section_xml}",
+            );
+
+            // The Hancom-canonical 8-parameter Command must always be
+            // emitted (Fiexde=1 marker is unique to the wave-12m form).
+            assert!(
+                section_xml.contains(r#"<hp:booleanParam name="Fiexde">1</hp:booleanParam>"#),
+                "{relative}: CROSSREF must use the 8-parameter Hancom-canonical form",
+            );
+
+            // Cross-ref count via field begin occurrence (one per field).
+            let crossref_field_count = section_xml.matches(r#"type="CROSSREF""#).count();
+            assert!(
+                crossref_field_count >= *expected_min_count,
+                "{relative}: expected at least {expected_min_count} CROSSREF field(s), found {crossref_field_count}",
+            );
+
+            // fieldid must never be 0 — Hancom treats fieldid=0 as
+            // invalid and breaks F9 refresh / Ctrl+click jump.
+            assert!(
+                !section_xml.contains(r#"fieldid="0""#),
+                "{relative}: CROSSREF must never emit fieldid=0",
+            );
+
+            let _ = std::fs::remove_file(&out);
+        }
+
+        assert!(
+            seen_any,
+            "expected at least one of the 12 crossref fixtures to be present under \
+             tests/fixtures/hwp5/crossref/; got none",
+        );
+    }
+
     #[test]
     fn hwp5_to_hwpx_user_sample_page_number_preserves_section_page_number() {
         let source = fixture_path("user_samples/sample-field-page-number-basic.hwp");
