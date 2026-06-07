@@ -431,11 +431,17 @@ fn encode_control_styled(
             format!("{main_text}({sub_text})")
         }
         Control::Compose { compose_text, .. } => compose_text.clone(),
-        Control::CrossRef { target, .. } => {
-            // Wave 12m Phase 2 Step 3: target_name: String → target: RefTarget.
-            // Markdown bridge 는 사용자에게 보이는 텍스트만 필요하므로
-            // as_display() 로 normalize.
-            format!("[{}]", target.as_display())
+        Control::CrossRef { target, display_text, .. } => {
+            // Wave 12m Phase 2 Step 4: display_text 추가. 사용자가 본
+            // visible body text 가 있으면 우선 사용 (e.g. "1" 페이지
+            // 번호, "see Section 1"); 비어 있으면 target 의 as_display()
+            // 로 fallback (Name → "bookmark1", SystemId → "#5").
+            // Markdown 은 anchor 링크 의미가 없으니 plain text 만 emit.
+            if display_text.is_empty() {
+                format!("[{}]", target.as_display())
+            } else {
+                display_text.clone()
+            }
         }
         Control::Field { hint_text, .. } => hint_text.as_deref().unwrap_or("____").to_string(),
         Control::Bookmark { .. } => {
