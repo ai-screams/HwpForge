@@ -20,6 +20,7 @@
     "**/.docs/**",
     "**/.omc/**",
     "**/temp/**",
+    "**/examples/hwp5_review/**",
     "**/*.hwpx",
     "**/CHANGELOG.md"
   ],
