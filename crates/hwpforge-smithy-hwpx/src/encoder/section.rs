@@ -899,9 +899,9 @@ use super::shapes::{
 /// rotation, lineShape, fillBrush, shadow). Only sz + pos + outMargin + script.
 /// Does not take `depth` because equations have no recursive sub-content.
 fn encode_equation_to_hx(ctrl: &Control) -> HwpxResult<HxEquation> {
-    let (script, width, height, base_line, text_color, font) = match ctrl {
-        Control::Equation { script, width, height, base_line, text_color, font, inst_id: _ } => {
-            (script, *width, *height, *base_line, text_color, font)
+    let (script, width, height, base_line, text_color, font, inst_id) = match ctrl {
+        Control::Equation { script, width, height, base_line, text_color, font, inst_id } => {
+            (script, *width, *height, *base_line, text_color, font, *inst_id)
         }
         _ => unreachable!("encode_equation_to_hx called with non-Equation"),
     };
@@ -910,7 +910,9 @@ fn encode_equation_to_hx(ctrl: &Control) -> HwpxResult<HxEquation> {
     let h = height.as_i32();
 
     Ok(HxEquation {
-        id: generate_instid(),
+        // Wave 12p Step 4: cross-ref target id 가 있으면 사용,
+        // 없으면 fresh fallback (한컴 native 와는 id 차이만 발생).
+        id: inst_id.map(|n| n.to_string()).unwrap_or_else(generate_instid),
         z_order: 0,
         numbering_type: "EQUATION".to_string(),
         text_wrap: "TOP_AND_BOTTOM".to_string(),
@@ -2107,7 +2109,10 @@ fn build_picture(
     let placement = img.placement.as_ref();
 
     Ok(HxPic {
-        id: generate_instid(),
+        // Wave 12p Step 4: HWPX `<hp:pic id="...">` cross-ref target.
+        // Image.inst_id 가 있으면 사용 (한컴 native 의 instance ID),
+        // 없으면 sequential fallback.
+        id: img.inst_id.map(|n| n.to_string()).unwrap_or_else(generate_instid),
         z_order: 0,
         numbering_type: "PICTURE".to_string(),
         text_wrap: placement
