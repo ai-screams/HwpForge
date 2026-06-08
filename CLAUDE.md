@@ -387,7 +387,7 @@ Local planning and research workspace. It may be git-excluded in this repository
 
 ## Gotchas & Common Mistakes
 
-> **상세 내용 (코드 예제 포함)**: `.docs/references/gotchas.md` (35항목)
+> **상세 내용 (코드 예제 포함)**: `.docs/references/gotchas.md` (40항목)
 
 1. HWP5 TagID +16 오프셋 — `PARA_HEADER` = 0x42 (66), not 0x32 (50)
 2. landscape 스펙 반전 — `WIDELY`=세로, `NARROWLY`=가로. width/height 교환 금지
@@ -411,6 +411,11 @@ Local planning and research workspace. It may be git-excluded in this repository
 20. Rotation: 정수 degrees + CCW 방향 + 중심 이동 보정 필수
 21. PatternType `BACK_SLASH`/`SLASH` 스펙 반전 — Display/FromStr에서 스왑
 22. 패턴 채우기: `hatchStyle` 속성 필수 (없으면 솔리드로 렌더링)
+23. fieldid = ctrl_id ASCII magic constant (`%xrf`/`%clk`/`%smr`/`%pat`) — type tag, instance ID 아님
+24. CROSSREF wire = 8-param Hancom-canonical (`Fiexde`/`Prop`/`Command` 포함, 5-param spec form 금지)
+25. cross-ref target element (endNote/footNote/figure/table) 에 `instId` attribute 필수
+26. Bookmark Contents reference 는 SpanStart/SpanEnd 책갈피 필요 (Point 는 본문 없음 → `?`)
+27. ContentType 의미는 RefType-상대적 (Bookmark+Contents = 책갈피 이름, Figure+Contents = 캡션 본문) — invented enum 금지
 
 ---
 
