@@ -476,15 +476,19 @@ impl<'a> ProjectionImageState<'a> {
 
         self.image_store.insert(asset.payload.storage_name.clone(), asset.bytes.clone());
 
-        Some(
-            Image::new(
-                asset.payload.package_path.clone(),
-                HwpUnit::new(resolved_dimensions.width_hwp).unwrap_or(HwpUnit::ZERO),
-                HwpUnit::new(resolved_dimensions.height_hwp).unwrap_or(HwpUnit::ZERO),
-                core_image_format(&asset.payload.format),
-            )
-            .with_placement(image_placement_from_geometry(&image.geometry, context)),
+        let mut core_image = Image::new(
+            asset.payload.package_path.clone(),
+            HwpUnit::new(resolved_dimensions.width_hwp).unwrap_or(HwpUnit::ZERO),
+            HwpUnit::new(resolved_dimensions.height_hwp).unwrap_or(HwpUnit::ZERO),
+            core_image_format(&asset.payload.format),
         )
+        .with_placement(image_placement_from_geometry(&image.geometry, context));
+        // Wave 12p Step 3: HWP5 GSO CtrlHeader trailer instance ID 통과.
+        // 한컴 native `<hp:pic id="...">` cross-ref target 과 매칭.
+        if image.instance_id != 0 {
+            core_image.inst_id = Some(u64::from(image.instance_id));
+        }
+        Some(core_image)
     }
 }
 
@@ -2170,7 +2174,12 @@ fn project_footnote_run(
         projection_images,
         ImageProjectionContext::Flow,
     );
-    Run::control(Control::Footnote { inst_id: None, paragraphs }, CharShapeIndex::new(0))
+    // Wave 12p Step 3: HWP5 CtrlHeader trailer instance ID 통과.
+    // 한컴 native `<hp:footNote instId="...">` 와 매칭되어 HWPX
+    // cross-ref Command `?#<id>` lookup 이 동작. 0 은 unset 의미
+    // (Step 1b 의 fallback 값) — None 으로 맵핑.
+    let inst_id = (subtree.instance_id != 0).then_some(subtree.instance_id);
+    Run::control(Control::Footnote { inst_id, paragraphs }, CharShapeIndex::new(0))
 }
 
 /// Projects a HWP5 endnote subtree into a Core `Run` carrying `Control::Endnote`.
@@ -2186,7 +2195,9 @@ fn project_endnote_run(
         projection_images,
         ImageProjectionContext::Flow,
     );
-    Run::control(Control::Endnote { inst_id: None, paragraphs }, CharShapeIndex::new(0))
+    // Wave 12p Step 3: 동일 패턴 (`<hp:endNote instId="...">`).
+    let inst_id = (subtree.instance_id != 0).then_some(subtree.instance_id);
+    Run::control(Control::Endnote { inst_id, paragraphs }, CharShapeIndex::new(0))
 }
 
 fn project_line_run(line: &Hwp5LineControl) -> Run {
@@ -2368,7 +2379,7 @@ fn project_connectline_run(connect_line: &Hwp5ConnectLineControl) -> Option<Run>
 /// always inline, so there is no offset to set).
 fn project_equation_run(equation: &Hwp5EquationControl) -> Run {
     let mut control = hwpforge_core::control::Control::equation(&equation.script);
-    if let Control::Equation { width, height, .. } = &mut control {
+    if let Control::Equation { width, height, inst_id, .. } = &mut control {
         if let Some(w) =
             positive_i32_from_u32(equation.geometry.width).and_then(|v| HwpUnit::new(v).ok())
         {
@@ -2378,6 +2389,10 @@ fn project_equation_run(equation: &Hwp5EquationControl) -> Run {
             positive_i32_from_u32(equation.geometry.height).and_then(|v| HwpUnit::new(v).ok())
         {
             *height = h;
+        }
+        // Wave 12p Step 3: `<hp:equation id="...">` cross-ref target.
+        if equation.instance_id != 0 {
+            *inst_id = Some(u64::from(equation.instance_id));
         }
     }
     Run::control(control, CharShapeIndex::new(0))
@@ -2704,6 +2719,12 @@ fn apply_table_projection_metadata(
         .transpose()
         .unwrap_or(None);
     core_table.border_fill_id = table.border_fill_id.map(u32::from);
+    // Wave 12p Step 3: HWP5 Table CtrlHeader trailer instance ID 통과.
+    // 한컴 native `<hp:tbl id="...">` cross-ref target 과 매칭. 0 은
+    // unset (Step 1c-1 fallback).
+    if table.instance_id != 0 {
+        core_table.inst_id = Some(u64::from(table.instance_id));
+    }
 
     match core_table_page_break(table.page_break) {
         Some(page_break) => core_table.page_break = page_break,
