@@ -32,6 +32,12 @@ pub(crate) struct Hwp5ParaHeader {
     pub line_seg_count: u16,
     /// Number of character-shape run entries in the companion `ParaCharShape` record.
     pub char_shape_count: u16,
+    /// Paragraph instance ID — 한컴 wire 의 unique per-paragraph
+    /// identifier carried in HWP5 `ParaHeader[18..22]` (u32 LE). HWPX
+    /// cross-ref Command 의 `?#<id>` target lookup (Outline / 다른
+    /// paragraph 대상 참조) 이 이 값을 매칭. Wave 12p Step 1: 이전엔
+    /// `parse()` 가 skip 했던 필드를 carry 시작.
+    pub instance_id: u32,
 }
 
 impl Hwp5ParaHeader {
@@ -81,6 +87,10 @@ impl Hwp5ParaHeader {
         // [14..16] range_tag_count — skip
         cur.set_position(16);
         let line_seg_count = cur.read_u16::<LittleEndian>()?;
+        // [18..22] instance_id (u32 LE) — Wave 12p Step 1: HWPX cross-ref
+        // target ID for outline-style references. ParaHeader MIN_SIZE
+        // already guarantees >= 22 bytes so the read is bounds-safe.
+        let instance_id = cur.read_u32::<LittleEndian>()?;
         Ok(Self {
             char_count,
             control_mask,
@@ -88,6 +98,7 @@ impl Hwp5ParaHeader {
             style_id,
             line_seg_count,
             char_shape_count,
+            instance_id,
         })
     }
 }
