@@ -644,6 +644,7 @@ mod tests {
                     controls: Vec::new(),
                 }],
             }],
+        instance_id: 0,
         };
 
         assert_eq!(derive_table_height(&table), Some(4482));

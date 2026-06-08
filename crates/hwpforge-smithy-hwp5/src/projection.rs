@@ -3457,6 +3457,7 @@ mod tests {
                 cell_spacing: 120,
                 border_fill_id: Some(8),
                 cells: vec![],
+            instance_id: 0,
             })],
         };
         let section = make_section(vec![para], None);
@@ -3515,6 +3516,7 @@ mod tests {
                         controls: vec![],
                     }],
                 }],
+            instance_id: 0,
             })],
         };
 
@@ -3585,6 +3587,7 @@ mod tests {
                         controls: vec![],
                     }],
                 }],
+            instance_id: 0,
             })],
         };
 
@@ -3682,6 +3685,7 @@ mod tests {
                         }],
                     },
                 ],
+            instance_id: 0,
             })],
         };
 
@@ -3755,6 +3759,7 @@ mod tests {
                     header_cell(1, false, "body"),
                     header_cell(2, true, "restated-head"),
                 ],
+            instance_id: 0,
             })],
         };
 
@@ -3834,6 +3839,7 @@ mod tests {
                 cell_spacing: 0,
                 border_fill_id: None,
                 cells: vec![pgnp_cell()],
+            instance_id: 0,
             })],
         };
 
@@ -3900,6 +3906,7 @@ mod tests {
                     cell_spacing: 0,
                     border_fill_id: None,
                     cells: vec![cell],
+                instance_id: 0,
                 })],
             }
         }
@@ -4083,6 +4090,7 @@ mod tests {
                 cell_spacing: 0,
                 border_fill_id: None,
                 cells: vec![],
+            instance_id: 0,
             },
             &mut warnings,
         );
@@ -4107,6 +4115,7 @@ mod tests {
                 cell_spacing: 0,
                 border_fill_id: None,
                 cells: vec![],
+            instance_id: 0,
             },
             &mut warnings,
         );
@@ -4129,6 +4138,7 @@ mod tests {
                 cell_spacing: 0,
                 border_fill_id: None,
                 cells: vec![],
+            instance_id: 0,
             },
             &mut warnings,
         );
@@ -4150,6 +4160,7 @@ mod tests {
                 cell_spacing: 0,
                 border_fill_id: None,
                 cells: vec![],
+            instance_id: 0,
             },
             &mut warnings,
         );

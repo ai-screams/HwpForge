@@ -353,6 +353,12 @@ pub(crate) struct Hwp5Table {
     pub border_fill_id: Option<u16>,
     /// Parsed cell records in source order.
     pub cells: Vec<Hwp5TableCell>,
+    /// Wave 12p Step 1c-1: Table CtrlHeader trailer 의 instance ID
+    /// (last 8 bytes 의 first 4, u32 LE). HWPX cross-ref Command
+    /// `?#<id>` 의 target ID 와 매칭, 한컴 native `<hp:tbl id="..."`
+    /// attribute 로 emit. 추출 불가하면 0.
+    #[allow(dead_code)]
+    pub instance_id: u32,
 }
 
 /// HWP5 table page break policy recovered from the table body record.
@@ -706,7 +712,7 @@ struct TableContext {
 }
 
 impl TableContext {
-    fn new(ctrl_depth: u16) -> Self {
+    fn new(ctrl_depth: u16, instance_id: u32) -> Self {
         Self {
             ctrl_depth,
             table: Hwp5Table {
@@ -717,6 +723,7 @@ impl TableContext {
                 cell_spacing: 0,
                 border_fill_id: None,
                 cells: Vec::new(),
+                instance_id,
             },
             seen_table_body: false,
             current_cell: None,
@@ -1404,7 +1411,10 @@ impl BodyTextParserState {
                 if let Some(ctx) = self.table_stack.last_mut() {
                     let ctrl_id = parse_ctrl_id(&record.data);
                     if ctrl_id == CTRL_ID_TABLE {
-                        self.table_stack.push(TableContext::new(level));
+                        self.table_stack.push(TableContext::new(
+                        level,
+                        extract_ctrl_header_trailer_instance_id(&record.data),
+                    ));
                     } else if ctrl_id == CTRL_ID_GSO {
                         ctx.inline_cell_gso_ctx = Some(InlineGsoContext::new(
                             level,
@@ -1718,7 +1728,10 @@ impl BodyTextParserState {
             TagId::CtrlHeader => {
                 let ctrl_id = parse_ctrl_id(&record.data);
                 if ctrl_id == CTRL_ID_TABLE {
-                    self.table_stack.push(TableContext::new(level));
+                    self.table_stack.push(TableContext::new(
+                        level,
+                        extract_ctrl_header_trailer_instance_id(&record.data),
+                    ));
                 } else if matches!(
                     ctrl_id,
                     CTRL_ID_HEADER

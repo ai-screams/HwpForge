@@ -1329,6 +1329,7 @@ mod tests {
                                     }],
                                 }],
                             }],
+                        instance_id: 0,
                         }),
                         Hwp5Control::Unknown { ctrl_id: 0x666F_6F74, header_data: Vec::new() },
                     ],
