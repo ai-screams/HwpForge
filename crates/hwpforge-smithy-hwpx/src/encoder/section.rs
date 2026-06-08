@@ -900,7 +900,7 @@ use super::shapes::{
 /// Does not take `depth` because equations have no recursive sub-content.
 fn encode_equation_to_hx(ctrl: &Control) -> HwpxResult<HxEquation> {
     let (script, width, height, base_line, text_color, font) = match ctrl {
-        Control::Equation { script, width, height, base_line, text_color, font } => {
+        Control::Equation { script, width, height, base_line, text_color, font, inst_id: _ } => {
             (script, *width, *height, *base_line, text_color, font)
         }
         _ => unreachable!("encode_equation_to_hx called with non-Equation"),
@@ -5066,6 +5066,7 @@ mod tests {
             base_line: 80,
             text_color: Color::BLACK,
             font: "HCR Batang".to_string(),
+        inst_id: None,
         };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(

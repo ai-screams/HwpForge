@@ -457,6 +457,11 @@ pub enum Control {
         text_color: Color,
         /// Font name (typically `"HancomEQN"`).
         font: String,
+        /// Wave 12p Step 2c: instance ID for cross-ref target lookup.
+        /// HWP5 변환 시 `eqed` CtrlHeader trailer 의 instance ID 가
+        /// 채워지고, HWPX encoder 가 `<hp:equation id="...">` attribute
+        /// 로 emit. `None` 이면 encoder fallback 허용.
+        inst_id: Option<u64>,
     },
 
     /// An OOXML chart embedded in the document.
@@ -1303,6 +1308,7 @@ impl Control {
             base_line: 71,
             text_color: Color::BLACK,
             font: "HancomEQN".to_string(),
+            inst_id: None,
         }
     }
 
@@ -2447,7 +2453,15 @@ mod tests {
         let ctrl = Control::equation("{a+b} over {c+d}");
         assert!(ctrl.is_equation());
         match ctrl {
-            Control::Equation { script, width, height, base_line, text_color, ref font } => {
+            Control::Equation {
+                script,
+                width,
+                height,
+                base_line,
+                text_color,
+                ref font,
+                inst_id: _,
+            } => {
                 assert_eq!(script, "{a+b} over {c+d}");
                 assert_eq!(width, HwpUnit::new(8779).unwrap());
                 assert_eq!(height, HwpUnit::new(2600).unwrap());
@@ -2854,6 +2868,7 @@ mod tests {
             base_line: 71,
             text_color: Color::BLACK,
             font: "HancomEQN".to_string(),
+        inst_id: None,
         };
         let json = serde_json::to_string(&ctrl).unwrap();
         let back: Control = serde_json::from_str(&json).unwrap();

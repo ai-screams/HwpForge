@@ -1221,6 +1221,7 @@ mod tests {
             base_line: 71,
             text_color: hwpforge_foundation::Color::BLACK,
             font: "HancomEQN".to_string(),
+        inst_id: None,
         };
         let sections = wrap_ctrl(ctrl);
         let result = validate_sections(&sections);
@@ -1236,6 +1237,7 @@ mod tests {
             base_line: 71,
             text_color: hwpforge_foundation::Color::BLACK,
             font: "HancomEQN".to_string(),
+        inst_id: None,
         };
         let sections = wrap_ctrl(ctrl);
         let result = validate_sections(&sections);
@@ -1254,6 +1256,7 @@ mod tests {
             base_line: 71,
             text_color: hwpforge_foundation::Color::BLACK,
             font: "HancomEQN".to_string(),
+        inst_id: None,
         };
         let sections = wrap_ctrl(ctrl);
         let result = validate_sections(&sections);

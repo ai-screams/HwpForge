@@ -68,6 +68,12 @@ pub struct Image {
     /// Optional placement/presentation metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placement: Option<ImagePlacement>,
+    /// Wave 12p Step 2a: instance ID for cross-ref target lookup. HWP5
+    /// 변환 시 GSO CtrlHeader trailer 의 instance ID 가 채워지고, HWPX
+    /// encoder 가 `<hp:pic id="...">` attribute 로 emit. `None` 이면
+    /// encoder 가 fallback 값 (예: sequential counter) 을 사용해도 됨.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inst_id: Option<u64>,
 }
 
 impl Image {
@@ -94,7 +100,15 @@ impl Image {
         height: HwpUnit,
         format: ImageFormat,
     ) -> Self {
-        Self { path: path.into(), width, height, format, caption: None, placement: None }
+        Self {
+            path: path.into(),
+            width,
+            height,
+            format,
+            caption: None,
+            placement: None,
+            inst_id: None,
+        }
     }
 
     /// Creates an image reference by inferring the format from the file extension.
@@ -124,7 +138,7 @@ impl Image {
     pub fn from_path(path: impl Into<String>, width: HwpUnit, height: HwpUnit) -> Self {
         let path: String = path.into();
         let format = ImageFormat::from_extension(&path);
-        Self { path, width, height, format, caption: None, placement: None }
+        Self { path, width, height, format, caption: None, placement: None, inst_id: None }
     }
 
     /// Attaches a caption to the image.
