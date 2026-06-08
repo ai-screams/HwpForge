@@ -171,6 +171,11 @@ pub(crate) struct Hwp5ImageControl {
     pub geometry: Hwp5ShapeComponentGeometry,
     /// `DocInfo/BinData` item identifier referenced by `ShapePicture`.
     pub binary_data_id: u16,
+    /// Wave 12p Step 1c-3: `gso ` CtrlHeader trailer 의 instance ID.
+    /// HWPX cross-ref Command `?#1108165583;1;0;0;0;` (TARGET_PICTURE)
+    /// 의 target ID 가 한컴 native `<hp:pic id="1108165583">` 와 매칭.
+    #[allow(dead_code)]
+    pub instance_id: u32,
 }
 
 /// Parsed line evidence from a `gso ` scope.
@@ -964,6 +969,7 @@ impl NestedSubtreeContext {
                 ellipse: self.ellipse,
                 curve: self.curve,
                 shape_component_kind: self.shape_component_kind,
+                instance_id: self.instance_id,
             }),
         }
     }
@@ -973,6 +979,9 @@ impl NestedSubtreeContext {
 struct InlineGsoContext {
     ctrl_depth: u16,
     ctrl_id: u32,
+    /// Wave 12p Step 1c-3: GSO CtrlHeader trailer instance ID,
+    /// carried through to typed `Hwp5ImageControl` and friends.
+    instance_id: u32,
     saw_shape_component: bool,
     saw_shape_rectangle: bool,
     geometry: Option<Hwp5ShapeComponentGeometry>,
@@ -999,13 +1008,23 @@ struct GsoClassificationInput {
     curve: Option<Hwp5ShapeComponentCurve>,
     /// Leading 4-byte type tag from the `ShapeComponent` (`0x4C`) record.
     shape_component_kind: Option<[u8; 4]>,
+    /// Wave 12p Step 1c-3: `gso ` CtrlHeader trailer instance ID,
+    /// passed through to `Hwp5ImageControl` (and other typed GSO
+    /// variants in the future).
+    instance_id: u32,
 }
 
 impl InlineGsoContext {
-    fn new(ctrl_depth: u16, ctrl_id: u32, geometry: Option<Hwp5ShapeComponentGeometry>) -> Self {
+    fn new(
+        ctrl_depth: u16,
+        ctrl_id: u32,
+        instance_id: u32,
+        geometry: Option<Hwp5ShapeComponentGeometry>,
+    ) -> Self {
         Self {
             ctrl_depth,
             ctrl_id,
+            instance_id,
             saw_shape_component: false,
             saw_shape_rectangle: false,
             geometry,
@@ -1059,6 +1078,7 @@ impl InlineGsoContext {
             ctrl_id: self.ctrl_id,
             saw_shape_component: self.saw_shape_component,
             saw_shape_rectangle: self.saw_shape_rectangle,
+            instance_id: self.instance_id,
             geometry: self.geometry,
             picture: self.picture,
             ole: self.ole,
@@ -1129,11 +1149,13 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
         }
     }
 
+    let gso_instance_id = input.instance_id;
     match (input.geometry, input.picture, input.ole, input.line, input.polygon) {
         (Some(geometry), Some(picture), None, None, None) => Hwp5Control::Image(Hwp5ImageControl {
             ctrl_id: input.ctrl_id,
             geometry,
             binary_data_id: picture.binary_data_id,
+            instance_id: gso_instance_id,
         }),
         (Some(geometry), None, Some(ole), None, None) => {
             Hwp5Control::OleObject(Hwp5OleObjectControl {
@@ -1427,6 +1449,7 @@ impl BodyTextParserState {
                         ctx.inline_cell_gso_ctx = Some(InlineGsoContext::new(
                             level,
                             ctrl_id,
+                            extract_ctrl_header_trailer_instance_id(&record.data),
                             Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).ok(),
                         ));
                     } else if let Some(buf) = ctx.current_cell_para.as_mut() {
@@ -1581,6 +1604,7 @@ impl BodyTextParserState {
                         self.inline_subtree_gso_ctx = Some(InlineGsoContext::new(
                             level,
                             ctrl_id,
+                            extract_ctrl_header_trailer_instance_id(&record.data),
                             Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).ok(),
                         ));
                     } else {
@@ -3664,7 +3688,7 @@ mod tests {
             width: 5_000,
             height: 6_000,
         };
-        let mut ctx = InlineGsoContext::new(0, CTRL_ID_GSO, Some(geometry));
+        let mut ctx = InlineGsoContext::new(0, CTRL_ID_GSO, 0, Some(geometry));
         ctx.note_shape_component(&[]);
         ctx.note_shape_picture(Hwp5ShapePicture::parse(&shape_picture_data(1)).unwrap());
         ctx.note_shape_ole(
@@ -3719,6 +3743,7 @@ mod tests {
             ellipse: None,
             curve: None,
             shape_component_kind,
+            instance_id: 0,
         }
     }
 

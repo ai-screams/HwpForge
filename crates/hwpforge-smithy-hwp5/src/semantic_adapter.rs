@@ -1624,6 +1624,7 @@ mod tests {
                             height: 4_560,
                         },
                         binary_data_id: 1,
+                    instance_id: 0,
                     })],
                 }],
                 page_def: None,

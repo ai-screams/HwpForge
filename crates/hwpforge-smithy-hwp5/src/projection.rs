@@ -2996,6 +2996,7 @@ mod tests {
                 height: 2_000,
             },
             binary_data_id: 1,
+        instance_id: 0,
         });
         let section = make_section(
             vec![Hwp5Paragraph {
@@ -3051,6 +3052,7 @@ mod tests {
                 height: 800,
             },
             binary_data_id: 7,
+        instance_id: 0,
         });
         let section = make_section(
             vec![Hwp5Paragraph {
@@ -3113,6 +3115,7 @@ mod tests {
                 height: 900,
             },
             binary_data_id: 3,
+        instance_id: 0,
         });
         let textbox = Hwp5Control::TextBox(Hwp5TextBoxControl {
             ctrl_id: 0x6773_6F20,
@@ -3193,6 +3196,7 @@ mod tests {
                 height: 800,
             },
             binary_data_id: 99,
+        instance_id: 0,
         });
         let section = make_section(
             vec![Hwp5Paragraph {
@@ -3231,6 +3235,7 @@ mod tests {
                 height: 0,
             },
             binary_data_id: 5,
+        instance_id: 0,
         });
         let section = make_section(
             vec![Hwp5Paragraph {
@@ -3275,6 +3280,7 @@ mod tests {
                 height: 0,
             },
             binary_data_id: 6,
+        instance_id: 0,
         });
         let section = make_section(
             vec![Hwp5Paragraph {
