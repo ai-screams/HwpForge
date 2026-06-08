@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Wave 12m fixup — fieldid `%xrf` magic constant + `RefContentType::BookmarkName` 폐기 (BREAKING)
+
+Wave 12m Phase 2 시각 검증 (한컴오피스 한글) 에서 cross-ref body 가 `?`
+로 표시되는 회귀 발견 → 2단계 research (1차 + 재검증) 후 두 결정적
+차이 fix.
+
+#### Breaking — `hwpforge-foundation`
+
+- `RefContentType::BookmarkName` variant **폐기**. OWPML 표 156 은
+  ContentType 을 4종 (PAGE / NUMBER / CONTENTS / UPDOWNPOS) 만 정의
+  하며, 책갈피의 경우 `Contents` 가 "책갈피 내용/이름" 의미를 내포함
+  (spec 명시: "참조 대상의 제시 내용 또는 책갈피의 경우, 책갈피 내용").
+  Wave 12m Phase 2 Step 3 의 `BookmarkName` enum + `OBJECT_TYPE_BOOKMARK_NAME`
+  emit 은 spec 외 invented string 으로 한컴 인식 실패. HWP5 N2 code 2
+  for Bookmark → `RefContentType::Contents` 로 매핑.
+
+#### Fixed — `hwpforge-smithy-hwpx`
+
+- `build_crossref_run_xml` 의 `fieldid` 가 sequential counter
+  (`1_828_000_000 + N`) 가 아니라 Hancom `%xrf` ASCII magic constant
+  (`0x25787266` = `628_650_598`) 로 emit. native HanCom-authored HWPX
+  11 sample 전수 분석 (n=11) 에서 모든 CROSSREF 가 동일 magic
+  constant 사용 확인. per-instance identity 는 `id` (begin_id) 가
+  carry. HwpForge 다른 native byte-identical 검증된 field 와 일관:
+  ClickHere=`%clk`, SummeryField=`%smr`, PathField=`%pat`.
+- HWP5 projection boundary `decode_hwp5_crossref_content_type`: Bookmark
+  + N2=2 → `Contents` (이전 `BookmarkName`). 의미는 RefType-상대적
+  ("책갈피 이름").
+- HWPX encoder reverse boundary `ref_content_type_wire_code`: Contents
+  → 모든 RefType 에서 N2=2 (Bookmark="책갈피 이름", Figure/Table/Eq/
+  Outline="캡션 내용").
+
+#### Regression gates
+
+- `crossref_builders_emit_nonzero_matching_fieldid`: fieldid 기댓값
+  `1828000000` → `628650598` 변경. assertion 메시지 "non-zero derived"
+  → "`%xrf` magic constant" 로 강화.
+
+#### 시각 검증 결과 (한컴오피스 한글 직접 열기)
+
+| 케이스 | 이전 | 현재 |
+|--------|-----|-----|
+| Bookmark+Page (Point) | `?` | `1` ✅ |
+| Bookmark+Page+Hyperlink (Point) | `?` | `1` ✅ |
+| Bookmark+Contents (Span) | (미검증) | 본문 표시 ✅ |
+| Bookmark+Contents (Point) | `?` | `?` (정상 — 본문 없음) |
+
+Point bookmark 의 Contents reference 는 본문이 없어 한컴이 `?` 표시 —
+우리 wire 형식은 정상. caller 가 SpanStart/SpanEnd 책갈피를 만들면 한컴
+이 범위 안 본문을 표시.
+
+#### 추가 발견 (별도 task)
+
+- `<hp:endNote>` / `<hp:footNote>` / `<hp:figure>` / `<hp:table>` 등
+  cross-ref target 이 될 수 있는 elements 에 `instId` attribute 가
+  emit 되지 않음. 한컴 cross-ref Command 의 `?#<id>` target lookup 이
+  실패하여 endnote/footnote/caption cross-ref 가 `?` 표시. Wave 12m
+  범위 밖 — task #134 로 분리.
+
+#### 새 examples (시각 검증용)
+
+- `crossref_matrix.rs` — RefType × ContentType 8-permutation HWPX
+- `crossref_with_target.rs` — Point bookmark + cross-ref 4종
+- `crossref_span_bookmark.rs` — Span bookmark + Contents reference 검증
+
+#### 검증
+
+- `cargo nextest run --workspace --all-features`: 2,463 passed, 2 skipped
+- `cargo clippy --workspace --all-features --all-targets -D warnings`: clean
+
 ### Wave 12m Phase 2 — `Control::CrossRef` HWP5 leg structured upgrade (BREAKING)
 
 HWP5 `%xrf` 상호참조 필드를 `Control::Unknown(tag="hwp5.crossref")`
