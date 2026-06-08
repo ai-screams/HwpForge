@@ -7,6 +7,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Wave 12p — cross-ref target element instance ID carry (BREAKING, partial)
+
+Wave 12m 시각 검증의 잔존 이슈 (HWP5 변환본의 footnote/endnote/figure/
+table/equation cross-ref 가 한컴에서 `?` 표시) 해소 작업. **Steps 1-4
+완료**, Step 5 (HWP5 → HWPX target ID 매칭 알고리즘) 는 후속 작업.
+
+ADR 참조: `.docs/architecture/adr/ADR-005-wave12p-target-element-instance-id-carry.md`
+
+#### Breaking — `hwpforge-foundation`
+
+- `RefContentType::BookmarkName` variant **부활** (Wave 12m fixup
+  regression revert). Bookmark N2 매핑 native 일치 보정:
+  - N2=0 → Page, N2=1 → Number (책갈피 본문/번호)
+  - N2=2 → BookmarkName (책갈피 이름), N2=3 → UpDownPos
+- `Display` 는 `Contents` 와 `BookmarkName` 모두 `OBJECT_TYPE_CONTENTS`
+  emit (한컴 wire 일치, 의미는 RefType + N2 wire code 에서 결정).
+
+#### Breaking — `hwpforge-core`
+
+- `Image` 에 `pub inst_id: Option<u64>` 신규.
+- `Table` 에 `pub inst_id: Option<u64>` 신규.
+- `Control::Equation` variant 에 `inst_id: Option<u64>` 신규.
+- 모두 `#[non_exhaustive]` + `Default::default()` 호환이라 builder
+  사용 시 caller 코드 변경 불필요.
+
+#### Added — `hwpforge-smithy-hwp5`
+
+- `Hwp5ParaHeader.instance_id: u32` (Step 1a) — HWP5 ParaHeader `[18..22]`
+  의 u32 LE 추출. outline cross-ref target ID source.
+- `Hwp5NestedSubtree.instance_id: u32` (Step 1b) — Header/Footer/Footnote/
+  Endnote CtrlHeader trailer.
+- `Hwp5Table.instance_id: u32` (Step 1c-1) — Table CtrlHeader trailer.
+- `Hwp5EquationControl.instance_id: u32` (Step 1c-2) — `eqed` CtrlHeader
+  trailer.
+- `Hwp5ImageControl.instance_id: u32` (Step 1c-3) — `gso ` CtrlHeader
+  trailer (via NestedSubtreeContext + InlineGsoContext).
+- Helper `extract_ctrl_header_trailer_instance_id(&[u8]) -> u32` —
+  마지막 8 bytes 중 first 4 의 u32 LE.
+
+#### Changed — projection / encoder
+
+- HWP5 projection: 6종 target element 의 instance_id 를 Core inst_id
+  로 통과 (`0` 은 unset 으로 `None` 정규화).
+- HWPX encoder: `<hp:footNote instId="N">`, `<hp:endNote instId="N">`,
+  `<hp:equation id="N">`, `<hp:tbl id="N">`, `<hp:pic id="N">` 모두
+  Core inst_id 가 있으면 사용, 없으면 sequential `generate_instid`
+  fallback.
+
+#### Deferred (Step 5, 후속 작업)
+
+Probe 결과 (`crates/hwpforge-smithy-hwp5/examples/probe_instance_id.rs`):
+HWP5 binary 의 footnote/endnote CtrlHeader payload 는 **자기 자신의
+instance ID 를 carry 하지 않음** (한컴이 save 시 session counter 로
+synthesize). cross-ref Command 는 target ID 를 carry 하지만 target
+element 의 ID 는 wire 에 없음.
+
+결과:
+- **Forged HWPX path** (caller 가 `Image::new(...).inst_id = Some(N)`
+  설정): ✅ 정상 동작 (encoder 가 wire 에 emit)
+- **HWP5 → HWPX 변환 path**: ❌ cross-ref 가 여전히 `?` 표시 (target
+  element inst_id = None, encoder skip)
+
+Step 5 알고리즘 (ADR-005 §"Step 5 Algorithm" 에 plan 상세):
+1. Section 별 cross-ref Command target_id 들을 pre-scan + RefType
+   별 grouping
+2. Doc 순서대로 target element 에 그 IDs 할당 (1:N dedup 처리)
+3. cross-ref Command 는 as-is (HWP5 wire 그대로)
+
+Step 5 land 시 HWP5 conversion path 도 cross-ref 정상 동작.
+
+#### 신규 examples / probe
+
+- `crates/hwpforge-smithy-hwp5/examples/probe_instance_id.rs` — debug:
+  HWP5 fixture 의 projection inst_id 확인
+
+#### 검증
+
+- `cargo nextest run --workspace --all-features`: 2,463 passed, 2 skipped
+- `cargo clippy --workspace --all-features --all-targets -D warnings`: clean
+- 한컴 시각 검증: forged path 만 동작 확인 (HWP5 conversion path 는
+  Step 5 대기)
+
 ### Wave 12m fixup — fieldid `%xrf` magic constant + `RefContentType::BookmarkName` 폐기 (BREAKING)
 
 Wave 12m Phase 2 시각 검증 (한컴오피스 한글) 에서 cross-ref body 가 `?`
