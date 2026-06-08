@@ -1468,12 +1468,13 @@ fn ref_content_type_wire_code(
         Page => 0,
         UpDownPos => 3,
         Number => 1,
-        // Wave 12m Phase 2 Step 4 fixup: per OWPML 표 156, Contents 의
-        // 의미는 RefType-상대적이지만 N2 wire code 는 모든 RefType 에서
-        // 동일하게 2 (Bookmark="책갈피 이름", Figure/Table/Eq/Outline=
-        // "캡션 내용"). Wave-12m-pre 의 `BookmarkName` enum 분리는 spec
-        // 외였고 `OBJECT_TYPE_BOOKMARK_NAME` 을 한컴이 인식 못해 폐기.
-        Contents => 2,
+        // Wave 12p pre-fix: native wire 일치. 모든 RefType 에서
+        // `Contents` 의 N2 wire code 는 2 (Figure/Table/Eq/Outline =
+        // "캡션 내용"). 별도로 `BookmarkName` variant (한컴 "책갈피
+        // 이름") 도 N2=2 로 emit — RefType=TARGET_BOOKMARK 컨텍스트에서
+        // 한컴이 의미를 결정. (Bookmark+Number=N2=1 = 책갈피 본문/번호
+        // 는 위 `Number => 1` arm 이 처리.)
+        Contents | BookmarkName => 2,
         Unknown(other) => *other,
         // Foundation RefContentType is `#[non_exhaustive]`; future
         // variants default to Page (slot 0).

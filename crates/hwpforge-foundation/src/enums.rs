@@ -3504,34 +3504,43 @@ impl schemars::JsonSchema for RefType {
 /// - `#[repr(u8)]` 제거 — N2 wire 코드는 boundary 에서 매핑.
 /// - `Unknown(u8)` 추가 — silent fallback 위조 방지.
 ///
-/// Wave 12m Phase 2 Step 4 fixup (재검증 후 보정):
-/// - `BookmarkName` 폐기. OWPML 표 156 은 ContentType 을 4종 (PAGE /
-///   NUMBER / CONTENTS / UPDOWNPOS) 만 정의하며, 책갈피의 경우 CONTENTS
-///   가 "책갈피 이름" 의미를 내포함. `OBJECT_TYPE_BOOKMARK_NAME` 은
-///   spec 외 invented string 으로 한컴이 인식 못함 (시각 검증에서 `?`
-///   표시 확인됨). HWP5 N2=2 for Bookmark → `Contents` 로 매핑하며
-///   ContentType 의 의미는 RefType-상대적임 (Bookmark+Contents = 책갈피
-///   이름, Figure+Contents = 캡션 본문).
+/// Wave 12p pre-fix (Wave 12m fixup regression revert + 한컴 native
+/// wire 일치 보정, 2026-06-08):
 ///
-/// HWP5 N2 코드 → `RefContentType` 변환은 RefType-relative
-/// 매핑이며 `smithy-hwp5/src/projection.rs::decode_hwp5_content_type`
-/// 에서 수행.
+/// Wave 12m fixup 에서 `BookmarkName` 폐기 + Bookmark+Contents 를 N2=2
+/// 로 통일했으나, native wire 분석 결과 정반대였음:
+///
+/// | HWP5 N2 (Bookmark) | 한컴 의미     | HWPX RefContentType 문자열 |
+/// |--------------------|---------------|---------------------------|
+/// | 0                  | 책갈피 위치 페이지 | `OBJECT_TYPE_PAGE`        |
+/// | 1                  | 책갈피 본문 / 번호 | `OBJECT_TYPE_NUMBER` (!!) |
+/// | 2                  | 책갈피 이름       | `OBJECT_TYPE_CONTENTS`    |
+/// | 3                  | 위/아래          | `OBJECT_TYPE_UPDOWNPOS`   |
+///
+/// (책갈피의 wire 는 OWPML spec 표 156 의 직관과 어긋남 — `CONTENTS`
+/// 가 "책갈피 이름", `NUMBER` 가 "책갈피 내용" 의미.) `BookmarkName`
+/// variant 부활 + Display 는 `OBJECT_TYPE_CONTENTS` 동일 emit (한컴
+/// wire 일치) 하되 boundary 의 wire code 매핑은 분리.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[non_exhaustive]
 pub enum RefContentType {
     /// Show page number where the target appears. 한컴: "쪽 번호" (모든 RefType 공통)
     #[default]
     Page,
-    /// Show the target's numbering (e.g. "표 3", "그림 2", 각주 번호).
-    /// 한컴: "주 번호" / "표 번호" / "그림 번호" / "개요 번호" 등 (N2=1 for
-    /// Footnote/Endnote/Caption/Outline).
+    /// Show the target's numbering. 의미는 RefType-상대적:
+    /// - Footnote/Endnote/Caption/Outline: "주 번호" / "표 번호" / "그림 번호" / "개요 번호" (N2=1)
+    /// - Bookmark: **책갈피 본문 / 번호 텍스트** (N2=1, 한컴 wire 특이성)
     Number,
-    /// Show the target's content. 한컴 spec 의미는 RefType-상대적:
-    /// - Bookmark: "책갈피 이름" (N2=2 for Bookmark; OWPML 표 156 명시
-    ///   "책갈피의 경우, 책갈피 내용")
+    /// Show the target's content. 의미는 RefType-상대적:
     /// - Figure/Table/Equation: "캡션 내용" (N2=2)
     /// - Outline: "개요 내용" (N2=2)
+    /// - Bookmark 에서는 *사용 안 함* — 책갈피의 "내용" 의미는
+    ///   `RefContentType::Number` 가 carry (N2=1).
     Contents,
+    /// Show the bookmark's NAME. 한컴: "책갈피 이름" (Bookmark+N2=2 전용).
+    /// HWPX wire 의 `OBJECT_TYPE_CONTENTS` 와 동일 문자열로 emit
+    /// (RefType=TARGET_BOOKMARK 컨텍스트에서 한컴이 의미 결정).
+    BookmarkName,
     /// Show relative position ("위" / "아래"). 한컴: "위/아래" (N2=3).
     UpDownPos,
     /// Unrecognized ContentType code preserved from wire for forward
@@ -3544,7 +3553,11 @@ impl fmt::Display for RefContentType {
         match self {
             Self::Page => f.write_str("OBJECT_TYPE_PAGE"),
             Self::Number => f.write_str("OBJECT_TYPE_NUMBER"),
-            Self::Contents => f.write_str("OBJECT_TYPE_CONTENTS"),
+            // Wave 12p pre-fix: `Contents` 와 `BookmarkName` 모두 한컴
+            // wire 의 `OBJECT_TYPE_CONTENTS` 로 emit. 의미 구분은
+            // RefType + Command 의 N2 wire code 에서 (Bookmark N2=2 =
+            // 책갈피 이름, Figure/Table/Eq/Outline N2=2 = 캡션 내용).
+            Self::Contents | Self::BookmarkName => f.write_str("OBJECT_TYPE_CONTENTS"),
             Self::UpDownPos => f.write_str("OBJECT_TYPE_UPDOWNPOS"),
             Self::Unknown(code) => write!(f, "OBJECT_TYPE_UNKNOWN({code})"),
         }
@@ -3558,7 +3571,13 @@ impl std::str::FromStr for RefContentType {
         match s {
             "OBJECT_TYPE_PAGE" | "Page" | "page" => Ok(Self::Page),
             "OBJECT_TYPE_NUMBER" | "Number" | "number" => Ok(Self::Number),
+            // Wave 12p pre-fix: `OBJECT_TYPE_CONTENTS` 는 caller 의 추가
+            // 컨텍스트 (RefType + N2 wire code) 없이는 `Contents` 와
+            // `BookmarkName` 을 구분할 수 없으므로 default 로 `Contents`
+            // 를 반환. boundary 함수 `decode_hwp5_crossref_content_type`
+            // 가 Bookmark N2=2 인 경우만 `BookmarkName` 으로 재매핑.
             "OBJECT_TYPE_CONTENTS" | "Contents" | "contents" => Ok(Self::Contents),
+            "BookmarkName" | "bookmark_name" => Ok(Self::BookmarkName),
             "OBJECT_TYPE_UPDOWNPOS" | "UpDownPos" | "updownpos" => Ok(Self::UpDownPos),
             _ => Err(FoundationError::ParseError {
                 type_name: "RefContentType".to_string(),

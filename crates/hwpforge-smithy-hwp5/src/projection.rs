@@ -1763,21 +1763,23 @@ fn decode_hwp5_crossref_ref_type(code: u8) -> RefType {
     }
 }
 
-/// Wave 12m Phase 2 Step 4 boundary: HWP5 `%xrf` N2 (ContentType) is
-/// RefType-relative. Slot `0` always `Page`, slot `3` always
-/// `UpDownPos`, slot `1` Bookmark→Contents (책갈피 내용) / 그 외
-/// →Number, slot `2` Bookmark→Contents (책갈피 이름) / 그 외→Contents
-/// (캡션 내용). OWPML 표 156 명시: "책갈피의 경우, 책갈피 내용". Unknown
-/// codes fall back to `RefContentType::Unknown(u8)`.
+/// Wave 12p pre-fix boundary: HWP5 `%xrf` N2 (ContentType) is
+/// RefType-relative. 한컴 native wire 분석 결과:
 ///
-/// Wave 12m Phase 2 Step 4 fixup: 1차 작업에서 만든 `BookmarkName` enum
-/// 변종은 OWPML spec 외 invented string 으로 한컴 인식 실패 (시각 검증).
-/// Bookmark N2=2 → `Contents` 로 매핑.
+/// | RefType        | N2=0 | N2=1   | N2=2          | N2=3      |
+/// |----------------|------|--------|---------------|-----------|
+/// | Bookmark       | Page | Number | BookmarkName  | UpDownPos |
+/// | 그 외 (T/F/Eq/…) | Page | Number | Contents      | UpDownPos |
+///
+/// 책갈피 N2=1 은 한컴에서 "책갈피 본문/번호" 의미 (OBJECT_TYPE_NUMBER
+/// emit), N2=2 는 "책갈피 이름" (OBJECT_TYPE_CONTENTS emit). spec 외
+/// 의미이지만 native wire 와 일치. Wave 12m fixup 의 (Bookmark, 2) →
+/// Contents 통일은 잘못이었고 본 fix 에서 보정.
 fn decode_hwp5_crossref_content_type(ref_type_code: u8, code: u8) -> RefContentType {
     match (ref_type_code, code) {
         (_, 0) => RefContentType::Page,
-        (HWP5_CROSSREF_REF_TYPE_BOOKMARK, 1) => RefContentType::Contents,
-        (HWP5_CROSSREF_REF_TYPE_BOOKMARK, 2) => RefContentType::Contents,
+        (HWP5_CROSSREF_REF_TYPE_BOOKMARK, 1) => RefContentType::Number,
+        (HWP5_CROSSREF_REF_TYPE_BOOKMARK, 2) => RefContentType::BookmarkName,
         (_, 1) => RefContentType::Number,
         (_, 2) => RefContentType::Contents,
         (_, 3) => RefContentType::UpDownPos,
