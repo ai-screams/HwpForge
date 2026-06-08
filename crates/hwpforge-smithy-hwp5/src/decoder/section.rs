@@ -269,6 +269,12 @@ pub(crate) struct Hwp5EquationControl {
     pub geometry: Hwp5ShapeComponentGeometry,
     /// HancomEQN script text recovered from the `HWPTAG_EQEDIT` record.
     pub script: String,
+    /// Wave 12p Step 1c-2: `eqed` CtrlHeader trailer 의 instance ID
+    /// (last 8 bytes 의 first 4, u32 LE). HWPX cross-ref Command
+    /// `?#1108165599;2;0;0;0;` (TARGET_EQUATION) 의 target ID 가
+    /// 한컴 native `<hp:equation id="1108165599">` 와 매칭.
+    #[allow(dead_code)]
+    pub instance_id: u32,
 }
 
 /// Parsed memo placeholder from a `%unk` ctrl with command `"MEMO/.../.../..."`.
@@ -1231,7 +1237,9 @@ struct BodyTextParserState {
     current_subtree_para: Option<ParaBuf>,
     inline_subtree_gso_ctx: Option<InlineGsoContext>,
     /// Geometry of an `eqed` ctrl awaiting its `HWPTAG_EQEDIT` script child.
-    eqed_pending: Option<Hwp5ShapeComponentGeometry>,
+    /// Wave 12p Step 1c-2: stash (geometry, instance_id) from the
+    /// `eqed` CtrlHeader; finalized by the paired `HWPTAG_EQEDIT` record.
+    eqed_pending: Option<(Hwp5ShapeComponentGeometry, u32)>,
     /// `%clk` CtrlHeader awaiting its trailing `0x57 lvl=2` sub-record
     /// for the form-mode field name (Wave 12l). If the next top-level
     /// record is not the expected sub-record, the press-field is
@@ -1775,12 +1783,14 @@ impl BodyTextParserState {
                 } else if ctrl_id == CTRL_ID_EQED {
                     // The `eqed` ctrl carries only geometry; its HancomEQN
                     // script lives in the child `HWPTAG_EQEDIT` (0x58) record.
-                    // Stash the geometry and finalize when that child arrives.
-                    self.eqed_pending = Some(
-                        Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).unwrap_or(
-                            Hwp5ShapeComponentGeometry { x: 0, y: 0, width: 0, height: 0 },
-                        ),
-                    );
+                    // Stash the geometry + trailer instance_id and finalize
+                    // when that child arrives (Wave 12p Step 1c-2).
+                    let geometry = Hwp5ShapeComponentGeometry::parse_from_ctrl_header(
+                        &record.data,
+                    )
+                    .unwrap_or(Hwp5ShapeComponentGeometry { x: 0, y: 0, width: 0, height: 0 });
+                    let instance_id = extract_ctrl_header_trailer_instance_id(&record.data);
+                    self.eqed_pending = Some((geometry, instance_id));
                 } else if ctrl_id == CTRL_ID_DUTMAL {
                     // `tdut` ctrl carries the dutmal (덧말) main/sub text
                     // strings + posType. The paired inline `0x17` marker
@@ -1986,7 +1996,7 @@ impl BodyTextParserState {
             }
             TagId::EqEdit => {
                 // Finalize the equation started by the preceding `eqed` ctrl.
-                if let Some(geometry) = self.eqed_pending.take() {
+                if let Some((geometry, instance_id)) = self.eqed_pending.take() {
                     match Hwp5EqEdit::parse(&record.data) {
                         Ok(eqedit) => {
                             if let Some(buf) = self.current.as_mut() {
@@ -1994,6 +2004,7 @@ impl BodyTextParserState {
                                     ctrl_id: CTRL_ID_EQED,
                                     geometry,
                                     script: eqedit.script,
+                                    instance_id,
                                 }));
                             }
                         }
