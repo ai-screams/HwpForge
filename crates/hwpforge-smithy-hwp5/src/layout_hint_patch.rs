@@ -517,43 +517,81 @@ fn rewrite_element_attr(
     Ok(rebuilt)
 }
 
+/// Conservative default lineseg values for paragraphs whose HWP5 source
+/// does not carry a `ParaLineSeg` (tag `0x45`) record (task #123).
+///
+/// Without an emitted `<hp:linesegarray>`, Hancom Office flags the file
+/// as needing "low-security recovery" because it cannot pre-compute the
+/// rendering cache. Emitting a single placeholder segment with native-
+/// matching default attributes lets Hancom open the file silently — it
+/// recomputes per-line metrics on first render anyway.
+///
+/// Values empirically derived from native `sample-field-docsummary.hwpx`:
+/// - `vertsize/textheight = 1000` (10pt baseline, native default)
+/// - `baseline = 850`, `spacing = 600`
+/// - `horzsize = 42520` (A4 content width, 1cm L/R margin)
+/// - `flags = 393216` (Hancom's default lineseg flag bitmask)
+///
+/// `vertpos` is intentionally left at `0` — Hancom recomputes the cumulative
+/// vertical position from paragraph order on open.
+fn write_default_lineseg<W: Write>(writer: &mut Writer<W>) -> Hwp5Result<()> {
+    let mut line = BytesStart::new("hp:lineseg");
+    line.push_attribute(("textpos", "0"));
+    line.push_attribute(("vertpos", "0"));
+    line.push_attribute(("vertsize", "1000"));
+    line.push_attribute(("textheight", "1000"));
+    line.push_attribute(("baseline", "850"));
+    line.push_attribute(("spacing", "600"));
+    line.push_attribute(("horzpos", "0"));
+    line.push_attribute(("horzsize", "42520"));
+    line.push_attribute(("flags", "393216"));
+    writer
+        .write_event(Event::Empty(line))
+        .map_err(|e| Hwp5Error::Cfb { detail: format!("write default lineseg: {e}") })?;
+    Ok(())
+}
+
 fn write_linesegarray<W: Write>(
     writer: &mut Writer<W>,
     line_segments: &[Hwp5ParaLineSeg],
 ) -> Hwp5Result<()> {
-    if line_segments.is_empty() {
-        return Ok(());
-    }
-
+    // task #123: always emit linesegarray (even if HWP5 source omitted
+    // the ParaLineSeg record). Hancom recomputes accurate metrics on
+    // first render, but the element's *presence* is required to skip
+    // the "low-security recovery" warning.
     writer
         .write_event(Event::Start(BytesStart::new("hp:linesegarray")))
         .map_err(|e| Hwp5Error::Cfb { detail: format!("write linesegarray start: {e}") })?;
 
-    for segment in line_segments {
-        let textpos = segment.text_start_position.to_string();
-        let vertpos = segment.vertical_position.to_string();
-        let vertsize = segment.line_height.to_string();
-        let textheight = segment.text_height.to_string();
-        let baseline = segment.baseline_distance.to_string();
-        let spacing = segment.line_spacing.to_string();
-        let horzpos = segment.column_start_position.to_string();
-        let horzsize = segment.segment_width.to_string();
-        let flags = segment.tag.to_string();
+    if line_segments.is_empty() {
+        write_default_lineseg(writer)?;
+    } else {
+        for segment in line_segments {
+            let textpos = segment.text_start_position.to_string();
+            let vertpos = segment.vertical_position.to_string();
+            let vertsize = segment.line_height.to_string();
+            let textheight = segment.text_height.to_string();
+            let baseline = segment.baseline_distance.to_string();
+            let spacing = segment.line_spacing.to_string();
+            let horzpos = segment.column_start_position.to_string();
+            let horzsize = segment.segment_width.to_string();
+            let flags = segment.tag.to_string();
 
-        let mut line = BytesStart::new("hp:lineseg");
-        line.push_attribute(("textpos", textpos.as_str()));
-        line.push_attribute(("vertpos", vertpos.as_str()));
-        line.push_attribute(("vertsize", vertsize.as_str()));
-        line.push_attribute(("textheight", textheight.as_str()));
-        line.push_attribute(("baseline", baseline.as_str()));
-        line.push_attribute(("spacing", spacing.as_str()));
-        line.push_attribute(("horzpos", horzpos.as_str()));
-        line.push_attribute(("horzsize", horzsize.as_str()));
-        line.push_attribute(("flags", flags.as_str()));
+            let mut line = BytesStart::new("hp:lineseg");
+            line.push_attribute(("textpos", textpos.as_str()));
+            line.push_attribute(("vertpos", vertpos.as_str()));
+            line.push_attribute(("vertsize", vertsize.as_str()));
+            line.push_attribute(("textheight", textheight.as_str()));
+            line.push_attribute(("baseline", baseline.as_str()));
+            line.push_attribute(("spacing", spacing.as_str()));
+            line.push_attribute(("horzpos", horzpos.as_str()));
+            line.push_attribute(("horzsize", horzsize.as_str()));
+            line.push_attribute(("flags", flags.as_str()));
 
-        writer
-            .write_event(Event::Empty(line))
-            .map_err(|e| Hwp5Error::Cfb { detail: format!("write lineseg: {e}") })?;
+            writer
+                .write_event(Event::Empty(line))
+                .map_err(|e| Hwp5Error::Cfb { detail: format!("write lineseg: {e}") })?;
+        }
     }
 
     writer
