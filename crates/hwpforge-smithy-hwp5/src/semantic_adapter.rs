@@ -747,6 +747,8 @@ fn adapt_textbox_control(
         // textbox carries no header/footer applyPageType bits — set to
         // 0 so projection treats it as default (BOTH).
         properties_raw: 0,
+        // TextBox 는 cross-ref target 이 아니므로 instance_id 사용 안 함.
+        instance_id: 0,
         paragraphs: textbox.paragraphs.clone(),
     };
 

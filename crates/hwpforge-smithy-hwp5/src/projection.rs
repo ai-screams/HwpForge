@@ -3064,6 +3064,7 @@ mod tests {
                     Hwp5Control::Header(crate::decoder::section::Hwp5NestedSubtree {
                         ctrl_id: 0x6865_6164,
                         properties_raw: 0,
+                        instance_id: 0,
                         paragraphs: vec![Hwp5Paragraph {
                             text: "\u{fffc}".to_string(),
                             text_segments: Vec::new(),
@@ -3077,6 +3078,7 @@ mod tests {
                     Hwp5Control::Footer(crate::decoder::section::Hwp5NestedSubtree {
                         ctrl_id: 0x666F_6F74,
                         properties_raw: 0,
+                        instance_id: 0,
                         paragraphs: vec![make_paragraph("꼬리말 테스트", 0, 0)],
                     }),
                 ],

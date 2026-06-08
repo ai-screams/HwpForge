@@ -690,6 +690,7 @@ mod tests {
                     vec![Hwp5Control::Header(Hwp5NestedSubtree {
                         ctrl_id: 0x6865_6164,
                         properties_raw: 0,
+                        instance_id: 0,
                         paragraphs: vec![paragraph(
                             "header",
                             vec![line_segment(30, 0, 1000)],
@@ -703,6 +704,7 @@ mod tests {
                     vec![Hwp5Control::Footer(Hwp5NestedSubtree {
                         ctrl_id: 0x666F_6F74,
                         properties_raw: 0,
+                        instance_id: 0,
                         paragraphs: vec![paragraph(
                             "footer",
                             vec![line_segment(40, 0, 1000)],

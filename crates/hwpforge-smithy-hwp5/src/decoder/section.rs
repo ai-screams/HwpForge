@@ -439,6 +439,15 @@ pub(crate) struct Hwp5NestedSubtree {
     /// the semantic split so the decoder stays format-agnostic
     /// (single source of payload, easy to extend for new bits).
     pub properties_raw: u32,
+    /// Wave 12p Step 1b: CtrlHeader trailer 의 first 4 bytes (u32 LE).
+    /// HWPX cross-ref Command `?#<id>` 의 target ID 와 매칭되는
+    /// instance ID. Footnote/Endnote 이 cross-ref 대상이 될 때 한컴이
+    /// 이 값을 `<hp:footNote instId="...">` / `<hp:endNote instId="...">`
+    /// attribute 로 emit. 추출 불가하면 0.
+    /// Wave 12p Step 4 (projection consumer) 가 land 하기 전까지는
+    /// 미사용 — `#[allow(dead_code)]` 로 step 별 atomic commit 분리.
+    #[allow(dead_code)]
+    pub instance_id: u32,
     /// Nested paragraphs captured under the subtree.
     pub paragraphs: Vec<Hwp5Paragraph>,
 }
@@ -763,6 +772,18 @@ enum NestedSubtreeKind {
     TextBox,
 }
 
+/// Wave 12p Step 1b: extracts the CtrlHeader trailer's `instance_id`
+/// (first 4 bytes of the trailing 8-byte trailer at the end of the
+/// payload) as a little-endian u32. Returns `0` when the payload is too
+/// short to carry a trailer.
+fn extract_ctrl_header_trailer_instance_id(data: &[u8]) -> u32 {
+    let n = data.len();
+    if n < 8 {
+        return 0;
+    }
+    u32::from_le_bytes([data[n - 8], data[n - 7], data[n - 6], data[n - 5]])
+}
+
 /// Active non-table control while collecting a nested paragraph subtree.
 struct NestedSubtreeContext {
     ctrl_depth: u16,
@@ -770,6 +791,9 @@ struct NestedSubtreeContext {
     /// Bytes [4..8] of the `CtrlHeader` payload (see
     /// [`Hwp5NestedSubtree::properties_raw`]).
     properties_raw: u32,
+    /// CtrlHeader trailer instance ID (Wave 12p Step 1b). See
+    /// [`Hwp5NestedSubtree::instance_id`].
+    instance_id: u32,
     saw_list_header: bool,
     saw_shape_rectangle: bool,
     saw_shape_component: bool,
@@ -791,12 +815,14 @@ impl NestedSubtreeContext {
         ctrl_depth: u16,
         ctrl_id: u32,
         properties_raw: u32,
+        instance_id: u32,
         geometry: Option<Hwp5ShapeComponentGeometry>,
     ) -> Self {
         Self {
             ctrl_depth,
             ctrl_id,
             properties_raw,
+            instance_id,
             saw_list_header: false,
             saw_shape_rectangle: false,
             saw_shape_component: false,
@@ -877,6 +903,7 @@ impl NestedSubtreeContext {
                 Hwp5Control::Header(Hwp5NestedSubtree {
                     ctrl_id: self.ctrl_id,
                     properties_raw: self.properties_raw,
+                    instance_id: self.instance_id,
                     paragraphs: self.paragraphs,
                 })
             }
@@ -884,6 +911,7 @@ impl NestedSubtreeContext {
                 Hwp5Control::Footer(Hwp5NestedSubtree {
                     ctrl_id: self.ctrl_id,
                     properties_raw: self.properties_raw,
+                    instance_id: self.instance_id,
                     paragraphs: self.paragraphs,
                 })
             }
@@ -891,6 +919,7 @@ impl NestedSubtreeContext {
                 Hwp5Control::Footnote(Hwp5NestedSubtree {
                     ctrl_id: self.ctrl_id,
                     properties_raw: self.properties_raw,
+                    instance_id: self.instance_id,
                     paragraphs: self.paragraphs,
                 })
             }
@@ -898,6 +927,7 @@ impl NestedSubtreeContext {
                 Hwp5Control::Endnote(Hwp5NestedSubtree {
                     ctrl_id: self.ctrl_id,
                     properties_raw: self.properties_raw,
+                    instance_id: self.instance_id,
                     paragraphs: self.paragraphs,
                 })
             }
@@ -1717,8 +1747,18 @@ impl BodyTextParserState {
                     } else {
                         0
                     };
-                    self.subtree_ctx =
-                        Some(NestedSubtreeContext::new(level, ctrl_id, properties_raw, geometry));
+                    // Wave 12p Step 1b: CtrlHeader trailer (last 8 bytes
+                    // of payload) carries the instance ID as the first 4
+                    // bytes (LE u32). HWPX cross-ref Command 의 target
+                    // ID 와 매칭. 추출 불가 (payload < 8 bytes) 시 0.
+                    let instance_id = extract_ctrl_header_trailer_instance_id(&record.data);
+                    self.subtree_ctx = Some(NestedSubtreeContext::new(
+                        level,
+                        ctrl_id,
+                        properties_raw,
+                        instance_id,
+                        geometry,
+                    ));
                 } else if ctrl_id == CTRL_ID_EQED {
                     // The `eqed` ctrl carries only geometry; its HancomEQN
                     // script lives in the child `HWPTAG_EQEDIT` (0x58) record.
@@ -3621,7 +3661,7 @@ mod tests {
             width: 5_000,
             height: 6_000,
         };
-        let mut ctx = NestedSubtreeContext::new(0, CTRL_ID_GSO, 0, Some(geometry));
+        let mut ctx = NestedSubtreeContext::new(0, CTRL_ID_GSO, 0, 0, Some(geometry));
         ctx.note_shape_component(&[]);
         ctx.note_shape_picture(Hwp5ShapePicture::parse(&shape_picture_data(1)).unwrap());
         ctx.note_shape_ole(
