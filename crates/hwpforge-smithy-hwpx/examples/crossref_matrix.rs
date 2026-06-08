@@ -24,8 +24,8 @@ use hwpforge_smithy_hwpx::style_store::HwpxStyleStore;
 use hwpforge_smithy_hwpx::HwpxEncoder;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../examples/hwp5_review/wave12m");
+    let out_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/hwp5_review/wave12m");
     std::fs::create_dir_all(&out_dir)?;
 
     let cases: &[(&str, RefType, RefContentType, RefTarget, bool, &str)] = &[
@@ -78,14 +78,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             false,
             "1",
         ),
-        (
-            "figure-page",
-            RefType::Figure,
-            RefContentType::Page,
-            RefTarget::SystemId(1),
-            false,
-            "1",
-        ),
+        ("figure-page", RefType::Figure, RefContentType::Page, RefTarget::SystemId(1), false, "1"),
         (
             "table-number",
             RefType::Table,
@@ -135,10 +128,7 @@ fn build_one(
     );
 
     let label_para = Paragraph::with_runs(
-        vec![Run::text(
-            "여기에 참조: ".to_string(),
-            CharShapeIndex::new(0),
-        )],
+        vec![Run::text("여기에 참조: ".to_string(), CharShapeIndex::new(0))],
         ParaShapeIndex::new(0),
     );
 
@@ -159,10 +149,8 @@ fn build_one(
         ParaShapeIndex::new(0),
     );
 
-    let section = Section::with_paragraphs(
-        vec![intro_para, label_para, ref_para],
-        PageSettings::a4(),
-    );
+    let section =
+        Section::with_paragraphs(vec![intro_para, label_para, ref_para], PageSettings::a4());
 
     let mut doc = Document::<hwpforge_core::document::Draft>::new();
     doc.add_section(section);

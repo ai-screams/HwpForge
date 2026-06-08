@@ -34,7 +34,7 @@ fn equation_control(script: &str, size: EquationSize, text_color: Color) -> Cont
         base_line: EQUATION_BASE_LINE,
         text_color,
         font: "HancomEQN".to_string(),
-    inst_id: None,
+        inst_id: None,
     }
 }
 

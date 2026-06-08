@@ -1900,7 +1900,7 @@ mod tests {
                     base_line: 70,
                     text_color: hwpforge_foundation::Color::BLACK,
                     font: "HancomEQN".to_string(),
-                inst_id: None,
+                    inst_id: None,
                 },
                 CharShapeIndex::new(0),
             )],

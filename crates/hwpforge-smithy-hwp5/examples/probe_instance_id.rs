@@ -30,10 +30,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         _ => {}
                     },
                     hwpforge_core::run::RunContent::Image(img) => {
-                        println!("Section {s_idx} para {p_idx} run {r_idx}: Image inst_id={:?}", img.inst_id);
+                        println!(
+                            "Section {s_idx} para {p_idx} run {r_idx}: Image inst_id={:?}",
+                            img.inst_id
+                        );
                     }
                     hwpforge_core::run::RunContent::Table(t) => {
-                        println!("Section {s_idx} para {p_idx} run {r_idx}: Table inst_id={:?}", t.inst_id);
+                        println!(
+                            "Section {s_idx} para {p_idx} run {r_idx}: Table inst_id={:?}",
+                            t.inst_id
+                        );
                     }
                     _ => {}
                 }

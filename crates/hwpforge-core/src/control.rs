@@ -2868,7 +2868,7 @@ mod tests {
             base_line: 71,
             text_color: Color::BLACK,
             font: "HancomEQN".to_string(),
-        inst_id: None,
+            inst_id: None,
         };
         let json = serde_json::to_string(&ctrl).unwrap();
         let back: Control = serde_json::from_str(&json).unwrap();

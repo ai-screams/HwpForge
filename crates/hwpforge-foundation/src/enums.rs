@@ -3332,6 +3332,29 @@ impl FieldType {
             _ => None,
         }
     }
+
+    /// Returns the HWPX `<hp:fieldBegin editable="…">` value for this
+    /// field type (Wave 12p task #124).
+    ///
+    /// Empirically derived from the Hancom-native
+    /// `sample-field-docsummary.hwpx`:
+    /// - `Author`, `Title` → `false` (stable user metadata; Hancom keeps
+    ///   the authored value)
+    /// - `LastSavedBy`, `CreatedTime`, `ModifiedTime` → `true` (Hancom
+    ///   recomputes from the document metadata on save)
+    /// - `ClickHere` → `true` (placeholder press-fields are user-editable)
+    ///
+    /// Encoders use this method to populate the `editable` attribute
+    /// instead of the prior hardcoded `"1"` (which previously caused
+    /// `$author`/`$title` to appear edited when re-saved by Hancom).
+    #[must_use]
+    pub fn hwpx_editable(self) -> bool {
+        match self {
+            Self::ClickHere => true,
+            Self::Author | Self::Title => false,
+            Self::LastSavedBy | Self::CreatedTime | Self::ModifiedTime => true,
+        }
+    }
 }
 
 impl fmt::Display for FieldType {

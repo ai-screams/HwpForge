@@ -19,15 +19,13 @@ use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::Run;
 use hwpforge_core::section::Section;
 use hwpforge_core::PageSettings;
-use hwpforge_foundation::{
-    BookmarkType, CharShapeIndex, ParaShapeIndex, RefContentType, RefType,
-};
+use hwpforge_foundation::{BookmarkType, CharShapeIndex, ParaShapeIndex, RefContentType, RefType};
 use hwpforge_smithy_hwpx::style_store::HwpxStyleStore;
 use hwpforge_smithy_hwpx::HwpxEncoder;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../examples/hwp5_review/wave12m");
+    let out_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/hwp5_review/wave12m");
     std::fs::create_dir_all(&out_dir)?;
 
     // ── 첫 페이지: 책갈피 "target1" 설치 ──
@@ -122,7 +120,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let header = Paragraph::with_runs(
         vec![Run::text(
-            "Wave 12m: 책갈피 target1 + cross-ref 4종 (한컴에서 F9 또는 Ctrl+클릭 시도)".to_string(),
+            "Wave 12m: 책갈피 target1 + cross-ref 4종 (한컴에서 F9 또는 Ctrl+클릭 시도)"
+                .to_string(),
             CharShapeIndex::new(0),
         )],
         ParaShapeIndex::new(0),

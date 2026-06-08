@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeSet, VecDeque};
 
+use hwpforge_core::control::RefTarget;
 use hwpforge_core::document::{Document, Draft};
 use hwpforge_core::image::{
     Image, ImageFormat, ImagePlacement, ImageRelativeTo, ImageStore, ImageTextFlow, ImageTextWrap,
@@ -14,7 +15,6 @@ use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::section::{HeaderFooter, PageBorderFillEntry, PageNumber, Section};
 use hwpforge_core::table::{Table, TableCell, TableMargin, TableRow};
-use hwpforge_core::control::RefTarget;
 use hwpforge_core::Control;
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
@@ -1890,7 +1890,6 @@ fn char_shape_id_for_visible_position(runs: &[Hwp5CharShapeRun], position: u32) 
     char_shape_id_at_position(runs, position.saturating_sub(1))
 }
 
-
 // ---------------------------------------------------------------------------
 // Text splitting
 // ---------------------------------------------------------------------------
@@ -3017,7 +3016,7 @@ mod tests {
                 height: 2_000,
             },
             binary_data_id: 1,
-        instance_id: 0,
+            instance_id: 0,
         });
         let section = make_section(
             vec![Hwp5Paragraph {
@@ -3073,7 +3072,7 @@ mod tests {
                 height: 800,
             },
             binary_data_id: 7,
-        instance_id: 0,
+            instance_id: 0,
         });
         let section = make_section(
             vec![Hwp5Paragraph {
@@ -3136,7 +3135,7 @@ mod tests {
                 height: 900,
             },
             binary_data_id: 3,
-        instance_id: 0,
+            instance_id: 0,
         });
         let textbox = Hwp5Control::TextBox(Hwp5TextBoxControl {
             ctrl_id: 0x6773_6F20,
@@ -3217,7 +3216,7 @@ mod tests {
                 height: 800,
             },
             binary_data_id: 99,
-        instance_id: 0,
+            instance_id: 0,
         });
         let section = make_section(
             vec![Hwp5Paragraph {
@@ -3256,7 +3255,7 @@ mod tests {
                 height: 0,
             },
             binary_data_id: 5,
-        instance_id: 0,
+            instance_id: 0,
         });
         let section = make_section(
             vec![Hwp5Paragraph {
@@ -3301,7 +3300,7 @@ mod tests {
                 height: 0,
             },
             binary_data_id: 6,
-        instance_id: 0,
+            instance_id: 0,
         });
         let section = make_section(
             vec![Hwp5Paragraph {
@@ -3484,7 +3483,7 @@ mod tests {
                 cell_spacing: 120,
                 border_fill_id: Some(8),
                 cells: vec![],
-            instance_id: 0,
+                instance_id: 0,
             })],
         };
         let section = make_section(vec![para], None);
@@ -3543,7 +3542,7 @@ mod tests {
                         controls: vec![],
                     }],
                 }],
-            instance_id: 0,
+                instance_id: 0,
             })],
         };
 
@@ -3614,7 +3613,7 @@ mod tests {
                         controls: vec![],
                     }],
                 }],
-            instance_id: 0,
+                instance_id: 0,
             })],
         };
 
@@ -3712,7 +3711,7 @@ mod tests {
                         }],
                     },
                 ],
-            instance_id: 0,
+                instance_id: 0,
             })],
         };
 
@@ -3786,7 +3785,7 @@ mod tests {
                     header_cell(1, false, "body"),
                     header_cell(2, true, "restated-head"),
                 ],
-            instance_id: 0,
+                instance_id: 0,
             })],
         };
 
@@ -3866,7 +3865,7 @@ mod tests {
                 cell_spacing: 0,
                 border_fill_id: None,
                 cells: vec![pgnp_cell()],
-            instance_id: 0,
+                instance_id: 0,
             })],
         };
 
@@ -3933,7 +3932,7 @@ mod tests {
                     cell_spacing: 0,
                     border_fill_id: None,
                     cells: vec![cell],
-                instance_id: 0,
+                    instance_id: 0,
                 })],
             }
         }
@@ -4117,7 +4116,7 @@ mod tests {
                 cell_spacing: 0,
                 border_fill_id: None,
                 cells: vec![],
-            instance_id: 0,
+                instance_id: 0,
             },
             &mut warnings,
         );
@@ -4142,7 +4141,7 @@ mod tests {
                 cell_spacing: 0,
                 border_fill_id: None,
                 cells: vec![],
-            instance_id: 0,
+                instance_id: 0,
             },
             &mut warnings,
         );
@@ -4165,7 +4164,7 @@ mod tests {
                 cell_spacing: 0,
                 border_fill_id: None,
                 cells: vec![],
-            instance_id: 0,
+                instance_id: 0,
             },
             &mut warnings,
         );
@@ -4187,7 +4186,7 @@ mod tests {
                 cell_spacing: 0,
                 border_fill_id: None,
                 cells: vec![],
-            instance_id: 0,
+                instance_id: 0,
             },
             &mut warnings,
         );

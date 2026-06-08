@@ -976,7 +976,7 @@ fn decode_equation(eq: &HxEquation, char_shape_id: CharShapeIndex) -> HwpxResult
             base_line: eq.base_line,
             text_color: parse_hex_color(&eq.text_color).unwrap_or(Color::BLACK),
             font: eq.font.clone(),
-        inst_id: None,
+            inst_id: None,
         })),
         char_shape_id,
     })

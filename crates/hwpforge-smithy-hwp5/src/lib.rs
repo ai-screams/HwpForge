@@ -3412,10 +3412,8 @@ mod tests {
             }
             seen_any = true;
 
-            let stem = source
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .expect("fixture path must have a stem");
+            let stem =
+                source.file_stem().and_then(|s| s.to_str()).expect("fixture path must have a stem");
             let out = unique_temp_path(&format!("crossref-matrix-{stem}.hwpx"));
 
             let warnings = hwp5_to_hwpx(&source, &out)
@@ -3433,9 +3431,8 @@ mod tests {
                 "{relative}: converted section must contain at least one CROSSREF field"
             );
 
-            let expected_ref_type_param = format!(
-                "<hp:stringParam name=\"RefType\">{expected_ref_type}</hp:stringParam>",
-            );
+            let expected_ref_type_param =
+                format!("<hp:stringParam name=\"RefType\">{expected_ref_type}</hp:stringParam>",);
             assert!(
                 section_xml.contains(&expected_ref_type_param),
                 "{relative}: converted section must carry RefType={expected_ref_type}\nbody: {section_xml}",

@@ -598,12 +598,15 @@ fn build_runs(
                     Control::UnknownSummery { token } => {
                         let field_id = hyperlink_entries.len();
                         let marker = next_marker("HWPFD", field_id);
+                        // Wave 12p task #124: unknown token — assume Hancom
+                        // recomputes (editable="1"). Matches pre-fix behavior.
                         let real_xml = build_summery_run_xml_raw(
                             token,
                             "",
                             "",
                             char_pr_id_ref,
                             1_000_000_000_u64 + field_id as u64,
+                            true,
                         );
                         let marker_run_xml = format!(
                             r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
@@ -621,12 +624,15 @@ fn build_runs(
                         let token: &str =
                             if *is_time_mode { "$createtime" } else { "$modifiedtime" };
                         let display = raw_command.as_str();
+                        // Wave 12p task #124: both $createtime / $modifiedtime
+                        // are recomputed by Hancom (editable="1").
                         let real_xml = build_summery_run_xml_raw(
                             token,
                             display,
                             "",
                             char_pr_id_ref,
                             1_000_000_000_u64 + field_id as u64,
+                            true,
                         );
                         let marker_run_xml = format!(
                             r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
@@ -1258,7 +1264,17 @@ fn build_summery_field_xml(
         FieldType::ClickHere => unreachable!("caller already routed ClickHere elsewhere"),
         _ => String::new(),
     };
-    build_summery_run_xml_raw(command, &display_text, name, char_pr_id_ref, begin_id)
+    // Wave 12p task #124: editable depends on whether Hancom recomputes
+    // the field value (Author/Title → "0" lock to authored value;
+    // LastSavedBy/CreatedTime/ModifiedTime → "1" Hancom recomputes).
+    build_summery_run_xml_raw(
+        command,
+        &display_text,
+        name,
+        char_pr_id_ref,
+        begin_id,
+        field_type.hwpx_editable(),
+    )
 }
 
 /// Lowest-level SUMMERY `<hp:run>` builder — emits a `type="SUMMERY"`
@@ -1275,14 +1291,16 @@ fn build_summery_run_xml_raw(
     name: &str,
     char_pr_id_ref: u32,
     begin_id: u64,
+    editable: bool,
 ) -> String {
     let escaped_name = escape_xml(name);
     let escaped_cmd = escape_xml(command);
+    let editable_bit = u8::from(editable);
     format!(
         concat!(
             r#"<hp:run charPrIDRef="{cpr}">"#,
             r#"<hp:ctrl>"#,
-            r#"<hp:fieldBegin id="{bid}" type="SUMMERY" name="{name}" editable="1" dirty="0" "#,
+            r#"<hp:fieldBegin id="{bid}" type="SUMMERY" name="{name}" editable="{ed}" dirty="0" "#,
             r#"zorder="-1" fieldid="628321650" metaTag="">"#,
             r#"<hp:parameters cnt="3" name="">"#,
             r#"<hp:integerParam name="Prop">8</hp:integerParam>"#,
@@ -1306,6 +1324,7 @@ fn build_summery_run_xml_raw(
         bid = begin_id,
         name = escaped_name,
         cmd = escaped_cmd,
+        ed = editable_bit,
         display = build_text_element_xml(display),
     )
 }
@@ -5071,7 +5090,7 @@ mod tests {
             base_line: 80,
             text_color: Color::BLACK,
             font: "HCR Batang".to_string(),
-        inst_id: None,
+            inst_id: None,
         };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(

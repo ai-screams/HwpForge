@@ -1442,9 +1442,9 @@ impl BodyTextParserState {
                     let ctrl_id = parse_ctrl_id(&record.data);
                     if ctrl_id == CTRL_ID_TABLE {
                         self.table_stack.push(TableContext::new(
-                        level,
-                        extract_ctrl_header_trailer_instance_id(&record.data),
-                    ));
+                            level,
+                            extract_ctrl_header_trailer_instance_id(&record.data),
+                        ));
                     } else if ctrl_id == CTRL_ID_GSO {
                         ctx.inline_cell_gso_ctx = Some(InlineGsoContext::new(
                             level,
@@ -1809,10 +1809,8 @@ impl BodyTextParserState {
                     // script lives in the child `HWPTAG_EQEDIT` (0x58) record.
                     // Stash the geometry + trailer instance_id and finalize
                     // when that child arrives (Wave 12p Step 1c-2).
-                    let geometry = Hwp5ShapeComponentGeometry::parse_from_ctrl_header(
-                        &record.data,
-                    )
-                    .unwrap_or(Hwp5ShapeComponentGeometry { x: 0, y: 0, width: 0, height: 0 });
+                    let geometry = Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data)
+                        .unwrap_or(Hwp5ShapeComponentGeometry { x: 0, y: 0, width: 0, height: 0 });
                     let instance_id = extract_ctrl_header_trailer_instance_id(&record.data);
                     self.eqed_pending = Some((geometry, instance_id));
                 } else if ctrl_id == CTRL_ID_DUTMAL {

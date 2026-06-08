@@ -20,15 +20,13 @@ use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::Run;
 use hwpforge_core::section::Section;
 use hwpforge_core::PageSettings;
-use hwpforge_foundation::{
-    BookmarkType, CharShapeIndex, ParaShapeIndex, RefContentType, RefType,
-};
+use hwpforge_foundation::{BookmarkType, CharShapeIndex, ParaShapeIndex, RefContentType, RefType};
 use hwpforge_smithy_hwpx::style_store::HwpxStyleStore;
 use hwpforge_smithy_hwpx::HwpxEncoder;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../examples/hwp5_review/wave12m");
+    let out_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/hwp5_review/wave12m");
     std::fs::create_dir_all(&out_dir)?;
 
     // ── 첫 페이지: 책갈피 "target1" 의 범위(span) 설치 ──
@@ -106,10 +104,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ParaShapeIndex::new(0),
     );
 
-    let section = Section::with_paragraphs(
-        vec![header, bm_para, break_para, ref1, ref2],
-        PageSettings::a4(),
-    );
+    let section =
+        Section::with_paragraphs(vec![header, bm_para, break_para, ref1, ref2], PageSettings::a4());
 
     let mut doc = Document::<hwpforge_core::document::Draft>::new();
     doc.add_section(section);
