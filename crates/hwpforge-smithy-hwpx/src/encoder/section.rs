@@ -1462,19 +1462,18 @@ fn ref_content_type_wire_code(
     ref_type: &hwpforge_foundation::RefType,
     content: &hwpforge_foundation::RefContentType,
 ) -> u8 {
-    use hwpforge_foundation::{RefContentType::*, RefType};
+    use hwpforge_foundation::RefContentType::*;
+    let _ = ref_type;
     match content {
         Page => 0,
         UpDownPos => 3,
         Number => 1,
-        Contents => {
-            if matches!(ref_type, RefType::Bookmark) {
-                1
-            } else {
-                2
-            }
-        }
-        BookmarkName => 2,
+        // Wave 12m Phase 2 Step 4 fixup: per OWPML 표 156, Contents 의
+        // 의미는 RefType-상대적이지만 N2 wire code 는 모든 RefType 에서
+        // 동일하게 2 (Bookmark="책갈피 이름", Figure/Table/Eq/Outline=
+        // "캡션 내용"). Wave-12m-pre 의 `BookmarkName` enum 분리는 spec
+        // 외였고 `OBJECT_TYPE_BOOKMARK_NAME` 을 한컴이 인식 못해 폐기.
+        Contents => 2,
         Unknown(other) => *other,
         // Foundation RefContentType is `#[non_exhaustive]`; future
         // variants default to Page (slot 0).
@@ -1533,9 +1532,16 @@ fn build_crossref_run_xml(
     // Hancom reads `fieldBegin id` as i32; a base >= 2^31 wraps negative
     // and the field is no longer recognized.
     let begin_id = 1_300_000_000_u64 + field_id as u64;
-    // `fieldid` is a Hancom field instance id and must be a non-zero 32-bit
-    // value. Distinct base from other field types' fieldid id-space.
-    let field_uid = 1_828_000_000_u64 + field_id as u64;
+    // Wave 12m Phase 2 Step 4 fixup: `fieldid` is a Hancom **type tag**,
+    // not an instance id. Native Hancom HWPX emits the ctrl_id's ASCII
+    // big-endian u32 — same convention as ClickHere (`%clk`=0x25636C6B),
+    // SummeryField (`%smr`=0x25736D72), PathField (`%pat`=0x25706174).
+    // For CROSSREF the constant is `%xrf` = 0x25787266 = 628_650_598.
+    // All CROSSREF fields in a document share this fieldid; per-instance
+    // identity is carried by `id` (begin_id) above. Verified against
+    // n=11 native Hancom-authored .hwpx samples (re-research stage 2).
+    let field_uid: u64 = 0x25787266;
+    let _ = field_id; // kept in signature for symmetry; not used for fieldid.
     let display_text_xml = build_text_element_xml(display_text);
     format!(
         concat!(
@@ -4904,18 +4910,23 @@ mod tests {
             0,
             0,
         );
+        // Wave 12m Phase 2 Step 4 fixup: fieldid is now the Hancom
+        // `%xrf` ASCII magic constant (0x25787266 = 628650598), shared
+        // across every CROSSREF instance in the document. Per-instance
+        // identity is carried by `id` (begin_id) instead. Verified
+        // against 11 native Hancom-authored .hwpx samples.
         assert!(!core_xml.contains(r#"fieldid="0""#), "Core CROSSREF must never emit fieldid=0");
         assert!(
-            core_xml.contains(r#"fieldid="1828000000""#),
-            "Core CROSSREF fieldid must be the non-zero derived value"
+            core_xml.contains(r#"fieldid="628650598""#),
+            "Core CROSSREF fieldid must be the `%xrf` magic constant"
         );
         assert_eq!(
-            core_xml.matches(r#"fieldid="1828000000""#).count(),
+            core_xml.matches(r#"fieldid="628650598""#).count(),
             2,
-            "fieldBegin and fieldEnd must share the same non-zero fieldid"
+            "fieldBegin and fieldEnd must share the `%xrf` magic fieldid"
         );
         assert!(
-            core_xml.contains(r#"<hp:fieldEnd beginIDRef="1300000000" fieldid="1828000000"/>"#),
+            core_xml.contains(r#"<hp:fieldEnd beginIDRef="1300000000" fieldid="628650598"/>"#),
             "fieldEnd beginIDRef must reference id, not fieldid"
         );
     }

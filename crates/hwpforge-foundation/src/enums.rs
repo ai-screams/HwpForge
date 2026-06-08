@@ -3502,9 +3502,16 @@ impl schemars::JsonSchema for RefType {
 ///
 /// Wave 12m Phase 2 (Codex(architect+critic) review 반영):
 /// - `#[repr(u8)]` 제거 — N2 wire 코드는 boundary 에서 매핑.
-/// - `BookmarkName` 추가 — Bookmark 전용 ContentType "책갈피 이름" (한컴
-///   dropdown N2=2 Bookmark 전용 의미). 다른 RefType 에서는 의미가 다름.
 /// - `Unknown(u8)` 추가 — silent fallback 위조 방지.
+///
+/// Wave 12m Phase 2 Step 4 fixup (재검증 후 보정):
+/// - `BookmarkName` 폐기. OWPML 표 156 은 ContentType 을 4종 (PAGE /
+///   NUMBER / CONTENTS / UPDOWNPOS) 만 정의하며, 책갈피의 경우 CONTENTS
+///   가 "책갈피 이름" 의미를 내포함. `OBJECT_TYPE_BOOKMARK_NAME` 은
+///   spec 외 invented string 으로 한컴이 인식 못함 (시각 검증에서 `?`
+///   표시 확인됨). HWP5 N2=2 for Bookmark → `Contents` 로 매핑하며
+///   ContentType 의 의미는 RefType-상대적임 (Bookmark+Contents = 책갈피
+///   이름, Figure+Contents = 캡션 본문).
 ///
 /// HWP5 N2 코드 → `RefContentType` 변환은 RefType-relative
 /// 매핑이며 `smithy-hwp5/src/projection.rs::decode_hwp5_content_type`
@@ -3519,12 +3526,12 @@ pub enum RefContentType {
     /// 한컴: "주 번호" / "표 번호" / "그림 번호" / "개요 번호" 등 (N2=1 for
     /// Footnote/Endnote/Caption/Outline).
     Number,
-    /// Show the target's content/body text. 한컴: "캡션 내용" /
-    /// "개요 내용" / "책갈피 내용" (Bookmark N2=1; Caption/Outline N2=2).
+    /// Show the target's content. 한컴 spec 의미는 RefType-상대적:
+    /// - Bookmark: "책갈피 이름" (N2=2 for Bookmark; OWPML 표 156 명시
+    ///   "책갈피의 경우, 책갈피 내용")
+    /// - Figure/Table/Equation: "캡션 내용" (N2=2)
+    /// - Outline: "개요 내용" (N2=2)
     Contents,
-    /// Show the bookmark's name (Bookmark 전용). 한컴: "책갈피 이름"
-    /// (Bookmark N2=2 전용).
-    BookmarkName,
     /// Show relative position ("위" / "아래"). 한컴: "위/아래" (N2=3).
     UpDownPos,
     /// Unrecognized ContentType code preserved from wire for forward
@@ -3538,7 +3545,6 @@ impl fmt::Display for RefContentType {
             Self::Page => f.write_str("OBJECT_TYPE_PAGE"),
             Self::Number => f.write_str("OBJECT_TYPE_NUMBER"),
             Self::Contents => f.write_str("OBJECT_TYPE_CONTENTS"),
-            Self::BookmarkName => f.write_str("OBJECT_TYPE_BOOKMARK_NAME"),
             Self::UpDownPos => f.write_str("OBJECT_TYPE_UPDOWNPOS"),
             Self::Unknown(code) => write!(f, "OBJECT_TYPE_UNKNOWN({code})"),
         }
@@ -3553,15 +3559,12 @@ impl std::str::FromStr for RefContentType {
             "OBJECT_TYPE_PAGE" | "Page" | "page" => Ok(Self::Page),
             "OBJECT_TYPE_NUMBER" | "Number" | "number" => Ok(Self::Number),
             "OBJECT_TYPE_CONTENTS" | "Contents" | "contents" => Ok(Self::Contents),
-            "OBJECT_TYPE_BOOKMARK_NAME" | "BookmarkName" | "bookmark_name" => {
-                Ok(Self::BookmarkName)
-            }
             "OBJECT_TYPE_UPDOWNPOS" | "UpDownPos" | "updownpos" => Ok(Self::UpDownPos),
             _ => Err(FoundationError::ParseError {
                 type_name: "RefContentType".to_string(),
                 value: s.to_string(),
                 valid_values: "OBJECT_TYPE_PAGE, OBJECT_TYPE_NUMBER, OBJECT_TYPE_CONTENTS, \
-                    OBJECT_TYPE_BOOKMARK_NAME, OBJECT_TYPE_UPDOWNPOS"
+                    OBJECT_TYPE_UPDOWNPOS"
                     .to_string(),
             }),
         }

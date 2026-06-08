@@ -1764,16 +1764,20 @@ fn decode_hwp5_crossref_ref_type(code: u8) -> RefType {
 }
 
 /// Wave 12m Phase 2 Step 4 boundary: HWP5 `%xrf` N2 (ContentType) is
-/// RefType-relative. For Bookmark refs, slot `1` means `Contents` and
-/// slot `2` means `BookmarkName`; for everything else, slot `1` means
-/// `Number` and slot `2` means `Contents`. Slot `0` is always `Page`
-/// and `3` is always `UpDownPos`. Unknown codes fall back to
-/// `RefContentType::Unknown(u8)`.
+/// RefType-relative. Slot `0` always `Page`, slot `3` always
+/// `UpDownPos`, slot `1` Bookmark→Contents (책갈피 내용) / 그 외
+/// →Number, slot `2` Bookmark→Contents (책갈피 이름) / 그 외→Contents
+/// (캡션 내용). OWPML 표 156 명시: "책갈피의 경우, 책갈피 내용". Unknown
+/// codes fall back to `RefContentType::Unknown(u8)`.
+///
+/// Wave 12m Phase 2 Step 4 fixup: 1차 작업에서 만든 `BookmarkName` enum
+/// 변종은 OWPML spec 외 invented string 으로 한컴 인식 실패 (시각 검증).
+/// Bookmark N2=2 → `Contents` 로 매핑.
 fn decode_hwp5_crossref_content_type(ref_type_code: u8, code: u8) -> RefContentType {
     match (ref_type_code, code) {
         (_, 0) => RefContentType::Page,
         (HWP5_CROSSREF_REF_TYPE_BOOKMARK, 1) => RefContentType::Contents,
-        (HWP5_CROSSREF_REF_TYPE_BOOKMARK, 2) => RefContentType::BookmarkName,
+        (HWP5_CROSSREF_REF_TYPE_BOOKMARK, 2) => RefContentType::Contents,
         (_, 1) => RefContentType::Number,
         (_, 2) => RefContentType::Contents,
         (_, 3) => RefContentType::UpDownPos,
