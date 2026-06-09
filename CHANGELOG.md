@@ -7,6 +7,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Wave 12q (task #122) — outline level 7~9 recovery via Style "개요 N" linkage
+
+HWP5 `ParaShape.property1` bit 25-27 은 3 bits 만 표현 가능 (cap=6).
+한컴 native 는 outline level 7~9 를 Style record 의 한국어 이름
+"개요 N" (N-1 = HWPX level) 으로 표현. 변환 후 paraPr 의 heading_level
+을 Style "개요 N" 매핑으로 override 하여 native parity 달성.
+
+#### Fixed
+
+- `hwpforge-smithy-hwp5`: `apply_outline_style_level_overrides()` —
+  ParaShape 변환 후 Style 테이블에서 "개요 N" / "Outline N" 패턴 매칭
+  → para_shape_id 가 가리키는 paraPr 의 heading_level 을 N-1 로
+  override. 한컴이 wire cap=6 으로 저장한 level 7/8/9 가 정확히 emit.
+- override 는 silent (warning 없음) — semantic loss 가 아닌 lossless
+  level recovery 이므로 audit warning_count 에 영향 없음.
+
+#### Added — `hwpforge-smithy-hwpx`
+
+- `HwpxStyleStore::para_shape_mut()` — Wave 12q level override 용
+  mutable accessor.
+
+#### 검증
+
+- `sample-outline-9levels.hwp` (사용자 작성 native fixture) 변환 결과:
+  - paraPr id 2~8 level 0~6: native parity ✅
+  - paraPr id 18/16/17 level 7/8/9: hp10 namespace switch wrap 없이도
+    한컴이 정상 인식 ✅
+- 한컴 시각 검증: 1~7수준 `1./가./1)/가)/(1)/(가)/①`, 8수준 `㉠`,
+  9~10수준 marker 없음 (native 와 byte-identical 매칭).
+- Codex(architect) 검토 반영: paraPr id 자체에 의존 안 함, heading_type
+  이 Outline 인 paraPr 만 override.
+
+ADR 참조: `.docs/architecture/adr/ADR-006-wave12p-task122-outline-level-7-9-diagnostics.md`
+
+### Wave 12p tasks #121/#123/#124 — outline/linesegarray/editable fidelity
+
+#### Fixed (#121) — `hwpforge-smithy-hwp5`
+
+- `Hwp5RawParaShape::heading_level()` 이 `saturating_sub(1)` 로 wire 를
+  1-based 로 잘못 가정 → 0-based 그대로 사용. HWP5 spec bit 25-27 (3
+  bits) 가 zero-based ordinal 0~7. HWPX `<hh:heading level>` 도
+  zero-based. Codex(architect) 검토 확인.
+- 검증: native `sample-outline-9levels.hwpx` 의 paraPr id 2~8 level
+  0~6 가 우리 emit 와 완전 일치.
+
+#### Fixed (#123) — `hwpforge-smithy-hwp5`
+
+- `layout_hint_patch::write_linesegarray()`: HWP5 source 의
+  `ParaLineSeg` (tag 0x45) record 가 없는 paragraph 도 default lineseg
+  로 `<hp:linesegarray>` 항상 emit. 이전엔 누락 → 한컴이 "낮은 보안
+  수준 복구" 경고.
+- Default 값 (native fixture 도출): `vertsize=1000`, `textheight=1000`,
+  `baseline=850`, `spacing=600`, `horzsize=42520` (A4 content width),
+  `flags=393216`. `vertpos=0` — 한컴이 paragraph 순서 따라 재계산.
+
+#### Fixed (#124) — `hwpforge-foundation` + `hwpforge-smithy-hwpx`
+
+- `FieldType::hwpx_editable()` 신규 method — `Author`/`Title` → `false`,
+  `LastSavedBy`/`CreatedTime`/`ModifiedTime` → `true` (한컴 native
+  fixture 도출). 이전엔 모든 SUMMERY field 가 `editable="1"` 강제됨.
+- `build_summery_run_xml_raw()` 시그니처 확장 (`editable: bool` 파라미터).
+- 검증: `sample-field-docsummary.hwp` 변환 결과 8/8 SUMMERY field 가
+  native editable 값과 일치.
+
 ### Wave 12p — cross-ref target element instance ID carry (BREAKING, partial)
 
 Wave 12m 시각 검증의 잔존 이슈 (HWP5 변환본의 footnote/endnote/figure/
@@ -323,6 +387,56 @@ PATH 필드 오분류는 #120 의 가장 강한 트리거이나 #121 (outline le
 off-by-1), #123 (linesegarray 누락), #124 (editable bit 강제) 등 다른
 트리거가 잔존. Step 6 만으로 보안 경고가 완전 사라지는지는 사용자
 시각 검증 (한컴 열기 후 확인) 에 의존.
+
+### Known Issues — Wave 12p/12q 종료 후 잔존
+
+#### #120 — "낮은 보안 수준 복구" 경고 (HWP5 → HWPX SUMMERY 필드)
+
+**증상** (2026-06-09 시각 검증, `converted-field-docsummary-wave12p-final.hwpx`):
+
+1. 한컴에서 변환 결과 파일을 열 때 "현재의 낮은 보안 수준으로 문서에
+   손상을 줄 수 있는 내용을 복구하였습니다" 경고 dialog 표시.
+2. 처음 열 때 모든 SUMMERY 필드 (`$author`, `$title`,
+   `$modifiedtime`, `$lastsaveby`, `$createtime`) 의 body 가 빈 placeholder
+   (`[문서 정보 시작][문서 정보 끝]`) 로 표시.
+3. 사용자가 **저장하면** 한컴이 자체적으로 metadata 를 evaluate 해서
+   `hanyul` / 날짜 등 실제 값으로 채워 다시 표시.
+
+**Native fixture (`sample-field-docsummary.hwpx`) 와의 차이**:
+- native: 경고 없음 + 처음 열 때부터 SUMMERY 값 표시.
+- ours: 경고 + 처음 열 때 빈 표시 → 저장 후 update.
+
+**Wire 비교 결과 (`/tmp/docsum_diff` 의 grep)**:
+
+native 와 우리 emit 모두 `<hp:fieldBegin>` 와 `<hp:fieldEnd>` 사이의
+`<hp:t>` body 에 실제 값을 채움 (예: native field #2 `hanyul`, ours
+field #2 `hanyul`). **body 자체에는 차이 없음**. 그럼에도 한컴이 우리
+파일은 빈 placeholder 로 표시 — 한컴이 다른 구조적 차이를 트리거로
+잡는 듯.
+
+**알려지지 않은 추가 트리거 (Wave 12p/12q 후 잔존)**:
+- `<hp:fieldBegin>` 의 `id`/`fieldid`/`metaTag` attribute 의 값/조합이
+  native 와 미세하게 다른가? (예: hardcoded `fieldid="628321650"` vs
+  native 의 paragraph-별 다른 값)
+- ParaText (paragraph 본문 text) 의 byte sequence 가 다른가?
+- `dirty="0"` 이지만 한컴이 dirty 로 인식하는 다른 signal?
+- 단일 paragraph 안에 여러 SUMMERY field 가 연속될 때 우리 emit 의
+  paragraph 구조가 다른가? (native field #5 는 paragraph 안에 여러
+  `<hp:t>` 가 split 되어 있음)
+
+**완화책 — 후속 wave 에서 진단 필요**:
+1. native `sample-field-docsummary.hwpx` 와 우리 emit 의 `section0.xml`
+   byte-level diff 로 트리거 specific 식별.
+2. 한컴 "낮은 보안 수준" warning 의 정확한 트리거 조건 reverse-engineering.
+3. ZIP container 의 file 순서 / mimetype 처리 차이 가능성도 검토.
+
+**user impact**: 사용자가 변환 결과를 저장 한 번 하면 모든 값이
+올바르게 표시되므로 **functional impact 는 크지 않음**. 단 첫 인상이
+"빈 필드 + 경고" 라 confusing — 후속 wave 에서 trigger specific 한 fix
+필요.
+
+상태: **investigation deferred** — 후속 wave 에서 byte-level diff 진단
+필요.
 
 ### Wave 12o-fixup — Codex(architect) Top-5 리뷰 4건 + 종료 정직성
 
