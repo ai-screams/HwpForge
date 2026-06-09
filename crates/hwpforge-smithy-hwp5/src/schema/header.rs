@@ -1036,14 +1036,21 @@ impl Hwp5RawParaShape {
         }
     }
 
-    /// Returns the zero-based paragraph list level encoded in `property1`
-    /// bits 25-27.
+    /// Returns the paragraph list level encoded in `property1` bits 25-27.
     ///
-    /// HWP5 stores these bits as one-based values (`1..=7`) for outline,
-    /// numbering, and bullet paragraphs. The shared IR and HWPX wire heading
-    /// level are zero-based, so this helper normalizes the value.
+    /// HWP5 stores a 3-bit ordinal (`0..=7`) and the HWPX `<hh:heading level>`
+    /// attribute is zero-based (`level=0` = 첫 outline, `level=1` = 둘째, …).
+    /// Both ends are zero-based, so this helper returns the wire value
+    /// verbatim.
+    ///
+    /// Task #121 (Wave 12p): an earlier implementation applied
+    /// `.saturating_sub(1)` under the (incorrect) assumption that the wire
+    /// was 1-based, which produced an off-by-1 emit (level 1~6 became 0~5).
+    /// Verified against the Codex-architect review of Hancom HWP5 PDF spec
+    /// (bit 23-24 = list family, bit 25-27 = level, bit 28 = border-connect)
+    /// and the user-authored `sample-outline-9levels.hwpx` native fixture.
     pub fn heading_level(&self) -> u8 {
-        (((self.property1 >> 25) & 0b111) as u8).saturating_sub(1)
+        ((self.property1 >> 25) & 0b111) as u8
     }
 
     /// Returns the raw HWP5 list-definition slot index.
