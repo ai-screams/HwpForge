@@ -790,16 +790,41 @@ enum NestedSubtreeKind {
     TextBox,
 }
 
-/// Wave 12p Step 1b: extracts the CtrlHeader trailer's `instance_id`
-/// (first 4 bytes of the trailing 8-byte trailer at the end of the
-/// payload) as a little-endian u32. Returns `0` when the payload is too
-/// short to carry a trailer.
-fn extract_ctrl_header_trailer_instance_id(data: &[u8]) -> u32 {
-    let n = data.len();
-    if n < 8 {
-        return 0;
-    }
-    u32::from_le_bytes([data[n - 8], data[n - 7], data[n - 6], data[n - 5]])
+/// Wave 12p Step 5 (#134): extract the CtrlHeader's `instance_id` field
+/// using ctrl_id-family-aware offsets.
+///
+/// Earlier (Wave 12p Step 1b) we tried `data[n-8..n-4]` as a uniform
+/// trailer, but wire audits (2026-06-09) on Hancom-native fixtures
+/// (`sample-field-crossref-footnote/endnote/table-caption/eq-caption.hwp`)
+/// proved the trailer offset only matches by coincidence. The real
+/// `instance_id` lives at a fixed offset relative to ctrl_id (record-data
+/// prefix), and the offset depends on the control family because
+/// different ctrl families pack different sized header blocks before the
+/// id. Verified offsets:
+///
+/// | ctrl_id family       | data.len | instance_id offset |
+/// |----------------------|----------|--------------------|
+/// | `fn  ` (footnote)    | 20       | `data[16..20]`     |
+/// | `en  ` (endnote)     | 20       | `data[16..20]`     |
+/// | `tbl ` (table)       | 46       | `data[36..40]`     |
+/// | `gso ` (shape)       | (varies) | `data[36..40]`     |
+/// | `eqed` (equation)    | 58       | `data[36..40]`     |
+///
+/// Other ctrl families (`head`, `foot`, `secd`, …) currently return 0 —
+/// they do not appear as cross-ref targets in the 12-fixture matrix.
+///
+/// Returns `0` when the payload is too short to carry the field at the
+/// expected offset, or when the family is unrecognized.
+fn extract_ctrl_header_instance_id(data: &[u8], ctrl_id: u32) -> u32 {
+    let offset = match ctrl_id {
+        CTRL_ID_FOOTNOTE | CTRL_ID_ENDNOTE => 16,
+        CTRL_ID_GSO | CTRL_ID_TABLE | CTRL_ID_EQED => 36,
+        _ => return 0,
+    };
+    data.get(offset..offset + 4)
+        .and_then(|s| s.try_into().ok())
+        .map(u32::from_le_bytes)
+        .unwrap_or(0)
 }
 
 /// Active non-table control while collecting a nested paragraph subtree.
@@ -1443,13 +1468,13 @@ impl BodyTextParserState {
                     if ctrl_id == CTRL_ID_TABLE {
                         self.table_stack.push(TableContext::new(
                             level,
-                            extract_ctrl_header_trailer_instance_id(&record.data),
+                            extract_ctrl_header_instance_id(&record.data, ctrl_id),
                         ));
                     } else if ctrl_id == CTRL_ID_GSO {
                         ctx.inline_cell_gso_ctx = Some(InlineGsoContext::new(
                             level,
                             ctrl_id,
-                            extract_ctrl_header_trailer_instance_id(&record.data),
+                            extract_ctrl_header_instance_id(&record.data, ctrl_id),
                             Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).ok(),
                         ));
                     } else if let Some(buf) = ctx.current_cell_para.as_mut() {
@@ -1604,7 +1629,7 @@ impl BodyTextParserState {
                         self.inline_subtree_gso_ctx = Some(InlineGsoContext::new(
                             level,
                             ctrl_id,
-                            extract_ctrl_header_trailer_instance_id(&record.data),
+                            extract_ctrl_header_instance_id(&record.data, ctrl_id),
                             Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).ok(),
                         ));
                     } else {
@@ -1762,7 +1787,7 @@ impl BodyTextParserState {
                 if ctrl_id == CTRL_ID_TABLE {
                     self.table_stack.push(TableContext::new(
                         level,
-                        extract_ctrl_header_trailer_instance_id(&record.data),
+                        extract_ctrl_header_instance_id(&record.data, ctrl_id),
                     ));
                 } else if matches!(
                     ctrl_id,
@@ -1792,11 +1817,12 @@ impl BodyTextParserState {
                     } else {
                         0
                     };
-                    // Wave 12p Step 1b: CtrlHeader trailer (last 8 bytes
-                    // of payload) carries the instance ID as the first 4
-                    // bytes (LE u32). HWPX cross-ref Command 의 target
-                    // ID 와 매칭. 추출 불가 (payload < 8 bytes) 시 0.
-                    let instance_id = extract_ctrl_header_trailer_instance_id(&record.data);
+                    // Wave 12p Step 5 (#134): CtrlHeader instance_id lives at
+                    // a family-specific offset. fn/en use data[16..20], gso
+                    // uses data[36..40]. See `extract_ctrl_header_instance_id`
+                    // for offset table. HWPX cross-ref Command 의 target ID
+                    // 와 매칭. 추출 불가 시 0.
+                    let instance_id = extract_ctrl_header_instance_id(&record.data, ctrl_id);
                     self.subtree_ctx = Some(NestedSubtreeContext::new(
                         level,
                         ctrl_id,
@@ -1807,11 +1833,12 @@ impl BodyTextParserState {
                 } else if ctrl_id == CTRL_ID_EQED {
                     // The `eqed` ctrl carries only geometry; its HancomEQN
                     // script lives in the child `HWPTAG_EQEDIT` (0x58) record.
-                    // Stash the geometry + trailer instance_id and finalize
-                    // when that child arrives (Wave 12p Step 1c-2).
+                    // Stash the geometry + instance_id and finalize when
+                    // that child arrives (Wave 12p Step 1c-2). Wave 12p
+                    // Step 5: eqed instance_id at data[36..40] (audited).
                     let geometry = Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data)
                         .unwrap_or(Hwp5ShapeComponentGeometry { x: 0, y: 0, width: 0, height: 0 });
-                    let instance_id = extract_ctrl_header_trailer_instance_id(&record.data);
+                    let instance_id = extract_ctrl_header_instance_id(&record.data, ctrl_id);
                     self.eqed_pending = Some((geometry, instance_id));
                 } else if ctrl_id == CTRL_ID_DUTMAL {
                     // `tdut` ctrl carries the dutmal (덧말) main/sub text
