@@ -438,6 +438,32 @@ field #2 `hanyul`). **body 자체에는 차이 없음**. 그럼에도 한컴이 
 상태: **investigation deferred** — 후속 wave 에서 byte-level diff 진단
 필요.
 
+#### #33 — Wave 5 gap C: 별도 `<hm:masterPage>` element carry
+
+**상태**: **investigation deferred** — Windows 한컴 fixture 필요.
+
+**컨텍스트** (2026-06-09 macOS 한컴 fixture 진단):
+
+macOS 한컴은 페이지 테두리 / 머리말 / 꼬리말 / 쪽 배경 등을 모두
+`<hp:secPr>` 안에 `<hp:pageBorderFill>` + `<hp:header>` + `<hp:footer>`
+로 inline emit. 별도 `<hm:masterPage>` element 는 만들지 못함
+(`masterPageCnt="0"`, 별도 `MasterPage/` 디렉토리 / `Contents/masterPageN.xml`
+파일 없음).
+
+진단 결과: **현재 HwpForge 변환이 이미 macOS 한컴 시나리오 (페이지
+테두리 + 머리말/꼬리말) 를 정확히 처리** — `<hp:pageBorderFill>` 3종
+(BOTH/EVEN/ODD), `<hp:header applyPageType="BOTH">`, `<hp:footer ...>`
+모두 native parity (id 번호만 +1 차이).
+
+#33 의 진짜 scope 인 **별도 `<hm:masterPage>` element** (페이지별로
+다른 master template 같은 advanced 기능) 는 macOS 한컴이 만들지 못해
+fixture 확보 불가. Windows 한컴 환경에서 `<hm:masterPage>` 정의된
+.hwp + native .hwpx fixture 확보 후 진단/구현 가능.
+
+**user impact 작음**: 일반 사용자가 사용하는 페이지 테두리/머리말/꼬리말
+시나리오는 이미 동작. advanced `<hm:masterPage>` 시나리오는 한컴 자체
+가 흔한 use case 가 아닌 듯 (macOS 빌드에서 누락 가능).
+
 ### Wave 12o-fixup — Codex(architect) Top-5 리뷰 4건 + 종료 정직성
 
 Codex(architect) Wave 12o post-completion 리뷰에서 발견된 P0/P1 4건의
