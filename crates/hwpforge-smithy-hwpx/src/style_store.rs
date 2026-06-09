@@ -1191,6 +1191,20 @@ impl HwpxStyleStore {
         self.para_shapes.len()
     }
 
+    /// Returns a mutable reference to the para shape at `index`.
+    ///
+    /// Used by Wave 12q HWP5 → HWPX style projection to apply outline-level
+    /// overrides derived from Style records ("개요 N") whose true level
+    /// exceeds what HWP5 wire bits (3 bits, cap 6) can represent.
+    pub fn para_shape_mut(&mut self, index: ParaShapeIndex) -> HwpxResult<&mut HwpxParaShape> {
+        let max = self.para_shapes.len() as u32;
+        self.para_shapes.get_mut(index.get()).ok_or(HwpxError::IndexOutOfBounds {
+            kind: "para_shape",
+            index: index.get() as u32,
+            max,
+        })
+    }
+
     // ── Iterators ────────────────────────────────────────────────
 
     /// Returns an iterator over all fonts in the store.
