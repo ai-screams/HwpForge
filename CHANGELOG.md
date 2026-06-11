@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Refactor (tasks #88/#89/#90/#91/#92/#94/#95) — Wave 12 누적 부채 정리
+
+기능 영향 0 (모든 step 에서 workspace nextest 전체 통과로 검증),
+코드 구조만 개선:
+
+- **#94** CTRL_ID 상수 33개 선언 (4개 파일, 9개 중복 그룹) →
+  `smithy-hwp5/src/ctrl_ids.rs` 단일 모듈 25개 canonical 상수.
+  drift 이름 정리: `SECTION_DEF`→`SECD`, `CROSSREF`→`FIELD_CROSSREF`,
+  `FIELD_INLINE_PAGE`/`INLINE_AUTONUM`→`ATNO`,
+  `INDEXMARK_INLINE`→`INDEXMARK`.
+- **#95** Wave 12i/12k 공유 split-leader / length-prefixed UTF-16 BSTR
+  파서를 `parse_split_leader_utf16` / `parse_length_prefixed_utf16`
+  helper 로 통합 (Dutmal main/sub, IndexMark primary/secondary).
+  Compose (12j) 는 length prefix 가 없는 다른 wire 라 의도적으로 제외.
+- **#88** `parse_name_subrecord` 의 `Option<Option<String>>` →
+  `ClickHereNameSubrecord { Named / Unnamed / Malformed }` named enum.
+- **#89** `Hwp5ClickHereControl::parse` → `Result<_, ClickHereParseError>`
+  (`TruncatedHeader` / `CommandTooLong` / `TruncatedCommand` /
+  `CommandSyntax`) — DroppedControl warning 에 구체 사유 표기.
+- **#90** `handle_top_level_record` ~425줄 → 71줄 dispatcher + 4 helper
+  (`try_intercept_memo_cluster`, `try_attach_clickhere_name`,
+  `handle_ctrl_header`, `handle_eqedit_record`).
+- **#91** `project_paragraph_with_images_structural` ~225줄 → 135줄 +
+  3 helper (`project_visible_text_segment`, `start_field_from_marker`,
+  `drain_unconsumed_paragraph_queues`).
+- **#92** `smithy-hwpx/encoder/section.rs` 5,481줄 → 3,765줄 (잔여 중
+  ~2,760줄은 root 테스트 모듈). 기존 `section/table.rs` 선례 패턴
+  (`mod X;` + `use super::*;` + `pub(super) fn`) 으로 8개 family 모듈
+  신설: `field`(694) / `section_pr`(280) / `header_footer`(245) /
+  `memo`(169) / `chart`(152) / `picture`(139) / `equation`(66) /
+  `typography`(64). root 재수입으로 호출처/테스트 무변경, 본문
+  verbatim 이동. 같은 crate 내 모듈 분리라 runtime 성능 영향 0.
+
 ### Docs (task #72) — HWP5 wire spec (HwpForge-internal)
 
 Added `crates/hwpforge-smithy-hwp5/HWP5_WIRE_SPEC.md` — code-grounded

@@ -11,6 +11,32 @@
 //! HWPX encodes page settings (`<hp:secPr>`) inside the **first run** of
 //! the **first paragraph**, not at the section level. This module reproduces
 //! that quirk so the output is compatible with the Hancom HWP editor.
+//!
+//! # Module Layout (task #92)
+//!
+//! This file holds the encode pipeline (`encode_section` → `build_section`
+//! → `build_paragraph` → `build_runs`), shared utilities
+//! (`next_marker`, `generate_instid`, `build_hx_caption`,
+//! `encode_paragraphs_to_sublist`), and the root tests module. Per-family
+//! run/control builders live in submodules (`mod X;` + `use super::*;` +
+//! `pub(super) fn` — re-imported below so call sites and tests stay
+//! unchanged):
+//!
+//! | module          | family                                            |
+//! |-----------------|---------------------------------------------------|
+//! | `table`         | `<hp:tbl>` grid/cell builders                     |
+//! | `field`         | hyperlink / bookmark / ClickHere / SUMMERY / path / autonum / cross-ref |
+//! | `section_pr`    | `<hp:secPr>` / `<hp:colPr>` build + enrichment    |
+//! | `header_footer` | header/footer, masterpage refs, page-number inject|
+//! | `memo`          | memo run/sublist builders                         |
+//! | `picture`       | paragraph-inline `<hp:pic>`                       |
+//! | `chart`         | run-level embedded-chart `<hp:switch>`            |
+//! | `typography`    | dutmal (덧말) / compose (글자겹침)                |
+//! | `equation`      | `<hp:equation>`                                   |
+//!
+//! Adding a new control family = new file + `mod` line + re-import. Keep
+//! cross-family code paths routed through this root (no family→family
+//! imports) so the dependency direction stays one-way.
 
 mod chart;
 mod equation;
