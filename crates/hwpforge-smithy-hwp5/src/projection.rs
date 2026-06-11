@@ -748,34 +748,13 @@ fn project_paragraph_with_images_structural(
     for segment in &hwp_para.text_segments {
         match segment {
             crate::schema::section::TextSegment::Text(text) => {
-                let len = text.encode_utf16().count() as u32;
-                if let Some(active) = active_field.as_mut() {
-                    match active {
-                        ActiveField::Hyperlink { display_text, .. }
-                        | ActiveField::CrossRef { display_text, .. } => display_text.push_str(text),
-                        // (Wave 12m Phase 2 Step 4: control field carries
-                        //  the structured payload; display_text is body-only.)
-                        // BookmarkSpan / PlainTextFallback / MemoAnchor all emit
-                        // their anchor text in `finish_active_field` via
-                        // `project_text_segment(start, end)`, so silently
-                        // advance the visible cursor here.
-                        ActiveField::BookmarkSpan { .. }
-                        | ActiveField::PlainTextFallback { .. }
-                        | ActiveField::MemoAnchor { .. }
-                        | ActiveField::ClickHere { .. }
-                        | ActiveField::SummeryField { .. }
-                        | ActiveField::DateCodeField { .. }
-                        | ActiveField::PathField { .. } => {}
-                    }
-                } else {
-                    runs.extend(project_text_segment(
-                        &hwp_para.text,
-                        &hwp_para.char_shape_runs,
-                        visible_utf16,
-                        visible_utf16 + len,
-                    ));
-                }
-                visible_utf16 += len;
+                project_visible_text_segment(
+                    text,
+                    hwp_para,
+                    &mut active_field,
+                    &mut runs,
+                    &mut visible_utf16,
+                );
             }
             crate::schema::section::TextSegment::Tab { .. } => {
                 // Inline tab metadata is dropped here; `<hp:tab>`
@@ -841,47 +820,9 @@ fn project_paragraph_with_images_structural(
                 let _ = consume_marker_header(&mut queues.marker_headers, ctrl_id);
             }
             crate::schema::section::TextSegment::FieldBegin { extra } => {
-                let ctrl_id = ctrl_id_from_inline_extra(extra);
-                let header = consume_marker_header(&mut queues.marker_headers, ctrl_id);
-                let memo = if ctrl_id == CTRL_ID_MEMO_INLINE {
-                    queues.memo_controls.pop_front()
-                } else {
-                    None
-                };
-                let clickhere = if ctrl_id == CTRL_ID_CLICK_HERE {
-                    queues.clickhere_controls.pop_front()
-                } else {
-                    None
-                };
-                let summery = if ctrl_id == CTRL_ID_FIELD_SUMMERY {
-                    queues.summery_fields.pop_front()
-                } else {
-                    None
-                };
-                let datecode = if ctrl_id == CTRL_ID_FIELD_DATE_CODE {
-                    queues.datecode_fields.pop_front()
-                } else {
-                    None
-                };
-                let pathfield = if ctrl_id == CTRL_ID_FIELD_PATH {
-                    queues.pathfield_controls.pop_front()
-                } else {
-                    None
-                };
-                let crossref = if ctrl_id == CTRL_ID_FIELD_CROSSREF {
-                    queues.crossref_controls.pop_front()
-                } else {
-                    None
-                };
-                active_field = Some(start_active_field(
-                    ctrl_id,
-                    header,
-                    memo,
-                    clickhere,
-                    summery,
-                    datecode,
-                    pathfield,
-                    crossref,
+                active_field = Some(start_field_from_marker(
+                    extra,
+                    &mut queues,
                     visible_utf16,
                     projection_images,
                     field_hints.as_deref_mut(),
@@ -906,6 +847,130 @@ fn project_paragraph_with_images_structural(
         finish_active_field(field, hwp_para, visible_utf16, &mut runs, projection_images);
     }
 
+    drain_unconsumed_paragraph_queues(
+        queues,
+        hwp_para,
+        visible_utf16,
+        &mut runs,
+        projection_images,
+        image_context,
+    );
+
+    if runs.is_empty() {
+        runs.push(Run::text("", CharShapeIndex::new(0)));
+    }
+
+    let mut paragraph =
+        Paragraph::with_runs(runs, ParaShapeIndex::new(hwp_para.para_shape_id as usize));
+    if hwp_para.style_id > 0 {
+        paragraph = paragraph.with_style(StyleIndex::new(hwp_para.style_id as usize));
+    }
+
+    ProjectedParagraph { paragraph }
+}
+
+/// Projects a visible `TextSegment::Text` chunk (task #91 — extracted
+/// from `project_paragraph_with_images_structural`).
+///
+/// Inside an active field the text feeds the field's `display_text`
+/// (Hyperlink / CrossRef) or is silently skipped — BookmarkSpan /
+/// PlainTextFallback / MemoAnchor / ClickHere / auto-field variants
+/// re-emit their anchor text in `finish_active_field` via
+/// `project_text_segment(start, end)`. Outside a field the chunk
+/// projects to styled runs directly. The visible cursor advances by
+/// the chunk's UTF-16 length either way.
+fn project_visible_text_segment(
+    text: &str,
+    hwp_para: &Hwp5Paragraph,
+    active_field: &mut Option<ActiveField>,
+    runs: &mut Vec<Run>,
+    visible_utf16: &mut u32,
+) {
+    let len = text.encode_utf16().count() as u32;
+    if let Some(active) = active_field.as_mut() {
+        match active {
+            ActiveField::Hyperlink { display_text, .. }
+            | ActiveField::CrossRef { display_text, .. } => display_text.push_str(text),
+            // (Wave 12m Phase 2 Step 4: control field carries
+            //  the structured payload; display_text is body-only.)
+            ActiveField::BookmarkSpan { .. }
+            | ActiveField::PlainTextFallback { .. }
+            | ActiveField::MemoAnchor { .. }
+            | ActiveField::ClickHere { .. }
+            | ActiveField::SummeryField { .. }
+            | ActiveField::DateCodeField { .. }
+            | ActiveField::PathField { .. } => {}
+        }
+    } else {
+        runs.extend(project_text_segment(
+            &hwp_para.text,
+            &hwp_para.char_shape_runs,
+            *visible_utf16,
+            *visible_utf16 + len,
+        ));
+    }
+    *visible_utf16 += len;
+}
+
+/// Opens the `ActiveField` for an inline `FieldBegin` marker (task #91
+/// — extracted from `project_paragraph_with_images_structural`).
+///
+/// The marker's `extra[0..4]` ctrl_id picks which per-family queue
+/// supplies the typed payload (memo / clickhere / summery / datecode /
+/// pathfield / crossref); families pop only their own queue so
+/// unrelated controls stay queued for later markers.
+fn start_field_from_marker(
+    extra: &[u8; 14],
+    queues: &mut ParagraphProjectionQueues<'_>,
+    visible_utf16: u32,
+    projection_images: &mut ProjectionImageState<'_>,
+    field_hints: Option<&mut SectionProjectionHints>,
+) -> ActiveField {
+    let ctrl_id = ctrl_id_from_inline_extra(extra);
+    let header = consume_marker_header(&mut queues.marker_headers, ctrl_id);
+    let memo = if ctrl_id == CTRL_ID_MEMO_INLINE { queues.memo_controls.pop_front() } else { None };
+    let clickhere =
+        if ctrl_id == CTRL_ID_CLICK_HERE { queues.clickhere_controls.pop_front() } else { None };
+    let summery =
+        if ctrl_id == CTRL_ID_FIELD_SUMMERY { queues.summery_fields.pop_front() } else { None };
+    let datecode =
+        if ctrl_id == CTRL_ID_FIELD_DATE_CODE { queues.datecode_fields.pop_front() } else { None };
+    let pathfield =
+        if ctrl_id == CTRL_ID_FIELD_PATH { queues.pathfield_controls.pop_front() } else { None };
+    let crossref =
+        if ctrl_id == CTRL_ID_FIELD_CROSSREF { queues.crossref_controls.pop_front() } else { None };
+    start_active_field(
+        ctrl_id,
+        header,
+        memo,
+        clickhere,
+        summery,
+        datecode,
+        pathfield,
+        crossref,
+        visible_utf16,
+        projection_images,
+        field_hints,
+    )
+}
+
+/// Drains queue entries that no inline marker consumed (task #91 —
+/// extracted from `project_paragraph_with_images_structural`).
+///
+/// Point bookmarks and object controls emit at the end of the
+/// paragraph in document order. Memo placeholders with body content
+/// emit with a `ProjectionFallback` warning — properly anchored memos
+/// always consume their queue entry, so a leftover means the inline
+/// `FieldBegin %unk MEMO` anchor was missing; emitting preserves the
+/// body rather than silently dropping it.
+fn drain_unconsumed_paragraph_queues(
+    queues: ParagraphProjectionQueues<'_>,
+    hwp_para: &Hwp5Paragraph,
+    visible_utf16: u32,
+    runs: &mut Vec<Run>,
+    projection_images: &mut ProjectionImageState<'_>,
+    image_context: ImageProjectionContext,
+) {
     for bookmark_name in queues.point_bookmark_names {
         let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
             &hwp_para.char_shape_runs,
@@ -923,10 +988,6 @@ fn project_paragraph_with_images_structural(
         }
     }
 
-    // Drain any memo placeholders that did not get consumed by a matching
-    // `FieldBegin %unk MEMO` inline segment. This is defensive — properly
-    // anchored memos always consume their queue entry — but it preserves
-    // memo body content rather than silently dropping it.
     for memo in queues.memo_controls {
         if !memo.paragraphs.is_empty() {
             projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
@@ -945,18 +1006,6 @@ fn project_paragraph_with_images_structural(
             ));
         }
     }
-
-    if runs.is_empty() {
-        runs.push(Run::text("", CharShapeIndex::new(0)));
-    }
-
-    let mut paragraph =
-        Paragraph::with_runs(runs, ParaShapeIndex::new(hwp_para.para_shape_id as usize));
-    if hwp_para.style_id > 0 {
-        paragraph = paragraph.with_style(StyleIndex::new(hwp_para.style_id as usize));
-    }
-
-    ProjectedParagraph { paragraph }
 }
 
 fn append_visible_unit(
