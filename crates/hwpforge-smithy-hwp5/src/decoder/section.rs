@@ -1581,88 +1581,13 @@ impl BodyTextParserState {
     }
 
     fn handle_top_level_record(&mut self, record: &Record, tag: TagId, level: u16) {
-        // ── Memo content-cluster state machine ──────────────────────
-        //
-        // `HWPTAG_MEMO_LIST` clusters appear at the end of the section's
-        // last body paragraph as a sequence of (MemoList, ListHeader,
-        // ParaHeader, ParaText, CharShape...) records at lvl=1/2. We
-        // intercept them *before* the normal arms so the body paragraph's
-        // `self.current` text/char_shape stay untouched — without this,
-        // the cluster's lvl=2 ParaText would fall into the existing
-        // `ParaText` arm and overwrite the body text (Wave 12e-Memo
-        // corruption root cause).
-        if matches!(tag, TagId::MemoList) && level == 1 {
-            if let Some(memo_id) = parse_memo_list_id(&record.data) {
-                self.flush_memo_content_capture();
-                self.memo_content_capture = Some(MemoContentCapture {
-                    memo_id,
-                    saw_list_header: false,
-                    current_para: None,
-                    paragraphs: Vec::new(),
-                });
-                return;
-            }
-            self.push_unsupported_tag(record.header.tag_id);
+        // Pending-state guards run before the normal arms (task #90 —
+        // extracted helpers; see each method for the wave rationale).
+        if self.try_intercept_memo_cluster(record, tag, level) {
             return;
         }
-        if self.memo_content_capture.is_some() {
-            if matches!(tag, TagId::ParaHeader) && level == 0 {
-                // Body paragraph boundary closes the cluster region; fall
-                // through to the normal `ParaHeader` arm so the next body
-                // para is opened cleanly.
-                self.flush_memo_content_capture();
-            } else if self.try_capture_memo_record(record, tag, level) {
-                return;
-            }
-        }
-
-        // ── ClickHere name sub-record pairing (Wave 12l) ───────────
-        //
-        // A `%clk` CtrlHeader is always followed by a `0x57 lvl=2`
-        // sub-record carrying the form-mode `name`. We intercept the
-        // sub-record here so it does not emit a generic
-        // `UnsupportedTag(0x57)` warning, merge the parsed name into
-        // the pending press-field, and push it as `Hwp5Control::ClickHere`
-        // on the current paragraph.
-        //
-        // If the next top-level record is *not* the expected 0x57, the
-        // pending press-field is finalized with `name=None` and the
-        // current record falls through to the normal dispatch — this
-        // keeps the rest of the section round-tripping (Codex review:
-        // grace-degrade rather than drop).
-        if self.pending_clickhere.is_some() {
-            if matches!(tag, TagId::CtrlData) && level == 2 {
-                let mut clickhere = self
-                    .pending_clickhere
-                    .take()
-                    .expect("pending_clickhere checked Some at the start of this matched arm");
-                use crate::schema::section::ClickHereNameSubrecord;
-                match crate::schema::section::Hwp5ClickHereControl::parse_name_subrecord(
-                    &record.data,
-                ) {
-                    ClickHereNameSubrecord::Named(name) => clickhere.name = Some(name),
-                    // Construction starts with `name = None`, so a
-                    // nameless-but-valid sub-record needs no write.
-                    ClickHereNameSubrecord::Unnamed => {}
-                    ClickHereNameSubrecord::Malformed => {
-                        self.warnings.push(Hwp5Warning::ProjectionFallback {
-                            subject: "field.clickhere",
-                            reason: "malformed %clk name sub-record (0x57); \
-                                     keeping the press-field with name=None"
-                                .to_string(),
-                        });
-                    }
-                }
-                if let Some(buf) = self.current.as_mut() {
-                    buf.controls.push(Hwp5Control::ClickHere(clickhere));
-                } else if let Some(buf) = self.current_subtree_para.as_mut() {
-                    buf.controls.push(Hwp5Control::ClickHere(clickhere));
-                }
-                return;
-            }
-            // Anything else: finalize with name=None and fall through to
-            // the normal dispatch so the current record can be processed.
-            self.flush_pending_clickhere();
+        if self.try_attach_clickhere_name(record, tag, level) {
+            return;
         }
 
         match tag {
@@ -1717,292 +1642,384 @@ impl BodyTextParserState {
                 Some(pbf) => self.page_border_fills.push(pbf),
                 None => self.push_unsupported_tag(record.header.tag_id),
             },
-            TagId::CtrlHeader => {
-                let ctrl_id = parse_ctrl_id(&record.data);
-                if ctrl_id == CTRL_ID_TABLE {
-                    self.table_stack.push(TableContext::new(
-                        level,
-                        extract_ctrl_header_instance_id(&record.data, ctrl_id),
-                    ));
-                } else if matches!(
-                    ctrl_id,
-                    CTRL_ID_HEADER
-                        | CTRL_ID_FOOTER
-                        | CTRL_ID_FOOTNOTE
-                        | CTRL_ID_ENDNOTE
-                        | CTRL_ID_GSO
-                ) {
-                    let geometry = if ctrl_id == CTRL_ID_GSO {
-                        Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).ok()
-                    } else {
-                        None
-                    };
-                    // HWP 5.0 spec §4.3.10.3 표 140: bytes [4..8] of
-                    // the ctrl_header payload are the property field
-                    // (e.g. header/footer applyPageType in bits 0~1).
-                    // Header is 4 bytes, so falling back to 0 keeps
-                    // pre-spec defaults consistent.
-                    let properties_raw = if record.data.len() >= 8 {
-                        u32::from_le_bytes([
-                            record.data[4],
-                            record.data[5],
-                            record.data[6],
-                            record.data[7],
-                        ])
-                    } else {
-                        0
-                    };
-                    // Wave 12p Step 5 (#134): CtrlHeader instance_id lives at
-                    // a family-specific offset. fn/en use data[16..20], gso
-                    // uses data[36..40]. See `extract_ctrl_header_instance_id`
-                    // for offset table. HWPX cross-ref Command 의 target ID
-                    // 와 매칭. 추출 불가 시 0.
-                    let instance_id = extract_ctrl_header_instance_id(&record.data, ctrl_id);
-                    self.subtree_ctx = Some(NestedSubtreeContext::new(
-                        level,
-                        ctrl_id,
-                        properties_raw,
-                        instance_id,
-                        geometry,
-                    ));
-                } else if ctrl_id == CTRL_ID_EQED {
-                    // The `eqed` ctrl carries only geometry; its HancomEQN
-                    // script lives in the child `HWPTAG_EQEDIT` (0x58) record.
-                    // Stash the geometry + instance_id and finalize when
-                    // that child arrives (Wave 12p Step 1c-2). Wave 12p
-                    // Step 5: eqed instance_id at data[36..40] (audited).
-                    let geometry = Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data)
-                        .unwrap_or(Hwp5ShapeComponentGeometry { x: 0, y: 0, width: 0, height: 0 });
-                    let instance_id = extract_ctrl_header_instance_id(&record.data, ctrl_id);
-                    self.eqed_pending = Some((geometry, instance_id));
-                } else if ctrl_id == CTRL_ID_DUTMAL {
-                    // `tdut` ctrl carries the dutmal (덧말) main/sub text
-                    // strings + posType. The paired inline `0x17` marker
-                    // in the body's `ParaText` decides the visible
-                    // position; this push keeps the projected Control in
-                    // doc order via `current.controls`.
-                    if let Some(dutmal) = Hwp5DutmalControl::parse(ctrl_id, &record.data) {
-                        if let Some(buf) = self.current.as_mut() {
-                            buf.controls.push(Hwp5Control::Dutmal(dutmal));
-                        }
-                    } else {
-                        self.push_unsupported_tag(record.header.tag_id);
-                    }
-                } else if ctrl_id == CTRL_ID_COMPOSE {
-                    // `tcps` ctrl carries the compose (글자겹침) text,
-                    // circleType/composeType enums, and 10 charPr refs.
-                    // Layout assumes `charPrCnt == 10` per HWPX schema;
-                    // malformed payloads fall through to Unknown so the
-                    // surrounding section keeps round-tripping.
-                    if let Some(compose) =
-                        crate::schema::section::Hwp5ComposeControl::parse(ctrl_id, &record.data)
-                    {
-                        if let Some(buf) = self.current.as_mut() {
-                            buf.controls.push(Hwp5Control::Compose(compose));
-                        }
-                    } else {
-                        self.push_unsupported_tag(record.header.tag_id);
-                    }
-                } else if ctrl_id == CTRL_ID_CLICK_HERE {
-                    // `%clk` ctrl carries the CLICK_HERE (누름틀) press-field
-                    // hint/help text. The form-mode `name` lives in the
-                    // immediately following `0x57 lvl=2` sub-record. Flush
-                    // any orphaned pending first (defensive), then store
-                    // the parsed control so the next `0x57` can attach the
-                    // name. (Wave 12l.)
-                    self.flush_pending_clickhere();
-                    match crate::schema::section::Hwp5ClickHereControl::parse(ctrl_id, &record.data)
-                    {
-                        Ok(clickhere) => self.pending_clickhere = Some(clickhere),
-                        Err(err) => {
-                            self.warnings.push(Hwp5Warning::DroppedControl {
-                                control: "clickhere",
-                                reason: format!(
-                                    "malformed %clk CtrlHeader payload ({}); \
-                                     dropping press-field metadata",
-                                    err.as_str()
-                                ),
-                            });
-                        }
-                    }
-                } else if ctrl_id == CTRL_ID_INDEXMARK {
-                    // `idxm` ctrl carries the IndexMark (찾아보기 표시)
-                    // `primary` text and optional `secondary` text. A
-                    // malformed payload emits a targeted
-                    // `DroppedControl` warning (per Codex review) so
-                    // audit baselines can attribute the loss to the
-                    // IndexMark code path instead of the generic
-                    // `UnsupportedTag(0x47)` bucket. (Wave 12k.)
-                    if let Some(indexmark) =
-                        crate::schema::section::Hwp5IndexMarkControl::parse(ctrl_id, &record.data)
-                    {
-                        if let Some(buf) = self.current.as_mut() {
-                            buf.controls.push(Hwp5Control::IndexMark(indexmark));
-                        }
-                    } else {
-                        self.warnings.push(Hwp5Warning::DroppedControl {
-                            control: "indexmark",
-                            reason: "malformed idxm CtrlHeader payload; dropping index mark"
-                                .to_string(),
-                        });
-                    }
-                } else if ctrl_id == CTRL_ID_FIELD_SUMMERY {
-                    // `%smr` ctrl carries a SUMMERY auto-field Command
-                    // `$token` (e.g. `$author`, `$modifiedtime`). The
-                    // projection layer dispatches the token to a typed
-                    // `FieldType` or `Control::UnknownSummery`. No
-                    // follow-up sub-record (Wave 12n).
-                    if let Some(summery) =
-                        crate::schema::section::Hwp5SummeryControl::parse(ctrl_id, &record.data)
-                    {
-                        if let Some(buf) = self.current.as_mut() {
-                            buf.controls.push(Hwp5Control::SummeryField(summery));
-                        }
-                    } else {
-                        self.warnings.push(Hwp5Warning::DroppedControl {
-                            control: "summery_field",
-                            reason: "malformed %smr CtrlHeader payload; dropping auto-field"
-                                .to_string(),
-                        });
-                    }
-                } else if ctrl_id == CTRL_ID_FIELD_DATE_CODE {
-                    // `%dte` ctrl carries a raw date/time format-code
-                    // (e.g. `"\:1년 2월 3일 (6);0;"`, `"T\:;0;"`). The
-                    // projection layer wraps it in `Control::DateCodeField`
-                    // with `is_time_mode` derived from the `T` prefix.
-                    // (Wave 12n.)
-                    if let Some(date_code) =
-                        crate::schema::section::Hwp5DateCodeControl::parse(ctrl_id, &record.data)
-                    {
-                        if let Some(buf) = self.current.as_mut() {
-                            buf.controls.push(Hwp5Control::DateCodeField(date_code));
-                        }
-                    } else {
-                        self.warnings.push(Hwp5Warning::DroppedControl {
-                            control: "date_code_field",
-                            reason: "malformed %dte CtrlHeader payload; dropping date-code field"
-                                .to_string(),
-                        });
-                    }
-                } else if ctrl_id == CTRL_ID_FIELD_PATH {
-                    // `%pat` ctrl carries a path/file-name format-code
-                    // Command (`"$P"`, `"$F"`, `"$P$F"`). Wave 12n.
-                    if let Some(pat) =
-                        crate::schema::section::Hwp5PathFieldControl::parse(ctrl_id, &record.data)
-                    {
-                        if let Some(buf) = self.current.as_mut() {
-                            buf.controls.push(Hwp5Control::PathField(pat));
-                        }
-                    } else {
-                        self.warnings.push(Hwp5Warning::DroppedControl {
-                            control: "path_field",
-                            reason: "malformed %pat CtrlHeader payload; dropping path field"
-                                .to_string(),
-                        });
-                    }
-                } else if ctrl_id == CTRL_ID_FIELD_CROSSREF {
-                    // `%xrf` ctrl carries a structured cross-reference Command
-                    // `?<target>;N1;N2;N3;N4;` + 8-byte trailer. Wave 12m
-                    // Phase 2. Schema preserves raw N1/N2/N3 codes;
-                    // projection boundary maps them to typed RefType /
-                    // RefContentType / RefTarget.
-                    if let Some(xrf) =
-                        crate::schema::section::Hwp5CrossRefControl::parse(ctrl_id, &record.data)
-                    {
-                        if let Some(buf) = self.current.as_mut() {
-                            buf.controls.push(Hwp5Control::CrossRef(xrf));
-                        }
-                    } else {
-                        self.warnings.push(Hwp5Warning::DroppedControl {
-                            control: "crossref",
-                            reason: "malformed %xrf CtrlHeader payload; dropping cross-reference"
-                                .to_string(),
-                        });
-                    }
-                } else if ctrl_id == CTRL_ID_ATNO {
-                    // `atno` ctrl carries a single 4-byte kind flag
-                    // (`0x00`/`0x06`). No Command/trailer. Wave 12n.
-                    if let Some(atno) = crate::schema::section::Hwp5InlinePageNumberControl::parse(
-                        ctrl_id,
-                        &record.data,
-                    ) {
-                        if let Some(buf) = self.current.as_mut() {
-                            buf.controls.push(Hwp5Control::InlinePageNumber(atno));
-                        }
-                    } else {
-                        self.warnings.push(Hwp5Warning::DroppedControl {
-                            control: "inline_page_number",
-                            reason: "malformed atno CtrlHeader payload; dropping inline page"
-                                .to_string(),
-                        });
-                    }
-                } else if let Some(command) = (ctrl_id == CTRL_ID_MEMO)
-                    .then(|| Hwp5MemoCommand::parse(&record.data))
-                    .flatten()
-                {
-                    // Push a placeholder `Hwp5Control::Memo` now; its content
-                    // paragraphs get filled in `finish()` by matching this
-                    // `memo_id` against the captured `HWPTAG_MEMO_LIST`
-                    // clusters. The `%unk` ctrl_id is shared with other
-                    // user-defined controls, so we only treat it as a memo
-                    // when the command string starts with `"MEMO/"` (the
-                    // `parse_memo_command_id` discriminator); non-memo
-                    // `%unk` payloads keep falling through to the Unknown
-                    // arm below for round-trip preservation.
-                    if let Some(buf) = self.current.as_mut() {
-                        buf.controls.push(Hwp5Control::Memo(Hwp5MemoControl {
-                            ctrl_id: CTRL_ID_MEMO,
-                            command,
-                            paragraphs: Vec::new(),
-                        }));
-                    }
-                } else if let Some(buf) = self.current.as_mut() {
-                    // Snapshot the `secd` ctrl property word for
-                    // projection-level Visibility decoding (gap B,
-                    // HWP 5.0 spec §4.3.10.1 표 130). The ctrl
-                    // continues to flow through the Unknown path so
-                    // downstream semantic adapter still emits the
-                    // SectionColumnDef inline item from the inline
-                    // 0x02 control byte; the property word is just an
-                    // additional sidecar capture.
-                    if ctrl_id == CTRL_ID_SECD
-                        && self.section_def_properties.is_none()
-                        && record.data.len() >= 8
-                    {
-                        self.section_def_properties = Some(u32::from_le_bytes([
-                            record.data[4],
-                            record.data[5],
-                            record.data[6],
-                            record.data[7],
-                        ]));
-                    }
-                    buf.controls
-                        .push(Hwp5Control::Unknown { ctrl_id, header_data: record.data.clone() });
-                }
-            }
-            TagId::EqEdit => {
-                // Finalize the equation started by the preceding `eqed` ctrl.
-                if let Some((geometry, instance_id)) = self.eqed_pending.take() {
-                    match Hwp5EqEdit::parse(&record.data) {
-                        Ok(eqedit) => {
-                            if let Some(buf) = self.current.as_mut() {
-                                buf.controls.push(Hwp5Control::Equation(Hwp5EquationControl {
-                                    ctrl_id: CTRL_ID_EQED,
-                                    geometry,
-                                    script: eqedit.script,
-                                    instance_id,
-                                }));
-                            }
-                        }
-                        Err(_) => self.push_unsupported_tag(record.header.tag_id),
-                    }
-                }
-            }
+            TagId::CtrlHeader => self.handle_ctrl_header(record, level),
+            TagId::EqEdit => self.handle_eqedit_record(record),
             TagId::ListHeader => {}
             TagId::Unknown(id) => {
                 self.warnings.push(Hwp5Warning::UnsupportedTag { tag_id: id, offset: 0 });
             }
             _ => {}
+        }
+    }
+
+    /// Memo content-cluster state machine (Wave 12e — task #90 extract).
+    ///
+    /// `HWPTAG_MEMO_LIST` clusters appear at the end of the section's
+    /// last body paragraph as a sequence of (MemoList, ListHeader,
+    /// ParaHeader, ParaText, CharShape...) records at lvl=1/2. They are
+    /// intercepted *before* the normal arms so the body paragraph's
+    /// `self.current` text/char_shape stay untouched — without this,
+    /// the cluster's lvl=2 ParaText would fall into the normal
+    /// `ParaText` arm and overwrite the body text (Wave 12e-Memo
+    /// corruption root cause).
+    ///
+    /// Returns `true` when the record was consumed by the cluster
+    /// region (caller must not dispatch it further). A body
+    /// `ParaHeader` at lvl=0 closes the capture and falls through so
+    /// the next body paragraph opens cleanly.
+    fn try_intercept_memo_cluster(&mut self, record: &Record, tag: TagId, level: u16) -> bool {
+        if matches!(tag, TagId::MemoList) && level == 1 {
+            if let Some(memo_id) = parse_memo_list_id(&record.data) {
+                self.flush_memo_content_capture();
+                self.memo_content_capture = Some(MemoContentCapture {
+                    memo_id,
+                    saw_list_header: false,
+                    current_para: None,
+                    paragraphs: Vec::new(),
+                });
+            } else {
+                self.push_unsupported_tag(record.header.tag_id);
+            }
+            return true;
+        }
+        if self.memo_content_capture.is_some() {
+            if matches!(tag, TagId::ParaHeader) && level == 0 {
+                // Body paragraph boundary closes the cluster region; fall
+                // through to the normal `ParaHeader` arm so the next body
+                // para is opened cleanly.
+                self.flush_memo_content_capture();
+            } else if self.try_capture_memo_record(record, tag, level) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// ClickHere name sub-record pairing (Wave 12l — task #90 extract).
+    ///
+    /// A `%clk` CtrlHeader is always followed by a `0x57 lvl=2`
+    /// sub-record carrying the form-mode `name`. The sub-record is
+    /// intercepted here so it does not emit a generic
+    /// `UnsupportedTag(0x57)` warning; the parsed name merges into the
+    /// pending press-field which is then pushed as
+    /// `Hwp5Control::ClickHere` on the current paragraph.
+    ///
+    /// Returns `true` when the record was the expected sub-record. If
+    /// the next top-level record is anything else, the pending
+    /// press-field is finalized with `name=None` and `false` lets the
+    /// record fall through to the normal dispatch — this keeps the rest
+    /// of the section round-tripping (Codex review: grace-degrade
+    /// rather than drop).
+    fn try_attach_clickhere_name(&mut self, record: &Record, tag: TagId, level: u16) -> bool {
+        if self.pending_clickhere.is_none() {
+            return false;
+        }
+        if matches!(tag, TagId::CtrlData) && level == 2 {
+            let mut clickhere = self
+                .pending_clickhere
+                .take()
+                .expect("pending_clickhere checked Some at the start of this method");
+            use crate::schema::section::ClickHereNameSubrecord;
+            match crate::schema::section::Hwp5ClickHereControl::parse_name_subrecord(&record.data) {
+                ClickHereNameSubrecord::Named(name) => clickhere.name = Some(name),
+                // Construction starts with `name = None`, so a
+                // nameless-but-valid sub-record needs no write.
+                ClickHereNameSubrecord::Unnamed => {}
+                ClickHereNameSubrecord::Malformed => {
+                    self.warnings.push(Hwp5Warning::ProjectionFallback {
+                        subject: "field.clickhere",
+                        reason: "malformed %clk name sub-record (0x57); \
+                                 keeping the press-field with name=None"
+                            .to_string(),
+                    });
+                }
+            }
+            if let Some(buf) = self.current.as_mut() {
+                buf.controls.push(Hwp5Control::ClickHere(clickhere));
+            } else if let Some(buf) = self.current_subtree_para.as_mut() {
+                buf.controls.push(Hwp5Control::ClickHere(clickhere));
+            }
+            return true;
+        }
+        // Anything else: finalize with name=None and fall through to
+        // the normal dispatch so the current record can be processed.
+        self.flush_pending_clickhere();
+        false
+    }
+
+    /// Dispatches a top-level `CtrlHeader` (`0x47`) record by its
+    /// `ctrl_id` (task #90 — extracted from `handle_top_level_record`).
+    ///
+    /// Families that open nested regions (`tbl `, `head`/`foot`/`fn`/`en`/
+    /// `gso `) push parser state; one-shot field/annotation controls parse
+    /// and attach to the current paragraph; unrecognized ids fall through
+    /// to `Hwp5Control::Unknown` for round-trip preservation.
+    fn handle_ctrl_header(&mut self, record: &Record, level: u16) {
+        let ctrl_id = parse_ctrl_id(&record.data);
+        if ctrl_id == CTRL_ID_TABLE {
+            self.table_stack.push(TableContext::new(
+                level,
+                extract_ctrl_header_instance_id(&record.data, ctrl_id),
+            ));
+        } else if matches!(
+            ctrl_id,
+            CTRL_ID_HEADER | CTRL_ID_FOOTER | CTRL_ID_FOOTNOTE | CTRL_ID_ENDNOTE | CTRL_ID_GSO
+        ) {
+            let geometry = if ctrl_id == CTRL_ID_GSO {
+                Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).ok()
+            } else {
+                None
+            };
+            // HWP 5.0 spec §4.3.10.3 표 140: bytes [4..8] of
+            // the ctrl_header payload are the property field
+            // (e.g. header/footer applyPageType in bits 0~1).
+            // Header is 4 bytes, so falling back to 0 keeps
+            // pre-spec defaults consistent.
+            let properties_raw = if record.data.len() >= 8 {
+                u32::from_le_bytes([record.data[4], record.data[5], record.data[6], record.data[7]])
+            } else {
+                0
+            };
+            // Wave 12p Step 5 (#134): CtrlHeader instance_id lives at
+            // a family-specific offset. fn/en use data[16..20], gso
+            // uses data[36..40]. See `extract_ctrl_header_instance_id`
+            // for offset table. HWPX cross-ref Command 의 target ID
+            // 와 매칭. 추출 불가 시 0.
+            let instance_id = extract_ctrl_header_instance_id(&record.data, ctrl_id);
+            self.subtree_ctx = Some(NestedSubtreeContext::new(
+                level,
+                ctrl_id,
+                properties_raw,
+                instance_id,
+                geometry,
+            ));
+        } else if ctrl_id == CTRL_ID_EQED {
+            // The `eqed` ctrl carries only geometry; its HancomEQN
+            // script lives in the child `HWPTAG_EQEDIT` (0x58) record.
+            // Stash the geometry + instance_id and finalize when
+            // that child arrives (Wave 12p Step 1c-2). Wave 12p
+            // Step 5: eqed instance_id at data[36..40] (audited).
+            let geometry = Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data)
+                .unwrap_or(Hwp5ShapeComponentGeometry { x: 0, y: 0, width: 0, height: 0 });
+            let instance_id = extract_ctrl_header_instance_id(&record.data, ctrl_id);
+            self.eqed_pending = Some((geometry, instance_id));
+        } else if ctrl_id == CTRL_ID_DUTMAL {
+            // `tdut` ctrl carries the dutmal (덧말) main/sub text
+            // strings + posType. The paired inline `0x17` marker
+            // in the body's `ParaText` decides the visible
+            // position; this push keeps the projected Control in
+            // doc order via `current.controls`.
+            if let Some(dutmal) = Hwp5DutmalControl::parse(ctrl_id, &record.data) {
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls.push(Hwp5Control::Dutmal(dutmal));
+                }
+            } else {
+                self.push_unsupported_tag(record.header.tag_id);
+            }
+        } else if ctrl_id == CTRL_ID_COMPOSE {
+            // `tcps` ctrl carries the compose (글자겹침) text,
+            // circleType/composeType enums, and 10 charPr refs.
+            // Layout assumes `charPrCnt == 10` per HWPX schema;
+            // malformed payloads fall through to Unknown so the
+            // surrounding section keeps round-tripping.
+            if let Some(compose) =
+                crate::schema::section::Hwp5ComposeControl::parse(ctrl_id, &record.data)
+            {
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls.push(Hwp5Control::Compose(compose));
+                }
+            } else {
+                self.push_unsupported_tag(record.header.tag_id);
+            }
+        } else if ctrl_id == CTRL_ID_CLICK_HERE {
+            // `%clk` ctrl carries the CLICK_HERE (누름틀) press-field
+            // hint/help text. The form-mode `name` lives in the
+            // immediately following `0x57 lvl=2` sub-record. Flush
+            // any orphaned pending first (defensive), then store
+            // the parsed control so the next `0x57` can attach the
+            // name. (Wave 12l.)
+            self.flush_pending_clickhere();
+            match crate::schema::section::Hwp5ClickHereControl::parse(ctrl_id, &record.data) {
+                Ok(clickhere) => self.pending_clickhere = Some(clickhere),
+                Err(err) => {
+                    self.warnings.push(Hwp5Warning::DroppedControl {
+                        control: "clickhere",
+                        reason: format!(
+                            "malformed %clk CtrlHeader payload ({}); \
+                                     dropping press-field metadata",
+                            err.as_str()
+                        ),
+                    });
+                }
+            }
+        } else if ctrl_id == CTRL_ID_INDEXMARK {
+            // `idxm` ctrl carries the IndexMark (찾아보기 표시)
+            // `primary` text and optional `secondary` text. A
+            // malformed payload emits a targeted
+            // `DroppedControl` warning (per Codex review) so
+            // audit baselines can attribute the loss to the
+            // IndexMark code path instead of the generic
+            // `UnsupportedTag(0x47)` bucket. (Wave 12k.)
+            if let Some(indexmark) =
+                crate::schema::section::Hwp5IndexMarkControl::parse(ctrl_id, &record.data)
+            {
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls.push(Hwp5Control::IndexMark(indexmark));
+                }
+            } else {
+                self.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "indexmark",
+                    reason: "malformed idxm CtrlHeader payload; dropping index mark".to_string(),
+                });
+            }
+        } else if ctrl_id == CTRL_ID_FIELD_SUMMERY {
+            // `%smr` ctrl carries a SUMMERY auto-field Command
+            // `$token` (e.g. `$author`, `$modifiedtime`). The
+            // projection layer dispatches the token to a typed
+            // `FieldType` or `Control::UnknownSummery`. No
+            // follow-up sub-record (Wave 12n).
+            if let Some(summery) =
+                crate::schema::section::Hwp5SummeryControl::parse(ctrl_id, &record.data)
+            {
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls.push(Hwp5Control::SummeryField(summery));
+                }
+            } else {
+                self.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "summery_field",
+                    reason: "malformed %smr CtrlHeader payload; dropping auto-field".to_string(),
+                });
+            }
+        } else if ctrl_id == CTRL_ID_FIELD_DATE_CODE {
+            // `%dte` ctrl carries a raw date/time format-code
+            // (e.g. `"\:1년 2월 3일 (6);0;"`, `"T\:;0;"`). The
+            // projection layer wraps it in `Control::DateCodeField`
+            // with `is_time_mode` derived from the `T` prefix.
+            // (Wave 12n.)
+            if let Some(date_code) =
+                crate::schema::section::Hwp5DateCodeControl::parse(ctrl_id, &record.data)
+            {
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls.push(Hwp5Control::DateCodeField(date_code));
+                }
+            } else {
+                self.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "date_code_field",
+                    reason: "malformed %dte CtrlHeader payload; dropping date-code field"
+                        .to_string(),
+                });
+            }
+        } else if ctrl_id == CTRL_ID_FIELD_PATH {
+            // `%pat` ctrl carries a path/file-name format-code
+            // Command (`"$P"`, `"$F"`, `"$P$F"`). Wave 12n.
+            if let Some(pat) =
+                crate::schema::section::Hwp5PathFieldControl::parse(ctrl_id, &record.data)
+            {
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls.push(Hwp5Control::PathField(pat));
+                }
+            } else {
+                self.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "path_field",
+                    reason: "malformed %pat CtrlHeader payload; dropping path field".to_string(),
+                });
+            }
+        } else if ctrl_id == CTRL_ID_FIELD_CROSSREF {
+            // `%xrf` ctrl carries a structured cross-reference Command
+            // `?<target>;N1;N2;N3;N4;` + 8-byte trailer. Wave 12m
+            // Phase 2. Schema preserves raw N1/N2/N3 codes;
+            // projection boundary maps them to typed RefType /
+            // RefContentType / RefTarget.
+            if let Some(xrf) =
+                crate::schema::section::Hwp5CrossRefControl::parse(ctrl_id, &record.data)
+            {
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls.push(Hwp5Control::CrossRef(xrf));
+                }
+            } else {
+                self.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "crossref",
+                    reason: "malformed %xrf CtrlHeader payload; dropping cross-reference"
+                        .to_string(),
+                });
+            }
+        } else if ctrl_id == CTRL_ID_ATNO {
+            // `atno` ctrl carries a single 4-byte kind flag
+            // (`0x00`/`0x06`). No Command/trailer. Wave 12n.
+            if let Some(atno) =
+                crate::schema::section::Hwp5InlinePageNumberControl::parse(ctrl_id, &record.data)
+            {
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls.push(Hwp5Control::InlinePageNumber(atno));
+                }
+            } else {
+                self.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "inline_page_number",
+                    reason: "malformed atno CtrlHeader payload; dropping inline page".to_string(),
+                });
+            }
+        } else if let Some(command) =
+            (ctrl_id == CTRL_ID_MEMO).then(|| Hwp5MemoCommand::parse(&record.data)).flatten()
+        {
+            // Push a placeholder `Hwp5Control::Memo` now; its content
+            // paragraphs get filled in `finish()` by matching this
+            // `memo_id` against the captured `HWPTAG_MEMO_LIST`
+            // clusters. The `%unk` ctrl_id is shared with other
+            // user-defined controls, so we only treat it as a memo
+            // when the command string starts with `"MEMO/"` (the
+            // `parse_memo_command_id` discriminator); non-memo
+            // `%unk` payloads keep falling through to the Unknown
+            // arm below for round-trip preservation.
+            if let Some(buf) = self.current.as_mut() {
+                buf.controls.push(Hwp5Control::Memo(Hwp5MemoControl {
+                    ctrl_id: CTRL_ID_MEMO,
+                    command,
+                    paragraphs: Vec::new(),
+                }));
+            }
+        } else if let Some(buf) = self.current.as_mut() {
+            // Snapshot the `secd` ctrl property word for
+            // projection-level Visibility decoding (gap B,
+            // HWP 5.0 spec §4.3.10.1 표 130). The ctrl
+            // continues to flow through the Unknown path so
+            // downstream semantic adapter still emits the
+            // SectionColumnDef inline item from the inline
+            // 0x02 control byte; the property word is just an
+            // additional sidecar capture.
+            if ctrl_id == CTRL_ID_SECD
+                && self.section_def_properties.is_none()
+                && record.data.len() >= 8
+            {
+                self.section_def_properties = Some(u32::from_le_bytes([
+                    record.data[4],
+                    record.data[5],
+                    record.data[6],
+                    record.data[7],
+                ]));
+            }
+            buf.controls.push(Hwp5Control::Unknown { ctrl_id, header_data: record.data.clone() });
+        }
+    }
+
+    /// Finalizes the equation started by the preceding `eqed` ctrl
+    /// using its paired `HWPTAG_EQEDIT` (`0x58`) script record
+    /// (task #90 — extracted from `handle_top_level_record`).
+    fn handle_eqedit_record(&mut self, record: &Record) {
+        // Finalize the equation started by the preceding `eqed` ctrl.
+        if let Some((geometry, instance_id)) = self.eqed_pending.take() {
+            match Hwp5EqEdit::parse(&record.data) {
+                Ok(eqedit) => {
+                    if let Some(buf) = self.current.as_mut() {
+                        buf.controls.push(Hwp5Control::Equation(Hwp5EquationControl {
+                            ctrl_id: CTRL_ID_EQED,
+                            geometry,
+                            script: eqedit.script,
+                            instance_id,
+                        }));
+                    }
+                }
+                Err(_) => self.push_unsupported_tag(record.header.tag_id),
+            }
         }
     }
 
