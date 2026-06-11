@@ -1102,18 +1102,21 @@ fn parse_length_prefixed_utf16(
 /// | next 2 bytes | `sub_len` | LE u16 |
 /// | next `2 * sub_len` bytes | `sub_text` | LE UTF-16 |
 /// | tail `[0..4]` | `pos_type_raw` | LE u32 (0 = TOP, 1 = BOTTOM, …) |
-/// | tail remainder | option / sz_ratio / align / styleIDRef | reserved for fidelity work |
+/// | tail `[4..8]` | `sz_ratio` | LE u32 percent, 0 = auto (task #73) |
+/// | tail `[8..12]` | `option_raw` | LE u32, mirrored verbatim |
+/// | tail `[12..16]` | reserved | constant 0 on every observed fixture (styleIDRef candidate) |
+/// | tail `[16..20]` | `align_raw` | LE u32: 1 = LEFT, 2 = RIGHT, 3 = CENTER (task #73) |
 ///
 /// The first `main_text` char is folded into the same 32-bit word as the
 /// length on the wire — packing them together saves a u16 over the more
-/// natural "header (len) → body (chars)" layout. Other dutmal options
-/// (`align`, `sz_ratio`, `option`, `styleIDRef`) are observed but not
-/// promoted to fields yet: every 한컴 fixture we've inspected leaves
-/// them at default values, so the encoder writes defaults until a
-/// future fixture forces fidelity work. See
-/// `.docs/algorithms/2026-06-01_memo_anchor_serialization.md` (general
-/// "carry wire metadata only when the source actually populates it"
-/// rule).
+/// natural "header (len) → body (chars)" layout. `sz_ratio` / `align_raw`
+/// offsets were pinned by the task #73 one-knob-per-paragraph fixture
+/// (`sample-dutmal-variants.hwp`; `probe_dutmal_tail` diff vs baseline:
+/// szRatio=50/75 flips tail `[4]` to `0x32`/`0x4B`, align=LEFT/RIGHT
+/// flips tail `[16]` to `01`/`02`). `styleIDRef` remains unattributed —
+/// the fixture could not vary it (Core does not model it yet), so the
+/// reserved word stays un-promoted per the "carry wire metadata only
+/// when the source actually populates it" rule.
 /// Defence-in-depth allocation cap for the `tdut` dutmal main/sub text
 /// payloads (task #86 hardening). The dutmal feature is decorative
 /// (위/아래 작은 글자) and realistic Korean strings rarely exceed
@@ -1133,13 +1136,28 @@ pub(crate) struct Hwp5DutmalControl {
     /// Raw `pos_type` word from the wire — meaning is mapped on the
     /// projection side (`0 = Top`, `1 = Bottom`, others reserved).
     pub pos_type_raw: u32,
+    /// Annotation size as a percentage of the main text (tail `[4..8]`,
+    /// task #73). `0` = auto (한컴 renders auto at ≈50%). Carried into
+    /// HWPX `<hp:dutmal szRatio=…>`.
+    pub sz_ratio: u32,
     /// Raw `option` word from the wire. Mirrored verbatim into the
     /// HWPX `<hp:dutmal option=…>` attribute — the precise meaning is
     /// not pinned down (see
     /// `.docs/algorithms/2026-06-01_dutmal_carry.md`), but mirroring it
     /// preserves fidelity round-trip without needing to know.
     pub option_raw: u32,
+    /// Raw `align` word from the wire (tail `[16..20]`, task #73):
+    /// `1` = LEFT, `2` = RIGHT, `3` = CENTER. Mapped to a typed
+    /// `DutmalAlign` on the projection side; unknown codes fall back
+    /// to CENTER with a `ProjectionFallback` warning. Truncated tails
+    /// default to the CENTER wire code so legacy/minimal payloads stay
+    /// warning-free.
+    pub align_raw: u32,
 }
+
+/// Wire code for dutmal CENTER alignment (tail `[16..20]` — note the
+/// wire treats `3`, not `0`, as the default/center value; task #73).
+pub(crate) const DUTMAL_ALIGN_WIRE_CENTER: u32 = 3;
 
 impl Hwp5DutmalControl {
     /// Decodes a `tdut` CtrlHeader payload into a `Hwp5DutmalControl`.
@@ -1165,33 +1183,22 @@ impl Hwp5DutmalControl {
         let (sub_text, sub_end) =
             parse_length_prefixed_utf16(data, main_tail_end, MAX_DUTMAL_TEXT_UNITS)?;
 
-        let pos_type_raw = if data.len() >= sub_end + 4 {
-            u32::from_le_bytes([
-                data[sub_end],
-                data[sub_end + 1],
-                data[sub_end + 2],
-                data[sub_end + 3],
-            ])
-        } else {
-            0
+        // Tail words (see the struct doc offset table; task #73 pinned
+        // sz_ratio/align via the variants fixture). Missing or truncated
+        // tails fall back to the per-field default so legacy/minimal
+        // payloads still carry their body text.
+        let tail_word = |off: usize, default: u32| -> u32 {
+            data.get(off..off + 4)
+                .and_then(|slice| slice.try_into().ok())
+                .map(u32::from_le_bytes)
+                .unwrap_or(default)
         };
-        // `option_raw` sits at tail offset [8..12] (see
-        // `.docs/algorithms/2026-06-01_dutmal_carry.md` for the full tail
-        // table). Missing/truncated tails default to 0 — round-trip
-        // accuracy degrades to "no option" but the body still carries.
-        let option_off = sub_end + 8;
-        let option_raw = if data.len() >= option_off + 4 {
-            u32::from_le_bytes([
-                data[option_off],
-                data[option_off + 1],
-                data[option_off + 2],
-                data[option_off + 3],
-            ])
-        } else {
-            0
-        };
+        let pos_type_raw = tail_word(sub_end, 0);
+        let sz_ratio = tail_word(sub_end + 4, 0);
+        let option_raw = tail_word(sub_end + 8, 0);
+        let align_raw = tail_word(sub_end + 16, DUTMAL_ALIGN_WIRE_CENTER);
 
-        Some(Self { ctrl_id, main_text, sub_text, pos_type_raw, option_raw })
+        Some(Self { ctrl_id, main_text, sub_text, pos_type_raw, sz_ratio, option_raw, align_raw })
     }
 }
 

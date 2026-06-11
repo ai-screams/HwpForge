@@ -1325,6 +1325,58 @@ fn hwp5_to_hwpx_user_sample_dutmal_basic_carries_option_and_preserves_spacing() 
 }
 
 #[test]
+fn hwp5_to_hwpx_user_sample_dutmal_variants_carries_sz_ratio_and_align() {
+    // Task #73: the one-knob-per-paragraph variants fixture pinned the
+    // `tdut` tail offsets — sz_ratio at tail [4..8] (u32 LE percent) and
+    // align at tail [16..20] (1=LEFT, 2=RIGHT, 3=CENTER). Six dutmals in
+    // document order: baseline / szratio-50 / szratio-75 / align-left /
+    // align-right / pos-bottom. See `probe_dutmal_tail` for the raw
+    // diff evidence and `HWP5_WIRE_SPEC.md` for the layout table.
+    let source = fixture_path("user_samples/sample-dutmal-variants.hwp");
+    if !source.exists() {
+        return;
+    }
+    let out = unique_temp_path("user-sample-dutmal-variants.hwpx");
+    let warnings = hwp5_to_hwpx(&source, &out).expect("dutmal variants conversion should succeed");
+    assert!(
+        !warnings.iter().any(|warning| matches!(
+            warning,
+            Hwp5Warning::DroppedControl { .. } | Hwp5Warning::ProjectionFallback { .. }
+        )),
+        "all six dutmal variants use known wire codes — no fallback expected: {warnings:?}"
+    );
+    assert_valid_hwpx(&out);
+
+    let section_xml = read_section_xml(&out, 0);
+    let dutmal_opens: Vec<&str> = section_xml
+        .match_indices("<hp:dutmal ")
+        .map(|(start, _)| {
+            let end = section_xml[start..].find('>').map(|rel| start + rel + 1).unwrap();
+            &section_xml[start..end]
+        })
+        .collect();
+    assert_eq!(dutmal_opens.len(), 6, "all six dutmals must carry: {section_xml}");
+
+    let expect = [
+        ("baseline", r#"szRatio="0""#, r#"align="CENTER""#, r#"posType="TOP""#),
+        ("szratio-50", r#"szRatio="50""#, r#"align="CENTER""#, r#"posType="TOP""#),
+        ("szratio-75", r#"szRatio="75""#, r#"align="CENTER""#, r#"posType="TOP""#),
+        ("align-left", r#"szRatio="0""#, r#"align="LEFT""#, r#"posType="TOP""#),
+        ("align-right", r#"szRatio="0""#, r#"align="RIGHT""#, r#"posType="TOP""#),
+        ("pos-bottom", r#"szRatio="0""#, r#"align="CENTER""#, r#"posType="BOTTOM""#),
+    ];
+    for (idx, (label, sz, align, pos)) in expect.iter().enumerate() {
+        let open = dutmal_opens[idx];
+        assert!(
+            open.contains(sz) && open.contains(align) && open.contains(pos),
+            "[{label}] dutmal #{idx} must carry {sz} {align} {pos}, got: {open}"
+        );
+    }
+
+    let _ = std::fs::remove_file(&out);
+}
+
+#[test]
 fn hwp5_to_hwpx_user_sample_compose_basic_carries_composetext_and_char_pr_overrides() {
     // Wave 12j: a natively-authored 한컴 fixture with a single compose
     // (글자겹침) — `composeText="한韓"`, `circleType="SHAPE_CIRCLE"`,

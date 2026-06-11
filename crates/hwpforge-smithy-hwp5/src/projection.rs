@@ -1530,18 +1530,36 @@ fn project_memo_run(
 }
 
 /// Projects a HWP5 dutmal (덧말) control into a Core `Run` carrying
-/// `Control::Dutmal`. Position is mapped from the wire's raw u32; other
-/// metadata (align/sz_ratio/option/styleIDRef) defaults — every 한컴
-/// fixture we've inspected leaves these at their default value, so we
-/// don't promote them to fields until a future fixture forces fidelity
-/// work. See `schema::section::Hwp5DutmalControl` for the wire layout.
-fn project_dutmal_run(dutmal: &Hwp5DutmalControl) -> Run {
+/// `Control::Dutmal`. Position, size ratio, and alignment map from the
+/// wire's raw words (offsets pinned by the task #73 variants fixture —
+/// see `schema::section::Hwp5DutmalControl` for the tail table); the
+/// `option` word stays a verbatim mirror. Unknown align codes fall back
+/// to CENTER with a `ProjectionFallback` warning (warning-first — the
+/// wire's CENTER is `3`, so an unexpected `0` is surfaced rather than
+/// silently absorbed). `styleIDRef` remains un-promoted (unattributed
+/// reserved word).
+fn project_dutmal_run(
+    dutmal: &Hwp5DutmalControl,
+    projection_images: &mut ProjectionImageState<'_>,
+) -> Run {
     let position = match dutmal.pos_type_raw {
         0 => hwpforge_core::control::DutmalPosition::Top,
         1 => hwpforge_core::control::DutmalPosition::Bottom,
         2 => hwpforge_core::control::DutmalPosition::Right,
         3 => hwpforge_core::control::DutmalPosition::Left,
         _ => hwpforge_core::control::DutmalPosition::Top,
+    };
+    let align = match dutmal.align_raw {
+        1 => hwpforge_core::control::DutmalAlign::Left,
+        2 => hwpforge_core::control::DutmalAlign::Right,
+        3 => hwpforge_core::control::DutmalAlign::Center,
+        other => {
+            projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                subject: "dutmal.align",
+                reason: format!("unknown dutmal align wire code {other}; defaulting to CENTER"),
+            });
+            hwpforge_core::control::DutmalAlign::Center
+        }
     };
     let mut metadata = hwpforge_core::DutmalMetadata::default();
     metadata.option = dutmal.option_raw;
@@ -1550,8 +1568,8 @@ fn project_dutmal_run(dutmal: &Hwp5DutmalControl) -> Run {
             main_text: dutmal.main_text.clone(),
             sub_text: dutmal.sub_text.clone(),
             position,
-            sz_ratio: 0,
-            align: hwpforge_core::control::DutmalAlign::Center,
+            sz_ratio: dutmal.sz_ratio,
+            align,
             metadata,
         },
         CharShapeIndex::new(0),
@@ -1970,7 +1988,7 @@ fn project_control_run(
         | Hwp5Control::Header(_)
         | Hwp5Control::Footer(_)
         | Hwp5Control::Unknown { .. } => None,
-        Hwp5Control::Dutmal(dutmal) => Some(project_dutmal_run(dutmal)),
+        Hwp5Control::Dutmal(dutmal) => Some(project_dutmal_run(dutmal, projection_images)),
         Hwp5Control::Compose(compose) => Some(project_compose_run(compose)),
         Hwp5Control::IndexMark(indexmark) => Some(project_indexmark_run(indexmark)),
         // ClickHere emission flows through the `FieldBegin`/`ActiveField::ClickHere`
