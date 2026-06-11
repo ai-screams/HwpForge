@@ -14,6 +14,8 @@
 
 mod chart;
 mod equation;
+mod memo;
+mod picture;
 mod table;
 mod typography;
 
@@ -47,6 +49,8 @@ use crate::schema::section::{
 
 use self::chart::{build_embedded_chart_run_xml, encode_chart_switch};
 use self::equation::encode_equation_to_hx;
+use self::memo::{build_memo_anchor_xml, build_memo_run_xml, encode_memo_sublist};
+use self::picture::build_picture;
 use self::table::build_table;
 use self::typography::{encode_compose_to_hx, encode_dutmal_to_hx};
 use super::chart::generate_chart_xml;
@@ -1553,115 +1557,6 @@ fn build_hwp5_crossref_run_xml(
     )
 }
 
-/// Builds a `<hp:run>` XML string for a memo annotation.
-///
-/// `anchor_xml` is the inline `<hp:t>…</hp:t>` sequence representing the
-/// visible body span the memo is attached to; it is placed *between*
-/// `<hp:fieldBegin>` and `<hp:fieldEnd>` in the same `<hp:run>`. An empty
-/// `anchor_xml` reproduces the pre-Wave-12f point-anchored layout, which
-/// 한컴 renders as `[메모 시작][필드 끝]` (the memo end marker is
-/// unpaired); see `.docs/algorithms/2026-06-01_memo_anchor_serialization.md`
-/// for why we collapse anchor_runs to a single `<hp:t>` element here.
-fn build_memo_run_xml(
-    sublist_xml: &str,
-    anchor_xml: &str,
-    metadata: &hwpforge_core::MemoMetadata,
-    char_pr_id_ref: u32,
-    field_id: usize,
-) -> String {
-    // Signed-32-bit-safe begin_id base; distinct from other field builders.
-    let begin_id = 1_500_000_000_u64 + field_id as u64;
-    // Non-zero 32-bit field instance id; `fieldid="0"` is invalid in Hancom.
-    let field_uid = 2_028_000_000_u64 + field_id as u64;
-
-    let id = metadata.hwpx_id();
-    let command = if metadata.command.is_empty() {
-        // HwpForge-authored memos synthesise a minimal Command string so
-        // 한컴 still pairs the field markers correctly. Format mirrors what
-        // 한컴 writes for a wire-less memo.
-        format!("MEMO/{}/{}/0/0/{}/\\;;", metadata.shape_id_ref, metadata.number, metadata.author)
-    } else {
-        metadata.command.clone()
-    };
-    let create_datetime = if metadata.create_datetime.is_empty() {
-        iso8601_utc_now()
-    } else {
-        metadata.create_datetime.clone()
-    };
-
-    let parameters = build_memo_parameters_xml(
-        metadata.shape_id_ref,
-        &command,
-        &id,
-        metadata.number,
-        &metadata.author,
-        &create_datetime,
-    );
-
-    format!(
-        concat!(
-            r#"<hp:run charPrIDRef="{cpr}">"#,
-            r#"<hp:ctrl>"#,
-            r#"<hp:fieldBegin id="{bid}" type="MEMO" name="" editable="1" dirty="1" "#,
-            r#"zorder="1" fieldid="{fid}" metaTag="">"#,
-            r#"{params}"#,
-            r#"{sublist}"#,
-            r#"</hp:fieldBegin>"#,
-            r#"</hp:ctrl>"#,
-            r#"{anchor}"#,
-            r#"<hp:ctrl>"#,
-            r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="{fid}"/>"#,
-            r#"</hp:ctrl>"#,
-            r#"</hp:run>"#,
-        ),
-        cpr = char_pr_id_ref,
-        bid = begin_id,
-        fid = field_uid,
-        params = parameters,
-        sublist = sublist_xml,
-        anchor = anchor_xml,
-    )
-}
-
-/// Builds the 7-parameter `<hp:parameters>` block 한컴 writes for a memo
-/// fieldBegin. Extracted from `build_memo_run_xml` so the same structure
-/// is easy to find when other field types need similar parameter blocks
-/// (hyperlink/crossref already use a 4-parameter analogue inside
-/// `build_hyperlink_run_xml`; that one can converge on this helper when
-/// it gains parity with 한컴 truth).
-fn build_memo_parameters_xml(
-    shape_id_ref: u32,
-    command: &str,
-    id: &str,
-    number: u32,
-    author: &str,
-    create_datetime: &str,
-) -> String {
-    let command_esc = escape_xml(command);
-    let id_esc = escape_xml(id);
-    let author_esc = escape_xml(author);
-    let dt_esc = escape_xml(create_datetime);
-    format!(
-        concat!(
-            r#"<hp:parameters cnt="7" name="">"#,
-            r#"<hp:integerParam name="Prop">0</hp:integerParam>"#,
-            r#"<hp:stringParam name="Command">{cmd}</hp:stringParam>"#,
-            r#"<hp:stringParam name="ID">{id}</hp:stringParam>"#,
-            r#"<hp:integerParam name="Number">{num}</hp:integerParam>"#,
-            r#"<hp:stringParam name="Author">{author}</hp:stringParam>"#,
-            r#"<hp:stringParam name="MemoShapeIDRef">{shape}</hp:stringParam>"#,
-            r#"<hp:stringParam name="CreateDateTime">{dt}</hp:stringParam>"#,
-            r#"</hp:parameters>"#,
-        ),
-        cmd = command_esc,
-        id = id_esc,
-        num = number,
-        author = author_esc,
-        shape = shape_id_ref,
-        dt = dt_esc,
-    )
-}
-
 /// Returns the current UTC time as an ISO 8601 timestamp
 /// (`"YYYY-MM-DDTHH:MM:SSZ"`). Used as a sensible default for
 /// `<hp:parameters name="CreateDateTime">` when callers don't supply one.
@@ -1694,62 +1589,6 @@ fn unix_to_ymdhms(secs: u64) -> (i64, u32, u32, u32, u32, u32) {
     let month_civil = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     let year_civil = if month_civil <= 2 { y0 + 1 } else { y0 };
     (year_civil, month_civil, day, hour, minute, second)
-}
-
-/// Serializes a memo's `anchor_runs` into an inline `<hp:t>…</hp:t>` sequence
-/// that lives between `<hp:fieldBegin type="MEMO">` and `<hp:fieldEnd>`.
-///
-/// Lossy by design: every `RunContent::Text` is concatenated into a single
-/// `<hp:t>` element; non-text runs are skipped; the per-run `char_shape_id`
-/// is *not* preserved (the surrounding `<hp:run>` already carries a single
-/// `charPrIDRef`). 한컴's own HWPX output is the same shape — a memo's
-/// anchor is a single `<hp:t>` per `<hp:run>` even when the source HWP5
-/// stream split it across char_shape changes.
-///
-/// Returns `<hp:t/>` for an empty anchor; that path reproduces the
-/// pre-Wave-12f point-anchored layout, which 한컴 mis-renders, so the
-/// projection layer should always populate `anchor_runs` when a memo's
-/// HWP5 `FieldBegin..FieldEnd` span contains text.
-///
-/// See `.docs/algorithms/2026-06-01_memo_anchor_serialization.md` for the
-/// fidelity tradeoff and why we accept it.
-fn build_memo_anchor_xml(anchor_runs: &[hwpforge_core::run::Run]) -> String {
-    use hwpforge_core::run::RunContent;
-    let mut text = String::new();
-    for run in anchor_runs {
-        if let RunContent::Text(s) = &run.content {
-            text.push_str(s);
-        }
-        // Non-text variants are dropped; a memo anchor cannot wrap
-        // tables/images/nested controls in HWPX, and 한컴 does not produce
-        // such anchors. If they ever appear, the lossy collapse here is
-        // strictly preferable to emitting an empty anchor (the old buggy
-        // path) — both bug 1 (wrong anchor position) and bug 2 (`[필드 끝]`
-        // mis-label) regress if the anchor is empty.
-    }
-    if text.is_empty() {
-        return "<hp:t/>".to_string();
-    }
-    build_text_element_xml(&text)
-}
-
-/// Encodes memo body paragraphs as an XML string for embedding inside fieldBegin.
-///
-/// `quick_xml::se::to_string` uses the Rust struct name `HxSubList` as the root
-/// element because `HxSubList` has no struct-level serde rename (the `hp:subList`
-/// rename lives on parent struct fields). We must fix the root tag manually.
-fn encode_memo_sublist(
-    paragraphs: &[Paragraph],
-    depth: usize,
-    hyperlink_entries: &mut Vec<(String, String)>,
-) -> HwpxResult<String> {
-    let sublist = encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries)?;
-    let xml = quick_xml::se::to_string(&sublist)
-        .map_err(|e| HwpxError::InvalidStructure { detail: e.to_string() })?;
-    // Fix root element: <HxSubList ...>...</HxSubList> → <hp:subList ...>...</hp:subList>
-    let xml = xml.replacen("<HxSubList", "<hp:subList", 1);
-    let xml = xml.replacen("</HxSubList>", "</hp:subList>", 1);
-    Ok(xml)
 }
 
 /// Converts a Core `Caption` into an `HxCaption`.
@@ -1832,139 +1671,6 @@ const DEFAULT_OUT_MARGIN: HxTableMargin =
 
 /// `borderFillIDRef` for table cells (matches header.xml borderFill id=3).
 const TABLE_BORDER_FILL_ID: u32 = 3;
-
-/// Builds `HxTable` from a Core `Table`.
-///
-/// Populates all attributes and sub-elements required by 한글:
-/// `hp:sz`, `hp:pos`, `hp:outMargin`, `hp:inMargin`, plus full
-/// attribute set on `<hp:tbl>`.
-///
-/// Builds `HxPic` from a Core `Image` with complete shape structure.
-///
-/// The `BinData/` prefix and file extension are stripped from the path
-/// to produce the `binaryItemIDRef` attribute value. For example,
-/// `"BinData/image1.png"` becomes `"image1"`. This matches 한글's
-/// convention where `binaryItemIDRef` is a logical name without extension.
-///
-/// Generates all required sub-elements (offset, orgSz, curSz, flip,
-/// rotationInfo, renderingInfo, imgRect, imgClip, inMargin, imgDim,
-/// img, sz, pos, outMargin) to match 한글's expected structure.
-fn build_picture(
-    img: &Image,
-    depth: usize,
-    hyperlink_entries: &mut Vec<(String, String)>,
-) -> HwpxResult<HxPic> {
-    let without_prefix = img.path.strip_prefix("BinData/").unwrap_or(&img.path);
-    // Strip extension: "image1.png" → "image1"
-    let binary_ref = match without_prefix.rfind('.') {
-        Some(dot) => &without_prefix[..dot],
-        None => without_prefix,
-    };
-
-    let w = img.width.as_i32();
-    let h = img.height.as_i32();
-    let half_w = w / 2;
-    let half_h = h / 2;
-    let placement = img.placement.as_ref();
-
-    Ok(HxPic {
-        // Wave 12p Step 4: HWPX `<hp:pic id="...">` cross-ref target.
-        // Image.inst_id 가 있으면 사용 (한컴 native 의 instance ID),
-        // 없으면 sequential fallback.
-        id: img.inst_id.map(|n| n.to_string()).unwrap_or_else(generate_instid),
-        z_order: 0,
-        numbering_type: "PICTURE".to_string(),
-        text_wrap: placement
-            .map(|value| value.text_wrap.as_hwpx_str().into_owned())
-            .unwrap_or_else(|| "TOP_AND_BOTTOM".to_string()),
-        text_flow: placement
-            .map(|value| value.text_flow.as_hwpx_str().into_owned())
-            .unwrap_or_else(|| "BOTH_SIDES".to_string()),
-        lock: 0,
-        dropcap_style: DropCapStyle::None.to_string(),
-        href: String::new(),
-        group_level: 0,
-        instid: generate_instid(),
-        reverse: 0,
-
-        offset: Some(HxOffset { x: 0, y: 0 }),
-        org_sz: Some(HxSizeAttr { width: w, height: h }),
-        cur_sz: Some(HxSizeAttr { width: w, height: h }),
-        flip: Some(HxFlip { horizontal: 0, vertical: 0 }),
-        rotation_info: Some(HxRotationInfo {
-            angle: 0,
-            center_x: half_w,
-            center_y: half_h,
-            rotate_image: 1,
-        }),
-        rendering_info: Some(HxRenderingInfo {
-            trans_matrix: HxMatrix::identity(),
-            sca_matrix: HxMatrix::identity(),
-            rot_matrix: HxMatrix::identity(),
-        }),
-        img_rect: Some(HxImgRect {
-            pt0: HxPoint { x: 0, y: 0 },
-            pt1: HxPoint { x: w, y: 0 },
-            pt2: HxPoint { x: w, y: h },
-            pt3: HxPoint { x: 0, y: h },
-        }),
-        img_clip: Some(HxImgClip { left: 0, right: w, top: 0, bottom: h }),
-        in_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
-        img_dim: Some(HxImgDim { dim_width: w, dim_height: h }),
-        img: Some(HxImg {
-            binary_item_id_ref: binary_ref.to_string(),
-            bright: 0,
-            contrast: 0,
-            effect: "REAL_PIC".to_string(),
-            alpha: "0".to_string(),
-        }),
-        sz: Some(HxTableSz {
-            width: w,
-            width_rel_to: "ABSOLUTE".to_string(),
-            height: h,
-            height_rel_to: "ABSOLUTE".to_string(),
-            protect: 0,
-        }),
-        pos: Some(build_picture_position(placement)),
-        out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
-        caption: img
-            .caption
-            .as_ref()
-            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries))
-            .transpose()?,
-    })
-}
-
-fn build_picture_position(placement: Option<&ImagePlacement>) -> HxTablePos {
-    match placement {
-        Some(value) => HxTablePos {
-            treat_as_char: u32::from(value.treat_as_char),
-            affect_l_spacing: 0,
-            flow_with_text: u32::from(value.flow_with_text),
-            allow_overlap: u32::from(value.allow_overlap),
-            hold_anchor_and_so: 0,
-            vert_rel_to: value.vert_rel_to.as_hwpx_str().into_owned(),
-            horz_rel_to: value.horz_rel_to.as_hwpx_str().into_owned(),
-            vert_align: "TOP".to_string(),
-            horz_align: "LEFT".to_string(),
-            vert_offset: value.vert_offset.as_i32(),
-            horz_offset: value.horz_offset.as_i32(),
-        },
-        None => HxTablePos {
-            treat_as_char: 1,
-            affect_l_spacing: 0,
-            flow_with_text: 0,
-            allow_overlap: 0,
-            hold_anchor_and_so: 0,
-            vert_rel_to: "PARA".to_string(),
-            horz_rel_to: "PARA".to_string(),
-            vert_align: "TOP".to_string(),
-            horz_align: "LEFT".to_string(),
-            vert_offset: 0,
-            horz_offset: 0,
-        },
-    }
-}
 
 // ── Linesegarray placeholder ─────────────────────────────────────
 
