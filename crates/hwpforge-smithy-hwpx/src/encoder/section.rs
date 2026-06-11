@@ -12,7 +12,10 @@
 //! the **first paragraph**, not at the section level. This module reproduces
 //! that quirk so the output is compatible with the Hancom HWP editor.
 
+mod chart;
+mod equation;
 mod table;
+mod typography;
 
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::{ColumnLayoutMode, ColumnSettings, ColumnType};
@@ -42,7 +45,10 @@ use crate::schema::section::{
     HxTableRow, HxTableSz, HxText, HxTitleMark,
 };
 
+use self::chart::{build_embedded_chart_run_xml, encode_chart_switch};
+use self::equation::encode_equation_to_hx;
 use self::table::build_table;
+use self::typography::{encode_compose_to_hx, encode_dutmal_to_hx};
 use super::chart::generate_chart_xml;
 use super::escape_xml;
 
@@ -899,127 +905,6 @@ use super::shapes::{
     encode_line_to_hx, encode_polygon_to_hx, encode_rect_to_hx, encode_textbox_to_rect,
 };
 
-/// Encodes a Core `Control::Equation` into `HxEquation`.
-///
-/// Equations have NO shape common block (no offset, orgSz, curSz, flip,
-/// rotation, lineShape, fillBrush, shadow). Only sz + pos + outMargin + script.
-/// Does not take `depth` because equations have no recursive sub-content.
-fn encode_equation_to_hx(ctrl: &Control) -> HwpxResult<HxEquation> {
-    let (script, width, height, base_line, text_color, font, inst_id) = match ctrl {
-        Control::Equation { script, width, height, base_line, text_color, font, inst_id } => {
-            (script, *width, *height, *base_line, text_color, font, *inst_id)
-        }
-        _ => unreachable!("encode_equation_to_hx called with non-Equation"),
-    };
-
-    let w = width.as_i32();
-    let h = height.as_i32();
-
-    Ok(HxEquation {
-        // Wave 12p Step 4: cross-ref target id 가 있으면 사용,
-        // 없으면 fresh fallback (한컴 native 와는 id 차이만 발생).
-        id: inst_id.map(|n| n.to_string()).unwrap_or_else(generate_instid),
-        z_order: 0,
-        numbering_type: "EQUATION".to_string(),
-        text_wrap: "TOP_AND_BOTTOM".to_string(),
-        text_flow: "BOTH_SIDES".to_string(),
-        lock: 0,
-        dropcap_style: DropCapStyle::None.to_string(),
-
-        // Equation-specific attrs (hardcoded constants per ground truth)
-        version: "Equation Version 60".to_string(),
-        base_line,
-        text_color: text_color.to_hex_rgb(),
-        base_unit: 1000,
-        line_mode: "CHAR".to_string(),
-        font: font.clone(),
-
-        sz: Some(HxTableSz {
-            width: w,
-            width_rel_to: "ABSOLUTE".to_string(),
-            height: h,
-            height_rel_to: "ABSOLUTE".to_string(),
-            protect: 0,
-        }),
-        pos: Some(HxTablePos {
-            treat_as_char: 1,
-            affect_l_spacing: 0,
-            flow_with_text: 1, // equations always flowWithText=1
-            allow_overlap: 0,
-            hold_anchor_and_so: 0,
-            vert_rel_to: "PARA".to_string(),
-            horz_rel_to: "PARA".to_string(),
-            vert_align: "TOP".to_string(),
-            horz_align: "LEFT".to_string(),
-            vert_offset: 0,
-            horz_offset: 0,
-        }),
-        out_margin: Some(HxTableMargin { left: 56, right: 56, top: 0, bottom: 0 }),
-        shape_comment: Some(HxShapeComment { text: "수식입니다.".to_string() }),
-        script: Some(HxScript { text: script.clone() }),
-    })
-}
-
-/// Encodes a Core `Control::Dutmal` into `HxDutmal`.
-fn encode_dutmal_to_hx(
-    main_text: &str,
-    sub_text: &str,
-    position: DutmalPosition,
-    sz_ratio: u32,
-    align: DutmalAlign,
-    option: u32,
-) -> HxDutmal {
-    let pos_type = match position {
-        DutmalPosition::Top => "TOP",
-        DutmalPosition::Bottom => "BOTTOM",
-        DutmalPosition::Right => "RIGHT",
-        DutmalPosition::Left => "LEFT",
-        _ => "TOP",
-    };
-    let align_str = match align {
-        DutmalAlign::Center => "CENTER",
-        DutmalAlign::Left => "LEFT",
-        DutmalAlign::Right => "RIGHT",
-        _ => "CENTER",
-    };
-    HxDutmal {
-        pos_type: pos_type.to_string(),
-        sz_ratio,
-        option,
-        style_id_ref: 0,
-        align: align_str.to_string(),
-        main_text: main_text.to_string(),
-        sub_text: sub_text.to_string(),
-    }
-}
-
-/// Encodes a Core `Control::Compose` into `HxCompose`.
-///
-/// Always emits 10 `<hp:charPr>` entries — KS X 6101 fixes
-/// `charPrCnt` at 10. `char_pr_ids` from the Core variant is
-/// padded with `u32::MAX` ("no override" sentinel) if shorter than
-/// 10 and truncated if longer; the resulting slice maps 1:1 onto
-/// the `<hp:charPr prIDRef="…"/>` children.
-fn encode_compose_to_hx(
-    compose_text: &str,
-    circle_type: &str,
-    char_sz: i32,
-    compose_type: &str,
-    char_pr_ids: &[u32],
-) -> HxCompose {
-    let char_prs = (0..10)
-        .map(|i| HxComposeCharPr { pr_id_ref: char_pr_ids.get(i).copied().unwrap_or(u32::MAX) })
-        .collect();
-    HxCompose {
-        circle_type: circle_type.to_string(),
-        char_sz,
-        compose_type: compose_type.to_string(),
-        char_pr_cnt: 10,
-        compose_text: compose_text.to_string(),
-        char_prs,
-    }
-}
-
 /// Builds a complete `<hp:run>` XML string for a hyperlink.
 ///
 /// HWPX hyperlinks use a `fieldBegin`/`fieldEnd` pair inside `<hp:ctrl>`
@@ -1865,151 +1750,6 @@ fn encode_memo_sublist(
     let xml = xml.replacen("<HxSubList", "<hp:subList", 1);
     let xml = xml.replacen("</HxSubList>", "</hp:subList>", 1);
     Ok(xml)
-}
-
-/// Builds the full `<hp:run>` XML for a [`Control::EmbeddedChart`] (Wave 4c).
-///
-/// Emits the marker-replaced run that 한컴 expects for a HWP5-sourced
-/// chart carry:
-///
-/// ```xml
-/// <hp:run charPrIDRef="N">
-///   <hp:switch>
-///     <hp:case hp:required-namespace="...">
-///       <hp:chart id="..." chartIDRef="Chart/chartN.xml">…</hp:chart>
-///     </hp:case>
-///     <hp:default>
-///       <hp:ole id="..." binaryItemIDRef="oleN" …>…</hp:ole>
-///     </hp:default>
-///   </hp:switch>
-///   <hp:t/>
-/// </hp:run>
-/// ```
-///
-/// `HxRunSwitch` only models the `<hp:case>` arm, so we cannot reuse the
-/// serde path used by the structured [`Control::Chart`] arm. The OPF
-/// manifest entry for `BinData/{ole_item_id}.ole` is registered by the
-/// `PackageWriter` callsite via [`SectionEncodeResult::embedded_oles`].
-#[allow(clippy::too_many_arguments)]
-fn build_embedded_chart_run_xml(
-    char_pr_id_ref: u32,
-    chart_ref: &str,
-    ole_item_id: &str,
-    width: i32,
-    height: i32,
-    horz_offset: i32,
-    vert_offset: i32,
-) -> String {
-    // The `id` attributes are render-time instance identifiers; they only
-    // need to be unique within the document and stay below i32::MAX (the
-    // attribute is read as a signed 32-bit int by Hancom). `generate_instid`
-    // already enforces both for us.
-    let shared_id = generate_instid();
-    format!(
-        concat!(
-            r#"<hp:run charPrIDRef="{cpr}">"#,
-            r#"<hp:switch>"#,
-            // ── <hp:case> with the OOXML chart reference ────────────────
-            r#"<hp:case hp:required-namespace="http://www.hancom.co.kr/hwpml/2016/ooxmlchart">"#,
-            r#"<hp:chart id="{id}" zOrder="0" numberingType="PICTURE" "#,
-            r#"textWrap="SQUARE" textFlow="BOTH_SIDES" lock="0" "#,
-            r#"dropcapstyle="None" chartIDRef="{chart_ref}">"#,
-            r#"<hp:sz width="{w}" widthRelTo="ABSOLUTE" height="{h}" heightRelTo="ABSOLUTE" protect="0"/>"#,
-            r#"<hp:pos treatAsChar="0" affectLSpacing="0" flowWithText="1" "#,
-            r#"allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" "#,
-            r#"vertAlign="TOP" horzAlign="LEFT" vertOffset="{vo}" horzOffset="{ho}"/>"#,
-            r#"<hp:outMargin left="0" right="0" top="0" bottom="0"/>"#,
-            r#"</hp:chart>"#,
-            r#"</hp:case>"#,
-            // ── <hp:default> with the OLE fallback ──────────────────────
-            r#"<hp:default>"#,
-            r#"<hp:ole id="{id}" zOrder="0" numberingType="PICTURE" "#,
-            r#"textWrap="SQUARE" textFlow="BOTH_SIDES" lock="0" "#,
-            r#"dropcapstyle="None" href="" groupLevel="0" instid="0" "#,
-            r#"objectType="UNKNOWN" binaryItemIDRef="{ole}" hasMoniker="0" "#,
-            r#"drawAspect="CONTENT" eqBaseLine="0">"#,
-            r#"<hp:offset x="0" y="0"/>"#,
-            r#"<hp:orgSz width="7200" height="7200"/>"#,
-            r#"<hp:curSz width="0" height="0"/>"#,
-            r#"<hp:flip horizontal="0" vertical="0"/>"#,
-            r#"<hp:rotationInfo angle="0" centerX="0" centerY="0" rotateimage="1"/>"#,
-            r#"<hp:renderingInfo>"#,
-            r#"<hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>"#,
-            r#"<hc:scaMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>"#,
-            r#"<hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>"#,
-            r#"</hp:renderingInfo>"#,
-            r#"<hc:extent x="7200" y="7200"/>"#,
-            r##"<hp:lineShape color="#000000" width="0" style="NONE" endCap="ROUND" "##,
-            r#"headStyle="NORMAL" tailStyle="NORMAL" headfill="0" tailfill="0" "#,
-            r#"headSz="SMALL_SMALL" tailSz="SMALL_SMALL" outlineStyle="NORMAL" alpha="0"/>"#,
-            r#"<hp:sz width="{w}" widthRelTo="ABSOLUTE" height="{h}" heightRelTo="ABSOLUTE" protect="0"/>"#,
-            r#"<hp:pos treatAsChar="0" affectLSpacing="0" flowWithText="1" "#,
-            r#"allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" "#,
-            r#"vertAlign="TOP" horzAlign="LEFT" vertOffset="{vo}" horzOffset="{ho}"/>"#,
-            r#"<hp:outMargin left="0" right="0" top="0" bottom="0"/>"#,
-            r#"</hp:ole>"#,
-            r#"</hp:default>"#,
-            r#"</hp:switch>"#,
-            r#"<hp:t/>"#,
-            r#"</hp:run>"#,
-        ),
-        cpr = char_pr_id_ref,
-        id = shared_id,
-        chart_ref = chart_ref,
-        ole = ole_item_id,
-        w = width,
-        h = height,
-        vo = vert_offset,
-        ho = horz_offset,
-    )
-}
-
-/// Encodes a Core `Control::Chart` into an `HxRunSwitch` wrapping `HxChart`.
-///
-/// Charts use `<hp:switch><hp:case><hp:chart>` structure in section XML,
-/// referencing a separate OOXML chart XML file in the ZIP archive.
-fn encode_chart_switch(ctrl: &Control, chart_ref: &str) -> HxRunSwitch {
-    let (width, height) = match ctrl {
-        Control::Chart { width, height, .. } => (*width, *height),
-        _ => unreachable!("encode_chart_switch called with non-Chart"),
-    };
-
-    HxRunSwitch {
-        case: Some(HxRunCase {
-            required_namespace: "http://www.hancom.co.kr/hwpml/2016/ooxmlchart".to_string(),
-            chart: Some(HxChart {
-                id: generate_instid(),
-                z_order: 0,
-                numbering_type: "PICTURE".to_string(),
-                text_wrap: "TOP_AND_BOTTOM".to_string(),
-                text_flow: "BOTH_SIDES".to_string(),
-                lock: 0,
-                dropcap_style: DropCapStyle::None.to_string(),
-                chart_id_ref: chart_ref.to_string(),
-                sz: Some(HxTableSz {
-                    width: width.as_i32(),
-                    width_rel_to: "ABSOLUTE".to_string(),
-                    height: height.as_i32(),
-                    height_rel_to: "ABSOLUTE".to_string(),
-                    protect: 0,
-                }),
-                pos: Some(HxTablePos {
-                    treat_as_char: 0,
-                    affect_l_spacing: 0,
-                    flow_with_text: 1,
-                    allow_overlap: 0,
-                    hold_anchor_and_so: 0,
-                    vert_rel_to: "PARA".to_string(),
-                    horz_rel_to: "COLUMN".to_string(),
-                    vert_align: "TOP".to_string(),
-                    horz_align: "LEFT".to_string(),
-                    vert_offset: 0,
-                    horz_offset: 0,
-                }),
-                out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
-            }),
-        }),
-    }
 }
 
 /// Converts a Core `Caption` into an `HxCaption`.
