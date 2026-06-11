@@ -37,6 +37,7 @@
 #![deny(missing_docs)]
 #![deny(unsafe_code)]
 
+mod ctrl_ids;
 pub mod decoder;
 pub mod error;
 mod layout_hint_patch;

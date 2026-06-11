@@ -107,27 +107,7 @@ impl Hwp5ParaHeader {
 // IndexMark inline-marker discriminator (Wave 12k)
 // ---------------------------------------------------------------------------
 
-/// ctrl_id for the IndexMark (찾아보기 표시) inline marker, BE-ascii
-/// `"idxm"`. Used by `Hwp5ParaText::parse` to discriminate which
-/// `0x16` inline markers represent an IndexMark vs. an unknown
-/// `0x0E..=0x16` extended control. The corresponding CtrlHeader
-/// shares the same numeric ctrl_id (`Hwp5Control::IndexMark`).
-const CTRL_ID_INDEXMARK_INLINE: u32 = 0x6964_786D;
-
-/// LE-stored ctrl_id `atno` inside a `0x12` inline marker's `extra[0..4]`
-/// (Wave 12n). Promotes the marker to a `TextSegment::ControlRef` so the
-/// projection layer can emit `Control::InlinePageNumber` at the right
-/// visible position. The CtrlHeader (also `atno`) is `Hwp5Control::InlinePageNumber`.
-const CTRL_ID_INLINE_AUTONUM: u32 = 0x6174_6E6F;
-
-// `CTRL_ID_CLICK_HERE = 0x2563_6C6B` ("%clk", Wave 12l) is defined in
-// `decoder/section.rs`. The schema crate does not currently dispatch
-// on this id (the inline-marker discriminator path used by IndexMark
-// goes through `Hwp5ParaText::parse`'s separate 0x16 vs 0x0E..=0x15
-// split, not through a ctrl_id constant). If a future schema-side
-// parser needs the value it should be re-introduced here, or — better —
-// the constants should be consolidated into a single `ctrl_ids`
-// module (backlog #94).
+use crate::ctrl_ids::{CTRL_ID_INDEXMARK_INLINE, CTRL_ID_INLINE_AUTONUM};
 
 /// Reads the LE-stored ctrl_id from the first four bytes of an
 /// inline-marker's `extra` block and returns it as the BE-ascii u32

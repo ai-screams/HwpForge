@@ -538,94 +538,25 @@ impl Hwp5PageBorderFill {
 }
 
 // ---------------------------------------------------------------------------
-// ctrl_id constants
+// ctrl_id constants — consolidated in `crate::ctrl_ids` (#94 Step B1)
 // ---------------------------------------------------------------------------
 
-/// ctrl_id for a table control: ASCII 'tbl ' as big-endian u32.
-const CTRL_ID_TABLE: u32 = 0x7462_6C20;
-/// ctrl_id for header control: ASCII `head` as big-endian u32.
-const CTRL_ID_HEADER: u32 = 0x6865_6164;
-/// ctrl_id for footer control: ASCII `foot` as big-endian u32.
-const CTRL_ID_FOOTER: u32 = 0x666F_6F74;
-/// ctrl_id for section definition control: ASCII `secd` as big-endian u32.
-/// Holds page-level visibility / column-spacing / paper-spec metadata
-/// (HWP 5.0 spec §4.3.10.1 표 129·130).
-const CTRL_ID_SECD: u32 = 0x7365_6364;
-/// ctrl_id for footnote control: ASCII `fn  ` as big-endian u32.
-const CTRL_ID_FOOTNOTE: u32 = 0x666E_2020;
-/// ctrl_id for endnote control: ASCII `en  ` as big-endian u32.
-const CTRL_ID_ENDNOTE: u32 = 0x656E_2020;
-/// ctrl_id for generic shape object control: ASCII `gso ` as big-endian u32.
-const CTRL_ID_GSO: u32 = 0x6773_6F20;
+use crate::ctrl_ids::{
+    CTRL_ID_CLICK_HERE, CTRL_ID_COMPOSE, CTRL_ID_DUTMAL, CTRL_ID_ENDNOTE, CTRL_ID_EQED,
+    CTRL_ID_FIELD_CROSSREF, CTRL_ID_FIELD_DATE_CODE, CTRL_ID_FIELD_INLINE_PAGE, CTRL_ID_FIELD_PATH,
+    CTRL_ID_FIELD_SUMMERY, CTRL_ID_FOOTER, CTRL_ID_FOOTNOTE, CTRL_ID_GSO, CTRL_ID_HEADER,
+    CTRL_ID_INDEXMARK, CTRL_ID_MEMO, CTRL_ID_SECD, CTRL_ID_TABLE,
+};
 
 /// `ShapeComponent` (`0x4C`) type tag identifying a connect line, stored as the
 /// little-endian bytes for `"$col"`. 한컴 reuses the `ShapeComponentLine`
 /// (`0x4E`) sub-record for both plain lines and connectors, so this 4-byte tag
 /// in the `ShapeComponent` header is the only discriminator (confirmed against
 /// `$rec`/`$ell`/`$cur` for rect/ellipse/curve from 한컴 truth fixtures).
+///
+/// Not a `ctrl_id` — `[u8; 4]` shape-component type tag (different wire role),
+/// so stays here rather than moving to `crate::ctrl_ids`.
 const SHAPE_COMPONENT_TYPE_CONNECT_LINE: [u8; 4] = [0x6C, 0x6F, 0x63, 0x24];
-
-/// ctrl_id for the equation editor control: ASCII `eqed` as big-endian u32.
-const CTRL_ID_EQED: u32 = 0x6571_6564;
-
-/// ctrl_id for memo placeholder controls: ASCII `%unk` as big-endian u32.
-///
-/// 한컴 stores both memo annotations (with command `"MEMO/.../.../..."`) and
-/// other user-unknown controls under this id; we recognize memos by the
-/// `"MEMO/"` command prefix. Other `%unk` payloads continue to flow through
-/// the `Hwp5Control::Unknown` fallback.
-const CTRL_ID_MEMO: u32 = 0x2575_6E6B;
-
-/// ctrl_id for the dutmal (덧말) control: ASCII `tdut` as big-endian u32.
-///
-/// Paired wire artifacts: an inline `0x17` marker in the body's
-/// `ParaText` stream (carries the LE-stored ctrl_id as `"tudt"` in
-/// `extra[0..4]`) plus this CtrlHeader carrying the actual
-/// `mainText` / `subText` strings.
-const CTRL_ID_DUTMAL: u32 = 0x7464_7574;
-
-/// ctrl_id for the compose (글자겹침) control: ASCII `tcps` as
-/// big-endian u32. Paired with an inline `0x17` marker whose
-/// `extra[0..4]` carries the LE-stored ctrl_id `"spct"`. Payload
-/// layout lives on `crate::schema::section::Hwp5ComposeControl`.
-const CTRL_ID_COMPOSE: u32 = 0x7463_7073;
-
-/// ctrl_id for the IndexMark (찾아보기 표시) control: ASCII `idxm`
-/// as big-endian u32. Paired with an inline `0x16` marker whose
-/// `extra[0..4]` carries the LE-stored ctrl_id `"mxdi"`
-/// (`6D 78 64 69`). Payload layout lives on
-/// `crate::schema::section::Hwp5IndexMarkControl`.
-const CTRL_ID_INDEXMARK: u32 = 0x6964_786D;
-
-/// ctrl_id for the ClickHere (누름틀) press-field: ASCII `%clk` as
-/// big-endian u32. Wave 12l.
-const CTRL_ID_CLICK_HERE: u32 = 0x2563_6C6B;
-
-/// ctrl_id for the SUMMERY auto-field family (`$author`, `$lastsaveby`,
-/// `$createtime`, `$modifiedtime`, `$title`, …): ASCII `%smr` as
-/// big-endian u32. Wave 12n. Payload layout lives on
-/// `crate::schema::section::Hwp5SummeryControl`.
-const CTRL_ID_FIELD_SUMMERY: u32 = 0x2573_6D72;
-
-/// ctrl_id for the `%dte` date/time format-code field: ASCII `%dte` as
-/// big-endian u32. Wave 12n. Payload layout lives on
-/// `crate::schema::section::Hwp5DateCodeControl`.
-const CTRL_ID_FIELD_DATE_CODE: u32 = 0x2564_7465;
-
-/// ctrl_id for the `%pat` path/file-name field: ASCII `%pat` as
-/// big-endian u32. Wave 12n. Payload layout lives on
-/// `crate::schema::section::Hwp5PathFieldControl`.
-const CTRL_ID_FIELD_PATH: u32 = 0x2570_6174;
-
-/// ctrl_id for the `%xrf` cross-reference field: ASCII `%xrf` as
-/// big-endian bytes (`0x25 0x78 0x72 0x66`). See
-/// `crate::schema::section::Hwp5CrossRefControl`. (Wave 12m Phase 2.)
-const CTRL_ID_FIELD_CROSSREF: u32 = 0x2578_7266;
-
-/// ctrl_id for the `atno` inline page-number control: ASCII `atno` as
-/// big-endian u32. Wave 12n. Payload layout lives on
-/// `crate::schema::section::Hwp5InlinePageNumberControl`.
-const CTRL_ID_FIELD_INLINE_PAGE: u32 = 0x6174_6E6F;
 
 // The `0x57 lvl=2` sub-record that follows every `%clk` CtrlHeader
 // carries the form-mode field name and HWP5 names it `CtrlData`. The

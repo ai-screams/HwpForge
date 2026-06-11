@@ -22,6 +22,11 @@ use hwpforge_foundation::{
     PageNumberPosition, ParaShapeIndex, RefContentType, RefType, StyleIndex,
 };
 
+use crate::ctrl_ids::{
+    CTRL_ID_BOOKMARK_POINT, CTRL_ID_BOOKMARK_SPAN, CTRL_ID_CLICK_HERE, CTRL_ID_COLUMN_DEF,
+    CTRL_ID_CROSSREF, CTRL_ID_FIELD_DATE_CODE, CTRL_ID_FIELD_PATH, CTRL_ID_FIELD_SUMMERY,
+    CTRL_ID_HYPERLINK, CTRL_ID_MEMO_INLINE, CTRL_ID_PAGE_NUMBER, CTRL_ID_SECTION_DEF,
+};
 use crate::decoder::chart_ole::{extract_chart_payload, ChartOleError};
 use crate::decoder::section::{
     Hwp5ArcControl, Hwp5ConnectLineControl, Hwp5Control, Hwp5CurveControl, Hwp5EllipseControl,
@@ -42,13 +47,6 @@ use crate::table_cell_vertical_align::{
 use crate::table_page_break::{core_table_page_break, unknown_hwp5_table_page_break_raw};
 use crate::warning_utils::push_projection_fallback;
 use crate::{Hwp5JoinedImageAsset, Hwp5JoinedImageAssetPlan, Hwp5OleAssetPlan};
-
-const CTRL_ID_SECTION_DEF: u32 = 0x7365_6364; // "secd"
-const CTRL_ID_COLUMN_DEF: u32 = 0x636F_6C64; // "cold"
-const CTRL_ID_PAGE_NUMBER: u32 = 0x7067_6E70; // "pgnp"
-const CTRL_ID_BOOKMARK_SPAN: u32 = 0x2562_6D6B; // "%bmk"
-const CTRL_ID_HYPERLINK: u32 = 0x2568_6C6B; // "%hlk"
-const CTRL_ID_CROSSREF: u32 = 0x2578_7266; // "%xrf"
 /// Wire code for the Bookmark `RefType` variant (Wave 12m Phase 2). The
 /// HWP5 `%xrf` Command's N1 slot uses these codes; boundary functions
 /// in this file map them to typed [`RefType`].
@@ -65,35 +63,7 @@ const HWP5_CROSSREF_REF_TYPE_ENDNOTE: u8 = 4;
 const HWP5_CROSSREF_REF_TYPE_OUTLINE: u8 = 5;
 /// Wire code for the Bookmark `RefType` variant (Wave 12m).
 const HWP5_CROSSREF_REF_TYPE_BOOKMARK: u8 = 6;
-const CTRL_ID_BOOKMARK_POINT: u32 = 0x626F_6B6D; // "bokm"
-/// Wave 12l: ClickHere (누름틀) inline `FieldBegin` ctrl_id `%clk`.
-/// Hint/help live in the matching `%clk` CtrlHeader payload and the
-/// form-mode `name` lives in the trailing `0x57 lvl=2` sub-record —
-/// see `schema::section::Hwp5ClickHereControl`.
-const CTRL_ID_CLICK_HERE: u32 = 0x2563_6C6B; // "%clk"
-/// SUMMERY auto-field ctrl_id (Wave 12n). Matches the inline `FieldBegin`
-/// `extra` bytes so the projection layer can pop the parsed payload from
-/// `summery_fields` when this id arrives.
-const CTRL_ID_FIELD_SUMMERY: u32 = 0x2573_6D72; // "%smr"
-/// `%dte` date/time format-code ctrl_id (Wave 12n).
-const CTRL_ID_FIELD_DATE_CODE: u32 = 0x2564_7465; // "%dte"
-/// `%pat` path/file-name ctrl_id (Wave 12n).
-const CTRL_ID_FIELD_PATH: u32 = 0x2570_6174; // "%pat"
-/// Inline `FieldBegin` ctrl_id for memo anchors (`%%me` BE-ascii).
-///
-/// In the HWP5 body text stream, memos are embedded as `FieldBegin` /
-/// `FieldEnd` markers whose `extra[0..4]` raw bytes are
-/// `65 6D 25 25` (ASCII `e m % %` — same "LE-stored u32 of BE-ascii name"
-/// convention as `%bmk` / `%hlk` / `%xrf` above). After
-/// `ctrl_id_from_inline_extra` reverses + reads BE, that yields
-/// `0x2525_6D65`.
-///
-/// This is *not* the same identifier as the `CtrlHeader` ctrl_id for memo
-/// placeholders — that one is `%unk` (`0x2575_6E6B`), defined in the
-/// decoder. HWP5 uses one ID for the inline anchor and another for the
-/// `CtrlHeader` placeholder; only the inline id is needed here, where we
-/// translate `FieldBegin` markers into `ActiveField::MemoAnchor`.
-const CTRL_ID_MEMO_INLINE: u32 = 0x2525_6D65;
+// CTRL_ID constants moved to `crate::ctrl_ids` (#94 Step B1).
 
 #[derive(Debug, Default)]
 struct SectionProjectionHints {

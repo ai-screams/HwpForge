@@ -13,6 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::ctrl_ids::CTRL_ID_PAGE_NUMBER;
 use crate::decoder::header::DocInfoResult;
 use crate::decoder::section::{
     Hwp5Control, Hwp5ImageControl, Hwp5LineControl, Hwp5NestedSubtree, Hwp5OleObjectControl,
@@ -35,12 +36,6 @@ use crate::semantic::{
 use crate::table_cell_vertical_align::semantic_table_cell_vertical_align;
 use crate::table_page_break::semantic_table_page_break;
 use crate::{Hwp5BinDataRecordSummary, Hwp5BinDataStream, Hwp5JoinedImageAssetPlan};
-
-/// ctrl_id for the page-number control: ASCII `pgnp` as a big-endian u32.
-/// Mirrors `projection::CTRL_ID_PAGE_NUMBER`; the page-number control flows
-/// through `Hwp5Control::Unknown`, so the semantic model recognizes it here
-/// to keep `audit-hwp5`'s source-side page-number count accurate.
-const CTRL_ID_PAGE_NUMBER: u32 = 0x7067_6E70;
 
 #[derive(Debug, Default)]
 struct SemanticIdAlloc {
