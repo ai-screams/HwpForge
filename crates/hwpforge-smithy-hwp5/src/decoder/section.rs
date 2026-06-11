@@ -1811,17 +1811,19 @@ impl BodyTextParserState {
                     // the parsed control so the next `0x57` can attach the
                     // name. (Wave 12l.)
                     self.flush_pending_clickhere();
-                    if let Some(clickhere) =
-                        crate::schema::section::Hwp5ClickHereControl::parse(ctrl_id, &record.data)
+                    match crate::schema::section::Hwp5ClickHereControl::parse(ctrl_id, &record.data)
                     {
-                        self.pending_clickhere = Some(clickhere);
-                    } else {
-                        self.warnings.push(Hwp5Warning::DroppedControl {
-                            control: "clickhere",
-                            reason:
-                                "malformed %clk CtrlHeader payload; dropping press-field metadata"
-                                    .to_string(),
-                        });
+                        Ok(clickhere) => self.pending_clickhere = Some(clickhere),
+                        Err(err) => {
+                            self.warnings.push(Hwp5Warning::DroppedControl {
+                                control: "clickhere",
+                                reason: format!(
+                                    "malformed %clk CtrlHeader payload ({}); \
+                                     dropping press-field metadata",
+                                    err.as_str()
+                                ),
+                            });
+                        }
                     }
                 } else if ctrl_id == CTRL_ID_INDEXMARK {
                     // `idxm` ctrl carries the IndexMark (찾아보기 표시)

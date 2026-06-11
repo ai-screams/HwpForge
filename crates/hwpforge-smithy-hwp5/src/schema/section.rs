@@ -1509,21 +1509,57 @@ const MAX_CLICKHERE_COMMAND_UNITS: usize = 32 * 1024;
 /// already absurd for an HTML-input-name-style identifier.
 const MAX_CLICKHERE_NAME_UNITS: usize = 2 * 1024;
 
+/// Why a `%clk` CtrlHeader payload was rejected by
+/// [`Hwp5ClickHereControl::parse`] (task #89 — observability).
+///
+/// Pre-#89 every reject collapsed into a single `None`, so the decoder
+/// could only emit one generic "malformed %clk" warning. Distinct
+/// variants let `audit-hwp5` baselines attribute a dropped press-field
+/// to a concrete wire defect instead of a catch-all bucket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ClickHereParseError {
+    /// Payload shorter than the 19-byte fixed minimum
+    /// (ctrl_id + properties + flag + count + trailer).
+    TruncatedHeader,
+    /// Declared command length exceeds `MAX_CLICKHERE_COMMAND_UNITS`
+    /// (allocation-cap guard, task #86).
+    CommandTooLong,
+    /// Declared command length + 8-byte trailer overruns the payload
+    /// (including arithmetic overflow on hostile lengths).
+    TruncatedCommand,
+    /// The command decoded as UTF-16 but did not match the
+    /// `Clickhere:set:N:…` grammar.
+    CommandSyntax,
+}
+
+impl ClickHereParseError {
+    /// Short static description for embedding in warning messages.
+    pub(crate) fn as_str(self) -> &'static str {
+        match self {
+            Self::TruncatedHeader => "payload shorter than fixed 19-byte minimum",
+            Self::CommandTooLong => "command length exceeds allocation cap",
+            Self::TruncatedCommand => "declared command length overruns payload",
+            Self::CommandSyntax => "command does not match Clickhere:set grammar",
+        }
+    }
+}
+
 impl Hwp5ClickHereControl {
     /// Decodes a `%clk` CtrlHeader payload (the raw record `data`
     /// excluding the 4-byte CtrlHeader prefix the dispatcher already
-    /// matched). Returns `None` on truncation or malformed command
-    /// string — the decoder reports those as a targeted
+    /// matched). Returns a [`ClickHereParseError`] naming the wire
+    /// defect on truncation or malformed command string — the decoder
+    /// embeds it in a targeted
     /// `Hwp5Warning::DroppedControl { control: "clickhere", … }` so
-    /// the lossy path is auditable.
+    /// the lossy path is auditable per-defect (task #89).
     ///
     /// `name` is left `None`; the dispatcher merges it from the
     /// following `0x57` sub-record once parsed.
-    pub(crate) fn parse(ctrl_id: u32, data: &[u8]) -> Option<Self> {
+    pub(crate) fn parse(ctrl_id: u32, data: &[u8]) -> Result<Self, ClickHereParseError> {
         // Need: 4 (ctrl_id) + 4 (properties) + 1 (flag) + 2 (count)
         // + 0 (command) + 8 (trailer) = 19 bytes minimum.
         if data.len() < 19 {
-            return None;
+            return Err(ClickHereParseError::TruncatedHeader);
         }
         // Skip the 8-byte CtrlHeader prefix (ctrl_id + properties).
         let body = &data[8..];
@@ -1532,14 +1568,17 @@ impl Hwp5ClickHereControl {
         // continue, so we accept any value here and trust the count).
         let command_units = usize::from(u16::from_le_bytes([body[1], body[2]]));
         if command_units > MAX_CLICKHERE_COMMAND_UNITS {
-            return None;
+            return Err(ClickHereParseError::CommandTooLong);
         }
-        let command_bytes = command_units.checked_mul(2)?;
-        let command_end = 3usize.checked_add(command_bytes)?;
+        let command_bytes =
+            command_units.checked_mul(2).ok_or(ClickHereParseError::TruncatedCommand)?;
+        let command_end =
+            3usize.checked_add(command_bytes).ok_or(ClickHereParseError::TruncatedCommand)?;
         // Trailer is 8 bytes (u32 field id + u32 padding).
-        let trailer_end = command_end.checked_add(8)?;
+        let trailer_end =
+            command_end.checked_add(8).ok_or(ClickHereParseError::TruncatedCommand)?;
         if body.len() < trailer_end {
-            return None;
+            return Err(ClickHereParseError::TruncatedCommand);
         }
 
         let mut command_units_vec: Vec<u16> = Vec::with_capacity(command_units);
@@ -1547,7 +1586,8 @@ impl Hwp5ClickHereControl {
             command_units_vec.push(u16::from_le_bytes([chunk[0], chunk[1]]));
         }
 
-        let (hint_text, help_text) = parse_clickhere_command(&command_units_vec)?;
+        let (hint_text, help_text) = parse_clickhere_command(&command_units_vec)
+            .ok_or(ClickHereParseError::CommandSyntax)?;
 
         let field_unique_id = u32::from_le_bytes([
             body[command_end],
@@ -1560,7 +1600,7 @@ impl Hwp5ClickHereControl {
         // recommended warning-not-error on mismatch which the decoder
         // does at the dispatch layer.
 
-        Some(Self { ctrl_id, hint_text, help_text, name: None, field_unique_id })
+        Ok(Self { ctrl_id, hint_text, help_text, name: None, field_unique_id })
     }
 
     /// Decodes a `0x57 lvl=2` sub-record's `data` into the field
@@ -3319,7 +3359,53 @@ mod tests {
     fn clickhere_parse_rejects_truncated_command() {
         let mut data = make_clk("hi", "", 0);
         data.truncate(data.len() - 4);
-        assert!(Hwp5ClickHereControl::parse(CLK_CTRL_ID, &data).is_none());
+        assert_eq!(
+            Hwp5ClickHereControl::parse(CLK_CTRL_ID, &data).unwrap_err(),
+            ClickHereParseError::TruncatedCommand,
+        );
+    }
+
+    #[test]
+    fn clickhere_parse_rejects_short_header() {
+        // Below the 19-byte fixed minimum — distinct reason from a
+        // declared-length overrun (task #89).
+        let data = vec![0u8; 18];
+        assert_eq!(
+            Hwp5ClickHereControl::parse(CLK_CTRL_ID, &data).unwrap_err(),
+            ClickHereParseError::TruncatedHeader,
+        );
+    }
+
+    #[test]
+    fn clickhere_parse_rejects_command_over_allocation_cap() {
+        // Declared command length above MAX_CLICKHERE_COMMAND_UNITS
+        // must be refused before any allocation (tasks #86/#89).
+        let mut data = vec![0u8; 8];
+        data.push(0x09);
+        data.extend_from_slice(&u16::MAX.to_le_bytes());
+        data.extend_from_slice(&[0u8; 8]);
+        assert_eq!(
+            Hwp5ClickHereControl::parse(CLK_CTRL_ID, &data).unwrap_err(),
+            ClickHereParseError::CommandTooLong,
+        );
+    }
+
+    #[test]
+    fn clickhere_parse_rejects_non_clickhere_command_syntax() {
+        // Structurally valid envelope whose command is not the
+        // `Clickhere:set` grammar.
+        let mut data = vec![0u8; 8];
+        data.push(0x09);
+        let command: Vec<u16> = "NotAClickhereCommand".encode_utf16().collect();
+        data.extend_from_slice(&(command.len() as u16).to_le_bytes());
+        for unit in &command {
+            data.extend_from_slice(&unit.to_le_bytes());
+        }
+        data.extend_from_slice(&[0u8; 8]);
+        assert_eq!(
+            Hwp5ClickHereControl::parse(CLK_CTRL_ID, &data).unwrap_err(),
+            ClickHereParseError::CommandSyntax,
+        );
     }
 
     #[test]
