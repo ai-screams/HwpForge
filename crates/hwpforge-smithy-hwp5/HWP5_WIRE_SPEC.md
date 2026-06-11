@@ -382,6 +382,22 @@ one-knob-per-paragraph `sample-dutmal-variants.hwp` fixture
 Unknown align codes project to CENTER with a `ProjectionFallback`
 warning. Source: `schema/section.rs::Hwp5DutmalControl`.
 
+### Compose (`tcps`) layouts + decoration glyph (task #74)
+
+The full 14-circleType × 2-composeType matrix
+(`sample-compose-all-shapes.hwp`, `probe_compose_variants`) confirmed
+exactly **two** layouts discriminated by `properties.low`:
+
+- `0x0003` (unpacked) — text fully in body; `properties.high` holds a
+  decoration glyph that is a pure 1:1 function of the body-trailer
+  `circleType`: CHAR→U+3000, ◯●□■△▲☼◇◆▢♲♺♻ for the 13 shape kinds
+  in OWPML enum order. No independent information → decoder ignores it.
+- `0x0002` (packed) — `composeText[0]` in `properties.high`; observed
+  on exactly one matrix cell (`CHAR + OVERLAP`).
+
+No third layout exists, so an unknown discriminator is genuinely
+malformed. Source: `schema/section.rs::Hwp5ComposeControl`.
+
 ### Allocation caps (defensive, Wave 12 + #86)
 
 Length prefixes are `u16` (0..65535). Without a cap, a malicious file
@@ -583,27 +599,28 @@ Source: `layout_hint_patch.rs::write_linesegarray`.
 
 ## 21. Wave 12 Series Provenance
 
-| Wave    | Discovery                                                                         |
-| ------- | --------------------------------------------------------------------------------- |
-| 12a     | GSO Ellipse/Arc/Curve sub-records (0x50/0x53)                                     |
-| 12b     | ConnectLine `$col` discriminator on `ShapeComponentLine`                          |
-| 12d     | `eqed` + `EQEDIT` (0x58) script pairing                                           |
-| 12e     | Memo `%unk` + `HWPTAG_MEMO_LIST` (0x5D) cluster joining                           |
-| 12f     | Memo inline marker `%%me` (0x2525_6D65) vs CtrlHeader `%unk`                      |
-| 12h     | Memo 7-parameter `<hp:parameters>` carry                                          |
-| 12i     | Dutmal `tdut` split-leader BSTR + `option_raw`                                    |
-| #73     | Dutmal tail words pinned — `sz_ratio` tail[4..8], `align` tail[16..20] (CENTER=3) |
-| 12j     | Compose `tcps` packed variant + `char_pr_ids` fidelity                            |
-| 12k     | IndexMark `idxm` `0x16` inline marker + sub-record `0x57` pairing                 |
-| 12l     | ClickHere `%clk` BSTR + `0x57 lvl=2` (`CtrlData`) sub-record pairing              |
-| 12m     | CrossRef `%xrf` 8-parameter Hancom-canonical wire + ADR-004                       |
-| 12n     | Auto fields `%smr`/`%dte`/`%pat`/`atno` discriminated by ctrl_id                  |
-| 12o     | SummaryInformation OLE2 PropertySet (BOM, VT types, Hancom PIDs)                  |
-| 12p     | ParaHeader `[18..22]` instance_id + family-aware CtrlHeader offsets               |
-| 12p#121 | ParaShape bits 25-27 are zero-based ordinal                                       |
-| 12p#123 | Default `linesegarray` synthesis for paragraphs lacking 0x45                      |
-| 12p#124 | SUMMERY `editable` per-FieldType                                                  |
-| 12q     | Style "개요 N" override for outline levels 7~9                                    |
+| Wave    | Discovery                                                                                                   |
+| ------- | ----------------------------------------------------------------------------------------------------------- |
+| 12a     | GSO Ellipse/Arc/Curve sub-records (0x50/0x53)                                                               |
+| 12b     | ConnectLine `$col` discriminator on `ShapeComponentLine`                                                    |
+| 12d     | `eqed` + `EQEDIT` (0x58) script pairing                                                                     |
+| 12e     | Memo `%unk` + `HWPTAG_MEMO_LIST` (0x5D) cluster joining                                                     |
+| 12f     | Memo inline marker `%%me` (0x2525_6D65) vs CtrlHeader `%unk`                                                |
+| 12h     | Memo 7-parameter `<hp:parameters>` carry                                                                    |
+| 12i     | Dutmal `tdut` split-leader BSTR + `option_raw`                                                              |
+| #73     | Dutmal tail words pinned — `sz_ratio` tail[4..8], `align` tail[16..20] (CENTER=3)                           |
+| #74     | Compose full-matrix probe — glyph = f(circleType) 1:1, packed layout only on CHAR+OVERLAP, no third variant |
+| 12j     | Compose `tcps` packed variant + `char_pr_ids` fidelity                                                      |
+| 12k     | IndexMark `idxm` `0x16` inline marker + sub-record `0x57` pairing                                           |
+| 12l     | ClickHere `%clk` BSTR + `0x57 lvl=2` (`CtrlData`) sub-record pairing                                        |
+| 12m     | CrossRef `%xrf` 8-parameter Hancom-canonical wire + ADR-004                                                 |
+| 12n     | Auto fields `%smr`/`%dte`/`%pat`/`atno` discriminated by ctrl_id                                            |
+| 12o     | SummaryInformation OLE2 PropertySet (BOM, VT types, Hancom PIDs)                                            |
+| 12p     | ParaHeader `[18..22]` instance_id + family-aware CtrlHeader offsets                                         |
+| 12p#121 | ParaShape bits 25-27 are zero-based ordinal                                                                 |
+| 12p#123 | Default `linesegarray` synthesis for paragraphs lacking 0x45                                                |
+| 12p#124 | SUMMERY `editable` per-FieldType                                                                            |
+| 12q     | Style "개요 N" override for outline levels 7~9                                                              |
 
 ---
 

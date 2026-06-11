@@ -1262,27 +1262,36 @@ impl Hwp5ComposeControl {
     /// keeps round-tripping.
     ///
     /// The wire has two observed layouts discriminated by the
-    /// `properties` low half (`data[4..6]` as LE u16):
+    /// `properties` low half (`data[4..6]` as LE u16). Task #74 ran the
+    /// full 14-circleType × 2-composeType matrix
+    /// (`sample-compose-all-shapes.hwp`, `probe_compose_variants`) and
+    /// confirmed these are the **only** layouts 한컴 emits:
     ///
     /// - **`0x0003` (unpacked)** — `composeText` is fully in the body
-    ///   (`data[8..]`). `properties[2..4]` is a shape glyph (e.g.
-    ///   `U+25EF` ◯ for `SHAPE_CIRCLE`) that the decoder ignores —
-    ///   the actual `circleType` enum is in the body trailer. This is
-    ///   what 한컴 emits natively and for almost every HWPX→HWP5
-    ///   round-tripped variant.
+    ///   (`data[8..]`). `properties[2..4]` is a decoration glyph that is
+    ///   a pure 1:1 function of the body-trailer `circleType` (observed
+    ///   table: CHAR→U+3000 전각공백, CIRCLE→U+25EF ◯,
+    ///   REVERSAL_CIRCLE→U+25CF ●, RECTANGLE→U+25A1 □,
+    ///   REVERSAL_RECTANGLE→U+25A0 ■, TRIANGLE→U+25B3 △,
+    ///   REVERSAL_TIRANGLE→U+25B2 ▲, LIGHT→U+263C ☼,
+    ///   RHOMBUS→U+25C7 ◇, REVERSAL_RHOMBUS→U+25C6 ◆,
+    ///   ROUNDED_RECTANGLE→U+25A2 ▢, EMPTY/THIN/THICK_CIRCULATE_TRIANGLE
+    ///   →U+2672 ♲ / U+267A ♺ / U+267B ♻). Because the glyph carries no
+    ///   independent information, the decoder rightly ignores it and
+    ///   reads the authoritative `circleType` from the body trailer —
+    ///   resolved-by-observation, not assumption (task #74).
     /// - **`0x0002` (packed)** — `composeText[0]` is in
     ///   `properties[2..4]` (LE u16), the rest in the body, and the
     ///   low half (`0x0002`) doubles as `composeText.len()`. Observed
-    ///   exclusively on the `CHAR + OVERLAP` variant when 한컴 saved
-    ///   an HWPX → HWP5 — presumably because `CHAR` has no decoration
-    ///   glyph to put in `properties[2..4]`, so 한컴 packs the first
-    ///   text char there instead. The body trailer layout is
-    ///   unchanged; only the leading char-region shrinks by one
-    ///   `u16`.
+    ///   on exactly one cell of the full matrix: `CHAR + OVERLAP`
+    ///   (CHAR + SPREAD stays unpacked with the U+3000 glyph). The
+    ///   body trailer layout is unchanged; only the leading
+    ///   char-region shrinks by one `u16`.
     ///
     /// Any other `properties.low` value falls through to `None`
-    /// (treated as malformed) — clamp-style guessing risks silently
-    /// inventing characters from unrelated bits.
+    /// (treated as malformed) — the full-matrix probe found no third
+    /// layout, so an unknown discriminator really is malformed rather
+    /// than an unobserved variant.
     pub(crate) fn parse(ctrl_id: u32, data: &[u8]) -> Option<Self> {
         // CtrlHeader payload is `[0..8] = ctrl_id + properties`, then
         // the compose-specific data lives in `[8..]`. We mirror the

@@ -1485,6 +1485,47 @@ fn hwp5_to_hwpx_user_sample_compose_all_shapes_handles_packed_wire_variant() {
         full_text_count, 28,
         "every compose must keep composeText=\"한韓\" (packed-variant regression gate)"
     );
+
+    // Task #74: circleType must carry per-entry in document order —
+    // the fixture is SPREAD×14 then OVERLAP×14, each in OWPML
+    // SHAPECIRCLETYPE enum order. The probe
+    // (`probe_compose_variants`) confirmed the body-trailer
+    // `circle_type_raw` is the authoritative source (0..=13) and the
+    // `properties.high` glyph is a derived 1:1 decoration the decoder
+    // rightly ignores.
+    const CIRCLE_TYPES_OWPML_ORDER: [&str; 14] = [
+        "CHAR",
+        "SHAPE_CIRCLE",
+        "SHAPE_REVERSAL_CIRCLE",
+        "SHAPE_RECTANGLE",
+        "SHAPE_REVERSAL_RECTANGLE",
+        "SHAPE_TRIANGLE",
+        "SHAPE_REVERSAL_TIRANGLE",
+        "SHAPE_LIGHT",
+        "SHAPE_RHOMBUS",
+        "SHAPE_REVERSAL_RHOMBUS",
+        "SHAPE_ROUNDED_RECTANGLE",
+        "SHAPE_EMPTY_CIRCULATE_TRIANGLE",
+        "SHAPE_THIN_CIRCULATE_TRIANGLE",
+        "SHAPE_THICK_CIRCULATE_TRIANGLE",
+    ];
+    let carried_circle_types: Vec<&str> = section_xml
+        .match_indices("circleType=\"")
+        .map(|(start, pat)| {
+            let value_start = start + pat.len();
+            let value_end = section_xml[value_start..].find('"').unwrap() + value_start;
+            &section_xml[value_start..value_end]
+        })
+        .collect();
+    let expected: Vec<&str> = CIRCLE_TYPES_OWPML_ORDER
+        .iter()
+        .copied()
+        .chain(CIRCLE_TYPES_OWPML_ORDER.iter().copied())
+        .collect();
+    assert_eq!(
+        carried_circle_types, expected,
+        "circleType must carry per-entry in document order (task #74)"
+    );
     // Inverse check: zero variants should be stripped to single-char
     // "韓" (the pre-fix bug only affected the CHAR + OVERLAP entry).
     assert_eq!(
