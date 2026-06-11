@@ -1045,6 +1045,13 @@ pub(crate) struct Hwp5MemoCommand {
 /// `.docs/algorithms/2026-06-01_memo_anchor_serialization.md` (general
 /// "carry wire metadata only when the source actually populates it"
 /// rule).
+/// Defence-in-depth allocation cap for the `tdut` dutmal main/sub text
+/// payloads (task #86 hardening). The dutmal feature is decorative
+/// (위/아래 작은 글자) and realistic Korean strings rarely exceed
+/// dozens of code units; 1024 leaves ample headroom while limiting a
+/// single hostile record to ≤ 4 KB per slot.
+const MAX_DUTMAL_TEXT_UNITS: usize = 1024;
+
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5DutmalControl {
     /// Owning control identifier, always `tdut` (`0x7464_7574` BE-ascii).
@@ -1078,6 +1085,13 @@ impl Hwp5DutmalControl {
         if main_len == 0 {
             return None;
         }
+        // task #86 hardening — cap allocation BEFORE Vec::with_capacity
+        // (DoS prevention). Observed dutmal main text is typically ≤ 32
+        // Korean code units; 1024 covers an order of magnitude headroom
+        // while keeping a hostile record well below 64 KB.
+        if main_len > MAX_DUTMAL_TEXT_UNITS {
+            return None;
+        }
         let main_first = u16::from_le_bytes([data[6], data[7]]);
 
         let mut main_units: Vec<u16> = Vec::with_capacity(main_len);
@@ -1097,6 +1111,12 @@ impl Hwp5DutmalControl {
             return None;
         }
         let sub_len = u16::from_le_bytes([data[sub_len_off], data[sub_len_off + 1]]) as usize;
+        // task #86 hardening — cap on sub-text length too. The dutmal
+        // sub-text (위/아래 작은 글자) shares the same realistic ceiling
+        // as the main text.
+        if sub_len > MAX_DUTMAL_TEXT_UNITS {
+            return None;
+        }
         let sub_bytes = sub_len.checked_mul(2)?;
         let sub_off = sub_len_off + 2;
         let sub_end = sub_off.checked_add(sub_bytes)?;
@@ -1324,6 +1344,12 @@ impl Hwp5ComposeControl {
 /// trailer means we no longer know the record boundary). See
 /// `.docs/algorithms/2026-06-02_indexmark_carry.md` for the
 /// Codex-reviewed rationale.
+///
+/// Defence-in-depth allocation cap (task #86 hardening). Index keys
+/// are short search strings; 1024 units accommodates the longest
+/// realistic content while keeping a hostile record under 4 KB.
+const MAX_INDEXMARK_KEY_UNITS: usize = 1024;
+
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5IndexMarkControl {
     /// Owning control identifier, always `idxm` (`0x6964_786D`
@@ -1356,6 +1382,12 @@ impl Hwp5IndexMarkControl {
         if primary_units_len == 0 {
             return None;
         }
+        // task #86 hardening — cap allocation BEFORE Vec::with_capacity.
+        // Index-mark primary keys are short strings; 1024 units is two
+        // orders of magnitude over realistic content.
+        if primary_units_len > MAX_INDEXMARK_KEY_UNITS {
+            return None;
+        }
         let primary_first = u16::from_le_bytes([data[6], data[7]]);
 
         let mut primary_units: Vec<u16> = Vec::with_capacity(primary_units_len);
@@ -1377,6 +1409,11 @@ impl Hwp5IndexMarkControl {
         }
         let secondary_units_len =
             usize::from(u16::from_le_bytes([data[primary_end], data[primary_end + 1]]));
+        // task #86 hardening — cap allocation BEFORE secondary Vec
+        // allocation (same realistic ceiling as primary key).
+        if secondary_units_len > MAX_INDEXMARK_KEY_UNITS {
+            return None;
+        }
         let secondary_bytes = secondary_units_len.checked_mul(2)?;
         let secondary_end = secondary_len_end.checked_add(secondary_bytes)?;
         // Require the trailing 4 bytes to be present — a truncated
