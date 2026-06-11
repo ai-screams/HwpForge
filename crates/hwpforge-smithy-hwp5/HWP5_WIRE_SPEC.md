@@ -248,36 +248,39 @@ Source: `schema/section.rs::ctrl_id_from_inline_extra_bytes`.
 `ctrl_id` is a BE-ASCII 4-byte tag — a **type discriminator**, not an
 instance ID. The schema crate stores them as `u32` (BE-ASCII numeric value).
 
-| Constant                    | Hex           | ASCII  | Wave     |
-| --------------------------- | ------------- | ------ | -------- |
-| `CTRL_ID_TABLE`             | `0x7462_6C20` | `tbl`  | Phase 10 |
-| `CTRL_ID_HEADER`            | `0x6865_6164` | `head` | Wave 5   |
-| `CTRL_ID_FOOTER`            | `0x666F_6F74` | `foot` | Wave 5   |
-| `CTRL_ID_SECD`              | `0x7365_6364` | `secd` | Wave 5   |
-| `CTRL_ID_FOOTNOTE`          | `0x666E_2020` | `fn`   | Wave 4   |
-| `CTRL_ID_ENDNOTE`           | `0x656E_2020` | `en`   | Wave 4   |
-| `CTRL_ID_GSO`               | `0x6773_6F20` | `gso`  | Wave 12a |
-| `CTRL_ID_EQED`              | `0x6571_6564` | `eqed` | Wave 12d |
-| `CTRL_ID_MEMO`              | `0x2575_6E6B` | `%unk` | Wave 12e |
-| `CTRL_ID_DUTMAL`            | `0x7464_7574` | `tdut` | Wave 12i |
-| `CTRL_ID_COMPOSE`           | `0x7463_7073` | `tcps` | Wave 12j |
-| `CTRL_ID_INDEXMARK`         | `0x6964_786D` | `idxm` | Wave 12k |
-| `CTRL_ID_CLICK_HERE`        | `0x2563_6C6B` | `%clk` | Wave 12l |
-| `CTRL_ID_FIELD_SUMMERY`     | `0x2573_6D72` | `%smr` | Wave 12n |
-| `CTRL_ID_FIELD_DATE_CODE`   | `0x2564_7465` | `%dte` | Wave 12n |
-| `CTRL_ID_FIELD_PATH`        | `0x2570_6174` | `%pat` | Wave 12n |
-| `CTRL_ID_FIELD_CROSSREF`    | `0x2578_7266` | `%xrf` | Wave 12m |
-| `CTRL_ID_FIELD_INLINE_PAGE` | `0x6174_6E6F` | `atno` | Wave 12n |
-| `CTRL_ID_HYPERLINK`         | `0x2568_6C6B` | `%hlk` | early    |
-| `CTRL_ID_BOOKMARK_SPAN`     | `0x2562_6D6B` | `%bmk` | early    |
-| `CTRL_ID_BOOKMARK_POINT`    | `0x626F_6B6D` | `bokm` | early    |
-| `CTRL_ID_COLUMN_DEF`        | `0x636F_6C64` | `cold` | early    |
-| `CTRL_ID_PAGE_NUMBER`       | `0x7067_6E70` | `pgnp` | early    |
-| `CTRL_ID_MEMO_INLINE`       | `0x2525_6D65` | `%%me` | Wave 12e |
+| Constant                  | Hex           | ASCII  | Wave     |
+| ------------------------- | ------------- | ------ | -------- |
+| `CTRL_ID_TABLE`           | `0x7462_6C20` | `tbl`  | Phase 10 |
+| `CTRL_ID_HEADER`          | `0x6865_6164` | `head` | Wave 5   |
+| `CTRL_ID_FOOTER`          | `0x666F_6F74` | `foot` | Wave 5   |
+| `CTRL_ID_SECD`            | `0x7365_6364` | `secd` | Wave 5   |
+| `CTRL_ID_FOOTNOTE`        | `0x666E_2020` | `fn`   | Wave 4   |
+| `CTRL_ID_ENDNOTE`         | `0x656E_2020` | `en`   | Wave 4   |
+| `CTRL_ID_GSO`             | `0x6773_6F20` | `gso`  | Wave 12a |
+| `CTRL_ID_EQED`            | `0x6571_6564` | `eqed` | Wave 12d |
+| `CTRL_ID_MEMO`            | `0x2575_6E6B` | `%unk` | Wave 12e |
+| `CTRL_ID_DUTMAL`          | `0x7464_7574` | `tdut` | Wave 12i |
+| `CTRL_ID_COMPOSE`         | `0x7463_7073` | `tcps` | Wave 12j |
+| `CTRL_ID_INDEXMARK`       | `0x6964_786D` | `idxm` | Wave 12k |
+| `CTRL_ID_CLICK_HERE`      | `0x2563_6C6B` | `%clk` | Wave 12l |
+| `CTRL_ID_FIELD_SUMMERY`   | `0x2573_6D72` | `%smr` | Wave 12n |
+| `CTRL_ID_FIELD_DATE_CODE` | `0x2564_7465` | `%dte` | Wave 12n |
+| `CTRL_ID_FIELD_PATH`      | `0x2570_6174` | `%pat` | Wave 12n |
+| `CTRL_ID_FIELD_CROSSREF`  | `0x2578_7266` | `%xrf` | Wave 12m |
+| `CTRL_ID_ATNO`            | `0x6174_6E6F` | `atno` | Wave 12n |
+| `CTRL_ID_HYPERLINK`       | `0x2568_6C6B` | `%hlk` | early    |
+| `CTRL_ID_BOOKMARK_SPAN`   | `0x2562_6D6B` | `%bmk` | early    |
+| `CTRL_ID_BOOKMARK_POINT`  | `0x626F_6B6D` | `bokm` | early    |
+| `CTRL_ID_COLUMN_DEF`      | `0x636F_6C64` | `cold` | early    |
+| `CTRL_ID_PAGE_NUMBER`     | `0x7067_6E70` | `pgnp` | early    |
+| `CTRL_ID_MEMO_INLINE`     | `0x2525_6D65` | `%%me` | Wave 12e |
 
-**Note**: these constants are currently scattered across `decoder/section.rs`,
-`schema/section.rs`, `projection.rs`, and `semantic_adapter.rs`. Consolidation
-into a single `ctrl_ids` module is tracked as task #94.
+**Note**: these constants live in `crate::ctrl_ids` (single source of
+truth as of task #94). Names are canonicalised to wire-name-first
+(`SECD`, `ATNO`) or `FIELD_*` family for `%`-class auto fields; the
+Step B1 backward-compat aliases (`SECTION_DEF`, `CROSSREF`,
+`FIELD_INLINE_PAGE`, `INDEXMARK_INLINE`, `INLINE_AUTONUM`) were removed
+in Step B2.
 
 Naming conventions observed:
 

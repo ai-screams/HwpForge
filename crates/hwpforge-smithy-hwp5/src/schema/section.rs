@@ -107,7 +107,7 @@ impl Hwp5ParaHeader {
 // IndexMark inline-marker discriminator (Wave 12k)
 // ---------------------------------------------------------------------------
 
-use crate::ctrl_ids::{CTRL_ID_INDEXMARK_INLINE, CTRL_ID_INLINE_AUTONUM};
+use crate::ctrl_ids::{CTRL_ID_ATNO, CTRL_ID_INDEXMARK};
 
 /// Reads the LE-stored ctrl_id from the first four bytes of an
 /// inline-marker's `extra` block and returns it as the BE-ascii u32
@@ -330,7 +330,7 @@ impl Hwp5ParaText {
                 0x16 => {
                     flush_text!();
                     let extra = read_extra!(i - 1);
-                    if ctrl_id_from_inline_extra_bytes(&extra) == CTRL_ID_INDEXMARK_INLINE {
+                    if ctrl_id_from_inline_extra_bytes(&extra) == CTRL_ID_INDEXMARK {
                         segments.push(TextSegment::ControlRef { extra });
                     }
                     // Else: consumed silently, same as 0x0E..=0x15 below.
@@ -344,7 +344,7 @@ impl Hwp5ParaText {
                 0x12 => {
                     flush_text!();
                     let extra = read_extra!(i - 1);
-                    if ctrl_id_from_inline_extra_bytes(&extra) == CTRL_ID_INLINE_AUTONUM {
+                    if ctrl_id_from_inline_extra_bytes(&extra) == CTRL_ID_ATNO {
                         segments.push(TextSegment::ControlRef { extra });
                     }
                     // Else: consumed silently, same as 0x0E..=0x11 / 0x13..=0x15 below.

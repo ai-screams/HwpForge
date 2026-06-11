@@ -24,8 +24,8 @@ use hwpforge_foundation::{
 
 use crate::ctrl_ids::{
     CTRL_ID_BOOKMARK_POINT, CTRL_ID_BOOKMARK_SPAN, CTRL_ID_CLICK_HERE, CTRL_ID_COLUMN_DEF,
-    CTRL_ID_CROSSREF, CTRL_ID_FIELD_DATE_CODE, CTRL_ID_FIELD_PATH, CTRL_ID_FIELD_SUMMERY,
-    CTRL_ID_HYPERLINK, CTRL_ID_MEMO_INLINE, CTRL_ID_PAGE_NUMBER, CTRL_ID_SECTION_DEF,
+    CTRL_ID_FIELD_CROSSREF, CTRL_ID_FIELD_DATE_CODE, CTRL_ID_FIELD_PATH, CTRL_ID_FIELD_SUMMERY,
+    CTRL_ID_HYPERLINK, CTRL_ID_MEMO_INLINE, CTRL_ID_PAGE_NUMBER, CTRL_ID_SECD,
 };
 use crate::decoder::chart_ole::{extract_chart_payload, ChartOleError};
 use crate::decoder::section::{
@@ -670,11 +670,11 @@ fn project_paragraph_with_images_flat(
         !matches!(
             control,
             Hwp5Control::Unknown {
-                ctrl_id: CTRL_ID_SECTION_DEF
+                ctrl_id: CTRL_ID_SECD
                     | CTRL_ID_COLUMN_DEF
                     | CTRL_ID_BOOKMARK_SPAN
                     | CTRL_ID_HYPERLINK
-                    | CTRL_ID_CROSSREF
+                    | CTRL_ID_FIELD_CROSSREF
                     | CTRL_ID_BOOKMARK_POINT
                     | CTRL_ID_PAGE_NUMBER,
                 ..
@@ -868,7 +868,7 @@ fn project_paragraph_with_images_structural(
                 } else {
                     None
                 };
-                let crossref = if ctrl_id == CTRL_ID_CROSSREF {
+                let crossref = if ctrl_id == CTRL_ID_FIELD_CROSSREF {
                     queues.crossref_controls.pop_front()
                 } else {
                     None
@@ -1078,10 +1078,9 @@ fn build_paragraph_projection_queues<'a>(
         };
 
         match unknown.ctrl_id {
-            CTRL_ID_SECTION_DEF
-            | CTRL_ID_COLUMN_DEF
-            | CTRL_ID_BOOKMARK_SPAN
-            | CTRL_ID_HYPERLINK => marker_headers.push_back(unknown),
+            CTRL_ID_SECD | CTRL_ID_COLUMN_DEF | CTRL_ID_BOOKMARK_SPAN | CTRL_ID_HYPERLINK => {
+                marker_headers.push_back(unknown)
+            }
             // Page numbers are resolved at section level by
             // `find_section_page_number` (which also reaches `pgnp` controls
             // inside table cells). Skip here so it is not mistaken for a
@@ -1176,7 +1175,7 @@ fn start_active_field(
                 ActiveField::PlainTextFallback { start_utf16 }
             }
         }
-        CTRL_ID_CROSSREF => {
+        CTRL_ID_FIELD_CROSSREF => {
             // Wave 12m Phase 2 Step 4: %xrf now flows through the typed
             // `Hwp5Control::CrossRef` schema, not `Unknown`. The structured
             // Command (target / N1..N4) lives in `crossref`; legacy

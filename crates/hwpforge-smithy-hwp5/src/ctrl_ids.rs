@@ -16,12 +16,12 @@
 //! sometimes with the *same* value defined twice under different names
 //! (drift hazard). This module is the single source of truth.
 //!
-//! # Step B1 (#94 part 1)
+//! # Naming (#94 Step B2 canonicalised)
 //!
-//! Names are preserved verbatim from the pre-#94 layout, including
-//! aliases (e.g. `CTRL_ID_SECD` and `CTRL_ID_SECTION_DEF` both point to
-//! `0x7365_6364`). Step B2 will canonicalise the drifted names and
-//! delete the aliases — see HWP5_WIRE_SPEC.md §9 for naming rationale.
+//! Wire names (`SECD`, `FIELD_CROSSREF`, `ATNO`, …) are the canonical
+//! identifiers. Step B1 aliases (`SECTION_DEF`, `CROSSREF`,
+//! `FIELD_INLINE_PAGE`, `INDEXMARK_INLINE`, `INLINE_AUTONUM`) were
+//! removed in Step B2 — see HWP5_WIRE_SPEC.md §9 for naming rationale.
 //!
 //! All values are `pub(crate)` — HWP5 wire detail, not part of the
 //! external API surface.
@@ -45,12 +45,6 @@ pub(crate) const CTRL_ID_FOOTER: u32 = 0x666F_6F74;
 /// Holds page-level visibility / column-spacing / paper-spec metadata
 /// (HWP 5.0 spec §4.3.10.1 표 129·130).
 pub(crate) const CTRL_ID_SECD: u32 = 0x7365_6364;
-
-/// Alias for [`CTRL_ID_SECD`] used historically by `projection.rs`.
-///
-/// Same value, same wire meaning. Kept for Step B1 compatibility;
-/// will be unified to `CTRL_ID_SECD` in Step B2 (#94 part 2).
-pub(crate) const CTRL_ID_SECTION_DEF: u32 = CTRL_ID_SECD;
 
 /// ctrl_id for footnote control: ASCII `"fn  "` as big-endian u32.
 pub(crate) const CTRL_ID_FOOTNOTE: u32 = 0x666E_2020;
@@ -107,19 +101,12 @@ pub(crate) const CTRL_ID_COMPOSE: u32 = 0x7463_7073;
 /// (`6D 78 64 69`). Payload layout lives on
 /// `crate::schema::section::Hwp5IndexMarkControl`.
 ///
-/// The inline-marker discriminator path uses [`CTRL_ID_INDEXMARK_INLINE`]
-/// (same value, retained as a separate name for documentation clarity
-/// at call sites — schema/section.rs's `Hwp5ParaText::parse` 0x16 arm).
+/// Used by both:
+/// - `decoder/section.rs` for `CtrlHeader` (`0x47`) dispatch
+/// - `schema/section.rs` for inline `0x16` marker discrimination
+///   in `Hwp5ParaText::parse` (`ctrl_id_from_inline_extra_bytes` reverses
+///   the LE bytes to BE-ascii, matching this value)
 pub(crate) const CTRL_ID_INDEXMARK: u32 = 0x6964_786D;
-
-/// Alias for [`CTRL_ID_INDEXMARK`] used by the schema layer's inline
-/// `0x16` marker discriminator path. Same value, different call site
-/// — kept distinct in Step B1 so the schema crate can document the
-/// inline-marker semantic at the point of use.
-///
-/// Step B2 may unify these to a single name with the documentation
-/// moved to the consolidated entry.
-pub(crate) const CTRL_ID_INDEXMARK_INLINE: u32 = CTRL_ID_INDEXMARK;
 
 // ---------------------------------------------------------------------------
 // §3 `%`-class field controls (CtrlHeader + FieldBegin pair)
@@ -154,10 +141,6 @@ pub(crate) const CTRL_ID_FIELD_PATH: u32 = 0x2570_6174;
 /// `crate::schema::section::Hwp5CrossRefControl`. (Wave 12m Phase 2.)
 pub(crate) const CTRL_ID_FIELD_CROSSREF: u32 = 0x2578_7266;
 
-/// Alias for [`CTRL_ID_FIELD_CROSSREF`] used historically by
-/// `projection.rs`. Same value; kept for Step B1 compatibility.
-pub(crate) const CTRL_ID_CROSSREF: u32 = CTRL_ID_FIELD_CROSSREF;
-
 /// ctrl_id for the `%bmk` bookmark span field: ASCII `"%bmk"` as
 /// big-endian u32. Inline `FieldBegin` / `FieldEnd` mark span endpoints.
 pub(crate) const CTRL_ID_BOOKMARK_SPAN: u32 = 0x2562_6D6B;
@@ -180,15 +163,12 @@ pub(crate) const CTRL_ID_BOOKMARK_POINT: u32 = 0x626F_6B6D;
 /// big-endian u32. Wave 12n. Payload layout lives on
 /// `crate::schema::section::Hwp5InlinePageNumberControl`.
 ///
-/// Despite the `FIELD_` prefix, `atno` reaches the projection layer
-/// through a `0x12` inline marker (`TextSegment::ControlRef`), not a
-/// `0x03` `FieldBegin` path. The `FIELD_` prefix is a Wave 12n
-/// historical artifact; Step B2 may rename to `CTRL_ID_ATNO`.
-pub(crate) const CTRL_ID_FIELD_INLINE_PAGE: u32 = 0x6174_6E6F;
-
-/// Alias for [`CTRL_ID_FIELD_INLINE_PAGE`] used by the schema layer.
-/// Same value; kept for Step B1 compatibility.
-pub(crate) const CTRL_ID_INLINE_AUTONUM: u32 = CTRL_ID_FIELD_INLINE_PAGE;
+/// `atno` reaches the projection layer through a `0x12` inline marker
+/// (`TextSegment::ControlRef`), not a `0x03` `FieldBegin` path — so
+/// despite the Wave 12n family naming, this is **not** in the `%`-class
+/// `FIELD_*` family. The constant lives in §4 (inline-marker controls)
+/// for that reason.
+pub(crate) const CTRL_ID_ATNO: u32 = 0x6174_6E6F;
 
 // ---------------------------------------------------------------------------
 // §5 Projection-only inline markers

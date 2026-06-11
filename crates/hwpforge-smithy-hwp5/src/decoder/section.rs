@@ -542,8 +542,8 @@ impl Hwp5PageBorderFill {
 // ---------------------------------------------------------------------------
 
 use crate::ctrl_ids::{
-    CTRL_ID_CLICK_HERE, CTRL_ID_COMPOSE, CTRL_ID_DUTMAL, CTRL_ID_ENDNOTE, CTRL_ID_EQED,
-    CTRL_ID_FIELD_CROSSREF, CTRL_ID_FIELD_DATE_CODE, CTRL_ID_FIELD_INLINE_PAGE, CTRL_ID_FIELD_PATH,
+    CTRL_ID_ATNO, CTRL_ID_CLICK_HERE, CTRL_ID_COMPOSE, CTRL_ID_DUTMAL, CTRL_ID_ENDNOTE,
+    CTRL_ID_EQED, CTRL_ID_FIELD_CROSSREF, CTRL_ID_FIELD_DATE_CODE, CTRL_ID_FIELD_PATH,
     CTRL_ID_FIELD_SUMMERY, CTRL_ID_FOOTER, CTRL_ID_FOOTNOTE, CTRL_ID_GSO, CTRL_ID_HEADER,
     CTRL_ID_INDEXMARK, CTRL_ID_MEMO, CTRL_ID_SECD, CTRL_ID_TABLE,
 };
@@ -1913,7 +1913,7 @@ impl BodyTextParserState {
                                 .to_string(),
                         });
                     }
-                } else if ctrl_id == CTRL_ID_FIELD_INLINE_PAGE {
+                } else if ctrl_id == CTRL_ID_ATNO {
                     // `atno` ctrl carries a single 4-byte kind flag
                     // (`0x00`/`0x06`). No Command/trailer. Wave 12n.
                     if let Some(atno) = crate::schema::section::Hwp5InlinePageNumberControl::parse(
