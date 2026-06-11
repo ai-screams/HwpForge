@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Docs (task #72) — HWP5 wire spec (HwpForge-internal)
+
+Added `crates/hwpforge-smithy-hwp5/HWP5_WIRE_SPEC.md` — code-grounded
+HWP5 binary format documentation capturing Wave 12 series discoveries
+that the public KS X 6101 / Hancom spec omits:
+
+- ParaHeader `[18..22]` `instance_id` field (Wave 12p Step 1)
+- Family-aware CtrlHeader `instance_id` offsets (fn/en at 16,
+  gso/tbl/eqed at 36, Wave 12p Step 5)
+- ParaShape `property1` bits 25-27 are **zero-based ordinal** cap=6
+  (Wave 12p #121)
+- Style "개요 N" / "Outline N" outline-level override for levels 7~9
+  (Wave 12q #122)
+- Default `linesegarray` synthesis values for paragraphs lacking
+  `ParaLineSeg` (Wave 12p #123)
+- `editable` attribute per `FieldType` (Wave 12p #124)
+- BSTR length-prefix allocation caps (`MAX_*_UNITS` family, Wave 12 +
+  task #86)
+- CTRL_ID magic constant inventory across 24 entries (3 source files,
+  prelude to task #94 consolidation)
+- SummaryInformation OLE2 PropertySet layout incl. Hancom custom PIDs
+  `0x14`/`0x15` (Wave 12o)
+- Cross-reference Command 8-parameter Hancom-canonical wire (Wave 12m,
+  ADR-004)
+
+Each topic links back to the canonical source file/symbol so future
+contributors can grep this file before re-running probes.
+
+Linked from `crates/hwpforge-smithy-hwp5/AGENTS.md` for discoverability.
+
 ### Wave 12q (task #122) — outline level 7~9 recovery via Style "개요 N" linkage
 
 HWP5 `ParaShape.property1` bit 25-27 은 3 bits 만 표현 가능 (cap=6).
