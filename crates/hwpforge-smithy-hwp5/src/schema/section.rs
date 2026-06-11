@@ -1000,6 +1000,95 @@ pub(crate) struct Hwp5MemoCommand {
     pub terminator: String,
 }
 
+// ---------------------------------------------------------------------------
+// UTF-16 BSTR helpers (Wave 12i/12k shared — task #95)
+// ---------------------------------------------------------------------------
+
+/// Decodes a "split-leader" UTF-16 string: the first code unit lives in
+/// the high half of the CtrlHeader's `properties` word (caller passes
+/// it as `packed_first`), and `total_units - 1` further code units sit
+/// at `data[start..]` as plain LE u16s.
+///
+/// Returns `(text, end_offset)`, where `end_offset` points just past
+/// the tail bytes — callers chain that into the next field's offset.
+///
+/// `None` on:
+/// - `total_units == 0` (caller-validated invariant; both Wave 12i/12k
+///   parsers reject zero up-front)
+/// - `total_units > max_units` (defence-in-depth allocation cap)
+/// - tail truncation
+/// - UTF-16 validation failure
+///
+/// Wire users (Wave 12i/12k):
+/// - `Hwp5DutmalControl::parse` — `main_text`
+/// - `Hwp5IndexMarkControl::parse` — `primary`
+///
+/// **Not used by Compose (Wave 12j)** — `Hwp5ComposeControl` has no
+/// length prefix (text region size is inferred from `body_len -
+/// FIXED_TRAILER`), so its packed-first-char path stays inline.
+fn parse_split_leader_utf16(
+    data: &[u8],
+    start: usize,
+    total_units: usize,
+    packed_first: u16,
+    max_units: usize,
+) -> Option<(String, usize)> {
+    if total_units == 0 || total_units > max_units {
+        return None;
+    }
+    let tail_bytes = total_units.checked_sub(1)?.checked_mul(2)?;
+    let tail_end = start.checked_add(tail_bytes)?;
+    if data.len() < tail_end {
+        return None;
+    }
+    let mut units: Vec<u16> = Vec::with_capacity(total_units);
+    units.push(packed_first);
+    for chunk in data[start..tail_end].chunks_exact(2) {
+        units.push(u16::from_le_bytes([chunk[0], chunk[1]]));
+    }
+    let text = String::from_utf16(&units).ok()?;
+    Some((text, tail_end))
+}
+
+/// Decodes a "plain" length-prefixed UTF-16 BSTR:
+/// `data[off..off+2]` carries the unit count `N` (LE u16), followed by
+/// `2 * N` payload bytes.
+///
+/// Returns `(text, end_offset)`. An empty string is returned when
+/// `N == 0` (no payload) — callers can wrap in `Option` if their wire
+/// uses zero as a "no value" sentinel (e.g. IndexMark secondary).
+///
+/// `None` on length-prefix truncation, allocation cap overrun, payload
+/// truncation, or UTF-16 validation failure.
+///
+/// Wire users (Wave 12i/12k):
+/// - `Hwp5DutmalControl::parse` — `sub_text` (empty when wire `sub_len == 0`)
+/// - `Hwp5IndexMarkControl::parse` — `secondary` (wrapper maps empty
+///   to `None` per Hancom's "no secondary" semantic)
+fn parse_length_prefixed_utf16(
+    data: &[u8],
+    off: usize,
+    max_units: usize,
+) -> Option<(String, usize)> {
+    let len_end = off.checked_add(2)?;
+    if data.len() < len_end {
+        return None;
+    }
+    let units_len = u16::from_le_bytes([data[off], data[off + 1]]) as usize;
+    if units_len > max_units {
+        return None;
+    }
+    let body_bytes = units_len.checked_mul(2)?;
+    let body_end = len_end.checked_add(body_bytes)?;
+    if data.len() < body_end {
+        return None;
+    }
+    let units: Vec<u16> =
+        data[len_end..body_end].chunks_exact(2).map(|c| u16::from_le_bytes([c[0], c[1]])).collect();
+    let text = String::from_utf16(&units).ok()?;
+    Some((text, body_end))
+}
+
 /// Dutmal (덧말) control parsed from a `tdut` CtrlHeader (`0x74647574`
 /// BE-ascii).
 ///
@@ -1061,53 +1150,20 @@ impl Hwp5DutmalControl {
         if data.len() < 8 {
             return None;
         }
+        // `main_text` is a split-leader BSTR: `properties.low` (data[4..6])
+        // carries the unit count; `properties.high` (data[6..8]) carries
+        // text[0]; data[8..] carries text[1..]. Defence-in-depth cap
+        // (task #86) is `MAX_DUTMAL_TEXT_UNITS`. Helper sits at the top
+        // of this file (task #95 — shared with IndexMark `primary`).
         let main_len = u16::from_le_bytes([data[4], data[5]]) as usize;
-        if main_len == 0 {
-            return None;
-        }
-        // task #86 hardening — cap allocation BEFORE Vec::with_capacity
-        // (DoS prevention). Observed dutmal main text is typically ≤ 32
-        // Korean code units; 1024 covers an order of magnitude headroom
-        // while keeping a hostile record well below 64 KB.
-        if main_len > MAX_DUTMAL_TEXT_UNITS {
-            return None;
-        }
         let main_first = u16::from_le_bytes([data[6], data[7]]);
+        let (main_text, main_tail_end) =
+            parse_split_leader_utf16(data, 8, main_len, main_first, MAX_DUTMAL_TEXT_UNITS)?;
 
-        let mut main_units: Vec<u16> = Vec::with_capacity(main_len);
-        main_units.push(main_first);
-        let main_tail_bytes = (main_len - 1).checked_mul(2)?;
-        let main_tail_end = 8usize.checked_add(main_tail_bytes)?;
-        if data.len() < main_tail_end {
-            return None;
-        }
-        for chunk in data[8..main_tail_end].chunks_exact(2) {
-            main_units.push(u16::from_le_bytes([chunk[0], chunk[1]]));
-        }
-        let main_text = String::from_utf16(&main_units).ok()?;
-
-        let sub_len_off = main_tail_end;
-        if data.len() < sub_len_off + 2 {
-            return None;
-        }
-        let sub_len = u16::from_le_bytes([data[sub_len_off], data[sub_len_off + 1]]) as usize;
-        // task #86 hardening — cap on sub-text length too. The dutmal
-        // sub-text (위/아래 작은 글자) shares the same realistic ceiling
-        // as the main text.
-        if sub_len > MAX_DUTMAL_TEXT_UNITS {
-            return None;
-        }
-        let sub_bytes = sub_len.checked_mul(2)?;
-        let sub_off = sub_len_off + 2;
-        let sub_end = sub_off.checked_add(sub_bytes)?;
-        if data.len() < sub_end {
-            return None;
-        }
-        let sub_units: Vec<u16> = data[sub_off..sub_end]
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
-            .collect();
-        let sub_text = String::from_utf16(&sub_units).ok()?;
+        // `sub_text` is a plain length-prefixed BSTR (task #86 cap shared
+        // with main). Empty wire (`sub_len == 0`) yields `String::new()`.
+        let (sub_text, sub_end) =
+            parse_length_prefixed_utf16(data, main_tail_end, MAX_DUTMAL_TEXT_UNITS)?;
 
         let pos_type_raw = if data.len() >= sub_end + 4 {
             u32::from_le_bytes([
@@ -1355,63 +1411,34 @@ impl Hwp5IndexMarkControl {
         if data.len() < 8 {
             return None;
         }
-        // `properties.low` is the primary's UTF-16 code-unit count
-        // (not Unicode scalar count); naming reflects what the wire
-        // is actually carrying.
+        // `primary` is a split-leader BSTR — same wire shape as Dutmal
+        // `main_text`. `properties.low` (data[4..6]) is the UTF-16
+        // code-unit count (not Unicode scalar count); the high half
+        // (data[6..8]) carries `primary[0]`. Helper shared via task #95.
         let primary_units_len = usize::from(u16::from_le_bytes([data[4], data[5]]));
-        if primary_units_len == 0 {
-            return None;
-        }
-        // task #86 hardening — cap allocation BEFORE Vec::with_capacity.
-        // Index-mark primary keys are short strings; 1024 units is two
-        // orders of magnitude over realistic content.
-        if primary_units_len > MAX_INDEXMARK_KEY_UNITS {
-            return None;
-        }
         let primary_first = u16::from_le_bytes([data[6], data[7]]);
+        let (primary, primary_end) = parse_split_leader_utf16(
+            data,
+            8,
+            primary_units_len,
+            primary_first,
+            MAX_INDEXMARK_KEY_UNITS,
+        )?;
 
-        let mut primary_units: Vec<u16> = Vec::with_capacity(primary_units_len);
-        primary_units.push(primary_first);
-        let primary_tail_bytes = (primary_units_len - 1).checked_mul(2)?;
-        let primary_end = 8usize.checked_add(primary_tail_bytes)?;
-        if data.len() < primary_end {
-            return None;
-        }
-        for chunk in data[8..primary_end].chunks_exact(2) {
-            primary_units.push(u16::from_le_bytes([chunk[0], chunk[1]]));
-        }
-        let primary = String::from_utf16(&primary_units).ok()?;
-
-        // Secondary length lives at `primary_end..primary_end+2`.
-        let secondary_len_end = primary_end.checked_add(2)?;
-        if data.len() < secondary_len_end {
-            return None;
-        }
-        let secondary_units_len =
-            usize::from(u16::from_le_bytes([data[primary_end], data[primary_end + 1]]));
-        // task #86 hardening — cap allocation BEFORE secondary Vec
-        // allocation (same realistic ceiling as primary key).
-        if secondary_units_len > MAX_INDEXMARK_KEY_UNITS {
-            return None;
-        }
-        let secondary_bytes = secondary_units_len.checked_mul(2)?;
-        let secondary_end = secondary_len_end.checked_add(secondary_bytes)?;
+        // `secondary` is a plain length-prefixed BSTR. Hancom normalises
+        // a source `Some("")` to wire `len == 0`, so we map an empty
+        // returned string back to `None` (the only "no secondary"
+        // signal on the wire). Allocation cap shared with `primary`.
+        let (secondary_text, secondary_end) =
+            parse_length_prefixed_utf16(data, primary_end, MAX_INDEXMARK_KEY_UNITS)?;
         // Require the trailing 4 bytes to be present — a truncated
         // record means the boundary is no longer trustworthy.
-        let trailer_end = secondary_end.checked_add(4)?;
-        if data.len() < trailer_end {
+        let _trailer_end = secondary_end.checked_add(4)?;
+        if data.len() < secondary_end + 4 {
             return None;
         }
 
-        let secondary = if secondary_units_len == 0 {
-            None
-        } else {
-            let mut units: Vec<u16> = Vec::with_capacity(secondary_units_len);
-            for chunk in data[secondary_len_end..secondary_end].chunks_exact(2) {
-                units.push(u16::from_le_bytes([chunk[0], chunk[1]]));
-            }
-            Some(String::from_utf16(&units).ok()?)
-        };
+        let secondary = if secondary_text.is_empty() { None } else { Some(secondary_text) };
 
         // Trailer u32 observed = 0x0000_0000 (round-trip) or
         // 0xFFFF_FFFF (native). HWPX has no field that carries it,
