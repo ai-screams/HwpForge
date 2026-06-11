@@ -1676,6 +1676,49 @@ fn hwp5_to_hwpx_user_sample_indexmark_multi_preserves_order_and_secondary_keys()
 }
 
 #[test]
+fn hwp5_to_hwpx_user_sample_indexmark_surrogate_reassembles_split_pairs() {
+    // Task #75: the `idxm` split-leader BSTR packs `primary[0]` (one
+    // UTF-16 code unit) into `properties.high`. The surrogate fixture
+    // proved 한컴 really does split an emoji-leading primary across
+    // that boundary — `probe_indexmark_surrogate` showed U+D83D (high
+    // surrogate) alone in the header with U+DE00 leading the body.
+    // `parse_split_leader_utf16` collects every unit before UTF-16
+    // validation, so the pair reassembles; this gate pins that.
+    let source = fixture_path("user_samples/sample-indexmark-surrogate.hwp");
+    if !source.exists() {
+        return;
+    }
+    let out = unique_temp_path("user-sample-indexmark-surrogate.hwpx");
+    let warnings =
+        hwp5_to_hwpx(&source, &out).expect("surrogate indexmark conversion should succeed");
+    assert!(
+        !warnings.iter().any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
+        "no surrogate variant must drop: {warnings:?}"
+    );
+    assert_valid_hwpx(&out);
+
+    let section_xml = read_section_xml(&out, 0);
+    // Document order: bmp-baseline / emoji-first / emoji-only /
+    // emoji-mid / emoji-secondary.
+    for needle in [
+        "<hp:firstKey>컴퓨터</hp:firstKey><hp:secondKey>하드웨어</hp:secondKey>",
+        "<hp:firstKey>😀테스트</hp:firstKey>",
+        "<hp:firstKey>😀</hp:firstKey>",
+        "<hp:firstKey>테스😀트</hp:firstKey>",
+        "<hp:firstKey>키워드</hp:firstKey><hp:secondKey>😀값</hp:secondKey>",
+    ] {
+        assert!(section_xml.contains(needle), "expected {needle} to carry: {section_xml}");
+    }
+
+    let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+    let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+    let layout = collect_decoded_shape_layout(&decoded);
+    assert_eq!(layout.index_marks, 5, "all 5 surrogate variants must reach Core");
+
+    let _ = std::fs::remove_file(&out);
+}
+
+#[test]
 fn hwp5_to_hwpx_user_sample_equation_native_carries_complex_scripts() {
     // Wave 12d: a richer, natively-authored 한컴 document with TWO equations
     // (Fourier series + binomial expansion). Stresses sum/subscript/

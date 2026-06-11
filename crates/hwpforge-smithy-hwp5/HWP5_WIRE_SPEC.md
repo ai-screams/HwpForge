@@ -398,6 +398,23 @@ exactly **two** layouts discriminated by `properties.low`:
 No third layout exists, so an unknown discriminator is genuinely
 malformed. Source: `schema/section.rs::Hwp5ComposeControl`.
 
+### IndexMark (`idxm`) surrogate split + trailer (task #75)
+
+The split-leader packing **does split surrogate pairs**: an
+emoji-leading primary stores the high surrogate alone in
+`properties.high` and the low surrogate as the first body unit
+(`sample-indexmark-surrogate.hwp`, `probe_indexmark_surrogate`:
+`emoji-first` → header `U+D83D`, body starts `00 DE`).
+`parse_split_leader_utf16` collects all units before UTF-16
+validation, so the pair reassembles correctly — verified end-to-end
+(all five variants round-trip with emoji intact, zero warnings).
+
+The trailing 4 bytes remain constant sentinels on every observation
+(`0x00000000` on HWPX→HWP5 round-trip saves, `0xFFFFFFFF` on
+hand-authored native) — no varied information, no HWPX carrier
+element, and no HWP5 re-encoder to feed; raw carry stays deferred
+until a re-encoder exists (YAGNI, now backed by observation).
+
 ### Allocation caps (defensive, Wave 12 + #86)
 
 Length prefixes are `u16` (0..65535). Without a cap, a malicious file
@@ -599,28 +616,29 @@ Source: `layout_hint_patch.rs::write_linesegarray`.
 
 ## 21. Wave 12 Series Provenance
 
-| Wave    | Discovery                                                                                                   |
-| ------- | ----------------------------------------------------------------------------------------------------------- |
-| 12a     | GSO Ellipse/Arc/Curve sub-records (0x50/0x53)                                                               |
-| 12b     | ConnectLine `$col` discriminator on `ShapeComponentLine`                                                    |
-| 12d     | `eqed` + `EQEDIT` (0x58) script pairing                                                                     |
-| 12e     | Memo `%unk` + `HWPTAG_MEMO_LIST` (0x5D) cluster joining                                                     |
-| 12f     | Memo inline marker `%%me` (0x2525_6D65) vs CtrlHeader `%unk`                                                |
-| 12h     | Memo 7-parameter `<hp:parameters>` carry                                                                    |
-| 12i     | Dutmal `tdut` split-leader BSTR + `option_raw`                                                              |
-| #73     | Dutmal tail words pinned — `sz_ratio` tail[4..8], `align` tail[16..20] (CENTER=3)                           |
-| #74     | Compose full-matrix probe — glyph = f(circleType) 1:1, packed layout only on CHAR+OVERLAP, no third variant |
-| 12j     | Compose `tcps` packed variant + `char_pr_ids` fidelity                                                      |
-| 12k     | IndexMark `idxm` `0x16` inline marker + sub-record `0x57` pairing                                           |
-| 12l     | ClickHere `%clk` BSTR + `0x57 lvl=2` (`CtrlData`) sub-record pairing                                        |
-| 12m     | CrossRef `%xrf` 8-parameter Hancom-canonical wire + ADR-004                                                 |
-| 12n     | Auto fields `%smr`/`%dte`/`%pat`/`atno` discriminated by ctrl_id                                            |
-| 12o     | SummaryInformation OLE2 PropertySet (BOM, VT types, Hancom PIDs)                                            |
-| 12p     | ParaHeader `[18..22]` instance_id + family-aware CtrlHeader offsets                                         |
-| 12p#121 | ParaShape bits 25-27 are zero-based ordinal                                                                 |
-| 12p#123 | Default `linesegarray` synthesis for paragraphs lacking 0x45                                                |
-| 12p#124 | SUMMERY `editable` per-FieldType                                                                            |
-| 12q     | Style "개요 N" override for outline levels 7~9                                                              |
+| Wave    | Discovery                                                                                                         |
+| ------- | ----------------------------------------------------------------------------------------------------------------- |
+| 12a     | GSO Ellipse/Arc/Curve sub-records (0x50/0x53)                                                                     |
+| 12b     | ConnectLine `$col` discriminator on `ShapeComponentLine`                                                          |
+| 12d     | `eqed` + `EQEDIT` (0x58) script pairing                                                                           |
+| 12e     | Memo `%unk` + `HWPTAG_MEMO_LIST` (0x5D) cluster joining                                                           |
+| 12f     | Memo inline marker `%%me` (0x2525_6D65) vs CtrlHeader `%unk`                                                      |
+| 12h     | Memo 7-parameter `<hp:parameters>` carry                                                                          |
+| 12i     | Dutmal `tdut` split-leader BSTR + `option_raw`                                                                    |
+| #73     | Dutmal tail words pinned — `sz_ratio` tail[4..8], `align` tail[16..20] (CENTER=3)                                 |
+| #74     | Compose full-matrix probe — glyph = f(circleType) 1:1, packed layout only on CHAR+OVERLAP, no third variant       |
+| #75     | IndexMark split-leader splits surrogate pairs (high in header, low leads body); trailer stays a constant sentinel |
+| 12j     | Compose `tcps` packed variant + `char_pr_ids` fidelity                                                            |
+| 12k     | IndexMark `idxm` `0x16` inline marker + sub-record `0x57` pairing                                                 |
+| 12l     | ClickHere `%clk` BSTR + `0x57 lvl=2` (`CtrlData`) sub-record pairing                                              |
+| 12m     | CrossRef `%xrf` 8-parameter Hancom-canonical wire + ADR-004                                                       |
+| 12n     | Auto fields `%smr`/`%dte`/`%pat`/`atno` discriminated by ctrl_id                                                  |
+| 12o     | SummaryInformation OLE2 PropertySet (BOM, VT types, Hancom PIDs)                                                  |
+| 12p     | ParaHeader `[18..22]` instance_id + family-aware CtrlHeader offsets                                               |
+| 12p#121 | ParaShape bits 25-27 are zero-based ordinal                                                                       |
+| 12p#123 | Default `linesegarray` synthesis for paragraphs lacking 0x45                                                      |
+| 12p#124 | SUMMERY `editable` per-FieldType                                                                                  |
+| 12q     | Style "개요 N" override for outline levels 7~9                                                                    |
 
 ---
 
