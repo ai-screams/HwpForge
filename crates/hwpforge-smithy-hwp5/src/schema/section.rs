@@ -1564,38 +1564,64 @@ impl Hwp5ClickHereControl {
     }
 
     /// Decodes a `0x57 lvl=2` sub-record's `data` into the field
-    /// `name`. Returns `None` on truncation or impossible length;
-    /// callers should treat `None` as "name not recoverable, keep the
-    /// rest of the press-field" (codex review medium: don't drop the
-    /// entire clickhere just because the name sub-record is bad).
-    pub(crate) fn parse_name_subrecord(data: &[u8]) -> Option<Option<String>> {
+    /// `name`. Returns [`ClickHereNameSubrecord::Malformed`] on
+    /// truncation or impossible length; callers should treat that as
+    /// "name not recoverable, keep the rest of the press-field"
+    /// (codex review medium: don't drop the entire clickhere just
+    /// because the name sub-record is bad).
+    pub(crate) fn parse_name_subrecord(data: &[u8]) -> ClickHereNameSubrecord {
         // 12-byte constant header observed: 1B 02 01 00 00 00 00 40 01 00 LL LL
         // We tolerate constant-prefix mismatch (codex: "부분 strict"):
         // the only field we strictly need is the u16 LE name length at
         // [10..12]. Lengths above that bound the body.
         if data.len() < 12 {
-            return None;
+            return ClickHereNameSubrecord::Malformed;
         }
         let name_units = usize::from(u16::from_le_bytes([data[10], data[11]]));
         if name_units > MAX_CLICKHERE_NAME_UNITS {
-            return None;
+            return ClickHereNameSubrecord::Malformed;
         }
-        let body_bytes = name_units.checked_mul(2)?;
-        let body_end = 12usize.checked_add(body_bytes)?;
+        let Some(body_bytes) = name_units.checked_mul(2) else {
+            return ClickHereNameSubrecord::Malformed;
+        };
+        let Some(body_end) = 12usize.checked_add(body_bytes) else {
+            return ClickHereNameSubrecord::Malformed;
+        };
         if data.len() < body_end {
-            return None;
+            return ClickHereNameSubrecord::Malformed;
         }
         if name_units == 0 {
-            // Some("") and None are indistinguishable on the wire.
-            return Some(None);
+            // Some("") and None are indistinguishable on the wire —
+            // length 0 normalizes to Unnamed (never `Named("")`).
+            return ClickHereNameSubrecord::Unnamed;
         }
         let mut units: Vec<u16> = Vec::with_capacity(name_units);
         for chunk in data[12..body_end].chunks_exact(2) {
             units.push(u16::from_le_bytes([chunk[0], chunk[1]]));
         }
-        let name = String::from_utf16(&units).ok()?;
-        Some(Some(name))
+        match String::from_utf16(&units) {
+            Ok(name) => ClickHereNameSubrecord::Named(name),
+            Err(_) => ClickHereNameSubrecord::Malformed,
+        }
     }
+}
+
+/// Outcome of parsing the `%clk` trailing `0x57 lvl=2` name sub-record
+/// (task #88 — replaces the earlier `Option<Option<String>>` shape so
+/// the three-way semantics carry their own names).
+///
+/// `Some("")` and `None` are wire-indistinguishable (length 0), so there
+/// is no `Named("")` — an empty name normalizes to [`Self::Unnamed`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ClickHereNameSubrecord {
+    /// Structurally valid, carries a non-empty form-mode name.
+    Named(String),
+    /// Structurally valid, wire length 0 — 한컴 saved a nameless field.
+    Unnamed,
+    /// Truncated / impossible length / invalid UTF-16 — the caller
+    /// warns and keeps the press-field with `name = None`
+    /// (grace-degrade rather than drop, per the Wave 12l codex review).
+    Malformed,
 }
 
 /// Parses the `Clickhere:set:N:Direction:wstring:H:<hint> HelpState:wstring:E:<help>  `
@@ -3299,36 +3325,43 @@ mod tests {
     #[test]
     fn clickhere_name_subrecord_carries_ascii_name() {
         let data = make_clk_name("user_email");
-        let name = Hwp5ClickHereControl::parse_name_subrecord(&data).expect("decode");
-        assert_eq!(name.as_deref(), Some("user_email"));
+        assert_eq!(
+            Hwp5ClickHereControl::parse_name_subrecord(&data),
+            ClickHereNameSubrecord::Named("user_email".to_string()),
+        );
     }
 
     #[test]
     fn clickhere_name_subrecord_carries_korean_name() {
         let data = make_clk_name("입력필드");
-        let name = Hwp5ClickHereControl::parse_name_subrecord(&data).expect("decode");
-        assert_eq!(name.as_deref(), Some("입력필드"));
+        assert_eq!(
+            Hwp5ClickHereControl::parse_name_subrecord(&data),
+            ClickHereNameSubrecord::Named("입력필드".to_string()),
+        );
     }
 
     #[test]
-    fn clickhere_name_subrecord_empty_returns_some_none() {
-        // Some("") and None are wire-indistinguishable; per Wave 12l
-        // contract, length=0 normalizes to None (Some(None) at the
-        // parser layer to differentiate "parsed cleanly, no name" from
-        // "parse failure").
+    fn clickhere_name_subrecord_empty_returns_unnamed() {
+        // Some("") and None are wire-indistinguishable; length=0
+        // normalizes to Unnamed (never `Named("")`).
         let data = make_clk_name("");
-        let name = Hwp5ClickHereControl::parse_name_subrecord(&data).expect("decode");
-        assert_eq!(name, None);
+        assert_eq!(
+            Hwp5ClickHereControl::parse_name_subrecord(&data),
+            ClickHereNameSubrecord::Unnamed,
+        );
     }
 
     #[test]
-    fn clickhere_name_subrecord_truncated_returns_none() {
+    fn clickhere_name_subrecord_truncated_returns_malformed() {
         // 12-byte header but LL claims 5 chars (10 bytes), data only
         // has the header — must fail.
         let mut data = vec![0x1B, 0x02, 0x01, 0x00, 0x00, 0x00, 0x00, 0x40, 0x01, 0x00];
         data.extend_from_slice(&5u16.to_le_bytes());
         // intentionally no body bytes
-        assert!(Hwp5ClickHereControl::parse_name_subrecord(&data).is_none());
+        assert_eq!(
+            Hwp5ClickHereControl::parse_name_subrecord(&data),
+            ClickHereNameSubrecord::Malformed,
+        );
     }
 
     // ── Wave 12n — auto-field parsers ────────────────────────────────

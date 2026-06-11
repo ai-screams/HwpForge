@@ -1636,11 +1636,15 @@ impl BodyTextParserState {
                     .pending_clickhere
                     .take()
                     .expect("pending_clickhere checked Some at the start of this matched arm");
+                use crate::schema::section::ClickHereNameSubrecord;
                 match crate::schema::section::Hwp5ClickHereControl::parse_name_subrecord(
                     &record.data,
                 ) {
-                    Some(name) => clickhere.name = name,
-                    None => {
+                    ClickHereNameSubrecord::Named(name) => clickhere.name = Some(name),
+                    // Construction starts with `name = None`, so a
+                    // nameless-but-valid sub-record needs no write.
+                    ClickHereNameSubrecord::Unnamed => {}
+                    ClickHereNameSubrecord::Malformed => {
                         self.warnings.push(Hwp5Warning::ProjectionFallback {
                             subject: "field.clickhere",
                             reason: "malformed %clk name sub-record (0x57); \
