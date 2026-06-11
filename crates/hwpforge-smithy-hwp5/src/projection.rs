@@ -695,7 +695,12 @@ fn project_paragraph_with_images_flat(
             ));
 
             if let Some(control) = control_iter.next() {
-                if let Some(run) = project_control_run(control, projection_images, image_context) {
+                if let Some(run) = project_control_run(
+                    control,
+                    projection_images,
+                    image_context,
+                    char_shape_at(hwp_para, current_utf16),
+                ) {
                     runs.push(run);
                 }
             }
@@ -716,7 +721,12 @@ fn project_paragraph_with_images_flat(
     ));
 
     for control in control_iter {
-        if let Some(run) = project_control_run(control, projection_images, image_context) {
+        if let Some(run) = project_control_run(
+            control,
+            projection_images,
+            image_context,
+            char_shape_at(hwp_para, current_utf16),
+        ) {
             runs.push(run);
         }
     }
@@ -806,9 +816,12 @@ fn project_paragraph_with_images_structural(
             | crate::schema::section::TextSegment::ExtendedControlRef { .. } => {
                 if active_field.is_none() {
                     if let Some(control) = queues.object_controls.pop_front() {
-                        if let Some(run) =
-                            project_control_run(control, projection_images, image_context)
-                        {
+                        if let Some(run) = project_control_run(
+                            control,
+                            projection_images,
+                            image_context,
+                            char_shape_at(hwp_para, visible_utf16),
+                        ) {
                             runs.push(run);
                         }
                     }
@@ -983,7 +996,12 @@ fn drain_unconsumed_paragraph_queues(
     }
 
     for control in queues.object_controls {
-        if let Some(run) = project_control_run(control, projection_images, image_context) {
+        if let Some(run) = project_control_run(
+            control,
+            projection_images,
+            image_context,
+            char_shape_at(hwp_para, visible_utf16),
+        ) {
             runs.push(run);
         }
     }
@@ -1001,7 +1019,7 @@ fn drain_unconsumed_paragraph_queues(
             runs.push(project_memo_run(
                 &memo,
                 projection_images,
-                CharShapeIndex::new(0),
+                char_shape_at(hwp_para, visible_utf16),
                 Vec::new(),
             ));
         }
@@ -1912,12 +1930,20 @@ fn char_shape_id_for_visible_position(runs: &[Hwp5CharShapeRun], position: u32) 
 // Text splitting
 // ---------------------------------------------------------------------------
 
+/// Dispatches a queued object control into its Core `Run`.
+///
+/// `char_shape_id` is the char shape at the control's visible anchor
+/// position (task #76) — applied uniformly on the dispatch result so
+/// the leaf `project_*_run` builders stay position-agnostic. Before
+/// #76 every control run was hardcoded to char shape 0, which lost
+/// the surrounding text style on paragraphs using non-default shapes.
 fn project_control_run(
     control: &Hwp5Control,
     projection_images: &mut ProjectionImageState<'_>,
     image_context: ImageProjectionContext,
+    char_shape_id: CharShapeIndex,
 ) -> Option<Run> {
-    match control {
+    let run = match control {
         Hwp5Control::Table(table) => Some(Run::table(
             build_table_with_images(table, projection_images),
             CharShapeIndex::new(0),
@@ -1980,7 +2006,20 @@ fn project_control_run(
         // free-floating CrossRef CtrlHeader means the inline `FieldBegin`
         // marker did not pair with it; drop rather than silently emit.
         Hwp5Control::CrossRef(_) => None,
-    }
+    };
+    run.map(|mut r| {
+        r.char_shape_id = char_shape_id;
+        r
+    })
+}
+
+/// Resolves the char shape at a visible UTF-16 position (task #76 —
+/// shared by every `project_control_run` call site and the point
+/// bookmark / fallback memo drains).
+fn char_shape_at(hwp_para: &Hwp5Paragraph, visible_utf16: u32) -> CharShapeIndex {
+    CharShapeIndex::new(
+        char_shape_id_for_visible_position(&hwp_para.char_shape_runs, visible_utf16) as usize,
+    )
 }
 
 /// Projects a HWP5 IndexMark (찾아보기 표시) control into a Core
