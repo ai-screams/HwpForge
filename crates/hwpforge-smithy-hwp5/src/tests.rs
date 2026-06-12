@@ -3204,6 +3204,24 @@ fn hwp5_to_hwpx_chart_fixture_emits_embedded_chart_switch_block() {
         "section OLE fallback must reference ole1 binary item id"
     );
 
+    // Chart display size must come from the wrapping `gso ` CtrlHeader
+    // geometry ([16..24] = frame width/height in HWPUNIT), matching the
+    // 한컴-native HWPX pair's hp:sz byte-for-byte — NOT the
+    // ShapeComponentOle extent (internal 7200×7200 canvas, which 한컴
+    // mirrors into orgSz/extent only). Regression for the size-source
+    // fix: the extent-derived 7200×7200 shrank converted charts to
+    // ≈2.5cm.
+    assert!(
+        section_xml.contains(
+            r#"<hp:sz width="32250" widthRelTo="ABSOLUTE" height="18750" heightRelTo="ABSOLUTE""#
+        ),
+        "chart hp:sz must carry the gso geometry frame (32250×18750), got: {section_xml}"
+    );
+    assert!(
+        section_xml.contains(r#"<hp:orgSz width="7200" height="7200"/>"#),
+        "chart orgSz must keep the OLE internal canvas (7200×7200)"
+    );
+
     // Decode round-trip: the HWPX decoder's structured Chart parser does
     // not know about the EmbeddedChart variant, so the chart shows up as
     // Control::Chart there. We only assert the OLE binary made it into

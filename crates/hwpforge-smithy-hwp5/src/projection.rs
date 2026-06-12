@@ -2140,26 +2140,39 @@ fn project_ole_object_run(
 
     match extract_chart_payload(raw_bytes) {
         Ok(payload) => {
-            // Dimensions come from the `ShapeComponentOle` extent fields,
-            // which the HWP5 decoder already stored as i32 HWPUNIT. The
-            // geometry x/y mirror the placement convention used by the
-            // other shape projections (zero-offset == inline).
-            let Some(width) = chart_dimension(ole.extent_width) else {
+            // Dimensions come from the wrapping `gso ` CtrlHeader geometry
+            // ([16..24] = display frame width/height in HWPUNIT) — the
+            // `ShapeComponentOle` extent fields hold the OLE's *internal
+            // canvas* size (observed constant 7200×7200), which 한컴
+            // mirrors into `hp:orgSz`/`hc:extent`, NOT `hp:sz`. The
+            // chart-fixture ground truth (`chart_02_single_pie.hwpx`
+            // 한컴-native pair: hp:sz 32250×18750 == CtrlHeader geometry)
+            // pinned this; using the extent shrank converted charts to
+            // ≈2.5cm. Extent stays as the fallback for a zero geometry.
+            // The geometry x/y mirror the placement convention used by
+            // the other shape projections (zero-offset == inline).
+            let geometry_width = i32::try_from(ole.geometry.width).unwrap_or(0);
+            let geometry_height = i32::try_from(ole.geometry.height).unwrap_or(0);
+            let Some(width) =
+                chart_dimension(geometry_width).or_else(|| chart_dimension(ole.extent_width))
+            else {
                 projection_images.warnings.push(Hwp5Warning::DroppedControl {
                     control: "ole_object",
                     reason: format!(
-                        "ole_chart_invalid_width binary_data_id={} width={}",
-                        ole.binary_data_id, ole.extent_width
+                        "ole_chart_invalid_width binary_data_id={} geometry_width={} extent_width={}",
+                        ole.binary_data_id, geometry_width, ole.extent_width
                     ),
                 });
                 return None;
             };
-            let Some(height) = chart_dimension(ole.extent_height) else {
+            let Some(height) =
+                chart_dimension(geometry_height).or_else(|| chart_dimension(ole.extent_height))
+            else {
                 projection_images.warnings.push(Hwp5Warning::DroppedControl {
                     control: "ole_object",
                     reason: format!(
-                        "ole_chart_invalid_height binary_data_id={} height={}",
-                        ole.binary_data_id, ole.extent_height
+                        "ole_chart_invalid_height binary_data_id={} geometry_height={} extent_height={}",
+                        ole.binary_data_id, geometry_height, ole.extent_height
                     ),
                 });
                 return None;
