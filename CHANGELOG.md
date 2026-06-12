@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Fixed — HWP5→HWPX 차트 편집 시나리오 (크기 + custom title)
+
+HWP5 → HWPX 변환본의 차트를 `to-json` → 값 편집 → `from-json` 으로
+재생성하는 체인을 end-to-end 검증하며 발견된 2건:
+
+- **차트 표시 크기**: projection 이 `ShapeComponentOle` extent (내부
+  캔버스, 상수 7200×7200) 를 `hp:sz` 로 사용해 변환 차트가 ≈2.5cm 로
+  축소되던 버그. 표시 프레임은 `gso ` CtrlHeader geometry `[16..24]`
+  (HWPUNIT) — 한컴 native HWPX 쌍의 `hp:sz 32250×18750` 과 byte 일치
+  (`probe_chart_geometry` 로 확정). geometry 우선 + extent fallback 으로
+  수정; encoder 의 `orgSz`/`extent` 7200 hardcode 는 native 와 일치라
+  유지. e2e 게이트에 native 크기 단언 추가.
+- **custom title 형태**: `write_title` 의 최소형
+  (`<a:bodyPr/><a:lstStyle/>` + 빈 `<a:rPr lang="ko-KR"/>`) 은 표준
+  OOXML 로는 유효하지만 한컴 native 형태와 다름. 사용자 작성
+  `sample-chart-title.hwpx` fixture 에서 한컴의 실제 custom title 형태를
+  probe 해 byte-convention 미러링으로 교체: fully-attributed `bodyPr`,
+  `lstStyle` 제거, `pPr/defRPr`+`rPr` 에 `sz=1400`+함초롬돋움 4종,
+  trailing `endParaRPr`. 단위 게이트
+  `write_title_mirrors_hancom_native_form` 추가.
+
+시각 검증: 변환 → 판매 값 `[10,3.5,1.5,1.2]`→`[1,2,3,4]` 편집 + 제목
+추가 → 재생성본이 한컴에서 정상 크기 프레임 + 제목 + 분리형 파이
+(explosion 25% 보존) 로 렌더링 확인.
+
 ### Refactor (tasks #88/#89/#90/#91/#92/#94/#95) — Wave 12 누적 부채 정리
 
 기능 영향 0 (모든 step 에서 workspace nextest 전체 통과로 검증),

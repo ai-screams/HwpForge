@@ -502,14 +502,35 @@ fn write_xy_series(
 
 /// Writes the chart title element.
 ///
-/// Uses `a:` (DrawingML) namespace inside `<c:rich>` as required by OOXML.
-/// Includes `<a:bodyPr/>`, `<a:lstStyle/>`, and `<a:rPr lang="ko-KR"/>` so
-/// that 한글 recognises the custom title instead of falling back to "차트 제목".
+/// Mirrors the 한컴-native custom-title form byte-for-byte (probed from
+/// `sample-chart-title.hwpx`, a 한컴-authored chart with a user-set
+/// title). 한컴's chart engine is a partial OOXML implementation: the
+/// previous minimal form (`<a:bodyPr/><a:lstStyle/>` + bare
+/// `<a:rPr lang="ko-KR"/>`) parsed fine in Excel-style consumers but
+/// made 한컴 abort rendering the whole plot area (chart showed as an
+/// empty placeholder). The observed requirements:
+///
+/// - fully-attributed `<a:bodyPr rot=… wrap="none" …/>`
+/// - NO `<a:lstStyle/>`
+/// - `<a:pPr algn="l">` carrying a `<a:defRPr>` with size/fill/fonts
+/// - `<a:rPr>` repeating the size/fill/font set
+/// - trailing `<a:endParaRPr/>`
+///
+/// Font/size match 한컴's defaults (함초롬돋움, 14pt = sz 1400).
 fn write_title(xml: &mut String, title: &str) {
+    const TITLE_RPR: &str = r#"sz="1400" b="0" i="0" u="none"><a:solidFill><a:sysClr val="windowText" lastClr="000000"/></a:solidFill><a:latin typeface="함초롬돋움"/><a:ea typeface="함초롬돋움"/><a:cs typeface="함초롬돋움"/><a:sym typeface="함초롬돋움"/>"#;
     write!(
         xml,
-        r#"<c:title><c:tx><c:rich><a:bodyPr/><a:lstStyle/><a:p><a:r><a:rPr lang="ko-KR"/><a:t>{}</a:t></a:r></a:p></c:rich></c:tx><c:layout/><c:overlay val="0"/></c:title>"#,
-        escape_xml(title),
+        concat!(
+            r#"<c:title><c:tx><c:rich>"#,
+            r#"<a:bodyPr rot="0" vert="horz" wrap="none" lIns="0" tIns="0" rIns="0" bIns="0" anchor="ctr" anchorCtr="1"/>"#,
+            r#"<a:p><a:pPr algn="l"><a:defRPr {rpr}</a:defRPr></a:pPr>"#,
+            r#"<a:r><a:rPr {rpr}</a:rPr><a:t>{title}</a:t></a:r>"#,
+            r#"<a:endParaRPr/></a:p>"#,
+            r#"</c:rich></c:tx><c:layout/><c:overlay val="0"/></c:title>"#,
+        ),
+        rpr = TITLE_RPR,
+        title = escape_xml(title),
     )
     .unwrap();
 }
@@ -582,6 +603,34 @@ mod tests {
     use super::*;
     use hwpforge_core::chart::ChartData;
     use hwpforge_foundation::HwpUnit;
+
+    /// The custom-title form must mirror 한컴-native byte conventions
+    /// (probed from `sample-chart-title.hwpx`): fully-attributed
+    /// `<a:bodyPr>`, no `<a:lstStyle/>`, `pPr/defRPr` + `rPr` carrying
+    /// the 함초롬돋움 font set, and a trailing `<a:endParaRPr/>`. The
+    /// earlier minimal form (`<a:bodyPr/><a:lstStyle/>` + bare
+    /// `<a:rPr lang="ko-KR"/>`) is valid OOXML but 한컴's partial
+    /// chart engine refused to render any chart carrying it.
+    #[test]
+    fn write_title_mirrors_hancom_native_form() {
+        let mut xml = String::new();
+        write_title(&mut xml, "테스트 제목");
+        assert!(
+            xml.contains(r#"<a:bodyPr rot="0" vert="horz" wrap="none""#),
+            "bodyPr must carry the full 한컴-native attribute set: {xml}"
+        );
+        assert!(!xml.contains("<a:lstStyle/>"), "lstStyle must be absent (한컴 form): {xml}");
+        assert!(
+            xml.contains(r#"<a:pPr algn="l"><a:defRPr sz="1400""#),
+            "pPr/defRPr with size must be present: {xml}"
+        );
+        assert!(
+            xml.contains(r#"<a:latin typeface="함초롬돋움"/>"#),
+            "함초롬돋움 font set must be present: {xml}"
+        );
+        assert!(xml.contains("<a:endParaRPr/>"), "endParaRPr must be present: {xml}");
+        assert!(xml.contains("<a:t>테스트 제목</a:t>"), "title text must carry: {xml}");
+    }
 
     fn make_chart_control(ct: ChartType, data: ChartData) -> Control {
         Control::Chart {
