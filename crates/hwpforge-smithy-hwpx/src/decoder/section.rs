@@ -852,17 +852,27 @@ fn decode_field_control(
         },
         "CLICK_HERE" | "DATE" | "TIME" | "PAGE_NUM" | "DOC_SUMMARY" | "USER_INFO" => {
             let ft = fb.field_type.parse::<hwpforge_foundation::FieldType>().unwrap_or_default();
+            // #120/#136: round-trip the cached body value. ClickHere's body is
+            // the hint placeholder (re-derived on encode), so keep its
+            // display_text empty per the Core invariant.
+            let display_text = if matches!(ft, hwpforge_foundation::FieldType::ClickHere) {
+                String::new()
+            } else {
+                text.to_string()
+            };
             Control::Field {
                 field_type: ft,
                 hint_text: get_field_param(fb, "Direction"),
                 help_text: get_field_param(fb, "HelpState"),
                 name: Some(fb.name.clone()).filter(|s| !s.is_empty()),
+                display_text,
             }
         }
         "SUMMERY" => {
             // 한글 uses type="SUMMERY" (typo for Summary) for SUMMERY auto-fields.
             // Map Command $token to semantic FieldType (Wave 12n). Unknown tokens
-            // are preserved verbatim as Control::UnknownSummery.
+            // are preserved verbatim as Control::UnknownSummery. #120/#136: the
+            // run's body text is the cached resolved value — round-trip it.
             let cmd = get_field_param(fb, "Command").unwrap_or_default();
             match hwpforge_foundation::FieldType::from_summery_token(&cmd) {
                 Some(ft) => Control::Field {
@@ -870,8 +880,9 @@ fn decode_field_control(
                     hint_text: None,
                     help_text: None,
                     name: Some(fb.name.clone()).filter(|s| !s.is_empty()),
+                    display_text: text.to_string(),
                 },
-                None => Control::UnknownSummery { token: cmd },
+                None => Control::UnknownSummery { token: cmd, display_text: text.to_string() },
             }
         }
         "PATH" => {
@@ -879,12 +890,14 @@ fn decode_field_control(
             // the path/file-name format code in the `Format` parameter (NOT
             // `Property` like SUMMERY). Round-trips back to `Control::PathField`.
             // Falls back to the raw Command string via
-            // `PathFieldCommand::Unknown` for any non-canonical token.
+            // `PathFieldCommand::Unknown` for any non-canonical token. #120/#136:
+            // the run's body text is the cached resolved path — round-trip it.
             let cmd = get_field_param(fb, "Format")
                 .or_else(|| get_field_param(fb, "Command"))
                 .unwrap_or_default();
             Control::PathField {
                 command: hwpforge_core::control::PathFieldCommand::from_wire(&cmd),
+                display_text: text.to_string(),
             }
         }
         "CROSSREF" => {
@@ -2893,7 +2906,7 @@ mod tests {
         let unknown =
             controls.iter().find(|c| matches!(c, hwpforge_core::Control::UnknownSummery { .. }));
         assert!(unknown.is_some(), "unknown SUMMERY token must fall back to UnknownSummery");
-        if let Some(hwpforge_core::Control::UnknownSummery { token }) = unknown {
+        if let Some(hwpforge_core::Control::UnknownSummery { token, .. }) = unknown {
             assert_eq!(token, "$company", "raw $token must be preserved verbatim");
         }
     }

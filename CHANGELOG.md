@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Fixed — SUMMERY/PATH 필드 빈 본문 → 한컴 "낮은 보안 수준 복구" 경고 (#120/#136)
+
+HWP5 → HWPX 변환 시 문서정보(SUMMERY: `$author`/`$title`/`$createtime`/
+`$modifiedtime`/`$lastsaveby`)·경로(PATH: `$P$F`) 필드의
+`<hp:fieldBegin>…<hp:fieldEnd>` 본문이 빈 `<hp:t/>` 로 나가
+한컴이 필드를 미해결로 보고 "낮은 보안 수준으로 복구" 경고 + 첫 열기
+빈 placeholder 를 남기던 문제.
+
+- **진단**: byte-diff 로 빈 본문이 유일 구조 차이임을 확인하고, 우리
+  출력에 native 값만 주입한 격리 파일로 한컴 실측 (경고 없음) 하여
+  본문 값이 원인임을 확정. 한컴 native HWPX 는 본문에 resolved 값을
+  캐싱하며 그 값은 HWP5 원본 `BodyText/Section0` ParaText 의
+  FieldBegin..FieldEnd span 에 이미 존재. Wave 12n Step 6.6 이 "빈 본문이
+  경고를 회피한다" 던 주석은 틀렸음 — 당시 거부된 건 **합성 ISO 날짜**
+  (locale 불일치) 였지 verbatim 값이 아니었다.
+- **Core (breaking, additive)**: `Control::Field`/`UnknownSummery`/
+  `DateCodeField`/`PathField` 에 `display_text: String` 추가
+  (`CrossRef::display_text` 와 동일 형태/의미, 빈 문자열 = 없음).
+  ClickHere 는 빈 값 유지 (visible placeholder 는 `hint_text`).
+- **HWP5 projection**: FieldBegin..FieldEnd span 을 `display_text` 로 누적
+  (Hyperlink/CrossRef 와 동일 경로) + DoS cap
+  (`MAX_FIELD_DISPLAY_TEXT_UNITS = 4096`, body 가 BSTR command cap 우회).
+- **HWPX encoder/decoder**: 본문에 캐싱값 emit + round-trip 복원
+  (디코더가 run body 텍스트를 `display_text` 로 환원).
+- **검증**: workspace nextest 2,469 통과, 변환 산출물 field body 가 native
+  안정값과 일치 (날짜/경로는 출처 파일 차이만), 한컴 시각 게이트
+  (경고 없음 + 첫 열기 값 표시) PASS.
+
 ### Fixed — HWP5→HWPX 차트 편집 시나리오 (크기 + custom title)
 
 HWP5 → HWPX 변환본의 차트를 `to-json` → 값 편집 → `from-json` 으로

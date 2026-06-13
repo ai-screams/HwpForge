@@ -237,7 +237,7 @@ fn validate_control_run(
         | Control::IndexMark { .. } => Ok(()),
         // Wave 12n: targeted invariant checks for new variants. Architect review
         // medium: do not let new variants slide through with a blanket `Ok(())`.
-        Control::UnknownSummery { token } => validate_unknown_summery(token, ctx),
+        Control::UnknownSummery { token, .. } => validate_unknown_summery(token, ctx),
         Control::DateCodeField { raw_command, is_time_mode, .. } => {
             validate_date_code_field(raw_command, *is_time_mode, ctx)
         }

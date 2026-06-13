@@ -118,6 +118,7 @@ pub(crate) fn section2_text_formatting() -> Section {
                     hint_text: Some("날짜".to_string()),
                     help_text: Some("마지막 저장한 날짜를 표시합니다.".to_string()),
                     name: None,
+                    display_text: String::new(),
                 },
                 csi(CS_BLUE),
             ),

@@ -35,6 +35,7 @@ fn field_section(label: &str, field_type: FieldType, hint: &str, help: &str) -> 
         hint_text: if hint.is_empty() { None } else { Some(hint.to_string()) },
         help_text: if help.is_empty() { None } else { Some(help.to_string()) },
         name: None,
+        display_text: String::new(),
     };
     let body = Paragraph::with_runs(
         vec![Run::control(field, CharShapeIndex::new(0))],

@@ -589,6 +589,7 @@ fn section_bookmarks_refs_fields() -> Section {
         hint_text: Some("날짜".to_string()),
         help_text: Some("문서 작성일".to_string()),
         name: None,
+        display_text: String::new(),
     };
 
     // Field: PageNumber (쪽번호) — Wave 12n: moved out of Control::Field

@@ -555,6 +555,34 @@ Note: SUMMERY (a typo in the original spec — meant "SUMMARY") is the
 HWPX `type=` attribute for these document-metadata fields. We preserve
 the misspelling for byte-identical compatibility.
 
+### Field body cached value (#120/#136)
+
+SUMMERY/PATH fields carry their **resolved value** in the body between
+`<hp:fieldBegin>` and `<hp:fieldEnd>` (e.g. `<hp:t>hanyul</hp:t>`, the
+locale-formatted date, the absolute path). An **empty** body triggers
+한컴's "낮은 보안 수준 복구" warning on open + leaves a blank placeholder
+until the user saves.
+
+The value is present in the HWP5 source `BodyText/Section0` ParaText, in
+the FieldBegin..FieldEnd span. Projection accumulates it into
+`ActiveField::{SummeryField,DateCodeField,PathField}.display_text`
+(capped at `MAX_FIELD_DISPLAY_TEXT_UNITS = 4096` — body text bypasses the
+BSTR command caps), carries it on the matching `Control` variant, and the
+HWPX encoder emits it as the body `<hp:t>`.
+
+> **Supersedes Wave 12n Step 6.6.** That step emitted an _empty_ body
+> after observing a _synthesized_ ISO date (`2026-06-06`) — locale-
+> mismatched against 한컴's `2026년 6월 …` — get rejected as corrupted
+> content. But an empty body **also** triggers the warning (#120 stayed
+> open). Byte-diff + 한컴 실측 (2026-06-13) proved native 한컴 carries the
+> verbatim locale value and opens cleanly; carrying the HWP5 source's own
+> cached render (NOT a synthesized value) reproduces that. A trailing
+> `<hp:t/>` _after_ `fieldEnd` is a separate, still-required element.
+
+한컴 recomputes editable fields (`editable="1"`: LastSavedBy/CreatedTime/
+ModifiedTime/PATH) on save, so the carried value is the cached render at
+HWP5 save time — exactly what native 한컴 HWPX itself stores.
+
 ---
 
 ## 18. `linesegarray` Synthesis (Wave 12p #123)

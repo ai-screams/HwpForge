@@ -676,6 +676,19 @@ pub enum Control {
         /// Maps to HWPX `fieldBegin name="..."` attribute. `None` represents
         /// the empty string convention (한컴 wire stores it as a 0-length BSTR).
         name: Option<String>,
+        /// Cached resolved value rendered between `<hp:fieldBegin>` and
+        /// `<hp:fieldEnd>` (e.g. the author name, the locale-formatted date).
+        /// HWP5 sources this from the FieldBegin..FieldEnd span; 한컴 native
+        /// HWPX carries the same cached render and recomputes it on save.
+        /// Empty string = "no cached value" (same convention as
+        /// [`Self::CrossRef::display_text`] / [`Self::Hyperlink::text`]).
+        /// For `ClickHere` this stays empty — its visible placeholder is
+        /// [`Self::Field::hint_text`], not a cached render.
+        ///
+        /// An empty body triggers 한컴's "낮은 보안 수준 복구" warning on
+        /// open for SUMMERY fields (#120/#136) — carrying the verbatim
+        /// source value avoids it.
+        display_text: String,
     },
 
     /// A memo (메모) annotation attached to text.
@@ -732,6 +745,9 @@ pub enum Control {
     UnknownSummery {
         /// Raw `Command` string after envelope (e.g. `"$company"`).
         token: String,
+        /// Cached resolved value rendered between `fieldBegin`/`fieldEnd`.
+        /// Same semantics as [`Self::Field::display_text`]; empty = none.
+        display_text: String,
     },
 
     /// A `%dte` date/time **format-pattern** field (Wave 12n).
@@ -753,6 +769,10 @@ pub enum Control {
         /// Opaque 8-byte trailer (instance ID + flags) carried for
         /// round-trip fidelity. The semantics are not pinned down.
         raw_trailer: [u8; 8],
+        /// Cached resolved value rendered between `fieldBegin`/`fieldEnd`
+        /// (the locale-formatted date/time string). Same semantics as
+        /// [`Self::Field::display_text`]; empty = none.
+        display_text: String,
     },
 
     /// A `%pat` path / file-name field (Wave 12n).
@@ -763,6 +783,12 @@ pub enum Control {
     PathField {
         /// Typed variant of the observed `Command` pattern.
         command: PathFieldCommand,
+        /// Cached resolved value rendered between `fieldBegin`/`fieldEnd`
+        /// (the absolute path/file name 한컴 last evaluated). Same semantics
+        /// as [`Self::Field::display_text`]; empty = none. 한컴 recomputes
+        /// `$P`/`$F` against the file's on-disk path on save, but an empty
+        /// body on open triggers the recovery warning (#120).
+        display_text: String,
     },
 
     /// An `atno` **inline** page number control (Wave 12n).
@@ -1166,6 +1192,7 @@ impl Control {
             hint_text: Some(hint.to_string()),
             help_text: None,
             name: None,
+            display_text: String::new(),
         }
     }
 
@@ -1998,14 +2025,14 @@ impl std::fmt::Display for Control {
                     write!(f, "IndexMark(\"{primary}\")")
                 }
             }
-            Self::UnknownSummery { token } => {
+            Self::UnknownSummery { token, .. } => {
                 write!(f, "UnknownSummery({token})")
             }
             Self::DateCodeField { raw_command, is_time_mode, .. } => {
                 let mode = if *is_time_mode { "time" } else { "date" };
                 write!(f, "DateCodeField({mode}, \"{raw_command}\")")
             }
-            Self::PathField { command } => {
+            Self::PathField { command, .. } => {
                 write!(f, "PathField({})", command.wire_command())
             }
             Self::InlinePageNumber { kind, raw_flag } => match kind {

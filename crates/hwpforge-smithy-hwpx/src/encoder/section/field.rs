@@ -151,6 +151,7 @@ pub(super) fn build_field_run_xml(
     hint: &str,
     help: &str,
     name: &str,
+    display_text: &str,
     char_pr_id_ref: u32,
     field_id: usize,
 ) -> String {
@@ -158,6 +159,9 @@ pub(super) fn build_field_run_xml(
     let begin_id = 1_000_000_000_u64 + field_id as u64;
     match field_type {
         FieldType::ClickHere => {
+            // ClickHere's visible body is the hint placeholder, not a cached
+            // render — `display_text` is unused here (stays empty in Core).
+            let _ = display_text;
             build_clickhere_field_xml(hint, help, name, char_pr_id_ref, begin_id)
         }
         FieldType::Author
@@ -165,7 +169,7 @@ pub(super) fn build_field_run_xml(
         | FieldType::CreatedTime
         | FieldType::ModifiedTime
         | FieldType::Title => {
-            build_summery_field_xml(field_type, hint, name, char_pr_id_ref, begin_id)
+            build_summery_field_xml(field_type, hint, name, display_text, char_pr_id_ref, begin_id)
         }
         // `FieldType` is `#[non_exhaustive]`. We intentionally do NOT collapse
         // future variants into ClickHere (Wave 12n architect review): silently
@@ -233,32 +237,38 @@ pub(super) fn build_summery_field_xml(
     field_type: &hwpforge_foundation::FieldType,
     hint: &str,
     name: &str,
+    cached_value: &str,
     char_pr_id_ref: u32,
     begin_id: u64,
 ) -> String {
     use hwpforge_foundation::FieldType;
     let command = field_type.summery_token().expect("caller guards SUMMERY variants");
-    // Wave 12n Step 6.6: emit empty body for typed SUMMERY fields.
+    // #120/#136 (supersedes Wave 12n Step 6.6): carry the cached resolved
+    // value in the body.
     //
-    // The previous implementation computed today's ISO date for
-    // ModifiedTime and parked single-space placeholders for the rest.
-    // Empirically (sample-field-docsummary 검증, 2026-06-06):
-    // Hancom Office discards mismatched display text and rebuilds the
-    // field on save anyway, while triggering the "low-security
-    // recovery" warning on open because our locale-mismatched values
-    // (ISO `2026-06-06` vs native Korean `2026년 6월 4일 …`) are
-    // treated as corrupted content. Letting Hancom recompute from
-    // metadata avoids the warning entirely.
+    // History: Step 6.6 emitted an EMPTY body after observing that a
+    // *synthesized* ISO date (`2026-06-06`) — locale-mismatched against
+    // 한컴's `2026년 6월 …` — was treated as corrupted content and
+    // triggered the "낮은 보안 수준 복구" warning. But an empty body ALSO
+    // triggers it (#120 stayed open). Byte-diff + 한컴 실측 (2026-06-13)
+    // proved native 한컴 carries the verbatim locale value in the body and
+    // opens cleanly; carrying the HWP5 source's own cached render (NOT a
+    // synthesized value) reproduces that and closes the warning.
     //
-    // For Author/LastSavedBy/Title the hint string (if supplied)
-    // still carries through — it's caller-provided display text
-    // rather than a computed placeholder.
-    let display_text = match field_type {
-        FieldType::Author | FieldType::LastSavedBy | FieldType::Title if !hint.is_empty() => {
-            hint.to_string()
+    // Precedence: prefer the carried `cached_value` (from the HWP5
+    // FieldBegin..FieldEnd span). Fall back to the caller-provided `hint`
+    // for Author/LastSavedBy/Title built via the native HwpForge API, which
+    // has no source span. Empty = none (Hancom recomputes editable fields).
+    let display_text = if !cached_value.is_empty() {
+        cached_value.to_string()
+    } else {
+        match field_type {
+            FieldType::Author | FieldType::LastSavedBy | FieldType::Title if !hint.is_empty() => {
+                hint.to_string()
+            }
+            FieldType::ClickHere => unreachable!("caller already routed ClickHere elsewhere"),
+            _ => String::new(),
         }
-        FieldType::ClickHere => unreachable!("caller already routed ClickHere elsewhere"),
-        _ => String::new(),
     };
     // Wave 12p task #124: editable depends on whether Hancom recomputes
     // the field value (Author/Title → "0" lock to authored value;
@@ -338,20 +348,23 @@ pub(super) fn build_summery_run_xml_raw(
 /// - `editable="0"` (PATH fields are read-only — Hancom recomputes)
 /// - `<hp:parameters cnt="3">` with `Prop` / `Command` / **`Format`**
 ///   (NOT the SUMMERY `Property`)
-/// - empty body (Hancom evaluates `$P$F` to the absolute path on save,
-///   the same way `date` is recomputed)
+/// - cached body value (`cached_value`): the absolute path/file name 한컴
+///   last evaluated. #120/#136 proved an empty body triggers the recovery
+///   warning; carrying the verbatim source value closes it. 한컴 still
+///   recomputes `$P$F` against the file's on-disk path on save.
 pub(super) fn build_path_field_run_xml_raw(
     command: &str,
+    cached_value: &str,
     char_pr_id_ref: u32,
     begin_id: u64,
 ) -> String {
     let escaped_cmd = escape_xml(command);
-    // Wave 12n Step 6.5: Hancom-native PATH runs include a `<hp:t/>`
-    // placeholder between fieldBegin/fieldEnd (recomputed to the
-    // absolute path on save) AND a trailing `<hp:t/>` after fieldEnd.
-    // Without the trailing element Hancom flags the file as
-    // "low-security recovery" and rebuilds the run — verified against
-    // `sample-field-docsummary.hwpx` wire diff after Step 6.
+    // Wave 12n Step 6.5 / #120: the body between fieldBegin/fieldEnd carries
+    // the cached resolved path (was a bare `<hp:t/>`; an empty body triggers
+    // the "낮은 보안 수준 복구" warning — verified against
+    // `sample-field-docsummary.hwpx` wire diff + 한컴 실측 2026-06-13).
+    // A trailing `<hp:t/>` after fieldEnd is also required (its absence is a
+    // separate trigger).
     format!(
         concat!(
             r#"<hp:run charPrIDRef="{cpr}">"#,
@@ -365,7 +378,7 @@ pub(super) fn build_path_field_run_xml_raw(
             r#"</hp:parameters>"#,
             r#"</hp:fieldBegin>"#,
             r#"</hp:ctrl>"#,
-            r#"<hp:t/>"#,
+            r#"{display}"#,
             r#"<hp:ctrl>"#,
             r#"<hp:fieldEnd beginIDRef="{bid}" fieldid="628121972"/>"#,
             r#"</hp:ctrl>"#,
@@ -375,6 +388,7 @@ pub(super) fn build_path_field_run_xml_raw(
         cpr = char_pr_id_ref,
         bid = begin_id,
         cmd = escaped_cmd,
+        display = build_text_element_xml(cached_value),
     )
 }
 

@@ -40,6 +40,7 @@ fn main() {
                 hint_text: None,
                 help_text: None,
                 name: None,
+                display_text: String::new(),
             },
             CharShapeIndex::new(0),
         )],

@@ -50,6 +50,7 @@ fn summery_section(label: &str, field_type: FieldType, cached_value: &str) -> Se
         hint_text: Some(cached_value.to_string()),
         help_text: None,
         name: None,
+        display_text: String::new(),
     };
     let body = Paragraph::with_runs(
         vec![Run::control(field, CharShapeIndex::new(0))],
@@ -101,6 +102,7 @@ fn wave12n_all_section() -> Section {
                     hint_text: Some((*cached).to_string()),
                     help_text: None,
                     name: None,
+                    display_text: String::new(),
                 },
                 CharShapeIndex::new(0),
             )],

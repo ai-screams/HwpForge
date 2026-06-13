@@ -198,28 +198,35 @@ enum ActiveField {
     /// `$X` token (e.g. `$author`, `$modifiedtime`). On `FieldEnd` the
     /// token is mapped to a typed [`hwpforge_foundation::FieldType`] or,
     /// for unknown tokens, surfaced as `Control::UnknownSummery { token }`.
-    /// The inline span text is not accumulated: HWP5 wire leaves it
-    /// empty and HWPX renders the field value at display time.
+    /// `display_text` accumulates the body chars between `FieldBegin` and
+    /// `FieldEnd` (the cached resolved value, e.g. the author name or the
+    /// locale-formatted date) so the HWPX encoder can carry it — an empty
+    /// body triggers 한컴's "낮은 보안 수준 복구" warning (#120/#136).
     SummeryField {
         start_utf16: u32,
         command_token: String,
+        display_text: String,
     },
     /// `%dte` date/time format-code field (Wave 12n). Carries the raw
     /// Command pattern + 8-byte trailer for round-trip fidelity. On
     /// `FieldEnd` the projection emits `Control::DateCodeField` with
-    /// `is_time_mode` derived from the `T` prefix.
+    /// `is_time_mode` derived from the `T` prefix. `display_text`
+    /// accumulates the cached resolved value (see [`Self::SummeryField`]).
     DateCodeField {
         start_utf16: u32,
         raw_command: String,
         raw_trailer: [u8; 8],
+        display_text: String,
     },
     /// `%pat` path/file-name field (Wave 12n). On `FieldEnd` the
     /// projection maps the raw Command to a typed `PathFieldCommand`
     /// (or `Unknown` for forward compatibility) and emits
-    /// `Control::PathField`.
+    /// `Control::PathField`. `display_text` accumulates the cached resolved
+    /// path (see [`Self::SummeryField`]).
     PathField {
         start_utf16: u32,
         raw_command: String,
+        display_text: String,
     },
 }
 
@@ -882,6 +889,39 @@ fn project_paragraph_with_images_structural(
     ProjectedParagraph { paragraph }
 }
 
+/// Cap on accumulated auto-field `display_text` (the cached value chars
+/// between `FieldBegin` and `FieldEnd`).
+///
+/// Unlike the `%smr`/`%dte` BSTR *command* (capped at
+/// `MAX_SUMMERY_COMMAND_UNITS` etc. at the decoder boundary), this body
+/// text comes from `ParaText` and bypasses those caps. A malicious file
+/// with a pathologically long FieldBegin..FieldEnd span would otherwise
+/// grow `display_text` unbounded. A legitimate cached render
+/// (author/date/path/title) is far under this; truncation only bites
+/// adversarial input. (Architect review P1.)
+const MAX_FIELD_DISPLAY_TEXT_UNITS: usize = 4096;
+
+/// Appends `text` to an auto-field `display_text`, stopping once the
+/// accumulated UTF-16 length would exceed [`MAX_FIELD_DISPLAY_TEXT_UNITS`].
+fn push_field_display_text(display_text: &mut String, text: &str) {
+    let current = display_text.encode_utf16().count();
+    if current >= MAX_FIELD_DISPLAY_TEXT_UNITS {
+        return;
+    }
+    let remaining = MAX_FIELD_DISPLAY_TEXT_UNITS - current;
+    if text.encode_utf16().count() <= remaining {
+        display_text.push_str(text);
+        return;
+    }
+    // Push char-by-char up to the cap (keeps UTF-16 boundaries intact).
+    for ch in text.chars() {
+        if display_text.encode_utf16().count() + ch.len_utf16() > MAX_FIELD_DISPLAY_TEXT_UNITS {
+            break;
+        }
+        display_text.push(ch);
+    }
+}
+
 /// Projects a visible `TextSegment::Text` chunk (task #91 — extracted
 /// from `project_paragraph_with_images_structural`).
 ///
@@ -904,15 +944,18 @@ fn project_visible_text_segment(
         match active {
             ActiveField::Hyperlink { display_text, .. }
             | ActiveField::CrossRef { display_text, .. } => display_text.push_str(text),
-            // (Wave 12m Phase 2 Step 4: control field carries
-            //  the structured payload; display_text is body-only.)
+            // Wave 12n cached-value carry (#120/#136): SUMMERY/%dte/%pat
+            // accumulate the FieldBegin..FieldEnd body as the field's cached
+            // resolved value (capped — see `push_field_display_text`).
+            ActiveField::SummeryField { display_text, .. }
+            | ActiveField::DateCodeField { display_text, .. }
+            | ActiveField::PathField { display_text, .. } => {
+                push_field_display_text(display_text, text);
+            }
             ActiveField::BookmarkSpan { .. }
             | ActiveField::PlainTextFallback { .. }
             | ActiveField::MemoAnchor { .. }
-            | ActiveField::ClickHere { .. }
-            | ActiveField::SummeryField { .. }
-            | ActiveField::DateCodeField { .. }
-            | ActiveField::PathField { .. } => {}
+            | ActiveField::ClickHere { .. } => {}
         }
     } else {
         runs.extend(project_text_segment(
@@ -1037,13 +1080,16 @@ fn append_visible_unit(
         match active {
             ActiveField::Hyperlink { display_text, .. }
             | ActiveField::CrossRef { display_text, .. } => display_text.push(ch),
+            ActiveField::SummeryField { display_text, .. }
+            | ActiveField::DateCodeField { display_text, .. }
+            | ActiveField::PathField { display_text, .. } => {
+                let mut buf = [0u8; 4];
+                push_field_display_text(display_text, ch.encode_utf8(&mut buf));
+            }
             ActiveField::BookmarkSpan { .. }
             | ActiveField::PlainTextFallback { .. }
             | ActiveField::MemoAnchor { .. }
-            | ActiveField::ClickHere { .. }
-            | ActiveField::SummeryField { .. }
-            | ActiveField::DateCodeField { .. }
-            | ActiveField::PathField { .. } => {}
+            | ActiveField::ClickHere { .. } => {}
         }
     } else {
         runs.extend(project_text_segment(
@@ -1284,7 +1330,11 @@ fn start_active_field(
         }
         CTRL_ID_FIELD_SUMMERY => {
             if let Some(summery) = summery {
-                ActiveField::SummeryField { start_utf16, command_token: summery.command_token }
+                ActiveField::SummeryField {
+                    start_utf16,
+                    command_token: summery.command_token,
+                    display_text: String::new(),
+                }
             } else {
                 projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
                     subject: "field.summery",
@@ -1301,6 +1351,7 @@ fn start_active_field(
                     start_utf16,
                     raw_command: date_code.raw_command,
                     raw_trailer: date_code.raw_trailer,
+                    display_text: String::new(),
                 }
             } else {
                 projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
@@ -1314,7 +1365,11 @@ fn start_active_field(
         }
         CTRL_ID_FIELD_PATH => {
             if let Some(pat) = pathfield {
-                ActiveField::PathField { start_utf16, raw_command: pat.raw_command }
+                ActiveField::PathField {
+                    start_utf16,
+                    raw_command: pat.raw_command,
+                    display_text: String::new(),
+                }
             } else {
                 projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
                     subject: "field.path",
@@ -1445,34 +1500,42 @@ fn finish_active_field(
                     hint_text,
                     help_text,
                     name,
+                    // ClickHere's visible body is `hint_text`, not a cached
+                    // render — leave display_text empty (span not accumulated).
+                    display_text: String::new(),
                 },
                 char_shape_id,
             ));
         }
-        ActiveField::SummeryField { start_utf16, command_token } => {
+        ActiveField::SummeryField { start_utf16, command_token, display_text } => {
             // Emit a single Run carrying either typed `Control::Field`
             // (for known `$X` tokens) or `Control::UnknownSummery` for
-            // future-compat raw carry. The HWPX encoder renders the
-            // value at display time, so the span text between
-            // FIELD_BEGIN/FIELD_END is intentionally dropped (Wave 12n).
+            // future-compat raw carry. `display_text` is the cached
+            // resolved value accumulated from the FieldBegin..FieldEnd
+            // span — 한컴 native HWPX carries it in the body and an empty
+            // body triggers the "낮은 보안 수준 복구" warning (#120/#136).
             let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
                 &hwp_para.char_shape_runs,
                 start_utf16,
             ) as usize);
             let _ = end_utf16;
             let control = match hwpforge_foundation::FieldType::from_summery_token(&command_token) {
-                Some(field_type) => {
-                    Control::Field { field_type, hint_text: None, help_text: None, name: None }
-                }
-                None => Control::UnknownSummery { token: command_token },
+                Some(field_type) => Control::Field {
+                    field_type,
+                    hint_text: None,
+                    help_text: None,
+                    name: None,
+                    display_text,
+                },
+                None => Control::UnknownSummery { token: command_token, display_text },
             };
             runs.push(Run::control(control, char_shape_id));
         }
-        ActiveField::DateCodeField { start_utf16, raw_command, raw_trailer } => {
+        ActiveField::DateCodeField { start_utf16, raw_command, raw_trailer, display_text } => {
             // Emit Control::DateCodeField with `is_time_mode` derived
             // from the `T` prefix convention. The 8-byte trailer is
-            // preserved verbatim for future round-trip fidelity. Span
-            // text is intentionally dropped (Wave 12n).
+            // preserved verbatim for future round-trip fidelity.
+            // `display_text` is the cached resolved date/time (#120/#136).
             let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
                 &hwp_para.char_shape_runs,
                 start_utf16,
@@ -1480,13 +1543,14 @@ fn finish_active_field(
             let _ = end_utf16;
             let is_time_mode = raw_command.starts_with('T');
             runs.push(Run::control(
-                Control::DateCodeField { raw_command, is_time_mode, raw_trailer },
+                Control::DateCodeField { raw_command, is_time_mode, raw_trailer, display_text },
                 char_shape_id,
             ));
         }
-        ActiveField::PathField { start_utf16, raw_command } => {
+        ActiveField::PathField { start_utf16, raw_command, display_text } => {
             // Map raw `$P`/`$F`/`$P$F` to a typed PathFieldCommand
-            // (Unknown for forward compatibility). Wave 12n.
+            // (Unknown for forward compatibility). Wave 12n. `display_text`
+            // is the cached resolved path accumulated from the span (#120).
             let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
                 &hwp_para.char_shape_runs,
                 start_utf16,
@@ -1494,7 +1558,7 @@ fn finish_active_field(
             let _ = end_utf16;
             use hwpforge_core::control::PathFieldCommand;
             let command = PathFieldCommand::from_wire(&raw_command);
-            runs.push(Run::control(Control::PathField { command }, char_shape_id));
+            runs.push(Run::control(Control::PathField { command, display_text }, char_shape_id));
         }
     }
 }

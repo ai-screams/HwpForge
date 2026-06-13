@@ -619,7 +619,7 @@ fn build_runs(
                         }
                         // Silently skip if no matching SpanStart found
                     }
-                    Control::Field { field_type, hint_text, help_text, name } => {
+                    Control::Field { field_type, hint_text, help_text, name, display_text } => {
                         let field_id = hyperlink_entries.len();
                         let marker = next_marker("HWPFD", field_id);
                         let hint = hint_text.as_deref().unwrap_or("");
@@ -628,6 +628,7 @@ fn build_runs(
                             hint,
                             help_text.as_deref().unwrap_or(""),
                             name.as_deref().unwrap_or(""),
+                            display_text,
                             char_pr_id_ref,
                             field_id,
                         );
@@ -649,14 +650,16 @@ fn build_runs(
                     // PathField is NO LONGER LOSSY (Wave 12n Step 6) — see the
                     // arm further below which emits Hancom-native
                     // `type="PATH"` with `Format=` param and a distinct fieldid.
-                    Control::UnknownSummery { token } => {
+                    Control::UnknownSummery { token, display_text } => {
                         let field_id = hyperlink_entries.len();
                         let marker = next_marker("HWPFD", field_id);
                         // Wave 12p task #124: unknown token — assume Hancom
                         // recomputes (editable="1"). Matches pre-fix behavior.
+                        // #120/#136: carry the cached resolved value in the
+                        // body (empty body → 한컴 recovery warning).
                         let real_xml = build_summery_run_xml_raw(
                             token,
-                            "",
+                            display_text,
                             "",
                             char_pr_id_ref,
                             1_000_000_000_u64 + field_id as u64,
@@ -668,7 +671,7 @@ fn build_runs(
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
-                    Control::DateCodeField { raw_command, is_time_mode, .. } => {
+                    Control::DateCodeField { is_time_mode, display_text, .. } => {
                         // LOSSY: %dte → SUMMERY mapping; raw_trailer is discarded.
                         // Round-trip through HWPX comes back as `Field(ModifiedTime)`
                         // or `Field(CreatedTime)` — proven by
@@ -677,12 +680,15 @@ fn build_runs(
                         let marker = next_marker("HWPFD", field_id);
                         let token: &str =
                             if *is_time_mode { "$createtime" } else { "$modifiedtime" };
-                        let display = raw_command.as_str();
+                        // #120/#136: emit the cached resolved date/time as the
+                        // body (the raw format pattern was never a valid display
+                        // value — an empty/garbage body triggers the 한컴
+                        // recovery warning).
                         // Wave 12p task #124: both $createtime / $modifiedtime
                         // are recomputed by Hancom (editable="1").
                         let real_xml = build_summery_run_xml_raw(
                             token,
-                            display,
+                            display_text,
                             "",
                             char_pr_id_ref,
                             1_000_000_000_u64 + field_id as u64,
@@ -694,20 +700,21 @@ fn build_runs(
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
-                    Control::PathField { command } => {
+                    Control::PathField { command, display_text } => {
                         // Wave 12n Step 6 — LOSSLESS emit. The prior SUMMERY
                         // surrogate (mapped %pat → type="SUMMERY") triggered the
                         // Hancom "low security level — content recovered"
                         // warning (#120) because native files emit
                         // type="PATH" with `Format=` param, `fieldid=628121972`,
                         // and `editable="0"`. We now emit the wire shape
-                        // directly. Body is left empty so Hancom recomputes
-                        // `$P$F` against the file's actual on-disk path the
-                        // same way `<opf:meta name="date"/>` is recomputed.
+                        // directly. #120/#136: the cached resolved path is
+                        // carried in the body (an empty body still triggers the
+                        // recovery warning); 한컴 recomputes `$P$F` on save.
                         let field_id = hyperlink_entries.len();
                         let marker = next_marker("HWPFD", field_id);
                         let real_xml = build_path_field_run_xml_raw(
                             command.wire_command(),
+                            display_text,
                             char_pr_id_ref,
                             1_000_000_000_u64 + field_id as u64,
                         );
@@ -2685,6 +2692,7 @@ mod tests {
             hint_text: None,
             help_text: None,
             name: None,
+            display_text: String::new(),
         };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
@@ -2709,6 +2717,7 @@ mod tests {
             hint_text: None,
             help_text: None,
             name: None,
+            display_text: String::new(),
         };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
@@ -2731,6 +2740,7 @@ mod tests {
             hint_text: None,
             help_text: None,
             name: None,
+            display_text: String::new(),
         };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
@@ -2744,6 +2754,68 @@ mod tests {
         assert!(xml.contains("$author"));
     }
 
+    /// #120/#136: a SUMMERY field with a cached value must emit it in the
+    /// body between fieldBegin/fieldEnd (an empty `<hp:t/>` body triggers
+    /// 한컴's "낮은 보안 수준 복구" warning), and the value must survive a
+    /// Core → HWPX → Core round-trip.
+    #[test]
+    fn summery_cached_value_emitted_in_body_and_roundtrips() {
+        use hwpforge_core::control::Control;
+        use hwpforge_foundation::FieldType;
+        let ctrl = Control::Field {
+            field_type: FieldType::Author,
+            hint_text: None,
+            help_text: None,
+            name: None,
+            display_text: "hanyul".to_string(),
+        };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
+        // Body carries the cached value, NOT an empty `<hp:t/>`.
+        assert!(xml.contains("<hp:t>hanyul</hp:t>"), "cached value missing from body: {xml}");
+        // Round-trip: decode the field back and confirm display_text survives.
+        let decoded = lossy_roundtrip_decode_first_control(Control::Field {
+            field_type: FieldType::Author,
+            hint_text: None,
+            help_text: None,
+            name: None,
+            display_text: "hanyul".to_string(),
+        });
+        match decoded {
+            Control::Field { display_text, .. } => {
+                assert_eq!(display_text, "hanyul", "display_text lost on round-trip");
+            }
+            other => panic!("expected Control::Field, got {other:?}"),
+        }
+    }
+
+    /// #120/#136: a PATH field also carries its cached resolved path in the
+    /// body (was hardcoded empty before the fix).
+    #[test]
+    fn path_field_cached_value_emitted_in_body() {
+        use hwpforge_core::control::{Control, PathFieldCommand};
+        let ctrl = Control::PathField {
+            command: PathFieldCommand::PathAndFileName,
+            display_text: "/tmp/doc.hwpx".to_string(),
+        };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
+        assert!(xml.contains(r#"type="PATH""#));
+        assert!(xml.contains("<hp:t>/tmp/doc.hwpx</hp:t>"), "PATH cached value missing: {xml}");
+    }
+
     #[test]
     fn field_userinfo_produces_summery_lastsaveby() {
         use hwpforge_core::control::Control;
@@ -2753,6 +2825,7 @@ mod tests {
             hint_text: None,
             help_text: None,
             name: None,
+            display_text: String::new(),
         };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
@@ -2775,6 +2848,7 @@ mod tests {
             hint_text: Some("클릭하세요".to_string()),
             help_text: Some("도움말".to_string()),
             name: None,
+            display_text: String::new(),
         };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
@@ -2805,6 +2879,7 @@ mod tests {
             raw_command: "T\\:H:mm;0;".to_string(),
             is_time_mode: true,
             raw_trailer: [0; 8],
+            display_text: String::new(),
         };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
@@ -2825,7 +2900,10 @@ mod tests {
         // `editable="0"`. Replaces the prior LOSSY SUMMERY surrogate
         // (`lossy_pathfield_emits_summery_with_raw_command`).
         use hwpforge_core::control::{Control, PathFieldCommand};
-        let ctrl = Control::PathField { command: PathFieldCommand::PathAndFileName };
+        let ctrl = Control::PathField {
+            command: PathFieldCommand::PathAndFileName,
+            display_text: String::new(),
+        };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
                 vec![Run::control(ctrl, CharShapeIndex::new(0))],
@@ -2857,7 +2935,8 @@ mod tests {
     #[test]
     fn lossy_unknown_summery_carries_raw_token() {
         use hwpforge_core::control::Control;
-        let ctrl = Control::UnknownSummery { token: "$company".to_string() };
+        let ctrl =
+            Control::UnknownSummery { token: "$company".to_string(), display_text: String::new() };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
                 vec![Run::control(ctrl, CharShapeIndex::new(0))],
@@ -2910,6 +2989,7 @@ mod tests {
             raw_command: "T\\:H:mm;0;".to_string(),
             is_time_mode: true,
             raw_trailer: [0; 8],
+            display_text: String::new(),
         };
         let decoded = lossy_roundtrip_decode_first_control(ctrl);
         match decoded {
@@ -2931,6 +3011,7 @@ mod tests {
             raw_command: "\\:1년 2월 3일;0;".to_string(),
             is_time_mode: false,
             raw_trailer: [0; 8],
+            display_text: String::new(),
         };
         let decoded = lossy_roundtrip_decode_first_control(ctrl);
         match decoded {
@@ -2955,10 +3036,12 @@ mod tests {
         for cmd in
             [PathFieldCommand::PathAndFileName, PathFieldCommand::Path, PathFieldCommand::FileName]
         {
-            let decoded =
-                lossy_roundtrip_decode_first_control(Control::PathField { command: cmd.clone() });
+            let decoded = lossy_roundtrip_decode_first_control(Control::PathField {
+                command: cmd.clone(),
+                display_text: String::new(),
+            });
             match decoded {
-                Control::PathField { command } => {
+                Control::PathField { command, .. } => {
                     assert_eq!(command, cmd, "PathField command must round-trip lossless");
                 }
                 other => {
@@ -2974,10 +3057,13 @@ mod tests {
         // `PathFieldCommand::Unknown("$X")` (no silent collapse to
         // `UnknownSummery` like the prior LOSSY policy).
         use hwpforge_core::control::{Control, PathFieldCommand};
-        let ctrl = Control::PathField { command: PathFieldCommand::Unknown("$X".to_string()) };
+        let ctrl = Control::PathField {
+            command: PathFieldCommand::Unknown("$X".to_string()),
+            display_text: String::new(),
+        };
         let decoded = lossy_roundtrip_decode_first_control(ctrl);
         match decoded {
-            Control::PathField { command } => match command {
+            Control::PathField { command, .. } => match command {
                 PathFieldCommand::Unknown(s) => assert_eq!(s, "$X"),
                 other => panic!("expected PathFieldCommand::Unknown(\"$X\"), got {other:?}"),
             },
@@ -2988,10 +3074,11 @@ mod tests {
     #[test]
     fn lossy_roundtrip_unknown_summery_preserves_token() {
         use hwpforge_core::control::Control;
-        let ctrl = Control::UnknownSummery { token: "$company".to_string() };
+        let ctrl =
+            Control::UnknownSummery { token: "$company".to_string(), display_text: String::new() };
         let decoded = lossy_roundtrip_decode_first_control(ctrl);
         match decoded {
-            Control::UnknownSummery { token } => {
+            Control::UnknownSummery { token, .. } => {
                 assert_eq!(token, "$company", "unknown $token must round-trip verbatim");
             }
             other => panic!("expected UnknownSummery($company), got {other:?}"),
@@ -3023,6 +3110,7 @@ mod tests {
             hint_text: None,
             help_text: None,
             name: None,
+            display_text: String::new(),
         };
         let decoded = lossy_roundtrip_decode_first_control(ctrl.clone());
         assert_eq!(decoded, ctrl, "SUMMERY $author must round-trip lossless");
@@ -3037,6 +3125,7 @@ mod tests {
             hint_text: None,
             help_text: None,
             name: None,
+            display_text: String::new(),
         };
         let decoded = lossy_roundtrip_decode_first_control(ctrl.clone());
         assert_eq!(decoded, ctrl, "SUMMERY $lastsaveby must round-trip lossless");
@@ -3051,6 +3140,7 @@ mod tests {
             hint_text: None,
             help_text: None,
             name: None,
+            display_text: String::new(),
         };
         let decoded = lossy_roundtrip_decode_first_control(ctrl.clone());
         assert_eq!(decoded, ctrl, "SUMMERY $createtime must round-trip lossless");
@@ -3065,6 +3155,7 @@ mod tests {
             hint_text: None,
             help_text: None,
             name: None,
+            display_text: String::new(),
         };
         let decoded = lossy_roundtrip_decode_first_control(ctrl.clone());
         assert_eq!(decoded, ctrl, "SUMMERY $modifiedtime must round-trip lossless");
@@ -3082,6 +3173,7 @@ mod tests {
             hint_text: None,
             help_text: None,
             name: None,
+            display_text: String::new(),
         };
         let decoded = lossy_roundtrip_decode_first_control(ctrl.clone());
         assert_eq!(decoded, ctrl, "SUMMERY $title must round-trip lossless");
@@ -3718,11 +3810,11 @@ mod tests {
         let big = 1_000_000_usize;
 
         assert_ids_under_limit(
-            &build_field_run_xml(&FieldType::ClickHere, "", "", "", 0, big),
+            &build_field_run_xml(&FieldType::ClickHere, "", "", "", "", 0, big),
             "field_run/CLICK_HERE",
         );
         assert_ids_under_limit(
-            &build_field_run_xml(&FieldType::ModifiedTime, "", "", "", 0, big),
+            &build_field_run_xml(&FieldType::ModifiedTime, "", "", "", "", 0, big),
             "field_run/SUMMERY",
         );
         assert_ids_under_limit(
