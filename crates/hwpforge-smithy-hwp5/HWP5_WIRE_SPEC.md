@@ -309,14 +309,67 @@ The schema parses these by family:
 | `0x54`  | `ShapeComponentOle`        | OLE container (Chart, embed)                                                        | Wave 4c  |
 | `0x55`  | `ShapePicture`             | picture / image                                                                     | early    |
 | `0x56`  | `ShapeContainer`           | group container                                                                     | early    |
-| `0x5A`  | `ShapeTextArt`             | TextArt                                                                             | early    |
+| `0x5A`  | `ShapeTextArt`             | TextArt (글맵시) — see §10.1                                                        | TextArt  |
 
 ConnectLine vs Line (both `0x4E`): differentiated by the leading 4-byte
 type tag on the parent `ShapeComponent` (`0x4C`) — `"$col"` discriminator
 for ConnectLine.
 
-> **`0x56 ShapeContainer` / `0x5A ShapeTextArt` exist in the `TagId` enum
-> but 한컴 does NOT use them for groups/text-art.** They are dead entries.
+> **`0x56 ShapeContainer` is a dead `TagId` entry** — 한컴 encodes a group as a
+> `ShapeComponent` (`0x4C`) with the `"$con"` type tag, NOT `0x56`.
+> **`0x5A ShapeTextArt` IS used** (TextArt), nested under a `ShapeComponent`
+> (`0x4C`) carrying the `"$tat"` type tag — see §10.1.
+
+### 10.1 TextArt (`<hp:textart>`, comp_type `"$tat"` + `0x5A`)
+
+TextArt (글맵시 — warped decorative text, like WordArt) is a `gso` shape whose
+`ShapeComponent` (`0x4C`) carries comp_type `"$tat"` (raw bytes
+`74 61 74 24`) wrapping a `ShapeTextArt` (`0x5A`) sub-record:
+
+```
+gso CtrlHeader (0x47 'gso ')               ← offset / size geometry
+  └─ ShapeComponent (0x4C, comp_type "$tat")  ← shape-common block
+       └─ ShapeTextArt (0x5A)                  ← textart payload
+```
+
+**`0x5A` payload layout** (little-endian; parsed by `Hwp5ShapeTextArt::parse`):
+
+| bytes     | field                                                  |
+| --------- | ------------------------------------------------------ |
+| `[0..32]` | `pt0..pt3` — four `(i32 x, i32 y)` corner points       |
+| BSTR      | `text` (u16 unit-count prefix + UTF-16LE body)         |
+| BSTR      | `font_name`                                            |
+| BSTR      | `font_style` (e.g. `"보통"`)                           |
+| `u32`     | `font_type` (`1` = TTF)                                |
+| `u32`     | `text_shape` (`0..=54` enum — see table below)         |
+| `u32`     | `line_spacing` (percent)                               |
+| `u32`     | `char_spacing` (percent)                               |
+| `u32`     | `align` (`0` = LEFT)                                   |
+| `[+20]`   | shadow (type / offsetX / offsetY) + reserved (ignored) |
+
+The HWPX `<hp:textartPr scaMatrix>` (the visual squish) is **not** read from
+the wire — it is computed as `curSz / orgSz` (`width/14173`, `height/14173`),
+matching native byte-for-byte.
+
+**`text_shape` enum** (HWP5 integer = grid reading-order position; HWPX string
+read from native `.hwpx`): `0` PARALLELOGRAM, `1` INVERTED_PARALLELOGRAM,
+`2` INVERTED_UPWARD_CASCADE, `3` INVERTED_DOWNWARD_CASCADE, `4` UPWARD_CASCADE,
+`5` DOWNWARD_CASCADE, `6` REDUCE_RIGHT, `7` REDUCE_LEFT, `8` ISOSCELES_TRAPEZOID,
+`9` INVERTED_ISOSCELES_TRAPEZOID, `10` TOP_RIBBON_RECTANGLE,
+`11` BOTTOM_RIBBON_RECTANGLE, `12` CHEVRON_DOWN, `13` CHEVRON, `14` BOW_TIE,
+`15` HEXAGON, `16` WAVE1, `17` WAVE2, `18` WAVE3, `19` WAVE4,
+`20` LEFT_TILT_CYLINDER, `21` RIGHT_TILT_CYLINDER, `22` BOTTOM_WIDE_CYLINDER,
+`23` TOP_WIDE_CYLINDER, `24` THIN_CURVE_UP1, `25` THIN_CURVE_UP2,
+`26` THIN_CURVE_DOWN1, `27` THIN_CURVE_DOWN2, `28` INVERSED_FINGERNAIL,
+`29` FINGERNAIL, `30` GINKO_LEAF1, `31` GINKO_LEAF2, `32` INFLATE_RIGHT,
+`33` INFLATE_LEFT, `34` INFLATE_UP_CONVEX, `35` INFLATE_BOTTOM_CONVEX,
+`36` DEFLATE_TOP, `37` DEFLATE_BOTTOM, `38` DEFLATE, `39` INFLATE,
+`40` INFLATE_TOP, `41` INFLATE_BOTTOM, `42` RECTANGLE, `43` LEFT_CYLINDER,
+`44` CYLINDER, `45` RIGHT_CYLINDER, `46` CIRCLE, `47` CURVE_DOWN, `48` ARCH_UP,
+`49` ARCH_DOWN, `50` SINGLE_LINE_CIRCLE1, `51` SINGLE_LINE_CIRCLE2,
+`52` TRIPLE_LINE_CIRCLE1, `53` TRIPLE_LINE_CIRCLE2, `54` DOUBLE_LINE_CIRCLE.
+(Source: `TEXTART_SHAPE_NAMES` in `schema/section.rs`, derived by pairing a
+native 56-textart fixture's wire integers with the 한컴-emitted HWPX strings.)
 
 ### Group / 묶음 객체 (`<hp:container>`, Wave A flat / Wave B nested)
 

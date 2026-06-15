@@ -13,6 +13,7 @@ use hwpforge_foundation::{
 use crate::error::HwpxResult;
 use crate::schema::section::{
     HxConnectLine, HxCurve, HxEllipse, HxFillBrush, HxLine, HxLineShape, HxPolygon, HxRect,
+    HxTextArt,
 };
 
 use super::section::{convert_hx_caption, decode_sublist_paragraphs, parse_hex_color};
@@ -504,6 +505,52 @@ pub(crate) fn decode_curve(
                 curve.flip.as_ref(),
                 &curve.dropcap_style,
             ),
+        })),
+        char_shape_id,
+    })
+}
+
+/// Decodes an `HxTextArt` (`<hp:textart>`) into a Core `Run` with
+/// `Control::TextArt`. Round-trip mirror of the encoder's raw-XML emission:
+/// geometry from `<hp:offset>`/`<hp:sz>`, typography from `<hp:textartPr>`.
+pub(crate) fn decode_textart(
+    text_art: &HxTextArt,
+    char_shape_id: CharShapeIndex,
+    _depth: usize,
+) -> HwpxResult<Run> {
+    let (width, height) = text_art
+        .sz
+        .as_ref()
+        .map(|sz| {
+            (
+                HwpUnit::new(sz.width).unwrap_or(HwpUnit::ZERO),
+                HwpUnit::new(sz.height).unwrap_or(HwpUnit::ZERO),
+            )
+        })
+        .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
+    let (horz_offset, vert_offset) = text_art.offset.as_ref().map(|o| (o.x, o.y)).unwrap_or((0, 0));
+    let inst_id = text_art.instid.parse::<u64>().ok().filter(|v| *v != 0);
+    let pr = text_art.textart_pr.clone().unwrap_or_default();
+    let line_spacing = u32::try_from(pr.line_spacing).unwrap_or(0);
+    let char_spacing = u32::try_from(pr.char_spacing).unwrap_or(0);
+    let shape = if pr.text_shape.is_empty() { "RECTANGLE".to_string() } else { pr.text_shape };
+    let align = if pr.align.is_empty() { "LEFT".to_string() } else { pr.align };
+
+    Ok(Run {
+        content: RunContent::Control(Box::new(Control::TextArt {
+            text: text_art.text.clone(),
+            shape,
+            font_name: pr.font_name,
+            font_style: pr.font_style,
+            align,
+            line_spacing,
+            char_spacing,
+            width,
+            height,
+            horz_offset,
+            vert_offset,
+            fill_color: None,
+            inst_id,
         })),
         char_shape_id,
     })

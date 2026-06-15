@@ -229,6 +229,65 @@ pub struct HxRun {
     /// deserializes back into a `Control::Group`.
     #[serde(rename(deserialize = "container"), default, skip_serializing)]
     pub containers: Vec<HxContainer>,
+
+    /// All `<hp:textart>` elements in this run (글맵시 / TextArt objects).
+    ///
+    /// Like `containers`, serialization is NOT driven by this field — the
+    /// encoder builds the `<hp:textart>` fragment as raw XML (derived
+    /// `scaMatrix`, fixed corner-point block that serde cannot express) and
+    /// injects it via marker substitution. This field exists for the decode
+    /// side so a round-tripped `<hp:textart>` deserializes back into a
+    /// `Control::TextArt`.
+    #[serde(rename(deserialize = "textart"), default, skip_serializing)]
+    pub textarts: Vec<HxTextArt>,
+}
+
+/// `<hp:textart>` — TextArt (글맵시) decorative warped-text object.
+///
+/// Decode-only mirror of [`crate::encoder::shapes::encode_text_art_to_xml`].
+/// Captures only the attributes needed to reconstruct `Control::TextArt`:
+/// the displayed `text`, `instid`, placement (`offset`), size (`sz`), and the
+/// `<hp:textartPr>` typography sub-element.
+#[derive(Debug, Default, Clone, Deserialize, PartialEq)]
+pub struct HxTextArt {
+    /// Displayed text content.
+    #[serde(rename = "@text", default)]
+    pub text: String,
+    /// Instance identifier (mirrors HWP5 / Core `inst_id`).
+    #[serde(rename = "@instid", default)]
+    pub instid: String,
+    /// Placement offset (`<hp:offset>`) — carries the anchor x/y.
+    #[serde(rename(deserialize = "offset"), default)]
+    pub offset: Option<HxOffset>,
+    /// Display size (`<hp:sz>`) — carries width/height.
+    #[serde(rename(deserialize = "sz"), default)]
+    pub sz: Option<HxTableSz>,
+    /// Typography properties (`<hp:textartPr>`).
+    #[serde(rename(deserialize = "textartPr"), default)]
+    pub textart_pr: Option<HxTextArtPr>,
+}
+
+/// `<hp:textartPr>` — TextArt typography (font / shape / spacing / align).
+#[derive(Debug, Default, Clone, Deserialize, PartialEq)]
+pub struct HxTextArtPr {
+    /// Font family name.
+    #[serde(rename = "@fontName", default)]
+    pub font_name: String,
+    /// Font style label.
+    #[serde(rename = "@fontStyle", default)]
+    pub font_style: String,
+    /// HWPX `textShape` name (e.g. `"WAVE2"`).
+    #[serde(rename = "@textShape", default)]
+    pub text_shape: String,
+    /// Line spacing (percent).
+    #[serde(rename = "@lineSpacing", default, deserialize_with = "deser_i32_or_u32")]
+    pub line_spacing: i32,
+    /// Character spacing (percent).
+    #[serde(rename = "@charSpacing", default, deserialize_with = "deser_i32_or_u32")]
+    pub char_spacing: i32,
+    /// Text alignment (e.g. `"LEFT"`).
+    #[serde(rename = "@align", default)]
+    pub align: String,
 }
 
 /// `<hp:container>` — group (묶음 객체 / 개체 묶기) wrapping child shapes.

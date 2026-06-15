@@ -906,6 +906,197 @@ impl Hwp5ShapeComponentCurve {
     }
 }
 
+/// Maximum UTF-16 code units accepted for a TextArt string field (DoS cap).
+pub(crate) const MAX_TEXTART_TEXT_UNITS: usize = 4096;
+
+/// Parsed `ShapeTextArt` (tag `0x5A`) payload for a 글맵시 (TextArt) object.
+///
+/// Layout (little-endian), confirmed by probing native 한컴 fixtures:
+/// - `[0..32]`  — four `(i32 x, i32 y)` corner points (`pt0`..`pt3`).
+/// - BSTR `text` — the displayed string (u16 length prefix + UTF-16LE body).
+/// - BSTR `font_name`.
+/// - BSTR `font_style`.
+/// - `font_type` (`u32`, `1` = TTF).
+/// - `text_shape` (`u32`, `0..=54` enum; maps to the HWPX `textShape` name).
+/// - `line_spacing` (`u32`, percent).
+/// - `char_spacing` (`u32`, percent).
+/// - `align` (`u32`, `0` = LEFT).
+/// - trailing 20 bytes — shadow (type/offsetX/offsetY) + reserved, ignored.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Hwp5ShapeTextArt {
+    /// Four corner points (`pt0`..`pt3`) in local object coordinates.
+    pub points: [Hwp5ShapePoint; 4],
+    /// Displayed text content.
+    pub text: String,
+    /// Font family name.
+    pub font_name: String,
+    /// Font style label (e.g. `"보통"`).
+    pub font_style: String,
+    /// Font type discriminator (`1` = TTF).
+    pub font_type: u32,
+    /// TextArt shape enum (`0..=54`).
+    pub text_shape: u32,
+    /// Line spacing (percent).
+    pub line_spacing: u32,
+    /// Character spacing (percent).
+    pub char_spacing: u32,
+    /// Text alignment enum (`0` = LEFT).
+    pub align: u32,
+}
+
+impl Hwp5ShapeTextArt {
+    /// Minimum payload: four corner points (32 bytes).
+    const MIN_SIZE: usize = 32;
+
+    /// Parse a `ShapeTextArt` payload.
+    pub(crate) fn parse(data: &[u8]) -> Hwp5Result<Self> {
+        if data.len() < Self::MIN_SIZE {
+            return Err(Hwp5Error::RecordParse {
+                offset: 0,
+                detail: format!(
+                    "ShapeTextArt too short: {} bytes (expected >= {})",
+                    data.len(),
+                    Self::MIN_SIZE
+                ),
+            });
+        }
+
+        let mut cur = Cursor::new(data);
+        let points = [
+            read_point(&mut cur)?,
+            read_point(&mut cur)?,
+            read_point(&mut cur)?,
+            read_point(&mut cur)?,
+        ];
+
+        let off = cur.position() as usize;
+        let parse_bstr = |off: usize, what: &str| -> Hwp5Result<(String, usize)> {
+            parse_length_prefixed_utf16(data, off, MAX_TEXTART_TEXT_UNITS).ok_or_else(|| {
+                Hwp5Error::RecordParse {
+                    offset: off,
+                    detail: format!("ShapeTextArt {what} string parse failed"),
+                }
+            })
+        };
+        let (text, off) = parse_bstr(off, "text")?;
+        let (font_name, off) = parse_bstr(off, "font_name")?;
+        let (font_style, off) = parse_bstr(off, "font_style")?;
+
+        let read_u32 = |off: usize, what: &str| -> Hwp5Result<u32> {
+            let end = off.checked_add(4).ok_or_else(|| Hwp5Error::RecordParse {
+                offset: off,
+                detail: format!("ShapeTextArt {what} offset overflow"),
+            })?;
+            data.get(off..end).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]])).ok_or_else(
+                || Hwp5Error::RecordParse {
+                    offset: off,
+                    detail: format!("ShapeTextArt truncated before {what}"),
+                },
+            )
+        };
+        let font_type = read_u32(off, "font_type")?;
+        let text_shape = read_u32(off + 4, "text_shape")?;
+        let line_spacing = read_u32(off + 8, "line_spacing")?;
+        let char_spacing = read_u32(off + 12, "char_spacing")?;
+        let align = read_u32(off + 16, "align")?;
+
+        Ok(Self {
+            points,
+            text,
+            font_name,
+            font_style,
+            font_type,
+            text_shape,
+            line_spacing,
+            char_spacing,
+            align,
+        })
+    }
+}
+
+/// The 55 TextArt shape names, indexed by the HWP5 `text_shape` integer
+/// (`0..=54`). Each entry is the exact HWPX `<hp:textartPr textShape>` string.
+///
+/// Derived by correlating a native 한컴 fixture containing one TextArt per
+/// grid shape against the 한컴-emitted `.hwpx` (the wire integer is the grid
+/// position; the string is read from the paired HWPX element).
+pub(crate) const TEXTART_SHAPE_NAMES: [&str; 55] = [
+    "PARALLELOGRAM",
+    "INVERTED_PARALLELOGRAM",
+    "INVERTED_UPWARD_CASCADE",
+    "INVERTED_DOWNWARD_CASCADE",
+    "UPWARD_CASCADE",
+    "DOWNWARD_CASCADE",
+    "REDUCE_RIGHT",
+    "REDUCE_LEFT",
+    "ISOSCELES_TRAPEZOID",
+    "INVERTED_ISOSCELES_TRAPEZOID",
+    "TOP_RIBBON_RECTANGLE",
+    "BOTTOM_RIBBON_RECTANGLE",
+    "CHEVRON_DOWN",
+    "CHEVRON",
+    "BOW_TIE",
+    "HEXAGON",
+    "WAVE1",
+    "WAVE2",
+    "WAVE3",
+    "WAVE4",
+    "LEFT_TILT_CYLINDER",
+    "RIGHT_TILT_CYLINDER",
+    "BOTTOM_WIDE_CYLINDER",
+    "TOP_WIDE_CYLINDER",
+    "THIN_CURVE_UP1",
+    "THIN_CURVE_UP2",
+    "THIN_CURVE_DOWN1",
+    "THIN_CURVE_DOWN2",
+    "INVERSED_FINGERNAIL",
+    "FINGERNAIL",
+    "GINKO_LEAF1",
+    "GINKO_LEAF2",
+    "INFLATE_RIGHT",
+    "INFLATE_LEFT",
+    "INFLATE_UP_CONVEX",
+    "INFLATE_BOTTOM_CONVEX",
+    "DEFLATE_TOP",
+    "DEFLATE_BOTTOM",
+    "DEFLATE",
+    "INFLATE",
+    "INFLATE_TOP",
+    "INFLATE_BOTTOM",
+    "RECTANGLE",
+    "LEFT_CYLINDER",
+    "CYLINDER",
+    "RIGHT_CYLINDER",
+    "CIRCLE",
+    "CURVE_DOWN",
+    "ARCH_UP",
+    "ARCH_DOWN",
+    "SINGLE_LINE_CIRCLE1",
+    "SINGLE_LINE_CIRCLE2",
+    "TRIPLE_LINE_CIRCLE1",
+    "TRIPLE_LINE_CIRCLE2",
+    "DOUBLE_LINE_CIRCLE",
+];
+
+/// Map a HWP5 `text_shape` integer to its HWPX `textShape` name.
+/// Returns `None` for an out-of-range value (caller should warn).
+pub(crate) fn textart_shape_name(index: u32) -> Option<&'static str> {
+    TEXTART_SHAPE_NAMES.get(index as usize).copied()
+}
+
+/// Map a HWP5 `align` integer to its HWPX `align` name.
+/// Only `0` = `LEFT` is observed; `1`/`2` follow the standard H-align order.
+pub(crate) fn textart_align_name(value: u32) -> Option<&'static str> {
+    match value {
+        0 => Some("LEFT"),
+        1 => Some("CENTER"),
+        2 => Some("RIGHT"),
+        3 => Some("FULL"),
+        4 => Some("DISTRIBUTE"),
+        _ => None,
+    }
+}
+
 /// Read one little-endian `(i32 x, i32 y)` point pair from a cursor.
 fn read_point(cur: &mut Cursor<&[u8]>) -> Hwp5Result<Hwp5ShapePoint> {
     let x = cur.read_i32::<LittleEndian>()?;
@@ -2794,6 +2985,82 @@ mod tests {
             Hwp5ShapeComponentEllipse::parse(&[0u8; 59]).unwrap_err(),
             Hwp5Error::RecordParse { .. }
         ));
+    }
+
+    /// Build a synthetic `ShapeTextArt` (`0x5A`) payload: four corner points,
+    /// three BSTR strings, then `font_type`/`text_shape`/`line_spacing`/
+    /// `char_spacing`/`align` u32s + the 20-byte shadow/reserved tail.
+    #[allow(clippy::too_many_arguments)]
+    fn textart_bytes(
+        text: &str,
+        font: &str,
+        style: &str,
+        font_type: u32,
+        shape: u32,
+        line_spacing: u32,
+        char_spacing: u32,
+        align: u32,
+    ) -> Vec<u8> {
+        let mut out = Vec::new();
+        for (x, y) in [(0i32, 0i32), (14173, 0), (14173, 14173), (0, 14173)] {
+            out.extend_from_slice(&x.to_le_bytes());
+            out.extend_from_slice(&y.to_le_bytes());
+        }
+        let push_bstr = |out: &mut Vec<u8>, s: &str| {
+            let units: Vec<u16> = s.encode_utf16().collect();
+            out.extend_from_slice(&(units.len() as u16).to_le_bytes());
+            for u in units {
+                out.extend_from_slice(&u.to_le_bytes());
+            }
+        };
+        push_bstr(&mut out, text);
+        push_bstr(&mut out, font);
+        push_bstr(&mut out, style);
+        for v in [font_type, shape, line_spacing, char_spacing, align] {
+            out.extend_from_slice(&v.to_le_bytes());
+        }
+        out.extend_from_slice(&[0u8; 20]); // shadow + reserved
+        out
+    }
+
+    #[test]
+    fn shape_text_art_parses_native_wave2_layout() {
+        // Mirrors the native WAVE2 fixture: text "글맵시", 함초롬바탕/보통,
+        // TTF(1), WAVE2(17), lineSpacing 120, charSpacing 100, LEFT(0).
+        let data = textart_bytes("글맵시", "함초롬바탕", "보통", 1, 17, 120, 100, 0);
+        let ta = Hwp5ShapeTextArt::parse(&data).unwrap();
+        assert_eq!(ta.points[1], Hwp5ShapePoint { x: 14173, y: 0 });
+        assert_eq!(ta.points[2], Hwp5ShapePoint { x: 14173, y: 14173 });
+        assert_eq!(ta.text, "글맵시");
+        assert_eq!(ta.font_name, "함초롬바탕");
+        assert_eq!(ta.font_style, "보통");
+        assert_eq!(ta.font_type, 1);
+        assert_eq!(ta.text_shape, 17);
+        assert_eq!(ta.line_spacing, 120);
+        assert_eq!(ta.char_spacing, 100);
+        assert_eq!(ta.align, 0);
+    }
+
+    #[test]
+    fn shape_text_art_too_short_errors() {
+        assert!(matches!(
+            Hwp5ShapeTextArt::parse(&[0u8; 16]).unwrap_err(),
+            Hwp5Error::RecordParse { .. }
+        ));
+    }
+
+    #[test]
+    fn textart_shape_table_is_complete_and_pinned() {
+        // The wire integer is the grid position; these anchors are confirmed
+        // against native fixtures (WAVE2=17, UPWARD_CASCADE=4).
+        assert_eq!(TEXTART_SHAPE_NAMES.len(), 55);
+        assert_eq!(textart_shape_name(0), Some("PARALLELOGRAM"));
+        assert_eq!(textart_shape_name(4), Some("UPWARD_CASCADE"));
+        assert_eq!(textart_shape_name(17), Some("WAVE2"));
+        assert_eq!(textart_shape_name(54), Some("DOUBLE_LINE_CIRCLE"));
+        assert_eq!(textart_shape_name(55), None, "out-of-range index yields None");
+        assert_eq!(textart_align_name(0), Some("LEFT"));
+        assert_eq!(textart_align_name(99), None);
     }
 
     #[test]

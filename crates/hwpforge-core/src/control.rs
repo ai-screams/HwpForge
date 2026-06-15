@@ -649,6 +649,44 @@ pub enum Control {
         inst_id: Option<u64>,
     },
 
+    /// A TextArt (글맵시) decorative warped-text object.
+    /// Maps to HWPX `<hp:textart>` with `<hp:textartPr>`.
+    ///
+    /// TextArt warps a short string into a shape (wave, arch, circle, …) and
+    /// renders it as a drawing object. The HWP5 wire stores `shape` as an
+    /// integer enum (`0..=54`); the HWPX wire stores it as a string name
+    /// (e.g. `"WAVE2"`). This carries the HWPX string form directly.
+    TextArt {
+        /// The displayed text content.
+        text: String,
+        /// HWPX `textShape` name (e.g. `"WAVE2"`). One of 55 known shapes.
+        shape: String,
+        /// Font family name (e.g. `"함초롬바탕"`).
+        font_name: String,
+        /// Font style label (e.g. `"보통"`).
+        font_style: String,
+        /// HWPX `align` value within the textart (e.g. `"LEFT"`).
+        align: String,
+        /// Line spacing (percent, HWPX `lineSpacing`).
+        line_spacing: u32,
+        /// Character spacing (percent, HWPX `charSpacing`).
+        char_spacing: u32,
+        /// Bounding box width (HWPUNIT).
+        width: HwpUnit,
+        /// Bounding box height (HWPUNIT).
+        height: HwpUnit,
+        /// Horizontal offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
+        horz_offset: i32,
+        /// Vertical offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
+        vert_offset: i32,
+        /// Fill color (the `<hc:winBrush faceColor>` of the textart glyphs).
+        /// `None` = no explicit fill carried.
+        fill_color: Option<Color>,
+        /// HWP5 GSO trailer instance ID, mirrored to HWPX `<hp:textart instid>`.
+        /// `None` = not carried.
+        inst_id: Option<u64>,
+    },
+
     /// A bookmark marking a named location in the document.
     /// Maps to HWPX `<hp:ctrl><hp:bookmark>` (point) or `fieldBegin/fieldEnd type="BOOKMARK"` (span).
     Bookmark {
@@ -2032,6 +2070,9 @@ impl std::fmt::Display for Control {
             }
             Self::Group { children, .. } => {
                 write!(f, "Group({} children)", children.len())
+            }
+            Self::TextArt { text, shape, .. } => {
+                write!(f, "TextArt(\"{text}\", {shape})")
             }
             Self::Bookmark { name, bookmark_type } => {
                 write!(f, "Bookmark(\"{name}\", {bookmark_type})")

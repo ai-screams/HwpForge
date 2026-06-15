@@ -813,6 +813,24 @@ fn build_runs(
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
+                    Control::TextArt { .. } => {
+                        // TextArt (글맵시) → <hp:textart>. Serde cannot express
+                        // the fixed corner-point block + <hp:textartPr> shape
+                        // and the scaMatrix entries are derived, so we build the
+                        // full fragment and inject it via the marker-substitution
+                        // path (mirroring group/chart/hyperlink).
+                        let textart_xml = super::shapes::encode_text_art_to_xml(ctrl)?;
+                        let field_id = hyperlink_entries.len();
+                        let marker = next_marker("HWPTAT", field_id);
+                        let real_xml = format!(
+                            r#"<hp:run charPrIDRef="{char_pr_id_ref}">{textart_xml}</hp:run>"#,
+                        );
+                        let marker_run_xml = format!(
+                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
+                        );
+                        hyperlink_entries.push((marker_run_xml, real_xml));
+                        texts.push(HxText::new(marker));
+                    }
                     Control::Unknown { .. } => {
                         // Unknown controls are silently skipped
                         continue;
@@ -849,6 +867,7 @@ fn build_runs(
             dutmals,
             composes,
             containers: Vec::new(),
+            textarts: Vec::new(),
         });
     }
 
@@ -877,6 +896,7 @@ fn build_runs(
                     curves: Vec::new(),
                     connect_lines: Vec::new(),
                     containers: Vec::new(),
+                    textarts: Vec::new(),
                 },
             );
         }

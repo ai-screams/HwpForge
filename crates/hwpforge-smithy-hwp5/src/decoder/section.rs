@@ -16,7 +16,7 @@ use crate::schema::section::{
     Hwp5CharShapeRun, Hwp5DutmalControl, Hwp5EqEdit, Hwp5MemoCommand, Hwp5PageDef, Hwp5ParaHeader,
     Hwp5ParaLineSeg, Hwp5ParaText, Hwp5ShapeComponentCurve, Hwp5ShapeComponentEllipse,
     Hwp5ShapeComponentGeometry, Hwp5ShapeComponentLine, Hwp5ShapeComponentOle,
-    Hwp5ShapeComponentPolygon, Hwp5ShapePicture, Hwp5ShapePoint, TextSegment,
+    Hwp5ShapeComponentPolygon, Hwp5ShapePicture, Hwp5ShapePoint, Hwp5ShapeTextArt, TextSegment,
 };
 
 // ---------------------------------------------------------------------------
@@ -159,6 +159,8 @@ pub(crate) enum Hwp5Control {
     /// `$con`-in-`$con` is degraded to `Unknown` with a warning (see
     /// [`GsoGroupBuilder`]). Depth-capped at [`GSO_GROUP_MAX_DEPTH`].
     Group(Hwp5GroupControl),
+    /// TextArt (글맵시) evidence: gso ShapeComponent "$tat" + a 0x5A ShapeTextArt sub-record.
+    TextArt(Hwp5TextArtControl),
     /// Generic/unsupported control — preserve the ctrl_id for future expansion.
     Unknown {
         /// Four-byte control ID (big-endian ASCII, e.g. 0x74626C20 = 'tbl ').
@@ -234,6 +236,26 @@ pub(crate) struct Hwp5EllipseControl {
     pub ctrl_id: u32,
     /// Minimal recovered geometry (placement + extent).
     pub geometry: Hwp5ShapeComponentGeometry,
+}
+
+/// Parsed TextArt (글맵시) evidence from a `gso ` scope whose `ShapeComponent`
+/// (`0x4C`) carries the `"$tat"` type tag wrapping a `ShapeTextArt` (`0x5A`)
+/// sub-record.
+///
+/// Geometry (placement + extent) comes from the owning `gso ` `CtrlHeader`,
+/// identical to how an ellipse gets its geometry; the warped-text payload
+/// (text, font, shape enum, spacing, alignment) comes from the `0x5A` record.
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5TextArtControl {
+    /// Owning control identifier, currently always `gso `.
+    #[allow(dead_code)] // reserved for semantic/control-audit slices
+    pub ctrl_id: u32,
+    /// Minimal recovered geometry (placement + extent).
+    pub geometry: Hwp5ShapeComponentGeometry,
+    /// Parsed warped-text payload from the `0x5A` `ShapeTextArt` sub-record.
+    pub text_art: Hwp5ShapeTextArt,
+    /// gso CtrlHeader trailer instance ID (mirror `Hwp5ImageControl.instance_id`).
+    pub instance_id: u32,
 }
 
 /// Parsed arc evidence from a `gso ` scope (a `ShapeComponentEllipse` with arc fields).
@@ -614,6 +636,15 @@ const SHAPE_COMPONENT_TYPE_CONNECT_LINE: [u8; 4] = [0x6C, 0x6F, 0x63, 0x24];
 /// rather than in `crate::ctrl_ids`.
 const SHAPE_COMPONENT_TYPE_GROUP: [u8; 4] = [0x6E, 0x6F, 0x63, 0x24];
 
+/// `ShapeComponent` (`0x4C`) type tag identifying a TextArt (글맵시) object,
+/// stored as the little-endian bytes for `"$tat"`. Probed from native 한컴
+/// fixtures. Shares the same discriminator mechanism as `$con` (group) and
+/// `$col` (connect line).
+///
+/// Not a `ctrl_id` — a `[u8; 4]` shape-component type tag — so it stays here
+/// rather than in `crate::ctrl_ids`.
+const SHAPE_COMPONENT_TYPE_TEXTART: [u8; 4] = [0x74, 0x61, 0x74, 0x24]; // "$tat"
+
 /// Maximum group nesting depth the decoder will descend before degrading.
 ///
 /// Wave A only carries FLAT groups (one `$con` level), but the cap is wired
@@ -842,6 +873,7 @@ struct NestedSubtreeContext {
     polygon: Option<Hwp5ShapeComponentPolygon>,
     ellipse: Option<Hwp5ShapeComponentEllipse>,
     curve: Option<Hwp5ShapeComponentCurve>,
+    text_art: Option<Hwp5ShapeTextArt>,
     /// Leading 4-byte type tag from the `ShapeComponent` (`0x4C`) record, used
     /// to tell a connect line apart from a plain line (both use `0x4E`).
     shape_component_kind: Option<[u8; 4]>,
@@ -875,6 +907,7 @@ impl NestedSubtreeContext {
             polygon: None,
             ellipse: None,
             curve: None,
+            text_art: None,
             shape_component_kind: None,
             paragraphs: Vec::new(),
             group: None,
@@ -918,6 +951,10 @@ impl NestedSubtreeContext {
 
     fn note_shape_curve(&mut self, curve: Hwp5ShapeComponentCurve) {
         self.curve = Some(curve);
+    }
+
+    fn note_shape_text_art(&mut self, ta: Hwp5ShapeTextArt) {
+        self.text_art = Some(ta);
     }
 
     fn allows_nested_paragraphs(&self) -> bool {
@@ -998,6 +1035,7 @@ impl NestedSubtreeContext {
                 polygon: self.polygon,
                 ellipse: self.ellipse,
                 curve: self.curve,
+                text_art: self.text_art,
                 shape_component_kind: self.shape_component_kind,
                 instance_id: self.instance_id,
             }),
@@ -1021,6 +1059,7 @@ struct InlineGsoContext {
     polygon: Option<Hwp5ShapeComponentPolygon>,
     ellipse: Option<Hwp5ShapeComponentEllipse>,
     curve: Option<Hwp5ShapeComponentCurve>,
+    text_art: Option<Hwp5ShapeTextArt>,
     /// Leading 4-byte type tag from the `ShapeComponent` (`0x4C`) record.
     shape_component_kind: Option<[u8; 4]>,
 }
@@ -1036,6 +1075,7 @@ struct GsoClassificationInput {
     polygon: Option<Hwp5ShapeComponentPolygon>,
     ellipse: Option<Hwp5ShapeComponentEllipse>,
     curve: Option<Hwp5ShapeComponentCurve>,
+    text_art: Option<Hwp5ShapeTextArt>,
     /// Leading 4-byte type tag from the `ShapeComponent` (`0x4C`) record.
     shape_component_kind: Option<[u8; 4]>,
     /// Wave 12p Step 1c-3: `gso ` CtrlHeader trailer instance ID,
@@ -1065,6 +1105,7 @@ struct GsoChildBuilder {
     polygon: Option<Hwp5ShapeComponentPolygon>,
     ellipse: Option<Hwp5ShapeComponentEllipse>,
     curve: Option<Hwp5ShapeComponentCurve>,
+    text_art: Option<Hwp5ShapeTextArt>,
     shape_component_kind: Option<[u8; 4]>,
     paragraphs: Vec<Hwp5Paragraph>,
 }
@@ -1086,6 +1127,7 @@ impl GsoChildBuilder {
             polygon: None,
             ellipse: None,
             curve: None,
+            text_art: None,
             shape_component_kind,
             paragraphs: Vec::new(),
         }
@@ -1127,6 +1169,7 @@ impl GsoChildBuilder {
             polygon: self.polygon,
             ellipse: self.ellipse,
             curve: self.curve,
+            text_art: self.text_art,
             shape_component_kind: self.shape_component_kind,
             instance_id: 0,
         });
@@ -1303,6 +1346,15 @@ impl GsoGroupBuilder {
                 Err(_) => warnings
                     .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
             },
+            TagId::ShapeTextArt => {
+                match crate::schema::section::Hwp5ShapeTextArt::parse(&record.data) {
+                    Ok(ta) => child.text_art = Some(ta),
+                    Err(_) => warnings.push(Hwp5Warning::UnsupportedTag {
+                        tag_id: record.header.tag_id,
+                        offset: 0,
+                    }),
+                }
+            }
             TagId::ShapePicture => match Hwp5ShapePicture::parse(&record.data) {
                 Ok(picture) => child.picture = Some(picture),
                 Err(_) => warnings
@@ -1397,6 +1449,7 @@ impl InlineGsoContext {
             polygon: None,
             ellipse: None,
             curve: None,
+            text_art: None,
             shape_component_kind: None,
         }
     }
@@ -1436,6 +1489,10 @@ impl InlineGsoContext {
         self.curve = Some(curve);
     }
 
+    fn note_shape_text_art(&mut self, ta: Hwp5ShapeTextArt) {
+        self.text_art = Some(ta);
+    }
+
     fn into_control(self) -> Hwp5Control {
         classify_gso_control(GsoClassificationInput {
             ctrl_id: self.ctrl_id,
@@ -1449,6 +1506,7 @@ impl InlineGsoContext {
             polygon: self.polygon,
             ellipse: self.ellipse,
             curve: self.curve,
+            text_art: self.text_art,
             shape_component_kind: self.shape_component_kind,
         })
     }
@@ -1456,6 +1514,21 @@ impl InlineGsoContext {
 
 fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
     if input.ctrl_id != CTRL_ID_GSO || !input.saw_shape_component {
+        return Hwp5Control::Unknown { ctrl_id: input.ctrl_id, header_data: Vec::new() };
+    }
+
+    // TextArt (글맵시) carries a `0x5A` `ShapeTextArt` sub-record but no
+    // single-shape payload (`payload_count == 0`), so it must be handled
+    // before the `payload_count != 1` guard below.
+    if input.shape_component_kind == Some(SHAPE_COMPONENT_TYPE_TEXTART) {
+        if let (Some(geometry), Some(text_art)) = (input.geometry, input.text_art) {
+            return Hwp5Control::TextArt(Hwp5TextArtControl {
+                ctrl_id: input.ctrl_id,
+                geometry,
+                text_art,
+                instance_id: input.instance_id,
+            });
+        }
         return Hwp5Control::Unknown { ctrl_id: input.ctrl_id, header_data: Vec::new() };
     }
 
@@ -1977,6 +2050,16 @@ impl BodyTextParserState {
                 }
                 Err(_) => self.push_unsupported_tag(record.header.tag_id),
             },
+            TagId::ShapeTextArt => {
+                match crate::schema::section::Hwp5ShapeTextArt::parse(&record.data) {
+                    Ok(ta) => {
+                        if let Some(ctx) = self.subtree_ctx.as_mut() {
+                            ctx.note_shape_text_art(ta);
+                        }
+                    }
+                    Err(_) => self.push_unsupported_tag(record.header.tag_id),
+                }
+            }
             TagId::ShapePicture => match Hwp5ShapePicture::parse(&record.data) {
                 Ok(picture) => {
                     if let Some(ctx) = self.subtree_ctx.as_mut() {
@@ -2805,6 +2888,15 @@ impl BodyTextParserState {
                 Err(_) => warnings
                     .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
             },
+            TagId::ShapeTextArt => {
+                match crate::schema::section::Hwp5ShapeTextArt::parse(&record.data) {
+                    Ok(ta) => ctx.note_shape_text_art(ta),
+                    Err(_) => warnings.push(Hwp5Warning::UnsupportedTag {
+                        tag_id: record.header.tag_id,
+                        offset: 0,
+                    }),
+                }
+            }
             TagId::ShapePicture => match Hwp5ShapePicture::parse(&record.data) {
                 Ok(picture) => ctx.note_shape_picture(picture),
                 Err(_) => warnings
@@ -4214,6 +4306,7 @@ mod tests {
             polygon: None,
             ellipse: None,
             curve: None,
+            text_art: None,
             shape_component_kind,
             instance_id: 0,
         }

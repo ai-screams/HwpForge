@@ -39,6 +39,7 @@ use crate::schema::section::{
     HxTableMargin, HxTablePos, HxTableSz,
 };
 
+use super::escape_xml;
 use super::section::{build_hx_caption, encode_paragraphs_to_sublist, generate_instid};
 
 // ── Shape-common helpers ─────────────────────────────────────────
@@ -1028,6 +1029,100 @@ fn remove_self_closing_element(xml: &str, local: &str) -> String {
     out
 }
 
+/// Encodes a Core `Control::TextArt` (글맵시) into its full `<hp:textart>` XML
+/// fragment.
+///
+/// Serde cannot model the fixed `<hc:pt0..pt3>` corner block plus the
+/// `<hp:textartPr>` sub-element shape, and the `scaMatrix` entries are
+/// derived (`width/14173`, `height/14173`) rather than stored, so this emits
+/// the native 한컴 element directly (mirroring the group/chart raw-XML path).
+/// `text` and string attributes are XML-escaped; the fill color falls back to
+/// the native default `#0000FF` when none is carried.
+pub(crate) fn encode_text_art_to_xml(ctrl: &Control) -> HwpxResult<String> {
+    let (
+        text,
+        shape,
+        font_name,
+        font_style,
+        align,
+        line_spacing,
+        char_spacing,
+        w,
+        h,
+        hx,
+        vy,
+        fill,
+        inst,
+    ) = match ctrl {
+        Control::TextArt {
+            text,
+            shape,
+            font_name,
+            font_style,
+            align,
+            line_spacing,
+            char_spacing,
+            width,
+            height,
+            horz_offset,
+            vert_offset,
+            fill_color,
+            inst_id,
+        } => (
+            text,
+            shape,
+            font_name,
+            font_style,
+            align,
+            *line_spacing,
+            *char_spacing,
+            width.as_i32(),
+            height.as_i32(),
+            *horz_offset,
+            *vert_offset,
+            *fill_color,
+            *inst_id,
+        ),
+        _ => unreachable!("encode_text_art_to_xml called with non-TextArt"),
+    };
+
+    let id = generate_instid();
+    let instid = inst.map_or_else(generate_instid, |v| v.to_string());
+    let face_color = fill.map_or_else(|| "#0000FF".to_string(), |c| c.to_hex_rgb());
+    // scaMatrix maps the 14173-HWPUNIT design box onto the rendered size.
+    let sca_x = format!("{:.6}", f64::from(w) / 14173.0);
+    let sca_y = format!("{:.6}", f64::from(h) / 14173.0);
+    let center_x = w / 2;
+    let center_y = h / 2;
+    let text_esc = escape_xml(text);
+    let shape_esc = escape_xml(shape);
+    let font_name_esc = escape_xml(font_name);
+    let font_style_esc = escape_xml(font_style);
+    let align_esc = escape_xml(align);
+
+    Ok(format!(
+        r##"<hp:textart id="{id}" zOrder="0" numberingType="PICTURE" textWrap="SQUARE" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="0" instid="{instid}" text="{text}"><hp:offset x="{hx}" y="{vy}"/><hp:orgSz width="14173" height="14173"/><hp:curSz width="{w}" height="{h}"/><hp:flip horizontal="0" vertical="0"/><hp:rotationInfo angle="0" centerX="{center_x}" centerY="{center_y}" rotateimage="1"/><hp:renderingInfo><hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/><hc:scaMatrix e1="{sca_x}" e2="0" e3="0" e4="0" e5="{sca_y}" e6="0"/><hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/></hp:renderingInfo><hp:lineShape color="#000000" width="0" style="NONE" endCap="ROUND" headStyle="NORMAL" tailStyle="NORMAL" headfill="0" tailfill="0" headSz="SMALL_SMALL" tailSz="SMALL_SMALL" outlineStyle="INNER" alpha="0"/><hc:fillBrush><hc:winBrush faceColor="{face_color}" hatchColor="#000000" alpha="0"/></hc:fillBrush><hp:shadow type="NONE" color="#B2B2B2" offsetX="0" offsetY="0" alpha="0"/><hc:pt0 x="0" y="0"/><hc:pt1 x="14173" y="0"/><hc:pt2 x="14173" y="14173"/><hc:pt3 x="0" y="14173"/><hp:textartPr fontName="{font_name}" fontStyle="{font_style}" fontType="TTF" textShape="{shape}" lineSpacing="{line_spacing}" charSpacing="{char_spacing}" align="{align}"><hp:shadow type="NONE" color="#000000" offsetX="0" offsetY="0" alpha="0"/></hp:textartPr><hp:sz width="{w}" widthRelTo="ABSOLUTE" height="{h}" heightRelTo="ABSOLUTE" protect="0"/><hp:pos treatAsChar="0" affectLSpacing="0" flowWithText="1" allowOverlap="0" holdAnchorAndSO="0" vertRelTo="PARA" horzRelTo="COLUMN" vertAlign="TOP" horzAlign="LEFT" vertOffset="0" horzOffset="0"/><hp:outMargin left="56" right="56" top="0" bottom="0"/><hp:shapeComment>글맵시</hp:shapeComment></hp:textart>"##,
+        id = id,
+        instid = instid,
+        text = text_esc,
+        hx = hx,
+        vy = vy,
+        w = w,
+        h = h,
+        center_x = center_x,
+        center_y = center_y,
+        sca_x = sca_x,
+        sca_y = sca_y,
+        face_color = face_color,
+        font_name = font_name_esc,
+        font_style = font_style_esc,
+        shape = shape_esc,
+        line_spacing = line_spacing,
+        char_spacing = char_spacing,
+        align = align_esc,
+    ))
+}
+
 /// Encodes a container child's group-relative position into its
 /// `<hc:transMatrix>` translation (`e3` = x, `e6` = y).
 ///
@@ -1138,6 +1233,7 @@ fn encode_group_child_xml(
             &encode_connect_line_to_hx(child, depth, hyperlink_entries)?,
             "hp:connectLine",
         )?,
+        Control::TextArt { .. } => encode_text_art_to_xml(child)?,
         // Nested groups are Wave B; in Wave A a group child is always flat.
         // Anything else (Equation, EmbeddedChart, Group, …) is not emitted as
         // a container child yet — drop it rather than fabricate.
@@ -1409,6 +1505,40 @@ mod tests {
         // Children carry groupLevel=1; only the container itself owns <hp:pos>.
         assert!(xml.contains(r#"groupLevel="1""#), "child groupLevel not set");
         assert_eq!(xml.matches("<hp:pos ").count(), 1, "only the container has <hp:pos>");
+    }
+
+    #[test]
+    fn text_art_encodes_native_textart_element() {
+        use hwpforge_foundation::HwpUnit;
+        let hu = |v: i32| HwpUnit::new(v).unwrap();
+        let ta = Control::TextArt {
+            text: "글맵시".to_string(),
+            shape: "WAVE2".to_string(),
+            font_name: "함초롬바탕".to_string(),
+            font_style: "보통".to_string(),
+            align: "LEFT".to_string(),
+            line_spacing: 120,
+            char_spacing: 100,
+            width: hu(6500),
+            height: hu(5000),
+            horz_offset: 0,
+            vert_offset: 0,
+            fill_color: None,
+            inst_id: Some(40_257_166),
+        };
+        let xml = encode_text_art_to_xml(&ta).unwrap();
+        assert!(xml.contains("<hp:textart "), "missing textart open: {xml}");
+        assert!(xml.contains(r#"text="글맵시""#), "text attr missing");
+        assert!(xml.contains(r#"textShape="WAVE2""#), "textShape missing");
+        assert!(xml.contains(r#"fontName="함초롬바탕""#), "fontName missing");
+        assert!(xml.contains(r#"instid="40257166""#), "carried instid missing");
+        assert!(xml.contains(r#"<hp:orgSz width="14173" height="14173"/>"#), "orgSz wrong");
+        assert!(xml.contains(r#"<hp:curSz width="6500" height="5000"/>"#), "curSz wrong");
+        // scaMatrix derived from curSz/orgSz: 6500/14173, 5000/14173.
+        assert!(xml.contains(r#"e1="0.458618""#), "scaMatrix e1 wrong: {xml}");
+        assert!(xml.contains(r#"e5="0.352783""#), "scaMatrix e5 wrong");
+        // No fill → native default blue.
+        assert!(xml.contains(r##"faceColor="#0000FF""##), "default fill missing");
     }
 
     #[test]

@@ -811,6 +811,7 @@ fn collect_image_geometry_hints_in_controls(
             | decoder::section::Hwp5Control::Ellipse(_)
             | decoder::section::Hwp5Control::Arc(_)
             | decoder::section::Hwp5Control::Curve(_)
+            | decoder::section::Hwp5Control::TextArt(_)
             | decoder::section::Hwp5Control::ConnectLine(_)
             | decoder::section::Hwp5Control::Equation(_)
             | decoder::section::Hwp5Control::Memo(_)

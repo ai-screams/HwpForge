@@ -268,6 +268,14 @@ fn adapt_control(
             build,
             ids,
         ),
+        Hwp5Control::TextArt(text_art) => adapt_shape_control(
+            text_art.ctrl_id,
+            Hwp5SemanticControlKind::TextArt,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
         Hwp5Control::ConnectLine(connect_line) => adapt_shape_control(
             connect_line.ctrl_id,
             Hwp5SemanticControlKind::ConnectLine,

@@ -223,6 +223,9 @@ fn validate_control_run(
         Control::Equation { script, width, height, .. } => {
             validate_equation_control(script, width.as_i32(), height.as_i32(), ctx)
         }
+        Control::TextArt { width, height, .. } => {
+            validate_shape_dimensions(width.as_i32(), height.as_i32(), "TextArt", ctx)
+        }
         Control::Hyperlink { .. }
         | Control::Unknown { .. }
         | Control::Dutmal { .. }
@@ -283,6 +286,7 @@ fn is_group_child_allowed(control: &Control) -> bool {
             | Control::TextBox { .. }
             | Control::EmbeddedChart { .. }
             | Control::Equation { .. }
+            | Control::TextArt { .. }
             | Control::Group { .. }
     )
 }

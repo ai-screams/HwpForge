@@ -480,6 +480,11 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
         runs.push(decode_curve(curve, char_shape_id, depth)?);
     }
 
+    // TextArt runs (from <hp:textart>)
+    for text_art in &hx.textarts {
+        runs.push(decode_textart(text_art, char_shape_id, depth)?);
+    }
+
     // ConnectLine runs (from <hp:connectLine>)
     for connect_line in &hx.connect_lines {
         runs.push(decode_connect_line(connect_line, char_shape_id, depth)?);
@@ -967,7 +972,7 @@ fn decode_field_control(
 // are defined in `super::shapes`.
 use super::shapes::{
     decode_arc, decode_connect_line, decode_container, decode_curve, decode_ellipse, decode_line,
-    decode_polygon, decode_textbox,
+    decode_polygon, decode_textart, decode_textbox,
 };
 
 /// Decodes an `HxEquation` into a Core `Run` with `Control::Equation`.

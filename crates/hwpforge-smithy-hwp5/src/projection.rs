@@ -32,8 +32,8 @@ use crate::decoder::section::{
     Hwp5ArcControl, Hwp5ConnectLineControl, Hwp5Control, Hwp5CurveControl, Hwp5EllipseControl,
     Hwp5EquationControl, Hwp5GroupChild, Hwp5GroupControl, Hwp5ImageControl, Hwp5LineControl,
     Hwp5MemoControl, Hwp5NestedSubtree, Hwp5OleObjectControl, Hwp5PageBorderFill, Hwp5Paragraph,
-    Hwp5PolygonControl, Hwp5RectControl, Hwp5Table, Hwp5TableCell, Hwp5TextBoxControl,
-    SectionResult,
+    Hwp5PolygonControl, Hwp5RectControl, Hwp5Table, Hwp5TableCell, Hwp5TextArtControl,
+    Hwp5TextBoxControl, SectionResult,
 };
 use crate::decoder::Hwp5Warning;
 use crate::error::Hwp5Result;
@@ -2040,6 +2040,9 @@ fn project_control_run(
         Hwp5Control::Ellipse(ellipse) => project_ellipse_run(ellipse),
         Hwp5Control::Arc(arc) => project_arc_run(arc),
         Hwp5Control::Curve(curve) => project_curve_run(curve),
+        Hwp5Control::TextArt(text_art) => {
+            Some(project_text_art_run(text_art, &mut projection_images.warnings))
+        }
         Hwp5Control::ConnectLine(connect_line) => project_connectline_run(connect_line),
         Hwp5Control::Equation(equation) => Some(project_equation_run(equation)),
         Hwp5Control::TextBox(textbox) => Some(project_textbox_run(textbox, projection_images)),
@@ -2402,6 +2405,9 @@ fn project_group_child(
         Hwp5Control::Ellipse(ellipse) => project_ellipse_run(ellipse),
         Hwp5Control::Arc(arc) => project_arc_run(arc),
         Hwp5Control::Curve(curve) => project_curve_run(curve),
+        Hwp5Control::TextArt(text_art) => {
+            Some(project_text_art_run(text_art, &mut projection_images.warnings))
+        }
         Hwp5Control::ConnectLine(connect_line) => project_connectline_run(connect_line),
         Hwp5Control::Equation(equation) => Some(project_equation_run(equation)),
         // Nested group (Wave B): recurse. `project_group_run` returns a
@@ -2578,6 +2584,51 @@ fn project_curve_run(curve: &Hwp5CurveControl) -> Option<Run> {
         }
     }
     Some(Run::control(control, CharShapeIndex::new(0)))
+}
+
+/// Project a TextArt (글맵시). Geometry comes from the owning gso CtrlHeader
+/// (mirroring the ellipse), and the warped-text payload from the `0x5A`
+/// `ShapeTextArt` sub-record. The HWP5 wire stores `text_shape`/`align` as
+/// integer enums; we map them to the HWPX string names, warning (rather than
+/// silently defaulting) when a value is out of the known range.
+fn project_text_art_run(text_art: &Hwp5TextArtControl, warnings: &mut Vec<Hwp5Warning>) -> Run {
+    let ta = &text_art.text_art;
+    let shape = crate::schema::section::textart_shape_name(ta.text_shape).unwrap_or_else(|| {
+        warnings.push(Hwp5Warning::ProjectionFallback {
+            subject: "textart.text_shape",
+            reason: format!(
+                "unknown TextArt shape enum {} (defaulting to RECTANGLE)",
+                ta.text_shape
+            ),
+        });
+        "RECTANGLE"
+    });
+    let align = crate::schema::section::textart_align_name(ta.align).unwrap_or_else(|| {
+        warnings.push(Hwp5Warning::ProjectionFallback {
+            subject: "textart.align",
+            reason: format!("unknown TextArt align enum {} (defaulting to LEFT)", ta.align),
+        });
+        "LEFT"
+    });
+    let width = hwp_unit_from_u32(text_art.geometry.width);
+    let height = hwp_unit_from_u32(text_art.geometry.height);
+    let inst_id = (text_art.instance_id != 0).then_some(u64::from(text_art.instance_id));
+    let control = Control::TextArt {
+        text: ta.text.clone(),
+        shape: shape.to_string(),
+        font_name: ta.font_name.clone(),
+        font_style: ta.font_style.clone(),
+        align: align.to_string(),
+        line_spacing: ta.line_spacing,
+        char_spacing: ta.char_spacing,
+        width,
+        height,
+        horz_offset: text_art.geometry.x,
+        vert_offset: text_art.geometry.y,
+        fill_color: None,
+        inst_id,
+    };
+    Run::control(control, CharShapeIndex::new(0))
 }
 
 /// Project a connect line. 한컴 stores it in the same `ShapeComponentLine`

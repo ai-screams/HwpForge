@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Added — HWP5↔HWPX TextArt(글맵시 / `<hp:textart>`) carry
+
+한컴 글맵시(워프된 장식 문자)를 HWP5→HWPX 변환에서 보존 (이전엔 통째로
+drop). **Core breaking (additive)**: `Control::TextArt { text, shape,
+font_name, font_style, align, line_spacing, char_spacing, width, height,
+horz_offset, vert_offset, fill_color, inst_id }` 신설 + `validate.rs` 가
+TextArt 를 도형 family 로 검증/그룹 자식 허용.
+
+- **Wire 발견**: TextArt 는 `gso` `ShapeComponent(0x4C)` 의 comp_type
+  판별자 `"$tat"` 가 `ShapeTextArt(0x5A)` sub-record 를 감싸는 구조
+  (`0x5A` 는 dead 가 아니라 TextArt 전용으로 사용됨 — WIRE_SPEC §10 정정).
+  `0x5A` 레이아웃: `pt0..3` (32B) + BSTR text/fontName/fontStyle + u32
+  fontType(1=TTF)/textShape(0..54)/lineSpacing/charSpacing/align(0=LEFT) +
+  20B shadow tail.
+- **textShape enum (55종)**: HWP5 정수 = 글맵시 모양 그리드 위치, HWPX
+  문자열은 native 출력에서 추출. 사용자가 작성한 56-textart fixture 로
+  전체 테이블 (`PARALLELOGRAM`=0 … `WAVE2`=17 … `DOUBLE_LINE_CIRCLE`=54)
+  을 한 번에 확정 (`TEXTART_SHAPE_NAMES`).
+- **HWP5 디코더**: `Hwp5ShapeTextArt` 스키마 + `$tat`/`0x5A` 를 4개 gso
+  컨텍스트에 ellipse 미러로 thread, `classify_gso_control` 에서
+  `Hwp5Control::TextArt` 조기 분류.
+- **Projection** → `Control::TextArt` (`textart_shape_name`/`textart_align_name`
+  으로 정수→문자열, 범위 밖이면 경고+fallback).
+- **HWPX 인코더**: `<hp:textart>` 직접 emit (renderingInfo scaMatrix =
+  curSz/orgSz 계산, lineShape NONE, fillBrush, pt0-3, textartPr, shapeComment).
+- **HWPX 디코더**: `<hp:textart>` → `Control::TextArt` round-trip (`HxTextArt`).
+- **검증**: workspace nextest 통과(+신규 textart 스키마/인코더/테이블 테스트),
+  clippy `-D warnings` clean. 사용자 작성 `sample-gso-textart-all.hwp`
+  (56 글맵시, 55 distinct shape) 변환 결과 textShape 55종 전부 보존, 0 drop,
+  HWP5→HWPX→JSON round-trip 56개 유지. scaMatrix/orgSz/curSz native 일치.
+
 ### Added — HWP5↔HWPX 묶음 객체(group / `<hp:container>`) carry (Wave A, flat groups)
 
 한컴 "개체 묶기"로 묶인 그리기 객체(group)를 HWP5→HWPX 변환에서 보존
