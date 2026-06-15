@@ -219,6 +219,62 @@ pub struct HxRun {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub composes: Vec<HxCompose>,
+
+    /// All `<hp:container>` elements in this run (group / 묶음 객체).
+    ///
+    /// Serialization is NOT driven by this field — the encoder builds the
+    /// container fragment as raw XML (heterogeneous, z-ordered children that
+    /// serde cannot express) and injects it via marker substitution. This
+    /// field exists for the decode side so a round-tripped `<hp:container>`
+    /// deserializes back into a `Control::Group`.
+    #[serde(rename(deserialize = "container"), default, skip_serializing)]
+    pub containers: Vec<HxContainer>,
+}
+
+/// `<hp:container>` — group (묶음 객체 / 개체 묶기) wrapping child shapes.
+///
+/// Wave A decodes FLAT children only (rect/ellipse/line/polygon/curve/
+/// connectLine). A nested `<hp:container>` child is dropped with no recursion
+/// (Wave B). The shape-common block (offset/orgSz/…) is parsed for geometry;
+/// children reuse the per-shape decoders.
+#[derive(Debug, Default, Clone, Deserialize, PartialEq)]
+pub struct HxContainer {
+    /// Group nesting level (`0` = outermost).
+    #[serde(rename = "@groupLevel", default)]
+    pub group_level: u32,
+    /// Instance identifier (mirrors HWP5 / Core `inst_id`).
+    #[serde(rename = "@instid", default)]
+    pub instid: String,
+
+    /// Group bounding-box original size (`<hp:orgSz>`).
+    #[serde(rename(deserialize = "orgSz"), default)]
+    pub org_sz: Option<HxSizeAttr>,
+    /// Group placement (`<hp:pos>`) — carries the anchor offsets.
+    #[serde(rename(deserialize = "pos"), default)]
+    pub pos: Option<HxTablePos>,
+    /// Group display size (`<hp:sz>`).
+    #[serde(rename(deserialize = "sz"), default)]
+    pub sz: Option<HxTableSz>,
+
+    // ── Children (flat shapes for Wave A) ──
+    /// `<hp:rect>` children (textboxes / pure rects).
+    #[serde(rename(deserialize = "rect"), default)]
+    pub rects: Vec<HxRect>,
+    /// `<hp:line>` children.
+    #[serde(rename(deserialize = "line"), default)]
+    pub lines: Vec<HxLine>,
+    /// `<hp:ellipse>` children (ellipse / arc).
+    #[serde(rename(deserialize = "ellipse"), default)]
+    pub ellipses: Vec<HxEllipse>,
+    /// `<hp:polygon>` children.
+    #[serde(rename(deserialize = "polygon"), default)]
+    pub polygons: Vec<HxPolygon>,
+    /// `<hp:curve>` children.
+    #[serde(rename(deserialize = "curve"), default)]
+    pub curves: Vec<HxCurve>,
+    /// `<hp:connectLine>` children.
+    #[serde(rename(deserialize = "connectLine"), default)]
+    pub connect_lines: Vec<HxConnectLine>,
 }
 
 // ── Text ──────────────────────────────────────────────────────────

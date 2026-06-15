@@ -1129,6 +1129,8 @@ pub enum Hwp5SemanticControlKind {
     Chart,
     /// OLE-backed embedded object.
     OleObject,
+    /// Group (묶음 객체) container wrapping flat shape children (Wave A).
+    Group,
     /// Unsupported or unknown control.
     Unknown(String),
 }

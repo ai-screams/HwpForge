@@ -153,6 +153,12 @@ pub(crate) enum Hwp5Control {
     TextBox(Hwp5TextBoxControl),
     /// Embedded OLE object evidence resolved from `gso ` + `ShapeComponent` + `ShapeComponentOle`.
     OleObject(Hwp5OleObjectControl),
+    /// Group (묶음 객체) evidence resolved from `gso ` + a `ShapeComponent`
+    /// (`0x4C`) carrying the `"$con"` type tag wrapping child
+    /// `ShapeComponent`s. Wave A carries FLAT children only; a nested
+    /// `$con`-in-`$con` is degraded to `Unknown` with a warning (see
+    /// [`GsoGroupBuilder`]). Depth-capped at [`GSO_GROUP_MAX_DEPTH`].
+    Group(Hwp5GroupControl),
     /// Generic/unsupported control — preserve the ctrl_id for future expansion.
     Unknown {
         /// Four-byte control ID (big-endian ASCII, e.g. 0x74626C20 = 'tbl ').
@@ -345,6 +351,45 @@ pub(crate) struct Hwp5OleObjectControl {
     pub extent_width: i32,
     /// Embedded object extent height in HWPUNIT.
     pub extent_height: i32,
+}
+
+/// Parsed group (묶음 객체) evidence from a `gso ` scope whose first
+/// `ShapeComponent` (`0x4C`) carries the `"$con"` type tag.
+///
+/// `children` holds the flat shape controls decoded from the deeper-level
+/// `ShapeComponent`s nested under the `$con` record (Wave A). Each child is
+/// produced by the same per-record decoders the single-shape path uses, so
+/// the group adds no new shape-parsing logic — only scope bookkeeping.
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5GroupControl {
+    /// Owning control identifier, always `gso `.
+    #[allow(dead_code)] // reserved for semantic/control-audit slices
+    pub ctrl_id: u32,
+    /// Group bounding-box geometry from the owning `gso ` `CtrlHeader`.
+    pub geometry: Hwp5ShapeComponentGeometry,
+    /// Child drawing objects in document (z-) order.
+    pub children: Vec<Hwp5GroupChild>,
+    /// `gso ` CtrlHeader trailer instance ID (mirrored to HWPX
+    /// `<hp:container instid>`). `0` when not recoverable.
+    pub instance_id: u32,
+}
+
+/// One child of a [`Hwp5GroupControl`]: a shape control plus any `drawText`
+/// paragraphs it carried.
+///
+/// The shape `control` is the typed evidence (`Rect`/`Ellipse`/`Line`/...);
+/// `paragraphs` is non-empty only for text-bearing shapes (the native group
+/// fixture's rect and ellipse both hold a single text paragraph). Carrying
+/// paragraphs separately keeps the existing typed `Hwp5Control` shape
+/// variants unchanged while letting the projection layer attach the text to
+/// the Core shape (`Control::TextBox` for rects, `ellipse_with_text` for
+/// ellipses).
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5GroupChild {
+    /// The child shape control.
+    pub control: Hwp5Control,
+    /// `drawText` paragraphs carried by the child, if any.
+    pub paragraphs: Vec<Hwp5Paragraph>,
 }
 
 /// Parsed table control content.
@@ -557,6 +602,25 @@ use crate::ctrl_ids::{
 /// Not a `ctrl_id` — `[u8; 4]` shape-component type tag (different wire role),
 /// so stays here rather than moving to `crate::ctrl_ids`.
 const SHAPE_COMPONENT_TYPE_CONNECT_LINE: [u8; 4] = [0x6C, 0x6F, 0x63, 0x24];
+
+/// `ShapeComponent` (`0x4C`) type tag identifying a group container (묶음
+/// 객체 / 개체 묶기), stored as the little-endian bytes for `"$con"`. Probed
+/// from the native fixture `sample-gso-group.hwp` (the leading 4 bytes of the
+/// `$con` `ShapeComponent` decode to `[0x6E, 0x6F, 0x63, 0x24]`). Shares the
+/// same discriminator mechanism as `$col` (connect line) and `$rec`/`$ell`/
+/// `$cur` (rect/ellipse/curve).
+///
+/// Not a `ctrl_id` — a `[u8; 4]` shape-component type tag — so it stays here
+/// rather than in `crate::ctrl_ids`.
+const SHAPE_COMPONENT_TYPE_GROUP: [u8; 4] = [0x6E, 0x6F, 0x63, 0x24];
+
+/// Maximum group nesting depth the decoder will descend before degrading.
+///
+/// Wave A only carries FLAT groups (one `$con` level), but the cap is wired
+/// now so Wave B (recursive `$con`-in-`$con`) is a small lift. Mirrors the
+/// defense-in-depth caps in `schema/summary_info.rs` — on exceed we emit a
+/// warning and degrade rather than recurse or panic.
+const GSO_GROUP_MAX_DEPTH: u16 = 16;
 
 // The `0x57 lvl=2` sub-record that follows every `%clk` CtrlHeader
 // carries the form-mode field name and HWP5 names it `CtrlData`. The
@@ -782,6 +846,10 @@ struct NestedSubtreeContext {
     /// to tell a connect line apart from a plain line (both use `0x4E`).
     shape_component_kind: Option<[u8; 4]>,
     paragraphs: Vec<Hwp5Paragraph>,
+    /// Active group builder, set when this gso scope's first `ShapeComponent`
+    /// carries the `"$con"` type tag. When `Some`, all subtree records are
+    /// routed to the group instead of the flat single-shape slots above.
+    group: Option<GsoGroupBuilder>,
 }
 
 impl NestedSubtreeContext {
@@ -809,6 +877,7 @@ impl NestedSubtreeContext {
             curve: None,
             shape_component_kind: None,
             paragraphs: Vec::new(),
+            group: None,
         }
     }
 
@@ -871,7 +940,12 @@ impl NestedSubtreeContext {
         }
     }
 
-    fn into_control(self) -> Hwp5Control {
+    fn into_control(self, warnings: &mut Vec<Hwp5Warning>) -> Hwp5Control {
+        // A `$con` group takes precedence over the flat single-shape path:
+        // the gso scope wrapped child shapes rather than a single shape.
+        if let Some(group) = self.group {
+            return group.into_control(warnings);
+        }
         match self.kind() {
             Some(NestedSubtreeKind::Header) if self.saw_list_header => {
                 Hwp5Control::Header(Hwp5NestedSubtree {
@@ -968,6 +1042,281 @@ struct GsoClassificationInput {
     /// passed through to `Hwp5ImageControl` (and other typed GSO
     /// variants in the future).
     instance_id: u32,
+}
+
+/// One child shape being collected inside a [`GsoGroupBuilder`].
+///
+/// Mirrors the single-shape slot set of [`InlineGsoContext`] /
+/// [`NestedSubtreeContext`] (same `note_shape_*` mutators, same
+/// `classify_gso_control` finalize path) plus a nested paragraph list for
+/// children that carry `drawText` content (the native group fixture's rect
+/// and ellipse both hold text). A child is finalized into a single
+/// `Hwp5Control` when its scope closes.
+struct GsoChildBuilder {
+    /// Record level of the child's own `ShapeComponent` (`0x4C`). The child
+    /// stays open while later records sit deeper than this.
+    comp_depth: u16,
+    saw_shape_rectangle: bool,
+    saw_list_header: bool,
+    geometry: Option<Hwp5ShapeComponentGeometry>,
+    picture: Option<Hwp5ShapePicture>,
+    ole: Option<Hwp5ShapeComponentOle>,
+    line: Option<Hwp5ShapeComponentLine>,
+    polygon: Option<Hwp5ShapeComponentPolygon>,
+    ellipse: Option<Hwp5ShapeComponentEllipse>,
+    curve: Option<Hwp5ShapeComponentCurve>,
+    shape_component_kind: Option<[u8; 4]>,
+    paragraphs: Vec<Hwp5Paragraph>,
+}
+
+impl GsoChildBuilder {
+    fn new(
+        comp_depth: u16,
+        shape_component_kind: Option<[u8; 4]>,
+        geometry: Option<Hwp5ShapeComponentGeometry>,
+    ) -> Self {
+        Self {
+            comp_depth,
+            saw_shape_rectangle: false,
+            saw_list_header: false,
+            geometry,
+            picture: None,
+            ole: None,
+            line: None,
+            polygon: None,
+            ellipse: None,
+            curve: None,
+            shape_component_kind,
+            paragraphs: Vec::new(),
+        }
+    }
+
+    /// Finalize this child into a [`Hwp5GroupChild`] (typed shape control +
+    /// any `drawText` paragraphs it carried).
+    ///
+    /// A rect/ellipse/line/etc. is classified by the shared
+    /// `classify_gso_control` path (no new shape logic). The child's
+    /// `drawText` paragraphs ride alongside so the projection layer can build
+    /// a text-bearing `Control::TextBox` (rects) or `ellipse_with_text`
+    /// (ellipses). A nested `$con` (group inside a group) is NOT recursed in
+    /// Wave A — it degrades to `Unknown` with a warning.
+    fn into_child(self, warnings: &mut Vec<Hwp5Warning>) -> Hwp5GroupChild {
+        if self.shape_component_kind == Some(SHAPE_COMPONENT_TYPE_GROUP) {
+            warnings.push(Hwp5Warning::DroppedControl {
+                control: "gso_group",
+                reason: "nested group ($con inside $con) is not carried in Wave A; \
+                         degrading nested group child to Unknown"
+                    .to_string(),
+            });
+            return Hwp5GroupChild {
+                control: Hwp5Control::Unknown { ctrl_id: CTRL_ID_GSO, header_data: Vec::new() },
+                paragraphs: Vec::new(),
+            };
+        }
+
+        let control = classify_gso_control(GsoClassificationInput {
+            ctrl_id: CTRL_ID_GSO,
+            saw_shape_component: true,
+            saw_shape_rectangle: self.saw_shape_rectangle,
+            geometry: self.geometry,
+            picture: self.picture,
+            ole: self.ole,
+            line: self.line,
+            polygon: self.polygon,
+            ellipse: self.ellipse,
+            curve: self.curve,
+            shape_component_kind: self.shape_component_kind,
+            instance_id: 0,
+        });
+        Hwp5GroupChild { control, paragraphs: self.paragraphs }
+    }
+}
+
+/// Group (묶음 객체) builder activated when a `gso ` scope's first
+/// `ShapeComponent` (`0x4C`) carries the `"$con"` type tag.
+///
+/// Models the scope-stack discipline of [`TableContext`]: a child opens on a
+/// deeper `ShapeComponent` and closes when a record at or above its depth
+/// arrives. Wave A keeps a single live child at a time (flat children only);
+/// the [`GSO_GROUP_MAX_DEPTH`] cap is wired so Wave B's recursive `$con`
+/// handling is a small lift.
+struct GsoGroupBuilder {
+    /// Level of the `$con` `ShapeComponent` (`0x4C`) that opened this group.
+    comp_depth: u16,
+    /// `1`-based nesting depth used for the depth cap. The outermost group
+    /// is depth `1`.
+    depth: u16,
+    geometry: Hwp5ShapeComponentGeometry,
+    instance_id: u32,
+    children: Vec<Hwp5GroupChild>,
+    current_child: Option<GsoChildBuilder>,
+}
+
+impl GsoGroupBuilder {
+    fn new(comp_depth: u16, geometry: Hwp5ShapeComponentGeometry, instance_id: u32) -> Self {
+        Self {
+            comp_depth,
+            depth: 1,
+            geometry,
+            instance_id,
+            children: Vec::new(),
+            current_child: None,
+        }
+    }
+
+    /// Close the live child (if any) and append it to `children`.
+    fn flush_current_child(&mut self, warnings: &mut Vec<Hwp5Warning>) {
+        if let Some(child) = self.current_child.take() {
+            self.children.push(child.into_child(warnings));
+        }
+    }
+
+    /// Dispatch one subtree record into the group / current-child state.
+    ///
+    /// `level` is the record's TLV level. Returns nothing; warnings are
+    /// surfaced for malformed sub-records and depth-cap exceed.
+    fn handle_record(
+        &mut self,
+        record: &Record,
+        tag: TagId,
+        level: u16,
+        warnings: &mut Vec<Hwp5Warning>,
+    ) {
+        // Close the live child when a record arrives at or above its depth
+        // (mirrors the `table_stack` close rule). A sibling `ShapeComponent`
+        // at the child depth closes the prior child before opening the next.
+        if self.current_child.as_ref().is_some_and(|c| level <= c.comp_depth) {
+            self.flush_current_child(warnings);
+        }
+
+        // A `ShapeComponent` (`0x4C`) one level below the `$con` opens a new
+        // child. Wave A treats every such child as a flat shape; a `$con`
+        // child (nested group) is recorded with its type tag and degraded at
+        // finalize time.
+        if matches!(tag, TagId::ShapeComponent) && level == self.comp_depth.saturating_add(1) {
+            let kind = record.data.get(..4).map(|c| [c[0], c[1], c[2], c[3]]);
+            // Depth cap: a nested `$con` would push us past the flat-group
+            // depth. Warn + degrade instead of recursing (Wave A scope).
+            if kind == Some(SHAPE_COMPONENT_TYPE_GROUP)
+                && self.depth.saturating_add(1) > GSO_GROUP_MAX_DEPTH
+            {
+                warnings.push(Hwp5Warning::DroppedControl {
+                    control: "gso_group",
+                    reason: format!(
+                        "group nesting exceeds depth cap {GSO_GROUP_MAX_DEPTH}; \
+                         degrading deepest group to Unknown"
+                    ),
+                });
+            }
+            // Parse the child's group-relative geometry from its own
+            // ShapeComponent common header (NOT the gso CtrlHeader — children
+            // have no per-shape CtrlHeader). Without it, classify_gso_control
+            // drops the child to Unknown.
+            let geometry =
+                Hwp5ShapeComponentGeometry::parse_from_shape_component(&record.data).ok();
+            self.current_child = Some(GsoChildBuilder::new(level, kind, geometry));
+            return;
+        }
+
+        // Everything deeper belongs to the live child.
+        let Some(child) = self.current_child.as_mut() else {
+            return;
+        };
+        match tag {
+            TagId::ListHeader => child.saw_list_header = true,
+            TagId::ShapeComponentRect => child.saw_shape_rectangle = true,
+            TagId::ShapeComponentLine => match Hwp5ShapeComponentLine::parse(&record.data) {
+                Ok(line) => child.line = Some(line),
+                Err(_) => warnings
+                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
+            },
+            TagId::ShapeComponentPolygon => match Hwp5ShapeComponentPolygon::parse(&record.data) {
+                Ok(polygon) => child.polygon = Some(polygon),
+                Err(_) => warnings
+                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
+            },
+            TagId::ShapeComponentEllipse => match Hwp5ShapeComponentEllipse::parse(&record.data) {
+                Ok(ellipse) => child.ellipse = Some(ellipse),
+                Err(_) => warnings
+                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
+            },
+            TagId::ShapeComponentCurve => match Hwp5ShapeComponentCurve::parse(&record.data) {
+                Ok(curve) => child.curve = Some(curve),
+                Err(_) => warnings
+                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
+            },
+            TagId::ShapePicture => match Hwp5ShapePicture::parse(&record.data) {
+                Ok(picture) => child.picture = Some(picture),
+                Err(_) => warnings
+                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
+            },
+            TagId::ShapeComponentOle => match Hwp5ShapeComponentOle::parse(&record.data) {
+                Ok(ole) => child.ole = Some(ole),
+                Err(_) => warnings
+                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
+            },
+            TagId::ParaHeader => {
+                if child.saw_list_header {
+                    if let Some(buf) = BodyTextParserState::parse_para_header_buf(
+                        record.header.tag_id,
+                        &record.data,
+                        warnings,
+                    ) {
+                        child.paragraphs.push(buf.finish());
+                    }
+                }
+            }
+            TagId::ParaText => {
+                if let Some(text) = BodyTextParserState::parse_para_text_value(
+                    record.header.tag_id,
+                    &record.data,
+                    warnings,
+                ) {
+                    if let Some(last) = child.paragraphs.last_mut() {
+                        last.text_segments = text.segments;
+                        last.text = segments_to_string(&last.text_segments);
+                    }
+                }
+            }
+            TagId::ParaCharShape => {
+                if let Some(runs) = BodyTextParserState::parse_para_char_shape_runs(
+                    record.header.tag_id,
+                    &record.data,
+                    warnings,
+                ) {
+                    if let Some(last) = child.paragraphs.last_mut() {
+                        last.char_shape_runs = runs;
+                    }
+                }
+            }
+            TagId::ParaLineSeg => {
+                if let Some(segments) = BodyTextParserState::parse_para_line_segments(
+                    record.header.tag_id,
+                    &record.data,
+                    warnings,
+                ) {
+                    if let Some(last) = child.paragraphs.last_mut() {
+                        last.line_segments = segments;
+                    }
+                }
+            }
+            TagId::Unknown(id) => {
+                warnings.push(Hwp5Warning::UnsupportedTag { tag_id: id, offset: 0 });
+            }
+            _ => {}
+        }
+    }
+
+    /// Finalize the group into a `Hwp5Control::Group`, closing any open child.
+    fn into_control(mut self, warnings: &mut Vec<Hwp5Warning>) -> Hwp5Control {
+        self.flush_current_child(warnings);
+        Hwp5Control::Group(Hwp5GroupControl {
+            ctrl_id: CTRL_ID_GSO,
+            geometry: self.geometry,
+            children: self.children,
+            instance_id: self.instance_id,
+        })
+    }
 }
 
 impl InlineGsoContext {
@@ -1289,7 +1638,7 @@ impl BodyTextParserState {
                 self.inline_subtree_gso_ctx.take(),
             );
             flush_subtree_paragraph(&mut self.current_subtree_para, self.subtree_ctx.as_mut());
-            attach_finished_subtree(&mut self.current, self.subtree_ctx.take());
+            attach_finished_subtree(&mut self.current, self.subtree_ctx.take(), &mut self.warnings);
         }
     }
 
@@ -1425,6 +1774,80 @@ impl BodyTextParserState {
         true
     }
 
+    /// Routes a subtree record into the active gso `$con` group, activating
+    /// the group on the first `$con` `ShapeComponent` (`0x4C`) seen at the
+    /// gso scope's top child level.
+    ///
+    /// Returns `true` when the record was consumed by group handling so the
+    /// caller skips the flat single-shape dispatch. Wave A keeps flat groups
+    /// only; nested `$con` children degrade to `Unknown` inside
+    /// [`GsoGroupBuilder`].
+    fn maybe_route_subtree_group_record(
+        &mut self,
+        record: &Record,
+        tag: TagId,
+        level: u16,
+    ) -> bool {
+        // Read the gso scope shape (ctrl_id / depth / geometry / group flag)
+        // without holding a mutable borrow across the `self.warnings` writes.
+        let Some((is_gso, ctrl_depth, geometry, instance_id, group_active)) =
+            self.subtree_ctx.as_ref().map(|ctx| {
+                (
+                    ctx.ctrl_id == CTRL_ID_GSO,
+                    ctx.ctrl_depth,
+                    ctx.geometry.clone(),
+                    ctx.instance_id,
+                    ctx.group.is_some(),
+                )
+            })
+        else {
+            return false;
+        };
+        if !is_gso {
+            return false;
+        }
+
+        // Activate the group on the first `$con` ShapeComponent at the gso
+        // scope's top child level (ctrl_depth + 1). Requires a recovered
+        // group bounding box; without it we cannot place the container, so
+        // fall through to the (degrading) flat path.
+        if !group_active
+            && matches!(tag, TagId::ShapeComponent)
+            && level == ctrl_depth.saturating_add(1)
+            && record.data.get(..4) == Some(&SHAPE_COMPONENT_TYPE_GROUP)
+        {
+            let Some(geometry) = geometry else {
+                self.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "gso_group",
+                    reason: "group ($con) without recoverable bounding box; \
+                             cannot place <hp:container>"
+                        .to_string(),
+                });
+                return false;
+            };
+            if let Some(ctx) = self.subtree_ctx.as_mut() {
+                ctx.group = Some(GsoGroupBuilder::new(level, geometry, instance_id));
+            }
+            // The `$con` record itself opens the group scope; it carries no
+            // child payload, so nothing further to route for this record.
+            return true;
+        }
+
+        if group_active {
+            // Take the group out so its mutator can borrow `self.warnings`
+            // disjointly, then store it back.
+            let mut group =
+                self.subtree_ctx.as_mut().and_then(|ctx| ctx.group.take()).expect("group active");
+            group.handle_record(record, tag, level, &mut self.warnings);
+            if let Some(ctx) = self.subtree_ctx.as_mut() {
+                ctx.group = Some(group);
+            }
+            return true;
+        }
+
+        false
+    }
+
     fn handle_active_subtree_record(&mut self, record: &Record, tag: TagId, level: u16) -> bool {
         if self.subtree_ctx.as_ref().is_none_or(|ctx| level <= ctx.ctrl_depth) {
             return false;
@@ -1436,6 +1859,15 @@ impl BodyTextParserState {
             &mut self.warnings,
             self.inline_subtree_gso_ctx.as_mut(),
         ) {
+            return true;
+        }
+
+        // Group (묶음 객체) routing. A gso scope whose first `ShapeComponent`
+        // (`0x4C`) carries the `"$con"` type tag is a group, not a single
+        // shape: every following subtree record belongs to the group's child
+        // collector rather than the flat single-shape slots. Once the group
+        // is active it owns all deeper records until the scope closes.
+        if self.maybe_route_subtree_group_record(record, tag, level) {
             return true;
         }
 
@@ -2201,7 +2633,7 @@ impl BodyTextParserState {
             self.inline_subtree_gso_ctx.take(),
         );
         flush_subtree_paragraph(&mut self.current_subtree_para, self.subtree_ctx.as_mut());
-        attach_finished_subtree(&mut self.current, self.subtree_ctx.take());
+        attach_finished_subtree(&mut self.current, self.subtree_ctx.take(), &mut self.warnings);
 
         if let Some(buf) = self.current.take() {
             self.paragraphs.push(buf.finish());
@@ -2602,12 +3034,14 @@ fn flush_subtree_paragraph(
 fn attach_finished_subtree(
     current: &mut Option<ParaBuf>,
     subtree_ctx: Option<NestedSubtreeContext>,
+    warnings: &mut Vec<Hwp5Warning>,
 ) {
     let Some(ctx) = subtree_ctx else {
         return;
     };
+    let control = ctx.into_control(warnings);
     if let Some(buf) = current.as_mut() {
-        buf.controls.push(ctx.into_control());
+        buf.controls.push(control);
     }
 }
 
@@ -3695,7 +4129,8 @@ mod tests {
             Hwp5ShapeComponentOle::parse(&shape_component_ole_data(1, 9000, 8000)).unwrap(),
         );
 
-        match ctx.into_control() {
+        let mut warnings = Vec::new();
+        match ctx.into_control(&mut warnings) {
             Hwp5Control::Unknown { ctrl_id, .. } => assert_eq!(ctrl_id, CTRL_ID_GSO),
             other => panic!("expected Unknown for ambiguous subtree gso payload, got {:?}", other),
         }

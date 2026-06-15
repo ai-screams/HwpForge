@@ -974,6 +974,244 @@ pub(crate) fn encode_connect_line_to_hx(
     })
 }
 
+/// Serializes any serde value to an XML fragment with the given root element
+/// name (e.g. `"hp:rect"`). Used by the recursive group emitter to turn each
+/// `Hx*` shape and the container's shape-common sub-blocks into raw XML that
+/// is concatenated in document (z-) order inside `<hp:container>`.
+fn serialize_with_root<T: serde::Serialize>(value: &T, root: &str) -> HwpxResult<String> {
+    let mut buf = String::new();
+    let ser = quick_xml::se::Serializer::with_root(&mut buf, Some(root))
+        .map_err(|e| crate::error::HwpxError::XmlSerialize { detail: e.to_string() })?;
+    value
+        .serialize(ser)
+        .map_err(|e| crate::error::HwpxError::XmlSerialize { detail: e.to_string() })?;
+    Ok(buf)
+}
+
+/// Sets the `groupLevel` attribute on a serialized shape XML fragment.
+///
+/// Every `Hx*` shape encoder emits `groupLevel="0"`; children of a group must
+/// carry the parent's depth + 1. We rewrite the first `groupLevel="0"` (which
+/// is always the shape's own attribute, the leftmost occurrence) rather than
+/// thread the level through every encoder signature.
+fn set_group_level(xml: &str, level: u32) -> String {
+    xml.replacen(r#"groupLevel="0""#, &format!(r#"groupLevel="{level}""#), 1)
+}
+
+/// Rewrites the shape's `<hp:offset x="0" y="0"/>` to its group-relative
+/// position. `build_shape_common` always emits a zero offset (a free-floating
+/// shape carries its position in `<hp:pos>`), but a container child's
+/// position lives in `<hp:offset>` relative to the group origin. We rewrite
+/// the leftmost (own) `<hp:offset>` rather than thread coordinates through
+/// every per-shape encoder signature — same approach as [`set_group_level`].
+fn set_group_child_offset(xml: &str, x: i32, y: i32) -> String {
+    xml.replacen(r#"<hp:offset x="0" y="0"/>"#, &format!(r#"<hp:offset x="{x}" y="{y}"/>"#), 1)
+}
+
+/// Removes every self-closing `<hp:{local} .../>` element from `xml`.
+///
+/// Top-level shape encoders emit `<hp:sz>` + `<hp:pos>` for placement
+/// relative to the page/paragraph. A container child is positioned by its
+/// `<hp:offset>` within the group instead — native 한컴 omits `sz`/`pos` on
+/// group children — so we strip them from the child fragment (the container's
+/// own `sz`/`pos`, added later by `encode_group_to_xml`, are unaffected).
+fn remove_self_closing_element(xml: &str, local: &str) -> String {
+    let open = format!("<{local} ");
+    let mut out = String::with_capacity(xml.len());
+    let mut rest = xml;
+    while let Some(start) = rest.find(&open) {
+        let Some(end_rel) = rest[start..].find("/>") else { break };
+        out.push_str(&rest[..start]);
+        rest = &rest[start + end_rel + 2..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Encodes a container child's group-relative position into its
+/// `<hc:transMatrix>` translation (`e3` = x, `e6` = y).
+///
+/// 한컴 positions a `<hp:container>` child by the translation components of
+/// its transform matrix, NOT by `<hp:offset>` (verified against native
+/// `sample-gso-group.hwpx`: a child at offset (17360, 0) carries
+/// `transMatrix e3="17360" e6="0"`; an identity matrix renders every child at
+/// the group origin → overlap). `build_shape_common` emits an identity
+/// transMatrix for non-rotated shapes, so we rewrite that exact string. The
+/// sibling `scaMatrix`/`rotMatrix` share the identity numbers but a distinct
+/// tag name, so the first-match replace only touches `transMatrix`.
+fn set_group_child_translate(xml: &str, x: i32, y: i32) -> String {
+    xml.replacen(
+        r#"<hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>"#,
+        &format!(r#"<hc:transMatrix e1="1" e2="0" e3="{x}" e4="0" e5="1" e6="{y}"/>"#),
+        1,
+    )
+}
+
+/// Rewrites the first `<hp:curSz .../>` to `width="0" height="0"` — the value
+/// native 한컴 emits for container children (the rendered size comes from
+/// `<hp:orgSz>`). Keeps byte-parity with native group children.
+fn zero_cur_sz(xml: &str) -> String {
+    let open = "<hp:curSz ";
+    let Some(start) = xml.find(open) else { return xml.to_string() };
+    let Some(end_rel) = xml[start..].find("/>") else { return xml.to_string() };
+    let mut out = String::with_capacity(xml.len());
+    out.push_str(&xml[..start]);
+    out.push_str(r#"<hp:curSz width="0" height="0"/>"#);
+    out.push_str(&xml[start + end_rel + 2..]);
+    out
+}
+
+/// Group-relative (x, y) offset of a shape child, read from the variant's
+/// `horz_offset`/`vert_offset`. Returns `(0, 0)` for variants without an
+/// offset (they sit at the group origin).
+fn group_child_offset(child: &Control) -> (i32, i32) {
+    match child {
+        Control::TextBox { horz_offset, vert_offset, .. }
+        | Control::Rect { horz_offset, vert_offset, .. }
+        | Control::Ellipse { horz_offset, vert_offset, .. }
+        | Control::Arc { horz_offset, vert_offset, .. }
+        | Control::Polygon { horz_offset, vert_offset, .. }
+        | Control::Curve { horz_offset, vert_offset, .. }
+        | Control::ConnectLine { horz_offset, vert_offset, .. }
+        | Control::Line { horz_offset, vert_offset, .. } => (*horz_offset, *vert_offset),
+        _ => (0, 0),
+    }
+}
+
+/// Encodes one child shape control into its HWPX XML fragment, reusing the
+/// existing per-shape encoders. Text-bearing children (`TextBox`,
+/// `Ellipse`-with-paragraphs) carry their `<hp:drawText>` automatically via
+/// those encoders. Returns `None` for controls that have no flat-shape
+/// representation (these are dropped — the decoder already warns for degraded
+/// nested groups).
+fn encode_group_child_xml(
+    child: &Control,
+    depth: usize,
+    group_level: u32,
+    hyperlink_entries: &mut Vec<(String, String)>,
+) -> HwpxResult<Option<String>> {
+    let raw = match child {
+        Control::TextBox { .. } => serialize_with_root(
+            &encode_textbox_to_rect(child, depth, hyperlink_entries)?,
+            "hp:rect",
+        )?,
+        Control::Rect { .. } => {
+            serialize_with_root(&encode_rect_to_hx(child, depth, hyperlink_entries)?, "hp:rect")?
+        }
+        Control::Line { .. } => {
+            serialize_with_root(&encode_line_to_hx(child, depth, hyperlink_entries)?, "hp:line")?
+        }
+        Control::Ellipse { .. } => serialize_with_root(
+            &encode_ellipse_to_hx(child, depth, hyperlink_entries)?,
+            "hp:ellipse",
+        )?,
+        Control::Arc { .. } => {
+            serialize_with_root(&encode_arc_to_hx(child, depth, hyperlink_entries)?, "hp:ellipse")?
+        }
+        Control::Polygon { .. } => serialize_with_root(
+            &encode_polygon_to_hx(child, depth, hyperlink_entries)?,
+            "hp:polygon",
+        )?,
+        Control::Curve { .. } => {
+            serialize_with_root(&encode_curve_to_hx(child, depth, hyperlink_entries)?, "hp:curve")?
+        }
+        Control::ConnectLine { .. } => serialize_with_root(
+            &encode_connect_line_to_hx(child, depth, hyperlink_entries)?,
+            "hp:connectLine",
+        )?,
+        // Nested groups are Wave B; in Wave A a group child is always flat.
+        // Anything else (Equation, EmbeddedChart, Group, …) is not emitted as
+        // a container child yet — drop it rather than fabricate.
+        _ => return Ok(None),
+    };
+    let (x, y) = group_child_offset(child);
+    // 한컴 positions a container child by its transform-matrix translation;
+    // `<hp:offset>` mirrors it (native carries both). Identity matrices render
+    // every child at the group origin (overlap) — verified visually.
+    let raw = set_group_child_offset(&raw, x, y);
+    let raw = set_group_child_translate(&raw, x, y);
+    let raw = zero_cur_sz(&raw);
+    // Container children are placed within the group, not relative to the
+    // page; strip the top-level `<hp:sz>`/`<hp:pos>` placement elements the
+    // per-shape encoders emit (native 한컴 omits them on group children).
+    let raw = remove_self_closing_element(&raw, "hp:sz");
+    let raw = remove_self_closing_element(&raw, "hp:pos");
+    Ok(Some(set_group_level(&raw, group_level)))
+}
+
+/// Encodes a Core `Control::Group` (묶음 객체) into a complete `<hp:container>`
+/// XML fragment (KS X 6101 §10.9.8).
+///
+/// Layout mirrors the native fixture: container attributes, the shape-common
+/// block (`offset`/`orgSz`/`curSz`/`flip`/`rotationInfo`/`renderingInfo`),
+/// the child shapes in z-order (each with `groupLevel` = parent + 1), then
+/// `sz`/`pos`/`outMargin`/`shapeComment`. Children carry absolute geometry —
+/// no rescaling (gotcha #3: geometry stays in the `hc:` namespace, which the
+/// per-shape encoders already honor).
+pub(crate) fn encode_group_to_xml(
+    ctrl: &Control,
+    depth: usize,
+    group_level: u32,
+    hyperlink_entries: &mut Vec<(String, String)>,
+) -> HwpxResult<String> {
+    let (children, width, height, horz_offset, vert_offset, inst_id) = match ctrl {
+        Control::Group { children, width, height, horz_offset, vert_offset, inst_id } => {
+            (children, width.as_i32(), height.as_i32(), *horz_offset, *vert_offset, *inst_id)
+        }
+        _ => unreachable!("encode_group_to_xml called with non-Group"),
+    };
+
+    let sc = build_shape_common(width, height, None);
+
+    // Shape-common block (serialized via the same Hx* sub-structs the per-shape
+    // encoders use, so the element shape matches native exactly).
+    let mut common = String::new();
+    common.push_str(&serialize_with_root(&sc.offset, "hp:offset")?);
+    common.push_str(&serialize_with_root(&sc.org_sz, "hp:orgSz")?);
+    common.push_str(&serialize_with_root(&sc.cur_sz, "hp:curSz")?);
+    common.push_str(&serialize_with_root(&sc.flip, "hp:flip")?);
+    common.push_str(&serialize_with_root(&sc.rotation_info, "hp:rotationInfo")?);
+    common.push_str(&serialize_with_root(&sc.rendering_info, "hp:renderingInfo")?);
+
+    // Children in z-order, each at the next group level.
+    let mut children_xml = String::new();
+    for child in children {
+        if let Some(xml) = encode_group_child_xml(child, depth, group_level + 1, hyperlink_entries)?
+        {
+            children_xml.push_str(&xml);
+        }
+    }
+
+    // Trailing sz / pos / outMargin / shapeComment.
+    let sz = serialize_with_root(
+        &HxTableSz {
+            width,
+            width_rel_to: "ABSOLUTE".to_string(),
+            height,
+            height_rel_to: "ABSOLUTE".to_string(),
+            protect: 0,
+        },
+        "hp:sz",
+    )?;
+    let pos = serialize_with_root(&shape_position(horz_offset, vert_offset), "hp:pos")?;
+    let out_margin = serialize_with_root(
+        &HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 },
+        "hp:outMargin",
+    )?;
+    let shape_comment = serialize_with_root(
+        &HxShapeComment { text: "묶음 개체입니다.".to_string() },
+        "hp:shapeComment",
+    )?;
+
+    let id = generate_instid();
+    let instid = inst_id.map_or_else(generate_instid, |v| v.to_string());
+    Ok(format!(
+        r#"<hp:container id="{id}" zOrder="0" numberingType="{numbering}" textWrap="{wrap}" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="{group_level}" instid="{instid}">{common}{children_xml}{sz}{pos}{out_margin}{shape_comment}</hp:container>"#,
+        numbering = shape_numbering_type(horz_offset, vert_offset),
+        wrap = shape_text_wrap(horz_offset, vert_offset),
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1110,6 +1348,48 @@ mod tests {
         let sc = build_shape_common(1000, 500, None);
         assert_eq!(sc.offset.x, 0);
         assert_eq!(sc.offset.y, 0);
+    }
+
+    #[test]
+    fn group_encodes_container_with_positioned_children() {
+        use hwpforge_foundation::HwpUnit;
+        let hu = |v: i32| HwpUnit::new(v).unwrap();
+        // A group with two rects at distinct offsets (0,1365) + (17360,0),
+        // mirroring the placement in native `sample-gso-group`.
+        let child = |w, h, hx, vy| Control::Rect {
+            width: hu(w),
+            height: hu(h),
+            horz_offset: hx,
+            vert_offset: vy,
+            caption: None,
+            style: None,
+        };
+        let group = Control::Group {
+            children: vec![child(14_922, 7780, 0, 1365), child(6998, 12_426, 17_360, 0)],
+            width: hu(24_358),
+            height: hu(12_426),
+            horz_offset: 0,
+            vert_offset: 0,
+            inst_id: None,
+        };
+        let mut entries = Vec::new();
+        let xml = encode_group_to_xml(&group, 0, 0, &mut entries).unwrap();
+
+        assert!(xml.contains("<hp:container"), "missing container: {xml}");
+        assert_eq!(xml.matches("<hp:rect").count(), 2, "expected 2 rect children");
+        // Children positioned by transMatrix translation (e3=x, e6=y), NOT an
+        // identity matrix — the bug that made every child render at the origin.
+        assert!(
+            xml.contains(r#"<hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="1365"/>"#),
+            "first child missing y-translation: {xml}"
+        );
+        assert!(
+            xml.contains(r#"<hc:transMatrix e1="1" e2="0" e3="17360" e4="0" e5="1" e6="0"/>"#),
+            "second child missing x-translation: {xml}"
+        );
+        // Children carry groupLevel=1; only the container itself owns <hp:pos>.
+        assert!(xml.contains(r#"groupLevel="1""#), "child groupLevel not set");
+        assert_eq!(xml.matches("<hp:pos ").count(), 1, "only the container has <hp:pos>");
     }
 
     #[test]

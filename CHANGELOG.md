@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Added — HWP5↔HWPX 묶음 객체(group / `<hp:container>`) carry (Wave A, flat groups)
+
+한컴 "개체 묶기"로 묶인 그리기 객체(group)를 HWP5→HWPX 변환에서 보존
+(이전엔 통째로 drop). **Core breaking (additive)**: 재귀
+`Control::Group { children: Vec<Control>, width, height, horz_offset,
+vert_offset, inst_id }` 신설 + `validate.rs` 가 비-도형 자식을
+`ValidationError::InvalidGroupChild` 로 거부.
+
+- **Wire 발견**: container 는 별도 TagId(0x56) 가 아니라 `gso`
+  `ShapeComponent(0x4C)` 의 comp_type 판별자 `"$con"` (line `"$col"` /
+  rect `"$rec"` / ellipse `"$ell"` 와 동일 메커니즘). 자식은 한 단계 깊은
+  `ShapeComponent` 들이고 각자 기존 shape sub-record(0x4F/0x50/…) 보유.
+- **HWP5 디코더**: gso 스코프를 단일-`Option` flat 상태머신에서
+  `GsoGroupBuilder`/`GsoChildBuilder` 스택으로 재구성 (기존 `table_stack`
+  패턴, architect 리뷰 P0). 자식 geometry 는 자식 ShapeComponent common
+  header 에서 파싱 (`Hwp5ShapeComponentGeometry::parse_from_shape_component`:
+  x=[4..8], y=[8..12], w=[16..20], h=[20..24] — native 바이트 대조로 도출).
+  Wave A 는 flat 만; 중첩 `$con` 은 depth cap(`GSO_GROUP_MAX_DEPTH`) 으로
+  warn+degrade.
+- **HWPX 인코더**: `<hp:container>` 재귀 emit. 자식 위치는 한컴이
+  `<hc:transMatrix>` translation(e3=x, e6=y)으로 잡으므로 그것을 설정
+  (identity matrix 면 전부 원점에 겹침 — 시각 검증으로 확인); `<hp:offset>`
+  도 동일 값으로 mirror, top-level `<hp:sz>`/`<hp:pos>` 는 자식에서 제거,
+  `<hp:curSz>` 는 0×0 (native 일치).
+- **HWPX 디코더**: `<hp:container>` → `Control::Group` round-trip.
+- **검증**: workspace nextest 통과, clippy clean, 변환 산출물 geometry 가
+  native `sample-gso-group.hwpx` 와 byte 일치 (offset/transMatrix/orgSz/
+  curSz/container sz·pos), 한컴 시각 게이트 PASS (직사각형+타원 나란히,
+  텍스트 "사각형"/"타원" 보존, 겹침 없음). 중첩 그룹 재귀는 Wave B.
+
 ### Fixed — SUMMERY/PATH 필드 빈 본문 → 한컴 "낮은 보안 수준 복구" 경고 (#120/#136)
 
 HWP5 → HWPX 변환 시 문서정보(SUMMERY: `$author`/`$title`/`$createtime`/

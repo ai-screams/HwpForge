@@ -186,6 +186,9 @@ fn collect_flow_paragraph_layout_hints(
             // hints for them from the body scope — same pattern as
             // Footnote/Endnote.
             Hwp5Control::Memo(memo) => collect_scope_paragraphs(&memo.paragraphs, body),
+            // Group children with text (rect/ellipse drawText) carry their
+            // own paragraphs that need linesegarray hints, mirroring TextBox.
+            Hwp5Control::Group(group) => collect_group_child_layout_hints(group, body),
             Hwp5Control::Image(_)
             | Hwp5Control::Line(_)
             | Hwp5Control::Rect(_)
@@ -210,6 +213,17 @@ fn collect_flow_paragraph_layout_hints(
     }
 }
 
+/// Collects layout hints from a group's text-bearing children (rect/ellipse
+/// with `drawText`). Non-text children carry no paragraphs.
+fn collect_group_child_layout_hints(
+    group: &crate::decoder::section::Hwp5GroupControl,
+    scope: &mut ScopeLayoutHints,
+) {
+    for child in &group.children {
+        collect_scope_paragraphs(&child.paragraphs, scope);
+    }
+}
+
 fn collect_scope_paragraphs(paragraphs: &[Hwp5Paragraph], scope: &mut ScopeLayoutHints) {
     for paragraph in paragraphs {
         collect_scope_paragraph_layout_hints(paragraph, scope);
@@ -227,6 +241,7 @@ fn collect_scope_paragraph_layout_hints(paragraph: &Hwp5Paragraph, scope: &mut S
                 collect_scope_paragraphs(&subtree.paragraphs, scope);
             }
             Hwp5Control::Memo(memo) => collect_scope_paragraphs(&memo.paragraphs, scope),
+            Hwp5Control::Group(group) => collect_group_child_layout_hints(group, scope),
             Hwp5Control::Header(_)
             | Hwp5Control::Footer(_)
             | Hwp5Control::Image(_)

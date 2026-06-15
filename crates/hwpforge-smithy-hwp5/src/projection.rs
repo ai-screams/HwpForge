@@ -30,9 +30,10 @@ use crate::ctrl_ids::{
 use crate::decoder::chart_ole::{extract_chart_payload, ChartOleError};
 use crate::decoder::section::{
     Hwp5ArcControl, Hwp5ConnectLineControl, Hwp5Control, Hwp5CurveControl, Hwp5EllipseControl,
-    Hwp5EquationControl, Hwp5ImageControl, Hwp5LineControl, Hwp5MemoControl, Hwp5NestedSubtree,
-    Hwp5OleObjectControl, Hwp5PageBorderFill, Hwp5Paragraph, Hwp5PolygonControl, Hwp5RectControl,
-    Hwp5Table, Hwp5TableCell, Hwp5TextBoxControl, SectionResult,
+    Hwp5EquationControl, Hwp5GroupChild, Hwp5GroupControl, Hwp5ImageControl, Hwp5LineControl,
+    Hwp5MemoControl, Hwp5NestedSubtree, Hwp5OleObjectControl, Hwp5PageBorderFill, Hwp5Paragraph,
+    Hwp5PolygonControl, Hwp5RectControl, Hwp5Table, Hwp5TableCell, Hwp5TextBoxControl,
+    SectionResult,
 };
 use crate::decoder::Hwp5Warning;
 use crate::error::Hwp5Result;
@@ -2042,6 +2043,7 @@ fn project_control_run(
         Hwp5Control::ConnectLine(connect_line) => project_connectline_run(connect_line),
         Hwp5Control::Equation(equation) => Some(project_equation_run(equation)),
         Hwp5Control::TextBox(textbox) => Some(project_textbox_run(textbox, projection_images)),
+        Hwp5Control::Group(group) => project_group_run(group, projection_images),
         Hwp5Control::Footnote(subtree) => Some(project_footnote_run(subtree, projection_images)),
         Hwp5Control::Endnote(subtree) => Some(project_endnote_run(subtree, projection_images)),
         // Memo emission flows through the `FieldBegin`/`MemoAnchor` machinery in
@@ -2307,6 +2309,110 @@ fn project_textbox_run(
         },
         CharShapeIndex::new(0),
     )
+}
+
+/// Projects a HWP5 group (묶음 객체) into a Core `Run` carrying
+/// `Control::Group` (Wave A: flat children only).
+///
+/// Each child is projected via the existing per-shape helpers; a child that
+/// carried `drawText` paragraphs becomes a text-bearing shape (rect →
+/// `Control::TextBox`, ellipse → `ellipse_with_text`). Children that cannot
+/// be represented as a Core group child (e.g. a degraded nested-group
+/// `Unknown`, or an image — not a valid group child per `validate`) are
+/// dropped so the resulting group still validates. Returns `None` only when
+/// the group ends up with no representable children.
+fn project_group_run(
+    group: &Hwp5GroupControl,
+    projection_images: &mut ProjectionImageState<'_>,
+) -> Option<Run> {
+    let mut children = Vec::with_capacity(group.children.len());
+    for child in &group.children {
+        if let Some(control) = project_group_child(child, projection_images) {
+            children.push(control);
+        }
+    }
+    if children.is_empty() {
+        return None;
+    }
+    let inst_id = (group.instance_id != 0).then_some(u64::from(group.instance_id));
+    Some(Run::control(
+        Control::Group {
+            children,
+            width: hwp_unit_from_u32(group.geometry.width),
+            height: hwp_unit_from_u32(group.geometry.height),
+            horz_offset: group.geometry.x,
+            vert_offset: group.geometry.y,
+            inst_id,
+        },
+        CharShapeIndex::new(0),
+    ))
+}
+
+/// Projects one [`Hwp5GroupChild`] into a Core shape `Control` suitable as a
+/// `Control::Group` child. Text-bearing rect/ellipse children become
+/// `TextBox` / `ellipse_with_text`; everything else reuses the single-shape
+/// projection helpers and extracts the inner control. Returns `None` for
+/// children that have no valid Core group-child representation.
+fn project_group_child(
+    child: &Hwp5GroupChild,
+    projection_images: &mut ProjectionImageState<'_>,
+) -> Option<Control> {
+    // Text-bearing shapes: attach the projected paragraphs.
+    if !child.paragraphs.is_empty() {
+        let paragraphs = project_nested_paragraphs(
+            &child.paragraphs,
+            projection_images,
+            ImageProjectionContext::TextBox,
+        );
+        match &child.control {
+            Hwp5Control::Rect(rect) => {
+                let mut control = Control::text_box(
+                    paragraphs,
+                    hwp_unit_from_u32(rect.geometry.width),
+                    hwp_unit_from_u32(rect.geometry.height),
+                );
+                if let Control::TextBox { horz_offset, vert_offset, .. } = &mut control {
+                    *horz_offset = rect.geometry.x;
+                    *vert_offset = rect.geometry.y;
+                }
+                return Some(control);
+            }
+            Hwp5Control::Ellipse(ellipse) => {
+                let width = HwpUnit::new(positive_i32_from_u32(ellipse.geometry.width)?).ok()?;
+                let height = HwpUnit::new(positive_i32_from_u32(ellipse.geometry.height)?).ok()?;
+                let mut control = Control::ellipse_with_text(width, height, paragraphs);
+                if let Control::Ellipse { horz_offset, vert_offset, .. } = &mut control {
+                    *horz_offset = ellipse.geometry.x;
+                    *vert_offset = ellipse.geometry.y;
+                }
+                return Some(control);
+            }
+            // Other text-bearing children are uncommon; fall through to the
+            // non-text projection (text is dropped) rather than fabricate.
+            _ => {}
+        }
+    }
+
+    // Non-text children reuse the single-shape projection helpers; extract
+    // the inner control from the produced run.
+    let run = match &child.control {
+        Hwp5Control::Line(line) => Some(project_line_run(line)),
+        Hwp5Control::Rect(rect) => project_rect_run(rect),
+        Hwp5Control::Polygon(polygon) => Some(project_polygon_run(polygon)),
+        Hwp5Control::Ellipse(ellipse) => project_ellipse_run(ellipse),
+        Hwp5Control::Arc(arc) => project_arc_run(arc),
+        Hwp5Control::Curve(curve) => project_curve_run(curve),
+        Hwp5Control::ConnectLine(connect_line) => project_connectline_run(connect_line),
+        Hwp5Control::Equation(equation) => Some(project_equation_run(equation)),
+        // Image / OLE / nested-group(Unknown) / anything else is not a valid
+        // flat group child for Wave A; drop it (the decoder already warned for
+        // degraded nested groups).
+        _ => None,
+    }?;
+    match run.content {
+        RunContent::Control(boxed) => Some(*boxed),
+        _ => None,
+    }
 }
 
 /// Projects a HWP5 footnote subtree into a Core `Run` carrying `Control::Footnote`.

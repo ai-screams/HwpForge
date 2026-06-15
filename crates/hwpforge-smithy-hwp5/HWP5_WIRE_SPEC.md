@@ -315,6 +315,47 @@ ConnectLine vs Line (both `0x4E`): differentiated by the leading 4-byte
 type tag on the parent `ShapeComponent` (`0x4C`) — `"$col"` discriminator
 for ConnectLine.
 
+> **`0x56 ShapeContainer` / `0x5A ShapeTextArt` exist in the `TagId` enum
+> but 한컴 does NOT use them for groups/text-art.** They are dead entries.
+
+### Group / 묶음 객체 (`<hp:container>`, Wave A)
+
+A group is NOT a distinct tag. It is a `ShapeComponent` (`0x4C`) whose
+4-byte comp_type discriminator is `"$con"` (same mechanism as `"$col"` /
+`"$rec"` / `"$ell"`). Its **child shapes are deeper-level `ShapeComponent`
+records**, each carrying its own shape sub-record (`0x4F`/`0x50`/…) + optional
+`LIST_HEADER` + `PARA_HEADER` drawText. Children may themselves be `"$con"`
+(nested group) — Wave A degrades nested groups to `Unknown` with a warning
+(`GSO_GROUP_MAX_DEPTH` cap); recursion is Wave B.
+
+The decoder routes this with a scope stack (`GsoGroupBuilder` /
+`GsoChildBuilder`, modeled on `table_stack`), because the gso scope was a
+flat single-shape state machine (`classify_gso_control` requires
+`payload_count == 1`).
+
+**Child geometry layout** (group-relative, from the child's own
+`ShapeComponent` common header — NOT the gso CtrlHeader, which children lack):
+
+| bytes      | field                  |
+| ---------- | ---------------------- |
+| `[0..4]`   | comp_type (`$rec`/…)   |
+| `[4..8]`   | x offset (i32 LE)      |
+| `[8..12]`  | y offset (i32 LE)      |
+| `[12..16]` | grouping/version flags |
+| `[16..20]` | width (u32, orgSz)     |
+| `[20..24]` | height (u32, orgSz)    |
+
+Source: `Hwp5ShapeComponentGeometry::parse_from_shape_component`. Derived by
+correlating native `sample-gso-group.hwp` child bytes with the 한컴-emitted
+`<hp:offset>`/`<hp:orgSz>` in the `.hwpx` pair.
+
+**HWPX positioning gotcha**: 한컴 places a `<hp:container>` child by its
+`<hc:transMatrix>` **translation** (`e3` = x, `e6` = y), NOT by `<hp:offset>`
+(native carries both with the same value; an identity matrix renders every
+child at the group origin → overlap). Container children also omit the
+top-level `<hp:sz>`/`<hp:pos>` and emit `<hp:curSz>` `0×0` (size from
+`<hp:orgSz>`). The container itself owns the single `<hp:sz>`/`<hp:pos>`.
+
 ---
 
 ## 11. Equation (`eqed`) + `EQEDIT` (`0x58`)

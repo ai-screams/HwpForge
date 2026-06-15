@@ -485,6 +485,13 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
         runs.push(decode_connect_line(connect_line, char_shape_id, depth)?);
     }
 
+    // Group runs (from <hp:container>) — Wave A flat children.
+    for container in &hx.containers {
+        if let Some(run) = decode_container(container, char_shape_id, depth)? {
+            runs.push(run);
+        }
+    }
+
     // Equation runs (from <hp:equation>)
     for equation in &hx.equations {
         runs.push(decode_equation(equation, char_shape_id)?);
@@ -959,8 +966,8 @@ fn decode_field_control(
 // Shape decode functions (decode_textbox, decode_line, decode_ellipse, decode_polygon)
 // are defined in `super::shapes`.
 use super::shapes::{
-    decode_arc, decode_connect_line, decode_curve, decode_ellipse, decode_line, decode_polygon,
-    decode_textbox,
+    decode_arc, decode_connect_line, decode_container, decode_curve, decode_ellipse, decode_line,
+    decode_polygon, decode_textbox,
 };
 
 /// Decodes an `HxEquation` into a Core `Run` with `Control::Equation`.

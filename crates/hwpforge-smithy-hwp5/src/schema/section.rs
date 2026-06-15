@@ -583,6 +583,46 @@ impl Hwp5ShapeComponentGeometry {
         let height = cur.read_u32::<LittleEndian>()?;
         Ok(Self { x, y, width, height })
     }
+
+    /// Minimum `ShapeComponent` (`0x4C`) payload to recover child geometry.
+    const MIN_SHAPE_COMPONENT_SIZE: usize = 24;
+
+    /// Parse geometry from a child `ShapeComponent` (`0x4C`) payload (a group
+    /// member). Unlike the `gso`/`tbl` CtrlHeader (which carries the bounding
+    /// box at `[8..24]`), a nested shape component stores its **group-relative**
+    /// offset and original size inline:
+    ///
+    /// | bytes      | field                  |
+    /// | ---------- | ---------------------- |
+    /// | `[0..4]`   | comp_type (`$rec`/…)   |
+    /// | `[4..8]`   | x offset (i32 LE)      |
+    /// | `[8..12]`  | y offset (i32 LE)      |
+    /// | `[12..16]` | grouping/version flags |
+    /// | `[16..20]` | width (u32, orgSz)     |
+    /// | `[20..24]` | height (u32, orgSz)    |
+    ///
+    /// Derived by correlating native `sample-gso-group.hwp` child bytes with
+    /// the 한컴-emitted `<hp:offset>` / `<hp:orgSz>` in the `.hwpx` pair
+    /// (Wave A group carry).
+    pub(crate) fn parse_from_shape_component(data: &[u8]) -> Hwp5Result<Self> {
+        if data.len() < Self::MIN_SHAPE_COMPONENT_SIZE {
+            return Err(Hwp5Error::RecordParse {
+                offset: 0,
+                detail: format!(
+                    "shape component geometry too short: {} bytes (expected >= {})",
+                    data.len(),
+                    Self::MIN_SHAPE_COMPONENT_SIZE
+                ),
+            });
+        }
+        let mut cur = Cursor::new(&data[4..24]);
+        let x = cur.read_i32::<LittleEndian>()?;
+        let y = cur.read_i32::<LittleEndian>()?;
+        let _flags = cur.read_u32::<LittleEndian>()?;
+        let width = cur.read_u32::<LittleEndian>()?;
+        let height = cur.read_u32::<LittleEndian>()?;
+        Ok(Self { x, y, width, height })
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -3060,6 +3100,34 @@ mod tests {
     fn shape_component_geometry_requires_full_ctrl_header_payload() {
         assert!(matches!(
             Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&[0u8; 20]).unwrap_err(),
+            Hwp5Error::RecordParse { .. }
+        ));
+    }
+
+    #[test]
+    fn shape_component_geometry_parses_group_child_layout() {
+        // Group-relative child layout: x=[4..8], y=[8..12], flags=[12..16],
+        // w=[16..20], h=[20..24]. Mirrors the native `sample-gso-group.hwp`
+        // ellipse child (offset 17360,0; orgSz 6998×12426).
+        let mut data = vec![0u8; 24];
+        data[0..4].copy_from_slice(b"\x6c\x6c\x65\x24"); // "$ell" (LE)
+        data[4..8].copy_from_slice(&17_360i32.to_le_bytes());
+        data[8..12].copy_from_slice(&0i32.to_le_bytes());
+        data[12..16].copy_from_slice(&0x0001_0001u32.to_le_bytes());
+        data[16..20].copy_from_slice(&6998u32.to_le_bytes());
+        data[20..24].copy_from_slice(&12_426u32.to_le_bytes());
+
+        let geometry = Hwp5ShapeComponentGeometry::parse_from_shape_component(&data).unwrap();
+        assert_eq!(
+            geometry,
+            Hwp5ShapeComponentGeometry { x: 17_360, y: 0, width: 6998, height: 12_426 }
+        );
+    }
+
+    #[test]
+    fn shape_component_geometry_requires_full_shape_component_payload() {
+        assert!(matches!(
+            Hwp5ShapeComponentGeometry::parse_from_shape_component(&[0u8; 20]).unwrap_err(),
             Hwp5Error::RecordParse { .. }
         ));
     }

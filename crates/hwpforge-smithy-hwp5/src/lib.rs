@@ -795,6 +795,16 @@ fn collect_image_geometry_hints_in_controls(
             decoder::section::Hwp5Control::TextBox(textbox) => {
                 collect_image_geometry_hints_in_paragraphs(&textbox.paragraphs, hints);
             }
+            // Group children may themselves carry image geometry (Wave A
+            // children are shapes, but the children Vec is generic).
+            decoder::section::Hwp5Control::Group(group) => {
+                for child in &group.children {
+                    collect_image_geometry_hints_in_controls(
+                        std::slice::from_ref(&child.control),
+                        hints,
+                    );
+                }
+            }
             decoder::section::Hwp5Control::Line(_)
             | decoder::section::Hwp5Control::Rect(_)
             | decoder::section::Hwp5Control::Polygon(_)

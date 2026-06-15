@@ -794,6 +794,25 @@ fn build_runs(
                         hyperlink_entries.push((marker_run_xml, real_xml));
                         texts.push(HxText::new(marker));
                     }
+                    Control::Group { .. } => {
+                        // Group (묶음 객체) → <hp:container>. Serde cannot
+                        // express the heterogeneous, z-ordered child shapes
+                        // inside the container, so we build the full fragment
+                        // and inject it via the marker-substitution path
+                        // (mirroring hyperlink/memo/chart).
+                        let container_xml =
+                            super::shapes::encode_group_to_xml(ctrl, depth, 0, hyperlink_entries)?;
+                        let field_id = hyperlink_entries.len();
+                        let marker = next_marker("HWPGRP", field_id);
+                        let real_xml = format!(
+                            r#"<hp:run charPrIDRef="{char_pr_id_ref}">{container_xml}</hp:run>"#,
+                        );
+                        let marker_run_xml = format!(
+                            r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
+                        );
+                        hyperlink_entries.push((marker_run_xml, real_xml));
+                        texts.push(HxText::new(marker));
+                    }
                     Control::Unknown { .. } => {
                         // Unknown controls are silently skipped
                         continue;
@@ -829,6 +848,7 @@ fn build_runs(
             title_mark: None,
             dutmals,
             composes,
+            containers: Vec::new(),
         });
     }
 
@@ -856,6 +876,7 @@ fn build_runs(
                     composes: Vec::new(),
                     curves: Vec::new(),
                     connect_lines: Vec::new(),
+                    containers: Vec::new(),
                 },
             );
         }

@@ -623,6 +623,32 @@ pub enum Control {
         style: Option<ShapeStyle>,
     },
 
+    /// A group of drawing objects (묶음 객체 / 개체 묶기).
+    /// Maps to HWPX `<hp:container>` and HWP5 `gso` → `ShapeComponent` with
+    /// the `"$con"` type tag wrapping child `ShapeComponent`s.
+    ///
+    /// `children` reuses the shape `Control` variants (`Rect`/`Ellipse`/
+    /// `Line`/`Polygon`/`Curve`/`ConnectLine`/`Image`/`EmbeddedChart` and,
+    /// recursively, `Group`). Non-shape variants are rejected by
+    /// `validate` rather than the type system, matching how every other
+    /// recursive container (`TextBox`/`Footnote`/`Memo.content`) carries a
+    /// loose `Vec<Paragraph>` / `Vec<Run>`.
+    Group {
+        /// Child drawing objects, in z-order. May nest further `Group`s.
+        children: Vec<Control>,
+        /// Bounding box width (HWPUNIT).
+        width: HwpUnit,
+        /// Bounding box height (HWPUNIT).
+        height: HwpUnit,
+        /// Horizontal offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
+        horz_offset: i32,
+        /// Vertical offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
+        vert_offset: i32,
+        /// HWP5 ParaHeader / GSO trailer instance ID, mirrored to the
+        /// HWPX `<hp:container instid>` attribute. `None` = not carried.
+        inst_id: Option<u64>,
+    },
+
     /// A bookmark marking a named location in the document.
     /// Maps to HWPX `<hp:ctrl><hp:bookmark>` (point) or `fieldBegin/fieldEnd type="BOOKMARK"` (span).
     Bookmark {
@@ -1135,6 +1161,11 @@ impl Control {
     /// Returns `true` if this is a [`Control::ConnectLine`].
     pub fn is_connect_line(&self) -> bool {
         matches!(self, Self::ConnectLine { .. })
+    }
+
+    /// Returns `true` if this is a [`Control::Group`].
+    pub fn is_group(&self) -> bool {
+        matches!(self, Self::Group { .. })
     }
 
     /// Returns `true` if this is a [`Control::Bookmark`].
@@ -1998,6 +2029,9 @@ impl std::fmt::Display for Control {
             }
             Self::ConnectLine { .. } => {
                 write!(f, "ConnectLine")
+            }
+            Self::Group { children, .. } => {
+                write!(f, "Group({} children)", children.len())
             }
             Self::Bookmark { name, bookmark_type } => {
                 write!(f, "Bookmark(\"{name}\", {bookmark_type})")

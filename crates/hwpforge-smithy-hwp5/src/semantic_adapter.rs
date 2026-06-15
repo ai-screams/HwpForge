@@ -421,6 +421,22 @@ fn adapt_control(
         Hwp5Control::TextBox(textbox) => {
             adapt_textbox_control(textbox, container, paragraph_id, build, support, ids)
         }
+        // Group (묶음 객체, Wave A): classify the container node, then adapt
+        // each flat child so the audit counts include the wrapped shapes.
+        Hwp5Control::Group(group) => {
+            let node_id = adapt_shape_control(
+                group.ctrl_id,
+                Hwp5SemanticControlKind::Group,
+                container,
+                paragraph_id,
+                build,
+                ids,
+            );
+            for child in &group.children {
+                adapt_control(&child.control, container, paragraph_id, build, support, ids);
+            }
+            node_id
+        }
         Hwp5Control::Unknown { ctrl_id, .. } => {
             let node_id = ids.next_control_id();
             let literal = crate::ctrl_id_ascii(*ctrl_id);

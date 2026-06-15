@@ -154,6 +154,17 @@ pub enum ValidationError {
         run_index: usize,
     },
 
+    /// A Group control contains a child that is not a drawing shape.
+    #[error("Group has a non-shape child (section {section_index}, paragraph {paragraph_index}, run {run_index})")]
+    InvalidGroupChild {
+        /// Zero-based section index.
+        section_index: usize,
+        /// Zero-based paragraph index.
+        paragraph_index: usize,
+        /// Zero-based run index.
+        run_index: usize,
+    },
+
     /// A Footnote control contains zero paragraphs.
     #[error("Footnote has no paragraphs (section {section_index}, paragraph {paragraph_index}, run {run_index})")]
     EmptyFootnote {
@@ -389,6 +400,8 @@ pub enum CoreErrorCode {
     DateCodeFieldMismatch = 2018,
     /// `InlinePageNumber.kind` ↔ `raw_flag` mismatch (Wave 12n).
     InlinePageNumberMismatch = 2019,
+    /// A Group control has a non-shape child.
+    InvalidGroupChild = 2020,
     /// Invalid document structure.
     InvalidStructure = 2100,
 }
@@ -412,6 +425,7 @@ impl ValidationError {
             Self::NonLeadingTableHeaderRow { .. } => CoreErrorCode::NonLeadingTableHeaderRow,
             Self::EmptyTextBox { .. } => CoreErrorCode::EmptyTextBox,
             Self::EmptyFootnote { .. } => CoreErrorCode::EmptyFootnote,
+            Self::InvalidGroupChild { .. } => CoreErrorCode::InvalidGroupChild,
             Self::EmptyTableCell { .. } => CoreErrorCode::EmptyTableCell,
             Self::EmptyEndnote { .. } => CoreErrorCode::EmptyEndnote,
             Self::InvalidPolygon { .. } => CoreErrorCode::InvalidPolygon,

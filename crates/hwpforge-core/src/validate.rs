@@ -245,7 +245,46 @@ fn validate_control_run(
             validate_inline_page_number(*kind, *raw_flag, ctx)
         }
         Control::PathField { .. } => Ok(()),
+        // Group (묶음 객체): recursively validate each child (nested groups +
+        // per-child dimension/empty checks at the same chokepoint). Only
+        // shape-family controls are legitimate children; non-shape variants
+        // are rejected so a malformed builder caller can't smuggle a
+        // hyperlink/field/memo into a `<hp:container>`.
+        Control::Group { children, .. } => {
+            for child in children {
+                if !is_group_child_allowed(child) {
+                    return Err(ValidationError::InvalidGroupChild {
+                        section_index: ctx.section_index,
+                        paragraph_index: ctx.paragraph_index,
+                        run_index: ctx.run_index,
+                    });
+                }
+                validate_control_run(child, ctx)?;
+            }
+            Ok(())
+        }
     }
+}
+
+/// Returns `true` if `control` is a drawing-shape variant permitted as a
+/// child of [`Control::Group`]. Groups may nest the geometric shapes, OLE
+/// objects, images, and further groups — but not text-flow controls
+/// (hyperlink/field/memo/bookmark/cross-ref/index-mark/page-number).
+fn is_group_child_allowed(control: &Control) -> bool {
+    matches!(
+        control,
+        Control::Line { .. }
+            | Control::Rect { .. }
+            | Control::Ellipse { .. }
+            | Control::Arc { .. }
+            | Control::Polygon { .. }
+            | Control::Curve { .. }
+            | Control::ConnectLine { .. }
+            | Control::TextBox { .. }
+            | Control::EmbeddedChart { .. }
+            | Control::Equation { .. }
+            | Control::Group { .. }
+    )
 }
 
 /// Rejects an `UnknownSummery` whose token is empty or does not start with
