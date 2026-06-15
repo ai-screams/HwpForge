@@ -1098,14 +1098,16 @@ impl GsoChildBuilder {
     /// `classify_gso_control` path (no new shape logic). The child's
     /// `drawText` paragraphs ride alongside so the projection layer can build
     /// a text-bearing `Control::TextBox` (rects) or `ellipse_with_text`
-    /// (ellipses). A nested `$con` (group inside a group) is NOT recursed in
-    /// Wave A — it degrades to `Unknown` with a warning.
+    /// (ellipses). A nested `$con` (group inside a group) is normally recursed
+    /// through [`GsoActiveChild::Nested`] (Wave B); this leaf path only sees a
+    /// `$con` kind when the [`GSO_GROUP_MAX_DEPTH`] cap forced the nested group
+    /// to degrade to a leaf, in which case it becomes `Unknown` with a warning.
     fn into_child(self, warnings: &mut Vec<Hwp5Warning>) -> Hwp5GroupChild {
         if self.shape_component_kind == Some(SHAPE_COMPONENT_TYPE_GROUP) {
             warnings.push(Hwp5Warning::DroppedControl {
                 control: "gso_group",
-                reason: "nested group ($con inside $con) is not carried in Wave A; \
-                         degrading nested group child to Unknown"
+                reason: "nested group ($con inside $con) exceeded GSO_GROUP_MAX_DEPTH; \
+                         degrading over-cap nested group child to Unknown"
                     .to_string(),
             });
             return Hwp5GroupChild {
@@ -1149,7 +1151,42 @@ struct GsoGroupBuilder {
     geometry: Hwp5ShapeComponentGeometry,
     instance_id: u32,
     children: Vec<Hwp5GroupChild>,
-    current_child: Option<GsoChildBuilder>,
+    current_child: Option<GsoActiveChild>,
+}
+
+/// The live child of a [`GsoGroupBuilder`]: either a flat leaf shape or a
+/// nested group (`$con`-in-`$con`, Wave B). Boxed on the `Nested` arm to
+/// break the `GsoGroupBuilder` → `GsoActiveChild` → `GsoGroupBuilder` type
+/// cycle.
+enum GsoActiveChild {
+    /// A flat shape child (rect/ellipse/line/…). Boxed to keep the enum small
+    /// (`GsoChildBuilder` is large; `clippy::large_enum_variant`).
+    Leaf(Box<GsoChildBuilder>),
+    /// A nested group child — recurses through its own `GsoGroupBuilder`.
+    Nested(Box<GsoGroupBuilder>),
+}
+
+impl GsoActiveChild {
+    /// The TLV level of the `ShapeComponent` that opened this child (used by
+    /// the parent's close rule, identical for both variants).
+    fn comp_depth(&self) -> u16 {
+        match self {
+            Self::Leaf(b) => b.comp_depth,
+            Self::Nested(b) => b.comp_depth,
+        }
+    }
+
+    /// Finalize this child into a [`Hwp5GroupChild`]. A leaf classifies via
+    /// the shared `classify_gso_control`; a nested group recurses through
+    /// `GsoGroupBuilder::into_control` to a `Hwp5Control::Group`.
+    fn into_child(self, warnings: &mut Vec<Hwp5Warning>) -> Hwp5GroupChild {
+        match self {
+            Self::Leaf(b) => b.into_child(warnings),
+            Self::Nested(b) => {
+                Hwp5GroupChild { control: b.into_control(warnings), paragraphs: Vec::new() }
+            }
+        }
+    }
 }
 
 impl GsoGroupBuilder {
@@ -1185,42 +1222,63 @@ impl GsoGroupBuilder {
         // Close the live child when a record arrives at or above its depth
         // (mirrors the `table_stack` close rule). A sibling `ShapeComponent`
         // at the child depth closes the prior child before opening the next.
-        if self.current_child.as_ref().is_some_and(|c| level <= c.comp_depth) {
+        if self.current_child.as_ref().is_some_and(|c| level <= c.comp_depth()) {
             self.flush_current_child(warnings);
         }
 
         // A `ShapeComponent` (`0x4C`) one level below the `$con` opens a new
-        // child. Wave A treats every such child as a flat shape; a `$con`
-        // child (nested group) is recorded with its type tag and degraded at
-        // finalize time.
+        // child. A nested `$con` child opens a recursive `GsoGroupBuilder`
+        // (Wave B); any other shape opens a flat leaf builder.
         if matches!(tag, TagId::ShapeComponent) && level == self.comp_depth.saturating_add(1) {
             let kind = record.data.get(..4).map(|c| [c[0], c[1], c[2], c[3]]);
-            // Depth cap: a nested `$con` would push us past the flat-group
-            // depth. Warn + degrade instead of recursing (Wave A scope).
-            if kind == Some(SHAPE_COMPONENT_TYPE_GROUP)
-                && self.depth.saturating_add(1) > GSO_GROUP_MAX_DEPTH
-            {
-                warnings.push(Hwp5Warning::DroppedControl {
-                    control: "gso_group",
-                    reason: format!(
-                        "group nesting exceeds depth cap {GSO_GROUP_MAX_DEPTH}; \
-                         degrading deepest group to Unknown"
-                    ),
-                });
-            }
             // Parse the child's group-relative geometry from its own
             // ShapeComponent common header (NOT the gso CtrlHeader — children
             // have no per-shape CtrlHeader). Without it, classify_gso_control
             // drops the child to Unknown.
             let geometry =
                 Hwp5ShapeComponentGeometry::parse_from_shape_component(&record.data).ok();
-            self.current_child = Some(GsoChildBuilder::new(level, kind, geometry));
+
+            if kind == Some(SHAPE_COMPONENT_TYPE_GROUP) {
+                // Depth cap: a nested `$con` past the limit degrades to a leaf
+                // (→ Unknown at finalize) instead of recursing — bounds both
+                // recursion depth and malicious nesting.
+                if self.depth.saturating_add(1) > GSO_GROUP_MAX_DEPTH {
+                    warnings.push(Hwp5Warning::DroppedControl {
+                        control: "gso_group",
+                        reason: format!(
+                            "group nesting exceeds depth cap {GSO_GROUP_MAX_DEPTH}; \
+                             degrading deepest group to Unknown"
+                        ),
+                    });
+                    self.current_child = Some(GsoActiveChild::Leaf(Box::new(
+                        GsoChildBuilder::new(level, kind, geometry),
+                    )));
+                } else {
+                    // Nested group: its bounding box is the child geometry
+                    // (fall back to the parent bbox if unrecoverable); it has
+                    // no per-child CtrlHeader so instance_id = 0.
+                    let bbox = geometry.unwrap_or_else(|| self.geometry.clone());
+                    let mut nested = GsoGroupBuilder::new(level, bbox, 0);
+                    nested.depth = self.depth.saturating_add(1);
+                    self.current_child = Some(GsoActiveChild::Nested(Box::new(nested)));
+                }
+            } else {
+                self.current_child = Some(GsoActiveChild::Leaf(Box::new(GsoChildBuilder::new(
+                    level, kind, geometry,
+                ))));
+            }
             return;
         }
 
-        // Everything deeper belongs to the live child.
-        let Some(child) = self.current_child.as_mut() else {
-            return;
+        // Everything deeper belongs to the live child. A nested group recurses;
+        // a leaf accumulates its shape sub-records.
+        let child = match self.current_child.as_mut() {
+            Some(GsoActiveChild::Nested(nested)) => {
+                nested.handle_record(record, tag, level, warnings);
+                return;
+            }
+            Some(GsoActiveChild::Leaf(leaf)) => leaf,
+            None => return,
         };
         match tag {
             TagId::ListHeader => child.saw_list_header = true,

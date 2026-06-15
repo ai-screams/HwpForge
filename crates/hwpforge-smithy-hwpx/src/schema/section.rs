@@ -233,10 +233,10 @@ pub struct HxRun {
 
 /// `<hp:container>` — group (묶음 객체 / 개체 묶기) wrapping child shapes.
 ///
-/// Wave A decodes FLAT children only (rect/ellipse/line/polygon/curve/
-/// connectLine). A nested `<hp:container>` child is dropped with no recursion
-/// (Wave B). The shape-common block (offset/orgSz/…) is parsed for geometry;
-/// children reuse the per-shape decoders.
+/// Decodes flat children (rect/ellipse/line/polygon/curve/connectLine) plus
+/// nested `<hp:container>` children (Wave B). The shape-common block
+/// (offset/orgSz/…) is parsed for geometry; children reuse the per-shape
+/// decoders, and nested containers recurse through `decode_container`.
 #[derive(Debug, Default, Clone, Deserialize, PartialEq)]
 pub struct HxContainer {
     /// Group nesting level (`0` = outermost).
@@ -275,6 +275,10 @@ pub struct HxContainer {
     /// `<hp:connectLine>` children.
     #[serde(rename(deserialize = "connectLine"), default)]
     pub connect_lines: Vec<HxConnectLine>,
+    /// Nested `<hp:container>` children (group-in-group, Wave B). `Vec` is
+    /// heap-indirected so the recursive type needs no explicit `Box`.
+    #[serde(rename(deserialize = "container"), default)]
+    pub containers: Vec<HxContainer>,
 }
 
 // ── Text ──────────────────────────────────────────────────────────

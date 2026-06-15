@@ -37,7 +37,7 @@ use crate::schema::section::{
 /// Prevents stack overflow from maliciously crafted HWPX files with
 /// deeply nested table structures. 32 levels is far beyond any
 /// legitimate document.
-const MAX_NESTING_DEPTH: usize = 32;
+pub(crate) const MAX_NESTING_DEPTH: usize = 32;
 
 fn decode_table_page_break(value: &str) -> HwpxResult<TablePageBreak> {
     match value {

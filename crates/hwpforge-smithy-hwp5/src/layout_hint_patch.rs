@@ -214,12 +214,18 @@ fn collect_flow_paragraph_layout_hints(
 }
 
 /// Collects layout hints from a group's text-bearing children (rect/ellipse
-/// with `drawText`). Non-text children carry no paragraphs.
+/// with `drawText`). Non-text children carry no paragraphs. A child that is
+/// itself a nested group recurses so the inner group's text-bearing leaves
+/// (whose `<hp:p>` the encoder still emits) contribute hints — without this
+/// the patcher would underflow on nested groups.
 fn collect_group_child_layout_hints(
     group: &crate::decoder::section::Hwp5GroupControl,
     scope: &mut ScopeLayoutHints,
 ) {
     for child in &group.children {
+        if let Hwp5Control::Group(nested) = &child.control {
+            collect_group_child_layout_hints(nested, scope);
+        }
         collect_scope_paragraphs(&child.paragraphs, scope);
     }
 }

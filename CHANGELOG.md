@@ -37,6 +37,35 @@ vert_offset, inst_id }` 신설 + `validate.rs` 가 비-도형 자식을
   curSz/container sz·pos), 한컴 시각 게이트 PASS (직사각형+타원 나란히,
   텍스트 "사각형"/"타원" 보존, 겹침 없음). 중첩 그룹 재귀는 Wave B.
 
+### Added — HWP5↔HWPX 중첩 묶음 객체(`$con`-in-`$con`) 재귀 carry (Wave B)
+
+Wave A 가 flat 그룹만 보존한 데 이어, 그룹 안의 그룹(`$con` 이 `$con` 을
+다시 품는 구조)을 재귀적으로 보존. Core 변경 없음(`Control::Group` 가
+이미 재귀형 `Vec<Control>`); 4개 레이어가 재귀를 타도록 확장.
+
+- **HWP5 디코더**: `GsoGroupBuilder.current_child` 를
+  `Option<GsoChildBuilder>` → `Option<GsoActiveChild>` 로 교체.
+  `GsoActiveChild::{Leaf(GsoChildBuilder), Nested(Box<GsoGroupBuilder>)}`
+  로 중첩 `$con` 은 자식 `GsoGroupBuilder` 를 열어 재귀 (Box 로
+  `GsoGroupBuilder → GsoActiveChild → GsoGroupBuilder` 타입 cycle 차단).
+  `GSO_GROUP_MAX_DEPTH` 초과 시에만 leaf 로 degrade → Unknown(경고).
+- **Projection**: `project_group_child` 에 `Hwp5Control::Group(nested) =>
+  project_group_run(...)` arm 추가 (중첩 그룹 자식 재귀).
+- **레이아웃 힌트**: `collect_group_child_layout_hints` 가 자식이 중첩
+  그룹이면 재귀 — 그러지 않으면 inner 그룹의 텍스트 자식 `<hp:p>` 가
+  hint 없이 emit 되어 `paragraph layout hint count underflow` 발생.
+- **HWPX 인코더**: `encode_group_child_xml` 에 `Control::Group` early-return
+  추가 — `encode_group_to_xml` 로 재귀 후 transMatrix/offset/curSz/sz·pos
+  를 다른 자식과 동일하게 처리 (groupLevel 은 재귀 내부에서 +1 baked).
+- **HWPX 디코더**: `HxContainer.containers: Vec<HxContainer>` 필드 +
+  `decode_container` 가 중첩 container 재귀, `MAX_NESTING_DEPTH`(32) depth
+  guard.
+- **검증**: workspace nextest 통과, clippy clean. 변환 산출물이 native
+  `sample-gso-group-nested.hwpx` 와 구조·geometry byte 일치 (groupLevel
+  0/1/2/2/1, inner container identity matrix, ellipse e3=1164/e6=6512, line
+  e3=525/e6=13422, 전 자식 curSz 0×0 + top-level sz/pos 없음). 한컴 시각
+  게이트 PASS.
+
 ### Fixed — SUMMERY/PATH 필드 빈 본문 → 한컴 "낮은 보안 수준 복구" 경고 (#120/#136)
 
 HWP5 → HWPX 변환 시 문서정보(SUMMERY: `$author`/`$title`/`$createtime`/

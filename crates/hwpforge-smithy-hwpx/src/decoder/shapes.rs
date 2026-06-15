@@ -586,6 +586,12 @@ pub(crate) fn decode_container(
     char_shape_id: CharShapeIndex,
     depth: usize,
 ) -> HwpxResult<Option<Run>> {
+    // Bound nested-container recursion (group-in-group) against pathological
+    // depth — same cap and pattern as table nesting (`convert_table`).
+    if depth >= crate::decoder::section::MAX_NESTING_DEPTH {
+        return Ok(None);
+    }
+
     let mut children: Vec<Control> = Vec::new();
 
     let push_run = |run: Run, out: &mut Vec<Control>| {
@@ -618,6 +624,12 @@ pub(crate) fn decode_container(
     }
     for connect_line in &container.connect_lines {
         push_run(decode_connect_line(connect_line, char_shape_id, depth)?, &mut children);
+    }
+    // Nested `<hp:container>` children recurse (Wave B); depth+1 bounds it.
+    for nested in &container.containers {
+        if let Some(run) = decode_container(nested, char_shape_id, depth + 1)? {
+            push_run(run, &mut children);
+        }
     }
 
     if children.is_empty() {

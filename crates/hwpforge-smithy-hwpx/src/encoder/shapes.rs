@@ -1073,7 +1073,8 @@ fn group_child_offset(child: &Control) -> (i32, i32) {
         | Control::Polygon { horz_offset, vert_offset, .. }
         | Control::Curve { horz_offset, vert_offset, .. }
         | Control::ConnectLine { horz_offset, vert_offset, .. }
-        | Control::Line { horz_offset, vert_offset, .. } => (*horz_offset, *vert_offset),
+        | Control::Line { horz_offset, vert_offset, .. }
+        | Control::Group { horz_offset, vert_offset, .. } => (*horz_offset, *vert_offset),
         _ => (0, 0),
     }
 }
@@ -1090,6 +1091,24 @@ fn encode_group_child_xml(
     group_level: u32,
     hyperlink_entries: &mut Vec<(String, String)>,
 ) -> HwpxResult<Option<String>> {
+    // Nested group (Wave B): recurse into a full `<hp:container>` fragment.
+    // `encode_group_to_xml` bakes the correct `groupLevel` into the opening
+    // tag directly, so we must NOT run `set_group_level` afterward (it patches
+    // a `groupLevel="0"` placeholder that a container never has). The other
+    // post-processors are nesting-safe — the container's own shape-common
+    // block precedes its children, so first-match ops hit the container's own
+    // `offset`/`transMatrix`/`curSz`, and the children's `sz`/`pos` were
+    // already stripped during their own recursion.
+    if let Control::Group { .. } = child {
+        let (x, y) = group_child_offset(child);
+        let raw = encode_group_to_xml(child, depth, group_level, hyperlink_entries)?;
+        let raw = set_group_child_offset(&raw, x, y);
+        let raw = set_group_child_translate(&raw, x, y);
+        let raw = zero_cur_sz(&raw);
+        let raw = remove_self_closing_element(&raw, "hp:sz");
+        let raw = remove_self_closing_element(&raw, "hp:pos");
+        return Ok(Some(raw));
+    }
     let raw = match child {
         Control::TextBox { .. } => serialize_with_root(
             &encode_textbox_to_rect(child, depth, hyperlink_entries)?,
@@ -1390,6 +1409,80 @@ mod tests {
         // Children carry groupLevel=1; only the container itself owns <hp:pos>.
         assert!(xml.contains(r#"groupLevel="1""#), "child groupLevel not set");
         assert_eq!(xml.matches("<hp:pos ").count(), 1, "only the container has <hp:pos>");
+    }
+
+    #[test]
+    fn group_encodes_nested_container_recursively() {
+        use hwpforge_foundation::HwpUnit;
+        let hu = |v: i32| HwpUnit::new(v).unwrap();
+        // outer group = { inner group { rect, ellipse }, line }, mirroring the
+        // native `sample-gso-group-nested` layout: a $con nested inside a $con.
+        let rect = Control::Rect {
+            width: hu(12_440),
+            height: hu(6000),
+            horz_offset: 0,
+            vert_offset: 0,
+            caption: None,
+            style: None,
+        };
+        let ellipse = Control::Ellipse {
+            center: ShapePoint::new(5116, 3000),
+            axis1: ShapePoint::new(10_232, 3000),
+            axis2: ShapePoint::new(5116, 6000),
+            width: hu(10_232),
+            height: hu(6000),
+            horz_offset: 1164,
+            vert_offset: 6512,
+            paragraphs: Vec::new(),
+            caption: None,
+            style: None,
+        };
+        let inner = Control::Group {
+            children: vec![rect, ellipse],
+            width: hu(13_604),
+            height: hu(12_512),
+            horz_offset: 0,
+            vert_offset: 0,
+            inst_id: None,
+        };
+        let line = Control::Line {
+            start: ShapePoint::new(0, 0),
+            end: ShapePoint::new(20_000, 0),
+            width: hu(20_000),
+            height: hu(0),
+            horz_offset: 525,
+            vert_offset: 13_422,
+            caption: None,
+            style: None,
+        };
+        let outer = Control::Group {
+            children: vec![inner, line],
+            width: hu(42_520),
+            height: hu(13_422),
+            horz_offset: 0,
+            vert_offset: 0,
+            inst_id: None,
+        };
+        let mut entries = Vec::new();
+        let xml = encode_group_to_xml(&outer, 0, 0, &mut entries).unwrap();
+
+        // Two nested containers: outer groupLevel=0, inner groupLevel=1.
+        assert_eq!(xml.matches("<hp:container").count(), 2, "expected 2 containers: {xml}");
+        assert!(xml.contains(r#"groupLevel="0""#), "outer container groupLevel=0 missing");
+        assert!(xml.contains(r#"groupLevel="1""#), "inner container groupLevel=1 missing");
+        // Inner group's leaves carry groupLevel=2.
+        assert!(xml.contains(r#"groupLevel="2""#), "leaf groupLevel=2 missing");
+        assert!(xml.contains("<hp:rect"), "missing nested rect");
+        assert!(xml.contains("<hp:ellipse"), "missing nested ellipse");
+        assert!(xml.contains("<hp:line"), "missing sibling line");
+        // The inner container is positioned by transMatrix translation just like
+        // any other child (here identity since it sits at the outer origin).
+        assert!(
+            xml.contains(r#"<hc:transMatrix e1="1" e2="0" e3="525" e4="0" e5="1" e6="13422"/>"#),
+            "sibling line missing translation: {xml}"
+        );
+        // Only the outermost container owns <hp:pos>; nested ones omit it.
+        assert_eq!(xml.matches("<hp:pos ").count(), 1, "only the outer container has <hp:pos>");
     }
 
     #[test]

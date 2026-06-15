@@ -318,20 +318,34 @@ for ConnectLine.
 > **`0x56 ShapeContainer` / `0x5A ShapeTextArt` exist in the `TagId` enum
 > but 한컴 does NOT use them for groups/text-art.** They are dead entries.
 
-### Group / 묶음 객체 (`<hp:container>`, Wave A)
+### Group / 묶음 객체 (`<hp:container>`, Wave A flat / Wave B nested)
 
 A group is NOT a distinct tag. It is a `ShapeComponent` (`0x4C`) whose
 4-byte comp_type discriminator is `"$con"` (same mechanism as `"$col"` /
 `"$rec"` / `"$ell"`). Its **child shapes are deeper-level `ShapeComponent`
 records**, each carrying its own shape sub-record (`0x4F`/`0x50`/…) + optional
 `LIST_HEADER` + `PARA_HEADER` drawText. Children may themselves be `"$con"`
-(nested group) — Wave A degrades nested groups to `Unknown` with a warning
-(`GSO_GROUP_MAX_DEPTH` cap); recursion is Wave B.
+(nested group, `$con`-in-`$con`) — **Wave B** recurses these to arbitrary
+depth (up to `GSO_GROUP_MAX_DEPTH`, beyond which a nested group degrades to
+`Unknown` with a warning).
 
 The decoder routes this with a scope stack (`GsoGroupBuilder` /
 `GsoChildBuilder`, modeled on `table_stack`), because the gso scope was a
 flat single-shape state machine (`classify_gso_control` requires
-`payload_count == 1`).
+`payload_count == 1`). The live child is a `GsoActiveChild` enum:
+`Leaf(GsoChildBuilder)` for a flat shape, or `Nested(Box<GsoGroupBuilder>)`
+for a nested `$con` (boxed to break the `GsoGroupBuilder → GsoActiveChild →
+GsoGroupBuilder` type cycle). A nested child's records recurse into its own
+builder; the parent's depth-based close rule is identical for both arms.
+
+Recursion threads through all four layers: projection
+(`project_group_child` → `project_group_run` on a nested group),
+layout-hint collection (`collect_group_child_layout_hints` recurses so the
+inner group's drawText `<hp:p>` get hints — otherwise the section patcher
+underflows), HWPX encoder (`encode_group_child_xml` early-returns into
+`encode_group_to_xml`, with `groupLevel` incremented +1 per nesting), and
+HWPX decoder (`HxContainer.containers: Vec<HxContainer>` +
+`decode_container` recursion under a `MAX_NESTING_DEPTH` = 32 guard).
 
 **Child geometry layout** (group-relative, from the child's own
 `ShapeComponent` common header — NOT the gso CtrlHeader, which children lack):

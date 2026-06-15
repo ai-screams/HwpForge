@@ -2404,9 +2404,12 @@ fn project_group_child(
         Hwp5Control::Curve(curve) => project_curve_run(curve),
         Hwp5Control::ConnectLine(connect_line) => project_connectline_run(connect_line),
         Hwp5Control::Equation(equation) => Some(project_equation_run(equation)),
-        // Image / OLE / nested-group(Unknown) / anything else is not a valid
-        // flat group child for Wave A; drop it (the decoder already warned for
-        // degraded nested groups).
+        // Nested group (Wave B): recurse. `project_group_run` returns a
+        // `Run` carrying `Control::Group`; extract it the same way as every
+        // leaf shape below. Recursion bottoms out when all descendants are
+        // leaf shapes; depth is already bounded by the decoder's cap.
+        Hwp5Control::Group(nested) => project_group_run(nested, projection_images),
+        // Image / OLE / anything else is not a valid group child; drop it.
         _ => None,
     }?;
     match run.content {
