@@ -553,8 +553,26 @@ pub(crate) struct SectionResult {
     /// follow the `secd` ctrl. 한글 emits them in `[BOTH, EVEN, ODD]`
     /// order; projection maps each to a `PageBorderFillEntry`.
     pub page_border_fills: Vec<Hwp5PageBorderFill>,
+    /// Column (다단) definition from the `cold` ctrl, if present and
+    /// multi-column. `None` for single-column sections; projection maps a
+    /// `col_count >= 2` value to `Section.column_settings`.
+    pub column_def: Option<Hwp5ColumnDef>,
     /// Non-fatal warnings.
     pub warnings: Vec<Hwp5Warning>,
+}
+
+/// Decoded `cold` (column definition / 다단) ctrl payload.
+///
+/// Wire (after the 4-byte `cold` ctrl_id): `[4..6]` u16 property word
+/// (bits 0-1 = column type, bits 2-9 = column count, bits 10-11 =
+/// direction), `[6..8]` u16 column gap in HWPUNIT. Equal-width columns
+/// (`sameSz`) store no per-column widths — 한글 computes them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Hwp5ColumnDef {
+    /// Number of columns (bits 2-9 of the property word).
+    pub col_count: u8,
+    /// Gap between columns in HWPUNIT.
+    pub gap: u16,
 }
 
 /// A decoded `HWPTAG_PAGE_BORDER_FILL` (0x4B) record.
@@ -609,10 +627,10 @@ impl Hwp5PageBorderFill {
 // ---------------------------------------------------------------------------
 
 use crate::ctrl_ids::{
-    CTRL_ID_ATNO, CTRL_ID_CLICK_HERE, CTRL_ID_COMPOSE, CTRL_ID_DUTMAL, CTRL_ID_ENDNOTE,
-    CTRL_ID_EQED, CTRL_ID_FIELD_CROSSREF, CTRL_ID_FIELD_DATE_CODE, CTRL_ID_FIELD_PATH,
-    CTRL_ID_FIELD_SUMMERY, CTRL_ID_FOOTER, CTRL_ID_FOOTNOTE, CTRL_ID_GSO, CTRL_ID_HEADER,
-    CTRL_ID_INDEXMARK, CTRL_ID_MEMO, CTRL_ID_SECD, CTRL_ID_TABLE,
+    CTRL_ID_ATNO, CTRL_ID_CLICK_HERE, CTRL_ID_COLUMN_DEF, CTRL_ID_COMPOSE, CTRL_ID_DUTMAL,
+    CTRL_ID_ENDNOTE, CTRL_ID_EQED, CTRL_ID_FIELD_CROSSREF, CTRL_ID_FIELD_DATE_CODE,
+    CTRL_ID_FIELD_PATH, CTRL_ID_FIELD_SUMMERY, CTRL_ID_FOOTER, CTRL_ID_FOOTNOTE, CTRL_ID_GSO,
+    CTRL_ID_HEADER, CTRL_ID_INDEXMARK, CTRL_ID_MEMO, CTRL_ID_SECD, CTRL_ID_TABLE,
 };
 
 /// `ShapeComponent` (`0x4C`) type tag identifying a connect line, stored as the
@@ -1688,6 +1706,8 @@ struct BodyTextParserState {
     section_def_properties: Option<u32>,
     /// Page border/fill records collected in document order.
     page_border_fills: Vec<Hwp5PageBorderFill>,
+    /// Captured `cold` (column definition) ctrl, if multi-column.
+    column_def: Option<Hwp5ColumnDef>,
     warnings: Vec<Hwp5Warning>,
     current: Option<ParaBuf>,
     table_stack: Vec<TableContext>,
@@ -2570,6 +2590,20 @@ impl BodyTextParserState {
                     record.data[7],
                 ]));
             }
+            // Snapshot the `cold` (column definition) ctrl, mirroring the
+            // `secd` sidecar capture. Payload after the 4-byte ctrl_id:
+            // `[4..6]` u16 property (bits 0-1 = type, bits 2-9 = column
+            // count, bits 10-11 = direction), `[6..8]` u16 column gap in
+            // HWPUNIT. The ctrl still flows through the Unknown path so the
+            // inline `0x02` SectionColumnDef marker is unaffected; this is
+            // an additional capture for projection-level `ColumnSettings`.
+            if ctrl_id == CTRL_ID_COLUMN_DEF && self.column_def.is_none() && record.data.len() >= 8
+            {
+                let property = u16::from_le_bytes([record.data[4], record.data[5]]);
+                let gap = u16::from_le_bytes([record.data[6], record.data[7]]);
+                self.column_def =
+                    Some(Hwp5ColumnDef { col_count: ((property >> 2) & 0xFF) as u8, gap });
+            }
             buf.controls.push(Hwp5Control::Unknown { ctrl_id, header_data: record.data.clone() });
         }
     }
@@ -2791,6 +2825,7 @@ impl BodyTextParserState {
             page_def: self.page_def,
             section_def_properties: self.section_def_properties,
             page_border_fills: self.page_border_fills,
+            column_def: self.column_def,
             warnings: self.warnings,
         }
     }
@@ -3579,6 +3614,25 @@ mod tests {
             }
             other => panic!("expected Table, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn ctrl_header_cold_captures_column_def() {
+        // `cold` ctrl: ctrl_id(4) + property u16 (bits 2-9 = colCount=2)
+        // + gap u16 (2268) + 8 zero bytes — mirrors the native 2-column wire.
+        let mut cold = CTRL_ID_COLUMN_DEF.to_le_bytes().to_vec();
+        cold.extend_from_slice(&0x0008u16.to_le_bytes()); // property: colCount=2 at bits 2-9
+        cold.extend_from_slice(&2268u16.to_le_bytes()); // gap
+        cold.extend_from_slice(&[0u8; 8]);
+
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &cold));
+
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let col = result.column_def.expect("cold ctrl should be captured");
+        assert_eq!(col.col_count, 2);
+        assert_eq!(col.gap, 2268);
     }
 
     #[test]

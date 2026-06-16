@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeSet, VecDeque};
 
+use hwpforge_core::column::ColumnSettings;
 use hwpforge_core::control::RefTarget;
 use hwpforge_core::document::{Document, Draft};
 use hwpforge_core::image::{
@@ -307,6 +308,24 @@ fn project_to_core_internal(
                 &section_result.page_border_fills,
                 &mut projection_images.warnings,
             ));
+        }
+        // 다단 (multi-column): map the `cold` ctrl's column count + gap to
+        // `Section.column_settings`. Single-column (`col_count < 2`) stays
+        // `None` so the encoder emits its single-column default. Equal-width
+        // columns (한글 computes widths when `sameSz=1`).
+        if let Some(col) = section_result.column_def {
+            if col.col_count >= 2 {
+                match ColumnSettings::equal_columns(
+                    u32::from(col.col_count),
+                    HwpUnit::new(i32::from(col.gap)).unwrap_or(HwpUnit::ZERO),
+                ) {
+                    Ok(cs) => section.column_settings = Some(cs),
+                    Err(_) => projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                        subject: "column_def",
+                        reason: format!("invalid column count {}", col.col_count),
+                    }),
+                }
+            }
         }
         let mut section_field_hints =
             SectionProjectionHints::from_paragraphs(&section_result.paragraphs);
@@ -3190,6 +3209,7 @@ mod tests {
             page_def,
             section_def_properties: None,
             page_border_fills: Vec::new(),
+            column_def: None,
             warnings: vec![],
         }
     }
@@ -3311,6 +3331,7 @@ mod tests {
             page_def: None,
             section_def_properties: None,
             page_border_fills: Vec::new(),
+            column_def: None,
             warnings: vec![warn],
         };
         let (_, warnings) = project_to_core(vec![section]).unwrap();

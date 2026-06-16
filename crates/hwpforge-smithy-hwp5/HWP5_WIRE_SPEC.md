@@ -164,6 +164,28 @@ HWPX `<hp:footNote instId="...">` / `<hp:pic id="...">` etc. round-trip
 correctly only if you read the instance_id from the family-correct
 offset. Reading offset 36 for a footnote returns garbage.
 
+### 6.3 `cold` (column definition / 다단)
+
+The `cold` ctrl (`CTRL_ID_COLUMN_DEF`, `0x636F_6C64`) defines a section's
+multi-column (다단) layout. Payload after the 4-byte ctrl_id:
+
+```
+[4..6]  u16 property
+          bits 0-1  : column type (0 = 일반다단/NEWSPAPER)
+          bits 2-9  : column count
+          bits 10-11: direction
+[6..8]  u16 column gap (HWPUNIT)
+rest    0 when sameSz (equal widths) — 한글 computes per-column widths
+```
+
+Single-column sections still emit a `cold` ctrl with count 1; HwpForge
+only carries `col_count >= 2` into `Section.column_settings`
+(`ColumnSettings::equal_columns`). The encoder's `build_col_pr_xml`
+emits `<hp:colPr colCount=N sameSz="1" sameGap=...>`. Verified
+byte-identical to a native 2-column fixture (`colCount="2"
+sameGap="2268"`). Source: `decoder/section.rs::Hwp5ColumnDef` +
+`projection.rs` section loop.
+
 ---
 
 ## 7. ParaShape `property1` Bit Layout

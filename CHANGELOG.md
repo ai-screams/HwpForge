@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Added — HWP5→HWPX 다단(multi-column / `<hp:colPr>`) carry
+
+한 구역을 2단/3단 신문형으로 나눈 다단을 HWP5→HWPX 변환에서 보존; 이전엔
+`cold` ctrl 을 마커로만 필터하고 단 개수를 항상 `colCount="1"` 로
+하드코딩해 단 정보가 손실됐다.
+
+- **HWP5 디코더**: `cold`(`CTRL_ID_COLUMN_DEF`) ctrl payload 파싱 —
+  `[4..6]` u16 property (bits 2-9 = 단 개수), `[6..8]` u16 단 간격(HWPUNIT).
+  `secd` 사이드카 캡처 패턴 미러로 `SectionResult.column_def` 에 저장.
+- **Projection**: `col_count >= 2` 면 `Section.column_settings =
+  ColumnSettings::equal_columns(count, gap)`. 단일 단은 `None` 유지(인코더
+  기본값).
+- **인코더/Core**: 변경 없음 — `Section.column_settings` 와
+  `build_col_pr_xml` 가 이미 multi-column emit + HWPX round-trip 지원.
+  HWP5 leg 만 비어 있던 것.
+- **검증**: 사용자 작성 `sample-multicolumn.hwp` (2단) 변환 결과 colPr 가
+  native 와 byte-identical (`colCount="2" sameSz="1" sameGap="2268"`),
+  0 warnings. 디코더 단위 테스트(`ctrl_header_cold_captures_column_def`)
+  추가. nextest/clippy clean, 한컴 시각 게이트 PASS.
+
 ### Fixed — Blueprint 저작 시 밑줄 선종류(underline shape) 손실
 
 Blueprint(YAML 템플릿 / 빌더 API)로 만든 문서의 밑줄이 선종류와 무관하게

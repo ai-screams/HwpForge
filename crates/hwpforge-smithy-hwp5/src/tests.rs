@@ -160,6 +160,7 @@ fn inspect_summary_counts_style_projection_warnings() {
             page_def: None,
             section_def_properties: None,
             page_border_fills: Vec::new(),
+            column_def: None,
             warnings: vec![],
         }],
         metadata: hwpforge_core::metadata::Metadata::default(),
