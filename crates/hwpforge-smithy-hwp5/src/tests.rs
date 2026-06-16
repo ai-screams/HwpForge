@@ -1877,6 +1877,54 @@ fn hwp5_to_hwpx_user_sample_page_border_pattern_carries_double_line_and_gradient
 }
 
 #[test]
+fn hwp5_to_hwpx_user_sample_charbg_hatch_carries_swapped_pattern_direction() {
+    // Locks the hatch (빗금무늬) fill carry AND the gotcha #21 direction swap:
+    // 한글's own HWPX writer emits the *visual* 빗금(/) as the string
+    // "BACK_SLASH" and the *visual* 역빗금(\) as "SLASH". These fixtures were
+    // authored natively (글자 배경 무늬, the only hatch authorable on macOS —
+    // 쪽 테두리/배경 무늬 needs Windows 한글). Their native .hwpx companions
+    // confirm ours is byte-identical:
+    //   slash.hwp     → hatchStyle="BACK_SLASH"
+    //   backslash.hwp → hatchStyle="BACK_SLASH" + "SLASH"
+    // (The hatch fill projection is shared across page/char/table border
+    // fills, so this also covers the still-Windows-deferred page-border hatch.)
+    let hatch_styles = |sample: &str| -> Vec<String> {
+        let source = fixture_path(&format!("user_samples/pages/{sample}.hwp"));
+        if !source.exists() {
+            return Vec::new();
+        }
+        let out = unique_temp_path(&format!("user-{sample}.hwpx"));
+        hwp5_to_hwpx(&source, &out).expect("hatch charbg conversion should succeed");
+        assert_valid_hwpx(&out);
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        let mut styles: Vec<String> = decoded
+            .style_store
+            .iter_border_fills()
+            .filter_map(|bf| bf.fill_hatch_style.clone())
+            .collect();
+        styles.sort();
+        let _ = std::fs::remove_file(&out);
+        styles
+    };
+
+    let slash = hatch_styles("sample-charbg-hatch-slash");
+    if slash.is_empty() {
+        return; // fixtures not present in this checkout
+    }
+    assert!(
+        slash.contains(&"BACK_SLASH".to_string()),
+        "visual 빗금(/) must carry as hatchStyle=BACK_SLASH (gotcha #21 swap); got {slash:?}"
+    );
+
+    let backslash = hatch_styles("sample-charbg-hatch-backslash");
+    assert!(
+        backslash.contains(&"SLASH".to_string()),
+        "visual 역빗금(\\) must carry as hatchStyle=SLASH (gotcha #21 swap); got {backslash:?}"
+    );
+}
+
+#[test]
 fn hwp5_to_hwpx_user_sample_multi_section_preserves_sections_and_orientation() {
     // Regression lock: HWP5 multi-section already carries (two sections,
     // second one landscape). Keep it that way.

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Verified — HWP5→HWPX 빗금무늬(hatch fill) carry + gotcha #21 방향 스왑
+
+빗금/역빗금 등 무늬 채우기(`<hc:winBrush hatchStyle>`)의 HWP5→HWPX carry 를
+native 한컴 fixture 로 실측 검증. **코드 변경 없음** — 디코드/projection/인코더
+경로는 이미 완성돼 있었고, 한컴 HWPX writer 의 빗금↔역빗금 문자열 스왑
+(gotcha #21: 시각 빗금(/) → `"BACK_SLASH"`, 시각 역빗금(\) → `"SLASH"`) 도
+이미 올바르게 반영돼 있었음.
+
+- **fixture**: 사용자 작성 native `sample-charbg-hatch-{slash,backslash}.{hwp,hwpx}`
+  (글자 배경 무늬 — hatch fill 은 page/char/table border fill 에 공유되므로
+  동일 코드 경로를 검증). 우리 출력 winBrush 가 한컴 native 와 byte-identical
+  (`faceColor="#E5E5E5" hatchColor="#CA56A7" hatchStyle="BACK_SLASH"/"SLASH"`).
+- **회귀 게이트**: `..._charbg_hatch_carries_swapped_pattern_direction`.
+- **Windows-deferred**: **쪽 테두리/배경**(페이지) 무늬 fixture 는 macOS 한글
+  [쪽] 메뉴에 항목 자체가 없어 작성 불가 → **Windows 한글 fixture 대기**
+  (masterPage gap C / non-chart OLE 와 동일 차단). 단 hatch fill 자체는 위에서
+  공유 검증됨.
+
 ### Added — HWP5→HWPX 다단(multi-column / `<hp:colPr>`) carry
 
 한 구역을 2단/3단 신문형으로 나눈 다단을 HWP5→HWPX 변환에서 보존; 이전엔
