@@ -6,7 +6,7 @@ use hwpforge_blueprint::error::BlueprintError;
 use hwpforge_blueprint::style::{CharShape, ParaShape, PartialCharShape, PartialParaShape};
 use hwpforge_foundation::{
     Alignment, Color, EmbossType, EmphasisType, EngraveType, HwpUnit, LineSpacingType, OutlineType,
-    ShadowType, StrikeoutShape, UnderlineType, VerticalPosition,
+    ShadowType, StrikeoutShape, UnderlineShape, UnderlineType, VerticalPosition,
 };
 use proptest::prelude::*;
 
@@ -242,6 +242,7 @@ proptest! {
             italic,
             color,
             underline_type: UnderlineType::None,
+            underline_shape: UnderlineShape::Solid,
             underline_color: None,
             strikeout_shape: StrikeoutShape::None,
             strikeout_color: None,

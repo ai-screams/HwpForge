@@ -1404,7 +1404,7 @@ fn build_store_from_registry_with(
             bold: cs.bold,
             italic: cs.italic,
             underline_type: cs.underline_type,
-            underline_shape: UnderlineShape::Solid,
+            underline_shape: cs.underline_shape,
             underline_color: cs.underline_color,
             strikeout_shape: cs.strikeout_shape,
             strikeout_color: cs.strikeout_color,
@@ -2146,6 +2146,7 @@ mod tests {
             assert_eq!(hwpx_cs.bold, bp_cs.bold);
             assert_eq!(hwpx_cs.italic, bp_cs.italic);
             assert_eq!(hwpx_cs.underline_type, bp_cs.underline_type);
+            assert_eq!(hwpx_cs.underline_shape, bp_cs.underline_shape);
             assert_eq!(hwpx_cs.underline_color, bp_cs.underline_color);
             assert_eq!(hwpx_cs.strikeout_shape, bp_cs.strikeout_shape);
             assert_eq!(hwpx_cs.strikeout_color, bp_cs.strikeout_color);
@@ -2155,6 +2156,24 @@ mod tests {
             assert_eq!(hwpx_cs.emboss_type, bp_cs.emboss);
             assert_eq!(hwpx_cs.engrave_type, bp_cs.engrave);
         }
+    }
+
+    #[test]
+    fn from_registry_carries_non_solid_underline_shape() {
+        // Regression: the Blueprint→HwpxCharShape bridge used to hardcode
+        // underline_shape = Solid, silently dropping every non-Solid line
+        // family authored via a template/builder. Mutate a resolved CharShape
+        // to a non-default shape and assert it survives to the store.
+        let template = builtin_default().unwrap();
+        let mut registry = StyleRegistry::from_template(&template).unwrap();
+        assert!(!registry.char_shapes.is_empty(), "default template has char shapes");
+        registry.char_shapes[0].underline_type = UnderlineType::Bottom;
+        registry.char_shapes[0].underline_shape = UnderlineShape::Wave;
+
+        let store = HwpxStyleStore::from_registry(&registry).unwrap();
+        let hwpx_cs = store.char_shape(CharShapeIndex::new(7)).unwrap();
+        assert_eq!(hwpx_cs.underline_shape, UnderlineShape::Wave);
+        assert_eq!(hwpx_cs.underline_type, UnderlineType::Bottom);
     }
 
     #[test]

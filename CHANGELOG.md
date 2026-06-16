@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Fixed — Blueprint 저작 시 밑줄 선종류(underline shape) 손실
+
+Blueprint(YAML 템플릿 / 빌더 API)로 만든 문서의 밑줄이 선종류와 무관하게
+항상 `SOLID` 로 나가던 문제. **Core breaking (additive)**: `CharShape` /
+`PartialCharShape` 에 `underline_shape` 필드 추가 (`strikeout_shape` 는
+이미 있었으나 `underline_shape` 만 누락돼 있었음).
+
+- **근본 원인**: `style_store.rs` 의 Blueprint→`HwpxCharShape` 브리지가
+  `underline_shape: UnderlineShape::Solid` 를 하드코딩 — Blueprint 에
+  읽을 필드가 없었기 때문.
+- **수정**: `blueprint/style.rs` 에 `underline_shape` 추가 (`PartialCharShape`
+  은 `Option`, `CharShape` 는 `UnderlineShape` 기본 `Solid`) + `merge()` /
+  `resolve()` thread, 하드코딩을 `cs.underline_shape` 로 교체.
+- **범위 메모**: HWP5→HWPX 변환과 HWPX→HWPX round-trip 경로는 이미
+  밑줄/취소선 12종 선종류를 완전히 carry 하고 있었음 (Foundation
+  `UnderlineShape`/`StrikeoutShape` + HWP5 decoder + HWPX encoder/decoder
+  모두 완비). 이번 수정은 Blueprint 저작 경로 전용.
+- **검증**: nextest 통과 (+ 비-Solid 밑줄 carry 회귀 테스트 +
+  serde round-trip 테스트). 생성기 `examples/underline_shapes.rs` 산출물이
+  SOLID/DASH/DOT/DASH_DOT/DASH_DOT_DOT/LONG_DASH/DOUBLE_SLIM/WAVE 밑줄 +
+  SOLID/DASH/DOUBLE_SLIM/WAVE 취소선을 distinct 하게 emit, 한컴 시각 게이트
+  PASS (이중선 2줄, 물결 곡선 정상 렌더링).
+
 ### Added — HWP5↔HWPX TextArt(글맵시 / `<hp:textart>`) carry
 
 한컴 글맵시(워프된 장식 문자)를 HWP5→HWPX 변환에서 보존 (이전엔 통째로
