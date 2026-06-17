@@ -128,6 +128,7 @@ bindings-py, bindings-cli, bindings-mcp (all smithy crates)
 
 - **Warning-first for unknowns**: if source truth is missing or a value is unsupported, emit a warning or validation signal first.
 - **No fake support**: do not silently normalize unknown semantics into arbitrary defaults just to keep output green.
+- **Unhandled enum ≠ bug**: an unmatched enum arm is a real gap only if that value actually exists in the reference enum (hwpxlib/libhwp) or a native fixture. Verify existence first — otherwise `_ => default` is correct and a guessed mapping is fake support. (See `HWP5_WIRE_SPEC.md §22`; 번호 code 11 / 이미지 채우기 모드 = real bugs, 가나다 · 대각선 1/4/5 = false positives.)
 - **Shared-model first**: if HWP5 discovers a semantic that Core/HWPX cannot carry, extend the shared representation first and wire HWP5 after.
 - **Semver-first for public API**: if a design touches public structs, enums, or externally constructible types, surface the breakage before implementation and get approval first.
 
