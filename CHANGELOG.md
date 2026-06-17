@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Fixed — HWP5→HWPX 이미지 채우기 모드 12종 (P1-2, 옵션 전수조사)
+
+배경 그림 채우기(`<hc:imgBrush mode>`)의 16개 모드 중 4개(TILE/TOTAL/CENTER/
+ZOOM)만 매핑되고 **나머지 12개가 무음으로 투명 처리(fill 드롭)** 되던 문제.
+바둑판 가로/세로, 가운데 위/아래, 좌/우 정렬 채우기가 전부 사라졌다.
+
+- `hwp5_image_fill_mode_to_hwpx` 를 16개 모드 전부로 완성. HWP5 raw 0-15 는
+  OWPML `ImageBrushMode` enum 과 동일 순서 1:1 (raw 1=TILE_HORZ_TOP, 7=
+  CENTER_TOP, 10=LEFT_TOP, 14=RIGHT_BOTTOM, `*Middle`→`*_CENTER` 등).
+- 검증: 사용자 작성 native `sample-cell-image-fill` (4 family 대표 모드
+  TILE_HORZ_TOP/CENTER_TOP/LEFT_TOP/RIGHT_BOTTOM) 변환 결과가 한컴 native
+  와 일치, 변환 경고 4→0.
+- 테스트: `image_fill_mode_maps_all_16_ks_x_6101_modes` (전 모드 단위).
+
 ### Fixed — HWP5→HWPX 쪽 번호 형식 carry (P0-3, 옵션 전수조사)
 
 `pgnp`(쪽 번호 위치) 컨트롤의 **번호 모양 바이트를 전혀 읽지 않아** 모든 쪽

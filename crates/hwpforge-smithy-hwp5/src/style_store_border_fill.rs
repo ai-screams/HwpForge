@@ -267,25 +267,31 @@ fn hwp5_gradation_type_to_hwpx(kind: Hwp5GradationType) -> GradientType {
 }
 
 fn hwp5_image_fill_mode_to_hwpx(kind: Hwp5FillImageMode) -> Option<&'static str> {
+    // HWP5 raw image-fill modes 0-15 map 1:1 (same ordinal order) to the
+    // KS X 6101 OWPML `ImageBrushMode` enum. Previously only TILE/TOTAL/
+    // CENTER/ZOOM (0/5/6/15) were mapped and the other 12 modes silently
+    // collapsed to a transparent fill. Confirmed against native fixture
+    // `sample-cell-image-fill` (TILE_HORZ_TOP/CENTER_TOP/LEFT_TOP/RIGHT_BOTTOM
+    // = raw 1/7/10/14) spanning every dropped family. (`Resize` → `TOTAL`,
+    // `*Middle` → `*_CENTER` per the OWPML naming.)
     match kind {
         Hwp5FillImageMode::TileAll => Some("TILE"),
-        // HWP5 "Resize/FitToSize" companion fixtures serialize to HWPX TOTAL.
+        Hwp5FillImageMode::TileHorizontalTop => Some("TILE_HORZ_TOP"),
+        Hwp5FillImageMode::TileHorizontalBottom => Some("TILE_HORZ_BOTTOM"),
+        Hwp5FillImageMode::TileVerticalLeft => Some("TILE_VERT_LEFT"),
+        Hwp5FillImageMode::TileVerticalRight => Some("TILE_VERT_RIGHT"),
         Hwp5FillImageMode::Resize => Some("TOTAL"),
         Hwp5FillImageMode::Center => Some("CENTER"),
+        Hwp5FillImageMode::CenterTop => Some("CENTER_TOP"),
+        Hwp5FillImageMode::CenterBottom => Some("CENTER_BOTTOM"),
+        Hwp5FillImageMode::LeftMiddle => Some("LEFT_CENTER"),
+        Hwp5FillImageMode::LeftTop => Some("LEFT_TOP"),
+        Hwp5FillImageMode::LeftBottom => Some("LEFT_BOTTOM"),
+        Hwp5FillImageMode::RightMiddle => Some("RIGHT_CENTER"),
+        Hwp5FillImageMode::RightTop => Some("RIGHT_TOP"),
+        Hwp5FillImageMode::RightBottom => Some("RIGHT_BOTTOM"),
         Hwp5FillImageMode::Zoom => Some("ZOOM"),
-        Hwp5FillImageMode::TileHorizontalTop
-        | Hwp5FillImageMode::TileHorizontalBottom
-        | Hwp5FillImageMode::TileVerticalLeft
-        | Hwp5FillImageMode::TileVerticalRight
-        | Hwp5FillImageMode::CenterTop
-        | Hwp5FillImageMode::CenterBottom
-        | Hwp5FillImageMode::LeftMiddle
-        | Hwp5FillImageMode::LeftTop
-        | Hwp5FillImageMode::LeftBottom
-        | Hwp5FillImageMode::RightMiddle
-        | Hwp5FillImageMode::RightTop
-        | Hwp5FillImageMode::RightBottom
-        | Hwp5FillImageMode::Unknown(_) => None,
+        Hwp5FillImageMode::Unknown(_) => None,
     }
 }
 
@@ -304,5 +310,47 @@ fn colorref_to_hwpx_color(raw: u32) -> String {
         format!("#{raw:08X}")
     } else {
         Color::from_raw(raw).to_hex_rgb()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schema::border_fill::Hwp5FillImageMode::{
+        self, Center, CenterBottom, CenterTop, LeftBottom, LeftMiddle, LeftTop, Resize,
+        RightBottom, RightMiddle, RightTop, TileAll, TileHorizontalBottom, TileHorizontalTop,
+        TileVerticalLeft, TileVerticalRight, Zoom,
+    };
+
+    #[test]
+    fn image_fill_mode_maps_all_16_ks_x_6101_modes() {
+        // HWP5 raw 0-15 ↔ OWPML ImageBrushMode, same ordinal order. Verified
+        // against native fixture sample-cell-image-fill for raw 1/7/10/14
+        // (TILE_HORZ_TOP/CENTER_TOP/LEFT_TOP/RIGHT_BOTTOM) plus the
+        // pre-existing 0/5/6/15. Before the P1-2 fix only 4 of 16 mapped;
+        // the rest collapsed to a transparent fill.
+        let cases: [(Hwp5FillImageMode, &str); 16] = [
+            (TileAll, "TILE"),
+            (TileHorizontalTop, "TILE_HORZ_TOP"),
+            (TileHorizontalBottom, "TILE_HORZ_BOTTOM"),
+            (TileVerticalLeft, "TILE_VERT_LEFT"),
+            (TileVerticalRight, "TILE_VERT_RIGHT"),
+            (Resize, "TOTAL"),
+            (Center, "CENTER"),
+            (CenterTop, "CENTER_TOP"),
+            (CenterBottom, "CENTER_BOTTOM"),
+            (LeftMiddle, "LEFT_CENTER"),
+            (LeftTop, "LEFT_TOP"),
+            (LeftBottom, "LEFT_BOTTOM"),
+            (RightMiddle, "RIGHT_CENTER"),
+            (RightTop, "RIGHT_TOP"),
+            (RightBottom, "RIGHT_BOTTOM"),
+            (Zoom, "ZOOM"),
+        ];
+        for (mode, expected) in cases {
+            assert_eq!(hwp5_image_fill_mode_to_hwpx(mode), Some(expected), "mode {mode:?}");
+        }
+        // Only a genuinely unknown raw value falls back to None now.
+        assert_eq!(hwp5_image_fill_mode_to_hwpx(Hwp5FillImageMode::Unknown(99)), None);
     }
 }

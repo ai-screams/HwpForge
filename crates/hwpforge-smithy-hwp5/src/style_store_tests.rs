@@ -1915,7 +1915,7 @@ fn fixture_table_17_diagonal_border_reports_raw_diagonal_shapes() {
 }
 
 #[test]
-fn to_hwpx_style_store_unsupported_image_fill_mode_emits_warning_and_drops_fill() {
+fn to_hwpx_style_store_unknown_image_fill_mode_emits_warning_and_drops_fill() {
     let store = Hwp5StyleStore {
         id_mappings: None,
         fonts: vec![],
@@ -1940,7 +1940,9 @@ fn to_hwpx_style_store_unsupported_image_fill_mode_emits_warning_and_drops_fill(
                 bottom: none_border_line(),
                 diagonal: none_border_line(),
                 fill: Hwp5RawBorderFillFill::Image(Hwp5RawImageFill {
-                    mode: Hwp5FillImageMode::CenterTop,
+                    // All 16 spec modes now carry (P1-2); only a genuinely
+                    // unknown raw value still falls back to drop-with-warning.
+                    mode: Hwp5FillImageMode::Unknown(99),
                     brightness: 0,
                     contrast: 0,
                     effect: Hwp5FillImageEffect::RealPic,
@@ -1958,6 +1960,6 @@ fn to_hwpx_style_store_unsupported_image_fill_mode_emits_warning_and_drops_fill(
         Hwp5Warning::ProjectionFallback { subject, reason }
             if *subject == "style.border_fill.image_fill_mode"
                 && reason.contains("border_fill_id=4")
-                && reason.contains("CenterTop")
+                && reason.contains("Unknown(99)")
     )));
 }
