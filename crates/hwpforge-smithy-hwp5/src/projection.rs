@@ -2010,6 +2010,17 @@ fn parse_page_number_control(header_data: &[u8]) -> Option<PageNumber> {
         10 => PageNumberPosition::InsideBottom,
         _ => PageNumberPosition::BottomCenter,
     };
+    // Number shape (번호 모양) lives in property bits 0-7 = header_data[4]
+    // (the position above is property bits 8-11 = header_data[5]). The HWP5
+    // `HWPNumberShape` codes map 1:1 to `NumberFormatType` (0=Digit,
+    // 1=CircledDigit, 2=RomanCapital, 3=RomanSmall, …), verified against the
+    // native `sample-pagenu-roman` fixture (ROMAN_CAPITAL = shape 2). Before
+    // this the format byte was never read and every page number emitted
+    // `Digit`, silently dropping Roman/Hangul/Latin page numbering (P0-3).
+    let number_format = header_data
+        .get(4)
+        .and_then(|&shape| NumberFormatType::try_from(shape).ok())
+        .unwrap_or(NumberFormatType::Digit);
     let decoration = header_data
         .iter()
         .rev()
@@ -2018,7 +2029,7 @@ fn parse_page_number_control(header_data: &[u8]) -> Option<PageNumber> {
         .filter(|byte| byte.is_ascii())
         .map(|byte| char::from(byte).to_string())
         .unwrap_or_else(|| "-".to_string());
-    Some(PageNumber::with_decoration(position, NumberFormatType::Digit, decoration))
+    Some(PageNumber::with_decoration(position, number_format, decoration))
 }
 
 fn char_shape_id_for_visible_position(runs: &[Hwp5CharShapeRun], position: u32) -> u32 {
@@ -3163,6 +3174,28 @@ fn page_def_to_settings(pd: &Hwp5PageDef) -> PageSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parse_page_number_control_reads_number_shape_from_property() {
+        // pgnp ctrl-header layout: [0..4] ctrl_id, [4..8] property u32 (LE)
+        // where bits 0-7 (byte 4) = number shape and bits 8-11 (byte 5) =
+        // position. Build a header with shape=2 (RomanCapital) and
+        // position=9 (INSIDE_TOP), plus a trailing '-' side char.
+        let mut header = vec![b'p', b'n', b'g', b'p'];
+        header.push(2); // byte 4: number shape = RomanCapital
+        header.push(9); // byte 5: position = InsideTop
+        header.extend_from_slice(&[0, 0]); // rest of property u32
+        header.extend_from_slice(&[0, 0]); // number u16
+        header.push(b'-'); // side decoration char
+        let pn = parse_page_number_control(&header).expect("pgnp should parse");
+        assert_eq!(pn.number_format, NumberFormatType::RomanCapital);
+        assert_eq!(pn.position, PageNumberPosition::InsideTop);
+
+        // Shape 0 must still decode as Digit (default, regression guard).
+        header[4] = 0;
+        let pn = parse_page_number_control(&header).expect("pgnp should parse");
+        assert_eq!(pn.number_format, NumberFormatType::Digit);
+    }
 
     use std::collections::BTreeMap;
 

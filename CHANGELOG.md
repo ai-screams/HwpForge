@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Fixed — HWP5→HWPX 쪽 번호 형식 carry (P0-3, 옵션 전수조사)
+
+`pgnp`(쪽 번호 위치) 컨트롤의 **번호 모양 바이트를 전혀 읽지 않아** 모든 쪽
+번호가 `formatType="DIGIT"` 로만 나가던 문제. 로마자/한글/알파벳 쪽 번호가
+조용히 아라비아 숫자로 변환됨.
+
+- `parse_page_number_control` 이 property bits 0-7 (`header_data[4]`) =
+  번호 모양(`HWPNumberShape`)을 읽어 `NumberFormatType::try_from` 으로 매핑
+  (위치는 기존대로 bits 8-11 = `header_data[5]`). HWP5 shape 코드는
+  `NumberFormatType` 과 1:1 (0=Digit, 2=RomanCapital, …).
+- 검증: 사용자 작성 native `sample-pagenu-roman` (로마자 대문자) 변환 결과가
+  한컴 native 와 byte-identical — `<hp:pageNum pos="INSIDE_TOP"
+  formatType="ROMAN_CAPITAL" sideChar="-"/>`.
+- 테스트: `parse_page_number_control_reads_number_shape_from_property` (단위),
+  `..._user_sample_page_number_format_matches_native` (native e2e).
+
 ### Fixed — HWP5→HWPX 문단 번호매기기 형식 5종 (P0-1, 옵션 전수조사)
 
 문단 번호 형식(`<hh:paraHead numFormat>`) 디코딩 매핑이 KS X 6101 OWPML

@@ -1877,6 +1877,44 @@ fn hwp5_to_hwpx_user_sample_page_border_pattern_carries_double_line_and_gradient
 }
 
 #[test]
+fn hwp5_to_hwpx_user_sample_page_number_format_matches_native() {
+    // P0-3: the pgnp page-number control's number-shape byte was never read,
+    // so every page number emitted formatType="DIGIT". Native fixture uses
+    // 로마자 대문자 → must carry as ROMAN_CAPITAL (byte-identical to 한컴).
+    let source = fixture_path("user_samples/pages/sample-pagenu-roman.hwp");
+    if !source.exists() {
+        return;
+    }
+
+    let out = unique_temp_path("user-sample-pagenu-roman.hwpx");
+    hwp5_to_hwpx(&source, &out).expect("page number conversion should succeed");
+    assert_valid_hwpx(&out);
+
+    let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes))
+        .expect("converted hwpx should open as zip");
+    let mut section_xml = String::new();
+    {
+        use std::io::Read;
+        archive
+            .by_name("Contents/section0.xml")
+            .expect("Contents/section0.xml should be present")
+            .read_to_string(&mut section_xml)
+            .expect("section0.xml should be UTF-8");
+    }
+    assert!(
+        section_xml.contains(r#"formatType="ROMAN_CAPITAL""#),
+        "page number must carry formatType=ROMAN_CAPITAL (native 로마자 대문자)"
+    );
+    assert!(
+        !section_xml.contains(r#"<hp:pageNum pos="INSIDE_TOP" formatType="DIGIT""#),
+        "page number must no longer fall back to DIGIT (P0-3 fix)"
+    );
+
+    let _ = std::fs::remove_file(&out);
+}
+
+#[test]
 fn hwp5_to_hwpx_user_sample_numbering_formats_match_native() {
     // Locks the P0-1 numbering-format fix against a native 한컴 fixture that
     // exercises 9 distinct paragraph numbering formats across 10 levels
