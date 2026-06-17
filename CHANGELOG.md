@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Changed — 미상 무늬/그러데이션 type warning-first (P1-3/4, 옵션 전수조사)
+
+`border_fill` 의 채우기 무늬·그러데이션 type 이 알 수 없는 raw 값일 때 조용히
+기본값(무늬→솔리드, 그러데이션→LINEAR)으로 떨어지던 것을 `ProjectionFallback`
+경고로 노출. (알려진 6개 무늬·4개 그러데이션 type 은 정상 carry 되며, 무늬
+`None`=무늬 없음 은 경고 대상 아님.)
+
+- 신규 경고 subject: `style.border_fill.fill_pattern`,
+  `style.border_fill.gradation_type` (각각 `border_fill_id` + raw 값 포함).
+- 정상 저작으론 도달하지 않는 방어적 경로라 native fixture 불필요.
+- 테스트: `unknown_hatch_pattern_warns_but_known_and_none_stay_silent`,
+  `unknown_gradation_type_warns_but_known_stays_silent`.
+
 ### Fixed — HWP5→HWPX 이미지 채우기 모드 12종 (P1-2, 옵션 전수조사)
 
 배경 그림 채우기(`<hc:imgBrush mode>`)의 16개 모드 중 4개(TILE/TOTAL/CENTER/

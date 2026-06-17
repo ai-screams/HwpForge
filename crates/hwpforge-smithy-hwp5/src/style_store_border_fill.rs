@@ -151,28 +151,57 @@ fn hwp5_fill_to_hwpx(
     warnings: &mut Vec<Hwp5Warning>,
 ) -> BorderFillFillProjection {
     match fill {
-        Hwp5RawBorderFillFill::Color(color_fill) => BorderFillFillProjection {
-            fill: Some(HwpxFill::WinBrush {
-                face_color: colorref_to_hwpx_color(color_fill.background_color),
-                hatch_color: colorref_to_hwpx_color(color_fill.pattern_color),
-                alpha: color_fill.alpha.to_string(),
-            }),
-            fill_hatch_style: hwp5_fill_pattern_to_hwpx(color_fill.pattern_kind),
-            ..BorderFillFillProjection::default()
-        },
-        Hwp5RawBorderFillFill::Gradation(fill) => BorderFillFillProjection {
-            gradient_fill: Some(HwpxGradientFill {
-                gradient_type: hwp5_gradation_type_to_hwpx(fill.gradation_type),
-                angle: fill.angle as i32,
-                center_x: fill.center_x,
-                center_y: fill.center_y,
-                step: 255,
-                step_center: fill.blur_center.map(i32::from).unwrap_or(50),
-                alpha: 0,
-                colors: fill.colors.iter().copied().map(Color::from_raw).collect(),
-            }),
-            ..BorderFillFillProjection::default()
-        },
+        Hwp5RawBorderFillFill::Color(color_fill) => {
+            // Warning-first: an unknown hatch pattern silently collapses to a
+            // solid fill (the 6 known patterns are mapped). `None` is a
+            // legitimate "no pattern" and must NOT warn. See HWP5_WIRE_SPEC §22.
+            if let Hwp5FillPatternKind::Unknown(raw) = color_fill.pattern_kind {
+                push_projection_fallback(
+                    warnings,
+                    "style.border_fill.fill_pattern",
+                    format!(
+                        "border_fill_id={border_fill_id}, unknown hatch pattern raw={raw}; \
+                         emitting solid fill (no hatch)"
+                    ),
+                );
+            }
+            BorderFillFillProjection {
+                fill: Some(HwpxFill::WinBrush {
+                    face_color: colorref_to_hwpx_color(color_fill.background_color),
+                    hatch_color: colorref_to_hwpx_color(color_fill.pattern_color),
+                    alpha: color_fill.alpha.to_string(),
+                }),
+                fill_hatch_style: hwp5_fill_pattern_to_hwpx(color_fill.pattern_kind),
+                ..BorderFillFillProjection::default()
+            }
+        }
+        Hwp5RawBorderFillFill::Gradation(fill) => {
+            // Warning-first: an unknown gradation type silently defaults to
+            // LINEAR. See HWP5_WIRE_SPEC §22.
+            if let Hwp5GradationType::Unknown(raw) = fill.gradation_type {
+                push_projection_fallback(
+                    warnings,
+                    "style.border_fill.gradation_type",
+                    format!(
+                        "border_fill_id={border_fill_id}, unknown gradation type raw={raw}; \
+                         defaulting to LINEAR"
+                    ),
+                );
+            }
+            BorderFillFillProjection {
+                gradient_fill: Some(HwpxGradientFill {
+                    gradient_type: hwp5_gradation_type_to_hwpx(fill.gradation_type),
+                    angle: fill.angle as i32,
+                    center_x: fill.center_x,
+                    center_y: fill.center_y,
+                    step: 255,
+                    step_center: fill.blur_center.map(i32::from).unwrap_or(50),
+                    alpha: 0,
+                    colors: fill.colors.iter().copied().map(Color::from_raw).collect(),
+                }),
+                ..BorderFillFillProjection::default()
+            }
+        }
         Hwp5RawBorderFillFill::Image(fill) => {
             let Some(mode) = hwp5_image_fill_mode_to_hwpx(fill.mode) else {
                 push_projection_fallback(
@@ -352,5 +381,73 @@ mod tests {
         }
         // Only a genuinely unknown raw value falls back to None now.
         assert_eq!(hwp5_image_fill_mode_to_hwpx(Hwp5FillImageMode::Unknown(99)), None);
+    }
+
+    use crate::schema::border_fill::{Hwp5RawColorFill, Hwp5RawGradationFill};
+
+    fn warnings_for(fill: &Hwp5RawBorderFillFill) -> Vec<Hwp5Warning> {
+        let mut warnings = Vec::new();
+        let _ = hwp5_fill_to_hwpx(7, fill, &mut warnings);
+        warnings
+    }
+
+    fn has_fallback(warnings: &[Hwp5Warning], subject: &str) -> bool {
+        warnings.iter().any(
+            |w| matches!(w, Hwp5Warning::ProjectionFallback { subject: s, .. } if *s == subject),
+        )
+    }
+
+    fn color_fill(pattern_kind: Hwp5FillPatternKind) -> Hwp5RawBorderFillFill {
+        Hwp5RawBorderFillFill::Color(Hwp5RawColorFill {
+            background_color: 0,
+            pattern_color: 0,
+            pattern_kind,
+            alpha: 0,
+            extra_data: Vec::new(),
+        })
+    }
+
+    fn gradation_fill(gradation_type: Hwp5GradationType) -> Hwp5RawBorderFillFill {
+        Hwp5RawBorderFillFill::Gradation(Hwp5RawGradationFill {
+            gradation_type,
+            angle: 0,
+            center_x: 50,
+            center_y: 50,
+            blur: 0,
+            colors: vec![0, 0xFF_FFFF],
+            shape: None,
+            blur_center: None,
+            extra_data: Vec::new(),
+        })
+    }
+
+    #[test]
+    fn unknown_hatch_pattern_warns_but_known_and_none_stay_silent() {
+        // P1-3/4 warning-first: only an unknown hatch pattern warns.
+        assert!(has_fallback(
+            &warnings_for(&color_fill(Hwp5FillPatternKind::Unknown(99))),
+            "style.border_fill.fill_pattern"
+        ));
+        // `None` (no hatch) and a known pattern must NOT warn.
+        assert!(!has_fallback(
+            &warnings_for(&color_fill(Hwp5FillPatternKind::None)),
+            "style.border_fill.fill_pattern"
+        ));
+        assert!(!has_fallback(
+            &warnings_for(&color_fill(Hwp5FillPatternKind::Slash)),
+            "style.border_fill.fill_pattern"
+        ));
+    }
+
+    #[test]
+    fn unknown_gradation_type_warns_but_known_stays_silent() {
+        assert!(has_fallback(
+            &warnings_for(&gradation_fill(Hwp5GradationType::Unknown(99))),
+            "style.border_fill.gradation_type"
+        ));
+        assert!(!has_fallback(
+            &warnings_for(&gradation_fill(Hwp5GradationType::Linear)),
+            "style.border_fill.gradation_type"
+        ));
     }
 }
