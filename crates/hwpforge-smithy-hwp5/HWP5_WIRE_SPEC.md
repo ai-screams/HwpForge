@@ -797,10 +797,79 @@ Source: `layout_hint_patch.rs::write_linesegarray`.
 | 12p#123 | Default `linesegarray` synthesis for paragraphs lacking 0x45                                                      |
 | 12p#124 | SUMMERY `editable` per-FieldType                                                                                  |
 | 12q     | Style "개요 N" override for outline levels 7~9                                                                    |
+| audit-1 | 옵션 전수조사: 번호 형식 / 쪽번호 형식 / 이미지 채우기 / 대각선 enum 정렬 (§22)                                   |
 
 ---
 
-## 22. Update Protocol
+## 22. Enum Value Tables — 옵션 단위 carry (2026-06-17 전수조사)
+
+옵션 단위 audit(코드 정독)으로 발견한 enum 매핑 갭들. **핵심 교훈**: audit이
+"코드가 일부 값만 처리 → 나머지 누락"으로 플래그한 것 중 상당수가 **오탐**
+(그 값이 스펙에 실재하지 않음)이었다. 따라서 unhandled enum value 는 반드시
+레퍼런스(hwpxlib/libhwp enum) 또는 native fixture 로 **그 값이 실재하는지**
+먼저 확인할 것. 실재하면 진짜 버그, 아니면 `_ => default` 가 옳은 동작.
+
+### 22.1 문단 번호 형식 (`numbering_attr_num_format`, schema/header.rs)
+
+Wire = `(attribute >> 5) & 0x1F`. OWPML `NumberType1` enum 과 ordinal 1:1.
+**진짜 버그였음** — code 0~10 은 native 일치 확인, code 11 은 무효 문자열
+`"HANJA_DIGIT"` 였고, 6/12/13/14 는 무음 DIGIT 붕괴였음. 정정:
+
+| code | numFormat                 | code | numFormat                                      |
+| ---- | ------------------------- | ---- | ---------------------------------------------- |
+| 0    | DIGIT                     | 8    | HANGUL_SYLLABLE (가,나,다)                     |
+| 1    | CIRCLED_DIGIT             | 9    | CIRCLED_HANGUL_SYLLABLE                        |
+| 2    | ROMAN_CAPITAL             | 10   | HANGUL_JAMO (ㄱ,ㄴ,ㄷ)                         |
+| 3    | ROMAN_SMALL               | 11   | CIRCLED_HANGUL_JAMO _(was wrong: HANJA_DIGIT)_ |
+| 4    | LATIN_CAPITAL             | 12   | HANGUL_PHONETIC (일,이,삼)                     |
+| 5    | LATIN_SMALL               | 13   | IDEOGRAPH (한자 一二三)                        |
+| 6    | CIRCLED_LATIN_CAPTION (Ⓐ) | 14   | CIRCLED_IDEOGRAPH                              |
+| 7    | CIRCLED_LATIN_SMALL       | —    | —                                              |
+
+`CIRCLED_LATIN_CAPTION` 은 스펙 오타(CAPITAL 아님), `CIRCLED_LATIN_SMALL` 과
+짝. 가/나/다 는 원래 정상(code 8) — audit "아라비아로 나간다"는 오탐.
+
+### 22.2 쪽 번호 형식 (`parse_page_number_control`, projection.rs)
+
+`pgnp` CtrlHeader property u32(`header_data[4..8]`) bit 분할:
+
+- **bits 0-7 = `header_data[4]` = 번호 모양** (`HWPNumberShape`, NumberFormatType 와 1:1: 0=Digit, 2=RomanCapital, …)
+- bits 8-11 = `header_data[5]` = 위치 (기존부터 읽고 있던 값)
+
+**진짜 버그였음** — 형식 바이트를 안 읽어 항상 `Digit` 였음. native
+`sample-pagenu-roman` (로마자 대문자 → ROMAN_CAPITAL) byte-identical 확인.
+
+### 22.3 이미지 채우기 모드 (`hwp5_image_fill_mode_to_hwpx`, style_store_border_fill.rs)
+
+Wire raw u8 0-15. OWPML `ImageBrushMode` enum 과 ordinal 1:1.
+**진짜 버그였음** — 4개(0/5/6/15)만 매핑, 나머지 12개 무음 투명 드롭. 정정:
+
+| raw | mode                  | raw | mode                            |
+| --- | --------------------- | --- | ------------------------------- |
+| 0   | TILE                  | 8   | CENTER_BOTTOM                   |
+| 1   | TILE_HORZ_TOP         | 9   | LEFT_CENTER _(HWP5 LeftMiddle)_ |
+| 2   | TILE_HORZ_BOTTOM      | 10  | LEFT_TOP                        |
+| 3   | TILE_VERT_LEFT        | 11  | LEFT_BOTTOM                     |
+| 4   | TILE_VERT_RIGHT       | 12  | RIGHT_CENTER _(RightMiddle)_    |
+| 5   | TOTAL _(HWP5 Resize)_ | 13  | RIGHT_TOP                       |
+| 6   | CENTER                | 14  | RIGHT_BOTTOM                    |
+| 7   | CENTER_TOP            | 15  | ZOOM                            |
+
+native `sample-cell-image-fill` (raw 1/7/10/14) 일치 확인. `*Middle→*_CENTER`,
+`Resize→TOTAL` 명칭 주의.
+
+### 22.4 대각선 모양 (`hwp5_diagonal_shape_to_hwpx`, style_store_border_fill.rs) — **오탐**
+
+HWP5 `HWPSlashDiagonalShape`/`HWPBackSlashDiagonalShape` 는 bit 패턴이라
+**유효 값이 `{0,2,3,6,7}` 뿐** (000/010/011/110/111). 우리 매핑이 이 5개를
+모두 처리(NONE/CENTER/CENTER_BELOW/CENTER_ABOVE/ALL). **1/4/5 는 양쪽 포맷
+모두에 존재하지 않는 값** → `_ => "NONE"` 이 옳음. audit "1/4/5 누락"은 오탐.
+HWP5·HWPX 둘 다 동일 5종, 기능 갭 없음. native `sample-cell-diagonal` 로
+value 2(CENTER) byte-identical 확인.
+
+---
+
+## 23. Update Protocol
 
 When a new wave discovers wire-level behavior:
 
