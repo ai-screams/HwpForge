@@ -8,60 +8,29 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document formats, designed with LLM-first principles. The goal is to enable AI agents (like Claude Code) to generate Korean government proposal documents using natural language + Markdown + YAML style templates.
 
-**Current Status**:
+**Current Status** (snapshot — 2026-06-17):
 
-- HWPX codec: read/write shipped
-- Markdown bridge: read/write shipped
-- HWP5 converter path: active with style/layout fidelity line in progress
-- CLI bindings: shipped
-- MCP bindings: shipped
-- Python bindings: stub
-- Shared tab semantics: landed on `main`
-- Shared `ordered / bullet / outline` semantics: implemented on local `feat/list-shared-semantics`
-- Checkable bullet semantics: implemented on local `feat/list-shared-semantics`
-- HWP5 checkable support: all three gotcha-#8 truth locations now carry end-to-end — `bullet.checkedChar`, `bullet.paraHead.checkable` (definition-level), and `paraPr.checked` (paragraph-level)
-- Markdown task lists normalize to HWPX-first checkable semantics; ordered task lists intentionally lose numbering
-- HWP5 char/para style bridge now preserves the main supported style surface
-- HWP5 layout hint patch injects `linesegarray` and safe table height hints for better visual parity
-- `convert-hwp5` / `audit-hwp5` warning counts are aligned for style projection fallbacks
-- HWP5/HWPX char effects now preserve `emboss`, `engrave`, `superscript`, and `subscript`
-- HWP5/HWPX paragraph `breakLatinWord=HYPHENATION` is now carried end-to-end (Wave 1d)
-- HWP5 chart objects (OLE-backed BinData) now carry end-to-end as `Control::EmbeddedChart` passthrough — emits `Chart/chartN.xml` + `BinData/oleN.ole` + `<hp:switch>` block (Wave 4c, closes `DroppedControl:ole_object`)
-- HWP5 tab fidelity end-to-end: inline `<hp:tab width/leader/type>` attributes carried via new `RunContent::InlineText` variant (Wave 4 tab Phase 2+3, additive `#[non_exhaustive]`)
-- HWP5 header/footer per-ctrl `applyPageType` (BOTH/ODD/EVEN) now carry as multiple `<hp:header>` / `<hp:footer>` elements (Wave 5 gap A; **breaking** ADR-002: `Section.header: Option<HeaderFooter>` → `Section.headers: Vec<HeaderFooter>`, footer 동일)
-- HWP5 `secd` ctrl property bits (0/1/2/5/19) carry into `Section.visibility.hide_first_*` (Wave 5 gap B)
-- **Phase 12 HWP5 carry series complete** (active branch `feat/phase12-hwp5-gso-shapes`, 21 commits ahead of `main`, 2026-06-02):
-  - Wave 12a: GSO `Ellipse`/`Arc`/`Curve` carry (`0x50`/`0x53` sub-records, arc inferred from ellipse)
-  - Wave 12b: GSO `ConnectLine` carry (`$col` discriminator on `ShapeComponentLine`)
-  - Wave 12d: `Equation` carry (`eqed` + `HWPTAG_EQEDIT` script pairing)
-  - Wave 12e/f/g/h: `Memo` carry — body content + anchor positioning + 7 wire parameters (`editable`/`dirty`/`zorder`/`field_id`/`begin_id_ref`/`name`/`meta_tag`)
-  - Wave 12i: `Dutmal` (덧말) `option` carry + flat-path `control_iter` filter (Core breaking: `option_raw`)
-  - Wave 12j: `Compose` (글자겹침) carry + `char_pr_ids` fidelity + packed-variant 지원 (Core breaking)
-  - Wave 12k: `IndexMark` (찾아보기) carry + `0x16` 인라인 marker 보존
-  - Wave 12l: `Control::Field` (CLICK_HERE / 누름틀) carry + form-mode `name` 메타 carry — `Control::Field`에 `name: Option<String>` 추가 (Core breaking), HWP5 `%clk` ctrl_id + 트레일링 `0x57` (`TagId::CtrlData`) sub-record 페어링, HWPX encoder `Clickhere:set:N:` 자기 참조 N 공식 empirical 도출 (이전 하드코딩 `43` 수정), 32K command + 2K name allocation cap (DoS 방어)
-  - Wave 12o (latest, 2026-06-04): Document metadata end-to-end carry — `Core::Metadata`에 `description`/`last_saved_by`/`extras: BTreeMap` 추가 + `#[non_exhaustive]` (Core breaking, builder API `Metadata::new().with_*()`), HWPX encoder가 `content.hpf <opf:metadata>` 9-slot byte-parity 형식 emit, HWPX decoder가 `Contents/content.hpf` 파싱하고 `Document.metadata` 채움 (XXE/billion-laughs/depth-cap 방어), HWP5 decoder가 `\x05HwpSummaryInformation` OLE2 PropertySet 디코딩 (VT_LPSTR/VT_LPWSTR/VT_FILETIME + Hancom custom PID 0x14/0x15, FILETIME→ISO 8601 hand-rolled). 검증: `$title`/`$author`/`$createtime`/`$modifiedtime`/`$lastsaveby` 모두 한컴 저장 시 재평가되어 native 값 표시 확인 (G6/G7 PASS). **G2 (native byte-parity diff), G4 (HWP5→HWPX e2e 자동 게이트), G8b (저장 후 fallback 거동) 미평가 — 후속 wave에서 자동 게이트로 승격 예정 (Codex(architect) Wave 12o-fixup §Top-5 종료 정직성).**
-  - Wave 12o-fixup (2026-06-04, Codex architect 리뷰 반영): (1) `summary_info.rs::parse_summary_information` `sec_start+8` unchecked add → `checked_add` + `bytes.get(..)` (32-bit/wasm DoS panic 차단, Top-1 P0), (2) HWPX encoder가 `extras["date"]` 를 9-slot 위치에서 그대로 carry (typed collision guard 에서 `date` 예외, Hancom recompute 가정 깨질 때 silent data loss 차단, Top-2 P0), (3) `Hwp5Decoder::decode` 가 `intermediate.metadata` → `document.set_metadata` forward (canonical entry API 일관성, Top-4 P1), (4) `decoder/metadata.rs::enforce_namespace` 가 unprefixed `<title>` 같은 prefix 누락 요소도 reject (S3 guard 실효화, P1 신규 발견).
-  - Wave 12n Step 6 (2026-06-06): `Control::PathField` lossless HWPX carry — encoder가 `<hp:fieldBegin type="PATH" fieldid="628121972" editable="0">` + `Format=` param native wire 직접 emit (이전 LOSSY SUMMERY surrogate 대체), decoder가 `type="PATH"` 인식 + `Format` 우선 파싱 → `PathFieldCommand::from_wire`. #120 (한컴 "낮은 보안수준 복구" 경고의 가장 강한 트리거) 핵심 해소. end-to-end 검증: `sample-field-docsummary.hwp` 변환 결과 PATH 필드가 한컴 native HWPX 와 byte-identical (id 카운터만 차이).
-  - Wave 12p (2026-06-08~09): cross-ref target element instance ID carry + Wave 12n leftover triage. **Steps 1-4** (encoder side) 완료: Foundation `RefContentType::BookmarkName` 부활 (Wave 12m fixup regression revert) + Bookmark N2 매핑 native 일치, Core breaking `Image`/`Table`/`Control::Equation::inst_id: Option<u64>` (Codex(architect) 리뷰 반영), HWP5 ParaHeader `[18..22]` instance_id + GSO trailer 추출, HWPX encoder `<hp:pic id>`/`<hp:tbl id>`/`<hp:equation id>`/`<hp:footNote instId>` attribute emit. **Step 5** (HWP5 → HWPX target ID 매칭 알고리즘) 후속 wave 로 분리 — HWP5 wire 가 target element 의 instance ID 를 carry 안 하는 것 probe 로 확인 (`extract_ctrl_header_trailer_instance_id` returns 0 for `fn`/`en` CtrlHeader). Wave 12n leftover 3건 동시 해소: **#121** `heading_level()` wire 가 zero-based 인데 `saturating_sub(1)` 잘못 적용된 off-by-1 fix (HWP5 spec bit 25-27 = 3-bit zero-based ordinal, Codex 검토 확인), **#123** `layout_hint_patch::write_linesegarray()` 가 `ParaLineSeg` (tag 0x45) 누락 paragraph 도 default lineseg 로 항상 emit (한컴 "낮은 보안 수준 복구" 경고 완화), **#124** `FieldType::hwpx_editable()` 신규로 SUMMERY 별 native editable 값 (`Author`/`Title`=0, `LastSavedBy`/`CreatedTime`/`ModifiedTime`=1) emit. forged HWPX visual gate `forged-figure-crossref-instid.hwpx`: caller-supplied `Image.inst_id = Some(0x4221_E000)` ↔ cross-ref `RefTarget::SystemId(...)` 매칭 한컴 시각 검증 PASS.
-  - Wave 12q (latest, 2026-06-09): outline level 7~9 recovery via Style "개요 N" linkage. HWP5 `ParaShape.property1` bit 25-27 은 3-bit ordinal (cap=6) 만 표현 가능 — 한컴 native 는 outline level 7~9 를 Style record 의 한국어 이름 "개요 N" (N-1 = HWPX level) 로 표현. `apply_outline_style_level_overrides()` (silent, no warnings) 가 ParaShape 변환 후 Style "개요 N"/"Outline N" 패턴 매칭하여 para_shape_id 가 가리키는 paraPr 의 heading_level 을 N-1 로 override. 사용자 작성 native `sample-outline-9levels.hwp` (10 levels) 시각 검증: 1~7수준 `1./가./1)/가)/(1)/(가)/①`, 8수준 `㉠`, 9~10수준 marker 없음 (native byte-identical 매칭). hp10 namespace switch wrap 은 미구현 — 한컴이 hp10 없이도 level 7/8/9 직접 emit 을 정상 인식 (시각 검증 확인). Codex(architect) §5 "순차 ID 신앙 금지" 호환: paraPr id 자체에 의존 안 함, `heading_type == Outline` 인 paraPr 만 override.
-- **Wave 12p Step 5 (#134) 해결됨** (2026-06-11): HWP5 변환 path 의 cross-ref `?` 표시는 wire 가 instance ID 를 family-별 offset (fn/en `data[16..20]`, gso/tbl/eqed `data[36..40]`) 에 carry 하는 것을 probe 로 발견하여 `extract_ctrl_header_instance_id` family-aware 화로 종료 — synthesis 알고리즘 불필요. 4 fixtures (footnote/endnote/equation/table) native byte-identical 검증.
-- **Refactor 시리즈 완료** (2026-06-11, tasks #72/#88/#89/#90/#91/#92/#94/#95): HWP5_WIRE_SPEC.md 신설, `ctrl_ids.rs` 단일 모듈 (drift 4종 canonical 화: `SECD`/`FIELD_CROSSREF`/`ATNO`/`INDEXMARK`), BSTR helper 통합, ClickHere named enum + parse error 차별화, `handle_top_level_record` 425→71줄, `project_paragraph_with_images_structural` 225→135줄, `smithy-hwpx encoder/section.rs` 5,481→3,765줄 (8개 family 모듈 신설: field/section_pr/header_footer/memo/chart/picture/equation/typography — `mod` + `use super::*` + `pub(super)` 패턴, 본문 verbatim, runtime 영향 0).
-- **#120/#136 해결됨** (2026-06-13): SUMMERY/PATH 필드 변환 시 한컴 "낮은 보안 수준 복구" 경고 + 빈 placeholder 의 근본 원인은 `<hp:fieldBegin>…<hp:fieldEnd>` 빈 본문이었음 (byte-diff + 한컴 실측으로 확정). Wave 12n Step 6.6 의 "빈 본문이 경고를 회피" 주석은 틀렸음 — 거부됐던 건 합성 ISO 날짜였지 verbatim 값이 아니었다. 해결: Core breaking `display_text: String` 을 `Control::{Field,UnknownSummery,DateCodeField,PathField}` 에 추가 (CrossRef 선례 미러), projection 이 FieldBegin..FieldEnd span 누적 (DoS cap 4096), encoder 가 본문으로 emit, decoder 가 round-trip 복원. 한컴 시각 게이트 PASS.
-- **옵션 단위 전수조사 + 수정** (2026-06-17): HWP5↔HWPX enum 옵션값이 조용히 틀리거나 뭉개지는 갭을 audit→fixture 검증으로 처리. 진짜 버그 3건 수정: **번호 형식**(`numbering_attr_num_format` code 11 무효 문자열 `HANJA_DIGIT`→`CIRCLED_HANGUL_JAMO`, 6/12/13/14 추가), **쪽번호 형식**(`pgnp` property bits 0-7 미読→항상 DIGIT), **이미지 채우기 모드**(16종 중 12종 무음 투명 드롭). 오탐 2건 fixture로 반증: 번호 "가/나/다"(원래 정상), 대각선 1/4/5(스펙에 없는 값). 상세 enum 표: `HWP5_WIRE_SPEC.md §22`. **구조적 교훈**: audit(코드 정독)의 "unhandled enum value" 플래그는 그 값이 **스펙에 실재하는지**(hwpxlib/libhwp enum 또는 native fixture)부터 확인 — 실재하면 진짜 버그, 아니면 `_ => default` 가 옳음. fixture 검증 워크플로는 memory `fixture-workflow.md` (한 번에 하나씩 + UI/단축키 + native .hwpx 대조).
-- Known still-deferred: **non-chart OLE passthrough** (한셀/Excel 등 임베드 OLE — `Control::OleObject` + `<hp:ole>` 전 구간 구현 완료했으나 standalone `<hp:ole>` 가 macOS 한컴을 crash 시킴; macOS 한컴은 non-chart OLE 생성 자체가 불가(`입력 → 개체` 에 OLE 항목 없음)하여 정답지·검증 둘 다 불가 → `git stash@{0}` 보존, Windows 한컴 fixture 대기. 상세: memory `non-chart-ole-deferred.md`); Wave 5 gap C (masterPage carry — macOS 한컴 fixture 비대칭, PC 한컴 fixture 대기, task #33); **쪽 테두리/배경 무늬(hatch) 페이지 경로** (hatch fill 자체는 글자 배경 fixture 로 byte-identical 검증 완료(gotcha #21 스왑 포함) — page/char/table 공유 코드라 동일; 단 macOS 한컴 [쪽] 메뉴에 "쪽 테두리/배경" 항목 자체가 없어 페이지 전용 시각 게이트는 Windows 한컴 fixture 대기); **양식컨트롤(form controls — 콤보/체크/버튼/에디트/리스트/스크롤바)** (현재 완전 무음 드롭; ctrl_id `b"form"` + `HWPTAG_FORM_OBJECT` 0x5B carry 미구현. macOS 한컴은 양식 개체 생성 자체가 불가([입력]→[개체]에 양식 항목 없음) + HWP5 스펙에 바이너리 레이아웃 0줄이라 fixture 없이 구현 = 추측 기반 가짜 carry → Windows 한컴 fixture 대기. wire research 완료, 상세: memory `form-controls-deferred.md`); 한컴-authored .hwpx의 multi-run span 디코딩 (편집 알고리즘 prerequisite, task #96)
+- HWPX codec: read/write shipped · Markdown bridge: read/write shipped
+- HWP5 → HWPX converter path: active, style/layout fidelity line in progress
+- CLI bindings: shipped · MCP bindings: shipped · Python bindings: stub
+- Shared `tab` / `ordered·bullet·outline` / checkable-bullet semantics wired through core → blueprint → smithy. HWP5 checkable carries all three gotcha-#8 truth locations (`bullet.checkedChar`, `bullet.paraHead.checkable`, `paraPr.checked`).
+- Active branch `feat/phase12-hwp5-gso-shapes` (ahead of `main`): Phase 12 HWP5→HWPX carry series — GSO shapes, equation, memo, dutmal, compose, indexmark, click-here/auto fields, cross-ref instId, document metadata, outline levels 1–10 — plus 옵션 단위 enum 전수조사 (번호/쪽번호/이미지 채우기 형식 버그 수정).
 
-**Workspace Facts (code-grounded, 2026-06-11 refactor 시리즈)**:
+> **이 섹션은 짧은 상태 스냅샷으로만 유지한다 (wave-by-wave 이력을 여기 다시 쌓지 말 것).**
+> Wave별 상세 이력 + breaking change: **`CHANGELOG.md`** (canonical) 와 memory `MEMORY.md` / `phase11_wave_history.md`.
+> Enum/wire 레이아웃 표 (번호·쪽번호·이미지채우기·대각선 등): **`crates/hwpforge-smithy-hwp5/HWP5_WIRE_SPEC.md`** (특히 §22).
 
-- Cargo packages: `10`
-- Workspace version: `0.6.0` (Unreleased — bumped from `0.5.2` for ADR-002 + Wave 12 series + Wave 12o `#[non_exhaustive] Metadata` + Wave 12p `Image/Table/Control::Equation::inst_id` + `RefContentType::BookmarkName` revival breaking)
-- Tracked Rust `src` files under `crates/`: `157`
-- Workspace nextest count: `2,466` (passed) + `2` skipped (#89 rejection-reason 게이트 3건 추가)
-- Example artifact files under `examples/`: `67`+ (gitignored `examples/hwp5_review/` 리뷰 영역 별도)
-- GitHub workflow files: `5`
-- MSRV: `1.88`
-- Dev toolchain: Rust `1.93`
+**Still-deferred (Windows 한컴 fixture 대기)**:
 
-Treat these as code-derived facts, not roadmap promises.
+- **non-chart OLE passthrough** — 전 구간 구현됐으나 standalone `<hp:ole>` 가 macOS 한컴 crash, macOS는 생성 자체 불가 → `git stash` 보존 (memory `non-chart-ole-deferred.md`)
+- **masterPage carry** (Wave 5 gap C, task #33) · **쪽 테두리/배경 hatch _페이지_ 경로** (char/table hatch 는 byte-verified 완료, 공유 코드 — macOS [쪽] 메뉴에 항목 없음)
+- **양식컨트롤(form controls)** — 완전 무음 드롭, `b"form"` + `HWPTAG_FORM_OBJECT(0x5B)` 미구현 (memory `form-controls-deferred.md`)
+- **가운데 밑줄** (macOS 한글 밑줄 위치에 "가운데" 옵션 없음) · 한컴-authored multi-run span 디코딩 (편집 prerequisite, task #96)
+
+**Workspace Facts** (code-grounded — 카운트는 drift하니 인용 전 확인):
+
+- Cargo packages `10` · Workspace version `0.6.0` (Unreleased, ADR-002 + Wave 12 series breaking) · MSRV `1.88` · Dev toolchain Rust `1.93`
+- `crates/` 추적 src 파일 ~`157` · nextest ~`2,489` passed + `2` skipped · `examples/` 산출물 `67`+ (gitignored `examples/hwp5_review/` 리뷰 영역 별도) · GitHub workflows `5`
 
 ---
 
@@ -119,6 +88,12 @@ make fmt-fix
 bacon         # Auto-run clippy on file changes
 bacon test    # Auto-run tests
 ```
+
+### Tooling Gotchas (pre-commit / test)
+
+- **dprint + 한글(CJK) 마크다운 표**: 한글이 든 `.md` 표(예: `HWP5_WIRE_SPEC.md`, `CHANGELOG.md`)를 편집하면 dprint pre-commit 훅이 거부함(CJK 글자 폭 재계산으로 표 정렬 불일치 판단). `dprint fmt <파일>` 수동 실행 → 재-stage → 재커밋.
+- **`cargo nextest run -p <crate> <filter>`** 의 필터는 정규식이 아니라 **부분일치(substring)** — `'a|b'` 는 아무것도 안 잡음. 공통 substring 하나(예: `warns`)로 필터하거나 따로 실행.
+- 용량 큰 이미지 임베드 fixture(~MB)는 gitignore된 `examples/hwp5_review/`에만 두고, 회귀 방지는 **단위 테스트로 잠금**(수 MB fixture를 커밋하지 말 것).
 
 ### Documentation & Coverage
 
