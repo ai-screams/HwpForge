@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Fixed — HWP5→HWPX 문단 번호매기기 형식 5종 (P0-1, 옵션 전수조사)
+
+문단 번호 형식(`<hh:paraHead numFormat>`) 디코딩 매핑이 KS X 6101 OWPML
+`NumberType1` enum 과 어긋나 일부 형식이 손실/오변환됐다. 옵션 단위 전수조사
+중 발견.
+
+- **code 11**: `"HANJA_DIGIT"` (OWPML 에 없는 무효 문자열) → `CIRCLED_HANGUL_JAMO`
+  (원 ㄱ,ㄴ,ㄷ) 로 정정. 한자 숫자는 실제로 code 13 = `IDEOGRAPH`.
+- **code 6** (`CIRCLED_LATIN_CAPTION`, 원 알파벳 대문자 Ⓐ), **code 12**
+  (`HANGUL_PHONETIC` 일,이,삼), **code 13** (`IDEOGRAPH` 한자), **code 14**
+  (`CIRCLED_IDEOGRAPH`) 추가 — 이전엔 전부 무음으로 `DIGIT` 로 붕괴.
+- code 0~10 은 사용자 작성 native fixture `sample-numbering-hangul`(10수준,
+  9형식)로 byte 단위 일치 확인 — 가/나/다(`HANGUL_SYLLABLE`), ㄱ/ㄴ/ㄷ
+  (`HANGUL_JAMO`) 등 정상 carry 회귀 잠금. (audit 의 "가/나/다가 아라비아로
+  나간다" 주장은 거짓이었음 — 코드 정독 한계, fixture 로 반증.)
+- 테스트: `numbering_num_format_covers_full_ks_x_6101_enum` (전 코드 단위),
+  `..._user_sample_numbering_formats_match_native` (native e2e 게이트).
+
 ### Verified — HWP5→HWPX 빗금무늬(hatch fill) carry + gotcha #21 방향 스왑
 
 빗금/역빗금 등 무늬 채우기(`<hc:winBrush hatchStyle>`)의 HWP5→HWPX carry 를

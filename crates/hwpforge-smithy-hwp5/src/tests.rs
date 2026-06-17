@@ -1877,6 +1877,58 @@ fn hwp5_to_hwpx_user_sample_page_border_pattern_carries_double_line_and_gradient
 }
 
 #[test]
+fn hwp5_to_hwpx_user_sample_numbering_formats_match_native() {
+    // Locks the P0-1 numbering-format fix against a native 한컴 fixture that
+    // exercises 9 distinct paragraph numbering formats across 10 levels
+    // (가/나/다 = HANGUL_SYLLABLE, ㄱ/ㄴ/ㄷ = HANGUL_JAMO, 원 가나다, 원 숫자,
+    // 로마자, 알파벳 대/소문자, 원 알파벳 소문자, 숫자). All must carry as the
+    // exact KS X 6101 `numFormat` strings — and crucially the converter must
+    // NOT emit the old invalid string "HANJA_DIGIT".
+    let source = fixture_path("user_samples/numbering/sample-numbering-hangul.hwp");
+    if !source.exists() {
+        return;
+    }
+
+    let out = unique_temp_path("user-sample-numbering-hangul.hwpx");
+    hwp5_to_hwpx(&source, &out).expect("numbering conversion should succeed");
+    assert_valid_hwpx(&out);
+
+    let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+    let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes))
+        .expect("converted hwpx should open as zip");
+    let mut header_xml = String::new();
+    {
+        use std::io::Read;
+        archive
+            .by_name("Contents/header.xml")
+            .expect("Contents/header.xml should be present")
+            .read_to_string(&mut header_xml)
+            .expect("header.xml should be UTF-8");
+    }
+
+    for expected in [
+        "numFormat=\"HANGUL_SYLLABLE\"",
+        "numFormat=\"HANGUL_JAMO\"",
+        "numFormat=\"CIRCLED_HANGUL_SYLLABLE\"",
+        "numFormat=\"CIRCLED_DIGIT\"",
+        "numFormat=\"CIRCLED_LATIN_SMALL\"",
+        "numFormat=\"LATIN_CAPITAL\"",
+        "numFormat=\"ROMAN_SMALL\"",
+    ] {
+        assert!(
+            header_xml.contains(expected),
+            "header.xml must carry {expected} (native 한컴 numbering format)"
+        );
+    }
+    assert!(
+        !header_xml.contains("HANJA_DIGIT"),
+        "header.xml must NOT emit the invalid OWPML string HANJA_DIGIT (P0-1 fix)"
+    );
+
+    let _ = std::fs::remove_file(&out);
+}
+
+#[test]
 fn hwp5_to_hwpx_user_sample_charbg_hatch_carries_swapped_pattern_direction() {
     // Locks the hatch (빗금무늬) fill carry AND the gotcha #21 direction swap:
     // 한글's own HWPX writer emits the *visual* 빗금(/) as the string
