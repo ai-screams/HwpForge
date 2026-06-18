@@ -117,11 +117,27 @@ fn pipeline_table_roundtrip() {
         .expect("Should have a table run");
 
     if let RunContent::Table(table) = &table_run.content {
-        // The markdown parser treats header as regular row, so only 1 data row after separator
-        assert!(!table.rows.is_empty(), "Should have at least 1 row");
-        // Note: col_count() returns the max column count across all rows
-        let cols = table.col_count();
-        assert_eq!(cols, 2, "Should have 2 columns");
+        // Regression: pulldown-cmark emits the GFM header row inside `TableHead`,
+        // which the decoder used to ignore (no-op), dropping the `A | B` header.
+        // The header must now be captured as table row 0.
+        assert_eq!(table.rows.len(), 2, "header row + data row");
+        assert_eq!(table.col_count(), 2, "Should have 2 columns");
+
+        let cell_text = |r: usize, c: usize| -> String {
+            table.rows[r].cells[c]
+                .paragraphs
+                .iter()
+                .flat_map(|p| &p.runs)
+                .filter_map(|run| match &run.content {
+                    RunContent::Text(t) => Some(t.as_str()),
+                    _ => None,
+                })
+                .collect()
+        };
+        assert_eq!(cell_text(0, 0), "A", "header cell A must survive");
+        assert_eq!(cell_text(0, 1), "B", "header cell B must survive");
+        assert_eq!(cell_text(1, 0), "1");
+        assert_eq!(cell_text(1, 1), "2");
     } else {
         panic!("Expected table content");
     }

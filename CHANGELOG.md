@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Fixed — Markdown(GFM) 표 헤더 행 손실 (사용자 흐름 점검)
+
+`convert`(Markdown → HWPX) 에서 GFM 표의 **헤더 행이 통째로 사라지던** data-loss
+버그. `| A | B |` 헤더 + `| 1 | 2 |` 데이터 → HWPX 에 `1|2` 1행만 남고 `A|B` 소실.
+
+- 원인: md 디코더가 pulldown-cmark 의 `Tag::TableHead`/`TagEnd::TableHead` 를
+  no-op(`{}`) 처리 → 헤더 셀이 어느 행에도 안 붙고 드롭. 본문 행(`TableRow`)만 캡처.
+- 수정: `TableHead` 를 `TableRow` 처럼 처리해 헤더 셀을 표 행 0 으로 캡처
+  (Core/HWPX 는 행 0 을 헤더로 렌더 — `to-md` 가 행 0 을 md 헤더로 출력하는 것과 정합).
+- 검증: `convert` → HWPX 에 2행(A,B / 1,2) + `to-md` 라운드트립이 헤더 완전 복원.
+- 테스트: `pipeline_table_roundtrip` 을 2행·헤더 셀 내용 단언으로 강화(기존엔
+  버그를 주석으로 박제하고 있었음), 표 셀 image/link 디코더 테스트 2건 행 인덱스 정정.
+
 ### Changed — BREAKING (이전 wave 누락분 명시, API audit)
 
 코드 audit 에서 발견한, 이미 발생했으나 Breaking 으로 명시되지 않았던 public API

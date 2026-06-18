@@ -503,7 +503,10 @@ impl<'a> DecoderState<'a> {
             Tag::List(start) => self.start_list_tag(start),
             Tag::Item => self.start_item_tag(),
             Tag::Table(_) => self.start_table_tag(),
-            Tag::TableHead => {}
+            // pulldown-cmark emits the GFM header row's cells inside `TableHead`
+            // (not `TableRow`). Treat it as a row so the header cells are
+            // captured as table row 0 (Core/HWPX render row 0 as the header).
+            Tag::TableHead => self.start_table_row_tag(),
             Tag::TableRow => self.start_table_row_tag(),
             Tag::TableCell => self.start_table_cell_tag(),
             Tag::Link { dest_url, .. } => self.start_link_tag(&dest_url),
@@ -538,7 +541,7 @@ impl<'a> DecoderState<'a> {
             TagEnd::List(_) => self.end_list_tag(),
             TagEnd::Item => self.end_item_tag(),
             TagEnd::Table => self.finalize_table()?,
-            TagEnd::TableHead => {}
+            TagEnd::TableHead => self.end_table_row_tag(),
             TagEnd::TableRow => self.end_table_row_tag(),
             TagEnd::TableCell => self.end_table_cell_tag(),
             TagEnd::Link => self.end_link_tag(),
@@ -1394,7 +1397,8 @@ mod tests {
             .find_map(|run| run.content.as_table())
             .expect("table run");
 
-        let cell_paragraph = &table_run.rows[0].cells[0].paragraphs[0];
+        // row 0 is the GFM header ("Link"); the link data cell is row 1.
+        let cell_paragraph = &table_run.rows[1].cells[0].paragraphs[0];
         assert!(cell_paragraph.runs.iter().any(|run| matches!(
             run.content,
             RunContent::Control(ref ctrl)
@@ -1421,7 +1425,8 @@ mod tests {
         let doc = MdDecoder::decode(markdown, &template).unwrap().document;
 
         let table = doc.sections()[0].paragraphs[0].runs[0].content.as_table().unwrap();
-        let cell_runs = &table.rows[0].cells[0].paragraphs[0].runs;
+        // row 0 is the GFM header ("Img"); the image data cell is row 1.
+        let cell_runs = &table.rows[1].cells[0].paragraphs[0].runs;
         assert!(cell_runs.iter().any(
             |run| matches!(run.content, RunContent::Image(ref img) if img.path == "logo.png")
         ));
