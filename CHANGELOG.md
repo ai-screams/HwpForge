@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Known Issues — HWP5→HWPX 옵션 손실 (P2/P3, Core breaking 필요, 후속 슬라이스)
+
+옵션 단위 전수조사에서 식별된 잔여 갭. **공유 Core/Foundation 모델이 해당
+정보를 담을 자리가 없어** 수정에 public API breaking 이 필요하므로 별도 슬라이스로
+보류 (P0/P1 은 매핑 수정만으로 해소돼 완료). 착수 전 각 항목의 macOS 한글 저작
+가능 여부 확인 필요 (P0-2 가운데밑줄처럼 Windows-blocked 일 수 있음). 상세 표·코드
+위치: `.docs/audit/2026-06-17_hwp5_hwpx_option_gaps.md` (§P2/§P3).
+
+**P2 — 경고는 나가지만 손실 (`ProjectionFallback` 동반, 값을 알지만 Core 가 못 담음):**
+
+- 글자: 외곽선/그림자 종류 단일화, **그림자 색·위치 미carry**, **스크립트별 자간/장평/상대크기(7스크립트) 붕괴**
+- 문단: 세로정렬, 줄높이 플래그, **한영/한숫자 자동 간격(한국어 조판 영향)**, 테두리 오프셋·연결 플래그, 줄간격 kind≥4
+- 기타: 반복 헤더행 강등, 필드 내부 tab 속성, TextArt enum 미상값, page_border_fill 레코드≠3 매핑
+
+**P3 — Core enum 천장 (경고도 없이 raw 초과분이 기본값으로):**
+
+- `UnderlineShape` raw 12–15 · `StrikeoutShape` ≥13 · `EmphasisType` ≥7 · `DutmalPosition` ≥4 · 이미지 fill effect · border line kind · border width ≥16 → 각 기본값
+- (일부는 P1-1 처럼 스펙에 실재하지 않는 값일 수 있음 — 착수 시 reference/fixture 로 도달성부터 확인)
+
+**그 외**: non-chart OLE · masterPage(gap C) · 양식컨트롤 · 쪽 테두리/배경 hatch 페이지 경로 · 가운데 밑줄 — 전부 **Windows 한컴 fixture 대기** (macOS 저작 불가, 상세는 `CLAUDE.md` Still-deferred).
+
 ### Fixed — HWP5→HWPX 채우기 "색 없음" → `faceColor="none"` (P1-5, 옵션 전수조사)
 
 HWP5 는 "배경색 없음" 을 None fill 이 아니라 **Color fill + `background_color =
