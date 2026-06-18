@@ -27,7 +27,7 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 - **양식컨트롤(form controls)** — 완전 무음 드롭, `b"form"` + `HWPTAG_FORM_OBJECT(0x5B)` 미구현 (memory `form-controls-deferred.md`)
 - **가운데 밑줄** (macOS 한글 밑줄 위치에 "가운데" 옵션 없음) · 한컴-authored multi-run span 디코딩 (편집 prerequisite, task #96)
 
-**Known lossy (Core breaking 필요, 후속 슬라이스)**: 글자 그림자 색·위치, 스크립트별 자간/장평, 한영 자동 간격, 문단 세로정렬·테두리 오프셋 등 (P2 — 경고는 나감) + enum 천장 (P3 — UnderlineShape/StrikeoutShape/EmphasisType 등 raw 초과분). 상세: `CHANGELOG.md` [Unreleased] Known Issues + `.docs/audit/2026-06-17_hwp5_hwpx_option_gaps.md`.
+**Known lossy (Core breaking 필요, 후속 슬라이스)**: 글자 그림자 색·위치, 스크립트별 자간/장평, 한영 자동 간격, 문단 세로정렬·테두리 오프셋 등 (P2 — 경고는 나감) + enum 천장 (P3 — UnderlineShape/StrikeoutShape/EmphasisType 등 raw 초과분). 상세 backlog: `.docs/planning/BACKLOG_SMITHY_HWPX.md` + 분석 `.docs/audit/2026-06-17_hwp5_hwpx_option_gaps.md`.
 
 **Workspace Facts** (code-grounded — 카운트는 drift하니 인용 전 확인):
 
