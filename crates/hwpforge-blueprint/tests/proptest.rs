@@ -190,16 +190,13 @@ proptest! {
         spacing_type in proptest::option::of(arb_line_spacing_type()),
         spacing_val in proptest::option::of(50.0f64..300.0),
     ) {
-        let partial = PartialParaShape {
-            alignment,
-            line_spacing: spacing_type.map(|st| {
-                hwpforge_blueprint::style::LineSpacing {
-                    spacing_type: Some(st),
-                    value: spacing_val,
-                }
-            }),
-            ..Default::default()
-        };
+        // #[non_exhaustive]; build via default() + field assignment.
+        let mut partial = PartialParaShape::default();
+        partial.alignment = alignment;
+        partial.line_spacing = spacing_type.map(|st| hwpforge_blueprint::style::LineSpacing {
+            spacing_type: Some(st),
+            value: spacing_val,
+        });
 
         let resolved = partial.resolve("test", &[], &[]).unwrap();
         // Should always succeed since ParaShape has defaults for all fields
@@ -255,23 +252,11 @@ proptest! {
         spacing_type in arb_line_spacing_type(),
         spacing_val in 50.0f64..300.0,
     ) {
-        let original = ParaShape {
-            alignment,
-            line_spacing_type: spacing_type,
-            line_spacing_value: spacing_val,
-            space_before: HwpUnit::ZERO,
-            space_after: HwpUnit::ZERO,
-            indent_left: HwpUnit::ZERO,
-            indent_right: HwpUnit::ZERO,
-            indent_first_line: HwpUnit::ZERO,
-            break_type: hwpforge_foundation::BreakType::None,
-            keep_with_next: false,
-            keep_lines_together: false,
-            widow_orphan: true,
-            border_fill_id: None,
-            tab_def_id: 0,
-            list: None,
-        };
+        // #[non_exhaustive]; build via default() + the fields under test.
+        let mut original = ParaShape::default();
+        original.alignment = alignment;
+        original.line_spacing_type = spacing_type;
+        original.line_spacing_value = spacing_val;
         let yaml = serde_yaml::to_string(&original).unwrap();
         let back: ParaShape = serde_yaml::from_str(&yaml).unwrap();
         prop_assert_eq!(original.alignment, back.alignment);

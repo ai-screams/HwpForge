@@ -456,6 +456,7 @@ impl PartialCharShape {
 
 /// Paragraph shape with all optional fields (for YAML parsing and inheritance).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct PartialParaShape {
     /// Text alignment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -648,6 +649,7 @@ impl PartialParaShape {
 
 /// A composite style entry (char + para shape) with optional fields for YAML.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct PartialStyle {
     /// Character formatting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -762,7 +764,13 @@ pub struct CharShape {
 }
 
 /// A fully-resolved paragraph shape (all fields present).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+///
+/// Construct via [`PartialParaShape::resolve`] (the canonical path), or via
+/// `ParaShape::default()` then field assignment, rather than a struct literal —
+/// this type is `#[non_exhaustive]` so new fields can be added without a
+/// breaking change.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct ParaShape {
     /// Text alignment.
     pub alignment: Alignment,

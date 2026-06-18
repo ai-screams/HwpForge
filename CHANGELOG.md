@@ -39,6 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `PartialCharShape::resolve()`, `PartialCharShape` 는 `default()` + 필드 설정으로
   생성. 향후 필드 추가가 더는 breaking 이 되지 않도록 한 번에 고정 (`underline_shape`
   추가가 이미 깨뜨린 김에).
+- `blueprint::style::{ParaShape, PartialParaShape, PartialStyle}` 에도
+  `#[non_exhaustive]` 추가 (B 일관화) — CharShape 쌍과 동일한 style/shape 패밀리.
+  `ParaShape` 는 `#[derive(Default)]` 추가(가산적, 합리적 기본값) + `resolve()` 또는
+  `default()`+필드설정 으로 생성. (성장형이나 외부 구성이 많은 `core::{Section,
+  Paragraph}` 등은 builder/Default 선행이 필요해 후속 슬라이스로 보류 — backlog 기록.)
 
 ### Fixed — HWP5→HWPX 채우기 "색 없음" → `faceColor="none"` (P1-5, 옵션 전수조사)
 
