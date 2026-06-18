@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Changed — BREAKING (이전 wave 누락분 명시, API audit)
+
+코드 audit 에서 발견한, 이미 발생했으나 Breaking 으로 명시되지 않았던 public API
+변경 (downstream 마이그레이션 누락 방지):
+
+- `Control::memo(content, author, date)` → `Control::memo(content)` 로 시그니처
+  축소. anchor run 이 필요하면 `Control::memo_with_anchor(content, anchor_runs)`
+  사용 (Wave 12e/f).
+- `Control::Memo` 에서 `author: String` / `date: String` 필드 제거 →
+  `anchor_runs: Vec<Run>` + `metadata: MemoMetadata` 로 대체. 패턴 매칭에서 해당
+  필드 바인딩 제거 필요 (Wave 12e/f).
+- `RefType: TryFrom<u8>` public trait impl 제거 (Wave 12m Phase 2). raw HWP5
+  바이트 → RefType 변환은 smithy-hwp5 경계 함수로 이동. downstream 의 직접 byte
+  변환 코드는 깨짐.
+
 ### Fixed — HWP5→HWPX 채우기 "색 없음" → `faceColor="none"` (P1-5, 옵션 전수조사)
 
 HWP5 는 "배경색 없음" 을 None fill 이 아니라 **Color fill + `background_color =

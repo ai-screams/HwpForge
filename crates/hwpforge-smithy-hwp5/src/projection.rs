@@ -2021,12 +2021,16 @@ fn parse_page_number_control(header_data: &[u8]) -> Option<PageNumber> {
         .get(4)
         .and_then(|&shape| NumberFormatType::try_from(shape).ok())
         .unwrap_or(NumberFormatType::Digit);
+    // The trailing side-decoration char is the last printable byte. Filter to
+    // `is_ascii_graphic` (not `is_ascii`): the property word's number-shape byte
+    // [4] and position byte [5] are small non-graphic values (e.g. 9 = InsideTop)
+    // that would otherwise be mis-read as a decoration glyph like `\t`.
     let decoration = header_data
         .iter()
         .rev()
         .find(|byte| **byte != 0)
         .copied()
-        .filter(|byte| byte.is_ascii())
+        .filter(|byte| byte.is_ascii_graphic())
         .map(|byte| char::from(byte).to_string())
         .unwrap_or_else(|| "-".to_string());
     Some(PageNumber::with_decoration(position, number_format, decoration))
@@ -3190,11 +3194,20 @@ mod tests {
         let pn = parse_page_number_control(&header).expect("pgnp should parse");
         assert_eq!(pn.number_format, NumberFormatType::RomanCapital);
         assert_eq!(pn.position, PageNumberPosition::InsideTop);
+        assert_eq!(pn.decoration, "-", "trailing graphic byte is the side char");
 
         // Shape 0 must still decode as Digit (default, regression guard).
         header[4] = 0;
         let pn = parse_page_number_control(&header).expect("pgnp should parse");
         assert_eq!(pn.number_format, NumberFormatType::Digit);
+
+        // Q1 regression: a pgnp with position byte 9 (InsideTop) and NO trailing
+        // graphic decoration must default to "-", not mis-read the non-graphic
+        // property byte (9 = '\t') as the decoration char.
+        let no_deco = vec![b'p', b'n', b'g', b'p', 0, 9, 0, 0, 0, 0];
+        let pn = parse_page_number_control(&no_deco).expect("pgnp should parse");
+        assert_eq!(pn.position, PageNumberPosition::InsideTop);
+        assert_eq!(pn.decoration, "-", "property byte must not be read as decoration");
     }
 
     use std::collections::BTreeMap;
