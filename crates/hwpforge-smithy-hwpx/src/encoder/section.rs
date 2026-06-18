@@ -84,7 +84,7 @@ use self::field::{
     build_path_field_run_xml_raw, build_summery_run_xml_raw, unix_to_ymdhms,
 };
 #[cfg(test)]
-use self::field::{build_hwp5_crossref_run_xml, clickhere_command_string, days_to_ymd};
+use self::field::{build_hwp5_crossref_run_xml, clickhere_command_string};
 #[cfg(test)]
 use self::header_footer::find_ctrl_injection_point;
 use self::header_footer::{
@@ -3598,29 +3598,6 @@ mod tests {
         assert!(xml.contains(r#"sameSz="0""#), "variable width must use sameSz=0");
         // Explicit hp:col children required
         assert!(xml.contains(r#"<hp:col"#));
-    }
-
-    // ── days_to_ymd helper ────────────────────────────────────────
-
-    #[test]
-    fn days_to_ymd_unix_epoch() {
-        // Days 0 = 1970-01-01
-        let (y, m, d) = days_to_ymd(0);
-        assert_eq!(y, 1970);
-        assert_eq!(m, 1);
-        assert_eq!(d, 1);
-    }
-
-    #[test]
-    fn days_to_ymd_known_date() {
-        // 2026-03-06: days since epoch
-        // 2026-01-01 = 365*56 + 14 (leap years 1972..2024) = 20454 days
-        // Then + 31 (Jan) + 28 (Feb non-leap) + 5 = 64 → total 20518
-        // Use a direct calculation: 2026-03-06 = 20518 days
-        let days: u64 = (365 * 56 + 14 + 31 + 28 + 5) as u64; // rough calculation
-        let (y, _m, _d) = days_to_ymd(days);
-        // Just verify it's in a reasonable range for 2026
-        assert!((2025..=2026).contains(&y), "year should be around 2026, got {y}");
     }
 
     // ── build_autonum_run_xml ─────────────────────────────────────

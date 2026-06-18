@@ -453,28 +453,6 @@ pub(super) fn build_autonum_run_xml(
     ))
 }
 
-/// Simple days-since-epoch to (year, month, day) conversion.
-///
-/// Wave 12n Step 6.6: no longer called by `build_summery_field_xml`
-/// (SUMMERY body is now empty so Hancom recomputes from metadata).
-/// Retained for the existing unit tests and possible future date
-/// emit paths.
-#[cfg_attr(not(test), allow(dead_code))]
-pub(super) fn days_to_ymd(days_since_epoch: u64) -> (u64, u64, u64) {
-    // Simplified civil calendar calculation.
-    let z = days_since_epoch + 719_468;
-    let era = z / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    (y, m, d)
-}
-
 /// Wave 12m Phase 2 Step 4 boundary: typed [`RefType`] → HWP5 `%xrf`
 /// N1 wire code. Returns the canonical code for known variants and
 /// `Unknown(code)` preserves the original byte.
