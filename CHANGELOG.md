@@ -21,6 +21,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `RefType: TryFrom<u8>` public trait impl 제거 (Wave 12m Phase 2). raw HWP5
   바이트 → RefType 변환은 smithy-hwp5 경계 함수로 이동. downstream 의 직접 byte
   변환 코드는 깨짐.
+- `blueprint::style::{CharShape, PartialCharShape}` 에 `#[non_exhaustive]` 추가
+  (B3). 외부 크레이트의 struct-literal 생성 차단 — `CharShape` 는
+  `PartialCharShape::resolve()`, `PartialCharShape` 는 `default()` + 필드 설정으로
+  생성. 향후 필드 추가가 더는 breaking 이 되지 않도록 한 번에 고정 (`underline_shape`
+  추가가 이미 깨뜨린 김에).
 
 ### Fixed — HWP5→HWPX 채우기 "색 없음" → `faceColor="none"` (P1-5, 옵션 전수조사)
 

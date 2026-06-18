@@ -104,6 +104,7 @@ pub struct LineSpacing {
 /// After inheritance resolution, this is converted to [`CharShape`] where
 /// all fields are guaranteed to be present.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct PartialCharShape {
     /// Font name (e.g. "한컴바탕", "Arial").
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -677,7 +678,12 @@ impl PartialStyle {
 // ---------------------------------------------------------------------------
 
 /// A fully-resolved character shape (all fields present).
+///
+/// Construct via [`PartialCharShape::resolve`] (the canonical path) rather than
+/// a struct literal — this type is `#[non_exhaustive]` so new fields can be
+/// added without a breaking change for downstream crates.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct CharShape {
     /// Font name.
     pub font: String,
