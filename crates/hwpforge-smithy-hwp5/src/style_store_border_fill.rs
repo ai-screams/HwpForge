@@ -167,8 +167,8 @@ fn hwp5_fill_to_hwpx(
             }
             BorderFillFillProjection {
                 fill: Some(HwpxFill::WinBrush {
-                    face_color: colorref_to_hwpx_color(color_fill.background_color),
-                    hatch_color: colorref_to_hwpx_color(color_fill.pattern_color),
+                    face_color: colorref_to_hwpx_fill_color(color_fill.background_color),
+                    hatch_color: colorref_to_hwpx_fill_color(color_fill.pattern_color),
                     alpha: color_fill.alpha.to_string(),
                 }),
                 fill_hatch_style: hwp5_fill_pattern_to_hwpx(color_fill.pattern_kind),
@@ -342,6 +342,21 @@ fn colorref_to_hwpx_color(raw: u32) -> String {
     }
 }
 
+/// Fill (face/hatch) colors only: HWP5 encodes "no color" as the Windows
+/// COLORREF null sentinel `0xFFFF_FFFF` inside a *Color* fill record (not a
+/// None fill). 한컴 native writes `faceColor="none"` for that, so map the
+/// sentinel to `"none"` instead of the literal `"#FFFFFFFF"` (P1-5). Verified
+/// against native `sample-cell-diagonal` / `table_17_diagonal_border` (id=2
+/// background = 0xFFFFFFFF → `faceColor="none"`). Scoped to fills — border-line
+/// colors keep the plain mapping (native uses real `#RRGGBB` there).
+fn colorref_to_hwpx_fill_color(raw: u32) -> String {
+    if raw == 0xFFFF_FFFF {
+        "none".to_string()
+    } else {
+        colorref_to_hwpx_color(raw)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -437,6 +452,18 @@ mod tests {
             &warnings_for(&color_fill(Hwp5FillPatternKind::Slash)),
             "style.border_fill.fill_pattern"
         ));
+    }
+
+    #[test]
+    fn fill_color_maps_no_color_sentinel_to_none() {
+        // P1-5: HWP5 "no color" sentinel 0xFFFFFFFF → faceColor="none"
+        // (한컴 native), not the literal "#FFFFFFFF".
+        assert_eq!(colorref_to_hwpx_fill_color(0xFFFF_FFFF), "none");
+        // Normal opaque BGR color is unaffected (red → #FF0000).
+        assert_eq!(colorref_to_hwpx_fill_color(0x0000_00FF), "#FF0000");
+        // The plain (non-fill) helper must NOT map the sentinel — border-line
+        // colors keep their literal mapping.
+        assert_eq!(colorref_to_hwpx_color(0xFFFF_FFFF), "#FFFFFFFF");
     }
 
     #[test]

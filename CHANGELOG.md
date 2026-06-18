@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.6.0`
 
+### Fixed — HWP5→HWPX 채우기 "색 없음" → `faceColor="none"` (P1-5, 옵션 전수조사)
+
+HWP5 는 "배경색 없음" 을 None fill 이 아니라 **Color fill + `background_color =
+0xFFFFFFFF`** (Windows COLORREF null sentinel)로 인코딩한다. `colorref_to_hwpx_color`
+가 `(raw>>24)!=0` 검사를 먼저 통과시켜 `faceColor="#FFFFFFFF"` (흰색)을 emit했고,
+한컴 native 는 `faceColor="none"` 을 쓴다.
+
+- 신규 fill 전용 헬퍼 `colorref_to_hwpx_fill_color`: `0xFFFFFFFF → "none"`,
+  그 외는 기존 매핑. face/hatch 색에만 적용 — 테두리 선 색은 native 가 실제
+  `#RRGGBB` 를 쓰므로 공유 함수 그대로 둠 (검증 안 된 거동 도입 방지).
+- 검증: 기존 native `sample-cell-diagonal` (borderFill id=2 background=0xFFFFFFFF)
+  변환 결과가 `faceColor="none"` 으로 일치, 출력에서 `#FFFFFFFF` 완전 제거.
+- 테스트: `fill_color_maps_no_color_sentinel_to_none`.
+
 ### Changed — 미상 무늬/그러데이션 type warning-first (P1-3/4, 옵션 전수조사)
 
 `border_fill` 의 채우기 무늬·그러데이션 type 이 알 수 없는 raw 값일 때 조용히
