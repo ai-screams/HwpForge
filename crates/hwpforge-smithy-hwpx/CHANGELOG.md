@@ -5,6 +5,98 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.6.0...hwpforge-smithy-hwpx-v0.7.0) - 2026-06-19
+
+### Added
+
+- *(hwp5)* TextArt (글맵시 / <hp:textart>) carry — HWP5↔HWPX
+
+- *(hwp5)* Wave B — nested group ($con-in-$con) recursive carry
+
+- *(hwp5)* carry group/묶음 객체 (<hp:container>) HWP5↔HWPX — Wave A (flat)
+
+- *(hwpx)* Wave 12p Step 4 — HWPX encoder emit inst_id 를 id/instId attribute 로
+
+- *(core)* **BREAKING** Wave 12p Step 2 — Core breaking: Image/Table/Equation 에 inst_id (cross-ref target carry)
+
+- *(hwp5)* **BREAKING** Wave 12m Phase 2 Step 4 — Control::CrossRef vertical slice
+
+- *(core)* **BREAKING** Wave 12m Phase 2 Step 3 — foundation/core API breaking (RefType + RefContentType + RefTarget + Control::CrossRef target)
+
+- *(hwpx)* **BREAKING** Wave 12n Step 6 — %pat PATH 필드 lossless HWPX carry (#120 핵심 해소)
+
+- *(hwpx)* **BREAKING** Wave 12o Phase 2 — content.hpf metadata decoder + XXE/DoS 방어
+
+- *(hwpx)* **BREAKING** Wave 12o Phase 1 — content.hpf metadata emit (Document.metadata → <opf:metadata>)
+
+- *(core)* **BREAKING** Wave 12o Phase 0 — Metadata에 description/last_saved_by/extras + non_exhaustive (ADR-003)
+
+- *(core)* **BREAKING** Wave 12n — 자동 필드 의미 분할 + HWPX carry
+
+- *(hwp5)* **BREAKING** Wave 12l — 누름틀(ClickHere) carry + name 메타 carry
+
+- *(hwp5)* **BREAKING** Wave 12j — 글자겹침(compose) carry + char_pr_ids fidelity + packed-variant 지원
+
+- *(hwp5)* **BREAKING** Wave 12i — 덧말(dutmal) option carry + flat-path control_iter 필터
+
+- *(hwp5)* **BREAKING** Wave 12f-h — 메모 anchor 위치 수정 + 7 parameters wire 메타 carry 완성
+
+- *(hwp5)* **BREAKING** Wave 12e — 메모 본문 carry + 본문 텍스트 덮어쓰기 버그 수정
+
+
+### Changed
+
+- *(hwpx)* remove orphaned days_to_ymd date-synthesis helper
+
+- *(hwpx)* task #92 Step 4 — split section_pr/header_footer out of encoder/section.rs
+
+- *(hwpx)* task #92 Step 3 — split field family out of encoder/section.rs
+
+- *(hwpx)* task #92 Step 2 — split memo/picture out of encoder/section.rs
+
+- *(hwpx)* task #92 Step 1 — split equation/typography/chart out of encoder/section.rs
+
+
+### Documentation
+
+- *(refactor)* task #92 Step 5 — module-layout doc + CHANGELOG + CLAUDE.md sync
+
+- *(metadata)* Wave 12o-fixup CHANGELOG + probe_date_carry example
+
+- Wave 12l + Phase 12 series 완료 반영 (CLAUDE/MEMORY/README)
+
+
+### Fixed
+
+- *(blueprint)* **BREAKING** non_exhaustive on ParaShape/PartialParaShape/PartialStyle (B)
+
+- *(blueprint)* carry underline_shape through Blueprint char styles
+
+- *(hwp5)* carry SUMMERY/PATH field cached value to close 한컴 recovery warning (#120/#136)
+
+- *(hwpx)* chart custom title mirrors 한컴-native form
+
+- *(hwp5)* task #73 — carry dutmal sz_ratio + align from pinned tail offsets
+
+- *(hwp5)* Wave 12q (task #122) — apply outline level overrides from Style 개요 N
+
+- *(hwpx)* Wave 12p task #124 — SUMMERY editable per FieldType + Wave 12p Step 4 visual gate + fmt fallout
+
+- *(foundation)* **BREAKING** RefContentType::BookmarkName 부활 + Bookmark N2 매핑 native 일치 (Wave 12m fixup regression)
+
+- *(hwpx)* **BREAKING** Wave 12m fixup — fieldid `%xrf` magic + RefContentType::BookmarkName 폐기 (시각 검증 통과)
+
+- *(hwpx)* #87 hardening — escape_xml에 C0/illegal-char strip 통합
+
+- *(hwpx)* Wave 12n Step 6.6 — SUMMERY body 빈 emit (한컴 "복구" 경고 우회)
+
+- *(hwpx)* Wave 12n Step 6.5 — fieldBegin/fieldEnd trailing <hp:t/> 추가
+
+- *(metadata)* Wave 12o-fixup — Codex review 4건 (Top-1/Top-2/Top-4/S3) + Top-5 종료 노트 정직성
+
+- *(hwpx)* floating ellipse/arc/curve/connectLine use shared positioning
+
+
 ## [0.5.2](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.5.1...hwpforge-smithy-hwpx-v0.5.2) - 2026-05-13
 
 ### Added

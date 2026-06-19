@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-foundation-v0.6.0...hwpforge-foundation-v0.7.0) - 2026-06-19
+
+### Added
+
+- *(core)* **BREAKING** Wave 12m Phase 2 Step 3 — foundation/core API breaking (RefType + RefContentType + RefTarget + Control::CrossRef target)
+
+- *(core)* **BREAKING** Wave 12n — 자동 필드 의미 분할 + HWPX carry
+
+
+### Documentation
+
+- Wave 12l + Phase 12 series 완료 반영 (CLAUDE/MEMORY/README)
+
+
+### Fixed
+
+- *(hwpx)* Wave 12p task #124 — SUMMERY editable per FieldType + Wave 12p Step 4 visual gate + fmt fallout
+
+- *(foundation)* **BREAKING** RefContentType::BookmarkName 부활 + Bookmark N2 매핑 native 일치 (Wave 12m fixup regression)
+
+- *(hwpx)* **BREAKING** Wave 12m fixup — fieldid `%xrf` magic + RefContentType::BookmarkName 폐기 (시각 검증 통과)
+
+
 ## [0.5.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-foundation-v0.4.0...hwpforge-foundation-v0.5.0) - 2026-03-22
 
 ### Added
