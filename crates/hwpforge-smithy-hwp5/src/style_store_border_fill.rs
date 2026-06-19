@@ -477,4 +477,89 @@ mod tests {
             "style.border_fill.gradation_type"
         ));
     }
+
+    #[test]
+    fn border_line_type_maps_full_enum() {
+        use crate::schema::border_fill::Hwp5BorderLineKind as K;
+        let cases: &[(K, &str)] = &[
+            (K::None, "NONE"),
+            (K::Solid, "SOLID"),
+            (K::Dash, "DASH"),
+            (K::Dot, "DOT"),
+            (K::DashDot, "DASH_DOT"),
+            (K::DashDotDot, "DASH_DOT_DOT"),
+            (K::LongDash, "LONG_DASH"),
+            (K::Circle, "CIRCLE"),
+            (K::DoubleSlim, "DOUBLE_SLIM"),
+            (K::SlimThick, "SLIM_THICK"),
+            (K::ThickSlim, "THICK_SLIM"),
+            (K::SlimThickSlim, "SLIM_THICK_SLIM"),
+            (K::Wave, "WAVE"),
+            (K::DoubleWave, "DOUBLE_WAVE"),
+            (K::Thick3d, "THICK_3D"),
+            (K::Thick3dReverseLighting, "THICK_3D_REVERSE_LIGHTING"),
+            (K::Solid3d, "SOLID_3D"),
+            (K::Solid3dReverseLighting, "SOLID_3D_REVERSE_LIGHTING"),
+            (K::Unknown(99), "NONE"),
+        ];
+        for (kind, want) in cases {
+            assert_eq!(hwp5_border_line_type_to_hwpx(*kind), *want, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn border_width_maps_full_table_with_fallback() {
+        let cases: [&str; 16] = [
+            "0.1 mm", "0.12 mm", "0.15 mm", "0.2 mm", "0.25 mm", "0.3 mm", "0.4 mm", "0.5 mm",
+            "0.6 mm", "0.7 mm", "1.0 mm", "1.5 mm", "2.0 mm", "3.0 mm", "4.0 mm", "5.0 mm",
+        ];
+        for (raw, want) in cases.iter().enumerate() {
+            assert_eq!(hwp5_border_width_to_hwpx(raw as u8), *want, "raw={raw}");
+        }
+        // Out-of-range falls back to the thinnest line.
+        assert_eq!(hwp5_border_width_to_hwpx(200), "0.1 mm");
+    }
+
+    #[test]
+    fn diagonal_shape_maps_known_values_and_fallback() {
+        assert_eq!(hwp5_diagonal_shape_to_hwpx(0), "NONE");
+        assert_eq!(hwp5_diagonal_shape_to_hwpx(2), "CENTER");
+        assert_eq!(hwp5_diagonal_shape_to_hwpx(3), "CENTER_BELOW");
+        assert_eq!(hwp5_diagonal_shape_to_hwpx(6), "CENTER_ABOVE");
+        assert_eq!(hwp5_diagonal_shape_to_hwpx(7), "ALL");
+        // Spec false-positives (1/4/5) and any other raw fall back to NONE.
+        assert_eq!(hwp5_diagonal_shape_to_hwpx(1), "NONE");
+        assert_eq!(hwp5_diagonal_shape_to_hwpx(255), "NONE");
+    }
+
+    #[test]
+    fn fill_pattern_maps_full_enum() {
+        use crate::schema::border_fill::Hwp5FillPatternKind as P;
+        assert_eq!(hwp5_fill_pattern_to_hwpx(P::None), None);
+        assert_eq!(hwp5_fill_pattern_to_hwpx(P::Unknown(7)), None);
+        for kind in [P::Horizontal, P::Vertical, P::BackSlash, P::Slash, P::Cross, P::CrossDiagonal]
+        {
+            assert!(hwp5_fill_pattern_to_hwpx(kind).is_some(), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn gradation_type_maps_full_enum() {
+        use crate::schema::border_fill::Hwp5GradationType as G;
+        assert_eq!(hwp5_gradation_type_to_hwpx(G::Linear), GradientType::Linear);
+        assert_eq!(hwp5_gradation_type_to_hwpx(G::Circular), GradientType::Radial);
+        assert_eq!(hwp5_gradation_type_to_hwpx(G::Conical), GradientType::Conical);
+        assert_eq!(hwp5_gradation_type_to_hwpx(G::Rectangular), GradientType::Square);
+        assert_eq!(hwp5_gradation_type_to_hwpx(G::Unknown(9)), GradientType::Linear);
+    }
+
+    #[test]
+    fn image_fill_effect_maps_full_enum() {
+        use crate::schema::border_fill::Hwp5FillImageEffect as E;
+        assert_eq!(hwp5_image_fill_effect_to_hwpx(E::RealPic), "REAL_PIC");
+        assert_eq!(hwp5_image_fill_effect_to_hwpx(E::GrayScale), "GRAY_SCALE");
+        assert_eq!(hwp5_image_fill_effect_to_hwpx(E::BlackWhite), "BLACK_WHITE");
+        assert_eq!(hwp5_image_fill_effect_to_hwpx(E::Pattern8x8), "PATTERN8x8");
+        assert_eq!(hwp5_image_fill_effect_to_hwpx(E::Unknown(9)), "REAL_PIC");
+    }
 }

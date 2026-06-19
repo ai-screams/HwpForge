@@ -243,3 +243,99 @@ pub(super) fn build_page_number_xml(pn: &hwpforge_core::section::PageNumber) -> 
     .expect("write to String is infallible");
     xml
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hwpforge_core::section::{HeaderFooter, PageNumber};
+    use hwpforge_foundation::{ApplyPageType, NumberFormatType, PageNumberPosition};
+
+    #[test]
+    fn page_number_xml_maps_every_position() {
+        let cases: &[(PageNumberPosition, &str)] = &[
+            (PageNumberPosition::None, "NONE"),
+            (PageNumberPosition::TopLeft, "TOP_LEFT"),
+            (PageNumberPosition::TopCenter, "TOP_CENTER"),
+            (PageNumberPosition::TopRight, "TOP_RIGHT"),
+            (PageNumberPosition::BottomLeft, "BOTTOM_LEFT"),
+            (PageNumberPosition::BottomCenter, "BOTTOM_CENTER"),
+            (PageNumberPosition::BottomRight, "BOTTOM_RIGHT"),
+            (PageNumberPosition::OutsideTop, "OUTSIDE_TOP"),
+            (PageNumberPosition::OutsideBottom, "OUTSIDE_BOTTOM"),
+            (PageNumberPosition::InsideTop, "INSIDE_TOP"),
+            (PageNumberPosition::InsideBottom, "INSIDE_BOTTOM"),
+        ];
+        for (pos, want) in cases {
+            let pn = PageNumber::new(*pos, NumberFormatType::Digit);
+            let xml = build_page_number_xml(&pn);
+            assert!(xml.contains(&format!(r#"pos="{want}""#)), "{want}: {xml}");
+        }
+    }
+
+    #[test]
+    fn page_number_xml_maps_every_format() {
+        let cases: &[(NumberFormatType, &str)] = &[
+            (NumberFormatType::Digit, "DIGIT"),
+            (NumberFormatType::CircledDigit, "CIRCLED_DIGIT"),
+            (NumberFormatType::RomanCapital, "ROMAN_CAPITAL"),
+            (NumberFormatType::RomanSmall, "ROMAN_SMALL"),
+            (NumberFormatType::LatinCapital, "LATIN_CAPITAL"),
+            (NumberFormatType::LatinSmall, "LATIN_SMALL"),
+            (NumberFormatType::CircledLatinSmall, "CIRCLED_LATIN_SMALL"),
+            (NumberFormatType::HangulSyllable, "HANGUL_SYLLABLE"),
+            (NumberFormatType::HangulJamo, "HANGUL_JAMO"),
+            (NumberFormatType::HanjaDigit, "HANJA_DIGIT"),
+        ];
+        for (fmt, want) in cases {
+            let pn = PageNumber::new(PageNumberPosition::BottomCenter, *fmt);
+            let xml = build_page_number_xml(&pn);
+            assert!(xml.contains(&format!(r#"formatType="{want}""#)), "{want}: {xml}");
+        }
+    }
+
+    #[test]
+    fn page_number_xml_escapes_decoration() {
+        let mut pn = PageNumber::new(PageNumberPosition::BottomCenter, NumberFormatType::Digit);
+        pn.decoration = "<&>".to_string();
+        let xml = build_page_number_xml(&pn);
+        assert!(xml.contains("sideChar=\"&lt;&amp;&gt;\""), "{xml}");
+    }
+
+    #[test]
+    fn header_xml_maps_apply_page_type() {
+        let mut entries = Vec::new();
+        for (apply, want) in [
+            (ApplyPageType::Both, "BOTH"),
+            (ApplyPageType::Even, "EVEN"),
+            (ApplyPageType::Odd, "ODD"),
+        ] {
+            let hf = HeaderFooter::new(Vec::new(), apply);
+            let xml = build_header_xml(&hf, "header", &mut entries).unwrap();
+            assert!(xml.contains(&format!(r#"applyPageType="{want}""#)), "{want}: {xml}");
+            assert!(xml.starts_with("<hp:ctrl><hp:header"));
+        }
+    }
+
+    #[test]
+    fn ctrl_injection_point_anchors_on_colpr_then_falls_back() {
+        // Self-closing colPr inside a ctrl: anchor after the enclosing ctrl close.
+        let with_col = r#"<hp:secPr></hp:secPr><hp:ctrl><hp:colPr/></hp:ctrl>REST"#;
+        let pos = find_ctrl_injection_point(with_col);
+        assert_eq!(&with_col[pos..], "REST");
+
+        // No colPr: fall back to just after </hp:secPr>.
+        let no_col = r#"<hp:secPr></hp:secPr>BODY"#;
+        let pos = find_ctrl_injection_point(no_col);
+        assert_eq!(&no_col[pos..], "BODY");
+
+        // Neither anchor present: returns 0 (no injection).
+        assert_eq!(find_ctrl_injection_point("<hp:p></hp:p>"), 0);
+    }
+
+    #[test]
+    fn masterpage_refs_empty_without_masters() {
+        let section = Section::new(hwpforge_core::PageSettings::a4());
+        assert!(build_masterpage_refs(&section, 0).is_empty());
+        assert!(build_masterpage_entries(&section, 0).is_empty());
+    }
+}
