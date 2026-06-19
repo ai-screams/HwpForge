@@ -5,6 +5,37 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.6.0...hwpforge-smithy-md-v0.7.0) - 2026-06-19
+
+### Added
+
+- *(core)* **BREAKING** Wave 12p Step 2 — Core breaking: Image/Table/Equation 에 inst_id (cross-ref target carry)
+
+- *(md)* Wave 12m Phase 2 Step 5 — Markdown CrossRef carry visible body text
+
+- *(core)* **BREAKING** Wave 12m Phase 2 Step 3 — foundation/core API breaking (RefType + RefContentType + RefTarget + Control::CrossRef target)
+
+- *(hwp5)* **BREAKING** Wave 12j — 글자겹침(compose) carry + char_pr_ids fidelity + packed-variant 지원
+
+- *(hwp5)* **BREAKING** Wave 12i — 덧말(dutmal) option carry + flat-path control_iter 필터
+
+- *(hwp5)* **BREAKING** Wave 12f-h — 메모 anchor 위치 수정 + 7 parameters wire 메타 carry 완성
+
+- *(hwp5)* **BREAKING** Wave 12e — 메모 본문 carry + 본문 텍스트 덮어쓰기 버그 수정
+
+
+### Documentation
+
+- Wave 12l + Phase 12 series 완료 반영 (CLAUDE/MEMORY/README)
+
+
+### Fixed
+
+- *(md)* capture GFM table header row (was silently dropped)
+
+- *(hwpx)* Wave 12p task #124 — SUMMERY editable per FieldType + Wave 12p Step 4 visual gate + fmt fallout
+
+
 ## [0.5.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.4.0...hwpforge-smithy-md-v0.5.0) - 2026-03-22
 
 ### Added

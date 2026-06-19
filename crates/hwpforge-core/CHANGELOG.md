@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.6.0...hwpforge-core-v0.7.0) - 2026-06-19
+
+### Added
+
+- *(hwp5)* TextArt (글맵시 / <hp:textart>) carry — HWP5↔HWPX
+
+- *(hwp5)* carry group/묶음 객체 (<hp:container>) HWP5↔HWPX — Wave A (flat)
+
+- *(core)* **BREAKING** Wave 12p Step 2 — Core breaking: Image/Table/Equation 에 inst_id (cross-ref target carry)
+
+- *(hwp5)* **BREAKING** Wave 12m Phase 2 Step 4 — Control::CrossRef vertical slice
+
+- *(core)* **BREAKING** Wave 12m Phase 2 Step 3 — foundation/core API breaking (RefType + RefContentType + RefTarget + Control::CrossRef target)
+
+- *(core)* **BREAKING** Wave 12o Phase 0 — Metadata에 description/last_saved_by/extras + non_exhaustive (ADR-003)
+
+- *(core)* **BREAKING** Wave 12n — 자동 필드 의미 분할 + HWPX carry
+
+- *(hwp5)* **BREAKING** Wave 12l — 누름틀(ClickHere) carry + name 메타 carry
+
+- *(hwp5)* **BREAKING** Wave 12j — 글자겹침(compose) carry + char_pr_ids fidelity + packed-variant 지원
+
+- *(hwp5)* **BREAKING** Wave 12i — 덧말(dutmal) option carry + flat-path control_iter 필터
+
+- *(hwp5)* **BREAKING** Wave 12f-h — 메모 anchor 위치 수정 + 7 parameters wire 메타 carry 완성
+
+- *(hwp5)* **BREAKING** Wave 12e — 메모 본문 carry + 본문 텍스트 덮어쓰기 버그 수정
+
+
+### Fixed
+
+- *(hwp5)* carry SUMMERY/PATH field cached value to close 한컴 recovery warning (#120/#136)
+
+- *(hwpx)* Wave 12p task #124 — SUMMERY editable per FieldType + Wave 12p Step 4 visual gate + fmt fallout
+
+
 ## [0.5.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.4.0...hwpforge-core-v0.5.0) - 2026-03-22
 
 ### Added

@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-blueprint-v0.6.0...hwpforge-blueprint-v0.7.0) - 2026-06-19
+
+### Documentation
+
+- Wave 12l + Phase 12 series 완료 반영 (CLAUDE/MEMORY/README)
+
+
+### Fixed
+
+- *(blueprint)* **BREAKING** non_exhaustive on ParaShape/PartialParaShape/PartialStyle (B)
+
+- *(blueprint)* **BREAKING** add #[non_exhaustive] to CharShape/PartialCharShape (B3)
+
+- *(blueprint)* carry underline_shape through Blueprint char styles
+
+
 ## [0.5.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-blueprint-v0.4.0...hwpforge-blueprint-v0.5.0) - 2026-03-22
 
 ### Added
