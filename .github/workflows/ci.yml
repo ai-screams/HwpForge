@@ -70,7 +70,6 @@ jobs:
       run_deny: ${{ steps.plan.outputs.run_deny }}
       run_docs_build: ${{ steps.plan.outputs.run_docs_build }}
       run_msrv: ${{ steps.plan.outputs.run_msrv }}
-      run_semver: ${{ steps.plan.outputs.run_semver }}
     steps:
       - name: Resolve validation mode
         id: plan
@@ -99,28 +98,24 @@ jobs:
               run_deny=true
               run_docs_build=true
               run_msrv=true
-              run_semver=true
               ;;
             merge_queue)
               run_coverage=false
               run_deny=false
               run_docs_build=true
               run_msrv=false
-              run_semver=false
               ;;
             release)
               run_coverage=false
               run_deny=false
               run_docs_build=true
               run_msrv=false
-              run_semver=false
               ;;
             full)
               run_coverage=true
               run_deny=true
               run_docs_build=true
               run_msrv=true
-              run_semver=true
               ;;
             *)
               echo "Invalid validation mode: $mode" >&2
@@ -134,7 +129,6 @@ jobs:
             echo "run_deny=$run_deny"
             echo "run_docs_build=$run_docs_build"
             echo "run_msrv=$run_msrv"
-            echo "run_semver=$run_semver"
           } >> "$GITHUB_OUTPUT"
 
   lint-format:
@@ -246,32 +240,12 @@ jobs:
       - name: cargo deny check
         run: cargo deny --all-features check
 
-  semver:
-    name: "Verify › SemVer"
-    needs: [plan, lint-format, lint-clippy]
-    if: >-
-      always() && !failure() && !cancelled() &&
-      needs.plan.outputs.run_semver == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      # Compare against the most recent release tag (this project releases
-      # via git tags, not crates.io). This keeps the baseline tracking the
-      # actual last release instead of self-comparing the unreleased HEAD.
-      - name: Resolve latest release tag
-        id: base
-        run: |
-          set -euo pipefail
-          tag="$(git describe --tags --abbrev=0 --match 'v[0-9]*')"
-          echo "Using baseline tag: $tag"
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-      - name: Check semver compatibility
-        uses: obi1kenobi/cargo-semver-checks-action@v2
-        with:
-          baseline-rev: ${{ steps.base.outputs.tag }}
+  # NOTE: SemVer compatibility is owned by release-plz (semver_check = true in
+  # release-plz.toml). It runs cargo-semver-checks when computing the version
+  # bump for the release PR, so breaking changes can't ship without a bump.
+  # A standalone PR-time gate is redundant AND structurally conflicts with the
+  # release-plz model (feature PRs intentionally don't bump the version — the
+  # release PR does), so it would red-fail every breaking feature PR forever.
 
   lint-docs:
     name: "Verify › Docs Lint"
