@@ -431,15 +431,24 @@ fn encode_control_styled(
             format!("{main_text}({sub_text})")
         }
         Control::Compose { compose_text, .. } => compose_text.clone(),
-        Control::CrossRef { target_name, .. } => {
-            format!("[{target_name}]")
+        Control::CrossRef { target, display_text, .. } => {
+            // Wave 12m Phase 2 Step 4: display_text 추가. 사용자가 본
+            // visible body text 가 있으면 우선 사용 (e.g. "1" 페이지
+            // 번호, "see Section 1"); 비어 있으면 target 의 as_display()
+            // 로 fallback (Name → "bookmark1", SystemId → "#5").
+            // Markdown 은 anchor 링크 의미가 없으니 plain text 만 emit.
+            if display_text.is_empty() {
+                format!("[{}]", target.as_display())
+            } else {
+                display_text.clone()
+            }
         }
         Control::Field { hint_text, .. } => hint_text.as_deref().unwrap_or("____").to_string(),
         Control::Bookmark { .. } => {
             // Bookmarks are invisible anchors — emit nothing.
             String::new()
         }
-        Control::Memo { content, author, .. } => {
+        Control::Memo { content, .. } => {
             let body = content
                 .iter()
                 .map(|p| extract_paragraph_text(p, styles))
@@ -449,10 +458,11 @@ fn encode_control_styled(
             if trimmed.is_empty() {
                 String::new()
             } else {
-                // Sanitize author and body to prevent HTML comment breakout via `-->`
-                let safe_author = author.replace("--", "\\-\\-");
+                // Sanitize body to prevent HTML comment breakout via `-->`.
+                // Author/date are no longer carried (Wave 12e-Memo): HWPX wire
+                // never surfaced them, so omit the `(author)` segment.
                 let safe_body = trimmed.replace("--", "\\-\\-");
-                format!("<!-- memo({safe_author}): {safe_body} -->")
+                format!("<!-- memo: {safe_body} -->")
             }
         }
         Control::IndexMark { .. } => {
@@ -1724,6 +1734,7 @@ mod tests {
                     sz_ratio: 50,
                     position: DutmalPosition::Top,
                     align: DutmalAlign::Center,
+                    metadata: hwpforge_core::DutmalMetadata::default(),
                 },
                 CharShapeIndex::new(0),
             )],
@@ -1744,6 +1755,7 @@ mod tests {
                     circle_type: "CIRCLE".to_string(),
                     char_sz: -3,
                     compose_type: "COMPOSED".to_string(),
+                    char_pr_ids: vec![u32::MAX; 10],
                 },
                 CharShapeIndex::new(0),
             )],
@@ -1888,6 +1900,7 @@ mod tests {
                     base_line: 70,
                     text_color: hwpforge_foundation::Color::BLACK,
                     font: "HancomEQN".to_string(),
+                    inst_id: None,
                 },
                 CharShapeIndex::new(0),
             )],

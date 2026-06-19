@@ -127,6 +127,12 @@ pub struct Table {
     /// Optional table-level border/fill reference.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub border_fill_id: Option<u32>,
+    /// Wave 12p Step 2b: instance ID for cross-ref target lookup. HWP5
+    /// 변환 시 Table CtrlHeader trailer 의 instance ID 가 채워지고,
+    /// HWPX encoder 가 `<hp:tbl id="...">` attribute 로 emit. `None`
+    /// 이면 encoder 가 fallback 값 (예: sequential counter) 사용 허용.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inst_id: Option<u64>,
 }
 
 impl Table {
@@ -150,6 +156,7 @@ impl Table {
             repeat_header: true,
             cell_spacing: None,
             border_fill_id: None,
+            inst_id: None,
         }
     }
 

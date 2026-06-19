@@ -1,25 +1,28 @@
 # MEMORY.md -- HwpForge Project Knowledge Base
 
-> Last Updated: 2026-03-21
+> Last Updated: 2026-06-02
 > Code-grounded snapshot. Prefer manifests, entrypoints, and shipped code over roadmap prose.
 
 ## Identity
 
-| Field                                    | Value                                                               |
-| ---------------------------------------- | ------------------------------------------------------------------- |
-| Name                                     | HwpForge                                                            |
-| Purpose                                  | Programmatic control of Korean HWP/HWPX documents                   |
-| Language                                 | Rust (edition 2021)                                                 |
-| License                                  | MIT OR Apache-2.0                                                   |
-| Workspace version                        | `0.4.0`                                                             |
-| MSRV / Dev Toolchain                     | `1.88 / 1.93`                                                       |
-| Workspace packages                       | `10`                                                                |
-| Tracked Rust `src` files under `crates/` | `137`                                                               |
-| Tracked Rust `src` LOC under `crates/`   | `83,962`                                                            |
-| Example artifact files under `examples/` | `47`                                                                |
-| GitHub workflow files                    | `5`                                                                 |
-| Coverage gate                            | 90%+ in CI                                                          |
-| Design                                   | Layered shared-IR architecture, warning-first for unknown semantics |
+| Field                                    | Value                                                                    |
+| ---------------------------------------- | ------------------------------------------------------------------------ |
+| Name                                     | HwpForge                                                                 |
+| Purpose                                  | Programmatic control of Korean HWP/HWPX documents                        |
+| Language                                 | Rust (edition 2021)                                                      |
+| License                                  | MIT OR Apache-2.0                                                        |
+| Workspace version                        | `0.6.0` in Cargo.toml (= last released; Wave 12 breaking → next `0.7.0`) |
+| Last released line                       | `0.6.0` (GitHub Release `v0.6.0`, 2026-05-29)                            |
+| Active local branch                      | `feat/phase12-hwp5-gso-shapes` (21+ commits ahead of `main`)             |
+| MSRV / Dev Toolchain                     | `1.88 / 1.93`                                                            |
+| Workspace packages                       | `10`                                                                     |
+| Tracked Rust `src` files under `crates/` | `146`                                                                    |
+| Tracked Rust `src` LOC under `crates/`   | `100,796`                                                                |
+| Workspace nextest count                  | `2,365 passed` + `2 skipped`                                             |
+| Example artifact files under `examples/` | `67+`                                                                    |
+| GitHub workflow files                    | `5`                                                                      |
+| Coverage gate                            | 90%+ in CI                                                               |
+| Design                                   | Layered shared-IR architecture, warning-first for unknown semantics      |
 
 ## Architecture
 

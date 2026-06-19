@@ -34,6 +34,10 @@ pub(crate) struct PackageReader {
     sections_data: Vec<Vec<u8>>,
     #[allow(dead_code)]
     bin_data: HashMap<String, Vec<u8>>,
+    /// Raw `\x05HwpSummaryInformation` stream bytes (Wave 12o Phase 3).
+    /// `None` when the stream is absent (third-party authors may omit it);
+    /// callers downgrade to `Metadata::default()` in that case.
+    summary_info_data: Option<Vec<u8>>,
 }
 
 /// Detects common file signatures that prove the input is not an HWP5 OLE2/CFB
@@ -135,7 +139,24 @@ impl PackageReader {
             }
         }
 
-        Ok(Self { file_header, doc_info_data, sections_data, bin_data })
+        // 5. \x05HwpSummaryInformation (Wave 12o Phase 3).
+        // PropertySet streams are never document-compressed even when the
+        // FileHeader's `compressed` flag is set — they are raw OLE2
+        // property-set bytes per MS Office spec.
+        let summary_path = "/\u{0005}HwpSummaryInformation";
+        let summary_info_data = match read_stream(&mut comp, summary_path) {
+            Ok(raw) => Some(raw),
+            Err(Hwp5Error::MissingStream { .. }) => None,
+            Err(e) => return Err(e),
+        };
+
+        Ok(Self { file_header, doc_info_data, sections_data, bin_data, summary_info_data })
+    }
+
+    /// Raw bytes of the `\x05HwpSummaryInformation` OLE2 PropertySet
+    /// stream, when present (Wave 12o Phase 3).
+    pub(crate) fn summary_info_data(&self) -> Option<&[u8]> {
+        self.summary_info_data.as_deref()
     }
 
     /// The parsed [`FileHeader`].

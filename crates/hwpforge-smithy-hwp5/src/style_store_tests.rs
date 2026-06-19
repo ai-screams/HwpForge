@@ -1065,24 +1065,28 @@ fn hwp5_para_shape_warns_on_dropped_border_and_spacing_flags() {
 
 #[test]
 fn hwp5_para_shape_heading_bits_map_to_kind_level_and_ref() {
+    // Task #121 (Wave 12p): HWP5 wire bit 25-27 is a 3-bit zero-based
+    // ordinal (`0..=7`) — the previous `saturating_sub(1)` assumption was
+    // wrong (cf. Codex-architect review + native sample-outline-9levels.hwpx
+    // fixture: paraPr id=2 → level=0 = first outline, id=3 → level=1, …).
     let mut raw = Hwp5RawParaShape::default_for_test();
     raw.property1 = (1 << 23) | (5 << 25);
     raw.numbering_bullet_id = 7;
     assert_eq!(raw.heading_kind(), HeadingType::Outline);
-    assert_eq!(raw.heading_level(), 4);
+    assert_eq!(raw.heading_level(), 5);
     assert_eq!(raw.list_ref_id(), 7);
     let hwpx = hwp5_para_shape_to_hwpx(&raw);
     assert_eq!(hwpx.heading_type, HeadingType::Outline);
     assert_eq!(hwpx.heading_id_ref, 0);
-    assert_eq!(hwpx.heading_level, 4);
+    assert_eq!(hwpx.heading_level, 5);
 
     raw.property1 = (2 << 23) | (3 << 25);
     assert_eq!(raw.heading_kind(), HeadingType::Number);
-    assert_eq!(raw.heading_level(), 2);
+    assert_eq!(raw.heading_level(), 3);
 
     raw.property1 = (3 << 23) | (1 << 25);
     assert_eq!(raw.heading_kind(), HeadingType::Bullet);
-    assert_eq!(raw.heading_level(), 0);
+    assert_eq!(raw.heading_level(), 1);
 
     raw.property1 = 0;
     assert_eq!(raw.heading_kind(), HeadingType::None);
@@ -1094,7 +1098,7 @@ fn hwp5_para_shape_heading_bits_map_to_kind_level_and_ref() {
     let hwpx = hwp5_para_shape_to_hwpx(&raw);
     assert_eq!(hwpx.heading_type, HeadingType::Bullet);
     assert_eq!(hwpx.heading_id_ref, 4);
-    assert_eq!(hwpx.heading_level, 1);
+    assert_eq!(hwpx.heading_level, 2);
 }
 
 #[test]
@@ -1911,7 +1915,7 @@ fn fixture_table_17_diagonal_border_reports_raw_diagonal_shapes() {
 }
 
 #[test]
-fn to_hwpx_style_store_unsupported_image_fill_mode_emits_warning_and_drops_fill() {
+fn to_hwpx_style_store_unknown_image_fill_mode_emits_warning_and_drops_fill() {
     let store = Hwp5StyleStore {
         id_mappings: None,
         fonts: vec![],
@@ -1936,7 +1940,9 @@ fn to_hwpx_style_store_unsupported_image_fill_mode_emits_warning_and_drops_fill(
                 bottom: none_border_line(),
                 diagonal: none_border_line(),
                 fill: Hwp5RawBorderFillFill::Image(Hwp5RawImageFill {
-                    mode: Hwp5FillImageMode::CenterTop,
+                    // All 16 spec modes now carry (P1-2); only a genuinely
+                    // unknown raw value still falls back to drop-with-warning.
+                    mode: Hwp5FillImageMode::Unknown(99),
                     brightness: 0,
                     contrast: 0,
                     effect: Hwp5FillImageEffect::RealPic,
@@ -1954,6 +1960,6 @@ fn to_hwpx_style_store_unsupported_image_fill_mode_emits_warning_and_drops_fill(
         Hwp5Warning::ProjectionFallback { subject, reason }
             if *subject == "style.border_fill.image_fill_mode"
                 && reason.contains("border_fill_id=4")
-                && reason.contains("CenterTop")
+                && reason.contains("Unknown(99)")
     )));
 }

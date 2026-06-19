@@ -573,22 +573,30 @@ fn section_bookmarks_refs_fields() -> Section {
         bookmark_type: BookmarkType::SpanEnd,
     };
 
-    // CrossRef (참조)
-    let cross_ref = Control::cross_ref("중요위치", RefType::Bookmark, RefContentType::Page);
+    // CrossRef (참조) — Wave 12m Phase 2: RefTarget enum 명시
+    let cross_ref = Control::cross_ref(
+        hwpforge_core::control::RefTarget::Name("중요위치".to_string()),
+        RefType::Bookmark,
+        RefContentType::Page,
+    );
 
     // Field: ClickHere (누름틀)
     let field_click = Control::field("여기를 클릭하세요");
 
-    // Field: Date
+    // Field: Date — SUMMERY $modifiedtime (Wave 12n: was FieldType::Date)
     let field_date = Control::Field {
-        field_type: FieldType::Date,
+        field_type: FieldType::ModifiedTime,
         hint_text: Some("날짜".to_string()),
         help_text: Some("문서 작성일".to_string()),
+        name: None,
+        display_text: String::new(),
     };
 
-    // Field: PageNumber (쪽번호)
-    let field_page =
-        Control::Field { field_type: FieldType::PageNum, hint_text: None, help_text: None };
+    // Field: PageNumber (쪽번호) — Wave 12n: moved out of Control::Field
+    let field_page = Control::InlinePageNumber {
+        kind: hwpforge_core::control::InlinePageKind::CurrentPage,
+        raw_flag: 0,
+    };
 
     Section::with_paragraphs(
         vec![
@@ -657,23 +665,15 @@ fn section_bookmarks_refs_fields() -> Section {
 
 fn section_memo_indexmark() -> Section {
     // Memo 1: 간단한 메모
-    let memo_simple = Control::memo(
-        vec![text_para("이 부분을 검토해주세요.", CS_NORMAL, PS_BODY)],
-        "김검토",
-        "2026-03-05",
-    );
+    let memo_simple = Control::memo(vec![text_para("이 부분을 검토해주세요.", CS_NORMAL, PS_BODY)]);
 
     // Memo 2: 긴 메모
-    let memo_long = Control::memo(
-        vec![
-            text_para("수정 필요 사항:", CS_RED, PS_LEFT),
-            text_para("1. 수치 데이터 재확인 필요", CS_NORMAL, PS_LEFT),
-            text_para("2. 참고문헌 추가 필요", CS_NORMAL, PS_LEFT),
-            text_para("3. 그래프 업데이트 요청", CS_NORMAL, PS_LEFT),
-        ],
-        "박수정",
-        "2026-03-05",
-    );
+    let memo_long = Control::memo(vec![
+        text_para("수정 필요 사항:", CS_RED, PS_LEFT),
+        text_para("1. 수치 데이터 재확인 필요", CS_NORMAL, PS_LEFT),
+        text_para("2. 참고문헌 추가 필요", CS_NORMAL, PS_LEFT),
+        text_para("3. 그래프 업데이트 요청", CS_NORMAL, PS_LEFT),
+    ]);
 
     // IndexMark 1: primary only
     let idx1 = Control::index_mark("한글문서");

@@ -108,15 +108,17 @@ pub(crate) fn section2_text_formatting() -> Section {
         PS_BODY,
     ));
 
-    // Date 필드
+    // ModifiedTime 필드 (Wave 12n: was FieldType::Date → $modifiedtime)
     paras.push(runs_p(
         vec![
-            Run::text("날짜 필드(Date): ", csi(CS_NORMAL)),
+            Run::text("날짜 필드(ModifiedTime): ", csi(CS_NORMAL)),
             Run::control(
                 Control::Field {
-                    field_type: FieldType::Date,
+                    field_type: FieldType::ModifiedTime,
                     hint_text: Some("날짜".to_string()),
-                    help_text: Some("문서 작성 날짜를 표시합니다.".to_string()),
+                    help_text: Some("마지막 저장한 날짜를 표시합니다.".to_string()),
+                    name: None,
+                    display_text: String::new(),
                 },
                 csi(CS_BLUE),
             ),
@@ -124,12 +126,15 @@ pub(crate) fn section2_text_formatting() -> Section {
         PS_BODY,
     ));
 
-    // PageNum 필드
+    // InlinePageNumber (Wave 12n: was FieldType::PageNum → autoNum)
     paras.push(runs_p(
         vec![
             Run::text("쪽 번호 필드(autoNum): 현재 ", csi(CS_NORMAL)),
             Run::control(
-                Control::Field { field_type: FieldType::PageNum, hint_text: None, help_text: None },
+                Control::InlinePageNumber {
+                    kind: hwpforge_core::control::InlinePageKind::CurrentPage,
+                    raw_flag: 0,
+                },
                 csi(CS_BLUE),
             ),
             Run::text("쪽", csi(CS_NORMAL)),
@@ -170,15 +175,11 @@ pub(crate) fn section2_text_formatting() -> Section {
         vec![
             Run::text("이 문단에는 검토 메모가 첨부되어 있습니다.", csi(CS_NORMAL)),
             Run::control(
-                Control::memo(
-                    vec![
-                        p("검토 의견:", CS_RED_BOLD, PS_LEFT),
-                        p("charShape 설명을 표 형태로 정리하면 더 좋겠습니다.", CS_NORMAL, PS_LEFT),
-                        p("다음 버전에 반영 부탁드립니다.", CS_NORMAL, PS_LEFT),
-                    ],
-                    "김검토",
-                    "2026-03-06",
-                ),
+                Control::memo(vec![
+                    p("검토 의견:", CS_RED_BOLD, PS_LEFT),
+                    p("charShape 설명을 표 형태로 정리하면 더 좋겠습니다.", CS_NORMAL, PS_LEFT),
+                    p("다음 버전에 반영 부탁드립니다.", CS_NORMAL, PS_LEFT),
+                ]),
                 csi(CS_NORMAL),
             ),
         ],
@@ -194,16 +195,21 @@ pub(crate) fn section2_text_formatting() -> Section {
         vec![
             Run::text("HWPX 문서 정의는 섹션 1의 ", csi(CS_NORMAL)),
             Run::control(
-                Control::cross_ref("HWPX정의", RefType::Bookmark, RefContentType::Page),
+                Control::cross_ref(
+                    hwpforge_core::control::RefTarget::Name("HWPX정의".to_string()),
+                    RefType::Bookmark,
+                    RefContentType::Page,
+                ),
                 csi(CS_BLUE),
             ),
             Run::text("쪽을 참조하세요. ZIP 파일 구조는 ", csi(CS_NORMAL)),
             Run::control(
                 Control::CrossRef {
-                    target_name: "헤더구조".to_string(),
+                    target: hwpforge_core::control::RefTarget::Name("헤더구조".to_string()),
                     ref_type: RefType::Bookmark,
                     content_type: RefContentType::Page,
                     as_hyperlink: true,
+                    display_text: String::new(),
                 },
                 csi(CS_BLUE),
             ),

@@ -37,7 +37,7 @@ use crate::schema::section::{
 /// Prevents stack overflow from maliciously crafted HWPX files with
 /// deeply nested table structures. 32 levels is far beyond any
 /// legitimate document.
-const MAX_NESTING_DEPTH: usize = 32;
+pub(crate) const MAX_NESTING_DEPTH: usize = 32;
 
 fn decode_table_page_break(value: &str) -> HwpxResult<TablePageBreak> {
     match value {
@@ -414,14 +414,21 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
                 }
             }
         }
-        // AutoNum (inline page number)
+        // AutoNum (inline page number) — Wave 12n: routed to
+        // Control::InlinePageNumber. Architect review CRITICAL: keep
+        // current-page (`PAGE`) and total-page (`TOTAL_PAGE`) distinct;
+        // collapsing them would lose user-visible semantics.
         if let Some(an) = &ctrl.auto_num {
-            if an.num_type == "PAGE" {
+            let kind_and_flag = match an.num_type.as_str() {
+                "PAGE" => Some((hwpforge_core::control::InlinePageKind::CurrentPage, 0)),
+                "TOTAL_PAGE" => Some((hwpforge_core::control::InlinePageKind::TotalPages, 0x06)),
+                _ => None,
+            };
+            if let Some((kind, raw_flag)) = kind_and_flag {
                 runs.push(Run {
-                    content: RunContent::Control(Box::new(Control::Field {
-                        field_type: hwpforge_foundation::FieldType::PageNum,
-                        hint_text: None,
-                        help_text: None,
+                    content: RunContent::Control(Box::new(Control::InlinePageNumber {
+                        kind,
+                        raw_flag,
                     })),
                     char_shape_id,
                 });
@@ -473,9 +480,21 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
         runs.push(decode_curve(curve, char_shape_id, depth)?);
     }
 
+    // TextArt runs (from <hp:textart>)
+    for text_art in &hx.textarts {
+        runs.push(decode_textart(text_art, char_shape_id, depth)?);
+    }
+
     // ConnectLine runs (from <hp:connectLine>)
     for connect_line in &hx.connect_lines {
         runs.push(decode_connect_line(connect_line, char_shape_id, depth)?);
+    }
+
+    // Group runs (from <hp:container>) — Wave A flat children.
+    for container in &hx.containers {
+        if let Some(run) = decode_container(container, char_shape_id, depth)? {
+            runs.push(run);
+        }
     }
 
     // Equation runs (from <hp:equation>)
@@ -845,27 +864,56 @@ fn decode_field_control(
         },
         "CLICK_HERE" | "DATE" | "TIME" | "PAGE_NUM" | "DOC_SUMMARY" | "USER_INFO" => {
             let ft = fb.field_type.parse::<hwpforge_foundation::FieldType>().unwrap_or_default();
+            // #120/#136: round-trip the cached body value. ClickHere's body is
+            // the hint placeholder (re-derived on encode), so keep its
+            // display_text empty per the Core invariant.
+            let display_text = if matches!(ft, hwpforge_foundation::FieldType::ClickHere) {
+                String::new()
+            } else {
+                text.to_string()
+            };
             Control::Field {
                 field_type: ft,
                 hint_text: get_field_param(fb, "Direction"),
                 help_text: get_field_param(fb, "HelpState"),
+                name: Some(fb.name.clone()).filter(|s| !s.is_empty()),
+                display_text,
             }
         }
         "SUMMERY" => {
-            // 한글 uses type="SUMMERY" (typo for Summary) for
-            // date/time/author fields. Map to FieldType via Command param.
+            // 한글 uses type="SUMMERY" (typo for Summary) for SUMMERY auto-fields.
+            // Map Command $token to semantic FieldType (Wave 12n). Unknown tokens
+            // are preserved verbatim as Control::UnknownSummery. #120/#136: the
+            // run's body text is the cached resolved value — round-trip it.
             let cmd = get_field_param(fb, "Command").unwrap_or_default();
-            let ft = match cmd.as_str() {
-                "$modifiedtime" => hwpforge_foundation::FieldType::Date,
-                "$createtime" => hwpforge_foundation::FieldType::Time,
-                "$author" | "$title" => hwpforge_foundation::FieldType::DocSummary,
-                "$lastsaveby" => hwpforge_foundation::FieldType::UserInfo,
-                _ => hwpforge_foundation::FieldType::DocSummary,
-            };
-            Control::Field { field_type: ft, hint_text: None, help_text: None }
+            match hwpforge_foundation::FieldType::from_summery_token(&cmd) {
+                Some(ft) => Control::Field {
+                    field_type: ft,
+                    hint_text: None,
+                    help_text: None,
+                    name: Some(fb.name.clone()).filter(|s| !s.is_empty()),
+                    display_text: text.to_string(),
+                },
+                None => Control::UnknownSummery { token: cmd, display_text: text.to_string() },
+            }
+        }
+        "PATH" => {
+            // Wave 12n Step 6 — Hancom-native `<hp:fieldBegin type="PATH">` carries
+            // the path/file-name format code in the `Format` parameter (NOT
+            // `Property` like SUMMERY). Round-trips back to `Control::PathField`.
+            // Falls back to the raw Command string via
+            // `PathFieldCommand::Unknown` for any non-canonical token. #120/#136:
+            // the run's body text is the cached resolved path — round-trip it.
+            let cmd = get_field_param(fb, "Format")
+                .or_else(|| get_field_param(fb, "Command"))
+                .unwrap_or_default();
+            Control::PathField {
+                command: hwpforge_core::control::PathFieldCommand::from_wire(&cmd),
+                display_text: text.to_string(),
+            }
         }
         "CROSSREF" => {
-            let target = get_field_param(fb, "RefPath")
+            let target_str = get_field_param(fb, "RefPath")
                 .map(|p| p.trim_start_matches("?#").to_string())
                 .unwrap_or_default();
             let rt = get_field_param(fb, "RefType")
@@ -875,11 +923,31 @@ fn decode_field_control(
                 .and_then(|s| s.parse::<hwpforge_foundation::RefContentType>().ok())
                 .unwrap_or_default();
             let hl = get_field_param(fb, "RefHyperLink").map(|s| s == "true").unwrap_or(false);
+            // Wave 12m Phase 2 Step 4: boundary-decode the parsed target.
+            // For Bookmark refs (ref_type == Bookmark) treat the path as
+            // a name; otherwise look for `#<u64>` and lift to SystemId.
+            // Failure preserves Raw so caller still sees the wire value.
+            let target = if matches!(rt, hwpforge_foundation::RefType::Bookmark) {
+                hwpforge_core::control::RefTarget::Name(target_str.clone())
+            } else if let Some(rest) = target_str.strip_prefix('#') {
+                if let Ok(id) = rest.parse::<u64>() {
+                    hwpforge_core::control::RefTarget::SystemId(id)
+                } else {
+                    hwpforge_core::control::RefTarget::Raw(target_str.clone())
+                }
+            } else {
+                hwpforge_core::control::RefTarget::Raw(target_str.clone())
+            };
+            // Display text capture from fieldBegin/fieldEnd body siblings
+            // is a follow-up. HWPX-native decode currently leaves it
+            // empty; the HWPX encoder falls back to target.as_display()
+            // for an empty display_text so round-trip stays readable.
             Control::CrossRef {
-                target_name: target,
+                target,
                 ref_type: rt,
                 content_type: ct,
                 as_hyperlink: hl,
+                display_text: String::new(),
             }
         }
         "MEMO" => {
@@ -889,7 +957,11 @@ fn decode_field_control(
             } else {
                 Vec::new()
             };
-            Control::Memo { content, author: String::new(), date: String::new() }
+            Control::Memo {
+                content,
+                anchor_runs: Vec::new(),
+                metadata: hwpforge_core::MemoMetadata::default(),
+            }
         }
         _ => return Ok(None),
     };
@@ -899,8 +971,8 @@ fn decode_field_control(
 // Shape decode functions (decode_textbox, decode_line, decode_ellipse, decode_polygon)
 // are defined in `super::shapes`.
 use super::shapes::{
-    decode_arc, decode_connect_line, decode_curve, decode_ellipse, decode_line, decode_polygon,
-    decode_textbox,
+    decode_arc, decode_connect_line, decode_container, decode_curve, decode_ellipse, decode_line,
+    decode_polygon, decode_textart, decode_textbox,
 };
 
 /// Decodes an `HxEquation` into a Core `Run` with `Control::Equation`.
@@ -929,6 +1001,7 @@ fn decode_equation(eq: &HxEquation, char_shape_id: CharShapeIndex) -> HwpxResult
             base_line: eq.base_line,
             text_color: parse_hex_color(&eq.text_color).unwrap_or(Color::BLACK),
             font: eq.font.clone(),
+            inst_id: None,
         })),
         char_shape_id,
     })
@@ -954,12 +1027,21 @@ fn decode_dutmal(dutmal: &HxDutmal, char_shape_id: CharShapeIndex) -> Run {
             position,
             sz_ratio: dutmal.sz_ratio,
             align,
+            metadata: {
+                let mut m = hwpforge_core::DutmalMetadata::default();
+                m.option = dutmal.option;
+                m
+            },
         })),
         char_shape_id,
     }
 }
 
 /// Decodes an `HxCompose` into a Core `Run` with `Control::Compose`.
+///
+/// Carries all 10 `<hp:charPr prIDRef="N"/>` references verbatim so a
+/// `HWPX → Core → HWPX` round-trip preserves which slots have actual
+/// overrides vs. the `u32::MAX` "no override" sentinel.
 fn decode_compose(compose: &HxCompose, char_shape_id: CharShapeIndex) -> Run {
     Run {
         content: RunContent::Control(Box::new(Control::Compose {
@@ -967,6 +1049,7 @@ fn decode_compose(compose: &HxCompose, char_shape_id: CharShapeIndex) -> Run {
             circle_type: compose.circle_type.clone(),
             char_sz: compose.char_sz,
             compose_type: compose.compose_type.clone(),
+            char_pr_ids: compose.char_prs.iter().map(|cp| cp.pr_id_ref).collect(),
         })),
         char_shape_id,
     }
@@ -2609,6 +2692,7 @@ mod tests {
                     circle_type,
                     char_sz,
                     compose_type,
+                    ..
                 } => {
                     assert_eq!(compose_text, "AB");
                     assert_eq!(circle_type, "CIRCLE");
@@ -2651,11 +2735,12 @@ mod tests {
         </sec>"#;
         let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         let controls = find_controls(&result);
-        let page_num = controls.iter().find(|c| {
-            matches!(c, hwpforge_core::Control::Field { field_type, .. }
-                if *field_type == hwpforge_foundation::FieldType::PageNum)
-        });
-        assert!(page_num.is_some(), "autoNum PAGE must produce Field PageNum control");
+        let page_num =
+            controls.iter().find(|c| matches!(c, hwpforge_core::Control::InlinePageNumber { .. }));
+        assert!(
+            page_num.is_some(),
+            "autoNum PAGE must produce InlinePageNumber control (Wave 12n)"
+        );
     }
 
     #[test]
@@ -2681,9 +2766,12 @@ mod tests {
         let controls = find_controls(&result);
         let date_ctrl = controls.iter().find(|c| {
             matches!(c, hwpforge_core::Control::Field { field_type, .. }
-                if *field_type == hwpforge_foundation::FieldType::Date)
+                if *field_type == hwpforge_foundation::FieldType::ModifiedTime)
         });
-        assert!(date_ctrl.is_some(), "SUMMERY/$modifiedtime must decode as FieldType::Date");
+        assert!(
+            date_ctrl.is_some(),
+            "SUMMERY/$modifiedtime must decode as FieldType::ModifiedTime"
+        );
     }
 
     #[test]
@@ -2709,9 +2797,9 @@ mod tests {
         let controls = find_controls(&result);
         let time_ctrl = controls.iter().find(|c| {
             matches!(c, hwpforge_core::Control::Field { field_type, .. }
-                if *field_type == hwpforge_foundation::FieldType::Time)
+                if *field_type == hwpforge_foundation::FieldType::CreatedTime)
         });
-        assert!(time_ctrl.is_some(), "SUMMERY/$createtime must decode as FieldType::Time");
+        assert!(time_ctrl.is_some(), "SUMMERY/$createtime must decode as FieldType::CreatedTime");
     }
 
     #[test]
@@ -2737,9 +2825,9 @@ mod tests {
         let controls = find_controls(&result);
         let doc_ctrl = controls.iter().find(|c| {
             matches!(c, hwpforge_core::Control::Field { field_type, .. }
-                if *field_type == hwpforge_foundation::FieldType::DocSummary)
+                if *field_type == hwpforge_foundation::FieldType::Author)
         });
-        assert!(doc_ctrl.is_some(), "SUMMERY/$author must decode as FieldType::DocSummary");
+        assert!(doc_ctrl.is_some(), "SUMMERY/$author must decode as FieldType::Author");
     }
 
     #[test]
@@ -2765,9 +2853,135 @@ mod tests {
         let controls = find_controls(&result);
         let ui_ctrl = controls.iter().find(|c| {
             matches!(c, hwpforge_core::Control::Field { field_type, .. }
-                if *field_type == hwpforge_foundation::FieldType::UserInfo)
+                if *field_type == hwpforge_foundation::FieldType::LastSavedBy)
         });
-        assert!(ui_ctrl.is_some(), "SUMMERY/$lastsaveby must decode as FieldType::UserInfo");
+        assert!(ui_ctrl.is_some(), "SUMMERY/$lastsaveby must decode as FieldType::LastSavedBy");
+    }
+
+    // ── Wave 12n Phase 2 Step 7 — decoder fallback / Title gates ────
+
+    #[test]
+    fn serde_field_summery_title() {
+        // Wave 12n new token: $title → FieldType::Title. Without this
+        // gate, a future decoder refactor could silently drop the
+        // mapping and downgrade titles to UnknownSummery.
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <fieldBegin id="0" type="SUMMERY" name="" editable="1" dirty="0" zorder="-1" fieldid="628321650" metaTag="">
+                            <parameters cnt="3" name="">
+                                <integerParam name="Prop">8</integerParam>
+                                <stringParam name="Command">$title</stringParam>
+                                <stringParam name="Property">$title</stringParam>
+                            </parameters>
+                        </fieldBegin>
+                    </ctrl>
+                    <t> </t>
+                    <ctrl><fieldEnd beginIDRef="0" fieldid="628321650"/></ctrl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let controls = find_controls(&result);
+        let title_ctrl = controls.iter().find(|c| {
+            matches!(c, hwpforge_core::Control::Field { field_type, .. }
+                if *field_type == hwpforge_foundation::FieldType::Title)
+        });
+        assert!(title_ctrl.is_some(), "SUMMERY/$title must decode as FieldType::Title");
+    }
+
+    #[test]
+    fn serde_field_summery_unknown_token_falls_back() {
+        // Unknown SUMMERY tokens must NOT be silently dropped — they
+        // carry through as UnknownSummery so round-trips preserve the
+        // original $token (see encoder/section.rs lossy_unknown_summery_*).
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <fieldBegin id="0" type="SUMMERY" name="" editable="1" dirty="0" zorder="-1" fieldid="628321650" metaTag="">
+                            <parameters cnt="3" name="">
+                                <integerParam name="Prop">8</integerParam>
+                                <stringParam name="Command">$company</stringParam>
+                                <stringParam name="Property">$company</stringParam>
+                            </parameters>
+                        </fieldBegin>
+                    </ctrl>
+                    <t> </t>
+                    <ctrl><fieldEnd beginIDRef="0" fieldid="628321650"/></ctrl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let controls = find_controls(&result);
+        let unknown =
+            controls.iter().find(|c| matches!(c, hwpforge_core::Control::UnknownSummery { .. }));
+        assert!(unknown.is_some(), "unknown SUMMERY token must fall back to UnknownSummery");
+        if let Some(hwpforge_core::Control::UnknownSummery { token, .. }) = unknown {
+            assert_eq!(token, "$company", "raw $token must be preserved verbatim");
+        }
+    }
+
+    #[test]
+    fn serde_field_autonum_total_page() {
+        // Wave 12n architect review CRITICAL gate: numType="TOTAL_PAGE"
+        // must NOT collapse to CurrentPage. raw_flag mirrors the
+        // hardcoded mapping (0x06) so encoder→decoder lossless tests
+        // can pin equality.
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <autoNum num="2" numType="TOTAL_PAGE">
+                            <autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar="" supscript="0"/>
+                        </autoNum>
+                    </ctrl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let controls = find_controls(&result);
+        let total = controls.iter().find(|c| {
+            matches!(
+                c,
+                hwpforge_core::Control::InlinePageNumber {
+                    kind: hwpforge_core::control::InlinePageKind::TotalPages,
+                    ..
+                }
+            )
+        });
+        assert!(
+            total.is_some(),
+            "autoNum TOTAL_PAGE must produce InlinePageNumber{{TotalPages}} (NOT CurrentPage)"
+        );
+    }
+
+    #[test]
+    fn serde_field_autonum_unknown_num_type_skipped() {
+        // Unknown numType (e.g. FOOTNOTE) must not fabricate a
+        // CurrentPage InlinePageNumber. Decoder silently skips so the
+        // semantic is not invented; matches the encoder skip path for
+        // InlinePageKind::Unknown.
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <autoNum num="3" numType="FOOTNOTE">
+                            <autoNumFormat type="DIGIT" userChar="" prefixChar="" suffixChar="" supscript="0"/>
+                        </autoNum>
+                    </ctrl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let controls = find_controls(&result);
+        let page =
+            controls.iter().find(|c| matches!(c, hwpforge_core::Control::InlinePageNumber { .. }));
+        assert!(
+            page.is_none(),
+            "unknown autoNum numType must not produce InlinePageNumber (no fabrication)"
+        );
     }
 
     #[test]
@@ -2796,8 +3010,8 @@ mod tests {
         let crossref =
             controls.iter().find(|c| matches!(c, hwpforge_core::Control::CrossRef { .. }));
         assert!(crossref.is_some(), "CROSSREF field must produce CrossRef control");
-        if let Some(hwpforge_core::Control::CrossRef { target_name, as_hyperlink, .. }) = crossref {
-            assert_eq!(target_name, "mybook", "target_name must strip ?# prefix");
+        if let Some(hwpforge_core::Control::CrossRef { target, as_hyperlink, .. }) = crossref {
+            assert_eq!(target.as_display(), "mybook", "target.as_display() must strip ?# prefix");
             assert!(*as_hyperlink, "RefHyperLink=true must decode as as_hyperlink=true");
         }
     }

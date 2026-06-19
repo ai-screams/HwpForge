@@ -1036,14 +1036,21 @@ impl Hwp5RawParaShape {
         }
     }
 
-    /// Returns the zero-based paragraph list level encoded in `property1`
-    /// bits 25-27.
+    /// Returns the paragraph list level encoded in `property1` bits 25-27.
     ///
-    /// HWP5 stores these bits as one-based values (`1..=7`) for outline,
-    /// numbering, and bullet paragraphs. The shared IR and HWPX wire heading
-    /// level are zero-based, so this helper normalizes the value.
+    /// HWP5 stores a 3-bit ordinal (`0..=7`) and the HWPX `<hh:heading level>`
+    /// attribute is zero-based (`level=0` = 첫 outline, `level=1` = 둘째, …).
+    /// Both ends are zero-based, so this helper returns the wire value
+    /// verbatim.
+    ///
+    /// Task #121 (Wave 12p): an earlier implementation applied
+    /// `.saturating_sub(1)` under the (incorrect) assumption that the wire
+    /// was 1-based, which produced an off-by-1 emit (level 1~6 became 0~5).
+    /// Verified against the Codex-architect review of Hancom HWP5 PDF spec
+    /// (bit 23-24 = list family, bit 25-27 = level, bit 28 = border-connect)
+    /// and the user-authored `sample-outline-9levels.hwpx` native fixture.
     pub fn heading_level(&self) -> u8 {
-        (((self.property1 >> 25) & 0b111) as u8).saturating_sub(1)
+        ((self.property1 >> 25) & 0b111) as u8
     }
 
     /// Returns the raw HWP5 list-definition slot index.
@@ -1279,6 +1286,13 @@ fn parse_numbering_para_head(
 }
 
 fn numbering_attr_num_format(attribute: u32) -> &'static str {
+    // Paragraph numbering format. The 5-bit code's ordinals match the
+    // KS X 6101 OWPML `NumberType1` enum 1:1 — verified against native HWPX
+    // (`sample-numbering-hangul`) for codes 0/1/3/4/5/7/8/9/10, so the full
+    // enum order is trusted for the remaining codes. Codes 6/12/13/14 were
+    // previously missing (silently → DIGIT) and code 11 was wrongly emitted
+    // as the invalid string "HANJA_DIGIT" (real 11 = 원 ㄱ,ㄴ,ㄷ =
+    // CIRCLED_HANGUL_JAMO; 한자 숫자 = IDEOGRAPH @ code 13).
     match (attribute >> 5) & 0x1F {
         0 => "DIGIT",
         1 => "CIRCLED_DIGIT",
@@ -1286,11 +1300,15 @@ fn numbering_attr_num_format(attribute: u32) -> &'static str {
         3 => "ROMAN_SMALL",
         4 => "LATIN_CAPITAL",
         5 => "LATIN_SMALL",
+        6 => "CIRCLED_LATIN_CAPTION",
         7 => "CIRCLED_LATIN_SMALL",
         8 => "HANGUL_SYLLABLE",
         9 => "CIRCLED_HANGUL_SYLLABLE",
         10 => "HANGUL_JAMO",
-        11 => "HANJA_DIGIT",
+        11 => "CIRCLED_HANGUL_JAMO",
+        12 => "HANGUL_PHONETIC",
+        13 => "IDEOGRAPH",
+        14 => "CIRCLED_IDEOGRAPH",
         _ => "DIGIT",
     }
 }
@@ -1970,5 +1988,34 @@ mod tests {
         let mut short = make_bullet_def_bytes_with_checked_char(false, 0x2611);
         short.truncate(20);
         assert!(Hwp5RawBulletDef::parse(&short).is_err());
+    }
+
+    #[test]
+    fn numbering_num_format_covers_full_ks_x_6101_enum() {
+        // The 5-bit numbering code lives in bits 5-9 of the attribute word.
+        let attr = |code: u32| code << 5;
+        // Codes 0-10 are verified 1:1 against native HWPX
+        // (sample-numbering-hangul). Codes 6/11/12/13/14 are the P0-1 fix:
+        // 6 was missing, 11 was the invalid string "HANJA_DIGIT", and
+        // 12/13/14 were silently collapsing to DIGIT.
+        assert_eq!(numbering_attr_num_format(attr(0)), "DIGIT");
+        assert_eq!(numbering_attr_num_format(attr(1)), "CIRCLED_DIGIT");
+        assert_eq!(numbering_attr_num_format(attr(2)), "ROMAN_CAPITAL");
+        assert_eq!(numbering_attr_num_format(attr(3)), "ROMAN_SMALL");
+        assert_eq!(numbering_attr_num_format(attr(4)), "LATIN_CAPITAL");
+        assert_eq!(numbering_attr_num_format(attr(5)), "LATIN_SMALL");
+        assert_eq!(numbering_attr_num_format(attr(6)), "CIRCLED_LATIN_CAPTION");
+        assert_eq!(numbering_attr_num_format(attr(7)), "CIRCLED_LATIN_SMALL");
+        assert_eq!(numbering_attr_num_format(attr(8)), "HANGUL_SYLLABLE");
+        assert_eq!(numbering_attr_num_format(attr(9)), "CIRCLED_HANGUL_SYLLABLE");
+        assert_eq!(numbering_attr_num_format(attr(10)), "HANGUL_JAMO");
+        assert_eq!(numbering_attr_num_format(attr(11)), "CIRCLED_HANGUL_JAMO");
+        assert_eq!(numbering_attr_num_format(attr(12)), "HANGUL_PHONETIC");
+        assert_eq!(numbering_attr_num_format(attr(13)), "IDEOGRAPH");
+        assert_eq!(numbering_attr_num_format(attr(14)), "CIRCLED_IDEOGRAPH");
+        // 11 must no longer emit the invalid OWPML string "HANJA_DIGIT".
+        assert_ne!(numbering_attr_num_format(attr(11)), "HANJA_DIGIT");
+        // Out-of-range codes still fall back to DIGIT.
+        assert_eq!(numbering_attr_num_format(attr(15)), "DIGIT");
     }
 }

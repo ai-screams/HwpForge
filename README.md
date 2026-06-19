@@ -8,9 +8,9 @@
 
 ![CI](https://img.shields.io/github/actions/workflow/status/ai-screams/HwpForge/ci.yml?branch=main\&label=CI\&logo=github)
 ![codecov](https://img.shields.io/badge/coverage-92.65%25-brightgreen.svg?logo=codecov)
-![Tests](https://img.shields.io/badge/tests-2%2C207_passed-success.svg?logo=checkmarx)
+![Tests](https://img.shields.io/badge/tests-2%2C365_passed-success.svg?logo=checkmarx)
 ![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg?logo=rust)
-![Lines of Code](https://img.shields.io/badge/LOC-~83%2C962-informational.svg)
+![Lines of Code](https://img.shields.io/badge/LOC-~100%2C796-informational.svg)
 
 ![crates.io](https://img.shields.io/crates/v/hwpforge.svg?logo=rust)
 ![docs.rs](https://img.shields.io/docsrs/hwpforge?logo=docs.rs)
@@ -464,11 +464,11 @@ flowchart LR
 
 | 지표                   | 값                      |
 | ---------------------- | ----------------------- |
-| Tracked Rust `src` LOC | ~83,962                 |
-| 테스트                 | 2,207개 (cargo-nextest) |
-| 소스 파일              | 137 .rs                 |
+| Tracked Rust `src` LOC | ~100,796                |
+| 테스트                 | 2,365개 (cargo-nextest) |
+| 소스 파일              | 146 .rs                 |
 | Crate 수               | 10개                    |
-| 커버리지               | 92.65%                  |
+| 커버리지               | 92%+                    |
 | Clippy 경고            | 0                       |
 | Unsafe 코드            | 0                       |
 

@@ -181,13 +181,53 @@ fn collect_flow_paragraph_layout_hints(
                 collect_scope_paragraphs(&subtree.paragraphs, body);
             }
             Hwp5Control::TextBox(textbox) => collect_scope_paragraphs(&textbox.paragraphs, body),
+            // Memo body paragraphs are emitted as `<hp:subList>` children of
+            // the body paragraph in HWPX, so the patcher consumes layout
+            // hints for them from the body scope — same pattern as
+            // Footnote/Endnote.
+            Hwp5Control::Memo(memo) => collect_scope_paragraphs(&memo.paragraphs, body),
+            // Group children with text (rect/ellipse drawText) carry their
+            // own paragraphs that need linesegarray hints, mirroring TextBox.
+            Hwp5Control::Group(group) => collect_group_child_layout_hints(group, body),
             Hwp5Control::Image(_)
             | Hwp5Control::Line(_)
             | Hwp5Control::Rect(_)
             | Hwp5Control::Polygon(_)
+            | Hwp5Control::Ellipse(_)
+            | Hwp5Control::Arc(_)
+            | Hwp5Control::Curve(_)
+            | Hwp5Control::TextArt(_)
+            | Hwp5Control::ConnectLine(_)
+            | Hwp5Control::Equation(_)
+            | Hwp5Control::Dutmal(_)
+            | Hwp5Control::Compose(_)
+            | Hwp5Control::IndexMark(_)
+            | Hwp5Control::ClickHere(_)
+            | Hwp5Control::SummeryField(_)
+            | Hwp5Control::DateCodeField(_)
+            | Hwp5Control::PathField(_)
+            | Hwp5Control::CrossRef(_)
+            | Hwp5Control::InlinePageNumber(_)
             | Hwp5Control::OleObject(_)
             | Hwp5Control::Unknown { .. } => {}
         }
+    }
+}
+
+/// Collects layout hints from a group's text-bearing children (rect/ellipse
+/// with `drawText`). Non-text children carry no paragraphs. A child that is
+/// itself a nested group recurses so the inner group's text-bearing leaves
+/// (whose `<hp:p>` the encoder still emits) contribute hints — without this
+/// the patcher would underflow on nested groups.
+fn collect_group_child_layout_hints(
+    group: &crate::decoder::section::Hwp5GroupControl,
+    scope: &mut ScopeLayoutHints,
+) {
+    for child in &group.children {
+        if let Hwp5Control::Group(nested) = &child.control {
+            collect_group_child_layout_hints(nested, scope);
+        }
+        collect_scope_paragraphs(&child.paragraphs, scope);
     }
 }
 
@@ -207,12 +247,29 @@ fn collect_scope_paragraph_layout_hints(paragraph: &Hwp5Paragraph, scope: &mut S
             Hwp5Control::Footnote(subtree) | Hwp5Control::Endnote(subtree) => {
                 collect_scope_paragraphs(&subtree.paragraphs, scope);
             }
+            Hwp5Control::Memo(memo) => collect_scope_paragraphs(&memo.paragraphs, scope),
+            Hwp5Control::Group(group) => collect_group_child_layout_hints(group, scope),
             Hwp5Control::Header(_)
             | Hwp5Control::Footer(_)
             | Hwp5Control::Image(_)
             | Hwp5Control::Line(_)
             | Hwp5Control::Rect(_)
             | Hwp5Control::Polygon(_)
+            | Hwp5Control::Ellipse(_)
+            | Hwp5Control::Arc(_)
+            | Hwp5Control::Curve(_)
+            | Hwp5Control::TextArt(_)
+            | Hwp5Control::ConnectLine(_)
+            | Hwp5Control::Equation(_)
+            | Hwp5Control::Dutmal(_)
+            | Hwp5Control::Compose(_)
+            | Hwp5Control::IndexMark(_)
+            | Hwp5Control::ClickHere(_)
+            | Hwp5Control::SummeryField(_)
+            | Hwp5Control::DateCodeField(_)
+            | Hwp5Control::PathField(_)
+            | Hwp5Control::CrossRef(_)
+            | Hwp5Control::InlinePageNumber(_)
             | Hwp5Control::OleObject(_)
             | Hwp5Control::Unknown { .. } => {}
         }
@@ -483,43 +540,81 @@ fn rewrite_element_attr(
     Ok(rebuilt)
 }
 
+/// Conservative default lineseg values for paragraphs whose HWP5 source
+/// does not carry a `ParaLineSeg` (tag `0x45`) record (task #123).
+///
+/// Without an emitted `<hp:linesegarray>`, Hancom Office flags the file
+/// as needing "low-security recovery" because it cannot pre-compute the
+/// rendering cache. Emitting a single placeholder segment with native-
+/// matching default attributes lets Hancom open the file silently — it
+/// recomputes per-line metrics on first render anyway.
+///
+/// Values empirically derived from native `sample-field-docsummary.hwpx`:
+/// - `vertsize/textheight = 1000` (10pt baseline, native default)
+/// - `baseline = 850`, `spacing = 600`
+/// - `horzsize = 42520` (A4 content width, 1cm L/R margin)
+/// - `flags = 393216` (Hancom's default lineseg flag bitmask)
+///
+/// `vertpos` is intentionally left at `0` — Hancom recomputes the cumulative
+/// vertical position from paragraph order on open.
+fn write_default_lineseg<W: Write>(writer: &mut Writer<W>) -> Hwp5Result<()> {
+    let mut line = BytesStart::new("hp:lineseg");
+    line.push_attribute(("textpos", "0"));
+    line.push_attribute(("vertpos", "0"));
+    line.push_attribute(("vertsize", "1000"));
+    line.push_attribute(("textheight", "1000"));
+    line.push_attribute(("baseline", "850"));
+    line.push_attribute(("spacing", "600"));
+    line.push_attribute(("horzpos", "0"));
+    line.push_attribute(("horzsize", "42520"));
+    line.push_attribute(("flags", "393216"));
+    writer
+        .write_event(Event::Empty(line))
+        .map_err(|e| Hwp5Error::Cfb { detail: format!("write default lineseg: {e}") })?;
+    Ok(())
+}
+
 fn write_linesegarray<W: Write>(
     writer: &mut Writer<W>,
     line_segments: &[Hwp5ParaLineSeg],
 ) -> Hwp5Result<()> {
-    if line_segments.is_empty() {
-        return Ok(());
-    }
-
+    // task #123: always emit linesegarray (even if HWP5 source omitted
+    // the ParaLineSeg record). Hancom recomputes accurate metrics on
+    // first render, but the element's *presence* is required to skip
+    // the "low-security recovery" warning.
     writer
         .write_event(Event::Start(BytesStart::new("hp:linesegarray")))
         .map_err(|e| Hwp5Error::Cfb { detail: format!("write linesegarray start: {e}") })?;
 
-    for segment in line_segments {
-        let textpos = segment.text_start_position.to_string();
-        let vertpos = segment.vertical_position.to_string();
-        let vertsize = segment.line_height.to_string();
-        let textheight = segment.text_height.to_string();
-        let baseline = segment.baseline_distance.to_string();
-        let spacing = segment.line_spacing.to_string();
-        let horzpos = segment.column_start_position.to_string();
-        let horzsize = segment.segment_width.to_string();
-        let flags = segment.tag.to_string();
+    if line_segments.is_empty() {
+        write_default_lineseg(writer)?;
+    } else {
+        for segment in line_segments {
+            let textpos = segment.text_start_position.to_string();
+            let vertpos = segment.vertical_position.to_string();
+            let vertsize = segment.line_height.to_string();
+            let textheight = segment.text_height.to_string();
+            let baseline = segment.baseline_distance.to_string();
+            let spacing = segment.line_spacing.to_string();
+            let horzpos = segment.column_start_position.to_string();
+            let horzsize = segment.segment_width.to_string();
+            let flags = segment.tag.to_string();
 
-        let mut line = BytesStart::new("hp:lineseg");
-        line.push_attribute(("textpos", textpos.as_str()));
-        line.push_attribute(("vertpos", vertpos.as_str()));
-        line.push_attribute(("vertsize", vertsize.as_str()));
-        line.push_attribute(("textheight", textheight.as_str()));
-        line.push_attribute(("baseline", baseline.as_str()));
-        line.push_attribute(("spacing", spacing.as_str()));
-        line.push_attribute(("horzpos", horzpos.as_str()));
-        line.push_attribute(("horzsize", horzsize.as_str()));
-        line.push_attribute(("flags", flags.as_str()));
+            let mut line = BytesStart::new("hp:lineseg");
+            line.push_attribute(("textpos", textpos.as_str()));
+            line.push_attribute(("vertpos", vertpos.as_str()));
+            line.push_attribute(("vertsize", vertsize.as_str()));
+            line.push_attribute(("textheight", textheight.as_str()));
+            line.push_attribute(("baseline", baseline.as_str()));
+            line.push_attribute(("spacing", spacing.as_str()));
+            line.push_attribute(("horzpos", horzpos.as_str()));
+            line.push_attribute(("horzsize", horzsize.as_str()));
+            line.push_attribute(("flags", flags.as_str()));
 
-        writer
-            .write_event(Event::Empty(line))
-            .map_err(|e| Hwp5Error::Cfb { detail: format!("write lineseg: {e}") })?;
+            writer
+                .write_event(Event::Empty(line))
+                .map_err(|e| Hwp5Error::Cfb { detail: format!("write lineseg: {e}") })?;
+        }
     }
 
     writer
@@ -610,6 +705,7 @@ mod tests {
                     controls: Vec::new(),
                 }],
             }],
+            instance_id: 0,
         };
 
         assert_eq!(derive_table_height(&table), Some(4482));
@@ -656,6 +752,7 @@ mod tests {
                     vec![Hwp5Control::Header(Hwp5NestedSubtree {
                         ctrl_id: 0x6865_6164,
                         properties_raw: 0,
+                        instance_id: 0,
                         paragraphs: vec![paragraph(
                             "header",
                             vec![line_segment(30, 0, 1000)],
@@ -669,6 +766,7 @@ mod tests {
                     vec![Hwp5Control::Footer(Hwp5NestedSubtree {
                         ctrl_id: 0x666F_6F74,
                         properties_raw: 0,
+                        instance_id: 0,
                         paragraphs: vec![paragraph(
                             "footer",
                             vec![line_segment(40, 0, 1000)],
@@ -680,6 +778,7 @@ mod tests {
             page_def: None,
             section_def_properties: None,
             page_border_fills: Vec::new(),
+            column_def: None,
             warnings: Vec::new(),
         };
 

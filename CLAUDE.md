@@ -8,42 +8,31 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document formats, designed with LLM-first principles. The goal is to enable AI agents (like Claude Code) to generate Korean government proposal documents using natural language + Markdown + YAML style templates.
 
-**Current Status**:
+**Current Status** (snapshot — 2026-06-17):
 
-- HWPX codec: read/write shipped
-- Markdown bridge: read/write shipped
-- HWP5 converter path: active with style/layout fidelity line in progress
-- CLI bindings: shipped
-- MCP bindings: shipped
-- Python bindings: stub
-- Shared tab semantics: landed on `main`
-- Shared `ordered / bullet / outline` semantics: implemented on local `feat/list-shared-semantics`
-- Checkable bullet semantics: implemented on local `feat/list-shared-semantics`
-- HWP5 checkable support: all three gotcha-#8 truth locations now carry end-to-end — `bullet.checkedChar`, `bullet.paraHead.checkable` (definition-level), and `paraPr.checked` (paragraph-level)
-- Markdown task lists normalize to HWPX-first checkable semantics; ordered task lists intentionally lose numbering
-- HWP5 char/para style bridge now preserves the main supported style surface
-- HWP5 layout hint patch injects `linesegarray` and safe table height hints for better visual parity
-- `convert-hwp5` / `audit-hwp5` warning counts are aligned for style projection fallbacks
-- HWP5/HWPX char effects now preserve `emboss`, `engrave`, `superscript`, and `subscript`
-- HWP5/HWPX paragraph `breakLatinWord=HYPHENATION` is now carried end-to-end (Wave 1d)
-- HWP5 chart objects (OLE-backed BinData) now carry end-to-end as `Control::EmbeddedChart` passthrough — emits `Chart/chartN.xml` + `BinData/oleN.ole` + `<hp:switch>` block (Wave 4c, closes `DroppedControl:ole_object`)
-- HWP5 tab fidelity end-to-end: inline `<hp:tab width/leader/type>` attributes carried via new `RunContent::InlineText` variant (Wave 4 tab Phase 2+3, additive `#[non_exhaustive]`)
-- HWP5 header/footer per-ctrl `applyPageType` (BOTH/ODD/EVEN) now carry as multiple `<hp:header>` / `<hp:footer>` elements (Wave 5 gap A; **breaking** ADR-002: `Section.header: Option<HeaderFooter>` → `Section.headers: Vec<HeaderFooter>`, footer 동일)
-- HWP5 `secd` ctrl property bits (0/1/2/5/19) carry into `Section.visibility.hide_first_*` (Wave 5 gap B)
-- Known still-deferred: richer strike/underline line families; Wave 5 gap C (masterPage carry — macOS 한컴 fixture 비대칭, PC 한컴 fixture 대기, task #33); multi-section / page-border-fill (fixture 미작성)
+- HWPX codec: read/write shipped · Markdown bridge: read/write shipped
+- HWP5 → HWPX converter path: active, style/layout fidelity line in progress
+- CLI bindings: shipped · MCP bindings: shipped · Python bindings: stub
+- Shared `tab` / `ordered·bullet·outline` / checkable-bullet semantics wired through core → blueprint → smithy. HWP5 checkable carries all three gotcha-#8 truth locations (`bullet.checkedChar`, `bullet.paraHead.checkable`, `paraPr.checked`).
+- Active branch `feat/phase12-hwp5-gso-shapes` (ahead of `main`): Phase 12 HWP5→HWPX carry series — GSO shapes, equation, memo, dutmal, compose, indexmark, click-here/auto fields, cross-ref instId, document metadata, outline levels 1–10 — plus 옵션 단위 enum 전수조사 (번호/쪽번호/이미지 채우기 형식 버그 수정).
 
-**Workspace Facts (code-grounded)**:
+> **이 섹션은 짧은 상태 스냅샷으로만 유지한다 (wave-by-wave 이력을 여기 다시 쌓지 말 것).**
+> Wave별 상세 이력 + breaking change: **`CHANGELOG.md`** (canonical) 와 memory `MEMORY.md` / `phase11_wave_history.md`.
+> Enum/wire 레이아웃 표 (번호·쪽번호·이미지채우기·대각선 등): **`crates/hwpforge-smithy-hwp5/HWP5_WIRE_SPEC.md`** (특히 §22).
 
-- Cargo packages: `10`
-- Workspace version: `0.6.0` (bumped from `0.5.2` for the ADR-002 breaking change)
-- Tracked Rust `src` files under `crates/`: `144`
-- Tracked Rust `src` LOC under `crates/`: `90,629`
-- Example artifact files under `examples/`: `67`
-- GitHub workflow files: `5`
-- MSRV: `1.88`
-- Dev toolchain: Rust `1.93`
+**Still-deferred (Windows 한컴 fixture 대기)**:
 
-Treat these as code-derived facts, not roadmap promises.
+- **non-chart OLE passthrough** — 전 구간 구현됐으나 standalone `<hp:ole>` 가 macOS 한컴 crash, macOS는 생성 자체 불가 → `git stash` 보존 (memory `non-chart-ole-deferred.md`)
+- **masterPage carry** (Wave 5 gap C, task #33) · **쪽 테두리/배경 hatch _페이지_ 경로** (char/table hatch 는 byte-verified 완료, 공유 코드 — macOS [쪽] 메뉴에 항목 없음)
+- **양식컨트롤(form controls)** — 완전 무음 드롭, `b"form"` + `HWPTAG_FORM_OBJECT(0x5B)` 미구현 (memory `form-controls-deferred.md`)
+- **가운데 밑줄** (macOS 한글 밑줄 위치에 "가운데" 옵션 없음) · 한컴-authored multi-run span 디코딩 (편집 prerequisite, task #96)
+
+**Known lossy (Core breaking 필요, 후속 슬라이스)**: 글자 그림자 색·위치, 스크립트별 자간/장평, 한영 자동 간격, 문단 세로정렬·테두리 오프셋 등 (P2 — 경고는 나감) + enum 천장 (P3 — UnderlineShape/StrikeoutShape/EmphasisType 등 raw 초과분). 상세 backlog: `.docs/planning/BACKLOG_SMITHY_HWPX.md` + 분석 `.docs/audit/2026-06-17_hwp5_hwpx_option_gaps.md`.
+
+**Workspace Facts** (code-grounded — 카운트는 drift하니 인용 전 확인):
+
+- Cargo packages `10` · Cargo.toml version `0.6.0` (released; release-plz bumps this branch's Wave 12 breaking series to `0.7.0` in its Release PR) · MSRV `1.88` · Dev toolchain Rust `1.93`
+- `crates/` 추적 src 파일 ~`157` · nextest ~`2,489` passed + `2` skipped · `examples/` 산출물 `67`+ (gitignored `examples/hwp5_review/` 리뷰 영역 별도) · GitHub workflows `5`
 
 ---
 
@@ -102,6 +91,12 @@ bacon         # Auto-run clippy on file changes
 bacon test    # Auto-run tests
 ```
 
+### Tooling Gotchas (pre-commit / test)
+
+- **dprint + 한글(CJK) 마크다운 표**: 한글이 든 `.md` 표(예: `HWP5_WIRE_SPEC.md`, `CHANGELOG.md`)를 편집하면 dprint pre-commit 훅이 거부함(CJK 글자 폭 재계산으로 표 정렬 불일치 판단). `dprint fmt <파일>` 수동 실행 → 재-stage → 재커밋.
+- **`cargo nextest run -p <crate> <filter>`** 의 필터는 정규식이 아니라 **부분일치(substring)** — `'a|b'` 는 아무것도 안 잡음. 공통 substring 하나(예: `warns`)로 필터하거나 따로 실행.
+- 용량 큰 이미지 임베드 fixture(~MB)는 gitignore된 `examples/hwp5_review/`에만 두고, 회귀 방지는 **단위 테스트로 잠금**(수 MB fixture를 커밋하지 말 것).
+
 ### Documentation & Coverage
 
 ```bash
@@ -135,6 +130,7 @@ bindings-py, bindings-cli, bindings-mcp (all smithy crates)
 
 - **Warning-first for unknowns**: if source truth is missing or a value is unsupported, emit a warning or validation signal first.
 - **No fake support**: do not silently normalize unknown semantics into arbitrary defaults just to keep output green.
+- **Unhandled enum ≠ bug**: an unmatched enum arm is a real gap only if that value actually exists in the reference enum (hwpxlib/libhwp) or a native fixture. Verify existence first — otherwise `_ => default` is correct and a guessed mapping is fake support. (See `HWP5_WIRE_SPEC.md §22`; 번호 code 11 / 이미지 채우기 모드 = real bugs, 가나다 · 대각선 1/4/5 = false positives.)
 - **Shared-model first**: if HWP5 discovers a semantic that Core/HWPX cannot carry, extend the shared representation first and wire HWP5 after.
 - **Semver-first for public API**: if a design touches public structs, enums, or externally constructible types, surface the breakage before implementation and get approval first.
 
@@ -373,9 +369,24 @@ Local planning and research workspace. It may be git-excluded in this repository
 
 ---
 
+## Releasing (release-plz 소유)
+
+> **상세 절차·다이어그램·체크리스트**: `RELEASING.md` (canonical).
+
+릴리스는 **release-plz** 가 소유한다 (`.github/workflows/release-plz.yml` + `release-plz.toml`). 규칙:
+
+- **버전/태그를 손으로 만들지 말 것.** `cargo publish`·`git tag`·Cargo.toml 버전 수동 bump 금지. `v0.6.0` 및 per-crate 태그는 전부 release-plz 산출물 — 손대면 자기비교·중복 publish 사고.
+- **흐름은 2단계**: feature PR 머지(버전 안 올림) → release-plz가 **Release PR** 생성/갱신(버전 bump + CHANGELOG) → 사람이 **Release PR 머지** → 그때서야 crates.io publish·태그·GitHub Release·npm·문서 배포가 일어남.
+- **conventional commit 으로 릴리스가 결정**됨: `feat|fix|perf|refactor`(+ `type!:`)만 트리거. breaking 은 **반드시 `type!:` 또는 `BREAKING CHANGE:`** 로 표기(안 하면 0.x에서 patch로 오판). 0.x에서 breaking = **마이너** bump(0.6→0.7).
+- **SemVer 검사는 release-plz가 소유** (`semver_check = true`). ci.yml 에 standalone cargo-semver-checks 게이트를 **다시 넣지 말 것** — feature PR은 버전을 안 올리는 모델이라 breaking PR마다 영원히 빨강이 됨 (이 이유로 PR #78에서 제거).
+- **배포 대상**: crates.io = `hwpforge`(umbrella)·foundation·core·blueprint·smithy-hwpx·smithy-md·bindings-mcp. **제외**(`publish=false`) = smithy-hwp5·bindings-cli·bindings-py. **umbrella 만 GitHub Release 생성** → npm(`@hwpforge/mcp`)·pages 배포가 거기 매달림.
+- **다음 릴리스 주의**: ① first crates.io publish는 의존 순서(foundation→…→umbrella) + `publish=false` 의존 차단 여부 검증 필요 · ② CHANGELOG 한글 표는 `dprint fmt CHANGELOG.md` 수동 후 재-stage · ③ 태그 기반 로컬 검증 전 `git fetch --tags`(stale 태그 → 거짓 통과 함정).
+
+---
+
 ## Gotchas & Common Mistakes
 
-> **상세 내용 (코드 예제 포함)**: `.docs/references/gotchas.md` (35항목)
+> **상세 내용 (코드 예제 포함)**: `.docs/references/gotchas.md` (40항목)
 
 1. HWP5 TagID +16 오프셋 — `PARA_HEADER` = 0x42 (66), not 0x32 (50)
 2. landscape 스펙 반전 — `WIDELY`=세로, `NARROWLY`=가로. width/height 교환 금지
@@ -399,6 +410,11 @@ Local planning and research workspace. It may be git-excluded in this repository
 20. Rotation: 정수 degrees + CCW 방향 + 중심 이동 보정 필수
 21. PatternType `BACK_SLASH`/`SLASH` 스펙 반전 — Display/FromStr에서 스왑
 22. 패턴 채우기: `hatchStyle` 속성 필수 (없으면 솔리드로 렌더링)
+23. fieldid = ctrl_id ASCII magic constant (`%xrf`/`%clk`/`%smr`/`%pat`) — type tag, instance ID 아님
+24. CROSSREF wire = 8-param Hancom-canonical (`Fiexde`/`Prop`/`Command` 포함, 5-param spec form 금지)
+25. cross-ref target element (endNote/footNote/figure/table) 에 `instId` attribute 필수
+26. Bookmark Contents reference 는 SpanStart/SpanEnd 책갈피 필요 (Point 는 본문 없음 → `?`)
+27. ContentType 의미는 RefType-상대적 (Bookmark+Contents = 책갈피 이름, Figure+Contents = 캡션 본문) — invented enum 금지
 
 ---
 

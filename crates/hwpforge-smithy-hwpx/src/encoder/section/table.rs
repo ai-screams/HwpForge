@@ -73,7 +73,10 @@ pub(super) fn build_table(
     });
 
     Ok(HxTable {
-        id: generate_instid(),
+        // Wave 12p Step 4: HWPX `<hp:tbl id="...">` cross-ref target.
+        // Table.inst_id 가 있으면 사용 (한컴 native 의 instance ID),
+        // 없으면 sequential fallback.
+        id: table.inst_id.map(|n| n.to_string()).unwrap_or_else(generate_instid),
         z_order: 0,
         numbering_type: "TABLE".to_string(),
         text_wrap: "TOP_AND_BOTTOM".to_string(),

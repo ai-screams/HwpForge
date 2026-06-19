@@ -6,6 +6,8 @@
 
 use std::collections::{BTreeSet, VecDeque};
 
+use hwpforge_core::column::ColumnSettings;
+use hwpforge_core::control::RefTarget;
 use hwpforge_core::document::{Document, Draft};
 use hwpforge_core::image::{
     Image, ImageFormat, ImagePlacement, ImageRelativeTo, ImageStore, ImageTextFlow, ImageTextWrap,
@@ -17,19 +19,27 @@ use hwpforge_core::table::{Table, TableCell, TableMargin, TableRow};
 use hwpforge_core::Control;
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
-    BookmarkType, CharShapeIndex, HwpUnit, NumberFormatType, PageNumberPosition, ParaShapeIndex,
-    RefContentType, RefType, StyleIndex,
+    ArcType, BookmarkType, CharShapeIndex, CurveSegmentType, HwpUnit, NumberFormatType,
+    PageNumberPosition, ParaShapeIndex, RefContentType, RefType, StyleIndex,
 };
 
+use crate::ctrl_ids::{
+    CTRL_ID_BOOKMARK_POINT, CTRL_ID_BOOKMARK_SPAN, CTRL_ID_CLICK_HERE, CTRL_ID_COLUMN_DEF,
+    CTRL_ID_FIELD_CROSSREF, CTRL_ID_FIELD_DATE_CODE, CTRL_ID_FIELD_PATH, CTRL_ID_FIELD_SUMMERY,
+    CTRL_ID_HYPERLINK, CTRL_ID_MEMO_INLINE, CTRL_ID_PAGE_NUMBER, CTRL_ID_SECD,
+};
 use crate::decoder::chart_ole::{extract_chart_payload, ChartOleError};
 use crate::decoder::section::{
-    Hwp5Control, Hwp5ImageControl, Hwp5LineControl, Hwp5NestedSubtree, Hwp5OleObjectControl,
-    Hwp5PageBorderFill, Hwp5Paragraph, Hwp5PolygonControl, Hwp5RectControl, Hwp5Table,
-    Hwp5TableCell, Hwp5TextBoxControl, SectionResult,
+    Hwp5ArcControl, Hwp5ConnectLineControl, Hwp5Control, Hwp5CurveControl, Hwp5EllipseControl,
+    Hwp5EquationControl, Hwp5GroupChild, Hwp5GroupControl, Hwp5ImageControl, Hwp5LineControl,
+    Hwp5MemoControl, Hwp5NestedSubtree, Hwp5OleObjectControl, Hwp5PageBorderFill, Hwp5Paragraph,
+    Hwp5PolygonControl, Hwp5RectControl, Hwp5Table, Hwp5TableCell, Hwp5TextArtControl,
+    Hwp5TextBoxControl, SectionResult,
 };
 use crate::decoder::Hwp5Warning;
 use crate::error::Hwp5Result;
 use crate::numeric::positive_i32_from_u32;
+use crate::schema::section::Hwp5DutmalControl;
 use crate::schema::section::{
     Hwp5CharShapeRun, Hwp5PageDef, Hwp5ShapeComponentGeometry, Hwp5ShapePoint,
 };
@@ -39,15 +49,23 @@ use crate::table_cell_vertical_align::{
 use crate::table_page_break::{core_table_page_break, unknown_hwp5_table_page_break_raw};
 use crate::warning_utils::push_projection_fallback;
 use crate::{Hwp5JoinedImageAsset, Hwp5JoinedImageAssetPlan, Hwp5OleAssetPlan};
-
-const CTRL_ID_SECTION_DEF: u32 = 0x7365_6364; // "secd"
-const CTRL_ID_COLUMN_DEF: u32 = 0x636F_6C64; // "cold"
-const CTRL_ID_PAGE_NUMBER: u32 = 0x7067_6E70; // "pgnp"
-const CTRL_ID_BOOKMARK_SPAN: u32 = 0x2562_6D6B; // "%bmk"
-const CTRL_ID_HYPERLINK: u32 = 0x2568_6C6B; // "%hlk"
-const CTRL_ID_CROSSREF: u32 = 0x2578_7266; // "%xrf"
-const CTRL_ID_BOOKMARK_POINT: u32 = 0x626F_6B6D; // "bokm"
-const HWP5_CROSSREF_UNKNOWN_TAG: &str = "hwp5.crossref";
+/// Wire code for the Bookmark `RefType` variant (Wave 12m Phase 2). The
+/// HWP5 `%xrf` Command's N1 slot uses these codes; boundary functions
+/// in this file map them to typed [`RefType`].
+const HWP5_CROSSREF_REF_TYPE_TABLE: u8 = 0;
+/// Wire code for the Figure `RefType` variant (Wave 12m).
+const HWP5_CROSSREF_REF_TYPE_FIGURE: u8 = 1;
+/// Wire code for the Equation `RefType` variant (Wave 12m).
+const HWP5_CROSSREF_REF_TYPE_EQUATION: u8 = 2;
+/// Wire code for the Footnote `RefType` variant (Wave 12m).
+const HWP5_CROSSREF_REF_TYPE_FOOTNOTE: u8 = 3;
+/// Wire code for the Endnote `RefType` variant (Wave 12m).
+const HWP5_CROSSREF_REF_TYPE_ENDNOTE: u8 = 4;
+/// Wire code for the Outline `RefType` variant (Wave 12m).
+const HWP5_CROSSREF_REF_TYPE_OUTLINE: u8 = 5;
+/// Wire code for the Bookmark `RefType` variant (Wave 12m).
+const HWP5_CROSSREF_REF_TYPE_BOOKMARK: u8 = 6;
+// CTRL_ID constants moved to `crate::ctrl_ids` (#94 Step B1).
 
 #[derive(Debug, Default)]
 struct SectionProjectionHints {
@@ -56,19 +74,26 @@ struct SectionProjectionHints {
 
 impl SectionProjectionHints {
     fn from_paragraphs(paragraphs: &[Hwp5Paragraph]) -> Self {
+        // Wave 12m Phase 2 Step 4: %xrf is now `Hwp5Control::CrossRef`
+        // (typed schema). Only Bookmark cross-refs (ref_type_code == 6)
+        // carry a bookmark NAME in `target_raw`; other ref types use
+        // `#<id>` SystemIds and won't resolve to a bookmark span, so
+        // they are skipped here. Preserves the previous behavior of
+        // back-feeding bookmark span names from forward cross-refs.
         let mut seen = BTreeSet::new();
         let mut unresolved_bookmark_names = VecDeque::new();
         for paragraph in paragraphs {
             for control in &paragraph.controls {
-                let Some(unknown) = unknown_control_header(control) else {
+                let Hwp5Control::CrossRef(xrf) = control else {
                     continue;
                 };
-                if unknown.ctrl_id != CTRL_ID_CROSSREF {
+                if xrf.ref_type_code != HWP5_CROSSREF_REF_TYPE_BOOKMARK {
                     continue;
                 }
-                let Some(target_name) = parse_crossref_target_name(unknown.header_data) else {
+                let target_name = xrf.target_raw.clone();
+                if target_name.is_empty() {
                     continue;
-                };
+                }
                 if seen.insert(target_name.clone()) {
                     unresolved_bookmark_names.push_back(target_name);
                 }
@@ -97,15 +122,114 @@ struct UnknownControlHeader<'a> {
 struct ParagraphProjectionQueues<'a> {
     marker_headers: VecDeque<UnknownControlHeader<'a>>,
     object_controls: VecDeque<&'a Hwp5Control>,
+    /// Pending memo placeholders in document order. Consumed by
+    /// `FieldBegin %unk MEMO` inline segments via `start_active_field`;
+    /// any leftovers are drained at end-of-paragraph as a safety net.
+    memo_controls: VecDeque<Hwp5MemoControl>,
+    /// Pending ClickHere (`%clk`) press-fields in document order
+    /// (Wave 12l). Consumed by `FieldBegin %clk` inline segments via
+    /// `start_active_field`. Like `memo_controls`, leftovers do not
+    /// emit visible runs — they only carry metadata.
+    clickhere_controls: VecDeque<crate::schema::section::Hwp5ClickHereControl>,
+    /// Pending SUMMERY (`%smr`) auto-fields in document order (Wave 12n).
+    /// Consumed by `FieldBegin %smr` inline segments via `start_active_field`.
+    /// Same lifecycle as `clickhere_controls`.
+    summery_fields: VecDeque<crate::schema::section::Hwp5SummeryControl>,
+    /// Pending `%dte` date/time format-code fields in document order
+    /// (Wave 12n). Consumed by `FieldBegin %dte` inline segments.
+    datecode_fields: VecDeque<crate::schema::section::Hwp5DateCodeControl>,
+    /// Pending `%pat` path/file-name fields in document order (Wave 12n).
+    /// Consumed by `FieldBegin %pat` inline segments.
+    pathfield_controls: VecDeque<crate::schema::section::Hwp5PathFieldControl>,
+    /// Pending `%xrf` cross-reference controls in document order
+    /// (Wave 12m Phase 2 Step 4). Consumed by `FieldBegin %xrf` inline
+    /// segments via `start_active_field`. Same lifecycle as the other
+    /// CtrlHeader-backed field queues above.
+    crossref_controls: VecDeque<crate::schema::section::Hwp5CrossRefControl>,
     point_bookmark_names: VecDeque<String>,
 }
 
 #[derive(Debug)]
 enum ActiveField {
-    Hyperlink { url: String, start_utf16: u32, display_text: String },
-    BookmarkSpan { name: String, start_utf16: u32 },
-    CrossRef { target_name: String, start_utf16: u32, display_text: String },
-    PlainTextFallback { start_utf16: u32 },
+    Hyperlink {
+        url: String,
+        start_utf16: u32,
+        display_text: String,
+    },
+    BookmarkSpan {
+        name: String,
+        start_utf16: u32,
+    },
+    /// `%xrf` cross-reference field span (Wave 12m Phase 2 Step 4).
+    /// Carries the structured wire payload parsed at the decoder
+    /// boundary. `display_text` accumulates body chars between
+    /// `FieldBegin` and `FieldEnd` so the HWPX encoder can embed it
+    /// between `<hp:fieldBegin>` and `<hp:fieldEnd>`.
+    CrossRef {
+        control: crate::schema::section::Hwp5CrossRefControl,
+        start_utf16: u32,
+        display_text: String,
+    },
+    PlainTextFallback {
+        start_utf16: u32,
+    },
+    /// Memo anchor: the inline `FieldBegin %unk MEMO` to `FieldEnd` span
+    /// whose anchor text flows directly into `runs` (not dropped). The
+    /// `Hwp5Control::Memo` run is emitted at `FieldEnd` after the anchor
+    /// text. Memo body is cloned at queue-build time to avoid leaking a
+    /// borrow into `ActiveField`.
+    MemoAnchor {
+        start_utf16: u32,
+        memo: Hwp5MemoControl,
+    },
+    /// ClickHere (누름틀, CLICK_HERE press-field) — Wave 12l. The
+    /// inline `FieldBegin %clk` to `FieldEnd` span is rendered as a
+    /// single `Control::Field { field_type: ClickHere, hint_text,
+    /// help_text, name }` Run emitted at `FieldEnd`. Per Codex review
+    /// the span text between the markers is *not* accumulated: in
+    /// HWP5 wire that span is empty, and HWPX renders `hint_text` as
+    /// the visible placeholder, so accumulating display text would
+    /// risk double-emitting it.
+    ClickHere {
+        start_utf16: u32,
+        hint_text: Option<String>,
+        help_text: Option<String>,
+        name: Option<String>,
+    },
+    /// SUMMERY auto-field (Wave 12n). `command_token` carries the wire
+    /// `$X` token (e.g. `$author`, `$modifiedtime`). On `FieldEnd` the
+    /// token is mapped to a typed [`hwpforge_foundation::FieldType`] or,
+    /// for unknown tokens, surfaced as `Control::UnknownSummery { token }`.
+    /// `display_text` accumulates the body chars between `FieldBegin` and
+    /// `FieldEnd` (the cached resolved value, e.g. the author name or the
+    /// locale-formatted date) so the HWPX encoder can carry it — an empty
+    /// body triggers 한컴's "낮은 보안 수준 복구" warning (#120/#136).
+    SummeryField {
+        start_utf16: u32,
+        command_token: String,
+        display_text: String,
+    },
+    /// `%dte` date/time format-code field (Wave 12n). Carries the raw
+    /// Command pattern + 8-byte trailer for round-trip fidelity. On
+    /// `FieldEnd` the projection emits `Control::DateCodeField` with
+    /// `is_time_mode` derived from the `T` prefix. `display_text`
+    /// accumulates the cached resolved value (see [`Self::SummeryField`]).
+    DateCodeField {
+        start_utf16: u32,
+        raw_command: String,
+        raw_trailer: [u8; 8],
+        display_text: String,
+    },
+    /// `%pat` path/file-name field (Wave 12n). On `FieldEnd` the
+    /// projection maps the raw Command to a typed `PathFieldCommand`
+    /// (or `Unknown` for forward compatibility) and emits
+    /// `Control::PathField`. `display_text` accumulates the cached resolved
+    /// path (see [`Self::SummeryField`]).
+    PathField {
+        start_utf16: u32,
+        raw_command: String,
+        display_text: String,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -184,6 +308,24 @@ fn project_to_core_internal(
                 &section_result.page_border_fills,
                 &mut projection_images.warnings,
             ));
+        }
+        // 다단 (multi-column): map the `cold` ctrl's column count + gap to
+        // `Section.column_settings`. Single-column (`col_count < 2`) stays
+        // `None` so the encoder emits its single-column default. Equal-width
+        // columns (한글 computes widths when `sameSz=1`).
+        if let Some(col) = section_result.column_def {
+            if col.col_count >= 2 {
+                match ColumnSettings::equal_columns(
+                    u32::from(col.col_count),
+                    HwpUnit::new(i32::from(col.gap)).unwrap_or(HwpUnit::ZERO),
+                ) {
+                    Ok(cs) => section.column_settings = Some(cs),
+                    Err(_) => projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                        subject: "column_def",
+                        reason: format!("invalid column count {}", col.col_count),
+                    }),
+                }
+            }
         }
         let mut section_field_hints =
             SectionProjectionHints::from_paragraphs(&section_result.paragraphs);
@@ -331,15 +473,19 @@ impl<'a> ProjectionImageState<'a> {
 
         self.image_store.insert(asset.payload.storage_name.clone(), asset.bytes.clone());
 
-        Some(
-            Image::new(
-                asset.payload.package_path.clone(),
-                HwpUnit::new(resolved_dimensions.width_hwp).unwrap_or(HwpUnit::ZERO),
-                HwpUnit::new(resolved_dimensions.height_hwp).unwrap_or(HwpUnit::ZERO),
-                core_image_format(&asset.payload.format),
-            )
-            .with_placement(image_placement_from_geometry(&image.geometry, context)),
+        let mut core_image = Image::new(
+            asset.payload.package_path.clone(),
+            HwpUnit::new(resolved_dimensions.width_hwp).unwrap_or(HwpUnit::ZERO),
+            HwpUnit::new(resolved_dimensions.height_hwp).unwrap_or(HwpUnit::ZERO),
+            core_image_format(&asset.payload.format),
         )
+        .with_placement(image_placement_from_geometry(&image.geometry, context));
+        // Wave 12p Step 3: HWP5 GSO CtrlHeader trailer instance ID 통과.
+        // 한컴 native `<hp:pic id="...">` cross-ref target 과 매칭.
+        if image.instance_id != 0 {
+            core_image.inst_id = Some(u64::from(image.instance_id));
+        }
+        Some(core_image)
     }
 }
 
@@ -538,7 +684,30 @@ fn project_paragraph_with_images_flat(
     image_context: ImageProjectionContext,
 ) -> Paragraph {
     let mut runs: Vec<Run> = Vec::new();
-    let mut control_iter = hwp_para.controls.iter();
+    // Marker-header controls (secd / cold / %bmk / %hlk / %xrf / bokm /
+    // pgnp) are consumed by `SectionColumnDef` / `FieldBegin` text
+    // segments in the structural path, never by `ControlRef`
+    // (`\u{FFFC}`) markers. The flat path historically iterated *all*
+    // controls and so mis-aligned the FFFC↔control pairing for first
+    // section paragraphs (which always carry `secd`/`cold`). Filter
+    // them out here so the FFFC iterator only sees object controls.
+    // See `.docs/algorithms/2026-06-01_dutmal_carry.md` (companion-fix
+    // section) for the full root-cause + rationale.
+    let mut control_iter = hwp_para.controls.iter().filter(|control| {
+        !matches!(
+            control,
+            Hwp5Control::Unknown {
+                ctrl_id: CTRL_ID_SECD
+                    | CTRL_ID_COLUMN_DEF
+                    | CTRL_ID_BOOKMARK_SPAN
+                    | CTRL_ID_HYPERLINK
+                    | CTRL_ID_FIELD_CROSSREF
+                    | CTRL_ID_BOOKMARK_POINT
+                    | CTRL_ID_PAGE_NUMBER,
+                ..
+            }
+        )
+    });
     let mut segment_start_utf16: u32 = 0;
     let mut current_utf16: u32 = 0;
 
@@ -553,7 +722,12 @@ fn project_paragraph_with_images_flat(
             ));
 
             if let Some(control) = control_iter.next() {
-                if let Some(run) = project_control_run(control, projection_images, image_context) {
+                if let Some(run) = project_control_run(
+                    control,
+                    projection_images,
+                    image_context,
+                    char_shape_at(hwp_para, current_utf16),
+                ) {
                     runs.push(run);
                 }
             }
@@ -574,7 +748,12 @@ fn project_paragraph_with_images_flat(
     ));
 
     for control in control_iter {
-        if let Some(run) = project_control_run(control, projection_images, image_context) {
+        if let Some(run) = project_control_run(
+            control,
+            projection_images,
+            image_context,
+            char_shape_at(hwp_para, current_utf16),
+        ) {
             runs.push(run);
         }
     }
@@ -606,23 +785,13 @@ fn project_paragraph_with_images_structural(
     for segment in &hwp_para.text_segments {
         match segment {
             crate::schema::section::TextSegment::Text(text) => {
-                let len = text.encode_utf16().count() as u32;
-                if let Some(active) = active_field.as_mut() {
-                    match active {
-                        ActiveField::Hyperlink { display_text, .. }
-                        | ActiveField::CrossRef { display_text, .. } => display_text.push_str(text),
-                        ActiveField::BookmarkSpan { .. }
-                        | ActiveField::PlainTextFallback { .. } => {}
-                    }
-                } else {
-                    runs.extend(project_text_segment(
-                        &hwp_para.text,
-                        &hwp_para.char_shape_runs,
-                        visible_utf16,
-                        visible_utf16 + len,
-                    ));
-                }
-                visible_utf16 += len;
+                project_visible_text_segment(
+                    text,
+                    hwp_para,
+                    &mut active_field,
+                    &mut runs,
+                    &mut visible_utf16,
+                );
             }
             crate::schema::section::TextSegment::Tab { .. } => {
                 // Inline tab metadata is dropped here; `<hp:tab>`
@@ -674,9 +843,12 @@ fn project_paragraph_with_images_structural(
             | crate::schema::section::TextSegment::ExtendedControlRef { .. } => {
                 if active_field.is_none() {
                     if let Some(control) = queues.object_controls.pop_front() {
-                        if let Some(run) =
-                            project_control_run(control, projection_images, image_context)
-                        {
+                        if let Some(run) = project_control_run(
+                            control,
+                            projection_images,
+                            image_context,
+                            char_shape_at(hwp_para, visible_utf16),
+                        ) {
                             runs.push(run);
                         }
                     }
@@ -688,11 +860,9 @@ fn project_paragraph_with_images_structural(
                 let _ = consume_marker_header(&mut queues.marker_headers, ctrl_id);
             }
             crate::schema::section::TextSegment::FieldBegin { extra } => {
-                let ctrl_id = ctrl_id_from_inline_extra(extra);
-                let header = consume_marker_header(&mut queues.marker_headers, ctrl_id);
-                active_field = Some(start_active_field(
-                    ctrl_id,
-                    header,
+                active_field = Some(start_field_from_marker(
+                    extra,
+                    &mut queues,
                     visible_utf16,
                     projection_images,
                     field_hints.as_deref_mut(),
@@ -717,22 +887,14 @@ fn project_paragraph_with_images_structural(
         finish_active_field(field, hwp_para, visible_utf16, &mut runs, projection_images);
     }
 
-    for bookmark_name in queues.point_bookmark_names {
-        let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
-            &hwp_para.char_shape_runs,
-            visible_utf16,
-        ) as usize);
-        runs.push(Run::control(
-            Control::Bookmark { name: bookmark_name, bookmark_type: BookmarkType::Point },
-            char_shape_id,
-        ));
-    }
-
-    for control in queues.object_controls {
-        if let Some(run) = project_control_run(control, projection_images, image_context) {
-            runs.push(run);
-        }
-    }
+    drain_unconsumed_paragraph_queues(
+        queues,
+        hwp_para,
+        visible_utf16,
+        &mut runs,
+        projection_images,
+        image_context,
+    );
 
     if runs.is_empty() {
         runs.push(Run::text("", CharShapeIndex::new(0)));
@@ -747,6 +909,186 @@ fn project_paragraph_with_images_structural(
     ProjectedParagraph { paragraph }
 }
 
+/// Cap on accumulated auto-field `display_text` (the cached value chars
+/// between `FieldBegin` and `FieldEnd`).
+///
+/// Unlike the `%smr`/`%dte` BSTR *command* (capped at
+/// `MAX_SUMMERY_COMMAND_UNITS` etc. at the decoder boundary), this body
+/// text comes from `ParaText` and bypasses those caps. A malicious file
+/// with a pathologically long FieldBegin..FieldEnd span would otherwise
+/// grow `display_text` unbounded. A legitimate cached render
+/// (author/date/path/title) is far under this; truncation only bites
+/// adversarial input. (Architect review P1.)
+const MAX_FIELD_DISPLAY_TEXT_UNITS: usize = 4096;
+
+/// Appends `text` to an auto-field `display_text`, stopping once the
+/// accumulated UTF-16 length would exceed [`MAX_FIELD_DISPLAY_TEXT_UNITS`].
+fn push_field_display_text(display_text: &mut String, text: &str) {
+    let current = display_text.encode_utf16().count();
+    if current >= MAX_FIELD_DISPLAY_TEXT_UNITS {
+        return;
+    }
+    let remaining = MAX_FIELD_DISPLAY_TEXT_UNITS - current;
+    if text.encode_utf16().count() <= remaining {
+        display_text.push_str(text);
+        return;
+    }
+    // Push char-by-char up to the cap (keeps UTF-16 boundaries intact).
+    for ch in text.chars() {
+        if display_text.encode_utf16().count() + ch.len_utf16() > MAX_FIELD_DISPLAY_TEXT_UNITS {
+            break;
+        }
+        display_text.push(ch);
+    }
+}
+
+/// Projects a visible `TextSegment::Text` chunk (task #91 — extracted
+/// from `project_paragraph_with_images_structural`).
+///
+/// Inside an active field the text feeds the field's `display_text`
+/// (Hyperlink / CrossRef) or is silently skipped — BookmarkSpan /
+/// PlainTextFallback / MemoAnchor / ClickHere / auto-field variants
+/// re-emit their anchor text in `finish_active_field` via
+/// `project_text_segment(start, end)`. Outside a field the chunk
+/// projects to styled runs directly. The visible cursor advances by
+/// the chunk's UTF-16 length either way.
+fn project_visible_text_segment(
+    text: &str,
+    hwp_para: &Hwp5Paragraph,
+    active_field: &mut Option<ActiveField>,
+    runs: &mut Vec<Run>,
+    visible_utf16: &mut u32,
+) {
+    let len = text.encode_utf16().count() as u32;
+    if let Some(active) = active_field.as_mut() {
+        match active {
+            ActiveField::Hyperlink { display_text, .. }
+            | ActiveField::CrossRef { display_text, .. } => display_text.push_str(text),
+            // Wave 12n cached-value carry (#120/#136): SUMMERY/%dte/%pat
+            // accumulate the FieldBegin..FieldEnd body as the field's cached
+            // resolved value (capped — see `push_field_display_text`).
+            ActiveField::SummeryField { display_text, .. }
+            | ActiveField::DateCodeField { display_text, .. }
+            | ActiveField::PathField { display_text, .. } => {
+                push_field_display_text(display_text, text);
+            }
+            ActiveField::BookmarkSpan { .. }
+            | ActiveField::PlainTextFallback { .. }
+            | ActiveField::MemoAnchor { .. }
+            | ActiveField::ClickHere { .. } => {}
+        }
+    } else {
+        runs.extend(project_text_segment(
+            &hwp_para.text,
+            &hwp_para.char_shape_runs,
+            *visible_utf16,
+            *visible_utf16 + len,
+        ));
+    }
+    *visible_utf16 += len;
+}
+
+/// Opens the `ActiveField` for an inline `FieldBegin` marker (task #91
+/// — extracted from `project_paragraph_with_images_structural`).
+///
+/// The marker's `extra[0..4]` ctrl_id picks which per-family queue
+/// supplies the typed payload (memo / clickhere / summery / datecode /
+/// pathfield / crossref); families pop only their own queue so
+/// unrelated controls stay queued for later markers.
+fn start_field_from_marker(
+    extra: &[u8; 14],
+    queues: &mut ParagraphProjectionQueues<'_>,
+    visible_utf16: u32,
+    projection_images: &mut ProjectionImageState<'_>,
+    field_hints: Option<&mut SectionProjectionHints>,
+) -> ActiveField {
+    let ctrl_id = ctrl_id_from_inline_extra(extra);
+    let header = consume_marker_header(&mut queues.marker_headers, ctrl_id);
+    let memo = if ctrl_id == CTRL_ID_MEMO_INLINE { queues.memo_controls.pop_front() } else { None };
+    let clickhere =
+        if ctrl_id == CTRL_ID_CLICK_HERE { queues.clickhere_controls.pop_front() } else { None };
+    let summery =
+        if ctrl_id == CTRL_ID_FIELD_SUMMERY { queues.summery_fields.pop_front() } else { None };
+    let datecode =
+        if ctrl_id == CTRL_ID_FIELD_DATE_CODE { queues.datecode_fields.pop_front() } else { None };
+    let pathfield =
+        if ctrl_id == CTRL_ID_FIELD_PATH { queues.pathfield_controls.pop_front() } else { None };
+    let crossref =
+        if ctrl_id == CTRL_ID_FIELD_CROSSREF { queues.crossref_controls.pop_front() } else { None };
+    start_active_field(
+        ctrl_id,
+        header,
+        memo,
+        clickhere,
+        summery,
+        datecode,
+        pathfield,
+        crossref,
+        visible_utf16,
+        projection_images,
+        field_hints,
+    )
+}
+
+/// Drains queue entries that no inline marker consumed (task #91 —
+/// extracted from `project_paragraph_with_images_structural`).
+///
+/// Point bookmarks and object controls emit at the end of the
+/// paragraph in document order. Memo placeholders with body content
+/// emit with a `ProjectionFallback` warning — properly anchored memos
+/// always consume their queue entry, so a leftover means the inline
+/// `FieldBegin %unk MEMO` anchor was missing; emitting preserves the
+/// body rather than silently dropping it.
+fn drain_unconsumed_paragraph_queues(
+    queues: ParagraphProjectionQueues<'_>,
+    hwp_para: &Hwp5Paragraph,
+    visible_utf16: u32,
+    runs: &mut Vec<Run>,
+    projection_images: &mut ProjectionImageState<'_>,
+    image_context: ImageProjectionContext,
+) {
+    for bookmark_name in queues.point_bookmark_names {
+        let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
+            &hwp_para.char_shape_runs,
+            visible_utf16,
+        ) as usize);
+        runs.push(Run::control(
+            Control::Bookmark { name: bookmark_name, bookmark_type: BookmarkType::Point },
+            char_shape_id,
+        ));
+    }
+
+    for control in queues.object_controls {
+        if let Some(run) = project_control_run(
+            control,
+            projection_images,
+            image_context,
+            char_shape_at(hwp_para, visible_utf16),
+        ) {
+            runs.push(run);
+        }
+    }
+
+    for memo in queues.memo_controls {
+        if !memo.paragraphs.is_empty() {
+            projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                subject: "field.memo",
+                reason: format!(
+                    "memo_id={} had no matching FieldBegin anchor; \
+                     emitting Run at end of paragraph",
+                    memo.command.memo_id
+                ),
+            });
+            runs.push(project_memo_run(
+                &memo,
+                projection_images,
+                char_shape_at(hwp_para, visible_utf16),
+                Vec::new(),
+            ));
+        }
+    }
+}
+
 fn append_visible_unit(
     hwp_para: &Hwp5Paragraph,
     runs: &mut Vec<Run>,
@@ -758,7 +1100,16 @@ fn append_visible_unit(
         match active {
             ActiveField::Hyperlink { display_text, .. }
             | ActiveField::CrossRef { display_text, .. } => display_text.push(ch),
-            ActiveField::BookmarkSpan { .. } | ActiveField::PlainTextFallback { .. } => {}
+            ActiveField::SummeryField { display_text, .. }
+            | ActiveField::DateCodeField { display_text, .. }
+            | ActiveField::PathField { display_text, .. } => {
+                let mut buf = [0u8; 4];
+                push_field_display_text(display_text, ch.encode_utf8(&mut buf));
+            }
+            ActiveField::BookmarkSpan { .. }
+            | ActiveField::PlainTextFallback { .. }
+            | ActiveField::MemoAnchor { .. }
+            | ActiveField::ClickHere { .. } => {}
         }
     } else {
         runs.extend(project_text_segment(
@@ -780,7 +1131,13 @@ fn paragraph_needs_structural_projection(hwp_para: &Hwp5Paragraph) -> bool {
             matches!(
                 control,
                 Hwp5Control::Unknown { ctrl_id: CTRL_ID_PAGE_NUMBER | CTRL_ID_BOOKMARK_POINT, .. }
-            )
+            ) || matches!(control, Hwp5Control::Memo(_))
+                || matches!(control, Hwp5Control::ClickHere(_))
+                || matches!(control, Hwp5Control::SummeryField(_))
+                || matches!(control, Hwp5Control::DateCodeField(_))
+                || matches!(control, Hwp5Control::PathField(_))
+                || matches!(control, Hwp5Control::CrossRef(_))
+                || matches!(control, Hwp5Control::InlinePageNumber(_))
         })
 }
 
@@ -791,21 +1148,72 @@ fn build_paragraph_projection_queues<'a>(
 ) -> ParagraphProjectionQueues<'a> {
     let mut marker_headers = VecDeque::new();
     let mut object_controls = VecDeque::new();
+    let mut memo_controls = VecDeque::new();
+    let mut clickhere_controls = VecDeque::new();
+    let mut summery_fields = VecDeque::new();
+    let mut datecode_fields = VecDeque::new();
+    let mut pathfield_controls = VecDeque::new();
+    let mut crossref_controls = VecDeque::new();
     let mut point_bookmark_names = VecDeque::new();
     let mut field_hints = field_hints;
 
     for control in &hwp_para.controls {
+        // Memos consume a dedicated queue so the `FieldBegin %unk MEMO`
+        // inline segment can pull the matching placeholder without
+        // entangling object/marker dispatch.
+        if let Hwp5Control::Memo(memo) = control {
+            memo_controls.push_back(memo.clone());
+            continue;
+        }
+        // ClickHere press-fields (Wave 12l) — same dedicated-queue
+        // pattern as memos. Hint/help/name live in the parsed control;
+        // the inline `FieldBegin %clk` marker pulls the next entry off
+        // this queue in `start_active_field`.
+        if let Hwp5Control::ClickHere(clickhere) = control {
+            clickhere_controls.push_back(clickhere.clone());
+            continue;
+        }
+        // SUMMERY auto-fields (Wave 12n) — same pattern. The Command
+        // token lives in the parsed control; `FieldBegin %smr` pulls the
+        // next entry off this queue.
+        if let Hwp5Control::SummeryField(summery) = control {
+            summery_fields.push_back(summery.clone());
+            continue;
+        }
+        // `%dte` date/time format-code fields (Wave 12n) — same pattern.
+        if let Hwp5Control::DateCodeField(date_code) = control {
+            datecode_fields.push_back(date_code.clone());
+            continue;
+        }
+        // `%pat` path fields (Wave 12n) — same pattern.
+        if let Hwp5Control::PathField(pat) = control {
+            pathfield_controls.push_back(pat.clone());
+            continue;
+        }
+        // `%xrf` cross-reference fields (Wave 12m Phase 2 Step 4) — same
+        // dedicated-queue pattern. The structured Command (RefType /
+        // ContentType / hyperlink / target) lives in the parsed control;
+        // `FieldBegin %xrf` pulls the next entry off this queue.
+        if let Hwp5Control::CrossRef(xrf) = control {
+            crossref_controls.push_back(xrf.clone());
+            continue;
+        }
+        // `atno` inline page-number controls (Wave 12n) intentionally
+        // fall through to `object_controls`. Codex 4차 review: atno's
+        // ParaText marker is `0x12 ControlRef`, not `0x03 FieldBegin`,
+        // and atno has no `FieldEnd`. The TextSegment::ControlRef arm
+        // in `project_paragraph_with_images_structural` pops the next
+        // `object_controls` entry and routes typed
+        // `Hwp5Control::InlinePageNumber` through `project_control_run`.
         let Some(unknown) = unknown_control_header(control) else {
             object_controls.push_back(control);
             continue;
         };
 
         match unknown.ctrl_id {
-            CTRL_ID_SECTION_DEF
-            | CTRL_ID_COLUMN_DEF
-            | CTRL_ID_BOOKMARK_SPAN
-            | CTRL_ID_HYPERLINK
-            | CTRL_ID_CROSSREF => marker_headers.push_back(unknown),
+            CTRL_ID_SECD | CTRL_ID_COLUMN_DEF | CTRL_ID_BOOKMARK_SPAN | CTRL_ID_HYPERLINK => {
+                marker_headers.push_back(unknown)
+            }
             // Page numbers are resolved at section level by
             // `find_section_page_number` (which also reaches `pgnp` controls
             // inside table cells). Skip here so it is not mistaken for a
@@ -828,17 +1236,55 @@ fn build_paragraph_projection_queues<'a>(
         }
     }
 
-    ParagraphProjectionQueues { marker_headers, object_controls, point_bookmark_names }
+    ParagraphProjectionQueues {
+        marker_headers,
+        object_controls,
+        memo_controls,
+        clickhere_controls,
+        summery_fields,
+        datecode_fields,
+        pathfield_controls,
+        crossref_controls,
+        point_bookmark_names,
+    }
 }
 
+// Wave 12n added 3 more optional carriers (summery/datecode/pathfield) on
+// top of the existing memo/clickhere set. Refactoring into a struct here
+// would add boilerplate without solving anything — each carrier is
+// independently `None` for every other CTRL_ID. Tracked as follow-up
+// backlog refactor #90 (handle_top_level_record helper extraction).
+#[allow(clippy::too_many_arguments)]
 fn start_active_field(
     ctrl_id: u32,
     header: Option<UnknownControlHeader<'_>>,
+    memo: Option<Hwp5MemoControl>,
+    clickhere: Option<crate::schema::section::Hwp5ClickHereControl>,
+    summery: Option<crate::schema::section::Hwp5SummeryControl>,
+    datecode: Option<crate::schema::section::Hwp5DateCodeControl>,
+    pathfield: Option<crate::schema::section::Hwp5PathFieldControl>,
+    crossref: Option<crate::schema::section::Hwp5CrossRefControl>,
     start_utf16: u32,
     projection_images: &mut ProjectionImageState<'_>,
     field_hints: Option<&mut SectionProjectionHints>,
 ) -> ActiveField {
     match ctrl_id {
+        CTRL_ID_MEMO_INLINE => {
+            // Anchor body is preserved via the BookmarkSpan/PlainTextFallback
+            // pattern; the memo Run is emitted in `finish_active_field` after
+            // the anchor text.
+            if let Some(memo) = memo {
+                ActiveField::MemoAnchor { start_utf16, memo }
+            } else {
+                projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "field.memo",
+                    reason: "memo placeholder unavailable for inline anchor; \
+                             preserving only visible text"
+                        .to_string(),
+                });
+                ActiveField::PlainTextFallback { start_utf16 }
+            }
+        }
         CTRL_ID_HYPERLINK => {
             if let Some(url) = header.and_then(|header| parse_hyperlink_url(header.header_data)) {
                 ActiveField::Hyperlink { url, start_utf16, display_text: String::new() }
@@ -862,15 +1308,93 @@ fn start_active_field(
                 ActiveField::PlainTextFallback { start_utf16 }
             }
         }
-        CTRL_ID_CROSSREF => {
-            if let Some(target_name) =
-                header.and_then(|header| parse_crossref_target_name(header.header_data))
-            {
-                ActiveField::CrossRef { target_name, start_utf16, display_text: String::new() }
+        CTRL_ID_FIELD_CROSSREF => {
+            // Wave 12m Phase 2 Step 4: %xrf now flows through the typed
+            // `Hwp5Control::CrossRef` schema, not `Unknown`. The structured
+            // Command (target / N1..N4) lives in `crossref`; legacy
+            // `header` (UnknownControlHeader) never arrives anymore for
+            // %xrf and is ignored here.
+            let _ = header;
+            if let Some(control) = crossref {
+                ActiveField::CrossRef { control, start_utf16, display_text: String::new() }
             } else {
                 projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
                     subject: "field.crossref",
-                    reason: "cross-reference target unavailable; preserving only visible text"
+                    reason: "cross-reference payload unavailable for inline anchor; \
+                             preserving only visible text"
+                        .to_string(),
+                });
+                ActiveField::PlainTextFallback { start_utf16 }
+            }
+        }
+        CTRL_ID_CLICK_HERE => {
+            if let Some(clickhere) = clickhere {
+                // hint/help/name pulled from the decoded
+                // `Hwp5ClickHereControl` (which already merged the
+                // trailing 0x57 sub-record at the decoder boundary).
+                ActiveField::ClickHere {
+                    start_utf16,
+                    hint_text: clickhere.hint_text,
+                    help_text: clickhere.help_text,
+                    name: clickhere.name,
+                }
+            } else {
+                projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "field.clickhere",
+                    reason: "click-here press-field metadata unavailable; \
+                             preserving only visible text"
+                        .to_string(),
+                });
+                ActiveField::PlainTextFallback { start_utf16 }
+            }
+        }
+        CTRL_ID_FIELD_SUMMERY => {
+            if let Some(summery) = summery {
+                ActiveField::SummeryField {
+                    start_utf16,
+                    command_token: summery.command_token,
+                    display_text: String::new(),
+                }
+            } else {
+                projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "field.summery",
+                    reason: "summery auto-field metadata unavailable; \
+                             preserving only visible text"
+                        .to_string(),
+                });
+                ActiveField::PlainTextFallback { start_utf16 }
+            }
+        }
+        CTRL_ID_FIELD_DATE_CODE => {
+            if let Some(date_code) = datecode {
+                ActiveField::DateCodeField {
+                    start_utf16,
+                    raw_command: date_code.raw_command,
+                    raw_trailer: date_code.raw_trailer,
+                    display_text: String::new(),
+                }
+            } else {
+                projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "field.date_code",
+                    reason: "date-code field metadata unavailable; \
+                             preserving only visible text"
+                        .to_string(),
+                });
+                ActiveField::PlainTextFallback { start_utf16 }
+            }
+        }
+        CTRL_ID_FIELD_PATH => {
+            if let Some(pat) = pathfield {
+                ActiveField::PathField {
+                    start_utf16,
+                    raw_command: pat.raw_command,
+                    display_text: String::new(),
+                }
+            } else {
+                projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "field.path",
+                    reason: "path field metadata unavailable; \
+                             preserving only visible text"
                         .to_string(),
                 });
                 ActiveField::PlainTextFallback { start_utf16 }
@@ -885,7 +1409,7 @@ fn finish_active_field(
     hwp_para: &Hwp5Paragraph,
     end_utf16: u32,
     runs: &mut Vec<Run>,
-    _projection_images: &mut ProjectionImageState<'_>,
+    projection_images: &mut ProjectionImageState<'_>,
 ) {
     match field {
         ActiveField::Hyperlink { url, start_utf16, display_text } => {
@@ -918,12 +1442,19 @@ fn finish_active_field(
                 char_shape_id,
             ));
         }
-        ActiveField::CrossRef { target_name, start_utf16, display_text } => {
+        ActiveField::CrossRef { control, start_utf16, display_text } => {
+            // Wave 12m Phase 2 Step 4: emit native `Control::CrossRef`.
+            // Boundary functions decode the wire codes into typed
+            // `RefType` / `RefContentType` / `RefTarget`. The HWPX
+            // encoder embeds `display_text` between fieldBegin/fieldEnd.
             let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
                 &hwp_para.char_shape_runs,
                 start_utf16,
             ) as usize);
             if display_text.is_empty() {
+                // No visible body between FieldBegin/FieldEnd — preserve
+                // any latent body text so users at least see the source
+                // span. This mirrors the pre-Step-4 fallback.
                 runs.extend(project_text_segment(
                     &hwp_para.text,
                     &hwp_para.char_shape_runs,
@@ -932,17 +1463,13 @@ fn finish_active_field(
                 ));
                 return;
             }
+            let ref_type = decode_hwp5_crossref_ref_type(control.ref_type_code);
+            let content_type =
+                decode_hwp5_crossref_content_type(control.ref_type_code, control.content_type_code);
+            let target = decode_hwp5_crossref_target(&control.target_raw, control.ref_type_code);
+            let as_hyperlink = control.hyperlink_code != 0;
             runs.push(Run::control(
-                Control::Unknown {
-                    tag: HWP5_CROSSREF_UNKNOWN_TAG.to_string(),
-                    data: Some(encode_hwp5_crossref_unknown_data(
-                        &target_name,
-                        &display_text,
-                        RefType::Bookmark,
-                        RefContentType::Page,
-                        false,
-                    )),
-                },
+                Control::CrossRef { target, ref_type, content_type, as_hyperlink, display_text },
                 char_shape_id,
             ));
         }
@@ -954,7 +1481,183 @@ fn finish_active_field(
                 end_utf16,
             ));
         }
+        ActiveField::MemoAnchor { start_utf16, memo } => {
+            // Capture the FieldBegin..FieldEnd span as `anchor_runs` *inside*
+            // `Control::Memo`. The HWPX encoder then emits them between
+            // `<hp:fieldBegin>` and `<hp:fieldEnd>` in the same `<hp:run>` —
+            // the layout 한컴 uses for `[메모 시작]anchor[메모 끝]`. Emitting
+            // anchor text as a separate Run *outside* the memo, as we did in
+            // Wave 12e/12f-pre-fix, made 한컴 mis-render the end marker as
+            // generic `[필드 끝]` because the field span was effectively
+            // empty.
+            let anchor_runs = project_text_segment(
+                &hwp_para.text,
+                &hwp_para.char_shape_runs,
+                start_utf16,
+                end_utf16,
+            );
+            let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
+                &hwp_para.char_shape_runs,
+                start_utf16,
+            ) as usize);
+            runs.push(project_memo_run(&memo, projection_images, char_shape_id, anchor_runs));
+        }
+        ActiveField::ClickHere { start_utf16, hint_text, help_text, name } => {
+            // Emit a single Control::Field Run at the span start. The
+            // HWPX encoder builds `<fieldBegin> + visible hint + <fieldEnd>`
+            // from this control, so we must *not* additionally project
+            // the span text (HWP5 wire span is empty between
+            // FIELD_BEGIN/FIELD_END; double-emitting would duplicate
+            // hint as both placeholder and run text in HWPX).
+            let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
+                &hwp_para.char_shape_runs,
+                start_utf16,
+            ) as usize);
+            let _ = end_utf16; // span text intentionally not consumed
+            runs.push(Run::control(
+                Control::Field {
+                    field_type: hwpforge_foundation::FieldType::ClickHere,
+                    hint_text,
+                    help_text,
+                    name,
+                    // ClickHere's visible body is `hint_text`, not a cached
+                    // render — leave display_text empty (span not accumulated).
+                    display_text: String::new(),
+                },
+                char_shape_id,
+            ));
+        }
+        ActiveField::SummeryField { start_utf16, command_token, display_text } => {
+            // Emit a single Run carrying either typed `Control::Field`
+            // (for known `$X` tokens) or `Control::UnknownSummery` for
+            // future-compat raw carry. `display_text` is the cached
+            // resolved value accumulated from the FieldBegin..FieldEnd
+            // span — 한컴 native HWPX carries it in the body and an empty
+            // body triggers the "낮은 보안 수준 복구" warning (#120/#136).
+            let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
+                &hwp_para.char_shape_runs,
+                start_utf16,
+            ) as usize);
+            let _ = end_utf16;
+            let control = match hwpforge_foundation::FieldType::from_summery_token(&command_token) {
+                Some(field_type) => Control::Field {
+                    field_type,
+                    hint_text: None,
+                    help_text: None,
+                    name: None,
+                    display_text,
+                },
+                None => Control::UnknownSummery { token: command_token, display_text },
+            };
+            runs.push(Run::control(control, char_shape_id));
+        }
+        ActiveField::DateCodeField { start_utf16, raw_command, raw_trailer, display_text } => {
+            // Emit Control::DateCodeField with `is_time_mode` derived
+            // from the `T` prefix convention. The 8-byte trailer is
+            // preserved verbatim for future round-trip fidelity.
+            // `display_text` is the cached resolved date/time (#120/#136).
+            let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
+                &hwp_para.char_shape_runs,
+                start_utf16,
+            ) as usize);
+            let _ = end_utf16;
+            let is_time_mode = raw_command.starts_with('T');
+            runs.push(Run::control(
+                Control::DateCodeField { raw_command, is_time_mode, raw_trailer, display_text },
+                char_shape_id,
+            ));
+        }
+        ActiveField::PathField { start_utf16, raw_command, display_text } => {
+            // Map raw `$P`/`$F`/`$P$F` to a typed PathFieldCommand
+            // (Unknown for forward compatibility). Wave 12n. `display_text`
+            // is the cached resolved path accumulated from the span (#120).
+            let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
+                &hwp_para.char_shape_runs,
+                start_utf16,
+            ) as usize);
+            let _ = end_utf16;
+            use hwpforge_core::control::PathFieldCommand;
+            let command = PathFieldCommand::from_wire(&raw_command);
+            runs.push(Run::control(Control::PathField { command, display_text }, char_shape_id));
+        }
     }
+}
+
+/// Projects a HWP5 memo placeholder into a Core `Run` carrying
+/// `Control::Memo`. Body paragraphs come from the joined
+/// `HWPTAG_MEMO_LIST` cluster (filled by the decoder during `finish`);
+/// they are projected with the standard `Flow` context.
+fn project_memo_run(
+    memo: &Hwp5MemoControl,
+    projection_images: &mut ProjectionImageState<'_>,
+    char_shape_id: CharShapeIndex,
+    anchor_runs: Vec<Run>,
+) -> Run {
+    let paragraphs = project_nested_paragraphs(
+        &memo.paragraphs,
+        projection_images,
+        ImageProjectionContext::Flow,
+    );
+    // Map the parsed wire command onto the format-agnostic
+    // `MemoMetadata`. `id` and `create_datetime` are left at their default
+    // (empty) so the HWPX encoder derives `"memo{number}"` and a current-UTC
+    // timestamp at emit time — wire never carried either field. We go
+    // through `Default::default()` because `MemoMetadata` is
+    // `#[non_exhaustive]` and can't be constructed positionally outside
+    // `hwpforge-core`.
+    let mut metadata = hwpforge_core::MemoMetadata::default();
+    metadata.shape_id_ref = memo.command.shape_id;
+    metadata.number = memo.command.memo_id;
+    metadata.author = memo.command.author.clone();
+    metadata.command = memo.command.raw.clone();
+    Run::control(Control::Memo { content: paragraphs, anchor_runs, metadata }, char_shape_id)
+}
+
+/// Projects a HWP5 dutmal (덧말) control into a Core `Run` carrying
+/// `Control::Dutmal`. Position, size ratio, and alignment map from the
+/// wire's raw words (offsets pinned by the task #73 variants fixture —
+/// see `schema::section::Hwp5DutmalControl` for the tail table); the
+/// `option` word stays a verbatim mirror. Unknown align codes fall back
+/// to CENTER with a `ProjectionFallback` warning (warning-first — the
+/// wire's CENTER is `3`, so an unexpected `0` is surfaced rather than
+/// silently absorbed). `styleIDRef` remains un-promoted (unattributed
+/// reserved word).
+fn project_dutmal_run(
+    dutmal: &Hwp5DutmalControl,
+    projection_images: &mut ProjectionImageState<'_>,
+) -> Run {
+    let position = match dutmal.pos_type_raw {
+        0 => hwpforge_core::control::DutmalPosition::Top,
+        1 => hwpforge_core::control::DutmalPosition::Bottom,
+        2 => hwpforge_core::control::DutmalPosition::Right,
+        3 => hwpforge_core::control::DutmalPosition::Left,
+        _ => hwpforge_core::control::DutmalPosition::Top,
+    };
+    let align = match dutmal.align_raw {
+        1 => hwpforge_core::control::DutmalAlign::Left,
+        2 => hwpforge_core::control::DutmalAlign::Right,
+        3 => hwpforge_core::control::DutmalAlign::Center,
+        other => {
+            projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                subject: "dutmal.align",
+                reason: format!("unknown dutmal align wire code {other}; defaulting to CENTER"),
+            });
+            hwpforge_core::control::DutmalAlign::Center
+        }
+    };
+    let mut metadata = hwpforge_core::DutmalMetadata::default();
+    metadata.option = dutmal.option_raw;
+    Run::control(
+        Control::Dutmal {
+            main_text: dutmal.main_text.clone(),
+            sub_text: dutmal.sub_text.clone(),
+            position,
+            sz_ratio: dutmal.sz_ratio,
+            align,
+            metadata,
+        },
+        CharShapeIndex::new(0),
+    )
 }
 
 /// Gathers each `Hwp5Control::Header` subtree separately, returning a
@@ -1185,10 +1888,61 @@ fn parse_hyperlink_url(header_data: &[u8]) -> Option<String> {
     Some(raw_url.replace("\\:", ":"))
 }
 
-fn parse_crossref_target_name(header_data: &[u8]) -> Option<String> {
-    let command = parse_utf16_command_string(header_data)?;
-    let target = command.strip_prefix('?').unwrap_or(&command).split(';').next()?;
-    (!target.is_empty()).then(|| target.to_string())
+/// Wave 12m Phase 2 Step 4 boundary: HWP5 `%xrf` N1 (RefType) wire code
+/// → typed [`RefType`]. Unknown codes are preserved as
+/// `RefType::Unknown(u8)`. Keeps the projection layer free from raw
+/// `u8`-vs-enum knowledge.
+fn decode_hwp5_crossref_ref_type(code: u8) -> RefType {
+    match code {
+        HWP5_CROSSREF_REF_TYPE_TABLE => RefType::Table,
+        HWP5_CROSSREF_REF_TYPE_FIGURE => RefType::Figure,
+        HWP5_CROSSREF_REF_TYPE_EQUATION => RefType::Equation,
+        HWP5_CROSSREF_REF_TYPE_FOOTNOTE => RefType::Footnote,
+        HWP5_CROSSREF_REF_TYPE_ENDNOTE => RefType::Endnote,
+        HWP5_CROSSREF_REF_TYPE_OUTLINE => RefType::Outline,
+        HWP5_CROSSREF_REF_TYPE_BOOKMARK => RefType::Bookmark,
+        other => RefType::Unknown(other),
+    }
+}
+
+/// Wave 12p pre-fix boundary: HWP5 `%xrf` N2 (ContentType) is
+/// RefType-relative. 한컴 native wire 분석 결과:
+///
+/// | RefType        | N2=0 | N2=1   | N2=2          | N2=3      |
+/// |----------------|------|--------|---------------|-----------|
+/// | Bookmark       | Page | Number | BookmarkName  | UpDownPos |
+/// | 그 외 (T/F/Eq/…) | Page | Number | Contents      | UpDownPos |
+///
+/// 책갈피 N2=1 은 한컴에서 "책갈피 본문/번호" 의미 (OBJECT_TYPE_NUMBER
+/// emit), N2=2 는 "책갈피 이름" (OBJECT_TYPE_CONTENTS emit). spec 외
+/// 의미이지만 native wire 와 일치. Wave 12m fixup 의 (Bookmark, 2) →
+/// Contents 통일은 잘못이었고 본 fix 에서 보정.
+fn decode_hwp5_crossref_content_type(ref_type_code: u8, code: u8) -> RefContentType {
+    match (ref_type_code, code) {
+        (_, 0) => RefContentType::Page,
+        (HWP5_CROSSREF_REF_TYPE_BOOKMARK, 1) => RefContentType::Number,
+        (HWP5_CROSSREF_REF_TYPE_BOOKMARK, 2) => RefContentType::BookmarkName,
+        (_, 1) => RefContentType::Number,
+        (_, 2) => RefContentType::Contents,
+        (_, 3) => RefContentType::UpDownPos,
+        (_, other) => RefContentType::Unknown(other),
+    }
+}
+
+/// Wave 12m Phase 2 Step 4 boundary: HWP5 `%xrf` Command's target slot
+/// → typed [`RefTarget`]. Bookmark refs (`ref_type_code == 6`) carry a
+/// raw bookmark NAME; other refs carry a `#<u64>` SystemId. Anything
+/// else lands in `RefTarget::Raw` (no fabrication).
+fn decode_hwp5_crossref_target(target_raw: &str, ref_type_code: u8) -> RefTarget {
+    if ref_type_code == HWP5_CROSSREF_REF_TYPE_BOOKMARK {
+        return RefTarget::Name(target_raw.to_string());
+    }
+    if let Some(rest) = target_raw.strip_prefix('#') {
+        if let Ok(id) = rest.parse::<u64>() {
+            return RefTarget::SystemId(id);
+        }
+    }
+    RefTarget::Raw(target_raw.to_string())
 }
 
 /// Resolves a `pgnp` (page-number) control header into a [`PageNumber`],
@@ -1256,15 +2010,30 @@ fn parse_page_number_control(header_data: &[u8]) -> Option<PageNumber> {
         10 => PageNumberPosition::InsideBottom,
         _ => PageNumberPosition::BottomCenter,
     };
+    // Number shape (번호 모양) lives in property bits 0-7 = header_data[4]
+    // (the position above is property bits 8-11 = header_data[5]). The HWP5
+    // `HWPNumberShape` codes map 1:1 to `NumberFormatType` (0=Digit,
+    // 1=CircledDigit, 2=RomanCapital, 3=RomanSmall, …), verified against the
+    // native `sample-pagenu-roman` fixture (ROMAN_CAPITAL = shape 2). Before
+    // this the format byte was never read and every page number emitted
+    // `Digit`, silently dropping Roman/Hangul/Latin page numbering (P0-3).
+    let number_format = header_data
+        .get(4)
+        .and_then(|&shape| NumberFormatType::try_from(shape).ok())
+        .unwrap_or(NumberFormatType::Digit);
+    // The trailing side-decoration char is the last printable byte. Filter to
+    // `is_ascii_graphic` (not `is_ascii`): the property word's number-shape byte
+    // [4] and position byte [5] are small non-graphic values (e.g. 9 = InsideTop)
+    // that would otherwise be mis-read as a decoration glyph like `\t`.
     let decoration = header_data
         .iter()
         .rev()
         .find(|byte| **byte != 0)
         .copied()
-        .filter(|byte| byte.is_ascii())
+        .filter(|byte| byte.is_ascii_graphic())
         .map(|byte| char::from(byte).to_string())
         .unwrap_or_else(|| "-".to_string());
-    Some(PageNumber::with_decoration(position, NumberFormatType::Digit, decoration))
+    Some(PageNumber::with_decoration(position, number_format, decoration))
 }
 
 fn char_shape_id_for_visible_position(runs: &[Hwp5CharShapeRun], position: u32) -> u32 {
@@ -1274,26 +2043,24 @@ fn char_shape_id_for_visible_position(runs: &[Hwp5CharShapeRun], position: u32) 
     char_shape_id_at_position(runs, position.saturating_sub(1))
 }
 
-fn encode_hwp5_crossref_unknown_data(
-    target_name: &str,
-    display_text: &str,
-    ref_type: RefType,
-    content_type: RefContentType,
-    as_hyperlink: bool,
-) -> String {
-    format!("{target_name}\n{display_text}\n{ref_type}\n{content_type}\n{as_hyperlink}",)
-}
-
 // ---------------------------------------------------------------------------
 // Text splitting
 // ---------------------------------------------------------------------------
 
+/// Dispatches a queued object control into its Core `Run`.
+///
+/// `char_shape_id` is the char shape at the control's visible anchor
+/// position (task #76) — applied uniformly on the dispatch result so
+/// the leaf `project_*_run` builders stay position-agnostic. Before
+/// #76 every control run was hardcoded to char shape 0, which lost
+/// the surrounding text style on paragraphs using non-default shapes.
 fn project_control_run(
     control: &Hwp5Control,
     projection_images: &mut ProjectionImageState<'_>,
     image_context: ImageProjectionContext,
+    char_shape_id: CharShapeIndex,
 ) -> Option<Run> {
-    match control {
+    let run = match control {
         Hwp5Control::Table(table) => Some(Run::table(
             build_table_with_images(table, projection_images),
             CharShapeIndex::new(0),
@@ -1304,11 +2071,151 @@ fn project_control_run(
         Hwp5Control::Line(line) => Some(project_line_run(line)),
         Hwp5Control::Rect(rect) => project_rect_run(rect),
         Hwp5Control::Polygon(polygon) => Some(project_polygon_run(polygon)),
+        Hwp5Control::Ellipse(ellipse) => project_ellipse_run(ellipse),
+        Hwp5Control::Arc(arc) => project_arc_run(arc),
+        Hwp5Control::Curve(curve) => project_curve_run(curve),
+        Hwp5Control::TextArt(text_art) => {
+            Some(project_text_art_run(text_art, &mut projection_images.warnings))
+        }
+        Hwp5Control::ConnectLine(connect_line) => project_connectline_run(connect_line),
+        Hwp5Control::Equation(equation) => Some(project_equation_run(equation)),
         Hwp5Control::TextBox(textbox) => Some(project_textbox_run(textbox, projection_images)),
+        Hwp5Control::Group(group) => project_group_run(group, projection_images),
         Hwp5Control::Footnote(subtree) => Some(project_footnote_run(subtree, projection_images)),
         Hwp5Control::Endnote(subtree) => Some(project_endnote_run(subtree, projection_images)),
-        Hwp5Control::Header(_) | Hwp5Control::Footer(_) | Hwp5Control::Unknown { .. } => None,
+        // Memo emission flows through the `FieldBegin`/`MemoAnchor` machinery in
+        // `project_paragraph_with_images_structural`, not through this dispatch.
+        // If a Memo control ever reaches here (no matching FieldBegin in text
+        // segments), prefer dropping over silently double-emitting.
+        Hwp5Control::Memo(_)
+        | Hwp5Control::Header(_)
+        | Hwp5Control::Footer(_)
+        | Hwp5Control::Unknown { .. } => None,
+        Hwp5Control::Dutmal(dutmal) => Some(project_dutmal_run(dutmal, projection_images)),
+        Hwp5Control::Compose(compose) => Some(project_compose_run(compose)),
+        Hwp5Control::IndexMark(indexmark) => Some(project_indexmark_run(indexmark)),
+        // ClickHere emission flows through the `FieldBegin`/`ActiveField::ClickHere`
+        // machinery in `project_paragraph_with_images_structural` (mirroring the
+        // Memo dispatch above). If a ClickHere ever reaches this flat dispatch
+        // path it means the structural pairing failed — drop rather than
+        // silently emit a free-floating field run.
+        Hwp5Control::ClickHere(_) => None,
+        // SUMMERY auto-fields (Wave 12n) follow the same structural-pairing
+        // pattern as ClickHere. Free-floating SummeryField means the inline
+        // FieldBegin marker did not pair with this CtrlHeader; drop.
+        Hwp5Control::SummeryField(_) => None,
+        // %dte date/time format-code fields (Wave 12n) — same pattern.
+        Hwp5Control::DateCodeField(_) => None,
+        // %pat path fields (Wave 12n) — same pattern.
+        Hwp5Control::PathField(_) => None,
+        // atno inline page-number controls (Wave 12n) emit immediately.
+        // The 0x12 inline marker is a ControlRef (no FieldEnd), so the
+        // emission flows through the object-control queue, not an
+        // ActiveField/FieldBegin pair.
+        Hwp5Control::InlinePageNumber(atno) => {
+            let kind = hwpforge_core::control::InlinePageKind::from_raw_flag(atno.raw_flag);
+            Some(Run::control(
+                Control::InlinePageNumber { kind, raw_flag: atno.raw_flag },
+                CharShapeIndex::new(0),
+            ))
+        }
         Hwp5Control::OleObject(ole) => project_ole_object_run(ole, projection_images),
+        // %xrf cross-reference fields (Wave 12m) flow through the
+        // `FieldBegin`/`ActiveField::CrossRef` machinery in
+        // `project_paragraph_with_images_structural` — same pattern as
+        // ClickHere / SummeryField / DateCodeField / PathField. A
+        // free-floating CrossRef CtrlHeader means the inline `FieldBegin`
+        // marker did not pair with it; drop rather than silently emit.
+        Hwp5Control::CrossRef(_) => None,
+    };
+    run.map(|mut r| {
+        r.char_shape_id = char_shape_id;
+        r
+    })
+}
+
+/// Resolves the char shape at a visible UTF-16 position (task #76 —
+/// shared by every `project_control_run` call site and the point
+/// bookmark / fallback memo drains).
+fn char_shape_at(hwp_para: &Hwp5Paragraph, visible_utf16: u32) -> CharShapeIndex {
+    CharShapeIndex::new(
+        char_shape_id_for_visible_position(&hwp_para.char_shape_runs, visible_utf16) as usize,
+    )
+}
+
+/// Projects a HWP5 IndexMark (찾아보기 표시) control into a Core
+/// `Run` carrying `Control::IndexMark`. The wire's `secondary_units_len
+/// == 0` case is decoded as `None` rather than `Some("")` — 한컴
+/// HWP5 cannot distinguish the two on save, so the decode matches
+/// 한컴's intent. See
+/// `.docs/algorithms/2026-06-02_indexmark_carry.md` for the
+/// Codex-reviewed empty-secondary discussion.
+fn project_indexmark_run(indexmark: &crate::schema::section::Hwp5IndexMarkControl) -> Run {
+    Run::control(
+        Control::IndexMark {
+            primary: indexmark.primary.clone(),
+            secondary: indexmark.secondary.clone(),
+        },
+        CharShapeIndex::new(0),
+    )
+}
+
+/// Projects a HWP5 compose (글자겹침) control into a Core `Run`
+/// carrying `Control::Compose`. Raw `circle_type` and `compose_type`
+/// bytes are mapped to the OWPML enum strings 한컴 expects on the
+/// HWPX side; unknown values fall back to the spec defaults so the
+/// HWPX encoder always emits a well-formed `<hp:compose>` element.
+/// See `.docs/algorithms/2026-06-01_compose_carry.md` for the layout
+/// rationale and enum-mapping tables.
+fn project_compose_run(compose: &crate::schema::section::Hwp5ComposeControl) -> Run {
+    let circle_type = compose_circle_type_label(compose.circle_type_raw);
+    let compose_type = compose_compose_type_label(compose.compose_type_raw);
+    Run::control(
+        Control::Compose {
+            compose_text: compose.compose_text.clone(),
+            circle_type: circle_type.to_string(),
+            char_sz: i32::from(compose.char_sz),
+            compose_type: compose_type.to_string(),
+            char_pr_ids: compose.char_pr_ids.clone(),
+        },
+        CharShapeIndex::new(0),
+    )
+}
+
+/// Maps the OWPML `SHAPECIRCLETYPE` enum (defined in
+/// `.docs/references/hwpx-owpml-model/OWPML/Class/enumdef.h` lines
+/// 623-639) from the raw wire byte to the HWPX attribute string.
+fn compose_circle_type_label(raw: u8) -> &'static str {
+    match raw {
+        0 => "CHAR",
+        1 => "SHAPE_CIRCLE",
+        2 => "SHAPE_REVERSAL_CIRCLE",
+        3 => "SHAPE_RECTANGLE",
+        4 => "SHAPE_REVERSAL_RECTANGLE",
+        5 => "SHAPE_TRIANGLE",
+        // 한컴의 공식 spec 오타 — `TIRANGLE` (not TRIANGLE) 그대로 보존해야
+        // HWPX truth와 round-trip이 닫힌다.
+        6 => "SHAPE_REVERSAL_TIRANGLE",
+        7 => "SHAPE_LIGHT",
+        8 => "SHAPE_RHOMBUS",
+        9 => "SHAPE_REVERSAL_RHOMBUS",
+        10 => "SHAPE_ROUNDED_RECTANGLE",
+        11 => "SHAPE_EMPTY_CIRCULATE_TRIANGLE",
+        12 => "SHAPE_THIN_CIRCULATE_TRIANGLE",
+        13 => "SHAPE_THICK_CIRCULATE_TRIANGLE",
+        // Unknown values fall back to the spec default ("CHAR"). 한컴이
+        // verify 단계에서 unknown을 받으면 거부할 수 있으니 안전 기본값.
+        _ => "CHAR",
+    }
+}
+
+/// Maps the OWPML `COMPOSETYPE` enum (`enumdef.h` lines 661-665) from
+/// the raw wire byte to the HWPX attribute string.
+fn compose_compose_type_label(raw: u8) -> &'static str {
+    match raw {
+        0 => "SPREAD",
+        1 => "OVERLAP",
+        _ => "SPREAD",
     }
 }
 
@@ -1336,26 +2243,39 @@ fn project_ole_object_run(
 
     match extract_chart_payload(raw_bytes) {
         Ok(payload) => {
-            // Dimensions come from the `ShapeComponentOle` extent fields,
-            // which the HWP5 decoder already stored as i32 HWPUNIT. The
-            // geometry x/y mirror the placement convention used by the
-            // other shape projections (zero-offset == inline).
-            let Some(width) = chart_dimension(ole.extent_width) else {
+            // Dimensions come from the wrapping `gso ` CtrlHeader geometry
+            // ([16..24] = display frame width/height in HWPUNIT) — the
+            // `ShapeComponentOle` extent fields hold the OLE's *internal
+            // canvas* size (observed constant 7200×7200), which 한컴
+            // mirrors into `hp:orgSz`/`hc:extent`, NOT `hp:sz`. The
+            // chart-fixture ground truth (`chart_02_single_pie.hwpx`
+            // 한컴-native pair: hp:sz 32250×18750 == CtrlHeader geometry)
+            // pinned this; using the extent shrank converted charts to
+            // ≈2.5cm. Extent stays as the fallback for a zero geometry.
+            // The geometry x/y mirror the placement convention used by
+            // the other shape projections (zero-offset == inline).
+            let geometry_width = i32::try_from(ole.geometry.width).unwrap_or(0);
+            let geometry_height = i32::try_from(ole.geometry.height).unwrap_or(0);
+            let Some(width) =
+                chart_dimension(geometry_width).or_else(|| chart_dimension(ole.extent_width))
+            else {
                 projection_images.warnings.push(Hwp5Warning::DroppedControl {
                     control: "ole_object",
                     reason: format!(
-                        "ole_chart_invalid_width binary_data_id={} width={}",
-                        ole.binary_data_id, ole.extent_width
+                        "ole_chart_invalid_width binary_data_id={} geometry_width={} extent_width={}",
+                        ole.binary_data_id, geometry_width, ole.extent_width
                     ),
                 });
                 return None;
             };
-            let Some(height) = chart_dimension(ole.extent_height) else {
+            let Some(height) =
+                chart_dimension(geometry_height).or_else(|| chart_dimension(ole.extent_height))
+            else {
                 projection_images.warnings.push(Hwp5Warning::DroppedControl {
                     control: "ole_object",
                     reason: format!(
-                        "ole_chart_invalid_height binary_data_id={} height={}",
-                        ole.binary_data_id, ole.extent_height
+                        "ole_chart_invalid_height binary_data_id={} geometry_height={} extent_height={}",
+                        ole.binary_data_id, geometry_height, ole.extent_height
                     ),
                 });
                 return None;
@@ -1428,6 +2348,116 @@ fn project_textbox_run(
     )
 }
 
+/// Projects a HWP5 group (묶음 객체) into a Core `Run` carrying
+/// `Control::Group` (Wave A: flat children only).
+///
+/// Each child is projected via the existing per-shape helpers; a child that
+/// carried `drawText` paragraphs becomes a text-bearing shape (rect →
+/// `Control::TextBox`, ellipse → `ellipse_with_text`). Children that cannot
+/// be represented as a Core group child (e.g. a degraded nested-group
+/// `Unknown`, or an image — not a valid group child per `validate`) are
+/// dropped so the resulting group still validates. Returns `None` only when
+/// the group ends up with no representable children.
+fn project_group_run(
+    group: &Hwp5GroupControl,
+    projection_images: &mut ProjectionImageState<'_>,
+) -> Option<Run> {
+    let mut children = Vec::with_capacity(group.children.len());
+    for child in &group.children {
+        if let Some(control) = project_group_child(child, projection_images) {
+            children.push(control);
+        }
+    }
+    if children.is_empty() {
+        return None;
+    }
+    let inst_id = (group.instance_id != 0).then_some(u64::from(group.instance_id));
+    Some(Run::control(
+        Control::Group {
+            children,
+            width: hwp_unit_from_u32(group.geometry.width),
+            height: hwp_unit_from_u32(group.geometry.height),
+            horz_offset: group.geometry.x,
+            vert_offset: group.geometry.y,
+            inst_id,
+        },
+        CharShapeIndex::new(0),
+    ))
+}
+
+/// Projects one [`Hwp5GroupChild`] into a Core shape `Control` suitable as a
+/// `Control::Group` child. Text-bearing rect/ellipse children become
+/// `TextBox` / `ellipse_with_text`; everything else reuses the single-shape
+/// projection helpers and extracts the inner control. Returns `None` for
+/// children that have no valid Core group-child representation.
+fn project_group_child(
+    child: &Hwp5GroupChild,
+    projection_images: &mut ProjectionImageState<'_>,
+) -> Option<Control> {
+    // Text-bearing shapes: attach the projected paragraphs.
+    if !child.paragraphs.is_empty() {
+        let paragraphs = project_nested_paragraphs(
+            &child.paragraphs,
+            projection_images,
+            ImageProjectionContext::TextBox,
+        );
+        match &child.control {
+            Hwp5Control::Rect(rect) => {
+                let mut control = Control::text_box(
+                    paragraphs,
+                    hwp_unit_from_u32(rect.geometry.width),
+                    hwp_unit_from_u32(rect.geometry.height),
+                );
+                if let Control::TextBox { horz_offset, vert_offset, .. } = &mut control {
+                    *horz_offset = rect.geometry.x;
+                    *vert_offset = rect.geometry.y;
+                }
+                return Some(control);
+            }
+            Hwp5Control::Ellipse(ellipse) => {
+                let width = HwpUnit::new(positive_i32_from_u32(ellipse.geometry.width)?).ok()?;
+                let height = HwpUnit::new(positive_i32_from_u32(ellipse.geometry.height)?).ok()?;
+                let mut control = Control::ellipse_with_text(width, height, paragraphs);
+                if let Control::Ellipse { horz_offset, vert_offset, .. } = &mut control {
+                    *horz_offset = ellipse.geometry.x;
+                    *vert_offset = ellipse.geometry.y;
+                }
+                return Some(control);
+            }
+            // Other text-bearing children are uncommon; fall through to the
+            // non-text projection (text is dropped) rather than fabricate.
+            _ => {}
+        }
+    }
+
+    // Non-text children reuse the single-shape projection helpers; extract
+    // the inner control from the produced run.
+    let run = match &child.control {
+        Hwp5Control::Line(line) => Some(project_line_run(line)),
+        Hwp5Control::Rect(rect) => project_rect_run(rect),
+        Hwp5Control::Polygon(polygon) => Some(project_polygon_run(polygon)),
+        Hwp5Control::Ellipse(ellipse) => project_ellipse_run(ellipse),
+        Hwp5Control::Arc(arc) => project_arc_run(arc),
+        Hwp5Control::Curve(curve) => project_curve_run(curve),
+        Hwp5Control::TextArt(text_art) => {
+            Some(project_text_art_run(text_art, &mut projection_images.warnings))
+        }
+        Hwp5Control::ConnectLine(connect_line) => project_connectline_run(connect_line),
+        Hwp5Control::Equation(equation) => Some(project_equation_run(equation)),
+        // Nested group (Wave B): recurse. `project_group_run` returns a
+        // `Run` carrying `Control::Group`; extract it the same way as every
+        // leaf shape below. Recursion bottoms out when all descendants are
+        // leaf shapes; depth is already bounded by the decoder's cap.
+        Hwp5Control::Group(nested) => project_group_run(nested, projection_images),
+        // Image / OLE / anything else is not a valid group child; drop it.
+        _ => None,
+    }?;
+    match run.content {
+        RunContent::Control(boxed) => Some(*boxed),
+        _ => None,
+    }
+}
+
 /// Projects a HWP5 footnote subtree into a Core `Run` carrying `Control::Footnote`.
 ///
 /// HWP5 does not carry a stable `instId` for footnotes the way HWPX does; the
@@ -1444,7 +2474,12 @@ fn project_footnote_run(
         projection_images,
         ImageProjectionContext::Flow,
     );
-    Run::control(Control::Footnote { inst_id: None, paragraphs }, CharShapeIndex::new(0))
+    // Wave 12p Step 3: HWP5 CtrlHeader trailer instance ID 통과.
+    // 한컴 native `<hp:footNote instId="...">` 와 매칭되어 HWPX
+    // cross-ref Command `?#<id>` lookup 이 동작. 0 은 unset 의미
+    // (Step 1b 의 fallback 값) — None 으로 맵핑.
+    let inst_id = (subtree.instance_id != 0).then_some(subtree.instance_id);
+    Run::control(Control::Footnote { inst_id, paragraphs }, CharShapeIndex::new(0))
 }
 
 /// Projects a HWP5 endnote subtree into a Core `Run` carrying `Control::Endnote`.
@@ -1460,7 +2495,9 @@ fn project_endnote_run(
         projection_images,
         ImageProjectionContext::Flow,
     );
-    Run::control(Control::Endnote { inst_id: None, paragraphs }, CharShapeIndex::new(0))
+    // Wave 12p Step 3: 동일 패턴 (`<hp:endNote instId="...">`).
+    let inst_id = (subtree.instance_id != 0).then_some(subtree.instance_id);
+    Run::control(Control::Endnote { inst_id, paragraphs }, CharShapeIndex::new(0))
 }
 
 fn project_line_run(line: &Hwp5LineControl) -> Run {
@@ -1527,6 +2564,181 @@ fn project_polygon_run(polygon: &Hwp5PolygonControl) -> Run {
     if let Control::Polygon { horz_offset, vert_offset, .. } = &mut control {
         *horz_offset = polygon.geometry.x;
         *vert_offset = polygon.geometry.y;
+    }
+    Run::control(control, CharShapeIndex::new(0))
+}
+
+/// Project a plain ellipse. Center/axes are derived from the bounding box
+/// (`Control::ellipse`), which matches how a HWP5 plain ellipse is defined.
+fn project_ellipse_run(ellipse: &Hwp5EllipseControl) -> Option<Run> {
+    let width = HwpUnit::new(positive_i32_from_u32(ellipse.geometry.width)?).ok()?;
+    let height = HwpUnit::new(positive_i32_from_u32(ellipse.geometry.height)?).ok()?;
+    let mut control = hwpforge_core::control::Control::ellipse(width, height);
+    if let Control::Ellipse { horz_offset, vert_offset, .. } = &mut control {
+        *horz_offset = ellipse.geometry.x;
+        *vert_offset = ellipse.geometry.y;
+    }
+    Some(Run::control(control, CharShapeIndex::new(0)))
+}
+
+/// Project an arc. 한컴 stores arcs inside the ellipse (`0x50`) record; we have
+/// verified the `Normal` open-arc shape end to end. Pie/chord arc types and
+/// exact arc-sweep endpoints are a future refinement that needs dedicated
+/// fixtures, so we carry a `Normal` arc sized from the bounding box rather than
+/// guess a sweep we cannot yet validate.
+fn project_arc_run(arc: &Hwp5ArcControl) -> Option<Run> {
+    let width = HwpUnit::new(positive_i32_from_u32(arc.geometry.width)?).ok()?;
+    let height = HwpUnit::new(positive_i32_from_u32(arc.geometry.height)?).ok()?;
+    let mut control = hwpforge_core::control::Control::arc(ArcType::Normal, width, height);
+    if let Control::Arc { horz_offset, vert_offset, .. } = &mut control {
+        *horz_offset = arc.geometry.x;
+        *vert_offset = arc.geometry.y;
+    }
+    Some(Run::control(control, CharShapeIndex::new(0)))
+}
+
+/// Project a curve, scaling its control points into the bounding box like a
+/// polygon and mapping the decoded per-segment type bytes onto the Core enum.
+fn project_curve_run(curve: &Hwp5CurveControl) -> Option<Run> {
+    let vertices = scale_polygon_points(&curve.points, &curve.geometry);
+    let mut control = hwpforge_core::control::Control::curve(vertices).ok()?;
+    if let Control::Curve { horz_offset, vert_offset, segment_types, .. } = &mut control {
+        *horz_offset = curve.geometry.x;
+        *vert_offset = curve.geometry.y;
+        let decoded: Vec<CurveSegmentType> = curve
+            .segment_types
+            .iter()
+            .map(|byte| match byte {
+                0 => CurveSegmentType::Line,
+                _ => CurveSegmentType::Curve,
+            })
+            .collect();
+        if !decoded.is_empty() {
+            *segment_types = decoded;
+        }
+    }
+    Some(Run::control(control, CharShapeIndex::new(0)))
+}
+
+/// Project a TextArt (글맵시). Geometry comes from the owning gso CtrlHeader
+/// (mirroring the ellipse), and the warped-text payload from the `0x5A`
+/// `ShapeTextArt` sub-record. The HWP5 wire stores `text_shape`/`align` as
+/// integer enums; we map them to the HWPX string names, warning (rather than
+/// silently defaulting) when a value is out of the known range.
+fn project_text_art_run(text_art: &Hwp5TextArtControl, warnings: &mut Vec<Hwp5Warning>) -> Run {
+    let ta = &text_art.text_art;
+    let shape = crate::schema::section::textart_shape_name(ta.text_shape).unwrap_or_else(|| {
+        warnings.push(Hwp5Warning::ProjectionFallback {
+            subject: "textart.text_shape",
+            reason: format!(
+                "unknown TextArt shape enum {} (defaulting to RECTANGLE)",
+                ta.text_shape
+            ),
+        });
+        "RECTANGLE"
+    });
+    let align = crate::schema::section::textart_align_name(ta.align).unwrap_or_else(|| {
+        warnings.push(Hwp5Warning::ProjectionFallback {
+            subject: "textart.align",
+            reason: format!("unknown TextArt align enum {} (defaulting to LEFT)", ta.align),
+        });
+        "LEFT"
+    });
+    let width = hwp_unit_from_u32(text_art.geometry.width);
+    let height = hwp_unit_from_u32(text_art.geometry.height);
+    let inst_id = (text_art.instance_id != 0).then_some(u64::from(text_art.instance_id));
+    let control = Control::TextArt {
+        text: ta.text.clone(),
+        shape: shape.to_string(),
+        font_name: ta.font_name.clone(),
+        font_style: ta.font_style.clone(),
+        align: align.to_string(),
+        line_spacing: ta.line_spacing,
+        char_spacing: ta.char_spacing,
+        width,
+        height,
+        horz_offset: text_art.geometry.x,
+        vert_offset: text_art.geometry.y,
+        fill_color: None,
+        inst_id,
+    };
+    Run::control(control, CharShapeIndex::new(0))
+}
+
+/// Project a connect line. 한컴 stores it in the same `ShapeComponentLine`
+/// record as a plain line, so endpoints are scaled into the bounding box the
+/// same way; only a straight connector is carried (the source object-link
+/// references have no `<hp:connectLine>` representation).
+fn project_connectline_run(connect_line: &Hwp5ConnectLineControl) -> Option<Run> {
+    let min_x = connect_line.start.x.min(connect_line.end.x);
+    let max_x = connect_line.start.x.max(connect_line.end.x);
+    let min_y = connect_line.start.y.min(connect_line.end.y);
+    let max_y = connect_line.start.y.max(connect_line.end.y);
+    let scaled_start = hwpforge_core::control::ShapePoint {
+        x: scale_point_into_geometry(
+            connect_line.start,
+            min_x,
+            max_x,
+            connect_line.geometry.width,
+            100,
+            Axis::Horizontal,
+        ),
+        y: scale_point_into_geometry(
+            connect_line.start,
+            min_y,
+            max_y,
+            connect_line.geometry.height,
+            100,
+            Axis::Vertical,
+        ),
+    };
+    let scaled_end = hwpforge_core::control::ShapePoint {
+        x: scale_point_into_geometry(
+            connect_line.end,
+            min_x,
+            max_x,
+            connect_line.geometry.width,
+            100,
+            Axis::Horizontal,
+        ),
+        y: scale_point_into_geometry(
+            connect_line.end,
+            min_y,
+            max_y,
+            connect_line.geometry.height,
+            100,
+            Axis::Vertical,
+        ),
+    };
+    let mut control =
+        hwpforge_core::control::Control::connect_line(scaled_start, scaled_end).ok()?;
+    if let Control::ConnectLine { horz_offset, vert_offset, .. } = &mut control {
+        *horz_offset = connect_line.geometry.x;
+        *vert_offset = connect_line.geometry.y;
+    }
+    Some(Run::control(control, CharShapeIndex::new(0)))
+}
+
+/// Project an equation. The HancomEQN script is carried verbatim; the box size
+/// comes from the `eqed` ctrl-header geometry when positive (equations are
+/// always inline, so there is no offset to set).
+fn project_equation_run(equation: &Hwp5EquationControl) -> Run {
+    let mut control = hwpforge_core::control::Control::equation(&equation.script);
+    if let Control::Equation { width, height, inst_id, .. } = &mut control {
+        if let Some(w) =
+            positive_i32_from_u32(equation.geometry.width).and_then(|v| HwpUnit::new(v).ok())
+        {
+            *width = w;
+        }
+        if let Some(h) =
+            positive_i32_from_u32(equation.geometry.height).and_then(|v| HwpUnit::new(v).ok())
+        {
+            *height = h;
+        }
+        // Wave 12p Step 3: `<hp:equation id="...">` cross-ref target.
+        if equation.instance_id != 0 {
+            *inst_id = Some(u64::from(equation.instance_id));
+        }
     }
     Run::control(control, CharShapeIndex::new(0))
 }
@@ -1852,6 +3064,12 @@ fn apply_table_projection_metadata(
         .transpose()
         .unwrap_or(None);
     core_table.border_fill_id = table.border_fill_id.map(u32::from);
+    // Wave 12p Step 3: HWP5 Table CtrlHeader trailer instance ID 통과.
+    // 한컴 native `<hp:tbl id="...">` cross-ref target 과 매칭. 0 은
+    // unset (Step 1c-1 fallback).
+    if table.instance_id != 0 {
+        core_table.inst_id = Some(u64::from(table.instance_id));
+    }
 
     match core_table_page_break(table.page_break) {
         Some(page_break) => core_table.page_break = page_break,
@@ -1961,6 +3179,37 @@ fn page_def_to_settings(pd: &Hwp5PageDef) -> PageSettings {
 mod tests {
     use super::*;
 
+    #[test]
+    fn parse_page_number_control_reads_number_shape_from_property() {
+        // pgnp ctrl-header layout: [0..4] ctrl_id, [4..8] property u32 (LE)
+        // where bits 0-7 (byte 4) = number shape and bits 8-11 (byte 5) =
+        // position. Build a header with shape=2 (RomanCapital) and
+        // position=9 (INSIDE_TOP), plus a trailing '-' side char.
+        let mut header = vec![b'p', b'n', b'g', b'p'];
+        header.push(2); // byte 4: number shape = RomanCapital
+        header.push(9); // byte 5: position = InsideTop
+        header.extend_from_slice(&[0, 0]); // rest of property u32
+        header.extend_from_slice(&[0, 0]); // number u16
+        header.push(b'-'); // side decoration char
+        let pn = parse_page_number_control(&header).expect("pgnp should parse");
+        assert_eq!(pn.number_format, NumberFormatType::RomanCapital);
+        assert_eq!(pn.position, PageNumberPosition::InsideTop);
+        assert_eq!(pn.decoration, "-", "trailing graphic byte is the side char");
+
+        // Shape 0 must still decode as Digit (default, regression guard).
+        header[4] = 0;
+        let pn = parse_page_number_control(&header).expect("pgnp should parse");
+        assert_eq!(pn.number_format, NumberFormatType::Digit);
+
+        // Q1 regression: a pgnp with position byte 9 (InsideTop) and NO trailing
+        // graphic decoration must default to "-", not mis-read the non-graphic
+        // property byte (9 = '\t') as the decoration char.
+        let no_deco = vec![b'p', b'n', b'g', b'p', 0, 9, 0, 0, 0, 0];
+        let pn = parse_page_number_control(&no_deco).expect("pgnp should parse");
+        assert_eq!(pn.position, PageNumberPosition::InsideTop);
+        assert_eq!(pn.decoration, "-", "property byte must not be read as decoration");
+    }
+
     use std::collections::BTreeMap;
 
     use hwpforge_core::table::TablePageBreak;
@@ -2006,6 +3255,7 @@ mod tests {
             page_def,
             section_def_properties: None,
             page_border_fills: Vec::new(),
+            column_def: None,
             warnings: vec![],
         }
     }
@@ -2127,6 +3377,7 @@ mod tests {
             page_def: None,
             section_def_properties: None,
             page_border_fills: Vec::new(),
+            column_def: None,
             warnings: vec![warn],
         };
         let (_, warnings) = project_to_core(vec![section]).unwrap();
@@ -2144,6 +3395,7 @@ mod tests {
                 height: 2_000,
             },
             binary_data_id: 1,
+            instance_id: 0,
         });
         let section = make_section(
             vec![Hwp5Paragraph {
@@ -2199,6 +3451,7 @@ mod tests {
                 height: 800,
             },
             binary_data_id: 7,
+            instance_id: 0,
         });
         let section = make_section(
             vec![Hwp5Paragraph {
@@ -2212,6 +3465,7 @@ mod tests {
                     Hwp5Control::Header(crate::decoder::section::Hwp5NestedSubtree {
                         ctrl_id: 0x6865_6164,
                         properties_raw: 0,
+                        instance_id: 0,
                         paragraphs: vec![Hwp5Paragraph {
                             text: "\u{fffc}".to_string(),
                             text_segments: Vec::new(),
@@ -2225,6 +3479,7 @@ mod tests {
                     Hwp5Control::Footer(crate::decoder::section::Hwp5NestedSubtree {
                         ctrl_id: 0x666F_6F74,
                         properties_raw: 0,
+                        instance_id: 0,
                         paragraphs: vec![make_paragraph("꼬리말 테스트", 0, 0)],
                     }),
                 ],
@@ -2259,6 +3514,7 @@ mod tests {
                 height: 900,
             },
             binary_data_id: 3,
+            instance_id: 0,
         });
         let textbox = Hwp5Control::TextBox(Hwp5TextBoxControl {
             ctrl_id: 0x6773_6F20,
@@ -2339,6 +3595,7 @@ mod tests {
                 height: 800,
             },
             binary_data_id: 99,
+            instance_id: 0,
         });
         let section = make_section(
             vec![Hwp5Paragraph {
@@ -2377,6 +3634,7 @@ mod tests {
                 height: 0,
             },
             binary_data_id: 5,
+            instance_id: 0,
         });
         let section = make_section(
             vec![Hwp5Paragraph {
@@ -2421,6 +3679,7 @@ mod tests {
                 height: 0,
             },
             binary_data_id: 6,
+            instance_id: 0,
         });
         let section = make_section(
             vec![Hwp5Paragraph {
@@ -2603,6 +3862,7 @@ mod tests {
                 cell_spacing: 120,
                 border_fill_id: Some(8),
                 cells: vec![],
+                instance_id: 0,
             })],
         };
         let section = make_section(vec![para], None);
@@ -2661,6 +3921,7 @@ mod tests {
                         controls: vec![],
                     }],
                 }],
+                instance_id: 0,
             })],
         };
 
@@ -2731,6 +3992,7 @@ mod tests {
                         controls: vec![],
                     }],
                 }],
+                instance_id: 0,
             })],
         };
 
@@ -2828,6 +4090,7 @@ mod tests {
                         }],
                     },
                 ],
+                instance_id: 0,
             })],
         };
 
@@ -2901,6 +4164,7 @@ mod tests {
                     header_cell(1, false, "body"),
                     header_cell(2, true, "restated-head"),
                 ],
+                instance_id: 0,
             })],
         };
 
@@ -2980,6 +4244,7 @@ mod tests {
                 cell_spacing: 0,
                 border_fill_id: None,
                 cells: vec![pgnp_cell()],
+                instance_id: 0,
             })],
         };
 
@@ -3046,6 +4311,7 @@ mod tests {
                     cell_spacing: 0,
                     border_fill_id: None,
                     cells: vec![cell],
+                    instance_id: 0,
                 })],
             }
         }
@@ -3229,6 +4495,7 @@ mod tests {
                 cell_spacing: 0,
                 border_fill_id: None,
                 cells: vec![],
+                instance_id: 0,
             },
             &mut warnings,
         );
@@ -3253,6 +4520,7 @@ mod tests {
                 cell_spacing: 0,
                 border_fill_id: None,
                 cells: vec![],
+                instance_id: 0,
             },
             &mut warnings,
         );
@@ -3275,6 +4543,7 @@ mod tests {
                 cell_spacing: 0,
                 border_fill_id: None,
                 cells: vec![],
+                instance_id: 0,
             },
             &mut warnings,
         );
@@ -3296,6 +4565,7 @@ mod tests {
                 cell_spacing: 0,
                 border_fill_id: None,
                 cells: vec![],
+                instance_id: 0,
             },
             &mut warnings,
         );

@@ -174,7 +174,7 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                     }
                     out.push_str("</polygon>");
                 }
-                Control::Dutmal { main_text, sub_text, sz_ratio, position, align } => {
+                Control::Dutmal { main_text, sub_text, sz_ratio, position, align, .. } => {
                     out.push_str(&format!(
                         "<dutmal data-char-shape=\"{}\" data-sz-ratio=\"{}\" data-position=\"{:?}\" data-align=\"{:?}\">{}</dutmal>",
                         run.char_shape_id.get(),
@@ -184,7 +184,7 @@ fn encode_paragraph(paragraph: &Paragraph) -> MdResult<String> {
                         escape_html(&format!("{main_text}|{sub_text}"))
                     ));
                 }
-                Control::Compose { compose_text, circle_type, char_sz, compose_type } => {
+                Control::Compose { compose_text, circle_type, char_sz, compose_type, .. } => {
                     out.push_str(&format!(
                         "<compose data-char-shape=\"{}\" data-circle-type=\"{}\" data-char-sz=\"{}\" data-compose-type=\"{}\">{}</compose>",
                         run.char_shape_id.get(),
@@ -799,6 +799,7 @@ mod tests {
                     sz_ratio: 50,
                     position: DutmalPosition::Top,
                     align: DutmalAlign::Center,
+                    metadata: hwpforge_core::DutmalMetadata::default(),
                 },
                 CharShapeIndex::new(0),
             )],
@@ -821,6 +822,7 @@ mod tests {
                     circle_type: "CIRCLE".to_string(),
                     char_sz: -3,
                     compose_type: "COMPOSED".to_string(),
+                    char_pr_ids: vec![u32::MAX; 10],
                 },
                 CharShapeIndex::new(0),
             )],

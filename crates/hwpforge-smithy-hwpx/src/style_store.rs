@@ -1191,6 +1191,20 @@ impl HwpxStyleStore {
         self.para_shapes.len()
     }
 
+    /// Returns a mutable reference to the para shape at `index`.
+    ///
+    /// Used by Wave 12q HWP5 → HWPX style projection to apply outline-level
+    /// overrides derived from Style records ("개요 N") whose true level
+    /// exceeds what HWP5 wire bits (3 bits, cap 6) can represent.
+    pub fn para_shape_mut(&mut self, index: ParaShapeIndex) -> HwpxResult<&mut HwpxParaShape> {
+        let max = self.para_shapes.len() as u32;
+        self.para_shapes.get_mut(index.get()).ok_or(HwpxError::IndexOutOfBounds {
+            kind: "para_shape",
+            index: index.get() as u32,
+            max,
+        })
+    }
+
     // ── Iterators ────────────────────────────────────────────────
 
     /// Returns an iterator over all fonts in the store.
@@ -1390,7 +1404,7 @@ fn build_store_from_registry_with(
             bold: cs.bold,
             italic: cs.italic,
             underline_type: cs.underline_type,
-            underline_shape: UnderlineShape::Solid,
+            underline_shape: cs.underline_shape,
             underline_color: cs.underline_color,
             strikeout_shape: cs.strikeout_shape,
             strikeout_color: cs.strikeout_color,
@@ -2132,6 +2146,7 @@ mod tests {
             assert_eq!(hwpx_cs.bold, bp_cs.bold);
             assert_eq!(hwpx_cs.italic, bp_cs.italic);
             assert_eq!(hwpx_cs.underline_type, bp_cs.underline_type);
+            assert_eq!(hwpx_cs.underline_shape, bp_cs.underline_shape);
             assert_eq!(hwpx_cs.underline_color, bp_cs.underline_color);
             assert_eq!(hwpx_cs.strikeout_shape, bp_cs.strikeout_shape);
             assert_eq!(hwpx_cs.strikeout_color, bp_cs.strikeout_color);
@@ -2141,6 +2156,24 @@ mod tests {
             assert_eq!(hwpx_cs.emboss_type, bp_cs.emboss);
             assert_eq!(hwpx_cs.engrave_type, bp_cs.engrave);
         }
+    }
+
+    #[test]
+    fn from_registry_carries_non_solid_underline_shape() {
+        // Regression: the Blueprint→HwpxCharShape bridge used to hardcode
+        // underline_shape = Solid, silently dropping every non-Solid line
+        // family authored via a template/builder. Mutate a resolved CharShape
+        // to a non-default shape and assert it survives to the store.
+        let template = builtin_default().unwrap();
+        let mut registry = StyleRegistry::from_template(&template).unwrap();
+        assert!(!registry.char_shapes.is_empty(), "default template has char shapes");
+        registry.char_shapes[0].underline_type = UnderlineType::Bottom;
+        registry.char_shapes[0].underline_shape = UnderlineShape::Wave;
+
+        let store = HwpxStyleStore::from_registry(&registry).unwrap();
+        let hwpx_cs = store.char_shape(CharShapeIndex::new(7)).unwrap();
+        assert_eq!(hwpx_cs.underline_shape, UnderlineShape::Wave);
+        assert_eq!(hwpx_cs.underline_type, UnderlineType::Bottom);
     }
 
     #[test]
@@ -2176,23 +2209,13 @@ mod tests {
                 checkable: false,
             }],
         });
-        registry.para_shapes.push(ParaShape {
-            alignment: Alignment::Left,
-            line_spacing_type: LineSpacingType::Percentage,
-            line_spacing_value: 160.0,
-            space_before: HwpUnit::ZERO,
-            space_after: HwpUnit::ZERO,
-            indent_left: HwpUnit::ZERO,
-            indent_right: HwpUnit::ZERO,
-            indent_first_line: HwpUnit::ZERO,
-            break_type: hwpforge_foundation::BreakType::None,
-            keep_with_next: false,
-            keep_lines_together: false,
-            widow_orphan: true,
-            border_fill_id: None,
-            tab_def_id: 3,
-            list: None,
-        });
+        // ParaShape is #[non_exhaustive]; build via default() + non-default fields.
+        let mut ps = ParaShape::default();
+        ps.line_spacing_type = LineSpacingType::Percentage;
+        ps.line_spacing_value = 160.0;
+        ps.widow_orphan = true;
+        ps.tab_def_id = 3;
+        registry.para_shapes.push(ps);
         registry.tabs.push(TabDef {
             id: 3,
             auto_tab_left: false,
@@ -2230,26 +2253,15 @@ mod tests {
                 checkable: false,
             }],
         });
-        registry.para_shapes.push(ParaShape {
-            alignment: Alignment::Left,
-            line_spacing_type: LineSpacingType::Percentage,
-            line_spacing_value: 160.0,
-            space_before: HwpUnit::ZERO,
-            space_after: HwpUnit::ZERO,
-            indent_left: HwpUnit::ZERO,
-            indent_right: HwpUnit::ZERO,
-            indent_first_line: HwpUnit::ZERO,
-            break_type: hwpforge_foundation::BreakType::None,
-            keep_with_next: false,
-            keep_lines_together: false,
-            widow_orphan: true,
-            border_fill_id: None,
-            tab_def_id: 0,
-            list: Some(ParagraphListRef::Number {
-                numbering_id: hwpforge_foundation::NumberingIndex::new(0),
-                level: 2,
-            }),
+        let mut ps = ParaShape::default();
+        ps.line_spacing_type = LineSpacingType::Percentage;
+        ps.line_spacing_value = 160.0;
+        ps.widow_orphan = true;
+        ps.list = Some(ParagraphListRef::Number {
+            numbering_id: hwpforge_foundation::NumberingIndex::new(0),
+            level: 2,
         });
+        registry.para_shapes.push(ps);
 
         let store = HwpxStyleStore::from_registry(&registry).unwrap();
         let hwpx_ps = store.para_shape(ParaShapeIndex::new(20)).unwrap();
@@ -2261,23 +2273,12 @@ mod tests {
     #[test]
     fn from_registry_lowers_outline_list_ref_using_zero_based_hwpx_level() {
         let mut registry = StyleRegistry::with_fonts(vec![]);
-        registry.para_shapes.push(ParaShape {
-            alignment: Alignment::Left,
-            line_spacing_type: LineSpacingType::Percentage,
-            line_spacing_value: 160.0,
-            space_before: HwpUnit::ZERO,
-            space_after: HwpUnit::ZERO,
-            indent_left: HwpUnit::ZERO,
-            indent_right: HwpUnit::ZERO,
-            indent_first_line: HwpUnit::ZERO,
-            break_type: hwpforge_foundation::BreakType::None,
-            keep_with_next: false,
-            keep_lines_together: false,
-            widow_orphan: true,
-            border_fill_id: None,
-            tab_def_id: 0,
-            list: Some(ParagraphListRef::Outline { level: 0 }),
-        });
+        let mut ps = ParaShape::default();
+        ps.line_spacing_type = LineSpacingType::Percentage;
+        ps.line_spacing_value = 160.0;
+        ps.widow_orphan = true;
+        ps.list = Some(ParagraphListRef::Outline { level: 0 });
+        registry.para_shapes.push(ps);
 
         let store = HwpxStyleStore::from_registry(&registry).unwrap();
         let hwpx_ps = store.para_shape(ParaShapeIndex::new(20)).unwrap();
@@ -2289,26 +2290,15 @@ mod tests {
     #[test]
     fn from_registry_rejects_invalid_shared_list_definition_indices() {
         let mut registry = StyleRegistry::with_fonts(vec![]);
-        registry.para_shapes.push(ParaShape {
-            alignment: Alignment::Left,
-            line_spacing_type: LineSpacingType::Percentage,
-            line_spacing_value: 160.0,
-            space_before: HwpUnit::ZERO,
-            space_after: HwpUnit::ZERO,
-            indent_left: HwpUnit::ZERO,
-            indent_right: HwpUnit::ZERO,
-            indent_first_line: HwpUnit::ZERO,
-            break_type: hwpforge_foundation::BreakType::None,
-            keep_with_next: false,
-            keep_lines_together: false,
-            widow_orphan: true,
-            border_fill_id: None,
-            tab_def_id: 0,
-            list: Some(ParagraphListRef::Number {
-                numbering_id: hwpforge_foundation::NumberingIndex::new(99),
-                level: 0,
-            }),
+        let mut ps = ParaShape::default();
+        ps.line_spacing_type = LineSpacingType::Percentage;
+        ps.line_spacing_value = 160.0;
+        ps.widow_orphan = true;
+        ps.list = Some(ParagraphListRef::Number {
+            numbering_id: hwpforge_foundation::NumberingIndex::new(99),
+            level: 0,
         });
+        registry.para_shapes.push(ps);
 
         let err = HwpxStyleStore::from_registry(&registry).unwrap_err();
         assert!(matches!(err, HwpxError::IndexOutOfBounds { kind: "numbering definition", .. }));

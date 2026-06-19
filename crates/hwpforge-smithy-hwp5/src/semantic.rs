@@ -1082,6 +1082,39 @@ pub enum Hwp5SemanticControlKind {
     Rect,
     /// Polygon shape object.
     Polygon,
+    /// Ellipse shape object.
+    Ellipse,
+    /// Arc shape object (an ellipse record carrying arc fields).
+    Arc,
+    /// Curve (bezier/polyline) shape object.
+    Curve,
+    /// TextArt (글맵시) decorative warped-text shape object.
+    TextArt,
+    /// Connect-line (connector) shape object.
+    ConnectLine,
+    /// Equation editor object.
+    Equation,
+    /// Memo (메모) annotation control.
+    Memo,
+    /// Dutmal (덧말) annotation control.
+    Dutmal,
+    /// Compose (글자겹침) annotation control.
+    Compose,
+    /// IndexMark (찾아보기 표시) annotation control.
+    IndexMark,
+    /// ClickHere (누름틀, CLICK_HERE press-field) form control.
+    ClickHere,
+    /// SUMMERY auto-field (`%smr`): Author / LastSavedBy / CreatedTime /
+    /// ModifiedTime / Title (Wave 12n).
+    SummeryField,
+    /// `%dte` date/time format-code field (Wave 12n).
+    DateCodeField,
+    /// `%pat` path / file-name field (Wave 12n).
+    PathField,
+    /// `atno` inline page-number control (Wave 12n).
+    InlinePageNumber,
+    /// `%xrf` cross-reference field (Wave 12m).
+    CrossRef,
     /// Header control.
     Header,
     /// Footer control.
@@ -1098,6 +1131,8 @@ pub enum Hwp5SemanticControlKind {
     Chart,
     /// OLE-backed embedded object.
     OleObject,
+    /// Group (묶음 객체) container wrapping flat shape children (Wave A).
+    Group,
     /// Unsupported or unknown control.
     Unknown(String),
 }

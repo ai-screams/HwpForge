@@ -13,8 +13,8 @@
 use hwpforge_core::{BulletDef, NumberingDef, ParagraphListRef};
 use hwpforge_foundation::{
     Alignment, BorderFillIndex, BreakType, Color, EmbossType, EmphasisType, EngraveType,
-    HeadingType, HwpUnit, LineSpacingType, OutlineType, ShadowType, StrikeoutShape, UnderlineType,
-    VerticalPosition,
+    HeadingType, HwpUnit, LineSpacingType, OutlineType, ShadowType, StrikeoutShape, UnderlineShape,
+    UnderlineType, VerticalPosition,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -104,6 +104,7 @@ pub struct LineSpacing {
 /// After inheritance resolution, this is converted to [`CharShape`] where
 /// all fields are guaranteed to be present.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct PartialCharShape {
     /// Font name (e.g. "한컴바탕", "Arial").
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -134,6 +135,10 @@ pub struct PartialCharShape {
     /// Underline type (None/Bottom/Center/Top).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub underline_type: Option<UnderlineType>,
+    /// Underline line shape (Solid/Dash/Dot/Wave/etc.). Defaults to Solid
+    /// when omitted during resolution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub underline_shape: Option<UnderlineShape>,
     /// Underline color (inherits text color if None).
     #[serde(
         default,
@@ -354,6 +359,9 @@ impl PartialCharShape {
         if other.underline_type.is_some() {
             self.underline_type = other.underline_type;
         }
+        if other.underline_shape.is_some() {
+            self.underline_shape = other.underline_shape;
+        }
         if other.underline_color.is_some() {
             self.underline_color = other.underline_color;
         }
@@ -424,6 +432,7 @@ impl PartialCharShape {
             italic: self.italic.unwrap_or(false),
             color: self.color.unwrap_or(Color::BLACK),
             underline_type: self.underline_type.unwrap_or(UnderlineType::None),
+            underline_shape: self.underline_shape.unwrap_or(UnderlineShape::Solid),
             underline_color: self.underline_color,
             strikeout_shape: self.strikeout_shape.unwrap_or(StrikeoutShape::None),
             strikeout_color: self.strikeout_color,
@@ -447,6 +456,7 @@ impl PartialCharShape {
 
 /// Paragraph shape with all optional fields (for YAML parsing and inheritance).
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct PartialParaShape {
     /// Text alignment.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -639,6 +649,7 @@ impl PartialParaShape {
 
 /// A composite style entry (char + para shape) with optional fields for YAML.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct PartialStyle {
     /// Character formatting.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -669,7 +680,12 @@ impl PartialStyle {
 // ---------------------------------------------------------------------------
 
 /// A fully-resolved character shape (all fields present).
+///
+/// Construct via [`PartialCharShape::resolve`] (the canonical path) rather than
+/// a struct literal — this type is `#[non_exhaustive]` so new fields can be
+/// added without a breaking change for downstream crates.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct CharShape {
     /// Font name.
     pub font: String,
@@ -685,6 +701,9 @@ pub struct CharShape {
     pub color: Color,
     /// Underline type.
     pub underline_type: UnderlineType,
+    /// Underline line shape (Solid/Dash/Dot/Wave/etc.).
+    #[serde(default)]
+    pub underline_shape: UnderlineShape,
     /// Underline color (None = inherit text color).
     #[serde(
         default,
@@ -745,7 +764,13 @@ pub struct CharShape {
 }
 
 /// A fully-resolved paragraph shape (all fields present).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
+///
+/// Construct via [`PartialParaShape::resolve`] (the canonical path), or via
+/// `ParaShape::default()` then field assignment, rather than a struct literal —
+/// this type is `#[non_exhaustive]` so new fields can be added without a
+/// breaking change.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
 pub struct ParaShape {
     /// Text alignment.
     pub alignment: Alignment,
@@ -1162,7 +1187,8 @@ mod tests {
             bold: true,
             italic: false,
             color: Color::from_rgb(0x00, 0x33, 0x66),
-            underline_type: UnderlineType::None,
+            underline_type: UnderlineType::Bottom,
+            underline_shape: UnderlineShape::Wave,
             underline_color: None,
             strikeout_shape: StrikeoutShape::None,
             strikeout_color: None,
@@ -1184,6 +1210,7 @@ mod tests {
         let yaml = serde_yaml::to_string(&original).unwrap();
         let back: CharShape = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(original, back);
+        assert_eq!(back.underline_shape, UnderlineShape::Wave);
     }
 
     #[test]
@@ -1195,6 +1222,7 @@ mod tests {
             italic: true,
             color: Color::RED,
             underline_type: UnderlineType::None,
+            underline_shape: UnderlineShape::Solid,
             underline_color: None,
             strikeout_shape: StrikeoutShape::None,
             strikeout_color: None,

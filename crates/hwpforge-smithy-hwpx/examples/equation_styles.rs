@@ -50,6 +50,7 @@ fn eq_run(script: &str, width: i32, height: i32, base_line: u32, color: Color) -
             base_line,
             text_color: color,
             font: "HancomEQN".to_string(),
+            inst_id: None,
         },
         CS0,
     )

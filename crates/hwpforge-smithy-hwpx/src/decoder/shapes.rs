@@ -13,6 +13,7 @@ use hwpforge_foundation::{
 use crate::error::HwpxResult;
 use crate::schema::section::{
     HxConnectLine, HxCurve, HxEllipse, HxFillBrush, HxLine, HxLineShape, HxPolygon, HxRect,
+    HxTextArt,
 };
 
 use super::section::{convert_hx_caption, decode_sublist_paragraphs, parse_hex_color};
@@ -509,6 +510,52 @@ pub(crate) fn decode_curve(
     })
 }
 
+/// Decodes an `HxTextArt` (`<hp:textart>`) into a Core `Run` with
+/// `Control::TextArt`. Round-trip mirror of the encoder's raw-XML emission:
+/// geometry from `<hp:offset>`/`<hp:sz>`, typography from `<hp:textartPr>`.
+pub(crate) fn decode_textart(
+    text_art: &HxTextArt,
+    char_shape_id: CharShapeIndex,
+    _depth: usize,
+) -> HwpxResult<Run> {
+    let (width, height) = text_art
+        .sz
+        .as_ref()
+        .map(|sz| {
+            (
+                HwpUnit::new(sz.width).unwrap_or(HwpUnit::ZERO),
+                HwpUnit::new(sz.height).unwrap_or(HwpUnit::ZERO),
+            )
+        })
+        .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
+    let (horz_offset, vert_offset) = text_art.offset.as_ref().map(|o| (o.x, o.y)).unwrap_or((0, 0));
+    let inst_id = text_art.instid.parse::<u64>().ok().filter(|v| *v != 0);
+    let pr = text_art.textart_pr.clone().unwrap_or_default();
+    let line_spacing = u32::try_from(pr.line_spacing).unwrap_or(0);
+    let char_spacing = u32::try_from(pr.char_spacing).unwrap_or(0);
+    let shape = if pr.text_shape.is_empty() { "RECTANGLE".to_string() } else { pr.text_shape };
+    let align = if pr.align.is_empty() { "LEFT".to_string() } else { pr.align };
+
+    Ok(Run {
+        content: RunContent::Control(Box::new(Control::TextArt {
+            text: text_art.text.clone(),
+            shape,
+            font_name: pr.font_name,
+            font_style: pr.font_style,
+            align,
+            line_spacing,
+            char_spacing,
+            width,
+            height,
+            horz_offset,
+            vert_offset,
+            fill_color: None,
+            inst_id,
+        })),
+        char_shape_id,
+    })
+}
+
 /// Decodes an `HxConnectLine` into a Core `Run` with `Control::ConnectLine`.
 pub(crate) fn decode_connect_line(
     cl: &HxConnectLine,
@@ -572,6 +619,95 @@ pub(crate) fn decode_connect_line(
         })),
         char_shape_id,
     })
+}
+
+/// Decodes an `<hp:container>` (group / 묶음 객체) into a Core `Run` carrying
+/// `Control::Group` (Wave A: FLAT children only).
+///
+/// Children reuse the per-shape decoders; the inner `Control` is extracted
+/// from each produced `Run`. Geometry/offset come from the container's
+/// `orgSz`/`pos`; `instid` maps to `inst_id`. Returns `None` when the
+/// container has no representable children.
+pub(crate) fn decode_container(
+    container: &crate::schema::section::HxContainer,
+    char_shape_id: CharShapeIndex,
+    depth: usize,
+) -> HwpxResult<Option<Run>> {
+    // Bound nested-container recursion (group-in-group) against pathological
+    // depth — same cap and pattern as table nesting (`convert_table`).
+    if depth >= crate::decoder::section::MAX_NESTING_DEPTH {
+        return Ok(None);
+    }
+
+    let mut children: Vec<Control> = Vec::new();
+
+    let push_run = |run: Run, out: &mut Vec<Control>| {
+        if let RunContent::Control(boxed) = run.content {
+            out.push(*boxed);
+        }
+    };
+
+    for rect in &container.rects {
+        if let Some(run) = decode_textbox(rect, char_shape_id, depth)? {
+            push_run(run, &mut children);
+        }
+    }
+    for line in &container.lines {
+        push_run(decode_line(line, char_shape_id, depth)?, &mut children);
+    }
+    for ellipse in &container.ellipses {
+        let run = if ellipse.has_arc_pr == 1 {
+            decode_arc(ellipse, char_shape_id, depth)?
+        } else {
+            decode_ellipse(ellipse, char_shape_id, depth)?
+        };
+        push_run(run, &mut children);
+    }
+    for polygon in &container.polygons {
+        push_run(decode_polygon(polygon, char_shape_id, depth)?, &mut children);
+    }
+    for curve in &container.curves {
+        push_run(decode_curve(curve, char_shape_id, depth)?, &mut children);
+    }
+    for connect_line in &container.connect_lines {
+        push_run(decode_connect_line(connect_line, char_shape_id, depth)?, &mut children);
+    }
+    // Nested `<hp:container>` children recurse (Wave B); depth+1 bounds it.
+    for nested in &container.containers {
+        if let Some(run) = decode_container(nested, char_shape_id, depth + 1)? {
+            push_run(run, &mut children);
+        }
+    }
+
+    if children.is_empty() {
+        return Ok(None);
+    }
+
+    let (width, height) = container
+        .org_sz
+        .as_ref()
+        .map(|sz| {
+            (
+                HwpUnit::new(sz.width).unwrap_or(HwpUnit::ZERO),
+                HwpUnit::new(sz.height).unwrap_or(HwpUnit::ZERO),
+            )
+        })
+        .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
+    let (horz_offset, vert_offset) =
+        container.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
+    let inst_id = container.instid.parse::<u64>().ok().filter(|&v| v != 0);
+
+    Ok(Some(Run {
+        content: RunContent::Control(Box::new(Control::Group {
+            children,
+            width,
+            height,
+            horz_offset,
+            vert_offset,
+            inst_id,
+        })),
+        char_shape_id,
+    }))
 }
 
 #[cfg(test)]

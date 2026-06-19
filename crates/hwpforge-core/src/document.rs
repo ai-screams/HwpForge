@@ -103,10 +103,7 @@ pub struct Validated;
 /// use hwpforge_core::document::Document;
 /// use hwpforge_core::Metadata;
 ///
-/// let doc = Document::with_metadata(Metadata {
-///     title: Some("Report".to_string()),
-///     ..Metadata::default()
-/// });
+/// let doc = Document::with_metadata(Metadata::new().with_title("Report"));
 /// assert!(doc.is_empty());
 /// ```
 pub struct Document<S = Draft> {
@@ -177,10 +174,7 @@ impl Document<Draft> {
     /// use hwpforge_core::document::Document;
     /// use hwpforge_core::Metadata;
     ///
-    /// let doc = Document::with_metadata(Metadata {
-    ///     title: Some("Test".to_string()),
-    ///     ..Metadata::default()
-    /// });
+    /// let doc = Document::with_metadata(Metadata::new().with_title("Test"));
     /// assert_eq!(doc.metadata().title.as_deref(), Some("Test"));
     /// ```
     pub fn with_metadata(metadata: Metadata) -> Self {

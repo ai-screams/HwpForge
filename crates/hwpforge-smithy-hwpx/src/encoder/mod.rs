@@ -15,12 +15,32 @@ pub(crate) mod package;
 pub(crate) mod section;
 pub(crate) mod shapes;
 
-/// Escapes XML special characters in text content.
+/// Escapes XML special characters in text content **and** strips Unicode
+/// code points illegal in XML 1.0 character content.
 ///
-/// Handles `&`, `<`, `>`, and `"`. Single quotes (`'`) are **not** escaped
-/// because all HWPX attribute values produced by this encoder use double-quote
-/// delimiters. If a future caller places escaped values inside single-quoted
-/// XML attributes, `&apos;` escaping must be added.
+/// Combines two responsibilities in a single pass:
+///
+/// 1. **Metacharacter escaping** — `&`, `<`, `>`, and `"` are encoded as
+///    `&amp;`, `&lt;`, `&gt;`, and `&quot;`. Single quotes (`'`) are
+///    **not** escaped because all HWPX attribute values produced by this
+///    encoder use double-quote delimiters. If a future caller places
+///    escaped values inside single-quoted XML attributes, `&apos;`
+///    escaping must be added.
+///
+/// 2. **Illegal-character strip** — Wave 12n leftover hardening (#87)
+///    promoted the previously metadata-only `sanitize_xml_text` strip
+///    to apply at every emit surface. The same `\x01..=\x08 | \x0B |
+///    \x0C | \x0E..=\x1F | U+FFFE | U+FFFF` ranges are dropped here so
+///    no caller can accidentally inject parser-fatal bytes through the
+///    50+ direct uses of `escape_xml` scattered throughout
+///    `encoder::section` / `encoder::header` / `encoder::shapes`.
+///
+/// The standalone [`sanitize_xml_text`] remains available for callers
+/// that only want the strip step (e.g. text routed through other
+/// escape paths). [`escape_xml_text_safe`] is the explicit-name
+/// convenience wrapper used by metadata; it is now equivalent to
+/// `escape_xml` for the strip+escape sequence but preserves the
+/// historical naming.
 pub(crate) fn escape_xml(s: &str) -> String {
     // Single-pass: only allocate when a special character is found.
     let mut result = String::with_capacity(s.len());
@@ -30,10 +50,63 @@ pub(crate) fn escape_xml(s: &str) -> String {
             '<' => result.push_str("&lt;"),
             '>' => result.push_str("&gt;"),
             '"' => result.push_str("&quot;"),
+            '\t' | '\n' | '\r' => result.push(ch),
+            '\u{0001}'..='\u{0008}'
+            | '\u{000B}'
+            | '\u{000C}'
+            | '\u{000E}'..='\u{001F}'
+            | '\u{FFFE}'
+            | '\u{FFFF}' => { /* strip — XML 1.0 illegal range */ }
             _ => result.push(ch),
         }
     }
     result
+}
+
+/// Strips Unicode code points that are illegal in XML 1.0 character content.
+///
+/// Removes:
+/// - **C0 control characters** (U+0000 – U+001F) except `\t` (U+0009),
+///   `\n` (U+000A), and `\r` (U+000D)
+/// - **Unicode non-characters** U+FFFE / U+FFFF, which are explicitly
+///   forbidden by the XML 1.0 Character Range production
+///   (`#x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]`)
+/// - **Surrogate code points** U+D800 – U+DFFF cannot occur in a
+///   well-formed `&str` (Rust enforces valid UTF-8), so they are not
+///   explicitly checked but the documentation calls out the rejection
+///   contract.
+///
+/// This is a **separate** stage from [`escape_xml`]: escaping only handles
+/// metacharacters that have meaning inside well-formed XML, while this
+/// sanitizer rejects bytes that the parser would reject *before* any
+/// escaping applied. Apply this first when user-controlled string values
+/// flow into XML text content (e.g. document metadata).
+///
+/// Wave 12o architect review S1: separating concerns prevents the common
+/// foot-gun where `escape_xml` produces well-formed-looking output that a
+/// strict downstream parser still rejects.
+pub(crate) fn sanitize_xml_text(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '\t' | '\n' | '\r' => result.push(ch),
+            '\u{0001}'..='\u{0008}'
+            | '\u{000B}'
+            | '\u{000C}'
+            | '\u{000E}'..='\u{001F}'
+            | '\u{FFFE}'
+            | '\u{FFFF}' => { /* strip */ }
+            _ => result.push(ch),
+        }
+    }
+    result
+}
+
+/// Convenience: sanitize then escape. Used by metadata writers where
+/// values flow straight from user-controlled `Metadata` fields into XML
+/// text content.
+pub(crate) fn escape_xml_text_safe(s: &str) -> String {
+    escape_xml(&sanitize_xml_text(s))
 }
 
 /// Returns `true` if the URL uses a safe scheme for hyperlinks.
@@ -114,6 +187,39 @@ pub(crate) fn sanitize_zip_entry_name(name: &str) -> String {
 }
 
 #[cfg(test)]
+mod sanitize_xml_text_tests {
+    use super::sanitize_xml_text;
+
+    #[test]
+    fn allows_tab_lf_cr() {
+        assert_eq!(sanitize_xml_text("a\tb\nc\rd"), "a\tb\nc\rd");
+    }
+
+    #[test]
+    fn strips_c0_controls_except_tab_lf_cr() {
+        // U+0001 .. U+0008, U+000B, U+000C, U+000E .. U+001F all stripped.
+        let input = "x\u{0001}y\u{0008}z\u{000B}w\u{000C}v\u{000E}u\u{001F}t";
+        assert_eq!(sanitize_xml_text(input), "xyzwvut");
+    }
+
+    #[test]
+    fn strips_non_characters_fffe_ffff() {
+        assert_eq!(sanitize_xml_text("a\u{FFFE}b\u{FFFF}c"), "abc");
+    }
+
+    #[test]
+    fn preserves_korean_text() {
+        assert_eq!(sanitize_xml_text("안녕하세요 Wave 12o"), "안녕하세요 Wave 12o");
+    }
+
+    #[test]
+    fn preserves_xml_metachars() {
+        // Sanitization does NOT escape — that's escape_xml's job.
+        assert_eq!(sanitize_xml_text("<a&b>"), "<a&b>");
+    }
+}
+
+#[cfg(test)]
 mod escape_xml_tests {
     use super::escape_xml;
 
@@ -153,6 +259,30 @@ mod escape_xml_tests {
     #[test]
     fn url_with_ampersand() {
         assert_eq!(escape_xml("https://example.com?a=1&b=2"), "https://example.com?a=1&amp;b=2");
+    }
+
+    // ── Wave 12n leftover #87 — C0 / illegal-char strip integrated ──
+
+    /// `escape_xml` now also strips XML 1.0-illegal control characters so
+    /// the 50+ direct callers across encoder/section, encoder/header,
+    /// and encoder/shapes do not need to be individually audited.
+    #[test]
+    fn strips_c0_controls_in_addition_to_escape() {
+        let input = "a\u{0001}b\u{0008}c\u{000B}d";
+        assert_eq!(escape_xml(input), "abcd");
+    }
+
+    #[test]
+    fn preserves_tab_lf_cr_during_escape() {
+        // Hancom HWPX uses literal newlines inside `<hp:t>` for memo body
+        // continuation; escape_xml must NOT strip those.
+        assert_eq!(escape_xml("line1\nline2\tindent\rfinal"), "line1\nline2\tindent\rfinal");
+    }
+
+    #[test]
+    fn strips_non_characters_alongside_metachar_escape() {
+        let input = "x\u{FFFE}<\u{FFFF}>";
+        assert_eq!(escape_xml(input), "x&lt;&gt;");
     }
 }
 
@@ -433,8 +563,10 @@ impl HwpxEncoder {
             image_store.iter().map(|(key, data)| (key.to_string(), data.to_vec())).collect();
 
         // Step 4: Package into ZIP with images, charts, master pages, and
-        // embedded-chart OLE blobs.
+        // embedded-chart OLE blobs. Document.metadata flows into content.hpf
+        // <opf:metadata> (Wave 12o Phase 1).
         PackageWriter::write_hwpx(
+            document.metadata(),
             &header_xml,
             &section_xmls,
             &images,

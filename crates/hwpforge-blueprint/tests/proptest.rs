@@ -4,10 +4,7 @@
 
 use hwpforge_blueprint::error::BlueprintError;
 use hwpforge_blueprint::style::{CharShape, ParaShape, PartialCharShape, PartialParaShape};
-use hwpforge_foundation::{
-    Alignment, Color, EmbossType, EmphasisType, EngraveType, HwpUnit, LineSpacingType, OutlineType,
-    ShadowType, StrikeoutShape, UnderlineType, VerticalPosition,
-};
+use hwpforge_foundation::{Alignment, Color, HwpUnit, LineSpacingType};
 use proptest::prelude::*;
 
 // ---------------------------------------------------------------------------
@@ -109,14 +106,14 @@ proptest! {
         italic in any::<bool>(),
         color in arb_color(),
     ) {
-        let partial = PartialCharShape {
-            font: Some(font.clone()),
-            size: Some(size),
-            bold: Some(bold),
-            italic: Some(italic),
-            color: Some(color),
-            ..Default::default()
-        };
+        // CharShape/PartialCharShape are #[non_exhaustive]; build via
+        // default() + field mutation rather than struct-literal.
+        let mut partial = PartialCharShape::default();
+        partial.font = Some(font.clone());
+        partial.size = Some(size);
+        partial.bold = Some(bold);
+        partial.italic = Some(italic);
+        partial.color = Some(color);
         let resolved = partial.resolve("test").unwrap();
         prop_assert_eq!(resolved.font, font);
         prop_assert_eq!(resolved.size, size);
@@ -129,11 +126,8 @@ proptest! {
     fn partial_char_shape_missing_font_fails(
         size in arb_hwpunit(),
     ) {
-        let partial = PartialCharShape {
-            font: None,
-            size: Some(size),
-            ..Default::default()
-        };
+        let mut partial = PartialCharShape::default();
+        partial.size = Some(size); // font intentionally left None
         let err = partial.resolve("test").unwrap_err();
         match err {
             BlueprintError::StyleResolution { field, .. } => {
@@ -147,11 +141,8 @@ proptest! {
     fn partial_char_shape_missing_size_fails(
         font in arb_font(),
     ) {
-        let partial = PartialCharShape {
-            font: Some(font),
-            size: None,
-            ..Default::default()
-        };
+        let mut partial = PartialCharShape::default();
+        partial.font = Some(font); // size intentionally left None
         let err = partial.resolve("test").unwrap_err();
         match err {
             BlueprintError::StyleResolution { field, .. } => {
@@ -173,12 +164,10 @@ proptest! {
         size in proptest::option::of(arb_hwpunit()),
         bold in proptest::option::of(any::<bool>()),
     ) {
-        let child = PartialCharShape {
-            font,
-            size,
-            bold,
-            ..Default::default()
-        };
+        let mut child = PartialCharShape::default();
+        child.font = font;
+        child.size = size;
+        child.bold = bold;
 
         let mut base1 = PartialCharShape::default();
         base1.merge(&child);
@@ -201,16 +190,13 @@ proptest! {
         spacing_type in proptest::option::of(arb_line_spacing_type()),
         spacing_val in proptest::option::of(50.0f64..300.0),
     ) {
-        let partial = PartialParaShape {
-            alignment,
-            line_spacing: spacing_type.map(|st| {
-                hwpforge_blueprint::style::LineSpacing {
-                    spacing_type: Some(st),
-                    value: spacing_val,
-                }
-            }),
-            ..Default::default()
-        };
+        // #[non_exhaustive]; build via default() + field assignment.
+        let mut partial = PartialParaShape::default();
+        partial.alignment = alignment;
+        partial.line_spacing = spacing_type.map(|st| hwpforge_blueprint::style::LineSpacing {
+            spacing_type: Some(st),
+            value: spacing_val,
+        });
 
         let resolved = partial.resolve("test", &[], &[]).unwrap();
         // Should always succeed since ParaShape has defaults for all fields
@@ -235,31 +221,16 @@ proptest! {
         italic in any::<bool>(),
         color in arb_color(),
     ) {
-        let original = CharShape {
-            font: font.clone(),
-            size,
-            bold,
-            italic,
-            color,
-            underline_type: UnderlineType::None,
-            underline_color: None,
-            strikeout_shape: StrikeoutShape::None,
-            strikeout_color: None,
-            outline: OutlineType::None,
-            shadow: ShadowType::None,
-            emboss: EmbossType::None,
-            engrave: EngraveType::None,
-            vertical_position: VerticalPosition::Normal,
-            shade_color: None,
-            emphasis: EmphasisType::None,
-            ratio: 100,
-            spacing: 0,
-            rel_sz: 100,
-            offset: 0,
-            use_kerning: false,
-            use_font_space: false,
-            char_border_fill_id: None,
-        };
+        // CharShape is #[non_exhaustive] (no external struct-literal). Build a
+        // semantically-valid shape through the canonical resolve() path instead
+        // of a literal — also exercises the real construction route.
+        let mut partial = PartialCharShape::default();
+        partial.font = Some(font.clone());
+        partial.size = Some(size);
+        partial.bold = Some(bold);
+        partial.italic = Some(italic);
+        partial.color = Some(color);
+        let original = partial.resolve("test").unwrap();
         let yaml = serde_yaml::to_string(&original).unwrap();
         let back: CharShape = serde_yaml::from_str(&yaml).unwrap();
         prop_assert_eq!(original.font, back.font);
@@ -281,23 +252,11 @@ proptest! {
         spacing_type in arb_line_spacing_type(),
         spacing_val in 50.0f64..300.0,
     ) {
-        let original = ParaShape {
-            alignment,
-            line_spacing_type: spacing_type,
-            line_spacing_value: spacing_val,
-            space_before: HwpUnit::ZERO,
-            space_after: HwpUnit::ZERO,
-            indent_left: HwpUnit::ZERO,
-            indent_right: HwpUnit::ZERO,
-            indent_first_line: HwpUnit::ZERO,
-            break_type: hwpforge_foundation::BreakType::None,
-            keep_with_next: false,
-            keep_lines_together: false,
-            widow_orphan: true,
-            border_fill_id: None,
-            tab_def_id: 0,
-            list: None,
-        };
+        // #[non_exhaustive]; build via default() + the fields under test.
+        let mut original = ParaShape::default();
+        original.alignment = alignment;
+        original.line_spacing_type = spacing_type;
+        original.line_spacing_value = spacing_val;
         let yaml = serde_yaml::to_string(&original).unwrap();
         let back: ParaShape = serde_yaml::from_str(&yaml).unwrap();
         prop_assert_eq!(original.alignment, back.alignment);

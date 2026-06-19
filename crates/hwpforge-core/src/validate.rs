@@ -223,6 +223,9 @@ fn validate_control_run(
         Control::Equation { script, width, height, .. } => {
             validate_equation_control(script, width.as_i32(), height.as_i32(), ctx)
         }
+        Control::TextArt { width, height, .. } => {
+            validate_shape_dimensions(width.as_i32(), height.as_i32(), "TextArt", ctx)
+        }
         Control::Hyperlink { .. }
         | Control::Unknown { .. }
         | Control::Dutmal { .. }
@@ -235,6 +238,120 @@ fn validate_control_run(
         | Control::Field { .. }
         | Control::Memo { .. }
         | Control::IndexMark { .. } => Ok(()),
+        // Wave 12n: targeted invariant checks for new variants. Architect review
+        // medium: do not let new variants slide through with a blanket `Ok(())`.
+        Control::UnknownSummery { token, .. } => validate_unknown_summery(token, ctx),
+        Control::DateCodeField { raw_command, is_time_mode, .. } => {
+            validate_date_code_field(raw_command, *is_time_mode, ctx)
+        }
+        Control::InlinePageNumber { kind, raw_flag } => {
+            validate_inline_page_number(*kind, *raw_flag, ctx)
+        }
+        Control::PathField { .. } => Ok(()),
+        // Group (묶음 객체): recursively validate each child (nested groups +
+        // per-child dimension/empty checks at the same chokepoint). Only
+        // shape-family controls are legitimate children; non-shape variants
+        // are rejected so a malformed builder caller can't smuggle a
+        // hyperlink/field/memo into a `<hp:container>`.
+        Control::Group { children, .. } => {
+            for child in children {
+                if !is_group_child_allowed(child) {
+                    return Err(ValidationError::InvalidGroupChild {
+                        section_index: ctx.section_index,
+                        paragraph_index: ctx.paragraph_index,
+                        run_index: ctx.run_index,
+                    });
+                }
+                validate_control_run(child, ctx)?;
+            }
+            Ok(())
+        }
+    }
+}
+
+/// Returns `true` if `control` is a drawing-shape variant permitted as a
+/// child of [`Control::Group`]. Groups may nest the geometric shapes, OLE
+/// objects, images, and further groups — but not text-flow controls
+/// (hyperlink/field/memo/bookmark/cross-ref/index-mark/page-number).
+fn is_group_child_allowed(control: &Control) -> bool {
+    matches!(
+        control,
+        Control::Line { .. }
+            | Control::Rect { .. }
+            | Control::Ellipse { .. }
+            | Control::Arc { .. }
+            | Control::Polygon { .. }
+            | Control::Curve { .. }
+            | Control::ConnectLine { .. }
+            | Control::TextBox { .. }
+            | Control::EmbeddedChart { .. }
+            | Control::Equation { .. }
+            | Control::TextArt { .. }
+            | Control::Group { .. }
+    )
+}
+
+/// Rejects an `UnknownSummery` whose token is empty or does not start with
+/// `$` — both are nonsensical for an HWPX SUMMERY `Command` and would
+/// emit garbage XML.
+fn validate_unknown_summery(token: &str, ctx: RunValidationContext) -> Result<(), ValidationError> {
+    if token.is_empty() || !token.starts_with('$') {
+        Err(ValidationError::InvalidSummeryToken {
+            section_index: ctx.section_index,
+            paragraph_index: ctx.paragraph_index,
+            run_index: ctx.run_index,
+            token: token.to_string(),
+        })
+    } else {
+        Ok(())
+    }
+}
+
+/// Rejects a `DateCodeField` whose `is_time_mode` claim contradicts the
+/// `T`-prefix convention of the raw command (Wave 12n architect review:
+/// keep the derived helper and the raw bytes from drifting apart).
+fn validate_date_code_field(
+    raw_command: &str,
+    is_time_mode: bool,
+    ctx: RunValidationContext,
+) -> Result<(), ValidationError> {
+    if raw_command.is_empty() || is_time_mode != raw_command.starts_with('T') {
+        Err(ValidationError::DateCodeFieldMismatch {
+            section_index: ctx.section_index,
+            paragraph_index: ctx.paragraph_index,
+            run_index: ctx.run_index,
+            is_time_mode,
+            raw_command: raw_command.to_string(),
+        })
+    } else {
+        Ok(())
+    }
+}
+
+/// Rejects an `InlinePageNumber` whose typed `kind` has a canonical
+/// `raw_flag` that does not match the actual `raw_flag` field
+/// (Wave 12n architect review: the encoder ignores `raw_flag` for known
+/// kinds, so a mismatch is silent drift).
+fn validate_inline_page_number(
+    kind: crate::control::InlinePageKind,
+    raw_flag: u32,
+    ctx: RunValidationContext,
+) -> Result<(), ValidationError> {
+    use crate::control::InlinePageKind;
+    match kind.raw_flag() {
+        Some(expected) if expected != raw_flag => Err(ValidationError::InlinePageNumberMismatch {
+            section_index: ctx.section_index,
+            paragraph_index: ctx.paragraph_index,
+            run_index: ctx.run_index,
+            kind: match kind {
+                InlinePageKind::CurrentPage => "CurrentPage",
+                InlinePageKind::TotalPages => "TotalPages",
+                InlinePageKind::Unknown => "Unknown",
+            },
+            expected,
+            actual: raw_flag,
+        }),
+        _ => Ok(()),
     }
 }
 
@@ -1147,6 +1264,7 @@ mod tests {
             base_line: 71,
             text_color: hwpforge_foundation::Color::BLACK,
             font: "HancomEQN".to_string(),
+            inst_id: None,
         };
         let sections = wrap_ctrl(ctrl);
         let result = validate_sections(&sections);
@@ -1162,6 +1280,7 @@ mod tests {
             base_line: 71,
             text_color: hwpforge_foundation::Color::BLACK,
             font: "HancomEQN".to_string(),
+            inst_id: None,
         };
         let sections = wrap_ctrl(ctrl);
         let result = validate_sections(&sections);
@@ -1180,6 +1299,7 @@ mod tests {
             base_line: 71,
             text_color: hwpforge_foundation::Color::BLACK,
             font: "HancomEQN".to_string(),
+            inst_id: None,
         };
         let sections = wrap_ctrl(ctrl);
         let result = validate_sections(&sections);

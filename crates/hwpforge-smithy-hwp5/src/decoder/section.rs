@@ -4,6 +4,8 @@
 //! producing an intermediate representation that the projection layer
 //! converts into Core's `Section` and `Paragraph` types.
 
+use std::collections::hash_map::Entry;
+use std::collections::HashMap;
 use std::io::Cursor;
 
 use crate::decoder::Hwp5Warning;
@@ -11,9 +13,10 @@ use crate::error::Hwp5Result;
 use crate::schema::header::HwpVersion;
 use crate::schema::record::{Record, TagId};
 use crate::schema::section::{
-    Hwp5CharShapeRun, Hwp5PageDef, Hwp5ParaHeader, Hwp5ParaLineSeg, Hwp5ParaText,
+    Hwp5CharShapeRun, Hwp5DutmalControl, Hwp5EqEdit, Hwp5MemoCommand, Hwp5PageDef, Hwp5ParaHeader,
+    Hwp5ParaLineSeg, Hwp5ParaText, Hwp5ShapeComponentCurve, Hwp5ShapeComponentEllipse,
     Hwp5ShapeComponentGeometry, Hwp5ShapeComponentLine, Hwp5ShapeComponentOle,
-    Hwp5ShapeComponentPolygon, Hwp5ShapePicture, Hwp5ShapePoint, TextSegment,
+    Hwp5ShapeComponentPolygon, Hwp5ShapePicture, Hwp5ShapePoint, Hwp5ShapeTextArt, TextSegment,
 };
 
 // ---------------------------------------------------------------------------
@@ -55,6 +58,81 @@ pub(crate) enum Hwp5Control {
     Rect(Hwp5RectControl),
     /// Polygon evidence resolved from `gso ` + `ShapeComponent` + `ShapeComponentPolygon`.
     Polygon(Hwp5PolygonControl),
+    /// Ellipse evidence resolved from `gso ` + `ShapeComponent` + `ShapeComponentEllipse`.
+    Ellipse(Hwp5EllipseControl),
+    /// Arc evidence resolved from the same `ShapeComponentEllipse` (`0x50`) record
+    /// with arc fields populated — 한컴 does not emit a separate arc sub-record.
+    Arc(Hwp5ArcControl),
+    /// Curve evidence resolved from `gso ` + `ShapeComponent` + `ShapeComponentCurve`.
+    Curve(Hwp5CurveControl),
+    /// Connect-line evidence. 한컴 stores connectors in the same
+    /// `ShapeComponentLine` (`0x4E`) sub-record as a plain line, distinguished
+    /// only by the `ShapeComponent` type tag `"$col"`.
+    ConnectLine(Hwp5ConnectLineControl),
+    /// Equation editor control (`eqed`) carrying a HancomEQN script.
+    Equation(Hwp5EquationControl),
+    /// Memo (메모) annotation control. The HWP5 ctrl carries only a
+    /// placeholder (`%unk` ctrl with command `"MEMO/{shapeId}/{memo_id}/{instId}"`);
+    /// the memo body content lives in a separate `HWPTAG_MEMO_LIST` (0x5D)
+    /// cluster at the section's last body paragraph and is joined back by
+    /// `memo_id` during `BodyTextParserState::finish`.
+    Memo(Hwp5MemoControl),
+    /// Dutmal (덧말) — small ruby-style annotation that prints
+    /// `main_text` in the body run and `sub_text` above/below it. Wire
+    /// pairs an inline `0x17` marker in the body's `ParaText` stream
+    /// with a `tdut` CtrlHeader carrying the actual strings — see
+    /// `schema::section::Hwp5DutmalControl` for the payload layout.
+    Dutmal(Hwp5DutmalControl),
+    /// Compose (글자겹침) — overlaid/combined characters in one cell
+    /// position. Wire pairs an inline `0x17` marker in the body's
+    /// `ParaText` stream with a `tcps` CtrlHeader carrying the
+    /// composed text and 10 charPr references — see
+    /// `schema::section::Hwp5ComposeControl` for the payload layout.
+    Compose(crate::schema::section::Hwp5ComposeControl),
+    /// IndexMark (찾아보기 표시) — inline marker that names a
+    /// document-level index entry. Wire pairs an inline `0x16`
+    /// marker (extra carries the LE-stored ctrl_id `idxm`) in the
+    /// body's `ParaText` with an `idxm` CtrlHeader carrying the
+    /// `primary` text and an optional `secondary` text — see
+    /// `schema::section::Hwp5IndexMarkControl` for the payload
+    /// layout. (Wave 12k.)
+    IndexMark(crate::schema::section::Hwp5IndexMarkControl),
+    /// ClickHere (누름틀, CLICK_HERE press-field) — interactive form
+    /// placeholder. Wire pairs an inline `0x03` (FIELD_BEGIN) marker in
+    /// the body's `ParaText` stream with a `%clk` CtrlHeader carrying
+    /// hint/help text + a following `0x57 lvl=2` sub-record carrying the
+    /// form-mode name — see `schema::section::Hwp5ClickHereControl` for
+    /// the payload layout. (Wave 12l.)
+    ClickHere(crate::schema::section::Hwp5ClickHereControl),
+    /// SUMMERY auto-field — `%smr` ctrl_id. Carries the Command `$token`
+    /// (e.g. `$author`, `$modifiedtime`) that the projection layer maps
+    /// to a typed `FieldType` or, for unknown tokens, to
+    /// `Control::UnknownSummery`. See
+    /// `schema::section::Hwp5SummeryControl`. (Wave 12n.)
+    SummeryField(crate::schema::section::Hwp5SummeryControl),
+    /// `%dte` date/time format-code field — carries a raw format pattern
+    /// (e.g. `"\:1년 2월 3일 (6);0;"` or `"T\:;0;"`). The projection
+    /// layer surfaces it as `Control::DateCodeField` with `raw_command`,
+    /// `is_time_mode` (derived from `T` prefix), and the 8-byte trailer
+    /// preserved verbatim. See `schema::section::Hwp5DateCodeControl`.
+    /// (Wave 12n.)
+    DateCodeField(crate::schema::section::Hwp5DateCodeControl),
+    /// `%pat` path/file-name field — carries a path format-code
+    /// Command (`"$P"`, `"$F"`, `"$P$F"`). See
+    /// `schema::section::Hwp5PathFieldControl`. (Wave 12n.)
+    PathField(crate::schema::section::Hwp5PathFieldControl),
+    /// `atno` inline page-number control — carries a 4-byte kind flag
+    /// (`0x00` current page, `0x06` total pages, other values forward
+    /// preserved). See `schema::section::Hwp5InlinePageNumberControl`.
+    /// (Wave 12n.)
+    InlinePageNumber(crate::schema::section::Hwp5InlinePageNumberControl),
+    /// `%xrf` cross-reference control — carries the structured
+    /// `?<target>;N1;N2;N3;N4;` Command with raw RefType / ContentType /
+    /// hyperlink codes. The projection layer maps these to typed
+    /// `Control::CrossRef` via boundary functions in
+    /// `smithy-hwp5/src/projection.rs`. See
+    /// `schema::section::Hwp5CrossRefControl`. (Wave 12m Phase 2.)
+    CrossRef(crate::schema::section::Hwp5CrossRefControl),
     /// Header control with nested subtree paragraphs.
     Header(Hwp5NestedSubtree),
     /// Footer control with nested subtree paragraphs.
@@ -75,6 +153,14 @@ pub(crate) enum Hwp5Control {
     TextBox(Hwp5TextBoxControl),
     /// Embedded OLE object evidence resolved from `gso ` + `ShapeComponent` + `ShapeComponentOle`.
     OleObject(Hwp5OleObjectControl),
+    /// Group (묶음 객체) evidence resolved from `gso ` + a `ShapeComponent`
+    /// (`0x4C`) carrying the `"$con"` type tag wrapping child
+    /// `ShapeComponent`s. Wave A carries FLAT children only; a nested
+    /// `$con`-in-`$con` is degraded to `Unknown` with a warning (see
+    /// [`GsoGroupBuilder`]). Depth-capped at [`GSO_GROUP_MAX_DEPTH`].
+    Group(Hwp5GroupControl),
+    /// TextArt (글맵시) evidence: gso ShapeComponent "$tat" + a 0x5A ShapeTextArt sub-record.
+    TextArt(Hwp5TextArtControl),
     /// Generic/unsupported control — preserve the ctrl_id for future expansion.
     Unknown {
         /// Four-byte control ID (big-endian ASCII, e.g. 0x74626C20 = 'tbl ').
@@ -93,6 +179,11 @@ pub(crate) struct Hwp5ImageControl {
     pub geometry: Hwp5ShapeComponentGeometry,
     /// `DocInfo/BinData` item identifier referenced by `ShapePicture`.
     pub binary_data_id: u16,
+    /// Wave 12p Step 1c-3: `gso ` CtrlHeader trailer 의 instance ID.
+    /// HWPX cross-ref Command `?#1108165583;1;0;0;0;` (TARGET_PICTURE)
+    /// 의 target ID 가 한컴 native `<hp:pic id="1108165583">` 와 매칭.
+    #[allow(dead_code)]
+    pub instance_id: u32,
 }
 
 /// Parsed line evidence from a `gso ` scope.
@@ -131,6 +222,133 @@ pub(crate) struct Hwp5PolygonControl {
     pub points: Vec<Hwp5ShapePoint>,
 }
 
+/// Parsed plain-ellipse evidence from a `gso ` scope.
+///
+/// Only geometry (placement + extent) is carried: projection derives the
+/// ellipse center/axes from the bounding box via `Control::ellipse`. The
+/// precise center/axis points decoded in [`Hwp5ShapeComponentEllipse`] are
+/// not needed downstream yet (they would only matter for exact-geometry
+/// fidelity, a future refinement).
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5EllipseControl {
+    /// Owning control identifier, currently always `gso `.
+    #[allow(dead_code)] // reserved for semantic/control-audit slices
+    pub ctrl_id: u32,
+    /// Minimal recovered geometry (placement + extent).
+    pub geometry: Hwp5ShapeComponentGeometry,
+}
+
+/// Parsed TextArt (글맵시) evidence from a `gso ` scope whose `ShapeComponent`
+/// (`0x4C`) carries the `"$tat"` type tag wrapping a `ShapeTextArt` (`0x5A`)
+/// sub-record.
+///
+/// Geometry (placement + extent) comes from the owning `gso ` `CtrlHeader`,
+/// identical to how an ellipse gets its geometry; the warped-text payload
+/// (text, font, shape enum, spacing, alignment) comes from the `0x5A` record.
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5TextArtControl {
+    /// Owning control identifier, currently always `gso `.
+    #[allow(dead_code)] // reserved for semantic/control-audit slices
+    pub ctrl_id: u32,
+    /// Minimal recovered geometry (placement + extent).
+    pub geometry: Hwp5ShapeComponentGeometry,
+    /// Parsed warped-text payload from the `0x5A` `ShapeTextArt` sub-record.
+    pub text_art: Hwp5ShapeTextArt,
+    /// gso CtrlHeader trailer instance ID (mirror `Hwp5ImageControl.instance_id`).
+    pub instance_id: u32,
+}
+
+/// Parsed arc evidence from a `gso ` scope (a `ShapeComponentEllipse` with arc fields).
+///
+/// Carries geometry only for now. We emit a `Normal` arc sized from the
+/// bounding box; exact arc-sweep endpoints and pie/chord arc types are a
+/// future refinement that needs dedicated fixtures, so the decoded arc points
+/// are intentionally not propagated here.
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5ArcControl {
+    /// Owning control identifier, currently always `gso `.
+    #[allow(dead_code)] // reserved for semantic/control-audit slices
+    pub ctrl_id: u32,
+    /// Minimal recovered geometry (placement + extent).
+    pub geometry: Hwp5ShapeComponentGeometry,
+}
+
+/// Parsed connect-line evidence from a `gso ` scope.
+///
+/// Shares the `ShapeComponentLine` (`0x4E`) sub-record with a plain line; the
+/// distinction comes from the `ShapeComponent` type tag. Only the endpoints and
+/// geometry are carried — the connector's object-link references map to no HWPX
+/// `<hp:connectLine>` attribute, so they are intentionally dropped.
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5ConnectLineControl {
+    /// Owning control identifier, currently always `gso `.
+    #[allow(dead_code)] // reserved for semantic/control-audit slices
+    pub ctrl_id: u32,
+    /// Minimal recovered geometry (placement + extent).
+    pub geometry: Hwp5ShapeComponentGeometry,
+    /// Connector start point in local object coordinates.
+    pub start: Hwp5ShapePoint,
+    /// Connector end point in local object coordinates.
+    pub end: Hwp5ShapePoint,
+}
+
+/// Parsed equation evidence from an `eqed` ctrl + `HWPTAG_EQEDIT` child record.
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5EquationControl {
+    /// Owning control identifier, always `eqed`.
+    #[allow(dead_code)] // reserved for semantic/control-audit slices
+    pub ctrl_id: u32,
+    /// Minimal recovered geometry (equation box extent) from the ctrl header.
+    pub geometry: Hwp5ShapeComponentGeometry,
+    /// HancomEQN script text recovered from the `HWPTAG_EQEDIT` record.
+    pub script: String,
+    /// Wave 12p Step 1c-2: `eqed` CtrlHeader trailer 의 instance ID
+    /// (last 8 bytes 의 first 4, u32 LE). HWPX cross-ref Command
+    /// `?#1108165599;2;0;0;0;` (TARGET_EQUATION) 의 target ID 가
+    /// 한컴 native `<hp:equation id="1108165599">` 와 매칭.
+    #[allow(dead_code)]
+    pub instance_id: u32,
+}
+
+/// Parsed memo placeholder from a `%unk` ctrl with command `"MEMO/.../.../..."`.
+///
+/// Wire metadata (shape_id / hancom_inst_* / author / terminator) lives in
+/// `command`. The decoder pushes this placeholder with `paragraphs: vec![]`
+/// when it sees the inline ctrl, then fills `paragraphs` from
+/// [`BodyTextParserState::memo_contents`] during `finish()` once the matching
+/// `HWPTAG_MEMO_LIST` cluster at the end of the section's last body paragraph
+/// has been captured. Cluster matching is keyed by `command.memo_id`, not by
+/// document position — see `phase12e_memo_design.md` for the wire layout.
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5MemoControl {
+    /// Owning control identifier, always `%unk` (0x2575_6E6B BE-ascii).
+    #[allow(dead_code)] // reserved for semantic/control-audit slices
+    pub ctrl_id: u32,
+    /// Full wire command — shape_id / memo_id / author / etc. The
+    /// downstream HWPX encoder uses these fields to emit the seven
+    /// `<hp:parameters>` 한컴 needs for correct memo classification (see
+    /// `.docs/algorithms/2026-06-01_memo_anchor_serialization.md`).
+    pub command: Hwp5MemoCommand,
+    /// Memo body paragraphs. Empty after the inline-ctrl push; filled by
+    /// `attach_memo_contents_to_placeholders` during `finish()`. Stays empty
+    /// when the matching cluster is missing (warning surfaced).
+    pub paragraphs: Vec<Hwp5Paragraph>,
+}
+
+/// Parsed curve evidence from a `gso ` scope.
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5CurveControl {
+    /// Owning control identifier, currently always `gso `.
+    #[allow(dead_code)] // reserved for semantic/control-audit slices
+    pub ctrl_id: u32,
+    /// Minimal recovered geometry (placement + extent).
+    pub geometry: Hwp5ShapeComponentGeometry,
+    /// Ordered curve control points in local object coordinates.
+    pub points: Vec<Hwp5ShapePoint>,
+    /// Per-gap segment type bytes (`0` = line, `1` = curve).
+    pub segment_types: Vec<u8>,
+}
+
 /// Parsed textbox evidence from a `gso ` scope carrying `drawText/subList`.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5TextBoxControl {
@@ -157,6 +375,45 @@ pub(crate) struct Hwp5OleObjectControl {
     pub extent_height: i32,
 }
 
+/// Parsed group (묶음 객체) evidence from a `gso ` scope whose first
+/// `ShapeComponent` (`0x4C`) carries the `"$con"` type tag.
+///
+/// `children` holds the flat shape controls decoded from the deeper-level
+/// `ShapeComponent`s nested under the `$con` record (Wave A). Each child is
+/// produced by the same per-record decoders the single-shape path uses, so
+/// the group adds no new shape-parsing logic — only scope bookkeeping.
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5GroupControl {
+    /// Owning control identifier, always `gso `.
+    #[allow(dead_code)] // reserved for semantic/control-audit slices
+    pub ctrl_id: u32,
+    /// Group bounding-box geometry from the owning `gso ` `CtrlHeader`.
+    pub geometry: Hwp5ShapeComponentGeometry,
+    /// Child drawing objects in document (z-) order.
+    pub children: Vec<Hwp5GroupChild>,
+    /// `gso ` CtrlHeader trailer instance ID (mirrored to HWPX
+    /// `<hp:container instid>`). `0` when not recoverable.
+    pub instance_id: u32,
+}
+
+/// One child of a [`Hwp5GroupControl`]: a shape control plus any `drawText`
+/// paragraphs it carried.
+///
+/// The shape `control` is the typed evidence (`Rect`/`Ellipse`/`Line`/...);
+/// `paragraphs` is non-empty only for text-bearing shapes (the native group
+/// fixture's rect and ellipse both hold a single text paragraph). Carrying
+/// paragraphs separately keeps the existing typed `Hwp5Control` shape
+/// variants unchanged while letting the projection layer attach the text to
+/// the Core shape (`Control::TextBox` for rects, `ellipse_with_text` for
+/// ellipses).
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5GroupChild {
+    /// The child shape control.
+    pub control: Hwp5Control,
+    /// `drawText` paragraphs carried by the child, if any.
+    pub paragraphs: Vec<Hwp5Paragraph>,
+}
+
 /// Parsed table control content.
 #[derive(Debug, Clone)]
 pub(crate) struct Hwp5Table {
@@ -174,6 +431,12 @@ pub(crate) struct Hwp5Table {
     pub border_fill_id: Option<u16>,
     /// Parsed cell records in source order.
     pub cells: Vec<Hwp5TableCell>,
+    /// Wave 12p Step 1c-1: Table CtrlHeader trailer 의 instance ID
+    /// (last 8 bytes 의 first 4, u32 LE). HWPX cross-ref Command
+    /// `?#<id>` 의 target ID 와 매칭, 한컴 native `<hp:tbl id="..."`
+    /// attribute 로 emit. 추출 불가하면 0.
+    #[allow(dead_code)]
+    pub instance_id: u32,
 }
 
 /// HWP5 table page break policy recovered from the table body record.
@@ -260,6 +523,15 @@ pub(crate) struct Hwp5NestedSubtree {
     /// the semantic split so the decoder stays format-agnostic
     /// (single source of payload, easy to extend for new bits).
     pub properties_raw: u32,
+    /// Wave 12p Step 1b: CtrlHeader trailer 의 first 4 bytes (u32 LE).
+    /// HWPX cross-ref Command `?#<id>` 의 target ID 와 매칭되는
+    /// instance ID. Footnote/Endnote 이 cross-ref 대상이 될 때 한컴이
+    /// 이 값을 `<hp:footNote instId="...">` / `<hp:endNote instId="...">`
+    /// attribute 로 emit. 추출 불가하면 0.
+    /// Wave 12p Step 4 (projection consumer) 가 land 하기 전까지는
+    /// 미사용 — `#[allow(dead_code)]` 로 step 별 atomic commit 분리.
+    #[allow(dead_code)]
+    pub instance_id: u32,
     /// Nested paragraphs captured under the subtree.
     pub paragraphs: Vec<Hwp5Paragraph>,
 }
@@ -281,8 +553,26 @@ pub(crate) struct SectionResult {
     /// follow the `secd` ctrl. 한글 emits them in `[BOTH, EVEN, ODD]`
     /// order; projection maps each to a `PageBorderFillEntry`.
     pub page_border_fills: Vec<Hwp5PageBorderFill>,
+    /// Column (다단) definition from the `cold` ctrl, if present and
+    /// multi-column. `None` for single-column sections; projection maps a
+    /// `col_count >= 2` value to `Section.column_settings`.
+    pub column_def: Option<Hwp5ColumnDef>,
     /// Non-fatal warnings.
     pub warnings: Vec<Hwp5Warning>,
+}
+
+/// Decoded `cold` (column definition / 다단) ctrl payload.
+///
+/// Wire (after the 4-byte `cold` ctrl_id): `[4..6]` u16 property word
+/// (bits 0-1 = column type, bits 2-9 = column count, bits 10-11 =
+/// direction), `[6..8]` u16 column gap in HWPUNIT. Equal-width columns
+/// (`sameSz`) store no per-column widths — 한글 computes them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Hwp5ColumnDef {
+    /// Number of columns (bits 2-9 of the property word).
+    pub col_count: u8,
+    /// Gap between columns in HWPUNIT.
+    pub gap: u16,
 }
 
 /// A decoded `HWPTAG_PAGE_BORDER_FILL` (0x4B) record.
@@ -333,25 +623,62 @@ impl Hwp5PageBorderFill {
 }
 
 // ---------------------------------------------------------------------------
-// ctrl_id constants
+// ctrl_id constants — consolidated in `crate::ctrl_ids` (#94 Step B1)
 // ---------------------------------------------------------------------------
 
-/// ctrl_id for a table control: ASCII 'tbl ' as big-endian u32.
-const CTRL_ID_TABLE: u32 = 0x7462_6C20;
-/// ctrl_id for header control: ASCII `head` as big-endian u32.
-const CTRL_ID_HEADER: u32 = 0x6865_6164;
-/// ctrl_id for footer control: ASCII `foot` as big-endian u32.
-const CTRL_ID_FOOTER: u32 = 0x666F_6F74;
-/// ctrl_id for section definition control: ASCII `secd` as big-endian u32.
-/// Holds page-level visibility / column-spacing / paper-spec metadata
-/// (HWP 5.0 spec §4.3.10.1 표 129·130).
-const CTRL_ID_SECD: u32 = 0x7365_6364;
-/// ctrl_id for footnote control: ASCII `fn  ` as big-endian u32.
-const CTRL_ID_FOOTNOTE: u32 = 0x666E_2020;
-/// ctrl_id for endnote control: ASCII `en  ` as big-endian u32.
-const CTRL_ID_ENDNOTE: u32 = 0x656E_2020;
-/// ctrl_id for generic shape object control: ASCII `gso ` as big-endian u32.
-const CTRL_ID_GSO: u32 = 0x6773_6F20;
+use crate::ctrl_ids::{
+    CTRL_ID_ATNO, CTRL_ID_CLICK_HERE, CTRL_ID_COLUMN_DEF, CTRL_ID_COMPOSE, CTRL_ID_DUTMAL,
+    CTRL_ID_ENDNOTE, CTRL_ID_EQED, CTRL_ID_FIELD_CROSSREF, CTRL_ID_FIELD_DATE_CODE,
+    CTRL_ID_FIELD_PATH, CTRL_ID_FIELD_SUMMERY, CTRL_ID_FOOTER, CTRL_ID_FOOTNOTE, CTRL_ID_GSO,
+    CTRL_ID_HEADER, CTRL_ID_INDEXMARK, CTRL_ID_MEMO, CTRL_ID_SECD, CTRL_ID_TABLE,
+};
+
+/// `ShapeComponent` (`0x4C`) type tag identifying a connect line, stored as the
+/// little-endian bytes for `"$col"`. 한컴 reuses the `ShapeComponentLine`
+/// (`0x4E`) sub-record for both plain lines and connectors, so this 4-byte tag
+/// in the `ShapeComponent` header is the only discriminator (confirmed against
+/// `$rec`/`$ell`/`$cur` for rect/ellipse/curve from 한컴 truth fixtures).
+///
+/// Not a `ctrl_id` — `[u8; 4]` shape-component type tag (different wire role),
+/// so stays here rather than moving to `crate::ctrl_ids`.
+const SHAPE_COMPONENT_TYPE_CONNECT_LINE: [u8; 4] = [0x6C, 0x6F, 0x63, 0x24];
+
+/// `ShapeComponent` (`0x4C`) type tag identifying a group container (묶음
+/// 객체 / 개체 묶기), stored as the little-endian bytes for `"$con"`. Probed
+/// from the native fixture `sample-gso-group.hwp` (the leading 4 bytes of the
+/// `$con` `ShapeComponent` decode to `[0x6E, 0x6F, 0x63, 0x24]`). Shares the
+/// same discriminator mechanism as `$col` (connect line) and `$rec`/`$ell`/
+/// `$cur` (rect/ellipse/curve).
+///
+/// Not a `ctrl_id` — a `[u8; 4]` shape-component type tag — so it stays here
+/// rather than in `crate::ctrl_ids`.
+const SHAPE_COMPONENT_TYPE_GROUP: [u8; 4] = [0x6E, 0x6F, 0x63, 0x24];
+
+/// `ShapeComponent` (`0x4C`) type tag identifying a TextArt (글맵시) object,
+/// stored as the little-endian bytes for `"$tat"`. Probed from native 한컴
+/// fixtures. Shares the same discriminator mechanism as `$con` (group) and
+/// `$col` (connect line).
+///
+/// Not a `ctrl_id` — a `[u8; 4]` shape-component type tag — so it stays here
+/// rather than in `crate::ctrl_ids`.
+const SHAPE_COMPONENT_TYPE_TEXTART: [u8; 4] = [0x74, 0x61, 0x74, 0x24]; // "$tat"
+
+/// Maximum group nesting depth the decoder will descend before degrading.
+///
+/// Wave A only carries FLAT groups (one `$con` level), but the cap is wired
+/// now so Wave B (recursive `$con`-in-`$con`) is a small lift. Mirrors the
+/// defense-in-depth caps in `schema/summary_info.rs` — on exceed we emit a
+/// warning and degrade rather than recurse or panic.
+const GSO_GROUP_MAX_DEPTH: u16 = 16;
+
+// The `0x57 lvl=2` sub-record that follows every `%clk` CtrlHeader
+// carries the form-mode field name and HWP5 names it `CtrlData`. The
+// dispatch arm matches `TagId::CtrlData` directly (no numeric constant
+// needed) — keeping a parallel constant would only invite drift.
+
+// Memo wire command parsing now lives on `Hwp5MemoCommand::parse` in
+// `crate::schema::section` — shared with the slash-command util that future
+// `%hlk` / `%xrf` / `%bmk` parsers can reuse.
 
 // ---------------------------------------------------------------------------
 // Parser state
@@ -394,6 +721,41 @@ impl ParaBuf {
     }
 }
 
+/// In-progress capture state for one `HWPTAG_MEMO_LIST` (0x5D) cluster.
+///
+/// The decoder enters capture mode when it sees `MemoList` at level 1 and
+/// stays in it until either the next `MemoList` arrives (start of the next
+/// memo) or a body `ParaHeader` at level 0 arrives (start of the next body
+/// paragraph), at which point the captured paragraphs are flushed to
+/// [`BodyTextParserState::memo_contents`].
+///
+/// The cluster wire is (records at level 1 are siblings of the body
+/// paragraph's `ParaText`):
+///
+/// ```text
+/// MemoList    lvl=1   (4-byte LE memo_id payload)
+/// ListHeader  lvl=1
+/// ParaHeader  lvl=1   (memo body content para — *not* a body paragraph)
+/// ParaText    lvl=2
+/// ParaCharShape lvl=2
+/// ...
+/// ```
+struct MemoContentCapture {
+    memo_id: u32,
+    saw_list_header: bool,
+    current_para: Option<ParaBuf>,
+    paragraphs: Vec<Hwp5Paragraph>,
+}
+
+impl MemoContentCapture {
+    fn into_paragraphs(mut self) -> Vec<Hwp5Paragraph> {
+        if let Some(buf) = self.current_para.take() {
+            self.paragraphs.push(buf.finish());
+        }
+        self.paragraphs
+    }
+}
+
 /// Active table control while walking nested child records.
 struct TableContext {
     ctrl_depth: u16,
@@ -405,7 +767,7 @@ struct TableContext {
 }
 
 impl TableContext {
-    fn new(ctrl_depth: u16) -> Self {
+    fn new(ctrl_depth: u16, instance_id: u32) -> Self {
         Self {
             ctrl_depth,
             table: Hwp5Table {
@@ -416,6 +778,7 @@ impl TableContext {
                 cell_spacing: 0,
                 border_fill_id: None,
                 cells: Vec::new(),
+                instance_id,
             },
             seen_table_body: false,
             current_cell: None,
@@ -471,6 +834,43 @@ enum NestedSubtreeKind {
     TextBox,
 }
 
+/// Wave 12p Step 5 (#134): extract the CtrlHeader's `instance_id` field
+/// using ctrl_id-family-aware offsets.
+///
+/// Earlier (Wave 12p Step 1b) we tried `data[n-8..n-4]` as a uniform
+/// trailer, but wire audits (2026-06-09) on Hancom-native fixtures
+/// (`sample-field-crossref-footnote/endnote/table-caption/eq-caption.hwp`)
+/// proved the trailer offset only matches by coincidence. The real
+/// `instance_id` lives at a fixed offset relative to ctrl_id (record-data
+/// prefix), and the offset depends on the control family because
+/// different ctrl families pack different sized header blocks before the
+/// id. Verified offsets:
+///
+/// | ctrl_id family       | data.len | instance_id offset |
+/// |----------------------|----------|--------------------|
+/// | `fn  ` (footnote)    | 20       | `data[16..20]`     |
+/// | `en  ` (endnote)     | 20       | `data[16..20]`     |
+/// | `tbl ` (table)       | 46       | `data[36..40]`     |
+/// | `gso ` (shape)       | (varies) | `data[36..40]`     |
+/// | `eqed` (equation)    | 58       | `data[36..40]`     |
+///
+/// Other ctrl families (`head`, `foot`, `secd`, …) currently return 0 —
+/// they do not appear as cross-ref targets in the 12-fixture matrix.
+///
+/// Returns `0` when the payload is too short to carry the field at the
+/// expected offset, or when the family is unrecognized.
+fn extract_ctrl_header_instance_id(data: &[u8], ctrl_id: u32) -> u32 {
+    let offset = match ctrl_id {
+        CTRL_ID_FOOTNOTE | CTRL_ID_ENDNOTE => 16,
+        CTRL_ID_GSO | CTRL_ID_TABLE | CTRL_ID_EQED => 36,
+        _ => return 0,
+    };
+    data.get(offset..offset + 4)
+        .and_then(|s| s.try_into().ok())
+        .map(u32::from_le_bytes)
+        .unwrap_or(0)
+}
+
 /// Active non-table control while collecting a nested paragraph subtree.
 struct NestedSubtreeContext {
     ctrl_depth: u16,
@@ -478,6 +878,9 @@ struct NestedSubtreeContext {
     /// Bytes [4..8] of the `CtrlHeader` payload (see
     /// [`Hwp5NestedSubtree::properties_raw`]).
     properties_raw: u32,
+    /// CtrlHeader trailer instance ID (Wave 12p Step 1b). See
+    /// [`Hwp5NestedSubtree::instance_id`].
+    instance_id: u32,
     saw_list_header: bool,
     saw_shape_rectangle: bool,
     saw_shape_component: bool,
@@ -486,7 +889,17 @@ struct NestedSubtreeContext {
     ole: Option<Hwp5ShapeComponentOle>,
     line: Option<Hwp5ShapeComponentLine>,
     polygon: Option<Hwp5ShapeComponentPolygon>,
+    ellipse: Option<Hwp5ShapeComponentEllipse>,
+    curve: Option<Hwp5ShapeComponentCurve>,
+    text_art: Option<Hwp5ShapeTextArt>,
+    /// Leading 4-byte type tag from the `ShapeComponent` (`0x4C`) record, used
+    /// to tell a connect line apart from a plain line (both use `0x4E`).
+    shape_component_kind: Option<[u8; 4]>,
     paragraphs: Vec<Hwp5Paragraph>,
+    /// Active group builder, set when this gso scope's first `ShapeComponent`
+    /// carries the `"$con"` type tag. When `Some`, all subtree records are
+    /// routed to the group instead of the flat single-shape slots above.
+    group: Option<GsoGroupBuilder>,
 }
 
 impl NestedSubtreeContext {
@@ -494,12 +907,14 @@ impl NestedSubtreeContext {
         ctrl_depth: u16,
         ctrl_id: u32,
         properties_raw: u32,
+        instance_id: u32,
         geometry: Option<Hwp5ShapeComponentGeometry>,
     ) -> Self {
         Self {
             ctrl_depth,
             ctrl_id,
             properties_raw,
+            instance_id,
             saw_list_header: false,
             saw_shape_rectangle: false,
             saw_shape_component: false,
@@ -508,7 +923,12 @@ impl NestedSubtreeContext {
             ole: None,
             line: None,
             polygon: None,
+            ellipse: None,
+            curve: None,
+            text_art: None,
+            shape_component_kind: None,
             paragraphs: Vec::new(),
+            group: None,
         }
     }
 
@@ -520,8 +940,11 @@ impl NestedSubtreeContext {
         self.saw_shape_rectangle = true;
     }
 
-    fn note_shape_component(&mut self) {
+    fn note_shape_component(&mut self, data: &[u8]) {
         self.saw_shape_component = true;
+        if let Some(code) = data.get(..4) {
+            self.shape_component_kind = Some([code[0], code[1], code[2], code[3]]);
+        }
     }
 
     fn note_shape_picture(&mut self, picture: Hwp5ShapePicture) {
@@ -538,6 +961,18 @@ impl NestedSubtreeContext {
 
     fn note_shape_polygon(&mut self, polygon: Hwp5ShapeComponentPolygon) {
         self.polygon = Some(polygon);
+    }
+
+    fn note_shape_ellipse(&mut self, ellipse: Hwp5ShapeComponentEllipse) {
+        self.ellipse = Some(ellipse);
+    }
+
+    fn note_shape_curve(&mut self, curve: Hwp5ShapeComponentCurve) {
+        self.curve = Some(curve);
+    }
+
+    fn note_shape_text_art(&mut self, ta: Hwp5ShapeTextArt) {
+        self.text_art = Some(ta);
     }
 
     fn allows_nested_paragraphs(&self) -> bool {
@@ -560,12 +995,18 @@ impl NestedSubtreeContext {
         }
     }
 
-    fn into_control(self) -> Hwp5Control {
+    fn into_control(self, warnings: &mut Vec<Hwp5Warning>) -> Hwp5Control {
+        // A `$con` group takes precedence over the flat single-shape path:
+        // the gso scope wrapped child shapes rather than a single shape.
+        if let Some(group) = self.group {
+            return group.into_control(warnings);
+        }
         match self.kind() {
             Some(NestedSubtreeKind::Header) if self.saw_list_header => {
                 Hwp5Control::Header(Hwp5NestedSubtree {
                     ctrl_id: self.ctrl_id,
                     properties_raw: self.properties_raw,
+                    instance_id: self.instance_id,
                     paragraphs: self.paragraphs,
                 })
             }
@@ -573,6 +1014,7 @@ impl NestedSubtreeContext {
                 Hwp5Control::Footer(Hwp5NestedSubtree {
                     ctrl_id: self.ctrl_id,
                     properties_raw: self.properties_raw,
+                    instance_id: self.instance_id,
                     paragraphs: self.paragraphs,
                 })
             }
@@ -580,6 +1022,7 @@ impl NestedSubtreeContext {
                 Hwp5Control::Footnote(Hwp5NestedSubtree {
                     ctrl_id: self.ctrl_id,
                     properties_raw: self.properties_raw,
+                    instance_id: self.instance_id,
                     paragraphs: self.paragraphs,
                 })
             }
@@ -587,6 +1030,7 @@ impl NestedSubtreeContext {
                 Hwp5Control::Endnote(Hwp5NestedSubtree {
                     ctrl_id: self.ctrl_id,
                     properties_raw: self.properties_raw,
+                    instance_id: self.instance_id,
                     paragraphs: self.paragraphs,
                 })
             }
@@ -607,6 +1051,11 @@ impl NestedSubtreeContext {
                 ole: self.ole,
                 line: self.line,
                 polygon: self.polygon,
+                ellipse: self.ellipse,
+                curve: self.curve,
+                text_art: self.text_art,
+                shape_component_kind: self.shape_component_kind,
+                instance_id: self.instance_id,
             }),
         }
     }
@@ -616,6 +1065,9 @@ impl NestedSubtreeContext {
 struct InlineGsoContext {
     ctrl_depth: u16,
     ctrl_id: u32,
+    /// Wave 12p Step 1c-3: GSO CtrlHeader trailer instance ID,
+    /// carried through to typed `Hwp5ImageControl` and friends.
+    instance_id: u32,
     saw_shape_component: bool,
     saw_shape_rectangle: bool,
     geometry: Option<Hwp5ShapeComponentGeometry>,
@@ -623,6 +1075,11 @@ struct InlineGsoContext {
     ole: Option<Hwp5ShapeComponentOle>,
     line: Option<Hwp5ShapeComponentLine>,
     polygon: Option<Hwp5ShapeComponentPolygon>,
+    ellipse: Option<Hwp5ShapeComponentEllipse>,
+    curve: Option<Hwp5ShapeComponentCurve>,
+    text_art: Option<Hwp5ShapeTextArt>,
+    /// Leading 4-byte type tag from the `ShapeComponent` (`0x4C`) record.
+    shape_component_kind: Option<[u8; 4]>,
 }
 
 struct GsoClassificationInput {
@@ -634,13 +1091,373 @@ struct GsoClassificationInput {
     ole: Option<Hwp5ShapeComponentOle>,
     line: Option<Hwp5ShapeComponentLine>,
     polygon: Option<Hwp5ShapeComponentPolygon>,
+    ellipse: Option<Hwp5ShapeComponentEllipse>,
+    curve: Option<Hwp5ShapeComponentCurve>,
+    text_art: Option<Hwp5ShapeTextArt>,
+    /// Leading 4-byte type tag from the `ShapeComponent` (`0x4C`) record.
+    shape_component_kind: Option<[u8; 4]>,
+    /// Wave 12p Step 1c-3: `gso ` CtrlHeader trailer instance ID,
+    /// passed through to `Hwp5ImageControl` (and other typed GSO
+    /// variants in the future).
+    instance_id: u32,
+}
+
+/// One child shape being collected inside a [`GsoGroupBuilder`].
+///
+/// Mirrors the single-shape slot set of [`InlineGsoContext`] /
+/// [`NestedSubtreeContext`] (same `note_shape_*` mutators, same
+/// `classify_gso_control` finalize path) plus a nested paragraph list for
+/// children that carry `drawText` content (the native group fixture's rect
+/// and ellipse both hold text). A child is finalized into a single
+/// `Hwp5Control` when its scope closes.
+struct GsoChildBuilder {
+    /// Record level of the child's own `ShapeComponent` (`0x4C`). The child
+    /// stays open while later records sit deeper than this.
+    comp_depth: u16,
+    saw_shape_rectangle: bool,
+    saw_list_header: bool,
+    geometry: Option<Hwp5ShapeComponentGeometry>,
+    picture: Option<Hwp5ShapePicture>,
+    ole: Option<Hwp5ShapeComponentOle>,
+    line: Option<Hwp5ShapeComponentLine>,
+    polygon: Option<Hwp5ShapeComponentPolygon>,
+    ellipse: Option<Hwp5ShapeComponentEllipse>,
+    curve: Option<Hwp5ShapeComponentCurve>,
+    text_art: Option<Hwp5ShapeTextArt>,
+    shape_component_kind: Option<[u8; 4]>,
+    paragraphs: Vec<Hwp5Paragraph>,
+}
+
+impl GsoChildBuilder {
+    fn new(
+        comp_depth: u16,
+        shape_component_kind: Option<[u8; 4]>,
+        geometry: Option<Hwp5ShapeComponentGeometry>,
+    ) -> Self {
+        Self {
+            comp_depth,
+            saw_shape_rectangle: false,
+            saw_list_header: false,
+            geometry,
+            picture: None,
+            ole: None,
+            line: None,
+            polygon: None,
+            ellipse: None,
+            curve: None,
+            text_art: None,
+            shape_component_kind,
+            paragraphs: Vec::new(),
+        }
+    }
+
+    /// Finalize this child into a [`Hwp5GroupChild`] (typed shape control +
+    /// any `drawText` paragraphs it carried).
+    ///
+    /// A rect/ellipse/line/etc. is classified by the shared
+    /// `classify_gso_control` path (no new shape logic). The child's
+    /// `drawText` paragraphs ride alongside so the projection layer can build
+    /// a text-bearing `Control::TextBox` (rects) or `ellipse_with_text`
+    /// (ellipses). A nested `$con` (group inside a group) is normally recursed
+    /// through [`GsoActiveChild::Nested`] (Wave B); this leaf path only sees a
+    /// `$con` kind when the [`GSO_GROUP_MAX_DEPTH`] cap forced the nested group
+    /// to degrade to a leaf, in which case it becomes `Unknown` with a warning.
+    fn into_child(self, warnings: &mut Vec<Hwp5Warning>) -> Hwp5GroupChild {
+        if self.shape_component_kind == Some(SHAPE_COMPONENT_TYPE_GROUP) {
+            warnings.push(Hwp5Warning::DroppedControl {
+                control: "gso_group",
+                reason: "nested group ($con inside $con) exceeded GSO_GROUP_MAX_DEPTH; \
+                         degrading over-cap nested group child to Unknown"
+                    .to_string(),
+            });
+            return Hwp5GroupChild {
+                control: Hwp5Control::Unknown { ctrl_id: CTRL_ID_GSO, header_data: Vec::new() },
+                paragraphs: Vec::new(),
+            };
+        }
+
+        let control = classify_gso_control(GsoClassificationInput {
+            ctrl_id: CTRL_ID_GSO,
+            saw_shape_component: true,
+            saw_shape_rectangle: self.saw_shape_rectangle,
+            geometry: self.geometry,
+            picture: self.picture,
+            ole: self.ole,
+            line: self.line,
+            polygon: self.polygon,
+            ellipse: self.ellipse,
+            curve: self.curve,
+            text_art: self.text_art,
+            shape_component_kind: self.shape_component_kind,
+            instance_id: 0,
+        });
+        Hwp5GroupChild { control, paragraphs: self.paragraphs }
+    }
+}
+
+/// Group (묶음 객체) builder activated when a `gso ` scope's first
+/// `ShapeComponent` (`0x4C`) carries the `"$con"` type tag.
+///
+/// Models the scope-stack discipline of [`TableContext`]: a child opens on a
+/// deeper `ShapeComponent` and closes when a record at or above its depth
+/// arrives. Wave A keeps a single live child at a time (flat children only);
+/// the [`GSO_GROUP_MAX_DEPTH`] cap is wired so Wave B's recursive `$con`
+/// handling is a small lift.
+struct GsoGroupBuilder {
+    /// Level of the `$con` `ShapeComponent` (`0x4C`) that opened this group.
+    comp_depth: u16,
+    /// `1`-based nesting depth used for the depth cap. The outermost group
+    /// is depth `1`.
+    depth: u16,
+    geometry: Hwp5ShapeComponentGeometry,
+    instance_id: u32,
+    children: Vec<Hwp5GroupChild>,
+    current_child: Option<GsoActiveChild>,
+}
+
+/// The live child of a [`GsoGroupBuilder`]: either a flat leaf shape or a
+/// nested group (`$con`-in-`$con`, Wave B). Boxed on the `Nested` arm to
+/// break the `GsoGroupBuilder` → `GsoActiveChild` → `GsoGroupBuilder` type
+/// cycle.
+enum GsoActiveChild {
+    /// A flat shape child (rect/ellipse/line/…). Boxed to keep the enum small
+    /// (`GsoChildBuilder` is large; `clippy::large_enum_variant`).
+    Leaf(Box<GsoChildBuilder>),
+    /// A nested group child — recurses through its own `GsoGroupBuilder`.
+    Nested(Box<GsoGroupBuilder>),
+}
+
+impl GsoActiveChild {
+    /// The TLV level of the `ShapeComponent` that opened this child (used by
+    /// the parent's close rule, identical for both variants).
+    fn comp_depth(&self) -> u16 {
+        match self {
+            Self::Leaf(b) => b.comp_depth,
+            Self::Nested(b) => b.comp_depth,
+        }
+    }
+
+    /// Finalize this child into a [`Hwp5GroupChild`]. A leaf classifies via
+    /// the shared `classify_gso_control`; a nested group recurses through
+    /// `GsoGroupBuilder::into_control` to a `Hwp5Control::Group`.
+    fn into_child(self, warnings: &mut Vec<Hwp5Warning>) -> Hwp5GroupChild {
+        match self {
+            Self::Leaf(b) => b.into_child(warnings),
+            Self::Nested(b) => {
+                Hwp5GroupChild { control: b.into_control(warnings), paragraphs: Vec::new() }
+            }
+        }
+    }
+}
+
+impl GsoGroupBuilder {
+    fn new(comp_depth: u16, geometry: Hwp5ShapeComponentGeometry, instance_id: u32) -> Self {
+        Self {
+            comp_depth,
+            depth: 1,
+            geometry,
+            instance_id,
+            children: Vec::new(),
+            current_child: None,
+        }
+    }
+
+    /// Close the live child (if any) and append it to `children`.
+    fn flush_current_child(&mut self, warnings: &mut Vec<Hwp5Warning>) {
+        if let Some(child) = self.current_child.take() {
+            self.children.push(child.into_child(warnings));
+        }
+    }
+
+    /// Dispatch one subtree record into the group / current-child state.
+    ///
+    /// `level` is the record's TLV level. Returns nothing; warnings are
+    /// surfaced for malformed sub-records and depth-cap exceed.
+    fn handle_record(
+        &mut self,
+        record: &Record,
+        tag: TagId,
+        level: u16,
+        warnings: &mut Vec<Hwp5Warning>,
+    ) {
+        // Close the live child when a record arrives at or above its depth
+        // (mirrors the `table_stack` close rule). A sibling `ShapeComponent`
+        // at the child depth closes the prior child before opening the next.
+        if self.current_child.as_ref().is_some_and(|c| level <= c.comp_depth()) {
+            self.flush_current_child(warnings);
+        }
+
+        // A `ShapeComponent` (`0x4C`) one level below the `$con` opens a new
+        // child. A nested `$con` child opens a recursive `GsoGroupBuilder`
+        // (Wave B); any other shape opens a flat leaf builder.
+        if matches!(tag, TagId::ShapeComponent) && level == self.comp_depth.saturating_add(1) {
+            let kind = record.data.get(..4).map(|c| [c[0], c[1], c[2], c[3]]);
+            // Parse the child's group-relative geometry from its own
+            // ShapeComponent common header (NOT the gso CtrlHeader — children
+            // have no per-shape CtrlHeader). Without it, classify_gso_control
+            // drops the child to Unknown.
+            let geometry =
+                Hwp5ShapeComponentGeometry::parse_from_shape_component(&record.data).ok();
+
+            if kind == Some(SHAPE_COMPONENT_TYPE_GROUP) {
+                // Depth cap: a nested `$con` past the limit degrades to a leaf
+                // (→ Unknown at finalize) instead of recursing — bounds both
+                // recursion depth and malicious nesting.
+                if self.depth.saturating_add(1) > GSO_GROUP_MAX_DEPTH {
+                    warnings.push(Hwp5Warning::DroppedControl {
+                        control: "gso_group",
+                        reason: format!(
+                            "group nesting exceeds depth cap {GSO_GROUP_MAX_DEPTH}; \
+                             degrading deepest group to Unknown"
+                        ),
+                    });
+                    self.current_child = Some(GsoActiveChild::Leaf(Box::new(
+                        GsoChildBuilder::new(level, kind, geometry),
+                    )));
+                } else {
+                    // Nested group: its bounding box is the child geometry
+                    // (fall back to the parent bbox if unrecoverable); it has
+                    // no per-child CtrlHeader so instance_id = 0.
+                    let bbox = geometry.unwrap_or_else(|| self.geometry.clone());
+                    let mut nested = GsoGroupBuilder::new(level, bbox, 0);
+                    nested.depth = self.depth.saturating_add(1);
+                    self.current_child = Some(GsoActiveChild::Nested(Box::new(nested)));
+                }
+            } else {
+                self.current_child = Some(GsoActiveChild::Leaf(Box::new(GsoChildBuilder::new(
+                    level, kind, geometry,
+                ))));
+            }
+            return;
+        }
+
+        // Everything deeper belongs to the live child. A nested group recurses;
+        // a leaf accumulates its shape sub-records.
+        let child = match self.current_child.as_mut() {
+            Some(GsoActiveChild::Nested(nested)) => {
+                nested.handle_record(record, tag, level, warnings);
+                return;
+            }
+            Some(GsoActiveChild::Leaf(leaf)) => leaf,
+            None => return,
+        };
+        match tag {
+            TagId::ListHeader => child.saw_list_header = true,
+            TagId::ShapeComponentRect => child.saw_shape_rectangle = true,
+            TagId::ShapeComponentLine => match Hwp5ShapeComponentLine::parse(&record.data) {
+                Ok(line) => child.line = Some(line),
+                Err(_) => warnings
+                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
+            },
+            TagId::ShapeComponentPolygon => match Hwp5ShapeComponentPolygon::parse(&record.data) {
+                Ok(polygon) => child.polygon = Some(polygon),
+                Err(_) => warnings
+                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
+            },
+            TagId::ShapeComponentEllipse => match Hwp5ShapeComponentEllipse::parse(&record.data) {
+                Ok(ellipse) => child.ellipse = Some(ellipse),
+                Err(_) => warnings
+                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
+            },
+            TagId::ShapeComponentCurve => match Hwp5ShapeComponentCurve::parse(&record.data) {
+                Ok(curve) => child.curve = Some(curve),
+                Err(_) => warnings
+                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
+            },
+            TagId::ShapeTextArt => {
+                match crate::schema::section::Hwp5ShapeTextArt::parse(&record.data) {
+                    Ok(ta) => child.text_art = Some(ta),
+                    Err(_) => warnings.push(Hwp5Warning::UnsupportedTag {
+                        tag_id: record.header.tag_id,
+                        offset: 0,
+                    }),
+                }
+            }
+            TagId::ShapePicture => match Hwp5ShapePicture::parse(&record.data) {
+                Ok(picture) => child.picture = Some(picture),
+                Err(_) => warnings
+                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
+            },
+            TagId::ShapeComponentOle => match Hwp5ShapeComponentOle::parse(&record.data) {
+                Ok(ole) => child.ole = Some(ole),
+                Err(_) => warnings
+                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
+            },
+            TagId::ParaHeader => {
+                if child.saw_list_header {
+                    if let Some(buf) = BodyTextParserState::parse_para_header_buf(
+                        record.header.tag_id,
+                        &record.data,
+                        warnings,
+                    ) {
+                        child.paragraphs.push(buf.finish());
+                    }
+                }
+            }
+            TagId::ParaText => {
+                if let Some(text) = BodyTextParserState::parse_para_text_value(
+                    record.header.tag_id,
+                    &record.data,
+                    warnings,
+                ) {
+                    if let Some(last) = child.paragraphs.last_mut() {
+                        last.text_segments = text.segments;
+                        last.text = segments_to_string(&last.text_segments);
+                    }
+                }
+            }
+            TagId::ParaCharShape => {
+                if let Some(runs) = BodyTextParserState::parse_para_char_shape_runs(
+                    record.header.tag_id,
+                    &record.data,
+                    warnings,
+                ) {
+                    if let Some(last) = child.paragraphs.last_mut() {
+                        last.char_shape_runs = runs;
+                    }
+                }
+            }
+            TagId::ParaLineSeg => {
+                if let Some(segments) = BodyTextParserState::parse_para_line_segments(
+                    record.header.tag_id,
+                    &record.data,
+                    warnings,
+                ) {
+                    if let Some(last) = child.paragraphs.last_mut() {
+                        last.line_segments = segments;
+                    }
+                }
+            }
+            TagId::Unknown(id) => {
+                warnings.push(Hwp5Warning::UnsupportedTag { tag_id: id, offset: 0 });
+            }
+            _ => {}
+        }
+    }
+
+    /// Finalize the group into a `Hwp5Control::Group`, closing any open child.
+    fn into_control(mut self, warnings: &mut Vec<Hwp5Warning>) -> Hwp5Control {
+        self.flush_current_child(warnings);
+        Hwp5Control::Group(Hwp5GroupControl {
+            ctrl_id: CTRL_ID_GSO,
+            geometry: self.geometry,
+            children: self.children,
+            instance_id: self.instance_id,
+        })
+    }
 }
 
 impl InlineGsoContext {
-    fn new(ctrl_depth: u16, ctrl_id: u32, geometry: Option<Hwp5ShapeComponentGeometry>) -> Self {
+    fn new(
+        ctrl_depth: u16,
+        ctrl_id: u32,
+        instance_id: u32,
+        geometry: Option<Hwp5ShapeComponentGeometry>,
+    ) -> Self {
         Self {
             ctrl_depth,
             ctrl_id,
+            instance_id,
             saw_shape_component: false,
             saw_shape_rectangle: false,
             geometry,
@@ -648,11 +1465,18 @@ impl InlineGsoContext {
             ole: None,
             line: None,
             polygon: None,
+            ellipse: None,
+            curve: None,
+            text_art: None,
+            shape_component_kind: None,
         }
     }
 
-    fn note_shape_component(&mut self) {
+    fn note_shape_component(&mut self, data: &[u8]) {
         self.saw_shape_component = true;
+        if let Some(code) = data.get(..4) {
+            self.shape_component_kind = Some([code[0], code[1], code[2], code[3]]);
+        }
     }
 
     fn note_shape_rectangle(&mut self) {
@@ -675,16 +1499,33 @@ impl InlineGsoContext {
         self.polygon = Some(polygon);
     }
 
+    fn note_shape_ellipse(&mut self, ellipse: Hwp5ShapeComponentEllipse) {
+        self.ellipse = Some(ellipse);
+    }
+
+    fn note_shape_curve(&mut self, curve: Hwp5ShapeComponentCurve) {
+        self.curve = Some(curve);
+    }
+
+    fn note_shape_text_art(&mut self, ta: Hwp5ShapeTextArt) {
+        self.text_art = Some(ta);
+    }
+
     fn into_control(self) -> Hwp5Control {
         classify_gso_control(GsoClassificationInput {
             ctrl_id: self.ctrl_id,
             saw_shape_component: self.saw_shape_component,
             saw_shape_rectangle: self.saw_shape_rectangle,
+            instance_id: self.instance_id,
             geometry: self.geometry,
             picture: self.picture,
             ole: self.ole,
             line: self.line,
             polygon: self.polygon,
+            ellipse: self.ellipse,
+            curve: self.curve,
+            text_art: self.text_art,
+            shape_component_kind: self.shape_component_kind,
         })
     }
 }
@@ -694,20 +1535,81 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
         return Hwp5Control::Unknown { ctrl_id: input.ctrl_id, header_data: Vec::new() };
     }
 
+    // TextArt (글맵시) carries a `0x5A` `ShapeTextArt` sub-record but no
+    // single-shape payload (`payload_count == 0`), so it must be handled
+    // before the `payload_count != 1` guard below.
+    if input.shape_component_kind == Some(SHAPE_COMPONENT_TYPE_TEXTART) {
+        if let (Some(geometry), Some(text_art)) = (input.geometry, input.text_art) {
+            return Hwp5Control::TextArt(Hwp5TextArtControl {
+                ctrl_id: input.ctrl_id,
+                geometry,
+                text_art,
+                instance_id: input.instance_id,
+            });
+        }
+        return Hwp5Control::Unknown { ctrl_id: input.ctrl_id, header_data: Vec::new() };
+    }
+
     let payload_count = usize::from(input.picture.is_some())
         + usize::from(input.ole.is_some())
         + usize::from(input.saw_shape_rectangle)
         + usize::from(input.line.is_some())
-        + usize::from(input.polygon.is_some());
+        + usize::from(input.polygon.is_some())
+        + usize::from(input.ellipse.is_some())
+        + usize::from(input.curve.is_some());
     if payload_count != 1 {
         return Hwp5Control::Unknown { ctrl_id: input.ctrl_id, header_data: Vec::new() };
     }
 
+    // Ellipse (0x50) doubles as the arc carrier — split on its arc fields.
+    // Both ellipse/arc/curve need geometry for placement; without it we drop
+    // to Unknown rather than fabricate a zero-size shape.
+    if let Some(ellipse) = input.ellipse {
+        let ctrl_id = input.ctrl_id;
+        return match input.geometry {
+            Some(geometry) if ellipse.is_arc() => {
+                Hwp5Control::Arc(Hwp5ArcControl { ctrl_id, geometry })
+            }
+            Some(geometry) => Hwp5Control::Ellipse(Hwp5EllipseControl { ctrl_id, geometry }),
+            None => Hwp5Control::Unknown { ctrl_id, header_data: Vec::new() },
+        };
+    }
+    if let Some(curve) = input.curve {
+        let ctrl_id = input.ctrl_id;
+        return match input.geometry {
+            Some(geometry) => Hwp5Control::Curve(Hwp5CurveControl {
+                ctrl_id,
+                geometry,
+                points: curve.points,
+                segment_types: curve.segment_types,
+            }),
+            None => Hwp5Control::Unknown { ctrl_id, header_data: Vec::new() },
+        };
+    }
+
+    // Connect line shares the 0x4E ShapeComponentLine sub-record with a plain
+    // line; the only discriminator is the ShapeComponent "$col" type tag.
+    // Conservative: only an exact "$col" match upgrades to a connect line, so a
+    // plain line is never reclassified (uses `as_ref` so the fall-through tuple
+    // match below still owns geometry/line for the plain-line case).
+    if input.shape_component_kind == Some(SHAPE_COMPONENT_TYPE_CONNECT_LINE) {
+        if let (Some(geometry), Some(line)) = (input.geometry.as_ref(), input.line.as_ref()) {
+            return Hwp5Control::ConnectLine(Hwp5ConnectLineControl {
+                ctrl_id: input.ctrl_id,
+                geometry: geometry.clone(),
+                start: line.start,
+                end: line.end,
+            });
+        }
+    }
+
+    let gso_instance_id = input.instance_id;
     match (input.geometry, input.picture, input.ole, input.line, input.polygon) {
         (Some(geometry), Some(picture), None, None, None) => Hwp5Control::Image(Hwp5ImageControl {
             ctrl_id: input.ctrl_id,
             geometry,
             binary_data_id: picture.binary_data_id,
+            instance_id: gso_instance_id,
         }),
         (Some(geometry), None, Some(ole), None, None) => {
             Hwp5Control::OleObject(Hwp5OleObjectControl {
@@ -804,12 +1706,32 @@ struct BodyTextParserState {
     section_def_properties: Option<u32>,
     /// Page border/fill records collected in document order.
     page_border_fills: Vec<Hwp5PageBorderFill>,
+    /// Captured `cold` (column definition) ctrl, if multi-column.
+    column_def: Option<Hwp5ColumnDef>,
     warnings: Vec<Hwp5Warning>,
     current: Option<ParaBuf>,
     table_stack: Vec<TableContext>,
     subtree_ctx: Option<NestedSubtreeContext>,
     current_subtree_para: Option<ParaBuf>,
     inline_subtree_gso_ctx: Option<InlineGsoContext>,
+    /// Geometry of an `eqed` ctrl awaiting its `HWPTAG_EQEDIT` script child.
+    /// Wave 12p Step 1c-2: stash (geometry, instance_id) from the
+    /// `eqed` CtrlHeader; finalized by the paired `HWPTAG_EQEDIT` record.
+    eqed_pending: Option<(Hwp5ShapeComponentGeometry, u32)>,
+    /// `%clk` CtrlHeader awaiting its trailing `0x57 lvl=2` sub-record
+    /// for the form-mode field name (Wave 12l). If the next top-level
+    /// record is not the expected sub-record, the press-field is
+    /// finalized with `name=None` and a targeted warning so the rest
+    /// of the section keeps round-tripping.
+    pending_clickhere: Option<crate::schema::section::Hwp5ClickHereControl>,
+    /// `HWPTAG_MEMO_LIST` clusters collected from the section, keyed by
+    /// memo_id. Filled while parsing the cluster region at the section end;
+    /// consumed in `finish` to merge into the matching `Hwp5Control::Memo`
+    /// placeholders.
+    memo_contents: HashMap<u32, Vec<Hwp5Paragraph>>,
+    /// Active capture state for the memo-content cluster currently being
+    /// absorbed. `Some` while inside a `HWPTAG_MEMO_LIST` region.
+    memo_content_capture: Option<MemoContentCapture>,
 }
 
 impl BodyTextParserState {
@@ -867,7 +1789,7 @@ impl BodyTextParserState {
                 self.inline_subtree_gso_ctx.take(),
             );
             flush_subtree_paragraph(&mut self.current_subtree_para, self.subtree_ctx.as_mut());
-            attach_finished_subtree(&mut self.current, self.subtree_ctx.take());
+            attach_finished_subtree(&mut self.current, self.subtree_ctx.take(), &mut self.warnings);
         }
     }
 
@@ -975,11 +1897,15 @@ impl BodyTextParserState {
                 if let Some(ctx) = self.table_stack.last_mut() {
                     let ctrl_id = parse_ctrl_id(&record.data);
                     if ctrl_id == CTRL_ID_TABLE {
-                        self.table_stack.push(TableContext::new(level));
+                        self.table_stack.push(TableContext::new(
+                            level,
+                            extract_ctrl_header_instance_id(&record.data, ctrl_id),
+                        ));
                     } else if ctrl_id == CTRL_ID_GSO {
                         ctx.inline_cell_gso_ctx = Some(InlineGsoContext::new(
                             level,
                             ctrl_id,
+                            extract_ctrl_header_instance_id(&record.data, ctrl_id),
                             Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).ok(),
                         ));
                     } else if let Some(buf) = ctx.current_cell_para.as_mut() {
@@ -999,6 +1925,80 @@ impl BodyTextParserState {
         true
     }
 
+    /// Routes a subtree record into the active gso `$con` group, activating
+    /// the group on the first `$con` `ShapeComponent` (`0x4C`) seen at the
+    /// gso scope's top child level.
+    ///
+    /// Returns `true` when the record was consumed by group handling so the
+    /// caller skips the flat single-shape dispatch. Wave A keeps flat groups
+    /// only; nested `$con` children degrade to `Unknown` inside
+    /// [`GsoGroupBuilder`].
+    fn maybe_route_subtree_group_record(
+        &mut self,
+        record: &Record,
+        tag: TagId,
+        level: u16,
+    ) -> bool {
+        // Read the gso scope shape (ctrl_id / depth / geometry / group flag)
+        // without holding a mutable borrow across the `self.warnings` writes.
+        let Some((is_gso, ctrl_depth, geometry, instance_id, group_active)) =
+            self.subtree_ctx.as_ref().map(|ctx| {
+                (
+                    ctx.ctrl_id == CTRL_ID_GSO,
+                    ctx.ctrl_depth,
+                    ctx.geometry.clone(),
+                    ctx.instance_id,
+                    ctx.group.is_some(),
+                )
+            })
+        else {
+            return false;
+        };
+        if !is_gso {
+            return false;
+        }
+
+        // Activate the group on the first `$con` ShapeComponent at the gso
+        // scope's top child level (ctrl_depth + 1). Requires a recovered
+        // group bounding box; without it we cannot place the container, so
+        // fall through to the (degrading) flat path.
+        if !group_active
+            && matches!(tag, TagId::ShapeComponent)
+            && level == ctrl_depth.saturating_add(1)
+            && record.data.get(..4) == Some(&SHAPE_COMPONENT_TYPE_GROUP)
+        {
+            let Some(geometry) = geometry else {
+                self.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "gso_group",
+                    reason: "group ($con) without recoverable bounding box; \
+                             cannot place <hp:container>"
+                        .to_string(),
+                });
+                return false;
+            };
+            if let Some(ctx) = self.subtree_ctx.as_mut() {
+                ctx.group = Some(GsoGroupBuilder::new(level, geometry, instance_id));
+            }
+            // The `$con` record itself opens the group scope; it carries no
+            // child payload, so nothing further to route for this record.
+            return true;
+        }
+
+        if group_active {
+            // Take the group out so its mutator can borrow `self.warnings`
+            // disjointly, then store it back.
+            let mut group =
+                self.subtree_ctx.as_mut().and_then(|ctx| ctx.group.take()).expect("group active");
+            group.handle_record(record, tag, level, &mut self.warnings);
+            if let Some(ctx) = self.subtree_ctx.as_mut() {
+                ctx.group = Some(group);
+            }
+            return true;
+        }
+
+        false
+    }
+
     fn handle_active_subtree_record(&mut self, record: &Record, tag: TagId, level: u16) -> bool {
         if self.subtree_ctx.as_ref().is_none_or(|ctx| level <= ctx.ctrl_depth) {
             return false;
@@ -1013,6 +2013,15 @@ impl BodyTextParserState {
             return true;
         }
 
+        // Group (묶음 객체) routing. A gso scope whose first `ShapeComponent`
+        // (`0x4C`) carries the `"$con"` type tag is a group, not a single
+        // shape: every following subtree record belongs to the group's child
+        // collector rather than the flat single-shape slots. Once the group
+        // is active it owns all deeper records until the scope closes.
+        if self.maybe_route_subtree_group_record(record, tag, level) {
+            return true;
+        }
+
         match tag {
             TagId::ListHeader => {
                 if let Some(ctx) = self.subtree_ctx.as_mut() {
@@ -1021,7 +2030,7 @@ impl BodyTextParserState {
             }
             TagId::ShapeComponent => {
                 if let Some(ctx) = self.subtree_ctx.as_mut() {
-                    ctx.note_shape_component();
+                    ctx.note_shape_component(&record.data);
                 }
             }
             TagId::ShapeComponentLine => match Hwp5ShapeComponentLine::parse(&record.data) {
@@ -1045,6 +2054,32 @@ impl BodyTextParserState {
                 }
                 Err(_) => self.push_unsupported_tag(record.header.tag_id),
             },
+            TagId::ShapeComponentEllipse => match Hwp5ShapeComponentEllipse::parse(&record.data) {
+                Ok(ellipse) => {
+                    if let Some(ctx) = self.subtree_ctx.as_mut() {
+                        ctx.note_shape_ellipse(ellipse);
+                    }
+                }
+                Err(_) => self.push_unsupported_tag(record.header.tag_id),
+            },
+            TagId::ShapeComponentCurve => match Hwp5ShapeComponentCurve::parse(&record.data) {
+                Ok(curve) => {
+                    if let Some(ctx) = self.subtree_ctx.as_mut() {
+                        ctx.note_shape_curve(curve);
+                    }
+                }
+                Err(_) => self.push_unsupported_tag(record.header.tag_id),
+            },
+            TagId::ShapeTextArt => {
+                match crate::schema::section::Hwp5ShapeTextArt::parse(&record.data) {
+                    Ok(ta) => {
+                        if let Some(ctx) = self.subtree_ctx.as_mut() {
+                            ctx.note_shape_text_art(ta);
+                        }
+                    }
+                    Err(_) => self.push_unsupported_tag(record.header.tag_id),
+                }
+            }
             TagId::ShapePicture => match Hwp5ShapePicture::parse(&record.data) {
                 Ok(picture) => {
                     if let Some(ctx) = self.subtree_ctx.as_mut() {
@@ -1118,6 +2153,7 @@ impl BodyTextParserState {
                         self.inline_subtree_gso_ctx = Some(InlineGsoContext::new(
                             level,
                             ctrl_id,
+                            extract_ctrl_header_instance_id(&record.data, ctrl_id),
                             Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).ok(),
                         ));
                     } else {
@@ -1138,6 +2174,15 @@ impl BodyTextParserState {
     }
 
     fn handle_top_level_record(&mut self, record: &Record, tag: TagId, level: u16) {
+        // Pending-state guards run before the normal arms (task #90 —
+        // extracted helpers; see each method for the wave rationale).
+        if self.try_intercept_memo_cluster(record, tag, level) {
+            return;
+        }
+        if self.try_attach_clickhere_name(record, tag, level) {
+            return;
+        }
+
         match tag {
             TagId::ParaHeader if level == 0 => {
                 if let Some(buf) = self.current.take() {
@@ -1190,64 +2235,8 @@ impl BodyTextParserState {
                 Some(pbf) => self.page_border_fills.push(pbf),
                 None => self.push_unsupported_tag(record.header.tag_id),
             },
-            TagId::CtrlHeader => {
-                let ctrl_id = parse_ctrl_id(&record.data);
-                if ctrl_id == CTRL_ID_TABLE {
-                    self.table_stack.push(TableContext::new(level));
-                } else if matches!(
-                    ctrl_id,
-                    CTRL_ID_HEADER
-                        | CTRL_ID_FOOTER
-                        | CTRL_ID_FOOTNOTE
-                        | CTRL_ID_ENDNOTE
-                        | CTRL_ID_GSO
-                ) {
-                    let geometry = if ctrl_id == CTRL_ID_GSO {
-                        Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).ok()
-                    } else {
-                        None
-                    };
-                    // HWP 5.0 spec §4.3.10.3 표 140: bytes [4..8] of
-                    // the ctrl_header payload are the property field
-                    // (e.g. header/footer applyPageType in bits 0~1).
-                    // Header is 4 bytes, so falling back to 0 keeps
-                    // pre-spec defaults consistent.
-                    let properties_raw = if record.data.len() >= 8 {
-                        u32::from_le_bytes([
-                            record.data[4],
-                            record.data[5],
-                            record.data[6],
-                            record.data[7],
-                        ])
-                    } else {
-                        0
-                    };
-                    self.subtree_ctx =
-                        Some(NestedSubtreeContext::new(level, ctrl_id, properties_raw, geometry));
-                } else if let Some(buf) = self.current.as_mut() {
-                    // Snapshot the `secd` ctrl property word for
-                    // projection-level Visibility decoding (gap B,
-                    // HWP 5.0 spec §4.3.10.1 표 130). The ctrl
-                    // continues to flow through the Unknown path so
-                    // downstream semantic adapter still emits the
-                    // SectionColumnDef inline item from the inline
-                    // 0x02 control byte; the property word is just an
-                    // additional sidecar capture.
-                    if ctrl_id == CTRL_ID_SECD
-                        && self.section_def_properties.is_none()
-                        && record.data.len() >= 8
-                    {
-                        self.section_def_properties = Some(u32::from_le_bytes([
-                            record.data[4],
-                            record.data[5],
-                            record.data[6],
-                            record.data[7],
-                        ]));
-                    }
-                    buf.controls
-                        .push(Hwp5Control::Unknown { ctrl_id, header_data: record.data.clone() });
-                }
-            }
+            TagId::CtrlHeader => self.handle_ctrl_header(record, level),
+            TagId::EqEdit => self.handle_eqedit_record(record),
             TagId::ListHeader => {}
             TagId::Unknown(id) => {
                 self.warnings.push(Hwp5Warning::UnsupportedTag { tag_id: id, offset: 0 });
@@ -1256,7 +2245,555 @@ impl BodyTextParserState {
         }
     }
 
+    /// Memo content-cluster state machine (Wave 12e — task #90 extract).
+    ///
+    /// `HWPTAG_MEMO_LIST` clusters appear at the end of the section's
+    /// last body paragraph as a sequence of (MemoList, ListHeader,
+    /// ParaHeader, ParaText, CharShape...) records at lvl=1/2. They are
+    /// intercepted *before* the normal arms so the body paragraph's
+    /// `self.current` text/char_shape stay untouched — without this,
+    /// the cluster's lvl=2 ParaText would fall into the normal
+    /// `ParaText` arm and overwrite the body text (Wave 12e-Memo
+    /// corruption root cause).
+    ///
+    /// Returns `true` when the record was consumed by the cluster
+    /// region (caller must not dispatch it further). A body
+    /// `ParaHeader` at lvl=0 closes the capture and falls through so
+    /// the next body paragraph opens cleanly.
+    fn try_intercept_memo_cluster(&mut self, record: &Record, tag: TagId, level: u16) -> bool {
+        if matches!(tag, TagId::MemoList) && level == 1 {
+            if let Some(memo_id) = parse_memo_list_id(&record.data) {
+                self.flush_memo_content_capture();
+                self.memo_content_capture = Some(MemoContentCapture {
+                    memo_id,
+                    saw_list_header: false,
+                    current_para: None,
+                    paragraphs: Vec::new(),
+                });
+            } else {
+                self.push_unsupported_tag(record.header.tag_id);
+            }
+            return true;
+        }
+        if self.memo_content_capture.is_some() {
+            if matches!(tag, TagId::ParaHeader) && level == 0 {
+                // Body paragraph boundary closes the cluster region; fall
+                // through to the normal `ParaHeader` arm so the next body
+                // para is opened cleanly.
+                self.flush_memo_content_capture();
+            } else if self.try_capture_memo_record(record, tag, level) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// ClickHere name sub-record pairing (Wave 12l — task #90 extract).
+    ///
+    /// A `%clk` CtrlHeader is always followed by a `0x57 lvl=2`
+    /// sub-record carrying the form-mode `name`. The sub-record is
+    /// intercepted here so it does not emit a generic
+    /// `UnsupportedTag(0x57)` warning; the parsed name merges into the
+    /// pending press-field which is then pushed as
+    /// `Hwp5Control::ClickHere` on the current paragraph.
+    ///
+    /// Returns `true` when the record was the expected sub-record. If
+    /// the next top-level record is anything else, the pending
+    /// press-field is finalized with `name=None` and `false` lets the
+    /// record fall through to the normal dispatch — this keeps the rest
+    /// of the section round-tripping (Codex review: grace-degrade
+    /// rather than drop).
+    fn try_attach_clickhere_name(&mut self, record: &Record, tag: TagId, level: u16) -> bool {
+        if self.pending_clickhere.is_none() {
+            return false;
+        }
+        if matches!(tag, TagId::CtrlData) && level == 2 {
+            let mut clickhere = self
+                .pending_clickhere
+                .take()
+                .expect("pending_clickhere checked Some at the start of this method");
+            use crate::schema::section::ClickHereNameSubrecord;
+            match crate::schema::section::Hwp5ClickHereControl::parse_name_subrecord(&record.data) {
+                ClickHereNameSubrecord::Named(name) => clickhere.name = Some(name),
+                // Construction starts with `name = None`, so a
+                // nameless-but-valid sub-record needs no write.
+                ClickHereNameSubrecord::Unnamed => {}
+                ClickHereNameSubrecord::Malformed => {
+                    self.warnings.push(Hwp5Warning::ProjectionFallback {
+                        subject: "field.clickhere",
+                        reason: "malformed %clk name sub-record (0x57); \
+                                 keeping the press-field with name=None"
+                            .to_string(),
+                    });
+                }
+            }
+            if let Some(buf) = self.current.as_mut() {
+                buf.controls.push(Hwp5Control::ClickHere(clickhere));
+            } else if let Some(buf) = self.current_subtree_para.as_mut() {
+                buf.controls.push(Hwp5Control::ClickHere(clickhere));
+            }
+            return true;
+        }
+        // Anything else: finalize with name=None and fall through to
+        // the normal dispatch so the current record can be processed.
+        self.flush_pending_clickhere();
+        false
+    }
+
+    /// Dispatches a top-level `CtrlHeader` (`0x47`) record by its
+    /// `ctrl_id` (task #90 — extracted from `handle_top_level_record`).
+    ///
+    /// Families that open nested regions (`tbl `, `head`/`foot`/`fn`/`en`/
+    /// `gso `) push parser state; one-shot field/annotation controls parse
+    /// and attach to the current paragraph; unrecognized ids fall through
+    /// to `Hwp5Control::Unknown` for round-trip preservation.
+    fn handle_ctrl_header(&mut self, record: &Record, level: u16) {
+        let ctrl_id = parse_ctrl_id(&record.data);
+        if ctrl_id == CTRL_ID_TABLE {
+            self.table_stack.push(TableContext::new(
+                level,
+                extract_ctrl_header_instance_id(&record.data, ctrl_id),
+            ));
+        } else if matches!(
+            ctrl_id,
+            CTRL_ID_HEADER | CTRL_ID_FOOTER | CTRL_ID_FOOTNOTE | CTRL_ID_ENDNOTE | CTRL_ID_GSO
+        ) {
+            let geometry = if ctrl_id == CTRL_ID_GSO {
+                Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).ok()
+            } else {
+                None
+            };
+            // HWP 5.0 spec §4.3.10.3 표 140: bytes [4..8] of
+            // the ctrl_header payload are the property field
+            // (e.g. header/footer applyPageType in bits 0~1).
+            // Header is 4 bytes, so falling back to 0 keeps
+            // pre-spec defaults consistent.
+            let properties_raw = if record.data.len() >= 8 {
+                u32::from_le_bytes([record.data[4], record.data[5], record.data[6], record.data[7]])
+            } else {
+                0
+            };
+            // Wave 12p Step 5 (#134): CtrlHeader instance_id lives at
+            // a family-specific offset. fn/en use data[16..20], gso
+            // uses data[36..40]. See `extract_ctrl_header_instance_id`
+            // for offset table. HWPX cross-ref Command 의 target ID
+            // 와 매칭. 추출 불가 시 0.
+            let instance_id = extract_ctrl_header_instance_id(&record.data, ctrl_id);
+            self.subtree_ctx = Some(NestedSubtreeContext::new(
+                level,
+                ctrl_id,
+                properties_raw,
+                instance_id,
+                geometry,
+            ));
+        } else if ctrl_id == CTRL_ID_EQED {
+            // The `eqed` ctrl carries only geometry; its HancomEQN
+            // script lives in the child `HWPTAG_EQEDIT` (0x58) record.
+            // Stash the geometry + instance_id and finalize when
+            // that child arrives (Wave 12p Step 1c-2). Wave 12p
+            // Step 5: eqed instance_id at data[36..40] (audited).
+            let geometry = Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data)
+                .unwrap_or(Hwp5ShapeComponentGeometry { x: 0, y: 0, width: 0, height: 0 });
+            let instance_id = extract_ctrl_header_instance_id(&record.data, ctrl_id);
+            self.eqed_pending = Some((geometry, instance_id));
+        } else if ctrl_id == CTRL_ID_DUTMAL {
+            // `tdut` ctrl carries the dutmal (덧말) main/sub text
+            // strings + posType. The paired inline `0x17` marker
+            // in the body's `ParaText` decides the visible
+            // position; this push keeps the projected Control in
+            // doc order via `current.controls`.
+            if let Some(dutmal) = Hwp5DutmalControl::parse(ctrl_id, &record.data) {
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls.push(Hwp5Control::Dutmal(dutmal));
+                }
+            } else {
+                self.push_unsupported_tag(record.header.tag_id);
+            }
+        } else if ctrl_id == CTRL_ID_COMPOSE {
+            // `tcps` ctrl carries the compose (글자겹침) text,
+            // circleType/composeType enums, and 10 charPr refs.
+            // Layout assumes `charPrCnt == 10` per HWPX schema;
+            // malformed payloads fall through to Unknown so the
+            // surrounding section keeps round-tripping.
+            if let Some(compose) =
+                crate::schema::section::Hwp5ComposeControl::parse(ctrl_id, &record.data)
+            {
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls.push(Hwp5Control::Compose(compose));
+                }
+            } else {
+                self.push_unsupported_tag(record.header.tag_id);
+            }
+        } else if ctrl_id == CTRL_ID_CLICK_HERE {
+            // `%clk` ctrl carries the CLICK_HERE (누름틀) press-field
+            // hint/help text. The form-mode `name` lives in the
+            // immediately following `0x57 lvl=2` sub-record. Flush
+            // any orphaned pending first (defensive), then store
+            // the parsed control so the next `0x57` can attach the
+            // name. (Wave 12l.)
+            self.flush_pending_clickhere();
+            match crate::schema::section::Hwp5ClickHereControl::parse(ctrl_id, &record.data) {
+                Ok(clickhere) => self.pending_clickhere = Some(clickhere),
+                Err(err) => {
+                    self.warnings.push(Hwp5Warning::DroppedControl {
+                        control: "clickhere",
+                        reason: format!(
+                            "malformed %clk CtrlHeader payload ({}); \
+                                     dropping press-field metadata",
+                            err.as_str()
+                        ),
+                    });
+                }
+            }
+        } else if ctrl_id == CTRL_ID_INDEXMARK {
+            // `idxm` ctrl carries the IndexMark (찾아보기 표시)
+            // `primary` text and optional `secondary` text. A
+            // malformed payload emits a targeted
+            // `DroppedControl` warning (per Codex review) so
+            // audit baselines can attribute the loss to the
+            // IndexMark code path instead of the generic
+            // `UnsupportedTag(0x47)` bucket. (Wave 12k.)
+            if let Some(indexmark) =
+                crate::schema::section::Hwp5IndexMarkControl::parse(ctrl_id, &record.data)
+            {
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls.push(Hwp5Control::IndexMark(indexmark));
+                }
+            } else {
+                self.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "indexmark",
+                    reason: "malformed idxm CtrlHeader payload; dropping index mark".to_string(),
+                });
+            }
+        } else if ctrl_id == CTRL_ID_FIELD_SUMMERY {
+            // `%smr` ctrl carries a SUMMERY auto-field Command
+            // `$token` (e.g. `$author`, `$modifiedtime`). The
+            // projection layer dispatches the token to a typed
+            // `FieldType` or `Control::UnknownSummery`. No
+            // follow-up sub-record (Wave 12n).
+            if let Some(summery) =
+                crate::schema::section::Hwp5SummeryControl::parse(ctrl_id, &record.data)
+            {
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls.push(Hwp5Control::SummeryField(summery));
+                }
+            } else {
+                self.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "summery_field",
+                    reason: "malformed %smr CtrlHeader payload; dropping auto-field".to_string(),
+                });
+            }
+        } else if ctrl_id == CTRL_ID_FIELD_DATE_CODE {
+            // `%dte` ctrl carries a raw date/time format-code
+            // (e.g. `"\:1년 2월 3일 (6);0;"`, `"T\:;0;"`). The
+            // projection layer wraps it in `Control::DateCodeField`
+            // with `is_time_mode` derived from the `T` prefix.
+            // (Wave 12n.)
+            if let Some(date_code) =
+                crate::schema::section::Hwp5DateCodeControl::parse(ctrl_id, &record.data)
+            {
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls.push(Hwp5Control::DateCodeField(date_code));
+                }
+            } else {
+                self.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "date_code_field",
+                    reason: "malformed %dte CtrlHeader payload; dropping date-code field"
+                        .to_string(),
+                });
+            }
+        } else if ctrl_id == CTRL_ID_FIELD_PATH {
+            // `%pat` ctrl carries a path/file-name format-code
+            // Command (`"$P"`, `"$F"`, `"$P$F"`). Wave 12n.
+            if let Some(pat) =
+                crate::schema::section::Hwp5PathFieldControl::parse(ctrl_id, &record.data)
+            {
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls.push(Hwp5Control::PathField(pat));
+                }
+            } else {
+                self.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "path_field",
+                    reason: "malformed %pat CtrlHeader payload; dropping path field".to_string(),
+                });
+            }
+        } else if ctrl_id == CTRL_ID_FIELD_CROSSREF {
+            // `%xrf` ctrl carries a structured cross-reference Command
+            // `?<target>;N1;N2;N3;N4;` + 8-byte trailer. Wave 12m
+            // Phase 2. Schema preserves raw N1/N2/N3 codes;
+            // projection boundary maps them to typed RefType /
+            // RefContentType / RefTarget.
+            if let Some(xrf) =
+                crate::schema::section::Hwp5CrossRefControl::parse(ctrl_id, &record.data)
+            {
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls.push(Hwp5Control::CrossRef(xrf));
+                }
+            } else {
+                self.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "crossref",
+                    reason: "malformed %xrf CtrlHeader payload; dropping cross-reference"
+                        .to_string(),
+                });
+            }
+        } else if ctrl_id == CTRL_ID_ATNO {
+            // `atno` ctrl carries a single 4-byte kind flag
+            // (`0x00`/`0x06`). No Command/trailer. Wave 12n.
+            if let Some(atno) =
+                crate::schema::section::Hwp5InlinePageNumberControl::parse(ctrl_id, &record.data)
+            {
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls.push(Hwp5Control::InlinePageNumber(atno));
+                }
+            } else {
+                self.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "inline_page_number",
+                    reason: "malformed atno CtrlHeader payload; dropping inline page".to_string(),
+                });
+            }
+        } else if let Some(command) =
+            (ctrl_id == CTRL_ID_MEMO).then(|| Hwp5MemoCommand::parse(&record.data)).flatten()
+        {
+            // Push a placeholder `Hwp5Control::Memo` now; its content
+            // paragraphs get filled in `finish()` by matching this
+            // `memo_id` against the captured `HWPTAG_MEMO_LIST`
+            // clusters. The `%unk` ctrl_id is shared with other
+            // user-defined controls, so we only treat it as a memo
+            // when the command string starts with `"MEMO/"` (the
+            // `parse_memo_command_id` discriminator); non-memo
+            // `%unk` payloads keep falling through to the Unknown
+            // arm below for round-trip preservation.
+            if let Some(buf) = self.current.as_mut() {
+                buf.controls.push(Hwp5Control::Memo(Hwp5MemoControl {
+                    ctrl_id: CTRL_ID_MEMO,
+                    command,
+                    paragraphs: Vec::new(),
+                }));
+            }
+        } else if let Some(buf) = self.current.as_mut() {
+            // Snapshot the `secd` ctrl property word for
+            // projection-level Visibility decoding (gap B,
+            // HWP 5.0 spec §4.3.10.1 표 130). The ctrl
+            // continues to flow through the Unknown path so
+            // downstream semantic adapter still emits the
+            // SectionColumnDef inline item from the inline
+            // 0x02 control byte; the property word is just an
+            // additional sidecar capture.
+            if ctrl_id == CTRL_ID_SECD
+                && self.section_def_properties.is_none()
+                && record.data.len() >= 8
+            {
+                self.section_def_properties = Some(u32::from_le_bytes([
+                    record.data[4],
+                    record.data[5],
+                    record.data[6],
+                    record.data[7],
+                ]));
+            }
+            // Snapshot the `cold` (column definition) ctrl, mirroring the
+            // `secd` sidecar capture. Payload after the 4-byte ctrl_id:
+            // `[4..6]` u16 property (bits 0-1 = type, bits 2-9 = column
+            // count, bits 10-11 = direction), `[6..8]` u16 column gap in
+            // HWPUNIT. The ctrl still flows through the Unknown path so the
+            // inline `0x02` SectionColumnDef marker is unaffected; this is
+            // an additional capture for projection-level `ColumnSettings`.
+            if ctrl_id == CTRL_ID_COLUMN_DEF && self.column_def.is_none() && record.data.len() >= 8
+            {
+                let property = u16::from_le_bytes([record.data[4], record.data[5]]);
+                let gap = u16::from_le_bytes([record.data[6], record.data[7]]);
+                self.column_def =
+                    Some(Hwp5ColumnDef { col_count: ((property >> 2) & 0xFF) as u8, gap });
+            }
+            buf.controls.push(Hwp5Control::Unknown { ctrl_id, header_data: record.data.clone() });
+        }
+    }
+
+    /// Finalizes the equation started by the preceding `eqed` ctrl
+    /// using its paired `HWPTAG_EQEDIT` (`0x58`) script record
+    /// (task #90 — extracted from `handle_top_level_record`).
+    fn handle_eqedit_record(&mut self, record: &Record) {
+        // Finalize the equation started by the preceding `eqed` ctrl.
+        if let Some((geometry, instance_id)) = self.eqed_pending.take() {
+            match Hwp5EqEdit::parse(&record.data) {
+                Ok(eqedit) => {
+                    if let Some(buf) = self.current.as_mut() {
+                        buf.controls.push(Hwp5Control::Equation(Hwp5EquationControl {
+                            ctrl_id: CTRL_ID_EQED,
+                            geometry,
+                            script: eqedit.script,
+                            instance_id,
+                        }));
+                    }
+                }
+                Err(_) => self.push_unsupported_tag(record.header.tag_id),
+            }
+        }
+    }
+
+    /// Absorbs a record into the active memo-content cluster capture.
+    ///
+    /// Returns `true` if the record belongs to the cluster (regardless of
+    /// whether it was structurally usable), so the caller can short-circuit
+    /// the normal record dispatch. The cluster region carries the same
+    /// `ParaText`/`ParaCharShape`/`ParaLineSeg` records as a normal body
+    /// paragraph; isolating them here keeps body-paragraph fields untouched.
+    fn try_capture_memo_record(&mut self, record: &Record, tag: TagId, level: u16) -> bool {
+        let Some(capture) = self.memo_content_capture.as_mut() else {
+            return false;
+        };
+        match (tag, level) {
+            (TagId::ListHeader, 1) => {
+                capture.saw_list_header = true;
+                true
+            }
+            (TagId::ParaHeader, 1) if capture.saw_list_header => {
+                if let Some(buf) = capture.current_para.take() {
+                    capture.paragraphs.push(buf.finish());
+                }
+                capture.current_para = Self::parse_para_header_buf(
+                    record.header.tag_id,
+                    &record.data,
+                    &mut self.warnings,
+                );
+                true
+            }
+            (TagId::ParaText, 2) => {
+                if let Some(buf) = capture.current_para.as_mut() {
+                    if let Some(text) = Self::parse_para_text_value(
+                        record.header.tag_id,
+                        &record.data,
+                        &mut self.warnings,
+                    ) {
+                        buf.text = Some(text);
+                    }
+                }
+                true
+            }
+            (TagId::ParaCharShape, 2) => {
+                if let Some(buf) = capture.current_para.as_mut() {
+                    if let Some(runs) = Self::parse_para_char_shape_runs(
+                        record.header.tag_id,
+                        &record.data,
+                        &mut self.warnings,
+                    ) {
+                        buf.char_shape_runs = runs;
+                    }
+                }
+                true
+            }
+            (TagId::ParaLineSeg, 2) => {
+                if let Some(buf) = capture.current_para.as_mut() {
+                    if let Some(segments) = Self::parse_para_line_segments(
+                        record.header.tag_id,
+                        &record.data,
+                        &mut self.warnings,
+                    ) {
+                        buf.line_segments = segments;
+                    }
+                }
+                true
+            }
+            _ => {
+                // Unknown record inside the cluster region: swallow rather
+                // than letting the normal arms touch body-paragraph state.
+                true
+            }
+        }
+    }
+
+    /// Finalizes a pending `%clk` ClickHere control whose trailing
+    /// `0x57` name sub-record never arrived (Wave 12l). Pushes it onto
+    /// the current paragraph with `name=None` and emits a warning so
+    /// the audit baseline can attribute the form-mode identifier loss
+    /// to the ClickHere code path instead of a generic
+    /// `UnsupportedTag(0x47)` bucket.
+    fn flush_pending_clickhere(&mut self) {
+        let Some(clickhere) = self.pending_clickhere.take() else {
+            return;
+        };
+        // Exactly one warning per orphan: ProjectionFallback when we
+        // *can* still attach (partial loss), DroppedControl when we
+        // cannot (full loss). Emitting both would double-count the same
+        // event in audit baselines.
+        if let Some(buf) = self.current.as_mut() {
+            buf.controls.push(Hwp5Control::ClickHere(clickhere));
+            self.warnings.push(Hwp5Warning::ProjectionFallback {
+                subject: "field.clickhere",
+                reason: "%clk press-field missing its trailing 0x57 name sub-record; \
+                         keeping the field with name=None"
+                    .to_string(),
+            });
+        } else if let Some(buf) = self.current_subtree_para.as_mut() {
+            buf.controls.push(Hwp5Control::ClickHere(clickhere));
+            self.warnings.push(Hwp5Warning::ProjectionFallback {
+                subject: "field.clickhere",
+                reason: "%clk press-field missing its trailing 0x57 name sub-record; \
+                         keeping the field with name=None"
+                    .to_string(),
+            });
+        } else {
+            // No paragraph buffer to attach to (e.g. malformed
+            // ParaHeader caused `parse_para_header_buf` to return None
+            // earlier). Surface the silent data loss with a targeted
+            // DroppedControl warning instead of a silent drop — per
+            // Wave 12l quality review (HIGH).
+            self.warnings.push(Hwp5Warning::DroppedControl {
+                control: "clickhere",
+                reason: "no active paragraph buffer to attach orphan %clk press-field".to_string(),
+            });
+        }
+    }
+
+    /// Commits the active memo-content capture (if any) into
+    /// `memo_contents`. First cluster wins on duplicate `memo_id` (warning
+    /// surfaced); zero-content clusters insert an empty entry so the
+    /// matching placeholder still resolves cleanly.
+    fn flush_memo_content_capture(&mut self) {
+        if let Some(capture) = self.memo_content_capture.take() {
+            let memo_id = capture.memo_id;
+            let paragraphs = capture.into_paragraphs();
+            match self.memo_contents.entry(memo_id) {
+                Entry::Vacant(slot) => {
+                    slot.insert(paragraphs);
+                }
+                Entry::Occupied(_) => {
+                    self.warnings.push(Hwp5Warning::DroppedControl {
+                        control: "memo_content_cluster",
+                        reason: format!("duplicate cluster for memo_id={memo_id}; keeping first"),
+                    });
+                }
+            }
+        }
+    }
+
+    /// Joins captured memo-content clusters to their inline `Memo`
+    /// placeholders by `memo_id`. Called once from `finish()` after the
+    /// last body paragraph is committed.
+    fn attach_memo_contents_to_placeholders(&mut self) {
+        if !self.memo_contents.is_empty() {
+            fill_memo_placeholders(
+                &mut self.paragraphs,
+                &mut self.memo_contents,
+                &mut self.warnings,
+            );
+            for orphan_id in self.memo_contents.keys() {
+                self.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "memo_content_cluster",
+                    reason: format!(
+                        "orphan content cluster for memo_id={orphan_id}; no matching MEMO ctrl"
+                    ),
+                });
+            }
+            self.memo_contents.clear();
+        } else {
+            warn_unfilled_memo_placeholders(&self.paragraphs, &mut self.warnings);
+        }
+    }
+
     fn finish(mut self) -> SectionResult {
+        // Drain any orphan `%clk` whose `0x57` name sub-record was
+        // missing or replaced by another top-level record (Wave 12l).
+        self.flush_pending_clickhere();
         while let Some(ctx) = self.table_stack.pop() {
             let finished = ctx.finalize();
             attach_finished_table(
@@ -1271,17 +2808,24 @@ impl BodyTextParserState {
             self.inline_subtree_gso_ctx.take(),
         );
         flush_subtree_paragraph(&mut self.current_subtree_para, self.subtree_ctx.as_mut());
-        attach_finished_subtree(&mut self.current, self.subtree_ctx.take());
+        attach_finished_subtree(&mut self.current, self.subtree_ctx.take(), &mut self.warnings);
 
-        if let Some(buf) = self.current {
+        if let Some(buf) = self.current.take() {
             self.paragraphs.push(buf.finish());
         }
+
+        // Flush any in-flight memo-content capture (cluster at end-of-stream)
+        // then join captured clusters to inline `Memo` placeholders by
+        // `memo_id`. See `phase12e_memo_design.md` for the wire layout.
+        self.flush_memo_content_capture();
+        self.attach_memo_contents_to_placeholders();
 
         SectionResult {
             paragraphs: self.paragraphs,
             page_def: self.page_def,
             section_def_properties: self.section_def_properties,
             page_border_fills: self.page_border_fills,
+            column_def: self.column_def,
             warnings: self.warnings,
         }
     }
@@ -1357,7 +2901,7 @@ impl BodyTextParserState {
         };
 
         match tag {
-            TagId::ShapeComponent => ctx.note_shape_component(),
+            TagId::ShapeComponent => ctx.note_shape_component(&record.data),
             TagId::ShapeComponentRect => ctx.note_shape_rectangle(),
             TagId::ShapeComponentLine => match Hwp5ShapeComponentLine::parse(&record.data) {
                 Ok(line) => ctx.note_shape_line(line),
@@ -1369,6 +2913,25 @@ impl BodyTextParserState {
                 Err(_) => warnings
                     .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
             },
+            TagId::ShapeComponentEllipse => match Hwp5ShapeComponentEllipse::parse(&record.data) {
+                Ok(ellipse) => ctx.note_shape_ellipse(ellipse),
+                Err(_) => warnings
+                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
+            },
+            TagId::ShapeComponentCurve => match Hwp5ShapeComponentCurve::parse(&record.data) {
+                Ok(curve) => ctx.note_shape_curve(curve),
+                Err(_) => warnings
+                    .push(Hwp5Warning::UnsupportedTag { tag_id: record.header.tag_id, offset: 0 }),
+            },
+            TagId::ShapeTextArt => {
+                match crate::schema::section::Hwp5ShapeTextArt::parse(&record.data) {
+                    Ok(ta) => ctx.note_shape_text_art(ta),
+                    Err(_) => warnings.push(Hwp5Warning::UnsupportedTag {
+                        tag_id: record.header.tag_id,
+                        offset: 0,
+                    }),
+                }
+            }
             TagId::ShapePicture => match Hwp5ShapePicture::parse(&record.data) {
                 Ok(picture) => ctx.note_shape_picture(picture),
                 Err(_) => warnings
@@ -1398,6 +2961,94 @@ impl BodyTextParserState {
 /// The stored bytes are little-endian in the record payload, so the raw
 /// sequence `[0x20, 0x6C, 0x62, 0x74]` decodes to `0x74626C20` (`"tbl "`).
 /// Returns 0 on short data.
+/// Parses the 4-byte payload of a `HWPTAG_MEMO_LIST` (0x5D) record as a
+/// little-endian u32 memo identifier. The same id appears at slash index 2
+/// of the matching `%unk MEMO/{shapeId}/{memo_id}/{instId}` command string.
+fn parse_memo_list_id(data: &[u8]) -> Option<u32> {
+    if data.len() >= 4 {
+        Some(u32::from_le_bytes([data[0], data[1], data[2], data[3]]))
+    } else {
+        None
+    }
+}
+
+/// Walks paragraphs (recursively into table cells / nested subtrees) and
+/// fills every empty `Hwp5Control::Memo` placeholder whose `memo_id`
+/// matches an entry in `memo_contents`. Entries are removed as they are
+/// consumed so the caller can surface remaining orphans as warnings.
+fn fill_memo_placeholders(
+    paragraphs: &mut [Hwp5Paragraph],
+    memo_contents: &mut HashMap<u32, Vec<Hwp5Paragraph>>,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    for para in paragraphs {
+        for control in &mut para.controls {
+            match control {
+                Hwp5Control::Memo(memo) if memo.paragraphs.is_empty() => {
+                    if let Some(content) = memo_contents.remove(&memo.command.memo_id) {
+                        memo.paragraphs = content;
+                    } else {
+                        warnings.push(Hwp5Warning::DroppedControl {
+                            control: "memo",
+                            reason: format!(
+                                "no content cluster for memo_id={}",
+                                memo.command.memo_id
+                            ),
+                        });
+                    }
+                }
+                Hwp5Control::Table(table) => {
+                    for cell in &mut table.cells {
+                        fill_memo_placeholders(&mut cell.paragraphs, memo_contents, warnings);
+                    }
+                }
+                Hwp5Control::Header(subtree)
+                | Hwp5Control::Footer(subtree)
+                | Hwp5Control::Footnote(subtree)
+                | Hwp5Control::Endnote(subtree) => {
+                    fill_memo_placeholders(&mut subtree.paragraphs, memo_contents, warnings);
+                }
+                Hwp5Control::TextBox(textbox) => {
+                    fill_memo_placeholders(&mut textbox.paragraphs, memo_contents, warnings);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Walks paragraphs and surfaces a warning for every empty `Memo`
+/// placeholder. Used in the no-clusters fast path.
+fn warn_unfilled_memo_placeholders(paragraphs: &[Hwp5Paragraph], warnings: &mut Vec<Hwp5Warning>) {
+    for para in paragraphs {
+        for control in &para.controls {
+            match control {
+                Hwp5Control::Memo(memo) if memo.paragraphs.is_empty() => {
+                    warnings.push(Hwp5Warning::DroppedControl {
+                        control: "memo",
+                        reason: format!("no content cluster for memo_id={}", memo.command.memo_id),
+                    });
+                }
+                Hwp5Control::Table(table) => {
+                    for cell in &table.cells {
+                        warn_unfilled_memo_placeholders(&cell.paragraphs, warnings);
+                    }
+                }
+                Hwp5Control::Header(subtree)
+                | Hwp5Control::Footer(subtree)
+                | Hwp5Control::Footnote(subtree)
+                | Hwp5Control::Endnote(subtree) => {
+                    warn_unfilled_memo_placeholders(&subtree.paragraphs, warnings);
+                }
+                Hwp5Control::TextBox(textbox) => {
+                    warn_unfilled_memo_placeholders(&textbox.paragraphs, warnings);
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 fn parse_ctrl_id(data: &[u8]) -> u32 {
     if data.len() < 4 {
         return 0;
@@ -1568,12 +3219,14 @@ fn flush_subtree_paragraph(
 fn attach_finished_subtree(
     current: &mut Option<ParaBuf>,
     subtree_ctx: Option<NestedSubtreeContext>,
+    warnings: &mut Vec<Hwp5Warning>,
 ) {
     let Some(ctx) = subtree_ctx else {
         return;
     };
+    let control = ctx.into_control(warnings);
     if let Some(buf) = current.as_mut() {
-        buf.controls.push(ctx.into_control());
+        buf.controls.push(control);
     }
 }
 
@@ -1961,6 +3614,25 @@ mod tests {
             }
             other => panic!("expected Table, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn ctrl_header_cold_captures_column_def() {
+        // `cold` ctrl: ctrl_id(4) + property u16 (bits 2-9 = colCount=2)
+        // + gap u16 (2268) + 8 zero bytes — mirrors the native 2-column wire.
+        let mut cold = CTRL_ID_COLUMN_DEF.to_le_bytes().to_vec();
+        cold.extend_from_slice(&0x0008u16.to_le_bytes()); // property: colCount=2 at bits 2-9
+        cold.extend_from_slice(&2268u16.to_le_bytes()); // gap
+        cold.extend_from_slice(&[0u8; 8]);
+
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &cold));
+
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let col = result.column_def.expect("cold ctrl should be captured");
+        assert_eq!(col.col_count, 2);
+        assert_eq!(col.gap, 2268);
     }
 
     #[test]
@@ -2633,8 +4305,8 @@ mod tests {
             width: 5_000,
             height: 6_000,
         };
-        let mut ctx = InlineGsoContext::new(0, CTRL_ID_GSO, Some(geometry));
-        ctx.note_shape_component();
+        let mut ctx = InlineGsoContext::new(0, CTRL_ID_GSO, 0, Some(geometry));
+        ctx.note_shape_component(&[]);
         ctx.note_shape_picture(Hwp5ShapePicture::parse(&shape_picture_data(1)).unwrap());
         ctx.note_shape_ole(
             Hwp5ShapeComponentOle::parse(&shape_component_ole_data(1, 9000, 8000)).unwrap(),
@@ -2654,16 +4326,67 @@ mod tests {
             width: 5_000,
             height: 6_000,
         };
-        let mut ctx = NestedSubtreeContext::new(0, CTRL_ID_GSO, 0, Some(geometry));
-        ctx.note_shape_component();
+        let mut ctx = NestedSubtreeContext::new(0, CTRL_ID_GSO, 0, 0, Some(geometry));
+        ctx.note_shape_component(&[]);
         ctx.note_shape_picture(Hwp5ShapePicture::parse(&shape_picture_data(1)).unwrap());
         ctx.note_shape_ole(
             Hwp5ShapeComponentOle::parse(&shape_component_ole_data(1, 9000, 8000)).unwrap(),
         );
 
-        match ctx.into_control() {
+        let mut warnings = Vec::new();
+        match ctx.into_control(&mut warnings) {
             Hwp5Control::Unknown { ctrl_id, .. } => assert_eq!(ctrl_id, CTRL_ID_GSO),
             other => panic!("expected Unknown for ambiguous subtree gso payload, got {:?}", other),
+        }
+    }
+
+    fn line_gso_input(shape_component_kind: Option<[u8; 4]>) -> GsoClassificationInput {
+        GsoClassificationInput {
+            ctrl_id: CTRL_ID_GSO,
+            saw_shape_component: true,
+            saw_shape_rectangle: false,
+            geometry: Some(crate::schema::section::Hwp5ShapeComponentGeometry {
+                x: 1,
+                y: 2,
+                width: 100,
+                height: 50,
+            }),
+            picture: None,
+            ole: None,
+            line: Some(crate::schema::section::Hwp5ShapeComponentLine {
+                start: Hwp5ShapePoint { x: 0, y: 0 },
+                end: Hwp5ShapePoint { x: 100, y: 0 },
+            }),
+            polygon: None,
+            ellipse: None,
+            curve: None,
+            text_art: None,
+            shape_component_kind,
+            instance_id: 0,
+        }
+    }
+
+    #[test]
+    fn gso_line_with_connect_line_tag_classifies_as_connect_line() {
+        let input = line_gso_input(Some(SHAPE_COMPONENT_TYPE_CONNECT_LINE));
+        match classify_gso_control(input) {
+            Hwp5Control::ConnectLine(connect_line) => {
+                assert_eq!(connect_line.end.x, 100);
+                assert_eq!(connect_line.geometry.width, 100);
+            }
+            other => panic!("expected ConnectLine for the $col tag, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn gso_line_without_connect_line_tag_stays_line() {
+        // Conservative guard: a plain line (no tag, or any non-$col tag) must
+        // never be reclassified as a connect line.
+        for kind in [None, Some(*b"$rec"), Some(*b"$lin")] {
+            match classify_gso_control(line_gso_input(kind)) {
+                Hwp5Control::Line(_) => {}
+                other => panic!("expected Line for shape_component_kind={kind:?}, got {other:?}"),
+            }
         }
     }
 }

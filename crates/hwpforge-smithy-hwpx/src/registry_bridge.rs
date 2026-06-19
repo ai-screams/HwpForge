@@ -289,7 +289,7 @@ mod tests {
             body_cs,
         ));
         root.add_run(Run::control(
-            Control::memo(vec![simple_paragraph(body_cs, body_ps)], "tester", "2026-03-20"),
+            Control::memo(vec![simple_paragraph(body_cs, body_ps)]),
             body_cs,
         ));
 

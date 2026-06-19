@@ -36,6 +36,7 @@ use crate::chart::{
 };
 use crate::error::{CoreError, CoreResult};
 use crate::paragraph::Paragraph;
+use crate::run::Run;
 
 /// A 2D point in raw HWPUNIT coordinates for shape geometry.
 ///
@@ -456,6 +457,11 @@ pub enum Control {
         text_color: Color,
         /// Font name (typically `"HancomEQN"`).
         font: String,
+        /// Wave 12p Step 2c: instance ID for cross-ref target lookup.
+        /// HWP5 변환 시 `eqed` CtrlHeader trailer 의 instance ID 가
+        /// 채워지고, HWPX encoder 가 `<hp:equation id="...">` attribute
+        /// 로 emit. `None` 이면 encoder fallback 허용.
+        inst_id: Option<u64>,
     },
 
     /// An OOXML chart embedded in the document.
@@ -513,6 +519,11 @@ pub enum Control {
         sz_ratio: u32,
         /// Alignment of the annotation text.
         align: DutmalAlign,
+        /// Optional metadata that mirrors HWPX `<hp:dutmal>` attributes
+        /// HwpForge doesn't promote to typed fields yet — currently
+        /// carries `option` verbatim so HWP5↔HWPX round-trips preserve
+        /// it. `#[non_exhaustive]` so future fields are additive.
+        metadata: DutmalMetadata,
     },
 
     /// Compose (글자겹침): overlaid/combined characters.
@@ -526,6 +537,11 @@ pub enum Control {
         char_sz: i32,
         /// Composition layout type.
         compose_type: String,
+        /// 10 `<hp:charPr prIDRef="N"/>` references (HWPX `charPrCnt` is
+        /// fixed at 10). `u32::MAX` is the "no override" sentinel —
+        /// 한컴 emits it for unused slots. A `Vec` shorter or longer
+        /// than 10 is normalized by the HWPX encoder (pad / truncate).
+        char_pr_ids: Vec<u32>,
     },
 
     /// An arc (partial ellipse) drawing object.
@@ -607,6 +623,70 @@ pub enum Control {
         style: Option<ShapeStyle>,
     },
 
+    /// A group of drawing objects (묶음 객체 / 개체 묶기).
+    /// Maps to HWPX `<hp:container>` and HWP5 `gso` → `ShapeComponent` with
+    /// the `"$con"` type tag wrapping child `ShapeComponent`s.
+    ///
+    /// `children` reuses the shape `Control` variants (`Rect`/`Ellipse`/
+    /// `Line`/`Polygon`/`Curve`/`ConnectLine`/`Image`/`EmbeddedChart` and,
+    /// recursively, `Group`). Non-shape variants are rejected by
+    /// `validate` rather than the type system, matching how every other
+    /// recursive container (`TextBox`/`Footnote`/`Memo.content`) carries a
+    /// loose `Vec<Paragraph>` / `Vec<Run>`.
+    Group {
+        /// Child drawing objects, in z-order. May nest further `Group`s.
+        children: Vec<Control>,
+        /// Bounding box width (HWPUNIT).
+        width: HwpUnit,
+        /// Bounding box height (HWPUNIT).
+        height: HwpUnit,
+        /// Horizontal offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
+        horz_offset: i32,
+        /// Vertical offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
+        vert_offset: i32,
+        /// HWP5 ParaHeader / GSO trailer instance ID, mirrored to the
+        /// HWPX `<hp:container instid>` attribute. `None` = not carried.
+        inst_id: Option<u64>,
+    },
+
+    /// A TextArt (글맵시) decorative warped-text object.
+    /// Maps to HWPX `<hp:textart>` with `<hp:textartPr>`.
+    ///
+    /// TextArt warps a short string into a shape (wave, arch, circle, …) and
+    /// renders it as a drawing object. The HWP5 wire stores `shape` as an
+    /// integer enum (`0..=54`); the HWPX wire stores it as a string name
+    /// (e.g. `"WAVE2"`). This carries the HWPX string form directly.
+    TextArt {
+        /// The displayed text content.
+        text: String,
+        /// HWPX `textShape` name (e.g. `"WAVE2"`). One of 55 known shapes.
+        shape: String,
+        /// Font family name (e.g. `"함초롬바탕"`).
+        font_name: String,
+        /// Font style label (e.g. `"보통"`).
+        font_style: String,
+        /// HWPX `align` value within the textart (e.g. `"LEFT"`).
+        align: String,
+        /// Line spacing (percent, HWPX `lineSpacing`).
+        line_spacing: u32,
+        /// Character spacing (percent, HWPX `charSpacing`).
+        char_spacing: u32,
+        /// Bounding box width (HWPUNIT).
+        width: HwpUnit,
+        /// Bounding box height (HWPUNIT).
+        height: HwpUnit,
+        /// Horizontal offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
+        horz_offset: i32,
+        /// Vertical offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
+        vert_offset: i32,
+        /// Fill color (the `<hc:winBrush faceColor>` of the textart glyphs).
+        /// `None` = no explicit fill carried.
+        fill_color: Option<Color>,
+        /// HWP5 GSO trailer instance ID, mirrored to HWPX `<hp:textart instid>`.
+        /// `None` = not carried.
+        inst_id: Option<u64>,
+    },
+
     /// A bookmark marking a named location in the document.
     /// Maps to HWPX `<hp:ctrl><hp:bookmark>` (point) or `fieldBegin/fieldEnd type="BOOKMARK"` (span).
     Bookmark {
@@ -616,17 +696,35 @@ pub enum Control {
         bookmark_type: BookmarkType,
     },
 
-    /// A cross-reference (상호참조) to a bookmark, table, figure, or equation.
+    /// A cross-reference (상호참조) to a bookmark, footnote, endnote,
+    /// outline heading, table/figure/equation caption.
+    ///
     /// Maps to HWPX `fieldBegin type="CROSSREF"` with parameters.
+    ///
+    /// Wave 12m Phase 2: `target_name: String` 가 `target: RefTarget` 로
+    /// 변경 (breaking). 책갈피 이름과 한컴 자동 ID (#<id>) 가 타입으로
+    /// 구분되어 caller 가 의미를 정확히 알 수 있음.
+    ///
+    /// Wave 12m Phase 2 Step 4 (breaking): `display_text: String` 추가.
+    /// HWPX wire 는 `<hp:fieldBegin>` 과 `<hp:fieldEnd>` 사이의 visible run
+    /// 으로 display text 를 embedding 한다. HWP5 `%xrf` wire 는 display
+    /// text 를 직접 carry 하지 않고 ParaText 본문에 풀어 두지만, projection
+    /// 이 FieldBegin..FieldEnd span 을 읽어 이 필드에 채워 넣는다.
+    /// 빈 문자열은 "display text 없음" 의미 (Hyperlink::text 와 동일).
     CrossRef {
-        /// Target bookmark or object name (e.g. `"bookmark1"`, `"table23"`).
-        target_name: String,
+        /// Reference target — Bookmark name (`Name(String)`) or system
+        /// id (`SystemId(u64)`) or unparseable raw (`Raw(String)`).
+        target: RefTarget,
         /// What kind of target is being referenced.
         ref_type: RefType,
         /// What content to display at the reference site.
         content_type: RefContentType,
         /// Whether to render the reference as a clickable hyperlink.
         as_hyperlink: bool,
+        /// Visible body text shown between `fieldBegin` and `fieldEnd`
+        /// in the encoded wire. HWP5 sources this from the FieldBegin
+        /// span; native builders may leave this empty.
+        display_text: String,
     },
 
     /// A press-field (누름틀) — an interactive form field.
@@ -638,17 +736,57 @@ pub enum Control {
         hint_text: Option<String>,
         /// Help text shown when hovering or clicking the field.
         help_text: Option<String>,
+        /// Form-mode identifier used to reference the field programmatically.
+        /// Maps to HWPX `fieldBegin name="..."` attribute. `None` represents
+        /// the empty string convention (한컴 wire stores it as a 0-length BSTR).
+        name: Option<String>,
+        /// Cached resolved value rendered between `<hp:fieldBegin>` and
+        /// `<hp:fieldEnd>` (e.g. the author name, the locale-formatted date).
+        /// HWP5 sources this from the FieldBegin..FieldEnd span; 한컴 native
+        /// HWPX carries the same cached render and recomputes it on save.
+        /// Empty string = "no cached value" (same convention as
+        /// [`Self::CrossRef::display_text`] / [`Self::Hyperlink::text`]).
+        /// For `ClickHere` this stays empty — its visible placeholder is
+        /// [`Self::Field::hint_text`], not a cached render.
+        ///
+        /// An empty body triggers 한컴's "낮은 보안 수준 복구" warning on
+        /// open for SUMMERY fields (#120/#136) — carrying the verbatim
+        /// source value avoids it.
+        display_text: String,
     },
 
     /// A memo (메모) annotation attached to text.
-    /// Maps to HWPX `fieldBegin type="MEMO"` with `<hp:subList>` body inside.
+    ///
+    /// Maps to HWPX `fieldBegin type="MEMO"` + anchor body runs +
+    /// `fieldEnd` flat inside one `<hp:run>`. The memo's body lives inside
+    /// `fieldBegin`'s `<hp:subList>`; the *anchor* runs sit between
+    /// `fieldBegin` and `fieldEnd` so 한컴 can pair the markers and render
+    /// the `[메모 시작]…[메모 끝]` UI labels instead of generic
+    /// `[메모 시작]…[필드 끝]`.
+    ///
+    /// Wave 12e: `author`/`date` fields removed (no wire path populated
+    /// them).
+    ///
+    /// Wave 12f: `anchor_runs` added. Without it, the encoder produced an
+    /// empty `<hp:t/>` between `fieldBegin` and `fieldEnd`, which 한컴 reads
+    /// as an unpaired field — visible bug.
     Memo {
-        /// Paragraphs forming the memo body content.
+        /// Paragraphs forming the memo body content (rendered in
+        /// `<hp:subList>`).
         content: Vec<Paragraph>,
-        /// Author name.
-        author: String,
-        /// Date string (e.g. `"2026-03-05"`).
-        date: String,
+        /// Runs that form the visible *anchor* text — the body span the memo
+        /// is attached to. Encoders interleave these between `fieldBegin`
+        /// and `fieldEnd` inside one `<hp:run>`. Should normally hold only
+        /// `RunContent::Text`; other variants are downgraded by the encoder
+        /// with a warning (memos cannot anchor on tables/images/nested
+        /// controls in HWPX).
+        anchor_runs: Vec<Run>,
+        /// HWPX `<hp:parameters>` for the memo. Carrying these as a
+        /// dedicated [`MemoMetadata`] (instead of half-empty hard-coded
+        /// values) keeps the metadata format-agnostic — encoders for HWPX
+        /// (and any future format with similar metadata) consume the same
+        /// struct.
+        metadata: MemoMetadata,
     },
 
     /// An index mark for building a document index (찾아보기).
@@ -658,6 +796,80 @@ pub enum Control {
         primary: String,
         /// Secondary (sub-entry) index key.
         secondary: Option<String>,
+    },
+
+    /// An unknown SUMMERY (`%smr`) `$token` carried verbatim for forward
+    /// compatibility (Wave 12n).
+    ///
+    /// Wave 12n only models the five HwpForge-observed tokens (`$author`,
+    /// `$lastsaveby`, `$createtime`, `$modifiedtime`, `$title`) as typed
+    /// [`FieldType`] variants. Any other `%smr` Command (e.g. additional
+    /// 한컴 metadata tokens not yet measured) is preserved here instead of
+    /// being silently coerced to `ClickHere`.
+    UnknownSummery {
+        /// Raw `Command` string after envelope (e.g. `"$company"`).
+        token: String,
+        /// Cached resolved value rendered between `fieldBegin`/`fieldEnd`.
+        /// Same semantics as [`Self::Field::display_text`]; empty = none.
+        display_text: String,
+    },
+
+    /// A `%dte` date/time **format-pattern** field (Wave 12n).
+    ///
+    /// HWP5 family `%dte` (ctrl_id `0x2564_7465`) used by 한컴
+    /// `입력 → 날짜/시간/파일 이름 → 날짜/시간 코드` menu. Unlike SUMMERY
+    /// (which carries semantic tokens like `$createtime`), `%dte` carries
+    /// a raw format pattern string (e.g. `"\:1년 2월 3일 (6);0;"` for date,
+    /// `"T\:;0;"` for time-only). The grammar is under-measured so the
+    /// raw command is preserved verbatim; `is_time_mode` is a derived
+    /// helper based on the `T` prefix.
+    DateCodeField {
+        /// Full Command string from the wire, including the `T` prefix
+        /// for time mode and the `\:format;options;` body.
+        raw_command: String,
+        /// Helper view: `true` when [`Self::DateCodeField::raw_command`]
+        /// starts with `T` (time-only format).
+        is_time_mode: bool,
+        /// Opaque 8-byte trailer (instance ID + flags) carried for
+        /// round-trip fidelity. The semantics are not pinned down.
+        raw_trailer: [u8; 8],
+        /// Cached resolved value rendered between `fieldBegin`/`fieldEnd`
+        /// (the locale-formatted date/time string). Same semantics as
+        /// [`Self::Field::display_text`]; empty = none.
+        display_text: String,
+    },
+
+    /// A `%pat` path / file-name field (Wave 12n).
+    ///
+    /// HWP5 family `%pat` (ctrl_id `0x2570_6174`) emitted by 한컴
+    /// `상용구 → 파일 이름 / 파일 이름과 경로`. Uses `$P` (path) and
+    /// `$F` (file name) format codes.
+    PathField {
+        /// Typed variant of the observed `Command` pattern.
+        command: PathFieldCommand,
+        /// Cached resolved value rendered between `fieldBegin`/`fieldEnd`
+        /// (the absolute path/file name 한컴 last evaluated). Same semantics
+        /// as [`Self::Field::display_text`]; empty = none. 한컴 recomputes
+        /// `$P`/`$F` against the file's on-disk path on save, but an empty
+        /// body on open triggers the recovery warning (#120).
+        display_text: String,
+    },
+
+    /// An `atno` **inline** page number control (Wave 12n).
+    ///
+    /// HWP5 family `atno` (ctrl_id `0x6174_6E6F`) used by 한컴
+    /// `상용구 → 현재 쪽 번호 / 전체 쪽수 / 현재 쪽/전체 쪽수`. Distinct
+    /// from `pgnp` (section-level page numbering control already modeled
+    /// as `Section.page_number`). Inline `atno` renders to HWPX
+    /// `<hp:autoNum>` inside a `<hp:run>`.
+    ///
+    /// The 16-byte wire envelope carries a single 4-byte flag that
+    /// distinguishes current-page from total-pages.
+    InlinePageNumber {
+        /// Typed variant of the observed `flag` byte.
+        kind: InlinePageKind,
+        /// Raw `flag` bytes (LE u32) carried for unknown values.
+        raw_flag: u32,
     },
 
     /// An unrecognized control element preserved for round-trip fidelity.
@@ -670,6 +882,209 @@ pub enum Control {
         /// Optional serialized data for round-trip preservation.
         data: Option<String>,
     },
+}
+
+/// Typed variant of the HWP5 `%pat` Command string (Wave 12n).
+///
+/// Observed forms are `$F` (file name only), `$P` (path only), and `$P$F`
+/// (full path). Anything else is preserved as [`PathFieldCommand::Unknown`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub enum PathFieldCommand {
+    /// `$F` — file name only.
+    FileName,
+    /// `$P` — folder path only (no file name).
+    Path,
+    /// `$P$F` — full path including file name.
+    PathAndFileName,
+    /// Any other Command form, preserved verbatim.
+    Unknown(String),
+}
+
+impl PathFieldCommand {
+    /// Returns the canonical wire Command string for typed variants.
+    /// For [`Self::Unknown`], returns the carried raw string.
+    pub fn wire_command(&self) -> &str {
+        match self {
+            Self::FileName => "$F",
+            Self::Path => "$P",
+            Self::PathAndFileName => "$P$F",
+            Self::Unknown(s) => s.as_str(),
+        }
+    }
+
+    /// Parses a wire Command string into a typed variant. Unknown forms
+    /// are preserved as [`Self::Unknown`].
+    pub fn from_wire(cmd: &str) -> Self {
+        match cmd {
+            "$F" => Self::FileName,
+            "$P" => Self::Path,
+            "$P$F" => Self::PathAndFileName,
+            other => Self::Unknown(other.to_string()),
+        }
+    }
+}
+
+/// Cross-reference target identifier (Wave 12m Phase 2).
+///
+/// Replaces the previous `target_name: String` field on
+/// [`Control::CrossRef`] with a type-safe enum that distinguishes the
+/// three observed wire forms in HWP5 `%xrf` Command strings:
+///
+/// - **`Name(String)`** — 사용자 지정 책갈피 이름 (Bookmark 전용).
+///   한컴 fixture 의 `?target1;6;0;0;0;` 형식에서 `target1` 부분.
+/// - **`SystemId(u64)`** — 한컴 자동 생성 정수 ID (Footnote / Endnote /
+///   Caption / Outline). 한컴 fixture 의 `?#1108165575;3;0;0;0;` 형식에서
+///   `#` 접두사를 떼고 정수로 파싱한 값.
+/// - **`Raw(String)`** — 위 두 형식 어느쪽으로도 파싱이 안 된 wire 값.
+///   silent fallback 위조 금지 원칙 (Codex(architect)) — 의미를
+///   모르면 raw 보존.
+///
+/// 변환은 `smithy-hwp5/src/projection.rs::decode_hwp5_target` 의
+/// boundary 함수에서 수행 (Core 는 wire-agnostic).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub enum RefTarget {
+    /// 사용자 지정 책갈피 이름 (Bookmark 전용).
+    Name(String),
+    /// 한컴 자동 생성 정수 ID (Footnote / Endnote / Caption / Outline).
+    SystemId(u64),
+    /// 위 형식 어느쪽으로도 정규화되지 않은 raw 값 — fallback 위조 금지.
+    Raw(String),
+}
+
+impl RefTarget {
+    /// Returns the displayable name for this target.
+    ///
+    /// - `Name(s)` → `s`
+    /// - `SystemId(id)` → `"#{id}"` 형식 (한컴 wire 와 동일)
+    /// - `Raw(s)` → `s`
+    pub fn as_display(&self) -> String {
+        match self {
+            Self::Name(s) => s.clone(),
+            Self::SystemId(id) => format!("#{id}"),
+            Self::Raw(s) => s.clone(),
+        }
+    }
+}
+
+/// Typed variant of the HWP5 `atno` inline page-number `flag` byte
+/// (Wave 12n).
+///
+/// Observed values: `0x00` = current page, `0x06` = total page count.
+/// Other values surface as [`InlinePageKind::Unknown`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub enum InlinePageKind {
+    /// Flag `0x00` — current page number.
+    CurrentPage,
+    /// Flag `0x06` — total page count.
+    TotalPages,
+    /// Any other flag value, carried verbatim via
+    /// [`Control::InlinePageNumber::raw_flag`].
+    Unknown,
+}
+
+impl InlinePageKind {
+    /// Returns the canonical raw flag value for typed variants.
+    /// For [`Self::Unknown`], callers must use the
+    /// [`Control::InlinePageNumber::raw_flag`] field directly.
+    pub fn raw_flag(self) -> Option<u32> {
+        match self {
+            Self::CurrentPage => Some(0x00),
+            Self::TotalPages => Some(0x06),
+            Self::Unknown => None,
+        }
+    }
+
+    /// Maps an observed raw flag value to a typed variant.
+    pub fn from_raw_flag(flag: u32) -> Self {
+        match flag {
+            0x00 => Self::CurrentPage,
+            0x06 => Self::TotalPages,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+/// Metadata associated with a memo annotation (HWPX `<hp:parameters>`).
+///
+/// Carries the seven HWPX memo parameters (`Prop`, `Command`, `ID`, `Number`,
+/// `Author`, `MemoShapeIDRef`, `CreateDateTime`). Empty / default values are
+/// rendered by encoders as sensible defaults: `Prop` is always `0` on
+/// 한컴-authored fixtures so the field is omitted on the Core side, and
+/// `CreateDateTime` is auto-generated at encode time if blank (a 한컴-native
+/// memo always has a timestamp).
+///
+/// Other format encoders (Markdown, future ODT) can ignore the
+/// HWPX-specific fields and just use `author` if useful.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub struct MemoMetadata {
+    /// Reference to the `MemoShape` table entry. 한컴 default is `65535`.
+    pub shape_id_ref: u32,
+    /// Memo number (`<hp:integerParam name="Number">`). Equals the HWP5
+    /// `memo_id`. Encoders normally also derive the HWPX `ID` parameter
+    /// from this value (`"memo{number}"`).
+    pub number: u32,
+    /// HWPX `ID` parameter (typically `"memo{number}"`). Encoders may
+    /// auto-derive from `number` when blank.
+    pub id: String,
+    /// Memo author (`Author` parameter). Empty when unknown.
+    pub author: String,
+    /// HWPX `CreateDateTime` parameter (ISO 8601 UTC). Empty triggers
+    /// encoder-side auto-generation at write time.
+    pub create_datetime: String,
+    /// Raw wire `Command` parameter (`"MEMO/{shape}/{number}/…"` from HWP5).
+    /// Empty for HwpForge-authored memos — encoders synthesise a minimum
+    /// `MEMO/{shape}/{number}/` form in that case.
+    pub command: String,
+}
+
+impl Default for MemoMetadata {
+    fn default() -> Self {
+        Self {
+            shape_id_ref: 65535,
+            number: 0,
+            id: String::new(),
+            author: String::new(),
+            create_datetime: String::new(),
+            command: String::new(),
+        }
+    }
+}
+
+impl MemoMetadata {
+    /// Returns the HWPX `ID` parameter, deriving `"memo{number}"` when the
+    /// explicit field is blank.
+    pub fn hwpx_id(&self) -> String {
+        if self.id.is_empty() {
+            format!("memo{}", self.number)
+        } else {
+            self.id.clone()
+        }
+    }
+}
+
+/// Wire-mirrored metadata attached to a `Control::Dutmal`.
+///
+/// Carries HWPX `<hp:dutmal>` attributes that HwpForge does not yet
+/// model as typed fields — currently just `option`. Field is mirrored
+/// verbatim from HWP5 wire / HWPX `option=` attribute and emitted
+/// verbatim on encode so round-trips preserve the value even when the
+/// semantics aren't pinned down (see
+/// `.docs/algorithms/2026-06-01_dutmal_carry.md`).
+///
+/// `#[non_exhaustive]` — additions like `style_id_ref` or the two
+/// reserved tail words are additive and don't break existing
+/// destructure / pattern-match sites.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub struct DutmalMetadata {
+    /// `<hp:dutmal option=…>` value mirrored verbatim. Likely a
+    /// bit-field or enum on the HWPX side; HwpForge treats it as an
+    /// opaque u32 until the spec is confirmed.
+    pub option: u32,
 }
 
 /// Position of dutmal annotation text relative to the main text.
@@ -786,6 +1201,11 @@ impl Control {
         matches!(self, Self::ConnectLine { .. })
     }
 
+    /// Returns `true` if this is a [`Control::Group`].
+    pub fn is_group(&self) -> bool {
+        matches!(self, Self::Group { .. })
+    }
+
     /// Returns `true` if this is a [`Control::Bookmark`].
     pub fn is_bookmark(&self) -> bool {
         matches!(self, Self::Bookmark { .. })
@@ -840,6 +1260,8 @@ impl Control {
             field_type: FieldType::ClickHere,
             hint_text: Some(hint.to_string()),
             help_text: None,
+            name: None,
+            display_text: String::new(),
         }
     }
 
@@ -857,7 +1279,7 @@ impl Control {
         Self::IndexMark { primary: primary.to_string(), secondary: None }
     }
 
-    /// Creates a memo annotation with the given text content.
+    /// Creates a memo annotation with the given paragraph body.
     ///
     /// # Examples
     ///
@@ -867,30 +1289,62 @@ impl Control {
     /// use hwpforge_foundation::ParaShapeIndex;
     ///
     /// let para = Paragraph::new(ParaShapeIndex::new(0));
-    /// let memo = Control::memo(vec![para], "Author", "2026-03-05");
+    /// let memo = Control::memo(vec![para]);
     /// assert!(memo.is_memo());
     /// ```
-    pub fn memo(content: Vec<Paragraph>, author: &str, date: &str) -> Self {
-        Self::Memo { content, author: author.to_string(), date: date.to_string() }
+    pub fn memo(content: Vec<Paragraph>) -> Self {
+        Self::Memo { content, anchor_runs: Vec::new(), metadata: MemoMetadata::default() }
     }
 
-    /// Creates a cross-reference to a bookmark target.
+    /// Creates a memo annotation with both body content and anchor runs.
+    ///
+    /// `anchor_runs` are the visible body span the memo is attached to (the
+    /// text between HWPX `<hp:fieldBegin type="MEMO">` and `<hp:fieldEnd>`);
+    /// `content` is the memo body inside `<hp:subList>`.
     ///
     /// # Examples
     ///
     /// ```
     /// use hwpforge_core::control::Control;
+    /// use hwpforge_core::paragraph::Paragraph;
+    /// use hwpforge_core::run::Run;
+    /// use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
+    ///
+    /// let body = vec![Paragraph::new(ParaShapeIndex::new(0))];
+    /// let anchor = vec![Run::text("hello", CharShapeIndex::new(0))];
+    /// let memo = Control::memo_with_anchor(body, anchor);
+    /// assert!(memo.is_memo());
+    /// ```
+    pub fn memo_with_anchor(content: Vec<Paragraph>, anchor_runs: Vec<Run>) -> Self {
+        Self::Memo { content, anchor_runs, metadata: MemoMetadata::default() }
+    }
+
+    /// Creates a cross-reference to a bookmark target (convenience helper).
+    ///
+    /// Wave 12m Phase 2: 인자 타입이 `&str` 에서 `RefTarget` 로 변경
+    /// (breaking). 책갈피 이름이라면 `RefTarget::Name(...)`, 한컴 시스템
+    /// ID 라면 `RefTarget::SystemId(...)` 를 명시.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::control::{Control, RefTarget};
     /// use hwpforge_foundation::{RefType, RefContentType};
     ///
-    /// let xref = Control::cross_ref("section1", RefType::Bookmark, RefContentType::Page);
+    /// let xref = Control::cross_ref(
+    ///     RefTarget::Name("section1".to_string()),
+    ///     RefType::Bookmark,
+    ///     RefContentType::Page,
+    /// );
     /// assert!(xref.is_cross_ref());
     /// ```
-    pub fn cross_ref(target: &str, ref_type: RefType, content_type: RefContentType) -> Self {
+    pub fn cross_ref(target: RefTarget, ref_type: RefType, content_type: RefContentType) -> Self {
         Self::CrossRef {
-            target_name: target.to_string(),
+            target,
             ref_type,
             content_type,
             as_hyperlink: false,
+            display_text: String::new(),
         }
     }
 
@@ -950,6 +1404,7 @@ impl Control {
             base_line: 71,
             text_color: Color::BLACK,
             font: "HancomEQN".to_string(),
+            inst_id: None,
         }
     }
 
@@ -1336,6 +1791,7 @@ impl Control {
             position: DutmalPosition::Top,
             sz_ratio: 0,
             align: DutmalAlign::Center,
+            metadata: DutmalMetadata::default(),
         }
     }
 
@@ -1358,6 +1814,8 @@ impl Control {
             circle_type: "SHAPE_REVERSAL_TIRANGLE".to_string(), // official spec typo preserved
             char_sz: -3,
             compose_type: "SPREAD".to_string(),
+            // 10 × no-override sentinel (HWPX `charPrCnt` is fixed at 10).
+            char_pr_ids: vec![u32::MAX; 10],
         }
     }
 
@@ -1610,20 +2068,30 @@ impl std::fmt::Display for Control {
             Self::ConnectLine { .. } => {
                 write!(f, "ConnectLine")
             }
+            Self::Group { children, .. } => {
+                write!(f, "Group({} children)", children.len())
+            }
+            Self::TextArt { text, shape, .. } => {
+                write!(f, "TextArt(\"{text}\", {shape})")
+            }
             Self::Bookmark { name, bookmark_type } => {
                 write!(f, "Bookmark(\"{name}\", {bookmark_type})")
             }
-            Self::CrossRef { target_name, ref_type, .. } => {
-                write!(f, "CrossRef(\"{target_name}\", {ref_type})")
+            Self::CrossRef { target, ref_type, .. } => {
+                write!(f, "CrossRef({:?}, {ref_type})", target.as_display())
             }
-            Self::Field { field_type, hint_text, .. } => {
+            Self::Field { field_type, hint_text, name, .. } => {
                 let hint = hint_text.as_deref().unwrap_or("");
-                write!(f, "Field({field_type}, \"{hint}\")")
+                match name.as_deref().filter(|s| !s.is_empty()) {
+                    Some(n) => write!(f, "Field({field_type}, name=\"{n}\", \"{hint}\")"),
+                    None => write!(f, "Field({field_type}, \"{hint}\")"),
+                }
             }
-            Self::Memo { content, author, .. } => {
+            Self::Memo { content, anchor_runs, .. } => {
                 let n = content.len();
                 let word = if n == 1 { "paragraph" } else { "paragraphs" };
-                write!(f, "Memo({n} {word}, by {author})")
+                let anchor_len = anchor_runs.len();
+                write!(f, "Memo({n} {word}, anchor={anchor_len} runs)")
             }
             Self::IndexMark { primary, secondary } => {
                 if let Some(sec) = secondary {
@@ -1632,6 +2100,23 @@ impl std::fmt::Display for Control {
                     write!(f, "IndexMark(\"{primary}\")")
                 }
             }
+            Self::UnknownSummery { token, .. } => {
+                write!(f, "UnknownSummery({token})")
+            }
+            Self::DateCodeField { raw_command, is_time_mode, .. } => {
+                let mode = if *is_time_mode { "time" } else { "date" };
+                write!(f, "DateCodeField({mode}, \"{raw_command}\")")
+            }
+            Self::PathField { command, .. } => {
+                write!(f, "PathField({})", command.wire_command())
+            }
+            Self::InlinePageNumber { kind, raw_flag } => match kind {
+                InlinePageKind::CurrentPage => write!(f, "InlinePageNumber(current)"),
+                InlinePageKind::TotalPages => write!(f, "InlinePageNumber(total)"),
+                InlinePageKind::Unknown => {
+                    write!(f, "InlinePageNumber(unknown, raw=0x{raw_flag:08X})")
+                }
+            },
             Self::Unknown { tag, .. } => {
                 write!(f, "Unknown({tag})")
             }
@@ -2070,7 +2555,15 @@ mod tests {
         let ctrl = Control::equation("{a+b} over {c+d}");
         assert!(ctrl.is_equation());
         match ctrl {
-            Control::Equation { script, width, height, base_line, text_color, ref font } => {
+            Control::Equation {
+                script,
+                width,
+                height,
+                base_line,
+                text_color,
+                ref font,
+                inst_id: _,
+            } => {
                 assert_eq!(script, "{a+b} over {c+d}");
                 assert_eq!(width, HwpUnit::new(8779).unwrap());
                 assert_eq!(height, HwpUnit::new(2600).unwrap());
@@ -2477,6 +2970,7 @@ mod tests {
             base_line: 71,
             text_color: Color::BLACK,
             font: "HancomEQN".to_string(),
+            inst_id: None,
         };
         let json = serde_json::to_string(&ctrl).unwrap();
         let back: Control = serde_json::from_str(&json).unwrap();
@@ -2501,7 +2995,7 @@ mod tests {
         let ctrl = Control::dutmal("본문", "주석");
         assert!(ctrl.is_dutmal());
         match ctrl {
-            Control::Dutmal { main_text, sub_text, position, sz_ratio, align } => {
+            Control::Dutmal { main_text, sub_text, position, sz_ratio, align, .. } => {
                 assert_eq!(main_text, "본문");
                 assert_eq!(sub_text, "주석");
                 assert_eq!(position, DutmalPosition::Top);
@@ -2536,6 +3030,7 @@ mod tests {
             position: DutmalPosition::Bottom,
             sz_ratio: 50,
             align: DutmalAlign::Right,
+            metadata: DutmalMetadata::default(),
         };
         let json = serde_json::to_string(&ctrl).unwrap();
         let decoded: Control = serde_json::from_str(&json).unwrap();
@@ -2559,11 +3054,12 @@ mod tests {
         let ctrl = Control::compose("가");
         assert!(ctrl.is_compose());
         match ctrl {
-            Control::Compose { compose_text, circle_type, char_sz, compose_type } => {
+            Control::Compose { compose_text, circle_type, char_sz, compose_type, char_pr_ids } => {
                 assert_eq!(compose_text, "가");
                 assert_eq!(circle_type, "SHAPE_REVERSAL_TIRANGLE");
                 assert_eq!(char_sz, -3);
                 assert_eq!(compose_type, "SPREAD");
+                assert_eq!(char_pr_ids, vec![u32::MAX; 10]);
             }
             _ => panic!("expected Compose"),
         }
@@ -2592,6 +3088,7 @@ mod tests {
             circle_type: "SHAPE_REVERSAL_TIRANGLE".to_string(),
             char_sz: -3,
             compose_type: "SPREAD".to_string(),
+            char_pr_ids: vec![u32::MAX; 10],
         };
         let json = serde_json::to_string(&ctrl).unwrap();
         let decoded: Control = serde_json::from_str(&json).unwrap();

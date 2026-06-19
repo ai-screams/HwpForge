@@ -13,6 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::ctrl_ids::CTRL_ID_PAGE_NUMBER;
 use crate::decoder::header::DocInfoResult;
 use crate::decoder::section::{
     Hwp5Control, Hwp5ImageControl, Hwp5LineControl, Hwp5NestedSubtree, Hwp5OleObjectControl,
@@ -35,12 +36,6 @@ use crate::semantic::{
 use crate::table_cell_vertical_align::semantic_table_cell_vertical_align;
 use crate::table_page_break::semantic_table_page_break;
 use crate::{Hwp5BinDataRecordSummary, Hwp5BinDataStream, Hwp5JoinedImageAssetPlan};
-
-/// ctrl_id for the page-number control: ASCII `pgnp` as a big-endian u32.
-/// Mirrors `projection::CTRL_ID_PAGE_NUMBER`; the page-number control flows
-/// through `Hwp5Control::Unknown`, so the semantic model recognizes it here
-/// to keep `audit-hwp5`'s source-side page-number count accurate.
-const CTRL_ID_PAGE_NUMBER: u32 = 0x7067_6E70;
 
 #[derive(Debug, Default)]
 struct SemanticIdAlloc {
@@ -249,6 +244,137 @@ fn adapt_control(
         Hwp5Control::Polygon(polygon) => {
             adapt_polygon_control(polygon, container, paragraph_id, build, ids)
         }
+        Hwp5Control::Ellipse(ellipse) => adapt_shape_control(
+            ellipse.ctrl_id,
+            Hwp5SemanticControlKind::Ellipse,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
+        Hwp5Control::Arc(arc) => adapt_shape_control(
+            arc.ctrl_id,
+            Hwp5SemanticControlKind::Arc,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
+        Hwp5Control::Curve(curve) => adapt_shape_control(
+            curve.ctrl_id,
+            Hwp5SemanticControlKind::Curve,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
+        Hwp5Control::TextArt(text_art) => adapt_shape_control(
+            text_art.ctrl_id,
+            Hwp5SemanticControlKind::TextArt,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
+        Hwp5Control::ConnectLine(connect_line) => adapt_shape_control(
+            connect_line.ctrl_id,
+            Hwp5SemanticControlKind::ConnectLine,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
+        Hwp5Control::Equation(equation) => adapt_shape_control(
+            equation.ctrl_id,
+            Hwp5SemanticControlKind::Equation,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
+        Hwp5Control::Memo(memo) => adapt_shape_control(
+            memo.ctrl_id,
+            Hwp5SemanticControlKind::Memo,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
+        Hwp5Control::Dutmal(dutmal) => adapt_shape_control(
+            dutmal.ctrl_id,
+            Hwp5SemanticControlKind::Dutmal,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
+        Hwp5Control::Compose(compose) => adapt_shape_control(
+            compose.ctrl_id,
+            Hwp5SemanticControlKind::Compose,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
+        Hwp5Control::IndexMark(indexmark) => adapt_shape_control(
+            indexmark.ctrl_id,
+            Hwp5SemanticControlKind::IndexMark,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
+        Hwp5Control::ClickHere(clickhere) => adapt_shape_control(
+            clickhere.ctrl_id,
+            Hwp5SemanticControlKind::ClickHere,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
+        Hwp5Control::SummeryField(summery) => adapt_shape_control(
+            summery.ctrl_id,
+            Hwp5SemanticControlKind::SummeryField,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
+        Hwp5Control::DateCodeField(date_code) => adapt_shape_control(
+            date_code.ctrl_id,
+            Hwp5SemanticControlKind::DateCodeField,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
+        Hwp5Control::PathField(pat) => adapt_shape_control(
+            pat.ctrl_id,
+            Hwp5SemanticControlKind::PathField,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
+        // %xrf cross-reference (Wave 12m). We classify it as `CrossRef`
+        // through the existing shape-control adapter so the audit
+        // counts match what projection emits via the FieldBegin pair.
+        Hwp5Control::CrossRef(xrf) => adapt_shape_control(
+            xrf.ctrl_id,
+            Hwp5SemanticControlKind::CrossRef,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
+        Hwp5Control::InlinePageNumber(atno) => adapt_shape_control(
+            atno.ctrl_id,
+            Hwp5SemanticControlKind::InlinePageNumber,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
         Hwp5Control::OleObject(ole) => {
             adapt_ole_object_control(ole, container, paragraph_id, build, support, ids)
         }
@@ -302,6 +428,22 @@ fn adapt_control(
         ),
         Hwp5Control::TextBox(textbox) => {
             adapt_textbox_control(textbox, container, paragraph_id, build, support, ids)
+        }
+        // Group (묶음 객체, Wave A): classify the container node, then adapt
+        // each flat child so the audit counts include the wrapped shapes.
+        Hwp5Control::Group(group) => {
+            let node_id = adapt_shape_control(
+                group.ctrl_id,
+                Hwp5SemanticControlKind::Group,
+                container,
+                paragraph_id,
+                build,
+                ids,
+            );
+            for child in &group.children {
+                adapt_control(&child.control, container, paragraph_id, build, support, ids);
+            }
+            node_id
         }
         Hwp5Control::Unknown { ctrl_id, .. } => {
             let node_id = ids.next_control_id();
@@ -405,6 +547,32 @@ fn adapt_ole_object_control(
         anchor_paragraph_id: Some(paragraph_id),
         confidence,
         notes,
+    });
+    node_id
+}
+
+/// Adapt a geometry-only GSO shape (ellipse/arc/curve) into a semantic control
+/// node. These carry no nested content or binary reference, so the audit only
+/// needs the kind and the raw ctrl_id for source-side counting.
+fn adapt_shape_control(
+    ctrl_id: u32,
+    kind: Hwp5SemanticControlKind,
+    container: &Hwp5SemanticContainerPath,
+    paragraph_id: Hwp5SemanticParagraphId,
+    build: &mut SectionBuildState,
+    ids: &mut SemanticIdAlloc,
+) -> Hwp5SemanticControlId {
+    let node_id = ids.next_control_id();
+    let literal = crate::ctrl_id_ascii(ctrl_id);
+    build.controls.push(Hwp5SemanticControlNode {
+        node_id,
+        kind,
+        payload: Hwp5SemanticControlPayload::None,
+        container: container.clone(),
+        literal_ctrl_id: Some(literal),
+        anchor_paragraph_id: Some(paragraph_id),
+        confidence: Hwp5SemanticConfidence::High,
+        notes: vec![format!("raw_ctrl_id=0x{ctrl_id:08X}")],
     });
     node_id
 }
@@ -598,6 +766,8 @@ fn adapt_textbox_control(
         // textbox carries no header/footer applyPageType bits — set to
         // 0 so projection treats it as default (BOTH).
         properties_raw: 0,
+        // TextBox 는 cross-ref target 이 아니므로 instance_id 사용 안 함.
+        instance_id: 0,
         paragraphs: textbox.paragraphs.clone(),
     };
 
@@ -1178,6 +1348,7 @@ mod tests {
                                     }],
                                 }],
                             }],
+                            instance_id: 0,
                         }),
                         Hwp5Control::Unknown { ctrl_id: 0x666F_6F74, header_data: Vec::new() },
                     ],
@@ -1196,8 +1367,10 @@ mod tests {
                 }),
                 section_def_properties: None,
                 page_border_fills: Vec::new(),
+                column_def: None,
                 warnings: Vec::new(),
             }],
+            metadata: hwpforge_core::metadata::Metadata::default(),
             warnings: Vec::new(),
         };
 
@@ -1339,8 +1512,10 @@ mod tests {
                 page_def: None,
                 section_def_properties: None,
                 page_border_fills: Vec::new(),
+                column_def: None,
                 warnings: Vec::new(),
             }],
+            metadata: hwpforge_core::metadata::Metadata::default(),
             warnings: Vec::new(),
         };
 
@@ -1379,8 +1554,10 @@ mod tests {
                 page_def: None,
                 section_def_properties: None,
                 page_border_fills: Vec::new(),
+                column_def: None,
                 warnings: Vec::new(),
             }],
+            metadata: hwpforge_core::metadata::Metadata::default(),
             warnings: Vec::new(),
         };
 
@@ -1420,8 +1597,10 @@ mod tests {
                 page_def: None,
                 section_def_properties: None,
                 page_border_fills: Vec::new(),
+                column_def: None,
                 warnings: Vec::new(),
             }],
+            metadata: hwpforge_core::metadata::Metadata::default(),
             warnings: Vec::new(),
         };
 
@@ -1468,13 +1647,16 @@ mod tests {
                             height: 4_560,
                         },
                         binary_data_id: 1,
+                        instance_id: 0,
                     })],
                 }],
                 page_def: None,
                 section_def_properties: None,
                 page_border_fills: Vec::new(),
+                column_def: None,
                 warnings: Vec::new(),
             }],
+            metadata: hwpforge_core::metadata::Metadata::default(),
             warnings: Vec::new(),
         };
 
@@ -1554,8 +1736,10 @@ mod tests {
                 page_def: None,
                 section_def_properties: None,
                 page_border_fills: Vec::new(),
+                column_def: None,
                 warnings: Vec::new(),
             }],
+            metadata: hwpforge_core::metadata::Metadata::default(),
             warnings: Vec::new(),
         };
 
@@ -1614,8 +1798,10 @@ mod tests {
                 page_def: None,
                 section_def_properties: None,
                 page_border_fills: Vec::new(),
+                column_def: None,
                 warnings: Vec::new(),
             }],
+            metadata: hwpforge_core::metadata::Metadata::default(),
             warnings: Vec::new(),
         };
 

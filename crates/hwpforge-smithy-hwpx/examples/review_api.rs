@@ -369,6 +369,7 @@ fn build_section_2() -> Section {
         base_line: 85,
         text_color: Color::from_rgb(0xCC, 0x00, 0x00), // Color 타입!
         font: "HancomEQ".to_string(),
+        inst_id: None,
     };
     paras.push(ctrl_para(red_eq, CS_NORMAL, PS_CENTER));
     paras.push(p("위 수식: text_color = Color::from_rgb(0xCC, 0x00, 0x00) — 빨간색"));
@@ -382,6 +383,7 @@ fn build_section_2() -> Section {
         base_line: 90,
         text_color: Color::from_rgb(0x00, 0x00, 0xCC), // Color 타입!
         font: "HancomEQ".to_string(),
+        inst_id: None,
     };
     paras.push(ctrl_para(blue_eq, CS_NORMAL, PS_CENTER));
     paras.push(p("위 수식: text_color = Color::from_rgb(0x00, 0x00, 0xCC) — 파란색"));
