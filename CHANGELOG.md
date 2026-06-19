@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — targeted as `0.6.0`
+## [Unreleased] — targeted as `0.7.0`
 
 ### Fixed — Markdown(GFM) 표 헤더 행 손실 (사용자 흐름 점검)
 
@@ -999,7 +999,7 @@ Workspace nextest: 2,441 → **2,444 passed** + 2 skipped.
 #### Changed (BREAKING — public API)
 
 - `core::metadata::Metadata` gains three new fields and is now annotated
-  `#[non_exhaustive]`. This is ADR-003 in the 0.6.0 break window. External
+  `#[non_exhaustive]`. This is ADR-003 in the 0.7.0 break window. External
   callers can no longer construct `Metadata` with a struct literal; use the
   new `Metadata::new()` seed plus the chainable
   `.with_title()`/`.with_author()`/`.with_subject()`/`.with_description()`/
