@@ -2829,6 +2829,15 @@ fn char_shape_id_at_position(runs: &[Hwp5CharShapeRun], position: u32) -> u32 {
     // index of the first run whose `position > position`, so `runs[..idx]` is
     // exactly the prefix the old `take_while` accepted — the last of which is
     // the active char shape. O(log R) instead of O(R).
+    //
+    // Equivalence with the old `take_while` holds only while this ascending
+    // invariant holds; assert it in debug builds so a future decoder change
+    // emitting unsorted runs is caught instead of silently returning a wrong
+    // char shape.
+    debug_assert!(
+        runs.windows(2).all(|w| w[0].position <= w[1].position),
+        "char_shape_runs must be ascending by position for partition_point lookup",
+    );
     let idx = runs.partition_point(|run| run.position <= position);
     runs[..idx].last().map(|run| run.char_shape_id).unwrap_or(0)
 }

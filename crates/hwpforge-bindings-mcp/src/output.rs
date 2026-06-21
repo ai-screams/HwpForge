@@ -50,14 +50,19 @@ pub fn read_file_string(file_path: &str) -> Result<String, ToolErrorInfo> {
 ///
 /// # Path safety
 ///
-/// `output_path` originates from MCP tool arguments (i.e. the model). Absolute
-/// paths are intentionally allowed: legitimate callers derive output locations
-/// from absolute input paths (e.g. `to_md` writes next to the source file) and
-/// MCP agents routinely pass absolute paths. What is rejected is any `..`
-/// (`ParentDir`) component, which is the path-traversal vector (CWE-22): a `..`
-/// segment lets a relative or crafted path escape its intended directory and
-/// overwrite arbitrary files. Blocking `..` closes that hole without breaking
-/// the legitimate absolute-path workflows.
+/// `output_path` originates from MCP tool arguments (i.e. the model). This
+/// rejects any `..` (`ParentDir`) component — the relative path-traversal
+/// vector (CWE-22) where a `..` segment escapes its intended directory.
+///
+/// Absolute paths are NOT rejected: some callers derive output locations from
+/// an absolute input path (`to_md`) and MCP agents routinely pass absolute
+/// paths, so confining writes to a root would break legitimate workflows.
+///
+/// RESIDUAL RISK (accepted, not yet mitigated): tools that pass a free-form,
+/// model-supplied `output_path` (convert/patch/to_json/from_json/restyle) can
+/// still write to any absolute path the process can write — blocking `..` does
+/// not prevent that. Confining writes to an allowed root (or a sensitive-path
+/// denylist) is tracked as a follow-up; see `.docs/planning` E1 audit.
 pub fn write_output_file(output_path: &str, data: &[u8]) -> Result<(), ToolErrorInfo> {
     let out = Path::new(output_path);
     if out.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
