@@ -348,16 +348,14 @@ impl Hwp5RawNumberingDef {
             }
         }
 
-        if cur.position() != data.len() as u64 {
-            return Err(Hwp5Error::RecordParse {
-                offset: cur.position() as usize,
-                detail: format!(
-                    "NumberingDef parsed {} of {} bytes; trailing bytes are not supported",
-                    cur.position(),
-                    data.len()
-                ),
-            });
-        }
+        // Trailing bytes are tolerated (not a hard error). Future HWP 5.x
+        // sub-versions may append version-gated fields after the layout we
+        // decode; rejecting the whole record on any leftover bytes would fail
+        // otherwise-valid government corpus files. Sibling parsers
+        // (`Hwp5RawCharShape::parse` / `Hwp5RawParaShape::parse`) already only
+        // require a minimum size and silently ignore trailing bytes — match
+        // that contract here. (This `parse` signature has no warning sink, so
+        // surfacing a warning is deferred to a follow-up; for now we ignore.)
 
         Ok(Self { start, paragraph_heads })
     }

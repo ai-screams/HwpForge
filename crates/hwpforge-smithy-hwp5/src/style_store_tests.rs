@@ -1139,6 +1139,45 @@ fn hwp5_numbering_def_parse_preserves_core_list_semantics() {
 }
 
 #[test]
+fn hwp5_numbering_def_tolerates_trailing_bytes() {
+    // A valid NumberingDef payload followed by extra trailing bytes (e.g. a
+    // future 5.x sub-version field we don't yet decode) must parse OK rather
+    // than hard-erroring the whole record — matching CharShape/ParaShape
+    // sibling parsers (E1 #5).
+    let version = HwpVersion::new(5, 1, 0, 0);
+    let mut data = make_numbering_def_bytes(
+        version,
+        &[
+            ("DIGIT", "^1."),
+            ("DIGIT", "^2."),
+            ("DIGIT", "^3."),
+            ("DIGIT", "^4."),
+            ("DIGIT", "^5."),
+            ("DIGIT", "^6."),
+            ("DIGIT", "^7."),
+            ("DIGIT", "^8."),
+            ("DIGIT", "^9."),
+            ("DIGIT", "^10."),
+        ],
+        3,
+    );
+    // No-trailing case: still Ok (regression).
+    let no_trailing = Hwp5RawNumberingDef::parse(&data, &version).unwrap();
+    assert_eq!(no_trailing.start, 3);
+    assert_eq!(no_trailing.paragraph_heads.len(), 10);
+
+    // Append unexpected trailing bytes.
+    data.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02]);
+    let with_trailing = Hwp5RawNumberingDef::parse(&data, &version)
+        .expect("trailing bytes must be tolerated, not hard-error");
+    // The leading fields must decode identically despite the trailing bytes.
+    assert_eq!(with_trailing.start, 3);
+    assert_eq!(with_trailing.paragraph_heads.len(), 10);
+    assert_eq!(with_trailing.paragraph_heads[0].text, "^1.");
+    assert_eq!(with_trailing.paragraph_heads[9].text, "^10.");
+}
+
+#[test]
 fn hwp5_para_shape_keeps_builtin_tab_ids() {
     for tab_def_id in 0..=2 {
         let mut raw = Hwp5RawParaShape::default_for_test();
