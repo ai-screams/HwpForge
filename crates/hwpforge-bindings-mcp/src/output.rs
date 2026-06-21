@@ -46,23 +46,53 @@ pub fn read_file_string(file_path: &str) -> Result<String, ToolErrorInfo> {
     })
 }
 
+/// Resolve the user's home directory from the environment (`HOME`, then
+/// `USERPROFILE` on Windows). Returns `None` when neither is set.
+fn home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+        .filter(|p| !p.as_os_str().is_empty())
+}
+
+/// Whether `target` (an absolute path) points into a sensitive user location:
+/// known credential/config directories under `$HOME`, or a dotfile directly in
+/// `$HOME` (e.g. `~/.zshrc`). Component-wise `starts_with` means `~/.sshfoo`
+/// does NOT match `~/.ssh`. Pure (no filesystem access) so it is unit-testable
+/// with a synthetic `home`.
+fn is_sensitive_output_path(target: &Path, home: &Path) -> bool {
+    const SENSITIVE_SUBDIRS: &[&str] =
+        &[".ssh", ".gnupg", ".aws", ".config", ".claude", ".codex", ".gemini"];
+    if SENSITIVE_SUBDIRS.iter().any(|sub| target.starts_with(home.join(sub))) {
+        return true;
+    }
+    // A dotfile written directly into $HOME (e.g. ~/.zshrc, ~/.bashrc).
+    if target.parent() == Some(home) {
+        if let Some(name) = target.file_name().and_then(|n| n.to_str()) {
+            return name.starts_with('.');
+        }
+    }
+    false
+}
+
 /// Write data to a file, creating parent directories as needed.
 ///
 /// # Path safety
 ///
-/// `output_path` originates from MCP tool arguments (i.e. the model). This
-/// rejects any `..` (`ParentDir`) component — the relative path-traversal
-/// vector (CWE-22) where a `..` segment escapes its intended directory.
+/// `output_path` originates from MCP tool arguments (i.e. the model), so this
+/// applies defense-in-depth before writing:
+/// 1. Reject any `..` (`ParentDir`) component — the relative path-traversal
+///    vector (CWE-22).
+/// 2. For absolute paths, reject writes into sensitive user locations
+///    (`~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.config`, `~/.claude`, …, and
+///    dotfiles directly under `$HOME`) via [`is_sensitive_output_path`].
+/// 3. Refuse to write when the final path component is a symlink (no-follow),
+///    so a planted symlink cannot redirect the write elsewhere.
 ///
-/// Absolute paths are NOT rejected: some callers derive output locations from
-/// an absolute input path (`to_md`) and MCP agents routinely pass absolute
-/// paths, so confining writes to a root would break legitimate workflows.
-///
-/// RESIDUAL RISK (accepted, not yet mitigated): tools that pass a free-form,
-/// model-supplied `output_path` (convert/patch/to_json/from_json/restyle) can
-/// still write to any absolute path the process can write — blocking `..` does
-/// not prevent that. Confining writes to an allowed root (or a sensitive-path
-/// denylist) is tracked as a follow-up; see `.docs/planning` E1 audit.
+/// Non-sensitive absolute paths stay allowed: callers legitimately derive
+/// output from absolute input paths (`to_md`) and agents write into e.g. the
+/// user's Documents. Full allowed-root confinement (config-driven) is a
+/// possible future tightening (see `.docs/planning` E1 audit).
 pub fn write_output_file(output_path: &str, data: &[u8]) -> Result<(), ToolErrorInfo> {
     let out = Path::new(output_path);
     if out.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
@@ -70,6 +100,24 @@ pub fn write_output_file(output_path: &str, data: &[u8]) -> Result<(), ToolError
             "WRITE_ERROR",
             format!("Unsafe output path contains '..': {output_path}"),
             "Provide an output path without any '..' parent-directory segments.",
+        ));
+    }
+    if out.is_absolute() {
+        if let Some(home) = home_dir() {
+            if is_sensitive_output_path(out, &home) {
+                return Err(ToolErrorInfo::new(
+                    "WRITE_ERROR",
+                    format!("Refusing to write to a sensitive location: {output_path}"),
+                    "Choose an output path outside SSH/credential/config directories.",
+                ));
+            }
+        }
+    }
+    if out.symlink_metadata().map(|m| m.file_type().is_symlink()).unwrap_or(false) {
+        return Err(ToolErrorInfo::new(
+            "WRITE_ERROR",
+            format!("Refusing to write through a symlink: {output_path}"),
+            "Provide a real (non-symlink) output path.",
         ));
     }
     if let Some(parent) = out.parent() {
@@ -306,5 +354,48 @@ mod tests {
 
         write_output_file(path.to_str().unwrap(), b"data").unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"data");
+    }
+
+    #[test]
+    fn is_sensitive_output_path_flags_credential_and_dotfile_targets() {
+        let home = Path::new("/home/u");
+        // Credential/config dirs under $HOME → sensitive.
+        assert!(is_sensitive_output_path(Path::new("/home/u/.ssh/authorized_keys"), home));
+        assert!(is_sensitive_output_path(Path::new("/home/u/.claude/settings.json"), home));
+        assert!(is_sensitive_output_path(Path::new("/home/u/.config/x/y.toml"), home));
+        // Dotfile directly in $HOME → sensitive.
+        assert!(is_sensitive_output_path(Path::new("/home/u/.zshrc"), home));
+        // Legitimate non-sensitive absolute outputs → allowed.
+        assert!(!is_sensitive_output_path(Path::new("/home/u/Documents/out.hwpx"), home));
+        assert!(!is_sensitive_output_path(Path::new("/home/u/proposals/p.hwpx"), home));
+        assert!(!is_sensitive_output_path(Path::new("/tmp/out.hwpx"), home));
+        // Component-wise: '.sshfoo' must NOT match '.ssh'.
+        assert!(!is_sensitive_output_path(Path::new("/home/u/.sshfoo/x"), home));
+    }
+
+    #[test]
+    fn write_output_file_refuses_sensitive_home_target() {
+        // End-to-end: a write into a sensitive $HOME subdir is rejected before
+        // any directory is created or file written. Uses the real home + a
+        // unique name; the guard must return Err so nothing is created.
+        let Some(home) = home_dir() else { return };
+        let target = home.join(".ssh").join("hwpforge-e1-guard-probe.tmp");
+        let err = write_output_file(target.to_str().unwrap(), b"x").unwrap_err();
+        assert_eq!(err.code, "WRITE_ERROR");
+        assert!(!target.exists(), "sensitive target must not be written");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_output_file_refuses_symlink_final_component() {
+        // A planted symlink as the final component must not be followed.
+        let dir = tempfile::tempdir().unwrap();
+        let real_target = dir.path().join("real.txt");
+        let link = dir.path().join("link.hwpx");
+        std::os::unix::fs::symlink(&real_target, &link).unwrap();
+
+        let err = write_output_file(link.to_str().unwrap(), b"data").unwrap_err();
+        assert_eq!(err.code, "WRITE_ERROR");
+        assert!(!real_target.exists(), "symlink target must not be written through");
     }
 }
