@@ -21,13 +21,19 @@ const MAX_DECOMPRESSION_RATIO: u64 = 100;
 /// Maximum number of BodyText sections to enumerate.
 const MAX_SECTIONS: usize = 256;
 
-/// Maximum cumulative decompressed size across every stream read from a single
-/// package (2 GiB).
+/// Maximum number of `/BinData/*` entries to read from one package.
+const MAX_BIN_DATA_ENTRIES: usize = 10_000;
+
+/// Maximum cumulative size of decoded stream data held resident in memory for a
+/// single package (2 GiB). Charged for FileHeader, DocInfo and every BodyText
+/// section (decompressed when the package is compressed), every BinData entry
+/// (raw), and the summary stream (raw).
 ///
 /// The per-stream `MAX_STREAM_SIZE` (500 MB) alone allows a malicious file with
-/// `MAX_SECTIONS` (256) sections to expand to ~128 GiB. This global budget
-/// bounds the aggregate while leaving generous headroom for large legitimate
-/// government documents.
+/// `MAX_SECTIONS` (256) sections or many BinData entries to expand far past any
+/// single cap (~128 GiB across sections). This global budget bounds the
+/// aggregate while leaving generous headroom for large legitimate government
+/// documents.
 const MAX_TOTAL_DECOMPRESSED: u64 = 2 * 1024 * 1024 * 1024;
 
 // ── PackageReader ─────────────────────────────────────────────────────────────
@@ -119,6 +125,7 @@ impl PackageReader {
 
         // 1. FileHeader
         let header_bytes = read_stream(&mut comp, "/FileHeader")?;
+        charge("/FileHeader", header_bytes.len())?;
         let file_header = FileHeader::parse(&header_bytes)?;
 
         // 2. DocInfo
@@ -161,9 +168,20 @@ impl PackageReader {
             })
             .unwrap_or_default();
 
+        if bin_entries.len() > MAX_BIN_DATA_ENTRIES {
+            return Err(Hwp5Error::Cfb {
+                detail: format!(
+                    "BinData entry count {} exceeds limit {MAX_BIN_DATA_ENTRIES}",
+                    bin_entries.len()
+                ),
+            });
+        }
         for path in bin_entries {
             match read_stream(&mut comp, &path) {
                 Ok(data) => {
+                    // BinData (raw image/object bytes) is held resident in
+                    // `bin_data`, so it counts toward the aggregate budget too.
+                    charge(&path, data.len())?;
                     let name = path.trim_start_matches("/BinData/").to_string();
                     bin_data.insert(name, data);
                 }
@@ -177,7 +195,10 @@ impl PackageReader {
         // property-set bytes per MS Office spec.
         let summary_path = "/\u{0005}HwpSummaryInformation";
         let summary_info_data = match read_stream(&mut comp, summary_path) {
-            Ok(raw) => Some(raw),
+            Ok(raw) => {
+                charge(summary_path, raw.len())?;
+                Some(raw)
+            }
             Err(Hwp5Error::MissingStream { .. }) => None,
             Err(e) => return Err(e),
         };
@@ -491,6 +512,52 @@ mod tests {
         let bytes = make_test_cfb(version, 0x00, doc_info, section0);
         let pkg = PackageReader::open_with_budget(&bytes, 1024).expect("within budget");
         assert_eq!(pkg.section_count(), 1);
+    }
+
+    /// Build a minimal CFB with FileHeader + DocInfo + `/BinData/*` entries.
+    fn make_test_cfb_with_bindata(
+        version: u32,
+        doc_info: &[u8],
+        bindata: &[(&str, &[u8])],
+    ) -> Vec<u8> {
+        let cursor = std::io::Cursor::new(Vec::new());
+        let mut comp = cfb::CompoundFile::create(cursor).unwrap();
+        let mut header_buf = vec![0u8; 256];
+        header_buf[..18].copy_from_slice(b"HWP Document File\0");
+        header_buf[32..36].copy_from_slice(&version.to_le_bytes());
+        header_buf[36..40].copy_from_slice(&0u32.to_le_bytes()); // uncompressed
+        let mut s = comp.create_stream("/FileHeader").unwrap();
+        s.write_all(&header_buf).unwrap();
+        drop(s);
+        let mut s = comp.create_stream("/DocInfo").unwrap();
+        s.write_all(doc_info).unwrap();
+        drop(s);
+        comp.create_storage("/BinData").unwrap();
+        for (name, data) in bindata {
+            let mut s = comp.create_stream(format!("/BinData/{name}")).unwrap();
+            s.write_all(data).unwrap();
+            drop(s);
+        }
+        comp.into_inner().into_inner()
+    }
+
+    #[test]
+    fn open_charges_bindata_against_global_budget() {
+        // DocInfo 10B + two BinData streams 30B each = 70B held resident. A
+        // 50B budget passes DocInfo (10) and the first BinData (40) but trips
+        // on the second (70 > 50) — proving BinData counts toward the budget.
+        let version = make_version(5, 0, 2, 5);
+        let bytes = make_test_cfb_with_bindata(
+            version,
+            &[0u8; 10],
+            &[("img0", &[0u8; 30]), ("img1", &[0u8; 30])],
+        );
+        let err = PackageReader::open_with_budget(&bytes, 50).unwrap_err();
+        assert!(err.to_string().contains("total decompressed data"), "got: {err}");
+
+        // Same package within a generous budget loads both BinData entries.
+        let pkg = PackageReader::open_with_budget(&bytes, 4096).expect("within budget");
+        assert_eq!(pkg.bin_data().len(), 2);
     }
 
     #[test]
