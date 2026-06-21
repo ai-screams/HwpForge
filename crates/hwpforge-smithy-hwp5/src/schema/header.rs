@@ -1438,6 +1438,13 @@ impl Hwp5TabDefSlot {
 
 // ---------------------------------------------------------------------------
 
+/// Maximum length (in UTF-16 code units) accepted for a single length-prefixed
+/// string. Every caller (font face/extension names, style names, numbering
+/// text) holds a short human-readable label, so 4096 code units (8 KiB) is far
+/// more than any legitimate value while bounding the per-call allocation a
+/// hostile `u16` length field (up to 65535 → 128 KiB) could otherwise force.
+const MAX_UTF16LE_STRING_UNITS: usize = 4096;
+
 /// Reads a length-prefixed UTF-16LE string from a `Cursor<&[u8]>`.
 ///
 /// Format: `u16` length (in UTF-16 code units) followed by that many u16 LE
@@ -1452,6 +1459,14 @@ fn read_utf16le_string(cur: &mut Cursor<&[u8]>) -> Hwp5Result<String> {
     }
 
     let len = LittleEndian::read_u16(&cur.get_ref()[start..start + 2]) as usize;
+    if len > MAX_UTF16LE_STRING_UNITS {
+        return Err(Hwp5Error::RecordParse {
+            offset: start,
+            detail: format!(
+                "UTF-16 string length {len} exceeds cap of {MAX_UTF16LE_STRING_UNITS} code units"
+            ),
+        });
+    }
     let data_start = start + 2;
     let data_end = data_start + len.saturating_mul(2);
     if cur.get_ref().len() < data_end {
@@ -1525,6 +1540,47 @@ impl Hwp5RawStyle {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn read_utf16le_string_rejects_oversized_length_prefix() {
+        // len-field advertises 5000 code units but the cap is 4096; the call
+        // must reject the length BEFORE allocating or reading the payload.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&5000u16.to_le_bytes());
+        // Deliberately provide no payload: a correct implementation rejects on
+        // the length cap, not on truncation.
+        let mut cur = Cursor::new(bytes.as_slice());
+        let err = read_utf16le_string(&mut cur).expect_err("oversized length must be rejected");
+        assert!(matches!(err, Hwp5Error::RecordParse { .. }), "got: {err:?}");
+    }
+
+    #[test]
+    fn read_utf16le_string_accepts_boundary_length() {
+        // len-field exactly at the cap (4096) with a full payload → Ok.
+        let len = MAX_UTF16LE_STRING_UNITS as u16;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&len.to_le_bytes());
+        // 'A' (U+0041) as UTF-16LE: low byte 0x41, high byte 0x00.
+        for _ in 0..len {
+            bytes.extend_from_slice(&0x0041u16.to_le_bytes());
+        }
+        let mut cur = Cursor::new(bytes.as_slice());
+        let s = read_utf16le_string(&mut cur).expect("boundary length must parse");
+        assert_eq!(s.chars().count(), len as usize);
+    }
+
+    #[test]
+    fn read_utf16le_string_accepts_normal_short_string() {
+        let text: Vec<u16> = "바탕".encode_utf16().collect();
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&(text.len() as u16).to_le_bytes());
+        for unit in &text {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        let mut cur = Cursor::new(bytes.as_slice());
+        let s = read_utf16le_string(&mut cur).expect("short string must parse");
+        assert_eq!(s, "바탕");
+    }
 
     /// Build a 25-byte `HWPTAG_BULLET` payload matching the real Hancom layout:
     /// 12-byte paragraph head + bullet glyph (2) + image flag (4) + fixed
