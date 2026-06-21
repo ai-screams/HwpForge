@@ -66,6 +66,16 @@ impl Record {
     /// Parse a single record (header + data) from a [`Read`] source.
     pub fn parse(reader: &mut impl Read) -> Hwp5Result<Self> {
         let header = RecordHeader::parse(reader)?;
+        const MAX_RECORD_SIZE: u32 = 64 * 1024 * 1024; // 64 MiB per record
+        if header.size > MAX_RECORD_SIZE {
+            return Err(Hwp5Error::RecordParse {
+                offset: 0,
+                detail: format!(
+                    "record size {} exceeds cap of {} bytes",
+                    header.size, MAX_RECORD_SIZE
+                ),
+            });
+        }
         let mut data = vec![0u8; header.size as usize];
         reader.read_exact(&mut data).map_err(|e| Hwp5Error::RecordParse {
             offset: 0,
@@ -388,6 +398,55 @@ mod tests {
         let mut cursor = Cursor::new(&buf[..]);
         let header = RecordHeader::parse(&mut cursor).unwrap();
         assert_eq!(header.size, 50_000);
+    }
+
+    #[test]
+    fn parse_record_rejects_oversize_extended_size_without_allocating() {
+        // A malicious/corrupt record header can declare an extended size far
+        // larger than any real payload. `Record::parse` must reject it via the
+        // MAX_RECORD_SIZE cap BEFORE `vec![0u8; size]` is allocated, so a tiny
+        // (here: empty) actual payload cannot trigger a multi-GiB allocation.
+        let word: u32 = 16 | (0xFFF << 20); // size_field == 0xFFF → extended size follows
+        let extended_size: u32 = 64 * 1024 * 1024 + 1; // 64 MiB + 1 byte, just over the cap
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&word.to_le_bytes());
+        buf.extend_from_slice(&extended_size.to_le_bytes());
+        // No payload bytes follow: if the cap were absent, the allocation would
+        // happen first (and read_exact would then fail), so reaching the cap
+        // error proves we bailed out before allocating.
+        let mut cursor = Cursor::new(&buf[..]);
+        let err = Record::parse(&mut cursor).unwrap_err();
+        match err {
+            Hwp5Error::RecordParse { detail, .. } => {
+                assert!(detail.contains("exceeds cap"), "expected size-cap error, got: {detail}",);
+            }
+            other => panic!("expected RecordParse cap error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_record_accepts_size_at_cap_boundary() {
+        // Exactly at the cap (64 MiB) must still be accepted by the guard; here
+        // we only need the header check to pass, so we use a non-extended small
+        // size to confirm the boundary comparison is `>` (strictly greater).
+        let word: u32 = 16 | (0xFFF << 20);
+        let extended_size: u32 = 64 * 1024 * 1024; // exactly the cap
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&word.to_le_bytes());
+        buf.extend_from_slice(&extended_size.to_le_bytes());
+        // Provide no payload: the cap check passes (size == cap is allowed), so
+        // failure now comes from read_exact (truncated data), NOT the cap.
+        let mut cursor = Cursor::new(&buf[..]);
+        let err = Record::parse(&mut cursor).unwrap_err();
+        match err {
+            Hwp5Error::RecordParse { detail, .. } => {
+                assert!(
+                    !detail.contains("exceeds cap"),
+                    "size at cap must not trip the cap guard, got: {detail}",
+                );
+            }
+            other => panic!("expected RecordParse data error, got: {other:?}"),
+        }
     }
 
     #[test]
