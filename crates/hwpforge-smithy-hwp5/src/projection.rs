@@ -2824,11 +2824,13 @@ fn project_text_segment(
 }
 
 fn char_shape_id_at_position(runs: &[Hwp5CharShapeRun], position: u32) -> u32 {
-    runs.iter()
-        .take_while(|run| run.position <= position)
-        .last()
-        .map(|run| run.char_shape_id)
-        .unwrap_or(0)
+    // `runs` is sorted ascending by `position` (the same invariant the prior
+    // linear `take_while(...).last()` relied on). `partition_point` finds the
+    // index of the first run whose `position > position`, so `runs[..idx]` is
+    // exactly the prefix the old `take_while` accepted — the last of which is
+    // the active char shape. O(log R) instead of O(R).
+    let idx = runs.partition_point(|run| run.position <= position);
+    runs[..idx].last().map(|run| run.char_shape_id).unwrap_or(0)
 }
 
 fn core_image_format(format: &crate::Hwp5SemanticImageFormat) -> ImageFormat {
@@ -3273,6 +3275,62 @@ mod tests {
         assert!(
             project_polygon_run(&polygon).is_some(),
             "valid polygon must still project to Some"
+        );
+    }
+
+    /// Reference (pre-optimization) linear implementation of
+    /// `char_shape_id_at_position`, kept here so the table test below proves
+    /// the `partition_point` rewrite is behaviorally identical.
+    fn char_shape_id_at_position_linear(runs: &[Hwp5CharShapeRun], position: u32) -> u32 {
+        runs.iter()
+            .take_while(|run| run.position <= position)
+            .last()
+            .map(|run| run.char_shape_id)
+            .unwrap_or(0)
+    }
+
+    fn char_run(position: u32, char_shape_id: u32) -> Hwp5CharShapeRun {
+        Hwp5CharShapeRun { position, char_shape_id }
+    }
+
+    #[test]
+    fn char_shape_id_at_position_matches_linear_reference() {
+        // Sorted-ascending runs (the invariant the lookup relies on).
+        let runs = [char_run(0, 10), char_run(5, 20), char_run(12, 30)];
+        let empty: [Hwp5CharShapeRun; 0] = [];
+
+        // Boundary table: before-first, exact starts, between, past-last, and
+        // the empty-slice case. Each row asserts new == old reference.
+        let cases = [0u32, 1, 4, 5, 6, 11, 12, 13, 1000];
+        for &pos in &cases {
+            assert_eq!(
+                char_shape_id_at_position(&runs, pos),
+                char_shape_id_at_position_linear(&runs, pos),
+                "non-empty mismatch at position {pos}",
+            );
+        }
+
+        // Empty slice → 0 in both implementations.
+        assert_eq!(char_shape_id_at_position(&empty, 0), 0);
+        assert_eq!(
+            char_shape_id_at_position(&empty, 0),
+            char_shape_id_at_position_linear(&empty, 0),
+        );
+
+        // Spot-check the actual expected values (not just equivalence).
+        assert_eq!(char_shape_id_at_position(&runs, 0), 10, "exact first start");
+        assert_eq!(char_shape_id_at_position(&runs, 4), 10, "before second start");
+        assert_eq!(char_shape_id_at_position(&runs, 5), 20, "exact second start");
+        assert_eq!(char_shape_id_at_position(&runs, 11), 20, "before third start");
+        assert_eq!(char_shape_id_at_position(&runs, 12), 30, "exact third start");
+        assert_eq!(char_shape_id_at_position(&runs, 1000), 30, "past last start");
+
+        // A run that starts after 0 leaves positions before it unattributed → 0.
+        let gapped = [char_run(3, 99)];
+        assert_eq!(char_shape_id_at_position(&gapped, 0), 0, "position before first run");
+        assert_eq!(
+            char_shape_id_at_position(&gapped, 0),
+            char_shape_id_at_position_linear(&gapped, 0),
         );
     }
 
