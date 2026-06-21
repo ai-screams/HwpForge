@@ -73,25 +73,82 @@ impl SectionLayoutHints {
     }
 }
 
+/// Maximum decompressed size of a single ZIP entry (50 MiB).
+///
+/// Mirrors `smithy-hwpx::decoder::package::MAX_ENTRY_SIZE` so the secondary
+/// reader used by the HWP5→HWPX layout-hint patcher enforces the same ZIP-bomb
+/// defenses as the primary HWPX decoder.
+const MAX_ENTRY_SIZE: u64 = 50 * 1024 * 1024;
+
+/// Maximum total decompressed size across all entries (500 MiB).
+const MAX_TOTAL_SIZE: u64 = 500 * 1024 * 1024;
+
+/// Maximum number of entries in the archive.
+const MAX_ENTRIES: usize = 10_000;
+
 impl RawPackage {
     fn read(bytes: &[u8]) -> Hwp5Result<Self> {
+        Self::read_capped(bytes, MAX_ENTRY_SIZE, MAX_TOTAL_SIZE, MAX_ENTRIES)
+    }
+
+    /// Internal worker for [`read`] with explicit caps so tests can verify the
+    /// bounds with small values instead of materializing multi-MiB entries.
+    fn read_capped(
+        bytes: &[u8],
+        max_entry: u64,
+        max_total: u64,
+        max_entries: usize,
+    ) -> Hwp5Result<Self> {
         let cursor = Cursor::new(bytes);
         let mut archive = ZipArchive::new(cursor)
             .map_err(|e| Hwp5Error::Cfb { detail: format!("open hwpx package: {e}") })?;
+
+        if archive.len() > max_entries {
+            return Err(Hwp5Error::Cfb {
+                detail: format!(
+                    "hwpx package has {} entries, exceeds limit of {max_entries}",
+                    archive.len()
+                ),
+            });
+        }
+
         let mut entries = Vec::with_capacity(archive.len());
         let mut index_by_path = BTreeMap::new();
+        let mut total: u64 = 0;
 
         for index in 0..archive.len() {
-            let mut file = archive
+            let file = archive
                 .by_index(index)
                 .map_err(|e| Hwp5Error::Cfb { detail: format!("read hwpx entry #{index}: {e}") })?;
-            let mut bytes = Vec::with_capacity(file.size() as usize);
-            file.read_to_end(&mut bytes).map_err(|e| Hwp5Error::Cfb {
-                detail: format!("read '{}' bytes: {e}", file.name()),
-            })?;
             let path = file.name().to_string();
+            let compression = file.compression();
+            // `file.size()` comes from the ZIP central directory and can be
+            // spoofed, so cap the capacity hint and bound the reader itself
+            // with `take(max_entry + 1)` to detect over-cap entries without
+            // pre-allocating an attacker-controlled buffer.
+            let hint = file.size().min(max_entry) as usize;
+            let mut bytes = Vec::with_capacity(hint);
+            file.take(max_entry + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|e| Hwp5Error::Cfb { detail: format!("read '{path}' bytes: {e}") })?;
+            if bytes.len() as u64 > max_entry {
+                return Err(Hwp5Error::Cfb {
+                    detail: format!(
+                        "hwpx entry '{path}' decompressed to {} bytes, exceeds limit of {max_entry}",
+                        bytes.len()
+                    ),
+                });
+            }
+            total = total.saturating_add(bytes.len() as u64);
+            if total > max_total {
+                return Err(Hwp5Error::Cfb {
+                    detail: format!(
+                        "hwpx package total decompressed data ({total} bytes) exceeds limit of {max_total}"
+                    ),
+                });
+            }
             index_by_path.insert(path.clone(), entries.len());
-            entries.push(RawPackageEntry { path, bytes, compression: file.compression() });
+            entries.push(RawPackageEntry { path, bytes, compression });
         }
 
         Ok(Self { entries, index_by_path })
@@ -631,6 +688,58 @@ fn local_name(name: &[u8]) -> &[u8] {
 mod tests {
     use super::*;
     use crate::decoder::section::Hwp5NestedSubtree;
+
+    /// Build a small in-memory ZIP whose entries hold the given byte payloads.
+    fn make_zip(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        let cursor = Cursor::new(Vec::<u8>::new());
+        let mut zip = ZipWriter::new(cursor);
+        let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+        for (name, payload) in entries {
+            zip.start_file(*name, options).unwrap();
+            zip.write_all(payload).unwrap();
+        }
+        zip.finish().unwrap().into_inner()
+    }
+
+    #[test]
+    fn read_capped_rejects_entry_count_over_cap() {
+        let entries: Vec<(String, Vec<u8>)> =
+            (0..5).map(|i| (format!("f{i}.xml"), b"x".to_vec())).collect();
+        let refs: Vec<(&str, &[u8])> =
+            entries.iter().map(|(n, b)| (n.as_str(), b.as_slice())).collect();
+        let zip = make_zip(&refs);
+        // Cap of 3 entries < 5 actual → reject before reading payloads.
+        let err = RawPackage::read_capped(&zip, MAX_ENTRY_SIZE, MAX_TOTAL_SIZE, 3).unwrap_err();
+        assert!(err.to_string().contains("exceeds limit of 3"), "got: {err}");
+    }
+
+    #[test]
+    fn read_capped_rejects_entry_size_over_cap() {
+        // One 100-byte entry against a 10-byte per-entry cap → reject without
+        // pre-allocating the central-directory-advertised size.
+        let zip = make_zip(&[("big.xml", &[b'a'; 100])]);
+        let err = RawPackage::read_capped(&zip, 10, MAX_TOTAL_SIZE, MAX_ENTRIES).unwrap_err();
+        assert!(err.to_string().contains("exceeds limit of 10"), "got: {err}");
+    }
+
+    #[test]
+    fn read_capped_rejects_cumulative_total_over_cap() {
+        // Three 40-byte entries (120 bytes total) against a 100-byte total cap,
+        // each under a 50-byte per-entry cap → only the cumulative budget trips.
+        let zip =
+            make_zip(&[("a.xml", &[b'a'; 40]), ("b.xml", &[b'b'; 40]), ("c.xml", &[b'c'; 40])]);
+        let err = RawPackage::read_capped(&zip, 50, 100, MAX_ENTRIES).unwrap_err();
+        assert!(err.to_string().contains("total decompressed data"), "got: {err}");
+    }
+
+    #[test]
+    fn read_capped_accepts_normal_small_package() {
+        let zip = make_zip(&[("Contents/section0.xml", b"<sec/>"), ("mimetype", b"x")]);
+        let pkg = RawPackage::read_capped(&zip, MAX_ENTRY_SIZE, MAX_TOTAL_SIZE, MAX_ENTRIES)
+            .expect("normal small package must parse");
+        assert_eq!(pkg.entries.len(), 2);
+        assert_eq!(pkg.read_text_entry("Contents/section0.xml").unwrap(), "<sec/>");
+    }
 
     fn paragraph(
         text: &str,
