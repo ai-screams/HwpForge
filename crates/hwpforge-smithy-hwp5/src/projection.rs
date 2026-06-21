@@ -2068,9 +2068,9 @@ fn project_control_run(
         Hwp5Control::Image(image) => projection_images
             .build_image(image, image_context)
             .map(|core_image| Run::image(core_image, CharShapeIndex::new(0))),
-        Hwp5Control::Line(line) => Some(project_line_run(line)),
+        Hwp5Control::Line(line) => project_line_run(line),
         Hwp5Control::Rect(rect) => project_rect_run(rect),
-        Hwp5Control::Polygon(polygon) => Some(project_polygon_run(polygon)),
+        Hwp5Control::Polygon(polygon) => project_polygon_run(polygon),
         Hwp5Control::Ellipse(ellipse) => project_ellipse_run(ellipse),
         Hwp5Control::Arc(arc) => project_arc_run(arc),
         Hwp5Control::Curve(curve) => project_curve_run(curve),
@@ -2433,9 +2433,9 @@ fn project_group_child(
     // Non-text children reuse the single-shape projection helpers; extract
     // the inner control from the produced run.
     let run = match &child.control {
-        Hwp5Control::Line(line) => Some(project_line_run(line)),
+        Hwp5Control::Line(line) => project_line_run(line),
         Hwp5Control::Rect(rect) => project_rect_run(rect),
-        Hwp5Control::Polygon(polygon) => Some(project_polygon_run(polygon)),
+        Hwp5Control::Polygon(polygon) => project_polygon_run(polygon),
         Hwp5Control::Ellipse(ellipse) => project_ellipse_run(ellipse),
         Hwp5Control::Arc(arc) => project_arc_run(arc),
         Hwp5Control::Curve(curve) => project_curve_run(curve),
@@ -2500,7 +2500,7 @@ fn project_endnote_run(
     Run::control(Control::Endnote { inst_id, paragraphs }, CharShapeIndex::new(0))
 }
 
-fn project_line_run(line: &Hwp5LineControl) -> Run {
+fn project_line_run(line: &Hwp5LineControl) -> Option<Run> {
     let projected_start = scale_point_into_geometry(
         line.start,
         line.start.x.min(line.end.x),
@@ -2537,13 +2537,12 @@ fn project_line_run(line: &Hwp5LineControl) -> Run {
     let scaled_start =
         hwpforge_core::control::ShapePoint { x: projected_start, y: projected_start_y };
     let scaled_end = hwpforge_core::control::ShapePoint { x: projected_end, y: projected_end_y };
-    let mut control = hwpforge_core::control::Control::line(scaled_start, scaled_end)
-        .expect("scaled line points remain non-degenerate");
+    let mut control = hwpforge_core::control::Control::line(scaled_start, scaled_end).ok()?;
     if let Control::Line { horz_offset, vert_offset, .. } = &mut control {
         *horz_offset = line.geometry.x;
         *vert_offset = line.geometry.y;
     }
-    Run::control(control, CharShapeIndex::new(0))
+    Some(Run::control(control, CharShapeIndex::new(0)))
 }
 
 fn project_rect_run(rect: &Hwp5RectControl) -> Option<Run> {
@@ -2557,15 +2556,14 @@ fn project_rect_run(rect: &Hwp5RectControl) -> Option<Run> {
     Some(Run::control(control, CharShapeIndex::new(0)))
 }
 
-fn project_polygon_run(polygon: &Hwp5PolygonControl) -> Run {
+fn project_polygon_run(polygon: &Hwp5PolygonControl) -> Option<Run> {
     let vertices = scale_polygon_points(&polygon.points, &polygon.geometry);
-    let mut control =
-        hwpforge_core::control::Control::polygon(vertices).expect("fixture polygon is valid");
+    let mut control = hwpforge_core::control::Control::polygon(vertices).ok()?;
     if let Control::Polygon { horz_offset, vert_offset, .. } = &mut control {
         *horz_offset = polygon.geometry.x;
         *vert_offset = polygon.geometry.y;
     }
-    Run::control(control, CharShapeIndex::new(0))
+    Some(Run::control(control, CharShapeIndex::new(0)))
 }
 
 /// Project a plain ellipse. Center/axes are derived from the bounding box
@@ -3208,6 +3206,74 @@ mod tests {
         let pn = parse_page_number_control(&no_deco).expect("pgnp should parse");
         assert_eq!(pn.position, PageNumberPosition::InsideTop);
         assert_eq!(pn.decoration, "-", "property byte must not be read as decoration");
+    }
+
+    fn zero_geometry() -> crate::schema::section::Hwp5ShapeComponentGeometry {
+        crate::schema::section::Hwp5ShapeComponentGeometry { x: 0, y: 0, width: 100, height: 100 }
+    }
+
+    fn shape_point(x: i32, y: i32) -> crate::schema::section::Hwp5ShapePoint {
+        crate::schema::section::Hwp5ShapePoint { x, y }
+    }
+
+    #[test]
+    fn project_line_run_returns_none_for_degenerate_start_equals_end() {
+        // A degenerate line (start == end) cannot form a valid Core line; the
+        // projection must return None instead of panicking via .expect(). The
+        // single point makes the scaled start/end coincide so
+        // `Control::line` rejects it.
+        let line = crate::decoder::section::Hwp5LineControl {
+            ctrl_id: 0,
+            geometry: zero_geometry(),
+            start: shape_point(50, 50),
+            end: shape_point(50, 50),
+        };
+        assert!(
+            project_line_run(&line).is_none(),
+            "degenerate line (start == end) must project to None, not panic",
+        );
+    }
+
+    #[test]
+    fn project_line_run_returns_some_for_valid_line() {
+        // Regression: a non-degenerate line still projects successfully.
+        let line = crate::decoder::section::Hwp5LineControl {
+            ctrl_id: 0,
+            geometry: zero_geometry(),
+            start: shape_point(0, 0),
+            end: shape_point(100, 100),
+        };
+        assert!(project_line_run(&line).is_some(), "valid line must still project to Some");
+    }
+
+    #[test]
+    fn project_polygon_run_returns_none_for_too_few_vertices() {
+        // A polygon needs >= 3 vertices. With 2 points `Control::polygon`
+        // rejects the shape, so the projection must return None rather than
+        // panicking via .expect().
+        let polygon = crate::decoder::section::Hwp5PolygonControl {
+            ctrl_id: 0,
+            geometry: zero_geometry(),
+            points: vec![shape_point(0, 0), shape_point(100, 0)],
+        };
+        assert!(
+            project_polygon_run(&polygon).is_none(),
+            "polygon with < 3 vertices must project to None, not panic",
+        );
+    }
+
+    #[test]
+    fn project_polygon_run_returns_some_for_valid_polygon() {
+        // Regression: a valid 3-vertex polygon still projects successfully.
+        let polygon = crate::decoder::section::Hwp5PolygonControl {
+            ctrl_id: 0,
+            geometry: zero_geometry(),
+            points: vec![shape_point(0, 0), shape_point(100, 0), shape_point(50, 100)],
+        };
+        assert!(
+            project_polygon_run(&polygon).is_some(),
+            "valid polygon must still project to Some"
+        );
     }
 
     use std::collections::BTreeMap;
