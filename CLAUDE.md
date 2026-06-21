@@ -321,6 +321,8 @@ Root `tests/` is primarily a fixture warehouse. It is not itself the main Rust i
 
 Local planning and research workspace. It may be git-excluded in this repository setup, so never assume "not in git status" means "does not exist".
 
+**Rule — 계획 문서는 `.docs/planning/` 에 작성한다** (내부 문서, git 미커밋). 마스터 플랜(epic 단위 전체 작업) + epic별 상세 실행 계획(TDD 단계/수용 기준)을 여기 둔다. 리서치/감사 산출물은 `.docs/audit/`, `.docs/research/`.
+
 ### Reference docs
 
 - `.docs/references/openhwp/docs/hwpx/` — local KS X 6101 markdownized reference
