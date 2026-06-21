@@ -47,8 +47,26 @@ pub fn read_file_string(file_path: &str) -> Result<String, ToolErrorInfo> {
 }
 
 /// Write data to a file, creating parent directories as needed.
+///
+/// # Path safety
+///
+/// `output_path` originates from MCP tool arguments (i.e. the model). Absolute
+/// paths are intentionally allowed: legitimate callers derive output locations
+/// from absolute input paths (e.g. `to_md` writes next to the source file) and
+/// MCP agents routinely pass absolute paths. What is rejected is any `..`
+/// (`ParentDir`) component, which is the path-traversal vector (CWE-22): a `..`
+/// segment lets a relative or crafted path escape its intended directory and
+/// overwrite arbitrary files. Blocking `..` closes that hole without breaking
+/// the legitimate absolute-path workflows.
 pub fn write_output_file(output_path: &str, data: &[u8]) -> Result<(), ToolErrorInfo> {
     let out = Path::new(output_path);
+    if out.components().any(|c| matches!(c, std::path::Component::ParentDir)) {
+        return Err(ToolErrorInfo::new(
+            "WRITE_ERROR",
+            format!("Unsafe output path contains '..': {output_path}"),
+            "Provide an output path without any '..' parent-directory segments.",
+        ));
+    }
     if let Some(parent) = out.parent() {
         if !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent).map_err(|e| {
@@ -243,5 +261,45 @@ mod tests {
 
         write_output_file(path.to_str().unwrap(), b"new").unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"new");
+    }
+
+    #[test]
+    fn write_output_file_rejects_parent_dir_traversal() {
+        // A relative path containing '..' must be rejected (CWE-22) and no file
+        // may be written.
+        let dir = tempfile::tempdir().unwrap();
+        // Build a guaranteed-nonexistent escape target so we can assert it is
+        // not created. Use a path that *contains* a '..' component.
+        let escape = dir.path().join("sub").join("..").join("escape.txt");
+        let escape_str = escape.to_str().unwrap();
+
+        let err = write_output_file(escape_str, b"x").unwrap_err();
+        assert_eq!(err.code, "WRITE_ERROR");
+        assert!(err.message.contains(".."), "error must mention the '..' rejection");
+
+        // The normalized escape target must not exist.
+        let normalized = dir.path().join("escape.txt");
+        assert!(!normalized.exists(), "traversal target must not be written");
+    }
+
+    #[test]
+    fn write_output_file_rejects_relative_parent_dir() {
+        // A purely relative '../escape' path must be rejected without writing.
+        let err = write_output_file("../escape-e1-test.txt", b"x").unwrap_err();
+        assert_eq!(err.code, "WRITE_ERROR");
+        assert!(!Path::new("../escape-e1-test.txt").exists(), "must not write outside cwd");
+    }
+
+    #[test]
+    fn write_output_file_allows_absolute_path() {
+        // Absolute paths remain legitimate (e.g. `to_md` writes next to an
+        // absolute input file). This is a regression guard for the #4 decision
+        // to reject only '..' traversal, not absolute paths.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("abs-out.hwpx");
+        assert!(path.is_absolute());
+
+        write_output_file(path.to_str().unwrap(), b"data").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"data");
     }
 }
