@@ -671,6 +671,17 @@ const SHAPE_COMPONENT_TYPE_TEXTART: [u8; 4] = [0x74, 0x61, 0x74, 0x24]; // "$tat
 /// warning and degrade rather than recurse or panic.
 const GSO_GROUP_MAX_DEPTH: u16 = 16;
 
+/// Maximum nesting depth of `tbl ` contexts on [`BodyTextParserState::table_stack`].
+///
+/// `table_stack` grows on every `tbl ` CtrlHeader (top-level or re-entered
+/// inside a cell). A malicious or corrupt stream can nest tables arbitrarily,
+/// growing the stack — and the eventual recursive projection — without bound.
+/// This cap mirrors [`GSO_GROUP_MAX_DEPTH`]: once the stack is this deep, an
+/// additional `tbl ` still pushes a context (so the level-driven pop/cell
+/// finalize machinery stays balanced) but the context is flagged over-cap and
+/// dropped at finalize with a `DroppedControl` warning, rather than attached.
+const MAX_TABLE_NESTING: usize = 32;
+
 // The `0x57 lvl=2` sub-record that follows every `%clk` CtrlHeader
 // carries the form-mode field name and HWP5 names it `CtrlData`. The
 // dispatch arm matches `TagId::CtrlData` directly (no numeric constant
@@ -764,10 +775,25 @@ struct TableContext {
     current_cell: Option<ActiveTableCell>,
     current_cell_para: Option<ParaBuf>,
     inline_cell_gso_ctx: Option<InlineGsoContext>,
+    /// True when this table was opened past [`MAX_TABLE_NESTING`]. The context
+    /// is still tracked (to keep the level-driven pop/cell machinery balanced
+    /// with the surrounding records) but its finalized control is dropped
+    /// rather than attached to the parent (E1 #3).
+    over_cap: bool,
 }
 
 impl TableContext {
     fn new(ctrl_depth: u16, instance_id: u32) -> Self {
+        Self::new_with_cap(ctrl_depth, instance_id, false)
+    }
+
+    /// Construct a context flagged as over the nesting cap; behaves identically
+    /// while parsing but is dropped (not attached) at finalize.
+    fn new_over_cap(ctrl_depth: u16, instance_id: u32) -> Self {
+        Self::new_with_cap(ctrl_depth, instance_id, true)
+    }
+
+    fn new_with_cap(ctrl_depth: u16, instance_id: u32, over_cap: bool) -> Self {
         Self {
             ctrl_depth,
             table: Hwp5Table {
@@ -784,6 +810,7 @@ impl TableContext {
             current_cell: None,
             current_cell_para: None,
             inline_cell_gso_ctx: None,
+            over_cap,
         }
     }
 
@@ -1750,6 +1777,29 @@ impl BodyTextParserState {
         self.handle_top_level_record(record, tag, level);
     }
 
+    /// Push a new `tbl ` context onto [`Self::table_stack`], enforcing the
+    /// [`MAX_TABLE_NESTING`] depth cap (E1 #3).
+    ///
+    /// At/over the cap the context is still pushed (flagged `over_cap`) so the
+    /// level-driven pop/cell/finalize machinery stays balanced with the inner
+    /// table's body records — but a `DroppedControl` warning is emitted and the
+    /// finalized table is dropped instead of attached, preventing unbounded
+    /// nesting from reaching projection.
+    fn push_table_context(&mut self, level: u16, instance_id: u32) {
+        if self.table_stack.len() >= MAX_TABLE_NESTING {
+            self.warnings.push(Hwp5Warning::DroppedControl {
+                control: "table",
+                reason: format!(
+                    "table nesting exceeds depth cap {MAX_TABLE_NESTING}; \
+                     dropping deepest table"
+                ),
+            });
+            self.table_stack.push(TableContext::new_over_cap(level, instance_id));
+        } else {
+            self.table_stack.push(TableContext::new(level, instance_id));
+        }
+    }
+
     fn prepare_for_record(&mut self, level: u16) {
         if self
             .table_stack
@@ -1770,17 +1820,22 @@ impl BodyTextParserState {
         }
 
         while self.table_stack.last().is_some_and(|ctx| level <= ctx.ctrl_depth) {
-            let finished = self
-                .table_stack
-                .pop()
-                .expect("table_stack.last().is_some() implies pop succeeds")
-                .finalize();
-            attach_finished_table(
-                &mut self.current,
-                &mut self.table_stack,
-                finished,
-                &mut self.warnings,
-            );
+            let ctx =
+                self.table_stack.pop().expect("table_stack.last().is_some() implies pop succeeds");
+            let over_cap = ctx.over_cap;
+            let finished = ctx.finalize();
+            // Over-cap tables are tracked only to keep pop/cell balance; their
+            // finalized control is dropped (a `DroppedControl` warning was
+            // already emitted at push time) so they cannot corrupt the parent
+            // table or leak unbounded nesting into projection (E1 #3).
+            if !over_cap {
+                attach_finished_table(
+                    &mut self.current,
+                    &mut self.table_stack,
+                    finished,
+                    &mut self.warnings,
+                );
+            }
         }
 
         if self.subtree_ctx.as_ref().is_some_and(|ctx| level <= ctx.ctrl_depth) {
@@ -1894,14 +1949,18 @@ impl BodyTextParserState {
                 }
             }
             TagId::CtrlHeader => {
-                if let Some(ctx) = self.table_stack.last_mut() {
-                    let ctrl_id = parse_ctrl_id(&record.data);
-                    if ctrl_id == CTRL_ID_TABLE {
-                        self.table_stack.push(TableContext::new(
-                            level,
-                            extract_ctrl_header_instance_id(&record.data, ctrl_id),
-                        ));
-                    } else if ctrl_id == CTRL_ID_GSO {
+                let ctrl_id = parse_ctrl_id(&record.data);
+                // A re-entered `tbl ` inside a cell opens a nested table. Handle
+                // it before borrowing the current context so the depth-cap check
+                // and `DroppedControl` warning don't fight the `last_mut()`
+                // borrow (E1 #3).
+                if ctrl_id == CTRL_ID_TABLE {
+                    self.push_table_context(
+                        level,
+                        extract_ctrl_header_instance_id(&record.data, ctrl_id),
+                    );
+                } else if let Some(ctx) = self.table_stack.last_mut() {
+                    if ctrl_id == CTRL_ID_GSO {
                         ctx.inline_cell_gso_ctx = Some(InlineGsoContext::new(
                             level,
                             ctrl_id,
@@ -2350,10 +2409,7 @@ impl BodyTextParserState {
     fn handle_ctrl_header(&mut self, record: &Record, level: u16) {
         let ctrl_id = parse_ctrl_id(&record.data);
         if ctrl_id == CTRL_ID_TABLE {
-            self.table_stack.push(TableContext::new(
-                level,
-                extract_ctrl_header_instance_id(&record.data, ctrl_id),
-            ));
+            self.push_table_context(level, extract_ctrl_header_instance_id(&record.data, ctrl_id));
         } else if matches!(
             ctrl_id,
             CTRL_ID_HEADER | CTRL_ID_FOOTER | CTRL_ID_FOOTNOTE | CTRL_ID_ENDNOTE | CTRL_ID_GSO
@@ -2795,13 +2851,18 @@ impl BodyTextParserState {
         // missing or replaced by another top-level record (Wave 12l).
         self.flush_pending_clickhere();
         while let Some(ctx) = self.table_stack.pop() {
+            let over_cap = ctx.over_cap;
             let finished = ctx.finalize();
-            attach_finished_table(
-                &mut self.current,
-                &mut self.table_stack,
-                finished,
-                &mut self.warnings,
-            );
+            // See `prepare_for_record`: over-cap tables are dropped, not
+            // attached (E1 #3).
+            if !over_cap {
+                attach_finished_table(
+                    &mut self.current,
+                    &mut self.table_stack,
+                    finished,
+                    &mut self.warnings,
+                );
+            }
         }
         attach_inline_gso_control(
             &mut self.current_subtree_para,
@@ -3797,6 +3858,155 @@ mod tests {
         assert_eq!(result.paragraphs[0].controls.len(), 1);
         assert_eq!(result.paragraphs[1].controls.len(), 0);
         assert_eq!(result.paragraphs[1].text, "hello");
+    }
+
+    /// Build a stream of `depth` tables nested table-in-cell-in-table.
+    ///
+    /// Level layout per nesting `d` (0-based), opening table `d` inside the
+    /// cell paragraph of table `d-1`:
+    ///   CtrlHeader(level = 2*d,   TABLE)   → table ctrl_depth = 2*d
+    ///   Table     (level = 2*d+1)          → table body
+    ///   ListHeader(level = 2*d+1)          → cell (1 paragraph)
+    ///   ParaHeader(level = 2*d+1)          → cell paragraph (control-ref host)
+    ///   ParaText  (level = 2*d+2, ctrl-ref)→ so the cell paragraph can host the
+    ///                                        next nested table CtrlHeader
+    /// After the deepest table, a `ParaHeader(level=0)` forces every table to
+    /// close (the level-driven pop loop).
+    fn nested_tables_stream(depth: usize) -> Vec<u8> {
+        let mut stream = Vec::new();
+        // Host paragraph for the outermost table.
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 0, &para_text_with_control_ref("", "")));
+        for d in 0..depth {
+            let base = (2 * d) as u16;
+            stream.extend(make_record(TagId::CtrlHeader, base, &ctrl_header_data(CTRL_ID_TABLE)));
+            stream.extend(make_record(TagId::Table, base + 1, &basic_table_data(1, 1)));
+            stream.extend(make_record(
+                TagId::ListHeader,
+                base + 1,
+                &list_header_table_cell_data(TestCellSpec {
+                    paragraph_count: 1,
+                    legacy_u16_count: false,
+                    properties: 0x20,
+                    column: 0,
+                    row: 0,
+                    col_span: 1,
+                    row_span: 1,
+                    width: 4000,
+                    height: 1000,
+                    margin: Hwp5TableCellMargin { left: 0, right: 0, top: 0, bottom: 0 },
+                    border_fill_id: Some(7),
+                }),
+            ));
+            // Cell paragraph with a control reference so it can host the next
+            // nested table.
+            stream.extend(make_record(TagId::ParaHeader, base + 1, &para_header_data(0, 0)));
+            stream.extend(make_record(
+                TagId::ParaText,
+                base + 2,
+                &para_text_with_control_ref("", ""),
+            ));
+        }
+        // Force every open table to close.
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(1, 0)));
+        stream
+    }
+
+    fn count_nested_table_depth(table: &Hwp5Table) -> usize {
+        let mut max_child = 0;
+        for cell in &table.cells {
+            for para in &cell.paragraphs {
+                for control in &para.controls {
+                    if let Hwp5Control::Table(inner) = control {
+                        max_child = max_child.max(count_nested_table_depth(inner));
+                    }
+                }
+            }
+        }
+        1 + max_child
+    }
+
+    #[test]
+    fn normal_nested_tables_still_decode() {
+        // Regression: shallow 2- and 3-deep nesting (well under the cap) must
+        // still produce fully attached nested tables, no DroppedControl warning.
+        for depth in [2usize, 3] {
+            let stream = nested_tables_stream(depth);
+            let result = parse_body_text(&stream, &version()).unwrap();
+            let outer = result
+                .paragraphs
+                .iter()
+                .flat_map(|p| &p.controls)
+                .find_map(|c| match c {
+                    Hwp5Control::Table(t) => Some(t),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("depth {depth}: expected an outer table"));
+            assert_eq!(
+                count_nested_table_depth(outer),
+                depth,
+                "depth {depth}: all nested tables must attach",
+            );
+            assert!(
+                !result
+                    .warnings
+                    .iter()
+                    .any(|w| matches!(w, Hwp5Warning::DroppedControl { control: "table", .. })),
+                "depth {depth}: normal nesting must not emit a table DroppedControl warning",
+            );
+        }
+    }
+
+    #[test]
+    fn over_cap_table_nesting_is_dropped_without_panic() {
+        // MAX_TABLE_NESTING + 1 deep: must NOT panic/OOM, must emit at least one
+        // DroppedControl{control:"table"} warning, must keep decoding the outer
+        // content, and the attached tree must be capped (no deeper than the
+        // cap) — proving push/pop stayed balanced.
+        let depth = MAX_TABLE_NESTING + 1;
+        let stream = nested_tables_stream(depth);
+
+        let result = parse_body_text(&stream, &version()).expect("deep nesting must not error");
+
+        // (b) the over-cap warning fired.
+        let dropped = result
+            .warnings
+            .iter()
+            .filter(|w| matches!(w, Hwp5Warning::DroppedControl { control: "table", .. }))
+            .count();
+        assert!(
+            dropped >= 1,
+            "expected a table DroppedControl warning, got warnings: {:?}",
+            result.warnings
+        );
+
+        // (c) the outer table is still decoded and attached.
+        let outer = result
+            .paragraphs
+            .iter()
+            .flat_map(|p| &p.controls)
+            .find_map(|c| match c {
+                Hwp5Control::Table(t) => Some(t),
+                _ => None,
+            })
+            .expect("outer table must still decode");
+
+        // (d) the attached nesting is capped — the deepest (over-cap) table was
+        // dropped rather than attached, so the visible depth never exceeds the
+        // cap. This also proves the pop/finalize machinery stayed balanced
+        // (otherwise the outer table would be malformed or missing).
+        let attached_depth = count_nested_table_depth(outer);
+        assert!(
+            attached_depth <= MAX_TABLE_NESTING,
+            "attached nesting depth {attached_depth} must not exceed cap {MAX_TABLE_NESTING}",
+        );
+
+        // The closing paragraph (para_shape_id 1) must still be decoded after
+        // all the tables unwound — i.e. outer body parsing resumed normally.
+        assert!(
+            result.paragraphs.len() >= 2,
+            "outer content after the nested tables must still parse",
+        );
     }
 
     #[test]
