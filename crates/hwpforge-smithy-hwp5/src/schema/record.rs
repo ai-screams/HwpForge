@@ -9,6 +9,14 @@ use std::io::Read;
 
 use crate::error::{Hwp5Error, Hwp5Result};
 
+/// Maximum number of records parsed from a single stream.
+///
+/// A 500 MB stream of minimal (4-byte header, zero-size) records could expand
+/// into ~125M `Record` structs. Real DocInfo/Section streams hold thousands to
+/// low tens of thousands of records, so 5,000,000 is an extremely generous
+/// ceiling that still blocks the amplification attack.
+const MAX_RECORDS_PER_STREAM: usize = 5_000_000;
+
 /// Parsed HWP5 record header (4 bytes, little-endian packed).
 ///
 /// Bit layout of the 32-bit word:
@@ -87,8 +95,18 @@ impl Record {
     /// Parse all records from a [`Read`] source until EOF.
     ///
     /// Returns an empty `Vec` for an empty stream. Any partial record at the
-    /// end of the stream is treated as a parse error.
+    /// end of the stream is treated as a parse error. Rejects streams whose
+    /// record count exceeds [`MAX_RECORDS_PER_STREAM`] to bound the worst-case
+    /// `Vec<Record>` a hostile stream of minimal records could amplify into.
     pub fn parse_stream(reader: &mut impl Read) -> Hwp5Result<Vec<Record>> {
+        Self::parse_stream_capped(reader, MAX_RECORDS_PER_STREAM)
+    }
+
+    /// Internal worker for [`parse_stream`] with an explicit record-count cap.
+    ///
+    /// Exposing the cap as a parameter lets tests verify the bound with a small
+    /// value instead of materializing millions of records.
+    fn parse_stream_capped(reader: &mut impl Read, max_records: usize) -> Hwp5Result<Vec<Record>> {
         let mut records = Vec::new();
         // Buffer the entire stream so we can detect EOF cleanly.
         let mut buf = Vec::new();
@@ -104,6 +122,12 @@ impl Record {
             let remaining = cursor.get_ref().len() - pos;
             if remaining == 0 {
                 break;
+            }
+            if records.len() >= max_records {
+                return Err(Hwp5Error::RecordParse {
+                    offset: pos,
+                    detail: format!("record count exceeds cap of {max_records} per stream"),
+                });
             }
             let record = Record::parse(&mut cursor)?;
             records.push(record);
@@ -364,6 +388,50 @@ impl TagId {
 mod tests {
     use super::*;
     use std::io::Cursor;
+
+    /// A minimal record: 4-byte header (tag=16, level=0, size=0), no payload.
+    fn minimal_record_bytes(count: usize) -> Vec<u8> {
+        let word: u32 = 16; // tag=16, level=0, size=0
+        let mut buf = Vec::with_capacity(count * 4);
+        for _ in 0..count {
+            buf.extend_from_slice(&word.to_le_bytes());
+        }
+        buf
+    }
+
+    #[test]
+    fn parse_stream_rejects_record_count_over_cap() {
+        // Use a tiny injected cap so we never build millions of records: a
+        // stream of cap+1 minimal records must be rejected before the final
+        // push, with no runaway allocation.
+        let cap = 8;
+        let bytes = minimal_record_bytes(cap + 1);
+        let mut cursor = Cursor::new(&bytes[..]);
+        let err = Record::parse_stream_capped(&mut cursor, cap).unwrap_err();
+        match err {
+            Hwp5Error::RecordParse { detail, .. } => {
+                assert!(detail.contains("record count exceeds cap"), "got: {detail}");
+            }
+            other => panic!("expected RecordParse cap error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_stream_accepts_count_at_cap() {
+        let cap = 8;
+        let bytes = minimal_record_bytes(cap);
+        let mut cursor = Cursor::new(&bytes[..]);
+        let records = Record::parse_stream_capped(&mut cursor, cap).expect("count at cap is ok");
+        assert_eq!(records.len(), cap);
+    }
+
+    #[test]
+    fn parse_stream_accepts_normal_small_stream() {
+        let bytes = minimal_record_bytes(3);
+        let mut cursor = Cursor::new(&bytes[..]);
+        let records = Record::parse_stream(&mut cursor).expect("small stream parses");
+        assert_eq!(records.len(), 3);
+    }
 
     #[test]
     fn parse_record_header_basic() {
