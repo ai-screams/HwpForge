@@ -212,9 +212,7 @@ pub(crate) fn encode_section(
     // Replace hyperlink placeholder runs with real interleaved XML.
     // Serde cannot express the ctrl-text-ctrl interleaving required by
     // HWPX fieldBegin/fieldEnd, so we serialize a marker and swap it here.
-    for (marker_xml, real_xml) in &run_xml_replacements {
-        enriched = enriched.replacen(marker_xml, real_xml, 1);
-    }
+    enriched = apply_run_xml_replacements(enriched, &run_xml_replacements);
 
     // Generate masterpage XML files
     let master_pages = build_masterpage_entries(section, masterpage_offset);
@@ -225,6 +223,49 @@ pub(crate) fn encode_section(
         master_pages,
         embedded_oles,
     })
+}
+
+/// Applies marker → real-XML substitutions in a single allocation.
+///
+/// Each marker produced by [`next_marker`] is a globally-unique nonce token
+/// that occurs exactly once in `xml` and never inside any replacement value,
+/// so locating every marker up front and splicing in offset order yields the
+/// same bytes as sequentially calling `String::replacen(marker, real, 1)` —
+/// while allocating the output string only once instead of once per marker
+/// (the previous loop was O(N·L): one full-string copy per replacement).
+fn apply_run_xml_replacements(xml: String, replacements: &[(String, String)]) -> String {
+    if replacements.is_empty() {
+        return xml;
+    }
+    // Locate each marker's byte offset. Each marker is unique and occurs at
+    // most once; a missing marker is a silent no-op, matching `replacen`.
+    let mut hits: Vec<(usize, usize, &str)> = Vec::with_capacity(replacements.len());
+    for (marker, real) in replacements {
+        if let Some(pos) = xml.find(marker.as_str()) {
+            hits.push((pos, marker.len(), real.as_str()));
+        }
+    }
+    if hits.is_empty() {
+        return xml;
+    }
+    hits.sort_unstable_by_key(|&(pos, _, _)| pos);
+
+    let extra: usize = hits.iter().map(|&(_, len, real)| real.len().saturating_sub(len)).sum();
+    let mut out = String::with_capacity(xml.len() + extra);
+    let mut cursor = 0usize;
+    for (pos, len, real) in hits {
+        // Skip any hit overlapping an already-applied region (defensive: a
+        // duplicate marker would otherwise splice twice). Mirrors `replacen`'s
+        // "first occurrence wins, later passes find nothing" behavior.
+        if pos < cursor {
+            continue;
+        }
+        out.push_str(&xml[cursor..pos]);
+        out.push_str(real);
+        cursor = pos + len;
+    }
+    out.push_str(&xml[cursor..]);
+    out
 }
 
 /// Wraps inner XML content in an `<hs:sec>` element with all xmlns declarations.
@@ -3897,5 +3938,53 @@ mod tests {
         let section = simple_section("Normal paragraph");
         let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(!xml.contains("<hp:titleMark"), "non-heading must NOT have titleMark");
+    }
+
+    /// Reference implementation: the original sequential `replacen` loop.
+    fn replacen_reference(mut xml: String, replacements: &[(String, String)]) -> String {
+        for (marker, real) in replacements {
+            xml = xml.replacen(marker, real, 1);
+        }
+        xml
+    }
+
+    #[test]
+    fn apply_run_xml_replacements_matches_replacen() {
+        // Markers are unique nonce tokens; payloads never contain markers.
+        let xml = "<p>A</p>__clk_0_1__mid__clk_1_2__tail__clk_2_3__end".to_string();
+        let repls = vec![
+            ("__clk_0_1__".to_string(), "<hp:fieldBegin/>X<hp:fieldEnd/>".to_string()),
+            ("__clk_1_2__".to_string(), "<hp:ctrl>Y</hp:ctrl>".to_string()),
+            ("__clk_2_3__".to_string(), "Z".to_string()),
+        ];
+        let single = apply_run_xml_replacements(xml.clone(), &repls);
+        let reference = replacen_reference(xml, &repls);
+        assert_eq!(single, reference);
+    }
+
+    #[test]
+    fn apply_run_xml_replacements_order_independent() {
+        // Out-of-order replacement list must still produce position-ordered output.
+        let xml = "head__m_2_0____m_0_1____m_1_2__".to_string();
+        let repls = vec![
+            ("__m_0_1__".to_string(), "B".to_string()),
+            ("__m_2_0__".to_string(), "A".to_string()),
+            ("__m_1_2__".to_string(), "C".to_string()),
+        ];
+        let single = apply_run_xml_replacements(xml.clone(), &repls);
+        let reference = replacen_reference(xml, &repls);
+        assert_eq!(single, reference);
+        assert_eq!(single, "headABC");
+    }
+
+    #[test]
+    fn apply_run_xml_replacements_empty_and_missing() {
+        // Empty list: identity.
+        let xml = "<p>no markers</p>".to_string();
+        assert_eq!(apply_run_xml_replacements(xml.clone(), &[]), xml);
+        // Missing marker: silent no-op (matches replacen).
+        let repls = vec![("__absent_9_9__".to_string(), "X".to_string())];
+        let single = apply_run_xml_replacements(xml.clone(), &repls);
+        assert_eq!(single, replacen_reference(xml, &repls));
     }
 }
