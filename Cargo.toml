@@ -11,6 +11,9 @@ members = [
   "crates/hwpforge-smithy-hwpx",
   "crates/hwpforge-smithy-md",
 ]
+# `fuzz/` is a standalone cargo-fuzz workspace (nightly + libfuzzer-sys only);
+# keep it out of the main workspace so normal builds/CI never pull it in.
+exclude = ["fuzz"]
 resolver = "2"
 
 [workspace.package]
