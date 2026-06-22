@@ -924,7 +924,7 @@ const MAX_FIELD_DISPLAY_TEXT_UNITS: usize = 4096;
 /// Appends `text` to an auto-field `display_text`, stopping once the
 /// accumulated UTF-16 length would exceed [`MAX_FIELD_DISPLAY_TEXT_UNITS`].
 fn push_field_display_text(display_text: &mut String, text: &str) {
-    let current = display_text.encode_utf16().count();
+    let mut current = display_text.encode_utf16().count();
     if current >= MAX_FIELD_DISPLAY_TEXT_UNITS {
         return;
     }
@@ -933,12 +933,17 @@ fn push_field_display_text(display_text: &mut String, text: &str) {
         display_text.push_str(text);
         return;
     }
-    // Push char-by-char up to the cap (keeps UTF-16 boundaries intact).
+    // Slow path: append char-by-char up to the cap (keeps UTF-16 boundaries
+    // intact). Track the accumulated UTF-16 length with a running counter
+    // instead of recomputing `display_text.encode_utf16().count()` every
+    // iteration (was O(M·K); now O(M+K)). Same truncation point.
     for ch in text.chars() {
-        if display_text.encode_utf16().count() + ch.len_utf16() > MAX_FIELD_DISPLAY_TEXT_UNITS {
+        let n = ch.len_utf16();
+        if current + n > MAX_FIELD_DISPLAY_TEXT_UNITS {
             break;
         }
         display_text.push(ch);
+        current += n;
     }
 }
 
