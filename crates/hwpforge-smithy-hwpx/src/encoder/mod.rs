@@ -550,13 +550,20 @@ impl HwpxEncoder {
             section_results.push(result);
         }
 
-        let section_xmls: Vec<String> = section_results.iter().map(|r| r.xml.clone()).collect();
-        let charts: Vec<(String, String)> =
-            section_results.iter().flat_map(|r| r.charts.clone()).collect();
-        let embedded_oles: Vec<(String, Vec<u8>)> =
-            section_results.iter().flat_map(|r| r.embedded_oles.clone()).collect();
-        let master_pages: Vec<(String, String)> =
-            section_results.into_iter().flat_map(|r| r.master_pages).collect();
+        // Single move-consuming pass: extract all four fields without cloning
+        // (previously xml/charts/embedded_oles were `.iter().clone()`d).
+        // Push/extend order preserves the original per-section ordering.
+        type SectionParts =
+            (Vec<String>, Vec<(String, String)>, Vec<(String, Vec<u8>)>, Vec<(String, String)>);
+        let (section_xmls, charts, embedded_oles, master_pages): SectionParts = section_results
+            .into_iter()
+            .fold(Default::default(), |(mut xmls, mut charts, mut oles, mut mps), r| {
+                xmls.push(r.xml);
+                charts.extend(r.charts);
+                oles.extend(r.embedded_oles);
+                mps.extend(r.master_pages);
+                (xmls, charts, oles, mps)
+            });
 
         // Step 3: Collect image binaries
         let images: Vec<(String, Vec<u8>)> =
