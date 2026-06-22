@@ -233,6 +233,29 @@ pub(crate) fn encode_section(
 /// same bytes as sequentially calling `String::replacen(marker, real, 1)` —
 /// while allocating the output string only once instead of once per marker
 /// (the previous loop was O(N·L): one full-string copy per replacement).
+///
+/// # Invariant this relies on: child-before-parent push ordering
+///
+/// A `real_xml` payload *may* embed another control's marker token — e.g. a
+/// memo/group whose sublist contains a nested field. Equivalence to the old
+/// sequential `replacen` loop is preserved only because nested controls push
+/// their `(marker, real)` pair to `run_xml_replacements` **before** their
+/// enclosing parent. With that ordering both strategies behave identically:
+/// the child's pass runs while its marker is still hidden inside the parent's
+/// not-yet-applied `real_xml` (a no-op for both), then the parent's pass
+/// splices the child marker into the output where it stays unreplaced in both
+/// the old loop and this single pass.
+///
+/// If ordering ever inverted to parent-before-child, the two would DIVERGE:
+/// the old `replacen` rescans the mutated string and would resolve the nested
+/// marker, whereas this pass only locates markers in the *original* string and
+/// would leave it. `apply_run_xml_replacements_child_before_parent_matches_replacen`
+/// locks the safe ordering against that regression.
+///
+/// (The fact that a deeply-nested field marker can survive into the output at
+/// all is a separate, pre-existing memo/group limitation — see
+/// `BACKLOG_SMITHY_HWPX.md` — and is byte-identical across both strategies, so
+/// it does not affect this optimization.)
 fn apply_run_xml_replacements(xml: String, replacements: &[(String, String)]) -> String {
     if replacements.is_empty() {
         return xml;
@@ -3461,6 +3484,37 @@ mod tests {
         assert!(xml.contains(r#"type="MEMO""#), "MEMO fieldBegin type");
         assert!(xml.contains("MemoShapeID"), "MemoShapeID param required");
         assert!(!xml.contains("__HWPME_"), "no leftover Memo marker");
+    }
+
+    /// Locks the child-before-parent ordering invariant that
+    /// [`apply_run_xml_replacements`] relies on for `replacen`-equivalence.
+    ///
+    /// Models a nested control: a child (hyperlink) marker that is embedded
+    /// inside a parent's (memo's) `real_xml`, with the child pair listed
+    /// BEFORE the parent pair (the order the encoder actually produces). Under
+    /// this ordering both the old sequential `replacen` loop and the new
+    /// single-pass splice leave the nested child marker unreplaced — i.e. they
+    /// are byte-identical. (Were the order inverted, `replacen` would resolve
+    /// the nested marker and the splice would not — the divergence this guards.)
+    #[test]
+    fn apply_run_xml_replacements_child_before_parent_matches_replacen() {
+        let child_marker = "__HWPHL_0_0__".to_string();
+        let parent_marker = "__HWPME_1_0__".to_string();
+        // Parent payload embeds the child marker (memo sublist containing a field).
+        let parent_real = format!("<hp:fieldBegin/><hp:subList>{child_marker}</hp:subList>");
+        // Only the parent marker is present in the base string; the child marker
+        // appears only AFTER the parent is spliced in.
+        let xml = format!("<p>before</p>{parent_marker}<p>after</p>");
+        // Child-before-parent ordering, as the encoder emits it.
+        let repls = vec![
+            (child_marker.clone(), "<hp:run>RESOLVED-CHILD</hp:run>".to_string()),
+            (parent_marker, parent_real),
+        ];
+        let single = apply_run_xml_replacements(xml.clone(), &repls);
+        let reference = replacen_reference(xml, &repls);
+        assert_eq!(single, reference, "splice must equal replacen under child-before-parent order");
+        // Both leave the nested child marker unreplaced (documents the shared behavior).
+        assert!(single.contains(&child_marker), "nested child marker stays unreplaced in both");
     }
 
     // ── Dutmal encoding ────────────────────────────────────────────
