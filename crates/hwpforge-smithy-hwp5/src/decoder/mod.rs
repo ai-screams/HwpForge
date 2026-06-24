@@ -212,7 +212,7 @@ impl Hwp5Decoder {
         // Codex(architect) Wave 12o-fixup §Top-4: forward
         // `\x05HwpSummaryInformation` derived metadata so the canonical
         // entry point honors the same wire contract as
-        // `decode_hwp5_with_images` / `hwp5_to_hwpx_bytes`. Without
+        // `decode_hwp5_with_images` / `decode_hwp5_to_core`. Without
         // this the public API silently dropped metadata for any
         // caller using `Hwp5Decoder::decode` directly (CLI/MCP/tests).
         document.set_metadata(metadata);

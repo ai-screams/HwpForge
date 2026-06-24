@@ -256,7 +256,7 @@ pub(crate) fn project_to_core_with_images(
 
 /// Project decoded HWP5 sections into Core with both image and OLE asset plans.
 ///
-/// Used by [`crate::hwp5_to_hwpx_bytes`] so the projection layer can attempt
+/// Used by [`crate::decode_hwp5_to_core`] so the projection layer can attempt
 /// chart payload extraction from `/BinData/BIN*.OLE` entries and emit
 /// [`hwpforge_core::Control::EmbeddedChart`] runs (Wave 4c carry).
 pub(crate) fn project_to_core_with_images_and_ole(

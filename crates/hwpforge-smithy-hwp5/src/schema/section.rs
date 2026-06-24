@@ -485,7 +485,7 @@ impl Hwp5CharShapeRun {
 /// This is format-local layout cache data. It must not leak into Core, but
 /// HWP5 → HWPX conversion can preserve it as a fidelity hint.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Hwp5ParaLineSeg {
+pub struct Hwp5ParaLineSeg {
     /// Character position where the line starts.
     pub text_start_position: u32,
     /// Vertical offset from the paragraph top in HWPUNIT.

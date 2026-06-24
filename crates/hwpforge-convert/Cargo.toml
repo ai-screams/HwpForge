@@ -22,7 +22,7 @@ hwpforge-smithy-hwp5 = { path = "../hwpforge-smithy-hwp5", version = "0.7.0" }
 hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0.7.0" }
 quick-xml = { workspace = true }
 serde = { workspace = true }
-thiserror = { workspace = true }
+zip = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }

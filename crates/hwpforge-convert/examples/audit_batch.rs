@@ -8,7 +8,7 @@
 //! Usage:
 //!
 //! ```text
-//! cargo run -p hwpforge-smithy-hwp5 --example audit_batch -- <dir> [<dir> ...]
+//! cargo run -p hwpforge-convert --example audit_batch -- <dir> [<dir> ...]
 //! ```
 //!
 //! The JSON schema is intentionally simple so a small `jq` / diff step in CI
@@ -20,7 +20,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
-use hwpforge_smithy_hwp5::{hwp5_to_hwpx_bytes, Hwp5Warning};
+use hwpforge_convert::hwp5_to_hwpx_bytes;
+use hwpforge_smithy_hwp5::Hwp5Warning;
 use serde::Serialize;
 
 #[derive(Default, Serialize)]

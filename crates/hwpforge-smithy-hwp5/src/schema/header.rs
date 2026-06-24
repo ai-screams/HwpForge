@@ -1187,7 +1187,12 @@ impl Hwp5RawParaShape {
         self.property2.is_some_and(|property2| property2 & (1 << 7) != 0)
     }
 
-    pub(crate) fn line_spacing_kind_raw(&self) -> u32 {
+    /// Returns the raw line-spacing kind code.
+    ///
+    /// Reads the 5-bit field from `property3` when present, otherwise the
+    /// legacy 2-bit field from `property1`. Output-format mappers use this to
+    /// detect line-spacing kinds the shared IR cannot represent.
+    pub fn line_spacing_kind_raw(&self) -> u32 {
         self.property3.map_or(self.property1 & 0b11, |property3| property3 & 0x1F)
     }
 
