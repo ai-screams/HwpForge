@@ -499,6 +499,11 @@ make doc         # rustdoc 생성 (브라우저에서 열림)
 make cov         # coverage 리포트 (90% gate)
 ```
 
+> **빌드 가속 (선택)**: `sccache`가 PATH에 있으면 `make` 타깃이 자동으로 컴파일
+> 캐시로 사용합니다(없으면 그대로 동작 — 아무것도 깨지지 않음). 반복 `make ci`가
+> 크게 빨라집니다. 설치: `cargo install sccache` 또는 `brew install sccache`.
+> (릴리스 파이프라인 release-plz 는 영향받지 않습니다.)
+
 ### 프로젝트 구조
 
 ```

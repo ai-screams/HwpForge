@@ -8,6 +8,17 @@ MDBOOK_VERSION ?= 0.4.52
 MDBOOK_ADMONISH_VERSION ?= 1.20.0
 MDBOOK_MERMAID_VERSION ?= 0.16.2
 
+# Use sccache as the compiler cache when it is on PATH (graceful no-op when
+# absent — contributors without sccache build normally, nothing breaks). This
+# speeds up the repeated full compiles in `make ci` (clippy -> test) and across
+# runs. Scoped to make targets on purpose: release tooling (release-plz runs
+# `cargo publish` via its own action, not make) is intentionally unaffected.
+# Install for the speedup: `cargo install sccache` (or `brew install sccache`).
+SCCACHE := $(shell command -v sccache 2>/dev/null)
+ifneq ($(SCCACHE),)
+export RUSTC_WRAPPER := $(SCCACHE)
+endif
+
 help:
 	@echo "HwpForge Development Commands"
 	@echo ""
