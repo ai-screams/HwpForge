@@ -1,0 +1,131 @@
+//! Field-control payload types: path/file-name commands, cross-reference
+//! targets, and inline page-number kinds.
+//!
+//! Houses [`PathFieldCommand`], [`RefTarget`], and [`InlinePageKind`] — the
+//! typed payloads carried by the field variants of [`Control`](super::Control).
+
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+
+/// Typed variant of the HWP5 `%pat` Command string (Wave 12n).
+///
+/// Observed forms are `$F` (file name only), `$P` (path only), and `$P$F`
+/// (full path). Anything else is preserved as [`PathFieldCommand::Unknown`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub enum PathFieldCommand {
+    /// `$F` — file name only.
+    FileName,
+    /// `$P` — folder path only (no file name).
+    Path,
+    /// `$P$F` — full path including file name.
+    PathAndFileName,
+    /// Any other Command form, preserved verbatim.
+    Unknown(String),
+}
+
+impl PathFieldCommand {
+    /// Returns the canonical wire Command string for typed variants.
+    /// For [`Self::Unknown`], returns the carried raw string.
+    pub fn wire_command(&self) -> &str {
+        match self {
+            Self::FileName => "$F",
+            Self::Path => "$P",
+            Self::PathAndFileName => "$P$F",
+            Self::Unknown(s) => s.as_str(),
+        }
+    }
+
+    /// Parses a wire Command string into a typed variant. Unknown forms
+    /// are preserved as [`Self::Unknown`].
+    pub fn from_wire(cmd: &str) -> Self {
+        match cmd {
+            "$F" => Self::FileName,
+            "$P" => Self::Path,
+            "$P$F" => Self::PathAndFileName,
+            other => Self::Unknown(other.to_string()),
+        }
+    }
+}
+
+/// Cross-reference target identifier (Wave 12m Phase 2).
+///
+/// Replaces the previous `target_name: String` field on
+/// [`Control::CrossRef`] with a type-safe enum that distinguishes the
+/// three observed wire forms in HWP5 `%xrf` Command strings:
+///
+/// - **`Name(String)`** — 사용자 지정 책갈피 이름 (Bookmark 전용).
+///   한컴 fixture 의 `?target1;6;0;0;0;` 형식에서 `target1` 부분.
+/// - **`SystemId(u64)`** — 한컴 자동 생성 정수 ID (Footnote / Endnote /
+///   Caption / Outline). 한컴 fixture 의 `?#1108165575;3;0;0;0;` 형식에서
+///   `#` 접두사를 떼고 정수로 파싱한 값.
+/// - **`Raw(String)`** — 위 두 형식 어느쪽으로도 파싱이 안 된 wire 값.
+///   silent fallback 위조 금지 원칙 (Codex(architect)) — 의미를
+///   모르면 raw 보존.
+///
+/// 변환은 `smithy-hwp5/src/projection.rs::decode_hwp5_target` 의
+/// boundary 함수에서 수행 (Core 는 wire-agnostic).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub enum RefTarget {
+    /// 사용자 지정 책갈피 이름 (Bookmark 전용).
+    Name(String),
+    /// 한컴 자동 생성 정수 ID (Footnote / Endnote / Caption / Outline).
+    SystemId(u64),
+    /// 위 형식 어느쪽으로도 정규화되지 않은 raw 값 — fallback 위조 금지.
+    Raw(String),
+}
+
+impl RefTarget {
+    /// Returns the displayable name for this target.
+    ///
+    /// - `Name(s)` → `s`
+    /// - `SystemId(id)` → `"#{id}"` 형식 (한컴 wire 와 동일)
+    /// - `Raw(s)` → `s`
+    pub fn as_display(&self) -> String {
+        match self {
+            Self::Name(s) => s.clone(),
+            Self::SystemId(id) => format!("#{id}"),
+            Self::Raw(s) => s.clone(),
+        }
+    }
+}
+
+/// Typed variant of the HWP5 `atno` inline page-number `flag` byte
+/// (Wave 12n).
+///
+/// Observed values: `0x00` = current page, `0x06` = total page count.
+/// Other values surface as [`InlinePageKind::Unknown`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub enum InlinePageKind {
+    /// Flag `0x00` — current page number.
+    CurrentPage,
+    /// Flag `0x06` — total page count.
+    TotalPages,
+    /// Any other flag value, carried verbatim via
+    /// [`Control::InlinePageNumber::raw_flag`].
+    Unknown,
+}
+
+impl InlinePageKind {
+    /// Returns the canonical raw flag value for typed variants.
+    /// For [`Self::Unknown`], callers must use the
+    /// [`Control::InlinePageNumber::raw_flag`] field directly.
+    pub fn raw_flag(self) -> Option<u32> {
+        match self {
+            Self::CurrentPage => Some(0x00),
+            Self::TotalPages => Some(0x06),
+            Self::Unknown => None,
+        }
+    }
+
+    /// Maps an observed raw flag value to a typed variant.
+    pub fn from_raw_flag(flag: u32) -> Self {
+        match flag {
+            0x00 => Self::CurrentPage,
+            0x06 => Self::TotalPages,
+            _ => Self::Unknown,
+        }
+    }
+}
