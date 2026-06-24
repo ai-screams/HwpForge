@@ -198,3 +198,56 @@ fn join_hwp5_image_assets_decompresses_full_report_png_payload() {
         "full_report joined image bytes must be actual PNG payload, not compressed raw data"
     );
 }
+
+/// Direct unit coverage for `Hwp5StyleStore::border_fill_image_binary_ids`,
+/// which is `pub(crate)` and therefore unreachable from the conversion tests
+/// that moved to `hwpforge-convert` (E5). It is consumed by
+/// `supplement_border_fill_image_assets`; this asserts it collects the binary
+/// data id of every image-fill border directly, restoring the assertion that
+/// the E5 move could only leave as a comment in the convert crate.
+#[test]
+fn border_fill_image_binary_ids_collects_image_fill_ids() {
+    use crate::decoder::header::Hwp5DocInfoBorderFillSlot;
+    use crate::schema::border_fill::{
+        Hwp5BorderLineKind, Hwp5FillImageEffect, Hwp5FillImageMode, Hwp5RawBorderFill,
+        Hwp5RawBorderFillFill, Hwp5RawBorderLine, Hwp5RawImageFill,
+    };
+    use crate::style_store::Hwp5StyleStore;
+
+    let none_line =
+        || Hwp5RawBorderLine { kind: Hwp5BorderLineKind::None, width: 0, color: 0x0000_0000 };
+    let image_fill = Hwp5RawBorderFill {
+        property: 0,
+        three_d: false,
+        shadow: false,
+        slash_diagonal_shape: 0,
+        back_slash_diagonal_shape: 0,
+        center_line: false,
+        left: none_line(),
+        right: none_line(),
+        top: none_line(),
+        bottom: none_line(),
+        diagonal: none_line(),
+        fill: Hwp5RawBorderFillFill::Image(Hwp5RawImageFill {
+            mode: Hwp5FillImageMode::TileAll,
+            brightness: 0,
+            contrast: 0,
+            effect: Hwp5FillImageEffect::RealPic,
+            bindata_id: 1,
+            extra_data: Vec::new(),
+        }),
+    };
+    let store = Hwp5StyleStore {
+        id_mappings: None,
+        fonts: vec![],
+        char_shapes: vec![],
+        para_shapes: vec![],
+        numberings: vec![],
+        bullets: vec![],
+        tab_defs: vec![],
+        styles: vec![],
+        border_fills: vec![Hwp5DocInfoBorderFillSlot { id: 4, fill: Some(image_fill) }],
+    };
+
+    assert_eq!(store.border_fill_image_binary_ids().into_iter().collect::<Vec<_>>(), vec![1]);
+}

@@ -83,6 +83,12 @@ pub fn hwp5_to_hwpx(
 pub fn hwp5_to_hwpx_bytes(bytes: &[u8]) -> Hwp5Result<(Vec<u8>, Vec<Hwp5Warning>)> {
     let decoded = decode_hwp5_to_core(bytes)?;
     let (hwpx_style_store, style_warnings) = hwp5_style_store_to_hwpx(&decoded.style_store);
+    // Warning order: decode-phase warnings (intermediate + projection +
+    // border-fill supplement) first, then HWPX style-mapping warnings. This
+    // differs from the pre-E5 monolith (which interleaved style warnings
+    // before projection) — an unavoidable, intentional consequence of moving
+    // style mapping above the decoder. The HWPX *output bytes* are unaffected
+    // (warnings never feed encoding); only the diagnostic Vec order changed.
     let mut warnings = decoded.warnings;
     warnings.extend(style_warnings);
 
