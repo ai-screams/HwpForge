@@ -4,6 +4,9 @@
 //! (parsed records, style tables) into HwpForge Core's `Document<Draft>`
 //! structure, bridging the format-specific layer to the format-agnostic core.
 
+mod shapes;
+mod text;
+
 use std::collections::{BTreeSet, VecDeque};
 
 use hwpforge_core::column::ColumnSettings;
@@ -19,8 +22,8 @@ use hwpforge_core::table::{Table, TableCell, TableMargin, TableRow};
 use hwpforge_core::Control;
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
-    ArcType, BookmarkType, CharShapeIndex, CurveSegmentType, HwpUnit, NumberFormatType,
-    PageNumberPosition, ParaShapeIndex, RefContentType, RefType, StyleIndex,
+    BookmarkType, CharShapeIndex, HwpUnit, NumberFormatType, PageNumberPosition, ParaShapeIndex,
+    RefContentType, RefType, StyleIndex,
 };
 
 use crate::ctrl_ids::{
@@ -30,25 +33,30 @@ use crate::ctrl_ids::{
 };
 use crate::decoder::chart_ole::{extract_chart_payload, ChartOleError};
 use crate::decoder::section::{
-    Hwp5ArcControl, Hwp5ConnectLineControl, Hwp5Control, Hwp5CurveControl, Hwp5EllipseControl,
-    Hwp5EquationControl, Hwp5GroupChild, Hwp5GroupControl, Hwp5ImageControl, Hwp5LineControl,
+    Hwp5Control, Hwp5EquationControl, Hwp5GroupChild, Hwp5GroupControl, Hwp5ImageControl,
     Hwp5MemoControl, Hwp5NestedSubtree, Hwp5OleObjectControl, Hwp5PageBorderFill, Hwp5Paragraph,
-    Hwp5PolygonControl, Hwp5RectControl, Hwp5Table, Hwp5TableCell, Hwp5TextArtControl,
-    Hwp5TextBoxControl, SectionResult,
+    Hwp5Table, Hwp5TableCell, Hwp5TextArtControl, Hwp5TextBoxControl, SectionResult,
 };
 use crate::decoder::Hwp5Warning;
 use crate::error::Hwp5Result;
 use crate::numeric::positive_i32_from_u32;
 use crate::schema::section::Hwp5DutmalControl;
-use crate::schema::section::{
-    Hwp5CharShapeRun, Hwp5PageDef, Hwp5ShapeComponentGeometry, Hwp5ShapePoint,
-};
+use crate::schema::section::{Hwp5CharShapeRun, Hwp5PageDef, Hwp5ShapeComponentGeometry};
 use crate::table_cell_vertical_align::{
     core_table_cell_vertical_align, unknown_hwp5_table_cell_vertical_align_raw,
 };
 use crate::table_page_break::{core_table_page_break, unknown_hwp5_table_page_break_raw};
 use crate::warning_utils::push_projection_fallback;
 use crate::{Hwp5JoinedImageAsset, Hwp5JoinedImageAssetPlan, Hwp5OleAssetPlan};
+
+use self::shapes::{
+    project_arc_run, project_connectline_run, project_curve_run, project_ellipse_run,
+    project_line_run, project_polygon_run, project_rect_run,
+};
+use self::text::{
+    char_shape_at, char_shape_id_at_position, char_shape_id_for_visible_position,
+    hwp_unit_from_u32, split_text_by_runs, utf16_boundaries, utf16_offset_to_byte,
+};
 /// Wire code for the Bookmark `RefType` variant (Wave 12m Phase 2). The
 /// HWP5 `%xrf` Command's N1 slot uses these codes; boundary functions
 /// in this file map them to typed [`RefType`].
@@ -2041,13 +2049,6 @@ fn parse_page_number_control(header_data: &[u8]) -> Option<PageNumber> {
     Some(PageNumber::with_decoration(position, number_format, decoration))
 }
 
-fn char_shape_id_for_visible_position(runs: &[Hwp5CharShapeRun], position: u32) -> u32 {
-    if position == 0 {
-        return char_shape_id_at_position(runs, 0);
-    }
-    char_shape_id_at_position(runs, position.saturating_sub(1))
-}
-
 // ---------------------------------------------------------------------------
 // Text splitting
 // ---------------------------------------------------------------------------
@@ -2142,12 +2143,6 @@ fn project_control_run(
 /// Resolves the char shape at a visible UTF-16 position (task #76 —
 /// shared by every `project_control_run` call site and the point
 /// bookmark / fallback memo drains).
-fn char_shape_at(hwp_para: &Hwp5Paragraph, visible_utf16: u32) -> CharShapeIndex {
-    CharShapeIndex::new(
-        char_shape_id_for_visible_position(&hwp_para.char_shape_runs, visible_utf16) as usize,
-    )
-}
-
 /// Projects a HWP5 IndexMark (찾아보기 표시) control into a Core
 /// `Run` carrying `Control::IndexMark`. The wire's `secondary_units_len
 /// == 0` case is decoded as `None` rather than `Some("")` — 한컴
@@ -2505,124 +2500,6 @@ fn project_endnote_run(
     Run::control(Control::Endnote { inst_id, paragraphs }, CharShapeIndex::new(0))
 }
 
-fn project_line_run(line: &Hwp5LineControl) -> Option<Run> {
-    let projected_start = scale_point_into_geometry(
-        line.start,
-        line.start.x.min(line.end.x),
-        line.start.x.max(line.end.x),
-        line.geometry.width,
-        100,
-        Axis::Horizontal,
-    );
-    let projected_end = scale_point_into_geometry(
-        line.end,
-        line.start.x.min(line.end.x),
-        line.start.x.max(line.end.x),
-        line.geometry.width,
-        100,
-        Axis::Horizontal,
-    );
-    let projected_start_y = scale_point_into_geometry(
-        line.start,
-        line.start.y.min(line.end.y),
-        line.start.y.max(line.end.y),
-        line.geometry.height,
-        100,
-        Axis::Vertical,
-    );
-    let projected_end_y = scale_point_into_geometry(
-        line.end,
-        line.start.y.min(line.end.y),
-        line.start.y.max(line.end.y),
-        line.geometry.height,
-        100,
-        Axis::Vertical,
-    );
-
-    let scaled_start =
-        hwpforge_core::control::ShapePoint { x: projected_start, y: projected_start_y };
-    let scaled_end = hwpforge_core::control::ShapePoint { x: projected_end, y: projected_end_y };
-    let mut control = hwpforge_core::control::Control::line(scaled_start, scaled_end).ok()?;
-    if let Control::Line { horz_offset, vert_offset, .. } = &mut control {
-        *horz_offset = line.geometry.x;
-        *vert_offset = line.geometry.y;
-    }
-    Some(Run::control(control, CharShapeIndex::new(0)))
-}
-
-fn project_rect_run(rect: &Hwp5RectControl) -> Option<Run> {
-    let width = HwpUnit::new(positive_i32_from_u32(rect.geometry.width)?).ok()?;
-    let height = HwpUnit::new(positive_i32_from_u32(rect.geometry.height)?).ok()?;
-    let mut control = hwpforge_core::control::Control::rect(width, height).ok()?;
-    if let Control::Rect { horz_offset, vert_offset, .. } = &mut control {
-        *horz_offset = rect.geometry.x;
-        *vert_offset = rect.geometry.y;
-    }
-    Some(Run::control(control, CharShapeIndex::new(0)))
-}
-
-fn project_polygon_run(polygon: &Hwp5PolygonControl) -> Option<Run> {
-    let vertices = scale_polygon_points(&polygon.points, &polygon.geometry);
-    let mut control = hwpforge_core::control::Control::polygon(vertices).ok()?;
-    if let Control::Polygon { horz_offset, vert_offset, .. } = &mut control {
-        *horz_offset = polygon.geometry.x;
-        *vert_offset = polygon.geometry.y;
-    }
-    Some(Run::control(control, CharShapeIndex::new(0)))
-}
-
-/// Project a plain ellipse. Center/axes are derived from the bounding box
-/// (`Control::ellipse`), which matches how a HWP5 plain ellipse is defined.
-fn project_ellipse_run(ellipse: &Hwp5EllipseControl) -> Option<Run> {
-    let width = HwpUnit::new(positive_i32_from_u32(ellipse.geometry.width)?).ok()?;
-    let height = HwpUnit::new(positive_i32_from_u32(ellipse.geometry.height)?).ok()?;
-    let mut control = hwpforge_core::control::Control::ellipse(width, height);
-    if let Control::Ellipse { horz_offset, vert_offset, .. } = &mut control {
-        *horz_offset = ellipse.geometry.x;
-        *vert_offset = ellipse.geometry.y;
-    }
-    Some(Run::control(control, CharShapeIndex::new(0)))
-}
-
-/// Project an arc. 한컴 stores arcs inside the ellipse (`0x50`) record; we have
-/// verified the `Normal` open-arc shape end to end. Pie/chord arc types and
-/// exact arc-sweep endpoints are a future refinement that needs dedicated
-/// fixtures, so we carry a `Normal` arc sized from the bounding box rather than
-/// guess a sweep we cannot yet validate.
-fn project_arc_run(arc: &Hwp5ArcControl) -> Option<Run> {
-    let width = HwpUnit::new(positive_i32_from_u32(arc.geometry.width)?).ok()?;
-    let height = HwpUnit::new(positive_i32_from_u32(arc.geometry.height)?).ok()?;
-    let mut control = hwpforge_core::control::Control::arc(ArcType::Normal, width, height);
-    if let Control::Arc { horz_offset, vert_offset, .. } = &mut control {
-        *horz_offset = arc.geometry.x;
-        *vert_offset = arc.geometry.y;
-    }
-    Some(Run::control(control, CharShapeIndex::new(0)))
-}
-
-/// Project a curve, scaling its control points into the bounding box like a
-/// polygon and mapping the decoded per-segment type bytes onto the Core enum.
-fn project_curve_run(curve: &Hwp5CurveControl) -> Option<Run> {
-    let vertices = scale_polygon_points(&curve.points, &curve.geometry);
-    let mut control = hwpforge_core::control::Control::curve(vertices).ok()?;
-    if let Control::Curve { horz_offset, vert_offset, segment_types, .. } = &mut control {
-        *horz_offset = curve.geometry.x;
-        *vert_offset = curve.geometry.y;
-        let decoded: Vec<CurveSegmentType> = curve
-            .segment_types
-            .iter()
-            .map(|byte| match byte {
-                0 => CurveSegmentType::Line,
-                _ => CurveSegmentType::Curve,
-            })
-            .collect();
-        if !decoded.is_empty() {
-            *segment_types = decoded;
-        }
-    }
-    Some(Run::control(control, CharShapeIndex::new(0)))
-}
-
 /// Project a TextArt (글맵시). Geometry comes from the owning gso CtrlHeader
 /// (mirroring the ellipse), and the warped-text payload from the `0x5A`
 /// `ShapeTextArt` sub-record. The HWP5 wire stores `text_shape`/`align` as
@@ -2668,60 +2545,6 @@ fn project_text_art_run(text_art: &Hwp5TextArtControl, warnings: &mut Vec<Hwp5Wa
     Run::control(control, CharShapeIndex::new(0))
 }
 
-/// Project a connect line. 한컴 stores it in the same `ShapeComponentLine`
-/// record as a plain line, so endpoints are scaled into the bounding box the
-/// same way; only a straight connector is carried (the source object-link
-/// references have no `<hp:connectLine>` representation).
-fn project_connectline_run(connect_line: &Hwp5ConnectLineControl) -> Option<Run> {
-    let min_x = connect_line.start.x.min(connect_line.end.x);
-    let max_x = connect_line.start.x.max(connect_line.end.x);
-    let min_y = connect_line.start.y.min(connect_line.end.y);
-    let max_y = connect_line.start.y.max(connect_line.end.y);
-    let scaled_start = hwpforge_core::control::ShapePoint {
-        x: scale_point_into_geometry(
-            connect_line.start,
-            min_x,
-            max_x,
-            connect_line.geometry.width,
-            100,
-            Axis::Horizontal,
-        ),
-        y: scale_point_into_geometry(
-            connect_line.start,
-            min_y,
-            max_y,
-            connect_line.geometry.height,
-            100,
-            Axis::Vertical,
-        ),
-    };
-    let scaled_end = hwpforge_core::control::ShapePoint {
-        x: scale_point_into_geometry(
-            connect_line.end,
-            min_x,
-            max_x,
-            connect_line.geometry.width,
-            100,
-            Axis::Horizontal,
-        ),
-        y: scale_point_into_geometry(
-            connect_line.end,
-            min_y,
-            max_y,
-            connect_line.geometry.height,
-            100,
-            Axis::Vertical,
-        ),
-    };
-    let mut control =
-        hwpforge_core::control::Control::connect_line(scaled_start, scaled_end).ok()?;
-    if let Control::ConnectLine { horz_offset, vert_offset, .. } = &mut control {
-        *horz_offset = connect_line.geometry.x;
-        *vert_offset = connect_line.geometry.y;
-    }
-    Some(Run::control(control, CharShapeIndex::new(0)))
-}
-
 /// Project an equation. The HancomEQN script is carried verbatim; the box size
 /// comes from the `eqed` ctrl-header geometry when positive (equations are
 /// always inline, so there is no offset to set).
@@ -2744,54 +2567,6 @@ fn project_equation_run(equation: &Hwp5EquationControl) -> Run {
         }
     }
     Run::control(control, CharShapeIndex::new(0))
-}
-
-#[derive(Debug, Clone, Copy)]
-enum Axis {
-    Horizontal,
-    Vertical,
-}
-
-fn scale_polygon_points(
-    points: &[Hwp5ShapePoint],
-    geometry: &Hwp5ShapeComponentGeometry,
-) -> Vec<hwpforge_core::control::ShapePoint> {
-    let min_x = points.iter().map(|point| point.x).min().unwrap_or(0);
-    let max_x = points.iter().map(|point| point.x).max().unwrap_or(0);
-    let min_y = points.iter().map(|point| point.y).min().unwrap_or(0);
-    let max_y = points.iter().map(|point| point.y).max().unwrap_or(0);
-
-    points
-        .iter()
-        .map(|point| hwpforge_core::control::ShapePoint {
-            x: scale_point_into_geometry(*point, min_x, max_x, geometry.width, 1, Axis::Horizontal),
-            y: scale_point_into_geometry(*point, min_y, max_y, geometry.height, 1, Axis::Vertical),
-        })
-        .collect()
-}
-
-fn scale_point_into_geometry(
-    point: Hwp5ShapePoint,
-    raw_min: i32,
-    raw_max: i32,
-    geometry_span: u32,
-    minimum_target_span: i32,
-    axis: Axis,
-) -> i32 {
-    let raw_span = i64::from(raw_max) - i64::from(raw_min);
-    let target_span =
-        i64::from(i32::try_from(geometry_span).unwrap_or(i32::MAX).max(minimum_target_span));
-    if raw_span <= 0 {
-        return 0;
-    }
-
-    let raw_value = match axis {
-        Axis::Horizontal => point.x,
-        Axis::Vertical => point.y,
-    };
-    let relative = i64::from(raw_value) - i64::from(raw_min);
-    let scaled = (relative * target_span + (raw_span / 2)) / raw_span;
-    i32::try_from(scaled).unwrap_or(i32::MAX)
 }
 
 fn project_text_segment(
@@ -2828,25 +2603,6 @@ fn project_text_segment(
     split_text_by_runs(segment, &segment_runs)
 }
 
-fn char_shape_id_at_position(runs: &[Hwp5CharShapeRun], position: u32) -> u32 {
-    // `runs` is sorted ascending by `position` (the same invariant the prior
-    // linear `take_while(...).last()` relied on). `partition_point` finds the
-    // index of the first run whose `position > position`, so `runs[..idx]` is
-    // exactly the prefix the old `take_while` accepted — the last of which is
-    // the active char shape. O(log R) instead of O(R).
-    //
-    // Equivalence with the old `take_while` holds only while this ascending
-    // invariant holds; assert it in debug builds so a future decoder change
-    // emitting unsorted runs is caught instead of silently returning a wrong
-    // char shape.
-    debug_assert!(
-        runs.windows(2).all(|w| w[0].position <= w[1].position),
-        "char_shape_runs must be ascending by position for partition_point lookup",
-    );
-    let idx = runs.partition_point(|run| run.position <= position);
-    runs[..idx].last().map(|run| run.char_shape_id).unwrap_or(0)
-}
-
 fn core_image_format(format: &crate::Hwp5SemanticImageFormat) -> ImageFormat {
     match format {
         crate::Hwp5SemanticImageFormat::Png => ImageFormat::Png,
@@ -2856,73 +2612,6 @@ fn core_image_format(format: &crate::Hwp5SemanticImageFormat) -> ImageFormat {
         crate::Hwp5SemanticImageFormat::Wmf => ImageFormat::Wmf,
         crate::Hwp5SemanticImageFormat::Emf => ImageFormat::Emf,
         crate::Hwp5SemanticImageFormat::Unknown(value) => ImageFormat::Unknown(value.clone()),
-    }
-}
-
-fn hwp_unit_from_u32(value: u32) -> HwpUnit {
-    i32::try_from(value).ok().and_then(|signed| HwpUnit::new(signed).ok()).unwrap_or(HwpUnit::ZERO)
-}
-
-/// Split paragraph text into runs according to `char_shape_runs`.
-///
-/// Each run entry marks the starting character position (as a UTF-16
-/// code-unit index) of a new character shape. For simplicity this
-/// implementation treats the positions as Unicode scalar-value indices,
-/// which is accurate for all-ASCII or all-Korean text.
-fn split_text_by_runs(text: &str, runs: &[Hwp5CharShapeRun]) -> Vec<Run> {
-    if text.is_empty() && runs.is_empty() {
-        return vec![];
-    }
-    if runs.is_empty() {
-        return vec![Run::text(text, CharShapeIndex::new(0))];
-    }
-
-    let boundaries = utf16_boundaries(text);
-    let mut result: Vec<Run> = Vec::with_capacity(runs.len());
-
-    for (i, run) in runs.iter().enumerate() {
-        let start = utf16_offset_to_byte(&boundaries, run.position);
-        let end = if i + 1 < runs.len() {
-            utf16_offset_to_byte(&boundaries, runs[i + 1].position)
-        } else {
-            text.len()
-        };
-
-        if start >= text.len() {
-            break;
-        }
-        let end = end.min(text.len());
-        let segment = &text[start..end];
-        if !segment.is_empty() {
-            result.push(Run::text(segment, CharShapeIndex::new(run.char_shape_id as usize)));
-        }
-    }
-
-    if result.is_empty() {
-        result.push(Run::text(text, CharShapeIndex::new(0)));
-    }
-    result
-}
-
-fn utf16_boundaries(text: &str) -> Vec<(u32, usize)> {
-    let mut boundaries = Vec::with_capacity(text.chars().count() + 1);
-    let mut utf16_offset = 0u32;
-
-    for (byte_idx, ch) in text.char_indices() {
-        boundaries.push((utf16_offset, byte_idx));
-        utf16_offset += ch.len_utf16() as u32;
-    }
-    boundaries.push((utf16_offset, text.len()));
-    boundaries
-}
-
-fn utf16_offset_to_byte(boundaries: &[(u32, usize)], utf16_offset: u32) -> usize {
-    match boundaries.binary_search_by_key(&utf16_offset, |(offset, _)| *offset) {
-        Ok(idx) => boundaries[idx].1,
-        Err(idx) => boundaries
-            .get(idx)
-            .map(|(_, byte_idx)| *byte_idx)
-            .unwrap_or_else(|| boundaries.last().map(|(_, byte_idx)| *byte_idx).unwrap_or(0)),
     }
 }
 
@@ -3224,130 +2913,6 @@ mod tests {
         assert_eq!(pn.decoration, "-", "property byte must not be read as decoration");
     }
 
-    fn zero_geometry() -> crate::schema::section::Hwp5ShapeComponentGeometry {
-        crate::schema::section::Hwp5ShapeComponentGeometry { x: 0, y: 0, width: 100, height: 100 }
-    }
-
-    fn shape_point(x: i32, y: i32) -> crate::schema::section::Hwp5ShapePoint {
-        crate::schema::section::Hwp5ShapePoint { x, y }
-    }
-
-    #[test]
-    fn project_line_run_returns_none_for_degenerate_start_equals_end() {
-        // A degenerate line (start == end) cannot form a valid Core line; the
-        // projection must return None instead of panicking via .expect(). The
-        // single point makes the scaled start/end coincide so
-        // `Control::line` rejects it.
-        let line = crate::decoder::section::Hwp5LineControl {
-            ctrl_id: 0,
-            geometry: zero_geometry(),
-            start: shape_point(50, 50),
-            end: shape_point(50, 50),
-        };
-        assert!(
-            project_line_run(&line).is_none(),
-            "degenerate line (start == end) must project to None, not panic",
-        );
-    }
-
-    #[test]
-    fn project_line_run_returns_some_for_valid_line() {
-        // Regression: a non-degenerate line still projects successfully.
-        let line = crate::decoder::section::Hwp5LineControl {
-            ctrl_id: 0,
-            geometry: zero_geometry(),
-            start: shape_point(0, 0),
-            end: shape_point(100, 100),
-        };
-        assert!(project_line_run(&line).is_some(), "valid line must still project to Some");
-    }
-
-    #[test]
-    fn project_polygon_run_returns_none_for_too_few_vertices() {
-        // A polygon needs >= 3 vertices. With 2 points `Control::polygon`
-        // rejects the shape, so the projection must return None rather than
-        // panicking via .expect().
-        let polygon = crate::decoder::section::Hwp5PolygonControl {
-            ctrl_id: 0,
-            geometry: zero_geometry(),
-            points: vec![shape_point(0, 0), shape_point(100, 0)],
-        };
-        assert!(
-            project_polygon_run(&polygon).is_none(),
-            "polygon with < 3 vertices must project to None, not panic",
-        );
-    }
-
-    #[test]
-    fn project_polygon_run_returns_some_for_valid_polygon() {
-        // Regression: a valid 3-vertex polygon still projects successfully.
-        let polygon = crate::decoder::section::Hwp5PolygonControl {
-            ctrl_id: 0,
-            geometry: zero_geometry(),
-            points: vec![shape_point(0, 0), shape_point(100, 0), shape_point(50, 100)],
-        };
-        assert!(
-            project_polygon_run(&polygon).is_some(),
-            "valid polygon must still project to Some"
-        );
-    }
-
-    /// Reference (pre-optimization) linear implementation of
-    /// `char_shape_id_at_position`, kept here so the table test below proves
-    /// the `partition_point` rewrite is behaviorally identical.
-    fn char_shape_id_at_position_linear(runs: &[Hwp5CharShapeRun], position: u32) -> u32 {
-        runs.iter()
-            .take_while(|run| run.position <= position)
-            .last()
-            .map(|run| run.char_shape_id)
-            .unwrap_or(0)
-    }
-
-    fn char_run(position: u32, char_shape_id: u32) -> Hwp5CharShapeRun {
-        Hwp5CharShapeRun { position, char_shape_id }
-    }
-
-    #[test]
-    fn char_shape_id_at_position_matches_linear_reference() {
-        // Sorted-ascending runs (the invariant the lookup relies on).
-        let runs = [char_run(0, 10), char_run(5, 20), char_run(12, 30)];
-        let empty: [Hwp5CharShapeRun; 0] = [];
-
-        // Boundary table: before-first, exact starts, between, past-last, and
-        // the empty-slice case. Each row asserts new == old reference.
-        let cases = [0u32, 1, 4, 5, 6, 11, 12, 13, 1000];
-        for &pos in &cases {
-            assert_eq!(
-                char_shape_id_at_position(&runs, pos),
-                char_shape_id_at_position_linear(&runs, pos),
-                "non-empty mismatch at position {pos}",
-            );
-        }
-
-        // Empty slice → 0 in both implementations.
-        assert_eq!(char_shape_id_at_position(&empty, 0), 0);
-        assert_eq!(
-            char_shape_id_at_position(&empty, 0),
-            char_shape_id_at_position_linear(&empty, 0),
-        );
-
-        // Spot-check the actual expected values (not just equivalence).
-        assert_eq!(char_shape_id_at_position(&runs, 0), 10, "exact first start");
-        assert_eq!(char_shape_id_at_position(&runs, 4), 10, "before second start");
-        assert_eq!(char_shape_id_at_position(&runs, 5), 20, "exact second start");
-        assert_eq!(char_shape_id_at_position(&runs, 11), 20, "before third start");
-        assert_eq!(char_shape_id_at_position(&runs, 12), 30, "exact third start");
-        assert_eq!(char_shape_id_at_position(&runs, 1000), 30, "past last start");
-
-        // A run that starts after 0 leaves positions before it unattributed → 0.
-        let gapped = [char_run(3, 99)];
-        assert_eq!(char_shape_id_at_position(&gapped, 0), 0, "position before first run");
-        assert_eq!(
-            char_shape_id_at_position(&gapped, 0),
-            char_shape_id_at_position_linear(&gapped, 0),
-        );
-    }
-
     use std::collections::BTreeMap;
 
     use hwpforge_core::table::TablePageBreak;
@@ -3396,10 +2961,6 @@ mod tests {
             column_def: None,
             warnings: vec![],
         }
-    }
-
-    fn hwp5_char_run(position: u32, char_shape_id: u32) -> Hwp5CharShapeRun {
-        Hwp5CharShapeRun { position, char_shape_id }
     }
 
     fn image_plan<'a>(
@@ -3912,73 +3473,6 @@ mod tests {
         let section = make_section(vec![make_paragraph("x", 0, 0)], None);
         let (doc, _) = project_to_core(vec![section]).unwrap();
         assert_eq!(doc.sections()[0].page_settings, PageSettings::a4());
-    }
-
-    // ── split_text_by_runs ────────────────────────────────────────────────────
-
-    #[test]
-    fn split_empty_text_empty_runs() {
-        let result = split_text_by_runs("", &[]);
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn split_text_no_runs_returns_single_run() {
-        let result = split_text_by_runs("Hello", &[]);
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].content.as_text(), Some("Hello"));
-        assert_eq!(result[0].char_shape_id, CharShapeIndex::new(0));
-    }
-
-    #[test]
-    fn split_single_run_covers_all_text() {
-        let runs = vec![hwp5_char_run(0, 7)];
-        let result = split_text_by_runs("Hello", &runs);
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].content.as_text(), Some("Hello"));
-        assert_eq!(result[0].char_shape_id, CharShapeIndex::new(7));
-    }
-
-    #[test]
-    fn split_two_runs() {
-        // "HelloWorld" split at position 5
-        let runs = vec![hwp5_char_run(0, 2), hwp5_char_run(5, 3)];
-        let result = split_text_by_runs("HelloWorld", &runs);
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0].content.as_text(), Some("Hello"));
-        assert_eq!(result[0].char_shape_id, CharShapeIndex::new(2));
-        assert_eq!(result[1].content.as_text(), Some("World"));
-        assert_eq!(result[1].char_shape_id, CharShapeIndex::new(3));
-    }
-
-    #[test]
-    fn split_run_start_beyond_text_length_ignored() {
-        // Run starting at position 100 in a 5-char string → ignored.
-        let runs = vec![hwp5_char_run(0, 1), hwp5_char_run(100, 2)];
-        let result = split_text_by_runs("Hello", &runs);
-        assert_eq!(result.len(), 1);
-        assert_eq!(result[0].content.as_text(), Some("Hello"));
-        assert_eq!(result[0].char_shape_id, CharShapeIndex::new(1));
-    }
-
-    #[test]
-    fn split_korean_text_by_runs() {
-        // "안녕하세요" = 5 chars; split at char 2
-        let runs = vec![hwp5_char_run(0, 10), hwp5_char_run(2, 11)];
-        let result = split_text_by_runs("안녕하세요", &runs);
-        assert_eq!(result.len(), 2);
-        assert_eq!(result[0].content.as_text(), Some("안녕"));
-        assert_eq!(result[1].content.as_text(), Some("하세요"));
-    }
-
-    #[test]
-    fn split_text_by_utf16_code_units_handles_surrogate_pairs() {
-        let runs = vec![hwp5_char_run(0, 1), hwp5_char_run(1, 2), hwp5_char_run(3, 3)];
-        let result = split_text_by_runs("A😀B", &runs);
-        assert_eq!(result.len(), 3);
-        assert_eq!(result[0].content.as_text(), Some("A"));
-        assert_eq!(result[1].content.as_text(), Some("😀"));
-        assert_eq!(result[2].content.as_text(), Some("B"));
     }
 
     // ── table controls ────────────────────────────────────────────────────────
