@@ -1,0 +1,28 @@
+[package]
+name = "hwpforge-convert"
+version.workspace = true
+authors.workspace = true
+categories.workspace = true
+documentation.workspace = true
+edition.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+license.workspace = true
+publish = false
+readme.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+description = "Cross-format conversion orchestrator for HwpForge (HWP5 -> HWPX)"
+
+[dependencies]
+hwpforge-blueprint = { path = "../hwpforge-blueprint", version = "0.7.0" }
+hwpforge-core = { path = "../hwpforge-core", version = "0.7.0" }
+hwpforge-foundation = { path = "../hwpforge-foundation", version = "0.7.0" }
+hwpforge-smithy-hwp5 = { path = "../hwpforge-smithy-hwp5", version = "0.7.0" }
+hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0.7.0" }
+quick-xml = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }

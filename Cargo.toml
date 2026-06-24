@@ -5,6 +5,7 @@ members = [
   "crates/hwpforge-bindings-mcp",
   "crates/hwpforge-bindings-py",
   "crates/hwpforge-blueprint",
+  "crates/hwpforge-convert",
   "crates/hwpforge-core",
   "crates/hwpforge-foundation",
   "crates/hwpforge-smithy-hwp5",
