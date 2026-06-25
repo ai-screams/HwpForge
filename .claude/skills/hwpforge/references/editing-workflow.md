@@ -1,149 +1,162 @@
 # JSON Round-Trip Editing Workflow
 
-## When to Use
+Edit an existing HWPX by exporting it to JSON, changing the JSON, and writing it back.
+Use this (NOT Markdown conversion) when you must preserve images, styles, tables, and layout.
 
-Use JSON round-trip editing (NOT Markdown conversion) when:
+## Two edit modes — choose correctly
 
-- Preserving images, charts, and embedded objects
-- Surgical edits to specific sections
-- Maintaining exact style and formatting
+| Mode          | Command            | Use for                                                                                     | Limit                                                                                 |
+| ------------- | ------------------ | ------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| **Text-only** | `patch`            | changing text inside existing paragraphs and **table cells** (fill placeholders, fix typos) | **cannot** add/remove paragraphs — returns `PATCH_FAILED: structural change detected` |
+| **Rebuild**   | `from-json --base` | adding/removing paragraphs, structural edits                                                | rebuilds from the model; complex 한컴 form elements may be lost (verify in 한컴)      |
 
-Use Markdown conversion when:
+If you only change existing text → `patch` (safest, preserves everything exactly).
+If you add or remove paragraphs → `from-json --base`.
 
-- Creating a new document from scratch
-- Full content replacement is acceptable
+## Step-by-step
 
-## Step-by-Step Workflow
-
-### 1. Inspect — Understand Structure
+### 1. Inspect — understand structure (always first)
 
 ```bash
 hwpforge inspect document.hwpx --json
 ```
 
-Returns section count, paragraph counts, table/image/chart locations, and style info.
+Returns section count, per-section paragraph counts, and table/image/chart locations.
 
-### 2. Export — Extract Target Section
+### 2. Export to JSON
 
 ```bash
-# Export specific section (0-indexed)
-hwpforge to-json document.hwpx --section 0 -o section0.json
-
-# Export full document
-hwpforge to-json document.hwpx -o full.json
-
-# Without styles (smaller JSON)
-hwpforge to-json document.hwpx --section 0 --no-styles -o section0.json
+hwpforge to-json document.hwpx --section 0 -o section0.json   # one section (for patch)
+hwpforge to-json document.hwpx -o full.json                   # whole document (for rebuild)
+hwpforge to-json document.hwpx --section 0 --no-styles -o section0.json  # smaller JSON
 ```
 
-### 3. Modify — Edit the JSON
+`-o/--output` is **required** — there is no stdout export.
 
-The exported JSON follows the `ExportedSection` schema:
+### 3. Edit the JSON
 
-```json
+Section export (`--section`) follows `ExportedSection`:
+
+```jsonc
 {
   "section_index": 0,
   "section": {
     "paragraphs": [
       {
         "runs": [
-          {
-            "content": { "Text": "본문 텍스트입니다." },
-            "char_shape_id": 0
-          }
+          { "content": { "Text": "본문 텍스트입니다." }, "char_shape_id": 7 },
         ],
-        "para_shape_id": 0,
+        "para_shape_id": 20,
         "column_break": false,
         "page_break": false,
-        "style_id": 0
-      }
-    ]
+        // "style_id" and "heading_level" are OPTIONAL — present only on some paragraphs
+      },
+    ],
   },
-  "styles": { ... }
+  "styles": {},
 }
 ```
 
-**Editable fields:**
+Full export (no `--section`) follows `ExportedDocument`: `{ "document": { "sections": [ … ] }, "styles": { } }`
+where each section has the same `paragraphs` shape.
 
-- `section.paragraphs[].runs[].content` — change text (e.g., `{"Text": "new text"}`)
-- `section.paragraphs[].runs[].char_shape_id` — reference a different char shape
-- `section.paragraphs[].para_shape_id` — reference a different paragraph shape
-- Add/remove entire paragraphs in `section.paragraphs`
-- Add/remove runs within a paragraph
+**Safe to edit:**
 
-**Read-only fields (do not modify):**
+- `…runs[].content.Text` — the visible text (text-only edits work with `patch`)
+- `…runs[].char_shape_id`, `…para_shape_id` — but only to **IDs that already exist** in this document
+- Table cell text: `…content.Table.rows[].cells[].paragraphs[].runs[].content.Text`
 
-- `styles` — style registry (modify via presets instead)
-- `section_index` — must match the `--section` argument in patch
-- `style_id`, `char_shape_id`, `para_shape_id` — only change to existing valid IDs
+**Do not:**
 
-### 4. Patch — Write Changes Back
+- Invent new `char_shape_id` / `para_shape_id` / `style_id` values — copy from a neighboring paragraph
+- Hand-edit the `styles` registry — change styles via `--preset` instead
+- Change `section_index` — it must match the `--section` argument in `patch`
 
-```bash
-# Replace section 0
-hwpforge patch document.hwpx --section 0 section0.json -o updated.hwpx
-
-# The first argument (base HWPX) provides image/style inheritance
-hwpforge patch original.hwpx --section 0 section0.json -o updated.hwpx
-```
-
-The first positional argument is the base HWPX file. The patch command inherits binary resources (images, OLE objects) from it.
-
-### 5. Verify — Confirm Result
+### 4a. Write back — text-only (`patch`)
 
 ```bash
-hwpforge inspect updated.hwpx --json
+hwpforge patch document.hwpx --section 0 section0.json -o document.hwpx
 ```
 
-Compare section counts, paragraph counts, and table/image counts with the original.
+`patch` **replaces the entire section**, so `section0.json` must contain ALL existing paragraphs
+plus your edits (read-modify-write the full section, not a delta). The first positional argument
+(base HWPX) supplies image/OLE inheritance. If you added or removed paragraphs, `patch` fails with
+`structural change detected` → use 4b instead.
 
-## JSON Schema
-
-Get the full schema for programmatic validation:
+### 4b. Write back — structural rebuild (`from-json --base`)
 
 ```bash
-# ExportedDocument schema (full document)
-hwpforge schema exported-document
-
-# ExportedSection schema (single section)
-hwpforge schema exported-section
+hwpforge from-json full.json -o document.hwpx --base document.hwpx
 ```
 
-## Common Edit Patterns
+Use after adding/removing paragraphs. `--base` inherits images from the original.
 
-### Replace text in a paragraph
+### 5. Verify
+
+```bash
+hwpforge inspect document.hwpx        # paragraph/table counts as expected?
+hwpforge to-md document.hwpx -o check.md   # eyeball the content
+```
+
+## Common patterns
+
+### Replace text in a paragraph (text-only → patch)
 
 ```python
-# Find paragraph by text content
 for para in data["section"]["paragraphs"]:
-    for run in para["runs"]:
-        content = run.get("content", {})
-        if "Text" in content and "기존 텍스트" in content["Text"]:
-            run["content"]["Text"] = content["Text"].replace("기존 텍스트", "새 텍스트")
+    for run in para.get("runs", []):
+        c = run.get("content", {})
+        if "Text" in c and "기존 텍스트" in c["Text"]:
+            c["Text"] = c["Text"].replace("기존 텍스트", "새 텍스트")
 ```
 
-### Add a new paragraph
+### Fill a table cell (text-only → patch)
 
 ```python
-existing = data["section"]["paragraphs"][0]
+for para in data["section"]["paragraphs"]:
+    for run in para.get("runs", []):
+        tbl = run.get("content", {}).get("Table")
+        if not tbl:
+            continue
+        for row in tbl["rows"]:
+            for cell in row["cells"]:
+                for cp in cell["paragraphs"]:
+                    for cr in cp["runs"]:
+                        c = cr.get("content", {})
+                        if c.get("Text") == "(작성)":
+                            c["Text"] = "100,000"
+```
+
+### Add a new paragraph (structural → from-json --base)
+
+```python
+# Operate on the FULL document JSON (to-json without --section)
+paras = data["document"]["sections"][0]["paragraphs"]
+ref = paras[-1]  # copy a neighboring paragraph's style references
 new_para = {
-    "runs": [{"content": {"Text": "추가할 내용입니다."}}],
-    "para_shape": existing["para_shape"]  # copy existing style
+    "runs": [{"content": {"Text": "추가할 내용입니다."},
+              "char_shape_id": ref["runs"][0]["char_shape_id"]}],
+    "para_shape_id": ref["para_shape_id"],
+    "column_break": False,
+    "page_break": False,
 }
-data["section"]["paragraphs"].append(new_para)
+if "style_id" in ref:        # optional — copy only if present
+    new_para["style_id"] = ref["style_id"]
+paras.append(new_para)
+# then: hwpforge from-json full.json -o document.hwpx --base document.hwpx
 ```
 
-### Delete a paragraph
+## Schema
 
-```python
-# Remove paragraph at index 2
-del data["section"]["paragraphs"][2]
+```bash
+hwpforge schema exported-document    # full-document JSON shape
+hwpforge schema exported-section     # single-section JSON shape
 ```
 
 ## Tips
 
-- Always inspect before editing to understand the document structure
-- Use `--section N` to minimize JSON size (token efficiency)
-- Back up the original file before patching
-- The first positional argument (base HWPX) preserves binary resources (images)
-- Verify the output with `inspect` after patching
+- Inspect before, verify after.
+- Use `--section N` to minimize JSON size (token efficiency) for text-only edits.
+- Back up the original before writing.
+- Government / 한컴-authored templates: prefer `patch` (preserves everything); if you must
+  rebuild, open the result in 한컴 and check it before submitting.

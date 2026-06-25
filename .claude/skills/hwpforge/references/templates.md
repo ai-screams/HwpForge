@@ -1,42 +1,40 @@
 # Style Templates (Presets)
 
+A preset is a built-in style set (fonts, sizes, page setup). `hwpforge templates list`
+catalogs four, but **`convert --preset` currently resolves only `default`** — the others
+return `UNKNOWN_PRESET` from `convert` today (catalogued/inspectable, not yet selectable).
+
 ## Available Presets
 
-| Preset       | Use Case    | 본문 글꼴       | Status    |
-| ------------ | ----------- | --------------- | --------- |
-| `default`    | 범용 문서   | 함초롬돋움 10pt | Available |
-| `government` | 정부 제안서 | —               | Planned   |
-| `report`     | 연구 보고서 | —               | Planned   |
-| `official`   | 공문서      | —               | Planned   |
+| Preset    | 본문 글꼴       | 용지 | `convert --preset` | 설명                    |
+| --------- | --------------- | ---- | ------------------ | ----------------------- |
+| `default` | 함초롬돋움 10pt | A4   | ✅ 사용 가능       | 한컴 Modern 기본 스타일 |
+| `modern`  | 맑은 고딕       | A4   | ❌ UNKNOWN_PRESET  | 깔끔한 현대적 스타일    |
+| `classic` | 바탕            | A4   | ❌ UNKNOWN_PRESET  | 전통적 문서 스타일      |
+| `latest`  | 함초롬바탕 10pt | A4   | ❌ UNKNOWN_PRESET  | 최신 한컴 스타일        |
+
+> For `convert`, use `default`. The other three appear in `templates list`/`show` but are not
+> wired into `convert` yet — do not pass them to `--preset` (it will error).
 
 ## Commands
 
-### List presets
-
 ```bash
-# Human-readable
-hwpforge templates list
-
-# JSON output
-hwpforge templates list --json
+hwpforge templates list            # human-readable list
+hwpforge templates list --json     # machine-readable
+hwpforge templates show default    # one preset's details
+hwpforge templates show modern --json
 ```
 
-### Show preset details
+## Using a preset
 
-```bash
-hwpforge templates show default
-hwpforge templates show default --json
-```
-
-## Using Presets
-
-### In CLI convert command
+CLI flag (takes precedence over frontmatter). Use `default` — it is the only value `convert`
+resolves today:
 
 ```bash
 hwpforge convert input.md -o output.hwpx --preset default
 ```
 
-### In YAML frontmatter
+YAML frontmatter:
 
 ```yaml
 ---
@@ -45,34 +43,6 @@ preset: default
 ---
 ```
 
-The `--preset` CLI flag takes precedence over the frontmatter `preset` field.
-
-## Preset Details
-
-### default (Available)
-
-General-purpose template using 한컴 Modern style set.
-
-- 본문: 함초롬돋움 10pt
-- 용지: A4 세로
-
-### government (Planned)
-
-Optimized for Korean government RFP proposals and tenders.
-
-### report (Planned)
-
-Designed for research reports and analysis documents.
-
-### official (Planned)
-
-For administrative correspondence and formal notices.
-
-## Choosing a Preset
-
-| Document Type             | Recommended Preset     |
-| ------------------------- | ---------------------- |
-| 기타 일반 문서            | `default`              |
-| 정부 제안서 / RFP 대응    | `government` (planned) |
-| 연구 보고서 / 분석 보고서 | `report` (planned)     |
-| 공문서 / 안내문 / 협조전  | `official` (planned)   |
+> Presets set styles for **new** documents created with `convert`. When editing an existing
+> document via JSON round-trip, the document keeps its own styles — do not expect a preset to
+> restyle an existing file. See [editing-workflow.md](editing-workflow.md).

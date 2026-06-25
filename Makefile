@@ -1,4 +1,4 @@
-.PHONY: help install-tools check test test-ci clippy fmt fmt-fix lint-md lint-md-fix doc cov deny machete msrv ci ci-fast ci-full clean audit-hwp5 audit-hwp5-baseline audit-hwp5-gate
+.PHONY: help install-tools check test test-ci clippy fmt fmt-fix lint-md lint-md-fix doc cov deny machete msrv ci ci-fast ci-full clean audit-hwp5 audit-hwp5-baseline audit-hwp5-gate skill-test
 
 AUDIT_HWP5_FIXTURE_DIRS ?= tests/fixtures crates/hwpforge-smithy-hwp5/tests/fixtures crates/hwpforge-smithy-hwpx/tests/fixtures
 AUDIT_HWP5_BASELINE   ?= .audit/hwp5_baseline.json
@@ -138,6 +138,9 @@ audit-hwp5-baseline: audit-hwp5
 
 audit-hwp5-gate: audit-hwp5
 	python3 scripts/audit_hwp5_gate.py --baseline $(AUDIT_HWP5_BASELINE) --current $(AUDIT_HWP5_CURRENT)
+
+skill-test:
+	bash scripts/skill-smoke.sh
 
 clean:
 	cargo clean
