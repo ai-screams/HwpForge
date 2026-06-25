@@ -605,4 +605,235 @@ mod tests {
         assert!(patched.contains(r#"height="7777""#));
         assert!(!patched.contains(r#"height="0""#));
     }
+
+    // ── has_payload = false → patch_hwpx_layout_hints skips the section ────────
+
+    #[test]
+    fn patch_hwpx_layout_hints_skips_section_with_no_payload() {
+        // A section with empty paragraphs and tables has has_payload()=false.
+        // The patcher must skip it entirely — no "missing stream" error even
+        // when the ZIP does not contain that section file.
+        let zip = make_zip(&[("Contents/section0.xml", b"<sec/>")]);
+
+        let sections = vec![
+            SectionLayoutHints { paragraphs: VecDeque::new(), tables: VecDeque::new() }, // no payload → skip
+        ];
+
+        // Must not error even though there is no "Contents/section0.xml" to
+        // read — has_payload=false means we never attempt to read it.
+        let result = patch_hwpx_layout_hints(&zip, &sections);
+        assert!(result.is_ok(), "no-payload section must be skipped: {result:?}");
+    }
+
+    // ── read_text_entry errors on missing path ─────────────────────────────────
+
+    #[test]
+    fn read_text_entry_returns_error_for_missing_path() {
+        let zip = make_zip(&[("Contents/section0.xml", b"<sec/>")]);
+        let pkg = RawPackage::read(&zip).expect("parse zip");
+        let err = pkg.read_text_entry("Contents/section99.xml").unwrap_err();
+        assert!(
+            err.to_string().contains("section99"),
+            "error must mention the missing path: {err}"
+        );
+    }
+
+    // ── replace_text_entry is a no-op for an absent path ─────────────────────
+
+    #[test]
+    fn replace_text_entry_is_noop_for_absent_path() {
+        let zip = make_zip(&[("Contents/section0.xml", b"<sec/>")]);
+        let mut pkg = RawPackage::read(&zip).expect("parse zip");
+        let before = pkg.entries.len();
+        // This path does not exist — must not panic or add an entry.
+        pkg.replace_text_entry("Contents/section99.xml", "<new/>".into());
+        assert_eq!(pkg.entries.len(), before, "entry count must be unchanged");
+    }
+
+    // ── handle_empty exercises the Event::Empty branch ───────────────────────
+
+    #[test]
+    fn patch_section_xml_processes_self_closing_elements() {
+        // A self-closing element (not <hp:p> or <hp:tbl>) must pass through
+        // unchanged, exercising the handle_empty code path.
+        let xml = concat!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>"#,
+            r#"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">"#,
+            r#"<hp:p id="0" paraPrIDRef="0" styleIDRef="0"><hp:run charPrIDRef="0"><hp:foo/><hp:t>hi</hp:t></hp:run></hp:p>"#,
+            r#"</hs:sec>"#
+        );
+
+        let hints = SectionLayoutHints {
+            paragraphs: VecDeque::from(vec![ParagraphLayoutHint {
+                line_segments: vec![line_segment(0, 0, 1000)],
+            }]),
+            tables: VecDeque::new(),
+        };
+
+        let patched = patch_section_xml(xml, hints).expect("must patch");
+        // The self-closing <hp:foo/> element must be preserved.
+        assert!(patched.contains("hp:foo"), "self-closing element must survive patching");
+    }
+
+    // ── finish errors when unconsumed paragraph hints remain ─────────────────
+
+    #[test]
+    fn finish_errors_when_paragraph_hints_remain_unconsumed() {
+        // Two hints for a section with only one <hp:p> → finish() must error.
+        let xml = concat!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>"#,
+            r#"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">"#,
+            r#"<hp:p id="0" paraPrIDRef="0" styleIDRef="0"><hp:run charPrIDRef="0"><hp:t>X</hp:t></hp:run></hp:p>"#,
+            r#"</hs:sec>"#
+        );
+
+        let hints = SectionLayoutHints {
+            paragraphs: VecDeque::from(vec![
+                ParagraphLayoutHint { line_segments: vec![line_segment(0, 0, 1000)] },
+                ParagraphLayoutHint { line_segments: vec![line_segment(0, 0, 1000)] }, // surplus
+            ]),
+            tables: VecDeque::new(),
+        };
+
+        let err = patch_section_xml(xml, hints).unwrap_err();
+        assert!(
+            err.to_string().contains("unconsumed hints"),
+            "must error on unconsumed hints: {err}"
+        );
+    }
+
+    // ── paragraph hint underflow ──────────────────────────────────────────────
+
+    #[test]
+    fn patch_section_xml_errors_on_paragraph_hint_underflow() {
+        // Zero hints for a section with one <hp:p> → push_paragraph_hint underflow.
+        let xml = concat!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>"#,
+            r#"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">"#,
+            r#"<hp:p id="0" paraPrIDRef="0" styleIDRef="0"><hp:run charPrIDRef="0"><hp:t>X</hp:t></hp:run></hp:p>"#,
+            r#"</hs:sec>"#
+        );
+
+        let hints = SectionLayoutHints { paragraphs: VecDeque::new(), tables: VecDeque::new() };
+
+        let err = patch_section_xml(xml, hints).unwrap_err();
+        assert!(
+            err.to_string().contains("underflow"),
+            "must error on paragraph hint underflow: {err}"
+        );
+    }
+
+    // ── table hint underflow ──────────────────────────────────────────────────
+
+    #[test]
+    fn patch_section_xml_errors_on_table_hint_underflow() {
+        // A section with a table but zero table hints → push_table_hint underflow.
+        let xml = concat!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>"#,
+            r#"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">"#,
+            r#"<hp:p id="0" paraPrIDRef="0" styleIDRef="0"><hp:run charPrIDRef="0">"#,
+            r#"<hp:tbl id="1" rowCnt="1" colCnt="1" cellSpacing="0" borderFillIDRef="2">"#,
+            r#"<hp:sz width="1000" widthRelTo="ABSOLUTE" height="0" heightRelTo="ABSOLUTE" protect="0"/>"#,
+            r#"<hp:tr><hp:tc borderFillIDRef="2"><hp:subList>"#,
+            r#"<hp:p id="1" paraPrIDRef="0" styleIDRef="0"><hp:run charPrIDRef="0"><hp:t>C</hp:t></hp:run></hp:p>"#,
+            r#"</hp:subList></hp:tc></hp:tr></hp:tbl></hp:run></hp:p>"#,
+            r#"</hs:sec>"#
+        );
+
+        let hints = SectionLayoutHints {
+            paragraphs: VecDeque::from(vec![
+                ParagraphLayoutHint { line_segments: vec![line_segment(0, 0, 1000)] },
+                ParagraphLayoutHint { line_segments: vec![line_segment(0, 0, 1000)] },
+            ]),
+            tables: VecDeque::new(), // no table hints → underflow
+        };
+
+        let err = patch_section_xml(xml, hints).unwrap_err();
+        assert!(err.to_string().contains("underflow"), "must error on table hint underflow: {err}");
+    }
+
+    // ── pop_element stack underflow ───────────────────────────────────────────
+
+    #[test]
+    fn patch_section_xml_errors_on_element_stack_underflow() {
+        // A malformed closing tag with no matching open exercises the
+        // element_stack.pop() underflow path.
+        // We directly call pop_element on an empty state to trigger it.
+        let mut state = SectionXmlPatchState::new(SectionLayoutHints {
+            paragraphs: VecDeque::new(),
+            tables: VecDeque::new(),
+        });
+        let err = state.pop_element(b"run").unwrap_err();
+        assert!(
+            err.to_string().contains("underflow"),
+            "empty element stack pop must give underflow error: {err}"
+        );
+    }
+
+    // ── pop_element mismatch ──────────────────────────────────────────────────
+
+    #[test]
+    fn patch_section_xml_errors_on_element_stack_mismatch() {
+        // Push "p", then try to pop "run" → mismatch.
+        let mut state = SectionXmlPatchState::new(SectionLayoutHints {
+            paragraphs: VecDeque::new(),
+            tables: VecDeque::new(),
+        });
+        state.element_stack.push(b"p".to_vec());
+        let err = state.pop_element(b"run").unwrap_err();
+        assert!(
+            err.to_string().contains("mismatch"),
+            "mismatched element names must give mismatch error: {err}"
+        );
+    }
+
+    // ── rewrite_element_attr inserts attribute when absent ────────────────────
+
+    #[test]
+    fn rewrite_element_attr_inserts_attribute_when_absent() {
+        // An element without a "height" attribute gets one injected.
+        let event = BytesStart::new("hp:sz").into_owned();
+        let result = rewrite_element_attr(event, "height", "9999").expect("rewrite must succeed");
+        let xml = format!("<{} />", std::str::from_utf8(result.name().as_ref()).unwrap());
+        // Attribute must be present in the rebuilt element.
+        let attrs: Vec<_> = result.attributes().with_checks(false).filter_map(|a| a.ok()).collect();
+        assert!(
+            attrs.iter().any(|a| {
+                std::str::from_utf8(a.key.as_ref()).unwrap_or("") == "height"
+                    && a.value.as_ref() == b"9999"
+            }),
+            "injected 'height' attribute must be present; xml={xml}"
+        );
+    }
+
+    // ── write_linesegarray with empty line_segments uses default lineseg ──────
+
+    #[test]
+    fn patch_section_xml_emits_default_lineseg_for_empty_line_segments() {
+        // A ParagraphLayoutHint with no line_segments must emit the default
+        // <hp:lineseg textpos="0" vertpos="0" ...> placeholder.
+        let xml = concat!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>"#,
+            r#"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">"#,
+            r#"<hp:p id="0" paraPrIDRef="0" styleIDRef="0"><hp:run charPrIDRef="0"><hp:t>X</hp:t></hp:run></hp:p>"#,
+            r#"</hs:sec>"#
+        );
+
+        let hints = SectionLayoutHints {
+            paragraphs: VecDeque::from(vec![ParagraphLayoutHint {
+                line_segments: vec![], // empty → must write default lineseg
+            }]),
+            tables: VecDeque::new(),
+        };
+
+        let patched = patch_section_xml(xml, hints).expect("must patch");
+        assert!(
+            patched.contains(r#"hp:lineseg textpos="0""#),
+            "default lineseg must be emitted for empty line_segments: {patched}"
+        );
+        assert!(
+            patched.contains(r#"horzsize="42520""#),
+            "default lineseg must carry horzsize=42520: {patched}"
+        );
+    }
 }

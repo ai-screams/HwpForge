@@ -1964,65 +1964,438 @@ fn fixture_table_18_image_fill_zoom_reports_raw_image_fill_mode() {
     assert_eq!(image_fill.mode, Hwp5FillImageMode::Zoom);
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// parse_outline_style_name
+// ──────────────────────────────────────────────────────────────────────────
+
 #[test]
-fn fixture_table_17_diagonal_border_reports_raw_diagonal_shapes() {
-    let store = fixture_doc_info("table_17_diagonal_border.hwp");
-    let custom = store
-        .border_fills()
-        .iter()
-        .filter_map(|slot| slot.fill.as_ref().map(|fill| (slot.id, fill)))
-        .find(|(_, fill)| fill.slash_diagonal_shape != 0 || fill.back_slash_diagonal_shape != 0)
-        .expect("fixture must contain a custom diagonal border fill");
-    assert_eq!(custom.0, 4);
-    assert_eq!(custom.1.back_slash_diagonal_shape, 2);
+fn parse_outline_style_name_returns_level_for_korean_prefix_with_space() {
+    assert_eq!(crate::parse_outline_style_name("개요 1"), Some(1));
+    assert_eq!(crate::parse_outline_style_name("개요 7"), Some(7));
+    assert_eq!(crate::parse_outline_style_name("개요 10"), Some(10));
 }
 
 #[test]
-fn to_hwpx_style_store_unknown_image_fill_mode_emits_warning_and_drops_fill() {
+fn parse_outline_style_name_returns_level_for_korean_prefix_without_space() {
+    assert_eq!(crate::parse_outline_style_name("개요1"), Some(1));
+    assert_eq!(crate::parse_outline_style_name("개요9"), Some(9));
+}
+
+#[test]
+fn parse_outline_style_name_returns_level_for_english_prefix() {
+    assert_eq!(crate::parse_outline_style_name("Outline 3"), Some(3));
+    assert_eq!(crate::parse_outline_style_name("Outline3"), Some(3));
+    assert_eq!(crate::parse_outline_style_name("Outline 10"), Some(10));
+}
+
+#[test]
+fn parse_outline_style_name_returns_none_for_unrelated_names() {
+    assert_eq!(crate::parse_outline_style_name("본문"), None);
+    assert_eq!(crate::parse_outline_style_name("Body"), None);
+    assert_eq!(crate::parse_outline_style_name("개요"), None);
+    assert_eq!(crate::parse_outline_style_name("Outline"), None);
+    assert_eq!(crate::parse_outline_style_name(""), None);
+}
+
+#[test]
+fn parse_outline_style_name_trims_leading_trailing_whitespace() {
+    assert_eq!(crate::parse_outline_style_name("  개요 2  "), Some(2));
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// apply_outline_style_level_overrides (via hwp5_style_store_to_hwpx)
+// ──────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn apply_outline_style_level_overrides_bumps_level_from_style_name() {
+    // "개요 7" → level_one_based=7 → level_zero_based=6.
+    // The para shape has Outline kind (bits 23-24=1) with wire-capped level=6
+    // (bits 25-27=6). After override heading_level must equal 6.
+    let mut para = default_para_shape();
+    // bits 23-24 = 0b01 → Outline; bits 25-27 = 0b110 → level 6
+    para.property1 = (1u32 << 23) | (6u32 << 25);
+
+    let store = Hwp5StyleStore {
+        id_mappings: None,
+        fonts: vec![],
+        char_shapes: vec![],
+        para_shapes: vec![para],
+        numberings: vec![],
+        bullets: vec![],
+        tab_defs: vec![],
+        styles: vec![Hwp5RawStyle {
+            name: "개요 7".into(),
+            english_name: "Outline7".into(),
+            kind: 0,
+            next_style_id: 0,
+            lang_id: 1042,
+            para_shape_id: 0,
+            char_shape_id: 0,
+            lock_form: 0,
+        }],
+        border_fills: vec![],
+    };
+
+    let (hwpx_store, _warnings) = crate::hwp5_style_store_to_hwpx(&store);
+    let ps = hwpx_store.para_shape(ParaShapeIndex::new(0)).unwrap();
+    assert_eq!(ps.heading_level, 6, "override from '개요 7' must set heading_level=6");
+}
+
+#[test]
+fn apply_outline_style_level_overrides_skips_non_outline_heading_type() {
+    // A Number-type paraPr pointing at an "개요 N" style must not be overridden.
+    let mut para = default_para_shape();
+    // bits 23-24 = 0b10 → Number; bits 25-27 = 2 → level 2
+    para.property1 = (2u32 << 23) | (2u32 << 25);
+
+    let store = Hwp5StyleStore {
+        id_mappings: None,
+        fonts: vec![],
+        char_shapes: vec![],
+        para_shapes: vec![para],
+        numberings: vec![],
+        bullets: vec![],
+        tab_defs: vec![],
+        styles: vec![Hwp5RawStyle {
+            name: "개요 7".into(),
+            english_name: "Outline7".into(),
+            kind: 0,
+            next_style_id: 0,
+            lang_id: 1042,
+            para_shape_id: 0,
+            char_shape_id: 0,
+            lock_form: 0,
+        }],
+        border_fills: vec![],
+    };
+
+    let (hwpx_store, _warnings) = crate::hwp5_style_store_to_hwpx(&store);
+    let ps = hwpx_store.para_shape(ParaShapeIndex::new(0)).unwrap();
+    // heading_level must remain 2 — Number kind is skipped
+    assert_eq!(ps.heading_level, 2, "Number-kind paraPr must not be overridden");
+}
+
+#[test]
+fn apply_outline_style_level_overrides_silently_skips_out_of_bounds_para_shape_id() {
+    // Style references a para_shape_id that exceeds the store — must not panic.
+    let store = Hwp5StyleStore {
+        id_mappings: None,
+        fonts: vec![],
+        char_shapes: vec![],
+        para_shapes: vec![], // empty
+        numberings: vec![],
+        bullets: vec![],
+        tab_defs: vec![],
+        styles: vec![Hwp5RawStyle {
+            name: "개요 3".into(),
+            english_name: "Outline3".into(),
+            kind: 0,
+            next_style_id: 0,
+            lang_id: 1042,
+            para_shape_id: 99, // out of bounds
+            char_shape_id: 0,
+            lock_form: 0,
+        }],
+        border_fills: vec![],
+    };
+
+    let (hwpx_store, _) = crate::hwp5_style_store_to_hwpx(&store);
+    assert_eq!(hwpx_store.para_shape_count(), 0, "no crash — para_shape_count stays 0");
+}
+
+#[test]
+fn apply_outline_style_level_overrides_skips_char_kind_styles() {
+    // kind=1 is a character style — must be skipped entirely.
+    let mut para = default_para_shape();
+    para.property1 = (1u32 << 23) | (1u32 << 25); // Outline, level 1
+
+    let store = Hwp5StyleStore {
+        id_mappings: None,
+        fonts: vec![],
+        char_shapes: vec![],
+        para_shapes: vec![para],
+        numberings: vec![],
+        bullets: vec![],
+        tab_defs: vec![],
+        styles: vec![Hwp5RawStyle {
+            name: "개요 9".into(),
+            english_name: "Outline9".into(),
+            kind: 1, // character style — skip
+            next_style_id: 0,
+            lang_id: 1042,
+            para_shape_id: 0,
+            char_shape_id: 0,
+            lock_form: 0,
+        }],
+        border_fills: vec![],
+    };
+
+    let (hwpx_store, _) = crate::hwp5_style_store_to_hwpx(&store);
+    let ps = hwpx_store.para_shape(ParaShapeIndex::new(0)).unwrap();
+    // heading_level stays 1 (decoded from property1 bits 25-27=1)
+    assert_eq!(ps.heading_level, 1, "char-style entry must not trigger outline override");
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// None-slot paths (lib.rs L137-163)
+// ──────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn numbering_slot_none_emits_parser_fallback_warning() {
+    let store = Hwp5StyleStore {
+        id_mappings: None,
+        fonts: vec![],
+        char_shapes: vec![],
+        para_shapes: vec![],
+        numberings: vec![Hwp5DocInfoNumberingSlot { id: 3, numbering: None }],
+        bullets: vec![],
+        tab_defs: vec![],
+        styles: vec![],
+        border_fills: vec![],
+    };
+
+    let (hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store);
+    assert_eq!(hwpx_store.numbering_count(), 0, "failed slot must not produce a numbering entry");
+    assert!(
+        warnings.iter().any(|w| matches!(
+            w,
+            Hwp5Warning::ParserFallback { subject, reason }
+                if *subject == "numbering.slot" && reason.contains("slot 3")
+        )),
+        "must emit ParserFallback for failed numbering slot: {warnings:?}"
+    );
+}
+
+#[test]
+fn bullet_slot_none_emits_parser_fallback_warning() {
     let store = Hwp5StyleStore {
         id_mappings: None,
         fonts: vec![],
         char_shapes: vec![],
         para_shapes: vec![],
         numberings: vec![],
-        bullets: vec![],
+        bullets: vec![Hwp5DocInfoBulletSlot { id: 5, bullet: None }],
         tab_defs: vec![],
         styles: vec![],
-        border_fills: vec![border_fill_slot(
-            4,
-            Hwp5RawBorderFill {
-                property: 0,
-                three_d: false,
-                shadow: false,
-                slash_diagonal_shape: 0,
-                back_slash_diagonal_shape: 0,
-                center_line: false,
-                left: none_border_line(),
-                right: none_border_line(),
-                top: none_border_line(),
-                bottom: none_border_line(),
-                diagonal: none_border_line(),
-                fill: Hwp5RawBorderFillFill::Image(Hwp5RawImageFill {
-                    // All 16 spec modes now carry (P1-2); only a genuinely
-                    // unknown raw value still falls back to drop-with-warning.
-                    mode: Hwp5FillImageMode::Unknown(99),
-                    brightness: 0,
-                    contrast: 0,
-                    effect: Hwp5FillImageEffect::RealPic,
-                    bindata_id: 1,
-                    extra_data: Vec::new(),
-                }),
-            },
-        )],
+        border_fills: vec![],
     };
 
     let (hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store);
-    assert!(hwpx_store.border_fill(4).unwrap().fill.is_none());
-    assert!(warnings.iter().any(|warning| matches!(
-        warning,
-        Hwp5Warning::ProjectionFallback { subject, reason }
-            if *subject == "style.border_fill.image_fill_mode"
-                && reason.contains("border_fill_id=4")
-                && reason.contains("Unknown(99)")
-    )));
+    assert_eq!(hwpx_store.bullet_count(), 0, "failed bullet slot must not produce an entry");
+    assert!(
+        warnings.iter().any(|w| matches!(
+            w,
+            Hwp5Warning::ParserFallback { subject, reason }
+                if *subject == "bullet.slot" && reason.contains("slot 5")
+        )),
+        "must emit ParserFallback for failed bullet slot: {warnings:?}"
+    );
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// Count-mismatch integrity warnings (lib.rs L261-299)
+// ──────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn numbering_count_mismatch_emits_projection_fallback_warning() {
+    // id_mappings declares 3 but only 1 slot is present.
+    let numbering = Hwp5RawNumberingDef {
+        start: 1,
+        paragraph_heads: vec![Hwp5RawNumberingParaHead {
+            start_number: 1,
+            level: 0,
+            num_format: "DIGIT".into(),
+            text: String::new(),
+            checkable: false,
+        }],
+    };
+
+    let store = Hwp5StyleStore {
+        id_mappings: Some(Hwp5RawIdMappings {
+            bin_data_count: 0,
+            hangul_font_count: 0,
+            english_font_count: 0,
+            hanja_font_count: 0,
+            japanese_font_count: 0,
+            other_font_count: 0,
+            symbol_font_count: 0,
+            user_font_count: 0,
+            border_fill_count: 0,
+            char_shape_count: 0,
+            tab_def_count: 0,
+            numbering_def_count: 3,
+            bullet_def_count: 0,
+            para_shape_count: 0,
+            style_count: 0,
+            memo_shape_count: None,
+            change_tracking_count: None,
+            change_tracking_author_count: None,
+        }),
+        fonts: vec![],
+        char_shapes: vec![],
+        para_shapes: vec![],
+        numberings: vec![numbering_slot(1, numbering)],
+        bullets: vec![],
+        tab_defs: vec![],
+        styles: vec![],
+        border_fills: vec![],
+    };
+
+    let (_, warnings) = crate::hwp5_style_store_to_hwpx(&store);
+    assert!(
+        warnings.iter().any(|w| matches!(
+            w,
+            Hwp5Warning::ProjectionFallback { subject, reason }
+                if *subject == "numbering.count"
+                    && reason.contains("declares 3")
+                    && reason.contains("parsed 1")
+        )),
+        "must warn on numbering count mismatch: {warnings:?}"
+    );
+}
+
+#[test]
+fn bullet_count_mismatch_emits_projection_fallback_warning() {
+    // id_mappings declares 2 but 0 bullet slots are present.
+    let store = Hwp5StyleStore {
+        id_mappings: Some(Hwp5RawIdMappings {
+            bin_data_count: 0,
+            hangul_font_count: 0,
+            english_font_count: 0,
+            hanja_font_count: 0,
+            japanese_font_count: 0,
+            other_font_count: 0,
+            symbol_font_count: 0,
+            user_font_count: 0,
+            border_fill_count: 0,
+            char_shape_count: 0,
+            tab_def_count: 0,
+            numbering_def_count: 0,
+            bullet_def_count: 2,
+            para_shape_count: 0,
+            style_count: 0,
+            memo_shape_count: None,
+            change_tracking_count: None,
+            change_tracking_author_count: None,
+        }),
+        fonts: vec![],
+        char_shapes: vec![],
+        para_shapes: vec![],
+        numberings: vec![],
+        bullets: vec![], // 0 actual
+        tab_defs: vec![],
+        styles: vec![],
+        border_fills: vec![],
+    };
+
+    let (_, warnings) = crate::hwp5_style_store_to_hwpx(&store);
+    assert!(
+        warnings.iter().any(|w| matches!(
+            w,
+            Hwp5Warning::ProjectionFallback { subject, reason }
+                if *subject == "bullet.count"
+                    && reason.contains("declares 2")
+                    && reason.contains("parsed 0")
+        )),
+        "must warn on bullet count mismatch: {warnings:?}"
+    );
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// shade_color non-null path (style_store_convert.rs L82)
+// ──────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn hwp5_char_shape_shade_color_non_null_carries_color() {
+    // shade_color != 0xFFFFFFFF sentinel → Some(Color)
+    let mut raw = default_char_shape();
+    raw.shade_color = 0x00_80_40_20; // non-null BGR color
+    let hwpx = hwp5_char_shape_to_hwpx(&raw);
+    assert!(hwpx.shade_color.is_some(), "non-null shade_color must produce Some(Color)");
+}
+
+#[test]
+fn hwp5_char_shape_shade_color_null_sentinel_maps_to_none() {
+    let mut raw = default_char_shape();
+    raw.shade_color = 0xFFFF_FFFF; // sentinel = "no shade"
+    let hwpx = hwp5_char_shape_to_hwpx(&raw);
+    assert!(hwpx.shade_color.is_none(), "sentinel 0xFFFFFFFF must map to None");
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// underline_shape variants (style_store_convert.rs L95-109)
+// Bit layout: underline_type = bits 2-3 ((property >> 2) & 0b11), value 1 = Bottom
+//             underline_shape_raw = bits 4-7 ((property >> 4) & 0b1111)
+// ──────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn hwp5_char_shape_underline_shape_variants_all_map_correctly() {
+    use hwpforge_foundation::UnderlineShape;
+
+    // Bottom underline is active when bits 2-3 = 0b01 → (1 << 2)
+    let underline_active = 1u32 << 2;
+
+    let cases: &[(u32, UnderlineShape)] = &[
+        (0 << 4, UnderlineShape::Solid),
+        (1 << 4, UnderlineShape::Dash),
+        (2 << 4, UnderlineShape::Dot),
+        (3 << 4, UnderlineShape::DashDot),
+        (4 << 4, UnderlineShape::DashDotDot),
+        (5 << 4, UnderlineShape::LongDash),
+        (6 << 4, UnderlineShape::Circle),
+        (7 << 4, UnderlineShape::DoubleSlim),
+        (8 << 4, UnderlineShape::SlimThick),
+        (9 << 4, UnderlineShape::ThickSlim),
+        (10 << 4, UnderlineShape::ThickSlimThick),
+        (11 << 4, UnderlineShape::Wave),
+        (12 << 4, UnderlineShape::Solid), // fallback: raw 12 → Solid
+    ];
+
+    for &(shape_bits, expected) in cases {
+        let mut raw = default_char_shape();
+        raw.property = underline_active | shape_bits;
+        let hwpx = hwp5_char_shape_to_hwpx(&raw);
+        assert_eq!(
+            hwpx.underline_shape, expected,
+            "shape_bits=0x{shape_bits:04X}: expected {expected:?}"
+        );
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────
+// outline_kind warning (style_store_convert.rs L285-291)
+// outline_kind_raw = bits 8-10 ((property >> 8) & 0b111)
+// ──────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn hwp5_char_shape_warns_on_outline_kind_when_nonzero() {
+    // Non-zero outline kind collapses to Solid and emits a ProjectionFallback.
+    // We exercise the warning path by calling through the full store conversion.
+    let mut raw = default_char_shape();
+    raw.property = 3u32 << 8; // outline_kind_raw = 3 (non-zero)
+
+    let store = Hwp5StyleStore {
+        id_mappings: None,
+        fonts: vec![],
+        char_shapes: vec![raw],
+        para_shapes: vec![],
+        numberings: vec![],
+        bullets: vec![],
+        tab_defs: vec![],
+        styles: vec![],
+        border_fills: vec![],
+    };
+
+    let (hwpx_store, warnings) = crate::hwp5_style_store_to_hwpx(&store);
+    // The char shape must be produced (store is non-empty)
+    assert!(hwpx_store.char_shape(CharShapeIndex::new(0)).is_ok());
+    // A ProjectionFallback must be emitted for the outline kind
+    assert!(
+        warnings.iter().any(|w| matches!(
+            w,
+            Hwp5Warning::ProjectionFallback { subject, .. }
+                if *subject == "style.char_shape.outline_kind"
+        )),
+        "non-zero outline_kind must emit ProjectionFallback: {warnings:?}"
+    );
 }

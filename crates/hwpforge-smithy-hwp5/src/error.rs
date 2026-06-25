@@ -142,3 +142,119 @@ impl Hwp5Error {
 
 /// Convenience alias used throughout this crate.
 pub type Hwp5Result<T> = Result<T, Hwp5Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- Hwp5ErrorCode::Display ---
+
+    #[test]
+    fn error_code_display_produces_e_prefixed_number() {
+        assert_eq!(Hwp5ErrorCode::NotHwp5.to_string(), "E5000");
+        assert_eq!(Hwp5ErrorCode::Cfb.to_string(), "E5001");
+        assert_eq!(Hwp5ErrorCode::MissingStream.to_string(), "E5002");
+        assert_eq!(Hwp5ErrorCode::RecordParse.to_string(), "E5003");
+        assert_eq!(Hwp5ErrorCode::UnsupportedVersion.to_string(), "E5004");
+        assert_eq!(Hwp5ErrorCode::PasswordProtected.to_string(), "E5005");
+        assert_eq!(Hwp5ErrorCode::Encoding.to_string(), "E5006");
+        assert_eq!(Hwp5ErrorCode::Io.to_string(), "E5007");
+        assert_eq!(Hwp5ErrorCode::Core.to_string(), "E5008");
+        assert_eq!(Hwp5ErrorCode::Foundation.to_string(), "E5009");
+    }
+
+    // --- Hwp5Error::code() covers every arm ---
+
+    #[test]
+    fn not_hwp5_variant_returns_correct_code() {
+        let err = Hwp5Error::NotHwp5 { detail: "missing magic bytes".into() };
+        assert_eq!(err.code(), Hwp5ErrorCode::NotHwp5);
+        assert!(err.to_string().contains("HWP5"));
+        assert!(err.to_string().contains("missing magic bytes"));
+    }
+
+    #[test]
+    fn cfb_variant_returns_correct_code() {
+        let err = Hwp5Error::Cfb { detail: "bad OLE header".into() };
+        assert_eq!(err.code(), Hwp5ErrorCode::Cfb);
+        assert!(err.to_string().contains("OLE2/CFB"));
+    }
+
+    #[test]
+    fn missing_stream_variant_returns_correct_code() {
+        let err = Hwp5Error::MissingStream { name: "BodyText/Section0".into() };
+        assert_eq!(err.code(), Hwp5ErrorCode::MissingStream);
+        assert!(err.to_string().contains("BodyText/Section0"));
+    }
+
+    #[test]
+    fn record_parse_variant_returns_correct_code() {
+        let err = Hwp5Error::RecordParse { offset: 42, detail: "unexpected EOF".into() };
+        assert_eq!(err.code(), Hwp5ErrorCode::RecordParse);
+        assert!(err.to_string().contains("42"));
+        assert!(err.to_string().contains("unexpected EOF"));
+    }
+
+    #[test]
+    fn unsupported_version_variant_returns_correct_code() {
+        let err = Hwp5Error::UnsupportedVersion { major: 3, minor: 0, micro: 0, build: 0 };
+        assert_eq!(err.code(), Hwp5ErrorCode::UnsupportedVersion);
+        assert!(err.to_string().contains("3.0.0.0"));
+    }
+
+    #[test]
+    fn password_protected_variant_returns_correct_code() {
+        let err = Hwp5Error::PasswordProtected;
+        assert_eq!(err.code(), Hwp5ErrorCode::PasswordProtected);
+        assert!(err.to_string().contains("password"));
+    }
+
+    #[test]
+    fn encoding_variant_returns_correct_code() {
+        let err = Hwp5Error::Encoding { detail: "invalid UTF-16LE sequence".into() };
+        assert_eq!(err.code(), Hwp5ErrorCode::Encoding);
+        assert!(err.to_string().contains("encoding"));
+    }
+
+    #[test]
+    fn io_variant_returns_correct_code() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file.hwp not found");
+        let err = Hwp5Error::from(io_err);
+        assert_eq!(err.code(), Hwp5ErrorCode::Io);
+        assert!(err.to_string().contains("I/O"));
+    }
+
+    #[test]
+    fn core_variant_returns_correct_code() {
+        let core_err = hwpforge_core::CoreError::InvalidStructure {
+            context: "test".into(),
+            reason: "missing section".into(),
+        };
+        let err = Hwp5Error::from(core_err);
+        assert_eq!(err.code(), Hwp5ErrorCode::Core);
+        assert!(err.to_string().contains("Core error"));
+    }
+
+    #[test]
+    fn foundation_variant_returns_correct_code() {
+        let found_err =
+            hwpforge_foundation::FoundationError::EmptyIdentifier { item: "font name".into() };
+        let err = Hwp5Error::from(found_err);
+        assert_eq!(err.code(), Hwp5ErrorCode::Foundation);
+        assert!(err.to_string().contains("Foundation error"));
+    }
+
+    // --- Debug representation ---
+
+    #[test]
+    fn hwp5_error_debug_is_non_empty() {
+        let err = Hwp5Error::PasswordProtected;
+        assert!(!format!("{err:?}").is_empty());
+    }
+
+    #[test]
+    fn hwp5_error_code_debug_is_non_empty() {
+        let code = Hwp5ErrorCode::NotHwp5;
+        assert!(!format!("{code:?}").is_empty());
+    }
+}
