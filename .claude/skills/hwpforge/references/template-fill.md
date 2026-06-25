@@ -44,32 +44,61 @@ hwpforge inspect 제안서_제출본.hwpx
 hwpforge to-md   제안서_제출본.hwpx -o check.md     # eyeball the filled content
 ```
 
-Example edit step (replace body placeholders and table `(작성)` cells):
+Body placeholders are usually unique text, so a simple text→value map works for them:
 
 ```python
 import json
 d = json.load(open("sec.json"))
 
-REPLACE = {
-    "(여기에 연구개발 목표를 작성하시오)": "본 과제는 …를 목표로 한다.",
-    "(작성)": "100,000",
+BODY = {
+    "(연구개발 목표를 작성하시오)": "본 과제는 …를 목표로 한다.",
+    "(기대효과를 작성하시오)": "행정 문서 작성 시간을 50% 단축한다.",
 }
 
-def fill_runs(runs):
-    for r in runs:
-        c = r.get("content", {})
-        if "Text" in c and c["Text"] in REPLACE:
-            c["Text"] = REPLACE[c["Text"]]
+def cell_text(cell):  # first run's text of a cell, for matching the row label
+    for cp in cell.get("paragraphs", []):
+        for r in cp.get("runs", []):
+            if "Text" in r.get("content", {}):
+                return r["content"]["Text"]
+    return ""
+
+def set_cell(cell, value):
+    for cp in cell.get("paragraphs", []):
+        for r in cp.get("runs", []):
+            if "Text" in r.get("content", {}):
+                r["content"]["Text"] = value
+                return
 
 for p in d["section"]["paragraphs"]:
-    fill_runs(p.get("runs", []))
+    for r in p.get("runs", []):
+        c = r.get("content", {})
+        if c.get("Text") in BODY:
+            c["Text"] = BODY[c["Text"]]
+```
+
+**Tables: fill POSITIONALLY, never by a text map.** Budget tables repeat the same placeholder
+(`(작성)`) in many cells, so a `{"(작성)": value}` map would write the SAME value into every
+cell. Instead, find each row by its label cell, then fill that row's columns by index:
+
+```python
+# 연구비 표:  비목 | 1년차 | 2년차   →  cells[0]=label, cells[1]=1년차, cells[2]=2년차
+BUDGET = {  # row label → [1년차, 2년차]
+    "인건비": ["120,000", "130,000"],
+    "재료비": ["30,000", "20,000"],
+}
+
+for p in d["section"]["paragraphs"]:
     for r in p.get("runs", []):
         tbl = r.get("content", {}).get("Table")
-        if tbl:
-            for row in tbl["rows"]:
-                for cell in row["cells"]:
-                    for cp in cell["paragraphs"]:
-                        fill_runs(cp.get("runs", []))
+        if not tbl:
+            continue
+        for row in tbl["rows"]:
+            cells = row["cells"]
+            label = cell_text(cells[0])
+            if label in BUDGET:
+                for col, value in enumerate(BUDGET[label], start=1):
+                    if col < len(cells):
+                        set_cell(cells[col], value)
 
 json.dump(d, open("sec.json", "w"), ensure_ascii=False)
 ```

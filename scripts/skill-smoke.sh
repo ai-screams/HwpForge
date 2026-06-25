@@ -76,30 +76,42 @@ assert_file sec.json
 # documented contract: to-json requires -o (no stdout export)
 assert_fail_grep "$BIN" to-json tpl.hwpx -- "output"
 
-echo "== Recipe A: patch (text-only) fills body + table-cell placeholders =="
+echo "== Recipe A: patch (text-only) fills body + POSITIONAL table cells =="
+# Mirrors template-fill.md: body via text map, table via row-label positional fill
+# (distinct values per column — a text map would write the same value to every cell).
 python3 - <<'PY'
 import json
 d = json.load(open("sec.json"))
-REP = {"(여기에 연구개발 목표를 작성하시오)": "본 과제는 X를 목표로 한다.", "(작성)": "100,000"}
-def fill(runs):
-    for r in runs:
-        c = r.get("content", {})
-        if c.get("Text") in REP: c["Text"] = REP[c["Text"]]
+BODY = {"(여기에 연구개발 목표를 작성하시오)": "본 과제는 X를 목표로 한다."}
+BUDGET = {"인건비": ["120,000", "130,000"]}  # label -> [1년차, 2년차]
+def cell_text(cell):
+    for cp in cell.get("paragraphs", []):
+        for r in cp.get("runs", []):
+            if "Text" in r.get("content", {}): return r["content"]["Text"]
+    return ""
+def set_cell(cell, v):
+    for cp in cell.get("paragraphs", []):
+        for r in cp.get("runs", []):
+            if "Text" in r.get("content", {}): r["content"]["Text"] = v; return
 for p in d["section"]["paragraphs"]:
-    fill(p.get("runs", []))
     for r in p.get("runs", []):
-        t = r.get("content", {}).get("Table")
+        c = r.get("content", {})
+        if c.get("Text") in BODY: c["Text"] = BODY[c["Text"]]
+        t = c.get("Table")
         if t:
             for row in t["rows"]:
-                for cell in row["cells"]:
-                    for cp in cell["paragraphs"]: fill(cp.get("runs", []))
+                cells = row["cells"]; cols = BUDGET.get(cell_text(cells[0]))
+                if cols:
+                    for i, v in enumerate(cols, start=1):
+                        if i < len(cells): set_cell(cells[i], v)
 json.dump(d, open("sec.json", "w"), ensure_ascii=False)
 PY
 assert_ok "$BIN" patch tpl.hwpx --section 0 sec.json -o A.hwpx
 assert_grep <("$BIN" inspect A.hwpx 2>/dev/null) "1 tables"   # table preserved
 "$BIN" to-md A.hwpx -o A.md >/dev/null 2>&1
 assert_grep A.md "본 과제는 X를 목표로 한다."
-assert_grep A.md "100,000"
+assert_grep A.md "120,000"   # positional fill put DISTINCT values in the two columns
+assert_grep A.md "130,000"
 
 echo "== patch rejects structural change (negative test) =="
 python3 - <<'PY'

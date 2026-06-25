@@ -110,21 +110,41 @@ for para in data["section"]["paragraphs"]:
             c["Text"] = c["Text"].replace("기존 텍스트", "새 텍스트")
 ```
 
-### Fill a table cell (text-only → patch)
+### Fill table cells (text-only → patch)
+
+Tables usually repeat the same placeholder (e.g. `(작성)`) in many cells, so matching by text
+would write the same value everywhere. Fill **positionally**: find each row by its label cell,
+then set its columns by index.
 
 ```python
+def cell_text(cell):
+    for cp in cell.get("paragraphs", []):
+        for r in cp.get("runs", []):
+            if "Text" in r.get("content", {}):
+                return r["content"]["Text"]
+    return ""
+
+def set_cell(cell, value):
+    for cp in cell.get("paragraphs", []):
+        for r in cp.get("runs", []):
+            if "Text" in r.get("content", {}):
+                r["content"]["Text"] = value
+                return
+
+BUDGET = {"인건비": ["120,000", "130,000"], "재료비": ["30,000", "20,000"]}  # label → columns
+
 for para in data["section"]["paragraphs"]:
     for run in para.get("runs", []):
         tbl = run.get("content", {}).get("Table")
         if not tbl:
             continue
         for row in tbl["rows"]:
-            for cell in row["cells"]:
-                for cp in cell["paragraphs"]:
-                    for cr in cp["runs"]:
-                        c = cr.get("content", {})
-                        if c.get("Text") == "(작성)":
-                            c["Text"] = "100,000"
+            cells = row["cells"]
+            cols = BUDGET.get(cell_text(cells[0]))   # cells[0] = row label
+            if cols:
+                for i, value in enumerate(cols, start=1):
+                    if i < len(cells):
+                        set_cell(cells[i], value)
 ```
 
 ### Add a new paragraph (structural → from-json --base)
