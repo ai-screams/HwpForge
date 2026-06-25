@@ -129,7 +129,7 @@ ci: ci-fast
 
 audit-hwp5:
 	@mkdir -p .audit
-	cargo run -q -p hwpforge-smithy-hwp5 --example audit_batch -- $(AUDIT_HWP5_FIXTURE_DIRS) > $(AUDIT_HWP5_CURRENT)
+	cargo run -q -p hwpforge-convert --example audit_batch -- $(AUDIT_HWP5_FIXTURE_DIRS) > $(AUDIT_HWP5_CURRENT)
 	@echo "audit-hwp5 → $(AUDIT_HWP5_CURRENT)"
 
 audit-hwp5-baseline: audit-hwp5
