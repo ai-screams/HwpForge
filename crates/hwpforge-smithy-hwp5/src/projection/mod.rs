@@ -3962,6 +3962,69 @@ mod tests {
     }
 
     #[test]
+    fn inline_footnote_stays_in_one_paragraph_between_text_runs() {
+        // Regression (CLAUDE.md gotcha #12): an inline footnote reference
+        // (HWP5 ParaText control char 0x11 → `\u{FFFC}` after the schema
+        // promotion) must project as a `Control::Footnote` run *between* the
+        // surrounding text runs, inside a single Core paragraph — never on
+        // its own line / paragraph, and never drained to the paragraph tail.
+        let para = Hwp5Paragraph {
+            text: "앞\u{FFFC}뒤".to_string(),
+            text_segments: Vec::new(),
+            para_shape_id: 0,
+            style_id: 0,
+            char_shape_runs: vec![],
+            line_segments: Vec::new(),
+            controls: vec![Hwp5Control::Footnote(crate::decoder::section::Hwp5NestedSubtree {
+                ctrl_id: 0x666E_2020,
+                properties_raw: 0,
+                instance_id: 7,
+                paragraphs: vec![Hwp5Paragraph {
+                    text: "각주 본문".to_string(),
+                    text_segments: Vec::new(),
+                    para_shape_id: 0,
+                    style_id: 0,
+                    char_shape_runs: vec![],
+                    line_segments: Vec::new(),
+                    controls: vec![],
+                }],
+            })],
+        };
+        let section = make_section(vec![para], None);
+        let (doc, warnings) = project_to_core(vec![section]).unwrap();
+        let paragraph = &doc.sections()[0].paragraphs[0];
+
+        // Exactly one Core paragraph carries everything.
+        assert_eq!(
+            doc.sections()[0].paragraphs.len(),
+            1,
+            "footnote must not spawn its own paragraph"
+        );
+
+        // Runs are in document order: text → footnote → text.
+        assert_eq!(paragraph.runs.len(), 3, "runs: {:?}", paragraph.runs);
+        assert_eq!(paragraph.runs[0].content.as_text(), Some("앞"));
+        let footnote = paragraph.runs[1]
+            .content
+            .as_control()
+            .expect("middle run must be the footnote control");
+        match footnote {
+            Control::Footnote { paragraphs, .. } => {
+                assert!(!paragraphs.is_empty(), "footnote body must stay nested");
+                assert_eq!(
+                    paragraphs[0].runs[0].content.as_text(),
+                    Some("각주 본문"),
+                    "footnote body text must survive nested inside the control"
+                );
+            }
+            other => panic!("expected Footnote control, got {other:?}"),
+        }
+        assert_eq!(paragraph.runs[2].content.as_text(), Some("뒤"));
+
+        assert!(warnings.is_empty(), "no warnings expected, got {warnings:?}");
+    }
+
+    #[test]
     fn line_control_becomes_visible_core_line() {
         let para = Hwp5Paragraph {
             text: "\u{FFFC}".to_string(),
