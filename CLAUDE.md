@@ -95,7 +95,9 @@ bacon test    # Auto-run tests
 
 - **dprint + 한글(CJK) 마크다운 표**: 한글이 든 `.md` 표(예: `HWP5_WIRE_SPEC.md`, `CHANGELOG.md`)를 편집하면 dprint pre-commit 훅이 거부함(CJK 글자 폭 재계산으로 표 정렬 불일치 판단). `dprint fmt <파일>` 수동 실행 → 재-stage → 재커밋.
 - **`cargo nextest run -p <crate> <filter>`** 의 필터는 정규식이 아니라 **부분일치(substring)** — `'a|b'` 는 아무것도 안 잡음. 공통 substring 하나(예: `warns`)로 필터하거나 따로 실행.
-- 용량 큰 이미지 임베드 fixture(~MB)는 gitignore된 `examples/hwp5_review/`에만 두고, 회귀 방지는 **단위 테스트로 잠금**(수 MB fixture를 커밋하지 말 것).
+- 용량 큰 이미지 임베드 fixture(~MB)는 리뷰 산출물 영역 `examples/hwp5_review/`(미추적 — .gitignore 규칙은 없으니 `git add -A` 주의)에만 두고, 회귀 방지는 **단위 테스트로 잠금**(수 MB fixture를 커밋하지 말 것).
+- **pre-commit `cargo fmt` 훅**: 스테이지된 Rust(특히 테스트의 다줄 배열/`assert!`)를 재포맷하며 커밋을 **거부**함 → `cargo fmt` 수동 실행 → 재-`git add` → 재커밋 (dprint 표와 동일 패턴).
+- **pre-commit/pre-push 훅이 workspace clippy(+`make ci`)를 돌림** → 다파일 커밋·push는 **2분+** 소요. foreground 2분 한계를 넘기니 `run_in_background`로 commit/push 후 결과 확인.
 
 ### Documentation & Coverage
 
@@ -403,7 +405,7 @@ Local planning and research workspace. It may be git-excluded in this repository
 9. Polygon 꼭짓점 닫힘 — 첫 꼭짓점을 마지막에 반복 필수
 10. `breakNonLatinWord` = `KEEP_WORD` (BREAK_WORD 시 글자 퍼짐)
 11. Field: 하이퍼링크=`fieldBegin/End`, 날짜=`type="SUMMERY"` (오타), 쪽번호=`autoNum`
-12. 각주/미주: 같은 문단의 inline Run에 포함 (별도 문단 금지)
+12. 각주/미주: 같은 문단의 inline Run에 포함 (별도 문단 금지). HWP5 decode 시 ParaText `0x11` 마커(ctrl_id `fn`/`en`)를 `ControlRef`로 승격해야 inline 유지 — 안 하면 문단 꼬리로 drain되어 마커가 단독 줄에 표시
 13. Style: 개요 8/9/10 paraPr 비순차(18/16/17), DropCapStyle은 PascalCase
 14. ArrowType: `EMPTY_*` + `headfill` 조합만 (FILLED_* 무시됨)
 15. MasterPage: prefix 없는 `<masterPage>` 루트, 15개 xmlns, `<hp:subList>`
@@ -419,6 +421,8 @@ Local planning and research workspace. It may be git-excluded in this repository
 25. cross-ref target element (endNote/footNote/figure/table) 에 `instId` attribute 필수
 26. Bookmark Contents reference 는 SpanStart/SpanEnd 책갈피 필요 (Point 는 본문 없음 → `?`)
 27. ContentType 의미는 RefType-상대적 (Bookmark+Contents = 책갈피 이름, Figure+Contents = 캡션 본문) — invented enum 금지
+28. 도형/글상자 텍스트 **세로정렬 = HWP5 ListHeader 속성 bits 5-6** (`(props>>5)&0x03`, 0/1/2=Top/Center/Bottom). 표 셀 디코드(`smithy-hwp5/src/decoder/section/mod.rs`)가 ground truth — openhwp `(props>>2)`는 우리 wire와 불일치
+29. 도형 drawText `<hp:subList textWidth/textHeight>` = **`0`이 Hancom-정답** (렌더러는 `<hp:sz>`−`<hp:textMargin>`(기본 283)으로 텍스트 영역 계산). 계산값으로 "고치지" 말 것 — 한컴 fixture·KS X 6101 샘플 141 확인
 
 ---
 
