@@ -31,8 +31,8 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 
 **Workspace Facts** (code-grounded — 카운트는 drift하니 인용 전 확인):
 
-- Cargo packages `10` · Cargo.toml version `0.6.0` (released; release-plz bumps this branch's Wave 12 breaking series to `0.7.0` in its Release PR) · MSRV `1.88` · Dev toolchain Rust `1.93`
-- `crates/` 추적 src 파일 ~`157` · nextest ~`2,489` passed + `2` skipped · `examples/` 산출물 `67`+ (gitignored `examples/hwp5_review/` 리뷰 영역 별도) · GitHub workflows `5`
+- Cargo packages `11` (E5에서 `hwpforge-convert` 추가) · crates.io published `0.6.0` · in-tree Cargo.toml version `0.7.0` (Wave 12 breaking 시리즈, release-plz pending Release PR; 다음 breaking E6 → `0.8.0`) · MSRV `1.88` · Dev toolchain Rust `1.93`
+- `crates/` 추적 src 파일 ~`176` · nextest ~`2,647` passed + `2` skipped · `examples/` 산출물 `67`+ (gitignored `examples/hwp5_review/` 리뷰 영역 별도) · GitHub workflows `5`
 
 ---
 
@@ -115,9 +115,11 @@ core (foundation only)
     ↓
 blueprint (foundation + core)
     ↓
-smithy-hwpx, smithy-hwp5, smithy-md (foundation + core + blueprint)
+smithy-hwpx, smithy-md (foundation + core + blueprint) · smithy-hwp5 (foundation + core only)
     ↓
-bindings-py, bindings-cli, bindings-mcp (all smithy crates)
+convert (core + foundation + smithy-hwp5 + smithy-hwpx — HWP5→HWPX 오케스트레이터)
+    ↓
+bindings-py, bindings-cli (+ convert), bindings-mcp
 ```
 
 **Important**: Foundation is the root. If you modify foundation, ALL crates rebuild. Keep it minimal.
@@ -381,7 +383,7 @@ Local planning and research workspace. It may be git-excluded in this repository
 - **흐름은 2단계**: feature PR 머지(버전 안 올림) → release-plz가 **Release PR** 생성/갱신(버전 bump + CHANGELOG) → 사람이 **Release PR 머지** → 그때서야 crates.io publish·태그·GitHub Release·npm·문서 배포가 일어남.
 - **conventional commit 으로 릴리스가 결정**됨: `feat|fix|perf|refactor`(+ `type!:`)만 트리거. breaking 은 **반드시 `type!:` 또는 `BREAKING CHANGE:`** 로 표기(안 하면 0.x에서 patch로 오판). 0.x에서 breaking = **마이너** bump(0.6→0.7).
 - **SemVer 검사는 release-plz가 소유** (`semver_check = true`). ci.yml 에 standalone cargo-semver-checks 게이트를 **다시 넣지 말 것** — feature PR은 버전을 안 올리는 모델이라 breaking PR마다 영원히 빨강이 됨 (이 이유로 PR #78에서 제거).
-- **배포 대상**: crates.io = `hwpforge`(umbrella)·foundation·core·blueprint·smithy-hwpx·smithy-md·bindings-mcp. **제외**(`publish=false`) = smithy-hwp5·bindings-cli·bindings-py. **umbrella 만 GitHub Release 생성** → npm(`@hwpforge/mcp`)·pages 배포가 거기 매달림.
+- **배포 대상**: crates.io = `hwpforge`(umbrella)·foundation·core·blueprint·smithy-hwpx·smithy-md·bindings-mcp. **제외**(`publish=false`) = smithy-hwp5·convert·bindings-cli·bindings-py. **umbrella 만 GitHub Release 생성** → npm(`@hwpforge/mcp`)·pages 배포가 거기 매달림.
 - **다음 릴리스 주의**: ① first crates.io publish는 의존 순서(foundation→…→umbrella) + `publish=false` 의존 차단 여부 검증 필요 · ② CHANGELOG 한글 표는 `dprint fmt CHANGELOG.md` 수동 후 재-stage · ③ 태그 기반 로컬 검증 전 `git fetch --tags`(stale 태그 → 거짓 통과 함정).
 
 ---

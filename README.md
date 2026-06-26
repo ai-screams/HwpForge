@@ -7,10 +7,10 @@
 <div align="center">
 
 ![CI](https://img.shields.io/github/actions/workflow/status/ai-screams/HwpForge/ci.yml?branch=main\&label=CI\&logo=github)
-![codecov](https://img.shields.io/badge/coverage-92.65%25-brightgreen.svg?logo=codecov)
-![Tests](https://img.shields.io/badge/tests-2%2C365_passed-success.svg?logo=checkmarx)
+![codecov](https://img.shields.io/badge/coverage-90.4%25-brightgreen.svg?logo=codecov)
+![Tests](https://img.shields.io/badge/tests-2%2C647_passed-success.svg?logo=checkmarx)
 ![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg?logo=rust)
-![Lines of Code](https://img.shields.io/badge/LOC-~100%2C796-informational.svg)
+![Lines of Code](https://img.shields.io/badge/LOC-~112%2C977-informational.svg)
 
 ![crates.io](https://img.shields.io/crates/v/hwpforge.svg?logo=rust)
 ![docs.rs](https://img.shields.io/docsrs/hwpforge?logo=docs.rs)
@@ -79,7 +79,7 @@ cargo add hwpforge --features full
 
 ```cpp
 [dependencies]
-hwpforge = "0.5"
+hwpforge = "0.7"
 ```
 
 ### 🔨 Hammer — CLI로 시작하기
@@ -358,7 +358,7 @@ let bytes = HwpxEncoder::encode(&validated, bridge.style_store(), &image_store).
 
 ```toml
 # Markdown 지원 포함
-hwpforge = { version = "0.5", features = ["full"] }
+hwpforge = { version = "0.7", features = ["full"] }
 ```
 
 ## 📜 지원 콘텐츠
@@ -384,7 +384,8 @@ HwpForge는 레이어를 나눠서 생각하는 프로젝트입니다.
 - `foundation`: 공통 primitive, unit, index, error
 - `core`: 포맷 독립 문서 모델과 shared semantics
 - `blueprint`: 스타일 정의와 템플릿 계층
-- `smithy-*`: 포맷별 codec과 bridge
+- `smithy-*`: 포맷별 codec과 bridge (각 크레이트는 단일 포맷만 담당)
+- `convert`: 포맷 간 변환 오케스트레이터 (HWP5 → HWPX, smithy 위에서 두 포맷을 엮음)
 - `bindings-*`: CLI / MCP / Python 진입점
 
 ### 레이어 구조
@@ -400,6 +401,8 @@ flowchart TB
     SH5["smithy-hwp5<br/>HWP5 read / audit / re-emission path"]:::smithy
     SMD["smithy-md<br/>Markdown bridge"]:::smithy
 
+    CONV["convert<br/>HWP5 → HWPX orchestrator"]:::convert
+
     CLI["bindings-cli<br/>Hammer"]:::binding
     MCP["bindings-mcp<br/>Anvil MCP Server"]:::binding
     PY["bindings-py<br/>stub"]:::binding
@@ -411,15 +414,20 @@ flowchart TB
     C --> SMD
     B --> SHX
     B --> SMD
+    C --> CONV
+    SHX --> CONV
+    SH5 --> CONV
     SHX --> CLI
     SH5 --> CLI
     SMD --> CLI
+    CONV --> CLI
     SHX --> MCP
     SMD --> MCP
     SHX --> PY
 
     classDef file fill:#FFFDE7,stroke:#F9A825,color:#5D4037
     classDef smithy fill:#FFF3E0,stroke:#FB8C00,color:#E65100
+    classDef convert fill:#E0F2F1,stroke:#00897B,color:#004D40
     classDef core fill:#E3F2FD,stroke:#42A5F5,color:#0D47A1
     classDef blueprint fill:#F3E5F5,stroke:#AB47BC,color:#4A148C
     classDef foundation fill:#FAFAFA,stroke:#BDBDBD,color:#424242
@@ -440,7 +448,11 @@ flowchart LR
     SMD <--> CORE
     CORE --> SHX
 
-    CLI["CLI"]:::binding --> SH5
+    CONV["convert<br/>HWP5→HWPX 오케스트레이션"]:::convert --> SH5
+    CONV --> SHX
+
+    CLI["CLI"]:::binding --> CONV
+    CLI --> SH5
     CLI --> SHX
     CLI --> SMD
     MCP["MCP"]:::binding --> SHX
@@ -448,6 +460,7 @@ flowchart LR
 
     classDef file fill:#FFFDE7,stroke:#F9A825,color:#5D4037
     classDef smithy fill:#FFF3E0,stroke:#FB8C00,color:#E65100
+    classDef convert fill:#E0F2F1,stroke:#00897B,color:#004D40
     classDef core fill:#E3F2FD,stroke:#42A5F5,color:#0D47A1
     classDef binding fill:#E8F5E9,stroke:#43A047,color:#1B5E20
 ```
@@ -464,11 +477,11 @@ flowchart LR
 
 | 지표                   | 값                      |
 | ---------------------- | ----------------------- |
-| Tracked Rust `src` LOC | ~100,796                |
-| 테스트                 | 2,365개 (cargo-nextest) |
-| 소스 파일              | 146 .rs                 |
-| Crate 수               | 10개                    |
-| 커버리지               | 92%+                    |
+| Tracked Rust `src` LOC | ~112,977                |
+| 테스트                 | 2,647개 (cargo-nextest) |
+| 소스 파일              | 176 .rs                 |
+| Crate 수               | 11개                    |
+| 커버리지               | 90%+                    |
 | Clippy 경고            | 0                       |
 | Unsafe 코드            | 0                       |
 
@@ -515,7 +528,8 @@ HwpForge/
 │   ├── hwpforge-blueprint/       # YAML 템플릿 (Figma 패턴)
 │   ├── hwpforge-smithy-hwpx/     # HWPX codec (ZIP+XML ↔ Core)
 │   ├── hwpforge-smithy-md/       # Markdown codec (MD ↔ Core)
-│   ├── hwpforge-smithy-hwp5/     # HWP5 decode/projection + inspect/convert helpers
+│   ├── hwpforge-smithy-hwp5/     # HWP5 decode/projection + inspect helpers
+│   ├── hwpforge-convert/         # 포맷 간 변환 오케스트레이터 (HWP5 → HWPX)
 │   ├── hwpforge-bindings-py/     # Python bindings (stub)
 │   ├── hwpforge-bindings-cli/    # CLI 도구 (hwpforge, shipped)
 │   └── hwpforge-bindings-mcp/    # MCP Server (hwpforge-mcp)
@@ -542,7 +556,7 @@ HwpForge/
 
 - [x] HWP5 읽기/점검/재출력 경로 — `convert-hwp5`, `audit-hwp5`, `census-hwp5`
 - [ ] HWP5 public API 확대 — umbrella crate surface와 broader parity 정리
-- [x] MCP 서버 — Claude, Cursor 등 AI 도구가 tool로 직접 HWPX 생성·검증·편집 (8개 도구 + 4 리소스 + 3 프롬프트)
+- [x] MCP 서버 — Claude, Cursor 등 AI 도구가 tool로 직접 HWPX 생성·검증·편집 (9개 도구 + 4 리소스 + 3 프롬프트)
 - [x] CLI 도구 — `hwpforge convert doc.md doc.hwpx` 한 줄 변환 (7개 명령어)
 - [ ] HWPX 완전 지원 — 양식 컨트롤, 변경 추적, OLE 객체
 - [ ] Python 바인딩 — `pip install hwpforge`로 설치, PyPI 배포

@@ -186,16 +186,17 @@ hwpforge from-json report.json -o updated.hwpx
 
 ## 크레이트 역할 분담
 
-| 크레이트               | 역할                                   | 포맷 의존성       |
-| ---------------------- | -------------------------------------- | ----------------- |
-| `hwpforge-foundation`  | 원시 타입 (HwpUnit, Color, Index)      | 없음              |
-| `hwpforge-core`        | 포맷 독립 문서 모델 (IR)               | 없음              |
-| `hwpforge-blueprint`   | YAML 스타일 템플릿                     | 없음              |
-| `hwpforge-smithy-hwpx` | HWPX ↔ Core 코덱                       | HWPX (ZIP+XML)    |
-| `hwpforge-smithy-hwp5` | HWP5 decode/projection + audit helpers | HWP5 (OLE/CFB)    |
-| `hwpforge-smithy-md`   | Markdown ↔ Core 코덱                   | Markdown (텍스트) |
+| 크레이트               | 역할                                            | 포맷 의존성               |
+| ---------------------- | ----------------------------------------------- | ------------------------- |
+| `hwpforge-foundation`  | 원시 타입 (HwpUnit, Color, Index)               | 없음                      |
+| `hwpforge-core`        | 포맷 독립 문서 모델 (IR)                        | 없음                      |
+| `hwpforge-blueprint`   | YAML 스타일 템플릿                              | 없음                      |
+| `hwpforge-smithy-hwpx` | HWPX ↔ Core 코덱                                | HWPX (ZIP+XML)            |
+| `hwpforge-smithy-hwp5` | HWP5 decode/projection                          | HWP5 (OLE/CFB)            |
+| `hwpforge-smithy-md`   | Markdown ↔ Core 코덱                            | Markdown (텍스트)         |
+| `hwpforge-convert`     | HWP5 → HWPX 변환 오케스트레이터 + audit helpers | HWP5 + HWPX (smithy 경유) |
 
-**핵심 원칙**: Core 이하 계층은 어떤 파일 포맷도 모릅니다. Smithy 계층만 특정 포맷을 이해합니다.
+**핵심 원칙**: Core 이하 계층은 어떤 파일 포맷도 모릅니다. Smithy 계층만 특정 포맷을 이해하고, `convert`는 두 Smithy를 엮어 포맷 간 변환을 지휘합니다(자체 포맷 파싱 없음).
 
 ## HWP5 포맷 구조 (참고)
 

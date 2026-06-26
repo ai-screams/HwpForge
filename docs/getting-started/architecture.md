@@ -5,13 +5,14 @@ HwpForge는 **대장간(Forge) 메타포**를 기반으로 설계된 계층형 �
 
 ## Forge 메타포
 
-| 계층               | 역할                    | 비유               |
-| ------------------ | ----------------------- | ------------------ |
-| Foundation (기반)  | 원시 타입, 단위, 인덱스 | 쇠못과 금속 소재   |
-| Core (핵심)        | 형식 독립 문서 모델     | 도면 위의 설계도   |
-| Blueprint (청사진) | YAML 스타일 템플릿      | 피그마 디자인 토큰 |
-| Smithy (대장간)    | 형식별 인코더/디코더    | 용광로와 망치      |
-| Bindings (바인딩)  | Python, CLI 인터페이스  | 완성된 제품 포장   |
+| 계층               | 역할                        | 비유               |
+| ------------------ | --------------------------- | ------------------ |
+| Foundation (기반)  | 원시 타입, 단위, 인덱스     | 쇠못과 금속 소재   |
+| Core (핵심)        | 형식 독립 문서 모델         | 도면 위의 설계도   |
+| Blueprint (청사진) | YAML 스타일 템플릿          | 피그마 디자인 토큰 |
+| Smithy (대장간)    | 형식별 인코더/디코더        | 용광로와 망치      |
+| Convert (변환)     | 포맷 간 변환 오케스트레이터 | 단조 작업 지휘     |
+| Bindings (바인딩)  | Python, CLI 인터페이스      | 완성된 제품 포장   |
 
 ## 크레이트 의존성 그래프
 
@@ -21,12 +22,19 @@ graph TD
     C --> B[hwpforge-blueprint<br/>스타일 템플릿]
     B --> SH[hwpforge-smithy-hwpx<br/>HWPX 코덱]
     B --> SM[hwpforge-smithy-md<br/>Markdown 코덱]
-    B --> S5[hwpforge-smithy-hwp5<br/>HWP5 decode/projection]
+    C --> S5[hwpforge-smithy-hwp5<br/>HWP5 decode/projection]
+    C --> CONV[hwpforge-convert<br/>HWP5 → HWPX 오케스트레이터]
+    SH --> CONV
+    S5 --> CONV
     SH --> U[hwpforge<br/>umbrella crate]
     SM --> U
-    S5 --> U
-    U --> PY[hwpforge-bindings-py<br/>Python (stub)]
-    U --> CLI[hwpforge-bindings-cli<br/>CLI (shipped)]
+    CONV --> CLI[hwpforge-bindings-cli<br/>CLI (shipped)]
+    S5 --> CLI
+    SH --> CLI
+    SM --> CLI
+    SH --> MCP[hwpforge-bindings-mcp<br/>MCP (shipped)]
+    SM --> MCP
+    SH --> PY[hwpforge-bindings-py<br/>Python (stub)]
 ```
 
 > **규칙**: 의존성은 위에서 아래로만 흐릅니다. `foundation`을 수정하면 모든 크레이트가 재빌드됩니다.
