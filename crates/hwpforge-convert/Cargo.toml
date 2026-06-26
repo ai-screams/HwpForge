@@ -15,7 +15,6 @@ rust-version.workspace = true
 description = "Cross-format conversion orchestrator for HwpForge (HWP5 -> HWPX)"
 
 [dependencies]
-hwpforge-blueprint = { path = "../hwpforge-blueprint", version = "0.7.0" }
 hwpforge-core = { path = "../hwpforge-core", version = "0.7.0" }
 hwpforge-foundation = { path = "../hwpforge-foundation", version = "0.7.0" }
 hwpforge-smithy-hwp5 = { path = "../hwpforge-smithy-hwp5", version = "0.7.0" }
