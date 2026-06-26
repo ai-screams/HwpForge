@@ -6,7 +6,7 @@ use hwpforge_core::section::{HeaderFooter, PageNumber, Section};
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
     ApplyPageType, ArcType, ArrowSize, ArrowType, Color, CurveSegmentType, Flip, GradientType,
-    HwpUnit, NumberFormatType, PageNumberPosition, PatternType,
+    HwpUnit, NumberFormatType, PageNumberPosition, PatternType, VerticalAlign,
 };
 
 use crate::{
@@ -458,6 +458,7 @@ fn append_rotation_examples(paras: &mut Vec<Paragraph>) {
                     rotation: Some(angle),
                     ..Default::default()
                 }),
+                text_vertical_align: VerticalAlign::Top,
             },
         );
     }
@@ -513,6 +514,7 @@ fn append_flip_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
                     flip: Some(flip),
                     ..Default::default()
                 }),
+                text_vertical_align: VerticalAlign::Top,
             },
         );
     }
@@ -553,6 +555,7 @@ fn append_gradient_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
                 }),
                 ..Default::default()
             }),
+            text_vertical_align: VerticalAlign::Top,
         },
     );
 
@@ -580,6 +583,7 @@ fn append_gradient_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
                 }),
                 ..Default::default()
             }),
+            text_vertical_align: VerticalAlign::Top,
         },
     );
 
@@ -611,6 +615,7 @@ fn append_gradient_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
                 }),
                 ..Default::default()
             }),
+            text_vertical_align: VerticalAlign::Top,
         },
     );
 
@@ -638,6 +643,7 @@ fn append_gradient_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
                 }),
                 ..Default::default()
             }),
+            text_vertical_align: VerticalAlign::Top,
         },
     );
 
@@ -669,6 +675,7 @@ fn append_gradient_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
                 }),
                 ..Default::default()
             }),
+            text_vertical_align: VerticalAlign::Top,
         },
     );
 
@@ -696,6 +703,7 @@ fn append_gradient_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
                 }),
                 ..Default::default()
             }),
+            text_vertical_align: VerticalAlign::Top,
         },
     );
 
@@ -747,6 +755,7 @@ fn append_pattern_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
                     }),
                     ..Default::default()
                 }),
+                text_vertical_align: VerticalAlign::Top,
             },
         );
     }
@@ -781,6 +790,7 @@ fn append_composite_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
                 line_width: Some(40),
                 ..Default::default()
             }),
+            text_vertical_align: VerticalAlign::Top,
         },
     );
 
@@ -809,6 +819,7 @@ fn append_composite_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
                 rotation: Some(60.0),
                 ..Default::default()
             }),
+            text_vertical_align: VerticalAlign::Top,
         },
     );
 
@@ -840,6 +851,7 @@ fn append_composite_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
                 line_width: Some(40),
                 ..Default::default()
             }),
+            text_vertical_align: VerticalAlign::Top,
         },
     );
 
@@ -916,6 +928,7 @@ fn append_composite_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
                 line_style: Some(LineStyle::Dash),
                 ..Default::default()
             }),
+            text_vertical_align: VerticalAlign::Top,
         },
     );
 }

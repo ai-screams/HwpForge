@@ -8,6 +8,7 @@ use hwpforge_core::control::{Control, ShapeStyle};
 use hwpforge_core::run::{Run, RunContent};
 use hwpforge_foundation::{
     ArcType, CharShapeIndex, Color, CurveSegmentType, DropCapStyle, Flip, HwpUnit, PatternType,
+    VerticalAlign,
 };
 
 use crate::error::HwpxResult;
@@ -17,6 +18,15 @@ use crate::schema::section::{
 };
 
 use super::section::{convert_hx_caption, decode_sublist_paragraphs, parse_hex_color};
+
+/// Parses an `<hp:subList vertAlign="...">` token into a Core [`VerticalAlign`].
+///
+/// An empty attribute (한컴 omits it for the default) or any unrecognized value
+/// falls back to [`VerticalAlign::Top`], matching the encoder default so that
+/// default shapes round-trip byte-for-byte.
+fn decode_shape_vert_align(token: &str) -> VerticalAlign {
+    token.parse().unwrap_or(VerticalAlign::Top)
+}
 
 /// Decodes an `HxRect` into a Core `Run`.
 ///
@@ -57,7 +67,17 @@ pub(crate) fn decode_textbox(
     let control = match &rect.draw_text {
         Some(draw_text) => {
             let paragraphs = decode_sublist_paragraphs(&draw_text.sub_list, depth)?;
-            Control::TextBox { paragraphs, width, height, horz_offset, vert_offset, caption, style }
+            let text_vertical_align = decode_shape_vert_align(&draw_text.sub_list.vert_align);
+            Control::TextBox {
+                paragraphs,
+                width,
+                height,
+                horz_offset,
+                vert_offset,
+                caption,
+                style,
+                text_vertical_align,
+            }
         }
         None => Control::Rect { width, height, horz_offset, vert_offset, caption, style },
     };
@@ -156,9 +176,12 @@ pub(crate) fn decode_ellipse(
         })
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
-    let paragraphs = match &ellipse.draw_text {
-        Some(dt) => decode_sublist_paragraphs(&dt.sub_list, depth)?,
-        None => Vec::new(),
+    let (paragraphs, text_vertical_align) = match &ellipse.draw_text {
+        Some(dt) => (
+            decode_sublist_paragraphs(&dt.sub_list, depth)?,
+            decode_shape_vert_align(&dt.sub_list.vert_align),
+        ),
+        None => (Vec::new(), VerticalAlign::Top),
     };
 
     let caption = ellipse.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
@@ -184,6 +207,7 @@ pub(crate) fn decode_ellipse(
                 ellipse.flip.as_ref(),
                 &ellipse.dropcap_style,
             ),
+            text_vertical_align,
         })),
         char_shape_id,
     })
@@ -211,9 +235,12 @@ pub(crate) fn decode_polygon(
         })
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
-    let paragraphs = match &polygon.draw_text {
-        Some(dt) => decode_sublist_paragraphs(&dt.sub_list, depth)?,
-        None => Vec::new(),
+    let (paragraphs, text_vertical_align) = match &polygon.draw_text {
+        Some(dt) => (
+            decode_sublist_paragraphs(&dt.sub_list, depth)?,
+            decode_shape_vert_align(&dt.sub_list.vert_align),
+        ),
+        None => (Vec::new(), VerticalAlign::Top),
     };
 
     let caption = polygon.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
@@ -237,6 +264,7 @@ pub(crate) fn decode_polygon(
                 polygon.flip.as_ref(),
                 &polygon.dropcap_style,
             ),
+            text_vertical_align,
         })),
         char_shape_id,
     })
@@ -1692,6 +1720,90 @@ mod tests {
             assert!(paragraphs.is_empty());
         } else {
             panic!("expected Control::Ellipse");
+        }
+    }
+
+    fn ellipse_with_draw_text_align(vert_align: &str) -> HxEllipse {
+        use crate::schema::section::HxSubList;
+        use crate::schema::shapes::HxDrawText;
+        let mut ellipse = default_ellipse();
+        ellipse.draw_text = Some(HxDrawText {
+            last_width: 0,
+            name: String::new(),
+            editable: 0,
+            sub_list: HxSubList {
+                vert_align: vert_align.to_string(),
+                paragraphs: vec![],
+                ..Default::default()
+            },
+            text_margin: None,
+        });
+        ellipse
+    }
+
+    #[test]
+    fn decode_ellipse_reads_center_vert_align_from_sublist() {
+        let ellipse = ellipse_with_draw_text_align("CENTER");
+        let run = decode_ellipse(&ellipse, CharShapeIndex::new(0), 0).unwrap();
+        match run.content.as_control().unwrap().clone() {
+            Control::Ellipse { text_vertical_align, .. } => {
+                assert_eq!(text_vertical_align, hwpforge_foundation::VerticalAlign::Center);
+            }
+            other => panic!("expected Control::Ellipse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn decode_ellipse_empty_vert_align_defaults_top() {
+        // 한컴 omits vertAlign for the default; empty must decode as Top so
+        // default shapes round-trip unchanged.
+        let ellipse = ellipse_with_draw_text_align("");
+        let run = decode_ellipse(&ellipse, CharShapeIndex::new(0), 0).unwrap();
+        match run.content.as_control().unwrap().clone() {
+            Control::Ellipse { text_vertical_align, .. } => {
+                assert_eq!(text_vertical_align, hwpforge_foundation::VerticalAlign::Top);
+            }
+            other => panic!("expected Control::Ellipse, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ellipse_center_align_survives_encode_decode_round_trip() {
+        use hwpforge_core::paragraph::Paragraph;
+        use hwpforge_foundation::{HwpUnit, ParaShapeIndex, VerticalAlign};
+
+        // Build a Core ellipse with CENTER-aligned text, encode it to the HWPX
+        // shape model, then decode it back. The new field must survive.
+        let ctrl = Control::Ellipse {
+            center: ShapePoint::new(100, 50),
+            axis1: ShapePoint::new(200, 50),
+            axis2: ShapePoint::new(100, 100),
+            width: HwpUnit::new(200).unwrap(),
+            height: HwpUnit::new(100).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
+            paragraphs: vec![Paragraph::new(ParaShapeIndex::new(0))],
+            caption: None,
+            style: None,
+            text_vertical_align: VerticalAlign::Center,
+        };
+        let mut hl = Vec::new();
+        let hx = crate::encoder::shapes::encode_ellipse_to_hx(&ctrl, 0, &mut hl).unwrap();
+        assert_eq!(
+            hx.draw_text.as_ref().unwrap().sub_list.vert_align,
+            "CENTER",
+            "encoder must emit CENTER"
+        );
+        let run = decode_ellipse(&hx, CharShapeIndex::new(0), 0).unwrap();
+        match run.content.as_control().unwrap().clone() {
+            Control::Ellipse { text_vertical_align, .. } => {
+                assert_eq!(
+                    text_vertical_align,
+                    VerticalAlign::Center,
+                    "round-trip must preserve CENTER"
+                );
+            }
+            other => panic!("expected Control::Ellipse, got {other:?}"),
         }
     }
 }

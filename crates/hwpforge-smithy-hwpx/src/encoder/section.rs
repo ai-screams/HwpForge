@@ -1007,13 +1007,26 @@ fn encode_control_to_ctrl(
     }
 }
 
-/// Encodes a `Vec<Paragraph>` into `HxSubList` with standard defaults.
+/// Encodes a `Vec<Paragraph>` into `HxSubList` with standard defaults
+/// (vertical alignment `TOP`).
 pub(crate) fn encode_paragraphs_to_sublist(
     paragraphs: &[Paragraph],
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
 ) -> HwpxResult<HxSubList> {
     build_sublist(paragraphs, depth, "TOP", hyperlink_entries)
+}
+
+/// Encodes a `Vec<Paragraph>` into `HxSubList` with an explicit vertical
+/// alignment token (`TOP`/`CENTER`/`BOTTOM`). Used by shape `drawText`
+/// encoders that carry a Core `VerticalAlign` field.
+pub(crate) fn encode_paragraphs_to_sublist_with_align(
+    paragraphs: &[Paragraph],
+    depth: usize,
+    vert_align: &str,
+    hyperlink_entries: &mut Vec<(String, String)>,
+) -> HwpxResult<HxSubList> {
+    build_sublist(paragraphs, depth, vert_align, hyperlink_entries)
 }
 
 fn build_sublist(
@@ -2027,6 +2040,7 @@ mod tests {
                         vert_offset: 0,
                         caption: None,
                         style: None,
+                        text_vertical_align: hwpforge_foundation::VerticalAlign::Top,
                     },
                     CharShapeIndex::new(0),
                 )],
@@ -2142,6 +2156,7 @@ mod tests {
                         vert_offset: 0,
                         caption: None,
                         style: None,
+                        text_vertical_align: hwpforge_foundation::VerticalAlign::Top,
                     },
                     CharShapeIndex::new(0),
                 )],

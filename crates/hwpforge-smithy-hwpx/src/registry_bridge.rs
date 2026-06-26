@@ -285,6 +285,7 @@ mod tests {
                     CaptionSide::Bottom,
                 )),
                 style: None,
+                text_vertical_align: hwpforge_foundation::VerticalAlign::Top,
             },
             body_cs,
         ));

@@ -13,7 +13,7 @@ use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::Run;
 use hwpforge_core::section::Section;
 use hwpforge_core::table::{Table, TableCell, TablePageBreak, TableRow};
-use hwpforge_foundation::{CharShapeIndex, Color, HwpUnit, ParaShapeIndex};
+use hwpforge_foundation::{CharShapeIndex, Color, HwpUnit, ParaShapeIndex, VerticalAlign};
 
 // ==========================================================================
 // Helpers
@@ -108,6 +108,7 @@ fn lifecycle_complex_document_with_all_content_types() {
         vert_offset: 0,
         caption: None,
         style: None,
+        text_vertical_align: VerticalAlign::Top,
     };
 
     let footnote =
@@ -225,6 +226,7 @@ fn validation_rejects_empty_text_box() {
         vert_offset: 0,
         caption: None,
         style: None,
+        text_vertical_align: VerticalAlign::Top,
     };
 
     let mut doc = Document::new();

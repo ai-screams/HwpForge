@@ -313,6 +313,12 @@ struct NestedSubtreeContext {
     /// [`Hwp5NestedSubtree::instance_id`].
     instance_id: u32,
     saw_list_header: bool,
+    /// `속성` (UINT32) field of the gso/textbox `HWPTAG_LIST_HEADER` record
+    /// (표 65). `None` until a ListHeader is seen. Bits 5–6 carry the text
+    /// vertical alignment (`0=top`, `1=center`, `2=bottom`); projection
+    /// extracts them for text-bearing shapes. Mirrors how `parse_table_cell`
+    /// recovers the same field for table cells.
+    list_header_properties: Option<u32>,
     saw_shape_rectangle: bool,
     saw_shape_component: bool,
     geometry: Option<Hwp5ShapeComponentGeometry>,
@@ -347,6 +353,7 @@ impl NestedSubtreeContext {
             properties_raw,
             instance_id,
             saw_list_header: false,
+            list_header_properties: None,
             saw_shape_rectangle: false,
             saw_shape_component: false,
             geometry,
@@ -363,8 +370,15 @@ impl NestedSubtreeContext {
         }
     }
 
-    fn note_list_header(&mut self) {
+    fn note_list_header(&mut self, data: &[u8]) {
         self.saw_list_header = true;
+        // 표 65 문단 리스트 헤더: INT16 문단 수 + UINT32 속성. Capture the
+        // 속성 word so projection can recover bits 5–6 (text vertical align).
+        if let Some(bytes) = data.get(2..6) {
+            if let Ok(arr) = <[u8; 4]>::try_from(bytes) {
+                self.list_header_properties = Some(u32::from_le_bytes(arr));
+            }
+        }
     }
 
     fn note_shape_rectangle(&mut self) {
@@ -470,6 +484,7 @@ impl NestedSubtreeContext {
                     ctrl_id: self.ctrl_id,
                     geometry,
                     paragraphs: self.paragraphs,
+                    list_header_properties: self.list_header_properties,
                 }),
                 None => Hwp5Control::Unknown { ctrl_id: self.ctrl_id, header_data: Vec::new() },
             },
@@ -1019,7 +1034,7 @@ impl BodyTextParserState {
         match tag {
             TagId::ListHeader => {
                 if let Some(ctx) = self.subtree_ctx.as_mut() {
-                    ctx.note_list_header();
+                    ctx.note_list_header(&record.data);
                 }
             }
             TagId::ShapeComponent => {

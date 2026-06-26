@@ -64,6 +64,7 @@ const _: () = assert!(std::mem::size_of::<GradientType>() == 1);
 const _: () = assert!(std::mem::size_of::<PatternType>() == 1);
 const _: () = assert!(std::mem::size_of::<ImageFillMode>() == 1);
 const _: () = assert!(std::mem::size_of::<CurveSegmentType>() == 1);
+const _: () = assert!(std::mem::size_of::<VerticalAlign>() == 1);
 const _: () = assert!(std::mem::size_of::<BookmarkType>() == 1);
 const _: () = assert!(std::mem::size_of::<FieldType>() == 1);
 // Wave 12m Phase 2: RefType / RefContentType 의 `#[repr(u8)]` 제거 + Unknown(u8)

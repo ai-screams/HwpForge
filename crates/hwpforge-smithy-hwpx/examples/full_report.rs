@@ -49,7 +49,8 @@ use hwpforge_core::section::{HeaderFooter, PageNumber, Section};
 use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
-    Alignment, CharShapeIndex, Color, HwpUnit, NumberFormatType, PageNumberPosition, ParaShapeIndex,
+    Alignment, CharShapeIndex, Color, HwpUnit, NumberFormatType, PageNumberPosition,
+    ParaShapeIndex, VerticalAlign,
 };
 use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
@@ -413,6 +414,7 @@ fn build_section_1() -> Section {
                 line_style: None,
                 ..Default::default()
             }),
+            text_vertical_align: VerticalAlign::Top,
         },
         CS_NORMAL,
         PS_CENTER,
@@ -577,6 +579,7 @@ fn build_section_2() -> Section {
                 line_style: None,
                 ..Default::default()
             }),
+            text_vertical_align: VerticalAlign::Top,
         },
         CS_NORMAL,
         PS_LEFT,
@@ -617,6 +620,7 @@ fn build_section_2() -> Section {
                 line_style: None,
                 ..Default::default()
             }),
+            text_vertical_align: VerticalAlign::Top,
         },
         CS_NORMAL,
         PS_LEFT,
@@ -873,9 +877,14 @@ fn main() {
             .paragraphs
             .iter()
             .flat_map(|p| &p.runs)
-            .filter(|r| matches!(&r.content, RunContent::Control(c) if matches!(**c,
-                Control::Line { .. } | Control::Ellipse { .. } | Control::Polygon { .. } | Control::TextBox { .. }
-            )))
+            .filter(|r| {
+                matches!(&r.content, RunContent::Control(c) if matches!(**c,
+                    Control::Line { .. }
+                        | Control::Ellipse { .. }
+                        | Control::Polygon { .. }
+                        | Control::TextBox { .. }
+                ))
+            })
             .count();
         println!(
             "    S{}: paras={}, tables={}, charts={}, shapes={}",

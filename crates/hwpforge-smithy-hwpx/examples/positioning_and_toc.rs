@@ -17,7 +17,9 @@ use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::Run;
 use hwpforge_core::section::Section;
 use hwpforge_core::PageSettings;
-use hwpforge_foundation::{Alignment, CharShapeIndex, Color, HwpUnit, ParaShapeIndex};
+use hwpforge_foundation::{
+    Alignment, CharShapeIndex, Color, HwpUnit, ParaShapeIndex, VerticalAlign,
+};
 use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
 use hwpforge_smithy_hwpx::HwpxEncoder;
 
@@ -160,6 +162,7 @@ fn section_positioning() -> Section {
             line_style: None,
             ..Default::default()
         }),
+        text_vertical_align: VerticalAlign::Top,
     };
     paras.push(ctrl_para(diamond));
 

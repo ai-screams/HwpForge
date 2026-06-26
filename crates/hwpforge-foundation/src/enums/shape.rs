@@ -435,3 +435,150 @@ impl schemars::JsonSchema for CurveSegmentType {
         gen.subschema_for::<String>()
     }
 }
+
+// ---------------------------------------------------------------------------
+// VerticalAlign
+// ---------------------------------------------------------------------------
+
+/// Vertical alignment of text inside a drawing shape (글상자/타원/다각형).
+///
+/// Maps to the HWPX `<hp:drawText><hp:subList vertAlign="...">` attribute and
+/// the HWP5 문단 리스트 헤더 (`HWPTAG_LIST_HEADER`) 속성 bits 5–6 (표 65):
+/// `0 = top`, `1 = center`, `2 = bottom`. The default is [`VerticalAlign::Top`],
+/// matching 한컴's default rendering (text pinned to the shape's top edge).
+///
+/// This is a neutral enum shared by shape text. Table cells keep their own
+/// [`crate`]-external `TableVerticalAlign` for now; unifying the two is a
+/// follow-up concern (see ADR-008).
+///
+/// `Display`/`FromStr` use the HWPX wire tokens (`TOP`/`CENTER`/`BOTTOM`).
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_foundation::VerticalAlign;
+/// use std::str::FromStr;
+///
+/// assert_eq!(VerticalAlign::default(), VerticalAlign::Top);
+/// assert_eq!(VerticalAlign::Center.to_string(), "CENTER");
+/// assert_eq!(VerticalAlign::from_str("BOTTOM").unwrap(), VerticalAlign::Bottom);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[non_exhaustive]
+#[repr(u8)]
+pub enum VerticalAlign {
+    /// Align text to the top edge of the shape (default).
+    #[default]
+    Top = 0,
+    /// Center text vertically within the shape.
+    Center = 1,
+    /// Align text to the bottom edge of the shape.
+    Bottom = 2,
+}
+
+impl fmt::Display for VerticalAlign {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Top => f.write_str("TOP"),
+            Self::Center => f.write_str("CENTER"),
+            Self::Bottom => f.write_str("BOTTOM"),
+        }
+    }
+}
+
+impl std::str::FromStr for VerticalAlign {
+    type Err = FoundationError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Top" | "top" | "TOP" => Ok(Self::Top),
+            "Center" | "center" | "CENTER" => Ok(Self::Center),
+            "Bottom" | "bottom" | "BOTTOM" => Ok(Self::Bottom),
+            _ => Err(FoundationError::ParseError {
+                type_name: "VerticalAlign".to_string(),
+                value: s.to_string(),
+                valid_values: "TOP, CENTER, BOTTOM".to_string(),
+            }),
+        }
+    }
+}
+
+impl TryFrom<u8> for VerticalAlign {
+    type Error = FoundationError;
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Top),
+            1 => Ok(Self::Center),
+            2 => Ok(Self::Bottom),
+            _ => Err(FoundationError::ParseError {
+                type_name: "VerticalAlign".to_string(),
+                value: value.to_string(),
+                valid_values: "0 (Top), 1 (Center), 2 (Bottom)".to_string(),
+            }),
+        }
+    }
+}
+
+impl schemars::JsonSchema for VerticalAlign {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        std::borrow::Cow::Borrowed("VerticalAlign")
+    }
+
+    fn json_schema(gen: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        gen.subschema_for::<String>()
+    }
+}
+
+#[cfg(test)]
+mod vertical_align_tests {
+    use super::VerticalAlign;
+    use std::str::FromStr;
+
+    #[test]
+    fn default_is_top() {
+        assert_eq!(VerticalAlign::default(), VerticalAlign::Top);
+    }
+
+    #[test]
+    fn display_uses_hwpx_tokens() {
+        assert_eq!(VerticalAlign::Top.to_string(), "TOP");
+        assert_eq!(VerticalAlign::Center.to_string(), "CENTER");
+        assert_eq!(VerticalAlign::Bottom.to_string(), "BOTTOM");
+    }
+
+    #[test]
+    fn from_str_accepts_hwpx_and_pascal_and_lower() {
+        assert_eq!(VerticalAlign::from_str("TOP").unwrap(), VerticalAlign::Top);
+        assert_eq!(VerticalAlign::from_str("Center").unwrap(), VerticalAlign::Center);
+        assert_eq!(VerticalAlign::from_str("bottom").unwrap(), VerticalAlign::Bottom);
+    }
+
+    #[test]
+    fn from_str_round_trips_display() {
+        for v in [VerticalAlign::Top, VerticalAlign::Center, VerticalAlign::Bottom] {
+            assert_eq!(VerticalAlign::from_str(&v.to_string()).unwrap(), v);
+        }
+    }
+
+    #[test]
+    fn from_str_rejects_invalid() {
+        assert!(VerticalAlign::from_str("").is_err());
+        assert!(VerticalAlign::from_str("MIDDLE").is_err());
+        assert!(VerticalAlign::from_str("baseline").is_err());
+    }
+
+    #[test]
+    fn try_from_u8_boundaries() {
+        assert_eq!(VerticalAlign::try_from(0u8).unwrap(), VerticalAlign::Top);
+        assert_eq!(VerticalAlign::try_from(1u8).unwrap(), VerticalAlign::Center);
+        assert_eq!(VerticalAlign::try_from(2u8).unwrap(), VerticalAlign::Bottom);
+        assert!(VerticalAlign::try_from(3u8).is_err());
+        assert!(VerticalAlign::try_from(u8::MAX).is_err());
+    }
+
+    #[test]
+    fn is_one_byte() {
+        assert_eq!(std::mem::size_of::<VerticalAlign>(), 1);
+    }
+}

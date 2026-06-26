@@ -76,6 +76,9 @@ pub(super) struct GsoChildBuilder {
     comp_depth: u16,
     saw_shape_rectangle: bool,
     saw_list_header: bool,
+    /// `속성` (UINT32) word of this child's `HWPTAG_LIST_HEADER` record (표 65),
+    /// when present. Bits 5–6 carry text vertical alignment.
+    list_header_properties: Option<u32>,
     geometry: Option<Hwp5ShapeComponentGeometry>,
     picture: Option<Hwp5ShapePicture>,
     ole: Option<Hwp5ShapeComponentOle>,
@@ -98,6 +101,7 @@ impl GsoChildBuilder {
             comp_depth,
             saw_shape_rectangle: false,
             saw_list_header: false,
+            list_header_properties: None,
             geometry,
             picture: None,
             ole: None,
@@ -133,6 +137,7 @@ impl GsoChildBuilder {
             return Hwp5GroupChild {
                 control: Hwp5Control::Unknown { ctrl_id: CTRL_ID_GSO, header_data: Vec::new() },
                 paragraphs: Vec::new(),
+                list_header_properties: None,
             };
         }
 
@@ -151,7 +156,11 @@ impl GsoChildBuilder {
             shape_component_kind: self.shape_component_kind,
             instance_id: 0,
         });
-        Hwp5GroupChild { control, paragraphs: self.paragraphs }
+        Hwp5GroupChild {
+            control,
+            paragraphs: self.paragraphs,
+            list_header_properties: self.list_header_properties,
+        }
     }
 }
 
@@ -203,9 +212,11 @@ impl GsoActiveChild {
     fn into_child(self, warnings: &mut Vec<Hwp5Warning>) -> Hwp5GroupChild {
         match self {
             Self::Leaf(b) => b.into_child(warnings),
-            Self::Nested(b) => {
-                Hwp5GroupChild { control: b.into_control(warnings), paragraphs: Vec::new() }
-            }
+            Self::Nested(b) => Hwp5GroupChild {
+                control: b.into_control(warnings),
+                paragraphs: Vec::new(),
+                list_header_properties: None,
+            },
         }
     }
 }
@@ -306,7 +317,14 @@ impl GsoGroupBuilder {
             None => return,
         };
         match tag {
-            TagId::ListHeader => child.saw_list_header = true,
+            TagId::ListHeader => {
+                child.saw_list_header = true;
+                if let Some(bytes) = record.data.get(2..6) {
+                    if let Ok(arr) = <[u8; 4]>::try_from(bytes) {
+                        child.list_header_properties = Some(u32::from_le_bytes(arr));
+                    }
+                }
+            }
             TagId::ShapeComponentRect => child.saw_shape_rectangle = true,
             TagId::ShapeComponentLine => match Hwp5ShapeComponentLine::parse(&record.data) {
                 Ok(line) => child.line = Some(line),

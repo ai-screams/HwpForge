@@ -23,7 +23,7 @@ use hwpforge_core::Control;
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
     BookmarkType, CharShapeIndex, HwpUnit, NumberFormatType, PageNumberPosition, ParaShapeIndex,
-    RefContentType, RefType, StyleIndex,
+    RefContentType, RefType, StyleIndex, VerticalAlign,
 };
 
 use crate::ctrl_ids::{
@@ -2325,6 +2325,23 @@ fn chart_dimension(value: i32) -> Option<HwpUnit> {
     HwpUnit::new(value).ok()
 }
 
+/// Recovers the shape text vertical alignment from a `HWPTAG_LIST_HEADER`
+/// 속성 word (표 65). Bits 5–6 hold the alignment (`0=top`, `1=center`,
+/// `2=bottom`), mirroring `parse_table_cell`. `None` (no ListHeader 속성
+/// captured) and any unmapped value default to [`VerticalAlign::Top`], which
+/// matches 한컴's default and keeps default shapes byte-unchanged downstream.
+fn shape_vertical_align_from_list_header(list_header_properties: Option<u32>) -> VerticalAlign {
+    match list_header_properties {
+        Some(props) => match ((props >> 5) & 0x03) as u8 {
+            0 => VerticalAlign::Top,
+            1 => VerticalAlign::Center,
+            2 => VerticalAlign::Bottom,
+            _ => VerticalAlign::Top,
+        },
+        None => VerticalAlign::Top,
+    }
+}
+
 fn project_textbox_run(
     textbox: &Hwp5TextBoxControl,
     projection_images: &mut ProjectionImageState<'_>,
@@ -2343,6 +2360,9 @@ fn project_textbox_run(
             vert_offset: textbox.geometry.y,
             caption: None,
             style: None,
+            text_vertical_align: shape_vertical_align_from_list_header(
+                textbox.list_header_properties,
+            ),
         },
         CharShapeIndex::new(0),
     )
@@ -2401,6 +2421,7 @@ fn project_group_child(
             projection_images,
             ImageProjectionContext::TextBox,
         );
+        let valign = shape_vertical_align_from_list_header(child.list_header_properties);
         match &child.control {
             Hwp5Control::Rect(rect) => {
                 let mut control = Control::text_box(
@@ -2408,9 +2429,12 @@ fn project_group_child(
                     hwp_unit_from_u32(rect.geometry.width),
                     hwp_unit_from_u32(rect.geometry.height),
                 );
-                if let Control::TextBox { horz_offset, vert_offset, .. } = &mut control {
+                if let Control::TextBox { horz_offset, vert_offset, text_vertical_align, .. } =
+                    &mut control
+                {
                     *horz_offset = rect.geometry.x;
                     *vert_offset = rect.geometry.y;
+                    *text_vertical_align = valign;
                 }
                 return Some(control);
             }
@@ -2418,9 +2442,12 @@ fn project_group_child(
                 let width = HwpUnit::new(positive_i32_from_u32(ellipse.geometry.width)?).ok()?;
                 let height = HwpUnit::new(positive_i32_from_u32(ellipse.geometry.height)?).ok()?;
                 let mut control = Control::ellipse_with_text(width, height, paragraphs);
-                if let Control::Ellipse { horz_offset, vert_offset, .. } = &mut control {
+                if let Control::Ellipse { horz_offset, vert_offset, text_vertical_align, .. } =
+                    &mut control
+                {
                     *horz_offset = ellipse.geometry.x;
                     *vert_offset = ellipse.geometry.y;
+                    *text_vertical_align = valign;
                 }
                 return Some(control);
             }
@@ -2883,6 +2910,95 @@ mod tests {
     use super::*;
 
     #[test]
+    fn shape_vertical_align_extracts_bits_5_6() {
+        // 표 65 문단 리스트 헤더 속성 bit 5~6 = 세로 정렬 (0=top, 1=center, 2=bottom).
+        // value << 5 places the alignment code in the right bits.
+        assert_eq!(
+            shape_vertical_align_from_list_header(Some(0 << 5)),
+            VerticalAlign::Top,
+            "code 0 → top"
+        );
+        assert_eq!(
+            shape_vertical_align_from_list_header(Some(1 << 5)),
+            VerticalAlign::Center,
+            "code 1 → center"
+        );
+        assert_eq!(
+            shape_vertical_align_from_list_header(Some(2 << 5)),
+            VerticalAlign::Bottom,
+            "code 2 → bottom"
+        );
+    }
+
+    #[test]
+    fn shape_vertical_align_ignores_other_bits() {
+        // Lower bits (text direction, line wrap) and higher bits must not leak
+        // into the alignment. Set every bit *except* 5~6 and expect Top.
+        let noise = !0b0110_0000u32;
+        assert_eq!(shape_vertical_align_from_list_header(Some(noise)), VerticalAlign::Top);
+        // center with surrounding noise still decodes center.
+        assert_eq!(
+            shape_vertical_align_from_list_header(Some(noise | (1 << 5))),
+            VerticalAlign::Center
+        );
+    }
+
+    #[test]
+    fn shape_vertical_align_defaults_top_when_absent() {
+        assert_eq!(shape_vertical_align_from_list_header(None), VerticalAlign::Top);
+        // code 3 (reserved) is not a real value → default Top, no fake mapping.
+        assert_eq!(shape_vertical_align_from_list_header(Some(3 << 5)), VerticalAlign::Top);
+    }
+
+    #[test]
+    fn project_textbox_carries_center_vertical_align_from_list_header() {
+        // 한컴 stores the textbox 세로 정렬 in the ListHeader 속성 bits 5~6.
+        // A CENTER (code 1) textbox must project to Core with Center align.
+        let textbox = Hwp5TextBoxControl {
+            ctrl_id: 0x6773_6F20,
+            geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                x: 10,
+                y: 20,
+                width: 8_000,
+                height: 6_000,
+            },
+            paragraphs: vec![make_paragraph("가운데", 0, 0)],
+            list_header_properties: Some(1 << 5),
+        };
+        let mut images = ProjectionImageState::new(None, None);
+        let run = project_textbox_run(&textbox, &mut images);
+        match run.content.as_control().unwrap().clone() {
+            Control::TextBox { text_vertical_align, .. } => {
+                assert_eq!(text_vertical_align, VerticalAlign::Center);
+            }
+            other => panic!("expected Control::TextBox, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn project_textbox_defaults_top_when_list_header_absent() {
+        let textbox = Hwp5TextBoxControl {
+            ctrl_id: 0x6773_6F20,
+            geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                x: 0,
+                y: 0,
+                width: 8_000,
+                height: 6_000,
+            },
+            paragraphs: vec![make_paragraph("위", 0, 0)],
+            list_header_properties: None,
+        };
+        let mut images = ProjectionImageState::new(None, None);
+        let run = project_textbox_run(&textbox, &mut images);
+        match run.content.as_control().unwrap().clone() {
+            Control::TextBox { text_vertical_align, .. } => {
+                assert_eq!(text_vertical_align, VerticalAlign::Top);
+            }
+            other => panic!("expected Control::TextBox, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn parse_page_number_control_reads_number_shape_from_property() {
         // pgnp ctrl-header layout: [0..4] ctrl_id, [4..8] property u32 (LE)
         // where bits 0-7 (byte 4) = number shape and bits 8-11 (byte 5) =
@@ -3223,6 +3339,7 @@ mod tests {
                 width: 8_000,
                 height: 6_000,
             },
+            list_header_properties: None,
             paragraphs: vec![Hwp5Paragraph {
                 text: "앞\u{fffc}뒤".to_string(),
                 text_segments: Vec::new(),

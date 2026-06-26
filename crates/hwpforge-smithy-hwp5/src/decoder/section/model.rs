@@ -345,6 +345,11 @@ pub(crate) struct Hwp5TextBoxControl {
     pub geometry: Hwp5ShapeComponentGeometry,
     /// Nested paragraphs captured from the textbox subtree.
     pub paragraphs: Vec<Hwp5Paragraph>,
+    /// `속성` (UINT32) word of the textbox `HWPTAG_LIST_HEADER` record (표 65),
+    /// when present. Bits 5–6 carry the text vertical alignment; projection
+    /// maps `(props >> 5) & 0x03` → Core `VerticalAlign`. `None` when the
+    /// ListHeader was absent or too short to carry the 속성 word.
+    pub list_header_properties: Option<u32>,
 }
 
 /// Parsed OLE-backed object evidence from a `gso ` scope.
@@ -399,6 +404,10 @@ pub(crate) struct Hwp5GroupChild {
     pub control: Hwp5Control,
     /// `drawText` paragraphs carried by the child, if any.
     pub paragraphs: Vec<Hwp5Paragraph>,
+    /// `속성` (UINT32) word of the child's `HWPTAG_LIST_HEADER` record (표 65),
+    /// when present. Bits 5–6 carry text vertical alignment; projection maps
+    /// `(props >> 5) & 0x03` → Core `VerticalAlign` for text-bearing children.
+    pub list_header_properties: Option<u32>,
 }
 
 /// Parsed table control content.

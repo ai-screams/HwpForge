@@ -32,6 +32,7 @@ pub use shapes::*;
 
 use hwpforge_foundation::{
     ArcType, BookmarkType, Color, CurveSegmentType, FieldType, HwpUnit, RefContentType, RefType,
+    VerticalAlign,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -90,6 +91,11 @@ pub enum Control {
         caption: Option<Caption>,
         /// Optional visual style overrides (border color, fill, line width).
         style: Option<ShapeStyle>,
+        /// Vertical alignment of the embedded text within the box.
+        /// Maps to HWPX `<hp:drawText><hp:subList vertAlign="...">` and HWP5
+        /// 문단 리스트 헤더 속성 bits 5–6. Defaults to [`VerticalAlign::Top`].
+        #[serde(default)]
+        text_vertical_align: VerticalAlign,
     },
 
     /// A hyperlink with display text and URL.
@@ -162,6 +168,11 @@ pub enum Control {
         caption: Option<Caption>,
         /// Optional visual style overrides (border color, fill, line width).
         style: Option<ShapeStyle>,
+        /// Vertical alignment of the embedded text within the ellipse.
+        /// Maps to HWPX `<hp:drawText><hp:subList vertAlign="...">` and HWP5
+        /// 문단 리스트 헤더 속성 bits 5–6. Defaults to [`VerticalAlign::Top`].
+        #[serde(default)]
+        text_vertical_align: VerticalAlign,
     },
 
     /// A HWP5 chart carried as opaque OOXML + OLE blob passthrough.
@@ -232,6 +243,11 @@ pub enum Control {
         caption: Option<Caption>,
         /// Optional visual style overrides (border color, fill, line width).
         style: Option<ShapeStyle>,
+        /// Vertical alignment of the embedded text within the polygon.
+        /// Maps to HWPX `<hp:drawText><hp:subList vertAlign="...">` and HWP5
+        /// 문단 리스트 헤더 속성 bits 5–6. Defaults to [`VerticalAlign::Top`].
+        #[serde(default)]
+        text_vertical_align: VerticalAlign,
     },
 
     /// An inline equation (수식) using HancomEQN script format.
@@ -998,6 +1014,7 @@ impl Control {
             vert_offset: 0,
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         }
     }
 
@@ -1115,6 +1132,7 @@ impl Control {
             paragraphs: vec![],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         }
     }
 
@@ -1151,6 +1169,7 @@ impl Control {
             paragraphs,
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         }
     }
 
@@ -1243,6 +1262,7 @@ impl Control {
             paragraphs: vec![],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         })
     }
 
@@ -1692,7 +1712,7 @@ impl std::fmt::Display for Control {
 mod tests {
     use super::*;
     use crate::run::Run;
-    use hwpforge_foundation::{CharShapeIndex, Color, ParaShapeIndex};
+    use hwpforge_foundation::{CharShapeIndex, Color, ParaShapeIndex, VerticalAlign};
 
     fn simple_paragraph() -> Paragraph {
         Paragraph::with_runs(
@@ -1777,6 +1797,7 @@ mod tests {
             vert_offset: 0,
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         assert!(ctrl.is_text_box());
         assert!(!ctrl.is_hyperlink());
@@ -1836,6 +1857,7 @@ mod tests {
             vert_offset: 0,
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         assert_eq!(ctrl.to_string(), "TextBox(2 paragraphs)");
     }
@@ -1896,6 +1918,7 @@ mod tests {
             vert_offset: 0,
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         let json = serde_json::to_string(&ctrl).unwrap();
         let back: Control = serde_json::from_str(&json).unwrap();
@@ -1970,6 +1993,7 @@ mod tests {
             paragraphs: vec![],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         assert!(ctrl.is_ellipse());
         assert!(!ctrl.is_line());
@@ -1989,6 +2013,7 @@ mod tests {
             paragraphs: vec![simple_paragraph()],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         assert!(ctrl.is_ellipse());
         assert_eq!(ctrl.to_string(), "Ellipse(1 paragraph)");
@@ -2009,6 +2034,7 @@ mod tests {
             paragraphs: vec![],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         assert!(ctrl.is_polygon());
         assert!(!ctrl.is_line());
@@ -2061,6 +2087,7 @@ mod tests {
             paragraphs: vec![simple_paragraph()],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         let json = serde_json::to_string(&ctrl).unwrap();
         let back: Control = serde_json::from_str(&json).unwrap();
@@ -2082,6 +2109,7 @@ mod tests {
             paragraphs: vec![],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         let json = serde_json::to_string(&ctrl).unwrap();
         let back: Control = serde_json::from_str(&json).unwrap();
@@ -2265,6 +2293,7 @@ mod tests {
                 paragraphs,
                 caption,
                 style,
+                ..
             } => {
                 assert_eq!(vertices.len(), 3);
                 // bbox: x 0..1000, y 0..1000
@@ -2483,6 +2512,7 @@ mod tests {
                 paragraphs,
                 caption,
                 style,
+                ..
             } => {
                 let wv = w.as_i32();
                 let hv = h.as_i32();

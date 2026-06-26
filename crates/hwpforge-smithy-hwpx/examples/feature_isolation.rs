@@ -35,7 +35,7 @@ use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
     Alignment, ApplyPageType, CharShapeIndex, Color, HwpUnit, NumberFormatType, PageNumberPosition,
-    ParaShapeIndex, UnderlineType,
+    ParaShapeIndex, UnderlineType, VerticalAlign,
 };
 use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
 use hwpforge_smithy_hwpx::HwpxEncoder;
@@ -810,6 +810,7 @@ fn gen_06_textbox() {
                 vert_offset: 0,
                 caption: None,
                 style: None,
+                text_vertical_align: VerticalAlign::Top,
             },
             csi(CS_NORMAL),
         )],
@@ -832,6 +833,7 @@ fn gen_06_textbox() {
                     CaptionSide::Bottom,
                 )),
                 style: None,
+                text_vertical_align: VerticalAlign::Top,
             },
             csi(CS_NORMAL),
         )],
@@ -864,6 +866,7 @@ fn gen_06_textbox() {
                     line_width: Some(50),
                     ..Default::default()
                 }),
+                text_vertical_align: VerticalAlign::Top,
             },
             csi(CS_NORMAL),
         )],
@@ -895,6 +898,7 @@ fn gen_06_textbox() {
                     line_width: Some(150),
                     ..Default::default()
                 }),
+                text_vertical_align: VerticalAlign::Top,
             },
             csi(CS_NORMAL),
         )],
@@ -917,6 +921,7 @@ fn gen_06_textbox() {
                     vert_offset: 0,
                     caption: None,
                     style: None,
+                    text_vertical_align: VerticalAlign::Top,
                 },
                 csi(CS_NORMAL),
             )],
@@ -957,6 +962,7 @@ fn gen_06_textbox() {
                     line_width: Some(30),
                     ..Default::default()
                 }),
+                text_vertical_align: VerticalAlign::Top,
             },
             csi(CS_NORMAL),
         )],
@@ -1105,6 +1111,7 @@ fn gen_08_ellipse() {
                     },
                     caption: None,
                     style,
+                    text_vertical_align: VerticalAlign::Top,
                 },
                 csi(CS_NORMAL),
             )],
@@ -1213,6 +1220,7 @@ fn gen_09_polygon() {
                         paragraphs: vec![p(text, CS_NORMAL, PS_CENTER)],
                         caption: None,
                         style,
+                        text_vertical_align: VerticalAlign::Top,
                     },
                     csi(CS_NORMAL),
                 )],
