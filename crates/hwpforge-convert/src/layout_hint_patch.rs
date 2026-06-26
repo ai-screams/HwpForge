@@ -18,7 +18,6 @@ use zip::{CompressionMethod, ZipArchive, ZipWriter};
 use hwpforge_smithy_hwp5::layout_hint_patch::{
     ParagraphLayoutHint, SectionLayoutHints, TableLayoutHint,
 };
-use hwpforge_smithy_hwp5::schema::section::Hwp5ParaLineSeg;
 use hwpforge_smithy_hwp5::{Hwp5Error, Hwp5Result};
 
 #[derive(Debug, Clone)]
@@ -227,8 +226,7 @@ impl SectionXmlPatchState {
     ) -> Hwp5Result<()> {
         let local = local_name(event.name().as_ref()).to_vec();
         if local.as_slice() == b"p" {
-            let hint = self.pop_paragraph_hint()?;
-            write_linesegarray(writer, &hint.line_segments)?;
+            self.pop_paragraph_hint()?;
         }
 
         writer
@@ -391,89 +389,6 @@ fn rewrite_element_attr(
     Ok(rebuilt)
 }
 
-/// Conservative default lineseg values for paragraphs whose HWP5 source
-/// does not carry a `ParaLineSeg` (tag `0x45`) record (task #123).
-///
-/// Without an emitted `<hp:linesegarray>`, Hancom Office flags the file
-/// as needing "low-security recovery" because it cannot pre-compute the
-/// rendering cache. Emitting a single placeholder segment with native-
-/// matching default attributes lets Hancom open the file silently — it
-/// recomputes per-line metrics on first render anyway.
-///
-/// Values empirically derived from native `sample-field-docsummary.hwpx`:
-/// - `vertsize/textheight = 1000` (10pt baseline, native default)
-/// - `baseline = 850`, `spacing = 600`
-/// - `horzsize = 42520` (A4 content width, 1cm L/R margin)
-/// - `flags = 393216` (Hancom's default lineseg flag bitmask)
-///
-/// `vertpos` is intentionally left at `0` — Hancom recomputes the cumulative
-/// vertical position from paragraph order on open.
-fn write_default_lineseg<W: Write>(writer: &mut Writer<W>) -> Hwp5Result<()> {
-    let mut line = BytesStart::new("hp:lineseg");
-    line.push_attribute(("textpos", "0"));
-    line.push_attribute(("vertpos", "0"));
-    line.push_attribute(("vertsize", "1000"));
-    line.push_attribute(("textheight", "1000"));
-    line.push_attribute(("baseline", "850"));
-    line.push_attribute(("spacing", "600"));
-    line.push_attribute(("horzpos", "0"));
-    line.push_attribute(("horzsize", "42520"));
-    line.push_attribute(("flags", "393216"));
-    writer
-        .write_event(Event::Empty(line))
-        .map_err(|e| Hwp5Error::Cfb { detail: format!("write default lineseg: {e}") })?;
-    Ok(())
-}
-
-fn write_linesegarray<W: Write>(
-    writer: &mut Writer<W>,
-    line_segments: &[Hwp5ParaLineSeg],
-) -> Hwp5Result<()> {
-    // task #123: always emit linesegarray (even if HWP5 source omitted
-    // the ParaLineSeg record). Hancom recomputes accurate metrics on
-    // first render, but the element's *presence* is required to skip
-    // the "low-security recovery" warning.
-    writer
-        .write_event(Event::Start(BytesStart::new("hp:linesegarray")))
-        .map_err(|e| Hwp5Error::Cfb { detail: format!("write linesegarray start: {e}") })?;
-
-    if line_segments.is_empty() {
-        write_default_lineseg(writer)?;
-    } else {
-        for segment in line_segments {
-            let textpos = segment.text_start_position.to_string();
-            let vertpos = segment.vertical_position.to_string();
-            let vertsize = segment.line_height.to_string();
-            let textheight = segment.text_height.to_string();
-            let baseline = segment.baseline_distance.to_string();
-            let spacing = segment.line_spacing.to_string();
-            let horzpos = segment.column_start_position.to_string();
-            let horzsize = segment.segment_width.to_string();
-            let flags = segment.tag.to_string();
-
-            let mut line = BytesStart::new("hp:lineseg");
-            line.push_attribute(("textpos", textpos.as_str()));
-            line.push_attribute(("vertpos", vertpos.as_str()));
-            line.push_attribute(("vertsize", vertsize.as_str()));
-            line.push_attribute(("textheight", textheight.as_str()));
-            line.push_attribute(("baseline", baseline.as_str()));
-            line.push_attribute(("spacing", spacing.as_str()));
-            line.push_attribute(("horzpos", horzpos.as_str()));
-            line.push_attribute(("horzsize", horzsize.as_str()));
-            line.push_attribute(("flags", flags.as_str()));
-
-            writer
-                .write_event(Event::Empty(line))
-                .map_err(|e| Hwp5Error::Cfb { detail: format!("write lineseg: {e}") })?;
-        }
-    }
-
-    writer
-        .write_event(Event::End(BytesEnd::new("hp:linesegarray")))
-        .map_err(|e| Hwp5Error::Cfb { detail: format!("write linesegarray end: {e}") })?;
-    Ok(())
-}
-
 fn local_name(name: &[u8]) -> &[u8] {
     name.rsplit(|byte| *byte == b':').next().unwrap_or(name)
 }
@@ -481,6 +396,7 @@ fn local_name(name: &[u8]) -> &[u8] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hwpforge_smithy_hwp5::schema::section::Hwp5ParaLineSeg;
     use std::collections::VecDeque;
 
     /// Build a small in-memory ZIP whose entries hold the given byte payloads.
@@ -554,7 +470,7 @@ mod tests {
     }
 
     #[test]
-    fn patch_section_xml_injects_linesegarray_and_table_height() {
+    fn patch_section_xml_patches_table_height_without_linesegarray() {
         let xml = concat!(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>"#,
             r#"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">"#,
@@ -579,9 +495,14 @@ mod tests {
         };
 
         let patched = patch_section_xml(xml, hints).expect("section xml should patch");
-        assert!(patched
-            .contains(r#"<hp:linesegarray><hp:lineseg textpos="0" vertpos="0" vertsize="1000""#));
-        assert!(patched.contains(r#"height="4482""#));
+        // Table height must still be patched.
+        assert!(patched.contains(r#"height="4482""#), "table height must be patched: {patched}");
+        // No linesegarray must be emitted at all.
+        assert!(
+            !patched.contains("hp:linesegarray"),
+            "linesegarray must NOT be emitted: {patched}"
+        );
+        assert!(!patched.contains("hp:lineseg"), "lineseg must NOT be emitted: {patched}");
     }
 
     #[test]
@@ -806,12 +727,42 @@ mod tests {
         );
     }
 
-    // ── write_linesegarray with empty line_segments uses default lineseg ──────
+    // ── no linesegarray emitted even when line_segments is empty ─────────────
 
     #[test]
-    fn patch_section_xml_emits_default_lineseg_for_empty_line_segments() {
-        // A ParagraphLayoutHint with no line_segments must emit the default
-        // <hp:lineseg textpos="0" vertpos="0" ...> placeholder.
+    fn patch_section_xml_emits_no_linesegarray_for_empty_line_segments() {
+        // A ParagraphLayoutHint with no line_segments must NOT emit any
+        // lineseg or linesegarray — Hancom recomputes layout itself.
+        let xml = concat!(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>"#,
+            r#"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">"#,
+            r#"<hp:p id="0" paraPrIDRef="0" styleIDRef="0"><hp:run charPrIDRef="0"><hp:t>X</hp:t></hp:run></hp:p>"#,
+            r#"</hs:sec>"#
+        );
+
+        let hints = SectionLayoutHints {
+            paragraphs: VecDeque::from(vec![ParagraphLayoutHint { line_segments: vec![] }]),
+            tables: VecDeque::new(),
+        };
+
+        let patched = patch_section_xml(xml, hints).expect("must patch");
+        assert!(
+            !patched.contains("hp:linesegarray"),
+            "linesegarray must NOT be emitted for empty line_segments: {patched}"
+        );
+        assert!(
+            !patched.contains("hp:lineseg"),
+            "lineseg must NOT be emitted for empty line_segments: {patched}"
+        );
+    }
+
+    // ── regression: non-empty line_segments also produce no linesegarray ─────
+
+    #[test]
+    fn patch_section_xml_emits_no_linesegarray_for_non_empty_line_segments() {
+        // Even when the ParagraphLayoutHint carries multiple line segments from
+        // HWP5, no <hp:linesegarray> must be written — stale HWP5 positions
+        // would cause Hancom to overlap text on a single line.
         let xml = concat!(
             r#"<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>"#,
             r#"<hs:sec xmlns:hp="http://www.hancom.co.kr/hwpml/2011/paragraph" xmlns:hs="http://www.hancom.co.kr/hwpml/2011/section">"#,
@@ -821,19 +772,23 @@ mod tests {
 
         let hints = SectionLayoutHints {
             paragraphs: VecDeque::from(vec![ParagraphLayoutHint {
-                line_segments: vec![], // empty → must write default lineseg
+                line_segments: vec![
+                    line_segment(0, 0, 1000),
+                    line_segment(20, 1600, 1000),
+                    line_segment(48, 3200, 1000),
+                ],
             }]),
             tables: VecDeque::new(),
         };
 
         let patched = patch_section_xml(xml, hints).expect("must patch");
         assert!(
-            patched.contains(r#"hp:lineseg textpos="0""#),
-            "default lineseg must be emitted for empty line_segments: {patched}"
+            !patched.contains("hp:linesegarray"),
+            "linesegarray must NOT be emitted even with non-empty line_segments: {patched}"
         );
         assert!(
-            patched.contains(r#"horzsize="42520""#),
-            "default lineseg must carry horzsize=42520: {patched}"
+            !patched.contains("hp:lineseg"),
+            "lineseg must NOT be emitted even with non-empty line_segments: {patched}"
         );
     }
 }
