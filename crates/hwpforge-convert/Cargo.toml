@@ -15,10 +15,14 @@ rust-version.workspace = true
 description = "Cross-format conversion orchestrator for HwpForge (HWP5 -> HWPX)"
 
 [dependencies]
-hwpforge-core = { path = "../hwpforge-core", version = "0.7.0" }
-hwpforge-foundation = { path = "../hwpforge-foundation", version = "0.7.0" }
-hwpforge-smithy-hwp5 = { path = "../hwpforge-smithy-hwp5", version = "0.7.0" }
-hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0.7.0" }
+# publish = false: path-only deps (no version pin) so release-plz can bump
+# the workspace version without convert's `^x` requirement failing to resolve
+# against an already-bumped publish=false sibling (e.g. smithy-hwp5). Matches
+# the bindings-cli / bindings-py convention.
+hwpforge-core = { path = "../hwpforge-core" }
+hwpforge-foundation = { path = "../hwpforge-foundation" }
+hwpforge-smithy-hwp5 = { path = "../hwpforge-smithy-hwp5" }
+hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx" }
 quick-xml = { workspace = true }
 serde = { workspace = true }
 zip = { workspace = true }
