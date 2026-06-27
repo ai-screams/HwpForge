@@ -142,7 +142,7 @@ struct ParagraphProjectionQueues<'a> {
     /// Pending SUMMERY (`%smr`) auto-fields in document order (Wave 12n).
     /// Consumed by `FieldBegin %smr` inline segments via `start_active_field`.
     /// Same lifecycle as `clickhere_controls`.
-    summery_fields: VecDeque<crate::schema::section::Hwp5SummeryControl>,
+    summary_fields: VecDeque<crate::schema::section::Hwp5SummaryControl>,
     /// Pending `%dte` date/time format-code fields in document order
     /// (Wave 12n). Consumed by `FieldBegin %dte` inline segments.
     datecode_fields: VecDeque<crate::schema::section::Hwp5DateCodeControl>,
@@ -207,12 +207,12 @@ enum ActiveField {
     /// SUMMERY auto-field (Wave 12n). `command_token` carries the wire
     /// `$X` token (e.g. `$author`, `$modifiedtime`). On `FieldEnd` the
     /// token is mapped to a typed [`hwpforge_foundation::FieldType`] or,
-    /// for unknown tokens, surfaced as `Control::UnknownSummery { token }`.
+    /// for unknown tokens, surfaced as `Control::UnknownSummary { token }`.
     /// `display_text` accumulates the body chars between `FieldBegin` and
     /// `FieldEnd` (the cached resolved value, e.g. the author name or the
     /// locale-formatted date) so the HWPX encoder can carry it — an empty
     /// body triggers 한컴's "낮은 보안 수준 복구" warning (#120/#136).
-    SummeryField {
+    SummaryField {
         start_utf16: u32,
         command_token: String,
         display_text: String,
@@ -221,7 +221,7 @@ enum ActiveField {
     /// Command pattern + 8-byte trailer for round-trip fidelity. On
     /// `FieldEnd` the projection emits `Control::DateCodeField` with
     /// `is_time_mode` derived from the `T` prefix. `display_text`
-    /// accumulates the cached resolved value (see [`Self::SummeryField`]).
+    /// accumulates the cached resolved value (see [`Self::SummaryField`]).
     DateCodeField {
         start_utf16: u32,
         raw_command: String,
@@ -232,7 +232,7 @@ enum ActiveField {
     /// projection maps the raw Command to a typed `PathFieldCommand`
     /// (or `Unknown` for forward compatibility) and emits
     /// `Control::PathField`. `display_text` accumulates the cached resolved
-    /// path (see [`Self::SummeryField`]).
+    /// path (see [`Self::SummaryField`]).
     PathField {
         start_utf16: u32,
         raw_command: String,
@@ -980,7 +980,7 @@ fn project_visible_text_segment(
             // Wave 12n cached-value carry (#120/#136): SUMMERY/%dte/%pat
             // accumulate the FieldBegin..FieldEnd body as the field's cached
             // resolved value (capped — see `push_field_display_text`).
-            ActiveField::SummeryField { display_text, .. }
+            ActiveField::SummaryField { display_text, .. }
             | ActiveField::DateCodeField { display_text, .. }
             | ActiveField::PathField { display_text, .. } => {
                 push_field_display_text(display_text, text);
@@ -1005,7 +1005,7 @@ fn project_visible_text_segment(
 /// — extracted from `project_paragraph_with_images_structural`).
 ///
 /// The marker's `extra[0..4]` ctrl_id picks which per-family queue
-/// supplies the typed payload (memo / clickhere / summery / datecode /
+/// supplies the typed payload (memo / clickhere / summary / datecode /
 /// pathfield / crossref); families pop only their own queue so
 /// unrelated controls stay queued for later markers.
 fn start_field_from_marker(
@@ -1020,8 +1020,8 @@ fn start_field_from_marker(
     let memo = if ctrl_id == CTRL_ID_MEMO_INLINE { queues.memo_controls.pop_front() } else { None };
     let clickhere =
         if ctrl_id == CTRL_ID_CLICK_HERE { queues.clickhere_controls.pop_front() } else { None };
-    let summery =
-        if ctrl_id == CTRL_ID_FIELD_SUMMERY { queues.summery_fields.pop_front() } else { None };
+    let summary =
+        if ctrl_id == CTRL_ID_FIELD_SUMMERY { queues.summary_fields.pop_front() } else { None };
     let datecode =
         if ctrl_id == CTRL_ID_FIELD_DATE_CODE { queues.datecode_fields.pop_front() } else { None };
     let pathfield =
@@ -1033,7 +1033,7 @@ fn start_field_from_marker(
         header,
         memo,
         clickhere,
-        summery,
+        summary,
         datecode,
         pathfield,
         crossref,
@@ -1113,7 +1113,7 @@ fn append_visible_unit(
         match active {
             ActiveField::Hyperlink { display_text, .. }
             | ActiveField::CrossRef { display_text, .. } => display_text.push(ch),
-            ActiveField::SummeryField { display_text, .. }
+            ActiveField::SummaryField { display_text, .. }
             | ActiveField::DateCodeField { display_text, .. }
             | ActiveField::PathField { display_text, .. } => {
                 let mut buf = [0u8; 4];
@@ -1146,7 +1146,7 @@ fn paragraph_needs_structural_projection(hwp_para: &Hwp5Paragraph) -> bool {
                 Hwp5Control::Unknown { ctrl_id: CTRL_ID_PAGE_NUMBER | CTRL_ID_BOOKMARK_POINT, .. }
             ) || matches!(control, Hwp5Control::Memo(_))
                 || matches!(control, Hwp5Control::ClickHere(_))
-                || matches!(control, Hwp5Control::SummeryField(_))
+                || matches!(control, Hwp5Control::SummaryField(_))
                 || matches!(control, Hwp5Control::DateCodeField(_))
                 || matches!(control, Hwp5Control::PathField(_))
                 || matches!(control, Hwp5Control::CrossRef(_))
@@ -1163,7 +1163,7 @@ fn build_paragraph_projection_queues<'a>(
     let mut object_controls = VecDeque::new();
     let mut memo_controls = VecDeque::new();
     let mut clickhere_controls = VecDeque::new();
-    let mut summery_fields = VecDeque::new();
+    let mut summary_fields = VecDeque::new();
     let mut datecode_fields = VecDeque::new();
     let mut pathfield_controls = VecDeque::new();
     let mut crossref_controls = VecDeque::new();
@@ -1189,8 +1189,8 @@ fn build_paragraph_projection_queues<'a>(
         // SUMMERY auto-fields (Wave 12n) — same pattern. The Command
         // token lives in the parsed control; `FieldBegin %smr` pulls the
         // next entry off this queue.
-        if let Hwp5Control::SummeryField(summery) = control {
-            summery_fields.push_back(summery.clone());
+        if let Hwp5Control::SummaryField(summary) = control {
+            summary_fields.push_back(summary.clone());
             continue;
         }
         // `%dte` date/time format-code fields (Wave 12n) — same pattern.
@@ -1254,7 +1254,7 @@ fn build_paragraph_projection_queues<'a>(
         object_controls,
         memo_controls,
         clickhere_controls,
-        summery_fields,
+        summary_fields,
         datecode_fields,
         pathfield_controls,
         crossref_controls,
@@ -1262,7 +1262,7 @@ fn build_paragraph_projection_queues<'a>(
     }
 }
 
-// Wave 12n added 3 more optional carriers (summery/datecode/pathfield) on
+// Wave 12n added 3 more optional carriers (summary/datecode/pathfield) on
 // top of the existing memo/clickhere set. Refactoring into a struct here
 // would add boilerplate without solving anything — each carrier is
 // independently `None` for every other CTRL_ID. Tracked as follow-up
@@ -1273,7 +1273,7 @@ fn start_active_field(
     header: Option<UnknownControlHeader<'_>>,
     memo: Option<Hwp5MemoControl>,
     clickhere: Option<crate::schema::section::Hwp5ClickHereControl>,
-    summery: Option<crate::schema::section::Hwp5SummeryControl>,
+    summary: Option<crate::schema::section::Hwp5SummaryControl>,
     datecode: Option<crate::schema::section::Hwp5DateCodeControl>,
     pathfield: Option<crate::schema::section::Hwp5PathFieldControl>,
     crossref: Option<crate::schema::section::Hwp5CrossRefControl>,
@@ -1362,16 +1362,16 @@ fn start_active_field(
             }
         }
         CTRL_ID_FIELD_SUMMERY => {
-            if let Some(summery) = summery {
-                ActiveField::SummeryField {
+            if let Some(summary) = summary {
+                ActiveField::SummaryField {
                     start_utf16,
-                    command_token: summery.command_token,
+                    command_token: summary.command_token,
                     display_text: String::new(),
                 }
             } else {
                 projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
-                    subject: "field.summery",
-                    reason: "summery auto-field metadata unavailable; \
+                    subject: "field.summary",
+                    reason: "summary auto-field metadata unavailable; \
                              preserving only visible text"
                         .to_string(),
                 });
@@ -1540,9 +1540,9 @@ fn finish_active_field(
                 char_shape_id,
             ));
         }
-        ActiveField::SummeryField { start_utf16, command_token, display_text } => {
+        ActiveField::SummaryField { start_utf16, command_token, display_text } => {
             // Emit a single Run carrying either typed `Control::Field`
-            // (for known `$X` tokens) or `Control::UnknownSummery` for
+            // (for known `$X` tokens) or `Control::UnknownSummary` for
             // future-compat raw carry. `display_text` is the cached
             // resolved value accumulated from the FieldBegin..FieldEnd
             // span — 한컴 native HWPX carries it in the body and an empty
@@ -1552,7 +1552,7 @@ fn finish_active_field(
                 start_utf16,
             ) as usize);
             let _ = end_utf16;
-            let control = match hwpforge_foundation::FieldType::from_summery_token(&command_token) {
+            let control = match hwpforge_foundation::FieldType::from_summary_token(&command_token) {
                 Some(field_type) => Control::Field {
                     field_type,
                     hint_text: None,
@@ -1560,7 +1560,7 @@ fn finish_active_field(
                     name: None,
                     display_text,
                 },
-                None => Control::UnknownSummery { token: command_token, display_text },
+                None => Control::UnknownSummary { token: command_token, display_text },
             };
             runs.push(Run::control(control, char_shape_id));
         }
@@ -2107,9 +2107,9 @@ fn project_control_run(
         // silently emit a free-floating field run.
         Hwp5Control::ClickHere(_) => None,
         // SUMMERY auto-fields (Wave 12n) follow the same structural-pairing
-        // pattern as ClickHere. Free-floating SummeryField means the inline
+        // pattern as ClickHere. Free-floating SummaryField means the inline
         // FieldBegin marker did not pair with this CtrlHeader; drop.
-        Hwp5Control::SummeryField(_) => None,
+        Hwp5Control::SummaryField(_) => None,
         // %dte date/time format-code fields (Wave 12n) — same pattern.
         Hwp5Control::DateCodeField(_) => None,
         // %pat path fields (Wave 12n) — same pattern.
@@ -2129,7 +2129,7 @@ fn project_control_run(
         // %xrf cross-reference fields (Wave 12m) flow through the
         // `FieldBegin`/`ActiveField::CrossRef` machinery in
         // `project_paragraph_with_images_structural` — same pattern as
-        // ClickHere / SummeryField / DateCodeField / PathField. A
+        // ClickHere / SummaryField / DateCodeField / PathField. A
         // free-floating CrossRef CtrlHeader means the inline `FieldBegin`
         // marker did not pair with it; drop rather than silently emit.
         Hwp5Control::CrossRef(_) => None,

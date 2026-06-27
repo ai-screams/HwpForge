@@ -240,7 +240,7 @@ fn validate_control_run(
         | Control::IndexMark { .. } => Ok(()),
         // Wave 12n: targeted invariant checks for new variants. Architect review
         // medium: do not let new variants slide through with a blanket `Ok(())`.
-        Control::UnknownSummery { token, .. } => validate_unknown_summery(token, ctx),
+        Control::UnknownSummary { token, .. } => validate_unknown_summary(token, ctx),
         Control::DateCodeField { raw_command, is_time_mode, .. } => {
             validate_date_code_field(raw_command, *is_time_mode, ctx)
         }
@@ -291,12 +291,12 @@ fn is_group_child_allowed(control: &Control) -> bool {
     )
 }
 
-/// Rejects an `UnknownSummery` whose token is empty or does not start with
+/// Rejects an `UnknownSummary` whose token is empty or does not start with
 /// `$` — both are nonsensical for an HWPX SUMMERY `Command` and would
 /// emit garbage XML.
-fn validate_unknown_summery(token: &str, ctx: RunValidationContext) -> Result<(), ValidationError> {
+fn validate_unknown_summary(token: &str, ctx: RunValidationContext) -> Result<(), ValidationError> {
     if token.is_empty() || !token.starts_with('$') {
-        Err(ValidationError::InvalidSummeryToken {
+        Err(ValidationError::InvalidSummaryToken {
             section_index: ctx.section_index,
             paragraph_index: ctx.paragraph_index,
             run_index: ctx.run_index,

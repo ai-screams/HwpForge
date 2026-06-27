@@ -143,7 +143,7 @@ pub(super) fn build_bookmark_span_end_run_xml(char_pr_id_ref: u32, field_id: usi
 /// - **CLICK_HERE** (`build_clickhere_field_xml`): editable press-field
 ///   (누름틀). `type="CLICK_HERE"`, `fieldid=627272811`,
 ///   `Command=Clickhere:set:N:...`.
-/// - **SUMMERY** (`build_summery_field_xml`): `$author`, `$lastsaveby`,
+/// - **SUMMERY** (`build_summary_field_xml`): `$author`, `$lastsaveby`,
 ///   `$createtime`, `$modifiedtime`, `$title`. `type="SUMMERY"` (한글 typo),
 ///   `fieldid=628321650`.
 pub(super) fn build_field_run_xml(
@@ -169,7 +169,7 @@ pub(super) fn build_field_run_xml(
         | FieldType::CreatedTime
         | FieldType::ModifiedTime
         | FieldType::Title => {
-            build_summery_field_xml(field_type, hint, name, display_text, char_pr_id_ref, begin_id)
+            build_summary_field_xml(field_type, hint, name, display_text, char_pr_id_ref, begin_id)
         }
         // `FieldType` is `#[non_exhaustive]`. We intentionally do NOT collapse
         // future variants into ClickHere (Wave 12n architect review): silently
@@ -233,7 +233,7 @@ pub(super) fn build_clickhere_field_xml(
 /// is shared by all SUMMERY auto-fields; discrimination is via the `Command`
 /// `$token`. Token mapping verified against 한컴 native fixtures in Wave 12n
 /// (see `.docs/research/2026-06-02_auto_field_wire_dump.md`).
-pub(super) fn build_summery_field_xml(
+pub(super) fn build_summary_field_xml(
     field_type: &hwpforge_foundation::FieldType,
     hint: &str,
     name: &str,
@@ -242,7 +242,7 @@ pub(super) fn build_summery_field_xml(
     begin_id: u64,
 ) -> String {
     use hwpforge_foundation::FieldType;
-    let command = field_type.summery_token().expect("caller guards SUMMERY variants");
+    let command = field_type.summary_token().expect("caller guards SUMMERY variants");
     // #120/#136 (supersedes Wave 12n Step 6.6): carry the cached resolved
     // value in the body.
     //
@@ -273,7 +273,7 @@ pub(super) fn build_summery_field_xml(
     // Wave 12p task #124: editable depends on whether Hancom recomputes
     // the field value (Author/Title → "0" lock to authored value;
     // LastSavedBy/CreatedTime/ModifiedTime → "1" Hancom recomputes).
-    build_summery_run_xml_raw(
+    build_summary_run_xml_raw(
         command,
         &display_text,
         name,
@@ -285,13 +285,13 @@ pub(super) fn build_summery_field_xml(
 
 /// Lowest-level SUMMERY `<hp:run>` builder — emits a `type="SUMMERY"`
 /// `fieldBegin`/`fieldEnd` pair with the caller-supplied `command` token
-/// and `display` text. Used by [`build_summery_field_xml`] for typed
+/// and `display` text. Used by [`build_summary_field_xml`] for typed
 /// [`hwpforge_foundation::FieldType`] variants and by Wave 12n
-/// `UnknownSummery` / `DateCodeField` fallback paths.
+/// `UnknownSummary` / `DateCodeField` fallback paths.
 ///
 /// Wave 12n Step 6: `Control::PathField` no longer uses this builder.
 /// See [`build_path_field_run_xml_raw`] for the native PATH wire shape.
-pub(super) fn build_summery_run_xml_raw(
+pub(super) fn build_summary_run_xml_raw(
     command: &str,
     display: &str,
     name: &str,
@@ -554,7 +554,7 @@ pub(super) fn build_crossref_run_xml(
     // Wave 12m Phase 2 Step 4 fixup: `fieldid` is a Hancom **type tag**,
     // not an instance id. Native Hancom HWPX emits the ctrl_id's ASCII
     // big-endian u32 — same convention as ClickHere (`%clk`=0x25636C6B),
-    // SummeryField (`%smr`=0x25736D72), PathField (`%pat`=0x25706174).
+    // SummaryField (`%smr`=0x25736D72), PathField (`%pat`=0x25706174).
     // For CROSSREF the constant is `%xrf` = 0x25787266 = 628_650_598.
     // All CROSSREF fields in a document share this fieldid; per-instance
     // identity is carried by `id` (begin_id) above. Verified against

@@ -617,7 +617,7 @@ pub enum Control {
     /// [`FieldType`] variants. Any other `%smr` Command (e.g. additional
     /// 한컴 metadata tokens not yet measured) is preserved here instead of
     /// being silently coerced to `ClickHere`.
-    UnknownSummery {
+    UnknownSummary {
         /// Raw `Command` string after envelope (e.g. `"$company"`).
         token: String,
         /// Cached resolved value rendered between `fieldBegin`/`fieldEnd`.
@@ -1684,8 +1684,8 @@ impl std::fmt::Display for Control {
                     write!(f, "IndexMark(\"{primary}\")")
                 }
             }
-            Self::UnknownSummery { token, .. } => {
-                write!(f, "UnknownSummery({token})")
+            Self::UnknownSummary { token, .. } => {
+                write!(f, "UnknownSummary({token})")
             }
             Self::DateCodeField { raw_command, is_time_mode, .. } => {
                 let mode = if *is_time_mode { "time" } else { "date" };

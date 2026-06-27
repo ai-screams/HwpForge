@@ -94,9 +94,9 @@ pub(crate) enum Hwp5Control {
     /// SUMMERY auto-field — `%smr` ctrl_id. Carries the Command `$token`
     /// (e.g. `$author`, `$modifiedtime`) that the projection layer maps
     /// to a typed `FieldType` or, for unknown tokens, to
-    /// `Control::UnknownSummery`. See
-    /// `schema::section::Hwp5SummeryControl`. (Wave 12n.)
-    SummeryField(crate::schema::section::Hwp5SummeryControl),
+    /// `Control::UnknownSummary`. See
+    /// `schema::section::Hwp5SummaryControl`. (Wave 12n.)
+    SummaryField(crate::schema::section::Hwp5SummaryControl),
     /// `%dte` date/time format-code field — carries a raw format pattern
     /// (e.g. `"\:1년 2월 3일 (6);0;"` or `"T\:;0;"`). The projection
     /// layer surfaces it as `Control::DateCodeField` with `raw_command`,

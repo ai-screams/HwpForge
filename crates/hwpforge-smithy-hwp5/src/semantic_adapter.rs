@@ -332,9 +332,9 @@ fn adapt_control(
             build,
             ids,
         ),
-        Hwp5Control::SummeryField(summery) => adapt_shape_control(
-            summery.ctrl_id,
-            Hwp5SemanticControlKind::SummeryField,
+        Hwp5Control::SummaryField(summary) => adapt_shape_control(
+            summary.ctrl_id,
+            Hwp5SemanticControlKind::SummaryField,
             container,
             paragraph_id,
             build,

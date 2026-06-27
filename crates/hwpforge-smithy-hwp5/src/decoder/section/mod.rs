@@ -1475,17 +1475,17 @@ impl BodyTextParserState {
             // `%smr` ctrl carries a SUMMERY auto-field Command
             // `$token` (e.g. `$author`, `$modifiedtime`). The
             // projection layer dispatches the token to a typed
-            // `FieldType` or `Control::UnknownSummery`. No
+            // `FieldType` or `Control::UnknownSummary`. No
             // follow-up sub-record (Wave 12n).
-            if let Some(summery) =
-                crate::schema::section::Hwp5SummeryControl::parse(ctrl_id, &record.data)
+            if let Some(summary) =
+                crate::schema::section::Hwp5SummaryControl::parse(ctrl_id, &record.data)
             {
                 if let Some(buf) = self.current.as_mut() {
-                    buf.controls.push(Hwp5Control::SummeryField(summery));
+                    buf.controls.push(Hwp5Control::SummaryField(summary));
                 }
             } else {
                 self.warnings.push(Hwp5Warning::DroppedControl {
-                    control: "summery_field",
+                    control: "summary_field",
                     reason: "malformed %smr CtrlHeader payload; dropping auto-field".to_string(),
                 });
             }

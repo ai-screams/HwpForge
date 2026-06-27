@@ -291,10 +291,10 @@ pub enum ValidationError {
         row_index: usize,
     },
 
-    /// A SUMMERY token (`UnknownSummery.token`) is empty or does not start with `$`.
+    /// A SUMMERY token (`UnknownSummary.token`) is empty or does not start with `$`.
     /// HWPX SUMMERY `Command` strings always have the `$word` shape (Wave 12n).
     #[error("Invalid SUMMERY token {token:?} (section {section_index}, paragraph {paragraph_index}, run {run_index})")]
-    InvalidSummeryToken {
+    InvalidSummaryToken {
         /// Zero-based section index.
         section_index: usize,
         /// Zero-based paragraph index.
@@ -395,7 +395,7 @@ pub enum CoreErrorCode {
     /// Non-leading table header row.
     NonLeadingTableHeaderRow = 2016,
     /// Invalid SUMMERY `$token` (Wave 12n).
-    InvalidSummeryToken = 2017,
+    InvalidSummaryToken = 2017,
     /// `DateCodeField.is_time_mode` ↔ raw command `T`-prefix mismatch (Wave 12n).
     DateCodeFieldMismatch = 2018,
     /// `InlinePageNumber.kind` ↔ `raw_flag` mismatch (Wave 12n).
@@ -434,7 +434,7 @@ impl ValidationError {
             Self::EmptyCategoryLabels { .. } => CoreErrorCode::EmptyCategoryLabels,
             Self::MismatchedSeriesLengths { .. } => CoreErrorCode::MismatchedSeriesLengths,
             Self::EmptyEquation { .. } => CoreErrorCode::EmptyEquation,
-            Self::InvalidSummeryToken { .. } => CoreErrorCode::InvalidSummeryToken,
+            Self::InvalidSummaryToken { .. } => CoreErrorCode::InvalidSummaryToken,
             Self::DateCodeFieldMismatch { .. } => CoreErrorCode::DateCodeFieldMismatch,
             Self::InlinePageNumberMismatch { .. } => CoreErrorCode::InlinePageNumberMismatch,
         }

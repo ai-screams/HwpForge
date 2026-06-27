@@ -40,7 +40,7 @@ use hwpforge_smithy_hwpx::HwpxEncoder;
 /// 화면에 표시한다. HwpForge encoder는 `hint_text` 를 cache 자리로
 /// 라우팅하므로, 시각 확인 데모에서는 이 자리에 의미있는 텍스트를 넣어
 /// `[문서 정보 시작]값[문서 정보 끝]` 형태가 보이게 한다.
-fn summery_section(label: &str, field_type: FieldType, cached_value: &str) -> Section {
+fn summary_section(label: &str, field_type: FieldType, cached_value: &str) -> Section {
     let title = Paragraph::with_runs(
         vec![Run::text(label, CharShapeIndex::new(0))],
         ParaShapeIndex::new(0),
@@ -83,14 +83,14 @@ fn wave12n_all_section() -> Section {
     // `cached_value` 는 한컴 native HWPX가 fieldBegin/fieldEnd 사이에 박아두는
     // stale display text. HwpForge encoder는 `hint_text` 를 그 자리에 라우팅
     // 하므로 데모용으로 의미있는 텍스트를 채워 시각 확인이 가능하게 한다.
-    let summery_cases: &[(&str, FieldType, &str)] = &[
+    let summary_cases: &[(&str, FieldType, &str)] = &[
         ("[Author 저자]", FieldType::Author, "홍길동"),
         ("[LastSavedBy 마지막 저장한 사람]", FieldType::LastSavedBy, "김편집"),
         ("[CreatedTime 만든 날짜]", FieldType::CreatedTime, "2026-06-04 09:00:00"),
         ("[ModifiedTime 마지막 저장 날짜]", FieldType::ModifiedTime, "2026-06-04 11:20:00"),
         ("[Title 문서 제목 (Wave 12n 신규)]", FieldType::Title, "HwpForge Wave 12n 데모 문서"),
     ];
-    for (label, ft, cached) in summery_cases {
+    for (label, ft, cached) in summary_cases {
         paras.push(Paragraph::with_runs(
             vec![Run::text(*label, CharShapeIndex::new(0))],
             ParaShapeIndex::new(0),
@@ -168,7 +168,7 @@ fn main() {
     write_one(
         "title",
         demo_metadata("HwpForge Wave 12o 데모 문서"),
-        summery_section(
+        summary_section(
             "[Title 문서 제목 자동 필드]",
             FieldType::Title,
             "HwpForge Wave 12o 데모 문서",

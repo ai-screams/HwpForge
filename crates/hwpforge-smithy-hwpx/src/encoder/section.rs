@@ -81,7 +81,7 @@ use self::equation::encode_equation_to_hx;
 use self::field::{
     build_autonum_run_xml, build_bookmark_span_end_run_xml, build_bookmark_span_start_run_xml,
     build_crossref_run_xml, build_field_run_xml, build_hyperlink_run_xml,
-    build_path_field_run_xml_raw, build_summery_run_xml_raw, unix_to_ymdhms,
+    build_path_field_run_xml_raw, build_summary_run_xml_raw, unix_to_ymdhms,
 };
 #[cfg(test)]
 use self::field::{build_hwp5_crossref_run_xml, clickhere_command_string};
@@ -703,25 +703,25 @@ fn build_runs(
                         texts.push(HxText::new(marker));
                     }
                     // LOSSY (Wave 12n architect review): The DateCodeField and
-                    // UnknownSummery arms below emit SUMMERY-shaped XML as a
+                    // UnknownSummary arms below emit SUMMERY-shaped XML as a
                     // *best-effort* HWPX surrogate. HWPX has no native counterpart
                     // for `%smr` unknown tokens or `%dte` format patterns.
                     // Round-tripping through HWPX → Core decoder normalises these
                     // back as `Field(ModifiedTime/CreatedTime)` (for
-                    // DateCodeField) or `UnknownSummery` (for UnknownSummery), so
+                    // DateCodeField) or `UnknownSummary` (for UnknownSummary), so
                     // the original Core variant is NOT preserved.
                     //
                     // PathField is NO LONGER LOSSY (Wave 12n Step 6) — see the
                     // arm further below which emits Hancom-native
                     // `type="PATH"` with `Format=` param and a distinct fieldid.
-                    Control::UnknownSummery { token, display_text } => {
+                    Control::UnknownSummary { token, display_text } => {
                         let field_id = hyperlink_entries.len();
                         let marker = next_marker("HWPFD", field_id);
                         // Wave 12p task #124: unknown token — assume Hancom
                         // recomputes (editable="1"). Matches pre-fix behavior.
                         // #120/#136: carry the cached resolved value in the
                         // body (empty body → 한컴 recovery warning).
-                        let real_xml = build_summery_run_xml_raw(
+                        let real_xml = build_summary_run_xml_raw(
                             token,
                             display_text,
                             "",
@@ -750,7 +750,7 @@ fn build_runs(
                         // recovery warning).
                         // Wave 12p task #124: both $createtime / $modifiedtime
                         // are recomputed by Hancom (editable="1").
-                        let real_xml = build_summery_run_xml_raw(
+                        let real_xml = build_summary_run_xml_raw(
                             token,
                             display_text,
                             "",
@@ -2804,7 +2804,7 @@ mod tests {
     }
 
     #[test]
-    fn field_date_produces_summery_type() {
+    fn field_date_produces_summary_type() {
         use hwpforge_core::control::Control;
         use hwpforge_foundation::FieldType;
         let ctrl = Control::Field {
@@ -2829,7 +2829,7 @@ mod tests {
     }
 
     #[test]
-    fn field_time_produces_summery_createtime() {
+    fn field_time_produces_summary_createtime() {
         use hwpforge_core::control::Control;
         use hwpforge_foundation::FieldType;
         let ctrl = Control::Field {
@@ -2852,7 +2852,7 @@ mod tests {
     }
 
     #[test]
-    fn field_docsummary_produces_summery_author() {
+    fn field_docsummary_produces_summary_author() {
         use hwpforge_core::control::Control;
         use hwpforge_foundation::FieldType;
         let ctrl = Control::Field {
@@ -2879,7 +2879,7 @@ mod tests {
     /// 한컴's "낮은 보안 수준 복구" warning), and the value must survive a
     /// Core → HWPX → Core round-trip.
     #[test]
-    fn summery_cached_value_emitted_in_body_and_roundtrips() {
+    fn summary_cached_value_emitted_in_body_and_roundtrips() {
         use hwpforge_core::control::Control;
         use hwpforge_foundation::FieldType;
         let ctrl = Control::Field {
@@ -2937,7 +2937,7 @@ mod tests {
     }
 
     #[test]
-    fn field_userinfo_produces_summery_lastsaveby() {
+    fn field_userinfo_produces_summary_lastsaveby() {
         use hwpforge_core::control::Control;
         use hwpforge_foundation::FieldType;
         let ctrl = Control::Field {
@@ -2986,13 +2986,13 @@ mod tests {
     // ── Wave 12n LOSSY-policy round-trip tests ──────────────────────
     //
     // These tests pin the *intentional* lossy mapping documented in the
-    // encoder arms for DateCodeField / PathField / UnknownSummery. They
+    // encoder arms for DateCodeField / PathField / UnknownSummary. They
     // exist so a future encoder change that silently fixes round-trip
     // (e.g. switching to a different HWPX representation) is caught and
     // the lossy-policy comments can be updated rather than left stale.
 
     #[test]
-    fn lossy_datecodefield_emits_summery_token() {
+    fn lossy_datecodefield_emits_summary_token() {
         // %dte time-mode → $createtime SUMMERY (lossy; raw_command kept as display).
         use hwpforge_core::control::Control;
         let ctrl = Control::DateCodeField {
@@ -3018,7 +3018,7 @@ mod tests {
         // Wave 12n Step 6 — PathField now emits Hancom-native
         // `type="PATH"` with `Format=` param, distinct `fieldid`, and
         // `editable="0"`. Replaces the prior LOSSY SUMMERY surrogate
-        // (`lossy_pathfield_emits_summery_with_raw_command`).
+        // (`lossy_pathfield_emits_summary_with_raw_command`).
         use hwpforge_core::control::{Control, PathFieldCommand};
         let ctrl = Control::PathField {
             command: PathFieldCommand::PathAndFileName,
@@ -3053,10 +3053,10 @@ mod tests {
     }
 
     #[test]
-    fn lossy_unknown_summery_carries_raw_token() {
+    fn lossy_unknown_summary_carries_raw_token() {
         use hwpforge_core::control::Control;
         let ctrl =
-            Control::UnknownSummery { token: "$company".to_string(), display_text: String::new() };
+            Control::UnknownSummary { token: "$company".to_string(), display_text: String::new() };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
                 vec![Run::control(ctrl, CharShapeIndex::new(0))],
@@ -3149,7 +3149,7 @@ mod tests {
     #[test]
     fn pathfield_roundtrip_preserves_command_lossless() {
         // Wave 12n Step 6 — replaces the prior LOSSY round-trip
-        // (`lossy_roundtrip_pathfield_becomes_unknown_summery`). With
+        // (`lossy_roundtrip_pathfield_becomes_unknown_summary`). With
         // the new `type="PATH"` builder + decoder arm, all three typed
         // PathFieldCommand variants round-trip without value loss.
         use hwpforge_core::control::{Control, PathFieldCommand};
@@ -3175,7 +3175,7 @@ mod tests {
     fn pathfield_unknown_command_roundtrips_as_unknown() {
         // A non-canonical `$X` Command should round-trip as
         // `PathFieldCommand::Unknown("$X")` (no silent collapse to
-        // `UnknownSummery` like the prior LOSSY policy).
+        // `UnknownSummary` like the prior LOSSY policy).
         use hwpforge_core::control::{Control, PathFieldCommand};
         let ctrl = Control::PathField {
             command: PathFieldCommand::Unknown("$X".to_string()),
@@ -3192,16 +3192,16 @@ mod tests {
     }
 
     #[test]
-    fn lossy_roundtrip_unknown_summery_preserves_token() {
+    fn lossy_roundtrip_unknown_summary_preserves_token() {
         use hwpforge_core::control::Control;
         let ctrl =
-            Control::UnknownSummery { token: "$company".to_string(), display_text: String::new() };
+            Control::UnknownSummary { token: "$company".to_string(), display_text: String::new() };
         let decoded = lossy_roundtrip_decode_first_control(ctrl);
         match decoded {
-            Control::UnknownSummery { token, .. } => {
+            Control::UnknownSummary { token, .. } => {
                 assert_eq!(token, "$company", "unknown $token must round-trip verbatim");
             }
-            other => panic!("expected UnknownSummery($company), got {other:?}"),
+            other => panic!("expected UnknownSummary($company), got {other:?}"),
         }
     }
 
@@ -3222,7 +3222,7 @@ mod tests {
     // decoder fabricates on parse.
 
     #[test]
-    fn roundtrip_summery_author_lossless() {
+    fn roundtrip_summary_author_lossless() {
         use hwpforge_core::control::Control;
         use hwpforge_foundation::FieldType;
         let ctrl = Control::Field {
@@ -3237,7 +3237,7 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_summery_lastsavedby_lossless() {
+    fn roundtrip_summary_lastsavedby_lossless() {
         use hwpforge_core::control::Control;
         use hwpforge_foundation::FieldType;
         let ctrl = Control::Field {
@@ -3252,7 +3252,7 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_summery_createdtime_lossless() {
+    fn roundtrip_summary_createdtime_lossless() {
         use hwpforge_core::control::Control;
         use hwpforge_foundation::FieldType;
         let ctrl = Control::Field {
@@ -3267,7 +3267,7 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_summery_modifiedtime_lossless() {
+    fn roundtrip_summary_modifiedtime_lossless() {
         use hwpforge_core::control::Control;
         use hwpforge_foundation::FieldType;
         let ctrl = Control::Field {
@@ -3282,7 +3282,7 @@ mod tests {
     }
 
     #[test]
-    fn roundtrip_summery_title_lossless() {
+    fn roundtrip_summary_title_lossless() {
         // Wave 12n new: Title was added to FieldType in Step 1.
         // No emission-only or parse-only test covers it; this is the
         // sole gate ensuring encoder ↔ decoder agree on `$title`.
