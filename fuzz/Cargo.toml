@@ -1,0 +1,43 @@
+# cargo-fuzz targets for HwpForge's untrusted-input parsers (E3).
+#
+# Standalone workspace (empty `[workspace]` below) so libfuzzer-sys never
+# enters the main build/CI. Build with:  cargo +nightly fuzz build
+# Run one target with:  cargo +nightly fuzz run decode_hwp5
+[package]
+name = "hwpforge-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+hwpforge-smithy-hwp5 = { path = "../crates/hwpforge-smithy-hwp5" }
+hwpforge-smithy-hwpx = { path = "../crates/hwpforge-smithy-hwpx" }
+libfuzzer-sys = "0.4"
+
+[[bin]]
+name = "decode_hwp5"
+path = "fuzz_targets/decode_hwp5.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "hwp5_to_hwpx"
+path = "fuzz_targets/hwp5_to_hwpx.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "decode_hwpx"
+path = "fuzz_targets/decode_hwpx.rs"
+test = false
+doc = false
+bench = false
+
+# Standalone workspace: keep this crate out of the root workspace so
+# libfuzzer-sys / nightly-only flags never affect normal builds.
+[workspace]

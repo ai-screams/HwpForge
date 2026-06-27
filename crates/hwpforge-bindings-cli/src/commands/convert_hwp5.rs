@@ -4,7 +4,8 @@ use std::path::Path;
 
 use serde::Serialize;
 
-use hwpforge_smithy_hwp5::{hwp5_to_hwpx, inspect_hwp5_file};
+use hwpforge_convert::hwp5_to_hwpx;
+use hwpforge_smithy_hwp5::inspect_hwp5_file;
 
 use crate::error::{check_file_size, CliError};
 

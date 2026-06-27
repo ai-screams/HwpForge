@@ -13,9 +13,9 @@ use crate::schema::header::{
 };
 use crate::schema::record::{Record, TagId};
 
-/// Result of parsing the DocInfo stream.
+/// Result of parsing a border-fill definition slot from DocInfo.
 #[derive(Debug, Clone)]
-pub(crate) struct Hwp5DocInfoBorderFillSlot {
+pub struct Hwp5DocInfoBorderFillSlot {
     /// 1-based border fill ID preserved from DocInfo record order.
     pub id: u32,
     /// Parsed border fill payload. `None` means the slot existed but parse failed.
@@ -42,8 +42,12 @@ pub struct Hwp5DocInfoBulletSlot {
 }
 
 /// Result of parsing the DocInfo stream.
+///
+/// This is the HWP5-native style snapshot. Output-format orchestrators consume
+/// it (via [`crate::style_store::Hwp5StyleStore::from_doc_info`]) when mapping
+/// HWP5 styles onto a target format.
 #[derive(Debug)]
-pub(crate) struct DocInfoResult {
+pub struct DocInfoResult {
     /// Parsed `IdMappings` record, if present.
     pub id_mappings: Option<Hwp5RawIdMappings>,
     /// Font face name records.

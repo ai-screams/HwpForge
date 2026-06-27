@@ -1,11 +1,11 @@
 ---
 name: hwpforge
-description: "Generate, inspect, and edit Korean HWPX documents using HwpForge. Use when the user asks to create a Korean government document, proposal, report, official letter, convert markdown to HWP/HWPX, edit an existing HWPX file, inspect HWPX structure, or work with Korean document templates. Supports Markdown-to-HWPX conversion, JSON round-trip editing, style template application, and Korean document formatting scenarios."
+description: "Generate, inspect, edit, and fill Korean HWP/HWPX documents using HwpForge. Use when the user asks to create a Korean government document, proposal, report, or official letter; convert Markdown to HWPX; convert an old HWP5 (.hwp) file to HWPX; fill in a Korean template (e.g. 국가과제 제안서) with content; edit/append content in an existing HWPX; inspect HWPX structure; or convert HWPX back to Markdown. Supports Markdown↔HWPX, HWP5→HWPX, JSON round-trip editing, template filling, and style presets."
 license: MIT
 compatibility: claude-code, openai-codex, cursor, windsurf, vscode-copilot
 metadata:
   author: ai-screams
-  version: "0.1.0"
+  version: "0.2.0"
 allowed-tools: Bash Read Write
 ---
 
@@ -13,166 +13,191 @@ allowed-tools: Bash Read Write
 
 ## Overview
 
-HwpForge converts Markdown to HWPX (KS X 6101), the Korean national standard document format used in government proposals, official reports, and administrative documents. It supports bidirectional JSON editing, style template application, and structural inspection of existing HWPX files.
+HwpForge is a CLI (`hwpforge`) for the Korean HWPX document format (KS X 6101) used in
+government proposals, official reports, and administrative documents. It can:
 
-The CLI binary is `hwpforge`. All commands support `--json` for machine-readable output and structured error codes for AI agent integration.
+- **Create** HWPX from Markdown (with Korean style presets)
+- **Convert** legacy HWP5 (`.hwp`) → HWPX, and HWPX → Markdown
+- **Edit** existing HWPX via a JSON round-trip (fill placeholders, fix text, add content)
+- **Inspect** structure and emit JSON Schemas
 
-## Available Commands
+Every command accepts `--json` for machine-readable output and structured error codes.
 
-### convert — Markdown to HWPX
+> **There is no `.hwp` (HWP5) writer.** HwpForge reads `.hwp` but only writes `.hwpx`.
+> To work with a `.hwp`, convert it to `.hwpx` first (`convert-hwp5`).
 
-```bash
-# File input
-hwpforge convert input.md -o output.hwpx
+## The Algorithm — pick the right command
 
-# With preset (only 'default' available currently)
-hwpforge convert input.md -o output.hwpx --preset default
+Follow this decision flow. Choosing the wrong path is the most common mistake.
 
-# stdin input (use - as path)
-echo "# Title" | hwpforge convert - -o out.hwpx
-
-# Pipe from file
-cat document.md | hwpforge convert - -o document.hwpx
+```
+What does the user want?
+│
+├─ Create a NEW document from text / Markdown
+│     → convert  (Markdown → HWPX, with --preset)
+│
+├─ They have a legacy .hwp file
+│     → convert-hwp5  (.hwp → .hwpx)   then treat it as HWPX
+│
+├─ EDIT an existing .hwpx  ── ALWAYS `inspect` first ──
+│   │
+│   ├─ Change only EXISTING text
+│   │   (fill a template placeholder, fix a typo, fill a table cell)
+│   │     → to-json (--section) → edit the Text → patch        [TEXT-ONLY, safest]
+│   │
+│   └─ ADD or REMOVE paragraphs (structural change)
+│         → to-json (full) → add paragraphs → from-json --base [REBUILD]
+│
+├─ Read / export an existing .hwpx
+│     → to-md   (HWPX → Markdown, for reading)
+│     → to-json (HWPX → JSON,    for machine editing)
+│
+└─ Need the JSON shape, or the list of styles
+      → schema        (JSON Schema for document/section types)
+      → templates list (available style presets)
 ```
 
-Presets: `default`. See [templates.md](references/templates.md) for details. Additional presets (`government`, `report`, `official`) are planned.
+**The two edit modes are not interchangeable:**
 
-### inspect — HWPX Structure Summary
+| Mode          | Command            | Can do                                                                                                       | Cannot do                                                                    |
+| ------------- | ------------------ | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------- |
+| **Text-only** | `patch`            | change text inside existing paragraphs **and table cells**; preserves images, styles, tables, layout exactly | add/remove paragraphs (returns `PATCH_FAILED: structural change detected`)   |
+| **Rebuild**   | `from-json --base` | add/remove paragraphs, structural edits; preserves tables; `--base` inherits images                          | guarantee byte-perfect fidelity of complex 한컴 forms (see Fidelity Warning) |
 
-```bash
-# Human-readable summary
-hwpforge inspect document.hwpx
+## Commands
 
-# Include style registry
-hwpforge inspect document.hwpx --styles
-
-# JSON output for AI parsing
-hwpforge inspect document.hwpx --json
-```
-
-### to-json — Export HWPX to JSON
+Run `hwpforge <command> --help` for exact flags. Key forms:
 
 ```bash
-# Export full document
-hwpforge to-json document.hwpx -o doc.json
+# Create  (convert --preset currently accepts only `default`; see Presets)
+hwpforge convert input.md -o out.hwpx [--preset default]
+echo "# 제목" | hwpforge convert - -o out.hwpx          # stdin via "-"
 
-# Export single section (0-indexed)
-hwpforge to-json document.hwpx --section 0 -o section0.json
+# Legacy HWP5
+hwpforge convert-hwp5 old.hwp -o out.hwpx
 
-# Pipe to stdout
-hwpforge to-json document.hwpx
+# Inspect (ALWAYS before editing)
+hwpforge inspect doc.hwpx [--styles] [--json]
+
+# Export  (NOTE: -o/--output is REQUIRED — there is no stdout export)
+hwpforge to-json doc.hwpx -o full.json                  # whole document
+hwpforge to-json doc.hwpx --section 0 -o sec.json       # one section
+hwpforge to-json doc.hwpx --section 0 --no-styles -o sec.json
+
+# Write back
+hwpforge patch doc.hwpx --section 0 sec.json -o doc.hwpx          # text-only
+hwpforge from-json full.json -o doc.hwpx --base doc.hwpx          # rebuild (inherit images)
+
+# Read out / schema / styles
+hwpforge to-md doc.hwpx -o doc.md
+hwpforge schema [document|exported-document|exported-section]
+hwpforge templates list [--json]
+hwpforge templates show default
 ```
 
-### patch — Replace Section in HWPX
+Diagnostic (parity/QA, not for normal authoring): `audit-hwp5`, `census-hwp5`.
+
+## Presets
+
+`templates list` catalogs four: `default` (함초롬돋움 10pt), `modern` (맑은 고딕),
+`classic` (바탕), `latest` (함초롬바탕) — all A4. **However, `convert --preset` currently
+resolves only `default`** (others return `UNKNOWN_PRESET`). Use `default` for `convert`; the
+catalog entries are inspectable via `hwpforge templates show <name>`. See
+[templates.md](references/templates.md).
+
+## Editing an existing document (JSON round-trip)
+
+The exported section/document JSON is structure + style **references** (IDs). Full recipes:
+[editing-workflow.md](references/editing-workflow.md). Filling a Korean template (e.g. 국가과제
+제안서): [template-fill.md](references/template-fill.md).
+
+Minimal text-only edit (fill placeholders, fix text, fill table cells):
 
 ```bash
-# Replace section 0 with edited JSON
-hwpforge patch document.hwpx --section 0 section.json -o updated.hwpx
-
-# The first argument is the base HWPX file (preserves images and styles)
-hwpforge patch original.hwpx --section 0 section.json -o updated.hwpx
+hwpforge inspect doc.hwpx --json                        # 1. understand structure
+hwpforge to-json doc.hwpx --section 0 -o sec.json        # 2. export section
+#   3. edit runs[].content.Text (and table cell text) in sec.json — keep style IDs as-is
+hwpforge patch doc.hwpx --section 0 sec.json -o doc.hwpx  # 4. write back (text-only)
+hwpforge inspect doc.hwpx                                 # 5. verify
 ```
 
-### templates — List and Inspect Presets
+Add new paragraphs (structural → rebuild):
 
 ```bash
-# List all presets
-hwpforge templates list
-
-# JSON output
-hwpforge templates list --json
-
-# Show preset details
-hwpforge templates show government
+hwpforge to-json doc.hwpx -o full.json                          # full document
+#   append paragraph objects to document.sections[N].paragraphs
+#   reuse a neighboring paragraph's para_shape_id + char_shape_id (do NOT invent IDs)
+hwpforge from-json full.json -o doc.hwpx --base doc.hwpx        # rebuild
+hwpforge inspect doc.hwpx                                       # paragraph count increased
 ```
 
-## Editing Workflow
+### JSON rules (these prevent broken output)
 
-Use JSON round-trip for surgical edits to existing HWPX files. This preserves images, styles, and binary content that Markdown conversion would lose.
+- **Reuse existing style IDs.** New paragraphs/runs must copy `para_shape_id` / `char_shape_id`
+  from a neighboring paragraph in the same document. Never invent IDs.
+- `style_id` and `heading_level` are **optional** per paragraph — copy them only if the
+  source paragraph has them; omit otherwise.
+- **`patch` replaces the whole section**, so `sec.json` must contain ALL existing paragraphs
+  plus your edits — it is a read-modify-write of the full section, not a delta.
+- Do not edit the `styles` registry by hand — change styles via `--preset` instead.
+- Table cell text lives at
+  `…content.Table.rows[].cells[].paragraphs[].runs[].content.Text`.
 
-1. **Inspect** — understand structure before editing
+## Fidelity Warning (government / 한컴-authored templates)
 
-   ```bash
-   hwpforge inspect document.hwpx --json
-   ```
+`patch` (text-only) preserves the original file structure exactly — **prefer it for real
+한컴 templates** (form fields, master pages, complex tables) where formatting is mandatory.
 
-2. **Export** — extract the target section
-
-   ```bash
-   hwpforge to-json document.hwpx --section 0 -o section0.json
-   ```
-
-3. **Modify** — edit the JSON (AI or human)
-
-   See [editing-workflow.md](references/editing-workflow.md) for the `ExportedSection` schema and editable fields.
-
-4. **Patch** — write changes back
-
-   ```bash
-   hwpforge patch document.hwpx --section 0 section0.json -o updated.hwpx
-   ```
-
-5. **Verify** — confirm the result
-
-   ```bash
-   hwpforge inspect updated.hwpx
-   ```
+`from-json --base` **rebuilds** the document from HwpForge's internal model. Simple tables and
+paragraphs survive, but elements HwpForge does not yet fully model (form controls, master pages,
+some advanced formatting) can be lost. **Never submit a rebuilt government document without
+opening it in 한컴 and checking it visually.** When in doubt, fill placeholders with `patch`.
 
 ## Document Scenarios
 
-Scenario reference files are in the `references/` directory:
-
-| Scenario                          | File                                                    | Use When                                     |
-| --------------------------------- | ------------------------------------------------------- | -------------------------------------------- |
-| 정부 제안서 (Government Proposal) | [scenario-proposal.md](references/scenario-proposal.md) | RFP response, project bid, government tender |
-| 보고서 (Report)                   | [scenario-report.md](references/scenario-report.md)     | Research report, progress report, analysis   |
-| 공문서 (Official Document)        | [scenario-official.md](references/scenario-official.md) | Administrative correspondence, formal notice |
+| Scenario                          | File                                                    | Use When                                      |
+| --------------------------------- | ------------------------------------------------------- | --------------------------------------------- |
+| 정부 제안서 (Government Proposal) | [scenario-proposal.md](references/scenario-proposal.md) | RFP response, project bid, tender             |
+| 보고서 (Report)                   | [scenario-report.md](references/scenario-report.md)     | Research/progress report, analysis            |
+| 공문서 (Official Document)        | [scenario-official.md](references/scenario-official.md) | Administrative correspondence, notice         |
+| 템플릿 채우기 (Template Fill)     | [template-fill.md](references/template-fill.md)         | Fill an existing Korean template with content |
 
 ## Korean Markdown Best Practices
 
-See [markdown-guide.md](references/markdown-guide.md) for:
-
-- GFM table syntax for Korean content
-- YAML frontmatter fields (`title`, `author`, `date`, `preset`)
-- Image path conventions (relative paths, absolute paths)
-- Horizontal rule (`---`) as page break signal
-- Korean special character handling
+See [markdown-guide.md](references/markdown-guide.md): GFM tables, YAML frontmatter
+(`title`, `author`, `date`, `preset`), image paths, `---` as page break, Korean characters.
 
 ## Agent Behavior Rules
 
 ### Output: No Raw JSON
 
-Never show raw JSON output to the user during JSON round-trip workflows. Always present results as a summarized table, structure diagram, or concise description. Save intermediate JSON to temporary files for internal processing only.
+Never show raw JSON to the user during round-trip workflows. Summarize as a table, structure
+diagram, or short description. Keep intermediate JSON in temp files for internal use only.
 
 ### Edit: In-Place by Default
 
-When the user asks to modify a specific HWPX file, overwrite the original file unless they explicitly specify a different output path. Set the `-o` flag to the same path as the input file.
+When the user asks to modify a specific file, overwrite the original unless they specify a
+different output path — set `-o` to the input path.
 
 ```bash
-# Default behavior: overwrite the original
-hwpforge patch document.hwpx --section 0 modified.json -o document.hwpx
-
-# Only create a new file when the user explicitly specifies a different output path
-hwpforge patch document.hwpx --section 0 modified.json -o new_document.hwpx
+hwpforge patch document.hwpx --section 0 modified.json -o document.hwpx   # default: overwrite
 ```
+
+### Always inspect before editing, always verify after
+
+Run `inspect` first to learn the structure, and `inspect` (or `to-md`) after to confirm the
+edit landed before reporting success.
 
 ## Error Handling
 
-All commands return structured errors when `--json` is passed:
+With `--json`, all commands return structured errors:
 
 ```json
-{
-  "error": {
-    "code": "FILE_NOT_FOUND",
-    "message": "Input file not found: input.md",
-    "hint": "Check the file path and try again."
-  }
-}
+{ "error": { "code": "PATCH_FAILED", "message": "...", "hint": "..." } }
 ```
 
-Exit codes:
+Common: `FILE_NOT_FOUND` (bad path), `PATCH_FAILED` with "structural change detected"
+(you added/removed paragraphs in a `patch` — use `from-json --base` instead).
 
-- `1` — user error (bad input, missing file, invalid format)
-- `2` — internal error (encoding failure, corrupt HWPX)
-
-Use `--json` in all AI agent workflows to parse errors programmatically.
+Exit codes: `1` user error (bad input/missing file), `2` internal error (encode/corrupt).
+Use `--json` in all agent workflows to parse errors programmatically.

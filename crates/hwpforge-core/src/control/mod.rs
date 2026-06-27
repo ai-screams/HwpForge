@@ -22,9 +22,17 @@
 //! assert!(link.is_hyperlink());
 //! ```
 
+mod fields;
+mod metadata;
+mod shapes;
+
+pub use fields::*;
+pub use metadata::*;
+pub use shapes::*;
+
 use hwpforge_foundation::{
-    ArcType, ArrowSize, ArrowType, BookmarkType, Color, CurveSegmentType, DropCapStyle, FieldType,
-    Flip, GradientType, HwpUnit, ImageFillMode, PatternType, RefContentType, RefType,
+    ArcType, BookmarkType, Color, CurveSegmentType, FieldType, HwpUnit, RefContentType, RefType,
+    VerticalAlign,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -37,218 +45,6 @@ use crate::chart::{
 use crate::error::{CoreError, CoreResult};
 use crate::paragraph::Paragraph;
 use crate::run::Run;
-
-/// A 2D point in raw HWPUNIT coordinates for shape geometry.
-///
-/// Uses `i32` (not `HwpUnit`) because shape geometry points are raw
-/// coordinate values within a bounding box, not document-level measurements.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ShapePoint {
-    /// X coordinate (HWPUNIT).
-    pub x: i32,
-    /// Y coordinate (HWPUNIT).
-    pub y: i32,
-}
-
-impl ShapePoint {
-    /// Creates a new shape point with the given coordinates.
-    ///
-    /// # Examples
-    ///
-    /// ```
-    /// use hwpforge_core::control::ShapePoint;
-    ///
-    /// let pt = ShapePoint::new(100, 200);
-    /// assert_eq!(pt.x, 100);
-    /// assert_eq!(pt.y, 200);
-    /// ```
-    pub fn new(x: i32, y: i32) -> Self {
-        Self { x, y }
-    }
-}
-
-/// Line drawing style for shapes.
-///
-/// Controls how the stroke of a shape is rendered (solid, dashed, etc.).
-/// Maps to HWPX `<hc:lineShape>` `dash` attribute values.
-///
-/// # Examples
-///
-/// ```
-/// use hwpforge_core::control::LineStyle;
-///
-/// let style = LineStyle::Dash;
-/// assert_eq!(style.to_string(), "DASH");
-/// assert_eq!("DOT".parse::<LineStyle>().unwrap(), LineStyle::Dot);
-/// ```
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-#[non_exhaustive]
-pub enum LineStyle {
-    /// Continuous solid line (default).
-    #[default]
-    Solid,
-    /// Dashed line.
-    Dash,
-    /// Dotted line.
-    Dot,
-    /// Alternating dash and dot.
-    DashDot,
-    /// Alternating dash, dot, dot.
-    DashDotDot,
-    /// No visible line.
-    None,
-}
-
-impl std::fmt::Display for LineStyle {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Solid => f.write_str("SOLID"),
-            Self::Dash => f.write_str("DASH"),
-            Self::Dot => f.write_str("DOT"),
-            Self::DashDot => f.write_str("DASH_DOT"),
-            Self::DashDotDot => f.write_str("DASH_DOT_DOT"),
-            Self::None => f.write_str("NONE"),
-        }
-    }
-}
-
-impl std::str::FromStr for LineStyle {
-    type Err = CoreError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "SOLID" | "Solid" | "solid" => Ok(Self::Solid),
-            "DASH" | "Dash" | "dash" => Ok(Self::Dash),
-            "DOT" | "Dot" | "dot" => Ok(Self::Dot),
-            "DASH_DOT" | "DashDot" | "dash_dot" => Ok(Self::DashDot),
-            "DASH_DOT_DOT" | "DashDotDot" | "dash_dot_dot" => Ok(Self::DashDotDot),
-            "NONE" | "None" | "none" => Ok(Self::None),
-            _ => Err(CoreError::InvalidStructure {
-                context: "LineStyle".to_string(),
-                reason: format!(
-                    "unknown line style '{s}', valid: SOLID, DASH, DOT, DASH_DOT, DASH_DOT_DOT, NONE"
-                ),
-            }),
-        }
-    }
-}
-
-/// Arrowhead style for line endpoints.
-///
-/// # Examples
-///
-/// ```
-/// use hwpforge_core::control::ArrowStyle;
-/// use hwpforge_foundation::{ArrowType, ArrowSize};
-///
-/// let arrow = ArrowStyle {
-///     arrow_type: ArrowType::Normal,
-///     size: ArrowSize::Medium,
-///     filled: true,
-/// };
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ArrowStyle {
-    /// Shape of the arrowhead.
-    pub arrow_type: ArrowType,
-    /// Size of the arrowhead.
-    pub size: ArrowSize,
-    /// Whether the arrowhead is filled (true) or outlined (false).
-    pub filled: bool,
-}
-
-/// Fill specification for shapes.
-///
-/// Replaces simple `fill_color` for shapes that need gradient, pattern, or image fills.
-///
-/// # Examples
-///
-/// ```
-/// use hwpforge_core::control::Fill;
-/// use hwpforge_foundation::Color;
-///
-/// let solid = Fill::Solid { color: Color::from_rgb(255, 0, 0) };
-/// ```
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[non_exhaustive]
-pub enum Fill {
-    /// Solid color fill.
-    Solid {
-        /// Fill color.
-        color: Color,
-    },
-    /// Gradient fill.
-    Gradient {
-        /// Gradient direction type.
-        gradient_type: GradientType,
-        /// Gradient angle in degrees.
-        angle: i32,
-        /// Color stops: (color, position 0-100).
-        colors: Vec<(Color, u32)>,
-    },
-    /// Hatch pattern fill.
-    Pattern {
-        /// Pattern type.
-        pattern_type: PatternType,
-        /// Foreground pattern color.
-        fg_color: Color,
-        /// Background color.
-        bg_color: Color,
-    },
-    /// Image fill.
-    Image {
-        /// Image binary data reference ID.
-        image_id: String,
-        /// Image fill mode (tile, stretch, etc.).
-        mode: ImageFillMode,
-    },
-}
-
-/// Visual style overrides for drawing shapes.
-///
-/// All fields are `Option`; `None` means "use the encoder's default"
-/// (typically black solid border, white fill, 0.12 mm stroke).
-///
-/// # Examples
-///
-/// ```
-/// use hwpforge_core::control::{ShapeStyle, LineStyle};
-/// use hwpforge_foundation::Color;
-///
-/// let style = ShapeStyle {
-///     line_color: Some(Color::from_rgb(255, 0, 0)),
-///     fill_color: Some(Color::from_rgb(0, 255, 0)),
-///     line_width: Some(100),
-///     line_style: Some(LineStyle::Dash),
-///     ..Default::default()
-/// };
-/// ```
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
-pub struct ShapeStyle {
-    /// Stroke/border color (e.g. `Color::from_rgb(255, 0, 0)` for red).
-    pub line_color: Option<Color>,
-    /// Fill color (e.g. `Color::from_rgb(0, 255, 0)` for green).
-    /// For advanced fills (gradient, pattern, image), use the `fill` field instead.
-    pub fill_color: Option<Color>,
-    /// Stroke width in HWPUNIT (33 ≈ 0.12mm, 100 ≈ 0.35mm).
-    pub line_width: Option<u32>,
-    /// Line drawing style (solid, dash, dot, etc.).
-    pub line_style: Option<LineStyle>,
-    /// Rotation angle in degrees (0-360). `None` means no rotation.
-    pub rotation: Option<f32>,
-    /// Flip/mirror state. `None` means no flip.
-    pub flip: Option<Flip>,
-    /// Arrowhead at the start of a line. Only meaningful for `Control::Line`.
-    pub head_arrow: Option<ArrowStyle>,
-    /// Arrowhead at the end of a line. Only meaningful for `Control::Line`.
-    pub tail_arrow: Option<ArrowStyle>,
-    /// Advanced fill (gradient, pattern, image). Overrides `fill_color` when present.
-    pub fill: Option<Fill>,
-    /// Drop cap style for the shape (HWPX `dropcapstyle` attribute).
-    /// Controls whether the shape participates in a drop-cap layout.
-    #[serde(default)]
-    pub drop_cap_style: DropCapStyle,
-}
 
 /// An inline control element.
 ///
@@ -295,6 +91,11 @@ pub enum Control {
         caption: Option<Caption>,
         /// Optional visual style overrides (border color, fill, line width).
         style: Option<ShapeStyle>,
+        /// Vertical alignment of the embedded text within the box.
+        /// Maps to HWPX `<hp:drawText><hp:subList vertAlign="...">` and HWP5
+        /// 문단 리스트 헤더 속성 bits 5–6. Defaults to [`VerticalAlign::Top`].
+        #[serde(default)]
+        text_vertical_align: VerticalAlign,
     },
 
     /// A hyperlink with display text and URL.
@@ -367,6 +168,11 @@ pub enum Control {
         caption: Option<Caption>,
         /// Optional visual style overrides (border color, fill, line width).
         style: Option<ShapeStyle>,
+        /// Vertical alignment of the embedded text within the ellipse.
+        /// Maps to HWPX `<hp:drawText><hp:subList vertAlign="...">` and HWP5
+        /// 문단 리스트 헤더 속성 bits 5–6. Defaults to [`VerticalAlign::Top`].
+        #[serde(default)]
+        text_vertical_align: VerticalAlign,
     },
 
     /// A HWP5 chart carried as opaque OOXML + OLE blob passthrough.
@@ -437,6 +243,11 @@ pub enum Control {
         caption: Option<Caption>,
         /// Optional visual style overrides (border color, fill, line width).
         style: Option<ShapeStyle>,
+        /// Vertical alignment of the embedded text within the polygon.
+        /// Maps to HWPX `<hp:drawText><hp:subList vertAlign="...">` and HWP5
+        /// 문단 리스트 헤더 속성 bits 5–6. Defaults to [`VerticalAlign::Top`].
+        #[serde(default)]
+        text_vertical_align: VerticalAlign,
     },
 
     /// An inline equation (수식) using HancomEQN script format.
@@ -884,237 +695,6 @@ pub enum Control {
     },
 }
 
-/// Typed variant of the HWP5 `%pat` Command string (Wave 12n).
-///
-/// Observed forms are `$F` (file name only), `$P` (path only), and `$P$F`
-/// (full path). Anything else is preserved as [`PathFieldCommand::Unknown`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-#[non_exhaustive]
-pub enum PathFieldCommand {
-    /// `$F` — file name only.
-    FileName,
-    /// `$P` — folder path only (no file name).
-    Path,
-    /// `$P$F` — full path including file name.
-    PathAndFileName,
-    /// Any other Command form, preserved verbatim.
-    Unknown(String),
-}
-
-impl PathFieldCommand {
-    /// Returns the canonical wire Command string for typed variants.
-    /// For [`Self::Unknown`], returns the carried raw string.
-    pub fn wire_command(&self) -> &str {
-        match self {
-            Self::FileName => "$F",
-            Self::Path => "$P",
-            Self::PathAndFileName => "$P$F",
-            Self::Unknown(s) => s.as_str(),
-        }
-    }
-
-    /// Parses a wire Command string into a typed variant. Unknown forms
-    /// are preserved as [`Self::Unknown`].
-    pub fn from_wire(cmd: &str) -> Self {
-        match cmd {
-            "$F" => Self::FileName,
-            "$P" => Self::Path,
-            "$P$F" => Self::PathAndFileName,
-            other => Self::Unknown(other.to_string()),
-        }
-    }
-}
-
-/// Cross-reference target identifier (Wave 12m Phase 2).
-///
-/// Replaces the previous `target_name: String` field on
-/// [`Control::CrossRef`] with a type-safe enum that distinguishes the
-/// three observed wire forms in HWP5 `%xrf` Command strings:
-///
-/// - **`Name(String)`** — 사용자 지정 책갈피 이름 (Bookmark 전용).
-///   한컴 fixture 의 `?target1;6;0;0;0;` 형식에서 `target1` 부분.
-/// - **`SystemId(u64)`** — 한컴 자동 생성 정수 ID (Footnote / Endnote /
-///   Caption / Outline). 한컴 fixture 의 `?#1108165575;3;0;0;0;` 형식에서
-///   `#` 접두사를 떼고 정수로 파싱한 값.
-/// - **`Raw(String)`** — 위 두 형식 어느쪽으로도 파싱이 안 된 wire 값.
-///   silent fallback 위조 금지 원칙 (Codex(architect)) — 의미를
-///   모르면 raw 보존.
-///
-/// 변환은 `smithy-hwp5/src/projection.rs::decode_hwp5_target` 의
-/// boundary 함수에서 수행 (Core 는 wire-agnostic).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-#[non_exhaustive]
-pub enum RefTarget {
-    /// 사용자 지정 책갈피 이름 (Bookmark 전용).
-    Name(String),
-    /// 한컴 자동 생성 정수 ID (Footnote / Endnote / Caption / Outline).
-    SystemId(u64),
-    /// 위 형식 어느쪽으로도 정규화되지 않은 raw 값 — fallback 위조 금지.
-    Raw(String),
-}
-
-impl RefTarget {
-    /// Returns the displayable name for this target.
-    ///
-    /// - `Name(s)` → `s`
-    /// - `SystemId(id)` → `"#{id}"` 형식 (한컴 wire 와 동일)
-    /// - `Raw(s)` → `s`
-    pub fn as_display(&self) -> String {
-        match self {
-            Self::Name(s) => s.clone(),
-            Self::SystemId(id) => format!("#{id}"),
-            Self::Raw(s) => s.clone(),
-        }
-    }
-}
-
-/// Typed variant of the HWP5 `atno` inline page-number `flag` byte
-/// (Wave 12n).
-///
-/// Observed values: `0x00` = current page, `0x06` = total page count.
-/// Other values surface as [`InlinePageKind::Unknown`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
-#[non_exhaustive]
-pub enum InlinePageKind {
-    /// Flag `0x00` — current page number.
-    CurrentPage,
-    /// Flag `0x06` — total page count.
-    TotalPages,
-    /// Any other flag value, carried verbatim via
-    /// [`Control::InlinePageNumber::raw_flag`].
-    Unknown,
-}
-
-impl InlinePageKind {
-    /// Returns the canonical raw flag value for typed variants.
-    /// For [`Self::Unknown`], callers must use the
-    /// [`Control::InlinePageNumber::raw_flag`] field directly.
-    pub fn raw_flag(self) -> Option<u32> {
-        match self {
-            Self::CurrentPage => Some(0x00),
-            Self::TotalPages => Some(0x06),
-            Self::Unknown => None,
-        }
-    }
-
-    /// Maps an observed raw flag value to a typed variant.
-    pub fn from_raw_flag(flag: u32) -> Self {
-        match flag {
-            0x00 => Self::CurrentPage,
-            0x06 => Self::TotalPages,
-            _ => Self::Unknown,
-        }
-    }
-}
-
-/// Metadata associated with a memo annotation (HWPX `<hp:parameters>`).
-///
-/// Carries the seven HWPX memo parameters (`Prop`, `Command`, `ID`, `Number`,
-/// `Author`, `MemoShapeIDRef`, `CreateDateTime`). Empty / default values are
-/// rendered by encoders as sensible defaults: `Prop` is always `0` on
-/// 한컴-authored fixtures so the field is omitted on the Core side, and
-/// `CreateDateTime` is auto-generated at encode time if blank (a 한컴-native
-/// memo always has a timestamp).
-///
-/// Other format encoders (Markdown, future ODT) can ignore the
-/// HWPX-specific fields and just use `author` if useful.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[non_exhaustive]
-pub struct MemoMetadata {
-    /// Reference to the `MemoShape` table entry. 한컴 default is `65535`.
-    pub shape_id_ref: u32,
-    /// Memo number (`<hp:integerParam name="Number">`). Equals the HWP5
-    /// `memo_id`. Encoders normally also derive the HWPX `ID` parameter
-    /// from this value (`"memo{number}"`).
-    pub number: u32,
-    /// HWPX `ID` parameter (typically `"memo{number}"`). Encoders may
-    /// auto-derive from `number` when blank.
-    pub id: String,
-    /// Memo author (`Author` parameter). Empty when unknown.
-    pub author: String,
-    /// HWPX `CreateDateTime` parameter (ISO 8601 UTC). Empty triggers
-    /// encoder-side auto-generation at write time.
-    pub create_datetime: String,
-    /// Raw wire `Command` parameter (`"MEMO/{shape}/{number}/…"` from HWP5).
-    /// Empty for HwpForge-authored memos — encoders synthesise a minimum
-    /// `MEMO/{shape}/{number}/` form in that case.
-    pub command: String,
-}
-
-impl Default for MemoMetadata {
-    fn default() -> Self {
-        Self {
-            shape_id_ref: 65535,
-            number: 0,
-            id: String::new(),
-            author: String::new(),
-            create_datetime: String::new(),
-            command: String::new(),
-        }
-    }
-}
-
-impl MemoMetadata {
-    /// Returns the HWPX `ID` parameter, deriving `"memo{number}"` when the
-    /// explicit field is blank.
-    pub fn hwpx_id(&self) -> String {
-        if self.id.is_empty() {
-            format!("memo{}", self.number)
-        } else {
-            self.id.clone()
-        }
-    }
-}
-
-/// Wire-mirrored metadata attached to a `Control::Dutmal`.
-///
-/// Carries HWPX `<hp:dutmal>` attributes that HwpForge does not yet
-/// model as typed fields — currently just `option`. Field is mirrored
-/// verbatim from HWP5 wire / HWPX `option=` attribute and emitted
-/// verbatim on encode so round-trips preserve the value even when the
-/// semantics aren't pinned down (see
-/// `.docs/algorithms/2026-06-01_dutmal_carry.md`).
-///
-/// `#[non_exhaustive]` — additions like `style_id_ref` or the two
-/// reserved tail words are additive and don't break existing
-/// destructure / pattern-match sites.
-#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
-#[non_exhaustive]
-pub struct DutmalMetadata {
-    /// `<hp:dutmal option=…>` value mirrored verbatim. Likely a
-    /// bit-field or enum on the HWPX side; HwpForge treats it as an
-    /// opaque u32 until the spec is confirmed.
-    pub option: u32,
-}
-
-/// Position of dutmal annotation text relative to the main text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
-#[non_exhaustive]
-pub enum DutmalPosition {
-    /// Annotation above main text (default).
-    #[default]
-    Top,
-    /// Annotation below main text.
-    Bottom,
-    /// Annotation to the right.
-    Right,
-    /// Annotation to the left.
-    Left,
-}
-
-/// Alignment of dutmal annotation text.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
-#[non_exhaustive]
-pub enum DutmalAlign {
-    /// Center-aligned (default).
-    #[default]
-    Center,
-    /// Left-aligned.
-    Left,
-    /// Right-aligned.
-    Right,
-}
-
 impl Control {
     /// Returns `true` if this is a [`Control::TextBox`].
     pub fn is_text_box(&self) -> bool {
@@ -1434,6 +1014,7 @@ impl Control {
             vert_offset: 0,
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         }
     }
 
@@ -1551,6 +1132,7 @@ impl Control {
             paragraphs: vec![],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         }
     }
 
@@ -1587,6 +1169,7 @@ impl Control {
             paragraphs,
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         }
     }
 
@@ -1679,6 +1262,7 @@ impl Control {
             paragraphs: vec![],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         })
     }
 
@@ -2128,7 +1712,7 @@ impl std::fmt::Display for Control {
 mod tests {
     use super::*;
     use crate::run::Run;
-    use hwpforge_foundation::{CharShapeIndex, Color, ParaShapeIndex};
+    use hwpforge_foundation::{CharShapeIndex, Color, ParaShapeIndex, VerticalAlign};
 
     fn simple_paragraph() -> Paragraph {
         Paragraph::with_runs(
@@ -2213,6 +1797,7 @@ mod tests {
             vert_offset: 0,
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         assert!(ctrl.is_text_box());
         assert!(!ctrl.is_hyperlink());
@@ -2272,6 +1857,7 @@ mod tests {
             vert_offset: 0,
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         assert_eq!(ctrl.to_string(), "TextBox(2 paragraphs)");
     }
@@ -2332,6 +1918,7 @@ mod tests {
             vert_offset: 0,
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         let json = serde_json::to_string(&ctrl).unwrap();
         let back: Control = serde_json::from_str(&json).unwrap();
@@ -2406,6 +1993,7 @@ mod tests {
             paragraphs: vec![],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         assert!(ctrl.is_ellipse());
         assert!(!ctrl.is_line());
@@ -2425,6 +2013,7 @@ mod tests {
             paragraphs: vec![simple_paragraph()],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         assert!(ctrl.is_ellipse());
         assert_eq!(ctrl.to_string(), "Ellipse(1 paragraph)");
@@ -2445,6 +2034,7 @@ mod tests {
             paragraphs: vec![],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         assert!(ctrl.is_polygon());
         assert!(!ctrl.is_line());
@@ -2497,6 +2087,7 @@ mod tests {
             paragraphs: vec![simple_paragraph()],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         let json = serde_json::to_string(&ctrl).unwrap();
         let back: Control = serde_json::from_str(&json).unwrap();
@@ -2518,6 +2109,7 @@ mod tests {
             paragraphs: vec![],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         let json = serde_json::to_string(&ctrl).unwrap();
         let back: Control = serde_json::from_str(&json).unwrap();
@@ -2701,6 +2293,7 @@ mod tests {
                 paragraphs,
                 caption,
                 style,
+                ..
             } => {
                 assert_eq!(vertices.len(), 3);
                 // bbox: x 0..1000, y 0..1000
@@ -2919,6 +2512,7 @@ mod tests {
                 paragraphs,
                 caption,
                 style,
+                ..
             } => {
                 let wv = w.as_i32();
                 let hv = h.as_i32();

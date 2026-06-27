@@ -487,6 +487,7 @@ fn attach_closed_node(
                         vert_offset: 0,
                         caption: None,
                         style: None,
+                        text_vertical_align: hwpforge_foundation::VerticalAlign::Top,
                     },
                     text_box.char_shape_id,
                 ),

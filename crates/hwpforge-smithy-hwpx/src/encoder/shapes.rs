@@ -40,7 +40,7 @@ use crate::schema::section::{
 };
 
 use super::escape_xml;
-use super::section::{build_hx_caption, encode_paragraphs_to_sublist, generate_instid};
+use super::section::{build_hx_caption, encode_paragraphs_to_sublist_with_align, generate_instid};
 
 // ── Shape-common helpers ─────────────────────────────────────────
 
@@ -291,18 +291,29 @@ pub(crate) fn encode_textbox_to_rect(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
 ) -> HwpxResult<HxRect> {
-    let (paragraphs, width, height, horz_offset, vert_offset, caption, style) = match ctrl {
-        Control::TextBox {
-            paragraphs,
-            width,
-            height,
-            horz_offset,
-            vert_offset,
-            caption,
-            style,
-        } => (paragraphs, *width, *height, *horz_offset, *vert_offset, caption, style),
-        _ => unreachable!("encode_textbox_to_rect called with non-TextBox"),
-    };
+    let (paragraphs, width, height, horz_offset, vert_offset, caption, style, text_vertical_align) =
+        match ctrl {
+            Control::TextBox {
+                paragraphs,
+                width,
+                height,
+                horz_offset,
+                vert_offset,
+                caption,
+                style,
+                text_vertical_align,
+            } => (
+                paragraphs,
+                *width,
+                *height,
+                *horz_offset,
+                *vert_offset,
+                caption,
+                style,
+                *text_vertical_align,
+            ),
+            _ => unreachable!("encode_textbox_to_rect called with non-TextBox"),
+        };
 
     let width_hwp = width.as_i32();
     let height_hwp = height.as_i32();
@@ -311,7 +322,12 @@ pub(crate) fn encode_textbox_to_rect(
     const MARGIN: i32 = 283;
     let last_width = width_hwp.max(0) as u32;
 
-    let sub_list = encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries)?;
+    let sub_list = encode_paragraphs_to_sublist_with_align(
+        paragraphs,
+        depth,
+        &text_vertical_align.to_string(),
+        hyperlink_entries,
+    )?;
     let sc = build_shape_common(width_hwp, height_hwp, style.as_ref());
 
     Ok(HxRect {
@@ -503,33 +519,46 @@ pub(crate) fn encode_ellipse_to_hx(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
 ) -> HwpxResult<HxEllipse> {
-    let (center, axis1, axis2, width, height, horz_offset, vert_offset, paragraphs, caption, style) =
-        match ctrl {
-            Control::Ellipse {
-                center,
-                axis1,
-                axis2,
-                width,
-                height,
-                horz_offset,
-                vert_offset,
-                paragraphs,
-                caption,
-                style,
-            } => (
-                center,
-                axis1,
-                axis2,
-                *width,
-                *height,
-                horz_offset,
-                vert_offset,
-                paragraphs,
-                caption,
-                style,
-            ),
-            _ => unreachable!("encode_ellipse_to_hx called with non-Ellipse"),
-        };
+    let (
+        center,
+        axis1,
+        axis2,
+        width,
+        height,
+        horz_offset,
+        vert_offset,
+        paragraphs,
+        caption,
+        style,
+        text_vertical_align,
+    ) = match ctrl {
+        Control::Ellipse {
+            center,
+            axis1,
+            axis2,
+            width,
+            height,
+            horz_offset,
+            vert_offset,
+            paragraphs,
+            caption,
+            style,
+            text_vertical_align,
+        } => (
+            center,
+            axis1,
+            axis2,
+            *width,
+            *height,
+            horz_offset,
+            vert_offset,
+            paragraphs,
+            caption,
+            style,
+            *text_vertical_align,
+        ),
+        _ => unreachable!("encode_ellipse_to_hx called with non-Ellipse"),
+    };
 
     let w = width.as_i32();
     let h = height.as_i32();
@@ -538,7 +567,12 @@ pub(crate) fn encode_ellipse_to_hx(
     let draw_text = if paragraphs.is_empty() {
         None
     } else {
-        let sub_list = encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries)?;
+        let sub_list = encode_paragraphs_to_sublist_with_align(
+            paragraphs,
+            depth,
+            &text_vertical_align.to_string(),
+            hyperlink_entries,
+        )?;
         Some(HxDrawText {
             last_width: 0,
             name: String::new(),
@@ -602,8 +636,17 @@ pub(crate) fn encode_polygon_to_hx(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
 ) -> HwpxResult<HxPolygon> {
-    let (vertices, width, height, horz_offset, vert_offset, paragraphs, caption, style) = match ctrl
-    {
+    let (
+        vertices,
+        width,
+        height,
+        horz_offset,
+        vert_offset,
+        paragraphs,
+        caption,
+        style,
+        text_vertical_align,
+    ) = match ctrl {
         Control::Polygon {
             vertices,
             width,
@@ -613,7 +656,18 @@ pub(crate) fn encode_polygon_to_hx(
             paragraphs,
             caption,
             style,
-        } => (vertices, *width, *height, horz_offset, vert_offset, paragraphs, caption, style),
+            text_vertical_align,
+        } => (
+            vertices,
+            *width,
+            *height,
+            horz_offset,
+            vert_offset,
+            paragraphs,
+            caption,
+            style,
+            *text_vertical_align,
+        ),
         _ => unreachable!("encode_polygon_to_hx called with non-Polygon"),
     };
 
@@ -624,7 +678,12 @@ pub(crate) fn encode_polygon_to_hx(
     let draw_text = if paragraphs.is_empty() {
         None
     } else {
-        let sub_list = encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries)?;
+        let sub_list = encode_paragraphs_to_sublist_with_align(
+            paragraphs,
+            depth,
+            &text_vertical_align.to_string(),
+            hyperlink_entries,
+        )?;
         Some(HxDrawText {
             last_width: 0,
             name: String::new(),
@@ -1333,7 +1392,7 @@ mod tests {
     use hwpforge_core::control::{ArrowStyle, Control, Fill, LineStyle, ShapePoint, ShapeStyle};
     use hwpforge_foundation::{
         ArcType, ArrowSize, ArrowType, Color, CurveSegmentType, DropCapStyle, Flip, HwpUnit,
-        PatternType,
+        PatternType, VerticalAlign,
     };
 
     fn empty_hyperlinks() -> Vec<(String, String)> {
@@ -1566,6 +1625,7 @@ mod tests {
             paragraphs: Vec::new(),
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         let inner = Control::Group {
             children: vec![rect, ellipse],
@@ -2387,6 +2447,7 @@ mod tests {
             paragraphs: vec![],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         let mut hl = empty_hyperlinks();
         let result = encode_ellipse_to_hx(&ctrl, 0, &mut hl).unwrap();
@@ -2406,6 +2467,7 @@ mod tests {
             paragraphs: vec![],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         let mut hl = empty_hyperlinks();
         let result = encode_ellipse_to_hx(&ctrl, 0, &mut hl).unwrap();
@@ -2425,10 +2487,58 @@ mod tests {
             paragraphs: vec![],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         let mut hl = empty_hyperlinks();
         let result = encode_ellipse_to_hx(&ctrl, 0, &mut hl).unwrap();
         assert!(result.draw_text.is_none());
+    }
+
+    fn ellipse_with_valign(valign: VerticalAlign) -> Control {
+        use hwpforge_core::paragraph::Paragraph;
+        use hwpforge_foundation::ParaShapeIndex;
+        Control::Ellipse {
+            center: ShapePoint::new(0, 0),
+            axis1: ShapePoint::new(100, 0),
+            axis2: ShapePoint::new(0, 50),
+            width: HwpUnit::new(200).unwrap(),
+            height: HwpUnit::new(100).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
+            paragraphs: vec![Paragraph::new(ParaShapeIndex::new(0))],
+            caption: None,
+            style: None,
+            text_vertical_align: valign,
+        }
+    }
+
+    #[test]
+    fn encode_ellipse_default_top_emits_top_sublist() {
+        // Regression guard: default Top must still serialize vertAlign="TOP"
+        // so existing top-aligned shapes are byte-unchanged.
+        let ctrl = ellipse_with_valign(VerticalAlign::Top);
+        let mut hl = empty_hyperlinks();
+        let result = encode_ellipse_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let dt = result.draw_text.expect("ellipse with text must emit drawText");
+        assert_eq!(dt.sub_list.vert_align, "TOP");
+    }
+
+    #[test]
+    fn encode_ellipse_center_emits_center_sublist() {
+        let ctrl = ellipse_with_valign(VerticalAlign::Center);
+        let mut hl = empty_hyperlinks();
+        let result = encode_ellipse_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let dt = result.draw_text.expect("ellipse with text must emit drawText");
+        assert_eq!(dt.sub_list.vert_align, "CENTER");
+    }
+
+    #[test]
+    fn encode_ellipse_bottom_emits_bottom_sublist() {
+        let ctrl = ellipse_with_valign(VerticalAlign::Bottom);
+        let mut hl = empty_hyperlinks();
+        let result = encode_ellipse_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let dt = result.draw_text.expect("ellipse with text must emit drawText");
+        assert_eq!(dt.sub_list.vert_align, "BOTTOM");
     }
 
     // ── encode_polygon_to_hx tests ───────────────────────────────────
@@ -2450,6 +2560,7 @@ mod tests {
             paragraphs: vec![],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         let mut hl = empty_hyperlinks();
         let result = encode_polygon_to_hx(&ctrl, 0, &mut hl).unwrap();
@@ -2476,6 +2587,7 @@ mod tests {
             paragraphs: vec![],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         let mut hl = empty_hyperlinks();
         let result = encode_polygon_to_hx(&ctrl, 0, &mut hl).unwrap();
@@ -2498,6 +2610,7 @@ mod tests {
             paragraphs: vec![],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         let mut hl = empty_hyperlinks();
         let result = encode_polygon_to_hx(&ctrl, 0, &mut hl).unwrap();
@@ -2545,6 +2658,7 @@ mod tests {
             vert_offset: 60,
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         let mut hl = empty_hyperlinks();
         let result = encode_textbox_to_rect(&ctrl, 0, &mut hl).unwrap();

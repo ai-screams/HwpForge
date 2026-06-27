@@ -1,15 +1,21 @@
-use crate::decoder::Hwp5Warning;
-use crate::schema::header::{
-    Hwp5RawCharShape, Hwp5RawFaceName, Hwp5RawIdMappings, Hwp5RawParaShape, Hwp5RawStyle,
-    Hwp5RawTabDef,
-};
-use crate::style_store::Hwp5StyleStore;
+//! HWP5 → HWPX style mapping (char/para/style/font/tab).
+//!
+//! Maps a format-neutral [`Hwp5StyleStore`] onto the HWPX encoder's
+//! [`HwpxStyleStore`] representation, emitting projection-fallback warnings for
+//! HWP5 semantics the shared/HWPX surface cannot carry.
+
 use crate::warning_utils::push_projection_fallback;
 use hwpforge_core::{TabDef, TabStop};
 use hwpforge_foundation::{
     BorderFillIndex, Color, EmbossType, EngraveType, FontIndex, HeadingType, HwpUnit,
     StrikeoutShape, TabAlign, TabLeader, UnderlineShape, UnderlineType, VerticalPosition,
 };
+use hwpforge_smithy_hwp5::schema::header::{
+    Hwp5RawCharShape, Hwp5RawFaceName, Hwp5RawIdMappings, Hwp5RawParaShape, Hwp5RawStyle,
+    Hwp5RawTabDef,
+};
+use hwpforge_smithy_hwp5::style_store::Hwp5StyleStore;
+use hwpforge_smithy_hwp5::Hwp5Warning;
 use hwpforge_smithy_hwpx::{
     HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape, HwpxStyle, HwpxStyleStore,
 };

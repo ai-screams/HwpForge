@@ -1,18 +1,23 @@
-use crate::decoder::header::Hwp5DocInfoBorderFillSlot;
-use crate::decoder::Hwp5Warning;
-use crate::schema::border_fill::{
+//! HWP5 → HWPX border/fill mapping.
+//!
+//! Maps HWP5 DocInfo border/fill slots onto the HWPX encoder's
+//! `HwpxBorderFill`/`HwpxFill` representation, emitting projection-fallback
+//! warnings for fill semantics the HWPX surface cannot carry.
+
+use crate::warning_utils::push_projection_fallback;
+use hwpforge_foundation::{Color, GradientType, PatternType};
+use hwpforge_smithy_hwp5::schema::border_fill::{
     Hwp5BorderLineKind, Hwp5FillImageEffect, Hwp5FillImageMode, Hwp5FillPatternKind,
     Hwp5GradationType, Hwp5RawBorderFill, Hwp5RawBorderFillFill,
 };
-use crate::warning_utils::push_projection_fallback;
-use hwpforge_foundation::{Color, GradientType, PatternType};
+use hwpforge_smithy_hwp5::Hwp5DocInfoBorderFillSlot;
+use hwpforge_smithy_hwp5::Hwp5Warning;
 use hwpforge_smithy_hwpx::{
     style_store::{
         HwpxBorderFill, HwpxBorderLine, HwpxDiagonalLine, HwpxFill, HwpxGradientFill, HwpxImageFill,
     },
     HwpxStyleStore,
 };
-use std::collections::BTreeSet;
 
 pub(crate) fn push_required_border_fills(store: &mut HwpxStyleStore) {
     store.push_border_fill(HwpxBorderFill::default_page_border()); // id=1
@@ -32,18 +37,6 @@ pub(crate) fn push_hwp5_border_fills(
         };
         store.push_border_fill(border_fill);
     }
-}
-
-pub(crate) fn collect_hwp5_border_fill_image_binary_ids(
-    border_fills: &[Hwp5DocInfoBorderFillSlot],
-) -> BTreeSet<u16> {
-    border_fills
-        .iter()
-        .filter_map(|slot| match slot.fill.as_ref()?.fill {
-            Hwp5RawBorderFillFill::Image(ref fill) => Some(fill.bindata_id),
-            _ => None,
-        })
-        .collect()
 }
 
 fn hwp5_border_fill_to_hwpx(
@@ -79,7 +72,7 @@ fn hwp5_border_fill_to_hwpx(
 }
 
 fn hwp5_border_line_to_hwpx(
-    line: &crate::schema::border_fill::Hwp5RawBorderLine,
+    line: &hwpforge_smithy_hwp5::schema::border_fill::Hwp5RawBorderLine,
 ) -> HwpxBorderLine {
     HwpxBorderLine {
         line_type: hwp5_border_line_type_to_hwpx(line.kind).into(),
@@ -360,7 +353,7 @@ fn colorref_to_hwpx_fill_color(raw: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema::border_fill::Hwp5FillImageMode::{
+    use hwpforge_smithy_hwp5::schema::border_fill::Hwp5FillImageMode::{
         self, Center, CenterBottom, CenterTop, LeftBottom, LeftMiddle, LeftTop, Resize,
         RightBottom, RightMiddle, RightTop, TileAll, TileHorizontalBottom, TileHorizontalTop,
         TileVerticalLeft, TileVerticalRight, Zoom,
@@ -398,7 +391,7 @@ mod tests {
         assert_eq!(hwp5_image_fill_mode_to_hwpx(Hwp5FillImageMode::Unknown(99)), None);
     }
 
-    use crate::schema::border_fill::{Hwp5RawColorFill, Hwp5RawGradationFill};
+    use hwpforge_smithy_hwp5::schema::border_fill::{Hwp5RawColorFill, Hwp5RawGradationFill};
 
     fn warnings_for(fill: &Hwp5RawBorderFillFill) -> Vec<Hwp5Warning> {
         let mut warnings = Vec::new();
@@ -480,7 +473,7 @@ mod tests {
 
     #[test]
     fn border_line_type_maps_full_enum() {
-        use crate::schema::border_fill::Hwp5BorderLineKind as K;
+        use hwpforge_smithy_hwp5::schema::border_fill::Hwp5BorderLineKind as K;
         let cases: &[(K, &str)] = &[
             (K::None, "NONE"),
             (K::Solid, "SOLID"),
@@ -534,7 +527,7 @@ mod tests {
 
     #[test]
     fn fill_pattern_maps_full_enum() {
-        use crate::schema::border_fill::Hwp5FillPatternKind as P;
+        use hwpforge_smithy_hwp5::schema::border_fill::Hwp5FillPatternKind as P;
         assert_eq!(hwp5_fill_pattern_to_hwpx(P::None), None);
         assert_eq!(hwp5_fill_pattern_to_hwpx(P::Unknown(7)), None);
         for kind in [P::Horizontal, P::Vertical, P::BackSlash, P::Slash, P::Cross, P::CrossDiagonal]
@@ -545,7 +538,7 @@ mod tests {
 
     #[test]
     fn gradation_type_maps_full_enum() {
-        use crate::schema::border_fill::Hwp5GradationType as G;
+        use hwpforge_smithy_hwp5::schema::border_fill::Hwp5GradationType as G;
         assert_eq!(hwp5_gradation_type_to_hwpx(G::Linear), GradientType::Linear);
         assert_eq!(hwp5_gradation_type_to_hwpx(G::Circular), GradientType::Radial);
         assert_eq!(hwp5_gradation_type_to_hwpx(G::Conical), GradientType::Conical);
@@ -555,7 +548,7 @@ mod tests {
 
     #[test]
     fn image_fill_effect_maps_full_enum() {
-        use crate::schema::border_fill::Hwp5FillImageEffect as E;
+        use hwpforge_smithy_hwp5::schema::border_fill::Hwp5FillImageEffect as E;
         assert_eq!(hwp5_image_fill_effect_to_hwpx(E::RealPic), "REAL_PIC");
         assert_eq!(hwp5_image_fill_effect_to_hwpx(E::GrayScale), "GRAY_SCALE");
         assert_eq!(hwp5_image_fill_effect_to_hwpx(E::BlackWhite), "BLACK_WHITE");

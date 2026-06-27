@@ -17,6 +17,7 @@ doc = false
 
 [dependencies]
 clap = { workspace = true }
+hwpforge-convert = { path = "../hwpforge-convert" }
 hwpforge-core = { path = "../hwpforge-core" }
 hwpforge-foundation = { path = "../hwpforge-foundation" }
 hwpforge-smithy-hwp5 = { path = "../hwpforge-smithy-hwp5" }

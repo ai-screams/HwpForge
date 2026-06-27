@@ -9,6 +9,14 @@ use std::io::Read;
 
 use crate::error::{Hwp5Error, Hwp5Result};
 
+/// Maximum number of records parsed from a single stream.
+///
+/// A 500 MB stream of minimal (4-byte header, zero-size) records could expand
+/// into ~125M `Record` structs. Real DocInfo/Section streams hold thousands to
+/// low tens of thousands of records, so 5,000,000 is an extremely generous
+/// ceiling that still blocks the amplification attack.
+const MAX_RECORDS_PER_STREAM: usize = 5_000_000;
+
 /// Parsed HWP5 record header (4 bytes, little-endian packed).
 ///
 /// Bit layout of the 32-bit word:
@@ -66,6 +74,16 @@ impl Record {
     /// Parse a single record (header + data) from a [`Read`] source.
     pub fn parse(reader: &mut impl Read) -> Hwp5Result<Self> {
         let header = RecordHeader::parse(reader)?;
+        const MAX_RECORD_SIZE: u32 = 64 * 1024 * 1024; // 64 MiB per record
+        if header.size > MAX_RECORD_SIZE {
+            return Err(Hwp5Error::RecordParse {
+                offset: 0,
+                detail: format!(
+                    "record size {} exceeds cap of {} bytes",
+                    header.size, MAX_RECORD_SIZE
+                ),
+            });
+        }
         let mut data = vec![0u8; header.size as usize];
         reader.read_exact(&mut data).map_err(|e| Hwp5Error::RecordParse {
             offset: 0,
@@ -77,8 +95,18 @@ impl Record {
     /// Parse all records from a [`Read`] source until EOF.
     ///
     /// Returns an empty `Vec` for an empty stream. Any partial record at the
-    /// end of the stream is treated as a parse error.
+    /// end of the stream is treated as a parse error. Rejects streams whose
+    /// record count exceeds [`MAX_RECORDS_PER_STREAM`] to bound the worst-case
+    /// `Vec<Record>` a hostile stream of minimal records could amplify into.
     pub fn parse_stream(reader: &mut impl Read) -> Hwp5Result<Vec<Record>> {
+        Self::parse_stream_capped(reader, MAX_RECORDS_PER_STREAM)
+    }
+
+    /// Internal worker for [`parse_stream`] with an explicit record-count cap.
+    ///
+    /// Exposing the cap as a parameter lets tests verify the bound with a small
+    /// value instead of materializing millions of records.
+    fn parse_stream_capped(reader: &mut impl Read, max_records: usize) -> Hwp5Result<Vec<Record>> {
         let mut records = Vec::new();
         // Buffer the entire stream so we can detect EOF cleanly.
         let mut buf = Vec::new();
@@ -94,6 +122,12 @@ impl Record {
             let remaining = cursor.get_ref().len() - pos;
             if remaining == 0 {
                 break;
+            }
+            if records.len() >= max_records {
+                return Err(Hwp5Error::RecordParse {
+                    offset: pos,
+                    detail: format!("record count exceeds cap of {max_records} per stream"),
+                });
             }
             let record = Record::parse(&mut cursor)?;
             records.push(record);
@@ -355,6 +389,50 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
+    /// A minimal record: 4-byte header (tag=16, level=0, size=0), no payload.
+    fn minimal_record_bytes(count: usize) -> Vec<u8> {
+        let word: u32 = 16; // tag=16, level=0, size=0
+        let mut buf = Vec::with_capacity(count * 4);
+        for _ in 0..count {
+            buf.extend_from_slice(&word.to_le_bytes());
+        }
+        buf
+    }
+
+    #[test]
+    fn parse_stream_rejects_record_count_over_cap() {
+        // Use a tiny injected cap so we never build millions of records: a
+        // stream of cap+1 minimal records must be rejected before the final
+        // push, with no runaway allocation.
+        let cap = 8;
+        let bytes = minimal_record_bytes(cap + 1);
+        let mut cursor = Cursor::new(&bytes[..]);
+        let err = Record::parse_stream_capped(&mut cursor, cap).unwrap_err();
+        match err {
+            Hwp5Error::RecordParse { detail, .. } => {
+                assert!(detail.contains("record count exceeds cap"), "got: {detail}");
+            }
+            other => panic!("expected RecordParse cap error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_stream_accepts_count_at_cap() {
+        let cap = 8;
+        let bytes = minimal_record_bytes(cap);
+        let mut cursor = Cursor::new(&bytes[..]);
+        let records = Record::parse_stream_capped(&mut cursor, cap).expect("count at cap is ok");
+        assert_eq!(records.len(), cap);
+    }
+
+    #[test]
+    fn parse_stream_accepts_normal_small_stream() {
+        let bytes = minimal_record_bytes(3);
+        let mut cursor = Cursor::new(&bytes[..]);
+        let records = Record::parse_stream(&mut cursor).expect("small stream parses");
+        assert_eq!(records.len(), 3);
+    }
+
     #[test]
     fn parse_record_header_basic() {
         // tag=0x10(16), level=0, size=100
@@ -388,6 +466,55 @@ mod tests {
         let mut cursor = Cursor::new(&buf[..]);
         let header = RecordHeader::parse(&mut cursor).unwrap();
         assert_eq!(header.size, 50_000);
+    }
+
+    #[test]
+    fn parse_record_rejects_oversize_extended_size_without_allocating() {
+        // A malicious/corrupt record header can declare an extended size far
+        // larger than any real payload. `Record::parse` must reject it via the
+        // MAX_RECORD_SIZE cap BEFORE `vec![0u8; size]` is allocated, so a tiny
+        // (here: empty) actual payload cannot trigger a multi-GiB allocation.
+        let word: u32 = 16 | (0xFFF << 20); // size_field == 0xFFF → extended size follows
+        let extended_size: u32 = 64 * 1024 * 1024 + 1; // 64 MiB + 1 byte, just over the cap
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&word.to_le_bytes());
+        buf.extend_from_slice(&extended_size.to_le_bytes());
+        // No payload bytes follow: if the cap were absent, the allocation would
+        // happen first (and read_exact would then fail), so reaching the cap
+        // error proves we bailed out before allocating.
+        let mut cursor = Cursor::new(&buf[..]);
+        let err = Record::parse(&mut cursor).unwrap_err();
+        match err {
+            Hwp5Error::RecordParse { detail, .. } => {
+                assert!(detail.contains("exceeds cap"), "expected size-cap error, got: {detail}",);
+            }
+            other => panic!("expected RecordParse cap error, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_record_accepts_size_at_cap_boundary() {
+        // Exactly at the cap (64 MiB) must still be accepted by the guard; here
+        // we only need the header check to pass, so we use a non-extended small
+        // size to confirm the boundary comparison is `>` (strictly greater).
+        let word: u32 = 16 | (0xFFF << 20);
+        let extended_size: u32 = 64 * 1024 * 1024; // exactly the cap
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&word.to_le_bytes());
+        buf.extend_from_slice(&extended_size.to_le_bytes());
+        // Provide no payload: the cap check passes (size == cap is allowed), so
+        // failure now comes from read_exact (truncated data), NOT the cap.
+        let mut cursor = Cursor::new(&buf[..]);
+        let err = Record::parse(&mut cursor).unwrap_err();
+        match err {
+            Hwp5Error::RecordParse { detail, .. } => {
+                assert!(
+                    !detail.contains("exceeds cap"),
+                    "size at cap must not trip the cap guard, got: {detail}",
+                );
+            }
+            other => panic!("expected RecordParse data error, got: {other:?}"),
+        }
     }
 
     #[test]

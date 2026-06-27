@@ -107,7 +107,7 @@ impl Hwp5ParaHeader {
 // IndexMark inline-marker discriminator (Wave 12k)
 // ---------------------------------------------------------------------------
 
-use crate::ctrl_ids::{CTRL_ID_ATNO, CTRL_ID_INDEXMARK};
+use crate::ctrl_ids::{CTRL_ID_ATNO, CTRL_ID_ENDNOTE, CTRL_ID_FOOTNOTE, CTRL_ID_INDEXMARK};
 
 /// Reads the LE-stored ctrl_id from the first four bytes of an
 /// inline-marker's `extra` block and returns it as the BE-ascii u32
@@ -347,13 +347,38 @@ impl Hwp5ParaText {
                     if ctrl_id_from_inline_extra_bytes(&extra) == CTRL_ID_ATNO {
                         segments.push(TextSegment::ControlRef { extra });
                     }
-                    // Else: consumed silently, same as 0x0E..=0x11 / 0x13..=0x15 below.
+                    // Else: consumed silently, same as 0x0E..=0x10 / 0x13..=0x15 below.
                 }
-                // 0x0E-0x15 (except 0x12): extended controls (bookmarks,
-                // change tracking, etc.). All consume 7 extra u16 values.
-                // Still silently consumed until a future slice promotes
-                // them to a typed variant.
-                0x0E..=0x11 | 0x13..=0x15 => {
+                // 0x11: 각주/미주 (footnote/endnote) inline reference marker
+                // (HWP 5.0 spec rev 1.3 표 6 코드 17 — "각주/미주", extended).
+                // `extra[0..4]` carries the LE-stored ctrl_id (`fn  ` /
+                // `en  `) of the corresponding `fn  `/`en  ` CtrlHeader,
+                // which the decoder turned into a footnote/endnote subtree
+                // control parked on the paragraph's control queue. Promote
+                // it to a `ControlRef` so the structural projection pops
+                // that footnote/endnote control *at the marker's inline
+                // position* (CLAUDE.md gotcha #12: 각주/미주는 같은 문단의
+                // inline Run, 별도 문단 금지) instead of draining it to the
+                // paragraph tail. Only `fn  `/`en  `-tagged 0x11 markers are
+                // promoted; any other 0x11 owner keeps falling through to
+                // silent-consume so we don't promote an unknown family whose
+                // CtrlHeader we don't decode (mirrors the 0x12/0x16 guards).
+                0x11 => {
+                    flush_text!();
+                    let extra = read_extra!(i - 1);
+                    if matches!(
+                        ctrl_id_from_inline_extra_bytes(&extra),
+                        CTRL_ID_FOOTNOTE | CTRL_ID_ENDNOTE
+                    ) {
+                        segments.push(TextSegment::ControlRef { extra });
+                    }
+                    // Else: consumed silently, same as 0x0E..=0x10 below.
+                }
+                // 0x0E-0x15 (except 0x11, 0x12): extended controls
+                // (bookmarks, change tracking, etc.). All consume 7 extra
+                // u16 values. Still silently consumed until a future slice
+                // promotes them to a typed variant.
+                0x0E..=0x10 | 0x13..=0x15 => {
                     flush_text!();
                     let _extra = read_extra!(i - 1);
                     // No segment emitted — consumed silently.
@@ -485,7 +510,7 @@ impl Hwp5CharShapeRun {
 /// This is format-local layout cache data. It must not leak into Core, but
 /// HWP5 → HWPX conversion can preserve it as a fidelity hint.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct Hwp5ParaLineSeg {
+pub struct Hwp5ParaLineSeg {
     /// Character position where the line starts.
     pub text_start_position: u32,
     /// Vertical offset from the paragraph top in HWPUNIT.
@@ -3167,6 +3192,88 @@ mod tests {
         let pt = Hwp5ParaText::parse(&data).unwrap();
         assert_eq!(pt.segments.len(), 1);
         assert!(matches!(pt.segments[0], TextSegment::ExtendedControlRef { .. }));
+    }
+
+    /// Builds the 8-wchar inline-control marker for control code `cp` with
+    /// `ctrl_id` LE-stored in `extra[0..4]` (mirrors how 한컴 tags
+    /// 각주/미주/atno/idxm inline markers; the remaining words are zero).
+    fn inline_marker_with_ctrl_id(cp: u16, ctrl_id: u32) -> Vec<u8> {
+        let id = ctrl_id.to_le_bytes();
+        inline_control_bytes(
+            cp,
+            [u16::from_le_bytes([id[0], id[1]]), u16::from_le_bytes([id[2], id[3]]), 0, 0, 0, 0, 0],
+        )
+    }
+
+    #[test]
+    fn para_text_footnote_marker_0x11_promotes_to_control_ref() {
+        // HWP 5.0 spec 표 6 코드 17 (0x11) = 각주/미주. A `fn  `-tagged 0x11
+        // inline marker must surface as a `ControlRef` so the structural
+        // projection can place the footnote control inline at the marker
+        // position (CLAUDE.md gotcha #12), not drain it to the para tail.
+        let data = inline_marker_with_ctrl_id(0x11, CTRL_ID_FOOTNOTE);
+        let pt = Hwp5ParaText::parse(&data).unwrap();
+        assert_eq!(pt.segments.len(), 1);
+        assert!(
+            matches!(pt.segments[0], TextSegment::ControlRef { .. }),
+            "0x11 fn marker should promote to ControlRef, got {:?}",
+            pt.segments[0]
+        );
+    }
+
+    #[test]
+    fn para_text_endnote_marker_0x11_promotes_to_control_ref() {
+        // Same 0x11 code, `en  `-tagged → endnote (shared code path).
+        let data = inline_marker_with_ctrl_id(0x11, CTRL_ID_ENDNOTE);
+        let pt = Hwp5ParaText::parse(&data).unwrap();
+        assert_eq!(pt.segments.len(), 1);
+        assert!(
+            matches!(pt.segments[0], TextSegment::ControlRef { .. }),
+            "0x11 en marker should promote to ControlRef, got {:?}",
+            pt.segments[0]
+        );
+    }
+
+    #[test]
+    fn para_text_footnote_marker_0x11_inline_between_text_keeps_order() {
+        // "앞<11>뒤" — the footnote marker sits *between* two text runs.
+        // The marker must become the single object-replacement (`\u{FFFC}`)
+        // position so the surrounding text stays in document order
+        // (regression: 0x11 was previously dropped, collapsing the text and
+        // forcing the footnote to the paragraph tail).
+        let mut data = utf16le("앞");
+        data.extend_from_slice(&inline_marker_with_ctrl_id(0x11, CTRL_ID_FOOTNOTE));
+        data.extend_from_slice(&utf16le("뒤"));
+        let pt = Hwp5ParaText::parse(&data).unwrap();
+        assert_eq!(
+            pt.segments,
+            vec![
+                TextSegment::Text("앞".to_string()),
+                TextSegment::ControlRef {
+                    extra: {
+                        let id = CTRL_ID_FOOTNOTE.to_le_bytes();
+                        let mut e = [0u8; 14];
+                        e[0..4].copy_from_slice(&id);
+                        e
+                    }
+                },
+                TextSegment::Text("뒤".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn para_text_unknown_0x11_owner_still_consumed_silently() {
+        // A 0x11 marker tagged with a ctrl_id we do not decode must keep the
+        // pre-fix silent-consume behavior so we never promote an unknown
+        // control family (no-fake-support; mirrors the 0x12/0x16 guards).
+        let data = inline_marker_with_ctrl_id(0x11, 0xDEAD_BEEF);
+        let pt = Hwp5ParaText::parse(&data).unwrap();
+        assert!(
+            pt.segments.is_empty(),
+            "unknown 0x11 owner must be consumed silently, got {:?}",
+            pt.segments
+        );
     }
 
     #[test]

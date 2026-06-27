@@ -1713,6 +1713,7 @@ mod tests {
                     vert_offset: 0,
                     caption: None,
                     style: None,
+                    text_vertical_align: hwpforge_foundation::VerticalAlign::Top,
                 },
                 CharShapeIndex::new(0),
             )],
@@ -1825,6 +1826,7 @@ mod tests {
                     paragraphs: vec![inner],
                     caption: None,
                     style: None,
+                    text_vertical_align: hwpforge_foundation::VerticalAlign::Top,
                 },
                 CharShapeIndex::new(0),
             )],
@@ -1857,6 +1859,7 @@ mod tests {
                     paragraphs: vec![inner],
                     caption: None,
                     style: None,
+                    text_vertical_align: hwpforge_foundation::VerticalAlign::Top,
                 },
                 CharShapeIndex::new(0),
             )],
@@ -2008,5 +2011,836 @@ mod tests {
             1,
         )])]);
         assert!(has_merge(&table));
+    }
+
+    // -----------------------------------------------------------------------
+    // Additional coverage tests for previously uncovered branches
+    // -----------------------------------------------------------------------
+
+    /// A MockStyles extension that supports underline, super/subscript, and font name.
+    struct ExtendedMockStyles {
+        base: MockStyles,
+        underline_ids: Vec<usize>,
+        superscript_ids: Vec<usize>,
+        subscript_ids: Vec<usize>,
+        font_names: HashMap<usize, String>,
+        image_filenames: HashMap<String, String>,
+    }
+
+    impl ExtendedMockStyles {
+        fn new() -> Self {
+            Self {
+                base: MockStyles::new(),
+                underline_ids: Vec::new(),
+                superscript_ids: Vec::new(),
+                subscript_ids: Vec::new(),
+                font_names: HashMap::new(),
+                image_filenames: HashMap::new(),
+            }
+        }
+    }
+
+    impl StyleLookup for ExtendedMockStyles {
+        fn char_bold(&self, id: CharShapeIndex) -> Option<bool> {
+            self.base.char_bold(id)
+        }
+        fn char_italic(&self, id: CharShapeIndex) -> Option<bool> {
+            self.base.char_italic(id)
+        }
+        fn char_strikeout(&self, id: CharShapeIndex) -> Option<bool> {
+            self.base.char_strikeout(id)
+        }
+        fn char_underline(&self, id: CharShapeIndex) -> Option<hwpforge_foundation::UnderlineType> {
+            if self.underline_ids.contains(&id.get()) {
+                Some(hwpforge_foundation::UnderlineType::Bottom)
+            } else {
+                None
+            }
+        }
+        fn char_superscript(&self, id: CharShapeIndex) -> Option<bool> {
+            Some(self.superscript_ids.contains(&id.get()))
+        }
+        fn char_subscript(&self, id: CharShapeIndex) -> Option<bool> {
+            Some(self.subscript_ids.contains(&id.get()))
+        }
+        fn char_font_name(&self, id: CharShapeIndex) -> Option<&str> {
+            self.font_names.get(&id.get()).map(String::as_str)
+        }
+        fn para_heading_level(&self, id: ParaShapeIndex) -> Option<u8> {
+            self.base.para_heading_level(id)
+        }
+        fn para_list_type(&self, id: ParaShapeIndex) -> Option<&str> {
+            self.base.para_list_type(id)
+        }
+        fn para_list_level(&self, id: ParaShapeIndex) -> Option<u8> {
+            self.base.para_list_level(id)
+        }
+        fn para_checked_state(&self, id: ParaShapeIndex) -> Option<bool> {
+            self.base.para_checked_state(id)
+        }
+        fn para_style_name(&self, id: ParaShapeIndex) -> Option<&str> {
+            self.base.para_style_name(id)
+        }
+        fn style_name(&self, id: StyleIndex) -> Option<&str> {
+            self.base.style_name(id)
+        }
+        fn style_heading_level(&self, id: StyleIndex) -> Option<u8> {
+            self.base.style_heading_level(id)
+        }
+        fn image_data(&self, key: &str) -> Option<&[u8]> {
+            self.base.image_data(key)
+        }
+        fn image_resolve_filename(&self, key: &str) -> Option<&str> {
+            self.image_filenames.get(key).map(String::as_str)
+        }
+    }
+
+    // --- format_as_list Korean/numbered style names ---
+
+    #[test]
+    fn format_as_list_korean_bullet_style_emits_dash() {
+        let result = format_as_list("item text", "글머리 기호");
+        assert_eq!(result, Some("- item text".to_string()));
+    }
+
+    #[test]
+    fn format_as_list_korean_gaejo_style_emits_dash() {
+        let result = format_as_list("item text", "개조식");
+        assert_eq!(result, Some("- item text".to_string()));
+    }
+
+    #[test]
+    fn format_as_list_korean_numbered_style_emits_numbered() {
+        let result = format_as_list("item text", "번호 목록");
+        assert_eq!(result, Some("1. item text".to_string()));
+    }
+
+    #[test]
+    fn format_as_list_empty_text_returns_none() {
+        let result = format_as_list("", "글머리");
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn format_as_list_unrecognized_style_returns_none() {
+        let result = format_as_list("text", "바탕글");
+        assert_eq!(result, None);
+    }
+
+    // --- InlineFormat underline/superscript/subscript wrap paths ---
+
+    #[test]
+    fn inline_format_underline_wraps_as_html_u() {
+        let fmt = InlineFormat { underline: true, ..Default::default() };
+        assert_eq!(fmt.wrap("underlined"), "<u>underlined</u>");
+    }
+
+    #[test]
+    fn inline_format_superscript_wraps_as_html_sup() {
+        let fmt = InlineFormat { superscript: true, ..Default::default() };
+        assert_eq!(fmt.wrap("sup text"), "<sup>sup text</sup>");
+    }
+
+    #[test]
+    fn inline_format_subscript_wraps_as_html_sub() {
+        let fmt = InlineFormat { subscript: true, ..Default::default() };
+        assert_eq!(fmt.wrap("sub text"), "<sub>sub text</sub>");
+    }
+
+    #[test]
+    fn inline_format_bold_and_underline_combines_markdown_and_html() {
+        let fmt = InlineFormat { bold: true, underline: true, ..Default::default() };
+        let result = fmt.wrap("text");
+        assert!(result.contains("<u>"), "expected <u> in: {result}");
+    }
+
+    #[test]
+    fn inline_format_wrap_html_underline() {
+        let fmt = InlineFormat { underline: true, ..Default::default() };
+        assert_eq!(fmt.wrap_html("text"), "<u>text</u>");
+    }
+
+    #[test]
+    fn inline_format_wrap_html_superscript() {
+        let fmt = InlineFormat { superscript: true, ..Default::default() };
+        assert_eq!(fmt.wrap_html("text"), "<sup>text</sup>");
+    }
+
+    #[test]
+    fn inline_format_wrap_html_subscript() {
+        let fmt = InlineFormat { subscript: true, ..Default::default() };
+        assert_eq!(fmt.wrap_html("text"), "<sub>text</sub>");
+    }
+
+    // --- is_code_paragraph via encode_styled ---
+
+    #[test]
+    fn code_font_paragraph_encoded_as_code_block() {
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::text("let x = 1;", CharShapeIndex::new(1))],
+            ParaShapeIndex::new(0),
+        )]);
+        let mut styles = ExtendedMockStyles::new();
+        styles.font_names.insert(1, "D2Coding".to_string());
+
+        let output = encode_styled(&doc, &styles);
+        assert!(output.markdown.contains("```"), "expected code block markers");
+        assert!(output.markdown.contains("let x = 1;"));
+    }
+
+    #[test]
+    fn code_block_flushed_at_section_end() {
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::text("code line", CharShapeIndex::new(1))],
+            ParaShapeIndex::new(0),
+        )]);
+        let mut styles = ExtendedMockStyles::new();
+        styles.font_names.insert(1, "Consolas".to_string());
+
+        let output = encode_styled(&doc, &styles);
+        assert!(output.markdown.contains("```\ncode line\n```"));
+    }
+
+    // --- Page break handling ---
+
+    #[test]
+    fn page_break_paragraph_emits_horizontal_rule() {
+        let mut p1 = Paragraph::with_runs(
+            vec![Run::text("before break", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        p1.page_break = true;
+        let p2 = Paragraph::with_runs(
+            vec![Run::text("after break", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        let doc = validated_document(vec![p1, p2]);
+        let styles = MockStyles::new();
+
+        let output = encode_styled(&doc, &styles);
+        assert!(output.markdown.contains("---"), "expected --- for page break");
+    }
+
+    #[test]
+    fn page_break_flushes_pending_code_block() {
+        let code_para = Paragraph::with_runs(
+            vec![Run::text("code", CharShapeIndex::new(1))],
+            ParaShapeIndex::new(0),
+        );
+        let mut break_para = Paragraph::with_runs(
+            vec![Run::text("break", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        break_para.page_break = true;
+        let doc = validated_document(vec![code_para, break_para]);
+        let mut styles = ExtendedMockStyles::new();
+        styles.font_names.insert(1, "D2Coding".to_string());
+
+        let output = encode_styled(&doc, &styles);
+        assert!(output.markdown.contains("```"), "code block should be present");
+        assert!(output.markdown.contains("---"), "page break marker should be present");
+    }
+
+    // --- escape_markdown helpers ---
+
+    #[test]
+    fn escape_markdown_escapes_special_chars() {
+        let result = escape_markdown("*bold* and _italic_ and `code`");
+        assert!(result.contains("\\*bold\\*"));
+        assert!(result.contains("\\_italic\\_"));
+        assert!(result.contains("\\`code\\`"));
+    }
+
+    #[test]
+    fn escape_markdown_escapes_angle_brackets() {
+        let result = escape_markdown("<tag>");
+        assert_eq!(result, "&lt;tag&gt;");
+    }
+
+    #[test]
+    fn escape_markdown_escapes_hash() {
+        let result = escape_markdown("# heading");
+        assert!(result.contains("\\#"));
+    }
+
+    #[test]
+    fn escape_markdown_passes_through_normal_text() {
+        let result = escape_markdown("hello world 안녕하세요");
+        assert_eq!(result, "hello world 안녕하세요");
+    }
+
+    // --- escape_html ---
+
+    #[test]
+    fn escape_html_escapes_all_special_chars() {
+        let result = escape_html("<script>alert('xss\" & stuff');</script>");
+        assert!(result.contains("&lt;script&gt;"));
+        assert!(result.contains("&amp;"));
+        assert!(result.contains("&quot;"));
+        assert!(result.contains("&#39;"));
+    }
+
+    // --- escape_gfm_cell ---
+
+    #[test]
+    fn escape_gfm_cell_escapes_pipe_and_newline() {
+        let result = escape_gfm_cell("a|b\nc");
+        assert_eq!(result, "a\\|b<br>c");
+    }
+
+    // --- image_alt_text and image_rel_path ---
+
+    #[test]
+    fn image_alt_text_extracts_stem_from_path() {
+        assert_eq!(image_alt_text("images/photo.jpg"), "photo");
+        assert_eq!(image_alt_text("BinData/logo.png"), "logo");
+        assert_eq!(image_alt_text("simple"), "simple");
+    }
+
+    #[test]
+    fn image_alt_text_escapes_brackets_in_stem() {
+        assert_eq!(image_alt_text("[photo].png"), "\\[photo\\]");
+    }
+
+    #[test]
+    fn image_rel_path_falls_back_to_basename() {
+        let styles = MockStyles::new();
+        let result = image_rel_path("BinData/photo.jpg", &styles);
+        assert_eq!(result, "images/photo.jpg");
+    }
+
+    #[test]
+    fn image_rel_path_uses_resolved_filename_when_available() {
+        let mut styles = ExtendedMockStyles::new();
+        styles.image_filenames.insert("BinData/img1".to_string(), "img1.png".to_string());
+        let result = image_rel_path("BinData/img1", &styles);
+        assert_eq!(result, "images/img1.png");
+    }
+
+    #[test]
+    fn image_rel_path_escapes_parentheses_in_filename() {
+        let styles = MockStyles::new();
+        let result = image_rel_path("path/file(1).jpg", &styles);
+        assert_eq!(result, "images/file%281%29.jpg");
+    }
+
+    // --- has_nested_table ---
+
+    #[test]
+    fn has_nested_table_false_for_plain_table() {
+        let table = Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![Paragraph::with_runs(
+                vec![Run::text("cell", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            HwpUnit::from_mm(30.0).unwrap(),
+        )])]);
+        assert!(!has_nested_table(&table));
+    }
+
+    #[test]
+    fn has_nested_table_true_for_table_in_cell() {
+        let inner_table = Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![Paragraph::new(ParaShapeIndex::new(0))],
+            HwpUnit::from_mm(20.0).unwrap(),
+        )])]);
+        let outer_table = Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![Paragraph::with_runs(
+                vec![Run::table(inner_table, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            HwpUnit::from_mm(60.0).unwrap(),
+        )])]);
+        assert!(has_nested_table(&outer_table));
+    }
+
+    #[test]
+    fn nested_table_in_cell_renders_html() {
+        let inner_table = Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![Paragraph::with_runs(
+                vec![Run::text("inner", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            HwpUnit::from_mm(20.0).unwrap(),
+        )])]);
+        let outer_table = Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![Paragraph::with_runs(
+                vec![Run::table(inner_table, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            HwpUnit::from_mm(60.0).unwrap(),
+        )])]);
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::table(outer_table, CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )]);
+        let styles = MockStyles::new();
+
+        let output = encode_styled(&doc, &styles);
+        assert!(output.markdown.contains("<table>"), "nested table should render as HTML");
+    }
+
+    // --- Control variants: Memo, Field, Bookmark, CrossRef, Arc, Curve, ConnectLine, IndexMark ---
+
+    #[test]
+    fn control_memo_with_content_renders_comment() {
+        use hwpforge_core::control::MemoMetadata;
+        let memo_body = Paragraph::with_runs(
+            vec![Run::text("memo note", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Memo {
+                    content: vec![memo_body],
+                    anchor_runs: vec![],
+                    metadata: MemoMetadata::default(),
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+        let styles = MockStyles::new();
+
+        let output = encode_styled(&doc, &styles);
+        assert!(
+            output.markdown.contains("<!-- memo:"),
+            "memo with content should render as HTML comment, got: {}",
+            output.markdown
+        );
+        assert!(output.markdown.contains("memo note"));
+    }
+
+    #[test]
+    fn control_memo_with_empty_content_emits_empty() {
+        use hwpforge_core::control::MemoMetadata;
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Memo {
+                    content: vec![Paragraph::with_runs(
+                        vec![Run::text("   ", CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
+                    )],
+                    anchor_runs: vec![],
+                    metadata: MemoMetadata::default(),
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+        let styles = MockStyles::new();
+
+        let output = encode_styled(&doc, &styles);
+        assert_eq!(output.markdown, "");
+    }
+
+    #[test]
+    fn control_field_with_hint_text_renders_hint() {
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Field {
+                    field_type: hwpforge_foundation::FieldType::ClickHere,
+                    hint_text: Some("날짜 입력".to_string()),
+                    help_text: None,
+                    name: None,
+                    display_text: String::new(),
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+        let styles = MockStyles::new();
+
+        let output = encode_styled(&doc, &styles);
+        assert_eq!(output.markdown, "날짜 입력");
+    }
+
+    #[test]
+    fn control_field_without_hint_text_renders_placeholder() {
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Field {
+                    field_type: hwpforge_foundation::FieldType::ClickHere,
+                    hint_text: None,
+                    help_text: None,
+                    name: None,
+                    display_text: String::new(),
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+        let styles = MockStyles::new();
+
+        let output = encode_styled(&doc, &styles);
+        assert_eq!(output.markdown, "____");
+    }
+
+    #[test]
+    fn control_bookmark_emits_nothing() {
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Bookmark {
+                    name: "anchor1".to_string(),
+                    bookmark_type: hwpforge_foundation::BookmarkType::Point,
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+        let styles = MockStyles::new();
+
+        let output = encode_styled(&doc, &styles);
+        assert_eq!(output.markdown, "");
+    }
+
+    #[test]
+    fn control_crossref_with_display_text_emits_display_text() {
+        use hwpforge_core::control::RefTarget;
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::CrossRef {
+                    target: RefTarget::Name("sec1".to_string()),
+                    ref_type: hwpforge_foundation::RefType::Bookmark,
+                    content_type: hwpforge_foundation::RefContentType::Page,
+                    as_hyperlink: false,
+                    display_text: "see Section 1".to_string(),
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+        let styles = MockStyles::new();
+
+        let output = encode_styled(&doc, &styles);
+        assert_eq!(output.markdown, "see Section 1");
+    }
+
+    #[test]
+    fn control_crossref_without_display_text_emits_bracket_target() {
+        use hwpforge_core::control::RefTarget;
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::CrossRef {
+                    target: RefTarget::Name("anchor1".to_string()),
+                    ref_type: hwpforge_foundation::RefType::Bookmark,
+                    content_type: hwpforge_foundation::RefContentType::Page,
+                    as_hyperlink: false,
+                    display_text: String::new(),
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+        let styles = MockStyles::new();
+
+        let output = encode_styled(&doc, &styles);
+        assert!(
+            output.markdown.contains("[anchor1]"),
+            "empty display_text should produce bracketed fallback, got: {}",
+            output.markdown
+        );
+    }
+
+    #[test]
+    fn control_index_mark_emits_nothing() {
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::IndexMark { primary: "Rust".to_string(), secondary: None },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+        let styles = MockStyles::new();
+
+        let output = encode_styled(&doc, &styles);
+        assert_eq!(output.markdown, "");
+    }
+
+    #[test]
+    fn control_arc_emits_nothing() {
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Arc {
+                    arc_type: hwpforge_foundation::ArcType::Normal,
+                    center: ShapePoint { x: 500, y: 300 },
+                    axis1: ShapePoint { x: 1000, y: 300 },
+                    axis2: ShapePoint { x: 500, y: 600 },
+                    start1: ShapePoint { x: 750, y: 300 },
+                    end1: ShapePoint { x: 500, y: 550 },
+                    start2: ShapePoint { x: 750, y: 300 },
+                    end2: ShapePoint { x: 500, y: 550 },
+                    width: HwpUnit::from_mm(40.0).unwrap(),
+                    height: HwpUnit::from_mm(20.0).unwrap(),
+                    horz_offset: 0,
+                    vert_offset: 0,
+                    caption: None,
+                    style: None,
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+        let styles = MockStyles::new();
+
+        let output = encode_styled(&doc, &styles);
+        assert_eq!(output.markdown, "");
+    }
+
+    #[test]
+    fn control_curve_emits_nothing() {
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Curve {
+                    points: vec![
+                        ShapePoint { x: 0, y: 0 },
+                        ShapePoint { x: 500, y: 200 },
+                        ShapePoint { x: 1000, y: 0 },
+                    ],
+                    segment_types: vec![
+                        hwpforge_foundation::CurveSegmentType::Curve,
+                        hwpforge_foundation::CurveSegmentType::Line,
+                    ],
+                    width: HwpUnit::from_mm(40.0).unwrap(),
+                    height: HwpUnit::from_mm(20.0).unwrap(),
+                    horz_offset: 0,
+                    vert_offset: 0,
+                    caption: None,
+                    style: None,
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+        let styles = MockStyles::new();
+
+        let output = encode_styled(&doc, &styles);
+        assert_eq!(output.markdown, "");
+    }
+
+    #[test]
+    fn control_connect_line_emits_nothing() {
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::ConnectLine {
+                    start: ShapePoint { x: 0, y: 0 },
+                    end: ShapePoint { x: 1000, y: 500 },
+                    control_points: vec![],
+                    connect_type: "STRAIGHT".to_string(),
+                    width: HwpUnit::from_mm(40.0).unwrap(),
+                    height: HwpUnit::from_mm(20.0).unwrap(),
+                    horz_offset: 0,
+                    vert_offset: 0,
+                    caption: None,
+                    style: None,
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+        let styles = MockStyles::new();
+
+        let output = encode_styled(&doc, &styles);
+        assert_eq!(output.markdown, "");
+    }
+
+    // --- Style-name list fallback in encode_paragraph_styled ---
+
+    #[test]
+    fn style_name_bullet_pattern_formats_as_list() {
+        let para = Paragraph::with_runs(
+            vec![Run::text("list item", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )
+        .with_style(StyleIndex::new(5));
+        let doc = validated_document(vec![para]);
+        let mut styles = MockStyles::new();
+        styles.style_names.insert(5, "글머리 기호".to_string());
+
+        let output = encode_styled(&doc, &styles);
+        assert_eq!(output.markdown, "- list item");
+    }
+
+    #[test]
+    fn style_name_numbered_pattern_formats_as_numbered_list() {
+        let para = Paragraph::with_runs(
+            vec![Run::text("step", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )
+        .with_style(StyleIndex::new(6));
+        let doc = validated_document(vec![para]);
+        let mut styles = MockStyles::new();
+        styles.style_names.insert(6, "번호 목록".to_string());
+
+        let output = encode_styled(&doc, &styles);
+        assert_eq!(output.markdown, "1. step");
+    }
+
+    // --- Underline/super/subscript via encode_styled ---
+
+    #[test]
+    fn underline_text_wraps_as_html_u_in_output() {
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::text("underlined text", CharShapeIndex::new(1))],
+            ParaShapeIndex::new(0),
+        )]);
+        let mut styles = ExtendedMockStyles::new();
+        styles.underline_ids.push(1);
+
+        let output = encode_styled(&doc, &styles);
+        assert!(output.markdown.contains("<u>underlined text</u>"));
+    }
+
+    #[test]
+    fn superscript_text_wraps_as_html_sup_in_output() {
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::text("sup text", CharShapeIndex::new(2))],
+            ParaShapeIndex::new(0),
+        )]);
+        let mut styles = ExtendedMockStyles::new();
+        styles.superscript_ids.push(2);
+
+        let output = encode_styled(&doc, &styles);
+        assert!(output.markdown.contains("<sup>sup text</sup>"));
+    }
+
+    #[test]
+    fn subscript_text_wraps_as_html_sub_in_output() {
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::text("sub text", CharShapeIndex::new(3))],
+            ParaShapeIndex::new(0),
+        )]);
+        let mut styles = ExtendedMockStyles::new();
+        styles.subscript_ids.push(3);
+
+        let output = encode_styled(&doc, &styles);
+        assert!(output.markdown.contains("<sub>sub text</sub>"));
+    }
+
+    // --- empty heading text is skipped ---
+
+    #[test]
+    fn heading_with_empty_text_emits_nothing_from_para_shape() {
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::text("   ", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(5),
+        )]);
+        let mut styles = MockStyles::new();
+        styles.heading_paras.insert(5, 2);
+
+        let output = encode_styled(&doc, &styles);
+        assert_eq!(output.markdown, "");
+    }
+
+    #[test]
+    fn heading_with_empty_text_emits_nothing_from_style_id() {
+        let para = Paragraph::with_runs(
+            vec![Run::text("  ", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )
+        .with_style(StyleIndex::new(3));
+        let doc = validated_document(vec![para]);
+        let mut styles = MockStyles::new();
+        styles.heading_styles.insert(3, 1);
+
+        let output = encode_styled(&doc, &styles);
+        assert_eq!(output.markdown, "");
+    }
+
+    // --- Memo body sanitizes double-dash ---
+
+    #[test]
+    fn control_memo_sanitizes_double_dash_to_prevent_comment_breakout() {
+        use hwpforge_core::control::MemoMetadata;
+        let memo_body = Paragraph::with_runs(
+            vec![Run::text("bad -- content", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Memo {
+                    content: vec![memo_body],
+                    anchor_runs: vec![],
+                    metadata: MemoMetadata::default(),
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+        let styles = MockStyles::new();
+
+        let output = encode_styled(&doc, &styles);
+        // The raw double-dash in the memo body should be escaped to \-\-
+        assert!(output.markdown.contains("\\-\\-"), "double-dash should be escaped");
+        // The unescaped " -- " sequence (space-dash-dash-space) should not appear in the body
+        assert!(
+            !output.markdown.contains(" -- "),
+            "raw double-dash should not appear in memo body"
+        );
+    }
+
+    // --- Hyperlink URL escaping ---
+
+    #[test]
+    fn hyperlink_url_parentheses_are_percent_escaped() {
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Hyperlink {
+                    text: "link".to_string(),
+                    url: "https://example.com/path(1)".to_string(),
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+        let styles = MockStyles::new();
+
+        let output = encode_styled(&doc, &styles);
+        assert!(output.markdown.contains("%28"), "( should be escaped as %28");
+        assert!(output.markdown.contains("%29"), ") should be escaped as %29");
+    }
+
+    #[test]
+    fn hyperlink_vbscript_url_rejected() {
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Hyperlink {
+                    text: "evil".to_string(),
+                    url: "vbscript:msgbox(1)".to_string(),
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+        let styles = MockStyles::new();
+
+        let output = encode_styled(&doc, &styles);
+        assert!(!output.markdown.contains("]("), "vbscript: URL should be rejected");
+        assert_eq!(output.markdown, "evil");
+    }
+
+    // --- Inline image in paragraph (not standalone) ---
+
+    #[test]
+    fn inline_image_in_mixed_paragraph_renders_inline() {
+        use hwpforge_core::{Image, ImageFormat};
+        let image = Image::new(
+            "BinData/icon.png",
+            HwpUnit::from_mm(20.0).unwrap(),
+            HwpUnit::from_mm(10.0).unwrap(),
+            ImageFormat::Png,
+        );
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![
+                Run::text("See ", CharShapeIndex::new(0)),
+                Run::image(image, CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        )]);
+        let styles = MockStyles::new();
+
+        let output = encode_styled(&doc, &styles);
+        assert!(output.markdown.contains("See"), "prefix text should be present");
+        assert!(output.markdown.contains("![icon](images/icon.png)"), "inline image should render");
     }
 }

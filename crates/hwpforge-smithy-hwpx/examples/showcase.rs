@@ -29,7 +29,7 @@ use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
     Alignment, ApplyPageType, CharShapeIndex, Color, HwpUnit, LineSpacingType, NumberFormatType,
-    PageNumberPosition, ParaShapeIndex, UnderlineType,
+    PageNumberPosition, ParaShapeIndex, UnderlineType, VerticalAlign,
 };
 use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore};
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
@@ -229,6 +229,7 @@ fn build_section2() -> Section {
                     vert_offset: 0,
                     caption: Some(make_caption("글상자 1. 설명", CaptionSide::Bottom)),
                     style: None,
+                    text_vertical_align: VerticalAlign::Top,
                 },
                 CharShapeIndex::new(0),
             )],
@@ -265,6 +266,7 @@ fn build_section2() -> Section {
                     paragraphs: vec![text_para("타원 내부 텍스트", 0, 1)],
                     caption: Some(make_caption("그림 2. 타원 도형", CaptionSide::Bottom)),
                     style: None,
+                    text_vertical_align: VerticalAlign::Top,
                 },
                 CharShapeIndex::new(0),
             )],
@@ -286,6 +288,7 @@ fn build_section2() -> Section {
                     paragraphs: vec![text_para("삼각형", 0, 1)],
                     caption: Some(make_caption("그림 3. 삼각형 도형", CaptionSide::Bottom)),
                     style: None,
+                    text_vertical_align: VerticalAlign::Top,
                 },
                 CharShapeIndex::new(0),
             )],

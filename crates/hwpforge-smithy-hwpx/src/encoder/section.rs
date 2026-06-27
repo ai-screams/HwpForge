@@ -212,9 +212,7 @@ pub(crate) fn encode_section(
     // Replace hyperlink placeholder runs with real interleaved XML.
     // Serde cannot express the ctrl-text-ctrl interleaving required by
     // HWPX fieldBegin/fieldEnd, so we serialize a marker and swap it here.
-    for (marker_xml, real_xml) in &run_xml_replacements {
-        enriched = enriched.replacen(marker_xml, real_xml, 1);
-    }
+    enriched = apply_run_xml_replacements(enriched, &run_xml_replacements);
 
     // Generate masterpage XML files
     let master_pages = build_masterpage_entries(section, masterpage_offset);
@@ -225,6 +223,72 @@ pub(crate) fn encode_section(
         master_pages,
         embedded_oles,
     })
+}
+
+/// Applies marker → real-XML substitutions in a single allocation.
+///
+/// Each marker produced by [`next_marker`] is a globally-unique nonce token
+/// that occurs exactly once in `xml` and never inside any replacement value,
+/// so locating every marker up front and splicing in offset order yields the
+/// same bytes as sequentially calling `String::replacen(marker, real, 1)` —
+/// while allocating the output string only once instead of once per marker
+/// (the previous loop was O(N·L): one full-string copy per replacement).
+///
+/// # Invariant this relies on: child-before-parent push ordering
+///
+/// A `real_xml` payload *may* embed another control's marker token — e.g. a
+/// memo/group whose sublist contains a nested field. Equivalence to the old
+/// sequential `replacen` loop is preserved only because nested controls push
+/// their `(marker, real)` pair to `run_xml_replacements` **before** their
+/// enclosing parent. With that ordering both strategies behave identically:
+/// the child's pass runs while its marker is still hidden inside the parent's
+/// not-yet-applied `real_xml` (a no-op for both), then the parent's pass
+/// splices the child marker into the output where it stays unreplaced in both
+/// the old loop and this single pass.
+///
+/// If ordering ever inverted to parent-before-child, the two would DIVERGE:
+/// the old `replacen` rescans the mutated string and would resolve the nested
+/// marker, whereas this pass only locates markers in the *original* string and
+/// would leave it. `apply_run_xml_replacements_child_before_parent_matches_replacen`
+/// locks the safe ordering against that regression.
+///
+/// (The fact that a deeply-nested field marker can survive into the output at
+/// all is a separate, pre-existing memo/group limitation — see
+/// `BACKLOG_SMITHY_HWPX.md` — and is byte-identical across both strategies, so
+/// it does not affect this optimization.)
+fn apply_run_xml_replacements(xml: String, replacements: &[(String, String)]) -> String {
+    if replacements.is_empty() {
+        return xml;
+    }
+    // Locate each marker's byte offset. Each marker is unique and occurs at
+    // most once; a missing marker is a silent no-op, matching `replacen`.
+    let mut hits: Vec<(usize, usize, &str)> = Vec::with_capacity(replacements.len());
+    for (marker, real) in replacements {
+        if let Some(pos) = xml.find(marker.as_str()) {
+            hits.push((pos, marker.len(), real.as_str()));
+        }
+    }
+    if hits.is_empty() {
+        return xml;
+    }
+    hits.sort_unstable_by_key(|&(pos, _, _)| pos);
+
+    let extra: usize = hits.iter().map(|&(_, len, real)| real.len().saturating_sub(len)).sum();
+    let mut out = String::with_capacity(xml.len() + extra);
+    let mut cursor = 0usize;
+    for (pos, len, real) in hits {
+        // Skip any hit overlapping an already-applied region (defensive: a
+        // duplicate marker would otherwise splice twice). Mirrors `replacen`'s
+        // "first occurrence wins, later passes find nothing" behavior.
+        if pos < cursor {
+            continue;
+        }
+        out.push_str(&xml[cursor..pos]);
+        out.push_str(real);
+        cursor = pos + len;
+    }
+    out.push_str(&xml[cursor..]);
+    out
 }
 
 /// Wraps inner XML content in an `<hs:sec>` element with all xmlns declarations.
@@ -943,13 +1007,26 @@ fn encode_control_to_ctrl(
     }
 }
 
-/// Encodes a `Vec<Paragraph>` into `HxSubList` with standard defaults.
+/// Encodes a `Vec<Paragraph>` into `HxSubList` with standard defaults
+/// (vertical alignment `TOP`).
 pub(crate) fn encode_paragraphs_to_sublist(
     paragraphs: &[Paragraph],
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
 ) -> HwpxResult<HxSubList> {
     build_sublist(paragraphs, depth, "TOP", hyperlink_entries)
+}
+
+/// Encodes a `Vec<Paragraph>` into `HxSubList` with an explicit vertical
+/// alignment token (`TOP`/`CENTER`/`BOTTOM`). Used by shape `drawText`
+/// encoders that carry a Core `VerticalAlign` field.
+pub(crate) fn encode_paragraphs_to_sublist_with_align(
+    paragraphs: &[Paragraph],
+    depth: usize,
+    vert_align: &str,
+    hyperlink_entries: &mut Vec<(String, String)>,
+) -> HwpxResult<HxSubList> {
+    build_sublist(paragraphs, depth, vert_align, hyperlink_entries)
 }
 
 fn build_sublist(
@@ -1963,6 +2040,7 @@ mod tests {
                         vert_offset: 0,
                         caption: None,
                         style: None,
+                        text_vertical_align: hwpforge_foundation::VerticalAlign::Top,
                     },
                     CharShapeIndex::new(0),
                 )],
@@ -2078,6 +2156,7 @@ mod tests {
                         vert_offset: 0,
                         caption: None,
                         style: None,
+                        text_vertical_align: hwpforge_foundation::VerticalAlign::Top,
                     },
                     CharShapeIndex::new(0),
                 )],
@@ -3422,6 +3501,37 @@ mod tests {
         assert!(!xml.contains("__HWPME_"), "no leftover Memo marker");
     }
 
+    /// Locks the child-before-parent ordering invariant that
+    /// [`apply_run_xml_replacements`] relies on for `replacen`-equivalence.
+    ///
+    /// Models a nested control: a child (hyperlink) marker that is embedded
+    /// inside a parent's (memo's) `real_xml`, with the child pair listed
+    /// BEFORE the parent pair (the order the encoder actually produces). Under
+    /// this ordering both the old sequential `replacen` loop and the new
+    /// single-pass splice leave the nested child marker unreplaced — i.e. they
+    /// are byte-identical. (Were the order inverted, `replacen` would resolve
+    /// the nested marker and the splice would not — the divergence this guards.)
+    #[test]
+    fn apply_run_xml_replacements_child_before_parent_matches_replacen() {
+        let child_marker = "__HWPHL_0_0__".to_string();
+        let parent_marker = "__HWPME_1_0__".to_string();
+        // Parent payload embeds the child marker (memo sublist containing a field).
+        let parent_real = format!("<hp:fieldBegin/><hp:subList>{child_marker}</hp:subList>");
+        // Only the parent marker is present in the base string; the child marker
+        // appears only AFTER the parent is spliced in.
+        let xml = format!("<p>before</p>{parent_marker}<p>after</p>");
+        // Child-before-parent ordering, as the encoder emits it.
+        let repls = vec![
+            (child_marker.clone(), "<hp:run>RESOLVED-CHILD</hp:run>".to_string()),
+            (parent_marker, parent_real),
+        ];
+        let single = apply_run_xml_replacements(xml.clone(), &repls);
+        let reference = replacen_reference(xml, &repls);
+        assert_eq!(single, reference, "splice must equal replacen under child-before-parent order");
+        // Both leave the nested child marker unreplaced (documents the shared behavior).
+        assert!(single.contains(&child_marker), "nested child marker stays unreplaced in both");
+    }
+
     // ── Dutmal encoding ────────────────────────────────────────────
 
     #[test]
@@ -3897,5 +4007,53 @@ mod tests {
         let section = simple_section("Normal paragraph");
         let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(!xml.contains("<hp:titleMark"), "non-heading must NOT have titleMark");
+    }
+
+    /// Reference implementation: the original sequential `replacen` loop.
+    fn replacen_reference(mut xml: String, replacements: &[(String, String)]) -> String {
+        for (marker, real) in replacements {
+            xml = xml.replacen(marker, real, 1);
+        }
+        xml
+    }
+
+    #[test]
+    fn apply_run_xml_replacements_matches_replacen() {
+        // Markers are unique nonce tokens; payloads never contain markers.
+        let xml = "<p>A</p>__clk_0_1__mid__clk_1_2__tail__clk_2_3__end".to_string();
+        let repls = vec![
+            ("__clk_0_1__".to_string(), "<hp:fieldBegin/>X<hp:fieldEnd/>".to_string()),
+            ("__clk_1_2__".to_string(), "<hp:ctrl>Y</hp:ctrl>".to_string()),
+            ("__clk_2_3__".to_string(), "Z".to_string()),
+        ];
+        let single = apply_run_xml_replacements(xml.clone(), &repls);
+        let reference = replacen_reference(xml, &repls);
+        assert_eq!(single, reference);
+    }
+
+    #[test]
+    fn apply_run_xml_replacements_order_independent() {
+        // Out-of-order replacement list must still produce position-ordered output.
+        let xml = "head__m_2_0____m_0_1____m_1_2__".to_string();
+        let repls = vec![
+            ("__m_0_1__".to_string(), "B".to_string()),
+            ("__m_2_0__".to_string(), "A".to_string()),
+            ("__m_1_2__".to_string(), "C".to_string()),
+        ];
+        let single = apply_run_xml_replacements(xml.clone(), &repls);
+        let reference = replacen_reference(xml, &repls);
+        assert_eq!(single, reference);
+        assert_eq!(single, "headABC");
+    }
+
+    #[test]
+    fn apply_run_xml_replacements_empty_and_missing() {
+        // Empty list: identity.
+        let xml = "<p>no markers</p>".to_string();
+        assert_eq!(apply_run_xml_replacements(xml.clone(), &[]), xml);
+        // Missing marker: silent no-op (matches replacen).
+        let repls = vec![("__absent_9_9__".to_string(), "X".to_string())];
+        let single = apply_run_xml_replacements(xml.clone(), &repls);
+        assert_eq!(single, replacen_reference(xml, &repls));
     }
 }

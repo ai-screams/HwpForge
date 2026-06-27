@@ -5,7 +5,7 @@
 fn main() {
     let path = "examples/hwp5_review/sample-field-docsummary.hwp";
     let bytes = std::fs::read(path).expect("read sample");
-    let (hwpx_bytes, warnings) = hwpforge_smithy_hwp5::hwp5_to_hwpx_bytes(&bytes).expect("convert");
+    let (hwpx_bytes, warnings) = hwpforge_convert::hwp5_to_hwpx_bytes(&bytes).expect("convert");
     println!("warnings: {}", warnings.len());
     for w in &warnings {
         if format!("{w:?}").contains("Summary") || format!("{w:?}").contains("metadata") {

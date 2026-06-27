@@ -409,7 +409,7 @@ fn convert_hwp5_fixture_and_audit_ok(
 ) -> (PathBuf, serde_json::Value) {
     let source = fixture(fixture_name);
     let output = tmp.join(fixture_name.replace(".hwp", ".hwpx"));
-    hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &output)
+    hwpforge_convert::hwp5_to_hwpx(&source, &output)
         .expect("convert hwp5 fixture for CLI integration");
 
     let (val, _, code) =
@@ -785,7 +785,7 @@ fn to_json_rejects_non_json_output_extension() {
     let source = fixture("hwp5_01.hwp");
     let tmp = test_tmp();
     let hwpx = tmp.join("to_json_guard.hwpx");
-    hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &hwpx).expect("convert hwp5 fixture");
+    hwpforge_convert::hwp5_to_hwpx(&source, &hwpx).expect("convert hwp5 fixture");
     let bad_out = tmp.join("export.txt");
 
     let (_, stderr, code) =
@@ -801,7 +801,7 @@ fn audit_hwp5_human_report() {
     let source = fixture("hwp5_01.hwp");
     let tmp = test_tmp();
     let out = tmp.join("hwp5_01.hwpx");
-    hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &out).expect("convert hwp5 fixture");
+    hwpforge_convert::hwp5_to_hwpx(&source, &out).expect("convert hwp5 fixture");
 
     let (stdout, _, code) = run(&["audit-hwp5", source.to_str().unwrap(), out.to_str().unwrap()]);
     assert_eq!(code, 0);
@@ -817,7 +817,7 @@ fn audit_hwp5_json_report() {
     let source = fixture("hwp5_02.hwp");
     let tmp = test_tmp();
     let out = tmp.join("hwp5_02.hwpx");
-    hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &out).expect("convert hwp5 fixture");
+    hwpforge_convert::hwp5_to_hwpx(&source, &out).expect("convert hwp5 fixture");
 
     let (val, _, code) = run_json(&["audit-hwp5", source.to_str().unwrap(), out.to_str().unwrap()]);
     assert_eq!(code, 0);
@@ -839,7 +839,7 @@ fn audit_hwp5_chart_reports_ole_evidence_note() {
     let source = fixture("chart_01_single_column.hwp");
     let tmp = test_tmp();
     let out = tmp.join("chart_01.hwpx");
-    hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &out).expect("convert hwp5 chart fixture");
+    hwpforge_convert::hwp5_to_hwpx(&source, &out).expect("convert hwp5 chart fixture");
 
     let (val, _, code) = run_json(&["audit-hwp5", source.to_str().unwrap(), out.to_str().unwrap()]);
     assert_eq!(code, 0);
@@ -875,7 +875,7 @@ fn audit_hwp5_line_fixture_reports_line_metric() {
     let source = fixture("line_simple.hwp");
     let tmp = test_tmp();
     let out = tmp.join("line_simple.hwpx");
-    hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &out).expect("convert hwp5 line fixture");
+    hwpforge_convert::hwp5_to_hwpx(&source, &out).expect("convert hwp5 line fixture");
 
     let (val, _, code) = run_json(&["audit-hwp5", source.to_str().unwrap(), out.to_str().unwrap()]);
     assert_eq!(code, 0);
@@ -1016,7 +1016,7 @@ fn convert_hwp5_table_page_break_and_repeat_header_parity() {
     for (fixture_name, field, expected_verdict) in cases {
         let source = fixture(fixture_name);
         let output = tmp.join(fixture_name.replace(".hwp", ".hwpx"));
-        hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &output).expect("convert hwp5 table fixture");
+        hwpforge_convert::hwp5_to_hwpx(&source, &output).expect("convert hwp5 table fixture");
 
         let (val, _, code) =
             run_json(&["audit-hwp5", source.to_str().unwrap(), output.to_str().unwrap()]);
@@ -1040,7 +1040,7 @@ fn convert_hwp5_table_repeat_header_multi_page_visual_gate() {
     for (fixture_name, expected_repeat_header_attr) in cases {
         let source = fixture(fixture_name);
         let output = tmp.join(fixture_name.replace(".hwp", ".hwpx"));
-        hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &output)
+        hwpforge_convert::hwp5_to_hwpx(&source, &output)
             .expect("convert hwp5 repeat-header multi-page fixture");
 
         let (val, _, code) =
@@ -1108,7 +1108,7 @@ fn convert_hwp5_table_border_fill_and_cell_height_parity() {
     {
         let source = fixture(fixture_name);
         let output = tmp.join(fixture_name.replace(".hwp", ".hwpx"));
-        hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &output).expect("convert hwp5 table fixture");
+        hwpforge_convert::hwp5_to_hwpx(&source, &output).expect("convert hwp5 table fixture");
 
         let (val, _, code) =
             run_json(&["audit-hwp5", source.to_str().unwrap(), output.to_str().unwrap()]);
@@ -1130,7 +1130,7 @@ fn convert_hwp5_table_border_fill_and_cell_height_parity() {
 fn convert_hwp5_table_border_fill_materializes_header_definitions() {
     let source = fixture("table_03_border_fill_variants.hwp");
     let output = test_tmp().join("table_03_border_fill_variants.hwpx");
-    hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &output).expect("convert hwp5 table fixture");
+    hwpforge_convert::hwp5_to_hwpx(&source, &output).expect("convert hwp5 table fixture");
 
     let header_xml = read_hwpx_entry(&output, "Contents/header.xml");
     let section_xml = read_hwpx_entry(&output, "Contents/section0.xml");
@@ -1448,7 +1448,7 @@ fn convert_hwp5_table_cell_presentation_parity() {
     for (fixture_name, field, expected_cell_evidence) in cases {
         let source = fixture(fixture_name);
         let output = tmp.join(fixture_name.replace(".hwp", ".hwpx"));
-        hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &output).expect("convert hwp5 table fixture");
+        hwpforge_convert::hwp5_to_hwpx(&source, &output).expect("convert hwp5 table fixture");
 
         let (val, _, code) =
             run_json(&["audit-hwp5", source.to_str().unwrap(), output.to_str().unwrap()]);
@@ -1473,7 +1473,7 @@ fn convert_hwp5_table_sizing_parity() {
     for (fixture_name, cell_widths, table_widths, row_max_cell_heights) in cases {
         let source = fixture(fixture_name);
         let output = tmp.join(fixture_name.replace(".hwp", ".hwpx"));
-        hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &output).expect("convert hwp5 table fixture");
+        hwpforge_convert::hwp5_to_hwpx(&source, &output).expect("convert hwp5 table fixture");
 
         let (val, _, code) =
             run_json(&["audit-hwp5", source.to_str().unwrap(), output.to_str().unwrap()]);
@@ -1515,7 +1515,7 @@ fn convert_hwp5_table_nested_table_parity() {
     let source = fixture("table_08_nested_table.hwp");
     let tmp = test_tmp();
     let output = tmp.join("table_08_nested_table.hwpx");
-    hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &output).expect("convert nested table fixture");
+    hwpforge_convert::hwp5_to_hwpx(&source, &output).expect("convert nested table fixture");
 
     let (audit_val, _, audit_code) =
         run_json(&["audit-hwp5", source.to_str().unwrap(), output.to_str().unwrap()]);
@@ -1544,7 +1544,7 @@ fn audit_hwp5_rect_fixture_now_matches_after_carry() {
     let tmp = test_tmp();
     let out = tmp.join("rect_simple.hwpx");
     let warnings =
-        hwpforge_smithy_hwp5::hwp5_to_hwpx(&source, &out).expect("convert hwp5 rect fixture");
+        hwpforge_convert::hwp5_to_hwpx(&source, &out).expect("convert hwp5 rect fixture");
     assert!(
         !warnings.iter().any(|warning| matches!(
             warning,

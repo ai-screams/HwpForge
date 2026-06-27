@@ -255,26 +255,53 @@ pub(super) fn enrich_sec_pr(xml: &str, section: &Section, masterpage_offset: usi
     let Some(end) = xml[start..].find('>') else {
         return xml.to_string();
     };
-    let minimal_open = &xml[start..start + end + 1];
+    let open_end = start + end + 1; // byte index just past the opening tag's `>`
 
     let open_enriched = build_sec_pr_open_enriched(section);
     let pre_elements = build_sec_pr_pre_elements(section);
     let post_elements = build_sec_pr_post_elements(section);
     let masterpage_refs = build_masterpage_refs(section, masterpage_offset);
+    let col_pr = build_col_pr_xml(section.column_settings.as_ref());
 
-    let mut result = xml.replacen(minimal_open, &format!("{open_enriched}{pre_elements}"), 1);
+    const CLOSE: &str = "</hp:secPr>";
 
-    // Insert post-elements + masterPage refs before the first </hp:secPr>
-    if let Some(pos) = result.find("</hp:secPr>") {
-        result.insert_str(pos, &format!("{post_elements}{masterpage_refs}"));
+    // Single forward-scan build (was: replacen + 2× find + 2× insert_str over the
+    // whole serialized XML). Splices, in order:
+    //   [prefix] open_enriched pre_elements [secPr inner] post_elements
+    //   masterpage_refs </hp:secPr> col_pr [tail]
+    // — byte-identical to the prior sequential edits.
+    match xml[open_end..].find(CLOSE) {
+        Some(rel_close) => {
+            let close_at = open_end + rel_close;
+            let mut result = String::with_capacity(
+                xml.len()
+                    + open_enriched.len()
+                    + pre_elements.len()
+                    + post_elements.len()
+                    + masterpage_refs.len()
+                    + col_pr.len(),
+            );
+            result.push_str(&xml[..start]);
+            result.push_str(&open_enriched);
+            result.push_str(&pre_elements);
+            result.push_str(&xml[open_end..close_at]);
+            result.push_str(&post_elements);
+            result.push_str(&masterpage_refs);
+            result.push_str(CLOSE);
+            result.push_str(&col_pr);
+            result.push_str(&xml[close_at + CLOSE.len()..]);
+            result
+        }
+        // No closing tag: mirror the old behavior (replacen ran, both inserts
+        // were skipped) — only the opening tag is enriched.
+        None => {
+            let mut result =
+                String::with_capacity(xml.len() + open_enriched.len() + pre_elements.len());
+            result.push_str(&xml[..start]);
+            result.push_str(&open_enriched);
+            result.push_str(&pre_elements);
+            result.push_str(&xml[open_end..]);
+            result
+        }
     }
-
-    // Insert colPr after </hp:secPr>
-    if let Some(pos) = result.find("</hp:secPr>") {
-        let insert_pos = pos + "</hp:secPr>".len();
-        let col_pr = build_col_pr_xml(section.column_settings.as_ref());
-        result.insert_str(insert_pos, &col_pr);
-    }
-
-    result
 }

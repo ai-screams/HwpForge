@@ -19,7 +19,9 @@ use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::Run;
 use hwpforge_core::section::Section;
 use hwpforge_core::PageSettings;
-use hwpforge_foundation::{CharShapeIndex, DropCapStyle, HwpUnit, ParaShapeIndex, TextDirection};
+use hwpforge_foundation::{
+    CharShapeIndex, DropCapStyle, HwpUnit, ParaShapeIndex, TextDirection, VerticalAlign,
+};
 use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
 use hwpforge_smithy_hwpx::HwpxEncoder;
 
@@ -107,6 +109,7 @@ fn main() {
                 drop_cap_style: DropCapStyle::DoubleLine,
                 ..Default::default()
             }),
+            text_vertical_align: VerticalAlign::Top,
         };
 
         // TextBox with DropCapStyle::Margin
@@ -120,6 +123,7 @@ fn main() {
             vert_offset: 0,
             caption: None,
             style: Some(ShapeStyle { drop_cap_style: DropCapStyle::Margin, ..Default::default() }),
+            text_vertical_align: VerticalAlign::Top,
         };
 
         let paras = vec![

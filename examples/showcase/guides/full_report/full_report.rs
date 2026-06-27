@@ -249,25 +249,27 @@ fn build_section_0() -> Section {
     paras.push(text_para("1. HWPX 포맷 개요", CS_HEADING, PS_LEFT));
     paras.push(empty());
 
-    // 본문 + 각주
-    paras.push(mixed_para(
-        &[
-            ("HWPX는 한컴오피스(한글)가 사용하는 ", CS_NORMAL),
-            ("개방형 XML 문서 포맷", CS_BOLD),
-            ("으로, ", CS_NORMAL),
-            ("KS X 6101", CS_BOLD),
+    // 본문 + 각주 (CLAUDE.md gotcha #12: 각주는 같은 문단의 inline Run.
+    // 별도 문단으로 만들면 각주 번호 "1)" 이 단독 줄에 표시됨. 따라서
+    // 참조 단어 뒤 → 각주 Control → 이어지는 본문을 한 문단의 runs 로 구성.)
+    paras.push(Paragraph::with_runs(
+        vec![
+            Run::text("HWPX는 한컴오피스(한글)가 사용하는 ", CharShapeIndex::new(CS_NORMAL)),
+            Run::text("개방형 XML 문서 포맷", CharShapeIndex::new(CS_BOLD)),
+            Run::text("으로, ", CharShapeIndex::new(CS_NORMAL)),
+            Run::text("KS X 6101", CharShapeIndex::new(CS_BOLD)),
+            Run::control(
+                Control::footnote_with_id(1, vec![
+                    p("KS X 6101은 한국산업표준(KS)으로 제정된 한글 문서 파일 포맷 규격입니다. 한국표준정보망(KSSN)을 통해 열람 가능하며, openhwp 프로젝트에 9,054줄 분량의 마크다운 사양이 공개되어 있습니다."),
+                ]),
+                CharShapeIndex::new(CS_NORMAL),
+            ),
+            Run::text(
+                " 표준을 기반으로 합니다. 내부 구조는 ZIP 압축 아카이브 안에 XML 파일들을 계층적으로 배치한 형태입니다.",
+                CharShapeIndex::new(CS_NORMAL),
+            ),
         ],
-        PS_JUSTIFY,
-    ));
-    paras.push(ctrl_para(
-        Control::footnote_with_id(1, vec![
-                p("KS X 6101은 한국산업표준(KS)으로 제정된 한글 문서 파일 포맷 규격입니다. 한국표준정보망(KSSN)을 통해 열람 가능하며, openhwp 프로젝트에 9,054줄 분량의 마크다운 사양이 공개되어 있습니다."),
-            ]),
-        CS_NORMAL,
-        PS_JUSTIFY,
-    ));
-    paras.push(p(
-        " 표준을 기반으로 합니다. 내부 구조는 ZIP 압축 아카이브 안에 XML 파일들을 계층적으로 배치한 형태입니다.",
+        ParaShapeIndex::new(PS_JUSTIFY),
     ));
     paras.push(p(
         "HWPX는 Microsoft Office의 OOXML과 유사한 구조를 가지며, ZIP → XML → 네임스페이스 계층으로 이루어져 있습니다. HwpForge는 이 포맷의 완전한 인코드/디코드를 순수 Rust로 구현하였습니다.",
@@ -354,21 +356,20 @@ fn build_section_1() -> Section {
     )));
     paras.push(empty());
 
-    // xmlns 래핑 + 각주
-    paras.push(mixed_para(
-        &[
-            ("네임스페이스 선언(xmlns)은 각 XML 파일의 ", CS_NORMAL),
-            ("루트 요소에만", CS_BOLD),
-            (" 작성합니다.", CS_NORMAL),
+    // xmlns 래핑 + 각주 (gotcha #12: 각주는 같은 문단의 inline Run)
+    paras.push(Paragraph::with_runs(
+        vec![
+            Run::text("네임스페이스 선언(xmlns)은 각 XML 파일의 ", CharShapeIndex::new(CS_NORMAL)),
+            Run::text("루트 요소에만", CharShapeIndex::new(CS_BOLD)),
+            Run::text(" 작성합니다.", CharShapeIndex::new(CS_NORMAL)),
+            Run::control(
+                Control::footnote_with_id(2, vec![p(
+                    "HwpForge는 루트 요소를 수동으로 생성하고 내부 콘텐츠만 serde로 직렬화하는 'xmlns 래핑 패턴'을 사용합니다.",
+                )]),
+                CharShapeIndex::new(CS_NORMAL),
+            ),
         ],
-        PS_JUSTIFY,
-    ));
-    paras.push(ctrl_para(
-        Control::footnote_with_id(2, vec![p(
-                "HwpForge는 루트 요소를 수동으로 생성하고 내부 콘텐츠만 serde로 직렬화하는 'xmlns 래핑 패턴'을 사용합니다.",
-            )]),
-        CS_NORMAL,
-        PS_JUSTIFY,
+        ParaShapeIndex::new(PS_JUSTIFY),
     ));
     paras.push(empty());
 
@@ -729,16 +730,23 @@ fn build_section_3() -> Section {
     paras.push(p(
         "HwpForge는 순수 Rust로 HWPX 포맷의 완전한 인코드/디코드를 구현한 최초의 오픈소스 프로젝트입니다.",
     ));
-    paras.push(p(
-        "Wave 1-6에서는 이미지, 머리글/바닥글, 각주/미주, 글상자, 다단, 도형, 캡션, 수식, 차트까지 확장하여 실무 문서 생성에 필요한 대부분의 기능을 갖추었습니다.",
-    ));
-    // 미주
-    paras.push(ctrl_para(
-        Control::endnote_with_id(1, vec![p(
-                "본 보고서는 HwpForge의 모든 구현 API를 활용하여 작성되었습니다. 텍스트, 표, 이미지, 차트, 수식, 도형, 다단, 머리글/바닥글, 각주/미주, 글상자 등 17개 API 유형을 포함합니다.",
-            )]),
-        CS_NORMAL,
-        PS_JUSTIFY,
+    // 본문 + 미주 (CLAUDE.md gotcha #12: 각주/미주는 같은 문단의 inline Run.
+    // 별도 문단으로 만들면 미주 번호 "1)" 이 단독 줄에 표시됨. 각주와 동일하게
+    // 참조 문장 끝 → 미주 Control 을 한 문단의 runs 로 구성.)
+    paras.push(Paragraph::with_runs(
+        vec![
+            Run::text(
+                "Wave 1-6에서는 이미지, 머리글/바닥글, 각주/미주, 글상자, 다단, 도형, 캡션, 수식, 차트까지 확장하여 실무 문서 생성에 필요한 대부분의 기능을 갖추었습니다.",
+                CharShapeIndex::new(CS_NORMAL),
+            ),
+            Run::control(
+                Control::endnote_with_id(1, vec![p(
+                    "본 보고서는 HwpForge의 모든 구현 API를 활용하여 작성되었습니다. 텍스트, 표, 이미지, 차트, 수식, 도형, 다단, 머리글/바닥글, 각주/미주, 글상자 등 17개 API 유형을 포함합니다.",
+                )]),
+                CharShapeIndex::new(CS_NORMAL),
+            ),
+        ],
+        ParaShapeIndex::new(PS_JUSTIFY),
     ));
     paras.push(empty());
     paras.push(line_separator());

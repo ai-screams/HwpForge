@@ -491,7 +491,7 @@ mod tests {
     use crate::run::Run;
     use crate::section::Section;
     use crate::table::{Table, TableCell, TableRow};
-    use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+    use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex, VerticalAlign};
 
     fn text_run(s: &str) -> Run {
         Run::text(s, CharShapeIndex::new(0))
@@ -679,6 +679,7 @@ mod tests {
             vert_offset: 0,
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
@@ -726,6 +727,7 @@ mod tests {
             vert_offset: 0,
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
@@ -856,6 +858,7 @@ mod tests {
             paragraphs: vec![],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
@@ -878,6 +881,7 @@ mod tests {
             paragraphs: vec![],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
@@ -904,6 +908,7 @@ mod tests {
             paragraphs: vec![],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
@@ -929,6 +934,7 @@ mod tests {
             paragraphs: vec![],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
@@ -956,6 +962,7 @@ mod tests {
             paragraphs: vec![],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
@@ -985,6 +992,7 @@ mod tests {
             paragraphs: vec![],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
@@ -1077,6 +1085,7 @@ mod tests {
             paragraphs: vec![],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
@@ -1102,6 +1111,7 @@ mod tests {
             paragraphs: vec![],
             caption: None,
             style: None,
+            text_vertical_align: VerticalAlign::Top,
         };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(

@@ -31,8 +31,8 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 
 **Workspace Facts** (code-grounded — 카운트는 drift하니 인용 전 확인):
 
-- Cargo packages `10` · Cargo.toml version `0.6.0` (released; release-plz bumps this branch's Wave 12 breaking series to `0.7.0` in its Release PR) · MSRV `1.88` · Dev toolchain Rust `1.93`
-- `crates/` 추적 src 파일 ~`157` · nextest ~`2,489` passed + `2` skipped · `examples/` 산출물 `67`+ (gitignored `examples/hwp5_review/` 리뷰 영역 별도) · GitHub workflows `5`
+- Cargo packages `11` (E5에서 `hwpforge-convert` 추가) · crates.io published `0.6.0` · in-tree Cargo.toml version `0.7.0` (Wave 12 breaking 시리즈, release-plz pending Release PR; 다음 breaking E6 → `0.8.0`) · MSRV `1.88` · Dev toolchain Rust `1.93`
+- `crates/` 추적 src 파일 ~`176` · nextest ~`2,647` passed + `2` skipped · `examples/` 산출물 `67`+ (gitignored `examples/hwp5_review/` 리뷰 영역 별도) · GitHub workflows `5`
 
 ---
 
@@ -95,7 +95,9 @@ bacon test    # Auto-run tests
 
 - **dprint + 한글(CJK) 마크다운 표**: 한글이 든 `.md` 표(예: `HWP5_WIRE_SPEC.md`, `CHANGELOG.md`)를 편집하면 dprint pre-commit 훅이 거부함(CJK 글자 폭 재계산으로 표 정렬 불일치 판단). `dprint fmt <파일>` 수동 실행 → 재-stage → 재커밋.
 - **`cargo nextest run -p <crate> <filter>`** 의 필터는 정규식이 아니라 **부분일치(substring)** — `'a|b'` 는 아무것도 안 잡음. 공통 substring 하나(예: `warns`)로 필터하거나 따로 실행.
-- 용량 큰 이미지 임베드 fixture(~MB)는 gitignore된 `examples/hwp5_review/`에만 두고, 회귀 방지는 **단위 테스트로 잠금**(수 MB fixture를 커밋하지 말 것).
+- 용량 큰 이미지 임베드 fixture(~MB)는 리뷰 산출물 영역 `examples/hwp5_review/`(미추적 — .gitignore 규칙은 없으니 `git add -A` 주의)에만 두고, 회귀 방지는 **단위 테스트로 잠금**(수 MB fixture를 커밋하지 말 것).
+- **pre-commit `cargo fmt` 훅**: 스테이지된 Rust(특히 테스트의 다줄 배열/`assert!`)를 재포맷하며 커밋을 **거부**함 → `cargo fmt` 수동 실행 → 재-`git add` → 재커밋 (dprint 표와 동일 패턴).
+- **pre-commit/pre-push 훅이 workspace clippy(+`make ci`)를 돌림** → 다파일 커밋·push는 **2분+** 소요. foreground 2분 한계를 넘기니 `run_in_background`로 commit/push 후 결과 확인.
 
 ### Documentation & Coverage
 
@@ -115,9 +117,11 @@ core (foundation only)
     ↓
 blueprint (foundation + core)
     ↓
-smithy-hwpx, smithy-hwp5, smithy-md (foundation + core + blueprint)
+smithy-hwpx, smithy-md (foundation + core + blueprint) · smithy-hwp5 (foundation + core only)
     ↓
-bindings-py, bindings-cli, bindings-mcp (all smithy crates)
+convert (core + foundation + smithy-hwp5 + smithy-hwpx — HWP5→HWPX 오케스트레이터)
+    ↓
+bindings-py, bindings-cli (+ convert), bindings-mcp
 ```
 
 **Important**: Foundation is the root. If you modify foundation, ALL crates rebuild. Keep it minimal.
@@ -321,6 +325,8 @@ Root `tests/` is primarily a fixture warehouse. It is not itself the main Rust i
 
 Local planning and research workspace. It may be git-excluded in this repository setup, so never assume "not in git status" means "does not exist".
 
+**Rule — 계획 문서는 `.docs/planning/` 에 작성한다** (내부 문서, git 미커밋). 마스터 플랜(epic 단위 전체 작업) + epic별 상세 실행 계획(TDD 단계/수용 기준)을 여기 둔다. 리서치/감사 산출물은 `.docs/audit/`, `.docs/research/`.
+
 ### Reference docs
 
 - `.docs/references/openhwp/docs/hwpx/` — local KS X 6101 markdownized reference
@@ -379,7 +385,7 @@ Local planning and research workspace. It may be git-excluded in this repository
 - **흐름은 2단계**: feature PR 머지(버전 안 올림) → release-plz가 **Release PR** 생성/갱신(버전 bump + CHANGELOG) → 사람이 **Release PR 머지** → 그때서야 crates.io publish·태그·GitHub Release·npm·문서 배포가 일어남.
 - **conventional commit 으로 릴리스가 결정**됨: `feat|fix|perf|refactor`(+ `type!:`)만 트리거. breaking 은 **반드시 `type!:` 또는 `BREAKING CHANGE:`** 로 표기(안 하면 0.x에서 patch로 오판). 0.x에서 breaking = **마이너** bump(0.6→0.7).
 - **SemVer 검사는 release-plz가 소유** (`semver_check = true`). ci.yml 에 standalone cargo-semver-checks 게이트를 **다시 넣지 말 것** — feature PR은 버전을 안 올리는 모델이라 breaking PR마다 영원히 빨강이 됨 (이 이유로 PR #78에서 제거).
-- **배포 대상**: crates.io = `hwpforge`(umbrella)·foundation·core·blueprint·smithy-hwpx·smithy-md·bindings-mcp. **제외**(`publish=false`) = smithy-hwp5·bindings-cli·bindings-py. **umbrella 만 GitHub Release 생성** → npm(`@hwpforge/mcp`)·pages 배포가 거기 매달림.
+- **배포 대상**: crates.io = `hwpforge`(umbrella)·foundation·core·blueprint·smithy-hwpx·smithy-md·bindings-mcp. **제외**(`publish=false`) = smithy-hwp5·convert·bindings-cli·bindings-py. **umbrella 만 GitHub Release 생성** → npm(`@hwpforge/mcp`)·pages 배포가 거기 매달림.
 - **다음 릴리스 주의**: ① first crates.io publish는 의존 순서(foundation→…→umbrella) + `publish=false` 의존 차단 여부 검증 필요 · ② CHANGELOG 한글 표는 `dprint fmt CHANGELOG.md` 수동 후 재-stage · ③ 태그 기반 로컬 검증 전 `git fetch --tags`(stale 태그 → 거짓 통과 함정).
 
 ---
@@ -399,7 +405,7 @@ Local planning and research workspace. It may be git-excluded in this repository
 9. Polygon 꼭짓점 닫힘 — 첫 꼭짓점을 마지막에 반복 필수
 10. `breakNonLatinWord` = `KEEP_WORD` (BREAK_WORD 시 글자 퍼짐)
 11. Field: 하이퍼링크=`fieldBegin/End`, 날짜=`type="SUMMERY"` (오타), 쪽번호=`autoNum`
-12. 각주/미주: 같은 문단의 inline Run에 포함 (별도 문단 금지)
+12. 각주/미주: 같은 문단의 inline Run에 포함 (별도 문단 금지). HWP5 decode 시 ParaText `0x11` 마커(ctrl_id `fn`/`en`)를 `ControlRef`로 승격해야 inline 유지 — 안 하면 문단 꼬리로 drain되어 마커가 단독 줄에 표시
 13. Style: 개요 8/9/10 paraPr 비순차(18/16/17), DropCapStyle은 PascalCase
 14. ArrowType: `EMPTY_*` + `headfill` 조합만 (FILLED_* 무시됨)
 15. MasterPage: prefix 없는 `<masterPage>` 루트, 15개 xmlns, `<hp:subList>`
@@ -415,6 +421,8 @@ Local planning and research workspace. It may be git-excluded in this repository
 25. cross-ref target element (endNote/footNote/figure/table) 에 `instId` attribute 필수
 26. Bookmark Contents reference 는 SpanStart/SpanEnd 책갈피 필요 (Point 는 본문 없음 → `?`)
 27. ContentType 의미는 RefType-상대적 (Bookmark+Contents = 책갈피 이름, Figure+Contents = 캡션 본문) — invented enum 금지
+28. 도형/글상자 텍스트 **세로정렬 = HWP5 ListHeader 속성 bits 5-6** (`(props>>5)&0x03`, 0/1/2=Top/Center/Bottom). 표 셀 디코드(`smithy-hwp5/src/decoder/section/mod.rs`)가 ground truth — openhwp `(props>>2)`는 우리 wire와 불일치
+29. 도형 drawText `<hp:subList textWidth/textHeight>` = **`0`이 Hancom-정답** (렌더러는 `<hp:sz>`−`<hp:textMargin>`(기본 283)으로 텍스트 영역 계산). 계산값으로 "고치지" 말 것 — 한컴 fixture·KS X 6101 샘플 141 확인
 
 ---
 

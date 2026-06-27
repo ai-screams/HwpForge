@@ -55,3 +55,23 @@ jobs:
           key: canary-${{ matrix.toolchain }}
       - name: cargo +${{ matrix.toolchain }} check
         run: cargo +${{ matrix.toolchain }} check --workspace --all-targets --all-features
+
+  fuzz-build:
+    name: "Nightly › Fuzz Build"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install nightly toolchain
+        run: rustup toolchain install nightly --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: fuzz-build
+      - name: Install cargo-fuzz
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-fuzz
+      # Compile-check the fuzz targets so they don't bit-rot. Actual fuzzing
+      # runs are manual / on-demand (`cargo +nightly fuzz run <target>`).
+      - name: Build fuzz targets
+        run: cargo +nightly fuzz build

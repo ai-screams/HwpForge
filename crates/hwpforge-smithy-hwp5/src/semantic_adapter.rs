@@ -1781,6 +1781,7 @@ mod tests {
                             width: 8_000,
                             height: 6_000,
                         },
+                        list_header_properties: None,
                         paragraphs: vec![Hwp5Paragraph {
                             text: "글상자 시작.\u{fffc}글상자 끝.".to_string(),
                             text_segments: Vec::new(),

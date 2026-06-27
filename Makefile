@@ -1,4 +1,4 @@
-.PHONY: help install-tools check test test-ci clippy fmt fmt-fix lint-md lint-md-fix doc cov deny machete msrv ci ci-fast ci-full clean audit-hwp5 audit-hwp5-baseline audit-hwp5-gate
+.PHONY: help install-tools check test test-ci clippy fmt fmt-fix lint-md lint-md-fix doc cov deny machete msrv ci ci-fast ci-full clean audit-hwp5 audit-hwp5-baseline audit-hwp5-gate skill-test
 
 AUDIT_HWP5_FIXTURE_DIRS ?= tests/fixtures crates/hwpforge-smithy-hwp5/tests/fixtures crates/hwpforge-smithy-hwpx/tests/fixtures
 AUDIT_HWP5_BASELINE   ?= .audit/hwp5_baseline.json
@@ -7,6 +7,17 @@ AUDIT_HWP5_CURRENT    ?= .audit/hwp5_current.json
 MDBOOK_VERSION ?= 0.4.52
 MDBOOK_ADMONISH_VERSION ?= 1.20.0
 MDBOOK_MERMAID_VERSION ?= 0.16.2
+
+# Use sccache as the compiler cache when it is on PATH (graceful no-op when
+# absent — contributors without sccache build normally, nothing breaks). This
+# speeds up the repeated full compiles in `make ci` (clippy -> test) and across
+# runs. Scoped to make targets on purpose: release tooling (release-plz runs
+# `cargo publish` via its own action, not make) is intentionally unaffected.
+# Install for the speedup: `cargo install sccache` (or `brew install sccache`).
+SCCACHE := $(shell command -v sccache 2>/dev/null)
+ifneq ($(SCCACHE),)
+export RUSTC_WRAPPER := $(SCCACHE)
+endif
 
 help:
 	@echo "HwpForge Development Commands"
@@ -118,7 +129,7 @@ ci: ci-fast
 
 audit-hwp5:
 	@mkdir -p .audit
-	cargo run -q -p hwpforge-smithy-hwp5 --example audit_batch -- $(AUDIT_HWP5_FIXTURE_DIRS) > $(AUDIT_HWP5_CURRENT)
+	cargo run -q -p hwpforge-convert --example audit_batch -- $(AUDIT_HWP5_FIXTURE_DIRS) > $(AUDIT_HWP5_CURRENT)
 	@echo "audit-hwp5 → $(AUDIT_HWP5_CURRENT)"
 
 audit-hwp5-baseline: audit-hwp5
@@ -127,6 +138,9 @@ audit-hwp5-baseline: audit-hwp5
 
 audit-hwp5-gate: audit-hwp5
 	python3 scripts/audit_hwp5_gate.py --baseline $(AUDIT_HWP5_BASELINE) --current $(AUDIT_HWP5_CURRENT)
+
+skill-test:
+	bash scripts/skill-smoke.sh
 
 clean:
 	cargo clean

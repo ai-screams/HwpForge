@@ -40,15 +40,13 @@
 mod ctrl_ids;
 pub mod decoder;
 pub mod error;
-mod layout_hint_patch;
+pub mod layout_hint_patch;
 mod numeric;
 pub mod projection;
 pub mod schema;
 pub mod semantic;
 mod semantic_adapter;
 pub mod style_store;
-mod style_store_border_fill;
-mod style_store_convert;
 mod table_cell_vertical_align;
 mod table_page_break;
 #[cfg(test)]
@@ -66,6 +64,9 @@ use crate::warning_utils::push_projection_fallback;
 use hwpforge_core::document::{Document, Draft};
 use hwpforge_core::image::ImageStore;
 
+pub use decoder::header::{
+    DocInfoResult, Hwp5DocInfoBorderFillSlot, Hwp5DocInfoBulletSlot, Hwp5DocInfoNumberingSlot,
+};
 pub use decoder::{Hwp5Decoder, Hwp5Document, Hwp5Warning};
 pub use error::{Hwp5Error, Hwp5ErrorCode, Hwp5Result};
 pub use semantic::{
@@ -365,8 +366,6 @@ fn inspect_decoded_hwp5_intermediate(
     let crate::decoder::DecodedHwp5Intermediate { version, sections, doc_info, warnings, .. } =
         intermediate;
     let mut warnings = warnings;
-    let (_, _, style_warnings) = project_doc_info_styles_with_warnings(&doc_info);
-    warnings.extend(style_warnings);
 
     let (document, projection_warnings) = projection::project_to_core(sections)?;
     warnings.extend(projection_warnings);
@@ -398,14 +397,6 @@ fn inspect_decoded_hwp5_intermediate(
         totals,
         sections,
     })
-}
-
-fn project_doc_info_styles_with_warnings(
-    doc_info: &crate::decoder::header::DocInfoResult,
-) -> (style_store::Hwp5StyleStore, hwpforge_smithy_hwpx::HwpxStyleStore, Vec<Hwp5Warning>) {
-    let hwp5_styles = style_store::Hwp5StyleStore::from_doc_info(doc_info);
-    let (hwpx_style_store, style_warnings) = hwp5_styles.to_hwpx_style_store_with_warnings();
-    (hwp5_styles, hwpx_style_store, style_warnings)
 }
 
 /// Builds a raw fixture census for an HWP5 document.
@@ -567,66 +558,57 @@ pub fn decode_hwp5_with_images_file(path: impl AsRef<Path>) -> Hwp5Result<Hwp5Do
     decode_hwp5_with_images(&bytes)
 }
 
-/// Converts an HWP5 file to HWPX format.
+/// Fully decoded HWP5 content projected onto the neutral Core IR, plus the
+/// HWP5-native style store and ancillary data an output encoder needs.
 ///
-/// This is the primary convenience function for HWP5 → HWPX conversion.
-/// Internally it decodes the HWP5 binary, builds a style store, validates
-/// the document, and re-encodes as HWPX.
+/// This is the format-neutral boundary between the HWP5 decoder and any
+/// output-format orchestrator (for example `hwpforge-convert`'s HWP5 → HWPX
+/// path). It deliberately does **not** reference any output format: callers
+/// map [`Hwp5Decoded::style_store`] onto their own style representation and run
+/// their own validation/encoding step.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct Hwp5Decoded {
+    /// The decoded document in Core's DOM, with metadata already applied.
+    pub document: Document<Draft>,
+    /// Binary image data extracted from `BinData` streams, including assets
+    /// supplemented from border-fill image references.
+    pub image_store: ImageStore,
+    /// HWP5-native style definitions parsed from the `DocInfo` stream.
+    pub style_store: style_store::Hwp5StyleStore,
+    /// Per-section captured layout hints (paragraph line segments, table
+    /// heights) for output formats that preserve them as fidelity hints.
+    pub layout_hints: Vec<layout_hint_patch::SectionLayoutHints>,
+    /// Document metadata parsed from `\x05HwpSummaryInformation`.
+    pub metadata: hwpforge_core::metadata::Metadata,
+    /// Non-fatal warnings collected during decoding and Core projection.
+    pub warnings: Vec<Hwp5Warning>,
+}
+
+/// Decodes an HWP5 document into the neutral [`Hwp5Decoded`] bundle.
 ///
-/// # Examples
-///
-/// ```no_run
-/// use hwpforge_smithy_hwp5::hwp5_to_hwpx;
-///
-/// let warnings = hwp5_to_hwpx("input.hwp", "output.hwpx").unwrap();
-/// println!("Conversion complete with {} warnings", warnings.len());
-/// ```
+/// This performs the full HWP5-native decode/projection pipeline — package
+/// decode, image/OLE asset joining, layout-hint capture, Core projection,
+/// metadata application, and border-fill image supplementation — and returns
+/// the result **before** any output-format validation or encoding. It does not
+/// depend on any output format.
 ///
 /// # Errors
 ///
-/// Returns [`Hwp5Error`] if the input file cannot be read, decoded, or
-/// the output file cannot be written.
-pub fn hwp5_to_hwpx(
-    input: impl AsRef<Path>,
-    output: impl AsRef<Path>,
-) -> Hwp5Result<Vec<Hwp5Warning>> {
-    let bytes = std::fs::read(input.as_ref()).map_err(Hwp5Error::Io)?;
-    let (hwpx_bytes, warnings) = hwp5_to_hwpx_bytes(&bytes)?;
-    std::fs::write(output.as_ref(), hwpx_bytes).map_err(Hwp5Error::Io)?;
-    Ok(warnings)
-}
-
-/// Convert HWP5 bytes to HWPX bytes in memory.
-///
-/// In-memory variant of [`hwp5_to_hwpx`]. Useful for chaining conversions
-/// (e.g. HWP5 -> HWPX -> Markdown) without touching the filesystem.
-///
-/// Returns the HWPX bytes alongside any non-fatal warnings encountered during
-/// decoding, projection, and style mapping.
-///
-/// # Examples
-///
-/// ```no_run
-/// use hwpforge_smithy_hwp5::hwp5_to_hwpx_bytes;
-///
-/// let hwp5_bytes = std::fs::read("input.hwp").unwrap();
-/// let (hwpx_bytes, warnings) = hwp5_to_hwpx_bytes(&hwp5_bytes).unwrap();
-/// println!("Produced {} bytes with {} warnings", hwpx_bytes.len(), warnings.len());
-/// ```
-pub fn hwp5_to_hwpx_bytes(bytes: &[u8]) -> Hwp5Result<(Vec<u8>, Vec<Hwp5Warning>)> {
+/// Returns [`Hwp5Error`] if the package cannot be opened, required streams
+/// cannot be decoded, or Core projection fails.
+pub fn decode_hwp5_to_core(bytes: &[u8]) -> Hwp5Result<Hwp5Decoded> {
     let intermediate = decoder::decode_intermediate(bytes)?;
     let image_assets = join_hwp5_image_assets(bytes, &intermediate)?;
     let ole_assets = join_hwp5_ole_assets(bytes, &intermediate)?;
     let layout_hints = layout_hint_patch::capture_layout_hints(&intermediate.sections);
     let mut warnings = intermediate.warnings;
     // Wave 12o Phase 3 — forward HWP5 SummaryInformation metadata into
-    // the projected Core Document so the downstream HWPX encoder emits
-    // a populated `<opf:metadata>` block.
+    // the projected Core Document so a downstream encoder emits a populated
+    // `<opf:metadata>` block.
     let metadata = intermediate.metadata;
 
-    let (hwp5_styles, hwpx_style_store, style_warnings) =
-        project_doc_info_styles_with_warnings(&intermediate.doc_info);
-    warnings.extend(style_warnings);
+    let style_store = style_store::Hwp5StyleStore::from_doc_info(&intermediate.doc_info);
 
     let (mut document, mut image_store, proj_warnings) =
         projection::project_to_core_with_images_and_ole(
@@ -634,22 +616,16 @@ pub fn hwp5_to_hwpx_bytes(bytes: &[u8]) -> Hwp5Result<(Vec<u8>, Vec<Hwp5Warning>
             &image_assets,
             &ole_assets,
         )?;
-    document.set_metadata(metadata);
+    document.set_metadata(metadata.clone());
     warnings.extend(proj_warnings);
     supplement_border_fill_image_assets(
-        &hwp5_styles,
+        &style_store,
         &image_assets,
         &mut image_store,
         &mut warnings,
     );
 
-    let validated = document.validate().map_err(Hwp5Error::Core)?;
-    let hwpx_bytes =
-        hwpforge_smithy_hwpx::HwpxEncoder::encode(&validated, &hwpx_style_store, &image_store)
-            .map_err(|e| Hwp5Error::Cfb { detail: format!("HWPX encoding failed: {e}") })?;
-    let hwpx_bytes = layout_hint_patch::patch_hwpx_layout_hints(&hwpx_bytes, &layout_hints)?;
-
-    Ok((hwpx_bytes, warnings))
+    Ok(Hwp5Decoded { document, image_store, style_store, layout_hints, metadata, warnings })
 }
 
 fn supplement_border_fill_image_assets(

@@ -21,6 +21,21 @@ const MAX_DECOMPRESSION_RATIO: u64 = 100;
 /// Maximum number of BodyText sections to enumerate.
 const MAX_SECTIONS: usize = 256;
 
+/// Maximum number of `/BinData/*` entries to read from one package.
+const MAX_BIN_DATA_ENTRIES: usize = 10_000;
+
+/// Maximum cumulative size of decoded stream data held resident in memory for a
+/// single package (2 GiB). Charged for FileHeader, DocInfo and every BodyText
+/// section (decompressed when the package is compressed), every BinData entry
+/// (raw), and the summary stream (raw).
+///
+/// The per-stream `MAX_STREAM_SIZE` (500 MB) alone allows a malicious file with
+/// `MAX_SECTIONS` (256) sections or many BinData entries to expand far past any
+/// single cap (~128 GiB across sections). This global budget bounds the
+/// aggregate while leaving generous headroom for large legitimate government
+/// documents.
+const MAX_TOTAL_DECOMPRESSED: u64 = 2 * 1024 * 1024 * 1024;
+
 // ── PackageReader ─────────────────────────────────────────────────────────────
 
 /// Opens an HWP5 OLE2/CFB container and exposes its streams.
@@ -77,6 +92,12 @@ impl PackageReader {
     /// 4. Enumerates `/BodyText/Section{N}` for N = 0..`MAX_SECTIONS`.
     /// 5. Reads all `/BinData/*` entries.
     pub(crate) fn open(bytes: &[u8]) -> Hwp5Result<Self> {
+        Self::open_with_budget(bytes, MAX_TOTAL_DECOMPRESSED)
+    }
+
+    /// Internal worker for [`open`] with an explicit cumulative-decompression
+    /// budget so tests can verify the global bound with a small value.
+    fn open_with_budget(bytes: &[u8], max_total_decompressed: u64) -> Hwp5Result<Self> {
         // Surface a clear, actionable error for inputs that are obviously not
         // HWP5 OLE2/CFB containers before the raw CFB magic-number failure.
         if let Some(detail) = detect_non_hwp5_signature(bytes) {
@@ -87,8 +108,24 @@ impl PackageReader {
         let mut comp = CompoundFile::open(cursor)
             .map_err(|e| Hwp5Error::Cfb { detail: format!("open: {e}") })?;
 
+        // Cumulative decompressed-size budget across every stream of this
+        // package. Tracked locally to keep the helper-fn signatures clean.
+        let mut total_decompressed: u64 = 0;
+        let mut charge = |path: &str, len: usize| -> Hwp5Result<()> {
+            total_decompressed = total_decompressed.saturating_add(len as u64);
+            if total_decompressed > max_total_decompressed {
+                return Err(Hwp5Error::Cfb {
+                    detail: format!(
+                        "total decompressed data ({total_decompressed} bytes) after '{path}' exceeds limit of {max_total_decompressed}"
+                    ),
+                });
+            }
+            Ok(())
+        };
+
         // 1. FileHeader
         let header_bytes = read_stream(&mut comp, "/FileHeader")?;
+        charge("/FileHeader", header_bytes.len())?;
         let file_header = FileHeader::parse(&header_bytes)?;
 
         // 2. DocInfo
@@ -98,6 +135,7 @@ impl PackageReader {
         } else {
             doc_info_raw
         };
+        charge("/DocInfo", doc_info_data.len())?;
 
         // 3. BodyText sections
         let mut sections_data: Vec<Vec<u8>> = Vec::new();
@@ -110,6 +148,7 @@ impl PackageReader {
                     } else {
                         raw
                     };
+                    charge(&path, data.len())?;
                     sections_data.push(data);
                 }
                 Err(Hwp5Error::MissingStream { .. }) => break,
@@ -129,9 +168,20 @@ impl PackageReader {
             })
             .unwrap_or_default();
 
+        if bin_entries.len() > MAX_BIN_DATA_ENTRIES {
+            return Err(Hwp5Error::Cfb {
+                detail: format!(
+                    "BinData entry count {} exceeds limit {MAX_BIN_DATA_ENTRIES}",
+                    bin_entries.len()
+                ),
+            });
+        }
         for path in bin_entries {
             match read_stream(&mut comp, &path) {
                 Ok(data) => {
+                    // BinData (raw image/object bytes) is held resident in
+                    // `bin_data`, so it counts toward the aggregate budget too.
+                    charge(&path, data.len())?;
                     let name = path.trim_start_matches("/BinData/").to_string();
                     bin_data.insert(name, data);
                 }
@@ -145,7 +195,10 @@ impl PackageReader {
         // property-set bytes per MS Office spec.
         let summary_path = "/\u{0005}HwpSummaryInformation";
         let summary_info_data = match read_stream(&mut comp, summary_path) {
-            Ok(raw) => Some(raw),
+            Ok(raw) => {
+                charge(summary_path, raw.len())?;
+                Some(raw)
+            }
             Err(Hwp5Error::MissingStream { .. }) => None,
             Err(e) => return Err(e),
         };
@@ -195,11 +248,16 @@ impl PackageReader {
 /// [`Hwp5Error::Cfb`] for other I/O failures. Rejects streams that exceed
 /// `MAX_STREAM_SIZE`.
 fn read_stream(comp: &mut CompoundFile<Cursor<&[u8]>>, path: &str) -> Hwp5Result<Vec<u8>> {
-    let mut stream =
+    let stream =
         comp.open_stream(path).map_err(|_| Hwp5Error::MissingStream { name: path.to_string() })?;
 
+    // Eagerly bound the read with `take(MAX_STREAM_SIZE + 1)` so a hostile
+    // stream cannot drive an unbounded allocation before the post-hoc size
+    // check runs — reading at most one byte past the cap is enough to detect
+    // an over-cap stream.
     let mut buf = Vec::new();
     stream
+        .take(MAX_STREAM_SIZE + 1)
         .read_to_end(&mut buf)
         .map_err(|e| Hwp5Error::Cfb { detail: format!("read '{path}': {e}") })?;
 
@@ -231,23 +289,33 @@ fn decompress_checked(data: &[u8], path: &str) -> Hwp5Result<Vec<u8>> {
 /// HWP5 streams are almost always raw DEFLATE; a handful of older files use
 /// zlib framing. We try DEFLATE first and fall back to zlib on failure.
 pub(crate) fn decompress_stream(data: &[u8]) -> Hwp5Result<Vec<u8>> {
+    decompress_stream_capped(data, MAX_STREAM_SIZE)
+}
+
+/// Decompress an HWP5 stream bounded by an explicit per-stream cap.
+///
+/// Exposing the cap as a parameter lets tests verify the eager `take()` bound
+/// with a small value instead of materializing a half-gigabyte buffer.
+fn decompress_stream_capped(data: &[u8], max_stream_size: u64) -> Hwp5Result<Vec<u8>> {
     if data.is_empty() {
         return Ok(Vec::new());
     }
 
-    // Try raw DEFLATE first (most HWP5 files).
+    // Try raw DEFLATE first (most HWP5 files). Both decoders are wrapped in
+    // `take(max_stream_size + 1)` so a decompression bomb cannot allocate an
+    // unbounded buffer: we read at most one byte past the cap, then reject.
     use flate2::read::DeflateDecoder;
-    let mut decoder = DeflateDecoder::new(data);
+    let mut decoder = DeflateDecoder::new(data).take(max_stream_size + 1);
     let mut decompressed = Vec::new();
     match decoder.read_to_end(&mut decompressed) {
-        Ok(_) => Ok(decompressed),
+        Ok(_) => bound_decompressed(decompressed, max_stream_size),
         Err(_) => {
             // Fallback: try zlib (some files use this).
             use flate2::read::ZlibDecoder;
-            let mut decoder = ZlibDecoder::new(data);
+            let mut decoder = ZlibDecoder::new(data).take(max_stream_size + 1);
             let mut decompressed = Vec::new();
             match decoder.read_to_end(&mut decompressed) {
-                Ok(_) => Ok(decompressed),
+                Ok(_) => bound_decompressed(decompressed, max_stream_size),
                 Err(e) => Err(Hwp5Error::RecordParse {
                     offset: 0,
                     detail: format!("decompression failed: {e}"),
@@ -255,6 +323,20 @@ pub(crate) fn decompress_stream(data: &[u8]) -> Hwp5Result<Vec<u8>> {
             }
         }
     }
+}
+
+/// Rejects a decompressed buffer that exceeds the per-stream cap.
+///
+/// Used after a `take(max_stream_size + 1)`-bounded read so an over-cap stream
+/// is caught with at most one byte of slack rather than after an unbounded
+/// allocation.
+fn bound_decompressed(buf: Vec<u8>, max_stream_size: u64) -> Hwp5Result<Vec<u8>> {
+    if buf.len() as u64 > max_stream_size {
+        return Err(Hwp5Error::Cfb {
+            detail: format!("decompressed stream exceeds {max_stream_size} bytes"),
+        });
+    }
+    Ok(buf)
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -377,6 +459,105 @@ mod tests {
 
         let decompressed = decompress_stream(&compressed).unwrap();
         assert_eq!(decompressed, original);
+    }
+
+    #[test]
+    fn decompress_stream_rejects_output_over_cap() {
+        // Compress 1000 bytes, then decompress under a 10-byte cap: the eager
+        // `take()` bound must reject without returning the full output.
+        use flate2::write::DeflateEncoder;
+        use flate2::Compression;
+
+        let original = vec![0u8; 1000];
+        let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&original).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        let err = decompress_stream_capped(&compressed, 10).unwrap_err();
+        assert!(err.to_string().contains("exceeds 10 bytes"), "got: {err}");
+    }
+
+    #[test]
+    fn decompress_stream_capped_accepts_output_at_cap() {
+        use flate2::write::DeflateEncoder;
+        use flate2::Compression;
+
+        let original = vec![7u8; 64];
+        let mut encoder = DeflateEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&original).unwrap();
+        let compressed = encoder.finish().unwrap();
+
+        let out = decompress_stream_capped(&compressed, 64).expect("output at cap is ok");
+        assert_eq!(out, original);
+    }
+
+    #[test]
+    fn open_rejects_cumulative_decompressed_over_budget() {
+        // Uncompressed CFB: DocInfo (18 bytes) + Section0 (17 bytes) = 35 bytes
+        // total. A 20-byte budget is exceeded only once Section0 is charged,
+        // proving the budget accumulates across streams.
+        let doc_info = b"test doc info data"; // 18 bytes
+        let section0 = b"test section data"; // 17 bytes
+        let version = make_version(5, 0, 2, 5);
+        let bytes = make_test_cfb(version, 0x00, doc_info, section0);
+        let err = PackageReader::open_with_budget(&bytes, 20).unwrap_err();
+        assert!(err.to_string().contains("total decompressed data"), "got: {err}");
+    }
+
+    #[test]
+    fn open_with_budget_accepts_within_budget() {
+        let doc_info = b"test doc info data";
+        let section0 = b"test section data";
+        let version = make_version(5, 0, 2, 5);
+        let bytes = make_test_cfb(version, 0x00, doc_info, section0);
+        let pkg = PackageReader::open_with_budget(&bytes, 1024).expect("within budget");
+        assert_eq!(pkg.section_count(), 1);
+    }
+
+    /// Build a minimal CFB with FileHeader + DocInfo + `/BinData/*` entries.
+    fn make_test_cfb_with_bindata(
+        version: u32,
+        doc_info: &[u8],
+        bindata: &[(&str, &[u8])],
+    ) -> Vec<u8> {
+        let cursor = std::io::Cursor::new(Vec::new());
+        let mut comp = cfb::CompoundFile::create(cursor).unwrap();
+        let mut header_buf = vec![0u8; 256];
+        header_buf[..18].copy_from_slice(b"HWP Document File\0");
+        header_buf[32..36].copy_from_slice(&version.to_le_bytes());
+        header_buf[36..40].copy_from_slice(&0u32.to_le_bytes()); // uncompressed
+        let mut s = comp.create_stream("/FileHeader").unwrap();
+        s.write_all(&header_buf).unwrap();
+        drop(s);
+        let mut s = comp.create_stream("/DocInfo").unwrap();
+        s.write_all(doc_info).unwrap();
+        drop(s);
+        comp.create_storage("/BinData").unwrap();
+        for (name, data) in bindata {
+            let mut s = comp.create_stream(format!("/BinData/{name}")).unwrap();
+            s.write_all(data).unwrap();
+            drop(s);
+        }
+        comp.into_inner().into_inner()
+    }
+
+    #[test]
+    fn open_charges_bindata_against_global_budget() {
+        // DocInfo 10B + two BinData streams 30B each = 70B held resident. A
+        // 50B budget passes DocInfo (10) and the first BinData (40) but trips
+        // on the second (70 > 50) — proving BinData counts toward the budget.
+        let version = make_version(5, 0, 2, 5);
+        let bytes = make_test_cfb_with_bindata(
+            version,
+            &[0u8; 10],
+            &[("img0", &[0u8; 30]), ("img1", &[0u8; 30])],
+        );
+        let err = PackageReader::open_with_budget(&bytes, 50).unwrap_err();
+        assert!(err.to_string().contains("total decompressed data"), "got: {err}");
+
+        // Same package within a generous budget loads both BinData entries.
+        let pkg = PackageReader::open_with_budget(&bytes, 4096).expect("within budget");
+        assert_eq!(pkg.bin_data().len(), 2);
     }
 
     #[test]
