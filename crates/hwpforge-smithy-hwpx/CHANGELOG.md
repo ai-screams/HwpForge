@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.7.0...hwpforge-smithy-hwpx-v0.8.0) - 2026-06-27
+
+### Added
+
+- *(core)* **BREAKING** shape text vertical alignment (ellipse/polygon/textbox)
+
+
+### Changed
+
+- *(core)* **BREAKING** rename Summery typo to Summary in IR identifiers (E6 slice A)
+
+
+### Documentation
+
+- *(example)* author footnote/endnote inline in full_report (gotcha #12)
+
+- sync README/mdbook/CLAUDE for hwpforge-convert (E5) + refresh metrics
+
+
+### Performance
+
+- *(hwpx)* single-allocation marker substitution (E4 #1)
+
+- *(hwpx)* single-pass enrich_sec_pr splice (E4 #4)
+
+- *(hwpx)* collect section results in one move-pass, drop clones (E4 #5)
+
+
 ## [0.7.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.6.0...hwpforge-smithy-hwpx-v0.7.0) - 2026-06-19
 
 ### Added
