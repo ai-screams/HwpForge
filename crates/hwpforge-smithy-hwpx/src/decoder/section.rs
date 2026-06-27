@@ -883,10 +883,10 @@ fn decode_field_control(
         "SUMMERY" => {
             // 한글 uses type="SUMMERY" (typo for Summary) for SUMMERY auto-fields.
             // Map Command $token to semantic FieldType (Wave 12n). Unknown tokens
-            // are preserved verbatim as Control::UnknownSummery. #120/#136: the
+            // are preserved verbatim as Control::UnknownSummary. #120/#136: the
             // run's body text is the cached resolved value — round-trip it.
             let cmd = get_field_param(fb, "Command").unwrap_or_default();
-            match hwpforge_foundation::FieldType::from_summery_token(&cmd) {
+            match hwpforge_foundation::FieldType::from_summary_token(&cmd) {
                 Some(ft) => Control::Field {
                     field_type: ft,
                     hint_text: None,
@@ -894,7 +894,7 @@ fn decode_field_control(
                     name: Some(fb.name.clone()).filter(|s| !s.is_empty()),
                     display_text: text.to_string(),
                 },
-                None => Control::UnknownSummery { token: cmd, display_text: text.to_string() },
+                None => Control::UnknownSummary { token: cmd, display_text: text.to_string() },
             }
         }
         "PATH" => {
@@ -2744,7 +2744,7 @@ mod tests {
     }
 
     #[test]
-    fn serde_field_summery_modifiedtime() {
+    fn serde_field_summary_modifiedtime() {
         let xml = r#"<sec>
             <p paraPrIDRef="0">
                 <run charPrIDRef="0">
@@ -2775,7 +2775,7 @@ mod tests {
     }
 
     #[test]
-    fn serde_field_summery_createtime() {
+    fn serde_field_summary_createtime() {
         let xml = r#"<sec>
             <p paraPrIDRef="0">
                 <run charPrIDRef="0">
@@ -2803,7 +2803,7 @@ mod tests {
     }
 
     #[test]
-    fn serde_field_summery_author() {
+    fn serde_field_summary_author() {
         let xml = r#"<sec>
             <p paraPrIDRef="0">
                 <run charPrIDRef="0">
@@ -2831,7 +2831,7 @@ mod tests {
     }
 
     #[test]
-    fn serde_field_summery_lastsaveby() {
+    fn serde_field_summary_lastsaveby() {
         let xml = r#"<sec>
             <p paraPrIDRef="0">
                 <run charPrIDRef="0">
@@ -2861,10 +2861,10 @@ mod tests {
     // ── Wave 12n Phase 2 Step 7 — decoder fallback / Title gates ────
 
     #[test]
-    fn serde_field_summery_title() {
+    fn serde_field_summary_title() {
         // Wave 12n new token: $title → FieldType::Title. Without this
         // gate, a future decoder refactor could silently drop the
-        // mapping and downgrade titles to UnknownSummery.
+        // mapping and downgrade titles to UnknownSummary.
         let xml = r#"<sec>
             <p paraPrIDRef="0">
                 <run charPrIDRef="0">
@@ -2892,10 +2892,10 @@ mod tests {
     }
 
     #[test]
-    fn serde_field_summery_unknown_token_falls_back() {
+    fn serde_field_summary_unknown_token_falls_back() {
         // Unknown SUMMERY tokens must NOT be silently dropped — they
-        // carry through as UnknownSummery so round-trips preserve the
-        // original $token (see encoder/section.rs lossy_unknown_summery_*).
+        // carry through as UnknownSummary so round-trips preserve the
+        // original $token (see encoder/section.rs lossy_unknown_summary_*).
         let xml = r#"<sec>
             <p paraPrIDRef="0">
                 <run charPrIDRef="0">
@@ -2916,9 +2916,9 @@ mod tests {
         let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         let controls = find_controls(&result);
         let unknown =
-            controls.iter().find(|c| matches!(c, hwpforge_core::Control::UnknownSummery { .. }));
-        assert!(unknown.is_some(), "unknown SUMMERY token must fall back to UnknownSummery");
-        if let Some(hwpforge_core::Control::UnknownSummery { token, .. }) = unknown {
+            controls.iter().find(|c| matches!(c, hwpforge_core::Control::UnknownSummary { .. }));
+        assert!(unknown.is_some(), "unknown SUMMERY token must fall back to UnknownSummary");
+        if let Some(hwpforge_core::Control::UnknownSummary { token, .. }) = unknown {
             assert_eq!(token, "$company", "raw $token must be preserved verbatim");
         }
     }

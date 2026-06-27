@@ -1106,7 +1106,7 @@ pub enum Hwp5SemanticControlKind {
     ClickHere,
     /// SUMMERY auto-field (`%smr`): Author / LastSavedBy / CreatedTime /
     /// ModifiedTime / Title (Wave 12n).
-    SummeryField,
+    SummaryField,
     /// `%dte` date/time format-code field (Wave 12n).
     DateCodeField,
     /// `%pat` path / file-name field (Wave 12n).

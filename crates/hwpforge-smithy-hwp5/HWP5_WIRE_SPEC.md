@@ -695,7 +695,7 @@ until the user saves.
 
 The value is present in the HWP5 source `BodyText/Section0` ParaText, in
 the FieldBegin..FieldEnd span. Projection accumulates it into
-`ActiveField::{SummeryField,DateCodeField,PathField}.display_text`
+`ActiveField::{SummaryField,DateCodeField,PathField}.display_text`
 (capped at `MAX_FIELD_DISPLAY_TEXT_UNITS = 4096` — body text bypasses the
 BSTR command caps), carries it on the matching `Control` variant, and the
 HWPX encoder emits it as the body `<hp:t>`.

@@ -117,7 +117,7 @@ impl FieldType {
     /// Returns the HWPX `Command` `$token` for SUMMERY variants, or `None`
     /// for non-SUMMERY (`ClickHere`).
     #[must_use]
-    pub fn summery_token(self) -> Option<&'static str> {
+    pub fn summary_token(self) -> Option<&'static str> {
         match self {
             Self::ClickHere => None,
             Self::Author => Some("$author"),
@@ -130,9 +130,9 @@ impl FieldType {
 
     /// Parses a SUMMERY `$token` (`$author`, `$createtime`, …) into a
     /// matching [`FieldType`]. Returns `None` for unknown tokens; callers
-    /// should carry the raw token via [`Control::UnknownSummery`] instead.
+    /// should carry the raw token via [`Control::UnknownSummary`] instead.
     #[must_use]
-    pub fn from_summery_token(token: &str) -> Option<Self> {
+    pub fn from_summary_token(token: &str) -> Option<Self> {
         match token {
             "$author" => Some(Self::Author),
             "$lastsaveby" => Some(Self::LastSavedBy),

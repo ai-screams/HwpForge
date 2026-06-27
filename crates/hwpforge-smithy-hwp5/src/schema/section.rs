@@ -2011,7 +2011,7 @@ fn parse_clickhere_command(units: &[u16]) -> Option<(Option<String>, Option<Stri
 }
 
 // ---------------------------------------------------------------------------
-// Hwp5SummeryControl (Wave 12n)
+// Hwp5SummaryControl (Wave 12n)
 // ---------------------------------------------------------------------------
 
 /// Defence-in-depth allocation cap for the `%smr` Command UTF-16 payload
@@ -2041,9 +2041,9 @@ const MAX_SUMMERY_COMMAND_UNITS: usize = 1024;
 /// - `$createtime` → 만든 날짜 → `FieldType::CreatedTime`
 /// - `$modifiedtime` → 마지막 저장한 날짜 → `FieldType::ModifiedTime`
 /// - `$title` → 문서 제목 → `FieldType::Title`
-/// - 기타 `$X` → `Control::UnknownSummery { token }` carry
+/// - 기타 `$X` → `Control::UnknownSummary { token }` carry
 #[derive(Debug, Clone)]
-pub(crate) struct Hwp5SummeryControl {
+pub(crate) struct Hwp5SummaryControl {
     /// Owning control identifier, always `0x2573_6D72` (`"%smr"` BE-ascii).
     #[allow(dead_code)]
     pub ctrl_id: u32,
@@ -2065,7 +2065,7 @@ const MAX_DATECODE_COMMAND_UNITS: usize = 1024;
 /// HWP5 representation of a `%dte` date/time format-code field
 /// (Wave 12n).
 ///
-/// Wire envelope is identical to [`Hwp5SummeryControl`] / [`Hwp5ClickHereControl`]:
+/// Wire envelope is identical to [`Hwp5SummaryControl`] / [`Hwp5ClickHereControl`]:
 ///
 /// | offset | bytes | field |
 /// |---|---|---|
@@ -2128,7 +2128,7 @@ const MAX_PATHFIELD_COMMAND_UNITS: usize = 256;
 
 /// HWP5 representation of a `%pat` path / file-name field (Wave 12n).
 ///
-/// Wire envelope is identical to [`Hwp5SummeryControl`] / [`Hwp5DateCodeControl`]:
+/// Wire envelope is identical to [`Hwp5SummaryControl`] / [`Hwp5DateCodeControl`]:
 /// the 1-byte flag + u16 LE command count + UTF-16LE Command + 8-byte
 /// trailer. The Command is a path-format-code string (`$P` = path,
 /// `$F` = file name, `$P$F` = both).
@@ -2219,12 +2219,12 @@ impl Hwp5InlinePageNumberControl {
     }
 }
 
-impl Hwp5SummeryControl {
+impl Hwp5SummaryControl {
     /// Decodes a `%smr` CtrlHeader payload (the raw record `data`
     /// excluding the 4-byte CtrlHeader prefix the dispatcher already
     /// matched). Returns `None` on truncation or malformed UTF-16 — the
     /// decoder reports those as a targeted
-    /// `Hwp5Warning::DroppedControl { control: "summery_field", … }` so
+    /// `Hwp5Warning::DroppedControl { control: "summary_field", … }` so
     /// the lossy path is auditable.
     pub(crate) fn parse(ctrl_id: u32, data: &[u8]) -> Option<Self> {
         // Need: 4 (ctrl_id) + 4 (properties) + 1 (flag) + 2 (count)
@@ -3934,10 +3934,10 @@ mod tests {
     const ATNO_CTRL_ID: u32 = 0x6174_6E6F; // "atno"
 
     #[test]
-    fn summery_parse_known_token_carries_command() {
+    fn summary_parse_known_token_carries_command() {
         for token in ["$author", "$lastsaveby", "$createtime", "$modifiedtime", "$title"] {
             let data = make_envelope(SMR_CTRL_ID, 0x0000_0001, token, 0x41A4_AD76);
-            let parsed = Hwp5SummeryControl::parse(SMR_CTRL_ID, &data)
+            let parsed = Hwp5SummaryControl::parse(SMR_CTRL_ID, &data)
                 .unwrap_or_else(|| panic!("token {token} must parse"));
             assert_eq!(parsed.command_token, token);
             assert_eq!(parsed.field_unique_id, 0x41A4_AD76);
@@ -3945,16 +3945,16 @@ mod tests {
     }
 
     #[test]
-    fn summery_parse_unknown_token_still_carried() {
+    fn summary_parse_unknown_token_still_carried() {
         // Forward-compat: parser does not gate on known $X — projection layer
-        // routes unknown tokens to Control::UnknownSummery.
+        // routes unknown tokens to Control::UnknownSummary.
         let data = make_envelope(SMR_CTRL_ID, 0x0000_0001, "$company", 0);
-        let parsed = Hwp5SummeryControl::parse(SMR_CTRL_ID, &data).expect("parse");
+        let parsed = Hwp5SummaryControl::parse(SMR_CTRL_ID, &data).expect("parse");
         assert_eq!(parsed.command_token, "$company");
     }
 
     #[test]
-    fn summery_parse_rejects_oversized_command() {
+    fn summary_parse_rejects_oversized_command() {
         // command_units > MAX_SUMMERY_COMMAND_UNITS (1024) must return None
         // without attempting allocation.
         let mut data = Vec::new();
@@ -3963,14 +3963,14 @@ mod tests {
         data.push(0x08);
         data.extend_from_slice(&(MAX_SUMMERY_COMMAND_UNITS as u16 + 1).to_le_bytes());
         // intentionally no further bytes
-        assert!(Hwp5SummeryControl::parse(SMR_CTRL_ID, &data).is_none());
+        assert!(Hwp5SummaryControl::parse(SMR_CTRL_ID, &data).is_none());
     }
 
     #[test]
-    fn summery_parse_rejects_truncated() {
+    fn summary_parse_rejects_truncated() {
         let mut data = make_envelope(SMR_CTRL_ID, 0, "$author", 0);
         data.truncate(data.len() - 4);
-        assert!(Hwp5SummeryControl::parse(SMR_CTRL_ID, &data).is_none());
+        assert!(Hwp5SummaryControl::parse(SMR_CTRL_ID, &data).is_none());
     }
 
     #[test]

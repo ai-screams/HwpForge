@@ -11,7 +11,7 @@
 //!   cargo run -p hwpforge-smithy-hwpx --example gen_field_auto
 //!
 //! 목적: 사용자 한컴 native .hwp → .hwpx export 결과와 cross-compare 하여
-//! 현재 build_summery_field_xml 의 하드코딩/추측 (fieldid=628321650,
+//! 현재 build_summary_field_xml 의 하드코딩/추측 (fieldid=628321650,
 //! $modifiedtime, " " display 등) 이 한컴 진실과 일치하는지 검증.
 
 use hwpforge_core::control::Control;

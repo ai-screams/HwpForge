@@ -123,7 +123,7 @@ pub(crate) const CTRL_ID_CLICK_HERE: u32 = 0x2563_6C6B;
 /// ctrl_id for the SUMMERY auto-field family (`$author`, `$lastsaveby`,
 /// `$createtime`, `$modifiedtime`, `$title`, …): ASCII `"%smr"` as
 /// big-endian u32. Wave 12n. Payload layout lives on
-/// `crate::schema::section::Hwp5SummeryControl`.
+/// `crate::schema::section::Hwp5SummaryControl`.
 pub(crate) const CTRL_ID_FIELD_SUMMERY: u32 = 0x2573_6D72;
 
 /// ctrl_id for the `%dte` date/time format-code field: ASCII `"%dte"` as
