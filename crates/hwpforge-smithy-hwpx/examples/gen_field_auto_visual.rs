@@ -60,12 +60,12 @@ fn summary_section(label: &str, field_type: FieldType, cached_value: &str) -> Se
 }
 
 /// 단일 InlinePageNumber 컨트롤을 라벨과 함께 담은 Section.
-fn inline_page_section(label: &str, kind: InlinePageKind, raw_flag: u32) -> Section {
+fn inline_page_section(label: &str, kind: InlinePageKind) -> Section {
     let title = Paragraph::with_runs(
         vec![Run::text(label, CharShapeIndex::new(0))],
         ParaShapeIndex::new(0),
     );
-    let ctrl = Control::InlinePageNumber { kind, raw_flag };
+    let ctrl = Control::InlinePageNumber { kind };
     let body = Paragraph::with_runs(
         vec![Run::control(ctrl, CharShapeIndex::new(0))],
         ParaShapeIndex::new(0),
@@ -110,20 +110,17 @@ fn wave12n_all_section() -> Section {
         ));
     }
 
-    let page_cases: &[(&str, InlinePageKind, u32)] = &[
-        ("[InlinePageNumber CurrentPage 현재 페이지]", InlinePageKind::CurrentPage, 0),
-        ("[InlinePageNumber TotalPages 전체 페이지]", InlinePageKind::TotalPages, 0x06),
+    let page_cases: &[(&str, InlinePageKind)] = &[
+        ("[InlinePageNumber CurrentPage 현재 페이지]", InlinePageKind::CurrentPage),
+        ("[InlinePageNumber TotalPages 전체 페이지]", InlinePageKind::TotalPages),
     ];
-    for (label, kind, flag) in page_cases {
+    for (label, kind) in page_cases {
         paras.push(Paragraph::with_runs(
             vec![Run::text(*label, CharShapeIndex::new(0))],
             ParaShapeIndex::new(0),
         ));
         paras.push(Paragraph::with_runs(
-            vec![Run::control(
-                Control::InlinePageNumber { kind: *kind, raw_flag: *flag },
-                CharShapeIndex::new(0),
-            )],
+            vec![Run::control(Control::InlinePageNumber { kind: *kind }, CharShapeIndex::new(0))],
             ParaShapeIndex::new(0),
         ));
     }
@@ -180,7 +177,6 @@ fn main() {
         inline_page_section(
             "[현재 페이지 번호 InlinePageNumber CurrentPage]",
             InlinePageKind::CurrentPage,
-            0,
         ),
     );
     write_one(
@@ -189,7 +185,6 @@ fn main() {
         inline_page_section(
             "[전체 페이지 수 InlinePageNumber TotalPages]",
             InlinePageKind::TotalPages,
-            0x06,
         ),
     );
     write_one(

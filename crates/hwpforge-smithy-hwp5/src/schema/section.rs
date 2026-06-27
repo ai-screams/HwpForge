@@ -2086,7 +2086,10 @@ pub(crate) struct Hwp5DateCodeControl {
     pub ctrl_id: u32,
     /// Raw Command string as recovered from the wire.
     pub raw_command: String,
-    /// 8-byte trailer carried verbatim for round-trip fidelity.
+    /// 8-byte trailer carried verbatim for round-trip fidelity. Parsed from
+    /// the wire and asserted by the `datecode_parse_*_preserves_raw` tests;
+    /// no longer consumed by projection (E6 slice C dropped it from the IR).
+    #[allow(dead_code)]
     pub raw_trailer: [u8; 8],
 }
 
@@ -2176,8 +2179,7 @@ impl Hwp5PathFieldControl {
 /// Unlike the SUMMERY-family controls, `atno` is a fixed 16-byte record
 /// with no Command string and no 8-byte trailer. The single 4-byte flag
 /// at `body[0..4]` distinguishes current-page (`0x00`) from total-page
-/// (`0x06`); other values are preserved verbatim via
-/// [`Control::InlinePageNumber::raw_flag`].
+/// (`0x06`); other values map to `InlinePageKind::Unknown` at projection.
 ///
 /// Wire layout:
 ///

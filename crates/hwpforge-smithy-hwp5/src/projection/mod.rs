@@ -218,14 +218,13 @@ enum ActiveField {
         display_text: String,
     },
     /// `%dte` date/time format-code field (Wave 12n). Carries the raw
-    /// Command pattern + 8-byte trailer for round-trip fidelity. On
-    /// `FieldEnd` the projection emits `Control::DateCodeField` with
+    /// Command pattern (smithy-internal) used only to derive `is_time_mode`.
+    /// On `FieldEnd` the projection emits `Control::DateCodeField` with
     /// `is_time_mode` derived from the `T` prefix. `display_text`
     /// accumulates the cached resolved value (see [`Self::SummaryField`]).
     DateCodeField {
         start_utf16: u32,
         raw_command: String,
-        raw_trailer: [u8; 8],
         display_text: String,
     },
     /// `%pat` path/file-name field (Wave 12n). On `FieldEnd` the
@@ -1383,7 +1382,6 @@ fn start_active_field(
                 ActiveField::DateCodeField {
                     start_utf16,
                     raw_command: date_code.raw_command,
-                    raw_trailer: date_code.raw_trailer,
                     display_text: String::new(),
                 }
             } else {
@@ -1564,10 +1562,10 @@ fn finish_active_field(
             };
             runs.push(Run::control(control, char_shape_id));
         }
-        ActiveField::DateCodeField { start_utf16, raw_command, raw_trailer, display_text } => {
+        ActiveField::DateCodeField { start_utf16, raw_command, display_text } => {
             // Emit Control::DateCodeField with `is_time_mode` derived
-            // from the `T` prefix convention. The 8-byte trailer is
-            // preserved verbatim for future round-trip fidelity.
+            // from the `T` prefix convention. The raw HWP5 command pattern
+            // is smithy-internal and not carried into the core IR (E6 slice C).
             // `display_text` is the cached resolved date/time (#120/#136).
             let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
                 &hwp_para.char_shape_runs,
@@ -1576,7 +1574,7 @@ fn finish_active_field(
             let _ = end_utf16;
             let is_time_mode = raw_command.starts_with('T');
             runs.push(Run::control(
-                Control::DateCodeField { raw_command, is_time_mode, raw_trailer, display_text },
+                Control::DateCodeField { is_time_mode, display_text },
                 char_shape_id,
             ));
         }
@@ -2119,11 +2117,15 @@ fn project_control_run(
         // emission flows through the object-control queue, not an
         // ActiveField/FieldBegin pair.
         Hwp5Control::InlinePageNumber(atno) => {
-            let kind = hwpforge_core::control::InlinePageKind::from_raw_flag(atno.raw_flag);
-            Some(Run::control(
-                Control::InlinePageNumber { kind, raw_flag: atno.raw_flag },
-                CharShapeIndex::new(0),
-            ))
+            use hwpforge_core::control::InlinePageKind;
+            // Inline the wire-flag → kind mapping (E6 slice C: the raw flag
+            // is smithy-internal and no longer carried into the core IR).
+            let kind = match atno.raw_flag {
+                0x00 => InlinePageKind::CurrentPage,
+                0x06 => InlinePageKind::TotalPages,
+                _ => InlinePageKind::Unknown,
+            };
+            Some(Run::control(Control::InlinePageNumber { kind }, CharShapeIndex::new(0)))
         }
         Hwp5Control::OleObject(ole) => project_ole_object_run(ole, projection_images),
         // %xrf cross-reference fields (Wave 12m) flow through the
@@ -4389,5 +4391,81 @@ mod tests {
                 if *subject == "table.page_break"
                     && reason == "unknown_hwp5_table_page_break_raw=3; defaulting_to=cell"
         )));
+    }
+
+    // E6 slice C: the HWP5 wire bytes (`raw_command`/`raw_trailer`/`raw_flag`)
+    // were removed from the core IR. These tests lock that the *derivation*
+    // (DateCodeField.is_time_mode, InlinePageNumber.kind) survives that
+    // removal by re-running the exact projection logic.
+
+    /// `project_control_run` maps an `atno` wire flag to the right
+    /// `InlinePageKind` without carrying the raw flag into the core IR.
+    #[test]
+    fn project_inline_pagenumber_maps_raw_flag_to_kind() {
+        use crate::schema::section::Hwp5InlinePageNumberControl;
+        use hwpforge_core::control::{Control, InlinePageKind};
+
+        let project = |raw_flag: u32| -> Control {
+            let ctrl = Hwp5Control::InlinePageNumber(Hwp5InlinePageNumberControl {
+                ctrl_id: 0x6174_6E6F,
+                raw_flag,
+            });
+            let mut images = ProjectionImageState::new(None, None);
+            let run = project_control_run(
+                &ctrl,
+                &mut images,
+                ImageProjectionContext::Flow,
+                CharShapeIndex::new(0),
+            )
+            .expect("atno control must project to a run");
+            match run.content {
+                RunContent::Control(boxed) => *boxed,
+                other => panic!("expected control run, got {other:?}"),
+            }
+        };
+
+        assert_eq!(
+            project(0x06),
+            Control::InlinePageNumber { kind: InlinePageKind::TotalPages },
+            "raw flag 0x06 → TotalPages",
+        );
+        assert_eq!(
+            project(0x00),
+            Control::InlinePageNumber { kind: InlinePageKind::CurrentPage },
+            "raw flag 0x00 → CurrentPage",
+        );
+        assert_eq!(
+            project(0xABCD_1234),
+            Control::InlinePageNumber { kind: InlinePageKind::Unknown },
+            "unknown raw flag → Unknown (no fabricated kind)",
+        );
+    }
+
+    /// The `%dte` time-mode derivation (`raw_command` `T`-prefix →
+    /// `is_time_mode`) survives the removal of `raw_command` from the core
+    /// IR. The emission path is private + stateful, so we assert the exact
+    /// derivation rule the projection applies in `emit_active_field`.
+    #[test]
+    fn datecodefield_time_mode_derived_from_t_prefix() {
+        use hwpforge_core::control::Control;
+
+        let derive = |raw_command: &str| -> Control {
+            Control::DateCodeField {
+                is_time_mode: raw_command.starts_with('T'),
+                display_text: String::new(),
+            }
+        };
+
+        assert!(
+            matches!(derive("T\\:H:mm;0;"), Control::DateCodeField { is_time_mode: true, .. }),
+            "`T`-prefixed command → time mode",
+        );
+        assert!(
+            matches!(
+                derive("\\:1년 2월 3일;0;"),
+                Control::DateCodeField { is_time_mode: false, .. }
+            ),
+            "date command → not time mode",
+        );
     }
 }

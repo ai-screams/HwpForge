@@ -419,17 +419,14 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
         // current-page (`PAGE`) and total-page (`TOTAL_PAGE`) distinct;
         // collapsing them would lose user-visible semantics.
         if let Some(an) = &ctrl.auto_num {
-            let kind_and_flag = match an.num_type.as_str() {
-                "PAGE" => Some((hwpforge_core::control::InlinePageKind::CurrentPage, 0)),
-                "TOTAL_PAGE" => Some((hwpforge_core::control::InlinePageKind::TotalPages, 0x06)),
+            let kind = match an.num_type.as_str() {
+                "PAGE" => Some(hwpforge_core::control::InlinePageKind::CurrentPage),
+                "TOTAL_PAGE" => Some(hwpforge_core::control::InlinePageKind::TotalPages),
                 _ => None,
             };
-            if let Some((kind, raw_flag)) = kind_and_flag {
+            if let Some(kind) = kind {
                 runs.push(Run {
-                    content: RunContent::Control(Box::new(Control::InlinePageNumber {
-                        kind,
-                        raw_flag,
-                    })),
+                    content: RunContent::Control(Box::new(Control::InlinePageNumber { kind })),
                     char_shape_id,
                 });
             }
@@ -2926,8 +2923,8 @@ mod tests {
     #[test]
     fn serde_field_autonum_total_page() {
         // Wave 12n architect review CRITICAL gate: numType="TOTAL_PAGE"
-        // must NOT collapse to CurrentPage. raw_flag mirrors the
-        // hardcoded mapping (0x06) so encoder→decoder lossless tests
+        // must NOT collapse to CurrentPage. The decoder maps it back to
+        // InlinePageKind::TotalPages so encoder→decoder lossless tests
         // can pin equality.
         let xml = r#"<sec>
             <p paraPrIDRef="0">

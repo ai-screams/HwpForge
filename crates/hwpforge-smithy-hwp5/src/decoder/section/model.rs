@@ -99,10 +99,10 @@ pub(crate) enum Hwp5Control {
     SummaryField(crate::schema::section::Hwp5SummaryControl),
     /// `%dte` date/time format-code field — carries a raw format pattern
     /// (e.g. `"\:1년 2월 3일 (6);0;"` or `"T\:;0;"`). The projection
-    /// layer surfaces it as `Control::DateCodeField` with `raw_command`,
-    /// `is_time_mode` (derived from `T` prefix), and the 8-byte trailer
-    /// preserved verbatim. See `schema::section::Hwp5DateCodeControl`.
-    /// (Wave 12n.)
+    /// layer surfaces it as `Control::DateCodeField` with only the derived
+    /// `is_time_mode` (from the `T` prefix); the raw wire pattern and trailer
+    /// are smithy-internal and not carried into the core IR (E6 slice C).
+    /// See `schema::section::Hwp5DateCodeControl`. (Wave 12n.)
     DateCodeField(crate::schema::section::Hwp5DateCodeControl),
     /// `%pat` path/file-name field — carries a path format-code
     /// Command (`"$P"`, `"$F"`, `"$P$F"`). See
