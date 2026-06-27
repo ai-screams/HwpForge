@@ -351,9 +351,12 @@ impl schemars::JsonSchema for RefType {
 /// | 3                  | 위/아래          | `OBJECT_TYPE_UPDOWNPOS`   |
 ///
 /// (책갈피의 wire 는 OWPML spec 표 156 의 직관과 어긋남 — `CONTENTS`
-/// 가 "책갈피 이름", `NUMBER` 가 "책갈피 내용" 의미.) `BookmarkName`
-/// variant 부활 + Display 는 `OBJECT_TYPE_CONTENTS` 동일 emit (한컴
-/// wire 일치) 하되 boundary 의 wire code 매핑은 분리.
+/// 가 "책갈피 이름", `NUMBER` 가 "책갈피 내용" 의미.)
+///
+/// E6 슬라이스 B (2026-06-28): 한때 분리됐던 `BookmarkName` variant 를
+/// `Contents` 로 흡수 — wire(N2=2)·Display(`OBJECT_TYPE_CONTENTS`) 가
+/// 동일하고, Bookmark vs caption 구분은 동반 [`RefType`] 가 carry
+/// (gotcha #27 — wire 모호성을 content variant 에 prebake 하지 않음).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[non_exhaustive]
 pub enum RefContentType {
@@ -364,16 +367,15 @@ pub enum RefContentType {
     /// - Footnote/Endnote/Caption/Outline: "주 번호" / "표 번호" / "그림 번호" / "개요 번호" (N2=1)
     /// - Bookmark: **책갈피 본문 / 번호 텍스트** (N2=1, 한컴 wire 특이성)
     Number,
-    /// Show the target's content. 의미는 RefType-상대적:
+    /// Show the target's content. 의미는 RefType-상대적 (gotcha #27 —
+    /// disambiguation 은 동반 [`RefType`] 가 carry, content variant 가 아님):
     /// - Figure/Table/Equation: "캡션 내용" (N2=2)
     /// - Outline: "개요 내용" (N2=2)
-    /// - Bookmark 에서는 *사용 안 함* — 책갈피의 "내용" 의미는
-    ///   `RefContentType::Number` 가 carry (N2=1).
+    /// - Bookmark: **책갈피 이름** "bookmark name" (N2=2). E6 슬라이스 B 에서
+    ///   이전 `BookmarkName` variant 를 흡수 — wire(N2=2)·Display
+    ///   (`OBJECT_TYPE_CONTENTS`) 가 동일하므로 별도 variant 불필요.
+    ///   (책갈피의 "본문/번호" 의미는 [`RefContentType::Number`] 가 carry, N2=1.)
     Contents,
-    /// Show the bookmark's NAME. 한컴: "책갈피 이름" (Bookmark+N2=2 전용).
-    /// HWPX wire 의 `OBJECT_TYPE_CONTENTS` 와 동일 문자열로 emit
-    /// (RefType=TARGET_BOOKMARK 컨텍스트에서 한컴이 의미 결정).
-    BookmarkName,
     /// Show relative position ("위" / "아래"). 한컴: "위/아래" (N2=3).
     UpDownPos,
     /// Unrecognized ContentType code preserved from wire for forward
@@ -386,11 +388,11 @@ impl fmt::Display for RefContentType {
         match self {
             Self::Page => f.write_str("OBJECT_TYPE_PAGE"),
             Self::Number => f.write_str("OBJECT_TYPE_NUMBER"),
-            // Wave 12p pre-fix: `Contents` 와 `BookmarkName` 모두 한컴
-            // wire 의 `OBJECT_TYPE_CONTENTS` 로 emit. 의미 구분은
-            // RefType + Command 의 N2 wire code 에서 (Bookmark N2=2 =
-            // 책갈피 이름, Figure/Table/Eq/Outline N2=2 = 캡션 내용).
-            Self::Contents | Self::BookmarkName => f.write_str("OBJECT_TYPE_CONTENTS"),
+            // `Contents` → `OBJECT_TYPE_CONTENTS`. 의미 구분(Bookmark N2=2
+            // = 책갈피 이름 vs Figure/Table/Eq/Outline N2=2 = 캡션 내용)은
+            // 동반 RefType 가 carry (gotcha #27). E6 슬라이스 B 에서
+            // `BookmarkName` variant 를 `Contents` 로 흡수 (wire 동일).
+            Self::Contents => f.write_str("OBJECT_TYPE_CONTENTS"),
             Self::UpDownPos => f.write_str("OBJECT_TYPE_UPDOWNPOS"),
             Self::Unknown(code) => write!(f, "OBJECT_TYPE_UNKNOWN({code})"),
         }
@@ -404,13 +406,10 @@ impl std::str::FromStr for RefContentType {
         match s {
             "OBJECT_TYPE_PAGE" | "Page" | "page" => Ok(Self::Page),
             "OBJECT_TYPE_NUMBER" | "Number" | "number" => Ok(Self::Number),
-            // Wave 12p pre-fix: `OBJECT_TYPE_CONTENTS` 는 caller 의 추가
-            // 컨텍스트 (RefType + N2 wire code) 없이는 `Contents` 와
-            // `BookmarkName` 을 구분할 수 없으므로 default 로 `Contents`
-            // 를 반환. boundary 함수 `decode_hwp5_crossref_content_type`
-            // 가 Bookmark N2=2 인 경우만 `BookmarkName` 으로 재매핑.
+            // `OBJECT_TYPE_CONTENTS` → `Contents`. Bookmark N2=2(책갈피
+            // 이름) vs caption-content 구분은 동반 RefType 가 carry
+            // (gotcha #27) — content variant 는 단일 `Contents`.
             "OBJECT_TYPE_CONTENTS" | "Contents" | "contents" => Ok(Self::Contents),
-            "BookmarkName" | "bookmark_name" => Ok(Self::BookmarkName),
             "OBJECT_TYPE_UPDOWNPOS" | "UpDownPos" | "updownpos" => Ok(Self::UpDownPos),
             _ => Err(FoundationError::ParseError {
                 type_name: "RefContentType".to_string(),

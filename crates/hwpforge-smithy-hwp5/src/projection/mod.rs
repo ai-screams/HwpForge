@@ -1921,20 +1921,27 @@ fn decode_hwp5_crossref_ref_type(code: u8) -> RefType {
 /// Wave 12p pre-fix boundary: HWP5 `%xrf` N2 (ContentType) is
 /// RefType-relative. 한컴 native wire 분석 결과:
 ///
-/// | RefType        | N2=0 | N2=1   | N2=2          | N2=3      |
-/// |----------------|------|--------|---------------|-----------|
-/// | Bookmark       | Page | Number | BookmarkName  | UpDownPos |
-/// | 그 외 (T/F/Eq/…) | Page | Number | Contents      | UpDownPos |
+/// | RefType        | N2=0 | N2=1   | N2=2       | N2=3      |
+/// |----------------|------|--------|------------|-----------|
+/// | Bookmark       | Page | Number | Contents¹  | UpDownPos |
+/// | 그 외 (T/F/Eq/…) | Page | Number | Contents   | UpDownPos |
 ///
 /// 책갈피 N2=1 은 한컴에서 "책갈피 본문/번호" 의미 (OBJECT_TYPE_NUMBER
 /// emit), N2=2 는 "책갈피 이름" (OBJECT_TYPE_CONTENTS emit). spec 외
-/// 의미이지만 native wire 와 일치. Wave 12m fixup 의 (Bookmark, 2) →
-/// Contents 통일은 잘못이었고 본 fix 에서 보정.
+/// 의미이지만 native wire 와 일치.
+///
+/// ¹ E6 슬라이스 B (2026-06-28): Bookmark N2=2 = "책갈피 이름" 은
+/// `Contents` variant 로 carry (이전 분리됐던 `BookmarkName` 흡수).
+/// wire(N2=2)·Display(`OBJECT_TYPE_CONTENTS`) 가 caption-content 와
+/// 동일하고, 구분은 동반 RefType 가 보유 (gotcha #27).
 fn decode_hwp5_crossref_content_type(ref_type_code: u8, code: u8) -> RefContentType {
     match (ref_type_code, code) {
         (_, 0) => RefContentType::Page,
         (HWP5_CROSSREF_REF_TYPE_BOOKMARK, 1) => RefContentType::Number,
-        (HWP5_CROSSREF_REF_TYPE_BOOKMARK, 2) => RefContentType::BookmarkName,
+        // (Bookmark, 2) = "책갈피 이름" → `Contents` (OBJECT_TYPE_CONTENTS,
+        // N2=2). E6 슬라이스 B: 이전 `BookmarkName` variant 를 흡수 — wire/
+        // Display 가 동일하고 RefType 컨텍스트가 의미를 carry (gotcha #27)
+        // 하므로 아래 `(_, 2) => Contents` 와 동일. 명시 arm 불필요.
         (_, 1) => RefContentType::Number,
         (_, 2) => RefContentType::Contents,
         (_, 3) => RefContentType::UpDownPos,
@@ -2908,6 +2915,25 @@ fn page_def_to_settings(pd: &Hwp5PageDef) -> PageSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bookmark_n2_2_collapses_to_contents_not_separate_variant() {
+        // E6 슬라이스 B 회귀 잠금: (Bookmark, 2) = "책갈피 이름" 은 이전
+        // `BookmarkName` variant 가 아니라 `Contents` 로 carry — wire/Display
+        // 가 caption-content 와 동일하고 구분은 동반 RefType 가 보유 (gotcha #27).
+        assert_eq!(
+            decode_hwp5_crossref_content_type(HWP5_CROSSREF_REF_TYPE_BOOKMARK, 2),
+            RefContentType::Contents,
+            "Bookmark N2=2 must collapse to Contents (BookmarkName absorbed)"
+        );
+        // 비-Bookmark N2=2 도 동일하게 Contents (대칭 확인).
+        assert_eq!(
+            decode_hwp5_crossref_content_type(HWP5_CROSSREF_REF_TYPE_BOOKMARK + 1, 2),
+            RefContentType::Contents
+        );
+        // Display byte 불변: Contents → OBJECT_TYPE_CONTENTS.
+        assert_eq!(RefContentType::Contents.to_string(), "OBJECT_TYPE_CONTENTS");
+    }
 
     #[test]
     fn shape_vertical_align_extracts_bits_5_6() {
