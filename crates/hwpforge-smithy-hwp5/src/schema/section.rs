@@ -2298,8 +2298,9 @@ const MAX_CROSSREF_COMMAND_UNITS: usize = 1024;
 /// The Command's semicolon-separated suffix encodes:
 /// - `N1` = RefType (Table=0, Figure=1, Equation=2, Footnote=3,
 ///   Endnote=4, Outline=5, Bookmark=6)
-/// - `N2` = ContentType (RefType-relative; Page=0, Number/Contents=1,
-///   Contents/BookmarkName=2, UpDownPos=3)
+/// - `N2` = ContentType (RefType-relative; Page=0, Number=1,
+///   Contents=2, UpDownPos=3 — Bookmark N2=2 "책갈피 이름" 도 Contents,
+///   E6 슬라이스 B 에서 BookmarkName variant 흡수)
 /// - `N3` = as_hyperlink (0 / 1)
 /// - `N4` = currently unidentified (all observed = 0)
 ///

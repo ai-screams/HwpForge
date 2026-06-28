@@ -486,13 +486,12 @@ pub(super) fn ref_content_type_wire_code(
         Page => 0,
         UpDownPos => 3,
         Number => 1,
-        // Wave 12p pre-fix: native wire 일치. 모든 RefType 에서
-        // `Contents` 의 N2 wire code 는 2 (Figure/Table/Eq/Outline =
-        // "캡션 내용"). 별도로 `BookmarkName` variant (한컴 "책갈피
-        // 이름") 도 N2=2 로 emit — RefType=TARGET_BOOKMARK 컨텍스트에서
-        // 한컴이 의미를 결정. (Bookmark+Number=N2=1 = 책갈피 본문/번호
-        // 는 위 `Number => 1` arm 이 처리.)
-        Contents | BookmarkName => 2,
+        // `Contents` → N2 wire code 2. Figure/Table/Eq/Outline 의 "캡션
+        // 내용" 과 Bookmark 의 "책갈피 이름" 둘 다 N2=2 로 emit — 의미
+        // 구분은 동반 RefType 가 carry (gotcha #27). E6 슬라이스 B 에서
+        // `BookmarkName` variant 를 `Contents` 로 흡수. (Bookmark+N2=1 =
+        // 책갈피 본문/번호 는 위 `Number => 1` arm 이 처리.)
+        Contents => 2,
         Unknown(other) => *other,
         // Foundation RefContentType is `#[non_exhaustive]`; future
         // variants default to Page (slot 0).
@@ -683,4 +682,32 @@ pub(super) fn unix_to_ymdhms(secs: u64) -> (i64, u32, u32, u32, u32, u32) {
     let month_civil = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     let year_civil = if month_civil <= 2 { y0 + 1 } else { y0 };
     (year_civil, month_civil, day, hour, minute, second)
+}
+
+#[cfg(test)]
+mod bookmarkname_collapse_tests {
+    use super::*;
+    use hwpforge_foundation::{RefContentType, RefType};
+
+    /// E6 슬라이스 B byte-불변 게이트: `BookmarkName` 흡수 후에도 Bookmark
+    /// 의 "책갈피 이름"(`Contents`) 은 N2 wire code `2` 로 emit — 이전
+    /// 분리됐던 variant 와 동일. golden 12-fixture 매트릭스는 content-type
+    /// 출력을 단언하지 않으므로 이 직접 단언이 진짜 byte-중립 게이트다.
+    #[test]
+    fn bookmark_contents_emits_n2_wire_code_2() {
+        assert_eq!(
+            ref_content_type_wire_code(&RefType::Bookmark, &RefContentType::Contents),
+            2,
+            "Bookmark Contents (책갈피 이름) must emit N2=2"
+        );
+        // caption-content (Figure/Table/Eq/Outline) 도 동일 N2=2 — 의미
+        // 구분은 RefType 가 carry (gotcha #27), wire 는 동일.
+        assert_eq!(
+            ref_content_type_wire_code(&RefType::Figure, &RefContentType::Contents),
+            2,
+            "Figure caption Contents must also emit N2=2"
+        );
+        // Display 불변도 함께 잠금.
+        assert_eq!(RefContentType::Contents.to_string(), "OBJECT_TYPE_CONTENTS");
+    }
 }
