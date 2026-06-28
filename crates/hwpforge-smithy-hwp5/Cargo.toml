@@ -18,8 +18,8 @@ description = "HWP5 binary format decoder for HwpForge (not yet implemented)"
 byteorder = { workspace = true }
 cfb = { workspace = true }
 flate2 = { workspace = true }
-hwpforge-core = { path = "../hwpforge-core", version = "0.8.0" }
-hwpforge-foundation = { path = "../hwpforge-foundation", version = "0.8.0" }
+hwpforge-core = { path = "../hwpforge-core", version = "0.9.0" }
+hwpforge-foundation = { path = "../hwpforge-foundation", version = "0.9.0" }
 serde = { workspace = true }
 thiserror = { workspace = true }
 
