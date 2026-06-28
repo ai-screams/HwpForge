@@ -7,6 +7,8 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::object_id::ObjectId;
+
 /// Typed variant of the HWP5 `%pat` Command string (Wave 12n).
 ///
 /// Observed forms are `$F` (file name only), `$P` (path only), and `$P$F`
@@ -56,9 +58,11 @@ impl PathFieldCommand {
 ///
 /// - **`Name(String)`** — 사용자 지정 책갈피 이름 (Bookmark 전용).
 ///   한컴 fixture 의 `?target1;6;0;0;0;` 형식에서 `target1` 부분.
-/// - **`SystemId(u64)`** — 한컴 자동 생성 정수 ID (Footnote / Endnote /
+/// - **`Object(ObjectId)`** — 한컴 자동 생성 정수 ID (Footnote / Endnote /
 ///   Caption / Outline). 한컴 fixture 의 `?#1108165575;3;0;0;0;` 형식에서
-///   `#` 접두사를 떼고 정수로 파싱한 값.
+///   `#` 접두사를 떼고 정수로 파싱한 값. 가리키는 타깃(Image/Table/…)의
+///   `inst_id: Option<ObjectId>` 와 **같은 [`ObjectId`]** 를 공유해 링크를
+///   타입 수준에서 보장한다 (ADR-010).
 /// - **`Raw(String)`** — 위 두 형식 어느쪽으로도 파싱이 안 된 wire 값.
 ///   silent fallback 위조 금지 원칙 (Codex(architect)) — 의미를
 ///   모르면 raw 보존.
@@ -70,8 +74,9 @@ impl PathFieldCommand {
 pub enum RefTarget {
     /// 사용자 지정 책갈피 이름 (Bookmark 전용).
     Name(String),
-    /// 한컴 자동 생성 정수 ID (Footnote / Endnote / Caption / Outline).
-    SystemId(u64),
+    /// 타깃 객체의 [`ObjectId`] (Footnote / Endnote / Caption / Outline).
+    /// 가리키는 타깃의 `inst_id` 와 같은 id 를 공유한다 (ADR-010).
+    Object(ObjectId),
     /// 위 형식 어느쪽으로도 정규화되지 않은 raw 값 — fallback 위조 금지.
     Raw(String),
 }
@@ -80,12 +85,12 @@ impl RefTarget {
     /// Returns the displayable name for this target.
     ///
     /// - `Name(s)` → `s`
-    /// - `SystemId(id)` → `"#{id}"` 형식 (한컴 wire 와 동일)
+    /// - `Object(id)` → `"#{id}"` 형식 (한컴 wire 와 동일)
     /// - `Raw(s)` → `s`
     pub fn as_display(&self) -> String {
         match self {
             Self::Name(s) => s.clone(),
-            Self::SystemId(id) => format!("#{id}"),
+            Self::Object(id) => format!("#{id}"),
             Self::Raw(s) => s.clone(),
         }
     }

@@ -980,14 +980,14 @@ fn encode_control_to_ctrl(
     match ctrl {
         Control::Footnote { inst_id, paragraphs } => Ok(Some(HxCtrl {
             foot_note: Some(HxFootNote {
-                inst_id: *inst_id,
+                inst_id: inst_id.map(hwpforge_core::ObjectId::value),
                 sub_list: encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries)?,
             }),
             ..Default::default()
         })),
         Control::Endnote { inst_id, paragraphs } => Ok(Some(HxCtrl {
             end_note: Some(HxFootNote {
-                inst_id: *inst_id,
+                inst_id: inst_id.map(hwpforge_core::ObjectId::value),
                 sub_list: encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries)?,
             }),
             ..Default::default()
@@ -1117,7 +1117,39 @@ pub(crate) fn build_hx_caption(
     Ok(HxCaption { side, full_sz: 0, width, gap, last_width: parent_width as u32, sub_list })
 }
 
-/// Generates a unique instance ID string via atomic counter.
+/// Generates a unique object-instance ID string for authored shapes that
+/// carry no imported id.
+///
+/// # Id-space layout (E6/M2, ADR-010)
+///
+/// HWPX `id`/`instid`/`fieldid`/`beginIDRef` integers are all read by Hancom
+/// as **signed 32-bit**, so every emitted value must stay below `i32::MAX`
+/// (locked by the `all_field_builders_emit_signed_i32_safe_begin_id` test).
+/// The encoder partitions the positive `i32` range into disjoint bands:
+///
+/// | band base       | purpose                                   |
+/// | --------------- | ----------------------------------------- |
+/// | `1` (this fn)   | authored object `id`/`instid` (sequential)|
+/// | `1_000_000_000` | summary / auto-num field `beginID`        |
+/// | `1_100_000_000` | click-here field `beginID`                |
+/// | `1_200_000_000` | bookmark span `beginID`                   |
+/// | `1_300_000_000` | cross-reference field `beginID`           |
+/// | `1_400_000_000` | path field `beginID`                      |
+/// | `1_500_000_000` | memo field `beginID`                      |
+/// | `1_6xx`–`2_028…` | per-builder `fieldid` UIDs               |
+///
+/// Cross-reference **targets** preserve their imported
+/// [`ObjectId`](hwpforge_core::ObjectId) verbatim (see `picture`/`table`/
+/// `equation`/group/text-art encoders) so the referencer's
+/// `RefTarget::Object` resolves to the same `id`. Only authored targets with
+/// no imported id fall back to this counter, whose small sequential values
+/// are disjoint from every field band above.
+///
+/// > Follow-up (ADR-010): replace this process-global counter with a
+/// > per-encode allocator and move authored object ids into a dedicated
+/// > reserved band. Deferred here because it would change authored-object
+/// > byte output without a fidelity gate requiring it (the convert path
+/// > always preserves imported ids, so it is unaffected).
 ///
 /// Each call returns a monotonically increasing ID, safe for parallel encoding.
 pub(crate) fn generate_instid() -> String {
@@ -1987,7 +2019,10 @@ mod tests {
                 vec![
                     Run::text("Main text", CharShapeIndex::new(0)),
                     Run::control(
-                        Control::Footnote { inst_id: Some(42), paragraphs: vec![footnote_para] },
+                        Control::Footnote {
+                            inst_id: Some(hwpforge_core::ObjectId::new(42)),
+                            paragraphs: vec![footnote_para],
+                        },
                         CharShapeIndex::new(0),
                     ),
                 ],
@@ -2068,7 +2103,10 @@ mod tests {
                 vec![
                     Run::text("Before", CharShapeIndex::new(0)),
                     Run::control(
-                        Control::Footnote { inst_id: Some(7), paragraphs: vec![footnote_para] },
+                        Control::Footnote {
+                            inst_id: Some(hwpforge_core::ObjectId::new(7)),
+                            paragraphs: vec![footnote_para],
+                        },
                         CharShapeIndex::new(1),
                     ),
                 ],
@@ -2092,7 +2130,7 @@ mod tests {
         match &footnote_run.content {
             RunContent::Control(ctrl) => match ctrl.as_ref() {
                 Control::Footnote { inst_id, paragraphs } => {
-                    assert_eq!(*inst_id, Some(7));
+                    assert_eq!(*inst_id, Some(hwpforge_core::ObjectId::new(7)));
                     assert_eq!(paragraphs.len(), 1);
                     assert_eq!(paragraphs[0].runs[0].content.as_text(), Some("Roundtrip note"));
                 }

@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.7.0`
 
+### Changed — BREAKING — cross-ref `inst_id` 누출을 `ObjectId` 로 (E6/M2, ADR-010)
+
+크로스레퍼런스 링크가 두 무관한 정수 필드(타깃 `inst_id: Option<u64/u32>` ↔ 참조자
+`RefTarget::SystemId(u64)`)의 값-우연-일치였던 것을, 공유 newtype
+`hwpforge_core::ObjectId(u64)` 로 묶어 **타입 수준 링크**로 격상 (ADR-010, ADR-005
+supersede). 리팩토링이 링크를 조용히 깨면 byte-diff 로도 안 잡히던 취약성 제거 +
+notes(u32)/shapes(u64) 폭 불일치 해소.
+
+- 신규 public 타입 `hwpforge_core::ObjectId` (`#[serde(transparent)]` → JSON/YAML
+  에서 bare integer).
+- 타깃 `inst_id` 필드 타입 변경 (필드명 **유지**): `Image`/`Table`/
+  `Control::{Equation,Group,TextArt,Footnote,Endnote}` 의 `inst_id` →
+  `Option<ObjectId>`. Footnote/Endnote 는 `u32`→`u64` 승격. 패턴 매칭에서 값을
+  꺼내 쓰면 `ObjectId` 로 받게 됨(`Some(42)` → `Some(ObjectId::new(42))`).
+- `RefTarget::SystemId(u64)` → **`RefTarget::Object(ObjectId)`** (variant 리네임
+  + payload 타입). `FromStr`/Display 출력 wire 문자열(`#<id>`)은 불변.
+- `Control::{footnote,endnote}_with_id` 인자 `u32` → `u64` (정수 리터럴 호출은
+  무변경).
+- **JSON 영향**: 타깃 `inst_id` 값은 정수 그대로(byte-동일). `RefTarget` 직렬화
+  태그가 `"SystemId"` → `"Object"` 로 변경 (CLI to-json/from-json, MCP). wire(HWPX)
+  출력은 전(全) 구간 byte-중립.
+- 와이어 스키마 `HxFootNote.inst_id` `u32`→`u64` (in-range byte-중립, truncation 제거).
+
 ### Fixed — Markdown(GFM) 표 헤더 행 손실 (사용자 흐름 점검)
 
 `convert`(Markdown → HWPX) 에서 GFM 표의 **헤더 행이 통째로 사라지던** data-loss

@@ -43,6 +43,7 @@ use crate::chart::{
     ScatterStyle, StockVariant,
 };
 use crate::error::{CoreError, CoreResult};
+use crate::object_id::ObjectId;
 use crate::paragraph::Paragraph;
 use crate::run::Run;
 
@@ -109,8 +110,9 @@ pub enum Control {
     /// A footnote containing paragraph content.
     /// Maps to HWPX `<hp:ctrl><hp:footNote>`.
     Footnote {
-        /// Instance identifier (unique ID for linking, optional).
-        inst_id: Option<u32>,
+        /// Object identity for cross-ref linking (optional). Shares the
+        /// [`ObjectId`] space with [`RefTarget::Object`](crate::control::RefTarget::Object).
+        inst_id: Option<ObjectId>,
         /// Paragraphs that form the footnote body.
         paragraphs: Vec<Paragraph>,
     },
@@ -118,8 +120,9 @@ pub enum Control {
     /// An endnote containing paragraph content.
     /// Maps to HWPX `<hp:ctrl><hp:endNote>`.
     Endnote {
-        /// Instance identifier (unique ID for linking, optional).
-        inst_id: Option<u32>,
+        /// Object identity for cross-ref linking (optional). Shares the
+        /// [`ObjectId`] space with [`RefTarget::Object`](crate::control::RefTarget::Object).
+        inst_id: Option<ObjectId>,
         /// Paragraphs that form the endnote body.
         paragraphs: Vec<Paragraph>,
     },
@@ -272,7 +275,7 @@ pub enum Control {
         /// HWP5 변환 시 `eqed` CtrlHeader trailer 의 instance ID 가
         /// 채워지고, HWPX encoder 가 `<hp:equation id="...">` attribute
         /// 로 emit. `None` 이면 encoder fallback 허용.
-        inst_id: Option<u64>,
+        inst_id: Option<ObjectId>,
     },
 
     /// An OOXML chart embedded in the document.
@@ -457,7 +460,7 @@ pub enum Control {
         vert_offset: i32,
         /// HWP5 ParaHeader / GSO trailer instance ID, mirrored to the
         /// HWPX `<hp:container instid>` attribute. `None` = not carried.
-        inst_id: Option<u64>,
+        inst_id: Option<ObjectId>,
     },
 
     /// A TextArt (글맵시) decorative warped-text object.
@@ -495,7 +498,7 @@ pub enum Control {
         fill_color: Option<Color>,
         /// HWP5 GSO trailer instance ID, mirrored to HWPX `<hp:textart instid>`.
         /// `None` = not carried.
-        inst_id: Option<u64>,
+        inst_id: Option<ObjectId>,
     },
 
     /// A bookmark marking a named location in the document.
@@ -1079,8 +1082,8 @@ impl Control {
     /// let ctrl = Control::footnote_with_id(1, vec![Paragraph::new(ParaShapeIndex::new(0))]);
     /// assert!(ctrl.is_footnote());
     /// ```
-    pub fn footnote_with_id(inst_id: u32, paragraphs: Vec<Paragraph>) -> Self {
-        Self::Footnote { inst_id: Some(inst_id), paragraphs }
+    pub fn footnote_with_id(inst_id: u64, paragraphs: Vec<Paragraph>) -> Self {
+        Self::Footnote { inst_id: Some(ObjectId::new(inst_id)), paragraphs }
     }
 
     /// Creates an endnote with an explicit instance ID for cross-referencing.
@@ -1098,8 +1101,8 @@ impl Control {
     /// let ctrl = Control::endnote_with_id(2, vec![Paragraph::new(ParaShapeIndex::new(0))]);
     /// assert!(ctrl.is_endnote());
     /// ```
-    pub fn endnote_with_id(inst_id: u32, paragraphs: Vec<Paragraph>) -> Self {
-        Self::Endnote { inst_id: Some(inst_id), paragraphs }
+    pub fn endnote_with_id(inst_id: u64, paragraphs: Vec<Paragraph>) -> Self {
+        Self::Endnote { inst_id: Some(ObjectId::new(inst_id)), paragraphs }
     }
 
     /// Creates an ellipse control with the given bounding box dimensions.
@@ -1826,7 +1829,10 @@ mod tests {
 
     #[test]
     fn endnote_construction() {
-        let ctrl = Control::Endnote { inst_id: Some(123456), paragraphs: vec![simple_paragraph()] };
+        let ctrl = Control::Endnote {
+            inst_id: Some(ObjectId::new(123456)),
+            paragraphs: vec![simple_paragraph()],
+        };
         assert!(ctrl.is_endnote());
         assert!(!ctrl.is_footnote());
         assert!(!ctrl.is_text_box());
@@ -1889,7 +1895,10 @@ mod tests {
 
     #[test]
     fn display_endnote() {
-        let ctrl = Control::Endnote { inst_id: Some(999), paragraphs: vec![simple_paragraph()] };
+        let ctrl = Control::Endnote {
+            inst_id: Some(ObjectId::new(999)),
+            paragraphs: vec![simple_paragraph()],
+        };
         assert_eq!(ctrl.to_string(), "Endnote(1 paragraph)");
     }
 
@@ -1938,7 +1947,10 @@ mod tests {
 
     #[test]
     fn serde_roundtrip_footnote() {
-        let ctrl = Control::Footnote { inst_id: Some(12345), paragraphs: vec![simple_paragraph()] };
+        let ctrl = Control::Footnote {
+            inst_id: Some(ObjectId::new(12345)),
+            paragraphs: vec![simple_paragraph()],
+        };
         let json = serde_json::to_string(&ctrl).unwrap();
         let back: Control = serde_json::from_str(&json).unwrap();
         assert_eq!(ctrl, back);
@@ -2457,7 +2469,7 @@ mod tests {
         assert!(ctrl.is_footnote());
         match ctrl {
             Control::Footnote { inst_id, paragraphs } => {
-                assert_eq!(inst_id, Some(42));
+                assert_eq!(inst_id, Some(ObjectId::new(42)));
                 assert_eq!(paragraphs.len(), 1);
             }
             _ => panic!("expected Footnote"),
@@ -2471,7 +2483,7 @@ mod tests {
         assert!(ctrl.is_endnote());
         match ctrl {
             Control::Endnote { inst_id, paragraphs } => {
-                assert_eq!(inst_id, Some(7));
+                assert_eq!(inst_id, Some(ObjectId::new(7)));
                 assert_eq!(paragraphs.len(), 1);
             }
             _ => panic!("expected Endnote"),
@@ -2487,7 +2499,7 @@ mod tests {
             _ => panic!("expected Footnote"),
         }
         match ctrl_id {
-            Control::Footnote { inst_id, .. } => assert_eq!(inst_id, Some(1)),
+            Control::Footnote { inst_id, .. } => assert_eq!(inst_id, Some(ObjectId::new(1))),
             _ => panic!("expected Footnote"),
         }
     }

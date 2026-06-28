@@ -1583,7 +1583,7 @@ mod tests {
             horz_offset: 0,
             vert_offset: 0,
             fill_color: None,
-            inst_id: Some(40_257_166),
+            inst_id: Some(hwpforge_core::ObjectId::new(40_257_166)),
         };
         let xml = encode_text_art_to_xml(&ta).unwrap();
         assert!(xml.contains("<hp:textart "), "missing textart open: {xml}");

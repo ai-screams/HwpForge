@@ -20,6 +20,7 @@ use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::section::{HeaderFooter, PageBorderFillEntry, PageNumber, Section};
 use hwpforge_core::table::{Table, TableCell, TableMargin, TableRow};
 use hwpforge_core::Control;
+use hwpforge_core::ObjectId;
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
     BookmarkType, CharShapeIndex, HwpUnit, NumberFormatType, PageNumberPosition, ParaShapeIndex,
@@ -491,7 +492,7 @@ impl<'a> ProjectionImageState<'a> {
         // Wave 12p Step 3: HWP5 GSO CtrlHeader trailer instance ID 통과.
         // 한컴 native `<hp:pic id="...">` cross-ref target 과 매칭.
         if image.instance_id != 0 {
-            core_image.inst_id = Some(u64::from(image.instance_id));
+            core_image.inst_id = Some(ObjectId::new(u64::from(image.instance_id)));
         }
         Some(core_image)
     }
@@ -1952,7 +1953,7 @@ fn decode_hwp5_crossref_target(target_raw: &str, ref_type_code: u8) -> RefTarget
     }
     if let Some(rest) = target_raw.strip_prefix('#') {
         if let Ok(id) = rest.parse::<u64>() {
-            return RefTarget::SystemId(id);
+            return RefTarget::Object(ObjectId::new(id));
         }
     }
     RefTarget::Raw(target_raw.to_string())
@@ -2391,7 +2392,7 @@ fn project_group_run(
     if children.is_empty() {
         return None;
     }
-    let inst_id = (group.instance_id != 0).then_some(u64::from(group.instance_id));
+    let inst_id = (group.instance_id != 0).then_some(ObjectId::new(u64::from(group.instance_id)));
     Some(Run::control(
         Control::Group {
             children,
@@ -2505,7 +2506,8 @@ fn project_footnote_run(
     // 한컴 native `<hp:footNote instId="...">` 와 매칭되어 HWPX
     // cross-ref Command `?#<id>` lookup 이 동작. 0 은 unset 의미
     // (Step 1b 의 fallback 값) — None 으로 맵핑.
-    let inst_id = (subtree.instance_id != 0).then_some(subtree.instance_id);
+    let inst_id =
+        (subtree.instance_id != 0).then_some(ObjectId::new(u64::from(subtree.instance_id)));
     Run::control(Control::Footnote { inst_id, paragraphs }, CharShapeIndex::new(0))
 }
 
@@ -2523,7 +2525,8 @@ fn project_endnote_run(
         ImageProjectionContext::Flow,
     );
     // Wave 12p Step 3: 동일 패턴 (`<hp:endNote instId="...">`).
-    let inst_id = (subtree.instance_id != 0).then_some(subtree.instance_id);
+    let inst_id =
+        (subtree.instance_id != 0).then_some(ObjectId::new(u64::from(subtree.instance_id)));
     Run::control(Control::Endnote { inst_id, paragraphs }, CharShapeIndex::new(0))
 }
 
@@ -2553,7 +2556,8 @@ fn project_text_art_run(text_art: &Hwp5TextArtControl, warnings: &mut Vec<Hwp5Wa
     });
     let width = hwp_unit_from_u32(text_art.geometry.width);
     let height = hwp_unit_from_u32(text_art.geometry.height);
-    let inst_id = (text_art.instance_id != 0).then_some(u64::from(text_art.instance_id));
+    let inst_id =
+        (text_art.instance_id != 0).then_some(ObjectId::new(u64::from(text_art.instance_id)));
     let control = Control::TextArt {
         text: ta.text.clone(),
         shape: shape.to_string(),
@@ -2590,7 +2594,7 @@ fn project_equation_run(equation: &Hwp5EquationControl) -> Run {
         }
         // Wave 12p Step 3: `<hp:equation id="...">` cross-ref target.
         if equation.instance_id != 0 {
-            *inst_id = Some(u64::from(equation.instance_id));
+            *inst_id = Some(ObjectId::new(u64::from(equation.instance_id)));
         }
     }
     Run::control(control, CharShapeIndex::new(0))
@@ -2798,7 +2802,7 @@ fn apply_table_projection_metadata(
     // 한컴 native `<hp:tbl id="...">` cross-ref target 과 매칭. 0 은
     // unset (Step 1c-1 fallback).
     if table.instance_id != 0 {
-        core_table.inst_id = Some(u64::from(table.instance_id));
+        core_table.inst_id = Some(ObjectId::new(u64::from(table.instance_id)));
     }
 
     match core_table_page_break(table.page_break) {

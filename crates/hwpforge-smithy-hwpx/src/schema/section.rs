@@ -945,8 +945,12 @@ pub struct HxPageNum {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxFootNote {
     /// Instance identifier (optional, for linking references).
+    ///
+    /// Widened to `u64` in E6/M2 to mirror Core's `Option<ObjectId>` without
+    /// truncation (footnote/endnote ids share the unified id space). In-range
+    /// values serialize byte-identically to the former `u32`.
     #[serde(rename = "@instId", default, skip_serializing_if = "Option::is_none")]
-    pub inst_id: Option<u32>,
+    pub inst_id: Option<u64>,
 
     /// Paragraph content container (required).
     #[serde(rename(serialize = "hp:subList", deserialize = "subList"))]

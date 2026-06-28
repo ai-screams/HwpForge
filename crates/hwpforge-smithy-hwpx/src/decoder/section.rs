@@ -756,7 +756,7 @@ fn decode_footnote(
     let paragraphs = decode_note_paragraphs(hx, depth)?;
     Ok(Some(Run {
         content: RunContent::Control(Box::new(Control::Footnote {
-            inst_id: hx.inst_id,
+            inst_id: hx.inst_id.map(hwpforge_core::ObjectId::new),
             paragraphs,
         })),
         char_shape_id,
@@ -776,7 +776,7 @@ fn decode_endnote(
     let paragraphs = decode_note_paragraphs(hx, depth)?;
     Ok(Some(Run {
         content: RunContent::Control(Box::new(Control::Endnote {
-            inst_id: hx.inst_id,
+            inst_id: hx.inst_id.map(hwpforge_core::ObjectId::new),
             paragraphs,
         })),
         char_shape_id,
@@ -931,7 +931,7 @@ fn decode_field_control(
                 hwpforge_core::control::RefTarget::Name(target_str.clone())
             } else if let Some(rest) = target_str.strip_prefix('#') {
                 if let Ok(id) = rest.parse::<u64>() {
-                    hwpforge_core::control::RefTarget::SystemId(id)
+                    hwpforge_core::control::RefTarget::Object(hwpforge_core::ObjectId::new(id))
                 } else {
                     hwpforge_core::control::RefTarget::Raw(target_str.clone())
                 }
@@ -2170,7 +2170,7 @@ mod tests {
         match &footnote_run.content {
             RunContent::Control(ctrl) => match ctrl.as_ref() {
                 hwpforge_core::Control::Footnote { inst_id, paragraphs } => {
-                    assert_eq!(*inst_id, Some(42));
+                    assert_eq!(*inst_id, Some(hwpforge_core::ObjectId::new(42)));
                     assert_eq!(paragraphs.len(), 1);
                     assert_eq!(paragraphs[0].runs[0].content.as_text(), Some("Footnote body"));
                 }

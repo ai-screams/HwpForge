@@ -27,6 +27,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::caption::Caption;
+use crate::object_id::ObjectId;
 
 /// An image reference within the document.
 ///
@@ -73,7 +74,7 @@ pub struct Image {
     /// encoder 가 `<hp:pic id="...">` attribute 로 emit. `None` 이면
     /// encoder 가 fallback 값 (예: sequential counter) 을 사용해도 됨.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub inst_id: Option<u64>,
+    pub inst_id: Option<ObjectId>,
 }
 
 impl Image {

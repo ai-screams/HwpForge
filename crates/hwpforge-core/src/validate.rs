@@ -486,6 +486,7 @@ fn validate_equation_control(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::object_id::ObjectId;
     use crate::page::PageSettings;
     use crate::paragraph::Paragraph;
     use crate::run::Run;
@@ -836,7 +837,10 @@ mod tests {
 
     #[test]
     fn valid_endnote_accepted() {
-        let ctrl = Control::Endnote { inst_id: Some(999), paragraphs: vec![simple_paragraph()] };
+        let ctrl = Control::Endnote {
+            inst_id: Some(ObjectId::new(999)),
+            paragraphs: vec![simple_paragraph()],
+        };
         let ctrl_run = Run::control(ctrl, CharShapeIndex::new(0));
         let sections = vec![Section::with_paragraphs(
             vec![Paragraph::with_runs(vec![ctrl_run], ParaShapeIndex::new(0))],
