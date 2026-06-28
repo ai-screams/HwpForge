@@ -133,7 +133,6 @@ pub(crate) fn section2_text_formatting() -> Section {
             Run::control(
                 Control::InlinePageNumber {
                     kind: hwpforge_core::control::InlinePageKind::CurrentPage,
-                    raw_flag: 0,
                 },
                 csi(CS_BLUE),
             ),

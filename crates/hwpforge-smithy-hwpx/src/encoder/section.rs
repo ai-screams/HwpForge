@@ -2825,7 +2825,7 @@ mod tests {
     fn field_pagenum_produces_autonum() {
         // Wave 12n: PageNum moved from FieldType::PageNum to Control::InlinePageNumber.
         use hwpforge_core::control::{Control, InlinePageKind};
-        let ctrl = Control::InlinePageNumber { kind: InlinePageKind::CurrentPage, raw_flag: 0 };
+        let ctrl = Control::InlinePageNumber { kind: InlinePageKind::CurrentPage };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
                 vec![Run::control(ctrl, CharShapeIndex::new(0))],
@@ -3033,12 +3033,7 @@ mod tests {
     fn lossy_datecodefield_emits_summary_token() {
         // %dte time-mode → $createtime SUMMERY (lossy; raw_command kept as display).
         use hwpforge_core::control::Control;
-        let ctrl = Control::DateCodeField {
-            raw_command: "T\\:H:mm;0;".to_string(),
-            is_time_mode: true,
-            raw_trailer: [0; 8],
-            display_text: String::new(),
-        };
+        let ctrl = Control::DateCodeField { is_time_mode: true, display_text: String::new() };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
                 vec![Run::control(ctrl, CharShapeIndex::new(0))],
@@ -3143,12 +3138,7 @@ mod tests {
     #[test]
     fn lossy_roundtrip_datecodefield_time_becomes_createdtime() {
         use hwpforge_core::control::Control;
-        let ctrl = Control::DateCodeField {
-            raw_command: "T\\:H:mm;0;".to_string(),
-            is_time_mode: true,
-            raw_trailer: [0; 8],
-            display_text: String::new(),
-        };
+        let ctrl = Control::DateCodeField { is_time_mode: true, display_text: String::new() };
         let decoded = lossy_roundtrip_decode_first_control(ctrl);
         match decoded {
             Control::Field { field_type, .. } => {
@@ -3165,12 +3155,7 @@ mod tests {
     #[test]
     fn lossy_roundtrip_datecodefield_date_becomes_modifiedtime() {
         use hwpforge_core::control::Control;
-        let ctrl = Control::DateCodeField {
-            raw_command: "\\:1년 2월 3일;0;".to_string(),
-            is_time_mode: false,
-            raw_trailer: [0; 8],
-            display_text: String::new(),
-        };
+        let ctrl = Control::DateCodeField { is_time_mode: false, display_text: String::new() };
         let decoded = lossy_roundtrip_decode_first_control(ctrl);
         match decoded {
             Control::Field { field_type, .. } => {
@@ -3253,11 +3238,10 @@ mod tests {
     // numType="TOTAL_PAGE" to the wrong kind), one of these flips
     // before the encoder/decoder ship as a pair.
     //
-    // `raw_flag` values mirror the decoder's hardcoded mapping
-    // (PAGE → 0, TOTAL_PAGE → 0x06 — see decoder/section.rs around
-    // line 423). The encoder discards `raw_flag` on emission, so the
-    // round-trip is lossless only when the input matches what the
-    // decoder fabricates on parse.
+    // The kind ↔ numType mapping (CurrentPage → PAGE, TotalPages →
+    // TOTAL_PAGE) is symmetric across encoder/decoder, so a known kind
+    // round-trips losslessly (the wire flag is no longer part of the
+    // core IR — E6 slice C).
 
     #[test]
     fn roundtrip_summary_author_lossless() {
@@ -3340,7 +3324,7 @@ mod tests {
     #[test]
     fn roundtrip_inline_pagenumber_currentpage_lossless() {
         use hwpforge_core::control::{Control, InlinePageKind};
-        let ctrl = Control::InlinePageNumber { kind: InlinePageKind::CurrentPage, raw_flag: 0 };
+        let ctrl = Control::InlinePageNumber { kind: InlinePageKind::CurrentPage };
         let decoded = lossy_roundtrip_decode_first_control(ctrl.clone());
         assert_eq!(decoded, ctrl, "autoNum PAGE must round-trip lossless");
     }
@@ -3350,9 +3334,9 @@ mod tests {
         // Wave 12n architect review CRITICAL gate: TotalPages must not
         // collapse to CurrentPage in either direction. Encoder emits
         // numType="TOTAL_PAGE"; decoder maps it back to TotalPages
-        // with raw_flag 0x06.
+        // (kind preserved through the autoNum numType attribute).
         use hwpforge_core::control::{Control, InlinePageKind};
-        let ctrl = Control::InlinePageNumber { kind: InlinePageKind::TotalPages, raw_flag: 0x06 };
+        let ctrl = Control::InlinePageNumber { kind: InlinePageKind::TotalPages };
         let decoded = lossy_roundtrip_decode_first_control(ctrl.clone());
         assert_eq!(decoded, ctrl, "autoNum TOTAL_PAGE must round-trip lossless");
     }
@@ -3363,7 +3347,7 @@ mod tests {
         // fabricate an autoNum. Decoder therefore sees no control.
         // If anyone collapses Unknown → CurrentPage, this flips.
         use hwpforge_core::control::{Control, InlinePageKind};
-        let ctrl = Control::InlinePageNumber { kind: InlinePageKind::Unknown, raw_flag: 0 };
+        let ctrl = Control::InlinePageNumber { kind: InlinePageKind::Unknown };
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
                 vec![Run::control(ctrl, CharShapeIndex::new(0))],

@@ -593,10 +593,8 @@ fn section_bookmarks_refs_fields() -> Section {
     };
 
     // Field: PageNumber (쪽번호) — Wave 12n: moved out of Control::Field
-    let field_page = Control::InlinePageNumber {
-        kind: hwpforge_core::control::InlinePageKind::CurrentPage,
-        raw_flag: 0,
-    };
+    let field_page =
+        Control::InlinePageNumber { kind: hwpforge_core::control::InlinePageKind::CurrentPage };
 
     Section::with_paragraphs(
         vec![

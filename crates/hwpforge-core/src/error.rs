@@ -304,42 +304,6 @@ pub enum ValidationError {
         /// The offending token.
         token: String,
     },
-
-    /// `DateCodeField.is_time_mode` does not match the `T` prefix convention
-    /// of the raw command, or the raw command is empty (Wave 12n).
-    #[error("DateCodeField mismatch: is_time_mode={is_time_mode}, raw_command={raw_command:?} (section {section_index}, paragraph {paragraph_index}, run {run_index})")]
-    DateCodeFieldMismatch {
-        /// Zero-based section index.
-        section_index: usize,
-        /// Zero-based paragraph index.
-        paragraph_index: usize,
-        /// Zero-based run index.
-        run_index: usize,
-        /// The claimed time-mode flag.
-        is_time_mode: bool,
-        /// The raw HWP5 command string.
-        raw_command: String,
-    },
-
-    /// `Control::InlinePageNumber` carries a known `kind` whose canonical
-    /// wire `raw_flag` does not match the actual `raw_flag` field. The
-    /// encoder ignores `raw_flag` for known kinds, so a mismatch is silent
-    /// drift that validation must catch (Wave 12n architect review).
-    #[error("InlinePageNumber mismatch: kind {kind} expects raw_flag {expected:#X}, found {actual:#X} (section {section_index}, paragraph {paragraph_index}, run {run_index})")]
-    InlinePageNumberMismatch {
-        /// Zero-based section index.
-        section_index: usize,
-        /// Zero-based paragraph index.
-        paragraph_index: usize,
-        /// Zero-based run index.
-        run_index: usize,
-        /// Display name of the typed kind variant (e.g. `"CurrentPage"`).
-        kind: &'static str,
-        /// The canonical wire flag for the typed kind.
-        expected: u32,
-        /// The actual `raw_flag` value carried by the control.
-        actual: u32,
-    },
 }
 
 // ---------------------------------------------------------------------------
@@ -396,10 +360,8 @@ pub enum CoreErrorCode {
     NonLeadingTableHeaderRow = 2016,
     /// Invalid SUMMERY `$token` (Wave 12n).
     InvalidSummaryToken = 2017,
-    /// `DateCodeField.is_time_mode` ↔ raw command `T`-prefix mismatch (Wave 12n).
-    DateCodeFieldMismatch = 2018,
-    /// `InlinePageNumber.kind` ↔ `raw_flag` mismatch (Wave 12n).
-    InlinePageNumberMismatch = 2019,
+    // 2018 (was DateCodeFieldMismatch) and 2019 (was InlinePageNumberMismatch)
+    // are retired (E6 slice C); the gap is intentional — do NOT renumber.
     /// A Group control has a non-shape child.
     InvalidGroupChild = 2020,
     /// Invalid document structure.
@@ -435,8 +397,6 @@ impl ValidationError {
             Self::MismatchedSeriesLengths { .. } => CoreErrorCode::MismatchedSeriesLengths,
             Self::EmptyEquation { .. } => CoreErrorCode::EmptyEquation,
             Self::InvalidSummaryToken { .. } => CoreErrorCode::InvalidSummaryToken,
-            Self::DateCodeFieldMismatch { .. } => CoreErrorCode::DateCodeFieldMismatch,
-            Self::InlinePageNumberMismatch { .. } => CoreErrorCode::InlinePageNumberMismatch,
         }
     }
 }

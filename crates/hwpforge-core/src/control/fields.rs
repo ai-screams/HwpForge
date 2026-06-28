@@ -108,29 +108,7 @@ pub enum InlinePageKind {
     CurrentPage,
     /// Flag `0x06` — total page count.
     TotalPages,
-    /// Any other flag value, carried verbatim via
-    /// [`Control::InlinePageNumber::raw_flag`].
+    /// Any other flag value, surfaced when the HWP5 wire flag is neither
+    /// `0x00` nor `0x06`.
     Unknown,
-}
-
-impl InlinePageKind {
-    /// Returns the canonical raw flag value for typed variants.
-    /// For [`Self::Unknown`], callers must use the
-    /// [`Control::InlinePageNumber::raw_flag`] field directly.
-    pub fn raw_flag(self) -> Option<u32> {
-        match self {
-            Self::CurrentPage => Some(0x00),
-            Self::TotalPages => Some(0x06),
-            Self::Unknown => None,
-        }
-    }
-
-    /// Maps an observed raw flag value to a typed variant.
-    pub fn from_raw_flag(flag: u32) -> Self {
-        match flag {
-            0x00 => Self::CurrentPage,
-            0x06 => Self::TotalPages,
-            _ => Self::Unknown,
-        }
-    }
 }

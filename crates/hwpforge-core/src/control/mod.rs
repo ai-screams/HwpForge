@@ -634,19 +634,13 @@ pub enum Control {
     /// `입력 → 날짜/시간/파일 이름 → 날짜/시간 코드` menu. Unlike SUMMERY
     /// (which carries semantic tokens like `$createtime`), `%dte` carries
     /// a raw format pattern string (e.g. `"\:1년 2월 3일 (6);0;"` for date,
-    /// `"T\:;0;"` for time-only). The grammar is under-measured so the
-    /// raw command is preserved verbatim; `is_time_mode` is a derived
-    /// helper based on the `T` prefix.
+    /// `"T\:;0;"` for time-only). The HWP5 wire format pattern is
+    /// smithy-internal; the format-agnostic core retains only the derived
+    /// `is_time_mode` helper (was based on the `T` prefix at projection time).
     DateCodeField {
-        /// Full Command string from the wire, including the `T` prefix
-        /// for time mode and the `\:format;options;` body.
-        raw_command: String,
-        /// Helper view: `true` when [`Self::DateCodeField::raw_command`]
-        /// starts with `T` (time-only format).
+        /// Helper view: `true` for a time-only (`T`-prefixed) format,
+        /// `false` for a date format. Derived at HWP5 projection time.
         is_time_mode: bool,
-        /// Opaque 8-byte trailer (instance ID + flags) carried for
-        /// round-trip fidelity. The semantics are not pinned down.
-        raw_trailer: [u8; 8],
         /// Cached resolved value rendered between `fieldBegin`/`fieldEnd`
         /// (the locale-formatted date/time string). Same semantics as
         /// [`Self::Field::display_text`]; empty = none.
@@ -678,12 +672,11 @@ pub enum Control {
     /// `<hp:autoNum>` inside a `<hp:run>`.
     ///
     /// The 16-byte wire envelope carries a single 4-byte flag that
-    /// distinguishes current-page from total-pages.
+    /// distinguishes current-page from total-pages; the HWP5 projection
+    /// maps it to [`InlinePageKind`].
     InlinePageNumber {
         /// Typed variant of the observed `flag` byte.
         kind: InlinePageKind,
-        /// Raw `flag` bytes (LE u32) carried for unknown values.
-        raw_flag: u32,
     },
 
     /// An unrecognized control element preserved for round-trip fidelity.
@@ -1690,19 +1683,17 @@ impl std::fmt::Display for Control {
             Self::UnknownSummary { token, .. } => {
                 write!(f, "UnknownSummary({token})")
             }
-            Self::DateCodeField { raw_command, is_time_mode, .. } => {
+            Self::DateCodeField { is_time_mode, .. } => {
                 let mode = if *is_time_mode { "time" } else { "date" };
-                write!(f, "DateCodeField({mode}, \"{raw_command}\")")
+                write!(f, "DateCodeField({mode})")
             }
             Self::PathField { command, .. } => {
                 write!(f, "PathField({})", command.wire_command())
             }
-            Self::InlinePageNumber { kind, raw_flag } => match kind {
+            Self::InlinePageNumber { kind } => match kind {
                 InlinePageKind::CurrentPage => write!(f, "InlinePageNumber(current)"),
                 InlinePageKind::TotalPages => write!(f, "InlinePageNumber(total)"),
-                InlinePageKind::Unknown => {
-                    write!(f, "InlinePageNumber(unknown, raw=0x{raw_flag:08X})")
-                }
+                InlinePageKind::Unknown => write!(f, "InlinePageNumber(unknown)"),
             },
             Self::Unknown { tag, .. } => {
                 write!(f, "Unknown({tag})")

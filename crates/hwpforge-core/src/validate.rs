@@ -241,13 +241,9 @@ fn validate_control_run(
         // Wave 12n: targeted invariant checks for new variants. Architect review
         // medium: do not let new variants slide through with a blanket `Ok(())`.
         Control::UnknownSummary { token, .. } => validate_unknown_summary(token, ctx),
-        Control::DateCodeField { raw_command, is_time_mode, .. } => {
-            validate_date_code_field(raw_command, *is_time_mode, ctx)
-        }
-        Control::InlinePageNumber { kind, raw_flag } => {
-            validate_inline_page_number(*kind, *raw_flag, ctx)
-        }
-        Control::PathField { .. } => Ok(()),
+        Control::DateCodeField { .. }
+        | Control::InlinePageNumber { .. }
+        | Control::PathField { .. } => Ok(()),
         // Group (묶음 객체): recursively validate each child (nested groups +
         // per-child dimension/empty checks at the same chokepoint). Only
         // shape-family controls are legitimate children; non-shape variants
@@ -304,54 +300,6 @@ fn validate_unknown_summary(token: &str, ctx: RunValidationContext) -> Result<()
         })
     } else {
         Ok(())
-    }
-}
-
-/// Rejects a `DateCodeField` whose `is_time_mode` claim contradicts the
-/// `T`-prefix convention of the raw command (Wave 12n architect review:
-/// keep the derived helper and the raw bytes from drifting apart).
-fn validate_date_code_field(
-    raw_command: &str,
-    is_time_mode: bool,
-    ctx: RunValidationContext,
-) -> Result<(), ValidationError> {
-    if raw_command.is_empty() || is_time_mode != raw_command.starts_with('T') {
-        Err(ValidationError::DateCodeFieldMismatch {
-            section_index: ctx.section_index,
-            paragraph_index: ctx.paragraph_index,
-            run_index: ctx.run_index,
-            is_time_mode,
-            raw_command: raw_command.to_string(),
-        })
-    } else {
-        Ok(())
-    }
-}
-
-/// Rejects an `InlinePageNumber` whose typed `kind` has a canonical
-/// `raw_flag` that does not match the actual `raw_flag` field
-/// (Wave 12n architect review: the encoder ignores `raw_flag` for known
-/// kinds, so a mismatch is silent drift).
-fn validate_inline_page_number(
-    kind: crate::control::InlinePageKind,
-    raw_flag: u32,
-    ctx: RunValidationContext,
-) -> Result<(), ValidationError> {
-    use crate::control::InlinePageKind;
-    match kind.raw_flag() {
-        Some(expected) if expected != raw_flag => Err(ValidationError::InlinePageNumberMismatch {
-            section_index: ctx.section_index,
-            paragraph_index: ctx.paragraph_index,
-            run_index: ctx.run_index,
-            kind: match kind {
-                InlinePageKind::CurrentPage => "CurrentPage",
-                InlinePageKind::TotalPages => "TotalPages",
-                InlinePageKind::Unknown => "Unknown",
-            },
-            expected,
-            actual: raw_flag,
-        }),
-        _ => Ok(()),
     }
 }
 
