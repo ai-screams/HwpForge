@@ -510,7 +510,7 @@ pub(super) fn crossref_target_for_command(
     use hwpforge_core::control::RefTarget;
     match target {
         RefTarget::Name(name) => name.clone(),
-        RefTarget::SystemId(id) => format!("#{id}"),
+        RefTarget::Object(id) => format!("#{id}"),
         RefTarget::Raw(raw) => {
             // Heuristic: Bookmark refs treat raw as a name; others treat
             // it as a pre-formatted `#<id>` style token. Preserves the

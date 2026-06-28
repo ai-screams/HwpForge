@@ -21,6 +21,7 @@ use hwpforge_core::image::{Image, ImageFormat, ImageStore};
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::Run;
 use hwpforge_core::section::Section;
+use hwpforge_core::ObjectId;
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex, RefContentType, RefType};
 use hwpforge_smithy_hwpx::style_store::HwpxStyleStore;
@@ -44,7 +45,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         HwpUnit::from_mm(45.0).unwrap(),
         ImageFormat::Png,
     );
-    img.inst_id = Some(FIGURE_INST_ID);
+    img.inst_id = Some(ObjectId::new(FIGURE_INST_ID));
     img.caption = Some(Caption::new(
         vec![Paragraph::with_runs(
             vec![Run::text(
@@ -69,7 +70,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // cross-ref Command targeting that same inst_id.
     let xref = Control::CrossRef {
-        target: RefTarget::SystemId(FIGURE_INST_ID),
+        target: RefTarget::Object(ObjectId::new(FIGURE_INST_ID)),
         ref_type: RefType::Figure,
         content_type: RefContentType::Number,
         as_hyperlink: false,

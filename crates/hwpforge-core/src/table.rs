@@ -40,6 +40,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::caption::Caption;
+use crate::object_id::ObjectId;
 use crate::paragraph::Paragraph;
 
 /// Page-break policy for a table.
@@ -132,7 +133,7 @@ pub struct Table {
     /// HWPX encoder 가 `<hp:tbl id="...">` attribute 로 emit. `None`
     /// 이면 encoder 가 fallback 값 (예: sequential counter) 사용 허용.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub inst_id: Option<u64>,
+    pub inst_id: Option<ObjectId>,
 }
 
 impl Table {

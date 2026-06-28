@@ -2515,6 +2515,103 @@ fn hwp5_to_hwpx_crossref_target_id_matches_referencer_systemid() {
     );
 }
 
+/// IR-level companion to the XML link test above: after HWP5 → Core
+/// projection, every cross-reference whose target is a `RefTarget::Object(id)`
+/// must point at a target object (image/table/equation/…) carrying the **same**
+/// [`ObjectId`](hwpforge_core::ObjectId) in its `inst_id`. E6/M2 (ADR-010) made
+/// this link a *type-level* invariant; this test locks that projection actually
+/// produces matching `ObjectId`s — something the string-level XML test cannot
+/// see, since before M2 the two sides were unrelated integer fields that merely
+/// happened to agree.
+#[test]
+fn hwp5_to_core_crossref_referencer_object_id_matches_a_target_inst_id() {
+    use hwpforge_core::control::RefTarget;
+    use hwpforge_core::object_id::ObjectId;
+    use hwpforge_core::run::RunContent;
+    use std::collections::HashSet;
+
+    fn collect(
+        paragraphs: &[Paragraph],
+        targets: &mut HashSet<ObjectId>,
+        referencers: &mut Vec<ObjectId>,
+    ) {
+        for para in paragraphs {
+            for run in &para.runs {
+                match &run.content {
+                    RunContent::Image(img) => {
+                        if let Some(id) = img.inst_id {
+                            targets.insert(id);
+                        }
+                    }
+                    RunContent::Table(t) => {
+                        if let Some(id) = t.inst_id {
+                            targets.insert(id);
+                        }
+                    }
+                    RunContent::Control(ctrl) => match ctrl.as_ref() {
+                        Control::Equation { inst_id, .. }
+                        | Control::Group { inst_id, .. }
+                        | Control::TextArt { inst_id, .. }
+                        | Control::Footnote { inst_id, .. }
+                        | Control::Endnote { inst_id, .. } => {
+                            if let Some(id) = inst_id {
+                                targets.insert(*id);
+                            }
+                        }
+                        Control::CrossRef { target: RefTarget::Object(id), .. } => {
+                            referencers.push(*id);
+                        }
+                        _ => {}
+                    },
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    let fixtures = [
+        "hwp5/crossref/sample-figure-caption-4-refs.hwp",
+        "hwp5/crossref/sample-table-caption-4-refs.hwp",
+        "hwp5/crossref/sample-eq-caption-4-refs.hwp",
+    ];
+    let mut seen_any = false;
+    for relative in fixtures {
+        let source = fixture_path(relative);
+        if !source.exists() {
+            continue;
+        }
+        seen_any = true;
+        let bytes = std::fs::read(&source).expect("fixture readable");
+        let decoded = hwpforge_smithy_hwp5::decode_hwp5_to_core(&bytes)
+            .unwrap_or_else(|e| panic!("{relative}: decode_hwp5_to_core failed: {e:?}"));
+
+        let mut targets = HashSet::new();
+        let mut referencers = Vec::new();
+        for section in decoded.document.sections() {
+            collect(&section.paragraphs, &mut targets, &mut referencers);
+            for header in &section.headers {
+                collect(&header.paragraphs, &mut targets, &mut referencers);
+            }
+            for footer in &section.footers {
+                collect(&footer.paragraphs, &mut targets, &mut referencers);
+            }
+        }
+
+        assert!(
+            !referencers.is_empty(),
+            "{relative}: expected at least one CrossRef with RefTarget::Object after projection",
+        );
+        for oid in &referencers {
+            assert!(
+                targets.contains(oid),
+                "{relative}: cross-ref references ObjectId {oid:?} but no target object carries \
+                 inst_id == Some({oid:?}) — type-level link broken. targets={targets:?}",
+            );
+        }
+    }
+    assert!(seen_any, "expected at least one crossref fixture present");
+}
+
 #[test]
 fn hwp5_to_hwpx_user_sample_page_number_preserves_section_page_number() {
     let source = fixture_path("user_samples/sample-field-page-number-basic.hwp");

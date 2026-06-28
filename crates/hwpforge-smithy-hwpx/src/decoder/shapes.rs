@@ -557,7 +557,8 @@ pub(crate) fn decode_textart(
         })
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
     let (horz_offset, vert_offset) = text_art.offset.as_ref().map(|o| (o.x, o.y)).unwrap_or((0, 0));
-    let inst_id = text_art.instid.parse::<u64>().ok().filter(|v| *v != 0);
+    let inst_id =
+        text_art.instid.parse::<u64>().ok().filter(|v| *v != 0).map(hwpforge_core::ObjectId::new);
     let pr = text_art.textart_pr.clone().unwrap_or_default();
     let line_spacing = u32::try_from(pr.line_spacing).unwrap_or(0);
     let char_spacing = u32::try_from(pr.char_spacing).unwrap_or(0);
@@ -723,7 +724,8 @@ pub(crate) fn decode_container(
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
     let (horz_offset, vert_offset) =
         container.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
-    let inst_id = container.instid.parse::<u64>().ok().filter(|&v| v != 0);
+    let inst_id =
+        container.instid.parse::<u64>().ok().filter(|&v| v != 0).map(hwpforge_core::ObjectId::new);
 
     Ok(Some(Run {
         content: RunContent::Control(Box::new(Control::Group {

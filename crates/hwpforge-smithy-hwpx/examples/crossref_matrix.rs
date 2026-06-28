@@ -18,6 +18,7 @@ use hwpforge_core::image::ImageStore;
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::Run;
 use hwpforge_core::section::Section;
+use hwpforge_core::ObjectId;
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex, RefContentType, RefType};
 use hwpforge_smithy_hwpx::style_store::HwpxStyleStore;
@@ -66,7 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "footnote-page",
             RefType::Footnote,
             RefContentType::Page,
-            RefTarget::SystemId(1),
+            RefTarget::Object(ObjectId::new(1)),
             false,
             "1",
         ),
@@ -74,16 +75,23 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "footnote-number",
             RefType::Footnote,
             RefContentType::Number,
-            RefTarget::SystemId(1),
+            RefTarget::Object(ObjectId::new(1)),
             false,
             "1",
         ),
-        ("figure-page", RefType::Figure, RefContentType::Page, RefTarget::SystemId(1), false, "1"),
+        (
+            "figure-page",
+            RefType::Figure,
+            RefContentType::Page,
+            RefTarget::Object(ObjectId::new(1)),
+            false,
+            "1",
+        ),
         (
             "table-number",
             RefType::Table,
             RefContentType::Number,
-            RefTarget::SystemId(1),
+            RefTarget::Object(ObjectId::new(1)),
             false,
             "1",
         ),
