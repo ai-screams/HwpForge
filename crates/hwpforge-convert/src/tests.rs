@@ -2443,6 +2443,78 @@ fn hwp5_to_hwpx_crossref_12_fixture_matrix_emits_typed_control_and_canonical_wir
     );
 }
 
+/// E6 slice M2 SAFETY NET (ADR-010 prerequisite, non-breaking): locks the
+/// currently-unverified cross-reference LINK INVARIANT — a reference target's
+/// emitted element `id` MUST equal the referencer's `?#<id>` in the CROSSREF
+/// Command/RefPath. Today both values come from the same Hancom session
+/// counter by coincidence; no Core constraint forces them equal. The upcoming
+/// `ObjectId` refactor (ADR-010) must not let them diverge — a divergence is
+/// otherwise byte-invisible (F9 refresh / Ctrl+click jump silently break while
+/// the file still parses and validates). This test fails loudly on divergence.
+///
+/// Footnote/Endnote targets are intentionally excluded: ADR-005 documents that
+/// their binary CtrlHeaders carry no id (trailer == 0), so the target emits no
+/// `id` and the Hancom-side link is `?` — out of scope until that gap is fixed.
+#[test]
+fn hwp5_to_hwpx_crossref_target_id_matches_referencer_systemid() {
+    // (fixture, target element tag carrying the `id` attribute the cross-ref
+    //  references). figure -> <hp:pic>, table -> <hp:tbl>, eq -> <hp:equation>.
+    let cases: &[(&str, &str)] = &[
+        ("hwp5/crossref/sample-figure-caption-4-refs.hwp", "hp:pic"),
+        ("hwp5/crossref/sample-table-caption-4-refs.hwp", "hp:tbl"),
+        ("hwp5/crossref/sample-eq-caption-4-refs.hwp", "hp:equation"),
+    ];
+
+    let mut seen_any = false;
+    for (relative, target_elem) in cases {
+        let source = fixture_path(relative);
+        if !source.exists() {
+            continue;
+        }
+        seen_any = true;
+
+        let stem =
+            source.file_stem().and_then(|s| s.to_str()).expect("fixture path must have a stem");
+        let out = unique_temp_path(&format!("crossref-link-{stem}.hwpx"));
+        let warnings = hwp5_to_hwpx(&source, &out)
+            .unwrap_or_else(|err| panic!("conversion failed for {relative}: {err:?}"));
+        assert!(warnings.is_empty(), "{relative} should convert without warnings: {warnings:?}");
+
+        let section_xml = read_section_xml(&out, 0);
+
+        // Referencer id: the `?#<digits>;` inside a CROSSREF RefPath param.
+        let needle = "name=\"RefPath\">?#";
+        let ref_id = section_xml
+            .split_once(needle)
+            .and_then(|(_, rest)| rest.split(';').next())
+            .map(str::trim)
+            .unwrap_or_else(|| {
+                panic!("{relative}: no CROSSREF RefPath `?#<id>` found\nbody: {section_xml}")
+            });
+        assert!(
+            !ref_id.is_empty() && ref_id.bytes().all(|b| b.is_ascii_digit()),
+            "{relative}: referencer id must be a non-empty numeric, got {ref_id:?}",
+        );
+        assert_ne!(ref_id, "0", "{relative}: referencer id must be non-zero");
+
+        // The TARGET element must carry the SAME id — this is the link.
+        let target_attr = format!("<{target_elem} id=\"{ref_id}\"");
+        assert!(
+            section_xml.contains(&target_attr),
+            "{relative}: cross-ref link BROKEN — referencer points at #{ref_id} but no \
+             `{target_elem}` with id=\"{ref_id}\" was emitted (target<->referencer id divergence)",
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+
+    assert!(
+        seen_any,
+        "expected at least one of the figure/table/eq crossref fixtures under \
+             tests/fixtures/hwp5/crossref/; got none",
+    );
+}
+
 #[test]
 fn hwp5_to_hwpx_user_sample_page_number_preserves_section_page_number() {
     let source = fixture_path("user_samples/sample-field-page-number-basic.hwp");
