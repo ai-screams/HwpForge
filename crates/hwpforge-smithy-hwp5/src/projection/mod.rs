@@ -9,7 +9,7 @@ mod text;
 
 use std::collections::{BTreeSet, VecDeque};
 
-use hwpforge_core::column::ColumnSettings;
+use hwpforge_core::column::{ColumnLine, ColumnSettings};
 use hwpforge_core::control::RefTarget;
 use hwpforge_core::document::{Document, Draft};
 use hwpforge_core::image::{
@@ -23,8 +23,8 @@ use hwpforge_core::Control;
 use hwpforge_core::ObjectId;
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
-    BookmarkType, CharShapeIndex, HwpUnit, NumberFormatType, PageNumberPosition, ParaShapeIndex,
-    RefContentType, RefType, StyleIndex, VerticalAlign,
+    BookmarkType, BorderLineType, CharShapeIndex, Color, HwpUnit, NumberFormatType,
+    PageNumberPosition, ParaShapeIndex, RefContentType, RefType, StyleIndex, VerticalAlign,
 };
 
 use crate::ctrl_ids::{
@@ -327,7 +327,19 @@ fn project_to_core_internal(
                     u32::from(col.col_count),
                     HwpUnit::new(i32::from(col.gap)).unwrap_or(HwpUnit::ZERO),
                 ) {
-                    Ok(cs) => section.column_settings = Some(cs),
+                    Ok(mut cs) => {
+                        if let Some(b) = col.border {
+                            if b.kind != 0 {
+                                cs = cs.with_separator(ColumnLine {
+                                    line_type: hwp5_col_border_kind_to_line_type(b.kind),
+                                    width: HwpUnit::from_mm(hwp5_border_width_mm(b.width))
+                                        .unwrap_or(HwpUnit::ZERO),
+                                    color: colorref_to_color(b.color),
+                                });
+                            }
+                        }
+                        section.column_settings = Some(cs);
+                    }
                     Err(_) => projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
                         subject: "column_def",
                         reason: format!("invalid column count {}", col.col_count),
@@ -1929,6 +1941,42 @@ fn decode_hwp5_crossref_ref_type(code: u8) -> RefType {
 /// emit), N2=2 는 "책갈피 이름" (OBJECT_TYPE_CONTENTS emit). spec 외
 /// 의미이지만 native wire 와 일치.
 ///
+/// Maps the HWP5 `cold` Border-line kind code to a Core [`BorderLineType`].
+///
+/// Codes follow 한글's real encoding (same table as
+/// `schema::border_fill::Hwp5BorderLineKind`): `0=없음`, `1=실선`, `2=점선`,
+/// `8=이중선`. Codes with no direct Core equivalent fall back to `Solid`.
+/// Verified against the native `cold` ctrl in `nativ-colline.hwpx` (kind 8 →
+/// `DOUBLE_SLIM`).
+fn hwp5_col_border_kind_to_line_type(code: u8) -> BorderLineType {
+    match code {
+        0 => BorderLineType::None,
+        1 => BorderLineType::Solid,
+        2 => BorderLineType::Dot,
+        3 => BorderLineType::Dash,
+        4 => BorderLineType::DashDot,
+        5 => BorderLineType::DashDotDot,
+        6 => BorderLineType::LongDash,
+        8 => BorderLineType::DoubleSlim,
+        _ => BorderLineType::Solid,
+    }
+}
+
+/// Maps a HWP5 border-width index to millimetres (한글's 16-step table).
+///
+/// Verified: index `9` → `0.7 mm` (native `nativ-colline.hwpx`). Out-of-range
+/// indices fall back to the OWPML default `0.12 mm`.
+fn hwp5_border_width_mm(index: u8) -> f64 {
+    const WIDTHS_MM: [f64; 16] =
+        [0.1, 0.12, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5, 0.6, 0.7, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0];
+    WIDTHS_MM.get(index as usize).copied().unwrap_or(0.12)
+}
+
+/// Converts a HWP5 `COLORREF` (`0x00BBGGRR`) to a Core [`Color`].
+fn colorref_to_color(c: u32) -> Color {
+    Color::from_rgb((c & 0xFF) as u8, ((c >> 8) & 0xFF) as u8, ((c >> 16) & 0xFF) as u8)
+}
+
 /// ¹ E6 슬라이스 B (2026-06-28): Bookmark N2=2 = "책갈피 이름" 은
 /// `Contents` variant 로 carry (이전 분리됐던 `BookmarkName` 흡수).
 /// wire(N2=2)·Display(`OBJECT_TYPE_CONTENTS`) 가 caption-content 와

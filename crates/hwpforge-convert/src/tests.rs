@@ -3818,3 +3818,29 @@ mod lib_unit_tests {
         );
     }
 }
+
+#[test]
+fn hwp5_to_hwpx_carries_column_separator_line() {
+    // Native 2-column .hwp with a divider line. Verifies the `cold` ctrl Border
+    // bytes carry through to a byte-exact `<hp:colLine>` matching the
+    // Hancom-native HWPX (type=DOUBLE_SLIM, width=0.7 mm, color=#CA56A7).
+    let source = fixture_path("layout/colline.hwp");
+    if !source.exists() {
+        return;
+    }
+    let out = unique_temp_path("colline.hwpx");
+    let warnings = hwp5_to_hwpx(&source, &out).expect("colline conversion should succeed");
+    assert!(warnings.is_empty(), "colline convert should be clean: {warnings:?}");
+
+    let section_xml = read_section_xml(&out, 0);
+    assert!(
+        section_xml
+            .contains(r##"<hp:colLine type="DOUBLE_SLIM" width="0.7 mm" color="#CA56A7"/>"##),
+        "cold Border must carry to byte-exact colLine; got: {}",
+        section_xml
+            .split_once("<hp:colPr")
+            .map(|(_, r)| &r[..r.find("</hp:colPr>").unwrap_or(120).min(r.len())])
+            .unwrap_or("<no colPr>")
+    );
+    let _ = std::fs::remove_file(&out);
+}

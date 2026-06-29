@@ -1605,10 +1605,34 @@ impl BodyTextParserState {
             // an additional capture for projection-level `ColumnSettings`.
             if ctrl_id == CTRL_ID_COLUMN_DEF && self.column_def.is_none() && record.data.len() >= 8
             {
-                let property = u16::from_le_bytes([record.data[4], record.data[5]]);
-                let gap = u16::from_le_bytes([record.data[6], record.data[7]]);
-                self.column_def =
-                    Some(Hwp5ColumnDef { col_count: ((property >> 2) & 0xFF) as u8, gap });
+                let data = &record.data;
+                let property = u16::from_le_bytes([data[4], data[5]]);
+                let gap = u16::from_le_bytes([data[6], data[7]]);
+                let col_count = ((property >> 2) & 0xFF) as u8;
+                let same_width = (property >> 12) & 1 == 1;
+                // Layout after gap: per-column widths (count×u16, only when
+                // !same_width) → u16 reserved → Border(6B): kind u8, width u8,
+                // color u32 (COLORREF). See HWP5_WIRE_SPEC §6.3.
+                let mut off = 8usize;
+                if !same_width {
+                    off += col_count as usize * 2;
+                }
+                off += 2; // reserved word
+                let border = if data.len() >= off + 6 {
+                    Some(Hwp5ColumnBorder {
+                        kind: data[off],
+                        width: data[off + 1],
+                        color: u32::from_le_bytes([
+                            data[off + 2],
+                            data[off + 3],
+                            data[off + 4],
+                            data[off + 5],
+                        ]),
+                    })
+                } else {
+                    None
+                };
+                self.column_def = Some(Hwp5ColumnDef { col_count, gap, border });
             }
             buf.controls.push(Hwp5Control::Unknown { ctrl_id, header_data: record.data.clone() });
         }

@@ -174,8 +174,15 @@ multi-column (다단) layout. Payload after the 4-byte ctrl_id:
           bits 0-1  : column type (0 = 일반다단/NEWSPAPER)
           bits 2-9  : column count
           bits 10-11: direction
+          bit 12    : same_width (1 = equal widths, no per-column list)
 [6..8]  u16 column gap (HWPUNIT)
-rest    0 when sameSz (equal widths) — 한글 computes per-column widths
+        count×u16 per-column widths — only when same_width == 0
+[+2]    u16 reserved (spec-undefined; hahnlee)
+[+0]    Border (구분선, 6 bytes):
+          [0]    u8  line kind (Hwp5BorderLineKind code; 0=없음, 1=실선,
+                                 2=점선, 8=이중선)
+          [1]    u8  width index (한글 16-step table; 9 = 0.7 mm)
+          [2..6] u32 color (COLORREF 0x00BBGGRR)
 ```
 
 Single-column sections still emit a `cold` ctrl with count 1; HwpForge
@@ -183,8 +190,17 @@ only carries `col_count >= 2` into `Section.column_settings`
 (`ColumnSettings::equal_columns`). The encoder's `build_col_pr_xml`
 emits `<hp:colPr colCount=N sameSz="1" sameGap=...>`. Verified
 byte-identical to a native 2-column fixture (`colCount="2"
-sameGap="2268"`). Source: `decoder/section.rs::Hwp5ColumnDef` +
-`projection.rs` section loop.
+sameGap="2268"`).
+
+The Border block carries the **column separator line** (`<hp:colLine>`).
+Projection maps `kind → BorderLineType`, `width index → mm`, and
+`COLORREF → Color` into `ColumnSettings.col_line` (a `ColumnLine`).
+Verified byte-identical against the native `colline.hwp` fixture: cold
+bytes `… 08 09 CA 56 A7 00` → `<hp:colLine type="DOUBLE_SLIM"
+width="0.7 mm" color="#CA56A7"/>`. Source: `decoder/section/mod.rs`
+(`Hwp5ColumnDef` + `Hwp5ColumnBorder`) + `projection/mod.rs` section loop
+(`hwp5_col_border_kind_to_line_type` / `hwp5_border_width_mm` /
+`colorref_to_color`).
 
 ---
 

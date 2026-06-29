@@ -567,6 +567,24 @@ pub(crate) struct Hwp5ColumnDef {
     pub col_count: u8,
     /// Gap between columns in HWPUNIT.
     pub gap: u16,
+    /// Raw column-separator line (`<hp:colLine>`), if present. Projection
+    /// maps it to `ColumnSettings.col_line`.
+    pub border: Option<Hwp5ColumnBorder>,
+}
+
+/// Raw column-separator line bytes from the `cold` ctrl Border block.
+///
+/// Wire (6 bytes): `[0]` u8 kind ([`Hwp5BorderLineKind`] code), `[1]` u8 width
+/// (HWP5 border-width index), `[2..6]` u32 color (COLORREF). Projection
+/// converts these to a typed `ColumnLine`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Hwp5ColumnBorder {
+    /// Border-line kind code.
+    pub kind: u8,
+    /// Border-width index.
+    pub width: u8,
+    /// Line color as a raw `COLORREF` (`0x00BBGGRR`).
+    pub color: u32,
 }
 
 /// A decoded `HWPTAG_PAGE_BORDER_FILL` (0x4B) record.
