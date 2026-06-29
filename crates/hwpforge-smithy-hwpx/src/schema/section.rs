@@ -865,6 +865,23 @@ pub struct HxIndexMark {
     pub second_key: Option<String>,
 }
 
+/// `<hp:colLine>` — separator line between columns (child of `<hp:colPr>`).
+///
+/// Mirrors `HxBorderLine`: all attributes are wire strings (`type`, `width`
+/// in millimetres e.g. `"0.7 mm"`, `color` e.g. `"#3A3C84"`).
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxColLine {
+    /// Line type string (e.g. `"SOLID"`, `"DOUBLE_SLIM"`).
+    #[serde(rename = "@type", default)]
+    pub line_type: String,
+    /// Width string in millimetres (e.g. `"0.7 mm"`).
+    #[serde(rename = "@width", default)]
+    pub width: String,
+    /// Color string (e.g. `"#3A3C84"`).
+    #[serde(rename = "@color", default)]
+    pub color: String,
+}
+
 /// `<hp:colPr>` — column properties element.
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxColPr {
@@ -886,6 +903,15 @@ pub struct HxColPr {
     /// Gap between columns in HWPUNIT (only when sameSz=1).
     #[serde(rename = "@sameGap", default, deserialize_with = "deser_i32_or_u32")]
     pub same_gap: i32,
+
+    /// Optional separator line drawn between columns (`<hp:colLine>`).
+    /// OWPML orders `colLine` before `colSz`/`<hp:col>` children.
+    #[serde(
+        rename(serialize = "hp:colLine", deserialize = "colLine"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub col_line: Option<HxColLine>,
 
     /// Individual column definitions (only when sameSz=0).
     #[serde(

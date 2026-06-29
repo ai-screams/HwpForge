@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] — targeted as `0.7.0`
 
+### Added — 다단 구분선 `colLine` carry (BREAKING)
+
+다단(`ColumnSettings`)에 단 사이 구분선(`<hp:colLine>`)을 carry. 한컴 native wire
+(`type="DOUBLE_SLIM" width="0.7 mm" color="#CA56A7"`)를 byte-exact 재현 + HWPX 양방향
+round-trip + 한컴 시각 게이트(2단+구분선 렌더) 통과.
+
+- 신규 public 타입 `hwpforge_core::column::ColumnLine { line_type: BorderLineType,
+  width: HwpUnit, color: Color }` (OWPML 기본값 `SOLID`/`0.12 mm`/`#000000`).
+- `ColumnSettings.col_line: Option<ColumnLine>` 필드 + `ColumnSettings::with_separator()` 빌더.
+- 구분선 없는 다단은 **byte-중립** (`<hp:colPr>` self-closing 유지). 구분선 있을 때만
+  container colPr 로 emit (OWPML 순서: colLine → colSz).
+- HWPX encoder/decoder 양방향. HWP5→HWPX leg(ColDef 구분선 비트 디코드)는 후속 슬라이스.
+
+BREAKING CHANGE: `hwpforge_core::column::ColumnSettings` 에 `col_line: Option<ColumnLine>`
+필드 추가 — struct-literal 로 `ColumnSettings` 를 직접 생성하던 외부 코드는 `col_line` 을
+명시해야 함 (`equal_columns`/`custom` 생성자 사용 시 무영향). 신규 public 타입 `ColumnLine`.
+JSON: 구분선 없으면 `col_line` 키 미직렬화(기존 byte 불변).
+
 ### Changed — BREAKING — cross-ref `inst_id` 누출을 `ObjectId` 로 (E6/M2, ADR-010)
 
 크로스레퍼런스 링크가 두 무관한 정수 필드(타깃 `inst_id: Option<u64/u32>` ↔ 참조자

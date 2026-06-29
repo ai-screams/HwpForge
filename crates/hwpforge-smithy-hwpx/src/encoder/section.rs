@@ -3699,6 +3699,7 @@ mod tests {
                 ColumnDef { width: HwpUnit::ZERO, gap: HwpUnit::new(1134).unwrap() },
                 ColumnDef { width: HwpUnit::ZERO, gap: HwpUnit::ZERO },
             ],
+            col_line: None,
         });
         let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains(r#"colCount="2""#));
@@ -3724,12 +3725,55 @@ mod tests {
                 ColumnDef { width: HwpUnit::new(15000).unwrap(), gap: HwpUnit::new(500).unwrap() },
                 ColumnDef { width: HwpUnit::new(10000).unwrap(), gap: HwpUnit::ZERO },
             ],
+            col_line: None,
         });
         let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
         assert!(xml.contains(r#"colCount="3""#));
         assert!(xml.contains(r#"sameSz="0""#), "variable width must use sameSz=0");
         // Explicit hp:col children required
         assert!(xml.contains(r#"<hp:col"#));
+    }
+
+    #[test]
+    fn two_column_with_separator_byte_matches_hancom_native_and_roundtrips() {
+        use hwpforge_core::column::{ColumnLine, ColumnSettings};
+        use hwpforge_foundation::{BorderLineType, Color, HwpUnit};
+
+        // Reproduces the Hancom-native wire captured in
+        // examples/hwp5_review/_verify/nativ-colline.hwpx:
+        //   <hp:colPr ... sameGap="2268">
+        //     <hp:colLine type="DOUBLE_SLIM" width="0.7 mm" color="#CA56A7"/>
+        //   </hp:colPr>
+        let mut section = simple_section("with separator");
+        section.column_settings = Some(
+            ColumnSettings::equal_columns(2, HwpUnit::new(2268).unwrap()).unwrap().with_separator(
+                ColumnLine {
+                    line_type: BorderLineType::DoubleSlim,
+                    width: HwpUnit::from_mm(0.7).unwrap(),
+                    color: Color::from_rgb(0xCA, 0x56, 0xA7),
+                },
+            ),
+        );
+        let xml = encode_section(&section, 0, 0, 0, 0).unwrap().xml;
+
+        // Byte-exact match against the Hancom-native colPr+colLine wire.
+        assert!(
+            xml.contains(
+                r##"<hp:colPr id="" type="NEWSPAPER" layout="LEFT" colCount="2" sameSz="1" sameGap="2268"><hp:colLine type="DOUBLE_SLIM" width="0.7 mm" color="#CA56A7"/></hp:colPr>"##
+            ),
+            "must byte-match Hancom native colPr+colLine: {xml}"
+        );
+
+        // Round-trips back to a ColumnLine.
+        let cs = crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+            .unwrap()
+            .column_settings
+            .expect("column settings");
+        let cl = cs.col_line.expect("separator must survive round-trip");
+        assert_eq!(cl.line_type, BorderLineType::DoubleSlim);
+        assert_eq!(cl.color, Color::from_rgb(0xCA, 0x56, 0xA7));
+        // 0.7 mm round-trips through HwpUnit within format precision.
+        assert!((cl.width.to_mm() - 0.7).abs() < 0.01, "width drift: {}", cl.width.to_mm());
     }
 
     // ── build_autonum_run_xml ─────────────────────────────────────

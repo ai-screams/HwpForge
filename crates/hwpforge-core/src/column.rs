@@ -20,7 +20,7 @@
 //! assert_eq!(cols.column_type, ColumnType::Newspaper);
 //! ```
 
-use hwpforge_foundation::HwpUnit;
+use hwpforge_foundation::{BorderLineType, Color, HwpUnit};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -90,6 +90,54 @@ pub struct ColumnDef {
 }
 
 // ---------------------------------------------------------------------------
+// ColumnLine
+// ---------------------------------------------------------------------------
+
+/// Separator line drawn between columns.
+///
+/// Maps to the HWPX `<hp:colLine>` child of `<hp:colPr>` (OWPML
+/// KS X 6101 §10.7.1.2). Present only when the document draws a visible
+/// divider between columns; [`ColumnSettings::col_line`] is `None` for the
+/// common no-separator case, which keeps `<hp:colPr>` self-closing.
+///
+/// OWPML defaults: `SOLID`, `0.12 mm`, `#000000` (see [`Default`]).
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_core::column::ColumnLine;
+/// use hwpforge_foundation::{BorderLineType, Color, HwpUnit};
+///
+/// let line = ColumnLine {
+///     line_type: BorderLineType::DoubleSlim,
+///     width: HwpUnit::from_mm(0.7).unwrap(),
+///     color: Color::from_rgb(0x3A, 0x3C, 0x84),
+/// };
+/// assert_eq!(line.line_type, BorderLineType::DoubleSlim);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, JsonSchema)]
+pub struct ColumnLine {
+    /// Separator line style. HWPX `type` attribute (e.g. `SOLID`, `DOUBLE_SLIM`).
+    pub line_type: BorderLineType,
+    /// Separator line thickness. HWPX `width` attribute, emitted in millimetres
+    /// (e.g. `"0.7 mm"`).
+    pub width: HwpUnit,
+    /// Separator line color. HWPX `color` attribute (e.g. `#3A3C84`).
+    pub color: Color,
+}
+
+impl Default for ColumnLine {
+    /// OWPML defaults: `SOLID`, `0.12 mm`, black.
+    fn default() -> Self {
+        Self {
+            line_type: BorderLineType::Solid,
+            width: HwpUnit::from_mm(0.12).unwrap_or(HwpUnit::ZERO),
+            color: Color::from_rgb(0, 0, 0),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // ColumnSettings
 // ---------------------------------------------------------------------------
 
@@ -118,6 +166,10 @@ pub struct ColumnSettings {
     pub layout_mode: ColumnLayoutMode,
     /// Individual column definitions. Length = number of columns (>= 2).
     pub columns: Vec<ColumnDef>,
+    /// Optional separator line drawn between columns (`<hp:colLine>`).
+    /// `None` = no divider (the common case; keeps `<hp:colPr>` self-closing).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub col_line: Option<ColumnLine>,
 }
 
 impl ColumnSettings {
@@ -154,6 +206,7 @@ impl ColumnSettings {
             column_type: ColumnType::Newspaper,
             layout_mode: ColumnLayoutMode::Left,
             columns,
+            col_line: None,
         })
     }
 
@@ -185,7 +238,27 @@ impl ColumnSettings {
             column_type: ColumnType::Newspaper,
             layout_mode: ColumnLayoutMode::Left,
             columns,
+            col_line: None,
         })
+    }
+
+    /// Attaches a separator line drawn between columns (builder style).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::column::{ColumnSettings, ColumnLine};
+    /// use hwpforge_foundation::HwpUnit;
+    ///
+    /// let cs = ColumnSettings::equal_columns(2, HwpUnit::from_mm(4.0).unwrap())
+    ///     .unwrap()
+    ///     .with_separator(ColumnLine::default());
+    /// assert!(cs.col_line.is_some());
+    /// ```
+    #[must_use]
+    pub fn with_separator(mut self, line: ColumnLine) -> Self {
+        self.col_line = Some(line);
+        self
     }
 
     /// Returns the number of columns.
@@ -238,6 +311,49 @@ mod tests {
         assert_eq!(cs.columns[0].gap, gap);
         assert_eq!(cs.columns[1].gap, gap);
         assert_eq!(cs.columns[2].gap, HwpUnit::ZERO);
+    }
+
+    #[test]
+    fn default_columns_have_no_separator() {
+        let cs = ColumnSettings::equal_columns(2, HwpUnit::new(1134).unwrap()).unwrap();
+        assert!(cs.col_line.is_none(), "default columns must have no separator line");
+    }
+
+    #[test]
+    fn column_line_default_is_owpml_default() {
+        let line = ColumnLine::default();
+        assert_eq!(line.line_type, BorderLineType::Solid);
+        assert_eq!(line.color, Color::from_rgb(0, 0, 0));
+        // 0.12 mm rounds to ~34 HWPUNIT (1 mm = 283.46 HWPUNIT).
+        assert!((line.width.to_mm() - 0.12).abs() < 0.01);
+    }
+
+    #[test]
+    fn with_separator_attaches_col_line() {
+        let line = ColumnLine {
+            line_type: BorderLineType::DoubleSlim,
+            width: HwpUnit::from_mm(0.7).unwrap(),
+            color: Color::from_rgb(0x3A, 0x3C, 0x84),
+        };
+        let cs = ColumnSettings::equal_columns(2, HwpUnit::new(1134).unwrap())
+            .unwrap()
+            .with_separator(line);
+        assert_eq!(cs.col_line, Some(line));
+    }
+
+    #[test]
+    fn serde_round_trip_with_and_without_separator() {
+        // Without separator: col_line is skipped entirely (byte-neutral for old JSON).
+        let plain = ColumnSettings::equal_columns(2, HwpUnit::new(1134).unwrap()).unwrap();
+        let json = serde_json::to_string(&plain).unwrap();
+        assert!(!json.contains("col_line"), "absent separator must not serialize a key");
+        assert_eq!(serde_json::from_str::<ColumnSettings>(&json).unwrap(), plain);
+
+        // With separator: round-trips intact.
+        let withed = plain.clone().with_separator(ColumnLine::default());
+        let json2 = serde_json::to_string(&withed).unwrap();
+        assert!(json2.contains("col_line"));
+        assert_eq!(serde_json::from_str::<ColumnSettings>(&json2).unwrap(), withed);
     }
 
     #[test]
