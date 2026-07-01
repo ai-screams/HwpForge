@@ -409,7 +409,7 @@ Local planning and research workspace. It may be git-excluded in this repository
 13. Style: 개요 8/9/10 paraPr 비순차(18/16/17), DropCapStyle은 PascalCase
 14. ArrowType: `EMPTY_*` + `headfill` 조합만 (FILLED_* 무시됨)
 15. MasterPage: prefix 없는 `<masterPage>` 루트, 15개 xmlns, `<hp:subList>`
-16. schemars 1.x: `Cow<'static, str>` 반환. quick-xml 0.40: `decoder().decode()` 사용
+16. schemars 1.x: `Cow<'static, str>` 반환. quick-xml 0.41: `decoder().decode()` 사용
 17. `page_break`: `u32::from(para.page_break)` — hardcoded 0 금지
 18. Flip은 `rotMatrix`에 인코딩 — scaMatrix/transMatrix는 identity 유지
 19. `fillBrush`는 xs:choice — winBrush/gradation/imgBrush 중 하나만
