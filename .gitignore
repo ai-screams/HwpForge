@@ -494,9 +494,10 @@ temp/
 .mcpregistry_*
 .docs/
 
-# HWP5→HWPX review artifacts (regenerated review area — never version-controlled;
-# CLAUDE.md warns against `git add -A` here)
-examples/hwp5_review/
+# NOTE: examples/hwp5_review/ is NOT ignored — it holds 39 tracked review samples
+# (README.md + chart_*/mixed_*/sample-*.hwpx). A blanket ignore there makes cargo/
+# release-plz fail ("files both committed and in .gitignore"). Beware `git add -A`
+# (per CLAUDE.md) instead of ignoring the whole dir.
 
 # Stray HWP5→HWPX conversion outputs dropped next to .hwp inputs. The .hwp inputs
 # are tracked and tests convert them in-memory; these .hwpx are regenerable byproducts,
