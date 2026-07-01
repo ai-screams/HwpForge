@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — targeted as `0.7.0`
+## [Unreleased] — targeted as `0.10.0`
 
 ### Added — 다단 구분선 `colLine` carry (BREAKING)
 
@@ -24,6 +24,13 @@ BREAKING CHANGE: `hwpforge_core::column::ColumnSettings` 에 `col_line: Option<C
 필드 추가 — struct-literal 로 `ColumnSettings` 를 직접 생성하던 외부 코드는 `col_line` 을
 명시해야 함 (`equal_columns`/`custom` 생성자 사용 시 무영향). 신규 public 타입 `ColumnLine`.
 JSON: 구분선 없으면 `col_line` 키 미직렬화(기존 byte 불변).
+
+## [0.6.0 – 0.9.0] — 2026-05-29 … 2026-06-28 (released)
+
+> 아래 항목들은 이미 crates.io 로 릴리스된 `v0.6.0`~`v0.9.0` 누적분이다 (루트 CHANGELOG 를
+> 버전별 섹션으로 컷하지 못해 오랫동안 `[Unreleased]` 에 쌓여 있던 것 — E6 IR 와이어-누출
+> 상환 A/B/C/M2, Wave 11/12 HWP5→HWPX carry, 문서 메타데이터 등). 정확한 **버전별 대응**은
+> release-plz 가 소유하는 per-crate CHANGELOG (`crates/*/CHANGELOG.md`) 를 참조.
 
 ### Changed — BREAKING — cross-ref `inst_id` 누출을 `ObjectId` 로 (E6/M2, ADR-010)
 

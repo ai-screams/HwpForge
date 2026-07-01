@@ -8,9 +8,9 @@
 
 ![CI](https://img.shields.io/github/actions/workflow/status/ai-screams/HwpForge/ci.yml?branch=main\&label=CI\&logo=github)
 ![codecov](https://img.shields.io/badge/coverage-90.4%25-brightgreen.svg?logo=codecov)
-![Tests](https://img.shields.io/badge/tests-2%2C647_passed-success.svg?logo=checkmarx)
+![Tests](https://img.shields.io/badge/tests-2%2C688_passed-success.svg?logo=checkmarx)
 ![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg?logo=rust)
-![Lines of Code](https://img.shields.io/badge/LOC-~112%2C977-informational.svg)
+![Lines of Code](https://img.shields.io/badge/LOC-~114%2C421-informational.svg)
 
 ![crates.io](https://img.shields.io/crates/v/hwpforge.svg?logo=rust)
 ![docs.rs](https://img.shields.io/docsrs/hwpforge?logo=docs.rs)
@@ -79,7 +79,7 @@ cargo add hwpforge --features full
 
 ```cpp
 [dependencies]
-hwpforge = "0.7"
+hwpforge = "0.9"
 ```
 
 ### 🔨 Hammer — CLI로 시작하기
@@ -358,7 +358,7 @@ let bytes = HwpxEncoder::encode(&validated, bridge.style_store(), &image_store).
 
 ```toml
 # Markdown 지원 포함
-hwpforge = { version = "0.7", features = ["full"] }
+hwpforge = { version = "0.9", features = ["full"] }
 ```
 
 ## 📜 지원 콘텐츠
@@ -477,9 +477,9 @@ flowchart LR
 
 | 지표                   | 값                      |
 | ---------------------- | ----------------------- |
-| Tracked Rust `src` LOC | ~112,977                |
-| 테스트                 | 2,647개 (cargo-nextest) |
-| 소스 파일              | 176 .rs                 |
+| Tracked Rust `src` LOC | ~114,421                |
+| 테스트                 | 2,688개 (cargo-nextest) |
+| 소스 파일              | 177 .rs                 |
 | Crate 수               | 11개                    |
 | 커버리지               | 90%+                    |
 | Clippy 경고            | 0                       |
@@ -557,7 +557,7 @@ HwpForge/
 - [x] HWP5 읽기/점검/재출력 경로 — `convert-hwp5`, `audit-hwp5`, `census-hwp5`
 - [ ] HWP5 public API 확대 — umbrella crate surface와 broader parity 정리
 - [x] MCP 서버 — Claude, Cursor 등 AI 도구가 tool로 직접 HWPX 생성·검증·편집 (9개 도구 + 4 리소스 + 3 프롬프트)
-- [x] CLI 도구 — `hwpforge convert doc.md doc.hwpx` 한 줄 변환 (7개 명령어)
+- [x] CLI 도구 — `hwpforge convert doc.md doc.hwpx` 한 줄 변환 (11개 명령어: 8 core + 3 HWP5)
 - [ ] HWPX 완전 지원 — 양식 컨트롤, 변경 추적, OLE 객체
 - [ ] Python 바인딩 — `pip install hwpforge`로 설치, PyPI 배포
 
