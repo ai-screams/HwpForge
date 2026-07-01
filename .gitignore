@@ -493,3 +493,12 @@ $RECYCLE.BIN/
 temp/
 .mcpregistry_*
 .docs/
+
+# HWP5→HWPX review artifacts (regenerated review area — never version-controlled;
+# CLAUDE.md warns against `git add -A` here)
+examples/hwp5_review/
+
+# Stray HWP5→HWPX conversion outputs dropped next to .hwp inputs. The .hwp inputs
+# are tracked and tests convert them in-memory; these .hwpx are regenerable byproducts,
+# not fixtures (no test references them). Targeted rule — golden .hwpx elsewhere stay tracked.
+tests/fixtures/hwp5/crossref/*.hwpx
