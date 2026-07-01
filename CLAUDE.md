@@ -8,13 +8,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document formats, designed with LLM-first principles. The goal is to enable AI agents (like Claude Code) to generate Korean government proposal documents using natural language + Markdown + YAML style templates.
 
-**Current Status** (snapshot — 2026-06-17):
+**Current Status** (snapshot — 2026-06-29):
 
 - HWPX codec: read/write shipped · Markdown bridge: read/write shipped
 - HWP5 → HWPX converter path: active, style/layout fidelity line in progress
 - CLI bindings: shipped · MCP bindings: shipped · Python bindings: stub
 - Shared `tab` / `ordered·bullet·outline` / checkable-bullet semantics wired through core → blueprint → smithy. HWP5 checkable carries all three gotcha-#8 truth locations (`bullet.checkedChar`, `bullet.paraHead.checkable`, `paraPr.checked`).
-- Active branch `feat/phase12-hwp5-gso-shapes` (ahead of `main`): Phase 12 HWP5→HWPX carry series — GSO shapes, equation, memo, dutmal, compose, indexmark, click-here/auto fields, cross-ref instId, document metadata, outline levels 1–10 — plus 옵션 단위 enum 전수조사 (번호/쪽번호/이미지 채우기 형식 버그 수정).
+- Phase 12 HWP5→HWPX carry series (GSO shapes/equation/memo/dutmal/compose/indexmark/click-here·auto fields/cross-ref instId/document metadata/outline 1–10) `main` 머지 완료.
+- **E6 IR 와이어-누출 상환 완료** (`0.9.0`): Summery rename(A) · BookmarkName collapse(B) · raw wire 필드 제거(C) · `inst_id`/`SystemId`→공유 `ObjectId`(M2). **H1(display_text)=Won't-do** (ADR-009 §CLOSURE, memory `e6-wire-leak-status-h1-wontdo.md`).
 
 > **이 섹션은 짧은 상태 스냅샷으로만 유지한다 (wave-by-wave 이력을 여기 다시 쌓지 말 것).**
 > Wave별 상세 이력 + breaking change: **`CHANGELOG.md`** (canonical) 와 memory `MEMORY.md` / `phase11_wave_history.md`.
@@ -31,8 +32,8 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 
 **Workspace Facts** (code-grounded — 카운트는 drift하니 인용 전 확인):
 
-- Cargo packages `11` (E5에서 `hwpforge-convert` 추가) · crates.io published `0.6.0` · in-tree Cargo.toml version `0.7.0` (Wave 12 breaking 시리즈, release-plz pending Release PR; 다음 breaking E6 → `0.8.0`) · MSRV `1.88` · Dev toolchain Rust `1.93`
-- `crates/` 추적 src 파일 ~`176` · nextest ~`2,647` passed + `2` skipped · `examples/` 산출물 `67`+ (gitignored `examples/hwp5_review/` 리뷰 영역 별도) · GitHub workflows `5`
+- Cargo packages `11` · crates.io published `0.9.0` (E6 cheap-wins+M2; 다음 breaking → `0.10.0`) · MSRV `1.88` · Dev toolchain Rust `1.93`
+- `crates/` 추적 src 파일 ~`177` · nextest ~`2,688` passed + `2` skipped · `examples/` 산출물 `68`+ (gitignored `examples/hwp5_review/` 리뷰 영역 별도) · GitHub workflows `5`
 
 ---
 
@@ -97,7 +98,8 @@ bacon test    # Auto-run tests
 - **`cargo nextest run -p <crate> <filter>`** 의 필터는 정규식이 아니라 **부분일치(substring)** — `'a|b'` 는 아무것도 안 잡음. 공통 substring 하나(예: `warns`)로 필터하거나 따로 실행.
 - 용량 큰 이미지 임베드 fixture(~MB)는 리뷰 산출물 영역 `examples/hwp5_review/`(미추적 — .gitignore 규칙은 없으니 `git add -A` 주의)에만 두고, 회귀 방지는 **단위 테스트로 잠금**(수 MB fixture를 커밋하지 말 것).
 - **pre-commit `cargo fmt` 훅**: 스테이지된 Rust(특히 테스트의 다줄 배열/`assert!`)를 재포맷하며 커밋을 **거부**함 → `cargo fmt` 수동 실행 → 재-`git add` → 재커밋 (dprint 표와 동일 패턴).
-- **pre-commit/pre-push 훅이 workspace clippy(+`make ci`)를 돌림** → 다파일 커밋·push는 **2분+** 소요. foreground 2분 한계를 넘기니 `run_in_background`로 commit/push 후 결과 확인.
+- **pre-commit/pre-push 훅이 workspace clippy(+`make ci`)를 돌림** → 다파일 커밋·push는 **2분+**, cold/contended 빌드 땐 **20분+** 까지 감. 항상 `run_in_background`로 commit/push 후 폴링.
+- **전체 `cargo nextest run --workspace`는 cold 빌드 시 15분+** (foreground 한계 초과) → 변경 영향 크레이트만 `-p <crate>`로 돌리고 byte-중립 게이트만 골라 검증. **테스트 실행 중 소스 편집 금지**(rebuild 유발로 더 느려짐).
 
 ### Documentation & Coverage
 
@@ -111,7 +113,7 @@ make cov
 ## Crate Dependency Graph
 
 ```
-foundation (NO dependencies except serde/thiserror)
+foundation (NO HwpForge crate deps; external only: serde/schemars/thiserror)
     ↓
 core (foundation only)
     ↓
@@ -249,7 +251,7 @@ This is decoder/encoder bridge logic, not shared list-kind proliferation.
 ### 3-Tier Approach
 
 1. **Golden Tests** (most important): Real HWPX/HWP5 files from 한글 program
-   - `tests/golden/hwpx/*.hwpx`
+   - Fixtures in `tests/fixtures/`; golden test lives in `crates/hwpforge-smithy-hwpx/tests/golden.rs`
    - Load → Save → Load → assert equality
 
 2. **Unit Tests**: Edge cases first (TDD)
@@ -265,7 +267,7 @@ This is decoder/encoder bridge logic, not shared list-kind proliferation.
 
 ```bash
 cargo test --lib                    # Unit tests only
-cargo test --test golden            # Golden tests only
+cargo test -p hwpforge-smithy-hwpx --test golden   # Golden tests only
 cargo test -p hwpforge-foundation   # Specific crate
 cargo llvm-cov --html               # Coverage report
 ```
@@ -301,7 +303,7 @@ These were planned but **removed as unnecessary** (keep it simple):
 - ❌ HwpUnit typestate (doubles size for minimal benefit)
 - ❌ String interning (profile first, optimize second)
 - ❌ miette diagnostics (heavy dependency)
-- ❌ derive_more, strum (manual implementations = better error messages)
+- ❌ derive_more, strum (manual implementations = better error messages; still declared in `[workspace.dependencies]` but no crate opts in)
 
 **Principle**: Add complexity only when proven necessary.
 
@@ -315,7 +317,7 @@ Actual implementation lives here. Read `crates/AGENTS.md` and any crate-local `A
 
 ### `examples/`
 
-Generated artifacts and sample converters live here. `hwpx2md/images/` is a helper output directory for Markdown conversion artifacts.
+Generated artifacts and sample converters live here, organized into `showcase/`, `interop/`, `hwp5_review/`, `hwpx_roundtrip_review/`. `interop/hwpx_md_convert/hwpx2md/images/` is a helper output directory for Markdown conversion artifacts.
 
 ### `tests/`
 
@@ -337,16 +339,12 @@ Local planning and research workspace. It may be git-excluded in this repository
 
 ## Current Engineering State
 
-- Phase 10 HWP5 line is active.
-- Shared tab semantics already landed on `main`.
+- HWP5→HWPX carry line (Phase 11/12) is complete and released in `0.9.0`; E6 IR wire-leak remediation (A/B/C/M2) shipped, D(H1) = Won't-do.
+- Shared `tab` / `ordered·bullet·outline` / checkable-bullet semantics are all wired through `core → blueprint → smithy` and merged to `main` (released), with Markdown bridge integration. HWP5 checkable carries all three gotcha-#8 truth locations (definition + paragraph-level checked state).
 - Table integration gates are concentrated in `crates/hwpforge-bindings-cli/tests/cli_integration.rs`.
 - Stress or real-world table fixtures are not the same thing as committed regression gates.
-- On local `feat/list-shared-semantics`, shared `ordered / bullet / outline` semantics are wired through `core -> blueprint -> smithy-hwpx`, with Markdown bridge integration.
-- Checkable bullet semantics are also wired on the local branch.
-- HWP5 remains the partial leg for this slice:
-  - bullet/checkable definition parity is present
-  - paragraph-level checked item state is not fully decoded yet
-- Do not confuse local branch completion with `main` branch state.
+- Active local branch: `feat/column-separator-line` — colLine (다단 구분선) HWPX + HWP5→HWPX legs done (commits 5ab3758, 68dbe71), **not yet merged/released**.
+- Always confirm `main` state from code + manifests + git; do not trust stale branch prose.
 
 ---
 
@@ -387,6 +385,8 @@ Local planning and research workspace. It may be git-excluded in this repository
 - **SemVer 검사는 release-plz가 소유** (`semver_check = true`). ci.yml 에 standalone cargo-semver-checks 게이트를 **다시 넣지 말 것** — feature PR은 버전을 안 올리는 모델이라 breaking PR마다 영원히 빨강이 됨 (이 이유로 PR #78에서 제거).
 - **배포 대상**: crates.io = `hwpforge`(umbrella)·foundation·core·blueprint·smithy-hwpx·smithy-md·bindings-mcp. **제외**(`publish=false`) = smithy-hwp5·convert·bindings-cli·bindings-py. **umbrella 만 GitHub Release 생성** → npm(`@hwpforge/mcp`)·pages 배포가 거기 매달림.
 - **다음 릴리스 주의**: ① first crates.io publish는 의존 순서(foundation→…→umbrella) + `publish=false` 의존 차단 여부 검증 필요 · ② CHANGELOG 한글 표는 `dprint fmt CHANGELOG.md` 수동 후 재-stage · ③ 태그 기반 로컬 검증 전 `git fetch --tags`(stale 태그 → 거짓 통과 함정).
+- **Merge queue 활성** — `gh pr merge --squash`(특히 `--delete-branch`) 거부됨(`Auto merge is not allowed` / `Cannot use --delete-branch when merge queue enabled`). 대신 GraphQL `enqueuePullRequest(input:{pullRequestId})` mutation 으로 큐에 넣을 것. 큐가 PR당 CI 재실행 후 자동 머지(머지 방식은 큐 설정 소유 — `gh --squash` 무시되고 merge-commit). 큐 상태 = `repository.mergeQueue(branch:"main").entries`.
+- **publish 검증**: crates.io API(`crates.io/api`) 는 샌드박스에서 막힐 수 있음 → sparse index `index.crates.io/hw/pf/<crate>`(`dangerouslyDisableSandbox`)로 published 버전 확인.
 
 ---
 
@@ -409,7 +409,7 @@ Local planning and research workspace. It may be git-excluded in this repository
 13. Style: 개요 8/9/10 paraPr 비순차(18/16/17), DropCapStyle은 PascalCase
 14. ArrowType: `EMPTY_*` + `headfill` 조합만 (FILLED_* 무시됨)
 15. MasterPage: prefix 없는 `<masterPage>` 루트, 15개 xmlns, `<hp:subList>`
-16. schemars 1.x: `Cow<'static, str>` 반환. quick-xml 0.39: `decoder().decode()` 사용
+16. schemars 1.x: `Cow<'static, str>` 반환. quick-xml 0.41: `decoder().decode()` 사용
 17. `page_break`: `u32::from(para.page_break)` — hardcoded 0 금지
 18. Flip은 `rotMatrix`에 인코딩 — scaMatrix/transMatrix는 identity 유지
 19. `fillBrush`는 xs:choice — winBrush/gradation/imgBrush 중 하나만

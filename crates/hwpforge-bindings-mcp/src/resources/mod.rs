@@ -133,17 +133,9 @@ pub fn list_resources() -> Result<ListResourcesResult, McpError> {
     let resources = TEMPLATES
         .iter()
         .map(|t| {
-            RawResource {
-                uri: t.uri.into(),
-                name: t.name.into(),
-                description: Some(t.description.into()),
-                mime_type: Some("application/x-yaml".into()),
-                title: None,
-                size: None,
-                icons: None,
-                meta: None,
-            }
-            .no_annotation()
+            Resource::new(t.uri, t.name)
+                .with_description(t.description)
+                .with_mime_type("application/x-yaml")
         })
         .collect();
 

@@ -52,6 +52,6 @@ pub fn get_prompt(
 hwpforge_convert({{ markdown: "<작성한_마크다운>", is_file: false, output_path: "report.hwpx", preset: "default" }})"#
     );
 
-    Ok(GetPromptResult::new(vec![PromptMessage::new_text(PromptMessageRole::User, text)])
+    Ok(GetPromptResult::new(vec![PromptMessage::new_text(Role::User, text)])
         .with_description("보고서 작성 워크플로우"))
 }

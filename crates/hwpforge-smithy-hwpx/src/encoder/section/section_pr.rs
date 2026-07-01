@@ -210,30 +210,78 @@ pub(super) fn build_col_pr_xml(column_settings: Option<&ColumnSettings>) -> Stri
             };
             let col_count = cs.columns.len();
             let all_same = cs.is_equal_width();
-
-            if all_same {
+            let (same_sz, same_gap) = if all_same {
                 // sameSz=1: 한글 calculates equal widths, we just specify gap
-                let same_gap = if col_count >= 2 { cs.columns[0].gap.as_i32() } else { 0 };
-                format!(
-                    r#"<hp:ctrl><hp:colPr id="" type="{col_type}" layout="{layout}" colCount="{col_count}" sameSz="1" sameGap="{same_gap}"/></hp:ctrl>"#
-                )
+                (1, if col_count >= 2 { cs.columns[0].gap.as_i32() } else { 0 })
             } else {
-                // sameSz=0: explicit <hp:col> children
-                let mut xml = format!(
-                    r#"<hp:ctrl><hp:colPr id="" type="{col_type}" layout="{layout}" colCount="{col_count}" sameSz="0" sameGap="0">"#
-                );
+                (0, 0)
+            };
+
+            // OWPML orders children as colLine (separator) then colSz (<hp:col>).
+            // `<hp:col>` children only exist when sameSz=0 (variable widths).
+            let mut children = cs.col_line.as_ref().map(build_col_line_xml).unwrap_or_default();
+            if same_sz == 0 {
                 for col in &cs.columns {
-                    xml.push_str(&format!(
+                    children.push_str(&format!(
                         r#"<hp:col width="{}" gap="{}"/>"#,
                         col.width.as_i32(),
                         col.gap.as_i32()
                     ));
                 }
-                xml.push_str("</hp:colPr></hp:ctrl>");
-                xml
+            }
+
+            // No children → self-closing colPr (byte-identical to the prior
+            // no-separator path). Children present → container colPr.
+            if children.is_empty() {
+                format!(
+                    r#"<hp:ctrl><hp:colPr id="" type="{col_type}" layout="{layout}" colCount="{col_count}" sameSz="{same_sz}" sameGap="{same_gap}"/></hp:ctrl>"#
+                )
+            } else {
+                format!(
+                    r#"<hp:ctrl><hp:colPr id="" type="{col_type}" layout="{layout}" colCount="{col_count}" sameSz="{same_sz}" sameGap="{same_gap}">{children}</hp:colPr></hp:ctrl>"#
+                )
             }
         }
     }
+}
+
+/// Maps a Core [`BorderLineType`](hwpforge_foundation::BorderLineType) to the
+/// HWPX `colLine`/border wire string (`LineType2`: UPPER_SNAKE). Types with no
+/// `LineType2` equivalent fall back to `SOLID`.
+fn col_line_type_to_hwpx(t: hwpforge_foundation::BorderLineType) -> &'static str {
+    use hwpforge_foundation::BorderLineType as B;
+    match t {
+        B::None => "NONE",
+        B::Solid => "SOLID",
+        B::Dash => "DASH",
+        B::Dot => "DOT",
+        B::DashDot => "DASH_DOT",
+        B::DashDotDot => "DASH_DOT_DOT",
+        B::LongDash => "LONG_DASH",
+        B::DoubleSlim => "DOUBLE_SLIM",
+        _ => "SOLID",
+    }
+}
+
+/// Formats a width in millimetres for HWPX (e.g. `0.7` → `"0.7"`), rounding to
+/// two decimals and stripping trailing zeros to match OWPML samples
+/// (`"0.7 mm"`, `"0.12 mm"`).
+///
+/// NOTE: exact 한컴 precision/format is confirmed against a native fixture in
+/// the colLine round-trip gate.
+fn format_mm(mm: f64) -> String {
+    let rounded = (mm * 100.0).round() / 100.0;
+    format!("{rounded}")
+}
+
+/// Builds the `<hp:colLine .../>` separator element for a column layout.
+fn build_col_line_xml(line: &hwpforge_core::column::ColumnLine) -> String {
+    format!(
+        r#"<hp:colLine type="{}" width="{} mm" color="{}"/>"#,
+        col_line_type_to_hwpx(line.line_type),
+        format_mm(line.width.to_mm()),
+        line.color.to_hex_rgb(),
+    )
 }
 
 /// Enriches the minimal `<hp:secPr>` output with sub-elements required

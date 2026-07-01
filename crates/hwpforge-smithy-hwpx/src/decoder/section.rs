@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 
 use hwpforge_core::caption::{Caption, CaptionSide};
-use hwpforge_core::column::{ColumnDef, ColumnLayoutMode, ColumnSettings, ColumnType};
+use hwpforge_core::column::{ColumnDef, ColumnLayoutMode, ColumnLine, ColumnSettings, ColumnType};
 use hwpforge_core::control::{Control, DutmalAlign, DutmalPosition};
 use hwpforge_core::image::{
     Image, ImageFormat, ImagePlacement, ImageRelativeTo, ImageTextFlow, ImageTextWrap,
@@ -19,8 +19,8 @@ use hwpforge_core::table::{
 };
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
-    ApplyPageType, CharShapeIndex, Color, HwpUnit, PageNumberPosition, ParaShapeIndex, StyleIndex,
-    TextDirection,
+    ApplyPageType, BorderLineType, CharShapeIndex, Color, HwpUnit, PageNumberPosition,
+    ParaShapeIndex, StyleIndex, TextDirection,
 };
 use quick_xml::de::from_str;
 
@@ -1386,7 +1386,35 @@ fn convert_ctrl_column_settings(ctrl: &HxCtrl) -> Option<ColumnSettings> {
             .collect()
     };
 
-    Some(ColumnSettings { column_type, layout_mode: layout, columns })
+    let col_line = col_pr.col_line.as_ref().map(|cl| ColumnLine {
+        line_type: col_line_type_from_hwpx(&cl.line_type),
+        width: parse_mm_width(&cl.width),
+        color: parse_hex_color(&cl.color).unwrap_or(Color::BLACK),
+    });
+
+    Some(ColumnSettings { column_type, layout_mode: layout, columns, col_line })
+}
+
+/// Maps a HWPX `colLine`/border `LineType2` wire string (UPPER_SNAKE) back to a
+/// Core [`BorderLineType`]. Unknown values fall back to `Solid`.
+fn col_line_type_from_hwpx(s: &str) -> BorderLineType {
+    match s {
+        "NONE" => BorderLineType::None,
+        "DASH" => BorderLineType::Dash,
+        "DOT" => BorderLineType::Dot,
+        "DASH_DOT" => BorderLineType::DashDot,
+        "DASH_DOT_DOT" => BorderLineType::DashDotDot,
+        "LONG_DASH" => BorderLineType::LongDash,
+        "DOUBLE_SLIM" => BorderLineType::DoubleSlim,
+        _ => BorderLineType::Solid,
+    }
+}
+
+/// Parses an HWPX width string in millimetres (e.g. `"0.7 mm"`) into a
+/// [`HwpUnit`]. Returns [`HwpUnit::ZERO`] for unparseable input.
+fn parse_mm_width(s: &str) -> HwpUnit {
+    let num = s.trim().trim_end_matches("mm").trim();
+    num.parse::<f64>().ok().and_then(|mm| HwpUnit::from_mm(mm).ok()).unwrap_or(HwpUnit::ZERO)
 }
 
 /// Extracts a [`HeaderFooter`] from an `HxCtrl`'s header element, if present.

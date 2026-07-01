@@ -126,7 +126,7 @@ fn default_preset() -> String {
 
 /// Convert a `ToolErrorInfo` into an MCP error response (non-fatal, returns content).
 fn tool_error_response(err: ToolErrorInfo) -> CallToolResult {
-    CallToolResult::error(vec![Content::text(err.to_json_string())])
+    CallToolResult::error(vec![ContentBlock::text(err.to_json_string())])
 }
 
 // ── Server ───────────────────────────────────────────────────────────────────
@@ -179,7 +179,7 @@ impl HwpForgeServer {
                         "Use hwpforge_to_json + hwpforge_patch to edit",
                     ],
                 );
-                Ok(CallToolResult::success(vec![Content::text(output.to_json_string())]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
             }
             Err(err) => Ok(tool_error_response(err)),
         }
@@ -217,7 +217,7 @@ impl HwpForgeServer {
                         "Use hwpforge_convert to create new documents",
                     ],
                 );
-                Ok(CallToolResult::success(vec![Content::text(output.to_json_string())]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
             }
             Err(err) => Ok(tool_error_response(err)),
         }
@@ -268,7 +268,7 @@ impl HwpForgeServer {
                     next.insert(0, format!("Warning: {}", warning.message));
                 }
                 let output = ToolOutput { data: &data, summary, next };
-                Ok(CallToolResult::success(vec![Content::text(output.to_json_string())]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
             }
             Err(err) => Ok(tool_error_response(err)),
         }
@@ -304,7 +304,7 @@ impl HwpForgeServer {
                         "Note: images are NOT preserved in JSON round-trip; use hwpforge_patch with base_path to keep images",
                     ],
                 );
-                Ok(CallToolResult::success(vec![Content::text(output.to_json_string())]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
             }
             Err(err) => Ok(tool_error_response(err)),
         }
@@ -336,7 +336,7 @@ impl HwpForgeServer {
                     ),
                     vec!["Use hwpforge_inspect to verify the patched output"],
                 );
-                Ok(CallToolResult::success(vec![Content::text(output.to_json_string())]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
             }
             Err(err) => Ok(tool_error_response(err)),
         }
@@ -375,7 +375,7 @@ impl HwpForgeServer {
                     ]
                 };
                 let output = ToolOutput::new(&data, summary, next);
-                Ok(CallToolResult::success(vec![Content::text(output.to_json_string())]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
             }
             Err(err) => Ok(tool_error_response(err)),
         }
@@ -410,7 +410,7 @@ impl HwpForgeServer {
                         "Use hwpforge_validate to check integrity",
                     ],
                 );
-                Ok(CallToolResult::success(vec![Content::text(output.to_json_string())]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
             }
             Err(err) => Ok(tool_error_response(err)),
         }
@@ -442,7 +442,7 @@ impl HwpForgeServer {
                         "Use hwpforge_restyle to change existing document styles",
                     ],
                 );
-                Ok(CallToolResult::success(vec![Content::text(output.to_json_string())]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
             }
             Err(err) => Ok(tool_error_response(err)),
         }
@@ -482,7 +482,7 @@ impl HwpForgeServer {
                         "Use hwpforge_inspect to review the original document structure",
                     ],
                 );
-                Ok(CallToolResult::success(vec![Content::text(output.to_json_string())]))
+                Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
             }
             Err(err) => Ok(tool_error_response(err)),
         }
