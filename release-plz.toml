@@ -51,68 +51,25 @@ commit_parsers = [
   { message = "^build", skip = true },
 ]
 
-# All crates share ONE version via `version.workspace = true`. `version_group`
-# makes release-plz treat them as a single unit: every crate is bumped to the
-# SAME next version AND the hardcoded inter-crate `version = "x"` requirements are
-# rewritten consistently. Without this, a breaking bump concentrated in one crate
-# (e.g. core -> 0.10.0) forces the shared workspace version up but leaves other
-# crates' `= "0.9.0"` dep requirements stale, so `cargo update` fails to resolve
-# (`failed to select a version for the requirement ... = "^0.9.0"`).
-# See https://release-plz.dev/docs/config (version_group).
-
 # Umbrella crate: creates the GitHub Release + v{{ version }} tag (triggers pages.yml)
 [[package]]
 name = "hwpforge"
 git_release_enable = true
 git_tag_name = "v{{ version }}"
 git_release_name = "v{{ version }}"
-version_group = "unified"
 
-[[package]]
-name = "hwpforge-foundation"
-version_group = "unified"
-
-[[package]]
-name = "hwpforge-core"
-version_group = "unified"
-
-[[package]]
-name = "hwpforge-blueprint"
-version_group = "unified"
-
-[[package]]
-name = "hwpforge-smithy-hwpx"
-version_group = "unified"
-
-[[package]]
-name = "hwpforge-smithy-md"
-version_group = "unified"
-
-[[package]]
-name = "hwpforge-bindings-mcp"
-version_group = "unified"
-
-# publish = false crates — kept out of crates.io, but still in the version group
-# so their inter-crate `version = "x"` requirements get rewritten consistently.
-[[package]]
-name = "hwpforge-convert"
-publish = false
-version_group = "unified"
-
+# Skip stub crates (they also have publish = false in Cargo.toml)
 [[package]]
 name = "hwpforge-bindings-py"
 release = false
 publish = false
-version_group = "unified"
 
 [[package]]
 name = "hwpforge-bindings-cli"
 release = false
 publish = false
-version_group = "unified"
 
 [[package]]
 name = "hwpforge-smithy-hwp5"
 release = false
 publish = false
-version_group = "unified"
