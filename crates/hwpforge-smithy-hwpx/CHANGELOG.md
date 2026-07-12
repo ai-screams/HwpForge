@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.10.0...hwpforge-smithy-hwpx-v0.11.0) - 2026-07-12
+
+### Added
+
+- *(hwpx)* 누름틀 본문을 preserve-first 텍스트 슬롯으로 등록
+
+- *(core)* **BREAKING** 누름틀 display_text 가 채워진 본문을 보존하도록 의미 변경
+
+- *(hwpx)* 누름틀 본문에 채워진 값을 인코딩
+
+
+### Fixed
+
+- *(hwpx)* 병합-run 누름틀 본문은 미채움으로 다운그레이드 (무모호 게이트)
+
+
 ## [0.10.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.9.0...hwpforge-smithy-hwpx-v0.10.0) - 2026-07-02
 
 ### Added
