@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document formats, designed with LLM-first principles. The goal is to enable AI agents (like Claude Code) to generate Korean government proposal documents using natural language + Markdown + YAML style templates.
 
-**Current Status** (snapshot — 2026-07-02):
+**Current Status** (snapshot — 2026-07-13):
 
 - HWPX codec: read/write shipped · Markdown bridge: read/write shipped
 - HWP5 → HWPX converter path: active, style/layout fidelity line in progress
@@ -17,6 +17,7 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 - Phase 12 HWP5→HWPX carry series (GSO shapes/equation/memo/dutmal/compose/indexmark/click-here·auto fields/cross-ref instId/document metadata/outline 1–10) `main` 머지 완료.
 - **E6 IR 와이어-누출 상환 완료** (`0.9.0`): Summery rename(A) · BookmarkName collapse(B) · raw wire 필드 제거(C) · `inst_id`/`SystemId`→공유 `ObjectId`(M2). **H1(display_text)=Won't-do** (ADR-009 §CLOSURE, memory `e6-wire-leak-status-h1-wontdo.md`).
 - **0.10.0 릴리스** (2026-07-02): colLine(다단 구분선) HWPX+HWP5 carry(breaking) + rmcp 2.0 보안(GHSA-89vp-x53w-74fx)·quick-xml 0.41 + 문서 정합.
+- **AI 편집 Wave 1** (2026-07-12~13): 누름틀(ClickHere) 채우기 — PR #97 머지 (`feat!:` `Field::display_text` 의미 변경 → 다음 릴리스 `0.11.0`) + `fill` 델타 API·`fields` 발견 표면 (PR #99). 설계/로드맵 = `.docs/planning/2026-07-10-agent-editing-architecture.md` (남은 조각: E3 표 격자 주소 · E6 스탬핑).
 
 > **이 섹션은 짧은 상태 스냅샷으로만 유지한다 (wave-by-wave 이력을 여기 다시 쌓지 말 것).**
 > Wave별 상세 이력 + breaking change: **`CHANGELOG.md`** (canonical) 와 memory `MEMORY.md` / `phase11_wave_history.md`.
@@ -103,6 +104,11 @@ bacon test    # Auto-run tests
 - **`git push` 를 파이프에 연결 금지**(`| tail` 등) — pre-push 훅의 대량 테스트 출력이 `BlockingIOError [Errno 35]` 로 push 자체를 죽임. run_in_background(파일 리다이렉트)로 실행하고, 성공 판정은 `git ls-remote --heads origin <branch> | grep -q .` 로.
 - pre-push `cargo deny` 가 RustSec advisory DB fetch 네트워크 오류로 간헐 실패 → 재시도로 해결.
 - **전체 `cargo nextest run --workspace`는 cold 빌드 시 15분+** (foreground 한계 초과) → 변경 영향 크레이트만 `-p <crate>`로 돌리고 byte-중립 게이트만 골라 검증. **테스트 실행 중 소스 편집 금지**(rebuild 유발로 더 느려짐).
+- **nextest 통합 테스트 파일 필터**: substring 은 테스트 _이름_ 만 매칭 (파일명 안 잡힘) — 파일 단위는 `-E 'binary(<파일명>)'`.
+- **commit 출력도 `| tail` 로 자르지 말 것** — 실패한 훅 라인·exit code 가 사라져 "커밋됐다" 오판. 파일 리다이렉트 후 grep (push 파이프 금지 규칙과 동일 계열).
+- **커밋 전 touched 크레이트만 `cargo clippy --all-targets -- -D warnings` 사전 점검** — 훅 거부 1회 = 2분+ 재사이클 (nextest/build 는 clippy lint 를 안 잡음).
+- `rm` 은 대화형 alias — stale `.git/index.lock`(0바이트·git 프로세스 없음 확인 후) 등 스크립트 삭제는 `rm -f`.
+- 대용량 정리: `target/`(수백 GB 가능)·`fuzz/target`·`.docs/papers/EAAI/eval/oracle-rs/target` 은 재생성 가능 빌드 산출물. `.docs/papers`(corpus·논문)·`fuzz/corpus` 는 자산 — 삭제 금지.
 
 ### Documentation & Coverage
 
@@ -345,7 +351,7 @@ Local planning and research workspace. It may be git-excluded in this repository
 - 릴리스/기능 상태의 canonical = 상단 **Current Status** 스냅샷 (여기 중복 서술 금지).
 - Table integration gates are concentrated in `crates/hwpforge-bindings-cli/tests/cli_integration.rs`.
 - Stress or real-world table fixtures are not the same thing as committed regression gates.
-- colLine (다단 구분선) HWPX + HWP5→HWPX legs shipped in `0.10.0` (PR #91, 2026-07-02). No active feature branch.
+- colLine (다단 구분선) HWPX + HWP5→HWPX legs shipped in `0.10.0` (PR #91, 2026-07-02).
 - Always confirm `main` state from code + manifests + git; do not trust stale branch prose.
 
 ---
@@ -427,6 +433,7 @@ Local planning and research workspace. It may be git-excluded in this repository
 27. ContentType 의미는 RefType-상대적 (Bookmark+Contents = 책갈피 이름, Figure+Contents = 캡션 본문) — invented enum 금지
 28. 도형/글상자 텍스트 **세로정렬 = HWP5 ListHeader 속성 bits 5-6** (`(props>>5)&0x03`, 0/1/2=Top/Center/Bottom). 표 셀 디코드(`smithy-hwp5/src/decoder/section/mod.rs`)가 ground truth — openhwp `(props>>2)`는 우리 wire와 불일치
 29. 도형 drawText `<hp:subList textWidth/textHeight>` = **`0`이 Hancom-정답** (렌더러는 `<hp:sz>`−`<hp:textMargin>`(기본 283)으로 텍스트 영역 계산). 계산값으로 "고치지" 말 것 — 한컴 fixture·KS X 6101 샘플 141 확인
+30. 누름틀(ClickHere) 본문 = `fieldBegin`~`fieldEnd` 사이 평범한 `<hp:t>` (미채움 = 힌트와 동일 문자열). `display_text` 빈 문자열 = 미채움/모호 sentinel — patch 슬롯·redact·fill 이 전부 ClickHere-gated 로 이 불변식 공유. 한컴 재저장은 라벨 run 을 필드 run 에 병합 → run 에 `<hp:t>` 1개일 때만 본문 무모호 귀속 (HxRun 은 자식 순서 미보존)
 
 ---
 
