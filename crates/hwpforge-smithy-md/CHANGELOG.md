@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.10.0...hwpforge-smithy-md-v0.11.0) - 2026-07-12
+
+### Added
+
+- *(hwpx)* 누름틀 본문을 preserve-first 텍스트 슬롯으로 등록
+
+
 ## [0.8.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.7.0...hwpforge-smithy-md-v0.8.0) - 2026-06-27
 
 ### Added
