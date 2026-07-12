@@ -159,10 +159,7 @@ pub(super) fn build_field_run_xml(
     let begin_id = 1_000_000_000_u64 + field_id as u64;
     match field_type {
         FieldType::ClickHere => {
-            // ClickHere's visible body is the hint placeholder, not a cached
-            // render — `display_text` is unused here (stays empty in Core).
-            let _ = display_text;
-            build_clickhere_field_xml(hint, help, name, char_pr_id_ref, begin_id)
+            build_clickhere_field_xml(hint, help, name, char_pr_id_ref, begin_id, display_text)
         }
         FieldType::Author
         | FieldType::LastSavedBy
@@ -187,12 +184,18 @@ pub(super) fn build_field_run_xml(
 /// Wire convention: `hint_len`/`help_len` are UTF-16 code unit counts of the
 /// *decoded* strings. `Command N` is computed by `clickhere_command_string`
 /// from the empirically-derived formula (see that function's doc comment).
+///
+/// `body` is the filled field value rendered between `fieldBegin` and
+/// `fieldEnd`. Empty `body` = unfilled → the hint placeholder is emitted as
+/// the body (한컴 native convention; byte-neutral for HWP5→HWPX carry where
+/// the ClickHere span is always empty).
 pub(super) fn build_clickhere_field_xml(
     hint: &str,
     help: &str,
     name: &str,
     char_pr_id_ref: u32,
     begin_id: u64,
+    body: &str,
 ) -> String {
     let escaped_hint = escape_xml(hint);
     let escaped_name = escape_xml(name);
@@ -223,7 +226,7 @@ pub(super) fn build_clickhere_field_xml(
         name = escaped_name,
         cmd = escape_xml(&command),
         hint = escaped_hint,
-        display = build_text_element_xml(hint),
+        display = build_text_element_xml(if body.is_empty() { hint } else { body }),
     )
 }
 
@@ -682,6 +685,55 @@ pub(super) fn unix_to_ymdhms(secs: u64) -> (i64, u32, u32, u32, u32, u32) {
     let month_civil = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
     let year_civil = if month_civil <= 2 { y0 + 1 } else { y0 };
     (year_civil, month_civil, day, hour, minute, second)
+}
+
+#[cfg(test)]
+mod clickhere_body_tests {
+    use super::*;
+
+    /// 채워진 누름틀은 `display_text` 를 본문 `<hp:t>` 로 방출한다.
+    /// `Direction` 힌트 파라미터는 값과 별개 축이므로 그대로 남는다
+    /// (native fixture: fieldBegin 파라미터에 힌트, 본문에 값).
+    #[test]
+    fn clickhere_body_prefers_display_text_when_filled() {
+        let xml = build_clickhere_field_xml(
+            "회사 이메일을 입력하세요",
+            "",
+            "user_email",
+            0,
+            1_000_000_000,
+            "hanyul@example.com",
+        );
+        assert!(
+            xml.contains("<hp:t>hanyul@example.com</hp:t>"),
+            "본문은 채워진 값이어야 한다: {xml}"
+        );
+        assert!(
+            xml.contains(
+                r#"<hp:stringParam name="Direction">회사 이메일을 입력하세요</hp:stringParam>"#
+            ),
+            "Direction 힌트는 그대로 남아야 한다: {xml}"
+        );
+    }
+
+    /// 미채움(`display_text` 빈 문자열)은 기존과 동일하게 힌트를 본문으로
+    /// 방출한다 — HWP5→HWPX 변환 산출물 byte-중립 게이트
+    /// (HWP5 wire 의 ClickHere span 은 항상 비어 있음, projection/mod.rs).
+    #[test]
+    fn clickhere_body_falls_back_to_hint_when_unfilled() {
+        let xml = build_clickhere_field_xml(
+            "회사 이메일을 입력하세요",
+            "",
+            "user_email",
+            0,
+            1_000_000_000,
+            "",
+        );
+        assert!(
+            xml.contains("<hp:t>회사 이메일을 입력하세요</hp:t>"),
+            "미채움은 힌트로 폴백해야 한다: {xml}"
+        );
+    }
 }
 
 #[cfg(test)]

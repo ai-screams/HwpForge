@@ -443,7 +443,15 @@ fn encode_control_styled(
                 display_text.clone()
             }
         }
-        Control::Field { hint_text, .. } => hint_text.as_deref().unwrap_or("____").to_string(),
+        Control::Field { hint_text, display_text, .. } => {
+            // 채워진 값(display_text)이 있으면 그것을, 없으면 힌트를 보인다
+            // — HWPX 인코더의 hint 폴백과 동일한 우선순위 (Epic 1).
+            if display_text.is_empty() {
+                hint_text.as_deref().unwrap_or("____").to_string()
+            } else {
+                display_text.clone()
+            }
+        }
         Control::Bookmark { .. } => {
             // Bookmarks are invisible anchors — emit nothing.
             String::new()

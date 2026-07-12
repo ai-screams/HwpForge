@@ -407,9 +407,21 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
         if ctrl.field_end.is_some() {
             if let Some(fb) = field_begin.take() {
                 let field_text = collect_run_text(hx);
-                if let Some(run) =
-                    decode_field_control(fb, &field_text, field_begin_char_shape, depth)?
-                {
+                // `HxRun` 은 자식 순서(texts/ctrls interleaving)를 보존하지
+                // 않으므로, run 에 `<hp:t>` 가 정확히 1개일 때만 그 텍스트가
+                // 마커 사이 본문이라고 무모호하게 귀속할 수 있다. 한컴은
+                // 재저장 시 라벨 run 과 필드 run 을 병합하기도 한다
+                // (fixture `fields/clickhere_filled.hwpx`: t·fieldBegin·
+                // t·fieldEnd·t 한 run) — 그 경우 연결 텍스트를 본문으로
+                // 오귀속하는 대신 미채움으로 다운그레이드한다 (warning-first).
+                let unambiguous_body = hx.texts.len() == 1;
+                if let Some(run) = decode_field_control(
+                    fb,
+                    &field_text,
+                    field_begin_char_shape,
+                    depth,
+                    unambiguous_body,
+                )? {
                     runs.push(run);
                 }
             }
@@ -849,6 +861,7 @@ fn decode_field_control(
     text: &str,
     char_shape_id: CharShapeIndex,
     depth: usize,
+    unambiguous_body: bool,
 ) -> HwpxResult<Option<Run>> {
     let control = match fb.field_type.as_str() {
         "HYPERLINK" => {
@@ -861,14 +874,22 @@ fn decode_field_control(
         },
         "CLICK_HERE" | "DATE" | "TIME" | "PAGE_NUM" | "DOC_SUMMARY" | "USER_INFO" => {
             let ft = fb.field_type.parse::<hwpforge_foundation::FieldType>().unwrap_or_default();
-            // #120/#136: round-trip the cached body value. ClickHere's body is
-            // the hint placeholder (re-derived on encode), so keep its
-            // display_text empty per the Core invariant.
-            let display_text = if matches!(ft, hwpforge_foundation::FieldType::ClickHere) {
-                String::new()
-            } else {
-                text.to_string()
-            };
+            // #120/#136: round-trip the cached body value. ClickHere 의 본문
+            // `<hp:t>` 는 사용자가 채운 값이다 — 미채움 상태에서는 본문 ==
+            // Direction 힌트이고, 인코더가 이를 그대로 방출하므로 verbatim
+            // carry 가 byte-중립이다 (encoder/section/field.rs).
+            //
+            // 단, ClickHere 는 patch 텍스트 슬롯과 짝을 이루므로(semantic
+            // 게이트 = display_text 비어있지 않음, patch.rs) 본문 귀속이
+            // 무모호할 때(`unambiguous_body`)만 carry 한다 — 모호하면
+            // 라벨 텍스트를 값으로 오귀속하는 대신 미채움으로 다운그레이드.
+            // DATE/TIME 류 캐시 값은 슬롯이 없으므로 종전대로 연결 carry.
+            let display_text =
+                if unambiguous_body || !matches!(ft, hwpforge_foundation::FieldType::ClickHere) {
+                    text.to_string()
+                } else {
+                    String::new()
+                };
             Control::Field {
                 field_type: ft,
                 hint_text: get_field_param(fb, "Direction"),

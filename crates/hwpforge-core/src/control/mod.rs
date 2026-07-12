@@ -560,8 +560,10 @@ pub enum Control {
         /// HWPX carries the same cached render and recomputes it on save.
         /// Empty string = "no cached value" (same convention as
         /// [`Self::CrossRef::display_text`] / [`Self::Hyperlink::text`]).
-        /// For `ClickHere` this stays empty — its visible placeholder is
-        /// [`Self::Field::hint_text`], not a cached render.
+        /// For `ClickHere` this is the user-filled value; an unfilled field
+        /// carries either the same string as [`Self::Field::hint_text`]
+        /// (decoded from a native body) or the empty string (constructed).
+        /// When empty, the HWPX encoder emits `hint_text` as the body.
         ///
         /// An empty body triggers 한컴's "낮은 보안 수준 복구" warning on
         /// open for SUMMERY fields (#120/#136) — carrying the verbatim
