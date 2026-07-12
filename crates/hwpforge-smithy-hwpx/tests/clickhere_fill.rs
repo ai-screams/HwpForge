@@ -54,6 +54,42 @@ fn fill_fields(section: &mut Section, value: &str) {
     }
 }
 
+/// 한컴이 **직접** 채워 저장한 누름틀의 ground-truth 게이트 (Step 0).
+///
+/// `clickhere_filled.hwpx` 는 macOS 한컴에서 누름틀에 값을 타이핑해 저장한
+/// 파일이다 (2026-07-12). wire 확인 결과: 한컴의 채우기 표현 = 본문
+/// `<hp:t>` 교체 + 필드 마커 보존 + `Direction` 힌트 불변 — Epic 1 구현과
+/// 동일한 모델이다. **단, 한컴은 재저장 시 라벨 run 을 필드 run 에
+/// 병합한다** (`<hp:t>이메일: </hp:t>`·fieldBegin·`<hp:t>값</hp:t>`·
+/// fieldEnd·`<hp:t/>` 가 한 run). `HxRun` 은 자식 순서를 보존하지 않아
+/// 이 경우 본문 귀속이 모호하다 → 라벨을 값으로 오귀속하는 대신
+/// **미채움("")으로 다운그레이드**하고, patch 슬롯도 만들지 않는다
+/// (decoder `unambiguous_body` · patch.rs 거울 게이트). 이 테스트는 그
+/// 다운그레이드 계약과 "모호 필드가 있어도 export 는 성공한다"를 잠근다.
+#[test]
+fn hancom_resaved_merged_run_downgrades_to_unfilled() {
+    let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    path.pop();
+    path.pop();
+    path.push("tests/fixtures/fields/clickhere_filled.hwpx");
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("fixture {}: {e}", path.display()));
+
+    let decoded = HwpxDecoder::decode(&bytes).expect("decode");
+    let section = decoded.document.sections()[0].clone();
+    let (name, body) = first_field(&section);
+    assert_eq!(name.as_deref(), Some("user_email"), "필드 이름 앵커는 살아야 한다");
+    assert_eq!(body, "", "모호한 본문(병합 run)은 라벨 오귀속 대신 미채움으로 다운그레이드");
+
+    // 모호한 필드가 있어도 preservation export 는 성공해야 한다 — 슬롯이
+    // 없을 뿐 export/patch 워크플로 전체가 죽으면 main 대비 회귀다.
+    let preservation = HwpxPatcher::export_section_preservation(&bytes, 0, &section)
+        .expect("모호 필드가 있어도 export 는 성공해야 한다");
+    assert!(
+        preservation.text_slots.iter().all(|s| !s.path.ends_with(".control.field")),
+        "모호한 필드는 patch 슬롯을 만들지 않는다"
+    );
+}
+
 #[test]
 fn filled_clickhere_survives_hwpx_round_trip() {
     let bytes = fixture_bytes();

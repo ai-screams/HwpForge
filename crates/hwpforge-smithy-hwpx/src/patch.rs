@@ -793,33 +793,22 @@ fn collect_raw_run_slots(
             if let Some(field_begin) = pending_field_begin.take() {
                 // 누름틀(CLICK_HERE) 본문 <hp:t> 는 디코더가 display_text 로
                 // 흡수하는 채워진 값이다 — semantic 쪽 Field arm 과 거울상으로
-                // 슬롯을 방출한다 (Epic 1). 디코더는 run 의 모든 텍스트를
-                // 연결하므로(collect_run_text) 단일 <hp:t> 본문만 단일
-                // 스플라이스로 표현 가능하다; 복수 본문은 warning-first 로
-                // 명시 거부한다.
-                if field_begin.field_type == "CLICK_HERE" {
-                    match text_locators.len() {
-                        0 => {}
-                        1 => {
-                            let body = run.texts[0].text();
-                            if !body.is_empty() {
-                                sink.body_slots.push(PreservedTextSlot {
-                                    path: format!(
-                                        "{prefix}.runs[{semantic_run_idx}].control.field"
-                                    ),
-                                    original_text: body,
-                                    has_inline_markup: text_locators[0].has_inline_markup,
-                                    locator: text_locator(&text_locators[0]),
-                                });
-                            }
-                        }
-                        n => {
-                            return Err(HwpxError::InvalidStructure {
-                                detail: format!(
-                                    "ClickHere field body with {n} text elements is not patchable yet ({prefix})"
-                                ),
-                            });
-                        }
+                // 슬롯을 방출한다 (Epic 1). 디코더와 동일한 무모호-귀속
+                // 게이트: run 에 <hp:t> 가 정확히 1개일 때만 슬롯을 만든다
+                // (decoder/section.rs `unambiguous_body`). 복수면 디코더가
+                // display_text 를 비우므로 semantic 쪽도 슬롯을 만들지 않아
+                // 거울이 유지된다 — 한컴 재저장이 라벨 run 을 필드 run 에
+                // 병합한 파일(fixture `fields/clickhere_filled.hwpx`)이
+                // 실존하는 사례.
+                if field_begin.field_type == "CLICK_HERE" && text_locators.len() == 1 {
+                    let body = run.texts[0].text();
+                    if !body.is_empty() {
+                        sink.body_slots.push(PreservedTextSlot {
+                            path: format!("{prefix}.runs[{semantic_run_idx}].control.field"),
+                            original_text: body,
+                            has_inline_markup: text_locators[0].has_inline_markup,
+                            locator: text_locator(&text_locators[0]),
+                        });
                     }
                 }
                 semantic_run_idx += 1;
