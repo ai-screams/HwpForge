@@ -10,7 +10,7 @@ use serde::Deserialize;
 
 use crate::output::{ToolErrorInfo, ToolOutput};
 use crate::tools::{
-    convert, from_json, inspect, patch, restyle, templates, to_json, to_md, validate,
+    convert, fields, fill, from_json, inspect, patch, restyle, templates, to_json, to_md, validate,
 };
 use crate::{prompts, resources};
 
@@ -74,6 +74,25 @@ pub struct PatchRequest {
     /// Path to the JSON file containing the replacement section.
     pub section_json_path: String,
     /// Output HWPX file path.
+    pub output_path: String,
+}
+
+/// Request parameters for `hwpforge_fields`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FieldsRequest {
+    /// Path to the HWPX file to inspect.
+    pub file_path: String,
+}
+
+/// Request parameters for `hwpforge_fill`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct FillRequest {
+    /// Path to the HWPX file to fill.
+    pub file_path: String,
+    /// Field name → value map. All values are validated before anything is
+    /// written (all-or-nothing). Use hwpforge_fields to discover names.
+    pub values: std::collections::BTreeMap<String, String>,
+    /// Output HWPX file path. Must end with `.hwpx`.
     pub output_path: String,
 }
 
@@ -335,6 +354,66 @@ impl HwpForgeServer {
                         data.patched_section, data.output_path, data.size_bytes, data.sections,
                     ),
                     vec!["Use hwpforge_inspect to verify the patched output"],
+                );
+                Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
+            }
+            Err(err) => Ok(tool_error_response(err)),
+        }
+    }
+
+    /// List named click-here fields (누름틀) for fill discoverability.
+    #[tool(
+        name = "hwpforge_fields",
+        description = "List named click-here fields (누름틀) in an HWPX document: name, hint, current value, and whether each is fillable. Use before hwpforge_fill to discover field names."
+    )]
+    async fn hwpforge_fields(
+        &self,
+        Parameters(req): Parameters<FieldsRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = tokio::task::spawn_blocking(move || fields::run_fields(&req.file_path))
+            .await
+            .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?;
+
+        match result {
+            Ok(data) => {
+                let output = ToolOutput::new(
+                    &data,
+                    format!("{} field(s), {} fillable", data.fields.len(), data.fillable_count),
+                    vec!["Use hwpforge_fill with values {name: value} to fill fields"],
+                );
+                Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
+            }
+            Err(err) => Ok(tool_error_response(err)),
+        }
+    }
+
+    /// Fill named click-here fields (누름틀) with values — delta edit that
+    /// byte-preserves every untouched package entry.
+    #[tool(
+        name = "hwpforge_fill",
+        description = "Fill named click-here fields (누름틀) by name→value map, byte-preserving everything else. All values are validated first (all-or-nothing). Much cheaper than to_json+patch for template filling. Use hwpforge_fields to discover names."
+    )]
+    async fn hwpforge_fill(
+        &self,
+        Parameters(req): Parameters<FillRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = tokio::task::spawn_blocking(move || {
+            fill::run_fill(&req.file_path, &req.values, &req.output_path)
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?;
+
+        match result {
+            Ok(data) => {
+                let output = ToolOutput::new(
+                    &data,
+                    format!(
+                        "Filled {} field(s) → {} ({} bytes)",
+                        data.filled.len(),
+                        data.output_path,
+                        data.size_bytes,
+                    ),
+                    vec!["Use hwpforge_inspect or hwpforge_to_md to verify the filled output"],
                 );
                 Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
             }

@@ -2,6 +2,8 @@ pub mod audit_hwp5;
 pub mod census_hwp5;
 pub mod convert;
 pub mod convert_hwp5;
+pub mod fields;
+pub mod fill;
 pub mod from_json;
 pub mod inspect;
 pub mod patch;

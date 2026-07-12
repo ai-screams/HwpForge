@@ -128,6 +128,29 @@ enum Commands {
         base: Option<PathBuf>,
     },
 
+    /// List named click-here fields (누름틀) and whether each is fillable.
+    Fields {
+        /// HWPX file to inspect.
+        file: PathBuf,
+    },
+
+    /// Fill named click-here fields (누름틀) with values, preserving everything else.
+    #[command(
+        long_about = "Fill named click-here fields (누름틀) by name, byte-preserving every untouched package entry.\n\nAll requested values are validated first (unknown/duplicate/unfillable names, empty values) and nothing is written unless every one passes. Use `fields` to discover names."
+    )]
+    Fill {
+        /// HWPX file to fill.
+        file: PathBuf,
+
+        /// name=value pair to fill (repeatable).
+        #[arg(long = "set", value_name = "NAME=VALUE")]
+        sets: Vec<String>,
+
+        /// Output HWPX file path.
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+
     /// Patch a section in an existing HWPX file.
     Patch {
         /// Base HWPX file.
@@ -218,6 +241,12 @@ fn main() {
         }
         Commands::FromJson { input, output, base } => {
             commands::from_json::run(&input, &output, &base, cli.json);
+        }
+        Commands::Fields { file } => {
+            commands::fields::run(&file, cli.json);
+        }
+        Commands::Fill { file, sets, output } => {
+            commands::fill::run(&file, &sets, &output, cli.json);
         }
         Commands::Patch { base, section, section_json, output } => {
             commands::patch::run(&base, section, &section_json, &output, cli.json);
