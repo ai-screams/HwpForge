@@ -861,14 +861,12 @@ fn decode_field_control(
         },
         "CLICK_HERE" | "DATE" | "TIME" | "PAGE_NUM" | "DOC_SUMMARY" | "USER_INFO" => {
             let ft = fb.field_type.parse::<hwpforge_foundation::FieldType>().unwrap_or_default();
-            // #120/#136: round-trip the cached body value. ClickHere's body is
-            // the hint placeholder (re-derived on encode), so keep its
-            // display_text empty per the Core invariant.
-            let display_text = if matches!(ft, hwpforge_foundation::FieldType::ClickHere) {
-                String::new()
-            } else {
-                text.to_string()
-            };
+            // #120/#136: round-trip the cached body value. ClickHere 의 본문
+            // `<hp:t>` 는 사용자가 채운 값이다 — 미채움 상태에서는 본문 ==
+            // Direction 힌트이고, 인코더가 이를 그대로 방출하므로 verbatim
+            // carry 가 byte-중립이다 (encoder/section/field.rs). 이전에는
+            // ClickHere 만 특례로 비워서 채워진 값이 무음 유실됐다.
+            let display_text = text.to_string();
             Control::Field {
                 field_type: ft,
                 hint_text: get_field_param(fb, "Direction"),
