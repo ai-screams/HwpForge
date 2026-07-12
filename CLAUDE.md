@@ -17,7 +17,7 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 - Phase 12 HWP5→HWPX carry series (GSO shapes/equation/memo/dutmal/compose/indexmark/click-here·auto fields/cross-ref instId/document metadata/outline 1–10) `main` 머지 완료.
 - **E6 IR 와이어-누출 상환 완료** (`0.9.0`): Summery rename(A) · BookmarkName collapse(B) · raw wire 필드 제거(C) · `inst_id`/`SystemId`→공유 `ObjectId`(M2). **H1(display_text)=Won't-do** (ADR-009 §CLOSURE, memory `e6-wire-leak-status-h1-wontdo.md`).
 - **0.10.0 릴리스** (2026-07-02): colLine(다단 구분선) HWPX+HWP5 carry(breaking) + rmcp 2.0 보안(GHSA-89vp-x53w-74fx)·quick-xml 0.41 + 문서 정합.
-- **AI 편집 Wave 1** (2026-07-12~13): 누름틀(ClickHere) 채우기 — PR #97 머지 (`feat!:` `Field::display_text` 의미 변경 → 다음 릴리스 `0.11.0`) + `fill` 델타 API·`fields` 발견 표면 (PR #99). 설계/로드맵 = `.docs/planning/2026-07-10-agent-editing-architecture.md` (남은 조각: E3 표 격자 주소 · E6 스탬핑).
+- **AI 편집 Wave 1** (2026-07-12~13): 누름틀(ClickHere) 채우기 — PR #97, **`0.11.0` 릴리스 완료** (2026-07-12, `feat!:` `Field::display_text` 의미 변경) + `fill` 델타 API·`fields` 발견 표면 (PR #99 → `0.12.0` 예정). 설계/로드맵 = `.docs/planning/2026-07-10-agent-editing-architecture.md` (남은 조각: E3 표 격자 주소 · E6 스탬핑).
 
 > **이 섹션은 짧은 상태 스냅샷으로만 유지한다 (wave-by-wave 이력을 여기 다시 쌓지 말 것).**
 > Wave별 상세 이력 + breaking change: **`CHANGELOG.md`** (canonical) 와 memory `MEMORY.md` / `phase11_wave_history.md`.
@@ -34,7 +34,7 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 
 **Workspace Facts** (code-grounded — 카운트는 drift하니 인용 전 확인):
 
-- Cargo packages `11` · crates.io published `0.10.0` (colLine+rmcp2.0; 다음 breaking → `0.11.0`) · MSRV `1.88` · Dev toolchain Rust `1.93`
+- Cargo packages `11` · crates.io published `0.11.0` (누름틀 display_text `feat!:`, 2026-07-12) — E2(fill) 는 `0.12.0` 예정 · MSRV `1.88` · Dev toolchain Rust `1.93`
 - `crates/` 추적 src 파일 ~`177` · nextest ~`2,688` passed + `2` skipped · `examples/` 산출물 `68`+ (미추적 `examples/hwp5_review/` 리뷰 영역 별도 — gitignore 아님) · GitHub workflows `5`
 
 ---
