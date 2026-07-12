@@ -538,6 +538,23 @@ fn collect_semantic_control_slots(
         Control::ConnectLine { caption: Some(caption), .. } => {
             collect_semantic_caption_slots(caption, &format!("{prefix}.connect_line"), slots);
         }
+        // 누름틀(ClickHere) 본문은 사용자가 채우는 값 — 텍스트 슬롯으로
+        // 노출한다 (Epic 1). ClickHere 로만 게이트: SUMMERY/DATE 류의
+        // display_text 는 한컴이 재계산하는 캐시 값이라 슬롯이 없고, redact
+        // 도 지우지 않으므로 편집 시 structural change 로 거부된다 —
+        // 슬롯 없이 redact 만 지우면 변경이 무음 드롭되는 부패 경로가 생긴다.
+        Control::Field {
+            field_type: hwpforge_foundation::FieldType::ClickHere,
+            display_text,
+            ..
+        } => {
+            if !display_text.is_empty() {
+                slots.push(SemanticTextSlot {
+                    path: format!("{prefix}.field"),
+                    text: display_text.clone(),
+                });
+            }
+        }
         _ => {}
     }
 }
@@ -772,8 +789,41 @@ fn collect_raw_run_slots(
         if let Some(field_begin) = &ctrl.field_begin {
             pending_field_begin = Some(field_begin);
         }
-        if ctrl.field_end.is_some() && pending_field_begin.take().is_some() {
-            semantic_run_idx += 1;
+        if ctrl.field_end.is_some() {
+            if let Some(field_begin) = pending_field_begin.take() {
+                // 누름틀(CLICK_HERE) 본문 <hp:t> 는 디코더가 display_text 로
+                // 흡수하는 채워진 값이다 — semantic 쪽 Field arm 과 거울상으로
+                // 슬롯을 방출한다 (Epic 1). 디코더는 run 의 모든 텍스트를
+                // 연결하므로(collect_run_text) 단일 <hp:t> 본문만 단일
+                // 스플라이스로 표현 가능하다; 복수 본문은 warning-first 로
+                // 명시 거부한다.
+                if field_begin.field_type == "CLICK_HERE" {
+                    match text_locators.len() {
+                        0 => {}
+                        1 => {
+                            let body = run.texts[0].text();
+                            if !body.is_empty() {
+                                sink.body_slots.push(PreservedTextSlot {
+                                    path: format!(
+                                        "{prefix}.runs[{semantic_run_idx}].control.field"
+                                    ),
+                                    original_text: body,
+                                    has_inline_markup: text_locators[0].has_inline_markup,
+                                    locator: text_locator(&text_locators[0]),
+                                });
+                            }
+                        }
+                        n => {
+                            return Err(HwpxError::InvalidStructure {
+                                detail: format!(
+                                    "ClickHere field body with {n} text elements is not patchable yet ({prefix})"
+                                ),
+                            });
+                        }
+                    }
+                }
+                semantic_run_idx += 1;
+            }
         }
         if let Some(auto_num) = &ctrl.auto_num {
             if auto_num.num_type == "PAGE" {
@@ -1725,6 +1775,14 @@ fn redact_control(control: &mut Control) {
                 redact_caption(caption);
             }
         }
+        // ClickHere 본문은 편집 가능한 텍스트 슬롯이므로 redact 대상.
+        // 다른 Field 타입(SUMMERY/DATE 류)은 지우지 않는다 — 슬롯이 없어
+        // 변경이 무음 드롭되는 대신 structural change 로 거부되게 한다.
+        Control::Field {
+            field_type: hwpforge_foundation::FieldType::ClickHere,
+            display_text,
+            ..
+        } => display_text.clear(),
         _ => {}
     }
 }
