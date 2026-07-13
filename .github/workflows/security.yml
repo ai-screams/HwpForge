@@ -73,5 +73,10 @@ jobs:
           tool: cargo-fuzz
       # Compile-check the fuzz targets so they don't bit-rot. Actual fuzzing
       # runs are manual / on-demand (`cargo +nightly fuzz run <target>`).
+      #
+      # --target 명시 이유: cargo-fuzz 는 기본 타깃을 "자기 자신이 컴파일된
+      # 플랫폼"으로 잡는데, 2026-06-29부터 prebuilt 바이너리가 musl 정적
+      # 빌드로 배포되면서 x86_64-unknown-linux-musl 을 골라 ASAN 과 충돌했다
+      # ("sanitizer is incompatible with statically linked libc").
       - name: Build fuzz targets
-        run: cargo +nightly fuzz build
+        run: cargo +nightly fuzz build --target x86_64-unknown-linux-gnu
