@@ -17,7 +17,7 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 - Phase 12 HWP5→HWPX carry series (GSO shapes/equation/memo/dutmal/compose/indexmark/click-here·auto fields/cross-ref instId/document metadata/outline 1–10) `main` 머지 완료.
 - **E6 IR 와이어-누출 상환 완료** (`0.9.0`): Summery rename(A) · BookmarkName collapse(B) · raw wire 필드 제거(C) · `inst_id`/`SystemId`→공유 `ObjectId`(M2). **H1(display_text)=Won't-do** (ADR-009 §CLOSURE, memory `e6-wire-leak-status-h1-wontdo.md`).
 - **0.10.0 릴리스** (2026-07-02): colLine(다단 구분선) HWPX+HWP5 carry(breaking) + rmcp 2.0 보안(GHSA-89vp-x53w-74fx)·quick-xml 0.41 + 문서 정합.
-- **AI 편집 Wave 1** (2026-07-12~13): 누름틀(ClickHere) 채우기 — PR #97, **`0.11.0` 릴리스 완료** (2026-07-12, `feat!:` `Field::display_text` 의미 변경) + `fill` 델타 API·`fields` 발견 표면 (PR #99 → `0.12.0` 예정). 설계/로드맵 = `.docs/planning/2026-07-10-agent-editing-architecture.md` (남은 조각: E3 표 격자 주소 · E6 스탬핑).
+- **AI 편집 Wave 1** (2026-07-12~13): 누름틀(ClickHere) 채우기 — PR #97, **`0.11.0` 릴리스 완료** (crates.io+npm, `feat!:` `Field::display_text` 의미 변경) + `fill` 델타 API·`fields` 발견 표면 — PR #99 **머지 완료**, Release PR #100(`v0.11.1`) 대기. 설계/로드맵 = `.docs/planning/2026-07-10-agent-editing-architecture.md` (남은 조각: E3 표 격자 주소 · E6 스탬핑).
 
 > **이 섹션은 짧은 상태 스냅샷으로만 유지한다 (wave-by-wave 이력을 여기 다시 쌓지 말 것).**
 > Wave별 상세 이력 + breaking change: **`CHANGELOG.md`** (canonical) 와 memory `MEMORY.md` / `phase11_wave_history.md`.
@@ -34,7 +34,7 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 
 **Workspace Facts** (code-grounded — 카운트는 drift하니 인용 전 확인):
 
-- Cargo packages `11` · crates.io published `0.11.0` (누름틀 display_text `feat!:`, 2026-07-12) — E2(fill) 는 `0.12.0` 예정 · MSRV `1.88` · Dev toolchain Rust `1.93`
+- Cargo packages `11` · crates.io published `0.11.0` (누름틀 display_text `feat!:`, 2026-07-12) — E2(fill) 는 `v0.11.1`(Release PR #100) 대기 · MSRV `1.88` · Dev toolchain Rust `1.93`
 - `crates/` 추적 src 파일 ~`177` · nextest ~`2,688` passed + `2` skipped · `examples/` 산출물 `68`+ (미추적 `examples/hwp5_review/` 리뷰 영역 별도 — gitignore 아님) · GitHub workflows `5`
 
 ---
@@ -352,6 +352,7 @@ Local planning and research workspace. It may be git-excluded in this repository
 - Table integration gates are concentrated in `crates/hwpforge-bindings-cli/tests/cli_integration.rs`.
 - Stress or real-world table fixtures are not the same thing as committed regression gates.
 - colLine (다단 구분선) HWPX + HWP5→HWPX legs shipped in `0.10.0` (PR #91, 2026-07-02).
+- **Nightly › Fuzz Build 는 2026-06-29부터 실패 중** (레포 변경 무관): prebuilt cargo-fuzz 가 musl 을 기본 타깃으로 골라 ASAN 과 충돌 (`sanitizer is incompatible with statically linked libc`). 수정 = `security.yml:77` 에 `--target x86_64-unknown-linux-gnu` 명시.
 - Always confirm `main` state from code + manifests + git; do not trust stale branch prose.
 
 ---
@@ -389,10 +390,10 @@ Local planning and research workspace. It may be git-excluded in this repository
 
 - **버전/태그를 손으로 만들지 말 것.** `cargo publish`·`git tag`·Cargo.toml 버전 수동 bump 금지. `v0.6.0` 및 per-crate 태그는 전부 release-plz 산출물 — 손대면 자기비교·중복 publish 사고.
 - **흐름은 2단계**: feature PR 머지(버전 안 올림) → release-plz가 **Release PR** 생성/갱신(버전 bump + CHANGELOG) → 사람이 **Release PR 머지** → 그때서야 crates.io publish·태그·GitHub Release·npm·문서 배포가 일어남.
-- **conventional commit 으로 릴리스가 결정**됨: `feat|fix|perf|refactor`(+ `type!:`)만 트리거. breaking 은 **반드시 `type!:` 또는 `BREAKING CHANGE:`** 로 표기(안 하면 0.x에서 patch로 오판). 0.x에서 breaking = **마이너** bump(0.6→0.7).
+- **conventional commit 으로 릴리스가 결정**됨: `feat|fix|perf|refactor`(+ `type!:`)만 트리거. breaking 은 **반드시 `type!:` 또는 `BREAKING CHANGE:`** 로 표기(안 하면 0.x에서 patch로 오판). 0.x에서 breaking = **마이너** bump(0.6→0.7), **비파괴 feat/fix = 패치** bump(0.11.0→0.11.1 — "다음은 0.12.0" 오판 주의).
 - **SemVer 검사는 release-plz가 소유** (`semver_check = true`). ci.yml 에 standalone cargo-semver-checks 게이트를 **다시 넣지 말 것** — feature PR은 버전을 안 올리는 모델이라 breaking PR마다 영원히 빨강이 됨 (이 이유로 PR #78에서 제거).
 - **배포 대상**: crates.io = `hwpforge`(umbrella)·foundation·core·blueprint·smithy-hwpx·smithy-md·bindings-mcp. **제외**(`publish=false`) = smithy-hwp5·convert·bindings-cli·bindings-py. **umbrella 만 GitHub Release 생성** → npm(`@hwpforge/mcp`)·pages 배포가 거기 매달림.
-- **다음 릴리스 주의**: ① **npm publish 는 v0.6.0부터 5연속 실패** (PUT E404 — NPM_TOKEN 만료/권한 의심, 오너가 secret 교체 후 npm-publish 워크플로 re-run 필요; crates.io·GitHub Release·Pages 는 정상) · ② CHANGELOG 한글 표는 `dprint fmt CHANGELOG.md` 수동 후 재-stage · ③ 태그 기반 로컬 검증 전 `git fetch --tags`(stale 태그 → 거짓 통과 함정).
+- **다음 릴리스 주의**: ① **npm publish 복구됨 (2026-07-13, v0.11.0 전 패키지 배포)** — 실패 원인은 granular 토큰 90일 만료(npm 은 인증 실패를 **E404 로 위장**) + 재발급 토큰의 **"Bypass 2FA" 필수**(없으면 E403). ⚠️ 현 토큰 **~2026-10-10 재만료** — 영구 해결은 npm Trusted Publishing(OIDC) 전환(워크플로에 `id-token: write` 추가) · ② CHANGELOG 한글 표는 `dprint fmt CHANGELOG.md` 수동 후 재-stage · ③ 태그 기반 로컬 검증 전 `git fetch --tags`(stale 태그 → 거짓 통과 함정).
 - **Merge queue 활성** — `gh pr merge --squash`(특히 `--delete-branch`) 거부됨(`Auto merge is not allowed` / `Cannot use --delete-branch when merge queue enabled`). 대신 GraphQL `enqueuePullRequest(input:{pullRequestId})` mutation 으로 큐에 넣을 것 (`mergeStateStatus=CLEAN` 이후에만 성공 — BLOCKED/UNSTABLE 중엔 대기). 큐가 PR당 CI 재실행 후 자동 머지(머지 방식은 큐 설정 소유 — `gh --squash` 무시되고 merge-commit). 큐 상태 = `repository.mergeQueue(branch:"main").entries`.
 - **inter-crate 의존성은 `version = "0"` 유지 — 정확 핀으로 "고치지" 말 것.** 통합버전(`version.workspace = true`) 워크스페이스에서 release-plz 는 커밋 없는 베이스 crate 를 못 올려, 정확 핀이면 breaking bump 시 `failed to select a version` 으로 Release PR 생성이 죽음 (PR #94 로 해결; `version_group`·`release_always` 는 무효 — 로컬 전수검증, memory `release-plz-unified-version-workspace.md`).
 - **release-plz 디버깅은 로컬 프리빌트로 재현** (CI 머지 사이클로 추측 금지): `gh release download release-plz-v0.3.159 --repo release-plz/release-plz` + 깨끗한 clone 에서 `release-plz update`. `{{ release_link }}` 는 로컬 렌더 실패 → 임시 제거 후 실험 (cargo install 은 rustc 1.94 요구로 로컬 1.93 에서 실패).
