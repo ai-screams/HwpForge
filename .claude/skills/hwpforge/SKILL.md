@@ -41,8 +41,11 @@ What does the user want?
 │
 ├─ EDIT an existing .hwpx  ── ALWAYS `inspect` first ──
 │   │
+│   ├─ Fill NAMED click-here fields (누름틀) — form-style templates
+│   │     → fields (discover names) → fill --set name=value    [DELTA, cheapest+safest]
+│   │
 │   ├─ Change only EXISTING text
-│   │   (fill a template placeholder, fix a typo, fill a table cell)
+│   │   (fill a prose placeholder, fix a typo, fill a table cell)
 │   │     → to-json (--section) → edit the Text → patch        [TEXT-ONLY, safest]
 │   │
 │   └─ ADD or REMOVE paragraphs (structural change)
@@ -78,6 +81,12 @@ hwpforge convert-hwp5 old.hwp -o out.hwpx
 
 # Inspect (ALWAYS before editing)
 hwpforge inspect doc.hwpx [--styles] [--json]
+
+# Named click-here fields (누름틀) — form templates: discover then fill
+hwpforge fields doc.hwpx [--json]                        # list name/hint/current/fillable
+hwpforge fill doc.hwpx --set 과제명="AI 문서 자동화" --set 기관명="AiScream" -o out.hwpx
+#   all-or-nothing: 하나라도 검증 실패(없는 이름/중복 이름/빈 값/모호 필드)면 아무 것도 안 씀
+#   나머지 패키지 엔트리는 바이트 그대로 보존 (preserve-first)
 
 # Export  (NOTE: -o/--output is REQUIRED — there is no stdout export)
 hwpforge to-json doc.hwpx -o full.json                  # whole document

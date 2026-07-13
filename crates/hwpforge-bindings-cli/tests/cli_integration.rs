@@ -3046,3 +3046,79 @@ fn bad_output_directory() {
         run(&["convert", md.to_str().unwrap(), "-o", "/nonexistent/dir/output.hwpx"]);
     assert_eq!(code, 1, "writing to nonexistent directory should fail");
 }
+
+// ═══════════════════════════════════════════════════════════════
+// fields / fill — E2 누름틀 델타 API 게이트
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn fields_lists_named_clickhere_with_fillability() {
+    let f = fixture("clickhere_named.hwpx");
+    let (value, _, code) = run_json(&["fields", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(value["status"], "ok");
+    assert_eq!(value["fields"][0]["name"], "user_email");
+    assert_eq!(value["fields"][0]["fillable"], true);
+}
+
+#[test]
+fn fill_named_field_end_to_end() {
+    let f = fixture("clickhere_named.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("filled.hwpx");
+    let (value, _, code) = run_json(&[
+        "fill",
+        f.to_str().unwrap(),
+        "--set",
+        "user_email=e2e@gate.io",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+    assert_eq!(value["filled"][0]["name"], "user_email");
+
+    // 채워진 값이 재조회에서 살아있어야 한다.
+    let (again, _, code2) = run_json(&["fields", out.to_str().unwrap()]);
+    assert_eq!(code2, 0);
+    assert_eq!(again["fields"][0]["current"], "e2e@gate.io");
+}
+
+#[test]
+fn fill_unknown_name_reports_available_fields() {
+    let f = fixture("clickhere_named.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("never.hwpx");
+    let (value, _, code) = run_json(&[
+        "fill",
+        f.to_str().unwrap(),
+        "--set",
+        "없는필드=x",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "FIELD_NOT_FOUND");
+    assert!(
+        value["hint"].as_str().unwrap_or("").contains("user_email"),
+        "hint 에 사용 가능한 필드 목록이 있어야 한다: {value}"
+    );
+    assert!(!out.exists(), "preflight 실패 시 산출물이 없어야 한다 (all-or-nothing)");
+}
+
+#[test]
+fn fill_merged_run_field_rejected_as_not_fillable() {
+    let f = fixture("clickhere_filled.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("never2.hwpx");
+    let (value, _, code) = run_json(&[
+        "fill",
+        f.to_str().unwrap(),
+        "--set",
+        "user_email=x@y.z",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "FIELD_NOT_FILLABLE");
+    assert!(!out.exists());
+}

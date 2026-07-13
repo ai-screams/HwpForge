@@ -55,6 +55,7 @@ pub mod default_styles;
 mod encoder;
 pub mod error;
 pub mod exchange;
+mod fill;
 mod inline_text;
 mod list_bridge;
 mod patch;
@@ -74,6 +75,7 @@ pub use exchange::{
     ExportedDocument, ExportedSection, PreservedTextSlot, SectionPreservation, TextLocator,
     SECTION_PRESERVATION_VERSION,
 };
+pub use fill::{FieldInfo, FillError, FillOutcome, FilledField, HwpxFiller};
 pub use patch::HwpxPatcher;
 pub use presets::{builtin_presets, style_store_for_preset, PresetInfo};
 pub use registry_bridge::HwpxRegistryBridge;
