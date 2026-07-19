@@ -7,5 +7,5 @@
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
-    let _ = hwpforge_smithy_hwp5::hwp5_to_hwpx_bytes(data);
+    let _ = hwpforge_convert::hwp5_to_hwpx_bytes(data);
 });

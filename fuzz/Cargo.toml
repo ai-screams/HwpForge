@@ -13,6 +13,7 @@ publish = false
 cargo-fuzz = true
 
 [dependencies]
+hwpforge-convert = { path = "../crates/hwpforge-convert" }
 hwpforge-smithy-hwp5 = { path = "../crates/hwpforge-smithy-hwp5" }
 hwpforge-smithy-hwpx = { path = "../crates/hwpforge-smithy-hwpx" }
 libfuzzer-sys = "0.4"
