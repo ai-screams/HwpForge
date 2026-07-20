@@ -9,6 +9,7 @@ use std::ops::Range;
 
 /// Built-in class-A marker patterns (closed list).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum BuiltinPattern {
@@ -52,6 +53,7 @@ pub struct MarkerHit {
 
 /// Why a candidate is downgraded to guarded (never auto-applied).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum GuardReason {

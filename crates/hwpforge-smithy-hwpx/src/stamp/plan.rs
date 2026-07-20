@@ -25,6 +25,7 @@ use crate::patch::collect_semantic_text_slots;
 /// preflights and every candidate is approved (named or ignored) by the
 /// caller's map (design decision §3-2/§3-3).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct StampCandidate {
     /// Zero-based section index.
     pub section: usize,

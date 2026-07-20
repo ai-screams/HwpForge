@@ -10,7 +10,8 @@ use serde::Deserialize;
 
 use crate::output::{ToolErrorInfo, ToolOutput};
 use crate::tools::{
-    convert, fields, fill, from_json, inspect, patch, restyle, templates, to_json, to_md, validate,
+    convert, fields, fill, from_json, inspect, patch, restyle, stamp, templates, to_json, to_md,
+    validate,
 };
 use crate::{prompts, resources};
 
@@ -94,6 +95,28 @@ pub struct FillRequest {
     pub values: std::collections::BTreeMap<String, String>,
     /// Output HWPX file path. Must end with `.hwpx`.
     pub output_path: String,
+}
+
+/// Request parameters for `hwpforge_stamp_plan`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct StampPlanRequest {
+    /// Path to the HWPX file to inspect for placeholder candidates.
+    pub file_path: String,
+}
+
+/// Request parameters for `hwpforge_stamp`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct StampRequest {
+    /// Path to the HWPX file to stamp.
+    pub file_path: String,
+    /// Approved specs: one per candidate from hwpforge_stamp_plan, each with
+    /// an action ({"field":{"name":"…"}} or "ignore"). Every unguarded
+    /// candidate must be covered (all-or-nothing).
+    pub specs: Vec<hwpforge_smithy_hwpx::stamp::StampSpec>,
+    /// Output HWPX file path. Must end with `.hwpx`.
+    pub output_path: String,
+    /// Manifest JSON path (default: `<output>.manifest.json`).
+    pub manifest_path: Option<String>,
 }
 
 /// Request parameters for `hwpforge_validate`.
@@ -414,6 +437,77 @@ impl HwpForgeServer {
                         data.size_bytes,
                     ),
                     vec!["Use hwpforge_inspect or hwpforge_to_md to verify the filled output"],
+                );
+                Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
+            }
+            Err(err) => Ok(tool_error_response(err)),
+        }
+    }
+
+    /// Discover prose placeholder candidates for template stamping (E6).
+    #[tool(
+        name = "hwpforge_stamp_plan",
+        description = "Discover class-A placeholder candidates (checkbox/paren-blank/date-blank/standalone-@/seal tokens) in an HWPX for template stamping. Author one spec per candidate (field name or ignore) and pass them to hwpforge_stamp. Guarded candidates (instruction context) are never auto-applied."
+    )]
+    async fn hwpforge_stamp_plan(
+        &self,
+        Parameters(req): Parameters<StampPlanRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = tokio::task::spawn_blocking(move || stamp::run_stamp_plan(&req.file_path))
+            .await
+            .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?;
+
+        match result {
+            Ok(data) => {
+                let output = ToolOutput::new(
+                    &data,
+                    format!("{} stamp candidate(s) found", data.candidates.len()),
+                    vec![
+                        "Author one spec per candidate: {\"field\":{\"name\":\"…\"}} or \"ignore\"",
+                        "Then call hwpforge_stamp with the full spec list (all-or-nothing)",
+                    ],
+                );
+                Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
+            }
+            Err(err) => Ok(tool_error_response(err)),
+        }
+    }
+
+    /// Promote placeholders to named click-here fields (E6 stamping).
+    #[tool(
+        name = "hwpforge_stamp",
+        description = "Promote prose placeholders to named click-here fields (누름틀) using the approved spec list from hwpforge_stamp_plan. Fail-closed admission gate (lossless round-trip + ZIP closed-world) + all-or-nothing preflight; writes the stamped HWPX and a manifest. The output is immediately usable with hwpforge_fields/hwpforge_fill."
+    )]
+    async fn hwpforge_stamp(
+        &self,
+        Parameters(req): Parameters<StampRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = tokio::task::spawn_blocking(move || {
+            stamp::run_stamp(
+                &req.file_path,
+                &req.specs,
+                &req.output_path,
+                req.manifest_path.as_deref(),
+            )
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?;
+
+        match result {
+            Ok(data) => {
+                let output = ToolOutput::new(
+                    &data,
+                    format!(
+                        "Stamped {} field(s) (ignored {}, guarded-skipped {}) → {}",
+                        data.stamped.len(),
+                        data.ignored,
+                        data.skipped_guarded,
+                        data.output_path,
+                    ),
+                    vec![
+                        "Use hwpforge_fields to list the stamped fields",
+                        "Fill them with hwpforge_fill (name→value map)",
+                    ],
                 );
                 Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
             }
