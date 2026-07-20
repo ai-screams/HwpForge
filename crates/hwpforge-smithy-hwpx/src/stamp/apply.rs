@@ -16,6 +16,7 @@ use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::{Control, Document, Draft, Paragraph, Section};
 use hwpforge_foundation::FieldType;
 
+use super::detect::BuiltinPattern;
 use super::plan::{plan, StampCandidate};
 use crate::fill::visit_section_fields;
 
@@ -62,8 +63,12 @@ pub struct StampedField {
     /// Pre-stamp semantic slot path (`source_location` — run indices shift
     /// after the split, so this addresses the ORIGINAL document).
     pub path: String,
+    /// UTF-8 byte span of the marker within the original slot text.
+    pub span: Range<usize>,
     /// The original marker, now the field's body and default hint.
     pub marker: String,
+    /// Which detector produced the candidate (manifest provenance).
+    pub pattern: BuiltinPattern,
 }
 
 /// Result of a successful [`apply`].
@@ -265,11 +270,18 @@ pub fn apply(
         match &spec.action {
             StampAction::Ignore => ignored += 1,
             StampAction::Field { name, hint } => {
+                // Preflight verified every spec resolves to a live candidate.
+                let pattern = by_key
+                    .get(&candidate_key(spec.section, &spec.path, &spec.span))
+                    .map(|c| c.pattern)
+                    .expect("preflight guarantees a matching candidate");
                 stamped.push(StampedField {
                     name: name.clone(),
                     section: spec.section,
                     path: spec.path.clone(),
+                    span: spec.span.clone(),
                     marker: spec.marker.clone(),
+                    pattern,
                 });
                 index.by_slot.entry(slot_key(spec.section, &spec.path)).or_default().push(
                     ApprovedField {

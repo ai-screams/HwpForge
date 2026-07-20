@@ -1667,7 +1667,8 @@ fn section_path(section_idx: usize) -> String {
     format!("Contents/section{section_idx}.xml")
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+// pub(crate): E6 stamp manifest 가 source/output 해시에 재사용.
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     let digest = hasher.finalize();

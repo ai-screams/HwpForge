@@ -18,7 +18,12 @@
 mod apply;
 mod detect;
 mod plan;
+mod stamper;
 
 pub use apply::{apply, StampAction, StampError, StampOutcome, StampSpec, StampedField};
 pub use detect::{detect_markers, paragraph_guard, BuiltinPattern, GuardReason, MarkerHit};
 pub use plan::{plan, StampCandidate};
+pub use stamper::{
+    HwpxStamper, ManifestField, StampManifest, StampMeta, StampResult, StamperError,
+    STAMP_MANIFEST_VERSION,
+};

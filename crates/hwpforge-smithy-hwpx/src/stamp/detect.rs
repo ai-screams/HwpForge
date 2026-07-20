@@ -25,6 +25,19 @@ pub enum BuiltinPattern {
     SealSign,
 }
 
+impl BuiltinPattern {
+    /// Stable detector id used in manifests and rule references.
+    pub fn id(&self) -> &'static str {
+        match self {
+            Self::Checkbox => "checkbox",
+            Self::ParenBlank => "paren_blank",
+            Self::DateBlank => "date_blank",
+            Self::EmailAt => "email_at",
+            Self::SealSign => "seal_sign",
+        }
+    }
+}
+
 /// One detected marker in a text payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MarkerHit {

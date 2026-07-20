@@ -13,7 +13,9 @@ use hwpforge_core::run::Run;
 use hwpforge_core::table::{Table, TableCell, TableRow};
 use hwpforge_core::{Document, Draft, Paragraph, Section};
 use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
-use hwpforge_smithy_hwpx::stamp::{apply, plan, StampAction, StampSpec};
+use hwpforge_smithy_hwpx::stamp::{
+    apply, plan, HwpxStamper, StampAction, StampSpec, StamperError, STAMP_MANIFEST_VERSION,
+};
 use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder, HwpxFiller};
 
@@ -142,4 +144,92 @@ fn stamped_output_decode_encode_is_a_fixed_point() {
     let d2 = HwpxDecoder::decode(&e1).expect("d2");
     assert_eq!(d1.document, d2.document, "stamped output must be a decode/encode fixed point");
     assert_eq!(d1.style_store, d2.style_store);
+}
+
+// ── HwpxStamper (bytes-level facade) ────────────────────────────────
+
+#[test]
+fn stamper_stamps_bytes_and_builds_manifest() {
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(
+        vec![text_para("성명: (   )")],
+        PageSettings::default(),
+    ));
+    let base = encode(doc);
+
+    let candidates = HwpxStamper::plan_bytes(&base).expect("plan_bytes");
+    assert_eq!(candidates.len(), 1);
+    let c = &candidates[0];
+    let specs = vec![StampSpec {
+        section: c.section,
+        path: c.path.clone(),
+        span: c.span.clone(),
+        marker: c.marker.clone(),
+        action: StampAction::Field { name: "성명".into(), hint: Some("이름을 입력".into()) },
+    }];
+
+    let result = HwpxStamper::stamp(&base, &specs).expect("stamp");
+    assert_eq!(result.outcome.stamped.len(), 1);
+
+    // manifest invariants (§3-5)
+    let m = &result.manifest;
+    assert_eq!(m.schema_version, STAMP_MANIFEST_VERSION);
+    assert_eq!(m.source_sha256.len(), 64);
+    assert_eq!(m.output_sha256.len(), 64);
+    assert_ne!(m.source_sha256, m.output_sha256);
+    assert_eq!(m.fields.len(), 1);
+    let mf = &m.fields[0];
+    assert_eq!(mf.field.name.as_deref(), Some("성명"));
+    assert!(mf.field.fillable);
+    let meta = mf.stamp.as_ref().expect("stamped field carries stamp meta");
+    assert_eq!(meta.pattern, "builtin:paren_blank");
+    assert_eq!(meta.marker, "(   )");
+    assert!(meta.source_location.contains("paragraphs[0].runs[0]"));
+
+    // manifest `field` projection == output list_fields (핵심 불변식)
+    let fields = HwpxFiller::list_fields(&result.bytes).expect("list_fields");
+    assert_eq!(fields.len(), m.fields.len());
+    for (a, b) in fields.iter().zip(&m.fields) {
+        assert_eq!(a.name, b.field.name);
+        assert_eq!(a.current, b.field.current);
+        assert_eq!(a.fillable, b.field.fillable);
+    }
+}
+
+#[test]
+fn stamper_rejects_input_with_uncarried_zip_entries() {
+    use std::io::{Cursor, Write};
+
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(vec![text_para("(   )")], PageSettings::default()));
+    let base = encode(doc);
+
+    // Append an entry the encoder does not carry.
+    let mut archive = zip::ZipArchive::new(Cursor::new(base.clone())).expect("open zip");
+    let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+    for i in 0..archive.len() {
+        let entry = archive.by_index_raw(i).expect("entry");
+        writer.raw_copy_file(entry).expect("copy");
+    }
+    writer
+        .start_file("Custom/extra.bin", zip::write::SimpleFileOptions::default())
+        .expect("start extra");
+    writer.write_all(b"payload").expect("write extra");
+    let tampered = writer.finish().expect("finish").into_inner();
+
+    let candidates = HwpxStamper::plan_bytes(&tampered).expect("plan_bytes");
+    let specs = vec![StampSpec {
+        section: candidates[0].section,
+        path: candidates[0].path.clone(),
+        span: candidates[0].span.clone(),
+        marker: candidates[0].marker.clone(),
+        action: StampAction::Field { name: "슬롯".into(), hint: None },
+    }];
+    let err = HwpxStamper::stamp(&tampered, &specs).unwrap_err();
+    match err {
+        StamperError::UncarriedZipEntries { entries } => {
+            assert_eq!(entries, vec!["Custom/extra.bin".to_string()]);
+        }
+        other => panic!("expected UncarriedZipEntries, got {other}"),
+    }
 }
