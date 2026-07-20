@@ -222,9 +222,9 @@ impl HwpxPatcher {
 }
 
 #[derive(Debug, Clone)]
-struct SemanticTextSlot {
-    path: String,
-    text: String,
+pub(crate) struct SemanticTextSlot {
+    pub(crate) path: String,
+    pub(crate) text: String,
 }
 
 #[derive(Debug, Default)]
@@ -375,7 +375,9 @@ fn build_section_preservation(
     })
 }
 
-fn collect_semantic_text_slots(section: &Section) -> Vec<SemanticTextSlot> {
+// pub(crate): E6 stamp plan 단계가 같은 커버리지로 placeholder 를 탐지한다
+// (세 번째 순회 복제 금지 — fill/patch 거울 규칙과 동일 계열).
+pub(crate) fn collect_semantic_text_slots(section: &Section) -> Vec<SemanticTextSlot> {
     let mut slots: Vec<SemanticTextSlot> = Vec::new();
     collect_semantic_paragraph_slots(&section.paragraphs, "paragraphs", &mut slots);
     // ADR-002: emit a slot per `<hp:header>` / `<hp:footer>` so multi-

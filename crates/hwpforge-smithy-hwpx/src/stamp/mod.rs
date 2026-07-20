@@ -16,5 +16,7 @@
 //!   plan preflights, then applies atomically
 
 mod detect;
+mod plan;
 
 pub use detect::{detect_markers, paragraph_guard, BuiltinPattern, GuardReason, MarkerHit};
+pub use plan::{plan, StampCandidate};
