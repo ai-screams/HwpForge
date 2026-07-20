@@ -69,7 +69,10 @@ pub fn plan<S>(document: &Document<S>) -> Vec<StampCandidate> {
         }
 
         for slot in &slots {
-            if is_field_body_slot(&slot.path) {
+            // Field bodies are never stamp targets; tab-bearing InlineText
+            // runs still contribute guard context above, but splitting them
+            // is lossy so they produce no candidates (Wave 1A).
+            if is_field_body_slot(&slot.path) || slot.inline {
                 continue;
             }
             let hits = detect_markers(&slot.text);

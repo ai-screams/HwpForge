@@ -225,6 +225,11 @@ impl HwpxPatcher {
 pub(crate) struct SemanticTextSlot {
     pub(crate) path: String,
     pub(crate) text: String,
+    /// True when the payload is a tab-bearing `RunContent::InlineText`
+    /// (plain-string projection). Patch editing downgrades such runs to
+    /// `Text` on apply; E6 stamping excludes them instead — splitting a
+    /// tab-bearing run is lossy (Wave 1A).
+    pub(crate) inline: bool,
 }
 
 #[derive(Debug, Default)]
@@ -433,6 +438,7 @@ fn collect_semantic_paragraph_slots(
                 RunContent::Text(text) => slots.push(SemanticTextSlot {
                     path: format!("{run_prefix}.text"),
                     text: text.clone(),
+                    inline: false,
                 }),
                 // `RunContent::InlineText` carries `<hp:tab>`
                 // attributes that the slot model cannot represent;
@@ -444,6 +450,7 @@ fn collect_semantic_paragraph_slots(
                 RunContent::InlineText(it) => slots.push(SemanticTextSlot {
                     path: format!("{run_prefix}.text"),
                     text: it.plain_text(),
+                    inline: true,
                 }),
                 RunContent::Table(table) => {
                     collect_semantic_table_slots(table, &format!("{run_prefix}.table"), slots);
@@ -554,6 +561,7 @@ fn collect_semantic_control_slots(
                 slots.push(SemanticTextSlot {
                     path: format!("{prefix}.field"),
                     text: display_text.clone(),
+                    inline: false,
                 });
             }
         }

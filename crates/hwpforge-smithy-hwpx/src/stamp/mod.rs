@@ -15,8 +15,10 @@
 //! - two-phase plan/apply: all rules produce a candidate plan, the whole
 //!   plan preflights, then applies atomically
 
+mod apply;
 mod detect;
 mod plan;
 
+pub use apply::{apply, StampAction, StampError, StampOutcome, StampSpec, StampedField};
 pub use detect::{detect_markers, paragraph_guard, BuiltinPattern, GuardReason, MarkerHit};
 pub use plan::{plan, StampCandidate};
