@@ -3122,3 +3122,110 @@ fn fill_merged_run_field_rejected_as_not_fillable() {
     assert_eq!(value["code"], "FIELD_NOT_FILLABLE");
     assert!(!out.exists());
 }
+
+// ═══════════════════════════════════════════════════════════════
+// stamp-plan / stamp — E6 템플릿 스탬핑 게이트
+// ═══════════════════════════════════════════════════════════════
+
+/// stamp-plan candidates 에서 시험용 spec 맵을 만든다: 무가드 후보는
+/// 순번 이름으로 승격, 가드 후보는 ignore.
+fn stamp_map_from_plan(plan: &serde_json::Value, skip_first: bool) -> serde_json::Value {
+    let mut specs = Vec::new();
+    let mut n = 0usize;
+    for (idx, c) in plan["candidates"].as_array().unwrap().iter().enumerate() {
+        if skip_first && idx == 0 {
+            continue;
+        }
+        // 가드 후보는 맵에서 제외 — 스펙 없는 가드 후보의 skip 경로 검증.
+        if !c["guard"].is_null() {
+            continue;
+        }
+        n += 1;
+        let action = serde_json::json!({"field": {"name": format!("게이트필드{n}"), "hint": null}});
+        specs.push(serde_json::json!({
+            "section": c["section"],
+            "path": c["path"],
+            "span": c["span"],
+            "marker": c["marker"],
+            "action": action,
+        }));
+    }
+    serde_json::Value::Array(specs)
+}
+
+#[test]
+fn stamp_plan_lists_candidates_with_guards() {
+    let f = fixture("stamp/placeholder_basic.hwpx");
+    let (value, _, code) = run_json(&["stamp-plan", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(value["status"], "ok");
+    let candidates = value["candidates"].as_array().unwrap();
+    assert_eq!(candidates.len(), 3, "paren blank + cell checkbox + guarded checkbox: {value}");
+    let guarded: Vec<_> = candidates.iter().filter(|c| !c["guard"].is_null()).collect();
+    assert_eq!(guarded.len(), 1, "※ 안내문의 □ 만 가드되어야 한다");
+    assert_eq!(guarded[0]["marker"], "□");
+}
+
+#[test]
+fn stamp_end_to_end_then_fillable() {
+    let f = fixture("stamp/placeholder_basic.hwpx");
+    let tmp = test_tmp();
+    let (plan, _, code) = run_json(&["stamp-plan", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+
+    let map = tmp.join("map.json");
+    std::fs::write(&map, stamp_map_from_plan(&plan, false).to_string()).unwrap();
+    let out = tmp.join("stamped.hwpx");
+    let (value, _, code) = run_json(&[
+        "stamp",
+        f.to_str().unwrap(),
+        "--map",
+        map.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "stamp must succeed: {value}");
+    assert_eq!(value["stamped"].as_array().unwrap().len(), 2);
+    assert_eq!(value["skipped_guarded"], 1);
+    let manifest_path = value["manifest"].as_str().unwrap().to_string();
+    assert!(std::path::Path::new(&manifest_path).exists(), "manifest must be written");
+
+    // 스탬프 산출물은 즉시 fields/fill 로 소비 가능해야 한다.
+    let (fields, _, code) = run_json(&["fields", out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(fields["fields"].as_array().unwrap().len(), 2);
+
+    let filled = tmp.join("filled.hwpx");
+    let (fill, _, code) = run_json(&[
+        "fill",
+        out.to_str().unwrap(),
+        "--set",
+        "게이트필드1=홍길동",
+        "-o",
+        filled.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "fill on stamped output must succeed: {fill}");
+}
+
+#[test]
+fn stamp_uncovered_candidate_rejected_all_or_nothing() {
+    let f = fixture("stamp/placeholder_basic.hwpx");
+    let tmp = test_tmp();
+    let (plan, _, _) = run_json(&["stamp-plan", f.to_str().unwrap()]);
+
+    // 첫 후보를 맵에서 누락 → preflight 거부, 산출물 없음
+    let map = tmp.join("partial-map.json");
+    std::fs::write(&map, stamp_map_from_plan(&plan, true).to_string()).unwrap();
+    let out = tmp.join("never-stamped.hwpx");
+    let (value, _, code) = run_json(&[
+        "stamp",
+        f.to_str().unwrap(),
+        "--map",
+        map.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "STAMP_CANDIDATE_UNCOVERED");
+    assert!(!out.exists(), "preflight 실패 시 산출물이 없어야 한다 (fail-closed)");
+}

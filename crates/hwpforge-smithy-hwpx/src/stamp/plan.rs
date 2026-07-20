@@ -24,7 +24,7 @@ use crate::patch::collect_semantic_text_slots;
 /// Candidates are proposals only — nothing is applied until the whole plan
 /// preflights and every candidate is approved (named or ignored) by the
 /// caller's map (design decision §3-2/§3-3).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct StampCandidate {
     /// Zero-based section index.
     pub section: usize,

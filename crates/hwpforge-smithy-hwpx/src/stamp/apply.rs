@@ -22,7 +22,8 @@ use crate::fill::visit_section_fields;
 
 /// Caller decision for one candidate (design §3-3: the caller map is the
 /// only source of final field names — no auto-derived names, no suffixes).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum StampAction {
     /// Promote to a named ClickHere field.
     Field {
@@ -39,7 +40,7 @@ pub enum StampAction {
 ///
 /// Identity must match a live plan candidate exactly — a stale span or
 /// edited document fails preflight instead of stamping the wrong text.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct StampSpec {
     /// Zero-based section index (from [`StampCandidate::section`]).
     pub section: usize,
@@ -54,7 +55,7 @@ pub struct StampSpec {
 }
 
 /// One field created by [`apply`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct StampedField {
     /// The field name (unique in the output document).
     pub name: String,

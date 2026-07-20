@@ -8,7 +8,8 @@
 use std::ops::Range;
 
 /// Built-in class-A marker patterns (closed list).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum BuiltinPattern {
     /// Literal `□` / `☑` checkbox glyph.
@@ -50,7 +51,8 @@ pub struct MarkerHit {
 }
 
 /// Why a candidate is downgraded to guarded (never auto-applied).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum GuardReason {
     /// The surrounding paragraph is instruction/example prose
