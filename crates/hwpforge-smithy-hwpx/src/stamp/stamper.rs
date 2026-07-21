@@ -122,10 +122,11 @@ impl std::fmt::Display for StamperError {
                  no-op decode→encode→decode — refusing to stamp (E4 preserve-first path \
                  required for this input)"
             ),
+            // Review L2: entry names come from an untrusted archive — debug
+            // formatting escapes control characters (terminal injection).
             Self::UncarriedZipEntries { entries } => write!(
                 f,
-                "input ZIP entries not carried by the encoder (would be dropped): {}",
-                entries.join(", ")
+                "input ZIP entries not carried by the encoder (would be dropped): {entries:?}"
             ),
             Self::Stamp(e) => write!(f, "stamp preflight: {e}"),
             Self::ManifestInvariant { detail } => write!(f, "manifest invariant: {detail}"),

@@ -3288,3 +3288,27 @@ fn stamp_error_codes_for_bad_maps() {
 
     assert!(!out.exists(), "모든 거부에서 산출물이 없어야 한다 (fail-closed)");
 }
+
+#[test]
+fn stamp_manifest_write_failure_removes_output() {
+    // Review L1: manifest 기록 실패 시 .hwpx 산출물도 남기지 않아야 한다.
+    let f = fixture("stamp/placeholder_basic.hwpx");
+    let tmp = test_tmp();
+    let (plan, _, _) = run_json(&["stamp-plan", f.to_str().unwrap()]);
+    let map = tmp.join("map.json");
+    std::fs::write(&map, stamp_map_from_plan(&plan, false).to_string()).unwrap();
+    let out = tmp.join("orphan.hwpx");
+    let (value, _, code) = run_json(&[
+        "stamp",
+        f.to_str().unwrap(),
+        "--map",
+        map.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--manifest",
+        "/nonexistent-dir/never.manifest.json",
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "FILE_WRITE_FAILED");
+    assert!(!out.exists(), "manifest 실패 시 산출물이 제거되어야 한다 (fail-closed)");
+}

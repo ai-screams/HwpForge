@@ -64,7 +64,9 @@ pub fn run_stamp(
     let bytes = read_file_bytes(file_path)?;
     let result = HwpxStamper::stamp(&bytes, specs).map_err(map_stamper_error)?;
 
-    write_output_file(output_path, &result.bytes)?;
+    // Review L1: serialize the manifest BEFORE writing anything, and remove
+    // the .hwpx if the manifest write fails — a failed call must leave no
+    // partial artifact behind (fail-closed).
     let manifest_file = manifest_path
         .map(str::to_string)
         .unwrap_or_else(|| format!("{}.manifest.json", output_path.trim_end_matches(".hwpx")));
@@ -75,7 +77,11 @@ pub fn run_stamp(
             "Report this as a bug.",
         )
     })?;
-    write_output_file(&manifest_file, manifest_json.as_bytes())?;
+    write_output_file(output_path, &result.bytes)?;
+    if let Err(e) = write_output_file(&manifest_file, manifest_json.as_bytes()) {
+        let _ = std::fs::remove_file(output_path);
+        return Err(e);
+    }
 
     let size_bytes = result.bytes.len() as u64;
     Ok(StampData {

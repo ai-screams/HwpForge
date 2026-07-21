@@ -938,6 +938,14 @@ fn decode_field_control(
             // `trim_start_matches("?#")` only handled the literal `?#`
             // prefix and never the `;` terminator, so Object lifting never
             // fired and every decode→encode cycle accumulated `?`/`;`.
+            //
+            // Known normalizations (review L3, Core semantics preserved):
+            // - a bookmark NAME that itself starts with `#` or ends with
+            //   `;` is indistinguishable from envelope/anchor decoration
+            //   and re-encodes without it (`?#foo;` → `?foo;`);
+            // - files corrupted by the old accumulating bug (`??…;;`)
+            //   stabilize after one unwrap per decode but are NOT healed
+            //   back to a clean Object/Name form.
             let target_str = get_field_param(fb, "RefPath")
                 .map(|p| {
                     let s = p.as_str();

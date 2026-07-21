@@ -104,14 +104,24 @@ fn scan_paren(text: &str, hits: &mut Vec<MarkerHit>) {
             push(hits, BuiltinPattern::SealSign, text, i..i + tok.len());
             continue;
         }
-        // Whitespace-only interior up to the next `)` on the same line.
+        // Whitespace-only interior up to the closing `)` on the same line.
+        // The scan consumes ONLY whitespace before deciding, so total work
+        // across all `(` is linear — review M1: the previous
+        // `rest.find(')')` scanned to EOF per `(`, O(n²) on adversarial
+        // `(((…` input (24s at 1MB, bench-verified).
         let rest = &text[i + 1..];
-        if let Some(close) = rest.find(')') {
-            let inner = &rest[..close];
-            if !inner.is_empty() && !inner.contains('\n') && inner.chars().all(char::is_whitespace)
-            {
-                push(hits, BuiltinPattern::ParenBlank, text, i..i + 1 + close + 1);
+        let mut saw_ws = false;
+        for (j, c) in rest.char_indices() {
+            if c == ')' {
+                if saw_ws {
+                    push(hits, BuiltinPattern::ParenBlank, text, i..i + 1 + j + 1);
+                }
+                break;
             }
+            if c == '\n' || !c.is_whitespace() {
+                break; // non-whitespace interior → not a blank
+            }
+            saw_ws = true;
         }
     }
 }
@@ -238,6 +248,22 @@ mod tests {
     fn empty_paren_pair_is_not_a_blank() {
         // `()` has no whitespace inside — not a fill slot.
         assert!(detect_markers("()").is_empty());
+    }
+
+    #[test]
+    fn adversarial_open_paren_flood_stays_linear() {
+        // Review M1: the old scanner ran `rest.find(')')` per `(` — O(n²),
+        // 24s on this input. The fixed scanner consumes only whitespace per
+        // `(`, so total work is linear (~ms). The generous bound below only
+        // trips on an algorithmic regression, not on slow CI.
+        let flood = "(".repeat(1_000_000);
+        let started = std::time::Instant::now();
+        assert!(detect_markers(&flood).is_empty());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "paren scan must stay linear on `(((…` flood, took {:?}",
+            started.elapsed()
+        );
     }
 
     #[test]

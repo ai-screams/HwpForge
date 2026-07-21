@@ -89,19 +89,23 @@ pub fn run(
         Err(e) => exit_stamper_error(e, json_mode),
     };
 
-    if let Err(e) = std::fs::write(output, &result.bytes) {
-        CliError::new("FILE_WRITE_FAILED", format!("Cannot write '{}': {e}", output.display()))
-            .exit(json_mode, 1);
-    }
     let manifest_file: PathBuf = manifest_path
         .map(Path::to_path_buf)
         .unwrap_or_else(|| output.with_extension("manifest.json"));
     let manifest_json = serde_json::to_string_pretty(&result.manifest).unwrap();
+    if let Err(e) = std::fs::write(output, &result.bytes) {
+        CliError::new("FILE_WRITE_FAILED", format!("Cannot write '{}': {e}", output.display()))
+            .exit(json_mode, 1);
+    }
     if let Err(e) = std::fs::write(&manifest_file, manifest_json) {
+        // Review L1: a stamped .hwpx without its manifest is a partial
+        // artifact — remove it so a failed command leaves nothing behind.
+        let _ = std::fs::remove_file(output);
         CliError::new(
             "FILE_WRITE_FAILED",
             format!("Cannot write '{}': {e}", manifest_file.display()),
         )
+        .with_hint("manifest 기록 실패로 산출물을 남기지 않았습니다 (fail-closed)")
         .exit(json_mode, 1);
     }
 
@@ -152,9 +156,10 @@ fn exit_stamper_error(error: StamperError, json_mode: bool) -> ! {
              코덱 갭 수정 또는 E4 preserve-first 경로가 필요합니다",
         )
         .exit(json_mode, 1),
+        // Review L2: entry names are untrusted — {:?} escapes control chars.
         StamperError::UncarriedZipEntries { entries } => CliError::new(
             "INPUT_ENTRIES_NOT_CARRIED",
-            format!("encoder does not carry input entries: {}", entries.join(", ")),
+            format!("encoder does not carry input entries: {entries:?}"),
         )
         .with_hint("재인코드 시 유실될 ZIP 엔트리가 있어 거부합니다 (fail-closed)")
         .exit(json_mode, 1),
