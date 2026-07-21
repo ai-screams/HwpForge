@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.3](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.11.2...hwpforge-core-v0.11.3) - 2026-07-21
+
+### Added
+
+- *(core)* 표 논리 격자 파생 모듈 table::grid 신설
+
+
+### Fixed
+
+- 완전 피복 빈 표 행을 진실하게 수용하고 HWP5 유령 셀 폴백 제거
+
+
 ## [0.11.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.10.0...hwpforge-core-v0.11.0) - 2026-07-12
 
 ### Added

@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.3](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.11.2...hwpforge-smithy-md-v0.11.3) - 2026-07-21
+
+### Added
+
+- lossy MD 병합셀 평탄화 경고 + convert 병합 격자 회귀 잠금 (E3 Wave 4)
+
+
 ## [0.11.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.10.0...hwpforge-smithy-md-v0.11.0) - 2026-07-12
 
 ### Added

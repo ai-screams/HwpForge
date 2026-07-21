@@ -5,6 +5,25 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.3](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.11.2...hwpforge-smithy-hwpx-v0.11.3) - 2026-07-21
+
+### Added
+
+- set-cell — 논리 격자 주소 기반 표 셀 편집 (E3 Wave 3)
+
+- JSON export 에 표 셀 논리 격자 주소(addr) 노출 + import 검증-후-폐기
+
+
+### Changed
+
+- 표 셀 주소 occupancy 계산 2중복을 core grid_placements 로 통합
+
+
+### Fixed
+
+- 완전 피복 빈 표 행을 진실하게 수용하고 HWP5 유령 셀 폴백 제거
+
+
 ## [0.11.2](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.11.1...hwpforge-smithy-hwpx-v0.11.2) - 2026-07-21
 
 ### Added
