@@ -117,3 +117,76 @@ pub fn run_to_md(file_path: &str, output_dir: Option<&str>) -> Result<ToMdData, 
 
     Ok(ToMdData { markdown_path: md_path, image_paths, size_bytes, image_count })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn temp_dir(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir()
+            .join(format!("hwpforge_mcp_to_md_{}", std::process::id()))
+            .join(name);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// 병합 표가 든 최소 hwpx 를 만들어 경로를 돌려준다.
+    fn merged_form_hwpx(dir: &std::path::Path) -> String {
+        use hwpforge_core::page::PageSettings;
+        use hwpforge_core::run::Run;
+        use hwpforge_core::table::{Table, TableCell, TableRow};
+        use hwpforge_core::{Document, Paragraph, Section};
+        use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+        use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
+        use hwpforge_smithy_hwpx::HwpxEncoder;
+
+        let text_para = |t: &str| {
+            Paragraph::with_runs(vec![Run::text(t, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
+        };
+        let cell = |t: &str, rs: u16| {
+            TableCell::with_span(vec![text_para(t)], HwpUnit::new(8000).unwrap(), 1, rs)
+        };
+        let table = Table::new(vec![
+            TableRow::new(vec![cell("병합", 2), cell("우측", 1)]),
+            TableRow::new(vec![cell("아래", 1)]),
+        ]);
+        let mut host = Paragraph::new(ParaShapeIndex::new(0));
+        host.add_run(Run::table(table, CharShapeIndex::new(0)));
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(vec![host], PageSettings::default()));
+
+        let mut styles = HwpxStyleStore::with_default_fonts("함초롬돋움");
+        styles.push_char_shape(HwpxCharShape::default());
+        styles.push_para_shape(HwpxParaShape::default());
+        let bytes = HwpxEncoder::encode(
+            &doc.validate().unwrap(),
+            &styles,
+            &hwpforge_core::image::ImageStore::new(),
+        )
+        .unwrap();
+        let path = dir.join("merged.hwpx");
+        std::fs::write(&path, bytes).unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn to_md_converts_merged_table_as_html_spans() {
+        let dir = temp_dir("convert");
+        let input = merged_form_hwpx(&dir);
+        let data = run_to_md(&input, Some(dir.to_str().unwrap())).unwrap();
+        assert!(std::path::Path::new(&data.markdown_path).exists());
+        assert_eq!(data.image_count, 0);
+        let md = std::fs::read_to_string(&data.markdown_path).unwrap();
+        // styled 경로는 병합을 rowspan HTML 로 보존한다.
+        assert!(md.contains("rowspan=\"2\""), "{md}");
+    }
+
+    #[test]
+    fn to_md_rejects_non_hwpx_extension() {
+        let dir = temp_dir("reject");
+        let bogus = dir.join("doc.txt");
+        std::fs::write(&bogus, b"x").unwrap();
+        let err = run_to_md(bogus.to_str().unwrap(), None).unwrap_err();
+        assert_eq!(err.code, "INVALID_INPUT");
+    }
+}

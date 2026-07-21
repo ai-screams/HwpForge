@@ -18,6 +18,7 @@ pub mod from_json;
 pub mod inspect;
 pub mod patch;
 pub mod restyle;
+pub mod set_cell;
 pub mod stamp;
 pub mod templates;
 pub mod to_json;

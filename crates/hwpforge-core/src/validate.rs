@@ -23,7 +23,10 @@ struct RunValidationContext {
 /// 1. At least 1 section
 /// 2. Every section has at least 1 paragraph
 /// 3. Every paragraph has at least 1 run
-/// 4. Every table has at least 1 row with at least 1 cell
+/// 4. Every table has at least 1 row with at least 1 cell — except that a
+///    row may be empty when row spans from earlier rows cover it completely
+///    (requires the whole table to tile a well-formed logical grid; see
+///    [`crate::table::grid::TableGrid`])
 /// 5. Every table cell has at least 1 paragraph
 /// 6. `col_span >= 1`, `row_span >= 1`
 /// 7. TextBox controls have at least 1 paragraph
@@ -85,9 +88,20 @@ fn validate_table_run(
         });
     }
 
+    // An empty row is legal only when row spans from earlier rows cover it
+    // completely (native formats keep the row element with no cells). Grid
+    // derivation succeeding implies every empty row is fully covered; for
+    // tables whose cells do not tile a well-formed grid the historical
+    // rejection stands.
+    // The zero-width guard keeps tables with no cells at all (degenerate
+    // grids like 1×0) on the historical rejection path.
+    let empty_rows_covered = table.rows.iter().any(|row| row.cells.is_empty())
+        && crate::table::grid::TableGrid::from_table(table)
+            .is_ok_and(|grid| grid.dimensions().1 > 0);
+
     let mut seen_non_header_row: bool = false;
     for (row_i, row) in table.rows.iter().enumerate() {
-        validate_table_row(row, ctx, row_i, &mut seen_non_header_row)?;
+        validate_table_row(row, ctx, row_i, &mut seen_non_header_row, empty_rows_covered)?;
     }
 
     Ok(())
@@ -98,8 +112,9 @@ fn validate_table_row(
     ctx: RunValidationContext,
     row_i: usize,
     seen_non_header_row: &mut bool,
+    empty_rows_covered: bool,
 ) -> Result<(), ValidationError> {
-    if row.cells.is_empty() {
+    if row.cells.is_empty() && !empty_rows_covered {
         return Err(ValidationError::EmptyTableRow {
             section_index: ctx.section_index,
             paragraph_index: ctx.paragraph_index,
@@ -533,6 +548,62 @@ mod tests {
     }
 
     // === Rule 4b: Table rows have at least 1 cell ===
+
+    fn table_sections(table: Table) -> Vec<Section> {
+        vec![Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::table(table, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        )]
+    }
+
+    #[test]
+    fn fully_covered_empty_row_accepted() {
+        // Native forms keep a row entry even when row spans from above cover
+        // the entire row (the wire keeps an empty row element); validation
+        // must accept the truthful representation instead of forcing
+        // projections to invent phantom cells.
+        let covered =
+            TableCell::with_span(vec![simple_paragraph()], HwpUnit::from_mm(50.0).unwrap(), 1, 2);
+        let table = Table::new(vec![TableRow::new(vec![covered]), TableRow::new(vec![])]);
+        assert!(validate_sections(&table_sections(table)).is_ok());
+    }
+
+    #[test]
+    fn uncovered_empty_row_still_rejected() {
+        let table = Table::new(vec![TableRow::new(vec![simple_cell()]), TableRow::new(vec![])]);
+        assert_eq!(
+            validate_sections(&table_sections(table)),
+            Err(ValidationError::EmptyTableRow {
+                section_index: 0,
+                paragraph_index: 0,
+                run_index: 0,
+                row_index: 1,
+            })
+        );
+    }
+
+    #[test]
+    fn empty_row_in_ragged_table_still_rejected() {
+        // Grid derivation fails for ragged tables, so the covered-row
+        // relaxation must not apply.
+        let table = Table::new(vec![
+            TableRow::new(vec![simple_cell(), simple_cell()]),
+            TableRow::new(vec![simple_cell()]),
+            TableRow::new(vec![]),
+        ]);
+        assert_eq!(
+            validate_sections(&table_sections(table)),
+            Err(ValidationError::EmptyTableRow {
+                section_index: 0,
+                paragraph_index: 0,
+                run_index: 0,
+                row_index: 2,
+            })
+        );
+    }
 
     #[test]
     fn empty_table_row_rejected() {

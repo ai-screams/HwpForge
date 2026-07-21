@@ -10,8 +10,8 @@ use serde::Deserialize;
 
 use crate::output::{ToolErrorInfo, ToolOutput};
 use crate::tools::{
-    convert, fields, fill, from_json, inspect, patch, restyle, stamp, templates, to_json, to_md,
-    validate,
+    convert, fields, fill, from_json, inspect, patch, restyle, set_cell, stamp, templates, to_json,
+    to_md, validate,
 };
 use crate::{prompts, resources};
 
@@ -117,6 +117,20 @@ pub struct StampRequest {
     pub output_path: String,
     /// Manifest JSON path (default: `<output>.manifest.json`).
     pub manifest_path: Option<String>,
+}
+
+/// Request parameters for `hwpforge_set_cell`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct SetCellRequest {
+    /// Path to the HWPX file to edit.
+    pub file_path: String,
+    /// Cell edits: each spec addresses a table by ordinal (to-json export
+    /// order) plus one of `at` {row,col} (covered positions resolve to their
+    /// merge anchor), `right_of` LABEL, or `below` LABEL (normalized exact
+    /// match). `text` "" clears the cell. All-or-nothing.
+    pub specs: Vec<hwpforge_smithy_hwpx::CellSpec>,
+    /// Output HWPX file path. Must end with `.hwpx`.
+    pub output_path: String,
 }
 
 /// Request parameters for `hwpforge_validate`.
@@ -507,6 +521,49 @@ impl HwpForgeServer {
                     vec![
                         "Use hwpforge_fields to list the stamped fields",
                         "Fill them with hwpforge_fill (name→value map)",
+                    ],
+                );
+                Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
+            }
+            Err(err) => Ok(tool_error_response(err)),
+        }
+    }
+
+    /// Edit table cells by logical grid address (E3).
+    #[tool(
+        name = "hwpforge_set_cell",
+        description = "Edit table cells by logical grid address in an HWPX file. Address a cell with a table ordinal (to-json export order) plus at {row,col} (covered positions resolve to their merge anchor), right_of LABEL, or below LABEL (normalized exact match). Empty text clears the cell. All-or-nothing behind the fail-closed admission gate; cells containing tables/images/controls are rejected."
+    )]
+    async fn hwpforge_set_cell(
+        &self,
+        Parameters(req): Parameters<SetCellRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = tokio::task::spawn_blocking(move || {
+            set_cell::run_set_cell(&req.file_path, &req.specs, &req.output_path)
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?;
+
+        match result {
+            Ok(data) => {
+                let covered = data
+                    .cells
+                    .iter()
+                    .filter(|c| {
+                        c.resolution == hwpforge_smithy_hwpx::CellResolution::CoveredToAnchor
+                    })
+                    .count();
+                let output = ToolOutput::new(
+                    &data,
+                    format!(
+                        "Set {} cell(s) ({} resolved to merge anchors) → {}",
+                        data.cells.len(),
+                        covered,
+                        data.output_path,
+                    ),
+                    vec![
+                        "Each result reports requested/anchor/resolution — covered coordinates were redirected to their merge anchor",
+                        "Verify with hwpforge_to_json (cells carry addr {row,col})",
                     ],
                 );
                 Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))

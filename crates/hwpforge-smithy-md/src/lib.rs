@@ -35,6 +35,6 @@ mod internal_styles;
 mod mapper;
 
 pub use decoder::{MdDecoder, MdDocument};
-pub use encoder::{MdEncoder, MdOutput};
+pub use encoder::{MdEncoder, MdOutput, MdWarning};
 pub use error::{MdError, MdErrorCode, MdResult};
 pub use frontmatter::Frontmatter;

@@ -151,6 +151,44 @@ enum Commands {
         output: PathBuf,
     },
 
+    /// Edit table cells by logical grid address (E3).
+    #[command(
+        name = "set-cell",
+        long_about = "Edit table cells by logical grid address, all-or-nothing behind the fail-closed admission gate.\n\nAddress a cell with --table N (to-json export order) plus one of --at \"r,c\" (covered positions resolve to their merge anchor), --right-of LABEL, or --below LABEL (normalized exact match). --text \"\" clears the cell. Batch edits go through --map (JSON array of CellSpec)."
+    )]
+    SetCell {
+        /// HWPX file to edit.
+        file: PathBuf,
+
+        /// Output HWPX file path.
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Table ordinal (document order, 0-based).
+        #[arg(long)]
+        table: Option<usize>,
+
+        /// Grid coordinate "row,col" (covered positions resolve to anchor).
+        #[arg(long, value_name = "R,C")]
+        at: Option<String>,
+
+        /// Target the cell right of this uniquely labeled cell.
+        #[arg(long, value_name = "LABEL")]
+        right_of: Option<String>,
+
+        /// Target the cell below this uniquely labeled cell.
+        #[arg(long, value_name = "LABEL")]
+        below: Option<String>,
+
+        /// Replacement text (empty string clears the cell).
+        #[arg(long)]
+        text: Option<String>,
+
+        /// Batch spec map (JSON array of CellSpec); exclusive with the flags above.
+        #[arg(long, value_name = "MAP_JSON")]
+        map: Option<PathBuf>,
+    },
+
     /// Discover prose placeholder candidates for stamping (E6, phase 1).
     #[command(
         name = "stamp-plan",
@@ -278,6 +316,21 @@ fn main() {
         }
         Commands::Fill { file, sets, output } => {
             commands::fill::run(&file, &sets, &output, cli.json);
+        }
+        Commands::SetCell { file, output, table, at, right_of, below, text, map } => {
+            commands::set_cell::run(
+                &file,
+                &output,
+                commands::set_cell::SingleTarget {
+                    table,
+                    at: at.as_deref(),
+                    right_of: right_of.as_deref(),
+                    below: below.as_deref(),
+                    text: text.as_deref(),
+                },
+                map.as_ref(),
+                cli.json,
+            );
         }
         Commands::StampPlan { file } => {
             commands::stamp::run_plan(&file, cli.json);

@@ -17,36 +17,16 @@ pub(super) fn build_table(
         });
     }
 
-    // Build grid occupancy map to compute correct cellAddr for merged cells.
-    // Tracks which (row, col) positions are occupied by col_span/row_span.
-    let mut occupied = std::collections::HashSet::<(u32, u32)>::new();
-    let mut cell_addrs: Vec<Vec<u32>> = Vec::new();
-    let mut max_col: u32 = 0;
-
-    for (row_idx, row) in table.rows.iter().enumerate() {
-        let mut col_addr: u32 = 0;
-        let mut addrs = Vec::new();
-        for cell in &row.cells {
-            while occupied.contains(&(row_idx as u32, col_addr)) {
-                col_addr += 1;
-            }
-            addrs.push(col_addr);
-
-            let col_span = (cell.col_span as u32).max(1);
-            let row_span = (cell.row_span as u32).max(1);
-            for dr in 0..row_span {
-                for dc in 0..col_span {
-                    occupied.insert((row_idx as u32 + dr, col_addr + dc));
-                }
-            }
-            col_addr += col_span;
-        }
-        if col_addr > max_col {
-            max_col = col_addr;
-        }
-        cell_addrs.push(addrs);
+    // Grid placement computes correct cellAddr for merged cells. The lenient
+    // scan is shared with `hwpforge_core::table::grid` and keeps historical
+    // output even for tables that do not tile a well-formed grid.
+    let placements = hwpforge_core::table::grid::grid_placements(table);
+    let mut cell_addrs: Vec<Vec<u32>> =
+        table.rows.iter().map(|row| Vec::with_capacity(row.cells.len())).collect();
+    for placed in &placements.cells {
+        cell_addrs[placed.row_idx].push(placed.at.col);
     }
-    let col_cnt = max_col;
+    let col_cnt = placements.cols;
 
     let table_border_fill_id = table.border_fill_id.unwrap_or(TABLE_BORDER_FILL_ID);
     let rows = table

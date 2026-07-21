@@ -52,13 +52,21 @@ pub fn run_to_json(
             warnings.push(map_section_workflow_warning_for_to_json(warning));
         }
         let exported = outcome.exported;
-        serde_json::to_string_pretty(&exported).map_err(|e| {
+        let mut value = serde_json::to_value(&exported).map_err(|e| {
             ToolErrorInfo::new(
                 "SERIALIZE_ERROR",
                 format!("Failed to serialize section: {e}"),
                 "This may be a bug.",
             )
-        })?
+        })?;
+        let addr_warnings = hwpforge_smithy_hwpx::grid_addr::annotate_section_addresses(
+            &mut value,
+            &exported.section,
+            exported.section_index,
+        )
+        .map_err(map_grid_addr_projection_error)?;
+        warnings.extend(addr_warnings.into_iter().map(map_grid_addr_warning));
+        render_pretty_value(&value)?
     } else {
         let hwpx_doc = HwpxDecoder::decode(&bytes).map_err(|e| {
             ToolErrorInfo::new(
@@ -69,13 +77,20 @@ pub fn run_to_json(
         })?;
         let styles = Some(hwpx_doc.style_store);
         let exported = ExportedDocument { document: hwpx_doc.document, styles };
-        serde_json::to_string_pretty(&exported).map_err(|e| {
+        let mut value = serde_json::to_value(&exported).map_err(|e| {
             ToolErrorInfo::new(
                 "SERIALIZE_ERROR",
                 format!("Failed to serialize document: {e}"),
                 "This may be a bug.",
             )
-        })?
+        })?;
+        let addr_warnings = hwpforge_smithy_hwpx::grid_addr::annotate_document_addresses(
+            &mut value,
+            &exported.document,
+        )
+        .map_err(map_grid_addr_projection_error)?;
+        warnings.extend(addr_warnings.into_iter().map(map_grid_addr_warning));
+        render_pretty_value(&value)?
     };
 
     let size_bytes = json_string.len() as u64;
@@ -108,6 +123,38 @@ pub fn run_to_json(
             warnings,
         })
     }
+}
+
+fn render_pretty_value(value: &serde_json::Value) -> Result<String, ToolErrorInfo> {
+    serde_json::to_string_pretty(value).map_err(|e| {
+        ToolErrorInfo::new(
+            "SERIALIZE_ERROR",
+            format!("Failed to serialize export: {e}"),
+            "This may be a bug.",
+        )
+    })
+}
+
+fn map_grid_addr_projection_error(
+    error: hwpforge_smithy_hwpx::grid_addr::GridAddrError,
+) -> ToolErrorInfo {
+    ToolErrorInfo::new(
+        "GRID_ADDR_PROJECTION_FAILED",
+        format!("Grid address projection failed: {error}"),
+        "This may be a bug.",
+    )
+}
+
+fn map_grid_addr_warning(
+    warning: hwpforge_smithy_hwpx::grid_addr::GridAddrWarning,
+) -> ToolWarningInfo {
+    ToolWarningInfo::new(
+        "TABLE_GRID_UNADDRESSABLE",
+        format!(
+            "table #{} in section {} exported without grid addresses: {}",
+            warning.table_ordinal, warning.section, warning.reason
+        ),
+    )
 }
 
 fn map_section_workflow_warning_for_to_json(warning: SectionWorkflowWarning) -> ToolWarningInfo {

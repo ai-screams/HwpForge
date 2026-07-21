@@ -3312,3 +3312,408 @@ fn stamp_manifest_write_failure_removes_output() {
     assert_eq!(value["code"], "FILE_WRITE_FAILED");
     assert!(!out.exists(), "manifest 실패 시 산출물이 제거되어야 한다 (fail-closed)");
 }
+
+// ═══════════════════════════════════════════════════════════════
+// E3 Wave 2: 표 격자 주소 (grid addresses on JSON exports)
+// ═══════════════════════════════════════════════════════════════
+
+/// (paragraph, run) indices of the first table run in a document export.
+fn first_table_run_indices(root: &serde_json::Value) -> (usize, usize) {
+    let paragraphs = root["document"]["sections"][0]["paragraphs"].as_array().expect("paragraphs");
+    for (pi, paragraph) in paragraphs.iter().enumerate() {
+        for (ri, run) in paragraph["runs"].as_array().expect("runs").iter().enumerate() {
+            if run["content"]["Table"].is_object() {
+                return (pi, ri);
+            }
+        }
+    }
+    panic!("no table run in export");
+}
+
+#[test]
+fn to_json_annotates_cell_grid_addresses() {
+    let f = fixture("tables/table_02_merge_col_row.hwpx");
+    let tmp = test_tmp();
+    let json_out = tmp.join("grid_addr.json");
+    let (_, _, code) = run(&["to-json", f.to_str().unwrap(), "-o", json_out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&json_out).unwrap()).unwrap();
+    let (pi, ri) = first_table_run_indices(&parsed);
+    let table =
+        &parsed["document"]["sections"][0]["paragraphs"][pi]["runs"][ri]["content"]["Table"];
+    let rows = table["rows"].as_array().expect("rows");
+    assert!(!rows.is_empty());
+    for row in rows {
+        for cell in row["cells"].as_array().expect("cells") {
+            let addr = cell.get("addr").expect("cell addr annotated");
+            assert!(addr["row"].is_u64() && addr["col"].is_u64(), "addr shape: {addr}");
+        }
+    }
+    assert_eq!(rows[0]["cells"][0]["addr"], serde_json::json!({"row": 0, "col": 0}));
+}
+
+#[test]
+fn from_json_accepts_annotated_export_and_rejects_tampered_addr() {
+    let f = fixture("tables/table_02_merge_col_row.hwpx");
+    let tmp = test_tmp();
+    let json_out = tmp.join("grid_addr_roundtrip.json");
+    let (_, _, code) = run(&["to-json", f.to_str().unwrap(), "-o", json_out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+
+    // Annotated export must import as-is (validate-then-drop).
+    let hwpx_out = tmp.join("grid_addr_roundtrip.hwpx");
+    let (_, stderr, code) =
+        run(&["from-json", json_out.to_str().unwrap(), "-o", hwpx_out.to_str().unwrap()]);
+    assert_eq!(code, 0, "annotated export must round-trip: {stderr}");
+    assert!(hwpx_out.exists());
+
+    // Tampered address → GRID_ADDR_INVALID, no output.
+    let mut parsed: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&json_out).unwrap()).unwrap();
+    let (pi, ri) = first_table_run_indices(&parsed);
+    parsed["document"]["sections"][0]["paragraphs"][pi]["runs"][ri]["content"]["Table"]["rows"]
+        [0]["cells"][0]["addr"] = serde_json::json!({"row": 0, "col": 99});
+    let tampered = tmp.join("grid_addr_tampered.json");
+    std::fs::write(&tampered, parsed.to_string()).unwrap();
+    let bad_out = tmp.join("grid_addr_tampered.hwpx");
+    let (value, _, code) =
+        run_json(&["from-json", tampered.to_str().unwrap(), "-o", bad_out.to_str().unwrap()]);
+    assert_eq!(code, 2);
+    assert_eq!(value["code"], "GRID_ADDR_INVALID");
+    assert!(!bad_out.exists(), "rejected import must not produce output");
+
+    // Absence = no check: stripping every addr must import cleanly.
+    fn strip_addr(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.remove("addr");
+                for child in map.values_mut() {
+                    strip_addr(child);
+                }
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(strip_addr),
+            _ => {}
+        }
+    }
+    strip_addr(&mut parsed);
+    let stripped = tmp.join("grid_addr_stripped.json");
+    std::fs::write(&stripped, parsed.to_string()).unwrap();
+    let clean_out = tmp.join("grid_addr_stripped.hwpx");
+    let (_, stderr, code) =
+        run(&["from-json", stripped.to_str().unwrap(), "-o", clean_out.to_str().unwrap()]);
+    assert_eq!(code, 0, "addr-free import must succeed: {stderr}");
+}
+
+// ═══════════════════════════════════════════════════════════════
+// E3 Wave 3: set-cell (격자 주소 셀 편집)
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn set_cell_edits_anchor_and_resolves_covered_coordinate() {
+    let f = fixture("tables/merged_grid_form.hwpx");
+    let tmp = test_tmp();
+
+    // export 로 첫 표의 병합 앵커(row_span > 1)를 찾는다.
+    let json_out = tmp.join("grid.json");
+    let (_, _, code) = run(&["to-json", f.to_str().unwrap(), "-o", json_out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&json_out).unwrap()).unwrap();
+    let (pi, ri) = first_table_run_indices(&parsed);
+    let table =
+        &parsed["document"]["sections"][0]["paragraphs"][pi]["runs"][ri]["content"]["Table"];
+    let merged = table["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|row| row["cells"].as_array().unwrap())
+        .find(|cell| cell["row_span"].as_u64().unwrap_or(1) > 1)
+        .expect("merge fixture must contain a row-span anchor");
+    let (arow, acol) =
+        (merged["addr"]["row"].as_u64().unwrap(), merged["addr"]["col"].as_u64().unwrap());
+
+    // 피병합 좌표(앵커 바로 아래)를 지정 → 앵커로 resolve 되어야 한다.
+    let covered = format!("{},{}", arow + 1, acol);
+    let out = tmp.join("edited.hwpx");
+    let (value, _, code) = run_json(&[
+        "set-cell",
+        f.to_str().unwrap(),
+        "--table",
+        "0",
+        "--at",
+        &covered,
+        "--text",
+        "격자값",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{value}");
+    assert_eq!(value["cells"][0]["resolution"], "covered_to_anchor");
+    assert_eq!(value["cells"][0]["anchor"], serde_json::json!({"row": arow, "col": acol}));
+
+    // 편집 결과 검증: 재-export 에서 앵커 셀 텍스트가 바뀌었는지.
+    let verify_json = tmp.join("verify.json");
+    let (_, _, code) =
+        run(&["to-json", out.to_str().unwrap(), "-o", verify_json.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let verify: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&verify_json).unwrap()).unwrap();
+    let (vpi, vri) = first_table_run_indices(&verify);
+    let vtable =
+        &verify["document"]["sections"][0]["paragraphs"][vpi]["runs"][vri]["content"]["Table"];
+    let edited = vtable["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|row| row["cells"].as_array().unwrap())
+        .find(|cell| cell["addr"] == serde_json::json!({"row": arow, "col": acol}))
+        .expect("anchor cell present");
+    let text = edited["paragraphs"][0]["runs"][0]["content"]["Text"].as_str().unwrap_or("");
+    assert_eq!(text, "격자값");
+}
+
+#[test]
+fn set_cell_error_codes_and_all_or_nothing() {
+    let f = fixture("tables/merged_grid_form.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("never.hwpx");
+    let run_edit = |args: &[&str]| {
+        let mut full = vec!["set-cell", f.to_str().unwrap()];
+        full.extend_from_slice(args);
+        full.extend_from_slice(&["-o", out.to_str().unwrap()]);
+        run_json(&full)
+    };
+
+    let (value, _, code) = run_edit(&["--table", "99", "--at", "0,0", "--text", "x"]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "TABLE_NOT_FOUND");
+
+    let (value, _, code) = run_edit(&["--table", "0", "--at", "9999,0", "--text", "x"]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "CELL_NOT_FOUND");
+
+    let (value, _, code) =
+        run_edit(&["--table", "0", "--right-of", "존재하지않는라벨", "--text", "x"]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "CELL_NOT_FOUND");
+
+    let (value, _, code) = run_edit(&["--table", "0", "--at", "abc", "--text", "x"]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "INVALID_SET_CELL_ARGS");
+
+    let (value, _, code) = run_edit(&["--table", "0", "--text", "x"]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "INVALID_SET_CELL_ARGS");
+
+    assert!(!out.exists(), "rejected edits must not produce output (all-or-nothing)");
+}
+
+// ═══════════════════════════════════════════════════════════════
+// E3 Wave 4: convert 경로 병합셀 격자 회귀 잠금
+// ═══════════════════════════════════════════════════════════════
+
+/// HWP5 record → cellAddr 구성 경로가 병합 표에서도 well-formed 격자를
+/// 산출함을 잠근다: 변환 산출물의 모든 표가 addr 주석을 받아야 하며
+/// (addr 부재 = 타일링 불변식 위반 = TABLE_GRID_UNADDRESSABLE 경고),
+/// 리서치가 확인한 커버리지 공백(병합 convert fixture 0개)을 메운다.
+#[test]
+fn convert_hwp5_merged_tables_produce_addressable_grids() {
+    for name in ["tables/table_02_merge_col_row.hwp", "tables/table_08_nested_table.hwp"] {
+        let source = fixture(name);
+        let tmp = test_tmp();
+        let out = tmp.join("converted.hwpx");
+        let (_, _, code) =
+            run(&["convert-hwp5", source.to_str().unwrap(), "-o", out.to_str().unwrap()]);
+        assert_eq!(code, 0, "{name}: convert must succeed");
+
+        let json_out = tmp.join("converted.json");
+        let (_, stderr, code) =
+            run(&["to-json", out.to_str().unwrap(), "-o", json_out.to_str().unwrap()]);
+        assert_eq!(code, 0, "{name}: export must succeed");
+        assert!(
+            !stderr.contains("TABLE_GRID_UNADDRESSABLE")
+                && !stderr.contains("without grid addresses"),
+            "{name}: converted tables must tile a well-formed grid: {stderr}"
+        );
+
+        // 모든 표의 모든 셀이 addr 를 받았는지 전수 확인.
+        let parsed: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&json_out).unwrap()).unwrap();
+        fn assert_cells_addressed(value: &serde_json::Value, ctx: &str) {
+            match value {
+                serde_json::Value::Object(map) => {
+                    if let (Some(rows), true) = (map.get("rows"), map.contains_key("cell_spacing"))
+                    {
+                        for row in rows.as_array().into_iter().flatten() {
+                            for cell in
+                                row.get("cells").and_then(|c| c.as_array()).into_iter().flatten()
+                            {
+                                assert!(
+                                    cell.get("addr").is_some(),
+                                    "{ctx}: cell without addr: {cell}"
+                                );
+                            }
+                        }
+                    }
+                    map.values().for_each(|v| assert_cells_addressed(v, ctx));
+                }
+                serde_json::Value::Array(items) => {
+                    items.iter().for_each(|v| assert_cells_addressed(v, ctx));
+                }
+                _ => {}
+            }
+        }
+        assert_cells_addressed(&parsed, name);
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════
+// to-md 모드 게이트 (E3 Wave 4 경고 E2E + 커버리지 공백 해소)
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn to_md_styled_keeps_merges_and_lossy_warns_flattening() {
+    let f = fixture("tables/merged_grid_form.hwpx");
+
+    // styled(기본): 병합 표는 rowspan HTML 로 보존 — 평탄화 경고 없음.
+    let tmp = test_tmp();
+    let (_, stderr, code) = run(&["to-md", f.to_str().unwrap(), "-o", tmp.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stderr}");
+    let md = std::fs::read_to_string(tmp.join("merged_grid_form.md")).unwrap();
+    assert!(md.contains("rowspan=\"2\""), "styled must keep merges as HTML: {md}");
+    assert!(!stderr.contains("TABLE_MERGE_FLATTENED"));
+
+    // lossy: GFM 평탄화 + TABLE_MERGE_FLATTENED 경고 (Wave 4 warning-first).
+    let tmp = test_tmp();
+    let (_, stderr, code) =
+        run(&["to-md", f.to_str().unwrap(), "-o", tmp.to_str().unwrap(), "--mode", "lossy"]);
+    assert_eq!(code, 0);
+    assert!(stderr.contains("merged cell"), "lossy must warn about flattening: {stderr}");
+    // json 모드는 구조화 경고 코드로.
+    let tmp = test_tmp();
+    let (_, _, stderr, code) = run_json_with_stdout(&[
+        "to-md",
+        f.to_str().unwrap(),
+        "-o",
+        tmp.to_str().unwrap(),
+        "--mode",
+        "lossy",
+    ]);
+    assert_eq!(code, 0);
+    assert!(stderr.contains("TABLE_MERGE_FLATTENED"), "{stderr}");
+}
+
+#[test]
+fn to_md_lossless_mode_runs() {
+    let f = fixture("tables/merged_grid_form.hwpx");
+    let tmp = test_tmp();
+    let (_, _, code) =
+        run(&["to-md", f.to_str().unwrap(), "-o", tmp.to_str().unwrap(), "--mode", "lossless"]);
+    assert_eq!(code, 0);
+    assert!(tmp.join("merged_grid_form.md").exists());
+}
+
+// ═══════════════════════════════════════════════════════════════
+// set-cell --map 배치·인자 충돌 게이트
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn set_cell_map_batch_reports_resolution_and_clear() {
+    let f = fixture("tables/merged_grid_form.hwpx");
+    let tmp = test_tmp();
+    let map = tmp.join("cells.json");
+    std::fs::write(
+        &map,
+        serde_json::json!([
+            {"table": 0, "at": {"row": 2, "col": 0}, "text": "세로병합값"},
+            {"table": 0, "right_of": "성명", "text": ""}
+        ])
+        .to_string(),
+    )
+    .unwrap();
+    let out = tmp.join("batch.hwpx");
+
+    // 사람용 출력 경로: covered → anchor 리다이렉트와 clear 마커가 보여야 한다.
+    let (stdout, stderr, code) = run(&[
+        "set-cell",
+        f.to_str().unwrap(),
+        "--map",
+        map.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("Set 2 cell(s)"), "{stdout}");
+    assert!(stdout.contains("covered -> anchor (1, 0)"), "{stdout}");
+    assert!(stdout.contains("[cleared]"), "{stdout}");
+    assert!(out.exists());
+}
+
+#[test]
+fn set_cell_map_arg_conflicts_rejected() {
+    let f = fixture("tables/merged_grid_form.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("never2.hwpx");
+    let map = tmp.join("cells.json");
+    std::fs::write(&map, "[]").unwrap();
+
+    // --map 과 단건 플래그 동시 사용 금지.
+    let (value, _, code) = run_json(&[
+        "set-cell",
+        f.to_str().unwrap(),
+        "--map",
+        map.to_str().unwrap(),
+        "--table",
+        "0",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "INVALID_SET_CELL_ARGS");
+
+    // 빈 맵 거부.
+    let (value, _, code) = run_json(&[
+        "set-cell",
+        f.to_str().unwrap(),
+        "--map",
+        map.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "INVALID_SET_CELL_MAP");
+
+    // 맵 파싱 실패.
+    std::fs::write(&map, "{not json").unwrap();
+    let (value, _, code) = run_json(&[
+        "set-cell",
+        f.to_str().unwrap(),
+        "--map",
+        map.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "INVALID_SET_CELL_MAP");
+
+    // --at 와 --right-of 동시 지정.
+    let (value, _, code) = run_json(&[
+        "set-cell",
+        f.to_str().unwrap(),
+        "--table",
+        "0",
+        "--at",
+        "0,0",
+        "--right-of",
+        "성명",
+        "--text",
+        "x",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "INVALID_SET_CELL_ARGS");
+    assert!(!out.exists());
+}

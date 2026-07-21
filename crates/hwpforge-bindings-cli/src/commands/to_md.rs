@@ -37,8 +37,24 @@ pub fn run(input: &PathBuf, output: &Option<PathBuf>, mode: &MdMode, json_mode: 
             let md_output = MdEncoder::encode_styled(&document, &lookup);
             (md_output.markdown, md_output.images)
         }
-        MdMode::Lossy => match MdEncoder::encode_lossy(&document) {
-            Ok(md) => (md, HashMap::new()),
+        MdMode::Lossy => match MdEncoder::encode_lossy_with_report(&document) {
+            Ok((md, warnings)) => {
+                // Warning-first: lossy 렌더가 표현 못 하는 것(병합셀 평탄화)을
+                // 무음으로 버리지 않고 노출한다. styled 모드는 HTML 로 보존.
+                for warning in warnings {
+                    if json_mode {
+                        let warn = serde_json::json!({
+                            "status": "warning",
+                            "code": "TABLE_MERGE_FLATTENED",
+                            "message": warning.to_string(),
+                        });
+                        eprintln!("{}", serde_json::to_string(&warn).unwrap());
+                    } else {
+                        eprintln!("Warning: {warning}");
+                    }
+                }
+                (md, HashMap::new())
+            }
             Err(e) => {
                 CliError::new("ENCODE_FAILED", format!("Markdown encode error: {e}"))
                     .exit(json_mode, 2);

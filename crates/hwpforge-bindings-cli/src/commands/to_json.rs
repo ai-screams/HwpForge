@@ -2,12 +2,56 @@
 
 use std::path::PathBuf;
 
+use hwpforge_smithy_hwpx::grid_addr::{GridAddrError, GridAddrWarning};
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxPatcher, SectionWorkflowError};
 
 use crate::error::{check_file_size, CliError};
 
 // Re-export shared exchange types so existing imports (`crate::commands::to_json::Exported*`) keep working.
 pub use hwpforge_smithy_hwpx::{ExportedDocument, ExportedSection};
+
+/// Surfaces grid-address projection warnings (tables left unannotated) and
+/// exits on projection failure.
+fn finish_annotation(result: Result<Vec<GridAddrWarning>, GridAddrError>, json_mode: bool) {
+    match result {
+        Ok(warnings) => {
+            for warning in warnings {
+                let message = format!(
+                    "table #{} in section {} exported without grid addresses: {}",
+                    warning.table_ordinal, warning.section, warning.reason
+                );
+                if json_mode {
+                    let warn = serde_json::json!({
+                        "status": "warning",
+                        "code": "TABLE_GRID_UNADDRESSABLE",
+                        "message": message,
+                    });
+                    eprintln!("{}", serde_json::to_string(&warn).unwrap());
+                } else {
+                    eprintln!("Warning: {message}");
+                }
+            }
+        }
+        Err(e) => {
+            CliError::new(
+                "GRID_ADDR_PROJECTION_FAILED",
+                format!("Grid address projection failed: {e}"),
+            )
+            .exit(json_mode, 2);
+        }
+    }
+}
+
+/// Pretty-prints the annotated export value.
+fn render_pretty(value: &serde_json::Value, json_mode: bool) -> String {
+    match serde_json::to_string_pretty(value) {
+        Ok(s) => s,
+        Err(e) => {
+            CliError::new("JSON_SERIALIZE_FAILED", format!("Failed to serialize export: {e}"))
+                .exit(json_mode, 2);
+        }
+    }
+}
 
 /// Run the to-json command.
 pub fn run(
@@ -53,14 +97,21 @@ pub fn run(
             }
         }
         let exported = outcome.exported;
-        match serde_json::to_string_pretty(&exported) {
-            Ok(s) => s,
+        let mut value = match serde_json::to_value(&exported) {
+            Ok(v) => v,
             Err(e) => {
                 CliError::new("JSON_SERIALIZE_FAILED", format!("Failed to serialize section: {e}"))
                     .with_hint("Check for NaN/Infinity values in chart data")
                     .exit(json_mode, 2);
             }
-        }
+        };
+        let annotate = hwpforge_smithy_hwpx::grid_addr::annotate_section_addresses(
+            &mut value,
+            &exported.section,
+            exported.section_index,
+        );
+        finish_annotation(annotate, json_mode);
+        render_pretty(&value, json_mode)
     } else {
         let hwpx_doc = match HwpxDecoder::decode(&bytes) {
             Ok(d) => d,
@@ -71,8 +122,8 @@ pub fn run(
         };
         let styles = if no_styles { None } else { Some(hwpx_doc.style_store) };
         let exported = ExportedDocument { document: hwpx_doc.document, styles };
-        match serde_json::to_string_pretty(&exported) {
-            Ok(s) => s,
+        let mut value = match serde_json::to_value(&exported) {
+            Ok(v) => v,
             Err(e) => {
                 CliError::new(
                     "JSON_SERIALIZE_FAILED",
@@ -81,7 +132,13 @@ pub fn run(
                 .with_hint("Check for NaN/Infinity values in chart data")
                 .exit(json_mode, 2);
             }
-        }
+        };
+        let annotate = hwpforge_smithy_hwpx::grid_addr::annotate_document_addresses(
+            &mut value,
+            &exported.document,
+        );
+        finish_annotation(annotate, json_mode);
+        render_pretty(&value, json_mode)
     };
 
     if let Err(e) = std::fs::write(output, &json_string) {
