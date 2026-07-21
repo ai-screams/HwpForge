@@ -2760,15 +2760,11 @@ fn build_table_with_images(
         .map(|mut cells| {
             cells.sort_by_key(|cell| cell.column);
             let row_is_header = projected_row_is_header(&cells, &mut projection_images.warnings);
-            let projected = if cells.is_empty() {
-                vec![empty_cell()]
-            } else {
-                cells
-                    .iter()
-                    .copied()
-                    .map(|cell| project_table_cell_with_images(cell, projection_images))
-                    .collect()
-            };
+            let projected = cells
+                .iter()
+                .copied()
+                .map(|cell| project_table_cell_with_images(cell, projection_images))
+                .collect();
             let row_height = cells.iter().map(|cell| cell.height).max().unwrap_or(0);
             match HwpUnit::new(row_height) {
                 Ok(height) if row_height > 0 => {
@@ -2780,10 +2776,47 @@ fn build_table_with_images(
         .collect();
 
     demote_non_leading_header_rows(&mut rows, &mut projection_images.warnings);
+    restore_placeholder_cells_for_uncovered_rows(&mut rows, &mut projection_images.warnings);
 
     let mut core_table = Table::new(rows);
     apply_table_projection_metadata(table, &mut core_table, &mut projection_images.warnings);
     core_table
+}
+
+/// Keeps rows that the wire left empty truthful when row spans from earlier
+/// rows cover them, and falls back to a placeholder cell (with a warning —
+/// historically this was silent) only when the table does not tile a
+/// well-formed grid.
+///
+/// The check mirrors `hwpforge_core::validate`'s covered-row rule exactly
+/// (grid derivation succeeds and the grid has non-zero width), so the
+/// projected table is guaranteed to pass validation either way.
+fn restore_placeholder_cells_for_uncovered_rows(
+    rows: &mut Vec<TableRow>,
+    warnings: &mut Vec<Hwp5Warning>,
+) {
+    if !rows.iter().any(|row| row.cells.is_empty()) {
+        return;
+    }
+    let candidate = Table::new(std::mem::take(rows));
+    let covered = hwpforge_core::table::grid::TableGrid::from_table(&candidate)
+        .is_ok_and(|grid| grid.dimensions().1 > 0);
+    *rows = candidate.rows;
+    if covered {
+        return;
+    }
+    for (row_idx, row) in rows.iter_mut().enumerate() {
+        if row.cells.is_empty() {
+            row.cells.push(empty_cell());
+            push_projection_fallback(
+                warnings,
+                "table.covered_row",
+                format!(
+                    "uncovered_empty_hwp5_table_row row={row_idx}; inserting_placeholder_cell (row has no cells and is not covered by row spans)"
+                ),
+            );
+        }
+    }
 }
 
 /// Enforces the Core/HWPX invariant that header rows form a single leading
@@ -3706,6 +3739,108 @@ mod tests {
         assert!(!table.repeat_header);
         assert_eq!(table.cell_spacing, Some(HwpUnit::new(120).unwrap()));
         assert_eq!(table.border_fill_id, Some(8));
+    }
+
+    fn grid_test_cell(row: u16, column: u16, row_span: u16, col_span: u16) -> Hwp5TableCell {
+        Hwp5TableCell {
+            column,
+            row,
+            col_span,
+            row_span,
+            width: 4000,
+            height: 1000,
+            is_header: false,
+            margin: crate::decoder::section::Hwp5TableCellMargin {
+                left: 0,
+                right: 0,
+                top: 0,
+                bottom: 0,
+            },
+            vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Center,
+            border_fill_id: None,
+            paragraphs: vec![Hwp5Paragraph {
+                text: "셀".to_string(),
+                text_segments: Vec::new(),
+                para_shape_id: 0,
+                style_id: 0,
+                char_shape_runs: vec![],
+                line_segments: Vec::new(),
+                controls: vec![],
+            }],
+        }
+    }
+
+    fn grid_test_table_paragraph(rows: u16, cols: u16, cells: Vec<Hwp5TableCell>) -> Hwp5Paragraph {
+        Hwp5Paragraph {
+            text: "\u{FFFC}".to_string(),
+            text_segments: Vec::new(),
+            para_shape_id: 0,
+            style_id: 0,
+            char_shape_runs: vec![],
+            line_segments: Vec::new(),
+            controls: vec![Hwp5Control::Table(Hwp5Table {
+                rows,
+                cols,
+                page_break: Hwp5TablePageBreak::None,
+                repeat_header: false,
+                cell_spacing: 0,
+                border_fill_id: None,
+                cells,
+                instance_id: 0,
+            })],
+        }
+    }
+
+    #[test]
+    fn fully_covered_row_projects_without_phantom_cell() {
+        // Wire truth: 2×1 grid with one rs-2 anchor; the second wire row has
+        // no cells. The projection must keep the empty row instead of
+        // injecting a phantom cell that breaks the grid tiling invariant.
+        let para = grid_test_table_paragraph(2, 1, vec![grid_test_cell(0, 0, 2, 1)]);
+        let section = make_section(vec![para], None);
+        let (doc, warnings) = project_to_core(vec![section]).unwrap();
+
+        {
+            let table = doc.sections()[0].paragraphs[0]
+                .runs
+                .iter()
+                .find_map(|run| run.content.as_table())
+                .expect("expected table run");
+            assert_eq!(table.rows.len(), 2);
+            assert!(table.rows[1].cells.is_empty(), "covered row must stay empty");
+        }
+        assert!(!warnings.iter().any(|warning| matches!(
+            warning,
+            Hwp5Warning::ProjectionFallback { subject, .. } if *subject == "table.covered_row"
+        )));
+        assert!(doc.validate().is_ok(), "truthful covered row must pass Core validation");
+    }
+
+    #[test]
+    fn uncovered_empty_row_gets_placeholder_cell_and_warning() {
+        // Malformed wire: row 1 declared but neither populated nor covered.
+        // Conversion keeps the historical placeholder cell so the document
+        // still converts, but the fallback is surfaced (previously silent).
+        let para = grid_test_table_paragraph(2, 1, vec![grid_test_cell(0, 0, 1, 1)]);
+        let section = make_section(vec![para], None);
+        let (doc, warnings) = project_to_core(vec![section]).unwrap();
+
+        {
+            let table = doc.sections()[0].paragraphs[0]
+                .runs
+                .iter()
+                .find_map(|run| run.content.as_table())
+                .expect("expected table run");
+            assert_eq!(table.rows.len(), 2);
+            assert_eq!(table.rows[1].cells.len(), 1, "placeholder cell expected");
+        }
+        assert!(warnings.iter().any(|warning| matches!(
+            warning,
+            Hwp5Warning::ProjectionFallback { subject, reason }
+                if *subject == "table.covered_row"
+                    && reason.contains("uncovered_empty_hwp5_table_row row=1")
+        )));
+        assert!(doc.validate().is_ok());
     }
 
     #[test]
