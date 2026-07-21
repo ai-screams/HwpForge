@@ -493,32 +493,15 @@ fn deep_table_vertical_align_from_core(value: TableVerticalAlign) -> DeepTableVe
 }
 
 fn compute_table_cell_addresses(table: &Table) -> Vec<Vec<u16>> {
-    let mut occupied: BTreeSet<(u16, u16)> = BTreeSet::new();
-    let mut row_addrs: Vec<Vec<u16>> = Vec::with_capacity(table.rows.len());
-
-    for (row_idx, row) in table.rows.iter().enumerate() {
-        let row_u16 = row_idx as u16;
-        let mut col_addr: u16 = 0;
-        let mut cell_addrs: Vec<u16> = Vec::with_capacity(row.cells.len());
-
-        for cell in &row.cells {
-            while occupied.contains(&(row_u16, col_addr)) {
-                col_addr = col_addr.saturating_add(1);
-            }
-            cell_addrs.push(col_addr);
-            let col_span = cell.col_span.max(1);
-            let row_span = cell.row_span.max(1);
-            for dr in 0..row_span {
-                for dc in 0..col_span {
-                    occupied.insert((row_u16.saturating_add(dr), col_addr.saturating_add(dc)));
-                }
-            }
-            col_addr = col_addr.saturating_add(col_span);
-        }
-
-        row_addrs.push(cell_addrs);
+    // Shared lenient placement (same scan the HWPX encoder uses); this
+    // analysis surface reports u16 like the wire, clamping pathological
+    // widths instead of wrapping.
+    let placements = hwpforge_core::table::grid::grid_placements(table);
+    let mut row_addrs: Vec<Vec<u16>> =
+        table.rows.iter().map(|row| Vec::with_capacity(row.cells.len())).collect();
+    for placed in &placements.cells {
+        row_addrs[placed.row_idx].push(placed.at.col.min(u32::from(u16::MAX)) as u16);
     }
-
     row_addrs
 }
 

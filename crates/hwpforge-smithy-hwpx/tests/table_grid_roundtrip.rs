@@ -57,6 +57,49 @@ fn covered_empty_row_encodes_as_empty_row_element() {
     assert!(xml.contains(r#"rowSpan="2""#), "anchor must carry its row span");
 }
 
+/// Extracts `name="value"` as u32 from the attribute region right after `pos`.
+fn attr_u32(xml: &str, pos: usize, name: &str) -> u32 {
+    let region = &xml[pos..xml[pos..].find('>').map(|e| pos + e).unwrap_or(xml.len())];
+    let needle = format!("{name}=\"");
+    let start = region.find(&needle).expect("attribute present") + needle.len();
+    let end = region[start..].find('"').expect("attribute closed") + start;
+    region[start..end].parse().expect("numeric attribute")
+}
+
+#[test]
+fn encoded_cell_addresses_match_table_grid_anchors() {
+    // Native government-form layout (blank-HPC table #11): 4×3 grid,
+    // 8 anchors, 4 covered positions — the encoder's wire cellAddr must
+    // agree with the format-neutral TableGrid derivation.
+    let width = HwpUnit::new(8000).unwrap();
+    let cell = |row_span: u16, col_span: u16| {
+        TableCell::with_span(vec![text_para("칸")], width, col_span, row_span)
+    };
+    let table = Table::new(vec![
+        TableRow::new(vec![cell(2, 1), cell(1, 2)]),
+        TableRow::new(vec![cell(1, 1), cell(1, 1)]),
+        TableRow::new(vec![cell(1, 1), cell(1, 1), cell(1, 1)]),
+        TableRow::new(vec![cell(1, 3)]),
+    ]);
+    let grid = hwpforge_core::table::grid::TableGrid::from_table(&table).expect("grid");
+
+    let mut host = Paragraph::new(ParaShapeIndex::new(0));
+    host.add_run(Run::table(table, CharShapeIndex::new(0)));
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(vec![host], PageSettings::default()));
+
+    let xml = section0_xml(&encode(doc));
+    let wire: Vec<(u32, u32)> = xml
+        .match_indices("<hp:cellAddr")
+        .map(|(pos, _)| (attr_u32(&xml, pos, "rowAddr"), attr_u32(&xml, pos, "colAddr")))
+        .collect();
+    let derived: Vec<(u32, u32)> =
+        grid.iter_anchors().map(|a| (a.anchor.row, a.anchor.col)).collect();
+    assert_eq!(wire, derived, "wire cellAddr must match TableGrid anchors: {xml}");
+    assert!(xml.contains(r#"colCnt="3""#), "colCnt must reflect the logical grid width");
+    assert!(xml.contains(r#"rowCnt="4""#));
+}
+
 #[test]
 fn covered_empty_row_round_trips_to_fixed_point() {
     let bytes = encode(covered_row_doc());
