@@ -15,27 +15,44 @@ pub(crate) fn encode_with_template(
     document: &Document<Validated>,
     template: &Template,
 ) -> MdResult<String> {
+    encode_with_template_report(document, template).map(|(md, _)| md)
+}
+
+pub(crate) fn encode_with_template_report(
+    document: &Document<Validated>,
+    template: &Template,
+) -> MdResult<(String, Vec<super::MdWarning>)> {
+    let mut warnings = Vec::new();
     let (mapping, registry) = resolve_mapping(template)?;
-    let body = encode_body(document, Some(&mapping), Some(&registry));
+    let body = encode_body(document, Some(&mapping), Some(&registry), &mut warnings);
 
     let frontmatter = from_metadata(document.metadata(), Some(template.meta.name.as_str()));
     let rendered = render_frontmatter(&frontmatter)?;
 
     if body.is_empty() {
-        Ok(rendered)
+        Ok((rendered, warnings))
     } else {
-        Ok(format!("{}\n{}", rendered, body))
+        Ok((format!("{}\n{}", rendered, body), warnings))
     }
 }
 
 pub(crate) fn encode_without_template(document: &Document<Validated>) -> MdResult<String> {
-    Ok(encode_body(document, None, None))
+    encode_without_template_report(document).map(|(md, _)| md)
+}
+
+pub(crate) fn encode_without_template_report(
+    document: &Document<Validated>,
+) -> MdResult<(String, Vec<super::MdWarning>)> {
+    let mut warnings = Vec::new();
+    let body = encode_body(document, None, None, &mut warnings);
+    Ok((body, warnings))
 }
 
 fn encode_body(
     document: &Document<Validated>,
     mapping: Option<&MdMapping>,
     registry: Option<&StyleRegistry>,
+    warnings: &mut Vec<super::MdWarning>,
 ) -> String {
     let mut blocks = Vec::new();
     let mut continuation_level: Option<u8> = None;
@@ -50,7 +67,7 @@ fn encode_body(
             let current_continuation_level = mapping
                 .and_then(|mapping| mapping.continuation_level(paragraph.para_shape_id))
                 .filter(|level| continuation_level == Some(*level));
-            let markdown = encode_paragraph(paragraph, mapping, registry);
+            let markdown = encode_paragraph(paragraph, mapping, registry, warnings);
             if !markdown.trim().is_empty() {
                 if let Some(level) = current_continuation_level {
                     let indented = format_list_continuation(&markdown, level);
@@ -80,10 +97,11 @@ fn encode_paragraph(
     paragraph: &Paragraph,
     mapping: Option<&MdMapping>,
     registry: Option<&StyleRegistry>,
+    warnings: &mut Vec<super::MdWarning>,
 ) -> String {
     if paragraph.runs.len() == 1 {
         match &paragraph.runs[0].content {
-            RunContent::Table(table) => return table_to_markdown(table),
+            RunContent::Table(table) => return table_to_markdown(table, warnings),
             RunContent::Image(image) => {
                 return format!("![{}]({})", image_alt_text(&image.path), image.path);
             }
@@ -91,7 +109,7 @@ fn encode_paragraph(
         }
     }
 
-    let text = paragraph_text_markdown(paragraph);
+    let text = paragraph_text_markdown(paragraph, warnings);
     let trimmed = text.trim();
 
     if !trimmed.is_empty() {
@@ -164,7 +182,7 @@ fn mapping_list_level(paragraph: &Paragraph, mapping: &MdMapping) -> Option<u8> 
     }
 }
 
-fn paragraph_text_markdown(paragraph: &Paragraph) -> String {
+fn paragraph_text_markdown(paragraph: &Paragraph, warnings: &mut Vec<super::MdWarning>) -> String {
     let mut output = String::new();
 
     for run in &paragraph.runs {
@@ -243,7 +261,7 @@ fn paragraph_text_markdown(paragraph: &Paragraph) -> String {
                 if !output.is_empty() {
                     output.push('\n');
                 }
-                output.push_str(&table_to_markdown(table));
+                output.push_str(&table_to_markdown(table, warnings));
             }
             _ => {}
         }
@@ -252,9 +270,21 @@ fn paragraph_text_markdown(paragraph: &Paragraph) -> String {
     output
 }
 
-fn table_to_markdown(table: &Table) -> String {
+fn table_to_markdown(table: &Table, warnings: &mut Vec<super::MdWarning>) -> String {
     if table.rows.is_empty() {
         return "| |\n| --- |".to_string();
+    }
+
+    // Warning-first: this renderer flattens merged regions into a plain GFM
+    // grid (spans are not representable in pipe tables).
+    let merged_cells = table
+        .rows
+        .iter()
+        .flat_map(|row| row.cells.iter())
+        .filter(|cell| cell.col_span > 1 || cell.row_span > 1)
+        .count();
+    if merged_cells > 0 {
+        warnings.push(super::MdWarning::MergedCellsFlattened { merged_cells });
     }
 
     let rows: Vec<Vec<String>> = table
@@ -267,7 +297,7 @@ fn table_to_markdown(table: &Table) -> String {
                     let text = cell
                         .paragraphs
                         .iter()
-                        .map(paragraph_text_markdown)
+                        .map(|p| paragraph_text_markdown(p, warnings))
                         .collect::<Vec<_>>()
                         .join(" ");
                     escape_gfm_cell(&text)
@@ -388,7 +418,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = paragraph_text_markdown(&paragraph);
+        let md = paragraph_text_markdown(&paragraph, &mut Vec::new());
         assert_eq!(md, "[Rust](https://www.rust-lang.org)");
     }
 
@@ -406,8 +436,63 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = paragraph_text_markdown(&paragraph);
+        let md = paragraph_text_markdown(&paragraph, &mut Vec::new());
         assert_eq!(md, "(footnote: note body)");
+    }
+
+    #[test]
+    fn merged_table_flattening_is_reported_and_output_unchanged() {
+        let text_cell = |t: &str| {
+            TableCell::with_span(
+                vec![Paragraph::with_runs(
+                    vec![Run::text(t, CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )],
+                hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+                1,
+                2, // row_span 2 → merged
+            )
+        };
+        let table = Table::new(vec![
+            TableRow::new(vec![text_cell("병합")]),
+            TableRow::new(vec![TableCell::new(
+                vec![Paragraph::with_runs(
+                    vec![Run::text("x", CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )],
+                hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+            )]),
+        ]);
+        let paragraph = Paragraph::with_runs(
+            vec![Run::table(table, CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        let doc = validated_document(vec![paragraph]);
+
+        let (md, warnings) = encode_without_template_report(&doc).unwrap();
+        assert_eq!(
+            warnings,
+            vec![super::super::MdWarning::MergedCellsFlattened { merged_cells: 1 }]
+        );
+        // report 표면은 렌더 결과를 바꾸지 않는다.
+        assert_eq!(md, encode_without_template(&doc).unwrap());
+
+        // 무병합 표는 경고 없음 — encode_table_to_gfm 의 2×2 표와 동일 조건.
+        let plain = validated_document(vec![Paragraph::with_runs(
+            vec![Run::table(
+                Table::new(vec![TableRow::new(vec![TableCell::new(
+                    vec![Paragraph::with_runs(
+                        vec![Run::text("A", CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
+                    )],
+                    hwpforge_foundation::HwpUnit::from_mm(30.0).unwrap(),
+                )])]),
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+        let (_, warnings) = encode_without_template_report(&plain).unwrap();
+        assert!(warnings.is_empty());
     }
 
     #[test]
@@ -453,7 +538,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None);
+        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new());
         assert!(md.contains("| A | B |"));
         assert!(md.contains("| --- | --- |"));
         assert!(md.contains("| 1 | 2 |"));
@@ -475,7 +560,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None);
+        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new());
         assert!(md.contains("A\\|B"));
     }
 
@@ -503,7 +588,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None);
+        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new());
         assert!(md.contains("[Rust](https://www.rust-lang.org)"));
     }
 
@@ -544,7 +629,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = paragraph_text_markdown(&paragraph);
+        let md = paragraph_text_markdown(&paragraph, &mut Vec::new());
         assert_eq!(md, "(endnote: end body)");
     }
 
@@ -571,7 +656,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = paragraph_text_markdown(&paragraph);
+        let md = paragraph_text_markdown(&paragraph, &mut Vec::new());
         assert_eq!(md, "box content");
     }
 
@@ -585,7 +670,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = paragraph_text_markdown(&paragraph);
+        let md = paragraph_text_markdown(&paragraph, &mut Vec::new());
         assert_eq!(md, "`[mystery]`");
     }
 
@@ -609,7 +694,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = paragraph_text_markdown(&paragraph);
+        let md = paragraph_text_markdown(&paragraph, &mut Vec::new());
         // Lines render as nothing (no text content)
         assert_eq!(md, "");
     }
@@ -641,7 +726,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = paragraph_text_markdown(&paragraph);
+        let md = paragraph_text_markdown(&paragraph, &mut Vec::new());
         assert_eq!(md, "shape text");
     }
 
@@ -668,7 +753,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = paragraph_text_markdown(&paragraph);
+        let md = paragraph_text_markdown(&paragraph, &mut Vec::new());
         assert_eq!(md, "");
     }
 
@@ -701,7 +786,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = paragraph_text_markdown(&paragraph);
+        let md = paragraph_text_markdown(&paragraph, &mut Vec::new());
         assert_eq!(md, "polygon text");
     }
 
@@ -723,7 +808,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = paragraph_text_markdown(&paragraph);
+        let md = paragraph_text_markdown(&paragraph, &mut Vec::new());
         assert_eq!(md, "한글(hangeul)");
     }
 
@@ -743,7 +828,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = paragraph_text_markdown(&paragraph);
+        let md = paragraph_text_markdown(&paragraph, &mut Vec::new());
         assert_eq!(md, "㊀");
     }
 
@@ -761,7 +846,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None);
+        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new());
         assert_eq!(md, "![photo](path/to/photo.jpg)");
     }
 
@@ -780,7 +865,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None);
+        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new());
         assert!(md.contains("![figure_1]"));
     }
 
@@ -802,7 +887,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = paragraph_text_markdown(&paragraph);
+        let md = paragraph_text_markdown(&paragraph, &mut Vec::new());
         assert!(md.contains("before"));
         assert!(md.contains("![img](img.png)"));
         assert!(md.contains("after"));
@@ -825,7 +910,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = paragraph_text_markdown(&paragraph);
+        let md = paragraph_text_markdown(&paragraph, &mut Vec::new());
         assert!(md.contains("intro"));
         assert!(md.contains("| A |"));
     }
@@ -838,7 +923,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None);
+        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new());
         assert_eq!(md, "| |\n| --- |");
     }
 
@@ -861,7 +946,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None);
+        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new());
         // An empty row renders as "| |"
         assert!(md.contains("| |"));
     }
@@ -882,7 +967,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None);
+        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new());
         assert!(md.contains(r"path\\to\\file"));
     }
 
@@ -902,7 +987,7 @@ mod tests {
             ParaShapeIndex::new(0),
         );
 
-        let md = encode_paragraph(&paragraph, None, None);
+        let md = encode_paragraph(&paragraph, None, None, &mut Vec::new());
         assert!(md.contains("<br>"));
     }
 
@@ -959,7 +1044,7 @@ mod tests {
             code_para_shape,
         );
 
-        let md = encode_paragraph(&paragraph, Some(&mapping), None);
+        let md = encode_paragraph(&paragraph, Some(&mapping), None, &mut Vec::new());
         assert!(md.starts_with("```\n"));
         assert!(md.ends_with("\n```"));
         assert!(md.contains("let x = 1;"));
@@ -979,7 +1064,13 @@ mod tests {
             mapping.task_list.checked[1],
         );
 
-        assert_eq!(encode_paragraph(&unchecked, Some(&mapping), Some(&registry)), "- [ ] todo");
-        assert_eq!(encode_paragraph(&checked, Some(&mapping), Some(&registry)), "  - [x] done");
+        assert_eq!(
+            encode_paragraph(&unchecked, Some(&mapping), Some(&registry), &mut Vec::new()),
+            "- [ ] todo"
+        );
+        assert_eq!(
+            encode_paragraph(&checked, Some(&mapping), Some(&registry), &mut Vec::new()),
+            "  - [x] done"
+        );
     }
 }

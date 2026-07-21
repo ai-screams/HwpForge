@@ -3509,3 +3509,62 @@ fn set_cell_error_codes_and_all_or_nothing() {
 
     assert!(!out.exists(), "rejected edits must not produce output (all-or-nothing)");
 }
+
+// ═══════════════════════════════════════════════════════════════
+// E3 Wave 4: convert 경로 병합셀 격자 회귀 잠금
+// ═══════════════════════════════════════════════════════════════
+
+/// HWP5 record → cellAddr 구성 경로가 병합 표에서도 well-formed 격자를
+/// 산출함을 잠근다: 변환 산출물의 모든 표가 addr 주석을 받아야 하며
+/// (addr 부재 = 타일링 불변식 위반 = TABLE_GRID_UNADDRESSABLE 경고),
+/// 리서치가 확인한 커버리지 공백(병합 convert fixture 0개)을 메운다.
+#[test]
+fn convert_hwp5_merged_tables_produce_addressable_grids() {
+    for name in ["tables/table_02_merge_col_row.hwp", "tables/table_08_nested_table.hwp"] {
+        let source = fixture(name);
+        let tmp = test_tmp();
+        let out = tmp.join("converted.hwpx");
+        let (_, _, code) =
+            run(&["convert-hwp5", source.to_str().unwrap(), "-o", out.to_str().unwrap()]);
+        assert_eq!(code, 0, "{name}: convert must succeed");
+
+        let json_out = tmp.join("converted.json");
+        let (_, stderr, code) =
+            run(&["to-json", out.to_str().unwrap(), "-o", json_out.to_str().unwrap()]);
+        assert_eq!(code, 0, "{name}: export must succeed");
+        assert!(
+            !stderr.contains("TABLE_GRID_UNADDRESSABLE")
+                && !stderr.contains("without grid addresses"),
+            "{name}: converted tables must tile a well-formed grid: {stderr}"
+        );
+
+        // 모든 표의 모든 셀이 addr 를 받았는지 전수 확인.
+        let parsed: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&json_out).unwrap()).unwrap();
+        fn assert_cells_addressed(value: &serde_json::Value, ctx: &str) {
+            match value {
+                serde_json::Value::Object(map) => {
+                    if let (Some(rows), true) = (map.get("rows"), map.contains_key("cell_spacing"))
+                    {
+                        for row in rows.as_array().into_iter().flatten() {
+                            for cell in
+                                row.get("cells").and_then(|c| c.as_array()).into_iter().flatten()
+                            {
+                                assert!(
+                                    cell.get("addr").is_some(),
+                                    "{ctx}: cell without addr: {cell}"
+                                );
+                            }
+                        }
+                    }
+                    map.values().for_each(|v| assert_cells_addressed(v, ctx));
+                }
+                serde_json::Value::Array(items) => {
+                    items.iter().for_each(|v| assert_cells_addressed(v, ctx));
+                }
+                _ => {}
+            }
+        }
+        assert_cells_addressed(&parsed, name);
+    }
+}
