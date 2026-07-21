@@ -161,3 +161,112 @@ fn map_stamp_error(error: StampError) -> ToolErrorInfo {
         other => ToolErrorInfo::new("STAMP_FAILED", other.to_string(), "Unexpected failure."),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use hwpforge_smithy_hwpx::stamp::StampAction;
+
+    use super::*;
+
+    /// Markdown → HWPX: 무가드 괄호빈칸 2개 + 가드(※) 체크박스 1개.
+    fn make_template(dir: &tempfile::TempDir) -> String {
+        let path = dir.path().join("template.hwpx");
+        crate::tools::convert::run_convert(
+            "성명: (   )\n\n소속: (  )\n\n※ 해당하는 항목의 □에 표시",
+            false,
+            path.to_str().unwrap(),
+            "default",
+        )
+        .unwrap();
+        path.to_str().unwrap().to_string()
+    }
+
+    fn named(c: &StampCandidate, name: &str) -> StampSpec {
+        StampSpec {
+            section: c.section,
+            path: c.path.clone(),
+            span: c.span.clone(),
+            marker: c.marker.clone(),
+            action: StampAction::Field { name: name.to_string(), hint: None },
+        }
+    }
+
+    #[test]
+    fn stamp_plan_lists_candidates_with_guard() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = make_template(&dir);
+        let data = run_stamp_plan(&src).unwrap();
+        assert_eq!(data.candidates.len(), 3, "{:?}", data.candidates);
+        assert_eq!(data.candidates.iter().filter(|c| c.guard.is_some()).count(), 1);
+    }
+
+    #[test]
+    fn stamp_happy_path_writes_output_and_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = make_template(&dir);
+        let plan = run_stamp_plan(&src).unwrap();
+        let unguarded: Vec<_> = plan.candidates.iter().filter(|c| c.guard.is_none()).collect();
+        let specs = vec![named(unguarded[0], "성명"), named(unguarded[1], "소속")];
+        let out = dir.path().join("stamped.hwpx");
+        let data = run_stamp(&src, &specs, out.to_str().unwrap(), None).unwrap();
+        assert_eq!(data.stamped.len(), 2);
+        assert_eq!(data.skipped_guarded, 1);
+        assert!(std::path::Path::new(&data.manifest_path).exists());
+
+        // 스탬프 산출물은 즉시 fields 툴로 소비 가능해야 한다.
+        let fields = crate::tools::fields::run_fields(out.to_str().unwrap()).unwrap();
+        assert_eq!(fields.fields.len(), 2);
+    }
+
+    #[test]
+    fn stamp_rejects_non_hwpx_extension() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = make_template(&dir);
+        let err = run_stamp(&src, &[], "out.zip", None).unwrap_err();
+        assert_eq!(err.code, "INVALID_EXTENSION");
+    }
+
+    #[test]
+    fn stamp_error_codes_reachable_via_real_calls() {
+        let dir = tempfile::tempdir().unwrap();
+        let src = make_template(&dir);
+        let plan = run_stamp_plan(&src).unwrap();
+        let unguarded: Vec<_> = plan.candidates.iter().filter(|c| c.guard.is_none()).collect();
+        let (c1, c2) = (unguarded[0], unguarded[1]);
+        let out = dir.path().join("never.hwpx");
+        let out_s = out.to_str().unwrap();
+
+        // 미커버 무가드 후보
+        let err = run_stamp(&src, &[], out_s, None).unwrap_err();
+        assert_eq!(err.code, "STAMP_CANDIDATE_UNCOVERED");
+
+        // stale spec (span 어긋남)
+        let mut stale = named(c1, "성명");
+        stale.span = 0..1;
+        let err = run_stamp(&src, &[stale, named(c2, "소속")], out_s, None).unwrap_err();
+        assert_eq!(err.code, "STAMP_SPEC_STALE");
+
+        // 마커 불일치
+        let mut wrong = named(c1, "성명");
+        wrong.marker = "(x)".to_string();
+        let err = run_stamp(&src, &[wrong, named(c2, "소속")], out_s, None).unwrap_err();
+        assert_eq!(err.code, "STAMP_MARKER_MISMATCH");
+
+        // 같은 후보 이중 분류
+        let err =
+            run_stamp(&src, &[named(c1, "a"), named(c1, "b"), named(c2, "소속")], out_s, None)
+                .unwrap_err();
+        assert_eq!(err.code, "STAMP_SPEC_DUPLICATE");
+
+        // 이름 중복
+        let err =
+            run_stamp(&src, &[named(c1, "같음"), named(c2, "같음")], out_s, None).unwrap_err();
+        assert_eq!(err.code, "STAMP_NAME_DUPLICATE");
+
+        // 빈 이름
+        let err = run_stamp(&src, &[named(c1, ""), named(c2, "소속")], out_s, None).unwrap_err();
+        assert_eq!(err.code, "STAMP_NAME_EMPTY");
+
+        assert!(!out.exists(), "fail-closed: 거부 시 산출물이 없어야 한다");
+    }
+}

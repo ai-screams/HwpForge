@@ -3229,3 +3229,62 @@ fn stamp_uncovered_candidate_rejected_all_or_nothing() {
     assert_eq!(value["code"], "STAMP_CANDIDATE_UNCOVERED");
     assert!(!out.exists(), "preflight 실패 시 산출물이 없어야 한다 (fail-closed)");
 }
+
+#[test]
+fn stamp_error_codes_for_bad_maps() {
+    let f = fixture("stamp/placeholder_basic.hwpx");
+    let tmp = test_tmp();
+    let (plan, _, _) = run_json(&["stamp-plan", f.to_str().unwrap()]);
+    let out = tmp.join("never3.hwpx");
+    let run_map = |specs: &serde_json::Value| {
+        let map = tmp.join("bad-map.json");
+        std::fs::write(&map, specs.to_string()).unwrap();
+        run_json(&[
+            "stamp",
+            f.to_str().unwrap(),
+            "--map",
+            map.to_str().unwrap(),
+            "-o",
+            out.to_str().unwrap(),
+        ])
+    };
+    let base = stamp_map_from_plan(&plan, false);
+
+    // stale span → STAMP_SPEC_STALE
+    let mut stale = base.clone();
+    stale[0]["span"] = serde_json::json!({"start": 0, "end": 1});
+    let (value, _, code) = run_map(&stale);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "STAMP_SPEC_STALE");
+
+    // marker 불일치 → STAMP_MARKER_MISMATCH
+    let mut mismatch = base.clone();
+    mismatch[0]["marker"] = serde_json::json!("(다름)");
+    let (value, _, code) = run_map(&mismatch);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "STAMP_MARKER_MISMATCH");
+
+    // 이름 중복 → STAMP_NAME_DUPLICATE
+    let mut dup = base.clone();
+    dup[0]["action"] = serde_json::json!({"field": {"name": "같음", "hint": null}});
+    dup[1]["action"] = serde_json::json!({"field": {"name": "같음", "hint": null}});
+    let (value, _, code) = run_map(&dup);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "STAMP_NAME_DUPLICATE");
+
+    // 깨진 맵 JSON → INVALID_STAMP_MAP
+    let map = tmp.join("broken-map.json");
+    std::fs::write(&map, "{ not json").unwrap();
+    let (value, _, code) = run_json(&[
+        "stamp",
+        f.to_str().unwrap(),
+        "--map",
+        map.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "INVALID_STAMP_MAP");
+
+    assert!(!out.exists(), "모든 거부에서 산출물이 없어야 한다 (fail-closed)");
+}

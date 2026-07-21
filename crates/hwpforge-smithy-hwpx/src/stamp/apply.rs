@@ -777,10 +777,10 @@ mod tests {
 
     #[test]
     fn mutation_walker_reaches_every_planned_container() {
-        // Body + table cell + table caption + textbox + footnote — one
-        // marker each. Stamp all candidates, then re-plan must be empty;
-        // any walker asymmetry leaves a candidate behind (or trips the
-        // debug_assert in the rebuild).
+        // Body + table cell + table caption + textbox(+caption) + footnote
+        // + endnote + rect caption — one marker each. Stamp all candidates,
+        // then re-plan must be empty; any walker asymmetry leaves a
+        // candidate behind (or trips the debug_assert in the rebuild).
         use hwpforge_core::caption::{Caption, CaptionSide};
 
         let width = HwpUnit::new(1000).unwrap();
@@ -792,14 +792,55 @@ mod tests {
         let mut host = Paragraph::new(ParaShapeIndex::new(0));
         host.add_run(Run::table(table, CharShapeIndex::new(0)));
 
-        let mut doc = doc_with_paras(vec![text_para("본문 (  )"), host]);
+        let mut controls = Paragraph::new(ParaShapeIndex::new(0));
+        controls.add_run(Run::control(
+            Control::TextBox {
+                paragraphs: vec![text_para("글상자 (  )")],
+                width,
+                height: width,
+                horz_offset: 0,
+                vert_offset: 0,
+                caption: Some(Caption::new(
+                    vec![text_para("글상자캡션 ☑")],
+                    CaptionSide::default(),
+                )),
+                style: None,
+                text_vertical_align: hwpforge_foundation::VerticalAlign::default(),
+            },
+            CharShapeIndex::new(0),
+        ));
+        controls.add_run(Run::control(
+            Control::Footnote { inst_id: None, paragraphs: vec![text_para("각주 (인)")] },
+            CharShapeIndex::new(0),
+        ));
+        controls.add_run(Run::control(
+            Control::Endnote { inst_id: None, paragraphs: vec![text_para("미주 □")] },
+            CharShapeIndex::new(0),
+        ));
+        controls.add_run(Run::control(
+            Control::Rect {
+                width,
+                height: width,
+                horz_offset: 0,
+                vert_offset: 0,
+                caption: Some(Caption::new(vec![text_para("사각형 (  )")], CaptionSide::default())),
+                style: None,
+            },
+            CharShapeIndex::new(0),
+        ));
+
+        let mut doc = doc_with_paras(vec![text_para("본문 (  )"), host, controls]);
 
         let cs = plan(&doc);
-        assert_eq!(cs.len(), 3, "expected candidates in body, cell, caption: {cs:?}");
+        assert_eq!(
+            cs.len(),
+            8,
+            "body/cell/caption/textbox/textbox-caption/footnote/endnote/rect-caption: {cs:?}"
+        );
         let specs: Vec<StampSpec> =
             cs.iter().enumerate().map(|(i, c)| field_spec(c, &format!("필드{i}"))).collect();
         let outcome = apply(&mut doc, &specs).unwrap();
-        assert_eq!(outcome.stamped.len(), 3);
+        assert_eq!(outcome.stamped.len(), 8);
         assert_eq!(plan(&doc).len(), 0, "walker must reach every planned container");
     }
 }
