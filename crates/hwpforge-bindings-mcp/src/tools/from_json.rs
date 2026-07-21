@@ -45,18 +45,25 @@ pub fn run_from_json(structure: &str, output_path: &str) -> Result<FromJsonData,
         ));
     }
 
-    // 3. Parse JSON
-    let exported: ExportedDocument = serde_json::from_str(structure).map_err(|e| {
+    // 3. Parse JSON — tree once, typed view by reference (no reparse).
+    let value: serde_json::Value = serde_json::from_str(structure).map_err(|e| {
         ToolErrorInfo::new(
             "JSON_PARSE_ERROR",
             format!("Invalid JSON: {e}"),
             "Ensure JSON matches the ExportedDocument schema from hwpforge_to_json output.",
         )
     })?;
+    let exported: ExportedDocument =
+        serde::Deserialize::deserialize(&value).map_err(|e: serde_json::Error| {
+            ToolErrorInfo::new(
+                "JSON_PARSE_ERROR",
+                format!("Invalid JSON: {e}"),
+                "Ensure JSON matches the ExportedDocument schema from hwpforge_to_json output.",
+            )
+        })?;
 
     // Supplied cell grid addresses are validated, then discarded: absence
     // means no check, a mismatch means the caller acted on stale addresses.
-    let value: serde_json::Value = serde_json::from_str(structure).expect("structure reparsed");
     hwpforge_smithy_hwpx::grid_addr::verify_document_addresses(&value, &exported.document)
         .map_err(|e| {
             ToolErrorInfo::new(

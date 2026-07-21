@@ -37,7 +37,16 @@ pub fn run(
         }
     };
 
-    let exported_section: ExportedSection = match serde_json::from_str(&json_str) {
+    // Parse the tree once; the typed section deserializes from it by
+    // reference (no reparse, no clone).
+    let value: serde_json::Value = match serde_json::from_str(&json_str) {
+        Ok(v) => v,
+        Err(e) => {
+            CliError::new("JSON_PARSE_FAILED", format!("Invalid section JSON: {e}"))
+                .exit(json_mode, 2);
+        }
+    };
+    let exported_section: ExportedSection = match serde::Deserialize::deserialize(&value) {
         Ok(s) => s,
         Err(e) => {
             CliError::new("JSON_PARSE_FAILED", format!("Invalid section JSON: {e}"))
@@ -47,7 +56,6 @@ pub fn run(
 
     // Supplied cell grid addresses are validated, then discarded (see
     // from-json): stale addresses after structural edits are rejected.
-    let value: serde_json::Value = serde_json::from_str(&json_str).expect("json_str reparsed");
     if let Err(e) = hwpforge_smithy_hwpx::grid_addr::verify_section_addresses(
         &value,
         &exported_section.section,

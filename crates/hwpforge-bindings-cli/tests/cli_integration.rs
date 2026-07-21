@@ -3568,3 +3568,152 @@ fn convert_hwp5_merged_tables_produce_addressable_grids() {
         assert_cells_addressed(&parsed, name);
     }
 }
+
+// ═══════════════════════════════════════════════════════════════
+// to-md 모드 게이트 (E3 Wave 4 경고 E2E + 커버리지 공백 해소)
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn to_md_styled_keeps_merges_and_lossy_warns_flattening() {
+    let f = fixture("tables/merged_grid_form.hwpx");
+
+    // styled(기본): 병합 표는 rowspan HTML 로 보존 — 평탄화 경고 없음.
+    let tmp = test_tmp();
+    let (_, stderr, code) = run(&["to-md", f.to_str().unwrap(), "-o", tmp.to_str().unwrap()]);
+    assert_eq!(code, 0, "{stderr}");
+    let md = std::fs::read_to_string(tmp.join("merged_grid_form.md")).unwrap();
+    assert!(md.contains("rowspan=\"2\""), "styled must keep merges as HTML: {md}");
+    assert!(!stderr.contains("TABLE_MERGE_FLATTENED"));
+
+    // lossy: GFM 평탄화 + TABLE_MERGE_FLATTENED 경고 (Wave 4 warning-first).
+    let tmp = test_tmp();
+    let (_, stderr, code) =
+        run(&["to-md", f.to_str().unwrap(), "-o", tmp.to_str().unwrap(), "--mode", "lossy"]);
+    assert_eq!(code, 0);
+    assert!(stderr.contains("merged cell"), "lossy must warn about flattening: {stderr}");
+    // json 모드는 구조화 경고 코드로.
+    let tmp = test_tmp();
+    let (_, _, stderr, code) = run_json_with_stdout(&[
+        "to-md",
+        f.to_str().unwrap(),
+        "-o",
+        tmp.to_str().unwrap(),
+        "--mode",
+        "lossy",
+    ]);
+    assert_eq!(code, 0);
+    assert!(stderr.contains("TABLE_MERGE_FLATTENED"), "{stderr}");
+}
+
+#[test]
+fn to_md_lossless_mode_runs() {
+    let f = fixture("tables/merged_grid_form.hwpx");
+    let tmp = test_tmp();
+    let (_, _, code) =
+        run(&["to-md", f.to_str().unwrap(), "-o", tmp.to_str().unwrap(), "--mode", "lossless"]);
+    assert_eq!(code, 0);
+    assert!(tmp.join("merged_grid_form.md").exists());
+}
+
+// ═══════════════════════════════════════════════════════════════
+// set-cell --map 배치·인자 충돌 게이트
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn set_cell_map_batch_reports_resolution_and_clear() {
+    let f = fixture("tables/merged_grid_form.hwpx");
+    let tmp = test_tmp();
+    let map = tmp.join("cells.json");
+    std::fs::write(
+        &map,
+        serde_json::json!([
+            {"table": 0, "at": {"row": 2, "col": 0}, "text": "세로병합값"},
+            {"table": 0, "right_of": "성명", "text": ""}
+        ])
+        .to_string(),
+    )
+    .unwrap();
+    let out = tmp.join("batch.hwpx");
+
+    // 사람용 출력 경로: covered → anchor 리다이렉트와 clear 마커가 보여야 한다.
+    let (stdout, stderr, code) = run(&[
+        "set-cell",
+        f.to_str().unwrap(),
+        "--map",
+        map.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{stderr}");
+    assert!(stdout.contains("Set 2 cell(s)"), "{stdout}");
+    assert!(stdout.contains("covered -> anchor (1, 0)"), "{stdout}");
+    assert!(stdout.contains("[cleared]"), "{stdout}");
+    assert!(out.exists());
+}
+
+#[test]
+fn set_cell_map_arg_conflicts_rejected() {
+    let f = fixture("tables/merged_grid_form.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("never2.hwpx");
+    let map = tmp.join("cells.json");
+    std::fs::write(&map, "[]").unwrap();
+
+    // --map 과 단건 플래그 동시 사용 금지.
+    let (value, _, code) = run_json(&[
+        "set-cell",
+        f.to_str().unwrap(),
+        "--map",
+        map.to_str().unwrap(),
+        "--table",
+        "0",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "INVALID_SET_CELL_ARGS");
+
+    // 빈 맵 거부.
+    let (value, _, code) = run_json(&[
+        "set-cell",
+        f.to_str().unwrap(),
+        "--map",
+        map.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "INVALID_SET_CELL_MAP");
+
+    // 맵 파싱 실패.
+    std::fs::write(&map, "{not json").unwrap();
+    let (value, _, code) = run_json(&[
+        "set-cell",
+        f.to_str().unwrap(),
+        "--map",
+        map.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "INVALID_SET_CELL_MAP");
+
+    // --at 와 --right-of 동시 지정.
+    let (value, _, code) = run_json(&[
+        "set-cell",
+        f.to_str().unwrap(),
+        "--table",
+        "0",
+        "--at",
+        "0,0",
+        "--right-of",
+        "성명",
+        "--text",
+        "x",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "INVALID_SET_CELL_ARGS");
+    assert!(!out.exists());
+}

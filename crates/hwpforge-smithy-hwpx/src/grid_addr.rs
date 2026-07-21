@@ -459,6 +459,42 @@ mod tests {
     }
 
     #[test]
+    fn textbox_nested_table_is_annotated_end_to_end() {
+        // 워커 경로 서술자가 serde 실형태와 어긋나면 to-json 이
+        // GRID_ADDR_PROJECTION_FAILED 로 죽는다 — 컨트롤 컨테이너 내 표의
+        // 실제 JSON 항법을 end-to-end 로 잠근다.
+        let textbox = hwpforge_core::Control::TextBox {
+            paragraphs: vec![{
+                let mut p = Paragraph::new(ParaShapeIndex::new(0));
+                p.add_run(Run::table(merged_table(), CharShapeIndex::new(0)));
+                p
+            }],
+            caption: None,
+            width: HwpUnit::new(1000).unwrap(),
+            height: HwpUnit::new(1000).unwrap(),
+            horz_offset: 0,
+            vert_offset: 0,
+            style: None,
+            text_vertical_align: hwpforge_foundation::VerticalAlign::default(),
+        };
+        let mut host = Paragraph::new(ParaShapeIndex::new(0));
+        host.add_run(Run::control(textbox, CharShapeIndex::new(0)));
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(vec![host], PageSettings::default()));
+
+        let mut root = export_value(&doc);
+        let warnings = annotate_document_addresses(&mut root, &doc).expect("annotate");
+        assert!(warnings.is_empty());
+        assert_eq!(
+            root["document"]["sections"][0]["paragraphs"][0]["runs"][0]["content"]["Control"]
+                ["TextBox"]["paragraphs"][0]["runs"][0]["content"]["Table"]["rows"][1]["cells"][0]
+                ["addr"],
+            serde_json::json!({"row": 1, "col": 1})
+        );
+        verify_document_addresses(&root, &doc).expect("verify");
+    }
+
+    #[test]
     fn section_export_round_trip_annotates_and_verifies() {
         let doc = doc_with(merged_table());
         let section = &doc.sections()[0];

@@ -59,6 +59,9 @@ What does the user want?
 │   │
 │   └─ ADD or REMOVE paragraphs (structural change)
 │         → to-json (full) → add paragraphs → from-json --base [REBUILD]
+│           ⚠ 표 구조를 바꿨다면(행/열/셀 추가·삭제) 셀의 addr 필드를 삭제하고
+│             제출할 것 — 남겨두면 stale 주소로 GRID_ADDR_INVALID 거부됨
+│             (addr 부재 = 무검사, 존재 = 재파생 격자와 대조)
 │
 ├─ Read / export an existing .hwpx
 │     → to-md   (HWPX → Markdown, for reading)

@@ -439,6 +439,20 @@ mod tests {
             CharShapeIndex::new(0),
         ));
         controls.add_run(Run::control(
+            Control::Endnote {
+                inst_id: None,
+                paragraphs: vec![{
+                    let mut p = Paragraph::new(ParaShapeIndex::new(0));
+                    p.add_run(Run::table(
+                        one_cell_table(vec![text_para("미주표")]),
+                        CharShapeIndex::new(0),
+                    ));
+                    p
+                }],
+            },
+            CharShapeIndex::new(0),
+        ));
+        controls.add_run(Run::control(
             Control::Rect {
                 width,
                 height: width,
@@ -472,8 +486,11 @@ mod tests {
         for_each_table_mut(&mut doc, &mut |ordinal, table| {
             mutable.push((ordinal, table_text(table)));
         });
-        assert_eq!(immutable.len(), 5, "{immutable:?}");
+        assert_eq!(immutable.len(), 6, "{immutable:?}");
         assert_eq!(immutable, mutable, "walkers must not drift");
+        // 잔여 도형 variant(Ellipse/Polygon/Line/Arc/Curve/ConnectLine)는
+        // 가변 워커에서 검증된 variant 와 같은 match arm 을 공유한다 —
+        // arm 분리 시 이 테스트에 해당 컨테이너를 추가할 것.
     }
 
     #[test]

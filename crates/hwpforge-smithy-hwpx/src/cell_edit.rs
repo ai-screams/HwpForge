@@ -336,6 +336,12 @@ pub fn apply_set_cells(
 
     // Ancestor/descendant conflicts: another spec's table nested inside an
     // edited cell would be destroyed by the replacement.
+    //
+    // Belt-and-suspenders: with today's rules this scan cannot fire — a cell
+    // hosting a nested table is already rejected by the text-only check
+    // above. It stays as an independent invariant so a future relaxation of
+    // the content gate (e.g. an explicitly destructive replace) cannot
+    // silently reintroduce the destroy-a-target hazard.
     for edit in &resolved {
         let mut cell_prefix: Vec<PathSeg> = entries[edit.table].path.clone();
         cell_prefix.push(PathSeg::Field("rows"));

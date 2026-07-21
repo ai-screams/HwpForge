@@ -151,7 +151,6 @@ enum Commands {
         output: PathBuf,
     },
 
-    /// Discover prose placeholder candidates for stamping (E6, phase 1).
     /// Edit table cells by logical grid address (E3).
     #[command(
         name = "set-cell",
@@ -190,6 +189,7 @@ enum Commands {
         map: Option<PathBuf>,
     },
 
+    /// Discover prose placeholder candidates for stamping (E6, phase 1).
     #[command(
         name = "stamp-plan",
         long_about = "Discover class-A placeholder candidates (checkbox/paren-blank/date-blank/standalone-@/seal tokens) for template stamping.\n\nAuthor a spec map from the output: every unguarded candidate must get an action — {\"field\":{\"name\":\"…\"}} or \"ignore\" — then run `stamp --map`."
