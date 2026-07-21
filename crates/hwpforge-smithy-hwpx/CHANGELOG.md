@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.2](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.11.1...hwpforge-smithy-hwpx-v0.11.2) - 2026-07-21
+
+### Added
+
+- MCP hwpforge_stamp_plan/hwpforge_stamp + 스킬 STAMP 경로
+
+- CLI stamp-plan/stamp — E6 스탬핑 커맨드 + 게이트 fixture
+
+- E6 HwpxStamper — admission 게이트 + manifest (fail-closed bytes 파사드)
+
+- E6 스탬핑 apply 단계 — 전량 preflight + run 분할 승격 (all-or-nothing)
+
+- E6 스탬핑 plan 단계 — patch 슬롯 워커 재사용 + 문단·셀 스코프 가드
+
+- E6 스탬핑 클래스-A 마커 탐지기 — 닫힌 패턴 리스트 + 안내문 가드
+
+
+### Fixed
+
+- 후속 검증 잔여 Low 상환 — MCP escape 일관성·manifest 경로 충돌 가드
+
+- 리뷰 확정 이슈 상환 — 탐지기 O(n²) DoS·부분 산출물·엔트리명 escape
+
+- CrossRef RefPath envelope 언랩 — 왕복 누적 발산·Object 승격 불발 수정
+
+
 ## [0.11.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.11.0...hwpforge-smithy-hwpx-v0.11.1) - 2026-07-13
 
 ### Added

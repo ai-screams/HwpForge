@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.2](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.11.1...hwpforge-bindings-mcp-v0.11.2) - 2026-07-21
+
+### Added
+
+- MCP hwpforge_stamp_plan/hwpforge_stamp + 스킬 STAMP 경로
+
+
+### Fixed
+
+- 후속 검증 잔여 Low 상환 — MCP escape 일관성·manifest 경로 충돌 가드
+
+- 리뷰 확정 이슈 상환 — 탐지기 O(n²) DoS·부분 산출물·엔트리명 escape
+
+
 ## [0.11.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.11.0...hwpforge-bindings-mcp-v0.11.1) - 2026-07-13
 
 ### Added
