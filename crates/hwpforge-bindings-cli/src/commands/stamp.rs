@@ -92,6 +92,16 @@ pub fn run(
     let manifest_file: PathBuf = manifest_path
         .map(Path::to_path_buf)
         .unwrap_or_else(|| output.with_extension("manifest.json"));
+    // R2: identical paths would silently overwrite the stamped .hwpx with
+    // the manifest JSON and still report success.
+    if output == &manifest_file {
+        CliError::new(
+            "MANIFEST_PATH_CONFLICT",
+            format!("manifest path equals output path: {}", output.display()),
+        )
+        .with_hint("--manifest 경로는 -o 경로와 달라야 합니다")
+        .exit(json_mode, 1);
+    }
     let manifest_json = serde_json::to_string_pretty(&result.manifest).unwrap();
     if let Err(e) = std::fs::write(output, &result.bytes) {
         CliError::new("FILE_WRITE_FAILED", format!("Cannot write '{}': {e}", output.display()))

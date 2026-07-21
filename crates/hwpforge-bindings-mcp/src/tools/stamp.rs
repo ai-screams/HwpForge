@@ -77,6 +77,15 @@ pub fn run_stamp(
             "Report this as a bug.",
         )
     })?;
+    // R2: identical paths would silently overwrite the stamped .hwpx with
+    // the manifest JSON and still report success.
+    if std::path::Path::new(output_path) == std::path::Path::new(&manifest_file) {
+        return Err(ToolErrorInfo::new(
+            "MANIFEST_PATH_CONFLICT",
+            format!("manifest path equals output path: {output_path}"),
+            "manifest_path 는 output_path 와 달라야 합니다.",
+        ));
+    }
     write_output_file(output_path, &result.bytes)?;
     if let Err(e) = write_output_file(&manifest_file, manifest_json.as_bytes()) {
         let _ = std::fs::remove_file(output_path);
@@ -101,9 +110,11 @@ fn map_stamper_error(error: StamperError) -> ToolErrorInfo {
             format!("input is not round-trip-safe: {component} differs at {diff_path}"),
             "이 입력은 무손실 재인코드가 증명되지 않아 거부됩니다 (fail-closed). 코덱 갭 수정 전까지 스탬핑 불가.",
         ),
+        // R1: entry names are untrusted — {:?} escapes control chars even
+        // if a client prints the parsed JSON string raw.
         StamperError::UncarriedZipEntries { entries } => ToolErrorInfo::new(
             "INPUT_ENTRIES_NOT_CARRIED",
-            format!("encoder does not carry input entries: {}", entries.join(", ")),
+            format!("encoder does not carry input entries: {entries:?}"),
             "재인코드 시 유실될 ZIP 엔트리가 있어 거부됩니다 (fail-closed).",
         ),
         StamperError::Stamp(inner) => map_stamp_error(inner),
@@ -274,5 +285,26 @@ mod tests {
         assert_eq!(err.code, "STAMP_NAME_EMPTY");
 
         assert!(!out.exists(), "fail-closed: 거부 시 산출물이 없어야 한다");
+    }
+
+    #[test]
+    fn stamp_manifest_write_failure_removes_output() {
+        // Review L1: manifest 기록 실패 시 .hwpx 산출물도 제거되어야 한다
+        // (fail-closed — 부분 산출물 금지).
+        let dir = tempfile::tempdir().unwrap();
+        let src = make_template(&dir);
+        let plan = run_stamp_plan(&src).unwrap();
+        let unguarded: Vec<_> = plan.candidates.iter().filter(|c| c.guard.is_none()).collect();
+        let specs = vec![named(unguarded[0], "성명"), named(unguarded[1], "소속")];
+        let out = dir.path().join("orphan.hwpx");
+        let err = run_stamp(
+            &src,
+            &specs,
+            out.to_str().unwrap(),
+            Some("/nonexistent-dir/never.manifest.json"),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "WRITE_ERROR");
+        assert!(!out.exists(), "manifest 실패 시 산출물이 제거되어야 한다");
     }
 }

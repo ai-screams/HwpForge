@@ -251,6 +251,17 @@ mod tests {
     }
 
     #[test]
+    fn paren_interior_newline_rejected_carriage_return_allowed() {
+        // Semantic-equivalence locks for the M1 rewrite: `\n` inside the
+        // parens breaks the blank (same-line rule), `\r` counts as blank
+        // whitespace, and nesting only matches the innermost pair.
+        assert!(detect_markers("(\n)").is_empty());
+        assert!(detect_markers("( \n )").is_empty());
+        assert_eq!(hits("(\r)"), vec![(BuiltinPattern::ParenBlank, "(\r)")]);
+        assert_eq!(hits("( ( )"), vec![(BuiltinPattern::ParenBlank, "( )")]);
+    }
+
+    #[test]
     fn adversarial_open_paren_flood_stays_linear() {
         // Review M1: the old scanner ran `rest.find(')')` per `(` — O(n²),
         // 24s on this input. The fixed scanner consumes only whitespace per
