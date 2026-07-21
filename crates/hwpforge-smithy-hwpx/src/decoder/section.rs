@@ -931,8 +931,28 @@ fn decode_field_control(
             }
         }
         "CROSSREF" => {
+            // E6 Wave 0 fix: RefPath wire is wrapped in a `?…;` envelope
+            // (`?#<instId>;` / `?<name>;` — the same form the encoder
+            // emits). Unwrap exactly one leading `?` and one trailing `;`
+            // (tolerant when absent) BEFORE boundary-decoding. The old
+            // `trim_start_matches("?#")` only handled the literal `?#`
+            // prefix and never the `;` terminator, so Object lifting never
+            // fired and every decode→encode cycle accumulated `?`/`;`.
+            //
+            // Known normalizations (review L3, Core semantics preserved):
+            // - a bookmark NAME that itself starts with `#` or ends with
+            //   `;` is indistinguishable from envelope/anchor decoration
+            //   and re-encodes without it (`?#foo;` → `?foo;`);
+            // - files corrupted by the old accumulating bug (`??…;;`)
+            //   stabilize after one unwrap per decode but are NOT healed
+            //   back to a clean Object/Name form.
             let target_str = get_field_param(fb, "RefPath")
-                .map(|p| p.trim_start_matches("?#").to_string())
+                .map(|p| {
+                    let s = p.as_str();
+                    let s = s.strip_prefix('?').unwrap_or(s);
+                    let s = s.strip_suffix(';').unwrap_or(s);
+                    s.to_string()
+                })
                 .unwrap_or_default();
             let rt = get_field_param(fb, "RefType")
                 .and_then(|s| s.parse::<hwpforge_foundation::RefType>().ok())
@@ -946,7 +966,11 @@ fn decode_field_control(
             // a name; otherwise look for `#<u64>` and lift to SystemId.
             // Failure preserves Raw so caller still sees the wire value.
             let target = if matches!(rt, hwpforge_foundation::RefType::Bookmark) {
-                hwpforge_core::control::RefTarget::Name(target_str.clone())
+                // Bookmark refpaths may carry an anchor-style `#` before the
+                // name (`?#mybook`) — tolerate and strip it.
+                hwpforge_core::control::RefTarget::Name(
+                    target_str.strip_prefix('#').unwrap_or(&target_str).to_string(),
+                )
             } else if let Some(rest) = target_str.strip_prefix('#') {
                 if let Ok(id) = rest.parse::<u64>() {
                     hwpforge_core::control::RefTarget::Object(hwpforge_core::ObjectId::new(id))
@@ -3059,6 +3083,85 @@ mod tests {
         if let Some(hwpforge_core::Control::CrossRef { target, as_hyperlink, .. }) = crossref {
             assert_eq!(target.as_display(), "mybook", "target.as_display() must strip ?# prefix");
             assert!(*as_hyperlink, "RefHyperLink=true must decode as as_hyperlink=true");
+        }
+    }
+
+    #[test]
+    fn crossref_refpath_object_envelope_lifts_object_id() {
+        // E6 Wave 0 audit fix: Hancom-canonical RefPath wire is wrapped in a
+        // `?…;` envelope (`?#<instId>;` for object targets — exactly what our
+        // encoder emits). The decoder must unwrap the envelope before the
+        // `#<u64>` boundary lift; the old `trim_start_matches("?#")` left the
+        // trailing `;` in place so Object lifting never fired and every
+        // decode→encode cycle accumulated `?`/`;` (16/53 corpus fixtures).
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <fieldBegin type="CROSSREF" editable="false" dirty="false" zorder="-1" fieldid="628650598" name="">
+                            <parameters cnt="5" name="">
+                                <stringParam name="RefPath">?#1108165592;</stringParam>
+                                <stringParam name="RefType">TARGET_TABLE</stringParam>
+                                <stringParam name="RefContentType">PAGE_NUMBER</stringParam>
+                                <booleanParam name="RefHyperLink">false</booleanParam>
+                                <stringParam name="RefOpenType">HWPHYPERLINK_JUMP_CURRENTTAB</stringParam>
+                            </parameters>
+                        </fieldBegin>
+                    </ctrl>
+                    <t>1</t>
+                    <ctrl><fieldEnd beginIDRef="0" fieldid="628650598"/></ctrl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let controls = find_controls(&result);
+        let crossref =
+            controls.iter().find(|c| matches!(c, hwpforge_core::Control::CrossRef { .. }));
+        assert!(crossref.is_some(), "CROSSREF field must produce CrossRef control");
+        if let Some(hwpforge_core::Control::CrossRef { target, .. }) = crossref {
+            assert_eq!(
+                *target,
+                hwpforge_core::control::RefTarget::Object(hwpforge_core::ObjectId::new(1108165592)),
+                "`?#<u64>;` RefPath must unwrap the envelope and lift to Object"
+            );
+        }
+    }
+
+    #[test]
+    fn crossref_refpath_bookmark_envelope_strips_wrapper() {
+        // Bookmark form of the same envelope bug: `?<name>;` must decode to
+        // Name("<name>") — the old code kept the wrapper verbatim, so the
+        // encoder's re-wrap produced `??<name>;;` on every cycle.
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <fieldBegin type="CROSSREF" editable="false" dirty="false" zorder="-1" fieldid="628650598" name="">
+                            <parameters cnt="5" name="">
+                                <stringParam name="RefPath">?target1;</stringParam>
+                                <stringParam name="RefType">TARGET_BOOKMARK</stringParam>
+                                <stringParam name="RefContentType">PAGE_NUMBER</stringParam>
+                                <booleanParam name="RefHyperLink">true</booleanParam>
+                                <stringParam name="RefOpenType">HWPHYPERLINK_JUMP_CURRENTTAB</stringParam>
+                            </parameters>
+                        </fieldBegin>
+                    </ctrl>
+                    <t>1</t>
+                    <ctrl><fieldEnd beginIDRef="0" fieldid="628650598"/></ctrl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let controls = find_controls(&result);
+        let crossref =
+            controls.iter().find(|c| matches!(c, hwpforge_core::Control::CrossRef { .. }));
+        assert!(crossref.is_some(), "CROSSREF field must produce CrossRef control");
+        if let Some(hwpforge_core::Control::CrossRef { target, .. }) = crossref {
+            assert_eq!(
+                *target,
+                hwpforge_core::control::RefTarget::Name("target1".to_string()),
+                "`?<name>;` bookmark RefPath must unwrap to the bare name"
+            );
         }
     }
 

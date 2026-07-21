@@ -44,6 +44,10 @@ What does the user want?
 │   ├─ Fill NAMED click-here fields (누름틀) — form-style templates
 │   │     → fields (discover names) → fill --set name=value    [DELTA, cheapest+safest]
 │   │
+│   ├─ Template has NO 누름틀, only prose placeholders (□, (   ), 년 월 일, (인), @)
+│   │     → stamp-plan (discover) → author spec map → stamp --map  [STAMP, one-time]
+│   │       then the stamped output is a form template: use fields/fill above
+│   │
 │   ├─ Change only EXISTING text
 │   │   (fill a prose placeholder, fix a typo, fill a table cell)
 │   │     → to-json (--section) → edit the Text → patch        [TEXT-ONLY, safest]
@@ -87,6 +91,15 @@ hwpforge fields doc.hwpx [--json]                        # list name/hint/curren
 hwpforge fill doc.hwpx --set 과제명="AI 문서 자동화" --set 기관명="AiScream" -o out.hwpx
 #   all-or-nothing: 하나라도 검증 실패(없는 이름/중복 이름/빈 값/모호 필드)면 아무 것도 안 씀
 #   나머지 패키지 엔트리는 바이트 그대로 보존 (preserve-first)
+
+# Template stamping (E6) — promote prose placeholders (□, (   ), 년 월 일, (인), @)
+# to named 누름틀 so fields/fill work. One-time preprocessing per template.
+hwpforge stamp-plan template.hwpx --json                 # discover candidates
+#   → author a spec map: EVERY unguarded candidate gets {"action":{"field":{"name":"…"}}}
+#     or {"action":"ignore"}; guarded ones (※/【작성방법】/(예시) context) may be omitted
+hwpforge stamp template.hwpx --map specs.json -o form.hwpx   # + form.manifest.json
+#   fail-closed: 무손실 왕복이 증명 안 되는 입력은 거부(INPUT_NOT_ROUNDTRIP_SAFE);
+#   무가드 후보 누락도 거부(STAMP_CANDIDATE_UNCOVERED). 이후 fields/fill 로 채움
 
 # Export  (NOTE: -o/--output is REQUIRED — there is no stdout export)
 hwpforge to-json doc.hwpx -o full.json                  # whole document

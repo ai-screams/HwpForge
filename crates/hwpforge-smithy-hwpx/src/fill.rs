@@ -138,9 +138,11 @@ impl From<HwpxError> for FillError {
 pub struct HwpxFiller;
 
 /// 순회 중 발견한 필드의 가변 참조와 위치.
-struct FieldSlot<'a> {
-    section: usize,
-    control: &'a mut Control,
+// pub(crate): E6 stamp preflight 가 기존 필드 이름 충돌 검사에 같은
+// 순회를 재사용한다 (필드 방문 커버리지의 단일 정의 유지).
+pub(crate) struct FieldSlot<'a> {
+    pub(crate) section: usize,
+    pub(crate) control: &'a mut Control,
 }
 
 impl HwpxFiller {
@@ -289,7 +291,7 @@ impl HwpxFiller {
 /// 방문한다 (`collect_semantic_control_slots` / `redact_control` 의 거울 —
 /// 여기 없는 컨테이너(예: `Group`)의 필드는 슬롯도 없으므로 fill 대상이
 /// 아니어야 일관된다).
-fn visit_section_fields(
+pub(crate) fn visit_section_fields(
     section: &mut Section,
     section_idx: usize,
     f: &mut impl FnMut(&mut FieldSlot<'_>),

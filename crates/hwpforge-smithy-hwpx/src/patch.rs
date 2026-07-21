@@ -222,9 +222,14 @@ impl HwpxPatcher {
 }
 
 #[derive(Debug, Clone)]
-struct SemanticTextSlot {
-    path: String,
-    text: String,
+pub(crate) struct SemanticTextSlot {
+    pub(crate) path: String,
+    pub(crate) text: String,
+    /// True when the payload is a tab-bearing `RunContent::InlineText`
+    /// (plain-string projection). Patch editing downgrades such runs to
+    /// `Text` on apply; E6 stamping excludes them instead — splitting a
+    /// tab-bearing run is lossy (Wave 1A).
+    pub(crate) inline: bool,
 }
 
 #[derive(Debug, Default)]
@@ -375,7 +380,9 @@ fn build_section_preservation(
     })
 }
 
-fn collect_semantic_text_slots(section: &Section) -> Vec<SemanticTextSlot> {
+// pub(crate): E6 stamp plan 단계가 같은 커버리지로 placeholder 를 탐지한다
+// (세 번째 순회 복제 금지 — fill/patch 거울 규칙과 동일 계열).
+pub(crate) fn collect_semantic_text_slots(section: &Section) -> Vec<SemanticTextSlot> {
     let mut slots: Vec<SemanticTextSlot> = Vec::new();
     collect_semantic_paragraph_slots(&section.paragraphs, "paragraphs", &mut slots);
     // ADR-002: emit a slot per `<hp:header>` / `<hp:footer>` so multi-
@@ -431,6 +438,7 @@ fn collect_semantic_paragraph_slots(
                 RunContent::Text(text) => slots.push(SemanticTextSlot {
                     path: format!("{run_prefix}.text"),
                     text: text.clone(),
+                    inline: false,
                 }),
                 // `RunContent::InlineText` carries `<hp:tab>`
                 // attributes that the slot model cannot represent;
@@ -442,6 +450,7 @@ fn collect_semantic_paragraph_slots(
                 RunContent::InlineText(it) => slots.push(SemanticTextSlot {
                     path: format!("{run_prefix}.text"),
                     text: it.plain_text(),
+                    inline: true,
                 }),
                 RunContent::Table(table) => {
                     collect_semantic_table_slots(table, &format!("{run_prefix}.table"), slots);
@@ -552,6 +561,7 @@ fn collect_semantic_control_slots(
                 slots.push(SemanticTextSlot {
                     path: format!("{prefix}.field"),
                     text: display_text.clone(),
+                    inline: false,
                 });
             }
         }
@@ -1657,7 +1667,8 @@ fn section_path(section_idx: usize) -> String {
     format!("Contents/section{section_idx}.xml")
 }
 
-fn sha256_hex(bytes: &[u8]) -> String {
+// pub(crate): E6 stamp manifest 가 source/output 해시에 재사용.
+pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     let digest = hasher.finalize();

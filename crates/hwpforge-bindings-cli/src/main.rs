@@ -151,6 +151,37 @@ enum Commands {
         output: PathBuf,
     },
 
+    /// Discover prose placeholder candidates for stamping (E6, phase 1).
+    #[command(
+        name = "stamp-plan",
+        long_about = "Discover class-A placeholder candidates (checkbox/paren-blank/date-blank/standalone-@/seal tokens) for template stamping.\n\nAuthor a spec map from the output: every unguarded candidate must get an action — {\"field\":{\"name\":\"…\"}} or \"ignore\" — then run `stamp --map`."
+    )]
+    StampPlan {
+        /// HWPX file to inspect.
+        file: PathBuf,
+    },
+
+    /// Promote placeholders to named click-here fields (E6, phase 2).
+    #[command(
+        long_about = "Apply a stamp spec map all-or-nothing behind a fail-closed admission gate (no-op round-trip + ZIP closed-world), then write the stamped HWPX and a manifest.\n\nThe map is a JSON array of StampSpec (from `stamp-plan --json` candidates plus an action per candidate). The stamped output is immediately usable with `fields`/`fill`."
+    )]
+    Stamp {
+        /// HWPX file to stamp.
+        file: PathBuf,
+
+        /// JSON spec map (array of StampSpec with actions).
+        #[arg(long, value_name = "MAP_JSON")]
+        map: PathBuf,
+
+        /// Output HWPX file path.
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Manifest JSON path (default: <output>.manifest.json).
+        #[arg(long)]
+        manifest: Option<PathBuf>,
+    },
+
     /// Patch a section in an existing HWPX file.
     Patch {
         /// Base HWPX file.
@@ -247,6 +278,12 @@ fn main() {
         }
         Commands::Fill { file, sets, output } => {
             commands::fill::run(&file, &sets, &output, cli.json);
+        }
+        Commands::StampPlan { file } => {
+            commands::stamp::run_plan(&file, cli.json);
+        }
+        Commands::Stamp { file, map, output, manifest } => {
+            commands::stamp::run(&file, &map, &output, manifest.as_deref(), cli.json);
         }
         Commands::Patch { base, section, section_json, output } => {
             commands::patch::run(&base, section, &section_json, &output, cli.json);

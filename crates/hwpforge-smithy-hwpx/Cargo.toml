@@ -24,10 +24,12 @@ hwpforge-foundation = { path = "../hwpforge-foundation", version = "0" }
 quick-xml = { workspace = true }
 schemars = { workspace = true, optional = true }
 serde = { workspace = true }
+# E6 stamp admission gate: first-diff-path reporting for fail-closed
+# round-trip rejection (serde tree walk).
+serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
 zip = { workspace = true }
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }
-serde_json = { workspace = true }

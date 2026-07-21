@@ -8,6 +8,7 @@ pub mod from_json;
 pub mod inspect;
 pub mod patch;
 pub mod schema;
+pub mod stamp;
 pub mod templates;
 pub mod to_json;
 pub mod to_md;

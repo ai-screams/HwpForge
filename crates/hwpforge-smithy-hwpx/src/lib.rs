@@ -63,6 +63,7 @@ pub mod presets;
 mod registry_bridge;
 mod schema;
 mod section_workflow;
+pub mod stamp;
 mod style_lookup_bridge;
 pub mod style_store;
 
