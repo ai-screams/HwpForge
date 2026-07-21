@@ -35,6 +35,8 @@
 //! assert_eq!(table.row_count(), 1);
 //! ```
 
+pub mod grid;
+
 use hwpforge_foundation::{Color, HwpUnit};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
