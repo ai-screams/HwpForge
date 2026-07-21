@@ -3405,3 +3405,107 @@ fn from_json_accepts_annotated_export_and_rejects_tampered_addr() {
         run(&["from-json", stripped.to_str().unwrap(), "-o", clean_out.to_str().unwrap()]);
     assert_eq!(code, 0, "addr-free import must succeed: {stderr}");
 }
+
+// ═══════════════════════════════════════════════════════════════
+// E3 Wave 3: set-cell (격자 주소 셀 편집)
+// ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn set_cell_edits_anchor_and_resolves_covered_coordinate() {
+    let f = fixture("tables/merged_grid_form.hwpx");
+    let tmp = test_tmp();
+
+    // export 로 첫 표의 병합 앵커(row_span > 1)를 찾는다.
+    let json_out = tmp.join("grid.json");
+    let (_, _, code) = run(&["to-json", f.to_str().unwrap(), "-o", json_out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let parsed: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&json_out).unwrap()).unwrap();
+    let (pi, ri) = first_table_run_indices(&parsed);
+    let table =
+        &parsed["document"]["sections"][0]["paragraphs"][pi]["runs"][ri]["content"]["Table"];
+    let merged = table["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|row| row["cells"].as_array().unwrap())
+        .find(|cell| cell["row_span"].as_u64().unwrap_or(1) > 1)
+        .expect("merge fixture must contain a row-span anchor");
+    let (arow, acol) =
+        (merged["addr"]["row"].as_u64().unwrap(), merged["addr"]["col"].as_u64().unwrap());
+
+    // 피병합 좌표(앵커 바로 아래)를 지정 → 앵커로 resolve 되어야 한다.
+    let covered = format!("{},{}", arow + 1, acol);
+    let out = tmp.join("edited.hwpx");
+    let (value, _, code) = run_json(&[
+        "set-cell",
+        f.to_str().unwrap(),
+        "--table",
+        "0",
+        "--at",
+        &covered,
+        "--text",
+        "격자값",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "{value}");
+    assert_eq!(value["cells"][0]["resolution"], "covered_to_anchor");
+    assert_eq!(value["cells"][0]["anchor"], serde_json::json!({"row": arow, "col": acol}));
+
+    // 편집 결과 검증: 재-export 에서 앵커 셀 텍스트가 바뀌었는지.
+    let verify_json = tmp.join("verify.json");
+    let (_, _, code) =
+        run(&["to-json", out.to_str().unwrap(), "-o", verify_json.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let verify: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&verify_json).unwrap()).unwrap();
+    let (vpi, vri) = first_table_run_indices(&verify);
+    let vtable =
+        &verify["document"]["sections"][0]["paragraphs"][vpi]["runs"][vri]["content"]["Table"];
+    let edited = vtable["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|row| row["cells"].as_array().unwrap())
+        .find(|cell| cell["addr"] == serde_json::json!({"row": arow, "col": acol}))
+        .expect("anchor cell present");
+    let text = edited["paragraphs"][0]["runs"][0]["content"]["Text"].as_str().unwrap_or("");
+    assert_eq!(text, "격자값");
+}
+
+#[test]
+fn set_cell_error_codes_and_all_or_nothing() {
+    let f = fixture("tables/merged_grid_form.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("never.hwpx");
+    let run_edit = |args: &[&str]| {
+        let mut full = vec!["set-cell", f.to_str().unwrap()];
+        full.extend_from_slice(args);
+        full.extend_from_slice(&["-o", out.to_str().unwrap()]);
+        run_json(&full)
+    };
+
+    let (value, _, code) = run_edit(&["--table", "99", "--at", "0,0", "--text", "x"]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "TABLE_NOT_FOUND");
+
+    let (value, _, code) = run_edit(&["--table", "0", "--at", "9999,0", "--text", "x"]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "CELL_NOT_FOUND");
+
+    let (value, _, code) =
+        run_edit(&["--table", "0", "--right-of", "존재하지않는라벨", "--text", "x"]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "CELL_NOT_FOUND");
+
+    let (value, _, code) = run_edit(&["--table", "0", "--at", "abc", "--text", "x"]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "INVALID_SET_CELL_ARGS");
+
+    let (value, _, code) = run_edit(&["--table", "0", "--text", "x"]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "INVALID_SET_CELL_ARGS");
+
+    assert!(!out.exists(), "rejected edits must not produce output (all-or-nothing)");
+}

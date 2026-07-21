@@ -190,7 +190,7 @@ impl HwpxStamper {
     }
 }
 
-fn encode_hwpx(doc: &HwpxDocument) -> Result<Vec<u8>, StamperError> {
+pub(crate) fn encode_hwpx(doc: &HwpxDocument) -> Result<Vec<u8>, StamperError> {
     let validated = doc
         .document
         .clone()
@@ -200,7 +200,7 @@ fn encode_hwpx(doc: &HwpxDocument) -> Result<Vec<u8>, StamperError> {
         .map_err(|e| StamperError::Codec(e.to_string()))
 }
 
-fn admission_compare(a: &HwpxDocument, b: &HwpxDocument) -> Result<(), StamperError> {
+pub(crate) fn admission_compare(a: &HwpxDocument, b: &HwpxDocument) -> Result<(), StamperError> {
     if a.document != b.document {
         return Err(StamperError::NotRoundTripSafe {
             component: "document".to_string(),
@@ -261,7 +261,7 @@ fn first_diff_path<T: Serialize>(a: &T, b: &T) -> String {
 
 /// Closed-world ZIP check: every input entry must exist in the re-encoded
 /// package, or stamping would silently drop it.
-fn check_zip_carry(base: &[u8], encoded: &[u8]) -> Result<(), StamperError> {
+pub(crate) fn check_zip_carry(base: &[u8], encoded: &[u8]) -> Result<(), StamperError> {
     let base_entries = zip_entry_names(base)?;
     let out_entries = zip_entry_names(encoded)?;
     let missing: Vec<String> =

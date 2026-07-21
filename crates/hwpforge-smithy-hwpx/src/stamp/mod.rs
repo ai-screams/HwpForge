@@ -23,6 +23,10 @@ mod stamper;
 pub use apply::{apply, StampAction, StampError, StampOutcome, StampSpec, StampedField};
 pub use detect::{detect_markers, paragraph_guard, BuiltinPattern, GuardReason, MarkerHit};
 pub use plan::{plan, StampCandidate};
+// E3 cell editing reuses the stamp admission gate (decode→encode→decode
+// no-op equality + ZIP closed-world) so both mutation facades share one
+// fail-closed contract.
+pub(crate) use stamper::{admission_compare, check_zip_carry, encode_hwpx};
 pub use stamper::{
     HwpxStamper, ManifestField, StampManifest, StampMeta, StampResult, StamperError,
     STAMP_MANIFEST_VERSION,

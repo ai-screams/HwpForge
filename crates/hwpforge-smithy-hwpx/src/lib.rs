@@ -49,6 +49,7 @@
 #![deny(rustdoc::broken_intra_doc_links)]
 #![deny(unsafe_code)]
 
+pub mod cell_edit;
 mod color;
 pub mod decoder;
 pub mod default_styles;
@@ -69,6 +70,10 @@ mod style_lookup_bridge;
 pub mod style_store;
 mod table_inventory;
 
+pub use cell_edit::{
+    apply_set_cells, CellEditError, CellEditResult, CellResolution, CellSpec, CellTarget,
+    HwpxCellEditor, SetCellOutcome, SetCellResult,
+};
 pub use decoder::package::{PackageEntryInfo, PackageReader};
 pub use decoder::{HwpxDecoder, HwpxDocument};
 pub use default_styles::{DefaultStyleEntry, HancomStyleSet};

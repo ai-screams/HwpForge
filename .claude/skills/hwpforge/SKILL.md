@@ -48,6 +48,11 @@ What does the user want?
 │   │     → stamp-plan (discover) → author spec map → stamp --map  [STAMP, one-time]
 │   │       then the stamped output is a form template: use fields/fill above
 │   │
+│   ├─ Fill a TABLE CELL by position or label (병합셀 표 서식)
+│   │     → to-json (cells carry addr {row,col}) → set-cell     [GRID, admission-gated]
+│   │       --table N --at "r,c" | --right-of LABEL | --below LABEL, --text "" clears
+│   │       covered coords resolve to their merge anchor (reported in the result)
+│   │
 │   ├─ Change only EXISTING text
 │   │   (fill a prose placeholder, fix a typo, fill a table cell)
 │   │     → to-json (--section) → edit the Text → patch        [TEXT-ONLY, safest]
@@ -100,6 +105,16 @@ hwpforge stamp-plan template.hwpx --json                 # discover candidates
 hwpforge stamp template.hwpx --map specs.json -o form.hwpx   # + form.manifest.json
 #   fail-closed: 무손실 왕복이 증명 안 되는 입력은 거부(INPUT_NOT_ROUNDTRIP_SAFE);
 #   무가드 후보 누락도 거부(STAMP_CANDIDATE_UNCOVERED). 이후 fields/fill 로 채움
+
+# Grid cell editing (E3) — fill table cells by logical grid address.
+# to-json export annotates every cell with addr {row,col} (병합 전 논리 격자).
+hwpforge set-cell form.hwpx --table 0 --at "1,2" --text "홍길동" -o out.hwpx
+hwpforge set-cell form.hwpx --table 0 --right-of "성명" --text "홍길동" -o out.hwpx
+hwpforge set-cell form.hwpx --table 0 --below "비고" --text "" -o out.hwpx   # "" = clear
+hwpforge set-cell form.hwpx --map cells.json -o out.hwpx   # batch: [{"table":0,"at":{"row":1,"col":2},"text":"…"}]
+#   피병합 좌표는 병합 앵커로 resolve (결과에 requested/anchor/resolution 명시);
+#   라벨은 NFC+공백 정규화 exact match (모호하면 CELL_LABEL_AMBIGUOUS — --at 로 지정);
+#   표/이미지/컨트롤 든 셀은 거부(CELL_HAS_NON_TEXT_CONTENT); stamp 와 같은 admission 게이트
 
 # Export  (NOTE: -o/--output is REQUIRED — there is no stdout export)
 hwpforge to-json doc.hwpx -o full.json                  # whole document

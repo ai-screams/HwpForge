@@ -29,6 +29,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 thiserror = { workspace = true }
+# E3 set_cell: NFC-normalized exact label matching (Codex-adopted design).
+unicode-normalization = { workspace = true }
 zip = { workspace = true }
 
 [dev-dependencies]

@@ -238,6 +238,75 @@ fn walk_caption_only<'a>(
     path.pop();
 }
 
+/// Mutable mirror of the shared traversal: calls `f(ordinal, &mut Table)` for
+/// every table in exactly the enumeration order of [`tables_in_document`].
+///
+/// Kept in this module so the two walkers cannot drift apart unnoticed; the
+/// `mutable_walker_mirrors_enumeration_order` test locks them together over
+/// every container type.
+pub(crate) fn for_each_table_mut(
+    document: &mut Document<Draft>,
+    f: &mut impl FnMut(usize, &mut Table),
+) {
+    let mut ordinal = 0usize;
+    for section in document.sections_mut() {
+        walk_paragraphs_mut(&mut section.paragraphs, &mut ordinal, f);
+    }
+}
+
+fn walk_paragraphs_mut(
+    paragraphs: &mut [Paragraph],
+    ordinal: &mut usize,
+    f: &mut impl FnMut(usize, &mut Table),
+) {
+    for paragraph in paragraphs {
+        for run in &mut paragraph.runs {
+            match &mut run.content {
+                RunContent::Table(table) => {
+                    let this = *ordinal;
+                    *ordinal += 1;
+                    f(this, table);
+                    if let Some(caption) = table.caption.as_mut() {
+                        walk_paragraphs_mut(&mut caption.paragraphs, ordinal, f);
+                    }
+                    for row in &mut table.rows {
+                        for cell in &mut row.cells {
+                            walk_paragraphs_mut(&mut cell.paragraphs, ordinal, f);
+                        }
+                    }
+                }
+                RunContent::Image(image) => {
+                    if let Some(caption) = image.caption.as_mut() {
+                        walk_paragraphs_mut(&mut caption.paragraphs, ordinal, f);
+                    }
+                }
+                RunContent::Control(control) => match control.as_mut() {
+                    Control::TextBox { paragraphs, caption, .. }
+                    | Control::Ellipse { paragraphs, caption, .. }
+                    | Control::Polygon { paragraphs, caption, .. } => {
+                        walk_paragraphs_mut(paragraphs, ordinal, f);
+                        if let Some(caption) = caption.as_mut() {
+                            walk_paragraphs_mut(&mut caption.paragraphs, ordinal, f);
+                        }
+                    }
+                    Control::Footnote { paragraphs, .. } | Control::Endnote { paragraphs, .. } => {
+                        walk_paragraphs_mut(paragraphs, ordinal, f);
+                    }
+                    Control::Rect { caption: Some(caption), .. }
+                    | Control::Line { caption: Some(caption), .. }
+                    | Control::Arc { caption: Some(caption), .. }
+                    | Control::Curve { caption: Some(caption), .. }
+                    | Control::ConnectLine { caption: Some(caption), .. } => {
+                        walk_paragraphs_mut(&mut caption.paragraphs, ordinal, f);
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -327,6 +396,84 @@ mod tests {
             "paragraphs[1].runs[0].content.Control.TextBox.paragraphs[0].runs[0].content.Table"
         );
         assert!(entries.iter().enumerate().all(|(i, e)| e.ordinal == i && e.section == 0));
+    }
+
+    #[test]
+    fn mutable_walker_mirrors_enumeration_order() {
+        // Same doc shape as `ordinals_are_preorder_and_paths_are_serde_shaped`
+        // plus footnote and rect-caption containers: both walkers must agree
+        // on ordinal ↔ table identity (locked via per-table cell text).
+        let mut caption_host = one_cell_table(vec![text_para("셀")]);
+        caption_host.caption = Some(Caption::new(
+            vec![{
+                let mut p = Paragraph::new(ParaShapeIndex::new(0));
+                p.add_run(Run::table(
+                    one_cell_table(vec![text_para("캡션표")]),
+                    CharShapeIndex::new(0),
+                ));
+                p
+            }],
+            CaptionSide::default(),
+        ));
+        let mut nested_cell_para = Paragraph::new(ParaShapeIndex::new(0));
+        nested_cell_para
+            .add_run(Run::table(one_cell_table(vec![text_para("중첩")]), CharShapeIndex::new(0)));
+        caption_host.rows[0].cells[0].paragraphs = vec![nested_cell_para];
+        let mut host = Paragraph::new(ParaShapeIndex::new(0));
+        host.add_run(Run::table(caption_host, CharShapeIndex::new(0)));
+
+        let width = HwpUnit::new(1000).unwrap();
+        let mut controls = Paragraph::new(ParaShapeIndex::new(0));
+        controls.add_run(Run::control(
+            Control::Footnote {
+                inst_id: None,
+                paragraphs: vec![{
+                    let mut p = Paragraph::new(ParaShapeIndex::new(0));
+                    p.add_run(Run::table(
+                        one_cell_table(vec![text_para("각주표")]),
+                        CharShapeIndex::new(0),
+                    ));
+                    p
+                }],
+            },
+            CharShapeIndex::new(0),
+        ));
+        controls.add_run(Run::control(
+            Control::Rect {
+                width,
+                height: width,
+                horz_offset: 0,
+                vert_offset: 0,
+                caption: Some(Caption::new(
+                    vec![{
+                        let mut p = Paragraph::new(ParaShapeIndex::new(0));
+                        p.add_run(Run::table(
+                            one_cell_table(vec![text_para("사각형캡션표")]),
+                            CharShapeIndex::new(0),
+                        ));
+                        p
+                    }],
+                    CaptionSide::default(),
+                )),
+                style: None,
+            },
+            CharShapeIndex::new(0),
+        ));
+
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(vec![host, controls], PageSettings::default()));
+
+        let table_text = |t: &Table| -> String {
+            t.rows[0].cells[0].paragraphs.first().map(|p| p.text_content()).unwrap_or_default()
+        };
+        let immutable: Vec<(usize, String)> =
+            tables_in_document(&doc).iter().map(|e| (e.ordinal, table_text(e.table))).collect();
+        let mut mutable: Vec<(usize, String)> = Vec::new();
+        for_each_table_mut(&mut doc, &mut |ordinal, table| {
+            mutable.push((ordinal, table_text(table)));
+        });
+        assert_eq!(immutable.len(), 5, "{immutable:?}");
+        assert_eq!(immutable, mutable, "walkers must not drift");
     }
 
     #[test]
