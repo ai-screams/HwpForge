@@ -56,6 +56,7 @@ mod encoder;
 pub mod error;
 pub mod exchange;
 mod fill;
+pub mod grid_addr;
 mod inline_text;
 mod list_bridge;
 mod patch;
@@ -66,6 +67,7 @@ mod section_workflow;
 pub mod stamp;
 mod style_lookup_bridge;
 pub mod style_store;
+mod table_inventory;
 
 pub use decoder::package::{PackageEntryInfo, PackageReader};
 pub use decoder::{HwpxDecoder, HwpxDocument};

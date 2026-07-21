@@ -47,6 +47,22 @@ pub fn run_patch(
         )
     })?;
 
+    // Supplied cell grid addresses are validated, then discarded (see
+    // hwpforge_from_json): stale addresses after structural edits are rejected.
+    let value: serde_json::Value = serde_json::from_str(&json_str).expect("json_str reparsed");
+    hwpforge_smithy_hwpx::grid_addr::verify_section_addresses(
+        &value,
+        &exported.section,
+        exported.section_index,
+    )
+    .map_err(|e| {
+        ToolErrorInfo::new(
+            "GRID_ADDR_INVALID",
+            format!("Cell grid address check failed: {e}"),
+            "Grid addresses come from hwpforge_to_json output; after structural edits, drop the stale addr fields (or re-export) and retry.",
+        )
+    })?;
+
     let outcome = HwpxPatcher::patch_exported_section(&base_bytes, section_idx, &exported)
         .map_err(map_section_workflow_error_for_patch)?;
     let SectionPatchOutcome { bytes, patched_section, sections } = outcome;

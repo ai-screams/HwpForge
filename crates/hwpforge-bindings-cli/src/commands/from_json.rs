@@ -29,6 +29,19 @@ pub fn run(input: &PathBuf, output: &PathBuf, base: &Option<PathBuf>, json_mode:
         }
     };
 
+    // Supplied cell grid addresses are validated, then discarded: absence
+    // means no check, a mismatch means the caller acted on stale addresses.
+    let value: serde_json::Value = serde_json::from_str(&json_str).expect("json_str reparsed");
+    if let Err(e) =
+        hwpforge_smithy_hwpx::grid_addr::verify_document_addresses(&value, &exported.document)
+    {
+        CliError::new("GRID_ADDR_INVALID", format!("Cell grid address check failed: {e}"))
+            .with_hint(
+                "Grid addresses come from to-json output; after structural edits, drop the stale addr fields (or re-export) and retry",
+            )
+            .exit(json_mode, 2);
+    }
+
     let style_store =
         exported.styles.unwrap_or_else(|| HwpxStyleStore::with_default_fonts("함초롬돋움"));
 

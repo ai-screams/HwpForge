@@ -3312,3 +3312,96 @@ fn stamp_manifest_write_failure_removes_output() {
     assert_eq!(value["code"], "FILE_WRITE_FAILED");
     assert!(!out.exists(), "manifest 실패 시 산출물이 제거되어야 한다 (fail-closed)");
 }
+
+// ═══════════════════════════════════════════════════════════════
+// E3 Wave 2: 표 격자 주소 (grid addresses on JSON exports)
+// ═══════════════════════════════════════════════════════════════
+
+/// (paragraph, run) indices of the first table run in a document export.
+fn first_table_run_indices(root: &serde_json::Value) -> (usize, usize) {
+    let paragraphs = root["document"]["sections"][0]["paragraphs"].as_array().expect("paragraphs");
+    for (pi, paragraph) in paragraphs.iter().enumerate() {
+        for (ri, run) in paragraph["runs"].as_array().expect("runs").iter().enumerate() {
+            if run["content"]["Table"].is_object() {
+                return (pi, ri);
+            }
+        }
+    }
+    panic!("no table run in export");
+}
+
+#[test]
+fn to_json_annotates_cell_grid_addresses() {
+    let f = fixture("tables/table_02_merge_col_row.hwpx");
+    let tmp = test_tmp();
+    let json_out = tmp.join("grid_addr.json");
+    let (_, _, code) = run(&["to-json", f.to_str().unwrap(), "-o", json_out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+
+    let parsed: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&json_out).unwrap()).unwrap();
+    let (pi, ri) = first_table_run_indices(&parsed);
+    let table =
+        &parsed["document"]["sections"][0]["paragraphs"][pi]["runs"][ri]["content"]["Table"];
+    let rows = table["rows"].as_array().expect("rows");
+    assert!(!rows.is_empty());
+    for row in rows {
+        for cell in row["cells"].as_array().expect("cells") {
+            let addr = cell.get("addr").expect("cell addr annotated");
+            assert!(addr["row"].is_u64() && addr["col"].is_u64(), "addr shape: {addr}");
+        }
+    }
+    assert_eq!(rows[0]["cells"][0]["addr"], serde_json::json!({"row": 0, "col": 0}));
+}
+
+#[test]
+fn from_json_accepts_annotated_export_and_rejects_tampered_addr() {
+    let f = fixture("tables/table_02_merge_col_row.hwpx");
+    let tmp = test_tmp();
+    let json_out = tmp.join("grid_addr_roundtrip.json");
+    let (_, _, code) = run(&["to-json", f.to_str().unwrap(), "-o", json_out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+
+    // Annotated export must import as-is (validate-then-drop).
+    let hwpx_out = tmp.join("grid_addr_roundtrip.hwpx");
+    let (_, stderr, code) =
+        run(&["from-json", json_out.to_str().unwrap(), "-o", hwpx_out.to_str().unwrap()]);
+    assert_eq!(code, 0, "annotated export must round-trip: {stderr}");
+    assert!(hwpx_out.exists());
+
+    // Tampered address → GRID_ADDR_INVALID, no output.
+    let mut parsed: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&json_out).unwrap()).unwrap();
+    let (pi, ri) = first_table_run_indices(&parsed);
+    parsed["document"]["sections"][0]["paragraphs"][pi]["runs"][ri]["content"]["Table"]["rows"]
+        [0]["cells"][0]["addr"] = serde_json::json!({"row": 0, "col": 99});
+    let tampered = tmp.join("grid_addr_tampered.json");
+    std::fs::write(&tampered, parsed.to_string()).unwrap();
+    let bad_out = tmp.join("grid_addr_tampered.hwpx");
+    let (value, _, code) =
+        run_json(&["from-json", tampered.to_str().unwrap(), "-o", bad_out.to_str().unwrap()]);
+    assert_eq!(code, 2);
+    assert_eq!(value["code"], "GRID_ADDR_INVALID");
+    assert!(!bad_out.exists(), "rejected import must not produce output");
+
+    // Absence = no check: stripping every addr must import cleanly.
+    fn strip_addr(value: &mut serde_json::Value) {
+        match value {
+            serde_json::Value::Object(map) => {
+                map.remove("addr");
+                for child in map.values_mut() {
+                    strip_addr(child);
+                }
+            }
+            serde_json::Value::Array(items) => items.iter_mut().for_each(strip_addr),
+            _ => {}
+        }
+    }
+    strip_addr(&mut parsed);
+    let stripped = tmp.join("grid_addr_stripped.json");
+    std::fs::write(&stripped, parsed.to_string()).unwrap();
+    let clean_out = tmp.join("grid_addr_stripped.hwpx");
+    let (_, stderr, code) =
+        run(&["from-json", stripped.to_str().unwrap(), "-o", clean_out.to_str().unwrap()]);
+    assert_eq!(code, 0, "addr-free import must succeed: {stderr}");
+}

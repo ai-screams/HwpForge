@@ -54,6 +54,18 @@ pub fn run_from_json(structure: &str, output_path: &str) -> Result<FromJsonData,
         )
     })?;
 
+    // Supplied cell grid addresses are validated, then discarded: absence
+    // means no check, a mismatch means the caller acted on stale addresses.
+    let value: serde_json::Value = serde_json::from_str(structure).expect("structure reparsed");
+    hwpforge_smithy_hwpx::grid_addr::verify_document_addresses(&value, &exported.document)
+        .map_err(|e| {
+            ToolErrorInfo::new(
+                "GRID_ADDR_INVALID",
+                format!("Cell grid address check failed: {e}"),
+                "Grid addresses come from hwpforge_to_json output; after structural edits, drop the stale addr fields (or re-export) and retry.",
+            )
+        })?;
+
     // 4. Resolve styles (use embedded styles or default fallback)
     let style_store = match exported.styles {
         Some(s) => s,
