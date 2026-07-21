@@ -233,3 +233,60 @@ fn stamper_rejects_input_with_uncarried_zip_entries() {
         other => panic!("expected UncarriedZipEntries, got {other}"),
     }
 }
+
+// ── 에러 Display 표면 (거부 메시지가 CLI/MCP 힌트의 원천) ────────────
+
+#[test]
+fn stamp_error_display_names_the_rejection() {
+    use hwpforge_smithy_hwpx::stamp::StampError;
+    let cases: Vec<(StampError, &str)> = vec![
+        (StampError::UnknownSpec { section: 0, path: "p".into(), span: 1..2 }, "no live candidate"),
+        (
+            StampError::MarkerMismatch {
+                path: "p".into(),
+                expected: "(a)".into(),
+                found: "(b)".into(),
+            },
+            "marker mismatch",
+        ),
+        (StampError::DuplicateSpec { path: "p".into(), span: 1..2 }, "duplicate specs"),
+        (StampError::DuplicateName { name: "n".into() }, "duplicate field name"),
+        (StampError::NameCollision { name: "n".into() }, "already exists"),
+        (
+            StampError::UncoveredCandidate {
+                section: 0,
+                path: "p".into(),
+                span: 1..2,
+                marker: "□".into(),
+            },
+            "has no",
+        ),
+        (StampError::EmptyName, "must not be empty"),
+    ];
+    for (err, needle) in cases {
+        let msg = err.to_string();
+        assert!(msg.contains(needle), "{msg:?} must contain {needle:?}");
+    }
+}
+
+#[test]
+fn stamper_error_display_names_the_rejection() {
+    use hwpforge_smithy_hwpx::stamp::{StampError, StamperError};
+    let cases: Vec<(StamperError, &str)> = vec![
+        (StamperError::Codec("boom".into()), "codec failure"),
+        (
+            StamperError::NotRoundTripSafe {
+                component: "document".into(),
+                diff_path: "$.x".into(),
+            },
+            "not round-trip-safe",
+        ),
+        (StamperError::UncarriedZipEntries { entries: vec!["Custom/x.bin".into()] }, "not carried"),
+        (StamperError::Stamp(StampError::EmptyName), "stamp preflight"),
+        (StamperError::ManifestInvariant { detail: "dup".into() }, "manifest invariant"),
+    ];
+    for (err, needle) in cases {
+        let msg = err.to_string();
+        assert!(msg.contains(needle), "{msg:?} must contain {needle:?}");
+    }
+}
