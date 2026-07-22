@@ -3062,6 +3062,28 @@ fn fields_lists_named_clickhere_with_fillability() {
 }
 
 #[test]
+fn outline_reports_navigation_map_for_table_fixture() {
+    let f = fixture("table_01_basic_2x2.hwpx");
+    let (value, _, code) = run_json(&["outline", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(value["status"], "ok");
+    let outline = &value["outline"];
+    assert_eq!(outline["sections"][0]["tables"], 1);
+    assert_eq!(outline["tables"][0]["ordinal"], 0);
+    assert_eq!(outline["tables"][0]["rows"], 2);
+    assert_eq!(outline["tables"][0]["cols"], 2);
+    assert_eq!(outline["tables"][0]["addressable"], true);
+}
+
+#[test]
+fn outline_exposes_named_fields_axis() {
+    let f = fixture("clickhere_named.hwpx");
+    let (value, _, code) = run_json(&["outline", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(value["outline"]["fields"][0]["name"], "user_email");
+}
+
+#[test]
 fn fill_named_field_end_to_end() {
     let f = fixture("clickhere_named.hwpx");
     let tmp = test_tmp();

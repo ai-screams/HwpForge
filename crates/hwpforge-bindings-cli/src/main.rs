@@ -134,6 +134,15 @@ enum Commands {
         file: PathBuf,
     },
 
+    /// Show the document navigation map: headings, tables, fields, bookmarks.
+    #[command(
+        long_about = "Show the document navigation map — headings (shared outline classification), tables (ordinal + logical grid dims), named click-here fields, and bookmarks.\n\nName anchors (heading text, table ordinal, field/bookmark name) are the primary keys; {section, para} locators are secondary and go stale after structural edits. Fetch this once before targeted reads or edits."
+    )]
+    Outline {
+        /// HWPX file to inspect.
+        file: PathBuf,
+    },
+
     /// Fill named click-here fields (누름틀) with values, preserving everything else.
     #[command(
         long_about = "Fill named click-here fields (누름틀) by name, byte-preserving every untouched package entry.\n\nAll requested values are validated first (unknown/duplicate/unfillable names, empty values) and nothing is written unless every one passes. Use `fields` to discover names."
@@ -310,6 +319,9 @@ fn main() {
         }
         Commands::FromJson { input, output, base } => {
             commands::from_json::run(&input, &output, &base, cli.json);
+        }
+        Commands::Outline { file } => {
+            commands::outline::run(&file, cli.json);
         }
         Commands::Fields { file } => {
             commands::fields::run(&file, cli.json);
