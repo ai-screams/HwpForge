@@ -263,7 +263,7 @@ struct TextElementSpan {
 }
 
 #[derive(Debug, Clone)]
-struct RawPackage {
+pub(crate) struct RawPackage {
     entries: Vec<RawPackageEntry>,
     index_by_path: BTreeMap<String, usize>,
 }
@@ -276,7 +276,7 @@ struct RawPackageEntry {
 }
 
 impl RawPackage {
-    fn read(bytes: &[u8]) -> HwpxResult<Self> {
+    pub(crate) fn read(bytes: &[u8]) -> HwpxResult<Self> {
         let _ = PackageReader::new(bytes)?;
 
         let cursor = Cursor::new(bytes);
@@ -297,7 +297,11 @@ impl RawPackage {
         Ok(Self { entries, index_by_path })
     }
 
-    fn read_text_entry(&self, path: &str) -> HwpxResult<String> {
+    pub(crate) fn entry_paths(&self) -> impl Iterator<Item = &str> {
+        self.entries.iter().map(|e| e.path.as_str())
+    }
+
+    pub(crate) fn read_text_entry(&self, path: &str) -> HwpxResult<String> {
         let index = self
             .index_by_path
             .get(path)
@@ -307,13 +311,13 @@ impl RawPackage {
             .map_err(|e| HwpxError::Zip(format!("entry '{path}' is not valid UTF-8: {e}")))
     }
 
-    fn replace_text_entry(&mut self, path: &str, content: String) {
+    pub(crate) fn replace_text_entry(&mut self, path: &str, content: String) {
         if let Some(index) = self.index_by_path.get(path).copied() {
             self.entries[index].bytes = content.into_bytes();
         }
     }
 
-    fn write(&self) -> HwpxResult<Vec<u8>> {
+    pub(crate) fn write(&self) -> HwpxResult<Vec<u8>> {
         let cursor = Cursor::new(Vec::<u8>::new());
         let mut zip = ZipWriter::new(cursor);
 

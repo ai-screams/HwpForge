@@ -101,13 +101,22 @@ hwpforge fill doc.hwpx --set 과제명="AI 문서 자동화" --set 기관명="Ai
 #   나머지 패키지 엔트리는 바이트 그대로 보존 (preserve-first)
 
 # Template stamping (E6) — promote prose placeholders (□, (   ), 년 월 일, (인), @)
-# to named 누름틀 so fields/fill work. One-time preprocessing per template.
-hwpforge stamp-plan template.hwpx --json                 # discover candidates
+# AND label-adjacent empty table cells (클래스-B) to named 누름틀 so fields/fill work.
+# One-time preprocessing per template.
+hwpforge stamp-plan template.hwpx --json                 # candidates(text) + cells + source_sha256
 #   → author a spec map: EVERY unguarded candidate gets {"action":{"field":{"name":"…"}}}
 #     or {"action":"ignore"}; guarded ones (※/【작성방법】/(예시) context) may be omitted
-hwpforge stamp template.hwpx --map specs.json -o form.hwpx   # + form.manifest.json
+#   text-only 는 legacy 배열 맵 그대로; 셀이 있으면 v2 객체 맵:
+#   {"schema_version":2, "source_sha256":"<plan 값 그대로>",
+#    "text":[…], "cells":[{"table":0,"at":{"row":5,"col":3},
+#      "label":{"at":{"row":5,"col":2},"text":"성 명"},      ← detected 후보 드리프트 재검증 (orphan 명시 스펙은 생략)
+#      "action":{"field":{"name":"성명","hint":"성명 입력"}}}]}   ← 셀 hint 는 필수 (빈 셀엔 마커가 없음)
+#   suggested_name/suggested_hint 는 제안일 뿐 — 그대로 복사 시 중복 이름은 거부됨
+hwpforge stamp template.hwpx --map specs.json -o form.hwpx   # + form.manifest.json (v2: origin text|cell)
 #   fail-closed: 무손실 왕복이 증명 안 되는 입력은 거부(INPUT_NOT_ROUNDTRIP_SAFE);
-#   무가드 후보 누락도 거부(STAMP_CANDIDATE_UNCOVERED). 이후 fields/fill 로 채움
+#   무가드 후보(양쪽 클래스) 누락 거부(STAMP_CANDIDATE_UNCOVERED); 문서 변경 후 재사용
+#   맵은 거부(STAMP_SOURCE_HASH_MISMATCH — stamp-plan 재실행); 셀 스펙은 병합 앵커 좌표만
+#   (STAMP_CELL_NOT_ANCHOR 가 앵커를 알려줌). 이후 fields/fill 로 채움
 
 # Grid cell editing (E3) — fill table cells by logical grid address.
 # to-json export annotates every cell with addr {row,col} (병합 전 논리 격자).

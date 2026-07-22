@@ -290,3 +290,141 @@ fn stamper_error_display_names_the_rejection() {
         assert!(msg.contains(needle), "{msg:?} must contain {needle:?}");
     }
 }
+
+// ── Wave 2B: class-B cell stamping E2E ──────────────────────────────
+
+#[test]
+fn stamp_v2_cells_end_to_end() {
+    use hwpforge_core::table::grid::GridCoord;
+    use hwpforge_smithy_hwpx::stamp::{
+        plan_cells, CellLabelClaim, CellStampAction, CellStampSpec, StampOriginV2, StampRequestV2,
+        STAMP_MANIFEST_V2_VERSION,
+    };
+
+    // 양식 표: 성명|빈칸 · 주소|U+3000 패딩(2문단) + 본문 class-A 괄호빈칸.
+    let width = HwpUnit::new(8000).unwrap();
+    let padded = TableCell::new(vec![text_para("\u{3000}"), text_para("")], width);
+    let table = Table::new(vec![
+        TableRow::new(vec![
+            TableCell::new(vec![text_para("성명")], width),
+            TableCell::new(vec![text_para("")], width),
+        ]),
+        TableRow::new(vec![TableCell::new(vec![text_para("주소")], width), padded]),
+    ]);
+    let mut host = Paragraph::new(ParaShapeIndex::new(0));
+    host.add_run(Run::table(table, CharShapeIndex::new(0)));
+
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(
+        vec![text_para("연락처: (   )"), host],
+        PageSettings::default(),
+    ));
+
+    // 탐지 확인: class-B 후보 2 (성명·주소 좌라벨)
+    let cell_plan = plan_cells(&doc);
+    assert_eq!(cell_plan.candidates.len(), 2, "{cell_plan:?}");
+    assert!(cell_plan.skipped_tables.is_empty());
+    let text_candidates = plan(&doc);
+    assert_eq!(text_candidates.len(), 1);
+
+    let bytes = encode(doc);
+
+    // source-hash 핀: 오답 sha 는 거부되고, 에러가 실제 해시를 알려준다.
+    let bad = StampRequestV2 {
+        schema_version: 2,
+        source_sha256: "0".repeat(64),
+        text: vec![],
+        cells: vec![],
+    };
+    let sha = match HwpxStamper::stamp_v2(&bytes, &bad) {
+        Err(StamperError::SourceHashMismatch { actual, .. }) => actual,
+        other => panic!("expected SourceHashMismatch, got {other:?}"),
+    };
+
+    let c = &text_candidates[0];
+    let request = StampRequestV2 {
+        schema_version: 2,
+        source_sha256: sha,
+        text: vec![StampSpec {
+            section: c.section,
+            path: c.path.clone(),
+            span: c.span.clone(),
+            marker: c.marker.clone(),
+            action: StampAction::Field { name: "연락처".into(), hint: None },
+        }],
+        cells: vec![
+            CellStampSpec {
+                table: 0,
+                at: GridCoord::new(0, 1),
+                label: Some(CellLabelClaim { at: GridCoord::new(0, 0), text: "성명".into() }),
+                action: CellStampAction::Field {
+                    name: "성명".into(), hint: "성명 입력".into()
+                },
+            },
+            CellStampSpec {
+                table: 0,
+                at: GridCoord::new(1, 1),
+                label: None, // explicit coverage of the 주소 candidate
+                action: CellStampAction::Field {
+                    name: "주소".into(), hint: "주소 입력".into()
+                },
+            },
+        ],
+    };
+    let result = HwpxStamper::stamp_v2(&bytes, &request).expect("stamp_v2");
+
+    // outcome + delta records
+    assert_eq!(result.outcome.text.stamped.len(), 1);
+    assert_eq!(result.outcome.cells.stamped.len(), 2);
+    assert_eq!(result.outcome.cells.stamped[0].original_text, "");
+    assert_eq!(result.outcome.cells.stamped[1].original_text, "\u{3000}");
+
+    // v2 manifest: 태그드 origin
+    assert_eq!(result.manifest.schema_version, STAMP_MANIFEST_V2_VERSION);
+    let origins: Vec<(&str, bool)> = result
+        .manifest
+        .fields
+        .iter()
+        .map(|f| match &f.stamp {
+            Some(StampOriginV2::Text { .. }) => ("text", f.field.fillable),
+            Some(StampOriginV2::Cell { .. }) => ("cell", f.field.fillable),
+            None => ("none", f.field.fillable),
+        })
+        .collect();
+    assert_eq!(origins.iter().filter(|(o, _)| *o == "text").count(), 1);
+    assert_eq!(origins.iter().filter(|(o, _)| *o == "cell").count(), 2);
+    assert!(origins.iter().all(|(_, fillable)| *fillable));
+    let cell_origin = result
+        .manifest
+        .fields
+        .iter()
+        .find_map(|f| match &f.stamp {
+            Some(StampOriginV2::Cell { table, at, label: Some(claim) }) => {
+                Some((*table, *at, claim.text.clone()))
+            }
+            _ => None,
+        })
+        .expect("labeled cell origin");
+    assert_eq!(cell_origin, (0, GridCoord::new(0, 1), "성명".to_string()));
+
+    // 산출물은 배포된 fill 표면으로 즉시 소비 가능
+    let fields = HwpxFiller::list_fields(&result.bytes).expect("list_fields");
+    assert_eq!(fields.len(), 3);
+    let mut values = BTreeMap::new();
+    values.insert("성명".to_string(), "홍길동".to_string());
+    let filled = HwpxFiller::fill(&result.bytes, &values).expect("fill");
+    let refetched = HwpxFiller::list_fields(&filled.bytes).expect("re-list");
+    let name_field = refetched.iter().find(|f| f.name.as_deref() == Some("성명")).unwrap();
+    assert_eq!(name_field.current, "홍길동");
+
+    // 기하 보존: 패딩 문단이 살아있고 첫 문단만 field 로 교체됨
+    let d = HwpxDecoder::decode(&result.bytes).expect("decode output");
+    let out_plan = plan_cells(&d.document);
+    assert!(out_plan.candidates.is_empty(), "stamped cells must not re-plan");
+    let section = &d.document.sections()[0];
+    let hwpforge_core::run::RunContent::Table(t) = &section.paragraphs[1].runs[0].content else {
+        panic!("expected table");
+    };
+    let padded_cell = &t.rows[1].cells[1];
+    assert_eq!(padded_cell.paragraphs.len(), 2, "padding paragraph must survive");
+}

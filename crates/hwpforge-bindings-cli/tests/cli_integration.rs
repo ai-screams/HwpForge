@@ -3717,3 +3717,163 @@ fn set_cell_map_arg_conflicts_rejected() {
     assert_eq!(value["code"], "INVALID_SET_CELL_ARGS");
     assert!(!out.exists());
 }
+
+// ═══════════════════════════════════════════════════════════════
+// stamp v2 — E6 Wave 2 클래스-B 셀 스탬핑 게이트
+// ═══════════════════════════════════════════════════════════════
+
+/// merged_grid_form 의 셀 후보 3개(성명·비고·비고-병합경계)에 대한 v2 맵.
+fn stamp_v2_map(plan: &serde_json::Value) -> serde_json::Value {
+    let sha = plan["source_sha256"].as_str().unwrap();
+    serde_json::json!({
+        "schema_version": 2,
+        "source_sha256": sha,
+        "cells": [
+            {"table": 0, "at": {"row": 0, "col": 1},
+             "label": {"at": {"row": 0, "col": 0}, "text": "성명"},
+             "action": {"field": {"name": "성명값", "hint": "성명 입력"}}},
+            {"table": 0, "at": {"row": 1, "col": 1},
+             "action": {"field": {"name": "비고값", "hint": "비고 입력"}}},
+            {"table": 0, "at": {"row": 2, "col": 1}, "action": "ignore"},
+        ],
+    })
+}
+
+#[test]
+fn stamp_plan_v2_lists_cell_candidates_with_source_hash() {
+    let f = fixture("tables/merged_grid_form.hwpx");
+    let (value, _, code) = run_json(&["stamp-plan", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(value["schema_version"], 2);
+    let sha = value["source_sha256"].as_str().unwrap();
+    assert_eq!(sha.len(), 64, "hex sha256: {sha}");
+    let cells = value["cells"].as_array().unwrap();
+    assert_eq!(cells.len(), 3, "성명·비고·병합경계 비고: {value}");
+    assert!(value["skipped_tables"].as_array().unwrap().is_empty());
+    // 병합 라벨(비고, rowspan 2)이 (2,1) 의 shared-boundary 라벨로 잡혀야 한다.
+    let covered_boundary = &cells[2];
+    assert_eq!(covered_boundary["at"], serde_json::json!({"row": 2, "col": 1}));
+    assert_eq!(covered_boundary["labels"][0]["normalized"], "비고");
+    // duplicate_count 는 문서 내 라벨 "텍스트" 중복 기준 — 비고 셀은 유일하므로
+    // 두 후보 모두 같은 suggested_name 을 받는다 (제안은 비구속; 그대로 복사해
+    // 쓰면 preflight DuplicateName 이 거부).
+    assert_eq!(cells[1]["suggested_name"], "비고");
+    assert_eq!(covered_boundary["suggested_name"], "비고");
+}
+
+#[test]
+fn stamp_v2_cells_end_to_end_then_fillable() {
+    let f = fixture("tables/merged_grid_form.hwpx");
+    let tmp = test_tmp();
+    let (plan, _, code) = run_json(&["stamp-plan", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+
+    let map = tmp.join("v2-map.json");
+    std::fs::write(&map, stamp_v2_map(&plan).to_string()).unwrap();
+    let out = tmp.join("v2-stamped.hwpx");
+    let (value, _, code) = run_json(&[
+        "stamp",
+        f.to_str().unwrap(),
+        "--map",
+        map.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "v2 stamp must succeed: {value}");
+    assert_eq!(value["stamped_cells"].as_array().unwrap().len(), 2);
+    assert_eq!(value["ignored"], 1);
+    let manifest_path = value["manifest"].as_str().unwrap().to_string();
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&manifest_path).unwrap()).unwrap();
+    assert_eq!(manifest["schema_version"], 2);
+    let cell_origins: Vec<_> = manifest["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|f| !f["stamp"]["cell"].is_null())
+        .collect();
+    assert_eq!(cell_origins.len(), 2, "{manifest}");
+
+    // 산출물은 즉시 fields/fill 로 소비 가능.
+    let (fields, _, code) = run_json(&["fields", out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(fields["fields"].as_array().unwrap().len(), 2);
+    let filled = tmp.join("v2-filled.hwpx");
+    let (fill, _, code) = run_json(&[
+        "fill",
+        out.to_str().unwrap(),
+        "--set",
+        "성명값=홍길동",
+        "-o",
+        filled.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0, "fill on cell-stamped output must succeed: {fill}");
+}
+
+#[test]
+fn stamp_v2_source_hash_mismatch_rejected() {
+    let f = fixture("tables/merged_grid_form.hwpx");
+    let tmp = test_tmp();
+    let (plan, _, _) = run_json(&["stamp-plan", f.to_str().unwrap()]);
+    let mut map_value = stamp_v2_map(&plan);
+    map_value["source_sha256"] = serde_json::Value::String("0".repeat(64));
+    let map = tmp.join("stale-map.json");
+    std::fs::write(&map, map_value.to_string()).unwrap();
+    let out = tmp.join("never-v2.hwpx");
+    let (value, _, code) = run_json(&[
+        "stamp",
+        f.to_str().unwrap(),
+        "--map",
+        map.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "STAMP_SOURCE_HASH_MISMATCH");
+    assert!(!out.exists(), "sha 불일치 시 산출물이 없어야 한다 (fail-closed)");
+}
+
+#[test]
+fn stamp_v2_uncovered_cell_and_unknown_field_rejected() {
+    let f = fixture("tables/merged_grid_form.hwpx");
+    let tmp = test_tmp();
+    let (plan, _, _) = run_json(&["stamp-plan", f.to_str().unwrap()]);
+    let sha = plan["source_sha256"].as_str().unwrap();
+
+    // 후보 3개 중 1개만 커버 → STAMP_CANDIDATE_UNCOVERED.
+    let partial = serde_json::json!({
+        "schema_version": 2, "source_sha256": sha,
+        "cells": [{"table": 0, "at": {"row": 0, "col": 1},
+                   "action": {"field": {"name": "성명값", "hint": "h"}}}],
+    });
+    let map = tmp.join("partial-v2.json");
+    std::fs::write(&map, partial.to_string()).unwrap();
+    let out = tmp.join("never-v2b.hwpx");
+    let (value, _, code) = run_json(&[
+        "stamp",
+        f.to_str().unwrap(),
+        "--map",
+        map.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "STAMP_CANDIDATE_UNCOVERED");
+    assert!(!out.exists());
+
+    // unknown field 가 든 v2 맵은 parse 단계에서 거부.
+    let typo = serde_json::json!({
+        "schema_version": 2, "source_sha256": sha, "cell": [],
+    });
+    std::fs::write(&map, typo.to_string()).unwrap();
+    let (value, _, code) = run_json(&[
+        "stamp",
+        f.to_str().unwrap(),
+        "--map",
+        map.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 1);
+    assert_eq!(value["code"], "INVALID_STAMP_MAP");
+}

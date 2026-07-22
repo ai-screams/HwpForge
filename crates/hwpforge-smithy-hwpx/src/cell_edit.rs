@@ -392,7 +392,7 @@ pub fn apply_set_cells(
 }
 
 /// NFC + Unicode-whitespace trim/collapse.
-fn normalize_label(s: &str) -> String {
+pub(crate) fn normalize_label(s: &str) -> String {
     let nfc: String = s.nfc().collect();
     nfc.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -525,6 +525,10 @@ impl HwpxCellEditor {
         let validated =
             document.validate().map_err(|e| CellEditError::Codec(format!("validate: {e}")))?;
         let bytes = HwpxEncoder::encode(&validated, &style_store, &image_store)
+            .map_err(|e| CellEditError::Codec(e.to_string()))?;
+        // Untouched paragraphs keep Hancom's line-layout cache so the
+        // renderer does not reflow (and repaginate) the whole document.
+        let bytes = crate::layout_carry::carry_line_segs(base, &e0, &bytes)
             .map_err(|e| CellEditError::Codec(e.to_string()))?;
         Ok(CellEditResult { bytes, outcome })
     }

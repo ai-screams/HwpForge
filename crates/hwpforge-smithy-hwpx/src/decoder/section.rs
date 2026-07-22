@@ -292,8 +292,16 @@ fn convert_paragraph(
 
     // Normalize empty paragraphs: HWPX files from 한글 can have empty paragraphs
     // (blank lines). Core's validate() requires at least 1 run per paragraph.
+    // The placeholder keeps the first authored run's charPrIDRef — visually
+    // empty paragraphs/cells still carry a real character style on the wire,
+    // and editing surfaces (cell stamping, set-cell) restore styled text from
+    // it. Index 0 is only for paragraphs with no <hp:run> at all.
     if runs.is_empty() {
-        runs.push(Run::text("", CharShapeIndex::new(0)));
+        let char_shape_id = hx
+            .runs
+            .first()
+            .map_or(CharShapeIndex::new(0), |r| CharShapeIndex::new(r.char_pr_id_ref as usize));
+        runs.push(Run::text("", char_shape_id));
     }
 
     // Best-effort heading level: always decodes as `Some(1)` when a titleMark
@@ -1612,6 +1620,75 @@ mod tests {
         // Empty paragraphs are normalized to contain a single empty text run
         assert_eq!(result.paragraphs[0].runs.len(), 1);
         assert_eq!(result.paragraphs[0].runs[0].content.as_text(), Some(""));
+    }
+
+    #[test]
+    fn empty_paragraph_placeholder_preserves_authored_char_shape() {
+        // Visually empty paragraphs still carry a real charPrIDRef on the
+        // wire; the normalization placeholder must keep it so that editing
+        // surfaces (cell stamping / set-cell) can restore styled text.
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="7"><t/></run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        assert_eq!(result.paragraphs[0].runs.len(), 1);
+        assert_eq!(result.paragraphs[0].runs[0].content.as_text(), Some(""));
+        assert_eq!(result.paragraphs[0].runs[0].char_shape_id.get(), 7);
+    }
+
+    #[test]
+    fn empty_paragraph_first_authored_char_shape_wins() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="3"><t/></run>
+                <run charPrIDRef="5"><t/></run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        assert_eq!(result.paragraphs[0].runs.len(), 1);
+        assert_eq!(result.paragraphs[0].runs[0].char_shape_id.get(), 3);
+    }
+
+    #[test]
+    fn paragraph_without_wire_runs_defaults_char_shape_zero() {
+        // No <run> at all on the wire — nothing authored, index 0 is honest.
+        let xml = r#"<sec>
+            <p paraPrIDRef="0"></p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        assert_eq!(result.paragraphs[0].runs.len(), 1);
+        assert_eq!(result.paragraphs[0].runs[0].content.as_text(), Some(""));
+        assert_eq!(result.paragraphs[0].runs[0].char_shape_id.get(), 0);
+    }
+
+    #[test]
+    fn empty_table_cell_preserves_authored_char_shape() {
+        // The class-B stamping target: a visually empty form cell whose wire
+        // run carries the form's character style.
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <tbl rowCnt="1" colCnt="1">
+                        <tr>
+                            <tc name="A1">
+                                <subList><p paraPrIDRef="0"><run charPrIDRef="9"><t/></run></p></subList>
+                            </tc>
+                        </tr>
+                    </tbl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        match &result.paragraphs[0].runs[0].content {
+            RunContent::Table(table) => {
+                let cell = &table.rows[0].cells[0];
+                assert_eq!(cell.paragraphs[0].runs[0].content.as_text(), Some(""));
+                assert_eq!(cell.paragraphs[0].runs[0].char_shape_id.get(), 9);
+            }
+            _ => panic!("expected Table"),
+        }
     }
 
     // ── Page settings ────────────────────────────────────────────

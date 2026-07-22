@@ -16,18 +16,28 @@
 //!   plan preflights, then applies atomically
 
 mod apply;
+mod apply_cells;
+mod cells;
 mod detect;
 mod plan;
+mod request;
 mod stamper;
 
 pub use apply::{apply, StampAction, StampError, StampOutcome, StampSpec, StampedField};
+pub use apply_cells::{apply_cells, CellStampError, CellStampOutcome, CellStampedField};
+pub use cells::{plan_cells, CellPlan, CellStampCandidate, LabelDirection, LabelRef, SkippedTable};
 pub use detect::{detect_markers, paragraph_guard, BuiltinPattern, GuardReason, MarkerHit};
 pub use plan::{plan, StampCandidate};
+pub use request::{
+    parse_stamp_map, CellLabelClaim, CellStampAction, CellStampSpec, StampMap, StampMapError,
+    StampRequestV2, STAMP_MAP_VERSION,
+};
 // E3 cell editing reuses the stamp admission gate (decode→encode→decode
 // no-op equality + ZIP closed-world) so both mutation facades share one
 // fail-closed contract.
 pub(crate) use stamper::{admission_compare, check_zip_carry, encode_hwpx};
 pub use stamper::{
-    HwpxStamper, ManifestField, StampManifest, StampMeta, StampResult, StamperError,
-    STAMP_MANIFEST_VERSION,
+    HwpxStamper, ManifestField, ManifestFieldV2, StampManifest, StampManifestV2, StampMeta,
+    StampOriginV2, StampOutcomeV2, StampPlanV2, StampResult, StampResultV2, StamperError,
+    STAMP_MANIFEST_V2_VERSION, STAMP_MANIFEST_VERSION,
 };

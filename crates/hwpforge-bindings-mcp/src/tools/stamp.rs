@@ -9,7 +9,9 @@
 use serde::Serialize;
 
 use hwpforge_smithy_hwpx::stamp::{
-    HwpxStamper, StampCandidate, StampError, StampSpec, StampedField, StamperError,
+    CellStampCandidate, CellStampError, CellStampSpec, CellStampedField, HwpxStamper, SkippedTable,
+    StampCandidate, StampError, StampRequestV2, StampSpec, StampedField, StamperError,
+    STAMP_MAP_VERSION,
 };
 
 use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo};
@@ -17,9 +19,17 @@ use crate::output::{read_file_bytes, write_output_file, ToolErrorInfo};
 /// Output data from a successful stamp-plan operation.
 #[derive(Debug, Serialize)]
 pub struct StampPlanData {
-    /// Discovered candidates (document order). Author one spec per
-    /// candidate: unguarded candidates MUST be named or ignored.
+    /// SHA-256 (hex) of the input — pass back verbatim as `source_sha256`
+    /// when the stamp request carries cell specs.
+    pub source_sha256: String,
+    /// Discovered class-A text candidates (document order). Author one spec
+    /// per candidate: unguarded candidates MUST be named or ignored.
     pub candidates: Vec<StampCandidate>,
+    /// Discovered class-B cell candidates (label-adjacent empty cells).
+    pub cells: Vec<CellStampCandidate>,
+    /// Tables excluded from cell detection (invalid grid) — explicit
+    /// incomplete-coverage diagnostics.
+    pub skipped_tables: Vec<SkippedTable>,
 }
 
 /// Output data from a successful stamp operation.
@@ -29,9 +39,12 @@ pub struct StampData {
     pub output_path: String,
     /// Path to the manifest JSON.
     pub manifest_path: String,
-    /// Fields created by this stamp (spec order).
+    /// Text fields created by this stamp (spec order).
     pub stamped: Vec<StampedField>,
-    /// Number of explicitly ignored candidates.
+    /// Cell fields created by this stamp (document order; empty for
+    /// text-only legacy requests).
+    pub stamped_cells: Vec<CellStampedField>,
+    /// Number of explicitly ignored candidates (both classes).
     pub ignored: usize,
     /// Guarded candidates skipped because no spec approved them.
     pub skipped_guarded: usize,
@@ -39,17 +52,28 @@ pub struct StampData {
     pub size_bytes: u64,
 }
 
-/// Discover class-A placeholder candidates.
+/// Discover both candidate classes (text markers + label-adjacent cells).
 pub fn run_stamp_plan(file_path: &str) -> Result<StampPlanData, ToolErrorInfo> {
     let bytes = read_file_bytes(file_path)?;
-    let candidates = HwpxStamper::plan_bytes(&bytes).map_err(map_stamper_error)?;
-    Ok(StampPlanData { candidates })
+    let plan = HwpxStamper::plan_bytes_v2(&bytes).map_err(map_stamper_error)?;
+    Ok(StampPlanData {
+        source_sha256: plan.source_sha256,
+        candidates: plan.text,
+        cells: plan.cells,
+        skipped_tables: plan.skipped_tables,
+    })
 }
 
 /// Apply the approved spec set behind the admission gate.
+///
+/// Text-only requests without `source_sha256` run the legacy v1 path;
+/// any cell spec (or an explicit `source_sha256`) selects the v2 path
+/// with source-hash pinning and post-encode delta verification.
 pub fn run_stamp(
     file_path: &str,
     specs: &[StampSpec],
+    cells: &[CellStampSpec],
+    source_sha256: Option<&str>,
     output_path: &str,
     manifest_path: Option<&str>,
 ) -> Result<StampData, ToolErrorInfo> {
@@ -62,7 +86,53 @@ pub fn run_stamp(
     }
 
     let bytes = read_file_bytes(file_path)?;
-    let result = HwpxStamper::stamp(&bytes, specs).map_err(map_stamper_error)?;
+    let serialize_err = |e: serde_json::Error| {
+        ToolErrorInfo::new(
+            "STAMP_MANIFEST_SERIALIZE",
+            format!("manifest serialization failed: {e}"),
+            "Report this as a bug.",
+        )
+    };
+    let (out_bytes, manifest_json, stamped, stamped_cells, ignored, skipped_guarded) =
+        if cells.is_empty() && source_sha256.is_none() {
+            let result = HwpxStamper::stamp(&bytes, specs).map_err(map_stamper_error)?;
+            let manifest_json =
+                serde_json::to_string_pretty(&result.manifest).map_err(serialize_err)?;
+            (
+                result.bytes,
+                manifest_json,
+                result.outcome.stamped,
+                Vec::new(),
+                result.outcome.ignored,
+                result.outcome.skipped_guarded.len(),
+            )
+        } else {
+            let Some(sha) = source_sha256 else {
+                return Err(ToolErrorInfo::new(
+                    "MISSING_SOURCE_SHA256",
+                    "cell specs require source_sha256 (drift pinning)",
+                    "hwpforge_stamp_plan 의 source_sha256 을 그대로 전달하세요.",
+                ));
+            };
+            let request = StampRequestV2 {
+                schema_version: STAMP_MAP_VERSION,
+                source_sha256: sha.to_string(),
+                text: specs.to_vec(),
+                cells: cells.to_vec(),
+            };
+            let result = HwpxStamper::stamp_v2(&bytes, &request).map_err(map_stamper_error)?;
+            let manifest_json =
+                serde_json::to_string_pretty(&result.manifest).map_err(serialize_err)?;
+            (
+                result.bytes,
+                manifest_json,
+                result.outcome.text.stamped,
+                result.outcome.cells.stamped,
+                result.outcome.text.ignored + result.outcome.cells.ignored,
+                result.outcome.text.skipped_guarded.len()
+                    + result.outcome.cells.skipped_guarded.len(),
+            )
+        };
 
     // Review L1: serialize the manifest BEFORE writing anything, and remove
     // the .hwpx if the manifest write fails — a failed call must leave no
@@ -70,13 +140,6 @@ pub fn run_stamp(
     let manifest_file = manifest_path
         .map(str::to_string)
         .unwrap_or_else(|| format!("{}.manifest.json", output_path.trim_end_matches(".hwpx")));
-    let manifest_json = serde_json::to_string_pretty(&result.manifest).map_err(|e| {
-        ToolErrorInfo::new(
-            "STAMP_MANIFEST_SERIALIZE",
-            format!("manifest serialization failed: {e}"),
-            "Report this as a bug.",
-        )
-    })?;
     // R2: identical paths would silently overwrite the stamped .hwpx with
     // the manifest JSON and still report success.
     if std::path::Path::new(output_path) == std::path::Path::new(&manifest_file) {
@@ -86,19 +149,20 @@ pub fn run_stamp(
             "manifest_path 는 output_path 와 달라야 합니다.",
         ));
     }
-    write_output_file(output_path, &result.bytes)?;
+    write_output_file(output_path, &out_bytes)?;
     if let Err(e) = write_output_file(&manifest_file, manifest_json.as_bytes()) {
         let _ = std::fs::remove_file(output_path);
         return Err(e);
     }
 
-    let size_bytes = result.bytes.len() as u64;
+    let size_bytes = out_bytes.len() as u64;
     Ok(StampData {
         output_path: output_path.to_string(),
         manifest_path: manifest_file,
-        stamped: result.outcome.stamped,
-        ignored: result.outcome.ignored,
-        skipped_guarded: result.outcome.skipped_guarded.len(),
+        stamped,
+        stamped_cells,
+        ignored,
+        skipped_guarded,
         size_bytes,
     })
 }
@@ -127,6 +191,94 @@ fn map_stamper_error(error: StamperError) -> ToolErrorInfo {
             "STAMP_CODEC_FAILED",
             msg,
             "Check that the file is valid HWPX.",
+        ),
+        StamperError::SourceHashMismatch { expected, actual } => ToolErrorInfo::new(
+            "STAMP_SOURCE_HASH_MISMATCH",
+            format!("request is pinned to {expected}, input is {actual}"),
+            "문서가 변경됐습니다 — hwpforge_stamp_plan 을 다시 실행해 source_sha256 을 갱신하세요.",
+        ),
+        StamperError::CellStamp(inner) => map_cell_stamp_error(inner),
+        StamperError::DeltaMismatch { stage, detail } => ToolErrorInfo::new(
+            "STAMP_DELTA_MISMATCH",
+            format!("post-encode verification failed at {stage}: {detail}"),
+            "산출물 검증 실패 — 코덱 버그 가능성이 있어 무출력으로 거부했습니다.",
+        ),
+        other => ToolErrorInfo::new("STAMP_FAILED", other.to_string(), "Unexpected failure."),
+    }
+}
+
+fn map_cell_stamp_error(error: CellStampError) -> ToolErrorInfo {
+    match error {
+        CellStampError::TableNotFound { table } => ToolErrorInfo::new(
+            "TABLE_NOT_FOUND",
+            format!("table ordinal {table} does not exist"),
+            "hwpforge_stamp_plan 의 cells[].table 서수를 사용하세요.",
+        ),
+        CellStampError::TableGridInvalid { table, detail } => ToolErrorInfo::new(
+            "TABLE_GRID_INVALID",
+            format!("table {table}: {detail}"),
+            "이 표는 논리 격자를 만들 수 없어 셀 스탬핑 대상이 아닙니다.",
+        ),
+        CellStampError::NotAnAnchor { table, requested, anchor } => ToolErrorInfo::new(
+            "STAMP_CELL_NOT_ANCHOR",
+            format!("table {table}: ({},{}) is not an anchor", requested.row, requested.col),
+            match anchor {
+                Some(a) => {
+                    format!("병합 피복 위치입니다 — anchor ({},{}) 를 지정하세요.", a.row, a.col)
+                }
+                None => "격자 범위 밖 좌표입니다.".to_string(),
+            },
+        ),
+        CellStampError::TargetNotStampable { table, at } => ToolErrorInfo::new(
+            "STAMP_CELL_NOT_EMPTY",
+            format!("table {table}: cell ({},{}) has authored content", at.row, at.col),
+            "클래스-B 대상은 whitespace-only 빈 셀이어야 합니다.",
+        ),
+        CellStampError::LabelDrift { table, at, claimed, found } => ToolErrorInfo::new(
+            "STAMP_LABEL_DRIFT",
+            format!(
+                "table {table} ({},{}): claimed label {claimed:?}, live {found:?}",
+                at.row, at.col
+            ),
+            "문서가 변경됐습니다 — hwpforge_stamp_plan 을 다시 실행하세요.",
+        ),
+        CellStampError::UnknownCandidate { table, at } => ToolErrorInfo::new(
+            "STAMP_CELL_NOT_CANDIDATE",
+            format!("table {table}: ({},{}) is not a live candidate", at.row, at.col),
+            "ignore 는 live 후보에만 가능합니다.",
+        ),
+        CellStampError::DuplicateTarget { table, at } => ToolErrorInfo::new(
+            "STAMP_CELL_TARGET_DUPLICATE",
+            format!("table {table}: cell ({},{}) targeted twice", at.row, at.col),
+            "같은 셀을 두 번 분류했습니다.",
+        ),
+        CellStampError::EmptyName => ToolErrorInfo::new(
+            "STAMP_NAME_EMPTY",
+            "field name must not be empty",
+            "빈 이름은 허용되지 않습니다.",
+        ),
+        CellStampError::BlankHint { name } => ToolErrorInfo::new(
+            "STAMP_HINT_BLANK",
+            format!("cell spec {name:?}: hint must not be blank"),
+            "빈 셀엔 마커가 없어 hint 가 필수입니다 — plan 의 suggested_hint 를 참고하세요.",
+        ),
+        CellStampError::DuplicateName { name } => ToolErrorInfo::new(
+            "STAMP_NAME_DUPLICATE",
+            format!("duplicate field name {name:?}"),
+            "필드 이름은 text+cells 전체에서 유일해야 합니다.",
+        ),
+        CellStampError::NameCollision { name } => ToolErrorInfo::new(
+            "STAMP_NAME_COLLISION",
+            format!("field name {name:?} already exists in the document"),
+            "기존 누름틀과 이름이 겹칩니다 — hwpforge_fields 로 확인하세요.",
+        ),
+        CellStampError::UncoveredCandidate { table, at } => ToolErrorInfo::new(
+            "STAMP_CANDIDATE_UNCOVERED",
+            format!(
+                "unguarded cell candidate at table {table} ({},{}) has no spec",
+                at.row, at.col
+            ),
+            "모든 무가드 셀 후보는 이름 또는 ignore 로 분류해야 합니다.",
         ),
         other => ToolErrorInfo::new("STAMP_FAILED", other.to_string(), "Unexpected failure."),
     }
@@ -208,6 +360,101 @@ mod tests {
         }
     }
 
+    /// 성명/주소 2×2 라벨 서식 (set_cell 테스트와 동일 형태).
+    fn label_form_hwpx(dir: &std::path::Path) -> String {
+        use hwpforge_core::page::PageSettings;
+        use hwpforge_core::run::Run;
+        use hwpforge_core::table::{Table, TableCell, TableRow};
+        use hwpforge_core::{Document, Paragraph, Section};
+        use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
+        use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxParaShape, HwpxStyleStore};
+        use hwpforge_smithy_hwpx::HwpxEncoder;
+
+        let text_para = |t: &str| {
+            Paragraph::with_runs(vec![Run::text(t, CharShapeIndex::new(0))], ParaShapeIndex::new(0))
+        };
+        let cell = |t: &str| TableCell::new(vec![text_para(t)], HwpUnit::new(8000).unwrap());
+        let table = Table::new(vec![
+            TableRow::new(vec![cell("성명"), cell("")]),
+            TableRow::new(vec![cell("주소"), cell("")]),
+        ]);
+        let mut host = Paragraph::new(ParaShapeIndex::new(0));
+        host.add_run(Run::table(table, CharShapeIndex::new(0)));
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(vec![host], PageSettings::default()));
+
+        let mut styles = HwpxStyleStore::with_default_fonts("함초롬돋움");
+        styles.push_char_shape(HwpxCharShape::default());
+        styles.push_para_shape(HwpxParaShape::default());
+        let bytes = HwpxEncoder::encode(
+            &doc.validate().unwrap(),
+            &styles,
+            &hwpforge_core::image::ImageStore::new(),
+        )
+        .unwrap();
+        let path = dir.join("label-form.hwpx");
+        std::fs::write(&path, bytes).unwrap();
+        path.to_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn stamp_v2_cells_via_mcp_surface() {
+        use hwpforge_core::table::grid::GridCoord;
+        use hwpforge_smithy_hwpx::stamp::{CellLabelClaim, CellStampAction};
+
+        let dir = tempfile::tempdir().unwrap();
+        let src = label_form_hwpx(dir.path());
+        let plan = run_stamp_plan(&src).unwrap();
+        assert_eq!(plan.cells.len(), 2, "{:?}", plan.cells);
+        assert!(plan.skipped_tables.is_empty());
+
+        let cell_specs = vec![
+            CellStampSpec {
+                table: 0,
+                at: GridCoord::new(0, 1),
+                label: Some(CellLabelClaim { at: GridCoord::new(0, 0), text: "성명".into() }),
+                action: CellStampAction::Field {
+                    name: "성명".into(), hint: "성명 입력".into()
+                },
+            },
+            CellStampSpec {
+                table: 0,
+                at: GridCoord::new(1, 1),
+                label: None,
+                action: CellStampAction::Ignore,
+            },
+        ];
+
+        // cells 만 있고 source_sha256 이 없으면 거부 (드리프트 핀 필수).
+        let out = dir.path().join("cells.hwpx");
+        let err = run_stamp(&src, &[], &cell_specs, None, out.to_str().unwrap(), None).unwrap_err();
+        assert_eq!(err.code, "MISSING_SOURCE_SHA256");
+
+        let data = run_stamp(
+            &src,
+            &[],
+            &cell_specs,
+            Some(&plan.source_sha256),
+            out.to_str().unwrap(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(data.stamped_cells.len(), 1);
+        assert_eq!(data.stamped_cells[0].name, "성명");
+        assert_eq!(data.ignored, 1);
+
+        // 산출물은 즉시 fields 로 발견 가능.
+        let fields = crate::tools::fields::run_fields(out.to_str().unwrap()).unwrap();
+        assert_eq!(fields.fields.len(), 1);
+        assert_eq!(fields.fields[0].name.as_deref(), Some("성명"));
+
+        // 틀린 sha 는 STAMP_SOURCE_HASH_MISMATCH.
+        let err =
+            run_stamp(&src, &[], &cell_specs, Some(&"0".repeat(64)), out.to_str().unwrap(), None)
+                .unwrap_err();
+        assert_eq!(err.code, "STAMP_SOURCE_HASH_MISMATCH");
+    }
+
     #[test]
     fn stamp_plan_lists_candidates_with_guard() {
         let dir = tempfile::tempdir().unwrap();
@@ -225,7 +472,7 @@ mod tests {
         let unguarded: Vec<_> = plan.candidates.iter().filter(|c| c.guard.is_none()).collect();
         let specs = vec![named(unguarded[0], "성명"), named(unguarded[1], "소속")];
         let out = dir.path().join("stamped.hwpx");
-        let data = run_stamp(&src, &specs, out.to_str().unwrap(), None).unwrap();
+        let data = run_stamp(&src, &specs, &[], None, out.to_str().unwrap(), None).unwrap();
         assert_eq!(data.stamped.len(), 2);
         assert_eq!(data.skipped_guarded, 1);
         assert!(std::path::Path::new(&data.manifest_path).exists());
@@ -239,7 +486,7 @@ mod tests {
     fn stamp_rejects_non_hwpx_extension() {
         let dir = tempfile::tempdir().unwrap();
         let src = make_template(&dir);
-        let err = run_stamp(&src, &[], "out.zip", None).unwrap_err();
+        let err = run_stamp(&src, &[], &[], None, "out.zip", None).unwrap_err();
         assert_eq!(err.code, "INVALID_EXTENSION");
     }
 
@@ -254,34 +501,41 @@ mod tests {
         let out_s = out.to_str().unwrap();
 
         // 미커버 무가드 후보
-        let err = run_stamp(&src, &[], out_s, None).unwrap_err();
+        let err = run_stamp(&src, &[], &[], None, out_s, None).unwrap_err();
         assert_eq!(err.code, "STAMP_CANDIDATE_UNCOVERED");
 
         // stale spec (span 어긋남)
         let mut stale = named(c1, "성명");
         stale.span = 0..1;
-        let err = run_stamp(&src, &[stale, named(c2, "소속")], out_s, None).unwrap_err();
+        let err = run_stamp(&src, &[stale, named(c2, "소속")], &[], None, out_s, None).unwrap_err();
         assert_eq!(err.code, "STAMP_SPEC_STALE");
 
         // 마커 불일치
         let mut wrong = named(c1, "성명");
         wrong.marker = "(x)".to_string();
-        let err = run_stamp(&src, &[wrong, named(c2, "소속")], out_s, None).unwrap_err();
+        let err = run_stamp(&src, &[wrong, named(c2, "소속")], &[], None, out_s, None).unwrap_err();
         assert_eq!(err.code, "STAMP_MARKER_MISMATCH");
 
         // 같은 후보 이중 분류
-        let err =
-            run_stamp(&src, &[named(c1, "a"), named(c1, "b"), named(c2, "소속")], out_s, None)
-                .unwrap_err();
+        let err = run_stamp(
+            &src,
+            &[named(c1, "a"), named(c1, "b"), named(c2, "소속")],
+            &[],
+            None,
+            out_s,
+            None,
+        )
+        .unwrap_err();
         assert_eq!(err.code, "STAMP_SPEC_DUPLICATE");
 
         // 이름 중복
-        let err =
-            run_stamp(&src, &[named(c1, "같음"), named(c2, "같음")], out_s, None).unwrap_err();
+        let err = run_stamp(&src, &[named(c1, "같음"), named(c2, "같음")], &[], None, out_s, None)
+            .unwrap_err();
         assert_eq!(err.code, "STAMP_NAME_DUPLICATE");
 
         // 빈 이름
-        let err = run_stamp(&src, &[named(c1, ""), named(c2, "소속")], out_s, None).unwrap_err();
+        let err = run_stamp(&src, &[named(c1, ""), named(c2, "소속")], &[], None, out_s, None)
+            .unwrap_err();
         assert_eq!(err.code, "STAMP_NAME_EMPTY");
 
         assert!(!out.exists(), "fail-closed: 거부 시 산출물이 없어야 한다");
@@ -300,6 +554,8 @@ mod tests {
         let err = run_stamp(
             &src,
             &specs,
+            &[],
+            None,
             out.to_str().unwrap(),
             Some("/nonexistent-dir/never.manifest.json"),
         )
