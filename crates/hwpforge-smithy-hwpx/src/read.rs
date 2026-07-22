@@ -220,6 +220,344 @@ impl HwpxReader {
             bookmarks,
         })
     }
+
+    /// Reads the text projection of a paragraph range in a section.
+    ///
+    /// `range` is an inclusive `(from, to)` pair of top-level paragraph
+    /// indexes; `None` reads the whole section. Paragraphs whose content is
+    /// not plain text are never silently dropped: embedded tables, images,
+    /// and controls surface as [`EmbeddedContent`] markers.
+    ///
+    /// # Errors
+    ///
+    /// Fails on undecodable input, an out-of-range section, or an invalid
+    /// paragraph range.
+    pub fn read_paragraphs(
+        bytes: &[u8],
+        section: usize,
+        range: Option<(usize, usize)>,
+    ) -> Result<ParagraphsView, ReadError> {
+        let decoded = HwpxDecoder::decode(bytes)?;
+        let document = &decoded.document;
+        let styles = &decoded.style_store;
+
+        let sections = document.sections();
+        let Some(sec) = sections.get(section) else {
+            return Err(ReadError::SectionOutOfRange {
+                requested: section,
+                available: sections.len(),
+            });
+        };
+
+        let available = sec.paragraphs.len();
+        let (from, to) = range.unwrap_or((0, available.saturating_sub(1)));
+        if available == 0 || from > to || to >= available {
+            return Err(ReadError::ParaRangeInvalid { section, from, to, available });
+        }
+
+        let tables = tables_in_document(document);
+        let paragraphs = sec.paragraphs[from..=to]
+            .iter()
+            .enumerate()
+            .map(|(offset, paragraph)| ParagraphView {
+                at: ParaLocator { section, para: from + offset },
+                kind: kind_view(classify_paragraph(paragraph, styles)),
+                text: paragraph.text_content(),
+                contains: embedded_content(paragraph, &tables),
+            })
+            .collect();
+
+        Ok(ParagraphsView { section, from, to, paragraphs })
+    }
+
+    /// Reads the logical-grid text matrix of the table at `ordinal`.
+    ///
+    /// Cells are the grid **anchors** (merged regions appear once, with
+    /// their spans); covered coordinates resolve to their anchor by
+    /// construction. Cell text joins the cell's paragraphs with `\n`; non-
+    /// text cell content surfaces as [`EmbeddedContent`] markers.
+    ///
+    /// # Errors
+    ///
+    /// Fails on undecodable input, an unknown ordinal, or a table whose
+    /// strict grid cannot be derived.
+    pub fn read_table(bytes: &[u8], ordinal: usize) -> Result<TableView, ReadError> {
+        let decoded = HwpxDecoder::decode(bytes)?;
+        let document = &decoded.document;
+
+        let entries = tables_in_document(document);
+        let Some(entry) = entries.iter().find(|e| e.ordinal == ordinal) else {
+            return Err(ReadError::TableOutOfRange {
+                requested: ordinal,
+                available: entries.len(),
+            });
+        };
+
+        let grid = TableGrid::from_table(entry.table)
+            .map_err(|e| ReadError::TableUnaddressable { ordinal, reason: e.to_string() })?;
+        let (rows, cols) = grid.dimensions();
+
+        let cells = grid
+            .iter_anchors()
+            .map(|anchor| {
+                let cell = &entry.table.rows[anchor.row_idx].cells[anchor.cell_idx];
+                let text = cell
+                    .paragraphs
+                    .iter()
+                    .map(hwpforge_core::Paragraph::text_content)
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let contains =
+                    cell.paragraphs.iter().flat_map(|p| embedded_content(p, &entries)).collect();
+                CellView {
+                    row: anchor.anchor.row,
+                    col: anchor.anchor.col,
+                    row_span: u32::from(anchor.row_span),
+                    col_span: u32::from(anchor.col_span),
+                    text,
+                    contains,
+                }
+            })
+            .collect();
+
+        let para = entry
+            .path
+            .iter()
+            .find_map(|seg| match seg {
+                PathSeg::Index(i) => Some(*i),
+                PathSeg::Field(_) => None,
+            })
+            .unwrap_or(0);
+
+        Ok(TableView {
+            ordinal,
+            at: ParaLocator { section: entry.section, para },
+            rows,
+            cols,
+            cells,
+        })
+    }
+
+    /// Reads every field named `name` (document order).
+    ///
+    /// # Errors
+    ///
+    /// Fails on undecodable input or when no field carries that name; the
+    /// error lists the available names.
+    pub fn read_field(bytes: &[u8], name: &str) -> Result<Vec<FieldInfo>, ReadError> {
+        let fields = HwpxFiller::list_fields(bytes)?;
+        let matches: Vec<FieldInfo> =
+            fields.iter().filter(|f| f.name.as_deref() == Some(name)).cloned().collect();
+        if matches.is_empty() {
+            let available = fields.iter().filter_map(|f| f.name.clone()).collect();
+            return Err(ReadError::FieldNotFound { name: name.to_string(), available });
+        }
+        Ok(matches)
+    }
+}
+
+/// Error surface of the `read` projections.
+#[derive(Debug, thiserror::Error)]
+pub enum ReadError {
+    /// The input could not be decoded.
+    #[error("codec: {0}")]
+    Codec(#[from] crate::error::HwpxError),
+    /// The requested section does not exist.
+    #[error("section {requested} out of range (document has {available} section(s))")]
+    SectionOutOfRange {
+        /// Requested section index.
+        requested: usize,
+        /// Number of sections in the document.
+        available: usize,
+    },
+    /// The requested paragraph range is empty or out of bounds.
+    #[error(
+        "paragraph range {from}..={to} invalid for section {section} ({available} paragraph(s))"
+    )]
+    ParaRangeInvalid {
+        /// Section index.
+        section: usize,
+        /// Inclusive range start.
+        from: usize,
+        /// Inclusive range end.
+        to: usize,
+        /// Number of paragraphs in the section.
+        available: usize,
+    },
+    /// The requested table ordinal does not exist.
+    #[error("table {requested} out of range (document has {available} table(s))")]
+    TableOutOfRange {
+        /// Requested ordinal.
+        requested: usize,
+        /// Number of tables in the document.
+        available: usize,
+    },
+    /// The table exists but its strict grid cannot be derived.
+    #[error("table {ordinal} grid underivable: {reason}")]
+    TableUnaddressable {
+        /// Table ordinal.
+        ordinal: usize,
+        /// Grid derivation failure.
+        reason: String,
+    },
+    /// No field carries the requested name.
+    #[error("no field named {name:?} (available: {available:?})")]
+    FieldNotFound {
+        /// Requested field name.
+        name: String,
+        /// Names that do exist in the document.
+        available: Vec<String>,
+    },
+}
+
+/// Wire form of [`ParaKind`] for read projections.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ParaKindView {
+    /// Heading with depth `1..=6`.
+    Heading {
+        /// Heading depth.
+        level: u8,
+    },
+    /// List item.
+    List {
+        /// `true` = numbered family, `false` = bullet family.
+        numbered: bool,
+        /// Zero-based nesting depth.
+        level: u8,
+        /// Checkbox state for checkable bullets.
+        checked: Option<bool>,
+    },
+    /// Plain body paragraph.
+    Body,
+}
+
+/// Non-text content embedded in a paragraph or cell (never silently
+/// dropped).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum EmbeddedContent {
+    /// Inline table; `ordinal` addresses it for `read --table`/`set-cell`.
+    Table {
+        /// Shared traversal ordinal (`None` only if inventory lookup fails,
+        /// which would be an internal inconsistency).
+        ordinal: Option<usize>,
+    },
+    /// Inline image.
+    Image,
+    /// Control element, labelled by [`Control::kind_name`].
+    Control {
+        /// Control kind (snake_case).
+        control: String,
+    },
+    /// Run content this build does not recognize (future variant).
+    Other,
+}
+
+/// One paragraph in a read projection.
+#[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ParagraphView {
+    /// Positional locator.
+    pub at: ParaLocator,
+    /// Outline/list classification.
+    #[serde(flatten)]
+    pub kind: ParaKindView,
+    /// Plain text content (text runs only; see `contains`).
+    pub text: String,
+    /// Embedded non-text content, in run order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub contains: Vec<EmbeddedContent>,
+}
+
+/// Paragraph-range read result.
+#[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct ParagraphsView {
+    /// Section index.
+    pub section: usize,
+    /// Inclusive range start actually read.
+    pub from: usize,
+    /// Inclusive range end actually read.
+    pub to: usize,
+    /// Paragraph projections in order.
+    pub paragraphs: Vec<ParagraphView>,
+}
+
+/// One anchor cell in a table read (merged regions appear once).
+#[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct CellView {
+    /// Logical grid row of the anchor.
+    pub row: u32,
+    /// Logical grid column of the anchor.
+    pub col: u32,
+    /// Rows covered by this cell.
+    pub row_span: u32,
+    /// Columns covered by this cell.
+    pub col_span: u32,
+    /// Cell text (paragraphs joined with `\n`).
+    pub text: String,
+    /// Embedded non-text content inside the cell.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub contains: Vec<EmbeddedContent>,
+}
+
+/// Table read result (logical grid text matrix).
+#[derive(Debug, Clone, serde::Serialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct TableView {
+    /// Shared traversal ordinal.
+    pub ordinal: usize,
+    /// Positional locator of the hosting paragraph.
+    pub at: ParaLocator,
+    /// Logical grid row count.
+    pub rows: u32,
+    /// Logical grid column count.
+    pub cols: u32,
+    /// Anchor cells in grid order.
+    pub cells: Vec<CellView>,
+}
+
+fn kind_view(kind: ParaKind) -> ParaKindView {
+    match kind {
+        ParaKind::Heading { level, .. } => ParaKindView::Heading { level },
+        ParaKind::ListItem { kind, level, checked, .. } => ParaKindView::List {
+            numbered: matches!(kind, hwpforge_core::ListItemKind::Number),
+            level,
+            checked,
+        },
+        ParaKind::Body => ParaKindView::Body,
+    }
+}
+
+fn embedded_content(
+    paragraph: &hwpforge_core::Paragraph,
+    tables: &[crate::table_inventory::TableEntry<'_>],
+) -> Vec<EmbeddedContent> {
+    let mut out = Vec::new();
+    for run in &paragraph.runs {
+        match &run.content {
+            RunContent::Text(_) | RunContent::InlineText(_) => {}
+            RunContent::Table(table) => {
+                let ordinal = tables
+                    .iter()
+                    .find(|e| std::ptr::eq(e.table, table.as_ref()))
+                    .map(|e| e.ordinal);
+                out.push(EmbeddedContent::Table { ordinal });
+            }
+            RunContent::Image(_) => out.push(EmbeddedContent::Image),
+            RunContent::Control(control) => {
+                out.push(EmbeddedContent::Control { control: control.kind_name().to_string() })
+            }
+            // RunContent is #[non_exhaustive]; a future variant must surface
+            // as an explicit marker, never vanish from the projection.
+            _ => out.push(EmbeddedContent::Other),
+        }
+    }
+    out
 }
 
 fn collect_headings(
@@ -445,5 +783,78 @@ mod tests {
     #[test]
     fn outline_rejects_non_hwpx_bytes() {
         assert!(HwpxReader::outline(b"not a zip").is_err());
+    }
+
+    // -- fixture: read projections (W2) ---------------------------------
+
+    #[test]
+    fn read_paragraphs_reports_table_marker_not_silent_drop() {
+        let bytes = fixture("tables/table_01_basic_2x2.hwpx");
+        let view = HwpxReader::read_paragraphs(&bytes, 0, None).unwrap();
+        assert!(
+            view.paragraphs.iter().any(|p| p
+                .contains
+                .iter()
+                .any(|c| matches!(c, EmbeddedContent::Table { ordinal: Some(0) }))),
+            "the table-hosting paragraph must carry an explicit marker"
+        );
+    }
+
+    #[test]
+    fn read_paragraphs_range_is_inclusive_and_validated() {
+        let bytes = fixture("tables/table_01_basic_2x2.hwpx");
+        let full = HwpxReader::read_paragraphs(&bytes, 0, None).unwrap();
+        let n = full.paragraphs.len();
+        assert!(n >= 1);
+
+        let one = HwpxReader::read_paragraphs(&bytes, 0, Some((0, 0))).unwrap();
+        assert_eq!(one.paragraphs.len(), 1);
+        assert_eq!(one.paragraphs[0].at, ParaLocator { section: 0, para: 0 });
+
+        assert!(matches!(
+            HwpxReader::read_paragraphs(&bytes, 0, Some((1, 0))),
+            Err(ReadError::ParaRangeInvalid { .. })
+        ));
+        assert!(matches!(
+            HwpxReader::read_paragraphs(&bytes, 0, Some((0, n))),
+            Err(ReadError::ParaRangeInvalid { .. })
+        ));
+        assert!(matches!(
+            HwpxReader::read_paragraphs(&bytes, 9, None),
+            Err(ReadError::SectionOutOfRange { .. })
+        ));
+    }
+
+    #[test]
+    fn read_table_anchors_tile_grid_exactly_once() {
+        let bytes = fixture("tables/merged_grid_form.hwpx");
+        let view = HwpxReader::read_table(&bytes, 0).unwrap();
+        assert!(view.rows >= 1 && view.cols >= 1);
+        let coverage: u32 = view.cells.iter().map(|c| c.row_span * c.col_span).sum();
+        assert_eq!(coverage, view.rows * view.cols, "anchors must tile the grid exactly once");
+    }
+
+    #[test]
+    fn read_table_unknown_ordinal_reports_available() {
+        let bytes = fixture("tables/table_01_basic_2x2.hwpx");
+        assert!(matches!(
+            HwpxReader::read_table(&bytes, 99),
+            Err(ReadError::TableOutOfRange { requested: 99, available: 1 })
+        ));
+    }
+
+    #[test]
+    fn read_field_finds_named_and_reports_missing_with_available() {
+        let bytes = fixture("fields/clickhere_named.hwpx");
+        let hits = HwpxReader::read_field(&bytes, "user_email").unwrap();
+        assert!(!hits.is_empty());
+
+        let err = HwpxReader::read_field(&bytes, "없는이름").unwrap_err();
+        match err {
+            ReadError::FieldNotFound { available, .. } => {
+                assert!(available.contains(&"user_email".to_string()));
+            }
+            other => panic!("expected FieldNotFound, got {other:?}"),
+        }
     }
 }

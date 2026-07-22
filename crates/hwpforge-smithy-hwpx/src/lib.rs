@@ -89,8 +89,9 @@ pub use fill::{FieldInfo, FillError, FillOutcome, FilledField, HwpxFiller};
 pub use patch::HwpxPatcher;
 pub use presets::{builtin_presets, style_store_for_preset, PresetInfo};
 pub use read::{
-    DocumentOutline, HwpxReader, OutlineBookmark, OutlineHeading, OutlineHeadingSource,
-    OutlineTable, ParaLocator, SectionOutline,
+    CellView, DocumentOutline, EmbeddedContent, HwpxReader, OutlineBookmark, OutlineHeading,
+    OutlineHeadingSource, OutlineTable, ParaKindView, ParaLocator, ParagraphView, ParagraphsView,
+    ReadError, SectionOutline, TableView,
 };
 pub use registry_bridge::HwpxRegistryBridge;
 pub use section_workflow::{
