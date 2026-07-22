@@ -73,4 +73,14 @@ mod tests {
         let err = run_outline("/nonexistent/e5-outline-probe.hwpx").unwrap_err();
         assert_eq!(err.code, "FILE_NOT_FOUND");
     }
+
+    #[test]
+    fn outline_non_hwpx_bytes_reports_decode_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let garbage = dir.path().join("garbage.hwpx");
+        std::fs::write(&garbage, b"not a zip").unwrap();
+
+        let err = run_outline(garbage.to_str().unwrap()).unwrap_err();
+        assert_eq!(err.code, "DECODE_ERROR");
+    }
 }

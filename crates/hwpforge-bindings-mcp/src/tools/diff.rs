@@ -117,6 +117,64 @@ mod tests {
     }
 
     #[test]
+    fn diff_summarizes_non_identical_documents() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.hwpx");
+        let b = dir.path().join("b.hwpx");
+        crate::tools::convert::run_convert(
+            "# 제목\n\n본문 A",
+            false,
+            a.to_str().unwrap(),
+            "default",
+        )
+        .unwrap();
+        crate::tools::convert::run_convert(
+            "# 제목\n\n본문 B",
+            false,
+            b.to_str().unwrap(),
+            "default",
+        )
+        .unwrap();
+
+        let data = run_diff(a.to_str().unwrap(), b.to_str().unwrap(), None).unwrap();
+        let diff = data.diff.expect("inline diff");
+        assert!(!diff.identical);
+        assert!(data.summary.contains("paragraph"), "summary: {}", data.summary);
+    }
+
+    #[test]
+    fn diff_missing_input_reports_file_not_found() {
+        let err = run_diff("/nonexistent/a.hwpx", "/nonexistent/b.hwpx", None).unwrap_err();
+        assert_eq!(err.code, "FILE_NOT_FOUND");
+    }
+
+    #[test]
+    fn diff_non_hwpx_bytes_reports_decode_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let garbage = dir.path().join("garbage.hwpx");
+        std::fs::write(&garbage, b"not a zip").unwrap();
+
+        let err = run_diff(garbage.to_str().unwrap(), garbage.to_str().unwrap(), None).unwrap_err();
+        assert_eq!(err.code, "DECODE_ERROR");
+    }
+
+    #[test]
+    fn diff_unwritable_report_path_reports_write_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("probe.hwpx");
+        crate::tools::convert::run_convert("본문", false, path.to_str().unwrap(), "default")
+            .unwrap();
+
+        let err = run_diff(
+            path.to_str().unwrap(),
+            path.to_str().unwrap(),
+            Some("/nonexistent-dir/report.json"),
+        )
+        .unwrap_err();
+        assert_eq!(err.code, "FILE_WRITE_FAILED");
+    }
+
+    #[test]
     fn diff_writes_report_file_when_requested() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("probe.hwpx");

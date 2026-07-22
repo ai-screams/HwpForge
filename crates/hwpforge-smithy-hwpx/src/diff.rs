@@ -40,6 +40,7 @@ use hwpforge_core::run::RunContent;
 use hwpforge_core::section::Section;
 use hwpforge_core::table::grid::TableGrid;
 use hwpforge_core::table::Table;
+use hwpforge_foundation::FieldType;
 
 use crate::decoder::package::PackageReader;
 use crate::error::HwpxResult;
@@ -326,6 +327,29 @@ fn diff_documents(base: &HwpxDocument, rev: &HwpxDocument, out: &mut SemanticDif
     for (si, (b_sec, r_sec)) in b_sections.iter().zip(r_sections).enumerate() {
         diff_section(si, b_sec, r_sec, &base_tables, out);
     }
+
+    // Sections beyond the common prefix: itemize their paragraphs so a
+    // whole-section add/remove is not paragraph-level silent.
+    for (si, sec) in r_sections.iter().enumerate().skip(b_sections.len()) {
+        for (pi, para) in sec.paragraphs.iter().enumerate() {
+            out.paragraphs.push(ParagraphChange {
+                at: ParaLocator { section: si, para: pi },
+                kind: ParagraphChangeKind::Added,
+                before: None,
+                after: Some(excerpt(&para.text_content())),
+            });
+        }
+    }
+    for (si, sec) in b_sections.iter().enumerate().skip(r_sections.len()) {
+        for (pi, para) in sec.paragraphs.iter().enumerate() {
+            out.paragraphs.push(ParagraphChange {
+                at: ParaLocator { section: si, para: pi },
+                kind: ParagraphChangeKind::Removed,
+                before: Some(excerpt(&para.text_content())),
+                after: None,
+            });
+        }
+    }
 }
 
 fn diff_section(
@@ -426,8 +450,16 @@ fn strip_in_paragraph(paragraph: &mut Paragraph) {
     for run in &mut paragraph.runs {
         match &mut run.content {
             RunContent::Control(control) => {
-                if let Control::Field { display_text, .. } = control.as_mut() {
-                    display_text.clear();
+                // Mirror the field axis EXACTLY: `diff_fields` only reports
+                // named ClickHere fields (that is all `list_fields` emits by
+                // name), so only those bodies may be blanked here. Blanking
+                // any wider set would let a field-body change vanish from
+                // every semantic axis at once — unnamed or non-ClickHere
+                // field changes must instead fall through to `raw`.
+                if let Control::Field { field_type, name, display_text, .. } = control.as_mut() {
+                    if *field_type == FieldType::ClickHere && name.is_some() {
+                        display_text.clear();
+                    }
                 }
             }
             RunContent::Table(table) => {
@@ -759,6 +791,153 @@ mod tests {
             .collect();
         assert_eq!(added.len(), 1);
         assert_eq!(added[0].after.as_deref(), Some("추가된 문단"));
+    }
+
+    #[test]
+    fn unnamed_field_body_change_falls_to_raw_not_silence() {
+        // Review H1: the field axis only reports named ClickHere fields, so
+        // an unnamed field's body change must surface via `raw` — never be
+        // stripped into silence.
+        let base_fixture = fixture("fields/clickhere_named.hwpx");
+        let mut decoded = HwpxDecoder::decode(&base_fixture).unwrap();
+        for p in &mut decoded.document.sections_mut()[0].paragraphs {
+            for run in &mut p.runs {
+                if let RunContent::Control(c) = &mut run.content {
+                    if let Control::Field { name, .. } = c.as_mut() {
+                        *name = None;
+                    }
+                }
+            }
+        }
+        let base = reencode(&decoded);
+
+        for p in &mut decoded.document.sections_mut()[0].paragraphs {
+            for run in &mut p.runs {
+                if let RunContent::Control(c) = &mut run.content {
+                    if let Control::Field { display_text, .. } = c.as_mut() {
+                        *display_text = "몰래 바뀐 값".to_string();
+                    }
+                }
+            }
+        }
+        let revised = reencode(&decoded);
+
+        let diff = HwpxDiffer::diff(&base, &revised).unwrap();
+        assert!(diff.semantic.field_values.is_empty(), "unnamed fields have no field axis");
+        assert!(!diff.semantic.is_empty(), "the change must not vanish from the semantic channel");
+        assert!(!diff.semantic.raw.is_empty(), "expected a raw fallback entry");
+    }
+
+    #[test]
+    fn stamp_output_diff_reports_added_fields() {
+        use crate::stamp::{HwpxStamper, StampAction, StampSpec};
+
+        let base = fixture("stamp/placeholder_basic.hwpx");
+        let candidates = HwpxStamper::plan_bytes(&base).expect("plan");
+        let specs: Vec<StampSpec> = candidates
+            .iter()
+            .filter(|c| c.guard.is_none())
+            .enumerate()
+            .map(|(i, c)| StampSpec {
+                section: c.section,
+                path: c.path.clone(),
+                span: c.span.clone(),
+                marker: c.marker.clone(),
+                action: StampAction::Field { name: format!("필드{i}"), hint: None },
+            })
+            .collect();
+        assert!(!specs.is_empty(), "fixture must yield unguarded candidates");
+        let stamped = HwpxStamper::stamp(&base, &specs).expect("stamp");
+
+        let diff = HwpxDiffer::diff(&base, &stamped.bytes).unwrap();
+        let added: Vec<_> = diff
+            .semantic
+            .field_values
+            .iter()
+            .filter(|f| f.kind == FieldChangeKind::Added)
+            .collect();
+        assert_eq!(added.len(), specs.len(), "field_values: {:?}", diff.semantic.field_values);
+        // Field promotion legitimately shows as marker-text changes; nothing
+        // may land in raw.
+        assert!(diff.semantic.raw.is_empty(), "raw: {:?}", diff.semantic.raw);
+    }
+
+    #[test]
+    fn metadata_change_reports_raw_metadata_path() {
+        let base = fixture("fields/clickhere_named.hwpx");
+        let mut decoded = HwpxDecoder::decode(&base).unwrap();
+        decoded.document.metadata_mut().title = Some("바뀐 제목".to_string());
+        let revised = reencode(&decoded);
+
+        let diff = HwpxDiffer::diff(&base, &revised).unwrap();
+        assert!(
+            diff.semantic.raw.iter().any(|r| r.path == "$.metadata"),
+            "raw: {:?}",
+            diff.semantic.raw
+        );
+    }
+
+    #[test]
+    fn added_section_itemizes_its_paragraphs() {
+        // Review L1: a whole added section must not be paragraph-level
+        // silent.
+        let base = fixture("fields/clickhere_named.hwpx");
+        let mut decoded = HwpxDecoder::decode(&base).unwrap();
+        decoded.document.add_section(Section::with_paragraphs(
+            vec![text_para("새 섹션 문단")],
+            PageSettings::default(),
+        ));
+        let revised = reencode(&decoded);
+
+        let diff = HwpxDiffer::diff(&base, &revised).unwrap();
+        assert!(diff
+            .semantic
+            .structure
+            .iter()
+            .any(|s| s.scope == "sections" && s.after == s.before + 1));
+        assert!(
+            diff.semantic.paragraphs.iter().any(|p| {
+                p.kind == ParagraphChangeKind::Added
+                    && p.at.section == 1
+                    && p.after.as_deref() == Some("새 섹션 문단")
+            }),
+            "paras: {:?}",
+            diff.semantic.paragraphs
+        );
+    }
+
+    #[test]
+    fn push_raw_caps_and_counts_drops() {
+        let mut s = SemanticDiff::default();
+        for i in 0..(RAW_CAP + 5) {
+            s.push_raw(format!("$.x[{i}]"), "d".to_string());
+        }
+        assert_eq!(s.raw.len(), RAW_CAP);
+        assert_eq!(s.raw_dropped, 5);
+        assert!(!s.is_empty());
+    }
+
+    #[test]
+    fn removed_field_reports_field_removed() {
+        let base = fixture("fields/clickhere_named.hwpx");
+        let mut decoded = HwpxDecoder::decode(&base).unwrap();
+        for p in &mut decoded.document.sections_mut()[0].paragraphs {
+            p.runs.retain(|r| {
+                !matches!(&r.content, RunContent::Control(c)
+                    if matches!(c.as_ref(), Control::Field { .. }))
+            });
+        }
+        let revised = reencode(&decoded);
+
+        let diff = HwpxDiffer::diff(&base, &revised).unwrap();
+        assert!(
+            diff.semantic
+                .field_values
+                .iter()
+                .any(|f| f.kind == FieldChangeKind::Removed && f.name == "user_email"),
+            "field_values: {:?}",
+            diff.semantic.field_values
+        );
     }
 
     #[test]

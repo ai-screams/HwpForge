@@ -186,4 +186,59 @@ mod tests {
         let err = run_read(&path, Some(0), None, Some(0), None).unwrap_err();
         assert_eq!(err.code, "READ_TARGET_REQUIRED");
     }
+
+    #[test]
+    fn read_paras_validation_and_range_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = probe_doc(&dir);
+
+        let err = run_read(&path, None, Some("0..1"), Some(0), None).unwrap_err();
+        assert_eq!(err.code, "READ_PARAS_WITHOUT_SECTION");
+        let err = run_read(&path, Some(0), Some("abc"), None, None).unwrap_err();
+        assert_eq!(err.code, "READ_PARAS_INVALID");
+        let err = run_read(&path, Some(0), Some("5..1"), None, None).unwrap_err();
+        assert_eq!(err.code, "READ_PARA_RANGE_INVALID");
+        let err = run_read(&path, Some(99), None, None, None).unwrap_err();
+        assert_eq!(err.code, "READ_SECTION_OUT_OF_RANGE");
+
+        let view = run_read(&path, Some(0), Some("0..0"), None, None).unwrap().paragraphs.unwrap();
+        assert_eq!((view.from, view.to), (0, 0));
+    }
+
+    #[test]
+    fn read_field_and_table_error_mappings() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = probe_doc(&dir);
+
+        let err = run_read(&path, None, None, Some(42), None).unwrap_err();
+        assert_eq!(err.code, "READ_TABLE_OUT_OF_RANGE");
+        let err = run_read(&path, None, None, None, Some("없는이름")).unwrap_err();
+        assert_eq!(err.code, "READ_FIELD_NOT_FOUND");
+    }
+
+    #[test]
+    fn read_non_hwpx_bytes_reports_decode_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let garbage = dir.path().join("garbage.hwpx");
+        std::fs::write(&garbage, b"not a zip").unwrap();
+
+        let err = run_read(garbage.to_str().unwrap(), Some(0), None, None, None).unwrap_err();
+        assert_eq!(err.code, "DECODE_ERROR");
+    }
+
+    #[test]
+    fn summary_covers_every_target_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = probe_doc(&dir);
+
+        let s = run_read(&path, Some(0), None, None, None).unwrap().summary();
+        assert!(s.starts_with("section 0"), "summary: {s}");
+        let s = run_read(&path, None, None, Some(0), None).unwrap().summary();
+        assert!(s.starts_with("table 0"), "summary: {s}");
+
+        let empty = ReadData { paragraphs: None, table: None, fields: None };
+        assert_eq!(empty.summary(), "empty read");
+        let fields = ReadData { paragraphs: None, table: None, fields: Some(Vec::new()) };
+        assert_eq!(fields.summary(), "0 field match(es)");
+    }
 }
