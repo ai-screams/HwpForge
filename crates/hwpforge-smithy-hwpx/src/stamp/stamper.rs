@@ -249,6 +249,10 @@ impl HwpxStamper {
             document.validate().map_err(|e| StamperError::Codec(format!("validate: {e}")))?;
         let bytes = HwpxEncoder::encode(&validated, &style_store, &image_store)
             .map_err(|e| StamperError::Codec(e.to_string()))?;
+        // Untouched paragraphs keep Hancom's line-layout cache (no full
+        // document reflow/repagination in the renderer).
+        let bytes = crate::layout_carry::carry_line_segs(base, &e0, &bytes)
+            .map_err(|e| StamperError::Codec(format!("layout carry: {e}")))?;
 
         // ── manifest from the OUTPUT (re-decode is the source of truth) ─
         let fields = HwpxFiller::list_fields(&bytes)
@@ -315,6 +319,10 @@ impl HwpxStamper {
             document.validate().map_err(|e| StamperError::Codec(format!("validate: {e}")))?;
         let bytes = HwpxEncoder::encode(&validated, &style_store, &image_store)
             .map_err(|e| StamperError::Codec(e.to_string()))?;
+        // Untouched paragraphs keep Hancom's line-layout cache (no full
+        // document reflow/repagination in the renderer).
+        let bytes = crate::layout_carry::carry_line_segs(base, &e0, &bytes)
+            .map_err(|e| StamperError::Codec(format!("layout carry: {e}")))?;
 
         // ── post-encode verification on the re-decoded OUTPUT ───────
         let d2 = HwpxDecoder::decode(&bytes)
