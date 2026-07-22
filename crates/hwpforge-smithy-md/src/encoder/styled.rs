@@ -6,7 +6,10 @@
 
 use std::collections::HashMap;
 
-use hwpforge_core::{Control, Document, Paragraph, RunContent, StyleLookup, Table, Validated};
+use hwpforge_core::{
+    classify_paragraph, Control, Document, ParaKind, Paragraph, RunContent, StyleLookup, Table,
+    Validated,
+};
 use hwpforge_foundation::UnderlineType;
 
 use super::list_format::{format_list_continuation, format_list_item};
@@ -200,48 +203,27 @@ fn encode_paragraph_styled(
     let (text, para_images) = paragraph_text_styled(paragraph, styles, footnotes);
     images.extend(para_images);
 
-    // Outline semantics on the paragraph shape are the truth source for headings.
-    if let Some(level) = styles.para_heading_level(paragraph.para_shape_id) {
-        let clamped = level.clamp(1, 6);
-        // Headings must be single-line: collapse lineBreak-originated newlines.
-        let heading_text = text.trim().replace('\n', " ");
-        if heading_text.is_empty() {
-            return (String::new(), images);
-        }
-        return (format!("{} {}", "#".repeat(clamped as usize), heading_text), images);
-    }
-
-    // Real paragraph list semantics take priority over style-name heuristics.
-    let trimmed = text.trim();
-    if !trimmed.is_empty() {
-        if let Some(list_type) = styles.para_list_type(paragraph.para_shape_id) {
-            let level = styles.para_list_level(paragraph.para_shape_id).unwrap_or(0);
-            let checked = styles.para_checked_state(paragraph.para_shape_id);
-            return (format_list_item(trimmed, list_type, level, checked), images);
-        }
-    }
-
-    if let Some(level) =
-        paragraph.style_id.and_then(|style_id| styles.style_heading_level(style_id))
-    {
-        let clamped = level.clamp(1, 6);
-        let heading_text = trimmed.replace('\n', " ");
-        if heading_text.is_empty() {
-            return (String::new(), images);
-        }
-        return (format!("{} {}", "#".repeat(clamped as usize), heading_text), images);
-    }
-
-    if let Some(style_id) = paragraph.style_id {
-        // Check for list style by style name (fallback).
-        if let Some(style_name) = styles.style_name(style_id) {
-            if let Some(list_md) = format_as_list(trimmed, style_name) {
-                return (list_md, images);
+    // Shared outline/list classification (hwpforge-core). Classification is
+    // text-blind; the empty-text guards below are rendering concerns (an
+    // empty heading/list item renders as nothing).
+    match classify_paragraph(paragraph, styles) {
+        ParaKind::Heading { level, .. } => {
+            // Headings must be single-line: collapse lineBreak-originated newlines.
+            let heading_text = text.trim().replace('\n', " ");
+            if heading_text.is_empty() {
+                return (String::new(), images);
             }
+            (format!("{} {}", "#".repeat(level as usize), heading_text), images)
         }
+        ParaKind::ListItem { kind, level, checked, .. } => {
+            let trimmed = text.trim();
+            if trimmed.is_empty() {
+                return (String::new(), images);
+            }
+            (format_list_item(trimmed, kind, level, checked), images)
+        }
+        ParaKind::Body => (text.trim_start().to_string(), images),
     }
-
-    (text.trim_start().to_string(), images)
 }
 
 fn list_context_for_paragraph(
@@ -956,23 +938,6 @@ fn is_code_paragraph(paragraph: &Paragraph, styles: &dyn StyleLookup) -> bool {
             .map(|name| CODE_FONTS.iter().any(|cf| name.contains(cf)))
             .unwrap_or(false)
     })
-}
-
-/// Formats paragraph text as a list item if the style name indicates a list.
-///
-/// Returns `None` if the style is not a list style.
-fn format_as_list(text: &str, style_name: &str) -> Option<String> {
-    if text.is_empty() {
-        return None;
-    }
-    // Korean list style patterns
-    if style_name.contains("글머리") || style_name.contains("개조") {
-        Some(format!("- {text}"))
-    } else if style_name.contains("번호") {
-        Some(format!("1. {text}"))
-    } else {
-        None
-    }
 }
 
 #[cfg(test)]
@@ -2101,38 +2066,6 @@ mod tests {
         fn image_resolve_filename(&self, key: &str) -> Option<&str> {
             self.image_filenames.get(key).map(String::as_str)
         }
-    }
-
-    // --- format_as_list Korean/numbered style names ---
-
-    #[test]
-    fn format_as_list_korean_bullet_style_emits_dash() {
-        let result = format_as_list("item text", "글머리 기호");
-        assert_eq!(result, Some("- item text".to_string()));
-    }
-
-    #[test]
-    fn format_as_list_korean_gaejo_style_emits_dash() {
-        let result = format_as_list("item text", "개조식");
-        assert_eq!(result, Some("- item text".to_string()));
-    }
-
-    #[test]
-    fn format_as_list_korean_numbered_style_emits_numbered() {
-        let result = format_as_list("item text", "번호 목록");
-        assert_eq!(result, Some("1. item text".to_string()));
-    }
-
-    #[test]
-    fn format_as_list_empty_text_returns_none() {
-        let result = format_as_list("", "글머리");
-        assert_eq!(result, None);
-    }
-
-    #[test]
-    fn format_as_list_unrecognized_style_returns_none() {
-        let result = format_as_list("text", "바탕글");
-        assert_eq!(result, None);
     }
 
     // --- InlineFormat underline/superscript/subscript wrap paths ---
