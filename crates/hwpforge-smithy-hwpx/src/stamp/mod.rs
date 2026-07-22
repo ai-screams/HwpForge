@@ -23,7 +23,7 @@ mod request;
 mod stamper;
 
 pub use apply::{apply, StampAction, StampError, StampOutcome, StampSpec, StampedField};
-pub use cells::{LabelDirection, LabelRef};
+pub use cells::{plan_cells, CellPlan, CellStampCandidate, LabelDirection, LabelRef, SkippedTable};
 pub use detect::{detect_markers, paragraph_guard, BuiltinPattern, GuardReason, MarkerHit};
 pub use plan::{plan, StampCandidate};
 pub use request::{

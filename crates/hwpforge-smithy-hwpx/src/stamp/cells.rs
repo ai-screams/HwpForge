@@ -2,12 +2,14 @@
 //!
 //! Two definitions everything downstream (detect/plan/apply) builds on:
 //!
-//! - **Canonical empty**: a cell is a class-B target only when it is exactly
-//!   one paragraph holding exactly one empty `Text` run — the shape the HWPX
-//!   decoder produces for visually empty form cells (99.6% of empty cells in
-//!   the government-form corpus). Whitespace-only or multi-run cells are NOT
-//!   canonical; they carry authored content the delta gate cannot restore
-//!   losslessly.
+//! - **Stampable empty**: a cell is a class-B target only when every one of
+//!   its paragraphs is exactly one whitespace-only `Text` run — the shapes
+//!   native Hancom forms use for unfilled value cells (single empty run,
+//!   multi-empty-paragraph row-height padding, `U+3000` full-width-space
+//!   padding; blank-HPC exhibits all three across its 63 label→empty
+//!   pairs). Any authored text, extra run, or non-text content disqualifies
+//!   the cell — the delta gate must be able to restore the original
+//!   losslessly, and apply only ever replaces the first paragraph's run.
 //! - **Shared-boundary adjacency**: a label annotates a target when their
 //!   merged regions share a full grid edge, not when a single probed
 //!   coordinate matches — 44.8% of corpus label→empty pairs involve merged
@@ -20,12 +22,14 @@
 
 use std::collections::HashMap;
 
+use hwpforge_core::document::{Document, Draft};
 use hwpforge_core::run::RunContent;
 use hwpforge_core::table::grid::{GridCell, GridCoord, TableGrid};
 use hwpforge_core::table::{Table, TableCell};
 
 use super::detect::{paragraph_guard, GuardReason};
 use crate::cell_edit::normalize_label;
+use crate::table_inventory::{render_path, tables_in_document, TableEntry};
 
 /// Direction from a label cell to the class-B target it annotates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -57,17 +61,24 @@ pub struct LabelRef {
     pub duplicate_count: usize,
 }
 
-/// Returns `true` iff `cell` is a canonical empty class-B target: exactly one
-/// paragraph holding exactly one empty [`RunContent::Text`] run.
-#[allow(dead_code)] // consumed by the Wave 2A plan slice
-pub(crate) fn is_canonical_empty(cell: &TableCell) -> bool {
-    let [paragraph] = cell.paragraphs.as_slice() else {
-        return false;
-    };
-    let [run] = paragraph.runs.as_slice() else {
-        return false;
-    };
-    matches!(&run.content, RunContent::Text(text) if text.is_empty())
+/// Returns `true` iff `cell` is a stampable empty class-B target: at least
+/// one paragraph, and EVERY paragraph holds exactly one
+/// [`RunContent::Text`] run whose text is empty or Unicode whitespace.
+///
+/// Native Hancom forms pad value cells with multiple empty paragraphs (row
+/// height) and full-width spaces (`U+3000`) — blank-HPC has 17 multi-empty-
+/// paragraph and 3 `U+3000` value cells among its 63 label→empty pairs, so
+/// the stricter "exactly one `Text(\"\")` run" predicate covers only 70% of
+/// the acceptance fixture. Whitespace padding is not authored content: the
+/// apply phase replaces only the FIRST paragraph's run (geometry preserved)
+/// and the delta records the original run text verbatim, so reversal stays
+/// exact. Multi-run paragraphs and non-text content remain excluded.
+pub(crate) fn is_stampable_empty(cell: &TableCell) -> bool {
+    !cell.paragraphs.is_empty()
+        && cell.paragraphs.iter().all(|paragraph| {
+            matches!(paragraph.runs.as_slice(),
+                [run] if matches!(&run.content, RunContent::Text(text) if text.trim().is_empty()))
+        })
 }
 
 /// Raw cell text: all paragraph text joined with `\n` (no normalization).
@@ -90,7 +101,6 @@ fn raw_cell_text(table: &Table, cell: &GridCell) -> String {
 ///
 /// `duplicates` is the document-wide normalized-label tally (see
 /// [`tally_normalized_labels`]); unknown labels get `duplicate_count = 1`.
-#[allow(dead_code)] // consumed by the Wave 2A plan slice
 pub(crate) fn adjacent_labels(
     table: &Table,
     grid: &TableGrid,
@@ -137,7 +147,6 @@ pub(crate) fn adjacent_labels(
 
 /// Adds every non-empty normalized label text of `table` into `tally`
 /// (document-wide aggregation happens across tables at plan time).
-#[allow(dead_code)] // consumed by the Wave 2A plan slice
 pub(crate) fn tally_normalized_labels(
     table: &Table,
     grid: &TableGrid,
@@ -149,6 +158,131 @@ pub(crate) fn tally_normalized_labels(
             *tally.entry(normalized).or_insert(0) += 1;
         }
     }
+}
+
+/// One detected class-B candidate: a stampable empty cell with at least one
+/// adjacent label.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct CellStampCandidate {
+    /// Table ordinal (shared inventory DFS pre-order, across sections).
+    pub table: usize,
+    /// Section index the table lives in.
+    pub section: usize,
+    /// Canonical anchor coordinate of the empty target cell.
+    pub at: GridCoord,
+    /// Every adjacent label reference (`Left` before `Above`).
+    pub labels: Vec<LabelRef>,
+    /// True when every adjacent label is guarded: the candidate is never
+    /// auto-required in preflight and needs an explicit spec to be stamped
+    /// (mirrors class-A guarded semantics).
+    pub guarded: bool,
+    /// Normalized text of the preferred clean label (first `Left`, else
+    /// first `Above`), present only when unique in the document — a
+    /// grounded name suggestion, never applied automatically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_name: Option<String>,
+    /// Raw text of the preferred clean label — a grounded hint suggestion,
+    /// never applied automatically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_hint: Option<String>,
+}
+
+/// A table whose logical grid could not be built during [`plan_cells`] —
+/// reported as an explicit incomplete-coverage diagnostic, never silently
+/// skipped.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct SkippedTable {
+    /// Table ordinal (shared inventory DFS pre-order).
+    pub table: usize,
+    /// Serde-shaped path of the table (from the document root).
+    pub path: String,
+    /// Why the grid failed (first violation, human-readable).
+    pub error: String,
+}
+
+/// Result of class-B detection over a whole document.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
+pub struct CellPlan {
+    /// Detected candidates in document order (table ordinal, then row-major
+    /// anchor order).
+    pub candidates: Vec<CellStampCandidate>,
+    /// Tables excluded from detection because their grid is invalid.
+    pub skipped_tables: Vec<SkippedTable>,
+}
+
+/// Enumerates class-B cell candidates across all tables of the document.
+///
+/// Read-only. A candidate is a [stampable empty](is_stampable_empty) anchor
+/// cell with at least one [adjacent label](adjacent_labels); orphan empty
+/// cells (53% in the government-form corpus — matrix interiors and spacers)
+/// are NOT candidates and can only be targeted by explicit specs. Tables
+/// whose grid cannot be built are reported in
+/// [`skipped_tables`](CellPlan::skipped_tables).
+pub fn plan_cells(document: &Document<Draft>) -> CellPlan {
+    let entries = tables_in_document(document);
+
+    // Pass 1: per-table grids + the document-wide normalized-label tally.
+    let mut grids: Vec<Option<TableGrid>> = Vec::with_capacity(entries.len());
+    let mut skipped_tables = Vec::new();
+    let mut tally = HashMap::new();
+    for entry in &entries {
+        match TableGrid::from_table(entry.table) {
+            Ok(grid) => {
+                tally_normalized_labels(entry.table, &grid, &mut tally);
+                grids.push(Some(grid));
+            }
+            Err(error) => {
+                skipped_tables.push(SkippedTable {
+                    table: entry.ordinal,
+                    path: table_path(entry),
+                    error: error.to_string(),
+                });
+                grids.push(None);
+            }
+        }
+    }
+
+    // Pass 2: canonical empty anchors with adjacent labels become candidates.
+    let mut candidates = Vec::new();
+    for (entry, grid) in entries.iter().zip(&grids) {
+        let Some(grid) = grid else {
+            continue;
+        };
+        for anchor in grid.iter_anchors() {
+            let cell = &entry.table.rows[anchor.row_idx].cells[anchor.cell_idx];
+            if !is_stampable_empty(cell) {
+                continue;
+            }
+            let labels = adjacent_labels(entry.table, grid, anchor, &tally);
+            if labels.is_empty() {
+                continue;
+            }
+            let guarded = labels.iter().all(|label| label.guard.is_some());
+            let preferred = labels.iter().find(|label| label.guard.is_none());
+            let suggested_name = preferred
+                .filter(|label| label.duplicate_count == 1)
+                .map(|label| label.normalized.clone());
+            let suggested_hint = preferred.map(|label| label.raw.clone());
+            candidates.push(CellStampCandidate {
+                table: entry.ordinal,
+                section: entry.section,
+                at: anchor.anchor,
+                labels,
+                guarded,
+                suggested_name,
+                suggested_hint,
+            });
+        }
+    }
+
+    CellPlan { candidates, skipped_tables }
+}
+
+fn table_path(entry: &TableEntry<'_>) -> String {
+    format!("sections[{}].{}", entry.section, render_path("", &entry.path))
 }
 
 #[cfg(test)]
@@ -189,21 +323,48 @@ mod tests {
         *grid.resolve(GridCoord::new(row, col)).expect("anchor")
     }
 
-    // ── canonical empty ─────────────────────────────────────────
+    // ── stampable empty ─────────────────────────────────────────
 
     #[test]
-    fn canonical_empty_accepts_single_empty_text_run() {
-        assert!(is_canonical_empty(&text_cell("")));
+    fn stampable_empty_accepts_single_empty_text_run() {
+        assert!(is_stampable_empty(&text_cell("")));
     }
 
     #[test]
-    fn canonical_empty_rejects_whitespace_text() {
-        assert!(!is_canonical_empty(&text_cell("  ")));
-        assert!(!is_canonical_empty(&text_cell("성명")));
+    fn stampable_empty_accepts_whitespace_padding_but_not_text() {
+        // 네이티브 한컴 양식은 값 칸을 전각 공백(U+3000)으로 패딩한다.
+        assert!(is_stampable_empty(&text_cell("  ")));
+        assert!(is_stampable_empty(&text_cell("\u{3000}")));
+        assert!(!is_stampable_empty(&text_cell("성명")));
     }
 
     #[test]
-    fn canonical_empty_rejects_multiple_runs() {
+    fn stampable_empty_accepts_multi_empty_paragraph_cell() {
+        // blank-HPC 쌍 63개 중 17개가 이 모양 (빈 문단 여러 개 = 행 높이).
+        let paragraph = |text: &str| {
+            Paragraph::with_runs(
+                vec![Run::text(text, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )
+        };
+        let cell = TableCell::new(
+            vec![paragraph(""), paragraph("\u{3000}"), paragraph("")],
+            HwpUnit::ZERO,
+        );
+        assert!(is_stampable_empty(&cell));
+
+        let with_text = TableCell::new(vec![paragraph(""), paragraph("메모")], HwpUnit::ZERO);
+        assert!(!is_stampable_empty(&with_text));
+    }
+
+    #[test]
+    fn stampable_empty_rejects_zero_paragraphs() {
+        let cell = TableCell::new(vec![], HwpUnit::ZERO);
+        assert!(!is_stampable_empty(&cell));
+    }
+
+    #[test]
+    fn stampable_empty_rejects_multiple_runs() {
         let cell = TableCell::new(
             vec![Paragraph::with_runs(
                 vec![Run::text("", CharShapeIndex::new(0)), Run::text("", CharShapeIndex::new(1))],
@@ -211,23 +372,11 @@ mod tests {
             )],
             HwpUnit::ZERO,
         );
-        assert!(!is_canonical_empty(&cell));
+        assert!(!is_stampable_empty(&cell));
     }
 
     #[test]
-    fn canonical_empty_rejects_multiple_paragraphs() {
-        let paragraph = || {
-            Paragraph::with_runs(
-                vec![Run::text("", CharShapeIndex::new(0))],
-                ParaShapeIndex::new(0),
-            )
-        };
-        let cell = TableCell::new(vec![paragraph(), paragraph()], HwpUnit::ZERO);
-        assert!(!is_canonical_empty(&cell));
-    }
-
-    #[test]
-    fn canonical_empty_rejects_non_text_content() {
+    fn stampable_empty_rejects_non_text_content() {
         let nested = Run {
             content: RunContent::Table(Box::new(table(vec![vec![text_cell("")]]))),
             char_shape_id: CharShapeIndex::new(0),
@@ -236,7 +385,7 @@ mod tests {
             vec![Paragraph::with_runs(vec![nested], ParaShapeIndex::new(0))],
             HwpUnit::ZERO,
         );
-        assert!(!is_canonical_empty(&cell));
+        assert!(!is_stampable_empty(&cell));
     }
 
     // ── shared-boundary adjacency ───────────────────────────────
@@ -339,6 +488,161 @@ mod tests {
 
         let refs = adjacent_labels(&t, &grid, &target, &HashMap::new());
         assert_eq!(refs[0].duplicate_count, 1);
+    }
+
+    // ── plan_cells ──────────────────────────────────────────────
+
+    use hwpforge_core::page::PageSettings;
+    use hwpforge_core::{Control, Section};
+    use hwpforge_foundation::FieldType;
+
+    fn table_run(t: Table) -> Run {
+        Run { content: RunContent::Table(Box::new(t)), char_shape_id: CharShapeIndex::new(0) }
+    }
+
+    fn doc_with_tables(tables: Vec<Table>) -> hwpforge_core::Document {
+        let paras = tables
+            .into_iter()
+            .map(|t| Paragraph::with_runs(vec![table_run(t)], ParaShapeIndex::new(0)))
+            .collect();
+        let mut doc = hwpforge_core::Document::new();
+        doc.add_section(Section::with_paragraphs(paras, PageSettings::default()));
+        doc
+    }
+
+    #[test]
+    fn plan_cells_empty_document_is_empty() {
+        let plan = plan_cells(&hwpforge_core::Document::new());
+        assert!(plan.candidates.is_empty());
+        assert!(plan.skipped_tables.is_empty());
+    }
+
+    #[test]
+    fn plan_cells_detects_left_labeled_empty_cell() {
+        let doc = doc_with_tables(vec![table(vec![vec![text_cell("성명"), text_cell("")]])]);
+        let plan = plan_cells(&doc);
+        assert!(plan.skipped_tables.is_empty());
+        assert_eq!(plan.candidates.len(), 1);
+        let c = &plan.candidates[0];
+        assert_eq!((c.table, c.section), (0, 0));
+        assert_eq!(c.at, GridCoord::new(0, 1));
+        assert_eq!(c.labels.len(), 1);
+        assert!(!c.guarded);
+        assert_eq!(c.suggested_name.as_deref(), Some("성명"));
+        assert_eq!(c.suggested_hint.as_deref(), Some("성명"));
+    }
+
+    #[test]
+    fn plan_cells_duplicate_label_suppresses_suggested_name_only() {
+        let make = || table(vec![vec![text_cell("성명"), text_cell("")]]);
+        let doc = doc_with_tables(vec![make(), make()]);
+        let plan = plan_cells(&doc);
+        assert_eq!(plan.candidates.len(), 2);
+        for c in &plan.candidates {
+            assert_eq!(c.labels[0].duplicate_count, 2);
+            assert_eq!(c.suggested_name, None);
+            assert_eq!(c.suggested_hint.as_deref(), Some("성명"));
+        }
+    }
+
+    #[test]
+    fn plan_cells_fully_guarded_candidate_has_no_suggestions() {
+        let doc = doc_with_tables(vec![table(vec![vec![
+            text_cell("※ 이 난은 기재하지 마십시오"),
+            text_cell(""),
+        ]])]);
+        let plan = plan_cells(&doc);
+        assert_eq!(plan.candidates.len(), 1);
+        let c = &plan.candidates[0];
+        assert!(c.guarded);
+        assert_eq!(c.suggested_name, None);
+        assert_eq!(c.suggested_hint, None);
+    }
+
+    #[test]
+    fn plan_cells_mixed_guard_prefers_clean_label() {
+        // left = guarded 안내문, above = clean 라벨 → guarded=false 이고
+        // 제안은 clean 라벨에서 나온다.
+        let doc = doc_with_tables(vec![table(vec![
+            vec![text_cell("제목"), text_cell("성명")],
+            vec![text_cell("※ 안내"), text_cell("")],
+        ])]);
+        let plan = plan_cells(&doc);
+        assert_eq!(plan.candidates.len(), 1);
+        let c = &plan.candidates[0];
+        assert!(!c.guarded);
+        assert_eq!(c.labels.len(), 2);
+        assert_eq!(c.suggested_name.as_deref(), Some("성명"));
+        assert_eq!(c.suggested_hint.as_deref(), Some("성명"));
+    }
+
+    #[test]
+    fn plan_cells_invalid_grid_is_reported_not_silently_skipped() {
+        // 표 A = ragged (2행이 1셀뿐, hole → NotTiled), 표 B = 정상.
+        let ragged = table(vec![vec![text_cell("성명"), text_cell("")], vec![text_cell("주소")]]);
+        let ok = table(vec![vec![text_cell("기관명"), text_cell("")]]);
+        let doc = doc_with_tables(vec![ragged, ok]);
+        let plan = plan_cells(&doc);
+        assert_eq!(plan.skipped_tables.len(), 1);
+        assert_eq!(plan.skipped_tables[0].table, 0);
+        assert!(plan.skipped_tables[0].path.contains("sections[0]"));
+        assert!(!plan.skipped_tables[0].error.is_empty());
+        assert_eq!(plan.candidates.len(), 1);
+        assert_eq!(plan.candidates[0].table, 1);
+    }
+
+    #[test]
+    fn plan_cells_orphan_and_authored_cells_are_not_candidates() {
+        // (0,0) 빈 셀은 라벨이 오른쪽에만 있음(orphan) · (1,1) 은 authored 텍스트.
+        let doc = doc_with_tables(vec![table(vec![
+            vec![text_cell(""), text_cell("성명")],
+            vec![text_cell("주소"), text_cell("기입됨")],
+        ])]);
+        assert!(plan_cells(&doc).candidates.is_empty());
+    }
+
+    #[test]
+    fn plan_cells_whitespace_padded_cell_is_a_candidate() {
+        // 전각 공백 패딩 칸(blank-HPC t3 실물 패턴)도 자동 후보다.
+        let doc =
+            doc_with_tables(vec![table(vec![vec![text_cell("성명"), text_cell("\u{3000}")]])]);
+        let plan = plan_cells(&doc);
+        assert_eq!(plan.candidates.len(), 1);
+        assert_eq!(plan.candidates[0].at, GridCoord::new(0, 1));
+    }
+
+    #[test]
+    fn plan_cells_nested_table_gets_its_own_ordinal() {
+        let inner = table(vec![vec![text_cell("항목"), text_cell("")]]);
+        let outer_cell = TableCell::new(
+            vec![Paragraph::with_runs(vec![table_run(inner)], ParaShapeIndex::new(0))],
+            HwpUnit::ZERO,
+        );
+        let outer = Table::new(vec![TableRow::new(vec![outer_cell])]);
+        let doc = doc_with_tables(vec![outer]);
+        let plan = plan_cells(&doc);
+        assert_eq!(plan.candidates.len(), 1);
+        assert_eq!(plan.candidates[0].table, 1); // DFS pre-order: outer=0, inner=1
+        assert_eq!(plan.candidates[0].at, GridCoord::new(0, 1));
+    }
+
+    #[test]
+    fn plan_cells_existing_clickhere_cell_is_not_a_candidate() {
+        let mut para = Paragraph::new(ParaShapeIndex::new(0));
+        para.add_run(Run::control(
+            Control::Field {
+                field_type: FieldType::ClickHere,
+                hint_text: Some("힌트".to_string()),
+                help_text: None,
+                name: Some("이미승격".to_string()),
+                display_text: "힌트".to_string(),
+            },
+            CharShapeIndex::new(0),
+        ));
+        let field_cell = TableCell::new(vec![para], HwpUnit::ZERO);
+        let t = Table::new(vec![TableRow::new(vec![text_cell("성명"), field_cell])]);
+        let doc = doc_with_tables(vec![t]);
+        assert!(plan_cells(&doc).candidates.is_empty());
     }
 
     #[test]
