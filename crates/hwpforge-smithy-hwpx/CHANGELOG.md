@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.4](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.11.3...hwpforge-smithy-hwpx-v0.11.4) - 2026-07-22
+
+### Added
+
+- *(cli,mcp)* stamp v2 배선 — 셀 후보 plan·v2 맵·클래스-B 스탬핑 표면
+
+- *(smithy-hwpx)* 클래스-B 셀 스탬핑 apply + stamp_v2 (통합 preflight·역치환 delta·manifest v2)
+
+- *(smithy-hwpx)* 클래스-B 셀 후보 탐지 plan_cells (+stampable-empty 실측 확장)
+
+- *(smithy-hwpx)* stamp map v2 versioned envelope (+클래스-B 셀 스펙 계약)
+
+- *(smithy-hwpx)* 클래스-B 셀 스탬핑 기본 술어 (canonical-empty + shared-boundary 인접)
+
+
+### Fixed
+
+- *(smithy-hwpx)* 미편집 문단의 linesegarray(줄 조판 캐시) 선별 보존
+
+- *(smithy-hwpx)* 빈 문단 placeholder 가 authored charPrIDRef 를 보존하도록 수정
+
+
 ## [0.11.3](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.11.2...hwpforge-smithy-hwpx-v0.11.3) - 2026-07-21
 
 ### Added
