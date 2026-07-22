@@ -173,9 +173,32 @@ hwpforge schema exported-document    # full-document JSON shape
 hwpforge schema exported-section     # single-section JSON shape
 ```
 
+## Verification loop (E5)
+
+Every edit surface (`fill`, `set-cell`, `stamp`, `patch`, `from-json`) should be followed by:
+
+```bash
+hwpforge diff base.hwpx edited.hwpx --json     # or -o report.json for the full report
+```
+
+Expected deltas per surface:
+
+| Edit        | Expected semantic diff                                       |
+| ----------- | ------------------------------------------------------------ |
+| `fill`      | `field_values` only (value_changed per name)                 |
+| `set-cell`  | `cells` only (`{table, row, col, before, after}`)            |
+| `stamp`     | `field_values` added + marker/cell text changes at the spots |
+| `patch`     | `paragraphs`/`cells` text changes you made                   |
+| `from-json` | your structural changes + `structure` count entries          |
+
+Anything else in the report (unexpected `raw` entries, extra paragraphs, package entries
+added/removed) means the edit did more than intended — stop and re-check instead of
+shipping. `package.changed` listing the section XML is normal for any re-encoded surface;
+the report's `note` states what is not compared (entry-internal layout caches).
+
 ## Tips
 
-- Inspect before, verify after.
+- Outline before, diff after.
 - Use `--section N` to minimize JSON size (token efficiency) for text-only edits.
 - Back up the original before writing.
 - Government / 한컴-authored templates: prefer `patch` (preserves everything); if you must

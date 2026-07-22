@@ -318,6 +318,7 @@ impl HwpForgeServer {
                         data.total_charts,
                     ),
                     vec![
+                        "Use hwpforge_outline for the navigation map (headings/tables/fields/bookmarks)",
                         "Use hwpforge_to_json to export for editing",
                         "Use hwpforge_convert to create new documents",
                     ],
@@ -439,7 +440,7 @@ impl HwpForgeServer {
                         "Patched section {} → {} ({} bytes, {} sections)",
                         data.patched_section, data.output_path, data.size_bytes, data.sections,
                     ),
-                    vec!["Use hwpforge_inspect to verify the patched output"],
+                    vec!["Use hwpforge_diff (base vs output) to verify only the intended text changed"],
                 );
                 Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
             }
@@ -606,7 +607,7 @@ impl HwpForgeServer {
                         data.output_path,
                         data.size_bytes,
                     ),
-                    vec!["Use hwpforge_inspect or hwpforge_to_md to verify the filled output"],
+                    vec!["Use hwpforge_diff (base vs output) to verify only the intended fields changed"],
                 );
                 Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
             }
@@ -685,6 +686,7 @@ impl HwpForgeServer {
                     vec![
                         "Use hwpforge_fields to list the stamped fields",
                         "Fill them with hwpforge_fill (name→value map)",
+                        "Verify with hwpforge_diff (base vs output): expect added fields + marker text changes only",
                     ],
                 );
                 Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
@@ -727,7 +729,7 @@ impl HwpForgeServer {
                     ),
                     vec![
                         "Each result reports requested/anchor/resolution — covered coordinates were redirected to their merge anchor",
-                        "Verify with hwpforge_to_json (cells carry addr {row,col})",
+                        "Verify with hwpforge_diff (base vs output) — cell changes are reported by {table,row,col}",
                     ],
                 );
                 Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))

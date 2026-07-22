@@ -39,7 +39,7 @@ What does the user want?
 ├─ They have a legacy .hwp file
 │     → convert-hwp5  (.hwp → .hwpx)   then treat it as HWPX
 │
-├─ EDIT an existing .hwpx  ── ALWAYS `inspect` first ──
+├─ EDIT an existing .hwpx  ── ALWAYS `outline` first (nav map), `read` to see targets ──
 │   │
 │   ├─ Fill NAMED click-here fields (누름틀) — form-style templates
 │   │     → fields (discover names) → fill --set name=value    [DELTA, cheapest+safest]
@@ -63,9 +63,12 @@ What does the user want?
 │             제출할 것 — 남겨두면 stale 주소로 GRID_ADDR_INVALID 거부됨
 │             (addr 부재 = 무검사, 존재 = 재파생 격자와 대조)
 │
-├─ Read / export an existing .hwpx
-│     → to-md   (HWPX → Markdown, for reading)
-│     → to-json (HWPX → JSON,    for machine editing)
+├─ Read / export an existing .hwpx — pick by granularity:
+│     → outline (nav map: headings/tables+dims/fields/bookmarks — fetch ONCE first)
+│     → read    (targeted text: --section N [--paras A..B] | --table N | --field NAME)
+│     → inspect (counts summary only)
+│     → to-md   (full lossy flatten, for human reading)
+│     → to-json (whole document JSON, for machine editing ONLY)
 │
 └─ Need the JSON shape, or the list of styles
       → schema        (JSON Schema for document/section types)
@@ -91,7 +94,20 @@ echo "# 제목" | hwpforge convert - -o out.hwpx          # stdin via "-"
 # Legacy HWP5
 hwpforge convert-hwp5 old.hwp -o out.hwpx
 
-# Inspect (ALWAYS before editing)
+# Navigation map (ALWAYS before editing) + targeted reads (E5)
+hwpforge outline doc.hwpx [--json]        # headings / tables(ordinal+dims) / fields / bookmarks
+hwpforge read doc.hwpx --section 0 --paras 2..5   # paragraph text with kinds + content markers
+hwpforge read doc.hwpx --table 3                  # grid text matrix (merged cells appear at anchor)
+hwpforge read doc.hwpx --field 과제명              # one named field
+#   name anchors (heading text, table ordinal, field name) are primary keys;
+#   {section, para} locators go stale after structural edits
+
+# Verify AFTER every edit (E5) — did ONLY the intended delta land?
+hwpforge diff base.hwpx edited.hwpx [--json] [-o report.json]
+#   semantic = field values / cell {table,row,col} / paragraph {section,para} / structure / raw
+#   package  = ZIP entries by bytes; entry-internal layout caches are NOT itemized (report says so)
+
+# Inspect (counts summary)
 hwpforge inspect doc.hwpx [--styles] [--json]
 
 # Named click-here fields (누름틀) — form templates: discover then fill
@@ -232,10 +248,12 @@ different output path — set `-o` to the input path.
 hwpforge patch document.hwpx --section 0 modified.json -o document.hwpx   # default: overwrite
 ```
 
-### Always inspect before editing, always verify after
+### Always outline before editing, always diff after
 
-Run `inspect` first to learn the structure, and `inspect` (or `to-md`) after to confirm the
-edit landed before reporting success.
+Run `outline` first to learn what is where (use `read` for the targets you will touch), and
+`diff base.hwpx edited.hwpx` after every edit to confirm ONLY the intended delta landed
+before reporting success — an unexpected entry in the diff report means stop and re-check,
+not ship.
 
 ## Error Handling
 
