@@ -12,6 +12,7 @@
 //! - `to_md`: Export (HWPX → Markdown)
 
 pub mod convert;
+pub mod diff;
 pub mod fields;
 pub mod fill;
 pub mod from_json;

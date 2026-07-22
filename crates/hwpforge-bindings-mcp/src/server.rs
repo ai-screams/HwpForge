@@ -10,8 +10,8 @@ use serde::Deserialize;
 
 use crate::output::{ToolErrorInfo, ToolOutput};
 use crate::tools::{
-    convert, fields, fill, from_json, inspect, outline, patch, read, restyle, set_cell, stamp,
-    templates, to_json, to_md, validate,
+    convert, diff, fields, fill, from_json, inspect, outline, patch, read, restyle, set_cell,
+    stamp, templates, to_json, to_md, validate,
 };
 use crate::{prompts, resources};
 
@@ -90,6 +90,19 @@ pub struct FieldsRequest {
 pub struct OutlineRequest {
     /// Path to the HWPX file to map.
     pub file_path: String,
+}
+
+/// Request parameters for `hwpforge_diff`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DiffRequest {
+    /// Path to the base HWPX file.
+    pub base_path: String,
+    /// Path to the revised HWPX file.
+    pub revised_path: String,
+    /// Optional path for the full pretty-printed JSON report. Required when
+    /// the report exceeds the 1 MB inline ceiling.
+    #[serde(default)]
+    pub output_path: Option<String>,
 }
 
 /// Request parameters for `hwpforge_read`.
@@ -462,6 +475,38 @@ impl HwpForgeServer {
                         "Use hwpforge_fields + hwpforge_fill for named fields",
                         "Use hwpforge_set_cell with a table ordinal + addr to fill cells",
                         "Use hwpforge_to_json to export for structural editing",
+                    ],
+                );
+                Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
+            }
+            Err(err) => Ok(tool_error_response(err)),
+        }
+    }
+
+    /// Diff two HWPX files: verify what an edit actually changed.
+    #[tool(
+        name = "hwpforge_diff",
+        description = "Compare two HWPX files. semantic channel = decoded Core structure classified into field values, table-cell text {table,row,col}, paragraph text {section,para}, structure counts, and a capped unclassified remainder; package channel = ZIP entries compared by bytes. Run after hwpforge_fill / hwpforge_set_cell / hwpforge_stamp / hwpforge_patch to confirm only the intended delta landed. Wire content inside a changed entry (e.g. layout caches) is not itemized — the report states its comparison levels explicitly."
+    )]
+    async fn hwpforge_diff(
+        &self,
+        Parameters(req): Parameters<DiffRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = tokio::task::spawn_blocking(move || {
+            diff::run_diff(&req.base_path, &req.revised_path, req.output_path.as_deref())
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?;
+
+        match result {
+            Ok(data) => {
+                let summary = data.summary.clone();
+                let output = ToolOutput::new(
+                    &data,
+                    summary,
+                    vec![
+                        "If unexpected changes appear, re-apply the edit from the pristine base",
+                        "Use hwpforge_read to inspect a reported location in detail",
                     ],
                 );
                 Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
