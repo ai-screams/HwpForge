@@ -143,6 +143,22 @@ enum Commands {
         file: PathBuf,
     },
 
+    /// Diff two HWPX files: verify what an edit actually changed.
+    #[command(
+        long_about = "Compare two HWPX files in two channels.\n\nsemantic = decoded Core structure, classified into field values, table-cell text {table, row, col}, paragraph text {section, para}, structure counts, and a capped unclassified remainder. package = ZIP entries compared by bytes (added/removed/changed).\n\nWire content inside a changed entry (e.g. the hp:linesegarray layout cache) is not itemized — the report says so explicitly. Run after fill/set-cell/stamp/patch to confirm only the intended delta landed."
+    )]
+    Diff {
+        /// Base HWPX file.
+        base: PathBuf,
+
+        /// Revised HWPX file to compare against the base.
+        revised: PathBuf,
+
+        /// Also write the full pretty-printed JSON report here.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
     /// Read a targeted text projection: paragraph range, table grid, or field.
     #[command(
         long_about = "Read a targeted text projection without exporting the whole document.\n\nExactly one target: --section N (optionally --paras A..B, inclusive) for paragraph text with outline/list kinds; --table N for the logical grid text matrix (merged regions appear once, at their anchor, with spans); --field NAME for a named click-here field.\n\nNon-text content is never silently dropped — embedded tables/images/controls surface as explicit markers. Read-only: to change what you read, use fill / set-cell / patch."
@@ -347,6 +363,9 @@ fn main() {
         }
         Commands::Outline { file } => {
             commands::outline::run(&file, cli.json);
+        }
+        Commands::Diff { base, revised, output } => {
+            commands::diff::run(&base, &revised, output.as_ref(), cli.json);
         }
         Commands::Read { file, section, paras, table, field } => {
             commands::read::run(

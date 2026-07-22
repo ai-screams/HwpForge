@@ -3117,6 +3117,49 @@ fn read_rejects_conflicting_targets() {
 }
 
 #[test]
+fn diff_self_is_identical_via_cli() {
+    let f = fixture("table_01_basic_2x2.hwpx");
+    let (value, _, code) = run_json(&["diff", f.to_str().unwrap(), f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(value["diff"]["identical"], true);
+}
+
+#[test]
+fn diff_verifies_fill_delta_end_to_end() {
+    let f = fixture("clickhere_named.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("filled.hwpx");
+    let (_, _, fill_code) = run_json(&[
+        "fill",
+        f.to_str().unwrap(),
+        "--set",
+        "user_email=diff@cli.io",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(fill_code, 0);
+
+    let report = tmp.join("report.json");
+    let (value, _, code) = run_json(&[
+        "diff",
+        f.to_str().unwrap(),
+        out.to_str().unwrap(),
+        "-o",
+        report.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+    let semantic = &value["diff"]["semantic"];
+    assert_eq!(semantic["field_values"][0]["name"], "user_email");
+    assert_eq!(semantic["field_values"][0]["after"], "diff@cli.io");
+    assert!(semantic["paragraphs"].as_array().unwrap().is_empty());
+    assert!(semantic["raw"].as_array().unwrap().is_empty());
+    // Full report file written alongside inline output.
+    let report_value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&report).unwrap()).unwrap();
+    assert_eq!(report_value["identical"], false);
+}
+
+#[test]
 fn fill_named_field_end_to_end() {
     let f = fixture("clickhere_named.hwpx");
     let tmp = test_tmp();
