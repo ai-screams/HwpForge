@@ -392,7 +392,7 @@ pub fn apply_set_cells(
 }
 
 /// NFC + Unicode-whitespace trim/collapse.
-fn normalize_label(s: &str) -> String {
+pub(crate) fn normalize_label(s: &str) -> String {
     let nfc: String = s.nfc().collect();
     nfc.split_whitespace().collect::<Vec<_>>().join(" ")
 }

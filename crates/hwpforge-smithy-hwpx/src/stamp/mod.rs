@@ -16,11 +16,13 @@
 //!   plan preflights, then applies atomically
 
 mod apply;
+mod cells;
 mod detect;
 mod plan;
 mod stamper;
 
 pub use apply::{apply, StampAction, StampError, StampOutcome, StampSpec, StampedField};
+pub use cells::{LabelDirection, LabelRef};
 pub use detect::{detect_markers, paragraph_guard, BuiltinPattern, GuardReason, MarkerHit};
 pub use plan::{plan, StampCandidate};
 // E3 cell editing reuses the stamp admission gate (decode→encode→decode
