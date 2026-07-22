@@ -113,11 +113,13 @@ pub struct SectionOutline {
     pub section: usize,
     /// Top-level paragraph count.
     pub paragraphs: usize,
-    /// Table count (including nested).
+    /// Table count in shared-traversal order, **including nested tables** —
+    /// always equal to the number of `tables` entries for this section, so
+    /// the summary and the ordinal list cannot disagree.
     pub tables: usize,
-    /// Image count.
+    /// Top-level image count (body flow).
     pub images: usize,
-    /// Chart count.
+    /// Top-level chart count (body flow).
     pub charts: usize,
 }
 
@@ -171,7 +173,7 @@ impl HwpxReader {
             collect_bookmarks(section, section_idx, &mut seen_bookmarks, &mut bookmarks);
         }
 
-        let tables = tables_in_document(document)
+        let tables: Vec<OutlineTable> = tables_in_document(document)
             .iter()
             .map(|entry| {
                 // First array index in the serde-shaped path is the hosting
@@ -196,6 +198,13 @@ impl HwpxReader {
                 }
             })
             .collect();
+
+        // The summary must agree with the ordinal list: ContentCounts only
+        // sees top-level runs, so nested tables would make "N table(s)"
+        // disagree with the entries below. Recount from the inventory.
+        for summary in &mut sections {
+            summary.tables = tables.iter().filter(|t| t.at.section == summary.section).count();
+        }
 
         // Reuses the shipped discovery surface so `outline` and `fields`
         // cannot disagree (single truth for the field walk); costs one extra
