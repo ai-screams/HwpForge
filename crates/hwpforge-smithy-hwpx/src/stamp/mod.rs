@@ -19,12 +19,17 @@ mod apply;
 mod cells;
 mod detect;
 mod plan;
+mod request;
 mod stamper;
 
 pub use apply::{apply, StampAction, StampError, StampOutcome, StampSpec, StampedField};
 pub use cells::{LabelDirection, LabelRef};
 pub use detect::{detect_markers, paragraph_guard, BuiltinPattern, GuardReason, MarkerHit};
 pub use plan::{plan, StampCandidate};
+pub use request::{
+    parse_stamp_map, CellLabelClaim, CellStampAction, CellStampSpec, StampMap, StampMapError,
+    StampRequestV2, STAMP_MAP_VERSION,
+};
 // E3 cell editing reuses the stamp admission gate (decode→encode→decode
 // no-op equality + ZIP closed-world) so both mutation facades share one
 // fail-closed contract.
