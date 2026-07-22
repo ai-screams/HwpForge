@@ -16,6 +16,7 @@ pub mod fields;
 pub mod fill;
 pub mod from_json;
 pub mod inspect;
+pub mod outline;
 pub mod patch;
 pub mod restyle;
 pub mod set_cell;

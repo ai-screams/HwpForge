@@ -10,8 +10,8 @@ use serde::Deserialize;
 
 use crate::output::{ToolErrorInfo, ToolOutput};
 use crate::tools::{
-    convert, fields, fill, from_json, inspect, patch, restyle, set_cell, stamp, templates, to_json,
-    to_md, validate,
+    convert, fields, fill, from_json, inspect, outline, patch, restyle, set_cell, stamp, templates,
+    to_json, to_md, validate,
 };
 use crate::{prompts, resources};
 
@@ -82,6 +82,13 @@ pub struct PatchRequest {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct FieldsRequest {
     /// Path to the HWPX file to inspect.
+    pub file_path: String,
+}
+
+/// Request parameters for `hwpforge_outline`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct OutlineRequest {
+    /// Path to the HWPX file to map.
     pub file_path: String,
 }
 
@@ -400,6 +407,42 @@ impl HwpForgeServer {
                         data.patched_section, data.output_path, data.size_bytes, data.sections,
                     ),
                     vec!["Use hwpforge_inspect to verify the patched output"],
+                );
+                Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
+            }
+            Err(err) => Ok(tool_error_response(err)),
+        }
+    }
+
+    /// Document navigation map: headings, tables, fields, bookmarks.
+    #[tool(
+        name = "hwpforge_outline",
+        description = "Show the document navigation map for an HWPX file: headings (level + text), tables (ordinal + logical grid dims + addressable), named click-here fields, and bookmarks. Name anchors are the primary keys; {section, para} locators are secondary and go stale after structural edits. Fetch this once before targeted reads or edits."
+    )]
+    async fn hwpforge_outline(
+        &self,
+        Parameters(req): Parameters<OutlineRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = tokio::task::spawn_blocking(move || outline::run_outline(&req.file_path))
+            .await
+            .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?;
+
+        match result {
+            Ok(data) => {
+                let output = ToolOutput::new(
+                    &data,
+                    format!(
+                        "{} heading(s), {} table(s), {} field(s), {} bookmark(s)",
+                        data.outline.headings.len(),
+                        data.outline.tables.len(),
+                        data.outline.fields.len(),
+                        data.outline.bookmarks.len(),
+                    ),
+                    vec![
+                        "Use hwpforge_fields + hwpforge_fill for named fields",
+                        "Use hwpforge_set_cell with a table ordinal + addr to fill cells",
+                        "Use hwpforge_to_json to export for structural editing",
+                    ],
                 );
                 Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
             }
