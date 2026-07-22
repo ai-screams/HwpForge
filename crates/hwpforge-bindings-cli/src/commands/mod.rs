@@ -8,6 +8,7 @@ pub mod from_json;
 pub mod inspect;
 pub mod outline;
 pub mod patch;
+pub mod read;
 pub mod schema;
 pub mod set_cell;
 pub mod stamp;

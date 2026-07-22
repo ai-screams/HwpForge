@@ -3084,6 +3084,39 @@ fn outline_exposes_named_fields_axis() {
 }
 
 #[test]
+fn read_table_grid_matrix_via_cli() {
+    let f = fixture("table_01_basic_2x2.hwpx");
+    let (value, _, code) = run_json(&["read", f.to_str().unwrap(), "--table", "0"]);
+    assert_eq!(code, 0);
+    assert_eq!(value["status"], "ok");
+    assert_eq!(value["table"]["rows"], 2);
+    assert_eq!(value["table"]["cols"], 2);
+    assert_eq!(value["table"]["cells"].as_array().unwrap().len(), 4);
+}
+
+#[test]
+fn read_paragraph_range_and_field_via_cli() {
+    let f = fixture("clickhere_named.hwpx");
+    let (value, _, code) = run_json(&["read", f.to_str().unwrap(), "--field", "user_email"]);
+    assert_eq!(code, 0);
+    assert_eq!(value["fields"][0]["name"], "user_email");
+
+    let (v2, _, c2) = run_json(&["read", f.to_str().unwrap(), "--section", "0", "--paras", "0"]);
+    assert_eq!(c2, 0);
+    assert_eq!(v2["paragraphs"]["from"], 0);
+    assert_eq!(v2["paragraphs"]["to"], 0);
+    assert_eq!(v2["paragraphs"]["paragraphs"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn read_rejects_conflicting_targets() {
+    let f = fixture("clickhere_named.hwpx");
+    let (err, _, code) = run_json(&["read", f.to_str().unwrap(), "--table", "0", "--field", "x"]);
+    assert_eq!(code, 1);
+    assert_eq!(err["code"], "READ_TARGET_REQUIRED");
+}
+
+#[test]
 fn fill_named_field_end_to_end() {
     let f = fixture("clickhere_named.hwpx");
     let tmp = test_tmp();

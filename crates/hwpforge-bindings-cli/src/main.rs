@@ -143,6 +143,31 @@ enum Commands {
         file: PathBuf,
     },
 
+    /// Read a targeted text projection: paragraph range, table grid, or field.
+    #[command(
+        long_about = "Read a targeted text projection without exporting the whole document.\n\nExactly one target: --section N (optionally --paras A..B, inclusive) for paragraph text with outline/list kinds; --table N for the logical grid text matrix (merged regions appear once, at their anchor, with spans); --field NAME for a named click-here field.\n\nNon-text content is never silently dropped — embedded tables/images/controls surface as explicit markers. Read-only: to change what you read, use fill / set-cell / patch."
+    )]
+    Read {
+        /// HWPX file to read.
+        file: PathBuf,
+
+        /// Section index to read paragraphs from.
+        #[arg(long)]
+        section: Option<usize>,
+
+        /// Inclusive paragraph range "A..B" or a single "N" (requires --section).
+        #[arg(long)]
+        paras: Option<String>,
+
+        /// Table ordinal to read as a grid text matrix.
+        #[arg(long)]
+        table: Option<usize>,
+
+        /// Field name to read.
+        #[arg(long)]
+        field: Option<String>,
+    },
+
     /// Fill named click-here fields (누름틀) with values, preserving everything else.
     #[command(
         long_about = "Fill named click-here fields (누름틀) by name, byte-preserving every untouched package entry.\n\nAll requested values are validated first (unknown/duplicate/unfillable names, empty values) and nothing is written unless every one passes. Use `fields` to discover names."
@@ -322,6 +347,16 @@ fn main() {
         }
         Commands::Outline { file } => {
             commands::outline::run(&file, cli.json);
+        }
+        Commands::Read { file, section, paras, table, field } => {
+            commands::read::run(
+                &file,
+                section,
+                paras.as_deref(),
+                table,
+                field.as_deref(),
+                cli.json,
+            );
         }
         Commands::Fields { file } => {
             commands::fields::run(&file, cli.json);
