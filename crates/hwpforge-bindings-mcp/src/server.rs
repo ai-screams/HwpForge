@@ -10,8 +10,8 @@ use serde::Deserialize;
 
 use crate::output::{ToolErrorInfo, ToolOutput};
 use crate::tools::{
-    convert, fields, fill, from_json, inspect, outline, patch, restyle, set_cell, stamp, templates,
-    to_json, to_md, validate,
+    convert, fields, fill, from_json, inspect, outline, patch, read, restyle, set_cell, stamp,
+    templates, to_json, to_md, validate,
 };
 use crate::{prompts, resources};
 
@@ -90,6 +90,26 @@ pub struct FieldsRequest {
 pub struct OutlineRequest {
     /// Path to the HWPX file to map.
     pub file_path: String,
+}
+
+/// Request parameters for `hwpforge_read`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ReadRequest {
+    /// Path to the HWPX file to read.
+    pub file_path: String,
+    /// Section index to read paragraphs from (exactly one of
+    /// section/table/field).
+    #[serde(default)]
+    pub section: Option<usize>,
+    /// Inclusive paragraph range "A..B" or a single "N" (requires section).
+    #[serde(default)]
+    pub paras: Option<String>,
+    /// Table ordinal to read as a grid text matrix.
+    #[serde(default)]
+    pub table: Option<usize>,
+    /// Field name to read.
+    #[serde(default)]
+    pub field: Option<String>,
 }
 
 /// Request parameters for `hwpforge_fill`.
@@ -442,6 +462,45 @@ impl HwpForgeServer {
                         "Use hwpforge_fields + hwpforge_fill for named fields",
                         "Use hwpforge_set_cell with a table ordinal + addr to fill cells",
                         "Use hwpforge_to_json to export for structural editing",
+                    ],
+                );
+                Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
+            }
+            Err(err) => Ok(tool_error_response(err)),
+        }
+    }
+
+    /// Targeted text read: paragraph range, table grid, or field by name.
+    #[tool(
+        name = "hwpforge_read",
+        description = "Read a targeted text projection without exporting the whole document. Exactly one target: section (paragraph range via optional paras \"A..B\") for text with outline/list kinds; table (ordinal) for the logical grid text matrix (merged regions appear once at their anchor with spans); field (name) for a named click-here field. Non-text content surfaces as explicit markers. Read-only: to change what you read, use hwpforge_fill / hwpforge_set_cell / hwpforge_patch."
+    )]
+    async fn hwpforge_read(
+        &self,
+        Parameters(req): Parameters<ReadRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = tokio::task::spawn_blocking(move || {
+            read::run_read(
+                &req.file_path,
+                req.section,
+                req.paras.as_deref(),
+                req.table,
+                req.field.as_deref(),
+            )
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?;
+
+        match result {
+            Ok(data) => {
+                let summary = data.summary();
+                let output = ToolOutput::new(
+                    &data,
+                    summary,
+                    vec![
+                        "Use hwpforge_fill to fill named fields",
+                        "Use hwpforge_set_cell to fill table cells by addr",
+                        "Use hwpforge_to_json + hwpforge_patch for text edits beyond fields/cells",
                     ],
                 );
                 Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
