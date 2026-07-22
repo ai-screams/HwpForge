@@ -18,6 +18,7 @@ use hwpforge_core::Control;
 
 use super::apply::{apply, StampAction, StampError, StampOutcome, StampSpec};
 use super::apply_cells::{commit_cells, preflight_cells, CellStampError, CellStampOutcome};
+use super::cells::plan_cells;
 use super::plan::{plan, StampCandidate};
 use super::request::{CellLabelClaim, StampRequestV2};
 use crate::decoder::{HwpxDecoder, HwpxDocument};
@@ -200,6 +201,27 @@ impl HwpxStamper {
     pub fn plan_bytes(base: &[u8]) -> Result<Vec<StampCandidate>, StamperError> {
         let decoded = HwpxDecoder::decode(base).map_err(|e| StamperError::Codec(e.to_string()))?;
         Ok(plan(&decoded.document))
+    }
+
+    /// Decodes the input and enumerates BOTH candidate classes (v2 plan).
+    ///
+    /// Discovery only — no admission gate, no mutation. The returned
+    /// `source_sha256` must be copied verbatim into the v2 map so
+    /// [`HwpxStamper::stamp_v2`] can reject drifted inputs.
+    ///
+    /// # Errors
+    ///
+    /// [`StamperError::Codec`] when the input fails to decode.
+    pub fn plan_bytes_v2(base: &[u8]) -> Result<StampPlanV2, StamperError> {
+        let decoded = HwpxDecoder::decode(base).map_err(|e| StamperError::Codec(e.to_string()))?;
+        let cells = plan_cells(&decoded.document);
+        Ok(StampPlanV2 {
+            schema_version: super::request::STAMP_MAP_VERSION,
+            source_sha256: sha256_hex(base),
+            text: plan(&decoded.document),
+            cells: cells.candidates,
+            skipped_tables: cells.skipped_tables,
+        })
     }
 
     /// Stamps the input with the approved specs, all-or-nothing.
@@ -404,6 +426,24 @@ fn stamped_cell_failure(
             stamped.table, stamped.at.row, stamped.at.col, stamped.name
         ),
     }
+}
+
+/// Result of [`HwpxStamper::plan_bytes_v2`]: both candidate classes plus
+/// the source hash the approval map must pin.
+#[derive(Debug, Clone, Serialize)]
+pub struct StampPlanV2 {
+    /// The map schema version this plan feeds
+    /// ([`super::request::STAMP_MAP_VERSION`]).
+    pub schema_version: u32,
+    /// SHA-256 (hex) of the input bytes — copy into the v2 map verbatim.
+    pub source_sha256: String,
+    /// Class-A text candidates (same shape as [`HwpxStamper::plan_bytes`]).
+    pub text: Vec<StampCandidate>,
+    /// Class-B cell candidates.
+    pub cells: Vec<super::cells::CellStampCandidate>,
+    /// Tables excluded from cell detection (invalid grid) — explicit
+    /// incomplete-coverage diagnostics.
+    pub skipped_tables: Vec<super::cells::SkippedTable>,
 }
 
 /// Result of a successful [`HwpxStamper::stamp_v2`].

@@ -109,10 +109,19 @@ pub struct StampPlanRequest {
 pub struct StampRequest {
     /// Path to the HWPX file to stamp.
     pub file_path: String,
-    /// Approved specs: one per candidate from hwpforge_stamp_plan, each with
-    /// an action ({"field":{"name":"…"}} or "ignore"). Every unguarded
-    /// candidate must be covered (all-or-nothing).
+    /// Approved text specs: one per candidate from hwpforge_stamp_plan,
+    /// each with an action ({"field":{"name":"…"}} or "ignore"). Every
+    /// unguarded candidate must be covered (all-or-nothing).
+    #[serde(default)]
     pub specs: Vec<hwpforge_smithy_hwpx::stamp::StampSpec>,
+    /// Approved cell specs (class-B, from hwpforge_stamp_plan `cells`).
+    /// Field actions REQUIRE a non-blank hint; presence of any cell spec
+    /// requires `source_sha256`.
+    #[serde(default)]
+    pub cells: Vec<hwpforge_smithy_hwpx::stamp::CellStampSpec>,
+    /// SHA-256 of the input from hwpforge_stamp_plan — mandatory with
+    /// `cells` (drift pinning); selects the v2 pipeline when present.
+    pub source_sha256: Option<String>,
     /// Output HWPX file path. Must end with `.hwpx`.
     pub output_path: String,
     /// Manifest JSON path (default: `<output>.manifest.json`).
@@ -475,9 +484,14 @@ impl HwpForgeServer {
             Ok(data) => {
                 let output = ToolOutput::new(
                     &data,
-                    format!("{} stamp candidate(s) found", data.candidates.len()),
+                    format!(
+                        "{} text + {} cell stamp candidate(s) found",
+                        data.candidates.len(),
+                        data.cells.len()
+                    ),
                     vec![
                         "Author one spec per candidate: {\"field\":{\"name\":\"…\"}} or \"ignore\"",
+                        "Cell specs need a non-blank hint and the plan's source_sha256",
                         "Then call hwpforge_stamp with the full spec list (all-or-nothing)",
                     ],
                 );
@@ -500,6 +514,8 @@ impl HwpForgeServer {
             stamp::run_stamp(
                 &req.file_path,
                 &req.specs,
+                &req.cells,
+                req.source_sha256.as_deref(),
                 &req.output_path,
                 req.manifest_path.as_deref(),
             )
@@ -512,8 +528,9 @@ impl HwpForgeServer {
                 let output = ToolOutput::new(
                     &data,
                     format!(
-                        "Stamped {} field(s) (ignored {}, guarded-skipped {}) → {}",
+                        "Stamped {} text + {} cell field(s) (ignored {}, guarded-skipped {}) → {}",
                         data.stamped.len(),
+                        data.stamped_cells.len(),
                         data.ignored,
                         data.skipped_guarded,
                         data.output_path,

@@ -38,6 +38,6 @@ pub use request::{
 pub(crate) use stamper::{admission_compare, check_zip_carry, encode_hwpx};
 pub use stamper::{
     HwpxStamper, ManifestField, ManifestFieldV2, StampManifest, StampManifestV2, StampMeta,
-    StampOriginV2, StampOutcomeV2, StampResult, StampResultV2, StamperError,
+    StampOriginV2, StampOutcomeV2, StampPlanV2, StampResult, StampResultV2, StamperError,
     STAMP_MANIFEST_V2_VERSION, STAMP_MANIFEST_VERSION,
 };
