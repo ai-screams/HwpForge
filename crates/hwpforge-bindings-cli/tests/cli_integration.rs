@@ -3588,6 +3588,36 @@ fn structural_edit_batch_and_structural_rejections() {
     assert_eq!(c, 0);
     assert_eq!(v["position"], "before");
     assert_eq!(v["anchor"], 2);
+
+    // delete-para text-mode success prints "Wrote ...".
+    let (stdout, _, c) = run(&[
+        "delete-para",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        "--index",
+        "2",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(c, 0);
+    assert!(stdout.contains("Wrote"), "stdout: {stdout}");
+
+    // Non-HWPX input → codec error, exit code 2.
+    let garbage = tmp.join("g.hwpx");
+    std::fs::write(&garbage, b"not a zip").unwrap();
+    let (err, _, c) = run_json(&[
+        "delete-para",
+        garbage.to_str().unwrap(),
+        "--section",
+        "0",
+        "--index",
+        "0",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(c, 2);
+    assert_eq!(err["code"], "STRUCTURAL_CODEC");
 }
 
 #[test]
