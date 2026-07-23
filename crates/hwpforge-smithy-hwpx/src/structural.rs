@@ -806,6 +806,28 @@ mod tests {
     }
 
     #[test]
+    fn scan_saturates_with_all_reference_kinds_present() {
+        // A paragraph carrying a bookmark AND a cross-ref AND an inst_id-bearing
+        // control exercises the scan's early-out once all three axes are set.
+        let mut p = para();
+        p.runs.push(Run::control(Control::bookmark("b"), CharShapeIndex::new(0)));
+        p.runs.push(Run::control(
+            Control::CrossRef {
+                target: RefTarget::Object(ObjectId::new(1)),
+                ref_type: RefType::Table,
+                content_type: RefContentType::Number,
+                as_hyperlink: false,
+                display_text: String::new(),
+            },
+            CharShapeIndex::new(0),
+        ));
+        p.runs
+            .push(Run::control(Control::footnote_with_id(9, vec![para()]), CharShapeIndex::new(0)));
+        let scan = scan_paragraph_references(&p);
+        assert!(scan.bookmark && scan.cross_ref && scan.object_id);
+    }
+
+    #[test]
     fn cross_ref_is_detected() {
         let ctrl = Control::CrossRef {
             target: RefTarget::Object(ObjectId::new(9)),
