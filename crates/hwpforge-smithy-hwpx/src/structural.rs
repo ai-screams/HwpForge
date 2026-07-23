@@ -1223,6 +1223,42 @@ mod tests {
     }
 
     #[test]
+    fn renumber_paragraph_ids_rewrites_sequentially_and_skips_missing_id() {
+        // Direct helper coverage: sequential rewrite + a `<hp:p>` with no id
+        // attribute (the skip branch) + values preserved.
+        let xml = concat!(
+            "<hs:sec>",
+            "<hp:p id=\"7\"><hp:run><hp:t>a</hp:t></hp:run></hp:p>",
+            "<hp:p paraPrIDRef=\"3\"><hp:run><hp:t>b</hp:t></hp:run></hp:p>",
+            "<hp:p id=\"9\"><hp:run><hp:t>c</hp:t></hp:run></hp:p>",
+            "</hs:sec>"
+        );
+        let out = renumber_paragraph_ids(xml).unwrap();
+        // First paragraph id 7→0; second has no id (unchanged); third 9→2.
+        assert!(out.contains("<hp:p id=\"0\">"), "out: {out}");
+        assert!(out.contains("<hp:p paraPrIDRef=\"3\">"), "no-id paragraph untouched");
+        assert!(out.contains("<hp:p id=\"2\">"), "out: {out}");
+        for t in ["<hp:t>a</hp:t>", "<hp:t>b</hp:t>", "<hp:t>c</hp:t>"] {
+            assert!(out.contains(t));
+        }
+    }
+
+    #[test]
+    fn paragraph_spans_errors_without_a_section_root() {
+        assert!(matches!(paragraph_spans("<other/>"), Err(StructuralEditError::Codec(_))));
+    }
+
+    #[test]
+    fn strip_line_segs_from_index_past_end_is_noop() {
+        let xml = concat!(
+            "<hs:sec><hp:p id=\"0\"><hp:run><hp:t>x</hp:t></hp:run>",
+            "<hp:linesegarray><hp:lineseg vertpos=\"0\"/></hp:linesegarray></hp:p></hs:sec>"
+        );
+        let out = strip_line_segs_from(xml, 5).unwrap();
+        assert_eq!(out, xml, "no paragraph at or past the index → unchanged");
+    }
+
+    #[test]
     fn every_error_variant_renders_a_message() {
         // Exercises the Display impl for the whole closed rejection set — each
         // fail-closed reason must produce a human-readable diagnostic.
