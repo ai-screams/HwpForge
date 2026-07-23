@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.5](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.11.4...hwpforge-smithy-hwpx-v0.11.5) - 2026-07-23
+
+### Added
+
+- *(hwpx)* HwpxDiffer — 두 문서 diff (semantic+package 2채널)
+
+- *(hwpx)* read 부분 projection — 문단범위/표격자/필드
+
+- *(hwpx)* outline 항법 지도 projection (HwpxReader)
+
+
+### Fixed
+
+- *(hwpx)* diff 필드 스트립을 field 축 커버리지로 한정 + 리뷰 상환
+
+- *(hwpx)* outline 섹션 요약 표 카운트를 ordinal 목록과 정합
+
+
 ## [0.11.4](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.11.3...hwpforge-smithy-hwpx-v0.11.4) - 2026-07-22
 
 ### Added

@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.5](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.11.4...hwpforge-bindings-mcp-v0.11.5) - 2026-07-23
+
+### Added
+
+- *(mcp)* hwpforge_diff 툴 — 편집 검증
+
+- *(mcp)* hwpforge_read 툴 — 표적 텍스트 읽기
+
+- *(mcp)* hwpforge_outline 툴 — 문서 항법 지도
+
+
+### Documentation
+
+- docs(skill)+feat(mcp): 스킬 축소 — outline→read→편집→diff 흐름으로 국소 교체
+
+
+### Fixed
+
+- *(hwpx)* diff 필드 스트립을 field 축 커버리지로 한정 + 리뷰 상환
+
+
 ## [0.11.4](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.11.3...hwpforge-bindings-mcp-v0.11.4) - 2026-07-22
 
 ### Added
