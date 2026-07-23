@@ -11,7 +11,7 @@ use serde::Deserialize;
 use crate::output::{ToolErrorInfo, ToolOutput};
 use crate::tools::{
     convert, diff, fields, fill, from_json, inspect, outline, patch, read, restyle, set_cell,
-    stamp, templates, to_json, to_md, validate,
+    stamp, structural, templates, to_json, to_md, validate,
 };
 use crate::{prompts, resources};
 
@@ -90,6 +90,37 @@ pub struct FieldsRequest {
 pub struct OutlineRequest {
     /// Path to the HWPX file to map.
     pub file_path: String,
+}
+
+/// Request parameters for `hwpforge_delete_para`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DeleteParaRequest {
+    /// Path to the HWPX file to edit.
+    pub file_path: String,
+    /// Section index.
+    pub section: usize,
+    /// Top-level paragraph indices to delete (all-or-nothing).
+    pub indices: Vec<usize>,
+    /// Output HWPX file path.
+    pub output_path: String,
+}
+
+/// Request parameters for `hwpforge_insert_para`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct InsertParaRequest {
+    /// Path to the HWPX file to edit.
+    pub file_path: String,
+    /// Section index.
+    pub section: usize,
+    /// Anchor paragraph index (the new paragraph inherits its shape).
+    pub anchor: usize,
+    /// Insert before the anchor instead of after.
+    #[serde(default)]
+    pub before: bool,
+    /// Plain text of the new paragraph (single line).
+    pub text: String,
+    /// Output HWPX file path.
+    pub output_path: String,
 }
 
 /// Request parameters for `hwpforge_diff`.
@@ -509,6 +540,69 @@ impl HwpForgeServer {
                         "If unexpected changes appear, re-apply the edit from the pristine base",
                         "Use hwpforge_read to inspect a reported location in detail",
                     ],
+                );
+                Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
+            }
+            Err(err) => Ok(tool_error_response(err)),
+        }
+    }
+
+    /// Delete top-level paragraphs (structural edit).
+    #[tool(
+        name = "hwpforge_delete_para",
+        description = "Delete top-level body paragraphs by index, all-or-nothing, preserving every other byte. Fail-closed: refuses a paragraph carrying a reference (bookmark/cross-ref/footnote/…), a hard page/column break, the section properties (the first paragraph), or that would empty the section. Only round-trip-safe inputs are editable. Verify the result with hwpforge_diff."
+    )]
+    async fn hwpforge_delete_para(
+        &self,
+        Parameters(req): Parameters<DeleteParaRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = tokio::task::spawn_blocking(move || {
+            structural::run_delete_para(&req.file_path, req.section, &req.indices, &req.output_path)
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?;
+
+        match result {
+            Ok(data) => {
+                let output = ToolOutput::new(
+                    &data,
+                    data.change.clone(),
+                    vec!["Verify with hwpforge_diff (base vs output) — expect only the removed paragraphs"],
+                );
+                Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
+            }
+            Err(err) => Ok(tool_error_response(err)),
+        }
+    }
+
+    /// Insert a new paragraph relative to an anchor (structural edit).
+    #[tool(
+        name = "hwpforge_insert_para",
+        description = "Insert one new top-level paragraph before or after an anchor paragraph, preserving every other byte. The new paragraph inherits the anchor's paragraph and character shape (no style is invented); text is a single line of plain text. Insert-before the section's first paragraph is refused. Only round-trip-safe inputs are editable. Verify with hwpforge_diff."
+    )]
+    async fn hwpforge_insert_para(
+        &self,
+        Parameters(req): Parameters<InsertParaRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = tokio::task::spawn_blocking(move || {
+            structural::run_insert_para(
+                &req.file_path,
+                req.section,
+                req.anchor,
+                req.before,
+                &req.text,
+                &req.output_path,
+            )
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?;
+
+        match result {
+            Ok(data) => {
+                let output = ToolOutput::new(
+                    &data,
+                    data.change.clone(),
+                    vec!["Verify with hwpforge_diff (base vs output) — expect only the added paragraph"],
                 );
                 Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
             }

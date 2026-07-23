@@ -23,6 +23,7 @@ pub mod read;
 pub mod restyle;
 pub mod set_cell;
 pub mod stamp;
+pub mod structural;
 pub mod templates;
 pub mod to_json;
 pub mod to_md;
