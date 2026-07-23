@@ -165,4 +165,59 @@ mod tests {
         let err = run_delete_para(&base, 0, &[], out.to_str().unwrap()).unwrap_err();
         assert_eq!(err.code, "DELETE_NO_TARGET");
     }
+
+    #[test]
+    fn error_code_mapping_covers_common_rejections() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = base_doc(&dir);
+        let out = dir.path().join("out.hwpx");
+
+        // out-of-range anchor / index.
+        let err = run_insert_para(&base, 0, 99, false, "x", out.to_str().unwrap()).unwrap_err();
+        assert_eq!(err.code, "INDEX_OUT_OF_RANGE");
+        let err = run_delete_para(&base, 9, &[0], out.to_str().unwrap()).unwrap_err();
+        assert_eq!(err.code, "INDEX_OUT_OF_RANGE");
+
+        // multiline text.
+        let err = run_insert_para(&base, 0, 1, false, "a\nb", out.to_str().unwrap()).unwrap_err();
+        assert_eq!(err.code, "MULTI_PARAGRAPH_TEXT");
+
+        // duplicate target in a batch.
+        let err = run_delete_para(&base, 0, &[1, 1], out.to_str().unwrap()).unwrap_err();
+        assert_eq!(err.code, "DUPLICATE_TARGET");
+
+        // decode failure on non-HWPX input.
+        let garbage = dir.path().join("g.hwpx");
+        std::fs::write(&garbage, b"not a zip").unwrap();
+        let err =
+            run_delete_para(garbage.to_str().unwrap(), 0, &[0], out.to_str().unwrap()).unwrap_err();
+        assert_eq!(err.code, "STRUCTURAL_CODEC");
+    }
+
+    fn fixture(rel: &str) -> String {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/structural")
+            .join(rel)
+            .to_str()
+            .unwrap()
+            .to_string()
+    }
+
+    #[test]
+    fn error_code_mapping_reference_and_roundtrip() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("out.hwpx");
+
+        let err = run_delete_para(&fixture("crossref_para.hwpx"), 0, &[0], out.to_str().unwrap())
+            .unwrap_err();
+        assert_eq!(err.code, "REFERENCE_STRANDED");
+
+        let err = run_delete_para(&fixture("page_break.hwpx"), 0, &[1], out.to_str().unwrap())
+            .unwrap_err();
+        assert_eq!(err.code, "HARD_BREAK_LOSS");
+
+        let err = run_delete_para(&fixture("plain_inserted.hwpx"), 0, &[1], out.to_str().unwrap())
+            .unwrap_err();
+        assert_eq!(err.code, "INPUT_NOT_ROUNDTRIP_SAFE");
+    }
 }

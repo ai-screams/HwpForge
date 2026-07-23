@@ -255,6 +255,11 @@ impl HwpxStructuralEditor {
         base: &[u8],
         targets: &[ParagraphLocator],
     ) -> Result<Vec<u8>, StructuralEditError> {
+        // Deleting nothing is a byte-identical no-op (the CLI/MCP surfaces nudge
+        // the caller with an explicit "no target" error instead).
+        if targets.is_empty() {
+            return Ok(base.to_vec());
+        }
         // ── input admission: base must round-trip so we can verify ──
         let d0 =
             HwpxDecoder::decode(base).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
@@ -363,6 +368,9 @@ impl HwpxStructuralEditor {
             // (a document with no linesegarray renders correctly — our own
             // encoder emits none). Paragraphs above the edit keep valid caches.
             out = strip_line_segs_from(&out, first_changed)?;
+            // Delete leaves gaps in the sequential `<hp:p id>`; renumber so the
+            // wire stays canonical (unique, contiguous).
+            out = renumber_paragraph_ids(&out)?;
             package.replace_text_entry(&path, out);
         }
         let bytes = package.write().map_err(|e| StructuralEditError::Codec(e.to_string()))?;
@@ -471,6 +479,15 @@ impl HwpxStructuralEditor {
             .read_text_entry(&path)
             .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
         let encoded_spans = paragraph_spans(&encoded_xml)?;
+        // The encoded doc has one more paragraph than the base; guard the index
+        // so an encoder invariant break fails gracefully instead of panicking.
+        if insert_index >= encoded_spans.len() {
+            return Err(StructuralEditError::SpanCountMismatch {
+                section: anchor.section,
+                decoded: section.paragraphs.len() + 1,
+                wire: encoded_spans.len(),
+            });
+        }
         let new_para_bytes = encoded_xml[encoded_spans[insert_index].clone()].to_string();
 
         // ── splice the new paragraph's bytes into the ORIGINAL section XML ──
@@ -508,6 +525,10 @@ impl HwpxStructuralEditor {
         // every paragraph below it shifts down, so its cumulative-vertpos
         // cache is stale — strip from the insertion point onward.
         out = strip_line_segs_from(&out, insert_index)?;
+        // The transplanted paragraph carries the encoded document's id (a
+        // different numbering than the original wire), so renumber every
+        // `<hp:p id>` sequentially to keep ids unique and contiguous.
+        out = renumber_paragraph_ids(&out)?;
         package.replace_text_entry(&path, out);
         let bytes = package.write().map_err(|e| StructuralEditError::Codec(e.to_string()))?;
 
@@ -538,33 +559,56 @@ impl HwpxStructuralEditor {
 /// stale; dropping them lets the renderer recompute (a document with no
 /// linesegarray renders correctly). Paragraphs above the edit keep their
 /// valid caches.
+///
+/// Only the paragraph's **direct-child** `linesegarray` is removed — a nested
+/// table's cell caches (which appear earlier in byte order) are left alone.
 fn strip_line_segs_from(xml: &str, from_index: usize) -> Result<String, StructuralEditError> {
     let spans = paragraph_spans(xml)?;
     let mut removals: Vec<std::ops::Range<usize>> = Vec::new();
     for span in spans.into_iter().skip(from_index) {
-        let frag = &xml[span.clone()];
-        let Some(open_rel) = frag.find("<hp:linesegarray") else {
-            continue;
-        };
-        // The opening tag ends at the first '>' (linesegarray carries no
-        // attributes in Hancom output).
-        let Some(gt_rel) = frag[open_rel..].find('>') else {
-            continue;
-        };
-        let self_closing = frag.as_bytes().get(open_rel + gt_rel - 1) == Some(&b'/');
-        let end_rel = if self_closing {
-            open_rel + gt_rel + 1
-        } else if let Some(close_rel) = frag[open_rel..].find("</hp:linesegarray>") {
-            open_rel + close_rel + "</hp:linesegarray>".len()
-        } else {
-            continue;
-        };
-        removals.push((span.start + open_rel)..(span.start + end_rel));
+        // Depth-aware: `<hp:linesegarray>` is a direct child of `<hp:p>`; a
+        // substring search would wrongly hit a cell paragraph's cache first.
+        let lsa = collect_direct_child_outer_spans(xml, span.clone(), b"hp:linesegarray")
+            .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+        removals.extend(lsa);
     }
     removals.sort_unstable_by(|a, b| b.start.cmp(&a.start));
     let mut out = xml.to_string();
     for r in removals {
         out.replace_range(r, "");
+    }
+    Ok(out)
+}
+
+/// Renumbers the `id` attribute of every direct-child `<hp:p>` to its sequential
+/// index (the encoder's canonical scheme). A byte-splice insert transplants a
+/// paragraph carrying the *encoded* document's id, and delete leaves gaps — both
+/// break `<hp:p id>` uniqueness/contiguity, which downstream consumers
+/// (e.g. `settings.xml` `paraIDRef`) rely on. Ids are wire-only (Core has no
+/// `id` field), so this does not affect the reverse-delta self-verify.
+///
+/// Note: paragraph ids are a distinct id-space from cross-reference targets
+/// (`ObjectId`/`inst_id`), so renumbering never disturbs a cross-reference.
+fn renumber_paragraph_ids(xml: &str) -> Result<String, StructuralEditError> {
+    let spans = paragraph_spans(xml)?;
+    // (byte range of the id value, new value) — applied descending.
+    let mut edits: Vec<(std::ops::Range<usize>, String)> = Vec::new();
+    for (i, span) in spans.iter().enumerate() {
+        let open_end = xml[span.clone()].find('>').map_or(span.end, |r| span.start + r);
+        let opening = &xml[span.start..open_end];
+        let Some(id_rel) = opening.find("id=\"") else {
+            continue;
+        };
+        let val_start = span.start + id_rel + 4;
+        let Some(q_rel) = xml[val_start..open_end].find('"') else {
+            continue;
+        };
+        edits.push((val_start..(val_start + q_rel), i.to_string()));
+    }
+    edits.sort_unstable_by(|a, b| b.0.start.cmp(&a.0.start));
+    let mut out = xml.to_string();
+    for (range, value) in edits {
+        out.replace_range(range, &value);
     }
     Ok(out)
 }
@@ -604,10 +648,14 @@ fn remove_targets(document: &mut Document<Draft>, targets: &[ParagraphLocator]) 
 /// The scan is an exhaustive `serde_json` structure walk: serde visits every
 /// field of the paragraph and everything nested under it — captions, group
 /// children, table cells, and container paragraphs (text box / footnote /
-/// endnote / ellipse / polygon / memo bodies) — so **no container can be
-/// missed**. A typed walker would risk overlooking one of the ~15 nested
-/// container sites; for a safety rule where a miss means silent corruption,
-/// provable completeness is worth more than type-elegance.
+/// endnote / ellipse / polygon / memo bodies) — so **no structured container
+/// can be missed**. A typed walker would risk overlooking one of the ~15
+/// nested container sites; for a safety rule where a miss means silent
+/// corruption, provable completeness is worth more than type-elegance.
+///
+/// The walk does not descend into opaque string payloads (`Control::Unknown`
+/// raw bytes, embedded-chart XML); nothing in the model references those as
+/// cross-ref targets, so a reference cannot be stranded through them.
 ///
 /// The conservative rule needs only *presence*; measuring which id is
 /// referenced by whom (to allow deleting a bookmark that nothing points at)
@@ -1049,5 +1097,134 @@ mod tests {
         )
         .expect("insert");
         assert_eq!(body_texts(&out)[2], "a < b & c > d");
+    }
+
+    #[test]
+    fn insert_rejects_out_of_range_anchor() {
+        let base = fixture("plain_paragraphs.hwpx");
+        assert!(matches!(
+            HwpxStructuralEditor::insert_paragraph(
+                &base,
+                &insertion(0, 99, InsertPosition::After, "x")
+            ),
+            Err(StructuralEditError::ParagraphOutOfRange { .. })
+        ));
+        assert!(matches!(
+            HwpxStructuralEditor::insert_paragraph(
+                &base,
+                &insertion(9, 0, InsertPosition::After, "x")
+            ),
+            Err(StructuralEditError::SectionOutOfRange { .. })
+        ));
+    }
+
+    #[test]
+    fn insert_rejects_non_hwpx_bytes() {
+        assert!(matches!(
+            HwpxStructuralEditor::insert_paragraph(
+                b"not a zip",
+                &insertion(0, 0, InsertPosition::After, "x")
+            ),
+            Err(StructuralEditError::Codec(_))
+        ));
+    }
+
+    fn paragraph_ids(bytes: &[u8]) -> Vec<u32> {
+        let pkg = RawPackage::read(bytes).unwrap();
+        let xml = pkg.read_text_entry("Contents/section0.xml").unwrap();
+        let mut ids = Vec::new();
+        let mut rest = xml.as_str();
+        while let Some(rel) = rest.find("<hp:p ") {
+            rest = &rest[rel + 6..];
+            if let Some(idrel) = rest.find("id=\"") {
+                let after = &rest[idrel + 4..];
+                if let Some(q) = after.find('"') {
+                    if let Ok(v) = after[..q].parse::<u32>() {
+                        ids.push(v);
+                    }
+                }
+            }
+        }
+        ids
+    }
+
+    #[test]
+    fn insert_keeps_paragraph_ids_unique_and_contiguous() {
+        // Review H1: a transplanted paragraph must not duplicate a wire id.
+        let base = fixture("plain_paragraphs.hwpx");
+        let out = HwpxStructuralEditor::insert_paragraph(
+            &base,
+            &insertion(0, 1, InsertPosition::After, "삽입"),
+        )
+        .expect("insert");
+        let ids = paragraph_ids(&out);
+        assert_eq!(ids, (0..ids.len() as u32).collect::<Vec<_>>(), "ids must be 0..N contiguous");
+    }
+
+    #[test]
+    fn delete_keeps_paragraph_ids_contiguous() {
+        // Review H1: delete must not leave a gap in the sequential ids.
+        let base = fixture("plain_paragraphs.hwpx");
+        let out = HwpxStructuralEditor::delete_paragraphs(&base, &[loc(0, 2)]).expect("delete");
+        let ids = paragraph_ids(&out);
+        assert_eq!(ids, (0..ids.len() as u32).collect::<Vec<_>>(), "ids must be 0..N contiguous");
+    }
+
+    #[test]
+    fn delete_no_targets_is_byte_identical_noop() {
+        let base = fixture("plain_paragraphs.hwpx");
+        let out = HwpxStructuralEditor::delete_paragraphs(&base, &[]).expect("noop");
+        assert_eq!(out, base, "empty delete must return the input unchanged");
+    }
+
+    #[test]
+    fn strip_line_segs_targets_only_direct_child_of_paragraph() {
+        // A paragraph whose <hp:p> hosts a nested table: the cell paragraph's
+        // linesegarray appears earlier in byte order, but only the paragraph's
+        // own direct-child cache must be stripped.
+        let xml = concat!(
+            "<hs:sec>",
+            "<hp:p id=\"0\"><hp:run><hp:t>x</hp:t></hp:run>",
+            "<hp:linesegarray><hp:lineseg vertpos=\"0\"/></hp:linesegarray></hp:p>",
+            "<hp:p id=\"1\"><hp:run><hp:tbl><hp:tr><hp:tc><hp:subList>",
+            "<hp:p id=\"0\"><hp:run><hp:t>cell</hp:t></hp:run>",
+            "<hp:linesegarray><hp:lineseg vertpos=\"9\"/></hp:linesegarray></hp:p>",
+            "</hp:subList></hp:tc></hp:tr></hp:tbl></hp:run>",
+            "<hp:linesegarray><hp:lineseg vertpos=\"1600\"/></hp:linesegarray></hp:p>",
+            "</hs:sec>"
+        );
+        let out = strip_line_segs_from(xml, 1).unwrap();
+        // The paragraph's own cache (vertpos 1600) is gone; the cell cache stays.
+        assert!(!out.contains("vertpos=\"1600\""), "top-level cache must be stripped");
+        assert!(out.contains("vertpos=\"9\""), "nested cell cache must be preserved");
+        assert!(out.contains("vertpos=\"0\""), "pre-edit cache preserved");
+    }
+
+    #[test]
+    fn every_error_variant_renders_a_message() {
+        // Exercises the Display impl for the whole closed rejection set — each
+        // fail-closed reason must produce a human-readable diagnostic.
+        let variants = [
+            StructuralEditError::Codec("x".into()),
+            StructuralEditError::NotRoundTripSafe {
+                component: "document".into(),
+                diff_path: "$".into(),
+            },
+            StructuralEditError::UncarriedZipEntries { entries: vec!["a".into()] },
+            StructuralEditError::SectionOutOfRange { section: 1, available: 1 },
+            StructuralEditError::ParagraphOutOfRange { section: 0, index: 9, available: 4 },
+            StructuralEditError::DuplicateTarget { section: 0, index: 1 },
+            StructuralEditError::ReferenceStranded { section: 0, index: 1 },
+            StructuralEditError::HardBreakLoss { section: 0, index: 1 },
+            StructuralEditError::EmptySection { section: 0 },
+            StructuralEditError::SectionPropertiesParagraph { section: 0, index: 0 },
+            StructuralEditError::SpanCountMismatch { section: 0, decoded: 4, wire: 5 },
+            StructuralEditError::DeltaMismatch { detail: "d".into() },
+            StructuralEditError::MultiParagraphText,
+            StructuralEditError::InsertBeforeSectionProperties { section: 0, index: 0 },
+        ];
+        for v in &variants {
+            assert!(!v.to_string().is_empty(), "variant {v:?} must render");
+        }
     }
 }
