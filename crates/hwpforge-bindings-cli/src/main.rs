@@ -159,6 +159,56 @@ enum Commands {
         output: Option<PathBuf>,
     },
 
+    /// Delete top-level paragraphs (structural edit, E4).
+    #[command(
+        long_about = "Delete top-level body paragraphs by index, all-or-nothing, preserving every other byte.\n\nFail-closed: refuses to delete a paragraph that carries a reference (bookmark/cross-ref/footnote/…), a hard page/column break, the section properties (secPr, the first paragraph), or that would empty the section. Only round-trip-safe inputs are editable. Verify with `diff base out`."
+    )]
+    DeletePara {
+        /// HWPX file to edit.
+        file: PathBuf,
+
+        /// Section index.
+        #[arg(long)]
+        section: usize,
+
+        /// Top-level paragraph index to delete (repeatable for a batch).
+        #[arg(long = "index", num_args = 1..)]
+        indices: Vec<usize>,
+
+        /// Output HWPX file path.
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+
+    /// Insert a new paragraph relative to an anchor (structural edit, E4).
+    #[command(
+        long_about = "Insert one new top-level paragraph before or after an anchor paragraph, preserving every other byte.\n\nThe new paragraph inherits the anchor's paragraph and character shape (no style is invented); --text is a single line of plain text (the encoder escapes it). Insert-before the section's first paragraph (secPr carrier) is refused. Only round-trip-safe inputs are editable. Verify with `diff base out`."
+    )]
+    InsertPara {
+        /// HWPX file to edit.
+        file: PathBuf,
+
+        /// Section index.
+        #[arg(long)]
+        section: usize,
+
+        /// Anchor paragraph index (shape is inherited from it).
+        #[arg(long)]
+        anchor: usize,
+
+        /// Insert before the anchor instead of after.
+        #[arg(long)]
+        before: bool,
+
+        /// Plain text of the new paragraph (single line).
+        #[arg(long)]
+        text: String,
+
+        /// Output HWPX file path.
+        #[arg(short, long)]
+        output: PathBuf,
+    },
+
     /// Read a targeted text projection: paragraph range, table grid, or field.
     #[command(
         long_about = "Read a targeted text projection without exporting the whole document.\n\nExactly one target: --section N (optionally --paras A..B, inclusive) for paragraph text with outline/list kinds; --table N for the logical grid text matrix (merged regions appear once, at their anchor, with spans); --field NAME for a named click-here field.\n\nNon-text content is never silently dropped — embedded tables/images/controls surface as explicit markers. Read-only: to change what you read, use fill / set-cell / patch."
@@ -366,6 +416,14 @@ fn main() {
         }
         Commands::Diff { base, revised, output } => {
             commands::diff::run(&base, &revised, output.as_ref(), cli.json);
+        }
+        Commands::DeletePara { file, section, indices, output } => {
+            commands::structural::run_delete(&file, section, &indices, &output, cli.json);
+        }
+        Commands::InsertPara { file, section, anchor, before, text, output } => {
+            commands::structural::run_insert(
+                &file, section, anchor, before, &text, &output, cli.json,
+            );
         }
         Commands::Read { file, section, paras, table, field } => {
             commands::read::run(

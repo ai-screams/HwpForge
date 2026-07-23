@@ -69,6 +69,7 @@ mod registry_bridge;
 mod schema;
 mod section_workflow;
 pub mod stamp;
+mod structural;
 mod style_lookup_bridge;
 pub mod style_store;
 mod table_inventory;
@@ -102,6 +103,9 @@ pub use read::{
 pub use registry_bridge::HwpxRegistryBridge;
 pub use section_workflow::{
     SectionExportOutcome, SectionPatchOutcome, SectionWorkflowError, SectionWorkflowWarning,
+};
+pub use structural::{
+    HwpxStructuralEditor, InsertPosition, Insertion, ParagraphLocator, StructuralEditError,
 };
 pub use style_lookup_bridge::HwpxStyleLookup;
 pub use style_store::{

@@ -3344,6 +3344,283 @@ fn diff_text_mode_renders_paragraph_and_structure_changes() {
 }
 
 #[test]
+fn insert_para_adds_paragraph_and_diff_confirms_delta() {
+    let f = fixture("plain_paragraphs.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("inserted.hwpx");
+    let (value, _, code) = run_json(&[
+        "insert-para",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        "--anchor",
+        "1",
+        "--text",
+        "삽입된 문단",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+    assert_eq!(value["status"], "ok");
+
+    // The E5 diff verifies exactly one paragraph was added.
+    let (d, _, dc) = run_json(&["diff", f.to_str().unwrap(), out.to_str().unwrap()]);
+    assert_eq!(dc, 0);
+    let added: Vec<_> = d["diff"]["semantic"]["paragraphs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["kind"] == "added")
+        .collect();
+    assert_eq!(added.len(), 1);
+    assert_eq!(added[0]["after"], "삽입된 문단");
+}
+
+#[test]
+fn delete_para_removes_paragraph_and_rejects_section_properties() {
+    let f = fixture("plain_paragraphs.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("deleted.hwpx");
+    let (value, _, code) = run_json(&[
+        "delete-para",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        "--index",
+        "2",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+    assert_eq!(value["deleted"], 1);
+
+    // Deleting paragraph 0 (secPr carrier) is refused.
+    let (err, _, ec) = run_json(&[
+        "delete-para",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        "--index",
+        "0",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(ec, 1);
+    assert_eq!(err["code"], "SECTION_PROPERTIES_PARAGRAPH");
+}
+
+#[test]
+fn structural_edit_text_mode_and_error_codes() {
+    let f = fixture("plain_paragraphs.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("o.hwpx");
+
+    // Text-mode success prints "Wrote ...".
+    let (stdout, _, code) = run(&[
+        "insert-para",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        "--anchor",
+        "1",
+        "--text",
+        "텍스트모드",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Wrote"), "stdout: {stdout}");
+
+    // delete with no --index.
+    let (err, _, c) = run_json(&[
+        "delete-para",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(c, 1);
+    assert_eq!(err["code"], "DELETE_NO_TARGET");
+
+    // multiline insert text.
+    let (err, _, c) = run_json(&[
+        "insert-para",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        "--anchor",
+        "1",
+        "--text",
+        "줄1\n줄2",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(c, 1);
+    assert_eq!(err["code"], "MULTI_PARAGRAPH_TEXT");
+}
+
+#[test]
+fn structural_edit_reference_and_roundtrip_rejections() {
+    let tmp = test_tmp();
+    let out = tmp.join("o.hwpx");
+
+    // Reference-bearing paragraph (footnote at index 0 of the crossref fixture).
+    let cr = fixture("crossref_para.hwpx");
+    let (err, _, c) = run_json(&[
+        "delete-para",
+        cr.to_str().unwrap(),
+        "--section",
+        "0",
+        "--index",
+        "0",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(c, 1);
+    assert_eq!(err["code"], "REFERENCE_STRANDED");
+
+    // Hard page break paragraph.
+    let pb = fixture("page_break.hwpx");
+    let (err, _, c) = run_json(&[
+        "delete-para",
+        pb.to_str().unwrap(),
+        "--section",
+        "0",
+        "--index",
+        "1",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(c, 1);
+    assert_eq!(err["code"], "HARD_BREAK_LOSS");
+
+    // Hancom-authored input that is not round-trip-safe.
+    let pi = fixture("plain_inserted.hwpx");
+    let (err, _, c) = run_json(&[
+        "delete-para",
+        pi.to_str().unwrap(),
+        "--section",
+        "0",
+        "--index",
+        "1",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(c, 1);
+    assert_eq!(err["code"], "INPUT_NOT_ROUNDTRIP_SAFE");
+}
+
+#[test]
+fn structural_edit_batch_and_structural_rejections() {
+    let f = fixture("plain_paragraphs.hwpx"); // 4 paragraphs, index 0 = secPr
+    let tmp = test_tmp();
+    let out = tmp.join("o.hwpx");
+
+    // Deleting every paragraph empties the section (this check precedes the
+    // secPr guard, so it reports EMPTY_SECTION even though index 0 is secPr).
+    let (err, _, c) = run_json(&[
+        "delete-para",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        "--index",
+        "0",
+        "--index",
+        "1",
+        "--index",
+        "2",
+        "--index",
+        "3",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(c, 1);
+    assert_eq!(err["code"], "EMPTY_SECTION");
+
+    // Duplicate target.
+    let (err, _, c) = run_json(&[
+        "delete-para",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        "--index",
+        "1",
+        "--index",
+        "1",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(c, 1);
+    assert_eq!(err["code"], "DUPLICATE_TARGET");
+
+    // Insert-before the secPr carrier.
+    let (err, _, c) = run_json(&[
+        "insert-para",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        "--anchor",
+        "0",
+        "--before",
+        "--text",
+        "맨앞",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(c, 1);
+    assert_eq!(err["code"], "INSERT_BEFORE_SECTION_PROPERTIES");
+
+    // Insert JSON output shape (before an anchor).
+    let (v, _, c) = run_json(&[
+        "insert-para",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        "--anchor",
+        "2",
+        "--before",
+        "--text",
+        "앞삽입",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(c, 0);
+    assert_eq!(v["position"], "before");
+    assert_eq!(v["anchor"], 2);
+
+    // delete-para text-mode success prints "Wrote ...".
+    let (stdout, _, c) = run(&[
+        "delete-para",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        "--index",
+        "2",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(c, 0);
+    assert!(stdout.contains("Wrote"), "stdout: {stdout}");
+
+    // Non-HWPX input → codec error, exit code 2.
+    let garbage = tmp.join("g.hwpx");
+    std::fs::write(&garbage, b"not a zip").unwrap();
+    let (err, _, c) = run_json(&[
+        "delete-para",
+        garbage.to_str().unwrap(),
+        "--section",
+        "0",
+        "--index",
+        "0",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(c, 2);
+    assert_eq!(err["code"], "STRUCTURAL_CODEC");
+}
+
+#[test]
 fn fill_named_field_end_to_end() {
     let f = fixture("clickhere_named.hwpx");
     let tmp = test_tmp();

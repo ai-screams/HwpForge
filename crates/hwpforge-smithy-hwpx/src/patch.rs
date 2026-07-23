@@ -1317,7 +1317,7 @@ fn picture_has_semantic_run(picture: &HxPic) -> bool {
     matches!(picture.img.as_ref(), Some(img) if !img.binary_item_id_ref.is_empty())
 }
 
-fn find_root_span(xml: &str, tag: &[u8]) -> HwpxResult<Range<usize>> {
+pub(crate) fn find_root_span(xml: &str, tag: &[u8]) -> HwpxResult<Range<usize>> {
     let mut reader = Reader::from_str(xml);
     reader.config_mut().trim_text(false);
     let mut buf: Vec<u8> = Vec::new();
@@ -1371,7 +1371,7 @@ fn find_root_span(xml: &str, tag: &[u8]) -> HwpxResult<Range<usize>> {
     })
 }
 
-fn collect_direct_child_outer_spans(
+pub(crate) fn collect_direct_child_outer_spans(
     xml: &str,
     parent_span: Range<usize>,
     tag: &[u8],
@@ -1667,7 +1667,7 @@ fn patch_text_run_xml(run_xml: &str, new_text: &str) -> HwpxResult<String> {
     Ok(patched)
 }
 
-fn section_path(section_idx: usize) -> String {
+pub(crate) fn section_path(section_idx: usize) -> String {
     format!("Contents/section{section_idx}.xml")
 }
 

@@ -57,8 +57,17 @@ What does the user want?
 │   │   (fill a prose placeholder, fix a typo, fill a table cell)
 │   │     → to-json (--section) → edit the Text → patch        [TEXT-ONLY, safest]
 │   │
-│   └─ ADD or REMOVE paragraphs (structural change)
-│         → to-json (full) → add paragraphs → from-json --base [REBUILD]
+│   ├─ ADD or REMOVE a top-level paragraph (structural edit, byte-preserving)
+│   │     → outline/read to find the index → insert-para / delete-para [E4]
+│   │       insert-para --section N --anchor I [--before] --text "…"  (shape inherited)
+│   │       delete-para --section N --index I [--index J …]           (batch)
+│   │       fail-closed: refuses deleting a paragraph with a reference
+│   │       (bookmark/cross-ref/footnote), a hard page/column break, or the
+│   │       section's first paragraph (secPr). Only round-trip-safe inputs.
+│   │       verify with `diff base out`. (표 행 추가/삭제는 아직 미지원)
+│   │
+│   └─ REBUILD from scratch (structural change beyond paragraphs)
+│         → to-json (full) → edit → from-json --base [REBUILD]
 │           ⚠ 표 구조를 바꿨다면(행/열/셀 추가·삭제) 셀의 addr 필드를 삭제하고
 │             제출할 것 — 남겨두면 stale 주소로 GRID_ADDR_INVALID 거부됨
 │             (addr 부재 = 무검사, 존재 = 재파생 격자와 대조)
@@ -133,6 +142,15 @@ hwpforge stamp template.hwpx --map specs.json -o form.hwpx   # + form.manifest.j
 #   무가드 후보(양쪽 클래스) 누락 거부(STAMP_CANDIDATE_UNCOVERED); 문서 변경 후 재사용
 #   맵은 거부(STAMP_SOURCE_HASH_MISMATCH — stamp-plan 재실행); 셀 스펙은 병합 앵커 좌표만
 #   (STAMP_CELL_NOT_ANCHOR 가 앵커를 알려줌). 이후 fields/fill 로 채움
+
+# Structural paragraph editing (E4) — insert/delete top-level paragraphs, byte-preserving.
+hwpforge insert-para doc.hwpx --section 0 --anchor 3 --text "추가 문단" -o out.hwpx
+hwpforge insert-para doc.hwpx --section 0 --anchor 3 --before --text "앞에 추가" -o out.hwpx
+hwpforge delete-para doc.hwpx --section 0 --index 5 -o out.hwpx           # batch: --index 5 --index 7
+#   새 문단은 앵커의 문단/글자 모양을 상속(스타일 발명 없음); --text 는 한 줄 평문
+#   fail-closed 거부: 참조(책갈피/상호참조/각주) 든 문단 삭제·hard page/column break·
+#   섹션 첫 문단(secPr)·섹션을 비우는 삭제. round-trip-safe 입력만. 표 행 편집은 미지원.
+#   반드시 `diff base out` 로 의도한 델타만 났는지 검증
 
 # Grid cell editing (E3) — fill table cells by logical grid address.
 # to-json export annotates every cell with addr {row,col} (병합 전 논리 격자).
