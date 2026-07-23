@@ -1667,7 +1667,7 @@ fn patch_text_run_xml(run_xml: &str, new_text: &str) -> HwpxResult<String> {
     Ok(patched)
 }
 
-fn section_path(section_idx: usize) -> String {
+pub(crate) fn section_path(section_idx: usize) -> String {
     format!("Contents/section{section_idx}.xml")
 }
 

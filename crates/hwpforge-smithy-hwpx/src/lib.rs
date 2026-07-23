@@ -66,11 +66,9 @@ mod patch;
 pub mod presets;
 mod read;
 mod registry_bridge;
-// The W1 reference-scan primitives are consumed by the W2 delete slice.
 mod schema;
 mod section_workflow;
 pub mod stamp;
-#[allow(dead_code)]
 mod structural;
 mod style_lookup_bridge;
 pub mod style_store;
@@ -106,6 +104,7 @@ pub use registry_bridge::HwpxRegistryBridge;
 pub use section_workflow::{
     SectionExportOutcome, SectionPatchOutcome, SectionWorkflowError, SectionWorkflowWarning,
 };
+pub use structural::{HwpxStructuralEditor, ParagraphLocator, StructuralEditError};
 pub use style_lookup_bridge::HwpxStyleLookup;
 pub use style_store::{
     HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape, HwpxStyle, HwpxStyleStore,
