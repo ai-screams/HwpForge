@@ -104,7 +104,9 @@ pub use registry_bridge::HwpxRegistryBridge;
 pub use section_workflow::{
     SectionExportOutcome, SectionPatchOutcome, SectionWorkflowError, SectionWorkflowWarning,
 };
-pub use structural::{HwpxStructuralEditor, ParagraphLocator, StructuralEditError};
+pub use structural::{
+    HwpxStructuralEditor, InsertPosition, Insertion, ParagraphLocator, StructuralEditError,
+};
 pub use style_lookup_bridge::HwpxStyleLookup;
 pub use style_store::{
     HwpxCharShape, HwpxFont, HwpxFontRef, HwpxParaShape, HwpxStyle, HwpxStyleStore,

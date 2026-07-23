@@ -17,6 +17,7 @@
 
 use hwpforge_core::document::{Document, Draft};
 use hwpforge_core::paragraph::Paragraph;
+use hwpforge_core::run::Run;
 use serde_json::Value;
 
 use crate::decoder::{HwpxDecoder, HwpxDocument};
@@ -37,6 +38,30 @@ pub struct ParagraphLocator {
     pub section: usize,
     /// Zero-based top-level paragraph index within the section.
     pub index: usize,
+}
+
+/// Where a new paragraph lands relative to its anchor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InsertPosition {
+    /// Immediately before the anchor paragraph.
+    Before,
+    /// Immediately after the anchor paragraph.
+    After,
+}
+
+/// A single paragraph insertion. The new paragraph **inherits the anchor's
+/// paragraph and character shape** (paraPrIDRef / styleIDRef / charPrIDRef) so
+/// no style is invented; only the text is new. `text` is a single paragraph of
+/// plain text — the encoder escapes it. Multi-paragraph content is expressed
+/// as multiple insertions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Insertion {
+    /// Existing paragraph whose shape the new paragraph inherits.
+    pub anchor: ParagraphLocator,
+    /// Whether the new paragraph goes before or after the anchor.
+    pub position: InsertPosition,
+    /// Plain text of the new paragraph (no line breaks).
+    pub text: String,
 }
 
 /// Fail-closed reasons a structural edit is refused. No bytes are produced on
@@ -132,6 +157,17 @@ pub enum StructuralEditError {
         /// Diagnostic detail.
         detail: String,
     },
+    /// Insertion text contains a line break; a single insertion is one
+    /// paragraph. Express multiple paragraphs as multiple insertions.
+    MultiParagraphText,
+    /// Insert-before the paragraph carrying section properties (`<hp:secPr>`)
+    /// would displace it from first position and reset the section layout.
+    InsertBeforeSectionProperties {
+        /// Section index.
+        section: usize,
+        /// Anchor paragraph index.
+        index: usize,
+    },
 }
 
 impl std::fmt::Display for StructuralEditError {
@@ -174,6 +210,13 @@ impl std::fmt::Display for StructuralEditError {
                 "section {section}: decoded {decoded} paragraphs but {wire} <hp:p> elements"
             ),
             Self::DeltaMismatch { detail } => write!(f, "self-verify failed: {detail}"),
+            Self::MultiParagraphText => {
+                write!(f, "insertion text spans multiple paragraphs; use one insertion per paragraph")
+            }
+            Self::InsertBeforeSectionProperties { section, index } => write!(
+                f,
+                "cannot insert before paragraph {section}:{index} — it carries the section properties (secPr)"
+            ),
         }
     }
 }
@@ -307,12 +350,19 @@ impl HwpxStructuralEditor {
                 }
             }
             // Cut in descending order so earlier byte offsets stay valid.
+            let first_changed = *indices.iter().min().expect("targets grouped this section");
             indices.sort_unstable_by(|a, b| b.cmp(a));
             let mut out = xml;
             for idx in indices {
                 let span = spans[idx].clone();
                 out.replace_range(span, "");
             }
+            // Every paragraph from the first deletion down shifts up, so its
+            // Hancom line-layout cache (cumulative vertpos) is now stale.
+            // Drop it from the edit point onward; the renderer recomputes
+            // (a document with no linesegarray renders correctly — our own
+            // encoder emits none). Paragraphs above the edit keep valid caches.
+            out = strip_line_segs_from(&out, first_changed)?;
             package.replace_text_entry(&path, out);
         }
         let bytes = package.write().map_err(|e| StructuralEditError::Codec(e.to_string()))?;
@@ -336,6 +386,187 @@ impl HwpxStructuralEditor {
 
         Ok(bytes)
     }
+
+    /// Inserts one new paragraph, preserving every other byte of the package.
+    ///
+    /// The new paragraph inherits the anchor's paragraph and character shape
+    /// (no style is invented); only its text is new. The paragraph is encoded
+    /// by the real encoder — so escaping and element order are correct — and
+    /// its bytes are spliced into the original section XML, leaving untouched
+    /// paragraphs (and their Hancom line-layout caches) exactly as they were.
+    /// Paragraphs from the insertion point down have their now-stale caches
+    /// stripped so the renderer recomputes them.
+    ///
+    /// # Errors
+    ///
+    /// See [`StructuralEditError`].
+    pub fn insert_paragraph(
+        base: &[u8],
+        insertion: &Insertion,
+    ) -> Result<Vec<u8>, StructuralEditError> {
+        if insertion.text.contains('\n') || insertion.text.contains('\r') {
+            return Err(StructuralEditError::MultiParagraphText);
+        }
+
+        // ── input admission ──
+        let d0 =
+            HwpxDecoder::decode(base).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+        let e0 = encode_hwpx(&d0).map_err(map_admission)?;
+        let d1 = HwpxDecoder::decode(&e0).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+        admission_compare(&d0, &d1).map_err(map_admission)?;
+        check_zip_carry(base, &e0).map_err(map_admission)?;
+
+        let anchor = insertion.anchor;
+        let sections = d0.document.sections();
+        let section =
+            sections.get(anchor.section).ok_or(StructuralEditError::SectionOutOfRange {
+                section: anchor.section,
+                available: sections.len(),
+            })?;
+        let anchor_para = section.paragraphs.get(anchor.index).ok_or(
+            StructuralEditError::ParagraphOutOfRange {
+                section: anchor.section,
+                index: anchor.index,
+                available: section.paragraphs.len(),
+            },
+        )?;
+
+        // The new paragraph inherits the anchor's shapes; it is a plain text
+        // paragraph (no inherited breaks, heading, or controls).
+        let char_shape = anchor_para
+            .runs
+            .first()
+            .map_or(hwpforge_foundation::CharShapeIndex::new(0), |r| r.char_shape_id);
+        let mut new_para = Paragraph::with_runs(
+            vec![Run::text(&insertion.text, char_shape)],
+            anchor_para.para_shape_id,
+        );
+        new_para.style_id = anchor_para.style_id;
+
+        let insert_index = match insertion.position {
+            InsertPosition::Before => anchor.index,
+            InsertPosition::After => anchor.index + 1,
+        };
+
+        // ── declared delta: the new paragraph spliced into the Core doc ──
+        let mut expected = d0.document.clone();
+        expected.sections_mut()[anchor.section].paragraphs.insert(insert_index, new_para);
+        expected
+            .clone()
+            .validate()
+            .map_err(|e| StructuralEditError::Codec(format!("validate: {e}")))?;
+
+        // Encode the declared delta once; its section XML holds the new
+        // paragraph in the exact form the codec round-trips.
+        let encoded = encode_hwpx(&HwpxDocument {
+            document: expected.clone(),
+            style_store: d0.style_store.clone(),
+            image_store: d0.image_store.clone(),
+        })
+        .map_err(map_admission)?;
+        let encoded_pkg =
+            RawPackage::read(&encoded).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+        let path = section_path(anchor.section);
+        let encoded_xml = encoded_pkg
+            .read_text_entry(&path)
+            .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+        let encoded_spans = paragraph_spans(&encoded_xml)?;
+        let new_para_bytes = encoded_xml[encoded_spans[insert_index].clone()].to_string();
+
+        // ── splice the new paragraph's bytes into the ORIGINAL section XML ──
+        let mut package =
+            RawPackage::read(base).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+        let xml = package
+            .read_text_entry(&path)
+            .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+        let spans = paragraph_spans(&xml)?;
+        if spans.len() != section.paragraphs.len() {
+            return Err(StructuralEditError::SpanCountMismatch {
+                section: anchor.section,
+                decoded: section.paragraphs.len(),
+                wire: spans.len(),
+            });
+        }
+        // Guard section properties: inserting before the secPr carrier would
+        // displace it from first position.
+        if insertion.position == InsertPosition::Before
+            && xml[spans[anchor.index].clone()].contains("<hp:secPr")
+        {
+            return Err(StructuralEditError::InsertBeforeSectionProperties {
+                section: anchor.section,
+                index: anchor.index,
+            });
+        }
+
+        let at = match insertion.position {
+            InsertPosition::Before => spans[anchor.index].start,
+            InsertPosition::After => spans[anchor.index].end,
+        };
+        let mut out = xml;
+        out.insert_str(at, &new_para_bytes);
+        // The inserted paragraph carries no cache (the encoder emits none) and
+        // every paragraph below it shifts down, so its cumulative-vertpos
+        // cache is stale — strip from the insertion point onward.
+        out = strip_line_segs_from(&out, insert_index)?;
+        package.replace_text_entry(&path, out);
+        let bytes = package.write().map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+
+        // ── reverse-delta self-verify ──
+        let d2 =
+            HwpxDecoder::decode(&bytes).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+        let expected_doc = HwpxDocument {
+            document: expected,
+            style_store: d0.style_store.clone(),
+            image_store: d0.image_store.clone(),
+        };
+        admission_compare(&d2, &expected_doc).map_err(|e| match e {
+            StamperError::NotRoundTripSafe { component, diff_path } => {
+                StructuralEditError::DeltaMismatch {
+                    detail: format!("{component} diverges at {diff_path}"),
+                }
+            }
+            other => StructuralEditError::DeltaMismatch { detail: other.to_string() },
+        })?;
+
+        Ok(bytes)
+    }
+}
+
+/// Removes `<hp:linesegarray>` from every direct-child `<hp:p>` at index
+/// `from_index` or later. A structural edit shifts the cumulative vertical
+/// position of every paragraph from the edit point down, making their caches
+/// stale; dropping them lets the renderer recompute (a document with no
+/// linesegarray renders correctly). Paragraphs above the edit keep their
+/// valid caches.
+fn strip_line_segs_from(xml: &str, from_index: usize) -> Result<String, StructuralEditError> {
+    let spans = paragraph_spans(xml)?;
+    let mut removals: Vec<std::ops::Range<usize>> = Vec::new();
+    for span in spans.into_iter().skip(from_index) {
+        let frag = &xml[span.clone()];
+        let Some(open_rel) = frag.find("<hp:linesegarray") else {
+            continue;
+        };
+        // The opening tag ends at the first '>' (linesegarray carries no
+        // attributes in Hancom output).
+        let Some(gt_rel) = frag[open_rel..].find('>') else {
+            continue;
+        };
+        let self_closing = frag.as_bytes().get(open_rel + gt_rel - 1) == Some(&b'/');
+        let end_rel = if self_closing {
+            open_rel + gt_rel + 1
+        } else if let Some(close_rel) = frag[open_rel..].find("</hp:linesegarray>") {
+            open_rel + close_rel + "</hp:linesegarray>".len()
+        } else {
+            continue;
+        };
+        removals.push((span.start + open_rel)..(span.start + end_rel));
+    }
+    removals.sort_unstable_by(|a, b| b.start.cmp(&a.start));
+    let mut out = xml.to_string();
+    for r in removals {
+        out.replace_range(r, "");
+    }
+    Ok(out)
 }
 
 /// Collects the outer byte spans of a section's direct-child `<hp:p>` elements.
@@ -672,5 +903,151 @@ mod tests {
             HwpxStructuralEditor::delete_paragraphs(b"not a zip", &[loc(0, 0)]),
             Err(StructuralEditError::Codec(_))
         ));
+    }
+
+    #[test]
+    fn strip_line_segs_drops_caches_from_index_onward() {
+        // The stale-cache stripping used by delete/insert: paragraphs before
+        // the edit keep their cache, the rest are dropped so the renderer
+        // recomputes their (shifted) cumulative positions.
+        let xml = concat!(
+            "<hs:sec>",
+            "<hp:p id=\"0\"><hp:run><hp:t>a</hp:t></hp:run>",
+            "<hp:linesegarray><hp:lineseg vertpos=\"0\"/></hp:linesegarray></hp:p>",
+            "<hp:p id=\"1\"><hp:run><hp:t>b</hp:t></hp:run>",
+            "<hp:linesegarray><hp:lineseg vertpos=\"1600\"/></hp:linesegarray></hp:p>",
+            "<hp:p id=\"2\"><hp:run><hp:t>c</hp:t></hp:run>",
+            "<hp:linesegarray><hp:lineseg vertpos=\"3200\"/></hp:linesegarray></hp:p>",
+            "</hs:sec>"
+        );
+        assert_eq!(xml.matches("<hp:linesegarray").count(), 3);
+        let out = strip_line_segs_from(xml, 1).unwrap();
+        assert_eq!(out.matches("<hp:linesegarray").count(), 1, "only p0 keeps its cache");
+        for t in ["<hp:t>a</hp:t>", "<hp:t>b</hp:t>", "<hp:t>c</hp:t>"] {
+            assert!(out.contains(t), "text {t} must be preserved");
+        }
+    }
+
+    #[test]
+    fn hancom_authored_input_that_is_not_round_trip_safe_is_refused() {
+        // The G2 evidence file is Hancom-authored (5 cumulative-vertpos
+        // linesegarrays) but does not yet round-trip through HwpForge's codec
+        // (a tab-definition gap). The admission gate refuses it fail-closed —
+        // byte-splice edits are only offered on round-trip-safe inputs.
+        let base = fixture("plain_inserted.hwpx");
+        assert!(matches!(
+            HwpxStructuralEditor::delete_paragraphs(&base, &[loc(0, 1)]),
+            Err(StructuralEditError::NotRoundTripSafe { .. })
+        ));
+    }
+
+    // -- W3: insert_paragraph (byte-splice) -------------------------------
+
+    fn insertion(section: usize, index: usize, pos: InsertPosition, text: &str) -> Insertion {
+        Insertion { anchor: loc(section, index), position: pos, text: text.to_string() }
+    }
+
+    #[test]
+    fn insert_after_anchor_adds_paragraph_and_preserves_others() {
+        let base = fixture("plain_paragraphs.hwpx");
+        let out = HwpxStructuralEditor::insert_paragraph(
+            &base,
+            &insertion(0, 1, InsertPosition::After, "새로 삽입된 문단"),
+        )
+        .expect("insert");
+        assert_eq!(
+            body_texts(&out),
+            vec![
+                "첫째 문단입니다.",
+                "둘째 문단입니다.",
+                "새로 삽입된 문단",
+                "셋째 문단입니다.",
+                "넷째 문단입니다."
+            ]
+        );
+    }
+
+    #[test]
+    fn insert_before_anchor_adds_paragraph() {
+        let base = fixture("plain_paragraphs.hwpx");
+        let out = HwpxStructuralEditor::insert_paragraph(
+            &base,
+            &insertion(0, 2, InsertPosition::Before, "삽입"),
+        )
+        .expect("insert");
+        assert_eq!(
+            body_texts(&out),
+            vec![
+                "첫째 문단입니다.",
+                "둘째 문단입니다.",
+                "삽입",
+                "셋째 문단입니다.",
+                "넷째 문단입니다."
+            ]
+        );
+    }
+
+    #[test]
+    fn insert_inherits_anchor_shape() {
+        let base = fixture("plain_paragraphs.hwpx");
+        let out = HwpxStructuralEditor::insert_paragraph(
+            &base,
+            &insertion(0, 1, InsertPosition::After, "상속확인"),
+        )
+        .expect("insert");
+        let decoded = HwpxDecoder::decode(&out).unwrap();
+        let anchor = &decoded.document.sections()[0].paragraphs[1];
+        let inserted = &decoded.document.sections()[0].paragraphs[2];
+        assert_eq!(inserted.para_shape_id, anchor.para_shape_id);
+        assert_eq!(inserted.runs[0].char_shape_id, anchor.runs[0].char_shape_id);
+        assert!(!inserted.page_break && !inserted.column_break);
+    }
+
+    #[test]
+    fn insert_rejects_multiline_text() {
+        let base = fixture("plain_paragraphs.hwpx");
+        assert!(matches!(
+            HwpxStructuralEditor::insert_paragraph(
+                &base,
+                &insertion(0, 1, InsertPosition::After, "줄1\n줄2")
+            ),
+            Err(StructuralEditError::MultiParagraphText)
+        ));
+    }
+
+    #[test]
+    fn insert_rejects_before_section_properties_paragraph() {
+        let base = fixture("plain_paragraphs.hwpx");
+        assert!(matches!(
+            HwpxStructuralEditor::insert_paragraph(
+                &base,
+                &insertion(0, 0, InsertPosition::Before, "맨앞")
+            ),
+            Err(StructuralEditError::InsertBeforeSectionProperties { section: 0, index: 0 })
+        ));
+    }
+
+    #[test]
+    fn insert_after_section_properties_paragraph_is_allowed() {
+        // Inserting AFTER the secPr carrier keeps secPr in first position.
+        let base = fixture("plain_paragraphs.hwpx");
+        let out = HwpxStructuralEditor::insert_paragraph(
+            &base,
+            &insertion(0, 0, InsertPosition::After, "둘째 앞"),
+        )
+        .expect("insert");
+        assert_eq!(body_texts(&out)[0], "첫째 문단입니다.");
+        assert_eq!(body_texts(&out)[1], "둘째 앞");
+    }
+
+    #[test]
+    fn insert_escapes_special_characters() {
+        let base = fixture("plain_paragraphs.hwpx");
+        let out = HwpxStructuralEditor::insert_paragraph(
+            &base,
+            &insertion(0, 1, InsertPosition::After, "a < b & c > d"),
+        )
+        .expect("insert");
+        assert_eq!(body_texts(&out)[2], "a < b & c > d");
     }
 }
