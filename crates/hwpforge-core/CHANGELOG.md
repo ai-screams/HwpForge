@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.5](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.11.4...hwpforge-core-v0.11.5) - 2026-07-23
+
+### Added
+
+- *(core)* Control::kind_name — 컨트롤 종류의 안정 snake_case 이름
+
+- *(core)* 문단 outline/list 분류기 공유 모듈 추가
+
+
 ## [0.11.3](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.11.2...hwpforge-core-v0.11.3) - 2026-07-21
 
 ### Added
