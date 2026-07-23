@@ -13,6 +13,7 @@ pub mod read;
 pub mod schema;
 pub mod set_cell;
 pub mod stamp;
+pub mod structural;
 pub mod templates;
 pub mod to_json;
 pub mod to_md;

@@ -3344,6 +3344,72 @@ fn diff_text_mode_renders_paragraph_and_structure_changes() {
 }
 
 #[test]
+fn insert_para_adds_paragraph_and_diff_confirms_delta() {
+    let f = fixture("plain_paragraphs.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("inserted.hwpx");
+    let (value, _, code) = run_json(&[
+        "insert-para",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        "--anchor",
+        "1",
+        "--text",
+        "삽입된 문단",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+    assert_eq!(value["status"], "ok");
+
+    // The E5 diff verifies exactly one paragraph was added.
+    let (d, _, dc) = run_json(&["diff", f.to_str().unwrap(), out.to_str().unwrap()]);
+    assert_eq!(dc, 0);
+    let added: Vec<_> = d["diff"]["semantic"]["paragraphs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["kind"] == "added")
+        .collect();
+    assert_eq!(added.len(), 1);
+    assert_eq!(added[0]["after"], "삽입된 문단");
+}
+
+#[test]
+fn delete_para_removes_paragraph_and_rejects_section_properties() {
+    let f = fixture("plain_paragraphs.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("deleted.hwpx");
+    let (value, _, code) = run_json(&[
+        "delete-para",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        "--index",
+        "2",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+    assert_eq!(value["deleted"], 1);
+
+    // Deleting paragraph 0 (secPr carrier) is refused.
+    let (err, _, ec) = run_json(&[
+        "delete-para",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        "--index",
+        "0",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(ec, 1);
+    assert_eq!(err["code"], "SECTION_PROPERTIES_PARAGRAPH");
+}
+
+#[test]
 fn fill_named_field_end_to_end() {
     let f = fixture("clickhere_named.hwpx");
     let tmp = test_tmp();
