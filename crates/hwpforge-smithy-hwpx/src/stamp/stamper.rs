@@ -561,7 +561,7 @@ pub(crate) fn admission_compare(a: &HwpxDocument, b: &HwpxDocument) -> Result<()
 }
 
 /// First differing JSON path between two serializable values.
-fn first_diff_path<T: Serialize>(a: &T, b: &T) -> String {
+pub(crate) fn first_diff_path<T: Serialize>(a: &T, b: &T) -> String {
     fn walk(a: &serde_json::Value, b: &serde_json::Value, path: &str) -> Option<String> {
         use serde_json::Value;
         match (a, b) {

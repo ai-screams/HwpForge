@@ -694,6 +694,45 @@ pub enum Control {
 }
 
 impl Control {
+    /// Returns the stable snake_case name of this control's kind.
+    ///
+    /// Read/diff projections use this to label embedded content without
+    /// exposing payload details. The match is deliberately exhaustive (no
+    /// wildcard) so adding a variant forces a name here at compile time.
+    #[must_use]
+    pub fn kind_name(&self) -> &'static str {
+        match self {
+            Self::TextBox { .. } => "text_box",
+            Self::Hyperlink { .. } => "hyperlink",
+            Self::Footnote { .. } => "footnote",
+            Self::Endnote { .. } => "endnote",
+            Self::Line { .. } => "line",
+            Self::Ellipse { .. } => "ellipse",
+            Self::EmbeddedChart { .. } => "embedded_chart",
+            Self::Rect { .. } => "rect",
+            Self::Polygon { .. } => "polygon",
+            Self::Equation { .. } => "equation",
+            Self::Chart { .. } => "chart",
+            Self::Dutmal { .. } => "dutmal",
+            Self::Compose { .. } => "compose",
+            Self::Arc { .. } => "arc",
+            Self::Curve { .. } => "curve",
+            Self::ConnectLine { .. } => "connect_line",
+            Self::Group { .. } => "group",
+            Self::TextArt { .. } => "text_art",
+            Self::Bookmark { .. } => "bookmark",
+            Self::CrossRef { .. } => "cross_ref",
+            Self::Field { .. } => "field",
+            Self::Memo { .. } => "memo",
+            Self::IndexMark { .. } => "index_mark",
+            Self::UnknownSummary { .. } => "unknown_summary",
+            Self::DateCodeField { .. } => "date_code_field",
+            Self::PathField { .. } => "path_field",
+            Self::InlinePageNumber { .. } => "inline_page_number",
+            Self::Unknown { .. } => "unknown",
+        }
+    }
+
     /// Returns `true` if this is a [`Control::TextBox`].
     pub fn is_text_box(&self) -> bool {
         matches!(self, Self::TextBox { .. })

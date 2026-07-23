@@ -10,8 +10,8 @@ use serde::Deserialize;
 
 use crate::output::{ToolErrorInfo, ToolOutput};
 use crate::tools::{
-    convert, fields, fill, from_json, inspect, patch, restyle, set_cell, stamp, templates, to_json,
-    to_md, validate,
+    convert, diff, fields, fill, from_json, inspect, outline, patch, read, restyle, set_cell,
+    stamp, templates, to_json, to_md, validate,
 };
 use crate::{prompts, resources};
 
@@ -83,6 +83,46 @@ pub struct PatchRequest {
 pub struct FieldsRequest {
     /// Path to the HWPX file to inspect.
     pub file_path: String,
+}
+
+/// Request parameters for `hwpforge_outline`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct OutlineRequest {
+    /// Path to the HWPX file to map.
+    pub file_path: String,
+}
+
+/// Request parameters for `hwpforge_diff`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct DiffRequest {
+    /// Path to the base HWPX file.
+    pub base_path: String,
+    /// Path to the revised HWPX file.
+    pub revised_path: String,
+    /// Optional path for the full pretty-printed JSON report. Required when
+    /// the report exceeds the 1 MB inline ceiling.
+    #[serde(default)]
+    pub output_path: Option<String>,
+}
+
+/// Request parameters for `hwpforge_read`.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct ReadRequest {
+    /// Path to the HWPX file to read.
+    pub file_path: String,
+    /// Section index to read paragraphs from (exactly one of
+    /// section/table/field).
+    #[serde(default)]
+    pub section: Option<usize>,
+    /// Inclusive paragraph range "A..B" or a single "N" (requires section).
+    #[serde(default)]
+    pub paras: Option<String>,
+    /// Table ordinal to read as a grid text matrix.
+    #[serde(default)]
+    pub table: Option<usize>,
+    /// Field name to read.
+    #[serde(default)]
+    pub field: Option<String>,
 }
 
 /// Request parameters for `hwpforge_fill`.
@@ -278,6 +318,7 @@ impl HwpForgeServer {
                         data.total_charts,
                     ),
                     vec![
+                        "Use hwpforge_outline for the navigation map (headings/tables/fields/bookmarks)",
                         "Use hwpforge_to_json to export for editing",
                         "Use hwpforge_convert to create new documents",
                     ],
@@ -399,7 +440,114 @@ impl HwpForgeServer {
                         "Patched section {} → {} ({} bytes, {} sections)",
                         data.patched_section, data.output_path, data.size_bytes, data.sections,
                     ),
-                    vec!["Use hwpforge_inspect to verify the patched output"],
+                    vec!["Use hwpforge_diff (base vs output) to verify only the intended text changed"],
+                );
+                Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
+            }
+            Err(err) => Ok(tool_error_response(err)),
+        }
+    }
+
+    /// Document navigation map: headings, tables, fields, bookmarks.
+    #[tool(
+        name = "hwpforge_outline",
+        description = "Show the document navigation map for an HWPX file: headings (level + text), tables (ordinal + logical grid dims + addressable), named click-here fields, and bookmarks. Name anchors are the primary keys; {section, para} locators are secondary and go stale after structural edits. Fetch this once before targeted reads or edits."
+    )]
+    async fn hwpforge_outline(
+        &self,
+        Parameters(req): Parameters<OutlineRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = tokio::task::spawn_blocking(move || outline::run_outline(&req.file_path))
+            .await
+            .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?;
+
+        match result {
+            Ok(data) => {
+                let output = ToolOutput::new(
+                    &data,
+                    format!(
+                        "{} heading(s), {} table(s), {} field(s), {} bookmark(s)",
+                        data.outline.headings.len(),
+                        data.outline.tables.len(),
+                        data.outline.fields.len(),
+                        data.outline.bookmarks.len(),
+                    ),
+                    vec![
+                        "Use hwpforge_fields + hwpforge_fill for named fields",
+                        "Use hwpforge_set_cell with a table ordinal + addr to fill cells",
+                        "Use hwpforge_to_json to export for structural editing",
+                    ],
+                );
+                Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
+            }
+            Err(err) => Ok(tool_error_response(err)),
+        }
+    }
+
+    /// Diff two HWPX files: verify what an edit actually changed.
+    #[tool(
+        name = "hwpforge_diff",
+        description = "Compare two HWPX files. semantic channel = decoded Core structure classified into field values, table-cell text {table,row,col}, paragraph text {section,para}, structure counts, and a capped unclassified remainder; package channel = ZIP entries compared by bytes. Run after hwpforge_fill / hwpforge_set_cell / hwpforge_stamp / hwpforge_patch to confirm only the intended delta landed. Wire content inside a changed entry (e.g. layout caches) is not itemized — the report states its comparison levels explicitly."
+    )]
+    async fn hwpforge_diff(
+        &self,
+        Parameters(req): Parameters<DiffRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = tokio::task::spawn_blocking(move || {
+            diff::run_diff(&req.base_path, &req.revised_path, req.output_path.as_deref())
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?;
+
+        match result {
+            Ok(data) => {
+                let summary = data.summary.clone();
+                let output = ToolOutput::new(
+                    &data,
+                    summary,
+                    vec![
+                        "If unexpected changes appear, re-apply the edit from the pristine base",
+                        "Use hwpforge_read to inspect a reported location in detail",
+                    ],
+                );
+                Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
+            }
+            Err(err) => Ok(tool_error_response(err)),
+        }
+    }
+
+    /// Targeted text read: paragraph range, table grid, or field by name.
+    #[tool(
+        name = "hwpforge_read",
+        description = "Read a targeted text projection without exporting the whole document. Exactly one target: section (paragraph range via optional paras \"A..B\") for text with outline/list kinds; table (ordinal) for the logical grid text matrix (merged regions appear once at their anchor with spans); field (name) for a named click-here field. Non-text content surfaces as explicit markers. Read-only: to change what you read, use hwpforge_fill / hwpforge_set_cell / hwpforge_patch."
+    )]
+    async fn hwpforge_read(
+        &self,
+        Parameters(req): Parameters<ReadRequest>,
+    ) -> Result<CallToolResult, McpError> {
+        let result = tokio::task::spawn_blocking(move || {
+            read::run_read(
+                &req.file_path,
+                req.section,
+                req.paras.as_deref(),
+                req.table,
+                req.field.as_deref(),
+            )
+        })
+        .await
+        .map_err(|e| McpError::internal_error(format!("Task join error: {e}"), None))?;
+
+        match result {
+            Ok(data) => {
+                let summary = data.summary();
+                let output = ToolOutput::new(
+                    &data,
+                    summary,
+                    vec![
+                        "Use hwpforge_fill to fill named fields",
+                        "Use hwpforge_set_cell to fill table cells by addr",
+                        "Use hwpforge_to_json + hwpforge_patch for text edits beyond fields/cells",
+                    ],
                 );
                 Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
             }
@@ -459,7 +607,7 @@ impl HwpForgeServer {
                         data.output_path,
                         data.size_bytes,
                     ),
-                    vec!["Use hwpforge_inspect or hwpforge_to_md to verify the filled output"],
+                    vec!["Use hwpforge_diff (base vs output) to verify only the intended fields changed"],
                 );
                 Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
             }
@@ -538,6 +686,7 @@ impl HwpForgeServer {
                     vec![
                         "Use hwpforge_fields to list the stamped fields",
                         "Fill them with hwpforge_fill (name→value map)",
+                        "Verify with hwpforge_diff (base vs output): expect added fields + marker text changes only",
                     ],
                 );
                 Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))
@@ -580,7 +729,7 @@ impl HwpForgeServer {
                     ),
                     vec![
                         "Each result reports requested/anchor/resolution — covered coordinates were redirected to their merge anchor",
-                        "Verify with hwpforge_to_json (cells carry addr {row,col})",
+                        "Verify with hwpforge_diff (base vs output) — cell changes are reported by {table,row,col}",
                     ],
                 );
                 Ok(CallToolResult::success(vec![ContentBlock::text(output.to_json_string())]))

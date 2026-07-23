@@ -3062,6 +3062,288 @@ fn fields_lists_named_clickhere_with_fillability() {
 }
 
 #[test]
+fn outline_reports_navigation_map_for_table_fixture() {
+    let f = fixture("table_01_basic_2x2.hwpx");
+    let (value, _, code) = run_json(&["outline", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(value["status"], "ok");
+    let outline = &value["outline"];
+    assert_eq!(outline["sections"][0]["tables"], 1);
+    assert_eq!(outline["tables"][0]["ordinal"], 0);
+    assert_eq!(outline["tables"][0]["rows"], 2);
+    assert_eq!(outline["tables"][0]["cols"], 2);
+    assert_eq!(outline["tables"][0]["addressable"], true);
+}
+
+#[test]
+fn outline_exposes_named_fields_axis() {
+    let f = fixture("clickhere_named.hwpx");
+    let (value, _, code) = run_json(&["outline", f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(value["outline"]["fields"][0]["name"], "user_email");
+}
+
+#[test]
+fn read_table_grid_matrix_via_cli() {
+    let f = fixture("table_01_basic_2x2.hwpx");
+    let (value, _, code) = run_json(&["read", f.to_str().unwrap(), "--table", "0"]);
+    assert_eq!(code, 0);
+    assert_eq!(value["status"], "ok");
+    assert_eq!(value["table"]["rows"], 2);
+    assert_eq!(value["table"]["cols"], 2);
+    assert_eq!(value["table"]["cells"].as_array().unwrap().len(), 4);
+}
+
+#[test]
+fn read_paragraph_range_and_field_via_cli() {
+    let f = fixture("clickhere_named.hwpx");
+    let (value, _, code) = run_json(&["read", f.to_str().unwrap(), "--field", "user_email"]);
+    assert_eq!(code, 0);
+    assert_eq!(value["fields"][0]["name"], "user_email");
+
+    let (v2, _, c2) = run_json(&["read", f.to_str().unwrap(), "--section", "0", "--paras", "0"]);
+    assert_eq!(c2, 0);
+    assert_eq!(v2["paragraphs"]["from"], 0);
+    assert_eq!(v2["paragraphs"]["to"], 0);
+    assert_eq!(v2["paragraphs"]["paragraphs"].as_array().unwrap().len(), 1);
+}
+
+#[test]
+fn read_rejects_conflicting_targets() {
+    let f = fixture("clickhere_named.hwpx");
+    let (err, _, code) = run_json(&["read", f.to_str().unwrap(), "--table", "0", "--field", "x"]);
+    assert_eq!(code, 1);
+    assert_eq!(err["code"], "READ_TARGET_REQUIRED");
+}
+
+#[test]
+fn diff_self_is_identical_via_cli() {
+    let f = fixture("table_01_basic_2x2.hwpx");
+    let (value, _, code) = run_json(&["diff", f.to_str().unwrap(), f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(value["diff"]["identical"], true);
+}
+
+#[test]
+fn diff_verifies_fill_delta_end_to_end() {
+    let f = fixture("clickhere_named.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("filled.hwpx");
+    let (_, _, fill_code) = run_json(&[
+        "fill",
+        f.to_str().unwrap(),
+        "--set",
+        "user_email=diff@cli.io",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(fill_code, 0);
+
+    let report = tmp.join("report.json");
+    let (value, _, code) = run_json(&[
+        "diff",
+        f.to_str().unwrap(),
+        out.to_str().unwrap(),
+        "-o",
+        report.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+    let semantic = &value["diff"]["semantic"];
+    assert_eq!(semantic["field_values"][0]["name"], "user_email");
+    assert_eq!(semantic["field_values"][0]["after"], "diff@cli.io");
+    assert!(semantic["paragraphs"].as_array().unwrap().is_empty());
+    assert!(semantic["raw"].as_array().unwrap().is_empty());
+    // Full report file written alongside inline output.
+    let report_value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&report).unwrap()).unwrap();
+    assert_eq!(report_value["identical"], false);
+}
+
+#[test]
+fn outline_text_mode_renders_navigation_sections() {
+    let tables = fixture("table_01_basic_2x2.hwpx");
+    let (stdout, _, code) = run(&["outline", tables.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Tables:"), "stdout: {stdout}");
+    assert!(stdout.contains("[0] 2x2"), "stdout: {stdout}");
+
+    let fields = fixture("clickhere_named.hwpx");
+    let (stdout, _, code) = run(&["outline", fields.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Fields:"), "stdout: {stdout}");
+    assert!(stdout.contains("user_email"), "stdout: {stdout}");
+}
+
+#[test]
+fn read_text_mode_renders_all_three_targets() {
+    let f = fixture("clickhere_named.hwpx");
+    let (stdout, _, code) = run(&["read", f.to_str().unwrap(), "--section", "0"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("[p0]"), "stdout: {stdout}");
+    assert!(stdout.contains("control:field"), "stdout: {stdout}");
+
+    let t = fixture("tables/merged_grid_form.hwpx");
+    let (stdout, _, code) = run(&["read", t.to_str().unwrap(), "--table", "0"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("table 0 ("), "stdout: {stdout}");
+    assert!(stdout.contains("[0,0"), "stdout: {stdout}");
+
+    let (stdout, _, code) = run(&["read", f.to_str().unwrap(), "--field", "user_email"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("user_email"), "stdout: {stdout}");
+}
+
+#[test]
+fn read_error_paths_report_stable_codes() {
+    let f = fixture("clickhere_named.hwpx");
+
+    let (err, _, code) =
+        run_json(&["read", f.to_str().unwrap(), "--section", "0", "--paras", "abc"]);
+    assert_eq!(code, 1);
+    assert_eq!(err["code"], "READ_PARAS_INVALID");
+
+    let (err, _, code) = run_json(&["read", f.to_str().unwrap(), "--section", "9"]);
+    assert_eq!(code, 1);
+    assert_eq!(err["code"], "READ_SECTION_OUT_OF_RANGE");
+
+    let (err, _, code) = run_json(&["read", f.to_str().unwrap(), "--field", "없는이름"]);
+    assert_eq!(code, 1);
+    assert_eq!(err["code"], "READ_FIELD_NOT_FOUND");
+
+    let (err, _, code) = run_json(&["read", f.to_str().unwrap(), "--table", "42"]);
+    assert_eq!(code, 1);
+    assert_eq!(err["code"], "READ_TABLE_OUT_OF_RANGE");
+
+    let (err, _, code) = run_json(&["read", f.to_str().unwrap(), "--paras", "0"]);
+    assert_eq!(code, 1);
+    assert_eq!(err["code"], "READ_TARGET_REQUIRED");
+
+    let (err, _, code) = run_json(&["read", f.to_str().unwrap(), "--table", "0", "--paras", "0"]);
+    assert_eq!(code, 1);
+    assert_eq!(err["code"], "READ_PARAS_WITHOUT_SECTION");
+
+    // Text-mode error rendering path.
+    let (_, stderr, code) = run(&["read", f.to_str().unwrap(), "--field", "없는이름"]);
+    assert_eq!(code, 1);
+    assert!(stderr.contains("READ_FIELD_NOT_FOUND"), "stderr: {stderr}");
+}
+
+#[test]
+fn diff_text_mode_renders_identical_and_delta() {
+    let f = fixture("clickhere_named.hwpx");
+    let (stdout, _, code) = run(&["diff", f.to_str().unwrap(), f.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("identical"), "stdout: {stdout}");
+
+    let tmp = test_tmp();
+    let out = tmp.join("filled.hwpx");
+    let (_, _, fill_code) = run_json(&[
+        "fill",
+        f.to_str().unwrap(),
+        "--set",
+        "user_email=text@mode.io",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(fill_code, 0);
+
+    let (stdout, _, code) = run(&["diff", f.to_str().unwrap(), out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Fields:"), "stdout: {stdout}");
+    assert!(stdout.contains("user_email"), "stdout: {stdout}");
+    assert!(stdout.contains("Package entries:"), "stdout: {stdout}");
+    assert!(stdout.contains("Note:"), "stdout: {stdout}");
+
+    let (err, _, code) = run_json(&["diff", f.to_str().unwrap(), "/nonexistent/x.hwpx"]);
+    assert_eq!(code, 1);
+    assert_eq!(err["code"], "FILE_READ_FAILED");
+}
+
+#[test]
+fn diff_text_mode_renders_cell_and_paragraph_changes() {
+    let base = fixture("tables/merged_grid_form.hwpx");
+    let tmp = test_tmp();
+
+    // Self-adapting target: first empty anchor cell of table 0 via `read`.
+    let (view, _, read_code) = run_json(&["read", base.to_str().unwrap(), "--table", "0"]);
+    assert_eq!(read_code, 0);
+    let empty = view["table"]["cells"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["text"].as_str().unwrap_or("x").trim().is_empty())
+        .expect("empty cell in fixture");
+    let at = format!("{},{}", empty["row"], empty["col"]);
+
+    let out = tmp.join("cell.hwpx");
+    let (_, _, code) = run_json(&[
+        "set-cell",
+        base.to_str().unwrap(),
+        "--table",
+        "0",
+        "--at",
+        &at,
+        "--text",
+        "텍스트모드",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+
+    let (stdout, _, code) = run(&["diff", base.to_str().unwrap(), out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Cells:"), "stdout: {stdout}");
+    assert!(stdout.contains("텍스트모드"), "stdout: {stdout}");
+}
+
+#[test]
+fn outline_and_read_text_mode_render_headings_and_lists() {
+    let tmp = test_tmp();
+    let md = create_test_md(
+        &tmp,
+        "# 사업 개요\n\n본문\n\n## 세부 목표\n\n- 항목 하나\n\n1. 번호 항목\n\n- [x] 완료 항목\n\n- [ ] 미완 항목\n",
+    );
+    let doc = tmp.join("outline_probe.hwpx");
+    let (_, _, code) = run(&["convert", md.to_str().unwrap(), "-o", doc.to_str().unwrap()]);
+    assert_eq!(code, 0);
+
+    let (stdout, _, code) = run(&["outline", doc.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Headings:"), "stdout: {stdout}");
+    assert!(stdout.contains("# 사업 개요"), "stdout: {stdout}");
+    assert!(stdout.contains("## 세부 목표"), "stdout: {stdout}");
+
+    let (stdout, _, code) = run(&["read", doc.to_str().unwrap(), "--section", "0"]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("# 사업 개요"), "stdout: {stdout}");
+    assert!(stdout.contains("- 항목 하나"), "stdout: {stdout}");
+    assert!(stdout.contains("1. 번호 항목"), "stdout: {stdout}");
+    assert!(stdout.contains("- [x] 완료 항목"), "stdout: {stdout}");
+    assert!(stdout.contains("- [ ] 미완 항목"), "stdout: {stdout}");
+}
+
+#[test]
+fn diff_text_mode_renders_paragraph_and_structure_changes() {
+    let tmp = test_tmp();
+    let md_a = create_test_md(&tmp, "# 제목\n\n본문 하나\n");
+    let a = tmp.join("a.hwpx");
+    let (_, _, code) = run(&["convert", md_a.to_str().unwrap(), "-o", a.to_str().unwrap()]);
+    assert_eq!(code, 0);
+
+    let md_b = tmp.join("b.md");
+    std::fs::write(&md_b, "# 제목\n\n본문 둘\n\n추가 문단\n").unwrap();
+    let b = tmp.join("b.hwpx");
+    let (_, _, code) = run(&["convert", md_b.to_str().unwrap(), "-o", b.to_str().unwrap()]);
+    assert_eq!(code, 0);
+
+    let (stdout, _, code) = run(&["diff", a.to_str().unwrap(), b.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Paragraphs:"), "stdout: {stdout}");
+    assert!(stdout.contains("Structure:"), "stdout: {stdout}");
+    assert!(stdout.contains("Note:"), "stdout: {stdout}");
+}
+
+#[test]
 fn fill_named_field_end_to_end() {
     let f = fixture("clickhere_named.hwpx");
     let tmp = test_tmp();

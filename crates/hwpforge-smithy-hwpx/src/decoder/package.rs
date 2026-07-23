@@ -231,7 +231,7 @@ impl<'a> PackageReader<'a> {
     /// Reads a single entry from the archive as raw bytes.
     ///
     /// Similar to [`read_entry`] but returns `Vec<u8>` instead of `String`.
-    fn read_binary_entry(&mut self, path: &str) -> HwpxResult<Vec<u8>> {
+    pub(crate) fn read_binary_entry(&mut self, path: &str) -> HwpxResult<Vec<u8>> {
         let file = self
             .archive
             .by_name(path)

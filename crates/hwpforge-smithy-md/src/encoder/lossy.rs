@@ -2,7 +2,9 @@
 
 use hwpforge_blueprint::registry::StyleRegistry;
 use hwpforge_blueprint::template::Template;
-use hwpforge_core::{Control, Document, Paragraph, ParagraphListRef, RunContent, Table, Validated};
+use hwpforge_core::{
+    Control, Document, ListItemKind, Paragraph, ParagraphListRef, RunContent, Table, Validated,
+};
 
 use super::list_format::{format_list_continuation, format_list_item};
 use crate::error::MdResult;
@@ -154,13 +156,13 @@ fn format_registry_list_item(
     match list {
         ParagraphListRef::Outline { .. } => None,
         ParagraphListRef::Number { level, .. } => {
-            Some(format_list_item(text, "NUMBER", level, None))
+            Some(format_list_item(text, ListItemKind::Number, level, None))
         }
         ParagraphListRef::Bullet { level, .. } => {
-            Some(format_list_item(text, "BULLET", level, None))
+            Some(format_list_item(text, ListItemKind::Bullet, level, None))
         }
         ParagraphListRef::CheckBullet { level, checked, .. } => {
-            Some(format_list_item(text, "BULLET", level, Some(checked)))
+            Some(format_list_item(text, ListItemKind::Bullet, level, Some(checked)))
         }
     }
 }

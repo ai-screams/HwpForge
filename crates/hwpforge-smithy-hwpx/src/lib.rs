@@ -53,6 +53,7 @@ pub mod cell_edit;
 mod color;
 pub mod decoder;
 pub mod default_styles;
+mod diff;
 mod encoder;
 pub mod error;
 pub mod exchange;
@@ -63,6 +64,7 @@ mod layout_carry;
 mod list_bridge;
 mod patch;
 pub mod presets;
+mod read;
 mod registry_bridge;
 mod schema;
 mod section_workflow;
@@ -78,6 +80,11 @@ pub use cell_edit::{
 pub use decoder::package::{PackageEntryInfo, PackageReader};
 pub use decoder::{HwpxDecoder, HwpxDocument};
 pub use default_styles::{DefaultStyleEntry, HancomStyleSet};
+pub use diff::{
+    CellTextChange, DocumentDiff, FieldChange, FieldChangeKind, HwpxDiffer, PackageDiff,
+    ParagraphChange, ParagraphChangeKind, RawChange, SemanticDiff, StructureChange,
+    COMPARISON_NOTE, RAW_CAP,
+};
 pub use encoder::HwpxEncoder;
 pub use error::{HwpxError, HwpxErrorCode, HwpxResult};
 pub use exchange::{
@@ -87,6 +94,11 @@ pub use exchange::{
 pub use fill::{FieldInfo, FillError, FillOutcome, FilledField, HwpxFiller};
 pub use patch::HwpxPatcher;
 pub use presets::{builtin_presets, style_store_for_preset, PresetInfo};
+pub use read::{
+    CellView, DocumentOutline, EmbeddedContent, HwpxReader, OutlineBookmark, OutlineHeading,
+    OutlineHeadingSource, OutlineTable, ParaKindView, ParaLocator, ParagraphView, ParagraphsView,
+    ReadError, SectionOutline, TableView,
+};
 pub use registry_bridge::HwpxRegistryBridge;
 pub use section_workflow::{
     SectionExportOutcome, SectionPatchOutcome, SectionWorkflowError, SectionWorkflowWarning,
