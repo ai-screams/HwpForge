@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.6](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.11.5...hwpforge-smithy-hwpx-v0.11.6) - 2026-07-24
+
+### Added
+
+- *(hwpx)* E4 W3 — 문단 insert + G2 linesegarray 처리
+
+- *(hwpx)* E4 W2 — 문단 delete (바이트 스플라이스 + reverse-delta 검증)
+
+- *(hwpx)* E4 W1 — 문단 참조 스캔 + 최상위 span 스캐너 승격
+
+
+### Changed
+
+- refactor(hwpx)+test: E4 구조 편집 admission/self-verify DRY + 안전망 커버
+
+
+### Fixed
+
+- *(hwpx)* E4 독립 리뷰 상환 — 문단 id 재번호(H1) + strip depth-aware(M1) 외
+
+
 ## [0.11.5](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.11.4...hwpforge-smithy-hwpx-v0.11.5) - 2026-07-23
 
 ### Added

@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.6](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.11.5...hwpforge-bindings-mcp-v0.11.6) - 2026-07-24
+
+### Added
+
+- feat(mcp)+docs(skill): E4 W4b — insert_para/delete_para 툴 + 스킬
+
+
+### Changed
+
+- refactor(hwpx)+test: E4 구조 편집 admission/self-verify DRY + 안전망 커버
+
+
+### Fixed
+
+- *(hwpx)* E4 독립 리뷰 상환 — 문단 id 재번호(H1) + strip depth-aware(M1) 외
+
+
 ## [0.11.5](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.11.4...hwpforge-bindings-mcp-v0.11.5) - 2026-07-23
 
 ### Added
