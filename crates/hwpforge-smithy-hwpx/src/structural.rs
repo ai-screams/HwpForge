@@ -235,6 +235,33 @@ fn map_admission(error: StamperError) -> StructuralEditError {
     }
 }
 
+/// Input admission gate shared by insert and delete: the base must round-trip
+/// (decode→encode→decode is a no-op) so a byte-splice edit can be verified.
+/// Returns the decoded base on success.
+fn admit(base: &[u8]) -> Result<HwpxDocument, StructuralEditError> {
+    let d0 = HwpxDecoder::decode(base).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+    let e0 = encode_hwpx(&d0).map_err(map_admission)?;
+    let d1 = HwpxDecoder::decode(&e0).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+    admission_compare(&d0, &d1).map_err(map_admission)?;
+    check_zip_carry(base, &e0).map_err(map_admission)?;
+    Ok(d0)
+}
+
+/// Reverse-delta self-verify shared by insert and delete: the re-decoded output
+/// must equal the declared delta (Core-structure equality), else the edit is
+/// refused with no bytes.
+fn self_verify(bytes: &[u8], expected: &HwpxDocument) -> Result<(), StructuralEditError> {
+    let d2 = HwpxDecoder::decode(bytes).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
+    admission_compare(&d2, expected).map_err(|e| match e {
+        StamperError::NotRoundTripSafe { component, diff_path } => {
+            StructuralEditError::DeltaMismatch {
+                detail: format!("{component} diverges at {diff_path}"),
+            }
+        }
+        other => StructuralEditError::DeltaMismatch { detail: other.to_string() },
+    })
+}
+
 /// Byte-splice structural editor (preserve-first, admission-gated).
 #[derive(Debug)]
 pub struct HwpxStructuralEditor;
@@ -261,13 +288,7 @@ impl HwpxStructuralEditor {
             return Ok(base.to_vec());
         }
         // ── input admission: base must round-trip so we can verify ──
-        let d0 =
-            HwpxDecoder::decode(base).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
-        let e0 = encode_hwpx(&d0).map_err(map_admission)?;
-        let d1 = HwpxDecoder::decode(&e0).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
-        admission_compare(&d0, &d1).map_err(map_admission)?;
-        check_zip_carry(base, &e0).map_err(map_admission)?;
-
+        let d0 = admit(base)?;
         let sections = d0.document.sections();
 
         // ── preflight: ranges, duplicates, rejection rules ──
@@ -376,21 +397,12 @@ impl HwpxStructuralEditor {
         let bytes = package.write().map_err(|e| StructuralEditError::Codec(e.to_string()))?;
 
         // ── reverse-delta self-verify: output ≡ declared delta ──
-        let d2 =
-            HwpxDecoder::decode(&bytes).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
         let expected_doc = HwpxDocument {
             document: expected,
             style_store: d0.style_store.clone(),
             image_store: d0.image_store.clone(),
         };
-        admission_compare(&d2, &expected_doc).map_err(|e| match e {
-            StamperError::NotRoundTripSafe { component, diff_path } => {
-                StructuralEditError::DeltaMismatch {
-                    detail: format!("{component} diverges at {diff_path}"),
-                }
-            }
-            other => StructuralEditError::DeltaMismatch { detail: other.to_string() },
-        })?;
+        self_verify(&bytes, &expected_doc)?;
 
         Ok(bytes)
     }
@@ -417,12 +429,7 @@ impl HwpxStructuralEditor {
         }
 
         // ── input admission ──
-        let d0 =
-            HwpxDecoder::decode(base).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
-        let e0 = encode_hwpx(&d0).map_err(map_admission)?;
-        let d1 = HwpxDecoder::decode(&e0).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
-        admission_compare(&d0, &d1).map_err(map_admission)?;
-        check_zip_carry(base, &e0).map_err(map_admission)?;
+        let d0 = admit(base)?;
 
         let anchor = insertion.anchor;
         let sections = d0.document.sections();
@@ -533,21 +540,12 @@ impl HwpxStructuralEditor {
         let bytes = package.write().map_err(|e| StructuralEditError::Codec(e.to_string()))?;
 
         // ── reverse-delta self-verify ──
-        let d2 =
-            HwpxDecoder::decode(&bytes).map_err(|e| StructuralEditError::Codec(e.to_string()))?;
         let expected_doc = HwpxDocument {
             document: expected,
             style_store: d0.style_store.clone(),
             image_store: d0.image_store.clone(),
         };
-        admission_compare(&d2, &expected_doc).map_err(|e| match e {
-            StamperError::NotRoundTripSafe { component, diff_path } => {
-                StructuralEditError::DeltaMismatch {
-                    detail: format!("{component} diverges at {diff_path}"),
-                }
-            }
-            other => StructuralEditError::DeltaMismatch { detail: other.to_string() },
-        })?;
+        self_verify(&bytes, &expected_doc)?;
 
         Ok(bytes)
     }
@@ -1151,6 +1149,20 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn insert_refuses_non_round_trip_safe_input() {
+        // The insert admission path (mirrors delete) must also reject a
+        // Hancom-authored input that does not round-trip.
+        let base = fixture("plain_inserted.hwpx");
+        assert!(matches!(
+            HwpxStructuralEditor::insert_paragraph(
+                &base,
+                &insertion(0, 1, InsertPosition::After, "x")
+            ),
+            Err(StructuralEditError::NotRoundTripSafe { .. })
+        ));
+    }
+
     fn paragraph_ids(bytes: &[u8]) -> Vec<u32> {
         let pkg = RawPackage::read(bytes).unwrap();
         let xml = pkg.read_text_entry("Contents/section0.xml").unwrap();
@@ -1256,6 +1268,49 @@ mod tests {
         );
         let out = strip_line_segs_from(xml, 5).unwrap();
         assert_eq!(out, xml, "no paragraph at or past the index → unchanged");
+    }
+
+    #[test]
+    fn self_verify_flags_a_declared_delta_mismatch() {
+        // Safety-net coverage: feed self_verify an "expected" document that
+        // does not match the bytes → the reverse-delta guard must fire.
+        let base = fixture("plain_paragraphs.hwpx");
+        let decoded = HwpxDecoder::decode(&base).unwrap();
+        // Valid bytes decode to 4 paragraphs; claim a 3-paragraph expected.
+        let mut wrong = decoded.document.clone();
+        wrong.sections_mut()[0].paragraphs.pop();
+        let expected = HwpxDocument {
+            document: wrong,
+            style_store: decoded.style_store.clone(),
+            image_store: decoded.image_store.clone(),
+        };
+        assert!(matches!(
+            self_verify(&base, &expected),
+            Err(StructuralEditError::DeltaMismatch { .. })
+        ));
+    }
+
+    #[test]
+    fn self_verify_passes_for_matching_expected() {
+        let base = fixture("plain_paragraphs.hwpx");
+        let decoded = HwpxDecoder::decode(&base).unwrap();
+        let expected = HwpxDocument {
+            document: decoded.document.clone(),
+            style_store: decoded.style_store.clone(),
+            image_store: decoded.image_store.clone(),
+        };
+        assert!(self_verify(&base, &expected).is_ok());
+    }
+
+    #[test]
+    fn admit_accepts_round_trip_safe_and_rejects_others() {
+        let base = fixture("plain_paragraphs.hwpx");
+        assert!(admit(&base).is_ok());
+        assert!(matches!(admit(b"not a zip"), Err(StructuralEditError::Codec(_))));
+        assert!(matches!(
+            admit(&fixture("plain_inserted.hwpx")),
+            Err(StructuralEditError::NotRoundTripSafe { .. })
+        ));
     }
 
     #[test]

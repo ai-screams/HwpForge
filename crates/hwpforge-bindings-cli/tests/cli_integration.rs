@@ -3621,6 +3621,60 @@ fn structural_edit_batch_and_structural_rejections() {
 }
 
 #[test]
+fn structural_edit_write_failure_and_batch_json_shape() {
+    let f = fixture("plain_paragraphs.hwpx");
+    let tmp = test_tmp();
+
+    // Unwritable output path → FILE_WRITE_FAILED, exit code 2.
+    let bad = "/nonexistent-dir-e4/out.hwpx";
+    let (err, _, c) = run_json(&[
+        "insert-para",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        "--anchor",
+        "1",
+        "--text",
+        "x",
+        "-o",
+        bad,
+    ]);
+    assert_eq!(c, 2);
+    assert_eq!(err["code"], "FILE_WRITE_FAILED");
+
+    let (err, _, c) = run_json(&[
+        "delete-para",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        "--index",
+        "1",
+        "-o",
+        bad,
+    ]);
+    assert_eq!(c, 2);
+    assert_eq!(err["code"], "FILE_WRITE_FAILED");
+
+    // Batch delete success JSON carries the requested indices.
+    let out = tmp.join("o.hwpx");
+    let (v, _, c) = run_json(&[
+        "delete-para",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        "--index",
+        "1",
+        "--index",
+        "3",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(c, 0);
+    assert_eq!(v["deleted"], 2);
+    assert_eq!(v["indices"], serde_json::json!([1, 3]));
+}
+
+#[test]
 fn fill_named_field_end_to_end() {
     let f = fixture("clickhere_named.hwpx");
     let tmp = test_tmp();
