@@ -204,6 +204,17 @@ mod tests {
     }
 
     #[test]
+    fn write_failure_is_reported() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = base_doc(&dir);
+        let err =
+            run_insert_para(&base, 0, 1, false, "x", "/nonexistent-dir-e4/o.hwpx").unwrap_err();
+        assert_eq!(err.code, "FILE_WRITE_FAILED");
+        let err = run_delete_para(&base, 0, &[1], "/nonexistent-dir-e4/o.hwpx").unwrap_err();
+        assert_eq!(err.code, "FILE_WRITE_FAILED");
+    }
+
+    #[test]
     fn error_code_mapping_reference_and_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let out = dir.path().join("out.hwpx");
