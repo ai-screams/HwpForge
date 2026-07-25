@@ -480,6 +480,8 @@ $RECYCLE.BIN/
 .claude/*
 # Share skills (agentskills.io standard — project-level AI instructions)
 !.claude/skills/
+# Share rules (auto-loaded project process rules — e.g. epic workflow)
+!.claude/rules/
 
 # npm package bin/ directories (override global [Bb]in rule)
 !npm/packages/*/bin/
