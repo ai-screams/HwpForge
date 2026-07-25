@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.7](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.11.6...hwpforge-bindings-mcp-v0.11.7) - 2026-07-25
+
+### Added
+
+- insert-para 배치·delete-para 경고를 CLI/MCP 표면에 노출 (E4 후속)
+
+
 ## [0.11.6](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.11.5...hwpforge-bindings-mcp-v0.11.6) - 2026-07-24
 
 ### Added
