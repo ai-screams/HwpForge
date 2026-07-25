@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document formats, designed with LLM-first principles. The goal is to enable AI agents (like Claude Code) to generate Korean government proposal documents using natural language + Markdown + YAML style templates.
 
-**Current Status** (snapshot — 2026-07-13):
+**Current Status** (snapshot — 2026-07-25):
 
 - HWPX codec: read/write shipped · Markdown bridge: read/write shipped
 - HWP5 → HWPX converter path: active, style/layout fidelity line in progress
@@ -17,7 +17,7 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 - Phase 12 HWP5→HWPX carry series (GSO shapes/equation/memo/dutmal/compose/indexmark/click-here·auto fields/cross-ref instId/document metadata/outline 1–10) `main` 머지 완료.
 - **E6 IR 와이어-누출 상환 완료** (`0.9.0`): Summery rename(A) · BookmarkName collapse(B) · raw wire 필드 제거(C) · `inst_id`/`SystemId`→공유 `ObjectId`(M2). **H1(display_text)=Won't-do** (ADR-009 §CLOSURE, memory `e6-wire-leak-status-h1-wontdo.md`).
 - **0.10.0 릴리스** (2026-07-02): colLine(다단 구분선) HWPX+HWP5 carry(breaking) + rmcp 2.0 보안(GHSA-89vp-x53w-74fx)·quick-xml 0.41 + 문서 정합.
-- **AI 편집 Wave 1** (2026-07-12~13): 누름틀(ClickHere) 채우기 — PR #97, **`0.11.0` 릴리스 완료** (crates.io+npm, `feat!:` `Field::display_text` 의미 변경) + `fill` 델타 API·`fields` 발견 표면 — PR #99, **`0.11.1` 릴리스 완료** (2026-07-13, Release PR #100). 설계/로드맵 = `.docs/planning/2026-07-10-agent-editing-architecture.md` (남은 조각: E3 표 격자 주소 · E6 스탬핑).
+- **AI 편집(에이전트 편집) 전 에픽 배포 완료** (2026-07-12~24, `0.11.0`→`0.11.6`): E1 누름틀 채우기(`0.11.0`, `feat!:` `display_text` 의미 변경) · E2 `fill` 델타 API·`fields`(`0.11.1`) · E6 템플릿 스탬핑 W1(`0.11.2`) · E3 표 격자 주소+`set-cell`(`0.11.3`) · E6 W2 클래스-B 셀 스탬핑+`layout_carry` linesegarray 보존(`0.11.4`) · E5 outline/read/diff 읽기 3표면(`0.11.5`) · E4 문단 구조 편집 `insert-para`/`delete-para`(`0.11.6`, preserve-first 바이트 스플라이스 + reverse-delta self-verify). 설계/로드맵 = `.docs/planning/2026-07-10-agent-editing-architecture.md` (남은 후속: E4b 표 행 편집 · `<hp:t>` 줄 경계 분할 보존 등 backlog).
 
 > **이 섹션은 짧은 상태 스냅샷으로만 유지한다 (wave-by-wave 이력을 여기 다시 쌓지 말 것).**
 > Wave별 상세 이력 + breaking change: **`CHANGELOG.md`** (canonical) 와 memory `MEMORY.md` / `phase11_wave_history.md`.
@@ -34,7 +34,7 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 
 **Workspace Facts** (code-grounded — 카운트는 drift하니 인용 전 확인):
 
-- Cargo packages `11` · crates.io published `0.11.1` (E2 fill 델타 API, 2026-07-13) · MSRV `1.88` · Dev toolchain Rust `1.93`
+- Cargo packages `11` · crates.io published `0.11.6` (E4 문단 구조 편집, 2026-07-24) · MSRV `1.88` · Dev toolchain Rust `1.93`
 - `crates/` 추적 src 파일 ~`177` · nextest ~`2,688` passed + `2` skipped · `examples/` 산출물 `68`+ (미추적 `examples/hwp5_review/` 리뷰 영역 별도 — gitignore 아님) · GitHub workflows `5`
 
 ---
@@ -359,26 +359,10 @@ Local planning and research workspace. It may be git-excluded in this repository
 
 ## Working on a New Slice
 
-### Before Starting
+> **정식 에픽 워크플로우 = `.claude/rules/epic-workflow.md`** (자동 로드 — E3~E6·E4 로 검증된 프로세스, 그쪽이 canonical).
+> 요약: 사전 확인(ground truth) → 연구·설계(`.docs/planning/`, 실측 근거) → Codex 적대 리뷰 → **확정 계획 보고·사용자 승인** → TDD 웨이브 → 시각 게이트(사용자 판정·PDF 대조) → 독립 리뷰 상환 → CI·merge queue → release-plz 릴리스 실측 검증 → 기록.
 
-1. Read root `AGENTS.md`.
-2. Read `crates/AGENTS.md` and the target crate's local `AGENTS.md` if present.
-3. Check code, manifests, and entrypoints before trusting roadmap prose.
-4. If HWP5 reveals a new semantic, confirm the shared model can carry it before wiring format-specific code.
-5. If the change may break public API or semver, stop and get approval first.
-
-### During Implementation
-
-1. **TDD**: Edge cases first
-2. **Atomic commits**: One logical change per commit
-3. **Documentation**: 100% rustdoc (enforced by `#![deny(missing_docs)]`)
-4. **Zero warnings**: `cargo clippy -- -D warnings`
-
-### After Implementation
-
-1. Run `make ci-fast` (or stricter checks if the slice warrants it)
-2. Re-check public API / semver impact before release-facing actions
-3. Update local research or Serena memory only if it materially changes the working model
+구현 중 상시 규칙: **TDD edge-first** · **atomic conventional commits** · **100% rustdoc** (`#![deny(missing_docs)]`) · **zero clippy warnings**.
 
 ---
 
