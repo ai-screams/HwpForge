@@ -391,6 +391,29 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "perf probe (E3 L5): run manually — numbers recorded in the planning doc"]
+    fn perf_probe_annotate_and_verify_on_large_table() {
+        // 100×100 = 10,000 cells — well above the largest corpus table
+        // (414 logical positions). Probes the per-cell root-`nav` cost that
+        // the E3 review flagged; refactor only if these numbers matter.
+        let big = Table::new(
+            (0..100).map(|_| TableRow::new((0..100).map(|_| cell(1, 1)).collect())).collect(),
+        );
+        let doc = doc_with(big);
+        let mut root = export_value(&doc);
+
+        let t0 = std::time::Instant::now();
+        annotate_document_addresses(&mut root, &doc).expect("annotate");
+        let annotate = t0.elapsed();
+
+        let t1 = std::time::Instant::now();
+        verify_document_addresses(&root, &doc).expect("verify");
+        let verify = t1.elapsed();
+
+        eprintln!("perf-probe 10k cells: annotate={annotate:?} verify={verify:?}");
+    }
+
+    #[test]
     fn verify_accepts_annotated_export_and_absent_addrs() {
         let doc = doc_with(merged_table());
         let mut root = export_value(&doc);
