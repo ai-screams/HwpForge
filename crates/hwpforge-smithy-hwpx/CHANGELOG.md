@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.11.7](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.11.6...hwpforge-smithy-hwpx-v0.11.7) - 2026-07-25
+
+### Added
+
+- 문단 배치 삽입 insert_paragraphs + 삭제 경고 스캔 scan_delete_warnings (E4 후속)
+
+
+### Fixed
+
+- lenient 격자 배치에 span-폭주 사전 가드 (E3 L3)
+
+
 ## [0.11.6](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.11.5...hwpforge-smithy-hwpx-v0.11.6) - 2026-07-24
 
 ### Added
