@@ -105,7 +105,8 @@ pub use section_workflow::{
     SectionExportOutcome, SectionPatchOutcome, SectionWorkflowError, SectionWorkflowWarning,
 };
 pub use structural::{
-    HwpxStructuralEditor, InsertPosition, Insertion, ParagraphLocator, StructuralEditError,
+    scan_delete_warnings, HwpxStructuralEditor, InsertPosition, Insertion, ParagraphLocator,
+    StructuralEditError, StructuralWarning,
 };
 pub use style_lookup_bridge::HwpxStyleLookup;
 pub use style_store::{
