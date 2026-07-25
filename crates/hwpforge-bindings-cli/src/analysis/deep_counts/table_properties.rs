@@ -73,6 +73,9 @@ pub(crate) struct DeepTablePropertiesSummary {
     pub repeat_header_tables: usize,
     pub header_rows: usize,
     pub nonzero_cell_spacing_tables: usize,
+    /// Tables whose covered span area exceeded the placement cap, so the
+    /// grid-aware cell-address scan was skipped (positional fallback used).
+    pub cell_addr_scan_skipped_tables: usize,
     pub table_border_fill_ids: BTreeSet<u32>,
     pub cell_border_fill_ids: BTreeSet<u32>,
     pub cell_heights_hwp: BTreeSet<i32>,
@@ -109,7 +112,16 @@ impl DeepTablePropertiesSummary {
             row_max_cell_heights_hwp,
         );
 
-        let cell_addrs = compute_table_cell_addresses(table);
+        let cell_addrs = match compute_table_cell_addresses(table) {
+            Some(addrs) => addrs,
+            None => {
+                // Covered-area cap tripped: degrade to positional column
+                // addresses instead of feeding the placement scan, and
+                // surface the skip through the notes channel.
+                self.cell_addr_scan_skipped_tables += 1;
+                positional_cell_addresses(table)
+            }
+        };
         for (row_idx, row) in table.rows.iter().enumerate() {
             for (cell_idx, cell) in row.cells.iter().enumerate() {
                 self.observe_table_cell(
@@ -359,6 +371,12 @@ pub(crate) fn append_table_property_notes(
     if summary.nonzero_cell_spacing_tables > 0 {
         notes.push(format!("table-nonzero-cell-spacing: {}", summary.nonzero_cell_spacing_tables));
     }
+    if summary.cell_addr_scan_skipped_tables > 0 {
+        notes.push(format!(
+            "table-cell-addr-scan-skipped: {}",
+            summary.cell_addr_scan_skipped_tables
+        ));
+    }
     if !summary.table_border_fill_ids.is_empty() {
         let ids =
             summary.table_border_fill_ids.iter().map(u32::to_string).collect::<Vec<_>>().join(",");
@@ -492,7 +510,15 @@ fn deep_table_vertical_align_from_core(value: TableVerticalAlign) -> DeepTableVe
     }
 }
 
-fn compute_table_cell_addresses(table: &Table) -> Vec<Vec<u16>> {
+fn compute_table_cell_addresses(table: &Table) -> Option<Vec<Vec<u16>>> {
+    // Guard the lenient placement scan before it allocates per-position
+    // state — this surface reads untrusted files, so pathological spans
+    // (e.g. 65535×65535) must not exhaust memory. `None` = caller degrades.
+    if hwpforge_core::table::grid::covered_area(table)
+        > hwpforge_core::table::grid::MAX_GRID_POSITIONS
+    {
+        return None;
+    }
     // Shared lenient placement (same scan the HWPX encoder uses); this
     // analysis surface reports u16 like the wire, clamping pathological
     // widths instead of wrapping.
@@ -502,7 +528,17 @@ fn compute_table_cell_addresses(table: &Table) -> Vec<Vec<u16>> {
     for placed in &placements.cells {
         row_addrs[placed.row_idx].push(placed.at.col.min(u32::from(u16::MAX)) as u16);
     }
-    row_addrs
+    Some(row_addrs)
+}
+
+/// Positional fallback when the covered-area cap refuses the placement scan:
+/// each cell reports its in-row index as the column address.
+fn positional_cell_addresses(table: &Table) -> Vec<Vec<u16>> {
+    table
+        .rows
+        .iter()
+        .map(|row| (0..row.cells.len()).map(|i| i.min(usize::from(u16::MAX)) as u16).collect())
+        .collect()
 }
 
 fn structural_table_width_hwp(table: &Table) -> Option<i32> {
@@ -523,4 +559,59 @@ fn structural_row_max_cell_heights_hwp(table: &Table) -> Vec<i32> {
                 .max()
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hwpforge_core::table::TableRow;
+    use hwpforge_foundation::HwpUnit;
+
+    fn spanned_cell(col_span: u16, row_span: u16) -> TableCell {
+        TableCell::with_span(vec![], HwpUnit::new(3000).unwrap(), col_span, row_span)
+    }
+
+    #[test]
+    fn pathological_span_table_degrades_to_positional_addresses() {
+        // Covered area 1025×1024 > MAX_GRID_POSITIONS: the scan is skipped,
+        // addresses fall back to in-row positions, and the skip surfaces
+        // through the notes channel instead of silently degrading.
+        let table = Table::new(vec![TableRow::new(vec![spanned_cell(1025, 1024)])]);
+        assert!(compute_table_cell_addresses(&table).is_none());
+        assert_eq!(positional_cell_addresses(&table), vec![vec![0]]);
+
+        let mut summary = DeepTablePropertiesSummary::default();
+        let mut next_ordinal = 1;
+        summary.observe_table(0, 0, &table, &mut next_ordinal);
+        assert_eq!(summary.cell_addr_scan_skipped_tables, 1);
+
+        let mut notes = Vec::new();
+        append_table_property_notes(&mut notes, &summary);
+        assert!(
+            notes.iter().any(|note| note == "table-cell-addr-scan-skipped: 1"),
+            "missing skip note in: {notes:?}"
+        );
+    }
+
+    #[test]
+    fn normal_table_keeps_grid_addresses_without_skip_note() {
+        // Merged first cell (row_span 2) shifts the second row's only cell to
+        // column 1 — the grid-aware address, not the positional fallback
+        // (which would report 0).
+        let table = Table::new(vec![
+            TableRow::new(vec![spanned_cell(1, 2), spanned_cell(1, 1)]),
+            TableRow::new(vec![spanned_cell(1, 1)]),
+        ]);
+        let addrs = compute_table_cell_addresses(&table).expect("well under the cap");
+        assert_eq!(addrs, vec![vec![0, 1], vec![1]]);
+
+        let mut summary = DeepTablePropertiesSummary::default();
+        let mut next_ordinal = 1;
+        summary.observe_table(0, 0, &table, &mut next_ordinal);
+        assert_eq!(summary.cell_addr_scan_skipped_tables, 0);
+
+        let mut notes = Vec::new();
+        append_table_property_notes(&mut notes, &summary);
+        assert!(notes.iter().all(|note| !note.contains("cell-addr-scan-skipped")));
+    }
 }

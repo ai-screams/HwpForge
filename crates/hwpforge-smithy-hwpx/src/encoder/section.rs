@@ -1644,6 +1644,27 @@ mod tests {
     }
 
     #[test]
+    fn pathological_span_table_rejected_before_placement() {
+        // Covered area 1025×1024 = 1_049_600 > MAX_GRID_POSITIONS
+        // (1_048_576): the encoder must fail fast instead of feeding the
+        // lenient placement scan per-position state.
+        let cell = TableCell::with_span(
+            vec![text_paragraph("x", 0, 0)],
+            HwpUnit::new(3000).unwrap(),
+            1025,
+            1024,
+        );
+        let table = Table::new(vec![TableRow::new(vec![cell])]);
+        let err = build_table(&table, 0, &mut Vec::new()).unwrap_err();
+        match &err {
+            HwpxError::InvalidStructure { detail } => {
+                assert!(detail.contains("covered area"), "unexpected detail: {detail}");
+            }
+            _ => panic!("expected InvalidStructure, got: {err:?}"),
+        }
+    }
+
+    #[test]
     fn image_without_bindata_prefix() {
         let img = Image::new(
             "image.jpg",
