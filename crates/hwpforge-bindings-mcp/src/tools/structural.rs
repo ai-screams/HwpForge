@@ -3,18 +3,23 @@
 use serde::Serialize;
 
 use hwpforge_smithy_hwpx::{
-    HwpxStructuralEditor, InsertPosition, Insertion, ParagraphLocator, StructuralEditError,
+    scan_delete_warnings, HwpxStructuralEditor, InsertPosition, ParagraphLocator,
+    StructuralEditError,
 };
 
 use crate::output::{read_file_bytes, ToolErrorInfo};
 
 /// Output of a structural edit.
 #[derive(Debug, Serialize)]
+#[non_exhaustive]
 pub struct StructuralData {
     /// Path the edited HWPX was written to.
     pub output_path: String,
     /// Human-readable description of what changed.
     pub change: String,
+    /// Non-blocking advisories (e.g. index-mark removal). Omitted when empty.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// Delete top-level paragraphs, all-or-nothing.
@@ -34,36 +39,57 @@ pub fn run_delete_para(
     let bytes = read_file_bytes(file_path)?;
     let targets: Vec<ParagraphLocator> =
         indices.iter().map(|&index| ParagraphLocator { section, index }).collect();
+    // Advisory scan (shared library messages — never a refusal): surfaced
+    // only alongside a successful edit.
+    let warnings: Vec<String> =
+        scan_delete_warnings(&bytes, &targets).iter().map(ToString::to_string).collect();
     let out = HwpxStructuralEditor::delete_paragraphs(&bytes, &targets).map_err(map_error)?;
     write_bytes(&out, output_path)?;
     Ok(StructuralData {
         output_path: output_path.to_string(),
         change: format!("deleted {} paragraph(s) from section {section}", indices.len()),
+        warnings,
     })
 }
 
-/// Insert one paragraph relative to an anchor.
+/// Insert a contiguous block of paragraphs relative to an anchor.
+///
+/// Exactly one of `text` (single paragraph) or `texts` (block) must be
+/// provided.
 pub fn run_insert_para(
     file_path: &str,
     section: usize,
     anchor: usize,
     before: bool,
-    text: &str,
+    text: Option<&str>,
+    texts: Option<&[String]>,
     output_path: &str,
 ) -> Result<StructuralData, ToolErrorInfo> {
+    let block: Vec<String> = match (text, texts) {
+        (Some(t), None) => vec![t.to_string()],
+        (None, Some(ts)) if !ts.is_empty() => ts.to_vec(),
+        _ => {
+            return Err(ToolErrorInfo::new(
+                "INSERT_TEXT_REQUIRED",
+                "Provide exactly one of `text` or `texts` (non-empty)",
+                "Use `text` for a single paragraph or `texts` for a contiguous block.",
+            ));
+        }
+    };
     let bytes = read_file_bytes(file_path)?;
     let position = if before { InsertPosition::Before } else { InsertPosition::After };
-    let insertion = Insertion {
-        anchor: ParagraphLocator { section, index: anchor },
-        position,
-        text: text.to_string(),
-    };
-    let out = HwpxStructuralEditor::insert_paragraph(&bytes, &insertion).map_err(map_error)?;
+    let anchor_loc = ParagraphLocator { section, index: anchor };
+    let out = HwpxStructuralEditor::insert_paragraphs(&bytes, anchor_loc, position, &block)
+        .map_err(map_error)?;
     write_bytes(&out, output_path)?;
     let where_ = if before { "before" } else { "after" };
     Ok(StructuralData {
         output_path: output_path.to_string(),
-        change: format!("inserted a paragraph {where_} section {section} paragraph {anchor}"),
+        change: format!(
+            "inserted {} paragraph(s) {where_} section {section} paragraph {anchor}",
+            block.len()
+        ),
+        warnings: Vec::new(),
     })
 }
 
@@ -140,9 +166,44 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let base = base_doc(&dir);
         let out = dir.path().join("out.hwpx");
-        let data = run_insert_para(&base, 0, 1, false, "삽입", out.to_str().unwrap()).unwrap();
-        assert!(data.change.contains("inserted"));
+        let data =
+            run_insert_para(&base, 0, 1, false, Some("삽입"), None, out.to_str().unwrap()).unwrap();
+        assert!(data.change.contains("inserted 1 paragraph"));
         assert!(out.exists());
+    }
+
+    #[test]
+    fn insert_para_batch_via_texts() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = base_doc(&dir);
+        let out = dir.path().join("out.hwpx");
+        let block = vec!["하나.".to_string(), "둘.".to_string()];
+        let data =
+            run_insert_para(&base, 0, 1, false, None, Some(&block), out.to_str().unwrap()).unwrap();
+        assert!(data.change.contains("inserted 2 paragraph"));
+        assert!(out.exists());
+    }
+
+    #[test]
+    fn insert_para_requires_exactly_one_text_form() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = base_doc(&dir);
+        let out = dir.path().join("out.hwpx");
+        let block = vec!["x".to_string()];
+
+        // Neither form.
+        let err =
+            run_insert_para(&base, 0, 1, false, None, None, out.to_str().unwrap()).unwrap_err();
+        assert_eq!(err.code, "INSERT_TEXT_REQUIRED");
+        // Both forms (ambiguous).
+        let err =
+            run_insert_para(&base, 0, 1, false, Some("x"), Some(&block), out.to_str().unwrap())
+                .unwrap_err();
+        assert_eq!(err.code, "INSERT_TEXT_REQUIRED");
+        // Empty block.
+        let err = run_insert_para(&base, 0, 1, false, None, Some(&[]), out.to_str().unwrap())
+            .unwrap_err();
+        assert_eq!(err.code, "INSERT_TEXT_REQUIRED");
     }
 
     #[test]
@@ -152,6 +213,7 @@ mod tests {
         let out = dir.path().join("out.hwpx");
         let data = run_delete_para(&base, 0, &[1], out.to_str().unwrap()).unwrap();
         assert!(data.change.contains("deleted"));
+        assert!(data.warnings.is_empty(), "plain paragraph must not warn: {:?}", data.warnings);
 
         let err = run_delete_para(&base, 0, &[0], out.to_str().unwrap()).unwrap_err();
         assert_eq!(err.code, "SECTION_PROPERTIES_PARAGRAPH");
@@ -173,13 +235,15 @@ mod tests {
         let out = dir.path().join("out.hwpx");
 
         // out-of-range anchor / index.
-        let err = run_insert_para(&base, 0, 99, false, "x", out.to_str().unwrap()).unwrap_err();
+        let err = run_insert_para(&base, 0, 99, false, Some("x"), None, out.to_str().unwrap())
+            .unwrap_err();
         assert_eq!(err.code, "INDEX_OUT_OF_RANGE");
         let err = run_delete_para(&base, 9, &[0], out.to_str().unwrap()).unwrap_err();
         assert_eq!(err.code, "INDEX_OUT_OF_RANGE");
 
         // multiline text.
-        let err = run_insert_para(&base, 0, 1, false, "a\nb", out.to_str().unwrap()).unwrap_err();
+        let err = run_insert_para(&base, 0, 1, false, Some("a\nb"), None, out.to_str().unwrap())
+            .unwrap_err();
         assert_eq!(err.code, "MULTI_PARAGRAPH_TEXT");
 
         // duplicate target in a batch.
@@ -208,7 +272,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let base = base_doc(&dir);
         let err =
-            run_insert_para(&base, 0, 1, false, "x", "/nonexistent-dir-e4/o.hwpx").unwrap_err();
+            run_insert_para(&base, 0, 1, false, Some("x"), None, "/nonexistent-dir-e4/o.hwpx")
+                .unwrap_err();
         assert_eq!(err.code, "FILE_WRITE_FAILED");
         let err = run_delete_para(&base, 0, &[1], "/nonexistent-dir-e4/o.hwpx").unwrap_err();
         assert_eq!(err.code, "FILE_WRITE_FAILED");

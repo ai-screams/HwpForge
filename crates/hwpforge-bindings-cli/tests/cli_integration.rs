@@ -3377,6 +3377,44 @@ fn insert_para_adds_paragraph_and_diff_confirms_delta() {
 }
 
 #[test]
+fn insert_para_batch_adds_block_and_diff_confirms_delta() {
+    // Repeated --text inserts a contiguous block in one verified edit; the
+    // E5 diff must report exactly the declared block, in order.
+    let f = fixture("plain_paragraphs.hwpx");
+    let tmp = test_tmp();
+    let out = tmp.join("inserted-batch.hwpx");
+    let (value, _, code) = run_json(&[
+        "insert-para",
+        f.to_str().unwrap(),
+        "--section",
+        "0",
+        "--anchor",
+        "1",
+        "--text",
+        "블록 하나",
+        "--text",
+        "블록 둘",
+        "-o",
+        out.to_str().unwrap(),
+    ]);
+    assert_eq!(code, 0);
+    assert_eq!(value["status"], "ok");
+    assert_eq!(value["inserted"], 2);
+
+    let (d, _, dc) = run_json(&["diff", f.to_str().unwrap(), out.to_str().unwrap()]);
+    assert_eq!(dc, 0);
+    let added: Vec<_> = d["diff"]["semantic"]["paragraphs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|p| p["kind"] == "added")
+        .collect();
+    assert_eq!(added.len(), 2);
+    assert_eq!(added[0]["after"], "블록 하나");
+    assert_eq!(added[1]["after"], "블록 둘");
+}
+
+#[test]
 fn delete_para_removes_paragraph_and_rejects_section_properties() {
     let f = fixture("plain_paragraphs.hwpx");
     let tmp = test_tmp();
@@ -3393,6 +3431,8 @@ fn delete_para_removes_paragraph_and_rejects_section_properties() {
     ]);
     assert_eq!(code, 0);
     assert_eq!(value["deleted"], 1);
+    // Plain paragraphs produce no advisories; the field is always present.
+    assert_eq!(value["warnings"].as_array().map(Vec::len), Some(0));
 
     // Deleting paragraph 0 (secPr carrier) is refused.
     let (err, _, ec) = run_json(&[

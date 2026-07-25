@@ -409,13 +409,8 @@ impl HwpxStructuralEditor {
 
     /// Inserts one new paragraph, preserving every other byte of the package.
     ///
-    /// The new paragraph inherits the anchor's paragraph and character shape
-    /// (no style is invented); only its text is new. The paragraph is encoded
-    /// by the real encoder — so escaping and element order are correct — and
-    /// its bytes are spliced into the original section XML, leaving untouched
-    /// paragraphs (and their Hancom line-layout caches) exactly as they were.
-    /// Paragraphs from the insertion point down have their now-stale caches
-    /// stripped so the renderer recomputes them.
+    /// Delegates to [`Self::insert_paragraphs`] with a single-text batch —
+    /// one implementation, two surfaces.
     ///
     /// # Errors
     ///
@@ -424,14 +419,56 @@ impl HwpxStructuralEditor {
         base: &[u8],
         insertion: &Insertion,
     ) -> Result<Vec<u8>, StructuralEditError> {
-        if insertion.text.contains('\n') || insertion.text.contains('\r') {
-            return Err(StructuralEditError::MultiParagraphText);
+        Self::insert_paragraphs(
+            base,
+            insertion.anchor,
+            insertion.position,
+            std::slice::from_ref(&insertion.text),
+        )
+    }
+
+    /// Inserts a contiguous block of new paragraphs at one anchor, preserving
+    /// every other byte of the package (batch form of
+    /// [`Self::insert_paragraph`]).
+    ///
+    /// Every inserted paragraph **uniformly** inherits the anchor's paragraph
+    /// and character shape (no per-paragraph override — this is a block of
+    /// sibling paragraphs, not the Markdown task-item continuation bridge of
+    /// gotcha #11); only the texts are new. `texts[0]` lands first, the rest
+    /// follow in order. The paragraphs are encoded by the real encoder — so
+    /// escaping and element order are correct — and their bytes are spliced
+    /// into the original section XML in one splice, leaving untouched
+    /// paragraphs (and their Hancom line-layout caches) exactly as they were.
+    /// Paragraphs from the insertion point down have their now-stale caches
+    /// stripped so the renderer recomputes them.
+    ///
+    /// An empty `texts` is a byte-identical no-op.
+    ///
+    /// # Errors
+    ///
+    /// See [`StructuralEditError`]; each text must be a single paragraph
+    /// (no newline), else [`StructuralEditError::MultiParagraphText`].
+    pub fn insert_paragraphs(
+        base: &[u8],
+        anchor: ParagraphLocator,
+        position: InsertPosition,
+        texts: &[String],
+    ) -> Result<Vec<u8>, StructuralEditError> {
+        for text in texts {
+            if text.contains('\n') || text.contains('\r') {
+                return Err(StructuralEditError::MultiParagraphText);
+            }
+        }
+        // Inserting nothing is a byte-identical no-op (mirrors delete's
+        // empty-target behaviour; binding surfaces nudge with their own
+        // "no text" errors).
+        if texts.is_empty() {
+            return Ok(base.to_vec());
         }
 
         // ── input admission ──
         let d0 = admit(base)?;
 
-        let anchor = insertion.anchor;
         let sections = d0.document.sections();
         let section =
             sections.get(anchor.section).ok_or(StructuralEditError::SectionOutOfRange {
@@ -446,26 +483,37 @@ impl HwpxStructuralEditor {
             },
         )?;
 
-        // The new paragraph inherits the anchor's shapes; it is a plain text
-        // paragraph (no inherited breaks, heading, or controls).
+        // Every new paragraph uniformly inherits the anchor's shapes; each is
+        // a plain text paragraph (no inherited breaks, heading, or controls).
         let char_shape = anchor_para
             .runs
             .first()
             .map_or(hwpforge_foundation::CharShapeIndex::new(0), |r| r.char_shape_id);
-        let mut new_para = Paragraph::with_runs(
-            vec![Run::text(&insertion.text, char_shape)],
-            anchor_para.para_shape_id,
-        );
-        new_para.style_id = anchor_para.style_id;
+        let new_paras: Vec<Paragraph> = texts
+            .iter()
+            .map(|text| {
+                let mut p = Paragraph::with_runs(
+                    vec![Run::text(text, char_shape)],
+                    anchor_para.para_shape_id,
+                );
+                p.style_id = anchor_para.style_id;
+                p
+            })
+            .collect();
 
-        let insert_index = match insertion.position {
+        let insert_index = match position {
             InsertPosition::Before => anchor.index,
             InsertPosition::After => anchor.index + 1,
         };
 
-        // ── declared delta: the new paragraph spliced into the Core doc ──
+        // ── declared delta: the new paragraphs spliced into the Core doc ──
         let mut expected = d0.document.clone();
-        expected.sections_mut()[anchor.section].paragraphs.insert(insert_index, new_para);
+        {
+            let paragraphs = &mut expected.sections_mut()[anchor.section].paragraphs;
+            for (offset, new_para) in new_paras.into_iter().enumerate() {
+                paragraphs.insert(insert_index + offset, new_para);
+            }
+        }
         expected
             .clone()
             .validate()
@@ -486,16 +534,23 @@ impl HwpxStructuralEditor {
             .read_text_entry(&path)
             .map_err(|e| StructuralEditError::Codec(e.to_string()))?;
         let encoded_spans = paragraph_spans(&encoded_xml)?;
-        // The encoded doc has one more paragraph than the base; guard the index
-        // so an encoder invariant break fails gracefully instead of panicking.
-        if insert_index >= encoded_spans.len() {
+        // The encoded doc has `texts.len()` more paragraphs than the base;
+        // guard the whole block range (`insert_index + N`, not `insert_index`
+        // — off-by-one) so an encoder invariant break fails gracefully
+        // instead of panicking.
+        if insert_index + texts.len() > encoded_spans.len() {
             return Err(StructuralEditError::SpanCountMismatch {
                 section: anchor.section,
-                decoded: section.paragraphs.len() + 1,
+                decoded: section.paragraphs.len() + texts.len(),
                 wire: encoded_spans.len(),
             });
         }
-        let new_para_bytes = encoded_xml[encoded_spans[insert_index].clone()].to_string();
+        // Sibling `<hp:p>` elements are adjacent with no separator bytes, so
+        // the block splices as one contiguous string.
+        let new_para_bytes: String = encoded_spans[insert_index..insert_index + texts.len()]
+            .iter()
+            .map(|span| &encoded_xml[span.clone()])
+            .collect();
 
         // ── splice the new paragraph's bytes into the ORIGINAL section XML ──
         let mut package =
@@ -513,7 +568,7 @@ impl HwpxStructuralEditor {
         }
         // Guard section properties: inserting before the secPr carrier would
         // displace it from first position.
-        if insertion.position == InsertPosition::Before
+        if position == InsertPosition::Before
             && xml[spans[anchor.index].clone()].contains("<hp:secPr")
         {
             return Err(StructuralEditError::InsertBeforeSectionProperties {
@@ -522,7 +577,7 @@ impl HwpxStructuralEditor {
             });
         }
 
-        let at = match insertion.position {
+        let at = match position {
             InsertPosition::Before => spans[anchor.index].start,
             InsertPosition::After => spans[anchor.index].end,
         };
@@ -690,6 +745,102 @@ pub(crate) fn scan_paragraph_references(paragraph: &Paragraph) -> ReferenceScan 
         Err(_) => scan.object_id = true, // unknown ⇒ reject (fail-closed)
     }
     scan
+}
+
+/// A non-blocking advisory for a planned structural edit.
+///
+/// Produced by [`scan_delete_warnings`]; shared by the CLI and MCP surfaces
+/// (via [`std::fmt::Display`]) so their messages cannot drift.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum StructuralWarning {
+    /// The paragraph at `section:index` contains `count` index-mark
+    /// control(s); deleting it removes those entries from any generated
+    /// index (찾아보기). Local content removal is an intended part of
+    /// deletion — advisory only, never a refusal.
+    IndexMarkRemoved {
+        /// Section the paragraph lives in.
+        section: usize,
+        /// Zero-based paragraph index inside the section.
+        index: usize,
+        /// Number of index-mark controls in the paragraph subtree.
+        count: usize,
+    },
+}
+
+impl std::fmt::Display for StructuralWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::IndexMarkRemoved { section, index, count } => write!(
+                f,
+                "deleting paragraph {section}:{index} removes {count} index-mark entr{} from the document index",
+                if *count == 1 { "y" } else { "ies" }
+            ),
+        }
+    }
+}
+
+/// Best-effort advisory scan for a planned paragraph deletion.
+///
+/// Decode failures and out-of-range targets yield no warnings — the editor
+/// itself refuses those inputs with hard errors, so this scan never needs to
+/// fail. Call it before [`HwpxStructuralEditor::delete_paragraphs`] and
+/// surface the warnings alongside a successful edit.
+#[must_use]
+pub fn scan_delete_warnings(base: &[u8], targets: &[ParagraphLocator]) -> Vec<StructuralWarning> {
+    let Ok(d0) = HwpxDecoder::decode(base) else {
+        return Vec::new();
+    };
+    let sections = d0.document.sections();
+    let mut warnings = Vec::new();
+    for t in targets {
+        let Some(para) = sections.get(t.section).and_then(|s| s.paragraphs.get(t.index)) else {
+            continue;
+        };
+        let count = count_index_marks(para);
+        if count > 0 {
+            warnings.push(StructuralWarning::IndexMarkRemoved {
+                section: t.section,
+                index: t.index,
+                count,
+            });
+        }
+    }
+    warnings
+}
+
+/// Counts `Control::IndexMark` occurrences in a paragraph subtree via the
+/// same serde walk as [`scan_paragraph_references`] (externally tagged:
+/// `{"IndexMark": {..}}`), so nested containers are covered identically.
+fn count_index_marks(paragraph: &Paragraph) -> usize {
+    match serde_json::to_value(paragraph) {
+        Ok(value) => {
+            let mut count = 0usize;
+            count_index_mark_keys(&value, &mut count);
+            count
+        }
+        // Advisory only — a serialization failure just means no warning.
+        Err(_) => 0,
+    }
+}
+
+fn count_index_mark_keys(value: &Value, count: &mut usize) {
+    match value {
+        Value::Object(map) => {
+            for (key, child) in map {
+                if key == "IndexMark" {
+                    *count += 1;
+                }
+                count_index_mark_keys(child, count);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                count_index_mark_keys(item, count);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn walk_value(value: &Value, scan: &mut ReferenceScan) {
@@ -1339,5 +1490,150 @@ mod tests {
         for v in &variants {
             assert!(!v.to_string().is_empty(), "variant {v:?} must render");
         }
+    }
+
+    // -- followups W2: batch insert + delete warnings ---------------------
+
+    #[test]
+    fn insert_batch_matches_sequential_single_inserts() {
+        // Differential lock (Codex Q2): batch-N must equal N sequential
+        // single inserts byte-for-byte — same splice product, one admission.
+        let base = fixture("plain_paragraphs.hwpx");
+        let texts = vec!["추가 하나.".to_string(), "추가 둘.".to_string()];
+        let batch = HwpxStructuralEditor::insert_paragraphs(
+            &base,
+            loc(0, 1),
+            InsertPosition::After,
+            &texts,
+        )
+        .expect("batch insert");
+
+        let s1 = HwpxStructuralEditor::insert_paragraph(
+            &base,
+            &insertion(0, 1, InsertPosition::After, "추가 하나."),
+        )
+        .expect("single 1");
+        let s2 = HwpxStructuralEditor::insert_paragraph(
+            &s1,
+            &insertion(0, 2, InsertPosition::After, "추가 둘."),
+        )
+        .expect("single 2");
+
+        assert_eq!(batch, s2, "batch must equal sequential singles byte-for-byte");
+        assert_eq!(
+            body_texts(&batch),
+            vec![
+                "첫째 문단입니다.",
+                "둘째 문단입니다.",
+                "추가 하나.",
+                "추가 둘.",
+                "셋째 문단입니다.",
+                "넷째 문단입니다."
+            ]
+        );
+    }
+
+    #[test]
+    fn insert_batch_after_last_paragraph_appends() {
+        // Boundary: anchoring After the final paragraph must land the block
+        // at the section tail (off-by-one guard exercises the upper edge).
+        let base = fixture("plain_paragraphs.hwpx");
+        let texts = vec!["꼬리 하나.".to_string(), "꼬리 둘.".to_string()];
+        let out = HwpxStructuralEditor::insert_paragraphs(
+            &base,
+            loc(0, 3),
+            InsertPosition::After,
+            &texts,
+        )
+        .expect("append");
+        assert_eq!(
+            body_texts(&out),
+            vec![
+                "첫째 문단입니다.",
+                "둘째 문단입니다.",
+                "셋째 문단입니다.",
+                "넷째 문단입니다.",
+                "꼬리 하나.",
+                "꼬리 둘."
+            ]
+        );
+    }
+
+    #[test]
+    fn insert_batch_empty_texts_is_byte_identical_noop() {
+        let base = fixture("plain_paragraphs.hwpx");
+        let out =
+            HwpxStructuralEditor::insert_paragraphs(&base, loc(0, 1), InsertPosition::After, &[])
+                .expect("noop");
+        assert_eq!(out, base, "empty batch must return the input unchanged");
+    }
+
+    #[test]
+    fn insert_batch_rejects_multiline_item() {
+        let base = fixture("plain_paragraphs.hwpx");
+        let texts = vec!["정상.".to_string(), "줄\n바꿈".to_string()];
+        assert!(matches!(
+            HwpxStructuralEditor::insert_paragraphs(
+                &base,
+                loc(0, 1),
+                InsertPosition::After,
+                &texts
+            ),
+            Err(StructuralEditError::MultiParagraphText)
+        ));
+    }
+
+    #[test]
+    fn insert_batch_keeps_paragraph_ids_unique_and_contiguous() {
+        // Review H1 extended to the batch surface: the transplanted block
+        // must renumber into one contiguous id space.
+        let base = fixture("plain_paragraphs.hwpx");
+        let texts = vec!["일.".to_string(), "이.".to_string(), "삼.".to_string()];
+        let out = HwpxStructuralEditor::insert_paragraphs(
+            &base,
+            loc(0, 2),
+            InsertPosition::Before,
+            &texts,
+        )
+        .expect("batch insert");
+        let ids = paragraph_ids(&out);
+        assert_eq!(ids, (0..ids.len() as u32).collect::<Vec<_>>(), "ids must be 0..N contiguous");
+    }
+
+    #[test]
+    fn scan_delete_warnings_flags_index_mark_paragraphs() {
+        // Build a package whose paragraph 2 carries an index mark, then scan
+        // a mixed target set: only the index-mark paragraph warns; the plain
+        // paragraph and the out-of-range target stay silent (best-effort).
+        let base = fixture("plain_paragraphs.hwpx");
+        let d0 = HwpxDecoder::decode(&base).expect("decode");
+        let mut document = d0.document.clone();
+        document.sections_mut()[0].paragraphs[2].add_run(Run::control(
+            Control::IndexMark { primary: "색인어".to_string(), secondary: None },
+            hwpforge_foundation::CharShapeIndex::new(0),
+        ));
+        let bytes = encode_hwpx(&HwpxDocument {
+            document,
+            style_store: d0.style_store.clone(),
+            image_store: d0.image_store.clone(),
+        })
+        .expect("encode");
+
+        let warnings = scan_delete_warnings(&bytes, &[loc(0, 1), loc(0, 2), loc(0, 99)]);
+        assert_eq!(
+            warnings,
+            vec![StructuralWarning::IndexMarkRemoved { section: 0, index: 2, count: 1 }]
+        );
+
+        // Undecodable input: advisory scan stays silent (editor errors later).
+        assert!(scan_delete_warnings(b"not a package", &[loc(0, 0)]).is_empty());
+    }
+
+    #[test]
+    fn structural_warning_renders_a_message() {
+        let one = StructuralWarning::IndexMarkRemoved { section: 0, index: 2, count: 1 };
+        let many = StructuralWarning::IndexMarkRemoved { section: 1, index: 3, count: 2 };
+        assert!(one.to_string().contains("index-mark entry"), "{one}");
+        assert!(many.to_string().contains("index-mark entries"), "{many}");
     }
 }

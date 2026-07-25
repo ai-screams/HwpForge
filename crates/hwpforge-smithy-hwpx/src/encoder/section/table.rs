@@ -17,6 +17,20 @@ pub(super) fn build_table(
         });
     }
 
+    // Guard the lenient placement scan before it allocates per-position
+    // state: pathological spans (e.g. 65535×65535) cover billions of grid
+    // positions. Same O(cells) pre-check the strict grid runs internally.
+    let area = hwpforge_core::table::grid::covered_area(table);
+    if area > hwpforge_core::table::grid::MAX_GRID_POSITIONS {
+        return Err(HwpxError::InvalidStructure {
+            detail: format!(
+                "table covered area {} exceeds the {}-position placement cap",
+                area,
+                hwpforge_core::table::grid::MAX_GRID_POSITIONS,
+            ),
+        });
+    }
+
     // Grid placement computes correct cellAddr for merged cells. The lenient
     // scan is shared with `hwpforge_core::table::grid` and keeps historical
     // output even for tables that do not tile a well-formed grid.

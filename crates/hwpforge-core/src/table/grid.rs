@@ -191,6 +191,26 @@ pub fn grid_placements(table: &Table) -> GridPlacements {
     GridPlacements { cells, cols }
 }
 
+/// Sums the grid area covered by every cell's span (`col_span × row_span`,
+/// each floored at 1), saturating at `u64::MAX`.
+///
+/// This is the O(cells) pre-check that strict [`TableGrid::from_table`]
+/// performs before scanning; lenient call sites compare the result against
+/// [`MAX_GRID_POSITIONS`] to refuse or degrade **before** [`grid_placements`]
+/// allocates per-position state. For overlapping spans the sum over-counts
+/// actual coverage, which is the conservative direction for a cap guard.
+#[must_use]
+pub fn covered_area(table: &Table) -> u64 {
+    let mut covered: u64 = 0;
+    for row in &table.rows {
+        for cell in &row.cells {
+            let area = u64::from(cell.col_span.max(1)) * u64::from(cell.row_span.max(1));
+            covered = covered.saturating_add(area);
+        }
+    }
+    covered
+}
+
 /// Interval of covered columns within one logical row: `[start, end)` maps to
 /// `anchors[idx]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -224,15 +244,9 @@ impl TableGrid {
 
         // Pre-check total covered area before any per-position allocation so
         // pathological spans cannot exhaust memory while scanning.
-        let mut covered_area: u64 = 0;
-        for row in &table.rows {
-            for cell in &row.cells {
-                let area = u64::from(cell.col_span.max(1)) * u64::from(cell.row_span.max(1));
-                covered_area = covered_area.saturating_add(area);
-            }
-        }
-        if covered_area > MAX_GRID_POSITIONS {
-            return Err(GridError::TooLarge { rows: u64::from(rows), cols: covered_area });
+        let area = covered_area(table);
+        if area > MAX_GRID_POSITIONS {
+            return Err(GridError::TooLarge { rows: u64::from(rows), cols: area });
         }
 
         let mut anchors: Vec<GridCell> = Vec::new();
@@ -508,5 +522,40 @@ mod tests {
         assert_eq!(placements.cells.len(), 4);
         assert_eq!(placements.cells[3].at, GridCoord::new(1, 1));
         assert_eq!(placements.cols, 3);
+    }
+
+    // === covered_area pre-check primitive ===
+
+    #[test]
+    fn covered_area_sums_span_areas() {
+        // rs2×cs1 + rs1×cs2 + two 1×1 = 2 + 2 + 1 + 1 = 6.
+        let t = table(vec![vec![cell(2, 1), cell(1, 2)], vec![cell(1, 1), cell(1, 1)]]);
+        assert_eq!(covered_area(&t), 6);
+        // Empty table covers nothing.
+        assert_eq!(covered_area(&table(vec![])), 0);
+    }
+
+    #[test]
+    fn covered_area_floors_zero_spans_at_one() {
+        // Mirrors the placement scan's `.max(1)` so the guard and the scan
+        // agree on what a degenerate span occupies.
+        let t = table(vec![vec![cell(0, 0), cell(0, 3)]]);
+        assert_eq!(covered_area(&t), 1 + 3);
+    }
+
+    #[test]
+    fn covered_area_boundary_sits_exactly_at_cap() {
+        // 1024×1024 = MAX_GRID_POSITIONS exactly; guards use strict `>` so
+        // this table is still allowed.
+        let t = table(vec![vec![cell(1024, 1024)]]);
+        assert_eq!(covered_area(&t), MAX_GRID_POSITIONS);
+    }
+
+    #[test]
+    fn covered_area_saturates_instead_of_overflowing() {
+        let row: Vec<TableCell> = (0..8).map(|_| cell(u16::MAX, u16::MAX)).collect();
+        let t = table(vec![row]);
+        assert_eq!(covered_area(&t), 8 * 4_294_836_225u64);
+        assert!(covered_area(&t) > MAX_GRID_POSITIONS);
     }
 }
