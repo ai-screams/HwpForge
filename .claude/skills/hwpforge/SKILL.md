@@ -59,8 +59,10 @@ What does the user want?
 │   │
 │   ├─ ADD or REMOVE a top-level paragraph (structural edit, byte-preserving)
 │   │     → outline/read to find the index → insert-para / delete-para [E4]
-│   │       insert-para --section N --anchor I [--before] --text "…"  (shape inherited)
+│   │       insert-para --section N --anchor I [--before] --text "…"  (shape inherited;
+│   │         --text 반복 = 연속 블록 batch 삽입)
 │   │       delete-para --section N --index I [--index J …]           (batch)
+│   │         IndexMark 든 문단 삭제 시 warnings 로 색인 소멸 advisory (거부 아님)
 │   │       fail-closed: refuses deleting a paragraph with a reference
 │   │       (bookmark/cross-ref/footnote), a hard page/column break, or the
 │   │       section's first paragraph (secPr). Only round-trip-safe inputs.
@@ -146,8 +148,10 @@ hwpforge stamp template.hwpx --map specs.json -o form.hwpx   # + form.manifest.j
 # Structural paragraph editing (E4) — insert/delete top-level paragraphs, byte-preserving.
 hwpforge insert-para doc.hwpx --section 0 --anchor 3 --text "추가 문단" -o out.hwpx
 hwpforge insert-para doc.hwpx --section 0 --anchor 3 --before --text "앞에 추가" -o out.hwpx
+hwpforge insert-para doc.hwpx --section 0 --anchor 3 --text "하나" --text "둘" -o out.hwpx  # 연속 블록 batch
 hwpforge delete-para doc.hwpx --section 0 --index 5 -o out.hwpx           # batch: --index 5 --index 7
-#   새 문단은 앵커의 문단/글자 모양을 상속(스타일 발명 없음); --text 는 한 줄 평문
+#   새 문단은 앵커의 문단/글자 모양을 상속(스타일 발명 없음, batch 는 균일 상속); --text 는 한 줄 평문
+#   delete 는 IndexMark 문단에 warnings advisory 를 내보냄 (JSON: warnings 배열, 텍스트: stderr)
 #   fail-closed 거부: 참조(책갈피/상호참조/각주) 든 문단 삭제·hard page/column break·
 #   섹션 첫 문단(secPr)·섹션을 비우는 삭제. round-trip-safe 입력만. 표 행 편집은 미지원.
 #   반드시 `diff base out` 로 의도한 델타만 났는지 검증

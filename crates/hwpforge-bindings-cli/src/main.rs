@@ -182,7 +182,7 @@ enum Commands {
 
     /// Insert a new paragraph relative to an anchor (structural edit, E4).
     #[command(
-        long_about = "Insert one new top-level paragraph before or after an anchor paragraph, preserving every other byte.\n\nThe new paragraph inherits the anchor's paragraph and character shape (no style is invented); --text is a single line of plain text (the encoder escapes it). Insert-before the section's first paragraph (secPr carrier) is refused. Only round-trip-safe inputs are editable. Verify with `diff base out`."
+        long_about = "Insert new top-level paragraph(s) before or after an anchor paragraph, preserving every other byte.\n\nEach new paragraph uniformly inherits the anchor's paragraph and character shape (no style is invented); --text is a single line of plain text (the encoder escapes it) and may be repeated to insert a contiguous block in one verified edit. Insert-before the section's first paragraph (secPr carrier) is refused. Only round-trip-safe inputs are editable. Verify with `diff base out`."
     )]
     InsertPara {
         /// HWPX file to edit.
@@ -200,9 +200,10 @@ enum Commands {
         #[arg(long)]
         before: bool,
 
-        /// Plain text of the new paragraph (single line).
-        #[arg(long)]
-        text: String,
+        /// Plain text of a new paragraph (single line). Repeat the flag to
+        /// insert a contiguous block of paragraphs in one verified edit.
+        #[arg(long = "text", required = true)]
+        texts: Vec<String>,
 
         /// Output HWPX file path.
         #[arg(short, long)]
@@ -420,9 +421,9 @@ fn main() {
         Commands::DeletePara { file, section, indices, output } => {
             commands::structural::run_delete(&file, section, &indices, &output, cli.json);
         }
-        Commands::InsertPara { file, section, anchor, before, text, output } => {
+        Commands::InsertPara { file, section, anchor, before, texts, output } => {
             commands::structural::run_insert(
-                &file, section, anchor, before, &text, &output, cli.json,
+                &file, section, anchor, before, &texts, &output, cli.json,
             );
         }
         Commands::Read { file, section, paras, table, field } => {

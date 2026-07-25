@@ -3,7 +3,8 @@
 use std::path::PathBuf;
 
 use hwpforge_smithy_hwpx::{
-    HwpxStructuralEditor, InsertPosition, Insertion, ParagraphLocator, StructuralEditError,
+    scan_delete_warnings, HwpxStructuralEditor, InsertPosition, ParagraphLocator,
+    StructuralEditError,
 };
 
 use crate::error::{check_file_size, CliError};
@@ -22,16 +23,28 @@ pub fn run_delete(
     let bytes = read_input(file, json_mode);
     let targets: Vec<ParagraphLocator> =
         indices.iter().map(|&index| ParagraphLocator { section, index }).collect();
+    // Advisory scan (shared library messages — never a refusal): surfaced
+    // only alongside a successful edit.
+    let warnings: Vec<String> =
+        scan_delete_warnings(&bytes, &targets).iter().map(ToString::to_string).collect();
     match HwpxStructuralEditor::delete_paragraphs(&bytes, &targets) {
-        Ok(out) => write_output(&out, output, json_mode, |v| {
-            *v = serde_json::json!({
-                "status": "ok",
-                "deleted": indices.len(),
-                "section": section,
-                "indices": indices,
-                "output": output.display().to_string(),
+        Ok(out) => {
+            if !json_mode {
+                for warning in &warnings {
+                    eprintln!("warning: {warning}");
+                }
+            }
+            write_output(&out, output, json_mode, |v| {
+                *v = serde_json::json!({
+                    "status": "ok",
+                    "deleted": indices.len(),
+                    "section": section,
+                    "indices": indices,
+                    "warnings": warnings,
+                    "output": output.display().to_string(),
+                });
             });
-        }),
+        }
         Err(e) => exit_structural_error(e, json_mode),
     }
 }
@@ -43,21 +56,18 @@ pub fn run_insert(
     section: usize,
     anchor: usize,
     before: bool,
-    text: &str,
+    texts: &[String],
     output: &PathBuf,
     json_mode: bool,
 ) {
     let bytes = read_input(file, json_mode);
     let position = if before { InsertPosition::Before } else { InsertPosition::After };
-    let insertion = Insertion {
-        anchor: ParagraphLocator { section, index: anchor },
-        position,
-        text: text.to_string(),
-    };
-    match HwpxStructuralEditor::insert_paragraph(&bytes, &insertion) {
+    let anchor_loc = ParagraphLocator { section, index: anchor };
+    match HwpxStructuralEditor::insert_paragraphs(&bytes, anchor_loc, position, texts) {
         Ok(out) => write_output(&out, output, json_mode, |v| {
             *v = serde_json::json!({
                 "status": "ok",
+                "inserted": texts.len(),
                 "section": section,
                 "anchor": anchor,
                 "position": if before { "before" } else { "after" },

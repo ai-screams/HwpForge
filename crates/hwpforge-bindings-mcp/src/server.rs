@@ -117,8 +117,15 @@ pub struct InsertParaRequest {
     /// Insert before the anchor instead of after.
     #[serde(default)]
     pub before: bool,
-    /// Plain text of the new paragraph (single line).
-    pub text: String,
+    /// Plain text of the new paragraph (single line). Provide exactly one of
+    /// `text` or `texts`.
+    #[serde(default)]
+    pub text: Option<String>,
+    /// Plain texts of a contiguous block of new paragraphs (one single-line
+    /// entry per paragraph, inserted in order in one verified edit). Provide
+    /// exactly one of `text` or `texts`.
+    #[serde(default)]
+    pub texts: Option<Vec<String>>,
     /// Output HWPX file path.
     pub output_path: String,
 }
@@ -590,7 +597,8 @@ impl HwpForgeServer {
                 req.section,
                 req.anchor,
                 req.before,
-                &req.text,
+                req.text.as_deref(),
+                req.texts.as_deref(),
                 &req.output_path,
             )
         })
