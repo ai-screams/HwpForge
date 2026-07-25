@@ -101,6 +101,7 @@ bacon test    # Auto-run tests
 - 용량 큰 이미지 임베드 fixture(~MB)는 리뷰 산출물 영역 `examples/hwp5_review/`(미추적 — `git add -A` 주의. **디렉터리 통째 gitignore 금지**: tracked 리뷰 샘플 39개가 있어 cargo/release-plz 가 "committed and in .gitignore" 로 실패, PR #92)에만 두고, 회귀 방지는 **단위 테스트로 잠금**(수 MB fixture를 커밋하지 말 것).
 - **pre-commit `cargo fmt` 훅**: 스테이지된 Rust(특히 테스트의 다줄 배열/`assert!`)를 재포맷하며 커밋을 **거부**함 → `cargo fmt` 수동 실행 → 재-`git add` → 재커밋 (dprint 표와 동일 패턴).
 - **pre-commit/pre-push 훅이 workspace clippy(+`make ci`)를 돌림** → 다파일 커밋·push는 **2분+**, cold/contended 빌드 땐 **20분+** 까지 감. 항상 `run_in_background`로 commit/push 후 폴링.
+- **docs-only 커밋/push 는 빠름**: pre-commit clippy·fmt 는 staged 에 Rust 파일이 있을 때만 실행(`no files to check` skip) — "훅 2분+" 은 Rust 변경 시에만 해당 (백그라운드 실행 원칙은 동일).
 - **`git push` 를 파이프에 연결 금지**(`| tail` 등) — pre-push 훅의 대량 테스트 출력이 `BlockingIOError [Errno 35]` 로 push 자체를 죽임. run_in_background(파일 리다이렉트)로 실행하고, 성공 판정은 `git ls-remote --heads origin <branch> | grep -q .` 로.
 - pre-push `cargo deny` 가 RustSec advisory DB fetch 네트워크 오류로 간헐 실패 → 재시도로 해결.
 - **전체 `cargo nextest run --workspace`는 cold 빌드 시 15분+** (foreground 한계 초과) → 변경 영향 크레이트만 `-p <crate>`로 돌리고 byte-중립 게이트만 골라 검증. **테스트 실행 중 소스 편집 금지**(rebuild 유발로 더 느려짐).
@@ -382,6 +383,7 @@ Local planning and research workspace. It may be git-excluded in this repository
 - **inter-crate 의존성은 `version = "0"` 유지 — 정확 핀으로 "고치지" 말 것.** 통합버전(`version.workspace = true`) 워크스페이스에서 release-plz 는 커밋 없는 베이스 crate 를 못 올려, 정확 핀이면 breaking bump 시 `failed to select a version` 으로 Release PR 생성이 죽음 (PR #94 로 해결; `version_group`·`release_always` 는 무효 — 로컬 전수검증, memory `release-plz-unified-version-workspace.md`).
 - **release-plz 디버깅은 로컬 프리빌트로 재현** (CI 머지 사이클로 추측 금지): `gh release download release-plz-v0.3.159 --repo release-plz/release-plz` + 깨끗한 clone 에서 `release-plz update`. `{{ release_link }}` 는 로컬 렌더 실패 → 임시 제거 후 실험 (cargo install 은 rustc 1.94 요구로 로컬 1.93 에서 실패).
 - **publish 검증**: crates.io API(`crates.io/api`) 는 샌드박스에서 막힐 수 있음 → sparse index `index.crates.io/hw/pf/<crate>`(`dangerouslyDisableSandbox`)로 published 버전 확인.
+- **릴리스 완주 판정**: GitHub Release 는 release-plz 실행 **도중** 먼저 게시되고 그 이벤트가 npm-publish 를 트리거 → release-plz·npm-publish **둘 다 success** + npm 레지스트리(`npm view @hwpforge/mcp version`)·sparse index 실측까지 확인해야 완료 (Release 게시만 보고 완료 오판 금지).
 
 ---
 
