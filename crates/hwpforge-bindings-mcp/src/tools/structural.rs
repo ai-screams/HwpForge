@@ -11,6 +11,7 @@ use crate::output::{read_file_bytes, ToolErrorInfo};
 
 /// Output of a structural edit.
 #[derive(Debug, Serialize)]
+#[non_exhaustive]
 pub struct StructuralData {
     /// Path the edited HWPX was written to.
     pub output_path: String,
