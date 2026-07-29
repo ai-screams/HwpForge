@@ -28,8 +28,8 @@ use crate::color::parse_hex_color_raw;
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
     HxCaption, HxChart, HxCompose, HxCtrl, HxDutmal, HxEquation, HxFieldBegin, HxFootNote,
-    HxHeaderFooter, HxPageNum, HxParagraph, HxPic, HxRun, HxSection, HxSubList, HxTable,
-    HxTableCell, HxTableRow,
+    HxHeaderFooter, HxPageNum, HxParagraph, HxPic, HxRun, HxRunChildOrder, HxSection, HxSubList,
+    HxTable, HxTableCell, HxTableRow,
 };
 
 /// Maximum nesting depth for tables-within-tables.
@@ -348,6 +348,34 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
     // is consumed by the field control and should NOT be emitted separately.
     let has_field_pair = hx.ctrls.iter().any(|c| c.field_begin.is_some())
         && hx.ctrls.iter().any(|c| c.field_end.is_some());
+
+    let inline_only = !hx.child_order.is_empty()
+        && hx
+            .child_order
+            .iter()
+            .all(|child| matches!(child, HxRunChildOrder::Text(_) | HxRunChildOrder::Equation(_)));
+    if inline_only {
+        for child in &hx.child_order {
+            match *child {
+                HxRunChildOrder::Text(index) if !has_field_pair => {
+                    let content = hx.texts[index].to_run_content();
+                    let keep = match &content {
+                        RunContent::Text(value) => !value.is_empty(),
+                        RunContent::InlineText(value) => !value.segments.is_empty(),
+                        _ => true,
+                    };
+                    if keep {
+                        runs.push(Run { content, char_shape_id });
+                    }
+                }
+                HxRunChildOrder::Equation(index) => {
+                    runs.push(decode_equation(&hx.equations[index], char_shape_id)?);
+                }
+                _ => {}
+            }
+        }
+        return Ok(runs);
+    }
 
     // Text runs — skip if consumed by field controls.
     //
@@ -1595,6 +1623,33 @@ mod tests {
         assert_eq!(para.runs[0].content.as_text(), Some("Hello "));
         assert_eq!(para.runs[1].char_shape_id.get(), 1);
         assert_eq!(para.runs[1].content.as_text(), Some("World"));
+    }
+
+    #[test]
+    fn parse_mixed_text_and_equation_in_source_order() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <t>에 대하여 </t>
+                    <equation id="1"><script>A+B</script></equation>
+                    <t>를 간단히 하면?</t>
+                </run>
+            </p>
+        </sec>"#;
+
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let runs = &result.paragraphs[0].runs;
+
+        assert_eq!(runs.len(), 3);
+        assert_eq!(runs[0].content.as_text(), Some("에 대하여 "));
+        match &runs[1].content {
+            RunContent::Control(control) => match control.as_ref() {
+                Control::Equation { script, .. } => assert_eq!(script, "A+B"),
+                other => panic!("expected equation, got {other:?}"),
+            },
+            other => panic!("expected control, got {other:?}"),
+        }
+        assert_eq!(runs[2].content.as_text(), Some("를 간단히 하면?"));
     }
 
     #[test]

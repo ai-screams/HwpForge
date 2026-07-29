@@ -10,7 +10,9 @@
 use hwpforge_core::inline::{InlineSegment, InlineTabAttr, InlineText};
 use hwpforge_core::run::RunContent;
 use hwpforge_foundation::HwpUnit;
+use serde::de::{MapAccess, Visitor};
 use serde::{Deserialize, Serialize};
+use std::fmt;
 
 use super::deser_i32_or_u32;
 
@@ -87,7 +89,7 @@ pub struct HxParagraph {
 ///
 /// Phase 3 extracts text, tables, images, and secPr; everything else
 /// is silently skipped by serde (no `deny_unknown_fields`).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct HxRun {
     #[serde(rename = "@charPrIDRef", default)]
     pub char_pr_id_ref: u32,
@@ -240,6 +242,224 @@ pub struct HxRun {
     /// `Control::TextArt`.
     #[serde(rename(deserialize = "textart"), default, skip_serializing)]
     pub textarts: Vec<HxTextArt>,
+
+    /// Direct child order captured during decode.
+    #[serde(skip)]
+    pub child_order: Vec<HxRunChildOrder>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HxRunChildOrder {
+    Text(usize),
+    Table(usize),
+    Picture(usize),
+    Ctrl(usize),
+    Rect(usize),
+    Line(usize),
+    Ellipse(usize),
+    Polygon(usize),
+    Curve(usize),
+    ConnectLine(usize),
+    Equation(usize),
+    Switch(usize),
+    Dutmal(usize),
+    Compose(usize),
+    Container(usize),
+    TextArt(usize),
+}
+
+impl<'de> Deserialize<'de> for HxRun {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        enum Field {
+            CharPrIdRef,
+            SecPr,
+            Text,
+            Table,
+            Picture,
+            Ctrl,
+            Rect,
+            Line,
+            Ellipse,
+            Polygon,
+            Curve,
+            ConnectLine,
+            Equation,
+            Switch,
+            TitleMark,
+            Dutmal,
+            Compose,
+            Container,
+            TextArt,
+            Ignore,
+        }
+
+        impl<'de> Deserialize<'de> for Field {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct FieldVisitor;
+
+                impl Visitor<'_> for FieldVisitor {
+                    type Value = Field;
+
+                    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                        formatter.write_str("an HWPX run attribute or child")
+                    }
+
+                    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        Ok(match value {
+                            "@charPrIDRef" => Field::CharPrIdRef,
+                            "secPr" => Field::SecPr,
+                            "t" => Field::Text,
+                            "tbl" => Field::Table,
+                            "pic" => Field::Picture,
+                            "ctrl" => Field::Ctrl,
+                            "rect" => Field::Rect,
+                            "line" => Field::Line,
+                            "ellipse" => Field::Ellipse,
+                            "polygon" => Field::Polygon,
+                            "curve" => Field::Curve,
+                            "connectLine" => Field::ConnectLine,
+                            "equation" => Field::Equation,
+                            "switch" => Field::Switch,
+                            "titleMark" => Field::TitleMark,
+                            "dutmal" => Field::Dutmal,
+                            "compose" => Field::Compose,
+                            "container" => Field::Container,
+                            "textart" => Field::TextArt,
+                            _ => Field::Ignore,
+                        })
+                    }
+                }
+
+                deserializer.deserialize_identifier(FieldVisitor)
+            }
+        }
+
+        struct HxRunVisitor;
+
+        impl<'de> Visitor<'de> for HxRunVisitor {
+            type Value = HxRun;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("an hp:run element")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut run = HxRun {
+                    char_pr_id_ref: 0,
+                    sec_pr: None,
+                    texts: Vec::new(),
+                    tables: Vec::new(),
+                    pictures: Vec::new(),
+                    ctrls: Vec::new(),
+                    rects: Vec::new(),
+                    lines: Vec::new(),
+                    ellipses: Vec::new(),
+                    polygons: Vec::new(),
+                    curves: Vec::new(),
+                    connect_lines: Vec::new(),
+                    equations: Vec::new(),
+                    switches: Vec::new(),
+                    title_mark: None,
+                    dutmals: Vec::new(),
+                    composes: Vec::new(),
+                    containers: Vec::new(),
+                    textarts: Vec::new(),
+                    child_order: Vec::new(),
+                };
+
+                while let Some(field) = map.next_key()? {
+                    match field {
+                        Field::CharPrIdRef => run.char_pr_id_ref = map.next_value()?,
+                        Field::SecPr => run.sec_pr = Some(map.next_value()?),
+                        Field::Text => {
+                            run.child_order.push(HxRunChildOrder::Text(run.texts.len()));
+                            run.texts.push(map.next_value()?);
+                        }
+                        Field::Table => {
+                            run.child_order.push(HxRunChildOrder::Table(run.tables.len()));
+                            run.tables.push(map.next_value()?);
+                        }
+                        Field::Picture => {
+                            run.child_order.push(HxRunChildOrder::Picture(run.pictures.len()));
+                            run.pictures.push(map.next_value()?);
+                        }
+                        Field::Ctrl => {
+                            run.child_order.push(HxRunChildOrder::Ctrl(run.ctrls.len()));
+                            run.ctrls.push(map.next_value()?);
+                        }
+                        Field::Rect => {
+                            run.child_order.push(HxRunChildOrder::Rect(run.rects.len()));
+                            run.rects.push(map.next_value()?);
+                        }
+                        Field::Line => {
+                            run.child_order.push(HxRunChildOrder::Line(run.lines.len()));
+                            run.lines.push(map.next_value()?);
+                        }
+                        Field::Ellipse => {
+                            run.child_order.push(HxRunChildOrder::Ellipse(run.ellipses.len()));
+                            run.ellipses.push(map.next_value()?);
+                        }
+                        Field::Polygon => {
+                            run.child_order.push(HxRunChildOrder::Polygon(run.polygons.len()));
+                            run.polygons.push(map.next_value()?);
+                        }
+                        Field::Curve => {
+                            run.child_order.push(HxRunChildOrder::Curve(run.curves.len()));
+                            run.curves.push(map.next_value()?);
+                        }
+                        Field::ConnectLine => {
+                            run.child_order
+                                .push(HxRunChildOrder::ConnectLine(run.connect_lines.len()));
+                            run.connect_lines.push(map.next_value()?);
+                        }
+                        Field::Equation => {
+                            run.child_order.push(HxRunChildOrder::Equation(run.equations.len()));
+                            run.equations.push(map.next_value()?);
+                        }
+                        Field::Switch => {
+                            run.child_order.push(HxRunChildOrder::Switch(run.switches.len()));
+                            run.switches.push(map.next_value()?);
+                        }
+                        Field::TitleMark => run.title_mark = Some(map.next_value()?),
+                        Field::Dutmal => {
+                            run.child_order.push(HxRunChildOrder::Dutmal(run.dutmals.len()));
+                            run.dutmals.push(map.next_value()?);
+                        }
+                        Field::Compose => {
+                            run.child_order.push(HxRunChildOrder::Compose(run.composes.len()));
+                            run.composes.push(map.next_value()?);
+                        }
+                        Field::Container => {
+                            run.child_order.push(HxRunChildOrder::Container(run.containers.len()));
+                            run.containers.push(map.next_value()?);
+                        }
+                        Field::TextArt => {
+                            run.child_order.push(HxRunChildOrder::TextArt(run.textarts.len()));
+                            run.textarts.push(map.next_value()?);
+                        }
+                        Field::Ignore => {
+                            let _: serde::de::IgnoredAny = map.next_value()?;
+                        }
+                    }
+                }
+                Ok(run)
+            }
+        }
+
+        deserializer.deserialize_map(HxRunVisitor)
+    }
 }
 
 /// `<hp:textart>` — TextArt (글맵시) decorative warped-text object.
@@ -1805,7 +2025,7 @@ impl Default for HxMatrix {
 }
 
 /// `<hp:renderingInfo>` — transformation matrices for rendering.
-#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, PartialEq)]
 pub struct HxRenderingInfo {
     /// Translation matrix.
     #[serde(rename(serialize = "hc:transMatrix", deserialize = "transMatrix"))]
@@ -1816,6 +2036,30 @@ pub struct HxRenderingInfo {
     /// Rotation matrix.
     #[serde(rename(serialize = "hc:rotMatrix", deserialize = "rotMatrix"))]
     pub rot_matrix: HxMatrix,
+}
+
+impl<'de> Deserialize<'de> for HxRenderingInfo {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RenderingInfoElements {
+            #[serde(rename = "transMatrix", default)]
+            trans_matrices: Vec<HxMatrix>,
+            #[serde(rename = "scaMatrix", default)]
+            scale_matrices: Vec<HxMatrix>,
+            #[serde(rename = "rotMatrix", default)]
+            rotation_matrices: Vec<HxMatrix>,
+        }
+
+        let elements = RenderingInfoElements::deserialize(deserializer)?;
+        Ok(Self {
+            trans_matrix: elements.trans_matrices.into_iter().last().unwrap_or_default(),
+            sca_matrix: elements.scale_matrices.into_iter().last().unwrap_or_default(),
+            rot_matrix: elements.rotation_matrices.into_iter().last().unwrap_or_default(),
+        })
+    }
 }
 
 // Shape-common types (HxLineShape, HxWinBrush, HxFillBrush, HxShadow, HxShapeComment)
@@ -2078,6 +2322,26 @@ mod tests {
         let xml = r#"<hs:sec></hs:sec>"#;
         let sec = parse_section(xml);
         assert!(sec.paragraphs.is_empty());
+    }
+
+    #[test]
+    fn parse_rendering_info_with_repeated_scale_and_rotation_matrices() {
+        let xml = r#"
+        <hp:renderingInfo>
+          <hc:transMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
+          <hc:scaMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
+          <hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
+          <hc:scaMatrix e1="1.07102" e2="0" e3="0" e4="0" e5="0.926194" e6="337"/>
+          <hc:rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
+        </hp:renderingInfo>"#;
+
+        let rendering: HxRenderingInfo =
+            quick_xml::de::from_str(xml).expect("repeated matrices should decode");
+
+        assert_eq!(rendering.trans_matrix.e1, "1");
+        assert_eq!(rendering.sca_matrix.e1, "1.07102");
+        assert_eq!(rendering.sca_matrix.e5, "0.926194");
+        assert_eq!(rendering.rot_matrix.e1, "1");
     }
 
     #[test]
