@@ -34,6 +34,11 @@ static KEYWORDS: &[&str] = &[
     "right",
     "matrix",
     "cases",
+    // Hancom font/style switches
+    "rm",
+    "it",
+    "bold",
+    "box",
     // Accents
     "vec",
     "hat",
@@ -58,6 +63,12 @@ static KEYWORDS: &[&str] = &[
     "leq",
     "geq",
     "neq",
+    "le",
+    "ge",
+    "ne",
+    "lt",
+    "gt",
+    "sim",
     // Arrows
     "rightarrow",
     "leftarrow",
@@ -157,6 +168,67 @@ fn is_keyword(s: &str) -> bool {
     KEYWORDS.contains(&s)
 }
 
+/// Uppercase commands commonly emitted by Hancom equation editors.
+///
+/// HancomEQN permits commands to be attached to adjacent identifiers
+/// (`PLEFT`, `THEREFOREk`) rather than separated by whitespace.
+const UPPERCASE_COMMANDS: &[(&str, &str)] = &[
+    ("THEREFORE", "therefore"),
+    ("BECAUSE", "because"),
+    ("TIMES", "times"),
+    ("CDOTS", "cdots"),
+    ("RIGHT", "right"),
+    ("LEFT", "left"),
+    ("LEQ", "leq"),
+    ("GEQ", "geq"),
+    ("NEQ", "neq"),
+    ("SIM", "sim"),
+];
+
+/// Lowercase commands observed attached directly to their operand.
+const ATTACHED_COMMAND_PREFIXES: &[&str] =
+    &["sqrt", "bold", "cdots", "over", "bar", "box", "rm", "it"];
+
+fn push_identifier_tokens(word: &str, tokens: &mut Vec<Token>) {
+    if word.is_empty() {
+        return;
+    }
+    if is_keyword(word) {
+        tokens.push(Token::Keyword(word.to_string()));
+        return;
+    }
+    if let Some((_, canonical)) = UPPERCASE_COMMANDS.iter().find(|(source, _)| word == *source) {
+        tokens.push(Token::Keyword((*canonical).to_string()));
+        return;
+    }
+
+    let uppercase_match = UPPERCASE_COMMANDS
+        .iter()
+        .filter_map(|(source, canonical)| {
+            word.find(source).map(|index| (index, *source, *canonical))
+        })
+        .min_by_key(|(index, _, _)| *index);
+    if let Some((index, source, canonical)) = uppercase_match {
+        if index > 0 {
+            push_identifier_tokens(&word[..index], tokens);
+        }
+        tokens.push(Token::Keyword(canonical.to_string()));
+        push_identifier_tokens(&word[index + source.len()..], tokens);
+        return;
+    }
+
+    if let Some(prefix) = ATTACHED_COMMAND_PREFIXES
+        .iter()
+        .find(|prefix| word.len() > prefix.len() && word.starts_with(**prefix))
+    {
+        tokens.push(Token::Keyword((*prefix).to_string()));
+        push_identifier_tokens(&word[prefix.len()..], tokens);
+        return;
+    }
+
+    tokens.push(Token::Text(word.to_string()));
+}
+
 /// Tokenizes a HancomEQN script into a flat token stream.
 pub(crate) fn tokenize(input: &str) -> Vec<Token> {
     let mut tokens = Vec::new();
@@ -165,8 +237,9 @@ pub(crate) fn tokenize(input: &str) -> Vec<Token> {
 
     while i < chars.len() {
         match chars[i] {
-            // Skip plain whitespace — preserve one space as Text(" ")
-            ' ' | '\t' | '\n' | '\r' => {
+            // Hancom uses backticks as visual spacing markers. LaTeX spacing is
+            // reconstructed by the parser, so they must not leak into output.
+            ' ' | '\t' | '\n' | '\r' | '`' => {
                 i += 1;
             }
             '{' => {
@@ -216,11 +289,7 @@ pub(crate) fn tokenize(input: &str) -> Vec<Token> {
                     i += 1;
                 }
                 let word: String = chars[start..i].iter().collect();
-                if is_keyword(&word) {
-                    tokens.push(Token::Keyword(word));
-                } else {
-                    tokens.push(Token::Text(word));
-                }
+                push_identifier_tokens(&word, &mut tokens);
             }
             // Numbers
             c if c.is_ascii_digit() => {
@@ -299,6 +368,62 @@ mod tests {
                 Token::Hash,
                 Token::Hash,
                 Token::Text("c".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn tokenize_hancom_spacing_markers_as_whitespace() {
+        assert_eq!(
+            tokenize("a,````b`"),
+            vec![Token::Text("a".into()), Token::Text(",".into()), Token::Text("b".into()),]
+        );
+    }
+
+    #[test]
+    fn tokenize_uppercase_and_attached_hancom_commands() {
+        assert_eq!(
+            tokenize("PLEFT(x RIGHT),~THEREFOREk LEQ 1 TIMES 2 CDOTS"),
+            vec![
+                Token::Text("P".into()),
+                Token::Keyword("left".into()),
+                Token::Text("(".into()),
+                Token::Text("x".into()),
+                Token::Keyword("right".into()),
+                Token::Text(")".into()),
+                Token::Text(",".into()),
+                Token::Text("~".into()),
+                Token::Keyword("therefore".into()),
+                Token::Text("k".into()),
+                Token::Keyword("leq".into()),
+                Token::Text("1".into()),
+                Token::Keyword("times".into()),
+                Token::Text("2".into()),
+                Token::Keyword("cdots".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn tokenize_attached_root_accent_fraction_and_style_commands() {
+        assert_eq!(
+            tokenize("sqrta+barz+3 overk+rmO+itf"),
+            vec![
+                Token::Keyword("sqrt".into()),
+                Token::Text("a".into()),
+                Token::Text("+".into()),
+                Token::Keyword("bar".into()),
+                Token::Text("z".into()),
+                Token::Text("+".into()),
+                Token::Text("3".into()),
+                Token::Keyword("over".into()),
+                Token::Text("k".into()),
+                Token::Text("+".into()),
+                Token::Keyword("rm".into()),
+                Token::Text("O".into()),
+                Token::Text("+".into()),
+                Token::Keyword("it".into()),
+                Token::Text("f".into()),
             ]
         );
     }

@@ -349,7 +349,7 @@ fn paragraph_text_styled(
 fn encode_control_styled(
     control: &Control,
     styles: &dyn StyleLookup,
-    _images: &mut HashMap<String, Vec<u8>>,
+    images: &mut HashMap<String, Vec<u8>>,
     footnotes: &mut FootnoteCollector,
 ) -> String {
     match control {
@@ -371,38 +371,22 @@ fn encode_control_styled(
             }
         }
         Control::Footnote { paragraphs, .. } => {
-            let body = paragraphs
-                .iter()
-                .map(|p| extract_paragraph_text(p, styles))
-                .collect::<Vec<_>>()
-                .join(" ");
+            let body = encode_nested_paragraphs(paragraphs, styles, images, footnotes);
             footnotes.add_footnote(body.trim())
         }
         Control::Endnote { paragraphs, .. } => {
-            let body = paragraphs
-                .iter()
-                .map(|p| extract_paragraph_text(p, styles))
-                .collect::<Vec<_>>()
-                .join(" ");
+            let body = encode_nested_paragraphs(paragraphs, styles, images, footnotes);
             footnotes.add_endnote(body.trim())
         }
         Control::TextBox { paragraphs, .. } => {
-            let body = paragraphs
-                .iter()
-                .map(|p| extract_paragraph_text(p, styles))
-                .collect::<Vec<_>>()
-                .join(" ");
+            let body = encode_nested_paragraphs(paragraphs, styles, images, footnotes);
             body.trim().to_string()
         }
         Control::Equation { script, .. } => eqn_to_latex(script),
         Control::Chart { .. } => "<!-- chart -->".to_string(),
         Control::Line { .. } => String::new(),
         Control::Ellipse { paragraphs, .. } | Control::Polygon { paragraphs, .. } => {
-            let body = paragraphs
-                .iter()
-                .map(|p| extract_paragraph_text(p, styles))
-                .collect::<Vec<_>>()
-                .join(" ");
+            let body = encode_nested_paragraphs(paragraphs, styles, images, footnotes);
             if body.trim().is_empty() {
                 String::new()
             } else {
@@ -439,11 +423,7 @@ fn encode_control_styled(
             String::new()
         }
         Control::Memo { content, .. } => {
-            let body = content
-                .iter()
-                .map(|p| extract_paragraph_text(p, styles))
-                .collect::<Vec<_>>()
-                .join(" ");
+            let body = encode_nested_paragraphs(content, styles, images, footnotes);
             let trimmed = body.trim();
             if trimmed.is_empty() {
                 String::new()
@@ -468,17 +448,24 @@ fn encode_control_styled(
     }
 }
 
-/// Recursively extracts plain text from a paragraph using style-aware formatting.
-///
-/// Note: Uses a local `FootnoteCollector`, so footnotes nested inside control
-/// bodies (e.g. footnote inside a TextBox) will not propagate to the document-level
-/// collector. This is acceptable because HWP rarely nests footnotes inside shapes,
-/// and threading the collector through all recursive paths would require significant
-/// refactoring for marginal benefit.
-fn extract_paragraph_text(paragraph: &Paragraph, styles: &dyn StyleLookup) -> String {
-    let mut dummy = FootnoteCollector::new();
-    let (text, _images) = paragraph_text_styled(paragraph, styles, &mut dummy);
-    text
+/// Encodes paragraphs nested in controls while retaining their extracted images
+/// and any nested footnote/endnote definitions in the document-level collectors.
+fn encode_nested_paragraphs(
+    paragraphs: &[Paragraph],
+    styles: &dyn StyleLookup,
+    images: &mut HashMap<String, Vec<u8>>,
+    footnotes: &mut FootnoteCollector,
+) -> String {
+    paragraphs
+        .iter()
+        .map(|paragraph| {
+            let (markdown, paragraph_images) =
+                encode_paragraph_styled(paragraph, styles, footnotes);
+            images.extend(paragraph_images);
+            markdown
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 // ---------------------------------------------------------------------------
@@ -1668,6 +1655,36 @@ mod tests {
 
         let output = encode_styled(&doc, &styles);
         assert_eq!(output.markdown, "[^e1]\n\n[^e1]: end body");
+    }
+
+    #[test]
+    fn control_endnote_extracts_nested_images() {
+        let mut styles = MockStyles::new();
+        styles.image_data.insert("BinData/graph.png".to_string(), vec![0x89, 0x50, 0x4E]);
+        let graph = Image::new(
+            "BinData/graph.png",
+            HwpUnit::from_mm(40.0).unwrap(),
+            HwpUnit::from_mm(30.0).unwrap(),
+            ImageFormat::Png,
+        );
+        let endnote_body = Paragraph::with_runs(
+            vec![
+                Run::text("solution", CharShapeIndex::new(0)),
+                Run::image(graph, CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Endnote { inst_id: None, paragraphs: vec![endnote_body] },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let output = encode_styled(&doc, &styles);
+        assert_eq!(output.markdown, "[^e1]\n\n[^e1]: solution ![graph](images/graph.png)");
+        assert_eq!(output.images.get("images/graph.png"), Some(&vec![0x89, 0x50, 0x4E]));
     }
 
     #[test]
