@@ -123,6 +123,8 @@ pub struct SectionParseResult {
     pub text_direction: TextDirection,
     /// Starting numbers extracted from `<hp:startNum>` in secPr.
     pub begin_num: Option<hwpforge_core::section::BeginNum>,
+    /// Equations embedded in picture captions and grouped drawing text.
+    pub visual_equations: Vec<crate::decoder::HwpxVisualEquation>,
 }
 
 /// Parses a section XML string into paragraphs and optional page settings.
@@ -137,6 +139,8 @@ pub fn parse_section(
     let file_hint = format!("Contents/section{section_index}.xml");
     let section: HxSection = from_str(xml)
         .map_err(|e| HwpxError::XmlParse { file: file_hint, detail: e.to_string() })?;
+    let visual_equations =
+        crate::decoder::visual_equations::collect_section(&section.paragraphs, section_index);
 
     let mut page_settings = None;
     let mut header = None;
@@ -245,6 +249,7 @@ pub fn parse_section(
         master_pages: None,
         text_direction,
         begin_num,
+        visual_equations,
     })
 }
 

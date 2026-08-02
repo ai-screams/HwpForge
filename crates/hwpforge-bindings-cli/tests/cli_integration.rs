@@ -11,7 +11,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use hwpforge_core::control::Control;
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::RunContent;
-use hwpforge_smithy_hwpx::ExportedSection;
+use hwpforge_smithy_hwpx::{ExportedSection, HwpxDecoder, HwpxStyleLookup};
+use hwpforge_smithy_md::MdEncoder;
 use serde_json::json;
 use zip::ZipArchive;
 
@@ -322,6 +323,42 @@ fn csv_to_json_array(csv: &str) -> serde_json::Value {
 fn create_test_md(dir: &Path, content: &str) -> PathBuf {
     let path = dir.join("input.md");
     std::fs::write(&path, content).expect("write test md");
+    path
+}
+
+fn create_visual_equations_hwpx(dir: &Path) -> PathBuf {
+    const HEADER: &str = r##"<head version="1.4" secCnt="1"><refList>
+      <fontfaces itemCnt="1"><fontface lang="HANGUL" fontCnt="1"><font id="0" face="함초롬돋움" type="TTF" isEmbedded="0"/></fontface></fontfaces>
+      <charProperties itemCnt="1"><charPr id="0" height="1000" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="0"><fontRef hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/></charPr></charProperties>
+      <paraProperties itemCnt="1"><paraPr id="0"><align horizontal="LEFT" vertical="BASELINE"/><switch><default><lineSpacing type="PERCENT" value="160"/></default></switch></paraPr></paraProperties>
+    </refList></head>"##;
+    const SECTION: &str = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
+      <t>visible markdown</t>
+      <equation id="ordinary-1"><sz width="1000" height="1000"/><script>ordinary</script></equation>
+      <rect id="textbox-1" instid="textbox-inst"><orgSz width="2000" height="1000"/><drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0"><equation id="textbox-eq"><sz width="1000" height="1000"/><script>textbox</script></equation></run></p></subList></drawText></rect>
+      <ctrl><endNote instId="9007199254740993"><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+        <pic id="9007199254740995" instid="9007199254740996" zOrder="7"><pos horzOffset="101" vertOffset="102"/><caption><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+          <equation id="9007199254740997" zOrder="31"><sz width="1000" height="1000"/><pos horzOffset="111" vertOffset="112"/><script>{a} over {b}</script></equation>
+        </run></p></subList></caption></pic>
+      </run></p></subList></endNote></ctrl>
+      <container id="group-1" instid="group-inst" zOrder="8"><orgSz width="3000" height="2000"/><rect id="9007199254740999" instid="9007199254741000" zOrder="41"><orgSz width="2000" height="1000"/><pos horzOffset="201" vertOffset="202"/><drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+        <equation id="9007199254741001" zOrder="42"><sz width="1000" height="1000"/><pos horzOffset="211" vertOffset="212"/><script>x ^{2}</script></equation>
+      </run></p></subList></drawText></rect></container>
+    </run></p></sec>"#;
+
+    let path = dir.join("visual-input.hwpx");
+    let file = std::fs::File::create(&path).expect("create visual-equations fixture");
+    let mut writer = zip::ZipWriter::new(file);
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let deflated = zip::write::SimpleFileOptions::default();
+    writer.start_file("mimetype", stored).unwrap();
+    writer.write_all(b"application/hwp+zip").unwrap();
+    writer.start_file("Contents/header.xml", deflated).unwrap();
+    writer.write_all(HEADER.as_bytes()).unwrap();
+    writer.start_file("Contents/section0.xml", deflated).unwrap();
+    writer.write_all(SECTION.as_bytes()).unwrap();
+    writer.finish().unwrap();
     path
 }
 
@@ -4266,6 +4303,62 @@ fn to_md_lossless_mode_runs() {
         run(&["to-md", f.to_str().unwrap(), "-o", tmp.to_str().unwrap(), "--mode", "lossless"]);
     assert_eq!(code, 0);
     assert!(tmp.join("merged_grid_form.md").exists());
+}
+
+#[test]
+fn to_md_json_visual_equations_reports_sidecar() {
+    let tmp = test_tmp();
+    let input = create_visual_equations_hwpx(&tmp);
+    let output_dir = tmp.join("out");
+
+    let decoded = HwpxDecoder::decode_file(&input).unwrap();
+    let lookup = HwpxStyleLookup::new(&decoded.style_store, &decoded.image_store);
+    let expected_markdown =
+        MdEncoder::encode_styled(&decoded.document.validate().unwrap(), &lookup).markdown;
+
+    let (result, stderr, code) =
+        run_json(&["to-md", input.to_str().unwrap(), "-o", output_dir.to_str().unwrap()]);
+
+    assert_eq!(code, 0, "{stderr}");
+    assert_eq!(result["status"], "ok");
+    assert_eq!(result["images"], 0);
+    assert_eq!(result["visual_equations"]["count"], 2);
+    let markdown_path = Path::new(result["output"].as_str().unwrap());
+    assert_eq!(
+        std::fs::read(markdown_path).unwrap(),
+        expected_markdown.as_bytes(),
+        "sidecar reporting must not change the existing styled Markdown bytes"
+    );
+    let sidecar = result["visual_equations"]["output"]
+        .as_str()
+        .expect("styled JSON output must report the visual-equations sidecar");
+    assert!(Path::new(sidecar).exists(), "reported sidecar must exist: {sidecar}");
+    assert!(Path::new(sidecar).starts_with(&output_dir));
+    let report: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(sidecar).unwrap()).unwrap();
+    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["equations"].as_array().unwrap().len(), 2);
+    assert_eq!(report["equations"][0]["domain"], "picture_caption");
+    assert_eq!(report["equations"][0]["latex"], r"$\frac{a}{b}$");
+    assert_eq!(report["equations"][1]["domain"], "group_draw_text");
+    assert_eq!(report["equations"][1]["latex"], "$x^{2}$");
+}
+
+#[test]
+fn to_md_json_visual_equations_sidecar_write_failure_is_fail_closed() {
+    let tmp = test_tmp();
+    let input = create_visual_equations_hwpx(&tmp);
+    let markdown_path = tmp.join("result.md");
+    let blocked_sidecar = tmp.join("result.visual-equations.json");
+    std::fs::create_dir(&blocked_sidecar).unwrap();
+
+    let (error, _stderr, code) =
+        run_json(&["to-md", input.to_str().unwrap(), "-o", markdown_path.to_str().unwrap()]);
+
+    assert_ne!(code, 0, "sidecar failure must not report success");
+    assert_eq!(error["status"], "error");
+    assert_eq!(error["code"], "FILE_WRITE_FAILED");
+    assert!(blocked_sidecar.is_dir(), "failed write must not replace the blocking target");
 }
 
 // ═══════════════════════════════════════════════════════════════
