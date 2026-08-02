@@ -39,6 +39,10 @@ const SECTION_XML: &str = r#"<sec>
 </sec>"#;
 
 fn visual_equations_fixture() -> Vec<u8> {
+    fixture_with_section(SECTION_XML)
+}
+
+fn fixture_with_section(section_xml: &str) -> Vec<u8> {
     let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
     let stored = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
     let deflated = SimpleFileOptions::default();
@@ -47,8 +51,52 @@ fn visual_equations_fixture() -> Vec<u8> {
     writer.start_file("Contents/header.xml", deflated).unwrap();
     writer.write_all(HEADER_XML.as_bytes()).unwrap();
     writer.start_file("Contents/section0.xml", deflated).unwrap();
-    writer.write_all(SECTION_XML.as_bytes()).unwrap();
+    writer.write_all(section_xml.as_bytes()).unwrap();
     writer.finish().unwrap().into_inner()
+}
+
+fn nested_containers_section(levels: usize) -> String {
+    let mut visual = concat!(
+        r#"<rect id="deep-rect" instid="deep-rect-inst" zOrder="17">"#,
+        r#"<offset x="701" y="702"/>"#,
+        r#"<drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">"#,
+        r#"<equation id="deep-equation"><script>deep</script></equation>"#,
+        r#"</run></p></subList></drawText></rect>"#,
+    )
+    .to_string();
+    for level in (0..levels).rev() {
+        visual = format!(
+            r#"<container groupLevel="{level}" instid="container-{level}">{visual}</container>"#
+        );
+    }
+    format!(
+        r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">{visual}</run></p></sec>"#
+    )
+}
+
+fn nested_table_controls_section(levels: usize) -> String {
+    let mut visual = concat!(
+        r#"<pic id="deep-picture" instid="deep-picture-inst" zOrder="19">"#,
+        r#"<pos horzOffset="801" vertOffset="802"/>"#,
+        r#"<caption><subList><p paraPrIDRef="0"><run charPrIDRef="0">"#,
+        r#"<equation id="deep-caption-equation"><script>deep caption</script></equation>"#,
+        r#"</run></p></subList></caption></pic>"#,
+    )
+    .to_string();
+    for level in (0..levels).rev() {
+        visual = if level % 2 == 0 {
+            format!(
+                r#"<tbl id="table-{level}" rowCnt="1" colCnt="1"><tr><tc><subList><p paraPrIDRef="0"><run charPrIDRef="0">{visual}</run></p></subList><cellAddr colAddr="0" rowAddr="0"/><cellSpan rowSpan="1" colSpan="1"/></tc></tr></tbl>"#
+            )
+        } else {
+            format!(
+                r#"<ctrl><endNote instId="{level}"><subList><p paraPrIDRef="0"><run charPrIDRef="0">{visual}</run></p></subList></endNote></ctrl>"#
+            )
+        };
+    }
+    format!(
+        r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">{visual}</run></p></sec>"#
+    )
 }
 
 #[test]
@@ -96,4 +144,101 @@ fn visual_equations_report_preserves_only_supported_visual_domains() {
     let serialized = serde_json::to_value(report).unwrap();
     assert_eq!(serialized["equations"][0]["equation_object_id"], "9007199254740997");
     assert_eq!(serialized["equations"][1]["parent_instance_id"], "9007199254741000");
+}
+
+#[test]
+fn visual_equation_explicit_zero_z_order_does_not_inherit_parent() {
+    let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
+      <container instid="group-inst"><rect id="rect-1" instid="rect-inst" zOrder="41">
+        <drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+          <equation id="explicit-zero" zOrder="0"><script>zero</script></equation>
+          <equation id="absent-z-order"><script>absent</script></equation>
+        </run></p></subList></drawText>
+      </rect></container>
+    </run></p></sec>"#;
+
+    let (_document, report) =
+        HwpxDecoder::decode_with_report(&fixture_with_section(section)).unwrap();
+
+    assert_eq!(report.equations.len(), 2);
+    assert_eq!(report.equations[0].id, "explicit-zero");
+    assert_eq!(
+        report.equations[0].z_order, 0,
+        "an explicit wire zOrder=0 must not inherit the parent z-order"
+    );
+    assert_eq!(report.equations[1].id, "absent-z-order");
+    assert_eq!(
+        report.equations[1].z_order, 41,
+        "only an absent equation zOrder may inherit the visual parent"
+    );
+}
+
+#[test]
+fn visual_equation_group_offset_and_picture_placement_are_preserved() {
+    let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
+      <container instid="group-inst"><rect id="rect-1" instid="rect-inst" zOrder="41">
+        <offset x="321" y="-654"/>
+        <drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+          <equation id="group-offset"><script>group</script></equation>
+        </run></p></subList></drawText>
+      </rect></container>
+      <pic id="picture-1" instid="picture-inst" zOrder="42">
+        <offset x="11" y="12"/><pos horzOffset="421" vertOffset="422"/>
+        <caption><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+          <equation id="picture-placement"><script>picture</script></equation>
+        </run></p></subList></caption>
+      </pic>
+    </run></p></sec>"#;
+
+    let (_document, report) =
+        HwpxDecoder::decode_with_report(&fixture_with_section(section)).unwrap();
+
+    assert_eq!(report.equations.len(), 2);
+    assert_eq!(report.equations[0].id, "group-offset");
+    assert_eq!(report.equations[0].position.horz_offset, 321);
+    assert_eq!(report.equations[0].position.vert_offset, -654);
+    assert_eq!(report.equations[1].id, "picture-placement");
+    assert_eq!(report.equations[1].position.horz_offset, 421);
+    assert_eq!(report.equations[1].position.vert_offset, 422);
+}
+
+#[test]
+fn visual_equation_nesting_boundary_succeeds() {
+    let section = nested_containers_section(32);
+
+    let (_document, report) = HwpxDecoder::decode_with_report(&fixture_with_section(&section))
+        .expect("32 visual-container levels must remain within the decoder boundary");
+
+    assert_eq!(report.equations.len(), 1);
+    assert_eq!(report.equations[0].id, "deep-equation");
+}
+
+#[test]
+fn visual_equation_container_nesting_depth_exceeded_fails_closed() {
+    let section = nested_containers_section(33);
+
+    let result = HwpxDecoder::decode_with_report(&fixture_with_section(&section));
+
+    match result {
+        Ok(_) => panic!("33 visual-container levels must fail closed"),
+        Err(error) => assert!(
+            error.to_string().contains("visual-equation nesting depth 32 exceeds limit of 32"),
+            "unexpected error: {error}"
+        ),
+    }
+}
+
+#[test]
+fn visual_equation_table_control_nesting_depth_exceeded_fails_closed() {
+    let section = nested_table_controls_section(33);
+
+    let result = HwpxDecoder::decode_with_report(&fixture_with_section(&section));
+
+    match result {
+        Ok(_) => panic!("33 table/control levels must fail closed"),
+        Err(error) => assert!(
+            error.to_string().contains("visual-equation nesting depth 32 exceeds limit of 32"),
+            "unexpected error: {error}"
+        ),
+    }
 }

@@ -24,7 +24,7 @@ pub(super) fn encode_equation_to_hx(ctrl: &Control) -> HwpxResult<HxEquation> {
         // Wave 12p Step 4: cross-ref target id 가 있으면 사용,
         // 없으면 fresh fallback (한컴 native 와는 id 차이만 발생).
         id: inst_id.map(|n| n.to_string()).unwrap_or_else(generate_instid),
-        z_order: 0,
+        z_order: Some(0),
         numbering_type: "EQUATION".to_string(),
         text_wrap: "TOP_AND_BOTTOM".to_string(),
         text_flow: "BOTH_SIDES".to_string(),

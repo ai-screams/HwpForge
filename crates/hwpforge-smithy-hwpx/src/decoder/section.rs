@@ -140,7 +140,7 @@ pub fn parse_section(
     let section: HxSection = from_str(xml)
         .map_err(|e| HwpxError::XmlParse { file: file_hint, detail: e.to_string() })?;
     let visual_equations =
-        crate::decoder::visual_equations::collect_section(&section.paragraphs, section_index);
+        crate::decoder::visual_equations::collect_section(&section.paragraphs, section_index)?;
 
     let mut page_settings = None;
     let mut header = None;

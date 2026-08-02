@@ -2081,9 +2081,10 @@ pub struct HxEquation {
     /// Element ID.
     #[serde(rename = "@id", default)]
     pub id: String,
-    /// Z-order for overlapping objects.
-    #[serde(rename = "@zOrder", default)]
-    pub z_order: u32,
+    /// Z-order for overlapping objects, preserving wire absence separately
+    /// from an explicit `zOrder="0"`.
+    #[serde(rename = "@zOrder", default, skip_serializing_if = "Option::is_none")]
+    pub z_order: Option<u32>,
     /// Numbering type: NONE, EQUATION, etc.
     #[serde(rename = "@numberingType", default)]
     pub numbering_type: String,
