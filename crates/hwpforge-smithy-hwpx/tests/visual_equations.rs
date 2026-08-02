@@ -203,6 +203,52 @@ fn visual_equation_group_offset_and_picture_placement_are_preserved() {
 }
 
 #[test]
+fn visual_equation_group_position_adds_rect_placement_to_child_local_pos() {
+    let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
+      <container instid="group-inst">
+        <rect id="2010924737" instid="rect-zero-child" zOrder="41">
+          <offset x="0" y="11428"/>
+          <drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+            <equation id="explicit-zero-child"><pos horzOffset="0" vertOffset="0"/><script>zero child</script></equation>
+          </run></p></subList></drawText>
+        </rect>
+        <rect id="rect-local-child" instid="rect-local-child-inst" zOrder="42">
+          <offset x="321" y="-654"/>
+          <drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+            <equation id="local-child"><pos horzOffset="11" vertOffset="12"/><script>local child</script></equation>
+          </run></p></subList></drawText>
+        </rect>
+        <rect id="rect-unsigned-offset" instid="rect-unsigned-offset-inst" zOrder="43">
+          <offset x="4294966848" y="11428"/>
+          <drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+            <equation id="unsigned-offset"><pos horzOffset="0" vertOffset="0"/><script>unsigned offset</script></equation>
+          </run></p></subList></drawText>
+        </rect>
+      </container>
+    </run></p></sec>"#;
+
+    let (_document, report) =
+        HwpxDecoder::decode_with_report(&fixture_with_section(section)).unwrap();
+
+    let positions: Vec<(&str, i32, i32)> = report
+        .equations
+        .iter()
+        .map(|equation| {
+            (equation.id.as_str(), equation.position.horz_offset, equation.position.vert_offset)
+        })
+        .collect();
+    assert_eq!(
+        positions,
+        vec![
+            ("explicit-zero-child", 0, 11428),
+            ("local-child", 332, -642),
+            ("unsigned-offset", -448, 11428),
+        ],
+        "group positions must combine rect placement with equation-local coordinates"
+    );
+}
+
+#[test]
 fn visual_equation_nesting_boundary_succeeds() {
     let section = nested_containers_section(32);
 

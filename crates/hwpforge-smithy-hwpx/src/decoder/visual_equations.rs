@@ -331,8 +331,7 @@ fn collect_parent_equations(
         let id = equation_object_id
             .clone()
             .unwrap_or_else(|| format!("{parent_path}/equation[{parent_order}]"));
-        let position =
-            equation.pos.as_ref().map(position_from_table).or(parent.position).unwrap_or_default();
+        let position = equation_position(equation, parent)?;
         let z_order = equation.z_order.unwrap_or(parent.z_order);
         equations.push(HwpxVisualEquation {
             id,
@@ -437,4 +436,36 @@ fn position_from_table(position: &HxTablePos) -> HwpxVisualEquationPosition {
 
 fn position_from_offset(position: &HxOffset) -> HwpxVisualEquationPosition {
     HwpxVisualEquationPosition { horz_offset: position.x, vert_offset: position.y }
+}
+
+fn equation_position(
+    equation: &HxEquation,
+    parent: VisualParent<'_>,
+) -> HwpxResult<HwpxVisualEquationPosition> {
+    let child_position = equation.pos.as_ref().map(position_from_table);
+    match parent.domain {
+        HwpxVisualEquationDomain::PictureCaption => {
+            Ok(child_position.or(parent.position).unwrap_or_default())
+        }
+        HwpxVisualEquationDomain::GroupDrawText => {
+            add_positions(parent.position.unwrap_or_default(), child_position.unwrap_or_default())
+        }
+    }
+}
+
+fn add_positions(
+    parent: HwpxVisualEquationPosition,
+    child: HwpxVisualEquationPosition,
+) -> HwpxResult<HwpxVisualEquationPosition> {
+    let horz_offset = parent.horz_offset.checked_add(child.horz_offset).ok_or_else(|| {
+        HwpxError::InvalidStructure {
+            detail: "visual-equation horizontal position exceeds i32 range".to_string(),
+        }
+    })?;
+    let vert_offset = parent.vert_offset.checked_add(child.vert_offset).ok_or_else(|| {
+        HwpxError::InvalidStructure {
+            detail: "visual-equation vertical position exceeds i32 range".to_string(),
+        }
+    })?;
+    Ok(HwpxVisualEquationPosition { horz_offset, vert_offset })
 }
