@@ -103,7 +103,7 @@ fn nested_table_controls_section(levels: usize) -> String {
 fn visual_equations_report_preserves_only_supported_visual_domains() {
     let (_document, report) = HwpxDecoder::decode_with_report(&visual_equations_fixture()).unwrap();
 
-    assert_eq!(report.schema_version, 3);
+    assert_eq!(report.schema_version, 4);
     assert_eq!(report.equations.len(), 2);
 
     let picture = &report.equations[0];
@@ -129,7 +129,7 @@ fn visual_equations_report_preserves_only_supported_visual_domains() {
     assert_eq!(picture.geometry.scale.vert, "1");
     assert_eq!(picture.geometry.display_box_size, None);
     assert_eq!(picture.geometry.display_equation_size, None);
-    assert_eq!(picture.geometry.display_base_unit, None);
+    assert_eq!(picture.geometry.render_base_unit, None);
     assert_eq!(picture.script, "{a} over {b}");
     assert_eq!(picture.latex, None);
 
@@ -266,7 +266,7 @@ fn visual_equation_group_position_adds_rect_placement_to_child_local_pos() {
 }
 
 #[test]
-fn visual_equation_group_geometry_applies_wire_scale_without_losing_raw_sizes() {
+fn q524_group_geometry_keeps_render_base_unit_unscaled_while_scaling_display_sizes() {
     let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
       <container instid="group-inst"><rect id="rect-1" instid="rect-inst" zOrder="41">
         <offset x="18928" y="7966"/><orgSz width="8504" height="8504"/>
@@ -286,7 +286,7 @@ fn visual_equation_group_geometry_applies_wire_scale_without_losing_raw_sizes() 
     let (_document, report) =
         HwpxDecoder::decode_with_report(&fixture_with_section(section)).unwrap();
 
-    assert_eq!(report.schema_version, 3);
+    assert_eq!(report.schema_version, 4);
     let geometry = &report.equations[0].geometry;
     assert_eq!(geometry.raw_box_size.unwrap().width, 8504);
     assert_eq!(geometry.raw_box_size.unwrap().height, 8504);
@@ -299,7 +299,7 @@ fn visual_equation_group_geometry_applies_wire_scale_without_losing_raw_sizes() 
     assert_eq!(geometry.display_box_size.unwrap().height, 2145);
     assert_eq!(geometry.display_equation_size.unwrap().width, 147);
     assert_eq!(geometry.display_equation_size.unwrap().height, 284);
-    assert_eq!(geometry.display_base_unit, Some(277));
+    assert_eq!(geometry.render_base_unit, Some(1100));
 
     let serialized = serde_json::to_value(report).unwrap();
     assert_eq!(
@@ -314,10 +314,15 @@ fn visual_equation_group_geometry_applies_wire_scale_without_losing_raw_sizes() 
         serialized["equations"][0]["display_position"],
         serde_json::json!({"horz_offset": 20309, "vert_offset": 8498})
     );
+    assert_eq!(serialized["equations"][0]["geometry"]["render_base_unit"], 1100);
+    assert!(
+        serialized["equations"][0]["geometry"].get("display_base_unit").is_none(),
+        "schema v4 must not expose the misleading scale-applied font base unit"
+    );
 }
 
 #[test]
-fn visual_equation_group_display_position_applies_final_scale_translation() {
+fn q448_group_position_uses_translation_but_render_base_unit_stays_raw() {
     let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
       <container id="2010952039" instid="937210216"><rect id="0" instid="937210219" zOrder="28100">
         <offset x="4294965625" y="343"/><orgSz width="2477" height="1883"/>
@@ -349,6 +354,32 @@ fn visual_equation_group_display_position_applies_final_scale_translation() {
         equation["display_position"],
         serde_json::json!({"horz_offset": 190, "vert_offset": 1022})
     );
+    assert_eq!(equation["geometry"]["scale"]["vert"], "0.831652");
+    assert_eq!(equation["geometry"]["display_equation_size"]["height"], 748);
+    assert_eq!(equation["geometry"]["render_base_unit"], 900);
+    assert!(equation["geometry"].get("display_base_unit").is_none());
+}
+
+#[test]
+fn visual_equation_render_base_unit_falls_back_to_raw_equation_height() {
+    let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
+      <container instid="group-inst"><rect id="rect-1" instid="rect-inst">
+        <orgSz width="2477" height="1883"/>
+        <renderingInfo><scaMatrix e1="0.478401" e2="0" e3="0" e4="0" e5="0.831652" e6="0"/></renderingInfo>
+        <drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+          <equation id="height-fallback"><sz width="405" height="900"/><script>y</script></equation>
+        </run></p></subList></drawText>
+      </rect></container>
+    </run></p></sec>"#;
+
+    let (_document, report) =
+        HwpxDecoder::decode_with_report(&fixture_with_section(section)).unwrap();
+    let geometry = &report.equations[0].geometry;
+
+    assert_eq!(geometry.raw_base_unit, None);
+    assert_eq!(geometry.raw_equation_size.unwrap().height, 900);
+    assert_eq!(geometry.render_base_unit, Some(900));
+    assert_eq!(geometry.display_equation_size.unwrap().height, 748);
 }
 
 #[test]
@@ -380,7 +411,7 @@ fn visual_equation_display_position_overflow_fails_closed_without_losing_wire_tr
 }
 
 #[test]
-fn visual_equation_invalid_scale_preserves_provenance_and_uses_explicit_null_display_values() {
+fn visual_equation_invalid_scale_preserves_geometry_and_raw_render_base_unit() {
     let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
       <container instid="group-inst"><rect id="rect-1" instid="rect-inst">
         <orgSz width="8504" height="8504"/>
@@ -402,12 +433,13 @@ fn visual_equation_invalid_scale_preserves_provenance_and_uses_explicit_null_dis
     assert_eq!(geometry.scale.vert, "-1");
     assert_eq!(geometry.display_box_size, None);
     assert_eq!(geometry.display_equation_size, None);
-    assert_eq!(geometry.display_base_unit, None);
+    assert_eq!(geometry.render_base_unit, Some(1100));
 
     let serialized = serde_json::to_value(report).unwrap();
     assert!(serialized["equations"][0]["geometry"]["display_box_size"].is_null());
     assert!(serialized["equations"][0]["geometry"]["display_equation_size"].is_null());
-    assert!(serialized["equations"][0]["geometry"]["display_base_unit"].is_null());
+    assert_eq!(serialized["equations"][0]["geometry"]["render_base_unit"], 1100);
+    assert!(serialized["equations"][0]["geometry"].get("display_base_unit").is_none());
 }
 
 #[test]

@@ -4336,7 +4336,7 @@ fn to_md_json_visual_equations_reports_sidecar() {
     assert!(Path::new(sidecar).starts_with(&output_dir));
     let report: serde_json::Value =
         serde_json::from_slice(&std::fs::read(sidecar).unwrap()).unwrap();
-    assert_eq!(report["schema_version"], 3);
+    assert_eq!(report["schema_version"], 4);
     assert_eq!(report["equations"].as_array().unwrap().len(), 2);
     assert_eq!(report["equations"][0]["domain"], "picture_caption");
     assert_eq!(report["equations"][0]["latex"], r"$\frac{a}{b}$");
@@ -4366,7 +4366,8 @@ fn to_md_json_visual_equations_reports_sidecar() {
     assert_eq!(report["equations"][1]["geometry"]["raw_base_unit"], 900);
     assert_eq!(report["equations"][1]["geometry"]["scale"]["horz"], "1");
     assert_eq!(report["equations"][1]["geometry"]["display_box_size"]["width"], 2000);
-    assert_eq!(report["equations"][1]["geometry"]["display_base_unit"], 900);
+    assert_eq!(report["equations"][1]["geometry"]["render_base_unit"], 900);
+    assert!(report["equations"][1]["geometry"].get("display_base_unit").is_none());
 }
 
 #[test]

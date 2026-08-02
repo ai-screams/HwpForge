@@ -8,7 +8,7 @@ use crate::schema::section::{
     HxSizeAttr, HxSubList, HxTable, HxTablePos, HxTableSz,
 };
 
-pub(crate) const HWPX_VISUAL_EQUATION_SCHEMA_VERSION: u32 = 3;
+pub(crate) const HWPX_VISUAL_EQUATION_SCHEMA_VERSION: u32 = 4;
 
 /// Versioned report of equations that styled Markdown intentionally leaves
 /// inside picture captions and grouped drawing text.
@@ -111,14 +111,14 @@ pub struct HwpxVisualEquationGeometry {
     pub raw_equation_size: Option<HwpxVisualEquationSize>,
     /// Equation `baseUnit` before its parent rendering scale is applied.
     pub raw_base_unit: Option<u32>,
+    /// Canonical equation font base for rendering, falling back to raw equation height.
+    pub render_base_unit: Option<u32>,
     /// Exact wire scale selected from the visual parent's final `scaMatrix`.
     pub scale: HwpxVisualEquationScale,
     /// Parent box size after applying the wire scale, rounded to HWP units.
     pub display_box_size: Option<HwpxVisualEquationSize>,
     /// Equation size after applying the wire scale, rounded to HWP units.
     pub display_equation_size: Option<HwpxVisualEquationSize>,
-    /// Equation `baseUnit` after applying the vertical wire scale.
-    pub display_base_unit: Option<u32>,
 }
 
 /// Width and height in HWP units.
@@ -569,13 +569,18 @@ fn equation_geometry(
         horz: parent.scale.horz.to_string(),
         vert: parent.scale.vert.to_string(),
     };
+    let raw_base_unit = (equation.base_unit > 0).then_some(equation.base_unit);
+    let render_base_unit = raw_base_unit.or_else(|| {
+        raw_equation_size
+            .and_then(|size| u32::try_from(size.height).ok().filter(|height| *height > 0))
+    });
     HwpxVisualEquationGeometry {
         raw_box_size,
         raw_equation_size,
-        raw_base_unit: (equation.base_unit > 0).then_some(equation.base_unit),
+        raw_base_unit,
+        render_base_unit,
         display_box_size: scale_size(raw_box_size, parent.scale),
         display_equation_size: scale_size(raw_equation_size, parent.scale),
-        display_base_unit: scale_base_unit(equation.base_unit, parent.scale.vert),
         scale,
     }
 }
@@ -604,21 +609,6 @@ fn scale_dimension(raw: i32, scale: &str) -> Option<i32> {
         return None;
     }
     Some(display.max(1.0) as i32)
-}
-
-fn scale_base_unit(raw: u32, scale: &str) -> Option<u32> {
-    if raw == 0 {
-        return None;
-    }
-    let scale = scale.parse::<f64>().ok()?;
-    if !scale.is_finite() || scale <= 0.0 {
-        return None;
-    }
-    let display = (f64::from(raw) * scale).round();
-    if !display.is_finite() || display > f64::from(u32::MAX) {
-        return None;
-    }
-    Some(display.max(1.0) as u32)
 }
 
 fn translate_position(
