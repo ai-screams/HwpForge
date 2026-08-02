@@ -686,4 +686,18 @@ mod tests {
              \\times{\\overline{{SD}}}^{2}=\\frac{35}{4}$"
         );
     }
+
+    #[test]
+    fn native_hancom_single_letter_escapes_are_plain_latin_labels() {
+        assert_eq!(eqn_to_latex(r"\B+\D+\A+\C"), "$B+D+A+C$");
+    }
+
+    #[test]
+    fn latex_commands_and_non_letter_backslash_syntax_are_preserved() {
+        assert_eq!(
+            eqn_to_latex(r"\alpha+\sqrt{x}+\operatorname{rank}"),
+            r"$\alpha+\sqrt{x}+\operatorname{rank}$"
+        );
+        assert_eq!(eqn_to_latex(r"\{x\}_1+\%+\_+\\"), r"$\{x\}_{1}+\%+\_+\\$");
+    }
 }

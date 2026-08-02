@@ -282,6 +282,38 @@ pub(crate) fn tokenize(input: &str) -> Vec<Token> {
                 tokens.push(Token::Keyword("!=".to_string()));
                 i += 2;
             }
+            '\\' => {
+                if i + 1 >= chars.len() {
+                    tokens.push(Token::Text("\\".to_string()));
+                    i += 1;
+                    continue;
+                }
+
+                if chars[i + 1].is_ascii_alphabetic() {
+                    let mut command_end = i + 1;
+                    while command_end < chars.len() && chars[command_end].is_ascii_alphabetic() {
+                        command_end += 1;
+                    }
+                    if command_end == i + 2 {
+                        // HancomEQN uses `\A`-style escapes for literal Latin
+                        // labels. Skip only the escape marker and let the
+                        // ordinary identifier path consume the operand.
+                        i += 1;
+                    } else {
+                        // Preserve multi-letter LaTeX commands as one token so
+                        // known Hancom keywords do not add a second backslash.
+                        tokens.push(Token::Text(chars[i..command_end].iter().collect()));
+                        i = command_end;
+                    }
+                    continue;
+                }
+
+                // Keep symbolic LaTeX escapes (`\{`, `\_`, `\\`, and so on)
+                // together so their second character is not parsed as
+                // HancomEQN structure.
+                tokens.push(Token::Text(chars[i..=i + 1].iter().collect()));
+                i += 2;
+            }
             // Identifier or keyword
             c if c.is_alphabetic() => {
                 let start = i;
