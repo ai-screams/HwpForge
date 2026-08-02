@@ -4336,14 +4336,31 @@ fn to_md_json_visual_equations_reports_sidecar() {
     assert!(Path::new(sidecar).starts_with(&output_dir));
     let report: serde_json::Value =
         serde_json::from_slice(&std::fs::read(sidecar).unwrap()).unwrap();
-    assert_eq!(report["schema_version"], 2);
+    assert_eq!(report["schema_version"], 3);
     assert_eq!(report["equations"].as_array().unwrap().len(), 2);
     assert_eq!(report["equations"][0]["domain"], "picture_caption");
     assert_eq!(report["equations"][0]["latex"], r"$\frac{a}{b}$");
+    assert_eq!(
+        report["equations"][0]["raw_position"],
+        json!({"horz_offset": 111, "vert_offset": 112})
+    );
+    assert_eq!(report["equations"][0]["translation"], json!({"horz": "0", "vert": "0"}));
+    assert_eq!(
+        report["equations"][0]["display_position"],
+        json!({"horz_offset": 111, "vert_offset": 112})
+    );
     assert_eq!(report["equations"][0]["geometry"]["raw_box_size"]["width"], 1000);
     assert_eq!(report["equations"][0]["geometry"]["display_box_size"]["height"], 1000);
     assert_eq!(report["equations"][1]["domain"], "group_draw_text");
     assert_eq!(report["equations"][1]["latex"], "$x^{2}$");
+    assert_eq!(
+        report["equations"][1]["raw_position"],
+        json!({"horz_offset": 412, "vert_offset": 414})
+    );
+    assert_eq!(
+        report["equations"][1]["display_position"],
+        json!({"horz_offset": 412, "vert_offset": 414})
+    );
     assert_eq!(report["equations"][1]["geometry"]["raw_box_size"]["width"], 2000);
     assert_eq!(report["equations"][1]["geometry"]["raw_equation_size"]["height"], 1000);
     assert_eq!(report["equations"][1]["geometry"]["raw_base_unit"], 900);

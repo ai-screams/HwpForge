@@ -8,7 +8,7 @@ use crate::schema::section::{
     HxSizeAttr, HxSubList, HxTable, HxTablePos, HxTableSz,
 };
 
-pub(crate) const HWPX_VISUAL_EQUATION_SCHEMA_VERSION: u32 = 2;
+pub(crate) const HWPX_VISUAL_EQUATION_SCHEMA_VERSION: u32 = 3;
 
 /// Versioned report of equations that styled Markdown intentionally leaves
 /// inside picture captions and grouped drawing text.
@@ -49,8 +49,12 @@ pub struct HwpxVisualEquation {
     pub parent_order: usize,
     /// Equation z-order, falling back to the nearest visual parent when absent.
     pub z_order: u32,
-    /// Equation position, falling back to the nearest visual parent when absent.
-    pub position: HwpxVisualEquationPosition,
+    /// Raw equation position before the visual parent's rendering translation.
+    pub raw_position: HwpxVisualEquationPosition,
+    /// Exact translation selected from the visual parent's final `scaMatrix`.
+    pub translation: HwpxVisualEquationTranslation,
+    /// Display-space position after applying the rendering translation.
+    pub display_position: Option<HwpxVisualEquationPosition>,
     /// Raw and display-space geometry for faithful visual composition.
     pub geometry: HwpxVisualEquationGeometry,
     /// Original HancomEQN source.
@@ -87,6 +91,15 @@ pub struct HwpxVisualEquationPosition {
     pub horz_offset: i32,
     /// Vertical offset in HWP units.
     pub vert_offset: i32,
+}
+
+/// Exact horizontal and vertical translation strings preserved from HWPX.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct HwpxVisualEquationTranslation {
+    /// Horizontal translation (`scaMatrix.e3`).
+    pub horz: String,
+    /// Vertical translation (`scaMatrix.e6`).
+    pub vert: String,
 }
 
 /// Raw wire geometry and scale-applied display geometry for a visual equation.
@@ -132,6 +145,18 @@ struct VisualScale<'a> {
     vert: &'a str,
 }
 
+#[derive(Clone, Copy)]
+struct VisualTranslation<'a> {
+    horz: &'a str,
+    vert: &'a str,
+}
+
+impl Default for VisualTranslation<'_> {
+    fn default() -> Self {
+        Self { horz: "0", vert: "0" }
+    }
+}
+
 impl Default for VisualScale<'_> {
     fn default() -> Self {
         Self { horz: "1", vert: "1" }
@@ -148,6 +173,7 @@ struct VisualParent<'a> {
     position: Option<HwpxVisualEquationPosition>,
     raw_box_size: Option<HwpxVisualEquationSize>,
     scale: VisualScale<'a>,
+    translation: VisualTranslation<'a>,
 }
 
 pub(crate) fn collect_section(
@@ -316,6 +342,7 @@ fn collect_picture(
             .or_else(|| pic.offset.as_ref().map(position_from_offset)),
         raw_box_size: None,
         scale: VisualScale::default(),
+        translation: VisualTranslation::default(),
     };
     collect_parent_equations(&caption.sub_list, parent, path, depth, equations)
 }
@@ -379,6 +406,14 @@ fn collect_group_rect(
                 vert: rendering.sca_matrix.e5.as_str(),
             })
             .unwrap_or_default(),
+        translation: rect
+            .rendering_info
+            .as_ref()
+            .map(|rendering| VisualTranslation {
+                horz: rendering.sca_matrix.e3.as_str(),
+                vert: rendering.sca_matrix.e6.as_str(),
+            })
+            .unwrap_or_default(),
     };
     collect_parent_equations(&draw_text.sub_list, parent, path, depth, equations)
 }
@@ -397,7 +432,12 @@ fn collect_parent_equations(
         let id = equation_object_id
             .clone()
             .unwrap_or_else(|| format!("{parent_path}/equation[{parent_order}]"));
-        let position = equation_position(equation, parent)?;
+        let raw_position = equation_position(equation, parent)?;
+        let translation = HwpxVisualEquationTranslation {
+            horz: parent.translation.horz.to_string(),
+            vert: parent.translation.vert.to_string(),
+        };
+        let display_position = translate_position(raw_position, parent.translation);
         let geometry = equation_geometry(equation, parent);
         let z_order = equation.z_order.unwrap_or(parent.z_order);
         equations.push(HwpxVisualEquation {
@@ -411,7 +451,9 @@ fn collect_parent_equations(
             document_order: 0,
             parent_order,
             z_order,
-            position,
+            raw_position,
+            translation,
+            display_position,
             geometry,
             script: equation.script.as_ref().map(|script| script.text.clone()).unwrap_or_default(),
             latex: None,
@@ -577,6 +619,28 @@ fn scale_base_unit(raw: u32, scale: &str) -> Option<u32> {
         return None;
     }
     Some(display.max(1.0) as u32)
+}
+
+fn translate_position(
+    raw: HwpxVisualEquationPosition,
+    translation: VisualTranslation<'_>,
+) -> Option<HwpxVisualEquationPosition> {
+    Some(HwpxVisualEquationPosition {
+        horz_offset: translate_coordinate(raw.horz_offset, translation.horz)?,
+        vert_offset: translate_coordinate(raw.vert_offset, translation.vert)?,
+    })
+}
+
+fn translate_coordinate(raw: i32, translation: &str) -> Option<i32> {
+    let translation = translation.parse::<f64>().ok()?;
+    if !translation.is_finite() {
+        return None;
+    }
+    let display = (f64::from(raw) + translation).round();
+    if !display.is_finite() || display < f64::from(i32::MIN) || display > f64::from(i32::MAX) {
+        return None;
+    }
+    Some(display as i32)
 }
 
 fn equation_position(

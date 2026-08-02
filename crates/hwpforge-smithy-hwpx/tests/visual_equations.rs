@@ -103,7 +103,7 @@ fn nested_table_controls_section(levels: usize) -> String {
 fn visual_equations_report_preserves_only_supported_visual_domains() {
     let (_document, report) = HwpxDecoder::decode_with_report(&visual_equations_fixture()).unwrap();
 
-    assert_eq!(report.schema_version, 2);
+    assert_eq!(report.schema_version, 3);
     assert_eq!(report.equations.len(), 2);
 
     let picture = &report.equations[0];
@@ -120,8 +120,8 @@ fn visual_equations_report_preserves_only_supported_visual_domains() {
     assert_eq!(picture.document_order, 0);
     assert_eq!(picture.parent_order, 0);
     assert_eq!(picture.z_order, 31);
-    assert_eq!(picture.position.horz_offset, 111);
-    assert_eq!(picture.position.vert_offset, 112);
+    assert_eq!(picture.raw_position.horz_offset, 111);
+    assert_eq!(picture.raw_position.vert_offset, 112);
     assert_eq!(picture.geometry.raw_box_size, None);
     assert_eq!(picture.geometry.raw_equation_size, None);
     assert_eq!(picture.geometry.raw_base_unit, None);
@@ -144,8 +144,8 @@ fn visual_equations_report_preserves_only_supported_visual_domains() {
     assert_eq!(grouped.document_order, 1);
     assert_eq!(grouped.parent_order, 0);
     assert_eq!(grouped.z_order, 42);
-    assert_eq!(grouped.position.horz_offset, 201);
-    assert_eq!(grouped.position.vert_offset, 202);
+    assert_eq!(grouped.raw_position.horz_offset, 201);
+    assert_eq!(grouped.raw_position.vert_offset, 202);
     assert_eq!(grouped.geometry.raw_box_size, None);
     assert_eq!(grouped.geometry.raw_equation_size, None);
     assert_eq!(grouped.geometry.display_box_size, None);
@@ -208,11 +208,11 @@ fn visual_equation_group_offset_and_picture_placement_are_preserved() {
 
     assert_eq!(report.equations.len(), 2);
     assert_eq!(report.equations[0].id, "group-offset");
-    assert_eq!(report.equations[0].position.horz_offset, 321);
-    assert_eq!(report.equations[0].position.vert_offset, -654);
+    assert_eq!(report.equations[0].raw_position.horz_offset, 321);
+    assert_eq!(report.equations[0].raw_position.vert_offset, -654);
     assert_eq!(report.equations[1].id, "picture-placement");
-    assert_eq!(report.equations[1].position.horz_offset, 421);
-    assert_eq!(report.equations[1].position.vert_offset, 422);
+    assert_eq!(report.equations[1].raw_position.horz_offset, 421);
+    assert_eq!(report.equations[1].raw_position.vert_offset, 422);
 }
 
 #[test]
@@ -247,7 +247,11 @@ fn visual_equation_group_position_adds_rect_placement_to_child_local_pos() {
         .equations
         .iter()
         .map(|equation| {
-            (equation.id.as_str(), equation.position.horz_offset, equation.position.vert_offset)
+            (
+                equation.id.as_str(),
+                equation.raw_position.horz_offset,
+                equation.raw_position.vert_offset,
+            )
         })
         .collect();
     assert_eq!(
@@ -282,7 +286,7 @@ fn visual_equation_group_geometry_applies_wire_scale_without_losing_raw_sizes() 
     let (_document, report) =
         HwpxDecoder::decode_with_report(&fixture_with_section(section)).unwrap();
 
-    assert_eq!(report.schema_version, 2);
+    assert_eq!(report.schema_version, 3);
     let geometry = &report.equations[0].geometry;
     assert_eq!(geometry.raw_box_size.unwrap().width, 8504);
     assert_eq!(geometry.raw_box_size.unwrap().height, 8504);
@@ -296,6 +300,83 @@ fn visual_equation_group_geometry_applies_wire_scale_without_losing_raw_sizes() 
     assert_eq!(geometry.display_equation_size.unwrap().width, 147);
     assert_eq!(geometry.display_equation_size.unwrap().height, 284);
     assert_eq!(geometry.display_base_unit, Some(277));
+
+    let serialized = serde_json::to_value(report).unwrap();
+    assert_eq!(
+        serialized["equations"][0]["raw_position"],
+        serde_json::json!({"horz_offset": 18928, "vert_offset": 7966})
+    );
+    assert_eq!(
+        serialized["equations"][0]["translation"],
+        serde_json::json!({"horz": "1381.427002", "vert": "532.402954"})
+    );
+    assert_eq!(
+        serialized["equations"][0]["display_position"],
+        serde_json::json!({"horz_offset": 20309, "vert_offset": 8498})
+    );
+}
+
+#[test]
+fn visual_equation_group_display_position_applies_final_scale_translation() {
+    let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
+      <container id="2010952039" instid="937210216"><rect id="0" instid="937210219" zOrder="28100">
+        <offset x="4294965625" y="343"/><orgSz width="2477" height="1883"/>
+        <renderingInfo>
+          <transMatrix e1="1" e2="0" e3="-1671" e4="0" e5="1" e6="343"/>
+          <scaMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
+          <rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
+          <scaMatrix e1="0.478401" e2="0" e3="1861" e4="0" e5="0.831652" e6="679"/>
+          <rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
+        </renderingInfo>
+        <drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+          <equation id="2010952060" baseUnit="900"><sz width="405" height="900"/><pos horzOffset="0" vertOffset="0"/><script>y</script></equation>
+        </run></p></subList></drawText>
+      </rect></container>
+    </run></p></sec>"#;
+
+    let (_document, report) =
+        HwpxDecoder::decode_with_report(&fixture_with_section(section)).unwrap();
+    let serialized = serde_json::to_value(report).unwrap();
+    let equation = &serialized["equations"][0];
+
+    assert_eq!(equation["equation_object_id"], "2010952060");
+    assert_eq!(
+        equation["raw_position"],
+        serde_json::json!({"horz_offset": -1671, "vert_offset": 343})
+    );
+    assert_eq!(equation["translation"], serde_json::json!({"horz": "1861", "vert": "679"}));
+    assert_eq!(
+        equation["display_position"],
+        serde_json::json!({"horz_offset": 190, "vert_offset": 1022})
+    );
+}
+
+#[test]
+fn visual_equation_display_position_overflow_fails_closed_without_losing_wire_translation() {
+    let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
+      <container instid="group-inst"><rect id="rect-1" instid="rect-inst">
+        <offset x="2147483647" y="0"/><orgSz width="100" height="100"/>
+        <renderingInfo>
+          <transMatrix e1="1" e2="0" e3="2147483647" e4="0" e5="1" e6="0"/>
+          <scaMatrix e1="1" e2="0" e3="1" e4="0" e5="1" e6="0"/>
+        </renderingInfo>
+        <drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+          <equation id="overflow" baseUnit="100"><sz width="100" height="100"/><script>x</script></equation>
+        </run></p></subList></drawText>
+      </rect></container>
+    </run></p></sec>"#;
+
+    let (_document, report) =
+        HwpxDecoder::decode_with_report(&fixture_with_section(section)).unwrap();
+    let serialized = serde_json::to_value(report).unwrap();
+    let equation = &serialized["equations"][0];
+
+    assert_eq!(
+        equation["raw_position"],
+        serde_json::json!({"horz_offset": 2147483647_i64, "vert_offset": 0})
+    );
+    assert_eq!(equation["translation"], serde_json::json!({"horz": "1", "vert": "0"}));
+    assert!(equation["display_position"].is_null());
 }
 
 #[test]

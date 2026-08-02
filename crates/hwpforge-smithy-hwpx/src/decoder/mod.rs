@@ -27,7 +27,7 @@ use crate::style_store::HwpxStyleStore;
 pub use visual_equations::{
     HwpxVisualEquation, HwpxVisualEquationDomain, HwpxVisualEquationGeometry,
     HwpxVisualEquationParentKind, HwpxVisualEquationPosition, HwpxVisualEquationReport,
-    HwpxVisualEquationScale, HwpxVisualEquationSize,
+    HwpxVisualEquationScale, HwpxVisualEquationSize, HwpxVisualEquationTranslation,
 };
 
 // ── HwpxDocument ─────────────────────────────────────────────────

@@ -83,6 +83,7 @@ pub use decoder::{
     HwpxDecoder, HwpxDocument, HwpxVisualEquation, HwpxVisualEquationDomain,
     HwpxVisualEquationGeometry, HwpxVisualEquationParentKind, HwpxVisualEquationPosition,
     HwpxVisualEquationReport, HwpxVisualEquationScale, HwpxVisualEquationSize,
+    HwpxVisualEquationTranslation,
 };
 pub use default_styles::{DefaultStyleEntry, HancomStyleSet};
 pub use diff::{
