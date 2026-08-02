@@ -25,8 +25,9 @@ use crate::error::HwpxResult;
 use crate::style_store::HwpxStyleStore;
 
 pub use visual_equations::{
-    HwpxVisualEquation, HwpxVisualEquationDomain, HwpxVisualEquationParentKind,
-    HwpxVisualEquationPosition, HwpxVisualEquationReport,
+    HwpxVisualEquation, HwpxVisualEquationDomain, HwpxVisualEquationGeometry,
+    HwpxVisualEquationParentKind, HwpxVisualEquationPosition, HwpxVisualEquationReport,
+    HwpxVisualEquationScale, HwpxVisualEquationSize,
 };
 
 // ── HwpxDocument ─────────────────────────────────────────────────
@@ -187,7 +188,10 @@ impl HwpxDecoder {
 
         Ok((
             HwpxDocument { document, style_store, image_store },
-            HwpxVisualEquationReport { schema_version: 1, equations: visual_equations },
+            HwpxVisualEquationReport {
+                schema_version: visual_equations::HWPX_VISUAL_EQUATION_SCHEMA_VERSION,
+                equations: visual_equations,
+            },
         ))
     }
 

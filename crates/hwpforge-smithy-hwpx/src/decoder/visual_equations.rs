@@ -5,8 +5,10 @@ use serde::Serialize;
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
     HxContainer, HxCtrl, HxEquation, HxOffset, HxParagraph, HxPic, HxRect, HxRun, HxRunChildOrder,
-    HxSubList, HxTable, HxTablePos,
+    HxSizeAttr, HxSubList, HxTable, HxTablePos, HxTableSz,
 };
+
+pub(crate) const HWPX_VISUAL_EQUATION_SCHEMA_VERSION: u32 = 2;
 
 /// Versioned report of equations that styled Markdown intentionally leaves
 /// inside picture captions and grouped drawing text.
@@ -20,7 +22,7 @@ pub struct HwpxVisualEquationReport {
 
 impl Default for HwpxVisualEquationReport {
     fn default() -> Self {
-        Self { schema_version: 1, equations: Vec::new() }
+        Self { schema_version: HWPX_VISUAL_EQUATION_SCHEMA_VERSION, equations: Vec::new() }
     }
 }
 
@@ -49,6 +51,8 @@ pub struct HwpxVisualEquation {
     pub z_order: u32,
     /// Equation position, falling back to the nearest visual parent when absent.
     pub position: HwpxVisualEquationPosition,
+    /// Raw and display-space geometry for faithful visual composition.
+    pub geometry: HwpxVisualEquationGeometry,
     /// Original HancomEQN source.
     pub script: String,
     /// Converted LaTeX, populated by a format consumer such as the CLI.
@@ -85,6 +89,55 @@ pub struct HwpxVisualEquationPosition {
     pub vert_offset: i32,
 }
 
+/// Raw wire geometry and scale-applied display geometry for a visual equation.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct HwpxVisualEquationGeometry {
+    /// Parent box size before its rendering scale is applied.
+    pub raw_box_size: Option<HwpxVisualEquationSize>,
+    /// Equation size before its parent rendering scale is applied.
+    pub raw_equation_size: Option<HwpxVisualEquationSize>,
+    /// Equation `baseUnit` before its parent rendering scale is applied.
+    pub raw_base_unit: Option<u32>,
+    /// Exact wire scale selected from the visual parent's final `scaMatrix`.
+    pub scale: HwpxVisualEquationScale,
+    /// Parent box size after applying the wire scale, rounded to HWP units.
+    pub display_box_size: Option<HwpxVisualEquationSize>,
+    /// Equation size after applying the wire scale, rounded to HWP units.
+    pub display_equation_size: Option<HwpxVisualEquationSize>,
+    /// Equation `baseUnit` after applying the vertical wire scale.
+    pub display_base_unit: Option<u32>,
+}
+
+/// Width and height in HWP units.
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+pub struct HwpxVisualEquationSize {
+    /// Horizontal extent.
+    pub width: i32,
+    /// Vertical extent.
+    pub height: i32,
+}
+
+/// Exact horizontal and vertical scale strings preserved from HWPX.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct HwpxVisualEquationScale {
+    /// Horizontal scale (`scaMatrix.e1`).
+    pub horz: String,
+    /// Vertical scale (`scaMatrix.e5`).
+    pub vert: String,
+}
+
+#[derive(Clone, Copy)]
+struct VisualScale<'a> {
+    horz: &'a str,
+    vert: &'a str,
+}
+
+impl Default for VisualScale<'_> {
+    fn default() -> Self {
+        Self { horz: "1", vert: "1" }
+    }
+}
+
 #[derive(Clone, Copy)]
 struct VisualParent<'a> {
     domain: HwpxVisualEquationDomain,
@@ -93,6 +146,8 @@ struct VisualParent<'a> {
     instance_id: &'a str,
     z_order: u32,
     position: Option<HwpxVisualEquationPosition>,
+    raw_box_size: Option<HwpxVisualEquationSize>,
+    scale: VisualScale<'a>,
 }
 
 pub(crate) fn collect_section(
@@ -259,6 +314,8 @@ fn collect_picture(
             .as_ref()
             .map(position_from_table)
             .or_else(|| pic.offset.as_ref().map(position_from_offset)),
+        raw_box_size: None,
+        scale: VisualScale::default(),
     };
     collect_parent_equations(&caption.sub_list, parent, path, depth, equations)
 }
@@ -313,6 +370,15 @@ fn collect_group_rect(
             .map(position_from_offset)
             .or_else(|| rect.pos.as_ref().map(position_from_table))
             .or(container_position),
+        raw_box_size: rect.org_sz.as_ref().map(size_from_original),
+        scale: rect
+            .rendering_info
+            .as_ref()
+            .map(|rendering| VisualScale {
+                horz: rendering.sca_matrix.e1.as_str(),
+                vert: rendering.sca_matrix.e5.as_str(),
+            })
+            .unwrap_or_default(),
     };
     collect_parent_equations(&draw_text.sub_list, parent, path, depth, equations)
 }
@@ -332,6 +398,7 @@ fn collect_parent_equations(
             .clone()
             .unwrap_or_else(|| format!("{parent_path}/equation[{parent_order}]"));
         let position = equation_position(equation, parent)?;
+        let geometry = equation_geometry(equation, parent);
         let z_order = equation.z_order.unwrap_or(parent.z_order);
         equations.push(HwpxVisualEquation {
             id,
@@ -345,6 +412,7 @@ fn collect_parent_equations(
             parent_order,
             z_order,
             position,
+            geometry,
             script: equation.script.as_ref().map(|script| script.text.clone()).unwrap_or_default(),
             latex: None,
         });
@@ -436,6 +504,79 @@ fn position_from_table(position: &HxTablePos) -> HwpxVisualEquationPosition {
 
 fn position_from_offset(position: &HxOffset) -> HwpxVisualEquationPosition {
     HwpxVisualEquationPosition { horz_offset: position.x, vert_offset: position.y }
+}
+
+fn size_from_original(size: &HxSizeAttr) -> HwpxVisualEquationSize {
+    HwpxVisualEquationSize { width: size.width, height: size.height }
+}
+
+fn size_from_table(size: &HxTableSz) -> HwpxVisualEquationSize {
+    HwpxVisualEquationSize { width: size.width, height: size.height }
+}
+
+fn equation_geometry(
+    equation: &HxEquation,
+    parent: VisualParent<'_>,
+) -> HwpxVisualEquationGeometry {
+    let raw_equation_size = equation.sz.as_ref().map(size_from_table);
+    let raw_box_size = match parent.domain {
+        HwpxVisualEquationDomain::PictureCaption => raw_equation_size,
+        HwpxVisualEquationDomain::GroupDrawText => parent.raw_box_size,
+    };
+    let scale = HwpxVisualEquationScale {
+        horz: parent.scale.horz.to_string(),
+        vert: parent.scale.vert.to_string(),
+    };
+    HwpxVisualEquationGeometry {
+        raw_box_size,
+        raw_equation_size,
+        raw_base_unit: (equation.base_unit > 0).then_some(equation.base_unit),
+        display_box_size: scale_size(raw_box_size, parent.scale),
+        display_equation_size: scale_size(raw_equation_size, parent.scale),
+        display_base_unit: scale_base_unit(equation.base_unit, parent.scale.vert),
+        scale,
+    }
+}
+
+fn scale_size(
+    raw_size: Option<HwpxVisualEquationSize>,
+    scale: VisualScale<'_>,
+) -> Option<HwpxVisualEquationSize> {
+    let raw_size = raw_size?;
+    Some(HwpxVisualEquationSize {
+        width: scale_dimension(raw_size.width, scale.horz)?,
+        height: scale_dimension(raw_size.height, scale.vert)?,
+    })
+}
+
+fn scale_dimension(raw: i32, scale: &str) -> Option<i32> {
+    if raw <= 0 {
+        return None;
+    }
+    let scale = scale.parse::<f64>().ok()?;
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    let display = (f64::from(raw) * scale).round();
+    if !display.is_finite() || display > f64::from(i32::MAX) {
+        return None;
+    }
+    Some(display.max(1.0) as i32)
+}
+
+fn scale_base_unit(raw: u32, scale: &str) -> Option<u32> {
+    if raw == 0 {
+        return None;
+    }
+    let scale = scale.parse::<f64>().ok()?;
+    if !scale.is_finite() || scale <= 0.0 {
+        return None;
+    }
+    let display = (f64::from(raw) * scale).round();
+    if !display.is_finite() || display > f64::from(u32::MAX) {
+        return None;
+    }
+    Some(display.max(1.0) as u32)
 }
 
 fn equation_position(

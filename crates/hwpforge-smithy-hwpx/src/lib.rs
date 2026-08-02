@@ -81,7 +81,8 @@ pub use cell_edit::{
 pub use decoder::package::{PackageEntryInfo, PackageReader};
 pub use decoder::{
     HwpxDecoder, HwpxDocument, HwpxVisualEquation, HwpxVisualEquationDomain,
-    HwpxVisualEquationParentKind, HwpxVisualEquationPosition, HwpxVisualEquationReport,
+    HwpxVisualEquationGeometry, HwpxVisualEquationParentKind, HwpxVisualEquationPosition,
+    HwpxVisualEquationReport, HwpxVisualEquationScale, HwpxVisualEquationSize,
 };
 pub use default_styles::{DefaultStyleEntry, HancomStyleSet};
 pub use diff::{

@@ -103,7 +103,7 @@ fn nested_table_controls_section(levels: usize) -> String {
 fn visual_equations_report_preserves_only_supported_visual_domains() {
     let (_document, report) = HwpxDecoder::decode_with_report(&visual_equations_fixture()).unwrap();
 
-    assert_eq!(report.schema_version, 1);
+    assert_eq!(report.schema_version, 2);
     assert_eq!(report.equations.len(), 2);
 
     let picture = &report.equations[0];
@@ -122,6 +122,14 @@ fn visual_equations_report_preserves_only_supported_visual_domains() {
     assert_eq!(picture.z_order, 31);
     assert_eq!(picture.position.horz_offset, 111);
     assert_eq!(picture.position.vert_offset, 112);
+    assert_eq!(picture.geometry.raw_box_size, None);
+    assert_eq!(picture.geometry.raw_equation_size, None);
+    assert_eq!(picture.geometry.raw_base_unit, None);
+    assert_eq!(picture.geometry.scale.horz, "1");
+    assert_eq!(picture.geometry.scale.vert, "1");
+    assert_eq!(picture.geometry.display_box_size, None);
+    assert_eq!(picture.geometry.display_equation_size, None);
+    assert_eq!(picture.geometry.display_base_unit, None);
     assert_eq!(picture.script, "{a} over {b}");
     assert_eq!(picture.latex, None);
 
@@ -138,12 +146,17 @@ fn visual_equations_report_preserves_only_supported_visual_domains() {
     assert_eq!(grouped.z_order, 42);
     assert_eq!(grouped.position.horz_offset, 201);
     assert_eq!(grouped.position.vert_offset, 202);
+    assert_eq!(grouped.geometry.raw_box_size, None);
+    assert_eq!(grouped.geometry.raw_equation_size, None);
+    assert_eq!(grouped.geometry.display_box_size, None);
+    assert_eq!(grouped.geometry.display_equation_size, None);
     assert_eq!(grouped.script, "x ^{2}");
     assert_eq!(grouped.latex, None);
 
     let serialized = serde_json::to_value(report).unwrap();
     assert_eq!(serialized["equations"][0]["equation_object_id"], "9007199254740997");
     assert_eq!(serialized["equations"][1]["parent_instance_id"], "9007199254741000");
+    assert!(serialized["equations"][0]["geometry"]["display_box_size"].is_null());
 }
 
 #[test]
@@ -246,6 +259,74 @@ fn visual_equation_group_position_adds_rect_placement_to_child_local_pos() {
         ],
         "group positions must combine rect placement with equation-local coordinates"
     );
+}
+
+#[test]
+fn visual_equation_group_geometry_applies_wire_scale_without_losing_raw_sizes() {
+    let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
+      <container instid="group-inst"><rect id="rect-1" instid="rect-inst" zOrder="41">
+        <offset x="18928" y="7966"/><orgSz width="8504" height="8504"/>
+        <renderingInfo>
+          <transMatrix e1="1" e2="0" e3="18928" e4="0" e5="1" e6="7966"/>
+          <scaMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
+          <rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
+          <scaMatrix e1="0.242542" e2="0" e3="1381.427002" e4="0" e5="0.252211" e6="532.402954"/>
+          <rotMatrix e1="1" e2="0" e3="0" e4="0" e5="1" e6="0"/>
+        </renderingInfo>
+        <drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+          <equation id="scaled-label" baseUnit="1100"><sz width="607" height="1125"/><pos horzOffset="0" vertOffset="0"/><script>rm B</script></equation>
+        </run></p></subList></drawText>
+      </rect></container>
+    </run></p></sec>"#;
+
+    let (_document, report) =
+        HwpxDecoder::decode_with_report(&fixture_with_section(section)).unwrap();
+
+    assert_eq!(report.schema_version, 2);
+    let geometry = &report.equations[0].geometry;
+    assert_eq!(geometry.raw_box_size.unwrap().width, 8504);
+    assert_eq!(geometry.raw_box_size.unwrap().height, 8504);
+    assert_eq!(geometry.raw_equation_size.unwrap().width, 607);
+    assert_eq!(geometry.raw_equation_size.unwrap().height, 1125);
+    assert_eq!(geometry.raw_base_unit, Some(1100));
+    assert_eq!(geometry.scale.horz, "0.242542");
+    assert_eq!(geometry.scale.vert, "0.252211");
+    assert_eq!(geometry.display_box_size.unwrap().width, 2063);
+    assert_eq!(geometry.display_box_size.unwrap().height, 2145);
+    assert_eq!(geometry.display_equation_size.unwrap().width, 147);
+    assert_eq!(geometry.display_equation_size.unwrap().height, 284);
+    assert_eq!(geometry.display_base_unit, Some(277));
+}
+
+#[test]
+fn visual_equation_invalid_scale_preserves_provenance_and_uses_explicit_null_display_values() {
+    let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
+      <container instid="group-inst"><rect id="rect-1" instid="rect-inst">
+        <orgSz width="8504" height="8504"/>
+        <renderingInfo><scaMatrix e1="not-a-number" e2="0" e3="0" e4="0" e5="-1" e6="0"/></renderingInfo>
+        <drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+          <equation id="invalid-scale" baseUnit="1100"><sz width="607" height="1125"/><script>rm B</script></equation>
+        </run></p></subList></drawText>
+      </rect></container>
+    </run></p></sec>"#;
+
+    let (_document, report) =
+        HwpxDecoder::decode_with_report(&fixture_with_section(section)).unwrap();
+
+    let geometry = &report.equations[0].geometry;
+    assert_eq!(geometry.raw_box_size.unwrap().width, 8504);
+    assert_eq!(geometry.raw_equation_size.unwrap().height, 1125);
+    assert_eq!(geometry.raw_base_unit, Some(1100));
+    assert_eq!(geometry.scale.horz, "not-a-number");
+    assert_eq!(geometry.scale.vert, "-1");
+    assert_eq!(geometry.display_box_size, None);
+    assert_eq!(geometry.display_equation_size, None);
+    assert_eq!(geometry.display_base_unit, None);
+
+    let serialized = serde_json::to_value(report).unwrap();
+    assert!(serialized["equations"][0]["geometry"]["display_box_size"].is_null());
+    assert!(serialized["equations"][0]["geometry"]["display_equation_size"].is_null());
+    assert!(serialized["equations"][0]["geometry"]["display_base_unit"].is_null());
 }
 
 #[test]

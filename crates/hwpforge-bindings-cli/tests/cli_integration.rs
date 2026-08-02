@@ -342,7 +342,7 @@ fn create_visual_equations_hwpx(dir: &Path) -> PathBuf {
         </run></p></subList></caption></pic>
       </run></p></subList></endNote></ctrl>
       <container id="group-1" instid="group-inst" zOrder="8"><orgSz width="3000" height="2000"/><rect id="9007199254740999" instid="9007199254741000" zOrder="41"><orgSz width="2000" height="1000"/><pos horzOffset="201" vertOffset="202"/><drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
-        <equation id="9007199254741001" zOrder="42"><sz width="1000" height="1000"/><pos horzOffset="211" vertOffset="212"/><script>x ^{2}</script></equation>
+          <equation id="9007199254741001" zOrder="42" baseUnit="900"><sz width="1000" height="1000"/><pos horzOffset="211" vertOffset="212"/><script>x ^{2}</script></equation>
       </run></p></subList></drawText></rect></container>
     </run></p></sec>"#;
 
@@ -4336,12 +4336,20 @@ fn to_md_json_visual_equations_reports_sidecar() {
     assert!(Path::new(sidecar).starts_with(&output_dir));
     let report: serde_json::Value =
         serde_json::from_slice(&std::fs::read(sidecar).unwrap()).unwrap();
-    assert_eq!(report["schema_version"], 1);
+    assert_eq!(report["schema_version"], 2);
     assert_eq!(report["equations"].as_array().unwrap().len(), 2);
     assert_eq!(report["equations"][0]["domain"], "picture_caption");
     assert_eq!(report["equations"][0]["latex"], r"$\frac{a}{b}$");
+    assert_eq!(report["equations"][0]["geometry"]["raw_box_size"]["width"], 1000);
+    assert_eq!(report["equations"][0]["geometry"]["display_box_size"]["height"], 1000);
     assert_eq!(report["equations"][1]["domain"], "group_draw_text");
     assert_eq!(report["equations"][1]["latex"], "$x^{2}$");
+    assert_eq!(report["equations"][1]["geometry"]["raw_box_size"]["width"], 2000);
+    assert_eq!(report["equations"][1]["geometry"]["raw_equation_size"]["height"], 1000);
+    assert_eq!(report["equations"][1]["geometry"]["raw_base_unit"], 900);
+    assert_eq!(report["equations"][1]["geometry"]["scale"]["horz"], "1");
+    assert_eq!(report["equations"][1]["geometry"]["display_box_size"]["width"], 2000);
+    assert_eq!(report["equations"][1]["geometry"]["display_base_unit"], 900);
 }
 
 #[test]
