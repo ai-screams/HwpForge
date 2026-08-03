@@ -186,6 +186,68 @@ fn visual_equations_preserve_interleaved_nested_container_order() {
 }
 
 #[test]
+fn visual_equations_traverse_nested_shape_text_with_outer_visual_parent() {
+    let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
+      <pic id="outer-picture" instid="outer-picture-inst"><caption><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+        <rect id="nested-picture-rect"><drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0"><equation id="picture-rect-equation"><script>pr</script></equation></run></p></subList></drawText></rect>
+        <ellipse id="nested-picture-ellipse"><drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0"><equation id="picture-ellipse-equation"><script>pe</script></equation></run></p></subList></drawText></ellipse>
+        <polygon id="nested-picture-polygon"><drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0"><equation id="picture-polygon-equation"><script>pp</script></equation></run></p></subList></drawText></polygon>
+      </run></p></subList></caption></pic>
+      <container instid="group-inst"><rect id="outer-group-rect" instid="outer-group-rect-inst"><drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+        <rect id="nested-group-rect"><drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0"><equation id="group-rect-equation"><script>gr</script></equation></run></p></subList></drawText></rect>
+        <ellipse id="nested-group-ellipse"><drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0"><equation id="group-ellipse-equation"><script>ge</script></equation></run></p></subList></drawText></ellipse>
+        <polygon id="nested-group-polygon"><drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0"><equation id="group-polygon-equation"><script>gp</script></equation></run></p></subList></drawText></polygon>
+      </run></p></subList></drawText></rect></container>
+    </run></p></sec>"#;
+
+    let (_document, report) =
+        HwpxDecoder::decode_with_report(&fixture_with_section(section)).unwrap();
+
+    let identities: Vec<(&str, Option<&str>, HwpxVisualEquationDomain)> = report
+        .equations
+        .iter()
+        .map(|equation| {
+            (equation.id.as_str(), equation.parent_object_id.as_deref(), equation.domain)
+        })
+        .collect();
+    assert_eq!(
+        identities,
+        vec![
+            (
+                "picture-rect-equation",
+                Some("outer-picture"),
+                HwpxVisualEquationDomain::PictureCaption,
+            ),
+            (
+                "picture-ellipse-equation",
+                Some("outer-picture"),
+                HwpxVisualEquationDomain::PictureCaption,
+            ),
+            (
+                "picture-polygon-equation",
+                Some("outer-picture"),
+                HwpxVisualEquationDomain::PictureCaption,
+            ),
+            (
+                "group-rect-equation",
+                Some("outer-group-rect"),
+                HwpxVisualEquationDomain::GroupDrawText,
+            ),
+            (
+                "group-ellipse-equation",
+                Some("outer-group-rect"),
+                HwpxVisualEquationDomain::GroupDrawText,
+            ),
+            (
+                "group-polygon-equation",
+                Some("outer-group-rect"),
+                HwpxVisualEquationDomain::GroupDrawText,
+            ),
+        ]
+    );
+}
+
+#[test]
 fn visual_equations_report_traverses_header_and_footer_controls() {
     let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
       <ctrl><header id="header-1" applyPageType="BOTH"><subList><p paraPrIDRef="0"><run charPrIDRef="0">

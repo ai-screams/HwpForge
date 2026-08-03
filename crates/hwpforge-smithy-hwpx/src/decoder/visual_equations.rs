@@ -4,8 +4,8 @@ use serde::Serialize;
 
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    HxContainer, HxContainerChildOrder, HxCtrl, HxEquation, HxOffset, HxParagraph, HxPic, HxRect,
-    HxRun, HxRunChildOrder, HxSizeAttr, HxSubList, HxTable, HxTablePos, HxTableSz,
+    HxContainer, HxContainerChildOrder, HxCtrl, HxDrawText, HxEquation, HxOffset, HxParagraph,
+    HxPic, HxRect, HxRun, HxRunChildOrder, HxSizeAttr, HxSubList, HxTable, HxTablePos, HxTableSz,
 };
 
 pub(crate) const HWPX_VISUAL_EQUATION_SCHEMA_VERSION: u32 = 4;
@@ -527,11 +527,37 @@ fn collect_equations_from_paragraphs<'a>(
                         HxRunChildOrder::Ctrl(index) => {
                             collect_equations_from_ctrl(&run.ctrls[index], depth, equations)?;
                         }
+                        HxRunChildOrder::Rect(index) => collect_equations_from_draw_text(
+                            run.rects[index].draw_text.as_ref(),
+                            depth,
+                            equations,
+                        )?,
+                        HxRunChildOrder::Ellipse(index) => collect_equations_from_draw_text(
+                            run.ellipses[index].draw_text.as_ref(),
+                            depth,
+                            equations,
+                        )?,
+                        HxRunChildOrder::Polygon(index) => collect_equations_from_draw_text(
+                            run.polygons[index].draw_text.as_ref(),
+                            depth,
+                            equations,
+                        )?,
                         _ => {}
                     }
                 }
             }
         }
+    }
+    Ok(())
+}
+
+fn collect_equations_from_draw_text<'a>(
+    draw_text: Option<&'a HxDrawText>,
+    depth: usize,
+    equations: &mut Vec<&'a HxEquation>,
+) -> HwpxResult<()> {
+    if let Some(draw_text) = draw_text {
+        collect_equations_from_paragraphs(&draw_text.sub_list.paragraphs, depth + 1, equations)?;
     }
     Ok(())
 }
