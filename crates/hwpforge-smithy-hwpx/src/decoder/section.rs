@@ -374,212 +374,173 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
     let has_field_pair = hx.ctrls.iter().any(|c| c.field_begin.is_some())
         && hx.ctrls.iter().any(|c| c.field_end.is_some());
 
-    let inline_only = !hx.child_order.is_empty()
-        && hx
-            .child_order
-            .iter()
-            .all(|child| matches!(child, HxRunChildOrder::Text(_) | HxRunChildOrder::Equation(_)));
-    if inline_only {
-        for child in &hx.child_order {
-            match *child {
-                HxRunChildOrder::Text(index) if !has_field_pair => {
-                    let content = hx.texts[index].to_run_content();
-                    let keep = match &content {
-                        RunContent::Text(value) => !value.is_empty(),
-                        RunContent::InlineText(value) => !value.segments.is_empty(),
-                        _ => true,
-                    };
-                    if keep {
-                        runs.push(Run { content, char_shape_id });
-                    }
-                }
-                HxRunChildOrder::Equation(index) => {
-                    runs.push(decode_equation(&hx.equations[index], char_shape_id)?);
-                }
-                _ => {}
-            }
-        }
-        return Ok(runs);
+    // Parsed HWPX runs carry their direct wire order in `child_order`. Internal
+    // callers can still construct `HxRun` without it, so synthesize the legacy
+    // grouped order only for that fallback case and use one dispatch path for
+    // every supported child variant.
+    let mut fallback_order = Vec::new();
+    if hx.child_order.is_empty() {
+        fallback_order.extend((0..hx.texts.len()).map(HxRunChildOrder::Text));
+        fallback_order.extend((0..hx.tables.len()).map(HxRunChildOrder::Table));
+        fallback_order.extend((0..hx.pictures.len()).map(HxRunChildOrder::Picture));
+        fallback_order.extend((0..hx.ctrls.len()).map(HxRunChildOrder::Ctrl));
+        fallback_order.extend((0..hx.rects.len()).map(HxRunChildOrder::Rect));
+        fallback_order.extend((0..hx.lines.len()).map(HxRunChildOrder::Line));
+        fallback_order.extend((0..hx.ellipses.len()).map(HxRunChildOrder::Ellipse));
+        fallback_order.extend((0..hx.polygons.len()).map(HxRunChildOrder::Polygon));
+        fallback_order.extend((0..hx.curves.len()).map(HxRunChildOrder::Curve));
+        fallback_order.extend((0..hx.textarts.len()).map(HxRunChildOrder::TextArt));
+        fallback_order.extend((0..hx.connect_lines.len()).map(HxRunChildOrder::ConnectLine));
+        fallback_order.extend((0..hx.containers.len()).map(HxRunChildOrder::Container));
+        fallback_order.extend((0..hx.equations.len()).map(HxRunChildOrder::Equation));
+        fallback_order.extend((0..hx.switches.len()).map(HxRunChildOrder::Switch));
+        fallback_order.extend((0..hx.dutmals.len()).map(HxRunChildOrder::Dutmal));
+        fallback_order.extend((0..hx.composes.len()).map(HxRunChildOrder::Compose));
     }
+    let child_order = if hx.child_order.is_empty() { &fallback_order } else { &hx.child_order };
 
-    // Text runs — skip if consumed by field controls.
-    //
-    // `HxText::to_run_content` preserves any `<hp:tab>` attribute payload
-    // (`width` / `leader` / `tab_type`) as `RunContent::InlineText`,
-    // falling back to the existing `RunContent::Text(String)` when every
-    // tab is attribute-less. This closes the HWPX-decode side of the
-    // inline tab carry — see
-    // `.docs/debug/2026-05-27_hwpx_decoder_inline_tab_attrs_lost.md`.
-    if !has_field_pair {
-        for text in &hx.texts {
-            let content = text.to_run_content();
-            let keep = match &content {
-                RunContent::Text(s) => !s.is_empty(),
-                RunContent::InlineText(it) => !it.segments.is_empty(),
-                _ => true,
-            };
-            if keep {
-                runs.push(Run { content, char_shape_id });
-            }
-        }
-    }
-
-    // Table runs
-    for table in &hx.tables {
-        let core_table = convert_table(table, depth)?;
-        runs.push(Run { content: RunContent::Table(Box::new(core_table)), char_shape_id });
-    }
-
-    // Image runs
-    for pic in &hx.pictures {
-        if let Some(image) = convert_picture(pic, depth)? {
-            runs.push(Run { content: RunContent::Image(image), char_shape_id });
-        }
-    }
-
-    // Footnote / Endnote / Bookmark / IndexMark / Field runs (from <hp:ctrl>)
-    //
-    // Field controls use fieldBegin/fieldEnd pairs. We collect fieldBegin ctrls
-    // and match them with fieldEnd ctrls to extract the field's text from
-    // intervening <hp:t> elements. The text runs between begin and end are
-    // consumed as the field's display text.
     let mut field_begin: Option<&HxFieldBegin> = None;
     let mut field_begin_char_shape: CharShapeIndex = char_shape_id;
 
-    for ctrl in &hx.ctrls {
-        if let Some(run) = decode_footnote(ctrl, char_shape_id, depth)? {
-            runs.push(run);
-        }
-        if let Some(run) = decode_endnote(ctrl, char_shape_id, depth)? {
-            runs.push(run);
-        }
-        if let Some(run) = decode_bookmark(ctrl, char_shape_id) {
-            runs.push(run);
-        }
-        if let Some(run) = decode_indexmark(ctrl, char_shape_id) {
-            runs.push(run);
-        }
-        // Field begin: remember for pairing with fieldEnd
-        if let Some(fb) = &ctrl.field_begin {
-            field_begin = Some(fb);
-            field_begin_char_shape = char_shape_id;
-        }
-        // Field end: pair with remembered fieldBegin and emit control
-        if ctrl.field_end.is_some() {
-            if let Some(fb) = field_begin.take() {
-                let field_text = collect_run_text(hx);
-                // `HxRun` 은 자식 순서(texts/ctrls interleaving)를 보존하지
-                // 않으므로, run 에 `<hp:t>` 가 정확히 1개일 때만 그 텍스트가
-                // 마커 사이 본문이라고 무모호하게 귀속할 수 있다. 한컴은
-                // 재저장 시 라벨 run 과 필드 run 을 병합하기도 한다
-                // (fixture `fields/clickhere_filled.hwpx`: t·fieldBegin·
-                // t·fieldEnd·t 한 run) — 그 경우 연결 텍스트를 본문으로
-                // 오귀속하는 대신 미채움으로 다운그레이드한다 (warning-first).
-                let unambiguous_body = hx.texts.len() == 1;
-                if let Some(run) = decode_field_control(
-                    fb,
-                    &field_text,
-                    field_begin_char_shape,
-                    depth,
-                    unambiguous_body,
-                )? {
+    for child in child_order {
+        match *child {
+            HxRunChildOrder::Text(index) if !has_field_pair => {
+                // `HxText::to_run_content` preserves attributed inline tabs.
+                let content = hx.texts[index].to_run_content();
+                let keep = match &content {
+                    RunContent::Text(value) => !value.is_empty(),
+                    RunContent::InlineText(value) => !value.segments.is_empty(),
+                    _ => true,
+                };
+                if keep {
+                    runs.push(Run { content, char_shape_id });
+                }
+            }
+            HxRunChildOrder::Text(_) | HxRunChildOrder::Switch(_) => {}
+            HxRunChildOrder::Table(index) => {
+                let table = convert_table(&hx.tables[index], depth)?;
+                runs.push(Run { content: RunContent::Table(Box::new(table)), char_shape_id });
+            }
+            HxRunChildOrder::Picture(index) => {
+                if let Some(image) = convert_picture(&hx.pictures[index], depth)? {
+                    runs.push(Run { content: RunContent::Image(image), char_shape_id });
+                }
+            }
+            HxRunChildOrder::Ctrl(index) => {
+                let ctrl = &hx.ctrls[index];
+                if let Some(run) = decode_footnote(ctrl, char_shape_id, depth)? {
+                    runs.push(run);
+                }
+                if let Some(run) = decode_endnote(ctrl, char_shape_id, depth)? {
+                    runs.push(run);
+                }
+                if let Some(run) = decode_bookmark(ctrl, char_shape_id) {
+                    runs.push(run);
+                }
+                if let Some(run) = decode_indexmark(ctrl, char_shape_id) {
+                    runs.push(run);
+                }
+                if let Some(begin) = &ctrl.field_begin {
+                    if !has_field_pair && begin.field_type == "BOOKMARK" {
+                        runs.push(Run {
+                            content: RunContent::Control(Box::new(Control::Bookmark {
+                                name: begin.name.clone(),
+                                bookmark_type: hwpforge_foundation::BookmarkType::SpanStart,
+                            })),
+                            char_shape_id,
+                        });
+                    } else {
+                        field_begin = Some(begin);
+                        field_begin_char_shape = char_shape_id;
+                    }
+                }
+                if ctrl.field_end.is_some() {
+                    if let Some(begin) = field_begin.take() {
+                        let field_text = collect_run_text(hx);
+                        let unambiguous_body = hx.texts.len() == 1;
+                        if let Some(run) = decode_field_control(
+                            begin,
+                            &field_text,
+                            field_begin_char_shape,
+                            depth,
+                            unambiguous_body,
+                        )? {
+                            runs.push(run);
+                        }
+                    }
+                }
+                if let Some(auto_num) = &ctrl.auto_num {
+                    let kind = match auto_num.num_type.as_str() {
+                        "PAGE" => Some(hwpforge_core::control::InlinePageKind::CurrentPage),
+                        "TOTAL_PAGE" => Some(hwpforge_core::control::InlinePageKind::TotalPages),
+                        _ => None,
+                    };
+                    if let Some(kind) = kind {
+                        runs.push(Run {
+                            content: RunContent::Control(Box::new(Control::InlinePageNumber {
+                                kind,
+                            })),
+                            char_shape_id,
+                        });
+                    }
+                }
+            }
+            HxRunChildOrder::Rect(index) => {
+                if let Some(run) = decode_textbox(&hx.rects[index], char_shape_id, depth)? {
                     runs.push(run);
                 }
             }
-        }
-        // AutoNum (inline page number) — Wave 12n: routed to
-        // Control::InlinePageNumber. Architect review CRITICAL: keep
-        // current-page (`PAGE`) and total-page (`TOTAL_PAGE`) distinct;
-        // collapsing them would lose user-visible semantics.
-        if let Some(an) = &ctrl.auto_num {
-            let kind = match an.num_type.as_str() {
-                "PAGE" => Some(hwpforge_core::control::InlinePageKind::CurrentPage),
-                "TOTAL_PAGE" => Some(hwpforge_core::control::InlinePageKind::TotalPages),
-                _ => None,
-            };
-            if let Some(kind) = kind {
-                runs.push(Run {
-                    content: RunContent::Control(Box::new(Control::InlinePageNumber { kind })),
-                    char_shape_id,
+            HxRunChildOrder::Line(index) => {
+                runs.push(decode_line(&hx.lines[index], char_shape_id, depth)?);
+            }
+            HxRunChildOrder::Ellipse(index) => {
+                let ellipse = &hx.ellipses[index];
+                runs.push(if ellipse.has_arc_pr == 1 {
+                    decode_arc(ellipse, char_shape_id, depth)?
+                } else {
+                    decode_ellipse(ellipse, char_shape_id, depth)?
                 });
+            }
+            HxRunChildOrder::Polygon(index) => {
+                runs.push(decode_polygon(&hx.polygons[index], char_shape_id, depth)?);
+            }
+            HxRunChildOrder::Curve(index) => {
+                runs.push(decode_curve(&hx.curves[index], char_shape_id, depth)?);
+            }
+            HxRunChildOrder::ConnectLine(index) => {
+                runs.push(decode_connect_line(&hx.connect_lines[index], char_shape_id, depth)?);
+            }
+            HxRunChildOrder::Equation(index) => {
+                runs.push(decode_equation(&hx.equations[index], char_shape_id)?);
+            }
+            HxRunChildOrder::Dutmal(index) => {
+                runs.push(decode_dutmal(&hx.dutmals[index], char_shape_id));
+            }
+            HxRunChildOrder::Compose(index) => {
+                runs.push(decode_compose(&hx.composes[index], char_shape_id));
+            }
+            HxRunChildOrder::Container(index) => {
+                if let Some(run) = decode_container(&hx.containers[index], char_shape_id, depth)? {
+                    runs.push(run);
+                }
+            }
+            HxRunChildOrder::TextArt(index) => {
+                runs.push(decode_textart(&hx.textarts[index], char_shape_id, depth)?);
             }
         }
     }
 
-    // Handle self-closing fieldBegin without a matching fieldEnd (e.g. bookmark span start)
-    if let Some(fb) = field_begin.take() {
-        if fb.field_type == "BOOKMARK" {
+    // Handle a self-closing fieldBegin without a matching fieldEnd.
+    if let Some(begin) = field_begin {
+        if begin.field_type == "BOOKMARK" {
             runs.push(Run {
                 content: RunContent::Control(Box::new(Control::Bookmark {
-                    name: fb.name.clone(),
+                    name: begin.name.clone(),
                     bookmark_type: hwpforge_foundation::BookmarkType::SpanStart,
                 })),
                 char_shape_id: field_begin_char_shape,
             });
         }
-    }
-
-    // Textbox runs (from <hp:rect>)
-    for rect in &hx.rects {
-        if let Some(run) = decode_textbox(rect, char_shape_id, depth)? {
-            runs.push(run);
-        }
-    }
-
-    // Line runs (from <hp:line>)
-    for line in &hx.lines {
-        runs.push(decode_line(line, char_shape_id, depth)?);
-    }
-
-    // Ellipse and Arc runs (from <hp:ellipse>)
-    for ellipse in &hx.ellipses {
-        if ellipse.has_arc_pr == 1 {
-            runs.push(decode_arc(ellipse, char_shape_id, depth)?);
-        } else {
-            runs.push(decode_ellipse(ellipse, char_shape_id, depth)?);
-        }
-    }
-
-    // Polygon runs (from <hp:polygon>)
-    for polygon in &hx.polygons {
-        runs.push(decode_polygon(polygon, char_shape_id, depth)?);
-    }
-
-    // Curve runs (from <hp:curve>)
-    for curve in &hx.curves {
-        runs.push(decode_curve(curve, char_shape_id, depth)?);
-    }
-
-    // TextArt runs (from <hp:textart>)
-    for text_art in &hx.textarts {
-        runs.push(decode_textart(text_art, char_shape_id, depth)?);
-    }
-
-    // ConnectLine runs (from <hp:connectLine>)
-    for connect_line in &hx.connect_lines {
-        runs.push(decode_connect_line(connect_line, char_shape_id, depth)?);
-    }
-
-    // Group runs (from <hp:container>) — Wave A flat children.
-    for container in &hx.containers {
-        if let Some(run) = decode_container(container, char_shape_id, depth)? {
-            runs.push(run);
-        }
-    }
-
-    // Equation runs (from <hp:equation>)
-    for equation in &hx.equations {
-        runs.push(decode_equation(equation, char_shape_id)?);
-    }
-
-    // Dutmal runs (from <hp:dutmal>)
-    for dutmal in &hx.dutmals {
-        runs.push(decode_dutmal(dutmal, char_shape_id));
-    }
-
-    // Compose runs (from <hp:compose>)
-    for compose in &hx.composes {
-        runs.push(decode_compose(compose, char_shape_id));
     }
 
     Ok(runs)
@@ -1675,6 +1636,41 @@ mod tests {
             other => panic!("expected control, got {other:?}"),
         }
         assert_eq!(runs[2].content.as_text(), Some("를 간단히 하면?"));
+    }
+
+    #[test]
+    fn parse_heterogeneous_run_children_in_source_order() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <t>before</t>
+                    <equation id="1"><script>A+B</script></equation>
+                    <pic id="pic1">
+                        <img binaryItemIDRef="logo.png" bright="0" contrast="0"/>
+                        <curSz width="10000" height="5000"/>
+                    </pic>
+                    <t>after</t>
+                </run>
+            </p>
+        </sec>"#;
+
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let runs = &result.paragraphs[0].runs;
+
+        assert_eq!(runs.len(), 4);
+        assert_eq!(runs[0].content.as_text(), Some("before"));
+        match &runs[1].content {
+            RunContent::Control(control) => match control.as_ref() {
+                Control::Equation { script, .. } => assert_eq!(script, "A+B"),
+                other => panic!("expected equation, got {other:?}"),
+            },
+            other => panic!("expected control, got {other:?}"),
+        }
+        match &runs[2].content {
+            RunContent::Image(image) => assert_eq!(image.path, "BinData/logo.png"),
+            other => panic!("expected image, got {other:?}"),
+        }
+        assert_eq!(runs[3].content.as_text(), Some("after"));
     }
 
     #[test]
