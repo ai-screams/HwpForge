@@ -161,6 +161,16 @@ pub fn run(input: &PathBuf, output: &Option<PathBuf>, mode: &MdMode, json_mode: 
             "count": visual_equations.equations.len(),
         }))
     } else {
+        let sidecar_path = md_path.with_extension("visual-equations.json");
+        if let Err(e) = std::fs::remove_file(&sidecar_path) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                CliError::new(
+                    "FILE_WRITE_FAILED",
+                    format!("Cannot remove stale '{}': {e}", sidecar_path.display()),
+                )
+                .exit(json_mode, 1);
+            }
+        }
         None
     };
 

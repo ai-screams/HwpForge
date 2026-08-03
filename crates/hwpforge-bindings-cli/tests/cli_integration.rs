@@ -4453,6 +4453,34 @@ fn to_md_json_visual_equations_replaces_existing_sidecar() {
 }
 
 #[test]
+fn to_md_non_styled_modes_remove_stale_visual_equations_sidecar() {
+    let input = fixture("tables/merged_grid_form.hwpx");
+
+    for mode in ["lossy", "lossless"] {
+        let tmp = test_tmp();
+        let markdown_path = tmp.join("same-output.md");
+        let sidecar_path = markdown_path.with_extension("visual-equations.json");
+        let (_, stderr, code) =
+            run(&["to-md", input.to_str().unwrap(), "-o", markdown_path.to_str().unwrap()]);
+        assert_eq!(code, 0, "styled setup failed: {stderr}");
+        assert!(sidecar_path.is_file());
+
+        let (_, stderr, code) = run(&[
+            "to-md",
+            input.to_str().unwrap(),
+            "-o",
+            markdown_path.to_str().unwrap(),
+            "--mode",
+            mode,
+        ]);
+
+        assert_eq!(code, 0, "{mode} conversion failed: {stderr}");
+        assert!(markdown_path.is_file());
+        assert!(!sidecar_path.exists(), "{mode} left a stale sidecar");
+    }
+}
+
+#[test]
 fn to_md_json_visual_equations_sidecar_write_failure_is_fail_closed() {
     let tmp = test_tmp();
     let input = create_visual_equations_hwpx(&tmp);
