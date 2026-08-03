@@ -303,6 +303,87 @@ fn visual_equations_traverse_visuals_nested_in_top_level_shape_text() {
 }
 
 #[test]
+fn visual_equations_collect_text_bearing_ellipse_and_polygon_in_group() {
+    let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
+      <container instid="group-inst">
+        <ellipse id="group-ellipse" instid="group-ellipse-inst"><drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+          <equation id="ellipse-equation"><script>ellipse</script></equation>
+        </run></p></subList></drawText></ellipse>
+        <polygon id="group-polygon" instid="group-polygon-inst"><drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+          <equation id="polygon-equation"><script>polygon</script></equation>
+        </run></p></subList></drawText></polygon>
+      </container>
+    </run></p></sec>"#;
+
+    let (_document, report) =
+        HwpxDecoder::decode_with_report(&fixture_with_section(section)).unwrap();
+
+    let identities: Vec<(&str, Option<&str>)> = report
+        .equations
+        .iter()
+        .map(|equation| (equation.id.as_str(), equation.parent_object_id.as_deref()))
+        .collect();
+    assert_eq!(
+        identities,
+        vec![
+            ("ellipse-equation", Some("group-ellipse")),
+            ("polygon-equation", Some("group-polygon")),
+        ]
+    );
+    assert!(report
+        .equations
+        .iter()
+        .all(|equation| equation.domain == HwpxVisualEquationDomain::GroupDrawText));
+}
+
+#[test]
+fn visual_equations_preserve_nested_visual_parent_and_interleaved_order() {
+    let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
+      <pic id="outer-picture" instid="outer-picture-inst"><caption><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+        <equation id="outer-before"><script>before</script></equation>
+        <pic id="nested-picture" instid="nested-picture-inst"><caption><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+          <equation id="nested-picture-equation"><script>nested</script></equation>
+        </run></p></subList></caption></pic>
+        <equation id="outer-after"><script>after</script></equation>
+      </run></p></subList></caption></pic>
+      <container instid="outer-container"><rect id="outer-rect" instid="outer-rect-inst"><drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+        <equation id="group-before"><script>group before</script></equation>
+        <container instid="nested-container"><rect id="nested-rect" instid="nested-rect-inst"><drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+          <equation id="nested-group-equation"><script>nested group</script></equation>
+        </run></p></subList></drawText></rect></container>
+        <equation id="group-after"><script>group after</script></equation>
+      </run></p></subList></drawText></rect></container>
+    </run></p></sec>"#;
+
+    let (_document, report) =
+        HwpxDecoder::decode_with_report(&fixture_with_section(section)).unwrap();
+
+    let identities: Vec<(&str, Option<&str>, usize, usize)> = report
+        .equations
+        .iter()
+        .map(|equation| {
+            (
+                equation.id.as_str(),
+                equation.parent_object_id.as_deref(),
+                equation.parent_order,
+                equation.document_order,
+            )
+        })
+        .collect();
+    assert_eq!(
+        identities,
+        vec![
+            ("outer-before", Some("outer-picture"), 0, 0),
+            ("nested-picture-equation", Some("nested-picture"), 0, 1),
+            ("outer-after", Some("outer-picture"), 1, 2),
+            ("group-before", Some("outer-rect"), 0, 3),
+            ("nested-group-equation", Some("nested-rect"), 0, 4),
+            ("group-after", Some("outer-rect"), 1, 5),
+        ]
+    );
+}
+
+#[test]
 fn visual_equations_report_traverses_header_and_footer_controls() {
     let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
       <ctrl><header id="header-1" applyPageType="BOTH"><subList><p paraPrIDRef="0"><run charPrIDRef="0">

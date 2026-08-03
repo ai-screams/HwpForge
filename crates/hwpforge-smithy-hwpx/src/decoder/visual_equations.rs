@@ -4,8 +4,9 @@ use serde::Serialize;
 
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    HxContainer, HxContainerChildOrder, HxCtrl, HxDrawText, HxEquation, HxOffset, HxParagraph,
-    HxPic, HxRect, HxRun, HxRunChildOrder, HxSizeAttr, HxSubList, HxTable, HxTablePos, HxTableSz,
+    HxContainer, HxContainerChildOrder, HxCtrl, HxDrawText, HxEllipse, HxEquation, HxOffset,
+    HxParagraph, HxPic, HxPolygon, HxRect, HxRenderingInfo, HxRun, HxRunChildOrder, HxSizeAttr,
+    HxSubList, HxTable, HxTablePos, HxTableSz,
 };
 
 pub(crate) const HWPX_VISUAL_EQUATION_SCHEMA_VERSION: u32 = 4;
@@ -446,6 +447,20 @@ fn collect_container(
                     container_position,
                     equations,
                 )?,
+                HxContainerChildOrder::Ellipse(ellipse_index) => collect_group_ellipse(
+                    &container.ellipses[ellipse_index],
+                    &format!("{path}/ellipse[{ellipse_index}]"),
+                    depth,
+                    container_position,
+                    equations,
+                )?,
+                HxContainerChildOrder::Polygon(polygon_index) => collect_group_polygon(
+                    &container.polygons[polygon_index],
+                    &format!("{path}/polygon[{polygon_index}]"),
+                    depth,
+                    container_position,
+                    equations,
+                )?,
                 HxContainerChildOrder::Container(container_index) => collect_container(
                     &container.containers[container_index],
                     &format!("{path}/container[{container_index}]"),
@@ -462,6 +477,24 @@ fn collect_container(
         collect_group_rect(
             rect,
             &format!("{path}/rect[{rect_index}]"),
+            depth,
+            container_position,
+            equations,
+        )?;
+    }
+    for (ellipse_index, ellipse) in container.ellipses.iter().enumerate() {
+        collect_group_ellipse(
+            ellipse,
+            &format!("{path}/ellipse[{ellipse_index}]"),
+            depth,
+            container_position,
+            equations,
+        )?;
+    }
+    for (polygon_index, polygon) in container.polygons.iter().enumerate() {
+        collect_group_polygon(
+            polygon,
+            &format!("{path}/polygon[{polygon_index}]"),
             depth,
             container_position,
             equations,
@@ -486,31 +519,101 @@ fn collect_group_rect(
     container_position: Option<HwpxVisualEquationPosition>,
     equations: &mut Vec<HwpxVisualEquation>,
 ) -> HwpxResult<()> {
-    let Some(draw_text) = &rect.draw_text else { return Ok(()) };
-    let rect_position = rect
-        .offset
-        .as_ref()
-        .map(position_from_offset)
-        .or_else(|| rect.pos.as_ref().map(position_from_table));
+    collect_group_shape(
+        rect.draw_text.as_ref(),
+        &rect.id,
+        &rect.instid,
+        rect.z_order,
+        rect.offset.as_ref(),
+        rect.pos.as_ref(),
+        rect.org_sz.as_ref(),
+        rect.rendering_info.as_ref(),
+        path,
+        depth,
+        container_position,
+        equations,
+    )
+}
+
+fn collect_group_ellipse(
+    ellipse: &HxEllipse,
+    path: &str,
+    depth: usize,
+    container_position: Option<HwpxVisualEquationPosition>,
+    equations: &mut Vec<HwpxVisualEquation>,
+) -> HwpxResult<()> {
+    collect_group_shape(
+        ellipse.draw_text.as_ref(),
+        &ellipse.id,
+        &ellipse.instid,
+        ellipse.z_order,
+        ellipse.offset.as_ref(),
+        ellipse.pos.as_ref(),
+        ellipse.org_sz.as_ref(),
+        ellipse.rendering_info.as_ref(),
+        path,
+        depth,
+        container_position,
+        equations,
+    )
+}
+
+fn collect_group_polygon(
+    polygon: &HxPolygon,
+    path: &str,
+    depth: usize,
+    container_position: Option<HwpxVisualEquationPosition>,
+    equations: &mut Vec<HwpxVisualEquation>,
+) -> HwpxResult<()> {
+    collect_group_shape(
+        polygon.draw_text.as_ref(),
+        &polygon.id,
+        &polygon.instid,
+        polygon.z_order,
+        polygon.offset.as_ref(),
+        polygon.pos.as_ref(),
+        polygon.org_sz.as_ref(),
+        polygon.rendering_info.as_ref(),
+        path,
+        depth,
+        container_position,
+        equations,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn collect_group_shape(
+    draw_text: Option<&HxDrawText>,
+    object_id: &str,
+    instance_id: &str,
+    z_order: u32,
+    offset: Option<&HxOffset>,
+    position: Option<&HxTablePos>,
+    original_size: Option<&HxSizeAttr>,
+    rendering_info: Option<&HxRenderingInfo>,
+    path: &str,
+    depth: usize,
+    container_position: Option<HwpxVisualEquationPosition>,
+    equations: &mut Vec<HwpxVisualEquation>,
+) -> HwpxResult<()> {
+    let Some(draw_text) = draw_text else { return Ok(()) };
+    let shape_position =
+        offset.map(position_from_offset).or_else(|| position.map(position_from_table));
     let parent = VisualParent {
         domain: HwpxVisualEquationDomain::GroupDrawText,
         kind: HwpxVisualEquationParentKind::Container,
-        object_id: &rect.id,
-        instance_id: &rect.instid,
-        z_order: rect.z_order,
-        position: add_optional_positions(container_position, rect_position)?,
-        raw_box_size: rect.org_sz.as_ref().map(size_from_original),
-        scale: rect
-            .rendering_info
-            .as_ref()
+        object_id,
+        instance_id,
+        z_order,
+        position: add_optional_positions(container_position, shape_position)?,
+        raw_box_size: original_size.map(size_from_original),
+        scale: rendering_info
             .map(|rendering| VisualScale {
                 horz: rendering.sca_matrix.e1.as_str(),
                 vert: rendering.sca_matrix.e5.as_str(),
             })
             .unwrap_or_default(),
-        translation: rect
-            .rendering_info
-            .as_ref()
+        translation: rendering_info
             .map(|rendering| VisualTranslation {
                 horz: rendering.sca_matrix.e3.as_str(),
                 vert: rendering.sca_matrix.e6.as_str(),
@@ -527,76 +630,175 @@ fn collect_parent_equations(
     depth: usize,
     equations: &mut Vec<HwpxVisualEquation>,
 ) -> HwpxResult<()> {
-    let mut occurrences = Vec::new();
-    collect_equations_from_paragraphs(&sub_list.paragraphs, depth, &mut occurrences)?;
-    for (parent_order, equation) in occurrences.into_iter().enumerate() {
-        let equation_object_id = nonempty(&equation.id);
-        let id = equation_object_id
-            .clone()
-            .unwrap_or_else(|| format!("{parent_path}/equation[{parent_order}]"));
-        let raw_position = equation_position(equation, parent)?;
-        let translation = HwpxVisualEquationTranslation {
-            horz: parent.translation.horz.to_string(),
-            vert: parent.translation.vert.to_string(),
-        };
-        let display_position = translate_position(raw_position, parent.translation);
-        let geometry = equation_geometry(equation, parent);
-        let z_order = equation.z_order.unwrap_or(parent.z_order);
-        equations.push(HwpxVisualEquation {
-            id,
-            domain: parent.domain,
-            equation_object_id,
-            parent_object_id: nonempty(parent.object_id),
-            parent_instance_id: nonempty(parent.instance_id),
-            parent_kind: parent.kind,
-            parent_path: parent_path.to_string(),
-            document_order: 0,
-            parent_order,
-            z_order,
-            raw_position,
-            translation,
-            display_position,
-            geometry,
-            script: equation.script.as_ref().map(|script| script.text.clone()).unwrap_or_default(),
-            latex: None,
-        });
-    }
-    Ok(())
+    let mut parent_order = 0;
+    collect_owned_visual_paragraphs(
+        &sub_list.paragraphs,
+        parent,
+        parent_path,
+        parent_path,
+        depth,
+        &mut parent_order,
+        equations,
+    )
 }
 
-fn collect_equations_from_paragraphs<'a>(
-    paragraphs: &'a [HxParagraph],
+#[allow(clippy::too_many_arguments)]
+fn collect_owned_visual_paragraphs(
+    paragraphs: &[HxParagraph],
+    parent: VisualParent<'_>,
+    parent_path: &str,
+    prefix: &str,
     depth: usize,
-    equations: &mut Vec<&'a HxEquation>,
+    parent_order: &mut usize,
+    equations: &mut Vec<HwpxVisualEquation>,
 ) -> HwpxResult<()> {
     ensure_depth(depth)?;
-    for paragraph in paragraphs {
-        for run in &paragraph.runs {
+    for (paragraph_index, paragraph) in paragraphs.iter().enumerate() {
+        let paragraph_path = format!("{prefix}/paragraph[{paragraph_index}]");
+        for (run_index, run) in paragraph.runs.iter().enumerate() {
+            let run_path = format!("{paragraph_path}/run[{run_index}]");
             if run.child_order.is_empty() {
-                equations.extend(&run.equations);
+                for equation in &run.equations {
+                    push_parent_equation(equation, parent, parent_path, parent_order, equations)?;
+                }
+                for (index, table) in run.tables.iter().enumerate() {
+                    collect_owned_visual_table(
+                        table,
+                        parent,
+                        parent_path,
+                        &format!("{run_path}/table[{index}]"),
+                        depth,
+                        parent_order,
+                        equations,
+                    )?;
+                }
+                for (index, ctrl) in run.ctrls.iter().enumerate() {
+                    collect_owned_visual_ctrl(
+                        ctrl,
+                        parent,
+                        parent_path,
+                        &format!("{run_path}/ctrl[{index}]"),
+                        depth,
+                        parent_order,
+                        equations,
+                    )?;
+                }
+                for (index, rect) in run.rects.iter().enumerate() {
+                    collect_owned_shape_text(
+                        rect.draw_text.as_ref(),
+                        parent,
+                        parent_path,
+                        &format!("{run_path}/rect[{index}]"),
+                        depth,
+                        parent_order,
+                        equations,
+                    )?;
+                }
+                for (index, ellipse) in run.ellipses.iter().enumerate() {
+                    collect_owned_shape_text(
+                        ellipse.draw_text.as_ref(),
+                        parent,
+                        parent_path,
+                        &format!("{run_path}/ellipse[{index}]"),
+                        depth,
+                        parent_order,
+                        equations,
+                    )?;
+                }
+                for (index, polygon) in run.polygons.iter().enumerate() {
+                    collect_owned_shape_text(
+                        polygon.draw_text.as_ref(),
+                        parent,
+                        parent_path,
+                        &format!("{run_path}/polygon[{index}]"),
+                        depth,
+                        parent_order,
+                        equations,
+                    )?;
+                }
+                for (index, picture) in run.pictures.iter().enumerate() {
+                    collect_picture(
+                        picture,
+                        &format!("{run_path}/picture[{index}]"),
+                        depth,
+                        equations,
+                    )?;
+                }
+                for (index, container) in run.containers.iter().enumerate() {
+                    collect_container(
+                        container,
+                        &format!("{run_path}/container[{index}]"),
+                        depth,
+                        None,
+                        equations,
+                    )?;
+                }
             } else {
                 for child in &run.child_order {
                     match *child {
-                        HxRunChildOrder::Equation(index) => equations.push(&run.equations[index]),
-                        HxRunChildOrder::Table(index) => {
-                            collect_equations_from_table(&run.tables[index], depth, equations)?;
-                        }
-                        HxRunChildOrder::Ctrl(index) => {
-                            collect_equations_from_ctrl(&run.ctrls[index], depth, equations)?;
-                        }
-                        HxRunChildOrder::Rect(index) => collect_equations_from_draw_text(
+                        HxRunChildOrder::Equation(index) => push_parent_equation(
+                            &run.equations[index],
+                            parent,
+                            parent_path,
+                            parent_order,
+                            equations,
+                        )?,
+                        HxRunChildOrder::Table(index) => collect_owned_visual_table(
+                            &run.tables[index],
+                            parent,
+                            parent_path,
+                            &format!("{run_path}/table[{index}]"),
+                            depth,
+                            parent_order,
+                            equations,
+                        )?,
+                        HxRunChildOrder::Ctrl(index) => collect_owned_visual_ctrl(
+                            &run.ctrls[index],
+                            parent,
+                            parent_path,
+                            &format!("{run_path}/ctrl[{index}]"),
+                            depth,
+                            parent_order,
+                            equations,
+                        )?,
+                        HxRunChildOrder::Rect(index) => collect_owned_shape_text(
                             run.rects[index].draw_text.as_ref(),
+                            parent,
+                            parent_path,
+                            &format!("{run_path}/rect[{index}]"),
                             depth,
+                            parent_order,
                             equations,
                         )?,
-                        HxRunChildOrder::Ellipse(index) => collect_equations_from_draw_text(
+                        HxRunChildOrder::Ellipse(index) => collect_owned_shape_text(
                             run.ellipses[index].draw_text.as_ref(),
+                            parent,
+                            parent_path,
+                            &format!("{run_path}/ellipse[{index}]"),
+                            depth,
+                            parent_order,
+                            equations,
+                        )?,
+                        HxRunChildOrder::Polygon(index) => collect_owned_shape_text(
+                            run.polygons[index].draw_text.as_ref(),
+                            parent,
+                            parent_path,
+                            &format!("{run_path}/polygon[{index}]"),
+                            depth,
+                            parent_order,
+                            equations,
+                        )?,
+                        HxRunChildOrder::Picture(index) => collect_picture(
+                            &run.pictures[index],
+                            &format!("{run_path}/picture[{index}]"),
                             depth,
                             equations,
                         )?,
-                        HxRunChildOrder::Polygon(index) => collect_equations_from_draw_text(
-                            run.polygons[index].draw_text.as_ref(),
+                        HxRunChildOrder::Container(index) => collect_container(
+                            &run.containers[index],
+                            &format!("{run_path}/container[{index}]"),
                             depth,
+                            None,
                             equations,
                         )?,
                         _ => {}
@@ -608,53 +810,158 @@ fn collect_equations_from_paragraphs<'a>(
     Ok(())
 }
 
-fn collect_equations_from_draw_text<'a>(
-    draw_text: Option<&'a HxDrawText>,
+#[allow(clippy::too_many_arguments)]
+fn collect_owned_shape_text(
+    draw_text: Option<&HxDrawText>,
+    parent: VisualParent<'_>,
+    parent_path: &str,
+    path: &str,
     depth: usize,
-    equations: &mut Vec<&'a HxEquation>,
+    parent_order: &mut usize,
+    equations: &mut Vec<HwpxVisualEquation>,
 ) -> HwpxResult<()> {
     if let Some(draw_text) = draw_text {
-        collect_equations_from_paragraphs(&draw_text.sub_list.paragraphs, depth + 1, equations)?;
+        collect_owned_visual_paragraphs(
+            &draw_text.sub_list.paragraphs,
+            parent,
+            parent_path,
+            &format!("{path}/drawText"),
+            depth + 1,
+            parent_order,
+            equations,
+        )?;
     }
     Ok(())
 }
 
-fn collect_equations_from_table<'a>(
-    table: &'a HxTable,
+#[allow(clippy::too_many_arguments)]
+fn collect_owned_visual_table(
+    table: &HxTable,
+    parent: VisualParent<'_>,
+    parent_path: &str,
+    path: &str,
     depth: usize,
-    equations: &mut Vec<&'a HxEquation>,
+    parent_order: &mut usize,
+    equations: &mut Vec<HwpxVisualEquation>,
 ) -> HwpxResult<()> {
-    for row in &table.rows {
-        for cell in &row.cells {
+    for (row_index, row) in table.rows.iter().enumerate() {
+        for (cell_index, cell) in row.cells.iter().enumerate() {
             if let Some(sub_list) = &cell.sub_list {
-                collect_equations_from_paragraphs(&sub_list.paragraphs, depth + 1, equations)?;
+                collect_owned_visual_paragraphs(
+                    &sub_list.paragraphs,
+                    parent,
+                    parent_path,
+                    &format!("{path}/row[{row_index}]/cell[{cell_index}]"),
+                    depth + 1,
+                    parent_order,
+                    equations,
+                )?;
             }
         }
     }
     Ok(())
 }
 
-fn collect_equations_from_ctrl<'a>(
-    ctrl: &'a HxCtrl,
+#[allow(clippy::too_many_arguments)]
+fn collect_owned_visual_ctrl(
+    ctrl: &HxCtrl,
+    parent: VisualParent<'_>,
+    parent_path: &str,
+    path: &str,
     depth: usize,
-    equations: &mut Vec<&'a HxEquation>,
+    parent_order: &mut usize,
+    equations: &mut Vec<HwpxVisualEquation>,
 ) -> HwpxResult<()> {
     if let Some(header) = &ctrl.header {
         if let Some(sub_list) = &header.sub_list {
-            collect_equations_from_paragraphs(&sub_list.paragraphs, depth + 1, equations)?;
+            collect_owned_visual_paragraphs(
+                &sub_list.paragraphs,
+                parent,
+                parent_path,
+                &format!("{path}/header"),
+                depth + 1,
+                parent_order,
+                equations,
+            )?;
         }
     }
     if let Some(footer) = &ctrl.footer {
         if let Some(sub_list) = &footer.sub_list {
-            collect_equations_from_paragraphs(&sub_list.paragraphs, depth + 1, equations)?;
+            collect_owned_visual_paragraphs(
+                &sub_list.paragraphs,
+                parent,
+                parent_path,
+                &format!("{path}/footer"),
+                depth + 1,
+                parent_order,
+                equations,
+            )?;
         }
     }
     if let Some(footnote) = &ctrl.foot_note {
-        collect_equations_from_paragraphs(&footnote.sub_list.paragraphs, depth + 1, equations)?;
+        collect_owned_visual_paragraphs(
+            &footnote.sub_list.paragraphs,
+            parent,
+            parent_path,
+            &format!("{path}/footnote"),
+            depth + 1,
+            parent_order,
+            equations,
+        )?;
     }
     if let Some(endnote) = &ctrl.end_note {
-        collect_equations_from_paragraphs(&endnote.sub_list.paragraphs, depth + 1, equations)?;
+        collect_owned_visual_paragraphs(
+            &endnote.sub_list.paragraphs,
+            parent,
+            parent_path,
+            &format!("{path}/endnote"),
+            depth + 1,
+            parent_order,
+            equations,
+        )?;
     }
+    Ok(())
+}
+
+fn push_parent_equation(
+    equation: &HxEquation,
+    parent: VisualParent<'_>,
+    parent_path: &str,
+    parent_order: &mut usize,
+    equations: &mut Vec<HwpxVisualEquation>,
+) -> HwpxResult<()> {
+    let current_parent_order = *parent_order;
+    let equation_object_id = nonempty(&equation.id);
+    let id = equation_object_id
+        .clone()
+        .unwrap_or_else(|| format!("{parent_path}/equation[{current_parent_order}]"));
+    let raw_position = equation_position(equation, parent)?;
+    let translation = HwpxVisualEquationTranslation {
+        horz: parent.translation.horz.to_string(),
+        vert: parent.translation.vert.to_string(),
+    };
+    let display_position = translate_position(raw_position, parent.translation);
+    let geometry = equation_geometry(equation, parent);
+    let z_order = equation.z_order.unwrap_or(parent.z_order);
+    equations.push(HwpxVisualEquation {
+        id,
+        domain: parent.domain,
+        equation_object_id,
+        parent_object_id: nonempty(parent.object_id),
+        parent_instance_id: nonempty(parent.instance_id),
+        parent_kind: parent.kind,
+        parent_path: parent_path.to_string(),
+        document_order: 0,
+        parent_order: current_parent_order,
+        z_order,
+        raw_position,
+        translation,
+        display_position,
+        geometry,
+        script: equation.script.as_ref().map(|script| script.text.clone()).unwrap_or_default(),
+        latex: None,
+    });
+    *parent_order += 1;
     Ok(())
 }
 
