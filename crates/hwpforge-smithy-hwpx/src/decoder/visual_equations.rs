@@ -175,6 +175,7 @@ struct VisualParent<'a> {
     raw_box_size: Option<HwpxVisualEquationSize>,
     scale: VisualScale<'a>,
     translation: VisualTranslation<'a>,
+    compose_child_position: bool,
 }
 
 pub(crate) fn collect_section(
@@ -421,6 +422,7 @@ fn collect_picture(
         raw_box_size: None,
         scale: VisualScale::default(),
         translation: VisualTranslation::default(),
+        compose_child_position: false,
     };
     collect_parent_equations(&caption.sub_list, parent, path, depth, equations)
 }
@@ -619,6 +621,7 @@ fn collect_group_shape(
                 vert: rendering.sca_matrix.e6.as_str(),
             })
             .unwrap_or_default(),
+        compose_child_position: true,
     };
     collect_parent_equations(&draw_text.sub_list, parent, path, depth, equations)
 }
@@ -686,6 +689,10 @@ fn collect_owned_visual_paragraphs(
                 for (index, rect) in run.rects.iter().enumerate() {
                     collect_owned_shape_text(
                         rect.draw_text.as_ref(),
+                        rect.offset.as_ref(),
+                        rect.pos.as_ref(),
+                        rect.org_sz.as_ref(),
+                        rect.rendering_info.as_ref(),
                         parent,
                         parent_path,
                         &format!("{run_path}/rect[{index}]"),
@@ -697,6 +704,10 @@ fn collect_owned_visual_paragraphs(
                 for (index, ellipse) in run.ellipses.iter().enumerate() {
                     collect_owned_shape_text(
                         ellipse.draw_text.as_ref(),
+                        ellipse.offset.as_ref(),
+                        ellipse.pos.as_ref(),
+                        ellipse.org_sz.as_ref(),
+                        ellipse.rendering_info.as_ref(),
                         parent,
                         parent_path,
                         &format!("{run_path}/ellipse[{index}]"),
@@ -708,6 +719,10 @@ fn collect_owned_visual_paragraphs(
                 for (index, polygon) in run.polygons.iter().enumerate() {
                     collect_owned_shape_text(
                         polygon.draw_text.as_ref(),
+                        polygon.offset.as_ref(),
+                        polygon.pos.as_ref(),
+                        polygon.org_sz.as_ref(),
+                        polygon.rendering_info.as_ref(),
                         parent,
                         parent_path,
                         &format!("{run_path}/polygon[{index}]"),
@@ -763,6 +778,10 @@ fn collect_owned_visual_paragraphs(
                         )?,
                         HxRunChildOrder::Rect(index) => collect_owned_shape_text(
                             run.rects[index].draw_text.as_ref(),
+                            run.rects[index].offset.as_ref(),
+                            run.rects[index].pos.as_ref(),
+                            run.rects[index].org_sz.as_ref(),
+                            run.rects[index].rendering_info.as_ref(),
                             parent,
                             parent_path,
                             &format!("{run_path}/rect[{index}]"),
@@ -772,6 +791,10 @@ fn collect_owned_visual_paragraphs(
                         )?,
                         HxRunChildOrder::Ellipse(index) => collect_owned_shape_text(
                             run.ellipses[index].draw_text.as_ref(),
+                            run.ellipses[index].offset.as_ref(),
+                            run.ellipses[index].pos.as_ref(),
+                            run.ellipses[index].org_sz.as_ref(),
+                            run.ellipses[index].rendering_info.as_ref(),
                             parent,
                             parent_path,
                             &format!("{run_path}/ellipse[{index}]"),
@@ -781,6 +804,10 @@ fn collect_owned_visual_paragraphs(
                         )?,
                         HxRunChildOrder::Polygon(index) => collect_owned_shape_text(
                             run.polygons[index].draw_text.as_ref(),
+                            run.polygons[index].offset.as_ref(),
+                            run.polygons[index].pos.as_ref(),
+                            run.polygons[index].org_sz.as_ref(),
+                            run.polygons[index].rendering_info.as_ref(),
                             parent,
                             parent_path,
                             &format!("{run_path}/polygon[{index}]"),
@@ -813,6 +840,10 @@ fn collect_owned_visual_paragraphs(
 #[allow(clippy::too_many_arguments)]
 fn collect_owned_shape_text(
     draw_text: Option<&HxDrawText>,
+    offset: Option<&HxOffset>,
+    position: Option<&HxTablePos>,
+    original_size: Option<&HxSizeAttr>,
+    rendering_info: Option<&HxRenderingInfo>,
     parent: VisualParent<'_>,
     parent_path: &str,
     path: &str,
@@ -821,9 +852,43 @@ fn collect_owned_shape_text(
     equations: &mut Vec<HwpxVisualEquation>,
 ) -> HwpxResult<()> {
     if let Some(draw_text) = draw_text {
+        let child_position =
+            offset.map(position_from_offset).or_else(|| position.map(position_from_table));
+        let child_scale = rendering_info
+            .map(|rendering| VisualScale {
+                horz: rendering.sca_matrix.e1.as_str(),
+                vert: rendering.sca_matrix.e5.as_str(),
+            })
+            .unwrap_or_default();
+        let child_translation = rendering_info
+            .map(|rendering| VisualTranslation {
+                horz: rendering.sca_matrix.e3.as_str(),
+                vert: rendering.sca_matrix.e6.as_str(),
+            })
+            .unwrap_or_default();
+        let scale_horz = compose_scale(parent.scale.horz, child_scale.horz)?;
+        let scale_vert = compose_scale(parent.scale.vert, child_scale.vert)?;
+        let translation_horz = compose_translation(
+            parent.translation.horz,
+            parent.scale.horz,
+            child_translation.horz,
+        )?;
+        let translation_vert = compose_translation(
+            parent.translation.vert,
+            parent.scale.vert,
+            child_translation.vert,
+        )?;
+        let nested_parent = VisualParent {
+            position: add_optional_positions(parent.position, child_position)?,
+            raw_box_size: original_size.map(size_from_original).or(parent.raw_box_size),
+            scale: VisualScale { horz: &scale_horz, vert: &scale_vert },
+            translation: VisualTranslation { horz: &translation_horz, vert: &translation_vert },
+            compose_child_position: true,
+            ..parent
+        };
         collect_owned_visual_paragraphs(
             &draw_text.sub_list.paragraphs,
-            parent,
+            nested_parent,
             parent_path,
             &format!("{path}/drawText"),
             depth + 1,
@@ -1083,6 +1148,12 @@ fn equation_position(
     parent: VisualParent<'_>,
 ) -> HwpxResult<HwpxVisualEquationPosition> {
     let child_position = equation.pos.as_ref().map(position_from_table);
+    if parent.compose_child_position {
+        return add_positions(
+            parent.position.unwrap_or_default(),
+            child_position.unwrap_or_default(),
+        );
+    }
     match parent.domain {
         HwpxVisualEquationDomain::PictureCaption => {
             Ok(child_position.or(parent.position).unwrap_or_default())
@@ -1090,6 +1161,39 @@ fn equation_position(
         HwpxVisualEquationDomain::GroupDrawText => {
             add_positions(parent.position.unwrap_or_default(), child_position.unwrap_or_default())
         }
+    }
+}
+
+fn compose_scale(parent: &str, child: &str) -> HwpxResult<String> {
+    let parent = parse_transform(parent)?;
+    let child = parse_transform(child)?;
+    Ok(format_transform(parent * child))
+}
+
+fn compose_translation(
+    parent_translation: &str,
+    parent_scale: &str,
+    child_translation: &str,
+) -> HwpxResult<String> {
+    let parent_translation = parse_transform(parent_translation)?;
+    let parent_scale = parse_transform(parent_scale)?;
+    let child_translation = parse_transform(child_translation)?;
+    Ok(format_transform(parent_translation + parent_scale * child_translation))
+}
+
+fn parse_transform(value: &str) -> HwpxResult<f64> {
+    value.parse::<f64>().ok().filter(|value| value.is_finite()).ok_or_else(|| {
+        HwpxError::InvalidStructure {
+            detail: format!("visual-equation transform is not finite: {value}"),
+        }
+    })
+}
+
+fn format_transform(value: f64) -> String {
+    if value == 0.0 {
+        "0".to_string()
+    } else {
+        value.to_string()
     }
 }
 

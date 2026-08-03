@@ -248,6 +248,47 @@ fn visual_equations_traverse_nested_shape_text_with_outer_visual_parent() {
 }
 
 #[test]
+fn visual_equations_compose_nested_shape_placement_and_rendering() {
+    let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
+      <container instid="group-inst"><rect id="outer-rect" instid="outer-rect-inst">
+        <pos horzOffset="100" vertOffset="200"/>
+        <orgSz width="50" height="60"/>
+        <renderingInfo><scaMatrix e1="2" e2="0" e3="5" e4="0" e5="3" e6="7"/></renderingInfo>
+        <drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+          <ellipse id="nested-ellipse">
+            <offset x="10" y="20"/>
+            <orgSz width="30" height="40"/>
+            <renderingInfo><scaMatrix e1="4" e2="0" e3="11" e4="0" e5="5" e6="13"/></renderingInfo>
+            <drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+              <equation id="nested-equation"><sz width="10" height="20"/><pos horzOffset="1" vertOffset="2"/><script>nested</script></equation>
+            </run></p></subList></drawText>
+          </ellipse>
+        </run></p></subList></drawText>
+      </rect></container>
+    </run></p></sec>"#;
+
+    let (_document, report) =
+        HwpxDecoder::decode_with_report(&fixture_with_section(section)).unwrap();
+
+    let equation = &report.equations[0];
+    assert_eq!(equation.parent_object_id.as_deref(), Some("outer-rect"));
+    assert_eq!((equation.raw_position.horz_offset, equation.raw_position.vert_offset), (111, 222));
+    assert_eq!(
+        (equation.translation.horz.as_str(), equation.translation.vert.as_str()),
+        ("27", "46")
+    );
+    let display = equation.display_position.unwrap();
+    assert_eq!((display.horz_offset, display.vert_offset), (138, 268));
+    assert_eq!(
+        (equation.geometry.scale.horz.as_str(), equation.geometry.scale.vert.as_str()),
+        ("8", "15")
+    );
+    assert_eq!(equation.geometry.raw_box_size.unwrap().width, 30);
+    assert_eq!(equation.geometry.display_box_size.unwrap().width, 240);
+    assert_eq!(equation.geometry.display_equation_size.unwrap().height, 300);
+}
+
+#[test]
 fn visual_equations_traverse_visuals_nested_in_top_level_shape_text() {
     let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
       <rect id="top-rect"><drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
