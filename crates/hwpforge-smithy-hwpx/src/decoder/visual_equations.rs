@@ -471,18 +471,12 @@ fn collect_picture(
     let Some(ancestor) = ancestor else {
         return collect_parent_equations(&caption.sub_list, parent_base, path, depth, equations);
     };
-    let scale_horz = compose_scale(ancestor.scale.horz, child_scale.horz)?;
-    let scale_vert = compose_scale(ancestor.scale.vert, child_scale.vert)?;
-    let translation_horz = compose_translation(
-        ancestor.translation.horz,
-        ancestor.scale.horz,
-        child_translation.horz,
-    )?;
-    let translation_vert = compose_translation(
-        ancestor.translation.vert,
-        ancestor.scale.vert,
-        child_translation.vert,
-    )?;
+    let scale_horz = compose_scale(ancestor.scale.horz, child_scale.horz);
+    let scale_vert = compose_scale(ancestor.scale.vert, child_scale.vert);
+    let translation_horz =
+        compose_translation(ancestor.translation.horz, ancestor.scale.horz, child_translation.horz);
+    let translation_vert =
+        compose_translation(ancestor.translation.vert, ancestor.scale.vert, child_translation.vert);
     let parent = VisualParent {
         position: add_optional_positions(ancestor.position, child_position)?,
         scale: VisualScale { horz: &scale_horz, vert: &scale_vert },
@@ -710,18 +704,12 @@ fn collect_group_shape(
     let Some(ancestor) = ancestor else {
         return collect_parent_equations(&draw_text.sub_list, parent_base, path, depth, equations);
     };
-    let scale_horz = compose_scale(ancestor.scale.horz, child_scale.horz)?;
-    let scale_vert = compose_scale(ancestor.scale.vert, child_scale.vert)?;
-    let translation_horz = compose_translation(
-        ancestor.translation.horz,
-        ancestor.scale.horz,
-        child_translation.horz,
-    )?;
-    let translation_vert = compose_translation(
-        ancestor.translation.vert,
-        ancestor.scale.vert,
-        child_translation.vert,
-    )?;
+    let scale_horz = compose_scale(ancestor.scale.horz, child_scale.horz);
+    let scale_vert = compose_scale(ancestor.scale.vert, child_scale.vert);
+    let translation_horz =
+        compose_translation(ancestor.translation.horz, ancestor.scale.horz, child_translation.horz);
+    let translation_vert =
+        compose_translation(ancestor.translation.vert, ancestor.scale.vert, child_translation.vert);
     let parent = VisualParent {
         scale: VisualScale { horz: &scale_horz, vert: &scale_vert },
         translation: VisualTranslation { horz: &translation_horz, vert: &translation_vert },
@@ -974,18 +962,12 @@ fn collect_owned_shape_text(
                 vert: rendering.sca_matrix.e6.as_str(),
             })
             .unwrap_or_default();
-        let scale_horz = compose_scale(parent.scale.horz, child_scale.horz)?;
-        let scale_vert = compose_scale(parent.scale.vert, child_scale.vert)?;
-        let translation_horz = compose_translation(
-            parent.translation.horz,
-            parent.scale.horz,
-            child_translation.horz,
-        )?;
-        let translation_vert = compose_translation(
-            parent.translation.vert,
-            parent.scale.vert,
-            child_translation.vert,
-        )?;
+        let scale_horz = compose_scale(parent.scale.horz, child_scale.horz);
+        let scale_vert = compose_scale(parent.scale.vert, child_scale.vert);
+        let translation_horz =
+            compose_translation(parent.translation.horz, parent.scale.horz, child_translation.horz);
+        let translation_vert =
+            compose_translation(parent.translation.vert, parent.scale.vert, child_translation.vert);
         let nested_parent = VisualParent {
             position: add_optional_positions(parent.position, child_position)?,
             raw_box_size: original_size.map(size_from_original).or(parent.raw_box_size),
@@ -1294,29 +1276,45 @@ fn equation_position(
     }
 }
 
-fn compose_scale(parent: &str, child: &str) -> HwpxResult<String> {
-    let parent = parse_transform(parent)?;
-    let child = parse_transform(child)?;
-    Ok(format_transform(parent * child))
+fn compose_scale(parent: &str, child: &str) -> String {
+    let Some(parent_value) = finite_transform(parent) else {
+        return parent.to_string();
+    };
+    let Some(child_value) = finite_transform(child) else {
+        return child.to_string();
+    };
+    format_composed_transform(parent_value * child_value)
 }
 
 fn compose_translation(
     parent_translation: &str,
     parent_scale: &str,
     child_translation: &str,
-) -> HwpxResult<String> {
-    let parent_translation = parse_transform(parent_translation)?;
-    let parent_scale = parse_transform(parent_scale)?;
-    let child_translation = parse_transform(child_translation)?;
-    Ok(format_transform(parent_translation + parent_scale * child_translation))
+) -> String {
+    let Some(parent_translation_value) = finite_transform(parent_translation) else {
+        return parent_translation.to_string();
+    };
+    let Some(parent_scale_value) = finite_transform(parent_scale) else {
+        return parent_scale.to_string();
+    };
+    let Some(child_translation_value) = finite_transform(child_translation) else {
+        return child_translation.to_string();
+    };
+    format_composed_transform(
+        parent_translation_value + parent_scale_value * child_translation_value,
+    )
 }
 
-fn parse_transform(value: &str) -> HwpxResult<f64> {
-    value.parse::<f64>().ok().filter(|value| value.is_finite()).ok_or_else(|| {
-        HwpxError::InvalidStructure {
-            detail: format!("visual-equation transform is not finite: {value}"),
-        }
-    })
+fn finite_transform(value: &str) -> Option<f64> {
+    value.parse::<f64>().ok().filter(|value| value.is_finite())
+}
+
+fn format_composed_transform(value: f64) -> String {
+    if value.is_finite() {
+        format_transform(value)
+    } else {
+        "unprojectable".to_string()
+    }
 }
 
 fn format_transform(value: f64) -> String {

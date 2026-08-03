@@ -1032,6 +1032,54 @@ fn visual_equation_invalid_scale_preserves_geometry_and_raw_render_base_unit() {
 }
 
 #[test]
+fn visual_equation_nested_invalid_transforms_preserve_raw_geometry() {
+    let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
+      <pic id="invalid-outer-picture" instid="invalid-outer-picture-inst">
+        <renderingInfo><scaMatrix e1="not-a-number" e2="0" e3="NaN" e4="0" e5="2" e6="3"/></renderingInfo>
+        <caption><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+          <pic id="nested-picture" instid="nested-picture-inst">
+            <renderingInfo><scaMatrix e1="4" e2="0" e3="11" e4="0" e5="5" e6="13"/></renderingInfo>
+            <caption><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+              <equation id="invalid-ancestor-equation" baseUnit="20"><sz width="10" height="20"/><script>picture</script></equation>
+            </run></p></subList></caption>
+          </pic>
+        </run></p></subList></caption>
+      </pic>
+      <container instid="valid-outer-container"><rect id="valid-outer-rect" instid="valid-outer-rect-inst">
+        <renderingInfo><scaMatrix e1="2" e2="0" e3="5" e4="0" e5="3" e6="7"/></renderingInfo>
+        <drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+          <container instid="invalid-nested-container"><rect id="invalid-nested-rect" instid="invalid-nested-rect-inst">
+            <orgSz width="30" height="40"/>
+            <renderingInfo><scaMatrix e1="Infinity" e2="0" e3="not-a-number" e4="0" e5="5" e6="13"/></renderingInfo>
+            <drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+              <equation id="invalid-child-equation" baseUnit="20"><sz width="10" height="20"/><script>group</script></equation>
+            </run></p></subList></drawText>
+          </rect></container>
+        </run></p></subList></drawText>
+      </rect></container>
+    </run></p></sec>"#;
+
+    let (_document, report) =
+        HwpxDecoder::decode_with_report(&fixture_with_section(section)).unwrap();
+
+    let invalid_ancestor = &report.equations[0];
+    assert_eq!(invalid_ancestor.geometry.raw_equation_size.unwrap().width, 10);
+    assert_eq!(invalid_ancestor.geometry.render_base_unit, Some(20));
+    assert_eq!(invalid_ancestor.geometry.scale.horz, "not-a-number");
+    assert_eq!(invalid_ancestor.geometry.display_equation_size, None);
+    assert_eq!(invalid_ancestor.translation.horz, "NaN");
+    assert_eq!(invalid_ancestor.display_position, None);
+
+    let invalid_child = &report.equations[1];
+    assert_eq!(invalid_child.geometry.raw_box_size.unwrap().width, 30);
+    assert_eq!(invalid_child.geometry.render_base_unit, Some(20));
+    assert_eq!(invalid_child.geometry.scale.horz, "Infinity");
+    assert_eq!(invalid_child.geometry.display_box_size, None);
+    assert_eq!(invalid_child.translation.horz, "not-a-number");
+    assert_eq!(invalid_child.display_position, None);
+}
+
+#[test]
 fn visual_equation_nesting_boundary_succeeds() {
     let section = nested_containers_section(32);
 
