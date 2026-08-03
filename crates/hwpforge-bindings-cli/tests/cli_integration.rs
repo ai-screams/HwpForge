@@ -4371,6 +4371,28 @@ fn to_md_json_visual_equations_reports_sidecar() {
 }
 
 #[test]
+fn to_md_json_visual_equations_replaces_existing_sidecar() {
+    let tmp = test_tmp();
+    let input = create_visual_equations_hwpx(&tmp);
+    let markdown_path = tmp.join("result.md");
+    let sidecar_path = tmp.join("result.visual-equations.json");
+
+    let (_first, first_stderr, first_code) =
+        run_json(&["to-md", input.to_str().unwrap(), "-o", markdown_path.to_str().unwrap()]);
+    assert_eq!(first_code, 0, "{first_stderr}");
+    std::fs::write(&sidecar_path, b"stale sidecar").unwrap();
+
+    let (second, second_stderr, second_code) =
+        run_json(&["to-md", input.to_str().unwrap(), "-o", markdown_path.to_str().unwrap()]);
+    assert_eq!(second_code, 0, "{second_stderr}");
+    assert_eq!(second["visual_equations"]["count"], 2);
+    let replaced: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(sidecar_path).unwrap()).unwrap();
+    assert_eq!(replaced["schema_version"], 4);
+    assert_eq!(replaced["equations"].as_array().unwrap().len(), 2);
+}
+
+#[test]
 fn to_md_json_visual_equations_sidecar_write_failure_is_fail_closed() {
     let tmp = test_tmp();
     let input = create_visual_equations_hwpx(&tmp);

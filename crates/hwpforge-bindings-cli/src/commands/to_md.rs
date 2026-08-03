@@ -1,16 +1,15 @@
 //! `to-md` subcommand: convert HWPX to Markdown.
 
 use std::collections::HashMap;
+use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxStyleLookup};
 use hwpforge_smithy_md::{hancom_eqn_to_latex, MdEncoder};
 
 use crate::error::{check_file_size, CliError};
 use crate::MdMode;
-
-static SIDECAR_TEMP_COUNTER: AtomicUsize = AtomicUsize::new(0);
 
 /// Run the to-md command.
 pub fn run(input: &PathBuf, output: &Option<PathBuf>, mode: &MdMode, json_mode: bool) {
@@ -188,14 +187,12 @@ pub fn run(input: &PathBuf, output: &Option<PathBuf>, mode: &MdMode, json_mode: 
 
 fn write_atomic(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
     let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("sidecar.json");
-    let attempt = SIDECAR_TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
-    let temp_path =
-        path.with_file_name(format!(".{file_name}.{}.{}.tmp", std::process::id(), attempt));
-
-    std::fs::write(&temp_path, contents)?;
-    if let Err(error) = std::fs::rename(&temp_path, path) {
-        let _ = std::fs::remove_file(&temp_path);
-        return Err(error);
-    }
-    Ok(())
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut temporary = tempfile::Builder::new()
+        .prefix(&format!(".{file_name}."))
+        .suffix(".tmp")
+        .tempfile_in(parent)?;
+    temporary.write_all(contents)?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path).map(|_| ()).map_err(|error| error.error)
 }
