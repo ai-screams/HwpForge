@@ -441,7 +441,9 @@ fn encode_control_styled(
             // registrations local as well, otherwise an invisible memo
             // reference leaks its body into document-level definitions.
             let mut memo_footnotes = FootnoteCollector::new();
-            let body = encode_nested_paragraphs(content, styles, images, &mut memo_footnotes);
+            let mut memo_images = HashMap::new();
+            let body =
+                encode_nested_paragraphs(content, styles, &mut memo_images, &mut memo_footnotes);
             let trimmed = body.trim();
             if trimmed.is_empty() {
                 String::new()
@@ -2537,6 +2539,39 @@ mod tests {
         assert!(!output.markdown.contains("secret memo footnote"));
         assert!(output.markdown.contains("[^1]: visible footnote"));
         assert!(!output.markdown.contains("[^2]:"));
+    }
+
+    #[test]
+    fn control_memo_discards_nested_image_artifacts() {
+        use hwpforge_core::control::MemoMetadata;
+
+        let mut styles = MockStyles::new();
+        styles.image_data.insert("BinData/secret.png".to_string(), vec![0x89, 0x50, 0x4E]);
+        let image = Image::new(
+            "BinData/secret.png",
+            HwpUnit::from_mm(40.0).unwrap(),
+            HwpUnit::from_mm(30.0).unwrap(),
+            ImageFormat::Png,
+        );
+        let memo_body = Paragraph::with_runs(
+            vec![Run::image(image, CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Memo {
+                    content: vec![memo_body],
+                    anchor_runs: vec![],
+                    metadata: MemoMetadata::default(),
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let output = encode_styled(&doc, &styles);
+        assert!(output.markdown.contains("![secret](images/secret.png)"));
+        assert!(output.images.is_empty(), "memo images must remain local to the memo body");
     }
 
     #[test]
