@@ -51,17 +51,29 @@ impl FootnoteCollector {
         Self { footnotes: Vec::new(), endnotes: Vec::new() }
     }
 
-    /// Adds a footnote body and returns the inline marker `[^N]`.
-    fn add_footnote(&mut self, body: &str) -> String {
+    /// Reserves a footnote number before recursively encoding its body.
+    fn reserve_footnote(&mut self) -> usize {
         let n = self.footnotes.len() + 1;
-        self.footnotes.push(body.to_string());
+        self.footnotes.push(String::new());
+        n
+    }
+
+    /// Fills a reserved footnote body and returns the inline marker `[^N]`.
+    fn complete_footnote(&mut self, n: usize, body: &str) -> String {
+        self.footnotes[n - 1] = body.to_string();
         format!("[^{n}]")
     }
 
-    /// Adds an endnote body and returns the inline marker `[^eN]`.
-    fn add_endnote(&mut self, body: &str) -> String {
+    /// Reserves an endnote number before recursively encoding its body.
+    fn reserve_endnote(&mut self) -> usize {
         let n = self.endnotes.len() + 1;
-        self.endnotes.push(body.to_string());
+        self.endnotes.push(String::new());
+        n
+    }
+
+    /// Fills a reserved endnote body and returns the inline marker `[^eN]`.
+    fn complete_endnote(&mut self, n: usize, body: &str) -> String {
+        self.endnotes[n - 1] = body.to_string();
         format!("[^e{n}]")
     }
 
@@ -371,12 +383,14 @@ fn encode_control_styled(
             }
         }
         Control::Footnote { paragraphs, .. } => {
+            let number = footnotes.reserve_footnote();
             let body = encode_nested_paragraphs(paragraphs, styles, images, footnotes);
-            footnotes.add_footnote(body.trim())
+            footnotes.complete_footnote(number, body.trim())
         }
         Control::Endnote { paragraphs, .. } => {
+            let number = footnotes.reserve_endnote();
             let body = encode_nested_paragraphs(paragraphs, styles, images, footnotes);
-            footnotes.add_endnote(body.trim())
+            footnotes.complete_endnote(number, body.trim())
         }
         Control::TextBox { paragraphs, .. } => {
             let body = encode_nested_paragraphs(paragraphs, styles, images, footnotes);
@@ -1654,6 +1668,64 @@ mod tests {
 
         let output = encode_styled(&doc, &styles);
         assert_eq!(output.markdown, "[^e1]\n\n[^e1]: end body");
+    }
+
+    #[test]
+    fn nested_footnote_numbers_follow_visible_reference_order() {
+        let inner_body = Paragraph::with_runs(
+            vec![Run::text("inner", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        let outer_body = Paragraph::with_runs(
+            vec![
+                Run::text("outer ", CharShapeIndex::new(0)),
+                Run::control(
+                    Control::Footnote { inst_id: None, paragraphs: vec![inner_body] },
+                    CharShapeIndex::new(0),
+                ),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Footnote { inst_id: None, paragraphs: vec![outer_body] },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let output = encode_styled(&doc, &MockStyles::new());
+
+        assert_eq!(output.markdown, "[^1]\n\n[^1]: outer [^2]\n[^2]: inner");
+    }
+
+    #[test]
+    fn nested_endnote_numbers_follow_visible_reference_order() {
+        let inner_body = Paragraph::with_runs(
+            vec![Run::text("inner", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        let outer_body = Paragraph::with_runs(
+            vec![
+                Run::text("outer ", CharShapeIndex::new(0)),
+                Run::control(
+                    Control::Endnote { inst_id: None, paragraphs: vec![inner_body] },
+                    CharShapeIndex::new(0),
+                ),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Endnote { inst_id: None, paragraphs: vec![outer_body] },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let output = encode_styled(&doc, &MockStyles::new());
+
+        assert_eq!(output.markdown, "[^e1]\n\n[^e1]: outer [^e2]\n[^e2]: inner");
     }
 
     #[test]
