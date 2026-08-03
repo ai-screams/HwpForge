@@ -16,7 +16,12 @@ pub fn run(input: &PathBuf, output: &Option<PathBuf>, mode: &MdMode, json_mode: 
     check_file_size(input, json_mode);
 
     // 1. Decode HWPX
-    let (hwpx_doc, mut visual_equations) = match HwpxDecoder::decode_file_with_report(input) {
+    let decoded = if matches!(mode, MdMode::Styled) {
+        HwpxDecoder::decode_file_with_report(input)
+    } else {
+        HwpxDecoder::decode_file(input).map(|document| (document, Default::default()))
+    };
+    let (hwpx_doc, mut visual_equations) = match decoded {
         Ok(result) => result,
         Err(e) => {
             CliError::new("DECODE_FAILED", format!("HWPX decode error: {e}")).exit(json_mode, 2);

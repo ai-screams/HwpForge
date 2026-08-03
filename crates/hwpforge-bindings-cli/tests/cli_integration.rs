@@ -362,6 +362,38 @@ fn create_visual_equations_hwpx(dir: &Path) -> PathBuf {
     path
 }
 
+fn create_visual_equation_overflow_hwpx(dir: &Path) -> PathBuf {
+    const HEADER: &str = r##"<head version="1.4" secCnt="1"><refList>
+      <fontfaces itemCnt="1"><fontface lang="HANGUL" fontCnt="1"><font id="0" face="함초롬돋움" type="TTF" isEmbedded="0"/></fontface></fontfaces>
+      <charProperties itemCnt="1"><charPr id="0" height="1000" textColor="#000000" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="0"><fontRef hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/></charPr></charProperties>
+      <paraProperties itemCnt="1"><paraPr id="0"><align horizontal="LEFT" vertical="BASELINE"/><switch><default><lineSpacing type="PERCENT" value="160"/></default></switch></paraPr></paraProperties>
+    </refList></head>"##;
+    const SECTION: &str = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
+      <t>legacy conversion remains valid</t>
+      <container instid="group-inst"><rect id="overflow-rect" instid="overflow-rect-inst">
+        <offset x="2147483647" y="0"/>
+        <drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+          <equation id="overflow-equation"><pos horzOffset="1" vertOffset="0"/><script>x</script></equation>
+        </run></p></subList></drawText>
+      </rect></container>
+    </run></p></sec>"#;
+
+    let path = dir.join("visual-overflow-input.hwpx");
+    let file = std::fs::File::create(&path).expect("create visual-overflow fixture");
+    let mut writer = zip::ZipWriter::new(file);
+    let stored =
+        zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let deflated = zip::write::SimpleFileOptions::default();
+    writer.start_file("mimetype", stored).unwrap();
+    writer.write_all(b"application/hwp+zip").unwrap();
+    writer.start_file("Contents/header.xml", deflated).unwrap();
+    writer.write_all(HEADER.as_bytes()).unwrap();
+    writer.start_file("Contents/section0.xml", deflated).unwrap();
+    writer.write_all(SECTION.as_bytes()).unwrap();
+    writer.finish().unwrap();
+    path
+}
+
 /// Run hwpforge with given args, return (stdout, stderr, exit_code).
 fn run(args: &[&str]) -> (String, String, i32) {
     let output =
@@ -4303,6 +4335,34 @@ fn to_md_lossless_mode_runs() {
         run(&["to-md", f.to_str().unwrap(), "-o", tmp.to_str().unwrap(), "--mode", "lossless"]);
     assert_eq!(code, 0);
     assert!(tmp.join("merged_grid_form.md").exists());
+}
+
+#[test]
+fn to_md_legacy_modes_ignore_visual_report_projection_overflow() {
+    let tmp = test_tmp();
+    let input = create_visual_equation_overflow_hwpx(&tmp);
+
+    for mode in ["lossy", "lossless"] {
+        let output_dir = tmp.join(mode);
+        let (_, stderr, code) = run(&[
+            "to-md",
+            input.to_str().unwrap(),
+            "-o",
+            output_dir.to_str().unwrap(),
+            "--mode",
+            mode,
+        ]);
+
+        assert!(!stderr.contains("DECODE_FAILED"), "{mode} must use legacy decode: {stderr}");
+        if mode == "lossy" {
+            assert_eq!(code, 0, "lossy conversion must complete: {stderr}");
+            assert!(output_dir.join("visual-overflow-input.md").is_file());
+        } else {
+            assert_eq!(code, 2, "lossless must reach its encoder: {stderr}");
+            assert!(stderr.contains("ENCODE_FAILED"), "{stderr}");
+        }
+        assert!(!output_dir.join("visual-overflow-input.visual-equations.json").exists());
+    }
 }
 
 #[test]
