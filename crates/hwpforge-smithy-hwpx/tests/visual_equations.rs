@@ -160,6 +160,35 @@ fn visual_equations_report_preserves_only_supported_visual_domains() {
 }
 
 #[test]
+fn visual_equations_apply_picture_rendering_to_caption_equations() {
+    let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
+      <pic id="scaled-picture" instid="scaled-picture-inst">
+        <renderingInfo><scaMatrix e1="2" e2="0" e3="5" e4="0" e5="3" e6="7"/></renderingInfo>
+        <caption><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+          <equation id="caption-equation"><sz width="10" height="20"/><pos horzOffset="1" vertOffset="2"/><script>caption</script></equation>
+        </run></p></subList></caption>
+      </pic>
+    </run></p></sec>"#;
+
+    let (_document, report) =
+        HwpxDecoder::decode_with_report(&fixture_with_section(section)).unwrap();
+
+    let equation = &report.equations[0];
+    assert_eq!(
+        (equation.translation.horz.as_str(), equation.translation.vert.as_str()),
+        ("5", "7")
+    );
+    assert_eq!(
+        (equation.geometry.scale.horz.as_str(), equation.geometry.scale.vert.as_str()),
+        ("2", "3")
+    );
+    let display_position = equation.display_position.unwrap();
+    assert_eq!((display_position.horz_offset, display_position.vert_offset), (6, 9));
+    let display_size = equation.geometry.display_equation_size.unwrap();
+    assert_eq!((display_size.width, display_size.height), (20, 60));
+}
+
+#[test]
 fn visual_equations_preserve_interleaved_nested_container_order() {
     let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
       <container instid="outer">

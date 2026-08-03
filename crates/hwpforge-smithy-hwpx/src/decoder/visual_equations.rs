@@ -428,8 +428,22 @@ fn collect_picture(
             .map(position_from_table)
             .or_else(|| pic.offset.as_ref().map(position_from_offset)),
         raw_box_size: None,
-        scale: VisualScale::default(),
-        translation: VisualTranslation::default(),
+        scale: pic
+            .rendering_info
+            .as_ref()
+            .map(|rendering| VisualScale {
+                horz: rendering.sca_matrix.e1.as_str(),
+                vert: rendering.sca_matrix.e5.as_str(),
+            })
+            .unwrap_or_default(),
+        translation: pic
+            .rendering_info
+            .as_ref()
+            .map(|rendering| VisualTranslation {
+                horz: rendering.sca_matrix.e3.as_str(),
+                vert: rendering.sca_matrix.e6.as_str(),
+            })
+            .unwrap_or_default(),
         compose_child_position: false,
     };
     collect_parent_equations(&caption.sub_list, parent, path, depth, equations)
