@@ -437,7 +437,11 @@ fn encode_control_styled(
             String::new()
         }
         Control::Memo { content, .. } => {
-            let body = encode_nested_paragraphs(content, styles, images, footnotes);
+            // Memo content is hidden inside an HTML comment. Keep note
+            // registrations local as well, otherwise an invisible memo
+            // reference leaks its body into document-level definitions.
+            let mut memo_footnotes = FootnoteCollector::new();
+            let body = encode_nested_paragraphs(content, styles, images, &mut memo_footnotes);
             let trimmed = body.trim();
             if trimmed.is_empty() {
                 String::new()
@@ -2483,6 +2487,56 @@ mod tests {
             output.markdown
         );
         assert!(output.markdown.contains("memo note"));
+    }
+
+    #[test]
+    fn control_memo_discards_nested_footnote_definitions() {
+        use hwpforge_core::control::MemoMetadata;
+        let hidden_footnote = Paragraph::with_runs(
+            vec![Run::control(
+                Control::Footnote {
+                    inst_id: None,
+                    paragraphs: vec![Paragraph::with_runs(
+                        vec![Run::text("secret memo footnote", CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
+                    )],
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        );
+        let visible_footnote = Paragraph::with_runs(
+            vec![Run::control(
+                Control::Footnote {
+                    inst_id: None,
+                    paragraphs: vec![Paragraph::with_runs(
+                        vec![Run::text("visible footnote", CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
+                    )],
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        );
+        let doc = validated_document(vec![
+            Paragraph::with_runs(
+                vec![Run::control(
+                    Control::Memo {
+                        content: vec![hidden_footnote],
+                        anchor_runs: vec![],
+                        metadata: MemoMetadata::default(),
+                    },
+                    CharShapeIndex::new(0),
+                )],
+                ParaShapeIndex::new(0),
+            ),
+            visible_footnote,
+        ]);
+
+        let output = encode_styled(&doc, &MockStyles::new());
+        assert!(!output.markdown.contains("secret memo footnote"));
+        assert!(output.markdown.contains("[^1]: visible footnote"));
+        assert!(!output.markdown.contains("[^2]:"));
     }
 
     #[test]
