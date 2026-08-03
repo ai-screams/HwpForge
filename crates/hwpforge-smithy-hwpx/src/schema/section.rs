@@ -516,48 +516,187 @@ pub struct HxTextArtPr {
 /// nested `<hp:container>` children (Wave B). The shape-common block
 /// (offset/orgSz/…) is parsed for geometry; children reuse the per-shape
 /// decoders, and nested containers recurse through `decode_container`.
-#[derive(Debug, Default, Clone, Deserialize, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub struct HxContainer {
     /// Group nesting level (`0` = outermost).
-    #[serde(rename = "@groupLevel", default)]
     pub group_level: u32,
     /// Instance identifier (mirrors HWP5 / Core `inst_id`).
-    #[serde(rename = "@instid", default)]
     pub instid: String,
 
     /// Group bounding-box original size (`<hp:orgSz>`).
-    #[serde(rename(deserialize = "orgSz"), default)]
     pub org_sz: Option<HxSizeAttr>,
     /// Group placement (`<hp:pos>`) — carries the anchor offsets.
-    #[serde(rename(deserialize = "pos"), default)]
     pub pos: Option<HxTablePos>,
     /// Group display size (`<hp:sz>`).
-    #[serde(rename(deserialize = "sz"), default)]
     pub sz: Option<HxTableSz>,
 
     // ── Children (flat shapes for Wave A) ──
     /// `<hp:rect>` children (textboxes / pure rects).
-    #[serde(rename(deserialize = "rect"), default)]
     pub rects: Vec<HxRect>,
     /// `<hp:line>` children.
-    #[serde(rename(deserialize = "line"), default)]
     pub lines: Vec<HxLine>,
     /// `<hp:ellipse>` children (ellipse / arc).
-    #[serde(rename(deserialize = "ellipse"), default)]
     pub ellipses: Vec<HxEllipse>,
     /// `<hp:polygon>` children.
-    #[serde(rename(deserialize = "polygon"), default)]
     pub polygons: Vec<HxPolygon>,
     /// `<hp:curve>` children.
-    #[serde(rename(deserialize = "curve"), default)]
     pub curves: Vec<HxCurve>,
     /// `<hp:connectLine>` children.
-    #[serde(rename(deserialize = "connectLine"), default)]
     pub connect_lines: Vec<HxConnectLine>,
     /// Nested `<hp:container>` children (group-in-group, Wave B). `Vec` is
     /// heap-indirected so the recursive type needs no explicit `Box`.
-    #[serde(rename(deserialize = "container"), default)]
     pub containers: Vec<HxContainer>,
+
+    /// Direct shape/container order captured during decode.
+    pub child_order: Vec<HxContainerChildOrder>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HxContainerChildOrder {
+    Rect(usize),
+    Line(usize),
+    Ellipse(usize),
+    Polygon(usize),
+    Curve(usize),
+    ConnectLine(usize),
+    Container(usize),
+}
+
+impl<'de> Deserialize<'de> for HxContainer {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        enum Field {
+            GroupLevel,
+            InstId,
+            OriginalSize,
+            Position,
+            Size,
+            Rect,
+            Line,
+            Ellipse,
+            Polygon,
+            Curve,
+            ConnectLine,
+            Container,
+            Ignore,
+        }
+
+        impl<'de> Deserialize<'de> for Field {
+            fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+            where
+                D: serde::Deserializer<'de>,
+            {
+                struct FieldVisitor;
+
+                impl Visitor<'_> for FieldVisitor {
+                    type Value = Field;
+
+                    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                        formatter.write_str("an HWPX container attribute or child")
+                    }
+
+                    fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+                    where
+                        E: serde::de::Error,
+                    {
+                        Ok(match value {
+                            "@groupLevel" => Field::GroupLevel,
+                            "@instid" => Field::InstId,
+                            "orgSz" => Field::OriginalSize,
+                            "pos" => Field::Position,
+                            "sz" => Field::Size,
+                            "rect" => Field::Rect,
+                            "line" => Field::Line,
+                            "ellipse" => Field::Ellipse,
+                            "polygon" => Field::Polygon,
+                            "curve" => Field::Curve,
+                            "connectLine" => Field::ConnectLine,
+                            "container" => Field::Container,
+                            _ => Field::Ignore,
+                        })
+                    }
+                }
+
+                deserializer.deserialize_identifier(FieldVisitor)
+            }
+        }
+
+        struct HxContainerVisitor;
+
+        impl<'de> Visitor<'de> for HxContainerVisitor {
+            type Value = HxContainer;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("an hp:container element")
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<Self::Value, A::Error>
+            where
+                A: MapAccess<'de>,
+            {
+                let mut container = HxContainer::default();
+                while let Some(field) = map.next_key()? {
+                    match field {
+                        Field::GroupLevel => container.group_level = map.next_value()?,
+                        Field::InstId => container.instid = map.next_value()?,
+                        Field::OriginalSize => container.org_sz = Some(map.next_value()?),
+                        Field::Position => container.pos = Some(map.next_value()?),
+                        Field::Size => container.sz = Some(map.next_value()?),
+                        Field::Rect => {
+                            container
+                                .child_order
+                                .push(HxContainerChildOrder::Rect(container.rects.len()));
+                            container.rects.push(map.next_value()?);
+                        }
+                        Field::Line => {
+                            container
+                                .child_order
+                                .push(HxContainerChildOrder::Line(container.lines.len()));
+                            container.lines.push(map.next_value()?);
+                        }
+                        Field::Ellipse => {
+                            container
+                                .child_order
+                                .push(HxContainerChildOrder::Ellipse(container.ellipses.len()));
+                            container.ellipses.push(map.next_value()?);
+                        }
+                        Field::Polygon => {
+                            container
+                                .child_order
+                                .push(HxContainerChildOrder::Polygon(container.polygons.len()));
+                            container.polygons.push(map.next_value()?);
+                        }
+                        Field::Curve => {
+                            container
+                                .child_order
+                                .push(HxContainerChildOrder::Curve(container.curves.len()));
+                            container.curves.push(map.next_value()?);
+                        }
+                        Field::ConnectLine => {
+                            container.child_order.push(HxContainerChildOrder::ConnectLine(
+                                container.connect_lines.len(),
+                            ));
+                            container.connect_lines.push(map.next_value()?);
+                        }
+                        Field::Container => {
+                            container
+                                .child_order
+                                .push(HxContainerChildOrder::Container(container.containers.len()));
+                            container.containers.push(map.next_value()?);
+                        }
+                        Field::Ignore => {
+                            let _: serde::de::IgnoredAny = map.next_value()?;
+                        }
+                    }
+                }
+                Ok(container)
+            }
+        }
+
+        deserializer.deserialize_map(HxContainerVisitor)
+    }
 }
 
 // ── Text ──────────────────────────────────────────────────────────

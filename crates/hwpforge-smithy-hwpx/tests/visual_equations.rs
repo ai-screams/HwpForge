@@ -160,6 +160,32 @@ fn visual_equations_report_preserves_only_supported_visual_domains() {
 }
 
 #[test]
+fn visual_equations_preserve_interleaved_nested_container_order() {
+    let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
+      <container instid="outer">
+        <container instid="nested-first"><rect id="nested-rect" instid="nested-rect-inst">
+          <drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+            <equation id="nested-equation"><script>nested first</script></equation>
+          </run></p></subList></drawText>
+        </rect></container>
+        <rect id="sibling-rect" instid="sibling-rect-inst">
+          <drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+            <equation id="sibling-equation"><script>sibling second</script></equation>
+          </run></p></subList></drawText>
+        </rect>
+      </container>
+    </run></p></sec>"#;
+
+    let (_document, report) =
+        HwpxDecoder::decode_with_report(&fixture_with_section(section)).unwrap();
+
+    let ids: Vec<&str> = report.equations.iter().map(|equation| equation.id.as_str()).collect();
+    assert_eq!(ids, vec!["nested-equation", "sibling-equation"]);
+    assert_eq!(report.equations[0].document_order, 0);
+    assert_eq!(report.equations[1].document_order, 1);
+}
+
+#[test]
 fn visual_equation_explicit_zero_z_order_does_not_inherit_parent() {
     let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
       <container instid="group-inst"><rect id="rect-1" instid="rect-inst" zOrder="41">

@@ -4,8 +4,8 @@ use serde::Serialize;
 
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    HxContainer, HxCtrl, HxEquation, HxOffset, HxParagraph, HxPic, HxRect, HxRun, HxRunChildOrder,
-    HxSizeAttr, HxSubList, HxTable, HxTablePos, HxTableSz,
+    HxContainer, HxContainerChildOrder, HxCtrl, HxEquation, HxOffset, HxParagraph, HxPic, HxRect,
+    HxRun, HxRunChildOrder, HxSizeAttr, HxSubList, HxTable, HxTablePos, HxTableSz,
 };
 
 pub(crate) const HWPX_VISUAL_EQUATION_SCHEMA_VERSION: u32 = 4;
@@ -356,6 +356,28 @@ fn collect_container(
 ) -> HwpxResult<()> {
     ensure_depth(depth)?;
     let container_position = container.pos.as_ref().map(position_from_table).or(inherited_position);
+    if !container.child_order.is_empty() {
+        for child in &container.child_order {
+            match *child {
+                HxContainerChildOrder::Rect(rect_index) => collect_group_rect(
+                    &container.rects[rect_index],
+                    &format!("{path}/rect[{rect_index}]"),
+                    depth,
+                    container_position,
+                    equations,
+                )?,
+                HxContainerChildOrder::Container(container_index) => collect_container(
+                    &container.containers[container_index],
+                    &format!("{path}/container[{container_index}]"),
+                    depth + 1,
+                    container_position,
+                    equations,
+                )?,
+                _ => {}
+            }
+        }
+        return Ok(());
+    }
     for (rect_index, rect) in container.rects.iter().enumerate() {
         collect_group_rect(
             rect,
