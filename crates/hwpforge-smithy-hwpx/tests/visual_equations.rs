@@ -289,6 +289,40 @@ fn visual_equations_compose_nested_shape_placement_and_rendering() {
 }
 
 #[test]
+fn visual_equations_traverse_table_caption_before_cells_in_picture_caption() {
+    let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
+      <pic id="outer-picture" instid="outer-picture-inst"><caption><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+        <tbl id="nested-table" rowCnt="1" colCnt="1">
+          <caption><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+            <equation id="table-caption-equation"><script>caption</script></equation>
+          </run></p></subList></caption>
+          <tr><tc><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+            <equation id="table-cell-equation"><script>cell</script></equation>
+          </run></p></subList><cellAddr colAddr="0" rowAddr="0"/><cellSpan rowSpan="1" colSpan="1"/></tc></tr>
+        </tbl>
+      </run></p></subList></caption></pic>
+    </run></p></sec>"#;
+
+    let (_document, report) =
+        HwpxDecoder::decode_with_report(&fixture_with_section(section)).unwrap();
+
+    let identities: Vec<(&str, Option<&str>, usize)> = report
+        .equations
+        .iter()
+        .map(|equation| {
+            (equation.id.as_str(), equation.parent_object_id.as_deref(), equation.parent_order)
+        })
+        .collect();
+    assert_eq!(
+        identities,
+        vec![
+            ("table-caption-equation", Some("outer-picture"), 0),
+            ("table-cell-equation", Some("outer-picture"), 1),
+        ]
+    );
+}
+
+#[test]
 fn visual_equations_traverse_visuals_nested_in_top_level_shape_text() {
     let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
       <rect id="top-rect"><drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">

@@ -341,6 +341,14 @@ fn walk_table(
     depth: usize,
     equations: &mut Vec<HwpxVisualEquation>,
 ) -> HwpxResult<()> {
+    if let Some(caption) = &table.caption {
+        walk_visual_paragraphs(
+            &caption.sub_list.paragraphs,
+            &format!("{path}/caption"),
+            depth + 1,
+            equations,
+        )?;
+    }
     for (row_index, row) in table.rows.iter().enumerate() {
         for (cell_index, cell) in row.cells.iter().enumerate() {
             if let Some(sub_list) = &cell.sub_list {
@@ -909,6 +917,17 @@ fn collect_owned_visual_table(
     parent_order: &mut usize,
     equations: &mut Vec<HwpxVisualEquation>,
 ) -> HwpxResult<()> {
+    if let Some(caption) = &table.caption {
+        collect_owned_visual_paragraphs(
+            &caption.sub_list.paragraphs,
+            parent,
+            parent_path,
+            &format!("{path}/caption"),
+            depth + 1,
+            parent_order,
+            equations,
+        )?;
+    }
     for (row_index, row) in table.rows.iter().enumerate() {
         for (cell_index, cell) in row.cells.iter().enumerate() {
             if let Some(sub_list) = &cell.sub_list {
