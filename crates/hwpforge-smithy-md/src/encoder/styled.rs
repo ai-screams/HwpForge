@@ -459,8 +459,7 @@ fn encode_nested_paragraphs(
     paragraphs
         .iter()
         .map(|paragraph| {
-            let (markdown, paragraph_images) =
-                encode_paragraph_styled(paragraph, styles, footnotes);
+            let (markdown, paragraph_images) = paragraph_text_styled(paragraph, styles, footnotes);
             images.extend(paragraph_images);
             markdown
         })
@@ -1713,6 +1712,51 @@ mod tests {
 
         let output = encode_styled(&doc, &styles);
         assert_eq!(output.markdown, "box content");
+    }
+
+    #[test]
+    fn nested_control_paragraph_styles_remain_inline() {
+        let textbox_body = Paragraph::with_runs(
+            vec![Run::text("box heading", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(1),
+        );
+        let footnote_body = Paragraph::with_runs(
+            vec![Run::text("note item", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(2),
+        );
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![
+                Run::control(
+                    Control::TextBox {
+                        paragraphs: vec![textbox_body],
+                        width: HwpUnit::from_mm(80.0).unwrap(),
+                        height: HwpUnit::from_mm(40.0).unwrap(),
+                        horz_offset: 0,
+                        vert_offset: 0,
+                        caption: None,
+                        style: None,
+                        text_vertical_align: hwpforge_foundation::VerticalAlign::Top,
+                    },
+                    CharShapeIndex::new(0),
+                ),
+                Run::text(" ", CharShapeIndex::new(0)),
+                Run::control(
+                    Control::Footnote { inst_id: None, paragraphs: vec![footnote_body] },
+                    CharShapeIndex::new(0),
+                ),
+            ],
+            ParaShapeIndex::new(0),
+        )]);
+        let mut styles = MockStyles::new();
+        styles.heading_paras.insert(1, 1);
+        styles.list_para_types.insert(2, "bullet");
+        styles.list_para_levels.insert(2, 0);
+
+        let output = encode_styled(&doc, &styles);
+
+        assert_eq!(output.markdown, "box heading [^1]\n\n[^1]: note item");
+        assert!(!output.markdown.contains("# box heading"));
+        assert!(!output.markdown.contains("[^1]: - note item"));
     }
 
     #[test]
