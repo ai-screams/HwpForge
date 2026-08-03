@@ -375,7 +375,10 @@ fn collect_container(
     equations: &mut Vec<HwpxVisualEquation>,
 ) -> HwpxResult<()> {
     ensure_depth(depth)?;
-    let container_position = container.pos.as_ref().map(position_from_table).or(inherited_position);
+    let container_position = add_optional_positions(
+        inherited_position,
+        container.pos.as_ref().map(position_from_table),
+    )?;
     if !container.child_order.is_empty() {
         for child in &container.child_order {
             match *child {
@@ -427,18 +430,18 @@ fn collect_group_rect(
     equations: &mut Vec<HwpxVisualEquation>,
 ) -> HwpxResult<()> {
     let Some(draw_text) = &rect.draw_text else { return Ok(()) };
+    let rect_position = rect
+        .offset
+        .as_ref()
+        .map(position_from_offset)
+        .or_else(|| rect.pos.as_ref().map(position_from_table));
     let parent = VisualParent {
         domain: HwpxVisualEquationDomain::GroupDrawText,
         kind: HwpxVisualEquationParentKind::Container,
         object_id: &rect.id,
         instance_id: &rect.instid,
         z_order: rect.z_order,
-        position: rect
-            .offset
-            .as_ref()
-            .map(position_from_offset)
-            .or_else(|| rect.pos.as_ref().map(position_from_table))
-            .or(container_position),
+        position: add_optional_positions(container_position, rect_position)?,
         raw_box_size: rect.org_sz.as_ref().map(size_from_original),
         scale: rect
             .rendering_info
@@ -715,4 +718,15 @@ fn add_positions(
         }
     })?;
     Ok(HwpxVisualEquationPosition { horz_offset, vert_offset })
+}
+
+fn add_optional_positions(
+    parent: Option<HwpxVisualEquationPosition>,
+    child: Option<HwpxVisualEquationPosition>,
+) -> HwpxResult<Option<HwpxVisualEquationPosition>> {
+    match (parent, child) {
+        (Some(parent), Some(child)) => add_positions(parent, child).map(Some),
+        (Some(position), None) | (None, Some(position)) => Ok(Some(position)),
+        (None, None) => Ok(None),
+    }
 }

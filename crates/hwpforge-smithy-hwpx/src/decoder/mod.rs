@@ -208,7 +208,8 @@ impl HwpxDecoder {
 
     /// Decodes an HWPX file from a filesystem path.
     pub fn decode_file(path: impl AsRef<Path>) -> HwpxResult<HwpxDocument> {
-        Self::decode_file_with_report(path).map(|(document, _report)| document)
+        let bytes = std::fs::read(path.as_ref()).map_err(crate::error::HwpxError::Io)?;
+        Self::decode(&bytes)
     }
 
     /// Decodes an HWPX file from a filesystem path and returns its visual-equation report.

@@ -223,8 +223,17 @@ fn legacy_decode_ignores_visual_report_projection_overflow() {
     </run></p></sec>"#;
     let fixture = fixture_with_section(section);
 
+    let path =
+        std::env::temp_dir().join(format!("hwpforge-visual-overflow-{}.hwpx", std::process::id()));
+    std::fs::write(&path, &fixture).unwrap();
+    let legacy_file_result = HwpxDecoder::decode_file(&path);
+    let report_file_result = HwpxDecoder::decode_file_with_report(&path);
+    std::fs::remove_file(&path).unwrap();
+
     assert!(HwpxDecoder::decode(&fixture).is_ok());
     assert!(HwpxDecoder::decode_with_report(&fixture).is_err());
+    assert!(legacy_file_result.is_ok());
+    assert!(report_file_result.is_err());
 }
 
 #[test]
@@ -287,6 +296,7 @@ fn visual_equation_group_offset_and_picture_placement_are_preserved() {
 fn visual_equation_group_position_adds_rect_placement_to_child_local_pos() {
     let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
       <container instid="group-inst">
+        <pos horzOffset="100" vertOffset="200"/>
         <rect id="2010924737" instid="rect-zero-child" zOrder="41">
           <offset x="0" y="11428"/>
           <drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
@@ -325,11 +335,11 @@ fn visual_equation_group_position_adds_rect_placement_to_child_local_pos() {
     assert_eq!(
         positions,
         vec![
-            ("explicit-zero-child", 0, 11428),
-            ("local-child", 332, -642),
-            ("unsigned-offset", -448, 11428),
+            ("explicit-zero-child", 100, 11628),
+            ("local-child", 432, -442),
+            ("unsigned-offset", -348, 11628),
         ],
-        "group positions must combine rect placement with equation-local coordinates"
+        "group positions must combine container, rect, and equation-local coordinates"
     );
 }
 
