@@ -202,12 +202,21 @@ fn push_identifier_tokens(word: &str, tokens: &mut Vec<Token>) {
         return;
     }
 
-    let uppercase_match = UPPERCASE_COMMANDS
-        .iter()
-        .filter_map(|(source, canonical)| {
-            word.find(source).map(|index| (index, *source, *canonical))
-        })
-        .min_by_key(|(index, _, _)| *index);
+    let uppercase_match = UPPERCASE_COMMANDS.iter().find_map(|(source, canonical)| {
+        let attached_operand = word
+            .strip_prefix(source)
+            .filter(|suffix| suffix.chars().next().is_some_and(|next| !next.is_ascii_uppercase()));
+        if attached_operand.is_some() {
+            return Some((0, *source, *canonical));
+        }
+
+        let attached_command = word.strip_suffix(source).filter(|prefix| {
+            let mut characters = prefix.chars();
+            characters.next().is_some_and(|first| first.is_ascii_alphabetic())
+                && characters.next().is_none()
+        });
+        attached_command.map(|prefix| (prefix.len(), *source, *canonical))
+    });
     if let Some((index, source, canonical)) = uppercase_match {
         if index > 0 {
             push_identifier_tokens(&word[..index], tokens);
@@ -434,6 +443,11 @@ mod tests {
                 Token::Keyword("cdots".into()),
             ]
         );
+    }
+
+    #[test]
+    fn ordinary_uppercase_identifiers_do_not_match_command_substrings() {
+        assert_eq!(tokenize("SIMPLE"), vec![Token::Text("SIMPLE".into())]);
     }
 
     #[test]
