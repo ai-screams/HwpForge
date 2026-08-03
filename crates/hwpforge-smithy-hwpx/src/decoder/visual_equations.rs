@@ -243,6 +243,24 @@ fn walk_visual_run(
                     equations,
                 )?;
             }
+            HxRunChildOrder::Rect(index) => walk_shape_text_visuals(
+                run.rects[index].draw_text.as_ref(),
+                &format!("{path}/rect[{index}]"),
+                depth,
+                equations,
+            )?,
+            HxRunChildOrder::Ellipse(index) => walk_shape_text_visuals(
+                run.ellipses[index].draw_text.as_ref(),
+                &format!("{path}/ellipse[{index}]"),
+                depth,
+                equations,
+            )?,
+            HxRunChildOrder::Polygon(index) => walk_shape_text_visuals(
+                run.polygons[index].draw_text.as_ref(),
+                &format!("{path}/polygon[{index}]"),
+                depth,
+                equations,
+            )?,
             _ => {}
         }
     }
@@ -273,7 +291,46 @@ fn walk_run_by_type(
             equations,
         )?;
     }
+    for (index, rect) in run.rects.iter().enumerate() {
+        walk_shape_text_visuals(
+            rect.draw_text.as_ref(),
+            &format!("{path}/rect[{index}]"),
+            depth,
+            equations,
+        )?;
+    }
+    for (index, ellipse) in run.ellipses.iter().enumerate() {
+        walk_shape_text_visuals(
+            ellipse.draw_text.as_ref(),
+            &format!("{path}/ellipse[{index}]"),
+            depth,
+            equations,
+        )?;
+    }
+    for (index, polygon) in run.polygons.iter().enumerate() {
+        walk_shape_text_visuals(
+            polygon.draw_text.as_ref(),
+            &format!("{path}/polygon[{index}]"),
+            depth,
+            equations,
+        )?;
+    }
     Ok(())
+}
+
+fn walk_shape_text_visuals(
+    draw_text: Option<&HxDrawText>,
+    path: &str,
+    depth: usize,
+    equations: &mut Vec<HwpxVisualEquation>,
+) -> HwpxResult<()> {
+    let Some(draw_text) = draw_text else { return Ok(()) };
+    walk_visual_paragraphs(
+        &draw_text.sub_list.paragraphs,
+        &format!("{path}/drawText"),
+        depth + 1,
+        equations,
+    )
 }
 
 fn walk_table(
