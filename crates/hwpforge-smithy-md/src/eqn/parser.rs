@@ -662,7 +662,7 @@ mod tests {
     #[test]
     fn native_hancom_uppercase_commands_and_spacing() {
         assert_eq!(
-            eqn_to_latex("LEFT(1+i RIGHT)+PLEFT(x RIGHT),~THEREFOREk LEQ 1 TIMES 2 CDOTS`"),
+            eqn_to_latex("LEFT(1+i RIGHT)+P LEFT(x RIGHT),~THEREFOREk LEQ 1 TIMES 2 CDOTS`"),
             "$\\left(1+i\\right)+P\\left(x\\right),~\\therefore k\\le 1\\times 2\\cdots$"
         );
     }
@@ -679,6 +679,11 @@ mod tests {
     #[test]
     fn ordinary_lowercase_identifiers_remain_plain_text() {
         assert_eq!(eqn_to_latex("item+barometer+bars+its"), "$item+barometer+bars+its$");
+    }
+
+    #[test]
+    fn ordinary_uppercase_identifiers_remain_plain_text() {
+        assert_eq!(eqn_to_latex("BRIGHT+CLEFT"), "$BRIGHT+CLEFT$");
     }
 
     #[test]

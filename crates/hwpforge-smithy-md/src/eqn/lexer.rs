@@ -170,8 +170,10 @@ fn is_keyword(s: &str) -> bool {
 
 /// Uppercase commands commonly emitted by Hancom equation editors.
 ///
-/// HancomEQN permits commands to be attached to adjacent identifiers
-/// (`PLEFT`, `THEREFOREk`) rather than separated by whitespace.
+/// HancomEQN permits commands to be attached to following operands when a
+/// case transition provides a boundary (`THEREFOREk`). A preceding operand
+/// requires a real token boundary (`P LEFT`) so ordinary identifiers remain
+/// indivisible.
 const UPPERCASE_COMMANDS: &[(&str, &str)] = &[
     ("THEREFORE", "therefore"),
     ("BECAUSE", "because"),
@@ -198,27 +200,15 @@ fn push_identifier_tokens(word: &str, tokens: &mut Vec<Token>) {
         return;
     }
 
-    let uppercase_match = UPPERCASE_COMMANDS.iter().find_map(|(source, canonical)| {
+    let attached_operand = UPPERCASE_COMMANDS.iter().find_map(|(source, canonical)| {
         let attached_operand = word
             .strip_prefix(source)
             .filter(|suffix| suffix.chars().next().is_some_and(|next| !next.is_ascii_uppercase()));
-        if attached_operand.is_some() {
-            return Some((0, *source, *canonical));
-        }
-
-        let attached_command = word.strip_suffix(source).filter(|prefix| {
-            let mut characters = prefix.chars();
-            characters.next().is_some_and(|first| first.is_ascii_alphabetic())
-                && characters.next().is_none()
-        });
-        attached_command.map(|prefix| (prefix.len(), *source, *canonical))
+        attached_operand.map(|_| (*source, *canonical))
     });
-    if let Some((index, source, canonical)) = uppercase_match {
-        if index > 0 {
-            push_identifier_tokens(&word[..index], tokens);
-        }
+    if let Some((source, canonical)) = attached_operand {
         tokens.push(Token::Keyword(canonical.to_string()));
-        push_identifier_tokens(&word[index + source.len()..], tokens);
+        push_identifier_tokens(&word[source.len()..], tokens);
         return;
     }
 
@@ -411,7 +401,7 @@ mod tests {
     #[test]
     fn tokenize_uppercase_and_attached_hancom_commands() {
         assert_eq!(
-            tokenize("PLEFT(x RIGHT),~THEREFOREk LEQ 1 TIMES 2 CDOTS"),
+            tokenize("P LEFT(x RIGHT),~THEREFOREk LEQ 1 TIMES 2 CDOTS"),
             vec![
                 Token::Text("P".into()),
                 Token::Keyword("left".into()),
@@ -434,7 +424,16 @@ mod tests {
 
     #[test]
     fn ordinary_uppercase_identifiers_do_not_match_command_substrings() {
-        assert_eq!(tokenize("SIMPLE"), vec![Token::Text("SIMPLE".into())]);
+        assert_eq!(
+            tokenize("SIMPLE+BRIGHT+CLEFT"),
+            vec![
+                Token::Text("SIMPLE".into()),
+                Token::Text("+".into()),
+                Token::Text("BRIGHT".into()),
+                Token::Text("+".into()),
+                Token::Text("CLEFT".into()),
+            ]
+        );
     }
 
     #[test]
