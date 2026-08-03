@@ -21,10 +21,12 @@
 ### Task 1: Schema v4 RED contract
 
 **Files:**
+
 - Modify: `crates/hwpforge-smithy-hwpx/tests/visual_equations.rs`
 - Modify: `crates/hwpforge-bindings-cli/tests/cli_integration.rs`
 
 **Interfaces:**
+
 - Consumes: `HwpxDecoder::decode_with_report`, CLI `to-md --json`
 - Produces: schema v4와 `render_base_unit` 공개 JSON 계약을 고정하는 테스트
 
@@ -36,9 +38,11 @@
 ### Task 2: Minimal schema v4 implementation
 
 **Files:**
+
 - Modify: `crates/hwpforge-smithy-hwpx/src/decoder/visual_equations.rs`
 
 **Interfaces:**
+
 - Consumes: `HxEquation.base_unit`, `HxEquation.sz.height`
 - Produces: `HwpxVisualEquationGeometry.render_base_unit: Option<u32>`
 
@@ -50,9 +54,11 @@
 ### Task 3: Corpus and workspace verification
 
 **Files:**
+
 - Verify only: actual M1-02 projection and generated visual-equations JSON
 
 **Interfaces:**
+
 - Consumes: HwpForge CLI `to-md`, 실제 Q448/Q524 HWPX projection
 - Produces: actual corpus `render_base_unit` assertions and workspace verification evidence
 
