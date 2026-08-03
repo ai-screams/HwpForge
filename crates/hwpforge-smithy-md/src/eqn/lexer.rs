@@ -185,10 +185,6 @@ const UPPERCASE_COMMANDS: &[(&str, &str)] = &[
     ("SIM", "sim"),
 ];
 
-/// Lowercase commands observed attached directly to their operand.
-const ATTACHED_COMMAND_PREFIXES: &[&str] =
-    &["sqrt", "bold", "cdots", "over", "bar", "box", "rm", "it"];
-
 fn push_identifier_tokens(word: &str, tokens: &mut Vec<Token>) {
     if word.is_empty() {
         return;
@@ -223,14 +219,6 @@ fn push_identifier_tokens(word: &str, tokens: &mut Vec<Token>) {
         }
         tokens.push(Token::Keyword(canonical.to_string()));
         push_identifier_tokens(&word[index + source.len()..], tokens);
-        return;
-    }
-
-    if let Some(prefix) = ATTACHED_COMMAND_PREFIXES.iter().find(|prefix| {
-        word.strip_prefix(**prefix).is_some_and(|suffix| suffix.chars().count() == 1)
-    }) {
-        tokens.push(Token::Keyword((*prefix).to_string()));
-        push_identifier_tokens(&word[prefix.len()..], tokens);
         return;
     }
 
@@ -452,19 +440,23 @@ mod tests {
     #[test]
     fn ordinary_lowercase_identifiers_do_not_match_command_prefixes() {
         assert_eq!(
-            tokenize("item+barometer"),
+            tokenize("item+barometer+bars+its"),
             vec![
                 Token::Text("item".into()),
                 Token::Text("+".into()),
                 Token::Text("barometer".into()),
+                Token::Text("+".into()),
+                Token::Text("bars".into()),
+                Token::Text("+".into()),
+                Token::Text("its".into()),
             ]
         );
     }
 
     #[test]
-    fn tokenize_attached_root_accent_fraction_and_style_commands() {
+    fn tokenize_root_accent_fraction_and_style_commands_at_boundaries() {
         assert_eq!(
-            tokenize("sqrta+barz+3 overk+rmO+itf"),
+            tokenize("sqrt a+bar z+3 over k+rm O+it f"),
             vec![
                 Token::Keyword("sqrt".into()),
                 Token::Text("a".into()),
@@ -481,6 +473,20 @@ mod tests {
                 Token::Text("+".into()),
                 Token::Keyword("it".into()),
                 Token::Text("f".into()),
+            ]
+        );
+        assert_eq!(
+            tokenize("sqrta+barz+overk+rmO+itf"),
+            vec![
+                Token::Text("sqrta".into()),
+                Token::Text("+".into()),
+                Token::Text("barz".into()),
+                Token::Text("+".into()),
+                Token::Text("overk".into()),
+                Token::Text("+".into()),
+                Token::Text("rmO".into()),
+                Token::Text("+".into()),
+                Token::Text("itf".into()),
             ]
         );
     }

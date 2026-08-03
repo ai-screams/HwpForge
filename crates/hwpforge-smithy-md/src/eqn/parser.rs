@@ -668,16 +668,17 @@ mod tests {
     }
 
     #[test]
-    fn attached_root_accent_fraction_and_style_commands() {
+    fn root_accent_fraction_and_style_commands_at_boundaries() {
         assert_eq!(
-            eqn_to_latex("sqrta+barz+3 overk+rmO+itf"),
+            eqn_to_latex("sqrt a+bar z+3 over k+rm O+it f"),
             "$\\sqrt{a}+\\overline{z}+\\frac{3}{k}+O+f$"
         );
+        assert_eq!(eqn_to_latex("sqrta+barz+overk+rmO+itf"), "$sqrta+barz+overk+rmO+itf$");
     }
 
     #[test]
     fn ordinary_lowercase_identifiers_remain_plain_text() {
-        assert_eq!(eqn_to_latex("item+barometer"), "$item+barometer$");
+        assert_eq!(eqn_to_latex("item+barometer+bars+its"), "$item+barometer+bars+its$");
     }
 
     #[test]
