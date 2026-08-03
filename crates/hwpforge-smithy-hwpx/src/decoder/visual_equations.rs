@@ -303,6 +303,26 @@ fn walk_ctrl(
     depth: usize,
     equations: &mut Vec<HwpxVisualEquation>,
 ) -> HwpxResult<()> {
+    if let Some(header) = &ctrl.header {
+        if let Some(sub_list) = &header.sub_list {
+            walk_visual_paragraphs(
+                &sub_list.paragraphs,
+                &format!("{path}/header"),
+                depth + 1,
+                equations,
+            )?;
+        }
+    }
+    if let Some(footer) = &ctrl.footer {
+        if let Some(sub_list) = &footer.sub_list {
+            walk_visual_paragraphs(
+                &sub_list.paragraphs,
+                &format!("{path}/footer"),
+                depth + 1,
+                equations,
+            )?;
+        }
+    }
     if let Some(footnote) = &ctrl.foot_note {
         walk_visual_paragraphs(
             &footnote.sub_list.paragraphs,
@@ -533,6 +553,16 @@ fn collect_equations_from_ctrl<'a>(
     depth: usize,
     equations: &mut Vec<&'a HxEquation>,
 ) -> HwpxResult<()> {
+    if let Some(header) = &ctrl.header {
+        if let Some(sub_list) = &header.sub_list {
+            collect_equations_from_paragraphs(&sub_list.paragraphs, depth + 1, equations)?;
+        }
+    }
+    if let Some(footer) = &ctrl.footer {
+        if let Some(sub_list) = &footer.sub_list {
+            collect_equations_from_paragraphs(&sub_list.paragraphs, depth + 1, equations)?;
+        }
+    }
     if let Some(footnote) = &ctrl.foot_note {
         collect_equations_from_paragraphs(&footnote.sub_list.paragraphs, depth + 1, equations)?;
     }

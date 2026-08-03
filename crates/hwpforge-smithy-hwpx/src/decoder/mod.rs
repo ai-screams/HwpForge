@@ -72,7 +72,7 @@ impl HwpxDecoder {
     /// 3. Parse `Contents/section*.xml` → paragraphs + page settings
     /// 4. Assemble `Document<Draft>` with sections
     pub fn decode(bytes: &[u8]) -> HwpxResult<HwpxDocument> {
-        Self::decode_with_report(bytes).map(|(document, _report)| document)
+        Self::decode_internal(bytes, false).map(|(document, _report)| document)
     }
 
     /// Decodes an HWPX file and preserves equations embedded in visual objects.
@@ -82,6 +82,13 @@ impl HwpxDecoder {
     /// remain part of the decoded Core document and are not duplicated there.
     pub fn decode_with_report(
         bytes: &[u8],
+    ) -> HwpxResult<(HwpxDocument, HwpxVisualEquationReport)> {
+        Self::decode_internal(bytes, true)
+    }
+
+    fn decode_internal(
+        bytes: &[u8],
+        include_visual_equations: bool,
     ) -> HwpxResult<(HwpxDocument, HwpxVisualEquationReport)> {
         // Step 1: Open package
         let mut pkg = package::PackageReader::new(bytes)?;
@@ -117,7 +124,11 @@ impl HwpxDecoder {
 
         for i in 0..section_count {
             let section_xml = pkg.read_section_xml(i)?;
-            let result = section::parse_section(&section_xml, i, &chart_xmls)?;
+            let result = if include_visual_equations {
+                section::parse_section_with_visual_equations(&section_xml, i, &chart_xmls)?
+            } else {
+                section::parse_section(&section_xml, i, &chart_xmls)?
+            };
 
             visual_equations.extend(result.visual_equations.iter().cloned());
 

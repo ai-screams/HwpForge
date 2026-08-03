@@ -136,11 +136,31 @@ pub fn parse_section(
     section_index: usize,
     chart_xmls: &HashMap<String, String>,
 ) -> HwpxResult<SectionParseResult> {
+    parse_section_impl(xml, section_index, chart_xmls, false)
+}
+
+pub(crate) fn parse_section_with_visual_equations(
+    xml: &str,
+    section_index: usize,
+    chart_xmls: &HashMap<String, String>,
+) -> HwpxResult<SectionParseResult> {
+    parse_section_impl(xml, section_index, chart_xmls, true)
+}
+
+fn parse_section_impl(
+    xml: &str,
+    section_index: usize,
+    chart_xmls: &HashMap<String, String>,
+    include_visual_equations: bool,
+) -> HwpxResult<SectionParseResult> {
     let file_hint = format!("Contents/section{section_index}.xml");
     let section: HxSection = from_str(xml)
         .map_err(|e| HwpxError::XmlParse { file: file_hint, detail: e.to_string() })?;
-    let visual_equations =
-        crate::decoder::visual_equations::collect_section(&section.paragraphs, section_index)?;
+    let visual_equations = if include_visual_equations {
+        crate::decoder::visual_equations::collect_section(&section.paragraphs, section_index)?
+    } else {
+        Vec::new()
+    };
 
     let mut page_settings = None;
     let mut header = None;

@@ -186,6 +186,48 @@ fn visual_equations_preserve_interleaved_nested_container_order() {
 }
 
 #[test]
+fn visual_equations_report_traverses_header_and_footer_controls() {
+    let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
+      <ctrl><header id="header-1" applyPageType="BOTH"><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+        <pic id="header-picture" instid="header-picture-inst"><caption><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+          <equation id="header-equation"><script>header</script></equation>
+        </run></p></subList></caption></pic>
+      </run></p></subList></header></ctrl>
+      <ctrl><footer id="footer-1" applyPageType="BOTH"><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+        <container instid="footer-container"><rect id="footer-rect" instid="footer-rect-inst">
+          <drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+            <equation id="footer-equation"><script>footer</script></equation>
+          </run></p></subList></drawText>
+        </rect></container>
+      </run></p></subList></footer></ctrl>
+    </run></p></sec>"#;
+
+    let (_document, report) =
+        HwpxDecoder::decode_with_report(&fixture_with_section(section)).unwrap();
+
+    let ids: Vec<&str> = report.equations.iter().map(|equation| equation.id.as_str()).collect();
+    assert_eq!(ids, vec!["header-equation", "footer-equation"]);
+    assert!(report.equations[0].parent_path.contains("/header/"));
+    assert!(report.equations[1].parent_path.contains("/footer/"));
+}
+
+#[test]
+fn legacy_decode_ignores_visual_report_projection_overflow() {
+    let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
+      <container instid="group-inst"><rect id="overflow-rect" instid="overflow-rect-inst">
+        <offset x="2147483647" y="0"/>
+        <drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+          <equation id="overflow-equation"><pos horzOffset="1" vertOffset="0"/><script>x</script></equation>
+        </run></p></subList></drawText>
+      </rect></container>
+    </run></p></sec>"#;
+    let fixture = fixture_with_section(section);
+
+    assert!(HwpxDecoder::decode(&fixture).is_ok());
+    assert!(HwpxDecoder::decode_with_report(&fixture).is_err());
+}
+
+#[test]
 fn visual_equation_explicit_zero_z_order_does_not_inherit_parent() {
     let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
       <container instid="group-inst"><rect id="rect-1" instid="rect-inst" zOrder="41">
