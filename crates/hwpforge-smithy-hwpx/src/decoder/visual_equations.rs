@@ -409,7 +409,22 @@ fn walk_ctrl(
             equations,
         )?;
     }
+    if let Some(sub_list) = memo_sub_list(ctrl) {
+        walk_visual_paragraphs(
+            &sub_list.paragraphs,
+            &format!("{path}/fieldBegin"),
+            depth + 1,
+            equations,
+        )?;
+    }
     Ok(())
+}
+
+fn memo_sub_list(ctrl: &HxCtrl) -> Option<&HxSubList> {
+    ctrl.field_begin
+        .as_ref()
+        .filter(|field| field.field_type.eq_ignore_ascii_case("MEMO"))
+        .and_then(|field| field.sub_list.as_ref())
 }
 
 fn collect_picture(
@@ -824,7 +839,7 @@ fn collect_owned_visual_paragraphs(
                     collect_picture(
                         picture,
                         &format!("{run_path}/picture[{index}]"),
-                        depth,
+                        depth + 1,
                         Some(parent),
                         equations,
                     )?;
@@ -833,7 +848,7 @@ fn collect_owned_visual_paragraphs(
                     collect_container(
                         container,
                         &format!("{run_path}/container[{index}]"),
-                        depth,
+                        depth + 1,
                         None,
                         Some(parent),
                         equations,
@@ -909,14 +924,14 @@ fn collect_owned_visual_paragraphs(
                         HxRunChildOrder::Picture(index) => collect_picture(
                             &run.pictures[index],
                             &format!("{run_path}/picture[{index}]"),
-                            depth,
+                            depth + 1,
                             Some(parent),
                             equations,
                         )?,
                         HxRunChildOrder::Container(index) => collect_container(
                             &run.containers[index],
                             &format!("{run_path}/container[{index}]"),
-                            depth,
+                            depth + 1,
                             None,
                             Some(parent),
                             equations,
@@ -1084,6 +1099,17 @@ fn collect_owned_visual_ctrl(
             parent,
             parent_path,
             &format!("{path}/endnote"),
+            depth + 1,
+            parent_order,
+            equations,
+        )?;
+    }
+    if let Some(sub_list) = memo_sub_list(ctrl) {
+        collect_owned_visual_paragraphs(
+            &sub_list.paragraphs,
+            parent,
+            parent_path,
+            &format!("{path}/fieldBegin"),
             depth + 1,
             parent_order,
             equations,

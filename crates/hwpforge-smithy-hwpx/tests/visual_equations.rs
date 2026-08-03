@@ -99,6 +99,33 @@ fn nested_table_controls_section(levels: usize) -> String {
     )
 }
 
+fn nested_picture_captions_section(levels: usize) -> String {
+    let mut visual =
+        r#"<equation id="deep-picture-equation"><script>deep picture</script></equation>"#
+            .to_string();
+    for level in (0..levels).rev() {
+        visual = format!(
+            r#"<pic id="picture-{level}" instid="picture-inst-{level}"><caption><subList><p paraPrIDRef="0"><run charPrIDRef="0">{visual}</run></p></subList></caption></pic>"#
+        );
+    }
+    format!(
+        r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">{visual}</run></p></sec>"#
+    )
+}
+
+fn nested_group_shape_text_section(levels: usize) -> String {
+    let mut visual =
+        r#"<equation id="deep-group-equation"><script>deep group</script></equation>"#.to_string();
+    for level in (0..levels).rev() {
+        visual = format!(
+            r#"<container instid="container-{level}"><rect id="rect-{level}" instid="rect-inst-{level}"><drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">{visual}</run></p></subList></drawText></rect></container>"#
+        );
+    }
+    format!(
+        r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">{visual}</run></p></sec>"#
+    )
+}
+
 #[test]
 fn visual_equations_report_preserves_only_supported_visual_domains() {
     let (_document, report) = HwpxDecoder::decode_with_report(&visual_equations_fixture()).unwrap();
@@ -660,6 +687,42 @@ fn visual_equations_report_traverses_header_and_footer_controls() {
 }
 
 #[test]
+fn visual_equations_report_traverses_memo_field_sublists() {
+    let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
+      <ctrl><fieldBegin type="MEMO" fieldid="1"><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+        <pic id="memo-picture" instid="memo-picture-inst"><caption><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+          <equation id="memo-picture-equation"><script>memo picture</script></equation>
+        </run></p></subList></caption></pic>
+      </run></p></subList></fieldBegin></ctrl>
+      <pic id="outer-picture" instid="outer-picture-inst"><caption><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+        <ctrl><fieldBegin type="MEMO" fieldid="2"><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+          <container instid="memo-container"><rect id="memo-rect" instid="memo-rect-inst"><drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+            <equation id="memo-group-equation"><script>memo group</script></equation>
+          </run></p></subList></drawText></rect></container>
+        </run></p></subList></fieldBegin></ctrl>
+      </run></p></subList></caption></pic>
+    </run></p></sec>"#;
+
+    let (_document, report) =
+        HwpxDecoder::decode_with_report(&fixture_with_section(section)).unwrap();
+
+    let identities: Vec<(&str, Option<&str>)> = report
+        .equations
+        .iter()
+        .map(|equation| (equation.id.as_str(), equation.parent_object_id.as_deref()))
+        .collect();
+    assert_eq!(
+        identities,
+        vec![
+            ("memo-picture-equation", Some("memo-picture")),
+            ("memo-group-equation", Some("memo-rect")),
+        ]
+    );
+    assert!(report.equations[0].parent_path.contains("/fieldBegin/"));
+    assert!(report.equations[1].parent_path.contains("/fieldBegin/"));
+}
+
+#[test]
 fn legacy_decode_ignores_visual_report_projection_overflow() {
     let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
       <container instid="group-inst"><rect id="overflow-rect" instid="overflow-rect-inst">
@@ -1002,6 +1065,45 @@ fn visual_equation_table_control_nesting_depth_exceeded_fails_closed() {
 
     match result {
         Ok(_) => panic!("33 table/control levels must fail closed"),
+        Err(error) => assert!(
+            error.to_string().contains("visual-equation nesting depth 32 exceeds limit of 32"),
+            "unexpected error: {error}"
+        ),
+    }
+}
+
+#[test]
+fn visual_equation_nested_picture_caption_depth_is_enforced() {
+    let boundary = nested_picture_captions_section(32);
+    let (_document, report) = HwpxDecoder::decode_with_report(&fixture_with_section(&boundary))
+        .expect("32 nested picture captions must remain within the decoder boundary");
+    assert_eq!(report.equations.len(), 1);
+    assert_eq!(report.equations[0].id, "deep-picture-equation");
+
+    let exceeded = nested_picture_captions_section(33);
+    let result = HwpxDecoder::decode_with_report(&fixture_with_section(&exceeded));
+    match result {
+        Ok(_) => panic!("33 nested picture captions must fail closed"),
+        Err(error) => assert!(
+            error.to_string().contains("visual-equation nesting depth 32 exceeds limit of 32"),
+            "unexpected error: {error}"
+        ),
+    }
+}
+
+#[test]
+fn visual_equation_nested_group_shape_text_depth_is_enforced() {
+    let group_boundary = nested_group_shape_text_section(32);
+    let (_document, report) =
+        HwpxDecoder::decode_with_report(&fixture_with_section(&group_boundary))
+            .expect("32 nested group shape texts must remain within the decoder boundary");
+    assert_eq!(report.equations.len(), 1);
+    assert_eq!(report.equations[0].id, "deep-group-equation");
+
+    let group_exceeded = nested_group_shape_text_section(33);
+    let result = HwpxDecoder::decode_with_report(&fixture_with_section(&group_exceeded));
+    match result {
+        Ok(_) => panic!("33 nested group shape texts must fail closed"),
         Err(error) => assert!(
             error.to_string().contains("visual-equation nesting depth 32 exceeds limit of 32"),
             "unexpected error: {error}"
