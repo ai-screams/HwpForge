@@ -488,6 +488,152 @@ fn visual_equations_preserve_nested_visual_parent_and_interleaved_order() {
 }
 
 #[test]
+fn visual_equations_compose_ancestor_transform_into_nearer_nested_visual_parents() {
+    let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
+      <pic id="outer-picture" instid="outer-picture-inst">
+        <pos horzOffset="100" vertOffset="200"/>
+        <renderingInfo><scaMatrix e1="2" e2="0" e3="5" e4="0" e5="3" e6="7"/></renderingInfo>
+        <caption><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+          <pic id="nested-picture" instid="nested-picture-inst">
+            <pos horzOffset="10" vertOffset="20"/>
+            <renderingInfo><scaMatrix e1="4" e2="0" e3="11" e4="0" e5="5" e6="13"/></renderingInfo>
+            <caption><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+              <equation id="nested-picture-equation"><sz width="10" height="20"/><pos horzOffset="1" vertOffset="2"/><script>picture</script></equation>
+            </run></p></subList></caption>
+          </pic>
+          <container instid="nested-container"><pos horzOffset="30" vertOffset="40"/>
+            <rect id="nested-rect" instid="nested-rect-inst">
+              <offset x="4" y="5"/>
+              <orgSz width="30" height="40"/>
+              <renderingInfo><scaMatrix e1="6" e2="0" e3="17" e4="0" e5="7" e6="19"/></renderingInfo>
+              <drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+                <equation id="nested-container-equation"><sz width="10" height="20"/><pos horzOffset="1" vertOffset="2"/><script>container</script></equation>
+              </run></p></subList></drawText>
+            </rect>
+          </container>
+        </run></p></subList></caption>
+      </pic>
+      <container instid="outer-container"><rect id="outer-rect" instid="outer-rect-inst">
+        <pos horzOffset="1000" vertOffset="2000"/>
+        <renderingInfo><scaMatrix e1="2" e2="0" e3="5" e4="0" e5="3" e6="7"/></renderingInfo>
+        <drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+          <pic id="group-nested-picture" instid="group-nested-picture-inst">
+            <pos horzOffset="10" vertOffset="20"/>
+            <renderingInfo><scaMatrix e1="4" e2="0" e3="11" e4="0" e5="5" e6="13"/></renderingInfo>
+            <caption><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+              <equation id="group-nested-picture-equation"><sz width="10" height="20"/><pos horzOffset="1" vertOffset="2"/><script>group picture</script></equation>
+            </run></p></subList></caption>
+          </pic>
+          <container instid="group-nested-container"><pos horzOffset="30" vertOffset="40"/>
+            <rect id="group-nested-rect" instid="group-nested-rect-inst">
+              <offset x="4" y="5"/>
+              <orgSz width="30" height="40"/>
+              <renderingInfo><scaMatrix e1="6" e2="0" e3="17" e4="0" e5="7" e6="19"/></renderingInfo>
+              <drawText><subList><p paraPrIDRef="0"><run charPrIDRef="0">
+                <equation id="group-nested-container-equation"><sz width="10" height="20"/><pos horzOffset="1" vertOffset="2"/><script>group container</script></equation>
+              </run></p></subList></drawText>
+            </rect>
+          </container>
+        </run></p></subList></drawText>
+      </rect></container>
+    </run></p></sec>"#;
+
+    let (_document, report) =
+        HwpxDecoder::decode_with_report(&fixture_with_section(section)).unwrap();
+
+    let nested_picture = &report.equations[0];
+    assert_eq!(nested_picture.parent_object_id.as_deref(), Some("nested-picture"));
+    assert_eq!(
+        (nested_picture.raw_position.horz_offset, nested_picture.raw_position.vert_offset,),
+        (111, 222)
+    );
+    assert_eq!(
+        (nested_picture.translation.horz.as_str(), nested_picture.translation.vert.as_str(),),
+        ("27", "46")
+    );
+    assert_eq!(
+        nested_picture
+            .display_position
+            .map(|position| { (position.horz_offset, position.vert_offset) }),
+        Some((138, 268))
+    );
+    assert_eq!(
+        (nested_picture.geometry.scale.horz.as_str(), nested_picture.geometry.scale.vert.as_str(),),
+        ("8", "15")
+    );
+
+    let nested_container = &report.equations[1];
+    assert_eq!(nested_container.parent_object_id.as_deref(), Some("nested-rect"));
+    assert_eq!(
+        (nested_container.raw_position.horz_offset, nested_container.raw_position.vert_offset,),
+        (135, 247)
+    );
+    assert_eq!(
+        (nested_container.translation.horz.as_str(), nested_container.translation.vert.as_str(),),
+        ("39", "64")
+    );
+    assert_eq!(
+        nested_container
+            .display_position
+            .map(|position| { (position.horz_offset, position.vert_offset) }),
+        Some((174, 311))
+    );
+    assert_eq!(
+        (
+            nested_container.geometry.scale.horz.as_str(),
+            nested_container.geometry.scale.vert.as_str(),
+        ),
+        ("12", "21")
+    );
+
+    let group_nested_picture = &report.equations[2];
+    assert_eq!(group_nested_picture.parent_object_id.as_deref(), Some("group-nested-picture"));
+    assert_eq!(
+        (
+            group_nested_picture.raw_position.horz_offset,
+            group_nested_picture.raw_position.vert_offset,
+        ),
+        (1011, 2022)
+    );
+    assert_eq!(
+        group_nested_picture
+            .display_position
+            .map(|position| { (position.horz_offset, position.vert_offset) }),
+        Some((1038, 2068))
+    );
+    assert_eq!(
+        (
+            group_nested_picture.geometry.scale.horz.as_str(),
+            group_nested_picture.geometry.scale.vert.as_str(),
+        ),
+        ("8", "15")
+    );
+
+    let group_nested_container = &report.equations[3];
+    assert_eq!(group_nested_container.parent_object_id.as_deref(), Some("group-nested-rect"));
+    assert_eq!(
+        (
+            group_nested_container.raw_position.horz_offset,
+            group_nested_container.raw_position.vert_offset,
+        ),
+        (1035, 2047)
+    );
+    assert_eq!(
+        group_nested_container
+            .display_position
+            .map(|position| { (position.horz_offset, position.vert_offset) }),
+        Some((1074, 2111))
+    );
+    assert_eq!(
+        (
+            group_nested_container.geometry.scale.horz.as_str(),
+            group_nested_container.geometry.scale.vert.as_str(),
+        ),
+        ("12", "21")
+    );
+}
+
+#[test]
 fn visual_equations_report_traverses_header_and_footer_controls() {
     let section = r#"<sec><p id="1" paraPrIDRef="0" styleIDRef="0"><run charPrIDRef="0">
       <ctrl><header id="header-1" applyPageType="BOTH"><subList><p paraPrIDRef="0"><run charPrIDRef="0">

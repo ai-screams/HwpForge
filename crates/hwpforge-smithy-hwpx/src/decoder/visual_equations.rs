@@ -230,6 +230,7 @@ fn walk_visual_run(
                     &run.pictures[index],
                     &format!("{path}/picture[{index}]"),
                     depth,
+                    None,
                     equations,
                 )?;
             }
@@ -241,6 +242,7 @@ fn walk_visual_run(
                     &run.containers[index],
                     &format!("{path}/container[{index}]"),
                     depth,
+                    None,
                     None,
                     equations,
                 )?;
@@ -279,7 +281,7 @@ fn walk_run_by_type(
         walk_table(table, &format!("{path}/table[{index}]"), depth, equations)?;
     }
     for (index, picture) in run.pictures.iter().enumerate() {
-        collect_picture(picture, &format!("{path}/picture[{index}]"), depth, equations)?;
+        collect_picture(picture, &format!("{path}/picture[{index}]"), depth, None, equations)?;
     }
     for (index, ctrl) in run.ctrls.iter().enumerate() {
         walk_ctrl(ctrl, &format!("{path}/ctrl[{index}]"), depth, equations)?;
@@ -289,6 +291,7 @@ fn walk_run_by_type(
             container,
             &format!("{path}/container[{index}]"),
             depth,
+            None,
             None,
             equations,
         )?;
@@ -413,38 +416,64 @@ fn collect_picture(
     pic: &HxPic,
     path: &str,
     depth: usize,
+    ancestor: Option<VisualParent<'_>>,
     equations: &mut Vec<HwpxVisualEquation>,
 ) -> HwpxResult<()> {
     let Some(caption) = &pic.caption else { return Ok(()) };
-    let parent = VisualParent {
+    let child_position = pic
+        .pos
+        .as_ref()
+        .map(position_from_table)
+        .or_else(|| pic.offset.as_ref().map(position_from_offset));
+    let child_scale = pic
+        .rendering_info
+        .as_ref()
+        .map(|rendering| VisualScale {
+            horz: rendering.sca_matrix.e1.as_str(),
+            vert: rendering.sca_matrix.e5.as_str(),
+        })
+        .unwrap_or_default();
+    let child_translation = pic
+        .rendering_info
+        .as_ref()
+        .map(|rendering| VisualTranslation {
+            horz: rendering.sca_matrix.e3.as_str(),
+            vert: rendering.sca_matrix.e6.as_str(),
+        })
+        .unwrap_or_default();
+    let parent_base = VisualParent {
         domain: HwpxVisualEquationDomain::PictureCaption,
         kind: HwpxVisualEquationParentKind::Picture,
         object_id: &pic.id,
         instance_id: &pic.instid,
         z_order: pic.z_order,
-        position: pic
-            .pos
-            .as_ref()
-            .map(position_from_table)
-            .or_else(|| pic.offset.as_ref().map(position_from_offset)),
+        position: child_position,
         raw_box_size: None,
-        scale: pic
-            .rendering_info
-            .as_ref()
-            .map(|rendering| VisualScale {
-                horz: rendering.sca_matrix.e1.as_str(),
-                vert: rendering.sca_matrix.e5.as_str(),
-            })
-            .unwrap_or_default(),
-        translation: pic
-            .rendering_info
-            .as_ref()
-            .map(|rendering| VisualTranslation {
-                horz: rendering.sca_matrix.e3.as_str(),
-                vert: rendering.sca_matrix.e6.as_str(),
-            })
-            .unwrap_or_default(),
+        scale: child_scale,
+        translation: child_translation,
         compose_child_position: false,
+    };
+    let Some(ancestor) = ancestor else {
+        return collect_parent_equations(&caption.sub_list, parent_base, path, depth, equations);
+    };
+    let scale_horz = compose_scale(ancestor.scale.horz, child_scale.horz)?;
+    let scale_vert = compose_scale(ancestor.scale.vert, child_scale.vert)?;
+    let translation_horz = compose_translation(
+        ancestor.translation.horz,
+        ancestor.scale.horz,
+        child_translation.horz,
+    )?;
+    let translation_vert = compose_translation(
+        ancestor.translation.vert,
+        ancestor.scale.vert,
+        child_translation.vert,
+    )?;
+    let parent = VisualParent {
+        position: add_optional_positions(ancestor.position, child_position)?,
+        scale: VisualScale { horz: &scale_horz, vert: &scale_vert },
+        translation: VisualTranslation { horz: &translation_horz, vert: &translation_vert },
+        compose_child_position: true,
+        ..parent_base
     };
     collect_parent_equations(&caption.sub_list, parent, path, depth, equations)
 }
@@ -454,11 +483,12 @@ fn collect_container(
     path: &str,
     depth: usize,
     inherited_position: Option<HwpxVisualEquationPosition>,
+    ancestor: Option<VisualParent<'_>>,
     equations: &mut Vec<HwpxVisualEquation>,
 ) -> HwpxResult<()> {
     ensure_depth(depth)?;
     let container_position = add_optional_positions(
-        inherited_position,
+        inherited_position.or_else(|| ancestor.and_then(|parent| parent.position)),
         container.pos.as_ref().map(position_from_table),
     )?;
     if !container.child_order.is_empty() {
@@ -469,6 +499,7 @@ fn collect_container(
                     &format!("{path}/rect[{rect_index}]"),
                     depth,
                     container_position,
+                    ancestor,
                     equations,
                 )?,
                 HxContainerChildOrder::Ellipse(ellipse_index) => collect_group_ellipse(
@@ -476,6 +507,7 @@ fn collect_container(
                     &format!("{path}/ellipse[{ellipse_index}]"),
                     depth,
                     container_position,
+                    ancestor,
                     equations,
                 )?,
                 HxContainerChildOrder::Polygon(polygon_index) => collect_group_polygon(
@@ -483,6 +515,7 @@ fn collect_container(
                     &format!("{path}/polygon[{polygon_index}]"),
                     depth,
                     container_position,
+                    ancestor,
                     equations,
                 )?,
                 HxContainerChildOrder::Container(container_index) => collect_container(
@@ -490,6 +523,7 @@ fn collect_container(
                     &format!("{path}/container[{container_index}]"),
                     depth + 1,
                     container_position,
+                    ancestor,
                     equations,
                 )?,
                 _ => {}
@@ -503,6 +537,7 @@ fn collect_container(
             &format!("{path}/rect[{rect_index}]"),
             depth,
             container_position,
+            ancestor,
             equations,
         )?;
     }
@@ -512,6 +547,7 @@ fn collect_container(
             &format!("{path}/ellipse[{ellipse_index}]"),
             depth,
             container_position,
+            ancestor,
             equations,
         )?;
     }
@@ -521,6 +557,7 @@ fn collect_container(
             &format!("{path}/polygon[{polygon_index}]"),
             depth,
             container_position,
+            ancestor,
             equations,
         )?;
     }
@@ -530,6 +567,7 @@ fn collect_container(
             &format!("{path}/container[{container_index}]"),
             depth + 1,
             container_position,
+            ancestor,
             equations,
         )?;
     }
@@ -541,6 +579,7 @@ fn collect_group_rect(
     path: &str,
     depth: usize,
     container_position: Option<HwpxVisualEquationPosition>,
+    ancestor: Option<VisualParent<'_>>,
     equations: &mut Vec<HwpxVisualEquation>,
 ) -> HwpxResult<()> {
     collect_group_shape(
@@ -555,6 +594,7 @@ fn collect_group_rect(
         path,
         depth,
         container_position,
+        ancestor,
         equations,
     )
 }
@@ -564,6 +604,7 @@ fn collect_group_ellipse(
     path: &str,
     depth: usize,
     container_position: Option<HwpxVisualEquationPosition>,
+    ancestor: Option<VisualParent<'_>>,
     equations: &mut Vec<HwpxVisualEquation>,
 ) -> HwpxResult<()> {
     collect_group_shape(
@@ -578,6 +619,7 @@ fn collect_group_ellipse(
         path,
         depth,
         container_position,
+        ancestor,
         equations,
     )
 }
@@ -587,6 +629,7 @@ fn collect_group_polygon(
     path: &str,
     depth: usize,
     container_position: Option<HwpxVisualEquationPosition>,
+    ancestor: Option<VisualParent<'_>>,
     equations: &mut Vec<HwpxVisualEquation>,
 ) -> HwpxResult<()> {
     collect_group_shape(
@@ -601,6 +644,7 @@ fn collect_group_polygon(
         path,
         depth,
         container_position,
+        ancestor,
         equations,
     )
 }
@@ -618,12 +662,25 @@ fn collect_group_shape(
     path: &str,
     depth: usize,
     container_position: Option<HwpxVisualEquationPosition>,
+    ancestor: Option<VisualParent<'_>>,
     equations: &mut Vec<HwpxVisualEquation>,
 ) -> HwpxResult<()> {
     let Some(draw_text) = draw_text else { return Ok(()) };
     let shape_position =
         offset.map(position_from_offset).or_else(|| position.map(position_from_table));
-    let parent = VisualParent {
+    let child_scale = rendering_info
+        .map(|rendering| VisualScale {
+            horz: rendering.sca_matrix.e1.as_str(),
+            vert: rendering.sca_matrix.e5.as_str(),
+        })
+        .unwrap_or_default();
+    let child_translation = rendering_info
+        .map(|rendering| VisualTranslation {
+            horz: rendering.sca_matrix.e3.as_str(),
+            vert: rendering.sca_matrix.e6.as_str(),
+        })
+        .unwrap_or_default();
+    let parent_base = VisualParent {
         domain: HwpxVisualEquationDomain::GroupDrawText,
         kind: HwpxVisualEquationParentKind::Container,
         object_id,
@@ -631,19 +688,29 @@ fn collect_group_shape(
         z_order,
         position: add_optional_positions(container_position, shape_position)?,
         raw_box_size: original_size.map(size_from_original),
-        scale: rendering_info
-            .map(|rendering| VisualScale {
-                horz: rendering.sca_matrix.e1.as_str(),
-                vert: rendering.sca_matrix.e5.as_str(),
-            })
-            .unwrap_or_default(),
-        translation: rendering_info
-            .map(|rendering| VisualTranslation {
-                horz: rendering.sca_matrix.e3.as_str(),
-                vert: rendering.sca_matrix.e6.as_str(),
-            })
-            .unwrap_or_default(),
+        scale: child_scale,
+        translation: child_translation,
         compose_child_position: true,
+    };
+    let Some(ancestor) = ancestor else {
+        return collect_parent_equations(&draw_text.sub_list, parent_base, path, depth, equations);
+    };
+    let scale_horz = compose_scale(ancestor.scale.horz, child_scale.horz)?;
+    let scale_vert = compose_scale(ancestor.scale.vert, child_scale.vert)?;
+    let translation_horz = compose_translation(
+        ancestor.translation.horz,
+        ancestor.scale.horz,
+        child_translation.horz,
+    )?;
+    let translation_vert = compose_translation(
+        ancestor.translation.vert,
+        ancestor.scale.vert,
+        child_translation.vert,
+    )?;
+    let parent = VisualParent {
+        scale: VisualScale { horz: &scale_horz, vert: &scale_vert },
+        translation: VisualTranslation { horz: &translation_horz, vert: &translation_vert },
+        ..parent_base
     };
     collect_parent_equations(&draw_text.sub_list, parent, path, depth, equations)
 }
@@ -758,6 +825,7 @@ fn collect_owned_visual_paragraphs(
                         picture,
                         &format!("{run_path}/picture[{index}]"),
                         depth,
+                        Some(parent),
                         equations,
                     )?;
                 }
@@ -767,6 +835,7 @@ fn collect_owned_visual_paragraphs(
                         &format!("{run_path}/container[{index}]"),
                         depth,
                         None,
+                        Some(parent),
                         equations,
                     )?;
                 }
@@ -841,6 +910,7 @@ fn collect_owned_visual_paragraphs(
                             &run.pictures[index],
                             &format!("{run_path}/picture[{index}]"),
                             depth,
+                            Some(parent),
                             equations,
                         )?,
                         HxRunChildOrder::Container(index) => collect_container(
@@ -848,6 +918,7 @@ fn collect_owned_visual_paragraphs(
                             &format!("{run_path}/container[{index}]"),
                             depth,
                             None,
+                            Some(parent),
                             equations,
                         )?,
                         _ => {}
