@@ -676,6 +676,11 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_lowercase_identifiers_remain_plain_text() {
+        assert_eq!(eqn_to_latex("item+barometer"), "$item+barometer$");
+    }
+
+    #[test]
     fn font_switch_at_group_end_does_not_consume_closing_brace() {
         assert_eq!(
             eqn_to_latex(

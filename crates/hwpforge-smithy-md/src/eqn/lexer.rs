@@ -226,10 +226,9 @@ fn push_identifier_tokens(word: &str, tokens: &mut Vec<Token>) {
         return;
     }
 
-    if let Some(prefix) = ATTACHED_COMMAND_PREFIXES
-        .iter()
-        .find(|prefix| word.len() > prefix.len() && word.starts_with(**prefix))
-    {
+    if let Some(prefix) = ATTACHED_COMMAND_PREFIXES.iter().find(|prefix| {
+        word.strip_prefix(**prefix).is_some_and(|suffix| suffix.chars().count() == 1)
+    }) {
         tokens.push(Token::Keyword((*prefix).to_string()));
         push_identifier_tokens(&word[prefix.len()..], tokens);
         return;
@@ -448,6 +447,18 @@ mod tests {
     #[test]
     fn ordinary_uppercase_identifiers_do_not_match_command_substrings() {
         assert_eq!(tokenize("SIMPLE"), vec![Token::Text("SIMPLE".into())]);
+    }
+
+    #[test]
+    fn ordinary_lowercase_identifiers_do_not_match_command_prefixes() {
+        assert_eq!(
+            tokenize("item+barometer"),
+            vec![
+                Token::Text("item".into()),
+                Token::Text("+".into()),
+                Token::Text("barometer".into()),
+            ]
+        );
     }
 
     #[test]
