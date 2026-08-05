@@ -3844,3 +3844,47 @@ fn hwp5_to_hwpx_carries_column_separator_line() {
     );
     let _ = std::fs::remove_file(&out);
 }
+
+// ── W1d: HWP5 조판 캐시 opt-in carry ────────────────────────────────
+
+/// 기본 변환은 linesegarray 를 방출하지 않고(기존 불변), opt-in 은
+/// HWP5 LINE_SEG 를 `<hp:linesegarray>` 로 carry 하며 재디코드 시
+/// Core 캐시로 승격돼야 한다.
+#[test]
+fn carry_layout_cache_optin_emits_and_roundtrips() {
+    let path = fixture_path("hwp5/hwp5_00.hwp");
+    if !path.exists() {
+        return; // fixture-optional (suite 관례)
+    }
+    let bytes = std::fs::read(&path).expect("fixture read");
+
+    let (default_out, _) = hwp5_to_hwpx_bytes(&bytes).expect("default convert");
+    let default_xml = {
+        let mut pkg = PackageReader::new(&default_out).expect("package");
+        pkg.read_section_xml(0).expect("section xml")
+    };
+    assert!(
+        !default_xml.contains("linesegarray"),
+        "기본 변환은 캐시를 방출하지 않는다 (기존 불변)"
+    );
+
+    let options = crate::ConvertOptions::default().with_carry_layout_cache(true);
+    let (optin_out, _) =
+        crate::hwp5_to_hwpx_bytes_with_options(&bytes, options).expect("opt-in convert");
+    let optin_xml = {
+        let mut pkg = PackageReader::new(&optin_out).expect("package");
+        pkg.read_section_xml(0).expect("section xml")
+    };
+    assert!(optin_xml.contains("<hp:linesegarray>"), "opt-in 은 HWP5 LINE_SEG 를 carry 한다");
+
+    // 재디코드 → Core 캐시 승격 확인 (PDF 재생 소비 경로 성립)
+    let decoded = HwpxDecoder::decode(&optin_out).expect("decode opt-in output");
+    let mut cached = 0usize;
+    let mut doc = decoded.document;
+    doc.for_each_paragraph_mut(|p| {
+        if p.layout_cache.as_ref().is_some_and(|c| !c.is_empty()) {
+            cached += 1;
+        }
+    });
+    assert!(cached > 0, "재디코드된 산출물에 승격된 캐시가 있어야 한다");
+}

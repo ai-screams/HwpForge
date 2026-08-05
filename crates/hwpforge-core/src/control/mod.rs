@@ -58,7 +58,7 @@ use crate::run::Run;
 /// ```
 /// use hwpforge_core::control::Control;
 /// use hwpforge_core::paragraph::Paragraph;
-/// use hwpforge_foundation::{HwpUnit, ParaShapeIndex};
+/// use hwpforge_foundation::{HwpUnit, ParaShapeIndex, VerticalAlign};
 ///
 /// let text_box = Control::TextBox {
 ///     paragraphs: vec![Paragraph::new(ParaShapeIndex::new(0))],
@@ -68,6 +68,7 @@ use crate::run::Run;
 ///     vert_offset: 0,
 ///     caption: None,
 ///     style: None,
+///     text_vertical_align: VerticalAlign::Top,
 /// };
 /// assert!(text_box.is_text_box());
 /// assert!(!text_box.is_hyperlink());
@@ -694,6 +695,76 @@ pub enum Control {
 }
 
 impl Control {
+    /// 이 컨트롤 안에 중첩된 모든 문단을 재귀 방문한다
+    /// (글상자/도형 본문·캡션·각주/미주·메모 본문+앵커 run·묶음 자식 포함).
+    ///
+    /// 새 variant 가 문단을 담게 되면 이 match 가 컴파일 에러로 강제한다
+    /// (와일드카드 없음 — 순회 완전성 보장).
+    pub(crate) fn walk_paragraphs_mut(
+        &mut self,
+        f: &mut dyn FnMut(&mut crate::paragraph::Paragraph),
+    ) {
+        fn walk_vec(
+            paragraphs: &mut [crate::paragraph::Paragraph],
+            f: &mut dyn FnMut(&mut crate::paragraph::Paragraph),
+        ) {
+            for p in paragraphs {
+                p.walk_paragraphs_mut(f);
+            }
+        }
+        fn walk_caption(
+            caption: &mut Option<Caption>,
+            f: &mut dyn FnMut(&mut crate::paragraph::Paragraph),
+        ) {
+            if let Some(c) = caption {
+                c.walk_paragraphs_mut(f);
+            }
+        }
+        match self {
+            Self::TextBox { paragraphs, caption, .. }
+            | Self::Ellipse { paragraphs, caption, .. }
+            | Self::Polygon { paragraphs, caption, .. } => {
+                walk_vec(paragraphs, f);
+                walk_caption(caption, f);
+            }
+            Self::Footnote { paragraphs, .. } | Self::Endnote { paragraphs, .. } => {
+                walk_vec(paragraphs, f);
+            }
+            Self::Line { caption, .. }
+            | Self::Rect { caption, .. }
+            | Self::Arc { caption, .. }
+            | Self::Curve { caption, .. }
+            | Self::ConnectLine { caption, .. } => walk_caption(caption, f),
+            Self::Group { children, .. } => {
+                for child in children {
+                    child.walk_paragraphs_mut(f);
+                }
+            }
+            Self::Memo { content, anchor_runs, .. } => {
+                walk_vec(content, f);
+                for run in anchor_runs {
+                    run.walk_paragraphs_mut(f);
+                }
+            }
+            Self::Hyperlink { .. }
+            | Self::EmbeddedChart { .. }
+            | Self::Equation { .. }
+            | Self::Chart { .. }
+            | Self::Dutmal { .. }
+            | Self::Compose { .. }
+            | Self::TextArt { .. }
+            | Self::Bookmark { .. }
+            | Self::CrossRef { .. }
+            | Self::Field { .. }
+            | Self::IndexMark { .. }
+            | Self::UnknownSummary { .. }
+            | Self::DateCodeField { .. }
+            | Self::PathField { .. }
+            | Self::InlinePageNumber { .. }
+            | Self::Unknown { .. } => {}
+        }
+    }
+
     /// Returns the stable snake_case name of this control's kind.
     ///
     /// Read/diff projections use this to label embedded content without

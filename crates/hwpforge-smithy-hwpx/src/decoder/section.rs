@@ -315,6 +315,28 @@ fn convert_paragraph(
     let style_id =
         if hx.style_id_ref == 0 { None } else { Some(StyleIndex::new(hx.style_id_ref as usize)) };
 
+    // 줄 조판 캐시 승격 (decode-only): <hp:linesegarray> 를 wire 그대로
+    // Core LayoutCache 로 나른다. 인코더는 기본적으로 재방출하지 않는다.
+    let layout_cache = hx.linesegarray.as_ref().map(|array| {
+        hwpforge_core::layout::LayoutCache::new(
+            array
+                .items
+                .iter()
+                .map(|s| hwpforge_core::layout::LineSeg {
+                    textpos: s.textpos,
+                    vertpos: s.vertpos,
+                    vertsize: s.vertsize,
+                    textheight: s.textheight,
+                    baseline: s.baseline,
+                    spacing: s.spacing,
+                    horzpos: s.horzpos,
+                    horzsize: s.horzsize,
+                    flags: s.flags,
+                })
+                .collect(),
+        )
+    });
+
     let paragraph = Paragraph {
         runs,
         para_shape_id,
@@ -322,6 +344,7 @@ fn convert_paragraph(
         page_break: hx.page_break != 0,
         heading_level,
         style_id,
+        layout_cache,
     };
     Ok((paragraph, page_settings))
 }
@@ -1578,6 +1601,41 @@ mod tests {
         assert_eq!(para.para_shape_id.get(), 0);
         assert_eq!(para.runs.len(), 1);
         assert_eq!(para.runs[0].content.as_text(), Some("안녕하세요"));
+    }
+
+    #[test]
+    fn linesegarray_is_promoted_to_layout_cache() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0"><t>본문</t></run>
+                <linesegarray>
+                    <lineseg textpos="0" vertpos="0" vertsize="1000" textheight="1000"
+                             baseline="850" spacing="600" horzpos="0" horzsize="48188"
+                             flags="393216"/>
+                    <lineseg textpos="70" vertpos="1600" vertsize="1000" textheight="1000"
+                             baseline="850" spacing="600" horzpos="0" horzsize="48188"
+                             flags="1441792"/>
+                </linesegarray>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let cache = result.paragraphs[0].layout_cache.as_ref().expect("cache promoted");
+        assert_eq!(cache.line_count(), 2);
+        assert_eq!(cache.lines[0].vertsize, 1000);
+        assert_eq!(cache.lines[1].textpos, 70);
+        assert_eq!(cache.lines[1].vertpos, 1600);
+        assert_eq!(cache.lines[1].flags, 1_441_792);
+    }
+
+    #[test]
+    fn paragraph_without_linesegarray_has_no_layout_cache() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0"><t>본문</t></run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        assert!(result.paragraphs[0].layout_cache.is_none());
     }
 
     #[test]

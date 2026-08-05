@@ -13,11 +13,9 @@
 //! ```
 //! use hwpforge_core::Metadata;
 //!
-//! let meta = Metadata {
-//!     title: Some("Quarterly Report".to_string()),
-//!     author: Some("Kim".to_string()),
-//!     ..Metadata::default()
-//! };
+//! let meta = Metadata::new()
+//!     .with_title("Quarterly Report")
+//!     .with_author("Kim");
 //! assert_eq!(meta.title.as_deref(), Some("Quarterly Report"));
 //! assert!(meta.subject.is_none());
 //! ```

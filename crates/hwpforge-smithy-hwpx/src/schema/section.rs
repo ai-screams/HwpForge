@@ -2277,7 +2277,7 @@ mod tests {
     }
 
     #[test]
-    fn linesegarray_is_ignored() {
+    fn linesegarray_is_captured() {
         let xml = r#"
         <hs:sec>
           <hp:p id="0" paraPrIDRef="0" styleIDRef="0">
@@ -2291,6 +2291,9 @@ mod tests {
         </hs:sec>"#;
         let sec = parse_section(xml);
         assert_eq!(sec.paragraphs[0].runs[0].texts[0].text(), "text");
+        let array = sec.paragraphs[0].linesegarray.as_ref().expect("captured");
+        assert_eq!(array.items.len(), 1);
+        assert_eq!(array.items[0].vertsize, 1000);
     }
 
     #[test]

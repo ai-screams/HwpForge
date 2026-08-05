@@ -1790,7 +1790,13 @@ mod tests {
             text_vertical_align: VerticalAlign::Center,
         };
         let mut hl = Vec::new();
-        let hx = crate::encoder::shapes::encode_ellipse_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let hx = crate::encoder::shapes::encode_ellipse_to_hx(
+            &ctrl,
+            0,
+            &mut hl,
+            crate::encoder::EncodeOptions::default(),
+        )
+        .unwrap();
         assert_eq!(
             hx.draw_text.as_ref().unwrap().sub_list.vert_align,
             "CENTER",

@@ -72,6 +72,15 @@ pub struct Paragraph {
     /// `None` means 바탕글 (style 0, the default).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub style_id: Option<StyleIndex>,
+    /// Hancom 이 저장한 줄 조판 캐시 (decode-only 승격).
+    ///
+    /// HWPX `<hp:linesegarray>` / HWP5 `PARA_LINE_SEG` 에서 디코더가
+    /// 채운다. `None` = 캐시 없음 (우리 순수 생성물의 정상 상태).
+    /// 인코더는 기본적으로 이 필드를 방출하지 않는다 (opt-in 전용).
+    /// 문서 동등성 비교(admission/golden)는 이 필드를 정규화한 사본으로
+    /// 수행한다 — [`crate::document::Document::strip_layout_caches`] 참조.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout_cache: Option<crate::layout::LayoutCache>,
 }
 
 impl Paragraph {
@@ -94,6 +103,7 @@ impl Paragraph {
             page_break: false,
             heading_level: None,
             style_id: None,
+            layout_cache: None,
         }
     }
 
@@ -120,6 +130,25 @@ impl Paragraph {
             page_break: false,
             heading_level: None,
             style_id: None,
+            layout_cache: None,
+        }
+    }
+
+    /// 이 문단 자신과 안에 중첩된 모든 문단(표 셀·캡션·글상자·각주/미주·
+    /// 메모 등)을 문서 순서로 방문한다.
+    ///
+    /// 자신을 먼저 방문한 뒤 run 내용물로 재귀한다. 캐시 정규화 등
+    /// 전 문단 일괄 변환의 기반 유틸 —
+    /// [`crate::document::Document::for_each_paragraph_mut`] 참조.
+    pub fn for_each_paragraph_mut<F: FnMut(&mut Paragraph)>(&mut self, mut f: F) {
+        self.walk_paragraphs_mut(&mut f);
+    }
+
+    /// [`Self::for_each_paragraph_mut`] 의 내부 재귀 본체 (dyn 으로 단형화 제한).
+    pub(crate) fn walk_paragraphs_mut(&mut self, f: &mut dyn FnMut(&mut Paragraph)) {
+        f(self);
+        for run in &mut self.runs {
+            run.walk_paragraphs_mut(f);
         }
     }
 

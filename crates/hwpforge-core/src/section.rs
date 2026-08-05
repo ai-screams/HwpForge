@@ -494,6 +494,31 @@ pub struct Section {
 }
 
 impl Section {
+    /// 이 섹션의 모든 문단(본문·머리말·꼬리말·바탕쪽 + 각 문단의 중첩)을
+    /// 문서 순서로 방문한다.
+    pub fn for_each_paragraph_mut<F: FnMut(&mut Paragraph)>(&mut self, mut f: F) {
+        self.walk_paragraphs_mut(&mut f);
+    }
+
+    /// [`Self::for_each_paragraph_mut`] 의 내부 재귀 본체.
+    pub(crate) fn walk_paragraphs_mut(&mut self, f: &mut dyn FnMut(&mut Paragraph)) {
+        for p in &mut self.paragraphs {
+            p.walk_paragraphs_mut(f);
+        }
+        for hf in self.headers.iter_mut().chain(self.footers.iter_mut()) {
+            for p in &mut hf.paragraphs {
+                p.walk_paragraphs_mut(f);
+            }
+        }
+        if let Some(master_pages) = &mut self.master_pages {
+            for mp in master_pages {
+                for p in &mut mp.paragraphs {
+                    p.walk_paragraphs_mut(f);
+                }
+            }
+        }
+    }
+
     /// Creates an empty section with the given page settings.
     ///
     /// # Examples

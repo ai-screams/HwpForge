@@ -18,7 +18,7 @@ use hwpforge_foundation::{HeadingType, ParaShapeIndex};
 use hwpforge_smithy_hwp5::schema::header::{Hwp5RawStyle, Hwp5RawTabDef, Hwp5TabDefSlot};
 use hwpforge_smithy_hwp5::style_store::Hwp5StyleStore;
 use hwpforge_smithy_hwp5::{decode_hwp5_to_core, Hwp5Error, Hwp5Result, Hwp5Warning};
-use hwpforge_smithy_hwpx::{HwpxEncoder, HwpxStyleStore};
+use hwpforge_smithy_hwpx::{EncodeOptions, HwpxEncoder, HwpxStyleStore};
 
 use crate::style_store_border_fill::{push_hwp5_border_fills, push_required_border_fills};
 use crate::style_store_convert::{
@@ -81,6 +81,41 @@ pub fn hwp5_to_hwpx(
 /// Returns [`Hwp5Error`] if the bytes cannot be decoded, the document fails
 /// validation, or HWPX encoding fails.
 pub fn hwp5_to_hwpx_bytes(bytes: &[u8]) -> Hwp5Result<(Vec<u8>, Vec<Hwp5Warning>)> {
+    hwp5_to_hwpx_bytes_with_options(bytes, ConvertOptions::default())
+}
+
+/// 변환 동작 옵션. [`Default`] 는 현행 변환 동작 그대로다.
+#[derive(Debug, Clone, Copy, Default)]
+#[non_exhaustive]
+pub struct ConvertOptions {
+    /// `true` 면 HWP5 조판 캐시(`PARA_LINE_SEG`)를 HWPX
+    /// `<hp:linesegarray>` 로 carry 한다. 기본 `false`.
+    ///
+    /// ⚠️ **PDF 재생/비교 파이프라인 전용** (같은 조건 비교의 성립 요건).
+    /// 과거 무조건 carry 는 한컴에서 다중행 텍스트 겹침을 일으켜 제거됐다
+    /// (`layout_hint_patch` 는 표 높이만 재생) — 이 opt-in 산출물은 한컴
+    /// 재개봉 용도가 아니다.
+    pub carry_layout_cache: bool,
+}
+
+impl ConvertOptions {
+    /// 조판 캐시 carry 여부를 설정한다 (기본 `false`).
+    #[must_use]
+    pub fn with_carry_layout_cache(mut self, carry: bool) -> Self {
+        self.carry_layout_cache = carry;
+        self
+    }
+}
+
+/// [`hwp5_to_hwpx_bytes`] 에 동작 옵션([`ConvertOptions`])을 더한 변형.
+///
+/// # Errors
+///
+/// [`hwp5_to_hwpx_bytes`] 와 동일.
+pub fn hwp5_to_hwpx_bytes_with_options(
+    bytes: &[u8],
+    options: ConvertOptions,
+) -> Hwp5Result<(Vec<u8>, Vec<Hwp5Warning>)> {
     let decoded = decode_hwp5_to_core(bytes)?;
     let (hwpx_style_store, style_warnings) = hwp5_style_store_to_hwpx(&decoded.style_store);
     // Warning order: decode-phase warnings (intermediate + projection +
@@ -93,8 +128,15 @@ pub fn hwp5_to_hwpx_bytes(bytes: &[u8]) -> Hwp5Result<(Vec<u8>, Vec<Hwp5Warning>
     warnings.extend(style_warnings);
 
     let validated = decoded.document.validate().map_err(Hwp5Error::Core)?;
-    let hwpx_bytes = HwpxEncoder::encode(&validated, &hwpx_style_store, &decoded.image_store)
-        .map_err(|e| Hwp5Error::Cfb { detail: format!("HWPX encoding failed: {e}") })?;
+    let encode_options =
+        EncodeOptions::default().with_emit_layout_cache(options.carry_layout_cache);
+    let hwpx_bytes = HwpxEncoder::encode_with_options(
+        &validated,
+        &hwpx_style_store,
+        &decoded.image_store,
+        encode_options,
+    )
+    .map_err(|e| Hwp5Error::Cfb { detail: format!("HWPX encoding failed: {e}") })?;
     let hwpx_bytes =
         layout_hint_patch::patch_hwpx_layout_hints(&hwpx_bytes, &decoded.layout_hints)?;
 

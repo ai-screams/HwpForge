@@ -539,10 +539,17 @@ pub(crate) fn encode_hwpx(doc: &HwpxDocument) -> Result<Vec<u8>, StamperError> {
 }
 
 pub(crate) fn admission_compare(a: &HwpxDocument, b: &HwpxDocument) -> Result<(), StamperError> {
-    if a.document != b.document {
+    // 캐시 정규화 비교: 줄 조판 캐시(layout_cache)는 Hancom 이 저장한 렌더
+    // 캐시라 원본(보유)과 우리 재인코드 산출물(미보유)이 당연히 다르다.
+    // 문서 의미 동등성 판정에서 제외하기 위해 양쪽 사본에서 제거 후 비교한다.
+    let mut doc_a = a.document.clone();
+    let mut doc_b = b.document.clone();
+    doc_a.strip_layout_caches();
+    doc_b.strip_layout_caches();
+    if doc_a != doc_b {
         return Err(StamperError::NotRoundTripSafe {
             component: "document".to_string(),
-            diff_path: first_diff_path(&a.document, &b.document),
+            diff_path: first_diff_path(&doc_a, &doc_b),
         });
     }
     if a.style_store != b.style_store {
