@@ -135,8 +135,32 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          node-version: "22"
+          # Node 24 (LTS Krypton) bundles npm >= 11.13. Trusted publishing (OIDC)
+          # requires npm >= 11.5.1 / Node >= 22.14.0, and Node 22 is pinned to
+          # npm 10.9.8 — too old. Bumping the runtime is preferred over
+          # `npm i -g npm` because the global self-update is flaky on Windows.
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
+
+      - name: Report npm CLI (trusted publishing readiness)
+        run: |
+          node -v
+          npm -v
+          # Below npm 11.5.1 the CLI silently falls back to NODE_AUTH_TOKEN.
+          # That looks like a successful publish while OIDC never engaged, so
+          # surface it explicitly instead of letting it pass unnoticed.
+          if ! node -e '
+            const need = [11, 5, 1];
+            const got = process.argv[1].split(".").map(Number);
+            for (let i = 0; i < 3; i++) {
+              if ((got[i] || 0) > need[i]) process.exit(0);
+              if ((got[i] || 0) < need[i]) process.exit(1);
+            }
+          ' "$(npm -v)"; then
+            echo "::warning::npm $(npm -v) < 11.5.1 — trusted publishing (OIDC) unavailable, falling back to NODE_AUTH_TOKEN"
+          else
+            echo "npm $(npm -v) supports trusted publishing (OIDC)"
+          fi
 
       - name: Publish platform package (skip if already published)
         working-directory: npm/packages/mcp-${{ matrix.npm-suffix }}
@@ -222,8 +246,26 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
         with:
-          node-version: "22"
+          # See the platform job above — Node 24 for npm >= 11.5.1 (OIDC).
+          node-version: "24"
           registry-url: "https://registry.npmjs.org"
+
+      - name: Report npm CLI (trusted publishing readiness)
+        run: |
+          node -v
+          npm -v
+          if ! node -e '
+            const need = [11, 5, 1];
+            const got = process.argv[1].split(".").map(Number);
+            for (let i = 0; i < 3; i++) {
+              if ((got[i] || 0) > need[i]) process.exit(0);
+              if ((got[i] || 0) < need[i]) process.exit(1);
+            }
+          ' "$(npm -v)"; then
+            echo "::warning::npm $(npm -v) < 11.5.1 — trusted publishing (OIDC) unavailable, falling back to NODE_AUTH_TOKEN"
+          else
+            echo "npm $(npm -v) supports trusted publishing (OIDC)"
+          fi
 
       - name: Publish base package (skip if already published)
         working-directory: npm/packages/mcp
