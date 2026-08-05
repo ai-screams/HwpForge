@@ -19,6 +19,7 @@
     "**/.git/**",
     "**/.docs/**",
     "**/.omc/**",
+    "**/.baram/**",
     "**/temp/**",
     "**/examples/hwp5_review/**",
     "**/*.hwpx",
