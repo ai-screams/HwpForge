@@ -787,7 +787,37 @@ fn project_paragraph_with_images_flat(
     if hwp_para.style_id > 0 {
         paragraph = paragraph.with_style(StyleIndex::new(hwp_para.style_id as usize));
     }
+    paragraph.layout_cache = promote_line_segments(&hwp_para.line_segments);
     paragraph
+}
+
+/// HWP5 `PARA_LINE_SEG` 레코드(36바이트×N)를 Core 조판 캐시로 승격한다
+/// (decode-only — 인코더 방출은 convert opt-in 전용).
+///
+/// 필드 대응은 이름만 다르고 wire 의미는 HWPX `<hp:lineseg>` 와 동일하다.
+/// 세그먼트가 없으면 `None` (HWP5 네이티브 문단은 항상 1개 이상 보유 —
+/// 없음 = 캐시 부재 의미).
+fn promote_line_segments(
+    segs: &[crate::schema::section::Hwp5ParaLineSeg],
+) -> Option<hwpforge_core::layout::LayoutCache> {
+    if segs.is_empty() {
+        return None;
+    }
+    Some(hwpforge_core::layout::LayoutCache::new(
+        segs.iter()
+            .map(|s| hwpforge_core::layout::LineSeg {
+                textpos: s.text_start_position,
+                vertpos: s.vertical_position,
+                vertsize: s.line_height,
+                textheight: s.text_height,
+                baseline: s.baseline_distance,
+                spacing: s.line_spacing,
+                horzpos: s.column_start_position,
+                horzsize: s.segment_width,
+                flags: s.tag,
+            })
+            .collect(),
+    ))
 }
 
 fn project_paragraph_with_images_structural(
@@ -925,6 +955,7 @@ fn project_paragraph_with_images_structural(
     if hwp_para.style_id > 0 {
         paragraph = paragraph.with_style(StyleIndex::new(hwp_para.style_id as usize));
     }
+    paragraph.layout_cache = promote_line_segments(&hwp_para.line_segments);
 
     ProjectedParagraph { paragraph }
 }
@@ -3176,6 +3207,48 @@ mod tests {
             line_segments: Vec::new(),
             controls: vec![],
         }
+    }
+
+    #[test]
+    fn line_segments_promote_to_layout_cache() {
+        use crate::schema::section::Hwp5ParaLineSeg;
+        let segs = vec![
+            Hwp5ParaLineSeg {
+                text_start_position: 0,
+                vertical_position: 0,
+                line_height: 1000,
+                text_height: 1000,
+                baseline_distance: 850,
+                line_spacing: 600,
+                column_start_position: 10,
+                segment_width: 42520,
+                tag: 0x0060_0000,
+            },
+            Hwp5ParaLineSeg {
+                text_start_position: 35,
+                vertical_position: 1600,
+                line_height: 1000,
+                text_height: 1000,
+                baseline_distance: 850,
+                line_spacing: 600,
+                column_start_position: 10,
+                segment_width: 42520,
+                tag: 0x0016_0000,
+            },
+        ];
+        let cache = promote_line_segments(&segs).expect("promoted");
+        assert_eq!(cache.line_count(), 2);
+        // 필드 대응: 이름만 다르고 wire 의미 동일 (textpos/vertpos/vertsize/…)
+        assert_eq!(cache.lines[0].horzpos, 10);
+        assert_eq!(cache.lines[0].horzsize, 42520);
+        assert_eq!(cache.lines[1].textpos, 35);
+        assert_eq!(cache.lines[1].vertpos, 1600);
+        assert_eq!(cache.lines[1].vertsize, 1000);
+        assert_eq!(cache.lines[1].baseline, 850);
+        assert_eq!(cache.lines[1].spacing, 600);
+        assert_eq!(cache.lines[1].flags, 0x0016_0000);
+        // 세그먼트 없음 = 캐시 부재
+        assert!(promote_line_segments(&[]).is_none());
     }
 
     fn make_section(
