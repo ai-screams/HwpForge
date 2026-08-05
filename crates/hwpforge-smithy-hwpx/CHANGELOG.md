@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.12.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.11.7...hwpforge-smithy-hwpx-v0.12.0) - 2026-08-05
+
+### Added
+
+- *(smithy-hwpx)* 인코더 opt-in emit_layout_cache (기본 off, PDF 재생 파이프라인 전용)
+
+- *(core)* **BREAKING** 줄 조판 캐시 LayoutCache 승격(decode-only) + HWPX 디코더 승격·admission 캐시 정규화
+
+
 ## [0.11.7](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.11.6...hwpforge-smithy-hwpx-v0.11.7) - 2026-07-25
 
 ### Added
