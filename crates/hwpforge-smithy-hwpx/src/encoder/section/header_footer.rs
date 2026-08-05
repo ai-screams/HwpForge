@@ -111,6 +111,7 @@ pub(super) fn inject_header_footer_pagenum(
     xml: &mut String,
     section: &Section,
     hyperlink_entries: &mut Vec<(String, String)>,
+    options: EncodeOptions,
 ) -> HwpxResult<()> {
     // Find insertion point: after the last </hp:ctrl> that contains colPr
     // (or after </hp:secPr> if no colPr).
@@ -125,12 +126,12 @@ pub(super) fn inject_header_footer_pagenum(
     // Header — emit each `<hp:header>` element preserving the HWPX
     // multi-cardinality wire shape (ADR-002).
     for header in &section.headers {
-        injection.push_str(&build_header_xml(header, "header", hyperlink_entries)?);
+        injection.push_str(&build_header_xml(header, "header", hyperlink_entries, options)?);
     }
 
     // Footer — same cardinality model.
     for footer in &section.footers {
-        injection.push_str(&build_header_xml(footer, "footer", hyperlink_entries)?);
+        injection.push_str(&build_header_xml(footer, "footer", hyperlink_entries, options)?);
     }
 
     // Page number
@@ -177,6 +178,7 @@ pub(super) fn build_header_xml(
     hf: &hwpforge_core::section::HeaderFooter,
     tag_name: &str,
     hyperlink_entries: &mut Vec<(String, String)>,
+    options: EncodeOptions,
 ) -> HwpxResult<String> {
     use std::fmt::Write as _;
 
@@ -191,7 +193,7 @@ pub(super) fn build_header_xml(
     let mut xml = String::new();
     write!(xml, r#"<hp:ctrl><hp:{tag_name} applyPageType="{apply_page}" id="{hf_id}">"#,)
         .expect("write to String is infallible");
-    xml.push_str(&encode_memo_sublist(&hf.paragraphs, 0, hyperlink_entries)?);
+    xml.push_str(&encode_memo_sublist(&hf.paragraphs, 0, hyperlink_entries, options)?);
     write!(xml, "</hp:{tag_name}></hp:ctrl>").expect("write to String is infallible");
     Ok(xml)
 }
@@ -310,7 +312,8 @@ mod tests {
             (ApplyPageType::Odd, "ODD"),
         ] {
             let hf = HeaderFooter::new(Vec::new(), apply);
-            let xml = build_header_xml(&hf, "header", &mut entries).unwrap();
+            let xml =
+                build_header_xml(&hf, "header", &mut entries, EncodeOptions::default()).unwrap();
             assert!(xml.contains(&format!(r#"applyPageType="{want}""#)), "{want}: {xml}");
             assert!(xml.starts_with("<hp:ctrl><hp:header"));
         }

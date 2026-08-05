@@ -41,6 +41,7 @@ use crate::schema::section::{
 
 use super::escape_xml;
 use super::section::{build_hx_caption, encode_paragraphs_to_sublist_with_align, generate_instid};
+use super::EncodeOptions;
 
 // ── Shape-common helpers ─────────────────────────────────────────
 
@@ -290,6 +291,7 @@ pub(crate) fn encode_textbox_to_rect(
     ctrl: &Control,
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
+    options: EncodeOptions,
 ) -> HwpxResult<HxRect> {
     let (paragraphs, width, height, horz_offset, vert_offset, caption, style, text_vertical_align) =
         match ctrl {
@@ -327,6 +329,7 @@ pub(crate) fn encode_textbox_to_rect(
         depth,
         &text_vertical_align.to_string(),
         hyperlink_entries,
+        options,
     )?;
     let sc = build_shape_common(width_hwp, height_hwp, style.as_ref());
 
@@ -366,7 +369,7 @@ pub(crate) fn encode_textbox_to_rect(
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
         caption: caption
             .as_ref()
-            .map(|c| build_hx_caption(c, width_hwp, depth, hyperlink_entries))
+            .map(|c| build_hx_caption(c, width_hwp, depth, hyperlink_entries, options))
             .transpose()?,
 
         draw_text: Some(HxDrawText {
@@ -398,6 +401,7 @@ pub(crate) fn encode_rect_to_hx(
     ctrl: &Control,
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
+    options: EncodeOptions,
 ) -> HwpxResult<HxRect> {
     let (width, height, horz_offset, vert_offset, caption, style) = match ctrl {
         Control::Rect { width, height, horz_offset, vert_offset, caption, style } => {
@@ -444,7 +448,7 @@ pub(crate) fn encode_rect_to_hx(
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
         caption: caption
             .as_ref()
-            .map(|c| build_hx_caption(c, width_hwp, depth, hyperlink_entries))
+            .map(|c| build_hx_caption(c, width_hwp, depth, hyperlink_entries, options))
             .transpose()?,
         // Pure rect: no embedded text content.
         draw_text: None,
@@ -461,6 +465,7 @@ pub(crate) fn encode_line_to_hx(
     ctrl: &Control,
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
+    options: EncodeOptions,
 ) -> HwpxResult<HxLine> {
     let (start, end, width, height, horz_offset, vert_offset, caption, style) = match ctrl {
         Control::Line { start, end, width, height, horz_offset, vert_offset, caption, style } => {
@@ -506,7 +511,7 @@ pub(crate) fn encode_line_to_hx(
         shape_comment: Some(HxShapeComment { text: "선입니다.".to_string() }),
         caption: caption
             .as_ref()
-            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries))
+            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries, options))
             .transpose()?,
         start_pt: Some(HxPoint { x: start.x, y: start.y }),
         end_pt: Some(HxPoint { x: end.x, y: end.y }),
@@ -518,6 +523,7 @@ pub(crate) fn encode_ellipse_to_hx(
     ctrl: &Control,
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
+    options: EncodeOptions,
 ) -> HwpxResult<HxEllipse> {
     let (
         center,
@@ -572,6 +578,7 @@ pub(crate) fn encode_ellipse_to_hx(
             depth,
             &text_vertical_align.to_string(),
             hyperlink_entries,
+            options,
         )?;
         Some(HxDrawText {
             last_width: 0,
@@ -617,7 +624,7 @@ pub(crate) fn encode_ellipse_to_hx(
         shape_comment: Some(HxShapeComment { text: "타원입니다.".to_string() }),
         caption: caption
             .as_ref()
-            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries))
+            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries, options))
             .transpose()?,
         draw_text,
         center: Some(HxPoint { x: center.x, y: center.y }),
@@ -635,6 +642,7 @@ pub(crate) fn encode_polygon_to_hx(
     ctrl: &Control,
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
+    options: EncodeOptions,
 ) -> HwpxResult<HxPolygon> {
     let (
         vertices,
@@ -683,6 +691,7 @@ pub(crate) fn encode_polygon_to_hx(
             depth,
             &text_vertical_align.to_string(),
             hyperlink_entries,
+            options,
         )?;
         Some(HxDrawText {
             last_width: 0,
@@ -727,7 +736,7 @@ pub(crate) fn encode_polygon_to_hx(
         shape_comment: Some(HxShapeComment { text: "다각형입니다.".to_string() }),
         caption: caption
             .as_ref()
-            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries))
+            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries, options))
             .transpose()?,
         draw_text,
         points,
@@ -741,6 +750,7 @@ pub(crate) fn encode_arc_to_hx(
     ctrl: &Control,
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
+    options: EncodeOptions,
 ) -> HwpxResult<HxEllipse> {
     let (
         arc_type,
@@ -831,7 +841,7 @@ pub(crate) fn encode_arc_to_hx(
         shape_comment: Some(HxShapeComment { text: "호입니다.".to_string() }),
         caption: caption
             .as_ref()
-            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries))
+            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries, options))
             .transpose()?,
         draw_text: None,
         center: Some(HxPoint { x: center.x, y: center.y }),
@@ -849,6 +859,7 @@ pub(crate) fn encode_curve_to_hx(
     ctrl: &Control,
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
+    options: EncodeOptions,
 ) -> HwpxResult<HxCurve> {
     let (points, segment_types, width, height, horz_offset, vert_offset, caption, style) =
         match ctrl {
@@ -919,7 +930,7 @@ pub(crate) fn encode_curve_to_hx(
         shape_comment: Some(HxShapeComment { text: "곡선입니다.".to_string() }),
         caption: caption
             .as_ref()
-            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries))
+            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries, options))
             .transpose()?,
         points: vec![], // KS X 6101: coordinates are in <hp:seg> elements, not <hc:pt>
         segments,
@@ -931,6 +942,7 @@ pub(crate) fn encode_connect_line_to_hx(
     ctrl: &Control,
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
+    options: EncodeOptions,
 ) -> HwpxResult<HxConnectLine> {
     let (
         start,
@@ -1029,7 +1041,7 @@ pub(crate) fn encode_connect_line_to_hx(
         shape_comment: Some(HxShapeComment { text: "연결선입니다.".to_string() }),
         caption: caption
             .as_ref()
-            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries))
+            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries, options))
             .transpose()?,
     })
 }
@@ -1244,6 +1256,7 @@ fn encode_group_child_xml(
     depth: usize,
     group_level: u32,
     hyperlink_entries: &mut Vec<(String, String)>,
+    options: EncodeOptions,
 ) -> HwpxResult<Option<String>> {
     // Nested group (Wave B): recurse into a full `<hp:container>` fragment.
     // `encode_group_to_xml` bakes the correct `groupLevel` into the opening
@@ -1255,7 +1268,7 @@ fn encode_group_child_xml(
     // already stripped during their own recursion.
     if let Control::Group { .. } = child {
         let (x, y) = group_child_offset(child);
-        let raw = encode_group_to_xml(child, depth, group_level, hyperlink_entries)?;
+        let raw = encode_group_to_xml(child, depth, group_level, hyperlink_entries, options)?;
         let raw = set_group_child_offset(&raw, x, y);
         let raw = set_group_child_translate(&raw, x, y);
         let raw = zero_cur_sz(&raw);
@@ -1265,31 +1278,35 @@ fn encode_group_child_xml(
     }
     let raw = match child {
         Control::TextBox { .. } => serialize_with_root(
-            &encode_textbox_to_rect(child, depth, hyperlink_entries)?,
+            &encode_textbox_to_rect(child, depth, hyperlink_entries, options)?,
             "hp:rect",
         )?,
-        Control::Rect { .. } => {
-            serialize_with_root(&encode_rect_to_hx(child, depth, hyperlink_entries)?, "hp:rect")?
-        }
-        Control::Line { .. } => {
-            serialize_with_root(&encode_line_to_hx(child, depth, hyperlink_entries)?, "hp:line")?
-        }
+        Control::Rect { .. } => serialize_with_root(
+            &encode_rect_to_hx(child, depth, hyperlink_entries, options)?,
+            "hp:rect",
+        )?,
+        Control::Line { .. } => serialize_with_root(
+            &encode_line_to_hx(child, depth, hyperlink_entries, options)?,
+            "hp:line",
+        )?,
         Control::Ellipse { .. } => serialize_with_root(
-            &encode_ellipse_to_hx(child, depth, hyperlink_entries)?,
+            &encode_ellipse_to_hx(child, depth, hyperlink_entries, options)?,
             "hp:ellipse",
         )?,
-        Control::Arc { .. } => {
-            serialize_with_root(&encode_arc_to_hx(child, depth, hyperlink_entries)?, "hp:ellipse")?
-        }
+        Control::Arc { .. } => serialize_with_root(
+            &encode_arc_to_hx(child, depth, hyperlink_entries, options)?,
+            "hp:ellipse",
+        )?,
         Control::Polygon { .. } => serialize_with_root(
-            &encode_polygon_to_hx(child, depth, hyperlink_entries)?,
+            &encode_polygon_to_hx(child, depth, hyperlink_entries, options)?,
             "hp:polygon",
         )?,
-        Control::Curve { .. } => {
-            serialize_with_root(&encode_curve_to_hx(child, depth, hyperlink_entries)?, "hp:curve")?
-        }
+        Control::Curve { .. } => serialize_with_root(
+            &encode_curve_to_hx(child, depth, hyperlink_entries, options)?,
+            "hp:curve",
+        )?,
         Control::ConnectLine { .. } => serialize_with_root(
-            &encode_connect_line_to_hx(child, depth, hyperlink_entries)?,
+            &encode_connect_line_to_hx(child, depth, hyperlink_entries, options)?,
             "hp:connectLine",
         )?,
         Control::TextArt { .. } => encode_text_art_to_xml(child)?,
@@ -1327,6 +1344,7 @@ pub(crate) fn encode_group_to_xml(
     depth: usize,
     group_level: u32,
     hyperlink_entries: &mut Vec<(String, String)>,
+    options: EncodeOptions,
 ) -> HwpxResult<String> {
     let (children, width, height, horz_offset, vert_offset, inst_id) = match ctrl {
         Control::Group { children, width, height, horz_offset, vert_offset, inst_id } => {
@@ -1350,7 +1368,8 @@ pub(crate) fn encode_group_to_xml(
     // Children in z-order, each at the next group level.
     let mut children_xml = String::new();
     for child in children {
-        if let Some(xml) = encode_group_child_xml(child, depth, group_level + 1, hyperlink_entries)?
+        if let Some(xml) =
+            encode_group_child_xml(child, depth, group_level + 1, hyperlink_entries, options)?
         {
             children_xml.push_str(&xml);
         }
@@ -1547,7 +1566,8 @@ mod tests {
             inst_id: None,
         };
         let mut entries = Vec::new();
-        let xml = encode_group_to_xml(&group, 0, 0, &mut entries).unwrap();
+        let xml =
+            encode_group_to_xml(&group, 0, 0, &mut entries, EncodeOptions::default()).unwrap();
 
         assert!(xml.contains("<hp:container"), "missing container: {xml}");
         assert_eq!(xml.matches("<hp:rect").count(), 2, "expected 2 rect children");
@@ -1654,7 +1674,8 @@ mod tests {
             inst_id: None,
         };
         let mut entries = Vec::new();
-        let xml = encode_group_to_xml(&outer, 0, 0, &mut entries).unwrap();
+        let xml =
+            encode_group_to_xml(&outer, 0, 0, &mut entries, EncodeOptions::default()).unwrap();
 
         // Two nested containers: outer groupLevel=0, inner groupLevel=1.
         assert_eq!(xml.matches("<hp:container").count(), 2, "expected 2 containers: {xml}");
@@ -1889,7 +1910,7 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_arc_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_arc_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert_eq!(result.has_arc_pr, 1, "Arc must have hasArcPr=1");
     }
 
@@ -1912,7 +1933,7 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_arc_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_arc_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert_eq!(result.arc_type, "PIE");
     }
 
@@ -1935,7 +1956,7 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_arc_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_arc_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert_eq!(result.center.as_ref().unwrap().x, 100);
         assert_eq!(result.center.as_ref().unwrap().y, 200);
         assert_eq!(result.ax1.as_ref().unwrap().x, 300);
@@ -1965,7 +1986,7 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_arc_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_arc_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert_eq!(result.sz.as_ref().unwrap().width, 7000);
         assert_eq!(result.sz.as_ref().unwrap().height, 4000);
         // Non-zero offset → treat_as_char=0
@@ -1992,7 +2013,7 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_arc_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_arc_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert_eq!(result.shape_comment.as_ref().unwrap().text, "호입니다.");
     }
 
@@ -2015,7 +2036,7 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_arc_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_arc_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert!(result.draw_text.is_none(), "Arc should have no draw_text");
     }
 
@@ -2034,7 +2055,7 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_curve_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_curve_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert!(result.segments.is_empty());
         assert!(result.points.is_empty(), "KS X 6101: coords go in segments, not points");
     }
@@ -2056,7 +2077,7 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_curve_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_curve_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert_eq!(result.segments.len(), 2);
         let seg0 = &result.segments[0];
         assert_eq!(seg0.seg_type, "CURVE");
@@ -2085,7 +2106,7 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_curve_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_curve_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert!(result.segments.is_empty(), "single point → no segments");
     }
 
@@ -2108,7 +2129,7 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_curve_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_curve_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert_eq!(result.segments.len(), 3);
         assert_eq!(result.segments[0].seg_type, "LINE");
         // Remaining use default CurveSegmentType::Curve
@@ -2129,7 +2150,7 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_curve_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_curve_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert_eq!(result.shape_comment.as_ref().unwrap().text, "곡선입니다.");
     }
 
@@ -2146,7 +2167,7 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_curve_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_curve_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert_eq!(result.pos.as_ref().unwrap().treat_as_char, 1);
     }
 
@@ -2167,7 +2188,8 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_connect_line_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result =
+            encode_connect_line_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         let cp = result.control_points.as_ref().unwrap();
         // 1 intermediate + start + end = 3 total
         assert_eq!(cp.points.len(), 3);
@@ -2194,7 +2216,8 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_connect_line_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result =
+            encode_connect_line_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         let cp = result.control_points.as_ref().unwrap();
         // Only start + end = 2
         assert_eq!(cp.points.len(), 2);
@@ -2217,7 +2240,8 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_connect_line_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result =
+            encode_connect_line_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert_eq!(result.connect_type, "CURVED");
     }
 
@@ -2237,7 +2261,8 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_connect_line_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result =
+            encode_connect_line_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert!(result.fill_brush.is_none(), "connect lines must have no fill_brush");
     }
 
@@ -2260,7 +2285,8 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_connect_line_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result =
+            encode_connect_line_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert_eq!(result.numbering_type, "PICTURE");
         assert_eq!(result.text_wrap, "IN_FRONT_OF_TEXT");
         let pos = result.pos.as_ref().expect("connect line should carry a pos block");
@@ -2285,7 +2311,8 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_connect_line_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result =
+            encode_connect_line_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert_eq!(result.numbering_type, "NONE");
         assert_eq!(result.text_wrap, "TOP_AND_BOTTOM");
         let pos = result.pos.as_ref().expect("connect line should carry a pos block");
@@ -2308,7 +2335,8 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_connect_line_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result =
+            encode_connect_line_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert_eq!(result.start_pt.as_ref().unwrap().x, 111);
         assert_eq!(result.start_pt.as_ref().unwrap().y, 222);
         assert_eq!(result.end_pt.as_ref().unwrap().x, 333);
@@ -2330,7 +2358,8 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_connect_line_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result =
+            encode_connect_line_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert_eq!(result.shape_comment.as_ref().unwrap().text, "연결선입니다.");
     }
 
@@ -2349,7 +2378,8 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_connect_line_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result =
+            encode_connect_line_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert_eq!(result.pos.as_ref().unwrap().treat_as_char, 0);
     }
 
@@ -2368,7 +2398,7 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_line_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_line_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert!(result.fill_brush.is_none(), "lines have no fill brush per golden");
     }
 
@@ -2385,7 +2415,7 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_line_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_line_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert_eq!(result.shape_comment.as_ref().unwrap().text, "선입니다.");
     }
 
@@ -2402,7 +2432,7 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_line_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_line_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert_eq!(result.start_pt.as_ref().unwrap().x, 50);
         assert_eq!(result.start_pt.as_ref().unwrap().y, 100);
         assert_eq!(result.end_pt.as_ref().unwrap().x, 500);
@@ -2422,7 +2452,7 @@ mod tests {
             style: None,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_line_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_line_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert_eq!(result.numbering_type, "PICTURE");
         assert_eq!(result.text_wrap, "IN_FRONT_OF_TEXT");
         let pos = result.pos.as_ref().unwrap();
@@ -2450,7 +2480,7 @@ mod tests {
             text_vertical_align: VerticalAlign::Top,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_ellipse_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_ellipse_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert_eq!(result.shape_comment.as_ref().unwrap().text, "타원입니다.");
     }
 
@@ -2470,7 +2500,7 @@ mod tests {
             text_vertical_align: VerticalAlign::Top,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_ellipse_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_ellipse_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert_eq!(result.has_arc_pr, 0, "Ellipse must have hasArcPr=0");
     }
 
@@ -2490,7 +2520,7 @@ mod tests {
             text_vertical_align: VerticalAlign::Top,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_ellipse_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_ellipse_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert!(result.draw_text.is_none());
     }
 
@@ -2518,7 +2548,7 @@ mod tests {
         // so existing top-aligned shapes are byte-unchanged.
         let ctrl = ellipse_with_valign(VerticalAlign::Top);
         let mut hl = empty_hyperlinks();
-        let result = encode_ellipse_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_ellipse_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         let dt = result.draw_text.expect("ellipse with text must emit drawText");
         assert_eq!(dt.sub_list.vert_align, "TOP");
     }
@@ -2527,7 +2557,7 @@ mod tests {
     fn encode_ellipse_center_emits_center_sublist() {
         let ctrl = ellipse_with_valign(VerticalAlign::Center);
         let mut hl = empty_hyperlinks();
-        let result = encode_ellipse_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_ellipse_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         let dt = result.draw_text.expect("ellipse with text must emit drawText");
         assert_eq!(dt.sub_list.vert_align, "CENTER");
     }
@@ -2536,7 +2566,7 @@ mod tests {
     fn encode_ellipse_bottom_emits_bottom_sublist() {
         let ctrl = ellipse_with_valign(VerticalAlign::Bottom);
         let mut hl = empty_hyperlinks();
-        let result = encode_ellipse_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_ellipse_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         let dt = result.draw_text.expect("ellipse with text must emit drawText");
         assert_eq!(dt.sub_list.vert_align, "BOTTOM");
     }
@@ -2563,7 +2593,7 @@ mod tests {
             text_vertical_align: VerticalAlign::Top,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_polygon_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_polygon_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert_eq!(result.points.len(), 4);
         assert_eq!(result.points[0].x, 0);
         assert_eq!(result.points[0].y, 100);
@@ -2590,7 +2620,7 @@ mod tests {
             text_vertical_align: VerticalAlign::Top,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_polygon_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_polygon_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert_eq!(result.shape_comment.as_ref().unwrap().text, "다각형입니다.");
     }
 
@@ -2613,7 +2643,7 @@ mod tests {
             text_vertical_align: VerticalAlign::Top,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_polygon_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_polygon_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert_eq!(result.numbering_type, "PICTURE");
         assert_eq!(result.text_wrap, "IN_FRONT_OF_TEXT");
         let pos = result.pos.as_ref().unwrap();
@@ -2627,7 +2657,7 @@ mod tests {
     fn encode_rect_pure_emits_no_draw_text() {
         let ctrl = Control::rect(HwpUnit::new(8000).unwrap(), HwpUnit::new(4000).unwrap()).unwrap();
         let mut hl = empty_hyperlinks();
-        let result = encode_rect_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_rect_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert!(result.draw_text.is_none(), "pure rect must not emit <hp:drawText>");
         let sz = result.sz.as_ref().unwrap();
         assert_eq!(sz.width, 8000);
@@ -2640,7 +2670,7 @@ mod tests {
     fn encode_rect_serializes_to_hp_rect_element() {
         let ctrl = Control::rect(HwpUnit::new(5000).unwrap(), HwpUnit::new(3000).unwrap()).unwrap();
         let mut hl = empty_hyperlinks();
-        let rect = encode_rect_to_hx(&ctrl, 0, &mut hl).unwrap();
+        let rect = encode_rect_to_hx(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         let mut buf = String::new();
         let ser = quick_xml::se::Serializer::with_root(&mut buf, Some("hp:rect")).unwrap();
         serde::Serialize::serialize(&rect, ser).unwrap();
@@ -2661,7 +2691,7 @@ mod tests {
             text_vertical_align: VerticalAlign::Top,
         };
         let mut hl = empty_hyperlinks();
-        let result = encode_textbox_to_rect(&ctrl, 0, &mut hl).unwrap();
+        let result = encode_textbox_to_rect(&ctrl, 0, &mut hl, EncodeOptions::default()).unwrap();
         assert_eq!(result.numbering_type, "PICTURE");
         assert_eq!(result.text_wrap, "IN_FRONT_OF_TEXT");
         let pos = result.pos.as_ref().unwrap();

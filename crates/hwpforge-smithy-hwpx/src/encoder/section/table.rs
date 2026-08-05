@@ -10,6 +10,7 @@ pub(super) fn build_table(
     table: &Table,
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
+    options: EncodeOptions,
 ) -> HwpxResult<HxTable> {
     if depth >= MAX_NESTING_DEPTH {
         return Err(HwpxError::InvalidStructure {
@@ -55,6 +56,7 @@ pub(super) fn build_table(
                 table_border_fill_id,
                 depth,
                 hyperlink_entries,
+                options,
             )
         })
         .collect::<HwpxResult<Vec<_>>>()?;
@@ -115,7 +117,7 @@ pub(super) fn build_table(
         caption: table
             .caption
             .as_ref()
-            .map(|c| build_hx_caption(c, table_width, depth, hyperlink_entries))
+            .map(|c| build_hx_caption(c, table_width, depth, hyperlink_entries, options))
             .transpose()?,
         in_margin: Some(DEFAULT_CELL_MARGIN),
         rows,
@@ -126,6 +128,7 @@ pub(super) fn build_table(
 ///
 /// `col_addrs` contains the precomputed grid column address for each cell,
 /// accounting for col_span/row_span from this and previous rows.
+#[allow(clippy::too_many_arguments)]
 fn build_table_row(
     row: &TableRow,
     row_idx: u32,
@@ -133,6 +136,7 @@ fn build_table_row(
     table_border_fill_id: u32,
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
+    options: EncodeOptions,
 ) -> HwpxResult<HxTableRow> {
     let row_fallback_height =
         (!row.cells.iter().any(|cell| cell.height.is_some())).then_some(row.height).flatten();
@@ -153,6 +157,7 @@ fn build_table_row(
                 },
                 depth,
                 hyperlink_entries,
+                options,
             )
         })
         .collect::<HwpxResult<Vec<_>>>()?;
@@ -178,6 +183,7 @@ fn build_table_cell(
     ctx: TableCellBuildContext,
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
+    options: EncodeOptions,
 ) -> HwpxResult<HxTableCell> {
     Ok(HxTableCell {
         name: String::new(),
@@ -192,6 +198,7 @@ fn build_table_cell(
             depth,
             encode_table_vertical_align(cell.vertical_align.unwrap_or(TableVerticalAlign::Center)),
             hyperlink_entries,
+            options,
         )?),
         cell_addr: Some(HxCellAddr { col_addr: ctx.col_idx, row_addr: ctx.row_idx }),
         cell_span: Some(HxCellSpan {

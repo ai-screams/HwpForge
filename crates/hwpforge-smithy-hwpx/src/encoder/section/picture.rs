@@ -25,6 +25,7 @@ pub(super) fn build_picture(
     img: &Image,
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
+    options: EncodeOptions,
 ) -> HwpxResult<HxPic> {
     let without_prefix = img.path.strip_prefix("BinData/").unwrap_or(&img.path);
     // Strip extension: "image1.png" → "image1"
@@ -102,7 +103,7 @@ pub(super) fn build_picture(
         caption: img
             .caption
             .as_ref()
-            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries))
+            .map(|c| build_hx_caption(c, w, depth, hyperlink_entries, options))
             .transpose()?,
     })
 }

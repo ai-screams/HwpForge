@@ -476,6 +476,35 @@ use self::section::encode_section;
 
 // ── HwpxEncoder ─────────────────────────────────────────────────
 
+/// Encoder behavior options.
+///
+/// [`Default`] 는 현행 인코더 동작 그대로다 (출력 바이트 불변).
+/// `#[non_exhaustive]` — 외부에서는 [`EncodeOptions::default`] 후
+/// 세터로 조정한다.
+#[derive(Debug, Clone, Copy, Default)]
+#[non_exhaustive]
+pub struct EncodeOptions {
+    /// `true` 면 [`Paragraph::layout_cache`](hwpforge_core::paragraph::Paragraph::layout_cache)
+    /// 를 `<hp:linesegarray>` 로 방출한다. 기본 `false`.
+    ///
+    /// ⚠️ 이 opt-in 은 **PDF 재생/비교 파이프라인 전용**이다 (HWP5→HWPX
+    /// convert carry). 편집 표면은 절대 켜지 않는다 — 승격된 캐시를
+    /// 무검증 방출하면 `layout_carry` 의 "이미 있으면 스킵" 안전장치가
+    /// fail-open 이 된다. 또한 과거 convert 가 HWP5 lineseg 를 carry 했다가
+    /// 한컴에서 다중행 텍스트 겹침을 일으켜 제거한 이력이 있다 — 이
+    /// 산출물은 한컴 재개봉 용도가 아니다.
+    pub emit_layout_cache: bool,
+}
+
+impl EncodeOptions {
+    /// 캐시 방출 여부를 설정한다 (기본 `false`).
+    #[must_use]
+    pub fn with_emit_layout_cache(mut self, emit: bool) -> Self {
+        self.emit_layout_cache = emit;
+        self
+    }
+}
+
 /// Encodes Core documents to HWPX format (ZIP + XML).
 ///
 /// This is the reverse of [`crate::HwpxDecoder`]: it takes a validated
@@ -526,6 +555,19 @@ impl HwpxEncoder {
         style_store: &HwpxStyleStore,
         image_store: &ImageStore,
     ) -> HwpxResult<Vec<u8>> {
+        Self::encode_with_options(document, style_store, image_store, EncodeOptions::default())
+    }
+
+    /// [`Self::encode`] 에 동작 옵션([`EncodeOptions`])을 더한 변형.
+    ///
+    /// `EncodeOptions::default()` 를 넘기면 [`Self::encode`] 와 바이트
+    /// 단위로 동일한 출력을 낸다.
+    pub fn encode_with_options(
+        document: &Document<Validated>,
+        style_store: &HwpxStyleStore,
+        image_store: &ImageStore,
+        options: EncodeOptions,
+    ) -> HwpxResult<Vec<u8>> {
         let sections = document.sections();
         let sec_cnt = sections.len() as u32;
 
@@ -542,8 +584,14 @@ impl HwpxEncoder {
         let mut embedded_ole_offset = 0usize;
         let mut section_results = Vec::with_capacity(sections.len());
         for (i, section) in sections.iter().enumerate() {
-            let result =
-                encode_section(section, i, chart_offset, masterpage_offset, embedded_ole_offset)?;
+            let result = encode_section(
+                section,
+                i,
+                chart_offset,
+                masterpage_offset,
+                embedded_ole_offset,
+                options,
+            )?;
             chart_offset += result.charts.len();
             masterpage_offset += result.master_pages.len();
             embedded_ole_offset += result.embedded_oles.len();
