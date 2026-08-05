@@ -163,6 +163,23 @@ impl Table {
         }
     }
 
+    /// 표의 모든 셀 문단과 캡션 문단을 재귀 방문한다 (중첩 표 포함).
+    pub(crate) fn walk_paragraphs_mut(
+        &mut self,
+        f: &mut dyn FnMut(&mut crate::paragraph::Paragraph),
+    ) {
+        for row in &mut self.rows {
+            for cell in &mut row.cells {
+                for p in &mut cell.paragraphs {
+                    p.walk_paragraphs_mut(f);
+                }
+            }
+        }
+        if let Some(caption) = &mut self.caption {
+            caption.walk_paragraphs_mut(f);
+        }
+    }
+
     /// Sets an explicit table width.
     #[must_use]
     pub fn with_width(mut self, width: HwpUnit) -> Self {

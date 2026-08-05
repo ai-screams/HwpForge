@@ -59,6 +59,18 @@ pub struct Run {
 }
 
 impl Run {
+    /// 이 run 안에 중첩된 모든 문단을 재귀 방문한다 (표 셀·캡션·컨트롤 포함).
+    pub(crate) fn walk_paragraphs_mut(
+        &mut self,
+        f: &mut dyn FnMut(&mut crate::paragraph::Paragraph),
+    ) {
+        match &mut self.content {
+            RunContent::Table(table) => table.walk_paragraphs_mut(f),
+            RunContent::Control(control) => control.walk_paragraphs_mut(f),
+            RunContent::Text(_) | RunContent::InlineText(_) | RunContent::Image(_) => {}
+        }
+    }
+
     /// Creates a text run.
     ///
     /// This is the most common constructor. Most runs in a typical

@@ -101,6 +101,14 @@ impl Caption {
     /// assert!(cap.width.is_none());
     /// assert_eq!(cap.paragraphs.len(), 1);
     /// ```
+    /// 캡션 문단 전부를 재귀 방문한다 (문단 안 중첩 포함).
+    pub(crate) fn walk_paragraphs_mut(&mut self, f: &mut dyn FnMut(&mut Paragraph)) {
+        for p in &mut self.paragraphs {
+            p.walk_paragraphs_mut(f);
+        }
+    }
+
+    /// Creates a caption with the given paragraphs and side.
     pub fn new(paragraphs: Vec<Paragraph>, side: CaptionSide) -> Self {
         Self {
             side,

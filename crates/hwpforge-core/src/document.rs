@@ -60,6 +60,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::CoreResult;
 use crate::metadata::Metadata;
+use crate::paragraph::Paragraph;
 use crate::section::Section;
 use crate::validate::validate_sections;
 
@@ -179,6 +180,64 @@ impl Document<Draft> {
     /// ```
     pub fn with_metadata(metadata: Metadata) -> Self {
         Self { sections: Vec::new(), metadata, _state: PhantomData }
+    }
+
+    /// 문서의 모든 문단(전 섹션 본문·머리말·꼬리말·바탕쪽 + 표 셀·캡션·
+    /// 글상자·각주/미주·메모 등 중첩 문단 전부)을 문서 순서로 방문한다.
+    ///
+    /// 캐시 정규화([`Self::strip_layout_caches`]) 등 전 문단 일괄 변환의
+    /// 진입점이다. `Draft` 전용 — `Validated` 는 typestate 상 불변이므로
+    /// 비교가 필요하면 검증 전 사본에서 수행한다.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::document::Document;
+    /// use hwpforge_core::page::PageSettings;
+    /// use hwpforge_core::paragraph::Paragraph;
+    /// use hwpforge_core::section::Section;
+    /// use hwpforge_foundation::ParaShapeIndex;
+    ///
+    /// let mut doc = Document::new();
+    /// doc.add_section(Section::with_paragraphs(
+    ///     vec![Paragraph::new(ParaShapeIndex::new(0))],
+    ///     PageSettings::a4(),
+    /// ));
+    /// let mut count = 0;
+    /// doc.for_each_paragraph_mut(|_| count += 1);
+    /// assert_eq!(count, 1);
+    /// ```
+    pub fn for_each_paragraph_mut<F: FnMut(&mut Paragraph)>(&mut self, mut f: F) {
+        for section in &mut self.sections {
+            section.walk_paragraphs_mut(&mut f);
+        }
+    }
+
+    /// 모든 문단의 줄 조판 캐시([`Paragraph::layout_cache`])를 제거한다.
+    ///
+    /// 문서 동등성 비교(admission/golden)의 정규화 단계: 네이티브 입력은
+    /// 캐시를 보유하고 우리 재인코드 산출물은 미보유가 정상이므로, 비교
+    /// 전 양쪽 사본에서 이 함수를 호출해 캐시 차이를 제거한다.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::document::Document;
+    /// use hwpforge_core::layout::LayoutCache;
+    /// use hwpforge_core::page::PageSettings;
+    /// use hwpforge_core::paragraph::Paragraph;
+    /// use hwpforge_core::section::Section;
+    /// use hwpforge_foundation::ParaShapeIndex;
+    ///
+    /// let mut para = Paragraph::new(ParaShapeIndex::new(0));
+    /// para.layout_cache = Some(LayoutCache::default());
+    /// let mut doc = Document::new();
+    /// doc.add_section(Section::with_paragraphs(vec![para], PageSettings::a4()));
+    /// doc.strip_layout_caches();
+    /// assert!(doc.sections()[0].paragraphs[0].layout_cache.is_none());
+    /// ```
+    pub fn strip_layout_caches(&mut self) {
+        self.for_each_paragraph_mut(|p| p.layout_cache = None);
     }
 
     /// Appends a section to the draft document.

@@ -88,6 +88,7 @@ pub mod document;
 pub mod error;
 pub mod image;
 pub mod inline;
+pub mod layout;
 pub mod metadata;
 pub mod numbering;
 pub mod object_id;
