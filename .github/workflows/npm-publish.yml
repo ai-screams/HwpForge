@@ -133,7 +133,7 @@ jobs:
           fi
 
       - name: Setup Node.js
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           # Node 24 (LTS Krypton) bundles npm >= 11.13. Trusted publishing (OIDC)
           # requires npm >= 11.5.1 / Node >= 22.14.0, and Node 22 is pinned to
@@ -244,7 +244,7 @@ jobs:
           fi
 
       - name: Setup Node.js
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           # See the platform job above — Node 24 for npm >= 11.5.1 (OIDC).
           node-version: "24"
