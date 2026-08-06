@@ -694,7 +694,11 @@ fn convert_table_cell(hx: &HxTableCell, depth: usize) -> HwpxResult<TableCell> {
         Some(sz) => decode_optional_hwp_unit(sz.height, "table cell height")?,
         None => None,
     };
-    let margin: Option<TableMargin> = decode_table_margin(hx.cell_margin.as_ref())?;
+    // H5: 한컴은 hasMargin="0" 이어도 `<hp:cellMargin>` 에 실효값을 쓴다 —
+    // 셀 오버라이드 여부의 진실은 `tc@hasMargin` 이다. element 존재만 보고
+    // 승격하면 표 inMargin fallback 이 영원히 죽는다.
+    let margin: Option<TableMargin> =
+        if hx.has_margin != 0 { decode_table_margin(hx.cell_margin.as_ref())? } else { None };
     let vertical_align: Option<TableVerticalAlign> = match hx.sub_list.as_ref() {
         Some(sub_list) => decode_table_vertical_align(&sub_list.vert_align)?,
         None => None,
