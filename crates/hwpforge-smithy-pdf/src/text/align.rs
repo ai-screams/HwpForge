@@ -13,7 +13,7 @@
 use hwpforge_foundation::Alignment;
 
 /// 한 줄의 배치 입력 (lineseg 에서 온 값 — 정렬 미반영 상태).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LineBox {
     /// 줄 가로 시작 (lineseg `horzpos`, HWPUNIT).
     pub horzpos: i32,
