@@ -9,10 +9,13 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::color::parse_hex_color_or_black;
+use crate::color::{parse_hex_color_or_black, parse_hex_color_raw};
 use crate::list_bridge::{heading_type_to_para_list_type, list_ref_to_wire_parts};
 use hwpforge_blueprint::registry::StyleRegistry;
-use hwpforge_core::{BulletDef, NumberingDef, StyleLookup, TabDef};
+use hwpforge_core::{
+    BorderFillLines, BorderLine, BorderLineKind, BulletDef, FillKind, NumberingDef, StyleLookup,
+    TabDef,
+};
 use hwpforge_foundation::{
     Alignment, BorderFillIndex, BreakType, CharShapeIndex, Color, EmbossType, EmphasisType,
     EngraveType, FontIndex, GradientType, HeadingType, HwpUnit, LineSpacingType, OutlineType,
@@ -1671,6 +1674,69 @@ impl StyleLookup for HwpxStyleStore {
         // ImageStore is separate from HwpxStyleStore; use HwpxStyleLookup bridge instead.
         None
     }
+
+    fn border_fill_lines(&self, id: u32) -> Option<BorderFillLines> {
+        let bf = self.border_fill(id).ok()?;
+        Some(BorderFillLines::new(
+            border_line_from_hwpx(&bf.left),
+            border_line_from_hwpx(&bf.right),
+            border_line_from_hwpx(&bf.top),
+            border_line_from_hwpx(&bf.bottom),
+        ))
+    }
+
+    fn border_fill_face(&self, id: u32) -> Option<FillKind> {
+        let bf = self.border_fill(id).ok()?;
+        if bf.gradient_fill.is_some() || bf.image_fill.is_some() {
+            return Some(FillKind::Unsupported);
+        }
+        let Some(HwpxFill::WinBrush { face_color, .. }) = bf.fill.as_ref() else {
+            return Some(FillKind::None);
+        };
+        // hatch 패턴을 face 색만으로 칠하면 fake — 미지원으로 보고한다.
+        if bf.fill_hatch_style.as_deref().is_some_and(|s| !s.eq_ignore_ascii_case("NONE")) {
+            return Some(FillKind::Unsupported);
+        }
+        let trimmed = face_color.trim();
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("none") {
+            return Some(FillKind::None);
+        }
+        match parse_hex_color_raw(trimmed) {
+            Some(color) => Some(FillKind::Solid(color)),
+            // 등록은 됐지만 파싱 불능 — "없음"으로 뭉개지 않는다 (M2).
+            None => Some(FillKind::Unsupported),
+        }
+    }
+}
+
+// ── borderFill → 렌더 표면 변환 (W3b) ───────────────────────────
+
+/// `HwpxBorderLine`(미파싱 문자열)을 렌더 가능한 [`BorderLine`] 으로 바꾼다.
+///
+/// 파싱 실패는 [`BorderLineKind::Other`] — 소비자가 경고 후 생략한다
+/// (기본값으로 그리는 fake support 금지).
+fn border_line_from_hwpx(line: &HwpxBorderLine) -> BorderLine {
+    if line.line_type.eq_ignore_ascii_case("NONE") {
+        return BorderLine::new(BorderLineKind::None, HwpUnit::ZERO, Color::BLACK);
+    }
+    let (Some(width), Some(color)) =
+        (parse_border_width(&line.width), parse_hex_color_raw(&line.color))
+    else {
+        return BorderLine::new(BorderLineKind::Other, HwpUnit::ZERO, Color::BLACK);
+    };
+    let kind = if line.line_type.eq_ignore_ascii_case("SOLID") {
+        BorderLineKind::Solid
+    } else {
+        BorderLineKind::Other
+    };
+    BorderLine::new(kind, width, color)
+}
+
+/// 괘선 굵기 문자열(`"0.1 mm"` — KS X 6101 LineWidth)을 [`HwpUnit`] 으로.
+fn parse_border_width(s: &str) -> Option<HwpUnit> {
+    let value = s.trim().strip_suffix("mm")?.trim();
+    let mm: f64 = value.parse().ok()?;
+    HwpUnit::from_mm(mm).ok()
 }
 
 // ── Color parsing helper ─────────────────────────────────────────
@@ -2473,6 +2539,126 @@ mod tests {
         assert_eq!(bf.diagonal.as_ref().unwrap().line_type, "SOLID");
         assert_eq!(bf.diagonal.as_ref().unwrap().width, "0.1 mm");
         assert!(bf.fill.is_none());
+    }
+
+    // ── W3b: borderFill → StyleLookup 렌더 표면 ──────────────────
+
+    fn render_border_fill(id: u32, left: HwpxBorderLine, fill: Option<HwpxFill>) -> HwpxBorderFill {
+        HwpxBorderFill::new(
+            id,
+            false,
+            false,
+            "NONE",
+            left,
+            HwpxBorderLine::default(),
+            HwpxBorderLine::default(),
+            HwpxBorderLine::default(),
+            None,
+            HwpxDiagonalLine::default(),
+            HwpxDiagonalLine::default(),
+            fill,
+        )
+    }
+
+    #[test]
+    fn border_fill_lines_parse_solid_and_refuse_to_fake_unsupported() {
+        use hwpforge_core::BorderLineKind;
+        let mut store = HwpxStyleStore::new();
+        let mut bf = render_border_fill(
+            1,
+            HwpxBorderLine {
+                line_type: "SOLID".into(),
+                width: "0.12 mm".into(),
+                color: "#FF0000".into(),
+            },
+            None,
+        );
+        bf.top = HwpxBorderLine {
+            line_type: "DASH".into(),
+            width: "0.1 mm".into(),
+            color: "#000000".into(),
+        };
+        bf.bottom = HwpxBorderLine {
+            line_type: "SOLID".into(),
+            width: "garbage".into(),
+            color: "#000000".into(),
+        };
+        store.push_border_fill(bf);
+
+        let lines = store.border_fill_lines(1).expect("registered id");
+        assert_eq!(lines.left.kind, BorderLineKind::Solid);
+        assert_eq!(lines.left.width, HwpUnit::from_mm(0.12).unwrap());
+        assert_eq!(lines.left.color, Color::from_rgb(0xFF, 0, 0));
+        // 기본 HwpxBorderLine = NONE → 선 없음.
+        assert_eq!(lines.right.kind, BorderLineKind::None);
+        // DASH = 미지원 종류, width 파싱 실패 = 신뢰 불가 — 둘 다 Other (fake 금지).
+        assert_eq!(lines.top.kind, BorderLineKind::Other);
+        assert_eq!(lines.bottom.kind, BorderLineKind::Other);
+        // 미등록 id = None.
+        assert!(store.border_fill_lines(99).is_none());
+    }
+
+    #[test]
+    fn border_fill_face_distinguishes_none_solid_unsupported() {
+        use hwpforge_core::FillKind;
+        let mut store = HwpxStyleStore::new();
+        // id 1: 채움 없음
+        store.push_border_fill(render_border_fill(1, HwpxBorderLine::default(), None));
+        // id 2: 단색
+        store.push_border_fill(render_border_fill(
+            2,
+            HwpxBorderLine::default(),
+            Some(HwpxFill::WinBrush {
+                face_color: "#F2F2F2".into(),
+                hatch_color: "#000000".into(),
+                alpha: String::new(),
+            }),
+        ));
+        // id 3: face "none" = 투명
+        store.push_border_fill(render_border_fill(
+            3,
+            HwpxBorderLine::default(),
+            Some(HwpxFill::WinBrush {
+                face_color: "none".into(),
+                hatch_color: "#000000".into(),
+                alpha: String::new(),
+            }),
+        ));
+        // id 4: hatch 패턴 — face 색만 칠하면 fake
+        let mut hatch = render_border_fill(
+            4,
+            HwpxBorderLine::default(),
+            Some(HwpxFill::WinBrush {
+                face_color: "#FFFFFF".into(),
+                hatch_color: "#000000".into(),
+                alpha: String::new(),
+            }),
+        );
+        hatch.fill_hatch_style = Some("HORIZONTAL".into());
+        store.push_border_fill(hatch);
+        // id 5: gradient
+        let mut grad = render_border_fill(5, HwpxBorderLine::default(), None);
+        grad.gradient_fill = Some(HwpxGradientFill {
+            gradient_type: GradientType::Linear,
+            angle: 0,
+            center_x: 0,
+            center_y: 0,
+            step: 50,
+            step_center: 50,
+            alpha: 0,
+            colors: vec![Color::BLACK, Color::from_rgb(255, 255, 255)],
+        });
+        store.push_border_fill(grad);
+
+        assert_eq!(store.border_fill_face(1), Some(FillKind::None));
+        assert_eq!(
+            store.border_fill_face(2),
+            Some(FillKind::Solid(Color::from_rgb(0xF2, 0xF2, 0xF2)))
+        );
+        assert_eq!(store.border_fill_face(3), Some(FillKind::None));
+        assert_eq!(store.border_fill_face(4), Some(FillKind::Unsupported));
+        assert_eq!(store.border_fill_face(5), Some(FillKind::Unsupported));
+        assert!(store.border_fill_face(99).is_none());
     }
 
     #[test]

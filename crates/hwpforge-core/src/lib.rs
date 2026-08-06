@@ -128,6 +128,6 @@ pub use section::{
     BeginNum, ContentCounts, HeaderFooter, LineNumberShape, MasterPage, PageBorderFillEntry,
     PageNumber, Section, Visibility,
 };
-pub use style_lookup::StyleLookup;
+pub use style_lookup::{BorderFillLines, BorderLine, BorderLineKind, FillKind, StyleLookup};
 pub use tab::{TabDef, TabStop};
 pub use table::{Table, TableCell, TableRow};
