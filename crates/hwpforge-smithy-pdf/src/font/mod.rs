@@ -173,6 +173,33 @@ mod tests {
     }
 
     #[test]
+    fn committed_test_fonts_resolve_family_to_regular_only() {
+        // 커밋된 자체 제작 폰트 (tests/fonts/generate_test_fonts.py) — CI 포함 전 환경 실행.
+        let dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts"));
+        let resolver = FontResolver::new(&[dir]).expect("scan committed fonts");
+        // Bold 파일("...-Bold.ttf")이 사전순으로 먼저 스캔되지만 subfamily 필터가
+        // family 이름 선점을 막는다 (함초롬돋움 잉크 오프셋 2.3pt 오염의 회귀 잠금).
+        let family = resolver.resolve("HwpForge Test").expect("family name");
+        assert!(
+            family.path.file_name().unwrap().to_string_lossy().contains("Regular"),
+            "family 는 Regular 파일이어야 한다: {:?}",
+            family.path
+        );
+        // full name(nameID 4)은 face 고유값 — Bold 도 자기 full name 으로는 해석된다.
+        let bold = resolver.resolve("HwpForge Test Bold").expect("bold full name");
+        assert!(
+            bold.path.file_name().unwrap().to_string_lossy().contains("Bold"),
+            "unexpected file: {:?}",
+            bold.path
+        );
+        // fallback 금지 — 미등록 이름은 에러.
+        assert!(matches!(
+            resolver.resolve("HwpForge Test Black"),
+            Err(PdfError::FontUnresolved { .. })
+        ));
+    }
+
+    #[test]
     fn hancom_bundle_resolves_korean_face_names() {
         let dir = PathBuf::from(HANCOM_TTF_DIR);
         if !dir.exists() {

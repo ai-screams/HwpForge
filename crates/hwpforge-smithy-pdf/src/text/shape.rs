@@ -147,4 +147,45 @@ mod tests {
         // (폰트가 다른 값을 갖는다면 그 값이 정답 — 이 단언은 HBatang 실측 고정.)
         assert_eq!(g.advance, 1000.0);
     }
+
+    // ── 커밋된 테스트 폰트 (tests/fonts/generate_test_fonts.py) — CI 포함 전 환경 실행.
+    // 메트릭이 생성기에 고정돼 있어 (space 0.3em / Latin 0.6em / 한글 1.0em)
+    // 단언을 정확값으로 걸 수 있다.
+
+    fn test_font() -> Vec<u8> {
+        std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts/HwpForgeTest-Regular.ttf"))
+            .expect("committed test font")
+    }
+
+    #[test]
+    fn space_override_beats_font_space_metric() {
+        // 테스트 폰트의 space 어드밴스는 의도적으로 0.3em — 오버라이드(0.5em)가 이겨야 한다.
+        let shaped = shape_text(&test_font(), 0, "가 나", 1000).expect("shape");
+        let spaces: Vec<_> = shaped.glyphs.iter().filter(|g| g.is_space).collect();
+        assert_eq!(spaces.len(), 1);
+        assert_eq!(spaces[0].advance, 500.0, "폰트값 300HU 이 아니라 0.5em=500HU");
+        assert_eq!(shaped.space_count(), 1);
+    }
+
+    #[test]
+    fn glyph_advance_comes_from_hmtx() {
+        // 한글 1.0em·Latin 0.6em — 생성기 고정 메트릭이 그대로 나와야 한다 (1em 가정 금지).
+        let data = test_font();
+        let hangul = shape_text(&data, 0, "가", 1000).expect("shape hangul");
+        assert_eq!(hangul.glyphs.len(), 1);
+        assert_eq!(hangul.glyphs[0].advance, 1000.0);
+        let latin = shape_text(&data, 0, "A", 1000).expect("shape latin");
+        assert_eq!(latin.glyphs.len(), 1);
+        assert_eq!(latin.glyphs[0].advance, 600.0);
+    }
+
+    #[test]
+    fn natural_width_is_exact_and_linear_with_test_font() {
+        // 자연폭 = 어드밴스 합: 가나(2000) + 공백(500) + 다라(2000) = 4500HU @10pt.
+        let data = test_font();
+        let at10 = shape_text(&data, 0, "가나 다라", 1000).expect("shape@10");
+        assert_eq!(at10.natural_width(), 4500.0);
+        let at20 = shape_text(&data, 0, "가나 다라", 2000).expect("shape@20");
+        assert_eq!(at20.natural_width(), 9000.0, "크기 선형성");
+    }
 }
