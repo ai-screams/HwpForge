@@ -315,15 +315,28 @@ fn convert_paragraph(
     let style_id =
         if hx.style_id_ref == 0 { None } else { Some(StyleIndex::new(hx.style_id_ref as usize)) };
 
-    // 줄 조판 캐시 승격 (decode-only): <hp:linesegarray> 를 wire 그대로
-    // Core LayoutCache 로 나른다. 인코더는 기본적으로 재방출하지 않는다.
+    // 줄 조판 캐시 승격 (decode-only). 인코더는 기본적으로 재방출하지 않는다.
+    //
+    // ⚠️ textpos 좌표 정규화: 한컴의 textpos 는 내부 텍스트 스트림 기준이라
+    // 확장 컨트롤(secPr·ctrl — HWP5 secd/cold 의 미러)이 **각 8 유닛**을
+    // 차지한다. Core 캐시는 보이는-텍스트(UTF-16) 좌표를 계약하므로 첫
+    // 텍스트 run 이전의 컨트롤 유닛을 차감한다. 실측: rules-justify 첫
+    // 문단 secPr+colPr = 16 = 70−54 (규칙 문서 §1). 텍스트 시작 이후에
+    // 끼어드는 컨트롤(필드 등)은 W2 스코프 밖 — 소비자의 textpos 정합
+    // 검사가 InvalidCache 로 표면화한다.
+    let leading_ctrl_units: u32 = hx
+        .runs
+        .iter()
+        .take_while(|run| run.texts.is_empty())
+        .map(|run| 8 * (u32::from(run.sec_pr.is_some()) + run.ctrls.len() as u32))
+        .sum();
     let layout_cache = hx.linesegarray.as_ref().map(|array| {
         hwpforge_core::layout::LayoutCache::new(
             array
                 .items
                 .iter()
                 .map(|s| hwpforge_core::layout::LineSeg {
-                    textpos: s.textpos,
+                    textpos: s.textpos.saturating_sub(leading_ctrl_units),
                     vertpos: s.vertpos,
                     vertsize: s.vertsize,
                     textheight: s.textheight,

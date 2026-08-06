@@ -22,6 +22,8 @@ pub struct ShapedGlyph {
     pub advance: f64,
     /// 이 글리프가 공백(U+0020)에서 왔는지 (JUSTIFY 배분 대상).
     pub is_space: bool,
+    /// 원문 텍스트 안의 시작 바이트 (rustybuzz cluster — 텍스트 range 파생용).
+    pub cluster: usize,
 }
 
 /// 한 텍스트 조각의 셰이핑 결과.
@@ -77,11 +79,17 @@ pub fn shape_text(
 
     let mut glyphs = Vec::with_capacity(infos.len());
     for (info, pos) in infos.iter().zip(positions) {
-        // cluster = UTF-8 바이트 인덱스 — 공백 판정에 사용.
-        let is_space = text_bytes.get(info.cluster as usize) == Some(&b' ');
+        // cluster = UTF-8 바이트 인덱스 — 공백 판정·텍스트 range 파생에 사용.
+        let cluster = info.cluster as usize;
+        let is_space = text_bytes.get(cluster) == Some(&b' ');
         let advance_em =
             if is_space { HANCOM_SPACE_ADVANCE_EM } else { f64::from(pos.x_advance) / upem };
-        glyphs.push(ShapedGlyph { glyph_id: info.glyph_id, advance: advance_em * size, is_space });
+        glyphs.push(ShapedGlyph {
+            glyph_id: info.glyph_id,
+            advance: advance_em * size,
+            is_space,
+            cluster,
+        });
     }
     Ok(ShapedText { glyphs })
 }

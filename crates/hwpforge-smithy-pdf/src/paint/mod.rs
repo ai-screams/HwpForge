@@ -24,6 +24,11 @@ impl Pt {
     pub fn from_hwpunit(value: i32) -> Self {
         Self(f64::from(value) / 100.0)
     }
+
+    /// 분수 HWPUNIT(셰이핑 파생값)을 pt 로 변환한다.
+    pub fn from_hwpunit_f64(value: f64) -> Self {
+        Self(value / 100.0)
+    }
 }
 
 /// top-left 원점 2D 좌표.
@@ -53,12 +58,17 @@ pub struct Size {
 pub struct FontKey(pub usize);
 
 /// baseline 원점 기준으로 위치가 확정된 글리프 하나.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PositionedGlyph {
     /// 폰트 내 글리프 ID.
     pub glyph_id: u32,
     /// [`GlyphRun::baseline`] 원점으로부터의 가로 오프셋 (정렬 배분 반영 후).
     pub x_offset: Pt,
+    /// 자연 어드밴스 (마지막 글리프의 pen 이동·advance 기반 백엔드용).
+    pub advance: Pt,
+    /// [`GlyphRun::text`] 안의 UTF-8 바이트 구간 (PDF 텍스트 추출 —
+    /// ToUnicode/ActualText 정합. bbox-diff 게이트가 이것에 의존한다).
+    pub text_range: std::ops::Range<usize>,
 }
 
 /// 같은 폰트·크기·색으로 그리는 글리프 묶음 (한 줄의 run 단위).
@@ -72,6 +82,8 @@ pub struct GlyphRun {
     pub color: Color,
     /// baseline 원점 (top-left 좌표계 — y = baseline 의 세로 위치).
     pub baseline: Point,
+    /// run 의 원문 텍스트 (글리프 [`PositionedGlyph::text_range`] 의 대상).
+    pub text: String,
     /// 위치 확정 글리프들 (baseline 원점 상대).
     pub glyphs: Vec<PositionedGlyph>,
 }
@@ -115,7 +127,13 @@ mod tests {
                 size: Pt(10.0),
                 color: Color::from_rgb(0, 0, 0),
                 baseline: Point { x: Pt(x), y: Pt(100.0) },
-                glyphs: vec![PositionedGlyph { glyph_id: 1, x_offset: Pt(0.0) }],
+                text: "가".to_string(),
+                glyphs: vec![PositionedGlyph {
+                    glyph_id: 1,
+                    x_offset: Pt(0.0),
+                    advance: Pt(10.0),
+                    text_range: 0..3,
+                }],
             })
         };
         let page = Page {

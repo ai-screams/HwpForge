@@ -48,30 +48,16 @@ impl FontResolver {
     pub fn new(dirs: &[PathBuf]) -> PdfResult<Self> {
         let mut index = HashMap::new();
         for dir in dirs {
-            // 재귀 스캔 (한컴 번들은 TTF/{All,Hwp,Install}/ 하위 구조) —
-            // 결정적 우선순위를 위해 항목을 경로순 정렬한다.
-            let mut stack = vec![dir.clone()];
-            while let Some(current) = stack.pop() {
-                let mut entries: Vec<PathBuf> = std::fs::read_dir(&current)?
-                    .collect::<Result<Vec<_>, _>>()?
-                    .into_iter()
-                    .map(|e| e.path())
-                    .collect();
-                entries.sort();
-                for path in entries {
-                    if path.is_dir() {
-                        stack.push(path);
-                        continue;
-                    }
-                    if !is_font_file(&path) {
-                        continue;
-                    }
-                    let Ok(data) = std::fs::read(&path) else {
-                        continue;
-                    };
-                    for (name, face_index) in face_names(&data) {
-                        index.entry(name).or_insert_with(|| (path.clone(), face_index));
-                    }
+            // 재귀 수집 후 전체 경로 정렬 — 순회 순서를 결정적으로 고정.
+            let mut files = Vec::new();
+            collect_font_files(dir, &mut files)?;
+            files.sort();
+            for path in files {
+                let Ok(data) = std::fs::read(&path) else {
+                    continue;
+                };
+                for (name, face_index) in regular_face_names(&data) {
+                    index.entry(name).or_insert_with(|| (path.clone(), face_index));
                 }
             }
         }
@@ -109,8 +95,25 @@ fn is_font_file(path: &Path) -> bool {
         .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "ttf" | "otf" | "ttc"))
 }
 
-/// 파일 안 모든 face 의 (family/full 이름, face 인덱스) 를 수집한다.
-fn face_names(data: &[u8]) -> Vec<(String, u32)> {
+fn collect_font_files(dir: &Path, out: &mut Vec<PathBuf>) -> PdfResult<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
+        if path.is_dir() {
+            collect_font_files(&path, out)?;
+        } else if is_font_file(&path) {
+            out.push(path);
+        }
+    }
+    Ok(())
+}
+
+/// 파일 안 **regular face** 의 (family/full 이름, face 인덱스) 를 수집한다.
+///
+/// family 이름(nameID 1)은 bold/변형 face 도 공유한다 — subfamily(nameID 2)가
+/// Regular 계열일 때만 등록해 비-regular 파일이 family 이름을 선점하지
+/// 못하게 한다 (실측: 함초롬돋움 family 충돌로 잉크 오프셋 2.3pt 오염).
+/// full name(nameID 4)은 face 고유값이라 그대로 등록한다.
+fn regular_face_names(data: &[u8]) -> Vec<(String, u32)> {
     use rustybuzz::ttf_parser;
 
     let face_count = ttf_parser::fonts_in_collection(data).unwrap_or(1);
@@ -119,17 +122,27 @@ fn face_names(data: &[u8]) -> Vec<(String, u32)> {
         let Ok(face) = ttf_parser::Face::parse(data, face_index) else {
             continue;
         };
+        let mut families = Vec::new();
+        let mut subfamilies = Vec::new();
         for name in face.names() {
-            if name.name_id != ttf_parser::name_id::FAMILY
-                && name.name_id != ttf_parser::name_id::FULL_NAME
-            {
+            let Some(value) = name.to_string() else { continue };
+            let value = value.trim().to_string();
+            if value.is_empty() {
                 continue;
             }
-            if let Some(value) = name.to_string() {
-                let value = value.trim().to_string();
-                if !value.is_empty() {
-                    out.push((value, face_index));
-                }
+            match name.name_id {
+                ttf_parser::name_id::FAMILY => families.push(value),
+                ttf_parser::name_id::SUBFAMILY => subfamilies.push(value),
+                ttf_parser::name_id::FULL_NAME => out.push((value, face_index)),
+                _ => {}
+            }
+        }
+        // subfamily 미기재 = 단일 face 파일 → regular 취급.
+        let is_regular = subfamilies.is_empty()
+            || subfamilies.iter().any(|s| s.eq_ignore_ascii_case("regular") || s == "보통");
+        if is_regular {
+            for family in families {
+                out.push((family, face_index));
             }
         }
     }

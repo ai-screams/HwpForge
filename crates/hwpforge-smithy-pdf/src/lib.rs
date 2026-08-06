@@ -30,10 +30,14 @@
 
 #![deny(missing_docs)]
 
+mod backend;
 pub mod font;
 pub mod paint;
+mod render;
 pub mod source;
 pub mod text;
+
+pub use render::render_document;
 
 use hwpforge_core::document::{Document, Validated};
 use hwpforge_core::StyleLookup;
@@ -101,6 +105,12 @@ pub enum PdfWarning {
         /// 문서 내 위치.
         location: String,
     },
+    /// 정렬 배분이 근사임 (배분 정렬 2종·공백 0 JUSTIFY — W0 미실측,
+    /// 위치는 정확하고 스트레치만 생략).
+    AlignmentApproximated {
+        /// 문서 내 위치.
+        location: String,
+    },
 }
 
 /// 렌더 실패 (fail-closed — 출력 바이트 없음).
@@ -152,6 +162,17 @@ pub enum PdfError {
     /// 폰트 파일 IO 실패.
     #[error("font io: {0}")]
     FontIo(#[from] std::io::Error),
+    /// 스타일 조회 실패 — [`StyleLookup`] 이 렌더 필수 속성을 제공하지 않음.
+    #[error("style lookup missing {what} at {location}")]
+    StyleUnavailable {
+        /// 결손 속성 (예: `font name`).
+        what: &'static str,
+        /// 문서 내 위치.
+        location: String,
+    },
+    /// PDF 백엔드(krilla) 실패.
+    #[error("pdf backend: {0}")]
+    Backend(String),
 }
 
 /// 이 크레이트의 `Result`.
