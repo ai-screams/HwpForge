@@ -1,0 +1,129 @@
+//! Paint IR — 좌표 확정·백엔드 중립 페인트 명령.
+//!
+//! 배치소스(source)가 캐시 재생을 끝낸 결과다. 이 층부터는 조판 정보가
+//! 없다 — 좌표는 전부 **top-left 원점 pt(f64)** 로 확정돼 있고, 백엔드는
+//! 그리기만 한다. W3(괘선)·W5(이미지) variant 확장을 위해 타입 계약을
+//! 지금 고정한다 (Codex 리뷰 M1):
+//!
+//! - 백엔드 타입(krilla 등)을 **이 모듈로 새지 않게 한다** — 폰트는
+//!   중립 [`FontKey`], 색은 foundation [`Color`].
+//! - [`Page::items`] 의 **Vec 순서가 z-order** 다 (앞 = 아래).
+//! - 새 variant 는 자기 geometry/style 을 스스로 소유한다.
+
+use hwpforge_foundation::Color;
+
+/// 포인트 단위 좌표값 (1pt = 1/72 inch).
+///
+/// source 층은 HWPUNIT(i32) 정수 산술로 규칙을 끝내고, paint 경계에서
+/// `HwpUnit → Pt` 로 **한 번만** 변환한다 (1pt = 100 HWPUNIT).
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Pt(pub f64);
+
+impl Pt {
+    /// HWPUNIT 값을 pt 로 변환한다 (1pt = 100 HWPUNIT).
+    pub fn from_hwpunit(value: i32) -> Self {
+        Self(f64::from(value) / 100.0)
+    }
+}
+
+/// top-left 원점 2D 좌표.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Point {
+    /// 가로 (오른쪽 +).
+    pub x: Pt,
+    /// 세로 (아래쪽 + — top-left 원점).
+    pub y: Pt,
+}
+
+/// 2D 크기.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Size {
+    /// 폭.
+    pub width: Pt,
+    /// 높이.
+    pub height: Pt,
+}
+
+/// 렌더 컨텍스트 폰트 테이블 인덱스 (백엔드 중립 폰트 식별자).
+///
+/// 실제 폰트 데이터([`crate::font::ResolvedFont`])는 렌더 컨텍스트가
+/// 소유하고, Paint IR 은 인덱스만 나른다 — krilla 폰트 객체나 파일 경로가
+/// 이 층에 유입되면 W4(resolver 확장)에서 재설계가 필요해진다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct FontKey(pub usize);
+
+/// baseline 원점 기준으로 위치가 확정된 글리프 하나.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PositionedGlyph {
+    /// 폰트 내 글리프 ID.
+    pub glyph_id: u32,
+    /// [`GlyphRun::baseline`] 원점으로부터의 가로 오프셋 (정렬 배분 반영 후).
+    pub x_offset: Pt,
+}
+
+/// 같은 폰트·크기·색으로 그리는 글리프 묶음 (한 줄의 run 단위).
+#[derive(Debug, Clone, PartialEq)]
+pub struct GlyphRun {
+    /// 폰트 식별자.
+    pub font: FontKey,
+    /// 글자 크기 (pt).
+    pub size: Pt,
+    /// 글자 색.
+    pub color: Color,
+    /// baseline 원점 (top-left 좌표계 — y = baseline 의 세로 위치).
+    pub baseline: Point,
+    /// 위치 확정 글리프들 (baseline 원점 상대).
+    pub glyphs: Vec<PositionedGlyph>,
+}
+
+/// 페인트 항목. `#[non_exhaustive]` — W3 `Rule`(괘선)·W5 `Image` 확장 예정.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum PaintItem {
+    /// 글리프 run.
+    Glyphs(GlyphRun),
+}
+
+/// PDF 한 쪽.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Page {
+    /// 쪽 크기 (pt).
+    pub size: Size,
+    /// 페인트 항목 — **Vec 순서 = z-order** (앞 원소가 아래에 깔린다).
+    pub items: Vec<PaintItem>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pt_from_hwpunit_is_1_to_100() {
+        assert_eq!(Pt::from_hwpunit(100), Pt(1.0));
+        assert_eq!(Pt::from_hwpunit(0), Pt(0.0));
+        assert_eq!(Pt::from_hwpunit(-1600), Pt(-16.0));
+        // A4 폭 59528 HWPUNIT = 595.28pt
+        assert_eq!(Pt::from_hwpunit(59_528), Pt(595.28));
+    }
+
+    #[test]
+    fn page_items_order_is_z_order() {
+        // 계약 문서화 테스트: Vec 순서가 곧 그리기 순서다.
+        let run = |x: f64| {
+            PaintItem::Glyphs(GlyphRun {
+                font: FontKey(0),
+                size: Pt(10.0),
+                color: Color::from_rgb(0, 0, 0),
+                baseline: Point { x: Pt(x), y: Pt(100.0) },
+                glyphs: vec![PositionedGlyph { glyph_id: 1, x_offset: Pt(0.0) }],
+            })
+        };
+        let page = Page {
+            size: Size { width: Pt(595.28), height: Pt(841.89) },
+            items: vec![run(0.0), run(10.0)],
+        };
+        assert_eq!(page.items.len(), 2);
+        let PaintItem::Glyphs(first) = &page.items[0];
+        assert_eq!(first.baseline.x, Pt(0.0));
+    }
+}

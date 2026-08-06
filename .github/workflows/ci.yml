@@ -309,7 +309,9 @@ jobs:
         with:
           key: msrv
       - name: cargo +1.88 check
-        run: cargo +1.88 check --workspace --all-features
+        # smithy-pdf 는 krilla(rust-version 1.92) 의존으로 워크스페이스 MSRV(1.88) 초과 —
+        # publish=false 라 MSRV 소비자 계약이 없어 MSRV 검증에서만 제외한다 (W2 계획 §6-7).
+        run: cargo +1.88 check --workspace --all-features --exclude hwpforge-smithy-pdf
 
   workflow-compat:
     name: "Standalone › Workflow Lint"

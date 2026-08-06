@@ -11,6 +11,7 @@ members = [
   "crates/hwpforge-smithy-hwp5",
   "crates/hwpforge-smithy-hwpx",
   "crates/hwpforge-smithy-md",
+  "crates/hwpforge-smithy-pdf",
 ]
 # `fuzz/` is a standalone cargo-fuzz workspace (nightly + libfuzzer-sys only);
 # keep it out of the main workspace so normal builds/CI never pull it in.
@@ -57,6 +58,10 @@ flate2 = "1.0"
 
 # === Markdown ===
 pulldown-cmark = "0.13"
+
+# === PDF (smithy-pdf 전용 — krilla 는 rust-version 1.92 요구, 해당 크레이트만 MSRV 상향) ===
+krilla = "0.8.2"
+rustybuzz = "0.20"
 
 # === Error Handling ===
 anyhow = "1.0"

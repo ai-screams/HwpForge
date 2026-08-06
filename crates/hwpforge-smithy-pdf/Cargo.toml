@@ -1,0 +1,27 @@
+[package]
+name = "hwpforge-smithy-pdf"
+version.workspace = true
+authors.workspace = true
+categories.workspace = true
+documentation.workspace = true
+edition.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+license.workspace = true
+publish = false
+readme.workspace = true
+repository.workspace = true
+# krilla 0.8 이 rust-version 1.92 를 요구 — 이 크레이트만 워크스페이스 MSRV(1.88) 초과.
+# CI MSRV 잡은 이 크레이트를 제외한다 (publish=false 라 MSRV 소비자 계약 없음).
+rust-version = "1.92"
+description = "PDF renderer for HwpForge — Hancom layout-cache replay (조판 캐시 재생)"
+
+[dependencies]
+hwpforge-core = { path = "../hwpforge-core", version = "0" }
+hwpforge-foundation = { path = "../hwpforge-foundation", version = "0" }
+krilla = { workspace = true }
+rustybuzz = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0" }
