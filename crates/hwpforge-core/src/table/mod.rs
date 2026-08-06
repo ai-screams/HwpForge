@@ -84,6 +84,32 @@ pub struct TableMargin {
     pub bottom: HwpUnit,
 }
 
+/// Decode-only layout cache for a table — Hancom-saved wire values that are
+/// replayed or used as checksums, never re-typeset.
+///
+/// Encoders MUST NOT emit these values back to the wire (the HWPX encoder
+/// keeps its own `sz` policy). Edit surfaces drop this cache together with
+/// paragraph caches via [`crate::document::Document::strip_layout_caches`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub struct TableLayoutCache {
+    /// Hancom-saved `<hp:sz height>` (always positive — decoders normalize
+    /// `0`/absent to a missing cache).
+    ///
+    /// ⚠️ For a page-spanning (split) table this is the **first fragment's
+    /// height**, not the total table height (W0 measurement). Natively
+    /// authored split tables may store `0` instead.
+    pub saved_sz_height: HwpUnit,
+}
+
+impl TableLayoutCache {
+    /// Creates a table layout cache from the saved `sz` height.
+    #[must_use]
+    pub fn new(saved_sz_height: HwpUnit) -> Self {
+        Self { saved_sz_height }
+    }
+}
+
 fn default_repeat_header() -> bool {
     true
 }
@@ -121,7 +147,8 @@ pub struct Table {
     /// Page-break policy for this table.
     #[serde(default)]
     pub page_break: TablePageBreak,
-    /// Whether the first row repeats across page breaks.
+    /// Whether the leading header-row block (consecutive rows marked
+    /// [`TableRow::is_header`]) repeats across page breaks.
     #[serde(default = "default_repeat_header")]
     pub repeat_header: bool,
     /// Optional explicit spacing between table cells.
@@ -136,6 +163,18 @@ pub struct Table {
     /// 이면 encoder 가 fallback 값 (예: sequential counter) 사용 허용.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inst_id: Option<ObjectId>,
+    /// Outer margins around the table (`<hp:outMargin>`) — the wire source
+    /// for table placement (PDF replay rule R5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub out_margin: Option<TableMargin>,
+    /// Table-level default cell padding (`<hp:inMargin>`) — the fallback when
+    /// a cell has no explicit [`TableCell::margin`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub in_margin: Option<TableMargin>,
+    /// Decode-only layout cache (saved wire geometry) — see
+    /// [`TableLayoutCache`]. Encoders must not emit it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout_cache: Option<TableLayoutCache>,
 }
 
 impl Table {
@@ -160,6 +199,9 @@ impl Table {
             cell_spacing: None,
             border_fill_id: None,
             inst_id: None,
+            out_margin: None,
+            in_margin: None,
+            layout_cache: None,
         }
     }
 
@@ -219,6 +261,27 @@ impl Table {
     #[must_use]
     pub fn with_border_fill_id(mut self, border_fill_id: u32) -> Self {
         self.border_fill_id = Some(border_fill_id);
+        self
+    }
+
+    /// Sets the outer margins around the table.
+    #[must_use]
+    pub fn with_out_margin(mut self, out_margin: TableMargin) -> Self {
+        self.out_margin = Some(out_margin);
+        self
+    }
+
+    /// Sets the table-level default cell padding.
+    #[must_use]
+    pub fn with_in_margin(mut self, in_margin: TableMargin) -> Self {
+        self.in_margin = Some(in_margin);
+        self
+    }
+
+    /// Attaches the decode-only layout cache.
+    #[must_use]
+    pub fn with_layout_cache(mut self, layout_cache: TableLayoutCache) -> Self {
+        self.layout_cache = Some(layout_cache);
         self
     }
 

@@ -178,10 +178,14 @@ mod tests {
         }
 
         fn one_cell_table(cell_para: Paragraph) -> Table {
+            // 표 수준 decode-only 캐시도 부착 — strip 이 문단 캐시와 함께
+            // 제거해야 한다 (out/in_margin 은 구조라 남아야 한다).
             Table::new(vec![TableRow::new(vec![TableCell::new(
                 vec![cell_para],
                 HwpUnit::from_pt(100.0).unwrap(),
             )])])
+            .with_layout_cache(crate::table::TableLayoutCache::new(HwpUnit::from_pt(56.7).unwrap()))
+            .with_out_margin(crate::table::TableMargin::default())
         }
 
         /// 모든 문단 컨테이너를 담은 문서: 본문·표 셀(중첩 표 포함)·표 캡션·
@@ -301,14 +305,26 @@ mod tests {
             doc.strip_layout_caches();
             let mut remaining = 0;
             let mut total = 0;
+            let mut table_caches = 0;
+            let mut table_margins = 0;
             doc.for_each_paragraph_mut(|p| {
                 total += 1;
                 if p.layout_cache.is_some() {
                     remaining += 1;
                 }
+                for run in &p.runs {
+                    if let crate::run::RunContent::Table(t) = &run.content {
+                        table_caches += usize::from(t.layout_cache.is_some());
+                        table_margins += usize::from(t.out_margin.is_some());
+                    }
+                }
             });
             assert_eq!(total, expected);
             assert_eq!(remaining, 0);
+            // 표 캐시도 제거 (중첩 표 포함 — one_cell_table 이 전부 부착).
+            assert_eq!(table_caches, 0, "table layout caches must be stripped");
+            // 반면 out_margin 은 구조 — strip 이 건드리면 안 된다.
+            assert!(table_margins >= 2, "structural margins must survive strip");
         }
 
         #[test]

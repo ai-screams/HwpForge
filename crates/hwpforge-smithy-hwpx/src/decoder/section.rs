@@ -15,7 +15,7 @@ use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::section::{HeaderFooter, PageNumber};
 use hwpforge_core::table::{
-    Table, TableCell, TableMargin, TablePageBreak, TableRow, TableVerticalAlign,
+    Table, TableCell, TableLayoutCache, TableMargin, TablePageBreak, TableRow, TableVerticalAlign,
 };
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
@@ -650,6 +650,22 @@ fn convert_table(hx: &HxTable, depth: usize) -> HwpxResult<Table> {
     }
     if hx.border_fill_id_ref > 0 {
         table = table.with_border_fill_id(hx.border_fill_id_ref);
+    }
+    if let Some(value) = decode_table_margin(hx.out_margin.as_ref())? {
+        table = table.with_out_margin(value);
+    }
+    if let Some(value) = decode_table_margin(hx.in_margin.as_ref())? {
+        table = table.with_in_margin(value);
+    }
+    // 재저장 sz height 는 decode-only 캐시로 승격. 0 = absent (native 저작
+    // 분할 표 실측 — blank-HPC). 분할 표에서 양수값은 첫 조각 높이다.
+    if let Some(sz) = hx.sz.as_ref() {
+        if sz.height > 0 {
+            let height = HwpUnit::new(sz.height).map_err(|_| HwpxError::InvalidStructure {
+                detail: format!("invalid table sz height: {}", sz.height),
+            })?;
+            table = table.with_layout_cache(TableLayoutCache::new(height));
+        }
     }
     Ok(table)
 }
@@ -1626,6 +1642,66 @@ mod tests {
         assert_eq!(para.para_shape_id.get(), 0);
         assert_eq!(para.runs.len(), 1);
         assert_eq!(para.runs[0].content.as_text(), Some("안녕하세요"));
+    }
+
+    #[test]
+    fn table_out_in_margin_and_sz_height_are_promoted() {
+        // W3a: outMargin/inMargin 은 구조 필드로, 재저장 sz height 는
+        // decode-only 캐시로 승격된다 (분할 표에선 첫 조각 높이 — W0 실측).
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <tbl rowCnt="1" colCnt="1" repeatHeader="1" pageBreak="CELL">
+                        <sz width="48189" height="2831"/>
+                        <outMargin left="283" right="284" top="240" bottom="241"/>
+                        <inMargin left="510" right="511" top="141" bottom="142"/>
+                        <tr><tc>
+                            <subList><p paraPrIDRef="0"><run charPrIDRef="0"><t>셀</t></run></p></subList>
+                            <cellAddr colAddr="0" rowAddr="0"/>
+                            <cellSpan colSpan="1" rowSpan="1"/>
+                            <cellSz width="48189" height="2831"/>
+                        </tc></tr>
+                    </tbl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let table = result.paragraphs[0].runs[0].content.as_table().expect("table");
+        let out = table.out_margin.expect("out_margin promoted");
+        assert_eq!(
+            (out.left.as_i32(), out.right.as_i32(), out.top.as_i32(), out.bottom.as_i32()),
+            (283, 284, 240, 241)
+        );
+        let inm = table.in_margin.expect("in_margin promoted");
+        assert_eq!(
+            (inm.left.as_i32(), inm.right.as_i32(), inm.top.as_i32(), inm.bottom.as_i32()),
+            (510, 511, 141, 142)
+        );
+        assert_eq!(table.layout_cache.expect("sz height promoted").saved_sz_height.as_i32(), 2831);
+    }
+
+    #[test]
+    fn table_sz_height_zero_or_missing_margins_normalize_to_none() {
+        // blank-HPC 실측: native 저작 분할 표는 sz height=0 — absent 취급.
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <tbl rowCnt="1" colCnt="1">
+                        <sz width="48189" height="0"/>
+                        <tr><tc>
+                            <subList><p paraPrIDRef="0"><run charPrIDRef="0"><t>셀</t></run></p></subList>
+                            <cellSpan colSpan="1" rowSpan="1"/>
+                            <cellSz width="48189" height="0"/>
+                        </tc></tr>
+                    </tbl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let table = result.paragraphs[0].runs[0].content.as_table().expect("table");
+        assert!(table.layout_cache.is_none(), "sz height=0 must not create a cache");
+        assert!(table.out_margin.is_none());
+        assert!(table.in_margin.is_none());
     }
 
     #[test]

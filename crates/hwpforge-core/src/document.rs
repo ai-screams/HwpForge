@@ -237,7 +237,17 @@ impl Document<Draft> {
     /// assert!(doc.sections()[0].paragraphs[0].layout_cache.is_none());
     /// ```
     pub fn strip_layout_caches(&mut self) {
-        self.for_each_paragraph_mut(|p| p.layout_cache = None);
+        self.for_each_paragraph_mut(|p| {
+            p.layout_cache = None;
+            // 표 수준 decode-only 캐시도 함께 제거 — 방문 문단의 직계 run 만
+            // 보면 충분하다 (중첩 표의 host 는 셀 문단이고, walker 가 셀
+            // 문단도 방문한다).
+            for run in &mut p.runs {
+                if let crate::run::RunContent::Table(table) = &mut run.content {
+                    table.layout_cache = None;
+                }
+            }
+        });
     }
 
     /// Appends a section to the draft document.
