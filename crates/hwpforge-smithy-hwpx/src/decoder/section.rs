@@ -318,18 +318,30 @@ fn convert_paragraph(
     // 줄 조판 캐시 승격 (decode-only). 인코더는 기본적으로 재방출하지 않는다.
     //
     // ⚠️ textpos 좌표 정규화: 한컴의 textpos 는 내부 텍스트 스트림 기준이라
-    // 확장 컨트롤(secPr·ctrl — HWP5 secd/cold 의 미러)이 **각 8 유닛**을
-    // 차지한다. Core 캐시는 보이는-텍스트(UTF-16) 좌표를 계약하므로 첫
-    // 텍스트 run 이전의 컨트롤 유닛을 차감한다. 실측: rules-justify 첫
-    // 문단 secPr+colPr = 16 = 70−54 (규칙 문서 §1). 텍스트 시작 이후에
-    // 끼어드는 컨트롤(필드 등)은 W2 스코프 밖 — 소비자의 textpos 정합
-    // 검사가 InvalidCache 로 표면화한다.
-    let leading_ctrl_units: u32 = hx
-        .runs
-        .iter()
-        .take_while(|run| run.texts.is_empty())
-        .map(|run| 8 * (u32::from(run.sec_pr.is_some()) + run.ctrls.len() as u32))
-        .sum();
+    // 확장 컨트롤(HWP5 secd/cold/head... 의 미러)이 **각 8 유닛**을 차지한다.
+    // Core 캐시는 보이는-텍스트(UTF-16) 좌표를 계약하므로, 텍스트 시작 전에
+    // 스트림을 차지하고 **디코더가 소비해 Core run 에서 사라지는** 요소만
+    // 차감한다: secPr + 섹션-수준 ctrl(colPr/header/footer/pageNum).
+    // 실측: rules-justify 첫 문단 secPr+colPr = 16 = 70−54 (규칙 문서 §1).
+    // 첫 텍스트 run 까지 포함해 센다 (한컴이 secPr 를 텍스트와 같은 run 에
+    // 쓰는 형태도 스트림상 텍스트보다 앞선다). Core run 으로 남는 인라인
+    // 컨트롤(각주·수식·그림 등)이 텍스트보다 앞서는 경우는 여기서 차감하지
+    // 않는다 — 소비자(smithy-pdf)의 선행 비텍스트 run 가드가 fail-closed
+    // 로 거부한다.
+    let leading_ctrl_units: u32 = {
+        let is_section_level = |c: &crate::schema::section::HxCtrl| {
+            c.col_pr.is_some() || c.header.is_some() || c.footer.is_some() || c.page_num.is_some()
+        };
+        let mut units = 0u32;
+        for run in &hx.runs {
+            units += 8 * u32::from(run.sec_pr.is_some());
+            units += 8 * run.ctrls.iter().filter(|c| is_section_level(c)).count() as u32;
+            if !run.texts.is_empty() {
+                break;
+            }
+        }
+        units
+    };
     let layout_cache = hx.linesegarray.as_ref().map(|array| {
         hwpforge_core::layout::LayoutCache::new(
             array
@@ -1649,6 +1661,68 @@ mod tests {
         </sec>"#;
         let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         assert!(result.paragraphs[0].layout_cache.is_none());
+    }
+
+    #[test]
+    fn textpos_normalization_subtracts_leading_section_controls() {
+        // W2 실측 불변식 (규칙 문서 §1): 첫 문단의 secPr(8) + colPr ctrl(8)
+        // = 16 스트림 유닛 → 승격된 textpos 는 보이는-텍스트 좌표 (70−16=54).
+        // 한컴의 "선행 무텍스트 run" 형태.
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <secPr textDirection="HORIZONTAL"/>
+                    <ctrl><colPr type="NEWSPAPER" layout="LEFT" colCount="1" sameSz="1" sameGap="0"/></ctrl>
+                </run>
+                <run charPrIDRef="0"><t>본문 텍스트</t></run>
+                <linesegarray>
+                    <lineseg textpos="16" vertpos="0" vertsize="1000"/>
+                    <lineseg textpos="70" vertpos="1600" vertsize="1000"/>
+                </linesegarray>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let cache = result.paragraphs[0].layout_cache.as_ref().expect("promoted");
+        assert_eq!(cache.lines[0].textpos, 0, "16 − 16");
+        assert_eq!(cache.lines[1].textpos, 54, "70 − 16");
+    }
+
+    #[test]
+    fn textpos_normalization_covers_secpr_in_same_run_as_text() {
+        // 같은 run 에 secPr + 텍스트가 함께 있는 형태 — 스트림상 secPr 는
+        // 텍스트보다 앞서므로 동일하게 차감돼야 한다.
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <secPr textDirection="HORIZONTAL"/>
+                    <t>본문</t>
+                </run>
+                <linesegarray>
+                    <lineseg textpos="8" vertpos="0" vertsize="1000"/>
+                </linesegarray>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let cache = result.paragraphs[0].layout_cache.as_ref().expect("promoted");
+        assert_eq!(cache.lines[0].textpos, 0, "8 − 8(secPr)");
+    }
+
+    #[test]
+    fn textpos_normalization_ignores_inline_ctrls() {
+        // 인라인 ctrl(각주 등)은 Core run 으로 남으므로 차감하지 않는다 —
+        // 선행 배치 시 소비자(smithy-pdf) 가드가 fail-closed 로 거부.
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0"><t>가나</t></run>
+                <run charPrIDRef="0"><ctrl><bookmark name="b"/></ctrl></run>
+                <linesegarray>
+                    <lineseg textpos="0" vertpos="0" vertsize="1000"/>
+                </linesegarray>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let cache = result.paragraphs[0].layout_cache.as_ref().expect("promoted");
+        assert_eq!(cache.lines[0].textpos, 0, "차감 없음");
     }
 
     #[test]

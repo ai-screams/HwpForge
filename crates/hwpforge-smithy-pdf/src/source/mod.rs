@@ -122,6 +122,22 @@ fn replay_section(
         };
         renderable += 1;
 
+        // fail-closed 가드 (독립 리뷰 열린질문): 첫 텍스트 run 이전에 비텍스트
+        // run(컨트롤·이미지)이 있으면 textpos 좌표를 신뢰할 수 없다 — HWPX
+        // 디코더의 선행 컨트롤 정규화는 secPr·ctrl 만 차감하므로(수식·그림
+        // 등은 스트림 유닛 미차감) 무음 오절단 대신 깨끗하게 거부한다.
+        let first_text = para.runs.iter().position(|r| r.content.plain_text().is_some());
+        if let Some(ft) = first_text {
+            if para.runs[..ft].iter().any(|r| r.content.plain_text().is_none()) {
+                return Err(PdfError::InvalidCache {
+                    detail: format!(
+                        "{location}: leading non-text run before first text run — textpos \
+                         normalization does not cover this control kind (W2 scope)"
+                    ),
+                });
+            }
+        }
+
         // regular-only 게이트 (Codex H2): bold/italic run 은 경고.
         for run in &para.runs {
             let bold = input.styles.char_bold(run.char_shape_id).unwrap_or(false);
@@ -224,9 +240,7 @@ fn run_utf16_spans(
             }
             None => {
                 // 표는 이미 거부됐고, 여기 오는 것은 컨트롤/이미지 — 흐름 폭 0.
-                warnings.push(PdfWarning::ParagraphSkipped {
-                    location: format!("{location} (non-text run)"),
-                });
+                warnings.push(PdfWarning::NonTextRunDropped { location: location.to_string() });
             }
         }
     }
@@ -416,6 +430,43 @@ mod tests {
         let doc2 = doc_of(vec![para_with_cache("가나다라", vec![seg(3, 0), seg(1, 1600)])]);
         let err2 = replay(&doc2, &PdfOptions::default()).unwrap_err();
         assert!(matches!(err2, PdfError::InvalidCache { .. }));
+    }
+
+    #[test]
+    fn leading_non_text_run_before_text_is_rejected() {
+        // 독립 리뷰 열린질문 상환: 디코더의 textpos 정규화가 다루지 않는
+        // 선행 컨트롤(각주·그림 등)은 무음 오절단 대신 fail-closed 거부.
+        let mut para = para_with_cache("본문", vec![seg(0, 0)]);
+        para.runs.insert(
+            0,
+            Run::control(
+                hwpforge_core::control::Control::footnote(vec![Paragraph::with_runs(
+                    vec![Run::text("각주", CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )]),
+                CharShapeIndex::new(0),
+            ),
+        );
+        let doc = doc_of(vec![para]);
+        let err = replay(&doc, &PdfOptions::default()).unwrap_err();
+        assert!(matches!(err, PdfError::InvalidCache { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn trailing_non_text_run_is_dropped_with_warning() {
+        // 텍스트 뒤의 컨트롤 run 은 경고와 함께 생략 (문단 자체는 렌더).
+        let mut para = para_with_cache("본문", vec![seg(0, 0)]);
+        para.add_run(Run::control(
+            hwpforge_core::control::Control::footnote(vec![Paragraph::with_runs(
+                vec![Run::text("각주", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )]),
+            CharShapeIndex::new(0),
+        ));
+        let doc = doc_of(vec![para]);
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        assert_eq!(layout.pages[0].lines.len(), 1);
+        assert!(layout.warnings.iter().any(|w| matches!(w, PdfWarning::NonTextRunDropped { .. })));
     }
 
     #[test]

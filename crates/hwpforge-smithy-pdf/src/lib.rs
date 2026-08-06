@@ -111,6 +111,12 @@ pub enum PdfWarning {
         /// 문서 내 위치.
         location: String,
     },
+    /// 문단 안의 비텍스트 run(컨트롤·이미지)을 렌더에서 생략함 (W5 전
+    /// 미지원 — 문단 자체는 렌더됨).
+    NonTextRunDropped {
+        /// 문서 내 위치.
+        location: String,
+    },
 }
 
 /// 렌더 실패 (fail-closed — 출력 바이트 없음).

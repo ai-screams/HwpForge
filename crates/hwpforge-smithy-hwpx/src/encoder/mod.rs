@@ -493,6 +493,10 @@ pub struct EncodeOptions {
     /// fail-open 이 된다. 또한 과거 convert 가 HWP5 lineseg 를 carry 했다가
     /// 한컴에서 다중행 텍스트 겹침을 일으켜 제거한 이력이 있다 — 이
     /// 산출물은 한컴 재개봉 용도가 아니다.
+    ///
+    /// 좌표 주의: HWPX 디코더가 승격한 캐시의 `textpos` 는 **보이는-텍스트
+    /// 좌표로 정규화**돼 있다 (선행 컨트롤 8유닛 차감) — 방출값도 원본
+    /// wire 의 스트림 좌표와 다르다.
     pub emit_layout_cache: bool,
 }
 

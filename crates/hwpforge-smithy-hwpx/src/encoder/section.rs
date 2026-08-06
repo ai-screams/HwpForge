@@ -333,6 +333,15 @@ fn build_section(
     embedded_ole_offset: usize,
     options: EncodeOptions,
 ) -> HwpxResult<HxSection> {
+    // opt-in 캐시 방출 시 첫 문단의 스트림 유닛 역가산분: 인코더가 첫
+    // 문단에 주입하는 secPr(8) + colPr ctrl(8 — enrich 가 항상 추가) +
+    // 머리말/꼬리말/쪽번호 ctrl(각 8, inject_header_footer_pagenum).
+    // 디코더 정규화(convert_paragraph 의 leading_ctrl_units)와 왕복 대칭 —
+    // 주입 구성이 바뀌면 tests/layout_cache_roundtrip.rs 가 깨진다.
+    let first_para_stream_units: u32 = 8
+        * (2 + section.headers.len()
+            + section.footers.len()
+            + usize::from(section.page_number.is_some())) as u32;
     let paragraphs = section
         .paragraphs
         .iter()
@@ -353,6 +362,7 @@ fn build_section(
                 chart_offset,
                 embedded_ole_offset,
                 options,
+                if inject_sec_pr { first_para_stream_units } else { 0 },
             )
             // (signature already plumbs embedded chart OLE state through)
         })
@@ -380,6 +390,7 @@ fn build_paragraph(
     chart_offset: usize,
     embedded_ole_offset: usize,
     options: EncodeOptions,
+    cache_stream_offset: u32,
 ) -> HwpxResult<HxParagraph> {
     let mut runs = build_runs(
         &para.runs,
@@ -409,7 +420,11 @@ fn build_paragraph(
     // multi-line paragraphs. Omitting it forces 한글 to compute properly.
     //
     // Exception (opt-in, PDF 재생/비교 파이프라인 전용): emit_layout_cache
-    // 가 켜지면 Core 로 승격된 캐시를 wire 그대로 되돌려 방출한다.
+    // 가 켜지면 Core 로 승격된 캐시를 되돌려 방출한다. wire 의 textpos 계약은
+    // **한컴 스트림 좌표**(선행 확장 컨트롤 8유닛 포함)이므로, Core 의
+    // 보이는-텍스트 좌표에 `cache_stream_offset`(이 문단에 인코더가 주입할
+    // secPr/colPr/header/footer/pageNum ctrl 유닛 — build_section 이 계산)을
+    // 되더해 방출한다. 디코더 정규화와 정확히 왕복 대칭.
     // 편집 표면은 절대 켜지 않는다 — EncodeOptions::emit_layout_cache 문서 참조.
     let linesegarray = if options.emit_layout_cache {
         para.layout_cache.as_ref().map(|cache| HxLineSegArray {
@@ -417,7 +432,7 @@ fn build_paragraph(
                 .lines
                 .iter()
                 .map(|l| HxLineSeg {
-                    textpos: l.textpos,
+                    textpos: l.textpos + cache_stream_offset,
                     vertpos: l.vertpos,
                     vertsize: l.vertsize,
                     textheight: l.textheight,
@@ -1124,6 +1139,7 @@ fn build_sublist(
                 0,
                 0,
                 options,
+                0, // 서브리스트 문단(셀·머리말 등)엔 인코더 주입 컨트롤이 없다
             )
         })
         .collect::<HwpxResult<Vec<_>>>()?;
