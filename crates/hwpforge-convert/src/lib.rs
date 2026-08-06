@@ -95,6 +95,12 @@ pub struct ConvertOptions {
     /// 과거 무조건 carry 는 한컴에서 다중행 텍스트 겹침을 일으켜 제거됐다
     /// (`layout_hint_patch` 는 표 높이만 재생) — 이 opt-in 산출물은 한컴
     /// 재개봉 용도가 아니다.
+    ///
+    /// ⚠️ 미완 (W2 독립 리뷰 기록): HWP5 승격 경로는 아직 textpos
+    /// 보이는-텍스트 정규화를 하지 않는다 (HWPX 디코더만 정규화) —
+    /// carry 산출물의 캐시는 현재 smithy-pdf 의 textpos 정합 검사를
+    /// 통과하지 못할 수 있다. HWP5 쪽 정규화 = 후속 TODO
+    /// (규칙 문서 §1 · W2 계획 §8).
     pub carry_layout_cache: bool,
 }
 

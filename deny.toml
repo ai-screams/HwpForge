@@ -15,6 +15,9 @@ unmaintained = "workspace"
 ignore = [
   # rand unsoundness only with custom logger + thread_rng reseed; not applicable to HwpForge
   "RUSTSEC-2026-0097",
+  # rustybuzz unmaintained (취약점 아님) — krilla 0.8.x 가 상류에서 고정 의존하므로 회피 불가.
+  # krilla 가 harfrust 로 이주하면 우리 직접 의존도 함께 이주 (W2 계획 백로그).
+  "RUSTSEC-2026-0206",
 ]
 
 [bans]
@@ -32,6 +35,7 @@ allow = [
   "Unicode-3.0",
   "Zlib",
   "BSD-3-Clause",
+  "BSD-2-Clause", # arrayref (krilla 전이 의존, smithy-pdf W2)
 ]
 
 [sources]
