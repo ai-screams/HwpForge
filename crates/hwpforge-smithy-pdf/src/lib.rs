@@ -32,6 +32,7 @@
 
 pub mod font;
 pub mod paint;
+pub mod text;
 
 use hwpforge_core::document::{Document, Validated};
 use hwpforge_core::StyleLookup;
