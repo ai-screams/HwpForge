@@ -123,6 +123,12 @@ pub enum PdfWarning {
         /// 표 host 문단 위치.
         location: String,
     },
+    /// 병합 셀 부족분을 행들에 재배분함 (규칙 = 마지막 스팬 행 몰빵 —
+    /// 실측 fixture 로 확정됐지만 내부 기하는 검산 사각이라 표면화).
+    TableDeficitDistributed {
+        /// 표 host 문단 위치.
+        location: String,
+    },
     /// 미지원 표 스타일(채움 종류·괘선 종류)을 경고 후 생략함.
     UnsupportedTableStyle {
         /// 셀 위치.

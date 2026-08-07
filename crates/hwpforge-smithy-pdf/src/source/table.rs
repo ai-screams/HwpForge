@@ -28,6 +28,9 @@ use crate::{PdfError, PdfInput, PdfResult, PdfWarning};
 /// 44/49/48 분할 정확 재현). blank-HPC 게이트가 반증하면 여기서 재보정.
 const SPLIT_BOTTOM_EXTRA: i32 = 0;
 
+/// 재귀 중첩 표 깊이 상한 — 디코더 캡(32)과 무관하게 API 저작 문서 방어.
+const MAX_TABLE_DEPTH: usize = 4;
+
 /// 섹션 본문 기하 (HWPUNIT).
 pub(crate) struct SectionGeom {
     /// body 상단 오프셋 (margin_top + header_margin).
@@ -95,7 +98,9 @@ pub(crate) fn replay_table(
     let col_x = solve_column_offsets(table, &anchors, col_count, location)?;
 
     // ── 행높이 R1' (게이트2 C3: span=1 만 기여, span>1 은 합 제약) ──
-    let row_heights = compute_row_heights(input, table, &anchors, row_count, location, warnings)?;
+    let depth = 0usize; // top-level 표 — 중첩은 emit_row 재귀에서 +1
+    let row_heights =
+        compute_row_heights(input, table, &anchors, row_count, location, depth, warnings)?;
 
     // ── 제목행 반복 블록 ─────────────────────────────────────────
     let header_rows = table.rows.iter().take_while(|r| r.is_header).count();
@@ -203,6 +208,7 @@ pub(crate) fn replay_table(
                     table_x,
                     header_y,
                     &format!("{location}/rep{fi}"),
+                    depth,
                     pages,
                     warnings,
                 )?;
@@ -221,6 +227,7 @@ pub(crate) fn replay_table(
                 table_x,
                 row_y,
                 &loc,
+                depth,
                 pages,
                 warnings,
             )?;
@@ -297,6 +304,7 @@ fn cell_content_extent(
     input: &PdfInput<'_>,
     cell: &TableCell,
     location: &str,
+    depth: usize,
 ) -> PdfResult<Option<i32>> {
     let mut extent: Option<i32> = None;
     for para in &cell.paragraphs {
@@ -310,7 +318,7 @@ fn cell_content_extent(
         for run in &para.runs {
             if let hwpforge_core::run::RunContent::Table(nested) = &run.content {
                 let om = nested.out_margin.unwrap_or_default();
-                let h = flat_table_height(input, nested, location)?;
+                let h = flat_table_height(input, nested, location, depth + 1)?;
                 e = e.max(cache.lines[0].vertpos + om.top.as_i32() + h + om.bottom.as_i32());
             }
         }
@@ -354,7 +362,18 @@ fn scan_cell_contents(table: &Table, location: &str) -> PdfResult<()> {
 }
 
 /// 중첩 표(행 내부 — 분할 없음)의 총높이 = Σ R1' 행높이.
-fn flat_table_height(input: &PdfInput<'_>, table: &Table, location: &str) -> PdfResult<i32> {
+fn flat_table_height(
+    input: &PdfInput<'_>,
+    table: &Table,
+    location: &str,
+    depth: usize,
+) -> PdfResult<i32> {
+    if depth > MAX_TABLE_DEPTH {
+        return Err(PdfError::UnsupportedContent {
+            kind: "table nesting too deep",
+            location: location.to_string(),
+        });
+    }
     let grid = TableGrid::from_table(table).map_err(|_| PdfError::UnsupportedContent {
         kind: "malformed table grid",
         location: location.to_string(),
@@ -362,23 +381,28 @@ fn flat_table_height(input: &PdfInput<'_>, table: &Table, location: &str) -> Pdf
     let anchors: Vec<&GridCell> = grid.iter_anchors().collect();
     let rows = grid.dimensions().0 as usize;
     let mut scratch = Vec::new();
-    let heights = compute_row_heights(input, table, &anchors, rows, location, &mut scratch)?;
+    let heights = compute_row_heights(input, table, &anchors, rows, location, depth, &mut scratch)?;
     Ok(heights.iter().sum())
 }
 
 /// 중첩 표를 고정 원점에 배치한다 (분할 없음 — 행 내부는 쪽 경계를 못 넘는다).
+#[allow(clippy::too_many_arguments)]
 fn place_table_flat(
     input: &PdfInput<'_>,
     table: &Table,
     location: &str,
     origin_x: i32,
     origin_y: i32,
+    depth: usize,
     pages: &mut [PageLayout],
     warnings: &mut Vec<PdfWarning>,
 ) -> PdfResult<i32> {
     let reject = |kind: &'static str| {
         Err(PdfError::UnsupportedContent { kind, location: location.to_string() })
     };
+    if depth > MAX_TABLE_DEPTH {
+        return reject("table nesting too deep");
+    }
     if table.caption.is_some() {
         return reject("table caption");
     }
@@ -400,7 +424,7 @@ fn place_table_flat(
     let anchors: Vec<&GridCell> = grid.iter_anchors().collect();
     let col_x = solve_column_offsets(table, &anchors, col_count as usize, location)?;
     let heights =
-        compute_row_heights(input, table, &anchors, row_count as usize, location, warnings)?;
+        compute_row_heights(input, table, &anchors, row_count as usize, location, depth, warnings)?;
     let total: i32 = heights.iter().sum();
     // 비분할 검산: Σ행높이 == 재저장 sz (있을 때).
     if let Some(sz) = tlc.saved_sz_height {
@@ -416,7 +440,8 @@ fn place_table_flat(
     let mut y = origin_y;
     for (r, &h) in heights.iter().enumerate() {
         emit_row(
-            input, table, &anchors, r, &col_x, &heights, origin_x, y, location, pages, warnings,
+            input, table, &anchors, r, &col_x, &heights, origin_x, y, location, depth, pages,
+            warnings,
         )?;
         y += h;
     }
@@ -430,7 +455,8 @@ fn compute_row_heights(
     anchors: &[&GridCell],
     row_count: usize,
     location: &str,
-    _warnings: &mut Vec<PdfWarning>,
+    depth: usize,
+    warnings: &mut Vec<PdfWarning>,
 ) -> PdfResult<Vec<i32>> {
     let mut heights = vec![0i32; row_count];
     for a in anchors {
@@ -439,7 +465,7 @@ fn compute_row_heights(
         }
         let cell = cell_of(table, a);
         let m = effective_margin(table, cell);
-        let Some(extent) = cell_content_extent(input, cell, location)? else {
+        let Some(extent) = cell_content_extent(input, cell, location, depth)? else {
             // 셀 캐시 결손 = 자동 행높이 재현 불가 (게이트2 C4 — 표 단위 fatal).
             return Err(PdfError::MissingLayoutCache {
                 count: 1,
@@ -467,21 +493,36 @@ fn compute_row_heights(
         .collect();
     spans.sort_by_key(|&(_, r, end)| (end, end - r));
     let mut changed = true;
+    let mut redistributed = false;
     while changed {
         changed = false;
         for &(a, r, end) in &spans {
             let cell = cell_of(table, a);
             let m = effective_margin(table, cell);
-            let need = cell.height.map_or(0, |h| h.as_i32()).max(
-                cell_content_extent(input, cell, location)?
-                    .map_or(0, |e| e + m.top.as_i32() + m.bottom.as_i32()),
-            );
+            // C4: 병합 셀도 캐시 결손 = 표 단위 fatal (span-1 과 동일 —
+            // 무음 0 처리하면 콘텐츠가 조용히 사라진다, 독립리뷰 H1).
+            let Some(extent) = cell_content_extent(input, cell, location, depth)? else {
+                return Err(PdfError::MissingLayoutCache {
+                    count: 1,
+                    first: format!("{location}/r{r}c{}", a.anchor.col),
+                });
+            };
+            let need = cell
+                .height
+                .map_or(0, |h| h.as_i32())
+                .max(extent + m.top.as_i32() + m.bottom.as_i32());
             let have: i32 = heights[r..end].iter().sum();
             if have < need {
                 heights[end - 1] += need - have;
                 changed = true;
+                redistributed = true;
             }
         }
+    }
+    if redistributed {
+        // 배분 규칙(마지막 스팬 행 몰빵)은 실측 1종 + blank-HPC 괘선 대조로
+        // 확정 — 그래도 내부 기하가 검산 사각이므로 표면화한다 (독립리뷰 M1).
+        warnings.push(PdfWarning::TableDeficitDistributed { location: location.to_string() });
     }
     // 배분 후에도 0 인 행 = 어떤 셀도 높이를 결정 못 함 → 재현 불가.
     for (r, h) in heights.iter().enumerate() {
@@ -507,6 +548,7 @@ fn emit_row(
     table_x: i32,
     row_y: i32,
     location: &str,
+    depth: usize,
     pages: &mut [PageLayout],
     warnings: &mut Vec<PdfWarning>,
 ) -> PdfResult<()> {
@@ -519,7 +561,7 @@ fn emit_row(
         let h: i32 = row_heights[row..(row + s_row).min(row_heights.len())].iter().sum();
 
         // 배경 (FillKind — 없음/미지원 구분, 게이트2 M2).
-        if let Some(id) = cell.border_fill_id {
+        if let Some(id) = cell.border_fill_id.or(table.border_fill_id) {
             match input.styles.border_fill_face(id) {
                 Some(FillKind::Solid(color)) => {
                     let page = pages.last_mut().expect("page exists");
@@ -574,7 +616,7 @@ fn emit_row(
 
         // 셀 텍스트 (셀-상대 캐시 → 페이지 절대 재배치).
         let m = effective_margin(table, cell);
-        let extent = cell_content_extent(input, cell, location)?.unwrap_or(0);
+        let extent = cell_content_extent(input, cell, location, depth)?.unwrap_or(0);
         let inner = h - m.top.as_i32() - m.bottom.as_i32();
         let valign_shift = match cell.vertical_align.unwrap_or(TableVerticalAlign::Top) {
             TableVerticalAlign::Top => 0,
@@ -585,7 +627,7 @@ fn emit_row(
         let content_y = row_y + m.top.as_i32() + valign_shift;
         for (pi, para) in cell.paragraphs.iter().enumerate() {
             let Some(cache) = para.layout_cache.as_ref().filter(|cc| !cc.is_empty()) else {
-                continue; // compute_row_heights 가 이미 fatal 처리 — 방어적 스킵.
+                continue; // compute_row_heights 가 전 셀(span 포함) fatal 처리 — 방어적 스킵.
             };
             // 중첩 표 host 문단: 셀 원점 기준으로 재귀 배치 (행 내부라 분할 없음).
             let mut hosted_table = false;
@@ -600,6 +642,7 @@ fn emit_row(
                         &format!("{cell_loc}/p{pi}/tbl"),
                         content_x + host_seg.horzpos + nom.left.as_i32(),
                         content_y + host_seg.vertpos + nom.top.as_i32(),
+                        depth + 1,
                         pages,
                         warnings,
                     )?;

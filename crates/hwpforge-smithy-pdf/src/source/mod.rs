@@ -613,10 +613,25 @@ mod tests {
             ])
             .with_layout_cache(TableLayoutCache::new(None, true))
         };
-        // 총높이 5000 앵커 = 성공.
+        // 총높이 5000 앵커 = 성공 + 배분 경고 + 기하 직접 잠금:
+        // "C"(행1 셀) baseline = body_top + 행0 높이(1000, 최소 유지) + 850
+        // — 부족분이 행0 이 아니라 행1 하단으로 갔다는 증명 (독립리뷰 M1).
         let follow = para_with_cache("후속", vec![seg(0, 5000)]);
         let doc = doc_of(vec![table_host(make(), 0), follow]);
-        assert!(replay(&doc, &PdfOptions::default()).is_ok());
+        let layout = replay(&doc, &PdfOptions::default()).expect("deficit replay");
+        assert!(
+            layout.warnings.iter().any(|w| matches!(w, PdfWarning::TableDeficitDistributed { .. })),
+            "{:?}",
+            layout.warnings
+        );
+        let body_top = hwpforge_core::page::PageSettings::a4().margin_top.as_i32()
+            + hwpforge_core::page::PageSettings::a4().header_margin.as_i32();
+        let c_line = layout.pages[0]
+            .lines
+            .iter()
+            .find(|l| l.runs.iter().any(|r| r.text == "C"))
+            .expect("C line");
+        assert_eq!(c_line.baseline_y, body_top + 1000 + 850, "행0 은 최소높이 유지");
         // 어긋난 앵커(6000 > 기대 5000, 쪽분할 아님) = 캐시 모순 fatal.
         // (기대보다 작은 v 는 쪽분할로 해석돼 앵커를 못 건다 — 문서화된 사각.)
         let stale = para_with_cache("후속", vec![seg(0, 6000)]);
