@@ -88,3 +88,26 @@ fn generate_all_text_fixture_artifacts() {
         std::fs::write(out_dir.join(format!("{name}-w2.pdf")), &output.bytes).expect("write");
     }
 }
+
+/// W3 표 시각 게이트 산출물 — `--ignored` 수동 실행 (한컴 폰트 필요).
+#[test]
+#[ignore = "W3 table visual gate artifact generation"]
+fn generate_w3_table_artifacts() {
+    let out_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/hwp5_review/_verify/pdf-w3");
+    std::fs::create_dir_all(&out_dir).expect("mkdir");
+    for name in
+        ["rules-table", "rules-pagespan3", "rules-pagespan3-repeat", "rules-rowspan-deficit"]
+    {
+        let Some(output) = render_fixture(&format!("{name}.hwpx")) else {
+            panic!("fixture/폰트 번들 필요: {name}");
+        };
+        let path = out_dir.join(format!("{name}-w3.pdf"));
+        std::fs::write(&path, &output.bytes).expect("write");
+        println!(
+            "wrote {path:?} ({} bytes, warnings={})",
+            output.bytes.len(),
+            output.warnings.len()
+        );
+    }
+}

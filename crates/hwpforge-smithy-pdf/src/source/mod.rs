@@ -157,7 +157,7 @@ fn replay_section(
     let mut renderable = 0usize;
     // 직전 표의 "다음 문단 v" 캐시 앵커 검산 (게이트2 C1 — 계산 페이지네이션
     // 을 캐시가 반증하면 fatal).
-    let mut pending_table_anchor: Option<(i32, String)> = None;
+    let mut pending_table_anchor: Option<(i32, i32, String)> = None;
 
     for (para_idx, para) in section.paragraphs.iter().enumerate() {
         let location = format!("s{section_idx}/p{para_idx}");
@@ -214,7 +214,8 @@ fn replay_section(
                 pages,
                 warnings,
             )?;
-            pending_table_anchor = Some((outcome.expected_next_v, location.clone()));
+            pending_table_anchor =
+                Some((outcome.expected_next_v, outcome.anchor_slack, location.clone()));
             // 분할 표는 흐름 좌표를 마지막 조각 쪽으로 옮긴다 — prev_v 를
             // host v 로 두면 후속 문단의 (작아진) v 가 "새 쪽"으로 오판된다.
             prev_v = Some(outcome.expected_next_v);
@@ -225,6 +226,9 @@ fn replay_section(
         let Some(cache) = para.layout_cache.as_ref().filter(|c| !c.is_empty()) else {
             missing.push(location.clone());
             warnings.push(PdfWarning::ParagraphSkipped { location });
+            // 앵커는 표 "바로 다음" 문단에만 결합한다 — 그 문단이 스킵되면
+            // 이후 문단의 v 는 앵커 식과 무관하므로 폐기 (오발 fatal 방지).
+            pending_table_anchor = None;
             continue;
         };
         renderable += 1;
@@ -313,12 +317,12 @@ fn replay_section(
 /// 다음 문단이 새 쪽에서 시작하면 앵커를 걸 수 없어 건너뛴다 (v 는
 /// 쪽-상대라 비교 불가) — 그 밖에 불일치 = 계산이 캐시와 모순 = fatal.
 fn check_table_anchor(
-    pending: &mut Option<(i32, String)>,
+    pending: &mut Option<(i32, i32, String)>,
     v: i32,
     broke_page: bool,
 ) -> PdfResult<()> {
-    if let Some((expected, table_loc)) = pending.take() {
-        if !broke_page && v != expected {
+    if let Some((expected, slack, table_loc)) = pending.take() {
+        if !broke_page && (v < expected || v - expected >= slack) {
             return Err(PdfError::InvalidCache {
                 detail: format!(
                     "{table_loc}: paragraph after table has cached v={v} but computed table \
@@ -571,19 +575,22 @@ mod tests {
             matches!(err, PdfError::UnsupportedContent { kind: "nonzero table cellSpacing", .. }),
             "{err:?}"
         );
-        // 중첩 표
-        let mut inner_host = para_with_cache("안쪽", vec![seg(0, 0)]);
+        // 중첩 표 = 지원 (재귀 평면 배치 — blank-HPC p2 실물 대응).
+        let mut inner_host = para_with_cache("", vec![seg(0, 0)]);
         inner_host.add_run(Run::table(one_cell_cached_table(), CharShapeIndex::new(0)));
         let nested = Table::new(vec![TableRow::new(vec![TableCell::new(
             vec![inner_host],
             HwpUnit::from_pt(100.0).unwrap(),
         )])])
         .with_layout_cache(TableLayoutCache::new(None, true));
-        let err = replay(&doc_of(vec![table_host(nested, 0)]), &PdfOptions::default()).unwrap_err();
-        assert!(
-            matches!(err, PdfError::UnsupportedContent { kind: "nested table", .. }),
-            "{err:?}"
-        );
+        let layout =
+            replay(&doc_of(vec![table_host(nested, 0)]), &PdfOptions::default()).expect("nested");
+        let texts: Vec<String> = layout.pages[0]
+            .lines
+            .iter()
+            .flat_map(|l| l.runs.iter().map(|r| r.text.clone()))
+            .collect();
+        assert!(texts.iter().any(|t| t == "셀"), "안쪽 표 텍스트 재생: {texts:?}");
     }
 
     #[test]

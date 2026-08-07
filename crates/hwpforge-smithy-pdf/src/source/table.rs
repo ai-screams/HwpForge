@@ -42,6 +42,11 @@ pub(crate) struct SectionGeom {
 pub(crate) struct TableReplayOutcome {
     /// 표 다음 문단의 캐시 v 기대값 (마지막 조각이 놓인 쪽 기준).
     pub expected_next_v: i32,
+    /// 앵커 허용 슬랙 — 다음 문단의 문단-위-간격(캐시 밖 속성)은 기대값에
+    /// 더해질 수 있다 (blank-HPC 실측 +214HU). 페이지네이션 오류는 행
+    /// 단위로 어긋나므로 "마지막 조각 최소 행높이 미만의 양의 편차"만
+    /// 허용하면 오류 포착력은 유지된다.
+    pub anchor_slack: i32,
 }
 
 /// 표 host 문단 하나를 재생한다. 분할 시 `pages` 에 새 쪽을 만든다.
@@ -74,25 +79,7 @@ pub(crate) fn replay_table(
     if table.cell_spacing.is_some_and(|s| s.as_i32() != 0) {
         return reject("nonzero table cellSpacing");
     }
-    for row in &table.rows {
-        for cell in &row.cells {
-            for para in &cell.paragraphs {
-                for run in &para.runs {
-                    match &run.content {
-                        hwpforge_core::run::RunContent::Table(_) => {
-                            return reject("nested table");
-                        }
-                        content if content.plain_text().is_none() => {
-                            // 비텍스트 run 은 자동 행높이에 기여할 수 있다 —
-                            // 캐시만으로 재현 불가 (게이트2 M4).
-                            return reject("non-text content in table cell");
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-    }
+    scan_cell_contents(table, location)?;
 
     // ── 격자 (strict) + 열폭 제약 풀이 ───────────────────────────
     if covered_area(table) > MAX_GRID_POSITIONS {
@@ -131,22 +118,40 @@ pub(crate) fn replay_table(
         end_row: usize,
         top_offset: i32, // body 기준 v
     }
+    // 분할점은 rowspan 내부에 못 떨어진다 — 병합 블록은 원자 (한컴 CELL
+    // 분할도 행 경계·병합 경계만 자른다). r 앞에서 끊어도 되는지 미리 계산.
+    let mut break_ok = vec![true; row_count + 1];
+    for a in &anchors {
+        let (ar, s) = (a.anchor.row as usize, a.row_span as usize);
+        break_ok[(ar + 1)..(ar + s).min(row_count)].fill(false);
+    }
     let mut frags: Vec<Frag> = Vec::new();
     let mut cursor = host_v + om_top;
     let mut frag_start = 0usize;
+    let mut r = 0usize;
     let mut y = cursor;
-    for (r, &h) in row_heights.iter().enumerate() {
+    while r < row_count {
+        let h = row_heights[r];
         if y + h > capacity_end && r > frag_start {
-            frags.push(Frag { start_row: frag_start, end_row: r, top_offset: cursor });
-            frag_start = r;
+            // 경계를 rowspan-안전 지점으로 되돌린다 (병합 블록 통째 이월).
+            let mut cut = r;
+            while cut > frag_start && !break_ok[cut] {
+                cut -= 1;
+            }
+            if cut == frag_start {
+                return reject("merged row block taller than page body");
+            }
+            frags.push(Frag { start_row: frag_start, end_row: cut, top_offset: cursor });
+            frag_start = cut;
             cursor = om_top + if repeat { header_height } else { 0 };
-            y = cursor;
+            y = cursor + row_heights[cut..r].iter().sum::<i32>();
+            // r 는 그대로 — 이월된 행들 높이만 새 조각 기준으로 재적산.
         }
         if y + h > capacity_end {
-            // 새 조각 첫 행조차 안 들어감 = 본문보다 큰 행 (셀 내부 분할 필요).
             return reject("table row taller than page body");
         }
         y += h;
+        r += 1;
     }
     frags.push(Frag { start_row: frag_start, end_row: row_count, top_offset: cursor });
 
@@ -229,7 +234,9 @@ pub(crate) fn replay_table(
     let last = frags.last().expect("at least one fragment");
     let last_height: i32 = row_heights[last.start_row..last.end_row].iter().sum();
     let expected_next_v = last.top_offset + last_height + om_bottom;
-    Ok(TableReplayOutcome { expected_next_v })
+    let anchor_slack =
+        row_heights[last.start_row..last.end_row].iter().copied().min().unwrap_or(1).max(1);
+    Ok(TableReplayOutcome { expected_next_v, anchor_slack })
 }
 
 /// 앵커 제약(`x[c+span] − x[c] = width`)으로 열 경계 오프셋을 푼다.
@@ -286,20 +293,139 @@ fn effective_margin(table: &Table, cell: &TableCell) -> TableMargin {
 
 /// 셀 콘텐츠 세로 범위 = 전 문단 max(마지막 lineseg.v + vertsize).
 /// (다문단 셀 v 는 셀 내 연속 누적 — blank-HPC 56셀 실측.)
-fn cell_content_extent(cell: &TableCell) -> Option<i32> {
+fn cell_content_extent(
+    input: &PdfInput<'_>,
+    cell: &TableCell,
+    location: &str,
+) -> PdfResult<Option<i32>> {
     let mut extent: Option<i32> = None;
     for para in &cell.paragraphs {
-        let cache = para.layout_cache.as_ref().filter(|c| !c.is_empty())?;
+        let Some(cache) = para.layout_cache.as_ref().filter(|c| !c.is_empty()) else {
+            return Ok(None);
+        };
         let last = cache.lines.last().expect("non-empty cache");
-        let e = last.vertpos + last.vertsize;
+        let mut e = last.vertpos + last.vertsize;
+        // 중첩 표 host 문단: lineseg 는 한 줄 높이만 알므로 표 흐름 소비
+        // (host.v + om.top + Σ행높이 + om.bottom, R5)를 별도 가산한다.
+        for run in &para.runs {
+            if let hwpforge_core::run::RunContent::Table(nested) = &run.content {
+                let om = nested.out_margin.unwrap_or_default();
+                let h = flat_table_height(input, nested, location)?;
+                e = e.max(cache.lines[0].vertpos + om.top.as_i32() + h + om.bottom.as_i32());
+            }
+        }
         extent = Some(extent.map_or(e, |cur| cur.max(e)));
     }
-    extent
+    Ok(extent)
+}
+
+/// 셀 콘텐츠 admission: 중첩 표는 허용(재귀 배치), 그 밖의 비텍스트 run 은
+/// 자동 행높이 재현 불가로 거부 (게이트2 M4).
+fn scan_cell_contents(table: &Table, location: &str) -> PdfResult<()> {
+    for row in &table.rows {
+        for cell in &row.cells {
+            for para in &cell.paragraphs {
+                let mut has_table = false;
+                let mut has_text = false;
+                for run in &para.runs {
+                    match &run.content {
+                        hwpforge_core::run::RunContent::Table(_) => has_table = true,
+                        content => match content.plain_text() {
+                            Some(t) => has_text |= !t.trim().is_empty(),
+                            None => {
+                                return Err(PdfError::UnsupportedContent {
+                                    kind: "non-text content in table cell",
+                                    location: location.to_string(),
+                                });
+                            }
+                        },
+                    }
+                }
+                if has_table && has_text {
+                    return Err(PdfError::UnsupportedContent {
+                        kind: "table mixed with visible text",
+                        location: location.to_string(),
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 중첩 표(행 내부 — 분할 없음)의 총높이 = Σ R1' 행높이.
+fn flat_table_height(input: &PdfInput<'_>, table: &Table, location: &str) -> PdfResult<i32> {
+    let grid = TableGrid::from_table(table).map_err(|_| PdfError::UnsupportedContent {
+        kind: "malformed table grid",
+        location: location.to_string(),
+    })?;
+    let anchors: Vec<&GridCell> = grid.iter_anchors().collect();
+    let rows = grid.dimensions().0 as usize;
+    let mut scratch = Vec::new();
+    let heights = compute_row_heights(input, table, &anchors, rows, location, &mut scratch)?;
+    Ok(heights.iter().sum())
+}
+
+/// 중첩 표를 고정 원점에 배치한다 (분할 없음 — 행 내부는 쪽 경계를 못 넘는다).
+fn place_table_flat(
+    input: &PdfInput<'_>,
+    table: &Table,
+    location: &str,
+    origin_x: i32,
+    origin_y: i32,
+    pages: &mut [PageLayout],
+    warnings: &mut Vec<PdfWarning>,
+) -> PdfResult<i32> {
+    let reject = |kind: &'static str| {
+        Err(PdfError::UnsupportedContent { kind, location: location.to_string() })
+    };
+    if table.caption.is_some() {
+        return reject("table caption");
+    }
+    let Some(tlc) = table.layout_cache else {
+        return Err(PdfError::MissingLayoutCache { count: 1, first: location.to_string() });
+    };
+    if !tlc.default_flow_pos {
+        return reject("non-default table position");
+    }
+    if table.cell_spacing.is_some_and(|s| s.as_i32() != 0) {
+        return reject("nonzero table cellSpacing");
+    }
+    scan_cell_contents(table, location)?;
+    let grid = match TableGrid::from_table(table) {
+        Ok(grid) => grid,
+        Err(_) => return reject("malformed table grid"),
+    };
+    let (row_count, col_count) = grid.dimensions();
+    let anchors: Vec<&GridCell> = grid.iter_anchors().collect();
+    let col_x = solve_column_offsets(table, &anchors, col_count as usize, location)?;
+    let heights =
+        compute_row_heights(input, table, &anchors, row_count as usize, location, warnings)?;
+    let total: i32 = heights.iter().sum();
+    // 비분할 검산: Σ행높이 == 재저장 sz (있을 때).
+    if let Some(sz) = tlc.saved_sz_height {
+        if sz.as_i32() != total {
+            return Err(PdfError::InvalidCache {
+                detail: format!(
+                    "{location}: nested table height {total} != saved sz {}",
+                    sz.as_i32()
+                ),
+            });
+        }
+    }
+    let mut y = origin_y;
+    for (r, &h) in heights.iter().enumerate() {
+        emit_row(
+            input, table, &anchors, r, &col_x, &heights, origin_x, y, location, pages, warnings,
+        )?;
+        y += h;
+    }
+    Ok(total)
 }
 
 /// R1' 행높이: span=1 셀만 행 최소높이에 기여, span>1 은 합 제약 검사.
 fn compute_row_heights(
-    _input: &PdfInput<'_>,
+    input: &PdfInput<'_>,
     table: &Table,
     anchors: &[&GridCell],
     row_count: usize,
@@ -313,7 +439,7 @@ fn compute_row_heights(
         }
         let cell = cell_of(table, a);
         let m = effective_margin(table, cell);
-        let Some(extent) = cell_content_extent(cell) else {
+        let Some(extent) = cell_content_extent(input, cell, location)? else {
             // 셀 캐시 결손 = 자동 행높이 재현 불가 (게이트2 C4 — 표 단위 fatal).
             return Err(PdfError::MissingLayoutCache {
                 count: 1,
@@ -347,7 +473,8 @@ fn compute_row_heights(
             let cell = cell_of(table, a);
             let m = effective_margin(table, cell);
             let need = cell.height.map_or(0, |h| h.as_i32()).max(
-                cell_content_extent(cell).map_or(0, |e| e + m.top.as_i32() + m.bottom.as_i32()),
+                cell_content_extent(input, cell, location)?
+                    .map_or(0, |e| e + m.top.as_i32() + m.bottom.as_i32()),
             );
             let have: i32 = heights[r..end].iter().sum();
             if have < need {
@@ -447,7 +574,7 @@ fn emit_row(
 
         // 셀 텍스트 (셀-상대 캐시 → 페이지 절대 재배치).
         let m = effective_margin(table, cell);
-        let extent = cell_content_extent(cell).unwrap_or(0);
+        let extent = cell_content_extent(input, cell, location)?.unwrap_or(0);
         let inner = h - m.top.as_i32() - m.bottom.as_i32();
         let valign_shift = match cell.vertical_align.unwrap_or(TableVerticalAlign::Top) {
             TableVerticalAlign::Top => 0,
@@ -460,6 +587,27 @@ fn emit_row(
             let Some(cache) = para.layout_cache.as_ref().filter(|cc| !cc.is_empty()) else {
                 continue; // compute_row_heights 가 이미 fatal 처리 — 방어적 스킵.
             };
+            // 중첩 표 host 문단: 셀 원점 기준으로 재귀 배치 (행 내부라 분할 없음).
+            let mut hosted_table = false;
+            for run in &para.runs {
+                if let hwpforge_core::run::RunContent::Table(nested) = &run.content {
+                    hosted_table = true;
+                    let host_seg = &cache.lines[0];
+                    let nom = nested.out_margin.unwrap_or_default();
+                    place_table_flat(
+                        input,
+                        nested,
+                        &format!("{cell_loc}/p{pi}/tbl"),
+                        content_x + host_seg.horzpos + nom.left.as_i32(),
+                        content_y + host_seg.vertpos + nom.top.as_i32(),
+                        pages,
+                        warnings,
+                    )?;
+                }
+            }
+            if hosted_table {
+                continue; // scan_cell_contents 가 표+가시 텍스트 혼재를 이미 거부.
+            }
             let text = para.text_content();
             let utf16: Vec<u16> = text.encode_utf16().collect();
             if utf16.is_empty() {
