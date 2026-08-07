@@ -13,7 +13,7 @@
 //! rowspan·본문보다 큰 행·셀 캐시 결손·열폭 미유일)은 전부 fail-closed.
 
 use hwpforge_core::table::grid::{covered_area, GridCell, TableGrid, MAX_GRID_POSITIONS};
-use hwpforge_core::table::{Table, TableCell, TableMargin, TableVerticalAlign};
+use hwpforge_core::table::{Table, TableCell, TableMargin, TablePageBreak, TableVerticalAlign};
 use hwpforge_core::{BorderLineKind, FillKind};
 use hwpforge_foundation::Alignment;
 
@@ -30,6 +30,9 @@ const SPLIT_BOTTOM_EXTRA: i32 = 0;
 
 /// 재귀 중첩 표 깊이 상한 — 디코더 캡(32)과 무관하게 API 저작 문서 방어.
 const MAX_TABLE_DEPTH: usize = 4;
+
+/// 분할 표 첫 조각: 재저장 sz(한컴 실측)와 계산 절단의 허용 편차 (실측 Δ101HU).
+const SZ_CUT_TOLERANCE: i32 = 300;
 
 /// 섹션 본문 기하 (HWPUNIT).
 pub(crate) struct SectionGeom {
@@ -118,131 +121,200 @@ pub(crate) fn replay_table(
     let (om_top, om_bottom, om_left) = (om.top.as_i32(), om.bottom.as_i32(), om.left.as_i32());
     let capacity_end = geom.body_height - om_bottom - SPLIT_BOTTOM_EXTRA;
 
-    struct Frag {
-        start_row: usize,
-        end_row: usize,
-        top_offset: i32, // body 기준 v
-    }
-    // 분할점은 rowspan 내부에 못 떨어진다 — 병합 블록은 원자 (한컴 CELL
-    // 분할도 행 경계·병합 경계만 자른다). r 앞에서 끊어도 되는지 미리 계산.
+    // ── 조각 = 표 콘텐츠 y-창 [y0, y1) (0 = 행0 상단) ────────────
+    let row_tops: Vec<i32> = {
+        let mut acc = 0;
+        let mut v = Vec::with_capacity(row_count + 1);
+        v.push(0);
+        for &h in &row_heights {
+            acc += h;
+            v.push(acc);
+        }
+        v
+    };
+    let total_height = row_tops[row_count];
+    // 행 경계 절단 허용 여부 (TABLE 모드에서만 병합 블록 원자 — CELL 모드는
+    // 병합 셀도 관통 절단한다: blank-HPC r3..r10 병합 실측).
     let mut break_ok = vec![true; row_count + 1];
     for a in &anchors {
-        let (ar, s) = (a.anchor.row as usize, a.row_span as usize);
-        break_ok[(ar + 1)..(ar + s).min(row_count)].fill(false);
+        let (ar, sp) = (a.anchor.row as usize, a.row_span as usize);
+        break_ok[(ar + 1)..(ar + sp).min(row_count)].fill(false);
     }
+    // CELL 내부 절단: 줄 걸침은 줄 상단으로 스냅 (텍스트 줄은 원자).
+    let snap_cut = |mut c: i32| -> i32 {
+        loop {
+            let mut snapped = c;
+            for a in &anchors {
+                let cell = cell_of(table, a);
+                let m = effective_margin(table, cell);
+                let base = row_tops[a.anchor.row as usize] + m.top.as_i32();
+                for para in &cell.paragraphs {
+                    let Some(cache) = para.layout_cache.as_ref().filter(|cc| !cc.is_empty()) else {
+                        continue;
+                    };
+                    for seg in &cache.lines {
+                        let line_top = base + seg.vertpos;
+                        if line_top < snapped && snapped < line_top + seg.vertsize {
+                            snapped = line_top;
+                        }
+                    }
+                }
+            }
+            if snapped == c {
+                return c;
+            }
+            c = snapped;
+        }
+    };
+    struct Frag {
+        y0: i32,
+        y1: i32,
+        top_offset: i32,
+    }
+    let continuation_top = om_top + if repeat { header_height } else { 0 };
     let mut frags: Vec<Frag> = Vec::new();
-    let mut cursor = host_v + om_top;
-    let mut frag_start = 0usize;
-    let mut r = 0usize;
-    let mut y = cursor;
-    while r < row_count {
-        let h = row_heights[r];
-        if y + h > capacity_end && r > frag_start {
-            // 경계를 rowspan-안전 지점으로 되돌린다 (병합 블록 통째 이월).
-            let mut cut = r;
-            while cut > frag_start && !break_ok[cut] {
-                cut -= 1;
-            }
-            if cut == frag_start {
-                return reject("merged row block taller than page body");
-            }
-            frags.push(Frag { start_row: frag_start, end_row: cut, top_offset: cursor });
-            frag_start = cut;
-            cursor = om_top + if repeat { header_height } else { 0 };
-            y = cursor + row_heights[cut..r].iter().sum::<i32>();
-            // r 는 그대로 — 이월된 행들 높이만 새 조각 기준으로 재적산.
+    let mut y0 = 0i32;
+    let mut top = host_v + om_top;
+    loop {
+        let avail = capacity_end - top;
+        if total_height - y0 <= avail {
+            frags.push(Frag { y0, y1: total_height, top_offset: top });
+            break;
         }
-        if y + h > capacity_end {
-            return reject("table row taller than page body");
+        if avail <= 0 {
+            return reject("table fragment has no room on page");
         }
-        y += h;
-        r += 1;
+        let limit = y0 + avail;
+        let cut = match table.page_break {
+            TablePageBreak::None => {
+                return reject("unsplittable table taller than page body");
+            }
+            TablePageBreak::Table => {
+                let mut best = None;
+                for (ri, &t) in row_tops.iter().enumerate() {
+                    if t > y0 && t <= limit && break_ok[ri] {
+                        best = Some(t);
+                    }
+                }
+                match best {
+                    Some(c) => c,
+                    None => return reject("merged row block taller than page body"),
+                }
+            }
+            TablePageBreak::Cell => {
+                // 남은 공간을 채우는 임의 절단 (한컴 실측 — r10 행 내부 분할).
+                let c = snap_cut(limit);
+                if c <= y0 {
+                    return reject("table line taller than page body");
+                }
+                c
+            }
+        };
+        frags.push(Frag { y0, y1: cut, top_offset: top });
+        y0 = cut;
+        top = continuation_top;
     }
-    frags.push(Frag { start_row: frag_start, end_row: row_count, top_offset: cursor });
 
     if frags.len() > 1 {
-        for anchor in &anchors {
-            let (r, s) = (anchor.anchor.row as usize, anchor.row_span as usize);
-            if s > 1 {
-                let within_one = frags.iter().any(|f| r >= f.start_row && r + s <= f.end_row);
-                if !within_one {
-                    return reject("rowspan across page boundary");
-                }
+        // 분할 표 재저장 sz = 한컴의 **첫 조각 높이 실측치** (규칙 §3.3) —
+        // 캐시 우선 원칙대로 첫 절단을 그 값으로 교정한다 (blank-HPC 실측
+        // Δ101HU 급 미세차). 크게 어긋나면 모델 모순 = fatal.
+        if let Some(sz) = tlc.saved_sz_height {
+            let saved = sz.as_i32();
+            let computed = frags[0].y1;
+            if (saved - computed).abs() > SZ_CUT_TOLERANCE {
+                return Err(PdfError::InvalidCache {
+                    detail: format!(
+                        "{location}: saved first-fragment height {saved} vs computed \
+                         {computed} (beyond ±{SZ_CUT_TOLERANCE} — pagination model mismatch; \
+                         host_v={host_v} capacity_end={capacity_end} heights={row_heights:?})"
+                    ),
+                });
+            }
+            if saved != computed && saved > frags[0].y0 && saved < frags[1].y1 {
+                frags[0].y1 = saved;
+                frags[1].y0 = saved;
             }
         }
         warnings.push(PdfWarning::TablePaginationComputed { location: location.to_string() });
-    }
-
-    // ── 검산 ① 첫 조각 높이 == 재저장 sz (있을 때, 규칙 §3.3 함정 반영) ──
-    let frag0_height: i32 = row_heights[frags[0].start_row..frags[0].end_row].iter().sum();
-    if let Some(sz) = tlc.saved_sz_height {
-        if sz.as_i32() != frag0_height {
+    } else if let Some(sz) = tlc.saved_sz_height {
+        // 비분할: Σ행높이 == sz 검산 (규칙 §6).
+        if sz.as_i32() != total_height {
             return Err(PdfError::InvalidCache {
                 detail: format!(
-                    "{location}: computed first-fragment height {frag0_height} != saved sz \
-                     height {} (pagination or R1 mismatch)",
+                    "{location}: computed table height {total_height} != saved sz height {} \
+                     (R1 mismatch; heights={row_heights:?})",
                     sz.as_i32()
                 ),
             });
         }
     }
 
-    // ── 방출 (조각별 절대좌표 재계산 — 게이트2 H4) ───────────────
+    // ── 방출: 조각 창과 교차하는 앵커를 창-절단으로 그린다 ────────
     let table_x = geom.body_left + host_h + om_left;
     for (fi, frag) in frags.iter().enumerate() {
         if fi > 0 {
             new_page(pages);
         }
-        let mut row_y = geom.body_top + frag.top_offset;
+        let loc = if fi == 0 { location.to_string() } else { format!("{location}/frag{fi}") };
         if fi > 0 && repeat {
-            // 연속 조각 상단 제목행 (원본 셀-상대 캐시 재생, 절대좌표만 재계산).
-            let mut header_y = geom.body_top + om_top;
-            for hr in 0..header_rows {
-                emit_row(
+            // 연속 조각 상단 반복 제목행 (원본 셀-상대 캐시, 절대좌표 재계산).
+            for a in anchors.iter().filter(|a| (a.anchor.row as usize) < header_rows) {
+                let a_top = row_tops[a.anchor.row as usize];
+                emit_anchor_clipped(
                     input,
                     table,
-                    &anchors,
-                    hr,
+                    a,
                     &col_x,
                     &row_heights,
                     table_x,
-                    header_y,
+                    geom.body_top + om_top + a_top,
+                    None,
                     &format!("{location}/rep{fi}"),
                     depth,
                     pages,
                     warnings,
                 )?;
-                header_y += row_heights[hr];
             }
         }
-        for r in frag.start_row..frag.end_row {
-            let loc = if fi == 0 { location.to_string() } else { format!("{location}/frag{fi}") };
-            emit_row(
+        for a in &anchors {
+            let ar = a.anchor.row as usize;
+            let a_top = row_tops[ar];
+            let a_bot = a_top
+                + row_heights[ar..(ar + a.row_span as usize).min(row_count)].iter().sum::<i32>();
+            let w0 = frag.y0.max(a_top);
+            let w1 = frag.y1.min(a_bot);
+            if w0 >= w1 {
+                continue;
+            }
+            let clip =
+                if w0 == a_top && w1 == a_bot { None } else { Some((w0 - a_top, w1 - a_top)) };
+            emit_anchor_clipped(
                 input,
                 table,
-                &anchors,
-                r,
+                a,
                 &col_x,
                 &row_heights,
                 table_x,
-                row_y,
+                geom.body_top + frag.top_offset + (w0 - frag.y0),
+                clip,
                 &loc,
                 depth,
                 pages,
                 warnings,
             )?;
-            row_y += row_heights[r];
         }
     }
 
-    // ── 검산 ② 앵커 준비: 다음 문단 v 기대값 ─────────────────────
-    // 연속 조각의 top_offset 은 (반복 제목행 포함) 데이터 시작 위치라
-    // 마지막 조각 데이터 높이만 더하면 표 하단이 된다.
+    // ── 앵커: 다음 문단 v 기대값 ─────────────────────────────────
     let last = frags.last().expect("at least one fragment");
-    let last_height: i32 = row_heights[last.start_row..last.end_row].iter().sum();
-    let expected_next_v = last.top_offset + last_height + om_bottom;
-    let anchor_slack =
-        row_heights[last.start_row..last.end_row].iter().copied().min().unwrap_or(1).max(1);
+    let expected_next_v = last.top_offset + (last.y1 - last.y0) + om_bottom;
+    let anchor_slack = (0..row_count)
+        .filter(|&ri| row_tops[ri] < last.y1 && row_tops[ri + 1] > last.y0)
+        .map(|ri| row_heights[ri])
+        .min()
+        .unwrap_or(1)
+        .max(1);
     Ok(TableReplayOutcome { expected_next_v, anchor_slack })
 }
 
@@ -552,13 +624,89 @@ fn emit_row(
     pages: &mut [PageLayout],
     warnings: &mut Vec<PdfWarning>,
 ) -> PdfResult<()> {
+    emit_row_clipped(
+        input,
+        table,
+        anchors,
+        row,
+        col_x,
+        row_heights,
+        table_x,
+        row_y,
+        None,
+        location,
+        depth,
+        pages,
+        warnings,
+    )
+}
+
+/// [`emit_row`] 의 절단 판 — `clip = Some((from, to))` 이면 행-로컬 y 창
+/// `[from, to)` 만 그린다 (CELL 모드 행 내부 분할 — blank-HPC r10 실측).
+#[allow(clippy::too_many_arguments)]
+fn emit_row_clipped(
+    input: &PdfInput<'_>,
+    table: &Table,
+    anchors: &[&GridCell],
+    row: usize,
+    col_x: &[i32],
+    row_heights: &[i32],
+    table_x: i32,
+    row_y: i32,
+    clip: Option<(i32, i32)>,
+    location: &str,
+    depth: usize,
+    pages: &mut [PageLayout],
+    warnings: &mut Vec<PdfWarning>,
+) -> PdfResult<()> {
     for a in anchors.iter().filter(|a| a.anchor.row as usize == row) {
+        emit_anchor_clipped(
+            input,
+            table,
+            a,
+            col_x,
+            row_heights,
+            table_x,
+            row_y,
+            clip,
+            location,
+            depth,
+            pages,
+            warnings,
+        )?;
+    }
+    Ok(())
+}
+
+/// 앵커 셀 하나를 (필요 시 절단 창으로) 방출한다 — 배경 → 괘선 → 텍스트.
+///
+/// `clip = Some((from, to))` 는 **앵커-로컬** y 창 (0 = 앵커 셀 상단):
+/// 병합 셀이 쪽 경계를 가로지르면 조각별로 다른 창이 들어온다.
+#[allow(clippy::too_many_arguments)]
+fn emit_anchor_clipped(
+    input: &PdfInput<'_>,
+    table: &Table,
+    a: &GridCell,
+    col_x: &[i32],
+    row_heights: &[i32],
+    table_x: i32,
+    row_y: i32,
+    clip: Option<(i32, i32)>,
+    location: &str,
+    depth: usize,
+    pages: &mut [PageLayout],
+    warnings: &mut Vec<PdfWarning>,
+) -> PdfResult<()> {
+    {
+        let row = a.anchor.row as usize;
         let cell = cell_of(table, a);
         let (c, s_col, s_row) = (a.anchor.col as usize, a.col_span as usize, a.row_span as usize);
         let cell_loc = format!("{location}/t0r{row}c{c}");
         let x0 = table_x + col_x[c];
         let w = col_x[c + s_col] - col_x[c];
-        let h: i32 = row_heights[row..(row + s_row).min(row_heights.len())].iter().sum();
+        let full_h: i32 = row_heights[row..(row + s_row).min(row_heights.len())].iter().sum();
+        let (clip_from, clip_to) = clip.unwrap_or((0, full_h));
+        let h = clip_to - clip_from;
 
         // 배경 (FillKind — 없음/미지원 구분, 게이트2 M2).
         if let Some(id) = cell.border_fill_id.or(table.border_fill_id) {
@@ -617,14 +765,15 @@ fn emit_row(
         // 셀 텍스트 (셀-상대 캐시 → 페이지 절대 재배치).
         let m = effective_margin(table, cell);
         let extent = cell_content_extent(input, cell, location, depth)?.unwrap_or(0);
-        let inner = h - m.top.as_i32() - m.bottom.as_i32();
+        // 세로정렬은 행 전체 높이 기준 — 절단 창은 그 위에 씌운다.
+        let inner = full_h - m.top.as_i32() - m.bottom.as_i32();
         let valign_shift = match cell.vertical_align.unwrap_or(TableVerticalAlign::Top) {
             TableVerticalAlign::Top => 0,
             TableVerticalAlign::Center => ((inner - extent) / 2).max(0),
             TableVerticalAlign::Bottom => (inner - extent).max(0),
         };
         let content_x = x0 + m.left.as_i32();
-        let content_y = row_y + m.top.as_i32() + valign_shift;
+        let content_y = row_y - clip_from + m.top.as_i32() + valign_shift;
         for (pi, para) in cell.paragraphs.iter().enumerate() {
             let Some(cache) = para.layout_cache.as_ref().filter(|cc| !cc.is_empty()) else {
                 continue; // compute_row_heights 가 전 셀(span 포함) fatal 처리 — 방어적 스킵.
@@ -634,6 +783,9 @@ fn emit_row(
             for run in &para.runs {
                 if let hwpforge_core::run::RunContent::Table(nested) = &run.content {
                     hosted_table = true;
+                    if clip.is_some() {
+                        continue; // 분할 창에서 중첩 표 없음 (splittable 가드) — 방어
+                    }
                     let host_seg = &cache.lines[0];
                     let nom = nested.out_margin.unwrap_or_default();
                     place_table_flat(
@@ -666,6 +818,10 @@ fn emit_row(
                 input.styles.para_alignment(para.para_shape_id).unwrap_or(Alignment::Left);
             let line_count = cache.lines.len();
             for (li, seg) in cache.lines.iter().enumerate() {
+                let line_top = m.top.as_i32() + valign_shift + seg.vertpos;
+                if line_top < clip_from || line_top >= clip_to {
+                    continue; // 절단 창 밖 줄 — 줄은 상단 기준으로 한 조각에 배정
+                }
                 let start = seg.textpos as usize;
                 let end = cache.lines.get(li + 1).map_or(utf16.len(), |n| n.textpos as usize);
                 let runs = slice_line_runs(&utf16, &run_spans, start, end);
