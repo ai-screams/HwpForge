@@ -167,6 +167,93 @@ pub trait StyleLookup {
     fn image_data(&self, _key: &str) -> Option<&[u8]> {
         None
     }
+
+    /// Returns the four rendered border edges of the `borderFill` at `id`
+    /// (1-based wire reference, e.g. [`crate::table::TableCell::border_fill_id`]).
+    ///
+    /// `None` means the id is not registered in this store.
+    fn border_fill_lines(&self, _id: u32) -> Option<BorderFillLines> {
+        None
+    }
+
+    /// Returns the face-fill verdict of the `borderFill` at `id` (1-based
+    /// wire reference).
+    ///
+    /// `None` means the id is not registered — distinguish this from
+    /// [`FillKind::None`] (registered, but transparent) and
+    /// [`FillKind::Unsupported`] (registered, but not renderable — warn).
+    fn border_fill_face(&self, _id: u32) -> Option<FillKind> {
+        None
+    }
+}
+
+/// Render kind of one border edge.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum BorderLineKind {
+    /// No line on this edge.
+    None,
+    /// Solid stroke.
+    Solid,
+    /// Any other style (dashed, double, …) or an unparsable width/color —
+    /// consumers must warn and skip instead of guessing (no fake support).
+    Other,
+}
+
+/// One rendered border edge of a `borderFill`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct BorderLine {
+    /// Render kind of this edge.
+    pub kind: BorderLineKind,
+    /// Stroke width ([`HwpUnit::ZERO`] when [`BorderLineKind::None`]/`Other`).
+    pub width: HwpUnit,
+    /// Stroke color.
+    pub color: Color,
+}
+
+impl BorderLine {
+    /// Creates a border line.
+    #[must_use]
+    pub fn new(kind: BorderLineKind, width: HwpUnit, color: Color) -> Self {
+        Self { kind, width, color }
+    }
+}
+
+/// The four rendered edges of a `borderFill`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct BorderFillLines {
+    /// Left edge.
+    pub left: BorderLine,
+    /// Right edge.
+    pub right: BorderLine,
+    /// Top edge.
+    pub top: BorderLine,
+    /// Bottom edge.
+    pub bottom: BorderLine,
+}
+
+impl BorderFillLines {
+    /// Creates the four edges.
+    #[must_use]
+    pub fn new(left: BorderLine, right: BorderLine, top: BorderLine, bottom: BorderLine) -> Self {
+        Self { left, right, top, bottom }
+    }
+}
+
+/// Face-fill verdict of a `borderFill` — distinguishes "no fill" from
+/// "unsupported fill": only the latter warrants a consumer warning.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub enum FillKind {
+    /// No fill (transparent) — normal, no warning.
+    None,
+    /// Solid color fill.
+    Solid(Color),
+    /// Gradient/image/hatch fill or an unparsable color — consumers must
+    /// warn and skip instead of guessing (no fake support).
+    Unsupported,
 }
 
 #[cfg(test)]
@@ -204,6 +291,8 @@ mod tests {
         assert!(store.style_name(si).is_none());
         assert!(store.style_heading_level(si).is_none());
         assert!(store.image_data("image1.jpg").is_none());
+        assert!(store.border_fill_lines(1).is_none());
+        assert!(store.border_fill_face(1).is_none());
     }
 
     #[test]

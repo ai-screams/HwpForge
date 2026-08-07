@@ -54,6 +54,7 @@ pub(super) fn build_table(
                 row_idx as u32,
                 &cell_addrs[row_idx],
                 table_border_fill_id,
+                table.in_margin,
                 depth,
                 hyperlink_entries,
                 options,
@@ -113,13 +114,15 @@ pub(super) fn build_table(
             vert_offset: 0,
             horz_offset: 0,
         }),
-        out_margin: Some(DEFAULT_OUT_MARGIN),
+        // Core 승격값 우선 (W3a-2 의도된 delta) — None(우리 API 저작)은 기존
+        // 기본값 유지로 바이트 불변.
+        out_margin: Some(table.out_margin.map(encode_table_margin).unwrap_or(DEFAULT_OUT_MARGIN)),
         caption: table
             .caption
             .as_ref()
             .map(|c| build_hx_caption(c, table_width, depth, hyperlink_entries, options))
             .transpose()?,
-        in_margin: Some(DEFAULT_CELL_MARGIN),
+        in_margin: Some(table.in_margin.map(encode_table_margin).unwrap_or(DEFAULT_CELL_MARGIN)),
         rows,
     })
 }
@@ -134,6 +137,7 @@ fn build_table_row(
     row_idx: u32,
     col_addrs: &[u32],
     table_border_fill_id: u32,
+    table_in_margin: Option<TableMargin>,
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
@@ -154,6 +158,7 @@ fn build_table_row(
                     row_is_header: row.is_header,
                     row_height: row_fallback_height,
                     table_border_fill_id,
+                    table_in_margin,
                 },
                 depth,
                 hyperlink_entries,
@@ -176,6 +181,7 @@ struct TableCellBuildContext {
     row_is_header: bool,
     row_height: Option<HwpUnit>,
     table_border_fill_id: u32,
+    table_in_margin: Option<TableMargin>,
 }
 
 fn build_table_cell(
@@ -209,6 +215,88 @@ fn build_table_cell(
             width: cell.width.as_i32(),
             height: cell.height.or(ctx.row_height).unwrap_or(HwpUnit::ZERO).as_i32(),
         }),
-        cell_margin: Some(cell.margin.map(encode_table_margin).unwrap_or(DEFAULT_CELL_MARGIN)),
+        // hasMargin=0 이어도 한컴은 실효값을 element 로 쓴다 (H5) — 셀
+        // 오버라이드 → 표 inMargin → 기본값 순.
+        cell_margin: Some(
+            cell.margin
+                .or(ctx.table_in_margin)
+                .map(encode_table_margin)
+                .unwrap_or(DEFAULT_CELL_MARGIN),
+        ),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use hwpforge_core::paragraph::Paragraph;
+    use hwpforge_core::table::TableLayoutCache;
+    use hwpforge_foundation::ParaShapeIndex;
+
+    fn margin(l: i32, r: i32, t: i32, b: i32) -> TableMargin {
+        TableMargin {
+            left: HwpUnit::new(l).unwrap(),
+            right: HwpUnit::new(r).unwrap(),
+            top: HwpUnit::new(t).unwrap(),
+            bottom: HwpUnit::new(b).unwrap(),
+        }
+    }
+
+    fn one_cell_table() -> Table {
+        Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![Paragraph::new(ParaShapeIndex::new(0))],
+            HwpUnit::new(1000).unwrap(),
+        )])])
+    }
+
+    #[test]
+    fn core_margins_round_trip_to_wire() {
+        // W3a-2 의도된 delta: 승격된 out/inMargin 은 고정 기본값 대신 원본값으로.
+        let table = one_cell_table()
+            .with_out_margin(margin(283, 284, 240, 241))
+            .with_in_margin(margin(510, 511, 141, 142));
+        let hx = build_table(&table, 0, &mut Vec::new(), EncodeOptions::default()).unwrap();
+        let out = hx.out_margin.expect("outMargin");
+        assert_eq!((out.left, out.right, out.top, out.bottom), (283, 284, 240, 241));
+        let inm = hx.in_margin.expect("inMargin");
+        assert_eq!((inm.left, inm.right, inm.top, inm.bottom), (510, 511, 141, 142));
+        // 셀 오버라이드 없음(H5): hasMargin=0 + element 는 표 inMargin 실효값.
+        let cell = &hx.rows[0].cells[0];
+        assert_eq!(cell.has_margin, 0);
+        let cm = cell.cell_margin.as_ref().expect("cellMargin element");
+        assert_eq!((cm.left, cm.right, cm.top, cm.bottom), (510, 511, 141, 142));
+    }
+
+    #[test]
+    fn default_emission_is_unchanged_without_core_margins() {
+        // None(우리 API 저작) = 기존 고정값 그대로 — 바이트 불변 계약.
+        let hx =
+            build_table(&one_cell_table(), 0, &mut Vec::new(), EncodeOptions::default()).unwrap();
+        assert_eq!(hx.out_margin.expect("outMargin"), DEFAULT_OUT_MARGIN);
+        assert_eq!(hx.in_margin.expect("inMargin"), DEFAULT_CELL_MARGIN);
+        assert_eq!(
+            hx.rows[0].cells[0].cell_margin.as_ref().expect("cellMargin"),
+            &DEFAULT_CELL_MARGIN
+        );
+    }
+
+    #[test]
+    fn decode_only_layout_cache_is_never_emitted() {
+        // sz height 는 decode-only 캐시 — 인코더는 항상 자체 정책(0)을 쓴다.
+        let table = one_cell_table()
+            .with_layout_cache(TableLayoutCache::new(Some(HwpUnit::new(2831).unwrap()), true));
+        let hx = build_table(&table, 0, &mut Vec::new(), EncodeOptions::default()).unwrap();
+        assert_eq!(hx.sz.expect("sz").height, 0, "decode-only cache must not reach the wire");
+    }
+
+    #[test]
+    fn explicit_cell_margin_still_wins_over_in_margin() {
+        let mut table = one_cell_table().with_in_margin(margin(510, 510, 141, 141));
+        table.rows[0].cells[0] = table.rows[0].cells[0].clone().with_margin(margin(10, 20, 30, 40));
+        let hx = build_table(&table, 0, &mut Vec::new(), EncodeOptions::default()).unwrap();
+        let cell = &hx.rows[0].cells[0];
+        assert_eq!(cell.has_margin, 1);
+        let cm = cell.cell_margin.as_ref().expect("cellMargin");
+        assert_eq!((cm.left, cm.right, cm.top, cm.bottom), (10, 20, 30, 40));
+    }
 }

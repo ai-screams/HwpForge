@@ -21,22 +21,63 @@ pub(crate) fn write_pdf(pages: &[Page], fonts: &[ResolvedFont]) -> PdfResult<Vec
         let mut surface = pdf_page.surface();
 
         for item in &page.items {
-            let PaintItem::Glyphs(run) = item;
-            let font = resolve_krilla_font(&mut krilla_fonts, fonts, run.font.0)?;
-            let (r, g, b) = run.color.to_rgb();
-            surface.set_fill(Some(krilla::paint::Fill {
-                paint: krilla::color::rgb::Color::new(r, g, b).into(),
-                ..Default::default()
-            }));
-            let glyphs = to_krilla_glyphs(run);
-            surface.draw_glyphs(
-                krilla::geom::Point::from_xy(run.baseline.x.0 as f32, run.baseline.y.0 as f32),
-                &glyphs,
-                font,
-                &run.text,
-                run.size.0 as f32,
-                false,
-            );
+            match item {
+                PaintItem::Glyphs(run) => {
+                    let font = resolve_krilla_font(&mut krilla_fonts, fonts, run.font.0)?;
+                    let (r, g, b) = run.color.to_rgb();
+                    surface.set_stroke(None);
+                    surface.set_fill(Some(krilla::paint::Fill {
+                        paint: krilla::color::rgb::Color::new(r, g, b).into(),
+                        ..Default::default()
+                    }));
+                    let glyphs = to_krilla_glyphs(run);
+                    surface.draw_glyphs(
+                        krilla::geom::Point::from_xy(
+                            run.baseline.x.0 as f32,
+                            run.baseline.y.0 as f32,
+                        ),
+                        &glyphs,
+                        font,
+                        &run.text,
+                        run.size.0 as f32,
+                        false,
+                    );
+                }
+                PaintItem::Rect(rect) => {
+                    let Some(kr) = krilla::geom::Rect::from_xywh(
+                        rect.x.0 as f32,
+                        rect.y.0 as f32,
+                        rect.width.0 as f32,
+                        rect.height.0 as f32,
+                    ) else {
+                        continue; // 0/음수 크기 — 그릴 것 없음.
+                    };
+                    let mut pb = krilla::geom::PathBuilder::new();
+                    pb.push_rect(kr);
+                    let Some(path) = pb.finish() else { continue };
+                    let (r, g, b) = rect.color.to_rgb();
+                    surface.set_stroke(None);
+                    surface.set_fill(Some(krilla::paint::Fill {
+                        paint: krilla::color::rgb::Color::new(r, g, b).into(),
+                        ..Default::default()
+                    }));
+                    surface.draw_path(&path);
+                }
+                PaintItem::Line(line) => {
+                    let mut pb = krilla::geom::PathBuilder::new();
+                    pb.move_to(line.from.x.0 as f32, line.from.y.0 as f32);
+                    pb.line_to(line.to.x.0 as f32, line.to.y.0 as f32);
+                    let Some(path) = pb.finish() else { continue };
+                    let (r, g, b) = line.color.to_rgb();
+                    surface.set_fill(None);
+                    surface.set_stroke(Some(krilla::paint::Stroke {
+                        paint: krilla::color::rgb::Color::new(r, g, b).into(),
+                        width: line.width.0 as f32,
+                        ..Default::default()
+                    }));
+                    surface.draw_path(&path);
+                }
+            }
         }
 
         surface.finish();

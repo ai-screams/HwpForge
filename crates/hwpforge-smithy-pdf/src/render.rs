@@ -8,7 +8,9 @@ use std::collections::HashMap;
 use hwpforge_foundation::Color;
 
 use crate::font::{FontResolver, ResolvedFont};
-use crate::paint::{FontKey, GlyphRun, Page, PaintItem, Point, PositionedGlyph, Pt, Size};
+use crate::paint::{
+    FontKey, GlyphRun, LineItem, Page, PaintItem, Point, PositionedGlyph, Pt, RectItem, Size,
+};
 use crate::source::replay_layout;
 use crate::text::align::{place_line, NaturalLine};
 use crate::text::shape::{shape_text, ShapedText};
@@ -61,6 +63,24 @@ pub fn render_document(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<
     let mut pages = Vec::with_capacity(layout.pages.len());
     for page in &layout.pages {
         let mut items = Vec::new();
+        // z-order 계약 (source): 셀 배경 → 괘선 → 글리프.
+        for r in &page.rects {
+            items.push(PaintItem::Rect(RectItem {
+                x: Pt::from_hwpunit(r.x),
+                y: Pt::from_hwpunit(r.y),
+                width: Pt::from_hwpunit(r.width),
+                height: Pt::from_hwpunit(r.height),
+                color: r.color,
+            }));
+        }
+        for b in &page.borders {
+            items.push(PaintItem::Line(LineItem {
+                from: Point { x: Pt::from_hwpunit(b.from.0), y: Pt::from_hwpunit(b.from.1) },
+                to: Point { x: Pt::from_hwpunit(b.to.0), y: Pt::from_hwpunit(b.to.1) },
+                width: Pt::from_hwpunit(b.width),
+                color: b.color,
+            }));
+        }
         for line in &page.lines {
             if line.runs.is_empty() {
                 continue; // 빈 줄 — 세로 공간은 캐시가 이미 소비했다.

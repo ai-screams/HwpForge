@@ -117,6 +117,25 @@ pub enum PdfWarning {
         /// 문서 내 위치.
         location: String,
     },
+    /// 분할 표의 중간 쪽 경계는 캐시에 신호가 없어 **계산**으로 배치함
+    /// (W3 — 캐시 앵커 이중 검산을 통과한 출력에만 딸려 나옴).
+    TablePaginationComputed {
+        /// 표 host 문단 위치.
+        location: String,
+    },
+    /// 병합 셀 부족분을 행들에 재배분함 (규칙 = 마지막 스팬 행 몰빵 —
+    /// 실측 fixture 로 확정됐지만 내부 기하는 검산 사각이라 표면화).
+    TableDeficitDistributed {
+        /// 표 host 문단 위치.
+        location: String,
+    },
+    /// 미지원 표 스타일(채움 종류·괘선 종류)을 경고 후 생략함.
+    UnsupportedTableStyle {
+        /// 셀 위치.
+        location: String,
+        /// 생략한 속성 (예: `cell fill`, `border line style`).
+        what: &'static str,
+    },
 }
 
 /// 렌더 실패 (fail-closed — 출력 바이트 없음).

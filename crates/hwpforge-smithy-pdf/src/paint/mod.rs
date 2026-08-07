@@ -88,12 +88,46 @@ pub struct GlyphRun {
     pub glyphs: Vec<PositionedGlyph>,
 }
 
-/// 페인트 항목. `#[non_exhaustive]` — W3 `Rule`(괘선)·W5 `Image` 확장 예정.
+/// 채운 사각형 (W3 — 셀 배경).
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct RectItem {
+    /// 좌상단 x (pt).
+    pub x: Pt,
+    /// 좌상단 y (pt).
+    pub y: Pt,
+    /// 폭 (pt).
+    pub width: Pt,
+    /// 높이 (pt).
+    pub height: Pt,
+    /// 채움색.
+    pub color: hwpforge_foundation::Color,
+}
+
+/// 선분 (W3 — 괘선, 경계선 중앙 기준 stroke).
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct LineItem {
+    /// 시작점 (pt).
+    pub from: Point,
+    /// 끝점 (pt).
+    pub to: Point,
+    /// 선 굵기 (pt).
+    pub width: Pt,
+    /// 선 색.
+    pub color: hwpforge_foundation::Color,
+}
+
+/// 페인트 항목. `#[non_exhaustive]` — W5 `Image` 확장 예정.
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
 pub enum PaintItem {
     /// 글리프 run.
     Glyphs(GlyphRun),
+    /// 채운 사각형 (셀 배경 — 글리프보다 먼저 그린다).
+    Rect(RectItem),
+    /// 선분 (괘선 — 배경 뒤, 글리프 앞).
+    Line(LineItem),
 }
 
 /// PDF 한 쪽.
@@ -141,7 +175,9 @@ mod tests {
             items: vec![run(0.0), run(10.0)],
         };
         assert_eq!(page.items.len(), 2);
-        let PaintItem::Glyphs(first) = &page.items[0];
+        let PaintItem::Glyphs(first) = &page.items[0] else {
+            panic!("first item must be glyphs");
+        };
         assert_eq!(first.baseline.x, Pt(0.0));
     }
 }

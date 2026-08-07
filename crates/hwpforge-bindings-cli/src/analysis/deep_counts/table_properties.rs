@@ -131,6 +131,7 @@ impl DeepTablePropertiesSummary {
                     cell_addrs[row_idx][cell_idx],
                     row.is_header,
                     cell,
+                    table.in_margin,
                 );
                 accumulate_table_properties_from_paragraphs(
                     &cell.paragraphs,
@@ -175,6 +176,7 @@ impl DeepTablePropertiesSummary {
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn observe_table_cell(
         &mut self,
         section_index: usize,
@@ -183,6 +185,7 @@ impl DeepTablePropertiesSummary {
         column: u16,
         row_is_header: bool,
         cell: &TableCell,
+        table_in_margin: Option<TableMargin>,
     ) {
         if let Some(border_fill_id) = cell.border_fill_id {
             self.cell_border_fill_ids.insert(border_fill_id);
@@ -207,7 +210,10 @@ impl DeepTablePropertiesSummary {
             border_fill_id: cell.border_fill_id,
             height_hwp: raw_height,
             width_hwp: (raw_width > 0).then_some(raw_width),
-            margin_hwp: cell.margin.map(deep_table_margin_from_core),
+            // 실효 margin 으로 비교한다: HWP5 는 셀마다 값을 쓰고, HWPX 는
+            // hasMargin=0 + 표 inMargin 으로 같은 의미를 쓴다 — wire 표현
+            // 차이는 parity 대상이 아니다 (W3a H5).
+            margin_hwp: cell.margin.or(table_in_margin).map(deep_table_margin_from_core),
             vertical_align: cell.vertical_align.map(deep_table_vertical_align_from_core),
         });
     }

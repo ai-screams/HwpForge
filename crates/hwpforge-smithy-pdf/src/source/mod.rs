@@ -14,10 +14,12 @@
 
 use hwpforge_core::run::RunContent;
 use hwpforge_core::section::Section;
-use hwpforge_foundation::{Alignment, CharShapeIndex};
+use hwpforge_foundation::{Alignment, CharShapeIndex, Color};
 
 use crate::text::align::LineBox;
 use crate::{PartialCachePolicy, PdfError, PdfInput, PdfOptions, PdfResult, PdfWarning};
+
+mod table;
 
 /// 한 줄 안에서 같은 문자 스타일을 공유하는 텍스트 구간.
 #[derive(Debug, Clone, PartialEq)]
@@ -45,13 +47,52 @@ pub struct LaidLine {
     pub alignment: Alignment,
 }
 
+/// 셀 배경 사각형 (HWPUNIT, 쪽 좌상단 원점).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LaidRect {
+    /// 위치 보고용 경로.
+    pub location: String,
+    /// 좌변 x.
+    pub x: i32,
+    /// 상단 y.
+    pub y: i32,
+    /// 폭.
+    pub width: i32,
+    /// 높이.
+    pub height: i32,
+    /// 채움색.
+    pub color: Color,
+}
+
+/// 괘선 선분 (HWPUNIT, 쪽 좌상단 원점 — 경계선 중앙 기준).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LaidBorder {
+    /// 위치 보고용 경로.
+    pub location: String,
+    /// 시작점 (x, y).
+    pub from: (i32, i32),
+    /// 끝점 (x, y).
+    pub to: (i32, i32),
+    /// 선 굵기.
+    pub width: i32,
+    /// 선 색.
+    pub color: Color,
+}
+
 /// 한 쪽의 배치 결과.
+///
+/// z-order 계약: `rects`(셀 배경) → `borders`(괘선) → `lines`(글리프) 순으로
+/// 그린다 (각 Vec 내부는 문서 순서).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageLayout {
     /// 쪽 폭 (HWPUNIT).
     pub width: i32,
     /// 쪽 높이 (HWPUNIT).
     pub height: i32,
+    /// 셀 배경 사각형들.
+    pub rects: Vec<LaidRect>,
+    /// 괘선 선분들.
+    pub borders: Vec<LaidBorder>,
     /// 줄들 (문서 순서).
     pub lines: Vec<LaidLine>,
 }
@@ -96,31 +137,106 @@ fn replay_section(
     // body 원점 (규칙 §0): top = margin_top + header_margin, left = margin_left.
     let body_top = ps.margin_top.as_i32() + ps.header_margin.as_i32();
     let body_left = ps.margin_left.as_i32();
+    let body_height =
+        page_height - body_top - ps.margin_bottom.as_i32() - ps.footer_margin.as_i32();
 
     // 구역은 새 쪽에서 시작한다.
     let new_page = |pages: &mut Vec<PageLayout>| {
-        pages.push(PageLayout { width: page_width, height: page_height, lines: Vec::new() })
+        pages.push(PageLayout {
+            width: page_width,
+            height: page_height,
+            rects: Vec::new(),
+            borders: Vec::new(),
+            lines: Vec::new(),
+        })
     };
     new_page(pages);
 
     let mut prev_v: Option<i32> = None;
     let mut missing: Vec<String> = Vec::new();
     let mut renderable = 0usize;
+    // 직전 표의 "다음 문단 v" 캐시 앵커 검산 (게이트2 C1 — 계산 페이지네이션
+    // 을 캐시가 반증하면 fatal).
+    let mut pending_table_anchor: Option<(i32, i32, String)> = None;
 
     for (para_idx, para) in section.paragraphs.iter().enumerate() {
         let location = format!("s{section_idx}/p{para_idx}");
 
-        // 표 = W2 거부 (다쪽 표 뒤 문단의 page ordinal 을 v 만으로 알 수 없다 — Codex H1).
-        if para.runs.iter().any(|r| matches!(r.content, RunContent::Table(_))) {
-            return Err(PdfError::UnsupportedContent { kind: "table", location });
+        // ── 표 host 문단 (W3c — 검증된 프로파일 재생) ─────────────
+        let table_count =
+            para.runs.iter().filter(|r| matches!(r.content, RunContent::Table(_))).count();
+        if table_count > 0 {
+            if table_count > 1 {
+                return Err(PdfError::UnsupportedContent {
+                    kind: "multiple tables in one paragraph",
+                    location,
+                });
+            }
+            let mixed_text = para
+                .runs
+                .iter()
+                .filter_map(|r| r.content.plain_text())
+                .any(|t| !t.trim().is_empty());
+            if mixed_text {
+                return Err(PdfError::UnsupportedContent {
+                    kind: "table mixed with visible text",
+                    location,
+                });
+            }
+            let Some(cache) = para.layout_cache.as_ref().filter(|c| !c.is_empty()) else {
+                return Err(PdfError::MissingLayoutCache { count: 1, first: location });
+            };
+            let host = &cache.lines[0];
+            let host_v = host.vertpos;
+            let broke = prev_v.is_some_and(|p| host_v == 0 || host_v < p);
+            if broke {
+                new_page(pages);
+            }
+            check_table_anchor(&mut pending_table_anchor, host_v, broke)?;
+
+            let table = para
+                .runs
+                .iter()
+                .find_map(|r| match &r.content {
+                    RunContent::Table(t) => Some(t.as_ref()),
+                    _ => None,
+                })
+                .expect("counted above");
+            let geom = table::SectionGeom { body_top, body_left, body_height };
+            let outcome = table::replay_table(
+                input,
+                table,
+                &location,
+                &geom,
+                host_v,
+                host.horzpos,
+                &new_page,
+                pages,
+                warnings,
+            )?;
+            pending_table_anchor =
+                Some((outcome.expected_next_v, outcome.anchor_slack, location.clone()));
+            // 분할 표는 흐름 좌표를 마지막 조각 쪽으로 옮긴다 — prev_v 를
+            // host v 로 두면 후속 문단의 (작아진) v 가 "새 쪽"으로 오판된다.
+            prev_v = Some(outcome.expected_next_v);
+            renderable += 1;
+            continue;
         }
 
         let Some(cache) = para.layout_cache.as_ref().filter(|c| !c.is_empty()) else {
             missing.push(location.clone());
             warnings.push(PdfWarning::ParagraphSkipped { location });
+            // 앵커는 표 "바로 다음" 문단에만 결합한다 — 그 문단이 스킵되면
+            // 이후 문단의 v 는 앵커 식과 무관하므로 폐기 (오발 fatal 방지).
+            pending_table_anchor = None;
             continue;
         };
         renderable += 1;
+
+        // 표 뒤 첫 renderable 문단이면 캐시 앵커 검산 (같은 쪽에서만 유효).
+        let first_v = cache.lines[0].vertpos;
+        let first_breaks = prev_v.is_some_and(|p| first_v == 0 || first_v < p);
+        check_table_anchor(&mut pending_table_anchor, first_v, first_breaks)?;
 
         // fail-closed 가드 (독립 리뷰 열린질문): 첫 텍스트 run 이전에 비텍스트
         // run(컨트롤·이미지)이 있으면 textpos 좌표를 신뢰할 수 없다 — HWPX
@@ -192,6 +308,28 @@ fn replay_section(
             count: missing.len(),
             first: missing.remove(0),
         });
+    }
+    Ok(())
+}
+
+/// 표 다음 문단의 캐시 v 로 계산 페이지네이션을 검산한다 (게이트2 C1).
+///
+/// 다음 문단이 새 쪽에서 시작하면 앵커를 걸 수 없어 건너뛴다 (v 는
+/// 쪽-상대라 비교 불가) — 그 밖에 불일치 = 계산이 캐시와 모순 = fatal.
+fn check_table_anchor(
+    pending: &mut Option<(i32, i32, String)>,
+    v: i32,
+    broke_page: bool,
+) -> PdfResult<()> {
+    if let Some((expected, slack, table_loc)) = pending.take() {
+        if !broke_page && (v < expected || v - expected >= slack) {
+            return Err(PdfError::InvalidCache {
+                detail: format!(
+                    "{table_loc}: paragraph after table has cached v={v} but computed table \
+                     pagination expects {expected} — refusing to output mismatched layout"
+                ),
+            });
+        }
     }
     Ok(())
 }
@@ -360,24 +498,190 @@ mod tests {
         assert_eq!(lines[1].runs[0].text, "라마바");
     }
 
+    // ── W3c 표 admission (검증된 프로파일 밖 = fail-closed) ──────
+
+    fn cell_with_cache(text: &str) -> TableCell {
+        TableCell::new(
+            vec![para_with_cache(text, vec![seg(0, 0)])],
+            HwpUnit::from_pt(100.0).unwrap(),
+        )
+    }
+
+    fn one_cell_cached_table() -> Table {
+        Table::new(vec![TableRow::new(vec![cell_with_cache("셀")])])
+            .with_layout_cache(hwpforge_core::table::TableLayoutCache::new(None, true))
+    }
+
+    /// 텍스트 없는 host 문단 (표 run + host 캐시 1줄).
+    fn table_host(table: Table, host_v: i32) -> Paragraph {
+        let mut p = Paragraph::with_runs(
+            vec![Run::table(table, CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        p.layout_cache = Some(LayoutCache::new(vec![seg(0, host_v)]));
+        p
+    }
+
     #[test]
-    fn table_document_is_rejected_in_w2() {
-        // Codex H1: 다쪽 표 page-ordinal 미보장 → W2 는 표 자체를 거부.
-        let cell = TableCell::new(
+    fn table_mixed_with_visible_text_is_rejected() {
+        let mut host = para_with_cache("표 호스트", vec![seg(0, 0)]);
+        host.add_run(Run::table(one_cell_cached_table(), CharShapeIndex::new(0)));
+        let err = replay(&doc_of(vec![host]), &PdfOptions::default()).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                PdfError::UnsupportedContent { kind: "table mixed with visible text", .. }
+            ),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn table_without_caches_is_rejected() {
+        // 표 layout_cache 없음 (합성 문서) → fatal.
+        let bare = Table::new(vec![TableRow::new(vec![cell_with_cache("셀")])]);
+        let err = replay(&doc_of(vec![table_host(bare, 0)]), &PdfOptions::default()).unwrap_err();
+        assert!(matches!(err, PdfError::MissingLayoutCache { .. }), "{err:?}");
+
+        // 셀 문단 캐시 결손 → 표 단위 fatal (게이트2 C4 — WarnAndSkip 아님).
+        let uncached_cell = TableCell::new(
             vec![Paragraph::with_runs(
-                vec![Run::text("셀", CharShapeIndex::new(0))],
+                vec![Run::text("결손", CharShapeIndex::new(0))],
                 ParaShapeIndex::new(0),
             )],
             HwpUnit::from_pt(100.0).unwrap(),
         );
-        let mut host = para_with_cache("표 호스트", vec![seg(0, 0)]);
-        host.add_run(Run::table(
-            Table::new(vec![TableRow::new(vec![cell])]),
-            CharShapeIndex::new(0),
-        ));
-        let doc = doc_of(vec![host]);
+        let table = Table::new(vec![TableRow::new(vec![uncached_cell])])
+            .with_layout_cache(hwpforge_core::table::TableLayoutCache::new(None, true));
+        let err = replay(&doc_of(vec![table_host(table, 0)]), &PdfOptions::default()).unwrap_err();
+        assert!(matches!(err, PdfError::MissingLayoutCache { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn table_profile_violations_are_rejected() {
+        use hwpforge_core::table::TableLayoutCache;
+        // 비기본 pos
+        let t = Table::new(vec![TableRow::new(vec![cell_with_cache("셀")])])
+            .with_layout_cache(TableLayoutCache::new(None, false));
+        let err = replay(&doc_of(vec![table_host(t, 0)]), &PdfOptions::default()).unwrap_err();
+        assert!(
+            matches!(err, PdfError::UnsupportedContent { kind: "non-default table position", .. }),
+            "{err:?}"
+        );
+        // cellSpacing ≠ 0
+        let t = one_cell_cached_table().with_cell_spacing(HwpUnit::from_pt(1.0).unwrap());
+        let err = replay(&doc_of(vec![table_host(t, 0)]), &PdfOptions::default()).unwrap_err();
+        assert!(
+            matches!(err, PdfError::UnsupportedContent { kind: "nonzero table cellSpacing", .. }),
+            "{err:?}"
+        );
+        // 중첩 표 = 지원 (재귀 평면 배치 — blank-HPC p2 실물 대응).
+        let mut inner_host = para_with_cache("", vec![seg(0, 0)]);
+        inner_host.add_run(Run::table(one_cell_cached_table(), CharShapeIndex::new(0)));
+        let nested = Table::new(vec![TableRow::new(vec![TableCell::new(
+            vec![inner_host],
+            HwpUnit::from_pt(100.0).unwrap(),
+        )])])
+        .with_layout_cache(TableLayoutCache::new(None, true));
+        let layout =
+            replay(&doc_of(vec![table_host(nested, 0)]), &PdfOptions::default()).expect("nested");
+        let texts: Vec<String> = layout.pages[0]
+            .lines
+            .iter()
+            .flat_map(|l| l.runs.iter().map(|r| r.text.clone()))
+            .collect();
+        assert!(texts.iter().any(|t| t == "셀"), "안쪽 표 텍스트 재생: {texts:?}");
+    }
+
+    #[test]
+    fn merged_cell_deficit_goes_to_last_spanned_row() {
+        use hwpforge_core::table::TableLayoutCache;
+        // 2행 격자: (0,1) rowspan2 높이 요구 5000 > 행 최소합 2000 —
+        // 부족분은 마지막 스팬 행 몰빵 (rules-rowspan-deficit 실측 2026-08-07)
+        // → 행높이 [1000, 4000], 총 5000. 검산 앵커가 총높이를 잠근다.
+        let make = || {
+            let tall = TableCell::with_span(
+                vec![para_with_cache("병합", vec![seg(0, 0)])],
+                HwpUnit::from_pt(100.0).unwrap(),
+                1,
+                2,
+            )
+            .with_height(HwpUnit::from_pt(50.0).unwrap());
+            Table::new(vec![
+                TableRow::new(vec![cell_with_cache("A"), tall]),
+                TableRow::new(vec![cell_with_cache("C")]),
+            ])
+            .with_layout_cache(TableLayoutCache::new(None, true))
+        };
+        // 총높이 5000 앵커 = 성공 + 배분 경고 + 기하 직접 잠금:
+        // "C"(행1 셀) baseline = body_top + 행0 높이(1000, 최소 유지) + 850
+        // — 부족분이 행0 이 아니라 행1 하단으로 갔다는 증명 (독립리뷰 M1).
+        let follow = para_with_cache("후속", vec![seg(0, 5000)]);
+        let doc = doc_of(vec![table_host(make(), 0), follow]);
+        let layout = replay(&doc, &PdfOptions::default()).expect("deficit replay");
+        assert!(
+            layout.warnings.iter().any(|w| matches!(w, PdfWarning::TableDeficitDistributed { .. })),
+            "{:?}",
+            layout.warnings
+        );
+        let body_top = hwpforge_core::page::PageSettings::a4().margin_top.as_i32()
+            + hwpforge_core::page::PageSettings::a4().header_margin.as_i32();
+        let c_line = layout.pages[0]
+            .lines
+            .iter()
+            .find(|l| l.runs.iter().any(|r| r.text == "C"))
+            .expect("C line");
+        assert_eq!(c_line.baseline_y, body_top + 1000 + 850, "행0 은 최소높이 유지");
+        // 어긋난 앵커(6000 > 기대 5000, 쪽분할 아님) = 캐시 모순 fatal.
+        // (기대보다 작은 v 는 쪽분할로 해석돼 앵커를 못 건다 — 문서화된 사각.)
+        let stale = para_with_cache("후속", vec![seg(0, 6000)]);
+        let doc = doc_of(vec![table_host(make(), 0), stale]);
         let err = replay(&doc, &PdfOptions::default()).unwrap_err();
-        assert!(matches!(err, PdfError::UnsupportedContent { kind: "table", .. }));
+        assert!(matches!(err, PdfError::InvalidCache { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn synthetic_table_replays_and_anchor_verifies() {
+        // 1셀 표 (행높이 = 셀 extent 1000) + 정확한 앵커의 후속 문단.
+        let host_v = 1600;
+        let follow = para_with_cache("후속", vec![seg(0, host_v + 1000)]);
+        let doc = doc_of(vec![table_host(one_cell_cached_table(), host_v), follow]);
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        assert_eq!(layout.pages.len(), 1, "단일 조각 = 쪽 분할 없음");
+        assert!(
+            !layout
+                .warnings
+                .iter()
+                .any(|w| matches!(w, PdfWarning::TablePaginationComputed { .. })),
+            "비분할 표는 계산 페이지네이션 경고가 없어야 한다"
+        );
+        let texts: Vec<String> = layout.pages[0]
+            .lines
+            .iter()
+            .flat_map(|l| l.runs.iter().map(|r| r.text.clone()))
+            .collect();
+        assert!(texts.iter().any(|t| t == "셀"), "{texts:?}");
+        assert!(texts.iter().any(|t| t == "후속"), "{texts:?}");
+    }
+
+    #[test]
+    fn table_anchor_mismatch_is_fatal() {
+        let host_v = 1600;
+        // 기대 앵커 = host_v + 1000 인데 캐시가 다른 값을 주장 → 계산 불신.
+        let follow = para_with_cache("후속", vec![seg(0, host_v + 4321)]);
+        let doc = doc_of(vec![table_host(one_cell_cached_table(), host_v), follow]);
+        let err = replay(&doc, &PdfOptions::default()).unwrap_err();
+        assert!(matches!(err, PdfError::InvalidCache { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn table_saved_sz_mismatch_is_fatal() {
+        use hwpforge_core::table::TableLayoutCache;
+        // 재저장 sz(5000) ≠ 계산 첫 조각 높이(1000) → fatal (게이트2 H7).
+        let table = Table::new(vec![TableRow::new(vec![cell_with_cache("셀")])])
+            .with_layout_cache(TableLayoutCache::new(Some(HwpUnit::new(5000).unwrap()), true));
+        let err = replay(&doc_of(vec![table_host(table, 0)]), &PdfOptions::default()).unwrap_err();
+        assert!(matches!(err, PdfError::InvalidCache { .. }), "{err:?}");
     }
 
     #[test]

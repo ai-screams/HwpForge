@@ -15,7 +15,7 @@ use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::section::{HeaderFooter, PageNumber};
 use hwpforge_core::table::{
-    Table, TableCell, TableMargin, TablePageBreak, TableRow, TableVerticalAlign,
+    Table, TableCell, TableLayoutCache, TableMargin, TablePageBreak, TableRow, TableVerticalAlign,
 };
 use hwpforge_core::PageSettings;
 use hwpforge_foundation::{
@@ -651,7 +651,42 @@ fn convert_table(hx: &HxTable, depth: usize) -> HwpxResult<Table> {
     if hx.border_fill_id_ref > 0 {
         table = table.with_border_fill_id(hx.border_fill_id_ref);
     }
+    if let Some(value) = decode_table_margin(hx.out_margin.as_ref())? {
+        table = table.with_out_margin(value);
+    }
+    if let Some(value) = decode_table_margin(hx.in_margin.as_ref())? {
+        table = table.with_in_margin(value);
+    }
+    // decode-only 캐시 승격: 재저장 sz height (0/absent = None — native 저작
+    // 분할 표 실측, 분할 표에서 양수값은 첫 조각 높이) + 기본 flow pos 판별
+    // (렌더러의 verified-profile admission 용).
+    let saved_sz_height = match hx.sz.as_ref() {
+        Some(sz) if sz.height > 0 => {
+            Some(HwpUnit::new(sz.height).map_err(|_| HwpxError::InvalidStructure {
+                detail: format!("invalid table sz height: {}", sz.height),
+            })?)
+        }
+        _ => None,
+    };
+    table = table.with_layout_cache(TableLayoutCache::new(
+        saved_sz_height,
+        table_pos_is_default_flow(hx.pos.as_ref()),
+    ));
     Ok(table)
+}
+
+/// wire `<hp:pos>` 가 기본 inline-flow 조합인지 (pos 없음 = 기본).
+fn table_pos_is_default_flow(pos: Option<&crate::schema::section::HxTablePos>) -> bool {
+    let Some(pos) = pos else {
+        return true;
+    };
+    pos.treat_as_char == 0
+        && pos.flow_with_text == 1
+        && pos.allow_overlap == 0
+        && pos.vert_rel_to.eq_ignore_ascii_case("PARA")
+        && pos.horz_rel_to.eq_ignore_ascii_case("COLUMN")
+        && pos.vert_offset == 0
+        && pos.horz_offset == 0
 }
 
 /// Converts an `HxTableCell` into a Core `TableCell`.
@@ -678,7 +713,11 @@ fn convert_table_cell(hx: &HxTableCell, depth: usize) -> HwpxResult<TableCell> {
         Some(sz) => decode_optional_hwp_unit(sz.height, "table cell height")?,
         None => None,
     };
-    let margin: Option<TableMargin> = decode_table_margin(hx.cell_margin.as_ref())?;
+    // H5: 한컴은 hasMargin="0" 이어도 `<hp:cellMargin>` 에 실효값을 쓴다 —
+    // 셀 오버라이드 여부의 진실은 `tc@hasMargin` 이다. element 존재만 보고
+    // 승격하면 표 inMargin fallback 이 영원히 죽는다.
+    let margin: Option<TableMargin> =
+        if hx.has_margin != 0 { decode_table_margin(hx.cell_margin.as_ref())? } else { None };
     let vertical_align: Option<TableVerticalAlign> = match hx.sub_list.as_ref() {
         Some(sub_list) => decode_table_vertical_align(&sub_list.vert_align)?,
         None => None,
@@ -1626,6 +1665,92 @@ mod tests {
         assert_eq!(para.para_shape_id.get(), 0);
         assert_eq!(para.runs.len(), 1);
         assert_eq!(para.runs[0].content.as_text(), Some("안녕하세요"));
+    }
+
+    #[test]
+    fn table_out_in_margin_and_sz_height_are_promoted() {
+        // W3a: outMargin/inMargin 은 구조 필드로, 재저장 sz height 는
+        // decode-only 캐시로 승격된다 (분할 표에선 첫 조각 높이 — W0 실측).
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <tbl rowCnt="1" colCnt="1" repeatHeader="1" pageBreak="CELL">
+                        <sz width="48189" height="2831"/>
+                        <outMargin left="283" right="284" top="240" bottom="241"/>
+                        <inMargin left="510" right="511" top="141" bottom="142"/>
+                        <tr><tc>
+                            <subList><p paraPrIDRef="0"><run charPrIDRef="0"><t>셀</t></run></p></subList>
+                            <cellAddr colAddr="0" rowAddr="0"/>
+                            <cellSpan colSpan="1" rowSpan="1"/>
+                            <cellSz width="48189" height="2831"/>
+                        </tc></tr>
+                    </tbl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let table = result.paragraphs[0].runs[0].content.as_table().expect("table");
+        let out = table.out_margin.expect("out_margin promoted");
+        assert_eq!(
+            (out.left.as_i32(), out.right.as_i32(), out.top.as_i32(), out.bottom.as_i32()),
+            (283, 284, 240, 241)
+        );
+        let inm = table.in_margin.expect("in_margin promoted");
+        assert_eq!(
+            (inm.left.as_i32(), inm.right.as_i32(), inm.top.as_i32(), inm.bottom.as_i32()),
+            (510, 511, 141, 142)
+        );
+        let cache = table.layout_cache.expect("layout cache attached");
+        assert_eq!(cache.saved_sz_height.expect("sz height promoted").as_i32(), 2831);
+        assert!(cache.default_flow_pos, "pos 없음 = 기본 flow");
+    }
+
+    #[test]
+    fn table_sz_height_zero_or_missing_margins_normalize_to_none() {
+        // blank-HPC 실측: native 저작 분할 표는 sz height=0 — absent 취급.
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <tbl rowCnt="1" colCnt="1">
+                        <sz width="48189" height="0"/>
+                        <tr><tc>
+                            <subList><p paraPrIDRef="0"><run charPrIDRef="0"><t>셀</t></run></p></subList>
+                            <cellSpan colSpan="1" rowSpan="1"/>
+                            <cellSz width="48189" height="0"/>
+                        </tc></tr>
+                    </tbl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let table = result.paragraphs[0].runs[0].content.as_table().expect("table");
+        let cache = table.layout_cache.expect("layout cache attached");
+        assert!(cache.saved_sz_height.is_none(), "sz height=0 = absent");
+        assert!(table.out_margin.is_none());
+        assert!(table.in_margin.is_none());
+    }
+
+    #[test]
+    fn table_non_default_pos_is_flagged() {
+        // treatAsChar=1 등 비기본 pos = 렌더러 admission 거부 신호.
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <tbl rowCnt="1" colCnt="1">
+                        <pos treatAsChar="1" flowWithText="1" vertRelTo="PARA" horzRelTo="COLUMN"
+                             vertOffset="0" horzOffset="0" allowOverlap="0"/>
+                        <tr><tc>
+                            <subList><p paraPrIDRef="0"><run charPrIDRef="0"><t>셀</t></run></p></subList>
+                            <cellSpan colSpan="1" rowSpan="1"/>
+                            <cellSz width="48189" height="0"/>
+                        </tc></tr>
+                    </tbl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let table = result.paragraphs[0].runs[0].content.as_table().expect("table");
+        assert!(!table.layout_cache.expect("cache").default_flow_pos);
     }
 
     #[test]
