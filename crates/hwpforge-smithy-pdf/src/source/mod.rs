@@ -587,29 +587,35 @@ mod tests {
     }
 
     #[test]
-    fn merged_cell_taller_than_spanned_rows_is_rejected() {
+    fn merged_cell_deficit_goes_to_last_spanned_row() {
         use hwpforge_core::table::TableLayoutCache;
-        // 2행 격자: (0,0) span1 · (0,1) rowspan2 (높이 요구 5000 > 행합 2000).
-        let tall = TableCell::with_span(
-            vec![para_with_cache("병합", vec![seg(0, 0)])],
-            HwpUnit::from_pt(100.0).unwrap(),
-            1,
-            2,
-        )
-        .with_height(HwpUnit::from_pt(50.0).unwrap());
-        let table = Table::new(vec![
-            TableRow::new(vec![cell_with_cache("A"), tall]),
-            TableRow::new(vec![cell_with_cache("C")]),
-        ])
-        .with_layout_cache(TableLayoutCache::new(None, true));
-        let err = replay(&doc_of(vec![table_host(table, 0)]), &PdfOptions::default()).unwrap_err();
-        assert!(
-            matches!(
-                err,
-                PdfError::UnsupportedContent { kind: "merged cell taller than spanned rows", .. }
-            ),
-            "{err:?}"
-        );
+        // 2행 격자: (0,1) rowspan2 높이 요구 5000 > 행 최소합 2000 —
+        // 부족분은 마지막 스팬 행 몰빵 (rules-rowspan-deficit 실측 2026-08-07)
+        // → 행높이 [1000, 4000], 총 5000. 검산 앵커가 총높이를 잠근다.
+        let make = || {
+            let tall = TableCell::with_span(
+                vec![para_with_cache("병합", vec![seg(0, 0)])],
+                HwpUnit::from_pt(100.0).unwrap(),
+                1,
+                2,
+            )
+            .with_height(HwpUnit::from_pt(50.0).unwrap());
+            Table::new(vec![
+                TableRow::new(vec![cell_with_cache("A"), tall]),
+                TableRow::new(vec![cell_with_cache("C")]),
+            ])
+            .with_layout_cache(TableLayoutCache::new(None, true))
+        };
+        // 총높이 5000 앵커 = 성공.
+        let follow = para_with_cache("후속", vec![seg(0, 5000)]);
+        let doc = doc_of(vec![table_host(make(), 0), follow]);
+        assert!(replay(&doc, &PdfOptions::default()).is_ok());
+        // 어긋난 앵커(6000 > 기대 5000, 쪽분할 아님) = 캐시 모순 fatal.
+        // (기대보다 작은 v 는 쪽분할로 해석돼 앵커를 못 건다 — 문서화된 사각.)
+        let stale = para_with_cache("후속", vec![seg(0, 6000)]);
+        let doc = doc_of(vec![table_host(make(), 0), stale]);
+        let err = replay(&doc, &PdfOptions::default()).unwrap_err();
+        assert!(matches!(err, PdfError::InvalidCache { .. }), "{err:?}");
     }
 
     #[test]

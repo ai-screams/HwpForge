@@ -325,31 +325,43 @@ fn compute_row_heights(
         let r = a.anchor.row as usize;
         heights[r] = heights[r].max(auto.max(min));
     }
+    // span>1 합 제약 + deficit 배분: 부족분은 **span 의 마지막 행이 전부
+    // 흡수**한다 (rules-rowspan-deficit 실측 2026-08-07 — 표A 명시높이
+    // 25000·표B 콘텐츠 30082 모두 행0..n-1 최소 유지 + 마지막 행 몰빵,
+    // PDF 행 간격 12.8pt 균일 + 재저장 sz 체크섬 정합). 겹치는 스팬은
+    // end-row 오름차순 fixpoint — blank-HPC 표별 앵커 검산이 재검증한다.
+    let mut spans: Vec<(&&GridCell, usize, usize)> = anchors
+        .iter()
+        .filter(|a| a.row_span > 1)
+        .map(|a| {
+            let r = a.anchor.row as usize;
+            let end = (r + a.row_span as usize).min(row_count);
+            (a, r, end)
+        })
+        .collect();
+    spans.sort_by_key(|&(_, r, end)| (end, end - r));
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for &(a, r, end) in &spans {
+            let cell = cell_of(table, a);
+            let m = effective_margin(table, cell);
+            let need = cell.height.map_or(0, |h| h.as_i32()).max(
+                cell_content_extent(cell).map_or(0, |e| e + m.top.as_i32() + m.bottom.as_i32()),
+            );
+            let have: i32 = heights[r..end].iter().sum();
+            if have < need {
+                heights[end - 1] += need - have;
+                changed = true;
+            }
+        }
+    }
+    // 배분 후에도 0 인 행 = 어떤 셀도 높이를 결정 못 함 → 재현 불가.
     for (r, h) in heights.iter().enumerate() {
         if *h <= 0 {
             return Err(PdfError::UnsupportedContent {
                 kind: "row height indeterminate (no span-1 cell)",
                 location: format!("{location}/r{r}"),
-            });
-        }
-    }
-    // span>1 합 제약: 위반 = deficit 배분 규칙 미실측 → 거부 (게이트2 C3).
-    for a in anchors {
-        let (r, s) = (a.anchor.row as usize, a.row_span as usize);
-        if s <= 1 {
-            continue;
-        }
-        let cell = cell_of(table, a);
-        let m = effective_margin(table, cell);
-        let need = cell
-            .height
-            .map_or(0, |h| h.as_i32())
-            .max(cell_content_extent(cell).map_or(0, |e| e + m.top.as_i32() + m.bottom.as_i32()));
-        let have: i32 = heights[r..(r + s).min(row_count)].iter().sum();
-        if have < need {
-            return Err(PdfError::UnsupportedContent {
-                kind: "merged cell taller than spanned rows",
-                location: format!("{location}/r{r}c{}", a.anchor.col),
             });
         }
     }
@@ -450,6 +462,12 @@ fn emit_row(
             };
             let text = para.text_content();
             let utf16: Vec<u16> = text.encode_utf16().collect();
+            if utf16.is_empty() {
+                // 빈 문단 — 기하(extent)만 행높이에 기여, 그릴 글리프 없음.
+                // 한컴 native 는 텍스트 삭제 후 stale textpos 가 남은 캐시를
+                // 쓰기도 한다 (blank-HPC r10c4 실측: <t/> + textpos=49).
+                continue;
+            }
             let para_loc = format!("{cell_loc}/p{pi}");
             validate_textpos(cache, utf16.len(), &para_loc)?;
             let run_spans = run_utf16_spans(para, warnings, &para_loc);
