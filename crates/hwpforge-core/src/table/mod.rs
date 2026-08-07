@@ -93,20 +93,24 @@ pub struct TableMargin {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[non_exhaustive]
 pub struct TableLayoutCache {
-    /// Hancom-saved `<hp:sz height>` (always positive — decoders normalize
-    /// `0`/absent to a missing cache).
+    /// Hancom-saved `<hp:sz height>` ([`None`] when the wire stored `0` or
+    /// omitted it — natively authored split tables do).
     ///
     /// ⚠️ For a page-spanning (split) table this is the **first fragment's
-    /// height**, not the total table height (W0 measurement). Natively
-    /// authored split tables may store `0` instead.
-    pub saved_sz_height: HwpUnit,
+    /// height**, not the total table height (W0 measurement).
+    pub saved_sz_height: Option<HwpUnit>,
+    /// Whether the wire `<hp:pos>` was the default inline-flow combination
+    /// (`treatAsChar=0`, `flowWithText=1`, PARA/COLUMN relative, zero
+    /// offsets). Renderers only support default-flow tables — a `false`
+    /// here must fail closed (verified profile admission).
+    pub default_flow_pos: bool,
 }
 
 impl TableLayoutCache {
-    /// Creates a table layout cache from the saved `sz` height.
+    /// Creates a table layout cache from decoded wire facts.
     #[must_use]
-    pub fn new(saved_sz_height: HwpUnit) -> Self {
-        Self { saved_sz_height }
+    pub fn new(saved_sz_height: Option<HwpUnit>, default_flow_pos: bool) -> Self {
+        Self { saved_sz_height, default_flow_pos }
     }
 }
 

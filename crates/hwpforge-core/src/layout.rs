@@ -184,7 +184,10 @@ mod tests {
                 vec![cell_para],
                 HwpUnit::from_pt(100.0).unwrap(),
             )])])
-            .with_layout_cache(crate::table::TableLayoutCache::new(HwpUnit::from_pt(56.7).unwrap()))
+            .with_layout_cache(crate::table::TableLayoutCache::new(
+                Some(HwpUnit::from_pt(56.7).unwrap()),
+                true,
+            ))
             .with_out_margin(crate::table::TableMargin::default())
         }
 

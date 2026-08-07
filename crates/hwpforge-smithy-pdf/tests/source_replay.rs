@@ -67,3 +67,116 @@ fn rules_headerfooter_splits_42_lines_per_page() {
     assert_eq!(layout.pages[0].lines.len(), 42);
     assert_eq!(layout.pages[1].lines.len(), 18);
 }
+
+// ── W3c 표 게이트 — 3쪽 분할 + 제목행 반복 (rules-pagespan3 쌍) ──
+
+fn replay_fixture(name: &str) -> Option<hwpforge_smithy_pdf::source::ReplayLayout> {
+    let bytes = fixture(name)?;
+    let decoded = hwpforge_smithy_hwpx::HwpxDecoder::decode(&bytes).expect("decode");
+    let validated = decoded.document.validate().expect("validate");
+    let input = PdfInput { document: &validated, styles: &decoded.style_store };
+    Some(replay_layout(&input, &PdfOptions::default()).expect("replay"))
+}
+
+/// 쪽의 표 데이터 첫 줄 텍스트 (번호 열) 를 찾는다.
+fn first_table_number_on_page(page: &hwpforge_smithy_pdf::source::PageLayout) -> Option<String> {
+    page.lines
+        .iter()
+        .filter(|l| l.location.contains("/t0r"))
+        .filter(|l| !l.location.contains("r0c"))
+        .find_map(|l| l.runs.first().map(|r| r.text.clone()))
+}
+
+#[test]
+fn pagespan3_replays_three_page_split_with_exact_anchor() {
+    let Some(layout) = replay_fixture("rules-pagespan3.hwpx") else { return };
+    // 한컴 PDF 실측: 4쪽 (표가 1~3쪽, 후속 본문이 3~4쪽).
+    assert_eq!(layout.pages.len(), 4, "쪽수 = 한컴 4쪽");
+    // 분할 = 계산임을 정직하게 경고.
+    assert!(
+        layout
+            .warnings
+            .iter()
+            .any(|w| matches!(w, hwpforge_smithy_pdf::PdfWarning::TablePaginationComputed { .. })),
+        "{:?}",
+        layout.warnings
+    );
+    // 분할점: p2 첫 데이터 행 = 44, p3 = 93 (pdftotext 실측 고정 — 게이트2 H8).
+    assert_eq!(first_table_number_on_page(&layout.pages[1]).as_deref(), Some("44"));
+    assert_eq!(first_table_number_on_page(&layout.pages[2]).as_deref(), Some("93"));
+    // p4 는 표 없음 (후속 본문만).
+    assert!(layout.pages[3].lines.iter().all(|l| !l.location.contains("/t0r")));
+    // 후속 본문이 실제로 재생됐는지.
+    let all_text: String = layout
+        .pages
+        .iter()
+        .flat_map(|p| p.lines.iter())
+        .flat_map(|l| l.runs.iter())
+        .map(|r| r.text.as_str())
+        .collect();
+    assert!(all_text.contains("표가 끝난 뒤의 첫 번째 후속 본문"), "후속 본문 소실");
+    // 괘선/배경이 방출됐는지 (모든 표 쪽).
+    assert!(!layout.pages[0].borders.is_empty(), "p1 괘선");
+    assert!(!layout.pages[2].borders.is_empty(), "p3 괘선");
+}
+
+#[test]
+fn pagespan3_repeat_inserts_header_on_every_continuation() {
+    let Some(layout) = replay_fixture("rules-pagespan3-repeat.hwpx") else { return };
+    assert_eq!(layout.pages.len(), 4, "쪽수 = 한컴 4쪽");
+    // 연속 조각(2·3·4쪽) 전부 상단 제목행 삽입 (2026-08-06 pdftotext 실측).
+    for page_idx in [1usize, 2, 3] {
+        let has_repeated_header = layout.pages[page_idx]
+            .lines
+            .iter()
+            .any(|l| l.location.contains("/rep") && l.runs.iter().any(|r| r.text == "번호"));
+        assert!(has_repeated_header, "p{} 반복 제목행 없음", page_idx + 1);
+    }
+    // 분할점: p2=44 · p3=92 · p4=140 (pdftotext 실측 고정).
+    assert_eq!(first_table_number_on_page(&layout.pages[1]).as_deref(), Some("44"));
+    assert_eq!(first_table_number_on_page(&layout.pages[2]).as_deref(), Some("92"));
+    assert_eq!(first_table_number_on_page(&layout.pages[3]).as_deref(), Some("140"));
+}
+
+#[test]
+fn rules_table_single_page_checksum_passes() {
+    // 비분할 표: Σ행높이 == 재저장 sz 검산이 replay 안에서 통과해야 한다.
+    let Some(layout) = replay_fixture("rules-table.hwpx") else { return };
+    assert_eq!(layout.pages.len(), 1, "1쪽 표 fixture");
+    assert!(
+        !layout
+            .warnings
+            .iter()
+            .any(|w| matches!(w, hwpforge_smithy_pdf::PdfWarning::TablePaginationComputed { .. })),
+        "비분할 표는 계산 경고 없음"
+    );
+    assert!(!layout.pages[0].rects.is_empty() || !layout.pages[0].borders.is_empty());
+}
+
+/// blank-HPC 실전 프로브 (수동 — 리뷰 영역 미추적 파일이라 fixture-optional).
+#[test]
+#[ignore = "manual probe against untracked blank-HPC review artifact"]
+fn probe_blank_hpc_replay() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/hwp5_review/blank-hpc-application-2026.hwpx");
+    let Ok(bytes) = std::fs::read(path) else {
+        eprintln!("blank-HPC not present — skip");
+        return;
+    };
+    let decoded = hwpforge_smithy_hwpx::HwpxDecoder::decode(&bytes).expect("decode");
+    let validated = decoded.document.validate().expect("validate");
+    let input = PdfInput { document: &validated, styles: &decoded.style_store };
+    match replay_layout(&input, &PdfOptions::default()) {
+        Ok(layout) => {
+            let mut warn_kinds = std::collections::BTreeMap::new();
+            for w in &layout.warnings {
+                *warn_kinds
+                    .entry(format!("{w:?}").split('{').next().unwrap().trim().to_string())
+                    .or_insert(0usize) += 1;
+            }
+            eprintln!("PAGES = {} (한컴 실측 9)", layout.pages.len());
+            eprintln!("warnings = {warn_kinds:?}");
+        }
+        Err(e) => eprintln!("REJECTED: {e}"),
+    }
+}

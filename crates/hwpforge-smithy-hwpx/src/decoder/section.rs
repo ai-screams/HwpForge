@@ -657,17 +657,36 @@ fn convert_table(hx: &HxTable, depth: usize) -> HwpxResult<Table> {
     if let Some(value) = decode_table_margin(hx.in_margin.as_ref())? {
         table = table.with_in_margin(value);
     }
-    // 재저장 sz height 는 decode-only 캐시로 승격. 0 = absent (native 저작
-    // 분할 표 실측 — blank-HPC). 분할 표에서 양수값은 첫 조각 높이다.
-    if let Some(sz) = hx.sz.as_ref() {
-        if sz.height > 0 {
-            let height = HwpUnit::new(sz.height).map_err(|_| HwpxError::InvalidStructure {
+    // decode-only 캐시 승격: 재저장 sz height (0/absent = None — native 저작
+    // 분할 표 실측, 분할 표에서 양수값은 첫 조각 높이) + 기본 flow pos 판별
+    // (렌더러의 verified-profile admission 용).
+    let saved_sz_height = match hx.sz.as_ref() {
+        Some(sz) if sz.height > 0 => {
+            Some(HwpUnit::new(sz.height).map_err(|_| HwpxError::InvalidStructure {
                 detail: format!("invalid table sz height: {}", sz.height),
-            })?;
-            table = table.with_layout_cache(TableLayoutCache::new(height));
+            })?)
         }
-    }
+        _ => None,
+    };
+    table = table.with_layout_cache(TableLayoutCache::new(
+        saved_sz_height,
+        table_pos_is_default_flow(hx.pos.as_ref()),
+    ));
     Ok(table)
+}
+
+/// wire `<hp:pos>` 가 기본 inline-flow 조합인지 (pos 없음 = 기본).
+fn table_pos_is_default_flow(pos: Option<&crate::schema::section::HxTablePos>) -> bool {
+    let Some(pos) = pos else {
+        return true;
+    };
+    pos.treat_as_char == 0
+        && pos.flow_with_text == 1
+        && pos.allow_overlap == 0
+        && pos.vert_rel_to.eq_ignore_ascii_case("PARA")
+        && pos.horz_rel_to.eq_ignore_ascii_case("COLUMN")
+        && pos.vert_offset == 0
+        && pos.horz_offset == 0
 }
 
 /// Converts an `HxTableCell` into a Core `TableCell`.
@@ -1681,7 +1700,9 @@ mod tests {
             (inm.left.as_i32(), inm.right.as_i32(), inm.top.as_i32(), inm.bottom.as_i32()),
             (510, 511, 141, 142)
         );
-        assert_eq!(table.layout_cache.expect("sz height promoted").saved_sz_height.as_i32(), 2831);
+        let cache = table.layout_cache.expect("layout cache attached");
+        assert_eq!(cache.saved_sz_height.expect("sz height promoted").as_i32(), 2831);
+        assert!(cache.default_flow_pos, "pos 없음 = 기본 flow");
     }
 
     #[test]
@@ -1703,9 +1724,33 @@ mod tests {
         </sec>"#;
         let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         let table = result.paragraphs[0].runs[0].content.as_table().expect("table");
-        assert!(table.layout_cache.is_none(), "sz height=0 must not create a cache");
+        let cache = table.layout_cache.expect("layout cache attached");
+        assert!(cache.saved_sz_height.is_none(), "sz height=0 = absent");
         assert!(table.out_margin.is_none());
         assert!(table.in_margin.is_none());
+    }
+
+    #[test]
+    fn table_non_default_pos_is_flagged() {
+        // treatAsChar=1 등 비기본 pos = 렌더러 admission 거부 신호.
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <tbl rowCnt="1" colCnt="1">
+                        <pos treatAsChar="1" flowWithText="1" vertRelTo="PARA" horzRelTo="COLUMN"
+                             vertOffset="0" horzOffset="0" allowOverlap="0"/>
+                        <tr><tc>
+                            <subList><p paraPrIDRef="0"><run charPrIDRef="0"><t>셀</t></run></p></subList>
+                            <cellSpan colSpan="1" rowSpan="1"/>
+                            <cellSz width="48189" height="0"/>
+                        </tc></tr>
+                    </tbl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let table = result.paragraphs[0].runs[0].content.as_table().expect("table");
+        assert!(!table.layout_cache.expect("cache").default_flow_pos);
     }
 
     #[test]

@@ -283,8 +283,8 @@ mod tests {
     #[test]
     fn decode_only_layout_cache_is_never_emitted() {
         // sz height 는 decode-only 캐시 — 인코더는 항상 자체 정책(0)을 쓴다.
-        let table =
-            one_cell_table().with_layout_cache(TableLayoutCache::new(HwpUnit::new(2831).unwrap()));
+        let table = one_cell_table()
+            .with_layout_cache(TableLayoutCache::new(Some(HwpUnit::new(2831).unwrap()), true));
         let hx = build_table(&table, 0, &mut Vec::new(), EncodeOptions::default()).unwrap();
         assert_eq!(hx.sz.expect("sz").height, 0, "decode-only cache must not reach the wire");
     }
