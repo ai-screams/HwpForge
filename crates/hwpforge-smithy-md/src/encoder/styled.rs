@@ -51,17 +51,29 @@ impl FootnoteCollector {
         Self { footnotes: Vec::new(), endnotes: Vec::new() }
     }
 
-    /// Adds a footnote body and returns the inline marker `[^N]`.
-    fn add_footnote(&mut self, body: &str) -> String {
+    /// Reserves a footnote number before recursively encoding its body.
+    fn reserve_footnote(&mut self) -> usize {
         let n = self.footnotes.len() + 1;
-        self.footnotes.push(body.to_string());
+        self.footnotes.push(String::new());
+        n
+    }
+
+    /// Fills a reserved footnote body and returns the inline marker `[^N]`.
+    fn complete_footnote(&mut self, n: usize, body: &str) -> String {
+        self.footnotes[n - 1] = body.to_string();
         format!("[^{n}]")
     }
 
-    /// Adds an endnote body and returns the inline marker `[^eN]`.
-    fn add_endnote(&mut self, body: &str) -> String {
+    /// Reserves an endnote number before recursively encoding its body.
+    fn reserve_endnote(&mut self) -> usize {
         let n = self.endnotes.len() + 1;
-        self.endnotes.push(body.to_string());
+        self.endnotes.push(String::new());
+        n
+    }
+
+    /// Fills a reserved endnote body and returns the inline marker `[^eN]`.
+    fn complete_endnote(&mut self, n: usize, body: &str) -> String {
+        self.endnotes[n - 1] = body.to_string();
         format!("[^e{n}]")
     }
 
@@ -349,7 +361,7 @@ fn paragraph_text_styled(
 fn encode_control_styled(
     control: &Control,
     styles: &dyn StyleLookup,
-    _images: &mut HashMap<String, Vec<u8>>,
+    images: &mut HashMap<String, Vec<u8>>,
     footnotes: &mut FootnoteCollector,
 ) -> String {
     match control {
@@ -371,38 +383,24 @@ fn encode_control_styled(
             }
         }
         Control::Footnote { paragraphs, .. } => {
-            let body = paragraphs
-                .iter()
-                .map(|p| extract_paragraph_text(p, styles))
-                .collect::<Vec<_>>()
-                .join(" ");
-            footnotes.add_footnote(body.trim())
+            let number = footnotes.reserve_footnote();
+            let body = encode_nested_paragraphs(paragraphs, styles, images, footnotes);
+            footnotes.complete_footnote(number, body.trim())
         }
         Control::Endnote { paragraphs, .. } => {
-            let body = paragraphs
-                .iter()
-                .map(|p| extract_paragraph_text(p, styles))
-                .collect::<Vec<_>>()
-                .join(" ");
-            footnotes.add_endnote(body.trim())
+            let number = footnotes.reserve_endnote();
+            let body = encode_nested_paragraphs(paragraphs, styles, images, footnotes);
+            footnotes.complete_endnote(number, body.trim())
         }
         Control::TextBox { paragraphs, .. } => {
-            let body = paragraphs
-                .iter()
-                .map(|p| extract_paragraph_text(p, styles))
-                .collect::<Vec<_>>()
-                .join(" ");
+            let body = encode_nested_paragraphs(paragraphs, styles, images, footnotes);
             body.trim().to_string()
         }
         Control::Equation { script, .. } => eqn_to_latex(script),
         Control::Chart { .. } => "<!-- chart -->".to_string(),
         Control::Line { .. } => String::new(),
         Control::Ellipse { paragraphs, .. } | Control::Polygon { paragraphs, .. } => {
-            let body = paragraphs
-                .iter()
-                .map(|p| extract_paragraph_text(p, styles))
-                .collect::<Vec<_>>()
-                .join(" ");
+            let body = encode_nested_paragraphs(paragraphs, styles, images, footnotes);
             if body.trim().is_empty() {
                 String::new()
             } else {
@@ -439,11 +437,13 @@ fn encode_control_styled(
             String::new()
         }
         Control::Memo { content, .. } => {
-            let body = content
-                .iter()
-                .map(|p| extract_paragraph_text(p, styles))
-                .collect::<Vec<_>>()
-                .join(" ");
+            // Memo content is hidden inside an HTML comment. Keep note
+            // registrations local as well, otherwise an invisible memo
+            // reference leaks its body into document-level definitions.
+            let mut memo_footnotes = FootnoteCollector::new();
+            let mut memo_images = HashMap::new();
+            let body =
+                encode_nested_paragraphs(content, styles, &mut memo_images, &mut memo_footnotes);
             let trimmed = body.trim();
             if trimmed.is_empty() {
                 String::new()
@@ -468,17 +468,23 @@ fn encode_control_styled(
     }
 }
 
-/// Recursively extracts plain text from a paragraph using style-aware formatting.
-///
-/// Note: Uses a local `FootnoteCollector`, so footnotes nested inside control
-/// bodies (e.g. footnote inside a TextBox) will not propagate to the document-level
-/// collector. This is acceptable because HWP rarely nests footnotes inside shapes,
-/// and threading the collector through all recursive paths would require significant
-/// refactoring for marginal benefit.
-fn extract_paragraph_text(paragraph: &Paragraph, styles: &dyn StyleLookup) -> String {
-    let mut dummy = FootnoteCollector::new();
-    let (text, _images) = paragraph_text_styled(paragraph, styles, &mut dummy);
-    text
+/// Encodes paragraphs nested in controls while retaining their extracted images
+/// and any nested footnote/endnote definitions in the document-level collectors.
+fn encode_nested_paragraphs(
+    paragraphs: &[Paragraph],
+    styles: &dyn StyleLookup,
+    images: &mut HashMap<String, Vec<u8>>,
+    footnotes: &mut FootnoteCollector,
+) -> String {
+    paragraphs
+        .iter()
+        .map(|paragraph| {
+            let (markdown, paragraph_images) = paragraph_text_styled(paragraph, styles, footnotes);
+            images.extend(paragraph_images);
+            markdown
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 // ---------------------------------------------------------------------------
@@ -1671,6 +1677,94 @@ mod tests {
     }
 
     #[test]
+    fn nested_footnote_numbers_follow_visible_reference_order() {
+        let inner_body = Paragraph::with_runs(
+            vec![Run::text("inner", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        let outer_body = Paragraph::with_runs(
+            vec![
+                Run::text("outer ", CharShapeIndex::new(0)),
+                Run::control(
+                    Control::Footnote { inst_id: None, paragraphs: vec![inner_body] },
+                    CharShapeIndex::new(0),
+                ),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Footnote { inst_id: None, paragraphs: vec![outer_body] },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let output = encode_styled(&doc, &MockStyles::new());
+
+        assert_eq!(output.markdown, "[^1]\n\n[^1]: outer [^2]\n[^2]: inner");
+    }
+
+    #[test]
+    fn nested_endnote_numbers_follow_visible_reference_order() {
+        let inner_body = Paragraph::with_runs(
+            vec![Run::text("inner", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        let outer_body = Paragraph::with_runs(
+            vec![
+                Run::text("outer ", CharShapeIndex::new(0)),
+                Run::control(
+                    Control::Endnote { inst_id: None, paragraphs: vec![inner_body] },
+                    CharShapeIndex::new(0),
+                ),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Endnote { inst_id: None, paragraphs: vec![outer_body] },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let output = encode_styled(&doc, &MockStyles::new());
+
+        assert_eq!(output.markdown, "[^e1]\n\n[^e1]: outer [^e2]\n[^e2]: inner");
+    }
+
+    #[test]
+    fn control_endnote_extracts_nested_images() {
+        let mut styles = MockStyles::new();
+        styles.image_data.insert("BinData/graph.png".to_string(), vec![0x89, 0x50, 0x4E]);
+        let graph = Image::new(
+            "BinData/graph.png",
+            HwpUnit::from_mm(40.0).unwrap(),
+            HwpUnit::from_mm(30.0).unwrap(),
+            ImageFormat::Png,
+        );
+        let endnote_body = Paragraph::with_runs(
+            vec![
+                Run::text("solution", CharShapeIndex::new(0)),
+                Run::image(graph, CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Endnote { inst_id: None, paragraphs: vec![endnote_body] },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let output = encode_styled(&doc, &styles);
+        assert_eq!(output.markdown, "[^e1]\n\n[^e1]: solution ![graph](images/graph.png)");
+        assert_eq!(output.images.get("images/graph.png"), Some(&vec![0x89, 0x50, 0x4E]));
+    }
+
+    #[test]
     fn control_textbox() {
         let textbox_body = Paragraph::with_runs(
             vec![Run::text("box content", CharShapeIndex::new(0))],
@@ -1696,6 +1790,51 @@ mod tests {
 
         let output = encode_styled(&doc, &styles);
         assert_eq!(output.markdown, "box content");
+    }
+
+    #[test]
+    fn nested_control_paragraph_styles_remain_inline() {
+        let textbox_body = Paragraph::with_runs(
+            vec![Run::text("box heading", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(1),
+        );
+        let footnote_body = Paragraph::with_runs(
+            vec![Run::text("note item", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(2),
+        );
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![
+                Run::control(
+                    Control::TextBox {
+                        paragraphs: vec![textbox_body],
+                        width: HwpUnit::from_mm(80.0).unwrap(),
+                        height: HwpUnit::from_mm(40.0).unwrap(),
+                        horz_offset: 0,
+                        vert_offset: 0,
+                        caption: None,
+                        style: None,
+                        text_vertical_align: hwpforge_foundation::VerticalAlign::Top,
+                    },
+                    CharShapeIndex::new(0),
+                ),
+                Run::text(" ", CharShapeIndex::new(0)),
+                Run::control(
+                    Control::Footnote { inst_id: None, paragraphs: vec![footnote_body] },
+                    CharShapeIndex::new(0),
+                ),
+            ],
+            ParaShapeIndex::new(0),
+        )]);
+        let mut styles = MockStyles::new();
+        styles.heading_paras.insert(1, 1);
+        styles.list_para_types.insert(2, "bullet");
+        styles.list_para_levels.insert(2, 0);
+
+        let output = encode_styled(&doc, &styles);
+
+        assert_eq!(output.markdown, "box heading [^1]\n\n[^1]: note item");
+        assert!(!output.markdown.contains("# box heading"));
+        assert!(!output.markdown.contains("[^1]: - note item"));
     }
 
     #[test]
@@ -2350,6 +2489,89 @@ mod tests {
             output.markdown
         );
         assert!(output.markdown.contains("memo note"));
+    }
+
+    #[test]
+    fn control_memo_discards_nested_footnote_definitions() {
+        use hwpforge_core::control::MemoMetadata;
+        let hidden_footnote = Paragraph::with_runs(
+            vec![Run::control(
+                Control::Footnote {
+                    inst_id: None,
+                    paragraphs: vec![Paragraph::with_runs(
+                        vec![Run::text("secret memo footnote", CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
+                    )],
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        );
+        let visible_footnote = Paragraph::with_runs(
+            vec![Run::control(
+                Control::Footnote {
+                    inst_id: None,
+                    paragraphs: vec![Paragraph::with_runs(
+                        vec![Run::text("visible footnote", CharShapeIndex::new(0))],
+                        ParaShapeIndex::new(0),
+                    )],
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        );
+        let doc = validated_document(vec![
+            Paragraph::with_runs(
+                vec![Run::control(
+                    Control::Memo {
+                        content: vec![hidden_footnote],
+                        anchor_runs: vec![],
+                        metadata: MemoMetadata::default(),
+                    },
+                    CharShapeIndex::new(0),
+                )],
+                ParaShapeIndex::new(0),
+            ),
+            visible_footnote,
+        ]);
+
+        let output = encode_styled(&doc, &MockStyles::new());
+        assert!(!output.markdown.contains("secret memo footnote"));
+        assert!(output.markdown.contains("[^1]: visible footnote"));
+        assert!(!output.markdown.contains("[^2]:"));
+    }
+
+    #[test]
+    fn control_memo_discards_nested_image_artifacts() {
+        use hwpforge_core::control::MemoMetadata;
+
+        let mut styles = MockStyles::new();
+        styles.image_data.insert("BinData/secret.png".to_string(), vec![0x89, 0x50, 0x4E]);
+        let image = Image::new(
+            "BinData/secret.png",
+            HwpUnit::from_mm(40.0).unwrap(),
+            HwpUnit::from_mm(30.0).unwrap(),
+            ImageFormat::Png,
+        );
+        let memo_body = Paragraph::with_runs(
+            vec![Run::image(image, CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        let doc = validated_document(vec![Paragraph::with_runs(
+            vec![Run::control(
+                Control::Memo {
+                    content: vec![memo_body],
+                    anchor_runs: vec![],
+                    metadata: MemoMetadata::default(),
+                },
+                CharShapeIndex::new(0),
+            )],
+            ParaShapeIndex::new(0),
+        )]);
+
+        let output = encode_styled(&doc, &styles);
+        assert!(output.markdown.contains("![secret](images/secret.png)"));
+        assert!(output.images.is_empty(), "memo images must remain local to the memo body");
     }
 
     #[test]

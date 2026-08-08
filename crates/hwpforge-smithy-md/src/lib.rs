@@ -38,3 +38,12 @@ pub use decoder::{MdDecoder, MdDocument};
 pub use encoder::{MdEncoder, MdOutput, MdWarning};
 pub use error::{MdError, MdErrorCode, MdResult};
 pub use frontmatter::Frontmatter;
+
+/// Converts a HancomEQN equation script into a LaTeX math expression.
+///
+/// This wrapper lets format consumers enrich structural HWPX reports without
+/// coupling the HWPX codec to the Markdown crate.
+#[must_use]
+pub fn hancom_eqn_to_latex(script: &str) -> String {
+    eqn::eqn_to_latex(script)
+}

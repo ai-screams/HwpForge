@@ -1,10 +1,12 @@
 //! `to-md` subcommand: convert HWPX to Markdown.
 
 use std::collections::HashMap;
+use std::io::Write;
+use std::path::Path;
 use std::path::PathBuf;
 
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxStyleLookup};
-use hwpforge_smithy_md::MdEncoder;
+use hwpforge_smithy_md::{hancom_eqn_to_latex, MdEncoder};
 
 use crate::error::{check_file_size, CliError};
 use crate::MdMode;
@@ -14,12 +16,21 @@ pub fn run(input: &PathBuf, output: &Option<PathBuf>, mode: &MdMode, json_mode: 
     check_file_size(input, json_mode);
 
     // 1. Decode HWPX
-    let hwpx_doc = match HwpxDecoder::decode_file(input) {
-        Ok(d) => d,
+    let decoded = if matches!(mode, MdMode::Styled) {
+        HwpxDecoder::decode_file_with_report(input)
+    } else {
+        HwpxDecoder::decode_file(input).map(|document| (document, Default::default()))
+    };
+    let (hwpx_doc, mut visual_equations) = match decoded {
+        Ok(result) => result,
         Err(e) => {
             CliError::new("DECODE_FAILED", format!("HWPX decode error: {e}")).exit(json_mode, 2);
         }
     };
+
+    for equation in &mut visual_equations.equations {
+        equation.latex = Some(hancom_eqn_to_latex(&equation.script));
+    }
 
     // 2. Validate document (Draft → Validated)
     let document = match hwpx_doc.document.validate() {
@@ -125,12 +136,56 @@ pub fn run(input: &PathBuf, output: &Option<PathBuf>, mode: &MdMode, json_mode: 
         }
     }
 
-    // 8. Print result
-    let result = serde_json::json!({
+    // 8. Write the styled-mode structural sidecar before reporting success.
+    let visual_equations_result = if matches!(mode, MdMode::Styled) {
+        let sidecar_path = md_path.with_extension("visual-equations.json");
+        let sidecar_json = match serde_json::to_vec_pretty(&visual_equations) {
+            Ok(json) => json,
+            Err(e) => {
+                CliError::new(
+                    "ENCODE_FAILED",
+                    format!("Visual-equations sidecar encode error: {e}"),
+                )
+                .exit(json_mode, 2);
+            }
+        };
+        if let Err(e) = write_atomic(&sidecar_path, &sidecar_json) {
+            CliError::new(
+                "FILE_WRITE_FAILED",
+                format!("Cannot write '{}': {e}", sidecar_path.display()),
+            )
+            .exit(json_mode, 1);
+        }
+        Some(serde_json::json!({
+            "output": sidecar_path.display().to_string(),
+            "count": visual_equations.equations.len(),
+        }))
+    } else {
+        let sidecar_path = md_path.with_extension("visual-equations.json");
+        if let Err(e) = std::fs::remove_file(&sidecar_path) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                CliError::new(
+                    "FILE_WRITE_FAILED",
+                    format!("Cannot remove stale '{}': {e}", sidecar_path.display()),
+                )
+                .exit(json_mode, 1);
+            }
+        }
+        None
+    };
+
+    // 9. Print result
+    let mut result = serde_json::json!({
         "status": "ok",
         "output": md_path.display().to_string(),
         "images": image_count,
     });
+    if let Some(visual_equations_result) = visual_equations_result {
+        result
+            .as_object_mut()
+            .expect("JSON object literal must remain an object")
+            .insert("visual_equations".to_string(), visual_equations_result);
+    }
 
     if json_mode {
         println!("{}", serde_json::to_string(&result).unwrap());
@@ -143,4 +198,16 @@ pub fn run(input: &PathBuf, output: &Option<PathBuf>, mode: &MdMode, json_mode: 
             if image_count == 1 { "" } else { "s" }
         );
     }
+}
+
+fn write_atomic(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+    let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("sidecar.json");
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let mut temporary = tempfile::Builder::new()
+        .prefix(&format!(".{file_name}."))
+        .suffix(".tmp")
+        .tempfile_in(parent)?;
+    temporary.write_all(contents)?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path).map(|_| ()).map_err(|error| error.error)
 }

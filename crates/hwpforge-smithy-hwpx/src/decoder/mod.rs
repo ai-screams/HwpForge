@@ -11,6 +11,7 @@ pub(crate) mod metadata;
 pub(crate) mod package;
 pub(crate) mod section;
 pub(crate) mod shapes;
+mod visual_equations;
 
 use std::path::Path;
 
@@ -22,6 +23,12 @@ use hwpforge_foundation::ApplyPageType;
 
 use crate::error::HwpxResult;
 use crate::style_store::HwpxStyleStore;
+
+pub use visual_equations::{
+    HwpxVisualEquation, HwpxVisualEquationDomain, HwpxVisualEquationGeometry,
+    HwpxVisualEquationParentKind, HwpxVisualEquationPosition, HwpxVisualEquationReport,
+    HwpxVisualEquationScale, HwpxVisualEquationSize, HwpxVisualEquationTranslation,
+};
 
 // ── HwpxDocument ─────────────────────────────────────────────────
 
@@ -65,6 +72,24 @@ impl HwpxDecoder {
     /// 3. Parse `Contents/section*.xml` → paragraphs + page settings
     /// 4. Assemble `Document<Draft>` with sections
     pub fn decode(bytes: &[u8]) -> HwpxResult<HwpxDocument> {
+        Self::decode_internal(bytes, false).map(|(document, _report)| document)
+    }
+
+    /// Decodes an HWPX file and preserves equations embedded in visual objects.
+    ///
+    /// The returned report contains only picture-caption and grouped-drawing
+    /// text equations. Ordinary prose, table, and top-level textbox equations
+    /// remain part of the decoded Core document and are not duplicated there.
+    pub fn decode_with_report(
+        bytes: &[u8],
+    ) -> HwpxResult<(HwpxDocument, HwpxVisualEquationReport)> {
+        Self::decode_internal(bytes, true)
+    }
+
+    fn decode_internal(
+        bytes: &[u8],
+        include_visual_equations: bool,
+    ) -> HwpxResult<(HwpxDocument, HwpxVisualEquationReport)> {
         // Step 1: Open package
         let mut pkg = package::PackageReader::new(bytes)?;
 
@@ -93,12 +118,19 @@ impl HwpxDecoder {
         // Step 5: Parse sections
         let mut document = Document::<Draft>::with_metadata(metadata);
         let section_count = pkg.section_count();
+        let mut visual_equations = Vec::new();
         // Track how many masterpages have been assigned across sections
         let mut masterpage_cursor = 0usize;
 
         for i in 0..section_count {
             let section_xml = pkg.read_section_xml(i)?;
-            let result = section::parse_section(&section_xml, i, &chart_xmls)?;
+            let result = if include_visual_equations {
+                section::parse_section_with_visual_equations(&section_xml, i, &chart_xmls)?
+            } else {
+                section::parse_section(&section_xml, i, &chart_xmls)?
+            };
+
+            visual_equations.extend(result.visual_equations.iter().cloned());
 
             let page_settings = result.page_settings.unwrap_or_else(PageSettings::a4);
 
@@ -161,13 +193,31 @@ impl HwpxDecoder {
         // Step 6: Extract binary image data from BinData/
         let image_store = pkg.read_all_bindata()?;
 
-        Ok(HwpxDocument { document, style_store, image_store })
+        for (document_order, equation) in visual_equations.iter_mut().enumerate() {
+            equation.document_order = document_order;
+        }
+
+        Ok((
+            HwpxDocument { document, style_store, image_store },
+            HwpxVisualEquationReport {
+                schema_version: visual_equations::HWPX_VISUAL_EQUATION_SCHEMA_VERSION,
+                equations: visual_equations,
+            },
+        ))
     }
 
     /// Decodes an HWPX file from a filesystem path.
     pub fn decode_file(path: impl AsRef<Path>) -> HwpxResult<HwpxDocument> {
         let bytes = std::fs::read(path.as_ref()).map_err(crate::error::HwpxError::Io)?;
         Self::decode(&bytes)
+    }
+
+    /// Decodes an HWPX file from a filesystem path and returns its visual-equation report.
+    pub fn decode_file_with_report(
+        path: impl AsRef<Path>,
+    ) -> HwpxResult<(HwpxDocument, HwpxVisualEquationReport)> {
+        let bytes = std::fs::read(path.as_ref()).map_err(crate::error::HwpxError::Io)?;
+        Self::decode_with_report(&bytes)
     }
 }
 

@@ -25,6 +25,12 @@ fn keyword_to_latex(kw: &str) -> &str {
         "leq" => r"\le",
         "geq" => r"\ge",
         "neq" => r"\ne",
+        "le" => r"\le",
+        "ge" => r"\ge",
+        "ne" => r"\ne",
+        "lt" => "<",
+        "gt" => ">",
+        "sim" => r"\sim",
         "therefore" => r"\therefore",
         "because" => r"\because",
         // Arrows
@@ -402,6 +408,16 @@ impl<'a> Parser<'a> {
                         };
                         format!("{}{{{}}}", cmd, arg)
                     }
+                    "rm" | "it" => {
+                        self.advance();
+                        String::new()
+                    }
+                    "bold" | "box" => {
+                        self.advance();
+                        let arg = self.parse_group();
+                        let cmd = if kw == "bold" { r"\mathbf" } else { r"\boxed" };
+                        format!("{}{{{}}}", cmd, arg)
+                    }
                     "left" => {
                         self.advance();
                         // next token should be a delimiter character
@@ -641,5 +657,58 @@ mod tests {
     fn prime_and_mod() {
         assert_eq!(eqn_to_latex("f prime"), "$f'$");
         assert_eq!(eqn_to_latex("a mod b"), "$a\\bmod b$");
+    }
+
+    #[test]
+    fn native_hancom_uppercase_commands_and_spacing() {
+        assert_eq!(
+            eqn_to_latex("LEFT(1+i RIGHT)+P LEFT(x RIGHT),~THEREFOREk LEQ 1 TIMES 2 CDOTS`"),
+            "$\\left(1+i\\right)+P\\left(x\\right),~\\therefore k\\le 1\\times 2\\cdots$"
+        );
+    }
+
+    #[test]
+    fn root_accent_fraction_and_style_commands_at_boundaries() {
+        assert_eq!(
+            eqn_to_latex("sqrt a+bar z+3 over k+rm O+it f"),
+            "$\\sqrt{a}+\\overline{z}+\\frac{3}{k}+O+f$"
+        );
+        assert_eq!(eqn_to_latex("sqrta+barz+overk+rmO+itf"), "$sqrta+barz+overk+rmO+itf$");
+    }
+
+    #[test]
+    fn ordinary_lowercase_identifiers_remain_plain_text() {
+        assert_eq!(eqn_to_latex("item+barometer+bars+its"), "$item+barometer+bars+its$");
+    }
+
+    #[test]
+    fn ordinary_uppercase_identifiers_remain_plain_text() {
+        assert_eq!(eqn_to_latex("BRIGHT+CLEFT"), "$BRIGHT+CLEFT$");
+    }
+
+    #[test]
+    fn font_switch_at_group_end_does_not_consume_closing_brace() {
+        assert_eq!(
+            eqn_to_latex(
+                "left({ bar{rm{AB}it}}+{ bar{rm{BF}it}} right) \
+                 times { bar{rm{SD}it}}^{2}={35} over {4}"
+            ),
+            "$\\left({\\overline{{AB}}}+{\\overline{{BF}}}\\right)\
+             \\times{\\overline{{SD}}}^{2}=\\frac{35}{4}$"
+        );
+    }
+
+    #[test]
+    fn native_hancom_single_letter_escapes_are_plain_latin_labels() {
+        assert_eq!(eqn_to_latex(r"\B+\D+\A+\C"), "$B+D+A+C$");
+    }
+
+    #[test]
+    fn latex_commands_and_non_letter_backslash_syntax_are_preserved() {
+        assert_eq!(
+            eqn_to_latex(r"\alpha+\sqrt{x}+\operatorname{rank}"),
+            r"$\alpha+\sqrt{x}+\operatorname{rank}$"
+        );
+        assert_eq!(eqn_to_latex(r"\{x\}_1+\%+\_+\\"), r"$\{x\}_{1}+\%+\_+\\$");
     }
 }
