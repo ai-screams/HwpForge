@@ -3913,9 +3913,14 @@ mod tests {
     #[test]
     fn absent_enum_attributes_do_not_warn() {
         // 속성 결측(빈 문자열) = 기본값 적용은 정상 — 경고 없음.
+        // applyPageType·subList vertAlign·startNum pageStartsOn 전부 결측인
+        // 구성 (독립 리뷰 Low 4 상환 — applyPageType 단독 커버리지 확장).
         let xml = r#"<sec>
             <p paraPrIDRef="0">
                 <run charPrIDRef="0">
+                    <secPr textDirection="HORIZONTAL">
+                        <startNum page="0" pic="0" tbl="0" equation="0"/>
+                    </secPr>
                     <ctrl>
                         <header id="1">
                             <subList id="" textDirection="HORIZONTAL">
@@ -3929,6 +3934,16 @@ mod tests {
         </sec>"#;
         let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         assert_eq!(result.headers[0].apply_page_type, ApplyPageType::Both);
+        assert_eq!(
+            result.headers[0].vert_align,
+            hwpforge_foundation::VerticalAlign::Top,
+            "vertAlign 결측 = Top 기본"
+        );
+        assert_eq!(
+            result.begin_num.expect("begin_num").page_starts_on,
+            hwpforge_core::section::PageStartsOn::Both,
+            "pageStartsOn 결측 = Both 기본"
+        );
         assert!(result.warnings.is_empty(), "{:?}", result.warnings);
     }
 

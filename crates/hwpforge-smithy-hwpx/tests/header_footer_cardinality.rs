@@ -54,4 +54,11 @@ fn odd_even_headers_roundtrip_cardinality() {
         headers.iter().map(|h| h.apply_page_type).collect::<Vec<_>>(),
         vec![ApplyPageType::Odd, ApplyPageType::Even]
     );
+    // subList 기하 실물 왕복 (독립 리뷰 Low 1 상환): 합성 단위테스트는
+    // 방향별로만 잠갔었다 — 실물 값(42520/4252)이 인코더에서 떨어지면
+    // 여기서 잡힌다.
+    for header in headers {
+        assert_eq!(header.text_width.as_i32(), 42520, "{:?}", header.apply_page_type);
+        assert_eq!(header.text_height.as_i32(), 4252, "{:?}", header.apply_page_type);
+    }
 }
