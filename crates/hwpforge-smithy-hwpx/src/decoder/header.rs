@@ -66,6 +66,9 @@ fn parse_begin_num(head: &HxHead) -> Option<BeginNum> {
         pic: bn.pic,
         tbl: bn.tbl,
         equation: bn.equation,
+        // header.xml <hh:beginNum> 에는 pageStartsOn 이 없다 — 섹션
+        // <hp:startNum> 전용 속성 (기본 Both).
+        ..BeginNum::default()
     })
 }
 

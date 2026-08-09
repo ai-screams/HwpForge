@@ -147,8 +147,7 @@ fn build_section_begin_num() -> Section {
         ],
         PageSettings::a4(),
     );
-    section.begin_num =
-        Some(BeginNum { page: 10, footnote: 5, endnote: 3, pic: 1, tbl: 1, equation: 1 });
+    section.begin_num = Some(BeginNum { page: 10, footnote: 5, endnote: 3, ..BeginNum::default() });
     section
 }
 

@@ -1432,7 +1432,21 @@ fn extract_begin_num(
         equation: sn.equation,
         footnote: 1,
         endnote: 1,
+        page_starts_on: parse_page_starts_on(&sn.page_starts_on),
     })
+}
+
+/// Parses an HWPX `pageStartsOn` string into [`PageStartsOn`].
+///
+/// 빈 문자열(속성 결측) = `Both` (스펙 기본). 미지 값도 `Both` 로
+/// 폴백한다 — W5-α α3 에서 디코드 경고 채널 표면화 대상.
+fn parse_page_starts_on(s: &str) -> hwpforge_core::section::PageStartsOn {
+    use hwpforge_core::section::PageStartsOn;
+    match s {
+        "EVEN" | "Even" | "even" => PageStartsOn::Even,
+        "ODD" | "Odd" | "odd" => PageStartsOn::Odd,
+        _ => PageStartsOn::Both,
+    }
 }
 
 /// Extracts [`PageBorderFillEntry`] list from an `HxSecPr`.
@@ -3736,6 +3750,33 @@ mod tests {
         assert_eq!(lns.count_by, 5);
         assert_eq!(lns.distance.as_i32(), 1000);
         assert_eq!(lns.start_number, 3);
+    }
+
+    // ── startNum pageStartsOn decoding (W5-α C2) ─────────────────
+
+    #[test]
+    fn start_num_page_starts_on_survives_decode() {
+        use hwpforge_core::section::PageStartsOn;
+        // pageStartsOn 은 스키마가 이미 파싱하는데 디코더가 폐기했다
+        // (Codex C2) — 쪽번호 홀짝 강제 시작은 W5-b PageIdentity 의 입력.
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <secPr textDirection="HORIZONTAL">
+                        <startNum pageStartsOn="EVEN" page="5" pic="1" tbl="1" equation="1"/>
+                        <pagePr landscape="WIDELY" width="59528" height="84188">
+                            <margin header="4252" footer="4252" gutter="0"
+                                    left="8504" right="8504" top="5668" bottom="4252"/>
+                        </pagePr>
+                    </secPr>
+                    <t>body</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let bn = result.begin_num.expect("should have begin_num");
+        assert_eq!(bn.page_starts_on, PageStartsOn::Even, "pageStartsOn 폐기 금지");
+        assert_eq!(bn.page, 5);
     }
 
     fn make_empty_sec_pr() -> crate::schema::section::HxSecPr {

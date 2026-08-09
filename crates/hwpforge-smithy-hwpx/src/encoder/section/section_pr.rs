@@ -76,9 +76,17 @@ pub(super) fn build_sec_pr_pre_elements(section: &Section) -> String {
     let pic = bn.map_or(0, |b| b.pic);
     let tbl = bn.map_or(0, |b| b.tbl);
     let equation = bn.map_or(0, |b| b.equation);
+    // W5-α C2: pageStartsOn 은 "BOTH" 고정이 아니라 실값 왕복 (홀짝 강제
+    // 시작 = 쪽번호 연속성 입력).
+    use hwpforge_core::section::PageStartsOn;
+    let page_starts_on = match bn.map_or(PageStartsOn::Both, |b| b.page_starts_on) {
+        PageStartsOn::Both => "BOTH",
+        PageStartsOn::Even => "EVEN",
+        PageStartsOn::Odd => "ODD",
+    };
     let _ = write!(
         xml,
-        r#"<hp:startNum pageStartsOn="BOTH" page="{page}" pic="{pic}" tbl="{tbl}" equation="{equation}"/>"#,
+        r#"<hp:startNum pageStartsOn="{page_starts_on}" page="{page}" pic="{pic}" tbl="{tbl}" equation="{equation}"/>"#,
     );
     let _ = write!(
         xml,

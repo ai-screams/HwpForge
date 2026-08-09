@@ -2730,8 +2730,35 @@ mod tests {
     fn begin_num_encodes_in_startnum() {
         use hwpforge_core::section::BeginNum;
         let mut section = simple_section("text");
-        section.begin_num =
-            Some(BeginNum { page: 3, footnote: 2, endnote: 1, pic: 4, tbl: 5, equation: 6 });
+        section.begin_num = Some(BeginNum {
+            page: 3,
+            footnote: 2,
+            endnote: 1,
+            pic: 4,
+            tbl: 5,
+            equation: 6,
+            ..BeginNum::default()
+        });
+        // 기본(Both) 은 wire "BOTH" 로 방출된다.
+        {
+            let xml = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default()).unwrap().xml;
+            assert!(xml.contains(r#"pageStartsOn="BOTH""#));
+        }
+        // W5-α C2: 홀짝 강제 시작은 실값 왕복 ("BOTH" 고정 회귀 방지).
+        section.begin_num.as_mut().unwrap().page_starts_on =
+            hwpforge_core::section::PageStartsOn::Even;
+        {
+            let xml = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default()).unwrap().xml;
+            assert!(xml.contains(r#"pageStartsOn="EVEN""#), "pageStartsOn 실값 방출");
+            let parsed =
+                crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
+                    .unwrap();
+            assert_eq!(
+                parsed.begin_num.expect("begin_num").page_starts_on,
+                hwpforge_core::section::PageStartsOn::Even,
+                "왕복 보존"
+            );
+        }
         let xml = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default()).unwrap().xml;
         assert!(xml.contains(r#"page="3""#));
         assert!(xml.contains(r#"pic="4""#));

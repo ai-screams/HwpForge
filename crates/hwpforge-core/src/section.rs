@@ -176,12 +176,33 @@ impl Default for PageBorderFillEntry {
 // BeginNum
 // ---------------------------------------------------------------------------
 
+/// Which page parity a section starts on.
+///
+/// Maps to HWPX `<hp:startNum pageStartsOn="BOTH|EVEN|ODD">`. 홀짝 강제
+/// 시작은 다중 섹션 쪽번호 연속성 계산의 입력이다 (W5-α C2 — 스키마에
+/// 있던 값을 디코더가 폐기하던 것을 승격).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, JsonSchema)]
+pub enum PageStartsOn {
+    /// 아무 쪽성에서나 시작한다 (기본).
+    #[default]
+    Both,
+    /// 짝수 쪽에서 시작한다.
+    Even,
+    /// 홀수 쪽에서 시작한다.
+    Odd,
+}
+
 /// Starting numbers for various auto-numbering sequences.
 ///
-/// Maps to `<hh:beginNum>` in header.xml.
+/// Maps to `<hh:beginNum>` in header.xml and per-section
+/// `<hp:startNum>` in section XML.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct BeginNum {
-    /// Starting page number (default: 1).
+    /// Starting page number.
+    ///
+    /// 섹션 `<hp:startNum>` 의미론 (OWPML §10.6.2): **`0` = 이전 구역에서
+    /// 계속**, `n > 0` = 이 구역을 `n` 번부터 재시작. ("기본값 1" 이
+    /// 아니다 — serde 기본 1 은 header.xml `<hh:beginNum>` 쪽 관례.)
     #[serde(default = "BeginNum::one")]
     pub page: u32,
     /// Starting footnote number (default: 1).
@@ -199,6 +220,16 @@ pub struct BeginNum {
     /// Starting equation number (default: 1).
     #[serde(default = "BeginNum::one")]
     pub equation: u32,
+    /// Which page parity this section starts on (`pageStartsOn`).
+    #[serde(default, skip_serializing_if = "PageStartsOn::is_default")]
+    pub page_starts_on: PageStartsOn,
+}
+
+impl PageStartsOn {
+    /// serde `skip_serializing_if` 용 기본값 판정.
+    fn is_default(&self) -> bool {
+        *self == Self::Both
+    }
 }
 
 impl BeginNum {
@@ -209,7 +240,15 @@ impl BeginNum {
 
 impl Default for BeginNum {
     fn default() -> Self {
-        Self { page: 1, footnote: 1, endnote: 1, pic: 1, tbl: 1, equation: 1 }
+        Self {
+            page: 1,
+            footnote: 1,
+            endnote: 1,
+            pic: 1,
+            tbl: 1,
+            equation: 1,
+            page_starts_on: PageStartsOn::Both,
+        }
     }
 }
 
