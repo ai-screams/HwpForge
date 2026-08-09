@@ -905,6 +905,22 @@ mod tests {
             "unexpected file: {:?}",
             hcr.path
         );
+        // 함초롬바탕 = 정상 Bold 축 실물 (HANBatangB: subfamily Bold + BOLD
+        // 플래그 + weight 700) — W4a 분류기가 실제 한컴 폰트에서 Bold 를
+        // 골라내는 real-world 잠금.
+        let hcr_bold =
+            resolver.resolve_styled("함초롬바탕", FaceStyle::Bold).expect("함초롬바탕 Bold");
+        assert!(
+            hcr_bold
+                .path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_ascii_lowercase()
+                .contains("hanbatangb"),
+            "unexpected bold file: {:?}",
+            hcr_bold.path
+        );
         // fallback 금지: 없는 이름은 에러
         assert!(matches!(
             resolver.resolve("존재하지않는서체"),
