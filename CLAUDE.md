@@ -109,7 +109,10 @@ bacon test    # Auto-run tests
 - **commit 출력도 `| tail` 로 자르지 말 것** — 실패한 훅 라인·exit code 가 사라져 "커밋됐다" 오판. 파일 리다이렉트 후 grep (push 파이프 금지 규칙과 동일 계열).
 - **커밋 전 touched 크레이트만 `cargo clippy --all-targets -- -D warnings` 사전 점검** — 훅 거부 1회 = 2분+ 재사이클 (nextest/build 는 clippy lint 를 안 잡음).
 - `rm` 은 대화형 alias — stale `.git/index.lock`(0바이트·git 프로세스 없음 확인 후) 등 스크립트 삭제는 `rm -f`.
-- 대용량 정리: `target/`(수백 GB 가능)·`fuzz/target`·`.docs/papers/EAAI/eval/oracle-rs/target` 은 재생성 가능 빌드 산출물. `.docs/papers`(corpus·논문)·`fuzz/corpus` 는 자산 — 삭제 금지.
+- 대용량 정리: `target/`(수백 GB 가능)·`fuzz/target`·`.docs/papers/EAAI/eval/oracle-rs/target` 은 재생성 가능 빌드 산출물. `.docs/papers`(corpus·논문)·`fuzz/corpus` 는 자산 — 삭제 금지. **디스크 고갈 시 우선 삭제 = `target/debug/incremental`(94GB 실사고)·`target/llvm-cov-target`** — `target/debug/deps`(warm 의존성 캐시)는 보존해 cold 재빌드를 피한다.
+- pre-commit 은 **미스테이지 변경을 stash 하고 staged 트리만 검사** — 다파일 수정에서 하나라도 `git add` 누락하면 staged 트리가 컴파일 실패로 거부됨 (원인이 "숨은 미스테이지 파일"이라 오진하기 쉬움). 커밋 전 `git status --short` 로 관련 파일 전부 staged(`M`) 확인.
+- **zsh 는 미인용 변수를 word-split 하지 않음** — `CMD="node /x.mjs"; $CMD status` 는 전체가 하나의 명령명 (조용한 command-not-found → 루프/조건 오탐). 스크립트에서 명령을 변수에 담지 말고 인라인 전체 경로로 (`for x in $VAR` 미분리와 동계열).
+- Bash 작업 디렉터리는 **호출 간 지속** — 앞서 `cd` 한 상태에서 레포-루트 상대 경로(git add 등)를 쓰면 pathspec fatal. 커밋/스테이지 명령은 절대 경로 또는 루트 복귀 후 실행.
 
 ### Documentation & Coverage
 

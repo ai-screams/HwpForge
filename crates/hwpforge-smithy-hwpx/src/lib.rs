@@ -79,7 +79,7 @@ pub use cell_edit::{
     HwpxCellEditor, SetCellOutcome, SetCellResult,
 };
 pub use decoder::package::{PackageEntryInfo, PackageReader};
-pub use decoder::{HwpxDecoder, HwpxDocument};
+pub use decoder::{DecodeWarning, HwpxDecoder, HwpxDocument};
 pub use default_styles::{DefaultStyleEntry, HancomStyleSet};
 pub use diff::{
     CellTextChange, DocumentDiff, FieldChange, FieldChangeKind, HwpxDiffer, PackageDiff,

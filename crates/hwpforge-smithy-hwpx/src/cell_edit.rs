@@ -520,7 +520,7 @@ impl HwpxCellEditor {
         admission_compare(&d0, &d1).map_err(map_admission_error)?;
         check_zip_carry(base, &e0).map_err(map_admission_error)?;
 
-        let HwpxDocument { mut document, style_store, image_store } = d0;
+        let HwpxDocument { mut document, style_store, image_store, .. } = d0;
         let outcome = apply_set_cells(&mut document, specs)?;
         let validated =
             document.validate().map_err(|e| CellEditError::Codec(format!("validate: {e}")))?;

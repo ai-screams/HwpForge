@@ -398,6 +398,7 @@ impl HwpxStructuralEditor {
 
         // ── reverse-delta self-verify: output ≡ declared delta ──
         let expected_doc = HwpxDocument {
+            warnings: Vec::new(),
             document: expected,
             style_store: d0.style_store.clone(),
             image_store: d0.image_store.clone(),
@@ -522,6 +523,7 @@ impl HwpxStructuralEditor {
         // Encode the declared delta once; its section XML holds the new
         // paragraph in the exact form the codec round-trips.
         let encoded = encode_hwpx(&HwpxDocument {
+            warnings: Vec::new(),
             document: expected.clone(),
             style_store: d0.style_store.clone(),
             image_store: d0.image_store.clone(),
@@ -596,6 +598,7 @@ impl HwpxStructuralEditor {
 
         // ── reverse-delta self-verify ──
         let expected_doc = HwpxDocument {
+            warnings: Vec::new(),
             document: expected,
             style_store: d0.style_store.clone(),
             image_store: d0.image_store.clone(),
@@ -1431,6 +1434,7 @@ mod tests {
         let mut wrong = decoded.document.clone();
         wrong.sections_mut()[0].paragraphs.pop();
         let expected = HwpxDocument {
+            warnings: Vec::new(),
             document: wrong,
             style_store: decoded.style_store.clone(),
             image_store: decoded.image_store.clone(),
@@ -1446,6 +1450,7 @@ mod tests {
         let base = fixture("plain_paragraphs.hwpx");
         let decoded = HwpxDecoder::decode(&base).unwrap();
         let expected = HwpxDocument {
+            warnings: Vec::new(),
             document: decoded.document.clone(),
             style_store: decoded.style_store.clone(),
             image_store: decoded.image_store.clone(),
@@ -1616,6 +1621,7 @@ mod tests {
             document,
             style_store: d0.style_store.clone(),
             image_store: d0.image_store.clone(),
+            warnings: Vec::new(),
         })
         .expect("encode");
 

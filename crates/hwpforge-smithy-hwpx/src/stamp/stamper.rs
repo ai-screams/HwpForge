@@ -243,7 +243,7 @@ impl HwpxStamper {
         check_zip_carry(base, &e0)?;
 
         // ── apply on the admitted decode ────────────────────────────
-        let HwpxDocument { mut document, style_store, image_store } = d0;
+        let HwpxDocument { mut document, style_store, image_store, .. } = d0;
         let outcome = apply(&mut document, specs)?;
         let validated =
             document.validate().map_err(|e| StamperError::Codec(format!("validate: {e}")))?;
@@ -292,7 +292,7 @@ impl HwpxStamper {
         check_zip_carry(base, &e0)?;
 
         // ── unified preflight, then mutate ──────────────────────────
-        let HwpxDocument { mut document, style_store, image_store } = d0;
+        let HwpxDocument { mut document, style_store, image_store, .. } = d0;
         let reserved: HashSet<String> = request
             .text
             .iter()
@@ -309,6 +309,7 @@ impl HwpxStamper {
         let text_outcome = apply(&mut document, &request.text)?;
         // Text-only reference for the reverse-delta gate (before cells).
         let text_only = HwpxDocument {
+            warnings: Vec::new(),
             document: document.clone(),
             style_store: style_store.clone(),
             image_store: image_store.clone(),
@@ -409,6 +410,7 @@ fn verify_and_reverse_cells(
     }
 
     let reverted = HwpxDocument {
+        warnings: Vec::new(),
         document: reverted,
         style_store: d2.style_store.clone(),
         image_store: d2.image_store.clone(),
@@ -769,6 +771,7 @@ mod tests {
             PageSettings::default(),
         ));
         HwpxDocument {
+            warnings: Vec::new(),
             document: doc,
             style_store: HwpxStyleStore::with_default_fonts("함초롬돋움"),
             image_store: ImageStore::new(),

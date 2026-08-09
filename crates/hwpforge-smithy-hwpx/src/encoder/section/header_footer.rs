@@ -193,7 +193,27 @@ pub(super) fn build_header_xml(
     let mut xml = String::new();
     write!(xml, r#"<hp:ctrl><hp:{tag_name} applyPageType="{apply_page}" id="{hf_id}">"#,)
         .expect("write to String is infallible");
-    xml.push_str(&encode_memo_sublist(&hf.paragraphs, 0, hyperlink_entries, options)?);
+    // W5-α H1: 컨테이너 기하(vertAlign/textWidth/textHeight) 실값 왕복 —
+    // 일반 꼬리말은 vertAlign=BOTTOM 을 쓰므로 하드코딩하면 데이터 손실.
+    let vert_align = match hf.vert_align {
+        hwpforge_foundation::VerticalAlign::Center => "CENTER",
+        hwpforge_foundation::VerticalAlign::Bottom => "BOTTOM",
+        _ => "TOP",
+    };
+    let mut sub_list = crate::encoder::section::encode_paragraphs_to_sublist_with_align(
+        &hf.paragraphs,
+        0,
+        vert_align,
+        hyperlink_entries,
+        options,
+    )?;
+    sub_list.text_width = u32::try_from(hf.text_width.as_i32()).unwrap_or(0);
+    sub_list.text_height = u32::try_from(hf.text_height.as_i32()).unwrap_or(0);
+    let sub_xml = quick_xml::se::to_string(&sub_list)
+        .map_err(|e| crate::error::HwpxError::InvalidStructure { detail: e.to_string() })?;
+    let sub_xml = sub_xml.replacen("<HxSubList", "<hp:subList", 1);
+    let sub_xml = sub_xml.replacen("</HxSubList>", "</hp:subList>", 1);
+    xml.push_str(&sub_xml);
     write!(xml, "</hp:{tag_name}></hp:ctrl>").expect("write to String is infallible");
     Ok(xml)
 }
@@ -317,6 +337,20 @@ mod tests {
             assert!(xml.contains(&format!(r#"applyPageType="{want}""#)), "{want}: {xml}");
             assert!(xml.starts_with("<hp:ctrl><hp:header"));
         }
+    }
+
+    #[test]
+    fn header_xml_carries_sublist_geometry() {
+        // W5-α H1: 컨테이너 기하 실값 왕복 — 일반 꼬리말 = vertAlign BOTTOM.
+        let mut entries = Vec::new();
+        let mut hf = HeaderFooter::new(Vec::new(), ApplyPageType::Both);
+        hf.vert_align = hwpforge_foundation::VerticalAlign::Bottom;
+        hf.text_width = hwpforge_foundation::HwpUnit::new(42520).unwrap();
+        hf.text_height = hwpforge_foundation::HwpUnit::new(4252).unwrap();
+        let xml = build_header_xml(&hf, "footer", &mut entries, EncodeOptions::default()).unwrap();
+        assert!(xml.contains(r#"vertAlign="BOTTOM""#), "{xml}");
+        assert!(xml.contains(r#"textWidth="42520""#), "{xml}");
+        assert!(xml.contains(r#"textHeight="4252""#), "{xml}");
     }
 
     #[test]

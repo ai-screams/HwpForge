@@ -281,8 +281,7 @@ fn section_border_fill_begin_num() -> Section {
         PageSettings::a4(),
     );
     section.page_border_fills = Some(entries);
-    section.begin_num =
-        Some(BeginNum { page: 10, footnote: 5, endnote: 3, pic: 1, tbl: 1, equation: 1 });
+    section.begin_num = Some(BeginNum { page: 10, footnote: 5, endnote: 3, ..BeginNum::default() });
     // Add page number display to make BeginNum visible (should show "10")
     section.page_number = Some(PageNumber::bottom_center());
     section
