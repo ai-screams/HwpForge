@@ -1993,7 +1993,9 @@ mod tests {
         let result =
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
                 .unwrap();
-        let header = result.header.expect("decoded section should have header");
+        let [header] = result.headers.as_slice() else {
+            panic!("decoded section should have exactly one header");
+        };
         assert_eq!(header.apply_page_type, ApplyPageType::Both);
         assert_eq!(header.paragraphs.len(), 1);
         assert_eq!(header.paragraphs[0].runs[0].content.as_text(), Some("Header Content"));
@@ -2016,7 +2018,9 @@ mod tests {
         let result =
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
                 .unwrap();
-        let footer = result.footer.expect("decoded section should have footer");
+        let [footer] = result.footers.as_slice() else {
+            panic!("decoded section should have exactly one footer");
+        };
         assert_eq!(footer.apply_page_type, ApplyPageType::Even);
         assert_eq!(footer.paragraphs.len(), 1);
         assert_eq!(footer.paragraphs[0].runs[0].content.as_text(), Some("Footer Content"));
@@ -2110,8 +2114,12 @@ mod tests {
         let result =
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
                 .unwrap();
-        let header = result.header.expect("should have header");
-        let footer = result.footer.expect("should have footer");
+        let [header] = result.headers.as_slice() else {
+            panic!("should have exactly one header");
+        };
+        let [footer] = result.footers.as_slice() else {
+            panic!("should have exactly one footer");
+        };
 
         assert_eq!(header.paragraphs[0].runs[0].content.as_text(), Some("My Header"));
         assert_eq!(header.apply_page_type, ApplyPageType::Both);
@@ -2360,7 +2368,9 @@ mod tests {
         let result =
             crate::decoder::section::parse_section(&xml, 0, &std::collections::HashMap::new())
                 .unwrap();
-        let header = result.header.expect("should have header");
+        let [header] = result.headers.as_slice() else {
+            panic!("should have exactly one header");
+        };
         assert_eq!(header.paragraphs[0].runs[0].content.as_text(), Some("A & B < C > D"),);
     }
 

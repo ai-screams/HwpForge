@@ -102,10 +102,14 @@ pub struct SectionParseResult {
     pub paragraphs: Vec<Paragraph>,
     /// Page settings extracted from `<hp:secPr>`, if present.
     pub page_settings: Option<PageSettings>,
-    /// Header extracted from `<hp:ctrl><hp:header>`, if present.
-    pub header: Option<HeaderFooter>,
-    /// Footer extracted from `<hp:ctrl><hp:footer>`, if present.
-    pub footer: Option<HeaderFooter>,
+    /// Headers extracted from `<hp:ctrl><hp:header>`, in wire order.
+    ///
+    /// W5-α (Codex C1): HWPX 는 `applyPageType`(BOTH/ODD/EVEN) 별로 복수의
+    /// `<hp:header>` 를 허용한다 — 단수 first-wins 는 무음 데이터 손실이었다.
+    pub headers: Vec<HeaderFooter>,
+    /// Footers extracted from `<hp:ctrl><hp:footer>`, in wire order.
+    /// See `headers` for the cardinality rationale.
+    pub footers: Vec<HeaderFooter>,
     /// Page number extracted from `<hp:ctrl><hp:pageNum>`, if present.
     pub page_number: Option<PageNumber>,
     /// Multi-column settings extracted from `<hp:ctrl><hp:colPr>`, if present.
@@ -139,8 +143,8 @@ pub fn parse_section(
         .map_err(|e| HwpxError::XmlParse { file: file_hint, detail: e.to_string() })?;
 
     let mut page_settings = None;
-    let mut header = None;
-    let mut footer = None;
+    let mut headers = Vec::new();
+    let mut footers = Vec::new();
     let mut page_number = None;
     let mut column_settings = None;
     let mut visibility = None;
@@ -189,15 +193,13 @@ pub fn parse_section(
                             column_settings = Some(cs);
                         }
                     }
-                    if header.is_none() {
-                        if let Some(hf) = convert_ctrl_header(ctrl) {
-                            header = Some(hf);
-                        }
+                    // 다중 머리말/꼬리말 = wire 순서대로 전부 수집 (W5-α C1:
+                    // first-wins 는 ODD/EVEN 문서에서 무음 데이터 손실).
+                    if let Some(hf) = convert_ctrl_header(ctrl)? {
+                        headers.push(hf);
                     }
-                    if footer.is_none() {
-                        if let Some(hf) = convert_ctrl_footer(ctrl) {
-                            footer = Some(hf);
-                        }
+                    if let Some(hf) = convert_ctrl_footer(ctrl)? {
+                        footers.push(hf);
                     }
                     if page_number.is_none() {
                         if let Some(pn) = convert_ctrl_page_number(ctrl) {
@@ -235,8 +237,8 @@ pub fn parse_section(
     Ok(SectionParseResult {
         paragraphs,
         page_settings,
-        header,
-        footer,
+        headers,
+        footers,
         page_number,
         column_settings,
         visibility,
@@ -1558,35 +1560,44 @@ fn parse_mm_width(s: &str) -> HwpUnit {
 }
 
 /// Extracts a [`HeaderFooter`] from an `HxCtrl`'s header element, if present.
-fn convert_ctrl_header(ctrl: &HxCtrl) -> Option<HeaderFooter> {
-    let hx = ctrl.header.as_ref()?;
-    Some(convert_header_footer(hx))
+///
+/// # Errors
+///
+/// 머리말 내부 문단 변환 실패를 전파한다 (W5-α C1 — `filter_map` 무음
+/// 삼킴은 캐시·본문 소실을 숨겼다).
+fn convert_ctrl_header(ctrl: &HxCtrl) -> HwpxResult<Option<HeaderFooter>> {
+    ctrl.header.as_ref().map(convert_header_footer).transpose()
 }
 
 /// Extracts a [`HeaderFooter`] from an `HxCtrl`'s footer element, if present.
-fn convert_ctrl_footer(ctrl: &HxCtrl) -> Option<HeaderFooter> {
-    let hx = ctrl.footer.as_ref()?;
-    Some(convert_header_footer(hx))
+///
+/// # Errors
+///
+/// 꼬리말 내부 문단 변환 실패를 전파한다 (`convert_ctrl_header` 참조).
+fn convert_ctrl_footer(ctrl: &HxCtrl) -> HwpxResult<Option<HeaderFooter>> {
+    ctrl.footer.as_ref().map(convert_header_footer).transpose()
 }
 
 /// Converts an `HxHeaderFooter` into a Core [`HeaderFooter`].
-fn convert_header_footer(hx: &HxHeaderFooter) -> HeaderFooter {
+///
+/// # Errors
+///
+/// 내부 문단 변환 실패를 전파한다 — 머리말 문단이 조용히 사라지면
+/// 렌더/왕복이 결손을 인지할 수 없다 (fail-open 금지).
+fn convert_header_footer(hx: &HxHeaderFooter) -> HwpxResult<HeaderFooter> {
     let apply_page_type = parse_apply_page_type(&hx.apply_page_type);
 
     let paragraphs = if let Some(sub_list) = &hx.sub_list {
         sub_list
             .paragraphs
             .iter()
-            .filter_map(|hx_para| {
-                let (para, _) = convert_paragraph(hx_para, false, 0).ok()?;
-                Some(para)
-            })
-            .collect()
+            .map(|hx_para| convert_paragraph(hx_para, false, 0).map(|(para, _)| para))
+            .collect::<HwpxResult<Vec<_>>>()?
     } else {
         Vec::new()
     };
 
-    HeaderFooter::new(paragraphs, apply_page_type)
+    Ok(HeaderFooter::new(paragraphs, apply_page_type))
 }
 
 /// Extracts a [`PageNumber`] from an `HxCtrl`'s page_num element, if present.
@@ -2442,7 +2453,9 @@ mod tests {
             </p>
         </sec>"#;
         let result = parse_section(xml, 0, &HashMap::new()).unwrap();
-        let header = result.header.expect("should have header");
+        let [header] = result.headers.as_slice() else {
+            panic!("expected exactly one header, got {}", result.headers.len());
+        };
         assert_eq!(header.apply_page_type, ApplyPageType::Both);
         assert_eq!(header.paragraphs.len(), 1);
         assert_eq!(header.paragraphs[0].runs[0].content.as_text(), Some("Header Text"));
@@ -2468,7 +2481,9 @@ mod tests {
             </p>
         </sec>"#;
         let result = parse_section(xml, 0, &HashMap::new()).unwrap();
-        let footer = result.footer.expect("should have footer");
+        let [footer] = result.footers.as_slice() else {
+            panic!("expected exactly one footer, got {}", result.footers.len());
+        };
         assert_eq!(footer.apply_page_type, ApplyPageType::Even);
         assert_eq!(footer.paragraphs.len(), 1);
         assert_eq!(footer.paragraphs[0].runs[0].content.as_text(), Some("Footer Text"));
@@ -2527,11 +2542,15 @@ mod tests {
         </sec>"#;
         let result = parse_section(xml, 0, &HashMap::new()).unwrap();
 
-        let header = result.header.expect("should have header");
+        let [header] = result.headers.as_slice() else {
+            panic!("expected exactly one header, got {}", result.headers.len());
+        };
         assert_eq!(header.apply_page_type, ApplyPageType::Both);
         assert_eq!(header.paragraphs[0].runs[0].content.as_text(), Some("My Header"));
 
-        let footer = result.footer.expect("should have footer");
+        let [footer] = result.footers.as_slice() else {
+            panic!("expected exactly one footer, got {}", result.footers.len());
+        };
         assert_eq!(footer.apply_page_type, ApplyPageType::Odd);
         assert_eq!(footer.paragraphs[0].runs[0].content.as_text(), Some("My Footer"));
 
@@ -2549,8 +2568,8 @@ mod tests {
             </p>
         </sec>"#;
         let result = parse_section(xml, 0, &HashMap::new()).unwrap();
-        assert!(result.header.is_none());
-        assert!(result.footer.is_none());
+        assert!(result.headers.is_empty());
+        assert!(result.footers.is_empty());
         assert!(result.page_number.is_none());
     }
 

@@ -1843,8 +1843,8 @@ mod tests {
         let section = Section {
             paragraphs: parsed.paragraphs,
             page_settings: parsed.page_settings.unwrap_or_default(),
-            headers: parsed.header.into_iter().collect(),
-            footers: parsed.footer.into_iter().collect(),
+            headers: parsed.headers,
+            footers: parsed.footers,
             page_number: parsed.page_number,
             column_settings: parsed.column_settings,
             visibility: parsed.visibility,
@@ -1900,13 +1900,13 @@ mod tests {
         "#;
 
         let parsed = parse_section(xml, 0, &HashMap::new()).unwrap();
-        assert!(parsed.footer.is_none(), "nested footer must not become section footer");
+        assert!(parsed.footers.is_empty(), "nested footer must not become section footer");
 
         let section = Section {
             paragraphs: parsed.paragraphs,
             page_settings: parsed.page_settings.unwrap_or_default(),
-            headers: parsed.header.into_iter().collect(),
-            footers: parsed.footer.into_iter().collect(),
+            headers: parsed.headers,
+            footers: parsed.footers,
             page_number: parsed.page_number,
             column_settings: parsed.column_settings,
             visibility: parsed.visibility,
@@ -1959,8 +1959,8 @@ mod tests {
         let section = Section {
             paragraphs: parsed.paragraphs,
             page_settings: parsed.page_settings.unwrap_or_default(),
-            headers: parsed.header.into_iter().collect(),
-            footers: parsed.footer.into_iter().collect(),
+            headers: parsed.headers,
+            footers: parsed.footers,
             page_number: parsed.page_number,
             column_settings: parsed.column_settings,
             visibility: parsed.visibility,

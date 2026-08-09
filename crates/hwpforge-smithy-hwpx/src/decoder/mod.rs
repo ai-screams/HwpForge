@@ -122,14 +122,10 @@ impl HwpxDecoder {
             let section = Section {
                 paragraphs: result.paragraphs,
                 page_settings,
-                // ADR-002: Section now holds `Vec<HeaderFooter>`. The
-                // section parser still returns single Option slots
-                // (one section can only have one `<hp:header>` per
-                // applyPageType in the decoder's current shape);
-                // collect them into the Vec so multi-cardinality is
-                // representable end-to-end.
-                headers: result.header.into_iter().collect(),
-                footers: result.footer.into_iter().collect(),
+                // ADR-002 cardinality — 파서가 wire 순서 그대로의 Vec 을
+                // 돌려준다 (W5-α C1: ODD/EVEN 다중 머리말 보존).
+                headers: result.headers,
+                footers: result.footers,
                 page_number: result.page_number,
                 column_settings: result.column_settings,
                 visibility: result.visibility,
