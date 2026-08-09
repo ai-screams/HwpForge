@@ -16,18 +16,22 @@ use hwpforge_core::run::Run;
 use hwpforge_core::section::Section;
 use hwpforge_core::StyleLookup;
 use hwpforge_foundation::{Alignment, CharShapeIndex, HwpUnit, ParaShapeIndex};
-use hwpforge_smithy_pdf::{render_document, PdfError, PdfInput, PdfOptions, PdfWarning};
+use hwpforge_smithy_pdf::{
+    render_document, FontFallbackMode, PdfError, PdfInput, PdfOptions, PdfWarning,
+};
 
 /// 테스트 폰트만 등록하는 스타일 컨텍스트 (10pt 고정).
 struct TestStyles {
     alignment: Alignment,
     bold: bool,
     face: &'static str,
+    /// 언어축 폰트 이름 (비면 `face` 단일 — 축 정보 없는 포맷).
+    axes: &'static [&'static str],
 }
 
 impl Default for TestStyles {
     fn default() -> Self {
-        Self { alignment: Alignment::Left, bold: false, face: "HwpForge Test" }
+        Self { alignment: Alignment::Left, bold: false, face: "HwpForge Test", axes: &[] }
     }
 }
 
@@ -38,6 +42,14 @@ impl StyleLookup for TestStyles {
 
     fn char_font_name(&self, _id: CharShapeIndex) -> Option<&str> {
         Some(self.face)
+    }
+
+    fn char_font_axis_names(&self, _id: CharShapeIndex) -> Vec<&str> {
+        if self.axes.is_empty() {
+            vec![self.face]
+        } else {
+            self.axes.to_vec()
+        }
     }
 
     fn char_font_size(&self, _id: CharShapeIndex) -> Option<HwpUnit> {
@@ -142,14 +154,126 @@ fn missing_cache_paragraph_warns_and_still_renders() {
 }
 
 #[test]
-fn bold_run_warns_non_regular_but_renders() {
-    // W2 는 regular 만 정합 보장 — bold run 은 경고 후 regular face 로 그린다.
+fn bold_run_resolves_real_bold_face_by_default() {
+    // W4c: bold run 은 경고가 아니라 실제 Bold face 로 그린다 (HwpForge W4
+    // Bold = Latin 실폭 0.7em vs Regular 0.6em → 출력 바이트가 달라진다).
+    let doc = doc_of(vec![para_with_cache("ABC", vec![seg(0, 0)])]);
+    let bold_styles = TestStyles { bold: true, face: "HwpForge W4", ..TestStyles::default() };
+    let input = PdfInput { document: &doc, styles: &bold_styles };
+    let bold_out = render_document(&input, &options()).expect("bold render");
+    assert!(bold_out.warnings.is_empty(), "{:?}", bold_out.warnings);
+
+    let regular_styles = TestStyles { face: "HwpForge W4", ..TestStyles::default() };
+    let input = PdfInput { document: &doc, styles: &regular_styles };
+    let regular_out = render_document(&input, &options()).expect("regular render");
+    assert_ne!(bold_out.bytes, regular_out.bytes, "Bold 는 실폭이 달라 출력이 다르다");
+}
+
+#[test]
+fn missing_bold_face_is_fatal_by_default() {
+    // HwpForge Rank 는 Regular face 만 있다 — 기본(Fatal) = 조용한 강등 금지.
+    let doc = doc_of(vec![para_with_cache("가나다", vec![seg(0, 0)])]);
+    let styles = TestStyles { bold: true, face: "HwpForge Rank", ..TestStyles::default() };
+    let input = PdfInput { document: &doc, styles: &styles };
+    let err = render_document(&input, &options()).unwrap_err();
+    assert!(matches!(err, PdfError::FontStyleUnavailable { .. }), "{err:?}");
+}
+
+#[test]
+fn degraded_mode_renders_regular_with_one_style_fallback_warning() {
+    // Degraded 옵트인: regular 강등 + (face, style) 당 1회 경고 (2문단 dedupe).
+    let doc = doc_of(vec![
+        para_with_cache("가나다", vec![seg(0, 0)]),
+        para_with_cache("라마바", vec![seg(0, 1600)]),
+    ]);
+    let styles = TestStyles { bold: true, face: "HwpForge Rank", ..TestStyles::default() };
+    let input = PdfInput { document: &doc, styles: &styles };
+    let mut opts = options();
+    opts.font_fallback = FontFallbackMode::Degraded;
+    let out = render_document(&input, &opts).expect("degraded render");
+    assert!(out.bytes.starts_with(b"%PDF-"));
+    assert_eq!(
+        out.warnings.iter().filter(|w| matches!(w, PdfWarning::FontStyleFallback { .. })).count(),
+        1,
+        "(face, style) 당 1회: {:?}",
+        out.warnings
+    );
+}
+
+#[test]
+fn ambiguous_bold_face_errors_in_both_modes() {
+    // 레거시 HwpForgeTest-Bold = subfamily/플래그 모순 → Degraded 라도
+    // 조용히 고르지 않는다 (FontFaceAmbiguous 전파).
     let doc = doc_of(vec![para_with_cache("가나다", vec![seg(0, 0)])]);
     let styles = TestStyles { bold: true, ..TestStyles::default() };
     let input = PdfInput { document: &doc, styles: &styles };
-    let output = render_document(&input, &options()).expect("render");
-    assert!(output.bytes.starts_with(b"%PDF-"));
-    assert!(output.warnings.iter().any(|w| matches!(w, PdfWarning::NonRegularRun { .. })));
+    let err = render_document(&input, &options()).unwrap_err();
+    assert!(matches!(err, PdfError::FontFaceAmbiguous { .. }), "{err:?}");
+    let mut opts = options();
+    opts.font_fallback = FontFallbackMode::Degraded;
+    let err = render_document(&input, &opts).unwrap_err();
+    assert!(matches!(err, PdfError::FontFaceAmbiguous { .. }), "{err:?}");
+}
+
+#[test]
+fn restricted_license_font_is_fatal_before_embed() {
+    // W4d: fsType Restricted (v0 — ENGDOS 실물형) = 임베드 전 거부.
+    // Degraded 는 스타일/축 강등 정책이지 라이선스 우회가 아니다.
+    let doc = doc_of(vec![para_with_cache("가나다", vec![seg(0, 0)])]);
+    let styles = TestStyles { face: "HwpForge FsV0Restricted", ..TestStyles::default() };
+    let input = PdfInput { document: &doc, styles: &styles };
+    let err = render_document(&input, &options()).unwrap_err();
+    assert!(matches!(err, PdfError::FontEmbedRestricted { .. }), "{err:?}");
+    let mut opts = options();
+    opts.font_fallback = FontFallbackMode::Degraded;
+    let err = render_document(&input, &opts).unwrap_err();
+    assert!(matches!(err, PdfError::FontEmbedRestricted { .. }), "{err:?}");
+}
+
+#[test]
+fn preview_print_font_renders_with_one_warning() {
+    // P&P 는 뷰/인쇄 임베드 허용 — physical face 당 1회 경고 (2문단 dedupe).
+    let doc = doc_of(vec![
+        para_with_cache("가나다", vec![seg(0, 0)]),
+        para_with_cache("라마바", vec![seg(0, 1600)]),
+    ]);
+    let styles = TestStyles { face: "HwpForge FsV3PP", ..TestStyles::default() };
+    let input = PdfInput { document: &doc, styles: &styles };
+    let out = render_document(&input, &options()).expect("P&P render");
+    assert!(out.bytes.starts_with(b"%PDF-"));
+    assert_eq!(
+        out.warnings
+            .iter()
+            .filter(|w| matches!(w, PdfWarning::FontEmbedPreviewPrint { .. }))
+            .count(),
+        1,
+        "physical face 당 1회: {:?}",
+        out.warnings
+    );
+}
+
+#[test]
+fn axis_mismatch_is_fatal_by_default_and_warns_once_in_degraded() {
+    // charPr 언어축이 서로 다른 폰트 참조 (blank-HPC 실측: run 30%) —
+    // 기본 = fatal, Degraded = 한글 축 + charPr 당 1회 경고.
+    let doc = doc_of(vec![
+        para_with_cache("가나 ABC", vec![seg(0, 0)]),
+        para_with_cache("다라 DEF", vec![seg(0, 1600)]),
+    ]);
+    let styles = TestStyles { axes: &["HwpForge Test", "HwpForge W4"], ..TestStyles::default() };
+    let input = PdfInput { document: &doc, styles: &styles };
+    let err = render_document(&input, &options()).unwrap_err();
+    assert!(matches!(err, PdfError::FontAxisMismatch { .. }), "{err:?}");
+    let mut opts = options();
+    opts.font_fallback = FontFallbackMode::Degraded;
+    let out = render_document(&input, &opts).expect("degraded render");
+    assert!(out.bytes.starts_with(b"%PDF-"));
+    assert_eq!(
+        out.warnings.iter().filter(|w| matches!(w, PdfWarning::FontAxisFallback { .. })).count(),
+        1,
+        "charPr 당 1회: {:?}",
+        out.warnings
+    );
 }
 
 #[test]

@@ -5,7 +5,8 @@
 
 use std::path::PathBuf;
 
-use hwpforge_smithy_pdf::{render_document, PdfInput, PdfOptions};
+use hwpforge_smithy_pdf::font::FontDiscovery;
+use hwpforge_smithy_pdf::{render_document, FontFallbackMode, PdfInput, PdfOptions};
 
 const HANCOM_TTF_DIR: &str =
     "/Applications/Hancom Office HWP.app/Contents/Resources/Hnc/Shared/TTF";
@@ -110,4 +111,73 @@ fn generate_w3_table_artifacts() {
             output.warnings.len()
         );
     }
+}
+
+/// blank-HPC 실전 렌더 프로브 (수동 — W4c 폰트 파이프라인 통과 확인).
+///
+/// 실측 (2026-08-09): 렌더 run 의 hangul 축 폰트 8종 중 7종(휴먼명조·
+/// 맑은 고딕·HY헤드라인M=H2HDRM·굴림·휴먼고딕·함초롬바탕·HY견고딕)은
+/// 한컴 번들 name table 로 해석되고, "한양중고딕"(1 run)은 한컴 내부 별칭
+/// DB 없이는 미해결 — regular face 미해결은 모드 무관 fatal 이 정직한
+/// 경계다 (no-fallback). 축 불일치 run 30% 는 Degraded 로 경고 표면화.
+#[test]
+#[ignore = "manual probe against untracked blank-HPC review artifact"]
+fn probe_blank_hpc_full_render_degraded() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/hwp5_review/blank-hpc-application-2026.hwpx");
+    let Ok(bytes) = std::fs::read(path) else {
+        eprintln!("blank-HPC not present — skip");
+        return;
+    };
+    let decoded = hwpforge_smithy_hwpx::HwpxDecoder::decode(&bytes).expect("decode");
+    let validated = decoded.document.validate().expect("validate");
+    let input = PdfInput { document: &validated, styles: &decoded.style_store };
+    let mut options = PdfOptions::default();
+    options.discovery = FontDiscovery::HancomBundle;
+    options.font_fallback = FontFallbackMode::Degraded;
+    match render_document(&input, &options) {
+        Ok(out) => {
+            let mut kinds = std::collections::BTreeMap::new();
+            for w in &out.warnings {
+                *kinds
+                    .entry(format!("{w:?}").split('{').next().unwrap().trim().to_string())
+                    .or_insert(0usize) += 1;
+            }
+            let hay = String::from_utf8_lossy(&out.bytes);
+            let pages = hay.matches("/Type/Page").count() - hay.matches("/Type/Pages").count();
+            eprintln!("PAGES = {pages} (한컴 실측 9)");
+            eprintln!("warnings = {kinds:?}");
+        }
+        Err(e) => eprintln!("REJECTED: {e}"),
+    }
+}
+
+#[test]
+fn rules_bold_renders_with_real_bold_face() {
+    // W4 게이트: bold run 이 강등·경고 없이 실물 Bold face 로 해석된다.
+    // 한컴 인쇄 PDF 실측 = HCRBatang + HCRBatang-Bold 임베드 (fixture 쌍) —
+    // 우리 출력도 같은 Bold face(HANBatangB, PS name "HCRBatang-Bold")를
+    // 임베드해야 한다. 기본(Fatal) 모드 렌더 성공 자체가 강등 부재의 증명.
+    let Some(output) = render_fixture("rules-bold.hwpx") else { return };
+    assert!(output.bytes.starts_with(b"%PDF-"));
+    assert!(output.warnings.is_empty(), "{:?}", output.warnings);
+    let hay = String::from_utf8_lossy(&output.bytes);
+    let pages = hay.matches("/Type/Page").count() - hay.matches("/Type/Pages").count();
+    assert_eq!(pages, 1, "재저장 실측 1쪽");
+    assert!(hay.contains("HCRBatang-Bold"), "Bold face 임베드 없음 — regular 강등 의심");
+}
+
+/// W4 bold 시각 게이트 산출물 — `--ignored` 수동 실행 (한컴 폰트 필요).
+#[test]
+#[ignore = "W4 bold visual gate artifact generation"]
+fn generate_w4_bold_artifacts() {
+    let out_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/hwp5_review/_verify/pdf-w4");
+    std::fs::create_dir_all(&out_dir).expect("mkdir");
+    let Some(output) = render_fixture("rules-bold.hwpx") else {
+        panic!("fixture/폰트 번들 필요: rules-bold");
+    };
+    let path = out_dir.join("rules-bold-w4.pdf");
+    std::fs::write(&path, &output.bytes).expect("write");
+    println!("wrote {path:?} ({} bytes, warnings={})", output.bytes.len(), output.warnings.len());
 }

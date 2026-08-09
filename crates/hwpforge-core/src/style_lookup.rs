@@ -70,6 +70,21 @@ pub trait StyleLookup {
         None
     }
 
+    /// Returns the **distinct** font face names referenced across the
+    /// per-language axes (hangul/latin/hanja/…) of the character shape.
+    ///
+    /// Formats with per-language font references (HWPX `fontRef`) override
+    /// this to surface axis mismatches — a result longer than 1 means the
+    /// character shape renders with different fonts per script, which a
+    /// single-font consumer cannot reproduce faithfully. The first element
+    /// matches [`char_font_name`](Self::char_font_name) when both resolve.
+    ///
+    /// The default implementation returns the single
+    /// [`char_font_name`](Self::char_font_name) (no axis information).
+    fn char_font_axis_names(&self, id: CharShapeIndex) -> Vec<&str> {
+        self.char_font_name(id).into_iter().collect()
+    }
+
     /// Returns the font size (in [`HwpUnit`]) of the character shape at `id`.
     fn char_font_size(&self, _id: CharShapeIndex) -> Option<HwpUnit> {
         None
@@ -314,5 +329,20 @@ mod tests {
     fn trait_object_works() {
         let store: &dyn StyleLookup = &NoopStore;
         assert!(store.char_bold(CharShapeIndex::new(0)).is_none());
+    }
+
+    #[test]
+    fn default_axis_names_mirror_single_font_name() {
+        // 기본 구현 = char_font_name 단일 원소 (축 정보 없는 포맷).
+        let cs = CharShapeIndex::new(0);
+        assert!(NoopStore.char_font_axis_names(cs).is_empty());
+
+        struct OneFont;
+        impl StyleLookup for OneFont {
+            fn char_font_name(&self, _id: CharShapeIndex) -> Option<&str> {
+                Some("함초롬바탕")
+            }
+        }
+        assert_eq!(OneFont.char_font_axis_names(cs), vec!["함초롬바탕"]);
     }
 }

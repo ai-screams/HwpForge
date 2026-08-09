@@ -1,19 +1,215 @@
-//! 폰트 해석 — W2 스코프: **regular exact-face** 매칭만.
+//! 폰트 해석 — face 축 분류 (family × style) + 정확 full-name 매칭.
 //!
 //! `header.xml` 의 fontface 이름(예: "한컴바탕")은 파일명이 아니다 —
-//! name table (nameID 1 family / 4 full name, 한국어 로캘 포함) 을 읽어
-//! 실물 파일에 매핑해야 한다 (W0 실측: 한컴바탕 = `HBatang.TTF`).
+//! name table 을 읽어 실물 파일에 매핑해야 한다 (W0 실측: 한컴바탕 =
+//! `HBatang.TTF`). W4a 분류 계약 (Codex 적대 리뷰 H2 재설계):
 //!
-//! W2 경계 (Codex 리뷰 H2·논점 5):
-//! - **명시 디렉터리만** 탐색한다 — 한컴 번들 자동 발견·시스템 폴백은 W4.
-//! - 정확한 이름 일치 실패 = [`PdfError::FontUnresolved`] — **fallback 금지**
-//!   (다른 폰트로 그리면 위치가 틀린 출력 — no-fake-support).
-//! - bold/italic face 선택·synthetic style·라이선스/서브셋 게이트는 W4.
+//! - **family** = nameID 16(typographic) 우선, 없으면 1 폴백. **subfamily**
+//!   = 17 우선, 없으면 2. 로캘별 레코드 전부 등록한다 (한/영 병기 이름).
+//! - **style 축** = face 플래그 (OS/2 bold·italic). subfamily 문자열이
+//!   보수 집합(regular/보통/bold/italic/bold italic)의 명시 스타일인데
+//!   플래그와 **모순**되면 그 face 는 후보에서 제외하고 문자열 쪽
+//!   (family, style) 키를 ambiguous 로 등록한다 — 조용한 선택 금지.
+//! - **vendor 접미사(B/M/L)는 style 신호로 쓰지 않는다** — 한컴 실측
+//!   (HANBaek B/M/L 등)은 Bold 축이 아니라 별개 nominal family 다.
+//! - 같은 (family, style) 후보 다수 = weight ranking (Bold 축 = 700,
+//!   나머지 = 400 최근접), 동률 = ambiguous.
+//!
+//! W2 부터의 불변 계약:
+//! - **명시 디렉터리 우선** — 자동 발견([`FontDiscovery`])은 낮은 우선순위
+//!   tier 로만 참여하고, 명시 dirs 의 기존 해석을 바꾸지 못한다.
+//! - 미해결 = [`PdfError::FontUnresolved`] — **fallback 금지** (다른 폰트로
+//!   그리면 위치가 틀린 출력 — no-fake-support).
+//! - 라이선스(fsType) 게이트 = [`embed_license`] — 임베드 시점에 fail-closed
+//!   판정한다 (Restricted·bit8/9·검증 불가 = 거부, P&P = 허용+경고).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use crate::{PdfError, PdfResult};
+
+/// 폰트 face 의 스타일 축 (RIBBI 4축 — variable font 중간축은 비지원).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FaceStyle {
+    /// 보통 (bold/italic 플래그 없음).
+    Regular,
+    /// 굵게.
+    Bold,
+    /// 기울임.
+    Italic,
+    /// 굵은 기울임.
+    BoldItalic,
+}
+
+impl FaceStyle {
+    /// face 플래그 쌍 → 스타일 축.
+    pub fn from_flags(bold: bool, italic: bool) -> Self {
+        match (bold, italic) {
+            (false, false) => Self::Regular,
+            (true, false) => Self::Bold,
+            (false, true) => Self::Italic,
+            (true, true) => Self::BoldItalic,
+        }
+    }
+
+    /// weight ranking 목표값 (Bold 축 = 700, 나머지 = 400).
+    fn target_weight(self) -> i32 {
+        match self {
+            Self::Bold | Self::BoldItalic => 700,
+            Self::Regular | Self::Italic => 400,
+        }
+    }
+}
+
+/// subfamily 문자열이 명시하는 스타일 (보수 집합 — 미지 토큰 = `None`).
+///
+/// "SemiBold"·"Light"·vendor 접미사 등은 의도적으로 해석하지 않는다 —
+/// 여기서 매칭되지 않은 face 는 플래그만으로 분류된다.
+fn explicit_style_token(subfamily: &str) -> Option<FaceStyle> {
+    let s = subfamily.trim();
+    if s == "보통" {
+        return Some(FaceStyle::Regular);
+    }
+    match s.to_ascii_lowercase().as_str() {
+        "regular" => Some(FaceStyle::Regular),
+        "bold" => Some(FaceStyle::Bold),
+        "italic" => Some(FaceStyle::Italic),
+        "bold italic" | "bolditalic" => Some(FaceStyle::BoldItalic),
+        _ => None,
+    }
+}
+
+/// 폰트 자동 발견 정책 — 명시 디렉터리 외에 어디를 더 탐색할지.
+///
+/// 발견은 "이름이 실제로 일치하는 face 를 더 찾는 것"이다 — 미해결 이름을
+/// 다른 폰트로 대체하는 fallback 이 아니다. 우선순위는 항상 명시
+/// `font_dirs` 가 위다 (tier 순서 — [`FontResolver::with_discovery`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum FontDiscovery {
+    /// 명시 `font_dirs` 만 (라이브러리 기본 — 머신 무관 결정적).
+    #[default]
+    ExplicitOnly,
+    /// 명시 dirs + 한컴오피스 번들 폰트.
+    ///
+    /// macOS: `/Applications/Hancom Office HWP.app/Contents/Resources/Hnc/Shared/TTF`
+    /// (W0 실측). 타 OS 설치 경로는 미실측 — 실측 후 추가한다 (no-fake-support).
+    HancomBundle,
+    /// 명시 dirs + 한컴 번들 + 플랫폼 시스템 폰트 디렉터리.
+    ///
+    /// 우선순위 순서 (사용자 > 로컬 > 시스템 — OS 폰트 캐스케이드 관례):
+    /// - macOS: `~/Library/Fonts` → `/Library/Fonts` → `/System/Library/Fonts`
+    ///   → `/System/Library/Fonts/Supplemental`
+    /// - Linux: `~/.local/share/fonts` → `~/.fonts` → `/usr/local/share/fonts`
+    ///   → `/usr/share/fonts`
+    /// - Windows: `%LOCALAPPDATA%\Microsoft\Windows\Fonts` → `C:\Windows\Fonts`
+    Platform,
+}
+
+/// 한컴오피스 번들 폰트 디렉터리 (알려진 설치 경로 — 미존재는 스캔에서 건너뜀).
+fn hancom_bundle_dirs() -> Vec<PathBuf> {
+    if cfg!(target_os = "macos") {
+        vec![PathBuf::from("/Applications/Hancom Office HWP.app/Contents/Resources/Hnc/Shared/TTF")]
+    } else {
+        Vec::new() // 타 OS 설치 경로 미실측 — 실측 후 추가 (no-fake-support)
+    }
+}
+
+/// 플랫폼 시스템 폰트 디렉터리 (우선순위 순 — [`FontDiscovery::Platform`] 문서).
+fn platform_font_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if cfg!(target_os = "macos") {
+        if let Some(home) = std::env::var_os("HOME") {
+            dirs.push(PathBuf::from(home).join("Library/Fonts"));
+        }
+        dirs.push(PathBuf::from("/Library/Fonts"));
+        dirs.push(PathBuf::from("/System/Library/Fonts"));
+        dirs.push(PathBuf::from("/System/Library/Fonts/Supplemental"));
+    } else if cfg!(target_os = "linux") {
+        if let Some(home) = std::env::var_os("HOME") {
+            let home = PathBuf::from(home);
+            dirs.push(home.join(".local/share/fonts"));
+            dirs.push(home.join(".fonts"));
+        }
+        dirs.push(PathBuf::from("/usr/local/share/fonts"));
+        dirs.push(PathBuf::from("/usr/share/fonts"));
+    } else if cfg!(target_os = "windows") {
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            dirs.push(PathBuf::from(local).join("Microsoft/Windows/Fonts"));
+        }
+        dirs.push(PathBuf::from("C:/Windows/Fonts"));
+    }
+    dirs
+}
+
+/// 임베드 라이선스 판정 (W4d — OS/2 `fsType`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EmbedLicense {
+    /// 제약 없음 (Installable/Editable — 경고 없이 임베드).
+    Allowed,
+    /// Preview & Print 전용 — PDF 뷰/인쇄 임베드는 관례상 허용하되
+    /// 경고를 표면화한다 (physical face 당 1회).
+    PreviewPrintOnly,
+    /// 임베드 불가 (사유 포함) — 렌더는 임베드 전에 거부한다.
+    Denied(String),
+}
+
+/// face 의 임베드 라이선스를 판정한다 (Codex C1·H4 — 기본 fail-closed).
+///
+/// 검사는 raw bit 가 아니라 ttf-parser 의 **버전 인지 helper**
+/// (`permissions`/`is_subsetting_allowed`/`is_outline_embedding_allowed`)로
+/// 한다. fail-closed 규칙:
+///
+/// - OS/2 결측·권한 비트 malformed = 검증 불가 → 거부.
+/// - bit8 No-subsetting = 거부 — PDF 백엔드(krilla)는 무조건 subset 한다.
+/// - bit9 Bitmap-only = 거부 — outline 임베드가 필요하다.
+/// - Restricted = 거부. Preview & Print = 허용 + 경고 대상.
+///
+/// 검사 대상 바이트는 **임베드할 그 바이트**([`ResolvedFont::data`])다
+/// (스캔 시점 검사와 달리 TOCTOU 없음).
+pub fn embed_license(data: &[u8], face_index: u32) -> EmbedLicense {
+    use rustybuzz::ttf_parser;
+
+    let Ok(face) = ttf_parser::Face::parse(data, face_index) else {
+        return EmbedLicense::Denied("font data failed to parse".to_string());
+    };
+    let Some(os2) = face.tables().os2 else {
+        return EmbedLicense::Denied(
+            "OS/2 table missing — embedding permission unverifiable (fail-closed)".to_string(),
+        );
+    };
+    let Some(permission) = os2.permissions() else {
+        return EmbedLicense::Denied("malformed fsType permission bits (fail-closed)".to_string());
+    };
+    if !os2.is_subsetting_allowed() {
+        return EmbedLicense::Denied(
+            "fsType bit8 forbids subsetting — the PDF embedder always subsets".to_string(),
+        );
+    }
+    if !os2.is_outline_embedding_allowed() {
+        return EmbedLicense::Denied(
+            "fsType bit9 allows bitmap embedding only (outline embed required)".to_string(),
+        );
+    }
+    match permission {
+        ttf_parser::Permissions::Restricted => {
+            EmbedLicense::Denied("fsType Restricted License embedding".to_string())
+        }
+        ttf_parser::Permissions::PreviewAndPrint => EmbedLicense::PreviewPrintOnly,
+        ttf_parser::Permissions::Installable | ttf_parser::Permissions::Editable => {
+            EmbedLicense::Allowed
+        }
+    }
+}
+
+/// 파일 바이트 fingerprint — (길이, 64-bit 해시). 물리 동일성 판정용:
+/// 동일 fingerprint + face 인덱스 = 같은 실물의 중복 배치 (충돌 아님).
+pub(crate) fn fingerprint(data: &[u8]) -> (u64, u64) {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    data.hash(&mut h);
+    (data.len() as u64, h.finish())
+}
 
 /// 해석된 폰트 실물.
 #[derive(Debug, Clone)]
@@ -28,65 +224,269 @@ pub struct ResolvedFont {
     pub face_index: u32,
 }
 
+/// 정확 full-name 항목 — face 의 플래그 유래 스타일을 함께 기억한다.
+///
+/// 모순 face(`style = None`)는 [`FontResolver::resolve_styled`] 의 스타일
+/// 매칭에서 제외된다 (이름 그대로의 [`FontResolver::resolve`] 는 허용).
+#[derive(Debug)]
+struct ExactFace {
+    path: PathBuf,
+    face_index: u32,
+    style: Option<FaceStyle>,
+}
+
 /// face 이름 → 폰트 파일 resolver.
 ///
 /// 생성 시 디렉터리를 1회 스캔해 name table 인덱스를 구축한다.
-/// 같은 이름이 여러 파일에서 나오면 먼저 발견된 항목이 이긴다
-/// (디렉터리 순서 = 우선순위 — 호출자가 순서로 제어).
+/// full name(nameID 4)은 먼저 발견된 항목이 이기고(경로 정렬 = 결정적),
+/// (family, style) 키는 weight ranking 으로 승자를 정한다 — 모순/동률은
+/// ambiguous 로 남겨 resolve 시 에러로 표면화한다.
 #[derive(Debug)]
 pub struct FontResolver {
-    index: HashMap<String, (PathBuf, u32)>,
+    /// nameID 4 full name → face (정확 일치 — W2 계약 유지).
+    exact: HashMap<String, ExactFace>,
+    /// (family, style) → ranking 승자.
+    styled: HashMap<(String, FaceStyle), (PathBuf, u32)>,
+    /// 충돌/동률 키 → 진단 상세.
+    ambiguous: HashMap<(String, FaceStyle), String>,
 }
 
 impl FontResolver {
-    /// 주어진 디렉터리들을 스캔해 resolver 를 만든다.
+    /// 주어진 디렉터리들만 스캔해 resolver 를 만든다
+    /// ([`FontDiscovery::ExplicitOnly`] 과 동일).
     ///
     /// # Errors
     ///
     /// 디렉터리가 존재하지 않거나 읽을 수 없으면 [`PdfError::FontIo`].
     /// (개별 파일의 폰트 파싱 실패는 조용히 건너뛴다 — 폰트가 아닌 파일.)
     pub fn new(dirs: &[PathBuf]) -> PdfResult<Self> {
-        let mut index = HashMap::new();
-        for dir in dirs {
-            // 재귀 수집 후 전체 경로 정렬 — 순회 순서를 결정적으로 고정.
-            let mut files = Vec::new();
-            collect_font_files(dir, &mut files)?;
-            files.sort();
-            for path in files {
-                let Ok(data) = std::fs::read(&path) else {
-                    continue;
-                };
-                for (name, face_index) in regular_face_names(&data) {
-                    index.entry(name).or_insert_with(|| (path.clone(), face_index));
-                }
-            }
-        }
-        Ok(Self { index })
+        Self::from_tiers(&[(dirs.to_vec(), true)])
     }
 
-    /// 인덱스에 등록된 face 이름 수 (진단용).
-    pub fn face_count(&self) -> usize {
-        self.index.len()
-    }
-
-    /// face 이름을 정확 일치로 해석한다. 실패 시 fallback 없이 에러.
+    /// 명시 디렉터리 + 자동 발견 경로를 스캔해 resolver 를 만든다.
+    ///
+    /// 우선순위 tier: 명시 `dirs`(최상위) → 한컴 번들 → (Platform) 사용자
+    /// → 로컬 → 시스템 폰트 디렉터리. 어떤 (family, style) 키든 **가장
+    /// 낮은 tier 에 등장한 face 들만** 해석에 참여한다 — 발견이 명시 dirs
+    /// 의 기존 해석을 바꾸지 못한다. 발견 tier 의 미존재/읽기 불가 경로는
+    /// 조용히 건너뛴다.
     ///
     /// # Errors
     ///
-    /// 이름 미등록 = [`PdfError::FontUnresolved`], 파일 재독 실패 = [`PdfError::FontIo`].
-    pub fn resolve(&self, face_name: &str) -> PdfResult<ResolvedFont> {
-        let (path, face_index) = self
-            .index
-            .get(face_name.trim())
-            .ok_or_else(|| PdfError::FontUnresolved { face: face_name.to_string() })?;
-        let data = std::fs::read(path)?;
-        Ok(ResolvedFont {
-            face_name: face_name.trim().to_string(),
-            path: path.clone(),
-            data,
-            face_index: *face_index,
-        })
+    /// 명시 `dirs` 가 존재하지 않거나 읽을 수 없으면 [`PdfError::FontIo`].
+    pub fn with_discovery(dirs: &[PathBuf], discovery: FontDiscovery) -> PdfResult<Self> {
+        let mut tiers: Vec<(Vec<PathBuf>, bool)> = vec![(dirs.to_vec(), true)];
+        match discovery {
+            FontDiscovery::ExplicitOnly => {}
+            FontDiscovery::HancomBundle => tiers.push((hancom_bundle_dirs(), false)),
+            FontDiscovery::Platform => {
+                tiers.push((hancom_bundle_dirs(), false));
+                for dir in platform_font_dirs() {
+                    tiers.push((vec![dir], false));
+                }
+            }
+        }
+        Self::from_tiers(&tiers)
     }
+
+    /// tier 목록으로 resolver 를 만든다 (앞 tier = 높은 우선순위).
+    ///
+    /// `required = false` tier 는 미존재/읽기 실패 디렉터리를 건너뛴다
+    /// (자동 발견 경로 — 머신마다 설치 여부가 다르다).
+    fn from_tiers(tiers: &[(Vec<PathBuf>, bool)]) -> PdfResult<Self> {
+        struct Candidate {
+            path: PathBuf,
+            face_index: u32,
+            weight: i32,
+            tier: usize,
+            fingerprint: (u64, u64),
+        }
+        let mut exact: HashMap<String, ExactFace> = HashMap::new();
+        let mut candidates: HashMap<(String, FaceStyle), Vec<Candidate>> = HashMap::new();
+        let mut contradictions: HashMap<(String, FaceStyle), Vec<(usize, String)>> = HashMap::new();
+        for (tier, (dirs, required)) in tiers.iter().enumerate() {
+            for dir in dirs {
+                // 재귀 수집 후 전체 경로 정렬 — 순회 순서를 결정적으로 고정.
+                let mut files = Vec::new();
+                if *required {
+                    collect_font_files(dir, 0, &mut files)?;
+                } else if collect_font_files(dir, 0, &mut files).is_err() {
+                    continue;
+                }
+                files.sort();
+                for path in files {
+                    let Ok(data) = std::fs::read(&path) else {
+                        continue;
+                    };
+                    let fp = fingerprint(&data);
+                    for face in classify_faces(&data) {
+                        let exact_style =
+                            if face.contradiction.is_some() { None } else { Some(face.style) };
+                        for full in &face.full_names {
+                            exact.entry(full.clone()).or_insert_with(|| ExactFace {
+                                path: path.clone(),
+                                face_index: face.face_index,
+                                style: exact_style,
+                            });
+                        }
+                        if let Some((token_style, detail)) = &face.contradiction {
+                            // 모순 face: 후보 등록 대신 문자열 쪽 키를 오염 표시.
+                            for family in &face.families {
+                                contradictions
+                                    .entry((family.clone(), *token_style))
+                                    .or_default()
+                                    .push((
+                                        tier,
+                                        format!(
+                                            "{detail} at {}#{}",
+                                            path.display(),
+                                            face.face_index
+                                        ),
+                                    ));
+                            }
+                        } else {
+                            for family in &face.families {
+                                candidates.entry((family.clone(), face.style)).or_default().push(
+                                    Candidate {
+                                        path: path.clone(),
+                                        face_index: face.face_index,
+                                        weight: face.weight,
+                                        tier,
+                                        fingerprint: fp,
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // 키별 해석: 최저 tier 만 참여 → 모순 우선 → weight ranking →
+        // 동일 실물(fingerprint) 중복 dedupe → 잔여 동률 = ambiguous.
+        let mut styled = HashMap::new();
+        let mut ambiguous: HashMap<(String, FaceStyle), String> = HashMap::new();
+        let keys: HashSet<(String, FaceStyle)> =
+            candidates.keys().chain(contradictions.keys()).cloned().collect();
+        for key in keys {
+            let cands = candidates.get(&key).map_or(&[][..], Vec::as_slice);
+            let contras = contradictions.get(&key).map_or(&[][..], Vec::as_slice);
+            let min_tier = cands
+                .iter()
+                .map(|c| c.tier)
+                .chain(contras.iter().map(|(t, _)| *t))
+                .min()
+                .expect("key exists in at least one map");
+            if let Some((_, detail)) = contras.iter().find(|(t, _)| *t == min_tier) {
+                ambiguous.insert(key, detail.clone());
+                continue;
+            }
+            let target = key.1.target_weight();
+            let tier_cands: Vec<&Candidate> = cands.iter().filter(|c| c.tier == min_tier).collect();
+            let best = tier_cands
+                .iter()
+                .map(|c| (c.weight - target).abs())
+                .min()
+                .expect("non-empty bucket");
+            // 동일 실물(같은 fingerprint + face 인덱스)의 중복 배치는 충돌이
+            // 아니다 — 먼저 스캔된 경로가 canonical 로 남는다.
+            let mut distinct: Vec<&Candidate> = Vec::new();
+            for c in tier_cands.iter().filter(|c| (c.weight - target).abs() == best) {
+                if !distinct
+                    .iter()
+                    .any(|d| d.fingerprint == c.fingerprint && d.face_index == c.face_index)
+                {
+                    distinct.push(c);
+                }
+            }
+            if let [winner] = distinct.as_slice() {
+                styled.insert(key, (winner.path.clone(), winner.face_index));
+            } else {
+                let list = distinct
+                    .iter()
+                    .map(|c| {
+                        format!(
+                            "{}#{} (weight {}, fingerprint {:016x})",
+                            c.path.display(),
+                            c.face_index,
+                            c.weight,
+                            c.fingerprint.1
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                ambiguous.insert(
+                    key,
+                    format!("weight tie at distance {best} from target {target}: {list}"),
+                );
+            }
+        }
+        Ok(Self { exact, styled, ambiguous })
+    }
+
+    /// 등록된 이름 수 (진단용 — 정확 full name + (family, style) 키 합).
+    pub fn face_count(&self) -> usize {
+        self.exact.len() + self.styled.len()
+    }
+
+    /// face 이름을 그대로 해석한다 (full name 정확 일치 → (이름, Regular)).
+    ///
+    /// W2 계약 유지 — `header.xml` 의 fontface 이름 경로. 실패 시 fallback
+    /// 없이 에러.
+    ///
+    /// # Errors
+    ///
+    /// 미등록 = [`PdfError::FontUnresolved`], (이름, Regular) 충돌 =
+    /// [`PdfError::FontFaceAmbiguous`], 파일 재독 실패 = [`PdfError::FontIo`].
+    pub fn resolve(&self, face_name: &str) -> PdfResult<ResolvedFont> {
+        let name = face_name.trim();
+        if let Some(hit) = self.exact.get(name) {
+            // 이름 그대로 요청 — face 플래그와 무관하게 그 실물을 반환한다.
+            return load(name, &hit.path, hit.face_index);
+        }
+        self.resolve_family(name, FaceStyle::Regular)
+    }
+
+    /// (face 이름, 스타일 축) 으로 해석한다.
+    ///
+    /// full name 정확 일치는 face 플래그가 요청 스타일과 **일치할 때만**
+    /// 매칭된다 (모순 face 의 조용한 강등 방지 — 예: full name 이 family
+    /// 이름과 같은 regular face 에 Bold 를 요청하면 미해결로 남겨 W4c 의
+    /// fail-closed 처리에 넘긴다).
+    ///
+    /// # Errors
+    ///
+    /// 미등록 = [`PdfError::FontUnresolved`], 신호 충돌/동률 =
+    /// [`PdfError::FontFaceAmbiguous`], 파일 재독 실패 = [`PdfError::FontIo`].
+    pub fn resolve_styled(&self, face_name: &str, style: FaceStyle) -> PdfResult<ResolvedFont> {
+        let name = face_name.trim();
+        if let Some(hit) = self.exact.get(name) {
+            if hit.style == Some(style) {
+                return load(name, &hit.path, hit.face_index);
+            }
+            // 스타일 불일치/모순 face — family 경로로 폴스루.
+        }
+        self.resolve_family(name, style)
+    }
+
+    fn resolve_family(&self, name: &str, style: FaceStyle) -> PdfResult<ResolvedFont> {
+        let key = (name.to_string(), style);
+        if let Some((path, face_index)) = self.styled.get(&key) {
+            return load(name, path, *face_index);
+        }
+        if let Some(detail) = self.ambiguous.get(&key) {
+            return Err(PdfError::FontFaceAmbiguous {
+                face: name.to_string(),
+                style,
+                detail: detail.clone(),
+            });
+        }
+        Err(PdfError::FontUnresolved { face: name.to_string() })
+    }
+}
+
+fn load(name: &str, path: &Path, face_index: u32) -> PdfResult<ResolvedFont> {
+    let data = std::fs::read(path)?;
+    Ok(ResolvedFont { face_name: name.to_string(), path: path.to_path_buf(), data, face_index })
 }
 
 fn is_font_file(path: &Path) -> bool {
@@ -95,25 +495,59 @@ fn is_font_file(path: &Path) -> bool {
         .is_some_and(|e| matches!(e.to_ascii_lowercase().as_str(), "ttf" | "otf" | "ttc"))
 }
 
-fn collect_font_files(dir: &Path, out: &mut Vec<PathBuf>) -> PdfResult<()> {
+/// 폰트 스캔 가드 — 재귀 깊이 상한 (병적 트리/시스템 디렉터리 방어).
+const MAX_SCAN_DEPTH: usize = 8;
+/// 폰트 스캔 가드 — 단일 파일 크기 상한 (실물 폰트 최대 ~60MB 의 여유 상한).
+const MAX_FONT_FILE_BYTES: u64 = 256 * 1024 * 1024;
+
+fn collect_font_files(dir: &Path, depth: usize, out: &mut Vec<PathBuf>) -> PdfResult<()> {
+    if depth > MAX_SCAN_DEPTH {
+        return Ok(()); // 깊이 상한 초과분은 조용히 무시 (가드 — 에러 아님).
+    }
     for entry in std::fs::read_dir(dir)? {
         let path = entry?.path();
-        if path.is_dir() {
-            collect_font_files(&path, out)?;
-        } else if is_font_file(&path) {
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if meta.file_type().is_symlink() {
+            // 심볼릭 링크 디렉터리는 따라가지 않는다 (사이클 가드). 링크
+            // 파일은 대상이 정상 크기의 파일일 때만 수집한다 (Linux 시스템
+            // 폰트 디렉터리의 관례적 링크 지원).
+            if is_font_file(&path) {
+                if let Ok(target) = std::fs::metadata(&path) {
+                    if target.is_file() && target.len() <= MAX_FONT_FILE_BYTES {
+                        out.push(path);
+                    }
+                }
+            }
+            continue;
+        }
+        if meta.is_dir() {
+            collect_font_files(&path, depth + 1, out)?;
+        } else if is_font_file(&path) && meta.len() <= MAX_FONT_FILE_BYTES {
             out.push(path);
         }
     }
     Ok(())
 }
 
-/// 파일 안 **regular face** 의 (family/full 이름, face 인덱스) 를 수집한다.
-///
-/// family 이름(nameID 1)은 bold/변형 face 도 공유한다 — subfamily(nameID 2)가
-/// Regular 계열일 때만 등록해 비-regular 파일이 family 이름을 선점하지
-/// 못하게 한다 (실측: 함초롬돋움 family 충돌로 잉크 오프셋 2.3pt 오염).
-/// full name(nameID 4)은 face 고유값이라 그대로 등록한다.
-fn regular_face_names(data: &[u8]) -> Vec<(String, u32)> {
+/// 파일 안 face 하나의 분류 결과.
+struct ClassifiedFace {
+    face_index: u32,
+    /// nameID 4 full name (로캘별 전부, 중복 제거).
+    full_names: Vec<String>,
+    /// family 이름 (nameID 16 우선 → 1 폴백, 중복 제거).
+    families: Vec<String>,
+    /// face 플래그 유래 스타일.
+    style: FaceStyle,
+    /// OS/2 usWeightClass (결측 = 400 취급).
+    weight: i32,
+    /// subfamily 명시 토큰이 플래그와 모순 → (토큰 스타일, 사유).
+    contradiction: Option<(FaceStyle, String)>,
+}
+
+/// 파일 안 모든 face 를 name table + 플래그로 분류한다.
+fn classify_faces(data: &[u8]) -> Vec<ClassifiedFace> {
     use rustybuzz::ttf_parser;
 
     let face_count = ttf_parser::fonts_in_collection(data).unwrap_or(1);
@@ -122,8 +556,11 @@ fn regular_face_names(data: &[u8]) -> Vec<(String, u32)> {
         let Ok(face) = ttf_parser::Face::parse(data, face_index) else {
             continue;
         };
-        let mut families = Vec::new();
-        let mut subfamilies = Vec::new();
+        let mut id1 = Vec::new();
+        let mut id2 = Vec::new();
+        let mut id16 = Vec::new();
+        let mut id17 = Vec::new();
+        let mut full_names = Vec::new();
         for name in face.names() {
             let Some(value) = name.to_string() else { continue };
             let value = value.trim().to_string();
@@ -131,22 +568,44 @@ fn regular_face_names(data: &[u8]) -> Vec<(String, u32)> {
                 continue;
             }
             match name.name_id {
-                ttf_parser::name_id::FAMILY => families.push(value),
-                ttf_parser::name_id::SUBFAMILY => subfamilies.push(value),
-                ttf_parser::name_id::FULL_NAME => out.push((value, face_index)),
+                ttf_parser::name_id::FAMILY => id1.push(value),
+                ttf_parser::name_id::SUBFAMILY => id2.push(value),
+                ttf_parser::name_id::FULL_NAME => full_names.push(value),
+                ttf_parser::name_id::TYPOGRAPHIC_FAMILY => id16.push(value),
+                ttf_parser::name_id::TYPOGRAPHIC_SUBFAMILY => id17.push(value),
                 _ => {}
             }
         }
-        // subfamily 미기재 = 단일 face 파일 → regular 취급.
-        let is_regular = subfamilies.is_empty()
-            || subfamilies.iter().any(|s| s.eq_ignore_ascii_case("regular") || s == "보통");
-        if is_regular {
-            for family in families {
-                out.push((family, face_index));
+        let mut families = if id16.is_empty() { id1 } else { id16 };
+        dedupe_preserving_order(&mut families);
+        dedupe_preserving_order(&mut full_names);
+        let subfamilies = if id17.is_empty() { id2 } else { id17 };
+        let (bold, italic) = (face.is_bold(), face.is_italic());
+        let style = FaceStyle::from_flags(bold, italic);
+        let weight = i32::from(face.weight().to_number());
+        let mut contradiction = None;
+        for sf in &subfamilies {
+            if let Some(token) = explicit_style_token(sf) {
+                if token != style {
+                    contradiction = Some((
+                        token,
+                        format!(
+                            "subfamily {sf:?} contradicts face flags (bold={bold}, \
+                             italic={italic})"
+                        ),
+                    ));
+                    break;
+                }
             }
         }
+        out.push(ClassifiedFace { face_index, full_names, families, style, weight, contradiction });
     }
     out
+}
+
+fn dedupe_preserving_order(values: &mut Vec<String>) {
+    let mut seen = HashSet::new();
+    values.retain(|v| seen.insert(v.clone()));
 }
 
 #[cfg(test)]
@@ -199,6 +658,227 @@ mod tests {
         ));
     }
 
+    /// 커밋 폰트 디렉터리 (tests/fonts — 생성기 산출물).
+    fn committed_fonts_dir() -> PathBuf {
+        PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fonts"))
+    }
+
+    #[test]
+    fn w4_pair_resolves_by_typographic_family_and_style() {
+        let resolver = FontResolver::new(&[committed_fonts_dir()]).expect("scan");
+        let regular =
+            resolver.resolve_styled("HwpForge W4", FaceStyle::Regular).expect("regular face");
+        let bold = resolver.resolve_styled("HwpForge W4", FaceStyle::Bold).expect("bold face");
+        assert!(
+            regular.path.file_name().unwrap().to_string_lossy().contains("Regular"),
+            "unexpected regular file: {:?}",
+            regular.path
+        );
+        assert!(
+            bold.path.file_name().unwrap().to_string_lossy().contains("Bold"),
+            "unexpected bold file: {:?}",
+            bold.path
+        );
+        // nameID 16 이 있으면 nameID 1 은 family 로 등록하지 않는다 (16 우선 — 병기 아님).
+        assert!(matches!(
+            resolver.resolve("HwpForgeW4 Legacy"),
+            Err(PdfError::FontUnresolved { .. })
+        ));
+        // Bold 는 실제 폭이 다르다 (Latin 0.7em vs 0.6em) — bbox 게이트 유효성의 근거.
+        let shaped_r =
+            crate::text::shape::shape_text(&regular.data, regular.face_index, "AB", 1000)
+                .expect("shape regular");
+        let shaped_b = crate::text::shape::shape_text(&bold.data, bold.face_index, "AB", 1000)
+            .expect("shape bold");
+        assert_eq!(shaped_r.natural_width().round() as i64, 1200);
+        assert_eq!(shaped_b.natural_width().round() as i64, 1400);
+    }
+
+    #[test]
+    fn contradictory_subfamily_vs_flags_is_ambiguous_not_silent() {
+        let resolver = FontResolver::new(&[committed_fonts_dir()]).expect("scan");
+        // 충돌 전용 폰트: subfamily "Bold" + regular 플래그 → (family, Bold) = ambiguous.
+        assert!(matches!(
+            resolver.resolve_styled("HwpForge Conflict", FaceStyle::Bold),
+            Err(PdfError::FontFaceAmbiguous { .. })
+        ));
+        // 모순 face 는 후보로도 등록하지 않는다 — Regular face 가 없으니 미해결.
+        assert!(matches!(
+            resolver.resolve("HwpForge Conflict"),
+            Err(PdfError::FontUnresolved { .. })
+        ));
+        // 레거시 W2 Bold(fsSelection 미설정)도 같은 모순 케이스로 표면화된다.
+        assert!(matches!(
+            resolver.resolve_styled("HwpForge Test", FaceStyle::Bold),
+            Err(PdfError::FontFaceAmbiguous { .. })
+        ));
+    }
+
+    #[test]
+    fn weight_ranking_nearest_wins_and_tie_is_ambiguous() {
+        let resolver = FontResolver::new(&[committed_fonts_dir()]).expect("scan");
+        // Regular 목표 400: weight 400 이 500 을 이긴다.
+        let rank = resolver.resolve("HwpForge Rank").expect("rank family");
+        assert!(
+            rank.path.file_name().unwrap().to_string_lossy().contains("R400"),
+            "unexpected winner: {:?}",
+            rank.path
+        );
+        // 350 vs 450 = 목표 400 에서 동거리 → 조용한 선택 금지.
+        assert!(matches!(
+            resolver.resolve("HwpForge RankTie"),
+            Err(PdfError::FontFaceAmbiguous { .. })
+        ));
+    }
+
+    #[test]
+    fn exact_full_name_carries_its_own_style() {
+        let resolver = FontResolver::new(&[committed_fonts_dir()]).expect("scan");
+        // full name 은 스타일 내재 — 요청 스타일과 face 플래그가 일치할 때만 styled 매칭.
+        let bold =
+            resolver.resolve_styled("HwpForge W4 Bold", FaceStyle::Bold).expect("bold full name");
+        assert!(bold.path.file_name().unwrap().to_string_lossy().contains("Bold"));
+        // 모순 face (레거시 lying Bold): full name 이라도 styled 요청은 신뢰하지 않는다.
+        assert!(matches!(
+            resolver.resolve_styled("HwpForge Test Bold", FaceStyle::Bold),
+            Err(PdfError::FontUnresolved { .. })
+        ));
+        // resolve() (이름 그대로 — W2 계약) 는 여전히 성공.
+        resolver.resolve("HwpForge Test Bold").expect("legacy exact name");
+    }
+
+    #[test]
+    fn embed_license_truth_table_from_fixtures() {
+        // W4d 진리표 (§5 H4 — OS/2 버전 × permission × bit8/9 × malformed/결측).
+        // 판정은 raw bit 가 아니라 ttf-parser 버전 인지 helper 로 한다 (C1).
+        let dir = committed_fonts_dir();
+        let case = |file: &str| {
+            let data = std::fs::read(dir.join(file)).expect("fixture font");
+            embed_license(&data, 0)
+        };
+        // 기본 fixture = installable(0x0000) → 무제약 허용.
+        assert_eq!(case("HwpForgeTest-Regular.ttf"), EmbedLicense::Allowed);
+        assert_eq!(case("HwpForgeW4-Bold.ttf"), EmbedLicense::Allowed);
+        // v0 Restricted (ENGDOS 실물형) = 거부.
+        assert!(
+            matches!(case("HwpForgeFsV0Restricted.ttf"), EmbedLicense::Denied(_)),
+            "{:?}",
+            case("HwpForgeFsV0Restricted.ttf")
+        );
+        // bit8 No-subsetting = 거부 (krilla 는 무조건 subset — C1 fatal).
+        assert!(matches!(case("HwpForgeFsV2NoSubset.ttf"), EmbedLicense::Denied(_)));
+        // bit9 Bitmap-only = 거부 (outline 임베드 불가).
+        assert!(matches!(case("HwpForgeFsV2BitmapOnly.ttf"), EmbedLicense::Denied(_)));
+        // P&P + bit8 복수비트 = 거부 (P&P 라도 subset 금지가 우선).
+        assert!(matches!(case("HwpForgeFsV2Multi.ttf"), EmbedLicense::Denied(_)));
+        // malformed 권한 비트 (예약 bit0) = fail-closed 거부.
+        assert!(matches!(case("HwpForgeFsV3Malformed.ttf"), EmbedLicense::Denied(_)));
+        // OS/2 결측 = 권한 검증 불가 → fail-closed 거부.
+        assert!(matches!(case("HwpForgeFsNoOs2.ttf"), EmbedLicense::Denied(_)));
+        // P&P 순수 = 뷰/인쇄 임베드 허용 — 단 경고 표면화 대상.
+        assert_eq!(case("HwpForgeFsV3PP.ttf"), EmbedLicense::PreviewPrintOnly);
+    }
+
+    #[test]
+    fn fs_type_fixtures_classify_normally_in_w4a() {
+        // 라이선스 게이트는 W4d (임베드 시점) — 분류기는 fsType 과 무관하게 해석한다.
+        let resolver = FontResolver::new(&[committed_fonts_dir()]).expect("scan");
+        resolver.resolve("HwpForge FsV0Restricted").expect("v0 restricted");
+        // OS/2 결측 = 플래그 없음 → Regular/weight 400 취급 (분류 실패 아님).
+        resolver.resolve("HwpForge FsNoOs2").expect("no os2");
+    }
+
+    /// 테스트 전용 임시 디렉터리 (재실행 멱등 — 기존 잔재 제거 후 생성).
+    fn temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("hwpforge-w4b-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        dir
+    }
+
+    fn copy_font(src_name: &str, dst_dir: &Path, dst_name: &str) {
+        std::fs::copy(committed_fonts_dir().join(src_name), dst_dir.join(dst_name))
+            .expect("copy fixture font");
+    }
+
+    #[test]
+    fn discovery_default_is_explicit_only() {
+        assert_eq!(FontDiscovery::default(), FontDiscovery::ExplicitOnly);
+        assert_eq!(crate::PdfOptions::default().discovery, FontDiscovery::ExplicitOnly);
+    }
+
+    #[test]
+    fn explicit_tier_shadows_discovered_tier() {
+        let explicit = temp_dir("shadow-explicit");
+        let discovered = temp_dir("shadow-discovered");
+        // 명시 tier 에 weight 500, 발견 tier 에 weight 400 — ranking 만이라면
+        // 400 이 이기지만 tier 우선이 먼저다 (명시 dirs 가 발견 경로를 가린다).
+        copy_font("HwpForgeRank-R500.ttf", &explicit, "HwpForgeRank-R500.ttf");
+        copy_font("HwpForgeRank-R400.ttf", &discovered, "HwpForgeRank-R400.ttf");
+        let resolver =
+            FontResolver::from_tiers(&[(vec![explicit.clone()], true), (vec![discovered], false)])
+                .expect("tiered scan");
+        let hit = resolver.resolve("HwpForge Rank").expect("family");
+        assert!(hit.path.starts_with(&explicit), "explicit tier must win: {:?}", hit.path);
+    }
+
+    #[test]
+    fn identical_duplicate_across_dirs_is_not_ambiguous() {
+        let a = temp_dir("dup-a");
+        let b = temp_dir("dup-b");
+        copy_font("HwpForgeTest-Regular.ttf", &a, "Copy-A.ttf");
+        copy_font("HwpForgeTest-Regular.ttf", &b, "Copy-B.ttf");
+        // 같은 실물(동일 fingerprint)의 중복 배치는 충돌이 아니다 — 첫 경로 canonical.
+        let resolver = FontResolver::new(&[a.clone(), b]).expect("scan");
+        let hit = resolver.resolve("HwpForge Test").expect("deduped family");
+        assert!(hit.path.starts_with(&a), "first path must be canonical: {:?}", hit.path);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_directory_cycles_are_skipped() {
+        let dir = temp_dir("symlink-cycle");
+        copy_font("HwpForgeTest-Regular.ttf", &dir, "Font.ttf");
+        std::os::unix::fs::symlink(&dir, dir.join("loop")).expect("create symlink cycle");
+        // 디렉터리 심볼릭 링크는 따라가지 않는다 — 사이클에서도 스캔이 끝난다.
+        let resolver = FontResolver::new(&[dir]).expect("scan terminates");
+        resolver.resolve("HwpForge Test").expect("font still found");
+    }
+
+    #[test]
+    fn optional_discovery_tier_missing_is_silently_skipped() {
+        // 발견 tier 의 미존재 경로는 조용히 건너뛴다 (명시 tier 는 FontIo 계약 유지).
+        let resolver = FontResolver::from_tiers(&[
+            (Vec::new(), true),
+            (vec![PathBuf::from("/nonexistent-hwpforge-discovery-dir")], false),
+        ])
+        .expect("optional tier missing is not an error");
+        assert_eq!(resolver.face_count(), 0);
+    }
+
+    #[test]
+    fn hancom_bundle_discovery_resolves_without_explicit_dirs() {
+        if !PathBuf::from(HANCOM_TTF_DIR).exists() {
+            return; // fixture-optional (한컴 미설치 머신)
+        }
+        let resolver =
+            FontResolver::with_discovery(&[], FontDiscovery::HancomBundle).expect("scan bundle");
+        resolver.resolve("한컴바탕").expect("한컴바탕 via discovery");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn platform_discovery_finds_system_font() {
+        if !Path::new("/System/Library/Fonts").exists() {
+            return;
+        }
+        let resolver =
+            FontResolver::with_discovery(&[], FontDiscovery::Platform).expect("scan platform");
+        // Apple SD Gothic Neo = macOS 기본 한글 시스템 폰트 (weight ranking 이
+        // 다face .ttc 에서 Regular 를 골라내는 실물 검증).
+        resolver.resolve("Apple SD Gothic Neo").expect("system font");
+    }
+
     #[test]
     fn hancom_bundle_resolves_korean_face_names() {
         let dir = PathBuf::from(HANCOM_TTF_DIR);
@@ -224,6 +904,22 @@ mod tests {
                 .contains("hanbatang"),
             "unexpected file: {:?}",
             hcr.path
+        );
+        // 함초롬바탕 = 정상 Bold 축 실물 (HANBatangB: subfamily Bold + BOLD
+        // 플래그 + weight 700) — W4a 분류기가 실제 한컴 폰트에서 Bold 를
+        // 골라내는 real-world 잠금.
+        let hcr_bold =
+            resolver.resolve_styled("함초롬바탕", FaceStyle::Bold).expect("함초롬바탕 Bold");
+        assert!(
+            hcr_bold
+                .path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_ascii_lowercase()
+                .contains("hanbatangb"),
+            "unexpected bold file: {:?}",
+            hcr_bold.path
         );
         // fallback 금지: 없는 이름은 에러
         assert!(matches!(

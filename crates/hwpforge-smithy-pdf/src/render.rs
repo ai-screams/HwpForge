@@ -3,39 +3,110 @@
 //! 좌표 흐름: source 는 HWPUNIT 정수, 셰이핑/배분은 분수 HWPUNIT, 이
 //! 모듈의 Paint IR 방출 시점에 pt 로 **1회** 변환한다 (계획 §2).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use hwpforge_foundation::Color;
 
-use crate::font::{FontResolver, ResolvedFont};
+use crate::font::{embed_license, EmbedLicense, FaceStyle, FontResolver, ResolvedFont};
 use crate::paint::{
     FontKey, GlyphRun, LineItem, Page, PaintItem, Point, PositionedGlyph, Pt, RectItem, Size,
 };
 use crate::source::replay_layout;
 use crate::text::align::{place_line, NaturalLine};
 use crate::text::shape::{shape_text, ShapedText};
-use crate::{PdfError, PdfInput, PdfOptions, PdfOutput, PdfResult, PdfWarning};
+use crate::{FontFallbackMode, PdfError, PdfInput, PdfOptions, PdfOutput, PdfResult, PdfWarning};
 
-/// 렌더 컨텍스트 폰트 테이블 — face 이름 → [`FontKey`] 인터닝.
+/// 렌더 컨텍스트 폰트 테이블 — (face 이름, 스타일) → [`FontKey`] 인터닝.
+///
+/// 물리 동일 face((경로, face 인덱스) 기준)는 [`FontKey`] 를 공유해 중복
+/// 임베드를 막는다 (Degraded 강등이 (face, Bold) 와 (face, Regular) 를 같은
+/// 실물로 해석하는 경우 등).
 struct FontTable {
     resolver: FontResolver,
-    keys: HashMap<String, FontKey>,
+    keys: HashMap<(String, FaceStyle), FontKey>,
+    by_identity: HashMap<(std::path::PathBuf, u32), FontKey>,
     fonts: Vec<ResolvedFont>,
 }
 
 impl FontTable {
     fn new(resolver: FontResolver) -> Self {
-        Self { resolver, keys: HashMap::new(), fonts: Vec::new() }
+        Self { resolver, keys: HashMap::new(), by_identity: HashMap::new(), fonts: Vec::new() }
     }
 
-    fn key_for(&mut self, face: &str) -> PdfResult<FontKey> {
-        if let Some(key) = self.keys.get(face) {
+    /// (face, style) 를 해석해 인터닝한다 (W4c 스타일 선택).
+    ///
+    /// - Regular = 현행 [`FontResolver::resolve`] (W2 계약).
+    /// - 비-Regular = [`FontResolver::resolve_styled`]. miss 시
+    ///   [`FontFallbackMode::Fatal`] 은 [`PdfError::FontStyleUnavailable`],
+    ///   [`FontFallbackMode::Degraded`] 는 regular 강등 + 경고 1회
+    ///   ((face, style) 캐시가 dedupe 를 겸한다).
+    /// - [`PdfError::FontFaceAmbiguous`] 는 양 모드 모두 전파.
+    fn key_for(
+        &mut self,
+        face: &str,
+        style: FaceStyle,
+        fallback: FontFallbackMode,
+        location: &str,
+        warnings: &mut Vec<PdfWarning>,
+    ) -> PdfResult<FontKey> {
+        let cache_key = (face.to_string(), style);
+        if let Some(key) = self.keys.get(&cache_key) {
             return Ok(*key);
         }
-        let resolved = self.resolver.resolve(face)?;
-        let key = FontKey(self.fonts.len());
-        self.fonts.push(resolved);
-        self.keys.insert(face.to_string(), key);
+        let resolved = if style == FaceStyle::Regular {
+            self.resolver.resolve(face)?
+        } else {
+            match self.resolver.resolve_styled(face, style) {
+                Ok(resolved) => resolved,
+                Err(PdfError::FontUnresolved { .. }) => match fallback {
+                    FontFallbackMode::Fatal => {
+                        return Err(PdfError::FontStyleUnavailable {
+                            face: face.to_string(),
+                            style,
+                            location: location.to_string(),
+                        });
+                    }
+                    FontFallbackMode::Degraded => {
+                        warnings.push(PdfWarning::FontStyleFallback {
+                            face: face.to_string(),
+                            requested: style,
+                            location: location.to_string(),
+                        });
+                        self.resolver.resolve(face)?
+                    }
+                },
+                Err(other) => return Err(other),
+            }
+        };
+        let identity = (resolved.path.clone(), resolved.face_index);
+        let key = if let Some(existing) = self.by_identity.get(&identity) {
+            *existing // 동일 실물 = 이미 라이선스 판정 완료 (경고도 1회로 dedupe)
+        } else {
+            // 임베드 라이선스 게이트 (W4d) — 임베드할 그 바이트를 판정한다.
+            match embed_license(&resolved.data, resolved.face_index) {
+                EmbedLicense::Allowed => {}
+                EmbedLicense::PreviewPrintOnly => {
+                    let (_, hash) = crate::font::fingerprint(&resolved.data);
+                    warnings.push(PdfWarning::FontEmbedPreviewPrint {
+                        face: face.to_string(),
+                        path: resolved.path.clone(),
+                        fingerprint: format!("{hash:016x}"),
+                    });
+                }
+                EmbedLicense::Denied(reason) => {
+                    return Err(PdfError::FontEmbedRestricted {
+                        face: face.to_string(),
+                        path: resolved.path.clone(),
+                        reason,
+                    });
+                }
+            }
+            let key = FontKey(self.fonts.len());
+            self.fonts.push(resolved);
+            self.by_identity.insert(identity, key);
+            key
+        };
+        self.keys.insert(cache_key, key);
         Ok(key)
     }
 }
@@ -50,7 +121,8 @@ impl FontTable {
 pub fn render_document(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<PdfOutput> {
     let layout = replay_layout(input, options)?;
     let mut warnings = layout.warnings;
-    let mut table = FontTable::new(FontResolver::new(&options.font_dirs)?);
+    let mut table =
+        FontTable::new(FontResolver::with_discovery(&options.font_dirs, options.discovery)?);
 
     struct PreparedRun {
         key: FontKey,
@@ -59,6 +131,9 @@ pub fn render_document(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<
         shaped: ShapedText,
         text: String,
     }
+
+    // 언어축 불일치 경고는 charPr 당 1회 (Degraded 모드).
+    let mut warned_axis: HashSet<usize> = HashSet::new();
 
     let mut pages = Vec::with_capacity(layout.pages.len());
     for page in &layout.pages {
@@ -103,6 +178,28 @@ pub fn render_document(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<
                     continue;
                 }
                 let cs = run.char_shape;
+                // 언어축 검사 (W4c 최소선 — charPr 의 7축 폰트 이름 distinct).
+                // 단일 폰트 렌더는 축 불일치 시 오글리프 — 기본 fatal,
+                // Degraded 옵트인만 한글 축([0])으로 강등 + 경고.
+                let axis_names = input.styles.char_font_axis_names(cs);
+                if axis_names.len() > 1 {
+                    match options.font_fallback {
+                        FontFallbackMode::Fatal => {
+                            return Err(PdfError::FontAxisMismatch {
+                                location: line.location.clone(),
+                                fonts: axis_names.iter().map(|s| (*s).to_string()).collect(),
+                            });
+                        }
+                        FontFallbackMode::Degraded => {
+                            if warned_axis.insert(cs.get()) {
+                                warnings.push(PdfWarning::FontAxisFallback {
+                                    fonts: axis_names.iter().map(|s| (*s).to_string()).collect(),
+                                    location: line.location.clone(),
+                                });
+                            }
+                        }
+                    }
+                }
                 let face = input
                     .styles
                     .char_font_name(cs)
@@ -120,7 +217,17 @@ pub fn render_document(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<
                     })?
                     .as_i32();
                 let color = input.styles.char_text_color(cs).unwrap_or(Color::BLACK);
-                let key = table.key_for(&face)?;
+                let style = FaceStyle::from_flags(
+                    input.styles.char_bold(cs).unwrap_or(false),
+                    input.styles.char_italic(cs).unwrap_or(false),
+                );
+                let key = table.key_for(
+                    &face,
+                    style,
+                    options.font_fallback,
+                    &line.location,
+                    &mut warnings,
+                )?;
                 let font = &table.fonts[key.0];
                 let shaped = shape_text(&font.data, font.face_index, text, size_hwpunit)?;
                 prepared.push(PreparedRun {
