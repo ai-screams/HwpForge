@@ -316,12 +316,36 @@ pub struct HeaderFooter {
     pub paragraphs: Vec<Paragraph>,
     /// Which pages this header/footer applies to.
     pub apply_page_type: ApplyPageType,
+    /// 컨테이너(subList) 세로 정렬 (W5-α H1 — 일반 꼬리말 실측 = BOTTOM).
+    ///
+    /// 밴드 안에서 문단 블록을 어디에 앉히는지 결정한다 — 렌더 재생의
+    /// 필수 입력. HWPX `<hp:subList vertAlign>`.
+    #[serde(default)]
+    pub vert_align: hwpforge_foundation::VerticalAlign,
+    /// 컨테이너 텍스트 폭 (HWPX `<hp:subList textWidth>`, 0 = 위임).
+    #[serde(default, skip_serializing_if = "HwpUnit::is_zero")]
+    pub text_width: HwpUnit,
+    /// 컨테이너 텍스트 높이 (HWPX `<hp:subList textHeight>`, 0 = 위임).
+    ///
+    /// 밴드(margin.header/footer)와 다를 수 있다 — 초과 시 동작은 실측
+    /// 전이므로 렌더는 fail-closed 로 다룬다 (W5-a).
+    #[serde(default, skip_serializing_if = "HwpUnit::is_zero")]
+    pub text_height: HwpUnit,
 }
 
 impl HeaderFooter {
     /// Creates a new header/footer with the given paragraphs and page scope.
+    ///
+    /// 컨테이너 기하는 기본값(Top/0/0 = 위임)으로 시작한다 — wire 승격은
+    /// 디코더가 채운다.
     pub fn new(paragraphs: Vec<Paragraph>, apply_page_type: ApplyPageType) -> Self {
-        Self { paragraphs, apply_page_type }
+        Self {
+            paragraphs,
+            apply_page_type,
+            vert_align: hwpforge_foundation::VerticalAlign::default(),
+            text_width: HwpUnit::ZERO,
+            text_height: HwpUnit::ZERO,
+        }
     }
 
     /// Creates a header/footer applied to **all** pages (both odd and even).
@@ -341,7 +365,7 @@ impl HeaderFooter {
     /// assert_eq!(hf.paragraphs.len(), 1);
     /// ```
     pub fn all_pages(paragraphs: Vec<Paragraph>) -> Self {
-        Self { paragraphs, apply_page_type: ApplyPageType::Both }
+        Self::new(paragraphs, ApplyPageType::Both)
     }
 
     /// Creates a header/footer applied to all pages.

@@ -1633,17 +1633,47 @@ fn convert_header_footer(
 ) -> HwpxResult<HeaderFooter> {
     let apply_page_type = parse_apply_page_type(&hx.apply_page_type, attribute, warnings);
 
-    let paragraphs = if let Some(sub_list) = &hx.sub_list {
-        sub_list
+    let hf = if let Some(sub_list) = &hx.sub_list {
+        let paragraphs = sub_list
             .paragraphs
             .iter()
             .map(|hx_para| convert_paragraph(hx_para, false, 0).map(|(para, _)| para))
-            .collect::<HwpxResult<Vec<_>>>()?
+            .collect::<HwpxResult<Vec<_>>>()?;
+        let mut hf = HeaderFooter::new(paragraphs, apply_page_type);
+        // W5-α H1: 컨테이너 기하 승격 — 밴드 재생(R6)의 필수 입력.
+        hf.vert_align = parse_vert_align(&sub_list.vert_align, warnings);
+        hf.text_width =
+            HwpUnit::new(i32::try_from(sub_list.text_width).unwrap_or(0)).unwrap_or(HwpUnit::ZERO);
+        hf.text_height =
+            HwpUnit::new(i32::try_from(sub_list.text_height).unwrap_or(0)).unwrap_or(HwpUnit::ZERO);
+        hf
     } else {
-        Vec::new()
+        HeaderFooter::new(Vec::new(), apply_page_type)
     };
+    Ok(hf)
+}
 
-    Ok(HeaderFooter::new(paragraphs, apply_page_type))
+/// Parses an HWPX `vertAlign` string into [`hwpforge_foundation::VerticalAlign`].
+///
+/// 결측(빈 문자열) = `Top` (기본, 경고 없음). 미지 값 = `Top` 폴백 + 경고.
+fn parse_vert_align(
+    s: &str,
+    warnings: &mut Vec<super::DecodeWarning>,
+) -> hwpforge_foundation::VerticalAlign {
+    use hwpforge_foundation::VerticalAlign;
+    match s {
+        "" | "TOP" => VerticalAlign::Top,
+        "CENTER" => VerticalAlign::Center,
+        "BOTTOM" => VerticalAlign::Bottom,
+        _ => {
+            warnings.push(super::DecodeWarning::UnknownEnumValue {
+                attribute: "hp:subList@vertAlign",
+                raw: s.to_string(),
+                fallback: "TOP",
+            });
+            VerticalAlign::Top
+        }
+    }
 }
 
 /// Extracts a [`PageNumber`] from an `HxCtrl`'s page_num element, if present.
@@ -3926,6 +3956,37 @@ mod tests {
             .collect();
         assert!(unknowns.contains(&"hp:pageNum@pos"), "{unknowns:?}");
         assert!(unknowns.contains(&"hp:pageNum@formatType"), "{unknowns:?}");
+    }
+
+    // ── 머리말 subList 기하 승격 (W5-α H1) ───────────────────────
+
+    #[test]
+    fn header_sublist_geometry_survives_decode() {
+        use hwpforge_foundation::VerticalAlign;
+        // R6 밴드 재생의 입력: 일반 꼬리말은 vertAlign=BOTTOM + 빈 간격
+        // 문단을 쓴다 (연구 실측 09-HEADER_FOOTER_PAGENUM_RESEARCH.md) —
+        // 디코더가 컨테이너 기하를 버리면 렌더가 재현할 수 없다.
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <header applyPageType="BOTH" id="1">
+                            <subList id="" textDirection="HORIZONTAL" vertAlign="BOTTOM"
+                                     textWidth="42520" textHeight="4252">
+                                <p paraPrIDRef="0"><run charPrIDRef="0"><t>H</t></run></p>
+                            </subList>
+                        </header>
+                    </ctrl>
+                    <t>Body</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let header = &result.headers[0];
+        assert_eq!(header.vert_align, VerticalAlign::Bottom);
+        assert_eq!(header.text_width.as_i32(), 42520);
+        assert_eq!(header.text_height.as_i32(), 4252);
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
     }
 
     // ── startNum pageStartsOn decoding (W5-α C2) ─────────────────
