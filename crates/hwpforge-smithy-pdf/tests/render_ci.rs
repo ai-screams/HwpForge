@@ -216,6 +216,43 @@ fn ambiguous_bold_face_errors_in_both_modes() {
 }
 
 #[test]
+fn restricted_license_font_is_fatal_before_embed() {
+    // W4d: fsType Restricted (v0 — ENGDOS 실물형) = 임베드 전 거부.
+    // Degraded 는 스타일/축 강등 정책이지 라이선스 우회가 아니다.
+    let doc = doc_of(vec![para_with_cache("가나다", vec![seg(0, 0)])]);
+    let styles = TestStyles { face: "HwpForge FsV0Restricted", ..TestStyles::default() };
+    let input = PdfInput { document: &doc, styles: &styles };
+    let err = render_document(&input, &options()).unwrap_err();
+    assert!(matches!(err, PdfError::FontEmbedRestricted { .. }), "{err:?}");
+    let mut opts = options();
+    opts.font_fallback = FontFallbackMode::Degraded;
+    let err = render_document(&input, &opts).unwrap_err();
+    assert!(matches!(err, PdfError::FontEmbedRestricted { .. }), "{err:?}");
+}
+
+#[test]
+fn preview_print_font_renders_with_one_warning() {
+    // P&P 는 뷰/인쇄 임베드 허용 — physical face 당 1회 경고 (2문단 dedupe).
+    let doc = doc_of(vec![
+        para_with_cache("가나다", vec![seg(0, 0)]),
+        para_with_cache("라마바", vec![seg(0, 1600)]),
+    ]);
+    let styles = TestStyles { face: "HwpForge FsV3PP", ..TestStyles::default() };
+    let input = PdfInput { document: &doc, styles: &styles };
+    let out = render_document(&input, &options()).expect("P&P render");
+    assert!(out.bytes.starts_with(b"%PDF-"));
+    assert_eq!(
+        out.warnings
+            .iter()
+            .filter(|w| matches!(w, PdfWarning::FontEmbedPreviewPrint { .. }))
+            .count(),
+        1,
+        "physical face 당 1회: {:?}",
+        out.warnings
+    );
+}
+
+#[test]
 fn axis_mismatch_is_fatal_by_default_and_warns_once_in_degraded() {
     // charPr 언어축이 서로 다른 폰트 참조 (blank-HPC 실측: run 30%) —
     // 기본 = fatal, Degraded = 한글 축 + charPr 당 1회 경고.

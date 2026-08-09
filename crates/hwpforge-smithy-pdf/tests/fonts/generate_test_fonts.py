@@ -234,6 +234,7 @@ if __name__ == "__main__":
         ("FsV2BitmapOnly", 2, 0x0200, False),
         ("FsV2Multi", 2, 0x0104, False),
         ("FsV3Malformed", 3, 0x0001, False),
+        ("FsV3PP", 3, 0x0004, False),  # Preview&Print 순수 — 허용+경고 경로
         ("FsNoOs2", None, None, True),
     ):
         build(

@@ -144,6 +144,18 @@ pub enum PdfWarning {
         /// 첫 발생 위치.
         location: String,
     },
+    /// Preview & Print 전용 폰트를 임베드함 (W4d — physical face 당 1회).
+    ///
+    /// PDF 뷰/인쇄 임베드는 관례상 허용 범위지만 라이선스 상태를
+    /// 표면화한다 (권한·출처·fingerprint).
+    FontEmbedPreviewPrint {
+        /// face 이름.
+        face: String,
+        /// 실물 경로 (출처).
+        path: std::path::PathBuf,
+        /// 파일 바이트 fingerprint (hex — 물리 동일성 진단).
+        fingerprint: String,
+    },
     /// 정렬 배분이 근사임 (배분 정렬 2종·공백 0 JUSTIFY — W0 미실측,
     /// 위치는 정확하고 스트레치만 생략).
     AlignmentApproximated {
@@ -238,6 +250,21 @@ pub enum PdfError {
         location: String,
         /// 축별 distinct 폰트 이름 (첫 원소 = 한글 축).
         fonts: Vec<String>,
+    },
+    /// 폰트 임베드 라이선스 거부 (W4d — `fsType` fail-closed).
+    ///
+    /// Restricted·No-subsetting(bit8)·Bitmap-only(bit9)·권한 검증 불가
+    /// (OS/2 결측/malformed) 폰트는 임베드 전에 거부한다.
+    /// [`FontFallbackMode::Degraded`] 는 강등 정책이지 라이선스 우회가
+    /// 아니다 — 양 모드 모두 에러.
+    #[error("font {face:?} at {path:?} cannot be embedded: {reason}")]
+    FontEmbedRestricted {
+        /// face 이름.
+        face: String,
+        /// 실물 경로 (출처 진단).
+        path: std::path::PathBuf,
+        /// 거부 사유 ([`font::embed_license`] 판정).
+        reason: String,
     },
     /// 폰트 face 신호 충돌 — (family, style) 후보가 모순/동률이라 결정 불가.
     ///

@@ -20,7 +20,8 @@
 //!   tier 로만 참여하고, 명시 dirs 의 기존 해석을 바꾸지 못한다.
 //! - 미해결 = [`PdfError::FontUnresolved`] — **fallback 금지** (다른 폰트로
 //!   그리면 위치가 틀린 출력 — no-fake-support).
-//! - 라이선스(fsType)/서브셋 게이트는 W4d (임베드 시점).
+//! - 라이선스(fsType) 게이트 = [`embed_license`] — 임베드 시점에 fail-closed
+//!   판정한다 (Restricted·bit8/9·검증 불가 = 거부, P&P = 허용+경고).
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -141,9 +142,69 @@ fn platform_font_dirs() -> Vec<PathBuf> {
     dirs
 }
 
+/// 임베드 라이선스 판정 (W4d — OS/2 `fsType`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EmbedLicense {
+    /// 제약 없음 (Installable/Editable — 경고 없이 임베드).
+    Allowed,
+    /// Preview & Print 전용 — PDF 뷰/인쇄 임베드는 관례상 허용하되
+    /// 경고를 표면화한다 (physical face 당 1회).
+    PreviewPrintOnly,
+    /// 임베드 불가 (사유 포함) — 렌더는 임베드 전에 거부한다.
+    Denied(String),
+}
+
+/// face 의 임베드 라이선스를 판정한다 (Codex C1·H4 — 기본 fail-closed).
+///
+/// 검사는 raw bit 가 아니라 ttf-parser 의 **버전 인지 helper**
+/// (`permissions`/`is_subsetting_allowed`/`is_outline_embedding_allowed`)로
+/// 한다. fail-closed 규칙:
+///
+/// - OS/2 결측·권한 비트 malformed = 검증 불가 → 거부.
+/// - bit8 No-subsetting = 거부 — PDF 백엔드(krilla)는 무조건 subset 한다.
+/// - bit9 Bitmap-only = 거부 — outline 임베드가 필요하다.
+/// - Restricted = 거부. Preview & Print = 허용 + 경고 대상.
+///
+/// 검사 대상 바이트는 **임베드할 그 바이트**([`ResolvedFont::data`])다
+/// (스캔 시점 검사와 달리 TOCTOU 없음).
+pub fn embed_license(data: &[u8], face_index: u32) -> EmbedLicense {
+    use rustybuzz::ttf_parser;
+
+    let Ok(face) = ttf_parser::Face::parse(data, face_index) else {
+        return EmbedLicense::Denied("font data failed to parse".to_string());
+    };
+    let Some(os2) = face.tables().os2 else {
+        return EmbedLicense::Denied(
+            "OS/2 table missing — embedding permission unverifiable (fail-closed)".to_string(),
+        );
+    };
+    let Some(permission) = os2.permissions() else {
+        return EmbedLicense::Denied("malformed fsType permission bits (fail-closed)".to_string());
+    };
+    if !os2.is_subsetting_allowed() {
+        return EmbedLicense::Denied(
+            "fsType bit8 forbids subsetting — the PDF embedder always subsets".to_string(),
+        );
+    }
+    if !os2.is_outline_embedding_allowed() {
+        return EmbedLicense::Denied(
+            "fsType bit9 allows bitmap embedding only (outline embed required)".to_string(),
+        );
+    }
+    match permission {
+        ttf_parser::Permissions::Restricted => {
+            EmbedLicense::Denied("fsType Restricted License embedding".to_string())
+        }
+        ttf_parser::Permissions::PreviewAndPrint => EmbedLicense::PreviewPrintOnly,
+        ttf_parser::Permissions::Installable | ttf_parser::Permissions::Editable => {
+            EmbedLicense::Allowed
+        }
+    }
+}
+
 /// 파일 바이트 fingerprint — (길이, 64-bit 해시). 물리 동일성 판정용:
 /// 동일 fingerprint + face 인덱스 = 같은 실물의 중복 배치 (충돌 아님).
-fn fingerprint(data: &[u8]) -> (u64, u64) {
+pub(crate) fn fingerprint(data: &[u8]) -> (u64, u64) {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();
     data.hash(&mut h);
@@ -684,6 +745,38 @@ mod tests {
         ));
         // resolve() (이름 그대로 — W2 계약) 는 여전히 성공.
         resolver.resolve("HwpForge Test Bold").expect("legacy exact name");
+    }
+
+    #[test]
+    fn embed_license_truth_table_from_fixtures() {
+        // W4d 진리표 (§5 H4 — OS/2 버전 × permission × bit8/9 × malformed/결측).
+        // 판정은 raw bit 가 아니라 ttf-parser 버전 인지 helper 로 한다 (C1).
+        let dir = committed_fonts_dir();
+        let case = |file: &str| {
+            let data = std::fs::read(dir.join(file)).expect("fixture font");
+            embed_license(&data, 0)
+        };
+        // 기본 fixture = installable(0x0000) → 무제약 허용.
+        assert_eq!(case("HwpForgeTest-Regular.ttf"), EmbedLicense::Allowed);
+        assert_eq!(case("HwpForgeW4-Bold.ttf"), EmbedLicense::Allowed);
+        // v0 Restricted (ENGDOS 실물형) = 거부.
+        assert!(
+            matches!(case("HwpForgeFsV0Restricted.ttf"), EmbedLicense::Denied(_)),
+            "{:?}",
+            case("HwpForgeFsV0Restricted.ttf")
+        );
+        // bit8 No-subsetting = 거부 (krilla 는 무조건 subset — C1 fatal).
+        assert!(matches!(case("HwpForgeFsV2NoSubset.ttf"), EmbedLicense::Denied(_)));
+        // bit9 Bitmap-only = 거부 (outline 임베드 불가).
+        assert!(matches!(case("HwpForgeFsV2BitmapOnly.ttf"), EmbedLicense::Denied(_)));
+        // P&P + bit8 복수비트 = 거부 (P&P 라도 subset 금지가 우선).
+        assert!(matches!(case("HwpForgeFsV2Multi.ttf"), EmbedLicense::Denied(_)));
+        // malformed 권한 비트 (예약 bit0) = fail-closed 거부.
+        assert!(matches!(case("HwpForgeFsV3Malformed.ttf"), EmbedLicense::Denied(_)));
+        // OS/2 결측 = 권한 검증 불가 → fail-closed 거부.
+        assert!(matches!(case("HwpForgeFsNoOs2.ttf"), EmbedLicense::Denied(_)));
+        // P&P 순수 = 뷰/인쇄 임베드 허용 — 단 경고 표면화 대상.
+        assert_eq!(case("HwpForgeFsV3PP.ttf"), EmbedLicense::PreviewPrintOnly);
     }
 
     #[test]

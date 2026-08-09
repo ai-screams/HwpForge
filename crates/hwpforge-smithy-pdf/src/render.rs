@@ -7,7 +7,7 @@ use std::collections::{HashMap, HashSet};
 
 use hwpforge_foundation::Color;
 
-use crate::font::{FaceStyle, FontResolver, ResolvedFont};
+use crate::font::{embed_license, EmbedLicense, FaceStyle, FontResolver, ResolvedFont};
 use crate::paint::{
     FontKey, GlyphRun, LineItem, Page, PaintItem, Point, PositionedGlyph, Pt, RectItem, Size,
 };
@@ -80,8 +80,27 @@ impl FontTable {
         };
         let identity = (resolved.path.clone(), resolved.face_index);
         let key = if let Some(existing) = self.by_identity.get(&identity) {
-            *existing
+            *existing // 동일 실물 = 이미 라이선스 판정 완료 (경고도 1회로 dedupe)
         } else {
+            // 임베드 라이선스 게이트 (W4d) — 임베드할 그 바이트를 판정한다.
+            match embed_license(&resolved.data, resolved.face_index) {
+                EmbedLicense::Allowed => {}
+                EmbedLicense::PreviewPrintOnly => {
+                    let (_, hash) = crate::font::fingerprint(&resolved.data);
+                    warnings.push(PdfWarning::FontEmbedPreviewPrint {
+                        face: face.to_string(),
+                        path: resolved.path.clone(),
+                        fingerprint: format!("{hash:016x}"),
+                    });
+                }
+                EmbedLicense::Denied(reason) => {
+                    return Err(PdfError::FontEmbedRestricted {
+                        face: face.to_string(),
+                        path: resolved.path.clone(),
+                        reason,
+                    });
+                }
+            }
             let key = FontKey(self.fonts.len());
             self.fonts.push(resolved);
             self.by_identity.insert(identity, key);
