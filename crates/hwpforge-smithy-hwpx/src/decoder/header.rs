@@ -177,20 +177,27 @@ fn convert_numbering(hx: &HxNumbering) -> hwpforge_core::NumberingDef {
 ///
 /// Shared by header (numbering definitions) and section (page number format).
 pub(crate) fn parse_number_format(s: &str) -> hwpforge_foundation::NumberFormatType {
+    parse_number_format_opt(s).unwrap_or(hwpforge_foundation::NumberFormatType::Digit)
+}
+
+/// [`parse_number_format`] 의 판정 코어 — 미지/결측 = `None`.
+///
+/// 호출자가 폴백 사실을 표면화(디코드 경고)할 수 있게 분리했다 (W5-α M4).
+pub(crate) fn parse_number_format_opt(s: &str) -> Option<hwpforge_foundation::NumberFormatType> {
     use hwpforge_foundation::NumberFormatType;
     match s {
-        "DIGIT" => NumberFormatType::Digit,
-        "CIRCLED_DIGIT" => NumberFormatType::CircledDigit,
-        "ROMAN_CAPITAL" => NumberFormatType::RomanCapital,
-        "ROMAN_SMALL" => NumberFormatType::RomanSmall,
-        "LATIN_CAPITAL" => NumberFormatType::LatinCapital,
-        "LATIN_SMALL" => NumberFormatType::LatinSmall,
-        "CIRCLED_LATIN_SMALL" => NumberFormatType::CircledLatinSmall,
-        "HANGUL_SYLLABLE" => NumberFormatType::HangulSyllable,
-        "HANGUL_JAMO" => NumberFormatType::HangulJamo,
-        "HANJA_DIGIT" => NumberFormatType::HanjaDigit,
-        "CIRCLED_HANGUL_SYLLABLE" => NumberFormatType::CircledHangulSyllable,
-        _ => NumberFormatType::Digit,
+        "DIGIT" => Some(NumberFormatType::Digit),
+        "CIRCLED_DIGIT" => Some(NumberFormatType::CircledDigit),
+        "ROMAN_CAPITAL" => Some(NumberFormatType::RomanCapital),
+        "ROMAN_SMALL" => Some(NumberFormatType::RomanSmall),
+        "LATIN_CAPITAL" => Some(NumberFormatType::LatinCapital),
+        "LATIN_SMALL" => Some(NumberFormatType::LatinSmall),
+        "CIRCLED_LATIN_SMALL" => Some(NumberFormatType::CircledLatinSmall),
+        "HANGUL_SYLLABLE" => Some(NumberFormatType::HangulSyllable),
+        "HANGUL_JAMO" => Some(NumberFormatType::HangulJamo),
+        "HANJA_DIGIT" => Some(NumberFormatType::HanjaDigit),
+        "CIRCLED_HANGUL_SYLLABLE" => Some(NumberFormatType::CircledHangulSyllable),
+        _ => None,
     }
 }
 

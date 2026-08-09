@@ -39,6 +39,28 @@ pub struct HwpxDocument {
     pub style_store: HwpxStyleStore,
     /// Binary image data extracted from `BinData/` ZIP entries.
     pub image_store: ImageStore,
+    /// 디코드 중 표면화된 비치명 경고 (W5-α M4 — warning-first).
+    pub warnings: Vec<DecodeWarning>,
+}
+
+/// 디코드 중 표면화된 비치명 경고.
+///
+/// 디코더가 미지 wire 값을 기본값으로 **조용히** 폴백하면 하류(렌더러
+/// 등)의 warning-first 는 증거가 세탁된 뒤라 무력해진다 (W5-α M4) —
+/// 폴백은 유지하되 사실을 표면화한다. 속성 결측(빈 문자열)은 기본값
+/// 적용이 정상이므로 경고 대상이 아니다.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum DecodeWarning {
+    /// 알 수 없는 enum 문자열을 기본값으로 폴백함.
+    UnknownEnumValue {
+        /// 요소@속성 경로 (예: `hp:header@applyPageType`).
+        attribute: &'static str,
+        /// 원본 wire 문자열.
+        raw: String,
+        /// 폴백한 값의 wire 표기.
+        fallback: &'static str,
+    },
 }
 
 // ── HwpxDecoder ──────────────────────────────────────────────────
@@ -95,10 +117,12 @@ impl HwpxDecoder {
         let section_count = pkg.section_count();
         // Track how many masterpages have been assigned across sections
         let mut masterpage_cursor = 0usize;
+        let mut warnings: Vec<DecodeWarning> = Vec::new();
 
         for i in 0..section_count {
             let section_xml = pkg.read_section_xml(i)?;
-            let result = section::parse_section(&section_xml, i, &chart_xmls)?;
+            let mut result = section::parse_section(&section_xml, i, &chart_xmls)?;
+            warnings.append(&mut result.warnings);
 
             let page_settings = result.page_settings.unwrap_or_else(PageSettings::a4);
 
@@ -157,7 +181,7 @@ impl HwpxDecoder {
         // Step 6: Extract binary image data from BinData/
         let image_store = pkg.read_all_bindata()?;
 
-        Ok(HwpxDocument { document, style_store, image_store })
+        Ok(HwpxDocument { document, style_store, image_store, warnings })
     }
 
     /// Decodes an HWPX file from a filesystem path.

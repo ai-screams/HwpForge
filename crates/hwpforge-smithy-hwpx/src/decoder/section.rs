@@ -127,6 +127,8 @@ pub struct SectionParseResult {
     pub text_direction: TextDirection,
     /// Starting numbers extracted from `<hp:startNum>` in secPr.
     pub begin_num: Option<hwpforge_core::section::BeginNum>,
+    /// 디코드 중 표면화된 비치명 경고 (W5-α M4 — 미지 enum 폴백 등).
+    pub warnings: Vec<super::DecodeWarning>,
 }
 
 /// Parses a section XML string into paragraphs and optional page settings.
@@ -145,6 +147,7 @@ pub fn parse_section(
     let mut page_settings = None;
     let mut headers = Vec::new();
     let mut footers = Vec::new();
+    let mut warnings: Vec<super::DecodeWarning> = Vec::new();
     let mut page_number = None;
     let mut column_settings = None;
     let mut visibility = None;
@@ -178,7 +181,7 @@ pub fn parse_section(
                             page_border_fills = extract_page_border_fills(sec_pr);
                         }
                         if begin_num.is_none() {
-                            begin_num = extract_begin_num(sec_pr);
+                            begin_num = extract_begin_num(sec_pr, &mut warnings);
                         }
                         text_direction = TextDirection::from_hwpx_str(&sec_pr.text_direction);
                     }
@@ -195,14 +198,14 @@ pub fn parse_section(
                     }
                     // 다중 머리말/꼬리말 = wire 순서대로 전부 수집 (W5-α C1:
                     // first-wins 는 ODD/EVEN 문서에서 무음 데이터 손실).
-                    if let Some(hf) = convert_ctrl_header(ctrl)? {
+                    if let Some(hf) = convert_ctrl_header(ctrl, &mut warnings)? {
                         headers.push(hf);
                     }
-                    if let Some(hf) = convert_ctrl_footer(ctrl)? {
+                    if let Some(hf) = convert_ctrl_footer(ctrl, &mut warnings)? {
                         footers.push(hf);
                     }
                     if page_number.is_none() {
-                        if let Some(pn) = convert_ctrl_page_number(ctrl) {
+                        if let Some(pn) = convert_ctrl_page_number(ctrl, &mut warnings) {
                             page_number = Some(pn);
                         }
                     }
@@ -247,6 +250,7 @@ pub fn parse_section(
         master_pages: None,
         text_direction,
         begin_num,
+        warnings,
     })
 }
 
@@ -1423,6 +1427,7 @@ fn extract_line_number_shape(
 /// Extracts [`BeginNum`] from an `HxSecPr`'s `<hp:startNum>` element.
 fn extract_begin_num(
     sec_pr: &crate::schema::section::HxSecPr,
+    warnings: &mut Vec<super::DecodeWarning>,
 ) -> Option<hwpforge_core::section::BeginNum> {
     let sn = sec_pr.start_num.as_ref()?;
     Some(hwpforge_core::section::BeginNum {
@@ -1432,20 +1437,31 @@ fn extract_begin_num(
         equation: sn.equation,
         footnote: 1,
         endnote: 1,
-        page_starts_on: parse_page_starts_on(&sn.page_starts_on),
+        page_starts_on: parse_page_starts_on(&sn.page_starts_on, warnings),
     })
 }
 
 /// Parses an HWPX `pageStartsOn` string into [`PageStartsOn`].
 ///
-/// 빈 문자열(속성 결측) = `Both` (스펙 기본). 미지 값도 `Both` 로
-/// 폴백한다 — W5-α α3 에서 디코드 경고 채널 표면화 대상.
-fn parse_page_starts_on(s: &str) -> hwpforge_core::section::PageStartsOn {
+/// 빈 문자열(속성 결측) = `Both` (스펙 기본, 경고 없음). 미지 값은
+/// `Both` 폴백 + 경고 표면화 (W5-α M4).
+fn parse_page_starts_on(
+    s: &str,
+    warnings: &mut Vec<super::DecodeWarning>,
+) -> hwpforge_core::section::PageStartsOn {
     use hwpforge_core::section::PageStartsOn;
     match s {
+        "" | "BOTH" | "Both" | "both" => PageStartsOn::Both,
         "EVEN" | "Even" | "even" => PageStartsOn::Even,
         "ODD" | "Odd" | "odd" => PageStartsOn::Odd,
-        _ => PageStartsOn::Both,
+        _ => {
+            warnings.push(super::DecodeWarning::UnknownEnumValue {
+                attribute: "hp:startNum@pageStartsOn",
+                raw: s.to_string(),
+                fallback: "BOTH",
+            });
+            PageStartsOn::Both
+        }
     }
 }
 
@@ -1579,8 +1595,14 @@ fn parse_mm_width(s: &str) -> HwpUnit {
 ///
 /// 머리말 내부 문단 변환 실패를 전파한다 (W5-α C1 — `filter_map` 무음
 /// 삼킴은 캐시·본문 소실을 숨겼다).
-fn convert_ctrl_header(ctrl: &HxCtrl) -> HwpxResult<Option<HeaderFooter>> {
-    ctrl.header.as_ref().map(convert_header_footer).transpose()
+fn convert_ctrl_header(
+    ctrl: &HxCtrl,
+    warnings: &mut Vec<super::DecodeWarning>,
+) -> HwpxResult<Option<HeaderFooter>> {
+    ctrl.header
+        .as_ref()
+        .map(|hx| convert_header_footer(hx, "hp:header@applyPageType", warnings))
+        .transpose()
 }
 
 /// Extracts a [`HeaderFooter`] from an `HxCtrl`'s footer element, if present.
@@ -1588,8 +1610,14 @@ fn convert_ctrl_header(ctrl: &HxCtrl) -> HwpxResult<Option<HeaderFooter>> {
 /// # Errors
 ///
 /// 꼬리말 내부 문단 변환 실패를 전파한다 (`convert_ctrl_header` 참조).
-fn convert_ctrl_footer(ctrl: &HxCtrl) -> HwpxResult<Option<HeaderFooter>> {
-    ctrl.footer.as_ref().map(convert_header_footer).transpose()
+fn convert_ctrl_footer(
+    ctrl: &HxCtrl,
+    warnings: &mut Vec<super::DecodeWarning>,
+) -> HwpxResult<Option<HeaderFooter>> {
+    ctrl.footer
+        .as_ref()
+        .map(|hx| convert_header_footer(hx, "hp:footer@applyPageType", warnings))
+        .transpose()
 }
 
 /// Converts an `HxHeaderFooter` into a Core [`HeaderFooter`].
@@ -1598,8 +1626,12 @@ fn convert_ctrl_footer(ctrl: &HxCtrl) -> HwpxResult<Option<HeaderFooter>> {
 ///
 /// 내부 문단 변환 실패를 전파한다 — 머리말 문단이 조용히 사라지면
 /// 렌더/왕복이 결손을 인지할 수 없다 (fail-open 금지).
-fn convert_header_footer(hx: &HxHeaderFooter) -> HwpxResult<HeaderFooter> {
-    let apply_page_type = parse_apply_page_type(&hx.apply_page_type);
+fn convert_header_footer(
+    hx: &HxHeaderFooter,
+    attribute: &'static str,
+    warnings: &mut Vec<super::DecodeWarning>,
+) -> HwpxResult<HeaderFooter> {
+    let apply_page_type = parse_apply_page_type(&hx.apply_page_type, attribute, warnings);
 
     let paragraphs = if let Some(sub_list) = &hx.sub_list {
         sub_list
@@ -1615,15 +1647,30 @@ fn convert_header_footer(hx: &HxHeaderFooter) -> HwpxResult<HeaderFooter> {
 }
 
 /// Extracts a [`PageNumber`] from an `HxCtrl`'s page_num element, if present.
-fn convert_ctrl_page_number(ctrl: &HxCtrl) -> Option<PageNumber> {
+fn convert_ctrl_page_number(
+    ctrl: &HxCtrl,
+    warnings: &mut Vec<super::DecodeWarning>,
+) -> Option<PageNumber> {
     let hx = ctrl.page_num.as_ref()?;
-    Some(convert_page_number(hx))
+    Some(convert_page_number(hx, warnings))
 }
 
 /// Converts an `HxPageNum` into a Core [`PageNumber`].
-fn convert_page_number(hx: &HxPageNum) -> PageNumber {
-    let position = parse_page_number_position(&hx.pos);
-    let number_format = super::header::parse_number_format(&hx.format_type);
+fn convert_page_number(hx: &HxPageNum, warnings: &mut Vec<super::DecodeWarning>) -> PageNumber {
+    let position = parse_page_number_position(&hx.pos, warnings);
+    let number_format = match super::header::parse_number_format_opt(&hx.format_type) {
+        Some(format) => format,
+        None => {
+            if !hx.format_type.is_empty() {
+                warnings.push(super::DecodeWarning::UnknownEnumValue {
+                    attribute: "hp:pageNum@formatType",
+                    raw: hx.format_type.clone(),
+                    fallback: "DIGIT",
+                });
+            }
+            hwpforge_foundation::NumberFormatType::Digit
+        }
+    };
     if hx.side_char.is_empty() {
         PageNumber::new(position, number_format)
     } else {
@@ -1632,21 +1679,38 @@ fn convert_page_number(hx: &HxPageNum) -> PageNumber {
 }
 
 /// Parses an HWPX `applyPageType` string into [`ApplyPageType`].
-fn parse_apply_page_type(s: &str) -> ApplyPageType {
+fn parse_apply_page_type(
+    s: &str,
+    attribute: &'static str,
+    warnings: &mut Vec<super::DecodeWarning>,
+) -> ApplyPageType {
     match s {
-        "BOTH" | "Both" | "both" => ApplyPageType::Both,
+        // 결측(빈 문자열) = 기본값 적용이 정상 — 경고 없음.
+        "" | "BOTH" | "Both" | "both" => ApplyPageType::Both,
         "EVEN" | "Even" | "even" => ApplyPageType::Even,
         "ODD" | "Odd" | "odd" => ApplyPageType::Odd,
-        _ => ApplyPageType::Both,
+        _ => {
+            // W5-α M4: 미지 값 폴백은 유지하되 표면화한다 (증거 세탁 금지).
+            warnings.push(super::DecodeWarning::UnknownEnumValue {
+                attribute,
+                raw: s.to_string(),
+                fallback: "BOTH",
+            });
+            ApplyPageType::Both
+        }
     }
 }
 
 /// Parses an HWPX `pos` string into [`PageNumberPosition`].
-fn parse_page_number_position(s: &str) -> PageNumberPosition {
+fn parse_page_number_position(
+    s: &str,
+    warnings: &mut Vec<super::DecodeWarning>,
+) -> PageNumberPosition {
     match s {
         "NONE" => PageNumberPosition::None,
+        // 결측(빈 문자열) = 기본값 적용이 정상 — 경고 없음.
+        "" | "TOP_CENTER" => PageNumberPosition::TopCenter,
         "TOP_LEFT" => PageNumberPosition::TopLeft,
-        "TOP_CENTER" => PageNumberPosition::TopCenter,
         "TOP_RIGHT" => PageNumberPosition::TopRight,
         "BOTTOM_LEFT" => PageNumberPosition::BottomLeft,
         "BOTTOM_CENTER" => PageNumberPosition::BottomCenter,
@@ -1655,7 +1719,15 @@ fn parse_page_number_position(s: &str) -> PageNumberPosition {
         "OUTSIDE_BOTTOM" => PageNumberPosition::OutsideBottom,
         "INSIDE_TOP" => PageNumberPosition::InsideTop,
         "INSIDE_BOTTOM" => PageNumberPosition::InsideBottom,
-        _ => PageNumberPosition::TopCenter,
+        _ => {
+            // W5-α M4: 미지 값 폴백 표면화.
+            warnings.push(super::DecodeWarning::UnknownEnumValue {
+                attribute: "hp:pageNum@pos",
+                raw: s.to_string(),
+                fallback: "TOP_CENTER",
+            });
+            PageNumberPosition::TopCenter
+        }
     }
 }
 
@@ -2898,27 +2970,53 @@ mod tests {
 
     #[test]
     fn parse_apply_page_type_values() {
-        assert_eq!(parse_apply_page_type("BOTH"), ApplyPageType::Both);
-        assert_eq!(parse_apply_page_type("EVEN"), ApplyPageType::Even);
-        assert_eq!(parse_apply_page_type("ODD"), ApplyPageType::Odd);
-        assert_eq!(parse_apply_page_type("Both"), ApplyPageType::Both);
-        assert_eq!(parse_apply_page_type("unknown"), ApplyPageType::Both);
+        let mut w = Vec::new();
+        let attr = "hp:header@applyPageType";
+        assert_eq!(parse_apply_page_type("BOTH", attr, &mut w), ApplyPageType::Both);
+        assert_eq!(parse_apply_page_type("EVEN", attr, &mut w), ApplyPageType::Even);
+        assert_eq!(parse_apply_page_type("ODD", attr, &mut w), ApplyPageType::Odd);
+        assert_eq!(parse_apply_page_type("Both", attr, &mut w), ApplyPageType::Both);
+        assert_eq!(parse_apply_page_type("", attr, &mut w), ApplyPageType::Both);
+        assert!(w.is_empty(), "정상·결측 값은 경고 없음: {w:?}");
+        assert_eq!(parse_apply_page_type("unknown", attr, &mut w), ApplyPageType::Both);
+        assert_eq!(w.len(), 1, "미지 값 = 경고 1건");
     }
 
     #[test]
     fn parse_page_number_position_values() {
-        assert_eq!(parse_page_number_position("NONE"), PageNumberPosition::None);
-        assert_eq!(parse_page_number_position("TOP_LEFT"), PageNumberPosition::TopLeft);
-        assert_eq!(parse_page_number_position("TOP_CENTER"), PageNumberPosition::TopCenter);
-        assert_eq!(parse_page_number_position("TOP_RIGHT"), PageNumberPosition::TopRight);
-        assert_eq!(parse_page_number_position("BOTTOM_LEFT"), PageNumberPosition::BottomLeft);
-        assert_eq!(parse_page_number_position("BOTTOM_CENTER"), PageNumberPosition::BottomCenter);
-        assert_eq!(parse_page_number_position("BOTTOM_RIGHT"), PageNumberPosition::BottomRight);
-        assert_eq!(parse_page_number_position("OUTSIDE_TOP"), PageNumberPosition::OutsideTop);
-        assert_eq!(parse_page_number_position("OUTSIDE_BOTTOM"), PageNumberPosition::OutsideBottom);
-        assert_eq!(parse_page_number_position("INSIDE_TOP"), PageNumberPosition::InsideTop);
-        assert_eq!(parse_page_number_position("INSIDE_BOTTOM"), PageNumberPosition::InsideBottom);
-        assert_eq!(parse_page_number_position("unknown"), PageNumberPosition::TopCenter);
+        let mut w = Vec::new();
+        assert_eq!(parse_page_number_position("NONE", &mut w), PageNumberPosition::None);
+        assert_eq!(parse_page_number_position("TOP_LEFT", &mut w), PageNumberPosition::TopLeft);
+        assert_eq!(parse_page_number_position("TOP_CENTER", &mut w), PageNumberPosition::TopCenter);
+        assert_eq!(parse_page_number_position("TOP_RIGHT", &mut w), PageNumberPosition::TopRight);
+        assert_eq!(
+            parse_page_number_position("BOTTOM_LEFT", &mut w),
+            PageNumberPosition::BottomLeft
+        );
+        assert_eq!(
+            parse_page_number_position("BOTTOM_CENTER", &mut w),
+            PageNumberPosition::BottomCenter
+        );
+        assert_eq!(
+            parse_page_number_position("BOTTOM_RIGHT", &mut w),
+            PageNumberPosition::BottomRight
+        );
+        assert_eq!(
+            parse_page_number_position("OUTSIDE_TOP", &mut w),
+            PageNumberPosition::OutsideTop
+        );
+        assert_eq!(
+            parse_page_number_position("OUTSIDE_BOTTOM", &mut w),
+            PageNumberPosition::OutsideBottom
+        );
+        assert_eq!(parse_page_number_position("INSIDE_TOP", &mut w), PageNumberPosition::InsideTop);
+        assert_eq!(
+            parse_page_number_position("INSIDE_BOTTOM", &mut w),
+            PageNumberPosition::InsideBottom
+        );
+        assert!(w.is_empty(), "정상 값은 경고 없음: {w:?}");
+        assert_eq!(parse_page_number_position("unknown", &mut w), PageNumberPosition::TopCenter);
+        assert_eq!(w.len(), 1, "미지 값 = 경고 1건");
     }
 
     #[test]
@@ -3750,6 +3848,84 @@ mod tests {
         assert_eq!(lns.count_by, 5);
         assert_eq!(lns.distance.as_i32(), 1000);
         assert_eq!(lns.start_number, 3);
+    }
+
+    // ── 미지 enum 경고 표면화 (W5-α M4 — 증거 세탁 방지) ─────────
+
+    #[test]
+    fn unknown_apply_page_type_surfaces_warning_and_keeps_fallback() {
+        use crate::decoder::DecodeWarning;
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <header applyPageType="WEIRD_VALUE" id="1">
+                            <subList id="" textDirection="HORIZONTAL">
+                                <p paraPrIDRef="0"><run charPrIDRef="0"><t>H</t></run></p>
+                            </subList>
+                        </header>
+                    </ctrl>
+                    <t>Body</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        // 기존 동작(Both 폴백)은 유지하되, 렌더러가 원본이 unknown 이었음을
+        // 알 수 있게 경고를 표면화한다 (디코더의 증거 세탁 금지).
+        assert_eq!(result.headers[0].apply_page_type, ApplyPageType::Both);
+        assert_eq!(result.warnings.len(), 1, "{:?}", result.warnings);
+        let DecodeWarning::UnknownEnumValue { attribute, raw, fallback } = &result.warnings[0];
+        assert_eq!(*attribute, "hp:header@applyPageType");
+        assert_eq!(raw, "WEIRD_VALUE");
+        assert_eq!(*fallback, "BOTH");
+    }
+
+    #[test]
+    fn absent_enum_attributes_do_not_warn() {
+        // 속성 결측(빈 문자열) = 기본값 적용은 정상 — 경고 없음.
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <header id="1">
+                            <subList id="" textDirection="HORIZONTAL">
+                                <p paraPrIDRef="0"><run charPrIDRef="0"><t>H</t></run></p>
+                            </subList>
+                        </header>
+                    </ctrl>
+                    <t>Body</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        assert_eq!(result.headers[0].apply_page_type, ApplyPageType::Both);
+        assert!(result.warnings.is_empty(), "{:?}", result.warnings);
+    }
+
+    #[test]
+    fn unknown_page_num_enums_surface_warnings() {
+        use crate::decoder::DecodeWarning;
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl>
+                        <pageNum pos="MIDDLE_EARTH" formatType="KLINGON" sideChar=""/>
+                    </ctrl>
+                    <t>Body</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let unknowns: Vec<&'static str> = result
+            .warnings
+            .iter()
+            .map(|w| {
+                let DecodeWarning::UnknownEnumValue { attribute, .. } = w;
+                *attribute
+            })
+            .collect();
+        assert!(unknowns.contains(&"hp:pageNum@pos"), "{unknowns:?}");
+        assert!(unknowns.contains(&"hp:pageNum@formatType"), "{unknowns:?}");
     }
 
     // ── startNum pageStartsOn decoding (W5-α C2) ─────────────────
