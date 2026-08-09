@@ -151,3 +151,33 @@ fn probe_blank_hpc_full_render_degraded() {
         Err(e) => eprintln!("REJECTED: {e}"),
     }
 }
+
+#[test]
+fn rules_bold_renders_with_real_bold_face() {
+    // W4 게이트: bold run 이 강등·경고 없이 실물 Bold face 로 해석된다.
+    // 한컴 인쇄 PDF 실측 = HCRBatang + HCRBatang-Bold 임베드 (fixture 쌍) —
+    // 우리 출력도 같은 Bold face(HANBatangB, PS name "HCRBatang-Bold")를
+    // 임베드해야 한다. 기본(Fatal) 모드 렌더 성공 자체가 강등 부재의 증명.
+    let Some(output) = render_fixture("rules-bold.hwpx") else { return };
+    assert!(output.bytes.starts_with(b"%PDF-"));
+    assert!(output.warnings.is_empty(), "{:?}", output.warnings);
+    let hay = String::from_utf8_lossy(&output.bytes);
+    let pages = hay.matches("/Type/Page").count() - hay.matches("/Type/Pages").count();
+    assert_eq!(pages, 1, "재저장 실측 1쪽");
+    assert!(hay.contains("HCRBatang-Bold"), "Bold face 임베드 없음 — regular 강등 의심");
+}
+
+/// W4 bold 시각 게이트 산출물 — `--ignored` 수동 실행 (한컴 폰트 필요).
+#[test]
+#[ignore = "W4 bold visual gate artifact generation"]
+fn generate_w4_bold_artifacts() {
+    let out_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/hwp5_review/_verify/pdf-w4");
+    std::fs::create_dir_all(&out_dir).expect("mkdir");
+    let Some(output) = render_fixture("rules-bold.hwpx") else {
+        panic!("fixture/폰트 번들 필요: rules-bold");
+    };
+    let path = out_dir.join("rules-bold-w4.pdf");
+    std::fs::write(&path, &output.bytes).expect("write");
+    println!("wrote {path:?} ({} bytes, warnings={})", output.bytes.len(), output.warnings.len());
+}
