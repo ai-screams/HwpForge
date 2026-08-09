@@ -42,7 +42,7 @@ pub enum FaceStyle {
 
 impl FaceStyle {
     /// face 플래그 쌍 → 스타일 축.
-    fn from_flags(bold: bool, italic: bool) -> Self {
+    pub fn from_flags(bold: bool, italic: bool) -> Self {
         match (bold, italic) {
             (false, false) => Self::Regular,
             (true, false) => Self::Bold,

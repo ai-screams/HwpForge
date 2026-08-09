@@ -1612,6 +1612,36 @@ impl StyleLookup for HwpxStyleStore {
         Some(font.face_name.as_str())
     }
 
+    fn char_font_axis_names(&self, id: CharShapeIndex) -> Vec<&str> {
+        // fontRef 인덱스는 언어 그룹-로컬 — (lang, id) 쌍으로 정확 조회한다
+        // (char_font_name 의 평탄 인덱스는 HANGUL-선두 관례에 의존하는 기존
+        // 동작이라 유지). hangul 축을 먼저 넣어 [0] 이 char_font_name 과
+        // 일치하게 한다 (양쪽 다 해석될 때).
+        let Some(cs) = self.char_shapes.get(id.get()) else {
+            return Vec::new();
+        };
+        let axes: [(&str, usize); 7] = [
+            ("HANGUL", cs.font_ref.hangul.get()),
+            ("LATIN", cs.font_ref.latin.get()),
+            ("HANJA", cs.font_ref.hanja.get()),
+            ("JAPANESE", cs.font_ref.japanese.get()),
+            ("OTHER", cs.font_ref.other.get()),
+            ("SYMBOL", cs.font_ref.symbol.get()),
+            ("USER", cs.font_ref.user.get()),
+        ];
+        let mut out: Vec<&str> = Vec::new();
+        for (lang, idx) in axes {
+            let Some(font) = self.fonts.iter().find(|f| f.lang == lang && f.id as usize == idx)
+            else {
+                continue; // 그룹 미존재/미등록 축은 판정에서 제외 (거짓 불일치 방지)
+            };
+            if !out.contains(&font.face_name.as_str()) {
+                out.push(font.face_name.as_str());
+            }
+        }
+        out
+    }
+
     fn char_font_size(&self, id: CharShapeIndex) -> Option<HwpUnit> {
         self.char_shapes.get(id.get()).map(|cs| cs.height)
     }
@@ -1906,6 +1936,34 @@ mod tests {
         assert_eq!(store.font_count(), 1);
         assert_eq!(store.char_shape_count(), 2);
         assert_eq!(store.para_shape_count(), 1);
+    }
+
+    #[test]
+    fn axis_names_distinct_across_language_groups() {
+        // W4c: fontRef 는 그룹-로컬 인덱스 — (lang, id) 로 조회해 distinct
+        // 이름을 hangul-우선으로 돌려준다 (blank-HPC 실측: 한글=휴먼명조 +
+        // 영문=별도 폰트 구성이 국룰).
+        let mut store = HwpxStyleStore::new();
+        store
+            .push_font(HwpxFont { id: 0, face_name: "휴먼명조".into(), lang: "HANGUL".into() });
+        store.push_font(HwpxFont { id: 0, face_name: "HCI Poppy".into(), lang: "LATIN".into() });
+        store.push_font(HwpxFont { id: 0, face_name: "휴먼명조".into(), lang: "HANJA".into() });
+        store.push_char_shape(HwpxCharShape::default()); // 모든 축 = 그룹-로컬 0
+        let names = store.char_font_axis_names(CharShapeIndex::new(0));
+        assert_eq!(names, vec!["휴먼명조", "HCI Poppy"]);
+        // [0] 은 char_font_name 과 일치 (hangul 축).
+        assert_eq!(store.char_font_name(CharShapeIndex::new(0)), Some("휴먼명조"));
+        // 미등록 charPr = 빈 목록 (거짓 불일치 없음).
+        assert!(store.char_font_axis_names(CharShapeIndex::new(9)).is_empty());
+    }
+
+    #[test]
+    fn axis_names_uniform_default_fonts_yield_single_name() {
+        let store = HwpxStyleStore::with_default_fonts("함초롬바탕");
+        let mut with_shape = store;
+        with_shape.push_char_shape(HwpxCharShape::default());
+        let names = with_shape.char_font_axis_names(CharShapeIndex::new(0));
+        assert_eq!(names, vec!["함초롬바탕"]);
     }
 
     // ── Iterator methods ───────────────────────────────────────────

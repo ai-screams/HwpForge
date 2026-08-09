@@ -254,16 +254,6 @@ fn replay_section(
             }
         }
 
-        // regular-only 게이트 (Codex H2): bold/italic run 은 경고.
-        for run in &para.runs {
-            let bold = input.styles.char_bold(run.char_shape_id).unwrap_or(false);
-            let italic = input.styles.char_italic(run.char_shape_id).unwrap_or(false);
-            if bold || italic {
-                warnings.push(PdfWarning::NonRegularRun { location: location.clone() });
-                break;
-            }
-        }
-
         let text = para.text_content();
         let utf16: Vec<u16> = text.encode_utf16().collect();
         validate_textpos(cache, utf16.len(), &location)?;

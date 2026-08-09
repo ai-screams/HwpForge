@@ -71,6 +71,25 @@ pub enum PartialCachePolicy {
     WarnAndSkip,
 }
 
+/// 폰트 강등 정책 — 스타일 face 결손·언어축 불일치의 공통 처리 (W4c).
+///
+/// 실측 (blank-HPC): 한컴 문서의 charPr 언어축 불일치는 예외가 아니라
+/// 상례(렌더 run 30%)이고, bold 요청 face 미보유도 흔하다. 기본값은
+/// 조용한 오글리프 출력을 금지하는 [`Fatal`](Self::Fatal) — 실용 렌더가
+/// 필요하면 [`Degraded`](Self::Degraded) 를 명시 옵트인한다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum FontFallbackMode {
+    /// 강등 없이 에러 (기본 — [`PdfError::FontStyleUnavailable`] /
+    /// [`PdfError::FontAxisMismatch`]).
+    #[default]
+    Fatal,
+    /// regular face·한글 축으로 강등하고 경고를 표면화한다 (옵트인 —
+    /// [`PdfWarning::FontStyleFallback`] / [`PdfWarning::FontAxisFallback`]).
+    /// 신호 모순([`PdfError::FontFaceAmbiguous`])은 이 모드에서도 에러다.
+    Degraded,
+}
+
 /// 렌더 동작 옵션.
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
@@ -82,6 +101,8 @@ pub struct PdfOptions {
     /// 폰트 자동 발견 정책. 기본 [`font::FontDiscovery::ExplicitOnly`]
     /// (명시 dirs 만 — 머신 무관 결정적).
     pub discovery: font::FontDiscovery,
+    /// 폰트 강등 정책. 기본 [`FontFallbackMode::Fatal`].
+    pub font_fallback: FontFallbackMode,
 }
 
 /// 렌더 산출물.
@@ -103,9 +124,24 @@ pub enum PdfWarning {
         /// 문서 내 위치 (사람이 읽는 경로 — 섹션/문단 인덱스).
         location: String,
     },
-    /// bold/italic run — W2 는 regular 만 정합 보장 (폭 정합은 W4).
-    NonRegularRun {
-        /// 문서 내 위치.
+    /// Degraded 모드: 요청 스타일 face 가 없어 regular 로 강등함
+    /// ((face, style) 당 1회 — 첫 발생 위치 기록).
+    FontStyleFallback {
+        /// face/family 이름.
+        face: String,
+        /// 요청했던 스타일 축.
+        requested: font::FaceStyle,
+        /// 첫 발생 위치.
+        location: String,
+    },
+    /// Degraded 모드: charPr 언어축(7축)이 서로 다른 폰트를 참조하는데
+    /// 한글 축 폰트 단일로 렌더함 (charPr 당 1회 — 첫 발생 위치 기록).
+    ///
+    /// 축별 폰트 선택 + run 분할은 후속 슬라이스 (issue #129).
+    FontAxisFallback {
+        /// 축별 distinct 폰트 이름 (첫 원소 = 렌더에 쓴 한글 축).
+        fonts: Vec<String>,
+        /// 첫 발생 위치.
         location: String,
     },
     /// 정렬 배분이 근사임 (배분 정렬 2종·공백 0 JUSTIFY — W0 미실측,
@@ -177,6 +213,31 @@ pub enum PdfError {
     FontUnresolved {
         /// 요청 face 이름.
         face: String,
+    },
+    /// 요청 스타일 face 미보유 — 기본([`FontFallbackMode::Fatal`]) 모드
+    /// (조용한 regular 강등 출력 금지 — [`FontFallbackMode::Degraded`] 로
+    /// 옵트인하면 regular + 경고로 렌더된다).
+    #[error(
+        "font {face:?} has no {style:?} face at {location} (opt in to \
+         FontFallbackMode::Degraded to render regular with a warning)"
+    )]
+    FontStyleUnavailable {
+        /// face/family 이름.
+        face: String,
+        /// 요청 스타일 축.
+        style: font::FaceStyle,
+        /// 문서 내 위치.
+        location: String,
+    },
+    /// charPr 언어축(7축)이 서로 다른 폰트를 참조 — 기본
+    /// ([`FontFallbackMode::Fatal`]) 모드 (단일 폰트 렌더는 오글리프 —
+    /// 축별 선택/분할 전까지 [`FontFallbackMode::Degraded`] 로 옵트인).
+    #[error("char shape references different fonts per language axis at {location}: {fonts:?}")]
+    FontAxisMismatch {
+        /// 문서 내 위치.
+        location: String,
+        /// 축별 distinct 폰트 이름 (첫 원소 = 한글 축).
+        fonts: Vec<String>,
     },
     /// 폰트 face 신호 충돌 — (family, style) 후보가 모순/동률이라 결정 불가.
     ///

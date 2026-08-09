@@ -65,6 +65,7 @@ impl StyleLookup for HwpxStyleLookup<'_> {
         fn char_superscript(&self, id: CharShapeIndex) -> Option<bool>;
         fn char_subscript(&self, id: CharShapeIndex) -> Option<bool>;
         fn char_font_name(&self, id: CharShapeIndex) -> Option<&str>;
+        fn char_font_axis_names(&self, id: CharShapeIndex) -> Vec<&str>;
         fn char_font_size(&self, id: CharShapeIndex) -> Option<HwpUnit>;
         fn char_text_color(&self, id: CharShapeIndex) -> Option<Color>;
         fn para_alignment(&self, id: ParaShapeIndex) -> Option<Alignment>;
