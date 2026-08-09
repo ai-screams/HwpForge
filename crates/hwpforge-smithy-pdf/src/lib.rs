@@ -175,6 +175,19 @@ pub enum PdfError {
         /// 요청 face 이름.
         face: String,
     },
+    /// 폰트 face 신호 충돌 — (family, style) 후보가 모순/동률이라 결정 불가.
+    ///
+    /// 조용한 선택 금지 (no-fake-support): 어느 실물 face 를 의미하는지
+    /// 확정할 수 없으면 에러로 표면화한다 (W4a 분류기 계약).
+    #[error("font face {face:?} style {style:?} is ambiguous: {detail}")]
+    FontFaceAmbiguous {
+        /// 요청 face/family 이름.
+        face: String,
+        /// 요청 스타일 축.
+        style: crate::font::FaceStyle,
+        /// 충돌 상세 (모순 face 경로 / 동률 후보 목록).
+        detail: String,
+    },
     /// 캐시 형식 정합 위반 (textpos 비단조/범위 초과 등).
     ///
     /// 이 검사는 형식 정합이지 스테일 캐시 방어가 아니다 — 동일 길이 치환은
