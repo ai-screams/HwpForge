@@ -50,7 +50,8 @@ impl FontTable {
 pub fn render_document(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<PdfOutput> {
     let layout = replay_layout(input, options)?;
     let mut warnings = layout.warnings;
-    let mut table = FontTable::new(FontResolver::new(&options.font_dirs)?);
+    let mut table =
+        FontTable::new(FontResolver::with_discovery(&options.font_dirs, options.discovery)?);
 
     struct PreparedRun {
         key: FontKey,

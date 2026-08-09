@@ -77,8 +77,11 @@ pub enum PartialCachePolicy {
 pub struct PdfOptions {
     /// 부분 캐시 처리 정책. 기본 [`PartialCachePolicy::WarnAndSkip`].
     pub partial_cache: PartialCachePolicy,
-    /// 폰트 파일 탐색 디렉터리 (regular exact-face 만 — [`font::FontResolver`]).
+    /// 폰트 파일 탐색 디렉터리 (face 축 분류 — [`font::FontResolver`]).
     pub font_dirs: Vec<std::path::PathBuf>,
+    /// 폰트 자동 발견 정책. 기본 [`font::FontDiscovery::ExplicitOnly`]
+    /// (명시 dirs 만 — 머신 무관 결정적).
+    pub discovery: font::FontDiscovery,
 }
 
 /// 렌더 산출물.
