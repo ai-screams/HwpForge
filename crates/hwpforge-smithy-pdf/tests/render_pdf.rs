@@ -182,6 +182,43 @@ fn generate_w3_table_artifacts() {
     }
 }
 
+/// W5 머리말/꼬리말·쪽번호 시각 게이트 산출물 — `--ignored` 수동 실행.
+#[test]
+#[ignore = "W5 header/footer/pagenum visual gate artifact generation"]
+fn generate_w5_artifacts() {
+    let out_dir =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/hwp5_review/_verify/pdf-w5");
+    std::fs::create_dir_all(&out_dir).expect("mkdir");
+    for name in
+        ["rules-headerfooter", "rules-pagenum", "rules-header-multi", "rules-header-overflow"]
+    {
+        let Some(output) = render_fixture(&format!("{name}.hwpx")) else {
+            panic!("fixture/폰트 번들 필요: {name}");
+        };
+        let path = out_dir.join(format!("{name}-w5.pdf"));
+        std::fs::write(&path, &output.bytes).expect("write");
+        println!(
+            "wrote {path:?} ({} bytes, warnings={})",
+            output.bytes.len(),
+            output.warnings.len()
+        );
+    }
+    // 실물 odd-even fixture (user_samples 경로).
+    let bytes = std::fs::read(
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/fixtures/user_samples/pages/sample-header-footer-odd-even.hwpx"),
+    )
+    .expect("odd-even fixture");
+    let options = options().expect("Hancom font bundle");
+    let decoded = hwpforge_smithy_hwpx::HwpxDecoder::decode(&bytes).expect("decode");
+    let validated = decoded.document.validate().expect("validate");
+    let input = PdfInput { document: &validated, styles: &decoded.style_store };
+    let output = render_document(&input, &options).expect("render");
+    let path = out_dir.join("sample-header-footer-odd-even-w5.pdf");
+    std::fs::write(&path, &output.bytes).expect("write");
+    println!("wrote {path:?} ({} bytes)", output.bytes.len());
+}
+
 /// blank-HPC 실전 렌더 프로브 (수동 — W4c 폰트 파이프라인 통과 확인).
 ///
 /// 실측 (2026-08-09): 렌더 run 의 hangul 축 폰트 8종 중 7종(휴먼명조·
