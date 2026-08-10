@@ -1704,6 +1704,13 @@ impl StyleLookup for HwpxStyleStore {
         self.styles.get(id.get()).map(|s| s.name.as_str())
     }
 
+    fn char_style_shape(&self, name: &str) -> Option<CharShapeIndex> {
+        self.styles
+            .iter()
+            .find(|s| s.style_type == "CHAR" && (s.name == name || s.eng_name == name))
+            .map(|s| CharShapeIndex::new(s.char_pr_id_ref as usize))
+    }
+
     fn style_heading_level(&self, id: StyleIndex) -> Option<u8> {
         let style = self.styles.get(id.get())?;
         if let Some(para_shape) = self.para_shapes.get(style.para_pr_id_ref as usize) {
