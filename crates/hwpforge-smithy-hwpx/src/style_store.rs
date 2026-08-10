@@ -1171,6 +1171,20 @@ impl HwpxStyleStore {
         self.char_shapes.len()
     }
 
+    /// Returns a mutable reference to the char shape at `index`.
+    ///
+    /// Allows adjusting an existing definition in place — e.g. restyling the
+    /// document default char shape (index 0), which every preset pre-seeds
+    /// and [`Self::push_char_shape`] therefore cannot reach.
+    pub fn char_shape_mut(&mut self, index: CharShapeIndex) -> HwpxResult<&mut HwpxCharShape> {
+        let max = self.char_shapes.len() as u32;
+        self.char_shapes.get_mut(index.get()).ok_or(HwpxError::IndexOutOfBounds {
+            kind: "char_shape",
+            index: index.get() as u32,
+            max,
+        })
+    }
+
     // ── Paragraph Shapes ─────────────────────────────────────────
 
     /// Adds a para shape and returns its index.
@@ -3305,6 +3319,27 @@ mod tests {
         assert_eq!(store.char_italic(CharShapeIndex::new(0)), Some(false));
         assert_eq!(store.char_strikeout(CharShapeIndex::new(0)), Some(false));
         assert_eq!(store.char_underline(CharShapeIndex::new(0)), Some(UnderlineType::None));
+    }
+
+    #[test]
+    fn char_shape_mut_edits_in_place() {
+        let mut store = HwpxStyleStore::new();
+        store.push_char_shape(HwpxCharShape::default());
+        let shape = store.char_shape_mut(CharShapeIndex::new(0)).expect("index 0");
+        shape.bold = true;
+        shape.height = HwpUnit::from_pt(16.0).expect("16pt");
+        let read_back = store.char_shape(CharShapeIndex::new(0)).expect("index 0");
+        assert!(read_back.bold);
+        assert_eq!(read_back.height, HwpUnit::from_pt(16.0).expect("16pt"));
+    }
+
+    #[test]
+    fn char_shape_mut_out_of_bounds() {
+        let mut store = HwpxStyleStore::new();
+        assert!(matches!(
+            store.char_shape_mut(CharShapeIndex::new(0)),
+            Err(HwpxError::IndexOutOfBounds { kind: "char_shape", index: 0, max: 0 })
+        ));
     }
 
     // ── parse_heading_level_from_name tests ─────────────────────
