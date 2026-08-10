@@ -14,7 +14,7 @@
 
 use hwpforge_core::run::RunContent;
 use hwpforge_core::section::Section;
-use hwpforge_foundation::{Alignment, CharShapeIndex, Color};
+use hwpforge_foundation::{Alignment, ApplyPageType, CharShapeIndex, Color};
 
 use crate::text::align::LineBox;
 use crate::{PartialCachePolicy, PdfError, PdfInput, PdfOptions, PdfResult, PdfWarning};
@@ -79,10 +79,29 @@ pub struct LaidBorder {
     pub color: Color,
 }
 
+/// 합성 쪽번호 (캐시 재생이 아니라 §8c 실측 규칙으로 합성).
+///
+/// 가로 = 페이지 폭 중앙(장식 포함 자연폭 기준 — 여백 무관, rules-pagenum
+/// Δ0.08pt) · 세로 = baseline 을 `anchor_bottom − hhea descent × size` 에
+/// 앵커 (렌더 층이 폰트 메트릭으로 확정 — 한컴 콘텐트 스트림 실측 783.00pt,
+/// 모델 오차 ≤0.16pt).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LaidPageNumber {
+    /// 위치 보고용 경로.
+    pub location: String,
+    /// 표시 문자열 (장식 포함 — 예: `- 1 -`).
+    pub text: String,
+    /// 문자 스타일 (전용 "쪽 번호" 스타일의 charPr — 부재 시 문서 기본 0).
+    pub char_shape: CharShapeIndex,
+    /// em 하단 앵커 (HWPUNIT — `H − margin.bottom`, §8c).
+    pub anchor_bottom: i32,
+}
+
 /// 한 쪽의 배치 결과.
 ///
 /// z-order 계약: `rects`(셀 배경) → `borders`(괘선) → `lines`(글리프) 순으로
-/// 그린다 (각 Vec 내부는 문서 순서).
+/// 그린다 (각 Vec 내부는 문서 순서). `page_number` 는 글리프와 같은 층이다
+/// (겹칠 본문이 없는 밴드 밖 영역).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageLayout {
     /// 쪽 폭 (HWPUNIT).
@@ -95,6 +114,8 @@ pub struct PageLayout {
     pub borders: Vec<LaidBorder>,
     /// 줄들 (문서 순서).
     pub lines: Vec<LaidLine>,
+    /// 합성 쪽번호 (지원 position/포맷일 때만).
+    pub page_number: Option<LaidPageNumber>,
 }
 
 /// 캐시 재생 결과.
@@ -117,10 +138,293 @@ pub fn replay_layout(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<Re
     let mut pages = Vec::new();
     let mut warnings = Vec::new();
 
+    // 표시 번호는 구역을 넘어 이어진다 (beginNum.page 0 = 이전 구역 계속).
+    let mut next_display: u32 = 1;
     for (section_idx, section) in input.document.sections().iter().enumerate() {
+        // pageStartsOn != BOTH 는 미실측 페이지네이션 속성 (한컴이 빈 쪽을
+        // 삽입할 수 있음) — 머리말/꼬리말·쪽번호 유무와 무관하게 BOTH 거동으로
+        // 재생하고 무조건 표면화한다 (§9 b0 — 독립 리뷰 M2 상환).
+        if section
+            .begin_num
+            .as_ref()
+            .is_some_and(|b| b.page_starts_on != hwpforge_core::section::PageStartsOn::Both)
+        {
+            warnings.push(PdfWarning::PageStartsOnFallback { section: section_idx });
+        }
+        let first_page = pages.len();
         replay_section(input, options, section, section_idx, &mut pages, &mut warnings)?;
+        overlay_headers_footers(
+            input,
+            options,
+            section,
+            section_idx,
+            first_page,
+            &mut pages,
+            &mut warnings,
+        )?;
+        let display_start = match section.begin_num.as_ref().map(|b| b.page) {
+            Some(n) if n > 0 => n, // n = 재시작 (스펙 §10.6.2)
+            _ => next_display,
+        };
+        emit_page_numbers(
+            input,
+            section,
+            section_idx,
+            first_page,
+            display_start,
+            &mut pages,
+            &mut warnings,
+        );
+        next_display = display_start + (pages.len() - first_page) as u32;
     }
     Ok(ReplayLayout { pages, warnings })
+}
+
+/// 쪽번호 합성 (§8c 실측 — BOTTOM_CENTER + DIGIT 만, 그 외 = 경고+생략).
+///
+/// 표시 문자열은 sideChar 장식을 어간 공백으로 감싼다 (`- 1 -` — 한컴 PDF
+/// 실측 어간 5.08pt = 10pt 공백 폭). 스타일은 전용 "쪽 번호"(Page Number)
+/// CHAR 스타일의 charPr — 부재 시 문서 기본 charPr(0) + 경고.
+fn emit_page_numbers(
+    input: &PdfInput<'_>,
+    section: &Section,
+    section_idx: usize,
+    first_page: usize,
+    display_start: u32,
+    pages: &mut [PageLayout],
+    warnings: &mut Vec<PdfWarning>,
+) {
+    use hwpforge_foundation::{NumberFormatType, PageNumberPosition};
+    let Some(pn) = section.page_number.as_ref() else { return };
+    if pn.position == PageNumberPosition::None {
+        return; // 표시 안 함 — 경고 아님.
+    }
+    if pn.position != PageNumberPosition::BottomCenter {
+        warnings.push(PdfWarning::PageNumberSkipped { section: section_idx, what: "position" });
+        return;
+    }
+    if pn.number_format != NumberFormatType::Digit {
+        warnings.push(PdfWarning::PageNumberSkipped { section: section_idx, what: "format" });
+        return;
+    }
+    let char_shape = input
+        .styles
+        .char_style_shape("쪽 번호")
+        .or_else(|| input.styles.char_style_shape("Page Number"))
+        .unwrap_or_else(|| {
+            warnings.push(PdfWarning::PageNumberStyleFallback { section: section_idx });
+            CharShapeIndex::new(0)
+        });
+    let ps = &section.page_settings;
+    let anchor_bottom = ps.height.as_i32() - ps.margin_bottom.as_i32();
+    let hide_first = section.visibility.as_ref().is_some_and(|v| v.hide_first_page_num);
+    for (offset, page) in pages[first_page..].iter_mut().enumerate() {
+        if hide_first && offset == 0 {
+            continue; // 번호 자체는 진행하고 표시만 생략.
+        }
+        let n = display_start + offset as u32;
+        let text = if pn.decoration.is_empty() {
+            n.to_string()
+        } else {
+            format!("{d} {n} {d}", d = pn.decoration)
+        };
+        page.page_number = Some(LaidPageNumber {
+            location: format!("s{section_idx}/pagenum/{n}"),
+            text,
+            char_shape,
+            anchor_bottom,
+        });
+    }
+}
+
+/// 머리말/꼬리말 오버레이 (규칙 §5 R6 + W5 §8 실측).
+///
+/// 본문 쪽이 확정된 **뒤** 섹션의 각 쪽에 밴드-상대 캐시를 재생한다. 밴드는
+/// 앵커일 뿐이다: 클립도, 본문 리플로도 없다 (rules-header-overflow 실측 —
+/// `v+vertsize` 가 밴드를 넘으면 [`PdfWarning::BandOverflow`] 만 표면화).
+/// ODD/EVEN 선택은 물리 쪽 서수(1-기반) 홀짝이다 (odd-even fixture 실측).
+#[allow(clippy::too_many_arguments)]
+fn overlay_headers_footers(
+    input: &PdfInput<'_>,
+    options: &PdfOptions,
+    section: &Section,
+    section_idx: usize,
+    first_page: usize,
+    pages: &mut [PageLayout],
+    warnings: &mut Vec<PdfWarning>,
+) -> PdfResult<()> {
+    if section.headers.is_empty() && section.footers.is_empty() {
+        return Ok(());
+    }
+    let ps = &section.page_settings;
+    let page_height = ps.height.as_i32();
+    let body_left = ps.margin_left.as_i32();
+
+    // 다중 섹션 + parity 는 미실측 (물리/구역 서수 어느 쪽 홀짝인지) — 거부.
+    if section_idx > 0 {
+        for (kind, list) in [("header", &section.headers), ("footer", &section.footers)] {
+            if list.iter().any(|h| h.apply_page_type != ApplyPageType::Both) {
+                return Err(PdfError::AmbiguousHeaderFooter {
+                    kind,
+                    detail: format!(
+                        "s{section_idx}: ODD/EVEN parity in a non-first section is unmeasured \
+                         (physical vs section ordinal)"
+                    ),
+                });
+            }
+        }
+    }
+
+    let vis = section.visibility.as_ref();
+    let bands = [
+        (
+            "header",
+            "h",
+            &section.headers,
+            ps.margin_top.as_i32(),
+            ps.header_margin.as_i32(),
+            vis.is_some_and(|v| v.hide_first_header),
+        ),
+        (
+            "footer",
+            "f",
+            &section.footers,
+            page_height - ps.margin_bottom.as_i32() - ps.footer_margin.as_i32(),
+            ps.footer_margin.as_i32(),
+            vis.is_some_and(|v| v.hide_first_footer),
+        ),
+    ];
+    for (kind, tag, list, band_top, band_height, hide_first) in bands {
+        // 같은 항목이 매 쪽 반복되므로 초과/정렬 경고는 항목당 1회.
+        let mut warned_overflow = vec![false; list.len()];
+        let mut warned_valign = vec![false; list.len()];
+        for (offset, page) in pages[first_page..].iter_mut().enumerate() {
+            let physical = first_page + offset + 1;
+            let odd = physical % 2 == 1;
+            let matched: Vec<usize> = list
+                .iter()
+                .enumerate()
+                .filter(|(_, h)| match h.apply_page_type {
+                    ApplyPageType::Both => true,
+                    ApplyPageType::Odd => odd,
+                    ApplyPageType::Even => !odd,
+                    // non_exhaustive 미래 variant — 디코더가 미지값을 BOTH 로
+                    // 경고 폴백하므로 여기 도달 불가. 도달하면 미매치 처리.
+                    _ => false,
+                })
+                .map(|(i, _)| i)
+                .collect();
+            if matched.len() > 1 {
+                let kinds: Vec<ApplyPageType> =
+                    matched.iter().map(|&i| list[i].apply_page_type).collect();
+                return Err(PdfError::AmbiguousHeaderFooter {
+                    kind,
+                    detail: format!(
+                        "s{section_idx} page {physical}: {} candidates match ({kinds:?}) — \
+                         Hancom priority unmeasured",
+                        matched.len()
+                    ),
+                });
+            }
+            let Some(&hf_idx) = matched.first() else { continue };
+            if hide_first && offset == 0 {
+                continue;
+            }
+            replay_band_item(
+                input,
+                options,
+                &list[hf_idx],
+                BandGeom { kind, tag, hf_idx, section_idx, band_top, band_height, body_left },
+                page,
+                warnings,
+                &mut warned_overflow[hf_idx],
+                &mut warned_valign[hf_idx],
+            )?;
+        }
+    }
+    Ok(())
+}
+
+/// 밴드 재생 기하 (인자 다발 — [`replay_band_item`] 전용).
+struct BandGeom {
+    kind: &'static str,
+    tag: &'static str,
+    hf_idx: usize,
+    section_idx: usize,
+    band_top: i32,
+    band_height: i32,
+    body_left: i32,
+}
+
+/// 머리말/꼬리말 한 항목을 한 쪽에 재생한다 (본문과 동일한 lineseg 재생,
+/// 원점만 밴드 top — rules-header-multi 실측: 다문단 = v 누적, 특수 로직 없음).
+#[allow(clippy::too_many_arguments)]
+fn replay_band_item(
+    input: &PdfInput<'_>,
+    options: &PdfOptions,
+    hf: &hwpforge_core::section::HeaderFooter,
+    geom: BandGeom,
+    page: &mut PageLayout,
+    warnings: &mut Vec<PdfWarning>,
+    warned_overflow: &mut bool,
+    warned_valign: &mut bool,
+) -> PdfResult<()> {
+    let BandGeom { kind, tag, hf_idx, section_idx, band_top, band_height, body_left } = geom;
+    let item_location = format!("s{section_idx}/{tag}{hf_idx}");
+    if hf.vert_align != hwpforge_foundation::VerticalAlign::Top && !*warned_valign {
+        *warned_valign = true;
+        warnings.push(PdfWarning::VertAlignFallback { location: item_location.clone() });
+    }
+    for (para_idx, para) in hf.paragraphs.iter().enumerate() {
+        let location = format!("{item_location}/p{para_idx}");
+        let Some(cache) = para.layout_cache.as_ref().filter(|c| !c.is_empty()) else {
+            if options.partial_cache == PartialCachePolicy::Reject {
+                return Err(PdfError::MissingLayoutCache { count: 1, first: location });
+            }
+            warnings.push(PdfWarning::ParagraphSkipped { location });
+            continue;
+        };
+        // fail-closed 가드 (본문 경로와 동일 — 독립 리뷰 M1 상환): 첫 텍스트
+        // run 이전의 비텍스트 run(로고 이미지 등)은 textpos 좌표를 신뢰할 수
+        // 없게 만든다 — 무음 오절단 대신 거부.
+        let first_text = para.runs.iter().position(|r| r.content.plain_text().is_some());
+        if let Some(ft) = first_text {
+            if para.runs[..ft].iter().any(|r| r.content.plain_text().is_none()) {
+                return Err(PdfError::InvalidCache {
+                    detail: format!(
+                        "{location}: leading non-text run before first text run — textpos \
+                         normalization does not cover this control kind (W2 scope)"
+                    ),
+                });
+            }
+        }
+
+        let text = para.text_content();
+        let utf16: Vec<u16> = text.encode_utf16().collect();
+        validate_textpos(cache, utf16.len(), &location)?;
+        let run_spans = run_utf16_spans(para, warnings, &location);
+        let alignment = input.styles.para_alignment(para.para_shape_id).unwrap_or(Alignment::Left);
+        let line_count = cache.lines.len();
+        for (line_idx, seg) in cache.lines.iter().enumerate() {
+            if seg.vertpos + seg.vertsize > band_height && !*warned_overflow {
+                *warned_overflow = true;
+                warnings.push(PdfWarning::BandOverflow { kind, location: location.clone() });
+            }
+            let start = seg.textpos as usize;
+            let end =
+                cache.lines.get(line_idx + 1).map_or(utf16.len(), |next| next.textpos as usize);
+            let runs = slice_line_runs(&utf16, &run_spans, start, end);
+            page.lines.push(LaidLine {
+                location: format!("{location}/l{line_idx}"),
+                runs,
+                baseline_y: band_top + seg.vertpos + seg.baseline,
+                line_box: LineBox { horzpos: body_left + seg.horzpos, horzsize: seg.horzsize },
+                is_last_line: line_idx + 1 == line_count,
+                alignment,
+            });
+        }
+    }
+    Ok(())
 }
 
 fn replay_section(
@@ -148,6 +452,7 @@ fn replay_section(
             rects: Vec::new(),
             borders: Vec::new(),
             lines: Vec::new(),
+            page_number: None,
         })
     };
     new_page(pages);
@@ -486,6 +791,417 @@ mod tests {
         let lines = &layout.pages[0].lines;
         assert_eq!(lines[0].runs[0].text, "가나다 ");
         assert_eq!(lines[1].runs[0].text, "라마바");
+    }
+
+    // ── W5-a 머리말/꼬리말 오버레이 ──────────────────────────────
+
+    use hwpforge_core::section::{BeginNum, HeaderFooter, PageStartsOn, Visibility};
+    use hwpforge_foundation::ApplyPageType;
+
+    fn hf_item(apply: ApplyPageType, texts: &[&str]) -> HeaderFooter {
+        let paras = texts.iter().map(|t| para_with_cache(t, vec![seg(0, 0)])).collect();
+        HeaderFooter::new(paras, apply)
+    }
+
+    fn doc_with_bands(
+        body: Vec<Paragraph>,
+        headers: Vec<HeaderFooter>,
+        footers: Vec<HeaderFooter>,
+    ) -> Document<hwpforge_core::document::Validated> {
+        let mut section = Section::with_paragraphs(body, PageSettings::a4());
+        section.headers = headers;
+        section.footers = footers;
+        let mut doc = Document::new();
+        doc.add_section(section);
+        doc.validate().expect("validate")
+    }
+
+    /// v==0 리셋으로 n쪽 본문을 만든다.
+    fn body_pages(n: usize) -> Vec<Paragraph> {
+        (0..n).map(|i| para_with_cache(&format!("본문{i}"), vec![seg(0, 0)])).collect()
+    }
+
+    fn band_lines<'a>(page: &'a PageLayout, tag: &str) -> Vec<&'a LaidLine> {
+        page.lines.iter().filter(|l| l.location.contains(tag)).collect()
+    }
+
+    #[test]
+    fn header_baseline_is_band_relative_not_body() {
+        // R6: 머리말 원점 = margin.top (body_top 아님 — rules-headerfooter 실측).
+        let doc =
+            doc_with_bands(body_pages(1), vec![hf_item(ApplyPageType::Both, &["머리말"])], vec![]);
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        let ps = PageSettings::a4();
+        let header = band_lines(&layout.pages[0], "/h0/");
+        assert_eq!(header.len(), 1);
+        assert_eq!(header[0].baseline_y, ps.margin_top.as_i32() + 850);
+        assert_ne!(header[0].baseline_y, a4_body_top() + 850, "본문 원점과 달라야 함");
+    }
+
+    #[test]
+    fn footer_baseline_anchors_at_body_bottom() {
+        // R6: 꼬리말 밴드 top = H − margin.bottom − margin.footer.
+        let doc =
+            doc_with_bands(body_pages(1), vec![], vec![hf_item(ApplyPageType::Both, &["꼬리말"])]);
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        let ps = PageSettings::a4();
+        let band_top = ps.height.as_i32() - ps.margin_bottom.as_i32() - ps.footer_margin.as_i32();
+        let footer = band_lines(&layout.pages[0], "/f0/");
+        assert_eq!(footer.len(), 1);
+        assert_eq!(footer[0].baseline_y, band_top + 850);
+    }
+
+    #[test]
+    fn both_header_repeats_on_every_page() {
+        let doc =
+            doc_with_bands(body_pages(3), vec![hf_item(ApplyPageType::Both, &["매쪽"])], vec![]);
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        assert_eq!(layout.pages.len(), 3);
+        for page in &layout.pages {
+            assert_eq!(band_lines(page, "/h0/").len(), 1);
+        }
+    }
+
+    #[test]
+    fn odd_even_headers_select_by_physical_parity() {
+        // odd-even fixture 실측: 1쪽=ODD·2쪽=EVEN·3쪽=ODD (1-기반 물리 서수).
+        let doc = doc_with_bands(
+            body_pages(3),
+            vec![hf_item(ApplyPageType::Odd, &["홀수"]), hf_item(ApplyPageType::Even, &["짝수"])],
+            vec![],
+        );
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        let texts: Vec<String> = layout
+            .pages
+            .iter()
+            .map(|p| {
+                let lines: Vec<&LaidLine> =
+                    p.lines.iter().filter(|l| l.location.contains("/h")).collect();
+                assert_eq!(lines.len(), 1, "쪽마다 정확히 한 머리말");
+                lines[0].runs[0].text.clone()
+            })
+            .collect();
+        assert_eq!(texts, vec!["홀수", "짝수", "홀수"]);
+    }
+
+    #[test]
+    fn both_plus_odd_header_is_ambiguous() {
+        // 게이트2 H2: 중복 매치 = 한컴 우선순위 미실측 — 첫 항목 선택 금지.
+        let doc = doc_with_bands(
+            body_pages(1),
+            vec![hf_item(ApplyPageType::Both, &["매쪽"]), hf_item(ApplyPageType::Odd, &["홀수"])],
+            vec![],
+        );
+        let err = replay(&doc, &PdfOptions::default()).unwrap_err();
+        assert!(matches!(err, PdfError::AmbiguousHeaderFooter { kind: "header", .. }), "{err:?}");
+    }
+
+    #[test]
+    fn multi_paragraph_header_accumulates_vertpos() {
+        // rules-header-multi 실측: 문단2 vertpos=1600 — 밴드-상대 누적 재생.
+        let mut hf = HeaderFooter::new(
+            vec![
+                para_with_cache("첫째", vec![seg(0, 0)]),
+                para_with_cache("둘째", vec![seg(0, 1600)]),
+            ],
+            ApplyPageType::Both,
+        );
+        hf.text_height = HwpUnit::new(2835).expect("2835 HU");
+        let doc = doc_with_bands(body_pages(1), vec![hf], vec![]);
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        let ps = PageSettings::a4();
+        let header = band_lines(&layout.pages[0], "/h0/");
+        assert_eq!(header.len(), 2);
+        assert_eq!(header[0].baseline_y, ps.margin_top.as_i32() + 850);
+        assert_eq!(header[1].baseline_y, ps.margin_top.as_i32() + 1600 + 850);
+    }
+
+    #[test]
+    fn band_overflow_renders_unclipped_with_warning() {
+        // rules-header-overflow 실측: 무클립 재생 + 경고 (fatal 아님).
+        let hf = HeaderFooter::new(
+            vec![
+                para_with_cache("일", vec![seg(0, 0)]),
+                para_with_cache("이", vec![seg(0, 1600)]),
+                para_with_cache("삼", vec![seg(0, 3200)]),
+                para_with_cache("사", vec![seg(0, 4800)]),
+            ],
+            ApplyPageType::Both,
+        );
+        let doc = doc_with_bands(body_pages(2), vec![hf], vec![]);
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        for page in &layout.pages {
+            assert_eq!(band_lines(page, "/h0/").len(), 4, "초과분 포함 전량 재생");
+        }
+        let overflow: Vec<&PdfWarning> = layout
+            .warnings
+            .iter()
+            .filter(|w| matches!(w, PdfWarning::BandOverflow { kind: "header", .. }))
+            .collect();
+        assert_eq!(overflow.len(), 1, "항목당 1회만 경고 (쪽 반복 스팸 금지)");
+    }
+
+    #[test]
+    fn hide_first_header_skips_first_page_only() {
+        let mut section = Section::with_paragraphs(body_pages(2), PageSettings::a4());
+        section.headers = vec![hf_item(ApplyPageType::Both, &["머리말"])];
+        section.visibility = Some(Visibility { hide_first_header: true, ..Visibility::default() });
+        let mut doc = Document::new();
+        doc.add_section(section);
+        let doc = doc.validate().expect("validate");
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        assert!(band_lines(&layout.pages[0], "/h0/").is_empty(), "1쪽 생략");
+        assert_eq!(band_lines(&layout.pages[1], "/h0/").len(), 1, "2쪽부터 재생");
+    }
+
+    #[test]
+    fn header_cache_missing_follows_partial_cache_policy() {
+        // WarnAndSkip(기본): 경고 후 생략 / Reject: fatal.
+        let uncached = HeaderFooter::new(
+            vec![Paragraph::with_runs(
+                vec![Run::text("무캐시", CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            ApplyPageType::Both,
+        );
+        let doc = doc_with_bands(body_pages(1), vec![uncached], vec![]);
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        assert!(band_lines(&layout.pages[0], "/h0/").is_empty());
+        assert!(layout.warnings.iter().any(
+            |w| matches!(w, PdfWarning::ParagraphSkipped { location } if location.contains("/h0/"))
+        ));
+
+        let opts = PdfOptions { partial_cache: PartialCachePolicy::Reject, ..Default::default() };
+        let err = replay(&doc, &opts).unwrap_err();
+        assert!(matches!(err, PdfError::MissingLayoutCache { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn parity_header_in_later_section_is_rejected() {
+        // 다중 섹션 parity = 물리/구역 서수 미실측 — 거부 (게이트2 H2).
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(body_pages(1), PageSettings::a4()));
+        let mut s2 = Section::with_paragraphs(body_pages(1), PageSettings::a4());
+        s2.headers = vec![hf_item(ApplyPageType::Odd, &["홀수"])];
+        doc.add_section(s2);
+        let doc = doc.validate().expect("validate");
+        let err = replay(&doc, &PdfOptions::default()).unwrap_err();
+        assert!(matches!(err, PdfError::AmbiguousHeaderFooter { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn unmeasured_vert_align_and_page_starts_on_are_surfaced() {
+        let mut hf = hf_item(ApplyPageType::Both, &["머리말"]);
+        hf.vert_align = hwpforge_foundation::VerticalAlign::Center;
+        let mut section = Section::with_paragraphs(body_pages(1), PageSettings::a4());
+        section.headers = vec![hf];
+        section.begin_num =
+            Some(BeginNum { page_starts_on: PageStartsOn::Even, ..BeginNum::default() });
+        let mut doc = Document::new();
+        doc.add_section(section);
+        let doc = doc.validate().expect("validate");
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        // TOP/BOTH 거동으로 재생은 되고 경고만 표면화.
+        assert_eq!(band_lines(&layout.pages[0], "/h0/").len(), 1);
+        assert!(layout.warnings.iter().any(|w| matches!(w, PdfWarning::VertAlignFallback { .. })));
+        assert!(layout
+            .warnings
+            .iter()
+            .any(|w| matches!(w, PdfWarning::PageStartsOnFallback { section: 0 })));
+    }
+
+    #[test]
+    fn header_leading_non_text_run_is_rejected() {
+        // 독립 리뷰 M1 상환: 밴드 경로도 본문과 동일한 fail-closed —
+        // 로고 이미지 등으로 시작하는 머리말은 textpos 오절단 대신 거부.
+        let mut hf = hf_item(ApplyPageType::Both, &["머리말"]);
+        hf.paragraphs[0].runs.insert(
+            0,
+            Run::control(
+                hwpforge_core::control::Control::footnote(vec![Paragraph::with_runs(
+                    vec![Run::text("각주", CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )]),
+                CharShapeIndex::new(0),
+            ),
+        );
+        let doc = doc_with_bands(body_pages(1), vec![hf], vec![]);
+        let err = replay(&doc, &PdfOptions::default()).unwrap_err();
+        assert!(matches!(err, PdfError::InvalidCache { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn page_starts_on_warns_even_without_headers_or_footers() {
+        // 독립 리뷰 M2 상환: pageStartsOn 은 페이지네이션 속성 — 머리말/꼬리말
+        // 유무와 무관하게 무조건 표면화돼야 한다 (§9 b0).
+        let mut section = Section::with_paragraphs(body_pages(1), PageSettings::a4());
+        section.begin_num =
+            Some(BeginNum { page_starts_on: PageStartsOn::Even, ..BeginNum::default() });
+        let mut doc = Document::new();
+        doc.add_section(section);
+        let doc = doc.validate().expect("validate");
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        assert!(layout
+            .warnings
+            .iter()
+            .any(|w| matches!(w, PdfWarning::PageStartsOnFallback { section: 0 })));
+    }
+
+    // ── W5-b 쪽번호 합성 ─────────────────────────────────────────
+
+    use hwpforge_core::section::PageNumber;
+    use hwpforge_foundation::{NumberFormatType, PageNumberPosition};
+
+    fn section_with_pagenum(body: Vec<Paragraph>, pn: PageNumber) -> Section {
+        let mut s = Section::with_paragraphs(body, PageSettings::a4());
+        s.page_number = Some(pn);
+        s
+    }
+
+    fn bottom_digit() -> PageNumber {
+        PageNumber::new(PageNumberPosition::BottomCenter, NumberFormatType::Digit)
+    }
+
+    #[test]
+    fn page_number_synthesized_with_decoration_and_sequence() {
+        let mut doc = Document::new();
+        doc.add_section(section_with_pagenum(
+            body_pages(3),
+            PageNumber::with_decoration(
+                PageNumberPosition::BottomCenter,
+                NumberFormatType::Digit,
+                "-",
+            ),
+        ));
+        let doc = doc.validate().expect("validate");
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        let texts: Vec<&str> = layout
+            .pages
+            .iter()
+            .map(|p| p.page_number.as_ref().expect("pagenum").text.as_str())
+            .collect();
+        // §8c 실측: 장식은 어간 공백으로 감싼 "- n -" 형태.
+        assert_eq!(texts, vec!["- 1 -", "- 2 -", "- 3 -"]);
+        let ps = PageSettings::a4();
+        let anchor = ps.height.as_i32() - ps.margin_bottom.as_i32();
+        assert_eq!(layout.pages[0].page_number.as_ref().unwrap().anchor_bottom, anchor);
+        // NoopStyles 엔 스타일 테이블이 없다 — 기본 charPr(0) 폴백 경고는 1회.
+        assert_eq!(
+            layout
+                .warnings
+                .iter()
+                .filter(|w| matches!(w, PdfWarning::PageNumberStyleFallback { .. }))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn page_number_without_decoration_is_bare_digit() {
+        let mut doc = Document::new();
+        doc.add_section(section_with_pagenum(body_pages(1), bottom_digit()));
+        let doc = doc.validate().expect("validate");
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        assert_eq!(layout.pages[0].page_number.as_ref().unwrap().text, "1");
+    }
+
+    #[test]
+    fn page_number_style_comes_from_dedicated_char_style() {
+        // §8c: 출처 = "쪽 번호" CHAR 스타일 (문서 기본 아님 — fixture 실측).
+        struct PageNumStyles;
+        impl StyleLookup for PageNumStyles {
+            fn char_style_shape(&self, name: &str) -> Option<CharShapeIndex> {
+                (name == "쪽 번호").then(|| CharShapeIndex::new(7))
+            }
+        }
+        let mut doc = Document::new();
+        doc.add_section(section_with_pagenum(body_pages(1), bottom_digit()));
+        let doc = doc.validate().expect("validate");
+        let layout = replay_layout(
+            &PdfInput { document: &doc, styles: &PageNumStyles },
+            &PdfOptions::default(),
+        )
+        .expect("replay");
+        let pn = layout.pages[0].page_number.as_ref().unwrap();
+        assert_eq!(pn.char_shape, CharShapeIndex::new(7));
+        assert!(
+            !layout
+                .warnings
+                .iter()
+                .any(|w| matches!(w, PdfWarning::PageNumberStyleFallback { .. })),
+            "전용 스타일 보유 시 폴백 경고 없음"
+        );
+    }
+
+    #[test]
+    fn page_number_restart_and_continue_across_sections() {
+        // beginNum.page: 0 = 이전 구역 계속, n>0 = n 재시작 (스펙 §10.6.2).
+        let mut doc = Document::new();
+        doc.add_section(section_with_pagenum(body_pages(2), bottom_digit()));
+        let mut s1 = section_with_pagenum(body_pages(2), bottom_digit());
+        s1.begin_num = Some(BeginNum { page: 10, ..BeginNum::default() });
+        doc.add_section(s1);
+        doc.add_section(section_with_pagenum(body_pages(1), bottom_digit()));
+        let doc = doc.validate().expect("validate");
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        let texts: Vec<&str> =
+            layout.pages.iter().map(|p| p.page_number.as_ref().unwrap().text.as_str()).collect();
+        assert_eq!(texts, vec!["1", "2", "10", "11", "12"]);
+    }
+
+    #[test]
+    fn page_number_hide_first_skips_display_but_counts() {
+        let mut section = section_with_pagenum(body_pages(2), bottom_digit());
+        section.visibility =
+            Some(Visibility { hide_first_page_num: true, ..Visibility::default() });
+        let mut doc = Document::new();
+        doc.add_section(section);
+        let doc = doc.validate().expect("validate");
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        assert!(layout.pages[0].page_number.is_none(), "1쪽 표시 생략");
+        assert_eq!(layout.pages[1].page_number.as_ref().unwrap().text, "2", "번호 자체는 진행");
+    }
+
+    #[test]
+    fn page_number_unmeasured_position_or_format_warns_and_skips() {
+        // TOP_* 등 미실측 position — 경고 + 생략.
+        let mut doc = Document::new();
+        doc.add_section(section_with_pagenum(
+            body_pages(1),
+            PageNumber::new(PageNumberPosition::TopCenter, NumberFormatType::Digit),
+        ));
+        let doc = doc.validate().expect("validate");
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        assert!(layout.pages[0].page_number.is_none());
+        assert!(layout
+            .warnings
+            .iter()
+            .any(|w| matches!(w, PdfWarning::PageNumberSkipped { what: "position", .. })));
+
+        // 비 DIGIT 포맷 — 경고 + 생략.
+        let mut doc = Document::new();
+        doc.add_section(section_with_pagenum(
+            body_pages(1),
+            PageNumber::new(PageNumberPosition::BottomCenter, NumberFormatType::RomanCapital),
+        ));
+        let doc = doc.validate().expect("validate");
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        assert!(layout.pages[0].page_number.is_none());
+        assert!(layout
+            .warnings
+            .iter()
+            .any(|w| matches!(w, PdfWarning::PageNumberSkipped { what: "format", .. })));
+
+        // position None = 표시 안 함 — 경고도 없음.
+        let mut doc = Document::new();
+        doc.add_section(section_with_pagenum(
+            body_pages(1),
+            PageNumber::new(PageNumberPosition::None, NumberFormatType::Digit),
+        ));
+        let doc = doc.validate().expect("validate");
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        assert!(layout.pages[0].page_number.is_none());
+        assert!(!layout.warnings.iter().any(|w| matches!(w, PdfWarning::PageNumberSkipped { .. })));
     }
 
     // ── W3c 표 admission (검증된 프로파일 밖 = fail-closed) ──────

@@ -90,6 +90,19 @@ pub trait StyleLookup {
         None
     }
 
+    /// Returns the char shape referenced by the named **character** style
+    /// (style table `type="CHAR"`), matching either the localized or the
+    /// English style name.
+    ///
+    /// Hancom renders page numbers (`hp:pageNum`) with the dedicated
+    /// "쪽 번호"/"Page Number" CHAR style rather than the document default —
+    /// fixture-verified (rules-pagenum, 2026-08-10). Consumers that
+    /// synthesize such text need the style's char shape to match Hancom
+    /// output. The default implementation reports no style table.
+    fn char_style_shape(&self, _name: &str) -> Option<CharShapeIndex> {
+        None
+    }
+
     /// Returns the text color of the character shape at `id`.
     fn char_text_color(&self, _id: CharShapeIndex) -> Option<Color> {
         None

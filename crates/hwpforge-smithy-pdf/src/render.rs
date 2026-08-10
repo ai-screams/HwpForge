@@ -111,6 +111,64 @@ impl FontTable {
     }
 }
 
+/// charPr 하나의 렌더 재료를 해석한다 — 언어축 검사(W4c) + face/크기/색 조회
+/// + 폰트 인터닝. 본문 run 과 합성 쪽번호(W5-b)가 같은 경로를 공유한다.
+#[allow(clippy::too_many_arguments)]
+fn resolve_char_style(
+    input: &PdfInput<'_>,
+    table: &mut FontTable,
+    options: &PdfOptions,
+    cs: hwpforge_foundation::CharShapeIndex,
+    location: &str,
+    warned_axis: &mut HashSet<usize>,
+    warnings: &mut Vec<PdfWarning>,
+) -> PdfResult<(FontKey, i32, Color)> {
+    // 언어축 검사 — 단일 폰트 렌더는 축 불일치 시 오글리프: 기본 fatal,
+    // Degraded 옵트인만 한글 축([0])으로 강등 + 경고 (charPr 당 1회).
+    let axis_names = input.styles.char_font_axis_names(cs);
+    if axis_names.len() > 1 {
+        match options.font_fallback {
+            FontFallbackMode::Fatal => {
+                return Err(PdfError::FontAxisMismatch {
+                    location: location.to_string(),
+                    fonts: axis_names.iter().map(|s| (*s).to_string()).collect(),
+                });
+            }
+            FontFallbackMode::Degraded => {
+                if warned_axis.insert(cs.get()) {
+                    warnings.push(PdfWarning::FontAxisFallback {
+                        fonts: axis_names.iter().map(|s| (*s).to_string()).collect(),
+                        location: location.to_string(),
+                    });
+                }
+            }
+        }
+    }
+    let face = input
+        .styles
+        .char_font_name(cs)
+        .ok_or_else(|| PdfError::StyleUnavailable {
+            what: "font name",
+            location: location.to_string(),
+        })?
+        .to_string();
+    let size_hwpunit = input
+        .styles
+        .char_font_size(cs)
+        .ok_or_else(|| PdfError::StyleUnavailable {
+            what: "font size",
+            location: location.to_string(),
+        })?
+        .as_i32();
+    let color = input.styles.char_text_color(cs).unwrap_or(Color::BLACK);
+    let style = FaceStyle::from_flags(
+        input.styles.char_bold(cs).unwrap_or(false),
+        input.styles.char_italic(cs).unwrap_or(false),
+    );
+    let key = table.key_for(&face, style, options.font_fallback, location, warnings)?;
+    Ok((key, size_hwpunit, color))
+}
+
 /// 문서를 PDF 로 렌더한다 (조판 캐시 재생 — 계산이 아니라 재생).
 ///
 /// # Errors
@@ -177,55 +235,13 @@ pub fn render_document(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<
                 if text.is_empty() {
                     continue;
                 }
-                let cs = run.char_shape;
-                // 언어축 검사 (W4c 최소선 — charPr 의 7축 폰트 이름 distinct).
-                // 단일 폰트 렌더는 축 불일치 시 오글리프 — 기본 fatal,
-                // Degraded 옵트인만 한글 축([0])으로 강등 + 경고.
-                let axis_names = input.styles.char_font_axis_names(cs);
-                if axis_names.len() > 1 {
-                    match options.font_fallback {
-                        FontFallbackMode::Fatal => {
-                            return Err(PdfError::FontAxisMismatch {
-                                location: line.location.clone(),
-                                fonts: axis_names.iter().map(|s| (*s).to_string()).collect(),
-                            });
-                        }
-                        FontFallbackMode::Degraded => {
-                            if warned_axis.insert(cs.get()) {
-                                warnings.push(PdfWarning::FontAxisFallback {
-                                    fonts: axis_names.iter().map(|s| (*s).to_string()).collect(),
-                                    location: line.location.clone(),
-                                });
-                            }
-                        }
-                    }
-                }
-                let face = input
-                    .styles
-                    .char_font_name(cs)
-                    .ok_or_else(|| PdfError::StyleUnavailable {
-                        what: "font name",
-                        location: line.location.clone(),
-                    })?
-                    .to_string();
-                let size_hwpunit = input
-                    .styles
-                    .char_font_size(cs)
-                    .ok_or_else(|| PdfError::StyleUnavailable {
-                        what: "font size",
-                        location: line.location.clone(),
-                    })?
-                    .as_i32();
-                let color = input.styles.char_text_color(cs).unwrap_or(Color::BLACK);
-                let style = FaceStyle::from_flags(
-                    input.styles.char_bold(cs).unwrap_or(false),
-                    input.styles.char_italic(cs).unwrap_or(false),
-                );
-                let key = table.key_for(
-                    &face,
-                    style,
-                    options.font_fallback,
+                let (key, size_hwpunit, color) = resolve_char_style(
+                    input,
+                    &mut table,
+                    options,
+                    run.char_shape,
                     &line.location,
+                    &mut warned_axis,
                     &mut warnings,
                 )?;
                 let font = &table.fonts[key.0];
@@ -280,6 +296,49 @@ pub fn render_document(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<
                 }));
             }
         }
+        // W5-b: 합성 쪽번호 — 전용 스타일 charPr 로 셰이핑해 페이지 폭 중앙 ·
+        // em 하단 앵커에 배치한다 (§8c 실측: baseline = 앵커 − hhea descent).
+        if let Some(pn) = &page.page_number {
+            let (key, size_hwpunit, color) = resolve_char_style(
+                input,
+                &mut table,
+                options,
+                pn.char_shape,
+                &pn.location,
+                &mut warned_axis,
+                &mut warnings,
+            )?;
+            let font = &table.fonts[key.0];
+            let shaped = shape_text(&font.data, font.face_index, &pn.text, size_hwpunit)?;
+            // 가로 = 페이지 폭 중앙 − 자연폭/2 (여백 무관 — R6 실측 Δ0.08pt).
+            let origin_x = (f64::from(page.width) - shaped.natural_width()) / 2.0;
+            let baseline_y = f64::from(pn.anchor_bottom) - shaped.descent;
+            let byte_len = pn.text.len();
+            let mut x = origin_x;
+            let mut glyphs = Vec::with_capacity(shaped.glyphs.len());
+            for (gi, g) in shaped.glyphs.iter().enumerate() {
+                let next_cluster = shaped.glyphs.get(gi + 1).map_or(byte_len, |n| n.cluster);
+                glyphs.push(PositionedGlyph {
+                    glyph_id: g.glyph_id,
+                    x_offset: Pt::from_hwpunit_f64(x - origin_x),
+                    advance: Pt::from_hwpunit_f64(g.advance),
+                    text_range: g.cluster..next_cluster,
+                });
+                x += g.advance;
+            }
+            items.push(PaintItem::Glyphs(GlyphRun {
+                font: key,
+                size: Pt::from_hwpunit(size_hwpunit),
+                color,
+                baseline: Point {
+                    x: Pt::from_hwpunit_f64(origin_x),
+                    y: Pt::from_hwpunit_f64(baseline_y),
+                },
+                text: pn.text.clone(),
+                glyphs,
+            }));
+        }
+
         pages.push(Page {
             size: Size {
                 width: Pt::from_hwpunit(page.width),

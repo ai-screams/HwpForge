@@ -76,6 +76,7 @@ impl StyleLookup for HwpxStyleLookup<'_> {
         fn para_heading_level(&self, id: ParaShapeIndex) -> Option<u8>;
         fn style_name(&self, id: StyleIndex) -> Option<&str>;
         fn style_heading_level(&self, id: StyleIndex) -> Option<u8>;
+        fn char_style_shape(&self, name: &str) -> Option<CharShapeIndex>;
         fn border_fill_lines(&self, id: u32) -> Option<hwpforge_core::BorderFillLines>;
         fn border_fill_face(&self, id: u32) -> Option<hwpforge_core::FillKind>;
     }

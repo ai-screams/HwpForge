@@ -187,6 +187,39 @@ pub enum PdfWarning {
         /// 생략한 속성 (예: `cell fill`, `border line style`).
         what: &'static str,
     },
+    /// 머리말/꼬리말 캐시가 밴드 높이를 넘음 — 한컴 실측(rules-header-overflow)
+    /// 대로 **무클립 재생**한다 (본문 리플로 없음, 잉크 겹침 가능성만 표면화).
+    BandOverflow {
+        /// 밴드 종류 (`header`/`footer`).
+        kind: &'static str,
+        /// 넘친 머리말/꼬리말 위치.
+        location: String,
+    },
+    /// `pageStartsOn != BOTH` 는 미실측 — BOTH 거동으로 렌더하고 표면화.
+    PageStartsOnFallback {
+        /// 섹션 인덱스.
+        section: usize,
+    },
+    /// 머리말/꼬리말 `vertAlign != TOP` 은 미실측 (실측 fixture 전부
+    /// textHeight==밴드 높이라 TOP 과 구분 불가) — TOP 거동으로 렌더하고 표면화.
+    VertAlignFallback {
+        /// 머리말/꼬리말 위치.
+        location: String,
+    },
+    /// 쪽번호를 생략함 — BOTTOM_CENTER + DIGIT 조합만 실측(rules-pagenum),
+    /// 그 외 position/포맷은 좌표 근거가 없어 그리지 않는다 (본문은 정상).
+    PageNumberSkipped {
+        /// 섹션 인덱스.
+        section: usize,
+        /// 생략 사유 (`position` / `format`).
+        what: &'static str,
+    },
+    /// "쪽 번호"(Page Number) CHAR 스타일이 스타일 테이블에 없어 문서 기본
+    /// charPr(0) 로 폴백함 — 한컴 실측 출처는 전용 스타일이다 (§8c).
+    PageNumberStyleFallback {
+        /// 섹션 인덱스.
+        section: usize,
+    },
 }
 
 /// 렌더 실패 (fail-closed — 출력 바이트 없음).
@@ -219,6 +252,17 @@ pub enum PdfError {
         kind: &'static str,
         /// 문서 내 위치.
         location: String,
+    },
+    /// 같은 쪽에 머리말/꼬리말 후보가 2개 이상 매치 (BOTH+ODD 중복 등) —
+    /// 한컴 우선순위 미실측이라 첫 항목 선택 대신 거부한다 (게이트2 H2).
+    /// 다중 섹션 + ODD/EVEN parity 조합도 동일 사유로 거부 (물리/구역
+    /// 서수 중 어느 쪽 홀짝인지 미실측).
+    #[error("ambiguous {kind} selection: {detail}")]
+    AmbiguousHeaderFooter {
+        /// 밴드 종류 (`header`/`footer`).
+        kind: &'static str,
+        /// 충돌 상세 (섹션/쪽/매치 수).
+        detail: String,
     },
     /// 폰트 파일 미해결 — fallback 하지 않는다 (위치가 틀린 출력 금지).
     #[error("font face {face:?} not resolved in provided font directories (no fallback)")]
