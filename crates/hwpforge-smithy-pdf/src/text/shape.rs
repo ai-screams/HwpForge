@@ -31,6 +31,11 @@ pub struct ShapedGlyph {
 pub struct ShapedText {
     /// 글리프 시퀀스 (시각 순서).
     pub glyphs: Vec<ShapedGlyph>,
+    /// baseline 아래 하강분 (HWPUNIT — `|hhea descender| × size / upem`).
+    ///
+    /// W5-b 쪽번호 세로 앵커에 사용: baseline = em 하단 앵커 − descent
+    /// (한컴 콘텐트 스트림 실측 — rules-pagenum §8c, 모델 오차 ≤0.16pt).
+    pub descent: f64,
 }
 
 impl ShapedText {
@@ -91,7 +96,8 @@ pub fn shape_text(
             cluster,
         });
     }
-    Ok(ShapedText { glyphs })
+    let descent = f64::from(face.descender()).abs() / upem * size;
+    Ok(ShapedText { glyphs, descent })
 }
 
 #[cfg(test)]

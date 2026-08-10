@@ -79,10 +79,29 @@ pub struct LaidBorder {
     pub color: Color,
 }
 
+/// 합성 쪽번호 (캐시 재생이 아니라 §8c 실측 규칙으로 합성).
+///
+/// 가로 = 페이지 폭 중앙(장식 포함 자연폭 기준 — 여백 무관, rules-pagenum
+/// Δ0.08pt) · 세로 = baseline 을 `anchor_bottom − hhea descent × size` 에
+/// 앵커 (렌더 층이 폰트 메트릭으로 확정 — 한컴 콘텐트 스트림 실측 783.00pt,
+/// 모델 오차 ≤0.16pt).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LaidPageNumber {
+    /// 위치 보고용 경로.
+    pub location: String,
+    /// 표시 문자열 (장식 포함 — 예: `- 1 -`).
+    pub text: String,
+    /// 문자 스타일 (전용 "쪽 번호" 스타일의 charPr — 부재 시 문서 기본 0).
+    pub char_shape: CharShapeIndex,
+    /// em 하단 앵커 (HWPUNIT — `H − margin.bottom`, §8c).
+    pub anchor_bottom: i32,
+}
+
 /// 한 쪽의 배치 결과.
 ///
 /// z-order 계약: `rects`(셀 배경) → `borders`(괘선) → `lines`(글리프) 순으로
-/// 그린다 (각 Vec 내부는 문서 순서).
+/// 그린다 (각 Vec 내부는 문서 순서). `page_number` 는 글리프와 같은 층이다
+/// (겹칠 본문이 없는 밴드 밖 영역).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageLayout {
     /// 쪽 폭 (HWPUNIT).
@@ -95,6 +114,8 @@ pub struct PageLayout {
     pub borders: Vec<LaidBorder>,
     /// 줄들 (문서 순서).
     pub lines: Vec<LaidLine>,
+    /// 합성 쪽번호 (지원 position/포맷일 때만).
+    pub page_number: Option<LaidPageNumber>,
 }
 
 /// 캐시 재생 결과.
@@ -117,6 +138,8 @@ pub fn replay_layout(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<Re
     let mut pages = Vec::new();
     let mut warnings = Vec::new();
 
+    // 표시 번호는 구역을 넘어 이어진다 (beginNum.page 0 = 이전 구역 계속).
+    let mut next_display: u32 = 1;
     for (section_idx, section) in input.document.sections().iter().enumerate() {
         let first_page = pages.len();
         replay_section(input, options, section, section_idx, &mut pages, &mut warnings)?;
@@ -129,8 +152,79 @@ pub fn replay_layout(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<Re
             &mut pages,
             &mut warnings,
         )?;
+        let display_start = match section.begin_num.as_ref().map(|b| b.page) {
+            Some(n) if n > 0 => n, // n = 재시작 (스펙 §10.6.2)
+            _ => next_display,
+        };
+        emit_page_numbers(
+            input,
+            section,
+            section_idx,
+            first_page,
+            display_start,
+            &mut pages,
+            &mut warnings,
+        );
+        next_display = display_start + (pages.len() - first_page) as u32;
     }
     Ok(ReplayLayout { pages, warnings })
+}
+
+/// 쪽번호 합성 (§8c 실측 — BOTTOM_CENTER + DIGIT 만, 그 외 = 경고+생략).
+///
+/// 표시 문자열은 sideChar 장식을 어간 공백으로 감싼다 (`- 1 -` — 한컴 PDF
+/// 실측 어간 5.08pt = 10pt 공백 폭). 스타일은 전용 "쪽 번호"(Page Number)
+/// CHAR 스타일의 charPr — 부재 시 문서 기본 charPr(0) + 경고.
+fn emit_page_numbers(
+    input: &PdfInput<'_>,
+    section: &Section,
+    section_idx: usize,
+    first_page: usize,
+    display_start: u32,
+    pages: &mut [PageLayout],
+    warnings: &mut Vec<PdfWarning>,
+) {
+    use hwpforge_foundation::{NumberFormatType, PageNumberPosition};
+    let Some(pn) = section.page_number.as_ref() else { return };
+    if pn.position == PageNumberPosition::None {
+        return; // 표시 안 함 — 경고 아님.
+    }
+    if pn.position != PageNumberPosition::BottomCenter {
+        warnings.push(PdfWarning::PageNumberSkipped { section: section_idx, what: "position" });
+        return;
+    }
+    if pn.number_format != NumberFormatType::Digit {
+        warnings.push(PdfWarning::PageNumberSkipped { section: section_idx, what: "format" });
+        return;
+    }
+    let char_shape = input
+        .styles
+        .char_style_shape("쪽 번호")
+        .or_else(|| input.styles.char_style_shape("Page Number"))
+        .unwrap_or_else(|| {
+            warnings.push(PdfWarning::PageNumberStyleFallback { section: section_idx });
+            CharShapeIndex::new(0)
+        });
+    let ps = &section.page_settings;
+    let anchor_bottom = ps.height.as_i32() - ps.margin_bottom.as_i32();
+    let hide_first = section.visibility.as_ref().is_some_and(|v| v.hide_first_page_num);
+    for (offset, page) in pages[first_page..].iter_mut().enumerate() {
+        if hide_first && offset == 0 {
+            continue; // 번호 자체는 진행하고 표시만 생략.
+        }
+        let n = display_start + offset as u32;
+        let text = if pn.decoration.is_empty() {
+            n.to_string()
+        } else {
+            format!("{d} {n} {d}", d = pn.decoration)
+        };
+        page.page_number = Some(LaidPageNumber {
+            location: format!("s{section_idx}/pagenum/{n}"),
+            text,
+            char_shape,
+            anchor_bottom,
+        });
+    }
 }
 
 /// 머리말/꼬리말 오버레이 (규칙 §5 R6 + W5 §8 실측).
@@ -342,6 +436,7 @@ fn replay_section(
             rects: Vec::new(),
             borders: Vec::new(),
             lines: Vec::new(),
+            page_number: None,
         })
     };
     new_page(pages);
@@ -897,6 +992,163 @@ mod tests {
             .warnings
             .iter()
             .any(|w| matches!(w, PdfWarning::PageStartsOnFallback { section: 0 })));
+    }
+
+    // ── W5-b 쪽번호 합성 ─────────────────────────────────────────
+
+    use hwpforge_core::section::PageNumber;
+    use hwpforge_foundation::{NumberFormatType, PageNumberPosition};
+
+    fn section_with_pagenum(body: Vec<Paragraph>, pn: PageNumber) -> Section {
+        let mut s = Section::with_paragraphs(body, PageSettings::a4());
+        s.page_number = Some(pn);
+        s
+    }
+
+    fn bottom_digit() -> PageNumber {
+        PageNumber::new(PageNumberPosition::BottomCenter, NumberFormatType::Digit)
+    }
+
+    #[test]
+    fn page_number_synthesized_with_decoration_and_sequence() {
+        let mut doc = Document::new();
+        doc.add_section(section_with_pagenum(
+            body_pages(3),
+            PageNumber::with_decoration(
+                PageNumberPosition::BottomCenter,
+                NumberFormatType::Digit,
+                "-",
+            ),
+        ));
+        let doc = doc.validate().expect("validate");
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        let texts: Vec<&str> = layout
+            .pages
+            .iter()
+            .map(|p| p.page_number.as_ref().expect("pagenum").text.as_str())
+            .collect();
+        // §8c 실측: 장식은 어간 공백으로 감싼 "- n -" 형태.
+        assert_eq!(texts, vec!["- 1 -", "- 2 -", "- 3 -"]);
+        let ps = PageSettings::a4();
+        let anchor = ps.height.as_i32() - ps.margin_bottom.as_i32();
+        assert_eq!(layout.pages[0].page_number.as_ref().unwrap().anchor_bottom, anchor);
+        // NoopStyles 엔 스타일 테이블이 없다 — 기본 charPr(0) 폴백 경고는 1회.
+        assert_eq!(
+            layout
+                .warnings
+                .iter()
+                .filter(|w| matches!(w, PdfWarning::PageNumberStyleFallback { .. }))
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn page_number_without_decoration_is_bare_digit() {
+        let mut doc = Document::new();
+        doc.add_section(section_with_pagenum(body_pages(1), bottom_digit()));
+        let doc = doc.validate().expect("validate");
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        assert_eq!(layout.pages[0].page_number.as_ref().unwrap().text, "1");
+    }
+
+    #[test]
+    fn page_number_style_comes_from_dedicated_char_style() {
+        // §8c: 출처 = "쪽 번호" CHAR 스타일 (문서 기본 아님 — fixture 실측).
+        struct PageNumStyles;
+        impl StyleLookup for PageNumStyles {
+            fn char_style_shape(&self, name: &str) -> Option<CharShapeIndex> {
+                (name == "쪽 번호").then(|| CharShapeIndex::new(7))
+            }
+        }
+        let mut doc = Document::new();
+        doc.add_section(section_with_pagenum(body_pages(1), bottom_digit()));
+        let doc = doc.validate().expect("validate");
+        let layout = replay_layout(
+            &PdfInput { document: &doc, styles: &PageNumStyles },
+            &PdfOptions::default(),
+        )
+        .expect("replay");
+        let pn = layout.pages[0].page_number.as_ref().unwrap();
+        assert_eq!(pn.char_shape, CharShapeIndex::new(7));
+        assert!(
+            !layout
+                .warnings
+                .iter()
+                .any(|w| matches!(w, PdfWarning::PageNumberStyleFallback { .. })),
+            "전용 스타일 보유 시 폴백 경고 없음"
+        );
+    }
+
+    #[test]
+    fn page_number_restart_and_continue_across_sections() {
+        // beginNum.page: 0 = 이전 구역 계속, n>0 = n 재시작 (스펙 §10.6.2).
+        let mut doc = Document::new();
+        doc.add_section(section_with_pagenum(body_pages(2), bottom_digit()));
+        let mut s1 = section_with_pagenum(body_pages(2), bottom_digit());
+        s1.begin_num = Some(BeginNum { page: 10, ..BeginNum::default() });
+        doc.add_section(s1);
+        doc.add_section(section_with_pagenum(body_pages(1), bottom_digit()));
+        let doc = doc.validate().expect("validate");
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        let texts: Vec<&str> =
+            layout.pages.iter().map(|p| p.page_number.as_ref().unwrap().text.as_str()).collect();
+        assert_eq!(texts, vec!["1", "2", "10", "11", "12"]);
+    }
+
+    #[test]
+    fn page_number_hide_first_skips_display_but_counts() {
+        let mut section = section_with_pagenum(body_pages(2), bottom_digit());
+        section.visibility =
+            Some(Visibility { hide_first_page_num: true, ..Visibility::default() });
+        let mut doc = Document::new();
+        doc.add_section(section);
+        let doc = doc.validate().expect("validate");
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        assert!(layout.pages[0].page_number.is_none(), "1쪽 표시 생략");
+        assert_eq!(layout.pages[1].page_number.as_ref().unwrap().text, "2", "번호 자체는 진행");
+    }
+
+    #[test]
+    fn page_number_unmeasured_position_or_format_warns_and_skips() {
+        // TOP_* 등 미실측 position — 경고 + 생략.
+        let mut doc = Document::new();
+        doc.add_section(section_with_pagenum(
+            body_pages(1),
+            PageNumber::new(PageNumberPosition::TopCenter, NumberFormatType::Digit),
+        ));
+        let doc = doc.validate().expect("validate");
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        assert!(layout.pages[0].page_number.is_none());
+        assert!(layout
+            .warnings
+            .iter()
+            .any(|w| matches!(w, PdfWarning::PageNumberSkipped { what: "position", .. })));
+
+        // 비 DIGIT 포맷 — 경고 + 생략.
+        let mut doc = Document::new();
+        doc.add_section(section_with_pagenum(
+            body_pages(1),
+            PageNumber::new(PageNumberPosition::BottomCenter, NumberFormatType::RomanCapital),
+        ));
+        let doc = doc.validate().expect("validate");
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        assert!(layout.pages[0].page_number.is_none());
+        assert!(layout
+            .warnings
+            .iter()
+            .any(|w| matches!(w, PdfWarning::PageNumberSkipped { what: "format", .. })));
+
+        // position None = 표시 안 함 — 경고도 없음.
+        let mut doc = Document::new();
+        doc.add_section(section_with_pagenum(
+            body_pages(1),
+            PageNumber::new(PageNumberPosition::None, NumberFormatType::Digit),
+        ));
+        let doc = doc.validate().expect("validate");
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        assert!(layout.pages[0].page_number.is_none());
+        assert!(!layout.warnings.iter().any(|w| matches!(w, PdfWarning::PageNumberSkipped { .. })));
     }
 
     // ── W3c 표 admission (검증된 프로파일 밖 = fail-closed) ──────

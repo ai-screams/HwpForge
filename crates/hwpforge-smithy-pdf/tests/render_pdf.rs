@@ -54,6 +54,75 @@ fn rules_headerfooter_renders_two_pages() {
     assert_eq!(pages, 2, "W0 실측 42+18줄 = 2쪽");
 }
 
+// ── W5-a/b 게이트 — 머리말/꼬리말 오버레이 + 쪽번호 합성 ──────
+
+#[test]
+fn rules_pagenum_renders_three_pages_with_dedicated_style() {
+    let Some(output) = render_fixture("rules-pagenum.hwpx") else { return };
+    let hay = String::from_utf8_lossy(&output.bytes);
+    let pages = hay.matches("/Type/Page").count() - hay.matches("/Type/Pages").count();
+    assert_eq!(pages, 3, "재저장 실측 3쪽");
+    // 본문 = charPr(0) 16pt bold 변조 · 쪽번호 = 전용 "쪽 번호" 스타일(10pt
+    // regular) — bold 외에 regular HCRBatang 서브셋이 별도로 임베드돼야
+    // 한다 (§8c 한컴 PDF 와 동일한 분리). bare 이름 등장 횟수로 확인.
+    let all = hay.matches("HCRBatang").count();
+    let bold = hay.matches("HCRBatang-Bold").count();
+    assert!(bold > 0, "본문 bold face 임베드");
+    assert!(all > bold, "쪽번호 regular face 임베드 (전용 스타일 출처)");
+    assert!(
+        !output
+            .warnings
+            .iter()
+            .any(|w| matches!(w, hwpforge_smithy_pdf::PdfWarning::PageNumberStyleFallback { .. })),
+        "재저장본은 쪽 번호 스타일 실물 보유 — 폴백 금지: {:?}",
+        output.warnings
+    );
+}
+
+#[test]
+fn rules_header_multi_renders_clean() {
+    // 2문단 머리말 = 경계 통과 케이스 (§8d) — 경고 없이 2쪽.
+    let Some(output) = render_fixture("rules-header-multi.hwpx") else { return };
+    let hay = String::from_utf8_lossy(&output.bytes);
+    let pages = hay.matches("/Type/Page").count() - hay.matches("/Type/Pages").count();
+    assert_eq!(pages, 2, "재저장 실측 2쪽");
+    assert!(output.warnings.is_empty(), "{:?}", output.warnings);
+}
+
+#[test]
+fn rules_header_overflow_renders_unclipped_with_warning() {
+    // 4문단 진초과 (§8e) — 무클립 재생 + BandOverflow 경고.
+    let Some(output) = render_fixture("rules-header-overflow.hwpx") else { return };
+    let hay = String::from_utf8_lossy(&output.bytes);
+    let pages = hay.matches("/Type/Page").count() - hay.matches("/Type/Pages").count();
+    assert_eq!(pages, 2, "재저장 실측 2쪽");
+    assert!(
+        output.warnings.iter().any(|w| matches!(
+            w,
+            hwpforge_smithy_pdf::PdfWarning::BandOverflow { kind: "header", .. }
+        )),
+        "{:?}",
+        output.warnings
+    );
+}
+
+#[test]
+fn sample_odd_even_headers_render_three_pages() {
+    // 실물 ODD/EVEN fixture — parity 선택이 풀 파이프라인을 통과해야 한다.
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/user_samples/pages/sample-header-footer-odd-even.hwpx");
+    let Ok(bytes) = std::fs::read(path) else { return };
+    let Some(options) = options() else { return };
+    let decoded = hwpforge_smithy_hwpx::HwpxDecoder::decode(&bytes).expect("decode");
+    let validated = decoded.document.validate().expect("validate");
+    let input = PdfInput { document: &validated, styles: &decoded.style_store };
+    let output = render_document(&input, &options).expect("render");
+    let hay = String::from_utf8_lossy(&output.bytes);
+    let pages = hay.matches("/Type/Page").count() - hay.matches("/Type/Pages").count();
+    assert_eq!(pages, 3, "한컴 PDF 실측 3쪽 (홀/짝/홀)");
+    assert!(output.warnings.is_empty(), "{:?}", output.warnings);
+}
+
 /// 시각 게이트 산출물 생성 (사용자 판정용) — `--ignored` 로 수동 실행.
 #[test]
 #[ignore = "visual gate artifact generation (writes to examples/hwp5_review/_verify)"]

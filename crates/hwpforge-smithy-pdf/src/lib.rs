@@ -206,6 +206,20 @@ pub enum PdfWarning {
         /// 머리말/꼬리말 위치.
         location: String,
     },
+    /// 쪽번호를 생략함 — BOTTOM_CENTER + DIGIT 조합만 실측(rules-pagenum),
+    /// 그 외 position/포맷은 좌표 근거가 없어 그리지 않는다 (본문은 정상).
+    PageNumberSkipped {
+        /// 섹션 인덱스.
+        section: usize,
+        /// 생략 사유 (`position` / `format`).
+        what: &'static str,
+    },
+    /// "쪽 번호"(Page Number) CHAR 스타일이 스타일 테이블에 없어 문서 기본
+    /// charPr(0) 로 폴백함 — 한컴 실측 출처는 전용 스타일이다 (§8c).
+    PageNumberStyleFallback {
+        /// 섹션 인덱스.
+        section: usize,
+    },
 }
 
 /// 렌더 실패 (fail-closed — 출력 바이트 없음).
