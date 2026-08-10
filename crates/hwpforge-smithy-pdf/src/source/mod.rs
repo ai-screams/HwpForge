@@ -506,7 +506,9 @@ fn replay_section(
                     RunContent::Table(t) => Some(t.as_ref()),
                     _ => None,
                 })
-                .expect("counted above");
+                .ok_or_else(|| PdfError::InternalInvariant {
+                    detail: format!("{location}: table run vanished after count"),
+                })?;
             let geom = table::SectionGeom { body_top, body_left, body_height };
             let outcome = table::replay_table(
                 input,
@@ -583,7 +585,9 @@ fn replay_section(
                 cache.lines.get(line_idx + 1).map_or(utf16.len(), |next| next.textpos as usize);
             let runs = slice_line_runs(&utf16, &run_spans, start, end);
 
-            let page = pages.last_mut().expect("page pushed at section start");
+            let page = pages.last_mut().ok_or_else(|| PdfError::InternalInvariant {
+                detail: "section replay has no current page".to_string(),
+            })?;
             page.lines.push(LaidLine {
                 location: format!("{location}/l{line_idx}"),
                 runs,
