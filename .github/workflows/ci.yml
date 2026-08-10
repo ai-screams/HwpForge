@@ -311,7 +311,17 @@ jobs:
       - name: cargo +1.88 check
         # smithy-pdf 는 krilla(rust-version 1.92) 의존으로 워크스페이스 MSRV(1.88) 초과 —
         # publish=false 라 MSRV 소비자 계약이 없어 MSRV 검증에서만 제외한다 (W2 계획 §6-7).
-        run: cargo +1.88 check --workspace --all-features --exclude hwpforge-smithy-pdf
+        # bindings-cli 는 W6a 부터 smithy-pdf 를 소비 (rust-version 1.92 명시) — 1.88
+        # 레인에서 제외하고 아래 1.92 스텝이 커버한다.
+        run: >-
+          cargo +1.88 check --workspace --all-features
+          --exclude hwpforge-smithy-pdf
+          --exclude hwpforge-bindings-cli
+      - name: Install PDF MSRV toolchain (1.92)
+        run: rustup toolchain install 1.92 --profile minimal
+      - name: cargo +1.92 check (PDF 소비 크레이트)
+        # smithy-pdf + 소비자(bindings-cli)의 실질 MSRV 검증 레인.
+        run: cargo +1.92 check --all-features -p hwpforge-smithy-pdf -p hwpforge-bindings-cli
 
   workflow-compat:
     name: "Standalone › Workflow Lint"
