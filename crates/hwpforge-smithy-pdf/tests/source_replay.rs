@@ -64,8 +64,20 @@ fn rules_headerfooter_splits_42_lines_per_page() {
 
     let layout = replay_layout(&input, &PdfOptions::default()).expect("replay");
     assert_eq!(layout.pages.len(), 2);
-    assert_eq!(layout.pages[0].lines.len(), 42);
-    assert_eq!(layout.pages[1].lines.len(), 18);
+    // W5-a: 머리말/꼬리말 오버레이가 줄에 합류 — 본문 카운트는 불변이어야 한다.
+    let body = |p: &hwpforge_smithy_pdf::source::PageLayout| {
+        p.lines.iter().filter(|l| !l.location.contains("/h") && !l.location.contains("/f")).count()
+    };
+    let band = |p: &hwpforge_smithy_pdf::source::PageLayout, tag: &str| {
+        p.lines.iter().filter(|l| l.location.contains(tag)).count()
+    };
+    assert_eq!(body(&layout.pages[0]), 42);
+    assert_eq!(body(&layout.pages[1]), 18);
+    // R6 실측: BOTH 머리말/꼬리말 각 1줄 — 매쪽 반복.
+    for page in &layout.pages {
+        assert_eq!(band(page, "/h0/"), 1, "머리말 1줄");
+        assert_eq!(band(page, "/f0/"), 1, "꼬리말 1줄");
+    }
 }
 
 // ── W3c 표 게이트 — 3쪽 분할 + 제목행 반복 (rules-pagespan3 쌍) ──
