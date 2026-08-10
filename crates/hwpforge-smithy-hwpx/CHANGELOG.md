@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.12.1...hwpforge-smithy-hwpx-v0.13.0) - 2026-08-09
+
+### Added
+
+- *(core)* **BREAKING** W5-α 머리말/꼬리말 subList 기하 승격 — vertAlign·textWidth·textHeight
+
+- *(smithy-hwpx)* W5-α 디코드 경고 채널 — 미지 enum 폴백 표면화
+
+- *(core)* **BREAKING** W5-α pageStartsOn 승격 — 스키마 폐기 교정 + 인코더 BOTH 고정 제거
+
+- *(smithy-hwpx)* **BREAKING** W5-α 다중 머리말/꼬리말 cardinality 보존 — first-wins 무음 폐기 제거
+
+- *(smithy-pdf)* W4c 스타일 선택·언어축 검사 — 기본 fatal + Degraded 옵트인
+
+- *(smithy-pdf)* W3c 표 배치소스 — 검증된 프로파일 재생 + 계산 페이지네이션 이중 검산
+
+- *(core)* StyleLookup borderFill 렌더 표면 + HWPX 브리지 (PDF W3b)
+
+- *(smithy-hwpx)* 표 margin 원본값 왕복 + hasMargin 기반 셀 margin 승격 (PDF W3a-2)
+
+- *(core)* 표 outMargin/inMargin 구조 승격 + sz height decode-only 캐시 (PDF W3a-1)
+
+
 ## [0.12.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.12.0...hwpforge-smithy-hwpx-v0.12.1) - 2026-08-06
 
 ### Added
