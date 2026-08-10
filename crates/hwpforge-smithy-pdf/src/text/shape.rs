@@ -186,6 +186,20 @@ mod tests {
     }
 
     #[test]
+    fn descent_is_positive_and_scales_with_size() {
+        // 독립 리뷰 L1 상환: descent 는 fixture-optional 통합 테스트에만
+        // 기대지 않고 커밋된 테스트 폰트로 결정적으로 고정한다.
+        let data = test_font();
+        let at10 = shape_text(&data, 0, "가", 1000).expect("shape@10");
+        let at20 = shape_text(&data, 0, "가", 2000).expect("shape@20");
+        assert!(at10.descent > 0.0, "hhea descender 유래 — 양수여야 함");
+        assert!((at20.descent - 2.0 * at10.descent).abs() < 1e-9, "크기 선형성");
+        // 텍스트 내용과 무관 (폰트 전역 메트릭).
+        let other = shape_text(&data, 0, "A b", 1000).expect("shape other");
+        assert_eq!(at10.descent, other.descent);
+    }
+
+    #[test]
     fn natural_width_is_exact_and_linear_with_test_font() {
         // 자연폭 = 어드밴스 합: 가나(2000) + 공백(500) + 다라(2000) = 4500HU @10pt.
         let data = test_font();

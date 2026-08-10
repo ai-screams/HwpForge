@@ -141,6 +141,16 @@ pub fn replay_layout(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<Re
     // 표시 번호는 구역을 넘어 이어진다 (beginNum.page 0 = 이전 구역 계속).
     let mut next_display: u32 = 1;
     for (section_idx, section) in input.document.sections().iter().enumerate() {
+        // pageStartsOn != BOTH 는 미실측 페이지네이션 속성 (한컴이 빈 쪽을
+        // 삽입할 수 있음) — 머리말/꼬리말·쪽번호 유무와 무관하게 BOTH 거동으로
+        // 재생하고 무조건 표면화한다 (§9 b0 — 독립 리뷰 M2 상환).
+        if section
+            .begin_num
+            .as_ref()
+            .is_some_and(|b| b.page_starts_on != hwpforge_core::section::PageStartsOn::Both)
+        {
+            warnings.push(PdfWarning::PageStartsOnFallback { section: section_idx });
+        }
         let first_page = pages.len();
         replay_section(input, options, section, section_idx, &mut pages, &mut warnings)?;
         overlay_headers_footers(
@@ -249,15 +259,6 @@ fn overlay_headers_footers(
     let ps = &section.page_settings;
     let page_height = ps.height.as_i32();
     let body_left = ps.margin_left.as_i32();
-
-    // pageStartsOn != BOTH 는 미실측 — BOTH 거동으로 재생하고 표면화 (§9 b0).
-    if section
-        .begin_num
-        .as_ref()
-        .is_some_and(|b| b.page_starts_on != hwpforge_core::section::PageStartsOn::Both)
-    {
-        warnings.push(PdfWarning::PageStartsOnFallback { section: section_idx });
-    }
 
     // 다중 섹션 + parity 는 미실측 (물리/구역 서수 어느 쪽 홀짝인지) — 거부.
     if section_idx > 0 {
@@ -383,6 +384,21 @@ fn replay_band_item(
             warnings.push(PdfWarning::ParagraphSkipped { location });
             continue;
         };
+        // fail-closed 가드 (본문 경로와 동일 — 독립 리뷰 M1 상환): 첫 텍스트
+        // run 이전의 비텍스트 run(로고 이미지 등)은 textpos 좌표를 신뢰할 수
+        // 없게 만든다 — 무음 오절단 대신 거부.
+        let first_text = para.runs.iter().position(|r| r.content.plain_text().is_some());
+        if let Some(ft) = first_text {
+            if para.runs[..ft].iter().any(|r| r.content.plain_text().is_none()) {
+                return Err(PdfError::InvalidCache {
+                    detail: format!(
+                        "{location}: leading non-text run before first text run — textpos \
+                         normalization does not cover this control kind (W2 scope)"
+                    ),
+                });
+            }
+        }
+
         let text = para.text_content();
         let utf16: Vec<u16> = text.encode_utf16().collect();
         validate_textpos(cache, utf16.len(), &location)?;
@@ -988,6 +1004,43 @@ mod tests {
         // TOP/BOTH 거동으로 재생은 되고 경고만 표면화.
         assert_eq!(band_lines(&layout.pages[0], "/h0/").len(), 1);
         assert!(layout.warnings.iter().any(|w| matches!(w, PdfWarning::VertAlignFallback { .. })));
+        assert!(layout
+            .warnings
+            .iter()
+            .any(|w| matches!(w, PdfWarning::PageStartsOnFallback { section: 0 })));
+    }
+
+    #[test]
+    fn header_leading_non_text_run_is_rejected() {
+        // 독립 리뷰 M1 상환: 밴드 경로도 본문과 동일한 fail-closed —
+        // 로고 이미지 등으로 시작하는 머리말은 textpos 오절단 대신 거부.
+        let mut hf = hf_item(ApplyPageType::Both, &["머리말"]);
+        hf.paragraphs[0].runs.insert(
+            0,
+            Run::control(
+                hwpforge_core::control::Control::footnote(vec![Paragraph::with_runs(
+                    vec![Run::text("각주", CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )]),
+                CharShapeIndex::new(0),
+            ),
+        );
+        let doc = doc_with_bands(body_pages(1), vec![hf], vec![]);
+        let err = replay(&doc, &PdfOptions::default()).unwrap_err();
+        assert!(matches!(err, PdfError::InvalidCache { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn page_starts_on_warns_even_without_headers_or_footers() {
+        // 독립 리뷰 M2 상환: pageStartsOn 은 페이지네이션 속성 — 머리말/꼬리말
+        // 유무와 무관하게 무조건 표면화돼야 한다 (§9 b0).
+        let mut section = Section::with_paragraphs(body_pages(1), PageSettings::a4());
+        section.begin_num =
+            Some(BeginNum { page_starts_on: PageStartsOn::Even, ..BeginNum::default() });
+        let mut doc = Document::new();
+        doc.add_section(section);
+        let doc = doc.validate().expect("validate");
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
         assert!(layout
             .warnings
             .iter()
