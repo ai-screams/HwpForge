@@ -31,6 +31,34 @@ import time
 from pathlib import Path
 
 
+HANCOM_TTF = Path("/Applications/Hancom Office HWP.app/Contents/Resources/Hnc/Shared/TTF")
+
+
+def font_inventory(extra_args: list[str]) -> dict:
+    """실행 환경 폰트 인벤토리 (§3 manifest 요구 — 성공률·축 폴백 수치의 재현 조건).
+
+    resolver 내부를 모르므로 정직한 프록시: 발견 대상 디렉터리의 폰트 파일명 집합.
+    """
+    dirs: list[Path] = []
+    if "hancom" in extra_args or "platform" in extra_args:
+        dirs.append(HANCOM_TTF)
+    dirs += [Path(a) for i, a in enumerate(extra_args) if i > 0 and extra_args[i - 1] == "--font-dir"]
+    inventory = {}
+    for d in dirs:
+        if d.is_dir():
+            names = sorted(
+                p.name for p in d.rglob("*") if p.suffix.lower() in (".ttf", ".ttc", ".otf")
+            )
+            inventory[str(d)] = {
+                "count": len(names),
+                "names_sha256": hashlib.sha256("\n".join(names).encode()).hexdigest()[:16],
+                "names": names,
+            }
+        else:
+            inventory[str(d)] = {"count": 0, "missing": True}
+    return inventory
+
+
 def git_commit(repo: Path) -> str:
     try:
         out = subprocess.run(
@@ -167,6 +195,7 @@ def main() -> int:
         "os": platform.platform(),
         "bin": str(args.bin),
         "extra_args": args.extra,
+        "font_inventory": font_inventory(args.extra),
         "timeout_s": args.timeout,
         "corpus": str(args.corpus),
         "total_manifested": total_manifested,

@@ -29,13 +29,17 @@ except ImportError:  # pragma: no cover
 
 
 def rasterize(pdf: Path, out_dir: Path, tag: str, dpi: int) -> list[Path]:
-    subprocess.run(
-        [
-            "gs", "-dNOPAUSE", "-dBATCH", "-dQUIET", "-sDEVICE=pnggray", f"-r{dpi}",
-            f"-sOutputFile={out_dir}/{tag}-%d.png", str(pdf),
-        ],
-        check=True,
-    )
+    try:
+        subprocess.run(
+            [
+                "gs", "-dNOPAUSE", "-dBATCH", "-dQUIET", "-sDEVICE=pnggray", f"-r{dpi}",
+                f"-sOutputFile={out_dir}/{tag}-%d.png", str(pdf),
+            ],
+            check=True,
+        )
+    except FileNotFoundError:
+        print("ghostscript(`gs`) 필요: brew install ghostscript", file=sys.stderr)
+        sys.exit(2)
     return sorted(out_dir.glob(f"{tag}-*.png"), key=lambda p: int(p.stem.rsplit("-", 1)[1]))
 
 
@@ -70,14 +74,16 @@ def main() -> int:
 
     args.out.mkdir(parents=True, exist_ok=True)
     worst = 0.0
+    page_mismatch = False
     with tempfile.TemporaryDirectory() as td:
         tdp = Path(td)
         ours_pages = rasterize(args.ours, tdp, "ours", args.dpi)
         ref_pages = rasterize(args.reference, tdp, "ref", args.dpi)
         n = min(len(ours_pages), len(ref_pages))
         if len(ours_pages) != len(ref_pages):
+            # 쪽수 = 유일한 구조 신호 — 잉크 비율/임계와 무관하게 무조건 실패.
             print(f"쪽수 불일치: ours {len(ours_pages)} vs reference {len(ref_pages)}")
-            worst = 1.0
+            page_mismatch = True
         pages = args.pages or range(1, n + 1)
         for p in pages:
             if p < 1 or p > n:
@@ -86,8 +92,8 @@ def main() -> int:
             ratio = overlay(ours_pages[p - 1], ref_pages[p - 1], out_png)
             worst = max(worst, ratio)
             print(f"p{p}: 불일치 잉크 {ratio:.4f} → {out_png}")
-    print(f"worst = {worst:.4f} (상한 {args.max_diff})")
-    return 0 if worst <= args.max_diff else 1
+    print(f"worst = {worst:.4f} (상한 {args.max_diff})" + (" · 쪽수 불일치" if page_mismatch else ""))
+    return 1 if page_mismatch or worst > args.max_diff else 0
 
 
 if __name__ == "__main__":

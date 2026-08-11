@@ -27,7 +27,8 @@ const CFB_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
 
 #[derive(Serialize)]
 struct WarningDto {
-    /// 발생 단계: `convert`(HWP5→HWPX) | `decode`(HWPX 해석) | `render`(PDF).
+    /// 발생 단계: `input`(디스패치) | `convert`(HWP5→HWPX) | `decode`(HWPX 해석)
+    /// | `render`(PDF).
     stage: &'static str,
     /// 안정 코드 (variant 유래 — 스크립트 필터링용).
     code: &'static str,
@@ -38,6 +39,7 @@ struct WarningDto {
 
 #[derive(Serialize)]
 struct WarningCounts {
+    input: usize,
     convert: usize,
     decode: usize,
     render: usize,
@@ -202,6 +204,8 @@ pub fn run(
     partial_cache_reject: bool,
     json_mode: bool,
 ) {
+    // 플래그 오류는 파이프라인 진입 전에 (독립 리뷰 L1 — .hwp 변환 후 exit 방지).
+    let discovery = parse_discovery(discovery, json_mode);
     check_file_size(input, json_mode);
     let bytes = std::fs::read(input).unwrap_or_else(|err| {
         CliError::new("FILE_READ_FAILED", format!("Cannot read '{}': {err}", input.display()))
@@ -228,7 +232,7 @@ pub fn run(
     if let Some(implied) = ext_implies {
         if implied != detected {
             warnings.push(WarningDto {
-                stage: "decode",
+                stage: "input",
                 code: "EXTENSION_MISMATCH",
                 message: format!("extension implies {implied} but content is {detected}"),
                 location: None,
@@ -268,7 +272,7 @@ pub fn run(
 
     let mut options = PdfOptions::default();
     options.font_dirs = font_dirs.to_vec();
-    options.discovery = parse_discovery(discovery, json_mode);
+    options.discovery = discovery;
     options.font_fallback =
         if degraded { FontFallbackMode::Degraded } else { FontFallbackMode::Fatal };
     options.partial_cache = if partial_cache_reject {
@@ -289,12 +293,14 @@ pub fn run(
             });
     warnings.extend(rendered.warnings.iter().map(render_warning_dto));
 
-    // 산출 경로: 미지정 = 입력의 .pdf 교체. 쓰기는 원자적 (tmp → rename).
+    // 산출 경로: 미지정 = 입력의 .pdf 교체. 쓰기는 원자적 (tmp → rename) —
+    // tmp 이름에 pid 를 넣어 동시 실행 충돌을 피하고, 실패 시 잔여물을 정리한다.
     let out_path = output.map_or_else(|| input.with_extension("pdf"), Path::to_path_buf);
-    let tmp_path = out_path.with_extension("pdf.tmp");
+    let tmp_path = out_path.with_extension(format!("pdf.tmp.{}", std::process::id()));
     std::fs::write(&tmp_path, &rendered.bytes)
         .and_then(|()| std::fs::rename(&tmp_path, &out_path))
         .unwrap_or_else(|err| {
+            let _ = std::fs::remove_file(&tmp_path);
             CliError::new(
                 "FILE_WRITE_FAILED",
                 format!("Cannot write '{}': {err}", out_path.display()),
@@ -303,6 +309,7 @@ pub fn run(
         });
 
     let counts = WarningCounts {
+        input: warnings.iter().filter(|w| w.stage == "input").count(),
         convert: warnings.iter().filter(|w| w.stage == "convert").count(),
         decode: warnings.iter().filter(|w| w.stage == "decode").count(),
         render: warnings.iter().filter(|w| w.stage == "render").count(),

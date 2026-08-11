@@ -4541,6 +4541,7 @@ fn hancom_ttf_dir() -> Option<PathBuf> {
 }
 
 #[test]
+#[ignore = "requires Hancom TTF bundle (macOS) — run with --run-ignored all"]
 fn to_pdf_renders_hwpx_fixture() {
     if hancom_ttf_dir().is_none() {
         return;
@@ -4564,6 +4565,7 @@ fn to_pdf_renders_hwpx_fixture() {
 }
 
 #[test]
+#[ignore = "requires Hancom TTF bundle (macOS) — run with --run-ignored all"]
 fn to_pdf_sniffs_content_over_extension() {
     // corpus 실측(.hwpx 탈 HWP5 79건)의 역방향 재현: HWPX 를 .hwp 로 위장 —
     // 확장자가 아니라 콘텐츠로 라우팅하고 불일치를 경고한다.
