@@ -170,7 +170,7 @@ jobs:
         run: rustup show
       - uses: Swatinem/rust-cache@v2
       - name: Install nextest
-        uses: taiki-e/install-action@v2.85.6
+        uses: taiki-e/install-action@v2.85.10
         with:
           tool: cargo-nextest
       - name: cargo nextest run (all features, ci profile)
@@ -204,7 +204,7 @@ jobs:
         run: rustup show
       - uses: Swatinem/rust-cache@v2
       - name: Install coverage tools
-        uses: taiki-e/install-action@v2.85.6
+        uses: taiki-e/install-action@v2.85.10
         with:
           tool: cargo-nextest,cargo-llvm-cov
       - name: cargo llvm-cov (fail-under-lines ${{ env.COVERAGE_THRESHOLD }}%)
@@ -234,7 +234,7 @@ jobs:
         run: rustup show
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-deny
-        uses: taiki-e/install-action@v2.85.6
+        uses: taiki-e/install-action@v2.85.10
         with:
           tool: cargo-deny
       - name: cargo deny check
