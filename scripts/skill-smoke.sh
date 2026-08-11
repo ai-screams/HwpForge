@@ -151,6 +151,21 @@ else
   echo "  (skipped — no .hwp fixture found)"
 fi
 
+echo "== to-pdf (W6a — 콘텐츠 스니핑 / fail-closed / 렌더는 폰트 있을 때만) =="
+printf 'not a container' > garbage.hwpx
+assert_fail_grep "$BIN" to-pdf garbage.hwpx -- "UNRECOGNIZED_FORMAT"
+PDF_FIXTURE="$ROOT/tests/fixtures/pdf-rules/rules-headerfooter.hwpx"
+HANCOM_TTF="/Applications/Hancom Office HWP.app/Contents/Resources/Hnc/Shared/TTF"
+if [[ -f "$PDF_FIXTURE" && -d "$HANCOM_TTF" ]]; then
+  assert_ok "$BIN" to-pdf "$PDF_FIXTURE" -o smoke.pdf --discovery hancom
+  assert_file smoke.pdf
+  "$BIN" --json to-pdf "$PDF_FIXTURE" -o smoke2.pdf --discovery hancom > topdf.json 2>/dev/null
+  assert_grep topdf.json '"detected_format":"hwpx"'
+  assert_grep topdf.json '"warning_counts"'
+else
+  echo "  (렌더 검사 skipped — 한컴 폰트 번들 또는 fixture 없음)"
+fi
+
 echo ""
 echo "== Skill smoke summary: $PASS passed, $FAIL failed =="
 [[ $FAIL -eq 0 ]]
