@@ -521,11 +521,23 @@ fn replay_section(
                 pages,
                 warnings,
             )?;
-            pending_table_anchor =
-                Some((outcome.expected_next_v, outcome.anchor_slack, location.clone()));
-            // 분할 표는 흐름 좌표를 마지막 조각 쪽으로 옮긴다 — prev_v 를
-            // host v 로 두면 후속 문단의 (작아진) v 가 "새 쪽"으로 오판된다.
-            prev_v = Some(outcome.expected_next_v);
+            // 흐름 앵커 (over-split 수정 — 두 모델 실측):
+            // ① 글자취급(인라인) 표 = host lineseg 가 표를 담아 vertsize ≈
+            //   표높이 — 흐름 = host_v + vertsize (기재부 corpus 실측: 계산치
+            //   의 outMargin 합산이 실제 간격보다 +190HU 과대 → 다음 문단을
+            //   새 쪽으로 오판했다).
+            // ② 앵커형 표 = host lineseg 는 순수 줄높이(vertsize ≪ 표높이) —
+            //   흐름 = 계산치 host_v+om+Σ행높이+om (rules-table 실측 정확 일치).
+            // 판별 = host.vertsize ≥ 계산 총높이. 분할 표는 항상 계산 흐름
+            // (캐시가 연속 조각을 표현 못 함 — prev_v 를 host v 로 두면 후속
+            // 문단의 작아진 v 가 "새 쪽"으로 오판되는 기존 근거 유지).
+            let flow_next = if !outcome.split && host.vertsize >= outcome.total_height {
+                host_v + host.vertsize
+            } else {
+                outcome.expected_next_v
+            };
+            pending_table_anchor = Some((flow_next, outcome.anchor_slack, location.clone()));
+            prev_v = Some(flow_next);
             renderable += 1;
             continue;
         }
@@ -1233,6 +1245,56 @@ mod tests {
     }
 
     #[test]
+    fn unsplit_table_flow_uses_host_cache_not_computed_margins() {
+        // 기재부 corpus over-split 실측 (p64→p65): 미분할 표의 계산치
+        // (outMargin 합산 = host_v + om.top + 표높이 + om.bottom)가 캐시
+        // 흐름(host_v + vertsize + spacing)보다 커서, 다음 문단 v 를
+        // "새 쪽"으로 오판해 한 쪽을 둘로 쪼갰다. 흐름 앵커 = host lineseg.
+        let mut table = one_cell_cached_table();
+        table.out_margin = Some(hwpforge_core::table::TableMargin {
+            left: HwpUnit::new(283).expect("283"),
+            right: HwpUnit::new(283).expect("283"),
+            top: HwpUnit::new(283).expect("283"),
+            bottom: HwpUnit::new(283).expect("283"),
+        });
+        let mut host = table_host(table, 0);
+        // 캐시 진실: host lineseg vertsize = 표높이 1000 (corpus 실측: vertsize
+        // = sz.h, outMargin 미포함).
+        host.layout_cache.as_mut().expect("host cache").lines[0].vertsize = 1000;
+        // 다음 문단 = 캐시 흐름 그대로 (1000 + 문단 간격 376) — 계산치
+        // 1566(= om 283 + 표높이 1000 + om 283) 보다 작아 구 코드는 새 쪽으로
+        // 오판했다 (corpus p64→p65 와 동일 비율).
+        let next = para_with_cache("다음 문단", vec![seg(0, 1376)]);
+        let doc = doc_of(vec![host, next]);
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        assert_eq!(layout.pages.len(), 1, "미분할 표 뒤 문단은 같은 쪽에 남아야 함");
+    }
+
+    #[test]
+    fn anchored_table_flow_uses_computed_margins() {
+        // 앵커형(비-글자취급) 표: host lineseg 는 순수 줄높이(1000 ≪ 표높이)
+        // — 흐름 = host_v + om + Σ행높이 + om (rules-table 실물 wire 정확 일치
+        // 모델). 인라인 판별(vertsize ≥ 표높이)에 걸리지 않아야 한다.
+        let tall_cell = TableCell::new(
+            vec![para_with_cache("셀", vec![seg(0, 0), seg(1, 1500)])],
+            HwpUnit::from_pt(100.0).unwrap(),
+        );
+        let mut table = Table::new(vec![TableRow::new(vec![tall_cell])])
+            .with_layout_cache(hwpforge_core::table::TableLayoutCache::new(None, true));
+        table.out_margin = Some(hwpforge_core::table::TableMargin {
+            left: HwpUnit::new(283).expect("283"),
+            right: HwpUnit::new(283).expect("283"),
+            top: HwpUnit::new(283).expect("283"),
+            bottom: HwpUnit::new(283).expect("283"),
+        });
+        // H = 셀 extent 2500 (= 1500 + 1000) → 흐름 = 0 + 283 + 2500 + 283 = 3066.
+        let next = para_with_cache("다음", vec![seg(0, 3066)]);
+        let doc = doc_of(vec![table_host(table, 0), next]);
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        assert_eq!(layout.pages.len(), 1, "앵커형 계산 흐름과 캐시가 정합");
+    }
+
+    #[test]
     fn table_mixed_with_visible_text_is_rejected() {
         let mut host = para_with_cache("표 호스트", vec![seg(0, 0)]);
         host.add_run(Run::table(one_cell_cached_table(), CharShapeIndex::new(0)));
@@ -1327,7 +1389,11 @@ mod tests {
         // "C"(행1 셀) baseline = body_top + 행0 높이(1000, 최소 유지) + 850
         // — 부족분이 행0 이 아니라 행1 하단으로 갔다는 증명 (독립리뷰 M1).
         let follow = para_with_cache("후속", vec![seg(0, 5000)]);
-        let doc = doc_of(vec![table_host(make(), 0), follow]);
+        // host lineseg vertsize = 표 흐름 소비(총높이 5000) — corpus 실측 규칙
+        // (미분할 표의 흐름 앵커 = 캐시). 이전 합성값 1000 은 실물과 다른 거짓말.
+        let mut host = table_host(make(), 0);
+        host.layout_cache.as_mut().expect("host cache").lines[0].vertsize = 5000;
+        let doc = doc_of(vec![host, follow]);
         let layout = replay(&doc, &PdfOptions::default()).expect("deficit replay");
         assert!(
             layout.warnings.iter().any(|w| matches!(w, PdfWarning::TableDeficitDistributed { .. })),
@@ -1345,7 +1411,9 @@ mod tests {
         // 어긋난 앵커(6000 > 기대 5000, 쪽분할 아님) = 캐시 모순 fatal.
         // (기대보다 작은 v 는 쪽분할로 해석돼 앵커를 못 건다 — 문서화된 사각.)
         let stale = para_with_cache("후속", vec![seg(0, 6000)]);
-        let doc = doc_of(vec![table_host(make(), 0), stale]);
+        let mut host2 = table_host(make(), 0);
+        host2.layout_cache.as_mut().expect("host cache").lines[0].vertsize = 5000;
+        let doc = doc_of(vec![host2, stale]);
         let err = replay(&doc, &PdfOptions::default()).unwrap_err();
         assert!(matches!(err, PdfError::InvalidCache { .. }), "{err:?}");
     }

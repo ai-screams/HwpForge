@@ -53,6 +53,14 @@ pub(crate) struct TableReplayOutcome {
     /// 단위로 어긋나므로 "마지막 조각 최소 행높이 미만의 양의 편차"만
     /// 허용하면 오류 포착력은 유지된다.
     pub anchor_slack: i32,
+    /// 쪽 경계 분할 여부 — 분할 표는 계산 페이지네이션으로만 흐름 전진 가능
+    /// (캐시가 연속 조각을 표현하지 못함).
+    pub split: bool,
+    /// 계산된 표 총높이 (Σ행높이, outMargin 미포함) — 미분할 표의 흐름 모델
+    /// 판별용: host lineseg vertsize ≥ 이 값이면 글자취급(인라인) 표라
+    /// host 줄이 흐름 소비를 담고(기재부 corpus 실측), 미만이면 앵커형이라
+    /// 계산치(`expected_next_v`)가 흐름이다 (rules-table 실측).
+    pub total_height: i32,
 }
 
 /// 표 host 문단 하나를 재생한다. 분할 시 `pages` 에 새 쪽을 만든다.
@@ -317,7 +325,12 @@ pub(crate) fn replay_table(
         .min()
         .unwrap_or(1)
         .max(1);
-    Ok(TableReplayOutcome { expected_next_v, anchor_slack })
+    Ok(TableReplayOutcome {
+        expected_next_v,
+        anchor_slack,
+        split: frags.len() > 1,
+        total_height: row_heights.iter().sum(),
+    })
 }
 
 /// 앵커 제약(`x[c+span] − x[c] = width`)으로 열 경계 오프셋을 푼다.
