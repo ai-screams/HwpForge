@@ -355,3 +355,108 @@ pub fn run(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detect_format_by_content() {
+        assert_eq!(detect_format(&CFB_MAGIC), Some("hwp5"));
+        assert_eq!(detect_format(b"PK\x03\x04zipzip"), Some("hwpx"));
+        assert_eq!(detect_format(b"not a container"), None);
+        assert_eq!(detect_format(b""), None);
+    }
+
+    #[test]
+    fn convert_warning_dto_maps_every_variant() {
+        let cases = [
+            (Hwp5Warning::UnsupportedTag { tag_id: 0x5B, offset: 12 }, "UNSUPPORTED_TAG"),
+            (Hwp5Warning::SkippedStream { name: "Scripts".into() }, "SKIPPED_STREAM"),
+            (
+                Hwp5Warning::DroppedControl { control: "ole_object", reason: "x".into() },
+                "DROPPED_CONTROL",
+            ),
+            (
+                Hwp5Warning::ProjectionFallback { subject: "s", reason: "r".into() },
+                "PROJECTION_FALLBACK",
+            ),
+            (Hwp5Warning::ParserFallback { subject: "s", reason: "r".into() }, "PARSER_FALLBACK"),
+        ];
+        for (w, code) in cases {
+            let dto = convert_warning_dto(&w);
+            assert_eq!(dto.stage, "convert");
+            assert_eq!(dto.code, code);
+        }
+    }
+
+    #[test]
+    fn decode_warning_dto_carries_attribute_location() {
+        let dto = decode_warning_dto(&DecodeWarning::UnknownEnumValue {
+            attribute: "hp:header@applyPageType",
+            raw: "WEIRD".into(),
+            fallback: "BOTH",
+        });
+        assert_eq!((dto.stage, dto.code), ("decode", "UNKNOWN_ENUM_VALUE"));
+        assert_eq!(dto.location.as_deref(), Some("hp:header@applyPageType"));
+    }
+
+    #[test]
+    fn render_warning_dto_maps_every_variant() {
+        use hwpforge_smithy_pdf::font::FaceStyle;
+        let loc = || "s0/p1/l2".to_string();
+        let cases: Vec<(PdfWarning, &str)> = vec![
+            (PdfWarning::ParagraphSkipped { location: loc() }, "PARAGRAPH_SKIPPED"),
+            (
+                PdfWarning::FontStyleFallback {
+                    face: "f".into(),
+                    requested: FaceStyle::Bold,
+                    location: loc(),
+                },
+                "FONT_STYLE_FALLBACK",
+            ),
+            (
+                PdfWarning::FontAxisFallback { fonts: vec!["a".into()], location: loc() },
+                "FONT_AXIS_FALLBACK",
+            ),
+            (
+                PdfWarning::FontEmbedPreviewPrint {
+                    face: "f".into(),
+                    path: "/x".into(),
+                    fingerprint: "00".into(),
+                },
+                "FONT_EMBED_PREVIEW_PRINT",
+            ),
+            (PdfWarning::AlignmentApproximated { location: loc() }, "ALIGNMENT_APPROXIMATED"),
+            (PdfWarning::NonTextRunDropped { location: loc() }, "NON_TEXT_RUN_DROPPED"),
+            (PdfWarning::TablePaginationComputed { location: loc() }, "TABLE_PAGINATION_COMPUTED"),
+            (PdfWarning::TableDeficitDistributed { location: loc() }, "TABLE_DEFICIT_DISTRIBUTED"),
+            (
+                PdfWarning::UnsupportedTableStyle { location: loc(), what: "cell fill" },
+                "UNSUPPORTED_TABLE_STYLE",
+            ),
+            (PdfWarning::BandOverflow { kind: "header", location: loc() }, "BAND_OVERFLOW"),
+            (PdfWarning::PageStartsOnFallback { section: 0 }, "PAGE_STARTS_ON_FALLBACK"),
+            (PdfWarning::VertAlignFallback { location: loc() }, "VERT_ALIGN_FALLBACK"),
+            (PdfWarning::PageNumberSkipped { section: 0, what: "position" }, "PAGE_NUMBER_SKIPPED"),
+            (PdfWarning::PageNumberStyleFallback { section: 0 }, "PAGE_NUMBER_STYLE_FALLBACK"),
+            (
+                PdfWarning::MissingGlyphs { face: "f".into(), count: 2, location: loc() },
+                "MISSING_GLYPHS",
+            ),
+            (PdfWarning::LineOverflow { location: loc(), excess: 190 }, "LINE_OVERFLOW"),
+        ];
+        for (w, code) in &cases {
+            let dto = render_warning_dto(w);
+            assert_eq!(dto.stage, "render");
+            assert_eq!(&dto.code, code, "{w:?}");
+        }
+    }
+
+    #[test]
+    fn parse_discovery_accepts_documented_modes() {
+        assert!(matches!(parse_discovery("explicit", false), FontDiscovery::ExplicitOnly));
+        assert!(matches!(parse_discovery("hancom", false), FontDiscovery::HancomBundle));
+        assert!(matches!(parse_discovery("platform", false), FontDiscovery::Platform));
+    }
+}
