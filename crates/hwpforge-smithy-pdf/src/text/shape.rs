@@ -36,6 +36,12 @@ pub struct ShapedText {
     /// W5-b 쪽번호 세로 앵커에 사용: baseline = em 하단 앵커 − descent
     /// (한컴 콘텐트 스트림 실측 — rules-pagenum §8c, 모델 오차 ≤0.16pt).
     pub descent: f64,
+    /// 폰트에 글리프가 없는(notdef, glyph_id 0) 입력 문자 수.
+    ///
+    /// 조용한 tofu(□) 방출 방지 신호 (W6 §5f — corpus 실측: 한자/특수기호가
+    /// 폴백 폰트에 없으면 무음으로 □ 가 찍혔다). 소비자가 Fatal/Degraded
+    /// 정책으로 처리한다.
+    pub missing_glyphs: usize,
 }
 
 impl ShapedText {
@@ -97,7 +103,8 @@ pub fn shape_text(
         });
     }
     let descent = f64::from(face.descender()).abs() / upem * size;
-    Ok(ShapedText { glyphs, descent })
+    let missing_glyphs = glyphs.iter().filter(|g| g.glyph_id == 0).count();
+    Ok(ShapedText { glyphs, descent, missing_glyphs })
 }
 
 #[cfg(test)]

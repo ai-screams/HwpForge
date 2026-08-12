@@ -222,6 +222,24 @@ pub enum PdfWarning {
         /// 섹션 인덱스.
         section: usize,
     },
+    /// 폰트에 없는 글리프(notdef)를 tofu(□)로 렌더함 (Degraded 옵트인 —
+    /// 기본 Fatal 모드는 [`PdfError::GlyphsUnavailable`]).
+    MissingGlyphs {
+        /// face 이름.
+        face: String,
+        /// notdef 로 찍힌 문자 수.
+        count: usize,
+        /// 문서 내 위치.
+        location: String,
+    },
+    /// 줄 자연폭이 캐시 줄 상자를 초과 — 자간/장평 미carry 갭의 표면화
+    /// (줄 시작은 캐시-정확하나 우측으로 넘칠 수 있음 — corpus 실측 §5f).
+    LineOverflow {
+        /// 문서 내 위치.
+        location: String,
+        /// 초과 폭 (HWPUNIT).
+        excess: i32,
+    },
 }
 
 /// 렌더 실패 (fail-closed — 출력 바이트 없음).
@@ -261,6 +279,20 @@ pub enum PdfError {
     InternalInvariant {
         /// 위반 상세 (위치 포함).
         detail: String,
+    },
+    /// 폰트에 없는 글리프(notdef) 포함 — 기본([`FontFallbackMode::Fatal`])
+    /// 모드 (조용한 tofu(□) 출력 금지 — Degraded 옵트인은 경고 후 렌더).
+    #[error(
+        "font {face:?} lacks glyphs for {count} character(s) at {location} \
+         (would render as tofu — opt in to FontFallbackMode::Degraded to render with a warning)"
+    )]
+    GlyphsUnavailable {
+        /// face 이름.
+        face: String,
+        /// notdef 문자 수.
+        count: usize,
+        /// 문서 내 위치.
+        location: String,
     },
     /// 같은 쪽에 머리말/꼬리말 후보가 2개 이상 매치 (BOTH+ODD 중복 등) —
     /// 한컴 우선순위 미실측이라 첫 항목 선택 대신 거부한다 (게이트2 H2).

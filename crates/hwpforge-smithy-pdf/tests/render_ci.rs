@@ -320,3 +320,51 @@ fn whitespace_only_line_renders_without_glyphs() {
     assert_eq!(page_count(&output.bytes), 1);
     assert!(output.warnings.is_empty(), "{:?}", output.warnings);
 }
+
+// ── W6 §5f: 무음 시각 결함의 신호화 (tofu·줄 넘침) ──────────────
+
+#[test]
+fn missing_glyph_is_fatal_by_default() {
+    // corpus 실측: 폴백 폰트에 없는 한자/기호가 조용히 □ 로 찍혔다 — 기본 fatal.
+    let doc = doc_of(vec![para_with_cache("高", vec![seg(0, 0)])]);
+    let styles = TestStyles::default();
+    let err =
+        render_document(&PdfInput { document: &doc, styles: &styles }, &options()).unwrap_err();
+    assert!(matches!(err, PdfError::GlyphsUnavailable { count: 1, .. }), "{err:?}");
+}
+
+#[test]
+fn degraded_mode_renders_tofu_with_missing_glyphs_warning() {
+    let doc = doc_of(vec![para_with_cache("高가", vec![seg(0, 0)])]);
+    let styles = TestStyles::default();
+    let mut opts = options();
+    opts.font_fallback = FontFallbackMode::Degraded;
+    let out =
+        render_document(&PdfInput { document: &doc, styles: &styles }, &opts).expect("render");
+    assert!(
+        out.warnings.iter().any(|w| matches!(w, PdfWarning::MissingGlyphs { count: 1, .. })),
+        "{:?}",
+        out.warnings
+    );
+}
+
+#[test]
+fn line_overflow_is_surfaced() {
+    // 자연폭(가나다라 = 4000HU @10pt) > 캐시 줄 상자(2000HU) — 자간/장평
+    // 미carry 갭의 최소형. 렌더는 되고 경고만 표면화된다.
+    let mut para = para_with_cache("가나다라", vec![seg(0, 0)]);
+    if let Some(cache) = para.layout_cache.as_mut() {
+        cache.lines[0].horzsize = 2000;
+    }
+    let doc = doc_of(vec![para]);
+    let out =
+        render_document(&PdfInput { document: &doc, styles: &TestStyles::default() }, &options())
+            .expect("render");
+    assert!(
+        out.warnings
+            .iter()
+            .any(|w| matches!(w, PdfWarning::LineOverflow { excess, .. } if *excess >= 1900)),
+        "{:?}",
+        out.warnings
+    );
+}

@@ -175,6 +175,18 @@ fn render_warning_dto(w: &PdfWarning) -> WarningDto {
             "\"쪽 번호\" CHAR style absent — fell back to default char shape".to_string(),
             Some(format!("s{section}")),
         ),
+        PdfWarning::MissingGlyphs { face, count, location } => (
+            "MISSING_GLYPHS",
+            format!("{face:?} lacks glyphs for {count} character(s) — rendered as tofu"),
+            Some(location.clone()),
+        ),
+        PdfWarning::LineOverflow { location, excess } => (
+            "LINE_OVERFLOW",
+            format!(
+                "line exceeds its cached box by {excess} HWPUNIT (char spacing/scale not carried)"
+            ),
+            Some(location.clone()),
+        ),
         other => ("OTHER", format!("{other:?}"), None),
     };
     WarningDto { stage: "render", code, message, location }

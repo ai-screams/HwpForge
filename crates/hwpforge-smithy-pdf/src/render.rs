@@ -246,6 +246,26 @@ pub fn render_document(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<
                 )?;
                 let font = &table.fonts[key.0];
                 let shaped = shape_text(&font.data, font.face_index, text, size_hwpunit)?;
+                // tofu 게이트 (W6 §5f): 폰트에 없는 글리프는 조용히 □ 로
+                // 찍힌다 — 기본 fatal, Degraded 만 경고 후 렌더.
+                if shaped.missing_glyphs > 0 {
+                    match options.font_fallback {
+                        FontFallbackMode::Fatal => {
+                            return Err(PdfError::GlyphsUnavailable {
+                                face: font.face_name.clone(),
+                                count: shaped.missing_glyphs,
+                                location: line.location.clone(),
+                            });
+                        }
+                        FontFallbackMode::Degraded => {
+                            warnings.push(PdfWarning::MissingGlyphs {
+                                face: font.face_name.clone(),
+                                count: shaped.missing_glyphs,
+                                location: line.location.clone(),
+                            });
+                        }
+                    }
+                }
                 prepared.push(PreparedRun {
                     key,
                     size_hwpunit,
@@ -260,6 +280,15 @@ pub fn render_document(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<
                 width: prepared.iter().map(|p| p.shaped.natural_width()).sum(),
                 space_count: prepared.iter().map(|p| p.shaped.space_count()).sum(),
             };
+            // 줄 넘침 표면화 (W6 §5f): 자간/장평 미carry 로 우리 자연폭이
+            // 캐시 줄 상자를 넘으면 우측으로 삐져나간다 — 무음 금지.
+            let overflow = natural.width - f64::from(line.line_box.horzsize);
+            if overflow > 10.0 {
+                warnings.push(PdfWarning::LineOverflow {
+                    location: line.location.clone(),
+                    excess: overflow.round() as i32,
+                });
+            }
             let placement = place_line(line.alignment, line.line_box, natural, line.is_last_line);
             if placement.needs_warning {
                 warnings
@@ -310,6 +339,24 @@ pub fn render_document(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<
             )?;
             let font = &table.fonts[key.0];
             let shaped = shape_text(&font.data, font.face_index, &pn.text, size_hwpunit)?;
+            if shaped.missing_glyphs > 0 {
+                match options.font_fallback {
+                    FontFallbackMode::Fatal => {
+                        return Err(PdfError::GlyphsUnavailable {
+                            face: font.face_name.clone(),
+                            count: shaped.missing_glyphs,
+                            location: pn.location.clone(),
+                        });
+                    }
+                    FontFallbackMode::Degraded => {
+                        warnings.push(PdfWarning::MissingGlyphs {
+                            face: font.face_name.clone(),
+                            count: shaped.missing_glyphs,
+                            location: pn.location.clone(),
+                        });
+                    }
+                }
+            }
             // 가로 = 페이지 폭 중앙 − 자연폭/2 (여백 무관 — R6 실측 Δ0.08pt).
             let origin_x = (f64::from(page.width) - shaped.natural_width()) / 2.0;
             let baseline_y = f64::from(pn.anchor_bottom) - shaped.descent;
