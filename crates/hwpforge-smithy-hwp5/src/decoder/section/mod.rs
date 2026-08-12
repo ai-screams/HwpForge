@@ -32,8 +32,8 @@ use crate::ctrl_ids::{
     CTRL_ID_ATNO, CTRL_ID_CLICK_HERE, CTRL_ID_COLUMN_DEF, CTRL_ID_COMPOSE, CTRL_ID_DUTMAL,
     CTRL_ID_ENDNOTE, CTRL_ID_EQED, CTRL_ID_FIELD_CROSSREF, CTRL_ID_FIELD_DATE_CODE,
     CTRL_ID_FIELD_PATH, CTRL_ID_FIELD_SUMMERY, CTRL_ID_FOOTER, CTRL_ID_FOOTNOTE, CTRL_ID_GSO,
-    CTRL_ID_HEADER, CTRL_ID_INDEXMARK, CTRL_ID_MEMO, CTRL_ID_NEW_NUMBER, CTRL_ID_SECD,
-    CTRL_ID_TABLE,
+    CTRL_ID_HEADER, CTRL_ID_INDEXMARK, CTRL_ID_MEMO, CTRL_ID_NEW_NUMBER, CTRL_ID_PAGE_HIDING,
+    CTRL_ID_SECD, CTRL_ID_TABLE,
 };
 
 /// `ShapeComponent` (`0x4C`) type tag identifying a connect line, stored as the
@@ -130,6 +130,10 @@ impl ParaBuf {
             text_segments,
             para_shape_id: self.header.para_shape_id,
             style_id: self.header.style_id,
+            // divide_sort bit2/bit3 = 쪽/단 나누기 (hwp-rs 확증 + F2 실측:
+            // 한컴 재저장 HWPX pageBreak="1" 대응 — W3 carry 시작).
+            page_break: self.header.divide_sort & 0x04 != 0,
+            column_break: self.header.divide_sort & 0x08 != 0,
             char_shape_runs: self.char_shape_runs,
             line_segments: self.line_segments,
             controls: self.controls,
@@ -1560,6 +1564,20 @@ impl BodyTextParserState {
                         .to_string(),
                 });
             }
+        } else if ctrl_id == CTRL_ID_PAGE_HIDING {
+            // `pghd` 감추기 — 8바이트 payload (W3, F2 실측 §1.2).
+            if let Some(pghd) =
+                crate::schema::section::Hwp5PageHidingControl::parse(ctrl_id, &record.data)
+            {
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls.push(Hwp5Control::PageHiding(pghd));
+                }
+            } else {
+                self.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "page_hiding",
+                    reason: "malformed pghd CtrlHeader payload; dropping page hiding".to_string(),
+                });
+            }
         } else if ctrl_id == CTRL_ID_ATNO {
             // `atno` ctrl carries a single 4-byte kind flag
             // (`0x00`/`0x06`). No Command/trailer. Wave 12n.
@@ -2762,6 +2780,43 @@ mod tests {
             .warnings
             .iter()
             .any(|w| matches!(w, Hwp5Warning::DroppedControl { control: "new_number", .. })));
+    }
+
+    #[test]
+    fn ctrl_header_pghd_produces_typed_page_hiding() {
+        // F2-① 실측 (rules-pagehide-base.hwp): pghd = ctrl_id + 속성 u32 —
+        // `20 00 00 00` = bit5 = 쪽번호만 감춤.
+        let mut pghd = CTRL_ID_PAGE_HIDING.to_le_bytes().to_vec();
+        pghd.extend_from_slice(&[0x20, 0x00, 0x00, 0x00]);
+
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &pghd));
+        let result = parse_body_text(&stream, &version()).unwrap();
+        assert!(
+            result.paragraphs[0].controls.iter().any(|c| matches!(
+                c,
+                Hwp5Control::PageHiding(p) if p.mask == 0x20
+            )),
+            "typed PageHiding expected: {:?}",
+            result.paragraphs[0].controls
+        );
+    }
+
+    #[test]
+    fn ctrl_header_pghd_truncated_payload_warns_dropped() {
+        let mut pghd = CTRL_ID_PAGE_HIDING.to_le_bytes().to_vec();
+        pghd.extend_from_slice(&[0x20]);
+
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &pghd));
+        let result = parse_body_text(&stream, &version()).unwrap();
+        assert!(result.paragraphs[0].controls.is_empty());
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| matches!(w, Hwp5Warning::DroppedControl { control: "page_hiding", .. })));
     }
 
     #[test]

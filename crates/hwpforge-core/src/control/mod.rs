@@ -701,6 +701,30 @@ pub enum Control {
         number: u32,
     },
 
+    /// A `pghd` **감추기** control — hides the listed page furniture on the
+    /// **physical page containing the control** (HWPX `<hp:pageHiding>`).
+    ///
+    /// HWP5 wire (native fixture 실측 2026-08-12): 8 bytes — `ctrl_id +
+    /// 속성 u32`, bits 0-5 = 머리말/꼬리말/바탕쪽/테두리/배경/쪽번호
+    /// (secd 속성 word 와 동일 배열 — libhwp·hwp-rs 의 다른 주장은 반증).
+    /// `0x15` inline marker 로 앵커. corpus: 403/2,231 문서, 87% 가
+    /// 쪽번호만 감춤 (표지 관행). 감춤은 쪽번호 **카운터 전진을 막지
+    /// 않는다** (PDF 실측: `1, _, 3`).
+    PageHiding {
+        /// 머리말 감춤 (bit 0, `hideHeader`).
+        hide_header: bool,
+        /// 꼬리말 감춤 (bit 1, `hideFooter`).
+        hide_footer: bool,
+        /// 바탕쪽 감춤 (bit 2, `hideMasterPage`).
+        hide_master_page: bool,
+        /// 테두리 감춤 (bit 3, `hideBorder`).
+        hide_border: bool,
+        /// 배경 감춤 (bit 4, `hideFill`).
+        hide_fill: bool,
+        /// 쪽번호 감춤 (bit 5, `hidePageNum`).
+        hide_page_num: bool,
+    },
+
     /// An unrecognized control element preserved for round-trip fidelity.
     ///
     /// `tag` holds the element's tag name or type identifier.
@@ -781,6 +805,7 @@ impl Control {
             | Self::PathField { .. }
             | Self::InlinePageNumber { .. }
             | Self::NewNumber { .. }
+            | Self::PageHiding { .. }
             | Self::Unknown { .. } => {}
         }
     }
@@ -821,6 +846,7 @@ impl Control {
             Self::PathField { .. } => "path_field",
             Self::InlinePageNumber { .. } => "inline_page_number",
             Self::NewNumber { .. } => "new_number",
+            Self::PageHiding { .. } => "page_hiding",
             Self::Unknown { .. } => "unknown",
         }
     }
@@ -1830,6 +1856,27 @@ impl std::fmt::Display for Control {
             },
             Self::NewNumber { kind, number } => {
                 write!(f, "NewNumber({kind:?}, {number})")
+            }
+            Self::PageHiding {
+                hide_header,
+                hide_footer,
+                hide_master_page,
+                hide_border,
+                hide_fill,
+                hide_page_num,
+            } => {
+                let flags: Vec<&str> = [
+                    (*hide_header, "header"),
+                    (*hide_footer, "footer"),
+                    (*hide_master_page, "master_page"),
+                    (*hide_border, "border"),
+                    (*hide_fill, "fill"),
+                    (*hide_page_num, "page_num"),
+                ]
+                .into_iter()
+                .filter_map(|(on, name)| on.then_some(name))
+                .collect();
+                write!(f, "PageHiding({})", flags.join(","))
             }
             Self::Unknown { tag, .. } => {
                 write!(f, "Unknown({tag})")

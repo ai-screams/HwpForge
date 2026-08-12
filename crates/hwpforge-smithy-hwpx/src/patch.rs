@@ -841,6 +841,10 @@ fn collect_raw_run_slots(
         if ctrl.new_num.is_some() {
             semantic_run_idx += 1;
         }
+        // W3: `<hp:pageHiding>` 도 Control::PageHiding run 으로 복원 — 전진.
+        if ctrl.page_hiding.is_some() {
+            semantic_run_idx += 1;
+        }
     }
     if let Some(field_begin) = pending_field_begin.take() {
         if field_begin.field_type == "BOOKMARK" {

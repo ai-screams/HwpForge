@@ -70,10 +70,10 @@ use hwpforge_foundation::{BookmarkType, DropCapStyle, HwpUnit, TextDirection};
 use crate::schema::section::{
     HxBookmark, HxCaption, HxCellAddr, HxCellSpan, HxCellSz, HxChart, HxCompose, HxComposeCharPr,
     HxCtrl, HxDutmal, HxEquation, HxFlip, HxFootNote, HxImg, HxImgClip, HxImgDim, HxImgRect,
-    HxIndexMark, HxLineSeg, HxLineSegArray, HxMatrix, HxNewNum, HxOffset, HxPageMargin, HxPagePr,
-    HxParagraph, HxPic, HxPoint, HxRenderingInfo, HxRotationInfo, HxRun, HxRunCase, HxRunSwitch,
-    HxScript, HxSecPr, HxSection, HxShapeComment, HxSizeAttr, HxSubList, HxTable, HxTableCell,
-    HxTableMargin, HxTablePos, HxTableRow, HxTableSz, HxText, HxTitleMark,
+    HxIndexMark, HxLineSeg, HxLineSegArray, HxMatrix, HxNewNum, HxOffset, HxPageHiding,
+    HxPageMargin, HxPagePr, HxParagraph, HxPic, HxPoint, HxRenderingInfo, HxRotationInfo, HxRun,
+    HxRunCase, HxRunSwitch, HxScript, HxSecPr, HxSection, HxShapeComment, HxSizeAttr, HxSubList,
+    HxTable, HxTableCell, HxTableMargin, HxTablePos, HxTableRow, HxTableSz, HxText, HxTitleMark,
 };
 
 use super::EncodeOptions;
@@ -713,6 +713,7 @@ fn build_runs(
                     }
                     Control::IndexMark { .. }
                     | Control::NewNumber { .. }
+                    | Control::PageHiding { .. }
                     | Control::Bookmark { bookmark_type: BookmarkType::Point, .. } => {
                         if let Some(hx_ctrl) =
                             encode_control_to_ctrl(ctrl, depth, hyperlink_entries, options)?
@@ -1104,6 +1105,25 @@ fn encode_control_to_ctrl(
                 ..Default::default()
             }))
         }
+        // 감추기 → `<hp:pageHiding 6속성/>` (F2 한컴 실측 형태 — 전 속성 병기).
+        Control::PageHiding {
+            hide_header,
+            hide_footer,
+            hide_master_page,
+            hide_border,
+            hide_fill,
+            hide_page_num,
+        } => Ok(Some(HxCtrl {
+            page_hiding: Some(HxPageHiding {
+                hide_header: u8::from(*hide_header),
+                hide_footer: u8::from(*hide_footer),
+                hide_master_page: u8::from(*hide_master_page),
+                hide_border: u8::from(*hide_border),
+                hide_fill: u8::from(*hide_fill),
+                hide_page_num: u8::from(*hide_page_num),
+            }),
+            ..Default::default()
+        })),
         _ => Ok(None),
     }
 }
@@ -3024,6 +3044,34 @@ mod tests {
         // 주의: `<hp:numbering ... newNum="1">` (각주/미주 속성)과 구분하기
         // 위해 요소 시작 태그로 매칭한다.
         assert!(!xml.contains("<hp:newNum"), "Unknown kind 는 인코딩 금지");
+    }
+
+    #[test]
+    fn page_hiding_encodes_as_hancom_shaped_pagehiding() {
+        // F2-② 한컴 실측 형태: 6속성 전부 병기, 배경만 = hideFill="1".
+        use hwpforge_core::control::Control;
+        let ctrl = Control::PageHiding {
+            hide_header: false,
+            hide_footer: false,
+            hide_master_page: false,
+            hide_border: false,
+            hide_fill: true,
+            hide_page_num: false,
+        };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default()).unwrap().xml;
+        assert!(
+            xml.contains(
+                r#"<hp:pageHiding hideHeader="0" hideFooter="0" hideMasterPage="0" hideBorder="0" hideFill="1" hidePageNum="0"/>"#
+            ),
+            "F2-② 실측 형태와 일치해야 함: {xml}"
+        );
     }
 
     #[test]

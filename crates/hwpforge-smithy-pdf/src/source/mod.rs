@@ -153,6 +153,7 @@ pub fn replay_layout(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<Re
         }
         let first_page = pages.len();
         let mut events: Vec<PageNumberEvent> = Vec::new();
+        let mut hides: Vec<PageHideEvent> = Vec::new();
         replay_section(
             input,
             options,
@@ -160,6 +161,7 @@ pub fn replay_layout(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<Re
             section_idx,
             &mut pages,
             &mut events,
+            &mut hides,
             &mut warnings,
         )?;
         overlay_headers_footers(
@@ -168,6 +170,7 @@ pub fn replay_layout(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<Re
             section,
             section_idx,
             first_page,
+            &hides,
             &mut pages,
             &mut warnings,
         )?;
@@ -189,6 +192,7 @@ pub fn replay_layout(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<Re
             section_idx,
             first_page,
             &numbers,
+            &hides,
             &mut pages,
             &mut warnings,
         );
@@ -245,12 +249,32 @@ struct PageNumberEvent {
     number: u32,
 }
 
+/// `pghd` 감춤 이벤트 (W3) — 컨트롤이 놓인 물리 쪽의 렌더 대상 3종
+/// (쪽번호/머리말/꼬리말)만 담는다. 바탕쪽/테두리/배경은 렌더 자체가 없어
+/// carry-only. 같은 쪽 다중 이벤트는 적용부에서 OR 병합된다 (F2 계약:
+/// 감춤은 카운터 전진을 막지 않는다 — `1, _, 3`).
+#[derive(Debug, Clone, Copy)]
+struct PageHideEvent {
+    /// 전역 물리 쪽 인덱스 (`pages` 벡터 기준).
+    page: usize,
+    /// 쪽번호 표시 억제.
+    page_num: bool,
+    /// 머리말 밴드 억제.
+    header: bool,
+    /// 꼬리말 밴드 억제.
+    footer: bool,
+}
+
 /// 렌더 replay 가 자체 소비하는 0폭 marker 컨트롤인지 (textpos 무영향 —
 /// 한컴 HWPX 실측: `<hp:ctrl>` 은 linesegarray textpos 를 소비하지 않는다).
 /// 선행 비텍스트 fail-closed 가드와 `NonTextRunDropped` 경고에서 제외된다.
 fn is_replay_consumed_marker(content: &RunContent) -> bool {
     matches!(content, RunContent::Control(c)
-        if matches!(**c, hwpforge_core::control::Control::NewNumber { .. }))
+    if matches!(
+        **c,
+        hwpforge_core::control::Control::NewNumber { .. }
+            | hwpforge_core::control::Control::PageHiding { .. }
+    ))
 }
 
 /// 쪽번호 합성 (§8c 실측 — BOTTOM_CENTER + DIGIT 만, 그 외 = 경고+생략).
@@ -258,12 +282,14 @@ fn is_replay_consumed_marker(content: &RunContent) -> bool {
 /// 표시 문자열은 sideChar 장식을 어간 공백으로 감싼다 (`- 1 -` — 한컴 PDF
 /// 실측 어간 5.08pt = 10pt 공백 폭). 스타일은 전용 "쪽 번호"(Page Number)
 /// CHAR 스타일의 charPr — 부재 시 문서 기본 charPr(0) + 경고.
+#[allow(clippy::too_many_arguments)]
 fn emit_page_numbers(
     input: &PdfInput<'_>,
     section: &Section,
     section_idx: usize,
     first_page: usize,
     numbers: &[u32],
+    hides: &[PageHideEvent],
     pages: &mut [PageLayout],
     warnings: &mut Vec<PdfWarning>,
 ) {
@@ -295,6 +321,11 @@ fn emit_page_numbers(
         if hide_first && offset == 0 {
             continue; // 번호 자체는 진행하고 표시만 생략.
         }
+        // W3: pghd 감춤 쪽 — 표시만 생략 (F2-① 실측 `1, _, 3`: 카운터는
+        // reducer 가 이미 전진시켰다). secd 첫쪽 감춤과 자연 OR.
+        if hides.iter().any(|h| h.page == first_page + offset && h.page_num) {
+            continue;
+        }
         let n = numbers[offset];
         let text = if pn.decoration.is_empty() {
             n.to_string()
@@ -323,6 +354,7 @@ fn overlay_headers_footers(
     section: &Section,
     section_idx: usize,
     first_page: usize,
+    hides: &[PageHideEvent],
     pages: &mut [PageLayout],
     warnings: &mut Vec<PdfWarning>,
 ) -> PdfResult<()> {
@@ -401,6 +433,14 @@ fn overlay_headers_footers(
             }
             let Some(&hf_idx) = matched.first() else { continue };
             if hide_first && offset == 0 {
+                continue;
+            }
+            // W3: pghd 감춤 쪽 — 해당 밴드만 억제 (F2-③ 실측: 2쪽 머리말
+            // 소거, 1·3쪽 유지). secd 첫쪽 감춤과 자연 OR.
+            if hides.iter().any(|h| {
+                h.page == first_page + offset
+                    && ((kind == "header" && h.header) || (kind == "footer" && h.footer))
+            }) {
                 continue;
             }
             replay_band_item(
@@ -500,6 +540,7 @@ fn replay_band_item(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn replay_section(
     input: &PdfInput<'_>,
     options: &PdfOptions,
@@ -507,6 +548,7 @@ fn replay_section(
     section_idx: usize,
     pages: &mut Vec<PageLayout>,
     events: &mut Vec<PageNumberEvent>,
+    hides: &mut Vec<PageHideEvent>,
     warnings: &mut Vec<PdfWarning>,
 ) -> PdfResult<()> {
     let ps = &section.page_settings;
@@ -540,6 +582,21 @@ fn replay_section(
 
     for (para_idx, para) in section.paragraphs.iter().enumerate() {
         let location = format!("s{section_idx}/p{para_idx}");
+
+        // W3: 명시적 쪽 나누기 (ParaHeader divide_sort bit2 / HWPX
+        // pageBreak="1") — F2 실측: 한컴은 쪽나눔 문단의 lineseg v 를
+        // 리셋하지 않아 (연속 600) `v==0 ∨ v<prev` 규칙이 잡지 못한다.
+        // 플래그가 유일한 신호. 현재 쪽이 비어 있으면 이중 쪽나눔 방지.
+        if para.page_break
+            && pages.last().is_some_and(|p| {
+                !p.lines.is_empty() || !p.rects.is_empty() || !p.borders.is_empty()
+            })
+        {
+            new_page(pages);
+            prev_v = None;
+            // 새 쪽 — 표 앵커 검산은 쪽-상대 v 비교라 무효.
+            pending_table_anchor = None;
+        }
 
         // ── 표 host 문단 (W3c — 검증된 프로파일 재생) ─────────────
         let table_count =
@@ -652,22 +709,40 @@ fn replay_section(
             }
         }
 
-        // W2: 이 문단의 nwno(쪽 종류) 재시작을 가시 텍스트 오프셋과 함께 수집
-        // — 아래 줄 루프에서 해당 오프셋이 놓이는 물리 쪽에 앵커한다.
+        // W2/W3: 이 문단의 nwno(쪽 종류) 재시작·pghd 감춤을 가시 텍스트
+        // 오프셋과 함께 수집 — 아래 줄 루프에서 해당 오프셋이 놓이는 물리
+        // 쪽에 앵커한다.
         let mut restarts: Vec<(usize, u32)> = Vec::new();
+        let mut hide_marks: Vec<(usize, PageHideEvent)> = Vec::new();
         {
+            use hwpforge_core::control::Control;
             let mut pos = 0usize;
             for run in &para.runs {
                 match run.content.plain_text() {
                     Some(t) => pos += t.encode_utf16().count(),
                     None => {
                         if let RunContent::Control(c) = &run.content {
-                            if let hwpforge_core::control::Control::NewNumber {
-                                kind: hwpforge_core::control::NewNumberKind::Page,
-                                number,
-                            } = **c
-                            {
-                                restarts.push((pos, number));
+                            match **c {
+                                Control::NewNumber {
+                                    kind: hwpforge_core::control::NewNumberKind::Page,
+                                    number,
+                                } => restarts.push((pos, number)),
+                                Control::PageHiding {
+                                    hide_header,
+                                    hide_footer,
+                                    hide_page_num,
+                                    ..
+                                } => hide_marks.push((
+                                    pos,
+                                    // page 는 줄 루프에서 확정 — 임시 0.
+                                    PageHideEvent {
+                                        page: 0,
+                                        page_num: hide_page_num,
+                                        header: hide_header,
+                                        footer: hide_footer,
+                                    },
+                                )),
+                                _ => {}
                             }
                         }
                     }
@@ -706,6 +781,11 @@ fn replay_section(
                 restarts.iter().filter(|&&(off, _)| off >= start && (off < end || is_last))
             {
                 events.push(PageNumberEvent { page: pages.len() - 1, number });
+            }
+            for &(_, hide) in
+                hide_marks.iter().filter(|&&(off, _)| off >= start && (off < end || is_last))
+            {
+                hides.push(PageHideEvent { page: pages.len() - 1, ..hide });
             }
 
             let page = pages.last_mut().ok_or_else(|| PdfError::InternalInvariant {
@@ -1395,6 +1475,112 @@ mod tests {
         let texts: Vec<&str> =
             layout.pages.iter().map(|p| p.page_number.as_ref().unwrap().text.as_str()).collect();
         assert_eq!(texts, vec!["9", "10"], "last-wins + Footnote kind 무시");
+    }
+
+    #[test]
+    fn explicit_page_break_splits_pages_even_with_equal_vertpos() {
+        // F2 실측: 한컴 쪽나눔 문단은 lineseg v 를 리셋하지 않는다 (전부
+        // 600) — pageBreak 플래그가 유일한 신호. 등v 3문단 = 3쪽.
+        let mk = |text: &str, brk: bool| {
+            let mut p = para_with_cache(text, vec![seg(0, 600)]);
+            p.page_break = brk;
+            p
+        };
+        let doc = doc_of(vec![mk("1쪽", false), mk("2쪽", true), mk("3쪽", true)]);
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        assert_eq!(layout.pages.len(), 3, "등v 에서도 쪽나눔 플래그로 분할");
+        for (i, page) in layout.pages.iter().enumerate() {
+            assert_eq!(page.lines.len(), 1, "p{i} 줄 1개씩");
+        }
+    }
+
+    #[test]
+    fn page_break_on_first_content_does_not_create_leading_blank_page() {
+        // 구역 시작이 이미 새 쪽 — 첫 문단의 쪽나눔 플래그로 빈 쪽을 만들지
+        // 않는다.
+        let mut p = para_with_cache("본문", vec![seg(0, 600)]);
+        p.page_break = true;
+        let doc = doc_of(vec![p]);
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        assert_eq!(layout.pages.len(), 1);
+    }
+
+    // ── W3: pghd 감춤 이벤트 (F2-①/③ PDF 실측 정답지) ────────────────────
+
+    /// [PageHiding ctrl run + 텍스트 run] 문단 (F2 한컴 실측 run 형태).
+    fn para_with_hiding(
+        text: &str,
+        hide_page_num: bool,
+        hide_header: bool,
+        lines: Vec<LineSeg>,
+    ) -> Paragraph {
+        use hwpforge_core::control::Control;
+        let mut p = Paragraph::with_runs(
+            vec![
+                Run::control(
+                    Control::PageHiding {
+                        hide_header,
+                        hide_footer: false,
+                        hide_master_page: false,
+                        hide_border: false,
+                        hide_fill: false,
+                        hide_page_num,
+                    },
+                    CharShapeIndex::new(0),
+                ),
+                Run::text(text, CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        p.layout_cache = Some(LayoutCache::new(lines));
+        p
+    }
+
+    #[test]
+    fn page_hiding_suppresses_number_display_but_counter_advances() {
+        // F2-① 정답지: 쪽번호 `1, _, 3` — 2쪽 표시만 소거, 카운터는 전진.
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(
+            vec![
+                para_with_cache("1쪽", vec![seg(0, 0)]),
+                para_with_hiding("2쪽 — 감추기", true, false, vec![seg(0, 0)]),
+                para_with_cache("3쪽", vec![seg(0, 0)]),
+            ],
+            PageSettings::a4(),
+        ));
+        doc.sections_mut()[0].page_number = Some(bottom_digit());
+        let doc = doc.validate().expect("validate");
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        let texts: Vec<Option<&str>> =
+            layout.pages.iter().map(|p| p.page_number.as_ref().map(|n| n.text.as_str())).collect();
+        assert_eq!(texts, vec![Some("1"), None, Some("3")], "F2-① `1, _, 3`");
+    }
+
+    #[test]
+    fn page_hiding_suppresses_header_band_on_its_page_only() {
+        // F2-③ 정답지: 2쪽 머리말만 소거 — 1·3쪽 머리말 유지.
+        let mut doc = Document::new();
+        let mut section = Section::with_paragraphs(
+            vec![
+                para_with_cache("1쪽", vec![seg(0, 0)]),
+                para_with_hiding("2쪽 — 감추기", true, true, vec![seg(0, 0)]),
+                para_with_cache("3쪽", vec![seg(0, 0)]),
+            ],
+            PageSettings::a4(),
+        );
+        section.headers = vec![hf_item(ApplyPageType::Both, &["머리말"])];
+        doc.add_section(section);
+        let doc = doc.validate().expect("validate");
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        let headers_per_page: Vec<usize> =
+            layout.pages.iter().map(|p| band_lines(p, "/h0/").len()).collect();
+        assert_eq!(headers_per_page, vec![1, 0, 1], "2쪽 머리말만 억제");
+        // 감춤 marker 는 드롭 경고를 내지 않는다.
+        assert!(
+            !layout.warnings.iter().any(|w| matches!(w, PdfWarning::NonTextRunDropped { .. })),
+            "{:?}",
+            layout.warnings
+        );
     }
 
     #[test]

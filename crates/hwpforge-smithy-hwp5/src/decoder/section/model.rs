@@ -23,6 +23,10 @@ pub(crate) struct Hwp5Paragraph {
     pub para_shape_id: u16,
     /// Style ID (index into DocInfo styles).
     pub style_id: u8,
+    /// 쪽 나누기 (ParaHeader divide_sort bit2 — W3, F2 실측).
+    pub page_break: bool,
+    /// 단 나누기 (ParaHeader divide_sort bit3 — W3).
+    pub column_break: bool,
     /// Character shape runs: (position, char_shape_id) pairs.
     pub char_shape_runs: Vec<Hwp5CharShapeRun>,
     /// Format-local line layout cache entries from `ParaLineSeg`.
@@ -117,6 +121,10 @@ pub(crate) enum Hwp5Control {
     /// 재시작한다. `0x15` inline 앵커로 위치 보존 (W2 — F1 실측).
     /// See `schema::section::Hwp5NewNumberControl`.
     NewNumber(crate::schema::section::Hwp5NewNumberControl),
+    /// `pghd` 감추기 control — 컨트롤이 놓인 쪽의 지정 요소를 감춘다.
+    /// `0x15` inline 앵커로 위치 보존 (W3 — F2 실측).
+    /// See `schema::section::Hwp5PageHidingControl`.
+    PageHiding(crate::schema::section::Hwp5PageHidingControl),
     /// `%xrf` cross-reference control — carries the structured
     /// `?<target>;N1;N2;N3;N4;` Command with raw RefType / ContentType /
     /// hyperlink codes. The projection layer maps these to typed

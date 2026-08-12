@@ -845,6 +845,39 @@ pub struct HxCtrl {
         skip_serializing_if = "Option::is_none"
     )]
     pub new_num: Option<HxNewNum>,
+    /// Optional pageHiding element (감추기 — 해당 쪽 요소 숨김).
+    #[serde(
+        rename(serialize = "hp:pageHiding", deserialize = "pageHiding"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub page_hiding: Option<HxPageHiding>,
+}
+
+/// `<hp:pageHiding hideHeader="0" … hidePageNum="1"/>` — 감추기 (표 177).
+///
+/// 한컴 F2 실측 (2026-08-12): run 안 `<hp:ctrl>` 자식, 자기닫힘, 6속성이
+/// 항상 `"0"`/`"1"` 로 병기된다.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxPageHiding {
+    /// 머리말 감춤: 0 or 1.
+    #[serde(rename = "@hideHeader", default)]
+    pub hide_header: u8,
+    /// 꼬리말 감춤: 0 or 1.
+    #[serde(rename = "@hideFooter", default)]
+    pub hide_footer: u8,
+    /// 바탕쪽 감춤: 0 or 1.
+    #[serde(rename = "@hideMasterPage", default)]
+    pub hide_master_page: u8,
+    /// 테두리 감춤: 0 or 1.
+    #[serde(rename = "@hideBorder", default)]
+    pub hide_border: u8,
+    /// 배경 감춤: 0 or 1.
+    #[serde(rename = "@hideFill", default)]
+    pub hide_fill: u8,
+    /// 쪽번호 감춤: 0 or 1.
+    #[serde(rename = "@hidePageNum", default)]
+    pub hide_page_num: u8,
 }
 
 /// `<hp:newNum num="7" numType="PAGE"/>` — 새 번호 지정 (번호 재시작).

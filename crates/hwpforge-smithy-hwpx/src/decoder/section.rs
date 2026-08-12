@@ -524,6 +524,21 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
                 char_shape_id,
             });
         }
+        // PageHiding (감추기) — W3: `<hp:pageHiding 6속성/>` →
+        // Control::PageHiding (F2 한컴 실측: "0"/"1" 병기).
+        if let Some(ph) = &ctrl.page_hiding {
+            runs.push(Run {
+                content: RunContent::Control(Box::new(Control::PageHiding {
+                    hide_header: ph.hide_header != 0,
+                    hide_footer: ph.hide_footer != 0,
+                    hide_master_page: ph.hide_master_page != 0,
+                    hide_border: ph.hide_border != 0,
+                    hide_fill: ph.hide_fill != 0,
+                    hide_page_num: ph.hide_page_num != 0,
+                })),
+                char_shape_id,
+            });
+        }
     }
 
     // Handle self-closing fieldBegin without a matching fieldEnd (e.g. bookmark span start)
@@ -3384,6 +3399,33 @@ mod tests {
                 number: 3
             }
         )));
+    }
+
+    #[test]
+    fn serde_ctrl_pagehiding_produces_page_hiding() {
+        // F2-① 한컴 실측 (rules-pagehide section0.xml): 쪽번호만 감춤.
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl><pageHiding hideHeader="0" hideFooter="0" hideMasterPage="0" hideBorder="0" hideFill="0" hidePageNum="1"/></ctrl>
+                    <t>2쪽 본문</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let controls = find_controls(&result);
+        assert!(
+            controls.iter().any(|c| matches!(
+                c,
+                hwpforge_core::Control::PageHiding {
+                    hide_page_num: true,
+                    hide_header: false,
+                    hide_fill: false,
+                    ..
+                }
+            )),
+            "pageHiding must produce Control::PageHiding"
+        );
     }
 
     #[test]

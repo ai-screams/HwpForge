@@ -383,6 +383,14 @@ fn adapt_control(
             build,
             ids,
         ),
+        Hwp5Control::PageHiding(pghd) => adapt_shape_control(
+            pghd.ctrl_id,
+            Hwp5SemanticControlKind::PageHiding,
+            container,
+            paragraph_id,
+            build,
+            ids,
+        ),
         Hwp5Control::OleObject(ole) => {
             adapt_ole_object_control(ole, container, paragraph_id, build, support, ids)
         }
@@ -1313,6 +1321,8 @@ mod tests {
             doc_info: empty_doc_info(),
             sections: vec![SectionResult {
                 paragraphs: vec![Hwp5Paragraph {
+                    page_break: false,
+                    column_break: false,
                     text: "\u{fffc}본문".to_string(),
                     text_segments: Vec::new(),
                     para_shape_id: 2,
@@ -1344,6 +1354,8 @@ mod tests {
                                 vertical_align: Hwp5TableCellVerticalAlign::Bottom,
                                 border_fill_id: Some(3),
                                 paragraphs: vec![Hwp5Paragraph {
+                                    page_break: false,
+                                    column_break: false,
                                     text: "cell".to_string(),
                                     text_segments: Vec::new(),
                                     para_shape_id: 4,
@@ -1550,6 +1562,8 @@ mod tests {
             doc_info: empty_doc_info(),
             sections: vec![SectionResult {
                 paragraphs: vec![Hwp5Paragraph {
+                    page_break: false,
+                    column_break: false,
                     text: "앞\u{fffc}뒤".to_string(),
                     text_segments: Vec::new(),
                     para_shape_id: 0,
@@ -1594,6 +1608,8 @@ mod tests {
             doc_info: empty_doc_info(),
             sections: vec![SectionResult {
                 paragraphs: vec![Hwp5Paragraph {
+                    page_break: false,
+                    column_break: false,
                     text: "\u{fffc}".to_string(),
                     text_segments: Vec::new(),
                     para_shape_id: 0,
@@ -1644,6 +1660,8 @@ mod tests {
             doc_info: empty_doc_info(),
             sections: vec![SectionResult {
                 paragraphs: vec![Hwp5Paragraph {
+                    page_break: false,
+                    column_break: false,
                     text: "앞\u{fffc}뒤".to_string(),
                     text_segments: Vec::new(),
                     para_shape_id: 0,
@@ -1727,6 +1745,8 @@ mod tests {
             doc_info: empty_doc_info(),
             sections: vec![SectionResult {
                 paragraphs: vec![Hwp5Paragraph {
+                    page_break: false,
+                    column_break: false,
                     text: "\u{fffc}".to_string(),
                     text_segments: Vec::new(),
                     para_shape_id: 0,
@@ -1781,6 +1801,8 @@ mod tests {
             doc_info: empty_doc_info(),
             sections: vec![SectionResult {
                 paragraphs: vec![Hwp5Paragraph {
+                    page_break: false,
+                    column_break: false,
                     text: "\u{fffc}".to_string(),
                     text_segments: Vec::new(),
                     para_shape_id: 0,
@@ -1797,6 +1819,8 @@ mod tests {
                         },
                         list_header_properties: None,
                         paragraphs: vec![Hwp5Paragraph {
+                            page_break: false,
+                            column_break: false,
                             text: "글상자 시작.\u{fffc}글상자 끝.".to_string(),
                             text_segments: Vec::new(),
                             para_shape_id: 1,
