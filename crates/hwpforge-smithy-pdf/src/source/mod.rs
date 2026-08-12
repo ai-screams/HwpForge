@@ -139,7 +139,7 @@ pub fn replay_layout(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<Re
     let mut warnings = Vec::new();
 
     // 표시 번호는 구역을 넘어 이어진다 (beginNum.page 0 = 이전 구역 계속).
-    let mut next_display: u32 = 1;
+    let mut counter = DisplayCounter::new();
     for (section_idx, section) in input.document.sections().iter().enumerate() {
         // pageStartsOn != BOTH 는 미실측 페이지네이션 속성 (한컴이 빈 쪽을
         // 삽입할 수 있음) — 머리말/꼬리말·쪽번호 유무와 무관하게 BOTH 거동으로
@@ -162,22 +162,52 @@ pub fn replay_layout(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<Re
             &mut pages,
             &mut warnings,
         )?;
-        let display_start = match section.begin_num.as_ref().map(|b| b.page) {
-            Some(n) if n > 0 => n, // n = 재시작 (스펙 §10.6.2)
-            _ => next_display,
-        };
+        counter.enter_section(section.begin_num.as_ref());
+        let numbers: Vec<u32> = pages[first_page..].iter().map(|_| counter.assign_page()).collect();
         emit_page_numbers(
             input,
             section,
             section_idx,
             first_page,
-            display_start,
+            &numbers,
             &mut pages,
             &mut warnings,
         );
-        next_display = display_start + (pages.len() - first_page) as u32;
     }
     Ok(ReplayLayout { pages, warnings })
+}
+
+/// 쪽번호 표시 카운터 (W1 reducer).
+///
+/// 구역 시작값(`BeginNum`)과 쪽 단위 이벤트(중간 재시작 `nwno` W2, 감춤
+/// `pghd` W3)가 **같은 카운터 상태**를 문서 순서로 변경한다 — 단일
+/// `display_start + offset` 산술로는 중간 재시작을 표현할 수 없어 쪽
+/// 단위 배정으로 바꾼다 (이 wave 에서는 기존 거동과 동일 — 골든 잠금).
+#[derive(Debug)]
+struct DisplayCounter {
+    next: u32,
+}
+
+impl DisplayCounter {
+    fn new() -> Self {
+        Self { next: 1 }
+    }
+
+    /// 구역 진입 — `beginNum.page` `n>0` = 재시작, `0`/부재 = 이어서
+    /// (OWPML §10.6.2).
+    fn enter_section(&mut self, begin_num: Option<&hwpforge_core::section::BeginNum>) {
+        if let Some(n) = begin_num.map(|b| b.page).filter(|&n| n > 0) {
+            self.next = n;
+        }
+    }
+
+    /// 물리 쪽 하나에 표시 번호를 배정하고 전진한다. 감춤(hide_first 등)은
+    /// **표시만** 생략하고 전진은 막지 않는다 (F2-① PDF 실측: `1, _, 3`).
+    fn assign_page(&mut self) -> u32 {
+        let n = self.next;
+        self.next += 1;
+        n
+    }
 }
 
 /// 쪽번호 합성 (§8c 실측 — BOTTOM_CENTER + DIGIT 만, 그 외 = 경고+생략).
@@ -190,7 +220,7 @@ fn emit_page_numbers(
     section: &Section,
     section_idx: usize,
     first_page: usize,
-    display_start: u32,
+    numbers: &[u32],
     pages: &mut [PageLayout],
     warnings: &mut Vec<PdfWarning>,
 ) {
@@ -222,7 +252,7 @@ fn emit_page_numbers(
         if hide_first && offset == 0 {
             continue; // 번호 자체는 진행하고 표시만 생략.
         }
-        let n = display_start + offset as u32;
+        let n = numbers[offset];
         let text = if pn.decoration.is_empty() {
             n.to_string()
         } else {
@@ -817,6 +847,24 @@ mod tests {
     fn hf_item(apply: ApplyPageType, texts: &[&str]) -> HeaderFooter {
         let paras = texts.iter().map(|t| para_with_cache(t, vec![seg(0, 0)])).collect();
         HeaderFooter::new(paras, apply)
+    }
+
+    // ── W1: DisplayCounter reducer (계약 — 감춤은 전진을 막지 않는다) ─────
+
+    #[test]
+    fn display_counter_continues_and_restarts_across_sections() {
+        let mut c = DisplayCounter::new();
+        c.enter_section(None);
+        assert_eq!((c.assign_page(), c.assign_page()), (1, 2));
+        // page=0 = 이전 구역 이어서 (§10.6.2)
+        c.enter_section(Some(&BeginNum { page: 0, ..BeginNum::default() }));
+        assert_eq!(c.assign_page(), 3);
+        // n>0 = 재시작
+        c.enter_section(Some(&BeginNum { page: 10, ..BeginNum::default() }));
+        assert_eq!((c.assign_page(), c.assign_page()), (10, 11));
+        // 재시작 뒤 다음 구역 이어서
+        c.enter_section(None);
+        assert_eq!(c.assign_page(), 12);
     }
 
     fn doc_with_bands(

@@ -681,6 +681,8 @@ struct BodyTextParserState {
     page_def: Option<Hwp5PageDef>,
     /// Captured `secd` ctrl property word (HWP 5.0 spec §4.3.10.1 표 130).
     section_def_properties: Option<u32>,
+    /// Captured `secd` 시작번호 (`[20..28]`, all-or-none — W1).
+    section_def_start_numbers: Option<Hwp5SectionStartNumbers>,
     /// Page border/fill records collected in document order.
     page_border_fills: Vec<Hwp5PageBorderFill>,
     /// Captured `cold` (column definition) ctrl, if multi-column.
@@ -1595,6 +1597,18 @@ impl BodyTextParserState {
                     record.data[6],
                     record.data[7],
                 ]));
+                // 시작번호 `[20..28]` (쪽/그림/표/수식 u16 — F1 실측 §1.2).
+                // all-or-none: 28바이트 미만이면 캡처하지 않는다 (부분값을
+                // 기본값과 섞어 날조 금지 — 계획 W1 fail-safe).
+                if let Some(bytes) = record.data.get(20..28) {
+                    let word = |i: usize| u16::from_le_bytes([bytes[i], bytes[i + 1]]);
+                    self.section_def_start_numbers = Some(Hwp5SectionStartNumbers {
+                        page: word(0),
+                        pic: word(2),
+                        tbl: word(4),
+                        equation: word(6),
+                    });
+                }
             }
             // Snapshot the `cold` (column definition) ctrl, mirroring the
             // `secd` sidecar capture. Payload after the 4-byte ctrl_id:
@@ -1859,6 +1873,7 @@ impl BodyTextParserState {
             paragraphs: self.paragraphs,
             page_def: self.page_def,
             section_def_properties: self.section_def_properties,
+            section_def_start_numbers: self.section_def_start_numbers,
             page_border_fills: self.page_border_fills,
             column_def: self.column_def,
             warnings: self.warnings,
@@ -2650,6 +2665,48 @@ mod tests {
             }
             other => panic!("expected Table, got {:?}", other),
         }
+    }
+
+    /// `secd` payload — F1 실측 레이아웃 (계획 §1.2): 속성 u32 + 열간격/세로/
+    /// 가로 정렬(각 u16) + 기본 탭(u32) + 번호 문단 모양 id(u16) + 시작번호
+    /// 4×u16. `starts = None` 이면 20바이트에서 자른다 (truncation 케이스).
+    fn secd_ctrl_data(properties: u32, starts: Option<(u16, u16, u16, u16)>) -> Vec<u8> {
+        let mut buf = CTRL_ID_SECD.to_le_bytes().to_vec();
+        buf.extend_from_slice(&properties.to_le_bytes());
+        buf.extend_from_slice(&[0u8; 12]); // [8..20] 열간격·정렬·탭·번호모양
+        if let Some((page, pic, tbl, equation)) = starts {
+            for v in [page, pic, tbl, equation] {
+                buf.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        buf
+    }
+
+    #[test]
+    fn ctrl_header_secd_captures_start_numbers_when_payload_full() {
+        // F1 실측 (rules-newnum-base.hwp): 한컴 5.1 은 [20..28] 에 쪽/그림/표/
+        // 수식 시작번호를 쓴다 — sidecar 가 네 값을 그대로 캡처해야 한다.
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &secd_ctrl_data(0, Some((7, 2, 3, 4)))));
+        let result = parse_body_text(&stream, &version()).unwrap();
+        assert_eq!(
+            result.section_def_start_numbers,
+            Some(Hwp5SectionStartNumbers { page: 7, pic: 2, tbl: 3, equation: 4 })
+        );
+        assert_eq!(result.section_def_properties, Some(0));
+    }
+
+    #[test]
+    fn ctrl_header_secd_truncated_payload_captures_no_start_numbers() {
+        // all-or-none (Codex 결함 8): [20..28] 이 없으면 부분 캡처 대신 None —
+        // 속성 word 캡처(기존 gap B 경로)는 그대로 살아 있어야 한다.
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &secd_ctrl_data(0x20, None)));
+        let result = parse_body_text(&stream, &version()).unwrap();
+        assert_eq!(result.section_def_start_numbers, None);
+        assert_eq!(result.section_def_properties, Some(0x20));
     }
 
     #[test]

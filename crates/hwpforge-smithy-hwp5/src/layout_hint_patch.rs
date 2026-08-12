@@ -370,6 +370,7 @@ mod tests {
             ],
             page_def: None,
             section_def_properties: None,
+            section_def_start_numbers: None,
             page_border_fills: Vec::new(),
             column_def: None,
             warnings: Vec::new(),

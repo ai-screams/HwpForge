@@ -543,6 +543,10 @@ pub(crate) struct SectionResult {
     /// (e.g. truncated fixtures); bits 0~5 + 8/9 + 19 are decoded by
     /// projection into `Section.visibility` (gap B).
     pub section_def_properties: Option<u32>,
+    /// `secd` payload `[20..28]` 시작번호 (쪽/그림/표/수식 각 u16 — F1 실측,
+    /// 계획 §1.2). payload 가 28바이트 미만이면 부분 캡처 대신 `None`
+    /// (all-or-none — 읽지 않은 값을 기본값으로 날조하지 않는다).
+    pub section_def_start_numbers: Option<Hwp5SectionStartNumbers>,
     /// Page border/fill records (`HWPTAG_PAGE_BORDER_FILL`, 0x4B) that
     /// follow the `secd` ctrl. 한글 emits them in `[BOTH, EVEN, ODD]`
     /// order; projection maps each to a `PageBorderFillEntry`.
@@ -553,6 +557,24 @@ pub(crate) struct SectionResult {
     pub column_def: Option<Hwp5ColumnDef>,
     /// Non-fatal warnings.
     pub warnings: Vec<Hwp5Warning>,
+}
+
+/// `secd` ctrl 의 시작번호 묶음 (payload `[20..28]`, 각 u16 LE).
+///
+/// F1 실측 (2026-08-12 rules-newnum): 한컴은 이 필드가 `1` 이고 속성
+/// bits 20-21 이 0 인 구역을 `<hp:startNum page="0">`(이어서) 로 변환한다 —
+/// "필드값 = 재시작" 이 아니다. bits ≠ 0 의 의미는 레퍼런스 3사 충돌로
+/// 미확정 (corpus 0.12%) — projection 이 경고로 표면화한다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Hwp5SectionStartNumbers {
+    /// 쪽 시작번호 (`[20..22]`).
+    pub page: u16,
+    /// 그림 시작번호 (`[22..24]`).
+    pub pic: u16,
+    /// 표 시작번호 (`[24..26]`).
+    pub tbl: u16,
+    /// 수식 시작번호 (`[26..28]`).
+    pub equation: u16,
 }
 
 /// Decoded `cold` (column definition / 다단) ctrl payload.

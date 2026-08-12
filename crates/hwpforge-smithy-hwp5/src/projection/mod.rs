@@ -304,6 +304,30 @@ fn project_to_core_internal(
         // `.docs/debug/2026-05-27_hwp5_page_features_lost.md` (gap B).
         if let Some(properties) = section_result.section_def_properties {
             section.visibility = Some(hwp5_section_properties_to_visibility(properties));
+            // W1 fail-safe (계획 §1.2·§1.4): secd 속성 bits 20-21 의 의미는
+            // 레퍼런스 3사가 서로 다르게 주장해 미확정 (corpus 0.12% 꼬리).
+            // F1 실측 — bits==0 + 시작번호 필드 1 을 한컴 자신이
+            // `<hp:startNum page="0">`(이어서) 로 변환하므로 begin_num 은
+            // 만들지 않는다. bits≠0 은 재시작으로 날조하는 대신 raw 값과
+            // 함께 경고로 표면화하고 이어서 처리한다.
+            let restart_bits = (properties >> 20) & 0x3;
+            if restart_bits != 0 {
+                let detail = match section_result.section_def_start_numbers {
+                    Some(n) => format!(
+                        "raw starts page={} pic={} tbl={} equation={}",
+                        n.page, n.pic, n.tbl, n.equation
+                    ),
+                    None => "start-number payload truncated".to_string(),
+                };
+                all_warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "section.begin_num",
+                    reason: format!(
+                        "secd property bits 20-21 = {restart_bits} are unverified \
+                         (reference implementations disagree); continuing page \
+                         numbering instead of restarting ({detail})"
+                    ),
+                });
+            }
         }
         // Wave 7: carry the section's page border/fill references
         // (HWPTAG_PAGE_BORDER_FILL, 0x4B). The borderFill *definitions*
@@ -3178,8 +3202,8 @@ mod tests {
     use hwpforge_core::table::TablePageBreak;
 
     use crate::decoder::section::{
-        Hwp5ImageControl, Hwp5LineControl, Hwp5PolygonControl, Hwp5TablePageBreak,
-        Hwp5TextBoxControl,
+        Hwp5ImageControl, Hwp5LineControl, Hwp5PolygonControl, Hwp5SectionStartNumbers,
+        Hwp5TablePageBreak, Hwp5TextBoxControl,
     };
     use crate::Hwp5SemanticImageFormat;
 
@@ -3259,6 +3283,7 @@ mod tests {
             paragraphs,
             page_def,
             section_def_properties: None,
+            section_def_start_numbers: None,
             page_border_fills: Vec::new(),
             column_def: None,
             warnings: vec![],
@@ -3338,6 +3363,69 @@ mod tests {
         assert_eq!(p.text_content(), "Hello");
     }
 
+    // ── W1: secd 시작번호 fail-safe (계획 §1.2 F1 실측·§1.4 corpus) ────────
+
+    #[test]
+    fn secd_restart_bits_zero_is_silent_and_begin_num_stays_none() {
+        // F1 실측: bits==0 + 시작번호 필드 1 → 한컴도 `<hp:startNum page="0">`
+        // (이어서). begin_num None 이 byte-정합 — 경고도 없어야 한다.
+        let mut section = make_section(vec![], None);
+        section.section_def_properties = Some(0);
+        section.section_def_start_numbers =
+            Some(Hwp5SectionStartNumbers { page: 1, pic: 0, tbl: 0, equation: 0 });
+        let (doc, warnings) = project_to_core(vec![section]).unwrap();
+        assert!(doc.sections()[0].begin_num.is_none());
+        assert!(
+            !warnings.iter().any(|w| matches!(
+                w,
+                Hwp5Warning::ProjectionFallback { subject: "section.begin_num", .. }
+            )),
+            "bits==0 은 정상 경로 — 경고 금지: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn secd_restart_bits_nonzero_warns_with_raw_starts_and_keeps_begin_num_none() {
+        // corpus 실측 존재값 bits=2 (2건/2,468) — 의미 미확정이므로 재시작으로
+        // 날조하지 않고 raw 값과 함께 경고 후 이어서 처리한다.
+        let mut section = make_section(vec![], None);
+        section.section_def_properties = Some(2 << 20);
+        section.section_def_start_numbers =
+            Some(Hwp5SectionStartNumbers { page: 6, pic: 0, tbl: 0, equation: 0 });
+        let (doc, warnings) = project_to_core(vec![section]).unwrap();
+        assert!(doc.sections()[0].begin_num.is_none(), "미확정 비트 재시작 날조 금지");
+        let reason = warnings
+            .iter()
+            .find_map(|w| match w {
+                Hwp5Warning::ProjectionFallback { subject: "section.begin_num", reason } => {
+                    Some(reason)
+                }
+                _ => None,
+            })
+            .expect("fail-safe warning must surface");
+        assert!(reason.contains("page=6"), "raw 값 표면화: {reason}");
+    }
+
+    #[test]
+    fn secd_restart_bits_nonzero_with_truncated_payload_reports_truncation() {
+        // all-or-none: [20..28] 이 없으면 부분값 대신 truncation 을 알린다
+        // (Codex 결함 8 — 읽지 않은 값을 기본값 1 로 날조 금지).
+        let mut section = make_section(vec![], None);
+        section.section_def_properties = Some(3 << 20);
+        let (doc, warnings) = project_to_core(vec![section]).unwrap();
+        assert!(doc.sections()[0].begin_num.is_none());
+        let reason = warnings
+            .iter()
+            .find_map(|w| match w {
+                Hwp5Warning::ProjectionFallback { subject: "section.begin_num", reason } => {
+                    Some(reason)
+                }
+                _ => None,
+            })
+            .expect("fail-safe warning must surface");
+        assert!(reason.contains("truncated"), "{reason}");
+    }
+
     #[test]
     fn style_id_zero_maps_to_none() {
         let para = make_paragraph("text", 0, 0);
@@ -3377,6 +3465,7 @@ mod tests {
             paragraphs: vec![make_paragraph("x", 0, 0)],
             page_def: None,
             section_def_properties: None,
+            section_def_start_numbers: None,
             page_border_fills: Vec::new(),
             column_def: None,
             warnings: vec![warn],
