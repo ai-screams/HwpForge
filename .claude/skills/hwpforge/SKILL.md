@@ -81,6 +81,9 @@ What does the user want?
 │     → to-md   (full lossy flatten, for human reading)
 │     → to-json (whole document JSON, for machine editing ONLY)
 │
+├─ Render to PDF (한컴과 같은 출력 — layout-cache replay)
+│     → to-pdf  (needs a 한컴-saved document: cacheless files are rejected)
+│
 └─ Need the JSON shape, or the list of styles
       → schema        (JSON Schema for document/section types)
       → templates list (available style presets)
@@ -174,6 +177,13 @@ hwpforge to-json doc.hwpx --section 0 --no-styles -o sec.json
 # Write back
 hwpforge patch doc.hwpx --section 0 sec.json -o doc.hwpx          # text-only
 hwpforge from-json full.json -o doc.hwpx --base doc.hwpx          # rebuild (inherit images)
+
+# Render to PDF (layout-cache replay — 한컴 재저장본만; format detected by content)
+hwpforge to-pdf doc.hwpx [-o out.pdf] [--font-dir DIR] [--discovery explicit|hancom|platform] \
+    [--degraded] [--partial-cache-reject] [--json]
+# macOS + 한컴오피스 설치 시: --discovery hancom 으로 번들 폰트 자동 발견.
+# 실무 문서는 언어축 혼합이 흔해 --degraded 권장 (경고로 표면화됨).
+# 실패는 fail-closed: cacheless → 한컴에서 열어 재저장 후 재시도.
 
 # Read out / schema / styles
 hwpforge to-md doc.hwpx -o doc.md

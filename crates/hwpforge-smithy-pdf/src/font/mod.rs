@@ -375,18 +375,21 @@ impl FontResolver {
                 .map(|c| c.tier)
                 .chain(contras.iter().map(|(t, _)| *t))
                 .min()
-                .expect("key exists in at least one map");
+                .ok_or_else(|| PdfError::InternalInvariant {
+                    detail: format!("font key {key:?} in neither candidate nor contradiction map"),
+                })?;
             if let Some((_, detail)) = contras.iter().find(|(t, _)| *t == min_tier) {
                 ambiguous.insert(key, detail.clone());
                 continue;
             }
             let target = key.1.target_weight();
             let tier_cands: Vec<&Candidate> = cands.iter().filter(|c| c.tier == min_tier).collect();
-            let best = tier_cands
-                .iter()
-                .map(|c| (c.weight - target).abs())
-                .min()
-                .expect("non-empty bucket");
+            let best =
+                tier_cands.iter().map(|c| (c.weight - target).abs()).min().ok_or_else(|| {
+                    PdfError::InternalInvariant {
+                        detail: format!("font key {key:?}: empty candidate bucket at min tier"),
+                    }
+                })?;
             // 동일 실물(같은 fingerprint + face 인덱스)의 중복 배치는 충돌이
             // 아니다 — 먼저 스캔된 경로가 canonical 로 남는다.
             let mut distinct: Vec<&Candidate> = Vec::new();

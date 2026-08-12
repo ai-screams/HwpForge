@@ -15,13 +15,15 @@
 //! backend/  krilla PDF 쓰기
 //! ```
 //!
-//! # 웨이브 스테이징
+//! # 지원 범위 (W2~W5 출하 기준)
 //!
-//! - **W2a (현재)**: Paint IR 타입 계약 + regular exact-face 폰트 resolver + 옵션/에러 표면
-//! - W2b: 셰이핑(공백 0.5em)·정렬 배분(R2) — W2c: 배치소스·admission — W2d: krilla 백엔드
-//!   + `render_document` 공개 (미구현 표면을 미리 노출하지 않는다)
-//! - W2 스코프: **regular 텍스트 전용** — 표 포함 문서 거부(다쪽 표 page-ordinal 미보장),
-//!   bold/italic run 경고, 머리말/꼬리말/쪽번호(W5)·폰트 스타일 선택/라이선스(W4) 제외
+//! - 텍스트: 셰이핑(공백 0.5em)·정렬 배분(R2)·bold/italic face 선택·언어축 검사·
+//!   임베드 라이선스 게이트(fsType fail-closed)
+//! - 표: 열폭/행높이(R1)·쪽걸침 분할·제목행 반복·셀 배경/괘선
+//! - 머리말/꼬리말: 밴드-상대 캐시 재생(R6) · ODD/EVEN parity · 무클립 overflow
+//! - 쪽번호: BOTTOM_CENTER+DIGIT 합성 (전용 "쪽 번호" 스타일 출처)
+//! - 미지원 (경고 or fail-closed 거부): 이미지·GSO 도형·각주/미주/메모·차트/OLE·
+//!   무캐시 문서(자체 조판 없음 — 한컴 재저장 필요)
 //!
 //! # 입력 계약
 //!
@@ -220,6 +222,24 @@ pub enum PdfWarning {
         /// 섹션 인덱스.
         section: usize,
     },
+    /// 폰트에 없는 글리프(notdef)를 tofu(□)로 렌더함 (Degraded 옵트인 —
+    /// 기본 Fatal 모드는 [`PdfError::GlyphsUnavailable`]).
+    MissingGlyphs {
+        /// face 이름.
+        face: String,
+        /// notdef 로 찍힌 문자 수.
+        count: usize,
+        /// 문서 내 위치.
+        location: String,
+    },
+    /// 줄 자연폭이 캐시 줄 상자를 초과 — 자간/장평 미carry 갭의 표면화
+    /// (줄 시작은 캐시-정확하나 우측으로 넘칠 수 있음 — corpus 실측 §5f).
+    LineOverflow {
+        /// 문서 내 위치.
+        location: String,
+        /// 초과 폭 (HWPUNIT).
+        excess: i32,
+    },
 }
 
 /// 렌더 실패 (fail-closed — 출력 바이트 없음).
@@ -250,6 +270,27 @@ pub enum PdfError {
     UnsupportedContent {
         /// 콘텐츠 종류 (예: `table`).
         kind: &'static str,
+        /// 문서 내 위치.
+        location: String,
+    },
+    /// 내부 불변식 위반 — 코드 결함의 안전망 (W6-α: corpus 대량 실행에서
+    /// panic 대신 문서 단위 fail-closed 오류로 표면화한다).
+    #[error("internal invariant violated: {detail}")]
+    InternalInvariant {
+        /// 위반 상세 (위치 포함).
+        detail: String,
+    },
+    /// 폰트에 없는 글리프(notdef) 포함 — 기본([`FontFallbackMode::Fatal`])
+    /// 모드 (조용한 tofu(□) 출력 금지 — Degraded 옵트인은 경고 후 렌더).
+    #[error(
+        "font {face:?} lacks glyphs for {count} character(s) at {location} \
+         (would render as tofu — opt in to FontFallbackMode::Degraded to render with a warning)"
+    )]
+    GlyphsUnavailable {
+        /// face 이름.
+        face: String,
+        /// notdef 문자 수.
+        count: usize,
         /// 문서 내 위치.
         location: String,
     },

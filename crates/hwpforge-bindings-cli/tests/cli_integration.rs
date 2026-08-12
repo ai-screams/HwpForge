@@ -4530,3 +4530,130 @@ fn stamp_v2_uncovered_cell_and_unknown_field_rejected() {
     assert_eq!(code, 1);
     assert_eq!(value["code"], "INVALID_STAMP_MAP");
 }
+
+// ─── W6a: to-pdf (조판 캐시 재생 렌더) ───
+
+/// 한컴 폰트 번들 (fixture-optional 관례 — CI 에는 없음).
+fn hancom_ttf_dir() -> Option<PathBuf> {
+    let dir =
+        PathBuf::from("/Applications/Hancom Office HWP.app/Contents/Resources/Hnc/Shared/TTF");
+    dir.exists().then_some(dir)
+}
+
+#[test]
+#[ignore = "requires Hancom TTF bundle (macOS) — run with --run-ignored all"]
+fn to_pdf_renders_hwpx_fixture() {
+    if hancom_ttf_dir().is_none() {
+        return;
+    }
+    let dir = test_tmp();
+    let out = dir.join("pagenum.pdf");
+    let (value, _stderr, code) = run_json(&[
+        "to-pdf",
+        fixture("pdf-rules/rules-pagenum.hwpx").to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--discovery",
+        "hancom",
+    ]);
+    assert_eq!(code, 0, "{value}");
+    assert_eq!(value["status"], "ok");
+    assert_eq!(value["detected_format"], "hwpx");
+    assert_eq!(value["warning_counts"]["render"], 0);
+    let bytes = std::fs::read(&out).expect("output pdf");
+    assert!(bytes.starts_with(b"%PDF-"), "PDF 헤더");
+}
+
+#[test]
+#[ignore = "requires Hancom TTF bundle (macOS) — run with --run-ignored all"]
+fn to_pdf_sniffs_content_over_extension() {
+    // corpus 실측(.hwpx 탈 HWP5 79건)의 역방향 재현: HWPX 를 .hwp 로 위장 —
+    // 확장자가 아니라 콘텐츠로 라우팅하고 불일치를 경고한다.
+    if hancom_ttf_dir().is_none() {
+        return;
+    }
+    let dir = test_tmp();
+    let misnamed = dir.join("misnamed.hwp");
+    std::fs::copy(fixture("pdf-rules/rules-headerfooter.hwpx"), &misnamed).expect("copy");
+    let out = dir.join("misnamed.pdf");
+    let (value, _stderr, code) = run_json(&[
+        "to-pdf",
+        misnamed.to_str().unwrap(),
+        "-o",
+        out.to_str().unwrap(),
+        "--discovery",
+        "hancom",
+    ]);
+    assert_eq!(code, 0, "{value}");
+    assert_eq!(value["detected_format"], "hwpx");
+    let mismatch = value["warnings"]
+        .as_array()
+        .expect("warnings array")
+        .iter()
+        .any(|w| w["code"] == "EXTENSION_MISMATCH");
+    assert!(mismatch, "{value}");
+}
+
+#[test]
+fn to_pdf_rejects_unrecognized_container() {
+    let dir = test_tmp();
+    let garbage = dir.join("garbage.hwpx");
+    std::fs::write(&garbage, b"not a container at all").expect("write");
+    let (value, _stderr, code) = run_json(&["to-pdf", garbage.to_str().unwrap()]);
+    assert_eq!(code, 2);
+    assert_eq!(value["code"], "UNRECOGNIZED_FORMAT");
+}
+
+#[test]
+fn to_pdf_hwp5_path_fails_closed_on_unnormalized_textpos() {
+    // 실측 잠금 (W6a): convert 의 HWP5 텍스트 위치 정규화 미완으로 carry 캐시가
+    // admission(textpos 정합)에서 거부된다 — 조용한 오출력 대신 깨끗한 에러.
+    // convert 정규화가 개선되면 이 게이트를 성공 게이트로 갱신할 것.
+    let (value, _stderr, code) =
+        run_json(&["to-pdf", fixture("pdf-rules/rules-header-multi.hwp").to_str().unwrap()]);
+    assert_eq!(code, 2, "{value}");
+    assert_eq!(value["status"], "error");
+    assert_eq!(value["code"], "PDF_RENDER_FAILED");
+}
+
+#[test]
+fn to_pdf_rejects_cacheless_hwpx_fail_closed() {
+    // 폰트 무관 CI 경로: 순수 생성 HWPX(캐시 없음) → 스니핑·디코드·검증까지
+    // 통과 후 렌더에서 fail-closed (한컴 재저장 안내 힌트).
+    let dir = test_tmp();
+    let md = dir.join("doc.md");
+    std::fs::write(&md, "# 제목\n\n본문 문단.\n").expect("write md");
+    let hwpx = dir.join("doc.hwpx");
+    let (_v, _s, code) = run_json(&["convert", md.to_str().unwrap(), "-o", hwpx.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let (value, _stderr, code) = run_json(&["to-pdf", hwpx.to_str().unwrap()]);
+    assert_eq!(code, 2, "{value}");
+    assert_eq!(value["code"], "PDF_RENDER_FAILED");
+}
+
+#[test]
+fn to_pdf_extension_mismatch_detected_without_fonts() {
+    // 위장 확장자(.hwp 탈 HWPX)도 폰트 없이 스니핑 라우팅까지는 CI 에서 검증
+    // 가능 — 이후 캐시 결손 fail-closed 는 위 게이트와 동일.
+    let dir = test_tmp();
+    let md = dir.join("doc.md");
+    std::fs::write(&md, "# 제목\n").expect("write md");
+    let hwpx = dir.join("doc.hwpx");
+    let (_v, _s, code) = run_json(&["convert", md.to_str().unwrap(), "-o", hwpx.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let misnamed = dir.join("doc-misnamed.hwp");
+    std::fs::copy(&hwpx, &misnamed).expect("copy");
+    let (value, _stderr, code) = run_json(&["to-pdf", misnamed.to_str().unwrap()]);
+    assert_eq!(code, 2, "{value}"); // cacheless — 렌더 거부는 동일
+    assert_eq!(value["code"], "PDF_RENDER_FAILED");
+}
+
+#[test]
+fn to_pdf_human_mode_error_output() {
+    let dir = test_tmp();
+    let garbage = dir.join("garbage.bin");
+    std::fs::write(&garbage, b"???").expect("write");
+    let (_stdout, stderr, code) = run(&["to-pdf", garbage.to_str().unwrap()]);
+    assert_eq!(code, 2);
+    assert!(stderr.contains("UNRECOGNIZED_FORMAT"), "{stderr}");
+}

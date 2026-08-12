@@ -53,6 +53,14 @@ pub(crate) struct TableReplayOutcome {
     /// 단위로 어긋나므로 "마지막 조각 최소 행높이 미만의 양의 편차"만
     /// 허용하면 오류 포착력은 유지된다.
     pub anchor_slack: i32,
+    /// 쪽 경계 분할 여부 — 분할 표는 계산 페이지네이션으로만 흐름 전진 가능
+    /// (캐시가 연속 조각을 표현하지 못함).
+    pub split: bool,
+    /// 계산된 표 총높이 (Σ행높이, outMargin 미포함) — 미분할 표의 흐름 모델
+    /// 판별용: host lineseg vertsize ≥ 이 값이면 글자취급(인라인) 표라
+    /// host 줄이 흐름 소비를 담고(기재부 corpus 실측), 미만이면 앵커형이라
+    /// 계산치(`expected_next_v`)가 흐름이다 (rules-table 실측).
+    pub total_height: i32,
 }
 
 /// 표 host 문단 하나를 재생한다. 분할 시 `pages` 에 새 쪽을 만든다.
@@ -307,7 +315,9 @@ pub(crate) fn replay_table(
     }
 
     // ── 앵커: 다음 문단 v 기대값 ─────────────────────────────────
-    let last = frags.last().expect("at least one fragment");
+    let last = frags.last().ok_or_else(|| PdfError::InternalInvariant {
+        detail: format!("{location}: table replay produced no fragments"),
+    })?;
     let expected_next_v = last.top_offset + (last.y1 - last.y0) + om_bottom;
     let anchor_slack = (0..row_count)
         .filter(|&ri| row_tops[ri] < last.y1 && row_tops[ri + 1] > last.y0)
@@ -315,7 +325,12 @@ pub(crate) fn replay_table(
         .min()
         .unwrap_or(1)
         .max(1);
-    Ok(TableReplayOutcome { expected_next_v, anchor_slack })
+    Ok(TableReplayOutcome {
+        expected_next_v,
+        anchor_slack,
+        split: frags.len() > 1,
+        total_height: row_heights.iter().sum(),
+    })
 }
 
 /// 앵커 제약(`x[c+span] − x[c] = width`)으로 열 경계 오프셋을 푼다.
@@ -359,7 +374,7 @@ fn solve_column_offsets(
             location: location.to_string(),
         });
     }
-    Ok(x.into_iter().map(|v| v.expect("checked") as i32).collect())
+    Ok(x.into_iter().flatten().map(|v| v as i32).collect())
 }
 
 fn cell_of<'t>(table: &'t Table, anchor: &GridCell) -> &'t TableCell {
@@ -383,7 +398,9 @@ fn cell_content_extent(
         let Some(cache) = para.layout_cache.as_ref().filter(|c| !c.is_empty()) else {
             return Ok(None);
         };
-        let last = cache.lines.last().expect("non-empty cache");
+        let last = cache.lines.last().ok_or_else(|| PdfError::InternalInvariant {
+            detail: format!("{location}: non-empty cache lost its last line"),
+        })?;
         let mut e = last.vertpos + last.vertsize;
         // 중첩 표 host 문단: lineseg 는 한 줄 높이만 알므로 표 흐름 소비
         // (host.v + om.top + Σ행높이 + om.bottom, R5)를 별도 가산한다.
@@ -712,7 +729,9 @@ fn emit_anchor_clipped(
         if let Some(id) = cell.border_fill_id.or(table.border_fill_id) {
             match input.styles.border_fill_face(id) {
                 Some(FillKind::Solid(color)) => {
-                    let page = pages.last_mut().expect("page exists");
+                    let page = pages.last_mut().ok_or_else(|| PdfError::InternalInvariant {
+                        detail: format!("{cell_loc}: no current page in table emit"),
+                    })?;
                     page.rects.push(LaidRect {
                         location: cell_loc.clone(),
                         x: x0,
@@ -741,7 +760,10 @@ fn emit_anchor_clipped(
                 for (line, from, to) in edges {
                     match line.kind {
                         BorderLineKind::Solid => {
-                            let page = pages.last_mut().expect("page exists");
+                            let page =
+                                pages.last_mut().ok_or_else(|| PdfError::InternalInvariant {
+                                    detail: format!("{cell_loc}: no current page in table emit"),
+                                })?;
                             page.borders.push(LaidBorder {
                                 location: cell_loc.clone(),
                                 from,
@@ -825,7 +847,9 @@ fn emit_anchor_clipped(
                 let start = seg.textpos as usize;
                 let end = cache.lines.get(li + 1).map_or(utf16.len(), |n| n.textpos as usize);
                 let runs = slice_line_runs(&utf16, &run_spans, start, end);
-                let page = pages.last_mut().expect("page exists");
+                let page = pages.last_mut().ok_or_else(|| PdfError::InternalInvariant {
+                    detail: format!("{para_loc}: no current page in table emit"),
+                })?;
                 page.lines.push(LaidLine {
                     location: format!("{para_loc}/l{li}"),
                     runs,

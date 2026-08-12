@@ -69,6 +69,32 @@ enum Commands {
         output: PathBuf,
     },
 
+    /// Render a document (HWPX or HWP5) to PDF via layout-cache replay.
+    ToPdf {
+        /// Input document — format is detected by content, not extension.
+        input: PathBuf,
+
+        /// Output PDF path (default: input path with .pdf extension).
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Font directory to search (repeatable).
+        #[arg(long = "font-dir")]
+        font_dirs: Vec<PathBuf>,
+
+        /// Font auto-discovery: explicit (deterministic, default) | hancom | platform.
+        #[arg(long, default_value = "explicit")]
+        discovery: String,
+
+        /// Degrade missing style/axis fonts to regular with warnings.
+        #[arg(long)]
+        degraded: bool,
+
+        /// Reject documents with any cache-missing paragraph (default: warn and skip).
+        #[arg(long = "partial-cache-reject")]
+        partial_cache_reject: bool,
+    },
+
     /// Convert Markdown to HWPX.
     Convert {
         /// Input markdown file (use '-' for stdin).
@@ -399,6 +425,17 @@ fn main() {
         }
         Commands::ConvertHwp5 { input, output } => {
             commands::convert_hwp5::run(&input, &output, cli.json);
+        }
+        Commands::ToPdf { input, output, font_dirs, discovery, degraded, partial_cache_reject } => {
+            commands::to_pdf::run(
+                &input,
+                output.as_deref(),
+                &font_dirs,
+                &discovery,
+                degraded,
+                partial_cache_reject,
+                cli.json,
+            );
         }
         Commands::Convert { input, output, preset } => {
             commands::convert::run(&input, &output, &preset, cli.json);

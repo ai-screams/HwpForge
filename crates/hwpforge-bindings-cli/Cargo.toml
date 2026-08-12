@@ -7,7 +7,8 @@ license.workspace = true
 publish = false
 readme.workspace = true
 repository.workspace = true
-rust-version.workspace = true
+# smithy-pdf(krilla) 의존으로 워크스페이스 MSRV(1.88) 초과 — ci.yml MSRV 레인 분리.
+rust-version = "1.92"
 description = "Hammer — AI-first CLI for HwpForge document generation and editing"
 
 [[bin]]
@@ -23,6 +24,7 @@ hwpforge-foundation = { path = "../hwpforge-foundation" }
 hwpforge-smithy-hwp5 = { path = "../hwpforge-smithy-hwp5" }
 hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", features = ["schemars"] }
 hwpforge-smithy-md = { path = "../hwpforge-smithy-md" }
+hwpforge-smithy-pdf = { path = "../hwpforge-smithy-pdf" }
 quick-xml = { workspace = true }
 schemars = { workspace = true }
 serde = { workspace = true }
