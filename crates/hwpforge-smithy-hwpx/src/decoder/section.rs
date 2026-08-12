@@ -505,6 +505,25 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
                 });
             }
         }
+        // NewNum (새 번호 지정) — W2: `<hp:newNum num numType/>` →
+        // Control::NewNumber. 미지 numType 문자열은 타입을 지어내는 대신
+        // Unknown 으로 carry (인코더가 스킵 — atno Unknown 대칭).
+        if let Some(nn) = &ctrl.new_num {
+            use hwpforge_core::control::NewNumberKind;
+            let kind = match nn.num_type.as_str() {
+                "PAGE" => NewNumberKind::Page,
+                "FOOTNOTE" => NewNumberKind::Footnote,
+                "ENDNOTE" => NewNumberKind::Endnote,
+                "PICTURE" => NewNumberKind::Picture,
+                "TABLE" => NewNumberKind::Table,
+                "EQUATION" => NewNumberKind::Equation,
+                _ => NewNumberKind::Unknown,
+            };
+            runs.push(Run {
+                content: RunContent::Control(Box::new(Control::NewNumber { kind, number: nn.num })),
+                char_shape_id,
+            });
+        }
     }
 
     // Handle self-closing fieldBegin without a matching fieldEnd (e.g. bookmark span start)
@@ -3319,6 +3338,52 @@ mod tests {
             page_num.is_some(),
             "autoNum PAGE must produce InlinePageNumber control (Wave 12n)"
         );
+    }
+
+    #[test]
+    fn serde_ctrl_newnum_page_produces_new_number() {
+        // F1b 한컴 실측 (rules-newnum2 section1.xml): 새 번호 지정은 run 안
+        // `<hp:ctrl><hp:newNum num="7" numType="PAGE"/></hp:ctrl>` 자기닫힘.
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl><newNum num="7" numType="PAGE"/></ctrl>
+                    <t>2구역 본문 시작</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let controls = find_controls(&result);
+        let new_num = controls.iter().find_map(|c| match c {
+            hwpforge_core::Control::NewNumber { kind, number } => Some((*kind, *number)),
+            _ => None,
+        });
+        assert_eq!(
+            new_num,
+            Some((hwpforge_core::control::NewNumberKind::Page, 7)),
+            "newNum PAGE must produce Control::NewNumber"
+        );
+    }
+
+    #[test]
+    fn serde_ctrl_newnum_unknown_numtype_carries_unknown_kind() {
+        // 미지 numType 은 타입을 지어내지 않고 Unknown 으로 carry (인코더 스킵).
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <ctrl><newNum num="3" numType="FUTURE_KIND"/></ctrl>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let controls = find_controls(&result);
+        assert!(controls.iter().any(|c| matches!(
+            c,
+            hwpforge_core::Control::NewNumber {
+                kind: hwpforge_core::control::NewNumberKind::Unknown,
+                number: 3
+            }
+        )));
     }
 
     #[test]

@@ -257,6 +257,9 @@ fn paragraph_text_markdown(paragraph: &Paragraph, warnings: &mut Vec<super::MdWa
                 Control::Compose { compose_text, .. } => {
                     output.push_str(compose_text);
                 }
+                Control::NewNumber { .. } => {
+                    // 번호 재시작 지시 — 본문 텍스트 없음, 명시적 no-op (W2).
+                }
                 _ => {}
             },
             RunContent::Table(table) => {

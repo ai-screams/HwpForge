@@ -50,7 +50,7 @@ mod typography;
 
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::{ColumnLayoutMode, ColumnSettings, ColumnType};
-use hwpforge_core::control::{Control, DutmalAlign, DutmalPosition};
+use hwpforge_core::control::{Control, DutmalAlign, DutmalPosition, NewNumberKind};
 use hwpforge_core::image::{Image, ImagePlacement};
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::{Run, RunContent};
@@ -70,7 +70,7 @@ use hwpforge_foundation::{BookmarkType, DropCapStyle, HwpUnit, TextDirection};
 use crate::schema::section::{
     HxBookmark, HxCaption, HxCellAddr, HxCellSpan, HxCellSz, HxChart, HxCompose, HxComposeCharPr,
     HxCtrl, HxDutmal, HxEquation, HxFlip, HxFootNote, HxImg, HxImgClip, HxImgDim, HxImgRect,
-    HxIndexMark, HxLineSeg, HxLineSegArray, HxMatrix, HxOffset, HxPageMargin, HxPagePr,
+    HxIndexMark, HxLineSeg, HxLineSegArray, HxMatrix, HxNewNum, HxOffset, HxPageMargin, HxPagePr,
     HxParagraph, HxPic, HxPoint, HxRenderingInfo, HxRotationInfo, HxRun, HxRunCase, HxRunSwitch,
     HxScript, HxSecPr, HxSection, HxShapeComment, HxSizeAttr, HxSubList, HxTable, HxTableCell,
     HxTableMargin, HxTablePos, HxTableRow, HxTableSz, HxText, HxTitleMark,
@@ -712,6 +712,7 @@ fn build_runs(
                         ));
                     }
                     Control::IndexMark { .. }
+                    | Control::NewNumber { .. }
                     | Control::Bookmark { bookmark_type: BookmarkType::Point, .. } => {
                         if let Some(hx_ctrl) =
                             encode_control_to_ctrl(ctrl, depth, hyperlink_entries, options)?
@@ -1085,6 +1086,24 @@ fn encode_control_to_ctrl(
             }),
             ..Default::default()
         })),
+        // 새 번호 지정 → `<hp:newNum num numType/>` (F1b 한컴 실측 형태).
+        // kind Unknown 은 인코딩하지 않는다 — 미지 wire 값에 타입을 지어내는
+        // 것이 fake support (atno Unknown 스킵과 동일 원칙).
+        Control::NewNumber { kind, number } => {
+            let num_type = match kind {
+                NewNumberKind::Page => "PAGE",
+                NewNumberKind::Footnote => "FOOTNOTE",
+                NewNumberKind::Endnote => "ENDNOTE",
+                NewNumberKind::Picture => "PICTURE",
+                NewNumberKind::Table => "TABLE",
+                NewNumberKind::Equation => "EQUATION",
+                _ => return Ok(None),
+            };
+            Ok(Some(HxCtrl {
+                new_num: Some(HxNewNum { num: *number, num_type: num_type.to_string() }),
+                ..Default::default()
+            }))
+        }
         _ => Ok(None),
     }
 }
@@ -2969,6 +2988,43 @@ mod tests {
     }
 
     // ── Field encoding ────────────────────────────────────────────
+
+    #[test]
+    fn new_number_encodes_as_hancom_shaped_newnum() {
+        // F1b 한컴 실측 형태: `<hp:newNum num="7" numType="PAGE"/>` (자기닫힘).
+        use hwpforge_core::control::{Control, NewNumberKind};
+        let ctrl = Control::NewNumber { kind: NewNumberKind::Page, number: 7 };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default()).unwrap().xml;
+        assert!(
+            xml.contains(r#"<hp:newNum num="7" numType="PAGE"/>"#),
+            "F1b 실측 형태와 일치해야 함: {xml}"
+        );
+    }
+
+    #[test]
+    fn new_number_unknown_kind_is_skipped_not_fabricated() {
+        // 미지 wire kind 에 numType 을 지어내는 것은 fake support — 스킵.
+        use hwpforge_core::control::{Control, NewNumberKind};
+        let ctrl = Control::NewNumber { kind: NewNumberKind::Unknown, number: 3 };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default()).unwrap().xml;
+        // 주의: `<hp:numbering ... newNum="1">` (각주/미주 속성)과 구분하기
+        // 위해 요소 시작 태그로 매칭한다.
+        assert!(!xml.contains("<hp:newNum"), "Unknown kind 는 인코딩 금지");
+    }
 
     #[test]
     fn field_pagenum_produces_autonum() {

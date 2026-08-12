@@ -682,6 +682,25 @@ pub enum Control {
         kind: InlinePageKind,
     },
 
+    /// A `nwno` **새 번호 지정** control — restarts a numbering counter
+    /// from this position (HWPX `<hp:newNum num numType>`).
+    ///
+    /// HWP5 wire (native fixture 실측 2026-08-12): 10 bytes —
+    /// `ctrl_id + 속성 u32(bits 0-3 = kind) + 번호 u16`, anchored in the
+    /// paragraph text by a `0x15` inline marker. 한컴 [쪽]→[새 번호로
+    /// 시작] 이 쓰는 경로다 (corpus: 407/2,231 문서). The restart applies
+    /// from the **physical page containing the control** (PDF 실측:
+    /// 1쪽 앵커 = 전문서 재번호, 2쪽 앵커 = `1, 7`).
+    NewNumber {
+        /// Which counter restarts ([`NewNumberKind::Page`] is the only
+        /// renderer-consumed kind; others carry through to HWPX).
+        kind: NewNumberKind,
+        /// The new counter value (1-based; fixture sentinel `7`). `u32`
+        /// covers both wires losslessly — HWP5 `nwno` carries u16, HWPX
+        /// `newNum@num` is `xs:positiveInteger`.
+        number: u32,
+    },
+
     /// An unrecognized control element preserved for round-trip fidelity.
     ///
     /// `tag` holds the element's tag name or type identifier.
@@ -761,6 +780,7 @@ impl Control {
             | Self::DateCodeField { .. }
             | Self::PathField { .. }
             | Self::InlinePageNumber { .. }
+            | Self::NewNumber { .. }
             | Self::Unknown { .. } => {}
         }
     }
@@ -800,6 +820,7 @@ impl Control {
             Self::DateCodeField { .. } => "date_code_field",
             Self::PathField { .. } => "path_field",
             Self::InlinePageNumber { .. } => "inline_page_number",
+            Self::NewNumber { .. } => "new_number",
             Self::Unknown { .. } => "unknown",
         }
     }
@@ -1807,6 +1828,9 @@ impl std::fmt::Display for Control {
                 InlinePageKind::TotalPages => write!(f, "InlinePageNumber(total)"),
                 InlinePageKind::Unknown => write!(f, "InlinePageNumber(unknown)"),
             },
+            Self::NewNumber { kind, number } => {
+                write!(f, "NewNumber({kind:?}, {number})")
+            }
             Self::Unknown { tag, .. } => {
                 write!(f, "Unknown({tag})")
             }

@@ -829,9 +829,17 @@ fn collect_raw_run_slots(
             }
         }
         if let Some(auto_num) = &ctrl.auto_num {
-            if auto_num.num_type == "PAGE" {
+            // 디코더는 PAGE 와 TOTAL_PAGE 를 InlinePageNumber run 으로
+            // 복원한다 (decoder/section.rs) — 카운터가 PAGE 만 세면 이후
+            // 슬롯 인덱스가 밀린다 (W2 독립 설계리뷰에서 발견된 잠복 결함).
+            if auto_num.num_type == "PAGE" || auto_num.num_type == "TOTAL_PAGE" {
                 semantic_run_idx += 1;
             }
+        }
+        // W2: 디코더가 모든 `<hp:newNum>` 을 Control::NewNumber run 으로
+        // 복원하므로 (미지 numType 도 Unknown kind 로 carry) 무조건 전진.
+        if ctrl.new_num.is_some() {
+            semantic_run_idx += 1;
         }
     }
     if let Some(field_begin) = pending_field_begin.take() {

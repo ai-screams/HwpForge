@@ -32,7 +32,8 @@ use crate::ctrl_ids::{
     CTRL_ID_ATNO, CTRL_ID_CLICK_HERE, CTRL_ID_COLUMN_DEF, CTRL_ID_COMPOSE, CTRL_ID_DUTMAL,
     CTRL_ID_ENDNOTE, CTRL_ID_EQED, CTRL_ID_FIELD_CROSSREF, CTRL_ID_FIELD_DATE_CODE,
     CTRL_ID_FIELD_PATH, CTRL_ID_FIELD_SUMMERY, CTRL_ID_FOOTER, CTRL_ID_FOOTNOTE, CTRL_ID_GSO,
-    CTRL_ID_HEADER, CTRL_ID_INDEXMARK, CTRL_ID_MEMO, CTRL_ID_SECD, CTRL_ID_TABLE,
+    CTRL_ID_HEADER, CTRL_ID_INDEXMARK, CTRL_ID_MEMO, CTRL_ID_NEW_NUMBER, CTRL_ID_SECD,
+    CTRL_ID_TABLE,
 };
 
 /// `ShapeComponent` (`0x4C`) type tag identifying a connect line, stored as the
@@ -1544,6 +1545,21 @@ impl BodyTextParserState {
                         .to_string(),
                 });
             }
+        } else if ctrl_id == CTRL_ID_NEW_NUMBER {
+            // `nwno` 새 번호 지정 — 10바이트 payload (W2, F1 실측 §1.2).
+            if let Some(nwno) =
+                crate::schema::section::Hwp5NewNumberControl::parse(ctrl_id, &record.data)
+            {
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls.push(Hwp5Control::NewNumber(nwno));
+                }
+            } else {
+                self.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "new_number",
+                    reason: "malformed nwno CtrlHeader payload; dropping number restart"
+                        .to_string(),
+                });
+            }
         } else if ctrl_id == CTRL_ID_ATNO {
             // `atno` ctrl carries a single 4-byte kind flag
             // (`0x00`/`0x06`). No Command/trailer. Wave 12n.
@@ -2707,6 +2723,45 @@ mod tests {
         let result = parse_body_text(&stream, &version()).unwrap();
         assert_eq!(result.section_def_start_numbers, None);
         assert_eq!(result.section_def_properties, Some(0x20));
+    }
+
+    #[test]
+    fn ctrl_header_nwno_produces_typed_new_number() {
+        // F1 실측 (rules-newnum-base.hwp): nwno = ctrl_id + 속성 u32(bits0-3
+        // = kind) + 번호 u16 — `00 00 00 00 07 00` = 쪽 번호 7.
+        let mut nwno = CTRL_ID_NEW_NUMBER.to_le_bytes().to_vec();
+        nwno.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x07, 0x00]);
+
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &nwno));
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let para = &result.paragraphs[0];
+        assert!(
+            para.controls.iter().any(|c| matches!(
+                c,
+                Hwp5Control::NewNumber(n) if n.kind_raw == 0 && n.number == 7
+            )),
+            "typed NewNumber expected: {:?}",
+            para.controls
+        );
+    }
+
+    #[test]
+    fn ctrl_header_nwno_truncated_payload_warns_dropped() {
+        // 10바이트 미만 payload → 무음 드롭 금지, DroppedControl 경고.
+        let mut nwno = CTRL_ID_NEW_NUMBER.to_le_bytes().to_vec();
+        nwno.extend_from_slice(&[0x00, 0x00]);
+
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &nwno));
+        let result = parse_body_text(&stream, &version()).unwrap();
+        assert!(result.paragraphs[0].controls.is_empty());
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| matches!(w, Hwp5Warning::DroppedControl { control: "new_number", .. })));
     }
 
     #[test]

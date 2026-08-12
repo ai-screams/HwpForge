@@ -2076,11 +2076,9 @@ fn page_number_from_pgnp_header(header_data: &[u8], warnings: &mut Vec<Hwp5Warni
             subject: "field.page_number",
             reason: "falling back to BOTTOM_CENTER digit page number".to_string(),
         });
-        PageNumber::with_decoration(
-            PageNumberPosition::BottomCenter,
-            NumberFormatType::Digit,
-            "-".to_string(),
-        )
+        // 장식 없는 맨 숫자 폴백 — F1 실측 (한컴 기본 재저장 = sideChar="")
+        // 과 정합. 장식을 날조하지 않는다.
+        PageNumber::new(PageNumberPosition::BottomCenter, NumberFormatType::Digit)
     })
 }
 
@@ -2147,6 +2145,10 @@ fn parse_page_number_control(header_data: &[u8]) -> Option<PageNumber> {
     // `is_ascii_graphic` (not `is_ascii`): the property word's number-shape byte
     // [4] and position byte [5] are small non-graphic values (e.g. 9 = InsideTop)
     // that would otherwise be mis-read as a decoration glyph like `\t`.
+    // 장식 바이트가 전부 0 = **장식 없음** — F1 native fixture 실측
+    // (2026-08-12): wire 전부 0 인 pgnp 를 한컴 자신이 `sideChar=""` 로
+    // 재저장하고 PDF 에도 맨 숫자로 찍는다. 과거의 `"-"` 기본값은 근거 없는
+    // 날조였다 (W2 에서 실측으로 교정).
     let decoration = header_data
         .iter()
         .rev()
@@ -2154,7 +2156,7 @@ fn parse_page_number_control(header_data: &[u8]) -> Option<PageNumber> {
         .copied()
         .filter(|byte| byte.is_ascii_graphic())
         .map(|byte| char::from(byte).to_string())
-        .unwrap_or_else(|| "-".to_string());
+        .unwrap_or_default();
     Some(PageNumber::with_decoration(position, number_format, decoration))
 }
 
@@ -2237,6 +2239,32 @@ fn project_control_run(
                 _ => InlinePageKind::Unknown,
             };
             Some(Run::control(Control::InlinePageNumber { kind }, CharShapeIndex::new(0)))
+        }
+        Hwp5Control::NewNumber(nwno) => {
+            use hwpforge_core::control::NewNumberKind;
+            // 속성 bits 0-3 → kind (F1 실측: 0 = 쪽). 미지 raw(6-15)는
+            // Unknown 으로 carry + 경고 — 타입을 지어내지 않는다.
+            let kind = match nwno.kind_raw {
+                0 => NewNumberKind::Page,
+                1 => NewNumberKind::Footnote,
+                2 => NewNumberKind::Endnote,
+                3 => NewNumberKind::Picture,
+                4 => NewNumberKind::Table,
+                5 => NewNumberKind::Equation,
+                raw => {
+                    projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                        subject: "control.new_number",
+                        reason: format!(
+                            "nwno kind raw value {raw} is unmapped; carrying as Unknown"
+                        ),
+                    });
+                    NewNumberKind::Unknown
+                }
+            };
+            Some(Run::control(
+                Control::NewNumber { kind, number: u32::from(nwno.number) },
+                CharShapeIndex::new(0),
+            ))
         }
         Hwp5Control::OleObject(ole) => project_ole_object_run(ole, projection_images),
         // %xrf cross-reference fields (Wave 12m) flow through the
@@ -3188,13 +3216,14 @@ mod tests {
         let pn = parse_page_number_control(&header).expect("pgnp should parse");
         assert_eq!(pn.number_format, NumberFormatType::Digit);
 
-        // Q1 regression: a pgnp with position byte 9 (InsideTop) and NO trailing
-        // graphic decoration must default to "-", not mis-read the non-graphic
-        // property byte (9 = '\t') as the decoration char.
+        // Q1 regression + W2 실측 교정: 장식 바이트 없는 pgnp 는 비그래픽
+        // 속성 바이트(9 = '\t')를 장식으로 오독하지 않아야 하고, 장식은
+        // **빈 문자열**이어야 한다 — F1 fixture 실측: 전부 0 인 wire 를
+        // 한컴이 `sideChar=""` + 맨 숫자 PDF 로 확정 (과거 "-" 기본값은 날조).
         let no_deco = vec![b'p', b'n', b'g', b'p', 0, 9, 0, 0, 0, 0];
         let pn = parse_page_number_control(&no_deco).expect("pgnp should parse");
         assert_eq!(pn.position, PageNumberPosition::InsideTop);
-        assert_eq!(pn.decoration, "-", "property byte must not be read as decoration");
+        assert_eq!(pn.decoration, "", "zero wire = no decoration (F1 byte-verified)");
     }
 
     use std::collections::BTreeMap;
@@ -4814,6 +4843,52 @@ mod tests {
             Control::InlinePageNumber { kind: InlinePageKind::Unknown },
             "unknown raw flag → Unknown (no fabricated kind)",
         );
+    }
+
+    /// W2: `project_control_run` maps `nwno` 속성 bits 0-3 to the right
+    /// `NewNumberKind` (F1 실측: 0 = 쪽) and carries the u16 number as u32.
+    /// Unmapped raw values surface as Unknown + warning (no fabrication).
+    #[test]
+    fn project_new_number_maps_kind_and_number() {
+        use crate::schema::section::Hwp5NewNumberControl;
+        use hwpforge_core::control::{Control, NewNumberKind};
+
+        let project = |kind_raw: u32, number: u16| -> (Control, Vec<Hwp5Warning>) {
+            let ctrl = Hwp5Control::NewNumber(Hwp5NewNumberControl {
+                ctrl_id: 0x6E77_6E6F,
+                kind_raw,
+                number,
+            });
+            let mut images = ProjectionImageState::new(None, None);
+            let run = project_control_run(
+                &ctrl,
+                &mut images,
+                ImageProjectionContext::Flow,
+                CharShapeIndex::new(0),
+            )
+            .expect("nwno control must project to a run");
+            let control = match run.content {
+                RunContent::Control(boxed) => *boxed,
+                other => panic!("expected control run, got {other:?}"),
+            };
+            (control, images.warnings)
+        };
+
+        // F1 실측: 00 00 00 00 07 00 → 쪽 번호 7.
+        let (control, warnings) = project(0, 7);
+        assert_eq!(control, Control::NewNumber { kind: NewNumberKind::Page, number: 7 });
+        assert!(warnings.is_empty(), "정상 kind 는 경고 없음: {warnings:?}");
+
+        let (control, _) = project(5, 3);
+        assert_eq!(control, Control::NewNumber { kind: NewNumberKind::Equation, number: 3 });
+
+        // 미지 raw → Unknown + 경고 (fake 매핑 금지).
+        let (control, warnings) = project(9, 1);
+        assert_eq!(control, Control::NewNumber { kind: NewNumberKind::Unknown, number: 1 });
+        assert!(warnings.iter().any(|w| matches!(
+            w,
+            Hwp5Warning::ProjectionFallback { subject: "control.new_number", .. }
+        )));
     }
 
     /// The `%dte` time-mode derivation (`raw_command` `T`-prefix →

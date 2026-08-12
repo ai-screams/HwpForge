@@ -113,6 +113,10 @@ pub(crate) enum Hwp5Control {
     /// preserved). See `schema::section::Hwp5InlinePageNumberControl`.
     /// (Wave 12n.)
     InlinePageNumber(crate::schema::section::Hwp5InlinePageNumberControl),
+    /// `nwno` 새 번호 지정 control — 번호 카운터를 컨트롤 위치부터
+    /// 재시작한다. `0x15` inline 앵커로 위치 보존 (W2 — F1 실측).
+    /// See `schema::section::Hwp5NewNumberControl`.
+    NewNumber(crate::schema::section::Hwp5NewNumberControl),
     /// `%xrf` cross-reference control — carries the structured
     /// `?<target>;N1;N2;N3;N4;` Command with raw RefType / ContentType /
     /// hyperlink codes. The projection layer maps these to typed

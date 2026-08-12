@@ -152,7 +152,16 @@ pub fn replay_layout(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<Re
             warnings.push(PdfWarning::PageStartsOnFallback { section: section_idx });
         }
         let first_page = pages.len();
-        replay_section(input, options, section, section_idx, &mut pages, &mut warnings)?;
+        let mut events: Vec<PageNumberEvent> = Vec::new();
+        replay_section(
+            input,
+            options,
+            section,
+            section_idx,
+            &mut pages,
+            &mut events,
+            &mut warnings,
+        )?;
         overlay_headers_footers(
             input,
             options,
@@ -163,7 +172,17 @@ pub fn replay_layout(input: &PdfInput<'_>, options: &PdfOptions) -> PdfResult<Re
             &mut warnings,
         )?;
         counter.enter_section(section.begin_num.as_ref());
-        let numbers: Vec<u32> = pages[first_page..].iter().map(|_| counter.assign_page()).collect();
+        // W2: 쪽 배정 직전에 그 쪽의 재시작 이벤트를 문서 순서로 적용한다
+        // (같은 쪽 다중 = last-wins). F1 실측: 컨트롤이 놓인 쪽부터 새 번호
+        // (1쪽 앵커 = `7,8`, 2쪽 앵커 = `1,7`).
+        let numbers: Vec<u32> = (first_page..pages.len())
+            .map(|page_idx| {
+                for ev in events.iter().filter(|e| e.page == page_idx) {
+                    counter.restart(ev.number);
+                }
+                counter.assign_page()
+            })
+            .collect();
         emit_page_numbers(
             input,
             section,
@@ -208,6 +227,30 @@ impl DisplayCounter {
         self.next += 1;
         n
     }
+
+    /// `nwno` 재시작 이벤트 — 해당 쪽 번호 배정 **직전에** 카운터를 덮어쓴다.
+    fn restart(&mut self, n: u32) {
+        self.next = n;
+    }
+}
+
+/// `nwno` 쪽번호 재시작 이벤트 (W2) — 컨트롤이 놓인 줄이 배치된 **물리 쪽**
+/// (전역 인덱스)에 앵커된다. 문서 순서로 수집되어 같은 쪽 다중 이벤트는
+/// last-wins 로 적용된다.
+#[derive(Debug, Clone, Copy)]
+struct PageNumberEvent {
+    /// 전역 물리 쪽 인덱스 (`pages` 벡터 기준).
+    page: usize,
+    /// 새 표시 번호.
+    number: u32,
+}
+
+/// 렌더 replay 가 자체 소비하는 0폭 marker 컨트롤인지 (textpos 무영향 —
+/// 한컴 HWPX 실측: `<hp:ctrl>` 은 linesegarray textpos 를 소비하지 않는다).
+/// 선행 비텍스트 fail-closed 가드와 `NonTextRunDropped` 경고에서 제외된다.
+fn is_replay_consumed_marker(content: &RunContent) -> bool {
+    matches!(content, RunContent::Control(c)
+        if matches!(**c, hwpforge_core::control::Control::NewNumber { .. }))
 }
 
 /// 쪽번호 합성 (§8c 실측 — BOTTOM_CENTER + DIGIT 만, 그 외 = 경고+생략).
@@ -463,6 +506,7 @@ fn replay_section(
     section: &Section,
     section_idx: usize,
     pages: &mut Vec<PageLayout>,
+    events: &mut Vec<PageNumberEvent>,
     warnings: &mut Vec<PdfWarning>,
 ) -> PdfResult<()> {
     let ps = &section.page_settings;
@@ -591,15 +635,43 @@ fn replay_section(
         // run(컨트롤·이미지)이 있으면 textpos 좌표를 신뢰할 수 없다 — HWPX
         // 디코더의 선행 컨트롤 정규화는 secPr·ctrl 만 차감하므로(수식·그림
         // 등은 스트림 유닛 미차감) 무음 오절단 대신 깨끗하게 거부한다.
+        // W2 예외: replay 가 자체 소비하는 0폭 marker(nwno)는 textpos 를
+        // 소비하지 않는다 (F1b 한컴 실측: ctrl 선행 + linesegarray textpos=0).
         let first_text = para.runs.iter().position(|r| r.content.plain_text().is_some());
         if let Some(ft) = first_text {
-            if para.runs[..ft].iter().any(|r| r.content.plain_text().is_none()) {
+            if para.runs[..ft]
+                .iter()
+                .any(|r| r.content.plain_text().is_none() && !is_replay_consumed_marker(&r.content))
+            {
                 return Err(PdfError::InvalidCache {
                     detail: format!(
                         "{location}: leading non-text run before first text run — textpos \
                          normalization does not cover this control kind (W2 scope)"
                     ),
                 });
+            }
+        }
+
+        // W2: 이 문단의 nwno(쪽 종류) 재시작을 가시 텍스트 오프셋과 함께 수집
+        // — 아래 줄 루프에서 해당 오프셋이 놓이는 물리 쪽에 앵커한다.
+        let mut restarts: Vec<(usize, u32)> = Vec::new();
+        {
+            let mut pos = 0usize;
+            for run in &para.runs {
+                match run.content.plain_text() {
+                    Some(t) => pos += t.encode_utf16().count(),
+                    None => {
+                        if let RunContent::Control(c) = &run.content {
+                            if let hwpforge_core::control::Control::NewNumber {
+                                kind: hwpforge_core::control::NewNumberKind::Page,
+                                number,
+                            } = **c
+                            {
+                                restarts.push((pos, number));
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -626,6 +698,15 @@ fn replay_section(
             let end =
                 cache.lines.get(line_idx + 1).map_or(utf16.len(), |next| next.textpos as usize);
             let runs = slice_line_runs(&utf16, &run_spans, start, end);
+
+            // W2: 이 줄 텍스트 구간에 놓인 nwno 재시작을 현재 물리 쪽에 앵커.
+            // 마지막 줄은 문단 끝 오프셋(컨트롤이 꼬리에 있는 경우)까지 흡수.
+            let is_last = line_idx + 1 == line_count;
+            for &(_, number) in
+                restarts.iter().filter(|&&(off, _)| off >= start && (off < end || is_last))
+            {
+                events.push(PageNumberEvent { page: pages.len() - 1, number });
+            }
 
             let page = pages.last_mut().ok_or_else(|| PdfError::InternalInvariant {
                 detail: "section replay has no current page".to_string(),
@@ -719,7 +800,10 @@ fn run_utf16_spans(
             }
             None => {
                 // 표는 이미 거부됐고, 여기 오는 것은 컨트롤/이미지 — 흐름 폭 0.
-                warnings.push(PdfWarning::NonTextRunDropped { location: location.to_string() });
+                // W2: replay 가 소비하는 marker(nwno)는 드롭이 아니므로 제외.
+                if !is_replay_consumed_marker(&run.content) {
+                    warnings.push(PdfWarning::NonTextRunDropped { location: location.to_string() });
+                }
             }
         }
     }
@@ -1211,6 +1295,106 @@ mod tests {
         let texts: Vec<&str> =
             layout.pages.iter().map(|p| p.page_number.as_ref().unwrap().text.as_str()).collect();
         assert_eq!(texts, vec!["1", "2", "10", "11", "12"]);
+    }
+
+    // ── W2: nwno 재시작 이벤트 (F1/F1b PDF 실측 정답지) ────────────────────
+
+    /// [NewNumber ctrl run + 텍스트 run] 문단 (F1b 한컴 실측 run 형태 — ctrl
+    /// 이 텍스트 앞, textpos 는 가시 텍스트만 계수).
+    fn para_with_restart(text: &str, number: u32, lines: Vec<LineSeg>) -> Paragraph {
+        use hwpforge_core::control::{Control, NewNumberKind};
+        let mut p = Paragraph::with_runs(
+            vec![
+                Run::control(
+                    Control::NewNumber { kind: NewNumberKind::Page, number },
+                    CharShapeIndex::new(0),
+                ),
+                Run::text(text, CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        p.layout_cache = Some(LayoutCache::new(lines));
+        p
+    }
+
+    #[test]
+    fn new_number_on_second_page_restarts_from_there() {
+        // F1b 정답지: 1쪽 = 1, 2쪽(컨트롤 앵커) = 7.
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(
+            vec![
+                para_with_cache("1쪽 본문", vec![seg(0, 0)]),
+                para_with_restart("2쪽 본문", 7, vec![seg(0, 0)]),
+            ],
+            PageSettings::a4(),
+        ));
+        doc.sections_mut()[0].page_number = Some(bottom_digit());
+        let doc = doc.validate().expect("validate");
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        let texts: Vec<&str> =
+            layout.pages.iter().map(|p| p.page_number.as_ref().unwrap().text.as_str()).collect();
+        assert_eq!(texts, vec!["1", "7"], "중간 쪽 재시작 (F1b `1, 7`)");
+        // 소비된 marker 는 드롭 경고를 내지 않는다.
+        assert!(
+            !layout.warnings.iter().any(|w| matches!(w, PdfWarning::NonTextRunDropped { .. })),
+            "{:?}",
+            layout.warnings
+        );
+    }
+
+    #[test]
+    fn new_number_on_first_page_renumbers_whole_document() {
+        // F1 정답지: 1쪽 앵커 → 전문서 재번호 `7, 8`.
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(
+            vec![
+                para_with_restart("1쪽 본문", 7, vec![seg(0, 0)]),
+                para_with_cache("2쪽 본문", vec![seg(0, 0)]),
+            ],
+            PageSettings::a4(),
+        ));
+        doc.sections_mut()[0].page_number = Some(bottom_digit());
+        let doc = doc.validate().expect("validate");
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        let texts: Vec<&str> =
+            layout.pages.iter().map(|p| p.page_number.as_ref().unwrap().text.as_str()).collect();
+        assert_eq!(texts, vec!["7", "8"]);
+    }
+
+    #[test]
+    fn new_number_same_page_last_wins_and_non_page_kind_ignored() {
+        use hwpforge_core::control::{Control, NewNumberKind};
+        // 같은 쪽 다중 재시작 = 문서 순서 last-wins; 쪽 외 kind 는 렌더 무시.
+        let mut p = Paragraph::with_runs(
+            vec![
+                Run::control(
+                    Control::NewNumber { kind: NewNumberKind::Page, number: 5 },
+                    CharShapeIndex::new(0),
+                ),
+                Run::control(
+                    Control::NewNumber { kind: NewNumberKind::Page, number: 9 },
+                    CharShapeIndex::new(0),
+                ),
+                Run::control(
+                    Control::NewNumber { kind: NewNumberKind::Footnote, number: 2 },
+                    CharShapeIndex::new(0),
+                ),
+                Run::text("본문", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        p.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(
+            vec![p, para_with_cache("다음 쪽", vec![seg(0, 0)])],
+            PageSettings::a4(),
+        ));
+        doc.sections_mut()[0].page_number = Some(bottom_digit());
+        let doc = doc.validate().expect("validate");
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        let texts: Vec<&str> =
+            layout.pages.iter().map(|p| p.page_number.as_ref().unwrap().text.as_str()).collect();
+        assert_eq!(texts, vec!["9", "10"], "last-wins + Footnote kind 무시");
     }
 
     #[test]

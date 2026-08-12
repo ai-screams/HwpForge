@@ -1113,6 +1113,8 @@ pub enum Hwp5SemanticControlKind {
     PathField,
     /// `atno` inline page-number control (Wave 12n).
     InlinePageNumber,
+    /// `nwno` 새 번호 지정 control (W2, 2026-08-12).
+    NewNumber,
     /// `%xrf` cross-reference field (Wave 12m).
     CrossRef,
     /// Header control.

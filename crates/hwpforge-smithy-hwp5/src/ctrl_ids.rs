@@ -66,6 +66,11 @@ pub(crate) const CTRL_ID_COLUMN_DEF: u32 = 0x636F_6C64;
 /// this id to keep audit page-number counts accurate.
 pub(crate) const CTRL_ID_PAGE_NUMBER: u32 = 0x7067_6E70;
 
+/// ctrl_id for the 새 번호 지정 (new number) control: ASCII `"nwno"` as
+/// big-endian u32. 번호 카운터를 컨트롤 위치부터 재시작한다 — F1 native
+/// fixture 실측 (2026-08-12): 10바이트 payload + `0x15` inline 앵커.
+pub(crate) const CTRL_ID_NEW_NUMBER: u32 = 0x6E77_6E6F;
+
 // ---------------------------------------------------------------------------
 // §2 Annotation controls (CtrlHeader only)
 // ---------------------------------------------------------------------------

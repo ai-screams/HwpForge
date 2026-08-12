@@ -838,6 +838,28 @@ pub struct HxCtrl {
         skip_serializing_if = "Option::is_none"
     )]
     pub auto_num: Option<HxAutoNum>,
+    /// Optional newNum element (새 번호 지정 — 번호 재시작).
+    #[serde(
+        rename(serialize = "hp:newNum", deserialize = "newNum"),
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub new_num: Option<HxNewNum>,
+}
+
+/// `<hp:newNum num="7" numType="PAGE"/>` — 새 번호 지정 (번호 재시작).
+///
+/// 한컴 F1b 실측 (2026-08-12): run 안 `<hp:ctrl>` 자식, 자기닫힘, 텍스트
+/// 위치를 소비하지 않는다 (linesegarray textpos 무영향).
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq)]
+pub struct HxNewNum {
+    /// New counter value (`xs:positiveInteger`).
+    #[serde(rename = "@num", default)]
+    pub num: u32,
+    /// Counter type (`"PAGE"` / `"FOOTNOTE"` / `"ENDNOTE"` / `"PICTURE"` /
+    /// `"TABLE"` / `"EQUATION"`).
+    #[serde(rename = "@numType", default)]
+    pub num_type: String,
 }
 
 /// `<hp:bookmark name="..."/>` — point bookmark element inside `<hp:ctrl>`.
