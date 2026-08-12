@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.13.0...hwpforge-core-v0.13.1) - 2026-08-12
+
+### Added
+
+- *(core)* 쪽번호 전용 CHAR 스타일 조회 char_style_shape 추가
+
+
 ## [0.13.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.12.1...hwpforge-core-v0.13.0) - 2026-08-09
 
 ### Added
