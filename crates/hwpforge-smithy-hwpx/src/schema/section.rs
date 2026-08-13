@@ -85,9 +85,13 @@ pub struct HxParagraph {
 /// `<hp:secPr>`, `<hp:ctrl>`, `<hp:t>`, `<hp:tbl>`, `<hp:pic>`,
 /// `<hp:rect>`, `<hp:ellipse>`, etc.
 ///
-/// Phase 3 extracts text, tables, images, and secPr; everything else
-/// is silently skipped by serde (no `deny_unknown_fields`).
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+/// W1a (이미지/글상자 에픽): 역직렬화는 수동 구현 — `$value` 혼합 파싱으로
+/// 종류별 Vec 을 채우면서 **문서 순서 사이드카** [`HxRun::child_order`] 를
+/// 함께 기록한다 (한컴 인터리브 `<t>a</t><pic/><t>b</t>` 의 순서 보존 —
+/// 스파이크 `tests/hxrun_read_spike.rs` 로 quick-xml 0.41 지원 확증).
+/// 직렬화는 derive 유지 (인코더는 1 Core Run → 1 HxRun 정규형 — mixed
+/// 직렬화 불요, Codex 리뷰 #2 채택).
+#[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct HxRun {
     #[serde(rename = "@charPrIDRef", default)]
     pub char_pr_id_ref: u32,
@@ -240,6 +244,245 @@ pub struct HxRun {
     /// `Control::TextArt`.
     #[serde(rename(deserialize = "textart"), default, skip_serializing)]
     pub textarts: Vec<HxTextArt>,
+
+    /// 자식의 **문서 순서** 사이드카: `(종류, 해당 종류 Vec 내 인덱스)` 를
+    /// 파싱 순서대로 기록한다 (W1a). 종류별 Vec 은 기존 소비자 호환을 위해
+    /// 유지되고, 순서가 필요한 소비자(디코더 평탄화·patch raw walker)만
+    /// 이 사이드카를 걷는다. 인코더 생성 run 은 빈 Vec (직렬화 제외).
+    #[serde(skip)]
+    pub child_order: Vec<(HxRunChildKind, usize)>,
+}
+
+/// [`HxRun::child_order`] 의 자식 종류 태그 (W1a).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HxRunChildKind {
+    /// `<hp:secPr>` (Option 필드 — 인덱스는 항상 0).
+    SecPr,
+    /// `<hp:t>`.
+    Text,
+    /// `<hp:tbl>`.
+    Table,
+    /// `<hp:pic>`.
+    Picture,
+    /// `<hp:ctrl>`.
+    Ctrl,
+    /// `<hp:rect>`.
+    Rect,
+    /// `<hp:line>`.
+    Line,
+    /// `<hp:ellipse>`.
+    Ellipse,
+    /// `<hp:polygon>`.
+    Polygon,
+    /// `<hp:curve>`.
+    Curve,
+    /// `<hp:connectLine>`.
+    ConnectLine,
+    /// `<hp:equation>`.
+    Equation,
+    /// `<hp:switch>`.
+    Switch,
+    /// `<hp:titleMark>` (Option 필드 — 인덱스는 항상 0).
+    TitleMark,
+    /// `<hp:dutmal>`.
+    Dutmal,
+    /// `<hp:compose>`.
+    Compose,
+    /// `<hp:container>`.
+    Container,
+    /// `<hp:textart>`.
+    TextArt,
+    /// 미지 요소 (자리 보존용 — 종류별 Vec 에는 미수록).
+    Other,
+}
+
+/// 종전 by-kind 고정 순서를 재현하는 폴백 (child_order 사이드카가 비어 있는
+/// 수동 생성 `HxRun` 전용 — 파싱 경로는 항상 사이드카를 갖는다).
+pub(crate) fn legacy_child_order(hx: &HxRun) -> Vec<(HxRunChildKind, usize)> {
+    use HxRunChildKind as K;
+    let mut order = Vec::new();
+    order.extend((0..hx.texts.len()).map(|i| (K::Text, i)));
+    order.extend((0..hx.tables.len()).map(|i| (K::Table, i)));
+    order.extend((0..hx.pictures.len()).map(|i| (K::Picture, i)));
+    order.extend((0..hx.ctrls.len()).map(|i| (K::Ctrl, i)));
+    order.extend((0..hx.rects.len()).map(|i| (K::Rect, i)));
+    order.extend((0..hx.lines.len()).map(|i| (K::Line, i)));
+    order.extend((0..hx.ellipses.len()).map(|i| (K::Ellipse, i)));
+    order.extend((0..hx.polygons.len()).map(|i| (K::Polygon, i)));
+    order.extend((0..hx.curves.len()).map(|i| (K::Curve, i)));
+    order.extend((0..hx.textarts.len()).map(|i| (K::TextArt, i)));
+    order.extend((0..hx.connect_lines.len()).map(|i| (K::ConnectLine, i)));
+    order.extend((0..hx.containers.len()).map(|i| (K::Container, i)));
+    order.extend((0..hx.equations.len()).map(|i| (K::Equation, i)));
+    order.extend((0..hx.dutmals.len()).map(|i| (K::Dutmal, i)));
+    order.extend((0..hx.composes.len()).map(|i| (K::Compose, i)));
+    order
+}
+
+/// `$value` 혼합 파싱용 중간 enum (W1a — 역직렬화 전용).
+#[derive(Deserialize)]
+enum HxRunChildDe {
+    #[serde(rename = "secPr")]
+    SecPr(Box<HxSecPr>),
+    #[serde(rename = "t")]
+    Text(HxText),
+    #[serde(rename = "tbl")]
+    Table(Box<HxTable>),
+    #[serde(rename = "pic")]
+    Picture(Box<HxPic>),
+    #[serde(rename = "ctrl")]
+    Ctrl(Box<HxCtrl>),
+    #[serde(rename = "rect")]
+    Rect(Box<HxRect>),
+    #[serde(rename = "line")]
+    Line(Box<HxLine>),
+    #[serde(rename = "ellipse")]
+    Ellipse(Box<HxEllipse>),
+    #[serde(rename = "polygon")]
+    Polygon(Box<HxPolygon>),
+    #[serde(rename = "curve")]
+    Curve(Box<HxCurve>),
+    #[serde(rename = "connectLine")]
+    ConnectLine(Box<HxConnectLine>),
+    #[serde(rename = "equation")]
+    Equation(Box<HxEquation>),
+    #[serde(rename = "switch")]
+    Switch(Box<HxRunSwitch>),
+    #[serde(rename = "titleMark")]
+    TitleMark(Box<HxTitleMark>),
+    #[serde(rename = "dutmal")]
+    Dutmal(Box<HxDutmal>),
+    #[serde(rename = "compose")]
+    Compose(Box<HxCompose>),
+    #[serde(rename = "container")]
+    Container(Box<HxContainer>),
+    #[serde(rename = "textart")]
+    TextArt(Box<HxTextArt>),
+    /// run 직속 텍스트 노드 (정상 문서엔 없음 — 방어적 흡수).
+    #[serde(rename = "$text")]
+    StrayText(String),
+    /// 미지 요소 — 파싱 실패 대신 자리만 기록.
+    #[serde(other)]
+    Other,
+}
+
+impl<'de> serde::Deserialize<'de> for HxRun {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct HxRunDe {
+            #[serde(rename = "@charPrIDRef", default)]
+            char_pr_id_ref: u32,
+            #[serde(rename = "$value", default)]
+            children: Vec<HxRunChildDe>,
+        }
+        let de = HxRunDe::deserialize(deserializer)?;
+        let mut run = HxRun {
+            char_pr_id_ref: de.char_pr_id_ref,
+            sec_pr: None,
+            texts: Vec::new(),
+            tables: Vec::new(),
+            pictures: Vec::new(),
+            ctrls: Vec::new(),
+            rects: Vec::new(),
+            lines: Vec::new(),
+            ellipses: Vec::new(),
+            polygons: Vec::new(),
+            curves: Vec::new(),
+            connect_lines: Vec::new(),
+            equations: Vec::new(),
+            switches: Vec::new(),
+            title_mark: None,
+            dutmals: Vec::new(),
+            composes: Vec::new(),
+            containers: Vec::new(),
+            textarts: Vec::new(),
+            child_order: Vec::new(),
+        };
+        use HxRunChildKind as K;
+        for child in de.children {
+            match child {
+                HxRunChildDe::SecPr(x) => {
+                    run.child_order.push((K::SecPr, 0));
+                    run.sec_pr = Some(*x);
+                }
+                HxRunChildDe::Text(x) => {
+                    run.child_order.push((K::Text, run.texts.len()));
+                    run.texts.push(x);
+                }
+                HxRunChildDe::Table(x) => {
+                    run.child_order.push((K::Table, run.tables.len()));
+                    run.tables.push(*x);
+                }
+                HxRunChildDe::Picture(x) => {
+                    run.child_order.push((K::Picture, run.pictures.len()));
+                    run.pictures.push(*x);
+                }
+                HxRunChildDe::Ctrl(x) => {
+                    run.child_order.push((K::Ctrl, run.ctrls.len()));
+                    run.ctrls.push(*x);
+                }
+                HxRunChildDe::Rect(x) => {
+                    run.child_order.push((K::Rect, run.rects.len()));
+                    run.rects.push(*x);
+                }
+                HxRunChildDe::Line(x) => {
+                    run.child_order.push((K::Line, run.lines.len()));
+                    run.lines.push(*x);
+                }
+                HxRunChildDe::Ellipse(x) => {
+                    run.child_order.push((K::Ellipse, run.ellipses.len()));
+                    run.ellipses.push(*x);
+                }
+                HxRunChildDe::Polygon(x) => {
+                    run.child_order.push((K::Polygon, run.polygons.len()));
+                    run.polygons.push(*x);
+                }
+                HxRunChildDe::Curve(x) => {
+                    run.child_order.push((K::Curve, run.curves.len()));
+                    run.curves.push(*x);
+                }
+                HxRunChildDe::ConnectLine(x) => {
+                    run.child_order.push((K::ConnectLine, run.connect_lines.len()));
+                    run.connect_lines.push(*x);
+                }
+                HxRunChildDe::Equation(x) => {
+                    run.child_order.push((K::Equation, run.equations.len()));
+                    run.equations.push(*x);
+                }
+                HxRunChildDe::Switch(x) => {
+                    run.child_order.push((K::Switch, run.switches.len()));
+                    run.switches.push(*x);
+                }
+                HxRunChildDe::TitleMark(x) => {
+                    run.child_order.push((K::TitleMark, 0));
+                    run.title_mark = Some(*x);
+                }
+                HxRunChildDe::Dutmal(x) => {
+                    run.child_order.push((K::Dutmal, run.dutmals.len()));
+                    run.dutmals.push(*x);
+                }
+                HxRunChildDe::Compose(x) => {
+                    run.child_order.push((K::Compose, run.composes.len()));
+                    run.composes.push(*x);
+                }
+                HxRunChildDe::Container(x) => {
+                    run.child_order.push((K::Container, run.containers.len()));
+                    run.containers.push(*x);
+                }
+                HxRunChildDe::TextArt(x) => {
+                    run.child_order.push((K::TextArt, run.textarts.len()));
+                    run.textarts.push(*x);
+                }
+                HxRunChildDe::StrayText(_) => {
+                    // run 직속 텍스트는 스키마상 없음 — 자리 기록 없이 무시.
+                }
+                HxRunChildDe::Other => {
+                    run.child_order.push((K::Other, 0));
+                }
+            }
+        }
+        Ok(run)
+    }
 }
 
 /// `<hp:textart>` — TextArt (글맵시) decorative warped-text object.

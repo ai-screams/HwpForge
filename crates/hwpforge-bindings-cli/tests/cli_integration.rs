@@ -3915,10 +3915,13 @@ fn fill_unknown_name_reports_available_fields() {
 }
 
 #[test]
-fn fill_merged_run_field_rejected_as_not_fillable() {
+fn fill_merged_run_field_succeeds_with_exact_attribution() {
+    // W1a (이미지/글상자 에픽): HxRun 자식 순서 보존으로 병합-run 본문
+    // 귀속이 무모호해져 채움이 성공한다 (종전 FIELD_NOT_FILLABLE 거부 →
+    // gotcha #30 철폐).
     let f = fixture("clickhere_filled.hwpx");
     let tmp = test_tmp();
-    let out = tmp.join("never2.hwpx");
+    let out = tmp.join("merged_filled.hwpx");
     let (value, _, code) = run_json(&[
         "fill",
         f.to_str().unwrap(),
@@ -3927,9 +3930,13 @@ fn fill_merged_run_field_rejected_as_not_fillable() {
         "-o",
         out.to_str().unwrap(),
     ]);
-    assert_eq!(code, 1);
-    assert_eq!(value["code"], "FIELD_NOT_FILLABLE");
-    assert!(!out.exists());
+    assert_eq!(code, 0, "{value}");
+    assert!(out.exists());
+    let (fields, _, code) = run_json(&["fields", out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let list = fields["fields"].as_array().expect("fields array");
+    let f = list.iter().find(|f| f["name"] == "user_email").expect("user_email field");
+    assert_eq!(f["current"], "x@y.z");
 }
 
 // ═══════════════════════════════════════════════════════════════

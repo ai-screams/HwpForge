@@ -27,9 +27,9 @@ use quick_xml::de::from_str;
 use crate::color::parse_hex_color_raw;
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    HxCaption, HxChart, HxCompose, HxCtrl, HxDutmal, HxEquation, HxFieldBegin, HxFootNote,
-    HxHeaderFooter, HxPageNum, HxParagraph, HxPic, HxRun, HxSection, HxSubList, HxTable,
-    HxTableCell, HxTableRow,
+    legacy_child_order, HxCaption, HxChart, HxCompose, HxCtrl, HxDutmal, HxEquation, HxFieldBegin,
+    HxFootNote, HxHeaderFooter, HxPageNum, HxParagraph, HxPic, HxRun, HxRunChildKind, HxSection,
+    HxSubList, HxTable, HxTableCell, HxTableRow,
 };
 
 /// Maximum nesting depth for tables-within-tables.
@@ -398,56 +398,151 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
     let char_shape_id = CharShapeIndex::new(hx.char_pr_id_ref as usize);
     let mut runs = Vec::new();
 
-    // Check if this run has a fieldBegin+fieldEnd pair — if so, the text
-    // is consumed by the field control and should NOT be emitted separately.
-    let has_field_pair = hx.ctrls.iter().any(|c| c.field_begin.is_some())
-        && hx.ctrls.iter().any(|c| c.field_end.is_some());
-
-    // Text runs — skip if consumed by field controls.
+    // W1a (이미지/글상자 에픽): 자식을 **문서 순서**(child_order 사이드카)로
+    // 평탄화한다 — 종전 by-kind 고정 순서는 `<t>a</t><pic/><t>b</t>` 를
+    // Core `[a, b, pic]` 으로 재배열해 인라인 객체의 앵커 위치를 왜곡했다.
+    //
+    // field pairing 도 순서 기반: fieldBegin 과 fieldEnd **사이**의 텍스트
+    // 자식이 곧 필드 본문이다 — 종전의 `texts.len()==1` 모호성 다운그레이드
+    // (gotcha #30)는 순서 보존으로 철폐. begin 앞/end 뒤 텍스트는 정상
+    // 방출된다 (종전엔 pair 존재 시 run 의 전 텍스트가 드롭 — 한컴 병합
+    // run 의 충실도 개선).
     //
     // `HxText::to_run_content` preserves any `<hp:tab>` attribute payload
-    // (`width` / `leader` / `tab_type`) as `RunContent::InlineText`,
-    // falling back to the existing `RunContent::Text(String)` when every
-    // tab is attribute-less. This closes the HWPX-decode side of the
-    // inline tab carry — see
-    // `.docs/debug/2026-05-27_hwpx_decoder_inline_tab_attrs_lost.md`.
-    if !has_field_pair {
-        for text in &hx.texts {
-            let content = text.to_run_content();
-            let keep = match &content {
-                RunContent::Text(s) => !s.is_empty(),
-                RunContent::InlineText(it) => !it.segments.is_empty(),
-                _ => true,
-            };
-            if keep {
-                runs.push(Run { content, char_shape_id });
-            }
-        }
-    }
+    // (`width` / `leader` / `tab_type`) as `RunContent::InlineText` —
+    // see `.docs/debug/2026-05-27_hwpx_decoder_inline_tab_attrs_lost.md`.
+    let order = if hx.child_order.is_empty() {
+        // 수동 생성 HxRun(테스트·내부 도구) 폴백 — 종전 by-kind 순서 재현.
+        legacy_child_order(hx)
+    } else {
+        hx.child_order.clone()
+    };
 
-    // Table runs
-    for table in &hx.tables {
-        let core_table = convert_table(table, depth)?;
-        runs.push(Run { content: RunContent::Table(Box::new(core_table)), char_shape_id });
-    }
-
-    // Image runs
-    for pic in &hx.pictures {
-        if let Some(image) = convert_picture(pic, depth)? {
-            runs.push(Run { content: RunContent::Image(image), char_shape_id });
-        }
-    }
-
-    // Footnote / Endnote / Bookmark / IndexMark / Field runs (from <hp:ctrl>)
-    //
-    // Field controls use fieldBegin/fieldEnd pairs. We collect fieldBegin ctrls
-    // and match them with fieldEnd ctrls to extract the field's text from
-    // intervening <hp:t> elements. The text runs between begin and end are
-    // consumed as the field's display text.
     let mut field_begin: Option<&HxFieldBegin> = None;
     let mut field_begin_char_shape: CharShapeIndex = char_shape_id;
+    let mut field_body = String::new();
 
-    for ctrl in &hx.ctrls {
+    for &(kind, idx) in &order {
+        match kind {
+            HxRunChildKind::Text => {
+                let text = &hx.texts[idx];
+                if field_begin.is_some() {
+                    // 마커 사이 텍스트 = 필드 본문 (문서 순서라 무모호).
+                    field_body.push_str(&text.text());
+                    continue;
+                }
+                let content = text.to_run_content();
+                let keep = match &content {
+                    RunContent::Text(s) => !s.is_empty(),
+                    RunContent::InlineText(it) => !it.segments.is_empty(),
+                    _ => true,
+                };
+                if keep {
+                    runs.push(Run { content, char_shape_id });
+                }
+            }
+            HxRunChildKind::Table => {
+                let core_table = convert_table(&hx.tables[idx], depth)?;
+                runs.push(Run { content: RunContent::Table(Box::new(core_table)), char_shape_id });
+            }
+            HxRunChildKind::Picture => {
+                if let Some(image) = convert_picture(&hx.pictures[idx], depth)? {
+                    runs.push(Run { content: RunContent::Image(image), char_shape_id });
+                }
+            }
+            HxRunChildKind::Ctrl => {
+                convert_ctrl_child(
+                    &hx.ctrls[idx],
+                    char_shape_id,
+                    depth,
+                    &mut runs,
+                    &mut field_begin,
+                    &mut field_begin_char_shape,
+                    &mut field_body,
+                )?;
+            }
+            HxRunChildKind::Rect => {
+                if let Some(run) = decode_textbox(&hx.rects[idx], char_shape_id, depth)? {
+                    runs.push(run);
+                }
+            }
+            HxRunChildKind::Line => {
+                runs.push(decode_line(&hx.lines[idx], char_shape_id, depth)?);
+            }
+            HxRunChildKind::Ellipse => {
+                let ellipse = &hx.ellipses[idx];
+                if ellipse.has_arc_pr == 1 {
+                    runs.push(decode_arc(ellipse, char_shape_id, depth)?);
+                } else {
+                    runs.push(decode_ellipse(ellipse, char_shape_id, depth)?);
+                }
+            }
+            HxRunChildKind::Polygon => {
+                runs.push(decode_polygon(&hx.polygons[idx], char_shape_id, depth)?);
+            }
+            HxRunChildKind::Curve => {
+                runs.push(decode_curve(&hx.curves[idx], char_shape_id, depth)?);
+            }
+            HxRunChildKind::TextArt => {
+                runs.push(decode_textart(&hx.textarts[idx], char_shape_id, depth)?);
+            }
+            HxRunChildKind::ConnectLine => {
+                runs.push(decode_connect_line(&hx.connect_lines[idx], char_shape_id, depth)?);
+            }
+            HxRunChildKind::Container => {
+                if let Some(run) = decode_container(&hx.containers[idx], char_shape_id, depth)? {
+                    runs.push(run);
+                }
+            }
+            HxRunChildKind::Equation => {
+                runs.push(decode_equation(&hx.equations[idx], char_shape_id)?);
+            }
+            HxRunChildKind::Dutmal => {
+                runs.push(decode_dutmal(&hx.dutmals[idx], char_shape_id));
+            }
+            HxRunChildKind::Compose => {
+                runs.push(decode_compose(&hx.composes[idx], char_shape_id));
+            }
+            // secPr/titleMark 는 구역·문단 수준에서 소비, switch 는 차트
+            // 전용 경로 소유, Other 는 미지 요소 자리 — run 방출 없음.
+            HxRunChildKind::SecPr
+            | HxRunChildKind::TitleMark
+            | HxRunChildKind::Switch
+            | HxRunChildKind::Other => {}
+        }
+    }
+
+    // Handle self-closing fieldBegin without a matching fieldEnd (e.g. bookmark span start)
+    if let Some(fb) = field_begin.take() {
+        if fb.field_type == "BOOKMARK" {
+            runs.push(Run {
+                content: RunContent::Control(Box::new(Control::Bookmark {
+                    name: fb.name.clone(),
+                    bookmark_type: hwpforge_foundation::BookmarkType::SpanStart,
+                })),
+                char_shape_id: field_begin_char_shape,
+            });
+        }
+    }
+
+    Ok(runs)
+}
+
+/// `<hp:ctrl>` 자식 하나를 문서 순서 위치에서 변환한다 (W1a 분리 헬퍼).
+///
+/// footnote/endnote/bookmark/indexmark/autoNum/newNum/pageHiding 은 즉시
+/// run 으로, fieldBegin/fieldEnd 는 순서 기반 pairing 상태를 갱신한다.
+#[allow(clippy::too_many_arguments)]
+fn convert_ctrl_child<'a>(
+    ctrl: &'a HxCtrl,
+    char_shape_id: CharShapeIndex,
+    depth: usize,
+    runs: &mut Vec<Run>,
+    field_begin: &mut Option<&'a HxFieldBegin>,
+    field_begin_char_shape: &mut CharShapeIndex,
+    field_body: &mut String,
+) -> HwpxResult<()> {
+    {
         if let Some(run) = decode_footnote(ctrl, char_shape_id, depth)? {
             runs.push(run);
         }
@@ -460,32 +555,24 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
         if let Some(run) = decode_indexmark(ctrl, char_shape_id) {
             runs.push(run);
         }
-        // Field begin: remember for pairing with fieldEnd
+        // Field begin: remember for pairing with fieldEnd — 사이드카 순서
+        // 덕에 이후 마주치는 텍스트는 정확히 마커 사이 본문이다 (W1a).
         if let Some(fb) = &ctrl.field_begin {
-            field_begin = Some(fb);
-            field_begin_char_shape = char_shape_id;
+            *field_begin = Some(fb);
+            *field_begin_char_shape = char_shape_id;
+            field_body.clear();
         }
-        // Field end: pair with remembered fieldBegin and emit control
+        // Field end: pair with remembered fieldBegin and emit control.
+        // 본문 = begin 이후 누적된 field_body — 문서 순서라 무모호하므로
+        // 종전의 `texts.len()==1` 다운그레이드(gotcha #30)는 철폐한다.
         if ctrl.field_end.is_some() {
             if let Some(fb) = field_begin.take() {
-                let field_text = collect_run_text(hx);
-                // `HxRun` 은 자식 순서(texts/ctrls interleaving)를 보존하지
-                // 않으므로, run 에 `<hp:t>` 가 정확히 1개일 때만 그 텍스트가
-                // 마커 사이 본문이라고 무모호하게 귀속할 수 있다. 한컴은
-                // 재저장 시 라벨 run 과 필드 run 을 병합하기도 한다
-                // (fixture `fields/clickhere_filled.hwpx`: t·fieldBegin·
-                // t·fieldEnd·t 한 run) — 그 경우 연결 텍스트를 본문으로
-                // 오귀속하는 대신 미채움으로 다운그레이드한다 (warning-first).
-                let unambiguous_body = hx.texts.len() == 1;
-                if let Some(run) = decode_field_control(
-                    fb,
-                    &field_text,
-                    field_begin_char_shape,
-                    depth,
-                    unambiguous_body,
-                )? {
+                if let Some(run) =
+                    decode_field_control(fb, field_body, *field_begin_char_shape, depth, true)?
+                {
                     runs.push(run);
                 }
+                field_body.clear();
             }
         }
         // AutoNum (inline page number) — Wave 12n: routed to
@@ -540,84 +627,7 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
             });
         }
     }
-
-    // Handle self-closing fieldBegin without a matching fieldEnd (e.g. bookmark span start)
-    if let Some(fb) = field_begin.take() {
-        if fb.field_type == "BOOKMARK" {
-            runs.push(Run {
-                content: RunContent::Control(Box::new(Control::Bookmark {
-                    name: fb.name.clone(),
-                    bookmark_type: hwpforge_foundation::BookmarkType::SpanStart,
-                })),
-                char_shape_id: field_begin_char_shape,
-            });
-        }
-    }
-
-    // Textbox runs (from <hp:rect>)
-    for rect in &hx.rects {
-        if let Some(run) = decode_textbox(rect, char_shape_id, depth)? {
-            runs.push(run);
-        }
-    }
-
-    // Line runs (from <hp:line>)
-    for line in &hx.lines {
-        runs.push(decode_line(line, char_shape_id, depth)?);
-    }
-
-    // Ellipse and Arc runs (from <hp:ellipse>)
-    for ellipse in &hx.ellipses {
-        if ellipse.has_arc_pr == 1 {
-            runs.push(decode_arc(ellipse, char_shape_id, depth)?);
-        } else {
-            runs.push(decode_ellipse(ellipse, char_shape_id, depth)?);
-        }
-    }
-
-    // Polygon runs (from <hp:polygon>)
-    for polygon in &hx.polygons {
-        runs.push(decode_polygon(polygon, char_shape_id, depth)?);
-    }
-
-    // Curve runs (from <hp:curve>)
-    for curve in &hx.curves {
-        runs.push(decode_curve(curve, char_shape_id, depth)?);
-    }
-
-    // TextArt runs (from <hp:textart>)
-    for text_art in &hx.textarts {
-        runs.push(decode_textart(text_art, char_shape_id, depth)?);
-    }
-
-    // ConnectLine runs (from <hp:connectLine>)
-    for connect_line in &hx.connect_lines {
-        runs.push(decode_connect_line(connect_line, char_shape_id, depth)?);
-    }
-
-    // Group runs (from <hp:container>) — Wave A flat children.
-    for container in &hx.containers {
-        if let Some(run) = decode_container(container, char_shape_id, depth)? {
-            runs.push(run);
-        }
-    }
-
-    // Equation runs (from <hp:equation>)
-    for equation in &hx.equations {
-        runs.push(decode_equation(equation, char_shape_id)?);
-    }
-
-    // Dutmal runs (from <hp:dutmal>)
-    for dutmal in &hx.dutmals {
-        runs.push(decode_dutmal(dutmal, char_shape_id));
-    }
-
-    // Compose runs (from <hp:compose>)
-    for compose in &hx.composes {
-        runs.push(decode_compose(compose, char_shape_id));
-    }
-
-    Ok(runs)
+    Ok(())
 }
 
 /// Converts an `HxTable` into a Core `Table`.
@@ -959,14 +969,6 @@ fn decode_indexmark(ctrl: &HxCtrl, char_shape_id: CharShapeIndex) -> Option<Run>
 /// Collects all text content from an `HxRun`'s `<hp:t>` elements.
 ///
 /// Used to extract the display text between a fieldBegin and fieldEnd pair.
-fn collect_run_text(hx: &HxRun) -> String {
-    let mut text = String::new();
-    for t in &hx.texts {
-        text.push_str(&t.text());
-    }
-    text
-}
-
 /// Extracts named parameter values from an `HxFieldBegin`'s parameters.
 fn get_field_param(fb: &HxFieldBegin, name: &str) -> Option<String> {
     let params = fb.parameters.as_ref()?;
@@ -3353,6 +3355,36 @@ mod tests {
             page_num.is_some(),
             "autoNum PAGE must produce InlinePageNumber control (Wave 12n)"
         );
+    }
+
+    #[test]
+    fn interleaved_children_preserve_document_order_in_core() {
+        // W1a 핵심 잠금: `<t>a</t><pic/><t>b</t>` 는 Core `[a, Image, b]` —
+        // 종전 by-kind 평탄화는 `[a, b, Image]` 로 재배열해 인라인 앵커를
+        // 왜곡했다 (이미지/글상자 에픽의 관문 결함).
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <t>a</t>
+                    <pic id="1"><img binaryItemIDRef="image1.png" bright="0" contrast="0"/><curSz width="100" height="100"/></pic>
+                    <t>b</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let kinds: Vec<&str> = result.paragraphs[0]
+            .runs
+            .iter()
+            .map(|r| match &r.content {
+                RunContent::Text(_) | RunContent::InlineText(_) => "text",
+                RunContent::Image(_) => "image",
+                RunContent::Table(_) => "table",
+                RunContent::Control(_) => "control",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(kinds, vec!["text", "image", "text"], "문서 순서 보존");
+        assert_eq!(result.paragraphs[0].text_content(), "ab");
     }
 
     #[test]

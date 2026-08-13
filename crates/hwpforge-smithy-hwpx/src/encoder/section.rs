@@ -519,6 +519,7 @@ fn build_runs(
                     connect_lines: Vec::new(),
                     containers: Vec::new(),
                     textarts: Vec::new(),
+                    child_order: Vec::new(),
                 });
             }
         }
@@ -1036,6 +1037,7 @@ fn build_runs(
             composes,
             containers: Vec::new(),
             textarts: Vec::new(),
+            child_order: Vec::new(),
         });
     }
 
@@ -1065,6 +1067,7 @@ fn build_runs(
                     connect_lines: Vec::new(),
                     containers: Vec::new(),
                     textarts: Vec::new(),
+                    child_order: Vec::new(),
                 },
             );
         }
