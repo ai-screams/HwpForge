@@ -61,6 +61,87 @@ pub enum DecodeWarning {
         /// 폴백한 값의 wire 표기.
         fallback: &'static str,
     },
+    /// 문단의 linesegarray 캐시가 Core 로 승격되지 않음 — wire→Core
+    /// 좌표 ledger 구축 실패 또는 textpos 정규화 실패 (W1b fail-closed,
+    /// 추측 좌표 승격 금지).
+    LayoutCacheDropped {
+        /// 경고가 난 문단의 중첩 경로.
+        path: ParagraphPath,
+        /// 구체 사유 (ledger 실패 원인 또는 문제 textpos).
+        reason: String,
+    },
+}
+
+/// 디코드 경고가 가리키는 문단의 중첩 경로 (§1g v5 변경 5).
+///
+/// `(section, paragraph)` 튜플로는 셀/머리말/각주 내부 문단을 표현할 수
+/// 없어 ordered segment vector 로 기록한다. `Section` 으로 시작해 최종
+/// 문단 segment 로 끝난다 — sublist 진입 시 인덱스를 리셋하거나 depth
+/// 만 전달하지 않는다.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ParagraphPath(pub Vec<PathSeg>);
+
+/// [`ParagraphPath`] 의 segment 하나.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum PathSeg {
+    /// 구역 인덱스.
+    Section(usize),
+    /// 본문 문단 인덱스.
+    BodyParagraph(usize),
+    /// 머리말 인덱스.
+    Header(usize),
+    /// 꼬리말 인덱스.
+    Footer(usize),
+    /// run 인덱스.
+    Run(usize),
+    /// 표 셀 (행, 셀).
+    TableCell {
+        /// 행 인덱스.
+        row: usize,
+        /// 셀 인덱스.
+        cell: usize,
+    },
+    /// 캡션 내부.
+    Caption,
+    /// 각주 내부.
+    Footnote,
+    /// 미주 내부.
+    Endnote,
+    /// 글상자 내부.
+    TextBox,
+    /// 메모 내부.
+    Memo,
+    /// 묶음 객체 자식 인덱스.
+    GroupChild(usize),
+    /// 중첩 sublist 문단 인덱스 (컨테이너 내부 문단).
+    NestedParagraph(usize),
+}
+
+impl std::fmt::Display for ParagraphPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (i, seg) in self.0.iter().enumerate() {
+            if i > 0 {
+                write!(f, ".")?;
+            }
+            match seg {
+                PathSeg::Section(n) => write!(f, "section[{n}]")?,
+                PathSeg::BodyParagraph(n) => write!(f, "para[{n}]")?,
+                PathSeg::Header(n) => write!(f, "header[{n}]")?,
+                PathSeg::Footer(n) => write!(f, "footer[{n}]")?,
+                PathSeg::Run(n) => write!(f, "run[{n}]")?,
+                PathSeg::TableCell { row, cell } => write!(f, "cell[{row}][{cell}]")?,
+                PathSeg::Caption => write!(f, "caption")?,
+                PathSeg::Footnote => write!(f, "footnote")?,
+                PathSeg::Endnote => write!(f, "endnote")?,
+                PathSeg::TextBox => write!(f, "textbox")?,
+                PathSeg::Memo => write!(f, "memo")?,
+                PathSeg::GroupChild(n) => write!(f, "group[{n}]")?,
+                PathSeg::NestedParagraph(n) => write!(f, "npara[{n}]")?,
+            }
+        }
+        Ok(())
+    }
 }
 
 // ── HwpxDecoder ──────────────────────────────────────────────────

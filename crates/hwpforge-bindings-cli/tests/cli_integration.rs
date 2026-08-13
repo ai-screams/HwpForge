@@ -1666,11 +1666,13 @@ fn audit_hwp5_rect_fixture_now_matches_after_carry() {
     let warnings =
         hwpforge_convert::hwp5_to_hwpx(&source, &out).expect("convert hwp5 rect fixture");
     assert!(
-        !warnings.iter().any(|warning| matches!(
-            warning,
-            hwpforge_smithy_hwp5::Hwp5Warning::DroppedControl { control, .. }
-                if *control == "rect"
-        )),
+        !warnings.iter().filter_map(hwpforge_convert::ConvertWarning::as_hwp5).any(|warning| {
+            matches!(
+                warning,
+                hwpforge_smithy_hwp5::Hwp5Warning::DroppedControl { control, .. }
+                    if *control == "rect"
+            )
+        }),
         "Wave 4a Rect carry should suppress the DroppedControl{{\"rect\", ..}} warning"
     );
 
@@ -3308,7 +3310,11 @@ fn diff_verifies_fill_delta_end_to_end() {
     assert_eq!(semantic["field_values"][0]["name"], "user_email");
     assert_eq!(semantic["field_values"][0]["after"], "diff@cli.io");
     assert!(semantic["paragraphs"].as_array().unwrap().is_empty());
-    assert!(semantic["raw"].as_array().unwrap().is_empty());
+    // W1b: fill 은 stale linesegarray 도 제거 — raw 축에 `$.layout_cache`
+    // 변경 하나가 정직하게 보고된다.
+    let raw = semantic["raw"].as_array().unwrap();
+    assert_eq!(raw.len(), 1, "raw: {raw:?}");
+    assert_eq!(raw[0]["detail"], "$.layout_cache");
     // Full report file written alongside inline output.
     let report_value: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&report).unwrap()).unwrap();

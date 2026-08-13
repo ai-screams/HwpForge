@@ -112,6 +112,7 @@ pub(super) fn inject_header_footer_pagenum(
     section: &Section,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
+    sink: &mut EncodeSink,
 ) -> HwpxResult<()> {
     // Find insertion point: after the last </hp:ctrl> that contains colPr
     // (or after </hp:secPr> if no colPr).
@@ -125,13 +126,19 @@ pub(super) fn inject_header_footer_pagenum(
 
     // Header — emit each `<hp:header>` element preserving the HWPX
     // multi-cardinality wire shape (ADR-002).
-    for header in &section.headers {
-        injection.push_str(&build_header_xml(header, "header", hyperlink_entries, options)?);
+    for (i, header) in section.headers.iter().enumerate() {
+        sink.enter(crate::decoder::PathSeg::Header(i));
+        let xml_result = build_header_xml(header, "header", hyperlink_entries, options, sink);
+        sink.leave();
+        injection.push_str(&xml_result?);
     }
 
     // Footer — same cardinality model.
-    for footer in &section.footers {
-        injection.push_str(&build_header_xml(footer, "footer", hyperlink_entries, options)?);
+    for (i, footer) in section.footers.iter().enumerate() {
+        sink.enter(crate::decoder::PathSeg::Footer(i));
+        let xml_result = build_header_xml(footer, "footer", hyperlink_entries, options, sink);
+        sink.leave();
+        injection.push_str(&xml_result?);
     }
 
     // Page number
@@ -179,6 +186,7 @@ pub(super) fn build_header_xml(
     tag_name: &str,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
+    sink: &mut EncodeSink,
 ) -> HwpxResult<String> {
     use std::fmt::Write as _;
 
@@ -206,6 +214,7 @@ pub(super) fn build_header_xml(
         vert_align,
         hyperlink_entries,
         options,
+        sink,
     )?;
     sub_list.text_width = u32::try_from(hf.text_width.as_i32()).unwrap_or(0);
     sub_list.text_height = u32::try_from(hf.text_height.as_i32()).unwrap_or(0);
@@ -332,8 +341,14 @@ mod tests {
             (ApplyPageType::Odd, "ODD"),
         ] {
             let hf = HeaderFooter::new(Vec::new(), apply);
-            let xml =
-                build_header_xml(&hf, "header", &mut entries, EncodeOptions::default()).unwrap();
+            let xml = build_header_xml(
+                &hf,
+                "header",
+                &mut entries,
+                EncodeOptions::default(),
+                &mut EncodeSink::new(0),
+            )
+            .unwrap();
             assert!(xml.contains(&format!(r#"applyPageType="{want}""#)), "{want}: {xml}");
             assert!(xml.starts_with("<hp:ctrl><hp:header"));
         }
@@ -347,7 +362,14 @@ mod tests {
         hf.vert_align = hwpforge_foundation::VerticalAlign::Bottom;
         hf.text_width = hwpforge_foundation::HwpUnit::new(42520).unwrap();
         hf.text_height = hwpforge_foundation::HwpUnit::new(4252).unwrap();
-        let xml = build_header_xml(&hf, "footer", &mut entries, EncodeOptions::default()).unwrap();
+        let xml = build_header_xml(
+            &hf,
+            "footer",
+            &mut entries,
+            EncodeOptions::default(),
+            &mut EncodeSink::new(0),
+        )
+        .unwrap();
         assert!(xml.contains(r#"vertAlign="BOTTOM""#), "{xml}");
         assert!(xml.contains(r#"textWidth="42520""#), "{xml}");
         assert!(xml.contains(r#"textHeight="4252""#), "{xml}");

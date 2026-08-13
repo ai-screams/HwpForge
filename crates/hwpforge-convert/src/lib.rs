@@ -27,6 +27,40 @@ use crate::style_store_convert::{
     push_fonts, resolved_font_group_counts,
 };
 use crate::warning_utils::push_projection_fallback;
+use hwpforge_smithy_hwpx::EncodeWarning;
+
+/// 변환 전 단계의 typed 경고 합성 (W1b — §1g v5 변경 2).
+///
+/// convert 는 HWP5 디코드/projection/스타일 경고와 HWPX 인코드 경고를
+/// **타입 그대로** 전달한다 (`Hwp5Warning` 으로 강제 변환하지 않음 —
+/// smithy peer 의미의 계층 누수 방지). 순서 = HWP5 경고 전체 → HWPX
+/// 인코드 경고.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum ConvertWarning {
+    /// HWP5 디코드/projection/스타일 매핑 경고.
+    Hwp5(Hwp5Warning),
+    /// HWPX 인코드 경고 (캐시 드롭 등).
+    HwpxEncode(EncodeWarning),
+}
+
+impl ConvertWarning {
+    /// HWP5 경고면 참조를 돌려준다 (테스트/집계 편의).
+    pub fn as_hwp5(&self) -> Option<&Hwp5Warning> {
+        match self {
+            Self::Hwp5(w) => Some(w),
+            Self::HwpxEncode(_) => None,
+        }
+    }
+
+    /// HWPX 인코드 경고면 참조를 돌려준다.
+    pub fn as_hwpx_encode(&self) -> Option<&EncodeWarning> {
+        match self {
+            Self::Hwp5(_) => None,
+            Self::HwpxEncode(w) => Some(w),
+        }
+    }
+}
 
 /// Converts an HWP5 file to HWPX format.
 ///
@@ -51,7 +85,7 @@ use crate::warning_utils::push_projection_fallback;
 pub fn hwp5_to_hwpx(
     input: impl AsRef<Path>,
     output: impl AsRef<Path>,
-) -> Hwp5Result<Vec<Hwp5Warning>> {
+) -> Hwp5Result<Vec<ConvertWarning>> {
     hwp5_to_hwpx_with_options(input, output, ConvertOptions::default())
 }
 
@@ -65,7 +99,7 @@ pub fn hwp5_to_hwpx_with_options(
     input: impl AsRef<Path>,
     output: impl AsRef<Path>,
     options: ConvertOptions,
-) -> Hwp5Result<Vec<Hwp5Warning>> {
+) -> Hwp5Result<Vec<ConvertWarning>> {
     let bytes = std::fs::read(input.as_ref()).map_err(Hwp5Error::Io)?;
     let (hwpx_bytes, warnings) = hwp5_to_hwpx_bytes_with_options(&bytes, options)?;
     std::fs::write(output.as_ref(), hwpx_bytes).map_err(Hwp5Error::Io)?;
@@ -94,7 +128,7 @@ pub fn hwp5_to_hwpx_with_options(
 ///
 /// Returns [`Hwp5Error`] if the bytes cannot be decoded, the document fails
 /// validation, or HWPX encoding fails.
-pub fn hwp5_to_hwpx_bytes(bytes: &[u8]) -> Hwp5Result<(Vec<u8>, Vec<Hwp5Warning>)> {
+pub fn hwp5_to_hwpx_bytes(bytes: &[u8]) -> Hwp5Result<(Vec<u8>, Vec<ConvertWarning>)> {
     hwp5_to_hwpx_bytes_with_options(bytes, ConvertOptions::default())
 }
 
@@ -110,11 +144,12 @@ pub struct ConvertOptions {
     /// (`layout_hint_patch` 는 표 높이만 재생) — 이 opt-in 산출물은 한컴
     /// 재개봉 용도가 아니다.
     ///
-    /// ⚠️ 미완 (W2 독립 리뷰 기록): HWP5 승격 경로는 아직 textpos
-    /// 보이는-텍스트 정규화를 하지 않는다 (HWPX 디코더만 정규화) —
-    /// carry 산출물의 캐시는 현재 smithy-pdf 의 textpos 정합 검사를
-    /// 통과하지 못할 수 있다. HWP5 쪽 정규화 = 후속 TODO
-    /// (규칙 문서 §1 · W2 계획 §8).
+    /// W1b (이미지 에픽): HWP5 승격 경로가 wire→Core 좌표 ledger 로
+    /// textpos 를 가시 좌표로 정규화하고, 인코더가 방출-통합 역변환으로
+    /// wire 좌표로 되돌린다. 정규화/역변환이 불가능한 문단(차트 재배치·
+    /// 미지 컨트롤·축약점 모호 등)은 캐시를 **드롭**하고
+    /// [`ConvertWarning::HwpxEncode`] 로 경고한다 (부분 carry — 무음
+    /// 손실 없음).
     pub carry_layout_cache: bool,
 }
 
@@ -135,7 +170,7 @@ impl ConvertOptions {
 pub fn hwp5_to_hwpx_bytes_with_options(
     bytes: &[u8],
     options: ConvertOptions,
-) -> Hwp5Result<(Vec<u8>, Vec<Hwp5Warning>)> {
+) -> Hwp5Result<(Vec<u8>, Vec<ConvertWarning>)> {
     let decoded = decode_hwp5_to_core(bytes)?;
     let (hwpx_style_store, style_warnings) = hwp5_style_store_to_hwpx(&decoded.style_store);
     // Warning order: decode-phase warnings (intermediate + projection +
@@ -150,7 +185,10 @@ pub fn hwp5_to_hwpx_bytes_with_options(
     let validated = decoded.document.validate().map_err(Hwp5Error::Core)?;
     let encode_options =
         EncodeOptions::default().with_emit_layout_cache(options.carry_layout_cache);
-    let hwpx_bytes = HwpxEncoder::encode_with_options(
+    // W1b: 진단 보존 경로 — 캐시 드롭이 있어도 변환은 성공하되 경고를
+    // `ConvertWarning::HwpxEncode` 로 전파한다 (legacy strict 진입점의
+    // LayoutCacheDropped 에러와 달리 carry 파이프라인은 부분 carry 허용).
+    let outcome = HwpxEncoder::encode_with_diagnostics(
         &validated,
         &hwpx_style_store,
         &decoded.image_store,
@@ -158,9 +196,11 @@ pub fn hwp5_to_hwpx_bytes_with_options(
     )
     .map_err(|e| Hwp5Error::Cfb { detail: format!("HWPX encoding failed: {e}") })?;
     let hwpx_bytes =
-        layout_hint_patch::patch_hwpx_layout_hints(&hwpx_bytes, &decoded.layout_hints)?;
+        layout_hint_patch::patch_hwpx_layout_hints(&outcome.bytes, &decoded.layout_hints)?;
 
-    Ok((hwpx_bytes, warnings))
+    let mut all: Vec<ConvertWarning> = warnings.into_iter().map(ConvertWarning::Hwp5).collect();
+    all.extend(outcome.warnings.into_iter().map(ConvertWarning::HwpxEncode));
+    Ok((hwpx_bytes, all))
 }
 
 /// Maps a format-neutral [`Hwp5StyleStore`] onto an [`HwpxStyleStore`].

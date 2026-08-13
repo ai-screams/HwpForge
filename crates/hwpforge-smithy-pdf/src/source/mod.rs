@@ -307,15 +307,20 @@ fn collect_page_events(
     (restarts, hide_marks)
 }
 
-/// 렌더 replay 가 자체 소비하는 0폭 marker 컨트롤인지 (textpos 무영향 —
-/// 한컴 HWPX 실측: `<hp:ctrl>` 은 linesegarray textpos 를 소비하지 않는다).
-/// 선행 비텍스트 fail-closed 가드와 `NonTextRunDropped` 경고에서 제외된다.
+/// 렌더 replay(`collect_page_events`)가 실제 소비하는 0폭 marker 인지.
+///
+/// W1b (§1g v5 변경 1): allowlist 는 **실제 consumer 와 동일한 match** —
+/// `NewNumber` 는 `Page` kind 만 replay 가 소비한다 (각주/그림 번호
+/// 재시작 등 다른 kind 는 소비자가 없으므로 허용하면 무음 드롭).
+/// admission(문단 전체 검사)과 `NonTextRunDropped` 경고에서 제외된다.
 fn is_replay_consumed_marker(content: &RunContent) -> bool {
     matches!(content, RunContent::Control(c)
     if matches!(
         **c,
-        hwpforge_core::control::Control::NewNumber { .. }
-            | hwpforge_core::control::Control::PageHiding { .. }
+        hwpforge_core::control::Control::NewNumber {
+            kind: hwpforge_core::control::NewNumberKind::Page,
+            ..
+        } | hwpforge_core::control::Control::PageHiding { .. }
     ))
 }
 
@@ -539,19 +544,16 @@ fn replay_band_item(
             warnings.push(PdfWarning::ParagraphSkipped { location });
             continue;
         };
-        // fail-closed 가드 (본문 경로와 동일 — 독립 리뷰 M1 상환): 첫 텍스트
-        // run 이전의 비텍스트 run(로고 이미지 등)은 textpos 좌표를 신뢰할 수
-        // 없게 만든다 — 무음 오절단 대신 거부.
-        let first_text = para.runs.iter().position(|r| r.content.plain_text().is_some());
-        if let Some(ft) = first_text {
-            if para.runs[..ft].iter().any(|r| r.content.plain_text().is_none()) {
-                return Err(PdfError::InvalidCache {
-                    detail: format!(
-                        "{location}: leading non-text run before first text run — textpos \
-                         normalization does not cover this control kind (W2 scope)"
-                    ),
-                });
-            }
+        // W1b admission (§1g v5 변경 1): 밴드는 대응 consumer 가 없어
+        // allowlist 가 **비어 있다** — 문단 전체에서 비텍스트 run 은 전부
+        // W2(밴드 이미지 렌더) 전 InvalidCache.
+        if para.runs.iter().any(|r| r.content.plain_text().is_none()) {
+            return Err(PdfError::InvalidCache {
+                detail: format!(
+                    "{location}: non-text run in band paragraph is not renderable \
+                     before W2 (band allowlist is empty)"
+                ),
+            });
         }
 
         let text = para.text_content();
@@ -764,25 +766,23 @@ fn replay_section(
         let first_breaks = prev_v.is_some_and(|p| first_v == 0 || first_v < p);
         check_table_anchor(&mut pending_table_anchor, first_v, first_breaks)?;
 
-        // fail-closed 가드 (독립 리뷰 열린질문): 첫 텍스트 run 이전에 비텍스트
-        // run(컨트롤·이미지)이 있으면 textpos 좌표를 신뢰할 수 없다 — HWPX
-        // 디코더의 선행 컨트롤 정규화는 secPr·ctrl 만 차감하므로(수식·그림
-        // 등은 스트림 유닛 미차감) 무음 오절단 대신 깨끗하게 거부한다.
-        // W2 예외: replay 가 자체 소비하는 0폭 marker(nwno)는 textpos 를
-        // 소비하지 않는다 (F1b 한컴 실측: ctrl 선행 + linesegarray textpos=0).
-        let first_text = para.runs.iter().position(|r| r.content.plain_text().is_some());
-        if let Some(ft) = first_text {
-            if para.runs[..ft]
-                .iter()
-                .any(|r| r.content.plain_text().is_none() && !is_replay_consumed_marker(&r.content))
-            {
-                return Err(PdfError::InvalidCache {
-                    detail: format!(
-                        "{location}: leading non-text run before first text run — textpos \
-                         normalization does not cover this control kind (W2 scope)"
-                    ),
-                });
-            }
+        // W1b admission (§1g v5 변경 1): 검사는 선두 prefix 가 아니라
+        // **문단 전체** — W1b 좌표 정규화로 marker 문단의 textpos 는
+        // 신뢰 가능해졌지만, 미렌더 원자(이미지·각주·수식·미지 컨트롤)는
+        // 위치 무관 W2 전 InvalidCache 다 (trailing 이미지가 0폭으로
+        // 무음 누락되는 경로 차단). 허용 = replay 가 실제 소비하는 0폭
+        // marker(Page 재시작·감추기)뿐.
+        if para
+            .runs
+            .iter()
+            .any(|r| r.content.plain_text().is_none() && !is_replay_consumed_marker(&r.content))
+        {
+            return Err(PdfError::InvalidCache {
+                detail: format!(
+                    "{location}: non-text run is not renderable before W2 \
+                     (only replay-consumed page markers are admitted)"
+                ),
+            });
         }
 
         let text = para.text_content();
@@ -1477,9 +1477,10 @@ mod tests {
     }
 
     #[test]
-    fn new_number_same_page_last_wins_and_non_page_kind_ignored() {
+    fn new_number_same_page_last_wins() {
         use hwpforge_core::control::{Control, NewNumberKind};
-        // 같은 쪽 다중 재시작 = 문서 순서 last-wins; 쪽 외 kind 는 렌더 무시.
+        // 같은 쪽 다중 재시작 = 문서 순서 last-wins (Page kind 만 —
+        // allowlist 원자).
         let mut p = Paragraph::with_runs(
             vec![
                 Run::control(
@@ -1488,10 +1489,6 @@ mod tests {
                 ),
                 Run::control(
                     Control::NewNumber { kind: NewNumberKind::Page, number: 9 },
-                    CharShapeIndex::new(0),
-                ),
-                Run::control(
-                    Control::NewNumber { kind: NewNumberKind::Footnote, number: 2 },
                     CharShapeIndex::new(0),
                 ),
                 Run::text("본문", CharShapeIndex::new(0)),
@@ -1509,7 +1506,34 @@ mod tests {
         let layout = replay(&doc, &PdfOptions::default()).expect("replay");
         let texts: Vec<&str> =
             layout.pages.iter().map(|p| p.page_number.as_ref().unwrap().text.as_str()).collect();
-        assert_eq!(texts, vec!["9", "10"], "last-wins + Footnote kind 무시");
+        assert_eq!(texts, vec!["9", "10"], "last-wins");
+    }
+
+    #[test]
+    fn non_page_new_number_is_rejected_not_silently_ignored() {
+        use hwpforge_core::control::{Control, NewNumberKind};
+        // W1b (§1g v5 변경 1): replay 소비자가 없는 NewNumber kind 는
+        // "무시"가 아니라 InvalidCache — 소비자와 allowlist 의 match 가
+        // 갈라지면 무음 드롭이 부활한다 (R4 Critical).
+        let mut p = Paragraph::with_runs(
+            vec![
+                Run::control(
+                    Control::NewNumber { kind: NewNumberKind::Footnote, number: 2 },
+                    CharShapeIndex::new(0),
+                ),
+                Run::text("본문", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        p.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(vec![p], PageSettings::a4()));
+        let doc = doc.validate().expect("validate");
+        let err = replay(&doc, &PdfOptions::default()).expect_err("must reject");
+        assert!(
+            matches!(&err, PdfError::InvalidCache { detail } if detail.contains("not renderable")),
+            "got {err:?}"
+        );
     }
 
     #[test]
@@ -2092,8 +2116,9 @@ mod tests {
     }
 
     #[test]
-    fn trailing_non_text_run_is_dropped_with_warning() {
-        // 텍스트 뒤의 컨트롤 run 은 경고와 함께 생략 (문단 자체는 렌더).
+    fn trailing_non_text_run_is_rejected_before_w2() {
+        // W1b (§1g v5 변경 1): 검사는 문단 전체 — trailing 각주도 W2 전
+        // InvalidCache 다 (종전 "경고+생략"은 미렌더 원자의 무음 누락).
         let mut para = para_with_cache("본문", vec![seg(0, 0)]);
         para.add_run(Run::control(
             hwpforge_core::control::Control::footnote(vec![Paragraph::with_runs(
@@ -2103,9 +2128,11 @@ mod tests {
             CharShapeIndex::new(0),
         ));
         let doc = doc_of(vec![para]);
-        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
-        assert_eq!(layout.pages[0].lines.len(), 1);
-        assert!(layout.warnings.iter().any(|w| matches!(w, PdfWarning::NonTextRunDropped { .. })));
+        let err = replay(&doc, &PdfOptions::default()).expect_err("must reject");
+        assert!(
+            matches!(&err, PdfError::InvalidCache { detail } if detail.contains("not renderable")),
+            "got {err:?}"
+        );
     }
 
     #[test]

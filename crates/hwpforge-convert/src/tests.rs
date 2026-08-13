@@ -2,6 +2,7 @@
 //! (`hwp5_to_hwpx`, `hwp5_to_hwpx_bytes`, image/OLE asset conversion, ...).
 //! Migrated from `hwpforge-smithy-hwp5` as part of the E5 executor task.
 
+use crate::ConvertWarning;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -432,7 +433,7 @@ fn hwp5_to_hwpx_full_report_keeps_leading_image_non_zero() {
     let out = unique_temp_path("full_report.hwpx");
     let warnings = hwp5_to_hwpx(&source, &out).expect("full_report conversion should succeed");
     assert!(
-        !warnings.iter().any(|warning| matches!(
+        !warnings.iter().filter_map(ConvertWarning::as_hwp5).any(|warning| matches!(
             warning,
             Hwp5Warning::DroppedControl { control, .. } if *control == "image"
         )),
@@ -686,7 +687,7 @@ fn hwp5_to_hwpx_rect_fixture_carries_rect_without_warning() {
     let out = unique_temp_path("rect_simple.hwpx");
     let warnings = hwp5_to_hwpx(&source, &out).expect("fixture conversion should succeed");
     assert!(
-        !warnings.iter().any(|warning| matches!(
+        !warnings.iter().filter_map(ConvertWarning::as_hwp5).any(|warning| matches!(
             warning,
             Hwp5Warning::DroppedControl { control, .. } if *control == "rect"
         )),
@@ -718,7 +719,10 @@ fn hwp5_to_hwpx_user_sample_gso_ellipse_carries_ellipse() {
     let out = unique_temp_path("user-sample-gso-ellipse.hwpx");
     let warnings = hwp5_to_hwpx(&source, &out).expect("ellipse conversion should succeed");
     assert!(
-        !warnings.iter().any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
+        !warnings
+            .iter()
+            .filter_map(ConvertWarning::as_hwp5)
+            .any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
         "gso ellipse must not drop any control: {warnings:?}"
     );
     assert_valid_hwpx(&out);
@@ -752,7 +756,10 @@ fn hwp5_to_hwpx_user_sample_gso_arc_carries_arc() {
     let out = unique_temp_path("user-sample-gso-arc.hwpx");
     let warnings = hwp5_to_hwpx(&source, &out).expect("arc conversion should succeed");
     assert!(
-        !warnings.iter().any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
+        !warnings
+            .iter()
+            .filter_map(ConvertWarning::as_hwp5)
+            .any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
         "gso arc must not drop any control: {warnings:?}"
     );
     assert_valid_hwpx(&out);
@@ -785,7 +792,10 @@ fn hwp5_to_hwpx_user_sample_gso_curve_carries_curve() {
     let out = unique_temp_path("user-sample-gso-curve.hwpx");
     let warnings = hwp5_to_hwpx(&source, &out).expect("curve conversion should succeed");
     assert!(
-        !warnings.iter().any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
+        !warnings
+            .iter()
+            .filter_map(ConvertWarning::as_hwp5)
+            .any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
         "gso curve must not drop any control: {warnings:?}"
     );
     assert_valid_hwpx(&out);
@@ -816,7 +826,10 @@ fn hwp5_to_hwpx_user_sample_gso_connectline_carries_connect_line() {
     let out = unique_temp_path("user-sample-gso-connectline-native.hwpx");
     let warnings = hwp5_to_hwpx(&source, &out).expect("connect-line conversion should succeed");
     assert!(
-        !warnings.iter().any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
+        !warnings
+            .iter()
+            .filter_map(ConvertWarning::as_hwp5)
+            .any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
         "connect line must not drop any control: {warnings:?}"
     );
     assert_valid_hwpx(&out);
@@ -849,7 +862,10 @@ fn hwp5_to_hwpx_user_sample_equation_carries_script() {
     let out = unique_temp_path("user-sample-equation-basic.hwpx");
     let warnings = hwp5_to_hwpx(&source, &out).expect("equation conversion should succeed");
     assert!(
-        !warnings.iter().any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
+        !warnings
+            .iter()
+            .filter_map(ConvertWarning::as_hwp5)
+            .any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
         "equation must not drop any control: {warnings:?}"
     );
     assert_valid_hwpx(&out);
@@ -883,7 +899,7 @@ fn hwp5_to_hwpx_user_sample_memo_basic_preserves_body_and_carries_memo() {
     let out = unique_temp_path("user-sample-memo-basic.hwpx");
     let warnings = hwp5_to_hwpx(&source, &out).expect("memo conversion should succeed");
     assert!(
-        !warnings.iter().any(|warning| matches!(
+        !warnings.iter().filter_map(ConvertWarning::as_hwp5).any(|warning| matches!(
             warning,
             Hwp5Warning::DroppedControl { control: "memo" | "memo_content_cluster", .. }
         )),
@@ -965,7 +981,7 @@ fn hwp5_to_hwpx_user_sample_memo_multiple_matches_clusters_by_id() {
     let out = unique_temp_path("user-sample-memo-multiple.hwpx");
     let warnings = hwp5_to_hwpx(&source, &out).expect("multi-memo conversion should succeed");
     assert!(
-        !warnings.iter().any(|warning| matches!(
+        !warnings.iter().filter_map(ConvertWarning::as_hwp5).any(|warning| matches!(
             warning,
             Hwp5Warning::DroppedControl { control: "memo" | "memo_content_cluster", .. }
         )),
@@ -1035,7 +1051,10 @@ fn hwp5_to_hwpx_user_sample_dutmal_basic_carries_option_and_preserves_spacing() 
     let out = unique_temp_path("user-sample-dutmal-basic.hwpx");
     let warnings = hwp5_to_hwpx(&source, &out).expect("dutmal conversion should succeed");
     assert!(
-        !warnings.iter().any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
+        !warnings
+            .iter()
+            .filter_map(ConvertWarning::as_hwp5)
+            .any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
         "dutmal must not drop any control: {warnings:?}"
     );
     assert_valid_hwpx(&out);
@@ -1109,7 +1128,7 @@ fn hwp5_to_hwpx_user_sample_dutmal_variants_carries_sz_ratio_and_align() {
     let out = unique_temp_path("user-sample-dutmal-variants.hwpx");
     let warnings = hwp5_to_hwpx(&source, &out).expect("dutmal variants conversion should succeed");
     assert!(
-        !warnings.iter().any(|warning| matches!(
+        !warnings.iter().filter_map(ConvertWarning::as_hwp5).any(|warning| matches!(
             warning,
             Hwp5Warning::DroppedControl { .. } | Hwp5Warning::ProjectionFallback { .. }
         )),
@@ -1169,7 +1188,10 @@ fn hwp5_to_hwpx_user_sample_compose_basic_carries_composetext_and_char_pr_overri
     let out = unique_temp_path("user-sample-compose-basic.hwpx");
     let warnings = hwp5_to_hwpx(&source, &out).expect("compose conversion should succeed");
     assert!(
-        !warnings.iter().any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
+        !warnings
+            .iter()
+            .filter_map(ConvertWarning::as_hwp5)
+            .any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
         "compose must not drop any control: {warnings:?}"
     );
     assert_valid_hwpx(&out);
@@ -1239,7 +1261,10 @@ fn hwp5_to_hwpx_user_sample_compose_all_shapes_handles_packed_wire_variant() {
     let warnings =
         hwp5_to_hwpx(&source, &out).expect("all-shapes compose conversion should succeed");
     assert!(
-        !warnings.iter().any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
+        !warnings
+            .iter()
+            .filter_map(ConvertWarning::as_hwp5)
+            .any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
         "no compose variant must drop: {warnings:?}"
     );
     assert_valid_hwpx(&out);
@@ -1337,7 +1362,10 @@ fn hwp5_to_hwpx_user_sample_indexmark_basic_carries_primary_only_entries() {
     let out = unique_temp_path("user-sample-indexmark-basic.hwpx");
     let warnings = hwp5_to_hwpx(&source, &out).expect("indexmark conversion should succeed");
     assert!(
-        !warnings.iter().any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
+        !warnings
+            .iter()
+            .filter_map(ConvertWarning::as_hwp5)
+            .any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
         "indexmark must not drop any control: {warnings:?}"
     );
     assert_valid_hwpx(&out);
@@ -1384,7 +1412,10 @@ fn hwp5_to_hwpx_user_sample_indexmark_multi_preserves_order_and_secondary_keys()
     let out = unique_temp_path("user-sample-indexmark-multi.hwpx");
     let warnings = hwp5_to_hwpx(&source, &out).expect("multi indexmark conversion should succeed");
     assert!(
-        !warnings.iter().any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
+        !warnings
+            .iter()
+            .filter_map(ConvertWarning::as_hwp5)
+            .any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
         "no indexmark variant must drop: {warnings:?}"
     );
     assert_valid_hwpx(&out);
@@ -1462,7 +1493,10 @@ fn hwp5_to_hwpx_user_sample_indexmark_surrogate_reassembles_split_pairs() {
     let warnings =
         hwp5_to_hwpx(&source, &out).expect("surrogate indexmark conversion should succeed");
     assert!(
-        !warnings.iter().any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
+        !warnings
+            .iter()
+            .filter_map(ConvertWarning::as_hwp5)
+            .any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
         "no surrogate variant must drop: {warnings:?}"
     );
     assert_valid_hwpx(&out);
@@ -1502,7 +1536,10 @@ fn hwp5_to_hwpx_user_sample_equation_native_carries_complex_scripts() {
     let out = unique_temp_path("user-sample-equation-native.hwpx");
     let warnings = hwp5_to_hwpx(&source, &out).expect("native equation conversion should succeed");
     assert!(
-        !warnings.iter().any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
+        !warnings
+            .iter()
+            .filter_map(ConvertWarning::as_hwp5)
+            .any(|warning| matches!(warning, Hwp5Warning::DroppedControl { .. })),
         "native equations must not drop any control: {warnings:?}"
     );
     assert_valid_hwpx(&out);
@@ -2751,7 +2788,7 @@ fn hwp5_to_hwpx_user_sample_underline_variants_preserves_all_shapes() {
 
     // After Wave 1b the underline_shape warning is replaced by actual carry.
     assert!(
-        !warnings.iter().any(|w| matches!(
+        !warnings.iter().filter_map(ConvertWarning::as_hwp5).any(|w| matches!(
             w,
             Hwp5Warning::ProjectionFallback { subject, .. }
                 if *subject == "style.char_shape.underline_shape"
@@ -2809,7 +2846,7 @@ fn hwp5_to_hwpx_user_sample_strike_variants_preserves_line_family() {
     // Wave 1c: the strike line family is now carried, so the projection
     // fallback warning for strike_shape must not fire.
     assert!(
-        !warnings.iter().any(|w| matches!(
+        !warnings.iter().filter_map(ConvertWarning::as_hwp5).any(|w| matches!(
             w,
             Hwp5Warning::ProjectionFallback { subject, .. }
                 if *subject == "style.char_shape.strike_shape"
@@ -2866,7 +2903,7 @@ fn hwp5_to_hwpx_user_sample_breakwordlatin_variants_preserves_hyphenation() {
     // After Wave 1d carry, the break_latin_word projection warning is gone
     // for the raw=1 (HYPHENATION) and raw=2 (BREAK_WORD) cases.
     assert!(
-        !warnings.iter().any(|w| matches!(
+        !warnings.iter().filter_map(ConvertWarning::as_hwp5).any(|w| matches!(
             w,
             Hwp5Warning::ProjectionFallback { subject, .. }
                 if *subject == "style.para_shape.break_latin_word"
@@ -2911,7 +2948,7 @@ fn hwp5_to_hwpx_user_sample_line_spacing_preserves_all_modes() {
     // Wave 2a: AtLeast is now a first-class variant, so the
     // ProjectionFallback warning for raw=3 must no longer fire.
     assert!(
-        !warnings.iter().any(|w| matches!(
+        !warnings.iter().filter_map(ConvertWarning::as_hwp5).any(|w| matches!(
             w,
             Hwp5Warning::ProjectionFallback { subject, .. }
                 if *subject == "style.para_shape.line_spacing"
@@ -3196,7 +3233,7 @@ fn hwp5_to_hwpx_chart_fixture_emits_embedded_chart_switch_block() {
     let out = unique_temp_path("chart_01_single_column.hwpx");
     let warnings = hwp5_to_hwpx(&source, &out).expect("chart fixture conversion should succeed");
     assert!(
-        !warnings.iter().any(|warning| matches!(
+        !warnings.iter().filter_map(ConvertWarning::as_hwp5).any(|warning| matches!(
             warning,
             Hwp5Warning::DroppedControl { control, .. } if *control == "ole_object"
         )),

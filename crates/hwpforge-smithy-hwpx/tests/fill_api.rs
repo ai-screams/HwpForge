@@ -197,3 +197,39 @@ fn fill_is_all_or_nothing_when_one_target_fails_preflight() {
         HwpxFiller::fill(&bytes, &values(&[("과제명", "값"), ("없는필드", "값2")])).unwrap_err();
     assert!(matches!(err, FillError::UnknownField { .. }));
 }
+
+#[test]
+fn fill_removes_linesegarray_of_filled_paragraph() {
+    // W1b (§1g v5 변경 5): 값이 바뀌면 길이와 무관하게 해당 문단의
+    // linesegarray 를 제거한다 — stale 좌표를 남기지 않는다.
+    let bytes = fixture_bytes("clickhere_filled.hwpx");
+    let base = HwpxDecoder::decode(&bytes).expect("decode base");
+    let base_has_cache =
+        base.document.sections()[0].paragraphs.iter().any(|p| p.layout_cache.is_some());
+    assert!(base_has_cache, "픽스처 전제: 원본에 캐시가 있어야 제거를 검증한다");
+
+    let outcome = HwpxFiller::fill(&bytes, &values(&[("user_email", "x@y.z")])).expect("fill");
+    let filled_doc = HwpxDecoder::decode(&outcome.bytes).expect("decode filled");
+    let field_para_has_cache = filled_doc.document.sections()[0]
+        .paragraphs
+        .iter()
+        .filter(|p| {
+            p.runs.iter().any(|r| {
+                matches!(&r.content, RunContent::Control(c)
+                    if matches!(c.as_ref(), Control::Field { name: Some(n), .. } if n == "user_email"))
+            })
+        })
+        .any(|p| p.layout_cache.is_some());
+    assert!(!field_para_has_cache, "채워진 문단의 linesegarray 는 제거돼야 한다");
+}
+
+#[test]
+fn fill_same_value_is_complete_noop() {
+    // W1b (§1g v5 변경 5): 현재 값과 동일한 fill 은 완전 no-op —
+    // mutate/FilledField/캐시 무효화 전부 생략, 바이트 동일.
+    let bytes = fixture_bytes("clickhere_filled.hwpx");
+    let outcome = HwpxFiller::fill(&bytes, &values(&[("user_email", "hanyul.ryu@example.com")]))
+        .expect("fill");
+    assert!(outcome.filled.is_empty(), "동일 값은 filled 에 기록되지 않는다");
+    assert_eq!(outcome.bytes, bytes, "바이트가 원본과 동일해야 한다");
+}

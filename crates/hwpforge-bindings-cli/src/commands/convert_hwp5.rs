@@ -59,10 +59,13 @@ pub fn run(input: &Path, output: &Path, carry_layout_cache: bool, json_mode: boo
 
     // 집계 드롭 경고(unknown_control)를 우선 배치 — 선행 decode 경고가
     // 상한을 다 먹어 집계가 가려지는 일 방지 (독립 리뷰 Medium #6).
-    let is_aggregate = |w: &&hwpforge_smithy_hwp5::Hwp5Warning| {
+    let is_aggregate = |w: &&hwpforge_convert::ConvertWarning| {
         matches!(
-            w,
-            hwpforge_smithy_hwp5::Hwp5Warning::DroppedControl { control: "unknown_control", .. }
+            w.as_hwp5(),
+            Some(hwpforge_smithy_hwp5::Hwp5Warning::DroppedControl {
+                control: "unknown_control",
+                ..
+            })
         )
     };
     let warning_details: Vec<String> = warnings

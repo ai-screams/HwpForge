@@ -67,7 +67,29 @@ fn detect_format(bytes: &[u8]) -> Option<&'static str> {
     None
 }
 
-fn convert_warning_dto(w: &Hwp5Warning) -> WarningDto {
+fn convert_warning_dto(w: &hwpforge_convert::ConvertWarning) -> WarningDto {
+    let w = match w {
+        hwpforge_convert::ConvertWarning::Hwp5(w) => w,
+        // W1b: 인코드 캐시 드롭 — 문단 경로+사유를 그대로 표면화.
+        hwpforge_convert::ConvertWarning::HwpxEncode(
+            hwpforge_smithy_hwpx::EncodeWarning::LayoutCacheDropped { path, reason },
+        ) => {
+            return WarningDto {
+                stage: "convert",
+                code: "LAYOUT_CACHE_DROPPED",
+                message: reason.clone(),
+                location: Some(path.to_string()),
+            };
+        }
+        other => {
+            return WarningDto {
+                stage: "convert",
+                code: "OTHER",
+                message: format!("{other:?}"),
+                location: None,
+            };
+        }
+    };
     let (code, message, location) = match w {
         Hwp5Warning::UnsupportedTag { tag_id, offset } => (
             "UNSUPPORTED_TAG",
@@ -85,6 +107,9 @@ fn convert_warning_dto(w: &Hwp5Warning) -> WarningDto {
         }
         Hwp5Warning::ParserFallback { subject, reason } => {
             ("PARSER_FALLBACK", format!("{subject}: {reason}"), None)
+        }
+        Hwp5Warning::LayoutCacheDropped { reason } => {
+            ("LAYOUT_CACHE_DROPPED", reason.clone(), None)
         }
         other => ("OTHER", format!("{other:?}"), None),
     };
@@ -389,7 +414,7 @@ mod tests {
             (Hwp5Warning::ParserFallback { subject: "s", reason: "r".into() }, "PARSER_FALLBACK"),
         ];
         for (w, code) in cases {
-            let dto = convert_warning_dto(&w);
+            let dto = convert_warning_dto(&hwpforge_convert::ConvertWarning::Hwp5(w));
             assert_eq!(dto.stage, "convert");
             assert_eq!(dto.code, code);
         }

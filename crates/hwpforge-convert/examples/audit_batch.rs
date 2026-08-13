@@ -135,7 +135,20 @@ fn collect_hwp_files(root: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-fn category_key(warning: &Hwp5Warning) -> String {
+fn category_key(warning: &hwpforge_convert::ConvertWarning) -> String {
+    let warning = match warning {
+        hwpforge_convert::ConvertWarning::Hwp5(w) => w,
+        // W1b: HWPX 인코드 경고 (캐시 드롭 등) — 자체 카테고리.
+        hwpforge_convert::ConvertWarning::HwpxEncode(w) => {
+            return format!("HwpxEncode:{w:?}")
+                .split('{')
+                .next()
+                .unwrap_or("HwpxEncode")
+                .trim()
+                .to_string();
+        }
+        _ => return "Other".to_string(),
+    };
     match warning {
         Hwp5Warning::UnsupportedTag { tag_id, .. } => {
             format!("UnsupportedTag:0x{tag_id:04X}")

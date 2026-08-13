@@ -159,8 +159,13 @@ pub(super) fn encode_memo_sublist(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
+    sink: &mut EncodeSink,
 ) -> HwpxResult<String> {
-    let sublist = encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries, options)?;
+    sink.enter(crate::decoder::PathSeg::Memo);
+    let sublist_result =
+        encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries, options, sink);
+    sink.leave();
+    let sublist = sublist_result?;
     let xml = quick_xml::se::to_string(&sublist)
         .map_err(|e| HwpxError::InvalidStructure { detail: e.to_string() })?;
     // Fix root element: <HxSubList ...>...</HxSubList> → <hp:subList ...>...</hp:subList>

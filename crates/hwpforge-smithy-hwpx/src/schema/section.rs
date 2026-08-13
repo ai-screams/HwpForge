@@ -294,6 +294,9 @@ pub enum HxRunChildKind {
     TextArt,
     /// 미지 요소 (자리 보존용 — 종류별 Vec 에는 미수록).
     Other,
+    /// run 직속 stray `$text` — 스키마상 위치가 없어 내용은 드롭하지만
+    /// **존재·위치는 기록**한다 (W1b: 캐시 fail-closed 신호, v4 R3#7).
+    StrayText,
 }
 
 /// 종전 by-kind 고정 순서를 재현하는 폴백 (child_order 사이드카가 비어 있는
@@ -474,7 +477,9 @@ impl<'de> serde::Deserialize<'de> for HxRun {
                     run.textarts.push(*x);
                 }
                 HxRunChildDe::StrayText(_) => {
-                    // run 직속 텍스트는 스키마상 없음 — 자리 기록 없이 무시.
+                    // run 직속 텍스트는 스키마상 없음 — 내용은 버리되
+                    // 위치는 사이드카에 기록한다 (W1b fail-closed 관측).
+                    run.child_order.push((K::StrayText, 0));
                 }
                 HxRunChildDe::Other => {
                     run.child_order.push((K::Other, 0));
@@ -644,6 +649,7 @@ impl HxText {
                 HxTextPart::FwSpace {} => "\u{001F}",
                 HxTextPart::NbSpace {} => "\u{00a0}",
                 HxTextPart::MarkpenBegin {} | HxTextPart::MarkpenEnd {} => "",
+                HxTextPart::TitleMark { .. } => "",
                 HxTextPart::Other => "",
             })
             .collect()
@@ -687,6 +693,7 @@ impl HxText {
 
         let segments = self.parts.iter().filter_map(|p| match p {
             HxTextPart::Text(s) if s.is_empty() => None,
+            HxTextPart::TitleMark { .. } => None,
             HxTextPart::Text(s) => Some(InlineSegment::Plain(s.clone())),
             HxTextPart::Tab { width, leader, tab_type } => {
                 Some(InlineSegment::Tab(InlineTabAttr {
@@ -747,6 +754,16 @@ pub enum HxTextPart {
     /// `<hp:nbSpace/>` — non-breaking space.
     #[serde(rename(serialize = "hp:nbSpace", deserialize = "nbSpace"))]
     NbSpace {},
+    /// `<hp:titleMark ignore="..."/>` — 한컴은 titleMark 를 `<t>` 내부에
+    /// 쓴다 (XSD 위치). HWP5 `0x08` 미러 = **wire 8유닛·가시 0** (W1b
+    /// ledger — Other 로 떨어지면 소비량 미상 fail-closed 가 되므로 typed
+    /// 로 승격, v4 R3#6).
+    #[serde(rename(serialize = "hp:titleMark", deserialize = "titleMark"))]
+    TitleMark {
+        /// TOC 제외 여부 (`false` = 포함).
+        #[serde(rename = "@ignore", default)]
+        ignore: bool,
+    },
     /// `<hp:markpenBegin/>` — highlight marker begin (no text output).
     #[serde(rename(serialize = "hp:markpenBegin", deserialize = "markpenBegin"))]
     MarkpenBegin {},

@@ -150,6 +150,8 @@ fn encode_table_margin(value: TableMargin) -> HxTableMargin {
 pub(crate) struct SectionEncodeResult {
     /// The section XML string.
     pub xml: String,
+    /// 인코드 경고 (캐시 드롭 등 — W1b).
+    pub warnings: Vec<super::EncodeWarning>,
     /// Chart entries: (ZIP path, OOXML chart XML content).
     pub charts: Vec<(String, String)>,
     /// Master page entries: (ZIP path, masterpage XML content).
@@ -176,9 +178,99 @@ pub(crate) struct SectionEncodeResult {
 ///
 /// Returns [`HwpxError::XmlSerialize`] if quick-xml serialization fails,
 /// or [`HwpxError::InvalidStructure`] if table nesting exceeds the limit.
+/// 인코드 경고 sink + 현재 문단 경로 (W1b — 디코더 `DecodeCtx` 대칭).
+pub(crate) struct EncodeSink {
+    pub(crate) warnings: Vec<super::EncodeWarning>,
+    path: Vec<crate::decoder::PathSeg>,
+}
+
+impl EncodeSink {
+    pub(crate) fn new(section_index: usize) -> Self {
+        Self { warnings: Vec::new(), path: vec![crate::decoder::PathSeg::Section(section_index)] }
+    }
+
+    pub(crate) fn enter(&mut self, seg: crate::decoder::PathSeg) {
+        self.path.push(seg);
+    }
+
+    pub(crate) fn leave(&mut self) {
+        self.path.pop();
+    }
+
+    fn cache_dropped(&mut self, reason: String) {
+        self.warnings.push(super::EncodeWarning::LayoutCacheDropped {
+            path: crate::decoder::ParagraphPath(self.path.clone()),
+            reason,
+        });
+    }
+}
+
+/// 방출-통합 wire ledger (W1b §1g v5 변경 4) — `build_runs` 가 각 방출
+/// 사이트에서 span 을 기여한다. 모든 스킵/재배치/placeholder-미상 방출은
+/// [`mark_cache_inadmissible`] 단일 choke 를 지나며, `false→true` 복구는
+/// 불가능하다 (monotonic AND).
+///
+/// [`mark_cache_inadmissible`]: EncoderLedger::mark_cache_inadmissible
+pub(crate) struct EncoderLedger {
+    builder: crate::wire_text_map::WireMapBuilder,
+    inadmissible: Option<String>,
+}
+
+impl EncoderLedger {
+    fn new(injected_leading_ctrls: usize) -> Self {
+        let mut builder = crate::wire_text_map::WireMapBuilder::new();
+        // 직렬화 후 문자열 주입되는 선행 ctrl (colPr/머리말/꼬리말/쪽번호)
+        // — 트리 밖 (8,0) 유닛 (전부 영-core 라 상호 순서 무관).
+        for _ in 0..injected_leading_ctrls {
+            builder.push_span(8, 0);
+        }
+        Self { builder, inadmissible: None }
+    }
+
+    fn identity(&mut self, units: u32) {
+        self.builder.advance_identity(units);
+    }
+
+    fn span(&mut self, wire: u32, core: u32) {
+        self.builder.push_span(wire, core);
+    }
+
+    /// utf16 문자열의 가시 재생 span — 접힘 필드 본문 등 wire 는 소비하되
+    /// Core 기여가 0 인 경우 `core_scale=0`, 1:1 이면 1.
+    fn folded_field(&mut self, body: &str) {
+        let body_units = body.encode_utf16().count() as u32;
+        self.span(16 + body_units, 0);
+    }
+
+    /// 혼합 텍스트(탭/줄바꿈 sentinel 포함)의 문자 단위 재생.
+    fn mixed_text(&mut self, s: &str) {
+        for u in s.encode_utf16().collect::<Vec<u16>>() {
+            if u == u16::from(b'\t') {
+                self.span(8, 1);
+            } else {
+                self.identity(1);
+            }
+        }
+    }
+
+    /// cache-inadmissible 방출 표시 — 단일 choke, 첫 사유 보존.
+    fn mark_cache_inadmissible(&mut self, reason: &str) {
+        if self.inadmissible.is_none() {
+            self.inadmissible = Some(reason.to_string());
+        }
+    }
+
+    fn finish(self) -> Result<crate::wire_text_map::WireTextMap, String> {
+        if let Some(reason) = self.inadmissible {
+            return Err(reason);
+        }
+        self.builder.finish().map_err(|e| e.to_string())
+    }
+}
+
 pub(crate) fn encode_section(
     section: &Section,
-    _section_index: usize,
+    section_index: usize,
     chart_offset: usize,
     masterpage_offset: usize,
     embedded_ole_offset: usize,
@@ -189,6 +281,7 @@ pub(crate) fn encode_section(
     // Replacement list for run-level XML fragments that serde cannot express
     // directly, such as interleaved hyperlink controls and mixed-content `<hp:t>`.
     let mut run_xml_replacements: Vec<(String, String)> = Vec::new();
+    let mut sink = EncodeSink::new(section_index);
     let hx_section = build_section(
         section,
         &mut chart_entries,
@@ -197,6 +290,7 @@ pub(crate) fn encode_section(
         chart_offset,
         embedded_ole_offset,
         options,
+        &mut sink,
     )?;
     let inner_xml = quick_xml::se::to_string(&hx_section)
         .map_err(|e| HwpxError::XmlSerialize { detail: e.to_string() })?;
@@ -211,7 +305,13 @@ pub(crate) fn encode_section(
     let mut enriched = enrich_sec_pr(inner_content, section, masterpage_offset);
 
     // Inject header/footer/page number controls after colPr
-    inject_header_footer_pagenum(&mut enriched, section, &mut run_xml_replacements, options)?;
+    inject_header_footer_pagenum(
+        &mut enriched,
+        section,
+        &mut run_xml_replacements,
+        options,
+        &mut sink,
+    )?;
 
     // Replace hyperlink placeholder runs with real interleaved XML.
     // Serde cannot express the ctrl-text-ctrl interleaving required by
@@ -223,6 +323,7 @@ pub(crate) fn encode_section(
 
     Ok(SectionEncodeResult {
         xml: wrap_section_xml(&enriched),
+        warnings: sink.warnings,
         charts: chart_entries,
         master_pages,
         embedded_oles,
@@ -332,41 +433,40 @@ fn build_section(
     chart_offset: usize,
     embedded_ole_offset: usize,
     options: EncodeOptions,
+    sink: &mut EncodeSink,
 ) -> HwpxResult<HxSection> {
-    // opt-in 캐시 방출 시 첫 문단의 스트림 유닛 역가산분: 인코더가 첫
-    // 문단에 주입하는 secPr(8) + colPr ctrl(8 — enrich 가 항상 추가) +
-    // 머리말/꼬리말/쪽번호 ctrl(각 8, inject_header_footer_pagenum).
-    // 디코더 정규화(convert_paragraph 의 leading_ctrl_units)와 왕복 대칭 —
-    // 주입 구성이 바뀌면 tests/layout_cache_roundtrip.rs 가 깨진다.
-    let first_para_stream_units: u32 = 8
-        * (2 + section.headers.len()
-            + section.footers.len()
-            + usize::from(section.page_number.is_some())) as u32;
-    let paragraphs = section
-        .paragraphs
-        .iter()
-        .enumerate()
-        .map(|(idx, para)| {
-            let inject_sec_pr = idx == 0;
-            let page_settings = if inject_sec_pr { Some(&section.page_settings) } else { None };
-            build_paragraph(
-                para,
-                inject_sec_pr,
-                page_settings,
-                section.text_direction,
-                idx,
-                0,
-                chart_entries,
-                embedded_oles,
-                hyperlink_entries,
-                chart_offset,
-                embedded_ole_offset,
-                options,
-                if inject_sec_pr { first_para_stream_units } else { 0 },
-            )
-            // (signature already plumbs embedded chart OLE state through)
-        })
-        .collect::<HwpxResult<Vec<_>>>()?;
+    // W1b: 첫 문단에 직렬화 후 문자열 주입되는 선행 ctrl 수 — colPr(1,
+    // enrich 가 항상 추가) + 머리말/꼬리말/쪽번호 (각 1,
+    // inject_header_footer_pagenum). secPr 는 typed 트리에 있어 ledger 가
+    // 직접 본다. 전부 영-core (8,0) 이라 상호 순서는 map 에 무관.
+    let injected_leading_ctrls: usize = 1
+        + section.headers.len()
+        + section.footers.len()
+        + usize::from(section.page_number.is_some());
+    let mut paragraphs = Vec::with_capacity(section.paragraphs.len());
+    for (idx, para) in section.paragraphs.iter().enumerate() {
+        let inject_sec_pr = idx == 0;
+        let page_settings = if inject_sec_pr { Some(&section.page_settings) } else { None };
+        sink.enter(crate::decoder::PathSeg::BodyParagraph(idx));
+        let built = build_paragraph(
+            para,
+            inject_sec_pr,
+            page_settings,
+            section.text_direction,
+            idx,
+            0,
+            chart_entries,
+            embedded_oles,
+            hyperlink_entries,
+            chart_offset,
+            embedded_ole_offset,
+            options,
+            if inject_sec_pr { injected_leading_ctrls } else { 0 },
+            sink,
+        );
+        sink.leave();
+        paragraphs.push(built?);
+    }
 
     Ok(HxSection { paragraphs })
 }
@@ -390,8 +490,10 @@ fn build_paragraph(
     chart_offset: usize,
     embedded_ole_offset: usize,
     options: EncodeOptions,
-    cache_stream_offset: u32,
+    injected_leading_ctrls: usize,
+    sink: &mut EncodeSink,
 ) -> HwpxResult<HxParagraph> {
+    let mut ledger = EncoderLedger::new(injected_leading_ctrls);
     let mut runs = build_runs(
         &para.runs,
         inject_sec_pr,
@@ -404,6 +506,8 @@ fn build_paragraph(
         chart_offset,
         embedded_ole_offset,
         options,
+        &mut ledger,
+        sink,
     )?;
 
     // Inject <hp:titleMark ignore="false"/> into the first run when the
@@ -411,6 +515,9 @@ fn build_paragraph(
     if para.heading_level.is_some() {
         if let Some(first_run) = runs.first_mut() {
             first_run.title_mark = Some(HxTitleMark { ignore: false });
+            // titleMark 는 run 트리 후주입이라 wire 위치가 map 에 반영되지
+            // 않는다 — heading+캐시 조합은 드롭 (W1b 한계, 백로그).
+            ledger.mark_cache_inadmissible("titleMark injection position not cache-mapped");
         }
     }
 
@@ -426,24 +533,49 @@ fn build_paragraph(
     // secPr/colPr/header/footer/pageNum ctrl 유닛 — build_section 이 계산)을
     // 되더해 방출한다. 디코더 정규화와 정확히 왕복 대칭.
     // 편집 표면은 절대 켜지 않는다 — EncodeOptions::emit_layout_cache 문서 참조.
+    // W1b: Core 가시 좌표 → wire 좌표 역변환은 **방출-통합 ledger** 가
+    // 소유한다 (별도 match 복제 금지 — §1g v5 변경 4). to_wire(0)=0
+    // canonicalization 으로 첫 lineseg 는 native 불변식(항상 0)을 따른다.
+    // 실패(축약점 모호·inadmissible 방출 등) = 캐시 미방출 + 경고.
     let linesegarray = if options.emit_layout_cache {
-        para.layout_cache.as_ref().map(|cache| HxLineSegArray {
-            items: cache
-                .lines
-                .iter()
-                .map(|l| HxLineSeg {
-                    textpos: l.textpos + cache_stream_offset,
-                    vertpos: l.vertpos,
-                    vertsize: l.vertsize,
-                    textheight: l.textheight,
-                    baseline: l.baseline,
-                    spacing: l.spacing,
-                    horzpos: l.horzpos,
-                    horzsize: l.horzsize,
-                    flags: l.flags,
-                })
-                .collect(),
-        })
+        match &para.layout_cache {
+            None => None,
+            Some(cache) => match ledger.finish() {
+                Err(reason) => {
+                    sink.cache_dropped(reason);
+                    None
+                }
+                Ok(map) => {
+                    let mut items = Vec::with_capacity(cache.lines.len());
+                    let mut dropped = false;
+                    for l in &cache.lines {
+                        match map.to_wire(l.textpos) {
+                            Ok(textpos) => items.push(HxLineSeg {
+                                textpos,
+                                vertpos: l.vertpos,
+                                vertsize: l.vertsize,
+                                textheight: l.textheight,
+                                baseline: l.baseline,
+                                spacing: l.spacing,
+                                horzpos: l.horzpos,
+                                horzsize: l.horzsize,
+                                flags: l.flags,
+                            }),
+                            Err(e) => {
+                                sink.cache_dropped(format!("core textpos {}: {e}", l.textpos));
+                                dropped = true;
+                                break;
+                            }
+                        }
+                    }
+                    if dropped {
+                        None
+                    } else {
+                        Some(HxLineSegArray { items })
+                    }
+                }
+            },
+        }
     } else {
         None
     };
@@ -483,6 +615,8 @@ fn build_runs(
     chart_offset: usize,
     embedded_ole_offset: usize,
     options: EncodeOptions,
+    ledger: &mut EncoderLedger,
+    sink: &mut EncodeSink,
 ) -> HwpxResult<Vec<HxRun>> {
     let mut result = Vec::new();
     let mut sec_pr_injected = false;
@@ -499,6 +633,7 @@ fn build_runs(
         if inject_sec_pr && !sec_pr_injected && run.content.is_control() {
             if let Some(ps) = page_settings {
                 sec_pr_injected = true;
+                ledger.span(8, 0);
                 result.push(HxRun {
                     char_pr_id_ref: 0,
                     sec_pr: Some(build_sec_pr(ps, text_direction)),
@@ -529,6 +664,9 @@ fn build_runs(
         } else {
             None
         };
+        if sec_pr.is_some() {
+            ledger.span(8, 0);
+        }
 
         let char_pr_id_ref = run.char_shape_id.get() as u32;
 
@@ -549,6 +687,7 @@ fn build_runs(
 
         match &run.content {
             RunContent::Text(s) => {
+                ledger.mixed_text(s);
                 if requires_inline_text_markup(s) {
                     let marker = next_marker("HWPTXT", char_pr_id_ref as usize);
                     let marker_xml = format!(r#"<hp:t>{marker}</hp:t>"#);
@@ -560,6 +699,14 @@ fn build_runs(
                 }
             }
             RunContent::InlineText(it) => {
+                for seg in &it.segments {
+                    match seg {
+                        hwpforge_core::inline::InlineSegment::Plain(s) => ledger.mixed_text(s),
+                        hwpforge_core::inline::InlineSegment::Tab(_) => ledger.span(8, 1),
+                        // 미래 inline 종류 — 소비량 미상 (fail-closed).
+                        _ => ledger.mark_cache_inadmissible("unknown inline segment kind"),
+                    }
+                }
                 // Always route through the marker-substitution path
                 // because InlineText carries `<hp:tab>` mixed content
                 // that the plain-string serializer cannot represent.
@@ -570,68 +717,114 @@ fn build_runs(
                 texts.push(HxText::new(marker));
             }
             RunContent::Table(t) => {
-                tables.push(build_table(t, depth, hyperlink_entries, options)?);
+                ledger.span(8, 0);
+                tables.push(build_table(t, depth, hyperlink_entries, options, sink)?);
             }
             RunContent::Image(img) => {
-                pictures.push(build_picture(img, depth, hyperlink_entries, options)?);
+                ledger.span(8, 0);
+                pictures.push(build_picture(img, depth, hyperlink_entries, options, sink)?);
             }
             RunContent::Control(ctrl) => {
                 match ctrl.as_ref() {
                     Control::Footnote { .. } | Control::Endnote { .. } => {
                         if let Some(hx_ctrl) =
-                            encode_control_to_ctrl(ctrl, depth, hyperlink_entries, options)?
+                            encode_control_to_ctrl(ctrl, depth, hyperlink_entries, options, sink)?
                         {
+                            ledger.span(8, 0);
                             ctrls.push(hx_ctrl);
+                        } else {
+                            ledger.mark_cache_inadmissible("unencodable note control skipped");
                         }
                     }
                     Control::TextBox { .. } => {
+                        ledger.span(8, 0);
                         rects.push(encode_textbox_to_rect(
                             ctrl,
                             depth,
                             hyperlink_entries,
                             options,
+                            sink,
                         )?);
                     }
                     Control::Rect { .. } => {
-                        rects.push(encode_rect_to_hx(ctrl, depth, hyperlink_entries, options)?);
+                        ledger.span(8, 0);
+                        rects.push(encode_rect_to_hx(
+                            ctrl,
+                            depth,
+                            hyperlink_entries,
+                            options,
+                            sink,
+                        )?);
                     }
                     Control::Line { .. } => {
-                        lines.push(encode_line_to_hx(ctrl, depth, hyperlink_entries, options)?);
+                        ledger.span(8, 0);
+                        lines.push(encode_line_to_hx(
+                            ctrl,
+                            depth,
+                            hyperlink_entries,
+                            options,
+                            sink,
+                        )?);
                     }
                     Control::Ellipse { .. } => {
+                        ledger.span(8, 0);
                         ellipses.push(encode_ellipse_to_hx(
                             ctrl,
                             depth,
                             hyperlink_entries,
                             options,
+                            sink,
                         )?);
                     }
                     Control::Polygon { .. } => {
+                        ledger.span(8, 0);
                         polygons.push(encode_polygon_to_hx(
                             ctrl,
                             depth,
                             hyperlink_entries,
                             options,
+                            sink,
                         )?);
                     }
                     Control::Arc { .. } => {
-                        ellipses.push(encode_arc_to_hx(ctrl, depth, hyperlink_entries, options)?);
+                        ledger.span(8, 0);
+                        ellipses.push(encode_arc_to_hx(
+                            ctrl,
+                            depth,
+                            hyperlink_entries,
+                            options,
+                            sink,
+                        )?);
                     }
                     Control::Curve { .. } => {
-                        curves.push(encode_curve_to_hx(ctrl, depth, hyperlink_entries, options)?);
+                        ledger.span(8, 0);
+                        curves.push(encode_curve_to_hx(
+                            ctrl,
+                            depth,
+                            hyperlink_entries,
+                            options,
+                            sink,
+                        )?);
                     }
                     Control::ConnectLine { .. } => {
+                        ledger.span(8, 0);
                         connect_lines.push(encode_connect_line_to_hx(
                             ctrl,
                             depth,
                             hyperlink_entries,
                             options,
+                            sink,
                         )?);
                     }
                     Control::Equation { .. } => {
+                        ledger.span(8, 0);
                         equations.push(encode_equation_to_hx(ctrl)?);
                     }
                     Control::Chart { .. } => {
+                        // 디코더가 chart 를 문단 꼬리로 재배치 (W1a 문서화)
+                        // — raw 위치 손실을 cache equality 로 세탁하지 않는다
+                        // (§1g v5 R3#6).
+                        ledger.mark_cache_inadmissible("chart emission reorders content");
                         let chart_idx = chart_offset + chart_entries.len() + 1;
                         let chart_ref = format!("Chart/chart{chart_idx}.xml");
                         let chart_xml = generate_chart_xml(ctrl)?;
@@ -646,6 +839,7 @@ fn build_runs(
                         horz_offset,
                         vert_offset,
                     } => {
+                        ledger.mark_cache_inadmissible("chart emission reorders content");
                         // Allocate stable per-document ids for the new chart
                         // XML file and the OLE blob. Both lists are
                         // section-global; we add `*_offset` to keep ids
@@ -697,6 +891,7 @@ fn build_runs(
                                 ),
                             });
                         };
+                        ledger.folded_field(text);
                         let field_id = hyperlink_entries.len();
                         let marker = next_marker("HWPHL", field_id);
                         let real_xml =
@@ -719,6 +914,7 @@ fn build_runs(
                         align,
                         metadata,
                     } => {
+                        ledger.span(8, 0);
                         dutmals.push(encode_dutmal_to_hx(
                             main_text,
                             sub_text,
@@ -735,6 +931,7 @@ fn build_runs(
                         compose_type,
                         char_pr_ids,
                     } => {
+                        ledger.span(8, 0);
                         composes.push(encode_compose_to_hx(
                             compose_text,
                             circle_type,
@@ -748,14 +945,20 @@ fn build_runs(
                     | Control::PageHiding { .. }
                     | Control::Bookmark { bookmark_type: BookmarkType::Point, .. } => {
                         if let Some(hx_ctrl) =
-                            encode_control_to_ctrl(ctrl, depth, hyperlink_entries, options)?
+                            encode_control_to_ctrl(ctrl, depth, hyperlink_entries, options, sink)?
                         {
+                            ledger.span(8, 0);
                             ctrls.push(hx_ctrl);
+                        } else {
+                            // NewNumberKind::Unknown 등 — 방출 스킵 = 기하
+                            // stale (§1g v5 R3#6 일반 불변식).
+                            ledger.mark_cache_inadmissible("unencodable control skipped");
                         }
                     }
                     Control::Bookmark { name, bookmark_type }
                         if *bookmark_type == BookmarkType::SpanStart =>
                     {
+                        ledger.span(8, 0);
                         let field_id = hyperlink_entries.len();
                         bookmark_span_ids.insert(name.clone(), field_id);
                         let marker = next_marker("HWPBM", field_id);
@@ -771,6 +974,7 @@ fn build_runs(
                         if *bookmark_type == BookmarkType::SpanEnd =>
                     {
                         if let Some(&field_id) = bookmark_span_ids.get(name) {
+                            ledger.span(8, 0);
                             let marker = next_marker("HWPBE", field_id);
                             let real_xml =
                                 build_bookmark_span_end_run_xml(char_pr_id_ref, field_id);
@@ -779,13 +983,21 @@ fn build_runs(
                             );
                             hyperlink_entries.push((marker_run_xml, real_xml));
                             texts.push(HxText::new(marker));
+                        } else {
+                            // 무짝 SpanEnd 방출 스킵 — choke 경유 (v5 변경 4).
+                            ledger.mark_cache_inadmissible("unmatched bookmark span end");
                         }
-                        // Silently skip if no matching SpanStart found
                     }
                     Control::Field { field_type, hint_text, help_text, name, display_text } => {
                         let field_id = hyperlink_entries.len();
                         let marker = next_marker("HWPFD", field_id);
                         let hint = hint_text.as_deref().unwrap_or("");
+                        // 본문 = 미채움이면 힌트 (E1/gotcha #30 계약과 동일).
+                        ledger.folded_field(if display_text.is_empty() {
+                            hint
+                        } else {
+                            display_text
+                        });
                         let real_xml = build_field_run_xml(
                             field_type,
                             hint,
@@ -814,6 +1026,7 @@ fn build_runs(
                     // arm further below which emits Hancom-native
                     // `type="PATH"` with `Format=` param and a distinct fieldid.
                     Control::UnknownSummary { token, display_text } => {
+                        ledger.folded_field(display_text);
                         let field_id = hyperlink_entries.len();
                         let marker = next_marker("HWPFD", field_id);
                         // Wave 12p task #124: unknown token — assume Hancom
@@ -835,6 +1048,7 @@ fn build_runs(
                         texts.push(HxText::new(marker));
                     }
                     Control::DateCodeField { is_time_mode, display_text, .. } => {
+                        ledger.folded_field(display_text);
                         // LOSSY: %dte → SUMMERY mapping; raw_trailer is discarded.
                         // Round-trip through HWPX comes back as `Field(ModifiedTime)`
                         // or `Field(CreatedTime)` — proven by
@@ -864,6 +1078,7 @@ fn build_runs(
                         texts.push(HxText::new(marker));
                     }
                     Control::PathField { command, display_text } => {
+                        ledger.folded_field(display_text);
                         // Wave 12n Step 6 — LOSSLESS emit. The prior SUMMERY
                         // surrogate (mapped %pat → type="SUMMERY") triggered the
                         // Hancom "low security level — content recovered"
@@ -894,8 +1109,10 @@ fn build_runs(
                         // architect review CRITICAL: TotalPages/Unknown must not
                         // collapse to CurrentPage).
                         let Some(real_xml) = build_autonum_run_xml(char_pr_id_ref, *kind) else {
+                            ledger.mark_cache_inadmissible("unencodable control skipped");
                             continue;
                         };
+                        ledger.span(8, 0);
                         let field_id = hyperlink_entries.len();
                         let marker = next_marker("HWPFD", field_id);
                         let marker_run_xml = format!(
@@ -922,6 +1139,7 @@ fn build_runs(
                         } else {
                             display_text.as_str()
                         };
+                        ledger.folded_field(visible_text);
                         let field_id = hyperlink_entries.len();
                         let marker = next_marker("HWPXR", field_id);
                         let real_xml = build_crossref_run_xml(
@@ -940,10 +1158,18 @@ fn build_runs(
                         texts.push(HxText::new(marker));
                     }
                     Control::Memo { content, anchor_runs, metadata } => {
+                        if anchor_runs.iter().any(|r| r.content.plain_text().is_none()) {
+                            // 비텍스트 anchor run 은 방출에서 버려짐
+                            // (memo.rs) — 기하 stale.
+                            ledger.mark_cache_inadmissible("memo anchor drops non-text runs");
+                        }
+                        let anchor_text: String =
+                            anchor_runs.iter().filter_map(|r| r.content.plain_text()).collect();
+                        ledger.folded_field(&anchor_text);
                         let field_id = hyperlink_entries.len();
                         let marker = next_marker("HWPME", field_id);
                         let sublist_xml =
-                            encode_memo_sublist(content, depth, hyperlink_entries, options)?;
+                            encode_memo_sublist(content, depth, hyperlink_entries, options, sink)?;
                         let anchor_xml = build_memo_anchor_xml(anchor_runs);
                         let real_xml = build_memo_run_xml(
                             &sublist_xml,
@@ -959,6 +1185,7 @@ fn build_runs(
                         texts.push(HxText::new(marker));
                     }
                     Control::Group { .. } => {
+                        ledger.span(8, 0);
                         // Group (묶음 객체) → <hp:container>. Serde cannot
                         // express the heterogeneous, z-ordered child shapes
                         // inside the container, so we build the full fragment
@@ -970,6 +1197,7 @@ fn build_runs(
                             0,
                             hyperlink_entries,
                             options,
+                            sink,
                         )?;
                         let field_id = hyperlink_entries.len();
                         let marker = next_marker("HWPGRP", field_id);
@@ -983,6 +1211,7 @@ fn build_runs(
                         texts.push(HxText::new(marker));
                     }
                     Control::TextArt { .. } => {
+                        ledger.span(8, 0);
                         // TextArt (글맵시) → <hp:textart>. Serde cannot express
                         // the fixed corner-point block + <hp:textartPr> shape
                         // and the scaMatrix entries are derived, so we build the
@@ -1001,11 +1230,14 @@ fn build_runs(
                         texts.push(HxText::new(marker));
                     }
                     Control::Unknown { .. } => {
-                        // Unknown controls are silently skipped
+                        // Unknown controls are silently skipped — 기하 stale
+                        // (§1g v5 R3#6: skipped emission 은 캐시 무효).
+                        ledger.mark_cache_inadmissible("unencodable control skipped");
                         continue;
                     }
                     _ => {
-                        // Future Control variants silently skipped
+                        // Future Control variants silently skipped — 동일.
+                        ledger.mark_cache_inadmissible("unencodable control skipped");
                         continue;
                     }
                 }
@@ -1084,32 +1316,35 @@ fn encode_control_to_ctrl(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
+    sink: &mut EncodeSink,
 ) -> HwpxResult<Option<HxCtrl>> {
     match ctrl {
-        Control::Footnote { inst_id, paragraphs } => Ok(Some(HxCtrl {
-            foot_note: Some(HxFootNote {
-                inst_id: inst_id.map(hwpforge_core::ObjectId::value),
-                sub_list: encode_paragraphs_to_sublist(
-                    paragraphs,
-                    depth,
-                    hyperlink_entries,
-                    options,
-                )?,
-            }),
-            ..Default::default()
-        })),
-        Control::Endnote { inst_id, paragraphs } => Ok(Some(HxCtrl {
-            end_note: Some(HxFootNote {
-                inst_id: inst_id.map(hwpforge_core::ObjectId::value),
-                sub_list: encode_paragraphs_to_sublist(
-                    paragraphs,
-                    depth,
-                    hyperlink_entries,
-                    options,
-                )?,
-            }),
-            ..Default::default()
-        })),
+        Control::Footnote { inst_id, paragraphs } => {
+            sink.enter(crate::decoder::PathSeg::Footnote);
+            let sub_list_result =
+                encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries, options, sink);
+            sink.leave();
+            Ok(Some(HxCtrl {
+                foot_note: Some(HxFootNote {
+                    inst_id: inst_id.map(hwpforge_core::ObjectId::value),
+                    sub_list: sub_list_result?,
+                }),
+                ..Default::default()
+            }))
+        }
+        Control::Endnote { inst_id, paragraphs } => {
+            sink.enter(crate::decoder::PathSeg::Endnote);
+            let sub_list_result =
+                encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries, options, sink);
+            sink.leave();
+            Ok(Some(HxCtrl {
+                end_note: Some(HxFootNote {
+                    inst_id: inst_id.map(hwpforge_core::ObjectId::value),
+                    sub_list: sub_list_result?,
+                }),
+                ..Default::default()
+            }))
+        }
         Control::Bookmark { name, bookmark_type: BookmarkType::Point } => Ok(Some(HxCtrl {
             bookmark: Some(HxBookmark { name: name.clone() }),
             ..Default::default()
@@ -1169,8 +1404,9 @@ pub(crate) fn encode_paragraphs_to_sublist(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
+    sink: &mut EncodeSink,
 ) -> HwpxResult<HxSubList> {
-    build_sublist(paragraphs, depth, "TOP", hyperlink_entries, options)
+    build_sublist(paragraphs, depth, "TOP", hyperlink_entries, options, sink)
 }
 
 /// Encodes a `Vec<Paragraph>` into `HxSubList` with an explicit vertical
@@ -1182,8 +1418,9 @@ pub(crate) fn encode_paragraphs_to_sublist_with_align(
     vert_align: &str,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
+    sink: &mut EncodeSink,
 ) -> HwpxResult<HxSubList> {
-    build_sublist(paragraphs, depth, vert_align, hyperlink_entries, options)
+    build_sublist(paragraphs, depth, vert_align, hyperlink_entries, options, sink)
 }
 
 fn build_sublist(
@@ -1192,6 +1429,7 @@ fn build_sublist(
     vert_align: &str,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
+    sink: &mut EncodeSink,
 ) -> HwpxResult<HxSubList> {
     let mut sub_chart_entries = Vec::new();
     let mut sub_embedded_oles: Vec<(String, Vec<u8>)> = Vec::new();
@@ -1199,7 +1437,8 @@ fn build_sublist(
         .iter()
         .enumerate()
         .map(|(idx, para)| {
-            build_paragraph(
+            sink.enter(crate::decoder::PathSeg::NestedParagraph(idx));
+            let result = build_paragraph(
                 para,
                 false,
                 None,
@@ -1213,7 +1452,10 @@ fn build_sublist(
                 0,
                 options,
                 0, // 서브리스트 문단(셀·머리말 등)엔 인코더 주입 컨트롤이 없다
-            )
+                sink,
+            );
+            sink.leave();
+            result
         })
         .collect::<HwpxResult<Vec<_>>>()?;
 
@@ -1261,6 +1503,7 @@ pub(crate) fn build_hx_caption(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
+    sink: &mut EncodeSink,
 ) -> HwpxResult<HxCaption> {
     let side = match caption.side {
         CaptionSide::Left => "LEFT",
@@ -1272,8 +1515,11 @@ pub(crate) fn build_hx_caption(
 
     let width = caption.width.map(|w| w.as_i32()).unwrap_or(parent_width);
     let gap = caption.gap.as_i32();
-    let sub_list =
-        encode_paragraphs_to_sublist(&caption.paragraphs, depth, hyperlink_entries, options)?;
+    sink.enter(crate::decoder::PathSeg::Caption);
+    let sub_list_result =
+        encode_paragraphs_to_sublist(&caption.paragraphs, depth, hyperlink_entries, options, sink);
+    sink.leave();
+    let sub_list = sub_list_result?;
 
     // parent_width comes from HwpUnit::as_i32(), guaranteed non-negative
     Ok(HxCaption { side, full_sz: 0, width, gap, last_width: parent_width as u32, sub_list })
@@ -1796,9 +2042,14 @@ mod tests {
     #[test]
     fn nesting_depth_exceeded() {
         let hx_table = Table::new(vec![]);
-        let err =
-            build_table(&hx_table, MAX_NESTING_DEPTH, &mut Vec::new(), EncodeOptions::default())
-                .unwrap_err();
+        let err = build_table(
+            &hx_table,
+            MAX_NESTING_DEPTH,
+            &mut Vec::new(),
+            EncodeOptions::default(),
+            &mut EncodeSink::new(0),
+        )
+        .unwrap_err();
         match &err {
             HwpxError::InvalidStructure { detail } => {
                 assert!(detail.contains("nesting depth"));
@@ -1819,7 +2070,14 @@ mod tests {
             1024,
         );
         let table = Table::new(vec![TableRow::new(vec![cell])]);
-        let err = build_table(&table, 0, &mut Vec::new(), EncodeOptions::default()).unwrap_err();
+        let err = build_table(
+            &table,
+            0,
+            &mut Vec::new(),
+            EncodeOptions::default(),
+            &mut EncodeSink::new(0),
+        )
+        .unwrap_err();
         match &err {
             HwpxError::InvalidStructure { detail } => {
                 assert!(detail.contains("covered area"), "unexpected detail: {detail}");
@@ -1836,7 +2094,14 @@ mod tests {
             HwpUnit::new(500).unwrap(),
             ImageFormat::Jpeg,
         );
-        let hx = build_picture(&img, 0, &mut Vec::new(), EncodeOptions::default()).unwrap();
+        let hx = build_picture(
+            &img,
+            0,
+            &mut Vec::new(),
+            EncodeOptions::default(),
+            &mut EncodeSink::new(0),
+        )
+        .unwrap();
         assert_eq!(
             hx.img.unwrap().binary_item_id_ref,
             "image",
@@ -1864,7 +2129,14 @@ mod tests {
             horz_offset: HwpUnit::new(3400).unwrap(),
         });
 
-        let hx = build_picture(&img, 0, &mut Vec::new(), EncodeOptions::default()).unwrap();
+        let hx = build_picture(
+            &img,
+            0,
+            &mut Vec::new(),
+            EncodeOptions::default(),
+            &mut EncodeSink::new(0),
+        )
+        .unwrap();
         assert_eq!(hx.text_wrap, "SQUARE");
         assert_eq!(hx.text_flow, "RIGHT_ONLY");
         let pos = hx.pos.expect("position should be present");
@@ -1885,7 +2157,14 @@ mod tests {
             HwpUnit::new(5000).unwrap(),
             ImageFormat::Png,
         );
-        let hx = build_picture(&img, 0, &mut Vec::new(), EncodeOptions::default()).unwrap();
+        let hx = build_picture(
+            &img,
+            0,
+            &mut Vec::new(),
+            EncodeOptions::default(),
+            &mut EncodeSink::new(0),
+        )
+        .unwrap();
         let pos = hx.pos.expect("picture position should exist");
 
         assert_eq!(hx.text_wrap, "TOP_AND_BOTTOM");

@@ -884,8 +884,8 @@ fn collect_raw_run_slots(
                 semantic_run_idx += 1;
             }
             // Switch(차트) 는 디코더가 문단 끝에 append — run 꼬리 집계 유지.
-            // secPr/titleMark/Other 는 run 방출 없음.
-            K::Switch | K::SecPr | K::TitleMark | K::Other => {}
+            // secPr/titleMark/Other/StrayText 는 run 방출 없음.
+            K::Switch | K::SecPr | K::TitleMark | K::Other | K::StrayText => {}
         }
     }
     // trailing self-closing fieldBegin (BOOKMARK span start) — 디코더 거울.

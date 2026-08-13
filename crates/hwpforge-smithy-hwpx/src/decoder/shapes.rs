@@ -17,7 +17,7 @@ use crate::schema::section::{
     HxTextArt,
 };
 
-use super::section::{convert_hx_caption, decode_sublist_paragraphs, parse_hex_color};
+use super::section::{convert_hx_caption, decode_sublist_paragraphs, parse_hex_color, DecodeCtx};
 
 /// Parses an `<hp:subList vertAlign="...">` token into a Core [`VerticalAlign`].
 ///
@@ -37,6 +37,7 @@ pub(crate) fn decode_textbox(
     rect: &HxRect,
     char_shape_id: CharShapeIndex,
     depth: usize,
+    ctx: &mut DecodeCtx,
 ) -> HwpxResult<Option<Run>> {
     // Extract width/height from sz, falling back to zero
     let (width, height) = rect
@@ -54,7 +55,7 @@ pub(crate) fn decode_textbox(
     let (horz_offset, vert_offset) =
         rect.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
 
-    let caption = rect.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
+    let caption = rect.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
     let style = decode_shape_style_full(
         &rect.line_shape,
@@ -66,7 +67,10 @@ pub(crate) fn decode_textbox(
 
     let control = match &rect.draw_text {
         Some(draw_text) => {
-            let paragraphs = decode_sublist_paragraphs(&draw_text.sub_list, depth)?;
+            ctx.enter(super::PathSeg::TextBox);
+            let result = decode_sublist_paragraphs(&draw_text.sub_list, depth, ctx);
+            ctx.leave();
+            let paragraphs = result?;
             let text_vertical_align = decode_shape_vert_align(&draw_text.sub_list.vert_align);
             Control::TextBox {
                 paragraphs,
@@ -90,6 +94,7 @@ pub(crate) fn decode_line(
     line: &HxLine,
     char_shape_id: CharShapeIndex,
     depth: usize,
+    ctx: &mut DecodeCtx,
 ) -> HwpxResult<Run> {
     use hwpforge_core::control::ShapePoint;
 
@@ -115,7 +120,7 @@ pub(crate) fn decode_line(
         })
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
-    let caption = line.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
+    let caption = line.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
     let (horz_offset, vert_offset) =
         line.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
@@ -146,6 +151,7 @@ pub(crate) fn decode_ellipse(
     ellipse: &HxEllipse,
     char_shape_id: CharShapeIndex,
     depth: usize,
+    ctx: &mut DecodeCtx,
 ) -> HwpxResult<Run> {
     use hwpforge_core::control::ShapePoint;
 
@@ -177,14 +183,17 @@ pub(crate) fn decode_ellipse(
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
     let (paragraphs, text_vertical_align) = match &ellipse.draw_text {
-        Some(dt) => (
-            decode_sublist_paragraphs(&dt.sub_list, depth)?,
-            decode_shape_vert_align(&dt.sub_list.vert_align),
-        ),
+        Some(dt) => {
+            ctx.enter(super::PathSeg::TextBox);
+            let result = decode_sublist_paragraphs(&dt.sub_list, depth, ctx);
+            ctx.leave();
+            (result?, decode_shape_vert_align(&dt.sub_list.vert_align))
+        }
         None => (Vec::new(), VerticalAlign::Top),
     };
 
-    let caption = ellipse.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
+    let caption =
+        ellipse.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
     let (horz_offset, vert_offset) =
         ellipse.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
@@ -218,6 +227,7 @@ pub(crate) fn decode_polygon(
     polygon: &HxPolygon,
     char_shape_id: CharShapeIndex,
     depth: usize,
+    ctx: &mut DecodeCtx,
 ) -> HwpxResult<Run> {
     use hwpforge_core::control::ShapePoint;
 
@@ -236,14 +246,17 @@ pub(crate) fn decode_polygon(
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
     let (paragraphs, text_vertical_align) = match &polygon.draw_text {
-        Some(dt) => (
-            decode_sublist_paragraphs(&dt.sub_list, depth)?,
-            decode_shape_vert_align(&dt.sub_list.vert_align),
-        ),
+        Some(dt) => {
+            ctx.enter(super::PathSeg::TextBox);
+            let result = decode_sublist_paragraphs(&dt.sub_list, depth, ctx);
+            ctx.leave();
+            (result?, decode_shape_vert_align(&dt.sub_list.vert_align))
+        }
         None => (Vec::new(), VerticalAlign::Top),
     };
 
-    let caption = polygon.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
+    let caption =
+        polygon.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
     let (horz_offset, vert_offset) =
         polygon.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
@@ -411,6 +424,7 @@ pub(crate) fn decode_arc(
     ellipse: &HxEllipse,
     char_shape_id: CharShapeIndex,
     _depth: usize,
+    ctx: &mut DecodeCtx,
 ) -> HwpxResult<Run> {
     use hwpforge_core::control::ShapePoint;
 
@@ -444,7 +458,8 @@ pub(crate) fn decode_arc(
 
     let (horz_offset, vert_offset) =
         ellipse.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
-    let caption = ellipse.caption.as_ref().map(|c| convert_hx_caption(c, _depth)).transpose()?;
+    let caption =
+        ellipse.caption.as_ref().map(|c| convert_hx_caption(c, _depth, ctx)).transpose()?;
 
     Ok(Run {
         content: RunContent::Control(Box::new(Control::Arc {
@@ -478,6 +493,7 @@ pub(crate) fn decode_curve(
     curve: &HxCurve,
     char_shape_id: CharShapeIndex,
     depth: usize,
+    ctx: &mut DecodeCtx,
 ) -> HwpxResult<Run> {
     use hwpforge_core::control::ShapePoint;
 
@@ -515,7 +531,7 @@ pub(crate) fn decode_curve(
 
     let (horz_offset, vert_offset) =
         curve.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
-    let caption = curve.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
+    let caption = curve.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
     Ok(Run {
         content: RunContent::Control(Box::new(Control::Curve {
@@ -590,6 +606,7 @@ pub(crate) fn decode_connect_line(
     cl: &HxConnectLine,
     char_shape_id: CharShapeIndex,
     depth: usize,
+    ctx: &mut DecodeCtx,
 ) -> HwpxResult<Run> {
     use hwpforge_core::control::ShapePoint;
 
@@ -625,7 +642,7 @@ pub(crate) fn decode_connect_line(
 
     let (horz_offset, vert_offset) =
         cl.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
-    let caption = cl.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
+    let caption = cl.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
     Ok(Run {
         content: RunContent::Control(Box::new(Control::ConnectLine {
@@ -661,6 +678,7 @@ pub(crate) fn decode_container(
     container: &crate::schema::section::HxContainer,
     char_shape_id: CharShapeIndex,
     depth: usize,
+    ctx: &mut DecodeCtx,
 ) -> HwpxResult<Option<Run>> {
     // Bound nested-container recursion (group-in-group) against pathological
     // depth — same cap and pattern as table nesting (`convert_table`).
@@ -669,42 +687,64 @@ pub(crate) fn decode_container(
     }
 
     let mut children: Vec<Control> = Vec::new();
+    let mut child_idx: usize = 0;
 
-    let push_run = |run: Run, out: &mut Vec<Control>| {
+    let push_run = |run: Run, out: &mut Vec<Control>, child_idx: &mut usize| {
         if let RunContent::Control(boxed) = run.content {
             out.push(*boxed);
+            *child_idx += 1;
         }
     };
 
     for rect in &container.rects {
-        if let Some(run) = decode_textbox(rect, char_shape_id, depth)? {
-            push_run(run, &mut children);
+        ctx.enter(super::PathSeg::GroupChild(child_idx));
+        let result = decode_textbox(rect, char_shape_id, depth, ctx);
+        ctx.leave();
+        if let Some(run) = result? {
+            push_run(run, &mut children, &mut child_idx);
         }
     }
     for line in &container.lines {
-        push_run(decode_line(line, char_shape_id, depth)?, &mut children);
+        ctx.enter(super::PathSeg::GroupChild(child_idx));
+        let result = decode_line(line, char_shape_id, depth, ctx);
+        ctx.leave();
+        push_run(result?, &mut children, &mut child_idx);
     }
     for ellipse in &container.ellipses {
-        let run = if ellipse.has_arc_pr == 1 {
-            decode_arc(ellipse, char_shape_id, depth)?
+        ctx.enter(super::PathSeg::GroupChild(child_idx));
+        let result = if ellipse.has_arc_pr == 1 {
+            decode_arc(ellipse, char_shape_id, depth, ctx)
         } else {
-            decode_ellipse(ellipse, char_shape_id, depth)?
+            decode_ellipse(ellipse, char_shape_id, depth, ctx)
         };
-        push_run(run, &mut children);
+        ctx.leave();
+        push_run(result?, &mut children, &mut child_idx);
     }
     for polygon in &container.polygons {
-        push_run(decode_polygon(polygon, char_shape_id, depth)?, &mut children);
+        ctx.enter(super::PathSeg::GroupChild(child_idx));
+        let result = decode_polygon(polygon, char_shape_id, depth, ctx);
+        ctx.leave();
+        push_run(result?, &mut children, &mut child_idx);
     }
     for curve in &container.curves {
-        push_run(decode_curve(curve, char_shape_id, depth)?, &mut children);
+        ctx.enter(super::PathSeg::GroupChild(child_idx));
+        let result = decode_curve(curve, char_shape_id, depth, ctx);
+        ctx.leave();
+        push_run(result?, &mut children, &mut child_idx);
     }
     for connect_line in &container.connect_lines {
-        push_run(decode_connect_line(connect_line, char_shape_id, depth)?, &mut children);
+        ctx.enter(super::PathSeg::GroupChild(child_idx));
+        let result = decode_connect_line(connect_line, char_shape_id, depth, ctx);
+        ctx.leave();
+        push_run(result?, &mut children, &mut child_idx);
     }
     // Nested `<hp:container>` children recurse (Wave B); depth+1 bounds it.
     for nested in &container.containers {
-        if let Some(run) = decode_container(nested, char_shape_id, depth + 1)? {
-            push_run(run, &mut children);
+        ctx.enter(super::PathSeg::GroupChild(child_idx));
+        let result = decode_container(nested, char_shape_id, depth + 1, ctx);
+        ctx.leave();
+        if let Some(run) = result? {
+            push_run(run, &mut children, &mut child_idx);
         }
     }
 
@@ -1274,7 +1314,7 @@ mod tests {
     fn decode_arc_default_fields_normal_type() {
         let ellipse = default_ellipse();
         let cs = CharShapeIndex::new(0);
-        let run = decode_arc(&ellipse, cs, 0).unwrap();
+        let run = decode_arc(&ellipse, cs, 0, &mut DecodeCtx::new(0)).unwrap();
         if let Control::Arc { arc_type, center, axis1, axis2, width, height, .. } =
             run.content.as_control().unwrap().clone()
         {
@@ -1294,7 +1334,7 @@ mod tests {
         let mut ellipse = default_ellipse();
         ellipse.arc_type = "PIE".to_string();
         let cs = CharShapeIndex::new(0);
-        let run = decode_arc(&ellipse, cs, 0).unwrap();
+        let run = decode_arc(&ellipse, cs, 0, &mut DecodeCtx::new(0)).unwrap();
         if let Control::Arc { arc_type, .. } = run.content.as_control().unwrap().clone() {
             assert_eq!(arc_type, ArcType::Pie);
         } else {
@@ -1307,7 +1347,7 @@ mod tests {
         let mut ellipse = default_ellipse();
         ellipse.arc_type = "CHORD".to_string();
         let cs = CharShapeIndex::new(0);
-        let run = decode_arc(&ellipse, cs, 0).unwrap();
+        let run = decode_arc(&ellipse, cs, 0, &mut DecodeCtx::new(0)).unwrap();
         if let Control::Arc { arc_type, .. } = run.content.as_control().unwrap().clone() {
             assert_eq!(arc_type, ArcType::Chord);
         } else {
@@ -1324,7 +1364,7 @@ mod tests {
         ellipse.start1 = Some(HxPoint { x: 50, y: 100 });
         ellipse.end1 = Some(HxPoint { x: 150, y: 100 });
         let cs = CharShapeIndex::new(2);
-        let run = decode_arc(&ellipse, cs, 0).unwrap();
+        let run = decode_arc(&ellipse, cs, 0, &mut DecodeCtx::new(0)).unwrap();
         assert_eq!(run.char_shape_id, cs);
         if let Control::Arc { center, axis1, axis2, start1, end1, .. } =
             run.content.as_control().unwrap().clone()
@@ -1345,7 +1385,7 @@ mod tests {
         ellipse.sz = Some(make_sz(5000, 3000));
         ellipse.pos = Some(make_pos(100, 200));
         let cs = CharShapeIndex::new(0);
-        let run = decode_arc(&ellipse, cs, 0).unwrap();
+        let run = decode_arc(&ellipse, cs, 0, &mut DecodeCtx::new(0)).unwrap();
         if let Control::Arc { width, height, horz_offset, vert_offset, .. } =
             run.content.as_control().unwrap().clone()
         {
@@ -1364,7 +1404,7 @@ mod tests {
         ellipse.rotation_info =
             Some(HxRotationInfo { angle: 45, center_x: 50, center_y: 50, rotate_image: 1 });
         let cs = CharShapeIndex::new(0);
-        let run = decode_arc(&ellipse, cs, 0).unwrap();
+        let run = decode_arc(&ellipse, cs, 0, &mut DecodeCtx::new(0)).unwrap();
         if let Control::Arc { style, .. } = run.content.as_control().unwrap().clone() {
             let s = style.unwrap();
             let rot = s.rotation.unwrap();
@@ -1379,7 +1419,7 @@ mod tests {
         let mut ellipse = default_ellipse();
         ellipse.arc_type = "BOGUS".to_string();
         let cs = CharShapeIndex::new(0);
-        let run = decode_arc(&ellipse, cs, 0).unwrap();
+        let run = decode_arc(&ellipse, cs, 0, &mut DecodeCtx::new(0)).unwrap();
         if let Control::Arc { arc_type, .. } = run.content.as_control().unwrap().clone() {
             assert_eq!(arc_type, ArcType::Normal);
         } else {
@@ -1393,7 +1433,7 @@ mod tests {
     fn decode_curve_empty_returns_no_points() {
         let curve = default_curve();
         let cs = CharShapeIndex::new(0);
-        let run = decode_curve(&curve, cs, 0).unwrap();
+        let run = decode_curve(&curve, cs, 0, &mut DecodeCtx::new(0)).unwrap();
         if let Control::Curve { points, segment_types, .. } =
             run.content.as_control().unwrap().clone()
         {
@@ -1412,7 +1452,7 @@ mod tests {
             HxCurveSegment { seg_type: "LINE".to_string(), x1: 100, y1: 50, x2: 200, y2: 100 },
         ];
         let cs = CharShapeIndex::new(0);
-        let run = decode_curve(&curve, cs, 0).unwrap();
+        let run = decode_curve(&curve, cs, 0, &mut DecodeCtx::new(0)).unwrap();
         if let Control::Curve { points, segment_types, .. } =
             run.content.as_control().unwrap().clone()
         {
@@ -1436,7 +1476,7 @@ mod tests {
         curve.segments =
             vec![HxCurveSegment { seg_type: "LINE".to_string(), x1: 0, y1: 0, x2: 999, y2: 999 }];
         let cs = CharShapeIndex::new(0);
-        let run = decode_curve(&curve, cs, 0).unwrap();
+        let run = decode_curve(&curve, cs, 0, &mut DecodeCtx::new(0)).unwrap();
         if let Control::Curve { points, .. } = run.content.as_control().unwrap().clone() {
             assert_eq!(points.len(), 2);
             assert_eq!(points[0], ShapePoint::new(10, 20));
@@ -1452,7 +1492,7 @@ mod tests {
         curve.segments =
             vec![HxCurveSegment { seg_type: "BOGUS".to_string(), x1: 0, y1: 0, x2: 100, y2: 100 }];
         let cs = CharShapeIndex::new(0);
-        let run = decode_curve(&curve, cs, 0).unwrap();
+        let run = decode_curve(&curve, cs, 0, &mut DecodeCtx::new(0)).unwrap();
         if let Control::Curve { segment_types, .. } = run.content.as_control().unwrap().clone() {
             assert_eq!(segment_types[0], CurveSegmentType::Curve);
         } else {
@@ -1466,7 +1506,7 @@ mod tests {
         curve.sz = Some(make_sz(8000, 4000));
         curve.pos = Some(make_pos(50, 75));
         let cs = CharShapeIndex::new(1);
-        let run = decode_curve(&curve, cs, 0).unwrap();
+        let run = decode_curve(&curve, cs, 0, &mut DecodeCtx::new(0)).unwrap();
         assert_eq!(run.char_shape_id, cs);
         if let Control::Curve { width, height, horz_offset, vert_offset, .. } =
             run.content.as_control().unwrap().clone()
@@ -1486,7 +1526,7 @@ mod tests {
     fn decode_connect_line_defaults() {
         let cl = default_connect_line();
         let cs = CharShapeIndex::new(0);
-        let run = decode_connect_line(&cl, cs, 0).unwrap();
+        let run = decode_connect_line(&cl, cs, 0, &mut DecodeCtx::new(0)).unwrap();
         if let Control::ConnectLine { start, end, control_points, connect_type, .. } =
             run.content.as_control().unwrap().clone()
         {
@@ -1515,7 +1555,7 @@ mod tests {
             subject_idx: "0".to_string(),
         });
         let cs = CharShapeIndex::new(0);
-        let run = decode_connect_line(&cl, cs, 0).unwrap();
+        let run = decode_connect_line(&cl, cs, 0, &mut DecodeCtx::new(0)).unwrap();
         if let Control::ConnectLine { start, end, .. } = run.content.as_control().unwrap().clone() {
             assert_eq!(start, ShapePoint::new(100, 200));
             assert_eq!(end, ShapePoint::new(500, 600));
@@ -1536,7 +1576,7 @@ mod tests {
             ],
         });
         let cs = CharShapeIndex::new(0);
-        let run = decode_connect_line(&cl, cs, 0).unwrap();
+        let run = decode_connect_line(&cl, cs, 0, &mut DecodeCtx::new(0)).unwrap();
         if let Control::ConnectLine { control_points, .. } =
             run.content.as_control().unwrap().clone()
         {
@@ -1558,7 +1598,7 @@ mod tests {
             ],
         });
         let cs = CharShapeIndex::new(0);
-        let run = decode_connect_line(&cl, cs, 0).unwrap();
+        let run = decode_connect_line(&cl, cs, 0, &mut DecodeCtx::new(0)).unwrap();
         if let Control::ConnectLine { control_points, .. } =
             run.content.as_control().unwrap().clone()
         {
@@ -1573,7 +1613,7 @@ mod tests {
         let mut cl = default_connect_line();
         cl.connect_type = "BENT".to_string();
         let cs = CharShapeIndex::new(0);
-        let run = decode_connect_line(&cl, cs, 0).unwrap();
+        let run = decode_connect_line(&cl, cs, 0, &mut DecodeCtx::new(0)).unwrap();
         if let Control::ConnectLine { connect_type, .. } = run.content.as_control().unwrap().clone()
         {
             assert_eq!(connect_type, "BENT");
@@ -1588,7 +1628,7 @@ mod tests {
         cl.sz = Some(make_sz(10000, 5000));
         cl.pos = Some(make_pos(150, 250));
         let cs = CharShapeIndex::new(3);
-        let run = decode_connect_line(&cl, cs, 0).unwrap();
+        let run = decode_connect_line(&cl, cs, 0, &mut DecodeCtx::new(0)).unwrap();
         assert_eq!(run.char_shape_id, cs);
         if let Control::ConnectLine { width, height, horz_offset, vert_offset, .. } =
             run.content.as_control().unwrap().clone()
@@ -1636,7 +1676,7 @@ mod tests {
             end_pt: None,
         };
         let cs = CharShapeIndex::new(0);
-        let run = decode_line(&line, cs, 0).unwrap();
+        let run = decode_line(&line, cs, 0, &mut DecodeCtx::new(0)).unwrap();
         if let Control::Line { start, end, width, height, .. } =
             run.content.as_control().unwrap().clone()
         {
@@ -1694,7 +1734,9 @@ mod tests {
     fn decode_rect_without_draw_text_produces_control_rect() {
         let rect = default_rect(8000, 4000);
         let cs = CharShapeIndex::new(0);
-        let run = decode_textbox(&rect, cs, 0).unwrap().expect("pure rect must decode to a Run");
+        let run = decode_textbox(&rect, cs, 0, &mut DecodeCtx::new(0))
+            .unwrap()
+            .expect("pure rect must decode to a Run");
         match run.content.as_control().unwrap().clone() {
             Control::Rect { width, height, horz_offset, vert_offset, .. } => {
                 assert_eq!(width, hwpforge_foundation::HwpUnit::new(8000).unwrap());
@@ -1710,7 +1752,7 @@ mod tests {
     fn decode_ellipse_defaults_all_zero() {
         let ellipse = default_ellipse();
         let cs = CharShapeIndex::new(0);
-        let run = decode_ellipse(&ellipse, cs, 0).unwrap();
+        let run = decode_ellipse(&ellipse, cs, 0, &mut DecodeCtx::new(0)).unwrap();
         if let Control::Ellipse { center, axis1, axis2, width, height, paragraphs, .. } =
             run.content.as_control().unwrap().clone()
         {
@@ -1746,7 +1788,8 @@ mod tests {
     #[test]
     fn decode_ellipse_reads_center_vert_align_from_sublist() {
         let ellipse = ellipse_with_draw_text_align("CENTER");
-        let run = decode_ellipse(&ellipse, CharShapeIndex::new(0), 0).unwrap();
+        let run =
+            decode_ellipse(&ellipse, CharShapeIndex::new(0), 0, &mut DecodeCtx::new(0)).unwrap();
         match run.content.as_control().unwrap().clone() {
             Control::Ellipse { text_vertical_align, .. } => {
                 assert_eq!(text_vertical_align, hwpforge_foundation::VerticalAlign::Center);
@@ -1760,7 +1803,8 @@ mod tests {
         // 한컴 omits vertAlign for the default; empty must decode as Top so
         // default shapes round-trip unchanged.
         let ellipse = ellipse_with_draw_text_align("");
-        let run = decode_ellipse(&ellipse, CharShapeIndex::new(0), 0).unwrap();
+        let run =
+            decode_ellipse(&ellipse, CharShapeIndex::new(0), 0, &mut DecodeCtx::new(0)).unwrap();
         match run.content.as_control().unwrap().clone() {
             Control::Ellipse { text_vertical_align, .. } => {
                 assert_eq!(text_vertical_align, hwpforge_foundation::VerticalAlign::Top);
@@ -1795,6 +1839,7 @@ mod tests {
             0,
             &mut hl,
             crate::encoder::EncodeOptions::default(),
+            &mut crate::encoder::section::EncodeSink::new(0),
         )
         .unwrap();
         assert_eq!(
@@ -1802,7 +1847,7 @@ mod tests {
             "CENTER",
             "encoder must emit CENTER"
         );
-        let run = decode_ellipse(&hx, CharShapeIndex::new(0), 0).unwrap();
+        let run = decode_ellipse(&hx, CharShapeIndex::new(0), 0, &mut DecodeCtx::new(0)).unwrap();
         match run.content.as_control().unwrap().clone() {
             Control::Ellipse { text_vertical_align, .. } => {
                 assert_eq!(

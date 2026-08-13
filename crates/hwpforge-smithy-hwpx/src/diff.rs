@@ -700,11 +700,14 @@ mod tests {
         assert_eq!(change.name, "user_email");
         assert_eq!(change.kind, FieldChangeKind::ValueChanged);
         assert_eq!(change.after.as_deref(), Some("diff@gate.io"));
-        // The field axis owns the change: nothing may leak elsewhere.
+        // The field axis owns the value change; W1b 이후 fill 은 해당
+        // 문단의 stale linesegarray 도 제거하므로 raw 축에 `$.layout_cache`
+        // 변경 하나가 **정직하게** 함께 보고된다 (§1g v5 변경 5).
         assert!(diff.semantic.cells.is_empty(), "cells: {:?}", diff.semantic.cells);
         assert!(diff.semantic.paragraphs.is_empty(), "paras: {:?}", diff.semantic.paragraphs);
         assert!(diff.semantic.structure.is_empty());
-        assert!(diff.semantic.raw.is_empty(), "raw: {:?}", diff.semantic.raw);
+        assert_eq!(diff.semantic.raw.len(), 1, "raw: {:?}", diff.semantic.raw);
+        assert_eq!(diff.semantic.raw[0].detail, "$.layout_cache");
         assert!(diff.package.changed.iter().any(|p| p.contains("section")));
     }
 
