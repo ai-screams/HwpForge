@@ -666,6 +666,20 @@ fn replay_section(
                     location,
                 });
             }
+            // 이미지 에픽 게이트 2 Critical#5 선행 수리: `[Image, Table]` 등
+            // 비텍스트 혼합 host 는 지금까지 표만 재생하고 나머지 객체를
+            // **무진단 폐기**했다 — 미지원 종류는 fail-closed 로 거부한다.
+            // (재시작/감춤 marker 는 host 쪽 이벤트로 소비되므로 예외.)
+            if para.runs.iter().any(|r| {
+                !matches!(r.content, RunContent::Table(_))
+                    && r.content.plain_text().is_none()
+                    && !is_replay_consumed_marker(&r.content)
+            }) {
+                return Err(PdfError::UnsupportedContent {
+                    kind: "non-text content in table-host paragraph",
+                    location,
+                });
+            }
             let Some(cache) = para.layout_cache.as_ref().filter(|c| !c.is_empty()) else {
                 return Err(PdfError::MissingLayoutCache { count: 1, first: location });
             };
@@ -1635,6 +1649,43 @@ mod tests {
         );
         // 이벤트는 적용되지 않는다 (앵커 불가 — 기존 번호 유지).
         assert_eq!(layout.pages[0].page_number.as_ref().unwrap().text, "1");
+    }
+
+    #[test]
+    fn table_host_with_image_fails_closed_instead_of_silent_discard() {
+        // 이미지 에픽 게이트 2 Critical#5: [Image, Table] host 는 이전엔 표만
+        // 그리고 이미지를 경고 없이 버렸다 — fail-closed 로 잠근다.
+        use hwpforge_core::image::{Image, ImageFormat};
+        use hwpforge_core::table::Table;
+        let img = Image::new(
+            "BinData/x.png".to_string(),
+            HwpUnit::from_pt(10.0).expect("unit"),
+            HwpUnit::from_pt(10.0).expect("unit"),
+            ImageFormat::Png,
+        );
+        let mut p = Paragraph::with_runs(
+            vec![
+                Run::image(img, CharShapeIndex::new(0)),
+                Run::table(
+                    Table::new(vec![TableRow::new(vec![cell_with_cache("셀")])]),
+                    CharShapeIndex::new(0),
+                ),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        p.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+        let doc = doc_of(vec![para_with_cache("본문", vec![seg(0, 0)]), p]);
+        let err = replay(&doc, &PdfOptions::default()).expect_err("must fail closed");
+        assert!(
+            matches!(
+                err,
+                PdfError::UnsupportedContent {
+                    kind: "non-text content in table-host paragraph",
+                    ..
+                }
+            ),
+            "{err:?}"
+        );
     }
 
     #[test]
