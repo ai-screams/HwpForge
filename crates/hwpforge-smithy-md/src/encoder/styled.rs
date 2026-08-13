@@ -459,6 +459,11 @@ fn encode_control_styled(
             // Index marks are invisible — emit nothing.
             String::new()
         }
+        Control::NewNumber { .. } | Control::PageHiding { .. } => {
+            // 새 번호 지정·감추기는 렌더 지시라 Markdown 본문 표현이
+            // 없다 — 명시적 no-op (W2·W3, IndexMark 와 동일 정책).
+            String::new()
+        }
         Control::Arc { .. } | Control::Curve { .. } | Control::ConnectLine { .. } => {
             // These shapes rarely contain text; render nothing.
             String::new()

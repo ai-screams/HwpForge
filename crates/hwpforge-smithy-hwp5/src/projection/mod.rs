@@ -304,6 +304,41 @@ fn project_to_core_internal(
         // `.docs/debug/2026-05-27_hwp5_page_features_lost.md` (gap B).
         if let Some(properties) = section_result.section_def_properties {
             section.visibility = Some(hwp5_section_properties_to_visibility(properties));
+            // W1 fail-safe (계획 §1.2·§1.4): secd 속성 bits 20-21 의 의미는
+            // 레퍼런스 3사가 서로 다르게 주장해 미확정 (corpus 0.12% 꼬리).
+            // F1 실측 — bits==0 + 시작번호 필드 1 을 한컴 자신이
+            // `<hp:startNum page="0">`(이어서) 로 변환하므로 begin_num 은
+            // 만들지 않는다. bits≠0 은 재시작으로 날조하는 대신 raw 값과
+            // 함께 경고로 표면화하고 이어서 처리한다.
+            // 독립 리뷰 Low #9: `[20..28]` 절단은 bits 값과 무관하게 계획의
+            // all-or-none 규약 위반 신호 — 표면화한다 (corpus 전수에서 관측
+            // 0건이라 flood 위험 없음).
+            if section_result.section_def_start_numbers.is_none() {
+                all_warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "section.begin_num",
+                    reason: "secd start-number payload [20..28] truncated; start numbers \
+                             not captured"
+                        .to_string(),
+                });
+            }
+            let restart_bits = (properties >> 20) & 0x3;
+            if restart_bits != 0 {
+                let detail = match section_result.section_def_start_numbers {
+                    Some(n) => format!(
+                        "raw starts page={} pic={} tbl={} equation={}",
+                        n.page, n.pic, n.tbl, n.equation
+                    ),
+                    None => "start-number payload truncated".to_string(),
+                };
+                all_warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "section.begin_num",
+                    reason: format!(
+                        "secd property bits 20-21 = {restart_bits} are unverified \
+                         (reference implementations disagree); continuing page \
+                         numbering instead of restarting ({detail})"
+                    ),
+                });
+            }
         }
         // Wave 7: carry the section's page border/fill references
         // (HWPTAG_PAGE_BORDER_FILL, 0x4B). The borderFill *definitions*
@@ -419,8 +454,43 @@ fn project_to_core_internal(
         doc.add_section(section);
     }
 
+    // W4 무음 드롭 종결: 미지원 ctrl 드롭을 문서별 (ctrl_id → count) 집계
+    // 경고로 방출. per-occurrence 폭탄 방지 — distinct id 상한 + "N more".
+    const MAX_DISTINCT_DROP_WARNINGS: usize = 16;
+    let dropped = std::mem::take(&mut projection_images.dropped_unknown);
+    let distinct = dropped.len();
+    for (ctrl_id, count) in dropped.into_iter().take(MAX_DISTINCT_DROP_WARNINGS) {
+        projection_images.warnings.push(Hwp5Warning::DroppedControl {
+            control: "unknown_control",
+            reason: format!(
+                "unsupported ctrl '{}' dropped {count} time(s) during projection",
+                ctrl_id_ascii(ctrl_id)
+            ),
+        });
+    }
+    if distinct > MAX_DISTINCT_DROP_WARNINGS {
+        projection_images.warnings.push(Hwp5Warning::DroppedControl {
+            control: "unknown_control",
+            reason: format!(
+                "{} more distinct unsupported ctrl ids were dropped",
+                distinct - MAX_DISTINCT_DROP_WARNINGS
+            ),
+        });
+    }
+
     all_warnings.extend(projection_images.warnings);
     Ok((doc, projection_images.image_store, all_warnings))
+}
+
+/// ctrl_id(big-endian ASCII u32)를 사람이 읽을 표기로 — 비인쇄 바이트가
+/// 섞이면 hex 로 폴백한다 (경고 메시지 전용).
+fn ctrl_id_ascii(ctrl_id: u32) -> String {
+    let bytes = ctrl_id.to_be_bytes();
+    if bytes.iter().all(|b| b.is_ascii_graphic() || *b == b' ') {
+        bytes.iter().map(|&b| char::from(b)).collect()
+    } else {
+        format!("{ctrl_id:#010x}")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -432,6 +502,11 @@ struct ProjectionImageState<'a> {
     ole_assets: Option<&'a Hwp5OleAssetPlan>,
     image_store: ImageStore,
     warnings: Vec<Hwp5Warning>,
+    /// W4 무음 드롭 종결: `project_control_run` 의 Unknown arm 에서 죽는
+    /// ctrl_id 별 카운트. 문서 끝에서 **집계 경고**로 방출된다 (per-occurrence
+    /// 폭탄도 무경고도 금지 — corpus 실측: `%fmu` 531회·`pghd` 1,013회가
+    /// 이 지점에서 소리 없이 사라졌었다).
+    dropped_unknown: std::collections::BTreeMap<u32, usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -445,7 +520,13 @@ impl<'a> ProjectionImageState<'a> {
         image_assets: Option<&'a Hwp5JoinedImageAssetPlan>,
         ole_assets: Option<&'a Hwp5OleAssetPlan>,
     ) -> Self {
-        Self { image_assets, ole_assets, image_store: ImageStore::new(), warnings: Vec::new() }
+        Self {
+            image_assets,
+            ole_assets,
+            image_store: ImageStore::new(),
+            warnings: Vec::new(),
+            dropped_unknown: std::collections::BTreeMap::new(),
+        }
     }
 
     /// Look up raw `/BinData/BIN*.OLE` bytes by `binary_data_id`, if a plan
@@ -788,6 +869,10 @@ fn project_paragraph_with_images_flat(
         paragraph = paragraph.with_style(StyleIndex::new(hwp_para.style_id as usize));
     }
     paragraph.layout_cache = promote_line_segments(&hwp_para.line_segments);
+    // W3: ParaHeader divide_sort 쪽/단 나누기 carry (F2 실측 — 한컴은 쪽나눔
+    // 문단의 lineseg v 를 리셋하지 않아 이 플래그가 유일한 쪽분할 신호).
+    paragraph.page_break = hwp_para.page_break;
+    paragraph.column_break = hwp_para.column_break;
     paragraph
 }
 
@@ -956,6 +1041,10 @@ fn project_paragraph_with_images_structural(
         paragraph = paragraph.with_style(StyleIndex::new(hwp_para.style_id as usize));
     }
     paragraph.layout_cache = promote_line_segments(&hwp_para.line_segments);
+    // W3: ParaHeader divide_sort 쪽/단 나누기 carry (F2 실측 — 한컴은 쪽나눔
+    // 문단의 lineseg v 를 리셋하지 않아 이 플래그가 유일한 쪽분할 신호).
+    paragraph.page_break = hwp_para.page_break;
+    paragraph.column_break = hwp_para.column_break;
 
     ProjectedParagraph { paragraph }
 }
@@ -1123,6 +1212,13 @@ fn drain_unconsumed_paragraph_queues(
         ) {
             runs.push(run);
         }
+    }
+
+    // 독립 리뷰 Medium #5: 소비되지 않고 남은 marker_headers(secd/cold/
+    // bookmark/hyperlink CtrlHeader 가 inline marker 없이 남은 wire 이상
+    // 케이스)도 무음 소멸 대신 드롭 집계에 합산한다.
+    for leftover in queues.marker_headers {
+        *projection_images.dropped_unknown.entry(leftover.ctrl_id).or_insert(0) += 1;
     }
 
     for memo in queues.memo_controls {
@@ -2052,11 +2148,9 @@ fn page_number_from_pgnp_header(header_data: &[u8], warnings: &mut Vec<Hwp5Warni
             subject: "field.page_number",
             reason: "falling back to BOTTOM_CENTER digit page number".to_string(),
         });
-        PageNumber::with_decoration(
-            PageNumberPosition::BottomCenter,
-            NumberFormatType::Digit,
-            "-".to_string(),
-        )
+        // 장식 없는 맨 숫자 폴백 — F1 실측 (한컴 기본 재저장 = sideChar="")
+        // 과 정합. 장식을 날조하지 않는다.
+        PageNumber::new(PageNumberPosition::BottomCenter, NumberFormatType::Digit)
     })
 }
 
@@ -2123,6 +2217,10 @@ fn parse_page_number_control(header_data: &[u8]) -> Option<PageNumber> {
     // `is_ascii_graphic` (not `is_ascii`): the property word's number-shape byte
     // [4] and position byte [5] are small non-graphic values (e.g. 9 = InsideTop)
     // that would otherwise be mis-read as a decoration glyph like `\t`.
+    // 장식 바이트가 전부 0 = **장식 없음** — F1 native fixture 실측
+    // (2026-08-12): wire 전부 0 인 pgnp 를 한컴 자신이 `sideChar=""` 로
+    // 재저장하고 PDF 에도 맨 숫자로 찍는다. 과거의 `"-"` 기본값은 근거 없는
+    // 날조였다 (W2 에서 실측으로 교정).
     let decoration = header_data
         .iter()
         .rev()
@@ -2130,7 +2228,7 @@ fn parse_page_number_control(header_data: &[u8]) -> Option<PageNumber> {
         .copied()
         .filter(|byte| byte.is_ascii_graphic())
         .map(|byte| char::from(byte).to_string())
-        .unwrap_or_else(|| "-".to_string());
+        .unwrap_or_default();
     Some(PageNumber::with_decoration(position, number_format, decoration))
 }
 
@@ -2178,10 +2276,14 @@ fn project_control_run(
         // `project_paragraph_with_images_structural`, not through this dispatch.
         // If a Memo control ever reaches here (no matching FieldBegin in text
         // segments), prefer dropping over silently double-emitting.
-        Hwp5Control::Memo(_)
-        | Hwp5Control::Header(_)
-        | Hwp5Control::Footer(_)
-        | Hwp5Control::Unknown { .. } => None,
+        Hwp5Control::Memo(_) | Hwp5Control::Header(_) | Hwp5Control::Footer(_) => None,
+        // W4 무음 드롭 종결: 미지원 ctrl 은 여전히 드롭되지만 **집계 카운트**
+        // 를 남겨 문서 끝에서 경고로 방출된다 (nwno/pghd 가 여기서 소리 없이
+        // 죽던 것이 corpus 18% 문서의 fake output 원인이었다 — 계획 §0).
+        Hwp5Control::Unknown { ctrl_id, .. } => {
+            *projection_images.dropped_unknown.entry(*ctrl_id).or_insert(0) += 1;
+            None
+        }
         Hwp5Control::Dutmal(dutmal) => Some(project_dutmal_run(dutmal, projection_images)),
         Hwp5Control::Compose(compose) => Some(project_compose_run(compose)),
         Hwp5Control::IndexMark(indexmark) => Some(project_indexmark_run(indexmark)),
@@ -2213,6 +2315,58 @@ fn project_control_run(
                 _ => InlinePageKind::Unknown,
             };
             Some(Run::control(Control::InlinePageNumber { kind }, CharShapeIndex::new(0)))
+        }
+        Hwp5Control::NewNumber(nwno) => {
+            use hwpforge_core::control::NewNumberKind;
+            // 속성 bits 0-3 → kind (F1 실측: 0 = 쪽). 미지 raw(6-15)는
+            // Unknown 으로 carry + 경고 — 타입을 지어내지 않는다.
+            let kind = match nwno.kind_raw {
+                0 => NewNumberKind::Page,
+                1 => NewNumberKind::Footnote,
+                2 => NewNumberKind::Endnote,
+                3 => NewNumberKind::Picture,
+                4 => NewNumberKind::Table,
+                5 => NewNumberKind::Equation,
+                raw => {
+                    projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                        subject: "control.new_number",
+                        reason: format!(
+                            "nwno kind raw value {raw} is unmapped; carrying as Unknown"
+                        ),
+                    });
+                    NewNumberKind::Unknown
+                }
+            };
+            Some(Run::control(
+                Control::NewNumber { kind, number: u32::from(nwno.number) },
+                CharShapeIndex::new(0),
+            ))
+        }
+        Hwp5Control::PageHiding(pghd) => {
+            // 속성 bits 0-5 → 6 bool (F2 실측: 0x20 쪽번호 / 0x10 배경 /
+            // 0x3F 전부 — secd word 동일 배열). bits 6+ 잔여는 실측 밖 —
+            // 무음 무시 대신 경고로 표면화하고 정의된 6비트만 carry.
+            if pghd.mask & !0x3F != 0 {
+                projection_images.warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "control.page_hiding",
+                    reason: format!(
+                        "pghd mask {:#010x} has bits outside verified 0-5; carrying low bits only",
+                        pghd.mask
+                    ),
+                });
+            }
+            let bit = |n: u32| pghd.mask & (1 << n) != 0;
+            Some(Run::control(
+                Control::PageHiding {
+                    hide_header: bit(0),
+                    hide_footer: bit(1),
+                    hide_master_page: bit(2),
+                    hide_border: bit(3),
+                    hide_fill: bit(4),
+                    hide_page_num: bit(5),
+                },
+                CharShapeIndex::new(0),
+            ))
         }
         Hwp5Control::OleObject(ole) => project_ole_object_run(ole, projection_images),
         // %xrf cross-reference fields (Wave 12m) flow through the
@@ -3164,13 +3318,14 @@ mod tests {
         let pn = parse_page_number_control(&header).expect("pgnp should parse");
         assert_eq!(pn.number_format, NumberFormatType::Digit);
 
-        // Q1 regression: a pgnp with position byte 9 (InsideTop) and NO trailing
-        // graphic decoration must default to "-", not mis-read the non-graphic
-        // property byte (9 = '\t') as the decoration char.
+        // Q1 regression + W2 실측 교정: 장식 바이트 없는 pgnp 는 비그래픽
+        // 속성 바이트(9 = '\t')를 장식으로 오독하지 않아야 하고, 장식은
+        // **빈 문자열**이어야 한다 — F1 fixture 실측: 전부 0 인 wire 를
+        // 한컴이 `sideChar=""` + 맨 숫자 PDF 로 확정 (과거 "-" 기본값은 날조).
         let no_deco = vec![b'p', b'n', b'g', b'p', 0, 9, 0, 0, 0, 0];
         let pn = parse_page_number_control(&no_deco).expect("pgnp should parse");
         assert_eq!(pn.position, PageNumberPosition::InsideTop);
-        assert_eq!(pn.decoration, "-", "property byte must not be read as decoration");
+        assert_eq!(pn.decoration, "", "zero wire = no decoration (F1 byte-verified)");
     }
 
     use std::collections::BTreeMap;
@@ -3178,8 +3333,8 @@ mod tests {
     use hwpforge_core::table::TablePageBreak;
 
     use crate::decoder::section::{
-        Hwp5ImageControl, Hwp5LineControl, Hwp5PolygonControl, Hwp5TablePageBreak,
-        Hwp5TextBoxControl,
+        Hwp5ImageControl, Hwp5LineControl, Hwp5PolygonControl, Hwp5SectionStartNumbers,
+        Hwp5TablePageBreak, Hwp5TextBoxControl,
     };
     use crate::Hwp5SemanticImageFormat;
 
@@ -3187,6 +3342,8 @@ mod tests {
 
     fn make_paragraph(text: &str, para_shape_id: u16, style_id: u8) -> Hwp5Paragraph {
         Hwp5Paragraph {
+            page_break: false,
+            column_break: false,
             text: text.to_string(),
             text_segments: Vec::new(),
             para_shape_id,
@@ -3199,6 +3356,8 @@ mod tests {
 
     fn _make_paragraph_with_runs(text: &str, runs: Vec<Hwp5CharShapeRun>) -> Hwp5Paragraph {
         Hwp5Paragraph {
+            page_break: false,
+            column_break: false,
             text: text.to_string(),
             text_segments: Vec::new(),
             para_shape_id: 0,
@@ -3259,6 +3418,7 @@ mod tests {
             paragraphs,
             page_def,
             section_def_properties: None,
+            section_def_start_numbers: None,
             page_border_fills: Vec::new(),
             column_def: None,
             warnings: vec![],
@@ -3338,6 +3498,142 @@ mod tests {
         assert_eq!(p.text_content(), "Hello");
     }
 
+    // ── W1: secd 시작번호 fail-safe (계획 §1.2 F1 실측·§1.4 corpus) ────────
+
+    #[test]
+    fn secd_restart_bits_zero_is_silent_and_begin_num_stays_none() {
+        // F1 실측: bits==0 + 시작번호 필드 1 → 한컴도 `<hp:startNum page="0">`
+        // (이어서). begin_num None 이 byte-정합 — 경고도 없어야 한다.
+        let mut section = make_section(vec![], None);
+        section.section_def_properties = Some(0);
+        section.section_def_start_numbers =
+            Some(Hwp5SectionStartNumbers { page: 1, pic: 0, tbl: 0, equation: 0 });
+        let (doc, warnings) = project_to_core(vec![section]).unwrap();
+        assert!(doc.sections()[0].begin_num.is_none());
+        assert!(
+            !warnings.iter().any(|w| matches!(
+                w,
+                Hwp5Warning::ProjectionFallback { subject: "section.begin_num", .. }
+            )),
+            "bits==0 은 정상 경로 — 경고 금지: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn secd_restart_bits_nonzero_warns_with_raw_starts_and_keeps_begin_num_none() {
+        // corpus 실측 존재값 bits=2 (2건/2,468) — 의미 미확정이므로 재시작으로
+        // 날조하지 않고 raw 값과 함께 경고 후 이어서 처리한다.
+        let mut section = make_section(vec![], None);
+        section.section_def_properties = Some(2 << 20);
+        section.section_def_start_numbers =
+            Some(Hwp5SectionStartNumbers { page: 6, pic: 0, tbl: 0, equation: 0 });
+        let (doc, warnings) = project_to_core(vec![section]).unwrap();
+        assert!(doc.sections()[0].begin_num.is_none(), "미확정 비트 재시작 날조 금지");
+        let reason = warnings
+            .iter()
+            .find_map(|w| match w {
+                Hwp5Warning::ProjectionFallback { subject: "section.begin_num", reason } => {
+                    Some(reason)
+                }
+                _ => None,
+            })
+            .expect("fail-safe warning must surface");
+        assert!(reason.contains("page=6"), "raw 값 표면화: {reason}");
+    }
+
+    #[test]
+    fn secd_restart_bits_nonzero_with_truncated_payload_reports_truncation() {
+        // all-or-none: [20..28] 이 없으면 부분값 대신 truncation 을 알린다
+        // (Codex 결함 8 — 읽지 않은 값을 기본값 1 로 날조 금지).
+        let mut section = make_section(vec![], None);
+        section.section_def_properties = Some(3 << 20);
+        let (doc, warnings) = project_to_core(vec![section]).unwrap();
+        assert!(doc.sections()[0].begin_num.is_none());
+        let reason = warnings
+            .iter()
+            .find_map(|w| match w {
+                Hwp5Warning::ProjectionFallback { subject: "section.begin_num", reason } => {
+                    Some(reason)
+                }
+                _ => None,
+            })
+            .expect("fail-safe warning must surface");
+        assert!(reason.contains("truncated"), "{reason}");
+    }
+
+    #[test]
+    fn unknown_control_drop_aggregate_caps_distinct_ids_and_reports_more() {
+        // distinct id 상한(16) + "N more" — corpus noisy 문서 폭주 방지 잠금.
+        let mut controls = Vec::new();
+        let mut segments = Vec::new();
+        for i in 0..20u32 {
+            // 'a a'..'t t' 꼴의 서로 다른 인쇄가능 4바이트 id 20종.
+            let id = u32::from_be_bytes([b'a' + i as u8, b' ', b'a' + i as u8, b' ']);
+            controls.push(Hwp5Control::Unknown { ctrl_id: id, header_data: vec![] });
+            segments.push(crate::schema::section::TextSegment::ControlRef { extra: [0u8; 14] });
+        }
+        let para = Hwp5Paragraph {
+            text: String::new(),
+            text_segments: segments,
+            para_shape_id: 0,
+            style_id: 0,
+            page_break: false,
+            column_break: false,
+            char_shape_runs: vec![],
+            line_segments: vec![],
+            controls,
+        };
+        let (_, warnings) = project_to_core(vec![make_section(vec![para], None)]).unwrap();
+        let drops: Vec<&String> = warnings
+            .iter()
+            .filter_map(|w| match w {
+                Hwp5Warning::DroppedControl { control: "unknown_control", reason } => Some(reason),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(drops.len(), 17, "16 distinct + 'N more' 요약 1건: {drops:?}");
+        assert!(drops.last().unwrap().contains("4 more distinct"), "{}", drops.last().unwrap());
+    }
+
+    #[test]
+    fn ctrl_id_ascii_falls_back_to_hex_for_non_printable() {
+        assert_eq!(ctrl_id_ascii(u32::from_be_bytes(*b"form")), "form");
+        assert_eq!(ctrl_id_ascii(0x0102_0304), "0x01020304");
+    }
+
+    #[test]
+    fn unknown_control_drops_are_aggregated_into_one_warning_per_id() {
+        // W4 무음 드롭 종결: 같은 미지원 ctrl 이 몇 번 죽든 경고는 id 당
+        // 1건 + count (per-occurrence 폭탄 금지 — corpus `%fmu` 531회).
+        let form_id = u32::from_be_bytes(*b"form"); // 기지 deferred ctrl
+        let mk = || Hwp5Control::Unknown { ctrl_id: form_id, header_data: vec![] };
+        let para = Hwp5Paragraph {
+            text: String::new(),
+            text_segments: vec![
+                crate::schema::section::TextSegment::ControlRef { extra: [0u8; 14] },
+                crate::schema::section::TextSegment::ControlRef { extra: [0u8; 14] },
+            ],
+            para_shape_id: 0,
+            style_id: 0,
+            page_break: false,
+            column_break: false,
+            char_shape_runs: vec![],
+            line_segments: vec![],
+            controls: vec![mk(), mk()],
+        };
+        let section = make_section(vec![para], None);
+        let (_, warnings) = project_to_core(vec![section]).unwrap();
+        let drops: Vec<&String> = warnings
+            .iter()
+            .filter_map(|w| match w {
+                Hwp5Warning::DroppedControl { control: "unknown_control", reason } => Some(reason),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(drops.len(), 1, "id 당 집계 1건: {warnings:?}");
+        assert!(drops[0].contains("'form'") && drops[0].contains("2 time(s)"), "{}", drops[0]);
+    }
+
     #[test]
     fn style_id_zero_maps_to_none() {
         let para = make_paragraph("text", 0, 0);
@@ -3377,6 +3673,7 @@ mod tests {
             paragraphs: vec![make_paragraph("x", 0, 0)],
             page_def: None,
             section_def_properties: None,
+            section_def_start_numbers: None,
             page_border_fills: Vec::new(),
             column_def: None,
             warnings: vec![warn],
@@ -3400,6 +3697,8 @@ mod tests {
         });
         let section = make_section(
             vec![Hwp5Paragraph {
+                page_break: false,
+                column_break: false,
                 text: "앞\u{fffc}뒤".to_string(),
                 text_segments: Vec::new(),
                 para_shape_id: 3,
@@ -3456,6 +3755,8 @@ mod tests {
         });
         let section = make_section(
             vec![Hwp5Paragraph {
+                page_break: false,
+                column_break: false,
                 text: "\u{fffc}\u{fffc}".to_string(),
                 text_segments: Vec::new(),
                 para_shape_id: 0,
@@ -3468,6 +3769,8 @@ mod tests {
                         properties_raw: 0,
                         instance_id: 0,
                         paragraphs: vec![Hwp5Paragraph {
+                            page_break: false,
+                            column_break: false,
                             text: "\u{fffc}".to_string(),
                             text_segments: Vec::new(),
                             para_shape_id: 0,
@@ -3527,6 +3830,8 @@ mod tests {
             },
             list_header_properties: None,
             paragraphs: vec![Hwp5Paragraph {
+                page_break: false,
+                column_break: false,
                 text: "앞\u{fffc}뒤".to_string(),
                 text_segments: Vec::new(),
                 para_shape_id: 1,
@@ -3538,6 +3843,8 @@ mod tests {
         });
         let section = make_section(
             vec![Hwp5Paragraph {
+                page_break: false,
+                column_break: false,
                 text: "\u{fffc}".to_string(),
                 text_segments: Vec::new(),
                 para_shape_id: 0,
@@ -3601,6 +3908,8 @@ mod tests {
         });
         let section = make_section(
             vec![Hwp5Paragraph {
+                page_break: false,
+                column_break: false,
                 text: "\u{fffc}".to_string(),
                 text_segments: Vec::new(),
                 para_shape_id: 0,
@@ -3640,6 +3949,8 @@ mod tests {
         });
         let section = make_section(
             vec![Hwp5Paragraph {
+                page_break: false,
+                column_break: false,
                 text: "\u{fffc}".to_string(),
                 text_segments: Vec::new(),
                 para_shape_id: 0,
@@ -3685,6 +3996,8 @@ mod tests {
         });
         let section = make_section(
             vec![Hwp5Paragraph {
+                page_break: false,
+                column_break: false,
                 text: "\u{fffc}".to_string(),
                 text_segments: Vec::new(),
                 para_shape_id: 0,
@@ -3783,6 +4096,8 @@ mod tests {
     #[test]
     fn table_control_becomes_run_table() {
         let para = Hwp5Paragraph {
+            page_break: false,
+            column_break: false,
             text: String::new(),
             text_segments: Vec::new(),
             para_shape_id: 0,
@@ -3832,6 +4147,8 @@ mod tests {
             vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Center,
             border_fill_id: None,
             paragraphs: vec![Hwp5Paragraph {
+                page_break: false,
+                column_break: false,
                 text: "셀".to_string(),
                 text_segments: Vec::new(),
                 para_shape_id: 0,
@@ -3845,6 +4162,8 @@ mod tests {
 
     fn grid_test_table_paragraph(rows: u16, cols: u16, cells: Vec<Hwp5TableCell>) -> Hwp5Paragraph {
         Hwp5Paragraph {
+            page_break: false,
+            column_break: false,
             text: "\u{FFFC}".to_string(),
             text_segments: Vec::new(),
             para_shape_id: 0,
@@ -3919,6 +4238,8 @@ mod tests {
     #[test]
     fn table_cell_text_is_projected() {
         let para = Hwp5Paragraph {
+            page_break: false,
+            column_break: false,
             text: "\u{FFFC}".to_string(),
             text_segments: Vec::new(),
             para_shape_id: 0,
@@ -3949,6 +4270,8 @@ mod tests {
                     vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Center,
                     border_fill_id: Some(3),
                     paragraphs: vec![Hwp5Paragraph {
+                        page_break: false,
+                        column_break: false,
                         text: "셀".to_string(),
                         text_segments: Vec::new(),
                         para_shape_id: 0,
@@ -3990,6 +4313,8 @@ mod tests {
     #[test]
     fn unknown_table_cell_vertical_align_emits_projection_fallback_warning() {
         let para = Hwp5Paragraph {
+            page_break: false,
+            column_break: false,
             text: "\u{FFFC}".to_string(),
             text_segments: Vec::new(),
             para_shape_id: 0,
@@ -4020,6 +4345,8 @@ mod tests {
                     vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Unknown(3),
                     border_fill_id: Some(3),
                     paragraphs: vec![Hwp5Paragraph {
+                        page_break: false,
+                        column_break: false,
                         text: "셀".to_string(),
                         text_segments: Vec::new(),
                         para_shape_id: 0,
@@ -4060,6 +4387,8 @@ mod tests {
     #[test]
     fn mixed_table_header_cells_emit_warning_and_do_not_promote_header_row() {
         let para = Hwp5Paragraph {
+            page_break: false,
+            column_break: false,
             text: "\u{FFFC}".to_string(),
             text_segments: Vec::new(),
             para_shape_id: 0,
@@ -4091,6 +4420,8 @@ mod tests {
                         vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Center,
                         border_fill_id: Some(3),
                         paragraphs: vec![Hwp5Paragraph {
+                            page_break: false,
+                            column_break: false,
                             text: "head".to_string(),
                             text_segments: Vec::new(),
                             para_shape_id: 0,
@@ -4117,6 +4448,8 @@ mod tests {
                         vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Center,
                         border_fill_id: Some(3),
                         paragraphs: vec![Hwp5Paragraph {
+                            page_break: false,
+                            column_break: false,
                             text: "body".to_string(),
                             text_segments: Vec::new(),
                             para_shape_id: 0,
@@ -4171,6 +4504,8 @@ mod tests {
                 vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Center,
                 border_fill_id: Some(3),
                 paragraphs: vec![Hwp5Paragraph {
+                    page_break: false,
+                    column_break: false,
                     text: text.to_string(),
                     text_segments: Vec::new(),
                     para_shape_id: 0,
@@ -4183,6 +4518,8 @@ mod tests {
         }
 
         let para = Hwp5Paragraph {
+            page_break: false,
+            column_break: false,
             text: "\u{FFFC}".to_string(),
             text_segments: Vec::new(),
             para_shape_id: 0,
@@ -4251,6 +4588,8 @@ mod tests {
                 vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Center,
                 border_fill_id: None,
                 paragraphs: vec![Hwp5Paragraph {
+                    page_break: false,
+                    column_break: false,
                     text: String::new(),
                     text_segments: Vec::new(),
                     para_shape_id: 0,
@@ -4267,6 +4606,8 @@ mod tests {
         }
 
         let para = Hwp5Paragraph {
+            page_break: false,
+            column_break: false,
             text: "\u{FFFC}".to_string(),
             text_segments: Vec::new(),
             para_shape_id: 0,
@@ -4302,6 +4643,8 @@ mod tests {
         // body-only scan would have returned the later top-level control).
         fn pgnp_para(pos_byte: u8) -> Hwp5Paragraph {
             Hwp5Paragraph {
+                page_break: false,
+                column_break: false,
                 text: "\u{FFFC}".to_string(),
                 text_segments: Vec::new(),
                 para_shape_id: 0,
@@ -4334,6 +4677,8 @@ mod tests {
                 paragraphs: vec![pgnp_para(pos_byte)],
             };
             Hwp5Paragraph {
+                page_break: false,
+                column_break: false,
                 text: "\u{FFFC}".to_string(),
                 text_segments: Vec::new(),
                 para_shape_id: 0,
@@ -4374,6 +4719,8 @@ mod tests {
         // surrounding text runs, inside a single Core paragraph — never on
         // its own line / paragraph, and never drained to the paragraph tail.
         let para = Hwp5Paragraph {
+            page_break: false,
+            column_break: false,
             text: "앞\u{FFFC}뒤".to_string(),
             text_segments: Vec::new(),
             para_shape_id: 0,
@@ -4385,6 +4732,8 @@ mod tests {
                 properties_raw: 0,
                 instance_id: 7,
                 paragraphs: vec![Hwp5Paragraph {
+                    page_break: false,
+                    column_break: false,
                     text: "각주 본문".to_string(),
                     text_segments: Vec::new(),
                     para_shape_id: 0,
@@ -4432,6 +4781,8 @@ mod tests {
     #[test]
     fn line_control_becomes_visible_core_line() {
         let para = Hwp5Paragraph {
+            page_break: false,
+            column_break: false,
             text: "\u{FFFC}".to_string(),
             text_segments: Vec::new(),
             para_shape_id: 0,
@@ -4470,6 +4821,8 @@ mod tests {
     #[test]
     fn polygon_control_becomes_visible_core_polygon() {
         let para = Hwp5Paragraph {
+            page_break: false,
+            column_break: false,
             text: "\u{FFFC}".to_string(),
             text_segments: Vec::new(),
             para_shape_id: 0,
@@ -4524,6 +4877,8 @@ mod tests {
     #[test]
     fn rect_control_carries_into_core_rect_without_warning() {
         let para = Hwp5Paragraph {
+            page_break: false,
+            column_break: false,
             text: "\u{FFFC}".to_string(),
             text_segments: Vec::new(),
             para_shape_id: 0,
@@ -4565,6 +4920,8 @@ mod tests {
     #[test]
     fn unknown_control_is_ignored() {
         let para = Hwp5Paragraph {
+            page_break: false,
+            column_break: false,
             text: "text".to_string(),
             text_segments: Vec::new(),
             para_shape_id: 0,
@@ -4725,6 +5082,116 @@ mod tests {
             Control::InlinePageNumber { kind: InlinePageKind::Unknown },
             "unknown raw flag → Unknown (no fabricated kind)",
         );
+    }
+
+    /// W2: `project_control_run` maps `nwno` 속성 bits 0-3 to the right
+    /// `NewNumberKind` (F1 실측: 0 = 쪽) and carries the u16 number as u32.
+    /// Unmapped raw values surface as Unknown + warning (no fabrication).
+    #[test]
+    fn project_new_number_maps_kind_and_number() {
+        use crate::schema::section::Hwp5NewNumberControl;
+        use hwpforge_core::control::{Control, NewNumberKind};
+
+        let project = |kind_raw: u32, number: u16| -> (Control, Vec<Hwp5Warning>) {
+            let ctrl = Hwp5Control::NewNumber(Hwp5NewNumberControl {
+                ctrl_id: 0x6E77_6E6F,
+                kind_raw,
+                number,
+            });
+            let mut images = ProjectionImageState::new(None, None);
+            let run = project_control_run(
+                &ctrl,
+                &mut images,
+                ImageProjectionContext::Flow,
+                CharShapeIndex::new(0),
+            )
+            .expect("nwno control must project to a run");
+            let control = match run.content {
+                RunContent::Control(boxed) => *boxed,
+                other => panic!("expected control run, got {other:?}"),
+            };
+            (control, images.warnings)
+        };
+
+        // F1 실측: 00 00 00 00 07 00 → 쪽 번호 7.
+        let (control, warnings) = project(0, 7);
+        assert_eq!(control, Control::NewNumber { kind: NewNumberKind::Page, number: 7 });
+        assert!(warnings.is_empty(), "정상 kind 는 경고 없음: {warnings:?}");
+
+        let (control, _) = project(5, 3);
+        assert_eq!(control, Control::NewNumber { kind: NewNumberKind::Equation, number: 3 });
+
+        // 미지 raw → Unknown + 경고 (fake 매핑 금지).
+        let (control, warnings) = project(9, 1);
+        assert_eq!(control, Control::NewNumber { kind: NewNumberKind::Unknown, number: 1 });
+        assert!(warnings.iter().any(|w| matches!(
+            w,
+            Hwp5Warning::ProjectionFallback { subject: "control.new_number", .. }
+        )));
+    }
+
+    /// W3: `project_control_run` maps pghd 속성 bits 0-5 to six bools
+    /// (F2 실측: 0x20 쪽번호 / 0x10 배경 / 0x3F 전부 — secd word 동일 배열).
+    /// 검증 밖 비트(6+)는 경고 + 하위 6비트만 carry.
+    #[test]
+    fn project_page_hiding_maps_mask_bits() {
+        use crate::schema::section::Hwp5PageHidingControl;
+        use hwpforge_core::control::Control;
+
+        let project = |mask: u32| -> (Control, Vec<Hwp5Warning>) {
+            let ctrl =
+                Hwp5Control::PageHiding(Hwp5PageHidingControl { ctrl_id: 0x7067_6864, mask });
+            let mut images = ProjectionImageState::new(None, None);
+            let run = project_control_run(
+                &ctrl,
+                &mut images,
+                ImageProjectionContext::Flow,
+                CharShapeIndex::new(0),
+            )
+            .expect("pghd control must project to a run");
+            let control = match run.content {
+                RunContent::Control(boxed) => *boxed,
+                other => panic!("expected control run, got {other:?}"),
+            };
+            (control, images.warnings)
+        };
+
+        // F2-①: 쪽번호만.
+        let (control, warnings) = project(0x20);
+        assert_eq!(
+            control,
+            Control::PageHiding {
+                hide_header: false,
+                hide_footer: false,
+                hide_master_page: false,
+                hide_border: false,
+                hide_fill: false,
+                hide_page_num: true,
+            }
+        );
+        assert!(warnings.is_empty(), "정의 비트만 = 경고 없음: {warnings:?}");
+
+        // F2-③: 전부.
+        let (control, _) = project(0x3F);
+        assert!(matches!(
+            control,
+            Control::PageHiding {
+                hide_header: true,
+                hide_footer: true,
+                hide_master_page: true,
+                hide_border: true,
+                hide_fill: true,
+                hide_page_num: true,
+            }
+        ));
+
+        // 검증 밖 비트 → 경고 + 하위 6비트만.
+        let (control, warnings) = project(0x60);
+        assert!(matches!(control, Control::PageHiding { hide_page_num: true, .. }));
+        assert!(warnings.iter().any(|w| matches!(
+            w,
+            Hwp5Warning::ProjectionFallback { subject: "control.page_hiding", .. }
+        )));
     }
 
     /// The `%dte` time-mode derivation (`raw_command` `T`-prefix →

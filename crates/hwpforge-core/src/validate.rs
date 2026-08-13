@@ -259,6 +259,13 @@ fn validate_control_run(
         Control::DateCodeField { .. }
         | Control::InlinePageNumber { .. }
         | Control::PathField { .. } => Ok(()),
+        // W2 (2026-08-12): 새 번호 지정 — number 는 wire 차원에서 전 u16 이
+        // 유효 (Codex 결함 8: 근거 없는 clamp 금지). kind Unknown 은 인코더가
+        // 스킵하므로 validation 통과.
+        Control::NewNumber { .. } => Ok(()),
+        // W3 (2026-08-12): 감추기 — 6 bool 전 조합이 유효 (빈 mask 도
+        // corpus 실측 존재, 렌더 no-op).
+        Control::PageHiding { .. } => Ok(()),
         // Group (묶음 객체): recursively validate each child (nested groups +
         // per-child dimension/empty checks at the same chokepoint). Only
         // shape-family controls are legitimate children; non-shape variants

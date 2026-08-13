@@ -682,6 +682,49 @@ pub enum Control {
         kind: InlinePageKind,
     },
 
+    /// A `nwno` **새 번호 지정** control — restarts a numbering counter
+    /// from this position (HWPX `<hp:newNum num numType>`).
+    ///
+    /// HWP5 wire (native fixture 실측 2026-08-12): 10 bytes —
+    /// `ctrl_id + 속성 u32(bits 0-3 = kind) + 번호 u16`, anchored in the
+    /// paragraph text by a `0x15` inline marker. 한컴 [쪽]→[새 번호로
+    /// 시작] 이 쓰는 경로다 (corpus: 407/2,231 문서). The restart applies
+    /// from the **physical page containing the control** (PDF 실측:
+    /// 1쪽 앵커 = 전문서 재번호, 2쪽 앵커 = `1, 7`).
+    NewNumber {
+        /// Which counter restarts ([`NewNumberKind::Page`] is the only
+        /// renderer-consumed kind; others carry through to HWPX).
+        kind: NewNumberKind,
+        /// The new counter value (1-based; fixture sentinel `7`). `u32`
+        /// covers both wires losslessly — HWP5 `nwno` carries u16, HWPX
+        /// `newNum@num` is `xs:positiveInteger`.
+        number: u32,
+    },
+
+    /// A `pghd` **감추기** control — hides the listed page furniture on the
+    /// **physical page containing the control** (HWPX `<hp:pageHiding>`).
+    ///
+    /// HWP5 wire (native fixture 실측 2026-08-12): 8 bytes — `ctrl_id +
+    /// 속성 u32`, bits 0-5 = 머리말/꼬리말/바탕쪽/테두리/배경/쪽번호
+    /// (secd 속성 word 와 동일 배열 — libhwp·hwp-rs 의 다른 주장은 반증).
+    /// `0x15` inline marker 로 앵커. corpus: 403/2,231 문서, 87% 가
+    /// 쪽번호만 감춤 (표지 관행). 감춤은 쪽번호 **카운터 전진을 막지
+    /// 않는다** (PDF 실측: `1, _, 3`).
+    PageHiding {
+        /// 머리말 감춤 (bit 0, `hideHeader`).
+        hide_header: bool,
+        /// 꼬리말 감춤 (bit 1, `hideFooter`).
+        hide_footer: bool,
+        /// 바탕쪽 감춤 (bit 2, `hideMasterPage`).
+        hide_master_page: bool,
+        /// 테두리 감춤 (bit 3, `hideBorder`).
+        hide_border: bool,
+        /// 배경 감춤 (bit 4, `hideFill`).
+        hide_fill: bool,
+        /// 쪽번호 감춤 (bit 5, `hidePageNum`).
+        hide_page_num: bool,
+    },
+
     /// An unrecognized control element preserved for round-trip fidelity.
     ///
     /// `tag` holds the element's tag name or type identifier.
@@ -761,6 +804,8 @@ impl Control {
             | Self::DateCodeField { .. }
             | Self::PathField { .. }
             | Self::InlinePageNumber { .. }
+            | Self::NewNumber { .. }
+            | Self::PageHiding { .. }
             | Self::Unknown { .. } => {}
         }
     }
@@ -800,6 +845,8 @@ impl Control {
             Self::DateCodeField { .. } => "date_code_field",
             Self::PathField { .. } => "path_field",
             Self::InlinePageNumber { .. } => "inline_page_number",
+            Self::NewNumber { .. } => "new_number",
+            Self::PageHiding { .. } => "page_hiding",
             Self::Unknown { .. } => "unknown",
         }
     }
@@ -1807,6 +1854,30 @@ impl std::fmt::Display for Control {
                 InlinePageKind::TotalPages => write!(f, "InlinePageNumber(total)"),
                 InlinePageKind::Unknown => write!(f, "InlinePageNumber(unknown)"),
             },
+            Self::NewNumber { kind, number } => {
+                write!(f, "NewNumber({kind:?}, {number})")
+            }
+            Self::PageHiding {
+                hide_header,
+                hide_footer,
+                hide_master_page,
+                hide_border,
+                hide_fill,
+                hide_page_num,
+            } => {
+                let flags: Vec<&str> = [
+                    (*hide_header, "header"),
+                    (*hide_footer, "footer"),
+                    (*hide_master_page, "master_page"),
+                    (*hide_border, "border"),
+                    (*hide_fill, "fill"),
+                    (*hide_page_num, "page_num"),
+                ]
+                .into_iter()
+                .filter_map(|(on, name)| on.then_some(name))
+                .collect();
+                write!(f, "PageHiding({})", flags.join(","))
+            }
             Self::Unknown { tag, .. } => {
                 write!(f, "Unknown({tag})")
             }
@@ -1954,6 +2025,45 @@ mod tests {
     fn unknown_without_data() {
         let ctrl = Control::Unknown { tag: "header".to_string(), data: None };
         assert!(ctrl.is_unknown());
+    }
+
+    #[test]
+    fn display_and_kind_name_for_page_control_variants() {
+        // W2/W3 variant 의 Display·kind_name·traversal no-op 커버 (커버리지
+        // 게이트 — 리눅스는 폰트 의존 테스트 스킵으로 마진이 얇다).
+        let nn = Control::NewNumber { kind: NewNumberKind::Page, number: 7 };
+        assert_eq!(nn.to_string(), "NewNumber(Page, 7)");
+        assert_eq!(nn.kind_name(), "new_number");
+
+        let ph = Control::PageHiding {
+            hide_header: true,
+            hide_footer: false,
+            hide_master_page: false,
+            hide_border: false,
+            hide_fill: true,
+            hide_page_num: true,
+        };
+        assert_eq!(ph.to_string(), "PageHiding(header,fill,page_num)");
+        assert_eq!(ph.kind_name(), "page_hiding");
+
+        // 빈 mask (corpus 실측 존재 — 렌더 no-op).
+        let empty = Control::PageHiding {
+            hide_header: false,
+            hide_footer: false,
+            hide_master_page: false,
+            hide_border: false,
+            hide_fill: false,
+            hide_page_num: false,
+        };
+        assert_eq!(empty.to_string(), "PageHiding()");
+
+        // traversal: leaf 컨트롤은 중첩 문단이 없다.
+        let mut nn = nn;
+        let mut ph = ph;
+        let mut seen = 0usize;
+        nn.walk_paragraphs_mut(&mut |_| seen += 1);
+        ph.walk_paragraphs_mut(&mut |_| seen += 1);
+        assert_eq!(seen, 0);
     }
 
     #[test]

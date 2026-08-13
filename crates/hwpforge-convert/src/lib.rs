@@ -52,8 +52,22 @@ pub fn hwp5_to_hwpx(
     input: impl AsRef<Path>,
     output: impl AsRef<Path>,
 ) -> Hwp5Result<Vec<Hwp5Warning>> {
+    hwp5_to_hwpx_with_options(input, output, ConvertOptions::default())
+}
+
+/// [`hwp5_to_hwpx`] 에 동작 옵션([`ConvertOptions`])을 더한 변형 (W4 —
+/// CLI `convert-hwp5 --carry-layout-cache` 가 사용).
+///
+/// # Errors
+///
+/// [`hwp5_to_hwpx`] 와 동일.
+pub fn hwp5_to_hwpx_with_options(
+    input: impl AsRef<Path>,
+    output: impl AsRef<Path>,
+    options: ConvertOptions,
+) -> Hwp5Result<Vec<Hwp5Warning>> {
     let bytes = std::fs::read(input.as_ref()).map_err(Hwp5Error::Io)?;
-    let (hwpx_bytes, warnings) = hwp5_to_hwpx_bytes(&bytes)?;
+    let (hwpx_bytes, warnings) = hwp5_to_hwpx_bytes_with_options(&bytes, options)?;
     std::fs::write(output.as_ref(), hwpx_bytes).map_err(Hwp5Error::Io)?;
     Ok(warnings)
 }

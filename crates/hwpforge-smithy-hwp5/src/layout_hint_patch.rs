@@ -141,6 +141,8 @@ fn collect_flow_paragraph_layout_hints(
             | Hwp5Control::PathField(_)
             | Hwp5Control::CrossRef(_)
             | Hwp5Control::InlinePageNumber(_)
+            | Hwp5Control::NewNumber(_)
+            | Hwp5Control::PageHiding(_)
             | Hwp5Control::OleObject(_)
             | Hwp5Control::Unknown { .. } => {}
         }
@@ -203,6 +205,8 @@ fn collect_scope_paragraph_layout_hints(paragraph: &Hwp5Paragraph, scope: &mut S
             | Hwp5Control::PathField(_)
             | Hwp5Control::CrossRef(_)
             | Hwp5Control::InlinePageNumber(_)
+            | Hwp5Control::NewNumber(_)
+            | Hwp5Control::PageHiding(_)
             | Hwp5Control::OleObject(_)
             | Hwp5Control::Unknown { .. } => {}
         }
@@ -262,6 +266,8 @@ mod tests {
         controls: Vec<Hwp5Control>,
     ) -> Hwp5Paragraph {
         Hwp5Paragraph {
+            page_break: false,
+            column_break: false,
             text: text.into(),
             text_segments: Vec::new(),
             para_shape_id: 0,
@@ -316,6 +322,8 @@ mod tests {
                 is_header: false,
                 border_fill_id: None,
                 paragraphs: vec![Hwp5Paragraph {
+                    page_break: false,
+                    column_break: false,
                     text: "cell".into(),
                     text_segments: Vec::new(),
                     para_shape_id: 0,
@@ -370,6 +378,7 @@ mod tests {
             ],
             page_def: None,
             section_def_properties: None,
+            section_def_start_numbers: None,
             page_border_fills: Vec::new(),
             column_def: None,
             warnings: Vec::new(),

@@ -32,7 +32,8 @@ use crate::ctrl_ids::{
     CTRL_ID_ATNO, CTRL_ID_CLICK_HERE, CTRL_ID_COLUMN_DEF, CTRL_ID_COMPOSE, CTRL_ID_DUTMAL,
     CTRL_ID_ENDNOTE, CTRL_ID_EQED, CTRL_ID_FIELD_CROSSREF, CTRL_ID_FIELD_DATE_CODE,
     CTRL_ID_FIELD_PATH, CTRL_ID_FIELD_SUMMERY, CTRL_ID_FOOTER, CTRL_ID_FOOTNOTE, CTRL_ID_GSO,
-    CTRL_ID_HEADER, CTRL_ID_INDEXMARK, CTRL_ID_MEMO, CTRL_ID_SECD, CTRL_ID_TABLE,
+    CTRL_ID_HEADER, CTRL_ID_INDEXMARK, CTRL_ID_MEMO, CTRL_ID_NEW_NUMBER, CTRL_ID_PAGE_HIDING,
+    CTRL_ID_SECD, CTRL_ID_TABLE,
 };
 
 /// `ShapeComponent` (`0x4C`) type tag identifying a connect line, stored as the
@@ -129,6 +130,10 @@ impl ParaBuf {
             text_segments,
             para_shape_id: self.header.para_shape_id,
             style_id: self.header.style_id,
+            // divide_sort bit2/bit3 = 쪽/단 나누기 (hwp-rs 확증 + F2 실측:
+            // 한컴 재저장 HWPX pageBreak="1" 대응 — W3 carry 시작).
+            page_break: self.header.divide_sort & 0x04 != 0,
+            column_break: self.header.divide_sort & 0x08 != 0,
             char_shape_runs: self.char_shape_runs,
             line_segments: self.line_segments,
             controls: self.controls,
@@ -681,6 +686,8 @@ struct BodyTextParserState {
     page_def: Option<Hwp5PageDef>,
     /// Captured `secd` ctrl property word (HWP 5.0 spec §4.3.10.1 표 130).
     section_def_properties: Option<u32>,
+    /// Captured `secd` 시작번호 (`[20..28]`, all-or-none — W1).
+    section_def_start_numbers: Option<Hwp5SectionStartNumbers>,
     /// Page border/fill records collected in document order.
     page_border_fills: Vec<Hwp5PageBorderFill>,
     /// Captured `cold` (column definition) ctrl, if multi-column.
@@ -918,10 +925,13 @@ impl BodyTextParserState {
                             Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).ok(),
                         ));
                     } else if let Some(buf) = ctx.current_cell_para.as_mut() {
-                        buf.controls.push(Hwp5Control::Unknown {
-                            ctrl_id,
-                            header_data: record.data.clone(),
-                        });
+                        buf.controls.push(
+                            Self::typed_inline_family_control(ctrl_id, &record.data)
+                                .unwrap_or_else(|| Hwp5Control::Unknown {
+                                    ctrl_id,
+                                    header_data: record.data.clone(),
+                                }),
+                        );
                     }
                 }
             }
@@ -1166,10 +1176,13 @@ impl BodyTextParserState {
                             Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).ok(),
                         ));
                     } else {
-                        buf.controls.push(Hwp5Control::Unknown {
-                            ctrl_id,
-                            header_data: record.data.clone(),
-                        });
+                        buf.controls.push(
+                            Self::typed_inline_family_control(ctrl_id, &record.data)
+                                .unwrap_or_else(|| Hwp5Control::Unknown {
+                                    ctrl_id,
+                                    header_data: record.data.clone(),
+                                }),
+                        );
                     }
                 }
             }
@@ -1180,6 +1193,28 @@ impl BodyTextParserState {
         }
 
         true
+    }
+
+    /// 중첩 컨텍스트(표 셀·subtree)의 CtrlHeader 를 top-level 과 동일하게
+    /// 타입화한다 — **inline marker 가족(atno/nwno/pghd)만**. 나머지는
+    /// Unknown round-trip 보존. (W4: 집계 경고가 각주 subtree 안 atno 의
+    /// 기존 무음 드롭을 적발 — 중첩에서도 같은 wire 이므로 같은 parse 재사용.)
+    fn typed_inline_family_control(ctrl_id: u32, data: &[u8]) -> Option<Hwp5Control> {
+        match ctrl_id {
+            CTRL_ID_ATNO => {
+                crate::schema::section::Hwp5InlinePageNumberControl::parse(ctrl_id, data)
+                    .map(Hwp5Control::InlinePageNumber)
+            }
+            CTRL_ID_NEW_NUMBER => {
+                crate::schema::section::Hwp5NewNumberControl::parse(ctrl_id, data)
+                    .map(Hwp5Control::NewNumber)
+            }
+            CTRL_ID_PAGE_HIDING => {
+                crate::schema::section::Hwp5PageHidingControl::parse(ctrl_id, data)
+                    .map(Hwp5Control::PageHiding)
+            }
+            _ => None,
+        }
     }
 
     fn handle_top_level_record(&mut self, record: &Record, tag: TagId, level: u16) {
@@ -1542,6 +1577,47 @@ impl BodyTextParserState {
                         .to_string(),
                 });
             }
+        } else if ctrl_id == CTRL_ID_NEW_NUMBER {
+            // `nwno` 새 번호 지정 — 10바이트 payload (W2, F1 실측 §1.2).
+            // malformed 여도 **Unknown placeholder 를 push** 해 marker↔control
+            // 큐 정렬을 보존한다 (독립 리뷰 High #1: 승격된 0x15 marker 가
+            // 뒤따르는 GSO 를 오소비하는 queue poisoning 방지).
+            if let Some(nwno) =
+                crate::schema::section::Hwp5NewNumberControl::parse(ctrl_id, &record.data)
+            {
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls.push(Hwp5Control::NewNumber(nwno));
+                }
+            } else {
+                self.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "new_number",
+                    reason: "malformed nwno CtrlHeader payload; dropping number restart"
+                        .to_string(),
+                });
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls
+                        .push(Hwp5Control::Unknown { ctrl_id, header_data: record.data.clone() });
+                }
+            }
+        } else if ctrl_id == CTRL_ID_PAGE_HIDING {
+            // `pghd` 감추기 — 8바이트 payload (W3, F2 실측 §1.2).
+            if let Some(pghd) =
+                crate::schema::section::Hwp5PageHidingControl::parse(ctrl_id, &record.data)
+            {
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls.push(Hwp5Control::PageHiding(pghd));
+                }
+            } else {
+                self.warnings.push(Hwp5Warning::DroppedControl {
+                    control: "page_hiding",
+                    reason: "malformed pghd CtrlHeader payload; dropping page hiding".to_string(),
+                });
+                // 큐 정렬 보존 placeholder (독립 리뷰 High #1).
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls
+                        .push(Hwp5Control::Unknown { ctrl_id, header_data: record.data.clone() });
+                }
+            }
         } else if ctrl_id == CTRL_ID_ATNO {
             // `atno` ctrl carries a single 4-byte kind flag
             // (`0x00`/`0x06`). No Command/trailer. Wave 12n.
@@ -1556,6 +1632,12 @@ impl BodyTextParserState {
                     control: "inline_page_number",
                     reason: "malformed atno CtrlHeader payload; dropping inline page".to_string(),
                 });
+                // 큐 정렬 보존 placeholder — 0x12 marker 승격과 동계열의
+                // 선행 결함도 함께 수리 (독립 리뷰 High #1).
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls
+                        .push(Hwp5Control::Unknown { ctrl_id, header_data: record.data.clone() });
+                }
             }
         } else if let Some(command) =
             (ctrl_id == CTRL_ID_MEMO).then(|| Hwp5MemoCommand::parse(&record.data)).flatten()
@@ -1595,6 +1677,18 @@ impl BodyTextParserState {
                     record.data[6],
                     record.data[7],
                 ]));
+                // 시작번호 `[20..28]` (쪽/그림/표/수식 u16 — F1 실측 §1.2).
+                // all-or-none: 28바이트 미만이면 캡처하지 않는다 (부분값을
+                // 기본값과 섞어 날조 금지 — 계획 W1 fail-safe).
+                if let Some(bytes) = record.data.get(20..28) {
+                    let word = |i: usize| u16::from_le_bytes([bytes[i], bytes[i + 1]]);
+                    self.section_def_start_numbers = Some(Hwp5SectionStartNumbers {
+                        page: word(0),
+                        pic: word(2),
+                        tbl: word(4),
+                        equation: word(6),
+                    });
+                }
             }
             // Snapshot the `cold` (column definition) ctrl, mirroring the
             // `secd` sidecar capture. Payload after the 4-byte ctrl_id:
@@ -1859,6 +1953,7 @@ impl BodyTextParserState {
             paragraphs: self.paragraphs,
             page_def: self.page_def,
             section_def_properties: self.section_def_properties,
+            section_def_start_numbers: self.section_def_start_numbers,
             page_border_fills: self.page_border_fills,
             column_def: self.column_def,
             warnings: self.warnings,
@@ -2650,6 +2745,140 @@ mod tests {
             }
             other => panic!("expected Table, got {:?}", other),
         }
+    }
+
+    /// `secd` payload — F1 실측 레이아웃 (계획 §1.2): 속성 u32 + 열간격/세로/
+    /// 가로 정렬(각 u16) + 기본 탭(u32) + 번호 문단 모양 id(u16) + 시작번호
+    /// 4×u16. `starts = None` 이면 20바이트에서 자른다 (truncation 케이스).
+    fn secd_ctrl_data(properties: u32, starts: Option<(u16, u16, u16, u16)>) -> Vec<u8> {
+        let mut buf = CTRL_ID_SECD.to_le_bytes().to_vec();
+        buf.extend_from_slice(&properties.to_le_bytes());
+        buf.extend_from_slice(&[0u8; 12]); // [8..20] 열간격·정렬·탭·번호모양
+        if let Some((page, pic, tbl, equation)) = starts {
+            for v in [page, pic, tbl, equation] {
+                buf.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+        buf
+    }
+
+    #[test]
+    fn ctrl_header_secd_captures_start_numbers_when_payload_full() {
+        // F1 실측 (rules-newnum-base.hwp): 한컴 5.1 은 [20..28] 에 쪽/그림/표/
+        // 수식 시작번호를 쓴다 — sidecar 가 네 값을 그대로 캡처해야 한다.
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &secd_ctrl_data(0, Some((7, 2, 3, 4)))));
+        let result = parse_body_text(&stream, &version()).unwrap();
+        assert_eq!(
+            result.section_def_start_numbers,
+            Some(Hwp5SectionStartNumbers { page: 7, pic: 2, tbl: 3, equation: 4 })
+        );
+        assert_eq!(result.section_def_properties, Some(0));
+    }
+
+    #[test]
+    fn ctrl_header_secd_truncated_payload_captures_no_start_numbers() {
+        // all-or-none (Codex 결함 8): [20..28] 이 없으면 부분 캡처 대신 None —
+        // 속성 word 캡처(기존 gap B 경로)는 그대로 살아 있어야 한다.
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &secd_ctrl_data(0x20, None)));
+        let result = parse_body_text(&stream, &version()).unwrap();
+        assert_eq!(result.section_def_start_numbers, None);
+        assert_eq!(result.section_def_properties, Some(0x20));
+    }
+
+    #[test]
+    fn ctrl_header_nwno_produces_typed_new_number() {
+        // F1 실측 (rules-newnum-base.hwp): nwno = ctrl_id + 속성 u32(bits0-3
+        // = kind) + 번호 u16 — `00 00 00 00 07 00` = 쪽 번호 7.
+        let mut nwno = CTRL_ID_NEW_NUMBER.to_le_bytes().to_vec();
+        nwno.extend_from_slice(&[0x00, 0x00, 0x00, 0x00, 0x07, 0x00]);
+
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &nwno));
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let para = &result.paragraphs[0];
+        assert!(
+            para.controls.iter().any(|c| matches!(
+                c,
+                Hwp5Control::NewNumber(n) if n.kind_raw == 0 && n.number == 7
+            )),
+            "typed NewNumber expected: {:?}",
+            para.controls
+        );
+    }
+
+    #[test]
+    fn ctrl_header_nwno_truncated_payload_warns_and_keeps_placeholder() {
+        // 10바이트 미만 payload → DroppedControl 경고 + **Unknown placeholder**
+        // 로 marker↔control 큐 정렬 보존 (독립 리뷰 High #1 — placeholder 가
+        // 없으면 승격된 0x15 marker 가 뒤따르는 객체를 오소비한다).
+        let mut nwno = CTRL_ID_NEW_NUMBER.to_le_bytes().to_vec();
+        nwno.extend_from_slice(&[0x00, 0x00]);
+
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &nwno));
+        let result = parse_body_text(&stream, &version()).unwrap();
+        assert!(
+            matches!(
+                result.paragraphs[0].controls.as_slice(),
+                [Hwp5Control::Unknown { ctrl_id, .. }] if *ctrl_id == CTRL_ID_NEW_NUMBER
+            ),
+            "placeholder 로 큐 정렬 보존: {:?}",
+            result.paragraphs[0].controls
+        );
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| matches!(w, Hwp5Warning::DroppedControl { control: "new_number", .. })));
+    }
+
+    #[test]
+    fn ctrl_header_pghd_produces_typed_page_hiding() {
+        // F2-① 실측 (rules-pagehide-base.hwp): pghd = ctrl_id + 속성 u32 —
+        // `20 00 00 00` = bit5 = 쪽번호만 감춤.
+        let mut pghd = CTRL_ID_PAGE_HIDING.to_le_bytes().to_vec();
+        pghd.extend_from_slice(&[0x20, 0x00, 0x00, 0x00]);
+
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &pghd));
+        let result = parse_body_text(&stream, &version()).unwrap();
+        assert!(
+            result.paragraphs[0].controls.iter().any(|c| matches!(
+                c,
+                Hwp5Control::PageHiding(p) if p.mask == 0x20
+            )),
+            "typed PageHiding expected: {:?}",
+            result.paragraphs[0].controls
+        );
+    }
+
+    #[test]
+    fn ctrl_header_pghd_truncated_payload_warns_and_keeps_placeholder() {
+        let mut pghd = CTRL_ID_PAGE_HIDING.to_le_bytes().to_vec();
+        pghd.extend_from_slice(&[0x20]);
+
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &pghd));
+        let result = parse_body_text(&stream, &version()).unwrap();
+        assert!(
+            matches!(
+                result.paragraphs[0].controls.as_slice(),
+                [Hwp5Control::Unknown { ctrl_id, .. }] if *ctrl_id == CTRL_ID_PAGE_HIDING
+            ),
+            "placeholder 로 큐 정렬 보존 (독립 리뷰 High #1): {:?}",
+            result.paragraphs[0].controls
+        );
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| matches!(w, Hwp5Warning::DroppedControl { control: "page_hiding", .. })));
     }
 
     #[test]

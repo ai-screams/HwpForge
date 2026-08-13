@@ -28,6 +28,11 @@ pub(crate) struct Hwp5ParaHeader {
     pub para_shape_id: u16,
     /// Style ID (index into the DocInfo `Style` table).
     pub style_id: u8,
+    /// 나누기 종류 (`[11]`, hwp-rs `break_options` 확증): bit0 구역 /
+    /// bit1 다단 / **bit2 쪽** / bit3 단. F2 실측 (2026-08-12): 한컴은
+    /// 쪽나눔 문단의 lineseg v 를 리셋하지 않아 (전부 600) 이 비트가
+    /// 쪽분할의 유일한 신호다 — W3 에서 carry 시작.
+    pub divide_sort: u8,
     /// Number of line segment entries in the companion `ParaLineSeg` record.
     pub line_seg_count: u16,
     /// Number of character-shape run entries in the companion `ParaCharShape` record.
@@ -81,8 +86,7 @@ impl Hwp5ParaHeader {
         let control_mask = cur.read_u32::<LittleEndian>()?;
         let para_shape_id = cur.read_u16::<LittleEndian>()?;
         let style_id = cur.read_u8()?;
-        // [11] page_break / divide_sort — skip
-        cur.set_position(12);
+        let divide_sort = cur.read_u8()?;
         let char_shape_count = cur.read_u16::<LittleEndian>()?;
         // [14..16] range_tag_count — skip
         cur.set_position(16);
@@ -96,6 +100,7 @@ impl Hwp5ParaHeader {
             control_mask,
             para_shape_id,
             style_id,
+            divide_sort,
             line_seg_count,
             char_shape_count,
             instance_id,
@@ -107,7 +112,10 @@ impl Hwp5ParaHeader {
 // IndexMark inline-marker discriminator (Wave 12k)
 // ---------------------------------------------------------------------------
 
-use crate::ctrl_ids::{CTRL_ID_ATNO, CTRL_ID_ENDNOTE, CTRL_ID_FOOTNOTE, CTRL_ID_INDEXMARK};
+use crate::ctrl_ids::{
+    CTRL_ID_ATNO, CTRL_ID_ENDNOTE, CTRL_ID_FOOTNOTE, CTRL_ID_INDEXMARK, CTRL_ID_NEW_NUMBER,
+    CTRL_ID_PAGE_HIDING,
+};
 
 /// Reads the LE-stored ctrl_id from the first four bytes of an
 /// inline-marker's `extra` block and returns it as the BE-ascii u32
@@ -374,11 +382,29 @@ impl Hwp5ParaText {
                     }
                     // Else: consumed silently, same as 0x0E..=0x10 below.
                 }
-                // 0x0E-0x15 (except 0x11, 0x12): extended controls
-                // (bookmarks, change tracking, etc.). All consume 7 extra
-                // u16 values. Still silently consumed until a future slice
-                // promotes them to a typed variant.
-                0x0E..=0x10 | 0x13..=0x15 => {
+                // 0x15: page-control marker (새 번호 `nwno`·감추기 `pghd`·
+                // 쪽번호 위치 `pgnp` 공유 — F1/F2 실측 2026-08-12). `nwno`
+                // 만 `ControlRef` 로 승격해 위치를 보존한다 (0x11 각주
+                // 선례): 마커를 버리면 컨트롤이 문단 꼬리로 밀려 재시작이
+                // 엉뚱한 쪽에 적용된다. `pgnp` 는 구역 수준에서 소비되므로
+                // (object_controls 큐에 안 들어감) 마커도 승격하지 않아야
+                // 큐 정렬이 유지된다.
+                0x15 => {
+                    flush_text!();
+                    let extra = read_extra!(i - 1);
+                    if matches!(
+                        ctrl_id_from_inline_extra_bytes(&extra),
+                        CTRL_ID_NEW_NUMBER | CTRL_ID_PAGE_HIDING
+                    ) {
+                        segments.push(TextSegment::ControlRef { extra });
+                    }
+                    // Else (pgnp/미지 owner): consumed silently.
+                }
+                // 0x0E-0x10: extended controls (bookmarks, change tracking,
+                // etc. — 0x11/0x12/0x13/0x14/0x15 는 위의 전용 arm). All
+                // consume 7 extra u16 values. Still silently consumed until
+                // a future slice promotes them to a typed variant.
+                0x0E..=0x10 => {
                     flush_text!();
                     let _extra = read_extra!(i - 1);
                     // No segment emitted — consumed silently.
@@ -2218,6 +2244,77 @@ impl Hwp5InlinePageNumberControl {
         }
         let raw_flag = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
         Some(Self { ctrl_id, raw_flag })
+    }
+}
+
+/// `nwno` 새 번호 지정 control payload.
+///
+/// Wire layout — **F1 native fixture 실측 (2026-08-12, rules-newnum)**:
+///
+/// | offset | bytes | meaning |
+/// |---|---|---|
+/// | `[0..4]` | ctrl_id | `"nwno"` (LE bytes) |
+/// | `[4..8]` | LE u32 | 속성 — bits 0-3 = 번호 종류 (0 쪽 … 5 수식) |
+/// | `[8..10]` | LE u16 | 새 번호 값 |
+///
+/// 실측 `00 00 00 00 07 00` = 쪽 번호 7. 총 10바이트 — openhwp 의
+/// 8바이트(u16+u16) 형은 이 실측으로 반증됐다 (계획 §1.2).
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5NewNumberControl {
+    /// Owning control identifier, always `0x6E77_6E6F` (`"nwno"`).
+    #[allow(dead_code)]
+    pub ctrl_id: u32,
+    /// 속성 bits 0-3 — 번호 종류 raw 값 (projection 이 typed kind 로 매핑).
+    pub kind_raw: u32,
+    /// 새 번호 값.
+    pub number: u16,
+}
+
+impl Hwp5NewNumberControl {
+    /// Decodes a `nwno` CtrlHeader payload. Returns `None` if truncated
+    /// (10바이트 미만) — the decoder reports a targeted
+    /// `Hwp5Warning::DroppedControl`.
+    pub(crate) fn parse(ctrl_id: u32, data: &[u8]) -> Option<Self> {
+        if data.len() < 10 {
+            return None;
+        }
+        let properties = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+        let number = u16::from_le_bytes([data[8], data[9]]);
+        Some(Self { ctrl_id, kind_raw: properties & 0xF, number })
+    }
+}
+
+/// `pghd` 감추기 control payload.
+///
+/// Wire layout — **F2 native fixture 실측 (2026-08-12, rules-pagehide ①②③)**:
+///
+/// | offset | bytes | meaning |
+/// |---|---|---|
+/// | `[0..4]` | ctrl_id | `"pghd"` (LE bytes) |
+/// | `[4..8]` | LE u32 | 속성 bits 0-5 = 머리말/꼬리말/바탕쪽/테두리/배경/쪽번호 |
+///
+/// 실측: 쪽번호만 = `0x20`(bit5) · 배경만 = `0x10`(bit4) · 전부 = `0x3F` —
+/// secd 속성 word(표 130)와 동일 배열. libhwp(쪽번호=bit4)·hwp-rs(u8,
+/// bits1-6)의 다른 주장은 이 실측으로 반증됐다 (계획 §1.2).
+#[derive(Debug, Clone)]
+pub(crate) struct Hwp5PageHidingControl {
+    /// Owning control identifier, always `0x7067_6864` (`"pghd"`).
+    #[allow(dead_code)]
+    pub ctrl_id: u32,
+    /// 속성 word (bits 0-5 만 정의 — 잔여 비트는 projection 이 경고).
+    pub mask: u32,
+}
+
+impl Hwp5PageHidingControl {
+    /// Decodes a `pghd` CtrlHeader payload. Returns `None` if truncated
+    /// (8바이트 미만) — the decoder reports a targeted
+    /// `Hwp5Warning::DroppedControl`.
+    pub(crate) fn parse(ctrl_id: u32, data: &[u8]) -> Option<Self> {
+        if data.len() < 8 {
+            return None;
+        }
+        let mask = u32::from_le_bytes([data[4], data[5], data[6], data[7]]);
+        Some(Self { ctrl_id, mask })
     }
 }
 

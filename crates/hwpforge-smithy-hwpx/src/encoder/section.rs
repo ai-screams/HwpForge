@@ -50,7 +50,7 @@ mod typography;
 
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::{ColumnLayoutMode, ColumnSettings, ColumnType};
-use hwpforge_core::control::{Control, DutmalAlign, DutmalPosition};
+use hwpforge_core::control::{Control, DutmalAlign, DutmalPosition, NewNumberKind};
 use hwpforge_core::image::{Image, ImagePlacement};
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::{Run, RunContent};
@@ -70,10 +70,10 @@ use hwpforge_foundation::{BookmarkType, DropCapStyle, HwpUnit, TextDirection};
 use crate::schema::section::{
     HxBookmark, HxCaption, HxCellAddr, HxCellSpan, HxCellSz, HxChart, HxCompose, HxComposeCharPr,
     HxCtrl, HxDutmal, HxEquation, HxFlip, HxFootNote, HxImg, HxImgClip, HxImgDim, HxImgRect,
-    HxIndexMark, HxLineSeg, HxLineSegArray, HxMatrix, HxOffset, HxPageMargin, HxPagePr,
-    HxParagraph, HxPic, HxPoint, HxRenderingInfo, HxRotationInfo, HxRun, HxRunCase, HxRunSwitch,
-    HxScript, HxSecPr, HxSection, HxShapeComment, HxSizeAttr, HxSubList, HxTable, HxTableCell,
-    HxTableMargin, HxTablePos, HxTableRow, HxTableSz, HxText, HxTitleMark,
+    HxIndexMark, HxLineSeg, HxLineSegArray, HxMatrix, HxNewNum, HxOffset, HxPageHiding,
+    HxPageMargin, HxPagePr, HxParagraph, HxPic, HxPoint, HxRenderingInfo, HxRotationInfo, HxRun,
+    HxRunCase, HxRunSwitch, HxScript, HxSecPr, HxSection, HxShapeComment, HxSizeAttr, HxSubList,
+    HxTable, HxTableCell, HxTableMargin, HxTablePos, HxTableRow, HxTableSz, HxText, HxTitleMark,
 };
 
 use super::EncodeOptions;
@@ -491,6 +491,37 @@ fn build_runs(
         std::collections::HashMap::new();
 
     for run in runs {
+        // 독립 리뷰 High #8: 첫 문단이 control run(NewNumber/PageHiding 등)
+        // 으로 시작하면 secPr 가 둘째 run 으로 밀려 한컴 계약(secPr = 첫
+        // 문단의 첫 run)을 깬다 — 전용 carrier run 을 index 0 에 먼저
+        // 삽입한다 (뒤의 "no non-control runs" 합성 run 과 동일 형태;
+        // colPr 는 secPr 직후 문자열 후처리로 따라붙는다).
+        if inject_sec_pr && !sec_pr_injected && run.content.is_control() {
+            if let Some(ps) = page_settings {
+                sec_pr_injected = true;
+                result.push(HxRun {
+                    char_pr_id_ref: 0,
+                    sec_pr: Some(build_sec_pr(ps, text_direction)),
+                    texts: Vec::new(),
+                    tables: Vec::new(),
+                    pictures: Vec::new(),
+                    ctrls: Vec::new(),
+                    rects: Vec::new(),
+                    lines: Vec::new(),
+                    ellipses: Vec::new(),
+                    polygons: Vec::new(),
+                    equations: Vec::new(),
+                    switches: Vec::new(),
+                    title_mark: None,
+                    dutmals: Vec::new(),
+                    composes: Vec::new(),
+                    curves: Vec::new(),
+                    connect_lines: Vec::new(),
+                    containers: Vec::new(),
+                    textarts: Vec::new(),
+                });
+            }
+        }
         let sec_pr = if inject_sec_pr && !sec_pr_injected && !run.content.is_control() {
             sec_pr_injected = true;
             page_settings.map(|ps| build_sec_pr(ps, text_direction))
@@ -712,6 +743,8 @@ fn build_runs(
                         ));
                     }
                     Control::IndexMark { .. }
+                    | Control::NewNumber { .. }
+                    | Control::PageHiding { .. }
                     | Control::Bookmark { bookmark_type: BookmarkType::Point, .. } => {
                         if let Some(hx_ctrl) =
                             encode_control_to_ctrl(ctrl, depth, hyperlink_entries, options)?
@@ -1082,6 +1115,43 @@ fn encode_control_to_ctrl(
             indexmark: Some(HxIndexMark {
                 first_key: primary.clone(),
                 second_key: secondary.clone(),
+            }),
+            ..Default::default()
+        })),
+        // 새 번호 지정 → `<hp:newNum num numType/>` (F1b 한컴 실측 형태).
+        // kind Unknown 은 인코딩하지 않는다 — 미지 wire 값에 타입을 지어내는
+        // 것이 fake support (atno Unknown 스킵과 동일 원칙).
+        Control::NewNumber { kind, number } => {
+            let num_type = match kind {
+                NewNumberKind::Page => "PAGE",
+                NewNumberKind::Footnote => "FOOTNOTE",
+                NewNumberKind::Endnote => "ENDNOTE",
+                NewNumberKind::Picture => "PICTURE",
+                NewNumberKind::Table => "TABLE",
+                NewNumberKind::Equation => "EQUATION",
+                _ => return Ok(None),
+            };
+            Ok(Some(HxCtrl {
+                new_num: Some(HxNewNum { num: *number, num_type: num_type.to_string() }),
+                ..Default::default()
+            }))
+        }
+        // 감추기 → `<hp:pageHiding 6속성/>` (F2 한컴 실측 형태 — 전 속성 병기).
+        Control::PageHiding {
+            hide_header,
+            hide_footer,
+            hide_master_page,
+            hide_border,
+            hide_fill,
+            hide_page_num,
+        } => Ok(Some(HxCtrl {
+            page_hiding: Some(HxPageHiding {
+                hide_header: u8::from(*hide_header),
+                hide_footer: u8::from(*hide_footer),
+                hide_master_page: u8::from(*hide_master_page),
+                hide_border: u8::from(*hide_border),
+                hide_fill: u8::from(*hide_fill),
+                hide_page_num: u8::from(*hide_page_num),
             }),
             ..Default::default()
         })),
@@ -2969,6 +3039,100 @@ mod tests {
     }
 
     // ── Field encoding ────────────────────────────────────────────
+
+    #[test]
+    fn leading_control_run_gets_secpr_carrier_at_index_zero() {
+        // 독립 리뷰 High #8: 첫 문단이 [NewNumber, Text]면 secPr 가 둘째
+        // run 으로 밀려 한컴 계약(secPr = 첫 run)을 깬다 — 전용 carrier
+        // run 이 index 0 에 삽입돼야 한다.
+        use hwpforge_core::control::{Control, NewNumberKind};
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![
+                    Run::control(
+                        Control::NewNumber { kind: NewNumberKind::Page, number: 7 },
+                        CharShapeIndex::new(0),
+                    ),
+                    Run::text("본문", CharShapeIndex::new(0)),
+                ],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default()).unwrap().xml;
+        let first_run = xml.find("<hp:run").expect("first run");
+        let sec_pr = xml.find("<hp:secPr").expect("secPr present");
+        let new_num = xml.find("<hp:newNum").expect("newNum present");
+        assert!(
+            sec_pr > first_run && sec_pr < new_num,
+            "secPr 는 첫 run(carrier)에, newNum 은 그 뒤에: secPr@{sec_pr} newNum@{new_num}"
+        );
+    }
+
+    #[test]
+    fn new_number_encodes_as_hancom_shaped_newnum() {
+        // F1b 한컴 실측 형태: `<hp:newNum num="7" numType="PAGE"/>` (자기닫힘).
+        use hwpforge_core::control::{Control, NewNumberKind};
+        let ctrl = Control::NewNumber { kind: NewNumberKind::Page, number: 7 };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default()).unwrap().xml;
+        assert!(
+            xml.contains(r#"<hp:newNum num="7" numType="PAGE"/>"#),
+            "F1b 실측 형태와 일치해야 함: {xml}"
+        );
+    }
+
+    #[test]
+    fn new_number_unknown_kind_is_skipped_not_fabricated() {
+        // 미지 wire kind 에 numType 을 지어내는 것은 fake support — 스킵.
+        use hwpforge_core::control::{Control, NewNumberKind};
+        let ctrl = Control::NewNumber { kind: NewNumberKind::Unknown, number: 3 };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default()).unwrap().xml;
+        // 주의: `<hp:numbering ... newNum="1">` (각주/미주 속성)과 구분하기
+        // 위해 요소 시작 태그로 매칭한다.
+        assert!(!xml.contains("<hp:newNum"), "Unknown kind 는 인코딩 금지");
+    }
+
+    #[test]
+    fn page_hiding_encodes_as_hancom_shaped_pagehiding() {
+        // F2-② 한컴 실측 형태: 6속성 전부 병기, 배경만 = hideFill="1".
+        use hwpforge_core::control::Control;
+        let ctrl = Control::PageHiding {
+            hide_header: false,
+            hide_footer: false,
+            hide_master_page: false,
+            hide_border: false,
+            hide_fill: true,
+            hide_page_num: false,
+        };
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![Run::control(ctrl, CharShapeIndex::new(0))],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default()).unwrap().xml;
+        assert!(
+            xml.contains(
+                r#"<hp:pageHiding hideHeader="0" hideFooter="0" hideMasterPage="0" hideBorder="0" hideFill="1" hidePageNum="0"/>"#
+            ),
+            "F2-② 실측 형태와 일치해야 함: {xml}"
+        );
+    }
 
     #[test]
     fn field_pagenum_produces_autonum() {

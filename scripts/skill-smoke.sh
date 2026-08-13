@@ -147,6 +147,14 @@ HWP_FIXTURE="$(find "$ROOT/tests/fixtures" "$ROOT/crates" -name '*.hwp' 2>/dev/n
 if [[ -n "$HWP_FIXTURE" ]]; then
   assert_ok "$BIN" convert-hwp5 "$HWP_FIXTURE" -o from_hwp5.hwpx
   assert_file from_hwp5.hwpx
+  # W4: layout-cache carry — 산출물에 linesegarray 가 실려야 한다.
+  assert_ok "$BIN" convert-hwp5 "$HWP_FIXTURE" -o from_hwp5_carry.hwpx --carry-layout-cache
+  assert_file from_hwp5_carry.hwpx
+  if unzip -p from_hwp5_carry.hwpx Contents/section0.xml 2>/dev/null | grep -qF "<hp:linesegarray>"; then
+    pass "carry output contains linesegarray"
+  else
+    fail "carry output missing linesegarray"
+  fi
 else
   echo "  (skipped — no .hwp fixture found)"
 fi

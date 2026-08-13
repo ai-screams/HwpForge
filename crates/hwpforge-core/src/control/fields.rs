@@ -112,3 +112,30 @@ pub enum InlinePageKind {
     /// `0x00` nor `0x06`.
     Unknown,
 }
+
+/// Which counter a [`Control::NewNumber`] restarts.
+///
+/// [`Control::NewNumber`]: crate::control::Control::NewNumber
+///
+/// Maps 1:1 to HWPX `<hp:newNum numType>` and HWP5 `nwno` property
+/// bits 0-3 (native fixture 실측 2026-08-12: 쪽 번호 = `0`, corpus 613회 중
+/// 607회가 `Page`). Unmapped wire values are surfaced as [`Self::Unknown`]
+/// — encoders must skip them instead of fabricating a type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
+#[non_exhaustive]
+pub enum NewNumberKind {
+    /// 쪽 번호 재시작 (`numType="PAGE"`, wire `0`).
+    Page,
+    /// 각주 번호 재시작 (`numType="FOOTNOTE"`, wire `1`).
+    Footnote,
+    /// 미주 번호 재시작 (`numType="ENDNOTE"`, wire `2`).
+    Endnote,
+    /// 그림 번호 재시작 (`numType="PICTURE"`, wire `3`).
+    Picture,
+    /// 표 번호 재시작 (`numType="TABLE"`, wire `4`).
+    Table,
+    /// 수식 번호 재시작 (`numType="EQUATION"`, wire `5`).
+    Equation,
+    /// Unmapped wire value (6-15) — preserved as a warning signal only.
+    Unknown,
+}

@@ -67,6 +67,15 @@ enum Commands {
         /// Output HWPX file path.
         #[arg(short, long)]
         output: PathBuf,
+
+        /// Carry the HWP5 layout cache (PARA_LINE_SEG) into HWPX
+        /// `<hp:linesegarray>` so the output can be rendered with `to-pdf`.
+        /// PDF replay/comparison pipelines only — the carried cache is NOT
+        /// for Hancom re-open (multi-line overlap risk), and HWP5-side
+        /// textpos normalization is incomplete so `to-pdf` may still reject
+        /// the cache on complex documents.
+        #[arg(long)]
+        carry_layout_cache: bool,
     },
 
     /// Render a document (HWPX or HWP5) to PDF via layout-cache replay.
@@ -423,8 +432,8 @@ fn main() {
         Commands::CensusHwp5 { input, companion, output } => {
             commands::census_hwp5::run(&input, &companion, &output, cli.json);
         }
-        Commands::ConvertHwp5 { input, output } => {
-            commands::convert_hwp5::run(&input, &output, cli.json);
+        Commands::ConvertHwp5 { input, output, carry_layout_cache } => {
+            commands::convert_hwp5::run(&input, &output, carry_layout_cache, cli.json);
         }
         Commands::ToPdf { input, output, font_dirs, discovery, degraded, partial_cache_reject } => {
             commands::to_pdf::run(
