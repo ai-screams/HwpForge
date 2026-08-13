@@ -53,6 +53,7 @@ mod table_page_break;
 /// Test-only helpers for resolving shared workspace fixtures.
 pub(crate) mod test_support;
 mod warning_utils;
+mod wire_text_map;
 
 use std::collections::BTreeMap;
 use std::path::Path;

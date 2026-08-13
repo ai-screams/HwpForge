@@ -19,6 +19,9 @@ pub(crate) struct Hwp5Paragraph {
     pub text: String,
     /// The raw decoded text segments in paragraph order before flattening.
     pub text_segments: Vec<TextSegment>,
+    /// segment 없이 무음 소비된 wire 구간들 (W1b ledger — 좌표 정규화 시
+    /// 이 구간들을 빼놓으면 그만큼 어긋난다).
+    pub silent_wires: Vec<crate::schema::section::SilentWire>,
     /// Paragraph shape ID (index into DocInfo para_shapes).
     pub para_shape_id: u16,
     /// Style ID (index into DocInfo styles).

@@ -122,10 +122,13 @@ impl ParaBuf {
 
     /// Build the final `Hwp5Paragraph`, consuming this buffer.
     fn finish(self) -> Hwp5Paragraph {
-        let text_segments =
-            self.text.map_or_else(Vec::new, |paragraph_text| paragraph_text.segments);
+        let (text_segments, silent_wires) = self.text.map_or_else(
+            || (Vec::new(), Vec::new()),
+            |paragraph_text| (paragraph_text.segments, paragraph_text.silent_wires),
+        );
         let text = segments_to_string(&text_segments);
         Hwp5Paragraph {
+            silent_wires,
             text,
             text_segments,
             para_shape_id: self.header.para_shape_id,

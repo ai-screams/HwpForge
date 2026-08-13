@@ -199,6 +199,21 @@ pub(crate) enum TextSegment {
     FwSpace,
 }
 
+/// segment 를 방출하지 않고 무음 소비된 wire 구간 (문단 시작 기준 u16 단위).
+///
+/// W1b ledger 의 유일한 추가 진실원 — segment 가 있는 소비는 종류에서
+/// wire 길이가 유도되지만 (Text=UTF-16 len · Tab/컨트롤=8 · 단일=1),
+/// 무음 소비 (`0x00`·`0x01`·`0x05~0x08`·`0x13/0x14`·비승격
+/// `0x11/0x12/0x15/0x16`·`0x0E~0x10`·`0x1E`) 는 여기 기록하지 않으면
+/// 좌표 정규화가 그만큼 어긋난다.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SilentWire {
+    /// wire 시작 위치 (문단 시작 기준 u16 단위).
+    pub start: u32,
+    /// wire 소비 유닛 수 (확장/인라인 컨트롤=8, 단일 제어문자=1).
+    pub len: u32,
+}
+
 /// Parsed from a `ParaText` (tag `0x43`) record in a BodyText section.
 ///
 /// Contains the decoded text of one paragraph as a sequence of typed
@@ -208,6 +223,8 @@ pub(crate) enum TextSegment {
 pub(crate) struct Hwp5ParaText {
     /// Decoded text segments in paragraph order.
     pub segments: Vec<TextSegment>,
+    /// segment 없이 무음 소비된 wire 구간들 (start 오름차순 — W1b ledger).
+    pub silent_wires: Vec<SilentWire>,
 }
 
 impl Hwp5ParaText {
@@ -236,6 +253,7 @@ impl Hwp5ParaText {
             data.chunks_exact(2).map(|b| u16::from_le_bytes([b[0], b[1]])).collect();
 
         let mut segments: Vec<TextSegment> = Vec::new();
+        let mut silent_wires: Vec<SilentWire> = Vec::new();
         let mut text_buf: Vec<u16> = Vec::new();
         let mut i = 0usize;
 
@@ -284,14 +302,22 @@ impl Hwp5ParaText {
 
             match cp {
                 // Reserved single-wchar control.
-                0x00 => {}
+                //
+                // W1b: 무음 1유닛 소비 — 텍스트 버퍼를 쪼개 flush 해야
+                // ledger 의 wire 구간이 연속 텍스트와 섞이지 않는다
+                // (segments_to_string 결과는 동일).
+                0x00 => {
+                    flush_text!();
+                    silent_wires.push(SilentWire { start: (i - 1) as u32, len: 1 });
+                }
 
                 // Extended controls: 8 wchars total (1 control + 7 extra u16).
                 // 0x01 = reserved extended control.
                 0x01 => {
                     flush_text!();
+                    let seg_start = (i - 1) as u32;
                     let _extra = read_extra!(i - 1);
-                    // No segment emitted — consumed silently.
+                    silent_wires.push(SilentWire { start: seg_start, len: 8 });
                 }
                 0x02 => {
                     flush_text!();
@@ -315,8 +341,9 @@ impl Hwp5ParaText {
                 }
                 0x13 | 0x14 => {
                     flush_text!();
+                    let seg_start = (i - 1) as u32;
                     let _extra = read_extra!(i - 1);
-                    // Unsupported inline control — consumed silently.
+                    silent_wires.push(SilentWire { start: seg_start, len: 8 });
                 }
                 // 0x17: dutmal (덧말) inline marker.
                 // `extra[0..4]` carries the BE-ascii ctrl_id `tdut` for the
@@ -337,11 +364,13 @@ impl Hwp5ParaText {
                 // family whose CtrlHeader we don't yet decode.
                 0x16 => {
                     flush_text!();
+                    let seg_start = (i - 1) as u32;
                     let extra = read_extra!(i - 1);
                     if ctrl_id_from_inline_extra_bytes(&extra) == CTRL_ID_INDEXMARK {
                         segments.push(TextSegment::ControlRef { extra });
+                    } else {
+                        silent_wires.push(SilentWire { start: seg_start, len: 8 });
                     }
-                    // Else: consumed silently, same as 0x0E..=0x15 below.
                 }
                 // 0x12: extended control — Wave 12n discovered that
                 // `atno` inline page-number markers ride this control
@@ -351,11 +380,13 @@ impl Hwp5ParaText {
                 // accidentally promoting an unknown control family.
                 0x12 => {
                     flush_text!();
+                    let seg_start = (i - 1) as u32;
                     let extra = read_extra!(i - 1);
                     if ctrl_id_from_inline_extra_bytes(&extra) == CTRL_ID_ATNO {
                         segments.push(TextSegment::ControlRef { extra });
+                    } else {
+                        silent_wires.push(SilentWire { start: seg_start, len: 8 });
                     }
-                    // Else: consumed silently, same as 0x0E..=0x10 / 0x13..=0x15 below.
                 }
                 // 0x11: 각주/미주 (footnote/endnote) inline reference marker
                 // (HWP 5.0 spec rev 1.3 표 6 코드 17 — "각주/미주", extended).
@@ -373,14 +404,16 @@ impl Hwp5ParaText {
                 // CtrlHeader we don't decode (mirrors the 0x12/0x16 guards).
                 0x11 => {
                     flush_text!();
+                    let seg_start = (i - 1) as u32;
                     let extra = read_extra!(i - 1);
                     if matches!(
                         ctrl_id_from_inline_extra_bytes(&extra),
                         CTRL_ID_FOOTNOTE | CTRL_ID_ENDNOTE
                     ) {
                         segments.push(TextSegment::ControlRef { extra });
+                    } else {
+                        silent_wires.push(SilentWire { start: seg_start, len: 8 });
                     }
-                    // Else: consumed silently, same as 0x0E..=0x10 below.
                 }
                 // 0x15: page-control marker (새 번호 `nwno`·감추기 `pghd`·
                 // 쪽번호 위치 `pgnp` 공유 — F1/F2 실측 2026-08-12). `nwno`
@@ -391,14 +424,16 @@ impl Hwp5ParaText {
                 // 큐 정렬이 유지된다.
                 0x15 => {
                     flush_text!();
+                    let seg_start = (i - 1) as u32;
                     let extra = read_extra!(i - 1);
                     if matches!(
                         ctrl_id_from_inline_extra_bytes(&extra),
                         CTRL_ID_NEW_NUMBER | CTRL_ID_PAGE_HIDING
                     ) {
                         segments.push(TextSegment::ControlRef { extra });
+                    } else {
+                        silent_wires.push(SilentWire { start: seg_start, len: 8 });
                     }
-                    // Else (pgnp/미지 owner): consumed silently.
                 }
                 // 0x0E-0x10: extended controls (bookmarks, change tracking,
                 // etc. — 0x11/0x12/0x13/0x14/0x15 는 위의 전용 arm). All
@@ -406,8 +441,9 @@ impl Hwp5ParaText {
                 // a future slice promotes them to a typed variant.
                 0x0E..=0x10 => {
                     flush_text!();
+                    let seg_start = (i - 1) as u32;
                     let _extra = read_extra!(i - 1);
-                    // No segment emitted — consumed silently.
+                    silent_wires.push(SilentWire { start: seg_start, len: 8 });
                 }
 
                 // Inline controls: 8 wchars total (1 control + 7 extra u16).
@@ -418,13 +454,16 @@ impl Hwp5ParaText {
                 }
                 0x05..=0x07 => {
                     flush_text!();
+                    let seg_start = (i - 1) as u32;
                     let _extra = read_extra!(i - 1);
-                    // Unsupported inline control — consumed silently.
+                    silent_wires.push(SilentWire { start: seg_start, len: 8 });
                 }
                 0x08 => {
                     flush_text!();
+                    let seg_start = (i - 1) as u32;
                     let _extra = read_extra!(i - 1);
-                    // Title mark is not modeled in Core IR yet.
+                    // Title mark is not modeled in Core IR yet — 무음 8유닛.
+                    silent_wires.push(SilentWire { start: seg_start, len: 8 });
                 }
                 0x09 => {
                     flush_text!();
@@ -457,6 +496,7 @@ impl Hwp5ParaText {
                 0x1E => {
                     flush_text!();
                     // Hard hyphen — not modeled in Core yet; consumed silently.
+                    silent_wires.push(SilentWire { start: (i - 1) as u32, len: 1 });
                 }
 
                 // Everything else: normal character.
@@ -469,7 +509,7 @@ impl Hwp5ParaText {
         // Flush any trailing text.
         flush_text!();
 
-        Ok(Self { segments })
+        Ok(Self { segments, silent_wires })
     }
 }
 

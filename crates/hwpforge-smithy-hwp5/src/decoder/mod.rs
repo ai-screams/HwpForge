@@ -86,6 +86,13 @@ pub enum Hwp5Warning {
         /// Concrete fallback detail.
         reason: String,
     },
+    /// A paragraph's line-layout cache was not promoted to Core because the
+    /// wire→Core coordinate ledger could not be built or a lineseg `textpos`
+    /// could not be normalized (W1b fail-closed — no guessed coordinates).
+    LayoutCacheDropped {
+        /// Concrete drop reason (ledger failure or offending textpos).
+        reason: String,
+    },
 }
 
 /// Shared parser output before Core projection or semantic adaptation.
