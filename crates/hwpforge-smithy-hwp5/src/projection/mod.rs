@@ -3562,6 +3562,46 @@ mod tests {
     }
 
     #[test]
+    fn unknown_control_drop_aggregate_caps_distinct_ids_and_reports_more() {
+        // distinct id 상한(16) + "N more" — corpus noisy 문서 폭주 방지 잠금.
+        let mut controls = Vec::new();
+        let mut segments = Vec::new();
+        for i in 0..20u32 {
+            // 'a a'..'t t' 꼴의 서로 다른 인쇄가능 4바이트 id 20종.
+            let id = u32::from_be_bytes([b'a' + i as u8, b' ', b'a' + i as u8, b' ']);
+            controls.push(Hwp5Control::Unknown { ctrl_id: id, header_data: vec![] });
+            segments.push(crate::schema::section::TextSegment::ControlRef { extra: [0u8; 14] });
+        }
+        let para = Hwp5Paragraph {
+            text: String::new(),
+            text_segments: segments,
+            para_shape_id: 0,
+            style_id: 0,
+            page_break: false,
+            column_break: false,
+            char_shape_runs: vec![],
+            line_segments: vec![],
+            controls,
+        };
+        let (_, warnings) = project_to_core(vec![make_section(vec![para], None)]).unwrap();
+        let drops: Vec<&String> = warnings
+            .iter()
+            .filter_map(|w| match w {
+                Hwp5Warning::DroppedControl { control: "unknown_control", reason } => Some(reason),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(drops.len(), 17, "16 distinct + 'N more' 요약 1건: {drops:?}");
+        assert!(drops.last().unwrap().contains("4 more distinct"), "{}", drops.last().unwrap());
+    }
+
+    #[test]
+    fn ctrl_id_ascii_falls_back_to_hex_for_non_printable() {
+        assert_eq!(ctrl_id_ascii(u32::from_be_bytes(*b"form")), "form");
+        assert_eq!(ctrl_id_ascii(0x0102_0304), "0x01020304");
+    }
+
+    #[test]
     fn unknown_control_drops_are_aggregated_into_one_warning_per_id() {
         // W4 무음 드롭 종결: 같은 미지원 ctrl 이 몇 번 죽든 경고는 id 당
         // 1건 + count (per-occurrence 폭탄 금지 — corpus `%fmu` 531회).

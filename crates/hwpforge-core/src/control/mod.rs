@@ -2028,6 +2028,45 @@ mod tests {
     }
 
     #[test]
+    fn display_and_kind_name_for_page_control_variants() {
+        // W2/W3 variant 의 Display·kind_name·traversal no-op 커버 (커버리지
+        // 게이트 — 리눅스는 폰트 의존 테스트 스킵으로 마진이 얇다).
+        let nn = Control::NewNumber { kind: NewNumberKind::Page, number: 7 };
+        assert_eq!(nn.to_string(), "NewNumber(Page, 7)");
+        assert_eq!(nn.kind_name(), "new_number");
+
+        let ph = Control::PageHiding {
+            hide_header: true,
+            hide_footer: false,
+            hide_master_page: false,
+            hide_border: false,
+            hide_fill: true,
+            hide_page_num: true,
+        };
+        assert_eq!(ph.to_string(), "PageHiding(header,fill,page_num)");
+        assert_eq!(ph.kind_name(), "page_hiding");
+
+        // 빈 mask (corpus 실측 존재 — 렌더 no-op).
+        let empty = Control::PageHiding {
+            hide_header: false,
+            hide_footer: false,
+            hide_master_page: false,
+            hide_border: false,
+            hide_fill: false,
+            hide_page_num: false,
+        };
+        assert_eq!(empty.to_string(), "PageHiding()");
+
+        // traversal: leaf 컨트롤은 중첩 문단이 없다.
+        let mut nn = nn;
+        let mut ph = ph;
+        let mut seen = 0usize;
+        nn.walk_paragraphs_mut(&mut |_| seen += 1);
+        ph.walk_paragraphs_mut(&mut |_| seen += 1);
+        assert_eq!(seen, 0);
+    }
+
+    #[test]
     fn display_text_box() {
         let ctrl = Control::TextBox {
             paragraphs: vec![simple_paragraph(), simple_paragraph()],

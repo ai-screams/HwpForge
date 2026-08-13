@@ -1003,6 +1003,33 @@ fn audit_hwp5_table_border_fill_notes_source_truth() {
 }
 
 #[test]
+fn convert_hwp5_human_mode_and_warning_details_surface_aggregate() {
+    // W4 표면 게이트: human 모드 요약 라인 + `--json` 의 warning_details 에
+    // 집계 드롭 경고(부처 실물 fixture 의 중첩 'foot' 1건)가 우선 노출된다.
+    let tmp = test_tmp();
+    let source = fixture("table_20_real_world_ministry_stress.hwp");
+
+    let out_h = tmp.join("stress_human.hwpx");
+    let (stdout, _, code) =
+        run(&["convert-hwp5", source.to_str().unwrap(), "-o", out_h.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Converted") && stdout.contains("warnings"), "{stdout}");
+
+    let out_j = tmp.join("stress_json.hwpx");
+    let (val, _, code) =
+        run_json(&["convert-hwp5", source.to_str().unwrap(), "-o", out_j.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let details = val["warning_details"].as_array().expect("details array");
+    assert!(
+        details
+            .first()
+            .and_then(|d| d.as_str())
+            .is_some_and(|d| d.contains("unknown_control") && d.contains("'foot'")),
+        "집계 경고가 첫 항목이어야 함: {details:?}"
+    );
+}
+
+#[test]
 fn convert_hwp5_pagectl_native_fixtures_carry_newnum_and_pagehiding() {
     // 독립 리뷰 제안 상환: native 한컴 fixture(2026-08-12 byte-verify 세트의
     // 소형 커밋본)를 상설 회귀 게이트로 — 새 번호(nwno→newNum)와
@@ -2337,6 +2364,42 @@ fn from_json_preserves_styles() {
 // ═══════════════════════════════════════════════════════════════
 // 5. patch — 10 tests
 // ═══════════════════════════════════════════════════════════════
+
+#[test]
+fn patch_preserves_sections_containing_newnum_and_pagehiding() {
+    // 독립 리뷰 체크리스트: newNum/pageHiding ctrl 이 있는 구역의 patch
+    // no-op 왕복 — 보존 카운터(semantic_run_idx)가 새 ctrl 을 세지 못하면
+    // slot 정렬이 깨져 실패한다. 소스 = 커밋된 native fixture 변환본.
+    let tmp = test_tmp();
+    let hwpx = tmp.join("pagectl.hwpx");
+    hwpforge_convert::hwp5_to_hwpx(fixture("pagectl_01_newnum_midpage.hwp"), &hwpx)
+        .expect("convert pagectl fixture");
+
+    for section in ["0", "1"] {
+        let json_out = tmp.join(format!("pagectl_s{section}.json"));
+        let patched = tmp.join(format!("pagectl_s{section}_patched.hwpx"));
+        let (_, _, code) = run(&[
+            "to-json",
+            hwpx.to_str().unwrap(),
+            "-o",
+            json_out.to_str().unwrap(),
+            "--section",
+            section,
+        ]);
+        assert_eq!(code, 0, "to-json s{section}");
+        let (_, stderr, code) = run(&[
+            "patch",
+            hwpx.to_str().unwrap(),
+            "--section",
+            section,
+            json_out.to_str().unwrap(),
+            "-o",
+            patched.to_str().unwrap(),
+        ]);
+        assert_eq!(code, 0, "patch s{section}: {stderr}");
+        assert!(patched.exists());
+    }
+}
 
 #[test]
 fn patch_section() {
