@@ -1003,6 +1003,52 @@ fn audit_hwp5_table_border_fill_notes_source_truth() {
 }
 
 #[test]
+fn convert_hwp5_carry_layout_cache_flag_emits_linesegarray() {
+    // W4: `--carry-layout-cache` 는 HWP5 조판 캐시를 HWPX linesegarray 로
+    // 실어 to-pdf 재생을 가능하게 한다 (기본 = 미방출 — 한컴 재개봉 안전).
+    let tmp = test_tmp();
+    let source = fixture("table_09c_page_break_none.hwp");
+    let plain = tmp.join("carry_off.hwpx");
+    let carried = tmp.join("carry_on.hwpx");
+
+    let (val, _, code) =
+        run_json(&["convert-hwp5", source.to_str().unwrap(), "-o", plain.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    assert_eq!(val["status"], "ok");
+    assert!(val["warning_details"].is_array(), "W4: JSON 에 경고 상세 채널");
+
+    let (val, _, code) = run_json(&[
+        "convert-hwp5",
+        source.to_str().unwrap(),
+        "-o",
+        carried.to_str().unwrap(),
+        "--carry-layout-cache",
+    ]);
+    assert_eq!(code, 0);
+    assert_eq!(val["status"], "ok");
+
+    let read_section = |p: &Path| {
+        let file = std::fs::File::open(p).expect("open hwpx");
+        let mut zip = zip::ZipArchive::new(file).expect("zip");
+        let mut xml = String::new();
+        std::io::Read::read_to_string(
+            &mut zip.by_name("Contents/section0.xml").expect("section0"),
+            &mut xml,
+        )
+        .expect("read section xml");
+        xml
+    };
+    assert!(
+        !read_section(&plain).contains("<hp:linesegarray>"),
+        "기본은 캐시 미방출 (한컴 재개봉 안전)"
+    );
+    assert!(
+        read_section(&carried).contains("<hp:linesegarray>"),
+        "--carry-layout-cache 는 linesegarray 방출"
+    );
+}
+
+#[test]
 fn convert_hwp5_table_page_break_and_repeat_header_parity() {
     let cases = [
         ("table_06_repeat_header_row.hwp", "table_repeat_header_tables", "MATCH"),

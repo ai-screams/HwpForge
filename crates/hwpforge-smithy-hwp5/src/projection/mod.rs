@@ -443,8 +443,43 @@ fn project_to_core_internal(
         doc.add_section(section);
     }
 
+    // W4 무음 드롭 종결: 미지원 ctrl 드롭을 문서별 (ctrl_id → count) 집계
+    // 경고로 방출. per-occurrence 폭탄 방지 — distinct id 상한 + "N more".
+    const MAX_DISTINCT_DROP_WARNINGS: usize = 16;
+    let dropped = std::mem::take(&mut projection_images.dropped_unknown);
+    let distinct = dropped.len();
+    for (ctrl_id, count) in dropped.into_iter().take(MAX_DISTINCT_DROP_WARNINGS) {
+        projection_images.warnings.push(Hwp5Warning::DroppedControl {
+            control: "unknown_control",
+            reason: format!(
+                "unsupported ctrl '{}' dropped {count} time(s) during projection",
+                ctrl_id_ascii(ctrl_id)
+            ),
+        });
+    }
+    if distinct > MAX_DISTINCT_DROP_WARNINGS {
+        projection_images.warnings.push(Hwp5Warning::DroppedControl {
+            control: "unknown_control",
+            reason: format!(
+                "{} more distinct unsupported ctrl ids were dropped",
+                distinct - MAX_DISTINCT_DROP_WARNINGS
+            ),
+        });
+    }
+
     all_warnings.extend(projection_images.warnings);
     Ok((doc, projection_images.image_store, all_warnings))
+}
+
+/// ctrl_id(big-endian ASCII u32)를 사람이 읽을 표기로 — 비인쇄 바이트가
+/// 섞이면 hex 로 폴백한다 (경고 메시지 전용).
+fn ctrl_id_ascii(ctrl_id: u32) -> String {
+    let bytes = ctrl_id.to_be_bytes();
+    if bytes.iter().all(|b| b.is_ascii_graphic() || *b == b' ') {
+        bytes.iter().map(|&b| char::from(b)).collect()
+    } else {
+        format!("{ctrl_id:#010x}")
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -456,6 +491,11 @@ struct ProjectionImageState<'a> {
     ole_assets: Option<&'a Hwp5OleAssetPlan>,
     image_store: ImageStore,
     warnings: Vec<Hwp5Warning>,
+    /// W4 무음 드롭 종결: `project_control_run` 의 Unknown arm 에서 죽는
+    /// ctrl_id 별 카운트. 문서 끝에서 **집계 경고**로 방출된다 (per-occurrence
+    /// 폭탄도 무경고도 금지 — corpus 실측: `%fmu` 531회·`pghd` 1,013회가
+    /// 이 지점에서 소리 없이 사라졌었다).
+    dropped_unknown: std::collections::BTreeMap<u32, usize>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -469,7 +509,13 @@ impl<'a> ProjectionImageState<'a> {
         image_assets: Option<&'a Hwp5JoinedImageAssetPlan>,
         ole_assets: Option<&'a Hwp5OleAssetPlan>,
     ) -> Self {
-        Self { image_assets, ole_assets, image_store: ImageStore::new(), warnings: Vec::new() }
+        Self {
+            image_assets,
+            ole_assets,
+            image_store: ImageStore::new(),
+            warnings: Vec::new(),
+            dropped_unknown: std::collections::BTreeMap::new(),
+        }
     }
 
     /// Look up raw `/BinData/BIN*.OLE` bytes by `binary_data_id`, if a plan
@@ -2212,10 +2258,14 @@ fn project_control_run(
         // `project_paragraph_with_images_structural`, not through this dispatch.
         // If a Memo control ever reaches here (no matching FieldBegin in text
         // segments), prefer dropping over silently double-emitting.
-        Hwp5Control::Memo(_)
-        | Hwp5Control::Header(_)
-        | Hwp5Control::Footer(_)
-        | Hwp5Control::Unknown { .. } => None,
+        Hwp5Control::Memo(_) | Hwp5Control::Header(_) | Hwp5Control::Footer(_) => None,
+        // W4 무음 드롭 종결: 미지원 ctrl 은 여전히 드롭되지만 **집계 카운트**
+        // 를 남겨 문서 끝에서 경고로 방출된다 (nwno/pghd 가 여기서 소리 없이
+        // 죽던 것이 corpus 18% 문서의 fake output 원인이었다 — 계획 §0).
+        Hwp5Control::Unknown { ctrl_id, .. } => {
+            *projection_images.dropped_unknown.entry(*ctrl_id).or_insert(0) += 1;
+            None
+        }
         Hwp5Control::Dutmal(dutmal) => Some(project_dutmal_run(dutmal, projection_images)),
         Hwp5Control::Compose(compose) => Some(project_compose_run(compose)),
         Hwp5Control::IndexMark(indexmark) => Some(project_indexmark_run(indexmark)),
@@ -3491,6 +3541,39 @@ mod tests {
             })
             .expect("fail-safe warning must surface");
         assert!(reason.contains("truncated"), "{reason}");
+    }
+
+    #[test]
+    fn unknown_control_drops_are_aggregated_into_one_warning_per_id() {
+        // W4 무음 드롭 종결: 같은 미지원 ctrl 이 몇 번 죽든 경고는 id 당
+        // 1건 + count (per-occurrence 폭탄 금지 — corpus `%fmu` 531회).
+        let form_id = u32::from_be_bytes(*b"form"); // 기지 deferred ctrl
+        let mk = || Hwp5Control::Unknown { ctrl_id: form_id, header_data: vec![] };
+        let para = Hwp5Paragraph {
+            text: String::new(),
+            text_segments: vec![
+                crate::schema::section::TextSegment::ControlRef { extra: [0u8; 14] },
+                crate::schema::section::TextSegment::ControlRef { extra: [0u8; 14] },
+            ],
+            para_shape_id: 0,
+            style_id: 0,
+            page_break: false,
+            column_break: false,
+            char_shape_runs: vec![],
+            line_segments: vec![],
+            controls: vec![mk(), mk()],
+        };
+        let section = make_section(vec![para], None);
+        let (_, warnings) = project_to_core(vec![section]).unwrap();
+        let drops: Vec<&String> = warnings
+            .iter()
+            .filter_map(|w| match w {
+                Hwp5Warning::DroppedControl { control: "unknown_control", reason } => Some(reason),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(drops.len(), 1, "id 당 집계 1건: {warnings:?}");
+        assert!(drops[0].contains("'form'") && drops[0].contains("2 time(s)"), "{}", drops[0]);
     }
 
     #[test]

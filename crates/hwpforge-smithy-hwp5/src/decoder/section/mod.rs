@@ -925,10 +925,13 @@ impl BodyTextParserState {
                             Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).ok(),
                         ));
                     } else if let Some(buf) = ctx.current_cell_para.as_mut() {
-                        buf.controls.push(Hwp5Control::Unknown {
-                            ctrl_id,
-                            header_data: record.data.clone(),
-                        });
+                        buf.controls.push(
+                            Self::typed_inline_family_control(ctrl_id, &record.data)
+                                .unwrap_or_else(|| Hwp5Control::Unknown {
+                                    ctrl_id,
+                                    header_data: record.data.clone(),
+                                }),
+                        );
                     }
                 }
             }
@@ -1173,10 +1176,13 @@ impl BodyTextParserState {
                             Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).ok(),
                         ));
                     } else {
-                        buf.controls.push(Hwp5Control::Unknown {
-                            ctrl_id,
-                            header_data: record.data.clone(),
-                        });
+                        buf.controls.push(
+                            Self::typed_inline_family_control(ctrl_id, &record.data)
+                                .unwrap_or_else(|| Hwp5Control::Unknown {
+                                    ctrl_id,
+                                    header_data: record.data.clone(),
+                                }),
+                        );
                     }
                 }
             }
@@ -1187,6 +1193,28 @@ impl BodyTextParserState {
         }
 
         true
+    }
+
+    /// 중첩 컨텍스트(표 셀·subtree)의 CtrlHeader 를 top-level 과 동일하게
+    /// 타입화한다 — **inline marker 가족(atno/nwno/pghd)만**. 나머지는
+    /// Unknown round-trip 보존. (W4: 집계 경고가 각주 subtree 안 atno 의
+    /// 기존 무음 드롭을 적발 — 중첩에서도 같은 wire 이므로 같은 parse 재사용.)
+    fn typed_inline_family_control(ctrl_id: u32, data: &[u8]) -> Option<Hwp5Control> {
+        match ctrl_id {
+            CTRL_ID_ATNO => {
+                crate::schema::section::Hwp5InlinePageNumberControl::parse(ctrl_id, data)
+                    .map(Hwp5Control::InlinePageNumber)
+            }
+            CTRL_ID_NEW_NUMBER => {
+                crate::schema::section::Hwp5NewNumberControl::parse(ctrl_id, data)
+                    .map(Hwp5Control::NewNumber)
+            }
+            CTRL_ID_PAGE_HIDING => {
+                crate::schema::section::Hwp5PageHidingControl::parse(ctrl_id, data)
+                    .map(Hwp5Control::PageHiding)
+            }
+            _ => None,
+        }
     }
 
     fn handle_top_level_record(&mut self, record: &Record, tag: TagId, level: u16) {

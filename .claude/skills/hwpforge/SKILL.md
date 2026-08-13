@@ -107,6 +107,8 @@ echo "# 제목" | hwpforge convert - -o out.hwpx          # stdin via "-"
 
 # Legacy HWP5
 hwpforge convert-hwp5 old.hwp -o out.hwpx
+#   --carry-layout-cache : carry the HWP5 layout cache so `to-pdf` can render
+#   the output (PDF replay/comparison ONLY — not for Hancom re-open)
 
 # Navigation map (ALWAYS before editing) + targeted reads (E5)
 hwpforge outline doc.hwpx [--json]        # headings / tables(ordinal+dims) / fields / bookmarks
