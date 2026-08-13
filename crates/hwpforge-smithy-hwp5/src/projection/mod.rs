@@ -310,6 +310,17 @@ fn project_to_core_internal(
             // `<hp:startNum page="0">`(이어서) 로 변환하므로 begin_num 은
             // 만들지 않는다. bits≠0 은 재시작으로 날조하는 대신 raw 값과
             // 함께 경고로 표면화하고 이어서 처리한다.
+            // 독립 리뷰 Low #9: `[20..28]` 절단은 bits 값과 무관하게 계획의
+            // all-or-none 규약 위반 신호 — 표면화한다 (corpus 전수에서 관측
+            // 0건이라 flood 위험 없음).
+            if section_result.section_def_start_numbers.is_none() {
+                all_warnings.push(Hwp5Warning::ProjectionFallback {
+                    subject: "section.begin_num",
+                    reason: "secd start-number payload [20..28] truncated; start numbers \
+                             not captured"
+                        .to_string(),
+                });
+            }
             let restart_bits = (properties >> 20) & 0x3;
             if restart_bits != 0 {
                 let detail = match section_result.section_def_start_numbers {
@@ -1201,6 +1212,13 @@ fn drain_unconsumed_paragraph_queues(
         ) {
             runs.push(run);
         }
+    }
+
+    // 독립 리뷰 Medium #5: 소비되지 않고 남은 marker_headers(secd/cold/
+    // bookmark/hyperlink CtrlHeader 가 inline marker 없이 남은 wire 이상
+    // 케이스)도 무음 소멸 대신 드롭 집계에 합산한다.
+    for leftover in queues.marker_headers {
+        *projection_images.dropped_unknown.entry(leftover.ctrl_id).or_insert(0) += 1;
     }
 
     for memo in queues.memo_controls {

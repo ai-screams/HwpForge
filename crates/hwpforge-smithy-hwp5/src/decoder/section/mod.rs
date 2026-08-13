@@ -1579,6 +1579,9 @@ impl BodyTextParserState {
             }
         } else if ctrl_id == CTRL_ID_NEW_NUMBER {
             // `nwno` 새 번호 지정 — 10바이트 payload (W2, F1 실측 §1.2).
+            // malformed 여도 **Unknown placeholder 를 push** 해 marker↔control
+            // 큐 정렬을 보존한다 (독립 리뷰 High #1: 승격된 0x15 marker 가
+            // 뒤따르는 GSO 를 오소비하는 queue poisoning 방지).
             if let Some(nwno) =
                 crate::schema::section::Hwp5NewNumberControl::parse(ctrl_id, &record.data)
             {
@@ -1591,6 +1594,10 @@ impl BodyTextParserState {
                     reason: "malformed nwno CtrlHeader payload; dropping number restart"
                         .to_string(),
                 });
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls
+                        .push(Hwp5Control::Unknown { ctrl_id, header_data: record.data.clone() });
+                }
             }
         } else if ctrl_id == CTRL_ID_PAGE_HIDING {
             // `pghd` 감추기 — 8바이트 payload (W3, F2 실측 §1.2).
@@ -1605,6 +1612,11 @@ impl BodyTextParserState {
                     control: "page_hiding",
                     reason: "malformed pghd CtrlHeader payload; dropping page hiding".to_string(),
                 });
+                // 큐 정렬 보존 placeholder (독립 리뷰 High #1).
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls
+                        .push(Hwp5Control::Unknown { ctrl_id, header_data: record.data.clone() });
+                }
             }
         } else if ctrl_id == CTRL_ID_ATNO {
             // `atno` ctrl carries a single 4-byte kind flag
@@ -1620,6 +1632,12 @@ impl BodyTextParserState {
                     control: "inline_page_number",
                     reason: "malformed atno CtrlHeader payload; dropping inline page".to_string(),
                 });
+                // 큐 정렬 보존 placeholder — 0x12 marker 승격과 동계열의
+                // 선행 결함도 함께 수리 (독립 리뷰 High #1).
+                if let Some(buf) = self.current.as_mut() {
+                    buf.controls
+                        .push(Hwp5Control::Unknown { ctrl_id, header_data: record.data.clone() });
+                }
             }
         } else if let Some(command) =
             (ctrl_id == CTRL_ID_MEMO).then(|| Hwp5MemoCommand::parse(&record.data)).flatten()
@@ -2794,8 +2812,10 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_header_nwno_truncated_payload_warns_dropped() {
-        // 10바이트 미만 payload → 무음 드롭 금지, DroppedControl 경고.
+    fn ctrl_header_nwno_truncated_payload_warns_and_keeps_placeholder() {
+        // 10바이트 미만 payload → DroppedControl 경고 + **Unknown placeholder**
+        // 로 marker↔control 큐 정렬 보존 (독립 리뷰 High #1 — placeholder 가
+        // 없으면 승격된 0x15 marker 가 뒤따르는 객체를 오소비한다).
         let mut nwno = CTRL_ID_NEW_NUMBER.to_le_bytes().to_vec();
         nwno.extend_from_slice(&[0x00, 0x00]);
 
@@ -2803,7 +2823,14 @@ mod tests {
         stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
         stream.extend(make_record(TagId::CtrlHeader, 0, &nwno));
         let result = parse_body_text(&stream, &version()).unwrap();
-        assert!(result.paragraphs[0].controls.is_empty());
+        assert!(
+            matches!(
+                result.paragraphs[0].controls.as_slice(),
+                [Hwp5Control::Unknown { ctrl_id, .. }] if *ctrl_id == CTRL_ID_NEW_NUMBER
+            ),
+            "placeholder 로 큐 정렬 보존: {:?}",
+            result.paragraphs[0].controls
+        );
         assert!(result
             .warnings
             .iter()
@@ -2832,7 +2859,7 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_header_pghd_truncated_payload_warns_dropped() {
+    fn ctrl_header_pghd_truncated_payload_warns_and_keeps_placeholder() {
         let mut pghd = CTRL_ID_PAGE_HIDING.to_le_bytes().to_vec();
         pghd.extend_from_slice(&[0x20]);
 
@@ -2840,7 +2867,14 @@ mod tests {
         stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
         stream.extend(make_record(TagId::CtrlHeader, 0, &pghd));
         let result = parse_body_text(&stream, &version()).unwrap();
-        assert!(result.paragraphs[0].controls.is_empty());
+        assert!(
+            matches!(
+                result.paragraphs[0].controls.as_slice(),
+                [Hwp5Control::Unknown { ctrl_id, .. }] if *ctrl_id == CTRL_ID_PAGE_HIDING
+            ),
+            "placeholder 로 큐 정렬 보존 (독립 리뷰 High #1): {:?}",
+            result.paragraphs[0].controls
+        );
         assert!(result
             .warnings
             .iter()

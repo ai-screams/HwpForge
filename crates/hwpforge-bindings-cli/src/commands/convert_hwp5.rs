@@ -57,8 +57,21 @@ pub fn run(input: &Path, output: &Path, carry_layout_cache: bool, json_mode: boo
         .exit(json_mode, 1)
     });
 
-    let warning_details: Vec<String> =
-        warnings.iter().take(MAX_WARNING_DETAILS).map(|w| format!("{w:?}")).collect();
+    // 집계 드롭 경고(unknown_control)를 우선 배치 — 선행 decode 경고가
+    // 상한을 다 먹어 집계가 가려지는 일 방지 (독립 리뷰 Medium #6).
+    let is_aggregate = |w: &&hwpforge_smithy_hwp5::Hwp5Warning| {
+        matches!(
+            w,
+            hwpforge_smithy_hwp5::Hwp5Warning::DroppedControl { control: "unknown_control", .. }
+        )
+    };
+    let warning_details: Vec<String> = warnings
+        .iter()
+        .filter(is_aggregate)
+        .chain(warnings.iter().filter(|w| !is_aggregate(w)))
+        .take(MAX_WARNING_DETAILS)
+        .map(|w| format!("{w:?}"))
+        .collect();
     let result = ConvertHwp5Result {
         status: "ok",
         input: input.display().to_string(),

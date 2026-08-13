@@ -1068,7 +1068,12 @@ impl Hwp5SemanticContainerKind {
 }
 
 /// Canonical semantic control kinds currently required by the parser plan.
+///
+/// `#[non_exhaustive]` (2026-08-13, 독립 리뷰 Medium #7): HWP5 wire 에서 새
+/// 컨트롤을 타입화할 때마다 variant 가 늘어난다 — 외부 소비자는 wildcard
+/// arm 을 유지해야 한다 (crate 는 publish=false 지만 소스 호환 계약 명시).
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[non_exhaustive]
 pub enum Hwp5SemanticControlKind {
     /// Body text paragraph container.
     Paragraph,

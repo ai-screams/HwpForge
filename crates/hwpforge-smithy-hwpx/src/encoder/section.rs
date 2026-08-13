@@ -491,6 +491,37 @@ fn build_runs(
         std::collections::HashMap::new();
 
     for run in runs {
+        // 독립 리뷰 High #8: 첫 문단이 control run(NewNumber/PageHiding 등)
+        // 으로 시작하면 secPr 가 둘째 run 으로 밀려 한컴 계약(secPr = 첫
+        // 문단의 첫 run)을 깬다 — 전용 carrier run 을 index 0 에 먼저
+        // 삽입한다 (뒤의 "no non-control runs" 합성 run 과 동일 형태;
+        // colPr 는 secPr 직후 문자열 후처리로 따라붙는다).
+        if inject_sec_pr && !sec_pr_injected && run.content.is_control() {
+            if let Some(ps) = page_settings {
+                sec_pr_injected = true;
+                result.push(HxRun {
+                    char_pr_id_ref: 0,
+                    sec_pr: Some(build_sec_pr(ps, text_direction)),
+                    texts: Vec::new(),
+                    tables: Vec::new(),
+                    pictures: Vec::new(),
+                    ctrls: Vec::new(),
+                    rects: Vec::new(),
+                    lines: Vec::new(),
+                    ellipses: Vec::new(),
+                    polygons: Vec::new(),
+                    equations: Vec::new(),
+                    switches: Vec::new(),
+                    title_mark: None,
+                    dutmals: Vec::new(),
+                    composes: Vec::new(),
+                    curves: Vec::new(),
+                    connect_lines: Vec::new(),
+                    containers: Vec::new(),
+                    textarts: Vec::new(),
+                });
+            }
+        }
         let sec_pr = if inject_sec_pr && !sec_pr_injected && !run.content.is_control() {
             sec_pr_injected = true;
             page_settings.map(|ps| build_sec_pr(ps, text_direction))
@@ -3008,6 +3039,35 @@ mod tests {
     }
 
     // ── Field encoding ────────────────────────────────────────────
+
+    #[test]
+    fn leading_control_run_gets_secpr_carrier_at_index_zero() {
+        // 독립 리뷰 High #8: 첫 문단이 [NewNumber, Text]면 secPr 가 둘째
+        // run 으로 밀려 한컴 계약(secPr = 첫 run)을 깬다 — 전용 carrier
+        // run 이 index 0 에 삽입돼야 한다.
+        use hwpforge_core::control::{Control, NewNumberKind};
+        let section = Section::with_paragraphs(
+            vec![Paragraph::with_runs(
+                vec![
+                    Run::control(
+                        Control::NewNumber { kind: NewNumberKind::Page, number: 7 },
+                        CharShapeIndex::new(0),
+                    ),
+                    Run::text("본문", CharShapeIndex::new(0)),
+                ],
+                ParaShapeIndex::new(0),
+            )],
+            PageSettings::a4(),
+        );
+        let xml = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default()).unwrap().xml;
+        let first_run = xml.find("<hp:run").expect("first run");
+        let sec_pr = xml.find("<hp:secPr").expect("secPr present");
+        let new_num = xml.find("<hp:newNum").expect("newNum present");
+        assert!(
+            sec_pr > first_run && sec_pr < new_num,
+            "secPr 는 첫 run(carrier)에, newNum 은 그 뒤에: secPr@{sec_pr} newNum@{new_num}"
+        );
+    }
 
     #[test]
     fn new_number_encodes_as_hancom_shaped_newnum() {

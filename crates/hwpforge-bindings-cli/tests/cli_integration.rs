@@ -1003,6 +1003,53 @@ fn audit_hwp5_table_border_fill_notes_source_truth() {
 }
 
 #[test]
+fn convert_hwp5_pagectl_native_fixtures_carry_newnum_and_pagehiding() {
+    // 독립 리뷰 제안 상환: native 한컴 fixture(2026-08-12 byte-verify 세트의
+    // 소형 커밋본)를 상설 회귀 게이트로 — 새 번호(nwno→newNum)와
+    // 감추기(pghd→pageHiding) carry 가 한컴 재저장본과 동형인지 잠근다.
+    let tmp = test_tmp();
+
+    // F1b: 2구역 중간 재시작 — section1 에 <hp:newNum num="7" numType="PAGE"/>.
+    let source = fixture("pagectl_01_newnum_midpage.hwp");
+    let out = tmp.join("pagectl_newnum.hwpx");
+    hwpforge_convert::hwp5_to_hwpx(&source, &out).expect("convert newnum fixture");
+    let file = std::fs::File::open(&out).expect("open hwpx");
+    let mut zip = zip::ZipArchive::new(file).expect("zip");
+    let mut xml = String::new();
+    std::io::Read::read_to_string(
+        &mut zip.by_name("Contents/section1.xml").expect("section1"),
+        &mut xml,
+    )
+    .expect("read section1");
+    assert!(
+        xml.contains(r#"<hp:newNum num="7" numType="PAGE"/>"#),
+        "F1b 한컴 재저장본과 동형이어야 함"
+    );
+    drop(zip);
+
+    // F2-①: 2쪽 쪽번호만 감춤 — section0 에 hidePageNum="1" one-hot.
+    let source = fixture("pagectl_02_pagehide_pagenum.hwp");
+    let out = tmp.join("pagectl_pagehide.hwpx");
+    hwpforge_convert::hwp5_to_hwpx(&source, &out).expect("convert pagehide fixture");
+    let file = std::fs::File::open(&out).expect("open hwpx");
+    let mut zip = zip::ZipArchive::new(file).expect("zip");
+    let mut xml = String::new();
+    std::io::Read::read_to_string(
+        &mut zip.by_name("Contents/section0.xml").expect("section0"),
+        &mut xml,
+    )
+    .expect("read section0");
+    assert!(
+        xml.contains(
+            r#"<hp:pageHiding hideHeader="0" hideFooter="0" hideMasterPage="0" hideBorder="0" hideFill="0" hidePageNum="1"/>"#
+        ),
+        "F2-① 한컴 재저장본과 동형이어야 함"
+    );
+    // 쪽나눔 carry (divide_sort bit2 — 등v 문단의 유일한 쪽분할 신호).
+    assert!(xml.contains(r#"pageBreak="1""#), "divide_sort 쪽나눔 carry");
+}
+
+#[test]
 fn convert_hwp5_carry_layout_cache_flag_emits_linesegarray() {
     // W4: `--carry-layout-cache` 는 HWP5 조판 캐시를 HWPX linesegarray 로
     // 실어 to-pdf 재생을 가능하게 한다 (기본 = 미방출 — 한컴 재개봉 안전).

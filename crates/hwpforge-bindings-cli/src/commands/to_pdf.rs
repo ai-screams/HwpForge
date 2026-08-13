@@ -110,6 +110,11 @@ fn render_warning_dto(w: &PdfWarning) -> WarningDto {
             "paragraph without layout cache skipped".to_string(),
             Some(location.clone()),
         ),
+        PdfWarning::PageEventLost { location } => (
+            "PAGE_EVENT_LOST",
+            "page-number restart/hiding control on a cacheless paragraph — event lost".to_string(),
+            Some(location.clone()),
+        ),
         PdfWarning::FontStyleFallback { face, requested, location } => (
             "FONT_STYLE_FALLBACK",
             format!("{face:?} has no {requested:?} face — rendered regular"),
@@ -407,6 +412,7 @@ mod tests {
         let loc = || "s0/p1/l2".to_string();
         let cases: Vec<(PdfWarning, &str)> = vec![
             (PdfWarning::ParagraphSkipped { location: loc() }, "PARAGRAPH_SKIPPED"),
+            (PdfWarning::PageEventLost { location: loc() }, "PAGE_EVENT_LOST"),
             (
                 PdfWarning::FontStyleFallback {
                     face: "f".into(),

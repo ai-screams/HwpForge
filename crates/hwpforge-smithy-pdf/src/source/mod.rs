@@ -265,6 +265,48 @@ struct PageHideEvent {
     footer: bool,
 }
 
+/// 문단의 nwno(쪽 종류) 재시작·pghd 감춤을 **가시 텍스트 오프셋**과 함께
+/// 수집한다 (오프셋 → 줄 → 물리 쪽 앵커의 입력). cache admission 과 분리해
+/// 문단 진입 시 항상 호출된다 — table-host/cacheless 경로도 이벤트를 놓치지
+/// 않는다 (독립 리뷰 High #3·#4).
+fn collect_page_events(
+    para: &hwpforge_core::paragraph::Paragraph,
+) -> (Vec<(usize, u32)>, Vec<(usize, PageHideEvent)>) {
+    use hwpforge_core::control::Control;
+    let mut restarts: Vec<(usize, u32)> = Vec::new();
+    let mut hide_marks: Vec<(usize, PageHideEvent)> = Vec::new();
+    let mut pos = 0usize;
+    for run in &para.runs {
+        match run.content.plain_text() {
+            Some(t) => pos += t.encode_utf16().count(),
+            None => {
+                if let RunContent::Control(c) = &run.content {
+                    match **c {
+                        Control::NewNumber {
+                            kind: hwpforge_core::control::NewNumberKind::Page,
+                            number,
+                        } => restarts.push((pos, number)),
+                        Control::PageHiding { hide_header, hide_footer, hide_page_num, .. } => {
+                            hide_marks.push((
+                                pos,
+                                // page 는 앵커 시점에 확정 — 임시 0.
+                                PageHideEvent {
+                                    page: 0,
+                                    page_num: hide_page_num,
+                                    header: hide_header,
+                                    footer: hide_footer,
+                                },
+                            ));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    (restarts, hide_marks)
+}
+
 /// 렌더 replay 가 자체 소비하는 0폭 marker 컨트롤인지 (textpos 무영향 —
 /// 한컴 HWPX 실측: `<hp:ctrl>` 은 linesegarray textpos 를 소비하지 않는다).
 /// 선행 비텍스트 fail-closed 가드와 `NonTextRunDropped` 경고에서 제외된다.
@@ -583,6 +625,11 @@ fn replay_section(
     for (para_idx, para) in section.paragraphs.iter().enumerate() {
         let location = format!("s{section_idx}/p{para_idx}");
 
+        // W2/W3 이벤트는 **cache admission 과 무관하게** 문단 진입 시 수집한다
+        // (독립 리뷰 High #3·#4: table-host/cacheless 경로의 `continue` 가
+        // 이벤트를 무음 유실시켰다).
+        let (restarts, hide_marks) = collect_page_events(para);
+
         // W3: 명시적 쪽 나누기 (ParaHeader divide_sort bit2 / HWPX
         // pageBreak="1") — F2 실측: 한컴은 쪽나눔 문단의 lineseg v 를
         // 리셋하지 않아 (연속 600) `v==0 ∨ v<prev` 규칙이 잡지 못한다.
@@ -630,6 +677,16 @@ fn replay_section(
             }
             check_table_anchor(&mut pending_table_anchor, host_v, broke)?;
 
+            // 독립 리뷰 High #4: `[marker, Table]` host 문단의 재시작/감춤은
+            // host lineseg 가 귀속된 쪽(표 재생 전 현재 쪽)에 앵커한다.
+            let host_page = pages.len() - 1;
+            for &(_, number) in &restarts {
+                events.push(PageNumberEvent { page: host_page, number });
+            }
+            for &(_, hide) in &hide_marks {
+                hides.push(PageHideEvent { page: host_page, ..hide });
+            }
+
             let table = para
                 .runs
                 .iter()
@@ -674,6 +731,11 @@ fn replay_section(
         }
 
         let Some(cache) = para.layout_cache.as_ref().filter(|c| !c.is_empty()) else {
+            // 독립 리뷰 High #3: 스킵 문단의 재시작/감춤은 물리 쪽을 결정할
+            // 수 없다 — 근사 앵커로 날조하지 않고 유실을 특정 경고로 표면화.
+            if !restarts.is_empty() || !hide_marks.is_empty() {
+                warnings.push(PdfWarning::PageEventLost { location: location.clone() });
+            }
             missing.push(location.clone());
             warnings.push(PdfWarning::ParagraphSkipped { location });
             // 앵커는 표 "바로 다음" 문단에만 결합한다 — 그 문단이 스킵되면
@@ -706,47 +768,6 @@ fn replay_section(
                          normalization does not cover this control kind (W2 scope)"
                     ),
                 });
-            }
-        }
-
-        // W2/W3: 이 문단의 nwno(쪽 종류) 재시작·pghd 감춤을 가시 텍스트
-        // 오프셋과 함께 수집 — 아래 줄 루프에서 해당 오프셋이 놓이는 물리
-        // 쪽에 앵커한다.
-        let mut restarts: Vec<(usize, u32)> = Vec::new();
-        let mut hide_marks: Vec<(usize, PageHideEvent)> = Vec::new();
-        {
-            use hwpforge_core::control::Control;
-            let mut pos = 0usize;
-            for run in &para.runs {
-                match run.content.plain_text() {
-                    Some(t) => pos += t.encode_utf16().count(),
-                    None => {
-                        if let RunContent::Control(c) = &run.content {
-                            match **c {
-                                Control::NewNumber {
-                                    kind: hwpforge_core::control::NewNumberKind::Page,
-                                    number,
-                                } => restarts.push((pos, number)),
-                                Control::PageHiding {
-                                    hide_header,
-                                    hide_footer,
-                                    hide_page_num,
-                                    ..
-                                } => hide_marks.push((
-                                    pos,
-                                    // page 는 줄 루프에서 확정 — 임시 0.
-                                    PageHideEvent {
-                                        page: 0,
-                                        page_num: hide_page_num,
-                                        header: hide_header,
-                                        footer: hide_footer,
-                                    },
-                                )),
-                                _ => {}
-                            }
-                        }
-                    }
-                }
             }
         }
 
@@ -1581,6 +1602,73 @@ mod tests {
             "{:?}",
             layout.warnings
         );
+    }
+
+    #[test]
+    fn cacheless_paragraph_with_restart_surfaces_page_event_lost() {
+        // 독립 리뷰 High #3: 스킵 문단의 이벤트는 근사 앵커로 날조하지 않고
+        // 유실을 특정 경고로 표면화한다.
+        use hwpforge_core::control::{Control, NewNumberKind};
+        let mut cacheless = Paragraph::with_runs(
+            vec![
+                Run::control(
+                    Control::NewNumber { kind: NewNumberKind::Page, number: 7 },
+                    CharShapeIndex::new(0),
+                ),
+                Run::text("캐시 없는 문단", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        cacheless.layout_cache = None;
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(
+            vec![para_with_cache("본문", vec![seg(0, 0)]), cacheless],
+            PageSettings::a4(),
+        ));
+        doc.sections_mut()[0].page_number = Some(bottom_digit());
+        let doc = doc.validate().expect("validate");
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        assert!(
+            layout.warnings.iter().any(|w| matches!(w, PdfWarning::PageEventLost { .. })),
+            "{:?}",
+            layout.warnings
+        );
+        // 이벤트는 적용되지 않는다 (앵커 불가 — 기존 번호 유지).
+        assert_eq!(layout.pages[0].page_number.as_ref().unwrap().text, "1");
+    }
+
+    #[test]
+    fn collect_page_events_sees_markers_in_table_host_paragraph() {
+        // 독립 리뷰 High #4: 이벤트 수집은 admission/표 분기와 분리돼
+        // [marker, Table] host 문단에서도 재시작·감춤을 놓치지 않는다
+        // (host 쪽 앵커 부착은 replay_section 표 분기의 직선 코드).
+        use hwpforge_core::control::{Control, NewNumberKind};
+        use hwpforge_core::table::Table;
+        let para = Paragraph::with_runs(
+            vec![
+                Run::control(
+                    Control::NewNumber { kind: NewNumberKind::Page, number: 7 },
+                    CharShapeIndex::new(0),
+                ),
+                Run::control(
+                    Control::PageHiding {
+                        hide_header: false,
+                        hide_footer: false,
+                        hide_master_page: false,
+                        hide_border: false,
+                        hide_fill: false,
+                        hide_page_num: true,
+                    },
+                    CharShapeIndex::new(0),
+                ),
+                Run::table(Table::new(Vec::new()), CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        let (restarts, hide_marks) = collect_page_events(&para);
+        assert_eq!(restarts, vec![(0, 7)]);
+        assert_eq!(hide_marks.len(), 1);
+        assert!(hide_marks[0].1.page_num && !hide_marks[0].1.header);
     }
 
     #[test]

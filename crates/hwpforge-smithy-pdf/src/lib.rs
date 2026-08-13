@@ -126,6 +126,13 @@ pub enum PdfWarning {
         /// 문서 내 위치 (사람이 읽는 경로 — 섹션/문단 인덱스).
         location: String,
     },
+    /// 캐시 결손으로 스킵된 문단이 쪽번호 재시작/감춤 컨트롤을 갖고 있어
+    /// 그 **페이지 이벤트가 유실**됨 — 물리 쪽을 결정할 수 없어 근사
+    /// 앵커로 날조하는 대신 유실을 특정한다 (독립 리뷰 High #3).
+    PageEventLost {
+        /// 문서 내 위치 (사람이 읽는 경로 — 섹션/문단 인덱스).
+        location: String,
+    },
     /// Degraded 모드: 요청 스타일 face 가 없어 regular 로 강등함
     /// ((face, style) 당 1회 — 첫 발생 위치 기록).
     FontStyleFallback {
