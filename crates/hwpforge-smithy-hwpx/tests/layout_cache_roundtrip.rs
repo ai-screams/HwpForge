@@ -289,3 +289,107 @@ fn legacy_strict_entrypoint_errors_on_cache_drop() {
         "got {err:?}"
     );
 }
+
+// ── 독립 리뷰 Medium 상환: 대칭-버그를 잡는 절대값 oracle ──────────
+
+/// 방출 XML 의 linesegarray textpos 절대값을 §1f 실측 상수로 대조한다.
+///
+/// roundtrip(encode∘decode) 은 **대칭 오류**(예: 양쪽 다 marker 를
+/// 7유닛으로 세는 버그)를 항등으로 통과시킨다 — 이 oracle 의 기대값은
+/// 코드가 아니라 한컴 fixture 실측(§1f: 확장 marker = 8 wire 유닛,
+/// 첫 lineseg = 0)에서 유도된 하드코딩 상수라 그 대칭을 깬다.
+#[test]
+fn emitted_wire_textpos_matches_hancom_measured_constants() {
+    use hwpforge_core::control::Control;
+    let mut para = Paragraph::with_runs(
+        vec![
+            Run::text("가나다", CharShapeIndex::new(0)),
+            Run::control(
+                Control::footnote(vec![Paragraph::with_runs(
+                    vec![Run::text("각주", CharShapeIndex::new(0))],
+                    ParaShapeIndex::new(0),
+                )]),
+                CharShapeIndex::new(0),
+            ),
+            Run::text("라마바", CharShapeIndex::new(0)),
+        ],
+        ParaShapeIndex::new(0),
+    );
+    para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0), seg(4, 1600)]));
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(vec![para], PageSettings::a4()));
+    let store = style_store_for_preset("default").expect("preset");
+    let validated = doc.validate().expect("validate");
+    let bytes = HwpxEncoder::encode_with_options(
+        &validated,
+        &store,
+        &ImageStore::new(),
+        EncodeOptions::default().with_emit_layout_cache(true),
+    )
+    .expect("encode");
+    let xml = section_xml(&bytes);
+    // 한컴 실측 유도 상수: 줄1 = 0 (native 전수 불변식) · 줄2 =
+    // secPr(8)+colPr(8) 주입 + "가나다"(3) + 각주 marker(8) + "라"(1) = 28.
+    assert!(xml.contains(r#"textpos="0""#), "line1 wire 0: {xml}");
+    assert!(xml.contains(r#"textpos="28""#), "line2 wire 28 (16+3+8+1): {xml}");
+}
+
+/// 접힘 필드 본문의 tab = wire 8유닛 (독립 리뷰 Low 상환 fixture).
+#[test]
+fn folded_field_body_tab_counts_eight_wire_units() {
+    use hwpforge_core::control::Control;
+    let mut para = Paragraph::with_runs(
+        vec![
+            Run::text("ab", CharShapeIndex::new(0)),
+            Run::control(
+                Control::Field {
+                    field_type: hwpforge_foundation::FieldType::ClickHere,
+                    hint_text: Some("h".into()),
+                    help_text: None,
+                    name: Some("f".into()),
+                    display_text: "x\ty".into(),
+                },
+                CharShapeIndex::new(0),
+            ),
+            Run::text("cd", CharShapeIndex::new(0)),
+        ],
+        ParaShapeIndex::new(0),
+    );
+    para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0), seg(3, 1600)]));
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(vec![para], PageSettings::a4()));
+    let outcome = roundtrip(doc);
+    assert!(outcome.warnings.is_empty(), "무경고: {:?}", outcome.warnings);
+    // 왕복 항등 + 절대값: 줄2 core 3("d") → wire = 16(주입) + "ab"(2)
+    // + 필드(16 + x(1)+tab(8)+y(1) = 26) + "c"(1) = 45.
+    assert_eq!(decoded_caches(&outcome.bytes)[0], Some(vec![0, 3]));
+    let xml = section_xml(&outcome.bytes);
+    assert!(xml.contains(r#"textpos="45""#), "tab=8 절대값 (16+2+26+1): {xml}");
+}
+
+/// 실물 한컴 fixture 골든 — 리뷰 영역 fixture 존재 시에만 실행 (930KB
+/// 라 커밋 금지 규칙 대상; 부재 환경(CI)에선 skip 로그 후 통과).
+#[test]
+fn real_hancom_marker_ledger_fixture_decodes_to_measured_triples() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../examples/hwp5_review/rules-marker-ledger-base.hwpx");
+    let Ok(bytes) = std::fs::read(&path) else {
+        eprintln!("skip: {} 부재 (리뷰 영역 미보유 환경)", path.display());
+        return;
+    };
+    let decoded = HwpxDecoder::decode(&bytes).expect("decode");
+    let caches: Vec<Vec<u32>> = decoded.document.sections()[0]
+        .paragraphs
+        .iter()
+        .filter_map(|p| p.layout_cache.as_ref())
+        .filter(|c| c.lines.len() >= 2)
+        .map(|c| c.lines.iter().map(|l| l.textpos).collect())
+        .collect();
+    // §1g 수용 기준 골든 (raw [0,76,132]/[0,64,117]/[0,62,117] 에서
+    // 선행 marker 8×n 차감 유도 — Codex 4차 산술 재검증 완료).
+    assert_eq!(
+        caches,
+        vec![vec![0, 60, 116], vec![0, 56, 109], vec![0, 54, 109]],
+        "실물 한컴 fixture 가시 좌표 골든"
+    );
+}

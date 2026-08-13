@@ -235,11 +235,17 @@ impl EncoderLedger {
         self.builder.push_span(wire, core);
     }
 
-    /// utf16 문자열의 가시 재생 span — 접힘 필드 본문 등 wire 는 소비하되
-    /// Core 기여가 0 인 경우 `core_scale=0`, 1:1 이면 1.
+    /// 접힘 필드(begin 8 + 본문 + end 8) 의 (n, 0) span.
+    ///
+    /// 독립 리뷰 Low 상환: 본문 tab 은 wire 8유닛이다 (디코더 in_field
+    /// Tab=(8,0) 과 대칭) — utf16 1:1 로 세면 필드가 tab 당 7유닛
+    /// 좁아져 이후 lineseg 가 무음 표류한다.
     fn folded_field(&mut self, body: &str) {
-        let body_units = body.encode_utf16().count() as u32;
-        self.span(16 + body_units, 0);
+        let mut wire: u32 = 16; // begin + end
+        for u in body.encode_utf16() {
+            wire += if u == u16::from(b'\t') { 8 } else { 1 };
+        }
+        self.span(wire, 0);
     }
 
     /// 혼합 텍스트(탭/줄바꿈 sentinel 포함)의 문자 단위 재생.
@@ -546,9 +552,24 @@ fn build_paragraph(
                     None
                 }
                 Ok(map) => {
+                    // 자가검증 (독립 리뷰 hardening — 디코더·HWP5 choke 와
+                    // 3중 대칭): ledger 의 Core 총길이 == 문단 가시 텍스트.
+                    // 누락된 zero-core span(미계측 방출 사이트)을 방어한다.
+                    let expected_core: u32 = para
+                        .runs
+                        .iter()
+                        .filter_map(|r| r.content.plain_text())
+                        .map(|t| t.encode_utf16().count() as u32)
+                        .sum();
                     let mut items = Vec::with_capacity(cache.lines.len());
-                    let mut dropped = false;
-                    for l in &cache.lines {
+                    let mut dropped = map.core_end() != expected_core;
+                    if dropped {
+                        sink.cache_dropped(format!(
+                            "ledger/emission core length mismatch (map {} vs paragraph {expected_core})",
+                            map.core_end()
+                        ));
+                    }
+                    for l in cache.lines.iter().take_while(|_| !dropped) {
                         match map.to_wire(l.textpos) {
                             Ok(textpos) => items.push(HxLineSeg {
                                 textpos,
@@ -1244,7 +1265,9 @@ fn build_runs(
             }
             _ => {
                 // Future RunContent variants are silently skipped
-                // (non_exhaustive enum)
+                // (non_exhaustive enum) — 방출 스킵 = 기하 stale (§1g v5
+                // R3#6, 독립 리뷰 Low 상환: Control `_` arm 과 대칭).
+                ledger.mark_cache_inadmissible("unencodable run content skipped");
                 continue;
             }
         }

@@ -601,8 +601,12 @@ impl HwpxEncoder {
         // 성공 금지 — 데이터 손실을 진단 없이 넘기지 않는다 (breaking,
         // 0.14.0). 경고 보존 경로는 `encode_with_diagnostics`.
         if options.emit_layout_cache {
-            if let Some(EncodeWarning::LayoutCacheDropped { path, reason }) =
-                outcome.warnings.first()
+            // 독립 리뷰 Low: first() 는 미래 variant 가 앞에 끼는 순간
+            // 데이터-손실 신호를 삼킨다 — find 로 전수 검색.
+            if let Some(EncodeWarning::LayoutCacheDropped { path, reason }) = outcome
+                .warnings
+                .iter()
+                .find(|w| matches!(w, EncodeWarning::LayoutCacheDropped { .. }))
             {
                 return Err(crate::error::HwpxError::LayoutCacheDropped {
                     path: path.to_string(),
