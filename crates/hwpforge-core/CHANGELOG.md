@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.13.1...hwpforge-core-v0.14.0) - 2026-08-13
+
+### Added
+
+- pghd 감추기 carry + 명시적 쪽나눔 렌더 존중 (W3)
+
+- nwno 새 번호 지정 carry — HWP5→Core→HWPX→PDF 전 구간 (W2)
+
+
 ## [0.13.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.13.0...hwpforge-core-v0.13.1) - 2026-08-12
 
 ### Added
