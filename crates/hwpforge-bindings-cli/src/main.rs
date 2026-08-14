@@ -71,9 +71,10 @@ enum Commands {
         /// Carry the HWP5 layout cache (PARA_LINE_SEG) into HWPX
         /// `<hp:linesegarray>` so the output can be rendered with `to-pdf`.
         /// PDF replay/comparison pipelines only — the carried cache is NOT
-        /// for Hancom re-open (multi-line overlap risk), and HWP5-side
-        /// textpos normalization is incomplete so `to-pdf` may still reject
-        /// the cache on complex documents.
+        /// for Hancom re-open (multi-line overlap risk). Paragraphs whose
+        /// coordinates cannot be normalized (charts, unknown controls,
+        /// ambiguous marker boundaries) drop their cache with a
+        /// LAYOUT_CACHE_DROPPED warning instead of carrying bad data.
         #[arg(long)]
         carry_layout_cache: bool,
     },

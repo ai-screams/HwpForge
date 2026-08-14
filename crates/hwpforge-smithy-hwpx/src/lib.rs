@@ -73,20 +73,21 @@ mod structural;
 mod style_lookup_bridge;
 pub mod style_store;
 mod table_inventory;
+mod wire_text_map;
 
 pub use cell_edit::{
     apply_set_cells, CellEditError, CellEditResult, CellResolution, CellSpec, CellTarget,
     HwpxCellEditor, SetCellOutcome, SetCellResult,
 };
 pub use decoder::package::{PackageEntryInfo, PackageReader};
-pub use decoder::{DecodeWarning, HwpxDecoder, HwpxDocument};
+pub use decoder::{DecodeWarning, HwpxDecoder, HwpxDocument, ParagraphPath, PathSeg};
 pub use default_styles::{DefaultStyleEntry, HancomStyleSet};
 pub use diff::{
     CellTextChange, DocumentDiff, FieldChange, FieldChangeKind, HwpxDiffer, PackageDiff,
     ParagraphChange, ParagraphChangeKind, RawChange, SemanticDiff, StructureChange,
     COMPARISON_NOTE, RAW_CAP,
 };
-pub use encoder::{EncodeOptions, HwpxEncoder};
+pub use encoder::{EncodeOptions, EncodeOutcome, EncodeWarning, HwpxEncoder};
 pub use error::{HwpxError, HwpxErrorCode, HwpxResult};
 pub use exchange::{
     ExportedDocument, ExportedSection, PreservedTextSlot, SectionPreservation, TextLocator,

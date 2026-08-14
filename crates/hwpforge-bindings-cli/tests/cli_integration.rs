@@ -1666,11 +1666,13 @@ fn audit_hwp5_rect_fixture_now_matches_after_carry() {
     let warnings =
         hwpforge_convert::hwp5_to_hwpx(&source, &out).expect("convert hwp5 rect fixture");
     assert!(
-        !warnings.iter().any(|warning| matches!(
-            warning,
-            hwpforge_smithy_hwp5::Hwp5Warning::DroppedControl { control, .. }
-                if *control == "rect"
-        )),
+        !warnings.iter().filter_map(hwpforge_convert::ConvertWarning::as_hwp5).any(|warning| {
+            matches!(
+                warning,
+                hwpforge_smithy_hwp5::Hwp5Warning::DroppedControl { control, .. }
+                    if *control == "rect"
+            )
+        }),
         "Wave 4a Rect carry should suppress the DroppedControl{{\"rect\", ..}} warning"
     );
 
@@ -3308,7 +3310,11 @@ fn diff_verifies_fill_delta_end_to_end() {
     assert_eq!(semantic["field_values"][0]["name"], "user_email");
     assert_eq!(semantic["field_values"][0]["after"], "diff@cli.io");
     assert!(semantic["paragraphs"].as_array().unwrap().is_empty());
-    assert!(semantic["raw"].as_array().unwrap().is_empty());
+    // W1b: fill 은 stale linesegarray 도 제거 — raw 축에 `$.layout_cache`
+    // 변경 하나가 정직하게 보고된다.
+    let raw = semantic["raw"].as_array().unwrap();
+    assert_eq!(raw.len(), 1, "raw: {raw:?}");
+    assert_eq!(raw[0]["detail"], "$.layout_cache");
     // Full report file written alongside inline output.
     let report_value: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&report).unwrap()).unwrap();
@@ -3915,10 +3921,13 @@ fn fill_unknown_name_reports_available_fields() {
 }
 
 #[test]
-fn fill_merged_run_field_rejected_as_not_fillable() {
+fn fill_merged_run_field_succeeds_with_exact_attribution() {
+    // W1a (이미지/글상자 에픽): HxRun 자식 순서 보존으로 병합-run 본문
+    // 귀속이 무모호해져 채움이 성공한다 (종전 FIELD_NOT_FILLABLE 거부 →
+    // gotcha #30 철폐).
     let f = fixture("clickhere_filled.hwpx");
     let tmp = test_tmp();
-    let out = tmp.join("never2.hwpx");
+    let out = tmp.join("merged_filled.hwpx");
     let (value, _, code) = run_json(&[
         "fill",
         f.to_str().unwrap(),
@@ -3927,9 +3936,13 @@ fn fill_merged_run_field_rejected_as_not_fillable() {
         "-o",
         out.to_str().unwrap(),
     ]);
-    assert_eq!(code, 1);
-    assert_eq!(value["code"], "FIELD_NOT_FILLABLE");
-    assert!(!out.exists());
+    assert_eq!(code, 0, "{value}");
+    assert!(out.exists());
+    let (fields, _, code) = run_json(&["fields", out.to_str().unwrap()]);
+    assert_eq!(code, 0);
+    let list = fields["fields"].as_array().expect("fields array");
+    let f = list.iter().find(|f| f["name"] == "user_email").expect("user_email field");
+    assert_eq!(f["current"], "x@y.z");
 }
 
 // ═══════════════════════════════════════════════════════════════

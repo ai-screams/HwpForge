@@ -27,9 +27,9 @@ use quick_xml::de::from_str;
 use crate::color::parse_hex_color_raw;
 use crate::error::{HwpxError, HwpxResult};
 use crate::schema::section::{
-    HxCaption, HxChart, HxCompose, HxCtrl, HxDutmal, HxEquation, HxFieldBegin, HxFootNote,
-    HxHeaderFooter, HxPageNum, HxParagraph, HxPic, HxRun, HxSection, HxSubList, HxTable,
-    HxTableCell, HxTableRow,
+    legacy_child_order, HxCaption, HxChart, HxCompose, HxCtrl, HxDutmal, HxEquation, HxFieldBegin,
+    HxFootNote, HxHeaderFooter, HxPageNum, HxParagraph, HxPic, HxRun, HxRunChildKind, HxSection,
+    HxSubList, HxTable, HxTableCell, HxTableRow,
 };
 
 /// Maximum nesting depth for tables-within-tables.
@@ -147,7 +147,7 @@ pub fn parse_section(
     let mut page_settings = None;
     let mut headers = Vec::new();
     let mut footers = Vec::new();
-    let mut warnings: Vec<super::DecodeWarning> = Vec::new();
+    let mut ctx = DecodeCtx::new(section_index);
     let mut page_number = None;
     let mut column_settings = None;
     let mut visibility = None;
@@ -161,7 +161,10 @@ pub fn parse_section(
         .iter()
         .enumerate()
         .map(|(para_idx, hx_para)| {
-            let (mut para, ps) = convert_paragraph(hx_para, para_idx == 0, 0)?;
+            ctx.enter(super::PathSeg::BodyParagraph(para_idx));
+            let result = convert_paragraph(hx_para, para_idx == 0, 0, &mut ctx);
+            ctx.leave();
+            let (mut para, ps) = result?;
             if ps.is_some() && page_settings.is_none() {
                 page_settings = ps;
             }
@@ -181,7 +184,7 @@ pub fn parse_section(
                             page_border_fills = extract_page_border_fills(sec_pr);
                         }
                         if begin_num.is_none() {
-                            begin_num = extract_begin_num(sec_pr, &mut warnings);
+                            begin_num = extract_begin_num(sec_pr, &mut ctx.warnings);
                         }
                         text_direction = TextDirection::from_hwpx_str(&sec_pr.text_direction);
                     }
@@ -198,14 +201,20 @@ pub fn parse_section(
                     }
                     // 다중 머리말/꼬리말 = wire 순서대로 전부 수집 (W5-α C1:
                     // first-wins 는 ODD/EVEN 문서에서 무음 데이터 손실).
-                    if let Some(hf) = convert_ctrl_header(ctrl, &mut warnings)? {
+                    ctx.enter(super::PathSeg::Header(headers.len()));
+                    let header_result = convert_ctrl_header(ctrl, &mut ctx);
+                    ctx.leave();
+                    if let Some(hf) = header_result? {
                         headers.push(hf);
                     }
-                    if let Some(hf) = convert_ctrl_footer(ctrl, &mut warnings)? {
+                    ctx.enter(super::PathSeg::Footer(footers.len()));
+                    let footer_result = convert_ctrl_footer(ctrl, &mut ctx);
+                    ctx.leave();
+                    if let Some(hf) = footer_result? {
                         footers.push(hf);
                     }
                     if page_number.is_none() {
-                        if let Some(pn) = convert_ctrl_page_number(ctrl, &mut warnings) {
+                        if let Some(pn) = convert_ctrl_page_number(ctrl, &mut ctx.warnings) {
                             page_number = Some(pn);
                         }
                     }
@@ -250,8 +259,186 @@ pub fn parse_section(
         master_pages: None,
         text_direction,
         begin_num,
-        warnings,
+        warnings: ctx.warnings,
     })
+}
+
+/// 디코드 경고 sink + 현재 문단의 중첩 경로 (W1b — §1g v5 변경 5).
+///
+/// 중첩 컨테이너(셀/각주/글상자/묶음)로 들어갈 때 [`enter`]/[`leave`] 로
+/// 경로를 유지한다. 캐시 드롭 경고는 이 경로를 payload 로 갖는다.
+///
+/// [`enter`]: DecodeCtx::enter
+/// [`leave`]: DecodeCtx::leave
+pub(crate) struct DecodeCtx {
+    /// 수집된 비치명 경고 (SectionParseResult.warnings 로 흘러감).
+    pub(crate) warnings: Vec<super::DecodeWarning>,
+    path: Vec<super::PathSeg>,
+}
+
+impl DecodeCtx {
+    pub(crate) fn new(section_index: usize) -> Self {
+        Self { warnings: Vec::new(), path: vec![super::PathSeg::Section(section_index)] }
+    }
+
+    pub(crate) fn enter(&mut self, seg: super::PathSeg) {
+        self.path.push(seg);
+    }
+
+    pub(crate) fn leave(&mut self) {
+        self.path.pop();
+    }
+
+    fn cache_dropped(&mut self, reason: String) {
+        self.warnings.push(super::DecodeWarning::LayoutCacheDropped {
+            path: super::ParagraphPath(self.path.clone()),
+            reason,
+        });
+    }
+}
+
+/// 문단 전체 자식을 문서 순서로 걷어 wire→Core 좌표 맵을 구축한다 (W1b).
+///
+/// 소비폭은 **디코더가 실제 방출하는 것**에서 유도한다 (§1g v5 R3#1):
+/// run-내 field 접힘(begin..end 같은 run — `convert_run` pairing 미러)은
+/// 사이 텍스트가 (n,0), cross-run field 는 begin/end 만 (8,0) 이고 사이
+/// 텍스트는 일반 방출이라 1:1. 소비량을 알 수 없는 자식(미지 Switch·
+/// Other·StrayText·`<hp:t>` 내 미지 요소·다중 payload ctrl)은 `Err` —
+/// 캐시 fail-closed (문서 디코드는 계속된다).
+fn build_paragraph_wire_map(hx: &HxParagraph) -> Result<crate::wire_text_map::WireTextMap, String> {
+    build_wire_map_over_runs(&hx.runs, 0)
+}
+
+/// [`build_paragraph_wire_map`] 의 본체 — 인코더도 **방출한 run 트리**에
+/// 동일 맵을 적용해 왕복 대칭을 구성적으로 보장한다 (§1g v5 변경 4:
+/// 방출-통합). `injected_leading_ctrls` = 인코더가 직렬화 후 문자열로
+/// 주입하는 선행 ctrl 수 (colPr/머리말/꼬리말/쪽번호 — 트리에 없어
+/// 맵이 못 보는 (8,0) 유닛; 전부 영-core 라 상호 순서는 무관).
+pub(crate) fn build_wire_map_over_runs(
+    runs: &[crate::schema::section::HxRun],
+    injected_leading_ctrls: usize,
+) -> Result<crate::wire_text_map::WireTextMap, String> {
+    use crate::schema::section::{HxRunChildKind as K, HxTextPart};
+    let mut b = crate::wire_text_map::WireMapBuilder::new();
+    for _ in 0..injected_leading_ctrls {
+        b.push_span(8, 0);
+    }
+    for hx_run in runs {
+        let order = if hx_run.child_order.is_empty() {
+            legacy_child_order(hx_run)
+        } else {
+            hx_run.child_order.clone()
+        };
+        // convert_run 의 run-local field 접힘 상태 미러.
+        let mut in_field = false;
+        for &(kind, idx) in &order {
+            match kind {
+                K::Text => {
+                    for part in &hx_run.texts[idx].parts {
+                        match part {
+                            HxTextPart::Text(s) => {
+                                let n = s.encode_utf16().count() as u32;
+                                if n == 0 {
+                                    continue;
+                                }
+                                if in_field {
+                                    b.push_span(n, 0);
+                                } else {
+                                    b.advance_identity(n);
+                                }
+                            }
+                            HxTextPart::Tab { .. } => {
+                                if in_field {
+                                    b.push_span(8, 0);
+                                } else {
+                                    b.push_span(8, 1);
+                                }
+                            }
+                            HxTextPart::LineBreak {}
+                            | HxTextPart::NbSpace {}
+                            | HxTextPart::FwSpace {} => {
+                                if in_field {
+                                    b.push_span(1, 0);
+                                } else {
+                                    b.advance_identity(1);
+                                }
+                            }
+                            // 한컴 titleMark 는 `<t>` 내부 — HWP5 0x08
+                            // 미러 = wire 8·가시 0.
+                            HxTextPart::TitleMark { .. } => b.push_span(8, 0),
+                            // markpen 은 HWP5 range-tag (스트림 유닛 0) —
+                            // corpus 프로브: native 327본 중 markpen 1본,
+                            // 전부 한 줄 (§1g v3).
+                            HxTextPart::MarkpenBegin {} | HxTextPart::MarkpenEnd {} => {}
+                            HxTextPart::Other => {
+                                return Err("unknown inline element in <hp:t>".into());
+                            }
+                        }
+                    }
+                }
+                K::Ctrl => {
+                    let ctrl = &hx_run.ctrls[idx];
+                    let payloads = usize::from(ctrl.col_pr.is_some())
+                        + usize::from(ctrl.header.is_some())
+                        + usize::from(ctrl.footer.is_some())
+                        + usize::from(ctrl.page_num.is_some())
+                        + usize::from(ctrl.foot_note.is_some())
+                        + usize::from(ctrl.end_note.is_some())
+                        + usize::from(ctrl.bookmark.is_some())
+                        + usize::from(ctrl.indexmark.is_some())
+                        + usize::from(ctrl.field_begin.is_some())
+                        + usize::from(ctrl.field_end.is_some())
+                        + usize::from(ctrl.auto_num.is_some())
+                        + usize::from(ctrl.new_num.is_some())
+                        + usize::from(ctrl.page_hiding.is_some());
+                    if payloads != 1 {
+                        return Err(format!(
+                            "<hp:ctrl> wrapper with {payloads} payloads (expected exactly 1)"
+                        ));
+                    }
+                    b.push_span(8, 0);
+                    if ctrl.field_begin.is_some() {
+                        in_field = true;
+                    }
+                    if ctrl.field_end.is_some() {
+                        in_field = false;
+                    }
+                }
+                K::SecPr
+                | K::Table
+                | K::Picture
+                | K::Rect
+                | K::Line
+                | K::Ellipse
+                | K::Polygon
+                | K::Curve
+                | K::ConnectLine
+                | K::Container
+                | K::TextArt
+                | K::Equation
+                | K::Dutmal
+                | K::Compose
+                | K::TitleMark => b.push_span(8, 0),
+                K::Switch => {
+                    // 알려진 chart 캐리어만 (8,0) — 미지 switch 내용은
+                    // 소비량 미상 (v4 R3#6: 차트 일괄 드롭은 퇴행).
+                    let is_chart = hx_run
+                        .switches
+                        .get(idx)
+                        .and_then(|sw| sw.case.as_ref())
+                        .is_some_and(|case| case.chart.is_some());
+                    if is_chart {
+                        b.push_span(8, 0);
+                    } else {
+                        return Err("unknown <hp:switch> content".into());
+                    }
+                }
+                K::Other => return Err("unknown run child element".into()),
+                K::StrayText => return Err("stray run-level text".into()),
+            }
+        }
+    }
+    b.finish().map_err(|e| e.to_string())
 }
 
 /// Converts an `HxParagraph` to a Core `Paragraph`.
@@ -262,6 +449,7 @@ fn convert_paragraph(
     hx: &HxParagraph,
     is_first: bool,
     depth: usize,
+    ctx: &mut DecodeCtx,
 ) -> HwpxResult<(Paragraph, Option<PageSettings>)> {
     const MAX_STYLE_INDEX: u32 = 100_000;
     if hx.para_pr_id_ref > MAX_STYLE_INDEX {
@@ -277,7 +465,7 @@ fn convert_paragraph(
 
     let mut runs = Vec::new();
     let mut has_title_mark = false;
-    for hx_run in &hx.runs {
+    for (run_idx, hx_run) in hx.runs.iter().enumerate() {
         // Extract page settings from secPr in first paragraph
         if is_first && page_settings.is_none() {
             if let Some(sec_pr) = &hx_run.sec_pr {
@@ -292,7 +480,10 @@ fn convert_paragraph(
             }
         }
 
-        let mut converted_runs = convert_run(hx_run, depth)?;
+        ctx.enter(super::PathSeg::Run(run_idx));
+        let result = convert_run(hx_run, depth, ctx);
+        ctx.leave();
+        let mut converted_runs = result?;
         runs.append(&mut converted_runs);
     }
 
@@ -323,38 +514,38 @@ fn convert_paragraph(
 
     // 줄 조판 캐시 승격 (decode-only). 인코더는 기본적으로 재방출하지 않는다.
     //
-    // ⚠️ textpos 좌표 정규화: 한컴의 textpos 는 내부 텍스트 스트림 기준이라
-    // 확장 컨트롤(HWP5 secd/cold/head... 의 미러)이 **각 8 유닛**을 차지한다.
-    // Core 캐시는 보이는-텍스트(UTF-16) 좌표를 계약하므로, 텍스트 시작 전에
-    // 스트림을 차지하고 **디코더가 소비해 Core run 에서 사라지는** 요소만
-    // 차감한다: secPr + 섹션-수준 ctrl(colPr/header/footer/pageNum).
-    // 실측: rules-justify 첫 문단 secPr+colPr = 16 = 70−54 (규칙 문서 §1).
-    // 첫 텍스트 run 까지 포함해 센다 (한컴이 secPr 를 텍스트와 같은 run 에
-    // 쓰는 형태도 스트림상 텍스트보다 앞선다). Core run 으로 남는 인라인
-    // 컨트롤(각주·수식·그림 등)이 텍스트보다 앞서는 경우는 여기서 차감하지
-    // 않는다 — 소비자(smithy-pdf)의 선행 비텍스트 run 가드가 fail-closed
-    // 로 거부한다.
-    let leading_ctrl_units: u32 = {
-        let is_section_level = |c: &crate::schema::section::HxCtrl| {
-            c.col_pr.is_some() || c.header.is_some() || c.footer.is_some() || c.page_num.is_some()
-        };
-        let mut units = 0u32;
-        for run in &hx.runs {
-            units += 8 * u32::from(run.sec_pr.is_some());
-            units += 8 * run.ctrls.iter().filter(|c| is_section_level(c)).count() as u32;
-            if !run.texts.is_empty() {
-                break;
+    // W1b: 한컴 textpos = HWP5 raw 스트림 좌표 (확장 marker 종류 무관
+    // 8유닛 — §1f 보편 규칙). 문단 전체 자식을 걷는 wire ledger 로 Core
+    // `text_content()` 가시 좌표로 정규화한다 (종전 선두-균일 차감은 중간
+    // marker 문단을 무음 오절단 — 철폐). 실패 = fail-closed: 캐시 미승격
+    // + `DecodeWarning::LayoutCacheDropped` (추측 좌표 승격 금지).
+    let layout_cache = hx.linesegarray.as_ref().and_then(|array| {
+        let map = match build_paragraph_wire_map(hx) {
+            Ok(map) => map,
+            Err(reason) => {
+                ctx.cache_dropped(reason);
+                return None;
             }
+        };
+        // ledger↔방출 정합 자가검증: 예측 Core 총길이 == 실제 방출 텍스트
+        // 총길이 (불일치 = ledger/방출 분기 — choke, §1g v5 변경 4).
+        let emitted_core: u32 = runs
+            .iter()
+            .filter_map(|r| r.content.plain_text())
+            .map(|t| t.encode_utf16().count() as u32)
+            .sum();
+        if map.core_end() != emitted_core {
+            ctx.cache_dropped(format!(
+                "ledger/emission core length mismatch (map {} vs emitted {emitted_core})",
+                map.core_end()
+            ));
+            return None;
         }
-        units
-    };
-    let layout_cache = hx.linesegarray.as_ref().map(|array| {
-        hwpforge_core::layout::LayoutCache::new(
-            array
-                .items
-                .iter()
-                .map(|s| hwpforge_core::layout::LineSeg {
-                    textpos: s.textpos.saturating_sub(leading_ctrl_units),
+        let mut lines = Vec::with_capacity(array.items.len());
+        for s in &array.items {
+            match map.to_core(s.textpos) {
+                Ok(textpos) => lines.push(hwpforge_core::layout::LineSeg {
+                    textpos,
                     vertpos: s.vertpos,
                     vertsize: s.vertsize,
                     textheight: s.textheight,
@@ -363,9 +554,14 @@ fn convert_paragraph(
                     horzpos: s.horzpos,
                     horzsize: s.horzsize,
                     flags: s.flags,
-                })
-                .collect(),
-        )
+                }),
+                Err(e) => {
+                    ctx.cache_dropped(format!("lineseg textpos {}: {e}", s.textpos));
+                    return None;
+                }
+            }
+        }
+        Some(hwpforge_core::layout::LayoutCache::new(lines))
     });
 
     let paragraph = Paragraph {
@@ -385,7 +581,7 @@ fn convert_paragraph(
 /// A single HxRun can contain multiple `<hp:t>`, `<hp:tbl>`, `<hp:pic>`,
 /// `<hp:ctrl>` (footnote/endnote), and `<hp:rect>` (textbox) elements.
 /// Each is converted to a separate Run with the same charPrIDRef.
-fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
+fn convert_run(hx: &HxRun, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<Vec<Run>> {
     const MAX_STYLE_INDEX: u32 = 100_000;
     if hx.char_pr_id_ref > MAX_STYLE_INDEX {
         return Err(crate::error::HwpxError::InvalidStructure {
@@ -398,60 +594,160 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
     let char_shape_id = CharShapeIndex::new(hx.char_pr_id_ref as usize);
     let mut runs = Vec::new();
 
-    // Check if this run has a fieldBegin+fieldEnd pair — if so, the text
-    // is consumed by the field control and should NOT be emitted separately.
-    let has_field_pair = hx.ctrls.iter().any(|c| c.field_begin.is_some())
-        && hx.ctrls.iter().any(|c| c.field_end.is_some());
-
-    // Text runs — skip if consumed by field controls.
+    // W1a (이미지/글상자 에픽): 자식을 **문서 순서**(child_order 사이드카)로
+    // 평탄화한다 — 종전 by-kind 고정 순서는 `<t>a</t><pic/><t>b</t>` 를
+    // Core `[a, b, pic]` 으로 재배열해 인라인 객체의 앵커 위치를 왜곡했다.
+    //
+    // field pairing 도 순서 기반: fieldBegin 과 fieldEnd **사이**의 텍스트
+    // 자식이 곧 필드 본문이다 — 종전의 `texts.len()==1` 모호성 다운그레이드
+    // (gotcha #30)는 순서 보존으로 철폐. begin 앞/end 뒤 텍스트는 정상
+    // 방출된다 (종전엔 pair 존재 시 run 의 전 텍스트가 드롭 — 한컴 병합
+    // run 의 충실도 개선).
     //
     // `HxText::to_run_content` preserves any `<hp:tab>` attribute payload
-    // (`width` / `leader` / `tab_type`) as `RunContent::InlineText`,
-    // falling back to the existing `RunContent::Text(String)` when every
-    // tab is attribute-less. This closes the HWPX-decode side of the
-    // inline tab carry — see
-    // `.docs/debug/2026-05-27_hwpx_decoder_inline_tab_attrs_lost.md`.
-    if !has_field_pair {
-        for text in &hx.texts {
-            let content = text.to_run_content();
-            let keep = match &content {
-                RunContent::Text(s) => !s.is_empty(),
-                RunContent::InlineText(it) => !it.segments.is_empty(),
-                _ => true,
-            };
-            if keep {
-                runs.push(Run { content, char_shape_id });
-            }
-        }
-    }
+    // (`width` / `leader` / `tab_type`) as `RunContent::InlineText` —
+    // see `.docs/debug/2026-05-27_hwpx_decoder_inline_tab_attrs_lost.md`.
+    let order = if hx.child_order.is_empty() {
+        // 수동 생성 HxRun(테스트·내부 도구) 폴백 — 종전 by-kind 순서 재현.
+        legacy_child_order(hx)
+    } else {
+        hx.child_order.clone()
+    };
 
-    // Table runs
-    for table in &hx.tables {
-        let core_table = convert_table(table, depth)?;
-        runs.push(Run { content: RunContent::Table(Box::new(core_table)), char_shape_id });
-    }
-
-    // Image runs
-    for pic in &hx.pictures {
-        if let Some(image) = convert_picture(pic, depth)? {
-            runs.push(Run { content: RunContent::Image(image), char_shape_id });
-        }
-    }
-
-    // Footnote / Endnote / Bookmark / IndexMark / Field runs (from <hp:ctrl>)
-    //
-    // Field controls use fieldBegin/fieldEnd pairs. We collect fieldBegin ctrls
-    // and match them with fieldEnd ctrls to extract the field's text from
-    // intervening <hp:t> elements. The text runs between begin and end are
-    // consumed as the field's display text.
     let mut field_begin: Option<&HxFieldBegin> = None;
     let mut field_begin_char_shape: CharShapeIndex = char_shape_id;
+    let mut field_body = String::new();
 
-    for ctrl in &hx.ctrls {
-        if let Some(run) = decode_footnote(ctrl, char_shape_id, depth)? {
+    for &(kind, idx) in &order {
+        match kind {
+            HxRunChildKind::Text => {
+                let text = &hx.texts[idx];
+                if field_begin.is_some() {
+                    // 마커 사이 텍스트 = 필드 본문 (문서 순서라 무모호).
+                    field_body.push_str(&text.text());
+                    continue;
+                }
+                let content = text.to_run_content();
+                let keep = match &content {
+                    RunContent::Text(s) => !s.is_empty(),
+                    RunContent::InlineText(it) => !it.segments.is_empty(),
+                    _ => true,
+                };
+                if keep {
+                    runs.push(Run { content, char_shape_id });
+                }
+            }
+            HxRunChildKind::Table => {
+                let core_table = convert_table(&hx.tables[idx], depth, ctx)?;
+                runs.push(Run { content: RunContent::Table(Box::new(core_table)), char_shape_id });
+            }
+            HxRunChildKind::Picture => {
+                if let Some(image) = convert_picture(&hx.pictures[idx], depth, ctx)? {
+                    runs.push(Run { content: RunContent::Image(image), char_shape_id });
+                }
+            }
+            HxRunChildKind::Ctrl => {
+                convert_ctrl_child(
+                    &hx.ctrls[idx],
+                    char_shape_id,
+                    depth,
+                    &mut runs,
+                    &mut field_begin,
+                    &mut field_begin_char_shape,
+                    &mut field_body,
+                    ctx,
+                )?;
+            }
+            HxRunChildKind::Rect => {
+                if let Some(run) = decode_textbox(&hx.rects[idx], char_shape_id, depth, ctx)? {
+                    runs.push(run);
+                }
+            }
+            HxRunChildKind::Line => {
+                runs.push(decode_line(&hx.lines[idx], char_shape_id, depth, ctx)?);
+            }
+            HxRunChildKind::Ellipse => {
+                let ellipse = &hx.ellipses[idx];
+                if ellipse.has_arc_pr == 1 {
+                    runs.push(decode_arc(ellipse, char_shape_id, depth, ctx)?);
+                } else {
+                    runs.push(decode_ellipse(ellipse, char_shape_id, depth, ctx)?);
+                }
+            }
+            HxRunChildKind::Polygon => {
+                runs.push(decode_polygon(&hx.polygons[idx], char_shape_id, depth, ctx)?);
+            }
+            HxRunChildKind::Curve => {
+                runs.push(decode_curve(&hx.curves[idx], char_shape_id, depth, ctx)?);
+            }
+            HxRunChildKind::TextArt => {
+                runs.push(decode_textart(&hx.textarts[idx], char_shape_id, depth)?);
+            }
+            HxRunChildKind::ConnectLine => {
+                runs.push(decode_connect_line(&hx.connect_lines[idx], char_shape_id, depth, ctx)?);
+            }
+            HxRunChildKind::Container => {
+                if let Some(run) = decode_container(&hx.containers[idx], char_shape_id, depth, ctx)?
+                {
+                    runs.push(run);
+                }
+            }
+            HxRunChildKind::Equation => {
+                runs.push(decode_equation(&hx.equations[idx], char_shape_id)?);
+            }
+            HxRunChildKind::Dutmal => {
+                runs.push(decode_dutmal(&hx.dutmals[idx], char_shape_id));
+            }
+            HxRunChildKind::Compose => {
+                runs.push(decode_compose(&hx.composes[idx], char_shape_id));
+            }
+            // secPr/titleMark 는 구역·문단 수준에서 소비, switch 는 차트
+            // 전용 경로 소유, Other/StrayText 는 미지 요소 자리 — run
+            // 방출 없음 (ledger 가 fail-closed 신호로 소비).
+            HxRunChildKind::SecPr
+            | HxRunChildKind::TitleMark
+            | HxRunChildKind::Switch
+            | HxRunChildKind::Other
+            | HxRunChildKind::StrayText => {}
+        }
+    }
+
+    // Handle self-closing fieldBegin without a matching fieldEnd (e.g. bookmark span start)
+    if let Some(fb) = field_begin.take() {
+        if fb.field_type == "BOOKMARK" {
+            runs.push(Run {
+                content: RunContent::Control(Box::new(Control::Bookmark {
+                    name: fb.name.clone(),
+                    bookmark_type: hwpforge_foundation::BookmarkType::SpanStart,
+                })),
+                char_shape_id: field_begin_char_shape,
+            });
+        }
+    }
+
+    Ok(runs)
+}
+
+/// `<hp:ctrl>` 자식 하나를 문서 순서 위치에서 변환한다 (W1a 분리 헬퍼).
+///
+/// footnote/endnote/bookmark/indexmark/autoNum/newNum/pageHiding 은 즉시
+/// run 으로, fieldBegin/fieldEnd 는 순서 기반 pairing 상태를 갱신한다.
+#[allow(clippy::too_many_arguments)]
+fn convert_ctrl_child<'a>(
+    ctrl: &'a HxCtrl,
+    char_shape_id: CharShapeIndex,
+    depth: usize,
+    runs: &mut Vec<Run>,
+    field_begin: &mut Option<&'a HxFieldBegin>,
+    field_begin_char_shape: &mut CharShapeIndex,
+    field_body: &mut String,
+    ctx: &mut DecodeCtx,
+) -> HwpxResult<()> {
+    {
+        if let Some(run) = decode_footnote(ctrl, char_shape_id, depth, ctx)? {
             runs.push(run);
         }
-        if let Some(run) = decode_endnote(ctrl, char_shape_id, depth)? {
+        if let Some(run) = decode_endnote(ctrl, char_shape_id, depth, ctx)? {
             runs.push(run);
         }
         if let Some(run) = decode_bookmark(ctrl, char_shape_id) {
@@ -460,32 +756,24 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
         if let Some(run) = decode_indexmark(ctrl, char_shape_id) {
             runs.push(run);
         }
-        // Field begin: remember for pairing with fieldEnd
+        // Field begin: remember for pairing with fieldEnd — 사이드카 순서
+        // 덕에 이후 마주치는 텍스트는 정확히 마커 사이 본문이다 (W1a).
         if let Some(fb) = &ctrl.field_begin {
-            field_begin = Some(fb);
-            field_begin_char_shape = char_shape_id;
+            *field_begin = Some(fb);
+            *field_begin_char_shape = char_shape_id;
+            field_body.clear();
         }
-        // Field end: pair with remembered fieldBegin and emit control
+        // Field end: pair with remembered fieldBegin and emit control.
+        // 본문 = begin 이후 누적된 field_body — 문서 순서라 무모호하므로
+        // 종전의 `texts.len()==1` 다운그레이드(gotcha #30)는 철폐한다.
         if ctrl.field_end.is_some() {
             if let Some(fb) = field_begin.take() {
-                let field_text = collect_run_text(hx);
-                // `HxRun` 은 자식 순서(texts/ctrls interleaving)를 보존하지
-                // 않으므로, run 에 `<hp:t>` 가 정확히 1개일 때만 그 텍스트가
-                // 마커 사이 본문이라고 무모호하게 귀속할 수 있다. 한컴은
-                // 재저장 시 라벨 run 과 필드 run 을 병합하기도 한다
-                // (fixture `fields/clickhere_filled.hwpx`: t·fieldBegin·
-                // t·fieldEnd·t 한 run) — 그 경우 연결 텍스트를 본문으로
-                // 오귀속하는 대신 미채움으로 다운그레이드한다 (warning-first).
-                let unambiguous_body = hx.texts.len() == 1;
-                if let Some(run) = decode_field_control(
-                    fb,
-                    &field_text,
-                    field_begin_char_shape,
-                    depth,
-                    unambiguous_body,
-                )? {
+                if let Some(run) =
+                    decode_field_control(fb, field_body, *field_begin_char_shape, depth, true, ctx)?
+                {
                     runs.push(run);
                 }
+                field_body.clear();
             }
         }
         // AutoNum (inline page number) — Wave 12n: routed to
@@ -540,112 +828,34 @@ fn convert_run(hx: &HxRun, depth: usize) -> HwpxResult<Vec<Run>> {
             });
         }
     }
-
-    // Handle self-closing fieldBegin without a matching fieldEnd (e.g. bookmark span start)
-    if let Some(fb) = field_begin.take() {
-        if fb.field_type == "BOOKMARK" {
-            runs.push(Run {
-                content: RunContent::Control(Box::new(Control::Bookmark {
-                    name: fb.name.clone(),
-                    bookmark_type: hwpforge_foundation::BookmarkType::SpanStart,
-                })),
-                char_shape_id: field_begin_char_shape,
-            });
-        }
-    }
-
-    // Textbox runs (from <hp:rect>)
-    for rect in &hx.rects {
-        if let Some(run) = decode_textbox(rect, char_shape_id, depth)? {
-            runs.push(run);
-        }
-    }
-
-    // Line runs (from <hp:line>)
-    for line in &hx.lines {
-        runs.push(decode_line(line, char_shape_id, depth)?);
-    }
-
-    // Ellipse and Arc runs (from <hp:ellipse>)
-    for ellipse in &hx.ellipses {
-        if ellipse.has_arc_pr == 1 {
-            runs.push(decode_arc(ellipse, char_shape_id, depth)?);
-        } else {
-            runs.push(decode_ellipse(ellipse, char_shape_id, depth)?);
-        }
-    }
-
-    // Polygon runs (from <hp:polygon>)
-    for polygon in &hx.polygons {
-        runs.push(decode_polygon(polygon, char_shape_id, depth)?);
-    }
-
-    // Curve runs (from <hp:curve>)
-    for curve in &hx.curves {
-        runs.push(decode_curve(curve, char_shape_id, depth)?);
-    }
-
-    // TextArt runs (from <hp:textart>)
-    for text_art in &hx.textarts {
-        runs.push(decode_textart(text_art, char_shape_id, depth)?);
-    }
-
-    // ConnectLine runs (from <hp:connectLine>)
-    for connect_line in &hx.connect_lines {
-        runs.push(decode_connect_line(connect_line, char_shape_id, depth)?);
-    }
-
-    // Group runs (from <hp:container>) — Wave A flat children.
-    for container in &hx.containers {
-        if let Some(run) = decode_container(container, char_shape_id, depth)? {
-            runs.push(run);
-        }
-    }
-
-    // Equation runs (from <hp:equation>)
-    for equation in &hx.equations {
-        runs.push(decode_equation(equation, char_shape_id)?);
-    }
-
-    // Dutmal runs (from <hp:dutmal>)
-    for dutmal in &hx.dutmals {
-        runs.push(decode_dutmal(dutmal, char_shape_id));
-    }
-
-    // Compose runs (from <hp:compose>)
-    for compose in &hx.composes {
-        runs.push(decode_compose(compose, char_shape_id));
-    }
-
-    Ok(runs)
+    Ok(())
 }
 
 /// Converts an `HxTable` into a Core `Table`.
-fn convert_table(hx: &HxTable, depth: usize) -> HwpxResult<Table> {
+fn convert_table(hx: &HxTable, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<Table> {
     if depth >= MAX_NESTING_DEPTH {
         return Err(HwpxError::InvalidStructure {
             detail: format!("table nesting depth {} exceeds limit of {}", depth, MAX_NESTING_DEPTH,),
         });
     }
 
-    let rows = hx
-        .rows
-        .iter()
-        .map(|hx_row| {
-            let cells = hx_row
-                .cells
-                .iter()
-                .map(|cell| convert_table_cell(cell, depth))
-                .collect::<HwpxResult<Vec<_>>>()?;
-            let height: Option<HwpUnit> = cells.iter().filter_map(|cell| cell.height).max();
-            let row: TableRow = match height {
-                Some(value) => TableRow::with_height(cells, value),
-                None => TableRow::new(cells),
-            };
-            let is_header: bool = decode_table_row_header(hx_row)?;
-            Ok(row.with_header(is_header))
-        })
-        .collect::<HwpxResult<Vec<_>>>()?;
+    let mut rows: Vec<TableRow> = Vec::with_capacity(hx.rows.len());
+    for (row_idx, hx_row) in hx.rows.iter().enumerate() {
+        let mut cells: Vec<TableCell> = Vec::with_capacity(hx_row.cells.len());
+        for (cell_idx, cell) in hx_row.cells.iter().enumerate() {
+            ctx.enter(super::PathSeg::TableCell { row: row_idx, cell: cell_idx });
+            let result = convert_table_cell(cell, depth, ctx);
+            ctx.leave();
+            cells.push(result?);
+        }
+        let height: Option<HwpUnit> = cells.iter().filter_map(|cell| cell.height).max();
+        let row: TableRow = match height {
+            Some(value) => TableRow::with_height(cells, value),
+            None => TableRow::new(cells),
+        };
+        let is_header: bool = decode_table_row_header(hx_row)?;
+        rows.push(row.with_header(is_header));
+    }
     validate_leading_header_rows(&rows)?;
 
     // Validate declared row count matches actual row count
@@ -659,7 +869,7 @@ fn convert_table(hx: &HxTable, depth: usize) -> HwpxResult<Table> {
         });
     }
 
-    let caption = hx.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
+    let caption = hx.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
     let page_break: TablePageBreak = decode_table_page_break(&hx.page_break)?;
     let width: Option<HwpUnit> = match hx.sz.as_ref() {
@@ -730,16 +940,21 @@ fn table_pos_is_default_flow(pos: Option<&crate::schema::section::HxTablePos>) -
 }
 
 /// Converts an `HxTableCell` into a Core `TableCell`.
-fn convert_table_cell(hx: &HxTableCell, depth: usize) -> HwpxResult<TableCell> {
+fn convert_table_cell(
+    hx: &HxTableCell,
+    depth: usize,
+    ctx: &mut DecodeCtx,
+) -> HwpxResult<TableCell> {
     let paragraphs = if let Some(sub_list) = &hx.sub_list {
-        sub_list
-            .paragraphs
-            .iter()
-            .map(|hx_para| {
-                let (para, _) = convert_paragraph(hx_para, false, depth + 1)?;
-                Ok(para)
-            })
-            .collect::<HwpxResult<Vec<_>>>()?
+        let mut out = Vec::with_capacity(sub_list.paragraphs.len());
+        for (i, hx_para) in sub_list.paragraphs.iter().enumerate() {
+            ctx.enter(super::PathSeg::NestedParagraph(i));
+            let result = convert_paragraph(hx_para, false, depth + 1, ctx);
+            ctx.leave();
+            let (para, _) = result?;
+            out.push(para);
+        }
+        out
     } else {
         vec![Paragraph::new(ParaShapeIndex::new(0))]
     };
@@ -819,7 +1034,7 @@ fn validate_leading_header_rows(rows: &[TableRow]) -> HwpxResult<()> {
 }
 
 /// Converts an `HxPic` into a Core `Image`, if it has a valid image reference.
-fn convert_picture(hx: &HxPic, depth: usize) -> HwpxResult<Option<Image>> {
+fn convert_picture(hx: &HxPic, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<Option<Image>> {
     let img = match hx.img.as_ref() {
         Some(img) if !img.binary_item_id_ref.is_empty() => img,
         _ => return Ok(None),
@@ -840,7 +1055,7 @@ fn convert_picture(hx: &HxPic, depth: usize) -> HwpxResult<Option<Image>> {
         })
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
-    let caption = hx.caption.as_ref().map(|c| convert_hx_caption(c, depth)).transpose()?;
+    let caption = hx.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
     let placement = decode_image_placement(hx);
 
     let mut image: Image = Image::new(path, width, height, format);
@@ -892,12 +1107,16 @@ fn decode_footnote(
     ctrl: &HxCtrl,
     char_shape_id: CharShapeIndex,
     depth: usize,
+    ctx: &mut DecodeCtx,
 ) -> HwpxResult<Option<Run>> {
     let hx = match &ctrl.foot_note {
         Some(note) => note,
         None => return Ok(None),
     };
-    let paragraphs = decode_note_paragraphs(hx, depth)?;
+    ctx.enter(super::PathSeg::Footnote);
+    let result = decode_note_paragraphs(hx, depth, ctx);
+    ctx.leave();
+    let paragraphs = result?;
     Ok(Some(Run {
         content: RunContent::Control(Box::new(Control::Footnote {
             inst_id: hx.inst_id.map(hwpforge_core::ObjectId::new),
@@ -912,12 +1131,16 @@ fn decode_endnote(
     ctrl: &HxCtrl,
     char_shape_id: CharShapeIndex,
     depth: usize,
+    ctx: &mut DecodeCtx,
 ) -> HwpxResult<Option<Run>> {
     let hx = match &ctrl.end_note {
         Some(note) => note,
         None => return Ok(None),
     };
-    let paragraphs = decode_note_paragraphs(hx, depth)?;
+    ctx.enter(super::PathSeg::Endnote);
+    let result = decode_note_paragraphs(hx, depth, ctx);
+    ctx.leave();
+    let paragraphs = result?;
     Ok(Some(Run {
         content: RunContent::Control(Box::new(Control::Endnote {
             inst_id: hx.inst_id.map(hwpforge_core::ObjectId::new),
@@ -928,8 +1151,12 @@ fn decode_endnote(
 }
 
 /// Decodes an `HxFootNote` (or `HxEndNote`, same type) sub-list into paragraphs.
-fn decode_note_paragraphs(hx: &HxFootNote, depth: usize) -> HwpxResult<Vec<Paragraph>> {
-    decode_sublist_paragraphs(&hx.sub_list, depth)
+fn decode_note_paragraphs(
+    hx: &HxFootNote,
+    depth: usize,
+    ctx: &mut DecodeCtx,
+) -> HwpxResult<Vec<Paragraph>> {
+    decode_sublist_paragraphs(&hx.sub_list, depth, ctx)
 }
 
 /// Decodes an `HxCtrl`'s bookmark into a Core `Run`, if present.
@@ -959,14 +1186,6 @@ fn decode_indexmark(ctrl: &HxCtrl, char_shape_id: CharShapeIndex) -> Option<Run>
 /// Collects all text content from an `HxRun`'s `<hp:t>` elements.
 ///
 /// Used to extract the display text between a fieldBegin and fieldEnd pair.
-fn collect_run_text(hx: &HxRun) -> String {
-    let mut text = String::new();
-    for t in &hx.texts {
-        text.push_str(&t.text());
-    }
-    text
-}
-
 /// Extracts named parameter values from an `HxFieldBegin`'s parameters.
 fn get_field_param(fb: &HxFieldBegin, name: &str) -> Option<String> {
     let params = fb.parameters.as_ref()?;
@@ -997,6 +1216,7 @@ fn decode_field_control(
     char_shape_id: CharShapeIndex,
     depth: usize,
     unambiguous_body: bool,
+    ctx: &mut DecodeCtx,
 ) -> HwpxResult<Option<Run>> {
     let control = match fb.field_type.as_str() {
         "HYPERLINK" => {
@@ -1130,7 +1350,10 @@ fn decode_field_control(
         "MEMO" => {
             // Memo body is in subList inside fieldBegin
             let content = if let Some(sub_list) = &fb.sub_list {
-                decode_sublist_paragraphs(sub_list, depth)?
+                ctx.enter(super::PathSeg::Memo);
+                let result = decode_sublist_paragraphs(sub_list, depth, ctx);
+                ctx.leave();
+                result?
             } else {
                 Vec::new()
             };
@@ -1293,6 +1516,7 @@ pub(crate) fn parse_hex_color(s: &str) -> Option<Color> {
 pub(crate) fn decode_sublist_paragraphs(
     sub_list: &HxSubList,
     depth: usize,
+    ctx: &mut DecodeCtx,
 ) -> HwpxResult<Vec<Paragraph>> {
     if depth >= MAX_NESTING_DEPTH {
         return Err(HwpxError::InvalidStructure {
@@ -1302,20 +1526,25 @@ pub(crate) fn decode_sublist_paragraphs(
             ),
         });
     }
-    sub_list
-        .paragraphs
-        .iter()
-        .map(|hx_para| {
-            let (para, _) = convert_paragraph(hx_para, false, depth + 1)?;
-            Ok(para)
-        })
-        .collect()
+    let mut out = Vec::with_capacity(sub_list.paragraphs.len());
+    for (i, hx_para) in sub_list.paragraphs.iter().enumerate() {
+        ctx.enter(super::PathSeg::NestedParagraph(i));
+        let result = convert_paragraph(hx_para, false, depth + 1, ctx);
+        ctx.leave();
+        let (para, _) = result?;
+        out.push(para);
+    }
+    Ok(out)
 }
 
 /// Converts an `HxCaption` into a Core `Caption`.
 ///
 /// Parses side, gap, optional width, and paragraph content from the schema type.
-pub(crate) fn convert_hx_caption(hx: &HxCaption, depth: usize) -> HwpxResult<Caption> {
+pub(crate) fn convert_hx_caption(
+    hx: &HxCaption,
+    depth: usize,
+    ctx: &mut DecodeCtx,
+) -> HwpxResult<Caption> {
     let side = match hx.side.as_str() {
         "RIGHT" => CaptionSide::Right,
         "TOP" => CaptionSide::Top,
@@ -1329,7 +1558,10 @@ pub(crate) fn convert_hx_caption(hx: &HxCaption, depth: usize) -> HwpxResult<Cap
 
     let gap = HwpUnit::new(hx.gap).unwrap_or(HwpUnit::new(850).unwrap());
 
-    let paragraphs = decode_sublist_paragraphs(&hx.sub_list, depth)?;
+    ctx.enter(super::PathSeg::Caption);
+    let result = decode_sublist_paragraphs(&hx.sub_list, depth, ctx);
+    ctx.leave();
+    let paragraphs = result?;
 
     Ok(Caption { side, width, gap, paragraphs })
 }
@@ -1629,13 +1861,10 @@ fn parse_mm_width(s: &str) -> HwpUnit {
 ///
 /// 머리말 내부 문단 변환 실패를 전파한다 (W5-α C1 — `filter_map` 무음
 /// 삼킴은 캐시·본문 소실을 숨겼다).
-fn convert_ctrl_header(
-    ctrl: &HxCtrl,
-    warnings: &mut Vec<super::DecodeWarning>,
-) -> HwpxResult<Option<HeaderFooter>> {
+fn convert_ctrl_header(ctrl: &HxCtrl, ctx: &mut DecodeCtx) -> HwpxResult<Option<HeaderFooter>> {
     ctrl.header
         .as_ref()
-        .map(|hx| convert_header_footer(hx, "hp:header@applyPageType", warnings))
+        .map(|hx| convert_header_footer(hx, "hp:header@applyPageType", ctx))
         .transpose()
 }
 
@@ -1644,13 +1873,10 @@ fn convert_ctrl_header(
 /// # Errors
 ///
 /// 꼬리말 내부 문단 변환 실패를 전파한다 (`convert_ctrl_header` 참조).
-fn convert_ctrl_footer(
-    ctrl: &HxCtrl,
-    warnings: &mut Vec<super::DecodeWarning>,
-) -> HwpxResult<Option<HeaderFooter>> {
+fn convert_ctrl_footer(ctrl: &HxCtrl, ctx: &mut DecodeCtx) -> HwpxResult<Option<HeaderFooter>> {
     ctrl.footer
         .as_ref()
-        .map(|hx| convert_header_footer(hx, "hp:footer@applyPageType", warnings))
+        .map(|hx| convert_header_footer(hx, "hp:footer@applyPageType", ctx))
         .transpose()
 }
 
@@ -1663,19 +1889,22 @@ fn convert_ctrl_footer(
 fn convert_header_footer(
     hx: &HxHeaderFooter,
     attribute: &'static str,
-    warnings: &mut Vec<super::DecodeWarning>,
+    ctx: &mut DecodeCtx,
 ) -> HwpxResult<HeaderFooter> {
-    let apply_page_type = parse_apply_page_type(&hx.apply_page_type, attribute, warnings);
+    let apply_page_type = parse_apply_page_type(&hx.apply_page_type, attribute, &mut ctx.warnings);
 
     let hf = if let Some(sub_list) = &hx.sub_list {
-        let paragraphs = sub_list
-            .paragraphs
-            .iter()
-            .map(|hx_para| convert_paragraph(hx_para, false, 0).map(|(para, _)| para))
-            .collect::<HwpxResult<Vec<_>>>()?;
+        let mut paragraphs = Vec::with_capacity(sub_list.paragraphs.len());
+        for (i, hx_para) in sub_list.paragraphs.iter().enumerate() {
+            ctx.enter(super::PathSeg::NestedParagraph(i));
+            let result = convert_paragraph(hx_para, false, 0, ctx);
+            ctx.leave();
+            let (para, _) = result?;
+            paragraphs.push(para);
+        }
         let mut hf = HeaderFooter::new(paragraphs, apply_page_type);
         // W5-α H1: 컨테이너 기하 승격 — 밴드 재생(R6)의 필수 입력.
-        hf.vert_align = parse_vert_align(&sub_list.vert_align, warnings);
+        hf.vert_align = parse_vert_align(&sub_list.vert_align, &mut ctx.warnings);
         hf.text_width =
             HwpUnit::new(i32::try_from(sub_list.text_width).unwrap_or(0)).unwrap_or(HwpUnit::ZERO);
         hf.text_height =
@@ -1916,14 +2145,16 @@ mod tests {
 
     #[test]
     fn linesegarray_is_promoted_to_layout_cache() {
+        // W1b: textpos 는 wire 스트림 좌표 — 텍스트 총길이(8유닛)를 넘지
+        // 않는 정합 fixture 여야 승격된다 (범위 밖 = fail-closed 거부).
         let xml = r#"<sec>
             <p paraPrIDRef="0">
-                <run charPrIDRef="0"><t>본문</t></run>
+                <run charPrIDRef="0"><t>본문 줄나눔 예시</t></run>
                 <linesegarray>
                     <lineseg textpos="0" vertpos="0" vertsize="1000" textheight="1000"
                              baseline="850" spacing="600" horzpos="0" horzsize="48188"
                              flags="393216"/>
-                    <lineseg textpos="70" vertpos="1600" vertsize="1000" textheight="1000"
+                    <lineseg textpos="6" vertpos="1600" vertsize="1000" textheight="1000"
                              baseline="850" spacing="600" horzpos="0" horzsize="48188"
                              flags="1441792"/>
                 </linesegarray>
@@ -1933,9 +2164,77 @@ mod tests {
         let cache = result.paragraphs[0].layout_cache.as_ref().expect("cache promoted");
         assert_eq!(cache.line_count(), 2);
         assert_eq!(cache.lines[0].vertsize, 1000);
-        assert_eq!(cache.lines[1].textpos, 70);
+        assert_eq!(cache.lines[1].textpos, 6);
         assert_eq!(cache.lines[1].vertpos, 1600);
         assert_eq!(cache.lines[1].flags, 1_441_792);
+        assert!(result.warnings.is_empty(), "no drop warning: {:?}", result.warnings);
+    }
+
+    #[test]
+    fn out_of_range_textpos_drops_cache_with_warning() {
+        // 텍스트 2유닛인데 textpos=70 — wire 총길이와 모순되는 조작 캐시는
+        // 승격하지 않고 경고한다 (W1b fail-closed).
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0"><t>본문</t></run>
+                <linesegarray>
+                    <lineseg textpos="0" vertpos="0" vertsize="1000"/>
+                    <lineseg textpos="70" vertpos="1600" vertsize="1000"/>
+                </linesegarray>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        assert!(result.paragraphs[0].layout_cache.is_none());
+        assert!(
+            result.warnings.iter().any(|w| matches!(
+                w,
+                super::super::DecodeWarning::LayoutCacheDropped { path, reason }
+                    if path.to_string() == "section[0].para[0]" && reason.contains("70")
+            )),
+            "expected LayoutCacheDropped with path, got {:?}",
+            result.warnings
+        );
+    }
+
+    #[test]
+    fn mid_paragraph_marker_normalizes_following_lines() {
+        // 중간 각주 marker(8유닛) 뒤 줄 시작 — 종전 선두-균일 차감은 이
+        // 문단을 무음 오절단했다 (§1f 따름정리). wire: 가나다=0..3,
+        // ctrl=3..11, 라마바=11..14 → 줄2 시작 raw 12 = Core 4.
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0"><t>가나다</t><ctrl><footNote number="1"><subList><p paraPrIDRef="0"><run charPrIDRef="0"><t>각주</t></run></p></subList></footNote></ctrl><t>라마바</t></run>
+                <linesegarray>
+                    <lineseg textpos="0" vertpos="0" vertsize="1000"/>
+                    <lineseg textpos="12" vertpos="1600" vertsize="1000"/>
+                </linesegarray>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let cache = result.paragraphs[0].layout_cache.as_ref().expect("promoted");
+        assert_eq!(cache.lines[0].textpos, 0);
+        assert_eq!(cache.lines[1].textpos, 4, "raw 12 − marker 8 = core 4");
+    }
+
+    #[test]
+    fn marker_interior_textpos_drops_cache_with_warning() {
+        // 줄 시작이 marker 내부(raw 5 ∈ ctrl 3..11)면 좌표를 신뢰할 수
+        // 없다 — 캐시 드롭 + 경고.
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0"><t>가나다</t><ctrl><autoNum num="1" numType="PAGE"/></ctrl><t>라마바</t></run>
+                <linesegarray>
+                    <lineseg textpos="0" vertpos="0" vertsize="1000"/>
+                    <lineseg textpos="5" vertpos="1600" vertsize="1000"/>
+                </linesegarray>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        assert!(result.paragraphs[0].layout_cache.is_none());
+        assert!(result
+            .warnings
+            .iter()
+            .any(|w| matches!(w, super::super::DecodeWarning::LayoutCacheDropped { .. })));
     }
 
     #[test]
@@ -1963,14 +2262,14 @@ mod tests {
                 <run charPrIDRef="0"><t>본문 텍스트</t></run>
                 <linesegarray>
                     <lineseg textpos="16" vertpos="0" vertsize="1000"/>
-                    <lineseg textpos="70" vertpos="1600" vertsize="1000"/>
+                    <lineseg textpos="20" vertpos="1600" vertsize="1000"/>
                 </linesegarray>
             </p>
         </sec>"#;
         let result = parse_section(xml, 0, &HashMap::new()).unwrap();
         let cache = result.paragraphs[0].layout_cache.as_ref().expect("promoted");
         assert_eq!(cache.lines[0].textpos, 0, "16 − 16");
-        assert_eq!(cache.lines[1].textpos, 54, "70 − 16");
+        assert_eq!(cache.lines[1].textpos, 4, "20 − 16");
     }
 
     #[test]
@@ -2360,7 +2659,7 @@ mod tests {
         use crate::schema::section::HxTable;
         // Directly call convert_table at max depth to trigger the limit
         let hx = HxTable { row_cnt: 0, col_cnt: 0, rows: vec![], ..Default::default() };
-        let err = convert_table(&hx, MAX_NESTING_DEPTH).unwrap_err();
+        let err = convert_table(&hx, MAX_NESTING_DEPTH, &mut DecodeCtx::new(0)).unwrap_err();
         match &err {
             HwpxError::InvalidStructure { detail } => {
                 assert!(detail.contains("nesting depth"));
@@ -2379,7 +2678,7 @@ mod tests {
             rows: vec![HxTableRow { cells: vec![] }],
             ..Default::default()
         };
-        let err = convert_table(&hx, 0).unwrap_err();
+        let err = convert_table(&hx, 0, &mut DecodeCtx::new(0)).unwrap_err();
         match &err {
             HwpxError::InvalidStructure { detail } => {
                 assert!(detail.contains("rowCnt=2"));
@@ -3356,6 +3655,36 @@ mod tests {
     }
 
     #[test]
+    fn interleaved_children_preserve_document_order_in_core() {
+        // W1a 핵심 잠금: `<t>a</t><pic/><t>b</t>` 는 Core `[a, Image, b]` —
+        // 종전 by-kind 평탄화는 `[a, b, Image]` 로 재배열해 인라인 앵커를
+        // 왜곡했다 (이미지/글상자 에픽의 관문 결함).
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <t>a</t>
+                    <pic id="1"><img binaryItemIDRef="image1.png" bright="0" contrast="0"/><curSz width="100" height="100"/></pic>
+                    <t>b</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        let kinds: Vec<&str> = result.paragraphs[0]
+            .runs
+            .iter()
+            .map(|r| match &r.content {
+                RunContent::Text(_) | RunContent::InlineText(_) => "text",
+                RunContent::Image(_) => "image",
+                RunContent::Table(_) => "table",
+                RunContent::Control(_) => "control",
+                _ => "other",
+            })
+            .collect();
+        assert_eq!(kinds, vec!["text", "image", "text"], "문서 순서 보존");
+        assert_eq!(result.paragraphs[0].text_content(), "ab");
+    }
+
+    #[test]
     fn serde_ctrl_newnum_page_produces_new_number() {
         // F1b 한컴 실측 (rules-newnum2 section1.xml): 새 번호 지정은 run 안
         // `<hp:ctrl><hp:newNum num="7" numType="PAGE"/></hp:ctrl>` 자기닫힘.
@@ -4011,7 +4340,10 @@ mod tests {
         // 알 수 있게 경고를 표면화한다 (디코더의 증거 세탁 금지).
         assert_eq!(result.headers[0].apply_page_type, ApplyPageType::Both);
         assert_eq!(result.warnings.len(), 1, "{:?}", result.warnings);
-        let DecodeWarning::UnknownEnumValue { attribute, raw, fallback } = &result.warnings[0];
+        let DecodeWarning::UnknownEnumValue { attribute, raw, fallback } = &result.warnings[0]
+        else {
+            panic!("expected UnknownEnumValue, got: {:?}", result.warnings[0]);
+        };
         assert_eq!(*attribute, "hp:header@applyPageType");
         assert_eq!(raw, "WEIRD_VALUE");
         assert_eq!(*fallback, "BOTH");
@@ -4072,7 +4404,9 @@ mod tests {
             .warnings
             .iter()
             .map(|w| {
-                let DecodeWarning::UnknownEnumValue { attribute, .. } = w;
+                let DecodeWarning::UnknownEnumValue { attribute, .. } = w else {
+                    panic!("expected UnknownEnumValue, got: {w:?}");
+                };
                 *attribute
             })
             .collect();
@@ -4336,7 +4670,8 @@ mod tests {
             has_num_ref: 0,
             paragraphs: vec![HxParagraph::default()],
         };
-        let err = decode_sublist_paragraphs(&sub_list, MAX_NESTING_DEPTH).unwrap_err();
+        let err = decode_sublist_paragraphs(&sub_list, MAX_NESTING_DEPTH, &mut DecodeCtx::new(0))
+            .unwrap_err();
         match &err {
             crate::error::HwpxError::InvalidStructure { detail } => {
                 assert!(detail.contains("nesting depth"), "error must mention nesting depth");
@@ -4457,7 +4792,7 @@ mod tests {
                 paragraphs: vec![],
             },
         };
-        let caption = convert_hx_caption(&hx, 0).unwrap();
+        let caption = convert_hx_caption(&hx, 0, &mut DecodeCtx::new(0)).unwrap();
         use hwpforge_core::caption::CaptionSide;
         assert_eq!(caption.side, CaptionSide::Left);
         assert_eq!(caption.width.unwrap().as_i32(), 5000);
@@ -4487,7 +4822,7 @@ mod tests {
                 paragraphs: vec![],
             },
         };
-        let caption = convert_hx_caption(&hx, 0).unwrap();
+        let caption = convert_hx_caption(&hx, 0, &mut DecodeCtx::new(0)).unwrap();
         use hwpforge_core::caption::CaptionSide;
         assert_eq!(caption.side, CaptionSide::Right);
         assert!(caption.width.is_none(), "zero width must decode as None");
@@ -4519,10 +4854,11 @@ mod tests {
             },
         };
 
-        let top = convert_hx_caption(&make_caption("TOP"), 0).unwrap();
+        let top = convert_hx_caption(&make_caption("TOP"), 0, &mut DecodeCtx::new(0)).unwrap();
         assert_eq!(top.side, CaptionSide::Top);
 
-        let bottom = convert_hx_caption(&make_caption("BOTTOM"), 0).unwrap();
+        let bottom =
+            convert_hx_caption(&make_caption("BOTTOM"), 0, &mut DecodeCtx::new(0)).unwrap();
         assert_eq!(bottom.side, CaptionSide::Bottom);
     }
 

@@ -145,6 +145,105 @@ pub(crate) struct FieldSlot<'a> {
     pub(crate) control: &'a mut Control,
 }
 
+/// 값이 바뀐 필드들의 둘러싼 `<hp:p>` 에서 `<hp:linesegarray>` 를 제거한다.
+///
+/// 이름 유일성은 fill preflight(DuplicateFieldName 거부)가 보장하므로
+/// 필드 이름으로 raw XML 에서 위치를 찾는 것이 무모호하다. 같은 문단의
+/// 다중 slot 은 첫 제거 후 자연히 no-op (문단당 정확히 1개 edit —
+/// §1g v5 변경 5).
+fn strip_linesegarray_for_changed_fields(
+    bytes: &[u8],
+    changed: &[(usize, String)],
+) -> crate::error::HwpxResult<Vec<u8>> {
+    if changed.is_empty() {
+        return Ok(bytes.to_vec());
+    }
+    let mut pkg = crate::patch::RawPackage::read(bytes)?;
+    let mut sections: std::collections::BTreeMap<usize, Vec<&str>> =
+        std::collections::BTreeMap::new();
+    for (section_idx, name) in changed {
+        sections.entry(*section_idx).or_default().push(name.as_str());
+    }
+    for (section_idx, names) in sections {
+        let path = crate::patch::section_path(section_idx);
+        let mut xml = pkg.read_text_entry(&path)?;
+        for name in names {
+            if let Some(stripped) = strip_paragraph_linesegarray_for_field(&xml, name) {
+                xml = stripped;
+            }
+        }
+        pkg.replace_text_entry(&path, xml);
+    }
+    pkg.write()
+}
+
+/// `name` 필드의 fieldBegin 을 찾아 그 문단의 linesegarray 를 제거한 XML 을
+/// 돌려준다. 필드/linesegarray 부재 시 `None` (무캐시 문단 = no-op).
+fn strip_paragraph_linesegarray_for_field(xml: &str, name: &str) -> Option<String> {
+    // fieldBegin 태그 중 name 속성이 일치하는 첫 위치.
+    let needle = format!("name=\"{name}\"");
+    let mut search = 0usize;
+    let field_pos = loop {
+        let at = xml[search..].find("<hp:fieldBegin")? + search;
+        let tag_end = xml[at..].find('>')? + at;
+        if xml[at..tag_end].contains(&needle) {
+            break at;
+        }
+        search = tag_end + 1;
+    };
+    let (p_start, p_end) = enclosing_paragraph_span(xml, field_pos)?;
+    let para = &xml[p_start..p_end];
+    let lsa_rel = para.find("<hp:linesegarray")?;
+    let lsa_start = p_start + lsa_rel;
+    let first_gt = xml[lsa_start..].find('>')? + lsa_start;
+    let lsa_end = if xml.as_bytes().get(first_gt.checked_sub(1)?) == Some(&b'/') {
+        first_gt + 1
+    } else {
+        let close = xml[lsa_start..p_end].find("</hp:linesegarray>")?;
+        lsa_start + close + "</hp:linesegarray>".len()
+    };
+    let mut out = String::with_capacity(xml.len());
+    out.push_str(&xml[..lsa_start]);
+    out.push_str(&xml[lsa_end..]);
+    Some(out)
+}
+
+/// `pos` 를 포함하는 가장 안쪽 `<hp:p …>…</hp:p>` 구간.
+///
+/// 중첩 문단(셀 등)은 안쪽이 먼저 닫히므로, pos 이후 처음 닫히는 열림이
+/// 곧 innermost 다.
+fn enclosing_paragraph_span(xml: &str, pos: usize) -> Option<(usize, usize)> {
+    let bytes = xml.as_bytes();
+    let mut stack: Vec<usize> = Vec::new();
+    let mut i = 0usize;
+    loop {
+        let open = xml[i..].find("<hp:p").map(|o| i + o);
+        let close = xml[i..].find("</hp:p>").map(|o| i + o);
+        let take_open = match (open, close) {
+            (None, None) => return None,
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            (Some(o), Some(c)) => o < c,
+        };
+        if take_open {
+            let o = open.expect("checked");
+            // `<hp:pic` 등 배제 — 다음 문자가 공백/`>` 인 경우만 문단.
+            if matches!(bytes.get(o + 5), Some(b' ') | Some(b'>')) {
+                stack.push(o);
+            }
+            i = o + 5;
+        } else {
+            let c = close.expect("checked");
+            if let Some(s) = stack.pop() {
+                if s < pos && pos < c {
+                    return Some((s, c + "</hp:p>".len()));
+                }
+            }
+            i = c + "</hp:p>".len();
+        }
+    }
+}
+
 impl HwpxFiller {
     /// 문서의 모든 누름틀을 문서 순서로 나열한다 (발견가능성 표면).
     ///
@@ -241,6 +340,7 @@ impl HwpxFiller {
         let original_sections: Vec<Section> = decoded.document.sections().to_vec();
         let mut filled: Vec<FilledField> = Vec::new();
         let mut touched: Vec<usize> = Vec::new();
+        let mut changed_fields: Vec<(usize, String)> = Vec::new();
         for (section_idx, section) in decoded.document.sections_mut().iter_mut().enumerate() {
             visit_section_fields(section, section_idx, &mut |slot| {
                 if let Control::Field {
@@ -251,11 +351,17 @@ impl HwpxFiller {
                 } = &mut *slot.control
                 {
                     if let Some(value) = values.get(name.as_str()) {
+                        if value == display_text {
+                            // 동일 값 = 완전 no-op — mutate/FilledField/
+                            // touched/캐시 무효화 전부 생략 (§1g v5 변경 5).
+                            return;
+                        }
                         filled.push(FilledField {
                             name: name.clone(),
                             section: slot.section,
                             previous: std::mem::replace(display_text, value.clone()),
                         });
+                        changed_fields.push((slot.section, name.clone()));
                         if !touched.contains(&slot.section) {
                             touched.push(slot.section);
                         }
@@ -282,6 +388,12 @@ impl HwpxFiller {
                 Some(&preservation),
             )?;
         }
+
+        // W1b (§1g v5 변경 5): 값이 바뀐 필드의 둘러싼 문단에서
+        // linesegarray 를 제거한다 — 동일 UTF-16 길이라도 글자 폭이 다르면
+        // 줄바꿈/기하가 stale 이므로 "길이 변경 시"가 아니라 **값 변경 시
+        // 무조건**이다. 문단당 정확히 1회 제거 (이후 재조판은 한글 몫).
+        bytes = strip_linesegarray_for_changed_fields(&bytes, &changed_fields)?;
 
         Ok(FillOutcome { bytes, filled })
     }

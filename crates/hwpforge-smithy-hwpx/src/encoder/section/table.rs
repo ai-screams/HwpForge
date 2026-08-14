@@ -11,6 +11,7 @@ pub(super) fn build_table(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
+    sink: &mut EncodeSink,
 ) -> HwpxResult<HxTable> {
     if depth >= MAX_NESTING_DEPTH {
         return Err(HwpxError::InvalidStructure {
@@ -58,6 +59,7 @@ pub(super) fn build_table(
                 depth,
                 hyperlink_entries,
                 options,
+                sink,
             )
         })
         .collect::<HwpxResult<Vec<_>>>()?;
@@ -120,7 +122,7 @@ pub(super) fn build_table(
         caption: table
             .caption
             .as_ref()
-            .map(|c| build_hx_caption(c, table_width, depth, hyperlink_entries, options))
+            .map(|c| build_hx_caption(c, table_width, depth, hyperlink_entries, options, sink))
             .transpose()?,
         in_margin: Some(table.in_margin.map(encode_table_margin).unwrap_or(DEFAULT_CELL_MARGIN)),
         rows,
@@ -141,6 +143,7 @@ fn build_table_row(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
+    sink: &mut EncodeSink,
 ) -> HwpxResult<HxTableRow> {
     let row_fallback_height =
         (!row.cells.iter().any(|cell| cell.height.is_some())).then_some(row.height).flatten();
@@ -150,7 +153,8 @@ fn build_table_row(
         .enumerate()
         .map(|(i, cell)| {
             let col_addr = col_addrs.get(i).copied().unwrap_or(i as u32);
-            build_table_cell(
+            sink.enter(crate::decoder::PathSeg::TableCell { row: row_idx as usize, cell: i });
+            let result = build_table_cell(
                 cell,
                 TableCellBuildContext {
                     col_idx: col_addr,
@@ -163,7 +167,10 @@ fn build_table_row(
                 depth,
                 hyperlink_entries,
                 options,
-            )
+                sink,
+            );
+            sink.leave();
+            result
         })
         .collect::<HwpxResult<Vec<_>>>()?;
 
@@ -190,6 +197,7 @@ fn build_table_cell(
     depth: usize,
     hyperlink_entries: &mut Vec<(String, String)>,
     options: EncodeOptions,
+    sink: &mut EncodeSink,
 ) -> HwpxResult<HxTableCell> {
     Ok(HxTableCell {
         name: String::new(),
@@ -205,6 +213,7 @@ fn build_table_cell(
             encode_table_vertical_align(cell.vertical_align.unwrap_or(TableVerticalAlign::Center)),
             hyperlink_entries,
             options,
+            sink,
         )?),
         cell_addr: Some(HxCellAddr { col_addr: ctx.col_idx, row_addr: ctx.row_idx }),
         cell_span: Some(HxCellSpan {
@@ -255,7 +264,14 @@ mod tests {
         let table = one_cell_table()
             .with_out_margin(margin(283, 284, 240, 241))
             .with_in_margin(margin(510, 511, 141, 142));
-        let hx = build_table(&table, 0, &mut Vec::new(), EncodeOptions::default()).unwrap();
+        let hx = build_table(
+            &table,
+            0,
+            &mut Vec::new(),
+            EncodeOptions::default(),
+            &mut EncodeSink::new(0),
+        )
+        .unwrap();
         let out = hx.out_margin.expect("outMargin");
         assert_eq!((out.left, out.right, out.top, out.bottom), (283, 284, 240, 241));
         let inm = hx.in_margin.expect("inMargin");
@@ -270,8 +286,14 @@ mod tests {
     #[test]
     fn default_emission_is_unchanged_without_core_margins() {
         // None(우리 API 저작) = 기존 고정값 그대로 — 바이트 불변 계약.
-        let hx =
-            build_table(&one_cell_table(), 0, &mut Vec::new(), EncodeOptions::default()).unwrap();
+        let hx = build_table(
+            &one_cell_table(),
+            0,
+            &mut Vec::new(),
+            EncodeOptions::default(),
+            &mut EncodeSink::new(0),
+        )
+        .unwrap();
         assert_eq!(hx.out_margin.expect("outMargin"), DEFAULT_OUT_MARGIN);
         assert_eq!(hx.in_margin.expect("inMargin"), DEFAULT_CELL_MARGIN);
         assert_eq!(
@@ -285,7 +307,14 @@ mod tests {
         // sz height 는 decode-only 캐시 — 인코더는 항상 자체 정책(0)을 쓴다.
         let table = one_cell_table()
             .with_layout_cache(TableLayoutCache::new(Some(HwpUnit::new(2831).unwrap()), true));
-        let hx = build_table(&table, 0, &mut Vec::new(), EncodeOptions::default()).unwrap();
+        let hx = build_table(
+            &table,
+            0,
+            &mut Vec::new(),
+            EncodeOptions::default(),
+            &mut EncodeSink::new(0),
+        )
+        .unwrap();
         assert_eq!(hx.sz.expect("sz").height, 0, "decode-only cache must not reach the wire");
     }
 
@@ -293,7 +322,14 @@ mod tests {
     fn explicit_cell_margin_still_wins_over_in_margin() {
         let mut table = one_cell_table().with_in_margin(margin(510, 510, 141, 141));
         table.rows[0].cells[0] = table.rows[0].cells[0].clone().with_margin(margin(10, 20, 30, 40));
-        let hx = build_table(&table, 0, &mut Vec::new(), EncodeOptions::default()).unwrap();
+        let hx = build_table(
+            &table,
+            0,
+            &mut Vec::new(),
+            EncodeOptions::default(),
+            &mut EncodeSink::new(0),
+        )
+        .unwrap();
         let cell = &hx.rows[0].cells[0];
         assert_eq!(cell.has_margin, 1);
         let cm = cell.cell_margin.as_ref().expect("cellMargin");

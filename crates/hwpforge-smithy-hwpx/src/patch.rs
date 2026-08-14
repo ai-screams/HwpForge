@@ -31,8 +31,8 @@ use crate::exchange::{
 };
 use crate::inline_text::encode_inline_text_xml;
 use crate::schema::section::{
-    HxCaption, HxFieldBegin, HxFootNote, HxHeaderFooter, HxParagraph, HxPic, HxRun, HxSection,
-    HxSubList, HxTable, HxTableCell, HxTableRow,
+    HxCaption, HxCtrl, HxFieldBegin, HxFootNote, HxHeaderFooter, HxParagraph, HxPic, HxRun,
+    HxSection, HxSubList, HxTable, HxTableCell, HxTableRow,
 };
 use crate::schema::shapes::{HxConnectLine, HxCurve, HxEllipse, HxLine, HxPolygon, HxRect};
 use crate::{HwpxDecoder, HwpxStyleStore};
@@ -689,9 +689,6 @@ fn collect_raw_run_slots(
     sink: &mut RawSlotSink<'_>,
     allow_section_header_footer: bool,
 ) -> HwpxResult<usize> {
-    let has_field_pair = run.ctrls.iter().any(|ctrl| ctrl.field_begin.is_some())
-        && run.ctrls.iter().any(|ctrl| ctrl.field_end.is_some());
-
     let text_locators = collect_direct_text_elements(xml, run_span.clone())?;
     if text_locators.len() != run.texts.len() {
         return Err(HwpxError::InvalidStructure {
@@ -703,67 +700,229 @@ fn collect_raw_run_slots(
         });
     }
 
-    if !has_field_pair {
-        for (text, locator) in run.texts.iter().zip(text_locators.iter()) {
-            let text_content = text.text();
-            if !text_content.is_empty() {
-                sink.body_slots.push(PreservedTextSlot {
-                    path: format!("{prefix}.runs[{semantic_run_idx}].text"),
-                    original_text: text_content,
-                    has_inline_markup: locator.has_inline_markup,
-                    locator: text_locator(locator),
-                });
+    // W1a: 디코더가 자식을 문서 순서(child_order 사이드카)로 평탄화하므로
+    // raw walker 도 같은 순서로 semantic_run_idx 를 전진시킨다 — 종전
+    // by-kind 재현(texts→tables→pictures→ctrls→shapes)은 인터리브 run 에서
+    // 경로 주소가 어긋난다. field 본문도 순서 기반: begin/end **사이**의
+    // 텍스트가 본문 (gotcha #30 모호성 게이트 철폐 — 디코더와 거울).
+    let kind_spans = |name: &[u8], expect: usize, label: &str| -> HwpxResult<Vec<Range<usize>>> {
+        let spans = collect_direct_child_outer_spans(xml, run_span.clone(), name)?;
+        if spans.len() != expect {
+            return Err(HwpxError::InvalidStructure {
+                detail: format!(
+                    "{label} count mismatch while building preservation metadata for {prefix}: raw={} semantic={}",
+                    spans.len(),
+                    expect
+                ),
+            });
+        }
+        Ok(spans)
+    };
+    let table_spans = kind_spans(b"hp:tbl", run.tables.len(), "table")?;
+    let picture_spans = kind_spans(b"hp:pic", run.pictures.len(), "picture")?;
+    let ctrl_spans = kind_spans(b"hp:ctrl", run.ctrls.len(), "ctrl")?;
+    let rect_spans = kind_spans(b"hp:rect", run.rects.len(), "rect")?;
+    let line_spans = kind_spans(b"hp:line", run.lines.len(), "line")?;
+    let ellipse_spans = kind_spans(b"hp:ellipse", run.ellipses.len(), "ellipse")?;
+    let polygon_spans = kind_spans(b"hp:polygon", run.polygons.len(), "polygon")?;
+    let curve_spans = kind_spans(b"hp:curve", run.curves.len(), "curve")?;
+    let connect_line_spans = kind_spans(b"hp:connectLine", run.connect_lines.len(), "connectLine")?;
+
+    let order = if run.child_order.is_empty() {
+        crate::schema::section::legacy_child_order(run)
+    } else {
+        run.child_order.clone()
+    };
+
+    let mut pending_field_begin: Option<&HxFieldBegin> = None;
+    // begin/end 사이 본문 텍스트 추적: (locator 인덱스, 사이 텍스트 개수).
+    // 슬롯은 본문이 정확히 1개 `<hp:t>` 일 때만 만든다 (단일 요소 교체
+    // locator 모델의 한계 — 0/2+ 개는 편집 슬롯 없음, 디코더 display_text
+    // 는 이어붙여 carry).
+    let mut field_body_locator: Option<usize> = None;
+    let mut field_body_count = 0usize;
+    let mut field_body_text = String::new();
+
+    for &(kind, idx) in &order {
+        use crate::schema::section::HxRunChildKind as K;
+        match kind {
+            K::Text => {
+                if pending_field_begin.is_some() {
+                    field_body_locator = Some(idx);
+                    field_body_count += 1;
+                    field_body_text.push_str(&run.texts[idx].text());
+                    continue;
+                }
+                let text_content = run.texts[idx].text();
+                if !text_content.is_empty() {
+                    sink.body_slots.push(PreservedTextSlot {
+                        path: format!("{prefix}.runs[{semantic_run_idx}].text"),
+                        original_text: text_content,
+                        has_inline_markup: text_locators[idx].has_inline_markup,
+                        locator: text_locator(&text_locators[idx]),
+                    });
+                    semantic_run_idx += 1;
+                }
+            }
+            K::Table => {
+                let table_prefix = format!("{prefix}.runs[{semantic_run_idx}].table");
+                collect_raw_table_slots(
+                    xml,
+                    table_spans[idx].clone(),
+                    &run.tables[idx],
+                    &table_prefix,
+                    sink,
+                )?;
                 semantic_run_idx += 1;
             }
+            K::Picture => {
+                if picture_has_semantic_run(&run.pictures[idx]) {
+                    let picture_prefix = format!("{prefix}.runs[{semantic_run_idx}].image");
+                    collect_raw_picture_slots(
+                        xml,
+                        picture_spans[idx].clone(),
+                        &run.pictures[idx],
+                        &picture_prefix,
+                        sink,
+                    )?;
+                    semantic_run_idx += 1;
+                }
+            }
+            K::Ctrl => {
+                semantic_run_idx = collect_raw_ctrl_child_slots(
+                    xml,
+                    ctrl_spans[idx].clone(),
+                    &run.ctrls[idx],
+                    prefix,
+                    semantic_run_idx,
+                    sink,
+                    allow_section_header_footer,
+                    &mut pending_field_begin,
+                    &mut field_body_locator,
+                    &mut field_body_count,
+                    &mut field_body_text,
+                    &text_locators,
+                )?;
+            }
+            K::Rect => {
+                if run.rects[idx].draw_text.is_some() {
+                    let rect_prefix = format!("{prefix}.runs[{semantic_run_idx}].control.textbox");
+                    collect_raw_rect_slots(
+                        xml,
+                        rect_spans[idx].clone(),
+                        &run.rects[idx],
+                        &rect_prefix,
+                        sink,
+                    )?;
+                    semantic_run_idx += 1;
+                }
+            }
+            K::Line => {
+                let line_prefix = format!("{prefix}.runs[{semantic_run_idx}].control.line");
+                collect_raw_line_slots(
+                    xml,
+                    line_spans[idx].clone(),
+                    &run.lines[idx],
+                    &line_prefix,
+                    sink,
+                )?;
+                semantic_run_idx += 1;
+            }
+            K::Ellipse => {
+                let ellipse = &run.ellipses[idx];
+                let control_name = if ellipse.has_arc_pr == 1 { "arc" } else { "ellipse" };
+                let ellipse_prefix =
+                    format!("{prefix}.runs[{semantic_run_idx}].control.{control_name}");
+                collect_raw_ellipse_slots(
+                    xml,
+                    ellipse_spans[idx].clone(),
+                    ellipse,
+                    control_name,
+                    &ellipse_prefix,
+                    sink,
+                )?;
+                semantic_run_idx += 1;
+            }
+            K::Polygon => {
+                let polygon_prefix = format!("{prefix}.runs[{semantic_run_idx}].control.polygon");
+                collect_raw_polygon_slots(
+                    xml,
+                    polygon_spans[idx].clone(),
+                    &run.polygons[idx],
+                    &polygon_prefix,
+                    sink,
+                )?;
+                semantic_run_idx += 1;
+            }
+            K::Curve => {
+                let curve_prefix = format!("{prefix}.runs[{semantic_run_idx}].control.curve");
+                collect_raw_curve_slots(
+                    xml,
+                    curve_spans[idx].clone(),
+                    &run.curves[idx],
+                    &curve_prefix,
+                    sink,
+                )?;
+                semantic_run_idx += 1;
+            }
+            K::ConnectLine => {
+                let connect_line_prefix =
+                    format!("{prefix}.runs[{semantic_run_idx}].control.connect_line");
+                collect_raw_connect_line_slots(
+                    xml,
+                    connect_line_spans[idx].clone(),
+                    &run.connect_lines[idx],
+                    &connect_line_prefix,
+                    sink,
+                )?;
+                semantic_run_idx += 1;
+            }
+            // 디코더가 문서 순서 위치에서 run 을 방출하는 슬롯-없는 종류 —
+            // 인덱스만 전진 (equation/dutmal/compose + W1a 신규: container/
+            // textart — 종전 walker 는 이 둘을 아예 세지 않던 잠복 결함).
+            K::Equation | K::Dutmal | K::Compose | K::Container | K::TextArt => {
+                semantic_run_idx += 1;
+            }
+            // Switch(차트) 는 디코더가 문단 끝에 append — run 꼬리 집계 유지.
+            // secPr/titleMark/Other/StrayText 는 run 방출 없음.
+            K::Switch | K::SecPr | K::TitleMark | K::Other | K::StrayText => {}
         }
     }
-
-    let table_spans = collect_direct_child_outer_spans(xml, run_span.clone(), b"hp:tbl")?;
-    if table_spans.len() != run.tables.len() {
-        return Err(HwpxError::InvalidStructure {
-            detail: format!(
-                "table count mismatch while building preservation metadata for {prefix}: raw={} semantic={}",
-                table_spans.len(),
-                run.tables.len()
-            ),
-        });
-    }
-    for (table, table_span) in run.tables.iter().zip(table_spans.into_iter()) {
-        let table_prefix = format!("{prefix}.runs[{semantic_run_idx}].table");
-        collect_raw_table_slots(xml, table_span, table, &table_prefix, sink)?;
+    // trailing self-closing fieldBegin (BOOKMARK span start) — 디코더 거울.
+    if pending_field_begin.take().is_some_and(|fb| fb.field_type == "BOOKMARK") {
         semantic_run_idx += 1;
     }
+    // Switch(차트): 디코더가 문단 끝에 append 하므로 종전대로 run 꼬리 집계.
+    semantic_run_idx += run
+        .switches
+        .iter()
+        .filter(|switch_case| {
+            switch_case.case.as_ref().and_then(|case| case.chart.as_ref()).is_some()
+        })
+        .count();
 
-    let picture_spans = collect_direct_child_outer_spans(xml, run_span.clone(), b"hp:pic")?;
-    if picture_spans.len() != run.pictures.len() {
-        return Err(HwpxError::InvalidStructure {
-            detail: format!(
-                "picture count mismatch while building preservation metadata for {prefix}: raw={} semantic={}",
-                picture_spans.len(),
-                run.pictures.len()
-            ),
-        });
-    }
-    for (picture, picture_span) in run.pictures.iter().zip(picture_spans.into_iter()) {
-        if picture_has_semantic_run(picture) {
-            let picture_prefix = format!("{prefix}.runs[{semantic_run_idx}].image");
-            collect_raw_picture_slots(xml, picture_span, picture, &picture_prefix, sink)?;
-            semantic_run_idx += 1;
-        }
-    }
+    Ok(semantic_run_idx)
+}
 
-    let ctrl_spans = collect_direct_child_outer_spans(xml, run_span.clone(), b"hp:ctrl")?;
-    if ctrl_spans.len() != run.ctrls.len() {
-        return Err(HwpxError::InvalidStructure {
-            detail: format!(
-                "ctrl count mismatch while building preservation metadata for {prefix}: raw={} semantic={}",
-                ctrl_spans.len(),
-                run.ctrls.len()
-            ),
-        });
-    }
-    let mut pending_field_begin: Option<&HxFieldBegin> = None;
-    for (ctrl, ctrl_span) in run.ctrls.iter().zip(ctrl_spans.into_iter()) {
+/// `<hp:ctrl>` 자식 하나의 raw 슬롯/인덱스 처리 (W1a — 디코더
+/// `convert_ctrl_child` 와 거울상. field 본문은 순서 기반: begin/end 사이
+/// 텍스트가 정확히 1개일 때만 편집 슬롯을 만든다).
+#[allow(clippy::too_many_arguments)]
+fn collect_raw_ctrl_child_slots<'a>(
+    xml: &str,
+    ctrl_span: Range<usize>,
+    ctrl: &'a HxCtrl,
+    prefix: &str,
+    mut semantic_run_idx: usize,
+    sink: &mut RawSlotSink<'_>,
+    allow_section_header_footer: bool,
+    pending_field_begin: &mut Option<&'a HxFieldBegin>,
+    field_body_locator: &mut Option<usize>,
+    field_body_count: &mut usize,
+    field_body_text: &mut String,
+    text_locators: &[TextElementSpan],
+) -> HwpxResult<usize> {
+    {
         if allow_section_header_footer {
             if let Some(header) = &ctrl.header {
                 collect_raw_header_footer_slots(
@@ -801,30 +960,32 @@ fn collect_raw_run_slots(
             semantic_run_idx += 1;
         }
         if let Some(field_begin) = &ctrl.field_begin {
-            pending_field_begin = Some(field_begin);
+            *pending_field_begin = Some(field_begin);
+            *field_body_locator = None;
+            *field_body_count = 0;
+            field_body_text.clear();
         }
         if ctrl.field_end.is_some() {
             if let Some(field_begin) = pending_field_begin.take() {
-                // 누름틀(CLICK_HERE) 본문 <hp:t> 는 디코더가 display_text 로
-                // 흡수하는 채워진 값이다 — semantic 쪽 Field arm 과 거울상으로
-                // 슬롯을 방출한다 (Epic 1). 디코더와 동일한 무모호-귀속
-                // 게이트: run 에 <hp:t> 가 정확히 1개일 때만 슬롯을 만든다
-                // (decoder/section.rs `unambiguous_body`). 복수면 디코더가
-                // display_text 를 비우므로 semantic 쪽도 슬롯을 만들지 않아
-                // 거울이 유지된다 — 한컴 재저장이 라벨 run 을 필드 run 에
-                // 병합한 파일(fixture `fields/clickhere_filled.hwpx`)이
-                // 실존하는 사례.
-                if field_begin.field_type == "CLICK_HERE" && text_locators.len() == 1 {
-                    let body = run.texts[0].text();
-                    if !body.is_empty() {
+                // 누름틀(CLICK_HERE) 본문 = begin/end **사이** 텍스트 (W1a
+                // 문서 순서 — 종전 `<hp:t> 1개` 모호성 게이트 철폐, 디코더와
+                // 거울). 편집 슬롯은 단일 요소 교체 locator 모델이라 사이
+                // 텍스트가 정확히 1개일 때만 만든다 (0/2+ 는 슬롯 없음 —
+                // 디코더 display_text 는 이어붙여 carry).
+                if field_begin.field_type == "CLICK_HERE" && *field_body_count == 1 {
+                    let li = field_body_locator.expect("count==1 이면 locator 존재");
+                    if !field_body_text.is_empty() {
                         sink.body_slots.push(PreservedTextSlot {
                             path: format!("{prefix}.runs[{semantic_run_idx}].control.field"),
-                            original_text: body,
-                            has_inline_markup: text_locators[0].has_inline_markup,
-                            locator: text_locator(&text_locators[0]),
+                            original_text: field_body_text.clone(),
+                            has_inline_markup: text_locators[li].has_inline_markup,
+                            locator: text_locator(&text_locators[li]),
                         });
                     }
                 }
+                *field_body_locator = None;
+                *field_body_count = 0;
+                field_body_text.clear();
                 semantic_run_idx += 1;
             }
         }
@@ -846,131 +1007,6 @@ fn collect_raw_run_slots(
             semantic_run_idx += 1;
         }
     }
-    if let Some(field_begin) = pending_field_begin.take() {
-        if field_begin.field_type == "BOOKMARK" {
-            semantic_run_idx += 1;
-        }
-    }
-
-    let rect_spans = collect_direct_child_outer_spans(xml, run_span.clone(), b"hp:rect")?;
-    if rect_spans.len() != run.rects.len() {
-        return Err(HwpxError::InvalidStructure {
-            detail: format!(
-                "rect count mismatch while building preservation metadata for {prefix}: raw={} semantic={}",
-                rect_spans.len(),
-                run.rects.len()
-            ),
-        });
-    }
-    for (rect, rect_span) in run.rects.iter().zip(rect_spans.into_iter()) {
-        if rect.draw_text.is_some() {
-            let rect_prefix = format!("{prefix}.runs[{semantic_run_idx}].control.textbox");
-            collect_raw_rect_slots(xml, rect_span, rect, &rect_prefix, sink)?;
-            semantic_run_idx += 1;
-        }
-    }
-
-    let line_spans = collect_direct_child_outer_spans(xml, run_span.clone(), b"hp:line")?;
-    if line_spans.len() != run.lines.len() {
-        return Err(HwpxError::InvalidStructure {
-            detail: format!(
-                "line count mismatch while building preservation metadata for {prefix}: raw={} semantic={}",
-                line_spans.len(),
-                run.lines.len()
-            ),
-        });
-    }
-    for (line, line_span) in run.lines.iter().zip(line_spans.into_iter()) {
-        let line_prefix = format!("{prefix}.runs[{semantic_run_idx}].control.line");
-        collect_raw_line_slots(xml, line_span, line, &line_prefix, sink)?;
-        semantic_run_idx += 1;
-    }
-
-    let ellipse_spans = collect_direct_child_outer_spans(xml, run_span.clone(), b"hp:ellipse")?;
-    if ellipse_spans.len() != run.ellipses.len() {
-        return Err(HwpxError::InvalidStructure {
-            detail: format!(
-                "ellipse count mismatch while building preservation metadata for {prefix}: raw={} semantic={}",
-                ellipse_spans.len(),
-                run.ellipses.len()
-            ),
-        });
-    }
-    for (ellipse, ellipse_span) in run.ellipses.iter().zip(ellipse_spans.into_iter()) {
-        let control_name = if ellipse.has_arc_pr == 1 { "arc" } else { "ellipse" };
-        let ellipse_prefix = format!("{prefix}.runs[{semantic_run_idx}].control.{control_name}");
-        collect_raw_ellipse_slots(xml, ellipse_span, ellipse, control_name, &ellipse_prefix, sink)?;
-        semantic_run_idx += 1;
-    }
-
-    let polygon_spans = collect_direct_child_outer_spans(xml, run_span.clone(), b"hp:polygon")?;
-    if polygon_spans.len() != run.polygons.len() {
-        return Err(HwpxError::InvalidStructure {
-            detail: format!(
-                "polygon count mismatch while building preservation metadata for {prefix}: raw={} semantic={}",
-                polygon_spans.len(),
-                run.polygons.len()
-            ),
-        });
-    }
-    for (polygon, polygon_span) in run.polygons.iter().zip(polygon_spans.into_iter()) {
-        let polygon_prefix = format!("{prefix}.runs[{semantic_run_idx}].control.polygon");
-        collect_raw_polygon_slots(xml, polygon_span, polygon, &polygon_prefix, sink)?;
-        semantic_run_idx += 1;
-    }
-
-    let curve_spans = collect_direct_child_outer_spans(xml, run_span.clone(), b"hp:curve")?;
-    if curve_spans.len() != run.curves.len() {
-        return Err(HwpxError::InvalidStructure {
-            detail: format!(
-                "curve count mismatch while building preservation metadata for {prefix}: raw={} semantic={}",
-                curve_spans.len(),
-                run.curves.len()
-            ),
-        });
-    }
-    for (curve, curve_span) in run.curves.iter().zip(curve_spans.into_iter()) {
-        let curve_prefix = format!("{prefix}.runs[{semantic_run_idx}].control.curve");
-        collect_raw_curve_slots(xml, curve_span, curve, &curve_prefix, sink)?;
-        semantic_run_idx += 1;
-    }
-
-    let connect_line_spans =
-        collect_direct_child_outer_spans(xml, run_span.clone(), b"hp:connectLine")?;
-    if connect_line_spans.len() != run.connect_lines.len() {
-        return Err(HwpxError::InvalidStructure {
-            detail: format!(
-                "connectLine count mismatch while building preservation metadata for {prefix}: raw={} semantic={}",
-                connect_line_spans.len(),
-                run.connect_lines.len()
-            ),
-        });
-    }
-    for (connect_line, connect_line_span) in
-        run.connect_lines.iter().zip(connect_line_spans.into_iter())
-    {
-        let connect_line_prefix = format!("{prefix}.runs[{semantic_run_idx}].control.connect_line");
-        collect_raw_connect_line_slots(
-            xml,
-            connect_line_span,
-            connect_line,
-            &connect_line_prefix,
-            sink,
-        )?;
-        semantic_run_idx += 1;
-    }
-
-    semantic_run_idx += run.equations.len();
-    semantic_run_idx += run
-        .switches
-        .iter()
-        .filter(|switch_case| {
-            switch_case.case.as_ref().and_then(|case| case.chart.as_ref()).is_some()
-        })
-        .count();
-    semantic_run_idx += run.dutmals.len();
-    semantic_run_idx += run.composes.len();
-
     Ok(semantic_run_idx)
 }
 

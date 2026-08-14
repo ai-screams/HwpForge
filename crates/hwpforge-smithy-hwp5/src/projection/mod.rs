@@ -42,7 +42,9 @@ use crate::decoder::Hwp5Warning;
 use crate::error::Hwp5Result;
 use crate::numeric::positive_i32_from_u32;
 use crate::schema::section::Hwp5DutmalControl;
-use crate::schema::section::{Hwp5CharShapeRun, Hwp5PageDef, Hwp5ShapeComponentGeometry};
+use crate::schema::section::{
+    Hwp5CharShapeRun, Hwp5PageDef, Hwp5ShapeComponentGeometry, SilentWire,
+};
 use crate::table_cell_vertical_align::{
     core_table_cell_vertical_align, unknown_hwp5_table_cell_vertical_align_raw,
 };
@@ -868,7 +870,11 @@ fn project_paragraph_with_images_flat(
     if hwp_para.style_id > 0 {
         paragraph = paragraph.with_style(StyleIndex::new(hwp_para.style_id as usize));
     }
-    paragraph.layout_cache = promote_line_segments(&hwp_para.line_segments);
+    paragraph.layout_cache = promote_line_segments(
+        &hwp_para.line_segments,
+        check_ledger_against_emission(build_flat_ledger(hwp_para), &paragraph.runs),
+        &mut projection_images.warnings,
+    );
     // W3: ParaHeader divide_sort 쪽/단 나누기 carry (F2 실측 — 한컴은 쪽나눔
     // 문단의 lineseg v 를 리셋하지 않아 이 플래그가 유일한 쪽분할 신호).
     paragraph.page_break = hwp_para.page_break;
@@ -884,25 +890,298 @@ fn project_paragraph_with_images_flat(
 /// 없음 = 캐시 부재 의미).
 fn promote_line_segments(
     segs: &[crate::schema::section::Hwp5ParaLineSeg],
+    ledger: Result<crate::wire_text_map::WireTextMap, &'static str>,
+    warnings: &mut Vec<crate::decoder::Hwp5Warning>,
 ) -> Option<hwpforge_core::layout::LayoutCache> {
     if segs.is_empty() {
         return None;
     }
-    Some(hwpforge_core::layout::LayoutCache::new(
-        segs.iter()
-            .map(|s| hwpforge_core::layout::LineSeg {
-                textpos: s.text_start_position,
-                vertpos: s.vertical_position,
-                vertsize: s.line_height,
-                textheight: s.text_height,
-                baseline: s.baseline_distance,
-                spacing: s.line_spacing,
-                horzpos: s.column_start_position,
-                horzsize: s.segment_width,
-                flags: s.tag,
-            })
-            .collect(),
-    ))
+    // W1b: raw wire textpos → Core 가시(text_content) 좌표 정규화.
+    // ledger 구축 실패·좌표 변환 실패 = fail-closed (캐시 미승격 + 경고) —
+    // 추측 좌표를 Core 에 싣지 않는다 (§1g v5).
+    let map = match ledger {
+        Ok(map) => map,
+        Err(reason) => {
+            warnings.push(crate::decoder::Hwp5Warning::LayoutCacheDropped {
+                reason: reason.to_string(),
+            });
+            return None;
+        }
+    };
+    let mut lines = Vec::with_capacity(segs.len());
+    for s in segs {
+        let textpos = match map.to_core(s.text_start_position) {
+            Ok(core) => core,
+            Err(e) => {
+                warnings.push(crate::decoder::Hwp5Warning::LayoutCacheDropped {
+                    reason: format!("lineseg textpos {}: {e}", s.text_start_position),
+                });
+                return None;
+            }
+        };
+        lines.push(hwpforge_core::layout::LineSeg {
+            textpos,
+            vertpos: s.vertical_position,
+            vertsize: s.line_height,
+            textheight: s.text_height,
+            baseline: s.baseline_distance,
+            spacing: s.line_spacing,
+            horzpos: s.column_start_position,
+            horzsize: s.segment_width,
+            flags: s.tag,
+        });
+    }
+    Some(hwpforge_core::layout::LayoutCache::new(lines))
+}
+
+/// ledger 가 예측한 Core 총길이와 실제 방출된 run 들의 텍스트 총길이를
+/// 대조한다 — 불일치 = ledger/방출 분기 (fail-closed, §1g v5 choke).
+fn check_ledger_against_emission(
+    ledger_result: Result<crate::wire_text_map::WireTextMap, &'static str>,
+    runs: &[Run],
+) -> Result<crate::wire_text_map::WireTextMap, &'static str> {
+    let map = ledger_result?;
+    let emitted_core: u32 = runs
+        .iter()
+        .filter_map(|r| r.content.plain_text())
+        .map(|t| t.encode_utf16().count() as u32)
+        .sum();
+    if map.core_end() != emitted_core {
+        return Err("ledger/emission core length mismatch");
+    }
+    Ok(map)
+}
+
+/// FieldBegin~FieldEnd 방출 결과 — ledger 의 field 구간 core 폭을
+/// 방출부가 결정한다 (단일 진실원, §1g v5 R3#1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FieldEmissionOutcome {
+    /// 본문이 Control 내부로 접힘 (ClickHere/Hyperlink/CrossRef/Memo/
+    /// 자동필드 display) — 전체 구간이 Core 텍스트 0 유닛.
+    Folded,
+    /// 본문이 가시 텍스트 슬라이스로 재방출됨 (BookmarkSpan/
+    /// PlainTextFallback/빈 display CrossRef) — begin/end 만 (8,0),
+    /// 본문은 가시 축 그대로 (내부 marker 는 U+FFFC 로 1유닛 재방출).
+    ReEmitted,
+}
+
+/// 문단 하나의 wire→Core 좌표 ledger 를 방출과 나란히 구축한다 (W1b).
+///
+/// wire 소비는 세그먼트 종류에서 유도하고 (Text=UTF-16 len ·
+/// Tab/컨트롤=8 · 단일 제어=1), segment 없는 무음 소비는
+/// [`SilentWire`] 목록을 wire 순서로 합류시킨다. FieldBegin~FieldEnd
+/// 는 pending 버퍼로 모아 방출 결과([`FieldEmissionOutcome`])가
+/// 확정된 뒤 commit 한다. 어떤 단계든 실패하면 문단 전체가
+/// fail-closed (캐시 미승격).
+struct ParaLedger<'a> {
+    builder: crate::wire_text_map::WireMapBuilder,
+    silent: &'a [SilentWire],
+    silent_idx: usize,
+    /// ledger 자체 wire 커서 — pending 동안 builder 커서와 분리.
+    wire_cursor: u32,
+    /// FieldBegin 이후 버퍼된 body 조각 `(wire, 재방출 시 core)`.
+    pending: Option<Vec<(u32, u32)>>,
+    failed: Option<&'static str>,
+}
+
+impl<'a> ParaLedger<'a> {
+    fn new(silent: &'a [SilentWire]) -> Self {
+        Self {
+            builder: crate::wire_text_map::WireMapBuilder::new(),
+            silent,
+            silent_idx: 0,
+            wire_cursor: 0,
+            pending: None,
+            failed: None,
+        }
+    }
+
+    fn fail(&mut self, why: &'static str) {
+        if self.failed.is_none() {
+            self.failed = Some(why);
+        }
+    }
+
+    /// 현재 커서 위치에 도달한 무음 소비 구간을 합류시킨다.
+    fn drain_silent(&mut self) {
+        while let Some(s) = self.silent.get(self.silent_idx) {
+            if s.start > self.wire_cursor {
+                break;
+            }
+            if s.start < self.wire_cursor {
+                // parse 기록과 유도 소비폭이 어긋남 — 좌표를 믿을 수 없다.
+                self.fail("silent-wire accounting mismatch");
+                self.silent_idx += 1;
+                continue;
+            }
+            self.silent_idx += 1;
+            self.consume(s.len, 0, 0);
+        }
+    }
+
+    /// 소비 하나를 기록한다. `core_folded`/`core_reemitted` 는 각각
+    /// field 밖(즉시 반영)·재방출 body 조각일 때의 Core 폭.
+    fn consume(&mut self, wire: u32, core_outside: u32, core_reemitted: u32) {
+        match self.wire_cursor.checked_add(wire) {
+            Some(w) => self.wire_cursor = w,
+            None => {
+                self.fail("wire cursor overflow");
+                return;
+            }
+        }
+        if let Some(pieces) = self.pending.as_mut() {
+            pieces.push((wire, core_reemitted));
+        } else if core_outside == wire {
+            self.builder.advance_identity(wire);
+        } else {
+            self.builder.push_span(wire, core_outside);
+        }
+    }
+
+    /// 일반 텍스트 (field 밖 1:1 · 재방출 body 도 1:1).
+    fn observe_text(&mut self, utf16_len: u32) {
+        self.drain_silent();
+        self.consume(utf16_len, utf16_len, utf16_len);
+    }
+
+    /// Tab — wire 8 · Core `\t` 1 (양쪽 동일).
+    fn observe_tab(&mut self) {
+        self.drain_silent();
+        self.consume(8, 1, 1);
+    }
+
+    /// 단일 유닛 제어 (`\n`·nbSp·fwSp) — 1:1.
+    fn observe_unit(&mut self) {
+        self.drain_silent();
+        self.consume(1, 1, 1);
+    }
+
+    /// ParaBreak — wire 1 · Core 0.
+    fn observe_para_break(&mut self) {
+        self.drain_silent();
+        self.consume(1, 0, 0);
+    }
+
+    /// ControlRef/ExtendedControlRef marker — field 밖 (8,0) (U+FFFC
+    /// 미방출), 재방출 body 안 (8,1) (U+FFFC 가 텍스트로 살아남음).
+    fn observe_marker(&mut self) {
+        self.drain_silent();
+        self.consume(8, 0, 1);
+    }
+
+    /// SectionColumnDef — wire 8 · Core 0 (양쪽 동일).
+    fn observe_section_ctrl(&mut self) {
+        self.drain_silent();
+        self.consume(8, 0, 0);
+    }
+
+    /// FieldBegin — pending 개시 (begin 자체 8유닛 소비).
+    fn begin_field(&mut self) {
+        self.drain_silent();
+        if self.pending.is_some() {
+            self.fail("nested field begin");
+        }
+        match self.wire_cursor.checked_add(8) {
+            Some(w) => self.wire_cursor = w,
+            None => {
+                self.fail("wire cursor overflow");
+                return;
+            }
+        }
+        if self.failed.is_none() {
+            self.pending = Some(Vec::new());
+        }
+    }
+
+    /// FieldEnd — 방출 결과에 따라 pending 을 commit 한다.
+    fn commit_field(&mut self, outcome: FieldEmissionOutcome) {
+        self.drain_silent();
+        match self.wire_cursor.checked_add(8) {
+            Some(w) => self.wire_cursor = w,
+            None => {
+                self.fail("wire cursor overflow");
+                return;
+            }
+        }
+        let Some(pieces) = self.pending.take() else {
+            self.fail("unpaired field end");
+            return;
+        };
+        match outcome {
+            FieldEmissionOutcome::Folded => {
+                let mut total: u32 = 16; // begin + end
+                for (wire, _) in &pieces {
+                    match total.checked_add(*wire) {
+                        Some(t) => total = t,
+                        None => {
+                            self.fail("wire cursor overflow");
+                            return;
+                        }
+                    }
+                }
+                self.builder.push_span(total, 0);
+            }
+            FieldEmissionOutcome::ReEmitted => {
+                self.builder.push_span(8, 0);
+                for (wire, core) in pieces {
+                    if wire == core {
+                        self.builder.advance_identity(wire);
+                    } else {
+                        self.builder.push_span(wire, core);
+                    }
+                }
+                self.builder.push_span(8, 0);
+            }
+        }
+    }
+
+    /// 문단 종료 — 잔여 무음 구간 합류 후 seal.
+    fn finish(mut self) -> Result<crate::wire_text_map::WireTextMap, &'static str> {
+        if self.pending.is_some() {
+            self.fail("dangling field begin");
+        }
+        self.drain_silent();
+        if self.silent_idx < self.silent.len() {
+            self.fail("silent-wire accounting mismatch");
+        }
+        if let Some(why) = self.failed {
+            return Err(why);
+        }
+        self.builder.finish().map_err(|_| "wire map invariant violation")
+    }
+}
+
+/// field 없는(flat) 문단의 ledger — 세그먼트 종류만으로 구축한다.
+fn build_flat_ledger(
+    hwp_para: &Hwp5Paragraph,
+) -> Result<crate::wire_text_map::WireTextMap, &'static str> {
+    let mut ledger = ParaLedger::new(&hwp_para.silent_wires);
+    for segment in &hwp_para.text_segments {
+        match segment {
+            crate::schema::section::TextSegment::Text(text) => {
+                ledger.observe_text(text.encode_utf16().count() as u32);
+            }
+            crate::schema::section::TextSegment::Tab { .. } => ledger.observe_tab(),
+            crate::schema::section::TextSegment::LineBreak
+            | crate::schema::section::TextSegment::NonBreakingSpace
+            | crate::schema::section::TextSegment::FwSpace => ledger.observe_unit(),
+            crate::schema::section::TextSegment::ParaBreak => ledger.observe_para_break(),
+            crate::schema::section::TextSegment::ControlRef { .. }
+            | crate::schema::section::TextSegment::ExtendedControlRef { .. } => {
+                ledger.observe_marker();
+            }
+            crate::schema::section::TextSegment::SectionColumnDef { .. } => {
+                ledger.observe_section_ctrl();
+            }
+            crate::schema::section::TextSegment::FieldBegin { .. }
+            | crate::schema::section::TextSegment::FieldEnd => {
+                // flat 분기는 field 문단을 받지 않는다
+                // (`paragraph_needs_structural_projection`) — 방어적 실패.
+                ledger.fail("field segment in flat projection");
+            }
+        }
+    }
+    ledger.finish()
 }
 
 fn project_paragraph_with_images_structural(
@@ -916,10 +1195,12 @@ fn project_paragraph_with_images_structural(
     let mut runs: Vec<Run> = Vec::new();
     let mut visible_utf16: u32 = 0;
     let mut active_field: Option<ActiveField> = None;
+    let mut ledger = ParaLedger::new(&hwp_para.silent_wires);
 
     for segment in &hwp_para.text_segments {
         match segment {
             crate::schema::section::TextSegment::Text(text) => {
+                ledger.observe_text(text.encode_utf16().count() as u32);
                 project_visible_text_segment(
                     text,
                     hwp_para,
@@ -933,6 +1214,7 @@ fn project_paragraph_with_images_structural(
                 // attribute carry is tracked separately by
                 // `warn_on_inline_tab_attributes` to cover both the
                 // flat and structural projection branches uniformly.
+                ledger.observe_tab();
                 append_visible_unit(
                     hwp_para,
                     &mut runs,
@@ -942,6 +1224,7 @@ fn project_paragraph_with_images_structural(
                 );
             }
             crate::schema::section::TextSegment::LineBreak => {
+                ledger.observe_unit();
                 append_visible_unit(
                     hwp_para,
                     &mut runs,
@@ -951,6 +1234,7 @@ fn project_paragraph_with_images_structural(
                 );
             }
             crate::schema::section::TextSegment::NonBreakingSpace => {
+                ledger.observe_unit();
                 // Sentinel: U+00A0 is the canonical NBSP code-point and is
                 // what `inline_text::encode_inline_text_xml` translates back
                 // into `<hp:nbSpace/>` on HWPX emit.
@@ -963,6 +1247,7 @@ fn project_paragraph_with_images_structural(
                 );
             }
             crate::schema::section::TextSegment::FwSpace => {
+                ledger.observe_unit();
                 // Sentinel: U+001F mirrors the HWP5 wire control byte for
                 // fixed-width space and is what `inline_text` translates back
                 // into `<hp:fwSpace/>` on HWPX emit.
@@ -976,6 +1261,7 @@ fn project_paragraph_with_images_structural(
             }
             crate::schema::section::TextSegment::ControlRef { .. }
             | crate::schema::section::TextSegment::ExtendedControlRef { .. } => {
+                ledger.observe_marker();
                 if active_field.is_none() {
                     if let Some(control) = queues.object_controls.pop_front() {
                         if let Some(run) = project_control_run(
@@ -991,10 +1277,17 @@ fn project_paragraph_with_images_structural(
                 visible_utf16 += 1;
             }
             crate::schema::section::TextSegment::SectionColumnDef { extra } => {
+                ledger.observe_section_ctrl();
                 let ctrl_id = ctrl_id_from_inline_extra(extra);
                 let _ = consume_marker_header(&mut queues.marker_headers, ctrl_id);
             }
             crate::schema::section::TextSegment::FieldBegin { extra } => {
+                ledger.begin_field();
+                if active_field.is_some() {
+                    // 기존 동작(교체)은 유지하되 ledger 는 nested 로 실패
+                    // 처리됨 — 좌표를 추측하지 않는다.
+                    ledger.fail("nested field begin");
+                }
                 active_field = Some(start_field_from_marker(
                     extra,
                     &mut queues,
@@ -1005,21 +1298,28 @@ fn project_paragraph_with_images_structural(
             }
             crate::schema::section::TextSegment::FieldEnd => {
                 if let Some(field) = active_field.take() {
-                    finish_active_field(
+                    let outcome = finish_active_field(
                         field,
                         hwp_para,
                         visible_utf16,
                         &mut runs,
                         projection_images,
                     );
+                    ledger.commit_field(outcome);
+                } else {
+                    ledger.commit_field(FieldEmissionOutcome::Folded);
                 }
             }
-            crate::schema::section::TextSegment::ParaBreak => {}
+            crate::schema::section::TextSegment::ParaBreak => {
+                ledger.observe_para_break();
+            }
         }
     }
 
     if let Some(field) = active_field.take() {
-        finish_active_field(field, hwp_para, visible_utf16, &mut runs, projection_images);
+        // 방출은 기존 동작대로 완료하되, 좌표는 신뢰 불가 (v5 fail-closed).
+        let _ = finish_active_field(field, hwp_para, visible_utf16, &mut runs, projection_images);
+        ledger.fail("dangling field begin");
     }
 
     drain_unconsumed_paragraph_queues(
@@ -1040,7 +1340,11 @@ fn project_paragraph_with_images_structural(
     if hwp_para.style_id > 0 {
         paragraph = paragraph.with_style(StyleIndex::new(hwp_para.style_id as usize));
     }
-    paragraph.layout_cache = promote_line_segments(&hwp_para.line_segments);
+    paragraph.layout_cache = promote_line_segments(
+        &hwp_para.line_segments,
+        check_ledger_against_emission(ledger.finish(), &paragraph.runs),
+        &mut projection_images.warnings,
+    );
     // W3: ParaHeader divide_sort 쪽/단 나누기 carry (F2 실측 — 한컴은 쪽나눔
     // 문단의 lineseg v 를 리셋하지 않아 이 플래그가 유일한 쪽분할 신호).
     paragraph.page_break = hwp_para.page_break;
@@ -1561,17 +1865,18 @@ fn finish_active_field(
     end_utf16: u32,
     runs: &mut Vec<Run>,
     projection_images: &mut ProjectionImageState<'_>,
-) {
+) -> FieldEmissionOutcome {
     match field {
         ActiveField::Hyperlink { url, start_utf16, display_text } => {
             if display_text.is_empty() {
-                return;
+                return FieldEmissionOutcome::Folded;
             }
             let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
                 &hwp_para.char_shape_runs,
                 start_utf16,
             ) as usize);
             runs.push(Run::control(Control::Hyperlink { text: display_text, url }, char_shape_id));
+            FieldEmissionOutcome::Folded
         }
         ActiveField::BookmarkSpan { name, start_utf16 } => {
             let char_shape_id = CharShapeIndex::new(char_shape_id_for_visible_position(
@@ -1592,6 +1897,7 @@ fn finish_active_field(
                 Control::Bookmark { name, bookmark_type: BookmarkType::SpanEnd },
                 char_shape_id,
             ));
+            FieldEmissionOutcome::ReEmitted
         }
         ActiveField::CrossRef { control, start_utf16, display_text } => {
             // Wave 12m Phase 2 Step 4: emit native `Control::CrossRef`.
@@ -1612,7 +1918,7 @@ fn finish_active_field(
                     start_utf16,
                     end_utf16,
                 ));
-                return;
+                return FieldEmissionOutcome::ReEmitted;
             }
             let ref_type = decode_hwp5_crossref_ref_type(control.ref_type_code);
             let content_type =
@@ -1623,6 +1929,7 @@ fn finish_active_field(
                 Control::CrossRef { target, ref_type, content_type, as_hyperlink, display_text },
                 char_shape_id,
             ));
+            FieldEmissionOutcome::Folded
         }
         ActiveField::PlainTextFallback { start_utf16 } => {
             runs.extend(project_text_segment(
@@ -1631,6 +1938,7 @@ fn finish_active_field(
                 start_utf16,
                 end_utf16,
             ));
+            FieldEmissionOutcome::ReEmitted
         }
         ActiveField::MemoAnchor { start_utf16, memo } => {
             // Capture the FieldBegin..FieldEnd span as `anchor_runs` *inside*
@@ -1652,6 +1960,7 @@ fn finish_active_field(
                 start_utf16,
             ) as usize);
             runs.push(project_memo_run(&memo, projection_images, char_shape_id, anchor_runs));
+            FieldEmissionOutcome::Folded
         }
         ActiveField::ClickHere { start_utf16, hint_text, help_text, name } => {
             // Emit a single Control::Field Run at the span start. The
@@ -1677,6 +1986,7 @@ fn finish_active_field(
                 },
                 char_shape_id,
             ));
+            FieldEmissionOutcome::Folded
         }
         ActiveField::SummaryField { start_utf16, command_token, display_text } => {
             // Emit a single Run carrying either typed `Control::Field`
@@ -1701,6 +2011,7 @@ fn finish_active_field(
                 None => Control::UnknownSummary { token: command_token, display_text },
             };
             runs.push(Run::control(control, char_shape_id));
+            FieldEmissionOutcome::Folded
         }
         ActiveField::DateCodeField { start_utf16, raw_command, display_text } => {
             // Emit Control::DateCodeField with `is_time_mode` derived
@@ -1717,6 +2028,7 @@ fn finish_active_field(
                 Control::DateCodeField { is_time_mode, display_text },
                 char_shape_id,
             ));
+            FieldEmissionOutcome::Folded
         }
         ActiveField::PathField { start_utf16, raw_command, display_text } => {
             // Map raw `$P`/`$F`/`$P$F` to a typed PathFieldCommand
@@ -1730,6 +2042,7 @@ fn finish_active_field(
             use hwpforge_core::control::PathFieldCommand;
             let command = PathFieldCommand::from_wire(&raw_command);
             runs.push(Run::control(Control::PathField { command, display_text }, char_shape_id));
+            FieldEmissionOutcome::Folded
         }
     }
 }
@@ -3342,6 +3655,7 @@ mod tests {
 
     fn make_paragraph(text: &str, para_shape_id: u16, style_id: u8) -> Hwp5Paragraph {
         Hwp5Paragraph {
+            silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
             text: text.to_string(),
@@ -3356,6 +3670,7 @@ mod tests {
 
     fn _make_paragraph_with_runs(text: &str, runs: Vec<Hwp5CharShapeRun>) -> Hwp5Paragraph {
         Hwp5Paragraph {
+            silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
             text: text.to_string(),
@@ -3395,7 +3710,14 @@ mod tests {
                 tag: 0x0016_0000,
             },
         ];
-        let cache = promote_line_segments(&segs).expect("promoted");
+        let mut warnings = Vec::new();
+        let identity = {
+            let mut b = crate::wire_text_map::WireMapBuilder::new();
+            b.advance_identity(64);
+            b.finish().expect("identity map")
+        };
+        let cache = promote_line_segments(&segs, Ok(identity), &mut warnings).expect("promoted");
+        assert!(warnings.is_empty(), "identity promote must not warn: {warnings:?}");
         assert_eq!(cache.line_count(), 2);
         // 필드 대응: 이름만 다르고 wire 의미 동일 (textpos/vertpos/vertsize/…)
         assert_eq!(cache.lines[0].horzpos, 10);
@@ -3406,8 +3728,10 @@ mod tests {
         assert_eq!(cache.lines[1].baseline, 850);
         assert_eq!(cache.lines[1].spacing, 600);
         assert_eq!(cache.lines[1].flags, 0x0016_0000);
-        // 세그먼트 없음 = 캐시 부재
-        assert!(promote_line_segments(&[]).is_none());
+        // 세그먼트 없음 = 캐시 부재 (경고도 없음)
+        let empty_map = crate::wire_text_map::WireMapBuilder::new().finish().expect("empty");
+        assert!(promote_line_segments(&[], Ok(empty_map), &mut warnings).is_none());
+        assert!(warnings.is_empty());
     }
 
     fn make_section(
@@ -3573,6 +3897,7 @@ mod tests {
             segments.push(crate::schema::section::TextSegment::ControlRef { extra: [0u8; 14] });
         }
         let para = Hwp5Paragraph {
+            silent_wires: Vec::new(),
             text: String::new(),
             text_segments: segments,
             para_shape_id: 0,
@@ -3608,6 +3933,7 @@ mod tests {
         let form_id = u32::from_be_bytes(*b"form"); // 기지 deferred ctrl
         let mk = || Hwp5Control::Unknown { ctrl_id: form_id, header_data: vec![] };
         let para = Hwp5Paragraph {
+            silent_wires: Vec::new(),
             text: String::new(),
             text_segments: vec![
                 crate::schema::section::TextSegment::ControlRef { extra: [0u8; 14] },
@@ -3697,6 +4023,7 @@ mod tests {
         });
         let section = make_section(
             vec![Hwp5Paragraph {
+                silent_wires: Vec::new(),
                 page_break: false,
                 column_break: false,
                 text: "앞\u{fffc}뒤".to_string(),
@@ -3755,6 +4082,7 @@ mod tests {
         });
         let section = make_section(
             vec![Hwp5Paragraph {
+                silent_wires: Vec::new(),
                 page_break: false,
                 column_break: false,
                 text: "\u{fffc}\u{fffc}".to_string(),
@@ -3769,6 +4097,7 @@ mod tests {
                         properties_raw: 0,
                         instance_id: 0,
                         paragraphs: vec![Hwp5Paragraph {
+                            silent_wires: Vec::new(),
                             page_break: false,
                             column_break: false,
                             text: "\u{fffc}".to_string(),
@@ -3830,6 +4159,7 @@ mod tests {
             },
             list_header_properties: None,
             paragraphs: vec![Hwp5Paragraph {
+                silent_wires: Vec::new(),
                 page_break: false,
                 column_break: false,
                 text: "앞\u{fffc}뒤".to_string(),
@@ -3843,6 +4173,7 @@ mod tests {
         });
         let section = make_section(
             vec![Hwp5Paragraph {
+                silent_wires: Vec::new(),
                 page_break: false,
                 column_break: false,
                 text: "\u{fffc}".to_string(),
@@ -3908,6 +4239,7 @@ mod tests {
         });
         let section = make_section(
             vec![Hwp5Paragraph {
+                silent_wires: Vec::new(),
                 page_break: false,
                 column_break: false,
                 text: "\u{fffc}".to_string(),
@@ -3949,6 +4281,7 @@ mod tests {
         });
         let section = make_section(
             vec![Hwp5Paragraph {
+                silent_wires: Vec::new(),
                 page_break: false,
                 column_break: false,
                 text: "\u{fffc}".to_string(),
@@ -3996,6 +4329,7 @@ mod tests {
         });
         let section = make_section(
             vec![Hwp5Paragraph {
+                silent_wires: Vec::new(),
                 page_break: false,
                 column_break: false,
                 text: "\u{fffc}".to_string(),
@@ -4096,6 +4430,7 @@ mod tests {
     #[test]
     fn table_control_becomes_run_table() {
         let para = Hwp5Paragraph {
+            silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
             text: String::new(),
@@ -4147,6 +4482,7 @@ mod tests {
             vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Center,
             border_fill_id: None,
             paragraphs: vec![Hwp5Paragraph {
+                silent_wires: Vec::new(),
                 page_break: false,
                 column_break: false,
                 text: "셀".to_string(),
@@ -4162,6 +4498,7 @@ mod tests {
 
     fn grid_test_table_paragraph(rows: u16, cols: u16, cells: Vec<Hwp5TableCell>) -> Hwp5Paragraph {
         Hwp5Paragraph {
+            silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
             text: "\u{FFFC}".to_string(),
@@ -4238,6 +4575,7 @@ mod tests {
     #[test]
     fn table_cell_text_is_projected() {
         let para = Hwp5Paragraph {
+            silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
             text: "\u{FFFC}".to_string(),
@@ -4270,6 +4608,7 @@ mod tests {
                     vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Center,
                     border_fill_id: Some(3),
                     paragraphs: vec![Hwp5Paragraph {
+                        silent_wires: Vec::new(),
                         page_break: false,
                         column_break: false,
                         text: "셀".to_string(),
@@ -4313,6 +4652,7 @@ mod tests {
     #[test]
     fn unknown_table_cell_vertical_align_emits_projection_fallback_warning() {
         let para = Hwp5Paragraph {
+            silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
             text: "\u{FFFC}".to_string(),
@@ -4345,6 +4685,7 @@ mod tests {
                     vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Unknown(3),
                     border_fill_id: Some(3),
                     paragraphs: vec![Hwp5Paragraph {
+                        silent_wires: Vec::new(),
                         page_break: false,
                         column_break: false,
                         text: "셀".to_string(),
@@ -4387,6 +4728,7 @@ mod tests {
     #[test]
     fn mixed_table_header_cells_emit_warning_and_do_not_promote_header_row() {
         let para = Hwp5Paragraph {
+            silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
             text: "\u{FFFC}".to_string(),
@@ -4420,6 +4762,7 @@ mod tests {
                         vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Center,
                         border_fill_id: Some(3),
                         paragraphs: vec![Hwp5Paragraph {
+                            silent_wires: Vec::new(),
                             page_break: false,
                             column_break: false,
                             text: "head".to_string(),
@@ -4448,6 +4791,7 @@ mod tests {
                         vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Center,
                         border_fill_id: Some(3),
                         paragraphs: vec![Hwp5Paragraph {
+                            silent_wires: Vec::new(),
                             page_break: false,
                             column_break: false,
                             text: "body".to_string(),
@@ -4504,6 +4848,7 @@ mod tests {
                 vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Center,
                 border_fill_id: Some(3),
                 paragraphs: vec![Hwp5Paragraph {
+                    silent_wires: Vec::new(),
                     page_break: false,
                     column_break: false,
                     text: text.to_string(),
@@ -4518,6 +4863,7 @@ mod tests {
         }
 
         let para = Hwp5Paragraph {
+            silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
             text: "\u{FFFC}".to_string(),
@@ -4588,6 +4934,7 @@ mod tests {
                 vertical_align: crate::decoder::section::Hwp5TableCellVerticalAlign::Center,
                 border_fill_id: None,
                 paragraphs: vec![Hwp5Paragraph {
+                    silent_wires: Vec::new(),
                     page_break: false,
                     column_break: false,
                     text: String::new(),
@@ -4606,6 +4953,7 @@ mod tests {
         }
 
         let para = Hwp5Paragraph {
+            silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
             text: "\u{FFFC}".to_string(),
@@ -4643,6 +4991,7 @@ mod tests {
         // body-only scan would have returned the later top-level control).
         fn pgnp_para(pos_byte: u8) -> Hwp5Paragraph {
             Hwp5Paragraph {
+                silent_wires: Vec::new(),
                 page_break: false,
                 column_break: false,
                 text: "\u{FFFC}".to_string(),
@@ -4677,6 +5026,7 @@ mod tests {
                 paragraphs: vec![pgnp_para(pos_byte)],
             };
             Hwp5Paragraph {
+                silent_wires: Vec::new(),
                 page_break: false,
                 column_break: false,
                 text: "\u{FFFC}".to_string(),
@@ -4719,6 +5069,7 @@ mod tests {
         // surrounding text runs, inside a single Core paragraph — never on
         // its own line / paragraph, and never drained to the paragraph tail.
         let para = Hwp5Paragraph {
+            silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
             text: "앞\u{FFFC}뒤".to_string(),
@@ -4732,6 +5083,7 @@ mod tests {
                 properties_raw: 0,
                 instance_id: 7,
                 paragraphs: vec![Hwp5Paragraph {
+                    silent_wires: Vec::new(),
                     page_break: false,
                     column_break: false,
                     text: "각주 본문".to_string(),
@@ -4781,6 +5133,7 @@ mod tests {
     #[test]
     fn line_control_becomes_visible_core_line() {
         let para = Hwp5Paragraph {
+            silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
             text: "\u{FFFC}".to_string(),
@@ -4821,6 +5174,7 @@ mod tests {
     #[test]
     fn polygon_control_becomes_visible_core_polygon() {
         let para = Hwp5Paragraph {
+            silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
             text: "\u{FFFC}".to_string(),
@@ -4877,6 +5231,7 @@ mod tests {
     #[test]
     fn rect_control_carries_into_core_rect_without_warning() {
         let para = Hwp5Paragraph {
+            silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
             text: "\u{FFFC}".to_string(),
@@ -4920,6 +5275,7 @@ mod tests {
     #[test]
     fn unknown_control_is_ignored() {
         let para = Hwp5Paragraph {
+            silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
             text: "text".to_string(),

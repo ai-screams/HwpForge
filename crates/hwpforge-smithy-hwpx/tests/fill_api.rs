@@ -96,13 +96,14 @@ fn list_fields_reports_name_hint_current_and_fillable() {
 }
 
 #[test]
-fn list_fields_marks_merged_run_field_unfillable() {
-    // 한컴 재저장 병합-run fixture — display_text 가 미채움("")으로
-    // 다운그레이드되므로 fillable=false 로 보고되어야 한다.
+fn list_fields_marks_merged_run_field_fillable() {
+    // W1a 자식 순서 보존으로 병합-run 본문 귀속이 무모호해졌다 —
+    // begin/end 사이 값이 current 로 잡히고 fillable=true 다.
     let bytes = fixture_bytes("clickhere_filled.hwpx");
     let fields = HwpxFiller::list_fields(&bytes).expect("list");
     let f = fields.iter().find(|f| f.name.as_deref() == Some("user_email")).expect("field");
-    assert!(!f.fillable, "병합-run 모호 필드는 fillable=false");
+    assert!(f.fillable, "병합-run 필드도 이제 fillable");
+    assert_eq!(f.current, "hanyul.ryu@example.com");
 }
 
 // ── fill 성공 경로 ───────────────────────────────────────────────
@@ -171,13 +172,19 @@ fn fill_rejects_empty_value() {
 }
 
 #[test]
-fn fill_rejects_unfillable_merged_run_field() {
+fn fill_replaces_merged_run_field_body() {
+    // W1a: 병합-run 필드가 채움 가능해졌다 — 값 교체 후 라벨("이메일: ")은
+    // 필드 앞 텍스트로 보존되어야 한다.
     let bytes = fixture_bytes("clickhere_filled.hwpx");
-    let err = HwpxFiller::fill(&bytes, &values(&[("user_email", "x@y.z")])).unwrap_err();
-    assert!(
-        matches!(err, FillError::UnfillableField { ref name, .. } if name == "user_email"),
-        "병합-run 모호 필드는 명확한 에러로 거부: {err:?}"
-    );
+    let outcome = HwpxFiller::fill(&bytes, &values(&[("user_email", "x@y.z")])).expect("fill 성공");
+    assert_eq!(outcome.filled.len(), 1);
+    assert_eq!(outcome.filled[0].previous, "hanyul.ryu@example.com");
+    assert_eq!(field_display(&outcome.bytes, 0, "user_email"), "x@y.z");
+    // 라벨 텍스트 보존 (병합 run 의 필드-앞 텍스트가 지워지면 회귀).
+    let redecoded = hwpforge_smithy_hwpx::HwpxDecoder::decode(&outcome.bytes).expect("redecode");
+    let text: String =
+        redecoded.document.sections()[0].paragraphs.iter().map(|p| p.text_content()).collect();
+    assert!(text.contains("이메일: "), "필드 앞 라벨 보존: {text}");
 }
 
 #[test]
@@ -189,4 +196,40 @@ fn fill_is_all_or_nothing_when_one_target_fails_preflight() {
     let err =
         HwpxFiller::fill(&bytes, &values(&[("과제명", "값"), ("없는필드", "값2")])).unwrap_err();
     assert!(matches!(err, FillError::UnknownField { .. }));
+}
+
+#[test]
+fn fill_removes_linesegarray_of_filled_paragraph() {
+    // W1b (§1g v5 변경 5): 값이 바뀌면 길이와 무관하게 해당 문단의
+    // linesegarray 를 제거한다 — stale 좌표를 남기지 않는다.
+    let bytes = fixture_bytes("clickhere_filled.hwpx");
+    let base = HwpxDecoder::decode(&bytes).expect("decode base");
+    let base_has_cache =
+        base.document.sections()[0].paragraphs.iter().any(|p| p.layout_cache.is_some());
+    assert!(base_has_cache, "픽스처 전제: 원본에 캐시가 있어야 제거를 검증한다");
+
+    let outcome = HwpxFiller::fill(&bytes, &values(&[("user_email", "x@y.z")])).expect("fill");
+    let filled_doc = HwpxDecoder::decode(&outcome.bytes).expect("decode filled");
+    let field_para_has_cache = filled_doc.document.sections()[0]
+        .paragraphs
+        .iter()
+        .filter(|p| {
+            p.runs.iter().any(|r| {
+                matches!(&r.content, RunContent::Control(c)
+                    if matches!(c.as_ref(), Control::Field { name: Some(n), .. } if n == "user_email"))
+            })
+        })
+        .any(|p| p.layout_cache.is_some());
+    assert!(!field_para_has_cache, "채워진 문단의 linesegarray 는 제거돼야 한다");
+}
+
+#[test]
+fn fill_same_value_is_complete_noop() {
+    // W1b (§1g v5 변경 5): 현재 값과 동일한 fill 은 완전 no-op —
+    // mutate/FilledField/캐시 무효화 전부 생략, 바이트 동일.
+    let bytes = fixture_bytes("clickhere_filled.hwpx");
+    let outcome = HwpxFiller::fill(&bytes, &values(&[("user_email", "hanyul.ryu@example.com")]))
+        .expect("fill");
+    assert!(outcome.filled.is_empty(), "동일 값은 filled 에 기록되지 않는다");
+    assert_eq!(outcome.bytes, bytes, "바이트가 원본과 동일해야 한다");
 }

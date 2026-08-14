@@ -266,6 +266,7 @@ mod tests {
         controls: Vec<Hwp5Control>,
     ) -> Hwp5Paragraph {
         Hwp5Paragraph {
+            silent_wires: Vec::new(),
             page_break: false,
             column_break: false,
             text: text.into(),
@@ -322,6 +323,7 @@ mod tests {
                 is_header: false,
                 border_fill_id: None,
                 paragraphs: vec![Hwp5Paragraph {
+                    silent_wires: Vec::new(),
                     page_break: false,
                     column_break: false,
                     text: "cell".into(),

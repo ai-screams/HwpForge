@@ -67,7 +67,11 @@ fn fill_fields(section: &mut Section, value: &str) {
 /// (decoder `unambiguous_body` · patch.rs 거울 게이트). 이 테스트는 그
 /// 다운그레이드 계약과 "모호 필드가 있어도 export 는 성공한다"를 잠근다.
 #[test]
-fn hancom_resaved_merged_run_downgrades_to_unfilled() {
+fn hancom_resaved_merged_run_attributes_body_exactly() {
+    // W1a (이미지/글상자 에픽): HxRun 자식 순서 보존으로 병합 run 의 본문
+    // 귀속이 무모호해졌다 — begin/end **사이** 텍스트가 곧 본문이다.
+    // 종전의 미채움 다운그레이드(gotcha #30)는 철폐: 라벨("이메일: ")은
+    // 필드 앞 일반 텍스트로 살고, 값은 정확히 귀속된다.
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     path.pop();
     path.pop();
@@ -78,15 +82,15 @@ fn hancom_resaved_merged_run_downgrades_to_unfilled() {
     let section = decoded.document.sections()[0].clone();
     let (name, body) = first_field(&section);
     assert_eq!(name.as_deref(), Some("user_email"), "필드 이름 앵커는 살아야 한다");
-    assert_eq!(body, "", "모호한 본문(병합 run)은 라벨 오귀속 대신 미채움으로 다운그레이드");
+    assert_eq!(body, "hanyul.ryu@example.com", "begin/end 사이 텍스트 = 본문 (정확 귀속)");
 
-    // 모호한 필드가 있어도 preservation export 는 성공해야 한다 — 슬롯이
-    // 없을 뿐 export/patch 워크플로 전체가 죽으면 main 대비 회귀다.
+    // 무모호 귀속이므로 편집 슬롯도 생긴다 (patch/fill 경로 활성).
     let preservation = HwpxPatcher::export_section_preservation(&bytes, 0, &section)
-        .expect("모호 필드가 있어도 export 는 성공해야 한다");
+        .expect("export 는 성공해야 한다");
     assert!(
-        preservation.text_slots.iter().all(|s| !s.path.ends_with(".control.field")),
-        "모호한 필드는 patch 슬롯을 만들지 않는다"
+        preservation.text_slots.iter().any(|s| s.path.ends_with(".control.field")),
+        "병합 run 필드도 이제 patch 슬롯을 갖는다: {:?}",
+        preservation.text_slots.iter().map(|s| &s.path).collect::<Vec<_>>()
     );
 }
 

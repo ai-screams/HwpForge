@@ -475,6 +475,30 @@ use self::package::PackageWriter;
 use self::section::encode_section;
 
 // ── HwpxEncoder ─────────────────────────────────────────────────
+/// 인코드 중 표면화된 비치명 경고 (W1b — §1g v5 변경 2).
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum EncodeWarning {
+    /// 문단 캐시가 방출되지 않음 — 방출 wire map 구축 실패, 좌표
+    /// 역변환 실패(축약점 모호 등), 또는 cache-inadmissible 방출
+    /// (차트 재배치·스킵된 컨트롤 등).
+    LayoutCacheDropped {
+        /// 해당 문단의 중첩 경로.
+        path: crate::decoder::ParagraphPath,
+        /// 드롭 사유.
+        reason: String,
+    },
+}
+
+/// [`HwpxEncoder::encode_with_diagnostics`] 의 결과 — 산출 바이트 +
+/// 전체 typed 경고 (permissive 경로: 캐시 드롭이 있어도 성공).
+#[derive(Debug)]
+pub struct EncodeOutcome {
+    /// HWPX ZIP 바이트.
+    pub bytes: Vec<u8>,
+    /// 인코드 경고 (캐시 드롭 등).
+    pub warnings: Vec<EncodeWarning>,
+}
 
 /// Encoder behavior options.
 ///
@@ -572,6 +596,36 @@ impl HwpxEncoder {
         image_store: &ImageStore,
         options: EncodeOptions,
     ) -> HwpxResult<Vec<u8>> {
+        let outcome = Self::encode_with_diagnostics(document, style_store, image_store, options)?;
+        // W1b (§1g v5 변경 2): emit_layout_cache 요청 중 캐시 드롭은 무음
+        // 성공 금지 — 데이터 손실을 진단 없이 넘기지 않는다 (breaking,
+        // 0.14.0). 경고 보존 경로는 `encode_with_diagnostics`.
+        if options.emit_layout_cache {
+            // 독립 리뷰 Low: first() 는 미래 variant 가 앞에 끼는 순간
+            // 데이터-손실 신호를 삼킨다 — find 로 전수 검색.
+            if let Some(EncodeWarning::LayoutCacheDropped { path, reason }) = outcome
+                .warnings
+                .iter()
+                .find(|w| matches!(w, EncodeWarning::LayoutCacheDropped { .. }))
+            {
+                return Err(crate::error::HwpxError::LayoutCacheDropped {
+                    path: path.to_string(),
+                    reason: reason.clone(),
+                });
+            }
+        }
+        Ok(outcome.bytes)
+    }
+
+    /// [`Self::encode_with_options`] 의 진단 보존 변형 — 캐시 드롭이
+    /// 있어도 성공하고 typed 경고([`EncodeWarning`])를 함께 반환한다
+    /// (convert carry 파이프라인이 경고를 `ConvertWarning` 으로 전파).
+    pub fn encode_with_diagnostics(
+        document: &Document<Validated>,
+        style_store: &HwpxStyleStore,
+        image_store: &ImageStore,
+        options: EncodeOptions,
+    ) -> HwpxResult<EncodeOutcome> {
         let sections = document.sections();
         let sec_cnt = sections.len() as u32;
 
@@ -601,6 +655,10 @@ impl HwpxEncoder {
             embedded_ole_offset += result.embedded_oles.len();
             section_results.push(result);
         }
+        let mut warnings: Vec<EncodeWarning> = Vec::new();
+        for r in &mut section_results {
+            warnings.append(&mut r.warnings);
+        }
 
         // Single move-consuming pass: extract all four fields without cloning
         // (previously xml/charts/embedded_oles were `.iter().clone()`d).
@@ -624,7 +682,7 @@ impl HwpxEncoder {
         // Step 4: Package into ZIP with images, charts, master pages, and
         // embedded-chart OLE blobs. Document.metadata flows into content.hpf
         // <opf:metadata> (Wave 12o Phase 1).
-        PackageWriter::write_hwpx(
+        let bytes = PackageWriter::write_hwpx(
             document.metadata(),
             &header_xml,
             &section_xmls,
@@ -632,7 +690,8 @@ impl HwpxEncoder {
             &charts,
             &master_pages,
             &embedded_oles,
-        )
+        )?;
+        Ok(EncodeOutcome { bytes, warnings })
     }
 
     /// Encodes a validated document and writes it to a file.
