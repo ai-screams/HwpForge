@@ -165,6 +165,13 @@ fn category_key(warning: &hwpforge_convert::ConvertWarning) -> String {
         Hwp5Warning::ParserFallback { subject, .. } => {
             format!("ParserFallback:{subject}")
         }
+        // W1b: 캐시 fail-closed 드롭 — 사유의 가변부(좌표 숫자)는 제거해
+        // baseline 카테고리를 안정화한다.
+        Hwp5Warning::LayoutCacheDropped { reason } => {
+            let stable: String =
+                reason.chars().map(|c| if c.is_ascii_digit() { '#' } else { c }).collect();
+            format!("LayoutCacheDropped:{stable}")
+        }
         _ => "Other:unknown".to_string(),
     }
 }

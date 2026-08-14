@@ -3,12 +3,18 @@
   "fixtures_scanned": 138,
   "fixtures_decoded": 138,
   "fixtures_failed": 0,
-  "total_warnings": 1,
+  "total_warnings": 2,
   "categories": {
     "DroppedControl:unknown_control": {
       "count": 1,
       "fixtures": {
         "tests/fixtures/tables/table_20_real_world_ministry_stress.hwp": 1
+      }
+    },
+    "LayoutCacheDropped:lineseg textpos ##: wire ## inside a non-#:# span interior": {
+      "count": 1,
+      "fixtures": {
+        "tests/fixtures/hwp5/sample-field-docsummary.hwp": 1
       }
     }
   },
