@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.14.0...hwpforge-smithy-hwpx-v0.15.0) - 2026-08-14
+
+### Added
+
+- *(smithy-hwpx)* **BREAKING** W1b wire↔Core 좌표 ledger — 3경계 정규화·allowlist·진단 전파
+
+- HxRun 자식 문서 순서 보존 — 순서 사이드카 + 디코더·patch 동시 전환 (이미지 에픽 W1a)
+
+
+### Fixed
+
+- *(smithy-hwpx)* W1b 독립 리뷰 상환 — folded field tab 폭·절대값 oracle·미래 variant 방어
+
+
 ## [0.14.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.13.1...hwpforge-smithy-hwpx-v0.14.0) - 2026-08-13
 
 ### Added
