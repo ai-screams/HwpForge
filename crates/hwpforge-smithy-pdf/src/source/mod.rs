@@ -29,14 +29,37 @@ pub struct LineRun {
     /// 문자 스타일 (폰트명·크기 조회 키).
     pub char_shape: CharShapeIndex,
 }
+/// 줄 안의 원자 하나 — 텍스트 run 또는 인라인 이미지 (W2a §3 D4).
+#[derive(Debug, Clone, PartialEq)]
+pub enum LineAtom {
+    /// 셰이핑 대상 텍스트 run.
+    Text(LineRun),
+    /// 인라인 이미지 — W2a 에선 synthetic 테스트만 생성하고 production
+    /// producer 는 admission 이 막는다 (개방 = W2b).
+    Image(LineImage),
+}
+
+/// 줄 안 인라인 이미지 원자.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LineImage {
+    /// canonical 스토어 키 (`StyleLookup::image_data` 조회 키).
+    pub canonical_key: String,
+    /// 표시 폭 (HWPUNIT).
+    pub width: i32,
+    /// 표시 높이 (HWPUNIT).
+    pub height: i32,
+}
 
 /// 배치가 끝난 한 줄.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LaidLine {
     /// 위치 보고용 경로 (`s{섹션}/p{문단}/l{줄}`).
     pub location: String,
-    /// 줄 텍스트 구간들 (run 경계 분할 — 시각 순서).
-    pub runs: Vec<LineRun>,
+    /// 이 줄을 구성하는 원자들 (run 경계 분할 — 시각 순서, 텍스트/이미지 혼합).
+    pub atoms: Vec<LineAtom>,
+    /// 줄 상자 상단 y (HWPUNIT, 페이지 원점) — 인라인 이미지의 top 앵커
+    /// (W0a 실측: 이미지 top = 줄 top). `baseline_y − seg.baseline` 과 동치.
+    pub top_y: i32,
     /// baseline 세로 위치 (HWPUNIT, 쪽 상단 원점 — body_top + v + baseline).
     pub baseline_y: i32,
     /// 줄 가로 상자 (HWPUNIT — body 좌변 반영, 정렬 미적용 상태).
@@ -45,6 +68,16 @@ pub struct LaidLine {
     pub is_last_line: bool,
     /// 문단 정렬.
     pub alignment: Alignment,
+}
+
+impl LaidLine {
+    /// 텍스트 원자만 문서 순서로 돌려준다 (검사/테스트 편의).
+    pub fn text_runs(&self) -> impl Iterator<Item = &LineRun> {
+        self.atoms.iter().filter_map(|a| match a {
+            LineAtom::Text(r) => Some(r),
+            LineAtom::Image(_) => None,
+        })
+    }
 }
 
 /// 셀 배경 사각형 (HWPUNIT, 쪽 좌상단 원점).
@@ -573,7 +606,8 @@ fn replay_band_item(
             let runs = slice_line_runs(&utf16, &run_spans, start, end);
             page.lines.push(LaidLine {
                 location: format!("{location}/l{line_idx}"),
-                runs,
+                atoms: runs.into_iter().map(LineAtom::Text).collect(),
+                top_y: band_top + seg.vertpos,
                 baseline_y: band_top + seg.vertpos + seg.baseline,
                 line_box: LineBox { horzpos: body_left + seg.horzpos, horzsize: seg.horzsize },
                 is_last_line: line_idx + 1 == line_count,
@@ -828,7 +862,8 @@ fn replay_section(
             })?;
             page.lines.push(LaidLine {
                 location: format!("{location}/l{line_idx}"),
-                runs,
+                atoms: runs.into_iter().map(LineAtom::Text).collect(),
+                top_y: body_top + v,
                 baseline_y: body_top + v + seg.baseline,
                 line_box: LineBox { horzpos: body_left + seg.horzpos, horzsize: seg.horzsize },
                 is_last_line: line_idx + 1 == line_count,
@@ -1034,8 +1069,8 @@ mod tests {
         let doc = doc_of(vec![para_with_cache("가나다 라마바", vec![seg(0, 0), seg(4, 1600)])]);
         let layout = replay(&doc, &PdfOptions::default()).expect("replay");
         let lines = &layout.pages[0].lines;
-        assert_eq!(lines[0].runs[0].text, "가나다 ");
-        assert_eq!(lines[1].runs[0].text, "라마바");
+        assert_eq!(lines[0].text_runs().next().unwrap().text, "가나다 ");
+        assert_eq!(lines[1].text_runs().next().unwrap().text, "라마바");
     }
 
     // ── W5-a 머리말/꼬리말 오버레이 ──────────────────────────────
@@ -1141,7 +1176,7 @@ mod tests {
                 let lines: Vec<&LaidLine> =
                     p.lines.iter().filter(|l| l.location.contains("/h")).collect();
                 assert_eq!(lines.len(), 1, "쪽마다 정확히 한 머리말");
-                lines[0].runs[0].text.clone()
+                lines[0].text_runs().next().unwrap().text.clone()
             })
             .collect();
         assert_eq!(texts, vec!["홀수", "짝수", "홀수"]);
@@ -1941,7 +1976,7 @@ mod tests {
         let texts: Vec<String> = layout.pages[0]
             .lines
             .iter()
-            .flat_map(|l| l.runs.iter().map(|r| r.text.clone()))
+            .flat_map(|l| l.text_runs().map(|r| r.text.clone()))
             .collect();
         assert!(texts.iter().any(|t| t == "셀"), "안쪽 표 텍스트 재생: {texts:?}");
     }
@@ -1986,7 +2021,7 @@ mod tests {
         let c_line = layout.pages[0]
             .lines
             .iter()
-            .find(|l| l.runs.iter().any(|r| r.text == "C"))
+            .find(|l| l.text_runs().any(|r| r.text == "C"))
             .expect("C line");
         assert_eq!(c_line.baseline_y, body_top + 1000 + 850, "행0 은 최소높이 유지");
         // 어긋난 앵커(6000 > 기대 5000, 쪽분할 아님) = 캐시 모순 fatal.
@@ -2017,7 +2052,7 @@ mod tests {
         let texts: Vec<String> = layout.pages[0]
             .lines
             .iter()
-            .flat_map(|l| l.runs.iter().map(|r| r.text.clone()))
+            .flat_map(|l| l.text_runs().map(|r| r.text.clone()))
             .collect();
         assert!(texts.iter().any(|t| t == "셀"), "{texts:?}");
         assert!(texts.iter().any(|t| t == "후속"), "{texts:?}");

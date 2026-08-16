@@ -24,4 +24,5 @@ rustybuzz = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+flate2 = { workspace = true }
 hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0" }

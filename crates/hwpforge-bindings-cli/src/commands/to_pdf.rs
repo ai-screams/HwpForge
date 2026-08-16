@@ -17,7 +17,7 @@ use hwpforge_smithy_hwp5::Hwp5Warning;
 use hwpforge_smithy_hwpx::{DecodeWarning, HwpxDecoder};
 use hwpforge_smithy_pdf::font::FontDiscovery;
 use hwpforge_smithy_pdf::{
-    render_document, FontFallbackMode, PartialCachePolicy, PdfInput, PdfOptions, PdfWarning,
+    render_document, PartialCachePolicy, PdfInput, PdfOptions, PdfWarning, RenderFailureMode,
 };
 
 use crate::error::{check_file_size, CliError};
@@ -163,6 +163,26 @@ fn render_warning_dto(w: &PdfWarning) -> WarningDto {
         PdfWarning::NonTextRunDropped { location } => (
             "NON_TEXT_RUN_DROPPED",
             "non-text run (control/image) dropped".to_string(),
+            Some(location.clone()),
+        ),
+        PdfWarning::ImageDataMissing { key, location } => (
+            "IMAGE_DATA_MISSING",
+            format!("image data missing for \"{key}\" — skipped"),
+            Some(location.clone()),
+        ),
+        PdfWarning::UnsupportedImageFormat { key, format, location } => (
+            "UNSUPPORTED_IMAGE_FORMAT",
+            format!("\"{key}\" is {format} — not renderable, skipped"),
+            Some(location.clone()),
+        ),
+        PdfWarning::ImageDecodeFailed { key, detail, location } => (
+            "IMAGE_DECODE_FAILED",
+            format!("\"{key}\": {detail} — skipped"),
+            Some(location.clone()),
+        ),
+        PdfWarning::InvalidImageGeometry { key, detail, location } => (
+            "INVALID_IMAGE_GEOMETRY",
+            format!("\"{key}\": {detail} — skipped"),
             Some(location.clone()),
         ),
         PdfWarning::TablePaginationComputed { location } => (
@@ -315,24 +335,27 @@ pub fn run(
     let mut options = PdfOptions::default();
     options.font_dirs = font_dirs.to_vec();
     options.discovery = discovery;
-    options.font_fallback =
-        if degraded { FontFallbackMode::Degraded } else { FontFallbackMode::Fatal };
+    options.failure_mode =
+        if degraded { RenderFailureMode::Degraded } else { RenderFailureMode::Fatal };
     options.partial_cache = if partial_cache_reject {
         PartialCachePolicy::Reject
     } else {
         PartialCachePolicy::WarnAndSkip
     };
 
-    let rendered =
-        render_document(&PdfInput { document: &validated, styles: &decoded.style_store }, &options)
-            .unwrap_or_else(|err| {
-                CliError::new("PDF_RENDER_FAILED", format!("Cannot render PDF: {err}"))
-                    .with_hint(
-                        "cacheless documents need a Hancom re-save; font errors may need \
+    // W2a §3 D1: 이미지 바이트가 렌더러에 도달하는 유일한 배관 —
+    // bare store 는 image_data=None 이므로 반드시 브리지 경유.
+    let bridge =
+        hwpforge_smithy_hwpx::HwpxStyleLookup::new(&decoded.style_store, &decoded.image_store);
+    let rendered = render_document(&PdfInput { document: &validated, styles: &bridge }, &options)
+        .unwrap_or_else(|err| {
+            CliError::new("PDF_RENDER_FAILED", format!("Cannot render PDF: {err}"))
+                .with_hint(
+                    "cacheless documents need a Hancom re-save; font errors may need \
                          --font-dir/--discovery or --degraded",
-                    )
-                    .exit(json_mode, 2)
-            });
+                )
+                .exit(json_mode, 2)
+        });
     warnings.extend(rendered.warnings.iter().map(render_warning_dto));
 
     // 산출 경로: 미지정 = 입력의 .pdf 교체. 쓰기는 원자적 (tmp → rename) —

@@ -852,7 +852,8 @@ fn emit_anchor_clipped(
                 })?;
                 page.lines.push(LaidLine {
                     location: format!("{para_loc}/l{li}"),
-                    runs,
+                    atoms: runs.into_iter().map(crate::source::LineAtom::Text).collect(),
+                    top_y: content_y + seg.vertpos,
                     baseline_y: content_y + seg.vertpos + seg.baseline,
                     line_box: LineBox { horzpos: content_x + seg.horzpos, horzsize: seg.horzsize },
                     is_last_line: li + 1 == line_count,

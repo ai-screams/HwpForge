@@ -128,6 +128,30 @@ pub enum PaintItem {
     Rect(RectItem),
     /// 선분 (괘선 — 배경 뒤, 글리프 앞).
     Line(LineItem),
+    /// 래스터 이미지 (W2a — §3 D3).
+    Image(ImageItem),
+}
+
+/// 래스터 이미지 paint 항목 — 자기완결 (backend 가 스토어를 모른다).
+///
+/// `data` 는 paint-build 스코프의 asset interner 가 canonical key 당
+/// 1회만 복사한 공유 바이트다 (occurrence 별 복제 금지 — §3 D3).
+/// 포맷은 backend 가 magic 스니핑으로 판별한다 (Core `ImageFormat` 은
+/// 확장자 유래라 진단 힌트일 뿐).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ImageItem {
+    /// canonical 스토어 키 (디코드 캐시 키 — 같은 키 다른 바이트 =
+    /// [`crate::PdfError::ImageAssetConflict`]).
+    pub canonical_key: String,
+    /// 원본 이미지 바이트 (공유).
+    pub data: std::sync::Arc<Vec<u8>>,
+    /// 좌상단 배치 원점 (pt).
+    pub origin: Point,
+    /// 표시 크기 (pt) — 0/음수/non-finite 는
+    /// [`crate::PdfError::InvalidImageGeometry`].
+    pub size: Size,
+    /// 진단 위치 (경고/오류 payload).
+    pub location: String,
 }
 
 /// PDF 한 쪽.

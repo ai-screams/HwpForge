@@ -34,6 +34,7 @@
 
 mod backend;
 pub mod font;
+mod image_sniff;
 pub mod paint;
 mod render;
 pub mod source;
@@ -81,14 +82,17 @@ pub enum PartialCachePolicy {
 /// 필요하면 [`Degraded`](Self::Degraded) 를 명시 옵트인한다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
-pub enum FontFallbackMode {
-    /// 강등 없이 에러 (기본 — [`PdfError::FontStyleUnavailable`] /
-    /// [`PdfError::FontAxisMismatch`]).
+pub enum RenderFailureMode {
+    /// 강등 없이 에러 (기본) — 폰트: [`PdfError::FontStyleUnavailable`] /
+    /// [`PdfError::FontAxisMismatch`] · 이미지(W2a):
+    /// [`PdfError::ImageDataMissing`] / [`PdfError::UnsupportedImageFormat`] /
+    /// [`PdfError::ImageDecodeFailed`] / [`PdfError::InvalidImageGeometry`].
     #[default]
     Fatal,
-    /// regular face·한글 축으로 강등하고 경고를 표면화한다 (옵트인 —
-    /// [`PdfWarning::FontStyleFallback`] / [`PdfWarning::FontAxisFallback`]).
-    /// 신호 모순([`PdfError::FontFaceAmbiguous`])은 이 모드에서도 에러다.
+    /// 강등/생략하고 경고를 표면화한다 (옵트인) — 폰트는 regular
+    /// face·한글 축으로 강등, 렌더 불가 이미지는 해당 항목만 생략.
+    /// 신호 모순([`PdfError::FontFaceAmbiguous`])·자산 충돌
+    /// ([`PdfError::ImageAssetConflict`])은 이 모드에서도 에러다.
     Degraded,
 }
 
@@ -103,8 +107,8 @@ pub struct PdfOptions {
     /// 폰트 자동 발견 정책. 기본 [`font::FontDiscovery::ExplicitOnly`]
     /// (명시 dirs 만 — 머신 무관 결정적).
     pub discovery: font::FontDiscovery,
-    /// 폰트 강등 정책. 기본 [`FontFallbackMode::Fatal`].
-    pub font_fallback: FontFallbackMode,
+    /// 렌더 실패 정책 (폰트·이미지 공통). 기본 [`RenderFailureMode::Fatal`].
+    pub failure_mode: RenderFailureMode,
 }
 
 /// 렌더 산출물.
@@ -141,6 +145,40 @@ pub enum PdfWarning {
         /// 요청했던 스타일 축.
         requested: font::FaceStyle,
         /// 첫 발생 위치.
+        location: String,
+    },
+    /// Degraded: 이미지 바이트 부재 — 해당 항목 생략.
+    ImageDataMissing {
+        /// canonical 스토어 키.
+        key: String,
+        /// 발생 위치.
+        location: String,
+    },
+    /// Degraded: 렌더 불가 포맷 — 해당 항목 생략.
+    UnsupportedImageFormat {
+        /// canonical 스토어 키.
+        key: String,
+        /// 스니핑된 포맷 이름.
+        format: &'static str,
+        /// 발생 위치.
+        location: String,
+    },
+    /// Degraded: 디코드 실패 — 해당 항목 생략.
+    ImageDecodeFailed {
+        /// canonical 스토어 키.
+        key: String,
+        /// 구체 사유.
+        detail: String,
+        /// 발생 위치.
+        location: String,
+    },
+    /// Degraded: 무효 기하 — 해당 항목 생략.
+    InvalidImageGeometry {
+        /// canonical 스토어 키.
+        key: String,
+        /// 구체 사유.
+        detail: String,
+        /// 발생 위치.
         location: String,
     },
     /// Degraded 모드: charPr 언어축(7축)이 서로 다른 폰트를 참조하는데
@@ -287,11 +325,11 @@ pub enum PdfError {
         /// 위반 상세 (위치 포함).
         detail: String,
     },
-    /// 폰트에 없는 글리프(notdef) 포함 — 기본([`FontFallbackMode::Fatal`])
+    /// 폰트에 없는 글리프(notdef) 포함 — 기본([`RenderFailureMode::Fatal`])
     /// 모드 (조용한 tofu(□) 출력 금지 — Degraded 옵트인은 경고 후 렌더).
     #[error(
         "font {face:?} lacks glyphs for {count} character(s) at {location} \
-         (would render as tofu — opt in to FontFallbackMode::Degraded to render with a warning)"
+         (would render as tofu — opt in to RenderFailureMode::Degraded to render with a warning)"
     )]
     GlyphsUnavailable {
         /// face 이름.
@@ -318,12 +356,12 @@ pub enum PdfError {
         /// 요청 face 이름.
         face: String,
     },
-    /// 요청 스타일 face 미보유 — 기본([`FontFallbackMode::Fatal`]) 모드
-    /// (조용한 regular 강등 출력 금지 — [`FontFallbackMode::Degraded`] 로
+    /// 요청 스타일 face 미보유 — 기본([`RenderFailureMode::Fatal`]) 모드
+    /// (조용한 regular 강등 출력 금지 — [`RenderFailureMode::Degraded`] 로
     /// 옵트인하면 regular + 경고로 렌더된다).
     #[error(
         "font {face:?} has no {style:?} face at {location} (opt in to \
-         FontFallbackMode::Degraded to render regular with a warning)"
+         RenderFailureMode::Degraded to render regular with a warning)"
     )]
     FontStyleUnavailable {
         /// face/family 이름.
@@ -333,9 +371,61 @@ pub enum PdfError {
         /// 문서 내 위치.
         location: String,
     },
+    /// 이미지 바이트가 스토어에 없다 (W2a — canonical key 미해결).
+    #[error(
+        "image data missing for \"{key}\" at {location} (opt in to \
+         RenderFailureMode::Degraded to skip with a warning)"
+    )]
+    ImageDataMissing {
+        /// canonical 스토어 키.
+        key: String,
+        /// 발생 위치.
+        location: String,
+    },
+    /// magic 스니핑 결과가 렌더 불가 포맷 (BMP/WMF/EMF 등 — W6 정책 전).
+    #[error("unsupported image format {format} for \"{key}\" at {location}")]
+    UnsupportedImageFormat {
+        /// canonical 스토어 키.
+        key: String,
+        /// 스니핑된 포맷 이름.
+        format: &'static str,
+        /// 발생 위치.
+        location: String,
+    },
+    /// krilla 생성자 또는 preflight(deferred decode 강제)가 실패함 —
+    /// 손상 바이트·valid-header/corrupt-body·intrinsic zero-size·
+    /// decoder 자원 한계 포함.
+    #[error("image decode failed for \"{key}\" at {location}: {detail}")]
+    ImageDecodeFailed {
+        /// canonical 스토어 키.
+        key: String,
+        /// 구체 사유.
+        detail: String,
+        /// 발생 위치.
+        location: String,
+    },
+    /// 표시 기하가 무효 (0/음수/non-finite 폭·높이) — 무음 생략 금지.
+    #[error("invalid image geometry for \"{key}\" at {location}: {detail}")]
+    InvalidImageGeometry {
+        /// canonical 스토어 키.
+        key: String,
+        /// 구체 사유.
+        detail: String,
+        /// 발생 위치.
+        location: String,
+    },
+    /// 같은 canonical key 에 서로 다른 바이트 — 캐시 정합성 위반
+    /// (Degraded 에서도 항상 fatal).
+    #[error("image asset conflict for \"{key}\" at {location}")]
+    ImageAssetConflict {
+        /// canonical 스토어 키.
+        key: String,
+        /// 발생 위치.
+        location: String,
+    },
     /// charPr 언어축(7축)이 서로 다른 폰트를 참조 — 기본
-    /// ([`FontFallbackMode::Fatal`]) 모드 (단일 폰트 렌더는 오글리프 —
-    /// 축별 선택/분할 전까지 [`FontFallbackMode::Degraded`] 로 옵트인).
+    /// ([`RenderFailureMode::Fatal`]) 모드 (단일 폰트 렌더는 오글리프 —
+    /// 축별 선택/분할 전까지 [`RenderFailureMode::Degraded`] 로 옵트인).
     #[error("char shape references different fonts per language axis at {location}: {fonts:?}")]
     FontAxisMismatch {
         /// 문서 내 위치.
@@ -347,7 +437,7 @@ pub enum PdfError {
     ///
     /// Restricted·No-subsetting(bit8)·Bitmap-only(bit9)·권한 검증 불가
     /// (OS/2 결측/malformed) 폰트는 임베드 전에 거부한다.
-    /// [`FontFallbackMode::Degraded`] 는 강등 정책이지 라이선스 우회가
+    /// [`RenderFailureMode::Degraded`] 는 강등 정책이지 라이선스 우회가
     /// 아니다 — 양 모드 모두 에러.
     #[error("font {face:?} at {path:?} cannot be embedded: {reason}")]
     FontEmbedRestricted {

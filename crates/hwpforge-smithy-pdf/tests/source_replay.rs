@@ -49,7 +49,7 @@ fn rules_justify_replays_hancom_saved_cache_exactly() {
 
     // 텍스트 재조립 = 원문 (줄분할 무손실).
     let para0: String =
-        lines[..4].iter().flat_map(|l| l.runs.iter()).map(|r| r.text.as_str()).collect();
+        lines[..4].iter().flat_map(|l| l.text_runs()).map(|r| r.text.as_str()).collect();
     assert!(para0.starts_with("본 과제는 한국어 공문서"), "{para0:?}");
     assert!(layout.warnings.is_empty(), "{:?}", layout.warnings);
 }
@@ -96,7 +96,7 @@ fn first_table_number_on_page(page: &hwpforge_smithy_pdf::source::PageLayout) ->
         .iter()
         .filter(|l| l.location.contains("/t0r"))
         .filter(|l| !l.location.contains("r0c"))
-        .find_map(|l| l.runs.first().map(|r| r.text.clone()))
+        .find_map(|l| l.text_runs().next().map(|r| r.text.clone()))
 }
 
 #[test]
@@ -123,7 +123,7 @@ fn pagespan3_replays_three_page_split_with_exact_anchor() {
         .pages
         .iter()
         .flat_map(|p| p.lines.iter())
-        .flat_map(|l| l.runs.iter())
+        .flat_map(|l| l.text_runs())
         .map(|r| r.text.as_str())
         .collect();
     assert!(all_text.contains("표가 끝난 뒤의 첫 번째 후속 본문"), "후속 본문 소실");
@@ -141,7 +141,7 @@ fn pagespan3_repeat_inserts_header_on_every_continuation() {
         let has_repeated_header = layout.pages[page_idx]
             .lines
             .iter()
-            .any(|l| l.location.contains("/rep") && l.runs.iter().any(|r| r.text == "번호"));
+            .any(|l| l.location.contains("/rep") && l.text_runs().any(|r| r.text == "번호"));
         assert!(has_repeated_header, "p{} 반복 제목행 없음", page_idx + 1);
     }
     // 분할점: p2=44 · p3=92 · p4=140 (pdftotext 실측 고정).
