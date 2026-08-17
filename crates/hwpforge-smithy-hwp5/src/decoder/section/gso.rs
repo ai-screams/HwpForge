@@ -28,6 +28,9 @@ pub(super) struct InlineGsoContext {
     /// Wave 12p Step 1c-3: GSO CtrlHeader trailer instance ID,
     /// carried through to typed `Hwp5ImageControl` and friends.
     instance_id: u32,
+    /// W2p: GSO CtrlHeader `data[4..8]` 공통 개체 속성 DWORD (표 70).
+    /// bit0 = 글자처럼 취급 — `Hwp5ImageControl::ctrl_properties` 로 carry.
+    ctrl_properties: u32,
     saw_shape_component: bool,
     saw_shape_rectangle: bool,
     geometry: Option<Hwp5ShapeComponentGeometry>,
@@ -60,6 +63,9 @@ pub(super) struct GsoClassificationInput {
     /// passed through to `Hwp5ImageControl` (and other typed GSO
     /// variants in the future).
     pub(super) instance_id: u32,
+    /// W2p: GSO CtrlHeader `data[4..8]` 공통 개체 속성 DWORD (표 70).
+    /// bit0 = 글자처럼 취급 — `Hwp5ImageControl::ctrl_properties` 로 carry.
+    pub(super) ctrl_properties: u32,
 }
 
 /// One child shape being collected inside a [`GsoGroupBuilder`].
@@ -155,6 +161,9 @@ impl GsoChildBuilder {
             text_art: self.text_art,
             shape_component_kind: self.shape_component_kind,
             instance_id: 0,
+            // 그룹 자식의 개체 속성은 그룹 배치(W5)가 지배 — 자식 단독
+            // treat_as_char 는 W5 에서 해석.
+            ctrl_properties: 0,
         });
         Hwp5GroupChild {
             control,
@@ -434,12 +443,14 @@ impl InlineGsoContext {
         ctrl_depth: u16,
         ctrl_id: u32,
         instance_id: u32,
+        ctrl_properties: u32,
         geometry: Option<Hwp5ShapeComponentGeometry>,
     ) -> Self {
         Self {
             ctrl_depth,
             ctrl_id,
             instance_id,
+            ctrl_properties,
             saw_shape_component: false,
             saw_shape_rectangle: false,
             geometry,
@@ -499,6 +510,7 @@ impl InlineGsoContext {
             saw_shape_component: self.saw_shape_component,
             saw_shape_rectangle: self.saw_shape_rectangle,
             instance_id: self.instance_id,
+            ctrl_properties: self.ctrl_properties,
             geometry: self.geometry,
             picture: self.picture,
             ole: self.ole,

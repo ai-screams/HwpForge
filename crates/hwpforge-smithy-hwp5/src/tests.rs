@@ -66,7 +66,7 @@ fn joined_asset_storage_names(plan: &Hwp5JoinedImageAssetPlan) -> Vec<String> {
 fn census_image_fixture_matrix_reports_expected_bindata_and_gso_inventory() {
     let cases: [ImageFixtureExpectation; 8] = [
         ImageFixtureExpectation {
-            name: "img_01_single_png_inline.hwp",
+            name: "anchored_zero_origin_png.hwp",
             expected_storage_names: &["BIN0001.png"],
             expected_gso_count: 1,
             expected_shape_picture_count: 1,
@@ -140,7 +140,7 @@ fn census_image_fixture_matrix_reports_expected_bindata_and_gso_inventory() {
 #[test]
 fn join_hwp5_image_assets_matches_fixture_bindata_inventory() {
     let cases: [(&str, &[&str]); 2] = [
-        ("img_01_single_png_inline.hwp", &["BIN0001.png"]),
+        ("anchored_zero_origin_png.hwp", &["BIN0001.png"]),
         ("img_03_two_images_png_jpg.hwp", &["BIN0001.png", "BIN0002.jpeg"]),
     ];
 

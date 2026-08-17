@@ -310,6 +310,20 @@ fn extract_ctrl_header_instance_id(data: &[u8], ctrl_id: u32) -> u32 {
         .unwrap_or(0)
 }
 
+/// `CtrlHeader` bytes `[4..8]` — HWP 5.0 spec §4.3.10.3 표 140/70 공통
+/// 개체 속성 DWORD (header/footer 는 applyPageType, gso 는 bit0=글자처럼
+/// 취급 등 family 별 의미). Shared by the top-level `handle_ctrl_header`
+/// and the two nested `gso ` `InlineGsoContext` entry points (table cell
+/// / subtree), which need the DWORD before a `NestedSubtreeContext`
+/// exists to carry it (W2p — #134 후속).
+fn ctrl_header_properties_raw(data: &[u8]) -> u32 {
+    if data.len() >= 8 {
+        u32::from_le_bytes([data[4], data[5], data[6], data[7]])
+    } else {
+        0
+    }
+}
+
 /// Active non-table control while collecting a nested paragraph subtree.
 struct NestedSubtreeContext {
     ctrl_depth: u16,
@@ -510,6 +524,7 @@ impl NestedSubtreeContext {
                 text_art: self.text_art,
                 shape_component_kind: self.shape_component_kind,
                 instance_id: self.instance_id,
+                ctrl_properties: self.properties_raw,
             }),
         }
     }
@@ -595,6 +610,7 @@ fn classify_gso_control(input: GsoClassificationInput) -> Hwp5Control {
             geometry,
             binary_data_id: picture.binary_data_id,
             instance_id: gso_instance_id,
+            ctrl_properties: input.ctrl_properties,
         }),
         (Some(geometry), None, Some(ole), None, None) => {
             Hwp5Control::OleObject(Hwp5OleObjectControl {
@@ -925,6 +941,7 @@ impl BodyTextParserState {
                             level,
                             ctrl_id,
                             extract_ctrl_header_instance_id(&record.data, ctrl_id),
+                            ctrl_header_properties_raw(&record.data),
                             Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).ok(),
                         ));
                     } else if let Some(buf) = ctx.current_cell_para.as_mut() {
@@ -1176,6 +1193,7 @@ impl BodyTextParserState {
                             level,
                             ctrl_id,
                             extract_ctrl_header_instance_id(&record.data, ctrl_id),
+                            ctrl_header_properties_raw(&record.data),
                             Hwp5ShapeComponentGeometry::parse_from_ctrl_header(&record.data).ok(),
                         ));
                     } else {
@@ -1412,11 +1430,7 @@ impl BodyTextParserState {
             // (e.g. header/footer applyPageType in bits 0~1).
             // Header is 4 bytes, so falling back to 0 keeps
             // pre-spec defaults consistent.
-            let properties_raw = if record.data.len() >= 8 {
-                u32::from_le_bytes([record.data[4], record.data[5], record.data[6], record.data[7]])
-            } else {
-                0
-            };
+            let properties_raw = ctrl_header_properties_raw(&record.data);
             // Wave 12p Step 5 (#134): CtrlHeader instance_id lives at
             // a family-specific offset. fn/en use data[16..20], gso
             // uses data[36..40]. See `extract_ctrl_header_instance_id`
@@ -2480,6 +2494,21 @@ mod tests {
         buf[12..16].copy_from_slice(&x.to_le_bytes());
         buf[16..20].copy_from_slice(&width.to_le_bytes());
         buf[20..24].copy_from_slice(&height.to_le_bytes());
+        buf
+    }
+
+    /// Same as [`gso_ctrl_header_data`] but also stamps bytes `[4..8]` with a
+    /// known object-property DWORD (표 70; bit0 = 글자처럼 취급) — used by
+    /// W2p carry tests to prove the raw DWORD reaches `Hwp5ImageControl`.
+    fn gso_ctrl_header_data_with_properties(
+        x: i32,
+        y: i32,
+        width: u32,
+        height: u32,
+        properties: u32,
+    ) -> Vec<u8> {
+        let mut buf = gso_ctrl_header_data(x, y, width, height);
+        buf[4..8].copy_from_slice(&properties.to_le_bytes());
         buf
     }
 
@@ -3580,6 +3609,122 @@ mod tests {
     }
 
     #[test]
+    fn gso_shape_picture_carries_ctrl_header_object_properties_top_level() {
+        // W2p: CtrlHeader `data[4..8]` (표 70 공통 개체 속성) 은 top-level
+        // `handle_ctrl_header` → `NestedSubtreeContext` 경로를 통해
+        // `Hwp5ImageControl.ctrl_properties` 까지 그대로 carry 돼야 한다.
+        // KNOWN_PROPERTIES = bit0(글자처럼 취급) + 노이즈 비트 — bit 추출이
+        // 아니라 raw DWORD 전체가 그대로 전달되는지 검증.
+        const KNOWN_PROPERTIES: u32 = 0x0000_1235;
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 0, &para_text_with_control_ref("", "")));
+        stream.extend(make_record(
+            TagId::CtrlHeader,
+            0,
+            &gso_ctrl_header_data_with_properties(-120, 240, 6400, 3200, KNOWN_PROPERTIES),
+        ));
+        stream.extend(make_record(TagId::ShapeComponent, 1, &[0u8; 4]));
+        stream.extend(make_record(TagId::ShapePicture, 1, &shape_picture_data(7)));
+
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let para = &result.paragraphs[0];
+        match &para.controls[0] {
+            Hwp5Control::Image(image) => {
+                assert_eq!(image.ctrl_properties, KNOWN_PROPERTIES);
+            }
+            other => panic!("expected Image, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn gso_shape_picture_carries_ctrl_header_object_properties_inside_table_cell() {
+        // W2p: 표 셀 안 `gso ` 는 `InlineGsoContext`(cell 경로,
+        // `ctx.inline_cell_gso_ctx`) 를 통해 같은 DWORD 를 carry 해야 한다 —
+        // top-level 과 별개 코드 경로.
+        const KNOWN_PROPERTIES: u32 = 0x0000_0001;
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &ctrl_header_data(CTRL_ID_TABLE)));
+        stream.extend(make_record(TagId::Table, 1, &basic_table_data(1, 1)));
+        stream.extend(make_record(
+            TagId::ListHeader,
+            1,
+            &list_header_table_cell_data(TestCellSpec {
+                paragraph_count: 1,
+                legacy_u16_count: false,
+                properties: 0x20,
+                column: 0,
+                row: 0,
+                col_span: 1,
+                row_span: 1,
+                width: 4000,
+                height: 1000,
+                margin: Hwp5TableCellMargin { left: 0, right: 0, top: 0, bottom: 0 },
+                border_fill_id: None,
+            }),
+        ));
+        stream.extend(make_record(TagId::ParaHeader, 1, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 2, &para_text_with_control_ref("", "")));
+        stream.extend(make_record(
+            TagId::CtrlHeader,
+            2,
+            &gso_ctrl_header_data_with_properties(1, 2, 300, 400, KNOWN_PROPERTIES),
+        ));
+        stream.extend(make_record(TagId::ShapeComponent, 3, &[0u8; 4]));
+        stream.extend(make_record(TagId::ShapePicture, 3, &shape_picture_data(9)));
+
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let para = &result.paragraphs[0];
+        match &para.controls[0] {
+            Hwp5Control::Table(table) => {
+                let cell_para = &table.cells[0].paragraphs[0];
+                match &cell_para.controls[0] {
+                    Hwp5Control::Image(image) => {
+                        assert_eq!(image.ctrl_properties, KNOWN_PROPERTIES);
+                    }
+                    other => panic!("expected cell Image, got {:?}", other),
+                }
+            }
+            other => panic!("expected Table, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn gso_shape_picture_carries_ctrl_header_object_properties_inside_textbox_subtree() {
+        // W2p: 글상자 subtree 안 `gso ` 는 `InlineGsoContext`(subtree 경로,
+        // `self.inline_subtree_gso_ctx`) 를 통해 같은 DWORD 를 carry 해야
+        // 한다 — table-cell 경로와도 별개.
+        const KNOWN_PROPERTIES: u32 = 0x0000_0001;
+        let mut stream = Vec::new();
+        stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::CtrlHeader, 0, &gso_ctrl_header_data(0, 0, 8000, 6000)));
+        stream.extend(make_record(TagId::ShapeComponentRect, 1, &[0u8; 4]));
+        stream.extend(make_record(TagId::ListHeader, 1, &[0u8; 4]));
+        stream.extend(make_record(TagId::ParaHeader, 1, &para_header_data(0, 0)));
+        stream.extend(make_record(TagId::ParaText, 2, &para_text_with_control_ref("앞", "뒤")));
+        stream.extend(make_record(
+            TagId::CtrlHeader,
+            2,
+            &gso_ctrl_header_data_with_properties(10, 20, 3000, 4000, KNOWN_PROPERTIES),
+        ));
+        stream.extend(make_record(TagId::ShapeComponent, 3, &[0u8; 4]));
+        stream.extend(make_record(TagId::ShapePicture, 3, &shape_picture_data(2)));
+
+        let result = parse_body_text(&stream, &version()).unwrap();
+        let para = &result.paragraphs[0];
+        match &para.controls[0] {
+            Hwp5Control::TextBox(textbox) => match &textbox.paragraphs[0].controls[0] {
+                Hwp5Control::Image(image) => {
+                    assert_eq!(image.ctrl_properties, KNOWN_PROPERTIES);
+                }
+                other => panic!("expected nested Image, got {:?}", other),
+            },
+            other => panic!("expected TextBox, got {:?}", other),
+        }
+    }
+
+    #[test]
     fn gso_shape_component_ole_becomes_ole_object_control() {
         let mut stream = Vec::new();
         stream.extend(make_record(TagId::ParaHeader, 0, &para_header_data(0, 0)));
@@ -3722,7 +3867,7 @@ mod tests {
             width: 5_000,
             height: 6_000,
         };
-        let mut ctx = InlineGsoContext::new(0, CTRL_ID_GSO, 0, Some(geometry));
+        let mut ctx = InlineGsoContext::new(0, CTRL_ID_GSO, 0, 0, Some(geometry));
         ctx.note_shape_component(&[]);
         ctx.note_shape_picture(Hwp5ShapePicture::parse(&shape_picture_data(1)).unwrap());
         ctx.note_shape_ole(
@@ -3780,6 +3925,7 @@ mod tests {
             text_art: None,
             shape_component_kind,
             instance_id: 0,
+            ctrl_properties: 0,
         }
     }
 

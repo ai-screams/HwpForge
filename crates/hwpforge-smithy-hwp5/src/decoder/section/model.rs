@@ -186,6 +186,10 @@ pub(crate) struct Hwp5ImageControl {
     /// 의 target ID 가 한컴 native `<hp:pic id="1108165583">` 와 매칭.
     #[allow(dead_code)]
     pub instance_id: u32,
+    /// `gso ` CtrlHeader `data[4..8]` — HWP 5.0 표 70 공통 개체 속성 DWORD.
+    /// bit0 = 글자처럼 취급. W2p: projection 의 `treat_as_char` 판정에 대한
+    /// 유일한 진실 — 좌표 `(x,y)==(0,0)` 휴리스틱을 대체한다.
+    pub ctrl_properties: u32,
 }
 
 /// Parsed line evidence from a `gso ` scope.
