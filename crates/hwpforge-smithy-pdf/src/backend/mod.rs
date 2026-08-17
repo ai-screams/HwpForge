@@ -492,4 +492,108 @@ mod image_tests {
             );
         }
     }
+
+    // ── W2b c3: krilla `q → composed cm → Do → Q` 구조 잠금 ─────────
+    //
+    // 이 테스트는 `tests/support/mod.rs` 의 범용 bbox 추출기가 의존하는
+    // 구조 가정(단일 합성 cm, 별도 Y-flip cm 없음)을 `write_pdf` 산출물
+    // 에 직접 대고 검증한다. `write_pdf` 는 크레이트 내부 전용
+    // (`pub(crate)`)이라 `tests/` 통합 테스트에서 호출할 수 없으므로
+    // 이 락은 여기(단위 테스트)에만 존재할 수 있다 — 범용 파서는
+    // `tests/*.rs` e2e 가 실사용으로 검증한다.
+
+    /// 콘텐츠 스트림(비-이미지 FlateDecode 스트림)만 인플레이트해 반환.
+    fn content_stream_bytes(pdf: &[u8]) -> Vec<u8> {
+        let mut i = 0usize;
+        loop {
+            let off = find(&pdf[i..], b"stream").expect("content stream not found");
+            let dict_end = i + off;
+            let dict_start = dict_end.saturating_sub(256);
+            let is_image = contains(&pdf[dict_start..dict_end], b"/Subtype/Image");
+            let mut s = dict_end + b"stream".len();
+            while pdf.get(s) == Some(&b'\r') || pdf.get(s) == Some(&b'\n') {
+                s += 1;
+            }
+            let end = find(&pdf[s..], b"endstream").map(|e| s + e).expect("endstream not found");
+            if !is_image {
+                use std::io::Read as _;
+                let mut out = Vec::new();
+                let mut dec = flate2::read::ZlibDecoder::new(&pdf[s..end]);
+                dec.read_to_end(&mut out).expect("inflate content stream");
+                return out;
+            }
+            i = end + b"endstream".len();
+        }
+    }
+
+    /// 인플레이트된 콘텐츠 텍스트에서 `<6 numbers> cm` 피연산자를 읽는다.
+    fn find_single_cm_operands(content: &[u8]) -> [f64; 6] {
+        let text = String::from_utf8_lossy(content);
+        let idx = text.find(" cm").expect("cm operator not found");
+        let before = &text[..idx];
+        let nums: Vec<f64> = before
+            .split_whitespace()
+            .rev()
+            .take(6)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .map(|s| s.parse().expect("numeric cm operand"))
+            .collect();
+        nums.try_into().unwrap_or_else(|v: Vec<f64>| {
+            panic!("expected exactly 6 cm operands, got {}: {v:?}", v.len())
+        })
+    }
+
+    #[test]
+    fn image_ctm_is_single_composed_cm_matching_page_yflip_translate_scale() {
+        // 원본 origin=(10,20)pt size=(50,40)pt, 페이지 595x842pt (image_item/one_page 기본값).
+        let pages = one_page(vec![PaintItem::Image(image_item("geom.png", TINY_PNG))]);
+        let mut warnings = Vec::new();
+        let bytes =
+            write_pdf(&pages, &[], RenderFailureMode::Fatal, &mut warnings).expect("render");
+        assert!(warnings.is_empty(), "{warnings:?}");
+
+        let content = content_stream_bytes(&bytes);
+        // 구조 잠금: q/Q 블록 정확히 1쌍, cm 정확히 1회, Form XObject 없음
+        // (별도 Y-flip cm 도 없음 — krilla 가 translate+scale+flip 을 이미
+        // 하나의 cm 으로 합성해 방출한다는 가정).
+        let text = String::from_utf8_lossy(&content);
+        assert_eq!(text.matches('q').count(), 1, "q 정확히 1개: {text}");
+        assert_eq!(text.matches('Q').count(), 1, "Q 정확히 1개: {text}");
+        assert_eq!(text.matches("cm").count(), 1, "cm 정확히 1개: {text}");
+        assert!(!text.contains("/Form"), "Form XObject 없어야 함: {text}");
+
+        let [a, b, c, d, e, f] = find_single_cm_operands(&content);
+        let page_height = 842.0;
+        let (origin_x, origin_y, w, h) = (10.0, 20.0, 50.0, 40.0);
+        // 기대 합성: scale(w,h) + translate(x, page_height - y - h).
+        assert!(approx(a, w), "a(scale-x)={a}");
+        assert!(approx(b, 0.0), "b={b}");
+        assert!(approx(c, 0.0), "c={c}");
+        assert!(approx(d, h), "d(scale-y)={d}");
+        assert!(approx(e, origin_x), "e(translate-x)={e}");
+        assert!(approx(f, page_height - origin_y - h), "f(translate-y)={f}");
+
+        // 실측 잠금의 본체: unit square 네 꼭짓점을 이 행렬로 변환하면
+        // top-left bbox == (10, 20, 50, 40) ±0.01pt (§4 D3 검증 방법과 동일 산술).
+        let corners: [(f64, f64); 4] = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+            .map(|(x, y)| (a * x + c * y + e, b * x + d * y + f));
+        let min_x = corners.iter().map(|p| p.0).fold(f64::INFINITY, f64::min);
+        let max_x = corners.iter().map(|p| p.0).fold(f64::NEG_INFINITY, f64::max);
+        let min_y = corners.iter().map(|p| p.1).fold(f64::INFINITY, f64::min);
+        let max_y = corners.iter().map(|p| p.1).fold(f64::NEG_INFINITY, f64::max);
+        let bbox_x = min_x;
+        let bbox_y = page_height - max_y; // top-left 변환.
+        let bbox_w = max_x - min_x;
+        let bbox_h = max_y - min_y;
+        assert!(approx(bbox_x, 10.0), "bbox.x={bbox_x}");
+        assert!(approx(bbox_y, 20.0), "bbox.y={bbox_y}");
+        assert!(approx(bbox_w, 50.0), "bbox.width={bbox_w}");
+        assert!(approx(bbox_h, 40.0), "bbox.height={bbox_h}");
+    }
+
+    fn approx(a: f64, b: f64) -> bool {
+        (a - b).abs() <= 0.01
+    }
 }
