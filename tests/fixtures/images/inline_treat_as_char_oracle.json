@@ -1,0 +1,38 @@
+{
+  "comment": "W2b primary 양성 fixture 진위 sidecar — SHA 불일치 = fixture drift 즉시 실패. bbox 상수는 두지 않는다 (runtime 추출 비교, §4 M6).",
+  "asset": {
+    "fixture-image.png": "f78131094538f8f6f89b17b80eb237792feb3c0462f576d7fa9d8a363626565e",
+    "fixture-image.jpg": "22399ccf2e505a91591b8f2c9a88c012c03855aae6bb26382bd44dfd889b750b"
+  },
+  "fixtures": {
+    "inline_treat_as_char_png_body": {
+      "hwp_sha256": "40627a468ab0e8d83080e4199a9646295a8ed9889ebb37f107cce2d04a843ca3",
+      "hwpx_sha256": "0c4ae9b8d3de71939d07f60a34f7c1e72234860c892d49051b84e3792802dff0",
+      "pdf_sha256": "8aab44a330a7da18622a9d17a2d10ffda9f545e7a827f4dd1bfa279f28c01012",
+      "images": [
+        {
+          "page": 1,
+          "ordinal": 0,
+          "format": "png"
+        }
+      ]
+    },
+    "inline_treat_as_char_jpeg_edges": {
+      "hwp_sha256": "cd13ece0bd02b44fef4136edd6b8173734d8b5de22f7998dc27472c9ee968edc",
+      "hwpx_sha256": "542907409c2074003350a39e3f862eee5af2e3b3384e592f358b7bdc13594191",
+      "pdf_sha256": "0bff048235265384889d507ff0224665414b6dfcd33d43ab5897b7825fd9eb37",
+      "images": [
+        {
+          "page": 1,
+          "ordinal": 0,
+          "format": "jpeg"
+        },
+        {
+          "page": 1,
+          "ordinal": 1,
+          "format": "jpeg"
+        }
+      ]
+    }
+  }
+}
