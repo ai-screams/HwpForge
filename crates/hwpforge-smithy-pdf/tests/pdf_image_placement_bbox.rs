@@ -426,12 +426,21 @@ fn cell_fixtures_render_with_three_way_verification() {
         eprintln!("skip: Hancom font bundle unavailable");
         return;
     };
-    for (base, expected_images) in
-        [("cell_inline_treat_as_char", 3usize), ("cell_rowspan_image", 1)]
-    {
-        verify_oracle_and_load(base);
+    for (base, expected_images) in [
+        ("cell_inline_treat_as_char", 3usize),
+        ("cell_rowspan_image", 1),
+        // w4 다쪽 게이트: 이미지 행높이가 extent 에 기여하는 2쪽 문서 —
+        // image-free pagespan3 으로는 대체 불가 (§7 r2 게이트 #12 보강).
+        ("table_image_pagespan", 3),
+    ] {
+        let oracle_entry = verify_oracle_and_load(base);
         let hancom_pdf = std::fs::read(fixture_path(&format!("{base}.pdf"))).expect("hancom pdf");
         let hancom_pages = support::extract_pages(&hancom_pdf);
+        // oracle 이 page_count 를 명시하면 한컴 PDF 자체도 그 쪽수여야
+        // 한다 — 재저장 사고로 1쪽으로 붕괴하면 vs-한컴 비교가 공허해짐.
+        if let Some(expected_pages) = oracle_entry["page_count"].as_u64() {
+            assert_eq!(hancom_pages.len() as u64, expected_pages, "{base}: 한컴 PDF page count");
+        }
         for (path_name, output, doc) in render_both_paths(base, &options) {
             // 셀 fixture 는 한컴 재저장이 문단에 양쪽정렬을 부여해
             // AlignmentApproximated(기지 근사 — W6 §5f)가 나온다 — 이미지

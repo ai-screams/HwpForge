@@ -71,6 +71,32 @@
           "context": "merged rowspan2 boundary"
         }
       ]
+    },
+    "table_image_pagespan": {
+      "hwp_sha256": "11e68dce4d2c42b3f4cd595f46d50dbac5c292ef8fd06fdc0aec02e038f34ab0",
+      "hwpx_sha256": "e3f43402bc62182d0fd4ea7639c3392bf897718fb2509adabf15b82b28b61e5e",
+      "pdf_sha256": "2c54aafd59f2cf0680a56b5e1b71750c29129bddfbcf195b8a73f3dcc524d165",
+      "page_count": 2,
+      "images": [
+        {
+          "page": 1,
+          "ordinal": 0,
+          "format": "png",
+          "context": "cell r0c0 mid-text"
+        },
+        {
+          "page": 1,
+          "ordinal": 1,
+          "format": "png",
+          "context": "cell r0c1 alone"
+        },
+        {
+          "page": 1,
+          "ordinal": 2,
+          "format": "png",
+          "context": "cell r1c1 tall governs row height"
+        }
+      ]
     }
   }
 }
