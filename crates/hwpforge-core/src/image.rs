@@ -19,7 +19,6 @@
 //! assert!(img.path.ends_with(".png"));
 //! ```
 
-use std::borrow::Cow;
 use std::collections::HashMap;
 
 use hwpforge_foundation::HwpUnit;
@@ -28,6 +27,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::caption::Caption;
 use crate::object_id::ObjectId;
+use crate::placement::ObjectPlacement;
 
 /// An image reference within the document.
 ///
@@ -68,7 +68,7 @@ pub struct Image {
     pub caption: Option<Caption>,
     /// Optional placement/presentation metadata.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub placement: Option<ImagePlacement>,
+    pub placement: Option<ObjectPlacement>,
     /// Wave 12p Step 2a: instance ID for cross-ref target lookup. HWP5
     /// 변환 시 GSO CtrlHeader trailer 의 instance ID 가 채워지고, HWPX
     /// encoder 가 `<hp:pic id="...">` attribute 로 emit. `None` 이면
@@ -151,7 +151,7 @@ impl Image {
 
     /// Attaches placement metadata while preserving the existing constructor API.
     #[must_use]
-    pub fn with_placement(mut self, placement: ImagePlacement) -> Self {
+    pub fn with_placement(mut self, placement: ObjectPlacement) -> Self {
         self.placement = Some(placement);
         self
     }
@@ -166,182 +166,6 @@ impl std::fmt::Display for Image {
             self.width.to_mm(),
             self.height.to_mm()
         )
-    }
-}
-
-/// Optional object-placement metadata for images.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-pub struct ImagePlacement {
-    /// Text wrapping mode around the image object.
-    pub text_wrap: ImageTextWrap,
-    /// Side flow policy around the wrapped object.
-    pub text_flow: ImageTextFlow,
-    /// Whether the object behaves like an inline character.
-    pub treat_as_char: bool,
-    /// Whether surrounding text should flow with the object.
-    pub flow_with_text: bool,
-    /// Whether overlapping other objects is allowed.
-    pub allow_overlap: bool,
-    /// Vertical anchor reference for `vert_offset`.
-    pub vert_rel_to: ImageRelativeTo,
-    /// Horizontal anchor reference for `horz_offset`.
-    pub horz_rel_to: ImageRelativeTo,
-    /// Vertical offset from `vert_rel_to`.
-    pub vert_offset: HwpUnit,
-    /// Horizontal offset from `horz_rel_to`.
-    pub horz_offset: HwpUnit,
-}
-
-impl ImagePlacement {
-    /// Legacy inline defaults used by the pre-placement HWPX image path.
-    pub fn legacy_inline_defaults() -> Self {
-        Self {
-            text_wrap: ImageTextWrap::TopAndBottom,
-            text_flow: ImageTextFlow::BothSides,
-            treat_as_char: true,
-            flow_with_text: false,
-            allow_overlap: false,
-            vert_rel_to: ImageRelativeTo::Para,
-            horz_rel_to: ImageRelativeTo::Para,
-            vert_offset: HwpUnit::ZERO,
-            horz_offset: HwpUnit::ZERO,
-        }
-    }
-}
-
-/// Text wrapping mode for placed images.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[non_exhaustive]
-pub enum ImageTextWrap {
-    /// Place text above and below the object.
-    TopAndBottom,
-    /// Wrap text on the object's sides.
-    Square,
-    /// Place the object behind text.
-    BehindText,
-    /// Place the object in front of text.
-    InFrontOfText,
-    /// Tight text wrapping around the object.
-    Tight,
-    /// Through-style wrapping.
-    Through,
-    /// Any wrap value not modeled explicitly.
-    Other(String),
-}
-
-impl ImageTextWrap {
-    /// Converts a raw HWPX wrap string into a typed value.
-    pub fn from_hwpx(value: &str) -> Self {
-        match value {
-            "TOP_AND_BOTTOM" => Self::TopAndBottom,
-            "SQUARE" => Self::Square,
-            "BEHIND_TEXT" => Self::BehindText,
-            "IN_FRONT_OF_TEXT" => Self::InFrontOfText,
-            "TIGHT" => Self::Tight,
-            "THROUGH" => Self::Through,
-            other => Self::Other(other.to_string()),
-        }
-    }
-
-    /// Returns the HWPX serialization string for this wrap mode.
-    pub fn as_hwpx_str(&self) -> Cow<'_, str> {
-        match self {
-            Self::TopAndBottom => Cow::Borrowed("TOP_AND_BOTTOM"),
-            Self::Square => Cow::Borrowed("SQUARE"),
-            Self::BehindText => Cow::Borrowed("BEHIND_TEXT"),
-            Self::InFrontOfText => Cow::Borrowed("IN_FRONT_OF_TEXT"),
-            Self::Tight => Cow::Borrowed("TIGHT"),
-            Self::Through => Cow::Borrowed("THROUGH"),
-            Self::Other(value) => Cow::Borrowed(value.as_str()),
-        }
-    }
-}
-
-/// Text flow mode for placed images.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[non_exhaustive]
-pub enum ImageTextFlow {
-    /// Text can flow on both sides.
-    BothSides,
-    /// Text can flow only on the left side.
-    LeftOnly,
-    /// Text can flow only on the right side.
-    RightOnly,
-    /// Use the side with the larger available space.
-    LargestOnly,
-    /// Any flow value not modeled explicitly.
-    Other(String),
-}
-
-impl ImageTextFlow {
-    /// Converts a raw HWPX flow string into a typed value.
-    pub fn from_hwpx(value: &str) -> Self {
-        match value {
-            "BOTH_SIDES" => Self::BothSides,
-            "LEFT_ONLY" => Self::LeftOnly,
-            "RIGHT_ONLY" => Self::RightOnly,
-            "LARGEST_ONLY" => Self::LargestOnly,
-            other => Self::Other(other.to_string()),
-        }
-    }
-
-    /// Returns the HWPX serialization string for this flow mode.
-    pub fn as_hwpx_str(&self) -> Cow<'_, str> {
-        match self {
-            Self::BothSides => Cow::Borrowed("BOTH_SIDES"),
-            Self::LeftOnly => Cow::Borrowed("LEFT_ONLY"),
-            Self::RightOnly => Cow::Borrowed("RIGHT_ONLY"),
-            Self::LargestOnly => Cow::Borrowed("LARGEST_ONLY"),
-            Self::Other(value) => Cow::Borrowed(value.as_str()),
-        }
-    }
-}
-
-/// Anchor target for image placement offsets.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
-#[non_exhaustive]
-pub enum ImageRelativeTo {
-    /// Anchor offsets to the paper.
-    Paper,
-    /// Anchor offsets to the page.
-    Page,
-    /// Anchor offsets to the paragraph.
-    Para,
-    /// Anchor offsets to the column.
-    Column,
-    /// Anchor offsets to the character box.
-    Character,
-    /// Anchor offsets to the line box.
-    Line,
-    /// Any anchor value not modeled explicitly.
-    Other(String),
-}
-
-impl ImageRelativeTo {
-    /// Converts a raw HWPX anchor string into a typed value.
-    pub fn from_hwpx(value: &str) -> Self {
-        match value {
-            "PAPER" => Self::Paper,
-            "PAGE" => Self::Page,
-            "PARA" => Self::Para,
-            "COLUMN" => Self::Column,
-            "CHAR" => Self::Character,
-            "LINE" => Self::Line,
-            other => Self::Other(other.to_string()),
-        }
-    }
-
-    /// Returns the HWPX serialization string for this anchor mode.
-    pub fn as_hwpx_str(&self) -> Cow<'_, str> {
-        match self {
-            Self::Paper => Cow::Borrowed("PAPER"),
-            Self::Page => Cow::Borrowed("PAGE"),
-            Self::Para => Cow::Borrowed("PARA"),
-            Self::Column => Cow::Borrowed("COLUMN"),
-            Self::Character => Cow::Borrowed("CHAR"),
-            Self::Line => Cow::Borrowed("LINE"),
-            Self::Other(value) => Cow::Borrowed(value.as_str()),
-        }
     }
 }
 
@@ -597,14 +421,15 @@ mod tests {
 
     #[test]
     fn placement_roundtrip() {
-        let img = sample_image().with_placement(ImagePlacement {
-            text_wrap: ImageTextWrap::Square,
-            text_flow: ImageTextFlow::RightOnly,
+        use crate::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
+        let img = sample_image().with_placement(ObjectPlacement {
+            text_wrap: ObjectTextWrap::Square,
+            text_flow: ObjectTextFlow::RightOnly,
             treat_as_char: false,
             flow_with_text: true,
             allow_overlap: true,
-            vert_rel_to: ImageRelativeTo::Paper,
-            horz_rel_to: ImageRelativeTo::Page,
+            vert_rel_to: ObjectRelativeTo::Paper,
+            horz_rel_to: ObjectRelativeTo::Page,
             vert_offset: HwpUnit::new(1200).unwrap(),
             horz_offset: HwpUnit::new(3400).unwrap(),
         });

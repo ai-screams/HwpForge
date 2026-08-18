@@ -369,8 +369,7 @@ mod tests {
             caption: None,
             width: HwpUnit::new(1000).unwrap(),
             height: HwpUnit::new(1000).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             style: None,
             text_vertical_align: VerticalAlign::default(),
         };
@@ -456,8 +455,7 @@ mod tests {
             Control::Rect {
                 width,
                 height: width,
-                horz_offset: 0,
-                vert_offset: 0,
+                placement: None,
                 caption: Some(Caption::new(
                     vec![{
                         let mut p = Paragraph::new(ParaShapeIndex::new(0));

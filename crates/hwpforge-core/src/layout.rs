@@ -231,8 +231,7 @@ mod tests {
                 children: vec![child],
                 width: HwpUnit::from_pt(10.0).unwrap(),
                 height: HwpUnit::from_pt(10.0).unwrap(),
-                horz_offset: 0,
-                vert_offset: 0,
+                placement: None,
                 inst_id: None,
             };
             let mut group_host = cached_para("group-host");

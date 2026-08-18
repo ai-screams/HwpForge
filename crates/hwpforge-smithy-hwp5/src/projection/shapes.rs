@@ -7,6 +7,7 @@
 //! document-traversal state; the parent `projection` module dispatches each
 //! GSO control into the matching builder here.
 
+use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
 use hwpforge_core::run::Run;
 use hwpforge_core::Control;
 use hwpforge_foundation::{ArcType, CharShapeIndex, CurveSegmentType, HwpUnit};
@@ -17,6 +18,55 @@ use crate::decoder::section::{
 };
 use crate::numeric::positive_i32_from_u32;
 use crate::schema::section::{Hwp5ShapeComponentGeometry, Hwp5ShapePoint};
+
+/// Derives a GSO shape's Core [`ObjectPlacement`] from the owning `gso `
+/// `CtrlHeader` 속성 word, reusing the same bit0 (treat-as-char) truth the image
+/// path applies via [`super::image_placement_from_wire`] in `Flow` context.
+///
+/// The `treat_as_char` bit and the `(x, y)` offset are byte-grounded in the
+/// shared `gso ` CtrlHeader word (표 70). An inline (treat-as-char) shape
+/// collapses to `None` so the encoder emits the legacy inline placement; a
+/// floating shape reproduces the anchor/wrap convention (`PAPER`,
+/// `IN_FRONT_OF_TEXT`, overlap-allowed) that the HWPX shape encoders already
+/// emit for a non-zero offset. Those anchor/wrap fields are the established
+/// shape floating convention, not shape-specific measured wire — **TextBox and
+/// shape native byte comparison is the w4 e2e gate.**
+pub(super) fn shape_placement(
+    geometry: &Hwp5ShapeComponentGeometry,
+    ctrl_properties: u32,
+) -> Option<ObjectPlacement> {
+    let placement = super::image_placement_from_wire(
+        geometry,
+        super::ImageProjectionContext::Flow,
+        ctrl_properties,
+    );
+    (placement != ObjectPlacement::legacy_inline_defaults()).then_some(placement)
+}
+
+/// Placement for shape families whose `gso ` 속성 word (bit0) is not threaded
+/// into the decoder model — the group container, `EmbeddedChart`, and
+/// `TextArt`. Falls back to the pre-placement offset heuristic: a non-zero
+/// offset floats (`PAPER`, `IN_FRONT_OF_TEXT` — the established shape floating
+/// convention), a zero offset stays inline (`None`). The chart/textart encoders
+/// read only the offset (their `<hp:pos>` is a fixed template); the group
+/// container encoder derives numbering/wrap/pos from these fields exactly as it
+/// did from the old non-zero-offset heuristic.
+pub(super) fn offset_placement(x: i32, y: i32) -> Option<ObjectPlacement> {
+    if x == 0 && y == 0 {
+        return None;
+    }
+    Some(ObjectPlacement {
+        text_wrap: ObjectTextWrap::InFrontOfText,
+        text_flow: ObjectTextFlow::BothSides,
+        treat_as_char: false,
+        flow_with_text: false,
+        allow_overlap: true,
+        vert_rel_to: ObjectRelativeTo::Paper,
+        horz_rel_to: ObjectRelativeTo::Paper,
+        vert_offset: HwpUnit::new(y).unwrap_or(HwpUnit::ZERO),
+        horz_offset: HwpUnit::new(x).unwrap_or(HwpUnit::ZERO),
+    })
+}
 
 pub(super) fn project_line_run(line: &Hwp5LineControl) -> Option<Run> {
     let projected_start = scale_point_into_geometry(
@@ -56,9 +106,8 @@ pub(super) fn project_line_run(line: &Hwp5LineControl) -> Option<Run> {
         hwpforge_core::control::ShapePoint { x: projected_start, y: projected_start_y };
     let scaled_end = hwpforge_core::control::ShapePoint { x: projected_end, y: projected_end_y };
     let mut control = hwpforge_core::control::Control::line(scaled_start, scaled_end).ok()?;
-    if let Control::Line { horz_offset, vert_offset, .. } = &mut control {
-        *horz_offset = line.geometry.x;
-        *vert_offset = line.geometry.y;
+    if let Control::Line { placement, .. } = &mut control {
+        *placement = shape_placement(&line.geometry, line.ctrl_properties);
     }
     Some(Run::control(control, CharShapeIndex::new(0)))
 }
@@ -67,9 +116,8 @@ pub(super) fn project_rect_run(rect: &Hwp5RectControl) -> Option<Run> {
     let width = HwpUnit::new(positive_i32_from_u32(rect.geometry.width)?).ok()?;
     let height = HwpUnit::new(positive_i32_from_u32(rect.geometry.height)?).ok()?;
     let mut control = hwpforge_core::control::Control::rect(width, height).ok()?;
-    if let Control::Rect { horz_offset, vert_offset, .. } = &mut control {
-        *horz_offset = rect.geometry.x;
-        *vert_offset = rect.geometry.y;
+    if let Control::Rect { placement, .. } = &mut control {
+        *placement = shape_placement(&rect.geometry, rect.ctrl_properties);
     }
     Some(Run::control(control, CharShapeIndex::new(0)))
 }
@@ -77,9 +125,8 @@ pub(super) fn project_rect_run(rect: &Hwp5RectControl) -> Option<Run> {
 pub(super) fn project_polygon_run(polygon: &Hwp5PolygonControl) -> Option<Run> {
     let vertices = scale_polygon_points(&polygon.points, &polygon.geometry);
     let mut control = hwpforge_core::control::Control::polygon(vertices).ok()?;
-    if let Control::Polygon { horz_offset, vert_offset, .. } = &mut control {
-        *horz_offset = polygon.geometry.x;
-        *vert_offset = polygon.geometry.y;
+    if let Control::Polygon { placement, .. } = &mut control {
+        *placement = shape_placement(&polygon.geometry, polygon.ctrl_properties);
     }
     Some(Run::control(control, CharShapeIndex::new(0)))
 }
@@ -90,9 +137,8 @@ pub(super) fn project_ellipse_run(ellipse: &Hwp5EllipseControl) -> Option<Run> {
     let width = HwpUnit::new(positive_i32_from_u32(ellipse.geometry.width)?).ok()?;
     let height = HwpUnit::new(positive_i32_from_u32(ellipse.geometry.height)?).ok()?;
     let mut control = hwpforge_core::control::Control::ellipse(width, height);
-    if let Control::Ellipse { horz_offset, vert_offset, .. } = &mut control {
-        *horz_offset = ellipse.geometry.x;
-        *vert_offset = ellipse.geometry.y;
+    if let Control::Ellipse { placement, .. } = &mut control {
+        *placement = shape_placement(&ellipse.geometry, ellipse.ctrl_properties);
     }
     Some(Run::control(control, CharShapeIndex::new(0)))
 }
@@ -106,9 +152,8 @@ pub(super) fn project_arc_run(arc: &Hwp5ArcControl) -> Option<Run> {
     let width = HwpUnit::new(positive_i32_from_u32(arc.geometry.width)?).ok()?;
     let height = HwpUnit::new(positive_i32_from_u32(arc.geometry.height)?).ok()?;
     let mut control = hwpforge_core::control::Control::arc(ArcType::Normal, width, height);
-    if let Control::Arc { horz_offset, vert_offset, .. } = &mut control {
-        *horz_offset = arc.geometry.x;
-        *vert_offset = arc.geometry.y;
+    if let Control::Arc { placement, .. } = &mut control {
+        *placement = shape_placement(&arc.geometry, arc.ctrl_properties);
     }
     Some(Run::control(control, CharShapeIndex::new(0)))
 }
@@ -118,9 +163,8 @@ pub(super) fn project_arc_run(arc: &Hwp5ArcControl) -> Option<Run> {
 pub(super) fn project_curve_run(curve: &Hwp5CurveControl) -> Option<Run> {
     let vertices = scale_polygon_points(&curve.points, &curve.geometry);
     let mut control = hwpforge_core::control::Control::curve(vertices).ok()?;
-    if let Control::Curve { horz_offset, vert_offset, segment_types, .. } = &mut control {
-        *horz_offset = curve.geometry.x;
-        *vert_offset = curve.geometry.y;
+    if let Control::Curve { placement, segment_types, .. } = &mut control {
+        *placement = shape_placement(&curve.geometry, curve.ctrl_properties);
         let decoded: Vec<CurveSegmentType> = curve
             .segment_types
             .iter()
@@ -183,9 +227,8 @@ pub(super) fn project_connectline_run(connect_line: &Hwp5ConnectLineControl) -> 
     };
     let mut control =
         hwpforge_core::control::Control::connect_line(scaled_start, scaled_end).ok()?;
-    if let Control::ConnectLine { horz_offset, vert_offset, .. } = &mut control {
-        *horz_offset = connect_line.geometry.x;
-        *vert_offset = connect_line.geometry.y;
+    if let Control::ConnectLine { placement, .. } = &mut control {
+        *placement = shape_placement(&connect_line.geometry, connect_line.ctrl_properties);
     }
     Some(Run::control(control, CharShapeIndex::new(0)))
 }
@@ -259,6 +302,7 @@ mod tests {
         let line = crate::decoder::section::Hwp5LineControl {
             ctrl_id: 0,
             geometry: zero_geometry(),
+            ctrl_properties: 0,
             start: shape_point(50, 50),
             end: shape_point(50, 50),
         };
@@ -274,6 +318,7 @@ mod tests {
         let line = crate::decoder::section::Hwp5LineControl {
             ctrl_id: 0,
             geometry: zero_geometry(),
+            ctrl_properties: 0,
             start: shape_point(0, 0),
             end: shape_point(100, 100),
         };
@@ -288,6 +333,7 @@ mod tests {
         let polygon = crate::decoder::section::Hwp5PolygonControl {
             ctrl_id: 0,
             geometry: zero_geometry(),
+            ctrl_properties: 0,
             points: vec![shape_point(0, 0), shape_point(100, 0)],
         };
         assert!(
@@ -302,11 +348,47 @@ mod tests {
         let polygon = crate::decoder::section::Hwp5PolygonControl {
             ctrl_id: 0,
             geometry: zero_geometry(),
+            ctrl_properties: 0,
             points: vec![shape_point(0, 0), shape_point(100, 0), shape_point(50, 100)],
         };
         assert!(
             project_polygon_run(&polygon).is_some(),
             "valid polygon must still project to Some"
         );
+    }
+
+    // ── placement derivation (W4 w1) ─────────────────────────────────
+
+    #[test]
+    fn shape_placement_bit0_drives_treat_as_char() {
+        let geometry = crate::schema::section::Hwp5ShapeComponentGeometry {
+            x: 1_234,
+            y: 5_678,
+            width: 8_000,
+            height: 6_000,
+        };
+        // bit0=1 (글자처럼 취급) → inline default → None (offset intentionally
+        // dropped for an inline shape).
+        assert!(shape_placement(&geometry, 0x1).is_none());
+        // bit0=0 → floating placement carrying the gso CtrlHeader offset.
+        let placement = shape_placement(&geometry, 0x0).expect("floating placement");
+        assert!(!placement.treat_as_char);
+        assert_eq!(placement.horz_offset.as_i32(), 1_234);
+        assert_eq!(placement.vert_offset.as_i32(), 5_678);
+        assert_eq!(placement.horz_rel_to, ObjectRelativeTo::Paper);
+        // Only bit0 is consulted; the other 31 property bits are ignored.
+        assert!(shape_placement(&geometry, 0xFFFF_FFFE).is_some());
+        assert!(shape_placement(&geometry, 0xFFFF_FFFF).is_none());
+    }
+
+    #[test]
+    fn offset_placement_floats_only_on_non_zero_offset() {
+        // The bit0-less fallback (group container / chart / textart): a zero
+        // offset stays inline (None), any non-zero offset floats.
+        assert!(offset_placement(0, 0).is_none());
+        let placement = offset_placement(1_000, 0).expect("non-zero floats");
+        assert!(!placement.treat_as_char);
+        assert_eq!(placement.horz_offset.as_i32(), 1_000);
+        assert_eq!(placement.text_wrap, ObjectTextWrap::InFrontOfText);
     }
 }

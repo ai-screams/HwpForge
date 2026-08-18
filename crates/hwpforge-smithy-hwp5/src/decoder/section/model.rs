@@ -204,6 +204,10 @@ pub(crate) struct Hwp5LineControl {
     pub start: Hwp5ShapePoint,
     /// Line end point in local object coordinates.
     pub end: Hwp5ShapePoint,
+    /// `속성` (UINT32) word of the owning `gso ` `CtrlHeader` (표 70). bit0 =
+    /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
+    /// from it, mirroring `Hwp5ImageControl::ctrl_properties`.
+    pub ctrl_properties: u32,
 }
 
 /// Parsed pure rectangle evidence from a `gso ` scope.
@@ -214,6 +218,10 @@ pub(crate) struct Hwp5RectControl {
     pub ctrl_id: u32,
     /// Minimal recovered geometry.
     pub geometry: Hwp5ShapeComponentGeometry,
+    /// `속성` (UINT32) word of the owning `gso ` `CtrlHeader` (표 70). bit0 =
+    /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
+    /// from it, mirroring `Hwp5ImageControl::ctrl_properties`.
+    pub ctrl_properties: u32,
 }
 
 /// Parsed polygon evidence from a `gso ` scope.
@@ -226,6 +234,10 @@ pub(crate) struct Hwp5PolygonControl {
     pub geometry: Hwp5ShapeComponentGeometry,
     /// Ordered polygon vertices in local object coordinates.
     pub points: Vec<Hwp5ShapePoint>,
+    /// `속성` (UINT32) word of the owning `gso ` `CtrlHeader` (표 70). bit0 =
+    /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
+    /// from it, mirroring `Hwp5ImageControl::ctrl_properties`.
+    pub ctrl_properties: u32,
 }
 
 /// Parsed plain-ellipse evidence from a `gso ` scope.
@@ -242,6 +254,10 @@ pub(crate) struct Hwp5EllipseControl {
     pub ctrl_id: u32,
     /// Minimal recovered geometry (placement + extent).
     pub geometry: Hwp5ShapeComponentGeometry,
+    /// `속성` (UINT32) word of the owning `gso ` `CtrlHeader` (표 70). bit0 =
+    /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
+    /// from it, mirroring `Hwp5ImageControl::ctrl_properties`.
+    pub ctrl_properties: u32,
 }
 
 /// Parsed TextArt (글맵시) evidence from a `gso ` scope whose `ShapeComponent`
@@ -277,6 +293,10 @@ pub(crate) struct Hwp5ArcControl {
     pub ctrl_id: u32,
     /// Minimal recovered geometry (placement + extent).
     pub geometry: Hwp5ShapeComponentGeometry,
+    /// `속성` (UINT32) word of the owning `gso ` `CtrlHeader` (표 70). bit0 =
+    /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
+    /// from it, mirroring `Hwp5ImageControl::ctrl_properties`.
+    pub ctrl_properties: u32,
 }
 
 /// Parsed connect-line evidence from a `gso ` scope.
@@ -296,6 +316,10 @@ pub(crate) struct Hwp5ConnectLineControl {
     pub start: Hwp5ShapePoint,
     /// Connector end point in local object coordinates.
     pub end: Hwp5ShapePoint,
+    /// `속성` (UINT32) word of the owning `gso ` `CtrlHeader` (표 70). bit0 =
+    /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
+    /// from it, mirroring `Hwp5ImageControl::ctrl_properties`.
+    pub ctrl_properties: u32,
 }
 
 /// Parsed equation evidence from an `eqed` ctrl + `HWPTAG_EQEDIT` child record.
@@ -353,6 +377,10 @@ pub(crate) struct Hwp5CurveControl {
     pub points: Vec<Hwp5ShapePoint>,
     /// Per-gap segment type bytes (`0` = line, `1` = curve).
     pub segment_types: Vec<u8>,
+    /// `속성` (UINT32) word of the owning `gso ` `CtrlHeader` (표 70). bit0 =
+    /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
+    /// from it, mirroring `Hwp5ImageControl::ctrl_properties`.
+    pub ctrl_properties: u32,
 }
 
 /// Parsed textbox evidence from a `gso ` scope carrying `drawText/subList`.
@@ -369,6 +397,11 @@ pub(crate) struct Hwp5TextBoxControl {
     /// maps `(props >> 5) & 0x03` → Core `VerticalAlign`. `None` when the
     /// ListHeader was absent or too short to carry the 속성 word.
     pub list_header_properties: Option<u32>,
+    /// `속성` (UINT32) word of the owning `gso ` `CtrlHeader` (표 70). bit0 =
+    /// 글자처럼 취급 (treat-as-char); projection derives the Core placement
+    /// from it, mirroring `Hwp5ImageControl::ctrl_properties`. Distinct from
+    /// `list_header_properties` (the textbox `HWPTAG_LIST_HEADER` 속성 word).
+    pub ctrl_properties: u32,
 }
 
 /// Parsed OLE-backed object evidence from a `gso ` scope.

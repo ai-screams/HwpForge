@@ -8,10 +8,9 @@ use std::collections::HashMap;
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::{ColumnDef, ColumnLayoutMode, ColumnLine, ColumnSettings, ColumnType};
 use hwpforge_core::control::{Control, DutmalAlign, DutmalPosition};
-use hwpforge_core::image::{
-    Image, ImageFormat, ImagePlacement, ImageRelativeTo, ImageTextFlow, ImageTextWrap,
-};
+use hwpforge_core::image::{Image, ImageFormat};
 use hwpforge_core::paragraph::Paragraph;
+use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
 use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::section::{HeaderFooter, PageNumber};
 use hwpforge_core::table::{
@@ -1075,32 +1074,32 @@ fn convert_picture(hx: &HxPic, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<
     Ok(Some(image))
 }
 
-fn decode_image_placement(hx: &HxPic) -> Option<ImagePlacement> {
+fn decode_image_placement(hx: &HxPic) -> Option<ObjectPlacement> {
     let pos = hx.pos.as_ref()?;
 
-    Some(ImagePlacement {
+    Some(ObjectPlacement {
         text_wrap: if hx.text_wrap.is_empty() {
-            ImageTextWrap::TopAndBottom
+            ObjectTextWrap::TopAndBottom
         } else {
-            ImageTextWrap::from_hwpx(&hx.text_wrap)
+            ObjectTextWrap::from_hwpx(&hx.text_wrap)
         },
         text_flow: if hx.text_flow.is_empty() {
-            ImageTextFlow::BothSides
+            ObjectTextFlow::BothSides
         } else {
-            ImageTextFlow::from_hwpx(&hx.text_flow)
+            ObjectTextFlow::from_hwpx(&hx.text_flow)
         },
         treat_as_char: pos.treat_as_char != 0,
         flow_with_text: pos.flow_with_text != 0,
         allow_overlap: pos.allow_overlap != 0,
         vert_rel_to: if pos.vert_rel_to.is_empty() {
-            ImageRelativeTo::Para
+            ObjectRelativeTo::Para
         } else {
-            ImageRelativeTo::from_hwpx(&pos.vert_rel_to)
+            ObjectRelativeTo::from_hwpx(&pos.vert_rel_to)
         },
         horz_rel_to: if pos.horz_rel_to.is_empty() {
-            ImageRelativeTo::Para
+            ObjectRelativeTo::Para
         } else {
-            ImageRelativeTo::from_hwpx(&pos.horz_rel_to)
+            ObjectRelativeTo::from_hwpx(&pos.horz_rel_to)
         },
         vert_offset: HwpUnit::new(pos.vert_offset).unwrap_or(HwpUnit::ZERO),
         horz_offset: HwpUnit::new(pos.horz_offset).unwrap_or(HwpUnit::ZERO),
@@ -2585,13 +2584,13 @@ mod tests {
         match &result.paragraphs[0].runs[0].content {
             RunContent::Image(img) => {
                 let placement = img.placement.as_ref().expect("placement should be decoded");
-                assert_eq!(placement.text_wrap, ImageTextWrap::Square);
-                assert_eq!(placement.text_flow, ImageTextFlow::RightOnly);
+                assert_eq!(placement.text_wrap, ObjectTextWrap::Square);
+                assert_eq!(placement.text_flow, ObjectTextFlow::RightOnly);
                 assert!(!placement.treat_as_char);
                 assert!(placement.flow_with_text);
                 assert!(placement.allow_overlap);
-                assert_eq!(placement.vert_rel_to, ImageRelativeTo::Paper);
-                assert_eq!(placement.horz_rel_to, ImageRelativeTo::Page);
+                assert_eq!(placement.vert_rel_to, ObjectRelativeTo::Paper);
+                assert_eq!(placement.horz_rel_to, ObjectRelativeTo::Page);
                 assert_eq!(placement.vert_offset.as_i32(), 1200);
                 assert_eq!(placement.horz_offset.as_i32(), 3400);
             }
@@ -3143,19 +3142,13 @@ mod tests {
         match &tb_run.content {
             RunContent::Control(ctrl) => match ctrl.as_ref() {
                 hwpforge_core::Control::TextBox {
-                    paragraphs,
-                    width,
-                    height,
-                    horz_offset,
-                    vert_offset,
-                    ..
+                    paragraphs, width, height, placement, ..
                 } => {
                     assert_eq!(paragraphs.len(), 1);
                     assert_eq!(paragraphs[0].runs[0].content.as_text(), Some("Box content"));
                     assert_eq!(width.as_i32(), 14000);
                     assert_eq!(height.as_i32(), 8000);
-                    assert_eq!(*horz_offset, 0);
-                    assert_eq!(*vert_offset, 0);
+                    assert!(placement.is_none());
                 }
                 other => panic!("expected TextBox, got {other:?}"),
             },

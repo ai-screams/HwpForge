@@ -5,6 +5,7 @@
 //! and `Control::Polygon` into their corresponding `Hx*` schema types.
 
 use hwpforge_core::control::{Control, Fill, ShapeStyle};
+use hwpforge_core::placement::ObjectPlacement;
 use hwpforge_foundation::{ArrowType, CurveSegmentType, DropCapStyle, Flip, GradientType};
 
 /// Extracts the dropcap style string from an optional `ShapeStyle`.
@@ -64,40 +65,73 @@ pub(crate) struct ShapeCommon {
     pub shadow: HxShadow,
 }
 
-fn shape_is_floating(horz_offset: i32, vert_offset: i32) -> bool {
-    horz_offset != 0 || vert_offset != 0
-}
-
-fn shape_numbering_type(horz_offset: i32, vert_offset: i32) -> String {
-    if shape_is_floating(horz_offset, vert_offset) {
-        "PICTURE".to_string()
-    } else {
-        "NONE".to_string()
+/// `<hp:*>` `numberingType` for a shape.
+///
+/// `None` (the historical inline default) and an inline (`treat_as_char`)
+/// placement both number as `NONE`; an anchored/floating object numbers as
+/// `PICTURE`. Anchoring is keyed on `treat_as_char` (HWP5 bit0), not on a
+/// non-zero offset — an object anchored at the origin is still floating.
+fn shape_numbering_type(placement: Option<&ObjectPlacement>) -> String {
+    match placement {
+        Some(p) if !p.treat_as_char => "PICTURE".to_string(),
+        _ => "NONE".to_string(),
     }
 }
 
-fn shape_text_wrap(horz_offset: i32, vert_offset: i32) -> String {
-    if shape_is_floating(horz_offset, vert_offset) {
-        "IN_FRONT_OF_TEXT".to_string()
-    } else {
-        "TOP_AND_BOTTOM".to_string()
+/// `<hp:*>` `textWrap` for a shape. `None` → the inline default
+/// `TOP_AND_BOTTOM`; `Some` re-emits the carried wrap mode.
+fn shape_text_wrap(placement: Option<&ObjectPlacement>) -> String {
+    match placement {
+        Some(p) => p.text_wrap.as_hwpx_str().into_owned(),
+        None => "TOP_AND_BOTTOM".to_string(),
     }
 }
 
-fn shape_position(horz_offset: i32, vert_offset: i32) -> HxTablePos {
-    let floating = shape_is_floating(horz_offset, vert_offset);
-    HxTablePos {
-        treat_as_char: if floating { 0 } else { 1 },
-        affect_l_spacing: 0,
-        flow_with_text: 0,
-        allow_overlap: if floating { 1 } else { 0 },
-        hold_anchor_and_so: 0,
-        vert_rel_to: if floating { "PAPER".to_string() } else { "PARA".to_string() },
-        horz_rel_to: if floating { "PAPER".to_string() } else { "PARA".to_string() },
-        vert_align: "TOP".to_string(),
-        horz_align: "LEFT".to_string(),
-        vert_offset,
-        horz_offset,
+/// `<hp:*>` `textFlow` for a shape. `None` → the inline default `BOTH_SIDES`;
+/// `Some` re-emits the carried flow mode.
+fn shape_text_flow(placement: Option<&ObjectPlacement>) -> String {
+    match placement {
+        Some(p) => p.text_flow.as_hwpx_str().into_owned(),
+        None => "BOTH_SIDES".to_string(),
+    }
+}
+
+/// Builds the `<hp:pos>` block for a shape.
+///
+/// The `None` branch reproduces the historical zero-offset inline output
+/// byte-for-byte (treat-as-char, paragraph-anchored, zero offset); the `Some`
+/// branch mirrors `build_picture_position`, sourcing every carried field from
+/// the [`ObjectPlacement`] while keeping the fields it does not model
+/// (`affectLSpacing`/`holdAnchorAndSO`/`vertAlign`/`horzAlign`) at the native
+/// defaults.
+fn shape_position(placement: Option<&ObjectPlacement>) -> HxTablePos {
+    match placement {
+        Some(p) => HxTablePos {
+            treat_as_char: u32::from(p.treat_as_char),
+            affect_l_spacing: 0,
+            flow_with_text: u32::from(p.flow_with_text),
+            allow_overlap: u32::from(p.allow_overlap),
+            hold_anchor_and_so: 0,
+            vert_rel_to: p.vert_rel_to.as_hwpx_str().into_owned(),
+            horz_rel_to: p.horz_rel_to.as_hwpx_str().into_owned(),
+            vert_align: "TOP".to_string(),
+            horz_align: "LEFT".to_string(),
+            vert_offset: p.vert_offset.as_i32(),
+            horz_offset: p.horz_offset.as_i32(),
+        },
+        None => HxTablePos {
+            treat_as_char: 1,
+            affect_l_spacing: 0,
+            flow_with_text: 0,
+            allow_overlap: 0,
+            hold_anchor_and_so: 0,
+            vert_rel_to: "PARA".to_string(),
+            horz_rel_to: "PARA".to_string(),
+            vert_align: "TOP".to_string(),
+            horz_align: "LEFT".to_string(),
+            vert_offset: 0,
+            horz_offset: 0,
+        },
     }
 }
 
@@ -297,29 +331,18 @@ pub(crate) fn encode_textbox_to_rect(
     options: EncodeOptions,
     sink: &mut EncodeSink,
 ) -> HwpxResult<HxRect> {
-    let (paragraphs, width, height, horz_offset, vert_offset, caption, style, text_vertical_align) =
-        match ctrl {
-            Control::TextBox {
-                paragraphs,
-                width,
-                height,
-                horz_offset,
-                vert_offset,
-                caption,
-                style,
-                text_vertical_align,
-            } => (
-                paragraphs,
-                *width,
-                *height,
-                *horz_offset,
-                *vert_offset,
-                caption,
-                style,
-                *text_vertical_align,
-            ),
-            _ => unreachable!("encode_textbox_to_rect called with non-TextBox"),
-        };
+    let (paragraphs, width, height, placement, caption, style, text_vertical_align) = match ctrl {
+        Control::TextBox {
+            paragraphs,
+            width,
+            height,
+            placement,
+            caption,
+            style,
+            text_vertical_align,
+        } => (paragraphs, *width, *height, placement, caption, style, *text_vertical_align),
+        _ => unreachable!("encode_textbox_to_rect called with non-TextBox"),
+    };
 
     let width_hwp = width.as_i32();
     let height_hwp = height.as_i32();
@@ -344,9 +367,9 @@ pub(crate) fn encode_textbox_to_rect(
     Ok(HxRect {
         id: generate_instid(),
         z_order: 0,
-        numbering_type: shape_numbering_type(horz_offset, vert_offset),
-        text_wrap: shape_text_wrap(horz_offset, vert_offset),
-        text_flow: "BOTH_SIDES".to_string(),
+        numbering_type: shape_numbering_type(placement.as_ref()),
+        text_wrap: shape_text_wrap(placement.as_ref()),
+        text_flow: shape_text_flow(placement.as_ref()),
         lock: 0,
         dropcap_style: dropcap_str(style),
         href: String::new(),
@@ -372,7 +395,7 @@ pub(crate) fn encode_textbox_to_rect(
             protect: 0,
         }),
 
-        pos: Some(shape_position(horz_offset, vert_offset)),
+        pos: Some(shape_position(placement.as_ref())),
 
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
         caption: caption
@@ -412,9 +435,9 @@ pub(crate) fn encode_rect_to_hx(
     options: EncodeOptions,
     sink: &mut EncodeSink,
 ) -> HwpxResult<HxRect> {
-    let (width, height, horz_offset, vert_offset, caption, style) = match ctrl {
-        Control::Rect { width, height, horz_offset, vert_offset, caption, style } => {
-            (*width, *height, *horz_offset, *vert_offset, caption, style)
+    let (width, height, placement, caption, style) = match ctrl {
+        Control::Rect { width, height, placement, caption, style } => {
+            (*width, *height, placement, caption, style)
         }
         _ => unreachable!("encode_rect_to_hx called with non-Rect"),
     };
@@ -426,9 +449,9 @@ pub(crate) fn encode_rect_to_hx(
     Ok(HxRect {
         id: generate_instid(),
         z_order: 0,
-        numbering_type: shape_numbering_type(horz_offset, vert_offset),
-        text_wrap: shape_text_wrap(horz_offset, vert_offset),
-        text_flow: "BOTH_SIDES".to_string(),
+        numbering_type: shape_numbering_type(placement.as_ref()),
+        text_wrap: shape_text_wrap(placement.as_ref()),
+        text_flow: shape_text_flow(placement.as_ref()),
         lock: 0,
         dropcap_style: dropcap_str(style),
         href: String::new(),
@@ -453,7 +476,7 @@ pub(crate) fn encode_rect_to_hx(
             height_rel_to: "ABSOLUTE".to_string(),
             protect: 0,
         }),
-        pos: Some(shape_position(horz_offset, vert_offset)),
+        pos: Some(shape_position(placement.as_ref())),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
         caption: caption
             .as_ref()
@@ -477,9 +500,9 @@ pub(crate) fn encode_line_to_hx(
     options: EncodeOptions,
     sink: &mut EncodeSink,
 ) -> HwpxResult<HxLine> {
-    let (start, end, width, height, horz_offset, vert_offset, caption, style) = match ctrl {
-        Control::Line { start, end, width, height, horz_offset, vert_offset, caption, style } => {
-            (start, end, *width, *height, horz_offset, vert_offset, caption, style)
+    let (start, end, width, height, placement, caption, style) = match ctrl {
+        Control::Line { start, end, width, height, placement, caption, style } => {
+            (start, end, *width, *height, placement, caption, style)
         }
         _ => unreachable!("encode_line_to_hx called with non-Line"),
     };
@@ -491,9 +514,9 @@ pub(crate) fn encode_line_to_hx(
     Ok(HxLine {
         id: generate_instid(),
         z_order: 0,
-        numbering_type: shape_numbering_type(*horz_offset, *vert_offset),
-        text_wrap: shape_text_wrap(*horz_offset, *vert_offset),
-        text_flow: "BOTH_SIDES".to_string(),
+        numbering_type: shape_numbering_type(placement.as_ref()),
+        text_wrap: shape_text_wrap(placement.as_ref()),
+        text_flow: shape_text_flow(placement.as_ref()),
         lock: 0,
         dropcap_style: dropcap_str(style),
         href: String::new(),
@@ -516,7 +539,7 @@ pub(crate) fn encode_line_to_hx(
             height_rel_to: "ABSOLUTE".to_string(),
             protect: 0,
         }),
-        pos: Some(shape_position(*horz_offset, *vert_offset)),
+        pos: Some(shape_position(placement.as_ref())),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
         shape_comment: Some(HxShapeComment { text: "선입니다.".to_string() }),
         caption: caption
@@ -542,8 +565,7 @@ pub(crate) fn encode_ellipse_to_hx(
         axis2,
         width,
         height,
-        horz_offset,
-        vert_offset,
+        placement,
         paragraphs,
         caption,
         style,
@@ -555,8 +577,7 @@ pub(crate) fn encode_ellipse_to_hx(
             axis2,
             width,
             height,
-            horz_offset,
-            vert_offset,
+            placement,
             paragraphs,
             caption,
             style,
@@ -567,8 +588,7 @@ pub(crate) fn encode_ellipse_to_hx(
             axis2,
             *width,
             *height,
-            horz_offset,
-            vert_offset,
+            placement,
             paragraphs,
             caption,
             style,
@@ -607,9 +627,9 @@ pub(crate) fn encode_ellipse_to_hx(
     Ok(HxEllipse {
         id: generate_instid(),
         z_order: 0,
-        numbering_type: shape_numbering_type(*horz_offset, *vert_offset),
-        text_wrap: shape_text_wrap(*horz_offset, *vert_offset),
-        text_flow: "BOTH_SIDES".to_string(),
+        numbering_type: shape_numbering_type(placement.as_ref()),
+        text_wrap: shape_text_wrap(placement.as_ref()),
+        text_flow: shape_text_flow(placement.as_ref()),
         lock: 0,
         dropcap_style: dropcap_str(style),
         href: String::new(),
@@ -634,7 +654,7 @@ pub(crate) fn encode_ellipse_to_hx(
             height_rel_to: "ABSOLUTE".to_string(),
             protect: 0,
         }),
-        pos: Some(shape_position(*horz_offset, *vert_offset)),
+        pos: Some(shape_position(placement.as_ref())),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
         shape_comment: Some(HxShapeComment { text: "타원입니다.".to_string() }),
         caption: caption
@@ -660,40 +680,29 @@ pub(crate) fn encode_polygon_to_hx(
     options: EncodeOptions,
     sink: &mut EncodeSink,
 ) -> HwpxResult<HxPolygon> {
-    let (
-        vertices,
-        width,
-        height,
-        horz_offset,
-        vert_offset,
-        paragraphs,
-        caption,
-        style,
-        text_vertical_align,
-    ) = match ctrl {
-        Control::Polygon {
-            vertices,
-            width,
-            height,
-            horz_offset,
-            vert_offset,
-            paragraphs,
-            caption,
-            style,
-            text_vertical_align,
-        } => (
-            vertices,
-            *width,
-            *height,
-            horz_offset,
-            vert_offset,
-            paragraphs,
-            caption,
-            style,
-            *text_vertical_align,
-        ),
-        _ => unreachable!("encode_polygon_to_hx called with non-Polygon"),
-    };
+    let (vertices, width, height, placement, paragraphs, caption, style, text_vertical_align) =
+        match ctrl {
+            Control::Polygon {
+                vertices,
+                width,
+                height,
+                placement,
+                paragraphs,
+                caption,
+                style,
+                text_vertical_align,
+            } => (
+                vertices,
+                *width,
+                *height,
+                placement,
+                paragraphs,
+                caption,
+                style,
+                *text_vertical_align,
+            ),
+            _ => unreachable!("encode_polygon_to_hx called with non-Polygon"),
+        };
 
     let w = width.as_i32();
     let h = height.as_i32();
@@ -727,9 +736,9 @@ pub(crate) fn encode_polygon_to_hx(
     Ok(HxPolygon {
         id: generate_instid(),
         z_order: 0,
-        numbering_type: shape_numbering_type(*horz_offset, *vert_offset),
-        text_wrap: shape_text_wrap(*horz_offset, *vert_offset),
-        text_flow: "BOTH_SIDES".to_string(),
+        numbering_type: shape_numbering_type(placement.as_ref()),
+        text_wrap: shape_text_wrap(placement.as_ref()),
+        text_flow: shape_text_flow(placement.as_ref()),
         lock: 0,
         dropcap_style: dropcap_str(style),
         href: String::new(),
@@ -751,7 +760,7 @@ pub(crate) fn encode_polygon_to_hx(
             height_rel_to: "ABSOLUTE".to_string(),
             protect: 0,
         }),
-        pos: Some(shape_position(*horz_offset, *vert_offset)),
+        pos: Some(shape_position(placement.as_ref())),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
         shape_comment: Some(HxShapeComment { text: "다각형입니다.".to_string() }),
         caption: caption
@@ -784,8 +793,7 @@ pub(crate) fn encode_arc_to_hx(
         end2,
         width,
         height,
-        horz_offset,
-        vert_offset,
+        placement,
         caption,
         style,
     ) = match ctrl {
@@ -800,25 +808,12 @@ pub(crate) fn encode_arc_to_hx(
             end2,
             width,
             height,
-            horz_offset,
-            vert_offset,
+            placement,
             caption,
             style,
         } => (
-            arc_type,
-            center,
-            axis1,
-            axis2,
-            start1,
-            end1,
-            start2,
-            end2,
-            *width,
-            *height,
-            horz_offset,
-            vert_offset,
-            caption,
-            style,
+            arc_type, center, axis1, axis2, start1, end1, start2, end2, *width, *height, placement,
+            caption, style,
         ),
         _ => unreachable!("encode_arc_to_hx called with non-Arc"),
     };
@@ -830,9 +825,9 @@ pub(crate) fn encode_arc_to_hx(
     Ok(HxEllipse {
         id: generate_instid(),
         z_order: 0,
-        numbering_type: shape_numbering_type(*horz_offset, *vert_offset),
-        text_wrap: shape_text_wrap(*horz_offset, *vert_offset),
-        text_flow: "BOTH_SIDES".to_string(),
+        numbering_type: shape_numbering_type(placement.as_ref()),
+        text_wrap: shape_text_wrap(placement.as_ref()),
+        text_flow: shape_text_flow(placement.as_ref()),
         lock: 0,
         dropcap_style: dropcap_str(style),
         href: String::new(),
@@ -857,7 +852,7 @@ pub(crate) fn encode_arc_to_hx(
             height_rel_to: "ABSOLUTE".to_string(),
             protect: 0,
         }),
-        pos: Some(shape_position(*horz_offset, *vert_offset)),
+        pos: Some(shape_position(placement.as_ref())),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
         shape_comment: Some(HxShapeComment { text: "호입니다.".to_string() }),
         caption: caption
@@ -883,20 +878,12 @@ pub(crate) fn encode_curve_to_hx(
     options: EncodeOptions,
     sink: &mut EncodeSink,
 ) -> HwpxResult<HxCurve> {
-    let (points, segment_types, width, height, horz_offset, vert_offset, caption, style) =
-        match ctrl {
-            Control::Curve {
-                points,
-                segment_types,
-                width,
-                height,
-                horz_offset,
-                vert_offset,
-                caption,
-                style,
-            } => (points, segment_types, *width, *height, horz_offset, vert_offset, caption, style),
-            _ => unreachable!("encode_curve_to_hx called with non-Curve"),
-        };
+    let (points, segment_types, width, height, placement, caption, style) = match ctrl {
+        Control::Curve { points, segment_types, width, height, placement, caption, style } => {
+            (points, segment_types, *width, *height, placement, caption, style)
+        }
+        _ => unreachable!("encode_curve_to_hx called with non-Curve"),
+    };
 
     let w = width.as_i32();
     let h = height.as_i32();
@@ -923,9 +910,9 @@ pub(crate) fn encode_curve_to_hx(
     Ok(HxCurve {
         id: generate_instid(),
         z_order: 0,
-        numbering_type: shape_numbering_type(*horz_offset, *vert_offset),
-        text_wrap: shape_text_wrap(*horz_offset, *vert_offset),
-        text_flow: "BOTH_SIDES".to_string(),
+        numbering_type: shape_numbering_type(placement.as_ref()),
+        text_wrap: shape_text_wrap(placement.as_ref()),
+        text_flow: shape_text_flow(placement.as_ref()),
         lock: 0,
         dropcap_style: dropcap_str(style),
         href: String::new(),
@@ -947,7 +934,7 @@ pub(crate) fn encode_curve_to_hx(
             height_rel_to: "ABSOLUTE".to_string(),
             protect: 0,
         }),
-        pos: Some(shape_position(*horz_offset, *vert_offset)),
+        pos: Some(shape_position(placement.as_ref())),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
         shape_comment: Some(HxShapeComment { text: "곡선입니다.".to_string() }),
         caption: caption
@@ -967,43 +954,31 @@ pub(crate) fn encode_connect_line_to_hx(
     options: EncodeOptions,
     sink: &mut EncodeSink,
 ) -> HwpxResult<HxConnectLine> {
-    let (
-        start,
-        end,
-        control_points,
-        connect_type,
-        width,
-        height,
-        horz_offset,
-        vert_offset,
-        caption,
-        style,
-    ) = match ctrl {
-        Control::ConnectLine {
-            start,
-            end,
-            control_points,
-            connect_type,
-            width,
-            height,
-            horz_offset,
-            vert_offset,
-            caption,
-            style,
-        } => (
-            start,
-            end,
-            control_points,
-            connect_type,
-            *width,
-            *height,
-            horz_offset,
-            vert_offset,
-            caption,
-            style,
-        ),
-        _ => unreachable!("encode_connect_line_to_hx called with non-ConnectLine"),
-    };
+    let (start, end, control_points, connect_type, width, height, placement, caption, style) =
+        match ctrl {
+            Control::ConnectLine {
+                start,
+                end,
+                control_points,
+                connect_type,
+                width,
+                height,
+                placement,
+                caption,
+                style,
+            } => (
+                start,
+                end,
+                control_points,
+                connect_type,
+                *width,
+                *height,
+                placement,
+                caption,
+                style,
+            ),
+            _ => unreachable!("encode_connect_line_to_hx called with non-ConnectLine"),
+        };
 
     let w = width.as_i32();
     let h = height.as_i32();
@@ -1021,9 +996,9 @@ pub(crate) fn encode_connect_line_to_hx(
     Ok(HxConnectLine {
         id: generate_instid(),
         z_order: 0,
-        numbering_type: shape_numbering_type(*horz_offset, *vert_offset),
-        text_wrap: shape_text_wrap(*horz_offset, *vert_offset),
-        text_flow: "BOTH_SIDES".to_string(),
+        numbering_type: shape_numbering_type(placement.as_ref()),
+        text_wrap: shape_text_wrap(placement.as_ref()),
+        text_flow: shape_text_flow(placement.as_ref()),
         lock: 0,
         dropcap_style: dropcap_str(style),
         href: String::new(),
@@ -1059,7 +1034,7 @@ pub(crate) fn encode_connect_line_to_hx(
             height_rel_to: "ABSOLUTE".to_string(),
             protect: 0,
         }),
-        pos: Some(shape_position(*horz_offset, *vert_offset)),
+        pos: Some(shape_position(placement.as_ref())),
         out_margin: Some(HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 }),
         shape_comment: Some(HxShapeComment { text: "연결선입니다.".to_string() }),
         caption: caption
@@ -1158,25 +1133,32 @@ pub(crate) fn encode_text_art_to_xml(ctrl: &Control) -> HwpxResult<String> {
             char_spacing,
             width,
             height,
-            horz_offset,
-            vert_offset,
+            placement,
             fill_color,
             inst_id,
-        } => (
-            text,
-            shape,
-            font_name,
-            font_style,
-            align,
-            *line_spacing,
-            *char_spacing,
-            width.as_i32(),
-            height.as_i32(),
-            *horz_offset,
-            *vert_offset,
-            *fill_color,
-            *inst_id,
-        ),
+        } => {
+            // TextArt anchors at `<hp:offset>`; its `<hp:pos>` is a fixed
+            // floating template, so only the placement offsets are sourced.
+            let (hx, vy) = placement
+                .as_ref()
+                .map(|p| (p.horz_offset.as_i32(), p.vert_offset.as_i32()))
+                .unwrap_or((0, 0));
+            (
+                text,
+                shape,
+                font_name,
+                font_style,
+                align,
+                *line_spacing,
+                *char_spacing,
+                width.as_i32(),
+                height.as_i32(),
+                hx,
+                vy,
+                *fill_color,
+                *inst_id,
+            )
+        }
         _ => unreachable!("encode_text_art_to_xml called with non-TextArt"),
     };
 
@@ -1255,15 +1237,18 @@ fn zero_cur_sz(xml: &str) -> String {
 /// offset (they sit at the group origin).
 fn group_child_offset(child: &Control) -> (i32, i32) {
     match child {
-        Control::TextBox { horz_offset, vert_offset, .. }
-        | Control::Rect { horz_offset, vert_offset, .. }
-        | Control::Ellipse { horz_offset, vert_offset, .. }
-        | Control::Arc { horz_offset, vert_offset, .. }
-        | Control::Polygon { horz_offset, vert_offset, .. }
-        | Control::Curve { horz_offset, vert_offset, .. }
-        | Control::ConnectLine { horz_offset, vert_offset, .. }
-        | Control::Line { horz_offset, vert_offset, .. }
-        | Control::Group { horz_offset, vert_offset, .. } => (*horz_offset, *vert_offset),
+        Control::TextBox { placement, .. }
+        | Control::Rect { placement, .. }
+        | Control::Ellipse { placement, .. }
+        | Control::Arc { placement, .. }
+        | Control::Polygon { placement, .. }
+        | Control::Curve { placement, .. }
+        | Control::ConnectLine { placement, .. }
+        | Control::Line { placement, .. }
+        | Control::Group { placement, .. } => placement
+            .as_ref()
+            .map(|p| (p.horz_offset.as_i32(), p.vert_offset.as_i32()))
+            .unwrap_or((0, 0)),
         _ => (0, 0),
     }
 }
@@ -1371,9 +1356,9 @@ pub(crate) fn encode_group_to_xml(
     options: EncodeOptions,
     sink: &mut EncodeSink,
 ) -> HwpxResult<String> {
-    let (children, width, height, horz_offset, vert_offset, inst_id) = match ctrl {
-        Control::Group { children, width, height, horz_offset, vert_offset, inst_id } => {
-            (children, width.as_i32(), height.as_i32(), *horz_offset, *vert_offset, *inst_id)
+    let (children, width, height, placement, inst_id) = match ctrl {
+        Control::Group { children, width, height, placement, inst_id } => {
+            (children, width.as_i32(), height.as_i32(), placement.as_ref(), *inst_id)
         }
         _ => unreachable!("encode_group_to_xml called with non-Group"),
     };
@@ -1419,7 +1404,7 @@ pub(crate) fn encode_group_to_xml(
         },
         "hp:sz",
     )?;
-    let pos = serialize_with_root(&shape_position(horz_offset, vert_offset), "hp:pos")?;
+    let pos = serialize_with_root(&shape_position(placement), "hp:pos")?;
     let out_margin = serialize_with_root(
         &HxTableMargin { left: 0, right: 0, top: 0, bottom: 0 },
         "hp:outMargin",
@@ -1433,8 +1418,8 @@ pub(crate) fn encode_group_to_xml(
     let instid = inst_id.map_or_else(generate_instid, |v| v.to_string());
     Ok(format!(
         r#"<hp:container id="{id}" zOrder="0" numberingType="{numbering}" textWrap="{wrap}" textFlow="BOTH_SIDES" lock="0" dropcapstyle="None" href="" groupLevel="{group_level}" instid="{instid}">{common}{children_xml}{sz}{pos}{out_margin}{shape_comment}</hp:container>"#,
-        numbering = shape_numbering_type(horz_offset, vert_offset),
-        wrap = shape_text_wrap(horz_offset, vert_offset),
+        numbering = shape_numbering_type(placement),
+        wrap = shape_text_wrap(placement),
     ))
 }
 
@@ -1442,6 +1427,7 @@ pub(crate) fn encode_group_to_xml(
 mod tests {
     use super::*;
     use hwpforge_core::control::{ArrowStyle, Control, Fill, LineStyle, ShapePoint, ShapeStyle};
+    use hwpforge_core::placement::{ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
     use hwpforge_foundation::{
         ArcType, ArrowSize, ArrowType, Color, CurveSegmentType, DropCapStyle, Flip, HwpUnit,
         PatternType, VerticalAlign,
@@ -1449,6 +1435,22 @@ mod tests {
 
     fn empty_hyperlinks() -> Vec<(String, String)> {
         vec![]
+    }
+
+    /// Floating placement matching what the encoder historically derived from a
+    /// non-zero shape offset: anchored to PAPER, IN_FRONT_OF_TEXT, overlap-allowed.
+    fn floating_placement(horz: i32, vert: i32) -> ObjectPlacement {
+        ObjectPlacement {
+            text_wrap: ObjectTextWrap::InFrontOfText,
+            text_flow: ObjectTextFlow::BothSides,
+            treat_as_char: false,
+            flow_with_text: false,
+            allow_overlap: true,
+            vert_rel_to: ObjectRelativeTo::Paper,
+            horz_rel_to: ObjectRelativeTo::Paper,
+            vert_offset: HwpUnit::new(vert).unwrap(),
+            horz_offset: HwpUnit::new(horz).unwrap(),
+        }
     }
 
     fn make_style(
@@ -1585,8 +1587,11 @@ mod tests {
         let child = |w, h, hx, vy| Control::Rect {
             width: hu(w),
             height: hu(h),
-            horz_offset: hx,
-            vert_offset: vy,
+            placement: Some(ObjectPlacement {
+                horz_offset: hu(hx),
+                vert_offset: hu(vy),
+                ..ObjectPlacement::legacy_inline_defaults()
+            }),
             caption: None,
             style: None,
         };
@@ -1594,8 +1599,7 @@ mod tests {
             children: vec![child(14_922, 7780, 0, 1365), child(6998, 12_426, 17_360, 0)],
             width: hu(24_358),
             height: hu(12_426),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             inst_id: None,
         };
         let mut entries = Vec::new();
@@ -1640,8 +1644,7 @@ mod tests {
             char_spacing: 100,
             width: hu(6500),
             height: hu(5000),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             fill_color: None,
             inst_id: Some(hwpforge_core::ObjectId::new(40_257_166)),
         };
@@ -1669,8 +1672,7 @@ mod tests {
         let rect = Control::Rect {
             width: hu(12_440),
             height: hu(6000),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         };
@@ -1680,8 +1682,11 @@ mod tests {
             axis2: ShapePoint::new(5116, 6000),
             width: hu(10_232),
             height: hu(6000),
-            horz_offset: 1164,
-            vert_offset: 6512,
+            placement: Some(ObjectPlacement {
+                horz_offset: hu(1164),
+                vert_offset: hu(6512),
+                ..ObjectPlacement::legacy_inline_defaults()
+            }),
             paragraphs: Vec::new(),
             caption: None,
             style: None,
@@ -1691,8 +1696,7 @@ mod tests {
             children: vec![rect, ellipse],
             width: hu(13_604),
             height: hu(12_512),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             inst_id: None,
         };
         let line = Control::Line {
@@ -1700,8 +1704,11 @@ mod tests {
             end: ShapePoint::new(20_000, 0),
             width: hu(20_000),
             height: hu(0),
-            horz_offset: 525,
-            vert_offset: 13_422,
+            placement: Some(ObjectPlacement {
+                horz_offset: hu(525),
+                vert_offset: hu(13_422),
+                ..ObjectPlacement::legacy_inline_defaults()
+            }),
             caption: None,
             style: None,
         };
@@ -1709,8 +1716,7 @@ mod tests {
             children: vec![inner, line],
             width: hu(42_520),
             height: hu(13_422),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             inst_id: None,
         };
         let mut entries = Vec::new();
@@ -1951,8 +1957,7 @@ mod tests {
             end2: ShapePoint::new(0, 0),
             width: HwpUnit::new(1000).unwrap(),
             height: HwpUnit::new(600).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         };
@@ -1976,8 +1981,7 @@ mod tests {
             end2: ShapePoint::new(0, 0),
             width: HwpUnit::new(200).unwrap(),
             height: HwpUnit::new(200).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         };
@@ -2001,8 +2005,7 @@ mod tests {
             end2: ShapePoint::new(400, 300),
             width: HwpUnit::new(5000).unwrap(),
             height: HwpUnit::new(3000).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         };
@@ -2033,8 +2036,12 @@ mod tests {
             end2: ShapePoint::new(0, 0),
             width: HwpUnit::new(7000).unwrap(),
             height: HwpUnit::new(4000).unwrap(),
-            horz_offset: 100,
-            vert_offset: 200,
+            placement: Some(ObjectPlacement {
+                treat_as_char: false,
+                horz_offset: HwpUnit::new(100).unwrap(),
+                vert_offset: HwpUnit::new(200).unwrap(),
+                ..ObjectPlacement::legacy_inline_defaults()
+            }),
             caption: None,
             style: None,
         };
@@ -2044,7 +2051,7 @@ mod tests {
                 .unwrap();
         assert_eq!(result.sz.as_ref().unwrap().width, 7000);
         assert_eq!(result.sz.as_ref().unwrap().height, 4000);
-        // Non-zero offset → treat_as_char=0
+        // Floating placement (treat_as_char=false) → pos treatAsChar=0
         assert_eq!(result.pos.as_ref().unwrap().treat_as_char, 0);
         assert_eq!(result.pos.as_ref().unwrap().horz_offset, 100);
     }
@@ -2062,8 +2069,7 @@ mod tests {
             end2: ShapePoint::new(0, 0),
             width: HwpUnit::new(1000).unwrap(),
             height: HwpUnit::new(500).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         };
@@ -2087,8 +2093,7 @@ mod tests {
             end2: ShapePoint::new(0, 0),
             width: HwpUnit::new(1000).unwrap(),
             height: HwpUnit::new(500).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         };
@@ -2108,8 +2113,7 @@ mod tests {
             segment_types: vec![],
             width: HwpUnit::new(1000).unwrap(),
             height: HwpUnit::new(500).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         };
@@ -2137,8 +2141,7 @@ mod tests {
             segment_types: vec![CurveSegmentType::Curve, CurveSegmentType::Line],
             width: HwpUnit::new(3000).unwrap(),
             height: HwpUnit::new(1500).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         };
@@ -2173,8 +2176,7 @@ mod tests {
             segment_types: vec![],
             width: HwpUnit::new(500).unwrap(),
             height: HwpUnit::new(500).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         };
@@ -2203,8 +2205,7 @@ mod tests {
             segment_types: vec![CurveSegmentType::Line], // only 1 type for 3 segments
             width: HwpUnit::new(4000).unwrap(),
             height: HwpUnit::new(500).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         };
@@ -2231,8 +2232,7 @@ mod tests {
             segment_types: vec![],
             width: HwpUnit::new(1000).unwrap(),
             height: HwpUnit::new(500).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         };
@@ -2255,8 +2255,7 @@ mod tests {
             segment_types: vec![],
             width: HwpUnit::new(1000).unwrap(),
             height: HwpUnit::new(500).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         };
@@ -2283,8 +2282,7 @@ mod tests {
             connect_type: "BENT".to_string(),
             width: HwpUnit::new(3000).unwrap(),
             height: HwpUnit::new(2000).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         };
@@ -2317,8 +2315,7 @@ mod tests {
             connect_type: "STRAIGHT".to_string(),
             width: HwpUnit::new(1000).unwrap(),
             height: HwpUnit::new(1000).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         };
@@ -2347,8 +2344,7 @@ mod tests {
             connect_type: "CURVED".to_string(),
             width: HwpUnit::new(1000).unwrap(),
             height: HwpUnit::new(1000).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         };
@@ -2374,8 +2370,7 @@ mod tests {
             connect_type: "STRAIGHT".to_string(),
             width: HwpUnit::new(1000).unwrap(),
             height: HwpUnit::new(1000).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         };
@@ -2404,8 +2399,7 @@ mod tests {
             connect_type: "STRAIGHT".to_string(),
             width: HwpUnit::new(14000).unwrap(),
             height: HwpUnit::new(0).unwrap(),
-            horz_offset: 17657,
-            vert_offset: 14057,
+            placement: Some(floating_placement(17657, 14057)),
             caption: None,
             style: None,
         };
@@ -2436,8 +2430,7 @@ mod tests {
             connect_type: "STRAIGHT".to_string(),
             width: HwpUnit::new(1000).unwrap(),
             height: HwpUnit::new(1000).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         };
@@ -2466,8 +2459,7 @@ mod tests {
             connect_type: "STRAIGHT".to_string(),
             width: HwpUnit::new(2000).unwrap(),
             height: HwpUnit::new(1000).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         };
@@ -2495,8 +2487,7 @@ mod tests {
             connect_type: "STRAIGHT".to_string(),
             width: HwpUnit::new(1000).unwrap(),
             height: HwpUnit::new(100).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         };
@@ -2521,8 +2512,7 @@ mod tests {
             connect_type: "STRAIGHT".to_string(),
             width: HwpUnit::new(1000).unwrap(),
             height: HwpUnit::new(100).unwrap(),
-            horz_offset: 50,
-            vert_offset: 0,
+            placement: Some(floating_placement(50, 0)),
             caption: None,
             style: None,
         };
@@ -2547,8 +2537,7 @@ mod tests {
             end: ShapePoint::new(100, 0),
             width: HwpUnit::new(1000).unwrap(),
             height: HwpUnit::new(100).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         };
@@ -2566,8 +2555,7 @@ mod tests {
             end: ShapePoint::new(100, 0),
             width: HwpUnit::new(1000).unwrap(),
             height: HwpUnit::new(100).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         };
@@ -2585,8 +2573,7 @@ mod tests {
             end: ShapePoint::new(500, 200),
             width: HwpUnit::new(5000).unwrap(),
             height: HwpUnit::new(2000).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         };
@@ -2607,8 +2594,7 @@ mod tests {
             end: ShapePoint::new(100, 0),
             width: HwpUnit::new(1000).unwrap(),
             height: HwpUnit::new(100).unwrap(),
-            horz_offset: 50,
-            vert_offset: 60,
+            placement: Some(floating_placement(50, 60)),
             caption: None,
             style: None,
         };
@@ -2635,8 +2621,7 @@ mod tests {
             axis2: ShapePoint::new(0, 50),
             width: HwpUnit::new(200).unwrap(),
             height: HwpUnit::new(100).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![],
             caption: None,
             style: None,
@@ -2662,8 +2647,7 @@ mod tests {
             axis2: ShapePoint::new(0, 50),
             width: HwpUnit::new(200).unwrap(),
             height: HwpUnit::new(100).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![],
             caption: None,
             style: None,
@@ -2689,8 +2673,7 @@ mod tests {
             axis2: ShapePoint::new(0, 50),
             width: HwpUnit::new(200).unwrap(),
             height: HwpUnit::new(100).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![],
             caption: None,
             style: None,
@@ -2717,8 +2700,7 @@ mod tests {
             axis2: ShapePoint::new(0, 50),
             width: HwpUnit::new(200).unwrap(),
             height: HwpUnit::new(100).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![Paragraph::new(ParaShapeIndex::new(0))],
             caption: None,
             style: None,
@@ -2790,8 +2772,7 @@ mod tests {
             vertices: vertices.clone(),
             width: HwpUnit::new(2000).unwrap(),
             height: HwpUnit::new(1000).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![],
             caption: None,
             style: None,
@@ -2824,8 +2805,7 @@ mod tests {
             ],
             width: HwpUnit::new(1000).unwrap(),
             height: HwpUnit::new(1000).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![],
             caption: None,
             style: None,
@@ -2854,8 +2834,7 @@ mod tests {
             ],
             width: HwpUnit::new(1000).unwrap(),
             height: HwpUnit::new(1000).unwrap(),
-            horz_offset: 50,
-            vert_offset: 60,
+            placement: Some(floating_placement(50, 60)),
             paragraphs: vec![],
             caption: None,
             style: None,
@@ -2914,8 +2893,7 @@ mod tests {
             paragraphs: vec![],
             width: HwpUnit::new(1000).unwrap(),
             height: HwpUnit::new(1000).unwrap(),
-            horz_offset: 50,
-            vert_offset: 60,
+            placement: Some(floating_placement(50, 60)),
             caption: None,
             style: None,
             text_vertical_align: VerticalAlign::Top,
@@ -2936,5 +2914,49 @@ mod tests {
         assert_eq!(pos.allow_overlap, 1);
         assert_eq!(pos.vert_rel_to, "PAPER");
         assert_eq!(pos.horz_rel_to, "PAPER");
+    }
+
+    #[test]
+    fn constructor_shapes_emit_legacy_inline_placement() {
+        // The generation path (constructor → `placement: None`) must reproduce
+        // the historical inline `<hp:pos>` unchanged: treatAsChar=1, PARA/PARA,
+        // zero offset, numberingType NONE, textWrap TOP_AND_BOTTOM. This is the
+        // hard gate that the placement refactor left the None path byte-stable.
+        let mut hl = empty_hyperlinks();
+        let rect = Control::rect(HwpUnit::new(8000).unwrap(), HwpUnit::new(4000).unwrap()).unwrap();
+        let hx =
+            encode_rect_to_hx(&rect, 0, &mut hl, EncodeOptions::default(), &mut EncodeSink::new(0))
+                .unwrap();
+        assert_eq!(hx.numbering_type, "NONE");
+        assert_eq!(hx.text_wrap, "TOP_AND_BOTTOM");
+        assert_eq!(hx.text_flow, "BOTH_SIDES");
+        let pos = hx.pos.expect("pos");
+        assert_eq!(pos.treat_as_char, 1);
+        assert_eq!(pos.allow_overlap, 0);
+        assert_eq!(pos.flow_with_text, 0);
+        assert_eq!(pos.vert_rel_to, "PARA");
+        assert_eq!(pos.horz_rel_to, "PARA");
+        assert_eq!(pos.vert_align, "TOP");
+        assert_eq!(pos.horz_align, "LEFT");
+        assert_eq!(pos.horz_offset, 0);
+        assert_eq!(pos.vert_offset, 0);
+
+        // A constructor text box (also `placement: None`) emits the same block.
+        let tb =
+            Control::text_box(vec![], HwpUnit::new(8000).unwrap(), HwpUnit::new(4000).unwrap());
+        let hx = encode_textbox_to_rect(
+            &tb,
+            0,
+            &mut hl,
+            EncodeOptions::default(),
+            &mut EncodeSink::new(0),
+        )
+        .unwrap();
+        assert_eq!(hx.numbering_type, "NONE");
+        assert_eq!(hx.text_wrap, "TOP_AND_BOTTOM");
+        let pos = hx.pos.expect("pos");
+        assert_eq!(pos.treat_as_char, 1);
+        assert_eq!(pos.vert_rel_to, "PARA");
+        assert_eq!(pos.horz_offset, 0);
     }
 }

@@ -109,7 +109,7 @@ pub(super) fn build_picture(
     })
 }
 
-pub(super) fn build_picture_position(placement: Option<&ImagePlacement>) -> HxTablePos {
+pub(super) fn build_picture_position(placement: Option<&ObjectPlacement>) -> HxTablePos {
     match placement {
         Some(value) => HxTablePos {
             treat_as_char: u32::from(value.treat_as_char),

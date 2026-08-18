@@ -1244,7 +1244,8 @@ mod tests {
 
     #[test]
     fn anchored_and_placement_none_images_stay_rejected() {
-        use hwpforge_core::image::{Image, ImageFormat, ImagePlacement};
+        use hwpforge_core::image::{Image, ImageFormat};
+        use hwpforge_core::placement::ObjectPlacement;
         // treat_as_char=false (앵커형).
         let mut anchored = Image::new(
             "BinData/anch.png",
@@ -1252,7 +1253,7 @@ mod tests {
             hwpforge_foundation::HwpUnit::new(2000).unwrap(),
             ImageFormat::Png,
         );
-        let mut placement = ImagePlacement::legacy_inline_defaults();
+        let mut placement = ObjectPlacement::legacy_inline_defaults();
         placement.treat_as_char = false;
         anchored.placement = Some(placement);
         // placement=None (보수 거부).
@@ -1286,14 +1287,15 @@ mod tests {
     // ── W2b c1: build_inline_image_line_atoms 귀속 edge (§4 D2) ─────────
 
     fn inline_img(key: &str) -> Run {
-        use hwpforge_core::image::{Image, ImageFormat, ImagePlacement};
+        use hwpforge_core::image::{Image, ImageFormat};
+        use hwpforge_core::placement::ObjectPlacement;
         let mut image = Image::new(
             key,
             hwpforge_foundation::HwpUnit::new(2000).unwrap(),
             hwpforge_foundation::HwpUnit::new(2000).unwrap(),
             ImageFormat::Png,
         );
-        image.placement = Some(ImagePlacement::legacy_inline_defaults());
+        image.placement = Some(ObjectPlacement::legacy_inline_defaults());
         Run { content: RunContent::Image(image), char_shape_id: CharShapeIndex::new(0) }
     }
 
@@ -1396,14 +1398,15 @@ mod tests {
     }
 
     fn img_with_height(key: &str, h: i32) -> Run {
-        use hwpforge_core::image::{Image, ImageFormat, ImagePlacement};
+        use hwpforge_core::image::{Image, ImageFormat};
+        use hwpforge_core::placement::ObjectPlacement;
         let mut image = Image::new(
             key,
             hwpforge_foundation::HwpUnit::new(2000).unwrap(),
             hwpforge_foundation::HwpUnit::new(h).unwrap(),
             ImageFormat::Png,
         );
-        image.placement = Some(ImagePlacement::legacy_inline_defaults());
+        image.placement = Some(ObjectPlacement::legacy_inline_defaults());
         Run { content: RunContent::Image(image), char_shape_id: CharShapeIndex::new(0) }
     }
 
@@ -2456,14 +2459,15 @@ mod tests {
 
     #[test]
     fn cell_anchored_image_stays_rejected() {
-        use hwpforge_core::image::{Image, ImageFormat, ImagePlacement};
+        use hwpforge_core::image::{Image, ImageFormat};
+        use hwpforge_core::placement::ObjectPlacement;
         let mut anchored = Image::new(
             "BinData/anch.png",
             hwpforge_foundation::HwpUnit::new(2000).unwrap(),
             hwpforge_foundation::HwpUnit::new(2000).unwrap(),
             ImageFormat::Png,
         );
-        let mut placement = ImagePlacement::legacy_inline_defaults();
+        let mut placement = ObjectPlacement::legacy_inline_defaults();
         placement.treat_as_char = false;
         anchored.placement = Some(placement);
         let mut cell_para = Paragraph::with_runs(

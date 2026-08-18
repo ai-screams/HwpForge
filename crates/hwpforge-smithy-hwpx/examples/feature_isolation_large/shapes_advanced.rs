@@ -1,6 +1,7 @@
 use hwpforge_core::control::{ArrowStyle, Control, Fill, LineStyle, ShapePoint, ShapeStyle};
 use hwpforge_core::document::Document;
 use hwpforge_core::paragraph::Paragraph;
+use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextWrap};
 use hwpforge_core::run::Run;
 use hwpforge_core::section::{HeaderFooter, PageNumber, Section};
 use hwpforge_core::PageSettings;
@@ -100,8 +101,7 @@ fn append_arc_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
                 end2: ShapePoint::new(0, 4000),
                 width: sizes.width_8k,
                 height: sizes.height_8k,
-                horz_offset: 0,
-                vert_offset: 0,
+                placement: None,
                 caption: None,
                 style: Some(ShapeStyle {
                     line_color: Some(line_color),
@@ -142,8 +142,7 @@ fn append_curve_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
             ],
             width: sizes.width_8k,
             height: sizes.height_8k,
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: Some(ShapeStyle {
                 line_color: Some(Color::from_rgb(128, 0, 128)),
@@ -174,8 +173,7 @@ fn append_curve_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
             ],
             width: sizes.width_8k,
             height: sizes.height_8k,
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: Some(ShapeStyle {
                 line_color: Some(Color::from_rgb(0, 150, 150)),
@@ -202,8 +200,7 @@ fn append_curve_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
             ],
             width: sizes.width_8k,
             height: sizes.height_6k,
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: Some(ShapeStyle {
                 line_color: Some(Color::from_rgb(230, 120, 0)),
@@ -224,8 +221,7 @@ fn append_curve_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
             connect_type: "STRAIGHT".to_string(),
             width: sizes.width_10k,
             height: HwpUnit::new(4000).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: Some(ShapeStyle {
                 line_color: Some(Color::from_rgb(0, 100, 200)),
@@ -273,8 +269,7 @@ fn append_line_style_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
                 end: ShapePoint::new(14000, 500),
                 width: sizes.width_14k,
                 height: sizes.height_1k,
-                horz_offset: 0,
-                vert_offset: 0,
+                placement: None,
                 caption: None,
                 style: Some(ShapeStyle {
                     line_color: Some(Color::from_rgb(red, green, blue)),
@@ -295,8 +290,7 @@ fn append_line_style_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
             end: ShapePoint::new(14000, 500),
             width: sizes.width_14k,
             height: sizes.height_1k,
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: Some(ShapeStyle {
                 line_color: Some(Color::from_rgb(50, 50, 50)),
@@ -336,8 +330,7 @@ fn append_arrow_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
                 end: ShapePoint::new(14000, 500),
                 width: sizes.width_14k,
                 height: sizes.height_1k,
-                horz_offset: 0,
-                vert_offset: 0,
+                placement: None,
                 caption: None,
                 style: Some(ShapeStyle {
                     line_color: Some(Color::from_rgb(red, green, blue)),
@@ -363,8 +356,7 @@ fn append_arrow_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
             end: ShapePoint::new(14000, 500),
             width: sizes.width_14k,
             height: sizes.height_1k,
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: Some(ShapeStyle {
                 line_color: Some(Color::from_rgb(0, 0, 0)),
@@ -392,8 +384,7 @@ fn append_arrow_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
             end: ShapePoint::new(14000, 500),
             width: sizes.width_14k,
             height: sizes.height_1k,
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: Some(ShapeStyle {
                 line_color: Some(Color::from_rgb(0, 80, 160)),
@@ -444,8 +435,7 @@ fn append_rotation_examples(paras: &mut Vec<Paragraph>) {
                 vertices: rotation_vertices.clone(),
                 width: HwpUnit::new(6000).unwrap(),
                 height: HwpUnit::new(8000).unwrap(),
-                horz_offset: 0,
-                vert_offset: 0,
+                placement: None,
                 paragraphs: vec![empty()],
                 caption: None,
                 style: Some(ShapeStyle {
@@ -500,8 +490,16 @@ fn append_flip_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
                 vertices: flip_vertices.clone(),
                 width: sizes.width_8k,
                 height: sizes.width_8k,
-                horz_offset: 1,
-                vert_offset: 0,
+                placement: Some(ObjectPlacement {
+                    treat_as_char: false,
+                    allow_overlap: true,
+                    text_wrap: ObjectTextWrap::InFrontOfText,
+                    vert_rel_to: ObjectRelativeTo::Paper,
+                    horz_rel_to: ObjectRelativeTo::Paper,
+                    horz_offset: HwpUnit::new(1).unwrap(),
+                    vert_offset: HwpUnit::ZERO,
+                    ..ObjectPlacement::legacy_inline_defaults()
+                }),
                 paragraphs: vec![empty()],
                 caption: None,
                 style: Some(ShapeStyle {
@@ -540,8 +538,7 @@ fn append_gradient_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
             axis2: ShapePoint::new(4000, 8000),
             width: sizes.width_8k,
             height: sizes.height_8k,
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![p("좌→우", CS_WHITE, PS_CENTER)],
             caption: None,
             style: Some(ShapeStyle {
@@ -568,8 +565,7 @@ fn append_gradient_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
             axis2: ShapePoint::new(4000, 8000),
             width: sizes.width_8k,
             height: sizes.height_8k,
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![p("위→아래", CS_BOLD, PS_CENTER)],
             caption: None,
             style: Some(ShapeStyle {
@@ -600,8 +596,7 @@ fn append_gradient_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
             ],
             width: sizes.width_8k,
             height: sizes.height_8k,
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![p("대각선 45°", CS_WHITE, PS_RIGHT)],
             caption: None,
             style: Some(ShapeStyle {
@@ -628,8 +623,7 @@ fn append_gradient_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
             axis2: ShapePoint::new(4000, 8000),
             width: sizes.width_8k,
             height: sizes.height_8k,
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![p("방사형", CS_BOLD, PS_CENTER)],
             caption: None,
             style: Some(ShapeStyle {
@@ -660,8 +654,7 @@ fn append_gradient_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
             ],
             width: sizes.width_8k,
             height: sizes.height_8k,
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![p("사각형", CS_WHITE, PS_LEFT)],
             caption: None,
             style: Some(ShapeStyle {
@@ -688,8 +681,7 @@ fn append_gradient_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
             axis2: ShapePoint::new(4000, 8000),
             width: sizes.width_8k,
             height: sizes.height_8k,
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![p("원뿔형", CS_WHITE, PS_CENTER)],
             caption: None,
             style: Some(ShapeStyle {
@@ -743,8 +735,7 @@ fn append_pattern_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
                 ],
                 width: sizes.width_8k,
                 height: sizes.height_8k,
-                horz_offset: 0,
-                vert_offset: 0,
+                placement: None,
                 paragraphs: vec![empty()],
                 caption: None,
                 style: Some(ShapeStyle {
@@ -780,8 +771,7 @@ fn append_composite_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
             axis2: ShapePoint::new(4000, 8000),
             width: sizes.width_8k,
             height: sizes.height_8k,
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![p("Solid Fill", CS_NORMAL, PS_CENTER)],
             caption: None,
             style: Some(ShapeStyle {
@@ -803,8 +793,7 @@ fn append_composite_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
             axis2: ShapePoint::new(5000, 6000),
             width: sizes.width_10k,
             height: sizes.height_6k,
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![p("Gradient+Rotation", CS_NORMAL, PS_CENTER)],
             caption: None,
             style: Some(ShapeStyle {
@@ -837,8 +826,16 @@ fn append_composite_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
             ],
             width: sizes.width_8k,
             height: sizes.height_8k,
-            horz_offset: 100,
-            vert_offset: 100,
+            placement: Some(ObjectPlacement {
+                treat_as_char: false,
+                allow_overlap: true,
+                text_wrap: ObjectTextWrap::InFrontOfText,
+                vert_rel_to: ObjectRelativeTo::Paper,
+                horz_rel_to: ObjectRelativeTo::Paper,
+                horz_offset: HwpUnit::new(100).unwrap(),
+                vert_offset: HwpUnit::new(100).unwrap(),
+                ..ObjectPlacement::legacy_inline_defaults()
+            }),
             paragraphs: vec![p("Pattern+Flip", CS_NORMAL, PS_CENTER)],
             caption: None,
             style: Some(ShapeStyle {
@@ -863,8 +860,7 @@ fn append_composite_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
             end: ShapePoint::new(14000, 500),
             width: sizes.width_14k,
             height: sizes.height_1k,
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: Some(ShapeStyle {
                 line_color: Some(Color::from_rgb(0, 100, 0)),
@@ -910,8 +906,7 @@ fn append_composite_examples(paras: &mut Vec<Paragraph>, sizes: ShapeSizes) {
             ],
             width: sizes.width_10k,
             height: HwpUnit::new(9500).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![empty()],
             caption: None,
             style: Some(ShapeStyle {

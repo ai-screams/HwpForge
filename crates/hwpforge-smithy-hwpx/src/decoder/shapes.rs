@@ -5,6 +5,7 @@
 //! into Core `Run` values with the appropriate `Control` variant.
 
 use hwpforge_core::control::{Control, ShapeStyle};
+use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
 use hwpforge_core::run::{Run, RunContent};
 use hwpforge_foundation::{
     ArcType, CharShapeIndex, Color, CurveSegmentType, DropCapStyle, Flip, HwpUnit, PatternType,
@@ -14,10 +15,60 @@ use hwpforge_foundation::{
 use crate::error::HwpxResult;
 use crate::schema::section::{
     HxConnectLine, HxCurve, HxEllipse, HxFillBrush, HxLine, HxLineShape, HxPolygon, HxRect,
-    HxTextArt,
+    HxTablePos, HxTextArt,
 };
 
 use super::section::{convert_hx_caption, decode_sublist_paragraphs, parse_hex_color, DecodeCtx};
+
+/// Builds an [`ObjectPlacement`] from a shape's `<hp:pos>` block plus the shape
+/// element's `textWrap`/`textFlow` attributes, collapsing a plain-inline
+/// placement back to `None`.
+///
+/// A shape whose placement equals [`ObjectPlacement::legacy_inline_defaults`]
+/// carries no positioning information; returning `None` lets the encoder
+/// re-emit it through the untouched legacy inline path (the same `Option`
+/// collapse `decode_shape_style_full` applies to `ShapeStyle`). Empty
+/// `textWrap`/`textFlow`/`relTo` attributes — which 한컴 omits for the default —
+/// map to the inline defaults so the collapse fires for native inline shapes.
+fn decode_object_placement(
+    pos: Option<&HxTablePos>,
+    text_wrap: &str,
+    text_flow: &str,
+) -> Option<ObjectPlacement> {
+    let pos = pos?;
+    let placement = ObjectPlacement {
+        text_wrap: if text_wrap.is_empty() {
+            ObjectTextWrap::TopAndBottom
+        } else {
+            ObjectTextWrap::from_hwpx(text_wrap)
+        },
+        text_flow: if text_flow.is_empty() {
+            ObjectTextFlow::BothSides
+        } else {
+            ObjectTextFlow::from_hwpx(text_flow)
+        },
+        treat_as_char: pos.treat_as_char != 0,
+        flow_with_text: pos.flow_with_text != 0,
+        allow_overlap: pos.allow_overlap != 0,
+        vert_rel_to: if pos.vert_rel_to.is_empty() {
+            ObjectRelativeTo::Para
+        } else {
+            ObjectRelativeTo::from_hwpx(&pos.vert_rel_to)
+        },
+        horz_rel_to: if pos.horz_rel_to.is_empty() {
+            ObjectRelativeTo::Para
+        } else {
+            ObjectRelativeTo::from_hwpx(&pos.horz_rel_to)
+        },
+        vert_offset: HwpUnit::new(pos.vert_offset).unwrap_or(HwpUnit::ZERO),
+        horz_offset: HwpUnit::new(pos.horz_offset).unwrap_or(HwpUnit::ZERO),
+    };
+    if placement == ObjectPlacement::legacy_inline_defaults() {
+        None
+    } else {
+        Some(placement)
+    }
+}
 
 /// Parses an `<hp:subList vertAlign="...">` token into a Core [`VerticalAlign`].
 ///
@@ -51,9 +102,7 @@ pub(crate) fn decode_textbox(
         })
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
-    // Extract offsets from pos (treatAsChar=1 means inline, offsets=0)
-    let (horz_offset, vert_offset) =
-        rect.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
+    let placement = decode_object_placement(rect.pos.as_ref(), &rect.text_wrap, &rect.text_flow);
 
     let caption = rect.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
@@ -76,14 +125,13 @@ pub(crate) fn decode_textbox(
                 paragraphs,
                 width,
                 height,
-                horz_offset,
-                vert_offset,
+                placement,
                 caption,
                 style,
                 text_vertical_align,
             }
         }
-        None => Control::Rect { width, height, horz_offset, vert_offset, caption, style },
+        None => Control::Rect { width, height, placement, caption, style },
     };
 
     Ok(Some(Run { content: RunContent::Control(Box::new(control)), char_shape_id }))
@@ -122,8 +170,7 @@ pub(crate) fn decode_line(
 
     let caption = line.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
-    let (horz_offset, vert_offset) =
-        line.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
+    let placement = decode_object_placement(line.pos.as_ref(), &line.text_wrap, &line.text_flow);
 
     Ok(Run {
         content: RunContent::Control(Box::new(Control::Line {
@@ -131,8 +178,7 @@ pub(crate) fn decode_line(
             end,
             width,
             height,
-            horz_offset,
-            vert_offset,
+            placement,
             caption,
             style: decode_shape_style_full(
                 &line.line_shape,
@@ -195,8 +241,8 @@ pub(crate) fn decode_ellipse(
     let caption =
         ellipse.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
-    let (horz_offset, vert_offset) =
-        ellipse.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
+    let placement =
+        decode_object_placement(ellipse.pos.as_ref(), &ellipse.text_wrap, &ellipse.text_flow);
 
     Ok(Run {
         content: RunContent::Control(Box::new(Control::Ellipse {
@@ -205,8 +251,7 @@ pub(crate) fn decode_ellipse(
             axis2,
             width,
             height,
-            horz_offset,
-            vert_offset,
+            placement,
             paragraphs,
             caption,
             style: decode_shape_style_full(
@@ -258,16 +303,15 @@ pub(crate) fn decode_polygon(
     let caption =
         polygon.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
-    let (horz_offset, vert_offset) =
-        polygon.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
+    let placement =
+        decode_object_placement(polygon.pos.as_ref(), &polygon.text_wrap, &polygon.text_flow);
 
     Ok(Run {
         content: RunContent::Control(Box::new(Control::Polygon {
             vertices,
             width,
             height,
-            horz_offset,
-            vert_offset,
+            placement,
             paragraphs,
             caption,
             style: decode_shape_style_full(
@@ -456,8 +500,8 @@ pub(crate) fn decode_arc(
         })
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
-    let (horz_offset, vert_offset) =
-        ellipse.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
+    let placement =
+        decode_object_placement(ellipse.pos.as_ref(), &ellipse.text_wrap, &ellipse.text_flow);
     let caption =
         ellipse.caption.as_ref().map(|c| convert_hx_caption(c, _depth, ctx)).transpose()?;
 
@@ -473,8 +517,7 @@ pub(crate) fn decode_arc(
             end2,
             width,
             height,
-            horz_offset,
-            vert_offset,
+            placement,
             caption,
             style: decode_shape_style_full(
                 &ellipse.line_shape,
@@ -529,8 +572,7 @@ pub(crate) fn decode_curve(
         })
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
-    let (horz_offset, vert_offset) =
-        curve.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
+    let placement = decode_object_placement(curve.pos.as_ref(), &curve.text_wrap, &curve.text_flow);
     let caption = curve.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
     Ok(Run {
@@ -539,8 +581,7 @@ pub(crate) fn decode_curve(
             segment_types,
             width,
             height,
-            horz_offset,
-            vert_offset,
+            placement,
             caption,
             style: decode_shape_style_full(
                 &curve.line_shape,
@@ -572,7 +613,17 @@ pub(crate) fn decode_textart(
             )
         })
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
-    let (horz_offset, vert_offset) = text_art.offset.as_ref().map(|o| (o.x, o.y)).unwrap_or((0, 0));
+    // TextArt anchors via `<hp:offset>` (not `<hp:pos>`); the encoder reads
+    // only the placement offsets back. A zero offset collapses to `None`.
+    let (ox, oy) = text_art.offset.as_ref().map(|o| (o.x, o.y)).unwrap_or((0, 0));
+    let placement = {
+        let candidate = ObjectPlacement {
+            horz_offset: HwpUnit::new(ox).unwrap_or(HwpUnit::ZERO),
+            vert_offset: HwpUnit::new(oy).unwrap_or(HwpUnit::ZERO),
+            ..ObjectPlacement::legacy_inline_defaults()
+        };
+        (candidate != ObjectPlacement::legacy_inline_defaults()).then_some(candidate)
+    };
     let inst_id =
         text_art.instid.parse::<u64>().ok().filter(|v| *v != 0).map(hwpforge_core::ObjectId::new);
     let pr = text_art.textart_pr.clone().unwrap_or_default();
@@ -592,8 +643,7 @@ pub(crate) fn decode_textart(
             char_spacing,
             width,
             height,
-            horz_offset,
-            vert_offset,
+            placement,
             fill_color: None,
             inst_id,
         })),
@@ -640,8 +690,7 @@ pub(crate) fn decode_connect_line(
         })
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 
-    let (horz_offset, vert_offset) =
-        cl.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
+    let placement = decode_object_placement(cl.pos.as_ref(), &cl.text_wrap, &cl.text_flow);
     let caption = cl.caption.as_ref().map(|c| convert_hx_caption(c, depth, ctx)).transpose()?;
 
     Ok(Run {
@@ -652,8 +701,7 @@ pub(crate) fn decode_connect_line(
             connect_type: cl.connect_type.clone(),
             width,
             height,
-            horz_offset,
-            vert_offset,
+            placement,
             caption,
             style: decode_shape_style_full(
                 &cl.line_shape,
@@ -762,8 +810,9 @@ pub(crate) fn decode_container(
             )
         })
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
-    let (horz_offset, vert_offset) =
-        container.pos.as_ref().map(|p| (p.horz_offset, p.vert_offset)).unwrap_or((0, 0));
+    // `<hp:container>` carries no `textWrap`/`textFlow` attributes, so those
+    // fall back to the inline defaults; anchoring comes from `<hp:pos>`.
+    let placement = decode_object_placement(container.pos.as_ref(), "", "");
     let inst_id =
         container.instid.parse::<u64>().ok().filter(|&v| v != 0).map(hwpforge_core::ObjectId::new);
 
@@ -772,8 +821,7 @@ pub(crate) fn decode_container(
             children,
             width,
             height,
-            horz_offset,
-            vert_offset,
+            placement,
             inst_id,
         })),
         char_shape_id,
@@ -1386,13 +1434,14 @@ mod tests {
         ellipse.pos = Some(make_pos(100, 200));
         let cs = CharShapeIndex::new(0);
         let run = decode_arc(&ellipse, cs, 0, &mut DecodeCtx::new(0)).unwrap();
-        if let Control::Arc { width, height, horz_offset, vert_offset, .. } =
+        if let Control::Arc { width, height, placement, .. } =
             run.content.as_control().unwrap().clone()
         {
             assert_eq!(width.as_i32(), 5000);
             assert_eq!(height.as_i32(), 3000);
-            assert_eq!(horz_offset, 100);
-            assert_eq!(vert_offset, 200);
+            let placement = placement.expect("anchored pos carries placement");
+            assert_eq!(placement.horz_offset.as_i32(), 100);
+            assert_eq!(placement.vert_offset.as_i32(), 200);
         } else {
             panic!("expected Control::Arc");
         }
@@ -1508,13 +1557,14 @@ mod tests {
         let cs = CharShapeIndex::new(1);
         let run = decode_curve(&curve, cs, 0, &mut DecodeCtx::new(0)).unwrap();
         assert_eq!(run.char_shape_id, cs);
-        if let Control::Curve { width, height, horz_offset, vert_offset, .. } =
+        if let Control::Curve { width, height, placement, .. } =
             run.content.as_control().unwrap().clone()
         {
             assert_eq!(width.as_i32(), 8000);
             assert_eq!(height.as_i32(), 4000);
-            assert_eq!(horz_offset, 50);
-            assert_eq!(vert_offset, 75);
+            let placement = placement.expect("anchored pos carries placement");
+            assert_eq!(placement.horz_offset.as_i32(), 50);
+            assert_eq!(placement.vert_offset.as_i32(), 75);
         } else {
             panic!("expected Control::Curve");
         }
@@ -1630,13 +1680,14 @@ mod tests {
         let cs = CharShapeIndex::new(3);
         let run = decode_connect_line(&cl, cs, 0, &mut DecodeCtx::new(0)).unwrap();
         assert_eq!(run.char_shape_id, cs);
-        if let Control::ConnectLine { width, height, horz_offset, vert_offset, .. } =
+        if let Control::ConnectLine { width, height, placement, .. } =
             run.content.as_control().unwrap().clone()
         {
             assert_eq!(width.as_i32(), 10000);
             assert_eq!(height.as_i32(), 5000);
-            assert_eq!(horz_offset, 150);
-            assert_eq!(vert_offset, 250);
+            let placement = placement.expect("anchored pos carries placement");
+            assert_eq!(placement.horz_offset.as_i32(), 150);
+            assert_eq!(placement.vert_offset.as_i32(), 250);
         } else {
             panic!("expected Control::ConnectLine");
         }
@@ -1738,11 +1789,10 @@ mod tests {
             .unwrap()
             .expect("pure rect must decode to a Run");
         match run.content.as_control().unwrap().clone() {
-            Control::Rect { width, height, horz_offset, vert_offset, .. } => {
+            Control::Rect { width, height, placement, .. } => {
                 assert_eq!(width, hwpforge_foundation::HwpUnit::new(8000).unwrap());
                 assert_eq!(height, hwpforge_foundation::HwpUnit::new(4000).unwrap());
-                assert_eq!(horz_offset, 0);
-                assert_eq!(vert_offset, 0);
+                assert!(placement.is_none());
             }
             other => panic!("expected Control::Rect, got {other:?}"),
         }
@@ -1826,8 +1876,7 @@ mod tests {
             axis2: ShapePoint::new(100, 100),
             width: HwpUnit::new(200).unwrap(),
             height: HwpUnit::new(100).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![Paragraph::new(ParaShapeIndex::new(0))],
             caption: None,
             style: None,
@@ -1858,5 +1907,143 @@ mod tests {
             }
             other => panic!("expected Control::Ellipse, got {other:?}"),
         }
+    }
+
+    // ── ObjectPlacement decode (W4 w1) ───────────────────────────────
+
+    #[test]
+    fn decode_object_placement_collapses_inline_default_to_none() {
+        // The plain inline default (treatAsChar=1, offsets 0, PARA) carries no
+        // placement info, so it collapses to None and the encoder re-emits the
+        // legacy inline `<hp:pos>`. An absent pos and empty (omitted) wrap/flow
+        // attributes collapse the same way. (`make_pos` defaults treatAsChar=0,
+        // so it is set explicitly here.)
+        let mut inline = make_pos(0, 0);
+        inline.treat_as_char = 1;
+        assert!(decode_object_placement(Some(&inline), "TOP_AND_BOTTOM", "BOTH_SIDES").is_none());
+        assert!(decode_object_placement(Some(&inline), "", "").is_none());
+        assert!(decode_object_placement(None, "SQUARE", "LEFT_ONLY").is_none());
+        // treatAsChar=0 at the origin is anchored, not inline → carries placement.
+        assert!(decode_object_placement(Some(&make_pos(0, 0)), "", "").is_some());
+    }
+
+    #[test]
+    fn decode_object_placement_maps_floating_pos_fields() {
+        let mut pos = make_pos(1_200, 3_400);
+        pos.treat_as_char = 0;
+        pos.flow_with_text = 1;
+        pos.allow_overlap = 1;
+        pos.vert_rel_to = "PAPER".to_string();
+        pos.horz_rel_to = "PAGE".to_string();
+        let placement =
+            decode_object_placement(Some(&pos), "SQUARE", "RIGHT_ONLY").expect("floating");
+        assert_eq!(placement.text_wrap, ObjectTextWrap::Square);
+        assert_eq!(placement.text_flow, ObjectTextFlow::RightOnly);
+        assert!(!placement.treat_as_char);
+        assert!(placement.flow_with_text);
+        assert!(placement.allow_overlap);
+        assert_eq!(placement.vert_rel_to, ObjectRelativeTo::Paper);
+        assert_eq!(placement.horz_rel_to, ObjectRelativeTo::Page);
+        assert_eq!(placement.horz_offset.as_i32(), 1_200);
+        assert_eq!(placement.vert_offset.as_i32(), 3_400);
+    }
+
+    #[test]
+    fn floating_rect_placement_round_trips_decode_then_encode() {
+        // decode → Core → encode: a floating rect keeps its full pos across the
+        // round-trip (the `<hp:pos>` silent-loss this slice removes).
+        let mut rect = default_rect(10_000, 6_000);
+        rect.text_wrap = "SQUARE".to_string();
+        rect.text_flow = "RIGHT_ONLY".to_string();
+        let mut pos = make_pos(1_000, 2_000);
+        pos.treat_as_char = 0;
+        pos.allow_overlap = 1;
+        pos.vert_rel_to = "PAPER".to_string();
+        pos.horz_rel_to = "PAPER".to_string();
+        rect.pos = Some(pos);
+
+        let control = decode_textbox(&rect, CharShapeIndex::new(0), 0, &mut DecodeCtx::new(0))
+            .unwrap()
+            .expect("rect decodes to a run")
+            .content
+            .as_control()
+            .unwrap()
+            .clone();
+        let placement = match &control {
+            Control::Rect { placement, .. } => placement.clone().expect("floating placement"),
+            other => panic!("expected Control::Rect, got {other:?}"),
+        };
+        assert!(!placement.treat_as_char);
+        assert_eq!(placement.horz_offset.as_i32(), 1_000);
+
+        let mut hyperlinks = Vec::new();
+        let encoded = crate::encoder::shapes::encode_rect_to_hx(
+            &control,
+            0,
+            &mut hyperlinks,
+            crate::encoder::EncodeOptions::default(),
+            &mut crate::encoder::section::EncodeSink::new(0),
+        )
+        .unwrap();
+        assert_eq!(encoded.numbering_type, "PICTURE");
+        assert_eq!(encoded.text_wrap, "SQUARE");
+        assert_eq!(encoded.text_flow, "RIGHT_ONLY");
+        let out_pos = encoded.pos.expect("encoded pos");
+        assert_eq!(out_pos.treat_as_char, 0);
+        assert_eq!(out_pos.allow_overlap, 1);
+        assert_eq!(out_pos.vert_rel_to, "PAPER");
+        assert_eq!(out_pos.horz_offset, 1_000);
+        assert_eq!(out_pos.vert_offset, 2_000);
+    }
+
+    #[test]
+    fn floating_textbox_placement_round_trips_decode_then_encode() {
+        use crate::schema::section::HxSubList;
+        use crate::schema::shapes::HxDrawText;
+        // Same as the rect case, but a `<hp:drawText>` child makes it a TextBox.
+        let mut rect = default_rect(12_000, 8_000);
+        rect.text_wrap = "SQUARE".to_string();
+        let mut pos = make_pos(500, 700);
+        pos.treat_as_char = 0;
+        pos.vert_rel_to = "PAPER".to_string();
+        pos.horz_rel_to = "PAPER".to_string();
+        rect.pos = Some(pos);
+        rect.draw_text = Some(HxDrawText {
+            last_width: 0,
+            name: String::new(),
+            editable: 0,
+            sub_list: HxSubList { paragraphs: vec![], ..Default::default() },
+            text_margin: None,
+        });
+
+        let control = decode_textbox(&rect, CharShapeIndex::new(0), 0, &mut DecodeCtx::new(0))
+            .unwrap()
+            .expect("textbox decodes to a run")
+            .content
+            .as_control()
+            .unwrap()
+            .clone();
+        match &control {
+            Control::TextBox { placement, .. } => {
+                let placement = placement.clone().expect("floating placement");
+                assert!(!placement.treat_as_char);
+                assert_eq!(placement.horz_offset.as_i32(), 500);
+            }
+            other => panic!("expected Control::TextBox, got {other:?}"),
+        }
+
+        let mut hyperlinks = Vec::new();
+        let encoded = crate::encoder::shapes::encode_textbox_to_rect(
+            &control,
+            0,
+            &mut hyperlinks,
+            crate::encoder::EncodeOptions::default(),
+            &mut crate::encoder::section::EncodeSink::new(0),
+        )
+        .unwrap();
+        assert_eq!(encoded.numbering_type, "PICTURE");
+        let out_pos = encoded.pos.expect("encoded pos");
+        assert_eq!(out_pos.horz_offset, 500);
+        assert_eq!(out_pos.vert_offset, 700);
     }
 }
