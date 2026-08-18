@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.15.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.15.0...hwpforge-smithy-hwpx-v0.15.1) - 2026-08-18
+
+### Added
+
+- *(smithy-pdf)* W2a 렌더러 이미지 배관 — Paint Image·스니퍼·preflight·브리지 결선
+
+
+### Fixed
+
+- *(smithy-hwpx)* pic 표시 크기를 sz-우선 선택으로 — 재저장 curSz=(0,0) 관례 반영
+
+
 ## [0.15.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.14.0...hwpforge-smithy-hwpx-v0.15.0) - 2026-08-14
 
 ### Added
