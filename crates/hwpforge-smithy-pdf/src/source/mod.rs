@@ -2403,6 +2403,28 @@ mod tests {
     }
 
     #[test]
+    fn cell_extent_uses_max_bottom_not_last_line() {
+        // W3 w3 (§7 r2 fold-in): 앞줄 큰 이미지 bottom(5000)이 마지막
+        // 줄 bottom(2600)보다 큰 캐시 — extent 는 max-bottom 이어야
+        // 행높이 누락이 없다 (정상 캐시는 last==max 라 동치).
+        let mut cell_para = Paragraph::with_runs(
+            vec![Run::text("가나다 라마", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        cell_para.layout_cache = Some(LayoutCache::new(vec![
+            tall_seg(0, 0, 5000),
+            seg(4, 1600), // bottom 2600 < 5000
+        ]));
+        let cell = TableCell::new(vec![cell_para], HwpUnit::from_pt(100.0).unwrap());
+        let doc = doc_of(vec![para_with_cache("x", vec![seg(0, 0)])]);
+        let input = PdfInput { document: &doc, styles: &NoopStyles };
+        let extent = crate::source::table::cell_content_extent(&input, &cell, "t", 0)
+            .expect("extent")
+            .expect("some");
+        assert_eq!(extent, 5000, "max-bottom (구현 전엔 last=2600)");
+    }
+
+    #[test]
     fn cell_inline_image_paragraph_replays_with_image_atom() {
         let mut cell_para = Paragraph::with_runs(
             vec![Run::text("셀 ", CharShapeIndex::new(0)), inline_img("BinData/c.png")],

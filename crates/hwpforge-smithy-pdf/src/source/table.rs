@@ -387,7 +387,7 @@ fn effective_margin(table: &Table, cell: &TableCell) -> TableMargin {
 
 /// 셀 콘텐츠 세로 범위 = 전 문단 max(마지막 lineseg.v + vertsize).
 /// (다문단 셀 v 는 셀 내 연속 누적 — blank-HPC 56셀 실측.)
-fn cell_content_extent(
+pub(crate) fn cell_content_extent(
     input: &PdfInput<'_>,
     cell: &TableCell,
     location: &str,
@@ -398,10 +398,24 @@ fn cell_content_extent(
         let Some(cache) = para.layout_cache.as_ref().filter(|c| !c.is_empty()) else {
             return Ok(None);
         };
-        let last = cache.lines.last().ok_or_else(|| PdfError::InternalInvariant {
-            detail: format!("{location}: non-empty cache lost its last line"),
-        })?;
-        let mut e = last.vertpos + last.vertsize;
+        // W3 w3 (§7 r2 fold-in): 마지막 줄 단독이 아니라 **전 줄의
+        // checked max-bottom** — 앞줄의 큰 이미지 bottom 이 마지막 줄을
+        // 넘는 stale/overlap 캐시에서 행높이 누락을 막는다 (정상 캐시는
+        // last==max — 기존 fixture 정적 대조 전수 동치 확인).
+        let mut e = cache
+            .lines
+            .iter()
+            .map(|seg| {
+                seg.vertpos.checked_add(seg.vertsize).ok_or_else(|| PdfError::InvalidCache {
+                    detail: format!("{location}: cell line bottom overflows i32"),
+                })
+            })
+            .collect::<PdfResult<Vec<_>>>()?
+            .into_iter()
+            .max()
+            .ok_or_else(|| PdfError::InternalInvariant {
+                detail: format!("{location}: non-empty cache has no lines"),
+            })?;
         // 중첩 표 host 문단: lineseg 는 한 줄 높이만 알므로 표 흐름 소비
         // (host.v + om.top + Σ행높이 + om.bottom, R5)를 별도 가산한다.
         for run in &para.runs {
@@ -886,6 +900,35 @@ fn emit_anchor_clipped(
                 let line_top = m.top.as_i32() + valign_shift + seg.vertpos;
                 if line_top < clip_from || line_top >= clip_to {
                     continue; // 절단 창 밖 줄 — 줄은 상단 기준으로 한 조각에 배정
+                }
+                // W3 w3 (§7 r2 fold-in): **내부 절단선**(from>0·to<full_h —
+                // 셀 외곽은 절단선 아님)이 이미지 줄을 strict 관통하면
+                // 잘림/넘침 (이미지에 clip IR 없음 — W5/W6) → fail-closed.
+                // boundary touch 는 허용.
+                if line_atoms_override.is_some() {
+                    let line_bottom = line_top.checked_add(seg.vertsize).ok_or_else(|| {
+                        PdfError::InvalidCache {
+                            detail: format!("{para_loc}/l{li}: line bottom overflows i32"),
+                        }
+                    })?;
+                    let has_image = matches!(
+                        &line_atoms_override,
+                        Some(per) if per[li]
+                            .iter()
+                            .any(|a| matches!(a, crate::source::LineAtom::Image(_)))
+                    );
+                    let crosses_from =
+                        clip_from > 0 && line_top < clip_from && clip_from < line_bottom;
+                    let crosses_to =
+                        clip_to < full_h && line_top < clip_to && clip_to < line_bottom;
+                    if has_image && (crosses_from || crosses_to) {
+                        return Err(PdfError::InvalidCache {
+                            detail: format!(
+                                "{para_loc}/l{li}: split boundary intersects an image \
+                                 line — image clipping is not renderable before W5"
+                            ),
+                        });
+                    }
                 }
                 let start = seg.textpos as usize;
                 let end = cache.lines.get(li + 1).map_or(utf16.len(), |n| n.textpos as usize);

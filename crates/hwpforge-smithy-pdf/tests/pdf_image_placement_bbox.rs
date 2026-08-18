@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use hwpforge_core::document::{Document, Validated};
 use hwpforge_core::layout::LineSeg;
 use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxStyleLookup};
-use hwpforge_smithy_pdf::{render_document, PdfInput, PdfOptions};
+use hwpforge_smithy_pdf::{render_document, PdfInput, PdfOptions, PdfWarning};
 
 const HANCOM_TTF_DIR: &str =
     "/Applications/Hancom Office HWP.app/Contents/Resources/Hnc/Shared/TTF";
@@ -415,5 +415,69 @@ fn generate_w2b_visual_gate_artifacts() {
         let hancom_dst = out_dir.join(format!("{base}-hancom-w2b.pdf"));
         std::fs::copy(&hancom_src, &hancom_dst).expect("copy hancom pdf for side-by-side");
         println!("wrote {path:?} + {hancom_dst:?}");
+    }
+}
+
+/// W3 w3 (§7 r2 fold-in): 셀 fixture e2e + 게이트2 #12 3검산 승격 —
+/// saved table height·next anchor·page count 를 자동 assertion 으로.
+#[test]
+fn cell_fixtures_render_with_three_way_verification() {
+    let Some(options) = font_options() else {
+        eprintln!("skip: Hancom font bundle unavailable");
+        return;
+    };
+    for (base, expected_images) in
+        [("cell_inline_treat_as_char", 3usize), ("cell_rowspan_image", 1)]
+    {
+        verify_oracle_and_load(base);
+        let hancom_pdf = std::fs::read(fixture_path(&format!("{base}.pdf"))).expect("hancom pdf");
+        let hancom_pages = support::extract_pages(&hancom_pdf);
+        for (path_name, output, doc) in render_both_paths(base, &options) {
+            // 셀 fixture 는 한컴 재저장이 문단에 양쪽정렬을 부여해
+            // AlignmentApproximated(기지 근사 — W6 §5f)가 나온다 — 이미지
+            // 게이트와 무관하므로 그것만 허용, 그 외 경고는 0.
+            let unexpected: Vec<_> = output
+                .warnings
+                .iter()
+                .filter(|w| {
+                    !matches!(
+                        w,
+                        PdfWarning::AlignmentApproximated { .. }
+                            // rowspan 병합 셀의 deficit 배분 — 기지 표
+                            // 메커니즘 (rules-rowspan-deficit 실측).
+                            | PdfWarning::TableDeficitDistributed { .. }
+                    )
+                })
+                .collect();
+            assert!(unexpected.is_empty(), "{base}/{path_name}: 경고 — {unexpected:?}");
+            let pages = support::extract_pages(&output.bytes);
+            // 검산 ①: page count == 한컴 PDF (셀 이미지가 extent 에
+            // 기여해도 쪽수가 흔들리지 않아야 한다).
+            assert_eq!(pages.len(), hancom_pages.len(), "{base}/{path_name}: page count vs 한컴");
+            // 셀 이미지가 전부 실제 렌더에 도달.
+            let total: usize = pages.iter().map(|p| p.images.len()).sum();
+            assert_eq!(total, expected_images, "{base}/{path_name}: 이미지 개수");
+            // 검산 ②·③ (cell_inline 만 — r2 정적 실측값의 승격):
+            // saved table height + 표 뒤 문단 anchor.
+            if base == "cell_inline_treat_as_char" {
+                let section = &doc.sections()[0];
+                let table = section
+                    .paragraphs
+                    .iter()
+                    .flat_map(|p| p.runs.iter())
+                    .find_map(|r| r.content.as_table())
+                    .expect("table");
+                let saved =
+                    table.layout_cache.as_ref().and_then(|c| c.saved_sz_height).map(|h| h.as_i32());
+                assert_eq!(saved, Some(22964), "{base}/{path_name}: saved table height");
+                let next_anchor = section
+                    .paragraphs
+                    .iter()
+                    .filter(|p| p.text_content().contains("표 뒤"))
+                    .find_map(|p| p.layout_cache.as_ref().map(|c| c.lines[0].vertpos))
+                    .expect("표 뒤 문단 anchor");
+                assert_eq!(next_anchor, 25130, "{base}/{path_name}: next anchor v");
+            }
+        }
     }
 }
