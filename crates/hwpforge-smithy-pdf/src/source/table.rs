@@ -387,7 +387,7 @@ fn effective_margin(table: &Table, cell: &TableCell) -> TableMargin {
 
 /// 셀 콘텐츠 세로 범위 = 전 문단 max(마지막 lineseg.v + vertsize).
 /// (다문단 셀 v 는 셀 내 연속 누적 — blank-HPC 56셀 실측.)
-fn cell_content_extent(
+pub(crate) fn cell_content_extent(
     input: &PdfInput<'_>,
     cell: &TableCell,
     location: &str,
@@ -398,10 +398,24 @@ fn cell_content_extent(
         let Some(cache) = para.layout_cache.as_ref().filter(|c| !c.is_empty()) else {
             return Ok(None);
         };
-        let last = cache.lines.last().ok_or_else(|| PdfError::InternalInvariant {
-            detail: format!("{location}: non-empty cache lost its last line"),
-        })?;
-        let mut e = last.vertpos + last.vertsize;
+        // W3 w3 (§7 r2 fold-in): 마지막 줄 단독이 아니라 **전 줄의
+        // checked max-bottom** — 앞줄의 큰 이미지 bottom 이 마지막 줄을
+        // 넘는 stale/overlap 캐시에서 행높이 누락을 막는다 (정상 캐시는
+        // last==max — 기존 fixture 정적 대조 전수 동치 확인).
+        let mut e = cache
+            .lines
+            .iter()
+            .map(|seg| {
+                seg.vertpos.checked_add(seg.vertsize).ok_or_else(|| PdfError::InvalidCache {
+                    detail: format!("{location}: cell line bottom overflows i32"),
+                })
+            })
+            .collect::<PdfResult<Vec<_>>>()?
+            .into_iter()
+            .max()
+            .ok_or_else(|| PdfError::InternalInvariant {
+                detail: format!("{location}: non-empty cache has no lines"),
+            })?;
         // 중첩 표 host 문단: lineseg 는 한 줄 높이만 알므로 표 흐름 소비
         // (host.v + om.top + Σ행높이 + om.bottom, R5)를 별도 가산한다.
         for run in &para.runs {
@@ -422,11 +436,18 @@ fn scan_cell_contents(table: &Table, location: &str) -> PdfResult<()> {
     for row in &table.rows {
         for cell in &row.cells {
             for para in &cell.paragraphs {
+                // W3 (§7 v2 D1): 3상태 — 글자취급 인라인 이미지는 통과,
+                // `[Table+Image]` 혼합은 명시 거부 (hosted-table replay 가
+                // 문단을 통째로 skip 해 이미지가 무음 폐기되므로 — r2 #2).
                 let mut has_table = false;
                 let mut has_text = false;
+                let mut has_inline_image = false;
                 for run in &para.runs {
                     match &run.content {
                         hwpforge_core::run::RunContent::Table(_) => has_table = true,
+                        content if crate::source::is_admitted_inline_image(content) => {
+                            has_inline_image = true;
+                        }
                         content => match content.plain_text() {
                             Some(t) => has_text |= !t.trim().is_empty(),
                             None => {
@@ -441,6 +462,12 @@ fn scan_cell_contents(table: &Table, location: &str) -> PdfResult<()> {
                 if has_table && has_text {
                     return Err(PdfError::UnsupportedContent {
                         kind: "table mixed with visible text",
+                        location: location.to_string(),
+                    });
+                }
+                if has_table && has_inline_image {
+                    return Err(PdfError::UnsupportedContent {
+                        kind: "table mixed with inline image",
                         location: location.to_string(),
                     });
                 }
@@ -827,15 +854,45 @@ fn emit_anchor_clipped(
             }
             let text = para.text_content();
             let utf16: Vec<u16> = text.encode_utf16().collect();
-            if utf16.is_empty() {
+            let para_loc = format!("{cell_loc}/p{pi}");
+            // W3 (§7 v2): admitted 이미지 보유 문단은 **빈 텍스트 continue
+            // 앞에서** helper 경로로 분기 (image-only 셀 도달 — r2 #4).
+            let has_admitted_images =
+                para.runs.iter().any(|r| crate::source::is_admitted_inline_image(&r.content));
+            let line_atoms_override = if has_admitted_images {
+                let atoms = crate::source::build_inline_image_line_atoms(para, cache, &para_loc)?;
+                for (li, line) in atoms.iter().enumerate() {
+                    for atom in line {
+                        if let crate::source::LineAtom::Image(img) = atom {
+                            let seg = &cache.lines[li];
+                            if !crate::source::line_matches_image_height(seg, img.height) {
+                                return Err(PdfError::InvalidCache {
+                                    detail: format!(
+                                        "{para_loc}/l{li}: image height {} != line vertsize {} / \
+                                         textheight {} — unmeasured height profile",
+                                        img.height, seg.vertsize, seg.textheight
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                }
+                Some(atoms)
+            } else {
+                None
+            };
+            if utf16.is_empty() && line_atoms_override.is_none() {
                 // 빈 문단 — 기하(extent)만 행높이에 기여, 그릴 글리프 없음.
                 // 한컴 native 는 텍스트 삭제 후 stale textpos 가 남은 캐시를
                 // 쓰기도 한다 (blank-HPC r10c4 실측: <t/> + textpos=49).
                 continue;
             }
-            let para_loc = format!("{cell_loc}/p{pi}");
             validate_textpos(cache, utf16.len(), &para_loc)?;
-            let run_spans = run_utf16_spans(para, warnings, &para_loc);
+            let run_spans = if line_atoms_override.is_none() {
+                run_utf16_spans(para, warnings, &para_loc)
+            } else {
+                Vec::new()
+            };
             let alignment =
                 input.styles.para_alignment(para.para_shape_id).unwrap_or(Alignment::Left);
             let line_count = cache.lines.len();
@@ -844,15 +901,52 @@ fn emit_anchor_clipped(
                 if line_top < clip_from || line_top >= clip_to {
                     continue; // 절단 창 밖 줄 — 줄은 상단 기준으로 한 조각에 배정
                 }
+                // W3 w3 (§7 r2 fold-in): **내부 절단선**(from>0·to<full_h —
+                // 셀 외곽은 절단선 아님)이 이미지 줄을 strict 관통하면
+                // 잘림/넘침 (이미지에 clip IR 없음 — W5/W6) → fail-closed.
+                // boundary touch 는 허용.
+                if line_atoms_override.is_some() {
+                    let line_bottom = line_top.checked_add(seg.vertsize).ok_or_else(|| {
+                        PdfError::InvalidCache {
+                            detail: format!("{para_loc}/l{li}: line bottom overflows i32"),
+                        }
+                    })?;
+                    let has_image = matches!(
+                        &line_atoms_override,
+                        Some(per) if per[li]
+                            .iter()
+                            .any(|a| matches!(a, crate::source::LineAtom::Image(_)))
+                    );
+                    // 상단 관통은 검사 불필요: 줄은 top 기준으로 한 조각에
+                    // 배정되므로(위 continue) 이 조각에 온 줄은 항상
+                    // line_top >= clip_from — 위 절단선을 걸치는 줄은 직전
+                    // 조각의 crosses_to 가 잡는다 (리뷰 L2).
+                    let crosses_to =
+                        clip_to < full_h && line_top < clip_to && clip_to < line_bottom;
+                    if has_image && crosses_to {
+                        return Err(PdfError::InvalidCache {
+                            detail: format!(
+                                "{para_loc}/l{li}: split boundary intersects an image \
+                                 line — image clipping is not renderable before W5"
+                            ),
+                        });
+                    }
+                }
                 let start = seg.textpos as usize;
                 let end = cache.lines.get(li + 1).map_or(utf16.len(), |n| n.textpos as usize);
-                let runs = slice_line_runs(&utf16, &run_spans, start, end);
+                let line_atoms = match &line_atoms_override {
+                    Some(per_line) => per_line[li].clone(),
+                    None => slice_line_runs(&utf16, &run_spans, start, end)
+                        .into_iter()
+                        .map(crate::source::LineAtom::Text)
+                        .collect(),
+                };
                 let page = pages.last_mut().ok_or_else(|| PdfError::InternalInvariant {
                     detail: format!("{para_loc}: no current page in table emit"),
                 })?;
                 page.lines.push(LaidLine {
                     location: format!("{para_loc}/l{li}"),
-                    atoms: runs.into_iter().map(crate::source::LineAtom::Text).collect(),
+                    atoms: line_atoms,
                     top_y: content_y + seg.vertpos,
                     baseline_y: content_y + seg.vertpos + seg.baseline,
                     line_box: LineBox { horzpos: content_x + seg.horzpos, horzsize: seg.horzsize },

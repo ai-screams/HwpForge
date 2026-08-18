@@ -134,8 +134,12 @@ impl WireTextMap {
 
     /// Core 좌표 → wire 좌표.
     ///
-    /// core 0 은 canonicalization 으로 항상 wire 0 (실측 불변식).
-    /// 그 외 축약점(preimage ≥ 2)은 `AmbiguousPreimage`.
+    /// **축약점(영-core span 경계, preimage ≥ 2)은 earliest preimage**
+    /// (marker 시작) — W3 실측 개정 (에픽 문서 §7): native 셀 fixture
+    /// 2건의 raw tp 가 모두 marker 시작이고, 첫 lineseg tp=0 전수
+    /// 불변식(13,598건)도 동일 규약이다 (W1b 의 Err 는 미측정 시점의
+    /// fail-closed — 측정이 규약을 확정함). `AmbiguousPreimage` 는
+    /// 다중-core span 내부(현 span 종류엔 없음 — 방어)에만 남는다.
     pub(crate) fn to_wire(&self, core: u32) -> Result<u32, CacheMapError> {
         if core > self.core_end {
             return Err(CacheMapError::OutOfRange { pos: core, end: self.core_end });
@@ -152,11 +156,11 @@ impl WireTextMap {
                 return Ok(wire_cursor + (core - core_cursor));
             }
             if core == gap_core_end {
-                if span.core_len == 0 {
-                    // 영-core span 경계: span 앞/뒤가 같은 core 로 축약.
-                    return Err(CacheMapError::AmbiguousPreimage { core });
-                }
-                // core 기여가 있는 span (tab 등): span 시작 = 유일 preimage.
+                // 영-core span 경계 = 축약점: earliest preimage(= span
+                // 시작 = 직전 1:1 구간의 그 core 위치)로 확정 — 실측
+                // 규약 (한컴은 경계 lineseg 를 marker 시작에 쓴다).
+                // core 기여 span (tab 등)도 span 시작이 유일 preimage 라
+                // 같은 식이 성립한다.
                 return Ok(span.wire_start);
             }
             let span_core_end = gap_core_end + span.core_len;
@@ -372,14 +376,17 @@ mod tests {
     }
 
     #[test]
-    fn mid_paragraph_collapse_point_is_ambiguous() {
+    fn mid_paragraph_collapse_point_resolves_to_earliest_preimage() {
         let map = marker_ledger_p1();
-        // core 17 의 preimage = {17, 25, 33} (연속 영-core span) → Err.
-        assert_eq!(map.to_wire(17), Err(CacheMapError::AmbiguousPreimage { core: 17 }));
+        // core 17 의 preimage = {17, 25, 33} (연속 영-core span) —
+        // earliest(marker 시작) 확정 (W3 실측 개정).
+        assert_eq!(map.to_wire(17), Ok(17));
+        // 왕복: earliest 로 되돌려도 core 는 동일.
+        assert_eq!(map.to_core(17), Ok(17));
     }
 
     #[test]
-    fn trailing_zero_core_span_makes_core_end_ambiguous() {
+    fn trailing_zero_core_span_core_end_resolves_to_earliest() {
         // 텍스트 4 + marker(8,0) 로 끝나는 문단: core_end=4 의 preimage =
         // {4, 12} → Err.
         let mut b = WireMapBuilder::new();
@@ -387,7 +394,8 @@ mod tests {
         b.push_span(8, 0);
         let map = b.finish().expect("valid");
         assert_eq!(map.core_end(), 4);
-        assert_eq!(map.to_wire(4), Err(CacheMapError::AmbiguousPreimage { core: 4 }));
+        // trailing 영-core span 의 core_end 도 earliest (marker 앞).
+        assert_eq!(map.to_wire(4), Ok(4));
         assert_eq!(map.to_wire(3), Ok(3));
     }
 
@@ -428,7 +436,8 @@ mod tests {
         // (1,0) span 은 strict interior 가 없음 — 경계만 존재.
         assert_eq!(map.to_core(1), Ok(1));
         assert_eq!(map.to_core(2), Ok(1));
-        assert_eq!(map.to_wire(1), Err(CacheMapError::AmbiguousPreimage { core: 1 }));
+        // 축약점 {1,2} — earliest preimage (W3 실측 개정).
+        assert_eq!(map.to_wire(1), Ok(1));
     }
 
     // ── 빌더 불변식 ─────────────────────────────────────────────

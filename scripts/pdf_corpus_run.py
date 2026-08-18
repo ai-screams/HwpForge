@@ -125,6 +125,14 @@ def run_one(bin_path: Path, doc: Path, out_pdf: Path, timeout: float, extra: lis
         "duration_s": round(duration, 3),
         "peak_rss_highwater": peak_rss,
     }
+    if outcome == "fail_closed":
+        # W3 w4: 최상위 code(PDF_RENDER_FAILED 등)는 거칠어서 admission 거부의
+        # 세부(variant·kind)를 못 가른다 — CLI 의 cause DTO 를 별도 집계.
+        cause = (last_json(stderr).get("cause") or last_json(stdout).get("cause")) or {}
+        if cause.get("code"):
+            record["cause_code"] = cause["code"]
+            if cause.get("kind"):
+                record["cause_kind"] = cause["kind"]
     if outcome == "ok":
         try:
             payload = json.loads(stdout.strip().splitlines()[-1])
@@ -182,11 +190,15 @@ def main() -> int:
 
     outcomes: dict[str, int] = {}
     error_codes: dict[str, int] = {}
+    cause_codes: dict[str, int] = {}
     warning_codes: dict[str, int] = {}
     for r in records:
         outcomes[r["outcome"]] = outcomes.get(r["outcome"], 0) + 1
         if r["error_code"]:
             error_codes[r["error_code"]] = error_codes.get(r["error_code"], 0) + 1
+        if r.get("cause_code"):
+            key = r["cause_code"] + (f":{r['cause_kind']}" if r.get("cause_kind") else "")
+            cause_codes[key] = cause_codes.get(key, 0) + 1
         for k, v in r.get("warning_codes", {}).items():
             warning_codes[k] = warning_codes.get(k, 0) + v
 
@@ -204,6 +216,7 @@ def main() -> int:
         "gate_violations": outcomes.get("crash", 0) + outcomes.get("timeout", 0),
         "success_rate": round(outcomes.get("ok", 0) / len(records), 4) if records else 0.0,
         "error_codes": dict(sorted(error_codes.items(), key=lambda kv: -kv[1])),
+        "cause_codes": dict(sorted(cause_codes.items(), key=lambda kv: -kv[1])),
         "warning_codes": dict(sorted(warning_codes.items(), key=lambda kv: -kv[1])),
     }
     summary_path = args.out / "summary.json"
