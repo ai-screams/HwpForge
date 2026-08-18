@@ -340,12 +340,6 @@ fn collect_page_events(
     (restarts, hide_marks)
 }
 
-/// 렌더 replay(`collect_page_events`)가 실제 소비하는 0폭 marker 인지.
-///
-/// W1b (§1g v5 변경 1): allowlist 는 **실제 consumer 와 동일한 match** —
-/// `NewNumber` 는 `Page` kind 만 replay 가 소비한다 (각주/그림 번호
-/// 재시작 등 다른 kind 는 소비자가 없으므로 허용하면 무음 드롭).
-/// admission(문단 전체 검사)과 `NonTextRunDropped` 경고에서 제외된다.
 /// 줄이 이미지 지배 profile(삼중 일치: vertsize==textheight==이미지
 /// 높이)인지 — 경계 귀속 판별과 H4 후검사가 **동일 predicate 를 공유**
 /// 한다 (§7 r2 fold-in — 순환 아님: 독립 입력의 방어적 중복).
@@ -363,6 +357,12 @@ pub(crate) fn is_admitted_inline_image(content: &RunContent) -> bool {
         if img.placement.as_ref().is_some_and(|p| p.treat_as_char))
 }
 
+/// 렌더 replay(`collect_page_events`)가 실제 소비하는 0폭 marker 인지.
+///
+/// W1b (§1g v5 변경 1): allowlist 는 **실제 consumer 와 동일한 match** —
+/// `NewNumber` 는 `Page` kind 만 replay 가 소비한다 (각주/그림 번호
+/// 재시작 등 다른 kind 는 소비자가 없으므로 허용하면 무음 드롭).
+/// admission(문단 전체 검사)과 `NonTextRunDropped` 경고에서 제외된다.
 fn is_replay_consumed_marker(content: &RunContent) -> bool {
     matches!(content, RunContent::Control(c)
     if matches!(

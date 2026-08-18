@@ -917,11 +917,13 @@ fn emit_anchor_clipped(
                             .iter()
                             .any(|a| matches!(a, crate::source::LineAtom::Image(_)))
                     );
-                    let crosses_from =
-                        clip_from > 0 && line_top < clip_from && clip_from < line_bottom;
+                    // 상단 관통은 검사 불필요: 줄은 top 기준으로 한 조각에
+                    // 배정되므로(위 continue) 이 조각에 온 줄은 항상
+                    // line_top >= clip_from — 위 절단선을 걸치는 줄은 직전
+                    // 조각의 crosses_to 가 잡는다 (리뷰 L2).
                     let crosses_to =
                         clip_to < full_h && line_top < clip_to && clip_to < line_bottom;
-                    if has_image && (crosses_from || crosses_to) {
+                    if has_image && crosses_to {
                         return Err(PdfError::InvalidCache {
                             detail: format!(
                                 "{para_loc}/l{li}: split boundary intersects an image \
