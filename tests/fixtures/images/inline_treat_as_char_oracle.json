@@ -33,6 +33,44 @@
           "format": "jpeg"
         }
       ]
+    },
+    "cell_inline_treat_as_char": {
+      "hwp_sha256": "755f3b860fbe30bbfac53592270866a8a5e2267ab516b7103abcdc1120ee86ad",
+      "hwpx_sha256": "e36744bbc15d19e904e98bf8298e7048e5c8aca153421de317075d45e85c0949",
+      "pdf_sha256": "3ee30cb29ee7a40221828271114477d15f9067cd6783fbba332f18623f19b639",
+      "images": [
+        {
+          "page": 1,
+          "ordinal": 0,
+          "format": "png",
+          "context": "cell r0c0 mid-text"
+        },
+        {
+          "page": 1,
+          "ordinal": 1,
+          "format": "png",
+          "context": "cell r0c1 image-only"
+        },
+        {
+          "page": 1,
+          "ordinal": 2,
+          "format": "png",
+          "context": "cell r1c1 boundary tall"
+        }
+      ]
+    },
+    "cell_rowspan_image": {
+      "hwp_sha256": "646646a38965bf482471444ca8df31f17989c2b5e28f313c01f165690cd7324d",
+      "hwpx_sha256": "c613f60205a1ed52bff1c8d2c54eebb5fe7660eb5d25320f8fbda619aac1cce2",
+      "pdf_sha256": "0668107c7f928d5ebf486cdacfdef3e1004fd0cd5a0865c3cd6c984c7c626961",
+      "images": [
+        {
+          "page": 1,
+          "ordinal": 0,
+          "format": "png",
+          "context": "merged rowspan2 boundary"
+        }
+      ]
     }
   }
 }

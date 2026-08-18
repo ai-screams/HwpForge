@@ -422,11 +422,18 @@ fn scan_cell_contents(table: &Table, location: &str) -> PdfResult<()> {
     for row in &table.rows {
         for cell in &row.cells {
             for para in &cell.paragraphs {
+                // W3 (§7 v2 D1): 3상태 — 글자취급 인라인 이미지는 통과,
+                // `[Table+Image]` 혼합은 명시 거부 (hosted-table replay 가
+                // 문단을 통째로 skip 해 이미지가 무음 폐기되므로 — r2 #2).
                 let mut has_table = false;
                 let mut has_text = false;
+                let mut has_inline_image = false;
                 for run in &para.runs {
                     match &run.content {
                         hwpforge_core::run::RunContent::Table(_) => has_table = true,
+                        content if crate::source::is_admitted_inline_image(content) => {
+                            has_inline_image = true;
+                        }
                         content => match content.plain_text() {
                             Some(t) => has_text |= !t.trim().is_empty(),
                             None => {
@@ -441,6 +448,12 @@ fn scan_cell_contents(table: &Table, location: &str) -> PdfResult<()> {
                 if has_table && has_text {
                     return Err(PdfError::UnsupportedContent {
                         kind: "table mixed with visible text",
+                        location: location.to_string(),
+                    });
+                }
+                if has_table && has_inline_image {
+                    return Err(PdfError::UnsupportedContent {
+                        kind: "table mixed with inline image",
                         location: location.to_string(),
                     });
                 }
@@ -827,15 +840,45 @@ fn emit_anchor_clipped(
             }
             let text = para.text_content();
             let utf16: Vec<u16> = text.encode_utf16().collect();
-            if utf16.is_empty() {
+            let para_loc = format!("{cell_loc}/p{pi}");
+            // W3 (§7 v2): admitted 이미지 보유 문단은 **빈 텍스트 continue
+            // 앞에서** helper 경로로 분기 (image-only 셀 도달 — r2 #4).
+            let has_admitted_images =
+                para.runs.iter().any(|r| crate::source::is_admitted_inline_image(&r.content));
+            let line_atoms_override = if has_admitted_images {
+                let atoms = crate::source::build_inline_image_line_atoms(para, cache, &para_loc)?;
+                for (li, line) in atoms.iter().enumerate() {
+                    for atom in line {
+                        if let crate::source::LineAtom::Image(img) = atom {
+                            let seg = &cache.lines[li];
+                            if !crate::source::line_matches_image_height(seg, img.height) {
+                                return Err(PdfError::InvalidCache {
+                                    detail: format!(
+                                        "{para_loc}/l{li}: image height {} != line vertsize {} / \
+                                         textheight {} — unmeasured height profile",
+                                        img.height, seg.vertsize, seg.textheight
+                                    ),
+                                });
+                            }
+                        }
+                    }
+                }
+                Some(atoms)
+            } else {
+                None
+            };
+            if utf16.is_empty() && line_atoms_override.is_none() {
                 // 빈 문단 — 기하(extent)만 행높이에 기여, 그릴 글리프 없음.
                 // 한컴 native 는 텍스트 삭제 후 stale textpos 가 남은 캐시를
                 // 쓰기도 한다 (blank-HPC r10c4 실측: <t/> + textpos=49).
                 continue;
             }
-            let para_loc = format!("{cell_loc}/p{pi}");
             validate_textpos(cache, utf16.len(), &para_loc)?;
-            let run_spans = run_utf16_spans(para, warnings, &para_loc);
+            let run_spans = if line_atoms_override.is_none() {
+                run_utf16_spans(para, warnings, &para_loc)
+            } else {
+                Vec::new()
+            };
             let alignment =
                 input.styles.para_alignment(para.para_shape_id).unwrap_or(Alignment::Left);
             let line_count = cache.lines.len();
@@ -846,13 +889,19 @@ fn emit_anchor_clipped(
                 }
                 let start = seg.textpos as usize;
                 let end = cache.lines.get(li + 1).map_or(utf16.len(), |n| n.textpos as usize);
-                let runs = slice_line_runs(&utf16, &run_spans, start, end);
+                let line_atoms = match &line_atoms_override {
+                    Some(per_line) => per_line[li].clone(),
+                    None => slice_line_runs(&utf16, &run_spans, start, end)
+                        .into_iter()
+                        .map(crate::source::LineAtom::Text)
+                        .collect(),
+                };
                 let page = pages.last_mut().ok_or_else(|| PdfError::InternalInvariant {
                     detail: format!("{para_loc}: no current page in table emit"),
                 })?;
                 page.lines.push(LaidLine {
                     location: format!("{para_loc}/l{li}"),
-                    atoms: runs.into_iter().map(crate::source::LineAtom::Text).collect(),
+                    atoms: line_atoms,
                     top_y: content_y + seg.vertpos,
                     baseline_y: content_y + seg.vertpos + seg.baseline,
                     line_box: LineBox { horzpos: content_x + seg.horzpos, horzsize: seg.horzsize },

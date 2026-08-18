@@ -346,9 +346,19 @@ fn collect_page_events(
 /// `NewNumber` 는 `Page` kind 만 replay 가 소비한다 (각주/그림 번호
 /// 재시작 등 다른 kind 는 소비자가 없으므로 허용하면 무음 드롭).
 /// admission(문단 전체 검사)과 `NonTextRunDropped` 경고에서 제외된다.
+/// 줄이 이미지 지배 profile(삼중 일치: vertsize==textheight==이미지
+/// 높이)인지 — 경계 귀속 판별과 H4 후검사가 **동일 predicate 를 공유**
+/// 한다 (§7 r2 fold-in — 순환 아님: 독립 입력의 방어적 중복).
+pub(crate) fn line_matches_image_height(
+    seg: &hwpforge_core::layout::LineSeg,
+    image_height: i32,
+) -> bool {
+    seg.vertsize == image_height && seg.textheight == image_height
+}
+
 /// body admission 이 허용하는 글자취급(treat_as_char) 인라인 이미지인지
 /// (W2b §4 D1 — placement None/false 는 보수 거부, 앵커형 렌더 = W5).
-fn is_admitted_inline_image(content: &RunContent) -> bool {
+pub(crate) fn is_admitted_inline_image(content: &RunContent) -> bool {
     matches!(content, RunContent::Image(img)
         if img.placement.as_ref().is_some_and(|p| p.treat_as_char))
 }
@@ -839,12 +849,12 @@ fn replay_section(
         // (어느 값도 임의 우선하지 않는다).
         let has_admitted_images = para.runs.iter().any(|r| is_admitted_inline_image(&r.content));
         let line_atoms_override = if has_admitted_images {
-            let atoms = build_body_line_atoms(para, cache, &location)?;
+            let atoms = build_inline_image_line_atoms(para, cache, &location)?;
             for (li, line) in atoms.iter().enumerate() {
                 for atom in line {
                     if let LineAtom::Image(img) = atom {
                         let seg = &cache.lines[li];
-                        if img.height != seg.vertsize || img.height != seg.textheight {
+                        if !line_matches_image_height(seg, img.height) {
                             return Err(PdfError::InvalidCache {
                                 detail: format!(
                                     "{location}/l{li}: image height {} != line vertsize {} / \
@@ -997,7 +1007,7 @@ fn validate_textpos(
 ///
 /// 전제: `cache.lines` 의 textpos 는 단조 (본문 경로는 `validate_textpos`
 /// 가 선행 보장).
-fn build_body_line_atoms(
+pub(crate) fn build_inline_image_line_atoms(
     para: &hwpforge_core::paragraph::Paragraph,
     cache: &hwpforge_core::layout::LayoutCache,
     location: &str,
@@ -1029,20 +1039,61 @@ fn build_body_line_atoms(
     };
 
     let mut cursor = 0usize;
+    // 동일 boundary offset 다중 이미지의 판별 결과 추적 — 서로 다른
+    // 후보 줄로 갈리면 줄 순회 방출이 문서 순서를 뒤집는다 (r2 High#1).
+    let mut boundary_target: Option<(usize, usize)> = None;
     for run in &para.runs {
         if let RunContent::Image(img) = &run.content {
-            if starts[1..].contains(&cursor) {
-                return Err(PdfError::InvalidCache {
-                    detail: format!(
-                        "{location}: image offset {cursor} coincides with a non-first \
-                         line start — zero-width collapse leaves attribution ambiguous"
-                    ),
-                });
-            }
-            atoms[line_of(cursor)].push(LineAtom::Image(LineImage {
+            let height = img.height.as_i32();
+            let li = if let Some(i) = (1..line_count).find(|&i| starts[i] == cursor) {
+                // 경계 (offset == non-first 줄 시작): 후보 = 줄 i−1(끝)·
+                // 줄 i(시작). 높이-profile 삼중 일치가 **유일**한 쪽으로
+                // 귀속 (캐시가 기록한 실측 — §7 v2), 0/2개 매치 =
+                // fail-closed (추측 금지).
+                let prev = line_matches_image_height(&cache.lines[i - 1], height);
+                let next = line_matches_image_height(&cache.lines[i], height);
+                let target = match (prev, next) {
+                    (true, false) => i - 1,
+                    (false, true) => i,
+                    (false, false) => {
+                        return Err(PdfError::InvalidCache {
+                            detail: format!(
+                                "{location}: image offset {cursor} on a line boundary \
+                                 matches neither candidate line's height profile \
+                                 (zero-match) — attribution ambiguous"
+                            ),
+                        });
+                    }
+                    (true, true) => {
+                        return Err(PdfError::InvalidCache {
+                            detail: format!(
+                                "{location}: image offset {cursor} on a line boundary \
+                                 matches both candidate lines' height profile \
+                                 (two-match) — attribution ambiguous"
+                            ),
+                        });
+                    }
+                };
+                if let Some((c, t)) = boundary_target {
+                    if c == cursor && t != target {
+                        return Err(PdfError::InvalidCache {
+                            detail: format!(
+                                "{location}: multiple images at boundary offset {cursor} \
+                                 resolve to different lines — document order would \
+                                 invert across line traversal"
+                            ),
+                        });
+                    }
+                }
+                boundary_target = Some((cursor, target));
+                target
+            } else {
+                line_of(cursor)
+            };
+            atoms[li].push(LineAtom::Image(LineImage {
                 canonical_key: img.path.clone(),
                 width: img.width.as_i32(),
-                height: img.height.as_i32(),
+                height,
             }));
             continue;
         }
@@ -1232,7 +1283,7 @@ mod tests {
         }
     }
 
-    // ── W2b c1: build_body_line_atoms 귀속 edge (§4 D2) ─────────
+    // ── W2b c1: build_inline_image_line_atoms 귀속 edge (§4 D2) ─────────
 
     fn inline_img(key: &str) -> Run {
         use hwpforge_core::image::{Image, ImageFormat, ImagePlacement};
@@ -1270,7 +1321,7 @@ mod tests {
         );
         para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0), seg(6, 1600)]));
         let cache = para.layout_cache.clone().unwrap();
-        let atoms = build_body_line_atoms(&para, &cache, "t").expect("attribution");
+        let atoms = build_inline_image_line_atoms(&para, &cache, "t").expect("attribution");
         assert_eq!(atom_kinds(&atoms[0]), ["text", "image", "text"]);
         assert_eq!(atom_kinds(&atoms[1]), ["text"]);
         let LineAtom::Text(t0) = &atoms[0][0] else { panic!() };
@@ -1291,7 +1342,7 @@ mod tests {
         );
         para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
         let cache = para.layout_cache.clone().unwrap();
-        let atoms = build_body_line_atoms(&para, &cache, "t").expect("attribution");
+        let atoms = build_inline_image_line_atoms(&para, &cache, "t").expect("attribution");
         assert_eq!(atom_kinds(&atoms[0]), ["text", "image"]);
     }
 
@@ -1301,7 +1352,7 @@ mod tests {
             Paragraph::with_runs(vec![inline_img("BinData/only.png")], ParaShapeIndex::new(0));
         para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
         let cache = para.layout_cache.clone().unwrap();
-        let atoms = build_body_line_atoms(&para, &cache, "t").expect("attribution");
+        let atoms = build_inline_image_line_atoms(&para, &cache, "t").expect("attribution");
         assert_eq!(atom_kinds(&atoms[0]), ["image"]);
     }
 
@@ -1315,7 +1366,7 @@ mod tests {
         );
         para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
         let cache = para.layout_cache.clone().unwrap();
-        let atoms = build_body_line_atoms(&para, &cache, "t").expect("attribution");
+        let atoms = build_inline_image_line_atoms(&para, &cache, "t").expect("attribution");
         assert_eq!(atom_kinds(&atoms[0]), ["image", "text"]);
     }
 
@@ -1333,9 +1384,121 @@ mod tests {
         );
         para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0), seg(3, 1600)]));
         let cache = para.layout_cache.clone().unwrap();
-        let err = build_body_line_atoms(&para, &cache, "t").expect_err("ambiguous");
+        let err = build_inline_image_line_atoms(&para, &cache, "t").expect_err("ambiguous");
         assert!(
             matches!(&err, PdfError::InvalidCache { detail } if detail.contains("ambiguous")),
+            "{err:?}"
+        );
+    }
+
+    fn tall_seg(textpos: u32, vertpos: i32, h: i32) -> LineSeg {
+        LineSeg { vertsize: h, textheight: h, ..seg(textpos, vertpos) }
+    }
+
+    fn img_with_height(key: &str, h: i32) -> Run {
+        use hwpforge_core::image::{Image, ImageFormat, ImagePlacement};
+        let mut image = Image::new(
+            key,
+            hwpforge_foundation::HwpUnit::new(2000).unwrap(),
+            hwpforge_foundation::HwpUnit::new(h).unwrap(),
+            ImageFormat::Png,
+        );
+        image.placement = Some(ImagePlacement::legacy_inline_defaults());
+        Run { content: RunContent::Image(image), char_shape_id: CharShapeIndex::new(0) }
+    }
+
+    #[test]
+    fn atoms_boundary_unique_next_attributes_to_image_line() {
+        // 대표 fixture r1c1 모양: "큰 그림 "(5) + 이미지(6000), 줄 2 가
+        // tp=5·h=6000 — 유일 next 매치 → 줄 2 귀속 (렌더 성공 경로).
+        let mut para = Paragraph::with_runs(
+            vec![
+                Run::text("큰 그림 ", CharShapeIndex::new(0)),
+                img_with_height("BinData/t.png", 6000),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0), tall_seg(5, 1600, 6000)]));
+        let cache = para.layout_cache.clone().unwrap();
+        let atoms = build_inline_image_line_atoms(&para, &cache, "t").expect("unique next");
+        assert_eq!(atom_kinds(&atoms[0]), ["text"]);
+        assert_eq!(atom_kinds(&atoms[1]), ["image"]);
+    }
+
+    #[test]
+    fn atoms_boundary_unique_prev_attributes_to_previous_line() {
+        // 이전 줄이 이미지 지배(2000)·다음 줄 텍스트(1000) — 유일 prev.
+        let mut para = Paragraph::with_runs(
+            vec![
+                Run::text("가나", CharShapeIndex::new(0)),
+                img_with_height("BinData/p.png", 2000),
+                Run::text("다라마", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![tall_seg(0, 0, 2000), seg(2, 2600)]));
+        let cache = para.layout_cache.clone().unwrap();
+        let atoms = build_inline_image_line_atoms(&para, &cache, "t").expect("unique prev");
+        assert_eq!(atom_kinds(&atoms[0]), ["text", "image"]);
+        assert_eq!(atom_kinds(&atoms[1]), ["text"]);
+    }
+
+    #[test]
+    fn atoms_boundary_two_match_is_invalid_cache() {
+        // image=1000 · 양 줄 다 1000 — 2-candidate = 판별 불가.
+        let mut para = Paragraph::with_runs(
+            vec![
+                Run::text("가나다", CharShapeIndex::new(0)),
+                img_with_height("BinData/two.png", 1000),
+                Run::text("라마바", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0), seg(3, 1600)]));
+        let cache = para.layout_cache.clone().unwrap();
+        let err = build_inline_image_line_atoms(&para, &cache, "t").expect_err("two-match");
+        assert!(
+            matches!(&err, PdfError::InvalidCache { detail } if detail.contains("two-match")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn atoms_boundary_multi_image_same_target_preserves_order() {
+        // 같은 경계의 이미지 2개가 모두 next(6000) 로 판별 — 순서 보존.
+        let mut para = Paragraph::with_runs(
+            vec![
+                Run::text("가나다", CharShapeIndex::new(0)),
+                img_with_height("BinData/one.png", 6000),
+                img_with_height("BinData/two.png", 6000),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0), tall_seg(3, 1600, 6000)]));
+        let cache = para.layout_cache.clone().unwrap();
+        let atoms = build_inline_image_line_atoms(&para, &cache, "t").expect("same target");
+        assert_eq!(atom_kinds(&atoms[1]), ["image", "image"]);
+        let LineAtom::Image(first) = &atoms[1][0] else { panic!() };
+        assert_eq!(first.canonical_key, "BinData/one.png");
+    }
+
+    #[test]
+    fn atoms_boundary_multi_image_cross_target_is_invalid_cache() {
+        // 같은 경계에서 이미지 1=next(6000)·이미지 2=prev(1000) — 줄 순회
+        // 방출이 문서 순서를 뒤집으므로 거부 (r2 High#1).
+        let mut para = Paragraph::with_runs(
+            vec![
+                Run::text("가나다", CharShapeIndex::new(0)),
+                img_with_height("BinData/next.png", 6000),
+                img_with_height("BinData/prev.png", 1000),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0), tall_seg(3, 1600, 6000)]));
+        let cache = para.layout_cache.clone().unwrap();
+        let err = build_inline_image_line_atoms(&para, &cache, "t").expect_err("cross target");
+        assert!(
+            matches!(&err, PdfError::InvalidCache { detail } if detail.contains("different lines")),
             "{err:?}"
         );
     }
@@ -1350,7 +1513,7 @@ mod tests {
         );
         para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0), seg(3, 1600), seg(3, 3200)]));
         let cache = para.layout_cache.clone().unwrap();
-        let err = build_body_line_atoms(&para, &cache, "t").expect_err("dup starts");
+        let err = build_inline_image_line_atoms(&para, &cache, "t").expect_err("dup starts");
         assert!(
             matches!(&err, PdfError::InvalidCache { detail } if detail.contains("duplicate")),
             "{err:?}"
@@ -1370,7 +1533,7 @@ mod tests {
         );
         para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
         let cache = para.layout_cache.clone().unwrap();
-        let atoms = build_body_line_atoms(&para, &cache, "t").expect("attribution");
+        let atoms = build_inline_image_line_atoms(&para, &cache, "t").expect("attribution");
         assert_eq!(atom_kinds(&atoms[0]), ["text", "image", "image", "text"]);
         let LineAtom::Image(first) = &atoms[0][1] else { panic!() };
         let LineAtom::Image(second) = &atoms[0][2] else { panic!() };
@@ -2227,6 +2390,116 @@ mod tests {
         );
         p.layout_cache = Some(LayoutCache::new(vec![seg(0, host_v)]));
         p
+    }
+
+    // ── W3 w2: 셀 인라인 이미지 admission (§7 v2 D1·replay) ─────
+
+    fn img_cell_table(paragraphs: Vec<Paragraph>) -> Table {
+        Table::new(vec![TableRow::new(vec![TableCell::new(
+            paragraphs,
+            HwpUnit::from_pt(100.0).unwrap(),
+        )])])
+        .with_layout_cache(hwpforge_core::table::TableLayoutCache::new(None, true))
+    }
+
+    #[test]
+    fn cell_inline_image_paragraph_replays_with_image_atom() {
+        let mut cell_para = Paragraph::with_runs(
+            vec![Run::text("셀 ", CharShapeIndex::new(0)), inline_img("BinData/c.png")],
+            ParaShapeIndex::new(0),
+        );
+        cell_para.layout_cache = Some(LayoutCache::new(vec![img_seg(0, 0)]));
+        let host = table_host(img_cell_table(vec![cell_para]), 0);
+        let doc = doc_of(vec![host]);
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        let cell_line =
+            layout.pages[0].lines.iter().find(|l| l.location.contains("r0c0")).expect("cell line");
+        assert_eq!(atom_kinds(&cell_line.atoms), ["text", "image"]);
+    }
+
+    #[test]
+    fn cell_image_only_paragraph_reaches_helper() {
+        // 빈 text_content 라도 admitted 이미지 문단은 continue 전에
+        // helper 로 분기해야 한다 (r2 #4).
+        let mut cell_para =
+            Paragraph::with_runs(vec![inline_img("BinData/only.png")], ParaShapeIndex::new(0));
+        cell_para.layout_cache = Some(LayoutCache::new(vec![img_seg(0, 0)]));
+        let host = table_host(img_cell_table(vec![cell_para]), 0);
+        let doc = doc_of(vec![host]);
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        let cell_line =
+            layout.pages[0].lines.iter().find(|l| l.location.contains("r0c0")).expect("cell line");
+        assert_eq!(atom_kinds(&cell_line.atoms), ["image"]);
+    }
+
+    #[test]
+    fn cell_anchored_image_stays_rejected() {
+        use hwpforge_core::image::{Image, ImageFormat, ImagePlacement};
+        let mut anchored = Image::new(
+            "BinData/anch.png",
+            hwpforge_foundation::HwpUnit::new(2000).unwrap(),
+            hwpforge_foundation::HwpUnit::new(2000).unwrap(),
+            ImageFormat::Png,
+        );
+        let mut placement = ImagePlacement::legacy_inline_defaults();
+        placement.treat_as_char = false;
+        anchored.placement = Some(placement);
+        let mut cell_para = Paragraph::with_runs(
+            vec![Run {
+                content: RunContent::Image(anchored),
+                char_shape_id: CharShapeIndex::new(0),
+            }],
+            ParaShapeIndex::new(0),
+        );
+        cell_para.layout_cache = Some(LayoutCache::new(vec![img_seg(0, 0)]));
+        let host = table_host(img_cell_table(vec![cell_para]), 0);
+        let doc = doc_of(vec![host]);
+        let err = replay(&doc, &PdfOptions::default()).expect_err("anchored rejected");
+        assert!(
+            matches!(&err, PdfError::UnsupportedContent { kind, .. }
+                if *kind == "non-text content in table cell"),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn cell_table_mixed_with_inline_image_rejected() {
+        // `[Table+Image]` 혼합 = hosted-table replay 가 문단을 skip 해
+        // 이미지가 무음 폐기됨 — 명시 거부 (r2 #2).
+        let mut cell_para = Paragraph::with_runs(
+            vec![
+                Run::table(one_cell_cached_table(), CharShapeIndex::new(0)),
+                inline_img("BinData/m.png"),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        cell_para.layout_cache = Some(LayoutCache::new(vec![img_seg(0, 0)]));
+        let host = table_host(img_cell_table(vec![cell_para]), 0);
+        let doc = doc_of(vec![host]);
+        let err = replay(&doc, &PdfOptions::default()).expect_err("mixed rejected");
+        assert!(
+            matches!(&err, PdfError::UnsupportedContent { kind, .. }
+                if *kind == "table mixed with inline image"),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn cell_image_height_mismatch_is_fatal_even_with_warn_and_skip() {
+        // 셀 캐시 오류는 행높이·앵커가 의존하므로 표-fatal — 기본
+        // WarnAndSkip 에서도 문서 전체 Err (r2 #9, C4 계약).
+        let mut cell_para = Paragraph::with_runs(
+            vec![Run::text("셀 ", CharShapeIndex::new(0)), inline_img("BinData/tall.png")],
+            ParaShapeIndex::new(0),
+        );
+        cell_para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)])); // vertsize 1000 ≠ 2000
+        let host = table_host(img_cell_table(vec![cell_para]), 0);
+        let doc = doc_of(vec![host]);
+        let err = replay(&doc, &PdfOptions::default()).expect_err("fatal");
+        assert!(
+            matches!(&err, PdfError::InvalidCache { detail } if detail.contains("height")),
+            "{err:?}"
+        );
     }
 
     #[test]
