@@ -362,7 +362,7 @@ fn hancom_pdf_runtime_comparison_reports_position_deltas() {
         assert_eq!(
             ours_images.len(),
             hancom_images.len(),
-            "{base}: 우리 산출과 한컴 PDF 의 이미지 개수가 달라야 함"
+            "{base}: 우리 산출과 한컴 PDF 의 이미지 개수가 일치해야 함"
         );
         for (idx, (ours_img, hancom_img)) in
             ours_images.iter().zip(hancom_images.iter()).enumerate()

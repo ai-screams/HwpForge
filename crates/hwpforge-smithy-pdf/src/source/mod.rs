@@ -1008,6 +1008,18 @@ fn build_body_line_atoms(
         return Ok(atoms);
     }
     let starts: Vec<usize> = cache.lines.iter().map(|l| l.textpos as usize).collect();
+    // 독립 리뷰 M1 상환: 동일 textpos 중복(영폭 줄)은 단일 pass 분할이
+    // 뒤 줄을 건너뛰어 텍스트 꼬리를 무음 유실한다 — 이미지 가드와
+    // 대칭으로 fail-closed (validate_textpos 는 == 를 허용하므로 여기가
+    // 유일 검출점).
+    if starts.windows(2).any(|w| w[0] == w[1]) {
+        return Err(PdfError::InvalidCache {
+            detail: format!(
+                "{location}: duplicate line textpos — zero-width line cannot be \
+                 attributed in an image paragraph"
+            ),
+        });
+    }
     // offset 을 포함하는 줄 인덱스 (마지막 start <= offset).
     let line_of = |offset: usize| -> usize {
         match starts.binary_search(&offset) {
@@ -1324,6 +1336,23 @@ mod tests {
         let err = build_body_line_atoms(&para, &cache, "t").expect_err("ambiguous");
         assert!(
             matches!(&err, PdfError::InvalidCache { detail } if detail.contains("ambiguous")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn atoms_duplicate_line_textpos_is_invalid_cache() {
+        // 독립 리뷰 M1: starts=[0,3,3] — 단일 pass 는 줄 2 를 건너뛰어
+        // 꼬리 텍스트를 유실한다 → fail-closed.
+        let mut para = Paragraph::with_runs(
+            vec![Run::text("가나다라마바", CharShapeIndex::new(0)), inline_img("BinData/dup.png")],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0), seg(3, 1600), seg(3, 3200)]));
+        let cache = para.layout_cache.clone().unwrap();
+        let err = build_body_line_atoms(&para, &cache, "t").expect_err("dup starts");
+        assert!(
+            matches!(&err, PdfError::InvalidCache { detail } if detail.contains("duplicate")),
             "{err:?}"
         );
     }
