@@ -29,14 +29,37 @@ pub struct LineRun {
     /// 문자 스타일 (폰트명·크기 조회 키).
     pub char_shape: CharShapeIndex,
 }
+/// 줄 안의 원자 하나 — 텍스트 run 또는 인라인 이미지 (W2a §3 D4).
+#[derive(Debug, Clone, PartialEq)]
+pub enum LineAtom {
+    /// 셰이핑 대상 텍스트 run.
+    Text(LineRun),
+    /// 인라인 이미지 — W2a 에선 synthetic 테스트만 생성하고 production
+    /// producer 는 admission 이 막는다 (개방 = W2b).
+    Image(LineImage),
+}
+
+/// 줄 안 인라인 이미지 원자.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LineImage {
+    /// canonical 스토어 키 (`StyleLookup::image_data` 조회 키).
+    pub canonical_key: String,
+    /// 표시 폭 (HWPUNIT).
+    pub width: i32,
+    /// 표시 높이 (HWPUNIT).
+    pub height: i32,
+}
 
 /// 배치가 끝난 한 줄.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LaidLine {
     /// 위치 보고용 경로 (`s{섹션}/p{문단}/l{줄}`).
     pub location: String,
-    /// 줄 텍스트 구간들 (run 경계 분할 — 시각 순서).
-    pub runs: Vec<LineRun>,
+    /// 이 줄을 구성하는 원자들 (run 경계 분할 — 시각 순서, 텍스트/이미지 혼합).
+    pub atoms: Vec<LineAtom>,
+    /// 줄 상자 상단 y (HWPUNIT, 페이지 원점) — 인라인 이미지의 top 앵커
+    /// (W0a 실측: 이미지 top = 줄 top). `baseline_y − seg.baseline` 과 동치.
+    pub top_y: i32,
     /// baseline 세로 위치 (HWPUNIT, 쪽 상단 원점 — body_top + v + baseline).
     pub baseline_y: i32,
     /// 줄 가로 상자 (HWPUNIT — body 좌변 반영, 정렬 미적용 상태).
@@ -45,6 +68,16 @@ pub struct LaidLine {
     pub is_last_line: bool,
     /// 문단 정렬.
     pub alignment: Alignment,
+}
+
+impl LaidLine {
+    /// 텍스트 원자만 문서 순서로 돌려준다 (검사/테스트 편의).
+    pub fn text_runs(&self) -> impl Iterator<Item = &LineRun> {
+        self.atoms.iter().filter_map(|a| match a {
+            LineAtom::Text(r) => Some(r),
+            LineAtom::Image(_) => None,
+        })
+    }
 }
 
 /// 셀 배경 사각형 (HWPUNIT, 쪽 좌상단 원점).
@@ -313,6 +346,13 @@ fn collect_page_events(
 /// `NewNumber` 는 `Page` kind 만 replay 가 소비한다 (각주/그림 번호
 /// 재시작 등 다른 kind 는 소비자가 없으므로 허용하면 무음 드롭).
 /// admission(문단 전체 검사)과 `NonTextRunDropped` 경고에서 제외된다.
+/// body admission 이 허용하는 글자취급(treat_as_char) 인라인 이미지인지
+/// (W2b §4 D1 — placement None/false 는 보수 거부, 앵커형 렌더 = W5).
+fn is_admitted_inline_image(content: &RunContent) -> bool {
+    matches!(content, RunContent::Image(img)
+        if img.placement.as_ref().is_some_and(|p| p.treat_as_char))
+}
+
 fn is_replay_consumed_marker(content: &RunContent) -> bool {
     matches!(content, RunContent::Control(c)
     if matches!(
@@ -573,7 +613,8 @@ fn replay_band_item(
             let runs = slice_line_runs(&utf16, &run_spans, start, end);
             page.lines.push(LaidLine {
                 location: format!("{location}/l{line_idx}"),
-                runs,
+                atoms: runs.into_iter().map(LineAtom::Text).collect(),
+                top_y: band_top + seg.vertpos,
                 baseline_y: band_top + seg.vertpos + seg.baseline,
                 line_box: LineBox { horzpos: body_left + seg.horzpos, horzsize: seg.horzsize },
                 is_last_line: line_idx + 1 == line_count,
@@ -772,11 +813,14 @@ fn replay_section(
         // 위치 무관 W2 전 InvalidCache 다 (trailing 이미지가 0폭으로
         // 무음 누락되는 경로 차단). 허용 = replay 가 실제 소비하는 0폭
         // marker(Page 재시작·감추기)뿐.
-        if para
-            .runs
-            .iter()
-            .any(|r| r.content.plain_text().is_none() && !is_replay_consumed_marker(&r.content))
-        {
+        // W2b (§4 D1): body 는 **글자취급(treat_as_char) 인라인 이미지**를
+        // 추가 허용한다 — placement None/false 는 보수 거부 유지 (앵커형
+        // 렌더 = W5). 그 외 미렌더 원자는 여전히 InvalidCache.
+        if para.runs.iter().any(|r| {
+            r.content.plain_text().is_none()
+                && !is_replay_consumed_marker(&r.content)
+                && !is_admitted_inline_image(&r.content)
+        }) {
             return Err(PdfError::InvalidCache {
                 detail: format!(
                     "{location}: non-text run is not renderable before W2 \
@@ -789,8 +833,42 @@ fn replay_section(
         let utf16: Vec<u16> = text.encode_utf16().collect();
         validate_textpos(cache, utf16.len(), &location)?;
 
-        // run 별 UTF-16 구간 (문자 스타일 매핑용).
-        let run_spans = run_utf16_spans(para, warnings, &location);
+        // W2b (§4 D2): 이미지 문단은 pure helper 로 줄별 원자 귀속 +
+        // 높이 삼중 일치(image.height == vertsize == textheight — W0a
+        // 실측 profile) 검사. 불일치 = 미측정 profile → InvalidCache
+        // (어느 값도 임의 우선하지 않는다).
+        let has_admitted_images = para.runs.iter().any(|r| is_admitted_inline_image(&r.content));
+        let line_atoms_override = if has_admitted_images {
+            let atoms = build_body_line_atoms(para, cache, &location)?;
+            for (li, line) in atoms.iter().enumerate() {
+                for atom in line {
+                    if let LineAtom::Image(img) = atom {
+                        let seg = &cache.lines[li];
+                        if img.height != seg.vertsize || img.height != seg.textheight {
+                            return Err(PdfError::InvalidCache {
+                                detail: format!(
+                                    "{location}/l{li}: image height {} != line vertsize {} / \
+                                     textheight {} — unmeasured height profile",
+                                    img.height, seg.vertsize, seg.textheight
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
+            Some(atoms)
+        } else {
+            None
+        };
+
+        // run 별 UTF-16 구간 (문자 스타일 매핑용 — 이미지 문단은 helper 가
+        // 원자를 소유하므로 불요 + admitted 이미지에 NonTextRunDropped
+        // 경고를 내지 않기 위해 건너뛴다).
+        let run_spans = if line_atoms_override.is_none() {
+            run_utf16_spans(para, warnings, &location)
+        } else {
+            Vec::new()
+        };
         let alignment = input.styles.para_alignment(para.para_shape_id).unwrap_or(Alignment::Left);
 
         let line_count = cache.lines.len();
@@ -807,7 +885,13 @@ fn replay_section(
             let start = seg.textpos as usize;
             let end =
                 cache.lines.get(line_idx + 1).map_or(utf16.len(), |next| next.textpos as usize);
-            let runs = slice_line_runs(&utf16, &run_spans, start, end);
+            let line_atoms = match &line_atoms_override {
+                Some(per_line) => per_line[line_idx].clone(),
+                None => slice_line_runs(&utf16, &run_spans, start, end)
+                    .into_iter()
+                    .map(LineAtom::Text)
+                    .collect(),
+            };
 
             // W2: 이 줄 텍스트 구간에 놓인 nwno 재시작을 현재 물리 쪽에 앵커.
             // 마지막 줄은 문단 끝 오프셋(컨트롤이 꼬리에 있는 경우)까지 흡수.
@@ -828,7 +912,8 @@ fn replay_section(
             })?;
             page.lines.push(LaidLine {
                 location: format!("{location}/l{line_idx}"),
-                runs,
+                atoms: line_atoms,
+                top_y: body_top + v,
                 baseline_y: body_top + v + seg.baseline,
                 line_box: LineBox { horzpos: body_left + seg.horzpos, horzsize: seg.horzsize },
                 is_last_line: line_idx + 1 == line_count,
@@ -895,6 +980,98 @@ fn validate_textpos(
         prev = Some(tp);
     }
     Ok(())
+}
+
+/// 문단의 원자(텍스트 span·인라인 이미지)를 캐시 줄별로 귀속한다
+/// (W2b §4 D2 — c2 admission 이 이 pure helper 를 결선한다).
+///
+/// 단일 pass: run 순서대로 가시(UTF-16) 커서를 전진시키며 텍스트는 줄
+/// 경계로 분할하고, 이미지는 커서가 속한 줄에 문서 순서 그대로 삽입한다.
+/// 줄 구간 = non-last `[start, end)` · **last `[start, end]`** (trailing
+/// 이미지·image-only 문단 귀속 — §4 H3).
+///
+/// fail-closed: 이미지 offset 이 **첫 줄이 아닌** 줄 시작과 같으면
+/// W1b 영폭 축약상 앞/뒤 줄 귀속을 결정할 수 없다 — `InvalidCache`.
+/// (그 캐시는 디코더 관점에선 합법이라 여기가 최초 검출점 — runtime
+/// 오류이며 unreachable 단정이 아니다.)
+///
+/// 전제: `cache.lines` 의 textpos 는 단조 (본문 경로는 `validate_textpos`
+/// 가 선행 보장).
+fn build_body_line_atoms(
+    para: &hwpforge_core::paragraph::Paragraph,
+    cache: &hwpforge_core::layout::LayoutCache,
+    location: &str,
+) -> PdfResult<Vec<Vec<LineAtom>>> {
+    let line_count = cache.lines.len();
+    let mut atoms: Vec<Vec<LineAtom>> = vec![Vec::new(); line_count];
+    if line_count == 0 {
+        return Ok(atoms);
+    }
+    let starts: Vec<usize> = cache.lines.iter().map(|l| l.textpos as usize).collect();
+    // 독립 리뷰 M1 상환: 동일 textpos 중복(영폭 줄)은 단일 pass 분할이
+    // 뒤 줄을 건너뛰어 텍스트 꼬리를 무음 유실한다 — 이미지 가드와
+    // 대칭으로 fail-closed (validate_textpos 는 == 를 허용하므로 여기가
+    // 유일 검출점).
+    if starts.windows(2).any(|w| w[0] == w[1]) {
+        return Err(PdfError::InvalidCache {
+            detail: format!(
+                "{location}: duplicate line textpos — zero-width line cannot be \
+                 attributed in an image paragraph"
+            ),
+        });
+    }
+    // offset 을 포함하는 줄 인덱스 (마지막 start <= offset).
+    let line_of = |offset: usize| -> usize {
+        match starts.binary_search(&offset) {
+            Ok(i) => i,
+            Err(i) => i.saturating_sub(1),
+        }
+    };
+
+    let mut cursor = 0usize;
+    for run in &para.runs {
+        if let RunContent::Image(img) = &run.content {
+            if starts[1..].contains(&cursor) {
+                return Err(PdfError::InvalidCache {
+                    detail: format!(
+                        "{location}: image offset {cursor} coincides with a non-first \
+                         line start — zero-width collapse leaves attribution ambiguous"
+                    ),
+                });
+            }
+            atoms[line_of(cursor)].push(LineAtom::Image(LineImage {
+                canonical_key: img.path.clone(),
+                width: img.width.as_i32(),
+                height: img.height.as_i32(),
+            }));
+            continue;
+        }
+        let Some(text) = run.content.plain_text() else {
+            continue; // 0폭 marker 류 — 원자 없음 (admission 이 종류를 거른다).
+        };
+        let units: Vec<u16> = text.encode_utf16().collect::<Vec<u16>>();
+        if units.is_empty() {
+            continue;
+        }
+        let (rs, re) = (cursor, cursor + units.len());
+        let mut li = line_of(rs);
+        while li < line_count {
+            let seg_start = rs.max(starts[li]);
+            let seg_end = if li + 1 < line_count { re.min(starts[li + 1]) } else { re };
+            if seg_start >= seg_end {
+                break;
+            }
+            let slice = String::from_utf16(&units[seg_start - rs..seg_end - rs]).map_err(|_| {
+                PdfError::InvalidCache {
+                    detail: format!("{location}: line boundary splits a surrogate pair"),
+                }
+            })?;
+            atoms[li].push(LineAtom::Text(LineRun { text: slice, char_shape: run.char_shape_id }));
+            li += 1;
+        }
+        cursor = re;
+    }
+    Ok(atoms)
 }
 
 /// run 별 UTF-16 [start, end) 구간과 문자 스타일. 텍스트가 아닌 run
@@ -974,6 +1151,233 @@ mod tests {
         }
     }
 
+    // ── W2b c2: body admission·높이 profile (§4 D1/D2) ──────────
+
+    fn img_seg(textpos: u32, vertpos: i32) -> LineSeg {
+        LineSeg { vertsize: 2000, textheight: 2000, ..seg(textpos, vertpos) }
+    }
+
+    #[test]
+    fn admitted_inline_image_paragraph_replays_with_image_atom() {
+        let mut para = Paragraph::with_runs(
+            vec![Run::text("본문", CharShapeIndex::new(0)), inline_img("BinData/ok.png")],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![img_seg(0, 0)]));
+        let doc = doc_of(vec![para]);
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        let kinds = atom_kinds(&layout.pages[0].lines[0].atoms);
+        assert_eq!(kinds, ["text", "image"]);
+        assert!(
+            !layout.warnings.iter().any(|w| matches!(w, PdfWarning::NonTextRunDropped { .. })),
+            "admitted 이미지는 드롭 경고 대상이 아니다: {:?}",
+            layout.warnings
+        );
+    }
+
+    #[test]
+    fn image_height_mismatch_is_invalid_cache() {
+        // 이미지 2000 vs 줄 1000 — 미측정 높이 profile 은 fail-closed.
+        let mut para = Paragraph::with_runs(
+            vec![Run::text("본문", CharShapeIndex::new(0)), inline_img("BinData/tall.png")],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+        let doc = doc_of(vec![para]);
+        let err = replay(&doc, &PdfOptions::default()).expect_err("mismatch");
+        assert!(
+            matches!(&err, PdfError::InvalidCache { detail } if detail.contains("height")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn anchored_and_placement_none_images_stay_rejected() {
+        use hwpforge_core::image::{Image, ImageFormat, ImagePlacement};
+        // treat_as_char=false (앵커형).
+        let mut anchored = Image::new(
+            "BinData/anch.png",
+            hwpforge_foundation::HwpUnit::new(2000).unwrap(),
+            hwpforge_foundation::HwpUnit::new(2000).unwrap(),
+            ImageFormat::Png,
+        );
+        let mut placement = ImagePlacement::legacy_inline_defaults();
+        placement.treat_as_char = false;
+        anchored.placement = Some(placement);
+        // placement=None (보수 거부).
+        let bare = Image::new(
+            "BinData/bare.png",
+            hwpforge_foundation::HwpUnit::new(2000).unwrap(),
+            hwpforge_foundation::HwpUnit::new(2000).unwrap(),
+            ImageFormat::Png,
+        );
+        for image in [anchored, bare] {
+            let mut para = Paragraph::with_runs(
+                vec![
+                    Run::text("본문", CharShapeIndex::new(0)),
+                    Run {
+                        content: RunContent::Image(image),
+                        char_shape_id: CharShapeIndex::new(0),
+                    },
+                ],
+                ParaShapeIndex::new(0),
+            );
+            para.layout_cache = Some(LayoutCache::new(vec![img_seg(0, 0)]));
+            let doc = doc_of(vec![para]);
+            let err = replay(&doc, &PdfOptions::default()).expect_err("rejected");
+            assert!(
+                matches!(&err, PdfError::InvalidCache { detail } if detail.contains("not renderable")),
+                "{err:?}"
+            );
+        }
+    }
+
+    // ── W2b c1: build_body_line_atoms 귀속 edge (§4 D2) ─────────
+
+    fn inline_img(key: &str) -> Run {
+        use hwpforge_core::image::{Image, ImageFormat, ImagePlacement};
+        let mut image = Image::new(
+            key,
+            hwpforge_foundation::HwpUnit::new(2000).unwrap(),
+            hwpforge_foundation::HwpUnit::new(2000).unwrap(),
+            ImageFormat::Png,
+        );
+        image.placement = Some(ImagePlacement::legacy_inline_defaults());
+        Run { content: RunContent::Image(image), char_shape_id: CharShapeIndex::new(0) }
+    }
+
+    fn atom_kinds(atoms: &[LineAtom]) -> Vec<&'static str> {
+        atoms
+            .iter()
+            .map(|a| match a {
+                LineAtom::Text(_) => "text",
+                LineAtom::Image(_) => "image",
+            })
+            .collect()
+    }
+
+    #[test]
+    fn atoms_mid_line_image_splits_text_in_document_order() {
+        // "가나다" + 이미지 + "라마바사아자차" — 줄 [0, 6): 이미지는
+        // 커서 3 에서 줄 0 중간, 텍스트는 경계 6 에서 분할.
+        let mut para = Paragraph::with_runs(
+            vec![
+                Run::text("가나다", CharShapeIndex::new(0)),
+                inline_img("BinData/a.png"),
+                Run::text("라마바사아자차", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0), seg(6, 1600)]));
+        let cache = para.layout_cache.clone().unwrap();
+        let atoms = build_body_line_atoms(&para, &cache, "t").expect("attribution");
+        assert_eq!(atom_kinds(&atoms[0]), ["text", "image", "text"]);
+        assert_eq!(atom_kinds(&atoms[1]), ["text"]);
+        let LineAtom::Text(t0) = &atoms[0][0] else { panic!() };
+        assert_eq!(t0.text, "가나다");
+        let LineAtom::Text(t2) = &atoms[0][2] else { panic!() };
+        assert_eq!(t2.text, "라마바");
+        let LineAtom::Text(t1) = &atoms[1][0] else { panic!() };
+        assert_eq!(t1.text, "사아자차");
+    }
+
+    #[test]
+    fn atoms_trailing_image_belongs_to_last_line_inclusive() {
+        // 텍스트 4유닛 + 문단 끝 이미지 (offset 4 == 마지막 줄 end) —
+        // last 줄 [start, end] inclusive 귀속 (§4 H3).
+        let mut para = Paragraph::with_runs(
+            vec![Run::text("텍스트끝", CharShapeIndex::new(0)), inline_img("BinData/t.png")],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+        let cache = para.layout_cache.clone().unwrap();
+        let atoms = build_body_line_atoms(&para, &cache, "t").expect("attribution");
+        assert_eq!(atom_kinds(&atoms[0]), ["text", "image"]);
+    }
+
+    #[test]
+    fn atoms_image_only_paragraph_lands_on_first_line() {
+        let mut para =
+            Paragraph::with_runs(vec![inline_img("BinData/only.png")], ParaShapeIndex::new(0));
+        para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+        let cache = para.layout_cache.clone().unwrap();
+        let atoms = build_body_line_atoms(&para, &cache, "t").expect("attribution");
+        assert_eq!(atom_kinds(&atoms[0]), ["image"]);
+    }
+
+    #[test]
+    fn atoms_leading_image_on_first_line_start_is_allowed() {
+        // offset 0 == 첫 줄 시작 — 첫 줄은 축약 모호가 없다 (native
+        // 불변식 to_wire(0)=0).
+        let mut para = Paragraph::with_runs(
+            vec![inline_img("BinData/lead.png"), Run::text("본문", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+        let cache = para.layout_cache.clone().unwrap();
+        let atoms = build_body_line_atoms(&para, &cache, "t").expect("attribution");
+        assert_eq!(atom_kinds(&atoms[0]), ["image", "text"]);
+    }
+
+    #[test]
+    fn atoms_image_on_non_first_line_start_is_invalid_cache() {
+        // 이미지 offset 3 == 줄 2 시작 3 — W1b 영폭 축약상 앞/뒤 줄
+        // 귀속 불가 → InvalidCache (§4 H3/H4 선계약).
+        let mut para = Paragraph::with_runs(
+            vec![
+                Run::text("가나다", CharShapeIndex::new(0)),
+                inline_img("BinData/b.png"),
+                Run::text("라마바", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0), seg(3, 1600)]));
+        let cache = para.layout_cache.clone().unwrap();
+        let err = build_body_line_atoms(&para, &cache, "t").expect_err("ambiguous");
+        assert!(
+            matches!(&err, PdfError::InvalidCache { detail } if detail.contains("ambiguous")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn atoms_duplicate_line_textpos_is_invalid_cache() {
+        // 독립 리뷰 M1: starts=[0,3,3] — 단일 pass 는 줄 2 를 건너뛰어
+        // 꼬리 텍스트를 유실한다 → fail-closed.
+        let mut para = Paragraph::with_runs(
+            vec![Run::text("가나다라마바", CharShapeIndex::new(0)), inline_img("BinData/dup.png")],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0), seg(3, 1600), seg(3, 3200)]));
+        let cache = para.layout_cache.clone().unwrap();
+        let err = build_body_line_atoms(&para, &cache, "t").expect_err("dup starts");
+        assert!(
+            matches!(&err, PdfError::InvalidCache { detail } if detail.contains("duplicate")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn atoms_multiple_images_same_offset_preserve_run_order() {
+        let mut para = Paragraph::with_runs(
+            vec![
+                Run::text("가", CharShapeIndex::new(0)),
+                inline_img("BinData/one.png"),
+                inline_img("BinData/two.png"),
+                Run::text("나", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+        let cache = para.layout_cache.clone().unwrap();
+        let atoms = build_body_line_atoms(&para, &cache, "t").expect("attribution");
+        assert_eq!(atom_kinds(&atoms[0]), ["text", "image", "image", "text"]);
+        let LineAtom::Image(first) = &atoms[0][1] else { panic!() };
+        let LineAtom::Image(second) = &atoms[0][2] else { panic!() };
+        assert_eq!(first.canonical_key, "BinData/one.png");
+        assert_eq!(second.canonical_key, "BinData/two.png");
+    }
+
     fn para_with_cache(text: &str, lines: Vec<LineSeg>) -> Paragraph {
         let mut p = Paragraph::with_runs(
             vec![Run::text(text, CharShapeIndex::new(0))],
@@ -1034,8 +1438,8 @@ mod tests {
         let doc = doc_of(vec![para_with_cache("가나다 라마바", vec![seg(0, 0), seg(4, 1600)])]);
         let layout = replay(&doc, &PdfOptions::default()).expect("replay");
         let lines = &layout.pages[0].lines;
-        assert_eq!(lines[0].runs[0].text, "가나다 ");
-        assert_eq!(lines[1].runs[0].text, "라마바");
+        assert_eq!(lines[0].text_runs().next().unwrap().text, "가나다 ");
+        assert_eq!(lines[1].text_runs().next().unwrap().text, "라마바");
     }
 
     // ── W5-a 머리말/꼬리말 오버레이 ──────────────────────────────
@@ -1141,7 +1545,7 @@ mod tests {
                 let lines: Vec<&LaidLine> =
                     p.lines.iter().filter(|l| l.location.contains("/h")).collect();
                 assert_eq!(lines.len(), 1, "쪽마다 정확히 한 머리말");
-                lines[0].runs[0].text.clone()
+                lines[0].text_runs().next().unwrap().text.clone()
             })
             .collect();
         assert_eq!(texts, vec!["홀수", "짝수", "홀수"]);
@@ -1941,7 +2345,7 @@ mod tests {
         let texts: Vec<String> = layout.pages[0]
             .lines
             .iter()
-            .flat_map(|l| l.runs.iter().map(|r| r.text.clone()))
+            .flat_map(|l| l.text_runs().map(|r| r.text.clone()))
             .collect();
         assert!(texts.iter().any(|t| t == "셀"), "안쪽 표 텍스트 재생: {texts:?}");
     }
@@ -1986,7 +2390,7 @@ mod tests {
         let c_line = layout.pages[0]
             .lines
             .iter()
-            .find(|l| l.runs.iter().any(|r| r.text == "C"))
+            .find(|l| l.text_runs().any(|r| r.text == "C"))
             .expect("C line");
         assert_eq!(c_line.baseline_y, body_top + 1000 + 850, "행0 은 최소높이 유지");
         // 어긋난 앵커(6000 > 기대 5000, 쪽분할 아님) = 캐시 모순 fatal.
@@ -2017,7 +2421,7 @@ mod tests {
         let texts: Vec<String> = layout.pages[0]
             .lines
             .iter()
-            .flat_map(|l| l.runs.iter().map(|r| r.text.clone()))
+            .flat_map(|l| l.text_runs().map(|r| r.text.clone()))
             .collect();
         assert!(texts.iter().any(|t| t == "셀"), "{texts:?}");
         assert!(texts.iter().any(|t| t == "후속"), "{texts:?}");

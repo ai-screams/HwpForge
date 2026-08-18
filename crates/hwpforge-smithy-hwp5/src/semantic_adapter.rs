@@ -1683,6 +1683,7 @@ mod tests {
                         },
                         binary_data_id: 1,
                         instance_id: 0,
+                        ctrl_properties: 0,
                     })],
                 }],
                 page_def: None,
@@ -2254,8 +2255,9 @@ mod tests {
     }
 
     #[test]
-    fn fixture_img_01_semantic_slice_keeps_single_body_image_anchor_and_bin_data() {
-        let Some(semantic) = semantic_fixture("img_01_single_png_inline.hwp") else {
+    fn fixture_anchored_zero_origin_png_semantic_slice_keeps_single_body_image_anchor_and_bin_data()
+    {
+        let Some(semantic) = semantic_fixture("anchored_zero_origin_png.hwp") else {
             return;
         };
 

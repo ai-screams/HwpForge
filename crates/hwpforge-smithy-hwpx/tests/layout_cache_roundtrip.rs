@@ -393,3 +393,28 @@ fn real_hancom_marker_ledger_fixture_decodes_to_measured_triples() {
         "실물 한컴 fixture 가시 좌표 골든"
     );
 }
+
+/// W2b fixture 골든: 한컴 재저장 산출물의 curSz=(0,0) 관례 — 표시
+/// 크기는 `<hp:sz>` 가 진실이다 (디코더 sz-우선 선택 잠금).
+#[test]
+fn resaved_inline_image_dimensions_come_from_sz_not_cursz() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../tests/fixtures/images/inline_treat_as_char_png_body.hwpx");
+    let bytes = std::fs::read(&path).expect("tracked fixture");
+    let decoded = HwpxDecoder::decode(&bytes).expect("decode");
+    let image = decoded.document.sections()[0]
+        .paragraphs
+        .iter()
+        .flat_map(|p| p.runs.iter())
+        .find_map(|r| match &r.content {
+            hwpforge_core::run::RunContent::Image(img) => Some(img),
+            _ => None,
+        })
+        .expect("inline image");
+    assert_eq!(image.width.as_i32(), 2000, "sz 우선 (curSz 는 0,0)");
+    assert_eq!(image.height.as_i32(), 2000);
+    assert!(
+        image.placement.as_ref().is_some_and(|p| p.treat_as_char),
+        "재저장 후 treatAsChar=1 유지"
+    );
+}

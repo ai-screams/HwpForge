@@ -96,7 +96,9 @@ enum Commands {
         #[arg(long, default_value = "explicit")]
         discovery: String,
 
-        /// Degrade missing style/axis fonts to regular with warnings.
+        /// Degrade render failures with warnings instead of erroring:
+        /// missing style/axis fonts render regular; unrenderable images
+        /// (missing/corrupt/unsupported) are skipped.
         #[arg(long)]
         degraded: bool,
 

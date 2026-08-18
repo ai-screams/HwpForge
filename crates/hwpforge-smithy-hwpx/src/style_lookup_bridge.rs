@@ -83,13 +83,25 @@ impl StyleLookup for HwpxStyleLookup<'_> {
 
     fn image_resolve_filename(&self, key: &str) -> Option<&str> {
         let stripped = key.strip_prefix("BinData/").unwrap_or(key);
-        // Always return a store-owned key (not the input) to satisfy lifetimes.
-        self.images
+        // W2a hardening (§3 disposition M5): 종전 단일 iter().find() 는
+        // exact 와 stem 을 OR 로 섞어 HashMap 순서에 따라 다른 자산을
+        // 돌려줄 수 있었다 (비결정). 우선순위 고정:
+        // ① exact 일치 → ② stem 일치가 **유일**할 때만 → ③ 복수 stem =
+        // None (모호 — 추측 금지). 실측 양 경로(HWPX sanitize 키·HWP5
+        // storage_name)는 exact 로 정합하므로 stem 은 방어층이다.
+        if let Some((k, _)) = self.images.iter().find(|(k, _)| *k == stripped) {
+            return Some(k);
+        }
+        let mut stem_matches = self
+            .images
             .iter()
-            .find(|(k, _)| {
-                *k == stripped || k.rsplit_once('.').is_some_and(|(stem, _)| stem == stripped)
-            })
-            .map(|(k, _)| k)
+            .filter(|(k, _)| k.rsplit_once('.').is_some_and(|(stem, _)| stem == stripped))
+            .map(|(k, _)| k);
+        let first = stem_matches.next()?;
+        if stem_matches.next().is_some() {
+            return None; // 복수 stem — 모호
+        }
+        Some(first)
     }
 
     fn image_data(&self, key: &str) -> Option<&[u8]> {
@@ -174,5 +186,38 @@ mod tests {
 
         assert!(lookup.char_bold(CharShapeIndex::new(99)).is_none());
         assert!(lookup.char_font_name(CharShapeIndex::new(99)).is_none());
+    }
+
+    #[test]
+    fn image_resolver_prefers_exact_over_stem() {
+        // W2a M5: "logo.png" 와 "logo.png.jpg" 공존 시 exact 가 항상 이긴다
+        // (종전 단일 find 는 HashMap 순서 비결정).
+        let store = HwpxStyleStore::new();
+        let mut images = ImageStore::new();
+        images.insert("logo.png".to_string(), vec![1]);
+        images.insert("logo.png.jpg".to_string(), vec![2]);
+        let lookup = HwpxStyleLookup::new(&store, &images);
+        assert_eq!(lookup.image_data("BinData/logo.png"), Some(&[1u8][..]));
+    }
+
+    #[test]
+    fn image_resolver_unique_stem_matches() {
+        // HWPX 디코더 키 관례: path="BinData/image1" ↔ 키 "image1.png".
+        let store = HwpxStyleStore::new();
+        let mut images = ImageStore::new();
+        images.insert("image1.png".to_string(), vec![7]);
+        let lookup = HwpxStyleLookup::new(&store, &images);
+        assert_eq!(lookup.image_data("BinData/image1"), Some(&[7u8][..]));
+    }
+
+    #[test]
+    fn image_resolver_ambiguous_stem_returns_none() {
+        // 같은 stem 다른 확장자 2개 = 모호 — 추측하지 않는다.
+        let store = HwpxStyleStore::new();
+        let mut images = ImageStore::new();
+        images.insert("logo.png".to_string(), vec![1]);
+        images.insert("logo.jpg".to_string(), vec![2]);
+        let lookup = HwpxStyleLookup::new(&store, &images);
+        assert_eq!(lookup.image_data("BinData/logo"), None);
     }
 }

@@ -582,7 +582,11 @@ impl<'a> ProjectionImageState<'a> {
             HwpUnit::new(resolved_dimensions.height_hwp).unwrap_or(HwpUnit::ZERO),
             core_image_format(&asset.payload.format),
         )
-        .with_placement(image_placement_from_geometry(&image.geometry, context));
+        .with_placement(image_placement_from_wire(
+            &image.geometry,
+            context,
+            image.ctrl_properties,
+        ));
         // Wave 12p Step 3: HWP5 GSO CtrlHeader trailer instance ID 통과.
         // 한컴 native `<hp:pic id="...">` cross-ref target 과 매칭.
         if image.instance_id != 0 {
@@ -616,9 +620,19 @@ fn resolve_image_dimensions(
     ResolvedImageDimensions { width_hwp, height_hwp }
 }
 
-fn image_placement_from_geometry(
+/// HWP 5.0 표 70 공통 개체 속성 DWORD 의 bit0 (글자처럼 취급) 마스크.
+const CTRL_PROPERTY_TREAT_AS_CHAR_BIT: u32 = 0x1;
+
+/// body/텍스트박스 컨텍스트에서 이미지의 `ImagePlacement` 를 판정한다.
+///
+/// W2p: `treat_as_char` 는 `gso ` CtrlHeader 공통 개체 속성 DWORD 의 bit0
+/// 만이 유일한 진실이다. 좌표 `(x,y)==(0,0)` 휴리스틱은 완전히 제거됐다 —
+/// bit0=1 이면 좌표가 무엇이든 inline, bit0=0 이면 좌표가 (0,0) 이어도
+/// anchored 로 판정한다.
+fn image_placement_from_wire(
     geometry: &Hwp5ShapeComponentGeometry,
     context: ImageProjectionContext,
+    ctrl_properties: u32,
 ) -> ImagePlacement {
     match context {
         ImageProjectionContext::TextBox => ImagePlacement {
@@ -632,18 +646,24 @@ fn image_placement_from_geometry(
             vert_offset: HwpUnit::new(geometry.y).unwrap_or(HwpUnit::ZERO),
             horz_offset: HwpUnit::new(geometry.x).unwrap_or(HwpUnit::ZERO),
         },
-        ImageProjectionContext::Flow if geometry.x != 0 || geometry.y != 0 => ImagePlacement {
-            text_wrap: ImageTextWrap::InFrontOfText,
-            text_flow: ImageTextFlow::BothSides,
-            treat_as_char: false,
-            flow_with_text: false,
-            allow_overlap: true,
-            vert_rel_to: ImageRelativeTo::Paper,
-            horz_rel_to: ImageRelativeTo::Paper,
-            vert_offset: HwpUnit::new(geometry.y).unwrap_or(HwpUnit::ZERO),
-            horz_offset: HwpUnit::new(geometry.x).unwrap_or(HwpUnit::ZERO),
-        },
-        ImageProjectionContext::Flow => ImagePlacement::legacy_inline_defaults(),
+        ImageProjectionContext::Flow => {
+            let treat_as_char = ctrl_properties & CTRL_PROPERTY_TREAT_AS_CHAR_BIT != 0;
+            if treat_as_char {
+                ImagePlacement::legacy_inline_defaults()
+            } else {
+                ImagePlacement {
+                    text_wrap: ImageTextWrap::InFrontOfText,
+                    text_flow: ImageTextFlow::BothSides,
+                    treat_as_char: false,
+                    flow_with_text: false,
+                    allow_overlap: true,
+                    vert_rel_to: ImageRelativeTo::Paper,
+                    horz_rel_to: ImageRelativeTo::Paper,
+                    vert_offset: HwpUnit::new(geometry.y).unwrap_or(HwpUnit::ZERO),
+                    horz_offset: HwpUnit::new(geometry.x).unwrap_or(HwpUnit::ZERO),
+                }
+            }
+        }
     }
 }
 
@@ -4020,6 +4040,9 @@ mod tests {
             },
             binary_data_id: 1,
             instance_id: 0,
+            // W2p: treat_as_char 는 이제 raw bit0 이 유일한 진실 — 좌표
+            // (0,0) 만으로는 더 이상 inline 판정이 되지 않는다.
+            ctrl_properties: 0x1,
         });
         let section = make_section(
             vec![Hwp5Paragraph {
@@ -4079,6 +4102,7 @@ mod tests {
             },
             binary_data_id: 7,
             instance_id: 0,
+            ctrl_properties: 0,
         });
         let section = make_section(
             vec![Hwp5Paragraph {
@@ -4148,6 +4172,7 @@ mod tests {
             },
             binary_data_id: 3,
             instance_id: 0,
+            ctrl_properties: 0,
         });
         let textbox = Hwp5Control::TextBox(Hwp5TextBoxControl {
             ctrl_id: 0x6773_6F20,
@@ -4236,6 +4261,7 @@ mod tests {
             },
             binary_data_id: 99,
             instance_id: 0,
+            ctrl_properties: 0,
         });
         let section = make_section(
             vec![Hwp5Paragraph {
@@ -4278,6 +4304,7 @@ mod tests {
             },
             binary_data_id: 5,
             instance_id: 0,
+            ctrl_properties: 0,
         });
         let section = make_section(
             vec![Hwp5Paragraph {
@@ -4326,6 +4353,7 @@ mod tests {
             },
             binary_data_id: 6,
             instance_id: 0,
+            ctrl_properties: 0,
         });
         let section = make_section(
             vec![Hwp5Paragraph {
@@ -4356,6 +4384,91 @@ mod tests {
                 if *control == "image"
                     && reason == "image_zero_size_projection binary_data_id=6 width=0 height=0"
         )));
+    }
+
+    // ── image_placement_from_wire (W2p) ─────────────────────────────────────
+
+    #[test]
+    fn image_placement_from_wire_raw_bit_truth_table() {
+        // HWP 5.0 표 70 공통 개체 속성 bit0(글자처럼 취급)이 유일한 진실 —
+        // 좌표는 4조합 전부에서 판정에 관여하지 않는다.
+        let zero_origin = crate::schema::section::Hwp5ShapeComponentGeometry {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 200,
+        };
+        let non_zero_origin = crate::schema::section::Hwp5ShapeComponentGeometry {
+            x: 1_234,
+            y: 5_678,
+            width: 100,
+            height: 200,
+        };
+
+        // bit0=0, geometry (0,0) → anchored (bit wins over zero coordinates
+        // — the old (0,0) heuristic would have inlined this occurrence).
+        let anchored_zero =
+            image_placement_from_wire(&zero_origin, ImageProjectionContext::Flow, 0x0);
+        assert!(!anchored_zero.treat_as_char);
+        assert_eq!(anchored_zero.text_wrap, ImageTextWrap::InFrontOfText);
+        assert_eq!(anchored_zero.vert_rel_to, ImageRelativeTo::Paper);
+        assert_eq!(anchored_zero.horz_rel_to, ImageRelativeTo::Paper);
+        assert_eq!(anchored_zero.vert_offset, HwpUnit::ZERO);
+        assert_eq!(anchored_zero.horz_offset, HwpUnit::ZERO);
+
+        // bit0=0, geometry non-zero → anchored (unchanged from before).
+        let anchored_nonzero =
+            image_placement_from_wire(&non_zero_origin, ImageProjectionContext::Flow, 0x0);
+        assert!(!anchored_nonzero.treat_as_char);
+        assert_eq!(anchored_nonzero.text_wrap, ImageTextWrap::InFrontOfText);
+        assert_eq!(anchored_nonzero.vert_offset, HwpUnit::new(5_678).unwrap());
+        assert_eq!(anchored_nonzero.horz_offset, HwpUnit::new(1_234).unwrap());
+
+        // bit0=1, geometry (0,0) → inline (legacy behavior preserved).
+        let inline_zero =
+            image_placement_from_wire(&zero_origin, ImageProjectionContext::Flow, 0x1);
+        assert!(inline_zero.treat_as_char);
+        assert_eq!(inline_zero, ImagePlacement::legacy_inline_defaults());
+
+        // bit0=1, geometry non-zero → still inline — the bit wins over
+        // coordinates (this is the actual W2p bug fix: the old (0,0)
+        // heuristic would have anchored this occurrence instead).
+        let inline_nonzero =
+            image_placement_from_wire(&non_zero_origin, ImageProjectionContext::Flow, 0x1);
+        assert!(inline_nonzero.treat_as_char);
+        assert_eq!(inline_nonzero, ImagePlacement::legacy_inline_defaults());
+    }
+
+    #[test]
+    fn image_placement_from_wire_textbox_context_ignores_bit() {
+        // TextBox 컨텍스트는 CtrlHeader 속성과 무관하게 항상 anchored.
+        let geometry = crate::schema::section::Hwp5ShapeComponentGeometry {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 200,
+        };
+        let placement = image_placement_from_wire(&geometry, ImageProjectionContext::TextBox, 0x1);
+        assert!(!placement.treat_as_char);
+        assert_eq!(placement.text_wrap, ImageTextWrap::Square);
+    }
+
+    #[test]
+    fn image_placement_from_wire_masks_only_bit0() {
+        // 다른 비트가 전부 설정돼도 bit0 만 판정에 관여해야 한다.
+        let geometry = crate::schema::section::Hwp5ShapeComponentGeometry {
+            x: 10,
+            y: 20,
+            width: 100,
+            height: 200,
+        };
+        let placement =
+            image_placement_from_wire(&geometry, ImageProjectionContext::Flow, 0xFFFF_FFFE);
+        assert!(!placement.treat_as_char, "bit0=0 with every other bit set must still anchor");
+
+        let placement_set =
+            image_placement_from_wire(&geometry, ImageProjectionContext::Flow, 0xFFFF_FFFF);
+        assert!(placement_set.treat_as_char, "bit0=1 with every other bit set must still inline");
     }
 
     // ── page_def_to_settings ─────────────────────────────────────────────────

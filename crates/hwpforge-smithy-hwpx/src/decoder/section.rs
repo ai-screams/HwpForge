@@ -1043,15 +1043,22 @@ fn convert_picture(hx: &HxPic, depth: usize, ctx: &mut DecodeCtx) -> HwpxResult<
     let path = format!("BinData/{}", img.binary_item_id_ref);
     let format = guess_image_format(&img.binary_item_id_ref);
 
-    let (width, height) = hx
-        .cur_sz
-        .as_ref()
-        .or(hx.org_sz.as_ref())
-        .map(|sz| {
-            (
-                HwpUnit::new(sz.width).unwrap_or(HwpUnit::ZERO),
-                HwpUnit::new(sz.height).unwrap_or(HwpUnit::ZERO),
-            )
+    // 표시 크기 선택 (W2b fixture 실측 — 에픽 문서 §4): `<hp:sz>` 가
+    // 항상 실표시 크기다 (한컴-authored 3소스 전수: crop/resize 포함
+    // curSz==sz 이거나, 재저장 산출물처럼 curSz=(0,0) 미설정). 0 은
+    // "미설정" 이므로 0 이 아닌 첫 후보를 sz → curSz → orgSz 순으로
+    // 고른다.
+    let candidates = [
+        hx.sz.as_ref().map(|s| (s.width, s.height)),
+        hx.cur_sz.as_ref().map(|s| (s.width, s.height)),
+        hx.org_sz.as_ref().map(|s| (s.width, s.height)),
+    ];
+    let (width, height) = candidates
+        .into_iter()
+        .flatten()
+        .find(|(w, h)| *w > 0 && *h > 0)
+        .map(|(w, h)| {
+            (HwpUnit::new(w).unwrap_or(HwpUnit::ZERO), HwpUnit::new(h).unwrap_or(HwpUnit::ZERO))
         })
         .unwrap_or((HwpUnit::ZERO, HwpUnit::ZERO));
 

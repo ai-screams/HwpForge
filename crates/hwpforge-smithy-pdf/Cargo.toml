@@ -24,4 +24,10 @@ rustybuzz = { workspace = true }
 thiserror = { workspace = true }
 
 [dev-dependencies]
+flate2 = { workspace = true }
+# publish = false 라 path-only(버전 미고정) — hwpforge-convert 는
+# release-plz 대상이 아니다 (convert 자체 Cargo.toml 관례와 동일).
+hwpforge-convert = { path = "../hwpforge-convert" }
 hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0" }
+serde_json = { workspace = true }
+sha2 = { workspace = true }

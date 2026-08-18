@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use hwpforge_core::control::Control;
+use hwpforge_core::document::{Document, Draft};
 use hwpforge_core::image::Image;
 use hwpforge_core::paragraph::Paragraph;
 use hwpforge_core::run::Run;
@@ -86,6 +87,12 @@ struct ImageFixtureExpectation {
     expected_table_cell_images_after_convert: usize,
     expected_textbox_images_after_convert: usize,
     expected_textbox_controls_after_convert: usize,
+    /// W2p: ordered `Image.placement.treat_as_char` per image, in
+    /// [`collect_image_treat_as_char`] traversal order. Measured from the
+    /// same round-tripped HWP5->HWPX->decode path this test already
+    /// exercises — see `hwp5_native_and_hwpx_native_decode_agree_on_image_treat_as_char`
+    /// for cross-decoder confirmation.
+    expected_image_treat_as_char: &'static [Option<bool>],
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -309,6 +316,64 @@ fn first_image_in_control(control: &Control) -> Option<&Image> {
     }
 }
 
+/// W2p: ordered `Image.placement.treat_as_char` for every image in a
+/// [`Document`], in document-traversal order (body, then headers, then
+/// footers — mirroring [`collect_decoded_image_layout`]'s container walk;
+/// within a container, cells/textbox/footnote/endnote content is visited
+/// inline as it's encountered). `None` marks an image with no `placement`
+/// attached at all (distinct from `Some(false)`).
+///
+/// Generic over `Document<Draft>` so the same walk locks placement for
+/// HWP5-native decode ([`hwpforge_smithy_hwp5::decode_hwp5_with_images`]),
+/// native HWPX decode (`HwpxDecoder::decode`), and the round-tripped
+/// HWP5→HWPX→decode path this file already exercises — all three produce
+/// the same Core `Document` type.
+fn collect_image_treat_as_char(document: &Document<Draft>) -> Vec<Option<bool>> {
+    let mut out = Vec::new();
+    for section in document.sections() {
+        collect_treat_as_char_in_paragraphs(&section.paragraphs, &mut out);
+        for header in &section.headers {
+            collect_treat_as_char_in_paragraphs(&header.paragraphs, &mut out);
+        }
+        for footer in &section.footers {
+            collect_treat_as_char_in_paragraphs(&footer.paragraphs, &mut out);
+        }
+    }
+    out
+}
+
+fn collect_treat_as_char_in_paragraphs(paragraphs: &[Paragraph], out: &mut Vec<Option<bool>>) {
+    for paragraph in paragraphs {
+        for run in &paragraph.runs {
+            collect_treat_as_char_in_run(run, out);
+        }
+    }
+}
+
+fn collect_treat_as_char_in_run(run: &Run, out: &mut Vec<Option<bool>>) {
+    match &run.content {
+        hwpforge_core::run::RunContent::Image(image) => {
+            out.push(image.placement.as_ref().map(|placement| placement.treat_as_char));
+        }
+        hwpforge_core::run::RunContent::Table(table) => {
+            for row in &table.rows {
+                for cell in &row.cells {
+                    collect_treat_as_char_in_paragraphs(&cell.paragraphs, out);
+                }
+            }
+        }
+        hwpforge_core::run::RunContent::Control(control) => match control.as_ref() {
+            Control::TextBox { paragraphs, .. }
+            | Control::Footnote { paragraphs, .. }
+            | Control::Endnote { paragraphs, .. } => {
+                collect_treat_as_char_in_paragraphs(paragraphs, out);
+            }
+            _ => {}
+        },
+        _ => {}
+    }
+}
+
 fn assert_valid_hwpx(path: &Path) {
     let bytes = std::fs::read(path).expect("converted hwpx should be readable");
     let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
@@ -477,7 +542,7 @@ fn hwp5_to_hwpx_full_report_keeps_leading_image_non_zero() {
 fn hwp5_to_hwpx_image_fixture_matrix_emits_valid_hwpx_packages() {
     let cases: [ImageFixtureExpectation; 8] = [
         ImageFixtureExpectation {
-            name: "img_01_single_png_inline.hwp",
+            name: "anchored_zero_origin_png.hwp",
             expected_storage_names: &["BIN0001.png"],
             expected_gso_count: 1,
             expected_shape_picture_count: 1,
@@ -488,6 +553,7 @@ fn hwp5_to_hwpx_image_fixture_matrix_emits_valid_hwpx_packages() {
             expected_table_cell_images_after_convert: 0,
             expected_textbox_images_after_convert: 0,
             expected_textbox_controls_after_convert: 0,
+            expected_image_treat_as_char: &[Some(false)],
         },
         ImageFixtureExpectation {
             name: "img_03_two_images_png_jpg.hwp",
@@ -501,6 +567,7 @@ fn hwp5_to_hwpx_image_fixture_matrix_emits_valid_hwpx_packages() {
             expected_table_cell_images_after_convert: 0,
             expected_textbox_images_after_convert: 0,
             expected_textbox_controls_after_convert: 0,
+            expected_image_treat_as_char: &[Some(false), Some(false)],
         },
         ImageFixtureExpectation {
             name: "img_05_image_in_table_cell.hwp",
@@ -514,6 +581,7 @@ fn hwp5_to_hwpx_image_fixture_matrix_emits_valid_hwpx_packages() {
             expected_table_cell_images_after_convert: 1,
             expected_textbox_images_after_convert: 0,
             expected_textbox_controls_after_convert: 0,
+            expected_image_treat_as_char: &[Some(false)],
         },
         ImageFixtureExpectation {
             name: "mixed_02a_header_image_footer_text_real.hwp",
@@ -527,6 +595,9 @@ fn hwp5_to_hwpx_image_fixture_matrix_emits_valid_hwpx_packages() {
             expected_table_cell_images_after_convert: 0,
             expected_textbox_images_after_convert: 0,
             expected_textbox_controls_after_convert: 0,
+            // W2p: measured true — the header image's CtrlHeader bit0 is
+            // actually set (unlike the body zero-origin negatives).
+            expected_image_treat_as_char: &[Some(true)],
         },
         ImageFixtureExpectation {
             name: "mixed_02b_textbox_with_image_real.hwp",
@@ -540,6 +611,7 @@ fn hwp5_to_hwpx_image_fixture_matrix_emits_valid_hwpx_packages() {
             expected_table_cell_images_after_convert: 0,
             expected_textbox_images_after_convert: 1,
             expected_textbox_controls_after_convert: 1,
+            expected_image_treat_as_char: &[Some(false)],
         },
         ImageFixtureExpectation {
             name: "floating_image_not_treat_as_char.hwp",
@@ -553,6 +625,7 @@ fn hwp5_to_hwpx_image_fixture_matrix_emits_valid_hwpx_packages() {
             expected_table_cell_images_after_convert: 0,
             expected_textbox_images_after_convert: 0,
             expected_textbox_controls_after_convert: 0,
+            expected_image_treat_as_char: &[Some(false)],
         },
         ImageFixtureExpectation {
             name: "two_same_image_refs_different_places.hwp",
@@ -566,6 +639,7 @@ fn hwp5_to_hwpx_image_fixture_matrix_emits_valid_hwpx_packages() {
             expected_table_cell_images_after_convert: 0,
             expected_textbox_images_after_convert: 0,
             expected_textbox_controls_after_convert: 0,
+            expected_image_treat_as_char: &[Some(false), Some(false)],
         },
         ImageFixtureExpectation {
             name: "real_crop_vs_original_two_objects.hwp",
@@ -579,6 +653,7 @@ fn hwp5_to_hwpx_image_fixture_matrix_emits_valid_hwpx_packages() {
             expected_table_cell_images_after_convert: 0,
             expected_textbox_images_after_convert: 0,
             expected_textbox_controls_after_convert: 0,
+            expected_image_treat_as_char: &[Some(false), Some(false)],
         },
     ];
 
@@ -640,6 +715,15 @@ fn hwp5_to_hwpx_image_fixture_matrix_emits_valid_hwpx_packages() {
         assert_eq!(
             layout.textbox_controls, case.expected_textbox_controls_after_convert,
             "fixture={}",
+            case.name
+        );
+        // W2p: raw CtrlHeader bit0 placement — locks the (0,0)-heuristic
+        // flip for the zero-origin negatives and the true-positive header
+        // image alike.
+        assert_eq!(
+            collect_image_treat_as_char(&decoded.document),
+            case.expected_image_treat_as_char.to_vec(),
+            "fixture={} treat_as_char (W2p)",
             case.name
         );
 
@@ -3924,4 +4008,91 @@ fn carry_layout_cache_optin_emits_and_roundtrips() {
         }
     });
     assert!(cached > 0, "재디코드된 산출물에 승격된 캐시가 있어야 한다");
+}
+
+#[test]
+fn hwp5_to_hwpx_image_treat_as_char_placement_golden_for_additional_fixtures() {
+    // W2p p2: locks the raw-bit0 flip for image fixtures not covered by the
+    // census-oriented `hwp5_to_hwpx_image_fixture_matrix_emits_valid_hwpx_packages`
+    // matrix above. Values measured via this exact round-tripped
+    // HWP5->HWPX->decode path (not guessed), and cross-checked to agree
+    // with both native .hwp decode and the native .hwpx companion fixture
+    // (see `hwp5_native_and_hwpx_native_decode_agree_on_image_treat_as_char`).
+    let cases: [(&str, &[Option<bool>]); 4] = [
+        ("anchored_zero_origin_jpeg.hwp", &[Some(false)]),
+        ("img_04_images_with_crop_or_resize.hwp", &[Some(false), Some(false)]),
+        ("mixed_01_image_and_chart_same_doc.hwp", &[Some(false)]),
+        ("table_07_image_in_merged_cell.hwp", &[Some(false)]),
+    ];
+
+    for (name, expected) in cases {
+        let source = fixture_path(name);
+        if !source.exists() {
+            continue;
+        }
+
+        let out = unique_temp_path(&format!("{}.hwpx", name.trim_end_matches(".hwp")));
+        let warnings = hwp5_to_hwpx(&source, &out).expect("fixture conversion should succeed");
+        assert!(
+            warnings.is_empty(),
+            "controlled image fixture should convert without warnings: {name}"
+        );
+        assert_valid_hwpx(&out);
+
+        let bytes = std::fs::read(&out).expect("converted hwpx should be readable");
+        let decoded = HwpxDecoder::decode(&bytes).expect("converted hwpx should decode");
+        assert_eq!(
+            collect_image_treat_as_char(&decoded.document),
+            expected.to_vec(),
+            "fixture={name} treat_as_char (W2p)"
+        );
+
+        let _ = std::fs::remove_file(&out);
+    }
+}
+
+#[test]
+fn hwp5_native_and_hwpx_native_decode_agree_on_image_treat_as_char() {
+    // W2p p2 item 3: parity between independently-authored HWP5/HWPX
+    // companion fixtures is the strongest evidence for W2p correctness —
+    // the HWPX decoder reads `treatAsChar` directly off the OWPML wire
+    // (ground truth for that format), so agreement here means the HWP5
+    // CtrlHeader `data[4..8]` bit0 carry reconstructs the exact semantic
+    // the format's own XML encodes independently, for every fixture with a
+    // tracked companion pair — not just the coordinate-flip negatives.
+    let names = [
+        "anchored_zero_origin_png",
+        "anchored_zero_origin_jpeg",
+        "img_03_two_images_png_jpg",
+        "img_04_images_with_crop_or_resize",
+        "img_05_image_in_table_cell",
+        "real_crop_vs_original_two_objects",
+        "two_same_image_refs_different_places",
+        "floating_image_not_treat_as_char",
+        "mixed_01_image_and_chart_same_doc",
+        "mixed_02a_header_image_footer_text_real",
+        "mixed_02b_textbox_with_image_real",
+        "table_07_image_in_merged_cell",
+    ];
+
+    for base in names {
+        let hwp_path = fixture_path(&format!("{base}.hwp"));
+        let hwpx_path = fixture_path(&format!("{base}.hwpx"));
+        if !hwp_path.exists() || !hwpx_path.exists() {
+            continue;
+        }
+
+        let hwp_bytes = std::fs::read(&hwp_path).expect("hwp fixture should be readable");
+        let hwp_doc = hwpforge_smithy_hwp5::decode_hwp5_with_images(&hwp_bytes)
+            .expect("native hwp5 decode should succeed");
+
+        let hwpx_bytes = std::fs::read(&hwpx_path).expect("hwpx fixture should be readable");
+        let hwpx_doc = HwpxDecoder::decode(&hwpx_bytes).expect("native hwpx decode should succeed");
+
+        assert_eq!(
+            collect_image_treat_as_char(&hwp_doc.document),
+            collect_image_treat_as_char(&hwpx_doc.document),
+            "fixture={base}: HWP5-native and HWPX-native treat_as_char must agree (W2p parity)"
+        );
+    }
 }

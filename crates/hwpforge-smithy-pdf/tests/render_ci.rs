@@ -17,7 +17,7 @@ use hwpforge_core::section::Section;
 use hwpforge_core::StyleLookup;
 use hwpforge_foundation::{Alignment, CharShapeIndex, HwpUnit, ParaShapeIndex};
 use hwpforge_smithy_pdf::{
-    render_document, FontFallbackMode, PdfError, PdfInput, PdfOptions, PdfWarning,
+    render_document, PdfError, PdfInput, PdfOptions, PdfWarning, RenderFailureMode,
 };
 
 /// 테스트 폰트만 등록하는 스타일 컨텍스트 (10pt 고정).
@@ -189,7 +189,7 @@ fn degraded_mode_renders_regular_with_one_style_fallback_warning() {
     let styles = TestStyles { bold: true, face: "HwpForge Rank", ..TestStyles::default() };
     let input = PdfInput { document: &doc, styles: &styles };
     let mut opts = options();
-    opts.font_fallback = FontFallbackMode::Degraded;
+    opts.failure_mode = RenderFailureMode::Degraded;
     let out = render_document(&input, &opts).expect("degraded render");
     assert!(out.bytes.starts_with(b"%PDF-"));
     assert_eq!(
@@ -210,7 +210,7 @@ fn ambiguous_bold_face_errors_in_both_modes() {
     let err = render_document(&input, &options()).unwrap_err();
     assert!(matches!(err, PdfError::FontFaceAmbiguous { .. }), "{err:?}");
     let mut opts = options();
-    opts.font_fallback = FontFallbackMode::Degraded;
+    opts.failure_mode = RenderFailureMode::Degraded;
     let err = render_document(&input, &opts).unwrap_err();
     assert!(matches!(err, PdfError::FontFaceAmbiguous { .. }), "{err:?}");
 }
@@ -225,7 +225,7 @@ fn restricted_license_font_is_fatal_before_embed() {
     let err = render_document(&input, &options()).unwrap_err();
     assert!(matches!(err, PdfError::FontEmbedRestricted { .. }), "{err:?}");
     let mut opts = options();
-    opts.font_fallback = FontFallbackMode::Degraded;
+    opts.failure_mode = RenderFailureMode::Degraded;
     let err = render_document(&input, &opts).unwrap_err();
     assert!(matches!(err, PdfError::FontEmbedRestricted { .. }), "{err:?}");
 }
@@ -265,7 +265,7 @@ fn axis_mismatch_is_fatal_by_default_and_warns_once_in_degraded() {
     let err = render_document(&input, &options()).unwrap_err();
     assert!(matches!(err, PdfError::FontAxisMismatch { .. }), "{err:?}");
     let mut opts = options();
-    opts.font_fallback = FontFallbackMode::Degraded;
+    opts.failure_mode = RenderFailureMode::Degraded;
     let out = render_document(&input, &opts).expect("degraded render");
     assert!(out.bytes.starts_with(b"%PDF-"));
     assert_eq!(
@@ -338,7 +338,7 @@ fn degraded_mode_renders_tofu_with_missing_glyphs_warning() {
     let doc = doc_of(vec![para_with_cache("高가", vec![seg(0, 0)])]);
     let styles = TestStyles::default();
     let mut opts = options();
-    opts.font_fallback = FontFallbackMode::Degraded;
+    opts.failure_mode = RenderFailureMode::Degraded;
     let out =
         render_document(&PdfInput { document: &doc, styles: &styles }, &opts).expect("render");
     assert!(

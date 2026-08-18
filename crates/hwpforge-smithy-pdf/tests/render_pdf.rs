@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use hwpforge_smithy_pdf::font::FontDiscovery;
-use hwpforge_smithy_pdf::{render_document, FontFallbackMode, PdfInput, PdfOptions};
+use hwpforge_smithy_pdf::{render_document, PdfInput, PdfOptions, RenderFailureMode};
 
 const HANCOM_TTF_DIR: &str =
     "/Applications/Hancom Office HWP.app/Contents/Resources/Hnc/Shared/TTF";
@@ -240,7 +240,7 @@ fn probe_blank_hpc_full_render_degraded() {
     let input = PdfInput { document: &validated, styles: &decoded.style_store };
     let mut options = PdfOptions::default();
     options.discovery = FontDiscovery::HancomBundle;
-    options.font_fallback = FontFallbackMode::Degraded;
+    options.failure_mode = RenderFailureMode::Degraded;
     match render_document(&input, &options) {
         Ok(out) => {
             let mut kinds = std::collections::BTreeMap::new();
