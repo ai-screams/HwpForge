@@ -4774,15 +4774,20 @@ fn to_pdf_rejects_unrecognized_container() {
 }
 
 #[test]
-fn to_pdf_hwp5_path_fails_closed_on_unnormalized_textpos() {
-    // 실측 잠금 (W6a): convert 의 HWP5 텍스트 위치 정규화 미완으로 carry 캐시가
-    // admission(textpos 정합)에서 거부된다 — 조용한 오출력 대신 깨끗한 에러.
-    // convert 정규화가 개선되면 이 게이트를 성공 게이트로 갱신할 것.
+fn to_pdf_hwp5_carry_cache_passes_admission_reaches_font_resolution() {
+    // 실측 잠금 (W6a → W1b 갱신): 원래 이 게이트는 "HWP5 textpos 미정규화로
+    // carry 캐시가 admission 에서 거부됨"을 잠갔으나, W1b 좌표 ledger +
+    // 축약점 earliest-preimage 개정으로 admission 을 통과한다. 폰트 무관
+    // CI 경로라 다음 단계인 폰트 해석에서 fail-closed — cause 가
+    // INVALID_CACHE 가 아닌 FONT_UNRESOLVED 임이 곧 정규화 완료의 증거.
+    // (성공 렌더 게이트는 폰트가 있는 smithy-pdf e2e 가 담당.)
     let (value, _stderr, code) =
         run_json(&["to-pdf", fixture("pdf-rules/rules-header-multi.hwp").to_str().unwrap()]);
     assert_eq!(code, 2, "{value}");
     assert_eq!(value["status"], "error");
     assert_eq!(value["code"], "PDF_RENDER_FAILED");
+    assert_eq!(value["cause"]["stage"], "render", "{value}");
+    assert_eq!(value["cause"]["code"], "FONT_UNRESOLVED", "{value}");
 }
 
 #[test]
@@ -4798,6 +4803,9 @@ fn to_pdf_rejects_cacheless_hwpx_fail_closed() {
     let (value, _stderr, code) = run_json(&["to-pdf", hwpx.to_str().unwrap()]);
     assert_eq!(code, 2, "{value}");
     assert_eq!(value["code"], "PDF_RENDER_FAILED");
+    assert_eq!(value["cause"]["stage"], "render", "{value}");
+    assert_eq!(value["cause"]["code"], "NO_RENDERABLE_CACHE", "{value}");
+    assert_eq!(value["cause"]["location"], "s0", "{value}");
 }
 
 #[test]
@@ -4815,6 +4823,7 @@ fn to_pdf_extension_mismatch_detected_without_fonts() {
     let (value, _stderr, code) = run_json(&["to-pdf", misnamed.to_str().unwrap()]);
     assert_eq!(code, 2, "{value}"); // cacheless — 렌더 거부는 동일
     assert_eq!(value["code"], "PDF_RENDER_FAILED");
+    assert_eq!(value["cause"]["code"], "NO_RENDERABLE_CACHE", "{value}");
 }
 
 #[test]

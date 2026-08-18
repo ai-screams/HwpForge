@@ -21,17 +21,48 @@ pub struct CliError {
     /// Optional hint for resolution.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hint: Option<String>,
+    /// Optional machine-readable cause (top-level `code` stays the stable
+    /// coarse contract; `cause` refines it without breaking consumers).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cause: Option<ErrorCause>,
+}
+
+/// Machine-readable refinement of a coarse [`CliError::code`].
+#[derive(Debug, Serialize)]
+pub struct ErrorCause {
+    /// Pipeline stage that produced the failure (e.g. `"render"`).
+    pub stage: &'static str,
+    /// SCREAMING_SNAKE variant code within the stage.
+    pub code: &'static str,
+    /// Sub-kind when the variant carries one (e.g. `UnsupportedContent.kind`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// Document-coordinate location when the variant carries one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
 }
 
 impl CliError {
     /// Creates a new error with the given code and message.
     pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
-        Self { status: "error", code: code.into(), message: message.into(), hint: None }
+        Self {
+            status: "error",
+            code: code.into(),
+            message: message.into(),
+            hint: None,
+            cause: None,
+        }
     }
 
     /// Adds a hint to this error.
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
         self.hint = Some(hint.into());
+        self
+    }
+
+    /// Adds a machine-readable cause to this error.
+    pub fn with_cause(mut self, cause: ErrorCause) -> Self {
+        self.cause = Some(cause);
         self
     }
 

@@ -17,10 +17,11 @@ use hwpforge_smithy_hwp5::Hwp5Warning;
 use hwpforge_smithy_hwpx::{DecodeWarning, HwpxDecoder};
 use hwpforge_smithy_pdf::font::FontDiscovery;
 use hwpforge_smithy_pdf::{
-    render_document, PartialCachePolicy, PdfInput, PdfOptions, PdfWarning, RenderFailureMode,
+    render_document, PartialCachePolicy, PdfError, PdfInput, PdfOptions, PdfWarning,
+    RenderFailureMode,
 };
 
-use crate::error::{check_file_size, CliError};
+use crate::error::{check_file_size, CliError, ErrorCause};
 
 /// OLE2/CFB magic — HWP5 컨테이너.
 const CFB_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
@@ -242,6 +243,66 @@ fn render_warning_dto(w: &PdfWarning) -> WarningDto {
     WarningDto { stage: "render", code, message, location }
 }
 
+/// [`PdfError`] → 안정 cause DTO — 최상위 `PDF_RENDER_FAILED` 계약은
+/// 유지하고 variant 를 SCREAMING_SNAKE 코드로 세분화한다.
+///
+/// `UnsupportedContent.kind` 는 필수 보존: corpus 집계에서 셀 비텍스트와
+/// 기타 admission 거부가 한 덩어리로 합쳐지는 것을 막는다.
+fn pdf_error_cause(err: &PdfError) -> ErrorCause {
+    let (code, kind, location): (&'static str, Option<String>, Option<String>) = match err {
+        PdfError::NoRenderableCache { section } => {
+            ("NO_RENDERABLE_CACHE", None, Some(format!("s{section}")))
+        }
+        PdfError::MissingLayoutCache { first, .. } => {
+            ("MISSING_LAYOUT_CACHE", None, Some(first.clone()))
+        }
+        PdfError::UnsupportedContent { kind, location } => {
+            ("UNSUPPORTED_CONTENT", Some((*kind).to_string()), Some(location.clone()))
+        }
+        PdfError::InternalInvariant { .. } => ("INTERNAL_INVARIANT", None, None),
+        PdfError::GlyphsUnavailable { location, .. } => {
+            ("GLYPHS_UNAVAILABLE", None, Some(location.clone()))
+        }
+        PdfError::AmbiguousHeaderFooter { kind, .. } => {
+            ("AMBIGUOUS_HEADER_FOOTER", Some((*kind).to_string()), None)
+        }
+        PdfError::FontUnresolved { .. } => ("FONT_UNRESOLVED", None, None),
+        PdfError::FontStyleUnavailable { location, .. } => {
+            ("FONT_STYLE_UNAVAILABLE", None, Some(location.clone()))
+        }
+        PdfError::ImageDataMissing { location, .. } => {
+            ("IMAGE_DATA_MISSING", None, Some(location.clone()))
+        }
+        PdfError::UnsupportedImageFormat { format, location, .. } => {
+            ("UNSUPPORTED_IMAGE_FORMAT", Some((*format).to_string()), Some(location.clone()))
+        }
+        PdfError::ImageDecodeFailed { location, .. } => {
+            ("IMAGE_DECODE_FAILED", None, Some(location.clone()))
+        }
+        PdfError::InvalidImageGeometry { location, .. } => {
+            ("INVALID_IMAGE_GEOMETRY", None, Some(location.clone()))
+        }
+        PdfError::ImageAssetConflict { location, .. } => {
+            ("IMAGE_ASSET_CONFLICT", None, Some(location.clone()))
+        }
+        PdfError::FontAxisMismatch { location, .. } => {
+            ("FONT_AXIS_MISMATCH", None, Some(location.clone()))
+        }
+        PdfError::FontEmbedRestricted { .. } => ("FONT_EMBED_RESTRICTED", None, None),
+        PdfError::FontFaceAmbiguous { .. } => ("FONT_FACE_AMBIGUOUS", None, None),
+        PdfError::InvalidCache { .. } => ("INVALID_CACHE", None, None),
+        PdfError::FontIo(_) => ("FONT_IO", None, None),
+        PdfError::StyleUnavailable { location, .. } => {
+            ("STYLE_UNAVAILABLE", None, Some(location.clone()))
+        }
+        PdfError::Backend(_) => ("BACKEND", None, None),
+        // PdfError 는 #[non_exhaustive] — 새 variant 는 조용한 오분류 대신
+        // 집계에서 눈에 띄는 UNCLASSIFIED 로 표면화한다.
+        _ => ("UNCLASSIFIED", None, None),
+    };
+    ErrorCause { stage: "render", code, kind, location }
+}
+
 fn parse_discovery(s: &str, json_mode: bool) -> FontDiscovery {
     match s {
         "explicit" => FontDiscovery::ExplicitOnly,
@@ -350,6 +411,7 @@ pub fn run(
     let rendered = render_document(&PdfInput { document: &validated, styles: &bridge }, &options)
         .unwrap_or_else(|err| {
             CliError::new("PDF_RENDER_FAILED", format!("Cannot render PDF: {err}"))
+                .with_cause(pdf_error_cause(&err))
                 .with_hint(
                     "cacheless documents need a Hancom re-save; font errors may need \
                          --font-dir/--discovery or --degraded",
@@ -504,6 +566,143 @@ mod tests {
             let dto = render_warning_dto(w);
             assert_eq!(dto.stage, "render");
             assert_eq!(&dto.code, code, "{w:?}");
+        }
+    }
+
+    #[test]
+    fn pdf_error_cause_maps_every_variant() {
+        use hwpforge_smithy_pdf::font::FaceStyle;
+        let loc = || "s0/p1/t0r0c0".to_string();
+        let cases: Vec<(PdfError, &str, Option<&str>, Option<&str>)> = vec![
+            (PdfError::NoRenderableCache { section: 2 }, "NO_RENDERABLE_CACHE", None, Some("s2")),
+            (
+                PdfError::MissingLayoutCache { count: 3, first: "s0/p7".into() },
+                "MISSING_LAYOUT_CACHE",
+                None,
+                Some("s0/p7"),
+            ),
+            (
+                PdfError::UnsupportedContent {
+                    kind: "table mixed with inline image",
+                    location: loc(),
+                },
+                "UNSUPPORTED_CONTENT",
+                Some("table mixed with inline image"),
+                Some("s0/p1/t0r0c0"),
+            ),
+            (PdfError::InternalInvariant { detail: "d".into() }, "INTERNAL_INVARIANT", None, None),
+            (
+                PdfError::GlyphsUnavailable { face: "f".into(), count: 1, location: loc() },
+                "GLYPHS_UNAVAILABLE",
+                None,
+                Some("s0/p1/t0r0c0"),
+            ),
+            (
+                PdfError::AmbiguousHeaderFooter { kind: "header", detail: "d".into() },
+                "AMBIGUOUS_HEADER_FOOTER",
+                Some("header"),
+                None,
+            ),
+            (PdfError::FontUnresolved { face: "f".into() }, "FONT_UNRESOLVED", None, None),
+            (
+                PdfError::FontStyleUnavailable {
+                    face: "f".into(),
+                    style: FaceStyle::Bold,
+                    location: loc(),
+                },
+                "FONT_STYLE_UNAVAILABLE",
+                None,
+                Some("s0/p1/t0r0c0"),
+            ),
+            (
+                PdfError::ImageDataMissing { key: "k".into(), location: loc() },
+                "IMAGE_DATA_MISSING",
+                None,
+                Some("s0/p1/t0r0c0"),
+            ),
+            (
+                PdfError::UnsupportedImageFormat {
+                    key: "k".into(),
+                    format: "Bmp",
+                    location: loc(),
+                },
+                "UNSUPPORTED_IMAGE_FORMAT",
+                Some("Bmp"),
+                Some("s0/p1/t0r0c0"),
+            ),
+            (
+                PdfError::ImageDecodeFailed {
+                    key: "k".into(),
+                    detail: "d".into(),
+                    location: loc(),
+                },
+                "IMAGE_DECODE_FAILED",
+                None,
+                Some("s0/p1/t0r0c0"),
+            ),
+            (
+                PdfError::InvalidImageGeometry {
+                    key: "k".into(),
+                    detail: "d".into(),
+                    location: loc(),
+                },
+                "INVALID_IMAGE_GEOMETRY",
+                None,
+                Some("s0/p1/t0r0c0"),
+            ),
+            (
+                PdfError::ImageAssetConflict { key: "k".into(), location: loc() },
+                "IMAGE_ASSET_CONFLICT",
+                None,
+                Some("s0/p1/t0r0c0"),
+            ),
+            (
+                PdfError::FontAxisMismatch { location: loc(), fonts: vec!["a".into()] },
+                "FONT_AXIS_MISMATCH",
+                None,
+                Some("s0/p1/t0r0c0"),
+            ),
+            (
+                PdfError::FontEmbedRestricted {
+                    face: "f".into(),
+                    path: "/x".into(),
+                    reason: "r".into(),
+                },
+                "FONT_EMBED_RESTRICTED",
+                None,
+                None,
+            ),
+            (
+                PdfError::FontFaceAmbiguous {
+                    face: "f".into(),
+                    style: FaceStyle::Bold,
+                    detail: "d".into(),
+                },
+                "FONT_FACE_AMBIGUOUS",
+                None,
+                None,
+            ),
+            (PdfError::InvalidCache { detail: "d".into() }, "INVALID_CACHE", None, None),
+            (
+                PdfError::FontIo(std::io::Error::new(std::io::ErrorKind::NotFound, "x")),
+                "FONT_IO",
+                None,
+                None,
+            ),
+            (
+                PdfError::StyleUnavailable { what: "font name", location: loc() },
+                "STYLE_UNAVAILABLE",
+                None,
+                Some("s0/p1/t0r0c0"),
+            ),
+            (PdfError::Backend("b".into()), "BACKEND", None, None),
+        ];
+        for (err, code, kind, location) in &cases {
+            let cause = pdf_error_cause(err);
+            assert_eq!(cause.stage, "render", "{err:?}");
+            assert_eq!(&cause.code, code, "{err:?}");
+            assert_eq!(cause.kind.as_deref(), *kind, "{err:?}");
+            assert_eq!(cause.location.as_deref(), *location, "{err:?}");
         }
     }
 
