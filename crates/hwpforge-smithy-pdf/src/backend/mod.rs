@@ -32,8 +32,12 @@ pub(crate) fn write_pdf(
     failure_mode: RenderFailureMode,
     warnings: &mut Vec<PdfWarning>,
 ) -> PdfResult<Vec<u8>> {
-    let mut krilla_fonts: Vec<Option<krilla::text::Font>> = vec![None; fonts.len()];
-    let mut image_cache: HashMap<String, CachedImage> = HashMap::new();
+    let mut writer = PdfWriter {
+        fonts,
+        krilla_fonts: vec![None; fonts.len()],
+        image_cache: HashMap::new(),
+        failure_mode,
+    };
     let mut doc = krilla::Document::new();
 
     for page in pages {
@@ -41,11 +45,41 @@ pub(crate) fn write_pdf(
             .ok_or_else(|| PdfError::Backend("invalid page size".to_string()))?;
         let mut pdf_page = doc.start_page_with(krilla::page::PageSettings::new(size));
         let mut surface = pdf_page.surface();
+        writer.draw_items(&mut surface, &page.items, warnings)?;
+        surface.finish();
+        pdf_page.finish();
+    }
 
-        for item in &page.items {
+    doc.finish().map_err(|e| PdfError::Backend(format!("{e:?}")))
+}
+
+/// 문서 스코프 렌더 상태 — 페이지와 중첩 클립을 넘어 폰트·이미지 캐시를
+/// 공유한다 (한 문서에 1회 생성).
+struct PdfWriter<'f> {
+    fonts: &'f [ResolvedFont],
+    /// [`crate::paint::FontKey`] → 지연 파싱된 krilla 폰트 (중복 임베드 방지).
+    krilla_fonts: Vec<Option<krilla::text::Font>>,
+    /// canonical key → preflight 된 krilla 이미지 (§3 D2).
+    image_cache: HashMap<String, CachedImage>,
+    failure_mode: RenderFailureMode,
+}
+
+impl PdfWriter<'_> {
+    /// paint 항목들을 Vec 순서(= z-order)대로 surface 에 그린다.
+    ///
+    /// [`PaintItem::Clipped`] 는 **재귀**로 처리한다: 클립 사각형을
+    /// `push_clip_path` 로 세우고 자식을 그린 뒤 `pop` 한다 (중첩 클립 허용).
+    /// push/pop 은 자식이 에러를 내도 반드시 짝을 맞춘다 (아래 참조).
+    fn draw_items(
+        &mut self,
+        surface: &mut krilla::surface::Surface<'_>,
+        items: &[PaintItem],
+        warnings: &mut Vec<PdfWarning>,
+    ) -> PdfResult<()> {
+        for item in items {
             match item {
                 PaintItem::Glyphs(run) => {
-                    let font = resolve_krilla_font(&mut krilla_fonts, fonts, run.font.0)?;
+                    let font = resolve_krilla_font(&mut self.krilla_fonts, self.fonts, run.font.0)?;
                     let (r, g, b) = run.color.to_rgb();
                     surface.set_stroke(None);
                     surface.set_fill(Some(krilla::paint::Fill {
@@ -105,7 +139,7 @@ pub(crate) fn write_pdf(
                     let h = item.size.height.0;
                     if !(w.is_finite() && h.is_finite()) || w <= 0.0 || h <= 0.0 {
                         let detail = format!("display size {w}x{h}pt");
-                        match failure_mode {
+                        match self.failure_mode {
                             RenderFailureMode::Fatal => {
                                 return Err(PdfError::InvalidImageGeometry {
                                     key: item.canonical_key.clone(),
@@ -123,11 +157,11 @@ pub(crate) fn write_pdf(
                             }
                         }
                     }
-                    let image = match cached_image(&mut image_cache, item) {
+                    let image = match cached_image(&mut self.image_cache, item) {
                         Ok(image) => image,
                         // 자산 충돌은 모드 무관 fatal (§3 D2).
                         Err(e @ PdfError::ImageAssetConflict { .. }) => return Err(e),
-                        Err(e) => match failure_mode {
+                        Err(e) => match self.failure_mode {
                             RenderFailureMode::Fatal => return Err(e),
                             RenderFailureMode::Degraded => {
                                 warnings.push(image_error_to_warning(e));
@@ -148,14 +182,39 @@ pub(crate) fn write_pdf(
                     surface.draw_image(image, size);
                     surface.pop();
                 }
+                PaintItem::Clipped(group) => {
+                    // 빈/퇴화 클립(0·음수·non-finite 크기)은 아무것도 보이지
+                    // 않는다 → clip op 도 자식도 방출하지 않고 그룹째 생략한다
+                    // (krilla `from_xywh` 는 0-폭을 거부하지 않으므로 명시 가드
+                    // 필요 — Image arm 의 기하 가드와 동계열).
+                    let w = group.size.width.0;
+                    let h = group.size.height.0;
+                    if !(w.is_finite() && h.is_finite()) || w <= 0.0 || h <= 0.0 {
+                        continue;
+                    }
+                    let Some(kr) = krilla::geom::Rect::from_xywh(
+                        group.origin.x.0 as f32,
+                        group.origin.y.0 as f32,
+                        group.size.width.0 as f32,
+                        group.size.height.0 as f32,
+                    ) else {
+                        continue;
+                    };
+                    let mut pb = krilla::geom::PathBuilder::new();
+                    pb.push_rect(kr);
+                    let Some(path) = pb.finish() else { continue };
+                    // push/pop 은 반드시 짝이 맞아야 한다 — 자식이 (Fatal
+                    // 이미지 등) 에러를 내도 pop 을 건너뛰면 krilla 가 surface
+                    // drop/finish 에서 패닉한다. 그래서 **pop-후-전파** 한다.
+                    surface.push_clip_path(&path, &krilla::paint::FillRule::NonZero);
+                    let inner = self.draw_items(surface, &group.items, warnings);
+                    surface.pop();
+                    inner?;
+                }
             }
         }
-
-        surface.finish();
-        pdf_page.finish();
+        Ok(())
     }
-
-    doc.finish().map_err(|e| PdfError::Backend(format!("{e:?}")))
 }
 
 /// canonical key 로 캐시 조회/생성한다 — 미스 시 스니핑 → 생성자 →
@@ -601,5 +660,160 @@ mod image_tests {
 
     fn approx(a: f64, b: f64) -> bool {
         (a - b).abs() <= 0.01
+    }
+
+    // ── W4 w2: PaintItem::Clipped — clip 그룹 방출·중첩·경계 잠금 ─────
+    //
+    // 클립 검증은 CTM(이미지)과 달리 콘텐츠 스트림의 **clip 오퍼레이터**
+    // (`W n`)와 클립 경로 좌표를 직접 읽는다. "경계 밖이 잘린다"는
+    // ① 클립이 자식 그리기 앞에 세워지고(q … W n … 자식 … Q) ② 클립
+    // 사각형의 실제 좌표가 origin+size 와 일치함으로 잠근다 (좌표가
+    // 틀리면 잘리는 위치도 틀리다 — 존재만 보는 검증은 고무도장).
+
+    fn clip_group(items: Vec<PaintItem>) -> PaintItem {
+        PaintItem::Clipped(crate::paint::ClipGroup {
+            origin: Point { x: Pt(10.0), y: Pt(20.0) },
+            size: Size { width: Pt(50.0), height: Pt(40.0) },
+            items,
+        })
+    }
+
+    /// 클립보다 훨씬 큰 채움 사각형 — 클립이 경계에서 잘라야 하는 대상.
+    fn inner_fill_rect() -> PaintItem {
+        PaintItem::Rect(crate::paint::RectItem {
+            x: Pt(0.0),
+            y: Pt(0.0),
+            width: Pt(500.0),
+            height: Pt(500.0),
+            color: hwpforge_foundation::Color::from_rgb(255, 0, 0),
+        })
+    }
+
+    /// 클립 경로 좌표(첫 `W` 앞, 직전 `q` 이후)를 (x,y) 쌍으로 읽어 페이지
+    /// y-flip 후 top-left bbox 로 환산한다 (이미지 cm 코너변환과 동일 방법).
+    fn clip_bbox_topleft(content: &[u8], page_height: f64) -> (f64, f64, f64, f64) {
+        let text = String::from_utf8_lossy(content);
+        let tokens: Vec<&str> = text.split_whitespace().collect();
+        let w_idx = tokens.iter().position(|t| *t == "W").expect("clip W operator");
+        let q_idx = tokens[..w_idx].iter().rposition(|t| *t == "q").map_or(0, |i| i + 1);
+        let nums: Vec<f64> =
+            tokens[q_idx..w_idx].iter().filter_map(|t| t.parse::<f64>().ok()).collect();
+        assert!(nums.len() >= 8 && nums.len().is_multiple_of(2), "clip path coords: {nums:?}");
+        let xs: Vec<f64> = nums.iter().step_by(2).copied().collect();
+        let ys: Vec<f64> = nums.iter().skip(1).step_by(2).copied().collect();
+        let min_x = xs.iter().copied().fold(f64::INFINITY, f64::min);
+        let max_x = xs.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let min_y = ys.iter().copied().fold(f64::INFINITY, f64::min);
+        let max_y = ys.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        (min_x, page_height - max_y, max_x - min_x, max_y - min_y)
+    }
+
+    #[test]
+    fn clipped_group_establishes_clip_before_inner_items() {
+        let pages = one_page(vec![clip_group(vec![inner_fill_rect()])]);
+        let mut warnings = Vec::new();
+        let bytes =
+            write_pdf(&pages, &[], RenderFailureMode::Fatal, &mut warnings).expect("render");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let content = content_stream_bytes(&bytes);
+        let text = String::from_utf8_lossy(&content);
+        // 클립 확립(W) 정확히 1회. (leaf draw 는 자기 q/cm/Q 로 감싸므로
+        // q 총계는 클립 1 + 자식 draw 수 — 여기선 검사 대상이 아니다.)
+        assert_eq!(
+            text.split_whitespace().filter(|t| *t == "W").count(),
+            1,
+            "clip op W 정확히 1회: {text}"
+        );
+        // q/Q 짝이 맞아야 한다 (불일치 = surface drop 시 krilla 패닉).
+        assert_eq!(text.matches('q').count(), text.matches('Q').count(), "q/Q 균형: {text}");
+        // 자식 채움(f)은 클립(W) **뒤**에 온다 — 클립이 자식보다 먼저
+        // 세워져 자식 그리기가 클립 영향을 받는다 (operator-level 잠금).
+        let after_w: Vec<&str> = text.split_whitespace().skip_while(|t| *t != "W").collect();
+        assert!(after_w.contains(&"f"), "자식 채움이 클립 뒤에서: {text}");
+    }
+
+    #[test]
+    fn clip_rect_operands_match_origin_and_size_after_page_yflip() {
+        // 클립 origin=(10,20) size=(50,40), 페이지 595x842 (clip_group/one_page 기본).
+        let pages = one_page(vec![clip_group(vec![inner_fill_rect()])]);
+        let mut warnings = Vec::new();
+        let bytes =
+            write_pdf(&pages, &[], RenderFailureMode::Fatal, &mut warnings).expect("render");
+        let content = content_stream_bytes(&bytes);
+        let (x, y, w, h) = clip_bbox_topleft(&content, 842.0);
+        assert!(approx(x, 10.0), "clip.x={x}");
+        assert!(approx(y, 20.0), "clip.y={y}");
+        assert!(approx(w, 50.0), "clip.width={w}");
+        assert!(approx(h, 40.0), "clip.height={h}");
+    }
+
+    #[test]
+    fn nested_clipped_groups_stack_clips() {
+        let inner = clip_group(vec![inner_fill_rect()]);
+        let outer = PaintItem::Clipped(crate::paint::ClipGroup {
+            origin: Point { x: Pt(5.0), y: Pt(5.0) },
+            size: Size { width: Pt(200.0), height: Pt(200.0) },
+            items: vec![inner],
+        });
+        let pages = one_page(vec![outer]);
+        let mut warnings = Vec::new();
+        let bytes =
+            write_pdf(&pages, &[], RenderFailureMode::Fatal, &mut warnings).expect("render");
+        let content = content_stream_bytes(&bytes);
+        let text = String::from_utf8_lossy(&content);
+        let tokens: Vec<&str> = text.split_whitespace().collect();
+        // 두 겹 클립 = W 정확히 2회.
+        assert_eq!(tokens.iter().filter(|t| **t == "W").count(), 2, "중첩 클립 W 2회: {text}");
+        // 두 W 모두 자식 채움(f) **앞**에 온다 — 자식이 두 클립 안에서
+        // 그려진다 (중첩이 실제로 쌓였다는 operator-level 증거).
+        let first_f = tokens.iter().position(|t| *t == "f").expect("자식 채움 f");
+        let ws_before_f = tokens[..first_f].iter().filter(|t| **t == "W").count();
+        assert_eq!(ws_before_f, 2, "자식 앞에 클립 2겹: {text}");
+        // 재귀 push/pop 이 짝을 맞춘다.
+        assert_eq!(text.matches('q').count(), text.matches('Q').count(), "q/Q 균형: {text}");
+    }
+
+    #[test]
+    fn empty_items_clip_group_pushes_and_pops_without_inner_draws() {
+        let pages = one_page(vec![clip_group(vec![])]);
+        let mut warnings = Vec::new();
+        let bytes =
+            write_pdf(&pages, &[], RenderFailureMode::Fatal, &mut warnings).expect("render");
+        let content = content_stream_bytes(&bytes);
+        let text = String::from_utf8_lossy(&content);
+        // 클립은 세워지고(W) 짝을 맞춰 pop 된다(q==Q==1), 자식 채움 없음.
+        assert_eq!(text.split_whitespace().filter(|t| *t == "W").count(), 1, "{text}");
+        assert_eq!(text.matches('q').count(), 1, "{text}");
+        assert_eq!(text.matches('Q').count(), 1, "{text}");
+        assert!(!text.split_whitespace().any(|t| t == "f"), "자식 채움 없음: {text}");
+    }
+
+    #[test]
+    fn zero_size_clip_group_is_omitted_but_siblings_render() {
+        // 폭 0 클립 = 빈 클립(아무것도 안 보임) → 그룹째 생략. 형제 사각형은
+        // 정상 렌더 (생략이 후속 항목을 삼키지 않음 — 짝 불일치 없음).
+        let zero = PaintItem::Clipped(crate::paint::ClipGroup {
+            origin: Point { x: Pt(10.0), y: Pt(20.0) },
+            size: Size { width: Pt(0.0), height: Pt(40.0) },
+            items: vec![inner_fill_rect()],
+        });
+        let sibling = PaintItem::Rect(crate::paint::RectItem {
+            x: Pt(100.0),
+            y: Pt(100.0),
+            width: Pt(20.0),
+            height: Pt(20.0),
+            color: hwpforge_foundation::Color::from_rgb(0, 128, 0),
+        });
+        let pages = one_page(vec![zero, sibling]);
+        let mut warnings = Vec::new();
+        let bytes =
+            write_pdf(&pages, &[], RenderFailureMode::Fatal, &mut warnings).expect("render");
+        let content = content_stream_bytes(&bytes);
+        let text = String::from_utf8_lossy(&content);
+        assert!(!text.split_whitespace().any(|t| t == "W"), "빈 클립 = clip op 없음: {text}");
+        // 형제 사각형은 정상 렌더 (생략이 후속 항목을 삼키지 않음).
+        assert!(text.split_whitespace().any(|t| t == "f"), "형제 사각형은 렌더됨: {text}");
+        // 생략 경로도 q/Q 짝이 맞는다 (형제 draw 는 자기 q/cm/Q 완결).
+        assert_eq!(text.matches('q').count(), text.matches('Q').count(), "q/Q 균형: {text}");
     }
 }

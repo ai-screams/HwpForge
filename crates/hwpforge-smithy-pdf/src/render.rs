@@ -311,6 +311,17 @@ pub(crate) fn build_paint_pages(
                         });
                         continue;
                     }
+                    crate::source::LineAtom::TextBox(_) => {
+                        // W4 w2 는 타입([`LineTextBox`])만 정의한다 — source→paint
+                        // 배선(내부 replay·clip·박스 페인트)은 w3/w4 몫이다.
+                        // production admission 이 아직 글상자를 방출하지 않아
+                        // 도달 불가지만, 무음 드롭 금지 원칙에 따라 fail-closed
+                        // (w3 이 이 arm 을 실제 렌더로 대체한다).
+                        return Err(PdfError::UnsupportedContent {
+                            kind: "inline text box",
+                            location: line.location.clone(),
+                        });
+                    }
                     crate::source::LineAtom::Text(run) => run,
                 };
                 let text = if atom_idx == last_atom_idx {

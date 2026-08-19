@@ -29,7 +29,7 @@ pub struct LineRun {
     /// 문자 스타일 (폰트명·크기 조회 키).
     pub char_shape: CharShapeIndex,
 }
-/// 줄 안의 원자 하나 — 텍스트 run 또는 인라인 이미지 (W2a §3 D4).
+/// 줄 안의 원자 하나 — 텍스트 run·인라인 이미지·인라인 글상자 (W2a §3 D4 · W4).
 #[derive(Debug, Clone, PartialEq)]
 pub enum LineAtom {
     /// 셰이핑 대상 텍스트 run.
@@ -37,6 +37,10 @@ pub enum LineAtom {
     /// 인라인 이미지 — W2a 에선 synthetic 테스트만 생성하고 production
     /// producer 는 admission 이 막는다 (개방 = W2b).
     Image(LineImage),
+    /// 인라인(글자취급) 글상자 — W4 w2 에선 타입만 정의하고 production
+    /// producer(admission)는 w3 이 연다. 렌더는 w3 이 [`LineTextBox`] 를
+    /// [`crate::paint::PaintItem::Clipped`] 로 낮춘다.
+    TextBox(LineTextBox),
 }
 
 /// 줄 안 인라인 이미지 원자.
@@ -48,6 +52,87 @@ pub struct LineImage {
     pub width: i32,
     /// 표시 높이 (HWPUNIT).
     pub height: i32,
+}
+
+/// 줄 안 인라인(글자취급) 글상자 원자 (W4 w2).
+///
+/// 글상자는 이미지처럼 호스트 줄에서 인라인 **폭**([`Self::width`])을
+/// 소비하는 원자다. 내부는 박스-내용 상대 좌표의 연속 줄들
+/// ([`Self::inner_lines`])이고, 테두리·채움([`Self::style`])과 세로
+/// 정렬([`Self::vert_align`])을 가진다 (설계 §8a 실측).
+///
+/// # w3 이 소비할 계약
+///
+/// 1. **원점·폭 소비**: 호스트 줄의 x 커서가 [`Self::width`] 만큼 전진한다
+///    (인라인 이미지와 동일 — [`LineImage::width`] 선례). 박스 좌상단 =
+///    (전진 전 x, 호스트 줄 top).
+/// 2. **박스 clip**: 박스 사각형([`Self::width`]×[`Self::height`])으로
+///    [`crate::paint::PaintItem::Clipped`] 를 세운다 — overflow 실측(한컴은
+///    넘친 줄을 캐시에 방출하고 렌더에서 절단)이라 상시 clip.
+/// 3. **내부 줄 replay**: [`Self::inner_lines`] 각 줄을 **박스 원점 +
+///    textMargin(기본 283, gotcha #29) + vertAlign 시프트** 를 더해 절대
+///    배치한다 (셀 replay 선례 — [`crate::source::table`]). 내부 캐시 v축은
+///    문단 경계를 넘어 연속이다 (§8a). 각 줄의 `seg`([`hwpforge_core::layout::LineSeg`])·
+///    `alignment`·`is_last_line` 이 텍스트/이미지 배치와 JUSTIFY 규칙을 준다.
+/// 4. **vertAlign 시프트**: 내부 캐시는 vertAlign 을 반영하지 않는다(3종
+///    모두 내부 vertpos 0 — §8f 실측) — TOP/CENTER/BOTTOM 은 렌더가
+///    콘텐츠 높이 대비 박스 높이 여백으로 시프트한다 (셀 valign 선례).
+///
+/// # 명시 제외 (W4 백로그 — admission fail-closed 유지)
+///
+/// 내부 원자가 다시 글상자·표인 중첩은 W4 범위 밖이다. w3 의 admission 이
+/// 그런 캐시를 거부한다 (fixture 부재 — §8f ⑤). 타입 자체는
+/// [`TextBoxLine::atoms`] 가 [`LineAtom`] 를 담아 재귀 표현이 가능하다.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LineTextBox {
+    /// 박스 폭 (HWPUNIT) — 호스트 줄에서 소비하는 인라인 폭.
+    pub width: i32,
+    /// 박스 높이 (HWPUNIT) — clip 영역 높이.
+    pub height: i32,
+    /// 테두리·채움 스타일 (Core `ShapeStyle` 에서 증류 — `None` 이면 박스
+    /// 페인트 없음, 내부 콘텐츠만).
+    pub style: Option<TextBoxStyle>,
+    /// 내부 콘텐츠 세로 정렬 (TOP/CENTER/BOTTOM — 내부 캐시 미반영, 렌더가
+    /// 시프트).
+    pub vert_align: hwpforge_foundation::VerticalAlign,
+    /// 내부 줄들 (박스-내용 상대, 문단 경계를 넘어 연속하는 v축 — §8a).
+    pub inner_lines: Vec<TextBoxLine>,
+}
+
+/// 글상자 내부 한 줄 (박스-내용 상대 좌표 — w3 렌더가 박스 원점·textMargin·
+/// vertAlign 시프트를 더해 절대 배치한다).
+///
+/// `seg` 는 디코드 캐시의 [`hwpforge_core::layout::LineSeg`] 를 **그대로**
+/// 나른다 (설계 §8g "내부 lineseg replay = 그대로 재생"). `textpos` 는
+/// 원자가 이미 줄별로 분할됐으므로 렌더에서 쓰이지 않지만, 캐시 실측값을
+/// 왜곡 없이 보존한다.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextBoxLine {
+    /// 이 줄의 조판 캐시 기하 (박스-내용 상대 — vertpos/baseline/horzpos/
+    /// horzsize/vertsize/textheight).
+    pub seg: hwpforge_core::layout::LineSeg,
+    /// 줄 원자들 (텍스트/이미지 — 재귀 표현. 중첩 글상자·표는 W4 제외,
+    /// admission fail-closed).
+    pub atoms: Vec<LineAtom>,
+    /// 이 줄이 속한 (내부) 문단의 정렬.
+    pub alignment: Alignment,
+    /// (내부) 문단의 마지막 줄인지 (JUSTIFY 마지막 줄 규칙).
+    pub is_last_line: bool,
+}
+
+/// 글상자 테두리·채움 (Core `ShapeStyle` 증류 — Paint IR `Rect`(채움)·
+/// `Line`(테두리)로 낮출 원색·굵기만).
+///
+/// `line_style`(dash/dot 등)은 담지 않는다 — Paint `Line` 이 실선만
+/// 그리므로(설계 §8g w4) 담아도 죽은 데이터다.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextBoxStyle {
+    /// 테두리 색 (`None` = 테두리 없음).
+    pub line_color: Option<Color>,
+    /// 채움 색 (`None` = 채움 없음).
+    pub fill_color: Option<Color>,
+    /// 테두리 굵기 (HWPUNIT — `line_color` 가 있을 때만 의미).
+    pub line_width: i32,
 }
 
 /// 배치가 끝난 한 줄.
@@ -75,7 +160,7 @@ impl LaidLine {
     pub fn text_runs(&self) -> impl Iterator<Item = &LineRun> {
         self.atoms.iter().filter_map(|a| match a {
             LineAtom::Text(r) => Some(r),
-            LineAtom::Image(_) => None,
+            LineAtom::Image(_) | LineAtom::TextBox(_) => None,
         })
     }
 }
@@ -1202,6 +1287,77 @@ mod tests {
         }
     }
 
+    // ── W4 w2: LineAtom::TextBox 구축/접근 계약 (w3 소비 형태) ──────
+
+    /// 글상자 원자가 박스 크기·스타일·vertAlign 과 내부 줄(lineseg + 재귀
+    /// 원자)을 손실 없이 나르고, 호스트 줄의 텍스트 run 으로 새지 않는지
+    /// 잠근다 — w3 이 이 형태를 소비한다.
+    #[test]
+    fn line_text_box_carries_size_style_and_recursive_inner_atoms() {
+        let inner_text = TextBoxLine {
+            seg: seg(0, 0),
+            atoms: vec![LineAtom::Text(LineRun {
+                text: "글상자 안 텍스트".to_string(),
+                char_shape: CharShapeIndex::new(0),
+            })],
+            alignment: Alignment::Left,
+            is_last_line: false,
+        };
+        // 내부 v축은 문단 경계를 넘어 연속 (0 → 1000, §8a) — 두 번째 줄은
+        // 이미지 원자 (재귀 표현).
+        let inner_image = TextBoxLine {
+            seg: seg(0, 1000),
+            atoms: vec![LineAtom::Image(LineImage {
+                canonical_key: "BinData/inner.png".to_string(),
+                width: 500,
+                height: 500,
+            })],
+            alignment: Alignment::Center,
+            is_last_line: true,
+        };
+        let tb = LineTextBox {
+            width: 22677,
+            height: 11339,
+            style: Some(TextBoxStyle {
+                line_color: Some(Color::from_rgb(0, 0, 255)),
+                fill_color: Some(Color::from_rgb(255, 244, 200)),
+                line_width: 100,
+            }),
+            vert_align: hwpforge_foundation::VerticalAlign::Center,
+            inner_lines: vec![inner_text, inner_image],
+        };
+
+        // 호스트 줄에 인라인 원자로 얹혀도 텍스트 run 으로 세지 않는다.
+        let line = LaidLine {
+            location: "s0/p0/l0".to_string(),
+            atoms: vec![LineAtom::TextBox(tb)],
+            top_y: 0,
+            baseline_y: 850,
+            line_box: LineBox { horzpos: 0, horzsize: 22677 },
+            is_last_line: true,
+            alignment: Alignment::Left,
+        };
+        assert_eq!(line.text_runs().count(), 0, "글상자는 호스트 줄의 텍스트 run 이 아니다");
+
+        let LineAtom::TextBox(tb) = &line.atoms[0] else { panic!("expected TextBox atom") };
+        assert_eq!(tb.width, 22677);
+        assert_eq!(tb.height, 11339);
+        assert_eq!(tb.vert_align, hwpforge_foundation::VerticalAlign::Center);
+        let style = tb.style.as_ref().expect("style carried");
+        assert_eq!(style.line_width, 100);
+        assert_eq!(style.line_color, Some(Color::from_rgb(0, 0, 255)));
+        assert_eq!(style.fill_color, Some(Color::from_rgb(255, 244, 200)));
+
+        assert_eq!(tb.inner_lines.len(), 2);
+        assert_eq!(tb.inner_lines[0].seg.vertpos, 0);
+        assert_eq!(tb.inner_lines[1].seg.vertpos, 1000, "내부 v축은 문단 경계를 넘어 연속");
+        assert!(matches!(tb.inner_lines[0].atoms[0], LineAtom::Text(_)));
+        assert!(matches!(tb.inner_lines[1].atoms[0], LineAtom::Image(_)), "내부 원자는 재귀");
+        assert!(!tb.inner_lines[0].is_last_line);
+        assert!(tb.inner_lines[1].is_last_line);
+        assert_eq!(tb.inner_lines[1].alignment, Alignment::Center);
+    }
+
     // ── W2b c2: body admission·높이 profile (§4 D1/D2) ──────────
 
     fn img_seg(textpos: u32, vertpos: i32) -> LineSeg {
@@ -1305,6 +1461,7 @@ mod tests {
             .map(|a| match a {
                 LineAtom::Text(_) => "text",
                 LineAtom::Image(_) => "image",
+                LineAtom::TextBox(_) => "textbox",
             })
             .collect()
     }
