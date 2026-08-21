@@ -425,14 +425,29 @@ fn collect_page_events(
     (restarts, hide_marks)
 }
 
-/// 줄이 이미지 지배 profile(삼중 일치: vertsize==textheight==이미지
-/// 높이)인지 — 경계 귀속 판별과 H4 후검사가 **동일 predicate 를 공유**
-/// 한다 (§7 r2 fold-in — 순환 아님: 독립 입력의 방어적 중복).
+/// 글상자 내부 텍스트 여백 (HWPUNIT) — HWPX `<hp:textMargin>` 기본값
+/// (gotcha #29). Core `Control::TextBox` 는 여백을 carry 하지 않으므로 기본을
+/// 쓴다 — 비기본 여백 fixture 는 host-줄 predicate 불일치로 fail-closed 된다.
+pub(crate) const TEXTBOX_TEXT_MARGIN: i32 = 283;
+
+/// 줄이 **원자 지배 profile**(삼중 일치: vertsize==textheight==원자 기대
+/// 높이)인지 — 인라인 이미지·글상자가 공유하는 host-줄 predicate. 경계 귀속
+/// 판별과 후검사가 이 동일 predicate 를 쓴다 (§7 r2 fold-in — 순환 아님:
+/// 독립 입력의 방어적 중복).
+pub(crate) fn line_matches_object_height(
+    seg: &hwpforge_core::layout::LineSeg,
+    height: i32,
+) -> bool {
+    seg.vertsize == height && seg.textheight == height
+}
+
+/// 줄이 이미지 지배 profile 인지 (이미지 기대 높이 = `image_height`).
+/// [`line_matches_object_height`] 의 이미지 이름 alias — 기존 호출부 유지.
 pub(crate) fn line_matches_image_height(
     seg: &hwpforge_core::layout::LineSeg,
     image_height: i32,
 ) -> bool {
-    seg.vertsize == image_height && seg.textheight == image_height
+    line_matches_object_height(seg, image_height)
 }
 
 /// body admission 이 허용하는 글자취급(treat_as_char) 인라인 이미지인지
@@ -440,6 +455,51 @@ pub(crate) fn line_matches_image_height(
 pub(crate) fn is_admitted_inline_image(content: &RunContent) -> bool {
     matches!(content, RunContent::Image(img)
         if img.placement.as_ref().is_some_and(|p| p.treat_as_char))
+}
+
+/// body admission 이 허용하는 글자취급(treat_as_char) 인라인 글상자인지
+/// (W4 §8g — `placement == None` 은 레거시 인라인 기본값(treat_as_char)이라
+/// 허용, `Some` 은 `treat_as_char` 일 때만. 앵커형(`treat_as_char=false`)은
+/// 보수 거부 → 앵커 렌더 = W5).
+pub(crate) fn is_admitted_inline_textbox(content: &RunContent) -> bool {
+    matches!(content, RunContent::Control(c)
+        if matches!(&**c, hwpforge_core::control::Control::TextBox { placement, .. }
+            if placement.as_ref().is_none_or(|p| p.treat_as_char)))
+}
+
+/// 글상자 내부 콘텐츠 세로 범위 = `max(내부 줄 vertpos + vertsize)` (checked).
+///
+/// admission host-줄 predicate(`max(box.height, extent + 상하 textMargin)`)와
+/// 렌더 vertAlign 시프트(`interior = box.height − 2×textMargin`, `interior −
+/// extent`)가 이 **단일 산식**을 공유한다 — 두 단계가 drift 하지 않도록.
+pub(crate) fn textbox_content_extent(
+    inner_lines: &[TextBoxLine],
+    location: &str,
+) -> PdfResult<i32> {
+    let mut extent = 0;
+    for line in inner_lines {
+        let bottom = line.seg.vertpos.checked_add(line.seg.vertsize).ok_or_else(|| {
+            PdfError::InvalidCache {
+                detail: format!("{location}: text box inner line bottom overflows i32"),
+            }
+        })?;
+        extent = extent.max(bottom);
+    }
+    Ok(extent)
+}
+
+/// 글상자 host 줄 기대 높이 = `max(box.height, content_extent + 상하 textMargin)`.
+///
+/// fixture 실측(§8f ①): basic 11339(=box.height) · valign 7087(=box.height) ·
+/// overflow 12766(=extent 12200 + 566 > box 4252). 불일치 = 미측정 profile →
+/// 호출부가 `InvalidCache` fail-closed.
+pub(crate) fn textbox_expected_host_height(box_height: i32, content_extent: i32) -> PdfResult<i32> {
+    let with_margins = content_extent.checked_add(2 * TEXTBOX_TEXT_MARGIN).ok_or_else(|| {
+        PdfError::InvalidCache {
+            detail: "text box content extent + margins overflows i32".to_string(),
+        }
+    })?;
+    Ok(box_height.max(with_margins))
 }
 
 /// 렌더 replay(`collect_page_events`)가 실제 소비하는 0폭 marker 인지.
@@ -911,10 +971,13 @@ fn replay_section(
         // W2b (§4 D1): body 는 **글자취급(treat_as_char) 인라인 이미지**를
         // 추가 허용한다 — placement None/false 는 보수 거부 유지 (앵커형
         // 렌더 = W5). 그 외 미렌더 원자는 여전히 InvalidCache.
+        // W4 (§8g): body 는 글자취급(treat_as_char) 인라인 **글상자**도
+        // 추가 허용한다 — 앵커형(treat_as_char=false)은 여전히 거부(W5).
         if para.runs.iter().any(|r| {
             r.content.plain_text().is_none()
                 && !is_replay_consumed_marker(&r.content)
                 && !is_admitted_inline_image(&r.content)
+                && !is_admitted_inline_textbox(&r.content)
         }) {
             return Err(PdfError::InvalidCache {
                 detail: format!(
@@ -928,12 +991,21 @@ fn replay_section(
         let utf16: Vec<u16> = text.encode_utf16().collect();
         validate_textpos(cache, utf16.len(), &location)?;
 
-        // W2b (§4 D2): 이미지 문단은 pure helper 로 줄별 원자 귀속 +
-        // 높이 삼중 일치(image.height == vertsize == textheight — W0a
-        // 실측 profile) 검사. 불일치 = 미측정 profile → InvalidCache
-        // (어느 값도 임의 우선하지 않는다).
+        // W2b/W4 (§4 D2 · §8g): 이미지·글상자 문단은 원자 지배 profile 로
+        // 줄별 원자를 귀속하고 host 줄 높이 삼중 일치를 검사한다. 이미지와
+        // 글상자를 한 문단에 섞은 캐시는 미측정 — fail-closed.
         let has_admitted_images = para.runs.iter().any(|r| is_admitted_inline_image(&r.content));
+        let has_admitted_textbox = para.runs.iter().any(|r| is_admitted_inline_textbox(&r.content));
+        if has_admitted_images && has_admitted_textbox {
+            return Err(PdfError::InvalidCache {
+                detail: format!(
+                    "{location}: paragraph mixes an inline image and a text box — \
+                     unmeasured profile (unsupported)"
+                ),
+            });
+        }
         let line_atoms_override = if has_admitted_images {
+            // 이미지 문단: image.height == vertsize == textheight (W0a profile).
             let atoms = build_inline_image_line_atoms(para, cache, &location)?;
             for (li, line) in atoms.iter().enumerate() {
                 for atom in line {
@@ -945,6 +1017,31 @@ fn replay_section(
                                     "{location}/l{li}: image height {} != line vertsize {} / \
                                      textheight {} — unmeasured height profile",
                                     img.height, seg.vertsize, seg.textheight
+                                ),
+                            });
+                        }
+                    }
+                }
+            }
+            Some(atoms)
+        } else if has_admitted_textbox {
+            // 글상자 문단: host 줄 vertsize == textheight ==
+            // max(box.height, content_extent + 상하 textMargin) (§8f ①).
+            let atoms = build_inline_textbox_line_atoms(input, para, cache, &location)?;
+            for (li, line) in atoms.iter().enumerate() {
+                for atom in line {
+                    if let LineAtom::TextBox(tb) = atom {
+                        let seg = &cache.lines[li];
+                        let extent = textbox_content_extent(&tb.inner_lines, &location)?;
+                        let expected = textbox_expected_host_height(tb.height, extent)?;
+                        if !line_matches_object_height(seg, expected) {
+                            return Err(PdfError::InvalidCache {
+                                detail: format!(
+                                    "{location}/l{li}: text box host line vertsize {} / \
+                                     textheight {} != expected {expected} \
+                                     (max(box.height {}, content-extent {extent} + \
+                                     2×{TEXTBOX_TEXT_MARGIN})) — unmeasured profile",
+                                    seg.vertsize, seg.textheight, tb.height
                                 ),
                             });
                         }
@@ -1077,25 +1174,27 @@ fn validate_textpos(
     Ok(())
 }
 
-/// 문단의 원자(텍스트 span·인라인 이미지)를 캐시 줄별로 귀속한다
-/// (W2b §4 D2 — c2 admission 이 이 pure helper 를 결선한다).
+/// 문단의 원자(텍스트 span·인라인 객체)를 캐시 줄별로 귀속하는 공용 엔진
+/// (W2b §4 D2 · W4 §8g — 인라인 이미지·글상자가 이 skeleton 을 공유한다).
 ///
 /// 단일 pass: run 순서대로 가시(UTF-16) 커서를 전진시키며 텍스트는 줄
-/// 경계로 분할하고, 이미지는 커서가 속한 줄에 문서 순서 그대로 삽입한다.
-/// 줄 구간 = non-last `[start, end)` · **last `[start, end]`** (trailing
-/// 이미지·image-only 문단 귀속 — §4 H3).
+/// 경계로 분할한다. `classify` 가 `Some((height, atom))` 을 돌려준 run 은
+/// **폭 0 인 인라인 객체**로, 커서가 속한 줄에 문서 순서 그대로 삽입한다
+/// (`height` = 그 객체의 host 줄 기대 높이 — 경계 판별용). `None` 은 텍스트
+/// /marker 로 취급한다. 줄 구간 = non-last `[start, end)` · **last
+/// `[start, end]`** (trailing 객체·객체-only 문단 귀속 — §4 H3).
 ///
-/// fail-closed: 이미지 offset 이 **첫 줄이 아닌** 줄 시작과 같으면
-/// W1b 영폭 축약상 앞/뒤 줄 귀속을 결정할 수 없다 — `InvalidCache`.
-/// (그 캐시는 디코더 관점에선 합법이라 여기가 최초 검출점 — runtime
-/// 오류이며 unreachable 단정이 아니다.)
+/// fail-closed: 객체 offset 이 **첫 줄이 아닌** 줄 시작과 같으면 host 줄
+/// 높이 profile 이 유일하게 매치되는 쪽으로 귀속하고, 0/2 매치는
+/// `InvalidCache` (추측 금지 — W1b 영폭 축약 사각).
 ///
 /// 전제: `cache.lines` 의 textpos 는 단조 (본문 경로는 `validate_textpos`
 /// 가 선행 보장).
-pub(crate) fn build_inline_image_line_atoms(
+pub(crate) fn build_inline_object_line_atoms(
     para: &hwpforge_core::paragraph::Paragraph,
     cache: &hwpforge_core::layout::LayoutCache,
     location: &str,
+    mut classify: impl FnMut(&hwpforge_core::run::Run) -> PdfResult<Option<(i32, LineAtom)>>,
 ) -> PdfResult<Vec<Vec<LineAtom>>> {
     let line_count = cache.lines.len();
     let mut atoms: Vec<Vec<LineAtom>> = vec![Vec::new(); line_count];
@@ -1104,14 +1203,14 @@ pub(crate) fn build_inline_image_line_atoms(
     }
     let starts: Vec<usize> = cache.lines.iter().map(|l| l.textpos as usize).collect();
     // 독립 리뷰 M1 상환: 동일 textpos 중복(영폭 줄)은 단일 pass 분할이
-    // 뒤 줄을 건너뛰어 텍스트 꼬리를 무음 유실한다 — 이미지 가드와
+    // 뒤 줄을 건너뛰어 텍스트 꼬리를 무음 유실한다 — 객체 가드와
     // 대칭으로 fail-closed (validate_textpos 는 == 를 허용하므로 여기가
     // 유일 검출점).
     if starts.windows(2).any(|w| w[0] == w[1]) {
         return Err(PdfError::InvalidCache {
             detail: format!(
                 "{location}: duplicate line textpos — zero-width line cannot be \
-                 attributed in an image paragraph"
+                 attributed in an inline-object paragraph"
             ),
         });
     }
@@ -1124,27 +1223,26 @@ pub(crate) fn build_inline_image_line_atoms(
     };
 
     let mut cursor = 0usize;
-    // 동일 boundary offset 다중 이미지의 판별 결과 추적 — 서로 다른
-    // 후보 줄로 갈리면 줄 순회 방출이 문서 순서를 뒤집는다 (r2 High#1).
+    // 동일 boundary offset 다중 객체의 판별 결과 추적 — 서로 다른 후보
+    // 줄로 갈리면 줄 순회 방출이 문서 순서를 뒤집는다 (r2 High#1).
     let mut boundary_target: Option<(usize, usize)> = None;
     for run in &para.runs {
-        if let RunContent::Image(img) = &run.content {
-            let height = img.height.as_i32();
+        if let Some((height, atom)) = classify(run)? {
             let li = if let Some(i) = (1..line_count).find(|&i| starts[i] == cursor) {
                 // 경계 (offset == non-first 줄 시작): 후보 = 줄 i−1(끝)·
                 // 줄 i(시작). 높이-profile 삼중 일치가 **유일**한 쪽으로
                 // 귀속 (캐시가 기록한 실측 — §7 v2), 0/2개 매치 =
                 // fail-closed (추측 금지).
-                let prev = line_matches_image_height(&cache.lines[i - 1], height);
-                let next = line_matches_image_height(&cache.lines[i], height);
+                let prev = line_matches_object_height(&cache.lines[i - 1], height);
+                let next = line_matches_object_height(&cache.lines[i], height);
                 let target = match (prev, next) {
                     (true, false) => i - 1,
                     (false, true) => i,
                     (false, false) => {
                         return Err(PdfError::InvalidCache {
                             detail: format!(
-                                "{location}: image offset {cursor} on a line boundary \
-                                 matches neither candidate line's height profile \
+                                "{location}: inline object offset {cursor} on a line \
+                                 boundary matches neither candidate line's height profile \
                                  (zero-match) — attribution ambiguous"
                             ),
                         });
@@ -1152,8 +1250,8 @@ pub(crate) fn build_inline_image_line_atoms(
                     (true, true) => {
                         return Err(PdfError::InvalidCache {
                             detail: format!(
-                                "{location}: image offset {cursor} on a line boundary \
-                                 matches both candidate lines' height profile \
+                                "{location}: inline object offset {cursor} on a line \
+                                 boundary matches both candidate lines' height profile \
                                  (two-match) — attribution ambiguous"
                             ),
                         });
@@ -1163,9 +1261,9 @@ pub(crate) fn build_inline_image_line_atoms(
                     if c == cursor && t != target {
                         return Err(PdfError::InvalidCache {
                             detail: format!(
-                                "{location}: multiple images at boundary offset {cursor} \
-                                 resolve to different lines — document order would \
-                                 invert across line traversal"
+                                "{location}: multiple inline objects at boundary offset \
+                                 {cursor} resolve to different lines — document order \
+                                 would invert across line traversal"
                             ),
                         });
                     }
@@ -1175,11 +1273,7 @@ pub(crate) fn build_inline_image_line_atoms(
             } else {
                 line_of(cursor)
             };
-            atoms[li].push(LineAtom::Image(LineImage {
-                canonical_key: img.path.clone(),
-                width: img.width.as_i32(),
-                height,
-            }));
+            atoms[li].push(atom);
             continue;
         }
         let Some(text) = run.content.plain_text() else {
@@ -1208,6 +1302,150 @@ pub(crate) fn build_inline_image_line_atoms(
         cursor = re;
     }
     Ok(atoms)
+}
+
+/// 인라인 이미지 문단의 원자를 캐시 줄별로 귀속한다 (W2b §4 D2).
+///
+/// [`build_inline_object_line_atoms`] 에 이미지 classifier(기대 높이 =
+/// `image.height`)를 결선한 얇은 래퍼다.
+pub(crate) fn build_inline_image_line_atoms(
+    para: &hwpforge_core::paragraph::Paragraph,
+    cache: &hwpforge_core::layout::LayoutCache,
+    location: &str,
+) -> PdfResult<Vec<Vec<LineAtom>>> {
+    build_inline_object_line_atoms(para, cache, location, |run| {
+        Ok(match &run.content {
+            RunContent::Image(img) => Some((
+                img.height.as_i32(),
+                LineAtom::Image(LineImage {
+                    canonical_key: img.path.clone(),
+                    width: img.width.as_i32(),
+                    height: img.height.as_i32(),
+                }),
+            )),
+            _ => None,
+        })
+    })
+}
+
+/// 인라인 글상자 문단의 원자를 캐시 줄별로 귀속한다 (W4 §8g).
+///
+/// [`build_inline_object_line_atoms`] 에 글상자 classifier 를 결선한다 —
+/// 각 글상자 원자의 host 줄 기대 높이 = `max(box.height, content_extent +
+/// 상하 textMargin)` ([`textbox_expected_host_height`]). 앵커형(비-admitted)
+/// 글상자 run 은 `None` 으로 무시하나(선행 admission 가드가 이미 그 문단을
+/// 거부), 내부 캐시/중첩 객체 결손은 [`build_line_text_box`] 가 fail-closed.
+pub(crate) fn build_inline_textbox_line_atoms(
+    input: &PdfInput<'_>,
+    para: &hwpforge_core::paragraph::Paragraph,
+    cache: &hwpforge_core::layout::LayoutCache,
+    location: &str,
+) -> PdfResult<Vec<Vec<LineAtom>>> {
+    build_inline_object_line_atoms(para, cache, location, |run| {
+        if !is_admitted_inline_textbox(&run.content) {
+            return Ok(None);
+        }
+        let RunContent::Control(ctrl) = &run.content else {
+            return Ok(None); // is_admitted_inline_textbox 가 이미 Control 로 좁힘.
+        };
+        let tb = build_line_text_box(input, ctrl, location)?;
+        let extent = textbox_content_extent(&tb.inner_lines, location)?;
+        let expected = textbox_expected_host_height(tb.height, extent)?;
+        Ok(Some((expected, LineAtom::TextBox(tb))))
+    })
+}
+
+/// Core `Control::TextBox` 를 렌더용 [`LineTextBox`] 로 증류한다 (W4 §8g).
+///
+/// 내부 문단들의 조판 캐시([`hwpforge_core::layout::LineSeg`])를 **그대로**
+/// 나른 [`TextBoxLine`] 로 옮기고, 테두리·채움([`TextBoxStyle`])과 세로정렬을
+/// 캐리한다. 내부는 **텍스트 전용**이다 — 중첩 객체(이미지/글상자/표)나
+/// 캐시 결손은 fail-closed (W4 제외 — §8f ⑤).
+fn build_line_text_box(
+    input: &PdfInput<'_>,
+    ctrl: &hwpforge_core::control::Control,
+    location: &str,
+) -> PdfResult<LineTextBox> {
+    let hwpforge_core::control::Control::TextBox {
+        paragraphs,
+        width,
+        height,
+        style,
+        text_vertical_align,
+        ..
+    } = ctrl
+    else {
+        return Err(PdfError::InternalInvariant {
+            detail: format!("{location}: build_line_text_box called on non-TextBox control"),
+        });
+    };
+    let mut inner_lines = Vec::new();
+    for (pi, para) in paragraphs.iter().enumerate() {
+        let inner_loc = format!("{location}/tb/p{pi}");
+        let Some(cache) = para.layout_cache.as_ref().filter(|c| !c.is_empty()) else {
+            return Err(PdfError::InvalidCache {
+                detail: format!("{inner_loc}: text box inner paragraph has no layout cache"),
+            });
+        };
+        // 내부는 텍스트 전용 — 중첩 객체(이미지/글상자/표) fail-closed.
+        if para.runs.iter().any(|r| r.content.plain_text().is_none()) {
+            return Err(PdfError::UnsupportedContent {
+                kind: "nested object inside text box",
+                location: inner_loc,
+            });
+        }
+        let text = para.text_content();
+        let utf16: Vec<u16> = text.encode_utf16().collect();
+        validate_textpos(cache, utf16.len(), &inner_loc)?;
+        let run_spans = text_only_run_spans(para);
+        let alignment = input.styles.para_alignment(para.para_shape_id).unwrap_or(Alignment::Left);
+        let line_count = cache.lines.len();
+        for (li, seg) in cache.lines.iter().enumerate() {
+            let start = seg.textpos as usize;
+            let end = cache.lines.get(li + 1).map_or(utf16.len(), |n| n.textpos as usize);
+            let runs = slice_line_runs(&utf16, &run_spans, start, end);
+            inner_lines.push(TextBoxLine {
+                seg: *seg,
+                atoms: runs.into_iter().map(LineAtom::Text).collect(),
+                alignment,
+                is_last_line: li + 1 == line_count,
+            });
+        }
+    }
+    Ok(LineTextBox {
+        width: width.as_i32(),
+        height: height.as_i32(),
+        style: style.as_ref().map(distill_textbox_style),
+        vert_align: *text_vertical_align,
+        inner_lines,
+    })
+}
+
+/// Core `ShapeStyle` 에서 [`TextBoxStyle`] 로 원색·굵기만 증류한다
+/// (dash/rotation 등은 Paint `Line` 이 실선만 그리므로 제외 — §8g w4).
+fn distill_textbox_style(style: &hwpforge_core::control::ShapeStyle) -> TextBoxStyle {
+    TextBoxStyle {
+        line_color: style.line_color,
+        fill_color: style.fill_color,
+        line_width: style.line_width.map_or(0, |w| w.min(i32::MAX as u32) as i32),
+    }
+}
+
+/// 텍스트 전용 문단의 run 별 UTF-16 [start, end) 구간 (경고 없음 —
+/// 글상자 내부는 이미 비텍스트 run 부재를 검증했다).
+fn text_only_run_spans(
+    para: &hwpforge_core::paragraph::Paragraph,
+) -> Vec<(usize, usize, CharShapeIndex)> {
+    let mut spans = Vec::with_capacity(para.runs.len());
+    let mut pos = 0usize;
+    for run in &para.runs {
+        if let Some(text) = run.content.plain_text() {
+            let len = text.encode_utf16().count();
+            spans.push((pos, pos + len, run.char_shape_id));
+            pos += len;
+        }
+    }
+    spans
 }
 
 /// run 별 UTF-16 [start, end) 구간과 문자 스타일. 텍스트가 아닌 run
@@ -1438,6 +1676,242 @@ mod tests {
                 "{err:?}"
             );
         }
+    }
+
+    // ── W4 w3: 인라인 글상자 admission·host predicate·fail-closed ────────
+
+    /// vertsize·textheight 를 지정하는 host 줄 seg (원자 지배 profile 검사용).
+    fn sized_seg(textpos: u32, vertpos: i32, size: i32) -> LineSeg {
+        LineSeg { vertsize: size, textheight: size, ..seg(textpos, vertpos) }
+    }
+
+    /// 글상자 내부 문단 하나 — 조판 캐시 + 텍스트 run (텍스트 길이 ≥ 최대
+    /// textpos 여야 validate_textpos 통과).
+    fn tb_inner(segs: Vec<LineSeg>, text: &str) -> Paragraph {
+        let mut p = Paragraph::with_runs(
+            vec![Run::text(text, CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        p.layout_cache = Some(LayoutCache::new(segs));
+        p
+    }
+
+    fn textbox_run(
+        width: i32,
+        height: i32,
+        valign: hwpforge_foundation::VerticalAlign,
+        inner: Vec<Paragraph>,
+    ) -> Run {
+        use hwpforge_core::control::Control;
+        Run {
+            content: RunContent::Control(Box::new(Control::TextBox {
+                paragraphs: inner,
+                width: HwpUnit::new(width).unwrap(),
+                height: HwpUnit::new(height).unwrap(),
+                placement: None,
+                caption: None,
+                style: None,
+                text_vertical_align: valign,
+            })),
+            char_shape_id: CharShapeIndex::new(0),
+        }
+    }
+
+    /// 순수 산술 잠금 — fixture 실측(§8f ①): basic 11339(=box.height) ·
+    /// valign 7087(=box.height) · overflow 12766(=extent 12200 + 566 > box 4252).
+    #[test]
+    fn textbox_expected_host_height_matches_fixture_measurements() {
+        use hwpforge_foundation::VerticalAlign;
+        // basic: box 11339 이 content-extent 5800 + 566 을 이겨 그대로.
+        assert_eq!(textbox_expected_host_height(11339, 5800).unwrap(), 11339);
+        // valign: box 7087 이 content 1000 + 566 을 이김.
+        assert_eq!(textbox_expected_host_height(7087, 1000).unwrap(), 7087);
+        // overflow: content 12200 + 566 = 12766 이 box 4252 를 넘겨 확장.
+        assert_eq!(textbox_expected_host_height(4252, 12200).unwrap(), 12766);
+        // content_extent = 내부 줄 max(vertpos + vertsize).
+        let inner = vec![
+            TextBoxLine {
+                seg: sized_seg(0, 3200, 1000),
+                atoms: vec![],
+                alignment: Alignment::Left,
+                is_last_line: false,
+            },
+            TextBoxLine {
+                seg: sized_seg(0, 4800, 1000),
+                atoms: vec![],
+                alignment: Alignment::Left,
+                is_last_line: true,
+            },
+        ];
+        assert_eq!(textbox_content_extent(&inner, "t").unwrap(), 5800);
+        let _ = VerticalAlign::Top;
+    }
+
+    /// basic 프로파일: 2 내부 문단(3줄 + 1줄)·연속 v축, host 11339 매치 →
+    /// admission 통과, 원자는 TextBox, LineTextBox 가 크기·valign·내부 줄을
+    /// 손실 없이 나른다.
+    #[test]
+    fn textbox_basic_admits_and_carries_inner_lines() {
+        use hwpforge_foundation::VerticalAlign;
+        let inner = vec![
+            tb_inner(vec![seg(0, 0), seg(1, 1600), seg(2, 3200)], "가나다"),
+            tb_inner(vec![seg(0, 4800)], "가"),
+        ];
+        // content-extent = 4800 + 1000 = 5800 → expected host = max(11339, 6366) = 11339.
+        let mut host = Paragraph::with_runs(
+            vec![textbox_run(22677, 11339, VerticalAlign::Top, inner)],
+            ParaShapeIndex::new(0),
+        );
+        host.layout_cache = Some(LayoutCache::new(vec![sized_seg(0, 1600, 11339)]));
+        let doc = doc_of(vec![host]);
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        let atoms = &layout.pages[0].lines[0].atoms;
+        assert_eq!(atom_kinds(atoms), ["textbox"]);
+        let LineAtom::TextBox(tb) = &atoms[0] else { panic!("expected textbox atom") };
+        assert_eq!(tb.width, 22677);
+        assert_eq!(tb.height, 11339);
+        assert_eq!(tb.vert_align, VerticalAlign::Top);
+        // 내부 v축은 문단 경계를 넘어 연속 (0/1600/3200 → 4800).
+        assert_eq!(tb.inner_lines.len(), 4);
+        assert_eq!(tb.inner_lines[0].seg.vertpos, 0);
+        assert_eq!(tb.inner_lines[3].seg.vertpos, 4800);
+        // is_last_line 은 내부 **문단마다** 계산된다 (JUSTIFY 마지막 줄
+        // 규칙): p0 중간 줄=false · p0 마지막 줄=true · p1 유일 줄=true.
+        assert!(!tb.inner_lines[1].is_last_line, "p0 중간 줄은 마지막 아님");
+        assert!(tb.inner_lines[2].is_last_line, "p0 마지막 줄 = 문단 마지막(비양쪽정렬)");
+        assert!(tb.inner_lines[3].is_last_line, "p1 마지막 줄");
+        assert!(matches!(tb.inner_lines[0].atoms[0], LineAtom::Text(_)));
+        assert!(tb.style.is_none(), "style None 은 그대로 None");
+    }
+
+    /// valign(box 7087) 과 overflow(box 4252, content 12200) 두 프로파일이
+    /// 모두 host predicate 를 통과한다.
+    #[test]
+    fn textbox_valign_and_overflow_profiles_admit() {
+        use hwpforge_foundation::VerticalAlign;
+        // valign: 단일 줄 content 1000 → expected 7087 (= box.height).
+        let mut valign_host = Paragraph::with_runs(
+            vec![textbox_run(
+                17008,
+                7087,
+                VerticalAlign::Center,
+                vec![tb_inner(vec![seg(0, 0)], "가")],
+            )],
+            ParaShapeIndex::new(0),
+        );
+        valign_host.layout_cache = Some(LayoutCache::new(vec![sized_seg(0, 3200, 7087)]));
+        let layout = replay(&doc_of(vec![valign_host]), &PdfOptions::default()).expect("valign");
+        let LineAtom::TextBox(tb) = &layout.pages[0].lines[0].atoms[0] else { panic!() };
+        assert_eq!(tb.vert_align, VerticalAlign::Center);
+
+        // overflow: content-extent 12200 → expected 12766 (> box 4252).
+        let mut ovf_host = Paragraph::with_runs(
+            vec![textbox_run(
+                17008,
+                4252,
+                VerticalAlign::Top,
+                vec![tb_inner(vec![sized_seg(0, 11200, 1000)], "가")],
+            )],
+            ParaShapeIndex::new(0),
+        );
+        ovf_host.layout_cache = Some(LayoutCache::new(vec![sized_seg(0, 1600, 12766)]));
+        let layout = replay(&doc_of(vec![ovf_host]), &PdfOptions::default()).expect("overflow");
+        assert_eq!(atom_kinds(&layout.pages[0].lines[0].atoms), ["textbox"]);
+    }
+
+    /// host 줄 vertsize/textheight 가 기대값과 다르면 미측정 profile →
+    /// InvalidCache fail-closed (어느 값도 임의 우선하지 않는다).
+    #[test]
+    fn textbox_host_height_mismatch_is_invalid_cache() {
+        use hwpforge_foundation::VerticalAlign;
+        let mut host = Paragraph::with_runs(
+            vec![textbox_run(
+                17008,
+                7087,
+                VerticalAlign::Top,
+                vec![tb_inner(vec![seg(0, 0)], "가")],
+            )],
+            ParaShapeIndex::new(0),
+        );
+        // expected = 7087 이지만 host vertsize=7000 → 불일치.
+        host.layout_cache = Some(LayoutCache::new(vec![sized_seg(0, 1600, 7000)]));
+        let err = replay(&doc_of(vec![host]), &PdfOptions::default()).expect_err("mismatch");
+        assert!(
+            matches!(&err, PdfError::InvalidCache { detail } if detail.contains("text box host line")),
+            "{err:?}"
+        );
+    }
+
+    /// 내부에 비텍스트 run(중첩 이미지)이 있으면 fail-closed (W4 제외 — §8f ⑤).
+    #[test]
+    fn textbox_inner_nontext_is_fail_closed() {
+        use hwpforge_foundation::VerticalAlign;
+        let mut inner = Paragraph::with_runs(
+            vec![Run::text("가", CharShapeIndex::new(0)), inline_img("BinData/inner.png")],
+            ParaShapeIndex::new(0),
+        );
+        inner.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+        let mut host = Paragraph::with_runs(
+            vec![textbox_run(17008, 7087, VerticalAlign::Top, vec![inner])],
+            ParaShapeIndex::new(0),
+        );
+        host.layout_cache = Some(LayoutCache::new(vec![sized_seg(0, 1600, 7087)]));
+        let err = replay(&doc_of(vec![host]), &PdfOptions::default()).expect_err("nested");
+        assert!(
+            matches!(
+                &err,
+                PdfError::UnsupportedContent { kind: "nested object inside text box", .. }
+            ),
+            "{err:?}"
+        );
+    }
+
+    /// 앵커형(treat_as_char=false) 글상자는 admission 거부 (앵커 렌더 = W5).
+    #[test]
+    fn anchored_textbox_stays_rejected() {
+        use hwpforge_core::control::Control;
+        use hwpforge_core::placement::ObjectPlacement;
+        use hwpforge_foundation::VerticalAlign;
+        let mut placement = ObjectPlacement::legacy_inline_defaults();
+        placement.treat_as_char = false;
+        let run = Run {
+            content: RunContent::Control(Box::new(Control::TextBox {
+                paragraphs: vec![tb_inner(vec![seg(0, 0)], "가")],
+                width: HwpUnit::new(17008).unwrap(),
+                height: HwpUnit::new(7087).unwrap(),
+                placement: Some(placement),
+                caption: None,
+                style: None,
+                text_vertical_align: VerticalAlign::Top,
+            })),
+            char_shape_id: CharShapeIndex::new(0),
+        };
+        let mut host = Paragraph::with_runs(vec![run], ParaShapeIndex::new(0));
+        host.layout_cache = Some(LayoutCache::new(vec![sized_seg(0, 1600, 7087)]));
+        let err = replay(&doc_of(vec![host]), &PdfOptions::default()).expect_err("anchored");
+        assert!(
+            matches!(&err, PdfError::InvalidCache { detail } if detail.contains("not renderable")),
+            "{err:?}"
+        );
+    }
+
+    /// 한 문단에 이미지와 글상자가 섞이면 미측정 profile → fail-closed.
+    #[test]
+    fn mixed_image_and_textbox_is_invalid_cache() {
+        use hwpforge_foundation::VerticalAlign;
+        let mut host = Paragraph::with_runs(
+            vec![
+                inline_img("BinData/x.png"),
+                textbox_run(17008, 7087, VerticalAlign::Top, vec![tb_inner(vec![seg(0, 0)], "가")]),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        host.layout_cache = Some(LayoutCache::new(vec![img_seg(0, 0)]));
+        let err = replay(&doc_of(vec![host]), &PdfOptions::default()).expect_err("mixed");
+        assert!(
+            matches!(&err, PdfError::InvalidCache { detail } if detail.contains("mixes")),
+            "{err:?}"
+        );
     }
 
     // ── W2b c1: build_inline_image_line_atoms 귀속 edge (§4 D2) ─────────
@@ -2638,6 +3112,31 @@ mod tests {
         let host = table_host(img_cell_table(vec![cell_para]), 0);
         let doc = doc_of(vec![host]);
         let err = replay(&doc, &PdfOptions::default()).expect_err("anchored rejected");
+        assert!(
+            matches!(&err, PdfError::UnsupportedContent { kind, .. }
+                if *kind == "non-text content in table cell"),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn cell_textbox_stays_fail_closed() {
+        // 셀 내부 글상자는 W4 범위 밖 (fixture 부재 — §8g 백로그): body 는
+        // 열렸어도 셀 admission(scan_cell_contents)은 닫힌 채여야 한다.
+        use hwpforge_foundation::VerticalAlign;
+        let mut cell_para = Paragraph::with_runs(
+            vec![textbox_run(
+                17008,
+                7087,
+                VerticalAlign::Top,
+                vec![tb_inner(vec![seg(0, 0)], "가")],
+            )],
+            ParaShapeIndex::new(0),
+        );
+        cell_para.layout_cache = Some(LayoutCache::new(vec![sized_seg(0, 0, 7087)]));
+        let host = table_host(img_cell_table(vec![cell_para]), 0);
+        let doc = doc_of(vec![host]);
+        let err = replay(&doc, &PdfOptions::default()).expect_err("cell textbox rejected");
         assert!(
             matches!(&err, PdfError::UnsupportedContent { kind, .. }
                 if *kind == "non-text content in table cell"),

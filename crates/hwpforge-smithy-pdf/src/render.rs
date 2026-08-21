@@ -213,10 +213,12 @@ fn resolve_char_style(
 /// admission 행렬([`crate::source::replay_layout`]) + 스타일 결손
 /// ([`PdfError::StyleUnavailable`]) + 폰트 미해결([`PdfError::FontUnresolved`],
 /// fallback 금지) + 백엔드 실패([`PdfError::Backend`]).
-/// 원자별 준비 결과 — 텍스트 셰이핑 or 이미지 자산 (W2a §3 D4).
-enum PreparedAtom {
+/// 원자별 준비 결과 — 텍스트 셰이핑 · 이미지 자산 (W2a §3 D4) · 인라인
+/// 글상자 (W4 w3 — 폭만 소비하고 배치 단계에서 clip 그룹으로 낮춘다).
+enum PreparedAtom<'a> {
     Run(PreparedRun),
     Image { canonical_key: String, data: std::sync::Arc<Vec<u8>>, width: i32, height: i32 },
+    TextBox { tb: &'a crate::source::LineTextBox },
 }
 
 struct PreparedRun {
@@ -276,185 +278,16 @@ pub(crate) fn build_paint_pages(
             }));
         }
         for line in &page.lines {
-            if line.atoms.is_empty() {
-                continue; // 빈 줄 — 세로 공간은 캐시가 이미 소비했다.
-            }
-            // 1) 원자별 준비 — 텍스트는 스타일 조회 + 셰이핑, 이미지는
-            //    바이트 해석(interner) 후 폭만 기여 (W2a §3 D4).
-            //
-            // 줄 끝 공백은 셰이핑에서 제외한다: 한컴 캐시의 줄 텍스트는
-            // 뒤따르는 공백을 앞 줄에 귀속시키지만, 렌더에서 그 공백은
-            // 그리지도 JUSTIFY 분모에 넣지도 않는다 (W0 실측 — 한컴
-            // 양쪽정렬 줄 끝 = 마지막 가시 글리프가 우변 밀착).
-            // trim 은 **마지막 가시 원자가 텍스트일 때만** 적용한다.
-            let last_atom_idx = line.atoms.len() - 1;
-            let mut prepared: Vec<PreparedAtom> = Vec::with_capacity(line.atoms.len());
-            for (atom_idx, atom) in line.atoms.iter().enumerate() {
-                let run = match atom {
-                    crate::source::LineAtom::Image(img) => {
-                        let data = match resolve_image_asset(
-                            input,
-                            &mut image_assets,
-                            img,
-                            &line.location,
-                            options,
-                            warnings,
-                        )? {
-                            Some(data) => data,
-                            None => continue, // Degraded: 경고 후 생략
-                        };
-                        prepared.push(PreparedAtom::Image {
-                            canonical_key: img.canonical_key.clone(),
-                            data,
-                            width: img.width,
-                            height: img.height,
-                        });
-                        continue;
-                    }
-                    crate::source::LineAtom::TextBox(_) => {
-                        // W4 w2 는 타입([`LineTextBox`])만 정의한다 — source→paint
-                        // 배선(내부 replay·clip·박스 페인트)은 w3/w4 몫이다.
-                        // production admission 이 아직 글상자를 방출하지 않아
-                        // 도달 불가지만, 무음 드롭 금지 원칙에 따라 fail-closed
-                        // (w3 이 이 arm 을 실제 렌더로 대체한다).
-                        return Err(PdfError::UnsupportedContent {
-                            kind: "inline text box",
-                            location: line.location.clone(),
-                        });
-                    }
-                    crate::source::LineAtom::Text(run) => run,
-                };
-                let text = if atom_idx == last_atom_idx {
-                    run.text.trim_end_matches(' ')
-                } else {
-                    run.text.as_str()
-                };
-                if text.is_empty() {
-                    continue;
-                }
-                let (key, size_hwpunit, color) = resolve_char_style(
-                    input,
-                    table,
-                    options,
-                    run.char_shape,
-                    &line.location,
-                    &mut warned_axis,
-                    warnings,
-                )?;
-                let font = &table.fonts[key.0];
-                let shaped = shape_text(&font.data, font.face_index, text, size_hwpunit)?;
-                // tofu 게이트 (W6 §5f): 폰트에 없는 글리프는 조용히 □ 로
-                // 찍힌다 — 기본 fatal, Degraded 만 경고 후 렌더.
-                if shaped.missing_glyphs > 0 {
-                    match options.failure_mode {
-                        RenderFailureMode::Fatal => {
-                            return Err(PdfError::GlyphsUnavailable {
-                                face: font.face_name.clone(),
-                                count: shaped.missing_glyphs,
-                                location: line.location.clone(),
-                            });
-                        }
-                        RenderFailureMode::Degraded => {
-                            warnings.push(PdfWarning::MissingGlyphs {
-                                face: font.face_name.clone(),
-                                count: shaped.missing_glyphs,
-                                location: line.location.clone(),
-                            });
-                        }
-                    }
-                }
-                prepared.push(PreparedAtom::Run(PreparedRun {
-                    key,
-                    size_hwpunit,
-                    color,
-                    shaped,
-                    text: text.to_string(),
-                }));
-            }
-
-            // 2) 줄 단위 정렬 배분 (자연폭·공백 수는 run 합산).
-            let natural = NaturalLine {
-                width: prepared
-                    .iter()
-                    .map(|a| match a {
-                        PreparedAtom::Run(p) => p.shaped.natural_width(),
-                        PreparedAtom::Image { width, .. } => f64::from(*width),
-                    })
-                    .sum(),
-                // JUSTIFY 분모는 텍스트 공백만 (이미지는 신축 불가 원자).
-                space_count: prepared
-                    .iter()
-                    .map(|a| match a {
-                        PreparedAtom::Run(p) => p.shaped.space_count(),
-                        PreparedAtom::Image { .. } => 0,
-                    })
-                    .sum(),
-            };
-            // 줄 넘침 표면화 (W6 §5f): 자간/장평 미carry 로 우리 자연폭이
-            // 캐시 줄 상자를 넘으면 우측으로 삐져나간다 — 무음 금지.
-            let overflow = natural.width - f64::from(line.line_box.horzsize);
-            if overflow > 10.0 {
-                warnings.push(PdfWarning::LineOverflow {
-                    location: line.location.clone(),
-                    excess: overflow.round() as i32,
-                });
-            }
-            let placement = place_line(line.alignment, line.line_box, natural, line.is_last_line);
-            if placement.needs_warning {
-                warnings
-                    .push(PdfWarning::AlignmentApproximated { location: line.location.clone() });
-            }
-
-            // 3) 절대 배치 (분수 HWPUNIT) → run 별 GlyphRun (pt 변환 = 여기 1회).
-            let baseline_y = Pt::from_hwpunit(line.baseline_y);
-            let mut x = placement.origin_x;
-            for atom in prepared {
-                let p = match atom {
-                    PreparedAtom::Image { canonical_key, data, width, height } => {
-                        items.push(PaintItem::Image(crate::paint::ImageItem {
-                            canonical_key,
-                            data,
-                            origin: Point {
-                                x: Pt::from_hwpunit_f64(x),
-                                // W0a 실측 계약: 이미지 top = 줄 top.
-                                y: Pt::from_hwpunit(line.top_y),
-                            },
-                            size: Size {
-                                width: Pt::from_hwpunit(width),
-                                height: Pt::from_hwpunit(height),
-                            },
-                            location: line.location.clone(),
-                        }));
-                        x += f64::from(width);
-                        continue;
-                    }
-                    PreparedAtom::Run(p) => p,
-                };
-                let origin_x = x;
-                let byte_len = p.text.len();
-                let mut glyphs = Vec::with_capacity(p.shaped.glyphs.len());
-                for (gi, g) in p.shaped.glyphs.iter().enumerate() {
-                    let next_cluster = p.shaped.glyphs.get(gi + 1).map_or(byte_len, |n| n.cluster);
-                    glyphs.push(PositionedGlyph {
-                        glyph_id: g.glyph_id,
-                        x_offset: Pt::from_hwpunit_f64(x - origin_x),
-                        advance: Pt::from_hwpunit_f64(g.advance),
-                        text_range: g.cluster..next_cluster,
-                    });
-                    x += g.advance;
-                    if g.is_space {
-                        x += placement.extra_per_space;
-                    }
-                }
-                items.push(PaintItem::Glyphs(GlyphRun {
-                    font: p.key,
-                    size: Pt::from_hwpunit(p.size_hwpunit),
-                    color: p.color,
-                    baseline: Point { x: Pt::from_hwpunit_f64(origin_x), y: baseline_y },
-                    text: p.text,
-                    glyphs,
-                }));
-            }
+            let line_items = render_line(
+                input,
+                options,
+                table,
+                &mut image_assets,
+                &mut warned_axis,
+                line,
+                warnings,
+            )?;
+            items.extend(line_items);
         }
         // W5-b: 합성 쪽번호 — 전용 스타일 charPr 로 셰이핑해 페이지 폭 중앙 ·
         // em 하단 앵커에 배치한다 (§8c 실측: baseline = 앵커 − hhea descent).
@@ -527,6 +360,275 @@ pub(crate) fn build_paint_pages(
     }
 
     Ok(pages)
+}
+
+/// 배치가 끝난 한 줄([`crate::source::LaidLine`])을 Paint 항목들로 낮춘다.
+///
+/// 원자별로 텍스트는 셰이핑, 이미지는 자산 해석 후 폭 소비, 인라인 글상자는
+/// clip 그룹([`build_textbox_clip_group`])으로 방출한다. 글상자 내부 줄은 이
+/// 함수를 **재귀**로 호출한다 (내부는 admission 이 텍스트 전용을 보장하므로
+/// 종료 보장 — 중첩 글상자/이미지 없음). 반환 Vec 순서 = z-order.
+#[allow(clippy::too_many_arguments)]
+fn render_line(
+    input: &PdfInput<'_>,
+    options: &PdfOptions,
+    table: &mut FontTable,
+    image_assets: &mut HashMap<String, std::sync::Arc<Vec<u8>>>,
+    warned_axis: &mut HashSet<usize>,
+    line: &crate::source::LaidLine,
+    warnings: &mut Vec<PdfWarning>,
+) -> PdfResult<Vec<PaintItem>> {
+    let mut out = Vec::new();
+    if line.atoms.is_empty() {
+        return Ok(out); // 빈 줄 — 세로 공간은 캐시가 이미 소비했다.
+    }
+    // 1) 원자별 준비 — 텍스트는 스타일 조회 + 셰이핑, 이미지는 바이트
+    //    해석(interner) 후 폭만 기여 (W2a §3 D4), 글상자는 폭만 기여 (W4 w3).
+    //
+    // 줄 끝 공백은 셰이핑에서 제외한다: 한컴 캐시의 줄 텍스트는 뒤따르는
+    // 공백을 앞 줄에 귀속시키지만, 렌더에서 그 공백은 그리지도 JUSTIFY
+    // 분모에 넣지도 않는다 (W0 실측). trim 은 **마지막 가시 원자가
+    // 텍스트일 때만** 적용한다.
+    let last_atom_idx = line.atoms.len() - 1;
+    let mut prepared: Vec<PreparedAtom<'_>> = Vec::with_capacity(line.atoms.len());
+    for (atom_idx, atom) in line.atoms.iter().enumerate() {
+        let run = match atom {
+            crate::source::LineAtom::Image(img) => {
+                let data = match resolve_image_asset(
+                    input,
+                    image_assets,
+                    img,
+                    &line.location,
+                    options,
+                    warnings,
+                )? {
+                    Some(data) => data,
+                    None => continue, // Degraded: 경고 후 생략
+                };
+                prepared.push(PreparedAtom::Image {
+                    canonical_key: img.canonical_key.clone(),
+                    data,
+                    width: img.width,
+                    height: img.height,
+                });
+                continue;
+            }
+            crate::source::LineAtom::TextBox(tb) => {
+                prepared.push(PreparedAtom::TextBox { tb });
+                continue;
+            }
+            crate::source::LineAtom::Text(run) => run,
+        };
+        let text = if atom_idx == last_atom_idx {
+            run.text.trim_end_matches(' ')
+        } else {
+            run.text.as_str()
+        };
+        if text.is_empty() {
+            continue;
+        }
+        let (key, size_hwpunit, color) = resolve_char_style(
+            input,
+            table,
+            options,
+            run.char_shape,
+            &line.location,
+            warned_axis,
+            warnings,
+        )?;
+        let font = &table.fonts[key.0];
+        let shaped = shape_text(&font.data, font.face_index, text, size_hwpunit)?;
+        // tofu 게이트 (W6 §5f): 폰트에 없는 글리프는 조용히 □ 로 찍힌다 —
+        // 기본 fatal, Degraded 만 경고 후 렌더.
+        if shaped.missing_glyphs > 0 {
+            match options.failure_mode {
+                RenderFailureMode::Fatal => {
+                    return Err(PdfError::GlyphsUnavailable {
+                        face: font.face_name.clone(),
+                        count: shaped.missing_glyphs,
+                        location: line.location.clone(),
+                    });
+                }
+                RenderFailureMode::Degraded => {
+                    warnings.push(PdfWarning::MissingGlyphs {
+                        face: font.face_name.clone(),
+                        count: shaped.missing_glyphs,
+                        location: line.location.clone(),
+                    });
+                }
+            }
+        }
+        prepared.push(PreparedAtom::Run(PreparedRun {
+            key,
+            size_hwpunit,
+            color,
+            shaped,
+            text: text.to_string(),
+        }));
+    }
+
+    // 2) 줄 단위 정렬 배분 (자연폭·공백 수는 run 합산).
+    let natural = NaturalLine {
+        width: prepared
+            .iter()
+            .map(|a| match a {
+                PreparedAtom::Run(p) => p.shaped.natural_width(),
+                PreparedAtom::Image { width, .. } => f64::from(*width),
+                PreparedAtom::TextBox { tb } => f64::from(tb.width),
+            })
+            .sum(),
+        // JUSTIFY 분모는 텍스트 공백만 (이미지·글상자는 신축 불가 원자).
+        space_count: prepared
+            .iter()
+            .map(|a| match a {
+                PreparedAtom::Run(p) => p.shaped.space_count(),
+                PreparedAtom::Image { .. } | PreparedAtom::TextBox { .. } => 0,
+            })
+            .sum(),
+    };
+    // 줄 넘침 표면화 (W6 §5f): 자간/장평 미carry 로 우리 자연폭이 캐시 줄
+    // 상자를 넘으면 우측으로 삐져나간다 — 무음 금지.
+    let overflow = natural.width - f64::from(line.line_box.horzsize);
+    if overflow > 10.0 {
+        warnings.push(PdfWarning::LineOverflow {
+            location: line.location.clone(),
+            excess: overflow.round() as i32,
+        });
+    }
+    let placement = place_line(line.alignment, line.line_box, natural, line.is_last_line);
+    if placement.needs_warning {
+        warnings.push(PdfWarning::AlignmentApproximated { location: line.location.clone() });
+    }
+
+    // 3) 절대 배치 (분수 HWPUNIT) → run 별 GlyphRun (pt 변환 = 여기 1회).
+    let baseline_y = Pt::from_hwpunit(line.baseline_y);
+    let mut x = placement.origin_x;
+    for atom in prepared {
+        let p = match atom {
+            PreparedAtom::Image { canonical_key, data, width, height } => {
+                out.push(PaintItem::Image(crate::paint::ImageItem {
+                    canonical_key,
+                    data,
+                    origin: Point {
+                        x: Pt::from_hwpunit_f64(x),
+                        // W0a 실측 계약: 이미지 top = 줄 top.
+                        y: Pt::from_hwpunit(line.top_y),
+                    },
+                    size: Size { width: Pt::from_hwpunit(width), height: Pt::from_hwpunit(height) },
+                    location: line.location.clone(),
+                }));
+                x += f64::from(width);
+                continue;
+            }
+            PreparedAtom::TextBox { tb } => {
+                // 박스 원점 = (전진 전 x, 호스트 줄 top). 내부 줄은 clip 그룹
+                // 안에서 절대 배치된다 (박스 페인트=w4 유보 — 내용만).
+                let box_x = x.round() as i32;
+                let group = build_textbox_clip_group(
+                    input,
+                    options,
+                    table,
+                    image_assets,
+                    warned_axis,
+                    tb,
+                    box_x,
+                    line.top_y,
+                    &line.location,
+                    warnings,
+                )?;
+                out.push(PaintItem::Clipped(group));
+                x += f64::from(tb.width);
+                continue;
+            }
+            PreparedAtom::Run(p) => p,
+        };
+        let origin_x = x;
+        let byte_len = p.text.len();
+        let mut glyphs = Vec::with_capacity(p.shaped.glyphs.len());
+        for (gi, g) in p.shaped.glyphs.iter().enumerate() {
+            let next_cluster = p.shaped.glyphs.get(gi + 1).map_or(byte_len, |n| n.cluster);
+            glyphs.push(PositionedGlyph {
+                glyph_id: g.glyph_id,
+                x_offset: Pt::from_hwpunit_f64(x - origin_x),
+                advance: Pt::from_hwpunit_f64(g.advance),
+                text_range: g.cluster..next_cluster,
+            });
+            x += g.advance;
+            if g.is_space {
+                x += placement.extra_per_space;
+            }
+        }
+        out.push(PaintItem::Glyphs(GlyphRun {
+            font: p.key,
+            size: Pt::from_hwpunit(p.size_hwpunit),
+            color: p.color,
+            baseline: Point { x: Pt::from_hwpunit_f64(origin_x), y: baseline_y },
+            text: p.text,
+            glyphs,
+        }));
+    }
+    Ok(out)
+}
+
+/// 인라인 글상자를 clip 그룹([`crate::paint::ClipGroup`])으로 낮춘다 (W4 w3).
+///
+/// 내부 줄을 **박스 원점 + textMargin(기본 283) + vertAlign 시프트**로 절대
+/// 배치해 [`render_line`] 로 재귀 렌더하고, 전체를 **박스 사각형**(width ×
+/// `LineTextBox::height`)의 clip 으로 감싼다. clip 높이는 Core 선언 박스
+/// 높이지 host 줄 vertsize(넘침 시 더 큼)가 아니다 — 그래야 overflow 가
+/// 실제로 잘린다 (§8f ③). 박스 테두리/채움 페인트는 w4 몫이다 (여기선 내용만).
+#[allow(clippy::too_many_arguments)]
+fn build_textbox_clip_group(
+    input: &PdfInput<'_>,
+    options: &PdfOptions,
+    table: &mut FontTable,
+    image_assets: &mut HashMap<String, std::sync::Arc<Vec<u8>>>,
+    warned_axis: &mut HashSet<usize>,
+    tb: &crate::source::LineTextBox,
+    box_x: i32,
+    box_top: i32,
+    host_location: &str,
+    warnings: &mut Vec<PdfWarning>,
+) -> PdfResult<crate::paint::ClipGroup> {
+    let margin = crate::source::TEXTBOX_TEXT_MARGIN;
+    // vertAlign 시프트 — 내부 캐시는 vertAlign 미반영(§8f 실측: 3종 모두
+    // 내부 vertpos=0), 렌더가 시프트한다. interior = box.height − 상하
+    // textMargin, content = 내부 content-extent (admission 과 동일 산식).
+    // Center/Bottom 은 여유가 음수(overflow)면 0 (상단 밀착).
+    let content_extent = crate::source::textbox_content_extent(&tb.inner_lines, host_location)?;
+    let interior = tb.height - 2 * margin;
+    let valign_shift = match tb.vert_align {
+        hwpforge_foundation::VerticalAlign::Top => 0,
+        hwpforge_foundation::VerticalAlign::Center => ((interior - content_extent) / 2).max(0),
+        hwpforge_foundation::VerticalAlign::Bottom => (interior - content_extent).max(0),
+        // non_exhaustive 미래 variant — 보수적으로 상단 밀착 (시프트 없음).
+        _ => 0,
+    };
+    // 내부 줄을 박스-상대 → 페이지 절대 좌표로 옮겨 재귀 렌더한다.
+    let mut group_items = Vec::new();
+    for (li, inner) in tb.inner_lines.iter().enumerate() {
+        let abs_top = box_top + margin + valign_shift + inner.seg.vertpos;
+        let laid = crate::source::LaidLine {
+            location: format!("{host_location}/tb/l{li}"),
+            atoms: inner.atoms.clone(),
+            top_y: abs_top,
+            baseline_y: abs_top + inner.seg.baseline,
+            line_box: crate::text::align::LineBox {
+                horzpos: box_x + margin + inner.seg.horzpos,
+                horzsize: inner.seg.horzsize,
+            },
+            is_last_line: inner.is_last_line,
+            alignment: inner.alignment,
+        };
+        let inner_items =
+            render_line(input, options, table, image_assets, warned_axis, &laid, warnings)?;
+        group_items.extend(inner_items);
+    }
+    Ok(crate::paint::ClipGroup {
+        origin: Point { x: Pt::from_hwpunit(box_x), y: Pt::from_hwpunit(box_top) },
+        size: Size { width: Pt::from_hwpunit(tb.width), height: Pt::from_hwpunit(tb.height) },
+        items: group_items,
+    })
 }
 
 #[cfg(test)]
@@ -647,5 +749,143 @@ mod atom_tests {
                 .expect("degraded ok");
         assert!(warnings.iter().any(|w| matches!(w, PdfWarning::ImageDataMissing { .. })));
         assert!(pages[0].items.iter().all(|i| !matches!(i, PaintItem::Image(_))));
+    }
+
+    // ── W4 w3: 인라인 글상자 clip 높이·vertAlign 시프트 (폰트 불요 —
+    //    내부 줄을 이미지 원자로 세워 clip/배치 산술만 잠근다) ──────────
+
+    use crate::source::{LineTextBox, TextBoxLine};
+    use hwpforge_core::layout::LineSeg;
+    use hwpforge_foundation::VerticalAlign;
+
+    /// 내부 이미지 원자 한 줄 (vertpos 0 · 지정 vertsize) — content-extent =
+    /// vertsize 를 준다.
+    fn inner_image_line(vertsize: i32) -> TextBoxLine {
+        TextBoxLine {
+            seg: LineSeg {
+                textpos: 0,
+                vertpos: 0,
+                vertsize,
+                textheight: vertsize,
+                baseline: 0,
+                spacing: 0,
+                horzpos: 0,
+                horzsize: 16440,
+                flags: 0,
+            },
+            atoms: vec![LineAtom::Image(LineImage {
+                canonical_key: "img1.png".into(),
+                width: 500,
+                height: 500,
+            })],
+            alignment: Alignment::Left,
+            is_last_line: true,
+        }
+    }
+
+    fn textbox_layout(height: i32, valign: VerticalAlign, inner_extent: i32) -> PageLayout {
+        let tb = LineTextBox {
+            width: 17008,
+            height,
+            style: None,
+            vert_align: valign,
+            inner_lines: vec![inner_image_line(inner_extent)],
+        };
+        PageLayout {
+            width: 59528,
+            height: 84188,
+            rects: Vec::new(),
+            borders: Vec::new(),
+            lines: vec![LaidLine {
+                location: "s0/p0/l0".into(),
+                atoms: vec![LineAtom::TextBox(tb)],
+                top_y: 5000,
+                baseline_y: 5000,
+                line_box: LineBox { horzpos: 8504, horzsize: 42520 },
+                is_last_line: true,
+                alignment: Alignment::Left,
+            }],
+            page_number: None,
+        }
+    }
+
+    fn paint_textbox(layout: PageLayout) -> crate::paint::Page {
+        let doc = minimal_doc();
+        let input = PdfInput { document: &doc, styles: &ImgStyles };
+        let options = PdfOptions::default();
+        let mut table = FontTable::new(
+            FontResolver::with_discovery(&[], crate::font::FontDiscovery::ExplicitOnly)
+                .expect("resolver"),
+        );
+        let mut warnings = Vec::new();
+        let mut pages = build_paint_pages(&input, &options, &[layout], &mut table, &mut warnings)
+            .expect("paint");
+        pages.remove(0)
+    }
+
+    /// clip 사각형 높이 = **박스 선언 높이**(4252)지 host 줄 vertsize(넘침
+    /// 시 더 큼)가 아니다 — 그래야 overflow 가 실제로 잘린다 (§8f ③). 이
+    /// 게이트를 놓치면 w3 는 통과하고 w4 시각 대조에서만 터진다.
+    #[test]
+    fn textbox_clip_height_is_box_height_not_content_extent() {
+        // box 4252, 내부 content-extent 12200 (>>box) — overflow 프로파일.
+        let page = paint_textbox(textbox_layout(4252, VerticalAlign::Top, 12200));
+        let clips: Vec<_> = page
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                PaintItem::Clipped(g) => Some(g),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(clips.len(), 1, "글상자 = clip 그룹 1개");
+        let g = clips[0];
+        assert!(
+            (g.size.height.0 - Pt::from_hwpunit(4252).0).abs() < 1e-9,
+            "clip 높이 = 박스 높이 4252 (content-extent 12200 아님): {:?}",
+            g.size.height
+        );
+        assert!((g.size.width.0 - Pt::from_hwpunit(17008).0).abs() < 1e-9);
+        // 박스 원점 = (호스트 줄 좌변, 호스트 줄 top).
+        assert!((g.origin.x.0 - Pt::from_hwpunit(8504).0).abs() < 1e-9);
+        assert!((g.origin.y.0 - Pt::from_hwpunit(5000).0).abs() < 1e-9);
+        // 내부 이미지가 clip 안에 있다 (넘쳐도 방출 — 잘림은 clip 이 강제).
+        assert!(g.items.iter().any(|i| matches!(i, PaintItem::Image(_))));
+    }
+
+    /// vertAlign TOP/CENTER/BOTTOM 이 내부 콘텐츠를 박스 여백 안에서
+    /// 시프트한다 — 내부 이미지 top = box_top + textMargin(283) + shift.
+    /// box 7087, interior = 7087 − 566 = 6521, content 1000.
+    #[test]
+    fn textbox_vertalign_shifts_inner_content() {
+        for (valign, shift) in [
+            (VerticalAlign::Top, 0),
+            (VerticalAlign::Center, (6521 - 1000) / 2), // 2760
+            (VerticalAlign::Bottom, 6521 - 1000),       // 5521
+        ] {
+            let page = paint_textbox(textbox_layout(7087, valign, 1000));
+            let g = page
+                .items
+                .iter()
+                .find_map(|i| match i {
+                    PaintItem::Clipped(g) => Some(g),
+                    _ => None,
+                })
+                .expect("clip group");
+            let img = g
+                .items
+                .iter()
+                .find_map(|i| match i {
+                    PaintItem::Image(im) => Some(im),
+                    _ => None,
+                })
+                .expect("inner image");
+            let expected_top = 5000 + 283 + shift; // box_top + margin + shift + vertpos(0)
+            assert!(
+                (img.origin.y.0 - Pt::from_hwpunit(expected_top).0).abs() < 1e-9,
+                "{valign:?}: 내부 top {:?} != box_top+283+{shift}",
+                img.origin.y
+            );
+        }
     }
 }
