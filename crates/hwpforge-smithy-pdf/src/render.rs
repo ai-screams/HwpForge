@@ -522,8 +522,19 @@ fn render_line(
             }
             PreparedAtom::TextBox { tb } => {
                 // 박스 원점 = (전진 전 x, 호스트 줄 top). 내부 줄은 clip 그룹
-                // 안에서 절대 배치된다 (박스 페인트=w4 유보 — 내용만).
+                // 안에서 절대 배치된다. z-order 는 셀 계약과 동일 계열:
+                // 채움 → 내용(clip) → 테두리 (테두리가 경계 글자 위에 —
+                // 한컴 박스 외곽선 관례).
                 let box_x = x.round() as i32;
+                if let Some(fill) = tb.style.as_ref().and_then(|s| s.fill_color) {
+                    out.push(PaintItem::Rect(RectItem {
+                        x: Pt::from_hwpunit(box_x),
+                        y: Pt::from_hwpunit(line.top_y),
+                        width: Pt::from_hwpunit(tb.width),
+                        height: Pt::from_hwpunit(tb.height),
+                        color: fill,
+                    }));
+                }
                 let group = build_textbox_clip_group(
                     input,
                     options,
@@ -537,6 +548,18 @@ fn render_line(
                     warnings,
                 )?;
                 out.push(PaintItem::Clipped(group));
+                if let Some(style) = tb.style.as_ref() {
+                    if let Some(border) = style.line_color {
+                        out.extend(textbox_border_lines(
+                            box_x,
+                            line.top_y,
+                            tb.width,
+                            tb.height,
+                            style.line_width,
+                            border,
+                        ));
+                    }
+                }
                 x += f64::from(tb.width);
                 continue;
             }
@@ -570,13 +593,41 @@ fn render_line(
     Ok(out)
 }
 
+/// 글상자 테두리 4변을 [`PaintItem::Line`] 으로 방출한다 (W4 w4).
+///
+/// 좌표는 박스 사각형 모서리 정확치 (표 괘선과 동일 관례 — cap 연장
+/// 없음). `line_width` 0 이하는 방출하지 않는다 (무의미 스트로크 방지).
+fn textbox_border_lines(
+    box_x: i32,
+    box_top: i32,
+    width: i32,
+    height: i32,
+    line_width: i32,
+    color: hwpforge_foundation::Color,
+) -> Vec<PaintItem> {
+    if line_width <= 0 {
+        return Vec::new();
+    }
+    let (x0, y0) = (Pt::from_hwpunit(box_x), Pt::from_hwpunit(box_top));
+    let (x1, y1) = (Pt::from_hwpunit(box_x + width), Pt::from_hwpunit(box_top + height));
+    let w = Pt::from_hwpunit(line_width);
+    let edge = |from: Point, to: Point| PaintItem::Line(LineItem { from, to, width: w, color });
+    vec![
+        edge(Point { x: x0, y: y0 }, Point { x: x1, y: y0 }),
+        edge(Point { x: x0, y: y1 }, Point { x: x1, y: y1 }),
+        edge(Point { x: x0, y: y0 }, Point { x: x0, y: y1 }),
+        edge(Point { x: x1, y: y0 }, Point { x: x1, y: y1 }),
+    ]
+}
+
 /// 인라인 글상자를 clip 그룹([`crate::paint::ClipGroup`])으로 낮춘다 (W4 w3).
 ///
 /// 내부 줄을 **박스 원점 + textMargin(기본 283) + vertAlign 시프트**로 절대
 /// 배치해 [`render_line`] 로 재귀 렌더하고, 전체를 **박스 사각형**(width ×
 /// `LineTextBox::height`)의 clip 으로 감싼다. clip 높이는 Core 선언 박스
 /// 높이지 host 줄 vertsize(넘침 시 더 큼)가 아니다 — 그래야 overflow 가
-/// 실제로 잘린다 (§8f ③). 박스 테두리/채움 페인트는 w4 몫이다 (여기선 내용만).
+/// 실제로 잘린다 (§8f ③). 박스 채움/테두리 페인트는 호출부(atom arm)가
+/// clip 그룹 바깥에서 감싼다 (채움 → 내용 → 테두리).
 #[allow(clippy::too_many_arguments)]
 fn build_textbox_clip_group(
     input: &PdfInput<'_>,

@@ -109,6 +109,46 @@ pub fn extract_pages(pdf_bytes: &[u8]) -> Vec<ExtractedPage> {
         .collect()
 }
 
+/// 모든 쪽 콘텐츠 스트림에서 지정 색의 채움(`rg`)/스트로크(`RG`) 연산
+/// 횟수를 센다 (글상자 채움·테두리 색 게이트 — W4 w4). 색 성분은
+/// 0–255 입력을 PDF 0–1 스케일로 환산해 ±0.002 로 비교한다.
+pub fn count_color_ops(pdf_bytes: &[u8], rgb: (u8, u8, u8), stroke: bool) -> usize {
+    let want = [f64::from(rgb.0) / 255.0, f64::from(rgb.1) / 255.0, f64::from(rgb.2) / 255.0];
+    let op = if stroke { "RG" } else { "rg" };
+    let doc = PdfDoc::load(pdf_bytes);
+    let root_num = doc.trailer_root.expect("trailer /Root not found");
+    let catalog = doc.objects.get(&root_num).expect("Root object missing");
+    let pages_ref = catalog.get("Pages").expect("/Catalog missing /Pages");
+    let pages_root = doc.resolve(pages_ref);
+    let mut leaves = Vec::new();
+    collect_page_leaves(&doc, pages_root, &mut leaves);
+    let mut count = 0;
+    for page in leaves {
+        let content = page_content_bytes(&doc, page);
+        let mut lexer = ContentLexer::new(&content);
+        let mut nums: Vec<f64> = Vec::new();
+        while let Some(tok) = lexer.next_token() {
+            match tok {
+                ContentTok::Num(n) => nums.push(n),
+                ContentTok::Keyword(k) => {
+                    if k == op
+                        && nums.len() >= 3
+                        && nums[nums.len() - 3..]
+                            .iter()
+                            .zip(want.iter())
+                            .all(|(a, b)| (a - b).abs() < 0.002)
+                    {
+                        count += 1;
+                    }
+                    nums.clear();
+                }
+                ContentTok::Name(_) => nums.clear(),
+            }
+        }
+    }
+    count
+}
+
 /// 모든 쪽의 콘텐츠 스트림에서 clip 연산자(`W`/`W*`) 개수를 센다
 /// (글상자 클리핑 존재 게이트 — W4 w3). krilla `push_clip_path` 는
 /// path 방출 뒤 `W n` 을 찍는다.

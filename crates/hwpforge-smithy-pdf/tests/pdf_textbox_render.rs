@@ -137,6 +137,37 @@ fn textbox_overflow_emits_clip_op() {
     }
 }
 
+/// styled fixture 의 박스 페인트 — 채움(#FFF4C8)은 `rg`, 테두리(#0000FF)
+/// 는 `RG` 로 콘텐츠 스트림에 실제 방출돼야 한다 (W4 w4 페인트 게이트).
+/// 존재만 보는 게 아니라 색 성분 3개를 ±0.002 로 대조한다.
+///
+/// **direct-hwpx 경로 한정**: HWP5 디코더는 GSO 도형의
+/// lineShape/fillBrush 를 아직 캐리하지 않는다 (선재 갭 — 이 에픽 회귀
+/// 아님, 명시 백로그). carry 경로는 내용+clip 만 렌더되므로 색 게이트를
+/// 걸 수 없다.
+#[test]
+fn textbox_styled_paints_fill_and_border() {
+    let Some(options) = font_options() else {
+        eprintln!("skip: Hancom 폰트 번들 없음");
+        return;
+    };
+    let base = "textbox_styled-base";
+    if !fixture_present(base) {
+        eprintln!("skip {base}: fixture 부재");
+        return;
+    }
+    let hwpx = std::fs::read(review_dir().join(format!("{base}.hwpx"))).expect("hwpx readable");
+    let out = render_hwpx(&hwpx, &options);
+    assert!(
+        support::count_color_ops(&out.bytes, (255, 244, 200), false) > 0,
+        "{base}/direct-hwpx: 채움색 #FFF4C8 rg 방출"
+    );
+    assert!(
+        support::count_color_ops(&out.bytes, (0, 0, 255), true) > 0,
+        "{base}/direct-hwpx: 테두리색 #0000FF RG 방출"
+    );
+}
+
 /// 음성 게이트 — 앵커형(treat_as_char=false) 글상자는 W4 범위 밖이라
 /// 렌더가 fail-closed(InvalidCache)로 거부한다 (앵커 렌더 = W5). admission
 /// 에서 거부되므로 폰트 없이도 검사한다.
