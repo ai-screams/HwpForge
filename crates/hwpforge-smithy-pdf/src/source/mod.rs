@@ -427,7 +427,12 @@ fn collect_page_events(
 
 /// 글상자 내부 텍스트 여백 (HWPUNIT) — HWPX `<hp:textMargin>` 기본값
 /// (gotcha #29). Core `Control::TextBox` 는 여백을 carry 하지 않으므로 기본을
-/// 쓴다 — 비기본 여백 fixture 는 host-줄 predicate 불일치로 fail-closed 된다.
+/// 쓴다 (리뷰 Low-2). 비기본 여백 문서의 거동은 regime 에 따라 다르다:
+/// content+margin-dominated(내용이 박스를 채움)에선 host-줄 predicate
+/// 불일치로 fail-closed 되지만, **box-dominated**(`box.height ≥
+/// content+2×여백)에선 조용히 admitted 되어 내부 세로 offset 이 실제
+/// 여백과의 차만큼(bounded) 어긋난다. 근본 해소 = Core textMargin carry
+/// (백로그 — 에픽 문서 §8h).
 pub(crate) const TEXTBOX_TEXT_MARGIN: i32 = 283;
 
 /// 줄이 **원자 지배 profile**(삼중 일치: vertsize==textheight==원자 기대

@@ -366,8 +366,10 @@ pub(crate) fn build_paint_pages(
 ///
 /// 원자별로 텍스트는 셰이핑, 이미지는 자산 해석 후 폭 소비, 인라인 글상자는
 /// clip 그룹([`build_textbox_clip_group`])으로 방출한다. 글상자 내부 줄은 이
-/// 함수를 **재귀**로 호출한다 (내부는 admission 이 텍스트 전용을 보장하므로
-/// 종료 보장 — 중첩 글상자/이미지 없음). 반환 Vec 순서 = z-order.
+/// 함수를 **재귀**로 호출한다. 종료 보장 = production producer
+/// (`build_line_text_box`)가 내부 비텍스트 run 을 거부해 실제 깊이는 1
+/// — 재귀 자체는 원자 종류에 일반적이라 테스트가 내부 이미지 원자를
+/// 합성해도 동작한다 (리뷰 Low-3 문구 정정). 반환 Vec 순서 = z-order.
 #[allow(clippy::too_many_arguments)]
 fn render_line(
     input: &PdfInput<'_>,

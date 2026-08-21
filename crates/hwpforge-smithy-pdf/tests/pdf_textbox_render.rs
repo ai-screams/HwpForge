@@ -5,6 +5,11 @@
 //! 미추적이라 **경로가 있을 때만** 실행한다. 렌더 경로 게이트는 한컴 폰트
 //! 번들이 있는 머신에서만(`render_pdf.rs` 와 동일한 fixture-optional 관례).
 //! anchored 음성 게이트는 admission 에서 거부되므로 폰트 없이도 돈다.
+//!
+//! ⚠️ **CI(Linux·무한컴·미추적 fixture)에선 4건 전부 early-return =
+//! 무신호(passed 로 계수)** — 이 파일은 로컬 전용 parity 게이트다 (리뷰
+//! Low-1). CI 커버는 소스 단위 테스트(clip 산술·admission·operator-level
+//! clip)와 `anchored_textbox_stays_rejected` 음성 unit 이 담당한다.
 
 mod support;
 
