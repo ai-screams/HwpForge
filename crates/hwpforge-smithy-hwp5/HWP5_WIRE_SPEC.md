@@ -883,6 +883,45 @@ HWP5 `HWPSlashDiagonalShape`/`HWPBackSlashDiagonalShape` 는 bit 패턴이라
 HWP5·HWPX 둘 다 동일 5종, 기능 갭 없음. native `sample-cell-diagonal` 로
 value 2(CENTER) byte-identical 확인.
 
+### 22.5 공통 개체 속성 DWORD (표 70) — bit0 이후 배치 (W5 w0) — **byte-verified**
+
+`gso`/`tbl` CtrlHeader payload `[4..8]` 의 공통 개체 속성 DWORD 은
+`object_placement_from_ctrl_properties`(projection/mod.rs)가 Core
+`ObjectPlacement` 로 디코드한다. bit0(글자처럼 취급)만 W2p 이후 byte-ground
+였고, **W5 w0 에서 나머지 축 필드도 실비트로 승격**(이전엔 projection-context
+관례 Flow=Paper/InFrontOfText·TextBox=Para/Square 로 채웠음). 비트 배치는
+hwp-rs `common_properties.rs` 대조 + 아래 native fixture 바이트 검증:
+
+| bits  | 필드 (표 70)  | 값 → Core `ObjectPlacement`                                                                                                     |
+| ----- | ------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| 0     | 글자처럼 취급 | `1` → `legacy_inline_defaults` (도형 `None`-collapse·이미지 inline). `0` 일 때만 아래 디코드                                    |
+| 3-4   | vertRelTo     | `0`=Paper `1`=Page `2`=Para (미정의 `3` = fail-closed 경고 + Paper)                                                             |
+| 8-9   | horzRelTo     | `0`=Paper `1`=Page `2`=Column `3`=Para                                                                                          |
+| 13    | flowWithText  | vertRelTo=Para 일 때만 유의, 그 외 false                                                                                        |
+| 14    | allowOverlap  | flowWithText=1 이면 강제 false (표 70 규약)                                                                                     |
+| 21-23 | textWrap      | `0`=Square `1`=Tight `2`=Through `3`=TopAndBottom `4`=BehindText `5`=InFrontOfText (미정의 `6`/`7` = fail-closed 경고 + Square) |
+| 24-25 | textFlow      | `0`=BothSides `1`=LeftOnly `2`=RightOnly `3`=LargestOnly (wrap∈{Square,Tight,Through} 일 때만)                                  |
+
+- **bits 5-7·10-12 align · 15-19 width/heightRelTo · 20 protect · 26-28
+  numbering** 은 Core 미carry → 무시.
+- **오프셋** (속성 DWORD 직후 `[8..12]` vertOffset · `[12..16]` horzOffset)
+  은 이미 `read_i32` (signed) — corpus 에 음수 실재(문단 위 돌출), u32 로
+  읽지 말 것.
+- **fail-closed (no-fake-support)**: relTo/wrap 의 레퍼런스 범위 밖 값(각
+  `3`, `6`/`7` — 레퍼런스 enum 에 대응 없음)은 임의 known 값으로 정규화하지
+  않고 `Hwp5Warning::ProjectionFallback` 방출 + 보수 fallback. 유효 파일엔
+  안 뜨지만 뜨면 속성 word 오프셋 오정렬 canary.
+
+**바이트 검증 (native `.hwp` 속성 word ↔ 한컴 `.hwpx` 쌍 `<hp:pos>`/`textWrap`)**:
+
+| fixture                    | attr word    | 디코드 (실측 일치)                                                                           |
+| -------------------------- | ------------ | -------------------------------------------------------------------------------------------- |
+| `textbox_anchored` (rect)  | `0x040a4110` | treatAsChar=0·vertRelTo=PARA·horzRelTo=PAGE·wrap=SQUARE·overlap=1·flow=0·vOff=2834·hOff=8503 |
+| `anchored_zero_origin_png` | `0x040a2310` | treatAsChar=0·vertRelTo=PARA·horzRelTo=PARA·wrap=SQUARE·flow=1→overlap 강제 0·off (0,0)      |
+
+두 fixture 모두 native `.hwp` 디코드 == companion `.hwpx` 디코드 (전-축
+parity, `crates/hwpforge-convert/src/tests.rs`).
+
 ---
 
 ## 23. Update Protocol

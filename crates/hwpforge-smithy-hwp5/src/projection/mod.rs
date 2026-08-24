@@ -575,17 +575,22 @@ impl<'a> ProjectionImageState<'a> {
 
         self.image_store.insert(asset.payload.storage_name.clone(), asset.bytes.clone());
 
+        // Decode placement before constructing the image so the byte-ground
+        // fail-closed warnings (unknown relTo/wrap bits) reach `self.warnings`
+        // without conflicting with the `Image::new(...)` borrow.
+        let placement = image_placement_from_wire(
+            &image.geometry,
+            context,
+            image.ctrl_properties,
+            &mut self.warnings,
+        );
         let mut core_image = Image::new(
             asset.payload.package_path.clone(),
             HwpUnit::new(resolved_dimensions.width_hwp).unwrap_or(HwpUnit::ZERO),
             HwpUnit::new(resolved_dimensions.height_hwp).unwrap_or(HwpUnit::ZERO),
             core_image_format(&asset.payload.format),
         )
-        .with_placement(image_placement_from_wire(
-            &image.geometry,
-            context,
-            image.ctrl_properties,
-        ));
+        .with_placement(placement);
         // Wave 12p Step 3: HWP5 GSO CtrlHeader trailer instance ID 통과.
         // 한컴 native `<hp:pic id="...">` cross-ref target 과 매칭.
         if image.instance_id != 0 {
@@ -622,48 +627,172 @@ fn resolve_image_dimensions(
 /// HWP 5.0 표 70 공통 개체 속성 DWORD 의 bit0 (글자처럼 취급) 마스크.
 const CTRL_PROPERTY_TREAT_AS_CHAR_BIT: u32 = 0x1;
 
-/// body/텍스트박스 컨텍스트에서 이미지의 `ObjectPlacement` 를 판정한다.
+/// 표 70 공통 개체 속성 DWORD 을 Core [`ObjectPlacement`] 로 디코드한다 (W5 w0 —
+/// projection 관례를 바이트-그라운드 실측으로 승격).
 ///
-/// W2p: `treat_as_char` 는 `gso ` CtrlHeader 공통 개체 속성 DWORD 의 bit0
-/// 만이 유일한 진실이다. 좌표 `(x,y)==(0,0)` 휴리스틱은 완전히 제거됐다 —
-/// bit0=1 이면 좌표가 무엇이든 inline, bit0=0 이면 좌표가 (0,0) 이어도
-/// anchored 로 판정한다.
+/// bit0(글자처럼 취급)=1 이면 나머지 축 비트는 의미가 없으므로
+/// [`ObjectPlacement::legacy_inline_defaults`] 를 반환한다 (도형은 `None` 으로
+/// collapse, 이미지는 인라인 유지 — W2p 계약 보존). bit0=0(부유)일 때만 축을
+/// 디코드한다 (비트 배치는 hwp-rs `common_properties.rs` 대조 + `textbox_anchored`
+/// ·`anchored_zero_origin_png` fixture 의 속성 word 와 한컴 `.hwpx` 쌍 `<hp:pos>`
+/// 바이트 검증):
+///
+/// - `vertRelTo` bits 3-4 (`0`=Paper `1`=Page `2`=Para)
+/// - `horzRelTo` bits 8-9 (`0`=Paper `1`=Page `2`=Column `3`=Para)
+/// - `flowWithText` bit 13 (`vertRelTo`=Para 일 때만 유의 — 그 외엔 false)
+/// - `allowOverlap` bit 14 (`flowWithText`=1 이면 표 70 규약상 강제 false)
+/// - `textWrap` bits 21-23 (`0`=Square `1`=Tight `2`=Through `3`=TopAndBottom
+///   `4`=BehindText `5`=InFrontOfText)
+/// - `textFlow` bits 24-25 (`0`=BothSides `1`=LeftOnly `2`=RightOnly
+///   `3`=LargestOnly — `textWrap`∈{Square,Tight,Through} 일 때만 유의)
+///
+/// `align`(bits 5-7·10-12)·`width/heightRelTo`(15-19)·`protect`(20)·
+/// `numbering`(26-28) 은 Core 가 carry 하지 않으므로 무시한다. `offset_x`/
+/// `offset_y` 는 CtrlHeader 오프셋 필드(이미 signed `i32` 로 디코드됨 —
+/// corpus 의 음수 오프셋 실재)를 그대로 싣는다.
+///
+/// **Fail-closed (no-fake-support)**: `vertRelTo`(bits 3-4)·`textWrap`(bits
+/// 21-23)에서 레퍼런스 enum 범위 밖 값(각각 `3`, `6`/`7` — hwp-rs
+/// `VerticalRelativeTo`/`TextWrap` 에 대응 variant 없음)이 나오면 임의 known
+/// 값으로 정규화하지 않고 [`Hwp5Warning::ProjectionFallback`] 를 방출한 뒤 가장
+/// 보수적인 기본값(Paper/Square)으로 폴백한다 — 유효 HWP5 에는 없는 값이라
+/// 실무엔 안 뜨지만, 뜨면 속성 word 오프셋 오정렬의 canary 로 표면화한다.
+fn object_placement_from_ctrl_properties(
+    ctrl_properties: u32,
+    offset_x: i32,
+    offset_y: i32,
+    warnings: &mut Vec<Hwp5Warning>,
+) -> ObjectPlacement {
+    if ctrl_properties & CTRL_PROPERTY_TREAT_AS_CHAR_BIT != 0 {
+        return ObjectPlacement::legacy_inline_defaults();
+    }
+    let vert_bits = (ctrl_properties >> 3) & 0x3;
+    if vert_bits == 3 {
+        warnings.push(Hwp5Warning::ProjectionFallback {
+            subject: "object_placement.vert_rel_to",
+            reason: "gso property word vertRelTo bits 3-4 = 3 is outside the HWP5 reference \
+                     range (0=Paper 1=Page 2=Para); falling back to Paper"
+                .to_string(),
+        });
+    }
+    let vert_rel_to = vert_relative_to_from_bits(vert_bits);
+    let horz_rel_to = horz_relative_to_from_bits((ctrl_properties >> 8) & 0x3);
+    let wrap_bits = (ctrl_properties >> 21) & 0x7;
+    if wrap_bits >= 6 {
+        warnings.push(Hwp5Warning::ProjectionFallback {
+            subject: "object_placement.text_wrap",
+            reason: format!(
+                "gso property word textWrap bits 21-23 = {wrap_bits} is outside the HWP5 \
+                 reference range (0..=5); falling back to Square"
+            ),
+        });
+    }
+    let text_wrap = object_text_wrap_from_bits(wrap_bits);
+    // 표 70: flowWithText 는 vertRelTo=Para 일 때만 정의된다. 그 외 기준에서는
+    // bit 13 을 읽지 않고 false 로 둔다 (hwp-rs 의 `Option` 조건과 동형).
+    let flow_with_text =
+        vert_rel_to == ObjectRelativeTo::Para && (ctrl_properties >> 13) & 0x1 != 0;
+    // 표 70: flowWithText 가 참이면 allowOverlap 은 무조건 false 로 간주한다.
+    let allow_overlap = if flow_with_text { false } else { (ctrl_properties >> 14) & 0x1 != 0 };
+    // 표 70: textFlow 는 wrap 이 Square/Tight/Through 일 때만 정의된다. 다른
+    // wrap(TopAndBottom/BehindText/InFrontOfText)에서는 bits 24-25 가 무의미
+    // 하므로 기본값 BothSides 로 둔다 (잡값이 사이드 흐름을 뒤집는 것을 방지).
+    let text_flow = match text_wrap {
+        ObjectTextWrap::Square | ObjectTextWrap::Tight | ObjectTextWrap::Through => {
+            object_text_flow_from_bits((ctrl_properties >> 24) & 0x3)
+        }
+        _ => ObjectTextFlow::BothSides,
+    };
+    ObjectPlacement {
+        text_wrap,
+        text_flow,
+        treat_as_char: false,
+        flow_with_text,
+        allow_overlap,
+        vert_rel_to,
+        horz_rel_to,
+        vert_offset: HwpUnit::new(offset_y).unwrap_or(HwpUnit::ZERO),
+        horz_offset: HwpUnit::new(offset_x).unwrap_or(HwpUnit::ZERO),
+    }
+}
+
+/// 표 70 `vertRelTo`(bits 3-4)를 Core [`ObjectRelativeTo`] 로 매핑한다.
+///
+/// 스펙 정의값은 `0`/`1`/`2` 뿐이다 — 2비트 필드의 미정의 값 `3` 은 유효
+/// 파일에 나타나지 않으므로(레퍼런스 `VerticalRelativeTo` 에 대응 variant
+/// 없음) 가장 보수적인 `Paper` 로 폴백한다 (날조 매핑이 아니라 안전 기본값).
+/// 이 미정의 값의 경고 방출은 호출부
+/// [`object_placement_from_ctrl_properties`] 가 담당한다.
+fn vert_relative_to_from_bits(bits: u32) -> ObjectRelativeTo {
+    match bits {
+        0 => ObjectRelativeTo::Paper,
+        1 => ObjectRelativeTo::Page,
+        2 => ObjectRelativeTo::Para,
+        _ => ObjectRelativeTo::Paper,
+    }
+}
+
+/// 표 70 `horzRelTo`(bits 8-9)를 Core [`ObjectRelativeTo`] 로 매핑한다.
+///
+/// 2비트 필드의 값 `0`~`3` 이 모두 정의돼 있어 폴백 분기는 도달하지 않는다.
+fn horz_relative_to_from_bits(bits: u32) -> ObjectRelativeTo {
+    match bits {
+        0 => ObjectRelativeTo::Paper,
+        1 => ObjectRelativeTo::Page,
+        2 => ObjectRelativeTo::Column,
+        3 => ObjectRelativeTo::Para,
+        _ => ObjectRelativeTo::Paper,
+    }
+}
+
+/// 표 70 `textWrap`(bits 21-23)을 Core [`ObjectTextWrap`] 로 매핑한다.
+///
+/// 스펙 정의값은 `0`~`5` 다 — 3비트 필드의 미정의 값 `6`/`7` 은 유효 파일에
+/// 나타나지 않으므로 기본 `Square` 로 폴백한다 (경고 방출은 호출부
+/// [`object_placement_from_ctrl_properties`] 담당).
+fn object_text_wrap_from_bits(bits: u32) -> ObjectTextWrap {
+    match bits {
+        0 => ObjectTextWrap::Square,
+        1 => ObjectTextWrap::Tight,
+        2 => ObjectTextWrap::Through,
+        3 => ObjectTextWrap::TopAndBottom,
+        4 => ObjectTextWrap::BehindText,
+        5 => ObjectTextWrap::InFrontOfText,
+        _ => ObjectTextWrap::Square,
+    }
+}
+
+/// 표 70 `textFlow`(bits 24-25)를 Core [`ObjectTextFlow`] 로 매핑한다.
+///
+/// 2비트 필드의 값 `0`~`3` 이 모두 정의돼 있어 폴백 분기는 도달하지 않는다.
+fn object_text_flow_from_bits(bits: u32) -> ObjectTextFlow {
+    match bits {
+        0 => ObjectTextFlow::BothSides,
+        1 => ObjectTextFlow::LeftOnly,
+        2 => ObjectTextFlow::RightOnly,
+        3 => ObjectTextFlow::LargestOnly,
+        _ => ObjectTextFlow::BothSides,
+    }
+}
+
+/// body/텍스트박스 이미지의 [`ObjectPlacement`] 를 `gso ` CtrlHeader 속성 word
+/// 에서 바이트-그라운드로 판정한다 (W5 w0).
+///
+/// 축(relTo·wrap·flow·overlap)은 전부
+/// [`object_placement_from_ctrl_properties`] 가 속성 word 실비트로 디코드하며,
+/// 이전의 projection-context 별 관례(Flow=Paper/InFrontOfText,
+/// TextBox=Para/Square)는 폐기됐다. 따라서 `context` 는 더 이상 배치에 영향을
+/// 주지 않는다 — 인자는 호출부 대칭과 향후 W1 앵커 렌더의 좌표 원점 프레임
+/// (body vs 글상자 내부) 판정 후보로 남겨둔다. W1 이 원점 프레임을 문서 구조
+/// 에서 유도한다면 이 인자와 [`ImageProjectionContext`] 스레딩을 제거할 것.
 fn image_placement_from_wire(
     geometry: &Hwp5ShapeComponentGeometry,
     context: ImageProjectionContext,
     ctrl_properties: u32,
+    warnings: &mut Vec<Hwp5Warning>,
 ) -> ObjectPlacement {
-    match context {
-        ImageProjectionContext::TextBox => ObjectPlacement {
-            text_wrap: ObjectTextWrap::Square,
-            text_flow: ObjectTextFlow::BothSides,
-            treat_as_char: false,
-            flow_with_text: true,
-            allow_overlap: false,
-            vert_rel_to: ObjectRelativeTo::Para,
-            horz_rel_to: ObjectRelativeTo::Para,
-            vert_offset: HwpUnit::new(geometry.y).unwrap_or(HwpUnit::ZERO),
-            horz_offset: HwpUnit::new(geometry.x).unwrap_or(HwpUnit::ZERO),
-        },
-        ImageProjectionContext::Flow => {
-            let treat_as_char = ctrl_properties & CTRL_PROPERTY_TREAT_AS_CHAR_BIT != 0;
-            if treat_as_char {
-                ObjectPlacement::legacy_inline_defaults()
-            } else {
-                ObjectPlacement {
-                    text_wrap: ObjectTextWrap::InFrontOfText,
-                    text_flow: ObjectTextFlow::BothSides,
-                    treat_as_char: false,
-                    flow_with_text: false,
-                    allow_overlap: true,
-                    vert_rel_to: ObjectRelativeTo::Paper,
-                    horz_rel_to: ObjectRelativeTo::Paper,
-                    vert_offset: HwpUnit::new(geometry.y).unwrap_or(HwpUnit::ZERO),
-                    horz_offset: HwpUnit::new(geometry.x).unwrap_or(HwpUnit::ZERO),
-                }
-            }
-        }
-    }
+    let _ = context;
+    object_placement_from_ctrl_properties(ctrl_properties, geometry.x, geometry.y, warnings)
 }
 
 fn project_paragraph_with_images(
@@ -2589,16 +2718,22 @@ fn project_control_run(
         Hwp5Control::Image(image) => projection_images
             .build_image(image, image_context)
             .map(|core_image| Run::image(core_image, CharShapeIndex::new(0))),
-        Hwp5Control::Line(line) => project_line_run(line),
-        Hwp5Control::Rect(rect) => project_rect_run(rect),
-        Hwp5Control::Polygon(polygon) => project_polygon_run(polygon),
-        Hwp5Control::Ellipse(ellipse) => project_ellipse_run(ellipse),
-        Hwp5Control::Arc(arc) => project_arc_run(arc),
-        Hwp5Control::Curve(curve) => project_curve_run(curve),
+        Hwp5Control::Line(line) => project_line_run(line, &mut projection_images.warnings),
+        Hwp5Control::Rect(rect) => project_rect_run(rect, &mut projection_images.warnings),
+        Hwp5Control::Polygon(polygon) => {
+            project_polygon_run(polygon, &mut projection_images.warnings)
+        }
+        Hwp5Control::Ellipse(ellipse) => {
+            project_ellipse_run(ellipse, &mut projection_images.warnings)
+        }
+        Hwp5Control::Arc(arc) => project_arc_run(arc, &mut projection_images.warnings),
+        Hwp5Control::Curve(curve) => project_curve_run(curve, &mut projection_images.warnings),
         Hwp5Control::TextArt(text_art) => {
             Some(project_text_art_run(text_art, &mut projection_images.warnings))
         }
-        Hwp5Control::ConnectLine(connect_line) => project_connectline_run(connect_line),
+        Hwp5Control::ConnectLine(connect_line) => {
+            project_connectline_run(connect_line, &mut projection_images.warnings)
+        }
         Hwp5Control::Equation(equation) => Some(project_equation_run(equation)),
         Hwp5Control::TextBox(textbox) => Some(project_textbox_run(textbox, projection_images)),
         Hwp5Control::Group(group) => project_group_run(group, projection_images),
@@ -2930,7 +3065,11 @@ fn project_textbox_run(
             paragraphs,
             width: hwp_unit_from_u32(textbox.geometry.width),
             height: hwp_unit_from_u32(textbox.geometry.height),
-            placement: shape_placement(&textbox.geometry, textbox.ctrl_properties),
+            placement: shape_placement(
+                &textbox.geometry,
+                textbox.ctrl_properties,
+                &mut projection_images.warnings,
+            ),
             caption: None,
             style: None,
             text_vertical_align: shape_vertical_align_from_list_header(
@@ -3031,16 +3170,22 @@ fn project_group_child(
     // Non-text children reuse the single-shape projection helpers; extract
     // the inner control from the produced run.
     let run = match &child.control {
-        Hwp5Control::Line(line) => project_line_run(line),
-        Hwp5Control::Rect(rect) => project_rect_run(rect),
-        Hwp5Control::Polygon(polygon) => project_polygon_run(polygon),
-        Hwp5Control::Ellipse(ellipse) => project_ellipse_run(ellipse),
-        Hwp5Control::Arc(arc) => project_arc_run(arc),
-        Hwp5Control::Curve(curve) => project_curve_run(curve),
+        Hwp5Control::Line(line) => project_line_run(line, &mut projection_images.warnings),
+        Hwp5Control::Rect(rect) => project_rect_run(rect, &mut projection_images.warnings),
+        Hwp5Control::Polygon(polygon) => {
+            project_polygon_run(polygon, &mut projection_images.warnings)
+        }
+        Hwp5Control::Ellipse(ellipse) => {
+            project_ellipse_run(ellipse, &mut projection_images.warnings)
+        }
+        Hwp5Control::Arc(arc) => project_arc_run(arc, &mut projection_images.warnings),
+        Hwp5Control::Curve(curve) => project_curve_run(curve, &mut projection_images.warnings),
         Hwp5Control::TextArt(text_art) => {
             Some(project_text_art_run(text_art, &mut projection_images.warnings))
         }
-        Hwp5Control::ConnectLine(connect_line) => project_connectline_run(connect_line),
+        Hwp5Control::ConnectLine(connect_line) => {
+            project_connectline_run(connect_line, &mut projection_images.warnings)
+        }
         Hwp5Control::Equation(equation) => Some(project_equation_run(equation)),
         // Nested group (Wave B): recurse. `project_group_run` returns a
         // `Run` carrying `Control::Group`; extract it the same way as every
@@ -4249,7 +4394,11 @@ mod tests {
             },
             binary_data_id: 3,
             instance_id: 0,
-            ctrl_properties: 0,
+            // W5 w0: 배치가 이제 속성 word 실비트로 결정되므로, 실측 anchored
+            // 이미지 word(anchored_zero_origin_png native fixture, 0x040a2310 →
+            // Para/Para/Square, flowWithText=1)를 싣는다 (이전엔 TextBox 관례가
+            // 이 값을 합성했다).
+            ctrl_properties: 0x040a_2310,
         });
         let textbox = Hwp5Control::TextBox(Hwp5TextBoxControl {
             ctrl_id: 0x6773_6F20,
@@ -4465,89 +4614,174 @@ mod tests {
         )));
     }
 
-    // ── image_placement_from_wire (W2p) ─────────────────────────────────────
+    // ── image_placement_from_wire (W5 w0 — byte-ground axes) ────────────────
 
     #[test]
-    fn image_placement_from_wire_raw_bit_truth_table() {
-        // HWP 5.0 표 70 공통 개체 속성 bit0(글자처럼 취급)이 유일한 진실 —
-        // 좌표는 4조합 전부에서 판정에 관여하지 않는다.
+    fn image_placement_from_wire_byte_grounds_floating_axes() {
+        // 속성 word bit0=0 → 부유. relTo/wrap/flow/overlap 이 실비트로
+        // 디코드된다 (이전 Flow 관례 Paper/Paper/InFrontOfText 폐기).
         let zero_origin = crate::schema::section::Hwp5ShapeComponentGeometry {
             x: 0,
             y: 0,
             width: 100,
             height: 200,
         };
-        let non_zero_origin = crate::schema::section::Hwp5ShapeComponentGeometry {
+        // 모든 축 비트 0 → Paper/Paper/Square, flow=false, overlap=false.
+        let zeroed = image_placement_from_wire(
+            &zero_origin,
+            ImageProjectionContext::Flow,
+            0x0,
+            &mut Vec::new(),
+        );
+        assert!(!zeroed.treat_as_char);
+        assert_eq!(zeroed.text_wrap, ObjectTextWrap::Square);
+        assert_eq!(zeroed.vert_rel_to, ObjectRelativeTo::Paper);
+        assert_eq!(zeroed.horz_rel_to, ObjectRelativeTo::Paper);
+        assert!(!zeroed.flow_with_text);
+        assert!(!zeroed.allow_overlap);
+        assert_eq!(zeroed.vert_offset, HwpUnit::ZERO);
+        assert_eq!(zeroed.horz_offset, HwpUnit::ZERO);
+
+        // 실측 속성 word (anchored_zero_origin_png native fixture,
+        // attr=0x040a2310) → Para/Para/Square, flow=true → overlap 강제 false.
+        let img = image_placement_from_wire(
+            &zero_origin,
+            ImageProjectionContext::Flow,
+            0x040a_2310,
+            &mut Vec::new(),
+        );
+        assert!(!img.treat_as_char);
+        assert_eq!(img.vert_rel_to, ObjectRelativeTo::Para);
+        assert_eq!(img.horz_rel_to, ObjectRelativeTo::Para);
+        assert_eq!(img.text_wrap, ObjectTextWrap::Square);
+        assert!(img.flow_with_text);
+        assert!(!img.allow_overlap);
+
+        // 오프셋은 signed CtrlHeader 필드를 그대로 싣는다 (음수 포함 —
+        // corpus 의 문단 위 돌출 offset).
+        let neg = crate::schema::section::Hwp5ShapeComponentGeometry {
+            x: -1_234,
+            y: -5_678,
+            width: 100,
+            height: 200,
+        };
+        let placement = image_placement_from_wire(
+            &neg,
+            ImageProjectionContext::Flow,
+            0x040a_2310,
+            &mut Vec::new(),
+        );
+        assert_eq!(placement.horz_offset, HwpUnit::new(-1_234).unwrap());
+        assert_eq!(placement.vert_offset, HwpUnit::new(-5_678).unwrap());
+    }
+
+    #[test]
+    fn image_placement_from_wire_bit0_inline_collapses_to_legacy_default() {
+        // bit0=1 → 좌표·다른 비트 무관 인라인 (legacy default). W2p 계약 보존.
+        let non_zero = crate::schema::section::Hwp5ShapeComponentGeometry {
             x: 1_234,
             y: 5_678,
             width: 100,
             height: 200,
         };
-
-        // bit0=0, geometry (0,0) → anchored (bit wins over zero coordinates
-        // — the old (0,0) heuristic would have inlined this occurrence).
-        let anchored_zero =
-            image_placement_from_wire(&zero_origin, ImageProjectionContext::Flow, 0x0);
-        assert!(!anchored_zero.treat_as_char);
-        assert_eq!(anchored_zero.text_wrap, ObjectTextWrap::InFrontOfText);
-        assert_eq!(anchored_zero.vert_rel_to, ObjectRelativeTo::Paper);
-        assert_eq!(anchored_zero.horz_rel_to, ObjectRelativeTo::Paper);
-        assert_eq!(anchored_zero.vert_offset, HwpUnit::ZERO);
-        assert_eq!(anchored_zero.horz_offset, HwpUnit::ZERO);
-
-        // bit0=0, geometry non-zero → anchored (unchanged from before).
-        let anchored_nonzero =
-            image_placement_from_wire(&non_zero_origin, ImageProjectionContext::Flow, 0x0);
-        assert!(!anchored_nonzero.treat_as_char);
-        assert_eq!(anchored_nonzero.text_wrap, ObjectTextWrap::InFrontOfText);
-        assert_eq!(anchored_nonzero.vert_offset, HwpUnit::new(5_678).unwrap());
-        assert_eq!(anchored_nonzero.horz_offset, HwpUnit::new(1_234).unwrap());
-
-        // bit0=1, geometry (0,0) → inline (legacy behavior preserved).
-        let inline_zero =
-            image_placement_from_wire(&zero_origin, ImageProjectionContext::Flow, 0x1);
-        assert!(inline_zero.treat_as_char);
-        assert_eq!(inline_zero, ObjectPlacement::legacy_inline_defaults());
-
-        // bit0=1, geometry non-zero → still inline — the bit wins over
-        // coordinates (this is the actual W2p bug fix: the old (0,0)
-        // heuristic would have anchored this occurrence instead).
-        let inline_nonzero =
-            image_placement_from_wire(&non_zero_origin, ImageProjectionContext::Flow, 0x1);
-        assert!(inline_nonzero.treat_as_char);
-        assert_eq!(inline_nonzero, ObjectPlacement::legacy_inline_defaults());
+        let inline = image_placement_from_wire(
+            &non_zero,
+            ImageProjectionContext::Flow,
+            0x1,
+            &mut Vec::new(),
+        );
+        assert!(inline.treat_as_char);
+        assert_eq!(inline, ObjectPlacement::legacy_inline_defaults());
+        // 다른 비트가 전부 켜져도 bit0 이 인라인 판정을 지배한다.
+        let inline_all = image_placement_from_wire(
+            &non_zero,
+            ImageProjectionContext::Flow,
+            0xFFFF_FFFF,
+            &mut Vec::new(),
+        );
+        assert!(inline_all.treat_as_char);
+        assert_eq!(inline_all, ObjectPlacement::legacy_inline_defaults());
     }
 
     #[test]
-    fn image_placement_from_wire_textbox_context_ignores_bit() {
-        // TextBox 컨텍스트는 CtrlHeader 속성과 무관하게 항상 anchored.
+    fn image_placement_from_wire_is_context_independent() {
+        // W5 w0: 배치는 속성 word 로만 결정된다 — Flow/TextBox context 는 더
+        // 이상 축을 바꾸지 않는다 (이전 TextBox 관례 Para/Square 폐기).
+        let geometry = crate::schema::section::Hwp5ShapeComponentGeometry {
+            x: 8_503,
+            y: 2_834,
+            width: 100,
+            height: 200,
+        };
+        // textbox_anchored native fixture attr=0x040a4110 → Para/Page/Square.
+        let flow = image_placement_from_wire(
+            &geometry,
+            ImageProjectionContext::Flow,
+            0x040a_4110,
+            &mut Vec::new(),
+        );
+        let textbox = image_placement_from_wire(
+            &geometry,
+            ImageProjectionContext::TextBox,
+            0x040a_4110,
+            &mut Vec::new(),
+        );
+        assert_eq!(flow, textbox);
+        assert_eq!(flow.vert_rel_to, ObjectRelativeTo::Para);
+        assert_eq!(flow.horz_rel_to, ObjectRelativeTo::Page);
+        assert_eq!(flow.text_wrap, ObjectTextWrap::Square);
+        assert!(flow.allow_overlap);
+        assert!(!flow.flow_with_text);
+        assert_eq!(flow.vert_offset, HwpUnit::new(2_834).unwrap());
+        assert_eq!(flow.horz_offset, HwpUnit::new(8_503).unwrap());
+    }
+
+    #[test]
+    fn image_placement_from_wire_textbox_context_respects_bit0_inline() {
+        // W5 w0 선재 결함 수정 잠금: TextBox 컨텍스트가 bit0 을 무시하고
+        // treat_as_char=false 로 강제하던 구거동을 제거했다 — 글상자 안 진짜
+        // 인라인 이미지(bit0=1)는 이제 TextBox 컨텍스트에서도 inline 으로
+        // 판정된다 (구 테스트 `..._textbox_context_ignores_bit` 대체).
         let geometry = crate::schema::section::Hwp5ShapeComponentGeometry {
             x: 0,
             y: 0,
             width: 100,
             height: 200,
         };
-        let placement = image_placement_from_wire(&geometry, ImageProjectionContext::TextBox, 0x1);
-        assert!(!placement.treat_as_char);
-        assert_eq!(placement.text_wrap, ObjectTextWrap::Square);
+        let placement = image_placement_from_wire(
+            &geometry,
+            ImageProjectionContext::TextBox,
+            0x1,
+            &mut Vec::new(),
+        );
+        assert!(placement.treat_as_char, "TextBox context must respect bit0=1 (inline)");
+        assert_eq!(placement, ObjectPlacement::legacy_inline_defaults());
     }
 
     #[test]
-    fn image_placement_from_wire_masks_only_bit0() {
-        // 다른 비트가 전부 설정돼도 bit0 만 판정에 관여해야 한다.
-        let geometry = crate::schema::section::Hwp5ShapeComponentGeometry {
-            x: 10,
-            y: 20,
-            width: 100,
-            height: 200,
-        };
-        let placement =
-            image_placement_from_wire(&geometry, ImageProjectionContext::Flow, 0xFFFF_FFFE);
-        assert!(!placement.treat_as_char, "bit0=0 with every other bit set must still anchor");
+    fn object_placement_from_ctrl_properties_fails_closed_on_out_of_range_bits() {
+        // W5 w0 fail-closed: 레퍼런스 범위 밖 relTo/wrap 값은 임의 known 값으로
+        // 정규화하지 않고 typed 경고 + 보수 fallback(Paper/Square)으로 처리한다.
+        // vertRelTo=3(미정의)·textWrap=6(미정의), bit0=0(부유).
+        let word = (3u32 << 3) | (6u32 << 21);
+        let mut warnings = Vec::new();
+        let placement = object_placement_from_ctrl_properties(word, 0, 0, &mut warnings);
+        assert_eq!(placement.vert_rel_to, ObjectRelativeTo::Paper);
+        assert_eq!(placement.text_wrap, ObjectTextWrap::Square);
+        assert_eq!(warnings.len(), 2, "unknown vertRelTo + textWrap each emit one warning");
+        assert!(warnings.iter().any(|w| matches!(
+            w,
+            Hwp5Warning::ProjectionFallback { subject, .. } if *subject == "object_placement.vert_rel_to"
+        )));
+        assert!(warnings.iter().any(|w| matches!(
+            w,
+            Hwp5Warning::ProjectionFallback { subject, .. } if *subject == "object_placement.text_wrap"
+        )));
 
-        let placement_set =
-            image_placement_from_wire(&geometry, ImageProjectionContext::Flow, 0xFFFF_FFFF);
-        assert!(placement_set.treat_as_char, "bit0=1 with every other bit set must still inline");
+        // 유효 word (anchored_zero_origin_png attr) 는 경고 0.
+        let mut clean = Vec::new();
+        let _ = object_placement_from_ctrl_properties(0x040a_2310, 0, 0, &mut clean);
+        assert!(clean.is_empty(), "valid property word must not emit fail-closed warnings");
     }
 
     // ── page_def_to_settings ─────────────────────────────────────────────────
