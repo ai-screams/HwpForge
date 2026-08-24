@@ -46,6 +46,10 @@ fn textbox_para(
 }
 
 fn save(name: &str, paragraphs: Vec<Paragraph>) {
+    save_with_images(name, paragraphs, ImageStore::new());
+}
+
+fn save_with_images(name: &str, paragraphs: Vec<Paragraph>, images: ImageStore) {
     let path = format!("examples/hwp5_review/{name}-base.hwpx");
     // 재저장 공동 제작 흐름에서 사용자가 같은 이름으로 한컴 재저장본을
     // 남기므로, 이미 존재하면 절대 덮어쓰지 않는다 (재저장본 소실 사고
@@ -58,7 +62,7 @@ fn save(name: &str, paragraphs: Vec<Paragraph>) {
     let mut doc = Document::new();
     doc.add_section(Section::with_paragraphs(paragraphs, PageSettings::a4()));
     let validated = doc.validate().expect("validate");
-    let bytes = HwpxEncoder::encode(&validated, &store, &ImageStore::new()).expect("encode");
+    let bytes = HwpxEncoder::encode(&validated, &store, &images).expect("encode");
     std::fs::write(&path, &bytes).expect("write");
     println!("생성: {path} ({} bytes)", bytes.len());
 }
@@ -163,6 +167,46 @@ fn main() {
         "textbox_anchored",
         vec![text_para("글상자 앞 문단입니다."), text_para("글상자 뒤 문단입니다.")],
     );
+
+    // ⑥ W5 w1a 게이트: 글상자 안 인라인(글자취급) 이미지 — corpus 8% 의
+    //    실체 (byte-ground census §9g). 내부 문단 = 앞텍스트 + 이미지 +
+    //    뒤텍스트, 재저장으로 내부 lineseg 의 이미지 계정·bit0=1 wire 를
+    //    얻는다.
+    {
+        use hwpforge_core::image::{Image, ImageFormat};
+        use hwpforge_foundation::HwpUnit as HU;
+        let mut images = ImageStore::new();
+        images.insert(
+            "fixture-image.png",
+            std::fs::read("examples/hwp5_review/fixture-image.png").expect("png asset"),
+        );
+        let img = Image::new(
+            "fixture-image.png",
+            HU::from_mm(12.0).expect("w"),
+            HU::from_mm(12.0).expect("h"),
+            ImageFormat::Png,
+        );
+        let inner = Paragraph::with_runs(
+            vec![
+                Run::text("그림 앞 ", CharShapeIndex::new(0)),
+                Run::image(img, CharShapeIndex::new(0)),
+                Run::text(
+                    " 그림 뒤 — 이 문장은 글상자 폭에서 줄이 감기도록 길게 씁니다.",
+                    CharShapeIndex::new(0),
+                ),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        save_with_images(
+            "textbox_inline_image",
+            vec![
+                text_para("글상자 앞 문단입니다."),
+                textbox_para(vec![inner], 80.0, 40.0, VerticalAlign::Top),
+                text_para("글상자 뒤 문단입니다."),
+            ],
+            images,
+        );
+    }
 
     println!();
     println!("한컴오피스에서 할 일 (재저장 = 조판 캐시·wire 진리 생성, 하나씩):");
