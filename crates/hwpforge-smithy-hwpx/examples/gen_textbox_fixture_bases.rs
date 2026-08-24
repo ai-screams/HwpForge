@@ -208,6 +208,50 @@ fn main() {
         );
     }
 
+    // ⑦ sub-line-height 실측용: 줄 텍스트(10pt=1000유닛)보다 **작은**
+    //    이미지(3mm≈850유닛) — corpus nested-8 의 6/8 실체 (이미지 2388 <
+    //    줄 3014). 재저장으로 혼합 높이 줄의 lineseg profile
+    //    (vertsize/textheight 가 텍스트 지배값인지)과 이미지 세로 배치
+    //    (baseline/하단?) wire 진리를 얻는다. 글상자 내부(corpus 케이스)와
+    //    body(공유 한계 확인) 양쪽을 한 문서에.
+    {
+        use hwpforge_core::image::{Image, ImageFormat};
+        use hwpforge_foundation::HwpUnit as HU;
+        let mut images = ImageStore::new();
+        images.insert(
+            "fixture-image.png",
+            std::fs::read("examples/hwp5_review/fixture-image.png").expect("png asset"),
+        );
+        let small = || {
+            Image::new(
+                "fixture-image.png",
+                HU::from_mm(3.0).expect("w"),
+                HU::from_mm(3.0).expect("h"),
+                ImageFormat::Png,
+            )
+        };
+        let mixed_para = |lead: &str| {
+            Paragraph::with_runs(
+                vec![
+                    Run::text(format!("{lead} 작은 그림 "), CharShapeIndex::new(0)),
+                    Run::image(small(), CharShapeIndex::new(0)),
+                    Run::text(" 뒤 텍스트가 줄 높이를 지배합니다.", CharShapeIndex::new(0)),
+                ],
+                ParaShapeIndex::new(0),
+            )
+        };
+        save_with_images(
+            "subline_image",
+            vec![
+                text_para("sub-line-height 대조 문서입니다."),
+                mixed_para("본문:"),
+                textbox_para(vec![mixed_para("글상자 안:")], 80.0, 25.0, VerticalAlign::Top),
+                text_para("문서 끝 문단입니다."),
+            ],
+            images,
+        );
+    }
+
     println!();
     println!("한컴오피스에서 할 일 (재저장 = 조판 캐시·wire 진리 생성, 하나씩):");
     println!("  1. textbox_basic-base.hwpx 열기 → 글상자·내부 줄바꿈 확인");
