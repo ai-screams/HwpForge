@@ -118,28 +118,28 @@ impl FontTable {
 fn resolve_image_asset(
     input: &PdfInput<'_>,
     assets: &mut std::collections::HashMap<String, std::sync::Arc<Vec<u8>>>,
-    img: &crate::source::LineImage,
+    canonical_key: &str,
     location: &str,
     options: &PdfOptions,
     warnings: &mut Vec<PdfWarning>,
 ) -> PdfResult<Option<std::sync::Arc<Vec<u8>>>> {
-    if let Some(existing) = assets.get(&img.canonical_key) {
+    if let Some(existing) = assets.get(canonical_key) {
         return Ok(Some(existing.clone()));
     }
-    match input.styles.image_data(&img.canonical_key) {
+    match input.styles.image_data(canonical_key) {
         Some(bytes) => {
             let arc = std::sync::Arc::new(bytes.to_vec());
-            assets.insert(img.canonical_key.clone(), arc.clone());
+            assets.insert(canonical_key.to_string(), arc.clone());
             Ok(Some(arc))
         }
         None => match options.failure_mode {
             RenderFailureMode::Fatal => Err(PdfError::ImageDataMissing {
-                key: img.canonical_key.clone(),
+                key: canonical_key.to_string(),
                 location: location.to_string(),
             }),
             RenderFailureMode::Degraded => {
                 warnings.push(PdfWarning::ImageDataMissing {
-                    key: img.canonical_key.clone(),
+                    key: canonical_key.to_string(),
                     location: location.to_string(),
                 });
                 Ok(None)
@@ -259,6 +259,31 @@ pub(crate) fn build_paint_pages(
     let mut pages = Vec::with_capacity(layout_pages.len());
     for page in layout_pages {
         let mut items = Vec::new();
+        // W5 w1b: 앵커 이미지 = 배경 (본문이 회피하므로 맨 아래에 깔린다 —
+        // §9e z-order). 인라인 이미지와 같은 asset interner 를 공유한다.
+        for ai in &page.anchored_images {
+            let Some(data) = resolve_image_asset(
+                input,
+                &mut image_assets,
+                &ai.canonical_key,
+                &ai.location,
+                options,
+                warnings,
+            )?
+            else {
+                continue; // Degraded: 경고 후 생략.
+            };
+            items.push(PaintItem::Image(crate::paint::ImageItem {
+                canonical_key: ai.canonical_key.clone(),
+                data,
+                origin: Point { x: Pt::from_hwpunit(ai.x), y: Pt::from_hwpunit(ai.y) },
+                size: Size {
+                    width: Pt::from_hwpunit(ai.width),
+                    height: Pt::from_hwpunit(ai.height),
+                },
+                location: ai.location.clone(),
+            }));
+        }
         // z-order 계약 (source): 셀 배경 → 괘선 → 글리프.
         for r in &page.rects {
             items.push(PaintItem::Rect(RectItem {
@@ -399,7 +424,7 @@ fn render_line(
                 let data = match resolve_image_asset(
                     input,
                     image_assets,
-                    img,
+                    &img.canonical_key,
                     &line.location,
                     options,
                     warnings,
@@ -687,7 +712,7 @@ fn build_textbox_clip_group(
 #[cfg(test)]
 mod atom_tests {
     use super::*;
-    use crate::source::{LaidLine, LineAtom, LineImage, PageLayout};
+    use crate::source::{LaidAnchoredImage, LaidLine, LaidRect, LineAtom, LineImage, PageLayout};
     use crate::text::align::LineBox;
     use crate::StyleLookup;
     use hwpforge_foundation::Alignment;
@@ -721,6 +746,7 @@ mod atom_tests {
         PageLayout {
             width: 59528,
             height: 84188,
+            anchored_images: Vec::new(),
             rects: Vec::new(),
             borders: Vec::new(),
             lines: vec![LaidLine {
@@ -774,6 +800,109 @@ mod atom_tests {
         assert!((img.origin.y.0 - Pt::from_hwpunit(5000).0).abs() < 1e-9);
         assert!((img.size.width.0 - Pt::from_hwpunit(2000).0).abs() < 1e-9);
         assert!((img.size.height.0 - Pt::from_hwpunit(3000).0).abs() < 1e-9);
+    }
+
+    /// W5 w1b: 앵커 이미지는 `PaintItem::Image` 로 절대 배치되고, **배경**
+    /// (셀 배경 rect 보다도 먼저 = z-order 맨 아래)에 온다. origin/size 는
+    /// source 층 HWPUNIT 을 pt 로 1:1 환산한다.
+    #[test]
+    fn anchored_image_paints_as_background_before_rects() {
+        let layout = PageLayout {
+            width: 59528,
+            height: 84188,
+            anchored_images: vec![LaidAnchoredImage {
+                location: "s0/p0".into(),
+                canonical_key: "img1.png".into(),
+                x: 10764,
+                y: 11020,
+                width: 4000,
+                height: 3000,
+            }],
+            rects: vec![LaidRect {
+                location: "s0/p0/cell".into(),
+                x: 0,
+                y: 0,
+                width: 1000,
+                height: 1000,
+                color: Color::from_rgb(200, 200, 200),
+            }],
+            borders: Vec::new(),
+            lines: Vec::new(),
+            page_number: None,
+        };
+        let doc = minimal_doc();
+        let input = PdfInput { document: &doc, styles: &ImgStyles };
+        let options = PdfOptions::default();
+        let mut table = FontTable::new(
+            FontResolver::with_discovery(&[], crate::font::FontDiscovery::ExplicitOnly)
+                .expect("resolver"),
+        );
+        let mut warnings = Vec::new();
+        let pages = build_paint_pages(&input, &options, &[layout], &mut table, &mut warnings)
+            .expect("paint");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        // 첫 항목 = 앵커 이미지 (배경), 그 다음이 셀 배경 rect.
+        assert!(
+            matches!(&pages[0].items[0], PaintItem::Image(_)),
+            "앵커 이미지가 맨 아래 배경이어야 함: {:?}",
+            pages[0].items[0]
+        );
+        assert!(matches!(&pages[0].items[1], PaintItem::Rect(_)), "rect 는 이미지 뒤");
+        let PaintItem::Image(img) = &pages[0].items[0] else { unreachable!() };
+        assert_eq!(img.canonical_key, "img1.png");
+        assert_eq!(*img.data, vec![1, 2, 3]);
+        assert!((img.origin.x.0 - Pt::from_hwpunit(10764).0).abs() < 1e-9);
+        assert!((img.origin.y.0 - Pt::from_hwpunit(11020).0).abs() < 1e-9);
+        assert!((img.size.width.0 - Pt::from_hwpunit(4000).0).abs() < 1e-9);
+        assert!((img.size.height.0 - Pt::from_hwpunit(3000).0).abs() < 1e-9);
+    }
+
+    /// 앵커 이미지 자산 누락도 폰트/인라인 이미지와 같은 failure_mode 계약.
+    #[test]
+    fn anchored_image_missing_asset_follows_failure_mode() {
+        struct NoImg;
+        impl StyleLookup for NoImg {}
+        let layout = PageLayout {
+            width: 59528,
+            height: 84188,
+            anchored_images: vec![LaidAnchoredImage {
+                location: "s0/p0".into(),
+                canonical_key: "gone.png".into(),
+                x: 0,
+                y: 0,
+                width: 4000,
+                height: 3000,
+            }],
+            rects: Vec::new(),
+            borders: Vec::new(),
+            lines: Vec::new(),
+            page_number: None,
+        };
+        let doc = minimal_doc();
+        let input = PdfInput { document: &doc, styles: &NoImg };
+        let mut table = FontTable::new(
+            FontResolver::with_discovery(&[], crate::font::FontDiscovery::ExplicitOnly)
+                .expect("resolver"),
+        );
+        // Fatal.
+        let mut warnings = Vec::new();
+        let err = build_paint_pages(
+            &input,
+            &PdfOptions::default(),
+            std::slice::from_ref(&layout),
+            &mut table,
+            &mut warnings,
+        )
+        .expect_err("fatal");
+        assert!(matches!(err, PdfError::ImageDataMissing { .. }), "{err:?}");
+        // Degraded: 경고 후 이미지 생략.
+        let options =
+            PdfOptions { failure_mode: RenderFailureMode::Degraded, ..PdfOptions::default() };
+        let mut warnings = Vec::new();
+        let pages = build_paint_pages(&input, &options, &[layout], &mut table, &mut warnings)
+            .expect("degraded");
+        assert!(pages[0].items.iter().all(|i| !matches!(i, PaintItem::Image(_))));
+        assert!(warnings.iter().any(|w| matches!(w, PdfWarning::ImageDataMissing { .. })));
     }
 
     #[test]
@@ -847,6 +976,7 @@ mod atom_tests {
         PageLayout {
             width: 59528,
             height: 84188,
+            anchored_images: Vec::new(),
             rects: Vec::new(),
             borders: Vec::new(),
             lines: vec![LaidLine {

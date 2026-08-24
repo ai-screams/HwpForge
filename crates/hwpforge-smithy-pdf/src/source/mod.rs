@@ -215,17 +215,51 @@ pub struct LaidPageNumber {
     pub anchor_bottom: i32,
 }
 
+/// 앵커형 이미지의 절대 배치 (HWPUNIT, 쪽 좌상단 원점 — W5 w1b).
+///
+/// 글자취급이 아닌(`treat_as_char == false`) 이미지는 줄 흐름에 속하지 않고
+/// 문단에 **앵커**된 오버레이다 (여러 줄에 걸침 — §9d High-1). 본문 회피는
+/// 조판 캐시(lineseg horzpos/horzsize)에 이미 구워져 있으므로 렌더는
+/// `rel_to + offset` 으로 절대 좌표만 계산한다 (§9a — wrap 재계산 불요).
+///
+/// 원점([`Self::x`]·[`Self::y`])은 이미지 **좌상단**이다. 산술(§9c ①·
+/// floating fixture 실측):
+///
+/// - `y = body_top + 앵커 문단 첫 lineseg.vertpos + vert_offset`
+///   (vertRelTo=PARA — 문단 top 기준). vertOffset 음수 = 문단 위로 돌출.
+/// - `x = body_left + horz_offset` (horzRelTo=PARA, 또는 단일 컬럼
+///   문서의 COLUMN — 컬럼 왼쪽 = 본문 왼쪽).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LaidAnchoredImage {
+    /// 위치 보고용 경로 (`s{섹션}/p{문단}` — 진단·오류 payload).
+    pub location: String,
+    /// canonical 스토어 키 ([`crate::render`] 의 `image_data` 조회 키).
+    pub canonical_key: String,
+    /// 좌상단 x (HWPUNIT, 쪽 좌상단 원점).
+    pub x: i32,
+    /// 좌상단 y (HWPUNIT, 쪽 좌상단 원점 — 음수 가능: 문단 위로 돌출).
+    pub y: i32,
+    /// 표시 폭 (HWPUNIT).
+    pub width: i32,
+    /// 표시 높이 (HWPUNIT).
+    pub height: i32,
+}
+
 /// 한 쪽의 배치 결과.
 ///
-/// z-order 계약: `rects`(셀 배경) → `borders`(괘선) → `lines`(글리프) 순으로
-/// 그린다 (각 Vec 내부는 문서 순서). `page_number` 는 글리프와 같은 층이다
-/// (겹칠 본문이 없는 밴드 밖 영역).
+/// z-order 계약: `anchored_images`(앵커 이미지 — 본문이 회피하므로 배경) →
+/// `rects`(셀 배경) → `borders`(괘선) → `lines`(글리프) 순으로 그린다 (각
+/// Vec 내부는 문서 순서). `page_number` 는 글리프와 같은 층이다 (겹칠 본문이
+/// 없는 밴드 밖 영역).
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageLayout {
     /// 쪽 폭 (HWPUNIT).
     pub width: i32,
     /// 쪽 높이 (HWPUNIT).
     pub height: i32,
+    /// 앵커형 이미지들 (배경 — 본문 아래. §9e w1b: Square/Tight/Through/
+    /// TopAndBottom 은 본문이 회피하므로 겹치지 않으나 순서로 배경 명시).
+    pub anchored_images: Vec<LaidAnchoredImage>,
     /// 셀 배경 사각형들.
     pub rects: Vec<LaidRect>,
     /// 괘선 선분들.
@@ -470,6 +504,154 @@ pub(crate) fn is_admitted_inline_textbox(content: &RunContent) -> bool {
     matches!(content, RunContent::Control(c)
         if matches!(&**c, hwpforge_core::control::Control::TextBox { placement, .. }
             if placement.as_ref().is_none_or(|p| p.treat_as_char)))
+}
+
+/// **앵커형** 이미지인지 (`placement.treat_as_char == false`) — 조합
+/// 지원 여부와 무관하게 앵커 렌더 대상 후보다.
+///
+/// 글자취급(`treat_as_char == true`) 및 `placement == None`(레거시 인라인
+/// 기본값)은 여기서 제외한다 — 그쪽은 [`is_admitted_inline_image`] 소관.
+fn is_anchored_image(content: &RunContent) -> bool {
+    matches!(content, RunContent::Image(img)
+        if img.placement.as_ref().is_some_and(|p| !p.treat_as_char))
+}
+
+/// W5 w1b 가 렌더하는 **앵커 이미지 조합**인지 (§9e·§9g byte-ground 실분포).
+///
+/// 캐시 재생 하에서 본문 회피는 이미 lineseg 에 구워져 있으므로 렌더 산술은
+/// `rel_to + offset` 절대 배치뿐이다 (§9a). 지원 축:
+///
+/// - `vert_rel_to == Para` (문단 top 기준 — 유일 실측 앵커 축)
+/// - `horz_rel_to ∈ {Para, Column}` (Column 은 단일 컬럼일 때만 렌더 —
+///   다중 컬럼 판정은 컬럼 기하가 필요해 호출부가 fail-closed)
+/// - `text_wrap ∈ {Square, Tight, Through, TopAndBottom}` (전부 본문이
+///   회피 — 렌더 산술 동일). `BehindText`·`InFrontOfText`·`Other` 는
+///   z-order/겹침 의미가 달라 제외 (W5 후속).
+///
+/// 앵커형이지만 위 조합 밖(예: `Paper`/`Page` rel)은 `false` → 호출부가
+/// 종류를 세분해 typed fail-closed (§9b).
+fn is_admitted_anchored_image(content: &RunContent) -> bool {
+    use hwpforge_core::placement::{ObjectRelativeTo, ObjectTextWrap};
+    let RunContent::Image(img) = content else {
+        return false;
+    };
+    let Some(p) = img.placement.as_ref() else {
+        return false;
+    };
+    !p.treat_as_char
+        && p.vert_rel_to == ObjectRelativeTo::Para
+        && matches!(p.horz_rel_to, ObjectRelativeTo::Para | ObjectRelativeTo::Column)
+        && matches!(
+            p.text_wrap,
+            ObjectTextWrap::Square
+                | ObjectTextWrap::Tight
+                | ObjectTextWrap::Through
+                | ObjectTextWrap::TopAndBottom
+        )
+}
+
+/// 문단의 앵커형 이미지를 절대 배치([`LaidAnchoredImage`])로 수집한다 (W5 w1b).
+///
+/// 지원 조합([`is_admitted_anchored_image`])만 수집하고, 그 밖(조합 외·다중·
+/// 글자취급 인라인과 혼합)은 미측정 profile 이라 typed [`PdfError::InvalidCache`]
+/// 로 fail-closed 한다 (§9b·§9e). 반환 `Vec` 은 0 또는 1 원소다 (다중 앵커 =
+/// fail-closed).
+///
+/// 산술 (floating fixture 실측 — §9c ①):
+/// - `y = body_top + first_v + vert_offset` (`first_v` = 문단 첫 lineseg
+///   vertpos = 문단 top; `vert_offset` 음수 = 문단 위로 돌출).
+/// - `x = body_left + horz_offset` (PARA, 또는 단일 컬럼의 COLUMN — 컬럼
+///   왼쪽 = 본문 왼쪽).
+fn collect_anchored_images(
+    para: &hwpforge_core::paragraph::Paragraph,
+    section: &Section,
+    body_top: i32,
+    body_left: i32,
+    first_v: i32,
+    location: &str,
+) -> PdfResult<Vec<LaidAnchoredImage>> {
+    use hwpforge_core::placement::ObjectRelativeTo;
+    let anchored_count = para.runs.iter().filter(|r| is_anchored_image(&r.content)).count();
+    if anchored_count == 0 {
+        return Ok(Vec::new());
+    }
+    // 다중 앵커 = 미측정 z-order (§9d Low — fail-closed).
+    if anchored_count > 1 {
+        return Err(PdfError::InvalidCache {
+            detail: format!(
+                "{location}: {anchored_count} anchored images in one paragraph — \
+                 unmeasured z-order (unsupported before W5 follow-up)"
+            ),
+        });
+    }
+    // 앵커 이미지 + 글자취급 인라인 이미지/글상자 혼합 = 미측정 profile.
+    if para
+        .runs
+        .iter()
+        .any(|r| is_admitted_inline_image(&r.content) || is_admitted_inline_textbox(&r.content))
+    {
+        return Err(PdfError::InvalidCache {
+            detail: format!(
+                "{location}: paragraph mixes an anchored image with an inline \
+                 image/text box — unmeasured profile (unsupported)"
+            ),
+        });
+    }
+    // 유일 앵커 이미지.
+    let content =
+        para.runs.iter().map(|r| &r.content).find(|&c| is_anchored_image(c)).ok_or_else(|| {
+            PdfError::InternalInvariant {
+                detail: format!("{location}: anchored image vanished after count"),
+            }
+        })?;
+    let RunContent::Image(img) = content else {
+        return Err(PdfError::InternalInvariant {
+            detail: format!("{location}: anchored classifier matched a non-image run"),
+        });
+    };
+    let placement = img.placement.as_ref().ok_or_else(|| PdfError::InternalInvariant {
+        detail: format!("{location}: anchored image lost placement after classify"),
+    })?;
+    // 조합 밖 = typed fail-closed (종류 세분 — CLI cause 집계용).
+    if !is_admitted_anchored_image(content) {
+        return Err(PdfError::InvalidCache {
+            detail: format!(
+                "{location}: anchored image placement (wrap={:?}, vert_rel={:?}, \
+                 horz_rel={:?}) unsupported before W5 w1b (scope: vert_rel=Para, \
+                 horz_rel=Para/Column, wrap=Square/Tight/Through/TopAndBottom)",
+                placement.text_wrap, placement.vert_rel_to, placement.horz_rel_to
+            ),
+        });
+    }
+    // COLUMN rel 은 단일 컬럼 문서만 (다중 컬럼 = 컬럼 기하 필요 — fail-closed).
+    if placement.horz_rel_to == ObjectRelativeTo::Column
+        && section.column_settings.as_ref().map_or(1, hwpforge_core::column::ColumnSettings::count)
+            > 1
+    {
+        return Err(PdfError::InvalidCache {
+            detail: format!(
+                "{location}: anchored image horz_rel=Column in a multi-column \
+                 section — column geometry unsupported before W5 follow-up"
+            ),
+        });
+    }
+    let y = body_top
+        .checked_add(first_v)
+        .and_then(|v| v.checked_add(placement.vert_offset.as_i32()))
+        .ok_or_else(|| PdfError::InvalidCache {
+            detail: format!("{location}: anchored image y overflows i32"),
+        })?;
+    let x = body_left.checked_add(placement.horz_offset.as_i32()).ok_or_else(|| {
+        PdfError::InvalidCache { detail: format!("{location}: anchored image x overflows i32") }
+    })?;
+    Ok(vec![LaidAnchoredImage {
+        location: location.to_string(),
+        canonical_key: img.path.clone(),
+        x,
+        y,
+        width: img.width.as_i32(),
+        height: img.height.as_i32(),
+    }])
 }
 
 /// 글상자 내부 콘텐츠 세로 범위 = `max(내부 줄 vertpos + vertsize)` (checked).
@@ -810,6 +992,7 @@ fn replay_section(
         pages.push(PageLayout {
             width: page_width,
             height: page_height,
+            anchored_images: Vec::new(),
             rects: Vec::new(),
             borders: Vec::new(),
             lines: Vec::new(),
@@ -967,6 +1150,15 @@ fn replay_section(
         let first_breaks = prev_v.is_some_and(|p| first_v == 0 || first_v < p);
         check_table_anchor(&mut pending_table_anchor, first_v, first_breaks)?;
 
+        // W5 w1b (§9e): 앵커형(treat_as_char=false) 이미지는 줄 흐름 밖
+        // 오버레이다 — 줄 원자로 귀속하지 않고 문단에 앵커해 절대 배치한다
+        // (§9d High-1). 본문 회피는 lineseg(horzpos/horzsize)에 이미 구워져
+        // 있으므로 렌더 산술은 `rel_to + offset` 절대 좌표뿐(§9a). y 는 첫
+        // lineseg vertpos(= 문단 top)로 지금 확정하고, 어느 쪽에 앵커할지는
+        // line_idx==0 처리(쪽분할 후)에서 정한다.
+        let pending_anchored =
+            collect_anchored_images(para, section, body_top, body_left, first_v, &location)?;
+
         // W1b admission (§1g v5 변경 1): 검사는 선두 prefix 가 아니라
         // **문단 전체** — W1b 좌표 정규화로 marker 문단의 textpos 는
         // 신뢰 가능해졌지만, 미렌더 원자(이미지·각주·수식·미지 컨트롤)는
@@ -978,11 +1170,15 @@ fn replay_section(
         // 렌더 = W5). 그 외 미렌더 원자는 여전히 InvalidCache.
         // W4 (§8g): body 는 글자취급(treat_as_char) 인라인 **글상자**도
         // 추가 허용한다 — 앵커형(treat_as_char=false)은 여전히 거부(W5).
+        // W5 w1b: 지원 조합 앵커 이미지도 제외한다 (위 collect_anchored_images
+        // 가 조합 밖·다중·혼합을 이미 typed fail-closed 로 걸렀으므로, 여기
+        // 남는 앵커 이미지는 렌더 대상뿐이다).
         if para.runs.iter().any(|r| {
             r.content.plain_text().is_none()
                 && !is_replay_consumed_marker(&r.content)
                 && !is_admitted_inline_image(&r.content)
                 && !is_admitted_inline_textbox(&r.content)
+                && !is_admitted_anchored_image(&r.content)
         }) {
             return Err(PdfError::InvalidCache {
                 detail: format!(
@@ -1078,6 +1274,14 @@ fn replay_section(
                 }
             }
             prev_v = Some(v);
+
+            // W5 w1b: 앵커 이미지는 문단 첫 줄이 안착한 쪽에 배경으로 붙인다
+            // (y 는 collect_anchored_images 가 첫 lineseg vertpos 로 확정).
+            if line_idx == 0 && !pending_anchored.is_empty() {
+                if let Some(page) = pages.last_mut() {
+                    page.anchored_images.extend(pending_anchored.iter().cloned());
+                }
+            }
 
             let start = seg.textpos as usize;
             let end =
@@ -1509,7 +1713,10 @@ fn run_utf16_spans(
             None => {
                 // 표는 이미 거부됐고, 여기 오는 것은 컨트롤/이미지 — 흐름 폭 0.
                 // W2: replay 가 소비하는 marker(nwno)는 드롭이 아니므로 제외.
-                if !is_replay_consumed_marker(&run.content) {
+                // W5 w1b: 앵커 이미지는 배경 오버레이로 렌더되므로 드롭 아님.
+                if !is_replay_consumed_marker(&run.content)
+                    && !is_admitted_anchored_image(&run.content)
+                {
                     warnings.push(PdfWarning::NonTextRunDropped { location: location.to_string() });
                 }
             }
@@ -1678,46 +1885,311 @@ mod tests {
         );
     }
 
+    /// `placement == None` 이미지는 보수 거부 유지 (앵커/글자취급 판별 근거
+    /// 부재 — W5 w1b 는 명시 placement 만 렌더).
     #[test]
-    fn anchored_and_placement_none_images_stay_rejected() {
+    fn placement_none_image_stays_rejected() {
         use hwpforge_core::image::{Image, ImageFormat};
-        use hwpforge_core::placement::ObjectPlacement;
-        // treat_as_char=false (앵커형).
-        let mut anchored = Image::new(
-            "BinData/anch.png",
-            hwpforge_foundation::HwpUnit::new(2000).unwrap(),
-            hwpforge_foundation::HwpUnit::new(2000).unwrap(),
-            ImageFormat::Png,
-        );
-        let mut placement = ObjectPlacement::legacy_inline_defaults();
-        placement.treat_as_char = false;
-        anchored.placement = Some(placement);
-        // placement=None (보수 거부).
         let bare = Image::new(
             "BinData/bare.png",
             hwpforge_foundation::HwpUnit::new(2000).unwrap(),
             hwpforge_foundation::HwpUnit::new(2000).unwrap(),
             ImageFormat::Png,
         );
-        for image in [anchored, bare] {
-            let mut para = Paragraph::with_runs(
-                vec![
-                    Run::text("본문", CharShapeIndex::new(0)),
-                    Run {
-                        content: RunContent::Image(image),
-                        char_shape_id: CharShapeIndex::new(0),
-                    },
-                ],
-                ParaShapeIndex::new(0),
-            );
-            para.layout_cache = Some(LayoutCache::new(vec![img_seg(0, 0)]));
-            let doc = doc_of(vec![para]);
-            let err = replay(&doc, &PdfOptions::default()).expect_err("rejected");
-            assert!(
-                matches!(&err, PdfError::InvalidCache { detail } if detail.contains("not renderable")),
-                "{err:?}"
-            );
-        }
+        let mut para = Paragraph::with_runs(
+            vec![
+                Run::text("본문", CharShapeIndex::new(0)),
+                Run { content: RunContent::Image(bare), char_shape_id: CharShapeIndex::new(0) },
+            ],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![img_seg(0, 0)]));
+        let doc = doc_of(vec![para]);
+        let err = replay(&doc, &PdfOptions::default()).expect_err("rejected");
+        assert!(
+            matches!(&err, PdfError::InvalidCache { detail } if detail.contains("not renderable")),
+            "{err:?}"
+        );
+    }
+
+    // ── W5 w1b: body 앵커 이미지 렌더 (§9e) ───────────────────────────
+
+    use hwpforge_core::placement::{ObjectRelativeTo, ObjectTextWrap};
+
+    /// 앵커형 이미지 run 을 (조합·offset 지정) 만든다. 폭 4000 × 높이 3000.
+    fn anchored_body_img(
+        key: &str,
+        wrap: ObjectTextWrap,
+        vert_rel: ObjectRelativeTo,
+        horz_rel: ObjectRelativeTo,
+        vert_offset: i32,
+        horz_offset: i32,
+    ) -> Run {
+        use hwpforge_core::image::{Image, ImageFormat};
+        use hwpforge_core::placement::ObjectPlacement;
+        let mut image = Image::new(
+            key,
+            hwpforge_foundation::HwpUnit::new(4000).unwrap(),
+            hwpforge_foundation::HwpUnit::new(3000).unwrap(),
+            ImageFormat::Png,
+        );
+        let mut placement = ObjectPlacement::legacy_inline_defaults();
+        placement.treat_as_char = false;
+        placement.text_wrap = wrap;
+        placement.vert_rel_to = vert_rel;
+        placement.horz_rel_to = horz_rel;
+        placement.vert_offset = HwpUnit::new(vert_offset).unwrap();
+        placement.horz_offset = HwpUnit::new(horz_offset).unwrap();
+        image.placement = Some(placement);
+        Run { content: RunContent::Image(image), char_shape_id: CharShapeIndex::new(0) }
+    }
+
+    fn a4_body_top_left() -> (i32, i32) {
+        let ps = PageSettings::a4();
+        (ps.margin_top.as_i32() + ps.header_margin.as_i32(), ps.margin_left.as_i32())
+    }
+
+    /// 지원 조합(Para/Para/Square) 앵커 이미지는 문단에 앵커한 배경으로
+    /// 수집된다 — 줄 원자로 새지 않고, 좌상단 = body 원점 + offset (§9c ①).
+    #[test]
+    fn body_anchored_image_collected_as_paragraph_placement() {
+        // 이미지 앞에 텍스트가 흐른다 (Square wrap 정상 케이스). 캐시는
+        // 텍스트 줄만 담고 (앵커 이미지는 0폭 marker → textpos 불변).
+        let mut para = Paragraph::with_runs(
+            vec![
+                anchored_body_img(
+                    "BinData/anch.png",
+                    ObjectTextWrap::Square,
+                    ObjectRelativeTo::Para,
+                    ObjectRelativeTo::Para,
+                    500,
+                    700,
+                ),
+                Run::text("본문", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+        let doc = doc_of(vec![para]);
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        // 줄 원자는 텍스트뿐 (앵커 이미지는 줄 계정 밖).
+        assert_eq!(atom_kinds(&layout.pages[0].lines[0].atoms), ["text"]);
+        // 앵커 이미지는 문단 배치 목록에 수집된다.
+        let anchored = &layout.pages[0].anchored_images;
+        assert_eq!(anchored.len(), 1, "정확히 한 앵커 이미지");
+        let (body_top, body_left) = a4_body_top_left();
+        // y = body_top + first_v(0) + vert_offset(500), x = body_left + horz_offset(700).
+        assert_eq!(anchored[0].y, body_top + 500);
+        assert_eq!(anchored[0].x, body_left + 700);
+        assert_eq!(anchored[0].width, 4000);
+        assert_eq!(anchored[0].height, 3000);
+        assert_eq!(anchored[0].canonical_key, "BinData/anch.png");
+        // 드롭 경고 없음 (렌더 대상).
+        assert!(
+            !layout.warnings.iter().any(|w| matches!(w, PdfWarning::NonTextRunDropped { .. })),
+            "앵커 이미지는 드롭 아님: {:?}",
+            layout.warnings
+        );
+    }
+
+    /// 음수 vert_offset (문단 위로 돌출) — doc 좌표 그대로 (clip 없음).
+    /// corpus 8/14 가 음수 (§9d High-2). 두 번째 문단이라 first_v>0.
+    #[test]
+    fn body_anchored_image_negative_vert_offset_protrudes_above() {
+        let mut p0 = para_with_cache("첫 문단", vec![seg(0, 0)]);
+        p0.layout_cache = Some(LayoutCache::new(vec![seg(0, 0), seg(3, 1600)]));
+        // 두 번째 문단 (first_v = 3200) 에 앵커, vert_offset 음수.
+        let mut p1 = Paragraph::with_runs(
+            vec![
+                anchored_body_img(
+                    "BinData/up.png",
+                    ObjectTextWrap::Tight,
+                    ObjectRelativeTo::Para,
+                    ObjectRelativeTo::Para,
+                    -2400,
+                    0,
+                ),
+                Run::text("둘째", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        p1.layout_cache = Some(LayoutCache::new(vec![seg(0, 3200)]));
+        let doc = doc_of(vec![p0, p1]);
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        let (body_top, _) = a4_body_top_left();
+        let anchored = &layout.pages[0].anchored_images;
+        assert_eq!(anchored.len(), 1);
+        // y = body_top + first_v(3200) + vert_offset(-2400) — 문단 top 위로 돌출.
+        assert_eq!(anchored[0].y, body_top + 3200 - 2400);
+        assert!(anchored[0].y < body_top + 3200, "문단 top 위로 돌출");
+    }
+
+    /// 단일 컬럼 문서의 horz_rel=Column 은 body_left 기준 (컬럼 왼쪽 = 본문 왼쪽).
+    #[test]
+    fn body_anchored_image_column_rel_single_column_uses_body_left() {
+        let mut para = Paragraph::with_runs(
+            vec![
+                anchored_body_img(
+                    "BinData/col.png",
+                    ObjectTextWrap::TopAndBottom,
+                    ObjectRelativeTo::Para,
+                    ObjectRelativeTo::Column,
+                    0,
+                    1200,
+                ),
+                Run::text("본문", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+        let doc = doc_of(vec![para]);
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        let (_, body_left) = a4_body_top_left();
+        assert_eq!(layout.pages[0].anchored_images[0].x, body_left + 1200);
+    }
+
+    /// 조합 밖(Paper rel) 앵커 이미지 = typed fail-closed (§9b).
+    #[test]
+    fn body_anchored_image_paper_rel_is_typed_rejection() {
+        let mut para = Paragraph::with_runs(
+            vec![
+                anchored_body_img(
+                    "BinData/paper.png",
+                    ObjectTextWrap::Square,
+                    ObjectRelativeTo::Paper,
+                    ObjectRelativeTo::Paper,
+                    1000,
+                    1000,
+                ),
+                Run::text("본문", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+        let doc = doc_of(vec![para]);
+        let err = replay(&doc, &PdfOptions::default()).expect_err("paper rel rejected");
+        assert!(
+            matches!(&err, PdfError::InvalidCache { detail }
+                if detail.contains("unsupported before W5 w1b")),
+            "{err:?}"
+        );
+    }
+
+    /// BehindText/InFrontOfText wrap = 조합 밖 (z-order 의미 다름) → typed 거부.
+    #[test]
+    fn body_anchored_image_infront_wrap_is_typed_rejection() {
+        let mut para = Paragraph::with_runs(
+            vec![
+                anchored_body_img(
+                    "BinData/front.png",
+                    ObjectTextWrap::InFrontOfText,
+                    ObjectRelativeTo::Para,
+                    ObjectRelativeTo::Para,
+                    0,
+                    0,
+                ),
+                Run::text("본문", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+        let doc = doc_of(vec![para]);
+        let err = replay(&doc, &PdfOptions::default()).expect_err("infront rejected");
+        assert!(
+            matches!(&err, PdfError::InvalidCache { detail }
+                if detail.contains("unsupported before W5 w1b")),
+            "{err:?}"
+        );
+    }
+
+    /// 한 문단 다중 앵커 이미지 = fail-closed (미측정 z-order).
+    #[test]
+    fn body_multiple_anchored_images_is_rejected() {
+        let mut para = Paragraph::with_runs(
+            vec![
+                anchored_body_img(
+                    "BinData/a.png",
+                    ObjectTextWrap::Square,
+                    ObjectRelativeTo::Para,
+                    ObjectRelativeTo::Para,
+                    0,
+                    0,
+                ),
+                anchored_body_img(
+                    "BinData/b.png",
+                    ObjectTextWrap::Square,
+                    ObjectRelativeTo::Para,
+                    ObjectRelativeTo::Para,
+                    100,
+                    100,
+                ),
+                Run::text("본문", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+        let doc = doc_of(vec![para]);
+        let err = replay(&doc, &PdfOptions::default()).expect_err("multi anchored rejected");
+        assert!(
+            matches!(&err, PdfError::InvalidCache { detail }
+                if detail.contains("anchored images in one paragraph")),
+            "{err:?}"
+        );
+    }
+
+    /// 앵커 이미지 + 글자취급 인라인 이미지 혼합 = fail-closed (미측정 profile).
+    #[test]
+    fn body_anchored_mixed_with_inline_image_is_rejected() {
+        let mut para = Paragraph::with_runs(
+            vec![
+                anchored_body_img(
+                    "BinData/anch.png",
+                    ObjectTextWrap::Square,
+                    ObjectRelativeTo::Para,
+                    ObjectRelativeTo::Para,
+                    0,
+                    0,
+                ),
+                Run::text("본문", CharShapeIndex::new(0)),
+                inline_img("BinData/inline.png"),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![img_seg(0, 0)]));
+        let doc = doc_of(vec![para]);
+        let err = replay(&doc, &PdfOptions::default()).expect_err("mixed rejected");
+        assert!(
+            matches!(&err, PdfError::InvalidCache { detail } if detail.contains("mixes an anchored")),
+            "{err:?}"
+        );
+    }
+
+    /// 앵커 이미지는 문단 첫 줄이 안착한 쪽에 붙는다 (쪽분할 뒤 귀속).
+    #[test]
+    fn body_anchored_image_attaches_to_first_line_page() {
+        // p0: 한 줄. p1: v==0 으로 새 쪽 시작 + 앵커 이미지 → 2쪽에 귀속.
+        let p0 = para_with_cache("첫쪽", vec![seg(0, 0)]);
+        let mut p1 = Paragraph::with_runs(
+            vec![
+                anchored_body_img(
+                    "BinData/pg2.png",
+                    ObjectTextWrap::Square,
+                    ObjectRelativeTo::Para,
+                    ObjectRelativeTo::Para,
+                    0,
+                    0,
+                ),
+                Run::text("둘째쪽", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        // v==0 (첫 줄 제외 규칙) → p1 은 새 쪽.
+        p1.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+        let doc = doc_of(vec![p0, p1]);
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        assert_eq!(layout.pages.len(), 2, "p1 이 새 쪽");
+        assert!(layout.pages[0].anchored_images.is_empty(), "1쪽엔 앵커 없음");
+        assert_eq!(layout.pages[1].anchored_images.len(), 1, "앵커는 2쪽");
     }
 
     // ── W4 w3: 인라인 글상자 admission·host predicate·fail-closed ────────
