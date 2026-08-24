@@ -798,8 +798,7 @@ mod tests {
                 paragraphs: vec![text_para("글상자 (  )")],
                 width,
                 height: width,
-                horz_offset: 0,
-                vert_offset: 0,
+                placement: None,
                 caption: Some(Caption::new(
                     vec![text_para("글상자캡션 ☑")],
                     CaptionSide::default(),
@@ -821,8 +820,7 @@ mod tests {
             Control::Rect {
                 width,
                 height: width,
-                horz_offset: 0,
-                vert_offset: 0,
+                placement: None,
                 caption: Some(Caption::new(vec![text_para("사각형 (  )")], CaptionSide::default())),
                 style: None,
             },

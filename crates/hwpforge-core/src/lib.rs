@@ -95,6 +95,7 @@ pub mod object_id;
 pub mod outline;
 pub mod page;
 pub mod paragraph;
+pub mod placement;
 pub mod run;
 pub mod section;
 pub mod style_lookup;
@@ -123,6 +124,7 @@ pub use object_id::ObjectId;
 pub use outline::{classify_paragraph, HeadingSource, ListItemKind, ListSource, ParaKind};
 pub use page::PageSettings;
 pub use paragraph::Paragraph;
+pub use placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
 pub use run::{Run, RunContent};
 pub use section::{
     BeginNum, ContentCounts, HeaderFooter, LineNumberShape, MasterPage, PageBorderFillEntry,

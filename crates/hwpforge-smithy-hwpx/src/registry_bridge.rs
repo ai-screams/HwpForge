@@ -278,8 +278,7 @@ mod tests {
                 paragraphs: vec![simple_paragraph(body_cs, body_ps)],
                 width: HwpUnit::from_mm(20.0).unwrap(),
                 height: HwpUnit::from_mm(10.0).unwrap(),
-                horz_offset: 0,
-                vert_offset: 0,
+                placement: None,
                 caption: Some(Caption::new(
                     vec![simple_paragraph(body_cs, body_ps)],
                     CaptionSide::Bottom,

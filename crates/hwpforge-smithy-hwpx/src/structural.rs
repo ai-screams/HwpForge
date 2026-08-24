@@ -938,8 +938,7 @@ mod tests {
             inst_id: None,
             width: HwpUnit::ZERO,
             height: HwpUnit::ZERO,
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
         };
         let scan = scan_paragraph_references(&with_control(group));
         assert!(scan.object_id, "footnote hidden inside a group must be seen");

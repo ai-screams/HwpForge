@@ -45,6 +45,7 @@ use crate::chart::{
 use crate::error::{CoreError, CoreResult};
 use crate::object_id::ObjectId;
 use crate::paragraph::Paragraph;
+use crate::placement::ObjectPlacement;
 use crate::run::Run;
 
 /// An inline control element.
@@ -64,8 +65,7 @@ use crate::run::Run;
 ///     paragraphs: vec![Paragraph::new(ParaShapeIndex::new(0))],
 ///     width: HwpUnit::from_mm(80.0).unwrap(),
 ///     height: HwpUnit::from_mm(40.0).unwrap(),
-///     horz_offset: 0,
-///     vert_offset: 0,
+///     placement: None,
 ///     caption: None,
 ///     style: None,
 ///     text_vertical_align: VerticalAlign::Top,
@@ -85,10 +85,13 @@ pub enum Control {
         width: HwpUnit,
         /// Box height (HWPUNIT).
         height: HwpUnit,
-        /// Horizontal offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
-        horz_offset: i32,
-        /// Vertical offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
-        vert_offset: i32,
+        /// Object placement / anchoring metadata (HWPX `<hp:pos>` block plus
+        /// the shape's `textWrap`/`textFlow`). `None` = the historical inline
+        /// default (treat-as-char, zero offset) — the encoder emits the legacy
+        /// inline placement for it; `Some` carries the full floating/anchored
+        /// placement. See [`ObjectPlacement`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        placement: Option<ObjectPlacement>,
         /// Optional caption attached to this text box.
         caption: Option<Caption>,
         /// Optional visual style overrides (border color, fill, line width).
@@ -139,10 +142,13 @@ pub enum Control {
         width: HwpUnit,
         /// Bounding box height (HWPUNIT).
         height: HwpUnit,
-        /// Horizontal offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
-        horz_offset: i32,
-        /// Vertical offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
-        vert_offset: i32,
+        /// Object placement / anchoring metadata (HWPX `<hp:pos>` block plus
+        /// the shape's `textWrap`/`textFlow`). `None` = the historical inline
+        /// default (treat-as-char, zero offset) — the encoder emits the legacy
+        /// inline placement for it; `Some` carries the full floating/anchored
+        /// placement. See [`ObjectPlacement`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        placement: Option<ObjectPlacement>,
         /// Optional caption attached to this line.
         caption: Option<Caption>,
         /// Optional visual style overrides (border color, fill, line width).
@@ -162,10 +168,13 @@ pub enum Control {
         width: HwpUnit,
         /// Bounding box height (HWPUNIT).
         height: HwpUnit,
-        /// Horizontal offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
-        horz_offset: i32,
-        /// Vertical offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
-        vert_offset: i32,
+        /// Object placement / anchoring metadata (HWPX `<hp:pos>` block plus
+        /// the shape's `textWrap`/`textFlow`). `None` = the historical inline
+        /// default (treat-as-char, zero offset) — the encoder emits the legacy
+        /// inline placement for it; `Some` carries the full floating/anchored
+        /// placement. See [`ObjectPlacement`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        placement: Option<ObjectPlacement>,
         /// Optional text content inside the ellipse.
         paragraphs: Vec<Paragraph>,
         /// Optional caption attached to this ellipse.
@@ -201,10 +210,13 @@ pub enum Control {
         width: HwpUnit,
         /// Chart height (HWPUNIT).
         height: HwpUnit,
-        /// Horizontal offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
-        horz_offset: i32,
-        /// Vertical offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
-        vert_offset: i32,
+        /// Object placement / anchoring metadata (HWPX `<hp:pos>` block plus
+        /// the shape's `textWrap`/`textFlow`). `None` = the historical inline
+        /// default (treat-as-char, zero offset) — the encoder emits the legacy
+        /// inline placement for it; `Some` carries the full floating/anchored
+        /// placement. See [`ObjectPlacement`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        placement: Option<ObjectPlacement>,
     },
 
     /// A pure rectangle drawing object (no embedded text).
@@ -218,10 +230,13 @@ pub enum Control {
         width: HwpUnit,
         /// Bounding box height (HWPUNIT).
         height: HwpUnit,
-        /// Horizontal offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
-        horz_offset: i32,
-        /// Vertical offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
-        vert_offset: i32,
+        /// Object placement / anchoring metadata (HWPX `<hp:pos>` block plus
+        /// the shape's `textWrap`/`textFlow`). `None` = the historical inline
+        /// default (treat-as-char, zero offset) — the encoder emits the legacy
+        /// inline placement for it; `Some` carries the full floating/anchored
+        /// placement. See [`ObjectPlacement`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        placement: Option<ObjectPlacement>,
         /// Optional caption attached to this rectangle.
         caption: Option<Caption>,
         /// Optional visual style overrides (border color, fill, line width).
@@ -237,10 +252,13 @@ pub enum Control {
         width: HwpUnit,
         /// Bounding box height (HWPUNIT).
         height: HwpUnit,
-        /// Horizontal offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
-        horz_offset: i32,
-        /// Vertical offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
-        vert_offset: i32,
+        /// Object placement / anchoring metadata (HWPX `<hp:pos>` block plus
+        /// the shape's `textWrap`/`textFlow`). `None` = the historical inline
+        /// default (treat-as-char, zero offset) — the encoder emits the legacy
+        /// inline placement for it; `Some` carries the full floating/anchored
+        /// placement. See [`ObjectPlacement`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        placement: Option<ObjectPlacement>,
         /// Optional text content inside the polygon.
         paragraphs: Vec<Paragraph>,
         /// Optional caption attached to this polygon.
@@ -382,10 +400,13 @@ pub enum Control {
         width: HwpUnit,
         /// Bounding box height (HWPUNIT).
         height: HwpUnit,
-        /// Horizontal offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
-        horz_offset: i32,
-        /// Vertical offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
-        vert_offset: i32,
+        /// Object placement / anchoring metadata (HWPX `<hp:pos>` block plus
+        /// the shape's `textWrap`/`textFlow`). `None` = the historical inline
+        /// default (treat-as-char, zero offset) — the encoder emits the legacy
+        /// inline placement for it; `Some` carries the full floating/anchored
+        /// placement. See [`ObjectPlacement`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        placement: Option<ObjectPlacement>,
         /// Optional caption attached to this arc.
         caption: Option<Caption>,
         /// Optional visual style overrides.
@@ -403,10 +424,13 @@ pub enum Control {
         width: HwpUnit,
         /// Bounding box height (HWPUNIT).
         height: HwpUnit,
-        /// Horizontal offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
-        horz_offset: i32,
-        /// Vertical offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
-        vert_offset: i32,
+        /// Object placement / anchoring metadata (HWPX `<hp:pos>` block plus
+        /// the shape's `textWrap`/`textFlow`). `None` = the historical inline
+        /// default (treat-as-char, zero offset) — the encoder emits the legacy
+        /// inline placement for it; `Some` carries the full floating/anchored
+        /// placement. See [`ObjectPlacement`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        placement: Option<ObjectPlacement>,
         /// Optional caption attached to this curve.
         caption: Option<Caption>,
         /// Optional visual style overrides.
@@ -428,10 +452,13 @@ pub enum Control {
         width: HwpUnit,
         /// Bounding box height (HWPUNIT).
         height: HwpUnit,
-        /// Horizontal offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
-        horz_offset: i32,
-        /// Vertical offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
-        vert_offset: i32,
+        /// Object placement / anchoring metadata (HWPX `<hp:pos>` block plus
+        /// the shape's `textWrap`/`textFlow`). `None` = the historical inline
+        /// default (treat-as-char, zero offset) — the encoder emits the legacy
+        /// inline placement for it; `Some` carries the full floating/anchored
+        /// placement. See [`ObjectPlacement`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        placement: Option<ObjectPlacement>,
         /// Optional caption attached to this connect line.
         caption: Option<Caption>,
         /// Optional visual style overrides.
@@ -455,10 +482,13 @@ pub enum Control {
         width: HwpUnit,
         /// Bounding box height (HWPUNIT).
         height: HwpUnit,
-        /// Horizontal offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
-        horz_offset: i32,
-        /// Vertical offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
-        vert_offset: i32,
+        /// Object placement / anchoring metadata (HWPX `<hp:pos>` block plus
+        /// the shape's `textWrap`/`textFlow`). `None` = the historical inline
+        /// default (treat-as-char, zero offset) — the encoder emits the legacy
+        /// inline placement for it; `Some` carries the full floating/anchored
+        /// placement. See [`ObjectPlacement`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        placement: Option<ObjectPlacement>,
         /// HWP5 ParaHeader / GSO trailer instance ID, mirrored to the
         /// HWPX `<hp:container instid>` attribute. `None` = not carried.
         inst_id: Option<ObjectId>,
@@ -490,10 +520,13 @@ pub enum Control {
         width: HwpUnit,
         /// Bounding box height (HWPUNIT).
         height: HwpUnit,
-        /// Horizontal offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
-        horz_offset: i32,
-        /// Vertical offset from anchor point (HWPUNIT, 0 = inline/treat-as-char).
-        vert_offset: i32,
+        /// Object placement / anchoring metadata (HWPX `<hp:pos>` block plus
+        /// the shape's `textWrap`/`textFlow`). `None` = the historical inline
+        /// default (treat-as-char, zero offset) — the encoder emits the legacy
+        /// inline placement for it; `Some` carries the full floating/anchored
+        /// placement. See [`ObjectPlacement`].
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        placement: Option<ObjectPlacement>,
         /// Fill color (the `<hc:winBrush faceColor>` of the textart glyphs).
         /// `None` = no explicit fill carried.
         fill_color: Option<Color>,
@@ -1145,7 +1178,7 @@ impl Control {
 
     /// Creates a text box control with the given paragraphs and dimensions.
     ///
-    /// Defaults: inline positioning (horz_offset=0, vert_offset=0), no caption, no style override.
+    /// Defaults: inline positioning (placement=None), no caption, no style override.
     ///
     /// # Examples
     ///
@@ -1165,8 +1198,7 @@ impl Control {
             paragraphs,
             width,
             height,
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
             text_vertical_align: VerticalAlign::Top,
@@ -1260,7 +1292,7 @@ impl Control {
     /// Creates an ellipse control with the given bounding box dimensions.
     ///
     /// Geometry is auto-derived: center=(w/2, h/2), axis1=(w, h/2), axis2=(w/2, h).
-    /// Defaults: inline positioning (horz_offset=0, vert_offset=0), no paragraphs, no caption, no style.
+    /// Defaults: inline positioning (placement=None), no paragraphs, no caption, no style.
     ///
     /// # Examples
     ///
@@ -1282,8 +1314,7 @@ impl Control {
             axis2: ShapePoint::new(w / 2, h),
             width,
             height,
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![],
             caption: None,
             style: None,
@@ -1295,7 +1326,7 @@ impl Control {
     ///
     /// Same as [`Control::ellipse`] but accepts paragraphs for text drawn inside the ellipse.
     /// Geometry is auto-derived: center=(w/2, h/2), axis1=(w, h/2), axis2=(w/2, h).
-    /// Defaults: inline positioning (horz_offset=0, vert_offset=0), no caption, no style.
+    /// Defaults: inline positioning (placement=None), no caption, no style.
     ///
     /// # Examples
     ///
@@ -1319,8 +1350,7 @@ impl Control {
             axis2: ShapePoint::new(w / 2, h),
             width,
             height,
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs,
             caption: None,
             style: None,
@@ -1332,7 +1362,7 @@ impl Control {
     ///
     /// Pure rectangle means no embedded text content; for a textbox-style rect with
     /// inline paragraphs, use [`Control::text_box`].
-    /// Defaults: inline positioning (horz_offset=0, vert_offset=0), no caption, no style.
+    /// Defaults: inline positioning (placement=None), no caption, no style.
     ///
     /// # Errors
     ///
@@ -1360,7 +1390,7 @@ impl Control {
                 ),
             });
         }
-        Ok(Self::Rect { width, height, horz_offset: 0, vert_offset: 0, caption: None, style: None })
+        Ok(Self::Rect { width, height, placement: None, caption: None, style: None })
     }
 
     /// Creates a polygon control from the given vertices.
@@ -1412,8 +1442,7 @@ impl Control {
             vertices,
             width,
             height,
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![],
             caption: None,
             style: None,
@@ -1473,8 +1502,7 @@ impl Control {
             end: norm_end,
             width,
             height,
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         })
@@ -1504,8 +1532,7 @@ impl Control {
             end: ShapePoint::new(w, 0),
             width,
             height: HwpUnit::new(100).expect("100 is valid"),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         }
@@ -1588,8 +1615,7 @@ impl Control {
             end2: ShapePoint::new(w / 2, 0),
             width,
             height,
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         }
@@ -1646,8 +1672,7 @@ impl Control {
             segment_types: vec![CurveSegmentType::Curve; seg_count],
             width,
             height,
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         })
@@ -1704,8 +1729,7 @@ impl Control {
             connect_type: "STRAIGHT".to_string(),
             width,
             height,
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         })
@@ -1970,8 +1994,7 @@ mod tests {
             paragraphs: vec![simple_paragraph()],
             width: HwpUnit::from_mm(80.0).unwrap(),
             height: HwpUnit::from_mm(40.0).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
             text_vertical_align: VerticalAlign::Top,
@@ -2072,8 +2095,7 @@ mod tests {
             paragraphs: vec![simple_paragraph(), simple_paragraph()],
             width: HwpUnit::from_mm(80.0).unwrap(),
             height: HwpUnit::from_mm(40.0).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
             text_vertical_align: VerticalAlign::Top,
@@ -2136,8 +2158,7 @@ mod tests {
             paragraphs: vec![simple_paragraph()],
             width: HwpUnit::from_mm(80.0).unwrap(),
             height: HwpUnit::from_mm(40.0).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
             text_vertical_align: VerticalAlign::Top,
@@ -2194,8 +2215,7 @@ mod tests {
             end: ShapePoint { x: 1000, y: 500 },
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(25.0).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         };
@@ -2213,8 +2233,7 @@ mod tests {
             axis2: ShapePoint { x: 500, y: 1000 },
             width: HwpUnit::from_mm(40.0).unwrap(),
             height: HwpUnit::from_mm(30.0).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![],
             caption: None,
             style: None,
@@ -2233,8 +2252,7 @@ mod tests {
             axis2: ShapePoint { x: 500, y: 1000 },
             width: HwpUnit::from_mm(40.0).unwrap(),
             height: HwpUnit::from_mm(30.0).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![simple_paragraph()],
             caption: None,
             style: None,
@@ -2254,8 +2272,7 @@ mod tests {
             ],
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(50.0).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![],
             caption: None,
             style: None,
@@ -2274,8 +2291,7 @@ mod tests {
             end: ShapePoint { x: 100, y: 200 },
             width: HwpUnit::from_mm(10.0).unwrap(),
             height: HwpUnit::from_mm(5.0).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         };
@@ -2289,8 +2305,7 @@ mod tests {
             end: ShapePoint { x: 300, y: 400 },
             width: HwpUnit::from_mm(20.0).unwrap(),
             height: HwpUnit::from_mm(10.0).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: None,
         };
@@ -2307,8 +2322,7 @@ mod tests {
             axis2: ShapePoint { x: 500, y: 1000 },
             width: HwpUnit::from_mm(40.0).unwrap(),
             height: HwpUnit::from_mm(30.0).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![simple_paragraph()],
             caption: None,
             style: None,
@@ -2329,8 +2343,7 @@ mod tests {
             ],
             width: HwpUnit::from_mm(50.0).unwrap(),
             height: HwpUnit::from_mm(50.0).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![],
             caption: None,
             style: None,
@@ -2405,10 +2418,9 @@ mod tests {
         let ctrl = Control::text_box(vec![simple_paragraph()], width, height);
         assert!(ctrl.is_text_box());
         match ctrl {
-            Control::TextBox { paragraphs, horz_offset, vert_offset, caption, style, .. } => {
+            Control::TextBox { paragraphs, placement, caption, style, .. } => {
                 assert_eq!(paragraphs.len(), 1);
-                assert_eq!(horz_offset, 0);
-                assert_eq!(vert_offset, 0);
+                assert!(placement.is_none());
                 assert!(caption.is_none());
                 assert!(style.is_none());
             }
@@ -2453,8 +2465,7 @@ mod tests {
                 center,
                 axis1,
                 axis2,
-                horz_offset,
-                vert_offset,
+                placement,
                 paragraphs,
                 caption,
                 style,
@@ -2465,8 +2476,7 @@ mod tests {
                 assert_eq!(*center, ShapePoint::new(w / 2, h / 2));
                 assert_eq!(*axis1, ShapePoint::new(w, h / 2));
                 assert_eq!(*axis2, ShapePoint::new(w / 2, h));
-                assert_eq!(*horz_offset, 0);
-                assert_eq!(*vert_offset, 0);
+                assert!(placement.is_none());
                 assert!(paragraphs.is_empty());
                 assert!(caption.is_none());
                 assert!(style.is_none());
@@ -2482,11 +2492,10 @@ mod tests {
         let ctrl = Control::rect(width, height).unwrap();
         assert!(ctrl.is_rect());
         match ctrl {
-            Control::Rect { width: w, height: h, horz_offset, vert_offset, caption, style } => {
+            Control::Rect { width: w, height: h, placement, caption, style } => {
                 assert_eq!(w, width);
                 assert_eq!(h, height);
-                assert_eq!(horz_offset, 0);
-                assert_eq!(vert_offset, 0);
+                assert!(placement.is_none());
                 assert!(caption.is_none());
                 assert!(style.is_none());
             }
@@ -2513,8 +2522,7 @@ mod tests {
                 vertices,
                 width,
                 height,
-                horz_offset,
-                vert_offset,
+                placement,
                 paragraphs,
                 caption,
                 style,
@@ -2524,8 +2532,7 @@ mod tests {
                 // bbox: x 0..1000, y 0..1000
                 assert_eq!(*width, HwpUnit::new(1000).unwrap());
                 assert_eq!(*height, HwpUnit::new(1000).unwrap());
-                assert_eq!(*horz_offset, 0);
-                assert_eq!(*vert_offset, 0);
+                assert!(placement.is_none());
                 assert!(paragraphs.is_empty());
                 assert!(caption.is_none());
                 assert!(style.is_none());
@@ -2578,22 +2585,12 @@ mod tests {
         let ctrl = Control::line(ShapePoint::new(0, 0), ShapePoint::new(5000, 0)).unwrap();
         assert!(ctrl.is_line());
         match ctrl {
-            Control::Line {
-                start,
-                end,
-                width,
-                height,
-                horz_offset,
-                vert_offset,
-                caption,
-                style,
-            } => {
+            Control::Line { start, end, width, height, placement, caption, style } => {
                 assert_eq!(start, ShapePoint::new(0, 0));
                 assert_eq!(end, ShapePoint::new(5000, 0));
                 assert_eq!(width, HwpUnit::new(5000).unwrap());
                 assert_eq!(height, HwpUnit::new(100).unwrap()); // min bounding box
-                assert_eq!(horz_offset, 0);
-                assert_eq!(vert_offset, 0);
+                assert!(placement.is_none());
                 assert!(caption.is_none());
                 assert!(style.is_none());
             }
@@ -2638,23 +2635,13 @@ mod tests {
         let ctrl = Control::horizontal_line(width);
         assert!(ctrl.is_line());
         match ctrl {
-            Control::Line {
-                start,
-                end,
-                width: w,
-                height,
-                horz_offset,
-                vert_offset,
-                caption,
-                style,
-            } => {
+            Control::Line { start, end, width: w, height, placement, caption, style } => {
                 assert_eq!(start, ShapePoint::new(0, 0));
                 assert_eq!(end.y, 0);
                 assert_eq!(end.x, width.as_i32());
                 assert_eq!(w, width);
                 assert_eq!(height, HwpUnit::new(100).unwrap()); // min bounding box
-                assert_eq!(horz_offset, 0);
-                assert_eq!(vert_offset, 0);
+                assert!(placement.is_none());
                 assert!(caption.is_none());
                 assert!(style.is_none());
             }
@@ -2732,8 +2719,7 @@ mod tests {
                 axis2,
                 width: w,
                 height: h,
-                horz_offset,
-                vert_offset,
+                placement,
                 paragraphs,
                 caption,
                 style,
@@ -2744,8 +2730,7 @@ mod tests {
                 assert_eq!(center, ShapePoint::new(wv / 2, hv / 2));
                 assert_eq!(axis1, ShapePoint::new(wv, hv / 2));
                 assert_eq!(axis2, ShapePoint::new(wv / 2, hv));
-                assert_eq!(horz_offset, 0);
-                assert_eq!(vert_offset, 0);
+                assert!(placement.is_none());
                 assert_eq!(paragraphs.len(), 1);
                 assert!(caption.is_none());
                 assert!(style.is_none());

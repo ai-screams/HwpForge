@@ -12,10 +12,9 @@ use std::collections::{BTreeSet, VecDeque};
 use hwpforge_core::column::{ColumnLine, ColumnSettings};
 use hwpforge_core::control::RefTarget;
 use hwpforge_core::document::{Document, Draft};
-use hwpforge_core::image::{
-    Image, ImageFormat, ImagePlacement, ImageRelativeTo, ImageStore, ImageTextFlow, ImageTextWrap,
-};
+use hwpforge_core::image::{Image, ImageFormat, ImageStore};
 use hwpforge_core::paragraph::Paragraph;
+use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
 use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::section::{HeaderFooter, PageBorderFillEntry, PageNumber, Section};
 use hwpforge_core::table::{Table, TableCell, TableMargin, TableRow};
@@ -53,8 +52,8 @@ use crate::warning_utils::push_projection_fallback;
 use crate::{Hwp5JoinedImageAsset, Hwp5JoinedImageAssetPlan, Hwp5OleAssetPlan};
 
 use self::shapes::{
-    project_arc_run, project_connectline_run, project_curve_run, project_ellipse_run,
-    project_line_run, project_polygon_run, project_rect_run,
+    offset_placement, project_arc_run, project_connectline_run, project_curve_run,
+    project_ellipse_run, project_line_run, project_polygon_run, project_rect_run, shape_placement,
 };
 use self::text::{
     char_shape_at, char_shape_id_at_position, char_shape_id_for_visible_position,
@@ -623,7 +622,7 @@ fn resolve_image_dimensions(
 /// HWP 5.0 표 70 공통 개체 속성 DWORD 의 bit0 (글자처럼 취급) 마스크.
 const CTRL_PROPERTY_TREAT_AS_CHAR_BIT: u32 = 0x1;
 
-/// body/텍스트박스 컨텍스트에서 이미지의 `ImagePlacement` 를 판정한다.
+/// body/텍스트박스 컨텍스트에서 이미지의 `ObjectPlacement` 를 판정한다.
 ///
 /// W2p: `treat_as_char` 는 `gso ` CtrlHeader 공통 개체 속성 DWORD 의 bit0
 /// 만이 유일한 진실이다. 좌표 `(x,y)==(0,0)` 휴리스틱은 완전히 제거됐다 —
@@ -633,32 +632,32 @@ fn image_placement_from_wire(
     geometry: &Hwp5ShapeComponentGeometry,
     context: ImageProjectionContext,
     ctrl_properties: u32,
-) -> ImagePlacement {
+) -> ObjectPlacement {
     match context {
-        ImageProjectionContext::TextBox => ImagePlacement {
-            text_wrap: ImageTextWrap::Square,
-            text_flow: ImageTextFlow::BothSides,
+        ImageProjectionContext::TextBox => ObjectPlacement {
+            text_wrap: ObjectTextWrap::Square,
+            text_flow: ObjectTextFlow::BothSides,
             treat_as_char: false,
             flow_with_text: true,
             allow_overlap: false,
-            vert_rel_to: ImageRelativeTo::Para,
-            horz_rel_to: ImageRelativeTo::Para,
+            vert_rel_to: ObjectRelativeTo::Para,
+            horz_rel_to: ObjectRelativeTo::Para,
             vert_offset: HwpUnit::new(geometry.y).unwrap_or(HwpUnit::ZERO),
             horz_offset: HwpUnit::new(geometry.x).unwrap_or(HwpUnit::ZERO),
         },
         ImageProjectionContext::Flow => {
             let treat_as_char = ctrl_properties & CTRL_PROPERTY_TREAT_AS_CHAR_BIT != 0;
             if treat_as_char {
-                ImagePlacement::legacy_inline_defaults()
+                ObjectPlacement::legacy_inline_defaults()
             } else {
-                ImagePlacement {
-                    text_wrap: ImageTextWrap::InFrontOfText,
-                    text_flow: ImageTextFlow::BothSides,
+                ObjectPlacement {
+                    text_wrap: ObjectTextWrap::InFrontOfText,
+                    text_flow: ObjectTextFlow::BothSides,
                     treat_as_char: false,
                     flow_with_text: false,
                     allow_overlap: true,
-                    vert_rel_to: ImageRelativeTo::Paper,
-                    horz_rel_to: ImageRelativeTo::Paper,
+                    vert_rel_to: ObjectRelativeTo::Paper,
+                    horz_rel_to: ObjectRelativeTo::Paper,
                     vert_offset: HwpUnit::new(geometry.y).unwrap_or(HwpUnit::ZERO),
                     horz_offset: HwpUnit::new(geometry.x).unwrap_or(HwpUnit::ZERO),
                 }
@@ -2863,8 +2862,7 @@ fn project_ole_object_run(
                     ole_bytes: payload.ole_bytes,
                     width,
                     height,
-                    horz_offset: ole.geometry.x,
-                    vert_offset: ole.geometry.y,
+                    placement: offset_placement(ole.geometry.x, ole.geometry.y),
                 },
                 CharShapeIndex::new(0),
             ))
@@ -2932,8 +2930,7 @@ fn project_textbox_run(
             paragraphs,
             width: hwp_unit_from_u32(textbox.geometry.width),
             height: hwp_unit_from_u32(textbox.geometry.height),
-            horz_offset: textbox.geometry.x,
-            vert_offset: textbox.geometry.y,
+            placement: shape_placement(&textbox.geometry, textbox.ctrl_properties),
             caption: None,
             style: None,
             text_vertical_align: shape_vertical_align_from_list_header(
@@ -2973,8 +2970,7 @@ fn project_group_run(
             children,
             width: hwp_unit_from_u32(group.geometry.width),
             height: hwp_unit_from_u32(group.geometry.height),
-            horz_offset: group.geometry.x,
-            vert_offset: group.geometry.y,
+            placement: offset_placement(group.geometry.x, group.geometry.y),
             inst_id,
         },
         CharShapeIndex::new(0),
@@ -3005,11 +3001,12 @@ fn project_group_child(
                     hwp_unit_from_u32(rect.geometry.width),
                     hwp_unit_from_u32(rect.geometry.height),
                 );
-                if let Control::TextBox { horz_offset, vert_offset, text_vertical_align, .. } =
-                    &mut control
-                {
-                    *horz_offset = rect.geometry.x;
-                    *vert_offset = rect.geometry.y;
+                if let Control::TextBox { placement, text_vertical_align, .. } = &mut control {
+                    // 그룹 자식은 자체 `gso ` 속성 word 가 없다 (`into_child`
+                    // 의 강제 0 은 byte-grounded 아님 — 자식 배치는 컨테이너가
+                    // 지배, W5 해석) → bit0 경로 대신 offset 휴리스틱으로
+                    // 기존 zero-offset 인라인 방출을 보존한다.
+                    *placement = offset_placement(rect.geometry.x, rect.geometry.y);
                     *text_vertical_align = valign;
                 }
                 return Some(control);
@@ -3018,11 +3015,9 @@ fn project_group_child(
                 let width = HwpUnit::new(positive_i32_from_u32(ellipse.geometry.width)?).ok()?;
                 let height = HwpUnit::new(positive_i32_from_u32(ellipse.geometry.height)?).ok()?;
                 let mut control = Control::ellipse_with_text(width, height, paragraphs);
-                if let Control::Ellipse { horz_offset, vert_offset, text_vertical_align, .. } =
-                    &mut control
-                {
-                    *horz_offset = ellipse.geometry.x;
-                    *vert_offset = ellipse.geometry.y;
+                if let Control::Ellipse { placement, text_vertical_align, .. } = &mut control {
+                    // 위 TextBox arm 과 동일 — 그룹 자식 offset 휴리스틱.
+                    *placement = offset_placement(ellipse.geometry.x, ellipse.geometry.y);
                     *text_vertical_align = valign;
                 }
                 return Some(control);
@@ -3056,8 +3051,51 @@ fn project_group_child(
         _ => None,
     }?;
     match run.content {
-        RunContent::Control(boxed) => Some(*boxed),
+        RunContent::Control(boxed) => {
+            let mut control = *boxed;
+            // 공유 project_*_run helper 는 bit0 기반 shape_placement 를
+            // 쓰지만, 그룹 자식의 `ctrl_properties` 는 `into_child` 가
+            // 강제한 0 (byte-grounded 아님 — 자식 배치는 컨테이너 지배,
+            // W5 해석) → offset 휴리스틱으로 재지정해 기존 zero-offset
+            // 인라인 방출(numbering="NONE")을 보존한다.
+            if let Some((x, y)) = group_child_offset(&child.control) {
+                override_shape_placement(&mut control, x, y);
+            }
+            Some(control)
+        }
         _ => None,
+    }
+}
+
+/// [`project_group_child`] 의 offset-휴리스틱 재지정 대상 자식의 기하
+/// offset. bit0 을 자체 보유하지 않는 leaf 도형만 대상 — `TextArt` 는
+/// [`offset_placement`] 로 이미 투영되고, 중첩 `Group` 은
+/// `project_group_run` 이 컨테이너 규칙을 소유하므로 제외한다.
+fn group_child_offset(control: &Hwp5Control) -> Option<(i32, i32)> {
+    match control {
+        Hwp5Control::Line(c) => Some((c.geometry.x, c.geometry.y)),
+        Hwp5Control::Rect(c) => Some((c.geometry.x, c.geometry.y)),
+        Hwp5Control::Polygon(c) => Some((c.geometry.x, c.geometry.y)),
+        Hwp5Control::Ellipse(c) => Some((c.geometry.x, c.geometry.y)),
+        Hwp5Control::Arc(c) => Some((c.geometry.x, c.geometry.y)),
+        Hwp5Control::Curve(c) => Some((c.geometry.x, c.geometry.y)),
+        Hwp5Control::ConnectLine(c) => Some((c.geometry.x, c.geometry.y)),
+        _ => None,
+    }
+}
+
+/// 그룹 자식 leaf 도형의 placement 를 [`offset_placement`] 결과로
+/// 재지정한다 (대상 variant 는 [`group_child_offset`] 와 짝).
+fn override_shape_placement(control: &mut Control, x: i32, y: i32) {
+    match control {
+        Control::Line { placement, .. }
+        | Control::Rect { placement, .. }
+        | Control::Polygon { placement, .. }
+        | Control::Ellipse { placement, .. }
+        | Control::Arc { placement, .. }
+        | Control::Curve { placement, .. }
+        | Control::ConnectLine { placement, .. } => *placement = offset_placement(x, y),
+        _ => {}
     }
 }
 
@@ -3143,8 +3181,7 @@ fn project_text_art_run(text_art: &Hwp5TextArtControl, warnings: &mut Vec<Hwp5Wa
         char_spacing: ta.char_spacing,
         width,
         height,
-        horz_offset: text_art.geometry.x,
-        vert_offset: text_art.geometry.y,
+        placement: offset_placement(text_art.geometry.x, text_art.geometry.y),
         fill_color: None,
         inst_id,
     };
@@ -3521,6 +3558,44 @@ fn page_def_to_settings(pd: &Hwp5PageDef) -> PageSettings {
 mod tests {
     use super::*;
 
+    /// 그룹 자식은 offset 휴리스틱을 쓴다 — `into_child` 가 강제한
+    /// `ctrl_properties: 0` 이 bit0 경로(shape_placement)를 타면
+    /// zero-offset 자식이 floating placement 를 얻어 numbering 이
+    /// NONE→PICTURE 로 조용히 바뀐다 (W4 w1 byte-preserving 잠금).
+    #[test]
+    fn group_child_zero_offset_stays_inline_non_zero_floats() {
+        let rect = |x: i32, y: i32| {
+            crate::decoder::section::Hwp5RectControl {
+                ctrl_id: 0,
+                geometry: crate::schema::section::Hwp5ShapeComponentGeometry {
+                    x,
+                    y,
+                    width: 1000,
+                    height: 1000,
+                },
+                ctrl_properties: 0, // into_child 의 강제값 재현
+            }
+        };
+        for (x, y, expect_inline) in [(0, 0, true), (1_000, 500, false)] {
+            let child = Hwp5GroupChild {
+                control: Hwp5Control::Rect(rect(x, y)),
+                paragraphs: Vec::new(),
+                list_header_properties: None,
+            };
+            let mut state = ProjectionImageState::new(None, None);
+            let control = project_group_child(&child, &mut state).expect("rect child projects");
+            let Control::Rect { placement, .. } = control else {
+                panic!("rect child must project to Control::Rect");
+            };
+            assert_eq!(
+                placement.is_none(),
+                expect_inline,
+                "offset ({x},{y}) → inline={expect_inline} (zero-offset 은 legacy \
+                 인라인 방출 보존, non-zero 는 floating)"
+            );
+        }
+    }
+
     #[test]
     fn bookmark_n2_2_collapses_to_contents_not_separate_variant() {
         // E6 슬라이스 B 회귀 잠금: (Bookmark, 2) = "책갈피 이름" 은 이전
@@ -3595,6 +3670,7 @@ mod tests {
             },
             paragraphs: vec![make_paragraph("가운데", 0, 0)],
             list_header_properties: Some(1 << 5),
+            ctrl_properties: 0,
         };
         let mut images = ProjectionImageState::new(None, None);
         let run = project_textbox_run(&textbox, &mut images);
@@ -3618,6 +3694,7 @@ mod tests {
             },
             paragraphs: vec![make_paragraph("위", 0, 0)],
             list_header_properties: None,
+            ctrl_properties: 0,
         };
         let mut images = ProjectionImageState::new(None, None);
         let run = project_textbox_run(&textbox, &mut images);
@@ -4084,9 +4161,9 @@ mod tests {
         assert_eq!(image.height, HwpUnit::new(2_000).unwrap());
         let placement = image.placement.as_ref().expect("placement should be attached");
         assert!(placement.treat_as_char);
-        assert_eq!(placement.text_wrap, ImageTextWrap::TopAndBottom);
-        assert_eq!(placement.horz_rel_to, ImageRelativeTo::Para);
-        assert_eq!(placement.vert_rel_to, ImageRelativeTo::Para);
+        assert_eq!(placement.text_wrap, ObjectTextWrap::TopAndBottom);
+        assert_eq!(placement.horz_rel_to, ObjectRelativeTo::Para);
+        assert_eq!(placement.vert_rel_to, ObjectRelativeTo::Para);
         assert_eq!(document.sections()[0].content_counts().images, 1);
     }
 
@@ -4183,6 +4260,7 @@ mod tests {
                 height: 6_000,
             },
             list_header_properties: None,
+            ctrl_properties: 0,
             paragraphs: vec![Hwp5Paragraph {
                 silent_wires: Vec::new(),
                 page_break: false,
@@ -4224,11 +4302,12 @@ mod tests {
         let textbox_control =
             paragraph.runs[0].content.as_control().expect("textbox should project as control");
         match textbox_control {
-            Control::TextBox { paragraphs, width, height, horz_offset, vert_offset, .. } => {
+            Control::TextBox { paragraphs, width, height, placement, .. } => {
                 assert_eq!(width, &HwpUnit::new(8_000).unwrap());
                 assert_eq!(height, &HwpUnit::new(6_000).unwrap());
-                assert_eq!(*horz_offset, 50);
-                assert_eq!(*vert_offset, 60);
+                let placement = placement.as_ref().expect("floating textbox carries placement");
+                assert_eq!(placement.horz_offset.as_i32(), 50);
+                assert_eq!(placement.vert_offset.as_i32(), 60);
                 assert_eq!(paragraphs.len(), 1);
                 assert_eq!(paragraphs[0].runs.len(), 3);
                 assert_eq!(paragraphs[0].runs[0].content.as_text(), Some("앞"));
@@ -4236,13 +4315,13 @@ mod tests {
                     paragraphs[0].runs[1].content.as_image().expect("middle run should be image");
                 let placement =
                     nested_image.placement.as_ref().expect("textbox image should have placement");
-                assert_eq!(placement.text_wrap, ImageTextWrap::Square);
-                assert_eq!(placement.text_flow, ImageTextFlow::BothSides);
+                assert_eq!(placement.text_wrap, ObjectTextWrap::Square);
+                assert_eq!(placement.text_flow, ObjectTextFlow::BothSides);
                 assert!(!placement.treat_as_char);
                 assert!(placement.flow_with_text);
                 assert!(!placement.allow_overlap);
-                assert_eq!(placement.horz_rel_to, ImageRelativeTo::Para);
-                assert_eq!(placement.vert_rel_to, ImageRelativeTo::Para);
+                assert_eq!(placement.horz_rel_to, ObjectRelativeTo::Para);
+                assert_eq!(placement.vert_rel_to, ObjectRelativeTo::Para);
                 assert_eq!(paragraphs[0].runs[2].content.as_text(), Some("뒤"));
             }
             other => panic!("expected TextBox control, got {:?}", other),
@@ -4410,9 +4489,9 @@ mod tests {
         let anchored_zero =
             image_placement_from_wire(&zero_origin, ImageProjectionContext::Flow, 0x0);
         assert!(!anchored_zero.treat_as_char);
-        assert_eq!(anchored_zero.text_wrap, ImageTextWrap::InFrontOfText);
-        assert_eq!(anchored_zero.vert_rel_to, ImageRelativeTo::Paper);
-        assert_eq!(anchored_zero.horz_rel_to, ImageRelativeTo::Paper);
+        assert_eq!(anchored_zero.text_wrap, ObjectTextWrap::InFrontOfText);
+        assert_eq!(anchored_zero.vert_rel_to, ObjectRelativeTo::Paper);
+        assert_eq!(anchored_zero.horz_rel_to, ObjectRelativeTo::Paper);
         assert_eq!(anchored_zero.vert_offset, HwpUnit::ZERO);
         assert_eq!(anchored_zero.horz_offset, HwpUnit::ZERO);
 
@@ -4420,7 +4499,7 @@ mod tests {
         let anchored_nonzero =
             image_placement_from_wire(&non_zero_origin, ImageProjectionContext::Flow, 0x0);
         assert!(!anchored_nonzero.treat_as_char);
-        assert_eq!(anchored_nonzero.text_wrap, ImageTextWrap::InFrontOfText);
+        assert_eq!(anchored_nonzero.text_wrap, ObjectTextWrap::InFrontOfText);
         assert_eq!(anchored_nonzero.vert_offset, HwpUnit::new(5_678).unwrap());
         assert_eq!(anchored_nonzero.horz_offset, HwpUnit::new(1_234).unwrap());
 
@@ -4428,7 +4507,7 @@ mod tests {
         let inline_zero =
             image_placement_from_wire(&zero_origin, ImageProjectionContext::Flow, 0x1);
         assert!(inline_zero.treat_as_char);
-        assert_eq!(inline_zero, ImagePlacement::legacy_inline_defaults());
+        assert_eq!(inline_zero, ObjectPlacement::legacy_inline_defaults());
 
         // bit0=1, geometry non-zero → still inline — the bit wins over
         // coordinates (this is the actual W2p bug fix: the old (0,0)
@@ -4436,7 +4515,7 @@ mod tests {
         let inline_nonzero =
             image_placement_from_wire(&non_zero_origin, ImageProjectionContext::Flow, 0x1);
         assert!(inline_nonzero.treat_as_char);
-        assert_eq!(inline_nonzero, ImagePlacement::legacy_inline_defaults());
+        assert_eq!(inline_nonzero, ObjectPlacement::legacy_inline_defaults());
     }
 
     #[test]
@@ -4450,7 +4529,7 @@ mod tests {
         };
         let placement = image_placement_from_wire(&geometry, ImageProjectionContext::TextBox, 0x1);
         assert!(!placement.treat_as_char);
-        assert_eq!(placement.text_wrap, ImageTextWrap::Square);
+        assert_eq!(placement.text_wrap, ObjectTextWrap::Square);
     }
 
     #[test]
@@ -5265,6 +5344,7 @@ mod tests {
                 },
                 start: crate::schema::section::Hwp5ShapePoint { x: 0, y: 0 },
                 end: crate::schema::section::Hwp5ShapePoint { x: 100, y: 100 },
+                ctrl_properties: 0,
             })],
         };
         let section = make_section(vec![para], None);
@@ -5272,13 +5352,14 @@ mod tests {
         let paragraph = &doc.sections()[0].paragraphs[0];
         let control = paragraph.runs[0].content.as_control().expect("expected control run");
         match control {
-            Control::Line { start, end, width, height, horz_offset, vert_offset, .. } => {
+            Control::Line { start, end, width, height, placement, .. } => {
                 assert_eq!(*start, hwpforge_core::control::ShapePoint { x: 0, y: 0 });
                 assert_eq!(*end, hwpforge_core::control::ShapePoint { x: 29_360, y: 100 });
                 assert_eq!(*width, HwpUnit::new(29_360).unwrap());
                 assert_eq!(*height, HwpUnit::new(100).unwrap());
-                assert_eq!(*horz_offset, 9_884);
-                assert_eq!(*vert_offset, 11_980);
+                let placement = placement.as_ref().expect("floating line carries placement");
+                assert_eq!(placement.horz_offset.as_i32(), 9_884);
+                assert_eq!(placement.vert_offset.as_i32(), 11_980);
             }
             other => panic!("expected Line control, got {:?}", other),
         }
@@ -5312,6 +5393,7 @@ mod tests {
                     crate::schema::section::Hwp5ShapePoint { x: 3_765, y: 1_405 },
                     crate::schema::section::Hwp5ShapePoint { x: 1_882, y: 0 },
                 ],
+                ctrl_properties: 0,
             })],
         };
         let section = make_section(vec![para], None);
@@ -5319,22 +5401,15 @@ mod tests {
         let paragraph = &doc.sections()[0].paragraphs[0];
         let control = paragraph.runs[0].content.as_control().expect("expected control run");
         match control {
-            Control::Polygon {
-                vertices,
-                width,
-                height,
-                horz_offset,
-                vert_offset,
-                paragraphs,
-                ..
-            } => {
+            Control::Polygon { vertices, width, height, placement, paragraphs, .. } => {
                 assert_eq!(vertices.len(), 6);
                 assert_eq!(vertices[0], hwpforge_core::control::ShapePoint { x: 6_278, y: 0 });
                 assert_eq!(vertices[5], hwpforge_core::control::ShapePoint { x: 6_278, y: 0 });
                 assert_eq!(*width, HwpUnit::new(12_560).unwrap());
                 assert_eq!(*height, HwpUnit::new(13_040).unwrap());
-                assert_eq!(*horz_offset, 17_804);
-                assert_eq!(*vert_offset, 13_900);
+                let placement = placement.as_ref().expect("floating polygon carries placement");
+                assert_eq!(placement.horz_offset.as_i32(), 17_804);
+                assert_eq!(placement.vert_offset.as_i32(), 13_900);
                 assert!(paragraphs.is_empty());
             }
             other => panic!("expected Polygon control, got {:?}", other),
@@ -5361,6 +5436,7 @@ mod tests {
                     width: 10_020,
                     height: 8_000,
                 },
+                ctrl_properties: 0,
             })],
         };
         let section = make_section(vec![para], None);
@@ -5368,11 +5444,12 @@ mod tests {
         let paragraph = &doc.sections()[0].paragraphs[0];
         let control = paragraph.runs[0].content.as_control().expect("expected control run");
         match control {
-            Control::Rect { width, height, horz_offset, vert_offset, .. } => {
+            Control::Rect { width, height, placement, .. } => {
                 assert_eq!(*width, HwpUnit::new(10_020).unwrap());
                 assert_eq!(*height, HwpUnit::new(8_000).unwrap());
-                assert_eq!(*horz_offset, 13_200);
-                assert_eq!(*vert_offset, 14_280);
+                let placement = placement.as_ref().expect("floating rect carries placement");
+                assert_eq!(placement.horz_offset.as_i32(), 13_200);
+                assert_eq!(placement.vert_offset.as_i32(), 14_280);
             }
             other => panic!("expected Control::Rect, got {:?}", other),
         }

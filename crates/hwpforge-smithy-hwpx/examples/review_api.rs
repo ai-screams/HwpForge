@@ -240,15 +240,12 @@ fn build_section_1() -> Section {
             Control::line(ShapePoint::new(0, 0), ShapePoint::new(35000, 0)).expect("valid line");
         // Apply style
         let styled_line: Control = match line_ctrl {
-            Control::Line {
-                start, end, width, height, horz_offset, vert_offset, caption, ..
-            } => Control::Line {
+            Control::Line { start, end, width, height, placement, caption, .. } => Control::Line {
                 start,
                 end,
                 width,
                 height,
-                horz_offset,
-                vert_offset,
+                placement,
                 caption,
                 style: Some(shape_style),
             },

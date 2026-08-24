@@ -51,8 +51,9 @@ mod typography;
 use hwpforge_core::caption::{Caption, CaptionSide};
 use hwpforge_core::column::{ColumnLayoutMode, ColumnSettings, ColumnType};
 use hwpforge_core::control::{Control, DutmalAlign, DutmalPosition, NewNumberKind};
-use hwpforge_core::image::{Image, ImagePlacement};
+use hwpforge_core::image::Image;
 use hwpforge_core::paragraph::Paragraph;
+use hwpforge_core::placement::ObjectPlacement;
 use hwpforge_core::run::{Run, RunContent};
 use hwpforge_core::section::Section;
 use hwpforge_core::table::{
@@ -852,14 +853,13 @@ fn build_runs(
                         chart_entries.push((chart_ref.clone(), chart_xml));
                         switches.push(encode_chart_switch(ctrl, &chart_ref));
                     }
-                    Control::EmbeddedChart {
-                        chart_xml,
-                        ole_bytes,
-                        width,
-                        height,
-                        horz_offset,
-                        vert_offset,
-                    } => {
+                    Control::EmbeddedChart { chart_xml, ole_bytes, width, height, placement } => {
+                        // The OOXML chart `<hp:pos>` template is fixed-floating;
+                        // only the anchor offsets are sourced from placement.
+                        let (chart_horz_offset, chart_vert_offset) = placement
+                            .as_ref()
+                            .map(|p| (p.horz_offset.as_i32(), p.vert_offset.as_i32()))
+                            .unwrap_or((0, 0));
                         ledger.mark_cache_inadmissible("chart emission reorders content");
                         // Allocate stable per-document ids for the new chart
                         // XML file and the OLE blob. Both lists are
@@ -886,8 +886,8 @@ fn build_runs(
                             &ole_item_id,
                             width.as_i32(),
                             height.as_i32(),
-                            *horz_offset,
-                            *vert_offset,
+                            chart_horz_offset,
+                            chart_vert_offset,
                         );
                         let marker_run_xml = format!(
                             r#"<hp:run charPrIDRef="{char_pr_id_ref}"><hp:t>{marker}</hp:t></hp:run>"#,
@@ -1618,8 +1618,9 @@ const DEFAULT_HORZ_SIZE: i32 = 42520;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hwpforge_core::image::{
-        ImageFormat, ImagePlacement, ImageRelativeTo, ImageTextFlow, ImageTextWrap,
+    use hwpforge_core::image::ImageFormat;
+    use hwpforge_core::placement::{
+        ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap,
     };
     use hwpforge_core::table::{Table, TableCell, TableRow};
     use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex};
@@ -2140,14 +2141,14 @@ mod tests {
             HwpUnit::new(5000).unwrap(),
             ImageFormat::Png,
         )
-        .with_placement(ImagePlacement {
-            text_wrap: ImageTextWrap::Square,
-            text_flow: ImageTextFlow::RightOnly,
+        .with_placement(ObjectPlacement {
+            text_wrap: ObjectTextWrap::Square,
+            text_flow: ObjectTextFlow::RightOnly,
             treat_as_char: false,
             flow_with_text: true,
             allow_overlap: true,
-            vert_rel_to: ImageRelativeTo::Paper,
-            horz_rel_to: ImageRelativeTo::Page,
+            vert_rel_to: ObjectRelativeTo::Paper,
+            horz_rel_to: ObjectRelativeTo::Page,
             vert_offset: HwpUnit::new(1200).unwrap(),
             horz_offset: HwpUnit::new(3400).unwrap(),
         });
@@ -2312,14 +2313,14 @@ mod tests {
             HwpUnit::new(5000).unwrap(),
             ImageFormat::Png,
         )
-        .with_placement(ImagePlacement {
-            text_wrap: ImageTextWrap::Square,
-            text_flow: ImageTextFlow::RightOnly,
+        .with_placement(ObjectPlacement {
+            text_wrap: ObjectTextWrap::Square,
+            text_flow: ObjectTextFlow::RightOnly,
             treat_as_char: false,
             flow_with_text: true,
             allow_overlap: true,
-            vert_rel_to: ImageRelativeTo::Paper,
-            horz_rel_to: ImageRelativeTo::Page,
+            vert_rel_to: ObjectRelativeTo::Paper,
+            horz_rel_to: ObjectRelativeTo::Page,
             vert_offset: HwpUnit::new(1200).unwrap(),
             horz_offset: HwpUnit::new(3400).unwrap(),
         });
@@ -2337,13 +2338,13 @@ mod tests {
 
         let decoded_img = result.paragraphs[0].runs[0].content.as_image().unwrap();
         let placement = decoded_img.placement.as_ref().expect("placement should survive roundtrip");
-        assert_eq!(placement.text_wrap, ImageTextWrap::Square);
-        assert_eq!(placement.text_flow, ImageTextFlow::RightOnly);
+        assert_eq!(placement.text_wrap, ObjectTextWrap::Square);
+        assert_eq!(placement.text_flow, ObjectTextFlow::RightOnly);
         assert!(!placement.treat_as_char);
         assert!(placement.flow_with_text);
         assert!(placement.allow_overlap);
-        assert_eq!(placement.vert_rel_to, ImageRelativeTo::Paper);
-        assert_eq!(placement.horz_rel_to, ImageRelativeTo::Page);
+        assert_eq!(placement.vert_rel_to, ObjectRelativeTo::Paper);
+        assert_eq!(placement.horz_rel_to, ObjectRelativeTo::Page);
         assert_eq!(placement.vert_offset.as_i32(), 1200);
         assert_eq!(placement.horz_offset.as_i32(), 3400);
     }
@@ -2566,8 +2567,7 @@ mod tests {
                         paragraphs: vec![tb_para],
                         width: HwpUnit::new(14000).unwrap(),
                         height: HwpUnit::new(8000).unwrap(),
-                        horz_offset: 0,
-                        vert_offset: 0,
+                        placement: None,
                         caption: None,
                         style: None,
                         text_vertical_align: hwpforge_foundation::VerticalAlign::Top,
@@ -2685,8 +2685,7 @@ mod tests {
                         paragraphs: vec![tb_para],
                         width: HwpUnit::new(14000).unwrap(),
                         height: HwpUnit::new(8000).unwrap(),
-                        horz_offset: 0,
-                        vert_offset: 0,
+                        placement: None,
                         caption: None,
                         style: None,
                         text_vertical_align: hwpforge_foundation::VerticalAlign::Top,
@@ -2711,14 +2710,11 @@ mod tests {
 
         match &ctrl_run.content {
             RunContent::Control(ctrl) => match ctrl.as_ref() {
-                Control::TextBox {
-                    paragraphs, width, height, horz_offset, vert_offset, ..
-                } => {
+                Control::TextBox { paragraphs, width, height, placement, .. } => {
                     assert_eq!(paragraphs[0].runs[0].content.as_text(), Some("Textbox roundtrip"));
                     assert_eq!(width.as_i32(), 14000);
                     assert_eq!(height.as_i32(), 8000);
-                    assert_eq!(*horz_offset, 0);
-                    assert_eq!(*vert_offset, 0);
+                    assert!(placement.is_none());
                 }
                 other => panic!("expected TextBox, got {other:?}"),
             },

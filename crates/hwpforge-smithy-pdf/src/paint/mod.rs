@@ -130,6 +130,8 @@ pub enum PaintItem {
     Line(LineItem),
     /// 래스터 이미지 (W2a — §3 D3).
     Image(ImageItem),
+    /// 사각 클립 그룹 (W4 w2 — 글상자 클리핑, 중첩 가능).
+    Clipped(ClipGroup),
 }
 
 /// 래스터 이미지 paint 항목 — 자기완결 (backend 가 스토어를 모른다).
@@ -152,6 +154,31 @@ pub struct ImageItem {
     pub size: Size,
     /// 진단 위치 (경고/오류 payload).
     pub location: String,
+}
+
+/// 사각 클립 그룹 (W4 w2 — 글상자 렌더의 클리핑 기반).
+///
+/// `origin`+`size` 사각형으로 클립 영역을 세운 뒤 `items` 를 그리고 클립을
+/// 되돌린다 (backend: krilla `push_clip_path` → 자식 그리기 → `pop`).
+/// 좌표계는 다른 항목과 동일한 **top-left 원점 pt** 다.
+///
+/// `items` 는 [`PaintItem::Clipped`] 를 다시 담을 수 있다 (중첩 클립 —
+/// 셀 안 글상자 대비). backend 는 재귀로 push/pop 을 쌓는다.
+///
+/// 넘친 자식(클립 밖)은 backend 가 렌더 시점에 잘라낸다 — Paint IR 은
+/// 자식을 그대로 담고, 잘림은 클립 영역이 강제한다 (글상자 overflow
+/// 실측 = 한컴은 글자 중간을 박스 경계로 절단, 설계 §8a).
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct ClipGroup {
+    /// 클립 사각형 좌상단 원점 (pt).
+    pub origin: Point,
+    /// 클립 사각형 크기 (pt) — 0/음수/non-finite 는 backend 가 그룹째
+    /// 생략한다 (빈 클립 = 아무것도 보이지 않음).
+    pub size: Size,
+    /// 클립 안에서 그릴 항목들 — **Vec 순서 = z-order**, [`PaintItem::Clipped`]
+    /// 중첩 허용.
+    pub items: Vec<PaintItem>,
 }
 
 /// PDF 한 쪽.

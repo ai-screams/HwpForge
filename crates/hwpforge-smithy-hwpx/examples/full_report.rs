@@ -157,8 +157,7 @@ fn line_separator() -> Paragraph {
             end: ShapePoint::new(42520, 0),
             width: HwpUnit::from_mm(150.0).unwrap(),
             height: HwpUnit::new(100).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: Some(ShapeStyle {
                 line_color: Some(Color::from_rgb(0x99, 0x99, 0x99)),
@@ -404,8 +403,7 @@ fn build_section_1() -> Section {
             ],
             width: HwpUnit::from_mm(120.0).unwrap(),
             height: HwpUnit::from_mm(20.0).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             caption: None,
             style: Some(ShapeStyle {
                 line_color: Some(Color::from_rgb(0xCC, 0xCC, 0xCC)),
@@ -568,8 +566,7 @@ fn build_section_2() -> Section {
             axis2: ShapePoint::new(ew / 2, eh),
             width: HwpUnit::new(ew).unwrap(),
             height: HwpUnit::new(eh).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![text_para("BGR!", CS_BOLD, PS_CENTER)],
             caption: Some(make_caption("[그림 2] BGR 색상 주의 영역", CaptionSide::Right)),
             style: Some(ShapeStyle {
@@ -609,8 +606,7 @@ fn build_section_2() -> Section {
             ],
             width: HwpUnit::new(tw).unwrap(),
             height: HwpUnit::new(th).unwrap(),
-            horz_offset: 0,
-            vert_offset: 0,
+            placement: None,
             paragraphs: vec![text_para("주의!", CS_BOLD, PS_CENTER)],
             caption: Some(make_caption("[그림 3] 경고 삼각형 (첫 점 반복)", CaptionSide::Bottom)),
             style: Some(ShapeStyle {
