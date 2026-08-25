@@ -221,3 +221,90 @@ fn oracle_sidecar_matches_fresh_hancom_extraction_when_present() {
     assert!(support::approx_eq(fresh.width, recorded.width, 0.001), "recorded w drifted");
     assert!(support::approx_eq(fresh.height, recorded.height, 0.001), "recorded h drifted");
 }
+
+/// W5 w2 — **음수 offset 한컴 oracle** (설계 리뷰 High-2): 대화상자 저작
+/// fixture 로 음수 offset 산술을 한컴 PDF 와 직접 대조한다.
+///
+/// 한컴 저작 정규화 실측 (§9j): API 가 쓴 음수 vertOffset 은 재저장에서
+/// 0 으로 클램프, 드래그는 **앵커 재지정**(첫 문단 + vert +534)으로
+/// 표현, 음수는 **개체 속성 대화상자만** 직저작 가능 — HWPX 는 음수를
+/// u32 랩 십진수로 인코드(`horzOffset="4294965029"` = −2267)하며
+/// 디코더는 signed 복원. fixture 는 미추적 리뷰 자산 — 존재+폰트
+/// 머신에서만 실행 (로컬 parity 게이트, CI 무신호).
+#[test]
+fn negative_horz_offset_anchored_image_matches_hancom() {
+    let hwpx_path = hancom_pdf_path("anchored_negative_offset-base.hwpx");
+    let pdf_path = hancom_pdf_path("anchored_negative_offset-base.pdf");
+    if !hwpx_path.exists() || !pdf_path.exists() {
+        eprintln!("skip: anchored_negative_offset 리뷰 fixture 부재");
+        return;
+    }
+    let Some(options) = font_options() else {
+        eprintln!("skip: Hancom font bundle unavailable");
+        return;
+    };
+
+    let bytes = std::fs::read(&hwpx_path).expect("read hwpx");
+    let decoded = HwpxDecoder::decode(&bytes).expect("decode");
+    let validated = decoded.document.validate().expect("validate");
+
+    // wire 잠금 — 대화상자 저작 음수 horz(−2267)·드래그 재지정 vert(+534),
+    // u32 랩 십진수의 signed 복원까지 이 단정이 커버한다.
+    let mut wire_locked = false;
+    for section in validated.sections() {
+        for para in &section.paragraphs {
+            for run in &para.runs {
+                if let RunContent::Image(img) = &run.content {
+                    if let Some(p) = img.placement.as_ref().filter(|p| !p.treat_as_char) {
+                        assert_eq!(p.horz_offset.as_i32(), -2267, "대화상자 저작 음수 horz");
+                        assert_eq!(p.vert_offset.as_i32(), 534, "드래그 재지정 vert");
+                        wire_locked = true;
+                    }
+                }
+            }
+        }
+    }
+    assert!(wire_locked, "anchored image placement not found");
+
+    let lookup = HwpxStyleLookup::new(&decoded.style_store, &decoded.image_store);
+    let ours = render_document(&PdfInput { document: &validated, styles: &lookup }, &options)
+        .expect("render")
+        .bytes;
+    let pages = support::extract_pages(&ours);
+    let imgs: Vec<_> = pages.iter().flat_map(|p| p.images.iter()).collect();
+    assert_eq!(imgs.len(), 1, "앵커 이미지 하나 렌더: {imgs:?}");
+    let got = imgs[0];
+
+    // 자체 일관성: 음수 horz 가 산술 x = body_left + horz_offset 로 흐른다.
+    let expected = expected_anchored(&validated);
+    assert!(support::approx_eq(got.x, expected.x, 0.01), "x {} != {}", got.x, expected.x);
+    assert!(support::approx_eq(got.y, expected.y, 0.01), "y {} != {}", got.y, expected.y);
+
+    // 판별 게이트: 한컴 PDF 신선 추출과 ±0.1pt.
+    let hancom_pdf = std::fs::read(&pdf_path).expect("read hancom pdf");
+    let hpages = support::extract_pages(&hancom_pdf);
+    let himgs: Vec<_> = hpages.iter().flat_map(|p| p.images.iter()).collect();
+    assert_eq!(himgs.len(), 1, "한컴 PDF 앵커 이미지 하나: {himgs:?}");
+    let h = himgs[0];
+    eprintln!(
+        "neg-offset Δ x={:.3} y={:.3} w={:.3} h={:.3}",
+        got.x - h.x,
+        got.y - h.y,
+        got.width - h.width,
+        got.height - h.height
+    );
+    assert!(support::approx_eq(got.x, h.x, 0.1), "x ours {} vs hancom {}", got.x, h.x);
+    assert!(support::approx_eq(got.y, h.y, 0.1), "y ours {} vs hancom {}", got.y, h.y);
+    assert!(
+        support::approx_eq(got.width, h.width, 0.1),
+        "w ours {} vs hancom {}",
+        got.width,
+        h.width
+    );
+    assert!(
+        support::approx_eq(got.height, h.height, 0.1),
+        "h ours {} vs hancom {}",
+        got.height,
+        h.height
+    );
+}
