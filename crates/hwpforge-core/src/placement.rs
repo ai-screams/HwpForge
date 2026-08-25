@@ -42,6 +42,11 @@ use serde::{Deserialize, Serialize};
 /// to `None`, so the encoder's untouched legacy path emits the historical
 /// inline bytes (mirrors the `Option<ShapeStyle>` collapse pattern in the
 /// HWPX shape-style decoder).
+///
+/// Offsets are signed: Hancom persists negative offsets in HWPX `hp:pos`
+/// as **u32 wrap-around decimal strings** (e.g. `horzOffset="4294965029"`
+/// = −2267, dialog-authored fixture measurement), and in HWP5 as plain
+/// signed `i32`. Codecs must round-trip both encodings losslessly.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 pub struct ObjectPlacement {
     /// Text wrapping mode around the object.
