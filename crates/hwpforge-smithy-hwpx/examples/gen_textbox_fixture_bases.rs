@@ -252,6 +252,61 @@ fn main() {
         );
     }
 
+    // ⑧ W5 w2 게이트: 음수 vertOffset 앵커 이미지 (문단 위로 돌출) —
+    //    리뷰 High-2 의 한컴 PDF oracle 재료. 재저장 PDF 의 이미지 bbox 로
+    //    "음수 offset = doc 좌표 그대로(클립 없음)" 산술을 oracle-lock.
+    {
+        use hwpforge_core::image::{Image, ImageFormat};
+        use hwpforge_core::placement::{
+            ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap,
+        };
+        use hwpforge_foundation::HwpUnit as HU;
+        let mut images = ImageStore::new();
+        images.insert(
+            "fixture-image.png",
+            std::fs::read("examples/hwp5_review/fixture-image.png").expect("png asset"),
+        );
+        let mut img = Image::new(
+            "fixture-image.png",
+            HU::from_mm(15.0).expect("w"),
+            HU::from_mm(15.0).expect("h"),
+            ImageFormat::Png,
+        );
+        img.placement = Some(ObjectPlacement {
+            text_wrap: ObjectTextWrap::Square,
+            text_flow: ObjectTextFlow::BothSides,
+            treat_as_char: false,
+            flow_with_text: false,
+            allow_overlap: true,
+            vert_rel_to: ObjectRelativeTo::Para,
+            horz_rel_to: ObjectRelativeTo::Para,
+            vert_offset: HU::from_mm(-8.0).expect("voff"),
+            horz_offset: HU::from_mm(30.0).expect("hoff"),
+        });
+        let anchor_para = Paragraph::with_runs(
+            vec![
+                Run::text(
+                    "앵커 문단입니다 — 이미지는 이 문단 기준 위로 8mm 돌출합니다. \
+                     본문이 이미지를 피해 흐르는지 봅니다.",
+                    CharShapeIndex::new(0),
+                ),
+                Run::image(img, CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        save_with_images(
+            "anchored_negative_offset",
+            vec![
+                text_para("첫 문단입니다."),
+                text_para("둘째 문단입니다 — 돌출 영역과 겹칠 수 있습니다."),
+                anchor_para,
+                text_para("앵커 뒤 문단입니다."),
+                text_para("문서 끝 문단입니다."),
+            ],
+            images,
+        );
+    }
+
     println!();
     println!("한컴오피스에서 할 일 (재저장 = 조판 캐시·wire 진리 생성, 하나씩):");
     println!("  1. textbox_basic-base.hwpx 열기 → 글상자·내부 줄바꿈 확인");
