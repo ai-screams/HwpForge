@@ -7,10 +7,12 @@
 #   - Reusable preflight for release workflow
 #   - Manual full validation when requested
 #
-# Modes
-#   pr          → full contributor checks (coverage + deny + msrv)
-#   merge_queue → merge safety checks (skip slow duplicate audits)
-#   release     → release preflight (docs build included, no MSRV/coverage/deny)
+# Modes (CI 다이어트 P1 — PR 은 빠른 피드백, 큐가 최종 전체 게이트)
+#   pr          → fast feedback (fmt/clippy/test/audit/lint — coverage,
+#                 deny, msrv, docs build 는 머지 큐로 이동)
+#   merge_queue → final full gate (coverage + deny + msrv + docs build)
+#   release     → pr 과 동일 플래그 (자동 트리거 경로 없음 — P2 로
+#                 release-plz Preflight 호출 제거됨, dispatch 라벨용 존치)
 #   full        → manual full validation
 # =============================================================================
 
@@ -92,23 +94,30 @@ jobs:
             esac
           fi
 
+          # CI 다이어트 (.docs/planning/2026-08-25-ci-diet-proposal.md P1):
+          # PR = 빠른 피드백(fmt/clippy/test/audit/lint), 머지 큐 = 최종
+          # 전체 게이트(coverage/MSRV/deny/docs build). skip 된 required
+          # check 는 GitHub 가 충족으로 취급하므로 PR 의 MSRV/deny skip 은
+          # 안전 (기존 큐가 skip 하고도 머지되던 것과 동일 메커니즘).
           case "$mode" in
             pr)
+              run_coverage=false
+              run_deny=false
+              run_docs_build=false
+              run_msrv=false
+              ;;
+            merge_queue)
               run_coverage=true
               run_deny=true
               run_docs_build=true
               run_msrv=true
               ;;
-            merge_queue)
-              run_coverage=false
-              run_deny=false
-              run_docs_build=true
-              run_msrv=false
-              ;;
             release)
+              # P2: 큐가 방금 게이트한 커밋 — Preflight 는 release-plz.yml
+              # 에서 호출 자체를 제거했고, 이 모드는 수동 dispatch 용 최소만.
               run_coverage=false
               run_deny=false
-              run_docs_build=true
+              run_docs_build=false
               run_msrv=false
               ;;
             full)

@@ -2,11 +2,11 @@
 # HwpForge Release Automation (release-plz)
 # =============================================================================
 #
-# On push to main:
-#   1. Run reusable release preflight from ci.yml
-#   2. Publish crates / create GitHub Releases when a release PR was merged
-#   3. Create or refresh the next release PR
-#   4. Deploy Pages only when a real release was created
+# On push to main (validation is owned by the merge queue — every commit
+# reaching main just passed ci.yml merge_queue mode; no preflight here, P2):
+#   1. Publish crates / create GitHub Releases when a release PR was merged
+#   2. Create or refresh the next release PR
+#   3. Deploy Pages only when a real release was created
 # =============================================================================
 
 name: Release
@@ -28,18 +28,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  preflight:
-    name: Release Preflight
-    if: github.ref == 'refs/heads/main'
-    uses: ./.github/workflows/ci.yml
-    permissions:
-      contents: read
-    with:
-      mode: release
-
+  # Release Preflight 제거 (CI 다이어트 P2 — .docs/planning/2026-08-25-ci-
+  # diet-proposal.md): main 에 닿는 모든 커밋은 머지 큐가 직전에 전체
+  # 게이트(coverage/MSRV/deny 포함, ci.yml merge_queue 모드)를 통과시킨
+  # 동일 커밋이므로 여기서의 재검증은 중복이었다 (~6분/머지). semver
+  # 검사는 release-plz 자체(semver_check)가 계속 소유한다.
   release-plz-release:
     name: Release
-    needs: [preflight]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     outputs:
@@ -76,7 +71,6 @@ jobs:
 
   release-plz-pr:
     name: Release PR
-    needs: [preflight]
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     permissions:
