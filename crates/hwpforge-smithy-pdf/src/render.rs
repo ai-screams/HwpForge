@@ -849,6 +849,46 @@ mod atom_tests {
         assert!((img.size.height.0 - Pt::from_hwpunit(3000).0).abs() < 1e-9);
     }
 
+    #[test]
+    fn subline_image_atom_paints_at_descent_formula_y() {
+        // 리뷰 Low-2 잠금 (CI 실행·fixture 불요): render_line →
+        // inline_image_top 의 인자 결선(top_y·baseline·vertsize·height)을
+        // sub-line 분기(img_h < vertsize)에서 잠근다 — 결선 전치(baseline↔
+        // vertsize 스왑 등)는 좌표가 달라져 즉시 적발된다.
+        // 기대 y = top_y + baseline − img_h + img_h×152/1000
+        //        = 5000 + 850 − 567 + 86 = 5369 (A 측점 산술과 동일).
+        let mut layout = image_only_layout();
+        let line = &mut layout.lines[0];
+        line.atoms = vec![LineAtom::Image(LineImage {
+            canonical_key: "img1.png".into(),
+            width: 567,
+            height: 567,
+        })];
+        line.baseline_y = 5000 + 850;
+        line.vertsize = 1000; // 텍스트-지배 줄 — sub-line 분기.
+        let doc = minimal_doc();
+        let input = PdfInput { document: &doc, styles: &ImgStyles };
+        let options = PdfOptions::default();
+        let mut table = FontTable::new(
+            FontResolver::with_discovery(&[], crate::font::FontDiscovery::ExplicitOnly)
+                .expect("resolver"),
+        );
+        let mut warnings = Vec::new();
+        let pages = build_paint_pages(&input, &options, &[layout], &mut table, &mut warnings)
+            .expect("paint");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let images: Vec<_> = pages[0]
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                PaintItem::Image(item) => Some(item),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(images.len(), 1);
+        assert!((images[0].origin.y.0 - Pt::from_hwpunit(5369).0).abs() < 1e-9);
+    }
+
     /// W5 w1b: 앵커 이미지는 `PaintItem::Image` 로 절대 배치되고, **배경**
     /// (셀 배경 rect 보다도 먼저 = z-order 맨 아래)에 온다. origin/size 는
     /// source 층 HWPUNIT 을 pt 로 1:1 환산한다.

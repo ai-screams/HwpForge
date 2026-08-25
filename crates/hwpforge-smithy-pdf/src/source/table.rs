@@ -860,7 +860,7 @@ fn emit_anchor_clipped(
             let has_admitted_images =
                 para.runs.iter().any(|r| crate::source::is_admitted_inline_image(&r.content));
             let line_atoms_override = if has_admitted_images {
-                let atoms = crate::source::build_inline_image_line_atoms(para, cache, &para_loc)?;
+                let atoms = crate::source::build_cell_image_line_atoms(para, cache, &para_loc)?;
                 for (li, line) in atoms.iter().enumerate() {
                     for atom in line {
                         if let crate::source::LineAtom::Image(img) = atom {

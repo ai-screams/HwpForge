@@ -1594,6 +1594,31 @@ pub(crate) fn build_inline_image_line_atoms(
     })
 }
 
+/// 표 **셀** 인라인 이미지 문단의 원자 귀속 — body 래퍼와 달리
+/// `sub_line_capable=false` 로 결선한다 (독립 리뷰 Low-1): 셀은 sub-line
+/// 미개방이라 경계-일치 이미지가 body/글상자 전용 typed kind 로 누출되지
+/// 않고 기존 InvalidCache(zero/two-match)로 떨어진다 — census 오염 방지.
+pub(crate) fn build_cell_image_line_atoms(
+    para: &hwpforge_core::paragraph::Paragraph,
+    cache: &hwpforge_core::layout::LayoutCache,
+    location: &str,
+) -> PdfResult<Vec<Vec<LineAtom>>> {
+    build_inline_object_line_atoms(para, cache, location, |run| {
+        Ok(match &run.content {
+            RunContent::Image(img) => Some(ClassifiedObject {
+                height: img.height.as_i32(),
+                sub_line_capable: false,
+                atom: LineAtom::Image(LineImage {
+                    canonical_key: img.path.clone(),
+                    width: img.width.as_i32(),
+                    height: img.height.as_i32(),
+                }),
+            }),
+            _ => None,
+        })
+    })
+}
+
 /// 인라인 글상자 문단의 원자를 캐시 줄별로 귀속한다 (W4 §8g).
 ///
 /// [`build_inline_object_line_atoms`] 에 글상자 classifier 를 결선한다 —
@@ -2917,6 +2942,25 @@ mod tests {
                 if *kind == "sub-line image on line boundary"),
             "{err:?}"
         );
+    }
+
+    #[test]
+    fn atoms_cell_wrapper_boundary_subline_stays_invalid_cache() {
+        // 리뷰 Low-1 잠금: 셀 래퍼는 sub_line_capable=false — 같은 경계
+        // 상황이 body/글상자 전용 typed kind 로 누출되지 않고 기존
+        // InvalidCache 로 떨어진다 (census 오염 방지).
+        let mut para = Paragraph::with_runs(
+            vec![
+                Run::text("가나다", CharShapeIndex::new(0)),
+                img_with_height("BinData/c.png", 567),
+                Run::text("라마바", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0), seg(3, 1600)]));
+        let cache = para.layout_cache.clone().unwrap();
+        let err = build_cell_image_line_atoms(&para, &cache, "t").expect_err("cell boundary");
+        assert!(matches!(&err, PdfError::InvalidCache { .. }), "{err:?}");
     }
 
     #[test]
