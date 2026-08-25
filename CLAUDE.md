@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document formats, designed with LLM-first principles. The goal is to enable AI agents (like Claude Code) to generate Korean government proposal documents using natural language + Markdown + YAML style templates.
 
-**Current Status** (snapshot — 2026-07-25):
+**Current Status** (snapshot — 2026-08-25):
 
 - HWPX codec: read/write shipped · Markdown bridge: read/write shipped
 - HWP5 → HWPX converter path: active, style/layout fidelity line in progress
@@ -18,6 +18,8 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 - **E6 IR 와이어-누출 상환 완료** (`0.9.0`): Summery rename(A) · BookmarkName collapse(B) · raw wire 필드 제거(C) · `inst_id`/`SystemId`→공유 `ObjectId`(M2). **H1(display_text)=Won't-do** (ADR-009 §CLOSURE, memory `e6-wire-leak-status-h1-wontdo.md`).
 - **0.10.0 릴리스** (2026-07-02): colLine(다단 구분선) HWPX+HWP5 carry(breaking) + rmcp 2.0 보안(GHSA-89vp-x53w-74fx)·quick-xml 0.41 + 문서 정합.
 - **AI 편집(에이전트 편집) 전 에픽 배포 완료** (2026-07-12~24, `0.11.0`→`0.11.6`): E1 누름틀 채우기(`0.11.0`, `feat!:` `display_text` 의미 변경) · E2 `fill` 델타 API·`fields`(`0.11.1`) · E6 템플릿 스탬핑 W1(`0.11.2`) · E3 표 격자 주소+`set-cell`(`0.11.3`) · E6 W2 클래스-B 셀 스탬핑+`layout_carry` linesegarray 보존(`0.11.4`) · E5 outline/read/diff 읽기 3표면(`0.11.5`) · E4 문단 구조 편집 `insert-para`/`delete-para`(`0.11.6`, preserve-first 바이트 스플라이스 + reverse-delta self-verify). 설계/로드맵 = `.docs/planning/2026-07-10-agent-editing-architecture.md` (남은 후속: E4b 표 행 편집 · `<hp:t>` 줄 경계 분할 보존 등 backlog).
+- **PDF Export 에픽 배포** (2026-07-26~08-12, `0.12.0`→`0.13.1`): smithy-pdf 신설 — 조판 캐시 **재생**(계산 금지) 렌더: 표·머리말/꼬리말·쪽번호·폰트 파이프라인(face 축·fsType)·CLI `to-pdf`(스니핑·3채널 경고 DTO). 에픽 canonical = `.docs/planning/2026-07-26-pdf-export-epic.md`.
+- **이미지/글상자 렌더 에픽 W1b~W5 배포** (2026-08-14~25, `0.14.0`→**`0.16.0`**): W1b 좌표 ledger(가시 textpos 통일, `0.15.0`) · W2 인라인 이미지(`0.15.1`) · W3 표 셀 이미지+축약점 earliest-preimage(`0.15.2`) · W4 글상자 렌더+**ObjectPlacement 공용화(breaking — 도형 11종 hp:pos 캐리)** · W5 글상자 내부 인라인+body 앵커 렌더+HWP5 앵커 비트 byte-ground → **`0.16.0`** (트리거 3막 사고 — Releasing 절 필수 조건 2건 참조). 에픽 canonical = `.docs/planning/2026-08-13-image-textbox-epic.md` (잔여: sub-line-height 인라인 이미지 · W6 마감 · CI 다이어트 제안 `.docs/planning/2026-08-25-ci-diet-proposal.md`).
 
 > **이 섹션은 짧은 상태 스냅샷으로만 유지한다 (wave-by-wave 이력을 여기 다시 쌓지 말 것).**
 > Wave별 상세 이력 + breaking change: **`CHANGELOG.md`** (canonical) 와 memory `MEMORY.md` / `phase11_wave_history.md`.
@@ -34,7 +36,7 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 
 **Workspace Facts** (code-grounded — 카운트는 drift하니 인용 전 확인):
 
-- Cargo packages `11` · crates.io published `0.11.6` (E4 문단 구조 편집, 2026-07-24) · MSRV `1.88` · Dev toolchain Rust `1.93`
+- Cargo packages `11` · crates.io published `0.16.0` (W5 앵커/글상자 렌더 + ObjectPlacement, 2026-08-25) · MSRV `1.88` · Dev toolchain Rust `1.93`
 - `crates/` 추적 src 파일 ~`177` · nextest ~`2,688` passed + `2` skipped · `examples/` 산출물 `68`+ (미추적 `examples/hwp5_review/` 리뷰 영역 별도 — gitignore 아님) · GitHub workflows `5`
 
 ---
@@ -111,6 +113,10 @@ bacon test    # Auto-run tests
 - `rm` 은 대화형 alias — stale `.git/index.lock`(0바이트·git 프로세스 없음 확인 후) 등 스크립트 삭제는 `rm -f`.
 - 대용량 정리: `target/`(수백 GB 가능)·`fuzz/target`·`.docs/papers/EAAI/eval/oracle-rs/target` 은 재생성 가능 빌드 산출물. `.docs/papers`(corpus·논문)·`fuzz/corpus` 는 자산 — 삭제 금지. **디스크 고갈 시 우선 삭제 = `target/debug/incremental`(94GB 실사고)·`target/llvm-cov-target`** — `target/debug/deps`(warm 의존성 캐시)는 보존해 cold 재빌드를 피한다.
 - pre-commit 은 **미스테이지 변경을 stash 하고 staged 트리만 검사** — 다파일 수정에서 하나라도 `git add` 누락하면 staged 트리가 컴파일 실패로 거부됨 (원인이 "숨은 미스테이지 파일"이라 오진하기 쉬움). 커밋 전 `git status --short` 로 관련 파일 전부 staged(`M`) 확인.
+- **`git add -u` 는 신규 파일을 안 잡는다** — 신규 모듈 포함 커밋에서 스테이징 후 `git status --short` 의 `??` 잔존 확인 필수. **훅 clippy 는 디스크 파일을 봐서 이 누락을 못 잡음** → "훅 통과 + clean-checkout 컴파일 불가 커밋" 사고 (placement.rs 실사고, reset --mixed 재구성으로 복구).
+- **stale `.git/index.lock` 은 반복 사고** — 백그라운드 에이전트/세션이 강제 종료될 때 0바이트 lock 잔존. `ls -la .git/index.lock`(0바이트) + git 프로세스 없음 확인 후 `rm -f`.
+- CLI **`convert` 는 Markdown→HWPX 전용** — HWP5 변환은 **`convert-hwp5`**. `convert` 에 .hwp 를 넣으면 "stream did not contain valid UTF-8" (텍스트로 읽음).
+- **백그라운드(run_in_background) Bash 는 cwd 가 포그라운드와 다를 수 있음** — 백그라운드 스크립트의 경로는 전부 절대 경로로 (상대 경로 FILE_READ_FAILED 오진 사고).
 - **zsh 는 미인용 변수를 word-split 하지 않음** — `CMD="node /x.mjs"; $CMD status` 는 전체가 하나의 명령명 (조용한 command-not-found → 루프/조건 오탐). 스크립트에서 명령을 변수에 담지 말고 인라인 전체 경로로 (`for x in $VAR` 미분리와 동계열).
 - Bash 작업 디렉터리는 **호출 간 지속** — 앞서 `cd` 한 상태에서 레포-루트 상대 경로(git add 등)를 쓰면 pathspec fatal. 커밋/스테이지 명령은 절대 경로 또는 루트 복귀 후 실행.
 
@@ -386,13 +392,14 @@ Local planning and research workspace. It may be git-excluded in this repository
 - **inter-crate 의존성은 `version = "0"` 유지 — 정확 핀으로 "고치지" 말 것.** 통합버전(`version.workspace = true`) 워크스페이스에서 release-plz 는 커밋 없는 베이스 crate 를 못 올려, 정확 핀이면 breaking bump 시 `failed to select a version` 으로 Release PR 생성이 죽음 (PR #94 로 해결; `version_group`·`release_always` 는 무효 — 로컬 전수검증, memory `release-plz-unified-version-workspace.md`).
 - **release-plz 디버깅은 로컬 프리빌트로 재현** (CI 머지 사이클로 추측 금지): `gh release download release-plz-v0.3.159 --repo release-plz/release-plz` + 깨끗한 clone 에서 `release-plz update`. `{{ release_link }}` 는 로컬 렌더 실패 → 임시 제거 후 실험 (cargo install 은 rustc 1.94 요구로 로컬 1.93 에서 실패).
 - **publish 검증**: crates.io API(`crates.io/api`) 는 샌드박스에서 막힐 수 있음 → sparse index `index.crates.io/hw/pf/<crate>`(`dangerouslyDisableSandbox`)로 published 버전 확인.
-- **릴리스 완주 판정**: GitHub Release 는 release-plz 실행 **도중** 먼저 게시되고 그 이벤트가 npm-publish 를 트리거 → release-plz·npm-publish **둘 다 success** + npm 레지스트리(`npm view @hwpforge/mcp version`)·sparse index 실측까지 확인해야 완료 (Release 게시만 보고 완료 오판 금지).
+- **릴리스 완주 판정**: GitHub Release 는 release-plz 실행 **도중** 먼저 게시되고 그 이벤트가 npm-publish 를 트리거 → release-plz·npm-publish **둘 다 success** + npm 레지스트리(`npm view @hwpforge/mcp version`)·sparse index 실측까지 확인해야 완료 (Release 게시만 보고 완료 오판 금지). **Release PR 생성 여부도 실측**: release-plz 로그의 `release_pr_output` 이 `{"prs":[]}` 면 미발화다 (0.16.0 사고 — 2회 미발화 후 발견).
+- **breaking/릴리스 트리거 커밋의 2대 필수 조건** (0.16.0 3막 사고, memory `breaking-commit-bang-position-release-trigger.md`): ① subject 는 `type(scope)!:` (**`type!(scope):` 는 release_commits regex 불일치로 통째 무시**) ② **대상 크레이트의 파일을 실제로 변경**해야 함 — release-plz 의 커밋→패키지 귀속은 변경 파일 경로 기반이라 **빈 커밋은 발화하지 않는다** (publish=false 크레이트만 건드린 PR 도 동일).
 
 ---
 
 ## Gotchas & Common Mistakes
 
-> **상세 내용 (코드 예제 포함)**: `.docs/references/gotchas.md` (40항목)
+> **상세 내용 (코드 예제 포함)**: `.docs/references/gotchas.md` (43항목)
 
 1. HWP5 TagID +16 오프셋 — `PARA_HEADER` = 0x42 (66), not 0x32 (50)
 2. landscape 스펙 반전 — `WIDELY`=세로, `NARROWLY`=가로. width/height 교환 금지
@@ -424,6 +431,9 @@ Local planning and research workspace. It may be git-excluded in this repository
 28. 도형/글상자 텍스트 **세로정렬 = HWP5 ListHeader 속성 bits 5-6** (`(props>>5)&0x03`, 0/1/2=Top/Center/Bottom). 표 셀 디코드(`smithy-hwp5/src/decoder/section/mod.rs`)가 ground truth — openhwp `(props>>2)`는 우리 wire와 불일치
 29. 도형 drawText `<hp:subList textWidth/textHeight>` = **`0`이 Hancom-정답** (렌더러는 `<hp:sz>`−`<hp:textMargin>`(기본 283)으로 텍스트 영역 계산). 계산값으로 "고치지" 말 것 — 한컴 fixture·KS X 6101 샘플 141 확인
 30. 누름틀(ClickHere) 본문 = `fieldBegin`~`fieldEnd` 사이 평범한 `<hp:t>` (미채움 = 힌트와 동일 문자열). `display_text` 빈 문자열 = 미채움/모호 sentinel — patch 슬롯·redact·fill 이 전부 ClickHere-gated 로 이 불변식 공유. 한컴 재저장은 라벨 run 을 필드 run 에 병합 → run 에 `<hp:t>` 1개일 때만 본문 무모호 귀속 (HxRun 은 자식 순서 미보존)
+31. HWPX `hp:pos` 음수 offset = **u32 랩어라운드 십진 문자열** (`horzOffset="4294965029"` = −2267) / HWP5 는 signed i32 — 파서는 u32 파싱 후 i32 캐스트 (i32 직파싱은 오버플로우)
+32. 한컴 저작 정규화 3종: API 가 쓴 음수 vertOffset 은 **재저장에서 0 클램프** · **드래그는 앵커 재지정**(가장 가까운 위 문단 + 작은 양수 offset — 음수를 안 씀) · 음수 offset 은 **개체 속성 대화상자 직접 입력만** 저작 가능 (corpus 음수 값의 출처)
+33. HWP5 개체 공통 속성 word(표 70) 비트 배치 = `WIRE_SPEC.md §22.5` (bit0 글자취급 · 3-4 vertRelTo · 8-9 horzRelTo · 21-23 wrap · 24-25 flow — **글자취급 bit0 은 TextBox 컨텍스트에서도 유효**, 컨텍스트별 하드코딩 관례 금지). 앵커 축 census 는 반드시 byte-ground 디코드 후에 — 관례-필터 데이터는 동어반복
 
 ---
 
