@@ -860,12 +860,15 @@ fn emit_anchor_clipped(
             let has_admitted_images =
                 para.runs.iter().any(|r| crate::source::is_admitted_inline_image(&r.content));
             let line_atoms_override = if has_admitted_images {
-                let atoms = crate::source::build_inline_image_line_atoms(para, cache, &para_loc)?;
+                let atoms = crate::source::build_cell_image_line_atoms(para, cache, &para_loc)?;
                 for (li, line) in atoms.iter().enumerate() {
                     for atom in line {
                         if let crate::source::LineAtom::Image(img) = atom {
                             let seg = &cache.lines[li];
-                            if !crate::source::line_matches_image_height(seg, img.height) {
+                            // 표 셀은 sub-line 이미지 미개방 (W1 범위 밖 — 셀 내부
+                            // 세로 원점 실측 fixture 부재) → 이미지-지배 삼중
+                            // 일치만 허용, 그 외는 fail-closed.
+                            if !crate::source::line_matches_object_height(seg, img.height) {
                                 return Err(PdfError::InvalidCache {
                                     detail: format!(
                                         "{para_loc}/l{li}: image height {} != line vertsize {} / \
@@ -949,6 +952,7 @@ fn emit_anchor_clipped(
                     atoms: line_atoms,
                     top_y: content_y + seg.vertpos,
                     baseline_y: content_y + seg.vertpos + seg.baseline,
+                    vertsize: seg.vertsize,
                     line_box: LineBox { horzpos: content_x + seg.horzpos, horzsize: seg.horzsize },
                     is_last_line: li + 1 == line_count,
                     alignment,

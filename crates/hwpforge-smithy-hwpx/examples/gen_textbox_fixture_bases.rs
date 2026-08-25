@@ -50,6 +50,16 @@ fn save(name: &str, paragraphs: Vec<Paragraph>) {
 }
 
 fn save_with_images(name: &str, paragraphs: Vec<Paragraph>, images: ImageStore) {
+    let store = style_store_for_preset("latest").expect("latest preset");
+    save_with_store_and_images(name, paragraphs, store, images);
+}
+
+fn save_with_store_and_images(
+    name: &str,
+    paragraphs: Vec<Paragraph>,
+    store: hwpforge_smithy_hwpx::HwpxStyleStore,
+    images: ImageStore,
+) {
     let path = format!("examples/hwp5_review/{name}-base.hwpx");
     // 재저장 공동 제작 흐름에서 사용자가 같은 이름으로 한컴 재저장본을
     // 남기므로, 이미 존재하면 절대 덮어쓰지 않는다 (재저장본 소실 사고
@@ -58,7 +68,6 @@ fn save_with_images(name: &str, paragraphs: Vec<Paragraph>, images: ImageStore) 
         println!("SKIP (이미 존재 — 덮어쓰기 금지): {path}");
         return;
     }
-    let store = style_store_for_preset("latest").expect("latest preset");
     let mut doc = Document::new();
     doc.add_section(Section::with_paragraphs(paragraphs, PageSettings::a4()));
     let validated = doc.validate().expect("validate");
@@ -301,6 +310,119 @@ fn main() {
                 text_para("둘째 문단입니다 — 돌출 영역과 겹칠 수 있습니다."),
                 anchor_para,
                 text_para("앵커 뒤 문단입니다."),
+                text_para("문서 끝 문단입니다."),
+            ],
+            images,
+        );
+    }
+
+    // ⑨ sub-line 세로 배치 규칙 판별용 v2 (설계 §10 w0): 한 라운드 5측점 —
+    //    같은 줄높이(10pt) 2크기 = 비율/상수 판별 · 큰 글꼴(20pt) 줄 2크기
+    //    = 줄높이 의존성 · 글상자 내부 1점 = 컨텍스트 parity 재확인.
+    {
+        use hwpforge_core::image::{Image, ImageFormat};
+        use hwpforge_foundation::HwpUnit as HU;
+        let mut store = style_store_for_preset("latest").expect("latest preset");
+        let mut big = store.char_shape(CharShapeIndex::new(0)).expect("char shape 0").clone();
+        big.height = HU::from_pt(20.0).expect("20pt");
+        let big_cs = store.push_char_shape(big);
+        let mut images = ImageStore::new();
+        images.insert(
+            "fixture-image.png",
+            std::fs::read("examples/hwp5_review/fixture-image.png").expect("png asset"),
+        );
+        let img_mm = |mm: f64| {
+            Image::new(
+                "fixture-image.png",
+                HU::from_mm(mm).expect("w"),
+                HU::from_mm(mm).expect("h"),
+                ImageFormat::Png,
+            )
+        };
+        let mixed = |label: &str, mm: f64, cs: CharShapeIndex| {
+            Paragraph::with_runs(
+                vec![
+                    Run::text(format!("{label}: 앞 "), cs),
+                    Run::image(img_mm(mm), cs),
+                    Run::text(" 뒤 텍스트.", cs),
+                ],
+                ParaShapeIndex::new(0),
+            )
+        };
+        let cs0 = CharShapeIndex::new(0);
+        save_with_store_and_images(
+            "subline_image_v2",
+            vec![
+                text_para("sub-line 배치 판별 v2 문서입니다."),
+                mixed("A(10pt·2mm)", 2.0, cs0),
+                mixed("B(10pt·3mm)", 3.0, cs0),
+                mixed("C(20pt·3mm)", 3.0, big_cs),
+                mixed("D(20pt·5mm)", 5.0, big_cs),
+                textbox_para(vec![mixed("E(박스·3mm)", 3.0, cs0)], 80.0, 25.0, VerticalAlign::Top),
+                text_para("문서 끝 문단입니다."),
+            ],
+            store,
+            images,
+        );
+    }
+
+    // ⑩ sub-line v3 판별 2점 (설계 §10c-3): F = 다른 face(함초롬돋움,
+    //    프리셋 cs=1) 줄의 3mm 이미지 — k 가 폰트 종속인지 상수인지 판별.
+    //    G = border=0 글상자 안 3mm — E 이탈(+8.7u)이 박스 테두리 폭
+    //    미반영 갭인지 판별 (border 소거 시 이탈 소멸 여부).
+    {
+        use hwpforge_core::image::{Image, ImageFormat};
+        use hwpforge_foundation::HwpUnit as HU;
+        let mut images = ImageStore::new();
+        images.insert(
+            "fixture-image.png",
+            std::fs::read("examples/hwp5_review/fixture-image.png").expect("png asset"),
+        );
+        let img3 = || {
+            Image::new(
+                "fixture-image.png",
+                HU::from_mm(3.0).expect("w"),
+                HU::from_mm(3.0).expect("h"),
+                ImageFormat::Png,
+            )
+        };
+        let mixed = |label: &str, cs: CharShapeIndex| {
+            Paragraph::with_runs(
+                vec![
+                    Run::text(format!("{label}: 앞 "), cs),
+                    Run::image(img3(), cs),
+                    Run::text(" 뒤 텍스트.", cs),
+                ],
+                ParaShapeIndex::new(0),
+            )
+        };
+        let cs0 = CharShapeIndex::new(0);
+        let dotum = CharShapeIndex::new(1); // 프리셋: 함초롬돋움 10pt
+        let borderless_box = Paragraph::with_runs(
+            vec![Run::control(
+                Control::TextBox {
+                    paragraphs: vec![mixed("G(무테박스·3mm)", cs0)],
+                    width: HwpUnit::from_mm(80.0).expect("width"),
+                    height: HwpUnit::from_mm(25.0).expect("height"),
+                    placement: None,
+                    caption: None,
+                    style: Some(ShapeStyle {
+                        line_color: None,
+                        line_width: Some(0),
+                        ..Default::default()
+                    }),
+                    text_vertical_align: VerticalAlign::Top,
+                },
+                cs0,
+            )],
+            ParaShapeIndex::new(0),
+        );
+        save_with_images(
+            "subline_image_v3",
+            vec![
+                text_para("sub-line 판별 v3 문서입니다."),
+                mixed("F(돋움 10pt·3mm)", dotum),
+                borderless_box,
                 text_para("문서 끝 문단입니다."),
             ],
             images,

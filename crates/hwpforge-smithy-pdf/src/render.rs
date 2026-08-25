@@ -396,6 +396,47 @@ pub(crate) fn build_paint_pages(
 /// — 재귀 자체는 원자 종류에 일반적이라 테스트가 내부 이미지 원자를
 /// 합성해도 동작한다 (리뷰 Low-3 문구 정정). 반환 Vec 순서 = z-order.
 #[allow(clippy::too_many_arguments)]
+/// sub-line 인라인 이미지가 baseline 아래로 얹히는 descent 비율 k 의 분자
+/// (`descent = img_h × NUM / DEN`) — Hancom 내부 상수 (TEXTBOX_TEXT_MARGIN=283
+/// 과 같은 계열의 매직 상수). 이미지 bottom = `baseline + k × img_h` 로, 이미지가
+/// 자기 크기에 비례한 descent 를 가진 글리프처럼 baseline 에 정렬된다.
+///
+/// 실측 k ≈ 0.152 (subline_image_v2 body 4측점 0.1499~0.1523). **폰트 메트릭
+/// 유도가 아니다** — hhea descent/em 0.23·OS/2 typo 0.170·win 0.23 어느 정의와도
+/// 불일치(적대 리뷰 r2 가 TTF 직접 파싱으로 실증). lineseg 비율
+/// ((vertsize−baseline)/vertsize = 0.150)과 이 상수(0.152)는 현 데이터(단일 글꼴
+/// 패밀리·85:15 고정 줄 메트릭)로 비식별이며, 상수 vs 비율 판별은 **다른 글꼴
+/// 패밀리 실측(w2 v3 fixture) 몫**이다 — 그때까지 폰트 스케일-불변 상수가 안전하다.
+const SUBLINE_IMAGE_DESCENT_RATIO_NUM: i64 = 152;
+/// [`SUBLINE_IMAGE_DESCENT_RATIO_NUM`] 의 분모 (per-mille 표현).
+const SUBLINE_IMAGE_DESCENT_RATIO_DEN: i64 = 1000;
+
+/// 인라인 이미지 원자의 세로 top(HWPUNIT)을 유도한다 (W1 §10c-2, r2 상수형).
+///
+/// 두 레짐을 **분기**로 처리한다 — 상수 k 로는 한 공식으로 일반화되지 않으므로
+/// 이미지-지배 경로를 그대로 둔다 (r2 ②, 회귀 위험 0):
+///
+/// - **이미지-지배**(`img_h >= vertsize`): 이미지가 줄 높이를 결정 → 기존
+///   계약대로 top = `line_top`.
+/// - **sub-line**(`img_h < vertsize`, 텍스트-지배 줄): 이미지가 baseline 에 얹혀
+///   자기 크기 비례 descent 를 가진다 —
+///   `image_top = line_top + baseline − img_h + img_h × k`,
+///   k = [`SUBLINE_IMAGE_DESCENT_RATIO_NUM`] / [`SUBLINE_IMAGE_DESCENT_RATIO_DEN`].
+///
+/// 정수(HWPUNIT) 산술 — descent 항은 절단 나눗셈(기존 관례), 중간 곱은 i64 로
+/// 승격해 오버플로가 없다. `vertsize ≤ 0`(퇴화 줄)은 세로 보정 불가 → `line_top`.
+fn inline_image_top(line_top: i32, baseline: i32, vertsize: i32, img_h: i32) -> i32 {
+    // 이미지-지배(또는 퇴화 줄) = 기존 계약(top=line_top). 상수 k 로는 이 경로가
+    // line_top 으로 환원되지 않으므로 명시 분기로 남긴다.
+    if vertsize <= 0 || img_h >= vertsize {
+        return line_top;
+    }
+    let descent =
+        (i64::from(img_h) * SUBLINE_IMAGE_DESCENT_RATIO_NUM) / SUBLINE_IMAGE_DESCENT_RATIO_DEN;
+    let top = i64::from(line_top) + i64::from(baseline) - i64::from(img_h) + descent;
+    top.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32
+}
+
 fn render_line(
     input: &PdfInput<'_>,
     options: &PdfOptions,
@@ -533,14 +574,18 @@ fn render_line(
     for atom in prepared {
         let p = match atom {
             PreparedAtom::Image { canonical_key, data, width, height } => {
+                // 세로 배치 = §10c-2 분기 (이미지-지배는 line_top, sub-line 은
+                // baseline + 상수 k descent). baseline = baseline_y − top_y.
+                let image_top = inline_image_top(
+                    line.top_y,
+                    line.baseline_y - line.top_y,
+                    line.vertsize,
+                    height,
+                );
                 out.push(PaintItem::Image(crate::paint::ImageItem {
                     canonical_key,
                     data,
-                    origin: Point {
-                        x: Pt::from_hwpunit_f64(x),
-                        // W0a 실측 계약: 이미지 top = 줄 top.
-                        y: Pt::from_hwpunit(line.top_y),
-                    },
+                    origin: Point { x: Pt::from_hwpunit_f64(x), y: Pt::from_hwpunit(image_top) },
                     size: Size { width: Pt::from_hwpunit(width), height: Pt::from_hwpunit(height) },
                     location: line.location.clone(),
                 }));
@@ -691,6 +736,7 @@ fn build_textbox_clip_group(
             atoms: inner.atoms.clone(),
             top_y: abs_top,
             baseline_y: abs_top + inner.seg.baseline,
+            vertsize: inner.seg.vertsize,
             line_box: crate::text::align::LineBox {
                 horzpos: box_x + margin + inner.seg.horzpos,
                 horzsize: inner.seg.horzsize,
@@ -758,6 +804,7 @@ mod atom_tests {
                 })],
                 top_y: 5000,
                 baseline_y: 5000 + 2550,
+                vertsize: 3000, // 이미지-지배(img_h==vertsize) → top==line_top.
                 line_box: LineBox { horzpos: 8504, horzsize: 42520 },
                 is_last_line: true,
                 alignment: Alignment::Left,
@@ -800,6 +847,46 @@ mod atom_tests {
         assert!((img.origin.y.0 - Pt::from_hwpunit(5000).0).abs() < 1e-9);
         assert!((img.size.width.0 - Pt::from_hwpunit(2000).0).abs() < 1e-9);
         assert!((img.size.height.0 - Pt::from_hwpunit(3000).0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn subline_image_atom_paints_at_descent_formula_y() {
+        // 리뷰 Low-2 잠금 (CI 실행·fixture 불요): render_line →
+        // inline_image_top 의 인자 결선(top_y·baseline·vertsize·height)을
+        // sub-line 분기(img_h < vertsize)에서 잠근다 — 결선 전치(baseline↔
+        // vertsize 스왑 등)는 좌표가 달라져 즉시 적발된다.
+        // 기대 y = top_y + baseline − img_h + img_h×152/1000
+        //        = 5000 + 850 − 567 + 86 = 5369 (A 측점 산술과 동일).
+        let mut layout = image_only_layout();
+        let line = &mut layout.lines[0];
+        line.atoms = vec![LineAtom::Image(LineImage {
+            canonical_key: "img1.png".into(),
+            width: 567,
+            height: 567,
+        })];
+        line.baseline_y = 5000 + 850;
+        line.vertsize = 1000; // 텍스트-지배 줄 — sub-line 분기.
+        let doc = minimal_doc();
+        let input = PdfInput { document: &doc, styles: &ImgStyles };
+        let options = PdfOptions::default();
+        let mut table = FontTable::new(
+            FontResolver::with_discovery(&[], crate::font::FontDiscovery::ExplicitOnly)
+                .expect("resolver"),
+        );
+        let mut warnings = Vec::new();
+        let pages = build_paint_pages(&input, &options, &[layout], &mut table, &mut warnings)
+            .expect("paint");
+        assert!(warnings.is_empty(), "{warnings:?}");
+        let images: Vec<_> = pages[0]
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                PaintItem::Image(item) => Some(item),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(images.len(), 1);
+        assert!((images[0].origin.y.0 - Pt::from_hwpunit(5369).0).abs() < 1e-9);
     }
 
     /// W5 w1b: 앵커 이미지는 `PaintItem::Image` 로 절대 배치되고, **배경**
@@ -941,7 +1028,9 @@ mod atom_tests {
     use hwpforge_foundation::VerticalAlign;
 
     /// 내부 이미지 원자 한 줄 (vertpos 0 · 지정 vertsize) — content-extent =
-    /// vertsize 를 준다.
+    /// vertsize 를 준다. 이미지는 **이미지-지배**(height == vertsize)로 둬서
+    /// 세로 배치가 줄 top 에 놓이게 한다 (valign 시프트 검증이 목적이라 세로
+    /// 배치는 image-dominated 분기로 고정 — sub-line 공식은 별도 테스트).
     fn inner_image_line(vertsize: i32) -> TextBoxLine {
         TextBoxLine {
             seg: LineSeg {
@@ -957,8 +1046,8 @@ mod atom_tests {
             },
             atoms: vec![LineAtom::Image(LineImage {
                 canonical_key: "img1.png".into(),
-                width: 500,
-                height: 500,
+                width: vertsize,
+                height: vertsize,
             })],
             alignment: Alignment::Left,
             is_last_line: true,
@@ -984,6 +1073,7 @@ mod atom_tests {
                 atoms: vec![LineAtom::TextBox(tb)],
                 top_y: 5000,
                 baseline_y: 5000,
+                vertsize: height, // 글상자 host 줄 높이 (이미지 원자 없음).
                 line_box: LineBox { horzpos: 8504, horzsize: 42520 },
                 is_last_line: true,
                 alignment: Alignment::Left,
@@ -1070,5 +1160,78 @@ mod atom_tests {
                 img.origin.y
             );
         }
+    }
+}
+
+/// sub-line 이미지 세로 배치([`inline_image_top`], 상수 k=152/1000) 산술 잠금
+/// (W1 §10c-2, r2 상수형).
+///
+/// 값은 subline_image_v2 fixture 의 실측 lineseg(vertsize/baseline)와 이미지
+/// 높이로부터 상수 k 로 유도한 것이다 — 한컴 PDF CTM 대조 잔차 body 4측점
+/// ≤0.04pt, 글상자 E 는 border-gap 계통차로 ≤0.08pt (e2e 가 대조).
+#[cfg(test)]
+mod subline_image_top_tests {
+    use super::inline_image_top;
+
+    /// 5측점(A~E) 실측 입력에 대한 Δtop(= image_top − line_top) 하드 잠금.
+    /// descent = img_h × 152 / 1000 (절단 나눗셈).
+    #[test]
+    fn five_measured_points_lock_delta_top() {
+        // (baseline, vertsize, img_h, 기대 Δtop) — descent 절단:
+        // A 86.184→86 · B 129.2→129 · C 129.2→129 · D 215.384→215
+        for (baseline, vertsize, img_h, expected) in [
+            (850, 1000, 567, 369),   // A: 10pt 줄 × 2mm  (850−567+86)
+            (850, 1000, 850, 129),   // B: 10pt 줄 × 3mm  (850−850+129)
+            (1700, 2000, 850, 979),  // C: 20pt 줄 × 3mm  (1700−850+129)
+            (1700, 2000, 1417, 498), // D: 20pt 줄 × 5mm  (1700−1417+215)
+            (850, 1000, 850, 129),   // E: 글상자 내부 3mm (내부-줄 상대, B 와 동일)
+        ] {
+            assert_eq!(
+                inline_image_top(0, baseline, vertsize, img_h),
+                expected,
+                "baseline={baseline} vertsize={vertsize} img_h={img_h}"
+            );
+        }
+    }
+
+    /// line_top 오프셋은 선형으로 더해진다 (쪽 절대 좌표).
+    #[test]
+    fn line_top_offset_is_additive() {
+        assert_eq!(inline_image_top(10_104, 850, 1000, 567), 10_104 + 369);
+    }
+
+    /// 이미지-지배(img_h ≥ vertsize)는 기존 계약대로 top == line_top (명시
+    /// 분기 — 상수 k 로는 일반화 안 됨). img_h > vertsize 방어 케이스 포함.
+    #[test]
+    fn image_dominated_places_at_line_top() {
+        for (line_top, baseline, vertsize, img_h) in [
+            (0, 850, 1000, 1000),      // img_h == vertsize
+            (5000, 2550, 3000, 3000),  // img_h == vertsize
+            (8504, 1700, 2000, 2000),  // img_h == vertsize
+            (12345, 6024, 7087, 7087), // img_h == vertsize
+            (500, 850, 1000, 1200),    // 방어: img_h > vertsize (admission 밖)
+        ] {
+            assert_eq!(
+                inline_image_top(line_top, baseline, vertsize, img_h),
+                line_top,
+                "img_h={img_h} >= vertsize={vertsize} 는 top==line_top 이어야 함"
+            );
+        }
+    }
+
+    /// 퇴화 줄(vertsize ≤ 0)은 세로 보정 불가 → line_top 폴백.
+    #[test]
+    fn nonpositive_vertsize_falls_back_to_line_top() {
+        assert_eq!(inline_image_top(1234, 850, 0, 500), 1234);
+        assert_eq!(inline_image_top(1234, 0, -5, 500), 1234);
+    }
+
+    /// 극단 크기에서도 오버플로 없이 계산된다 (i64 중간·clamp).
+    #[test]
+    fn large_inputs_do_not_overflow() {
+        // sub-line (img_h < vertsize): baseline − img_h + img_h×152/1000
+        // = 1_000_000 − 1_500_000 + 1_500_000×152/1000 = −272_000
+        let top = inline_image_top(100_000_000, 1_000_000, 2_000_000, 1_500_000);
+        assert_eq!(top, 100_000_000 - 272_000);
     }
 }
