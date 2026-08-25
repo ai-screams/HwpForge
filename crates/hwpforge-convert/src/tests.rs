@@ -4256,14 +4256,11 @@ fn hwp5_native_anchored_image_placement_axes_are_byte_ground() {
 fn hwp5_native_textbox_anchored_placement_axes_are_byte_ground() {
     // W5 w0 byte-ground 게이트 (글상자 경로): `textbox_anchored` 는 부유
     // `<hp:rect>` 글상자로, 속성 word 0x040a4110 → PARA/PAGE/SQUARE,
-    // allowOverlap=1, flowWithText=0, off (2834,8503). fixture 는 미추적
-    // 리뷰 영역(examples/hwp5_review)이라 경로 가드하되, 존재 시 실행한다.
-    let review = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../examples/hwp5_review");
-    let hwp_path = review.join("textbox_anchored-base.hwp");
-    let hwpx_path = review.join("textbox_anchored-base.hwpx");
-    if !hwp_path.exists() {
-        return;
-    }
+    // allowOverlap=1, flowWithText=0, off (2834,8503). W5 리뷰 L1 상환 —
+    // tracked fixture 승격으로 CI 에서도 무조건 실행한다.
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/images");
+    let hwp_path = fixtures.join("textbox_anchored.hwp");
+    let hwpx_path = fixtures.join("textbox_anchored.hwpx");
 
     let hwp_bytes = std::fs::read(&hwp_path).expect("hwp fixture readable");
     let hwp_doc = hwpforge_smithy_hwp5::decode_hwp5_with_images(&hwp_bytes)
@@ -4284,14 +4281,12 @@ fn hwp5_native_textbox_anchored_placement_axes_are_byte_ground() {
     };
     assert_eq!(hwp_placement, expected, "hwp5 text box placement must match measured hp:pos axes");
 
-    if hwpx_path.exists() {
-        let hwpx_bytes = std::fs::read(&hwpx_path).expect("hwpx fixture readable");
-        let hwpx_doc = HwpxDecoder::decode(&hwpx_bytes).expect("native hwpx decode should succeed");
-        let hwpx_placement = first_textbox_placement(&hwpx_doc.document)
-            .expect("hwpx decode should place the text box");
-        assert_eq!(
-            hwp_placement, hwpx_placement,
-            "HWP5-native and HWPX-native text box placement must agree on every axis (W5 w0)"
-        );
-    }
+    let hwpx_bytes = std::fs::read(&hwpx_path).expect("hwpx fixture readable");
+    let hwpx_doc = HwpxDecoder::decode(&hwpx_bytes).expect("native hwpx decode should succeed");
+    let hwpx_placement =
+        first_textbox_placement(&hwpx_doc.document).expect("hwpx decode should place the text box");
+    assert_eq!(
+        hwp_placement, hwpx_placement,
+        "HWP5-native and HWPX-native text box placement must agree on every axis (W5 w0)"
+    );
 }
