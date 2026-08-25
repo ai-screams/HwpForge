@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.15.2...hwpforge-core-v0.16.0) - 2026-08-25
+
+### Added
+
+- *(core)* **BREAKING** ObjectPlacement 공용화 릴리스 트리거 재선언 (파일 변경 동반)
+
+- feat!(core): 도형 placement 공용화 — ObjectPlacement 로 hp:pos 무음 소실 제거
+
+
 ## [0.14.0](https://github.com/ai-screams/HwpForge/compare/hwpforge-core-v0.13.1...hwpforge-core-v0.14.0) - 2026-08-13
 
 ### Added
