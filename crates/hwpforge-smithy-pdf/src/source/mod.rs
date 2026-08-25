@@ -143,10 +143,15 @@ pub struct LaidLine {
     /// 이 줄을 구성하는 원자들 (run 경계 분할 — 시각 순서, 텍스트/이미지 혼합).
     pub atoms: Vec<LineAtom>,
     /// 줄 상자 상단 y (HWPUNIT, 페이지 원점) — 인라인 이미지의 top 앵커
-    /// (W0a 실측: 이미지 top = 줄 top). `baseline_y − seg.baseline` 과 동치.
+    /// (이미지-지배 줄: 이미지 top = 줄 top). `baseline_y − seg.baseline` 과 동치.
     pub top_y: i32,
     /// baseline 세로 위치 (HWPUNIT, 쪽 상단 원점 — body_top + v + baseline).
     pub baseline_y: i32,
+    /// 줄 상자 높이 (HWPUNIT — `seg.vertsize`). sub-line 인라인 이미지의 세로
+    /// 배치 공식이 쓰는 줄 높이다 (§10c-2): 이미지가 줄 높이보다 작으면
+    /// baseline 에 얹혀 이미지 자체 descent 만큼 내려앉는다. baseline =
+    /// `baseline_y − top_y` 와 함께 [`crate::render`] 가 이미지 top 을 유도한다.
+    pub vertsize: i32,
     /// 줄 가로 상자 (HWPUNIT — body 좌변 반영, 정렬 미적용 상태).
     pub line_box: LineBox,
     /// 문단의 마지막 줄인지 (JUSTIFY 마지막 줄 규칙).
@@ -480,13 +485,20 @@ pub(crate) fn line_matches_object_height(
     seg.vertsize == height && seg.textheight == height
 }
 
-/// 줄이 이미지 지배 profile 인지 (이미지 기대 높이 = `image_height`).
-/// [`line_matches_object_height`] 의 이미지 이름 alias — 기존 호출부 유지.
-pub(crate) fn line_matches_image_height(
-    seg: &hwpforge_core::layout::LineSeg,
-    image_height: i32,
-) -> bool {
-    line_matches_object_height(seg, image_height)
+/// 줄이 인라인 이미지를 받을 수 있는 profile 인지 (W1 sub-line 확장 — §10b).
+///
+/// 두 레짐을 한 조건으로 담는다:
+///
+/// - **이미지-지배**: `img_h == vertsize == textheight` (기존 삼중 일치의
+///   특수형 — 이미지가 줄 높이를 결정).
+/// - **sub-line**: 텍스트-지배 줄(`vertsize == textheight`)에 이미지가 줄
+///   높이를 결정하지 않는 경우(`img_h ≤ vertsize`) — 이미지는 baseline 에
+///   얹힌다 (렌더 배치 = [`crate::render`] §10c-2 공식).
+///
+/// `vertsize != textheight`(미측정 profile)이거나 `img_h > vertsize`(이미지가
+/// 줄보다 큼)면 거부한다 (fail-closed — 추측 금지).
+pub(crate) fn line_admits_image(seg: &hwpforge_core::layout::LineSeg, image_height: i32) -> bool {
+    seg.vertsize == seg.textheight && image_height <= seg.vertsize
 }
 
 /// body admission 이 허용하는 글자취급(treat_as_char) 인라인 이미지인지
@@ -958,6 +970,7 @@ fn replay_band_item(
                 atoms: runs.into_iter().map(LineAtom::Text).collect(),
                 top_y: band_top + seg.vertpos,
                 baseline_y: band_top + seg.vertpos + seg.baseline,
+                vertsize: seg.vertsize,
                 line_box: LineBox { horzpos: body_left + seg.horzpos, horzsize: seg.horzsize },
                 is_last_line: line_idx + 1 == line_count,
                 alignment,
@@ -1206,17 +1219,20 @@ fn replay_section(
             });
         }
         let line_atoms_override = if has_admitted_images {
-            // 이미지 문단: image.height == vertsize == textheight (W0a profile).
+            // 이미지 문단 (W1 §10b): 이미지-지배(img_h==vertsize==textheight)
+            // 또는 sub-line(텍스트-지배 줄 + img_h ≤ vertsize) profile 을 받는다.
+            // 경계 귀속·sub-line 경계 fail-closed 는 helper 가 이미 처리했으므로
+            // 여기선 줄 profile 만 확인한다.
             let atoms = build_inline_image_line_atoms(para, cache, &location)?;
             for (li, line) in atoms.iter().enumerate() {
                 for atom in line {
                     if let LineAtom::Image(img) = atom {
                         let seg = &cache.lines[li];
-                        if !line_matches_image_height(seg, img.height) {
+                        if !line_admits_image(seg, img.height) {
                             return Err(PdfError::InvalidCache {
                                 detail: format!(
-                                    "{location}/l{li}: image height {} != line vertsize {} / \
-                                     textheight {} — unmeasured height profile",
+                                    "{location}/l{li}: image height {} not admissible on line \
+                                     vertsize {} / textheight {} — unmeasured height profile",
                                     img.height, seg.vertsize, seg.textheight
                                 ),
                             });
@@ -1316,6 +1332,7 @@ fn replay_section(
                 atoms: line_atoms,
                 top_y: body_top + v,
                 baseline_y: body_top + v + seg.baseline,
+                vertsize: seg.vertsize,
                 line_box: LineBox { horzpos: body_left + seg.horzpos, horzsize: seg.horzsize },
                 is_last_line: line_idx + 1 == line_count,
                 alignment,
@@ -1383,19 +1400,40 @@ fn validate_textpos(
     Ok(())
 }
 
+/// [`build_inline_object_line_atoms`] 의 `classify` 가 돌려주는 인라인 객체.
+///
+/// 폭 0 인 인라인 객체(이미지·글상자)를 줄에 귀속하기 위한 판별 재료다.
+pub(crate) struct ClassifiedObject {
+    /// 이미지-지배 경계 귀속용 host 줄 기대 높이 (삼중 일치 검사값).
+    pub height: i32,
+    /// sub-line 이미지처럼 **텍스트-지배 줄에 얹힐 수 있는** 객체인지
+    /// (W1 §10c-2). 참이면 줄 경계(공유 offset)에서 높이-profile 이 어느
+    /// 후보 줄에도 안 맞을 때 `InvalidCache` 대신 typed
+    /// `UnsupportedContent { kind: "sub-line image on line boundary" }` 로
+    /// fail-closed 한다 (집계 식별용). 글상자 등 항상 줄-지배 객체는 거짓.
+    pub sub_line_capable: bool,
+    /// 이 줄에 삽입할 원자.
+    pub atom: LineAtom,
+}
+
 /// 문단의 원자(텍스트 span·인라인 객체)를 캐시 줄별로 귀속하는 공용 엔진
 /// (W2b §4 D2 · W4 §8g — 인라인 이미지·글상자가 이 skeleton 을 공유한다).
 ///
 /// 단일 pass: run 순서대로 가시(UTF-16) 커서를 전진시키며 텍스트는 줄
-/// 경계로 분할한다. `classify` 가 `Some((height, atom))` 을 돌려준 run 은
-/// **폭 0 인 인라인 객체**로, 커서가 속한 줄에 문서 순서 그대로 삽입한다
-/// (`height` = 그 객체의 host 줄 기대 높이 — 경계 판별용). `None` 은 텍스트
-/// /marker 로 취급한다. 줄 구간 = non-last `[start, end)` · **last
+/// 경계로 분할한다. `classify` 가 [`ClassifiedObject`] 를 돌려준 run 은 **폭
+/// 0 인 인라인 객체**로, 커서가 속한 줄에 문서 순서 그대로 삽입한다. `None`
+/// 은 텍스트/marker 로 취급한다. 줄 구간 = non-last `[start, end)` · **last
 /// `[start, end]`** (trailing 객체·객체-only 문단 귀속 — §4 H3).
 ///
-/// fail-closed: 객체 offset 이 **첫 줄이 아닌** 줄 시작과 같으면 host 줄
-/// 높이 profile 이 유일하게 매치되는 쪽으로 귀속하고, 0/2 매치는
-/// `InvalidCache` (추측 금지 — W1b 영폭 축약 사각).
+/// fail-closed (줄 경계 = 첫 줄이 아닌 줄 시작과 offset 이 같을 때):
+/// - 높이-profile 삼중 일치가 **유일**한 후보 줄로 귀속 (이미지-지배 — §7 v2).
+/// - two-match = `InvalidCache` (모호).
+/// - zero-match = **sub-line 이미지면**(`sub_line_capable`) typed
+///   `UnsupportedContent`("sub-line image on line boundary" — C1 §10c-2),
+///   그 외에는 `InvalidCache` (추측 금지 — W1b 영폭 축약 사각).
+///
+/// sub-line 이미지는 **줄-중간**(offset 이 어느 줄 시작과도 다름)에서만
+/// admit 되고, 그 배치는 렌더 [`crate::render`] §10c-2 공식이 준다.
 ///
 /// 전제: `cache.lines` 의 textpos 는 단조 (본문 경로는 `validate_textpos`
 /// 가 선행 보장).
@@ -1403,7 +1441,7 @@ pub(crate) fn build_inline_object_line_atoms(
     para: &hwpforge_core::paragraph::Paragraph,
     cache: &hwpforge_core::layout::LayoutCache,
     location: &str,
-    mut classify: impl FnMut(&hwpforge_core::run::Run) -> PdfResult<Option<(i32, LineAtom)>>,
+    mut classify: impl FnMut(&hwpforge_core::run::Run) -> PdfResult<Option<ClassifiedObject>>,
 ) -> PdfResult<Vec<Vec<LineAtom>>> {
     let line_count = cache.lines.len();
     let mut atoms: Vec<Vec<LineAtom>> = vec![Vec::new(); line_count];
@@ -1436,17 +1474,35 @@ pub(crate) fn build_inline_object_line_atoms(
     // 줄로 갈리면 줄 순회 방출이 문서 순서를 뒤집는다 (r2 High#1).
     let mut boundary_target: Option<(usize, usize)> = None;
     for run in &para.runs {
-        if let Some((height, atom)) = classify(run)? {
+        if let Some(ClassifiedObject { height, sub_line_capable, atom }) = classify(run)? {
             let li = if let Some(i) = (1..line_count).find(|&i| starts[i] == cursor) {
                 // 경계 (offset == non-first 줄 시작): 후보 = 줄 i−1(끝)·
                 // 줄 i(시작). 높이-profile 삼중 일치가 **유일**한 쪽으로
                 // 귀속 (캐시가 기록한 실측 — §7 v2), 0/2개 매치 =
                 // fail-closed (추측 금지).
-                let prev = line_matches_object_height(&cache.lines[i - 1], height);
-                let next = line_matches_object_height(&cache.lines[i], height);
+                let prev_seg = &cache.lines[i - 1];
+                let next_seg = &cache.lines[i];
+                let prev = line_matches_object_height(prev_seg, height);
+                let next = line_matches_object_height(next_seg, height);
                 let target = match (prev, next) {
                     (true, false) => i - 1,
                     (false, true) => i,
+                    // 지배 profile 어디에도 안 맞음. sub-line 이미지가 경계에
+                    // 정확히 얹혔고 인접 줄이 이를 sub-line 으로 받을 수 있으면
+                    // (텍스트-지배 + img_h ≤ 줄높이) 귀속이 모호하다 —
+                    // C1(§10c-2): 줄-중간만 개방하고 경계는 typed fail-closed
+                    // (집계 식별용 신규 kind). 이미지가 어느 후보 줄에도 sub-line
+                    // 으로도 안 맞으면(과대 이미지 등) 기존 InvalidCache 유지.
+                    (false, false)
+                        if sub_line_capable
+                            && (line_admits_image(prev_seg, height)
+                                || line_admits_image(next_seg, height)) =>
+                    {
+                        return Err(PdfError::UnsupportedContent {
+                            kind: "sub-line image on line boundary",
+                            location: format!("{location} (offset {cursor})"),
+                        });
+                    }
                     (false, false) => {
                         return Err(PdfError::InvalidCache {
                             detail: format!(
@@ -1524,14 +1580,15 @@ pub(crate) fn build_inline_image_line_atoms(
 ) -> PdfResult<Vec<Vec<LineAtom>>> {
     build_inline_object_line_atoms(para, cache, location, |run| {
         Ok(match &run.content {
-            RunContent::Image(img) => Some((
-                img.height.as_i32(),
-                LineAtom::Image(LineImage {
+            RunContent::Image(img) => Some(ClassifiedObject {
+                height: img.height.as_i32(),
+                sub_line_capable: true,
+                atom: LineAtom::Image(LineImage {
                     canonical_key: img.path.clone(),
                     width: img.width.as_i32(),
                     height: img.height.as_i32(),
                 }),
-            )),
+            }),
             _ => None,
         })
     })
@@ -1560,7 +1617,13 @@ pub(crate) fn build_inline_textbox_line_atoms(
         let tb = build_line_text_box(input, ctrl, location)?;
         let extent = textbox_content_extent(&tb.inner_lines, location)?;
         let expected = textbox_expected_host_height(tb.height, extent)?;
-        Ok(Some((expected, LineAtom::TextBox(tb))))
+        // 글상자는 항상 host 줄을 지배한다 (sub-line 아님) — 경계는 기존
+        // 높이-profile 판별을 그대로 쓴다.
+        Ok(Some(ClassifiedObject {
+            height: expected,
+            sub_line_capable: false,
+            atom: LineAtom::TextBox(tb),
+        }))
     })
 }
 
@@ -1589,14 +1652,15 @@ pub(crate) fn build_textbox_inner_line_atoms(
 ) -> PdfResult<Vec<Vec<LineAtom>>> {
     build_inline_object_line_atoms(para, cache, location, |run| match &run.content {
         RunContent::Image(img) if img.placement.as_ref().is_none_or(|p| p.treat_as_char) => {
-            Ok(Some((
-                img.height.as_i32(),
-                LineAtom::Image(LineImage {
+            Ok(Some(ClassifiedObject {
+                height: img.height.as_i32(),
+                sub_line_capable: true,
+                atom: LineAtom::Image(LineImage {
                     canonical_key: img.path.clone(),
                     width: img.width.as_i32(),
                     height: img.height.as_i32(),
                 }),
-            )))
+            }))
         }
         RunContent::Image(_) => Err(PdfError::UnsupportedContent {
             kind: "anchored object inside text box",
@@ -1652,15 +1716,16 @@ fn build_line_text_box(
         let alignment = input.styles.para_alignment(para.para_shape_id).unwrap_or(Alignment::Left);
         let line_count = cache.lines.len();
         for (li, (seg, line_atoms)) in cache.lines.iter().zip(atoms_per_line).enumerate() {
-            // 이미지 지배 줄 삼중 일치 (body 와 동일 계약 — §4 D2): image.height
-            // == vertsize == textheight. 불일치 = 미측정 profile → fail-closed.
+            // 줄 profile 검사 (body 와 동일 계약 — W1 §10b): 이미지-지배
+            // (img_h==vertsize==textheight) 또는 sub-line(텍스트-지배 줄 +
+            // img_h ≤ vertsize). 불일치 = 미측정 profile → fail-closed.
             for atom in &line_atoms {
                 if let LineAtom::Image(img) = atom {
-                    if !line_matches_object_height(seg, img.height) {
+                    if !line_admits_image(seg, img.height) {
                         return Err(PdfError::InvalidCache {
                             detail: format!(
-                                "{inner_loc}/l{li}: inner image height {} != line vertsize {} / \
-                                 textheight {} — unmeasured height profile",
+                                "{inner_loc}/l{li}: inner image height {} not admissible on line \
+                                 vertsize {} / textheight {} — unmeasured height profile",
                                 img.height, seg.vertsize, seg.textheight
                             ),
                         });
@@ -1820,6 +1885,7 @@ mod tests {
             atoms: vec![LineAtom::TextBox(tb)],
             top_y: 0,
             baseline_y: 850,
+            vertsize: 11339, // 글상자 host 줄 높이 (이미지 원자 없음).
             line_box: LineBox { horzpos: 0, horzsize: 22677 },
             is_last_line: true,
             alignment: Alignment::Left,
@@ -2793,6 +2859,102 @@ mod tests {
             matches!(&err, PdfError::InvalidCache { detail } if detail.contains("different lines")),
             "{err:?}"
         );
+    }
+
+    // ── W1 sub-line 인라인 이미지 (§10) ──────────────────────────────
+
+    #[test]
+    fn line_admits_image_covers_dominant_and_subline() {
+        // 이미지-지배: img_h == vertsize == textheight.
+        assert!(line_admits_image(&seg(0, 0), 1000));
+        assert!(line_admits_image(&tall_seg(0, 0, 2000), 2000));
+        // sub-line: 텍스트-지배 줄(vertsize==textheight) + img_h ≤ vertsize.
+        assert!(line_admits_image(&seg(0, 0), 567));
+        assert!(line_admits_image(&seg(0, 0), 1));
+        // img_h > vertsize (이미지가 줄보다 큼): 거부.
+        assert!(!line_admits_image(&seg(0, 0), 1001));
+        // vertsize != textheight (미측정 profile): 거부.
+        let mixed = LineSeg { vertsize: 1000, textheight: 900, ..seg(0, 0) };
+        assert!(!line_admits_image(&mixed, 500));
+    }
+
+    #[test]
+    fn atoms_subline_image_mid_line_is_attributed() {
+        // sub-line 이미지(567 < 줄 1000)가 줄-중간(offset 2)에 있으면 경계
+        // 검사 없이 그 줄에 귀속된다 (C1: 줄-중간만 개방).
+        let mut para = Paragraph::with_runs(
+            vec![
+                Run::text("가나", CharShapeIndex::new(0)),
+                img_with_height("BinData/s.png", 567),
+                Run::text("다라마", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0)]));
+        let cache = para.layout_cache.clone().unwrap();
+        let atoms = build_inline_image_line_atoms(&para, &cache, "t").expect("mid-line sub-line");
+        assert_eq!(atom_kinds(&atoms[0]), ["text", "image", "text"]);
+    }
+
+    #[test]
+    fn atoms_subline_image_on_boundary_is_unsupported_content() {
+        // sub-line 이미지(567)가 비-첫 줄 경계(offset 3)에 정확히 얹힘 — 인접
+        // 두 줄 모두 텍스트-지배(1000)라 sub-line 으로 받을 수 있어 귀속 모호
+        // → C1 typed fail-closed(집계 식별용 신규 kind).
+        let mut para = Paragraph::with_runs(
+            vec![
+                Run::text("가나다", CharShapeIndex::new(0)),
+                img_with_height("BinData/b.png", 567),
+                Run::text("라마바", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0), seg(3, 1600)]));
+        let cache = para.layout_cache.clone().unwrap();
+        let err = build_inline_image_line_atoms(&para, &cache, "t").expect_err("boundary sub-line");
+        assert!(
+            matches!(&err, PdfError::UnsupportedContent { kind, .. }
+                if *kind == "sub-line image on line boundary"),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn atoms_oversized_image_on_boundary_stays_invalid_cache() {
+        // 과대 이미지(2000 > 줄 1000)는 어느 인접 줄에도 sub-line 으로도 안
+        // 맞음 → C1 신규 kind 아니라 기존 InvalidCache(zero-match) 유지.
+        let mut para = Paragraph::with_runs(
+            vec![
+                Run::text("가나다", CharShapeIndex::new(0)),
+                img_with_height("BinData/big.png", 2000),
+                Run::text("라마바", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0), seg(3, 1600)]));
+        let cache = para.layout_cache.clone().unwrap();
+        let err = build_inline_image_line_atoms(&para, &cache, "t").expect_err("oversized");
+        assert!(
+            matches!(&err, PdfError::InvalidCache { detail } if detail.contains("ambiguous")),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn atoms_subline_boundary_that_dominates_one_line_attributes_there() {
+        // 경계에서 이미지 높이가 한 후보 줄을 정확히 지배(next=1600 매치)하면
+        // sub-line 모호가 아니라 지배 귀속 — 기존 이미지-지배 경계 로직 무변.
+        let mut para = Paragraph::with_runs(
+            vec![
+                Run::text("가나다", CharShapeIndex::new(0)),
+                img_with_height("BinData/dom.png", 1600),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0), tall_seg(3, 1600, 1600)]));
+        let cache = para.layout_cache.clone().unwrap();
+        let atoms = build_inline_image_line_atoms(&para, &cache, "t").expect("dominant next");
+        assert_eq!(atom_kinds(&atoms[1]), ["image"]);
     }
 
     #[test]
