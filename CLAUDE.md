@@ -117,6 +117,8 @@ bacon test    # Auto-run tests
 - **stale `.git/index.lock` 은 반복 사고** — 백그라운드 에이전트/세션이 강제 종료될 때 0바이트 lock 잔존. `ls -la .git/index.lock`(0바이트) + git 프로세스 없음 확인 후 `rm -f`.
 - CLI **`convert` 는 Markdown→HWPX 전용** — HWP5 변환은 **`convert-hwp5`**. `convert` 에 .hwp 를 넣으면 "stream did not contain valid UTF-8" (텍스트로 읽음).
 - **백그라운드(run_in_background) Bash 는 cwd 가 포그라운드와 다를 수 있음** — 백그라운드 스크립트의 경로는 전부 절대 경로로 (상대 경로 FILE_READ_FAILED 오진 사고).
+- 시각 게이트 PDF 대조에서 "달라 보인다" 보고가 오면 먼저 **동일 배율 PNG**(`sips -s format png -Z <px>`)로 재판정 — 뷰어 확대율/스크롤 차이가 흔한 오탐. 정량 판정은 CTM 파서 bbox Δ(≤0.1pt 게이트)가 정본.
+- 백그라운드 executor 가 API 단절로 죽으면: **작업 트리 diff 부터 확인** — 변경 0 이면 전체 스펙으로 재시작, 부분 진행이면 SendMessage 로 재개(transcript 컨텍스트 보존). 죽을 때 stale `.git/index.lock` 을 남기는 일이 잦다.
 - **zsh 는 미인용 변수를 word-split 하지 않음** — `CMD="node /x.mjs"; $CMD status` 는 전체가 하나의 명령명 (조용한 command-not-found → 루프/조건 오탐). 스크립트에서 명령을 변수에 담지 말고 인라인 전체 경로로 (`for x in $VAR` 미분리와 동계열).
 - Bash 작업 디렉터리는 **호출 간 지속** — 앞서 `cd` 한 상태에서 레포-루트 상대 경로(git add 등)를 쓰면 pathspec fatal. 커밋/스테이지 명령은 절대 경로 또는 루트 복귀 후 실행.
 
