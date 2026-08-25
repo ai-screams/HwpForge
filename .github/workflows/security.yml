@@ -31,7 +31,7 @@ jobs:
         run: rustup show
       - uses: Swatinem/rust-cache@v2
       - name: Install cargo-deny
-        uses: taiki-e/install-action@v2.85.6
+        uses: taiki-e/install-action@v2.86.5
         with:
           tool: cargo-deny
       - name: Scan for security advisories
@@ -68,7 +68,7 @@ jobs:
         with:
           key: fuzz-build
       - name: Install cargo-fuzz
-        uses: taiki-e/install-action@v2.85.6
+        uses: taiki-e/install-action@v2.86.5
         with:
           tool: cargo-fuzz
       # Compile-check the fuzz targets so they don't bit-rot. Actual fuzzing
