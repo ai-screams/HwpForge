@@ -10,6 +10,7 @@ use hwpforge_core::control::Control;
 use hwpforge_core::document::{Document, Draft};
 use hwpforge_core::image::Image;
 use hwpforge_core::paragraph::Paragraph;
+use hwpforge_core::placement::{ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap};
 use hwpforge_core::run::Run;
 use hwpforge_core::table::Table;
 use hwpforge_foundation::{
@@ -4095,4 +4096,197 @@ fn hwp5_native_and_hwpx_native_decode_agree_on_image_treat_as_char() {
             "fixture={base}: HWP5-native and HWPX-native treat_as_char must agree (W2p parity)"
         );
     }
+}
+
+/// First image `ObjectPlacement` in document-traversal order (recursing into
+/// tables, text boxes, foot/endnotes). `None` if no placed image is found.
+fn first_image_placement(document: &Document<Draft>) -> Option<ObjectPlacement> {
+    fn in_paragraphs(paragraphs: &[Paragraph]) -> Option<ObjectPlacement> {
+        for paragraph in paragraphs {
+            for run in &paragraph.runs {
+                match &run.content {
+                    hwpforge_core::run::RunContent::Image(image) => {
+                        if let Some(placement) = &image.placement {
+                            return Some(placement.clone());
+                        }
+                    }
+                    hwpforge_core::run::RunContent::Table(table) => {
+                        for row in &table.rows {
+                            for cell in &row.cells {
+                                if let Some(found) = in_paragraphs(&cell.paragraphs) {
+                                    return Some(found);
+                                }
+                            }
+                        }
+                    }
+                    hwpforge_core::run::RunContent::Control(control) => {
+                        if let Control::TextBox { paragraphs, .. }
+                        | Control::Footnote { paragraphs, .. }
+                        | Control::Endnote { paragraphs, .. } = control.as_ref()
+                        {
+                            if let Some(found) = in_paragraphs(paragraphs) {
+                                return Some(found);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        None
+    }
+    for section in document.sections() {
+        if let Some(found) = in_paragraphs(&section.paragraphs) {
+            return Some(found);
+        }
+        for header in &section.headers {
+            if let Some(found) = in_paragraphs(&header.paragraphs) {
+                return Some(found);
+            }
+        }
+        for footer in &section.footers {
+            if let Some(found) = in_paragraphs(&footer.paragraphs) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+/// Placement of the first `Control::TextBox` in document-traversal order.
+/// Returns the (non-collapsed) `Some(ObjectPlacement)` of the first text box
+/// that carries a floating placement; `None` when no such text box is present.
+fn first_textbox_placement(document: &Document<Draft>) -> Option<ObjectPlacement> {
+    fn in_paragraphs(paragraphs: &[Paragraph]) -> Option<ObjectPlacement> {
+        for paragraph in paragraphs {
+            for run in &paragraph.runs {
+                match &run.content {
+                    hwpforge_core::run::RunContent::Control(control) => {
+                        if let Control::TextBox { placement: Some(placement), .. } =
+                            control.as_ref()
+                        {
+                            return Some(placement.clone());
+                        }
+                    }
+                    hwpforge_core::run::RunContent::Table(table) => {
+                        for row in &table.rows {
+                            for cell in &row.cells {
+                                if let Some(found) = in_paragraphs(&cell.paragraphs) {
+                                    return Some(found);
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        None
+    }
+    for section in document.sections() {
+        if let Some(found) = in_paragraphs(&section.paragraphs) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+#[test]
+fn hwp5_native_anchored_image_placement_axes_are_byte_ground() {
+    // W5 w0 byte-ground 게이트 (이미지 경로): `anchored_zero_origin_png` 의
+    // gso CtrlHeader 속성 word(0x040a2310)를 디코드한 Core placement 가
+    // 한컴이 companion `.hwpx` 에 쓴 `<hp:pos>` + `textWrap` 실측과 정확히
+    // 일치해야 한다. 이전 Flow 관례(Paper/Paper/InFrontOfText/overlap)를
+    // 폐기하고 실비트(Para/Para/Square/flowWithText)로 승격됐음을 잠근다.
+    let hwp_path = fixture_path("anchored_zero_origin_png.hwp");
+    let hwpx_path = fixture_path("anchored_zero_origin_png.hwpx");
+    assert!(hwp_path.exists(), "tracked fixture must exist: {}", hwp_path.display());
+    assert!(hwpx_path.exists(), "tracked fixture must exist: {}", hwpx_path.display());
+
+    let hwp_bytes = std::fs::read(&hwp_path).expect("hwp fixture readable");
+    let hwp_doc = hwpforge_smithy_hwp5::decode_hwp5_with_images(&hwp_bytes)
+        .expect("native hwp5 decode should succeed");
+    let hwp_placement =
+        first_image_placement(&hwp_doc.document).expect("hwp5 decode should place the image");
+
+    // 한컴 native hp:pos 실측: treatAsChar=0, flowWithText=1, allowOverlap=0,
+    // vertRelTo=PARA, horzRelTo=PARA, off (0,0); pic textWrap=SQUARE.
+    let expected = ObjectPlacement {
+        text_wrap: ObjectTextWrap::Square,
+        text_flow: ObjectTextFlow::BothSides,
+        treat_as_char: false,
+        flow_with_text: true,
+        allow_overlap: false,
+        vert_rel_to: ObjectRelativeTo::Para,
+        horz_rel_to: ObjectRelativeTo::Para,
+        vert_offset: HwpUnit::ZERO,
+        horz_offset: HwpUnit::ZERO,
+    };
+    assert_eq!(hwp_placement, expected, "hwp5 image placement must match measured hp:pos axes");
+
+    // companion .hwpx 는 OWPML wire 를 직접 읽는 독립 진리원 — 두 디코드가
+    // 완전히 동일해야 byte-ground 가 확증된다.
+    let hwpx_bytes = std::fs::read(&hwpx_path).expect("hwpx fixture readable");
+    let hwpx_doc = HwpxDecoder::decode(&hwpx_bytes).expect("native hwpx decode should succeed");
+    let hwpx_placement =
+        first_image_placement(&hwpx_doc.document).expect("hwpx decode should place the image");
+    assert_eq!(
+        hwp_placement, hwpx_placement,
+        "HWP5-native and HWPX-native image placement must agree on every axis (W5 w0 parity)"
+    );
+
+    // end-to-end encode 잠금: HWP5→HWPX 변환 산출물을 다시 디코드해 배치 축이
+    // `<hp:pos>`/`textWrap` 으로 온전히 방출됐는지 확인한다 (디코드-온리 게이트
+    // 위에 인코드 경로까지 닫는다).
+    let out = unique_temp_path("anchored_zero_origin_png_w5w0.hwpx");
+    let warnings = hwp5_to_hwpx(&hwp_path, &out).expect("fixture conversion should succeed");
+    assert!(warnings.is_empty(), "anchored image conversion should be warning-free");
+    let converted_bytes = std::fs::read(&out).expect("converted hwpx readable");
+    let converted = HwpxDecoder::decode(&converted_bytes).expect("converted hwpx should decode");
+    let converted_placement =
+        first_image_placement(&converted.document).expect("converted hwpx should place the image");
+    assert_eq!(
+        converted_placement, expected,
+        "HWP5→HWPX conversion must emit the byte-ground placement axes end-to-end (W5 w0)"
+    );
+    let _ = std::fs::remove_file(&out);
+}
+
+#[test]
+fn hwp5_native_textbox_anchored_placement_axes_are_byte_ground() {
+    // W5 w0 byte-ground 게이트 (글상자 경로): `textbox_anchored` 는 부유
+    // `<hp:rect>` 글상자로, 속성 word 0x040a4110 → PARA/PAGE/SQUARE,
+    // allowOverlap=1, flowWithText=0, off (2834,8503). W5 리뷰 L1 상환 —
+    // tracked fixture 승격으로 CI 에서도 무조건 실행한다.
+    let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/fixtures/images");
+    let hwp_path = fixtures.join("textbox_anchored.hwp");
+    let hwpx_path = fixtures.join("textbox_anchored.hwpx");
+
+    let hwp_bytes = std::fs::read(&hwp_path).expect("hwp fixture readable");
+    let hwp_doc = hwpforge_smithy_hwp5::decode_hwp5_with_images(&hwp_bytes)
+        .expect("native hwp5 decode should succeed");
+    let hwp_placement =
+        first_textbox_placement(&hwp_doc.document).expect("hwp5 decode should place the text box");
+
+    let expected = ObjectPlacement {
+        text_wrap: ObjectTextWrap::Square,
+        text_flow: ObjectTextFlow::BothSides,
+        treat_as_char: false,
+        flow_with_text: false,
+        allow_overlap: true,
+        vert_rel_to: ObjectRelativeTo::Para,
+        horz_rel_to: ObjectRelativeTo::Page,
+        vert_offset: HwpUnit::new(2_834).unwrap(),
+        horz_offset: HwpUnit::new(8_503).unwrap(),
+    };
+    assert_eq!(hwp_placement, expected, "hwp5 text box placement must match measured hp:pos axes");
+
+    let hwpx_bytes = std::fs::read(&hwpx_path).expect("hwpx fixture readable");
+    let hwpx_doc = HwpxDecoder::decode(&hwpx_bytes).expect("native hwpx decode should succeed");
+    let hwpx_placement =
+        first_textbox_placement(&hwpx_doc.document).expect("hwpx decode should place the text box");
+    assert_eq!(
+        hwp_placement, hwpx_placement,
+        "HWP5-native and HWPX-native text box placement must agree on every axis (W5 w0)"
+    );
 }

@@ -1,0 +1,12 @@
+{
+  "_doc": "W5 w1b body anchored-image bbox oracle. Recorded once from the native Hancom-authored PDF (examples/hwp5_review/floating_image_not_treat_as_char.pdf, untracked review asset) so the ±0.1pt gate is CI-durable without committing the 1.1MB PDF. hwpx_sha256 guards fixture drift; hancom_pdf_sha256 pins the source of the recorded numbers. Bbox is page-space top-left pt (support::extract_pages). Only the positive-vert-offset / first-paragraph / zero-horz-offset axis is oracle-validated by this fixture — see the epic doc §9e for the deferred (w2) axes.",
+  "fixtures": {
+    "floating_image_not_treat_as_char": {
+      "hwpx_sha256": "a69950ba85da8d73c6fd378d9b57cde31bda3c0dae563085335418fa40a9c18a",
+      "hancom_pdf_sha256": "cdf87d348876bdb87d8a72c09b0c3d3fb20e92d39f650f4b8049309bd907d92c",
+      "page_index": 0,
+      "axis": "positive vert_offset (4840) / first-paragraph (first_v=0) / horz_offset=0 / TOP_AND_BOTTOM / vert_rel=Para / horz_rel=Para",
+      "hancom_image_bbox_pt": { "x": 85.07654, "y": 147.594, "width": 425.1427, "height": 425.1427 }
+    }
+  }
+}

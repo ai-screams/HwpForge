@@ -46,6 +46,10 @@ fn textbox_para(
 }
 
 fn save(name: &str, paragraphs: Vec<Paragraph>) {
+    save_with_images(name, paragraphs, ImageStore::new());
+}
+
+fn save_with_images(name: &str, paragraphs: Vec<Paragraph>, images: ImageStore) {
     let path = format!("examples/hwp5_review/{name}-base.hwpx");
     // 재저장 공동 제작 흐름에서 사용자가 같은 이름으로 한컴 재저장본을
     // 남기므로, 이미 존재하면 절대 덮어쓰지 않는다 (재저장본 소실 사고
@@ -58,7 +62,7 @@ fn save(name: &str, paragraphs: Vec<Paragraph>) {
     let mut doc = Document::new();
     doc.add_section(Section::with_paragraphs(paragraphs, PageSettings::a4()));
     let validated = doc.validate().expect("validate");
-    let bytes = HwpxEncoder::encode(&validated, &store, &ImageStore::new()).expect("encode");
+    let bytes = HwpxEncoder::encode(&validated, &store, &images).expect("encode");
     std::fs::write(&path, &bytes).expect("write");
     println!("생성: {path} ({} bytes)", bytes.len());
 }
@@ -163,6 +167,145 @@ fn main() {
         "textbox_anchored",
         vec![text_para("글상자 앞 문단입니다."), text_para("글상자 뒤 문단입니다.")],
     );
+
+    // ⑥ W5 w1a 게이트: 글상자 안 인라인(글자취급) 이미지 — corpus 8% 의
+    //    실체 (byte-ground census §9g). 내부 문단 = 앞텍스트 + 이미지 +
+    //    뒤텍스트, 재저장으로 내부 lineseg 의 이미지 계정·bit0=1 wire 를
+    //    얻는다.
+    {
+        use hwpforge_core::image::{Image, ImageFormat};
+        use hwpforge_foundation::HwpUnit as HU;
+        let mut images = ImageStore::new();
+        images.insert(
+            "fixture-image.png",
+            std::fs::read("examples/hwp5_review/fixture-image.png").expect("png asset"),
+        );
+        let img = Image::new(
+            "fixture-image.png",
+            HU::from_mm(12.0).expect("w"),
+            HU::from_mm(12.0).expect("h"),
+            ImageFormat::Png,
+        );
+        let inner = Paragraph::with_runs(
+            vec![
+                Run::text("그림 앞 ", CharShapeIndex::new(0)),
+                Run::image(img, CharShapeIndex::new(0)),
+                Run::text(
+                    " 그림 뒤 — 이 문장은 글상자 폭에서 줄이 감기도록 길게 씁니다.",
+                    CharShapeIndex::new(0),
+                ),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        save_with_images(
+            "textbox_inline_image",
+            vec![
+                text_para("글상자 앞 문단입니다."),
+                textbox_para(vec![inner], 80.0, 40.0, VerticalAlign::Top),
+                text_para("글상자 뒤 문단입니다."),
+            ],
+            images,
+        );
+    }
+
+    // ⑦ sub-line-height 실측용: 줄 텍스트(10pt=1000유닛)보다 **작은**
+    //    이미지(3mm≈850유닛) — corpus nested-8 의 6/8 실체 (이미지 2388 <
+    //    줄 3014). 재저장으로 혼합 높이 줄의 lineseg profile
+    //    (vertsize/textheight 가 텍스트 지배값인지)과 이미지 세로 배치
+    //    (baseline/하단?) wire 진리를 얻는다. 글상자 내부(corpus 케이스)와
+    //    body(공유 한계 확인) 양쪽을 한 문서에.
+    {
+        use hwpforge_core::image::{Image, ImageFormat};
+        use hwpforge_foundation::HwpUnit as HU;
+        let mut images = ImageStore::new();
+        images.insert(
+            "fixture-image.png",
+            std::fs::read("examples/hwp5_review/fixture-image.png").expect("png asset"),
+        );
+        let small = || {
+            Image::new(
+                "fixture-image.png",
+                HU::from_mm(3.0).expect("w"),
+                HU::from_mm(3.0).expect("h"),
+                ImageFormat::Png,
+            )
+        };
+        let mixed_para = |lead: &str| {
+            Paragraph::with_runs(
+                vec![
+                    Run::text(format!("{lead} 작은 그림 "), CharShapeIndex::new(0)),
+                    Run::image(small(), CharShapeIndex::new(0)),
+                    Run::text(" 뒤 텍스트가 줄 높이를 지배합니다.", CharShapeIndex::new(0)),
+                ],
+                ParaShapeIndex::new(0),
+            )
+        };
+        save_with_images(
+            "subline_image",
+            vec![
+                text_para("sub-line-height 대조 문서입니다."),
+                mixed_para("본문:"),
+                textbox_para(vec![mixed_para("글상자 안:")], 80.0, 25.0, VerticalAlign::Top),
+                text_para("문서 끝 문단입니다."),
+            ],
+            images,
+        );
+    }
+
+    // ⑧ W5 w2 게이트: 음수 vertOffset 앵커 이미지 (문단 위로 돌출) —
+    //    리뷰 High-2 의 한컴 PDF oracle 재료. 재저장 PDF 의 이미지 bbox 로
+    //    "음수 offset = doc 좌표 그대로(클립 없음)" 산술을 oracle-lock.
+    {
+        use hwpforge_core::image::{Image, ImageFormat};
+        use hwpforge_core::placement::{
+            ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap,
+        };
+        use hwpforge_foundation::HwpUnit as HU;
+        let mut images = ImageStore::new();
+        images.insert(
+            "fixture-image.png",
+            std::fs::read("examples/hwp5_review/fixture-image.png").expect("png asset"),
+        );
+        let mut img = Image::new(
+            "fixture-image.png",
+            HU::from_mm(15.0).expect("w"),
+            HU::from_mm(15.0).expect("h"),
+            ImageFormat::Png,
+        );
+        img.placement = Some(ObjectPlacement {
+            text_wrap: ObjectTextWrap::Square,
+            text_flow: ObjectTextFlow::BothSides,
+            treat_as_char: false,
+            flow_with_text: false,
+            allow_overlap: true,
+            vert_rel_to: ObjectRelativeTo::Para,
+            horz_rel_to: ObjectRelativeTo::Para,
+            vert_offset: HU::from_mm(-8.0).expect("voff"),
+            horz_offset: HU::from_mm(30.0).expect("hoff"),
+        });
+        let anchor_para = Paragraph::with_runs(
+            vec![
+                Run::text(
+                    "앵커 문단입니다 — 이미지는 이 문단 기준 위로 8mm 돌출합니다. \
+                     본문이 이미지를 피해 흐르는지 봅니다.",
+                    CharShapeIndex::new(0),
+                ),
+                Run::image(img, CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        save_with_images(
+            "anchored_negative_offset",
+            vec![
+                text_para("첫 문단입니다."),
+                text_para("둘째 문단입니다 — 돌출 영역과 겹칠 수 있습니다."),
+                anchor_para,
+                text_para("앵커 뒤 문단입니다."),
+                text_para("문서 끝 문단입니다."),
+            ],
+            images,
+        );
+    }
 
     println!();
     println!("한컴오피스에서 할 일 (재저장 = 조판 캐시·wire 진리 생성, 하나씩):");
