@@ -580,7 +580,8 @@ fn is_admitted_anchored_image(content: &RunContent) -> bool {
 ///   왼쪽 = 본문 왼쪽). 수평은 문단 좌변 기준으로 한컴과 일치 (Δ0.05pt).
 /// - 마커 가시 좌표가 줄 경계(lineseg 시작)와 정확히 일치하면 **뒤
 ///   세그먼트(새 줄)** 를 채택하고 [`PdfWarning::AnchorMarkerOnLineBoundary`]
-///   로 표면화한다 (§11b F3 — 한컴 선택은 경계 fixture 로 byte-ground 전).
+///   로 표면화한다 (§11b F3 — 한컴도 아랫줄 기준임을 `anchored_marker_boundary`
+///   fixture 로 byte-ground 확정, Δ≤0.03pt).
 fn collect_anchored_images(
     para: &hwpforge_core::paragraph::Paragraph,
     section: &Section,

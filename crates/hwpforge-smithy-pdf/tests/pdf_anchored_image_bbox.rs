@@ -72,9 +72,10 @@ struct Bbox {
     height: f64,
 }
 
-/// 문서의 첫 body 앵커 이미지의 기대 bbox 를 margin + placement offset + 첫
-/// lineseg vertpos 로 독립 계산한다 (렌더 파이프라인과 무관 — self-consistency;
-/// 판별 oracle 은 sidecar 한컴 실측이 담당).
+/// 문서의 첫 body 앵커 이미지의 기대 bbox 를 margin + placement offset +
+/// **마커 소속 lineseg vertpos** 로 독립 계산한다 (§10i F3 — floor-search;
+/// 마커가 첫 줄이면 종전 first-lineseg 모델과 동치. 렌더 파이프라인과 무관
+/// — self-consistency; 판별 oracle 은 한컴 실측이 담당).
 fn expected_anchored(doc: &Document<Validated>) -> Bbox {
     for section in doc.sections() {
         let body_top = section.page_settings.margin_top.as_i32()
@@ -82,17 +83,27 @@ fn expected_anchored(doc: &Document<Validated>) -> Bbox {
         let body_left = section.page_settings.margin_left.as_i32();
         for para in &section.paragraphs {
             let Some(cache) = para.layout_cache.as_ref() else { continue };
-            let Some(first) = cache.lines.first() else { continue };
+            if cache.lines.is_empty() {
+                continue;
+            }
+            let mut marker_pos: u32 = 0;
             for run in &para.runs {
                 if let RunContent::Image(img) = &run.content {
                     if let Some(p) = img.placement.as_ref().filter(|p| !p.treat_as_char) {
+                        let idx =
+                            cache.lines.iter().rposition(|s| s.textpos <= marker_pos).unwrap_or(0);
                         return Bbox {
                             x: hwpunit_to_pt(body_left + p.horz_offset.as_i32()),
-                            y: hwpunit_to_pt(body_top + first.vertpos + p.vert_offset.as_i32()),
+                            y: hwpunit_to_pt(
+                                body_top + cache.lines[idx].vertpos + p.vert_offset.as_i32(),
+                            ),
                             width: hwpunit_to_pt(img.width.as_i32()),
                             height: hwpunit_to_pt(img.height.as_i32()),
                         };
                     }
+                }
+                if let Some(t) = run.content.plain_text() {
+                    marker_pos += u32::try_from(t.encode_utf16().count()).expect("len");
                 }
             }
         }
@@ -220,6 +231,85 @@ fn oracle_sidecar_matches_fresh_hancom_extraction_when_present() {
     assert!(support::approx_eq(fresh.y, recorded.y, 0.001), "recorded y drifted");
     assert!(support::approx_eq(fresh.width, recorded.width, 0.001), "recorded w drifted");
     assert!(support::approx_eq(fresh.height, recorded.height, 0.001), "recorded h drifted");
+}
+
+/// §10i F3 — **마커 줄 판별 게이트** (커밋 fixture 쌍, hwpx+한컴 PDF 동커밋):
+/// PARA 앵커의 수직 기준 = 마커 소속 줄. `anchored_marker_line` 은 마커가
+/// 둘째 줄 **중간**(가시 60, 줄 tp [0,55,…) — 경고 없음), `anchored_marker_boundary`
+/// 는 마커가 둘째 줄 **시작과 정확 일치**(가시 55 == tp 55 — 한컴도 아랫줄
+/// 기준 배치를 byte-ground 확인, `ANCHOR_MARKER_ON_LINE_BOUNDARY` 표면화).
+/// 두 fixture 모두 마지막 분할 행의 빈 오른쪽 세그먼트가 문단부호 sentinel
+/// (wire끝+1)로 방출된 실물이라 **F2 디코드 수용의 회귀 게이트를 겸한다**.
+#[test]
+fn marker_line_anchored_images_match_hancom() {
+    let Some(options) = font_options() else {
+        eprintln!("skip: Hancom font bundle unavailable");
+        return;
+    };
+    for (name, expect_boundary_warning) in
+        [("anchored_marker_line", false), ("anchored_marker_boundary", true)]
+    {
+        let bytes = std::fs::read(fixture_path(&format!("{name}.hwpx"))).expect("read hwpx");
+        // F2 게이트: 문단부호 sentinel lineseg 가 있어도 디코드 드롭 0.
+        let decoded = HwpxDecoder::decode(&bytes).expect("decode");
+        let validated = decoded.document.validate().expect("validate");
+        let lookup = HwpxStyleLookup::new(&decoded.style_store, &decoded.image_store);
+        let out = render_document(&PdfInput { document: &validated, styles: &lookup }, &options)
+            .expect("render");
+        assert!(
+            !out.warnings
+                .iter()
+                .any(|w| matches!(w, hwpforge_smithy_pdf::PdfWarning::ParagraphSkipped { .. })),
+            "{name}: sentinel 문단이 스킵되면 F2 회귀: {:?}",
+            out.warnings
+        );
+        let has_boundary = out.warnings.iter().any(|w| {
+            matches!(w, hwpforge_smithy_pdf::PdfWarning::AnchorMarkerOnLineBoundary { .. })
+        });
+        assert_eq!(
+            has_boundary, expect_boundary_warning,
+            "{name}: 경계 경고 기대 {expect_boundary_warning}: {:?}",
+            out.warnings
+        );
+
+        let pages = support::extract_pages(&out.bytes);
+        let imgs: Vec<_> = pages.iter().flat_map(|p| p.images.iter()).collect();
+        assert_eq!(imgs.len(), 1, "{name}: 앵커 이미지 하나 렌더: {imgs:?}");
+        let got = imgs[0];
+
+        // 자체 일관성: 마커 소속 줄 산술과 일치.
+        let expected = expected_anchored(&validated);
+        assert!(
+            support::approx_eq(got.x, expected.x, 0.01),
+            "{name} x {} != {}",
+            got.x,
+            expected.x
+        );
+        assert!(
+            support::approx_eq(got.y, expected.y, 0.01),
+            "{name} y {} != {}",
+            got.y,
+            expected.y
+        );
+
+        // 판별 게이트: 동커밋 한컴 PDF 신선 추출과 ±0.1pt.
+        let hancom_pdf = std::fs::read(fixture_path(&format!("{name}.pdf"))).expect("hancom pdf");
+        let hpages = support::extract_pages(&hancom_pdf);
+        let himgs: Vec<_> = hpages.iter().flat_map(|p| p.images.iter()).collect();
+        assert_eq!(himgs.len(), 1, "{name}: 한컴 PDF 앵커 이미지 하나: {himgs:?}");
+        let h = himgs[0];
+        eprintln!(
+            "{name} Δ x={:.3} y={:.3} w={:.3} h={:.3}",
+            got.x - h.x,
+            got.y - h.y,
+            got.width - h.width,
+            got.height - h.height
+        );
+        assert!(support::approx_eq(got.x, h.x, 0.1), "{name} x ours {} vs hancom {}", got.x, h.x);
+        assert!(support::approx_eq(got.y, h.y, 0.1), "{name} y ours {} vs hancom {}", got.y, h.y);
+        assert!(support::approx_eq(got.width, h.width, 0.1), "{name} w {}", got.width);
+        assert!(support::approx_eq(got.height, h.height, 0.1), "{name} h {}", got.height);
+    }
 }
 
 /// W5 w2 — **음수 offset 한컴 oracle** (설계 리뷰 High-2): 대화상자 저작
