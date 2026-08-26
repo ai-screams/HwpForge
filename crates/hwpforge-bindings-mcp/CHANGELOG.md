@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.2](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.16.1...hwpforge-bindings-mcp-v0.16.2) - 2026-08-26
+
+### Fixed
+
+- *(bindings-mcp)* rmcp 3.1 마이그레이션 (MRTR outcome enum·SEP-2549 필드)
+
+
 ## [0.11.7](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.11.6...hwpforge-bindings-mcp-v0.11.7) - 2026-07-25
 
 ### Added
