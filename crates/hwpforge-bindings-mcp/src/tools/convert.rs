@@ -2,11 +2,10 @@
 
 use serde::Serialize;
 
-use hwpforge_core::image::ImageStore;
 use hwpforge_foundation::FontId;
 use hwpforge_smithy_hwpx::presets::builtin_presets;
 use hwpforge_smithy_hwpx::{HwpxEncoder, HwpxRegistryBridge};
-use hwpforge_smithy_md::MdDecoder;
+use hwpforge_smithy_md::{load_referenced_images, MdDecoder};
 
 use crate::output::{read_file_string, write_output_file, ToolErrorInfo, MAX_INLINE_SIZE};
 
@@ -21,6 +20,9 @@ pub struct ConvertData {
     pub sections: usize,
     /// Total number of paragraphs across all sections.
     pub paragraphs: usize,
+    /// 이미지 임베드에서 제외된 참조들 (W6 §12b — typed 경고의 표시 문자열).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// Execute Markdown → HWPX conversion.
@@ -79,6 +81,15 @@ pub fn run_convert(
         )
     })?;
 
+    // 4b. 이미지 참조를 BinData 로 적재 (W6 §12b). 인라인 입력은 base_dir
+    //     이 없다 — 상대 경로 참조는 typed 경고로 제외되고 data: URI 만
+    //     임베드된다 (파일 입력은 md 파일의 부모 디렉터리 기준 + 경로
+    //     탈출 차단).
+    let base_dir = if is_file { std::path::Path::new(markdown).parent() } else { None };
+    let embedded = load_referenced_images(&mut md_doc.document, base_dir);
+    let warnings: Vec<String> =
+        embedded.warnings.iter().map(std::string::ToString::to_string).collect();
+
     // 5. Count sections and paragraphs
     let sections: usize = md_doc.document.sections().len();
     let paragraphs: usize = md_doc.document.sections().iter().map(|s| s.paragraphs.len()).sum();
@@ -111,7 +122,6 @@ pub fn run_convert(
             "Check paragraph list references in the resolved style registry.",
         )
     })?;
-    let image_store = ImageStore::new();
 
     let rebound = bridge.rebind_draft_document(md_doc.document).map_err(|e| {
         ToolErrorInfo::new(
@@ -130,8 +140,8 @@ pub fn run_convert(
     })?;
 
     // 7. Encode to HWPX bytes
-    let hwpx_bytes =
-        HwpxEncoder::encode(&validated, bridge.style_store(), &image_store).map_err(|e| {
+    let hwpx_bytes = HwpxEncoder::encode(&validated, bridge.style_store(), &embedded.store)
+        .map_err(|e| {
             ToolErrorInfo::new(
                 "ENCODE_ERROR",
                 format!("HWPX encoding failed: {e}"),
@@ -144,5 +154,11 @@ pub fn run_convert(
 
     let size_bytes: u64 = hwpx_bytes.len() as u64;
 
-    Ok(ConvertData { output_path: output_path.to_string(), size_bytes, sections, paragraphs })
+    Ok(ConvertData {
+        output_path: output_path.to_string(),
+        size_bytes,
+        sections,
+        paragraphs,
+        warnings,
+    })
 }

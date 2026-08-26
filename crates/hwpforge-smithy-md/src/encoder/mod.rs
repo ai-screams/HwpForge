@@ -15,8 +15,10 @@ pub use styled::MdOutput;
 /// Markdown encoder entrypoint.
 pub struct MdEncoder;
 
-/// Warning emitted by the lossy markdown encoders (warning-first: what the
-/// output can no longer represent is reported, not silently dropped).
+/// Warning emitted by the markdown bridge in **either direction** — lossy
+/// markdown encoders (HWPX→MD) and the MD→HWPX image embed loader
+/// ([`crate::embed`]). Warning-first: what the output can no longer
+/// represent is reported, not silently dropped.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum MdWarning {
@@ -28,6 +30,16 @@ pub enum MdWarning {
         /// Number of cells in the table with `col_span > 1` or `row_span > 1`.
         merged_cells: usize,
     },
+    /// MD→HWPX (W6 §12b): an image reference could not be embedded — the
+    /// image run is dropped so no dangling `binaryItemIDRef` reaches the
+    /// package, and the exclusion is declared here.
+    ImageEmbedSkipped {
+        /// The markdown source string (truncated for display; `data:` URIs
+        /// are cut at 64 chars).
+        src: String,
+        /// Why the reference was excluded.
+        reason: crate::embed::ImageEmbedSkipReason,
+    },
 }
 
 impl core::fmt::Display for MdWarning {
@@ -38,6 +50,9 @@ impl core::fmt::Display for MdWarning {
                 "table with {merged_cells} merged cell(s) flattened to a plain GFM grid \
                  (use styled mode to keep spans as HTML)"
             ),
+            Self::ImageEmbedSkipped { src, reason } => {
+                write!(f, "image \"{src}\" not embedded ({reason}) — image dropped")
+            }
         }
     }
 }

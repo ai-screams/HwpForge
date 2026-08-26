@@ -27,6 +27,7 @@
 #![deny(clippy::all)]
 
 mod decoder;
+pub mod embed;
 mod encoder;
 mod eqn;
 pub mod error;
@@ -35,6 +36,7 @@ mod internal_styles;
 mod mapper;
 
 pub use decoder::{MdDecoder, MdDocument};
+pub use embed::{load_referenced_images, EmbeddedImages, ImageEmbedSkipReason};
 pub use encoder::{MdEncoder, MdOutput, MdWarning};
 pub use error::{MdError, MdErrorCode, MdResult};
 pub use frontmatter::Frontmatter;
