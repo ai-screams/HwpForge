@@ -696,10 +696,12 @@ fn textbox_border_lines(
 ///
 /// 내부 줄을 **박스 원점 + textMargin(기본 283) + vertAlign 시프트**로 절대
 /// 배치해 [`render_line`] 로 재귀 렌더하고, 전체를 **박스 사각형**(width ×
-/// `LineTextBox::height`)의 clip 으로 감싼다. clip 높이는 Core 선언 박스
-/// 높이지 host 줄 vertsize(넘침 시 더 큼)가 아니다 — 그래야 overflow 가
-/// 실제로 잘린다 (§8f ③). 박스 채움/테두리 페인트는 호출부(atom arm)가
-/// clip 그룹 바깥에서 감싼다 (채움 → 내용 → 테두리).
+/// `LineTextBox::height`)의 clip 으로 감싼다. `height` 는
+/// `build_line_text_box` 가 이미 확장 높이(`max(선언, extent+2×283)`)로
+/// 구성한 값이다 — 한컴은 overflow 를 자르지 않고 박스를 내용에 맞게
+/// 확장한다 (§10g F1, curSz byte 증거). clip 은 그 확장 경계 밖 잉크
+/// 억제용이다. 박스 채움/테두리 페인트는 호출부(atom arm)가 clip 그룹
+/// 바깥에서 감싼다 (채움 → 내용 → 테두리).
 #[allow(clippy::too_many_arguments)]
 fn build_textbox_clip_group(
     input: &PdfInput<'_>,

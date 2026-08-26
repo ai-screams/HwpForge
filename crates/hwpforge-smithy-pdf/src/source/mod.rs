@@ -87,7 +87,9 @@ pub struct LineImage {
 pub struct LineTextBox {
     /// 박스 폭 (HWPUNIT) — 호스트 줄에서 소비하는 인라인 폭.
     pub width: i32,
-    /// 박스 높이 (HWPUNIT) — clip 영역 높이.
+    /// 박스 높이 (HWPUNIT) — clip·페인트 영역 높이. `build_line_text_box`
+    /// 구성 시점에 확장 높이(`max(선언 sz, content extent + 2×283)`)로
+    /// 확정된다 (§10g F1 — overflow 는 잘리지 않고 확장).
     pub height: i32,
     /// 테두리·채움 스타일 (Core `ShapeStyle` 에서 증류 — `None` 이면 박스
     /// 페인트 없음, 내부 콘텐츠만).
