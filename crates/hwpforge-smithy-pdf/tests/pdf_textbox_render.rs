@@ -122,8 +122,9 @@ fn textbox_fixtures_render_and_match_hancom_page_count() {
     }
 }
 
-/// overflow 글상자는 넘친 내용을 박스 경계로 절단한다 — 양 경로 모두
-/// clip 연산자를 방출해야 한다 (clip 없으면 넘침이 안 잘린다).
+/// overflow 글상자는 **내용에 맞게 확장해** 그려진다 (§10g — 한컴 curSz
+/// byte 증거·재투어 실차이 수정 F1). clip 은 잘림이 아니라 확장 경계 밖
+/// 잉크 억제용으로 상존한다 — 양 경로 모두 clip 연산자를 방출해야 한다.
 #[test]
 fn textbox_overflow_emits_clip_op() {
     let Some(options) = font_options() else {

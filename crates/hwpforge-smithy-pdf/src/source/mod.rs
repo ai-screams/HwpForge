@@ -1815,9 +1815,19 @@ fn build_line_text_box(
             });
         }
     }
+    // §10g (F1): 넘침 글상자는 한컴이 **내용에 맞게 확장해** 그린다 —
+    // overflow fixture byte 증거: 재저장 curSz h=12766 = extent 12200 +
+    // 2×283 (선언 sz h=4252 아님), 한컴 PDF 는 8줄 전부 테두리 안에 표시.
+    // 페인트 채움·클립·vertAlign interior·테두리가 전부 이 단일 필드를
+    // 읽으므로 여기 **한 곳**에서 확장을 반영한다 (admission predicate 와
+    // 동일 산식 `textbox_expected_host_height` 공유 — 이중 산식 금지).
+    // 비넘침 박스는 max 가 선언 높이를 그대로 반환한다 (fixture 4종 무변화).
+    // 확장 시 interior == extent 라 vertAlign 시프트는 단일 공식에서 0 이
+    // 자동으로 나온다 (§11b F1 — CENTER/BOTTOM 별도 분기 불요).
+    let extent = textbox_content_extent(&inner_lines, location)?;
     Ok(LineTextBox {
         width: width.as_i32(),
-        height: height.as_i32(),
+        height: textbox_expected_host_height(height.as_i32(), extent)?,
         style: style.as_ref().map(distill_textbox_style),
         vert_align: *text_vertical_align,
         inner_lines,

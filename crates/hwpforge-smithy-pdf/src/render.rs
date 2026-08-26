@@ -1096,13 +1096,19 @@ mod atom_tests {
         pages.remove(0)
     }
 
-    /// clip 사각형 높이 = **박스 선언 높이**(4252)지 host 줄 vertsize(넘침
-    /// 시 더 큼)가 아니다 — 그래야 overflow 가 실제로 잘린다 (§8f ③). 이
-    /// 게이트를 놓치면 w3 는 통과하고 w4 시각 대조에서만 터진다.
+    /// clip 사각형 높이 = **확장 박스 높이** (§10g F1): 한컴은 overflow
+    /// 글상자를 내용에 맞게 확장해 그린다 (overflow fixture 재저장 curSz
+    /// h=12766 = extent 12200 + 2×283 byte 증거 — 선언 4252 아님, 한컴 PDF
+    /// 는 8줄 전부 테두리 안에 표시). 확장은 `build_line_text_box` **단일점**
+    /// 에서 반영되므로 렌더에 도달하는 `LineTextBox.height` 는 이미
+    /// `max(선언, extent + 2×283)` 다 — clip 은 그 값을 그대로 쓰고,
+    /// 박스 밖 잉크(여백 침범)만 억제한다. 잘림 게이트가 아니라 **비잘림**
+    /// 게이트다 (2026-08-21 시각 게이트가 놓친 실차이 — 재투어가 적발).
     #[test]
-    fn textbox_clip_height_is_box_height_not_content_extent() {
-        // box 4252, 내부 content-extent 12200 (>>box) — overflow 프로파일.
-        let page = paint_textbox(textbox_layout(4252, VerticalAlign::Top, 12200));
+    fn textbox_clip_height_is_expanded_box_height() {
+        // 선언 4252 + extent 12200 → build_line_text_box 가 12766 으로 확장
+        // 해 렌더에 전달한다 (여기선 렌더 입력 계약을 직접 재현).
+        let page = paint_textbox(textbox_layout(12766, VerticalAlign::Top, 12200));
         let clips: Vec<_> = page
             .items
             .iter()
@@ -1114,15 +1120,15 @@ mod atom_tests {
         assert_eq!(clips.len(), 1, "글상자 = clip 그룹 1개");
         let g = clips[0];
         assert!(
-            (g.size.height.0 - Pt::from_hwpunit(4252).0).abs() < 1e-9,
-            "clip 높이 = 박스 높이 4252 (content-extent 12200 아님): {:?}",
+            (g.size.height.0 - Pt::from_hwpunit(12766).0).abs() < 1e-9,
+            "clip 높이 = 확장 높이 12766 (선언 4252 아님): {:?}",
             g.size.height
         );
         assert!((g.size.width.0 - Pt::from_hwpunit(17008).0).abs() < 1e-9);
         // 박스 원점 = (호스트 줄 좌변, 호스트 줄 top).
         assert!((g.origin.x.0 - Pt::from_hwpunit(8504).0).abs() < 1e-9);
         assert!((g.origin.y.0 - Pt::from_hwpunit(5000).0).abs() < 1e-9);
-        // 내부 이미지가 clip 안에 있다 (넘쳐도 방출 — 잘림은 clip 이 강제).
+        // 내부 이미지(extent 12200)가 확장 clip 안에 온전히 보인다.
         assert!(g.items.iter().any(|i| matches!(i, PaintItem::Image(_))));
     }
 
