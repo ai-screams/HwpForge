@@ -110,7 +110,20 @@ impl WireTextMap {
     }
 
     /// wire 좌표 → Core 좌표.
+    ///
+    /// **문단부호 sentinel (wire끝+1)**: Square 어울림 앵커가 행을 좌/우로
+    /// 쪼갠 문단에서, 텍스트 소진 후의 오른쪽 빈 세그먼트 lineseg 를
+    /// 한컴이 문단부호 좌표(= wire끝+1)로 방출한다 — byte 확정 실측 2건
+    /// (에픽 문서 §10h: 52/[0,51] · 267/[0,266]). Core 끝으로 수용한다.
+    /// 그 외 초과는 기존대로 [`CacheMapError::OutOfRange`] (임의 클램프
+    /// 금지). **HWPX 실측 한정** — HWP5 동형 사본에는 native 실측 전
+    /// 이식 금지. 왕복 비대칭: 재인코드([`Self::to_wire`])는 축약점
+    /// 규약(earliest preimage)대로 방출하므로 이 sentinel 은 byte
+    /// 복제되지 않는다 (known 정규화 — §11b F2).
     pub(crate) fn to_core(&self, wire: u32) -> Result<u32, CacheMapError> {
+        if self.wire_end.checked_add(1) == Some(wire) {
+            return Ok(self.core_end);
+        }
         if wire > self.wire_end {
             return Err(CacheMapError::OutOfRange { pos: wire, end: self.wire_end });
         }
@@ -301,7 +314,11 @@ mod tests {
         assert_eq!(map.core_end(), 0);
         assert_eq!(map.to_core(0), Ok(0));
         assert_eq!(map.to_wire(0), Ok(0));
-        assert_eq!(map.to_core(1), Err(CacheMapError::OutOfRange { pos: 1, end: 0 }));
+        // wire끝+1 = 문단부호 sentinel (§10h) — 빈 문단에도 문단부호는
+        // 존재하므로 수용된다. +2 부터 거부.
+        assert_eq!(map.to_core(1), Ok(0));
+        assert_eq!(map.to_core(2), Err(CacheMapError::OutOfRange { pos: 2, end: 0 }));
+        // to_wire 는 sentinel 미보유 (왕복 비대칭 — 인코드는 축약점 규약).
         assert_eq!(map.to_wire(1), Err(CacheMapError::OutOfRange { pos: 1, end: 0 }));
     }
 
@@ -397,6 +414,64 @@ mod tests {
         // trailing 영-core span 의 core_end 도 earliest (marker 앞).
         assert_eq!(map.to_wire(4), Ok(4));
         assert_eq!(map.to_wire(3), Ok(3));
+    }
+
+    // ── 문단부호(+1) sentinel (§10h — Square 앵커 분할 행) ─────────
+
+    #[test]
+    fn paragraph_mark_sentinel_maps_to_core_end() {
+        // evidence1 (짧은 제목 문단): secPr(8,0)+colPr(8,0)+text 27+pic(8,0)
+        // → wire_end=51, core_end=27. 한컴 trailing 빈 세그먼트 tp=52.
+        let mut b = WireMapBuilder::new();
+        b.push_span(8, 0);
+        b.push_span(8, 0);
+        b.advance_identity(27);
+        b.push_span(8, 0);
+        let map = b.finish().expect("valid");
+        assert_eq!(map.wire_end(), 51);
+        assert_eq!(map.core_end(), 27);
+        assert_eq!(map.to_core(52), Ok(27));
+        // sentinel 초과(+2 이상)는 여전히 거부 — 임의 클램프 금지.
+        assert_eq!(map.to_core(53), Err(CacheMapError::OutOfRange { pos: 53, end: 51 }));
+    }
+
+    #[test]
+    fn paragraph_mark_sentinel_long_paragraph() {
+        // evidence2 (258자 문단 + 문단끝 pic): wire_end=266 → tp=267 수용.
+        let mut b = WireMapBuilder::new();
+        b.advance_identity(258);
+        b.push_span(8, 0);
+        let map = b.finish().expect("valid");
+        assert_eq!(map.wire_end(), 266);
+        assert_eq!(map.to_core(267), Ok(258));
+        assert_eq!(map.to_core(268), Err(CacheMapError::OutOfRange { pos: 268, end: 266 }));
+    }
+
+    #[test]
+    fn paragraph_mark_sentinel_roundtrip_normalizes_to_contraction_point() {
+        // 왕복 비대칭 잠금 (§11b F2 Critical): sentinel 로 디코드한
+        // core_end 를 재인코드하면 축약점 규약(earliest preimage = marker
+        // 시작 = 43)대로 방출된다 — 원본 byte(+1 sentinel = 52)는 복제되지
+        // 않는다 (known 정규화, 인코드 방향 byte 복제는 스코프 아님).
+        let mut b = WireMapBuilder::new();
+        b.push_span(8, 0);
+        b.push_span(8, 0);
+        b.advance_identity(27);
+        b.push_span(8, 0);
+        let map = b.finish().expect("valid");
+        assert_eq!(map.to_core(52), Ok(27));
+        assert_eq!(map.to_wire(27), Ok(43));
+    }
+
+    #[test]
+    fn paragraph_mark_sentinel_identity_only_paragraph() {
+        // 마커 없는 순수 텍스트 문단도 문단부호 좌표는 유효하다
+        // (sentinel 은 문단부호 의미론 — 앵커 유무와 무관).
+        let mut b = WireMapBuilder::new();
+        b.advance_identity(10);
+        let map = b.finish().expect("valid");
+        assert_eq!(map.to_core(11), Ok(10));
+        assert_eq!(map.to_core(12), Err(CacheMapError::OutOfRange { pos: 12, end: 10 }));
     }
 
     // ── tab (8,1) 비대칭 ────────────────────────────────────────
