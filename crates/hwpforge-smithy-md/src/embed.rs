@@ -46,7 +46,8 @@ pub enum ImageEmbedSkipReason {
     PathEscapes,
     /// `http(s)`/프로토콜-상대 원격 URL — 네트워크 접근 금지.
     RemoteUrl,
-    /// 상대 경로인데 base_dir 이 없음 (인라인 텍스트·stdin 입력).
+    /// 상대 경로인데 해석 가능한 base 디렉터리가 없음 (인라인 텍스트·
+    /// stdin 입력, 또는 base 정규화 실패).
     NoBaseDir,
     /// 읽은 바이트의 magic 이 알려진 이미지 포맷이 아님 — 임의 바이트
     /// 반입 차단 (C1).
@@ -64,7 +65,7 @@ impl fmt::Display for ImageEmbedSkipReason {
             Self::Unreadable => "file unreadable",
             Self::PathEscapes => "path escapes the document directory",
             Self::RemoteUrl => "remote URL (network access is not allowed)",
-            Self::NoBaseDir => "relative path with no base directory (inline input)",
+            Self::NoBaseDir => "relative path with no resolvable base directory",
             Self::UnsupportedBytes => "bytes are not a recognized image format",
             Self::InvalidDataUri => "data: URI is not valid base64 image data",
             Self::TooLarge => "file exceeds the 50 MB embed ceiling",
@@ -91,45 +92,60 @@ pub struct EmbeddedImages {
 /// 임베드된다.
 ///
 /// 실패한 참조는 run 이 **드롭**되고 경고로 선언된다 — 결과 문서에는
-/// dangling `binaryItemIDRef` 가 남지 않는다.
+/// dangling `binaryItemIDRef` 가 남지 않는다. 드롭으로 문단이 비면 빈
+/// 텍스트 run 으로 문단을 보존한다 — `![..](url)` 단독 문단은 md 표준
+/// 형태라, 빈 문단 거부(validate)로 문서 전체가 죽으면 회귀다 (독립
+/// 리뷰 B1).
 pub fn load_referenced_images(document: &mut Document, base_dir: Option<&Path>) -> EmbeddedImages {
     let mut out = EmbeddedImages::default();
-    // dedup: 해석된 정체(canonical 경로 문자열 또는 data URI 전문) → 합성 키.
-    let mut seen: HashMap<String, String> = HashMap::new();
+    // dedup: 해석된 정체(canonical 경로 문자열 또는 data URI 전문) →
+    // (합성 키, 스니핑 포맷) — dedup 경로도 format 을 동일 갱신 (리뷰 L1).
+    let mut seen: HashMap<String, (String, ImageFormat)> = HashMap::new();
     let mut counter: usize = 0;
     // base_dir 은 한 번만 정규화 (부재/실패 = None → NoBaseDir 계열).
     let canonical_base = base_dir.and_then(|d| d.canonicalize().ok());
 
     document.for_each_paragraph_mut(|para| {
+        let mut dropped_char_shape = None;
         para.runs.retain_mut(|run| {
             let RunContent::Image(img) = &mut run.content else { return true };
             let src = img.path.clone();
             match resolve_source(&src, canonical_base.as_deref()) {
                 Ok((identity, bytes)) => {
-                    if let Some(key) = seen.get(&identity) {
+                    if let Some((key, format)) = seen.get(&identity) {
                         img.path.clone_from(key);
+                        img.format = format.clone();
                         return true;
                     }
                     let Some(format) = ImageFormat::sniff(&bytes) else {
                         out.warnings
                             .push(skip_warning(&src, ImageEmbedSkipReason::UnsupportedBytes));
+                        dropped_char_shape = Some(run.char_shape_id);
                         return false;
                     };
                     let ext = format.canonical_extension().expect("sniff never returns Unknown");
                     counter += 1;
                     let key = format!("image{counter}.{ext}");
                     out.store.insert(key.clone(), bytes);
-                    seen.insert(identity, key.clone());
+                    seen.insert(identity, (key.clone(), format.clone()));
                     img.path = key;
                     img.format = format;
                     true
                 }
                 Err(reason) => {
                     out.warnings.push(skip_warning(&src, reason));
+                    dropped_char_shape = Some(run.char_shape_id);
                     false
                 }
             }
         });
+        // B1: 이미지 단독 문단이 드롭으로 비면 빈 텍스트 run 으로 문단
+        // 유효성을 보존한다 (validate 는 run 0 문단을 거부).
+        if para.runs.is_empty() {
+            if let Some(cs) = dropped_char_shape {
+                para.runs.push(hwpforge_core::run::Run::text("", cs));
+            }
+        }
     });
     out
 }
@@ -169,6 +185,10 @@ fn resolve_source(
         return Err(ImageEmbedSkipReason::PathEscapes);
     }
     let meta = std::fs::metadata(&canonical).map_err(|_| ImageEmbedSkipReason::Unreadable)?;
+    // 정규 파일만 (리뷰 L3 — FIFO 는 read 무한 블록, len=0 이라 상한도 통과).
+    if !meta.is_file() {
+        return Err(ImageEmbedSkipReason::Unreadable);
+    }
     if meta.len() > MAX_IMAGE_BYTES {
         return Err(ImageEmbedSkipReason::TooLarge);
     }
@@ -386,6 +406,32 @@ mod tests {
             &out2.warnings[..],
             [MdWarning::ImageEmbedSkipped { reason: ImageEmbedSkipReason::NoBaseDir, .. }]
         ));
+    }
+
+    #[test]
+    fn image_only_paragraph_survives_failed_embed() {
+        // B1 (독립 리뷰 Critical): `![..](url)` 단독 문단은 md 표준 형태 —
+        // 드롭 후 빈 문단이 남아 validate 가 문서 전체를 거부하면 회귀.
+        let mut doc = doc_with_srcs(&["https://example.com/logo.png"]);
+        let out = load_referenced_images(&mut doc, None);
+        assert_eq!(out.warnings.len(), 1);
+        let sections = doc.sections();
+        assert_eq!(sections[0].paragraphs[0].runs.len(), 1, "빈 텍스트 run 으로 문단 보존");
+        assert!(doc.validate().is_ok(), "이미지 단독 문단 드롭 후에도 문서는 유효");
+    }
+
+    #[test]
+    fn bm_prefixed_garbage_is_rejected() {
+        // 독립 리뷰 M1 실증 벡터 — 2바이트 BM magic 을 위장한 임의 파일.
+        let dir = TempDir::new("bm-garbage");
+        dir.write("blob.png", b"BMsecret-credential-material-here-0123456789");
+        let mut doc = doc_with_srcs(&["blob.png"]);
+        let out = load_referenced_images(&mut doc, Some(dir.path()));
+        assert!(matches!(
+            &out.warnings[..],
+            [MdWarning::ImageEmbedSkipped { reason: ImageEmbedSkipReason::UnsupportedBytes, .. }]
+        ));
+        assert_eq!(out.store.iter().count(), 0);
     }
 
     #[test]

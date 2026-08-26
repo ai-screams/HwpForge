@@ -85,7 +85,16 @@ pub fn run_convert(
     //     이 없다 — 상대 경로 참조는 typed 경고로 제외되고 data: URI 만
     //     임베드된다 (파일 입력은 md 파일의 부모 디렉터리 기준 + 경로
     //     탈출 차단).
-    let base_dir = if is_file { std::path::Path::new(markdown).parent() } else { None };
+    // bare 파일명의 parent() 는 빈 경로 `Some("")` — 현재 디렉터리로
+    // 정규화 (독립 리뷰 B2).
+    let base_dir = if is_file {
+        match std::path::Path::new(markdown).parent() {
+            Some(p) if p.as_os_str().is_empty() => Some(std::path::Path::new(".")),
+            other => other,
+        }
+    } else {
+        None
+    };
     let embedded = load_referenced_images(&mut md_doc.document, base_dir);
     let warnings: Vec<String> =
         embedded.warnings.iter().map(std::string::ToString::to_string).collect();

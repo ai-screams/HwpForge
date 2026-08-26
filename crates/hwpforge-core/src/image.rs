@@ -258,14 +258,23 @@ impl ImageFormat {
     /// HWPX `BinData` natively carries).
     ///
     /// Returns `None` for empty, truncated, or unrecognized bytes — callers
-    /// must not guess from content. Magic table (mirrors the render-side
-    /// sniffer in `smithy-pdf`, W6 §12b):
+    /// must not guess from content. Magic table (shares the render-side
+    /// sniffer's rules in `smithy-pdf`, with two deliberate divergences for
+    /// ingestion, W6 §12b·§12-r2):
     ///
     /// - PNG `89 50 4E 47 0D 0A 1A 0A` · JPEG `FF D8 FF` · GIF `GIF87a`/`GIF89a`
-    /// - BMP `BM` + 14-byte header minimum (2-byte magic alone is too weak)
+    /// - BMP `BM` **plus structural header checks** — `bfOffBits`
+    ///   (offset 10) within `14..=len` and a known DIB header size
+    ///   (offset 14 ∈ {12, 40, 52, 56, 64, 108, 124}). The 2-byte magic
+    ///   alone admits arbitrary bytes starting with `BM` into packages
+    ///   (ingestion is stricter than the render sniffer, which only gates
+    ///   an error path).
     /// - EMF record type `01 00 00 00` + `" EMF"` signature at offset 40
     /// - WMF **placeable only** (`D7 CD C6 9A`) — standard WMF's magic is
     ///   too weak and would misfire, so it stays unrecognized
+    /// - WebP is **intentionally absent** (render sniffer knows it): HWPX
+    ///   `BinData` carry of WebP is unverified against Hancom, so ingestion
+    ///   refuses it until a native fixture proves it (§12-r2).
     ///
     /// # Examples
     ///
@@ -289,8 +298,15 @@ impl ImageFormat {
         if bytes.len() >= 6 && (&bytes[..6] == b"GIF87a" || &bytes[..6] == b"GIF89a") {
             return Some(Self::Gif);
         }
-        if bytes.len() >= 14 && &bytes[..2] == b"BM" {
-            return Some(Self::Bmp);
+        if bytes.len() >= 18 && &bytes[..2] == b"BM" {
+            let off_bits = u32::from_le_bytes([bytes[10], bytes[11], bytes[12], bytes[13]]);
+            let dib_size = u32::from_le_bytes([bytes[14], bytes[15], bytes[16], bytes[17]]);
+            let off_ok = off_bits >= 14 && (off_bits as usize) <= bytes.len();
+            let dib_ok = matches!(dib_size, 12 | 40 | 52 | 56 | 64 | 108 | 124);
+            if off_ok && dib_ok {
+                return Some(Self::Bmp);
+            }
+            return None;
         }
         if bytes.len() >= 44 && bytes[..4] == [0x01, 0, 0, 0] && &bytes[40..44] == b" EMF" {
             return Some(Self::Emf);
@@ -718,8 +734,12 @@ mod tests {
         assert_eq!(ImageFormat::sniff(&[0xFF, 0xD8, 0xFF, 0xE0]), Some(ImageFormat::Jpeg));
         assert_eq!(ImageFormat::sniff(b"GIF87a\x00"), Some(ImageFormat::Gif));
         assert_eq!(ImageFormat::sniff(b"GIF89a\x00"), Some(ImageFormat::Gif));
+        // BMP: 유효 구조 헤더 (BITMAPCOREHEADER — bfOffBits=26, DIB=12).
         let mut bmp = Vec::from(&b"BM"[..]);
-        bmp.extend_from_slice(&[0u8; 12]);
+        bmp.extend_from_slice(&[0u8; 8]); // size(4)+reserved(4)
+        bmp.extend_from_slice(&26u32.to_le_bytes()); // bfOffBits
+        bmp.extend_from_slice(&12u32.to_le_bytes()); // DIB header size
+        bmp.extend_from_slice(&[0u8; 8]); // 나머지 코어 헤더
         assert_eq!(ImageFormat::sniff(&bmp), Some(ImageFormat::Bmp));
         let mut emf = vec![0x01, 0, 0, 0];
         emf.extend_from_slice(&[0u8; 36]);
@@ -739,6 +759,23 @@ mod tests {
         assert_eq!(ImageFormat::sniff(b"GIF8"), None);
         // EMF: 레코드 타입만으론 부족 (오프셋 40 시그니처 필요).
         assert_eq!(ImageFormat::sniff(&[0x01, 0, 0, 0, 0, 0, 0, 0]), None);
+    }
+
+    #[test]
+    fn sniff_bmp_requires_structural_header() {
+        // 2바이트 magic 만으론 임의 바이트 반입 가능 (독립 리뷰 M1) —
+        // bfOffBits·DIB 크기 구조 검사로 차단.
+        assert_eq!(ImageFormat::sniff(b"BMsecret-credential-material-here-0123456789"), None);
+        // 구 14바이트 규칙이 수용하던 제로 헤더도 거부 (DIB 0 미지).
+        let mut zeros = Vec::from(&b"BM"[..]);
+        zeros.extend_from_slice(&[0u8; 20]);
+        assert_eq!(ImageFormat::sniff(&zeros), None);
+        // bfOffBits 가 파일 길이를 초과하면 거부.
+        let mut oob = Vec::from(&b"BM"[..]);
+        oob.extend_from_slice(&[0u8; 8]);
+        oob.extend_from_slice(&999u32.to_le_bytes());
+        oob.extend_from_slice(&40u32.to_le_bytes());
+        assert_eq!(ImageFormat::sniff(&oob), None);
     }
 
     #[test]

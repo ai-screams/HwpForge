@@ -70,7 +70,17 @@ pub fn run(input: &str, output: &PathBuf, preset: &str, json_mode: bool) {
 
     // 이미지 참조를 BinData 로 적재 (W6 §12b — stdin 입력은 base_dir 없음:
     // 상대 경로는 typed 경고로 제외되고 data: URI 만 임베드된다).
-    let base_dir = if input == "-" { None } else { std::path::Path::new(input).parent() };
+    // bare 파일명(`convert a.md`)의 parent() 는 None 이 아니라 빈 경로
+    // `Some("")` — canonicalize 불가라 base 를 통째로 잃는다 (독립 리뷰
+    // B2). 빈 경로 = 현재 디렉터리로 정규화.
+    let base_dir = if input == "-" {
+        None
+    } else {
+        match std::path::Path::new(input).parent() {
+            Some(p) if p.as_os_str().is_empty() => Some(std::path::Path::new(".")),
+            other => other,
+        }
+    };
     let embedded = load_referenced_images(&mut md_doc.document, base_dir);
     let embed_warnings: Vec<String> =
         embedded.warnings.iter().map(std::string::ToString::to_string).collect();
