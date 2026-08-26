@@ -311,12 +311,23 @@ impl HwpForgeServer {
 
         match result {
             Ok(data) => {
+                // 임베드 제외 경고는 summary 에도 실어야 한다 — 에이전트가
+                // summary 만 읽고 이미지 누락을 성공으로 오독하지 않도록
+                // (독립 리뷰 M4, W6 §12b).
+                let mut summary = format!(
+                    "Generated {} ({} bytes, {} sections, {} paragraphs)",
+                    data.output_path, data.size_bytes, data.sections, data.paragraphs,
+                );
+                if !data.warnings.is_empty() {
+                    summary.push_str(&format!(
+                        " — {} image reference(s) NOT embedded: {}",
+                        data.warnings.len(),
+                        data.warnings.join(" · "),
+                    ));
+                }
                 let output = ToolOutput::new(
                     &data,
-                    format!(
-                        "Generated {} ({} bytes, {} sections, {} paragraphs)",
-                        data.output_path, data.size_bytes, data.sections, data.paragraphs,
-                    ),
+                    summary,
                     vec![
                         "Use hwpforge_inspect to verify the output",
                         "Use hwpforge_to_json + hwpforge_patch to edit",

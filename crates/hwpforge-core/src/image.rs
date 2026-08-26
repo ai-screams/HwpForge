@@ -248,6 +248,101 @@ impl ImageFormat {
             None => Self::Unknown(String::new()),
         }
     }
+
+    /// Sniffs an [`ImageFormat`] from the leading magic bytes.
+    ///
+    /// Extension-derived formats ([`Self::from_extension`]) are diagnostic
+    /// hints only — file names cannot be trusted. Byte sniffing is the
+    /// ground truth for admission decisions (e.g. the Markdown → HWPX image
+    /// embed loader only packages bytes whose magic identifies a format
+    /// HWPX `BinData` natively carries).
+    ///
+    /// Returns `None` for empty, truncated, or unrecognized bytes — callers
+    /// must not guess from content. Magic table (shares the render-side
+    /// sniffer's rules in `smithy-pdf`, with two deliberate divergences for
+    /// ingestion, W6 §12b·§12-r2):
+    ///
+    /// - PNG `89 50 4E 47 0D 0A 1A 0A` · JPEG `FF D8 FF` · GIF `GIF87a`/`GIF89a`
+    /// - BMP `BM` **plus structural header checks** — `bfOffBits`
+    ///   (offset 10) within `14..=len` and a known DIB header size
+    ///   (offset 14 ∈ {12, 40, 52, 56, 64, 108, 124}). The 2-byte magic
+    ///   alone admits arbitrary bytes starting with `BM` into packages
+    ///   (ingestion is stricter than the render sniffer, which only gates
+    ///   an error path).
+    /// - EMF record type `01 00 00 00` + `" EMF"` signature at offset 40
+    /// - WMF **placeable only** (`D7 CD C6 9A`) — standard WMF's magic is
+    ///   too weak and would misfire, so it stays unrecognized
+    /// - WebP is **intentionally absent** (render sniffer knows it): HWPX
+    ///   `BinData` carry of WebP is unverified against Hancom, so ingestion
+    ///   refuses it until a native fixture proves it (§12-r2).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::image::ImageFormat;
+    ///
+    /// let png = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0];
+    /// assert_eq!(ImageFormat::sniff(&png), Some(ImageFormat::Png));
+    /// assert_eq!(ImageFormat::sniff(b"GIF89a\x00"), Some(ImageFormat::Gif));
+    /// assert_eq!(ImageFormat::sniff(b"not an image"), None);
+    /// assert_eq!(ImageFormat::sniff(&[]), None);
+    /// ```
+    #[must_use]
+    pub fn sniff(bytes: &[u8]) -> Option<Self> {
+        if bytes.len() >= 8 && bytes[..8] == [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A] {
+            return Some(Self::Png);
+        }
+        if bytes.len() >= 3 && bytes[..3] == [0xFF, 0xD8, 0xFF] {
+            return Some(Self::Jpeg);
+        }
+        if bytes.len() >= 6 && (&bytes[..6] == b"GIF87a" || &bytes[..6] == b"GIF89a") {
+            return Some(Self::Gif);
+        }
+        if bytes.len() >= 18 && &bytes[..2] == b"BM" {
+            let off_bits = u32::from_le_bytes([bytes[10], bytes[11], bytes[12], bytes[13]]);
+            let dib_size = u32::from_le_bytes([bytes[14], bytes[15], bytes[16], bytes[17]]);
+            let off_ok = off_bits >= 14 && (off_bits as usize) <= bytes.len();
+            let dib_ok = matches!(dib_size, 12 | 40 | 52 | 56 | 64 | 108 | 124);
+            if off_ok && dib_ok {
+                return Some(Self::Bmp);
+            }
+            return None;
+        }
+        if bytes.len() >= 44 && bytes[..4] == [0x01, 0, 0, 0] && &bytes[40..44] == b" EMF" {
+            return Some(Self::Emf);
+        }
+        if bytes.len() >= 4 && bytes[..4] == [0xD7, 0xCD, 0xC6, 0x9A] {
+            return Some(Self::Wmf);
+        }
+        None
+    }
+
+    /// Canonical file extension for a sniffed format (used to build
+    /// synthetic package keys like `image1.png`).
+    ///
+    /// Returns `None` for [`Self::Unknown`] — unknown formats never get a
+    /// synthetic key (they are not admitted into packages).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::image::ImageFormat;
+    ///
+    /// assert_eq!(ImageFormat::Jpeg.canonical_extension(), Some("jpg"));
+    /// assert_eq!(ImageFormat::Unknown("svg".into()).canonical_extension(), None);
+    /// ```
+    #[must_use]
+    pub fn canonical_extension(&self) -> Option<&'static str> {
+        match self {
+            Self::Png => Some("png"),
+            Self::Jpeg => Some("jpg"),
+            Self::Gif => Some("gif"),
+            Self::Bmp => Some("bmp"),
+            Self::Wmf => Some("wmf"),
+            Self::Emf => Some("emf"),
+            Self::Unknown(_) => None,
+        }
+    }
 }
 
 impl std::fmt::Display for ImageFormat {
@@ -626,6 +721,84 @@ mod tests {
     #[test]
     fn from_extension_multi_dot() {
         assert_eq!(ImageFormat::from_extension("multi.dot.png"), ImageFormat::Png);
+    }
+
+    // -----------------------------------------------------------------------
+    // ImageFormat::sniff tests (W6 §12b — magic 판별, 추측 금지)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn sniff_known_magics() {
+        let png = [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0];
+        assert_eq!(ImageFormat::sniff(&png), Some(ImageFormat::Png));
+        assert_eq!(ImageFormat::sniff(&[0xFF, 0xD8, 0xFF, 0xE0]), Some(ImageFormat::Jpeg));
+        assert_eq!(ImageFormat::sniff(b"GIF87a\x00"), Some(ImageFormat::Gif));
+        assert_eq!(ImageFormat::sniff(b"GIF89a\x00"), Some(ImageFormat::Gif));
+        // BMP: 유효 구조 헤더 (BITMAPCOREHEADER — bfOffBits=26, DIB=12).
+        let mut bmp = Vec::from(&b"BM"[..]);
+        bmp.extend_from_slice(&[0u8; 8]); // size(4)+reserved(4)
+        bmp.extend_from_slice(&26u32.to_le_bytes()); // bfOffBits
+        bmp.extend_from_slice(&12u32.to_le_bytes()); // DIB header size
+        bmp.extend_from_slice(&[0u8; 8]); // 나머지 코어 헤더
+        assert_eq!(ImageFormat::sniff(&bmp), Some(ImageFormat::Bmp));
+        let mut emf = vec![0x01, 0, 0, 0];
+        emf.extend_from_slice(&[0u8; 36]);
+        emf.extend_from_slice(b" EMF");
+        assert_eq!(ImageFormat::sniff(&emf), Some(ImageFormat::Emf));
+        assert_eq!(ImageFormat::sniff(&[0xD7, 0xCD, 0xC6, 0x9A, 0, 0]), Some(ImageFormat::Wmf));
+    }
+
+    #[test]
+    fn sniff_truncated_and_weak_magics_are_none() {
+        assert_eq!(ImageFormat::sniff(&[]), None);
+        // BMP 2바이트 magic 단독은 약함 — 14바이트 헤더 미달 = None.
+        assert_eq!(ImageFormat::sniff(b"BM"), None);
+        // PNG/JPEG/GIF 절단 prefix.
+        assert_eq!(ImageFormat::sniff(&[0x89, b'P']), None);
+        assert_eq!(ImageFormat::sniff(&[0xFF, 0xD8]), None);
+        assert_eq!(ImageFormat::sniff(b"GIF8"), None);
+        // EMF: 레코드 타입만으론 부족 (오프셋 40 시그니처 필요).
+        assert_eq!(ImageFormat::sniff(&[0x01, 0, 0, 0, 0, 0, 0, 0]), None);
+    }
+
+    #[test]
+    fn sniff_bmp_requires_structural_header() {
+        // 2바이트 magic 만으론 임의 바이트 반입 가능 (독립 리뷰 M1) —
+        // bfOffBits·DIB 크기 구조 검사로 차단.
+        assert_eq!(ImageFormat::sniff(b"BMsecret-credential-material-here-0123456789"), None);
+        // 구 14바이트 규칙이 수용하던 제로 헤더도 거부 (DIB 0 미지).
+        let mut zeros = Vec::from(&b"BM"[..]);
+        zeros.extend_from_slice(&[0u8; 20]);
+        assert_eq!(ImageFormat::sniff(&zeros), None);
+        // bfOffBits 가 파일 길이를 초과하면 거부.
+        let mut oob = Vec::from(&b"BM"[..]);
+        oob.extend_from_slice(&[0u8; 8]);
+        oob.extend_from_slice(&999u32.to_le_bytes());
+        oob.extend_from_slice(&40u32.to_le_bytes());
+        assert_eq!(ImageFormat::sniff(&oob), None);
+    }
+
+    #[test]
+    fn sniff_never_guesses_from_content() {
+        assert_eq!(ImageFormat::sniff(b"<svg xmlns=\"http\""), None);
+        assert_eq!(ImageFormat::sniff(&[0u8; 64]), None);
+        // RIFF 컨테이너(WAV 등) = None — WebP 포함 미지원 (HWPX BinData
+        // 캐리 대상 아님).
+        let mut wav = Vec::from(&b"RIFF"[..]);
+        wav.extend_from_slice(&[0x10, 0, 0, 0]);
+        wav.extend_from_slice(b"WAVEfmt ");
+        assert_eq!(ImageFormat::sniff(&wav), None);
+    }
+
+    #[test]
+    fn canonical_extension_covers_all_known() {
+        assert_eq!(ImageFormat::Png.canonical_extension(), Some("png"));
+        assert_eq!(ImageFormat::Jpeg.canonical_extension(), Some("jpg"));
+        assert_eq!(ImageFormat::Gif.canonical_extension(), Some("gif"));
+        assert_eq!(ImageFormat::Bmp.canonical_extension(), Some("bmp"));
+        assert_eq!(ImageFormat::Wmf.canonical_extension(), Some("wmf"));
+        assert_eq!(ImageFormat::Emf.canonical_extension(), Some("emf"));
+        assert_eq!(ImageFormat::Unknown("svg".into()).canonical_extension(), None);
     }
 
     // -----------------------------------------------------------------------

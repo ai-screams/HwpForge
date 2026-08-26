@@ -14,6 +14,7 @@ rust-version.workspace = true
 description = "Markdown codec (decoder + lossy/lossless encoder) for HwpForge"
 
 [dependencies]
+base64 = { workspace = true }
 hwpforge-blueprint = { path = "../hwpforge-blueprint", version = "0" }
 hwpforge-core = { path = "../hwpforge-core", version = "0" }
 hwpforge-foundation = { path = "../hwpforge-foundation", version = "0" }

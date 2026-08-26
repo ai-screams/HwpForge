@@ -492,6 +492,44 @@ fn convert_md_to_hwpx() {
     assert!(std::fs::metadata(&out).unwrap().len() > 0);
 }
 
+/// W6 §12b B2 게이트: bare 파일명 입력(`convert a.md`)에서도 md 옆 이미지가
+/// 임베드된다 — `parent()` 의 빈 경로가 base 를 잃게 하던 회귀 잠금.
+#[test]
+fn convert_bare_filename_embeds_sibling_image() {
+    let tmp = test_tmp();
+    let png: &[u8] = &[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3];
+    std::fs::write(tmp.join("i.png"), png).expect("write png");
+    std::fs::write(tmp.join("a.md"), "본문 ![아이콘](i.png) 끝.\n").expect("write md");
+    let output = Command::new(hwpforge_bin())
+        .current_dir(&tmp)
+        .args(["convert", "a.md", "-o", "out.hwpx"])
+        .output()
+        .expect("run hwpforge");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(0), "stderr: {stderr}");
+    assert!(!stderr.contains("not embedded"), "임베드 경고 없어야 함: {stderr}");
+    let bytes = std::fs::read(tmp.join("out.hwpx")).expect("read out");
+    assert!(
+        bytes.windows(b"BinData/image1.png".len()).any(|w| w == b"BinData/image1.png"),
+        "zip 에 BinData 엔트리"
+    );
+}
+
+/// W6 §12b B1 게이트: 해결 불가 참조(원격 URL)가 문단의 유일한 run 이어도
+/// 변환은 성공한다 — 빈 문단 validate 거부로 문서 전체가 죽던 회귀 잠금.
+#[test]
+fn convert_remote_image_only_paragraph_still_succeeds() {
+    let tmp = test_tmp();
+    let md = tmp.join("r.md");
+    std::fs::write(&md, "# 제목\n\n![remote](https://example.com/logo.png)\n\n본문.\n")
+        .expect("write md");
+    let out = tmp.join("r.hwpx");
+    let (_, stderr, code) = run(&["convert", md.to_str().unwrap(), "-o", out.to_str().unwrap()]);
+    assert_eq!(code, 0, "stderr: {stderr}");
+    assert!(stderr.contains("not embedded"), "typed 경고 표면화: {stderr}");
+    assert!(out.exists());
+}
+
 #[test]
 fn convert_json_mode() {
     let tmp = test_tmp();
