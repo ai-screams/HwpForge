@@ -139,7 +139,9 @@ pub fn list_resources() -> Result<ListResourcesResult, McpError> {
         })
         .collect();
 
-    Ok(ListResourcesResult { resources, next_cursor: None, meta: None })
+    // rmcp 3.x: with_all_items 가 SEP-2322/2549 신규 필드(result_type=
+    // COMPLETE, ttl_ms/cache_scope=None)를 규약대로 채운다.
+    Ok(ListResourcesResult::with_all_items(resources))
 }
 
 /// Read a specific template resource by URI.

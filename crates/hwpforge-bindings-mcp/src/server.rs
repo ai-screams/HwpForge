@@ -1025,8 +1025,10 @@ impl ServerHandler for HwpForgeServer {
         &self,
         request: ReadResourceRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<ReadResourceResult, McpError> {
-        resources::read_resource(&request.uri)
+    ) -> Result<ReadResourceResponse, McpError> {
+        // rmcp 3.x MRTR(SEP-2322): 핸들러는 outcome enum 을 반환한다 —
+        // 우리는 항상 완결 응답이므로 Complete 로 승격 (From impl).
+        resources::read_resource(&request.uri).map(Into::into)
     }
 
     async fn list_prompts(
@@ -1041,7 +1043,8 @@ impl ServerHandler for HwpForgeServer {
         &self,
         request: GetPromptRequestParams,
         _context: RequestContext<RoleServer>,
-    ) -> Result<GetPromptResult, McpError> {
-        prompts::get_prompt(&request.name, request.arguments.as_ref())
+    ) -> Result<GetPromptResponse, McpError> {
+        // rmcp 3.x MRTR(SEP-2322): 항상 완결 응답 — Complete 로 승격.
+        prompts::get_prompt(&request.name, request.arguments.as_ref()).map(Into::into)
     }
 }

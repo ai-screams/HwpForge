@@ -12,67 +12,65 @@ mod report;
 
 /// List all available prompts.
 pub fn list_prompts() -> Result<ListPromptsResult, McpError> {
-    Ok(ListPromptsResult {
-        prompts: vec![
-            Prompt::new(
-                "generate_proposal",
-                Some("한국 정부 RFP 제안서를 마크다운으로 작성하고 HWPX로 변환하는 워크플로우"),
-                Some(vec![
-                    PromptArgument::new("topic")
-                        .with_title("제안서 주제")
-                        .with_description("제안서의 주제 또는 사업명")
-                        .with_required(true),
-                    PromptArgument::new("organization")
-                        .with_title("제안 기관")
-                        .with_description("제안 기관/회사명 (선택)")
-                        .with_required(false),
-                    PromptArgument::new("deadline")
-                        .with_title("제출 기한")
-                        .with_description("제출 기한 (YYYY-MM-DD, 선택)")
-                        .with_required(false),
-                ]),
-            )
-            .with_title("정부 제안서 생성"),
-            Prompt::new(
-                "generate_report",
-                Some("연구/진행/분석 보고서를 마크다운으로 작성하고 HWPX로 변환하는 워크플로우"),
-                Some(vec![
-                    PromptArgument::new("topic")
-                        .with_title("보고서 주제")
-                        .with_description("보고서의 주제")
-                        .with_required(true),
-                    PromptArgument::new("author")
-                        .with_title("저자")
-                        .with_description("보고서 저자 (선택)")
-                        .with_required(false),
-                    PromptArgument::new("report_type")
-                        .with_title("보고서 유형")
-                        .with_description(
-                            "보고서 종류: research/progress/analysis (선택, 기본: research)",
-                        )
-                        .with_required(false),
-                ]),
-            )
-            .with_title("보고서 생성"),
-            Prompt::new(
-                "convert_and_review",
-                Some("기존 HWPX 문서를 JSON round-trip으로 편집하는 단계별 가이드"),
-                Some(vec![
-                    PromptArgument::new("file_path")
-                        .with_title("HWPX 파일 경로")
-                        .with_description("편집할 HWPX 파일의 경로")
-                        .with_required(true),
-                    PromptArgument::new("edit_instructions")
-                        .with_title("편집 지침")
-                        .with_description("구체적인 편집 지침 (선택)")
-                        .with_required(false),
-                ]),
-            )
-            .with_title("문서 편집 워크플로우"),
-        ],
-        next_cursor: None,
-        meta: None,
-    })
+    // rmcp 3.x: with_all_items 가 SEP-2322/2549 신규 필드(result_type=
+    // COMPLETE, ttl_ms/cache_scope=None)를 규약대로 채운다.
+    Ok(ListPromptsResult::with_all_items(vec![
+        Prompt::new(
+            "generate_proposal",
+            Some("한국 정부 RFP 제안서를 마크다운으로 작성하고 HWPX로 변환하는 워크플로우"),
+            Some(vec![
+                PromptArgument::new("topic")
+                    .with_title("제안서 주제")
+                    .with_description("제안서의 주제 또는 사업명")
+                    .with_required(true),
+                PromptArgument::new("organization")
+                    .with_title("제안 기관")
+                    .with_description("제안 기관/회사명 (선택)")
+                    .with_required(false),
+                PromptArgument::new("deadline")
+                    .with_title("제출 기한")
+                    .with_description("제출 기한 (YYYY-MM-DD, 선택)")
+                    .with_required(false),
+            ]),
+        )
+        .with_title("정부 제안서 생성"),
+        Prompt::new(
+            "generate_report",
+            Some("연구/진행/분석 보고서를 마크다운으로 작성하고 HWPX로 변환하는 워크플로우"),
+            Some(vec![
+                PromptArgument::new("topic")
+                    .with_title("보고서 주제")
+                    .with_description("보고서의 주제")
+                    .with_required(true),
+                PromptArgument::new("author")
+                    .with_title("저자")
+                    .with_description("보고서 저자 (선택)")
+                    .with_required(false),
+                PromptArgument::new("report_type")
+                    .with_title("보고서 유형")
+                    .with_description(
+                        "보고서 종류: research/progress/analysis (선택, 기본: research)",
+                    )
+                    .with_required(false),
+            ]),
+        )
+        .with_title("보고서 생성"),
+        Prompt::new(
+            "convert_and_review",
+            Some("기존 HWPX 문서를 JSON round-trip으로 편집하는 단계별 가이드"),
+            Some(vec![
+                PromptArgument::new("file_path")
+                    .with_title("HWPX 파일 경로")
+                    .with_description("편집할 HWPX 파일의 경로")
+                    .with_required(true),
+                PromptArgument::new("edit_instructions")
+                    .with_title("편집 지침")
+                    .with_description("구체적인 편집 지침 (선택)")
+                    .with_required(false),
+            ]),
+        )
+        .with_title("문서 편집 워크플로우"),
+    ]))
 }
 
 /// Get a specific prompt by name with arguments.
