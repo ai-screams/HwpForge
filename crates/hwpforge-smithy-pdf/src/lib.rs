@@ -215,6 +215,15 @@ pub enum PdfWarning {
         /// 문서 내 위치.
         location: String,
     },
+    /// PARA 앵커 이미지의 마커 가시 좌표가 줄 경계(lineseg 시작)와 정확히
+    /// 일치함 — **뒤 세그먼트(새 줄) 기준**으로 배치하고 표면화한다.
+    ///
+    /// 한컴 선택도 아랫줄 기준임이 byte-ground 확정됨 (`anchored_marker_boundary`
+    /// fixture, Δ≤0.03pt — §11c). 경고는 경계 케이스 가시화용으로 유지.
+    AnchorMarkerOnLineBoundary {
+        /// 문서 내 위치.
+        location: String,
+    },
     /// 분할 표의 중간 쪽 경계는 캐시에 신호가 없어 **계산**으로 배치함
     /// (W3 — 캐시 앵커 이중 검산을 통과한 출력에만 딸려 나옴).
     TablePaginationComputed {

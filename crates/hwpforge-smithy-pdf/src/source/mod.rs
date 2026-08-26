@@ -87,7 +87,9 @@ pub struct LineImage {
 pub struct LineTextBox {
     /// 박스 폭 (HWPUNIT) — 호스트 줄에서 소비하는 인라인 폭.
     pub width: i32,
-    /// 박스 높이 (HWPUNIT) — clip 영역 높이.
+    /// 박스 높이 (HWPUNIT) — clip·페인트 영역 높이. `build_line_text_box`
+    /// 구성 시점에 확장 높이(`max(선언 sz, content extent + 2×283)`)로
+    /// 확정된다 (§10g F1 — overflow 는 잘리지 않고 확장).
     pub height: i32,
     /// 테두리·채움 스타일 (Core `ShapeStyle` 에서 증류 — `None` 이면 박스
     /// 페인트 없음, 내부 콘텐츠만).
@@ -567,25 +569,34 @@ fn is_admitted_anchored_image(content: &RunContent) -> bool {
 /// 지원 조합([`is_admitted_anchored_image`])만 수집하고, 그 밖(조합 외·다중·
 /// 글자취급 인라인과 혼합)은 미측정 profile 이라 typed [`PdfError::InvalidCache`]
 /// 로 fail-closed 한다 (§9b·§9e). 반환 `Vec` 은 0 또는 1 원소다 (다중 앵커 =
-/// fail-closed).
+/// fail-closed). 두 번째 반환값 = **마커 소속 lineseg 인덱스** (앵커 없으면 0)
+/// — 호출부가 그 줄이 안착한 쪽에 이미지를 귀속한다.
 ///
-/// 산술 (floating fixture 실측 — §9c ①):
-/// - `y = body_top + first_v + vert_offset` (`first_v` = 문단 첫 lineseg
-///   vertpos = 문단 top; `vert_offset` 음수 = 문단 위로 돌출).
+/// 산술 (floating fixture 실측 §9c ① + showcase CTM 판별 §10i):
+/// - `y = body_top + marker_v + vert_offset` — `marker_v` = **앵커 마커가
+///   있는 줄**의 vertpos. 한컴 `vertRelTo="PARA"` 실동작은 문단 첫 줄이
+///   아니라 마커 소속 줄 기준이다 (마커 둘째 줄 showcase 에서 정확히
+///   1줄(15.95pt) 판별 — 기존 fixture 는 마커가 전부 첫 줄이라 동치였음).
+///   `vert_offset` 음수 = 그 줄 위로 돌출.
 /// - `x = body_left + horz_offset` (PARA, 또는 단일 컬럼의 COLUMN — 컬럼
-///   왼쪽 = 본문 왼쪽).
+///   왼쪽 = 본문 왼쪽). 수평은 문단 좌변 기준으로 한컴과 일치 (Δ0.05pt).
+/// - 마커 가시 좌표가 줄 경계(lineseg 시작)와 정확히 일치하면 **뒤
+///   세그먼트(새 줄)** 를 채택하고 [`PdfWarning::AnchorMarkerOnLineBoundary`]
+///   로 표면화한다 (§11b F3 — 한컴도 아랫줄 기준임을 `anchored_marker_boundary`
+///   fixture 로 byte-ground 확정, Δ≤0.03pt).
 fn collect_anchored_images(
     para: &hwpforge_core::paragraph::Paragraph,
     section: &Section,
     body_top: i32,
     body_left: i32,
-    first_v: i32,
+    lines: &[hwpforge_core::layout::LineSeg],
     location: &str,
-) -> PdfResult<Vec<LaidAnchoredImage>> {
+    warnings: &mut Vec<PdfWarning>,
+) -> PdfResult<(Vec<LaidAnchoredImage>, usize)> {
     use hwpforge_core::placement::ObjectRelativeTo;
     let anchored_count = para.runs.iter().filter(|r| is_anchored_image(&r.content)).count();
     if anchored_count == 0 {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), 0));
     }
     // 다중 앵커 = 미측정 z-order (§9d Low — fail-closed).
     if anchored_count > 1 {
@@ -647,8 +658,34 @@ fn collect_anchored_images(
             ),
         });
     }
+    // 마커 소속 줄 (§10i): 마커 가시 좌표 = 선행 run 가시 텍스트 합
+    // (앵커 마커 자신은 0폭 — W1b 가시 좌표계와 동일 축). floor-search
+    // (마지막 textpos ≤ pos)로 소속 lineseg 를 고른다 — validate_textpos
+    // 가 호출 전에 오름차순을 보증한다.
+    let mut marker_pos: u32 = 0;
+    for r in &para.runs {
+        if is_anchored_image(&r.content) {
+            break;
+        }
+        if let Some(t) = r.content.plain_text() {
+            let len =
+                u32::try_from(t.encode_utf16().count()).map_err(|_| PdfError::InvalidCache {
+                    detail: format!("{location}: anchored marker offset overflows u32"),
+                })?;
+            marker_pos = marker_pos.checked_add(len).ok_or_else(|| PdfError::InvalidCache {
+                detail: format!("{location}: anchored marker offset overflows u32"),
+            })?;
+        }
+    }
+    let marker_idx = lines.iter().rposition(|s| s.textpos <= marker_pos).unwrap_or(0);
+    // 경계 일치 (마커 == lineseg 시작): 뒤 세그먼트(새 줄) 채택 + 표면화
+    // (§11b F3 — 한컴 선택은 경계 fixture byte-ground 전, 반증 시 교체).
+    if marker_idx > 0 && lines[marker_idx].textpos == marker_pos {
+        warnings.push(PdfWarning::AnchorMarkerOnLineBoundary { location: location.to_string() });
+    }
+    let marker_v = lines.get(marker_idx).map_or(0, |s| s.vertpos);
     let y = body_top
-        .checked_add(first_v)
+        .checked_add(marker_v)
         .and_then(|v| v.checked_add(placement.vert_offset.as_i32()))
         .ok_or_else(|| PdfError::InvalidCache {
             detail: format!("{location}: anchored image y overflows i32"),
@@ -656,14 +693,17 @@ fn collect_anchored_images(
     let x = body_left.checked_add(placement.horz_offset.as_i32()).ok_or_else(|| {
         PdfError::InvalidCache { detail: format!("{location}: anchored image x overflows i32") }
     })?;
-    Ok(vec![LaidAnchoredImage {
-        location: location.to_string(),
-        canonical_key: img.path.clone(),
-        x,
-        y,
-        width: img.width.as_i32(),
-        height: img.height.as_i32(),
-    }])
+    Ok((
+        vec![LaidAnchoredImage {
+            location: location.to_string(),
+            canonical_key: img.path.clone(),
+            x,
+            y,
+            width: img.width.as_i32(),
+            height: img.height.as_i32(),
+        }],
+        marker_idx,
+    ))
 }
 
 /// 글상자 내부 콘텐츠 세로 범위 = `max(내부 줄 vertpos + vertsize)` (checked).
@@ -1166,11 +1206,22 @@ fn replay_section(
         // W5 w1b (§9e): 앵커형(treat_as_char=false) 이미지는 줄 흐름 밖
         // 오버레이다 — 줄 원자로 귀속하지 않고 문단에 앵커해 절대 배치한다
         // (§9d High-1). 본문 회피는 lineseg(horzpos/horzsize)에 이미 구워져
-        // 있으므로 렌더 산술은 `rel_to + offset` 절대 좌표뿐(§9a). y 는 첫
-        // lineseg vertpos(= 문단 top)로 지금 확정하고, 어느 쪽에 앵커할지는
-        // line_idx==0 처리(쪽분할 후)에서 정한다.
-        let pending_anchored =
-            collect_anchored_images(para, section, body_top, body_left, first_v, &location)?;
+        // 있으므로 렌더 산술은 `rel_to + offset` 절대 좌표뿐(§9a). y 는
+        // **마커 소속 lineseg vertpos** 로 확정하고(§10i — PARA 의 실기준),
+        // 어느 쪽에 앵커할지는 그 줄의 line_idx 처리(쪽분할 후)에서 정한다.
+        // 조합 외/다중/혼합의 **구체 typed 오류가 아래 일반 admission 보다
+        // 먼저** 나가도록 여기서 호출한다 — floor-search 의 textpos 오름차순
+        // 전제는 결과 소비 전에 도는 validate_textpos 가 보증한다 (실패 시
+        // 문단 전체가 에러라 마커 귀속값은 소비되지 않음).
+        let (pending_anchored, anchor_line_idx) = collect_anchored_images(
+            para,
+            section,
+            body_top,
+            body_left,
+            &cache.lines,
+            &location,
+            warnings,
+        )?;
 
         // W1b admission (§1g v5 변경 1): 검사는 선두 prefix 가 아니라
         // **문단 전체** — W1b 좌표 정규화로 marker 문단의 textpos 는
@@ -1291,9 +1342,11 @@ fn replay_section(
             }
             prev_v = Some(v);
 
-            // W5 w1b: 앵커 이미지는 문단 첫 줄이 안착한 쪽에 배경으로 붙인다
-            // (y 는 collect_anchored_images 가 첫 lineseg vertpos 로 확정).
-            if line_idx == 0 && !pending_anchored.is_empty() {
+            // W5 w1b + §10i: 앵커 이미지는 **마커 소속 줄**이 안착한 쪽에
+            // 배경으로 붙인다 (y 는 collect_anchored_images 가 그 줄의
+            // vertpos 로 확정 — vertpos 는 쪽-상대라 쪽 귀속과 짝이어야
+            // 좌표계가 맞는다, §11b F3 High).
+            if line_idx == anchor_line_idx && !pending_anchored.is_empty() {
                 if let Some(page) = pages.last_mut() {
                     page.anchored_images.extend(pending_anchored.iter().cloned());
                 }
@@ -1765,9 +1818,19 @@ fn build_line_text_box(
             });
         }
     }
+    // §10g (F1): 넘침 글상자는 한컴이 **내용에 맞게 확장해** 그린다 —
+    // overflow fixture byte 증거: 재저장 curSz h=12766 = extent 12200 +
+    // 2×283 (선언 sz h=4252 아님), 한컴 PDF 는 8줄 전부 테두리 안에 표시.
+    // 페인트 채움·클립·vertAlign interior·테두리가 전부 이 단일 필드를
+    // 읽으므로 여기 **한 곳**에서 확장을 반영한다 (admission predicate 와
+    // 동일 산식 `textbox_expected_host_height` 공유 — 이중 산식 금지).
+    // 비넘침 박스는 max 가 선언 높이를 그대로 반환한다 (fixture 4종 무변화).
+    // 확장 시 interior == extent 라 vertAlign 시프트는 단일 공식에서 0 이
+    // 자동으로 나온다 (§11b F1 — CENTER/BOTTOM 별도 분기 불요).
+    let extent = textbox_content_extent(&inner_lines, location)?;
     Ok(LineTextBox {
         width: width.as_i32(),
-        height: height.as_i32(),
+        height: textbox_expected_host_height(height.as_i32(), extent)?,
         style: style.as_ref().map(distill_textbox_style),
         vert_align: *text_vertical_align,
         inner_lines,
@@ -2281,6 +2344,110 @@ mod tests {
         assert_eq!(layout.pages.len(), 2, "p1 이 새 쪽");
         assert!(layout.pages[0].anchored_images.is_empty(), "1쪽엔 앵커 없음");
         assert_eq!(layout.pages[1].anchored_images.len(), 1, "앵커는 2쪽");
+    }
+
+    /// §10i (F3): PARA 앵커 y 는 문단 첫 줄이 아니라 **마커 소속 줄** 기준
+    /// — showcase CTM 판별(마커 둘째 줄, 정확히 1줄 차)의 축소판.
+    #[test]
+    fn body_anchored_image_y_uses_marker_line() {
+        // 선행 텍스트 4자 → 줄 tp [0,2,6) 에서 floor(4) = 둘째 줄(v=1600).
+        let mut para = Paragraph::with_runs(
+            vec![
+                Run::text("가나다라", CharShapeIndex::new(0)),
+                anchored_body_img(
+                    "BinData/mk.png",
+                    ObjectTextWrap::Square,
+                    ObjectRelativeTo::Para,
+                    ObjectRelativeTo::Para,
+                    500,
+                    700,
+                ),
+                Run::text("마바사아자차", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0), seg(2, 1600), seg(6, 3200)]));
+        let doc = doc_of(vec![para]);
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        let (body_top, body_left) = a4_body_top_left();
+        let anchored = &layout.pages[0].anchored_images;
+        assert_eq!(anchored.len(), 1);
+        assert_eq!(anchored[0].y, body_top + 1600 + 500, "마커 줄(v=1600) 기준");
+        assert_eq!(anchored[0].x, body_left + 700, "수평은 문단 좌변 기준 불변");
+        assert!(
+            !layout
+                .warnings
+                .iter()
+                .any(|w| matches!(w, PdfWarning::AnchorMarkerOnLineBoundary { .. })),
+            "줄 중간 마커는 경계 경고 없음"
+        );
+    }
+
+    /// §11b F3: 마커 가시 좌표 == lineseg 시작(줄 경계)이면 뒤 세그먼트
+    /// 채택 + typed 경고 표면화 (한컴 선택 byte-ground 전 잠정 규약).
+    #[test]
+    fn body_anchored_image_marker_on_line_boundary_warns_and_uses_later_line() {
+        let mut para = Paragraph::with_runs(
+            vec![
+                Run::text("가나다라마바", CharShapeIndex::new(0)),
+                anchored_body_img(
+                    "BinData/bd.png",
+                    ObjectTextWrap::Square,
+                    ObjectRelativeTo::Para,
+                    ObjectRelativeTo::Para,
+                    0,
+                    0,
+                ),
+                Run::text("사아자차", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        para.layout_cache = Some(LayoutCache::new(vec![seg(0, 0), seg(6, 1600)]));
+        let doc = doc_of(vec![para]);
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        let (body_top, _) = a4_body_top_left();
+        assert_eq!(layout.pages[0].anchored_images[0].y, body_top + 1600, "뒤 세그먼트 채택");
+        assert!(
+            layout
+                .warnings
+                .iter()
+                .any(|w| matches!(w, PdfWarning::AnchorMarkerOnLineBoundary { .. })),
+            "경계 일치는 표면화: {:?}",
+            layout.warnings
+        );
+    }
+
+    /// §11b F3 High: 다중 쪽 문단에서 마커가 뒤쪽 줄이면 이미지는 **마커
+    /// 줄이 안착한 쪽**에 귀속된다 (vertpos 는 쪽-상대 — 쪽 귀속과 y 가
+    /// 같은 줄에서 나와야 좌표계가 맞는다).
+    #[test]
+    fn body_anchored_image_attaches_to_marker_line_page() {
+        let p0 = para_with_cache("첫쪽", vec![seg(0, 0)]);
+        let mut p1 = Paragraph::with_runs(
+            vec![
+                Run::text("가나다라", CharShapeIndex::new(0)),
+                anchored_body_img(
+                    "BinData/pg.png",
+                    ObjectTextWrap::Square,
+                    ObjectRelativeTo::Para,
+                    ObjectRelativeTo::Para,
+                    500,
+                    0,
+                ),
+                Run::text("마바", CharShapeIndex::new(0)),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        // 줄0 은 1쪽 끝(v=3200), 줄1(v==0)은 2쪽 시작 — floor(4)=줄1.
+        p1.layout_cache = Some(LayoutCache::new(vec![seg(0, 3200), seg(3, 0)]));
+        let doc = doc_of(vec![p0, p1]);
+        let layout = replay(&doc, &PdfOptions::default()).expect("replay");
+        let (body_top, _) = a4_body_top_left();
+        assert_eq!(layout.pages.len(), 2);
+        assert!(layout.pages[0].anchored_images.is_empty(), "1쪽엔 앵커 없음");
+        let anchored = &layout.pages[1].anchored_images;
+        assert_eq!(anchored.len(), 1, "앵커는 마커 줄이 안착한 2쪽");
+        assert_eq!(anchored[0].y, body_top + 500, "y 는 마커 줄(2쪽 v=0) 기준");
     }
 
     // ── W4 w3: 인라인 글상자 admission·host predicate·fail-closed ────────

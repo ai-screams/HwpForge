@@ -429,6 +429,134 @@ fn main() {
         );
     }
 
+    // ⑪ F3 판별 (§10i): 마커가 **둘째 줄 중간**에 오는 앵커 이미지 —
+    //    PARA 수직 기준 = 마커 소속 줄 (문단 첫 줄 아님) 을 oracle 로
+    //    잠근다. showcase 실증 구성(선행 ~72자 → 마커 = 2번째 줄 중간)의
+    //    축소판, 150B 아이콘이라 커밋 가능. 마커 뒤 텍스트가 이미지
+    //    세로 범위를 지나 이어져 문단끝+1 빈 세그먼트도 안 생긴다 (§10h).
+    {
+        use hwpforge_core::image::{Image, ImageFormat};
+        use hwpforge_core::placement::{
+            ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap,
+        };
+        use hwpforge_foundation::HwpUnit as HU;
+        let mut images = ImageStore::new();
+        images.insert(
+            "fixture-image.png",
+            std::fs::read("examples/hwp5_review/fixture-image.png").expect("png asset"),
+        );
+        let mut img = Image::new(
+            "fixture-image.png",
+            HU::from_mm(12.0).expect("w"),
+            HU::from_mm(12.0).expect("h"),
+            ImageFormat::Png,
+        );
+        img.placement = Some(ObjectPlacement {
+            text_wrap: ObjectTextWrap::Square,
+            text_flow: ObjectTextFlow::BothSides,
+            treat_as_char: false,
+            flow_with_text: false,
+            allow_overlap: true,
+            vert_rel_to: ObjectRelativeTo::Para,
+            horz_rel_to: ObjectRelativeTo::Para,
+            vert_offset: HU::from_mm(2.0).expect("voff"),
+            horz_offset: HU::from_mm(120.0).expect("hoff"),
+        });
+        let anchor_para = Paragraph::with_runs(
+            vec![
+                Run::text(
+                    "앵커 판별 문단입니다. 이 첫 부분은 첫 줄을 다 채우고 \
+                     둘째 줄 중간까지 이어지도록 충분히 길게 씁니다. ",
+                    CharShapeIndex::new(0),
+                ),
+                Run::image(img, CharShapeIndex::new(0)),
+                Run::text(
+                    "마커 뒤 텍스트는 이미지가 쪼갠 줄들의 오른쪽 칸을 채우고, \
+                     이미지 세로 범위를 지나 아래 전폭 줄까지 계속 이어집니다. \
+                     그래야 문단 끝 빈 세그먼트가 생기지 않고, 마커 소속 줄 \
+                     기준의 세로 배치를 오라클로 잠글 수 있습니다.",
+                    CharShapeIndex::new(0),
+                ),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        save_with_images(
+            "anchored_marker_line",
+            vec![
+                text_para("첫 문단입니다."),
+                anchor_para,
+                text_para("앵커 뒤 문단입니다."),
+                text_para("문서 끝 문단입니다."),
+            ],
+            images,
+        );
+    }
+
+    // ⑫ F3 경계 케이스 (§11b F3 Critical): 마커 가시 좌표 == 줄 경계.
+    //    ⑪ 재저장 실측에서 한컴이 첫 줄을 정확히 55자에서 꺾었다 — 같은
+    //    페이지 설정에서 선행 텍스트를 그 55자로 자르면 마커가 둘째 줄
+    //    시작 좌표에 정확히 앉는다. 한컴 배치(위 줄 끝 vs 아래 줄 시작)가
+    //    경계 채택 방향의 byte-ground 다 (현 구현 = 뒤 세그먼트 + typed
+    //    경고 — 반증 시 교체).
+    {
+        use hwpforge_core::image::{Image, ImageFormat};
+        use hwpforge_core::placement::{
+            ObjectPlacement, ObjectRelativeTo, ObjectTextFlow, ObjectTextWrap,
+        };
+        use hwpforge_foundation::HwpUnit as HU;
+        let mut images = ImageStore::new();
+        images.insert(
+            "fixture-image.png",
+            std::fs::read("examples/hwp5_review/fixture-image.png").expect("png asset"),
+        );
+        let mut img = Image::new(
+            "fixture-image.png",
+            HU::from_mm(12.0).expect("w"),
+            HU::from_mm(12.0).expect("h"),
+            ImageFormat::Png,
+        );
+        img.placement = Some(ObjectPlacement {
+            text_wrap: ObjectTextWrap::Square,
+            text_flow: ObjectTextFlow::BothSides,
+            treat_as_char: false,
+            flow_with_text: false,
+            allow_overlap: true,
+            vert_rel_to: ObjectRelativeTo::Para,
+            horz_rel_to: ObjectRelativeTo::Para,
+            vert_offset: HU::from_mm(2.0).expect("voff"),
+            horz_offset: HU::from_mm(120.0).expect("hoff"),
+        });
+        let anchor_para = Paragraph::with_runs(
+            vec![
+                // ⑪ 실측 첫 줄(55자) 그대로 — 트레일링 공백 포함.
+                Run::text(
+                    "앵커 판별 문단입니다. 이 첫 부분은 첫 줄을 다 채우고 둘째 \
+                     줄 중간까지 이어지도록 충분히 길게 ",
+                    CharShapeIndex::new(0),
+                ),
+                Run::image(img, CharShapeIndex::new(0)),
+                Run::text(
+                    "씁니다. 마커 뒤 텍스트는 이미지가 쪼갠 줄들의 오른쪽 칸을 \
+                     채우고, 이미지 세로 범위를 지나 아래 전폭 줄까지 계속 \
+                     이어집니다. 경계 좌표의 한컴 배치가 이 fixture 의 실측 \
+                     대상입니다.",
+                    CharShapeIndex::new(0),
+                ),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        save_with_images(
+            "anchored_marker_boundary",
+            vec![
+                text_para("첫 문단입니다."),
+                anchor_para,
+                text_para("앵커 뒤 문단입니다."),
+                text_para("문서 끝 문단입니다."),
+            ],
+            images,
+        );
+    }
+
     println!();
     println!("한컴오피스에서 할 일 (재저장 = 조판 캐시·wire 진리 생성, 하나씩):");
     println!("  1. textbox_basic-base.hwpx 열기 → 글상자·내부 줄바꿈 확인");

@@ -166,6 +166,13 @@ fn render_warning_dto(w: &PdfWarning) -> WarningDto {
             "non-text run (control/image) dropped".to_string(),
             Some(location.clone()),
         ),
+        PdfWarning::AnchorMarkerOnLineBoundary { location } => (
+            "ANCHOR_MARKER_ON_LINE_BOUNDARY",
+            "anchored-image marker sits exactly on a line boundary — \
+             anchored to the later line"
+                .to_string(),
+            Some(location.clone()),
+        ),
         PdfWarning::ImageDataMissing { key, location } => (
             "IMAGE_DATA_MISSING",
             format!("image data missing for \"{key}\" — skipped"),
@@ -544,6 +551,10 @@ mod tests {
                 "FONT_EMBED_PREVIEW_PRINT",
             ),
             (PdfWarning::AlignmentApproximated { location: loc() }, "ALIGNMENT_APPROXIMATED"),
+            (
+                PdfWarning::AnchorMarkerOnLineBoundary { location: loc() },
+                "ANCHOR_MARKER_ON_LINE_BOUNDARY",
+            ),
             (PdfWarning::NonTextRunDropped { location: loc() }, "NON_TEXT_RUN_DROPPED"),
             (PdfWarning::TablePaginationComputed { location: loc() }, "TABLE_PAGINATION_COMPUTED"),
             (PdfWarning::TableDeficitDistributed { location: loc() }, "TABLE_DEFICIT_DISTRIBUTED"),
