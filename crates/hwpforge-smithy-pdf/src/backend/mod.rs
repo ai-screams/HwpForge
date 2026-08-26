@@ -528,6 +528,50 @@ mod image_tests {
             .any(|w| matches!(w, PdfWarning::UnsupportedImageFormat { format: "bmp", .. })));
     }
 
+    /// W6 §12a 정책 확정 잠금: WMF/EMF 도 BMP 와 동열 — strict = typed
+    /// 에러, degraded = 경고+스킵 (변환 지원은 후속 슬라이스).
+    #[test]
+    fn wmf_and_emf_follow_failure_mode_like_bmp() {
+        let wmf: &[u8] = &[0xD7, 0xCD, 0xC6, 0x9A, 0, 0, 0, 0];
+        let mut emf = vec![0x01u8, 0, 0, 0];
+        emf.extend_from_slice(&[0u8; 36]);
+        emf.extend_from_slice(b" EMF");
+        for (name, bytes, tag) in [("dia.wmf", wmf, "wmf"), ("chart.emf", emf.as_slice(), "emf")] {
+            let item = image_item(name, bytes);
+            let mut warnings = Vec::new();
+            let err = write_pdf(
+                &one_page(vec![PaintItem::Image(item.clone())]),
+                &[],
+                RenderFailureMode::Fatal,
+                &mut warnings,
+            )
+            .expect_err("fatal");
+            assert!(
+                matches!(&err, PdfError::UnsupportedImageFormat { format, .. } if *format == tag),
+                "{name}: {err:?}"
+            );
+
+            let mut warnings = Vec::new();
+            let bytes_out = write_pdf(
+                &one_page(vec![PaintItem::Image(item)]),
+                &[],
+                RenderFailureMode::Degraded,
+                &mut warnings,
+            )
+            .expect("degraded ok");
+            assert!(
+                warnings.iter().any(
+                    |w| matches!(w, PdfWarning::UnsupportedImageFormat { format, .. } if *format == tag)
+                ),
+                "{name}: {warnings:?}"
+            );
+            assert!(
+                !contains(&inflated_pdf_text(&bytes_out), b"/Subtype/Image"),
+                "스킵 = 무이미지"
+            );
+        }
+    }
+
     #[test]
     fn zero_and_negative_geometry_follow_failure_mode() {
         for (w, h) in [(0.0, 40.0), (-1.0, 40.0), (50.0, 0.0), (f64::NAN, 40.0)] {
