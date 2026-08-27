@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.3](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.16.2...hwpforge-bindings-mcp-v0.16.3) - 2026-08-26
+
+### Fixed
+
+- *(smithy-md)* 임베드 리뷰 상환 — 단독 문단 보존·bare 경로 base·BMP 구조검사
+
+- *(smithy-md)* md→hwpx 이미지 참조를 BinData 로 실제 임베드
+
+
 ## [0.16.2](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.16.1...hwpforge-bindings-mcp-v0.16.2) - 2026-08-26
 
 ### Fixed
