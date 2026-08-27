@@ -140,7 +140,8 @@ pub fn parse_section(
     chart_xmls: &HashMap<String, String>,
 ) -> HwpxResult<SectionParseResult> {
     let file_hint = format!("Contents/section{section_index}.xml");
-    let section: HxSection = from_str(xml)
+    let xml = preserve_ws_only_text(xml);
+    let section: HxSection = from_str(&xml)
         .map_err(|e| HwpxError::XmlParse { file: file_hint, detail: e.to_string() })?;
 
     let mut page_settings = None;
@@ -4924,5 +4925,103 @@ mod tests {
             },
             _ => panic!("expected Control"),
         }
+    }
+}
+
+/// quick-xml 의 serde 역직렬화는 whitespace-only 텍스트 노드를 무시해
+/// `<hp:t> </hp:t>` (공백만 담긴 run — 한컴도 저작하는 유효 wire)가 통째로
+/// 사라진다. CDATA·문자 참조(`&#32;`)도 unescape 후 판정이라 살아남지 못한다
+/// (실측). 그래서 파싱 전에 ws-only 콘텐츠 선두에 sentinel `U+E000` 을 붙여
+/// 노드를 살리고, [`HxText`] 소비 시점(`strip_ws_sentinel`)에 대칭 제거한다.
+///
+/// mixed content(`<hp:t>` 안에 자식 요소가 있는 경우)는 건드리지 않는다 —
+/// 관측된 결함 범위는 순수 ws-only 콘텐츠뿐이다.
+fn preserve_ws_only_text(xml: &str) -> std::borrow::Cow<'_, str> {
+    let mut result = mark_ws_only_text(xml, "<hp:t");
+    if let std::borrow::Cow::Borrowed(_) = result {
+        result = mark_ws_only_text(xml, "<t");
+    }
+    result
+}
+
+/// [`preserve_ws_only_text`] 의 실제 스캐너 — `open` 여는-태그 접두로 1패스.
+fn mark_ws_only_text<'a>(xml: &'a str, open: &str) -> std::borrow::Cow<'a, str> {
+    let close = if open == "<hp:t" { "</hp:t>" } else { "</t>" };
+    let mut out: Option<String> = None;
+    let mut last = 0usize;
+    let mut search = 0usize;
+    while let Some(rel) = xml[search..].find(open) {
+        let tag_start = search + rel;
+        let after = &xml[tag_start + open.len()..];
+        // `<hp:tab/>` 등 다른 태그 배제: 다음 문자가 '>' 또는 공백(속성)이어야 함.
+        let Some(first) = after.chars().next() else { break };
+        if first != '>' && !first.is_ascii_whitespace() {
+            search = tag_start + open.len();
+            continue;
+        }
+        let Some(gt_rel) = after.find('>') else { break };
+        // 자기닫힘 `<hp:t/>` 는 콘텐츠 없음.
+        if after[..gt_rel].ends_with('/') {
+            search = tag_start + open.len() + gt_rel + 1;
+            continue;
+        }
+        let content_start = tag_start + open.len() + gt_rel + 1;
+        let Some(close_rel) = xml[content_start..].find(close) else { break };
+        let content = &xml[content_start..content_start + close_rel];
+        let ws_only = !content.is_empty()
+            && !content.contains('<')
+            && content.chars().all(|c| matches!(c, ' ' | '\t' | '\r' | '\n'));
+        if ws_only {
+            let buf = out.get_or_insert_with(|| String::with_capacity(xml.len() + 8));
+            buf.push_str(&xml[last..content_start]);
+            buf.push('\u{E000}');
+            last = content_start;
+        }
+        search = content_start + close_rel + close.len();
+    }
+    match out {
+        Some(mut buf) => {
+            buf.push_str(&xml[last..]);
+            std::borrow::Cow::Owned(buf)
+        }
+        None => std::borrow::Cow::Borrowed(xml),
+    }
+}
+
+// ── ws-only `<hp:t>` 보존 테스트 (quick-xml de 무시 우회) ──────────────────
+
+#[cfg(test)]
+mod ws_preserve_tests {
+    use super::*;
+
+    #[test]
+    fn preserve_ws_only_text_marks_only_pure_whitespace() {
+        let xml = "<hp:run><hp:t>a</hp:t><hp:t> </hp:t><hp:t>  b</hp:t><hp:t/></hp:run>";
+        let out = preserve_ws_only_text(xml);
+        assert_eq!(
+            out,
+            "<hp:run><hp:t>a</hp:t><hp:t>\u{E000} </hp:t><hp:t>  b</hp:t><hp:t/></hp:run>"
+        );
+    }
+
+    #[test]
+    fn preserve_ws_only_text_ignores_mixed_and_other_tags() {
+        let xml = "<hp:t> <hp:tab/></hp:t><hp:tbl> </hp:tbl>";
+        assert_eq!(preserve_ws_only_text(xml), xml, "mixed content and other tags untouched");
+    }
+
+    #[test]
+    fn ws_only_run_survives_section_parse() {
+        // 공백 전용 run 이 파싱 후에도 살아남아야 한다
+        // (종전: quick-xml de 가 무음 드롭 — 서식 run 사이 공백 소실).
+        let xml = r#"<sec><p paraPrIDRef="0"><run charPrIDRef="1"><t>가</t></run><run charPrIDRef="0"><t> </t></run><run charPrIDRef="2"><t>나</t></run></p></sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).expect("parse");
+        let para = &result.paragraphs[0];
+        let texts: Vec<_> = para
+            .runs
+            .iter()
+            .filter_map(|r| r.content.plain_text().map(|c| c.into_owned()))
+            .collect();
+        assert_eq!(texts, vec!["가", " ", "나"], "whitespace-only run must survive");
     }
 }

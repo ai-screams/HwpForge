@@ -618,6 +618,20 @@ impl Serialize for HxText {
     }
 }
 
+/// 디코더 전처리(`preserve_ws_only_text`)가 ws-only `<hp:t>` 콘텐츠 선두에
+/// 붙인 sentinel `U+E000` 을 대칭 제거한다. 조건은 전처리와 정확히 동형 —
+/// "선두 U+E000 + 나머지 전부 XML whitespace" 일 때만 1글자 벗긴다.
+/// (원본 문서가 그 정확한 형태의 텍스트를 가질 이론적 위험은 PUA 단독+공백
+/// run 이라 실사용이 없다 — 전처리 rustdoc 참조.)
+fn strip_ws_sentinel(s: &str) -> &str {
+    if let Some(rest) = s.strip_prefix('\u{E000}') {
+        if !rest.is_empty() && rest.chars().all(|c| matches!(c, ' ' | '\t' | '\r' | '\n')) {
+            return rest;
+        }
+    }
+    s
+}
+
 impl HxText {
     /// Creates a new `HxText` from a plain string.
     pub fn new(text: impl Into<String>) -> Self {
@@ -643,7 +657,7 @@ impl HxText {
         self.parts
             .iter()
             .map(|p| match p {
-                HxTextPart::Text(s) => s.as_str(),
+                HxTextPart::Text(s) => strip_ws_sentinel(s),
                 HxTextPart::LineBreak {} => "\n",
                 HxTextPart::Tab { .. } => "\t",
                 HxTextPart::FwSpace {} => "\u{001F}",
@@ -694,7 +708,7 @@ impl HxText {
         let segments = self.parts.iter().filter_map(|p| match p {
             HxTextPart::Text(s) if s.is_empty() => None,
             HxTextPart::TitleMark { .. } => None,
-            HxTextPart::Text(s) => Some(InlineSegment::Plain(s.clone())),
+            HxTextPart::Text(s) => Some(InlineSegment::Plain(strip_ws_sentinel(s).to_string())),
             HxTextPart::Tab { width, leader, tab_type } => {
                 Some(InlineSegment::Tab(InlineTabAttr {
                     width: HwpUnit::new(width.unwrap_or(0)).unwrap_or(HwpUnit::ZERO),
