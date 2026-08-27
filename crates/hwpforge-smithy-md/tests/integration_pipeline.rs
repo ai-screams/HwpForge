@@ -412,3 +412,43 @@ fn pipeline_empty_markdown_produces_valid_hwpx() {
     assert!(!decoded.sections().is_empty(), "Should have at least 1 section");
     assert!(!decoded.sections()[0].paragraphs.is_empty(), "Should have at least 1 paragraph");
 }
+
+// ── W0: inline formatting fixed point (MD → HWPX → MD) ──────────────────────
+
+/// Runs MD → Core → HWPX → Core → styled-MD and returns the regenerated MD.
+fn roundtrip_md(markdown: &str, template: &Template) -> String {
+    let (bytes, _) = run_full_pipeline(markdown, template);
+    let hwpx_doc = HwpxDecoder::decode(&bytes).expect("HWPX decode");
+    let validated = hwpx_doc.document.validate().expect("validate");
+    let lookup = HwpxStyleLookup::new(&hwpx_doc.style_store, &hwpx_doc.image_store);
+    MdEncoder::encode_styled(&validated, &lookup).markdown
+}
+
+/// W0 acceptance: inline formatting survives the full pipeline and the MD
+/// side reaches a fixed point (G1 == G3 — first regeneration equals the
+/// regeneration of its own output).
+#[test]
+fn pipeline_w0_inline_format_fixed_point() {
+    let template = builtin_default().expect("builtin_default");
+    let g1 =
+        roundtrip_md("본문 **굵게** 그리고 *기울임* 그리고 ~~취소선~~ 그리고 `코드` 끝", &template);
+    assert!(g1.contains("**굵게**"), "bold marker must survive: {g1}");
+    assert!(g1.contains("*기울임*"), "italic marker must survive: {g1}");
+    assert!(g1.contains("~~취소선~~"), "strikethrough marker must survive: {g1}");
+    // 인라인 코드: 코드-서식 왕복은 W0 범위 밖 (styled 인코더에 역판정 축이
+    // 없음 — is_code_paragraph 는 블록 코드 전용). 백틱은 이스케이프된
+    // 리터럴로 안정 왕복한다.
+    assert!(g1.contains("\\`코드\\`"), "backticks round-trip as escaped literals: {g1}");
+
+    let g3 = roundtrip_md(&g1, &template);
+    assert_eq!(g1, g3, "styled MD must be a fixed point");
+}
+
+/// Nested bold+italic keeps both attributes through the pipeline.
+#[test]
+fn pipeline_w0_nested_format_fixed_point() {
+    let template = builtin_default().expect("builtin_default");
+    let g1 = roundtrip_md("**굵게 *겹침***", &template);
+    let g3 = roundtrip_md(&g1, &template);
+    assert_eq!(g1, g3, "nested format MD must be a fixed point: {g1}");
+}

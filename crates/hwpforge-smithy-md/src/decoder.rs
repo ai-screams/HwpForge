@@ -11,7 +11,7 @@ use hwpforge_blueprint::template::Template;
 use hwpforge_core::{
     Control, Document, Image, Paragraph, Run, RunContent, Section, Table, TableCell, TableRow,
 };
-use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex, StyleIndex};
+use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex, StrikeoutShape, StyleIndex};
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use crate::error::{MdError, MdResult};
@@ -85,14 +85,14 @@ impl MdDecoder {
     /// automatically.
     pub fn decode(markdown: &str, template: &Template) -> MdResult<MdDocument> {
         let extracted = extract_frontmatter(markdown)?;
-        let (mapping, style_registry) = resolve_mapping(template)?;
+        let (mapping, mut style_registry) = resolve_mapping(template)?;
 
         let mut document = Document::new();
         if let Some(frontmatter) = extracted.frontmatter.as_ref() {
             apply_to_metadata(frontmatter, document.metadata_mut());
         }
 
-        let mut state = DecoderState::new(&mapping);
+        let mut state = DecoderState::new(&mapping, &mut style_registry);
         state.decode_markdown(extracted.content)?;
         let decoded = state.finish()?;
 
@@ -236,20 +236,26 @@ impl ParagraphBuilder {
     }
 
     fn push_text(&mut self, text: &str) {
+        self.push_text_with_style(text, self.style.char_shape_id);
+    }
+
+    /// Appends text with an explicit character shape (inline-format runs).
+    /// Adjacent text with the same shape merges into one run.
+    fn push_text_with_style(&mut self, text: &str, char_shape_id: CharShapeIndex) {
         if text.is_empty() {
             return;
         }
 
         if let Some(last) = self.runs.last_mut() {
             if let RunContent::Text(existing) = &mut last.content {
-                if last.char_shape_id == self.style.char_shape_id {
+                if last.char_shape_id == char_shape_id {
                     existing.push_str(text);
                     return;
                 }
             }
         }
 
-        self.runs.push(Run::text(text, self.style.char_shape_id));
+        self.runs.push(Run::text(text, char_shape_id));
     }
 
     fn push_run(&mut self, run: Run) {
@@ -409,6 +415,16 @@ impl TableBuilder {
 #[derive(Debug)]
 struct DecoderState<'a> {
     mapping: &'a MdMapping,
+    /// Style registry the decoder may extend with derived inline-format
+    /// character shapes (W0 — bold/italic/strikethrough runs).
+    registry: &'a mut StyleRegistry,
+    /// Inline-format nesting counters (pulldown-cmark guarantees balanced
+    /// start/end tags; counters keep same-tag nesting safe).
+    fmt_bold: u32,
+    fmt_italic: u32,
+    fmt_strike: u32,
+    /// Cache of derived char shapes: (base shape index, format flags) → index.
+    derived_shapes: std::collections::HashMap<(usize, u8), CharShapeIndex>,
     paragraphs: Vec<Paragraph>,
     current: Option<ParagraphBuilder>,
     table: Option<TableBuilder>,
@@ -429,9 +445,14 @@ struct DecodeOutput {
 }
 
 impl<'a> DecoderState<'a> {
-    fn new(mapping: &'a MdMapping) -> Self {
+    fn new(mapping: &'a MdMapping, registry: &'a mut StyleRegistry) -> Self {
         Self {
             mapping,
+            registry,
+            fmt_bold: 0,
+            fmt_italic: 0,
+            fmt_strike: 0,
+            derived_shapes: std::collections::HashMap::new(),
             paragraphs: Vec::new(),
             current: None,
             table: None,
@@ -511,12 +532,10 @@ impl<'a> DecoderState<'a> {
             Tag::TableCell => self.start_table_cell_tag(),
             Tag::Link { dest_url, .. } => self.start_link_tag(&dest_url),
             Tag::Image { dest_url, .. } => self.start_image_tag(&dest_url),
-            Tag::Emphasis
-            | Tag::Strong
-            | Tag::Strikethrough
-            | Tag::HtmlBlock
-            | Tag::Superscript
-            | Tag::Subscript => {}
+            Tag::Strong => self.fmt_bold += 1,
+            Tag::Emphasis => self.fmt_italic += 1,
+            Tag::Strikethrough => self.fmt_strike += 1,
+            Tag::HtmlBlock | Tag::Superscript | Tag::Subscript => {}
             Tag::FootnoteDefinition(_) => {
                 return Err(unsupported_markdown_feature("footnote definition"))
             }
@@ -546,12 +565,10 @@ impl<'a> DecoderState<'a> {
             TagEnd::TableCell => self.end_table_cell_tag(),
             TagEnd::Link => self.end_link_tag(),
             TagEnd::Image => self.end_image_tag()?,
-            TagEnd::Emphasis
-            | TagEnd::Strong
-            | TagEnd::Strikethrough
-            | TagEnd::HtmlBlock
-            | TagEnd::Superscript
-            | TagEnd::Subscript => {}
+            TagEnd::Strong => self.fmt_bold = self.fmt_bold.saturating_sub(1),
+            TagEnd::Emphasis => self.fmt_italic = self.fmt_italic.saturating_sub(1),
+            TagEnd::Strikethrough => self.fmt_strike = self.fmt_strike.saturating_sub(1),
+            TagEnd::HtmlBlock | TagEnd::Superscript | TagEnd::Subscript => {}
             TagEnd::FootnoteDefinition => {
                 return Err(unsupported_markdown_feature("footnote definition"))
             }
@@ -740,7 +757,7 @@ impl<'a> DecoderState<'a> {
         }
 
         self.with_materialized_paragraph(|current| {
-            current.push_text(text);
+            current.push_text_with_style(text, char_shape_id);
         });
 
         Ok(())
@@ -767,9 +784,9 @@ impl<'a> DecoderState<'a> {
         }
 
         self.with_materialized_paragraph(|current| {
-            current.push_text("`");
-            current.push_text(code);
-            current.push_text("`");
+            current.push_text_with_style("`", char_shape_id);
+            current.push_text_with_style(code, char_shape_id);
+            current.push_text_with_style("`", char_shape_id);
         });
         Ok(())
     }
@@ -831,11 +848,53 @@ impl<'a> DecoderState<'a> {
         self.mapping.body
     }
 
-    fn current_char_shape_id(&self) -> CharShapeIndex {
-        self.current
+    fn current_char_shape_id(&mut self) -> CharShapeIndex {
+        let base = self
+            .current
             .as_ref()
             .map(|p| p.style.char_shape_id)
-            .unwrap_or(self.style_for_context().char_shape_id)
+            .unwrap_or(self.style_for_context().char_shape_id);
+        self.derived_char_shape(base)
+    }
+
+    /// Bitset of active inline formats: bit0 bold, bit1 italic, bit2 strike.
+    fn format_flags(&self) -> u8 {
+        u8::from(self.fmt_bold > 0)
+            | (u8::from(self.fmt_italic > 0) << 1)
+            | (u8::from(self.fmt_strike > 0) << 2)
+    }
+
+    /// Returns `base` when no inline format is active; otherwise returns a
+    /// char shape derived from `base` with the active formats applied,
+    /// registering it once per (base, flags) combination.
+    fn derived_char_shape(&mut self, base: CharShapeIndex) -> CharShapeIndex {
+        let flags = self.format_flags();
+        if flags == 0 {
+            return base;
+        }
+        let key = (base.get(), flags);
+        if let Some(&cached) = self.derived_shapes.get(&key) {
+            return cached;
+        }
+        let Some(base_shape) = self.registry.char_shape(base) else {
+            // Unknown base (defensive): keep the base index rather than
+            // fabricating a shape from nothing.
+            return base;
+        };
+        let mut derived = base_shape.clone();
+        if flags & 1 != 0 {
+            derived.bold = true;
+        }
+        if flags & 2 != 0 {
+            derived.italic = true;
+        }
+        if flags & 4 != 0 && derived.strikeout_shape == StrikeoutShape::None {
+            derived.strikeout_shape = StrikeoutShape::Solid;
+        }
+        let idx = CharShapeIndex::new(self.registry.char_shapes.len());
+        self.registry.char_shapes.push(derived);
+        self.derived_shapes.insert(key, idx);
+        idx
     }
 
     fn is_in_table_cell(&self) -> bool {
@@ -1596,5 +1655,114 @@ mod tests {
         let result = MdDecoder::decode("본문입니다.", &template).unwrap();
         let section = &result.document.sections()[0];
         assert_eq!(section.paragraphs[0].style_id, None);
+    }
+
+    // -----------------------------------------------------------------------
+    // W0: inline formatting stack (bold/italic/strikethrough)
+    // -----------------------------------------------------------------------
+
+    /// Finds the body-style section paragraph containing `needle`.
+    fn body_para_with<'a>(
+        doc: &'a hwpforge_core::document::Document<hwpforge_core::Draft>,
+        needle: &str,
+    ) -> &'a hwpforge_core::paragraph::Paragraph {
+        doc.sections()[0]
+            .paragraphs
+            .iter()
+            .find(|p| p.text_content().contains(needle))
+            .expect("paragraph containing needle")
+    }
+
+    #[test]
+    fn w0_bold_run_derives_char_shape() {
+        let template = default_template();
+        let result = MdDecoder::decode("text **bold** tail", &template).unwrap();
+        let para = body_para_with(&result.document, "bold");
+        let texts: Vec<_> = para.runs.iter().filter_map(|r| r.content.plain_text()).collect();
+        assert_eq!(texts, vec!["text ", "bold", " tail"]);
+        let base = para.runs[0].char_shape_id;
+        let derived = para.runs[1].char_shape_id;
+        assert_ne!(base, derived, "bold run must use a derived char shape");
+        assert_eq!(para.runs[2].char_shape_id, base, "tail returns to base shape");
+        let cs = result.style_registry.char_shape(derived).expect("derived shape registered");
+        assert!(cs.bold);
+        assert!(!cs.italic);
+    }
+
+    #[test]
+    fn w0_italic_run_derives_char_shape() {
+        let template = default_template();
+        let result = MdDecoder::decode("a *it* b", &template).unwrap();
+        let para = body_para_with(&result.document, "it");
+        let cs = result
+            .style_registry
+            .char_shape(para.runs[1].char_shape_id)
+            .expect("derived shape registered");
+        assert!(cs.italic);
+        assert!(!cs.bold);
+    }
+
+    #[test]
+    fn w0_strikethrough_run_derives_char_shape() {
+        let template = default_template();
+        let result = MdDecoder::decode("a ~~gone~~ b", &template).unwrap();
+        let para = body_para_with(&result.document, "gone");
+        let cs = result
+            .style_registry
+            .char_shape(para.runs[1].char_shape_id)
+            .expect("derived shape registered");
+        assert_ne!(cs.strikeout_shape, hwpforge_foundation::StrikeoutShape::None);
+    }
+
+    #[test]
+    fn w0_nested_bold_italic_combines() {
+        let template = default_template();
+        let result = MdDecoder::decode("**bold *both***", &template).unwrap();
+        let para = body_para_with(&result.document, "both");
+        let texts: Vec<_> = para.runs.iter().filter_map(|r| r.content.plain_text()).collect();
+        assert_eq!(texts, vec!["bold ", "both"]);
+        let bold_cs = result.style_registry.char_shape(para.runs[0].char_shape_id).unwrap();
+        assert!(bold_cs.bold && !bold_cs.italic);
+        let both_cs = result.style_registry.char_shape(para.runs[1].char_shape_id).unwrap();
+        assert!(both_cs.bold && both_cs.italic);
+    }
+
+    #[test]
+    fn w0_same_format_combo_reuses_derived_shape() {
+        let template = default_template();
+        let before =
+            MdDecoder::decode("plain", &template).unwrap().style_registry.char_shape_count();
+        let result = MdDecoder::decode("**a** x **b**", &template).unwrap();
+        let para = body_para_with(&result.document, "a");
+        assert_eq!(
+            para.runs[0].char_shape_id, para.runs[2].char_shape_id,
+            "identical combos share one derived shape"
+        );
+        assert_eq!(
+            result.style_registry.char_shape_count(),
+            before + 1,
+            "exactly one derived shape for one combo"
+        );
+    }
+
+    #[test]
+    fn w0_unformatted_text_adds_no_derived_shapes() {
+        let template = default_template();
+        let before =
+            MdDecoder::decode("plain", &template).unwrap().style_registry.char_shape_count();
+        let after =
+            MdDecoder::decode("plain again", &template).unwrap().style_registry.char_shape_count();
+        assert_eq!(before, after, "no formatting => registry untouched");
+    }
+
+    #[test]
+    fn w0_formatting_inside_heading_derives_from_heading_base() {
+        let template = default_template();
+        let (mapping, _) = resolve_mapping(&template).unwrap();
+        let result = MdDecoder::decode("# head **bold**", &template).unwrap();
+        let para = &result.document.sections()[0].paragraphs[0];
+        assert_eq!(para.runs[0].char_shape_id, mapping.heading1.char_shape_id);
+        let derived = result.style_registry.char_shape(para.runs[1].char_shape_id).unwrap();
+        assert!(derived.bold);
     }
 }
