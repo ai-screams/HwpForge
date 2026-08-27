@@ -495,6 +495,9 @@ fn path_starts_with(path: &[PathSeg], prefix: &[PathSeg]) -> bool {
 }
 
 /// Result of a bytes-level [`HwpxCellEditor::set_cells`] run.
+///
+/// 의미 손상 인코드 경고(번호 머리/titleMark 생략 등)는 결과에 실리는 대신
+/// [`CellEditError::Codec`] 으로 **fail-closed** 된다 (stamper 와 동일 계약).
 #[derive(Debug)]
 pub struct CellEditResult {
     /// The edited HWPX package.
@@ -528,8 +531,29 @@ impl HwpxCellEditor {
         let outcome = apply_set_cells(&mut document, specs)?;
         let validated =
             document.validate().map_err(|e| CellEditError::Codec(format!("validate: {e}")))?;
-        let bytes = HwpxEncoder::encode(&validated, &style_store, &image_store)
-            .map_err(|e| CellEditError::Codec(e.to_string()))?;
+        let encode_outcome = HwpxEncoder::encode_with_diagnostics(
+            &validated,
+            &style_store,
+            &image_store,
+            crate::EncodeOptions::default(),
+        )
+        .map_err(|e| CellEditError::Codec(e.to_string()))?;
+        // 의미 손상 fail-closed (7차 평결 High) — stamper 의
+        // `encode_fail_closed` 와 동일 계약: 편집기가 알고 있는 의미
+        // 손상(번호 머리/titleMark 생략 등)을 무음 반환하지 않는다.
+        if let Some(w) = encode_outcome.warnings.iter().find(|w| {
+            matches!(
+                w,
+                crate::EncodeWarning::NoteHeadSkipped { .. }
+                    | crate::EncodeWarning::TitleMarkSkipped { .. }
+                    | crate::EncodeWarning::NoteRestartIgnored { .. }
+            )
+        }) {
+            return Err(CellEditError::Codec(format!(
+                "encode produced a semantic-loss warning (fail-closed): {w}"
+            )));
+        }
+        let bytes = encode_outcome.bytes;
         // Untouched paragraphs keep Hancom's line-layout cache so the
         // renderer does not reflow (and repaginate) the whole document.
         let bytes = crate::layout_carry::carry_line_segs(base, &e0, &bytes)

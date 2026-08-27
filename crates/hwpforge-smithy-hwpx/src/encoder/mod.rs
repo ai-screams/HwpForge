@@ -642,6 +642,10 @@ impl HwpxEncoder {
     ///
     /// `EncodeOptions::default()` 를 넘기면 [`Self::encode`] 와 바이트
     /// 단위로 동일한 출력을 낸다.
+    ///
+    /// [`Self::encode`] 와 동일하게 의미 [`EncodeWarning`] 은 **폐기**된다
+    /// (`emit_layout_cache` 요청 중 캐시 드롭만 오류로 승격) — 경고 보존
+    /// 경로는 [`Self::encode_with_diagnostics`].
     pub fn encode_with_options(
         document: &Document<Validated>,
         style_store: &HwpxStyleStore,

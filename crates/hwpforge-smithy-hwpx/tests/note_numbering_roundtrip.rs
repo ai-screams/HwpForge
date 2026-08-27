@@ -244,3 +244,39 @@ fn short_heading_text_keeps_title_mark() {
         assert!(!xml.contains("__HWP"), "마커 유출: {xml}");
     }
 }
+
+/// 7차 평결 High 잠금: titleMark 각주 문서는 재인코드에서 번호 머리가
+/// 생략된다(`NoteHeadSkipped`) — 편집기(stamper)는 이 의미 손상을 무음
+/// 반환하지 않고 **fail-closed** 해야 한다 (admission 은 Core 비교라 이
+/// 손상을 못 본다: 디코더가 FOOTNOTE autoNum 을 Core 로 올리지 않음).
+#[test]
+fn stamper_fails_closed_on_note_head_skip() {
+    use hwpforge_smithy_hwpx::stamp::{HwpxStamper, StamperError};
+
+    let store = minimal_store();
+    let images = ImageStore::new();
+
+    let mut heading_body = Paragraph::with_runs(
+        vec![Run::text("제목 각주", CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    heading_body.heading_level = Some(1);
+    let section = Section::with_paragraphs(
+        vec![Paragraph::with_runs(
+            vec![Run::control(Control::footnote(vec![heading_body]), CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        )],
+        PageSettings::a4(),
+    );
+    let mut doc = Document::new();
+    doc.add_section(section);
+    let validated = doc.validate().expect("validate");
+    let base = HwpxEncoder::encode(&validated, &store, &images).expect("encode");
+
+    let err = HwpxStamper::stamp(&base, &[])
+        .expect_err("titleMark 각주의 번호 머리 생략을 무음 반환하면 안 됨 (7차 평결 High)");
+    assert!(
+        matches!(&err, StamperError::Codec(msg) if msg.contains("semantic-loss")),
+        "다른 오류: {err:?}"
+    );
+}
