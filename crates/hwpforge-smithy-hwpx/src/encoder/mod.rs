@@ -472,7 +472,7 @@ use crate::style_store::HwpxStyleStore;
 
 use self::header::encode_header;
 use self::package::PackageWriter;
-use self::section::encode_section;
+use self::section::encode_section_with_note_counters;
 
 // ── HwpxEncoder ─────────────────────────────────────────────────
 /// 인코드 중 표면화된 비치명 경고 (W1b — §1g v5 변경 2).
@@ -641,14 +641,17 @@ impl HwpxEncoder {
         let mut masterpage_offset = 0usize;
         let mut embedded_ole_offset = 0usize;
         let mut section_results = Vec::with_capacity(sections.len());
+        // 각주/미주 autoNum 순번 — 문서 전역 연속 (한컴 F7 실측: 종류별 1..N).
+        let mut note_counters = (0u32, 0u32);
         for (i, section) in sections.iter().enumerate() {
-            let result = encode_section(
+            let result = encode_section_with_note_counters(
                 section,
                 i,
                 chart_offset,
                 masterpage_offset,
                 embedded_ole_offset,
                 options,
+                &mut note_counters,
             )?;
             chart_offset += result.charts.len();
             masterpage_offset += result.master_pages.len();

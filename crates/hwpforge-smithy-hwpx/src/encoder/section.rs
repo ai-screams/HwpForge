@@ -69,12 +69,13 @@ use crate::inline_text::{
 use hwpforge_foundation::{BookmarkType, DropCapStyle, HwpUnit, TextDirection};
 
 use crate::schema::section::{
-    HxBookmark, HxCaption, HxCellAddr, HxCellSpan, HxCellSz, HxChart, HxCompose, HxComposeCharPr,
-    HxCtrl, HxDutmal, HxEquation, HxFlip, HxFootNote, HxImg, HxImgClip, HxImgDim, HxImgRect,
-    HxIndexMark, HxLineSeg, HxLineSegArray, HxMatrix, HxNewNum, HxOffset, HxPageHiding,
-    HxPageMargin, HxPagePr, HxParagraph, HxPic, HxPoint, HxRenderingInfo, HxRotationInfo, HxRun,
-    HxRunCase, HxRunSwitch, HxScript, HxSecPr, HxSection, HxShapeComment, HxSizeAttr, HxSubList,
-    HxTable, HxTableCell, HxTableMargin, HxTablePos, HxTableRow, HxTableSz, HxText, HxTitleMark,
+    HxAutoNum, HxAutoNumFormat, HxBookmark, HxCaption, HxCellAddr, HxCellSpan, HxCellSz, HxChart,
+    HxCompose, HxComposeCharPr, HxCtrl, HxDutmal, HxEquation, HxFlip, HxFootNote, HxImg, HxImgClip,
+    HxImgDim, HxImgRect, HxIndexMark, HxLineSeg, HxLineSegArray, HxMatrix, HxNewNum, HxOffset,
+    HxPageHiding, HxPageMargin, HxPagePr, HxParagraph, HxPic, HxPoint, HxRenderingInfo,
+    HxRotationInfo, HxRun, HxRunCase, HxRunSwitch, HxScript, HxSecPr, HxSection, HxShapeComment,
+    HxSizeAttr, HxSubList, HxTable, HxTableCell, HxTableMargin, HxTablePos, HxTableRow, HxTableSz,
+    HxText, HxTitleMark,
 };
 
 use super::EncodeOptions;
@@ -275,6 +276,7 @@ impl EncoderLedger {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn encode_section(
     section: &Section,
     section_index: usize,
@@ -283,13 +285,37 @@ pub(crate) fn encode_section(
     embedded_ole_offset: usize,
     options: EncodeOptions,
 ) -> HwpxResult<SectionEncodeResult> {
+    // 단독 호출(테스트 등)은 섹션-지역 카운터 — 문서 전역 연속은
+    // [`encode_section_with_note_counters`] (인코더 본 경로) 소유.
+    let mut local_counters = (0u32, 0u32);
+    encode_section_with_note_counters(
+        section,
+        section_index,
+        chart_offset,
+        masterpage_offset,
+        embedded_ole_offset,
+        options,
+        &mut local_counters,
+    )
+}
+
+/// [`encode_section`] + 문서 전역 각주/미주 autoNum 카운터 관통.
+pub(crate) fn encode_section_with_note_counters(
+    section: &Section,
+    section_index: usize,
+    chart_offset: usize,
+    masterpage_offset: usize,
+    embedded_ole_offset: usize,
+    options: EncodeOptions,
+    note_counters: &mut (u32, u32),
+) -> HwpxResult<SectionEncodeResult> {
     let mut chart_entries: Vec<(String, String)> = Vec::new();
     let mut embedded_oles: Vec<(String, Vec<u8>)> = Vec::new();
     // Replacement list for run-level XML fragments that serde cannot express
     // directly, such as interleaved hyperlink controls and mixed-content `<hp:t>`.
     let mut run_xml_replacements: Vec<(String, String)> = Vec::new();
     let mut sink = EncodeSink::new(section_index);
-    let hx_section = build_section(
+    let mut hx_section = build_section(
         section,
         &mut chart_entries,
         &mut embedded_oles,
@@ -299,6 +325,7 @@ pub(crate) fn encode_section(
         options,
         &mut sink,
     )?;
+    renumber_note_autonums(&mut hx_section, &mut note_counters.0, &mut note_counters.1);
     let inner_xml = quick_xml::se::to_string(&hx_section)
         .map_err(|e| HwpxError::XmlSerialize { detail: e.to_string() })?;
 
@@ -1347,10 +1374,12 @@ fn encode_control_to_ctrl(
             let sub_list_result =
                 encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries, options, sink);
             sink.leave();
+            let mut sub_list = sub_list_result?;
+            inject_note_autonum_head(&mut sub_list, "FOOTNOTE");
             Ok(Some(HxCtrl {
                 foot_note: Some(HxFootNote {
                     inst_id: inst_id.map(hwpforge_core::ObjectId::value),
-                    sub_list: sub_list_result?,
+                    sub_list,
                 }),
                 ..Default::default()
             }))
@@ -1360,10 +1389,12 @@ fn encode_control_to_ctrl(
             let sub_list_result =
                 encode_paragraphs_to_sublist(paragraphs, depth, hyperlink_entries, options, sink);
             sink.leave();
+            let mut sub_list = sub_list_result?;
+            inject_note_autonum_head(&mut sub_list, "ENDNOTE");
             Ok(Some(HxCtrl {
                 end_note: Some(HxFootNote {
                     inst_id: inst_id.map(hwpforge_core::ObjectId::value),
-                    sub_list: sub_list_result?,
+                    sub_list,
                 }),
                 ..Default::default()
             }))
@@ -1418,6 +1449,118 @@ fn encode_control_to_ctrl(
         })),
         _ => Ok(None),
     }
+}
+
+/// 각주/미주 본문 첫 문단에 autoNum 번호 머리를 주입한다 (한컴 F1 실측 정합).
+///
+/// 한컴 native 는 본문 첫 run 안에 `<hp:ctrl><hp:autoNum num=… numType=…>` 를
+/// 두지만, `HxRun` 직렬화는 texts 가 ctrls 보다 앞이라 같은 run 에 넣으면
+/// 순서가 뒤집힌다 — **별도 선행 run** 으로 주입한다 (run 순서는 Vec 보존).
+/// `num` 은 placeholder(0) — 문서 순서 확정은 [`renumber_note_autonums`] 가
+/// 섹션 조립 후 일괄 수행한다 (한컴 F7 실측: num 은 종류별 실제 순번 캐시).
+/// 본문 첫 텍스트에는 한컴 형태대로 선행 공백 하나를 붙인다 (MD 왕복에서는
+/// trim 되어 불변 — hancom_notes_gate 고정점 테스트가 잠금).
+fn inject_note_autonum_head(sub_list: &mut HxSubList, num_type: &str) {
+    let Some(first_para) = sub_list.paragraphs.first_mut() else { return };
+    let char_pr_id_ref = first_para.runs.first().map(|r| r.char_pr_id_ref).unwrap_or_default();
+    // 이미 autoNum 머리가 있으면(향후 carry 경로) 중복 주입하지 않는다.
+    let already = first_para.runs.iter().any(|r| r.ctrls.iter().any(|c| c.auto_num.is_some()));
+    if already {
+        return;
+    }
+    if let Some(first_text) = first_para.runs.iter_mut().find_map(|r| r.texts.first_mut()) {
+        let text = first_text.text();
+        if !text.starts_with(' ') {
+            *first_text = HxText::new(format!(" {text}"));
+        }
+    }
+    let head = HxRun {
+        char_pr_id_ref,
+        sec_pr: None,
+        texts: Vec::new(),
+        tables: Vec::new(),
+        pictures: Vec::new(),
+        ctrls: vec![HxCtrl {
+            auto_num: Some(HxAutoNum {
+                num: 0,
+                num_type: num_type.to_string(),
+                auto_num_format: Some(HxAutoNumFormat {
+                    format_type: "DIGIT".to_string(),
+                    user_char: String::new(),
+                    prefix_char: String::new(),
+                    suffix_char: ")".to_string(),
+                    supscript: "0".to_string(),
+                }),
+            }),
+            ..Default::default()
+        }],
+        rects: Vec::new(),
+        lines: Vec::new(),
+        ellipses: Vec::new(),
+        polygons: Vec::new(),
+        curves: Vec::new(),
+        connect_lines: Vec::new(),
+        equations: Vec::new(),
+        switches: Vec::new(),
+        title_mark: None,
+        dutmals: Vec::new(),
+        composes: Vec::new(),
+        containers: Vec::new(),
+        textarts: Vec::new(),
+        child_order: Vec::new(),
+    };
+    first_para.runs.insert(0, head);
+}
+
+/// 섹션 트리를 문서 순서로 걷어 각주/미주 autoNum 의 `num` 을 종류별 순번으로
+/// 확정한다 (한컴 F7 실측: 1..N 캐시). 걷기 범위는 MD 인코딩이 생성 가능한
+/// 형상(본문 문단 · 표 셀 · note subList)이다 — 도형 drawText 등 그 밖의
+/// 컨테이너는 이 pass 의 계약 밖 (decoder M1 계약과 동일 범위).
+pub(crate) fn renumber_note_autonums(
+    section: &mut HxSection,
+    footnote_counter: &mut u32,
+    endnote_counter: &mut u32,
+) {
+    fn walk_paragraphs(paragraphs: &mut [HxParagraph], foot: &mut u32, end: &mut u32) {
+        for para in paragraphs {
+            for run in &mut para.runs {
+                for ctrl in &mut run.ctrls {
+                    if let Some(note) = ctrl.foot_note.as_mut() {
+                        *foot += 1;
+                        set_head_num(&mut note.sub_list, *foot);
+                        walk_paragraphs(&mut note.sub_list.paragraphs, foot, end);
+                    }
+                    if let Some(note) = ctrl.end_note.as_mut() {
+                        *end += 1;
+                        set_head_num(&mut note.sub_list, *end);
+                        walk_paragraphs(&mut note.sub_list.paragraphs, foot, end);
+                    }
+                }
+                for table in &mut run.tables {
+                    for row in &mut table.rows {
+                        for cell in &mut row.cells {
+                            if let Some(sub_list) = cell.sub_list.as_mut() {
+                                walk_paragraphs(&mut sub_list.paragraphs, foot, end);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    fn set_head_num(sub_list: &mut HxSubList, num: u32) {
+        for para in &mut sub_list.paragraphs {
+            for run in &mut para.runs {
+                for ctrl in &mut run.ctrls {
+                    if let Some(auto_num) = ctrl.auto_num.as_mut() {
+                        auto_num.num = num;
+                        return;
+                    }
+                }
+            }
+        }
+    }
+    walk_paragraphs(&mut section.paragraphs, footnote_counter, endnote_counter);
 }
 
 /// Encodes a `Vec<Paragraph>` into `HxSubList` with standard defaults
@@ -2530,7 +2673,9 @@ mod tests {
 
         assert!(xml.contains("<hp:ctrl>"), "missing ctrl wrapper");
         assert!(xml.contains("<hp:footNote"), "missing footNote element");
-        assert!(xml.contains("<hp:t>Note body</hp:t>"), "missing footnote text");
+        // autoNum 번호 머리 주입 계약 (한컴 F1 정합): 별도 선행 run + 본문 선행 공백.
+        assert!(xml.contains(r#"numType="FOOTNOTE""#), "missing autoNum head");
+        assert!(xml.contains("<hp:t> Note body</hp:t>"), "missing footnote text (leading space)");
         assert!(xml.contains(r#"instId="42""#), "missing instId attribute");
     }
 
@@ -2552,7 +2697,8 @@ mod tests {
         let xml = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default()).unwrap().xml;
 
         assert!(xml.contains("<hp:endNote"), "missing endNote element");
-        assert!(xml.contains("<hp:t>End note</hp:t>"), "missing endnote text");
+        assert!(xml.contains(r#"numType="ENDNOTE""#), "missing autoNum head");
+        assert!(xml.contains("<hp:t> End note</hp:t>"), "missing endnote text (leading space)");
     }
 
     #[test]
@@ -2627,7 +2773,8 @@ mod tests {
                 Control::Footnote { inst_id, paragraphs } => {
                     assert_eq!(*inst_id, Some(hwpforge_core::ObjectId::new(7)));
                     assert_eq!(paragraphs.len(), 1);
-                    assert_eq!(paragraphs[0].runs[0].content.as_text(), Some("Roundtrip note"));
+                    // 선행 공백 = autoNum 머리의 짝 (autoNum 자체는 디코더가 드롭).
+                    assert_eq!(paragraphs[0].runs[0].content.as_text(), Some(" Roundtrip note"));
                 }
                 other => panic!("expected Footnote, got {other:?}"),
             },
@@ -2665,7 +2812,9 @@ mod tests {
         match &ctrl_run.content {
             RunContent::Control(ctrl) => match ctrl.as_ref() {
                 Control::Endnote { paragraphs, .. } => {
-                    assert_eq!(paragraphs[0].runs[0].content.as_text(), Some("Endnote roundtrip"));
+                    // 선행 공백 = autoNum 번호 머리 주입의 짝 (한컴 F1 정합 —
+                    // native 본문도 " 본문" 형태. autoNum 자체는 디코더가 드롭).
+                    assert_eq!(paragraphs[0].runs[0].content.as_text(), Some(" Endnote roundtrip"));
                 }
                 other => panic!("expected Endnote, got {other:?}"),
             },
