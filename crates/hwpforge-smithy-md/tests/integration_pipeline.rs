@@ -452,3 +452,60 @@ fn pipeline_w0_nested_format_fixed_point() {
     let g3 = roundtrip_md(&g1, &template);
     assert_eq!(g1, g3, "nested format MD must be a fixed point: {g1}");
 }
+
+// ── W2: note emission fixed point (multi-paragraph + escape) ────────────────
+
+/// W2 acceptance: notes (footnote/endnote, multi-paragraph, table cell,
+/// inline formatting) reach an MD fixed point through the full pipeline.
+#[test]
+fn pipeline_w2_notes_fixed_point() {
+    let template = builtin_default().expect("builtin_default");
+    let md = "본문[^1] 그리고[^e1] 끝\n\n\
+              | a | b |\n|---|---|\n| 셀[^2] | x |\n\n\
+              [^1]: 첫 문단 **굵게** 포함\n\n    둘째 문단\n\n\
+              [^e1]: 미주 본문\n\n\
+              [^2]: 셀 각주\n";
+    let g1 = roundtrip_md(md, &template);
+    assert!(g1.contains("[^e1]"), "endnote marker must survive: {g1}");
+    let g3 = roundtrip_md(&g1, &template);
+    assert_eq!(g1, g3, "note MD must be a fixed point");
+}
+
+/// W2: multi-paragraph definition emission must re-parse as the same number
+/// of paragraphs (C1 — blank line + 4-space indent, verified by re-parsing).
+#[test]
+fn pipeline_w2_multiparagraph_emission_reparses_identically() {
+    let template = builtin_default().expect("builtin_default");
+    let md = "본문[^1]\n\n[^1]: 첫 문단\n\n    둘째 문단\n\n    셋째 문단\n";
+    let g1 = roundtrip_md(md, &template);
+
+    // 방출 문자열을 다시 디코드해 각주 본문 문단 수를 직접 센다.
+    let md_doc = MdDecoder::decode(&g1, &template).expect("re-decode");
+    let mut para_counts = Vec::new();
+    for p in &md_doc.document.sections()[0].paragraphs {
+        for run in &p.runs {
+            if let RunContent::Control(c) = &run.content {
+                if let hwpforge_core::control::Control::Footnote { paragraphs, .. } = c.as_ref() {
+                    para_counts.push(paragraphs.len());
+                }
+            }
+        }
+    }
+    assert_eq!(para_counts, vec![3], "3 paragraphs must survive emission+reparse: {g1}");
+}
+
+/// W2 (H6): a note body starting with a list marker must not turn into a
+/// structural list on re-parse — the emitter escapes line-start block marks.
+#[test]
+fn pipeline_w2_note_body_line_start_marker_escaped() {
+    let template = builtin_default().expect("builtin_default");
+    // Core 쪽에서 직접 만든 각주 본문이 "- " 로 시작하는 상황을 MD 입력으로는
+    // 만들 수 없으므로(디코더가 리스트로 거부), HWPX 파이프라인 대신 인코더
+    // 단위 왕복으로 검증한다: G1 의 정의 본문이 이스케이프돼 재파싱에서
+    // 리스트가 되지 않아야 한다.
+    let md = "본문[^1]\n\n[^1]: \\- 대시로 시작하는 본문\n";
+    let g1 = roundtrip_md(md, &template);
+    let g3 = roundtrip_md(&g1, &template);
+    assert_eq!(g1, g3, "escaped line-start marker must stay a fixed point: {g1}");
+    assert!(g1.contains("대시로 시작"), "body text must survive: {g1}");
+}
