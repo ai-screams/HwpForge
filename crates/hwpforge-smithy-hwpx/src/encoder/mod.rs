@@ -641,9 +641,13 @@ impl HwpxEncoder {
         let mut masterpage_offset = 0usize;
         let mut embedded_ole_offset = 0usize;
         let mut section_results = Vec::with_capacity(sections.len());
-        // 각주/미주 autoNum 번호 — 문서 전역 연속, 섹션 begin_num/NewNumber 로
-        // 재시작 (한컴 F7 실측: 종류별 순번 캐시).
-        let mut note_counters = crate::encoder::section::NoteNumbering::new();
+        // 각주/미주 autoNum 번호 — 문서 전역 연속 (한컴 기본 CONTINUOUS,
+        // F7 실측: 종류별 순번 캐시). 첫 섹션 begin_num(= header
+        // <hh:beginNum> 병합 실값)은 문서 시작에서 1회 반영하고, 후속
+        // 섹션의 합성 begin_num 과 본문 NewNumber 는 카운터 walk 가 처리.
+        let mut note_counters = crate::encoder::section::NoteNumbering::from_document_begin(
+            sections.first().and_then(|s| s.begin_num.as_ref()),
+        );
         for (i, section) in sections.iter().enumerate() {
             let result = encode_section_with_note_counters(
                 section,

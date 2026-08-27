@@ -113,6 +113,12 @@ pub enum Control {
 
     /// A footnote containing paragraph content.
     /// Maps to HWPX `<hp:ctrl><hp:footNote>`.
+    ///
+    /// **번호 재계산 계약**: wire 의 종류별 순번 캐시(`footNote@number`)와
+    /// 접미 문자(`suffixChar`), 본문 선두의 자동 번호 머리(`<hp:autoNum
+    /// numType="FOOTNOTE">` + 구분 공백)는 표현 산물이라 Core 로 나르지
+    /// 않는다 — 인코더가 문서 순서로 재계산·재주입한다. 비표준(custom)
+    /// suffix 의 typed 보존은 section note-format 승격(별도 승인) 대상.
     Footnote {
         /// Object identity for cross-ref linking (optional). Shares the
         /// [`ObjectId`] space with [`RefTarget::Object`](crate::control::RefTarget::Object).
@@ -123,6 +129,9 @@ pub enum Control {
 
     /// An endnote containing paragraph content.
     /// Maps to HWPX `<hp:ctrl><hp:endNote>`.
+    ///
+    /// 번호 재계산 계약은 [`Control::Footnote`] 와 동일 (`numType="ENDNOTE"`,
+    /// 독립 카운터).
     Endnote {
         /// Object identity for cross-ref linking (optional). Shares the
         /// [`ObjectId`] space with [`RefTarget::Object`](crate::control::RefTarget::Object).

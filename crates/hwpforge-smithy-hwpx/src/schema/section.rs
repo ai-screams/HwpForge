@@ -1322,12 +1322,27 @@ pub struct HxFootNote {
 /// `<hp:endNote>` — endnote element (NoteType in XSD, same structure as footnote).
 pub type HxEndNote = HxFootNote;
 
-/// `<hp:footNotePr>` — section-level footnote formatting (decoder-only for Phase 4.5).
+/// `<hp:footNotePr>` — section-level footnote formatting (decode-only).
+///
+/// 인코더는 이 요소를 `enrich_sec_pr()` 가 고정값으로 재생성하므로 typed
+/// 왕복은 아직 없다 — 디코더가 `numbering` 정책만 읽어 **비지원 정책
+/// (`ON_SECTION` 등) 을 무음 정규화하는 대신 경고**를 낸다 (warning-first).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct HxFootNotePr {
-    /// Raw XML content preserved for roundtrip fidelity.
-    #[serde(rename = "$value", default)]
-    pub raw_xml: String,
+    /// `<hp:numbering type newNum>` — 번호 재시작 정책.
+    #[serde(rename = "numbering", default, skip_serializing)]
+    pub numbering: Option<HxNoteNumberingPolicy>,
+}
+
+/// `<hp:numbering>` (footNotePr/endNotePr 자식) — 각주/미주 번호 정책.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct HxNoteNumberingPolicy {
+    /// `CONTINUOUS`(전 구역 연속·기본) / `ON_SECTION`(구역마다 재시작) 등.
+    #[serde(rename = "@type", default)]
+    pub policy_type: String,
+    /// 재시작 시작 번호 (`ON_SECTION` 일 때만 유효 — OWPML XSD).
+    #[serde(rename = "@newNum", default)]
+    pub new_num: u32,
 }
 
 /// `<hp:endNotePr>` — section-level endnote formatting (decoder-only for Phase 4.5).
@@ -1422,9 +1437,16 @@ pub struct HxSecPr {
     /// by `enrich_sec_pr()` via raw XML injection (hence `skip_serializing`).
     #[serde(rename = "startNum", default, skip_serializing)]
     pub start_num: Option<HxStartNum>,
-    // footNotePr, endNotePr, grid — still skipped by serde
-    // (no deny_unknown_fields). The encoder injects these as raw XML strings
-    // via enrich_sec_pr().
+
+    /// `<hp:footNotePr>` — decode-only (비지원 numbering 정책 경고용).
+    #[serde(rename = "footNotePr", default, skip_serializing)]
+    pub foot_note_pr: Option<HxFootNotePr>,
+
+    /// `<hp:endNotePr>` — decode-only (비지원 numbering 정책 경고용).
+    #[serde(rename = "endNotePr", default, skip_serializing)]
+    pub end_note_pr: Option<HxEndNotePr>,
+    // grid — still skipped by serde (no deny_unknown_fields). The encoder
+    // injects these as raw XML strings via enrich_sec_pr().
 }
 
 /// `<hp:visibility>` — controls visibility of page elements.

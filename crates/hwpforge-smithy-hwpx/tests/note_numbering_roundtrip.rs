@@ -93,3 +93,37 @@ fn public_roundtrip_keeps_note_numbers_across_sections() {
         "재인코드에서 s2 가 1 로 리셋되면 H-N2 회귀"
     );
 }
+
+/// 3차 평결 High(신규): 첫 섹션의 **명시적** `begin_num`(= header
+/// `<hh:beginNum>` 실값)은 문서 시작에서 반영돼야 하며 공개 왕복에서
+/// 유지돼야 한다 — 전부 무시하면 사용자/한컴의 시작번호 7 이 손실된다.
+#[test]
+fn public_roundtrip_keeps_explicit_document_begin_num() {
+    use hwpforge_core::section::BeginNum;
+
+    let store = minimal_store();
+    let images = ImageStore::new();
+
+    let mut s1 = note_section(&["하나", "둘"]);
+    s1.begin_num = Some(BeginNum { footnote: 7, ..Default::default() });
+    let mut doc = Document::new();
+    doc.add_section(s1);
+    doc.add_section(note_section(&["셋"]));
+    let validated = doc.validate().expect("validate");
+
+    let first = HwpxEncoder::encode(&validated, &store, &images).expect("encode 1");
+    assert_eq!(footnote_autonum_sequence(&section_xml(&first, 0)), vec![7, 8]);
+    assert_eq!(footnote_autonum_sequence(&section_xml(&first, 1)), vec![9], "연속 유지");
+
+    // header <hh:beginNum footnote="7"> 왕복 → 재인코드에서도 7,8,9 유지.
+    let decoded = HwpxDecoder::decode(&first).expect("decode");
+    let revalidated = decoded.document.validate().expect("re-validate");
+    let second = HwpxEncoder::encode(&revalidated, &decoded.style_store, &decoded.image_store)
+        .expect("encode 2");
+    assert_eq!(footnote_autonum_sequence(&section_xml(&second, 0)), vec![7, 8]);
+    assert_eq!(
+        footnote_autonum_sequence(&section_xml(&second, 1)),
+        vec![9],
+        "명시적 시작번호가 왕복에서 손실되면 3차 평결 High 회귀"
+    );
+}

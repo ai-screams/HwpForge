@@ -37,6 +37,8 @@ pub(super) fn build_sec_pr(ps: &PageSettings, text_direction: TextDirection) -> 
         }),
         page_border_fills: Vec::new(),
         start_num: None,
+        foot_note_pr: None,
+        end_note_pr: None,
     }
 }
 
