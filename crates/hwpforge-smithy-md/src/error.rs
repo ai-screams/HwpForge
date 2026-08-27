@@ -31,6 +31,41 @@ pub enum MdError {
         detail: String,
     },
 
+    /// A footnote/endnote definition never referenced from the body.
+    #[error("orphan note definition '[^{label}]' — defined but never referenced")]
+    OrphanNoteDefinition {
+        /// Original definition label.
+        label: String,
+    },
+
+    /// The same note label was defined more than once.
+    #[error("duplicate note definition '[^{label}]' — the body is ambiguous")]
+    DuplicateNoteDefinition {
+        /// Original definition label.
+        label: String,
+    },
+
+    /// A note definition with no content.
+    #[error("empty note definition '[^{label}]' — a note needs body text")]
+    EmptyNoteDefinition {
+        /// Original definition label.
+        label: String,
+    },
+
+    /// A note reference inside another note's definition (HWP cannot nest notes).
+    #[error("nested note reference '[^{label}]' inside a note definition")]
+    NestedNoteReference {
+        /// Referenced label.
+        label: String,
+    },
+
+    /// Total expanded note content exceeded the safety budget.
+    #[error("expanded note content exceeds the {budget}-byte budget (duplicated references)")]
+    NoteExpansionBudgetExceeded {
+        /// Budget in bytes.
+        budget: usize,
+    },
+
     /// Lossless body parsing failed.
     #[error("invalid lossless body: {detail}")]
     LosslessParse {
@@ -112,6 +147,16 @@ pub enum MdErrorCode {
     Blueprint = 6006,
     /// Propagated Foundation error.
     Foundation = 6007,
+    /// Orphan note definition (never referenced).
+    OrphanNoteDefinition = 6012,
+    /// Duplicate note definition label.
+    DuplicateNoteDefinition = 6013,
+    /// Empty note definition.
+    EmptyNoteDefinition = 6014,
+    /// Nested note reference inside a definition.
+    NestedNoteReference = 6015,
+    /// Expanded note content exceeded budget.
+    NoteExpansionBudgetExceeded = 6016,
 }
 
 impl fmt::Display for MdErrorCode {
@@ -128,6 +173,11 @@ impl MdError {
             Self::FrontmatterUnclosed => MdErrorCode::FrontmatterUnclosed,
             Self::TemplateResolution { .. } => MdErrorCode::TemplateResolution,
             Self::UnsupportedStructure { .. } => MdErrorCode::UnsupportedStructure,
+            Self::OrphanNoteDefinition { .. } => MdErrorCode::OrphanNoteDefinition,
+            Self::DuplicateNoteDefinition { .. } => MdErrorCode::DuplicateNoteDefinition,
+            Self::EmptyNoteDefinition { .. } => MdErrorCode::EmptyNoteDefinition,
+            Self::NestedNoteReference { .. } => MdErrorCode::NestedNoteReference,
+            Self::NoteExpansionBudgetExceeded { .. } => MdErrorCode::NoteExpansionBudgetExceeded,
             Self::LosslessParse { .. } => MdErrorCode::LosslessParse,
             Self::LosslessMissingAttribute { .. } => MdErrorCode::LosslessMissingAttribute,
             Self::LosslessInvalidAttribute { .. } => MdErrorCode::LosslessInvalidAttribute,

@@ -13,6 +13,7 @@ use hwpforge_core::{
 };
 use hwpforge_foundation::{CharShapeIndex, HwpUnit, ParaShapeIndex, StrikeoutShape, StyleIndex};
 use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use unicase::UniCase;
 
 use crate::error::{MdError, MdResult};
 use crate::frontmatter::{apply_to_metadata, extract_frontmatter};
@@ -412,6 +413,37 @@ impl TableBuilder {
     }
 }
 
+/// 전개된 각주/미주 본문의 총량 상한 (H5 — 다중 참조 복제 증폭 방어).
+const MAX_EXPANDED_NOTE_BYTES: usize = 8 * 1024 * 1024;
+
+/// 각주/미주 정의의 해석 상태 (H4 — 소비하지 않고 참조 수만 센다).
+#[derive(Debug)]
+struct NoteDefinition {
+    /// 원문 라벨 (에러 메시지용 — canonical 은 맵 키).
+    label: String,
+    /// 본문 문단들 (다문단 지원).
+    paragraphs: Vec<Paragraph>,
+    /// resolve 에서 이 정의를 참조한 횟수. 0 이면 고아 (에러).
+    reference_count: u32,
+}
+
+/// 정의 수집 모드 — 본문 빌더와 **격리**된 캡처 (Codex H1).
+///
+/// 전역 리스트/인용/표 상태를 읽지도 쓰지도 않는다. 화이트리스트:
+/// 문단 · 텍스트 · 인라인 서식(W0 스택 재사용) · soft/hard break ·
+/// 인라인 코드(리터럴). 그 외 블록/링크/이미지는 typed 거부.
+#[derive(Debug)]
+struct DefinitionCapture {
+    /// 원문 라벨.
+    label: String,
+    /// 완성된 본문 문단들.
+    paragraphs: Vec<Paragraph>,
+    /// 조립 중인 문단.
+    current: Option<ParagraphBuilder>,
+    /// 본문 문단 스타일 (builtin "각주"/"미주" — 없으면 body 폴백).
+    style: MdStyleRef,
+}
+
 #[derive(Debug)]
 struct DecoderState<'a> {
     mapping: &'a MdMapping,
@@ -425,6 +457,16 @@ struct DecoderState<'a> {
     fmt_strike: u32,
     /// Cache of derived char shapes: (base shape index, format flags) → index.
     derived_shapes: std::collections::HashMap<(usize, u8), CharShapeIndex>,
+    /// 각주/미주 정의 — 키는 파서(UniCase)와 동일한 case-fold canonical (H3).
+    note_definitions: std::collections::HashMap<UniCase<String>, NoteDefinition>,
+    /// 참조를 만난 순서 (resolve 가 이 순서로 빈 컨트롤을 채운다 — D1).
+    pending_notes: Vec<UniCase<String>>,
+    /// 정의 수집 모드 (Some 이면 활성).
+    definition_capture: Option<DefinitionCapture>,
+    /// builtin "각주" 스타일 (없으면 body 폴백 — D6).
+    footnote_style: MdStyleRef,
+    /// builtin "미주" 스타일 (없으면 body 폴백 — D6).
+    endnote_style: MdStyleRef,
     paragraphs: Vec<Paragraph>,
     current: Option<ParagraphBuilder>,
     table: Option<TableBuilder>,
@@ -446,9 +488,25 @@ struct DecodeOutput {
 
 impl<'a> DecoderState<'a> {
     fn new(mapping: &'a MdMapping, registry: &'a mut StyleRegistry) -> Self {
+        let style_of = |name: &str| {
+            registry
+                .get_style(name)
+                .map(|e| MdStyleRef {
+                    para_shape_id: e.para_shape_id,
+                    char_shape_id: e.char_shape_id,
+                })
+                .unwrap_or(mapping.body)
+        };
+        let footnote_style = style_of(crate::internal_styles::FOOTNOTE_STYLE_NAME);
+        let endnote_style = style_of(crate::internal_styles::ENDNOTE_STYLE_NAME);
         Self {
             mapping,
             registry,
+            note_definitions: std::collections::HashMap::new(),
+            pending_notes: Vec::new(),
+            definition_capture: None,
+            footnote_style,
+            endnote_style,
             fmt_bold: 0,
             fmt_italic: 0,
             fmt_strike: 0,
@@ -494,10 +552,120 @@ impl<'a> DecoderState<'a> {
         if self.paragraphs.is_empty() {
             self.paragraphs.push(ParagraphBuilder::new(self.mapping.body).build());
         }
+        self.resolve_notes()?;
         Ok(DecodeOutput { paragraphs: self.paragraphs, section_breaks: self.section_breaks })
     }
 
+    /// A안 resolve — 빈 각주/미주 컨트롤을 참조 순서대로 정의 본문으로 채운다.
+    ///
+    /// 순회는 **소스 순서 보장 전용 in-order run walk** 다 (D1): run 을 순서대로
+    /// 걷고 `Table` run 을 만나면 그 자리에서 셀 문단을 재귀한다. 기존
+    /// `walk_paragraphs_mut` 는 문단을 먼저 방문(`f(self)` 후 run 재귀)해
+    /// `[표, 컨트롤]` 순서 문단에서 소스 순서와 어긋날 수 있어 쓰지 않는다.
+    /// 이 보장의 계약 범위는 MD 디코더가 생성 가능한 형상(본문 문단 +
+    /// 비병합 GFM 표 셀)뿐이다 (M1).
+    fn resolve_notes(&mut self) -> MdResult<()> {
+        let mut queue = std::mem::take(&mut self.pending_notes).into_iter();
+        let mut expanded_bytes = 0usize;
+
+        fn walk_paragraphs(
+            paragraphs: &mut [Paragraph],
+            queue: &mut std::vec::IntoIter<UniCase<String>>,
+            definitions: &mut std::collections::HashMap<UniCase<String>, NoteDefinition>,
+            expanded_bytes: &mut usize,
+        ) -> MdResult<()> {
+            for paragraph in paragraphs {
+                for run in &mut paragraph.runs {
+                    match &mut run.content {
+                        RunContent::Control(control) => {
+                            let is_empty_note = matches!(
+                                control.as_ref(),
+                                Control::Footnote { paragraphs, .. }
+                                | Control::Endnote { paragraphs, .. }
+                                    if paragraphs.is_empty()
+                            );
+                            if !is_empty_note {
+                                continue;
+                            }
+                            let Some(canonical) = queue.next() else {
+                                return Err(MdError::UnsupportedStructure {
+                                    detail: "note resolve invariant broken: more empty note \
+                                             controls than pending references"
+                                        .to_string(),
+                                });
+                            };
+                            let Some(def) = definitions.get_mut(&canonical) else {
+                                // P2: 정의 없는 참조는 파서가 이벤트를 만들지 않으므로
+                                // 여기 도달 = 내부 불변식 위반.
+                                return Err(MdError::UnsupportedStructure {
+                                    detail: format!(
+                                        "note resolve invariant broken: no definition for \
+                                         referenced label '{}'",
+                                        canonical.as_ref()
+                                    ),
+                                });
+                            };
+                            def.reference_count += 1;
+                            *expanded_bytes += def
+                                .paragraphs
+                                .iter()
+                                .map(|p| p.text_content().len())
+                                .sum::<usize>();
+                            if *expanded_bytes > MAX_EXPANDED_NOTE_BYTES {
+                                return Err(MdError::NoteExpansionBudgetExceeded {
+                                    budget: MAX_EXPANDED_NOTE_BYTES,
+                                });
+                            }
+                            match control.as_mut() {
+                                Control::Footnote { paragraphs, .. }
+                                | Control::Endnote { paragraphs, .. } => {
+                                    *paragraphs = def.paragraphs.clone();
+                                }
+                                _ => unreachable!("guarded by is_empty_note"),
+                            }
+                        }
+                        RunContent::Table(table) => {
+                            for row in &mut table.rows {
+                                for cell in &mut row.cells {
+                                    walk_paragraphs(
+                                        &mut cell.paragraphs,
+                                        queue,
+                                        definitions,
+                                        expanded_bytes,
+                                    )?;
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        walk_paragraphs(
+            &mut self.paragraphs,
+            &mut queue,
+            &mut self.note_definitions,
+            &mut expanded_bytes,
+        )?;
+
+        if queue.next().is_some() {
+            return Err(MdError::UnsupportedStructure {
+                detail: "note resolve invariant broken: pending references left unfilled"
+                    .to_string(),
+            });
+        }
+        if let Some(orphan) = self.note_definitions.values().find(|def| def.reference_count == 0) {
+            return Err(MdError::OrphanNoteDefinition { label: orphan.label.clone() });
+        }
+        Ok(())
+    }
+
     fn handle_event(&mut self, event: Event<'_>) -> MdResult<()> {
+        if self.definition_capture.is_some() {
+            return self.handle_definition_event(event);
+        }
         match event {
             Event::Start(tag) => self.start_tag(tag)?,
             Event::End(tag_end) => self.end_tag(tag_end)?,
@@ -536,9 +704,7 @@ impl<'a> DecoderState<'a> {
             Tag::Emphasis => self.fmt_italic += 1,
             Tag::Strikethrough => self.fmt_strike += 1,
             Tag::HtmlBlock | Tag::Superscript | Tag::Subscript => {}
-            Tag::FootnoteDefinition(_) => {
-                return Err(unsupported_markdown_feature("footnote definition"))
-            }
+            Tag::FootnoteDefinition(label) => self.start_footnote_definition(label.as_ref())?,
             Tag::DefinitionList => return Err(unsupported_markdown_feature("definition list")),
             Tag::DefinitionListTitle => {
                 return Err(unsupported_markdown_feature("definition list title"));
@@ -570,7 +736,9 @@ impl<'a> DecoderState<'a> {
             TagEnd::Strikethrough => self.fmt_strike = self.fmt_strike.saturating_sub(1),
             TagEnd::HtmlBlock | TagEnd::Superscript | TagEnd::Subscript => {}
             TagEnd::FootnoteDefinition => {
-                return Err(unsupported_markdown_feature("footnote definition"))
+                // capture 활성 중에는 handle_definition_event 가 소화한다.
+                // 여기 도달 = 시작 없이 끝 — 파서 계약 위반 (방어).
+                return Err(unsupported_markdown_feature("unbalanced footnote definition end"));
             }
             TagEnd::DefinitionList => return Err(unsupported_markdown_feature("definition list")),
             TagEnd::DefinitionListTitle => {
@@ -594,8 +762,130 @@ impl<'a> DecoderState<'a> {
         Err(unsupported_markdown_feature("raw HTML"))
     }
 
+    /// 각주/미주 참조 — 빈 컨트롤을 참조 지점에 꽂고 라벨을 순서 큐에 기록한다
+    /// (A안 — 본문은 문서 빌드 완료 후 resolve 단계에서 채운다).
     fn handle_footnote_reference(&mut self, label: &str) -> MdResult<()> {
-        Err(unsupported_markdown_feature(&format!("footnote reference '[^{label}]'")))
+        let canonical = UniCase::new(label.to_string());
+        let control = if is_endnote_label(&canonical) {
+            Control::endnote(Vec::new())
+        } else {
+            Control::footnote(Vec::new())
+        };
+        self.pending_notes.push(canonical);
+        let char_shape_id = self.current_char_shape_id();
+        self.push_run_to_active_context(Run {
+            content: RunContent::Control(Box::new(control)),
+            char_shape_id,
+        });
+        Ok(())
+    }
+
+    /// 정의 수집 모드 진입 (`[^label]:` 블록 시작).
+    fn start_footnote_definition(&mut self, label: &str) -> MdResult<()> {
+        let canonical = UniCase::new(label.to_string());
+        if self.note_definitions.contains_key(&canonical) {
+            return Err(MdError::DuplicateNoteDefinition { label: label.to_string() });
+        }
+        let style =
+            if is_endnote_label(&canonical) { self.endnote_style } else { self.footnote_style };
+        self.definition_capture = Some(DefinitionCapture {
+            label: label.to_string(),
+            paragraphs: Vec::new(),
+            current: None,
+            style,
+        });
+        Ok(())
+    }
+
+    /// 정의 수집 모드의 이벤트 처리 — 본문 빌더와 격리 (H1).
+    fn handle_definition_event(&mut self, event: Event<'_>) -> MdResult<()> {
+        match event {
+            Event::Start(Tag::Paragraph) => {
+                let capture = self.definition_capture.as_mut().expect("capture active");
+                let style = capture.style;
+                capture.current = Some(ParagraphBuilder::new(style));
+                Ok(())
+            }
+            Event::End(TagEnd::Paragraph) => {
+                let capture = self.definition_capture.as_mut().expect("capture active");
+                if let Some(builder) = capture.current.take() {
+                    capture.paragraphs.push(builder.build());
+                }
+                Ok(())
+            }
+            Event::End(TagEnd::FootnoteDefinition) => self.finish_footnote_definition(),
+            Event::Text(text) => self.push_definition_text(text.as_ref()),
+            Event::Code(code) => {
+                self.push_definition_text("`")?;
+                self.push_definition_text(code.as_ref())?;
+                self.push_definition_text("`")
+            }
+            Event::SoftBreak => self.push_definition_text(" "),
+            Event::HardBreak => self.push_definition_text("\n"),
+            Event::Start(Tag::Strong) => {
+                self.fmt_bold += 1;
+                Ok(())
+            }
+            Event::End(TagEnd::Strong) => {
+                self.fmt_bold = self.fmt_bold.saturating_sub(1);
+                Ok(())
+            }
+            Event::Start(Tag::Emphasis) => {
+                self.fmt_italic += 1;
+                Ok(())
+            }
+            Event::End(TagEnd::Emphasis) => {
+                self.fmt_italic = self.fmt_italic.saturating_sub(1);
+                Ok(())
+            }
+            Event::Start(Tag::Strikethrough) => {
+                self.fmt_strike += 1;
+                Ok(())
+            }
+            Event::End(TagEnd::Strikethrough) => {
+                self.fmt_strike = self.fmt_strike.saturating_sub(1);
+                Ok(())
+            }
+            Event::FootnoteReference(label) => {
+                Err(MdError::NestedNoteReference { label: label.to_string() })
+            }
+            other => {
+                Err(unsupported_markdown_feature(&format!("{other:?} in footnote definition")))
+            }
+        }
+    }
+
+    /// 정의 본문 텍스트 — 각주 스타일 base 에서 W0 서식 파생을 적용한다.
+    fn push_definition_text(&mut self, text: &str) -> MdResult<()> {
+        let base = self.definition_capture.as_ref().expect("capture active").style.char_shape_id;
+        let char_shape_id = self.derived_char_shape(base);
+        let capture = self.definition_capture.as_mut().expect("capture active");
+        let style = capture.style;
+        let builder = capture.current.get_or_insert_with(|| ParagraphBuilder::new(style));
+        builder.push_text_with_style(text, char_shape_id);
+        Ok(())
+    }
+
+    /// 정의 수집 종료 — 빈 정의 거부 후 등록.
+    fn finish_footnote_definition(&mut self) -> MdResult<()> {
+        let mut capture = self.definition_capture.take().expect("capture active");
+        if let Some(builder) = capture.current.take() {
+            capture.paragraphs.push(builder.build());
+        }
+        let has_content = capture.paragraphs.iter().any(|p| !p.text_content().trim().is_empty());
+        if !has_content {
+            return Err(MdError::EmptyNoteDefinition { label: capture.label });
+        }
+        let canonical = UniCase::new(capture.label.clone());
+        self.note_definitions.insert(
+            canonical,
+            NoteDefinition {
+                label: capture.label,
+                paragraphs: capture.paragraphs,
+                reference_count: 0,
+            },
+        );
+        Ok(())
     }
 
     fn start_paragraph_tag(&mut self) {
@@ -1067,6 +1357,18 @@ fn default_empty_section() -> Section {
     Section::with_paragraphs(vec![paragraph], hwpforge_core::PageSettings::a4())
 }
 
+/// 미주 라벨 판별 — canonical(case-fold) 기준 `e` + 숫자 1개 이상 (D3).
+///
+/// `e[0-9]+` 는 HwpForge dialect 의 **미주 예약 이름공간**이다 (H2):
+/// `to-md` 가 미주를 `[^eN]` 으로 방출하는 규약의 역방향. 사용자가 각주
+/// 의도로 `[^e1]` 을 쓰면 미주로 정규화된다 (lossy — CHANGELOG 명시).
+fn is_endnote_label(canonical: &UniCase<String>) -> bool {
+    // UniCase 비교 기준과 동일하게 fold 된 소문자 형태로 검사한다.
+    let folded = canonical.as_ref().to_lowercase();
+    let Some(rest) = folded.strip_prefix('e') else { return false };
+    !rest.is_empty() && rest.bytes().all(|b| b.is_ascii_digit())
+}
+
 fn unsupported_markdown_feature(feature: &str) -> MdError {
     MdError::UnsupportedStructure { detail: format!("unsupported markdown feature: {feature}") }
 }
@@ -1492,19 +1794,6 @@ mod tests {
     }
 
     #[test]
-    fn decode_footnote_reference_returns_unsupported_structure_error() {
-        let template = default_template();
-        let markdown = "Body[^1]\n\n[^1]: note";
-        let err = MdDecoder::decode(markdown, &template).unwrap_err();
-
-        assert!(matches!(
-            err,
-            MdError::UnsupportedStructure { ref detail }
-                if detail.contains("footnote reference")
-        ));
-    }
-
-    #[test]
     fn decode_definition_list_returns_unsupported_structure_error() {
         let template = default_template();
         let markdown = "Term\n: Definition";
@@ -1764,5 +2053,261 @@ mod tests {
         assert_eq!(para.runs[0].char_shape_id, mapping.heading1.char_shape_id);
         let derived = result.style_registry.char_shape(para.runs[1].char_shape_id).unwrap();
         assert!(derived.bold);
+    }
+
+    // -----------------------------------------------------------------------
+    // W1: footnote / endnote decoding
+    // -----------------------------------------------------------------------
+
+    use hwpforge_core::control::Control;
+
+    /// Collects `(is_endnote, body_paragraph_texts)` for every note control in
+    /// document order (body paragraphs + table cells, source order).
+    fn collect_notes(
+        doc: &hwpforge_core::document::Document<hwpforge_core::Draft>,
+    ) -> Vec<(bool, Vec<String>)> {
+        fn walk(paras: &[Paragraph], out: &mut Vec<(bool, Vec<String>)>) {
+            for p in paras {
+                for run in &p.runs {
+                    match &run.content {
+                        RunContent::Control(c) => match c.as_ref() {
+                            Control::Footnote { paragraphs, .. } => out.push((
+                                false,
+                                paragraphs.iter().map(|b| b.text_content()).collect(),
+                            )),
+                            Control::Endnote { paragraphs, .. } => out.push((
+                                true,
+                                paragraphs.iter().map(|b| b.text_content()).collect(),
+                            )),
+                            _ => {}
+                        },
+                        RunContent::Table(t) => {
+                            for row in &t.rows {
+                                for cell in &row.cells {
+                                    walk(&cell.paragraphs, out);
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        let mut out = Vec::new();
+        for section in doc.sections() {
+            walk(&section.paragraphs, &mut out);
+        }
+        out
+    }
+
+    #[test]
+    fn w1_basic_footnote_resolves_at_reference_site() {
+        let template = default_template();
+        let result = MdDecoder::decode("본문[^1] 끝\n\n[^1]: 각주 본문\n", &template).unwrap();
+        let notes = collect_notes(&result.document);
+        assert_eq!(notes.len(), 1);
+        assert_eq!(notes[0], (false, vec!["각주 본문".to_string()]));
+        // 참조 지점: 본문 문단 안 inline control (gotcha #12)
+        let para = &result.document.sections()[0].paragraphs[0];
+        assert!(para.text_content().contains("본문"));
+        assert!(para
+            .runs
+            .iter()
+            .any(|r| matches!(&r.content, RunContent::Control(c) if c.is_footnote())));
+    }
+
+    #[test]
+    fn w1_undefined_reference_stays_literal_text() {
+        // P2 파서 동작: 정의 없는 참조는 이벤트가 아니라 평문으로 강등된다.
+        let template = default_template();
+        let result = MdDecoder::decode("본문[^nodef] 끝\n", &template).unwrap();
+        let text = result.document.sections()[0].paragraphs[0].text_content();
+        assert!(text.contains("[^nodef]"), "literal must be preserved: {text}");
+        assert!(collect_notes(&result.document).is_empty());
+    }
+
+    #[test]
+    fn w1_orphan_definition_is_typed_error() {
+        let template = default_template();
+        let err = MdDecoder::decode("본문뿐\n\n[^orphan]: 아무도 안 씀\n", &template).unwrap_err();
+        assert!(
+            matches!(&err, MdError::OrphanNoteDefinition { label } if label == "orphan"),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn w1_duplicate_definition_is_typed_error() {
+        let template = default_template();
+        let err =
+            MdDecoder::decode("본문[^1]\n\n[^1]: 첫째\n\n[^1]: 둘째\n", &template).unwrap_err();
+        assert!(matches!(&err, MdError::DuplicateNoteDefinition { label } if label == "1"));
+    }
+
+    #[test]
+    fn w1_empty_definition_is_typed_error() {
+        let template = default_template();
+        let err = MdDecoder::decode("본문[^1]\n\n[^1]:\n", &template).unwrap_err();
+        assert!(matches!(&err, MdError::EmptyNoteDefinition { label } if label == "1"));
+    }
+
+    #[test]
+    fn w1_nested_reference_is_typed_error() {
+        let template = default_template();
+        let err = MdDecoder::decode("본문[^1]\n\n[^1]: 안에서[^2] 참조\n\n[^2]: 둘째\n", &template)
+            .unwrap_err();
+        assert!(matches!(&err, MdError::NestedNoteReference { label } if label == "2"));
+    }
+
+    #[test]
+    fn w1_block_content_in_definition_is_rejected() {
+        let template = default_template();
+        for md in [
+            "본문[^1]\n\n[^1]: 머리\n\n    - 항목\n",
+            "본문[^1]\n\n[^1]: 머리\n\n    ```\n    code\n    ```\n",
+        ] {
+            let err = MdDecoder::decode(md, &template).unwrap_err();
+            assert!(
+                matches!(&err, MdError::UnsupportedStructure { .. }),
+                "block content must be rejected: {md:?} → {err:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn w1_definition_before_reference_is_fine() {
+        let template = default_template();
+        let result = MdDecoder::decode("[^1]: 본문 먼저\n\n참조[^1]\n", &template).unwrap();
+        let notes = collect_notes(&result.document);
+        assert_eq!(notes, vec![(false, vec!["본문 먼저".to_string()])]);
+    }
+
+    #[test]
+    fn w1_e_prefix_label_is_endnote_others_footnote() {
+        let template = default_template();
+        let md = "가[^e1] 나[^1] 다[^note] 라[^example]\n\n[^e1]: 미주\n\n[^1]: 각주하나\n\n[^note]: 각주둘\n\n[^example]: 각주셋\n";
+        let result = MdDecoder::decode(md, &template).unwrap();
+        let kinds: Vec<bool> = collect_notes(&result.document).iter().map(|(e, _)| *e).collect();
+        assert_eq!(kinds, vec![true, false, false, false], "only e<digits> is an endnote");
+    }
+
+    #[test]
+    fn w1_same_label_multi_reference_duplicates_body() {
+        let template = default_template();
+        let result = MdDecoder::decode("가[^1] 나[^1]\n\n[^1]: 공유 본문\n", &template).unwrap();
+        let notes = collect_notes(&result.document);
+        assert_eq!(notes.len(), 2, "each reference gets its own note control");
+        assert_eq!(notes[0].1, notes[1].1);
+    }
+
+    #[test]
+    fn w1_table_cell_and_body_references_resolve_in_source_order() {
+        let template = default_template();
+        let md = "| a | b |\n|---|---|\n| 셀[^1] | x |\n\n본문[^2]\n\n[^1]: 셀 각주\n\n[^2]: 본문 각주\n";
+        let result = MdDecoder::decode(md, &template).unwrap();
+        let notes = collect_notes(&result.document);
+        assert_eq!(
+            notes,
+            vec![(false, vec!["셀 각주".to_string()]), (false, vec!["본문 각주".to_string()])],
+            "cell note (source-first) must resolve before body note"
+        );
+    }
+
+    #[test]
+    fn w1_multiparagraph_definition_keeps_paragraphs() {
+        let template = default_template();
+        let md = "본문[^1]\n\n[^1]: 첫 문단\n\n    둘째 문단\n\n    셋째 문단\n";
+        let result = MdDecoder::decode(md, &template).unwrap();
+        let notes = collect_notes(&result.document);
+        assert_eq!(
+            notes[0].1,
+            vec!["첫 문단".to_string(), "둘째 문단".to_string(), "셋째 문단".to_string()]
+        );
+    }
+
+    #[test]
+    fn w1_definition_body_keeps_inline_formatting_runs() {
+        let template = default_template();
+        let result = MdDecoder::decode("본문[^1]\n\n[^1]: 여기 **굵게** 끝\n", &template).unwrap();
+        let doc = &result.document;
+        let mut found = false;
+        for p in &doc.sections()[0].paragraphs {
+            for run in &p.runs {
+                if let RunContent::Control(c) = &run.content {
+                    if let Control::Footnote { paragraphs, .. } = c.as_ref() {
+                        let body = &paragraphs[0];
+                        assert!(body.runs.len() >= 3, "formatting must split runs");
+                        let bold_run = &body.runs[1];
+                        let cs = result
+                            .style_registry
+                            .char_shape(bold_run.char_shape_id)
+                            .expect("derived shape");
+                        assert!(cs.bold, "bold must survive inside note body");
+                        found = true;
+                    }
+                }
+            }
+        }
+        assert!(found, "footnote control must exist");
+    }
+
+    #[test]
+    fn w1_mixed_notes_preserve_order_and_kind() {
+        let template = default_template();
+        let md = "가[^1] 나[^e1] 다[^2]\n\n[^1]: 각주 하나\n\n[^e1]: 미주 하나\n\n[^2]: 각주 둘\n";
+        let result = MdDecoder::decode(md, &template).unwrap();
+        let notes = collect_notes(&result.document);
+        assert_eq!(
+            notes,
+            vec![
+                (false, vec!["각주 하나".to_string()]),
+                (true, vec!["미주 하나".to_string()]),
+                (false, vec!["각주 둘".to_string()])
+            ]
+        );
+    }
+
+    #[test]
+    fn w1_case_folded_labels_link_and_classify_together() {
+        // 파서는 라벨을 UniCase 로 연결한다 (P13) — 분류·매칭도 동일 기준.
+        let template = default_template();
+        let result = MdDecoder::decode("본문[^E1]\n\n[^e1]: 미주 본문\n", &template).unwrap();
+        let notes = collect_notes(&result.document);
+        assert_eq!(notes, vec![(true, vec!["미주 본문".to_string()])]);
+    }
+
+    #[test]
+    fn w1_note_body_style_uses_footnote_style_slot() {
+        // D6: 본문 스타일 재사용이 아니라 기존 "각주"(14)/"미주"(15) 스타일 참조.
+        let template = default_template();
+        let result = MdDecoder::decode("본문[^1]\n\n[^1]: 각주 본문\n", &template).unwrap();
+        let notes_style = result
+            .style_registry
+            .get_style(crate::internal_styles::FOOTNOTE_STYLE_NAME)
+            .expect("derived footnote style");
+        let doc = &result.document;
+        let mut checked = false;
+        for p in &doc.sections()[0].paragraphs {
+            for run in &p.runs {
+                if let RunContent::Control(c) = &run.content {
+                    if let Control::Footnote { paragraphs, .. } = c.as_ref() {
+                        assert_eq!(paragraphs[0].para_shape_id, notes_style.para_shape_id);
+                        checked = true;
+                    }
+                }
+            }
+        }
+        assert!(checked);
+    }
+
+    #[test]
+    fn w1_expansion_budget_rejects_pathological_duplication() {
+        let template = default_template();
+        // 큰 본문 1개를 다수 참조 — 전개 총량이 예산을 넘으면 typed 에러.
+        let big = "가".repeat(600_000);
+        let refs: String = (0..20).map(|_| "x[^1] ").collect();
+        let md = format!("{refs}\n\n[^1]: {big}\n");
+        let err = MdDecoder::decode(&md, &template).unwrap_err();
+        assert!(matches!(&err, MdError::NoteExpansionBudgetExceeded { .. }), "got: {err:?}");
     }
 }

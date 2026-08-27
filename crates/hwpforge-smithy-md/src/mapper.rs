@@ -11,7 +11,9 @@ use hwpforge_core::{BulletDef, ImageFormat, PageSettings, ParaHead, ParagraphLis
 use hwpforge_foundation::{BulletIndex, CharShapeIndex, HwpUnit, NumberFormatType, ParaShapeIndex};
 
 use crate::error::{MdError, MdResult};
-use crate::internal_styles::list_continuation_style_name;
+use crate::internal_styles::{
+    list_continuation_style_name, ENDNOTE_STYLE_NAME, FOOTNOTE_STYLE_NAME,
+};
 
 /// Resolved style indices for a markdown semantic element.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -216,6 +218,7 @@ pub fn resolve_mapping(template: &Template) -> MdResult<(MdMapping, StyleRegistr
     let list_item =
         resolve_style(&registry, md.and_then(|m| m.list_item.as_deref()), "list_item", body);
     let list_continuation = install_list_continuation_mapping(&mut registry, list_item)?;
+    install_note_styles(&mut registry, body)?;
     let task_list = install_task_list_mapping(&mut registry, list_item)?;
 
     let page_settings = resolved
@@ -358,6 +361,61 @@ fn push_task_list_para_shapes(
         registry.para_shapes.push(para);
         para_shape_id
     })
+}
+
+/// 각주/미주 본문 스타일을 파생 등록한다 (D6 — 한컴 default 스타일 정합).
+///
+/// 한컴 native 실측(F1, 2026-08-27): 각주 본문 = 9pt(charPr height 900),
+/// 첫 줄 내어쓰기 −1310, 줄간격 130%. 템플릿이 같은 이름을 이미 제공하면
+/// (향후 커스텀) 그것을 존중하고 파생을 건너뛴다.
+fn install_note_styles(registry: &mut StyleRegistry, body: MdStyleRef) -> MdResult<()> {
+    use hwpforge_foundation::LineSpacingType;
+
+    if registry.get_style(FOOTNOTE_STYLE_NAME).is_some()
+        && registry.get_style(ENDNOTE_STYLE_NAME).is_some()
+    {
+        return Ok(());
+    }
+
+    let font_id = registry
+        .style_entries
+        .values()
+        .find(|e| e.char_shape_id == body.char_shape_id)
+        .map(|e| e.font_id)
+        .ok_or_else(|| MdError::TemplateResolution {
+            detail: "body style entry missing for note style derivation".to_string(),
+        })?;
+    let base_char = registry
+        .char_shape(body.char_shape_id)
+        .ok_or_else(|| MdError::TemplateResolution {
+            detail: "body char shape missing for note style derivation".to_string(),
+        })?
+        .clone();
+    let base_para = registry
+        .para_shape(body.para_shape_id)
+        .ok_or_else(|| MdError::TemplateResolution {
+            detail: "body para shape missing for note style derivation".to_string(),
+        })?
+        .clone();
+
+    let mut note_char = base_char;
+    note_char.size = HwpUnit::new(900).unwrap_or(note_char.size);
+
+    let mut note_para = base_para;
+    note_para.indent_first_line = HwpUnit::new(-1310).unwrap_or(HwpUnit::ZERO);
+    note_para.line_spacing_type = LineSpacingType::Percentage;
+    note_para.line_spacing_value = 130.0;
+    note_para.list = None;
+
+    let char_shape_id = CharShapeIndex::new(registry.char_shapes.len());
+    registry.char_shapes.push(note_char);
+    let para_shape_id = ParaShapeIndex::new(registry.para_shapes.len());
+    registry.para_shapes.push(note_para);
+
+    let entry = StyleEntry::new(char_shape_id, para_shape_id, font_id);
+    registry.style_entries.entry(FOOTNOTE_STYLE_NAME.to_string()).or_insert(entry);
+    registry.style_entries.entry(ENDNOTE_STYLE_NAME.to_string()).or_insert(entry);
+    Ok(())
 }
 
 fn push_list_continuation_para_shapes(

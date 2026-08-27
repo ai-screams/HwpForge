@@ -23,6 +23,9 @@ quick-xml = { workspace = true }
 serde = { workspace = true }
 serde_yaml = { workspace = true }
 thiserror = { workspace = true }
+# 각주 라벨의 canonical key — pulldown-cmark 의 FootnoteLabel(UniCase) 과
+# 동일 crate·버전으로 case-fold 해 참조↔정의 매칭 기준을 파서와 일치시킨다.
+unicase = "2"
 
 [dev-dependencies]
 hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx", version = "0" }
