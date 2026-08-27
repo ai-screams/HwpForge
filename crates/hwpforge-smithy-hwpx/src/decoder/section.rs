@@ -1163,7 +1163,74 @@ fn decode_note_paragraphs(
     depth: usize,
     ctx: &mut DecodeCtx,
 ) -> HwpxResult<Vec<Paragraph>> {
+    // 인코더가 주입한 `[autoNum head run, " " spacer run]` 쌍(번호 머리)은
+    // 표현 산물이라 Core 로 올리지 않는다 — 대칭 드롭으로 `decode∘encode` 가
+    // Core 고정점을 유지한다 (E4 구조 편집기의 NotRoundTripSafe 게이트가
+    // 이 계약을 집행: spacer 만 살아남으면 사이클마다 " " run 이 누적된다).
+    // 한컴 wire 는 autoNum 과 본문 텍스트를 **같은 run** 에 넣으므로(F1 실측)
+    // 이 시그니처에 걸리지 않는다 — 한컴 본문은 있는 그대로 보존.
+    if note_body_has_injected_head(&hx.sub_list) {
+        let mut sub_list = hx.sub_list.clone();
+        if let Some(first) = sub_list.paragraphs.first_mut() {
+            first.runs.drain(..2);
+        }
+        return decode_sublist_paragraphs(&sub_list, depth, ctx);
+    }
     decode_sublist_paragraphs(&hx.sub_list, depth, ctx)
+}
+
+/// 노트 본문 첫 문단이 인코더 주입 번호-머리 쌍으로 시작하는지 판정한다.
+///
+/// 쌍 시그니처 (인코더 `inject_note_autonum_head` 와 대칭):
+/// run[0] = autoNum(FOOTNOTE/ENDNOTE)-전용 ctrl 만 담은 run (텍스트·개체 없음),
+/// run[1] = 정확히 한 칸 공백(`" "`) 텍스트만 담은 spacer run.
+fn note_body_has_injected_head(sub_list: &HxSubList) -> bool {
+    let Some(first) = sub_list.paragraphs.first() else { return false };
+    let [head, spacer, ..] = first.runs.as_slice() else { return false };
+    is_injected_note_head_run(head) && is_injected_note_spacer_run(spacer)
+}
+
+/// autoNum(FOOTNOTE/ENDNOTE)-전용 head run 판정 — 다른 payload 가 섞인
+/// run(한컴 fused 형태 포함)은 내용 보존을 위해 해당하지 않는다.
+fn is_injected_note_head_run(run: &HxRun) -> bool {
+    if !run.texts.is_empty() || !hx_run_has_no_objects(run) || run.ctrls.len() != 1 {
+        return false;
+    }
+    let ctrl = &run.ctrls[0];
+    let is_note_autonum = ctrl
+        .auto_num
+        .as_ref()
+        .is_some_and(|an| matches!(an.num_type.as_str(), "FOOTNOTE" | "ENDNOTE"));
+    // autoNum 외 payload(newNum·colPr 등)가 같은 ctrl 에 있으면 드롭 금지.
+    is_note_autonum && *ctrl == HxCtrl { auto_num: ctrl.auto_num.clone(), ..Default::default() }
+}
+
+/// 정확히 한 칸 공백(`" "`)만 담은 spacer run 판정 (인코더 `note_spacer_run`
+/// 방출 형태와 정확 일치 — 그 외 ws-only run 은 내용으로 보존).
+fn is_injected_note_spacer_run(run: &HxRun) -> bool {
+    run.ctrls.is_empty()
+        && hx_run_has_no_objects(run)
+        && run.texts.len() == 1
+        && run.texts[0].text() == " "
+}
+
+/// run 에 텍스트/ctrl 외 개체 payload 가 전혀 없는지 (head/spacer 공용 검사).
+fn hx_run_has_no_objects(run: &HxRun) -> bool {
+    run.sec_pr.is_none()
+        && run.title_mark.is_none()
+        && run.tables.is_empty()
+        && run.pictures.is_empty()
+        && run.rects.is_empty()
+        && run.lines.is_empty()
+        && run.ellipses.is_empty()
+        && run.polygons.is_empty()
+        && run.curves.is_empty()
+        && run.connect_lines.is_empty()
+        && run.equations.is_empty()
+        && run.switches.is_empty()
+        && run.dutmals.is_empty()
+        && run.composes.is_empty()
+        && run.containers.is_empty()
 }
 
 /// Decodes an `HxCtrl`'s bookmark into a Core `Run`, if present.

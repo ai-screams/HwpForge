@@ -1299,6 +1299,13 @@ pub struct HxPageNum {
 /// `<hp:footNote>` — footnote element (NoteType in XSD).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxFootNote {
+    /// 종류별 순번 캐시 (한컴 F1/F4 실측: `number="1"` — 항상 존재).
+    /// 종전엔 스키마에 없어 한컴 wire 를 **무음 드롭**했다 (M-W3.5-2).
+    #[serde(rename = "@number", default, skip_serializing_if = "Option::is_none")]
+    pub number: Option<u32>,
+    /// 접미 문자(십진 문자코드 — 한컴 F1: `suffixChar="41"` = `)`).
+    #[serde(rename = "@suffixChar", default, skip_serializing_if = "Option::is_none")]
+    pub suffix_char: Option<String>,
     /// Instance identifier (optional, for linking references).
     ///
     /// Widened to `u64` in E6/M2 to mirror Core's `Option<ObjectId>` without
