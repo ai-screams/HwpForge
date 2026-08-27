@@ -205,6 +205,27 @@ impl EncodeSink {
             reason,
         });
     }
+
+    fn note_head_skipped(&mut self, reason: String) {
+        self.warnings.push(super::EncodeWarning::NoteHeadSkipped {
+            path: crate::decoder::ParagraphPath(self.path.clone()),
+            reason,
+        });
+    }
+
+    fn title_mark_skipped(&mut self, reason: String) {
+        self.warnings.push(super::EncodeWarning::TitleMarkSkipped {
+            path: crate::decoder::ParagraphPath(self.path.clone()),
+            reason,
+        });
+    }
+
+    fn note_restart_ignored(&mut self, reason: String) {
+        self.warnings.push(super::EncodeWarning::NoteRestartIgnored {
+            path: crate::decoder::ParagraphPath(self.path.clone()),
+            reason,
+        });
+    }
 }
 
 /// 방출-통합 wire ledger (W1b §1g v5 변경 4) — `build_runs` 가 각 방출
@@ -309,20 +330,33 @@ pub(crate) fn encode_section_with_note_counters(
     options: EncodeOptions,
     numbering: &mut NoteNumbering,
 ) -> HwpxResult<SectionEncodeResult> {
-    // 주의 — `begin_num.footnote/endnote` 로 카운터를 재시작하지 말 것
+    // 주의 — 섹션 단위로 `begin_num.footnote/endnote` 를 재시작에 쓰지 말 것
     // (H-N2 회귀 실사고): `<hp:startNum>` wire 에는 각주/미주 속성이 없어
-    // 디코더가 `1` 을 **합성**한다. 이를 재시작 신호로 읽으면 공개
-    // encode→decode→encode 왕복에서 섹션마다 카운터가 1 로 리셋된다
-    // (1,2,3 → 1,2,1). 한컴 기본 정책 = `<hp:footNotePr><hp:numbering
-    // type="CONTINUOUS">` (문서 전역 연속 — F1 실측) 이므로 카운터는
-    // 관통 연속 + 본문 `NewNumber` 재시작만 반영한다. `ON_SECTION`
-    // 재시작 정책의 typed 지원은 Core 승격이 필요한 후속 (계획 문서 §7c).
+    // 디코더가 후속 섹션에 `1` 을 **합성**한다. 이를 재시작 신호로 읽으면
+    // 공개 encode→decode→encode 왕복에서 섹션마다 카운터가 1 로 리셋된다
+    // (1,2,3 → 1,2,1). 첫 섹션의 실값(header `<hh:beginNum>` 병합)은 문서
+    // 레벨 `NoteNumbering::from_document_begin` 이 1회 반영하고, 여기서는
+    // 본문 `NewNumber` 재시작만 처리한다. 후속 섹션에 **비기본 실값**이
+    // 들어온 경우는 무음으로 버리지 않고 경고한다 (`ON_SECTION` typed
+    // 지원은 Core 승격이 필요한 후속 — 계획 문서 §7f).
     let mut chart_entries: Vec<(String, String)> = Vec::new();
     let mut embedded_oles: Vec<(String, Vec<u8>)> = Vec::new();
     // Replacement list for run-level XML fragments that serde cannot express
     // directly, such as interleaved hyperlink controls and mixed-content `<hp:t>`.
     let mut run_xml_replacements: Vec<(String, String)> = Vec::new();
     let mut sink = EncodeSink::new(section_index);
+    // 후속 섹션의 명시적 비기본 시작번호는 현재 반영 불가 — 무음 무시 금지.
+    if section_index > 0 {
+        if let Some(b) = section.begin_num.as_ref() {
+            if b.footnote != 1 || b.endnote != 1 {
+                sink.note_restart_ignored(format!(
+                    "section {} begin_num (footnote={}, endnote={}) ignored: per-section \
+                     note restart needs the ON_SECTION numbering policy (not yet carried)",
+                    section_index, b.footnote, b.endnote
+                ));
+            }
+        }
+    }
     let mut hx_section = build_section(
         section,
         &mut chart_entries,
@@ -556,10 +590,28 @@ fn build_paragraph(
     // paragraph has a heading level, enabling 한글 auto-TOC generation.
     if para.heading_level.is_some() {
         if let Some(first_run) = runs.first_mut() {
-            first_run.title_mark = Some(HxTitleMark { ignore: false });
-            // titleMark 는 run 트리 후주입이라 wire 위치가 map 에 반영되지
-            // 않는다 — heading+캐시 조합은 드롭 (W1b 한계, 백로그).
-            ledger.mark_cache_inadmissible("titleMark injection position not cache-mapped");
+            // 하이퍼링크/필드 placeholder run 은 **전체-run 직렬화 문자열**이
+            // 치환 키다 — titleMark 를 후주입하면 키가 어긋나 치환이 실행되지
+            // 않고 내부 마커(`__HWPHL_*`/`__HWPFD_*`)가 최종 XML 에 유출된다
+            // (4차 평결 Critical — 2문단 heading+hyperlink-first 재현 확정).
+            // 부착을 보류하고 경고한다 (TOC 표식 소실 < 마커 유출 파손).
+            let is_replacement_marker_run = first_run.texts.first().is_some_and(|t| {
+                let text = t.text();
+                text.starts_with("__HWPHL_") || text.starts_with("__HWPFD_")
+            });
+            if is_replacement_marker_run {
+                sink.title_mark_skipped(
+                    "titleMark omitted: heading paragraph starts with a full-run \
+                     replacement placeholder (hyperlink/field) — attaching would break \
+                     the replacement key and leak internal markers"
+                        .to_string(),
+                );
+            } else {
+                first_run.title_mark = Some(HxTitleMark { ignore: false });
+                // titleMark 는 run 트리 후주입이라 wire 위치가 map 에 반영되지
+                // 않는다 — heading+캐시 조합은 드롭 (W1b 한계, 백로그).
+                ledger.mark_cache_inadmissible("titleMark injection position not cache-mapped");
+            }
         }
     }
 
@@ -1470,20 +1522,43 @@ fn encode_control_to_ctrl(
 /// 키가 깨져 최종 XML 에 내부 마커가 유출된다. 한컴형 번호-본문 간격은
 /// 공백 하나를 담은 **별도 텍스트 run** 으로 방출한다 (공백 전용 run 은
 /// ws-only 보존 수정(`preserve_ws_only_text`)으로 왕복에서도 안전).
-/// 반환값 = 주입으로 lineseg 캐시를 드롭했는지 (호출부가 경고를 낸다).
-fn inject_note_autonum_head(sub_list: &mut HxSubList, num_type: &str, num: u32) -> bool {
-    let Some(first_para) = sub_list.paragraphs.first_mut() else { return false };
-    // titleMark 는 "첫 run" 불변식(TOC 계약)을 갖는다 — 그 경우 head/spacer 를
-    // titleMark run **뒤**(offset 1)에 끼워 불변식과 번호 머리를 모두 지킨다
-    // (L-N2 — 주입 생략은 무번호 각주를 만들므로 답이 아니다). 디코더 쌍
-    // 드롭도 같은 offset 규칙으로 대칭 (`note_body_has_injected_head`).
-    let at = usize::from(first_para.runs.first().is_some_and(|r| r.title_mark.is_some()));
-    let char_pr_id_ref = first_para.runs.get(at).map(|r| r.char_pr_id_ref).unwrap_or_default();
-    // 이미 autoNum 머리가 있으면(향후 carry 경로) 중복 주입하지 않는다.
+/// 주입 결과 — 호출부([`renumber_note_autonums`])가 경고로 표면화한다.
+pub(crate) enum NoteHeadInjection {
+    /// 주입 완료. `cache_dropped` = 어긋나게 될 lineseg 캐시를 드롭했는지.
+    Injected {
+        /// M-N2 fail-closed 드롭 발생 여부.
+        cache_dropped: bool,
+    },
+    /// autoNum 머리가 이미 있어(native fused run 등) 주입 불필요.
+    AlreadyPresent,
+    /// titleMark 첫 run 문단 — 주입을 보류했다 (경고 대상).
+    ///
+    /// titleMark 는 기존 **본문 run 에 붙어** 있어 (별도 run 이 아님), 앞에
+    /// 끼우면 TOC "첫 run" 불변식이 깨지고 뒤(offset 1)에 끼우면 번호가
+    /// 본문 **뒤**에 렌더된다 (4차 평결 High). 특히 그 run 이 하이퍼링크/
+    /// 필드 치환 marker run 이면 전체-run 치환 키가 어긋나 내부 마커가
+    /// 유출된다 (4차 평결 Critical 경로). 안전한 배치가 없어 번호 머리를
+    /// 생략하고 경고한다 — typed 해법은 백로그 (계획 문서 §7f).
+    SkippedTitleMark,
+}
+
+fn inject_note_autonum_head(
+    sub_list: &mut HxSubList,
+    num_type: &str,
+    num: u32,
+) -> NoteHeadInjection {
+    let Some(first_para) = sub_list.paragraphs.first_mut() else {
+        return NoteHeadInjection::AlreadyPresent;
+    };
+    // 이미 autoNum 머리가 있으면(native fused run 등) 중복 주입하지 않는다.
     let already = first_para.runs.iter().any(|r| r.ctrls.iter().any(|c| c.auto_num.is_some()));
     if already {
-        return false;
+        return NoteHeadInjection::AlreadyPresent;
     }
+    if first_para.runs.first().is_some_and(|r| r.title_mark.is_some()) {
+        return NoteHeadInjection::SkippedTitleMark;
+    }
+    let char_pr_id_ref = first_para.runs.first().map(|r| r.char_pr_id_ref).unwrap_or_default();
     let head = note_head_run(
         char_pr_id_ref,
         HxCtrl {
@@ -1502,13 +1577,32 @@ fn inject_note_autonum_head(sub_list: &mut HxSubList, num_type: &str, num: u32) 
         },
     );
     let spacer = note_spacer_run(char_pr_id_ref);
-    first_para.runs.insert(at, spacer);
-    first_para.runs.insert(at, head);
+    first_para.runs.insert(0, spacer);
+    first_para.runs.insert(0, head);
     // M-N2 fail-closed: 주입된 head(8 유닛)+spacer(1 유닛)는 이 문단의
     // 기존 lineseg 캐시(textpos)와 어긋난다 — 어긋난 캐시를 무음 방출하는
     // 대신 드롭한다 (native fused autoNum 은 `already` 로 여기 오지 않음;
     // 이 경로 = 캐시 보존 문서의 autoNum-드롭된 Core 재인코드 한정).
-    first_para.linesegarray.take().is_some()
+    NoteHeadInjection::Injected { cache_dropped: first_para.linesegarray.take().is_some() }
+}
+
+/// [`inject_note_autonum_head`] 결과를 typed 경고로 표면화한다.
+fn report_note_head(outcome: NoteHeadInjection, kind: &str, sink: &mut EncodeSink) {
+    match outcome {
+        NoteHeadInjection::Injected { cache_dropped: true } => {
+            sink.cache_dropped(format!(
+                "{kind} body lineseg cache dropped: injected autoNum head shifts textpos"
+            ));
+        }
+        NoteHeadInjection::Injected { cache_dropped: false }
+        | NoteHeadInjection::AlreadyPresent => {}
+        NoteHeadInjection::SkippedTitleMark => {
+            sink.note_head_skipped(format!(
+                "{kind} number head omitted: first paragraph starts with a titleMark run \
+                 (no safe injection point — TOC first-run invariant / marker replacement keys)"
+            ));
+        }
+    }
 }
 
 /// autoNum 컨트롤만 담는 선행 run.
@@ -1545,41 +1639,81 @@ fn note_spacer_run(char_pr_id_ref: u32) -> HxRun {
     run
 }
 
+/// 단일 종류(각주 또는 미주)의 번호 카운터.
+///
+/// `take()` 가 현재 번호를 부여하고 나서 증가를 시도한다 — 증가 overflow 는
+/// **고갈 표시**로만 남기고, 다음 `take()` 에서 오류를 낸다. `u32::MAX` 번호
+/// 자체는 wire-유효(u32)하므로 부여할 수 있어야 한다 (4차 평결 off-by-one:
+/// 부여 전 `checked_add` 는 첫 MAX note 부터 거부했다).
+pub(crate) struct NoteCounter {
+    next: u32,
+    exhausted: bool,
+}
+
+impl NoteCounter {
+    fn new(start: u32) -> Self {
+        Self { next: start, exhausted: false }
+    }
+
+    /// 현재 번호를 부여하고 카운터를 전진시킨다.
+    fn take(&mut self, kind: &str) -> HwpxResult<u32> {
+        if self.exhausted {
+            return Err(HwpxError::InvalidStructure {
+                detail: format!("{kind} counter overflow (u32::MAX exhausted)"),
+            });
+        }
+        let num = self.next;
+        match num.checked_add(1) {
+            Some(n) => self.next = n,
+            None => self.exhausted = true,
+        }
+        Ok(num)
+    }
+
+    /// `NewNumber` 재시작 — wire 값 그대로 수용한다 (`hp:newNum@num` 은
+    /// XSD 상 `xs:integer` — `0` 도 유효 wire 라 걸러내면 wire 와 재생성
+    /// 캐시의 의미가 갈라진다. 값 검증은 Core validate 소관).
+    fn restart(&mut self, n: u32) {
+        self.next = n;
+        self.exhausted = false;
+    }
+}
+
 /// 각주/미주 번호 상태 — "다음에 부여할 번호" 모델 (Codex H-W3.5-2).
 ///
 /// - 문서 시작: **첫 섹션** `begin_num` 의 footnote/endnote 를 딱 한 번
 ///   반영한다 — header.xml `<hh:beginNum>` 실값이 첫 섹션에만 병합되는
-///   디코더 계약의 대칭. 후속 섹션의 `begin_num` 은 `<hp:startNum>` 존재로
-///   합성된 `1` 이라 재시작 신호로 읽지 않는다 (H-N2 회귀 방지).
+///   디코더 계약의 대칭. 후속 섹션의 `begin_num` 은 무시된다 (`<hp:startNum>`
+///   존재로 합성된 `1` 이 대부분이라 재시작으로 읽으면 왕복마다 리셋 —
+///   비기본 실값이 무시될 때는 [`EncodeWarning::NoteRestartIgnored`] 로
+///   표면화).
 /// - `Control::NewNumber`(FOOTNOTE/ENDNOTE) 를 문서 순서에서 만나면 그 값으로
 ///   재시작 (다음 note 가 그 번호)
 pub(crate) struct NoteNumbering {
-    /// 다음 각주 번호.
-    pub next_footnote: u32,
-    /// 다음 미주 번호.
-    pub next_endnote: u32,
+    /// 각주 카운터.
+    pub footnote: NoteCounter,
+    /// 미주 카운터.
+    pub endnote: NoteCounter,
 }
 
 impl NoteNumbering {
     /// 문서 시작 상태 (1 부터).
     pub(crate) fn new() -> Self {
-        Self { next_footnote: 1, next_endnote: 1 }
+        Self { footnote: NoteCounter::new(1), endnote: NoteCounter::new(1) }
     }
 
     /// 문서 시작 상태 — 첫 섹션 `begin_num`(= header `<hh:beginNum>` 병합
-    /// 결과)의 명시적 시작 번호를 1회 반영한다. `0` 은 wire 위반 입력이라
-    /// 무시하고 1 을 유지한다.
+    /// 결과)의 명시적 시작 번호를 1회 반영한다. 값은 그대로 쓴다 — `0` 등
+    /// 비정상 입력의 거부는 Core validate 소관 (wire 와 캐시가 갈라지는
+    /// 무음 보정 금지).
     pub(crate) fn from_document_begin(begin: Option<&hwpforge_core::section::BeginNum>) -> Self {
-        let mut n = Self::new();
-        if let Some(b) = begin {
-            if b.footnote > 0 {
-                n.next_footnote = b.footnote;
-            }
-            if b.endnote > 0 {
-                n.next_endnote = b.endnote;
-            }
+        match begin {
+            Some(b) => Self {
+                footnote: NoteCounter::new(b.footnote),
+                endnote: NoteCounter::new(b.endnote),
+            },
+            None => Self::new(),
         }
-        n
     }
 }
 
@@ -1604,52 +1738,36 @@ pub(crate) fn renumber_note_autonums(
         for para in paragraphs {
             for run in &mut para.runs {
                 for ctrl in &mut run.ctrls {
-                    // NewNumber(FOOTNOTE/ENDNOTE) = 이 위치부터 재시작.
-                    // `newNum@num` 은 xs:positiveInteger — `0` 은 스펙 위반
-                    // 입력이므로 재시작 신호로 무시한다 (0 번호 방출 방지,
-                    // M-N1. 지어내지 않는다 — 컨트롤 자체는 그대로 방출).
+                    // `hp:newNum@num` 은 XSD 상 `xs:integer` — 0 포함 wire
+                    // 값을 그대로 재시작에 반영한다 (걸러내면 방출되는
+                    // newNum 과 재생성 캐시의 의미가 갈라진다, 4차 평결).
                     if let Some(new_num) = ctrl.new_num.as_ref() {
-                        if new_num.num > 0 {
-                            match new_num.num_type.as_str() {
-                                "FOOTNOTE" => numbering.next_footnote = new_num.num,
-                                "ENDNOTE" => numbering.next_endnote = new_num.num,
-                                _ => {}
-                            }
+                        match new_num.num_type.as_str() {
+                            "FOOTNOTE" => numbering.footnote.restart(new_num.num),
+                            "ENDNOTE" => numbering.endnote.restart(new_num.num),
+                            _ => {}
                         }
                     }
                     if let Some(note) = ctrl.foot_note.as_mut() {
-                        let num = numbering.next_footnote;
-                        // 포화는 MAX 이후 번호 중복을 낳는다 — 경계에서 오류.
-                        numbering.next_footnote =
-                            num.checked_add(1).ok_or_else(|| HwpxError::InvalidStructure {
-                                detail: "footnote counter overflow (u32::MAX)".to_string(),
-                            })?;
+                        let num = numbering.footnote.take("footnote")?;
                         note.number = Some(num);
                         note.suffix_char.get_or_insert_with(|| "41".to_string());
-                        if inject_note_autonum_head(&mut note.sub_list, "FOOTNOTE", num) {
-                            sink.cache_dropped(
-                                "footnote body lineseg cache dropped: injected autoNum \
-                                 head shifts textpos"
-                                    .to_string(),
-                            );
-                        }
+                        report_note_head(
+                            inject_note_autonum_head(&mut note.sub_list, "FOOTNOTE", num),
+                            "footnote",
+                            sink,
+                        );
                         walk_paragraphs(&mut note.sub_list.paragraphs, numbering, sink)?;
                     }
                     if let Some(note) = ctrl.end_note.as_mut() {
-                        let num = numbering.next_endnote;
-                        numbering.next_endnote =
-                            num.checked_add(1).ok_or_else(|| HwpxError::InvalidStructure {
-                                detail: "endnote counter overflow (u32::MAX)".to_string(),
-                            })?;
+                        let num = numbering.endnote.take("endnote")?;
                         note.number = Some(num);
                         note.suffix_char.get_or_insert_with(|| "41".to_string());
-                        if inject_note_autonum_head(&mut note.sub_list, "ENDNOTE", num) {
-                            sink.cache_dropped(
-                                "endnote body lineseg cache dropped: injected autoNum \
-                                 head shifts textpos"
-                                    .to_string(),
-                            );
-                        }
+                        report_note_head(
+                            inject_note_autonum_head(&mut note.sub_list, "ENDNOTE", num),
+                            "endnote",
+                            sink,
+                        );
                         walk_paragraphs(&mut note.sub_list.paragraphs, numbering, sink)?;
                     }
                 }
@@ -3025,10 +3143,12 @@ mod tests {
         assert_eq!(footnote_autonum_sequence(&xml), vec![1, 5], "재시작 순서 불일치: {xml}");
     }
 
-    /// M-N1 잠금: `NewNumber(0)` 은 xs:positiveInteger 위반 입력 — 재시작
-    /// 신호로 무시해야 한다 (0 번호 방출 금지; 컨트롤 자체는 방출 유지).
+    /// 4차 평결 정정: `hp:newNum@num` 은 XSD 상 `xs:integer` — `0` 도 유효
+    /// wire 다. 방출되는 `<hp:newNum num="0">` 과 재생성 캐시가 갈라지지
+    /// 않도록 재시작 신호로 **수용**한다 (걸러내면 wire-캐시 의미 불일치;
+    /// 값 검증은 Core validate 소관 — 계획 문서 §7f HITL).
     #[test]
-    fn note_numbering_ignores_new_number_zero() {
+    fn note_numbering_applies_new_number_zero_verbatim() {
         use hwpforge_core::control::{Control, NewNumberKind};
 
         let section = Section::with_paragraphs(
@@ -3039,7 +3159,7 @@ mod tests {
                         CharShapeIndex::new(0),
                     ),
                     Run::control(
-                        Control::footnote(vec![text_paragraph("일", 0, 0)]),
+                        Control::footnote(vec![text_paragraph("영", 0, 0)]),
                         CharShapeIndex::new(0),
                     ),
                 ],
@@ -3049,59 +3169,108 @@ mod tests {
         );
 
         let xml = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default()).unwrap().xml;
-        assert_eq!(footnote_autonum_sequence(&xml), vec![1], "NewNumber(0) 은 무시: {xml}");
+        assert_eq!(
+            footnote_autonum_sequence(&xml),
+            vec![0],
+            "NewNumber(0) 은 wire 그대로 캐시에 반영 (지어내기 금지): {xml}"
+        );
+        assert!(xml.contains(r#"<hp:newNum num="0""#), "컨트롤 자체도 원형 방출: {xml}");
     }
 
-    /// 3차 평결 M-N1 잔여: 포화는 MAX 이후 **중복 번호**를 방출한다 —
-    /// 카운터 overflow 는 경계에서 오류여야 한다.
+    /// titleMark 각주의 번호 머리 생략은 **경고로 표면화**돼야 한다
+    /// (무음 생략 금지 — `NoteHeadSkipped` 가 섹션 warnings 로 전달).
     #[test]
-    fn note_numbering_errors_on_counter_overflow() {
-        use hwpforge_core::control::{Control, NewNumberKind};
+    fn skipped_title_mark_note_surfaces_warning() {
+        use hwpforge_core::control::Control;
 
+        let mut heading_body = text_paragraph("제목 각주", 0, 0);
+        heading_body.heading_level = Some(1);
         let section = Section::with_paragraphs(
             vec![Paragraph::with_runs(
-                vec![
-                    Run::control(
-                        Control::NewNumber { kind: NewNumberKind::Footnote, number: u32::MAX },
-                        CharShapeIndex::new(0),
-                    ),
-                    Run::control(
-                        Control::footnote(vec![text_paragraph("맥스", 0, 0)]),
-                        CharShapeIndex::new(0),
-                    ),
-                    Run::control(
-                        Control::footnote(vec![text_paragraph("한 번 더", 0, 0)]),
-                        CharShapeIndex::new(0),
-                    ),
-                ],
+                vec![Run::control(Control::footnote(vec![heading_body]), CharShapeIndex::new(0))],
                 ParaShapeIndex::new(0),
             )],
             PageSettings::a4(),
         );
 
-        let err = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default())
-            .expect_err("MAX 직후 두 번째 각주는 overflow 오류여야 함");
+        let result = encode_section(&section, 0, 0, 0, 0, EncodeOptions::default()).unwrap();
+        assert!(
+            result.warnings.iter().any(|w| matches!(
+                w,
+                crate::EncodeWarning::NoteHeadSkipped { reason, .. }
+                    if reason.contains("titleMark")
+            )),
+            "titleMark 생략이 무경고면 무음 드롭: {:?}",
+            result.warnings
+        );
+        // `<hp:autoNum ` — secPr 의 `<hp:autoNumFormat>` 과 구별 (substring 함정).
+        assert!(
+            !result.xml.contains("<hp:autoNum "),
+            "생략인데 autoNum 이 나오면 계약 위반: {}",
+            result.xml
+        );
+    }
+
+    /// 4차 평결 off-by-one 정정: `u32::MAX` 번호 자체는 wire-유효라 **첫
+    /// MAX 각주는 성공**해야 하고 (num=MAX 방출), 그 **다음** 각주에서
+    /// 카운터 고갈 오류가 나야 한다 (포화식 중복 번호 금지).
+    #[test]
+    fn note_numbering_errors_after_max_number_assigned() {
+        use hwpforge_core::control::{Control, NewNumberKind};
+
+        let restart_max = || {
+            Run::control(
+                Control::NewNumber { kind: NewNumberKind::Footnote, number: u32::MAX },
+                CharShapeIndex::new(0),
+            )
+        };
+        let note = |t: &str| {
+            Run::control(Control::footnote(vec![text_paragraph(t, 0, 0)]), CharShapeIndex::new(0))
+        };
+        let section_of = |runs| {
+            Section::with_paragraphs(
+                vec![Paragraph::with_runs(runs, ParaShapeIndex::new(0))],
+                PageSettings::a4(),
+            )
+        };
+
+        // MAX 각주 1개 = 성공 + num=MAX 방출.
+        let one = section_of(vec![restart_max(), note("맥스")]);
+        let xml = encode_section(&one, 0, 0, 0, 0, EncodeOptions::default())
+            .expect("첫 MAX 각주는 성공해야 함 (off-by-one 금지)")
+            .xml;
+        assert_eq!(footnote_autonum_sequence(&xml), vec![u32::MAX]);
+
+        // MAX 다음 각주 = 고갈 오류 (중복 MAX 방출 금지).
+        let two = section_of(vec![restart_max(), note("맥스"), note("한 번 더")]);
+        let err = encode_section(&two, 0, 0, 0, 0, EncodeOptions::default())
+            .expect_err("MAX 다음 각주는 카운터 고갈 오류여야 함");
         assert!(format!("{err:?}").contains("footnote counter overflow"), "다른 오류: {err:?}");
     }
 
-    /// 3차 평결 L-N2: titleMark 첫 run 문단은 번호 머리를 **titleMark 뒤**
-    /// (offset 1)에 끼운다 — TOC "첫 run" 불변식과 번호 머리를 모두 지킨다.
+    /// 4차 평결 반영: titleMark 는 본문 run 에 fused 라 안전한 주입 지점이
+    /// 없다 (앞 = TOC 불변식·치환 키 파손, 뒤 = 번호가 본문 뒤에 렌더).
+    /// 번호 머리를 생략하고 `SkippedTitleMark` 를 반환해야 한다 — 호출부가
+    /// `NoteHeadSkipped` 경고로 표면화한다 (무음 아님).
     #[test]
-    fn note_head_injects_after_title_mark_run() {
+    fn note_head_skips_title_mark_paragraph_with_signal() {
         use crate::schema::section::HxTitleMark;
 
         let mut sub_list = test_sublist(text_paragraph("제목 본문", 0, 0));
         sub_list.paragraphs[0].runs[0].title_mark = Some(HxTitleMark { ignore: false });
 
-        let dropped = inject_note_autonum_head(&mut sub_list, "FOOTNOTE", 3);
-        assert!(!dropped, "lineseg 캐시 없음 — 드롭 없음");
+        let outcome = inject_note_autonum_head(&mut sub_list, "FOOTNOTE", 3);
+        assert!(
+            matches!(outcome, NoteHeadInjection::SkippedTitleMark),
+            "titleMark 문단은 생략 신호를 돌려줘야 경고가 나간다"
+        );
         let runs = &sub_list.paragraphs[0].runs;
+        assert_eq!(runs.len(), 1, "run 삽입/수정 금지 — 치환 키·TOC 불변식 보존");
         assert!(runs[0].title_mark.is_some(), "titleMark 는 여전히 첫 run");
         assert!(
-            runs[1].ctrls.first().is_some_and(|c| c.auto_num.is_some()),
-            "head 는 titleMark 바로 뒤"
+            runs.iter().all(|r| r.ctrls.iter().all(|c| c.auto_num.is_none())),
+            "본문 앞이 아닌 곳에 번호를 붙이면 본문 뒤 번호 렌더 (4차 High)"
         );
-        assert_eq!(runs[2].texts[0].text(), " ", "spacer 는 head 뒤");
     }
 
     /// 3차 평결 M-N2: head/spacer 주입은 해당 문단의 lineseg 캐시(textpos)와
@@ -3113,8 +3282,11 @@ mod tests {
         let mut sub_list = test_sublist(text_paragraph("본문", 0, 0));
         sub_list.paragraphs[0].linesegarray = Some(HxLineSegArray { items: Vec::new() });
 
-        let dropped = inject_note_autonum_head(&mut sub_list, "FOOTNOTE", 1);
-        assert!(dropped, "캐시 드롭 사실을 알려야 경고를 낼 수 있다");
+        let outcome = inject_note_autonum_head(&mut sub_list, "FOOTNOTE", 1);
+        assert!(
+            matches!(outcome, NoteHeadInjection::Injected { cache_dropped: true }),
+            "캐시 드롭 사실을 알려야 경고를 낼 수 있다"
+        );
         assert!(
             sub_list.paragraphs[0].linesegarray.is_none(),
             "주입 후 어긋난 캐시가 남으면 무음 좌표 오류 (M-N2)"

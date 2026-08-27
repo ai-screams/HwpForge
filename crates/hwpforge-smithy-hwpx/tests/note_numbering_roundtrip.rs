@@ -127,3 +127,35 @@ fn public_roundtrip_keeps_explicit_document_begin_num() {
         "명시적 시작번호가 왕복에서 손실되면 3차 평결 High 회귀"
     );
 }
+
+/// 4차 평결 Critical (pre-existing, 재현 확정): heading 문단의 첫 run 이
+/// 하이퍼링크(전체-run 치환 placeholder)이면 titleMark 후주입이 치환 키를
+/// 어긋내 내부 마커(`__HWPHL_*`)가 최종 XML 로 유출됐다. titleMark 부착을
+/// 보류(경고)하고 마커는 절대 유출되지 않아야 한다.
+#[test]
+fn heading_hyperlink_first_run_must_not_leak_markers() {
+    let store = minimal_store();
+    let images = ImageStore::new();
+
+    let plain = Paragraph::with_runs(
+        vec![Run::text("첫 문단", CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    let mut heading = Paragraph::with_runs(
+        vec![Run::control(
+            Control::Hyperlink { text: "링크".into(), url: "https://example.com".into() },
+            CharShapeIndex::new(0),
+        )],
+        ParaShapeIndex::new(0),
+    );
+    heading.heading_level = Some(1);
+
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(vec![plain, heading], PageSettings::a4()));
+    let validated = doc.validate().expect("validate");
+
+    let bytes = HwpxEncoder::encode(&validated, &store, &images).expect("encode");
+    let xml = section_xml(&bytes, 0);
+    assert!(!xml.contains("__HWP"), "내부 치환 마커 유출 (4차 평결 Critical): {xml}");
+    assert!(xml.contains("fieldBegin"), "하이퍼링크 치환 자체는 실행돼야 함: {xml}");
+}

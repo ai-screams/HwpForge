@@ -488,6 +488,32 @@ pub enum EncodeWarning {
         /// 드롭 사유.
         reason: String,
     },
+    /// 각주/미주 번호 머리(autoNum)를 안전하게 주입할 수 없어 생략함 —
+    /// 예: 첫 문단이 titleMark run 으로 시작 (TOC "첫 run" 불변식 및
+    /// 전체-run 치환 키와 충돌해 안전한 삽입 지점이 없다).
+    NoteHeadSkipped {
+        /// 해당 note 의 중첩 경로.
+        path: crate::decoder::ParagraphPath,
+        /// 생략 사유.
+        reason: String,
+    },
+    /// TOC 제목 표식(`<hp:titleMark>`)을 부착하지 못함 — heading 문단의
+    /// 첫 run 이 전체-run 치환 placeholder(하이퍼링크/필드)라 부착하면
+    /// 치환 키가 어긋나 내부 마커가 최종 XML 로 유출된다.
+    TitleMarkSkipped {
+        /// 해당 문단의 중첩 경로.
+        path: crate::decoder::ParagraphPath,
+        /// 생략 사유.
+        reason: String,
+    },
+    /// 후속 섹션의 명시적 각주/미주 시작 번호를 반영하지 못함 — 구역별
+    /// 재시작(`ON_SECTION` numbering 정책)은 아직 typed carry 되지 않는다.
+    NoteRestartIgnored {
+        /// 해당 섹션의 경로.
+        path: crate::decoder::ParagraphPath,
+        /// 무시 사유.
+        reason: String,
+    },
 }
 
 /// [`HwpxEncoder::encode_with_diagnostics`] 의 결과 — 산출 바이트 +
@@ -643,8 +669,9 @@ impl HwpxEncoder {
         let mut section_results = Vec::with_capacity(sections.len());
         // 각주/미주 autoNum 번호 — 문서 전역 연속 (한컴 기본 CONTINUOUS,
         // F7 실측: 종류별 순번 캐시). 첫 섹션 begin_num(= header
-        // <hh:beginNum> 병합 실값)은 문서 시작에서 1회 반영하고, 후속
-        // 섹션의 합성 begin_num 과 본문 NewNumber 는 카운터 walk 가 처리.
+        // <hh:beginNum> 병합 실값)만 문서 시작에서 1회 반영한다. 후속
+        // 섹션의 begin_num 은 **무시**되고 (합성 1 — 비기본 실값이면
+        // NoteRestartIgnored 경고), 본문 NewNumber 재시작은 walk 가 처리.
         let mut note_counters = crate::encoder::section::NoteNumbering::from_document_begin(
             sections.first().and_then(|s| s.begin_num.as_ref()),
         );

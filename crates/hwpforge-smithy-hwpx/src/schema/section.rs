@@ -1335,14 +1335,17 @@ pub struct HxFootNotePr {
 }
 
 /// `<hp:numbering>` (footNotePr/endNotePr 자식) — 각주/미주 번호 정책.
+///
+/// `newNum` 은 의도적으로 파싱하지 않는다 — 경고 판정에 불필요하고,
+/// `xs:positiveInteger` 는 u32 상한을 넘을 수 있어 typed 파싱이 schema-valid
+/// 문서의 디코드 실패를 만든다 (4차 평결 Medium — typed carry 승격 때
+/// 문자열/광폭 정수로 재설계).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct HxNoteNumberingPolicy {
     /// `CONTINUOUS`(전 구역 연속·기본) / `ON_SECTION`(구역마다 재시작) 등.
+    /// `None` = 속성 결측(기본 적용·정상), `Some("")` = 명시적 빈 값(비정상).
     #[serde(rename = "@type", default)]
-    pub policy_type: String,
-    /// 재시작 시작 번호 (`ON_SECTION` 일 때만 유효 — OWPML XSD).
-    #[serde(rename = "@newNum", default)]
-    pub new_num: u32,
+    pub policy_type: Option<String>,
 }
 
 /// `<hp:endNotePr>` — section-level endnote formatting (decoder-only for Phase 4.5).

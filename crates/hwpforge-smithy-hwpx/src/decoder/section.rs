@@ -1176,15 +1176,15 @@ fn decode_note_paragraphs(
 
 /// 노트 본문 첫 문단에서 인코더 주입 번호-머리 쌍의 위치를 찾는다.
 ///
-/// 쌍 시그니처 (인코더 `inject_note_autonum_head` 와 대칭 — offset 규칙 포함):
-/// run[at] = autoNum(FOOTNOTE/ENDNOTE)-전용 ctrl 만 담은 run (텍스트·개체 없음),
-/// run[at+1] = 정확히 한 칸 공백(`" "`) 텍스트만 담은 spacer run.
-/// `at` 은 0, 단 titleMark 첫 run 문단은 1 (TOC "첫 run" 불변식 보존 주입).
+/// 쌍 시그니처 (인코더 `inject_note_autonum_head` 와 대칭):
+/// run[0] = autoNum(FOOTNOTE/ENDNOTE)-전용 ctrl 만 담은 run (텍스트·개체 없음),
+/// run[1] = 정확히 한 칸 공백(`" "`) 텍스트만 담은 spacer run.
+/// titleMark 첫 run 문단에는 인코더가 주입하지 않으므로 (NoteHeadSkipped
+/// 경고) offset 변형은 없다 — 오탐 범위를 넓히지 않는다 (4차 평결 L-N1).
 fn injected_head_range(sub_list: &HxSubList) -> Option<(usize, usize)> {
     let first = sub_list.paragraphs.first()?;
-    let at = usize::from(first.runs.first().is_some_and(|r| r.title_mark.is_some()));
-    let [head, spacer, ..] = first.runs.get(at..)? else { return None };
-    (is_injected_note_head_run(head) && is_injected_note_spacer_run(spacer)).then_some((at, 2))
+    let [head, spacer, ..] = first.runs.as_slice() else { return None };
+    (is_injected_note_head_run(head) && is_injected_note_spacer_run(spacer)).then_some((0, 2))
 }
 
 /// autoNum(FOOTNOTE/ENDNOTE)-전용 head run 판정 — 다른 payload 가 섞인
@@ -1826,12 +1826,16 @@ fn warn_unsupported_note_policy(
         (&sec_pr.end_note_pr, "hp:endNotePr/hp:numbering@type"),
     ] {
         let Some(policy) = pr.as_ref().and_then(|p| p.numbering.as_ref()) else { continue };
-        if !policy.policy_type.is_empty() && policy.policy_type != "CONTINUOUS" {
-            warnings.push(super::DecodeWarning::UnknownEnumValue {
-                attribute,
-                raw: policy.policy_type.clone(),
-                fallback: "CONTINUOUS",
-            });
+        // 결측(None) = 기본 적용·정상. 명시된 값은 빈 문자열 포함 전부
+        // 대조한다 — explicit `type=""` 로 경고를 우회할 수 없다 (4차 Low).
+        if let Some(t) = policy.policy_type.as_deref() {
+            if t != "CONTINUOUS" {
+                warnings.push(super::DecodeWarning::UnknownEnumValue {
+                    attribute,
+                    raw: t.to_string(),
+                    fallback: "CONTINUOUS",
+                });
+            }
         }
     }
 }
@@ -2195,8 +2199,9 @@ mod tests {
         );
     }
 
-    /// 3차 평결 L-N2 대칭: titleMark 첫 run 문단은 쌍이 offset 1 에 있다 —
-    /// `injected_head_range` 가 (1, 2) 를 돌려줘야 인코더 offset 주입과 대칭.
+    /// 4차 평결 반영: titleMark 첫 run 문단에는 인코더가 주입하지 않으므로
+    /// (`NoteHeadSkipped`) 디코더도 offset 변형 없이 선두 쌍만 드롭한다 —
+    /// titleMark 문단의 후속 run 들은 오탐 없이 그대로 보존돼야 한다.
     #[test]
     fn injected_head_range_honors_title_mark_offset() {
         use crate::schema::section::{
@@ -2224,8 +2229,9 @@ mod tests {
         );
         assert_eq!(
             super::injected_head_range(&make(vec![title, head, spacer, body])),
-            Some((1, 2)),
-            "titleMark 첫 run 이면 쌍은 offset 1 (인코더 주입 규칙과 대칭)"
+            None,
+            "titleMark 첫 run 문단은 인코더가 주입하지 않으므로 쌍 미탐지 — \
+             후속 run 을 오탐 삭제하면 저작 내용 손실 (L-N1 오탐 확대 방지)"
         );
     }
 
@@ -4585,6 +4591,53 @@ mod tests {
                         && *fallback == "CONTINUOUS"
             )),
             "ON_SECTION 정책이 무경고로 지나가면 무음 정규화: {:?}",
+            result.warnings
+        );
+    }
+
+    /// 4차 평결 Medium: `numbering@newNum` 은 `xs:positiveInteger` 라 u32
+    /// 상한을 넘는 schema-valid 값이 올 수 있다 — typed 파싱으로 섹션
+    /// 디코드가 통째로 실패하면 신규 호환성 회귀다 (newNum 은 파싱하지
+    /// 않는 게 계약).
+    #[test]
+    fn huge_new_num_does_not_fail_section_decode() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <secPr textDirection="HORIZONTAL">
+                        <footNotePr>
+                            <numbering type="CONTINUOUS" newNum="4294967296"/>
+                        </footNotePr>
+                    </secPr>
+                    <t>Body</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new());
+        assert!(result.is_ok(), "u32 초과 newNum 으로 디코드가 죽으면 안 됨: {result:?}");
+    }
+
+    /// 4차 평결 Low: 명시적 `type=""` 는 결측과 달리 비정상 명시값 — 경고를
+    /// 우회하면 안 된다.
+    #[test]
+    fn explicit_empty_note_policy_type_warns() {
+        use crate::decoder::DecodeWarning;
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <secPr textDirection="HORIZONTAL">
+                        <footNotePr><numbering type="" newNum="1"/></footNotePr>
+                    </secPr>
+                    <t>Body</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        assert!(
+            result.warnings.iter().any(|w| matches!(w,
+                DecodeWarning::UnknownEnumValue { attribute, raw, .. }
+                    if *attribute == "hp:footNotePr/hp:numbering@type" && raw.is_empty())),
+            "explicit 빈 type 은 경고 우회 불가: {:?}",
             result.warnings
         );
     }
