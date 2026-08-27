@@ -516,6 +516,25 @@ pub enum EncodeWarning {
     },
 }
 
+impl std::fmt::Display for EncodeWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LayoutCacheDropped { path, reason } => {
+                write!(f, "layout cache dropped at {path}: {reason}")
+            }
+            Self::NoteHeadSkipped { path, reason } => {
+                write!(f, "note number head skipped at {path}: {reason}")
+            }
+            Self::TitleMarkSkipped { path, reason } => {
+                write!(f, "titleMark skipped at {path}: {reason}")
+            }
+            Self::NoteRestartIgnored { path, reason } => {
+                write!(f, "note restart ignored at {path}: {reason}")
+            }
+        }
+    }
+}
+
 /// [`HwpxEncoder::encode_with_diagnostics`] 의 결과 — 산출 바이트 +
 /// 전체 typed 경고 (permissive 경로: 캐시 드롭이 있어도 성공).
 #[derive(Debug)]

@@ -1809,7 +1809,6 @@ fn extract_line_number_shape(
     })
 }
 
-/// Extracts [`BeginNum`] from an `HxSecPr`'s `<hp:startNum>` element.
 /// 비지원 각주/미주 번호 정책을 경고한다 (무음 정규화 방지).
 ///
 /// 인코더는 `<hp:footNotePr>/<hp:endNotePr>` 를 한컴 기본
@@ -1840,6 +1839,7 @@ fn warn_unsupported_note_policy(
     }
 }
 
+/// Extracts [`BeginNum`] from an `HxSecPr`'s `<hp:startNum>` element.
 fn extract_begin_num(
     sec_pr: &crate::schema::section::HxSecPr,
     warnings: &mut Vec<super::DecodeWarning>,

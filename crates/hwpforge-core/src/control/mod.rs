@@ -737,9 +737,11 @@ pub enum Control {
         /// Which counter restarts ([`NewNumberKind::Page`] is the only
         /// renderer-consumed kind; others carry through to HWPX).
         kind: NewNumberKind,
-        /// The new counter value (1-based; fixture sentinel `7`). `u32`
-        /// covers both wires losslessly — HWP5 `nwno` carries u16, HWPX
-        /// `newNum@num` is `xs:positiveInteger`.
+        /// The new counter value (fixture sentinel `7`). `u32` covers both
+        /// wires losslessly — HWP5 `nwno` carries u16, HWPX inline
+        /// `hp:newNum@num` is `xs:integer` (so `0` is wire-valid and the
+        /// HWPX encoder carries it verbatim into the regenerated number
+        /// cache; range enforcement, if any, belongs to Core validation).
         number: u32,
     },
 

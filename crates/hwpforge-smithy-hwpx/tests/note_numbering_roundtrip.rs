@@ -159,3 +159,42 @@ fn heading_hyperlink_first_run_must_not_leak_markers() {
     assert!(!xml.contains("__HWP"), "내부 치환 마커 유출 (4차 평결 Critical): {xml}");
     assert!(xml.contains("fieldBegin"), "하이퍼링크 치환 자체는 실행돼야 함: {xml}");
 }
+
+/// 5차 평결 Critical 잔여: 가드는 Hyperlink 만이 아니라 전체-run 치환 키를
+/// 쓰는 **모든** 마커를 덮어야 한다 (등록 키 대조 방식) — Bookmark(Span)
+/// 생성처는 Hyperlink 와 다른 코드 경로다.
+#[test]
+fn heading_bookmark_first_run_must_not_leak_markers() {
+    use hwpforge_foundation::BookmarkType;
+
+    let store = minimal_store();
+    let images = ImageStore::new();
+
+    let plain = Paragraph::with_runs(
+        vec![Run::text("첫 문단", CharShapeIndex::new(0))],
+        ParaShapeIndex::new(0),
+    );
+    let mut heading = Paragraph::with_runs(
+        vec![
+            Run::control(
+                Control::Bookmark { name: "표식".into(), bookmark_type: BookmarkType::SpanStart },
+                CharShapeIndex::new(0),
+            ),
+            Run::text("제목", CharShapeIndex::new(0)),
+            Run::control(
+                Control::Bookmark { name: "표식".into(), bookmark_type: BookmarkType::SpanEnd },
+                CharShapeIndex::new(0),
+            ),
+        ],
+        ParaShapeIndex::new(0),
+    );
+    heading.heading_level = Some(1);
+
+    let mut doc = Document::new();
+    doc.add_section(Section::with_paragraphs(vec![plain, heading], PageSettings::a4()));
+    let validated = doc.validate().expect("validate");
+
+    let bytes = HwpxEncoder::encode(&validated, &store, &images).expect("encode");
+    let xml = section_xml(&bytes, 0);
+    assert!(!xml.contains("__HWP"), "Bookmark 마커 유출 (5차 평결 Critical 잔여): {xml}");
+}
