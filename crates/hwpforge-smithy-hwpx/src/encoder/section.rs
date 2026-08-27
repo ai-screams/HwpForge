@@ -594,17 +594,24 @@ fn build_paragraph(
             // 치환 키다 — titleMark 를 후주입하면 키가 어긋나 치환이 실행되지
             // 않고 내부 마커가 최종 XML 에 유출된다 (4차 평결 Critical —
             // 2문단 heading+hyperlink-first 재현 확정). 판정은 prefix 목록이
-            // 아니라 **등록된 치환 키와의 직접 대조**로 한다 — HWPHL/HWPFD
-            // 외에 HWPBM/HWPECH/HWPXR/HWPME/HWPGRP/HWPTAT 등 전체-run 키를
-            // 쓰는 모든 마커(미래 추가 포함)를 자동으로 덮는다 (5차 평결
-            // Critical 잔여). `<hp:t>` 단위 키(HWPTXT 계열)는 titleMark 가
-            // run 요소라 키가 불변이므로 부착해도 안전 — `<hp:run` 시작
-            // 키만 대조해 과잉 보류를 피한다.
+            // 아니라 **등록된 치환 키와의 정확 일치**로 한다: 13개 전체-run
+            // 생성처(HWPHL/HWPFD/HWPBM/HWPECH/HWPXR/HWPME/HWPGRP/HWPTAT …)가
+            // 전부 동일한 `<hp:run charPrIDRef="N"><hp:t>{marker}</hp:t>
+            // </hp:run>` 키를 등록하므로, 이 run 이 재구성한 키와 **동일한
+            // 키가 등록돼 있을 때만** 보류한다. substring `contains` 는 정상
+            // heading 텍스트 `"0"`·`"hp"` 가 키 XML 과 부분 일치해 titleMark
+            // 를 오삭제했다 (6차 평결 Medium — 정확 일치로 오탐 원천 차단;
+            // `<hp:t>` 단위 키 HWPTXT 는 형식이 달라 자연 제외). 형식 변경
+            // 시 이 재구성과 함께 갱신할 것 — typed replacement registry
+            // 승격은 백로그 (계획 문서 §7h).
             let first_text = first_run.texts.first().map(HxText::text).unwrap_or_default();
-            let is_replacement_marker_run = !first_text.is_empty()
-                && hyperlink_entries.iter().any(|(key, _)| {
-                    key.starts_with("<hp:run") && key.contains(first_text.as_str())
-                });
+            let is_replacement_marker_run = !first_text.is_empty() && {
+                let this_run_key = format!(
+                    r#"<hp:run charPrIDRef="{}"><hp:t>{}</hp:t></hp:run>"#,
+                    first_run.char_pr_id_ref, first_text
+                );
+                hyperlink_entries.iter().any(|(key, _)| *key == this_run_key)
+            };
             if is_replacement_marker_run {
                 sink.title_mark_skipped(
                     "titleMark omitted: heading paragraph starts with a full-run \

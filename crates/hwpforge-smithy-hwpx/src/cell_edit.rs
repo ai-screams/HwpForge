@@ -99,6 +99,10 @@ pub struct SetCellResult {
 }
 
 /// Result of an all-or-nothing [`apply_set_cells`] batch.
+///
+/// 현재 인코드 [`EncodeWarning`](crate::EncodeWarning) 은 이 결과에 실리지
+/// 않는다 — 경고 채널 신설은 public 필드 추가(semver) 라 별도 승인 대기
+/// (각주 에픽 계획 문서 §7h).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct SetCellOutcome {
     /// Applied edits, in spec order.

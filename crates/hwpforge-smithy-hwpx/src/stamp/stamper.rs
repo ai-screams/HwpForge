@@ -40,6 +40,10 @@ pub const STAMP_MANIFEST_V2_VERSION: u32 = 2;
 pub struct HwpxStamper;
 
 /// Result of a successful [`HwpxStamper::stamp`].
+///
+/// 현재 인코드 [`EncodeWarning`](crate::EncodeWarning) (각주 번호 머리
+/// 생략 등)은 이 결과에 실리지 않는다 — 경고 채널 신설은 public 필드
+/// 추가(semver) 라 별도 승인 대기 (각주 에픽 계획 문서 §7h).
 #[derive(Debug)]
 pub struct StampResult {
     /// The stamped `.hwpx` bytes.

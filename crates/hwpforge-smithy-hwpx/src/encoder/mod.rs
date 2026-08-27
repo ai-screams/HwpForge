@@ -623,6 +623,13 @@ impl HwpxEncoder {
     /// - [`HwpxError::XmlSerialize`] if quick-xml serialization fails
     /// - [`HwpxError::InvalidStructure`] if table nesting exceeds limits
     /// - [`HwpxError::Zip`] if ZIP archive creation fails
+    ///
+    /// # Warnings are discarded
+    ///
+    /// 이 편의 API 는 [`EncodeWarning`] (각주 번호 머리 생략·titleMark 보류
+    /// 등 의미 경고)을 **폐기한다**. 사용자-노출 write 표면은 반드시
+    /// [`Self::encode_with_diagnostics`] 로 경고를 표면화할 것 — CLI/MCP
+    /// `convert`·`from-json`·`restyle` 이 그 경로다.
     pub fn encode(
         document: &Document<Validated>,
         style_store: &HwpxStyleStore,
@@ -757,6 +764,10 @@ impl HwpxEncoder {
     ///
     /// Returns [`HwpxError::Io`] if the file cannot be written, or any
     /// error from [`encode`](Self::encode).
+    ///
+    /// [`encode`](Self::encode) 와 동일하게 **[`EncodeWarning`] 을 폐기**
+    /// 한다 — 경고 보존이 필요하면 [`Self::encode_with_diagnostics`] 후
+    /// 직접 파일로 쓸 것.
     pub fn encode_file(
         path: impl AsRef<Path>,
         document: &Document<Validated>,

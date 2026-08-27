@@ -19,6 +19,9 @@ pub struct FromJsonData {
     pub sections: usize,
     /// Total paragraphs.
     pub paragraphs: usize,
+    /// 인코드 경고 (각주 번호 머리 생략 등 — 무음 폐기 금지).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// Create an HWPX document from a JSON structure (ExportedDocument schema).
@@ -100,20 +103,35 @@ pub fn run_from_json(structure: &str, output_path: &str) -> Result<FromJsonData,
 
     // 7. Encode
     let image_store = ImageStore::new();
-    let hwpx_bytes = HwpxEncoder::encode(&validated, &style_store, &image_store).map_err(|e| {
+    let outcome = HwpxEncoder::encode_with_diagnostics(
+        &validated,
+        &style_store,
+        &image_store,
+        hwpforge_smithy_hwpx::EncodeOptions::default(),
+    )
+    .map_err(|e| {
         ToolErrorInfo::new(
             "ENCODE_ERROR",
             format!("HWPX encoding failed: {e}"),
             "This may be a bug. Please report at https://github.com/ai-screams/HwpForge/issues",
         )
     })?;
+    let hwpx_bytes = outcome.bytes;
+    let warnings: Vec<String> =
+        outcome.warnings.iter().map(std::string::ToString::to_string).collect();
 
     // 8. Write output file
     write_output_file(output_path, &hwpx_bytes)?;
 
     let size_bytes = hwpx_bytes.len() as u64;
 
-    Ok(FromJsonData { output_path: output_path.to_string(), size_bytes, sections, paragraphs })
+    Ok(FromJsonData {
+        output_path: output_path.to_string(),
+        size_bytes,
+        sections,
+        paragraphs,
+        warnings,
+    })
 }
 
 #[cfg(test)]

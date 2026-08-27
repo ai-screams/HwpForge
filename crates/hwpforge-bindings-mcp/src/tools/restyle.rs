@@ -18,6 +18,9 @@ pub struct RestyleData {
     pub size_bytes: u64,
     /// Number of sections.
     pub sections: usize,
+    /// 인코드 경고 (각주 번호 머리 생략 등 — 무음 폐기 금지).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub warnings: Vec<String>,
 }
 
 /// Apply a style preset to an existing HWPX document.
@@ -90,14 +93,22 @@ pub fn run_restyle(
 
     let section_count = validated.section_count();
 
-    let output_bytes = HwpxEncoder::encode(&validated, &style_store, &hwpx_doc.image_store)
-        .map_err(|e| {
-            ToolErrorInfo::new(
-                "ENCODE_ERROR",
-                format!("HWPX encoding failed: {e}"),
-                "This may be a bug. Please report at https://github.com/ai-screams/HwpForge/issues",
-            )
-        })?;
+    let outcome = HwpxEncoder::encode_with_diagnostics(
+        &validated,
+        &style_store,
+        &hwpx_doc.image_store,
+        hwpforge_smithy_hwpx::EncodeOptions::default(),
+    )
+    .map_err(|e| {
+        ToolErrorInfo::new(
+            "ENCODE_ERROR",
+            format!("HWPX encoding failed: {e}"),
+            "This may be a bug. Please report at https://github.com/ai-screams/HwpForge/issues",
+        )
+    })?;
+    let output_bytes = outcome.bytes;
+    let warnings: Vec<String> =
+        outcome.warnings.iter().map(std::string::ToString::to_string).collect();
 
     // 5. Write output
     write_output_file(output_path, &output_bytes)?;
@@ -109,6 +120,7 @@ pub fn run_restyle(
         applied_preset: preset.to_string(),
         size_bytes,
         sections: section_count,
+        warnings,
     })
 }
 

@@ -197,4 +197,50 @@ fn heading_bookmark_first_run_must_not_leak_markers() {
     let bytes = HwpxEncoder::encode(&validated, &store, &images).expect("encode");
     let xml = section_xml(&bytes, 0);
     assert!(!xml.contains("__HWP"), "Bookmark 마커 유출 (5차 평결 Critical 잔여): {xml}");
+    // 마커 부재만으로는 치환 run 이 통째 사라져도 통과한다 (6차 Low) —
+    // 실제 bookmark 필드 전개까지 확인.
+    assert!(
+        xml.contains("bookmark") || xml.contains("BOOKMARK"),
+        "치환이 실행되어 bookmark 필드가 전개돼야 함: {xml}"
+    );
+}
+
+/// 6차 평결 Medium 잠금: 정상 heading 텍스트 `"0"`·`"hp"` 는 치환 키 XML 과
+/// substring 이 겹치더라도 marker run 이 아니다 — titleMark 를 오삭제하면
+/// TOC 의미 손실 (정확 일치 가드가 이를 막는다).
+#[test]
+fn short_heading_text_keeps_title_mark() {
+    let store = minimal_store();
+    let images = ImageStore::new();
+
+    for text in ["0", "hp"] {
+        let plain = Paragraph::with_runs(
+            vec![Run::text("첫 문단", CharShapeIndex::new(0))],
+            ParaShapeIndex::new(0),
+        );
+        // 같은 문단 뒤에 하이퍼링크 → charPrIDRef="0" 키가 등록되어
+        // substring 대조라면 "0"/"hp" 가 오탐하는 구성.
+        let mut heading = Paragraph::with_runs(
+            vec![
+                Run::text(text, CharShapeIndex::new(0)),
+                Run::control(
+                    Control::Hyperlink { text: "링크".into(), url: "https://example.com".into() },
+                    CharShapeIndex::new(0),
+                ),
+            ],
+            ParaShapeIndex::new(0),
+        );
+        heading.heading_level = Some(1);
+
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(vec![plain, heading], PageSettings::a4()));
+        let validated = doc.validate().expect("validate");
+        let bytes = HwpxEncoder::encode(&validated, &store, &images).expect("encode");
+        let xml = section_xml(&bytes, 0);
+        assert!(
+            xml.contains("<hp:titleMark"),
+            "정상 heading `{text}` 의 titleMark 가 오삭제됨 (6차 Medium): {xml}"
+        );
+        assert!(!xml.contains("__HWP"), "마커 유출: {xml}");
+    }
 }
