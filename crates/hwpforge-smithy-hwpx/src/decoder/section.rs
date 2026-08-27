@@ -1169,14 +1169,8 @@ fn decode_note_paragraphs(
     // 이 계약을 집행: spacer 만 살아남으면 사이클마다 " " run 이 누적된다).
     // 한컴 wire 는 autoNum 과 본문 텍스트를 **같은 run** 에 넣으므로(F1 실측)
     // 이 시그니처에 걸리지 않는다 — 한컴 본문은 있는 그대로 보존.
-    if note_body_has_injected_head(&hx.sub_list) {
-        let mut sub_list = hx.sub_list.clone();
-        if let Some(first) = sub_list.paragraphs.first_mut() {
-            first.runs.drain(..2);
-        }
-        return decode_sublist_paragraphs(&sub_list, depth, ctx);
-    }
-    decode_sublist_paragraphs(&hx.sub_list, depth, ctx)
+    let skip = if note_body_has_injected_head(&hx.sub_list) { 2 } else { 0 };
+    decode_sublist_paragraphs_skipping(&hx.sub_list, skip, depth, ctx)
 }
 
 /// 노트 본문 첫 문단이 인코더 주입 번호-머리 쌍으로 시작하는지 판정한다.
@@ -1215,22 +1209,50 @@ fn is_injected_note_spacer_run(run: &HxRun) -> bool {
 }
 
 /// run 에 텍스트/ctrl 외 개체 payload 가 전혀 없는지 (head/spacer 공용 검사).
+///
+/// 구조 분해로 전 필드를 강제 나열한다 — `HxRun` 에 payload 필드가 추가되면
+/// 여기서 컴파일이 깨져, 새 payload 를 조용히 삼키는 오인 드롭(H-N3 —
+/// `textarts` 누락으로 TextArt 가 head 쌍과 함께 삭제될 뻔한 실사고)을
+/// 구조적으로 방지한다.
 fn hx_run_has_no_objects(run: &HxRun) -> bool {
-    run.sec_pr.is_none()
-        && run.title_mark.is_none()
-        && run.tables.is_empty()
-        && run.pictures.is_empty()
-        && run.rects.is_empty()
-        && run.lines.is_empty()
-        && run.ellipses.is_empty()
-        && run.polygons.is_empty()
-        && run.curves.is_empty()
-        && run.connect_lines.is_empty()
-        && run.equations.is_empty()
-        && run.switches.is_empty()
-        && run.dutmals.is_empty()
-        && run.composes.is_empty()
-        && run.containers.is_empty()
+    let HxRun {
+        char_pr_id_ref: _,
+        sec_pr,
+        texts: _, // head 는 비어야·spacer 는 " " 하나 — 호출부 별도 검사
+        tables,
+        pictures,
+        ctrls: _, // 호출부 별도 검사 (head = autoNum-전용 1개, spacer = 0개)
+        rects,
+        lines,
+        ellipses,
+        polygons,
+        curves,
+        connect_lines,
+        equations,
+        switches,
+        title_mark,
+        dutmals,
+        composes,
+        containers,
+        textarts,
+        child_order: _, // 순서 메타데이터 — payload 아님
+    } = run;
+    sec_pr.is_none()
+        && title_mark.is_none()
+        && tables.is_empty()
+        && pictures.is_empty()
+        && rects.is_empty()
+        && lines.is_empty()
+        && ellipses.is_empty()
+        && polygons.is_empty()
+        && curves.is_empty()
+        && connect_lines.is_empty()
+        && equations.is_empty()
+        && switches.is_empty()
+        && dutmals.is_empty()
+        && composes.is_empty()
+        && containers.is_empty()
+        && textarts.is_empty()
 }
 
 /// Decodes an `HxCtrl`'s bookmark into a Core `Run`, if present.
@@ -1592,6 +1614,19 @@ pub(crate) fn decode_sublist_paragraphs(
     depth: usize,
     ctx: &mut DecodeCtx,
 ) -> HwpxResult<Vec<Paragraph>> {
+    decode_sublist_paragraphs_skipping(sub_list, 0, depth, ctx)
+}
+
+/// [`decode_sublist_paragraphs`] + 첫 문단 선두 run `skip_first_runs` 개 생략.
+///
+/// 주입 번호-머리 쌍 드롭 전용 — subtree 전체 clone(중첩 note 에서 중첩
+/// clone, M-N4 메모리 증폭) 대신 첫 문단만 얕게 재구성한다.
+fn decode_sublist_paragraphs_skipping(
+    sub_list: &HxSubList,
+    skip_first_runs: usize,
+    depth: usize,
+    ctx: &mut DecodeCtx,
+) -> HwpxResult<Vec<Paragraph>> {
     if depth >= MAX_NESTING_DEPTH {
         return Err(HwpxError::InvalidStructure {
             detail: format!(
@@ -1603,7 +1638,13 @@ pub(crate) fn decode_sublist_paragraphs(
     let mut out = Vec::with_capacity(sub_list.paragraphs.len());
     for (i, hx_para) in sub_list.paragraphs.iter().enumerate() {
         ctx.enter(super::PathSeg::NestedParagraph(i));
-        let result = convert_paragraph(hx_para, false, depth + 1, ctx);
+        let result = if i == 0 && skip_first_runs > 0 {
+            let mut trimmed = hx_para.clone();
+            trimmed.runs.drain(..skip_first_runs);
+            convert_paragraph(&trimmed, false, depth + 1, ctx)
+        } else {
+            convert_paragraph(hx_para, false, depth + 1, ctx)
+        };
         ctx.leave();
         let (para, _) = result?;
         out.push(para);
@@ -2100,6 +2141,56 @@ fn parse_page_number_position(
 
 #[cfg(test)]
 mod tests {
+    /// H-N3 잠금: autoNum-전용처럼 보여도 TextArt 등 다른 payload 가 실린
+    /// run 은 주입 head 로 오인 드롭하면 안 된다 (내용 무음 삭제 방지).
+    #[test]
+    fn injected_head_predicate_rejects_run_with_textart() {
+        use crate::schema::section::{HxAutoNum, HxCtrl, HxRun, HxTextArt};
+        let mut run = HxRun {
+            ctrls: vec![HxCtrl {
+                auto_num: Some(HxAutoNum {
+                    num: 1,
+                    num_type: "FOOTNOTE".to_string(),
+                    auto_num_format: None,
+                }),
+                ..Default::default()
+            }],
+            ..empty_hx_run()
+        };
+        assert!(super::is_injected_note_head_run(&run), "전제: autoNum-전용은 head");
+        run.textarts.push(HxTextArt::default());
+        assert!(
+            !super::is_injected_note_head_run(&run),
+            "TextArt 가 실린 run 을 head 로 오인하면 통째 드롭된다 (H-N3)"
+        );
+    }
+
+    /// [`injected_head_predicate_rejects_run_with_textart`] 전용 — 전 payload
+    /// 빈 HxRun (HxRun 은 Default 미파생: 신규 필드 시 여기서 컴파일 실패).
+    fn empty_hx_run() -> crate::schema::section::HxRun {
+        crate::schema::section::HxRun {
+            char_pr_id_ref: 0,
+            sec_pr: None,
+            texts: Vec::new(),
+            tables: Vec::new(),
+            pictures: Vec::new(),
+            ctrls: Vec::new(),
+            rects: Vec::new(),
+            lines: Vec::new(),
+            ellipses: Vec::new(),
+            polygons: Vec::new(),
+            curves: Vec::new(),
+            connect_lines: Vec::new(),
+            equations: Vec::new(),
+            switches: Vec::new(),
+            title_mark: None,
+            dutmals: Vec::new(),
+            composes: Vec::new(),
+            containers: Vec::new(),
+            textarts: Vec::new(),
+            child_order: Vec::new(),
+        }
+    }
     use super::*;
     use hwpforge_foundation::NumberFormatType;
 
