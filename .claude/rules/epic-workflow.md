@@ -1,8 +1,8 @@
 # 정식 에픽 워크플로우
 
 E3(표 격자 주소)·E4(문단 구조 편집)·E5(outline/read/diff)·E6(템플릿 스탬핑)으로 검증된 프로세스.
-새 에픽/슬라이스는 아래 게이트를 **순서대로** 통과한다. 단계별 상세 규칙이 CLAUDE.md 의 다른 절에
-있으면 그쪽이 canonical — 이 파일은 순서·게이트·금지사항만 정의한다.
+새 에픽/슬라이스는 아래 게이트를 **순서대로** 통과한다. 단계별 상세 규칙은 CLAUDE.md 로딩 맵의
+대상 파일이 canonical — 이 파일은 순서·게이트·금지사항만 정의한다.
 
 ## 0. 사전 확인 (ground truth)
 
@@ -32,7 +32,7 @@ E3(표 격자 주소)·E4(문단 구조 편집)·E5(outline/read/diff)·E6(템�
 ## 4. TDD 웨이브 구현
 
 - W1..Wn 웨이브 단위로 진행: edge-first TDD → atomic conventional commits (breaking 은 `type!:`).
-- 커밋/푸시·훅·nextest·clippy 함정은 CLAUDE.md **"Tooling Gotchas"** 절이 canonical
+- 커밋/푸시·훅·nextest·clippy 함정은 `.claude/guides/tooling.md` 가 canonical
   (commit/push 는 run_in_background + 파일 리다이렉트, 파이프 금지 등).
 - 구현 중 설계와 다른 실측이 나오면 그 자리에서 계획 문서에 수정 근거를 기록한다.
 
@@ -50,20 +50,22 @@ E3(표 격자 주소)·E4(문단 구조 편집)·E5(outline/read/diff)·E6(템�
 
 - 구현 컨텍스트와 **분리된 lane** 에서 코드리뷰를 받는다 (같은 컨텍스트 자기승인 금지).
 - Critical/High = 즉시 수정. Medium/Low = 상환하거나 **백로그로 명시 문서화** (무음 드롭 금지).
+- 리뷰어는 read-only 샌드박스라 테스트를 못 돌린다 — nextest/clippy 결과를 요청문에
+  제시하고, 다라운드 재평결은 **상환 커밋 diff 한정**으로 범위를 지정하면 수렴이 빨라진다.
 
 ## 7. CI → PR → merge queue
 
 - push 전 `make ci` (플래그 일치: `--all-targets`·`--all-features`·fmt `--all`).
 - coverage 게이트 ≥90% — **linux 가 macOS 보다 ~0.02–0.06% 낮게** 나오므로 마진을 확보한다.
-- PR 제목·본문은 **한글**. 머지는 GraphQL `enqueuePullRequest` 로만 (CLAUDE.md "Releasing" 절 canonical).
+- PR 제목·본문은 **한글**. 머지는 GraphQL `enqueuePullRequest` 로만 (`RELEASING.md` §8 canonical).
 
 ## 8. 릴리스 (release-plz 소유)
 
 - Release PR 머지 후 release-plz·npm-publish workflow success + crates.io sparse index·
   GitHub Release·npm 레지스트리 버전을 **실측 검증**한다 (추측 보고 금지).
-- 버전/태그/publish 수동 조작 금지 (CLAUDE.md "Releasing" 절 canonical).
+- 버전/태그/publish 수동 조작 금지 (`RELEASING.md` canonical).
 
 ## 9. 기록
 
-- memory `MEMORY.md` 체크포인트 + CLAUDE.md **Current Status** 스냅샷 갱신 (릴리스 후 docs PR).
-- 에픽 상세 이력은 `.docs/planning/` 계획 문서에 남긴다 (CLAUDE.md 에 wave-by-wave 재축적 금지).
+- memory `MEMORY.md` 체크포인트 + `.claude/guides/status.md` 스냅샷 갱신 (릴리스 후 docs PR).
+- 에픽 상세 이력은 `.docs/planning/` 계획 문서에 남긴다 (status.md 에 wave-by-wave 재축적 금지).

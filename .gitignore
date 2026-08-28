@@ -482,6 +482,7 @@ $RECYCLE.BIN/
 !.claude/skills/
 # Share rules (auto-loaded project process rules — e.g. epic workflow)
 !.claude/rules/
+!.claude/guides/
 
 # npm package bin/ directories (override global [Bb]in rule)
 !npm/packages/*/bin/
