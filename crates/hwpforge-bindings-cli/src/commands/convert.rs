@@ -115,13 +115,26 @@ pub fn run(input: &str, output: &PathBuf, preset: &str, json_mode: bool) {
 
     let total_paragraphs: usize = validated.sections().iter().map(|s| s.paragraphs.len()).sum();
 
-    // Encode Core → HWPX
-    let bytes = match HwpxEncoder::encode(&validated, bridge.style_store(), &embedded.store) {
-        Ok(b) => b,
+    // Encode Core → HWPX — 진단 동반 경로: 인코드 경고(각주 번호 머리
+    // 생략·titleMark 보류 등)를 무음 폐기하지 않고 warnings 채널로 합류.
+    let outcome = match HwpxEncoder::encode_with_diagnostics(
+        &validated,
+        bridge.style_store(),
+        &embedded.store,
+        hwpforge_smithy_hwpx::EncodeOptions::default(),
+    ) {
+        Ok(o) => o,
         Err(e) => {
             CliError::new("ENCODE_FAILED", format!("HWPX encode error: {e}")).exit(json_mode, 2);
         }
     };
+    let bytes = outcome.bytes;
+    let mut all_warnings = embed_warnings;
+    for w in &outcome.warnings {
+        let line = encode_warning_line(w);
+        eprintln!("[convert] {line}");
+        all_warnings.push(line);
+    }
 
     // Write output
     if let Err(e) = std::fs::write(output, &bytes) {
@@ -136,7 +149,7 @@ pub fn run(input: &str, output: &PathBuf, preset: &str, json_mode: bool) {
         sections: validated.section_count(),
         paragraphs: total_paragraphs,
         size_bytes: bytes.len(),
-        warnings: embed_warnings,
+        warnings: all_warnings,
     };
 
     if json_mode {
@@ -146,5 +159,28 @@ pub fn run(input: &str, output: &PathBuf, preset: &str, json_mode: bool) {
             "Generated {} ({} sections, {} paragraphs, {} bytes)",
             result.output, result.sections, result.paragraphs, result.size_bytes
         );
+    }
+}
+
+/// [`hwpforge_smithy_hwpx::EncodeWarning`] 을 한 줄 진단 문자열로 만든다.
+///
+/// `#[non_exhaustive]` — 새 variant 는 Debug 표기로 폴백해 무음 유실을
+/// 막는다 (경고 채널의 목적이 곧 무음 방지다).
+fn encode_warning_line(w: &hwpforge_smithy_hwpx::EncodeWarning) -> String {
+    use hwpforge_smithy_hwpx::EncodeWarning;
+    match w {
+        EncodeWarning::LayoutCacheDropped { path, reason } => {
+            format!("LAYOUT_CACHE_DROPPED at {path}: {reason}")
+        }
+        EncodeWarning::NoteHeadSkipped { path, reason } => {
+            format!("NOTE_HEAD_SKIPPED at {path}: {reason}")
+        }
+        EncodeWarning::NoteRestartIgnored { path, reason } => {
+            format!("NOTE_RESTART_IGNORED at {path}: {reason}")
+        }
+        EncodeWarning::TitleMarkSkipped { path, reason } => {
+            format!("TITLE_MARK_SKIPPED at {path}: {reason}")
+        }
+        other => format!("ENCODE_WARNING {other:?}"),
     }
 }

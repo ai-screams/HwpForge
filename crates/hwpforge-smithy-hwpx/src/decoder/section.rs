@@ -140,7 +140,8 @@ pub fn parse_section(
     chart_xmls: &HashMap<String, String>,
 ) -> HwpxResult<SectionParseResult> {
     let file_hint = format!("Contents/section{section_index}.xml");
-    let section: HxSection = from_str(xml)
+    let xml = preserve_ws_only_text(xml);
+    let section: HxSection = from_str(&xml)
         .map_err(|e| HwpxError::XmlParse { file: file_hint, detail: e.to_string() })?;
 
     let mut page_settings = None;
@@ -185,6 +186,7 @@ pub fn parse_section(
                         if begin_num.is_none() {
                             begin_num = extract_begin_num(sec_pr, &mut ctx.warnings);
                         }
+                        warn_unsupported_note_policy(sec_pr, &mut ctx.warnings);
                         text_direction = TextDirection::from_hwpx_str(&sec_pr.text_direction);
                     }
                 }
@@ -1162,7 +1164,98 @@ fn decode_note_paragraphs(
     depth: usize,
     ctx: &mut DecodeCtx,
 ) -> HwpxResult<Vec<Paragraph>> {
-    decode_sublist_paragraphs(&hx.sub_list, depth, ctx)
+    // 인코더가 주입한 `[autoNum head run, " " spacer run]` 쌍(번호 머리)은
+    // 표현 산물이라 Core 로 올리지 않는다 — 대칭 드롭으로 `decode∘encode` 가
+    // Core 고정점을 유지한다 (E4 구조 편집기의 NotRoundTripSafe 게이트가
+    // 이 계약을 집행: spacer 만 살아남으면 사이클마다 " " run 이 누적된다).
+    // 한컴 wire 는 autoNum 과 본문 텍스트를 **같은 run** 에 넣으므로(F1 실측)
+    // 이 시그니처에 걸리지 않는다 — 한컴 본문은 있는 그대로 보존.
+    let strip = injected_head_range(&hx.sub_list);
+    decode_sublist_paragraphs_skipping(&hx.sub_list, strip, depth, ctx)
+}
+
+/// 노트 본문 첫 문단에서 인코더 주입 번호-머리 쌍의 위치를 찾는다.
+///
+/// 쌍 시그니처 (인코더 `inject_note_autonum_head` 와 대칭):
+/// run[0] = autoNum(FOOTNOTE/ENDNOTE)-전용 ctrl 만 담은 run (텍스트·개체 없음),
+/// run[1] = 정확히 한 칸 공백(`" "`) 텍스트만 담은 spacer run.
+/// titleMark 첫 run 문단에는 인코더가 주입하지 않으므로 (NoteHeadSkipped
+/// 경고) offset 변형은 없다 — 오탐 범위를 넓히지 않는다 (4차 평결 L-N1).
+fn injected_head_range(sub_list: &HxSubList) -> Option<(usize, usize)> {
+    let first = sub_list.paragraphs.first()?;
+    let [head, spacer, ..] = first.runs.as_slice() else { return None };
+    (is_injected_note_head_run(head) && is_injected_note_spacer_run(spacer)).then_some((0, 2))
+}
+
+/// autoNum(FOOTNOTE/ENDNOTE)-전용 head run 판정 — 다른 payload 가 섞인
+/// run(한컴 fused 형태 포함)은 내용 보존을 위해 해당하지 않는다.
+fn is_injected_note_head_run(run: &HxRun) -> bool {
+    if !run.texts.is_empty() || !hx_run_has_no_objects(run) || run.ctrls.len() != 1 {
+        return false;
+    }
+    let ctrl = &run.ctrls[0];
+    let is_note_autonum = ctrl
+        .auto_num
+        .as_ref()
+        .is_some_and(|an| matches!(an.num_type.as_str(), "FOOTNOTE" | "ENDNOTE"));
+    // autoNum 외 payload(newNum·colPr 등)가 같은 ctrl 에 있으면 드롭 금지.
+    is_note_autonum && *ctrl == HxCtrl { auto_num: ctrl.auto_num.clone(), ..Default::default() }
+}
+
+/// 정확히 한 칸 공백(`" "`)만 담은 spacer run 판정 (인코더 `note_spacer_run`
+/// 방출 형태와 정확 일치 — 그 외 ws-only run 은 내용으로 보존).
+fn is_injected_note_spacer_run(run: &HxRun) -> bool {
+    run.ctrls.is_empty()
+        && hx_run_has_no_objects(run)
+        && run.texts.len() == 1
+        && run.texts[0].text() == " "
+}
+
+/// run 에 텍스트/ctrl 외 개체 payload 가 전혀 없는지 (head/spacer 공용 검사).
+///
+/// 구조 분해로 전 필드를 강제 나열한다 — `HxRun` 에 payload 필드가 추가되면
+/// 여기서 컴파일이 깨져, 새 payload 를 조용히 삼키는 오인 드롭(H-N3 —
+/// `textarts` 누락으로 TextArt 가 head 쌍과 함께 삭제될 뻔한 실사고)을
+/// 구조적으로 방지한다.
+fn hx_run_has_no_objects(run: &HxRun) -> bool {
+    let HxRun {
+        char_pr_id_ref: _,
+        sec_pr,
+        texts: _, // head 는 비어야·spacer 는 " " 하나 — 호출부 별도 검사
+        tables,
+        pictures,
+        ctrls: _, // 호출부 별도 검사 (head = autoNum-전용 1개, spacer = 0개)
+        rects,
+        lines,
+        ellipses,
+        polygons,
+        curves,
+        connect_lines,
+        equations,
+        switches,
+        title_mark,
+        dutmals,
+        composes,
+        containers,
+        textarts,
+        child_order: _, // 순서 메타데이터 — payload 아님
+    } = run;
+    sec_pr.is_none()
+        && title_mark.is_none()
+        && tables.is_empty()
+        && pictures.is_empty()
+        && rects.is_empty()
+        && lines.is_empty()
+        && ellipses.is_empty()
+        && polygons.is_empty()
+        && curves.is_empty()
+        && connect_lines.is_empty()
+        && equations.is_empty()
+        && switches.is_empty()
+        && dutmals.is_empty()
+        && composes.is_empty()
+        && containers.is_empty()
+        && textarts.is_empty()
 }
 
 /// Decodes an `HxCtrl`'s bookmark into a Core `Run`, if present.
@@ -1524,6 +1617,19 @@ pub(crate) fn decode_sublist_paragraphs(
     depth: usize,
     ctx: &mut DecodeCtx,
 ) -> HwpxResult<Vec<Paragraph>> {
+    decode_sublist_paragraphs_skipping(sub_list, None, depth, ctx)
+}
+
+/// [`decode_sublist_paragraphs`] + 첫 문단의 run 구간 `(offset, count)` 생략.
+///
+/// 주입 번호-머리 쌍 드롭 전용 — subtree 전체 clone(중첩 note 에서 중첩
+/// clone, M-N4 메모리 증폭) 대신 첫 문단만 재구성한다.
+fn decode_sublist_paragraphs_skipping(
+    sub_list: &HxSubList,
+    strip_first: Option<(usize, usize)>,
+    depth: usize,
+    ctx: &mut DecodeCtx,
+) -> HwpxResult<Vec<Paragraph>> {
     if depth >= MAX_NESTING_DEPTH {
         return Err(HwpxError::InvalidStructure {
             detail: format!(
@@ -1535,7 +1641,14 @@ pub(crate) fn decode_sublist_paragraphs(
     let mut out = Vec::with_capacity(sub_list.paragraphs.len());
     for (i, hx_para) in sub_list.paragraphs.iter().enumerate() {
         ctx.enter(super::PathSeg::NestedParagraph(i));
-        let result = convert_paragraph(hx_para, false, depth + 1, ctx);
+        let result = if i == 0 && strip_first.is_some() {
+            let (at, count) = strip_first.unwrap_or_default();
+            let mut trimmed = hx_para.clone();
+            trimmed.runs.drain(at..at + count);
+            convert_paragraph(&trimmed, false, depth + 1, ctx)
+        } else {
+            convert_paragraph(hx_para, false, depth + 1, ctx)
+        };
         ctx.leave();
         let (para, _) = result?;
         out.push(para);
@@ -1694,6 +1807,36 @@ fn extract_line_number_shape(
         distance: HwpUnit::new(hx.distance).unwrap_or(HwpUnit::ZERO),
         start_number: hx.start_number,
     })
+}
+
+/// 비지원 각주/미주 번호 정책을 경고한다 (무음 정규화 방지).
+///
+/// 인코더는 `<hp:footNotePr>/<hp:endNotePr>` 를 한컴 기본
+/// (`type="CONTINUOUS"`) 고정값으로 재생성한다 — Core 에 정책을 나를 자리가
+/// 아직 없기 때문 (typed 승격 = public surface, 계획 문서 §7d HITL). 그
+/// 사이 `ON_SECTION` 등 비기본 정책 문서는 재인코드에서 정책이 바뀌므로,
+/// 디코드 시점에 warning-first 로 표면화한다.
+fn warn_unsupported_note_policy(
+    sec_pr: &crate::schema::section::HxSecPr,
+    warnings: &mut Vec<super::DecodeWarning>,
+) {
+    for (pr, attribute) in [
+        (&sec_pr.foot_note_pr, "hp:footNotePr/hp:numbering@type"),
+        (&sec_pr.end_note_pr, "hp:endNotePr/hp:numbering@type"),
+    ] {
+        let Some(policy) = pr.as_ref().and_then(|p| p.numbering.as_ref()) else { continue };
+        // 결측(None) = 기본 적용·정상. 명시된 값은 빈 문자열 포함 전부
+        // 대조한다 — explicit `type=""` 로 경고를 우회할 수 없다 (4차 Low).
+        if let Some(t) = policy.policy_type.as_deref() {
+            if t != "CONTINUOUS" {
+                warnings.push(super::DecodeWarning::UnknownEnumValue {
+                    attribute,
+                    raw: t.to_string(),
+                    fallback: "CONTINUOUS",
+                });
+            }
+        }
+    }
 }
 
 /// Extracts [`BeginNum`] from an `HxSecPr`'s `<hp:startNum>` element.
@@ -2032,6 +2175,107 @@ fn parse_page_number_position(
 
 #[cfg(test)]
 mod tests {
+    /// H-N3 잠금: autoNum-전용처럼 보여도 TextArt 등 다른 payload 가 실린
+    /// run 은 주입 head 로 오인 드롭하면 안 된다 (내용 무음 삭제 방지).
+    #[test]
+    fn injected_head_predicate_rejects_run_with_textart() {
+        use crate::schema::section::{HxAutoNum, HxCtrl, HxRun, HxTextArt};
+        let mut run = HxRun {
+            ctrls: vec![HxCtrl {
+                auto_num: Some(HxAutoNum {
+                    num: 1,
+                    num_type: "FOOTNOTE".to_string(),
+                    auto_num_format: None,
+                }),
+                ..Default::default()
+            }],
+            ..empty_hx_run()
+        };
+        assert!(super::is_injected_note_head_run(&run), "전제: autoNum-전용은 head");
+        run.textarts.push(HxTextArt::default());
+        assert!(
+            !super::is_injected_note_head_run(&run),
+            "TextArt 가 실린 run 을 head 로 오인하면 통째 드롭된다 (H-N3)"
+        );
+    }
+
+    /// 4차 평결 반영: titleMark 첫 run 문단에는 인코더가 주입하지 않으므로
+    /// (`NoteHeadSkipped`) 디코더도 offset 변형 없이 선두 쌍만 드롭한다 —
+    /// titleMark 문단의 후속 run 들은 오탐 없이 그대로 보존돼야 한다.
+    #[test]
+    fn injected_head_range_honors_title_mark_offset() {
+        use crate::schema::section::{
+            HxAutoNum, HxCtrl, HxParagraph, HxSubList, HxText, HxTitleMark,
+        };
+        let head = crate::decoder::section::tests::head_run();
+        let mut spacer = empty_hx_run();
+        spacer.texts = vec![HxText::new(" ")];
+        let mut title = empty_hx_run();
+        title.title_mark = Some(HxTitleMark { ignore: false });
+        let mut body = empty_hx_run();
+        body.texts = vec![HxText::new("본문")];
+
+        let make = |runs: Vec<crate::schema::section::HxRun>| HxSubList {
+            paragraphs: vec![HxParagraph { runs, ..HxParagraph::default() }],
+            ..HxSubList::default()
+        };
+        let _ = HxCtrl::default();
+        let _ = HxAutoNum { num: 0, num_type: String::new(), auto_num_format: None };
+
+        assert_eq!(
+            super::injected_head_range(&make(vec![head.clone(), spacer.clone(), body.clone()])),
+            Some((0, 2)),
+            "기본 offset 0"
+        );
+        assert_eq!(
+            super::injected_head_range(&make(vec![title, head, spacer, body])),
+            None,
+            "titleMark 첫 run 문단은 인코더가 주입하지 않으므로 쌍 미탐지 — \
+             후속 run 을 오탐 삭제하면 저작 내용 손실 (L-N1 오탐 확대 방지)"
+        );
+    }
+
+    /// autoNum(FOOTNOTE)-전용 head run (offset 대칭 테스트 공용).
+    fn head_run() -> crate::schema::section::HxRun {
+        use crate::schema::section::{HxAutoNum, HxCtrl};
+        let mut run = empty_hx_run();
+        run.ctrls = vec![HxCtrl {
+            auto_num: Some(HxAutoNum {
+                num: 1,
+                num_type: "FOOTNOTE".to_string(),
+                auto_num_format: None,
+            }),
+            ..Default::default()
+        }];
+        run
+    }
+
+    /// [`injected_head_predicate_rejects_run_with_textart`] 전용 — 전 payload
+    /// 빈 HxRun (HxRun 은 Default 미파생: 신규 필드 시 여기서 컴파일 실패).
+    fn empty_hx_run() -> crate::schema::section::HxRun {
+        crate::schema::section::HxRun {
+            char_pr_id_ref: 0,
+            sec_pr: None,
+            texts: Vec::new(),
+            tables: Vec::new(),
+            pictures: Vec::new(),
+            ctrls: Vec::new(),
+            rects: Vec::new(),
+            lines: Vec::new(),
+            ellipses: Vec::new(),
+            polygons: Vec::new(),
+            curves: Vec::new(),
+            connect_lines: Vec::new(),
+            equations: Vec::new(),
+            switches: Vec::new(),
+            title_mark: None,
+            dutmals: Vec::new(),
+            composes: Vec::new(),
+            containers: Vec::new(),
+            textarts: Vec::new(),
+            child_order: Vec::new(),
+        }
+    }
     use super::*;
     use hwpforge_foundation::NumberFormatType;
 
@@ -4318,6 +4562,116 @@ mod tests {
 
     // ── 미지 enum 경고 표면화 (W5-α M4 — 증거 세탁 방지) ─────────
 
+    /// 3차 평결(ON_SECTION 무음 정규화): 비기본 note 번호 정책은 인코더가
+    /// `CONTINUOUS` 고정값으로 재생성한다 — 디코드 시점에 경고를 내야
+    /// 무음 정책 변경이 아니다 (warning-first).
+    #[test]
+    fn on_section_note_policy_surfaces_warning() {
+        use crate::decoder::DecodeWarning;
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <secPr textDirection="HORIZONTAL">
+                        <footNotePr>
+                            <autoNumFormat type="DIGIT" suffixChar=")"/>
+                            <numbering type="ON_SECTION" newNum="1"/>
+                        </footNotePr>
+                    </secPr>
+                    <t>Body</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        assert!(
+            result.warnings.iter().any(|w| matches!(
+                w,
+                DecodeWarning::UnknownEnumValue { attribute, raw, fallback }
+                    if *attribute == "hp:footNotePr/hp:numbering@type"
+                        && raw == "ON_SECTION"
+                        && *fallback == "CONTINUOUS"
+            )),
+            "ON_SECTION 정책이 무경고로 지나가면 무음 정규화: {:?}",
+            result.warnings
+        );
+    }
+
+    /// 4차 평결 Medium: `numbering@newNum` 은 `xs:positiveInteger` 라 u32
+    /// 상한을 넘는 schema-valid 값이 올 수 있다 — typed 파싱으로 섹션
+    /// 디코드가 통째로 실패하면 신규 호환성 회귀다 (newNum 은 파싱하지
+    /// 않는 게 계약).
+    #[test]
+    fn huge_new_num_does_not_fail_section_decode() {
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <secPr textDirection="HORIZONTAL">
+                        <footNotePr>
+                            <numbering type="CONTINUOUS" newNum="4294967296"/>
+                        </footNotePr>
+                    </secPr>
+                    <t>Body</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new());
+        assert!(result.is_ok(), "u32 초과 newNum 으로 디코드가 죽으면 안 됨: {result:?}");
+    }
+
+    /// 4차 평결 Low: 명시적 `type=""` 는 결측과 달리 비정상 명시값 — 경고를
+    /// 우회하면 안 된다.
+    #[test]
+    fn explicit_empty_note_policy_type_warns() {
+        use crate::decoder::DecodeWarning;
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <secPr textDirection="HORIZONTAL">
+                        <footNotePr><numbering type="" newNum="1"/></footNotePr>
+                    </secPr>
+                    <t>Body</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        assert!(
+            result.warnings.iter().any(|w| matches!(w,
+                DecodeWarning::UnknownEnumValue { attribute, raw, .. }
+                    if *attribute == "hp:footNotePr/hp:numbering@type" && raw.is_empty())),
+            "explicit 빈 type 은 경고 우회 불가: {:?}",
+            result.warnings
+        );
+    }
+
+    /// 기본(CONTINUOUS)·결측 정책은 경고 없음 — 전 corpus 가 시끄러워지면
+    /// 경고 채널이 죽는다.
+    #[test]
+    fn continuous_note_policy_does_not_warn() {
+        use crate::decoder::DecodeWarning;
+        let xml = r#"<sec>
+            <p paraPrIDRef="0">
+                <run charPrIDRef="0">
+                    <secPr textDirection="HORIZONTAL">
+                        <footNotePr>
+                            <numbering type="CONTINUOUS" newNum="1"/>
+                        </footNotePr>
+                        <endNotePr/>
+                    </secPr>
+                    <t>Body</t>
+                </run>
+            </p>
+        </sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).unwrap();
+        assert!(
+            !result
+                .warnings
+                .iter()
+                .any(|w| matches!(w, DecodeWarning::UnknownEnumValue { attribute, .. }
+                    if attribute.contains("NotePr"))),
+            "기본 정책에 경고가 나면 오탐: {:?}",
+            result.warnings
+        );
+    }
+
     #[test]
     fn unknown_apply_page_type_surfaces_warning_and_keeps_fallback() {
         use crate::decoder::DecodeWarning;
@@ -4482,6 +4836,8 @@ mod tests {
             page_pr: None,
             page_border_fills: vec![],
             start_num: None,
+            foot_note_pr: None,
+            end_note_pr: None,
         }
     }
 
@@ -4924,5 +5280,103 @@ mod tests {
             },
             _ => panic!("expected Control"),
         }
+    }
+}
+
+/// quick-xml 의 serde 역직렬화는 whitespace-only 텍스트 노드를 무시해
+/// `<hp:t> </hp:t>` (공백만 담긴 run — 한컴도 저작하는 유효 wire)가 통째로
+/// 사라진다. CDATA·문자 참조(`&#32;`)도 unescape 후 판정이라 살아남지 못한다
+/// (실측). 그래서 파싱 전에 ws-only 콘텐츠 선두에 sentinel `U+E000` 을 붙여
+/// 노드를 살리고, [`HxText`] 소비 시점(`strip_ws_sentinel`)에 대칭 제거한다.
+///
+/// mixed content(`<hp:t>` 안에 자식 요소가 있는 경우)는 건드리지 않는다 —
+/// 관측된 결함 범위는 순수 ws-only 콘텐츠뿐이다.
+fn preserve_ws_only_text(xml: &str) -> std::borrow::Cow<'_, str> {
+    let mut result = mark_ws_only_text(xml, "<hp:t");
+    if let std::borrow::Cow::Borrowed(_) = result {
+        result = mark_ws_only_text(xml, "<t");
+    }
+    result
+}
+
+/// [`preserve_ws_only_text`] 의 실제 스캐너 — `open` 여는-태그 접두로 1패스.
+fn mark_ws_only_text<'a>(xml: &'a str, open: &str) -> std::borrow::Cow<'a, str> {
+    let close = if open == "<hp:t" { "</hp:t>" } else { "</t>" };
+    let mut out: Option<String> = None;
+    let mut last = 0usize;
+    let mut search = 0usize;
+    while let Some(rel) = xml[search..].find(open) {
+        let tag_start = search + rel;
+        let after = &xml[tag_start + open.len()..];
+        // `<hp:tab/>` 등 다른 태그 배제: 다음 문자가 '>' 또는 공백(속성)이어야 함.
+        let Some(first) = after.chars().next() else { break };
+        if first != '>' && !first.is_ascii_whitespace() {
+            search = tag_start + open.len();
+            continue;
+        }
+        let Some(gt_rel) = after.find('>') else { break };
+        // 자기닫힘 `<hp:t/>` 는 콘텐츠 없음.
+        if after[..gt_rel].ends_with('/') {
+            search = tag_start + open.len() + gt_rel + 1;
+            continue;
+        }
+        let content_start = tag_start + open.len() + gt_rel + 1;
+        let Some(close_rel) = xml[content_start..].find(close) else { break };
+        let content = &xml[content_start..content_start + close_rel];
+        let ws_only = !content.is_empty()
+            && !content.contains('<')
+            && content.chars().all(|c| matches!(c, ' ' | '\t' | '\r' | '\n'));
+        if ws_only {
+            let buf = out.get_or_insert_with(|| String::with_capacity(xml.len() + 8));
+            buf.push_str(&xml[last..content_start]);
+            buf.push('\u{E000}');
+            last = content_start;
+        }
+        search = content_start + close_rel + close.len();
+    }
+    match out {
+        Some(mut buf) => {
+            buf.push_str(&xml[last..]);
+            std::borrow::Cow::Owned(buf)
+        }
+        None => std::borrow::Cow::Borrowed(xml),
+    }
+}
+
+// ── ws-only `<hp:t>` 보존 테스트 (quick-xml de 무시 우회) ──────────────────
+
+#[cfg(test)]
+mod ws_preserve_tests {
+    use super::*;
+
+    #[test]
+    fn preserve_ws_only_text_marks_only_pure_whitespace() {
+        let xml = "<hp:run><hp:t>a</hp:t><hp:t> </hp:t><hp:t>  b</hp:t><hp:t/></hp:run>";
+        let out = preserve_ws_only_text(xml);
+        assert_eq!(
+            out,
+            "<hp:run><hp:t>a</hp:t><hp:t>\u{E000} </hp:t><hp:t>  b</hp:t><hp:t/></hp:run>"
+        );
+    }
+
+    #[test]
+    fn preserve_ws_only_text_ignores_mixed_and_other_tags() {
+        let xml = "<hp:t> <hp:tab/></hp:t><hp:tbl> </hp:tbl>";
+        assert_eq!(preserve_ws_only_text(xml), xml, "mixed content and other tags untouched");
+    }
+
+    #[test]
+    fn ws_only_run_survives_section_parse() {
+        // 공백 전용 run 이 파싱 후에도 살아남아야 한다
+        // (종전: quick-xml de 가 무음 드롭 — 서식 run 사이 공백 소실).
+        let xml = r#"<sec><p paraPrIDRef="0"><run charPrIDRef="1"><t>가</t></run><run charPrIDRef="0"><t> </t></run><run charPrIDRef="2"><t>나</t></run></p></sec>"#;
+        let result = parse_section(xml, 0, &HashMap::new()).expect("parse");
+        let para = &result.paragraphs[0];
+        let texts: Vec<_> = para
+            .runs
+            .iter()
+            .filter_map(|r| r.content.plain_text().map(|c| c.into_owned()))
+            .collect();
+        assert_eq!(texts, vec!["가", " ", "나"], "whitespace-only run must survive");
     }
 }

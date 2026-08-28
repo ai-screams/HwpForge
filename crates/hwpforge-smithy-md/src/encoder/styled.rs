@@ -42,40 +42,124 @@ struct ListContinuationContext {
 /// Collects footnote and endnote references during encoding,
 /// then renders GFM-style `[^n]` definitions at document end.
 struct FootnoteCollector {
-    footnotes: Vec<String>,
-    endnotes: Vec<String>,
+    /// Per-note body paragraphs (multi-paragraph definitions).
+    footnotes: Vec<Vec<String>>,
+    endnotes: Vec<Vec<String>>,
+    /// Nested-note policy (M5): when rendering **inside** another note body,
+    /// a nested note cannot become a `[^n]` reference (a definition inside a
+    /// definition either strands the marker or, if emitted, produces output
+    /// our own decoder rejects as a nested reference). Instead its text is
+    /// inlined as plain `(주: …)` — documented lossy.
+    nested_inline: bool,
 }
 
 impl FootnoteCollector {
     fn new() -> Self {
-        Self { footnotes: Vec::new(), endnotes: Vec::new() }
+        Self { footnotes: Vec::new(), endnotes: Vec::new(), nested_inline: false }
     }
 
-    /// Adds a footnote body and returns the inline marker `[^N]`.
-    fn add_footnote(&mut self, body: &str) -> String {
+    /// Collector for rendering paragraphs *inside* a note body (M5).
+    fn nested() -> Self {
+        Self { footnotes: Vec::new(), endnotes: Vec::new(), nested_inline: true }
+    }
+
+    /// Adds a footnote body and returns the inline marker `[^N]`
+    /// (or the inlined plain text in nested mode).
+    fn add_footnote(&mut self, body_paragraphs: Vec<String>) -> String {
+        if self.nested_inline {
+            return format!("(주: {})", body_paragraphs.join(" "));
+        }
         let n = self.footnotes.len() + 1;
-        self.footnotes.push(body.to_string());
+        self.footnotes.push(body_paragraphs);
         format!("[^{n}]")
     }
 
-    /// Adds an endnote body and returns the inline marker `[^eN]`.
-    fn add_endnote(&mut self, body: &str) -> String {
+    /// Adds an endnote body and returns the inline marker `[^eN]`
+    /// (or the inlined plain text in nested mode).
+    fn add_endnote(&mut self, body_paragraphs: Vec<String>) -> String {
+        if self.nested_inline {
+            return format!("(주: {})", body_paragraphs.join(" "));
+        }
         let n = self.endnotes.len() + 1;
-        self.endnotes.push(body.to_string());
+        self.endnotes.push(body_paragraphs);
         format!("[^e{n}]")
     }
 
     /// Renders all collected definitions as a markdown block.
+    ///
+    /// Multi-paragraph bodies follow the GFM continuation form the parser
+    /// actually accepts (probe P4/P12): a **blank line** between paragraphs
+    /// and 4-space indentation on **every** physical line of continuation
+    /// paragraphs. Line-start block markers are escaped so a body that
+    /// *looks* like a list stays plain text on re-parse (H6, probe P14).
     fn render_definitions(&self) -> String {
-        let mut lines = Vec::new();
+        let mut blocks = Vec::new();
         for (i, body) in self.footnotes.iter().enumerate() {
-            lines.push(format!("[^{}]: {}", i + 1, body));
+            blocks.push(render_definition(&format!("{}", i + 1), body));
         }
         for (i, body) in self.endnotes.iter().enumerate() {
-            lines.push(format!("[^e{}]: {}", i + 1, body));
+            blocks.push(render_definition(&format!("e{}", i + 1), body));
         }
-        lines.join("\n")
+        blocks.join("\n\n")
     }
+}
+
+/// Renders one `[^label]:` definition with GFM multi-paragraph continuation.
+fn render_definition(label: &str, paragraphs: &[String]) -> String {
+    let mut out = String::new();
+    for (i, para) in paragraphs.iter().enumerate() {
+        let escaped = escape_footnote_paragraph(para);
+        if i == 0 {
+            out.push_str(&format!("[^{label}]: {escaped}"));
+        } else {
+            out.push_str("\n\n");
+            for (j, line) in escaped.split('\n').enumerate() {
+                if j > 0 {
+                    out.push('\n');
+                }
+                out.push_str("    ");
+                out.push_str(line);
+            }
+        }
+    }
+    out
+}
+
+/// Escapes line-start block markers inside a note-definition paragraph (H6).
+///
+/// A body line beginning with `- ` / `* ` / `+ ` / `1. ` / `#` / `>` would
+/// re-parse as a structural block inside the definition, which this decoder
+/// rejects — the emitter must keep such text literal.
+fn escape_footnote_paragraph(paragraph: &str) -> String {
+    paragraph
+        .split('\n')
+        .map(|line| {
+            let trimmed = line.trim_start();
+            let needs_escape = trimmed.starts_with("- ")
+                || trimmed.starts_with("* ")
+                || trimmed.starts_with("+ ")
+                || trimmed.starts_with('#')
+                || trimmed.starts_with('>')
+                || is_ordered_marker(trimmed);
+            if needs_escape {
+                let indent_len = line.len() - trimmed.len();
+                format!("{}\\{}", &line[..indent_len], trimmed)
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// `1. ` / `23) ` 형태의 순서 목록 마커 판정.
+fn is_ordered_marker(s: &str) -> bool {
+    let digits = s.bytes().take_while(|b| b.is_ascii_digit()).count();
+    if digits == 0 {
+        return false;
+    }
+    matches!(s.as_bytes().get(digits), Some(b'.') | Some(b')'))
+        && matches!(s.as_bytes().get(digits + 1), Some(b' ') | None)
 }
 
 /// Encodes a validated document into style-aware markdown.
@@ -371,20 +455,10 @@ fn encode_control_styled(
             }
         }
         Control::Footnote { paragraphs, .. } => {
-            let body = paragraphs
-                .iter()
-                .map(|p| extract_paragraph_text(p, styles))
-                .collect::<Vec<_>>()
-                .join(" ");
-            footnotes.add_footnote(body.trim())
+            footnotes.add_footnote(extract_note_body(paragraphs, styles))
         }
         Control::Endnote { paragraphs, .. } => {
-            let body = paragraphs
-                .iter()
-                .map(|p| extract_paragraph_text(p, styles))
-                .collect::<Vec<_>>()
-                .join(" ");
-            footnotes.add_endnote(body.trim())
+            footnotes.add_endnote(extract_note_body(paragraphs, styles))
         }
         Control::TextBox { paragraphs, .. } => {
             let body = paragraphs
@@ -480,6 +554,20 @@ fn encode_control_styled(
 /// collector. This is acceptable because HWP rarely nests footnotes inside shapes,
 /// and threading the collector through all recursive paths would require significant
 /// refactoring for marginal benefit.
+/// Renders note-body paragraphs individually (multi-paragraph preserved).
+/// Nested notes inside the body are inlined as plain text (M5).
+fn extract_note_body(paragraphs: &[Paragraph], styles: &dyn StyleLookup) -> Vec<String> {
+    let mut nested = FootnoteCollector::nested();
+    paragraphs
+        .iter()
+        .map(|p| {
+            let (text, _images) = paragraph_text_styled(p, styles, &mut nested);
+            text.trim().to_string()
+        })
+        .filter(|t| !t.is_empty())
+        .collect()
+}
+
 fn extract_paragraph_text(paragraph: &Paragraph, styles: &dyn StyleLookup) -> String {
     let mut dummy = FootnoteCollector::new();
     let (text, _images) = paragraph_text_styled(paragraph, styles, &mut dummy);

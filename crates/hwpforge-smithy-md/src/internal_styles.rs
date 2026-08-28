@@ -2,6 +2,11 @@ use hwpforge_core::ParagraphListRef;
 
 const LIST_CONTINUATION_STYLE_PREFIX: &str = "__hwpforge_md_list_continuation_level_";
 
+/// 각주 본문 문단 스타일 이름 (mapper 가 파생 등록).
+pub(crate) const FOOTNOTE_STYLE_NAME: &str = "__hwpforge_md_footnote";
+/// 미주 본문 문단 스타일 이름 (mapper 가 파생 등록).
+pub(crate) const ENDNOTE_STYLE_NAME: &str = "__hwpforge_md_endnote";
+
 pub(crate) fn list_continuation_style_name(level: u8) -> String {
     format!("{LIST_CONTINUATION_STYLE_PREFIX}{level}")
 }

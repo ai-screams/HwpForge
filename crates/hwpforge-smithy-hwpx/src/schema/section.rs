@@ -618,6 +618,20 @@ impl Serialize for HxText {
     }
 }
 
+/// 디코더 전처리(`preserve_ws_only_text`)가 ws-only `<hp:t>` 콘텐츠 선두에
+/// 붙인 sentinel `U+E000` 을 대칭 제거한다. 조건은 전처리와 정확히 동형 —
+/// "선두 U+E000 + 나머지 전부 XML whitespace" 일 때만 1글자 벗긴다.
+/// (원본 문서가 그 정확한 형태의 텍스트를 가질 이론적 위험은 PUA 단독+공백
+/// run 이라 실사용이 없다 — 전처리 rustdoc 참조.)
+fn strip_ws_sentinel(s: &str) -> &str {
+    if let Some(rest) = s.strip_prefix('\u{E000}') {
+        if !rest.is_empty() && rest.chars().all(|c| matches!(c, ' ' | '\t' | '\r' | '\n')) {
+            return rest;
+        }
+    }
+    s
+}
+
 impl HxText {
     /// Creates a new `HxText` from a plain string.
     pub fn new(text: impl Into<String>) -> Self {
@@ -643,7 +657,7 @@ impl HxText {
         self.parts
             .iter()
             .map(|p| match p {
-                HxTextPart::Text(s) => s.as_str(),
+                HxTextPart::Text(s) => strip_ws_sentinel(s),
                 HxTextPart::LineBreak {} => "\n",
                 HxTextPart::Tab { .. } => "\t",
                 HxTextPart::FwSpace {} => "\u{001F}",
@@ -694,7 +708,7 @@ impl HxText {
         let segments = self.parts.iter().filter_map(|p| match p {
             HxTextPart::Text(s) if s.is_empty() => None,
             HxTextPart::TitleMark { .. } => None,
-            HxTextPart::Text(s) => Some(InlineSegment::Plain(s.clone())),
+            HxTextPart::Text(s) => Some(InlineSegment::Plain(strip_ws_sentinel(s).to_string())),
             HxTextPart::Tab { width, leader, tab_type } => {
                 Some(InlineSegment::Tab(InlineTabAttr {
                     width: HwpUnit::new(width.unwrap_or(0)).unwrap_or(HwpUnit::ZERO),
@@ -1285,6 +1299,13 @@ pub struct HxPageNum {
 /// `<hp:footNote>` — footnote element (NoteType in XSD).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct HxFootNote {
+    /// 종류별 순번 캐시 (한컴 F1/F4 실측: `number="1"` — 항상 존재).
+    /// 종전엔 스키마에 없어 한컴 wire 를 **무음 드롭**했다 (M-W3.5-2).
+    #[serde(rename = "@number", default, skip_serializing_if = "Option::is_none")]
+    pub number: Option<u32>,
+    /// 접미 문자(십진 문자코드 — 한컴 F1: `suffixChar="41"` = `)`).
+    #[serde(rename = "@suffixChar", default, skip_serializing_if = "Option::is_none")]
+    pub suffix_char: Option<String>,
     /// Instance identifier (optional, for linking references).
     ///
     /// Widened to `u64` in E6/M2 to mirror Core's `Option<ObjectId>` without
@@ -1301,12 +1322,30 @@ pub struct HxFootNote {
 /// `<hp:endNote>` — endnote element (NoteType in XSD, same structure as footnote).
 pub type HxEndNote = HxFootNote;
 
-/// `<hp:footNotePr>` — section-level footnote formatting (decoder-only for Phase 4.5).
+/// `<hp:footNotePr>` — section-level footnote formatting (decode-only).
+///
+/// 인코더는 이 요소를 `enrich_sec_pr()` 가 고정값으로 재생성하므로 typed
+/// 왕복은 아직 없다 — 디코더가 `numbering` 정책만 읽어 **비지원 정책
+/// (`ON_SECTION` 등) 을 무음 정규화하는 대신 경고**를 낸다 (warning-first).
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct HxFootNotePr {
-    /// Raw XML content preserved for roundtrip fidelity.
-    #[serde(rename = "$value", default)]
-    pub raw_xml: String,
+    /// `<hp:numbering type newNum>` — 번호 재시작 정책.
+    #[serde(rename = "numbering", default, skip_serializing)]
+    pub numbering: Option<HxNoteNumberingPolicy>,
+}
+
+/// `<hp:numbering>` (footNotePr/endNotePr 자식) — 각주/미주 번호 정책.
+///
+/// `newNum` 은 의도적으로 파싱하지 않는다 — 경고 판정에 불필요하고,
+/// `xs:positiveInteger` 는 u32 상한을 넘을 수 있어 typed 파싱이 schema-valid
+/// 문서의 디코드 실패를 만든다 (4차 평결 Medium — typed carry 승격 때
+/// 문자열/광폭 정수로 재설계).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct HxNoteNumberingPolicy {
+    /// `CONTINUOUS`(전 구역 연속·기본) / `ON_SECTION`(구역마다 재시작) 등.
+    /// `None` = 속성 결측(기본 적용·정상), `Some("")` = 명시적 빈 값(비정상).
+    #[serde(rename = "@type", default)]
+    pub policy_type: Option<String>,
 }
 
 /// `<hp:endNotePr>` — section-level endnote formatting (decoder-only for Phase 4.5).
@@ -1401,9 +1440,16 @@ pub struct HxSecPr {
     /// by `enrich_sec_pr()` via raw XML injection (hence `skip_serializing`).
     #[serde(rename = "startNum", default, skip_serializing)]
     pub start_num: Option<HxStartNum>,
-    // footNotePr, endNotePr, grid — still skipped by serde
-    // (no deny_unknown_fields). The encoder injects these as raw XML strings
-    // via enrich_sec_pr().
+
+    /// `<hp:footNotePr>` — decode-only (비지원 numbering 정책 경고용).
+    #[serde(rename = "footNotePr", default, skip_serializing)]
+    pub foot_note_pr: Option<HxFootNotePr>,
+
+    /// `<hp:endNotePr>` — decode-only (비지원 numbering 정책 경고용).
+    #[serde(rename = "endNotePr", default, skip_serializing)]
+    pub end_note_pr: Option<HxEndNotePr>,
+    // grid — still skipped by serde (no deny_unknown_fields). The encoder
+    // injects these as raw XML strings via enrich_sec_pr().
 }
 
 /// `<hp:visibility>` — controls visibility of page elements.

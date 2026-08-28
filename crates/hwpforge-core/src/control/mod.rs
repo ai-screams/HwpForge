@@ -113,6 +113,12 @@ pub enum Control {
 
     /// A footnote containing paragraph content.
     /// Maps to HWPX `<hp:ctrl><hp:footNote>`.
+    ///
+    /// **번호 재계산 계약**: wire 의 종류별 순번 캐시(`footNote@number`)와
+    /// 접미 문자(`suffixChar`), 본문 선두의 자동 번호 머리(`<hp:autoNum
+    /// numType="FOOTNOTE">` + 구분 공백)는 표현 산물이라 Core 로 나르지
+    /// 않는다 — 인코더가 문서 순서로 재계산·재주입한다. 비표준(custom)
+    /// suffix 의 typed 보존은 section note-format 승격(별도 승인) 대상.
     Footnote {
         /// Object identity for cross-ref linking (optional). Shares the
         /// [`ObjectId`] space with [`RefTarget::Object`](crate::control::RefTarget::Object).
@@ -123,6 +129,9 @@ pub enum Control {
 
     /// An endnote containing paragraph content.
     /// Maps to HWPX `<hp:ctrl><hp:endNote>`.
+    ///
+    /// 번호 재계산 계약은 [`Control::Footnote`] 와 동일 (`numType="ENDNOTE"`,
+    /// 독립 카운터).
     Endnote {
         /// Object identity for cross-ref linking (optional). Shares the
         /// [`ObjectId`] space with [`RefTarget::Object`](crate::control::RefTarget::Object).
@@ -728,9 +737,11 @@ pub enum Control {
         /// Which counter restarts ([`NewNumberKind::Page`] is the only
         /// renderer-consumed kind; others carry through to HWPX).
         kind: NewNumberKind,
-        /// The new counter value (1-based; fixture sentinel `7`). `u32`
-        /// covers both wires losslessly — HWP5 `nwno` carries u16, HWPX
-        /// `newNum@num` is `xs:positiveInteger`.
+        /// The new counter value (fixture sentinel `7`). `u32` covers both
+        /// wires losslessly — HWP5 `nwno` carries u16, HWPX inline
+        /// `hp:newNum@num` is `xs:integer` (so `0` is wire-valid and the
+        /// HWPX encoder carries it verbatim into the regenerated number
+        /// cache; range enforcement, if any, belongs to Core validation).
         number: u32,
     },
 

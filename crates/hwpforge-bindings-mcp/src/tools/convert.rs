@@ -148,15 +148,24 @@ pub fn run_convert(
         )
     })?;
 
-    // 7. Encode to HWPX bytes
-    let hwpx_bytes = HwpxEncoder::encode(&validated, bridge.style_store(), &embedded.store)
-        .map_err(|e| {
-            ToolErrorInfo::new(
-                "ENCODE_ERROR",
-                format!("HWPX encoding failed: {e}"),
-                "This may be a bug. Please report at https://github.com/ai-screams/HwpForge/issues",
-            )
-        })?;
+    // 7. Encode to HWPX bytes — 진단 동반 경로: 인코드 경고(각주 번호 머리
+    // 생략 등)를 무음 폐기하지 않고 warnings 채널로 합류.
+    let outcome = HwpxEncoder::encode_with_diagnostics(
+        &validated,
+        bridge.style_store(),
+        &embedded.store,
+        hwpforge_smithy_hwpx::EncodeOptions::default(),
+    )
+    .map_err(|e| {
+        ToolErrorInfo::new(
+            "ENCODE_ERROR",
+            format!("HWPX encoding failed: {e}"),
+            "This may be a bug. Please report at https://github.com/ai-screams/HwpForge/issues",
+        )
+    })?;
+    let hwpx_bytes = outcome.bytes;
+    let mut warnings = warnings;
+    warnings.extend(outcome.warnings.iter().map(std::string::ToString::to_string));
 
     // 8. Write output file
     write_output_file(output_path, &hwpx_bytes)?;

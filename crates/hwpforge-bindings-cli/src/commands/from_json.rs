@@ -84,12 +84,24 @@ pub fn run(input: &PathBuf, output: &PathBuf, base: &Option<PathBuf>, json_mode:
         ImageStore::new()
     };
 
-    let bytes = match HwpxEncoder::encode(&validated, &style_store, &image_store) {
-        Ok(b) => b,
+    let outcome = match HwpxEncoder::encode_with_diagnostics(
+        &validated,
+        &style_store,
+        &image_store,
+        hwpforge_smithy_hwpx::EncodeOptions::default(),
+    ) {
+        Ok(o) => o,
         Err(e) => {
             CliError::new("ENCODE_FAILED", format!("HWPX encode error: {e}")).exit(json_mode, 2);
         }
     };
+    let bytes = outcome.bytes;
+    // 인코드 경고(각주 번호 머리 생략 등)를 무음 폐기하지 않는다.
+    let encode_warnings: Vec<String> =
+        outcome.warnings.iter().map(std::string::ToString::to_string).collect();
+    for w in &encode_warnings {
+        eprintln!("[from-json] {w}");
+    }
 
     if let Err(e) = std::fs::write(output, &bytes) {
         CliError::new("FILE_WRITE_FAILED", format!("Cannot write '{}': {e}", output.display()))
@@ -101,6 +113,7 @@ pub fn run(input: &PathBuf, output: &PathBuf, base: &Option<PathBuf>, json_mode:
         "output": output.display().to_string(),
         "sections": validated.section_count(),
         "size_bytes": bytes.len(),
+        "warnings": encode_warnings,
     });
 
     if json_mode {

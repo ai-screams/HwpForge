@@ -319,8 +319,11 @@ impl HwpForgeServer {
                     data.output_path, data.size_bytes, data.sections, data.paragraphs,
                 );
                 if !data.warnings.is_empty() {
+                    // warnings 채널은 이제 이미지 임베드 제외 + 인코드 경고
+                    // (각주 번호 머리 생략 등)가 섞인다 — 종류를 단정하는
+                    // 문구는 note 경고를 이미지 문제로 오독시킨다.
                     summary.push_str(&format!(
-                        " — {} image reference(s) NOT embedded: {}",
+                        " — {} warning(s): {}",
                         data.warnings.len(),
                         data.warnings.join(" · "),
                     ));

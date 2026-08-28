@@ -39,7 +39,48 @@ pub const STAMP_MANIFEST_V2_VERSION: u32 = 2;
 /// (admission-gated apply + manifest).
 pub struct HwpxStamper;
 
+/// 인코드 + **의미 손상 fail-closed** (7차 평결 High).
+///
+/// 편집기(stamper/cell-edit)는 preserve-first 계약이다 — 인코더가
+/// [`EncodeWarning::NoteHeadSkipped`] 등 의미 손상 경고를 낸 산출물을
+/// 무경고 반환하면, admission 은 Core 비교라 이를 못 본다 (디코더가
+/// FOOTNOTE/ENDNOTE autoNum 을 Core 로 올리지 않아 native fused 번호
+/// 머리는 재인코드에서 `AlreadyPresent` 가 될 수 없다 — titleMark 각주의
+/// 가시 번호가 무음 삭제되는 실경로). public 결과형 변경 없이 기존
+/// `Codec` 오류로 거부한다 — 경고를 결과에 싣는 richer API 는 별도 승인
+/// 대상 (계획 문서 §7i).
+fn encode_fail_closed(
+    validated: &hwpforge_core::Document<hwpforge_core::Validated>,
+    style_store: &crate::style_store::HwpxStyleStore,
+    image_store: &hwpforge_core::image::ImageStore,
+) -> Result<Vec<u8>, StamperError> {
+    let outcome = HwpxEncoder::encode_with_diagnostics(
+        validated,
+        style_store,
+        image_store,
+        crate::EncodeOptions::default(),
+    )
+    .map_err(|e| StamperError::Codec(e.to_string()))?;
+    if let Some(w) = outcome.warnings.iter().find(|w| {
+        matches!(
+            w,
+            crate::EncodeWarning::NoteHeadSkipped { .. }
+                | crate::EncodeWarning::TitleMarkSkipped { .. }
+                | crate::EncodeWarning::NoteRestartIgnored { .. }
+        )
+    }) {
+        return Err(StamperError::Codec(format!(
+            "encode produced a semantic-loss warning (fail-closed): {w}"
+        )));
+    }
+    Ok(outcome.bytes)
+}
+
 /// Result of a successful [`HwpxStamper::stamp`].
+///
+/// 현재 인코드 [`EncodeWarning`](crate::EncodeWarning) (각주 번호 머리
+/// 생략 등)은 이 결과에 실리지 않는다 — 경고 채널 신설은 public 필드
+/// 추가(semver) 라 별도 승인 대기 (각주 에픽 계획 문서 §7h).
 #[derive(Debug)]
 pub struct StampResult {
     /// The stamped `.hwpx` bytes.
@@ -247,8 +288,7 @@ impl HwpxStamper {
         let outcome = apply(&mut document, specs)?;
         let validated =
             document.validate().map_err(|e| StamperError::Codec(format!("validate: {e}")))?;
-        let bytes = HwpxEncoder::encode(&validated, &style_store, &image_store)
-            .map_err(|e| StamperError::Codec(e.to_string()))?;
+        let bytes = encode_fail_closed(&validated, &style_store, &image_store)?;
         // Untouched paragraphs keep Hancom's line-layout cache (no full
         // document reflow/repagination in the renderer).
         let bytes = crate::layout_carry::carry_line_segs(base, &e0, &bytes)
@@ -318,8 +358,7 @@ impl HwpxStamper {
 
         let validated =
             document.validate().map_err(|e| StamperError::Codec(format!("validate: {e}")))?;
-        let bytes = HwpxEncoder::encode(&validated, &style_store, &image_store)
-            .map_err(|e| StamperError::Codec(e.to_string()))?;
+        let bytes = encode_fail_closed(&validated, &style_store, &image_store)?;
         // Untouched paragraphs keep Hancom's line-layout cache (no full
         // document reflow/repagination in the renderer).
         let bytes = crate::layout_carry::carry_line_segs(base, &e0, &bytes)
@@ -457,6 +496,9 @@ pub struct StampPlanV2 {
 }
 
 /// Result of a successful [`HwpxStamper::stamp_v2`].
+///
+/// 의미 손상 인코드 경고(번호 머리/titleMark 생략 등)는 결과에 실리는 대신
+/// [`StamperError::Codec`] 으로 **fail-closed** 된다 (`encode_fail_closed`).
 #[derive(Debug)]
 pub struct StampResultV2 {
     /// The stamped `.hwpx` bytes.

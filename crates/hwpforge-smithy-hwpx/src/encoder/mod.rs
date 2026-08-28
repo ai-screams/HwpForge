@@ -472,7 +472,7 @@ use crate::style_store::HwpxStyleStore;
 
 use self::header::encode_header;
 use self::package::PackageWriter;
-use self::section::encode_section;
+use self::section::encode_section_with_note_counters;
 
 // ── HwpxEncoder ─────────────────────────────────────────────────
 /// 인코드 중 표면화된 비치명 경고 (W1b — §1g v5 변경 2).
@@ -488,6 +488,51 @@ pub enum EncodeWarning {
         /// 드롭 사유.
         reason: String,
     },
+    /// 각주/미주 번호 머리(autoNum)를 안전하게 주입할 수 없어 생략함 —
+    /// 예: 첫 문단이 titleMark run 으로 시작 (TOC "첫 run" 불변식 및
+    /// 전체-run 치환 키와 충돌해 안전한 삽입 지점이 없다).
+    NoteHeadSkipped {
+        /// 해당 note 의 중첩 경로.
+        path: crate::decoder::ParagraphPath,
+        /// 생략 사유.
+        reason: String,
+    },
+    /// TOC 제목 표식(`<hp:titleMark>`)을 부착하지 못함 — heading 문단의
+    /// 첫 run 이 전체-run 치환 placeholder(하이퍼링크/필드)라 부착하면
+    /// 치환 키가 어긋나 내부 마커가 최종 XML 로 유출된다.
+    TitleMarkSkipped {
+        /// 해당 문단의 중첩 경로.
+        path: crate::decoder::ParagraphPath,
+        /// 생략 사유.
+        reason: String,
+    },
+    /// 후속 섹션의 명시적 각주/미주 시작 번호를 반영하지 못함 — 구역별
+    /// 재시작(`ON_SECTION` numbering 정책)은 아직 typed carry 되지 않는다.
+    NoteRestartIgnored {
+        /// 해당 섹션의 경로.
+        path: crate::decoder::ParagraphPath,
+        /// 무시 사유.
+        reason: String,
+    },
+}
+
+impl std::fmt::Display for EncodeWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LayoutCacheDropped { path, reason } => {
+                write!(f, "layout cache dropped at {path}: {reason}")
+            }
+            Self::NoteHeadSkipped { path, reason } => {
+                write!(f, "note number head skipped at {path}: {reason}")
+            }
+            Self::TitleMarkSkipped { path, reason } => {
+                write!(f, "titleMark skipped at {path}: {reason}")
+            }
+            Self::NoteRestartIgnored { path, reason } => {
+                write!(f, "note restart ignored at {path}: {reason}")
+            }
+        }
+    }
 }
 
 /// [`HwpxEncoder::encode_with_diagnostics`] 의 결과 — 산출 바이트 +
@@ -578,6 +623,13 @@ impl HwpxEncoder {
     /// - [`HwpxError::XmlSerialize`] if quick-xml serialization fails
     /// - [`HwpxError::InvalidStructure`] if table nesting exceeds limits
     /// - [`HwpxError::Zip`] if ZIP archive creation fails
+    ///
+    /// # Warnings are discarded
+    ///
+    /// 이 편의 API 는 [`EncodeWarning`] (각주 번호 머리 생략·titleMark 보류
+    /// 등 의미 경고)을 **폐기한다**. 사용자-노출 write 표면은 반드시
+    /// [`Self::encode_with_diagnostics`] 로 경고를 표면화할 것 — CLI/MCP
+    /// `convert`·`from-json`·`restyle` 이 그 경로다.
     pub fn encode(
         document: &Document<Validated>,
         style_store: &HwpxStyleStore,
@@ -590,6 +642,10 @@ impl HwpxEncoder {
     ///
     /// `EncodeOptions::default()` 를 넘기면 [`Self::encode`] 와 바이트
     /// 단위로 동일한 출력을 낸다.
+    ///
+    /// [`Self::encode`] 와 동일하게 의미 [`EncodeWarning`] 은 **폐기**된다
+    /// (`emit_layout_cache` 요청 중 캐시 드롭만 오류로 승격) — 경고 보존
+    /// 경로는 [`Self::encode_with_diagnostics`].
     pub fn encode_with_options(
         document: &Document<Validated>,
         style_store: &HwpxStyleStore,
@@ -641,14 +697,23 @@ impl HwpxEncoder {
         let mut masterpage_offset = 0usize;
         let mut embedded_ole_offset = 0usize;
         let mut section_results = Vec::with_capacity(sections.len());
+        // 각주/미주 autoNum 번호 — 문서 전역 연속 (한컴 기본 CONTINUOUS,
+        // F7 실측: 종류별 순번 캐시). 첫 섹션 begin_num(= header
+        // <hh:beginNum> 병합 실값)만 문서 시작에서 1회 반영한다. 후속
+        // 섹션의 begin_num 은 **무시**되고 (합성 1 — 비기본 실값이면
+        // NoteRestartIgnored 경고), 본문 NewNumber 재시작은 walk 가 처리.
+        let mut note_counters = crate::encoder::section::NoteNumbering::from_document_begin(
+            sections.first().and_then(|s| s.begin_num.as_ref()),
+        );
         for (i, section) in sections.iter().enumerate() {
-            let result = encode_section(
+            let result = encode_section_with_note_counters(
                 section,
                 i,
                 chart_offset,
                 masterpage_offset,
                 embedded_ole_offset,
                 options,
+                &mut note_counters,
             )?;
             chart_offset += result.charts.len();
             masterpage_offset += result.master_pages.len();
@@ -703,6 +768,10 @@ impl HwpxEncoder {
     ///
     /// Returns [`HwpxError::Io`] if the file cannot be written, or any
     /// error from [`encode`](Self::encode).
+    ///
+    /// [`encode`](Self::encode) 와 동일하게 **[`EncodeWarning`] 을 폐기**
+    /// 한다 — 경고 보존이 필요하면 [`Self::encode_with_diagnostics`] 후
+    /// 직접 파일로 쓸 것.
     pub fn encode_file(
         path: impl AsRef<Path>,
         document: &Document<Validated>,
