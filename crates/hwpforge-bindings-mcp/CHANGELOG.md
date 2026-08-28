@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.4](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.16.3...hwpforge-bindings-mcp-v0.16.4) - 2026-08-28
+
+### Fixed
+
+- *(smithy-hwpx)* 각주 번호부여 6차 평결 상환 — 정확 일치 가드·경고 표면 확대
+
+- *(smithy-hwpx)* 각주 번호부여 5차 평결 상환 — 마커 가드 전종화·경고 관통
+
+
 ## [0.16.3](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.16.2...hwpforge-bindings-mcp-v0.16.3) - 2026-08-26
 
 ### Fixed

@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.4](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.16.3...hwpforge-smithy-md-v0.16.4) - 2026-08-28
+
+### Added
+
+- *(smithy-hwpx)* 각주/미주 본문 autoNum 번호 머리 방출 (W3.5)
+
+- *(smithy-md)* 각주 다문단 방출 + 행 시작 escape — 왕복 폐곡선 (W2)
+
+- *(smithy-md)* 각주·미주 MD 디코딩 — [^N]/[^eN] 왕복 (W1)
+
+- *(smithy-md)* 인라인 서식 스택 — 굵게/기울임/취소선 왕복 (W0)
+
+
+### Fixed
+
+- *(smithy-hwpx)* 각주 번호 머리 주입의 리뷰 지적 7건 상환
+
+
 ## [0.16.3](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-md-v0.16.2...hwpforge-smithy-md-v0.16.3) - 2026-08-26
 
 ### Fixed
