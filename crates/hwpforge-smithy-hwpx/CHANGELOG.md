@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.4](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.16.3...hwpforge-smithy-hwpx-v0.16.4) - 2026-08-28
+
+### Added
+
+- *(smithy-hwpx)* 각주/미주 본문 autoNum 번호 머리 방출 (W3.5)
+
+
+### Fixed
+
+- *(smithy-hwpx)* 각주 번호부여 7차 평결 상환 — 편집기 의미 손상 fail-closed
+
+- *(smithy-hwpx)* 각주 번호부여 6차 평결 상환 — 정확 일치 가드·경고 표면 확대
+
+- *(smithy-hwpx)* 각주 번호부여 5차 평결 상환 — 마커 가드 전종화·경고 관통
+
+- *(smithy-hwpx)* 각주 번호부여 4차 평결 상환 — 마커 유출 차단·주입 안전화
+
+- *(smithy-hwpx)* 각주 번호부여 3차 평결 상환 — 명시적 시작번호 보존
+
+- *(smithy-hwpx)* 각주 번호부여 재평결 지적 상환 — 합성 begin_num 오독 제거
+
+- *(smithy-hwpx)* 각주 번호 머리 주입의 리뷰 지적 7건 상환
+
+- *(smithy-hwpx)* 공백 전용 <hp:t> run 무음 소실 수정
+
+
 ## [0.16.1](https://github.com/ai-screams/HwpForge/compare/hwpforge-smithy-hwpx-v0.16.0...hwpforge-smithy-hwpx-v0.16.1) - 2026-08-26
 
 ### Fixed
