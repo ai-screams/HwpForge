@@ -40,7 +40,7 @@ rust-version = "1.88"
 [workspace.dependencies]
 # === XML Processing ===
 base64 = "0.22"
-quick-xml = { version = "0.41", features = ["serialize", "overlapped-lists"] }
+quick-xml = { version = "0.42", features = ["serialize", "overlapped-lists"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 unicode-normalization = "0.1"
