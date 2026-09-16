@@ -8,7 +8,7 @@
 
 ![CI](https://img.shields.io/github/actions/workflow/status/ai-screams/HwpForge/ci.yml?branch=main\&label=CI\&logo=github)
 ![codecov](https://img.shields.io/badge/coverage-90.4%25-brightgreen.svg?logo=codecov)
-![Tests](https://img.shields.io/badge/tests-2%2C688_passed-success.svg?logo=checkmarx)
+![Tests](https://img.shields.io/badge/tests-3%2C476_passed-success.svg?logo=checkmarx)
 ![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg?logo=rust)
 ![Lines of Code](https://img.shields.io/badge/LOC-~114%2C421-informational.svg)
 
@@ -79,15 +79,21 @@ cargo add hwpforge --features full
 
 ```cpp
 [dependencies]
-hwpforge = "0.9"
+hwpforge = "0.16"
 ```
 
 ### 🔨 Hammer — CLI로 시작하기
 
 CLI 도구 `hwpforge`(Hammer)를 설치하면 터미널에서 바로 문서를 생성하고 편집할 수 있습니다.
+`hwpforge-bindings-cli`는 crates.io에 배포되지 않으므로(`publish = false`), git 또는 로컬 경로에서 설치합니다.
+`hwpforge-smithy-pdf`(krilla) 의존으로 워크스페이스 MSRV(1.88)보다 높은 **Rust 1.92+가** 필요합니다.
 
 ```cpp
-cargo install hwpforge-bindings-cli
+cargo install --git https://github.com/ai-screams/HwpForge hwpforge-bindings-cli
+
+# 또는 clone 후 로컬 경로에서
+git clone https://github.com/ai-screams/HwpForge && cd HwpForge
+cargo install --path crates/hwpforge-bindings-cli
 ```
 
 ```bash
@@ -96,6 +102,9 @@ hwpforge convert report.md -o report.hwpx
 
 # HWPX 구조 확인
 hwpforge inspect report.hwpx
+
+# 문서 내비게이션 맵 확인 (제목·표·필드·책갈피)
+hwpforge outline report.hwpx
 
 # HWPX → Markdown 변환 (AI가 한글 문서 읽기)
 hwpforge to-md report.hwpx -o report.md
@@ -109,6 +118,12 @@ hwpforge from-json section0.json -o new.hwpx
 # JSON으로 섹션 교체
 hwpforge patch report.hwpx --section 0 < modified.json -o updated.hwpx
 
+# 누름틀 필드 채우기 (기존 내용은 그대로 보존)
+hwpforge fill report.hwpx --set 회사명=HwpForge -o filled.hwpx
+
+# PDF로 내보내기 (한컴 조판 캐시 재생)
+hwpforge to-pdf report.hwpx -o report.pdf
+
 # JSON Schema 출력 (AI agent용)
 hwpforge schema document
 ```
@@ -120,7 +135,7 @@ hwpforge schema document
 
 ### ⚙️ Anvil — MCP Server (Beta)로 AI가 직접 한글 문서를 다루다
 
-Claude Code, Codex CLI, Claude, ChatGPT, Cursor, Antigravity 등 [MCP](https://modelcontextprotocol.io/) 지원 AI 도구에서 **한글 문서를 직접 생성하고 편집**할 수 있습니다. 현재 MCP surface는 **베타**이며, HWP5 경로는 MCP가 아니라 CLI workflow를 우선합니다. "보고서 만들어줘"라고 말하면, AI가 알아서 `.hwpx` 파일을 뚝딱 만들어냅니다.
+Claude Code, Codex CLI, Claude, ChatGPT, Cursor, Antigravity 등 [MCP](https://modelcontextprotocol.io/) 지원 AI 도구에서 **한글 문서를 직접 생성하고 편집할** 수 있습니다. 현재 MCP surface는 **베타이며**, HWP5 경로는 MCP가 아니라 CLI workflow를 우선합니다. "보고서 만들어줘"라고 말하면, AI가 알아서 `.hwpx` 파일을 뚝딱 만들어냅니다.
 
 #### AI 도구에 등록
 
@@ -241,19 +256,29 @@ Settings → Tools → Add MCP Server에서:
 
 </details>
 
-#### 등록하면 9개 도구를 사용할 수 있습니다
+#### 등록하면 19개 도구를 사용할 수 있습니다
 
-| 도구                 | 하는 일                 | 한마디                               |
-| -------------------- | ----------------------- | ------------------------------------ |
-| `hwpforge_convert`   | Markdown → HWPX 변환    | "이 마크다운을 한글 파일로!"         |
-| `hwpforge_inspect`   | HWPX 구조 확인          | "이 문서 뭐가 들어있어?"             |
-| `hwpforge_to_json`   | HWPX → JSON 추출        | "이 섹션 내용 좀 꺼내봐"             |
-| `hwpforge_patch`     | JSON으로 섹션 교체      | "이 부분만 바꿔서 다시 저장해"       |
-| `hwpforge_templates` | 스타일 프리셋 조회      | "어떤 템플릿 쓸 수 있어?"            |
-| `hwpforge_validate`  | HWPX 구조/무결성 검증   | "이 파일 문제 없는지 확인해"         |
-| `hwpforge_restyle`   | 스타일 프리셋 일괄 적용 | "이 문서 폰트 바꿔줘"                |
-| `hwpforge_from_json` | JSON → HWPX 직접 생성   | "이 JSON으로 한글 파일 만들어"       |
-| `hwpforge_to_md`     | HWPX → Markdown 변환    | "이 한글 문서를 Markdown으로 꺼내줘" |
+| 도구                   | 하는 일                                      | 한마디                               |
+| ---------------------- | -------------------------------------------- | ------------------------------------ |
+| `hwpforge_convert`     | Markdown → HWPX 변환                         | "이 마크다운을 한글 파일로!"         |
+| `hwpforge_inspect`     | HWPX 구조 확인                               | "이 문서 뭐가 들어있어?"             |
+| `hwpforge_to_json`     | HWPX → JSON 추출                             | "이 섹션 내용 좀 꺼내봐"             |
+| `hwpforge_patch`       | JSON으로 섹션 교체                           | "이 부분만 바꿔서 다시 저장해"       |
+| `hwpforge_templates`   | 스타일 프리셋 조회                           | "어떤 템플릿 쓸 수 있어?"            |
+| `hwpforge_validate`    | HWPX 구조/무결성 검증                        | "이 파일 문제 없는지 확인해"         |
+| `hwpforge_restyle`     | 스타일 프리셋 일괄 적용                      | "이 문서 폰트 바꿔줘"                |
+| `hwpforge_from_json`   | JSON → HWPX 직접 생성                        | "이 JSON으로 한글 파일 만들어"       |
+| `hwpforge_to_md`       | HWPX → Markdown 변환                         | "이 한글 문서를 Markdown으로 꺼내줘" |
+| `hwpforge_outline`     | 문서 내비게이션 맵(제목·표·필드·책갈피) 조회 | "이 문서 구조가 어떻게 생겼어?"      |
+| `hwpforge_diff`        | 두 HWPX 파일을 semantic/package 채널로 비교  | "이 편집이 뭘 바꿨는지 확인해줘"     |
+| `hwpforge_delete_para` | 최상위 문단 삭제 (구조 편집)                 | "이 문단 지워줘"                     |
+| `hwpforge_insert_para` | 앵커 문단 기준 새 문단 삽입                  | "이 문단 다음에 내용 추가해줘"       |
+| `hwpforge_read`        | 문단/표/필드 중 하나를 타겟 읽기             | "이 부분만 딱 읽어줘"                |
+| `hwpforge_fields`      | 누름틀 필드 목록 조회                        | "채울 수 있는 칸이 뭐가 있어?"       |
+| `hwpforge_fill`        | 누름틀 필드에 값 채우기                      | "이 필드들 채워줘"                   |
+| `hwpforge_stamp_plan`  | 문장 속 빈칸 스탬핑 후보 탐색                | "채울 수 있는 빈칸 후보 찾아줘"      |
+| `hwpforge_stamp`       | 후보를 누름틀 필드로 승격                    | "이 빈칸들을 필드로 만들어줘"        |
+| `hwpforge_set_cell`    | 표 셀을 그리드 주소로 편집                   | "이 표 칸 값 바꿔줘"                 |
 
 #### 업데이트 / 삭제
 
@@ -265,7 +290,7 @@ cargo install hwpforge-bindings-mcp --force   # 업데이트
 cargo uninstall hwpforge-bindings-mcp          # 삭제
 ```
 
-> **왜 MCP?** CLI(Hammer)는 AI가 `bash` 명령을 실행해야 하지만, MCP(Anvil)는 AI가 **네이티브 도구**로
+> **왜 MCP?** CLI(Hammer)는 AI가 `bash` 명령을 실행해야 하지만, MCP(Anvil)는 AI가 **네이티브 도구로**
 > 직접 호출합니다. 파일 경로 파싱도, stdout 해석도 필요 없습니다.
 > JSON-RPC로 요청하면 구조화된 JSON으로 응답 — 깔끔합니다.
 
@@ -358,24 +383,25 @@ let bytes = HwpxEncoder::encode(&validated, bridge.style_store(), &image_store).
 
 ```toml
 # Markdown 지원 포함
-hwpforge = { version = "0.9", features = ["full"] }
+hwpforge = { version = "0.16", features = ["full"] }
 ```
 
 ## 📜 지원 콘텐츠
 
-| 카테고리      | 요소                                                                 |
-| ------------- | -------------------------------------------------------------------- |
-| 텍스트        | Run, character shape, paragraph shape, style (22개 한컴 기본 스타일) |
-| 구조          | Table (중첩), Image (바이너리 + 경로), TextBox, Caption              |
-| 레이아웃      | 다단, 페이지 설정, 가로/세로 방향, 제본 여백, master page            |
-| 머리글/바닥글 | Header, Footer, 쪽번호 (autoNum)                                     |
-| 각주/미주     | 각주, 미주                                                           |
-| 도형          | 선, 타원, 다각형, 호, 곡선, 연결선 (채움, 회전, 화살표 지원)         |
-| 수식          | HancomEQN script 형식                                                |
-| 차트          | 18종 chart type (OOXML 호환)                                         |
-| 참조          | 책갈피, 상호 참조, 필드 (날짜/시간/요약), 메모, 색인                 |
-| 덧말/겹침     | 덧말 (dutmal), 글자 겹침                                             |
-| Markdown      | GFM decode, lossy + lossless encode, YAML frontmatter                |
+| 카테고리      | 요소                                                                          |
+| ------------- | ----------------------------------------------------------------------------- |
+| 텍스트        | Run, character shape, paragraph shape, style (22개 한컴 기본 스타일)          |
+| 구조          | Table (중첩), Image (바이너리 + 경로), TextBox, Caption                       |
+| 레이아웃      | 다단, 페이지 설정, 가로/세로 방향, 제본 여백, master page                     |
+| 머리글/바닥글 | Header, Footer, 쪽번호 (autoNum)                                              |
+| 각주/미주     | 각주, 미주                                                                    |
+| 도형          | 선, 타원, 다각형, 호, 곡선, 연결선 (채움, 회전, 화살표 지원)                  |
+| 수식          | HancomEQN script 형식                                                         |
+| 차트          | 18종 chart type (OOXML 호환)                                                  |
+| 참조          | 책갈피, 상호 참조, 필드 (날짜/시간/요약), 메모, 색인                          |
+| 덧말/겹침     | 덧말 (dutmal), 글자 겹침                                                      |
+| Markdown      | GFM decode, lossy + lossless encode, YAML frontmatter                         |
+| PDF 내보내기  | 한컴 조판 캐시 재생(계산 아님) 렌더 — 표·머리글/바닥글·쪽번호·폰트 파이프라인 |
 
 ## 아키텍처
 
@@ -400,6 +426,7 @@ flowchart TB
     SHX["smithy-hwpx<br/>HWPX read/write"]:::smithy
     SH5["smithy-hwp5<br/>HWP5 read / audit / re-emission path"]:::smithy
     SMD["smithy-md<br/>Markdown bridge"]:::smithy
+    SPDF["smithy-pdf<br/>layout-cache replay renderer"]:::smithy
 
     CONV["convert<br/>HWP5 → HWPX orchestrator"]:::convert
 
@@ -412,6 +439,8 @@ flowchart TB
     C --> SHX
     C --> SH5
     C --> SMD
+    F --> SPDF
+    C --> SPDF
     B --> SHX
     B --> SMD
     C --> CONV
@@ -420,6 +449,7 @@ flowchart TB
     SHX --> CLI
     SH5 --> CLI
     SMD --> CLI
+    SPDF --> CLI
     CONV --> CLI
     SHX --> MCP
     SMD --> MCP
@@ -475,31 +505,31 @@ flowchart LR
 
 ## 프로젝트 현황
 
-| 지표                   | 값                      |
-| ---------------------- | ----------------------- |
-| Tracked Rust `src` LOC | ~114,421                |
-| 테스트                 | 2,688개 (cargo-nextest) |
-| 소스 파일              | 177 .rs                 |
-| Crate 수               | 11개                    |
-| 커버리지               | 90%+                    |
-| Clippy 경고            | 0                       |
-| Unsafe 코드            | 0                       |
+| 지표                   | 값                                                                  |
+| ---------------------- | ------------------------------------------------------------------- |
+| Tracked Rust `src` LOC | ~114,421                                                            |
+| 테스트                 | ~3,476 passed + 14 skipped (cargo-nextest, 2026-08-28 make ci 기준) |
+| 소스 파일              | 228 .rs                                                             |
+| Crate 수               | 12개                                                                |
+| 커버리지               | 90%+                                                                |
+| Clippy 경고            | 0                                                                   |
+| Unsafe 코드            | 0                                                                   |
 
 ## 개발
 
 ### 필수 요구사항
 
-- Rust 1.88+ (MSRV)
+- Rust 1.88+ (워크스페이스 MSRV) — `hwpforge-bindings-cli` CLI를 직접 빌드/설치하려면 krilla 의존으로 1.92+ 필요
 - (권장) [cargo-nextest](https://nexte.st/) — 병렬 테스트 실행
 - (선택) [pre-commit](https://pre-commit.com/) — git hook 자동화
 
 ### MSRV 정책
 
-- 현재 MSRV는 **Rust 1.88**입니다.
-- HwpForge는 **stable에서 4 릴리스 뒤처진 버전**을 기본 MSRV 정책으로 유지합니다.
-- `Cargo.toml`의 `rust-version`이 단일 진실원이며, CI의 `Verify › MSRV` job이 이 계약을 검증합니다.
+- 워크스페이스 기본 MSRV는 **Rust 1.88이며**, **stable에서 4 릴리스 뒤처진 버전을** 기본 정책으로 유지합니다.
+- `hwpforge-bindings-cli`와 `hwpforge-smithy-pdf`는 krilla 의존으로 **Rust 1.92+가** 필요합니다(`rust-version`을 크레이트별로 상향 지정). CI의 `Verify › MSRV (1.88)` job은 이 두 크레이트를 1.88 검증 패스에서는 제외하지만, 같은 job 안에서 `cargo +1.92 check`로 따로 검증합니다 — 검증 대상에서 빠지는 것이 아닙니다.
+- 각 크레이트의 `Cargo.toml`의 `rust-version`이 그 크레이트의 실제 MSRV이며, CI의 `Verify › MSRV` job이 워크스페이스 기본값(1.88)을 검증합니다.
 - MSRV 상향이 필요하면 PR에서 이유를 명시하고, `Cargo.toml`, CI, CHANGELOG를 함께 갱신합니다.
-- 개발용 기본 툴체인은 더 최신일 수 있습니다. 호환성 판단 기준은 최신 stable이 아니라 **MSRV + CI 통과 여부**입니다.
+- 개발용 기본 툴체인은 더 최신일 수 있습니다. 호환성 판단 기준은 최신 stable이 아니라 **MSRV + CI 통과 여부입니다**.
 
 ### ⚒️ 명령어
 
@@ -529,6 +559,7 @@ HwpForge/
 │   ├── hwpforge-smithy-hwpx/     # HWPX codec (ZIP+XML ↔ Core)
 │   ├── hwpforge-smithy-md/       # Markdown codec (MD ↔ Core)
 │   ├── hwpforge-smithy-hwp5/     # HWP5 decode/projection + inspect helpers
+│   ├── hwpforge-smithy-pdf/      # PDF codec (조판 캐시 재생 렌더러, to-pdf 가 사용)
 │   ├── hwpforge-convert/         # 포맷 간 변환 오케스트레이터 (HWP5 → HWPX)
 │   ├── hwpforge-bindings-py/     # Python bindings (stub)
 │   ├── hwpforge-bindings-cli/    # CLI 도구 (hwpforge, shipped)
@@ -556,8 +587,8 @@ HwpForge/
 
 - [x] HWP5 읽기/점검/재출력 경로 — `convert-hwp5`, `audit-hwp5`, `census-hwp5`
 - [ ] HWP5 public API 확대 — umbrella crate surface와 broader parity 정리
-- [x] MCP 서버 — Claude, Cursor 등 AI 도구가 tool로 직접 HWPX 생성·검증·편집 (9개 도구 + 4 리소스 + 3 프롬프트)
-- [x] CLI 도구 — `hwpforge convert doc.md doc.hwpx` 한 줄 변환 (11개 명령어: 8 core + 3 HWP5)
+- [x] MCP 서버 — Claude, Cursor 등 AI 도구가 tool로 직접 HWPX 생성·검증·편집 (19개 도구 + 4 리소스 + 3 프롬프트)
+- [x] CLI 도구 — `hwpforge convert doc.md doc.hwpx` 한 줄 변환 (22개 명령어: 19 core + 3 HWP5)
 - [ ] HWPX 완전 지원 — 양식 컨트롤, 변경 추적, OLE 객체
 - [ ] Python 바인딩 — `pip install hwpforge`로 설치, PyPI 배포
 

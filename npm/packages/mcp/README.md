@@ -14,13 +14,27 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 
 ## MCP Tools
 
-| Tool                 | Description                     |
-| -------------------- | ------------------------------- |
-| `hwpforge_convert`   | Markdown to HWPX conversion     |
-| `hwpforge_inspect`   | Inspect HWPX document structure |
-| `hwpforge_to_json`   | Export HWPX to JSON for editing |
-| `hwpforge_patch`     | Apply JSON patches to HWPX      |
-| `hwpforge_templates` | List available style templates  |
+| Tool                   | Description                                            |
+| ---------------------- | ------------------------------------------------------ |
+| `hwpforge_convert`     | Markdown to HWPX conversion                            |
+| `hwpforge_inspect`     | Inspect HWPX document structure                        |
+| `hwpforge_to_json`     | Export HWPX to JSON for editing                        |
+| `hwpforge_from_json`   | Build an HWPX document directly from JSON              |
+| `hwpforge_patch`       | Apply JSON patches to HWPX                             |
+| `hwpforge_outline`     | Navigation map: headings, tables, fields, bookmarks    |
+| `hwpforge_diff`        | Compare two HWPX files (semantic + package channels)   |
+| `hwpforge_delete_para` | Delete top-level paragraphs by index                   |
+| `hwpforge_insert_para` | Insert a paragraph relative to an anchor               |
+| `hwpforge_read`        | Read a targeted paragraph range, table, or field       |
+| `hwpforge_fields`      | List named click-here fields (누름틀)                  |
+| `hwpforge_fill`        | Fill named click-here fields by name → value           |
+| `hwpforge_stamp_plan`  | Discover prose placeholder candidates for stamping     |
+| `hwpforge_stamp`       | Promote placeholders to named click-here fields        |
+| `hwpforge_set_cell`    | Edit table cells by logical grid address               |
+| `hwpforge_validate`    | Validate HWPX structure and integrity                  |
+| `hwpforge_restyle`     | Apply a different style preset to an existing document |
+| `hwpforge_templates`   | List available style templates                         |
+| `hwpforge_to_md`       | Convert HWPX to Markdown                               |
 
 ## Configuration
 

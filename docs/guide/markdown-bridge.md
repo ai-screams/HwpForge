@@ -55,22 +55,36 @@ Markdown 파일 상단에 `---` 블록으로 문서 메타데이터를 지정합
 ---
 title: 문서 제목          # Metadata.title
 author: 작성자 이름        # Metadata.author
-date: 2026-03-06          # Metadata.date (ISO 8601)
-template: government      # 사용할 스타일 템플릿 이름 (옵션)
+date: 2026-03-06          # Metadata.created (ISO 8601)
+template: government      # 파싱되지만 스타일 선택에는 쓰이지 않습니다 (inert)
+metadata:                 # 아래 하위 필드를 담는 중첩 맵
+  subject: 신규 사업 제안   # Metadata.subject
+  keywords:                # Metadata.keywords (YAML 배열)
+    - 사업
+    - 제안
+  modified: 2026-03-10     # Metadata.modified (ISO 8601)
 ---
 ```
 
-지원 필드:
+최상위 필드:
 
-| 필드       | Metadata 필드 | 설명                      |
-| ---------- | ------------- | ------------------------- |
-| `title`    | `title`       | 문서 제목                 |
-| `author`   | `author`      | 작성자                    |
-| `date`     | `created`     | 작성일 (ISO 8601)         |
-| `subject`  | `subject`     | 주제/설명                 |
-| `keywords` | `keywords`    | 검색 키워드 (YAML 배열)   |
-| `modified` | `modified`    | 수정일 (ISO 8601)         |
-| `template` | _(스타일)_    | 스타일 템플릿 이름 (옵션) |
+| 필드       | Metadata 필드 | 설명                                              |
+| ---------- | ------------- | ------------------------------------------------- |
+| `title`    | `title`       | 문서 제목                                         |
+| `author`   | `author`      | 작성자                                            |
+| `date`     | `created`     | 작성일 (ISO 8601)                                 |
+| `template` | _(없음)_      | 파싱되지만 스타일 선택에는 쓰이지 않습니다(inert) |
+| `metadata` | _(중첩 맵)_   | 아래 하위 필드를 담는 컨테이너                    |
+
+`metadata:` 아래의 하위 필드:
+
+| 하위 필드  | Metadata 필드 | 설명                    |
+| ---------- | ------------- | ----------------------- |
+| `subject`  | `subject`     | 주제/설명               |
+| `keywords` | `keywords`    | 검색 키워드 (YAML 배열) |
+| `modified` | `modified`    | 수정일 (ISO 8601)       |
+
+`subject`/`keywords`/`modified`는 반드시 `metadata:` 아래에 중첩해야 합니다 — 최상위에 쓰면 조용히 무시됩니다(`Frontmatter` 구조체가 이 키들을 최상위 필드로 갖지 않고, 모르는 키를 에러로 거부하지도 않기 때문입니다).
 
 Frontmatter 없이도 디코딩이 가능하며, 메타데이터 필드는 빈 값으로 처리됩니다.
 
@@ -105,6 +119,60 @@ assert_eq!(meta.created.as_deref(), Some("2026-03-06"));
 
 두 번째 섹션 — 다른 페이지 설정 가능.
 ```
+
+## 각주 (Footnote) / 미주 (Endnote)
+
+GFM 각주 문법으로 각주와 미주를 표현합니다.
+
+```markdown
+본문에 각주를 답니다.[^1] 미주도 답니다.[^e1]
+
+[^1]: 각주 본문입니다.
+
+[^e1]: 미주 본문입니다.
+```
+
+- `[^라벨]`: 각주 — 관례적으로 숫자를 씁니다(`[^1]`), 하지만 규칙 자체는 아래 미주 형태(`e[0-9]+`)가 아니면 어떤 라벨도 각주로 인정됩니다(예: `[^note]`도 유효한 각주 라벨입니다).
+- `[^eN]` (`e` + 숫자 1개 이상): 미주 — HwpForge dialect의 예약 네임스페이스입니다. 각주 의도로 `[^e1]`을 써도 미주로 정규화됩니다 (lossy 변환입니다).
+- 정의는 여러 문단으로 이어갈 수 있습니다. 첫 문단 다음에 빈 줄을 두고, 이어지는 문단의 모든 줄을 4-space 들여씁니다.
+
+```markdown
+[^1]: 첫 번째 문단.
+
+    두 번째 문단 (4-space 들여쓰기).
+```
+
+`hwpforge to-md`(기본 `styled` 모드)로 HWPX → Markdown 역방향 변환할 때도 각주는 `[^N]`, 미주는 `[^eN]`으로 방출되어 왕복이 보존됩니다. `lossy` 모드는 대신 `(footnote: ...)`/`(endnote: ...)` 형태의 인라인 텍스트로 펼쳐서 출력하므로 이 왕복 규약의 대상이 아닙니다.
+
+## 표 (Table)
+
+GFM 표 문법을 지원합니다.
+
+```markdown
+| 항목 | 값     |
+| ---- | ------ |
+| 이름 | 홍길동 |
+| 부서 | 기획팀 |
+```
+
+표 셀 안에는 링크, 이미지, 각주/미주 참조 등 인라인 요소도 담을 수 있습니다.
+
+## 이미지
+
+```markdown
+![대체 텍스트](images/photo.png)
+```
+
+- 지원 포맷: PNG, JPEG, GIF, BMP, WMF, EMF (SVG는 지원하지 않습니다) — 확장자가 아니라 실제 바이트를 스니핑해 포맷을 확인합니다.
+- 경로(상대·절대 모두)는 정규화한 뒤 **Markdown 파일이 있는 디렉터리 하위에 있는지** 검사합니다. `../`로 그 디렉터리를 벗어나는 경로는 거부되지만, 그 디렉터리 안을 가리키는 절대 경로는 허용됩니다 — 거부되는 것은 "절대 경로"가 아니라 "벗어나는 경로"입니다.
+- `data:` URI(base64)도 지원합니다 — 네트워크 접근 없이 로컬에서 바로 디코드됩니다. 기준 디렉터리가 없는 인라인 텍스트/stdin 입력에서는 `data:` URI만 임베드할 수 있습니다.
+- `http(s)` 원격 URL은 네트워크 접근을 금지하는 정책상 거부됩니다.
+- 실패한 참조(파일 없음·경로 탈출·원격 URL·미지 포맷 등)는 경고와 함께 이미지 run이 드롭됩니다 — 결과 문서에 깨진 참조가 남지 않습니다.
+- 파일 크기 상한은 50MB입니다.
+
+## 구분선과 섹션 구분자
+
+Markdown의 `---`(frontmatter 블록 밖에서 단독으로 쓴 thematic break)는 리터럴 `"---"` 문단으로 변환됩니다 — 페이지나 섹션을 나누는 구분자가 아닙니다. HWPX 섹션(다른 페이지 설정 구역)을 나누려면 반드시 `<!-- hwpforge:section -->` 주석을 사용하세요 (앞의 [섹션 마커](#섹션-마커) 참고).
 
 ## H1-H6 → 개요 1-6 자동 매핑
 
@@ -303,9 +371,16 @@ fn batch_convert(input_dir: &str, output_dir: &str) -> Result<usize, Box<dyn std
 # Markdown → HWPX
 hwpforge convert report.md -o report.hwpx
 
+# HWPX → Markdown
+hwpforge to-md report.hwpx -o report.md
+
+# 변환 모드 선택 (기본값: styled)
+hwpforge to-md report.hwpx -o report.md --mode lossy
+hwpforge to-md report.hwpx -o report.md --mode lossless
+
 # HWPX 구조 확인 후 JSON으로 추출 (Markdown 변환 대안)
 hwpforge inspect document.hwpx --json
 hwpforge to-json document.hwpx -o document.json
 ```
 
-> **참고**: CLI의 `convert` 명령은 현재 Markdown → HWPX 방향만 지원합니다. HWPX → Markdown 변환은 Rust API(`MdEncoder`)를 사용하세요.
+> **참고**: CLI의 `convert` 명령은 Markdown → HWPX 방향만 지원합니다. HWPX → Markdown 변환은 `hwpforge to-md` 명령(모드 `styled`/`lossy`/`lossless`) 또는 Rust API(`MdEncoder`)를 사용하세요.

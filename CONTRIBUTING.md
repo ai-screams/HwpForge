@@ -182,8 +182,8 @@ If any of these apply, call them out in the PR description:
 
 ### Review process
 
-- All PRs require at least one approving review.
-- CI must be green before merge.
+- Branch protection does not require a minimum number of approving reviews (`required_approving_review_count: 0`), but a review is still strongly encouraged before merge.
+- Merge happens through the merge queue only, gated on required status checks (format, clippy, test, docs lint, MSRV, dependency policy, workflow lint, coverage ≥ 90%).
 - Squash merge is the default strategy.
 
 ## Testing
@@ -237,11 +237,11 @@ Documentation changes follow the same review bar as code changes.
 
 ## MSRV Policy
 
-HwpForge maintains an MSRV of **stable minus 4 releases** (currently Rust 1.88).
+The workspace default MSRV follows **stable minus 4 releases** (currently Rust 1.88). `hwpforge-bindings-cli` and `hwpforge-smithy-pdf` require **Rust 1.92+** (krilla dependency) and set their own crate-level `rust-version`, excluded from the 1.88 MSRV CI job and checked separately under `cargo +1.92`.
 
 Rules:
 
-- `rust-version` in `Cargo.toml` is the single source of truth.
+- Each crate's `rust-version` in its own `Cargo.toml` is that crate's actual MSRV.
 - New code that compiles on latest stable but breaks on MSRV is a regression.
 - If a dependency update requires raising MSRV, document the reason in the PR and update `Cargo.toml`, CI, and CHANGELOG together.
 - MSRV bumps are never silent — they require explicit discussion and approval.
