@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.16.5](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.16.4...hwpforge-bindings-mcp-v0.16.5) - 2026-09-16
+
+### Documentation
+
+- 공개 문서를 0.16.4 실측에 맞게 정정 — CLI 22·MCP 19·smithy-pdf·설치 명령·정책 문서
+
+
+### Fixed
+
+- *(bindings-mcp)* rmcp 3.4 에서 deprecated 된 ServerInfo 별칭 대신 InitializeResult 사용
+
+
 ## [0.16.4](https://github.com/ai-screams/HwpForge/compare/hwpforge-bindings-mcp-v0.16.3...hwpforge-bindings-mcp-v0.16.4) - 2026-08-28
 
 ### Fixed
