@@ -12,7 +12,7 @@ publish = false
 readme.workspace = true
 repository.workspace = true
 rust-version.workspace = true
-description = "HWP5 binary format decoder for HwpForge (not yet implemented)"
+description = "HWP5 binary format decoder for HwpForge (HWP5 → Core; workspace-internal, not published)"
 
 [dependencies]
 byteorder = { workspace = true }

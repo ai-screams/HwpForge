@@ -1,6 +1,6 @@
 # 보고서 (Report) 시나리오
 
-> **Note**: This scenario references the `report` preset which is **planned but not yet available**. Use `default` preset until it is implemented.
+> **참고**: `report` 프리셋은 `presets.rs`의 4종 카탈로그(`default`/`modern`/`classic`/`latest`)에 없습니다 — CLI `convert --preset`는 현재 `default`만 허용합니다. 다른 세 카탈로그 이름은 `templates list`/`show`로 조회할 수 있고, CLI `convert`에는 `default`만 연결돼 있습니다(MCP `hwpforge_convert`/`hwpforge_restyle`은 4종 모두 받습니다). 자세한 내용은 [templates.md](templates.md).
 
 ## 표준 구조
 
@@ -35,21 +35,15 @@
 - `####` (H4): 세부 항목
 - 각주: `[^1]` 문법 (변환 시 HWPX 각주로 변환)
 - 이미지: `![대체텍스트](./images/figure1.png)` (상대 경로)
-- `---`: 장 사이 페이지 구분
+- 장 사이를 실제로 나누려면 `<!-- hwpforge:section -->` HTML 주석 사용(`---`는 새 섹션이 아니라 리터럴 텍스트 `"---"`로 본문에 남으므로 쓰지 않음)
 
 ## 프리셋
 
 ```bash
-hwpforge convert report.md -o report.hwpx --preset report
+hwpforge convert report.md -o report.hwpx --preset default
 ```
 
-`report` 프리셋 설정:
-
-- 제목 글꼴: 고딕체 14pt Bold
-- 줄간격: 170%
-- 여백: 위/아래 25mm, 좌/우 30mm
-- 쪽번호: 하단 중앙
-- 용지: A4 세로
+CLI `convert`는 현재 `default` 프리셋만 허용합니다(함초롬돋움 10pt, A4). `templates list`/`show`로 조회되는 `modern`/`classic`/`latest`는 CLI `convert`에는 연결돼 있지 않지만, MCP `hwpforge_convert`와 기존 문서를 다시 꾸미는 MCP `hwpforge_restyle`은 4종 모두 받습니다. 자세한 내용은 [templates.md](templates.md).
 
 ## YAML 프론트매터
 
@@ -58,9 +52,6 @@ hwpforge convert report.md -o report.hwpx --preset report
 title: "AI 활용 공공서비스 품질 향상 방안 연구"
 author: "홍길동, 김철수"
 date: "2026년 3월"
-organization: "(사)한국정보화진흥원"
-report_number: "2026-NIPA-001"
-preset: report
 ---
 ```
 
@@ -91,7 +82,6 @@ HWPX 변환 시 각주 번호가 자동으로 매겨집니다.
 title: "AI 기반 공공서비스 혁신 방안 연구"
 author: "연구책임자: 홍길동 박사"
 date: "2026년 3월"
-preset: report
 ---
 
 # AI 기반 공공서비스 혁신 방안 연구
@@ -99,7 +89,7 @@ preset: report
 **연구책임자**: 홍길동 (○○연구원 선임연구위원)
 **연구기간**: 2025년 6월 ~ 2026년 2월
 
----
+<!-- hwpforge:section -->
 
 ## 요약
 
@@ -112,7 +102,7 @@ preset: report
 - 국민 만족도 지수가 도입 전 대비 23p 상승
 - 연간 운영비용 약 30% 절감 효과 확인
 
----
+<!-- hwpforge:section -->
 
 ## 제1장 서론
 
@@ -142,7 +132,7 @@ preset: report
 - 공간적 범위: 국내 중앙행정기관 및 주요 공공기관
 - 내용적 범위: 민원 처리, 데이터 분석, 의사결정 지원 분야
 
----
+<!-- hwpforge:section -->
 
 ## 제2장 현황 분석
 
@@ -155,7 +145,7 @@ preset: report
 | 에스토니아 | X-Road 기반 전자정부                  | 전 부처 연동     |
 | 한국       | 디지털플랫폼정부 추진                 | 데이터 기반 행정 |
 
----
+<!-- hwpforge:section -->
 
 ## 제4장 결론 및 제언
 
@@ -170,7 +160,7 @@ preset: report
 2. **인력 역량 강화**: 공무원 AI 리터러시 교육 프로그램 의무화
 3. **데이터 거버넌스**: 공공데이터 품질 관리 체계 고도화
 
----
+<!-- hwpforge:section -->
 
 ## 참고문헌
 

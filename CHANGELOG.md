@@ -5,25 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — targeted as `0.10.0`
+## 릴리스 노트 위치 (0.10.0 이후)
 
-### Added — 다단 구분선 `colLine` carry (BREAKING)
+0.10.0 이후 릴리스 노트는 release-plz 가 크레이트별로 생성한다 — 이 루트 파일은 갱신을 멈췄다. 최신 이력은 다음에서 확인:
 
-다단(`ColumnSettings`)에 단 사이 구분선(`<hp:colLine>`)을 carry. 한컴 native wire
-(`type="DOUBLE_SLIM" width="0.7 mm" color="#CA56A7"`)를 byte-exact 재현 + HWPX 양방향
-round-trip + 한컴 시각 게이트(2단+구분선 렌더) 통과.
+- [GitHub Releases](https://github.com/ai-screams/HwpForge/releases) — 버전별 릴리스 노트, canonical
+- 커밋이 귀속된 크레이트별 CHANGELOG (release-plz 는 커밋 없는 크레이트는 건너뛴다): [`hwpforge-core`](https://github.com/ai-screams/HwpForge/blob/main/crates/hwpforge-core/CHANGELOG.md) · [`hwpforge-smithy-hwpx`](https://github.com/ai-screams/HwpForge/blob/main/crates/hwpforge-smithy-hwpx/CHANGELOG.md) · [`hwpforge-smithy-md`](https://github.com/ai-screams/HwpForge/blob/main/crates/hwpforge-smithy-md/CHANGELOG.md) · [`hwpforge-bindings-mcp`](https://github.com/ai-screams/HwpForge/blob/main/crates/hwpforge-bindings-mcp/CHANGELOG.md)
+- umbrella [`crates/hwpforge/CHANGELOG.md`](https://github.com/ai-screams/HwpForge/blob/main/crates/hwpforge/CHANGELOG.md) 는 `0.5.0`(2026-03-22) 이후 갱신이 없다 — 참조하지 말 것
 
-- 신규 public 타입 `hwpforge_core::column::ColumnLine { line_type: BorderLineType,
-  width: HwpUnit, color: Color }` (OWPML 기본값 `SOLID`/`0.12 mm`/`#000000`).
-- `ColumnSettings.col_line: Option<ColumnLine>` 필드 + `ColumnSettings::with_separator()` 빌더.
-- 구분선 없는 다단은 **byte-중립** (`<hp:colPr>` self-closing 유지). 구분선 있을 때만
-  container colPr 로 emit (OWPML 순서: colLine → colSz).
-- HWPX encoder/decoder 양방향. HWP5→HWPX leg(ColDef 구분선 비트 디코드)는 후속 슬라이스.
-
-BREAKING CHANGE: `hwpforge_core::column::ColumnSettings` 에 `col_line: Option<ColumnLine>`
-필드 추가 — struct-literal 로 `ColumnSettings` 를 직접 생성하던 외부 코드는 `col_line` 을
-명시해야 함 (`equal_columns`/`custom` 생성자 사용 시 무영향). 신규 public 타입 `ColumnLine`.
-JSON: 구분선 없으면 `col_line` 키 미직렬화(기존 byte 불변).
+아래는 `0.6.0`~`0.9.0` 수동 관리 이전 이력이다.
 
 ## [0.6.0 – 0.9.0] — 2026-05-29 … 2026-06-28 (released)
 
@@ -459,7 +449,7 @@ HWP5 `ParaShape.property1` bit 25-27 은 3 bits 만 표현 가능 (cap=6).
 #### 검증
 
 - `sample-outline-9levels.hwp` (사용자 작성 native fixture) 변환 결과:
-  - paraPr id 2~8 level 0~6: native parity ✅
+  - paraPr id 2\~8 level 0\~6: native parity ✅
   - paraPr id 18/16/17 level 7/8/9: hp10 namespace switch wrap 없이도
     한컴이 정상 인식 ✅
 - 한컴 시각 검증: 1~7수준 `1./가./1)/가)/(1)/(가)/①`, 8수준 `㉠`,

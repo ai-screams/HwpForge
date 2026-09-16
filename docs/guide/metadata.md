@@ -5,17 +5,23 @@ HwpForge의 모든 문서는 `Metadata` 구조체를 통해 제목, 작성자, �
 ## Metadata 구조체
 
 ```rust
+#[non_exhaustive]
 pub struct Metadata {
-    pub title: Option<String>,      // 문서 제목
-    pub author: Option<String>,     // 작성자
-    pub subject: Option<String>,    // 주제/설명
-    pub keywords: Vec<String>,      // 검색 키워드
-    pub created: Option<String>,    // 작성일 (ISO 8601, 예: "2026-03-06")
-    pub modified: Option<String>,   // 수정일 (ISO 8601)
+    pub title: Option<String>,               // 문서 제목
+    pub author: Option<String>,              // 작성자
+    pub subject: Option<String>,             // 주제/설명
+    pub description: Option<String>,         // 자유 서술 요약 (subject와 별개)
+    pub last_saved_by: Option<String>,       // 마지막으로 저장한 사람 (author와 별개)
+    pub keywords: Vec<String>,               // 검색 키워드
+    pub created: Option<String>,             // 작성일 (ISO 8601, 예: "2026-03-06")
+    pub modified: Option<String>,            // 수정일 (ISO 8601)
+    pub extras: BTreeMap<String, String>,    // 아직 타입 필드로 승격되지 않은 <opf:meta> 등 원본 항목
 }
 ```
 
 모든 필드는 선택적입니다. `Metadata::default()`는 모든 필드가 비어 있는 상태를 반환합니다.
+
+`Metadata`는 `#[non_exhaustive]`입니다 — 향후 버전에서 필드가 추가될 수 있으므로, 구조체 리터럴로 생성할 때는 반드시 `..Default::default()` (또는 `..Metadata::default()`)를 함께 사용해야 합니다.
 
 ## 기존 HWPX 파일에서 메타데이터 읽기
 
@@ -60,11 +66,12 @@ let markdown = r#"---
 title: 분기 보고서
 author: 김철수
 date: 2026-03-06
-subject: 2026년 1분기 경영실적 보고
-keywords:
-  - 분기실적
-  - 경영보고
-modified: 2026-03-10
+metadata:
+  subject: 2026년 1분기 경영실적 보고
+  keywords:
+    - 분기실적
+    - 경영보고
+  modified: 2026-03-10
 ---
 
 # 보고서 본문
@@ -85,17 +92,25 @@ assert_eq!(meta.modified.as_deref(), Some("2026-03-10"));
 
 ### Frontmatter 필드 매핑
 
-| YAML 필드  | Metadata 필드   | 설명               |
-| ---------- | --------------- | ------------------ |
-| `title`    | `title`         | 문서 제목          |
-| `author`   | `author`        | 작성자             |
-| `date`     | `created`       | 작성일 (ISO 8601)  |
-| `subject`  | `subject`       | 주제/설명          |
-| `keywords` | `keywords`      | 검색 키워드 (배열) |
-| `modified` | `modified`      | 수정일 (ISO 8601)  |
-| `template` | _(스타일 선택)_ | 스타일 템플릿 이름 |
+최상위 필드:
 
-`template`은 메타데이터가 아닌 스타일 선택에 사용됩니다.
+| YAML 필드  | Metadata 필드 | 설명                                              |
+| ---------- | ------------- | ------------------------------------------------- |
+| `title`    | `title`       | 문서 제목                                         |
+| `author`   | `author`      | 작성자                                            |
+| `date`     | `created`     | 작성일 (ISO 8601)                                 |
+| `template` | _(없음)_      | 파싱되지만 스타일 선택에는 쓰이지 않습니다(inert) |
+| `metadata` | _(중첩 맵)_   | 아래 하위 필드를 담는 컨테이너                    |
+
+`metadata:` 아래의 하위 필드:
+
+| 하위 필드  | Metadata 필드 | 설명               |
+| ---------- | ------------- | ------------------ |
+| `subject`  | `subject`     | 주제/설명          |
+| `keywords` | `keywords`    | 검색 키워드 (배열) |
+| `modified` | `modified`    | 수정일 (ISO 8601)  |
+
+`subject`/`keywords`/`modified`는 반드시 `metadata:` 아래에 중첩해야 합니다 — 최상위에 쓰면 조용히 무시됩니다.
 
 ## 프로그래밍으로 메타데이터 설정
 

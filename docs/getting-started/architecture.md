@@ -1,6 +1,6 @@
 # 아키텍처 개요
 
-HwpForge는 **대장간(Forge) 메타포**를 기반으로 설계된 계층형 크레이트 구조를 갖습니다.
+HwpForge는 **대장간(Forge) 메타포를** 기반으로 설계된 계층형 크레이트 구조를 갖습니다.
 각 계층은 명확한 역할을 가지며, 상위 계층은 하위 계층에만 의존합니다.
 
 ## Forge 메타포
@@ -12,7 +12,7 @@ HwpForge는 **대장간(Forge) 메타포**를 기반으로 설계된 계층형 �
 | Blueprint (청사진) | YAML 스타일 템플릿          | 피그마 디자인 토큰 |
 | Smithy (대장간)    | 형식별 인코더/디코더        | 용광로와 망치      |
 | Convert (변환)     | 포맷 간 변환 오케스트레이터 | 단조 작업 지휘     |
-| Bindings (바인딩)  | Python, CLI 인터페이스      | 완성된 제품 포장   |
+| Bindings (바인딩)  | Python, CLI, MCP 인터페이스 | 완성된 제품 포장   |
 
 ## 크레이트 의존성 그래프
 
@@ -23,18 +23,21 @@ graph TD
     B --> SH[hwpforge-smithy-hwpx<br/>HWPX 코덱]
     B --> SM[hwpforge-smithy-md<br/>Markdown 코덱]
     C --> S5[hwpforge-smithy-hwp5<br/>HWP5 decode/projection]
-    C --> CONV[hwpforge-convert<br/>HWP5 → HWPX 오케스트레이터]
+    C --> SPDF[hwpforge-smithy-pdf<br/>레이아웃 캐시 재생 렌더러]
+    F --> SPDF
+    C --> CONV["hwpforge-convert<br/>HWP5 → HWPX 오케스트레이터"]
     SH --> CONV
     S5 --> CONV
     SH --> U[hwpforge<br/>umbrella crate]
     SM --> U
-    CONV --> CLI[hwpforge-bindings-cli<br/>CLI (shipped)]
+    CONV --> CLI["hwpforge-bindings-cli<br/>CLI (shipped)"]
     S5 --> CLI
     SH --> CLI
     SM --> CLI
-    SH --> MCP[hwpforge-bindings-mcp<br/>MCP (shipped)]
+    SPDF --> CLI
+    SH --> MCP["hwpforge-bindings-mcp<br/>MCP (shipped)"]
     SM --> MCP
-    SH --> PY[hwpforge-bindings-py<br/>Python (stub)]
+    SH --> PY["hwpforge-bindings-py<br/>Python (stub)"]
 ```
 
 > **규칙**: 의존성은 위에서 아래로만 흐릅니다. `foundation`을 수정하면 모든 크레이트가 재빌드됩니다.
@@ -42,7 +45,7 @@ graph TD
 
 ## 핵심 원칙: 구조와 스타일의 분리
 
-HwpForge는 HTML + CSS의 관계처럼 **문서 구조**와 **스타일 정의**를 완전히 분리합니다.
+HwpForge는 HTML + CSS의 관계처럼 **문서 구조와** **스타일 정의를** 완전히 분리합니다.
 
 ```
 Core (구조)           Blueprint (스타일)
@@ -52,8 +55,8 @@ Paragraph             font: "맑은 고딕"
   runs: [...]         color: #000000
 ```
 
-- **Core**는 스타일 ID(인덱스)만 보유합니다. 실제 글꼴 이름이나 크기를 모릅니다.
-- **Blueprint**는 스타일 정의를 YAML 템플릿으로 관리합니다.
+- **Core는** 스타일 ID(인덱스)만 보유합니다. 실제 글꼴 이름이나 크기를 모릅니다.
+- **Blueprint는** 스타일 정의를 YAML 템플릿으로 관리합니다.
 - **Smithy** 컴파일러가 Core + Blueprint를 조합해 최종 형식을 생성합니다.
 
 이 구조 덕분에 하나의 YAML 템플릿을 여러 문서에 재사용하거나,
@@ -82,7 +85,7 @@ let bytes = hwpforge::hwpx::HwpxEncoder::encode(
 ).unwrap();
 ```
 
-잘못된 상태에서 저장을 시도하면 **런타임 에러가 아닌 컴파일 에러**가 발생합니다.
+잘못된 상태에서 저장을 시도하면 **런타임 에러가 아닌 컴파일 에러가** 발생합니다.
 
 ## 이중 포맷 설계: HWP5 + HWPX
 
@@ -91,7 +94,7 @@ let bytes = hwpforge::hwpx::HwpxEncoder::encode(
 - **HWP5** (`.hwp`): OLE2/CFB 바이너리 컨테이너 + TLV 레코드 (1990년대~현재, 레거시)
 - **HWPX** (`.hwpx`): ZIP 컨테이너 + XML 파일 (KS X 6101 국가 표준, 2014년~현재)
 
-HwpForge는 **Core DOM이 포맷에 독립적**이도록 설계하여 두 포맷을 통합 처리합니다:
+HwpForge는 **Core DOM이 포맷에 독립적이도록** 설계하여 두 포맷을 통합 처리합니다:
 
 ```text
 HWP5 (.hwp)  ──decode──▶ ┌────────────────────┐ ◀──decode── Markdown (.md)

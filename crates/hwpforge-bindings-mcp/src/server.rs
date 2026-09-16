@@ -1003,8 +1003,8 @@ impl HwpForgeServer {
 
 #[tool_handler]
 impl ServerHandler for HwpForgeServer {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo::new(
+    fn get_info(&self) -> InitializeResult {
+        InitializeResult::new(
             ServerCapabilities::builder()
                 .enable_tools()
                 .enable_resources()

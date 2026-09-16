@@ -264,7 +264,8 @@ opening it in 한컴 and checking it visually.** When in doubt, fill placeholder
 ## Korean Markdown Best Practices
 
 See [markdown-guide.md](references/markdown-guide.md): GFM tables, YAML frontmatter
-(`title`, `author`, `date`, `preset`), image paths, `---` as page break, Korean characters.
+(`title`, `author`, `date`, `metadata` with nested `subject`/`keywords`/`modified`), image
+paths, section breaks (`<!-- hwpforge:section -->`), Korean characters.
 
 ## Agent Behavior Rules
 

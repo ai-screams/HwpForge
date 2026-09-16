@@ -4,7 +4,7 @@ HwpForge는 순수 Rust로 작성된 라이브러리입니다. 별도의 시스�
 
 ## 최소 지원 Rust 버전 (MSRV)
 
-**Rust 1.88 이상**이 필요합니다. 현재 버전을 확인하려면:
+**Rust 1.88 이상이** 필요합니다. 현재 버전을 확인하려면:
 
 ```bash
 rustc --version
@@ -22,7 +22,7 @@ rustup update stable
 
 ```toml
 [dependencies]
-hwpforge = "0.1"
+hwpforge = "0.16"
 ```
 
 기본 설치에는 HWPX 인코더/디코더가 포함됩니다.
@@ -41,21 +41,21 @@ HwpForge는 필요한 기능만 선택적으로 활성화할 수 있습니다.
 
 ```toml
 [dependencies]
-hwpforge = "0.1"
+hwpforge = "0.16"
 ```
 
 ### Markdown 변환 포함
 
 ```toml
 [dependencies]
-hwpforge = { version = "0.1", features = ["md"] }
+hwpforge = { version = "0.16", features = ["md"] }
 ```
 
 ### 모든 기능 활성화
 
 ```toml
 [dependencies]
-hwpforge = { version = "0.1", features = ["full"] }
+hwpforge = { version = "0.16", features = ["full"] }
 ```
 
 ## 빌드 확인
@@ -69,7 +69,7 @@ cargo build
 다음과 같이 컴파일이 성공하면 설치가 완료된 것입니다:
 
 ```
-Compiling hwpforge v0.1.0
+Compiling hwpforge v0.16.4
  Finished `dev` profile [unoptimized + debuginfo] target(s) in ...
 ```
 

@@ -4,7 +4,7 @@
 
 | Version | Supported |
 | ------- | --------- |
-| 0.1.x   | Yes       |
+| 0.16.x  | Yes       |
 
 Only the latest release receives security patches.
 Once HwpForge reaches 1.0, this table will expand to cover the last two minor releases.
@@ -38,13 +38,13 @@ Instead, please report them privately:
 
 HwpForge is a document processing library. The following are in scope:
 
-| Area              | Examples                                                                        |
-| ----------------- | ------------------------------------------------------------------------------- |
-| Memory safety     | Buffer overflows, use-after-free (note: the crate is `#![forbid(unsafe_code)]`) |
-| Input parsing     | ZIP bombs, XML entity expansion, malformed HWPX/HWP5 causing panics or hangs    |
-| Path traversal    | Malicious ZIP entries writing outside the target directory                      |
-| Denial of service | Crafted inputs causing unbounded memory or CPU consumption                      |
-| Dependency issues | Known CVEs in transitive dependencies                                           |
+| Area              | Examples                                                                                                                      |
+| ----------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Memory safety     | Buffer overflows, use-after-free (note: `#![deny(unsafe_code)]` is declared in the core crates — see Security Measures below) |
+| Input parsing     | ZIP bombs, XML entity expansion, malformed HWPX/HWP5 causing panics or hangs                                                  |
+| Path traversal    | Malicious ZIP entries writing outside the target directory                                                                    |
+| Denial of service | Crafted inputs causing unbounded memory or CPU consumption                                                                    |
+| Dependency issues | Known CVEs in transitive dependencies                                                                                         |
 
 Out of scope: issues in the Hancom 한글 application itself, or issues that require the attacker to already have arbitrary code execution on the host.
 
@@ -52,7 +52,7 @@ Out of scope: issues in the Hancom 한글 application itself, or issues that req
 
 HwpForge employs the following safeguards:
 
-- **`#![forbid(unsafe_code)]`** across all crates — zero unsafe blocks.
+- **`#![deny(unsafe_code)]`** declared in `hwpforge-core`, `hwpforge-foundation`, `hwpforge-blueprint`, `hwpforge-smithy-hwpx`, `hwpforge-smithy-md`, and `hwpforge-smithy-hwp5`. The remaining six crates (`hwpforge`, `hwpforge-convert`, `hwpforge-bindings-py`, `hwpforge-bindings-cli`, `hwpforge-bindings-mcp`, `hwpforge-smithy-pdf`) do not declare the attribute, but contain no `unsafe` code either — the workspace has zero unsafe blocks in total.
 - **ZIP bomb defense** — 50 MB per entry, 500 MB total, 10,000 entry limit.
 - **`cargo-deny`** — license and advisory audits run in CI (weekly + every PR).
 - **Dependabot** — automated dependency update PRs.

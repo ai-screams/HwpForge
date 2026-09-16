@@ -1,6 +1,6 @@
 # 정부 제안서 (Government Proposal) 시나리오
 
-> **Note**: This scenario references the `government` preset which is **planned but not yet available**. Use `default` preset until it is implemented.
+> **참고**: `government` 프리셋은 `presets.rs`의 4종 카탈로그(`default`/`modern`/`classic`/`latest`)에 없습니다 — CLI `convert --preset`는 현재 `default`만 허용합니다. 다른 세 카탈로그 이름은 `templates list`/`show`로 조회할 수 있고, CLI `convert`에는 `default`만 연결돼 있습니다(MCP `hwpforge_convert`/`hwpforge_restyle`은 4종 모두 받습니다). 자세한 내용은 [templates.md](templates.md).
 
 ## 표준 구조
 
@@ -35,20 +35,15 @@
 - `###` (H3): 절 번호 (`### 1.1 사업 배경`)
 - `####` (H4): 항 번호 (`#### 1.1.1 현황`)
 - GFM 표: 인력 현황, 일정표, 비교표에 사용
-- `---`: 장(chapter) 구분 시 페이지 분리 신호
+- 장(chapter)을 실제로 나누려면 `<!-- hwpforge:section -->` HTML 주석을 사용(`---`는 새 섹션이 아니라 리터럴 텍스트 `"---"`로 본문에 남으므로 쓰지 않음)
 
 ## 프리셋
 
 ```bash
-hwpforge convert proposal.md -o proposal.hwpx --preset government
+hwpforge convert proposal.md -o proposal.hwpx --preset default
 ```
 
-`government` 프리셋 설정:
-
-- 제목 글꼴: 고딕체 16pt Bold
-- 줄간격: 160%
-- 여백: 위/아래 20mm, 좌/우 25mm
-- 용지: A4 세로
+CLI `convert`는 현재 `default` 프리셋만 허용합니다(함초롬돋움 10pt, A4). `templates list`/`show`로 조회되는 `modern`/`classic`/`latest`는 CLI `convert`에는 연결돼 있지 않지만, MCP `hwpforge_convert`와 기존 문서를 다시 꾸미는 MCP `hwpforge_restyle`은 4종 모두 받습니다. 자세한 내용은 [templates.md](templates.md).
 
 ## 예제 마크다운
 
@@ -59,7 +54,6 @@ hwpforge convert proposal.md -o proposal.hwpx --preset government
 title: AI 기반 문서 관리 시스템 구축 사업 제안서
 author: (주)에이아이스크림
 date: 2026-03-09
-preset: government
 ---
 
 # AI 기반 문서 관리 시스템 구축 사업 제안서
@@ -68,7 +62,7 @@ preset: government
 제출일: 2026년 3월 9일
 수신: ○○부 정보화담당관
 
----
+<!-- hwpforge:section -->
 
 ## 1. 사업 이해
 
@@ -89,7 +83,7 @@ preset: government
 | 중복 문서 발생률 | 12%          | 3% 이하     |
 | 연간 처리 건수   | 약 50,000건  | 약 70,000건 |
 
----
+<!-- hwpforge:section -->
 
 ## 2. 수행 방안
 
@@ -114,7 +108,7 @@ preset: government
 - 시맨틱 검색 엔진 도입 (벡터 유사도 기반)
 - 검색 응답 시간: 1초 이내 목표
 
----
+<!-- hwpforge:section -->
 
 ## 3. 수행 조직
 
@@ -127,7 +121,7 @@ preset: government
 | 백엔드 개발 | 이영희 | 6년  | 100%   |
 | QA          | 박민준 | 5년  | 50%    |
 
----
+<!-- hwpforge:section -->
 
 ## 4. 관리 방안
 
