@@ -449,7 +449,7 @@ HWP5 `ParaShape.property1` bit 25-27 은 3 bits 만 표현 가능 (cap=6).
 #### 검증
 
 - `sample-outline-9levels.hwp` (사용자 작성 native fixture) 변환 결과:
-  - paraPr id 2~8 level 0~6: native parity ✅
+  - paraPr id 2\~8 level 0\~6: native parity ✅
   - paraPr id 18/16/17 level 7/8/9: hp10 namespace switch wrap 없이도
     한컴이 정상 인식 ✅
 - 한컴 시각 검증: 1~7수준 `1./가./1)/가)/(1)/(가)/①`, 8수준 `㉠`,

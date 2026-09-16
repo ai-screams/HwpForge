@@ -1,7 +1,7 @@
-# HWPX/HWP5 Wire Gotchas (WG#1~37)
+# HWPX/HWP5 Wire Gotchas (WG#1\~37)
 
 > 이 파일은 CLAUDE.md 로딩 맵에서 필요 시 로드된다 (자동 로드 아님).
-> **상세 내용 (코드 예제 포함)**: `.docs/references/gotchas.md` 는 RG# 독립 번호 (WG#28~30·34~37 = RG#44~50)
+> **상세 내용 (코드 예제 포함)**: `.docs/references/gotchas.md` 는 RG# 독립 번호 (WG#28\~30·34\~37 = RG#44\~50)
 
 1. HWP5 TagID +16 오프셋 — `PARA_HEADER` = 0x42 (66), not 0x32 (50)
 2. landscape 스펙 반전 — `WIDELY`=세로, `NARROWLY`=가로. width/height 교환 금지
