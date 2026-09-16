@@ -5,25 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] — targeted as `0.10.0`
+## 릴리스 노트 위치 (0.10.0 이후)
 
-### Added — 다단 구분선 `colLine` carry (BREAKING)
+0.10.0 이후 릴리스 노트는 release-plz 가 크레이트별로 생성한다 — 이 루트 파일은 갱신을 멈췄다. 최신 이력은 다음에서 확인:
 
-다단(`ColumnSettings`)에 단 사이 구분선(`<hp:colLine>`)을 carry. 한컴 native wire
-(`type="DOUBLE_SLIM" width="0.7 mm" color="#CA56A7"`)를 byte-exact 재현 + HWPX 양방향
-round-trip + 한컴 시각 게이트(2단+구분선 렌더) 통과.
+- umbrella [`crates/hwpforge/CHANGELOG.md`](https://github.com/ai-screams/HwpForge/blob/main/crates/hwpforge/CHANGELOG.md)
+- 크레이트별 [`crates/*/CHANGELOG.md`](https://github.com/ai-screams/HwpForge/tree/main/crates)
+- [GitHub Releases](https://github.com/ai-screams/HwpForge/releases)
 
-- 신규 public 타입 `hwpforge_core::column::ColumnLine { line_type: BorderLineType,
-  width: HwpUnit, color: Color }` (OWPML 기본값 `SOLID`/`0.12 mm`/`#000000`).
-- `ColumnSettings.col_line: Option<ColumnLine>` 필드 + `ColumnSettings::with_separator()` 빌더.
-- 구분선 없는 다단은 **byte-중립** (`<hp:colPr>` self-closing 유지). 구분선 있을 때만
-  container colPr 로 emit (OWPML 순서: colLine → colSz).
-- HWPX encoder/decoder 양방향. HWP5→HWPX leg(ColDef 구분선 비트 디코드)는 후속 슬라이스.
-
-BREAKING CHANGE: `hwpforge_core::column::ColumnSettings` 에 `col_line: Option<ColumnLine>`
-필드 추가 — struct-literal 로 `ColumnSettings` 를 직접 생성하던 외부 코드는 `col_line` 을
-명시해야 함 (`equal_columns`/`custom` 생성자 사용 시 무영향). 신규 public 타입 `ColumnLine`.
-JSON: 구분선 없으면 `col_line` 키 미직렬화(기존 byte 불변).
+## 이전 이력 (수동 관리, 0.6.0~0.9.0)
 
 ## [0.6.0 – 0.9.0] — 2026-05-29 … 2026-06-28 (released)
 

@@ -1,7 +1,7 @@
-# HWPX/HWP5 Wire Gotchas (#1~37)
+# HWPX/HWP5 Wire Gotchas (WG#1~37)
 
 > 이 파일은 CLAUDE.md 로딩 맵에서 필요 시 로드된다 (자동 로드 아님).
-> **상세 내용 (코드 예제 포함)**: `.docs/references/gotchas.md` (43항목)
+> **상세 내용 (코드 예제 포함)**: `.docs/references/gotchas.md` 는 RG# 독립 번호 (WG#28~30·34~37 = RG#44~50)
 
 1. HWP5 TagID +16 오프셋 — `PARA_HEADER` = 0x42 (66), not 0x32 (50)
 2. landscape 스펙 반전 — `WIDELY`=세로, `NARROWLY`=가로. width/height 교환 금지
@@ -32,7 +32,7 @@
 27. ContentType 의미는 RefType-상대적 (Bookmark+Contents = 책갈피 이름, Figure+Contents = 캡션 본문) — invented enum 금지
 28. 도형/글상자 텍스트 **세로정렬 = HWP5 ListHeader 속성 bits 5-6** (`(props>>5)&0x03`, 0/1/2=Top/Center/Bottom). 표 셀 디코드(`smithy-hwp5/src/decoder/section/mod.rs`)가 ground truth — openhwp `(props>>2)`는 우리 wire와 불일치
 29. 도형 drawText `<hp:subList textWidth/textHeight>` = **`0`이 Hancom-정답** (렌더러는 `<hp:sz>`−`<hp:textMargin>`(기본 283)으로 텍스트 영역 계산). 계산값으로 "고치지" 말 것 — 한컴 fixture·KS X 6101 샘플 141 확인
-30. 누름틀(ClickHere) 본문 = `fieldBegin`~`fieldEnd` 사이 평범한 `<hp:t>` (미채움 = 힌트와 동일 문자열). `display_text` 빈 문자열 = 미채움/모호 sentinel — patch 슬롯·redact·fill 이 전부 ClickHere-gated 로 이 불변식 공유. 한컴 재저장은 라벨 run 을 필드 run 에 병합 → run 에 `<hp:t>` 1개일 때만 본문 무모호 귀속 (HxRun 은 자식 순서 미보존)
+30. 누름틀(ClickHere) 본문 = `fieldBegin`~`fieldEnd` 사이 평범한 `<hp:t>` (미채움 = 힌트와 동일 문자열). `display_text` 빈 문자열 = 미채움/모호 sentinel — patch 슬롯·redact·fill 이 전부 ClickHere-gated 로 이 불변식 공유. 한컴 재저장이 라벨 run 을 필드 run 에 병합하는 현상은 여전히 사실이나, W1a 부터 디코드는 문서 순서로 무모호 — `<hp:t>` 1개 조건은 patch 편집 슬롯 전제로만 잔존
 31. HWPX `hp:pos` 음수 offset = **u32 랩어라운드 십진 문자열** (`horzOffset="4294965029"` = −2267) / HWP5 는 signed i32 — 파서는 u32 파싱 후 i32 캐스트 (i32 직파싱은 오버플로우)
 32. 한컴 저작 정규화 3종: API 가 쓴 음수 vertOffset 은 **재저장에서 0 클램프** · **드래그는 앵커 재지정**(가장 가까운 위 문단 + 작은 양수 offset — 음수를 안 씀) · 음수 offset 은 **개체 속성 대화상자 직접 입력만** 저작 가능 (corpus 음수 값의 출처)
 33. HWP5 개체 공통 속성 word(표 70) 비트 배치 = `WIRE_SPEC.md §22.5` (bit0 글자취급 · 3-4 vertRelTo · 8-9 horzRelTo · 21-23 wrap · 24-25 flow — **글자취급 bit0 은 TextBox 컨텍스트에서도 유효**, 컨텍스트별 하드코딩 관례 금지). 앵커 축 census 는 반드시 byte-ground 디코드 후에 — 관례-필터 데이터는 동어반복

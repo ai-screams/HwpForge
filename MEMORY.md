@@ -1,5 +1,7 @@
 # MEMORY.md -- HwpForge Project Knowledge Base
 
+> **DEPRECATED (2026-09-16)** — 이 파일은 2026-06-02 스냅샷(0.6.0)에서 갱신이 멈췄다. 현재 상태 = `.claude/guides/status.md`, 릴리스 이력 = `crates/hwpforge/CHANGELOG.md`. 참조하지 말 것 (삭제 예정).
+>
 > Last Updated: 2026-06-02
 > Code-grounded snapshot. Prefer manifests, entrypoints, and shipped code over roadmap prose.
 

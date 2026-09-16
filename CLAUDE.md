@@ -17,15 +17,16 @@ HwpForge is a Rust library for programmatic control of Korean HWP/HWPX document 
 
 ## 로딩 맵 (필요할 때 읽는다 — 해당 작업 전 필독)
 
-| 상황 (트리거) | 읽을 파일 |
-| --- | --- |
-| 에픽/슬라이스 시작 · 현재 상태 인용 전 | `.claude/guides/status.md` (스냅샷·deferred·lossy·Workspace Facts) |
-| **커밋·푸시·테스트 실행 전** | `.claude/guides/tooling.md` (훅·nextest·lock·디스크 함정) |
-| 새 타입/API 설계 · 테스트 작성 | `.claude/guides/design-patterns.md` (패턴 11종·크레이트 그래프·TDD·레퍼런스) |
-| **HWPX/HWP5 wire 구현·디버깅 전** | `.claude/guides/wire-gotchas.md` (gotcha #1~37; 코드 예제판 = `.docs/references/gotchas.md`) |
-| 릴리스·머지 큐·publish 검증 | `RELEASING.md` (canonical — §8 운영 함정 포함) |
-| 에픽 정식 절차 | `.claude/rules/epic-workflow.md` (자동 로드) |
-| 에이전트 경계/크레이트 규칙 | root `AGENTS.md` → `crates/AGENTS.md` → 크레이트 로컬 |
+| 상황 (트리거)                          | 읽을 파일                                                                                                |
+| -------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| 에픽/슬라이스 시작 · 현재 상태 인용 전 | `.claude/guides/status.md` (스냅샷·deferred·lossy·Workspace Facts)                                       |
+| **커밋·푸시·테스트 실행 전**           | `.claude/guides/tooling.md` (훅·nextest·lock·디스크 함정)                                                |
+| 새 타입/API 설계 · 테스트 작성         | `.claude/guides/design-patterns.md` (패턴 11종·크레이트 그래프·TDD·레퍼런스)                             |
+| **HWPX/HWP5 wire 구현·디버깅 전**      | `.claude/guides/wire-gotchas.md` (WG#1~37; 코드 예제판 = `.docs/references/gotchas.md` (RG#, 번호 독립)) |
+| 릴리스·머지 큐·publish 검증            | `RELEASING.md` (canonical — §8 운영 함정 포함)                                                           |
+| 에픽 정식 절차                         | `.claude/rules/epic-workflow.md` (자동 로드)                                                             |
+| 에이전트 경계/크레이트 규칙            | root `AGENTS.md` → `crates/AGENTS.md` → 크레이트 로컬                                                    |
+| 내부 문서·계획·참조 자료 위치          | `.docs/README.md` (git 밖, 인덱스)                                                                       |
 
 ---
 
@@ -37,7 +38,7 @@ The codebase follows a **blacksmith workshop** metaphor with clear separation of
 Foundation (🔩 primitives)
   → Core (🔨 pure document structure, no style definitions)
   → Blueprint (📐 YAML style templates, centralized like Figma Design Tokens)
-  → Smithy (🔥 format-specific compilers: HWPX, HWP5, Markdown)
+  → Smithy (🔥 format-specific compilers: HWPX, HWP5, Markdown, PDF)
   → Bindings (🐍⚒️🤖 Python/CLI/MCP interfaces)
 ```
 
@@ -51,7 +52,7 @@ This enables:
 
 - One YAML template applied to multiple documents
 - Format-agnostic document manipulation
-- Easy addition of new formats (smithy-odt, smithy-pdf, etc.)
+- Easy addition of new formats — smithy-pdf is a real, shipped example (0.12.0+); smithy-odt remains a hypothetical one
 
 ---
 

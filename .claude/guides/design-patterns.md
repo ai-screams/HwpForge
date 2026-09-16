@@ -11,18 +11,24 @@ core (foundation only)
     ↓
 blueprint (foundation + core)
     ↓
-smithy-hwpx, smithy-md (foundation + core + blueprint) · smithy-hwp5 (foundation + core only)
+smithy-hwpx, smithy-md (foundation + core + blueprint) · smithy-hwp5, smithy-pdf (foundation + core only)
     ↓
 convert (core + foundation + smithy-hwp5 + smithy-hwpx — HWP5→HWPX 오케스트레이터)
     ↓
-bindings-py, bindings-cli (+ convert), bindings-mcp
+bindings-py, bindings-cli (+ convert, + smithy-pdf), bindings-mcp
 ```
 
 **Important**: Foundation is the root. If you modify foundation, ALL crates rebuild. Keep it minimal.
 
+### Dependency hygiene
+
+Foundation 의존성은 최소화한다 — 불필요한 dependency 추가 금지 (Phase 0 Oracle 리뷰에서 미사용 의존성 3개 제거 사례, RG#28 참조).
+
 ---
 
 ## Critical Design Patterns
+
+> 이 목록의 번호는 `DP#n` 으로 인용한다 (예: DP#8) — `wire-gotchas.md`(WG#n)·`.docs/references/gotchas.md`(RG#n) 와 번호 체계가 독립이다.
 
 ### 1. Color is BGR (NOT RGB!)
 
@@ -197,13 +203,13 @@ These were planned but **removed as unnecessary** (keep it simple):
 
 When implementing HWPX:
 
-- openhwp/docs/hwpx/ (9,054 lines) — **KS X 6101 spec in markdown**
+- `.docs/references/openhwp/docs/hwpx/` (9,054 lines) — **KS X 6101 spec in markdown**
 - No need to buy KS X 6101 standard document
 
 When implementing HWP5:
 
 - `.docs/research/ANALYSIS_hwpers.md` — Rust HWP5 patterns
-- HWP_5_0_FORMAT_COMPLETE_GUIDE.md — 6 critical gotchas
+- `.docs/references/HWP_5_0_FORMAT_COMPLETE_GUIDE.md` — 6 critical gotchas
 
 When designing APIs:
 
