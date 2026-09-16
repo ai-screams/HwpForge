@@ -52,7 +52,7 @@ This enables:
 
 - One YAML template applied to multiple documents
 - Format-agnostic document manipulation
-- Easy addition of new formats — smithy-pdf is a real, shipped example (0.12.0+); smithy-odt remains a hypothetical one
+- Easy addition of new formats — smithy-pdf is a real, shipped example (0.12.1+); smithy-odt remains a hypothetical one
 
 ---
 

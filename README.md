@@ -9,7 +9,7 @@
 ![CI](https://img.shields.io/github/actions/workflow/status/ai-screams/HwpForge/ci.yml?branch=main\&label=CI\&logo=github)
 ![codecov](https://img.shields.io/badge/coverage-90.4%25-brightgreen.svg?logo=codecov)
 ![Tests](https://img.shields.io/badge/tests-3%2C476_passed-success.svg?logo=checkmarx)
-![unsafe forbidden](https://img.shields.io/badge/unsafe-forbidden-success.svg?logo=rust)
+![unsafe: 0 blocks](https://img.shields.io/badge/unsafe-0_blocks-success.svg?logo=rust)
 ![Lines of Code](https://img.shields.io/badge/LOC-~114%2C421-informational.svg)
 
 ![crates.io](https://img.shields.io/crates/v/hwpforge.svg?logo=rust)
@@ -84,9 +84,7 @@ hwpforge = "0.16"
 
 ### 🔨 Hammer — CLI로 시작하기
 
-CLI 도구 `hwpforge`(Hammer)를 설치하면 터미널에서 바로 문서를 생성하고 편집할 수 있습니다.
-`hwpforge-bindings-cli`는 crates.io에 배포되지 않으므로(`publish = false`), git 또는 로컬 경로에서 설치합니다.
-`hwpforge-smithy-pdf`(krilla) 의존으로 워크스페이스 MSRV(1.88)보다 높은 **Rust 1.92+가** 필요합니다.
+CLI 도구 `hwpforge`(Hammer)를 설치하면 터미널에서 바로 문서를 생성하고 편집할 수 있습니다. `hwpforge-bindings-cli`는 crates.io에 배포되지 않으므로(`publish = false`), git 또는 로컬 경로에서 설치합니다. `hwpforge-smithy-pdf`(krilla) 의존으로 워크스페이스 MSRV(1.88)보다 높은 **Rust 1.92+가** 필요합니다.
 
 ```cpp
 cargo install --git https://github.com/ai-screams/HwpForge hwpforge-bindings-cli
@@ -559,7 +557,7 @@ HwpForge/
 │   ├── hwpforge-smithy-hwpx/     # HWPX codec (ZIP+XML ↔ Core)
 │   ├── hwpforge-smithy-md/       # Markdown codec (MD ↔ Core)
 │   ├── hwpforge-smithy-hwp5/     # HWP5 decode/projection + inspect helpers
-│   ├── hwpforge-smithy-pdf/      # PDF codec (조판 캐시 재생 렌더러, to-pdf 가 사용)
+│   ├── hwpforge-smithy-pdf/      # PDF 렌더러 (조판 캐시 재생 렌더러, to-pdf 가 사용)
 │   ├── hwpforge-convert/         # 포맷 간 변환 오케스트레이터 (HWP5 → HWPX)
 │   ├── hwpforge-bindings-py/     # Python bindings (stub)
 │   ├── hwpforge-bindings-cli/    # CLI 도구 (hwpforge, shipped)

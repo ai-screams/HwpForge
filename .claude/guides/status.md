@@ -17,7 +17,7 @@
 - **각주/미주 MD 브리지 에픽 완주** (2026-08-27~28, **`0.16.4`**): `[^N]`/`[^eN]` 양방향 왕복 (다문단·명명 라벨·표 셀·인라인 서식) + autoNum 번호 머리(**대칭 쌍 계약** — WG#34) + 편집 표면 fail-closed. 한컴 native fixture F1~F7 게이트 · 시각 게이트 3회 · 적대 리뷰 8라운드 수렴. 에픽 canonical = `.docs/planning/2026-08-27-footnote-endnote-md-bridge.md` (HITL 4건 백로그: ON_SECTION 정책·note format 승격·validate 값 범위·편집기 warning API).
 
 > **이 섹션은 짧은 상태 스냅샷으로만 유지한다 (wave-by-wave 이력을 여기 다시 쌓지 말 것).**
-> Wave별 상세 이력 + breaking change: umbrella **`crates/hwpforge/CHANGELOG.md`**(release-plz, canonical) + 크레이트별 `crates/*/CHANGELOG.md` + GitHub Releases (루트 `CHANGELOG.md` 는 0.9.0 이후 정지 — 참조하지 말 것) 와 memory `MEMORY.md` / `phase11_wave_history.md`.
+> Wave별 상세 이력 + breaking change: [GitHub Releases](https://github.com/ai-screams/HwpForge/releases) + 커밋이 귀속된 크레이트별 `crates/*/CHANGELOG.md`(canonical — `hwpforge-core`·`hwpforge-smithy-hwpx`·`hwpforge-smithy-md`·`hwpforge-bindings-mcp` 등, release-plz 는 커밋 없는 크레이트는 건너뛴다) 와 Claude auto-memory `MEMORY.md` / `phase11_wave_history.md`. umbrella `crates/hwpforge/CHANGELOG.md` 는 `0.5.0`(2026-03-22) 이후 갱신이 없다 — 참조하지 말 것 (루트 `CHANGELOG.md` 도 0.9.0 이후 정지).
 > Enum/wire 레이아웃 표 (번호·쪽번호·이미지채우기·대각선 등): **`crates/hwpforge-smithy-hwp5/HWP5_WIRE_SPEC.md`** (특히 §22).
 
 **Still-deferred (Windows 한컴 fixture 대기)**:
@@ -31,7 +31,7 @@
 
 **Workspace Facts** (code-grounded — 카운트는 drift하니 인용 전 확인):
 
-- Cargo packages `12` (smithy-pdf 포함) · crates.io published `0.16.4` (각주/미주 MD 브리지, 2026-08-28) · MSRV `1.88` · Dev toolchain Rust `1.93`
+- Cargo packages `12` (smithy-pdf 포함) · crates.io published `0.16.4` (각주/미주 MD 브리지, 2026-08-28) · MSRV `1.88` (bindings-cli·smithy-pdf 는 krilla 로 `1.92`) · Dev toolchain Rust `1.93`
 - `crates/` 추적 src 파일 ~`228` · nextest(make ci) ~`3,476` passed + `14` skipped · `examples/` 산출물 `68`+ (미추적 `examples/hwp5_review/` 리뷰 영역 별도 — gitignore 아님) · GitHub workflows `5`
 
 ---
@@ -44,7 +44,7 @@
 - Table integration gates are concentrated in `crates/hwpforge-bindings-cli/tests/cli_integration.rs`.
 - Stress or real-world table fixtures are not the same thing as committed regression gates.
 - colLine (다단 구분선) HWPX + HWP5→HWPX legs shipped in `0.10.0` (PR #91, 2026-07-02).
-- **Nightly › Fuzz Build 복구됨** (PR #101, 2026-07-19 — 2026-06-29부터 실패했었음): 원인 2겹 = ① prebuilt cargo-fuzz 가 musl 을 기본 타깃으로 골라 ASAN 과 충돌 → `security.yml` 에 `--target x86_64-unknown-linux-gnu` 명시 ② fuzz 타깃 bit-rot (`hwp5_to_hwpx_bytes` 가 convert 크레이트로 이사). fuzz/ 는 standalone 워크스페이스라 메인 CI 가 컴파일을 안 잡음 — API 이동 시 fuzz 타깃도 함께 갱신할 것.
+- **Nightly › Fuzz Build 복구됨** (PR #101, 2026-07-19 — 2026-06-29부터 실패했었음): 원인 2겹 = (1) prebuilt cargo-fuzz 가 musl 을 기본 타깃으로 골라 ASAN 과 충돌 → `security.yml` 에 `--target x86_64-unknown-linux-gnu` 명시 (2) fuzz 타깃 bit-rot (`hwp5_to_hwpx_bytes` 가 convert 크레이트로 이사). fuzz/ 는 standalone 워크스페이스라 메인 CI 가 컴파일을 안 잡음 — API 이동 시 fuzz 타깃도 함께 갱신할 것.
 - Always confirm `main` state from code + manifests + git; do not trust stale branch prose.
 
 ---

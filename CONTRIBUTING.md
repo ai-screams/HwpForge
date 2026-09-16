@@ -237,7 +237,7 @@ Documentation changes follow the same review bar as code changes.
 
 ## MSRV Policy
 
-The workspace default MSRV follows **stable minus 4 releases** (currently Rust 1.88). `hwpforge-bindings-cli` and `hwpforge-smithy-pdf` require **Rust 1.92+** (krilla dependency) and set their own crate-level `rust-version`, excluded from the 1.88 MSRV CI job and checked separately under `cargo +1.92`.
+The workspace default MSRV follows **stable minus 4 releases** (currently Rust 1.88). `hwpforge-bindings-cli` and `hwpforge-smithy-pdf` require **Rust 1.92+** (krilla dependency) and set their own crate-level `rust-version`; the `Verify › MSRV (1.88)` CI job excludes both crates from the 1.88 pass, then checks them separately in the same job with `cargo +1.92 check`.
 
 Rules:
 

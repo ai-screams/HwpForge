@@ -25,19 +25,19 @@ graph TD
     C --> S5[hwpforge-smithy-hwp5<br/>HWP5 decode/projection]
     C --> SPDF[hwpforge-smithy-pdf<br/>레이아웃 캐시 재생 렌더러]
     F --> SPDF
-    C --> CONV[hwpforge-convert<br/>HWP5 → HWPX 오케스트레이터]
+    C --> CONV["hwpforge-convert<br/>HWP5 → HWPX 오케스트레이터"]
     SH --> CONV
     S5 --> CONV
     SH --> U[hwpforge<br/>umbrella crate]
     SM --> U
-    CONV --> CLI[hwpforge-bindings-cli<br/>CLI (shipped)]
+    CONV --> CLI["hwpforge-bindings-cli<br/>CLI (shipped)"]
     S5 --> CLI
     SH --> CLI
     SM --> CLI
     SPDF --> CLI
-    SH --> MCP[hwpforge-bindings-mcp<br/>MCP (shipped)]
+    SH --> MCP["hwpforge-bindings-mcp<br/>MCP (shipped)"]
     SM --> MCP
-    SH --> PY[hwpforge-bindings-py<br/>Python (stub)]
+    SH --> PY["hwpforge-bindings-py<br/>Python (stub)"]
 ```
 
 > **규칙**: 의존성은 위에서 아래로만 흐릅니다. `foundation`을 수정하면 모든 크레이트가 재빌드됩니다.

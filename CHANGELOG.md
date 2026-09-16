@@ -9,11 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 0.10.0 이후 릴리스 노트는 release-plz 가 크레이트별로 생성한다 — 이 루트 파일은 갱신을 멈췄다. 최신 이력은 다음에서 확인:
 
-- umbrella [`crates/hwpforge/CHANGELOG.md`](https://github.com/ai-screams/HwpForge/blob/main/crates/hwpforge/CHANGELOG.md)
-- 크레이트별 [`crates/*/CHANGELOG.md`](https://github.com/ai-screams/HwpForge/tree/main/crates)
-- [GitHub Releases](https://github.com/ai-screams/HwpForge/releases)
+- [GitHub Releases](https://github.com/ai-screams/HwpForge/releases) — 버전별 릴리스 노트, canonical
+- 커밋이 귀속된 크레이트별 CHANGELOG (release-plz 는 커밋 없는 크레이트는 건너뛴다): [`hwpforge-core`](https://github.com/ai-screams/HwpForge/blob/main/crates/hwpforge-core/CHANGELOG.md) · [`hwpforge-smithy-hwpx`](https://github.com/ai-screams/HwpForge/blob/main/crates/hwpforge-smithy-hwpx/CHANGELOG.md) · [`hwpforge-smithy-md`](https://github.com/ai-screams/HwpForge/blob/main/crates/hwpforge-smithy-md/CHANGELOG.md) · [`hwpforge-bindings-mcp`](https://github.com/ai-screams/HwpForge/blob/main/crates/hwpforge-bindings-mcp/CHANGELOG.md)
+- umbrella [`crates/hwpforge/CHANGELOG.md`](https://github.com/ai-screams/HwpForge/blob/main/crates/hwpforge/CHANGELOG.md) 는 `0.5.0`(2026-03-22) 이후 갱신이 없다 — 참조하지 말 것
 
-## 이전 이력 (수동 관리, 0.6.0~0.9.0)
+아래는 `0.6.0`~`0.9.0` 수동 관리 이전 이력이다.
 
 ## [0.6.0 – 0.9.0] — 2026-05-29 … 2026-06-28 (released)
 
