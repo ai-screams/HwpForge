@@ -1,6 +1,6 @@
 # 공문서 (Official Document) 시나리오
 
-> **Note**: This scenario references the `official` preset which is **planned but not yet available**. Use `default` preset until it is implemented.
+> **참고**: `official` 프리셋은 `presets.rs`의 4종 카탈로그(`default`/`modern`/`classic`/`latest`)에 없습니다 — CLI `convert --preset`는 현재 `default`만 허용합니다. 다른 세 카탈로그 이름은 `templates list`/`show`로 조회할 수 있고, CLI `convert`에는 `default`만 연결돼 있습니다(MCP `hwpforge_convert`/`hwpforge_restyle`은 4종 모두 받습니다). 자세한 내용은 [templates.md](templates.md).
 
 ## 표준 구조
 
@@ -52,28 +52,17 @@
 ## 프리셋
 
 ```bash
-hwpforge convert official.md -o official.hwpx --preset official
+hwpforge convert official.md -o official.hwpx --preset default
 ```
 
-`official` 프리셋 설정:
-
-- 제목 글꼴: 고딕체 12pt Bold
-- 줄간격: 180%
-- 여백: 위 30mm, 아래 15mm, 좌/우 20mm
-- 쪽번호: 없음 (공문서 표준)
-- 용지: A4 세로
+CLI `convert`는 현재 `default` 프리셋만 허용합니다(함초롬돋움 10pt, A4). `templates list`/`show`로 조회되는 `modern`/`classic`/`latest`는 CLI `convert`에는 연결돼 있지 않지만, MCP `hwpforge_convert`와 기존 문서를 다시 꾸미는 MCP `hwpforge_restyle`은 4종 모두 받습니다. 자세한 내용은 [templates.md](templates.md).
 
 ## YAML 프론트매터
 
 ```yaml
 ---
 title: "AI 도입 사업 협조 요청"
-sender: "○○부 정보화담당관"
-receiver: "각 소속기관장"
-reference: "○○부장관"
-doc_number: "정보화담당관-2026-123"
 date: "2026. 3. 9."
-preset: official
 ---
 ```
 
@@ -82,11 +71,7 @@ preset: official
 ```markdown
 ---
 title: "AI 기반 문서 관리 시스템 도입 협조 요청"
-sender: "행정안전부 디지털정부국장"
-receiver: "각 중앙행정기관장"
-doc_number: "디지털정부국-2026-456"
 date: "2026. 3. 9."
-preset: official
 ---
 
 행정안전부 디지털정부국

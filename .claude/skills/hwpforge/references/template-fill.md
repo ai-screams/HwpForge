@@ -25,6 +25,8 @@ hwpforge convert-hwp5 template.hwp -o template.hwpx
 
 ## Recipe A — fill placeholders (text-only, recommended)
 
+> If the template has named click-here fields (누름틀), check `hwpforge fields template.hwpx` first — if it lists fillable fields, use `fill --set` instead of the JSON round-trip below (cheaper and safer; see SKILL.md's decision tree).
+
 ```bash
 # 1. Learn the structure
 hwpforge inspect template.hwpx --json        # how many sections, where the tables are
