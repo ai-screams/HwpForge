@@ -152,6 +152,22 @@ impl Paragraph {
         }
     }
 
+    /// [`Self::for_each_paragraph_mut`] 의 불변 쌍둥이 — 방문 순서 동일.
+    pub fn for_each_paragraph<F: FnMut(&Paragraph)>(&self, mut f: F) {
+        self.walk_paragraphs(&mut f);
+    }
+
+    /// [`Self::for_each_paragraph`] 의 내부 재귀 본체 (dyn 으로 단형화 제한).
+    ///
+    /// [`Self::walk_paragraphs_mut`] 와 같이 **자신을 먼저** 방문한 뒤 run
+    /// 내용물로 재귀한다 (pre-order).
+    pub(crate) fn walk_paragraphs(&self, f: &mut dyn FnMut(&Paragraph)) {
+        f(self);
+        for run in &self.runs {
+            run.walk_paragraphs(f);
+        }
+    }
+
     /// Appends a run to this paragraph.
     ///
     /// # Examples

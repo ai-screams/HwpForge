@@ -213,6 +213,38 @@ impl Document<Draft> {
         }
     }
 
+    /// [`Self::for_each_paragraph_mut`] 의 불변 쌍둥이 — **방문 순서와 재귀
+    /// 대상이 완전히 같다**.
+    ///
+    /// 문서를 바꾸지 않고 훑기만 하는 호출자(자산 계획 수집·통계·검증)를
+    /// 위한 것이다. 순서가 같아야 두 순회를 같은 문단 번호로 짝지을 수
+    /// 있으므로, 한쪽만 고치면 안 된다 —
+    /// `layout::tests::immutable_walker_matches_the_mutable_one` 이 잠근다.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::document::Document;
+    /// use hwpforge_core::page::PageSettings;
+    /// use hwpforge_core::paragraph::Paragraph;
+    /// use hwpforge_core::section::Section;
+    /// use hwpforge_foundation::ParaShapeIndex;
+    ///
+    /// let mut doc = Document::new();
+    /// doc.add_section(Section::with_paragraphs(
+    ///     vec![Paragraph::new(ParaShapeIndex::new(0))],
+    ///     PageSettings::a4(),
+    /// ));
+    /// let mut count = 0;
+    /// doc.for_each_paragraph(|_| count += 1);
+    /// assert_eq!(count, 1);
+    /// ```
+    pub fn for_each_paragraph<F: FnMut(&Paragraph)>(&self, mut f: F) {
+        for section in &self.sections {
+            section.walk_paragraphs(&mut f);
+        }
+    }
+
     /// 모든 문단의 줄 조판 캐시([`Paragraph::layout_cache`])를 제거한다.
     ///
     /// 문서 동등성 비교(admission/golden)의 정규화 단계: 네이티브 입력은

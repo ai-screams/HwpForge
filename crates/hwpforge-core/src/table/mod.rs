@@ -226,6 +226,21 @@ impl Table {
         }
     }
 
+    /// [`Self::walk_paragraphs_mut`] 의 불변 쌍둥이 — 방문 순서 동일
+    /// (행 → 셀 → 셀 문단, 그다음 캡션).
+    pub(crate) fn walk_paragraphs(&self, f: &mut dyn FnMut(&crate::paragraph::Paragraph)) {
+        for row in &self.rows {
+            for cell in &row.cells {
+                for p in &cell.paragraphs {
+                    p.walk_paragraphs(f);
+                }
+            }
+        }
+        if let Some(caption) = &self.caption {
+            caption.walk_paragraphs(f);
+        }
+    }
+
     /// Sets an explicit table width.
     #[must_use]
     pub fn with_width(mut self, width: HwpUnit) -> Self {

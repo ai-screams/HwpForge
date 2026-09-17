@@ -854,6 +854,75 @@ impl Control {
         }
     }
 
+    /// [`Self::walk_paragraphs_mut`] 의 불변 쌍둥이 — 방문 순서와 재귀
+    /// 대상이 완전히 같다.
+    ///
+    /// 가변판과 마찬가지로 와일드카드가 없다 — 새 variant 가 문단을 담게
+    /// 되면 **두 match 가 함께** 컴파일 에러로 강제된다 (순회 완전성 보장).
+    pub(crate) fn walk_paragraphs(&self, f: &mut dyn FnMut(&crate::paragraph::Paragraph)) {
+        fn walk_vec(
+            paragraphs: &[crate::paragraph::Paragraph],
+            f: &mut dyn FnMut(&crate::paragraph::Paragraph),
+        ) {
+            for p in paragraphs {
+                p.walk_paragraphs(f);
+            }
+        }
+        fn walk_caption(
+            caption: &Option<Caption>,
+            f: &mut dyn FnMut(&crate::paragraph::Paragraph),
+        ) {
+            if let Some(c) = caption {
+                c.walk_paragraphs(f);
+            }
+        }
+        match self {
+            Self::TextBox { paragraphs, caption, .. }
+            | Self::Ellipse { paragraphs, caption, .. }
+            | Self::Polygon { paragraphs, caption, .. } => {
+                walk_vec(paragraphs, f);
+                walk_caption(caption, f);
+            }
+            Self::Footnote { paragraphs, .. } | Self::Endnote { paragraphs, .. } => {
+                walk_vec(paragraphs, f);
+            }
+            Self::Line { caption, .. }
+            | Self::Rect { caption, .. }
+            | Self::Arc { caption, .. }
+            | Self::Curve { caption, .. }
+            | Self::ConnectLine { caption, .. } => walk_caption(caption, f),
+            Self::Group { children, .. } => {
+                for child in children {
+                    child.walk_paragraphs(f);
+                }
+            }
+            Self::Memo { content, anchor_runs, .. } => {
+                walk_vec(content, f);
+                for run in anchor_runs {
+                    run.walk_paragraphs(f);
+                }
+            }
+            Self::Hyperlink { .. }
+            | Self::EmbeddedChart { .. }
+            | Self::Equation { .. }
+            | Self::Chart { .. }
+            | Self::Dutmal { .. }
+            | Self::Compose { .. }
+            | Self::TextArt { .. }
+            | Self::Bookmark { .. }
+            | Self::CrossRef { .. }
+            | Self::Field { .. }
+            | Self::IndexMark { .. }
+            | Self::UnknownSummary { .. }
+            | Self::DateCodeField { .. }
+            | Self::PathField { .. }
+            | Self::InlinePageNumber { .. }
+            | Self::NewNumber { .. }
+            | Self::PageHiding { .. }
+            | Self::Unknown { .. } => {}
+        }
+    }
+
     /// Returns the stable snake_case name of this control's kind.
     ///
     /// Read/diff projections use this to label embedded content without

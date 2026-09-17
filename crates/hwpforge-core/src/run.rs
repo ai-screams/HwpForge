@@ -71,6 +71,19 @@ impl Run {
         }
     }
 
+    /// [`Self::walk_paragraphs_mut`] 의 불변 쌍둥이 — 재귀 대상 동일.
+    ///
+    /// [`RunContent::Image`] 안으로는 재귀하지 않는다 (이미지 캡션 문단은
+    /// 방문 대상이 아니다) — 가변판과 같은 선택이므로 두 순회의 문단
+    /// 번호가 일치한다.
+    pub(crate) fn walk_paragraphs(&self, f: &mut dyn FnMut(&crate::paragraph::Paragraph)) {
+        match &self.content {
+            RunContent::Table(table) => table.walk_paragraphs(f),
+            RunContent::Control(control) => control.walk_paragraphs(f),
+            RunContent::Text(_) | RunContent::InlineText(_) | RunContent::Image(_) => {}
+        }
+    }
+
     /// Creates a text run.
     ///
     /// This is the most common constructor. Most runs in a typical
