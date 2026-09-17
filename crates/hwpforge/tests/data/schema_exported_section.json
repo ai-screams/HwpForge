@@ -1,0 +1,4425 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExportedSection",
+  "description": "Section-only export for targeted editing.\n\nProduced by `to-json --section N` and consumed by `patch`.",
+  "type": "object",
+  "properties": {
+    "section_index": {
+      "description": "Which section index this was extracted from.",
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "section": {
+      "description": "The section data.",
+      "$ref": "#/$defs/Section"
+    },
+    "preservation": {
+      "description": "Optional preservation metadata for byte-preserving section patching.",
+      "anyOf": [
+        {
+          "$ref": "#/$defs/SectionPreservation"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "section_index",
+    "section"
+  ],
+  "$defs": {
+    "Section": {
+      "description": "A document section: paragraphs + page geometry.\n\n# Examples\n\n```\nuse hwpforge_core::section::Section;\nuse hwpforge_core::PageSettings;\nuse hwpforge_core::paragraph::Paragraph;\nuse hwpforge_foundation::ParaShapeIndex;\n\nlet section = Section::with_paragraphs(\n    vec![Paragraph::new(ParaShapeIndex::new(0))],\n    PageSettings::a4(),\n);\nassert_eq!(section.paragraph_count(), 1);\n```",
+      "type": "object",
+      "properties": {
+        "paragraphs": {
+          "description": "Ordered paragraphs in this section.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Paragraph"
+          }
+        },
+        "page_settings": {
+          "description": "Page dimensions and margins for this section.",
+          "$ref": "#/$defs/PageSettings"
+        },
+        "headers": {
+          "description": "Headers for this section, ordered as in HWPX wire (`<hp:header>` × N).\n\nHWPX allows multiple `<hp:header>` elements in a single section,\ndifferentiated by `applyPageType` (`BOTH` / `ODD` / `EVEN`). HWP5\nstores the same information as multiple `head` ctrl records.\nEmpty `Vec` = \"no header on this section\". See\n[ADR-002](../../../.docs/architecture/adr/ADR-002-section-multi-header-footer-cardinality.md)\nfor the cardinality decision.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HeaderFooter"
+          }
+        },
+        "footers": {
+          "description": "Footers for this section, ordered as in HWPX wire (`<hp:footer>` × N).\nSee `headers` for the cardinality rationale.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HeaderFooter"
+          }
+        },
+        "page_number": {
+          "description": "Optional page number settings for this section.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PageNumber"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "column_settings": {
+          "description": "Multi-column layout. `None` = single column (default).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ColumnSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "visibility": {
+          "description": "Visibility flags for headers, footers, borders, etc.\n`None` = default visibility (show everything).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Visibility"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "line_number_shape": {
+          "description": "Line numbering settings. `None` = no line numbers.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LineNumberShape"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "page_border_fills": {
+          "description": "Page border/fill entries. `None` = default 3 entries (BOTH/EVEN/ODD with borderFillIDRef=1).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/PageBorderFillEntry"
+          }
+        },
+        "master_pages": {
+          "description": "Master pages (background content rendered behind the body).\n`None` = no master pages (default).",
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "$ref": "#/$defs/MasterPage"
+          }
+        },
+        "begin_num": {
+          "description": "Starting numbers for auto-numbering sequences.\n`None` = default values (all start at 1).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BeginNum"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "text_direction": {
+          "description": "Text writing direction for this section.\nDefaults to [`TextDirection::Horizontal`] (가로쓰기).",
+          "$ref": "#/$defs/TextDirection",
+          "default": "Horizontal"
+        }
+      },
+      "required": [
+        "paragraphs",
+        "page_settings"
+      ]
+    },
+    "Paragraph": {
+      "description": "A paragraph: an ordered sequence of runs sharing a paragraph shape.\n\n# Examples\n\n```\nuse hwpforge_core::paragraph::Paragraph;\nuse hwpforge_core::run::Run;\nuse hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};\n\nlet para = Paragraph::with_runs(\n    vec![Run::text(\"Hello\", CharShapeIndex::new(0))],\n    ParaShapeIndex::new(0),\n);\nassert_eq!(para.run_count(), 1);\nassert!(!para.is_empty());\n```",
+      "type": "object",
+      "properties": {
+        "runs": {
+          "description": "Ordered sequence of runs.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Run"
+          }
+        },
+        "para_shape_id": {
+          "description": "Index into the paragraph shape collection (Blueprint resolves this).",
+          "$ref": "#/$defs/Index"
+        },
+        "column_break": {
+          "description": "Whether this paragraph starts a new column (HWPX `columnBreak=\"1\"`).",
+          "type": "boolean",
+          "default": false
+        },
+        "page_break": {
+          "description": "Whether this paragraph starts a new page (HWPX `pageBreak=\"1\"`).",
+          "type": "boolean",
+          "default": false
+        },
+        "heading_level": {
+          "description": "Optional heading level (1-7) for TOC participation.\nMaps to 개요 1-7 styles. Paragraphs with a heading level\nwill emit `<hp:titleMark>` in HWPX for auto-TOC support.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "style_id": {
+          "description": "Optional reference to a named style (e.g. 개요 1, 본문).\n`None` means 바탕글 (style 0, the default).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Index"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "layout_cache": {
+          "description": "Hancom 이 저장한 줄 조판 캐시 (decode-only 승격).\n\nHWPX `<hp:linesegarray>` / HWP5 `PARA_LINE_SEG` 에서 디코더가\n채운다. `None` = 캐시 없음 (우리 순수 생성물의 정상 상태).\n인코더는 기본적으로 이 필드를 방출하지 않는다 (opt-in 전용).\n문서 동등성 비교(admission/golden)는 이 필드를 정규화한 사본으로\n수행한다 — [`crate::document::Document::strip_layout_caches`] 참조.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LayoutCache"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "runs",
+        "para_shape_id"
+      ]
+    },
+    "Run": {
+      "description": "A run: a segment of content with a single character shape reference.\n\nRuns are the leaf nodes of the document tree. A paragraph contains\none or more runs. Adjacent runs with the same `char_shape_id` could\ntheoretically be merged, but Core preserves the original structure.\n\n# Examples\n\n```\nuse hwpforge_core::run::Run;\nuse hwpforge_foundation::CharShapeIndex;\n\nlet run = Run::text(\"paragraph text\", CharShapeIndex::new(0));\nassert!(run.content.is_text());\n```",
+      "type": "object",
+      "properties": {
+        "content": {
+          "description": "The content of this run.",
+          "$ref": "#/$defs/RunContent"
+        },
+        "char_shape_id": {
+          "description": "Index into the character shape collection (Blueprint resolves this).",
+          "$ref": "#/$defs/Index"
+        }
+      },
+      "required": [
+        "content",
+        "char_shape_id"
+      ]
+    },
+    "RunContent": {
+      "description": "The content of a run.\n\nMarked `#[non_exhaustive]` so future content types can be added\nwithout a breaking change.\n\n# Design Decision\n\n`Table` and `Control` are boxed to keep the enum size small.\nThe common case (`Text`) is 24 bytes (a `String`). Without boxing,\nthe enum would be ~88 bytes (dominated by the `Control` variant).\n\n# Examples\n\n```\nuse hwpforge_core::run::RunContent;\n\nlet text = RunContent::Text(\"Hello\".to_string());\nassert!(text.is_text());\nassert_eq!(text.as_text(), Some(\"Hello\"));\n```",
+      "oneOf": [
+        {
+          "description": "Plain text.",
+          "type": "object",
+          "properties": {
+            "Text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Text"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "Rich inline text that needs per-segment attributes (e.g. an\ninline `<hp:tab width=\"...\" leader=\"...\" type=\"...\"/>`). Used\nonly when `Text(String)` cannot represent the payload —\nprojection still prefers `Text` for the common plain-string\ncase to keep the audit baseline and downstream encoders simple.\n\nSee [`crate::inline::InlineText`] for the design notes.",
+          "type": "object",
+          "properties": {
+            "InlineText": {
+              "$ref": "#/$defs/InlineText"
+            }
+          },
+          "required": [
+            "InlineText"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "An inline table (boxed for enum size optimization).",
+          "type": "object",
+          "properties": {
+            "Table": {
+              "$ref": "#/$defs/Table"
+            }
+          },
+          "required": [
+            "Table"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "An inline image.",
+          "type": "object",
+          "properties": {
+            "Image": {
+              "$ref": "#/$defs/Image"
+            }
+          },
+          "required": [
+            "Image"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "A control element (boxed for enum size optimization).",
+          "type": "object",
+          "properties": {
+            "Control": {
+              "$ref": "#/$defs/Control"
+            }
+          },
+          "required": [
+            "Control"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "InlineText": {
+      "description": "A sequence of inline segments that compose a single `<hp:t>` element\nwith mixed content.\n\n`segments` is normalized so adjacent [`InlineSegment::Plain`] entries\nare merged. Callers that only need the plain-text equivalent (no tab\nattributes) can use [`InlineText::plain_text`] which renders each\n[`InlineSegment::Tab`] as a `\\t` character.",
+      "type": "object",
+      "properties": {
+        "segments": {
+          "description": "Ordered inline segments. Always non-empty for a meaningful run;\nprojection that produces an empty `InlineText` should emit\n`RunContent::Text(String::new())` instead.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/InlineSegment"
+          }
+        }
+      },
+      "required": [
+        "segments"
+      ]
+    },
+    "InlineSegment": {
+      "description": "One typed segment inside an [`InlineText`].\n\nMarked `#[non_exhaustive]` so future inline elements (ruby, hyphen\nhints, etc.) can be added without breaking existing matches.",
+      "oneOf": [
+        {
+          "description": "Plain text. May contain `\\n`, `U+00A0` (NBSP), `U+001F` (fwSpace)\n— those are still handled as character-level sentinels by the\nHWPX encoder, matching the `Text(String)` behavior.",
+          "type": "object",
+          "properties": {
+            "Plain": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Plain"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "An inline tab with explicit per-occurrence attributes.",
+          "type": "object",
+          "properties": {
+            "Tab": {
+              "$ref": "#/$defs/InlineTabAttr"
+            }
+          },
+          "required": [
+            "Tab"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "InlineTabAttr": {
+      "description": "Per-occurrence attributes for an inline `<hp:tab>` element.\n\nMirrors the HWP5 0x09 control char's 14-byte inline payload (only\nthe first 6 bytes are meaningful per HWP 5.0 spec §1.5):\n\n| offset | width    | meaning                                |\n|-------:|----------|----------------------------------------|\n| 0..4   | `u32 LE` | `width` — HwpUnit, distance to the stop |\n| 4      | `u8`     | `leader` — fill glyph (raw HWP5 enum)   |\n| 5      | `u8`     | `tab_type` — 0=Left, 1=Right, 2=Center, 3=Decimal |\n\nThe raw `leader` / `tab_type` integers are preserved verbatim and\nemitted into HWPX as `<hp:tab leader=\"3\" type=\"1\"/>` — Hancom uses\nthe HWP5 numeric encoding directly for inline tabs (unlike the\nheader-level `<hh:tabItem>` which uses enum strings).",
+      "type": "object",
+      "properties": {
+        "width": {
+          "description": "Position (HwpUnit) at which the tab stops. Truth-pair fixtures\nshow this is the original HWP5 raw value, NOT the halved\nHwpUnitChar form used by `<hh:tabPr>` stops.",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "leader": {
+          "description": "Raw HWP5 fill_type byte (0..=4 known; openhwp: 0=None, 1=Dot,\n2=LongDash, 3=Dash, 4=Underscore).",
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        },
+        "tab_type": {
+          "description": "Raw HWP5 tab_type byte (0=Left, 1=Right, 2=Center, 3=Decimal).",
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255
+        }
+      },
+      "required": [
+        "width",
+        "leader",
+        "tab_type"
+      ]
+    },
+    "HwpUnit": {
+      "type": "integer",
+      "format": "int32"
+    },
+    "Table": {
+      "description": "A table: a sequence of rows, with optional width and caption.\n\n# Design Decision\n\nNo `border: Option<BorderStyle>` in Phase 1. Border styling is a\nBlueprint concern (Phase 2). Core tables are purely structural.\n\n# Examples\n\n```\nuse hwpforge_core::table::{Table, TableCell, TablePageBreak, TableRow};\nuse hwpforge_core::paragraph::Paragraph;\nuse hwpforge_foundation::{HwpUnit, ParaShapeIndex};\n\nlet table = Table::new(vec![TableRow::new(vec![TableCell::new(\n    vec![Paragraph::new(ParaShapeIndex::new(0))],\n    HwpUnit::from_mm(100.0).unwrap(),\n)])])\n.with_page_break(TablePageBreak::Cell);\nassert_eq!(table.row_count(), 1);\n```",
+      "type": "object",
+      "properties": {
+        "rows": {
+          "description": "Rows of the table.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TableRow"
+          }
+        },
+        "width": {
+          "description": "Optional explicit table width. `None` means auto-width.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HwpUnit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "caption": {
+          "description": "Optional table caption.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Caption"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "page_break": {
+          "description": "Page-break policy for this table.",
+          "$ref": "#/$defs/TablePageBreak",
+          "default": "cell"
+        },
+        "repeat_header": {
+          "description": "Whether the leading header-row block (consecutive rows marked\n[`TableRow::is_header`]) repeats across page breaks.",
+          "type": "boolean",
+          "default": true
+        },
+        "cell_spacing": {
+          "description": "Optional explicit spacing between table cells.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HwpUnit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "border_fill_id": {
+          "description": "Optional table-level border/fill reference.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "inst_id": {
+          "description": "Wave 12p Step 2b: instance ID for cross-ref target lookup. HWP5\n변환 시 Table CtrlHeader trailer 의 instance ID 가 채워지고,\nHWPX encoder 가 `<hp:tbl id=\"...\">` attribute 로 emit. `None`\n이면 encoder 가 fallback 값 (예: sequential counter) 사용 허용.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObjectId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "out_margin": {
+          "description": "Outer margins around the table (`<hp:outMargin>`) — the wire source\nfor table placement (PDF replay rule R5).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TableMargin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "in_margin": {
+          "description": "Table-level default cell padding (`<hp:inMargin>`) — the fallback when\na cell has no explicit [`TableCell::margin`].",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TableMargin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "layout_cache": {
+          "description": "Decode-only layout cache (saved wire geometry) — see\n[`TableLayoutCache`]. Encoders must not emit it.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TableLayoutCache"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "rows"
+      ]
+    },
+    "TableRow": {
+      "description": "A single row of a table.\n\n# Examples\n\n```\nuse hwpforge_core::table::{TableRow, TableCell};\nuse hwpforge_core::paragraph::Paragraph;\nuse hwpforge_foundation::{HwpUnit, ParaShapeIndex};\n\nlet row = TableRow::new(vec![\n    TableCell::new(vec![Paragraph::new(ParaShapeIndex::new(0))], HwpUnit::from_mm(50.0).unwrap()),\n    TableCell::new(vec![Paragraph::new(ParaShapeIndex::new(0))], HwpUnit::from_mm(50.0).unwrap()),\n]);\nassert_eq!(row.cells.len(), 2);\n```",
+      "type": "object",
+      "properties": {
+        "cells": {
+          "description": "Cells in this row.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/TableCell"
+          }
+        },
+        "height": {
+          "description": "Optional fixed row height. `None` means auto-height.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HwpUnit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "is_header": {
+          "description": "Whether this row is part of the table's leading header-row block.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "cells"
+      ]
+    },
+    "TableCell": {
+      "description": "A single cell within a table row.\n\nEach cell contains its own paragraphs (rich content). Spans\ndefault to 1 (no spanning).\n\n# Examples\n\n```\nuse hwpforge_core::table::TableCell;\nuse hwpforge_core::paragraph::Paragraph;\nuse hwpforge_foundation::{HwpUnit, ParaShapeIndex};\n\nlet cell = TableCell::new(\n    vec![Paragraph::new(ParaShapeIndex::new(0))],\n    HwpUnit::from_mm(40.0).unwrap(),\n);\nassert_eq!(cell.col_span, 1);\nassert_eq!(cell.row_span, 1);\n```",
+      "type": "object",
+      "properties": {
+        "paragraphs": {
+          "description": "Rich content within the cell.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Paragraph"
+          }
+        },
+        "col_span": {
+          "description": "Number of columns this cell spans. Must be >= 1.",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "row_span": {
+          "description": "Number of rows this cell spans. Must be >= 1.",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "width": {
+          "description": "Cell width.",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "height": {
+          "description": "Optional explicit cell height.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HwpUnit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "background": {
+          "description": "Optional cell background color.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "border_fill_id": {
+          "description": "Optional border/fill reference for this cell.",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "margin": {
+          "description": "Optional cell-local margin override.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TableMargin"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "vertical_align": {
+          "description": "Optional vertical alignment override for the cell content box.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/TableVerticalAlign"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "addr": {
+          "description": "Pre-merge logical grid anchor of this cell (0-based), added by to-json when the table tiles a well-formed grid. Optional on import: absent = unchecked, present = must match the derived grid.",
+          "type": "object",
+          "properties": {
+            "row": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            },
+            "col": {
+              "type": "integer",
+              "format": "uint32",
+              "minimum": 0
+            }
+          },
+          "required": [
+            "row",
+            "col"
+          ]
+        }
+      },
+      "required": [
+        "paragraphs",
+        "col_span",
+        "row_span",
+        "width"
+      ]
+    },
+    "Color": {
+      "type": "integer",
+      "format": "uint32",
+      "minimum": 0
+    },
+    "TableMargin": {
+      "description": "Explicit margins inside a table cell.",
+      "type": "object",
+      "properties": {
+        "left": {
+          "description": "Left margin in HWP units.",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "right": {
+          "description": "Right margin in HWP units.",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "top": {
+          "description": "Top margin in HWP units.",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "bottom": {
+          "description": "Bottom margin in HWP units.",
+          "$ref": "#/$defs/HwpUnit"
+        }
+      },
+      "required": [
+        "left",
+        "right",
+        "top",
+        "bottom"
+      ]
+    },
+    "TableVerticalAlign": {
+      "description": "Vertical alignment for content inside a table cell.",
+      "oneOf": [
+        {
+          "description": "Align cell content to the top edge.",
+          "type": "string",
+          "const": "top"
+        },
+        {
+          "description": "Center cell content vertically.",
+          "type": "string",
+          "const": "center"
+        },
+        {
+          "description": "Align cell content to the bottom edge.",
+          "type": "string",
+          "const": "bottom"
+        }
+      ]
+    },
+    "Caption": {
+      "description": "Caption attached to a shape object (table, image, textbox, etc.).\n\nContains position, gap distance, optional explicit width, and the\ncaption's paragraph content. Empty paragraphs are valid (한글 allows it).\n\n# Default\n\nDefault caption: side = Bottom, width = None, gap = 850 HWPUNIT (~3mm),\nparagraphs = empty.\n\n# Examples\n\n```\nuse hwpforge_core::caption::{Caption, CaptionSide};\nuse hwpforge_foundation::HwpUnit;\n\nlet cap = Caption::default();\nassert_eq!(cap.side, CaptionSide::Bottom);\nassert_eq!(cap.gap.as_i32(), 850);\nassert!(cap.width.is_none());\nassert!(cap.paragraphs.is_empty());\n```",
+      "type": "object",
+      "properties": {
+        "side": {
+          "description": "Position of the caption relative to the object.",
+          "$ref": "#/$defs/CaptionSide"
+        },
+        "width": {
+          "description": "Caption width in HwpUnit. `None` = auto (same as object width).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HwpUnit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "gap": {
+          "description": "Gap between caption and object. Default: `HwpUnit(850)` (~3mm).",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "paragraphs": {
+          "description": "Caption content paragraphs.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Paragraph"
+          }
+        }
+      },
+      "required": [
+        "side",
+        "gap",
+        "paragraphs"
+      ]
+    },
+    "CaptionSide": {
+      "description": "Position of caption relative to its parent object.\n\n# Default\n\nDefaults to [`CaptionSide::Bottom`], the most common position in\nKorean government documents.\n\n# Examples\n\n```\nuse hwpforge_core::caption::CaptionSide;\n\nassert_eq!(CaptionSide::default(), CaptionSide::Bottom);\n```",
+      "oneOf": [
+        {
+          "description": "Caption appears to the left of the object.",
+          "type": "string",
+          "const": "Left"
+        },
+        {
+          "description": "Caption appears to the right of the object.",
+          "type": "string",
+          "const": "Right"
+        },
+        {
+          "description": "Caption appears above the object.",
+          "type": "string",
+          "const": "Top"
+        },
+        {
+          "description": "Caption appears below the object (most common).",
+          "type": "string",
+          "const": "Bottom"
+        }
+      ]
+    },
+    "TablePageBreak": {
+      "description": "Page-break policy for a table.",
+      "oneOf": [
+        {
+          "description": "Split the table at cell boundaries.",
+          "type": "string",
+          "const": "cell"
+        },
+        {
+          "description": "Split the table as a whole unit.",
+          "type": "string",
+          "const": "table"
+        },
+        {
+          "description": "Do not split the table across pages.",
+          "type": "string",
+          "const": "none"
+        }
+      ]
+    },
+    "ObjectId": {
+      "description": "A document-object identity that links a cross-reference to its target.\n\nCross-reference *targets* — image, table, equation, group, text-art,\nfootnote, endnote — carry an `Option<ObjectId>` (the `inst_id` field),\nand the *referencing* [`Control::CrossRef`](crate::Control::CrossRef)\ncarries the **same** `ObjectId` via\n[`RefTarget::Object`](crate::control::RefTarget::Object). Sharing one id\ntype makes the target↔referencer link checkable at the type level instead\nof relying on two unrelated integer fields coincidentally agreeing on a\nraw value (the latent fragility this newtype replaces — see ADR-010).\n\n`ObjectId` is format-agnostic: Core only carries *identity*. The wire\nencoder owns id *allocation* — preserving ids imported from a source\ndocument and assigning fresh ids to authored objects. Serialization is\n[`#[serde(transparent)]`](https://serde.rs/container-attrs.html#transparent),\nso an `ObjectId` round-trips through JSON/YAML as a bare integer.",
+      "type": "integer",
+      "format": "uint64",
+      "minimum": 0
+    },
+    "TableLayoutCache": {
+      "description": "Decode-only layout cache for a table — Hancom-saved wire values that are\nreplayed or used as checksums, never re-typeset.\n\nEncoders MUST NOT emit these values back to the wire (the HWPX encoder\nkeeps its own `sz` policy). Edit surfaces drop this cache together with\nparagraph caches via [`crate::document::Document::strip_layout_caches`].",
+      "type": "object",
+      "properties": {
+        "saved_sz_height": {
+          "description": "Hancom-saved `<hp:sz height>` ([`None`] when the wire stored `0` or\nomitted it — natively authored split tables do).\n\n⚠️ For a page-spanning (split) table this is the **first fragment's\nheight**, not the total table height (W0 measurement).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/HwpUnit"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "default_flow_pos": {
+          "description": "Whether the wire `<hp:pos>` was the default inline-flow combination\n(`treatAsChar=0`, `flowWithText=1`, PARA/COLUMN relative, zero\noffsets). Renderers only support default-flow tables — a `false`\nhere must fail closed (verified profile admission).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "default_flow_pos"
+      ]
+    },
+    "Image": {
+      "description": "An image reference within the document.\n\nContains the path to the image resource (relative to the document\npackage root), its display dimensions, and format hint.\n\n# No Binary Data\n\nCore deliberately holds no image bytes. The Smithy crate resolves\n`path` into actual binary data during encode/decode.\n\n# Examples\n\n```\nuse hwpforge_core::image::{Image, ImageFormat};\nuse hwpforge_foundation::HwpUnit;\n\nlet img = Image::new(\n    \"BinData/logo.jpeg\",\n    HwpUnit::from_mm(80.0).unwrap(),\n    HwpUnit::from_mm(40.0).unwrap(),\n    ImageFormat::Jpeg,\n);\nassert_eq!(img.format, ImageFormat::Jpeg);\n```",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Relative path within the document package (e.g. `\"BinData/image1.png\"`).",
+          "type": "string"
+        },
+        "width": {
+          "description": "Display width.",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "height": {
+          "description": "Display height.",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "format": {
+          "description": "Image format hint.",
+          "$ref": "#/$defs/ImageFormat"
+        },
+        "caption": {
+          "description": "Optional image caption.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Caption"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "placement": {
+          "description": "Optional placement/presentation metadata.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObjectPlacement"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "inst_id": {
+          "description": "Wave 12p Step 2a: instance ID for cross-ref target lookup. HWP5\n변환 시 GSO CtrlHeader trailer 의 instance ID 가 채워지고, HWPX\nencoder 가 `<hp:pic id=\"...\">` attribute 로 emit. `None` 이면\nencoder 가 fallback 값 (예: sequential counter) 을 사용해도 됨.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ObjectId"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "width",
+        "height",
+        "format"
+      ]
+    },
+    "ImageFormat": {
+      "description": "Supported image formats.\n\nMarked `#[non_exhaustive]` so new formats can be added in future\nphases without a breaking change.\n\n# Examples\n\n```\nuse hwpforge_core::image::ImageFormat;\n\nlet fmt = ImageFormat::Png;\nassert_eq!(fmt.to_string(), \"PNG\");\n\nlet unknown = ImageFormat::Unknown(\"SVG\".to_string());\nassert_eq!(unknown.to_string(), \"svg\");\n```",
+      "oneOf": [
+        {
+          "description": "Portable Network Graphics.",
+          "type": "string",
+          "const": "Png"
+        },
+        {
+          "description": "JPEG.",
+          "type": "string",
+          "const": "Jpeg"
+        },
+        {
+          "description": "Graphics Interchange Format.",
+          "type": "string",
+          "const": "Gif"
+        },
+        {
+          "description": "Windows Bitmap.",
+          "type": "string",
+          "const": "Bmp"
+        },
+        {
+          "description": "Windows Metafile.",
+          "type": "string",
+          "const": "Wmf"
+        },
+        {
+          "description": "Enhanced Metafile.",
+          "type": "string",
+          "const": "Emf"
+        },
+        {
+          "description": "Unrecognized format with its extension or MIME type.",
+          "type": "object",
+          "properties": {
+            "Unknown": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Unknown"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ObjectPlacement": {
+      "description": "Optional object-placement metadata for a floating drawing object.\n\nMirrors the HWPX `<hp:pos>` block (anchor references + offsets +\ntreat-as-char / overlap / flow flags) together with the owning shape's\n`textWrap`/`textFlow` attributes.\n\n[`ObjectPlacement::legacy_inline_defaults`] is the canonical \"plain inline\nobject\" value: an image or shape that behaves like a character with no\nfloating offset. Decoders collapse a placement equal to this default back\nto `None`, so the encoder's untouched legacy path emits the historical\ninline bytes (mirrors the `Option<ShapeStyle>` collapse pattern in the\nHWPX shape-style decoder).\n\nOffsets are signed: Hancom persists negative offsets in HWPX `hp:pos`\nas **u32 wrap-around decimal strings** (e.g. `horzOffset=\"4294965029\"`\n= −2267, dialog-authored fixture measurement), and in HWP5 as plain\nsigned `i32`. Codecs must round-trip both encodings losslessly.",
+      "type": "object",
+      "properties": {
+        "text_wrap": {
+          "description": "Text wrapping mode around the object.",
+          "$ref": "#/$defs/ObjectTextWrap"
+        },
+        "text_flow": {
+          "description": "Side flow policy around the wrapped object.",
+          "$ref": "#/$defs/ObjectTextFlow"
+        },
+        "treat_as_char": {
+          "description": "Whether the object behaves like an inline character.",
+          "type": "boolean"
+        },
+        "flow_with_text": {
+          "description": "Whether surrounding text should flow with the object.",
+          "type": "boolean"
+        },
+        "allow_overlap": {
+          "description": "Whether overlapping other objects is allowed.",
+          "type": "boolean"
+        },
+        "vert_rel_to": {
+          "description": "Vertical anchor reference for `vert_offset`.",
+          "$ref": "#/$defs/ObjectRelativeTo"
+        },
+        "horz_rel_to": {
+          "description": "Horizontal anchor reference for `horz_offset`.",
+          "$ref": "#/$defs/ObjectRelativeTo"
+        },
+        "vert_offset": {
+          "description": "Vertical offset from `vert_rel_to`.",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "horz_offset": {
+          "description": "Horizontal offset from `horz_rel_to`.",
+          "$ref": "#/$defs/HwpUnit"
+        }
+      },
+      "required": [
+        "text_wrap",
+        "text_flow",
+        "treat_as_char",
+        "flow_with_text",
+        "allow_overlap",
+        "vert_rel_to",
+        "horz_rel_to",
+        "vert_offset",
+        "horz_offset"
+      ]
+    },
+    "ObjectTextWrap": {
+      "description": "Text wrapping mode for placed objects.",
+      "oneOf": [
+        {
+          "description": "Place text above and below the object.",
+          "type": "string",
+          "const": "TopAndBottom"
+        },
+        {
+          "description": "Wrap text on the object's sides.",
+          "type": "string",
+          "const": "Square"
+        },
+        {
+          "description": "Place the object behind text.",
+          "type": "string",
+          "const": "BehindText"
+        },
+        {
+          "description": "Place the object in front of text.",
+          "type": "string",
+          "const": "InFrontOfText"
+        },
+        {
+          "description": "Tight text wrapping around the object.",
+          "type": "string",
+          "const": "Tight"
+        },
+        {
+          "description": "Through-style wrapping.",
+          "type": "string",
+          "const": "Through"
+        },
+        {
+          "description": "Any wrap value not modeled explicitly.",
+          "type": "object",
+          "properties": {
+            "Other": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Other"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ObjectTextFlow": {
+      "description": "Text flow mode for placed objects.",
+      "oneOf": [
+        {
+          "description": "Text can flow on both sides.",
+          "type": "string",
+          "const": "BothSides"
+        },
+        {
+          "description": "Text can flow only on the left side.",
+          "type": "string",
+          "const": "LeftOnly"
+        },
+        {
+          "description": "Text can flow only on the right side.",
+          "type": "string",
+          "const": "RightOnly"
+        },
+        {
+          "description": "Use the side with the larger available space.",
+          "type": "string",
+          "const": "LargestOnly"
+        },
+        {
+          "description": "Any flow value not modeled explicitly.",
+          "type": "object",
+          "properties": {
+            "Other": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Other"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ObjectRelativeTo": {
+      "description": "Anchor target for object placement offsets.",
+      "oneOf": [
+        {
+          "description": "Anchor offsets to the paper.",
+          "type": "string",
+          "const": "Paper"
+        },
+        {
+          "description": "Anchor offsets to the page.",
+          "type": "string",
+          "const": "Page"
+        },
+        {
+          "description": "Anchor offsets to the paragraph.",
+          "type": "string",
+          "const": "Para"
+        },
+        {
+          "description": "Anchor offsets to the column.",
+          "type": "string",
+          "const": "Column"
+        },
+        {
+          "description": "Anchor offsets to the character box.",
+          "type": "string",
+          "const": "Character"
+        },
+        {
+          "description": "Anchor offsets to the line box.",
+          "type": "string",
+          "const": "Line"
+        },
+        {
+          "description": "Any anchor value not modeled explicitly.",
+          "type": "object",
+          "properties": {
+            "Other": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Other"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "Control": {
+      "description": "An inline control element.\n\nControls are non-text elements that appear within a Run.\nEach variant carries its own data; the enum is `#[non_exhaustive]`\nfor forward compatibility.\n\n# Examples\n\n```\nuse hwpforge_core::control::Control;\nuse hwpforge_core::paragraph::Paragraph;\nuse hwpforge_foundation::{HwpUnit, ParaShapeIndex, VerticalAlign};\n\nlet text_box = Control::TextBox {\n    paragraphs: vec![Paragraph::new(ParaShapeIndex::new(0))],\n    width: HwpUnit::from_mm(80.0).unwrap(),\n    height: HwpUnit::from_mm(40.0).unwrap(),\n    placement: None,\n    caption: None,\n    style: None,\n    text_vertical_align: VerticalAlign::Top,\n};\nassert!(text_box.is_text_box());\nassert!(!text_box.is_hyperlink());\n```",
+      "oneOf": [
+        {
+          "description": "An inline text box with its own paragraph content.\nMaps to HWPX `<hp:rect>` + `<hp:drawText>` (drawing object, not control).",
+          "type": "object",
+          "properties": {
+            "TextBox": {
+              "type": "object",
+              "properties": {
+                "paragraphs": {
+                  "description": "Paragraphs inside the text box.",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/Paragraph"
+                  }
+                },
+                "width": {
+                  "description": "Box width (HWPUNIT).",
+                  "$ref": "#/$defs/HwpUnit"
+                },
+                "height": {
+                  "description": "Box height (HWPUNIT).",
+                  "$ref": "#/$defs/HwpUnit"
+                },
+                "placement": {
+                  "description": "Object placement / anchoring metadata (HWPX `<hp:pos>` block plus\nthe shape's `textWrap`/`textFlow`). `None` = the historical inline\ndefault (treat-as-char, zero offset) — the encoder emits the legacy\ninline placement for it; `Some` carries the full floating/anchored\nplacement. See [`ObjectPlacement`].",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ObjectPlacement"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "caption": {
+                  "description": "Optional caption attached to this text box.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Caption"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "style": {
+                  "description": "Optional visual style overrides (border color, fill, line width).",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ShapeStyle"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "text_vertical_align": {
+                  "description": "Vertical alignment of the embedded text within the box.\nMaps to HWPX `<hp:drawText><hp:subList vertAlign=\"...\">` and HWP5\n문단 리스트 헤더 속성 bits 5–6. Defaults to [`VerticalAlign::Top`].",
+                  "$ref": "#/$defs/VerticalAlign",
+                  "default": "Top"
+                }
+              },
+              "required": [
+                "paragraphs",
+                "width",
+                "height"
+              ]
+            }
+          },
+          "required": [
+            "TextBox"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "A hyperlink with display text and URL.",
+          "type": "object",
+          "properties": {
+            "Hyperlink": {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "description": "Visible text of the link.",
+                  "type": "string"
+                },
+                "url": {
+                  "description": "Target URL.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "text",
+                "url"
+              ]
+            }
+          },
+          "required": [
+            "Hyperlink"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "A footnote containing paragraph content.\nMaps to HWPX `<hp:ctrl><hp:footNote>`.\n\n**번호 재계산 계약**: wire 의 종류별 순번 캐시(`footNote@number`)와\n접미 문자(`suffixChar`), 본문 선두의 자동 번호 머리(`<hp:autoNum\nnumType=\"FOOTNOTE\">` + 구분 공백)는 표현 산물이라 Core 로 나르지\n않는다 — 인코더가 문서 순서로 재계산·재주입한다. 비표준(custom)\nsuffix 의 typed 보존은 section note-format 승격(별도 승인) 대상.",
+          "type": "object",
+          "properties": {
+            "Footnote": {
+              "type": "object",
+              "properties": {
+                "inst_id": {
+                  "description": "Object identity for cross-ref linking (optional). Shares the\n[`ObjectId`] space with [`RefTarget::Object`](crate::control::RefTarget::Object).",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ObjectId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "paragraphs": {
+                  "description": "Paragraphs that form the footnote body.",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/Paragraph"
+                  }
+                }
+              },
+              "required": [
+                "paragraphs"
+              ]
+            }
+          },
+          "required": [
+            "Footnote"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "An endnote containing paragraph content.\nMaps to HWPX `<hp:ctrl><hp:endNote>`.\n\n번호 재계산 계약은 [`Control::Footnote`] 와 동일 (`numType=\"ENDNOTE\"`,\n독립 카운터).",
+          "type": "object",
+          "properties": {
+            "Endnote": {
+              "type": "object",
+              "properties": {
+                "inst_id": {
+                  "description": "Object identity for cross-ref linking (optional). Shares the\n[`ObjectId`] space with [`RefTarget::Object`](crate::control::RefTarget::Object).",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ObjectId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "paragraphs": {
+                  "description": "Paragraphs that form the endnote body.",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/Paragraph"
+                  }
+                }
+              },
+              "required": [
+                "paragraphs"
+              ]
+            }
+          },
+          "required": [
+            "Endnote"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "A line drawing object (2 endpoints).\nMaps to HWPX `<hp:line>`.",
+          "type": "object",
+          "properties": {
+            "Line": {
+              "type": "object",
+              "properties": {
+                "start": {
+                  "description": "Start point (x, y in HWPUNIT).",
+                  "$ref": "#/$defs/ShapePoint"
+                },
+                "end": {
+                  "description": "End point (x, y in HWPUNIT).",
+                  "$ref": "#/$defs/ShapePoint"
+                },
+                "width": {
+                  "description": "Bounding box width (HWPUNIT).",
+                  "$ref": "#/$defs/HwpUnit"
+                },
+                "height": {
+                  "description": "Bounding box height (HWPUNIT).",
+                  "$ref": "#/$defs/HwpUnit"
+                },
+                "placement": {
+                  "description": "Object placement / anchoring metadata (HWPX `<hp:pos>` block plus\nthe shape's `textWrap`/`textFlow`). `None` = the historical inline\ndefault (treat-as-char, zero offset) — the encoder emits the legacy\ninline placement for it; `Some` carries the full floating/anchored\nplacement. See [`ObjectPlacement`].",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ObjectPlacement"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "caption": {
+                  "description": "Optional caption attached to this line.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Caption"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "style": {
+                  "description": "Optional visual style overrides (border color, fill, line width).",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ShapeStyle"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "start",
+                "end",
+                "width",
+                "height"
+              ]
+            }
+          },
+          "required": [
+            "Line"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "An ellipse (or circle) drawing object.\nMaps to HWPX `<hp:ellipse>`.",
+          "type": "object",
+          "properties": {
+            "Ellipse": {
+              "type": "object",
+              "properties": {
+                "center": {
+                  "description": "Center point (x, y in HWPUNIT).",
+                  "$ref": "#/$defs/ShapePoint"
+                },
+                "axis1": {
+                  "description": "Axis 1 endpoint (defines semi-major axis direction and length).",
+                  "$ref": "#/$defs/ShapePoint"
+                },
+                "axis2": {
+                  "description": "Axis 2 endpoint (perpendicular to axis1, defines semi-minor axis).",
+                  "$ref": "#/$defs/ShapePoint"
+                },
+                "width": {
+                  "description": "Bounding box width (HWPUNIT).",
+                  "$ref": "#/$defs/HwpUnit"
+                },
+                "height": {
+                  "description": "Bounding box height (HWPUNIT).",
+                  "$ref": "#/$defs/HwpUnit"
+                },
+                "placement": {
+                  "description": "Object placement / anchoring metadata (HWPX `<hp:pos>` block plus\nthe shape's `textWrap`/`textFlow`). `None` = the historical inline\ndefault (treat-as-char, zero offset) — the encoder emits the legacy\ninline placement for it; `Some` carries the full floating/anchored\nplacement. See [`ObjectPlacement`].",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ObjectPlacement"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "paragraphs": {
+                  "description": "Optional text content inside the ellipse.",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/Paragraph"
+                  }
+                },
+                "caption": {
+                  "description": "Optional caption attached to this ellipse.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Caption"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "style": {
+                  "description": "Optional visual style overrides (border color, fill, line width).",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ShapeStyle"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "text_vertical_align": {
+                  "description": "Vertical alignment of the embedded text within the ellipse.\nMaps to HWPX `<hp:drawText><hp:subList vertAlign=\"...\">` and HWP5\n문단 리스트 헤더 속성 bits 5–6. Defaults to [`VerticalAlign::Top`].",
+                  "$ref": "#/$defs/VerticalAlign",
+                  "default": "Top"
+                }
+              },
+              "required": [
+                "center",
+                "axis1",
+                "axis2",
+                "width",
+                "height",
+                "paragraphs"
+              ]
+            }
+          },
+          "required": [
+            "Ellipse"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "A HWP5 chart carried as opaque OOXML + OLE blob passthrough.\n\nUsed when chart data is extracted from a HWP5 BinData OLE container\nand emitted to HWPX without round-tripping through the structured\n[`Control::Chart`] data model. Renders in 한컴 via the `<hp:switch>`\nblock with full OOXML chart inside `<hp:case>` and an OLE fallback\ninside `<hp:default>`.\n\nWave 4c passthrough: the chart XML and OLE bytes are carried as-is\nfrom the source HWP5 file. The encoder writes:\n- `Chart/chartN.xml` (NOT registered in manifest — gotcha #5)\n- `BinData/oleN.ole` (registered in `content.hpf` as `application/ole`)\n- section `<hp:switch>` with `<hp:case>` chart + `<hp:default>` ole",
+          "type": "object",
+          "properties": {
+            "EmbeddedChart": {
+              "type": "object",
+              "properties": {
+                "chart_xml": {
+                  "description": "Full OOXML chart XML (starts with `<?xml`, contains `<c:chartSpace>`).",
+                  "type": "string"
+                },
+                "ole_bytes": {
+                  "description": "Raw OLE2 compound file bytes for `<hp:ole>` fallback rendering.",
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "uint8",
+                    "minimum": 0,
+                    "maximum": 255
+                  }
+                },
+                "width": {
+                  "description": "Chart width (HWPUNIT).",
+                  "$ref": "#/$defs/HwpUnit"
+                },
+                "height": {
+                  "description": "Chart height (HWPUNIT).",
+                  "$ref": "#/$defs/HwpUnit"
+                },
+                "placement": {
+                  "description": "Object placement / anchoring metadata (HWPX `<hp:pos>` block plus\nthe shape's `textWrap`/`textFlow`). `None` = the historical inline\ndefault (treat-as-char, zero offset) — the encoder emits the legacy\ninline placement for it; `Some` carries the full floating/anchored\nplacement. See [`ObjectPlacement`].",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ObjectPlacement"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "chart_xml",
+                "ole_bytes",
+                "width",
+                "height"
+              ]
+            }
+          },
+          "required": [
+            "EmbeddedChart"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "A pure rectangle drawing object (no embedded text).\n\nDistinct from [`Control::TextBox`], which uses `<hp:rect>` with a\n`<hp:drawText>` child for inline text. A pure `Rect` carries only the\nrectangle geometry and visual style and emits `<hp:rect>` without\n`<hp:drawText>`.",
+          "type": "object",
+          "properties": {
+            "Rect": {
+              "type": "object",
+              "properties": {
+                "width": {
+                  "description": "Bounding box width (HWPUNIT).",
+                  "$ref": "#/$defs/HwpUnit"
+                },
+                "height": {
+                  "description": "Bounding box height (HWPUNIT).",
+                  "$ref": "#/$defs/HwpUnit"
+                },
+                "placement": {
+                  "description": "Object placement / anchoring metadata (HWPX `<hp:pos>` block plus\nthe shape's `textWrap`/`textFlow`). `None` = the historical inline\ndefault (treat-as-char, zero offset) — the encoder emits the legacy\ninline placement for it; `Some` carries the full floating/anchored\nplacement. See [`ObjectPlacement`].",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ObjectPlacement"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "caption": {
+                  "description": "Optional caption attached to this rectangle.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Caption"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "style": {
+                  "description": "Optional visual style overrides (border color, fill, line width).",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ShapeStyle"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "width",
+                "height"
+              ]
+            }
+          },
+          "required": [
+            "Rect"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "A polygon drawing object (3+ vertices).\nMaps to HWPX `<hp:polygon>`.",
+          "type": "object",
+          "properties": {
+            "Polygon": {
+              "type": "object",
+              "properties": {
+                "vertices": {
+                  "description": "Ordered list of vertices (minimum 3).",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/ShapePoint"
+                  }
+                },
+                "width": {
+                  "description": "Bounding box width (HWPUNIT).",
+                  "$ref": "#/$defs/HwpUnit"
+                },
+                "height": {
+                  "description": "Bounding box height (HWPUNIT).",
+                  "$ref": "#/$defs/HwpUnit"
+                },
+                "placement": {
+                  "description": "Object placement / anchoring metadata (HWPX `<hp:pos>` block plus\nthe shape's `textWrap`/`textFlow`). `None` = the historical inline\ndefault (treat-as-char, zero offset) — the encoder emits the legacy\ninline placement for it; `Some` carries the full floating/anchored\nplacement. See [`ObjectPlacement`].",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ObjectPlacement"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "paragraphs": {
+                  "description": "Optional text content inside the polygon.",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/Paragraph"
+                  }
+                },
+                "caption": {
+                  "description": "Optional caption attached to this polygon.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Caption"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "style": {
+                  "description": "Optional visual style overrides (border color, fill, line width).",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ShapeStyle"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "text_vertical_align": {
+                  "description": "Vertical alignment of the embedded text within the polygon.\nMaps to HWPX `<hp:drawText><hp:subList vertAlign=\"...\">` and HWP5\n문단 리스트 헤더 속성 bits 5–6. Defaults to [`VerticalAlign::Top`].",
+                  "$ref": "#/$defs/VerticalAlign",
+                  "default": "Top"
+                }
+              },
+              "required": [
+                "vertices",
+                "width",
+                "height",
+                "paragraphs"
+              ]
+            }
+          },
+          "required": [
+            "Polygon"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "An inline equation (수식) using HancomEQN script format.\nMaps to HWPX `<hp:equation>` with `<hp:script>` child.\n\nEquations have NO shape common block (no offset, orgSz, curSz, flip,\nrotation, lineShape, fillBrush, shadow). Only sz + pos + outMargin + script.",
+          "type": "object",
+          "properties": {
+            "Equation": {
+              "type": "object",
+              "properties": {
+                "script": {
+                  "description": "HancomEQN script text (e.g. `\"{a+b} over {c+d}\"`).",
+                  "type": "string"
+                },
+                "width": {
+                  "description": "Bounding box width (HWPUNIT).",
+                  "$ref": "#/$defs/HwpUnit"
+                },
+                "height": {
+                  "description": "Bounding box height (HWPUNIT).",
+                  "$ref": "#/$defs/HwpUnit"
+                },
+                "base_line": {
+                  "description": "Baseline position (51-90 typical range).",
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                },
+                "text_color": {
+                  "description": "Text color.",
+                  "$ref": "#/$defs/Color"
+                },
+                "font": {
+                  "description": "Font name (typically `\"HancomEQN\"`).",
+                  "type": "string"
+                },
+                "inst_id": {
+                  "description": "Wave 12p Step 2c: instance ID for cross-ref target lookup.\nHWP5 변환 시 `eqed` CtrlHeader trailer 의 instance ID 가\n채워지고, HWPX encoder 가 `<hp:equation id=\"...\">` attribute\n로 emit. `None` 이면 encoder fallback 허용.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ObjectId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "script",
+                "width",
+                "height",
+                "base_line",
+                "text_color",
+                "font"
+              ]
+            }
+          },
+          "required": [
+            "Equation"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "An OOXML chart embedded in the document.\nMaps to HWPX `<hp:switch><hp:case><hp:chart>` with separate Chart XML file.\n\nCharts have NO shape common block (like Equation): only sz + pos + outMargin.",
+          "type": "object",
+          "properties": {
+            "Chart": {
+              "type": "object",
+              "properties": {
+                "chart_type": {
+                  "description": "Chart type (18 variants covering all OOXML chart types).",
+                  "$ref": "#/$defs/ChartType"
+                },
+                "data": {
+                  "description": "Chart data (category-based or XY-based).",
+                  "$ref": "#/$defs/ChartData"
+                },
+                "width": {
+                  "description": "Chart width (HWPUNIT, default ~32250 ≈ 114mm).",
+                  "$ref": "#/$defs/HwpUnit"
+                },
+                "height": {
+                  "description": "Chart height (HWPUNIT, default ~18750 ≈ 66mm).",
+                  "$ref": "#/$defs/HwpUnit"
+                },
+                "title": {
+                  "description": "Optional chart title.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "legend": {
+                  "description": "Legend position.",
+                  "$ref": "#/$defs/LegendPosition"
+                },
+                "grouping": {
+                  "description": "Series grouping mode.",
+                  "$ref": "#/$defs/ChartGrouping"
+                },
+                "bar_shape": {
+                  "description": "3D bar/column shape (None = default Box).",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/BarShape"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "explosion": {
+                  "description": "Exploded pie/doughnut percentage (None = not exploded, Some(25) = 25% explosion).",
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "uint32",
+                  "minimum": 0
+                },
+                "of_pie_type": {
+                  "description": "Pie-of-pie or bar-of-pie sub-type (None = default pie-of-pie).",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/OfPieType"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "radar_style": {
+                  "description": "Radar chart rendering style (None = default Standard).",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/RadarStyle"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "wireframe": {
+                  "description": "Surface chart wireframe mode (None = default solid).",
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "bubble_3d": {
+                  "description": "3D bubble effect (None = default flat).",
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "scatter_style": {
+                  "description": "Scatter chart style (None = default Dots).",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ScatterStyle"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "show_markers": {
+                  "description": "Show data point markers on line charts (None = no markers).",
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
+                },
+                "stock_variant": {
+                  "description": "Stock chart sub-variant (None = default HLC, 3 series).\n\nVHLC and VOHLC generate a composite `<c:plotArea>` with both\n`<c:barChart>` (volume) and `<c:stockChart>` (price) elements.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/StockVariant"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "chart_type",
+                "data",
+                "width",
+                "height",
+                "legend",
+                "grouping"
+              ]
+            }
+          },
+          "required": [
+            "Chart"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "Dutmal (덧말): annotation text displayed above or below main text.\nMaps to HWPX `<hp:dutmal>`.",
+          "type": "object",
+          "properties": {
+            "Dutmal": {
+              "type": "object",
+              "properties": {
+                "main_text": {
+                  "description": "Main text that receives the annotation.",
+                  "type": "string"
+                },
+                "sub_text": {
+                  "description": "Annotation text displayed above/below.",
+                  "type": "string"
+                },
+                "position": {
+                  "description": "Position of the annotation relative to main text.",
+                  "$ref": "#/$defs/DutmalPosition"
+                },
+                "sz_ratio": {
+                  "description": "Size ratio of annotation text relative to main (0 = auto).",
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                },
+                "align": {
+                  "description": "Alignment of the annotation text.",
+                  "$ref": "#/$defs/DutmalAlign"
+                },
+                "metadata": {
+                  "description": "Optional metadata that mirrors HWPX `<hp:dutmal>` attributes\nHwpForge doesn't promote to typed fields yet — currently\ncarries `option` verbatim so HWP5↔HWPX round-trips preserve\nit. `#[non_exhaustive]` so future fields are additive.",
+                  "$ref": "#/$defs/DutmalMetadata"
+                }
+              },
+              "required": [
+                "main_text",
+                "sub_text",
+                "position",
+                "sz_ratio",
+                "align",
+                "metadata"
+              ]
+            }
+          },
+          "required": [
+            "Dutmal"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "Compose (글자겹침): overlaid/combined characters.\nMaps to HWPX `<hp:compose>`.",
+          "type": "object",
+          "properties": {
+            "Compose": {
+              "type": "object",
+              "properties": {
+                "compose_text": {
+                  "description": "The combined text (e.g. \"12\" for two overlaid digits).",
+                  "type": "string"
+                },
+                "circle_type": {
+                  "description": "Circle/frame type for the composition.",
+                  "type": "string"
+                },
+                "char_sz": {
+                  "description": "Character size adjustment (-3 = slightly smaller).",
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "compose_type": {
+                  "description": "Composition layout type.",
+                  "type": "string"
+                },
+                "char_pr_ids": {
+                  "description": "10 `<hp:charPr prIDRef=\"N\"/>` references (HWPX `charPrCnt` is\nfixed at 10). `u32::MAX` is the \"no override\" sentinel —\n한컴 emits it for unused slots. A `Vec` shorter or longer\nthan 10 is normalized by the HWPX encoder (pad / truncate).",
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "uint32",
+                    "minimum": 0
+                  }
+                }
+              },
+              "required": [
+                "compose_text",
+                "circle_type",
+                "char_sz",
+                "compose_type",
+                "char_pr_ids"
+              ]
+            }
+          },
+          "required": [
+            "Compose"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "An arc (partial ellipse) drawing object.\nMaps to HWPX `<hp:ellipse>` with `hasArcPr=\"1\"`.",
+          "type": "object",
+          "properties": {
+            "Arc": {
+              "type": "object",
+              "properties": {
+                "arc_type": {
+                  "description": "Arc type (normal open arc, pie/sector, chord).",
+                  "$ref": "#/$defs/ArcType"
+                },
+                "center": {
+                  "description": "Center point of the parent ellipse.",
+                  "$ref": "#/$defs/ShapePoint"
+                },
+                "axis1": {
+                  "description": "Axis 1 endpoint (semi-major axis).",
+                  "$ref": "#/$defs/ShapePoint"
+                },
+                "axis2": {
+                  "description": "Axis 2 endpoint (semi-minor axis).",
+                  "$ref": "#/$defs/ShapePoint"
+                },
+                "start1": {
+                  "description": "Arc start point 1.",
+                  "$ref": "#/$defs/ShapePoint"
+                },
+                "end1": {
+                  "description": "Arc end point 1.",
+                  "$ref": "#/$defs/ShapePoint"
+                },
+                "start2": {
+                  "description": "Arc start point 2.",
+                  "$ref": "#/$defs/ShapePoint"
+                },
+                "end2": {
+                  "description": "Arc end point 2.",
+                  "$ref": "#/$defs/ShapePoint"
+                },
+                "width": {
+                  "description": "Bounding box width (HWPUNIT).",
+                  "$ref": "#/$defs/HwpUnit"
+                },
+                "height": {
+                  "description": "Bounding box height (HWPUNIT).",
+                  "$ref": "#/$defs/HwpUnit"
+                },
+                "placement": {
+                  "description": "Object placement / anchoring metadata (HWPX `<hp:pos>` block plus\nthe shape's `textWrap`/`textFlow`). `None` = the historical inline\ndefault (treat-as-char, zero offset) — the encoder emits the legacy\ninline placement for it; `Some` carries the full floating/anchored\nplacement. See [`ObjectPlacement`].",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ObjectPlacement"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "caption": {
+                  "description": "Optional caption attached to this arc.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Caption"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "style": {
+                  "description": "Optional visual style overrides.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ShapeStyle"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "arc_type",
+                "center",
+                "axis1",
+                "axis2",
+                "start1",
+                "end1",
+                "start2",
+                "end2",
+                "width",
+                "height"
+              ]
+            }
+          },
+          "required": [
+            "Arc"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "A curve drawing object (bezier/polyline).\nMaps to HWPX `<hp:curve>`.",
+          "type": "object",
+          "properties": {
+            "Curve": {
+              "type": "object",
+              "properties": {
+                "points": {
+                  "description": "Ordered control points for the curve path.",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/ShapePoint"
+                  }
+                },
+                "segment_types": {
+                  "description": "Segment types (one per segment between points).",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/CurveSegmentType"
+                  }
+                },
+                "width": {
+                  "description": "Bounding box width (HWPUNIT).",
+                  "$ref": "#/$defs/HwpUnit"
+                },
+                "height": {
+                  "description": "Bounding box height (HWPUNIT).",
+                  "$ref": "#/$defs/HwpUnit"
+                },
+                "placement": {
+                  "description": "Object placement / anchoring metadata (HWPX `<hp:pos>` block plus\nthe shape's `textWrap`/`textFlow`). `None` = the historical inline\ndefault (treat-as-char, zero offset) — the encoder emits the legacy\ninline placement for it; `Some` carries the full floating/anchored\nplacement. See [`ObjectPlacement`].",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ObjectPlacement"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "caption": {
+                  "description": "Optional caption attached to this curve.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Caption"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "style": {
+                  "description": "Optional visual style overrides.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ShapeStyle"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "points",
+                "segment_types",
+                "width",
+                "height"
+              ]
+            }
+          },
+          "required": [
+            "Curve"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "A connect line drawing object (line with control points for routing).\nMaps to HWPX `<hp:connectLine>`.",
+          "type": "object",
+          "properties": {
+            "ConnectLine": {
+              "type": "object",
+              "properties": {
+                "start": {
+                  "description": "Start point of the connect line.",
+                  "$ref": "#/$defs/ShapePoint"
+                },
+                "end": {
+                  "description": "End point of the connect line.",
+                  "$ref": "#/$defs/ShapePoint"
+                },
+                "control_points": {
+                  "description": "Intermediate control points for routing.",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/ShapePoint"
+                  }
+                },
+                "connect_type": {
+                  "description": "Connect line type (e.g. \"STRAIGHT\", \"BENT\", \"CURVED\").",
+                  "type": "string"
+                },
+                "width": {
+                  "description": "Bounding box width (HWPUNIT).",
+                  "$ref": "#/$defs/HwpUnit"
+                },
+                "height": {
+                  "description": "Bounding box height (HWPUNIT).",
+                  "$ref": "#/$defs/HwpUnit"
+                },
+                "placement": {
+                  "description": "Object placement / anchoring metadata (HWPX `<hp:pos>` block plus\nthe shape's `textWrap`/`textFlow`). `None` = the historical inline\ndefault (treat-as-char, zero offset) — the encoder emits the legacy\ninline placement for it; `Some` carries the full floating/anchored\nplacement. See [`ObjectPlacement`].",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ObjectPlacement"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "caption": {
+                  "description": "Optional caption attached to this connect line.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Caption"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "style": {
+                  "description": "Optional visual style overrides.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ShapeStyle"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "start",
+                "end",
+                "control_points",
+                "connect_type",
+                "width",
+                "height"
+              ]
+            }
+          },
+          "required": [
+            "ConnectLine"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "A group of drawing objects (묶음 객체 / 개체 묶기).\nMaps to HWPX `<hp:container>` and HWP5 `gso` → `ShapeComponent` with\nthe `\"$con\"` type tag wrapping child `ShapeComponent`s.\n\n`children` reuses the shape `Control` variants (`Rect`/`Ellipse`/\n`Line`/`Polygon`/`Curve`/`ConnectLine`/`Image`/`EmbeddedChart` and,\nrecursively, `Group`). Non-shape variants are rejected by\n`validate` rather than the type system, matching how every other\nrecursive container (`TextBox`/`Footnote`/`Memo.content`) carries a\nloose `Vec<Paragraph>` / `Vec<Run>`.",
+          "type": "object",
+          "properties": {
+            "Group": {
+              "type": "object",
+              "properties": {
+                "children": {
+                  "description": "Child drawing objects, in z-order. May nest further `Group`s.",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/Control"
+                  }
+                },
+                "width": {
+                  "description": "Bounding box width (HWPUNIT).",
+                  "$ref": "#/$defs/HwpUnit"
+                },
+                "height": {
+                  "description": "Bounding box height (HWPUNIT).",
+                  "$ref": "#/$defs/HwpUnit"
+                },
+                "placement": {
+                  "description": "Object placement / anchoring metadata (HWPX `<hp:pos>` block plus\nthe shape's `textWrap`/`textFlow`). `None` = the historical inline\ndefault (treat-as-char, zero offset) — the encoder emits the legacy\ninline placement for it; `Some` carries the full floating/anchored\nplacement. See [`ObjectPlacement`].",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ObjectPlacement"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "inst_id": {
+                  "description": "HWP5 ParaHeader / GSO trailer instance ID, mirrored to the\nHWPX `<hp:container instid>` attribute. `None` = not carried.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ObjectId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "children",
+                "width",
+                "height"
+              ]
+            }
+          },
+          "required": [
+            "Group"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "A TextArt (글맵시) decorative warped-text object.\nMaps to HWPX `<hp:textart>` with `<hp:textartPr>`.\n\nTextArt warps a short string into a shape (wave, arch, circle, …) and\nrenders it as a drawing object. The HWP5 wire stores `shape` as an\ninteger enum (`0..=54`); the HWPX wire stores it as a string name\n(e.g. `\"WAVE2\"`). This carries the HWPX string form directly.",
+          "type": "object",
+          "properties": {
+            "TextArt": {
+              "type": "object",
+              "properties": {
+                "text": {
+                  "description": "The displayed text content.",
+                  "type": "string"
+                },
+                "shape": {
+                  "description": "HWPX `textShape` name (e.g. `\"WAVE2\"`). One of 55 known shapes.",
+                  "type": "string"
+                },
+                "font_name": {
+                  "description": "Font family name (e.g. `\"함초롬바탕\"`).",
+                  "type": "string"
+                },
+                "font_style": {
+                  "description": "Font style label (e.g. `\"보통\"`).",
+                  "type": "string"
+                },
+                "align": {
+                  "description": "HWPX `align` value within the textart (e.g. `\"LEFT\"`).",
+                  "type": "string"
+                },
+                "line_spacing": {
+                  "description": "Line spacing (percent, HWPX `lineSpacing`).",
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                },
+                "char_spacing": {
+                  "description": "Character spacing (percent, HWPX `charSpacing`).",
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                },
+                "width": {
+                  "description": "Bounding box width (HWPUNIT).",
+                  "$ref": "#/$defs/HwpUnit"
+                },
+                "height": {
+                  "description": "Bounding box height (HWPUNIT).",
+                  "$ref": "#/$defs/HwpUnit"
+                },
+                "placement": {
+                  "description": "Object placement / anchoring metadata (HWPX `<hp:pos>` block plus\nthe shape's `textWrap`/`textFlow`). `None` = the historical inline\ndefault (treat-as-char, zero offset) — the encoder emits the legacy\ninline placement for it; `Some` carries the full floating/anchored\nplacement. See [`ObjectPlacement`].",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ObjectPlacement"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "fill_color": {
+                  "description": "Fill color (the `<hc:winBrush faceColor>` of the textart glyphs).\n`None` = no explicit fill carried.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Color"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "inst_id": {
+                  "description": "HWP5 GSO trailer instance ID, mirrored to HWPX `<hp:textart instid>`.\n`None` = not carried.",
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ObjectId"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "text",
+                "shape",
+                "font_name",
+                "font_style",
+                "align",
+                "line_spacing",
+                "char_spacing",
+                "width",
+                "height"
+              ]
+            }
+          },
+          "required": [
+            "TextArt"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "A bookmark marking a named location in the document.\nMaps to HWPX `<hp:ctrl><hp:bookmark>` (point) or `fieldBegin/fieldEnd type=\"BOOKMARK\"` (span).",
+          "type": "object",
+          "properties": {
+            "Bookmark": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "description": "Bookmark name (unique within the document).",
+                  "type": "string"
+                },
+                "bookmark_type": {
+                  "description": "Type: point bookmark or span start/end.",
+                  "$ref": "#/$defs/BookmarkType"
+                }
+              },
+              "required": [
+                "name",
+                "bookmark_type"
+              ]
+            }
+          },
+          "required": [
+            "Bookmark"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "A cross-reference (상호참조) to a bookmark, footnote, endnote,\noutline heading, table/figure/equation caption.\n\nMaps to HWPX `fieldBegin type=\"CROSSREF\"` with parameters.\n\nWave 12m Phase 2: `target_name: String` 가 `target: RefTarget` 로\n변경 (breaking). 책갈피 이름과 한컴 자동 ID (#<id>) 가 타입으로\n구분되어 caller 가 의미를 정확히 알 수 있음.\n\nWave 12m Phase 2 Step 4 (breaking): `display_text: String` 추가.\nHWPX wire 는 `<hp:fieldBegin>` 과 `<hp:fieldEnd>` 사이의 visible run\n으로 display text 를 embedding 한다. HWP5 `%xrf` wire 는 display\ntext 를 직접 carry 하지 않고 ParaText 본문에 풀어 두지만, projection\n이 FieldBegin..FieldEnd span 을 읽어 이 필드에 채워 넣는다.\n빈 문자열은 \"display text 없음\" 의미 (Hyperlink::text 와 동일).",
+          "type": "object",
+          "properties": {
+            "CrossRef": {
+              "type": "object",
+              "properties": {
+                "target": {
+                  "description": "Reference target — Bookmark name (`Name(String)`) or system\nid (`SystemId(u64)`) or unparseable raw (`Raw(String)`).",
+                  "$ref": "#/$defs/RefTarget"
+                },
+                "ref_type": {
+                  "description": "What kind of target is being referenced.",
+                  "$ref": "#/$defs/RefType"
+                },
+                "content_type": {
+                  "description": "What content to display at the reference site.",
+                  "$ref": "#/$defs/RefContentType"
+                },
+                "as_hyperlink": {
+                  "description": "Whether to render the reference as a clickable hyperlink.",
+                  "type": "boolean"
+                },
+                "display_text": {
+                  "description": "Visible body text shown between `fieldBegin` and `fieldEnd`\nin the encoded wire. HWP5 sources this from the FieldBegin\nspan; native builders may leave this empty.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "target",
+                "ref_type",
+                "content_type",
+                "as_hyperlink",
+                "display_text"
+              ]
+            }
+          },
+          "required": [
+            "CrossRef"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "A press-field (누름틀) — an interactive form field.\nMaps to HWPX `fieldBegin type=\"CLICK_HERE\"` with parameters and `metaTag`.",
+          "type": "object",
+          "properties": {
+            "Field": {
+              "type": "object",
+              "properties": {
+                "field_type": {
+                  "description": "Field type (ClickHere, Date, Time, etc.).",
+                  "$ref": "#/$defs/FieldType"
+                },
+                "hint_text": {
+                  "description": "Hint/visible text shown in the field placeholder.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "help_text": {
+                  "description": "Help text shown when hovering or clicking the field.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "name": {
+                  "description": "Form-mode identifier used to reference the field programmatically.\nMaps to HWPX `fieldBegin name=\"...\"` attribute. `None` represents\nthe empty string convention (한컴 wire stores it as a 0-length BSTR).",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "display_text": {
+                  "description": "Cached resolved value rendered between `<hp:fieldBegin>` and\n`<hp:fieldEnd>` (e.g. the author name, the locale-formatted date).\nHWP5 sources this from the FieldBegin..FieldEnd span; 한컴 native\nHWPX carries the same cached render and recomputes it on save.\nEmpty string = \"no cached value\" (same convention as\n[`Self::CrossRef::display_text`] / [`Self::Hyperlink::text`]).\nFor `ClickHere` this is the user-filled value; an unfilled field\ncarries either the same string as [`Self::Field::hint_text`]\n(decoded from a native body) or the empty string (constructed).\nWhen empty, the HWPX encoder emits `hint_text` as the body.\n\nAn empty body triggers 한컴's \"낮은 보안 수준 복구\" warning on\nopen for SUMMERY fields (#120/#136) — carrying the verbatim\nsource value avoids it.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "field_type",
+                "display_text"
+              ]
+            }
+          },
+          "required": [
+            "Field"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "A memo (메모) annotation attached to text.\n\nMaps to HWPX `fieldBegin type=\"MEMO\"` + anchor body runs +\n`fieldEnd` flat inside one `<hp:run>`. The memo's body lives inside\n`fieldBegin`'s `<hp:subList>`; the *anchor* runs sit between\n`fieldBegin` and `fieldEnd` so 한컴 can pair the markers and render\nthe `[메모 시작]…[메모 끝]` UI labels instead of generic\n`[메모 시작]…[필드 끝]`.\n\nWave 12e: `author`/`date` fields removed (no wire path populated\nthem).\n\nWave 12f: `anchor_runs` added. Without it, the encoder produced an\nempty `<hp:t/>` between `fieldBegin` and `fieldEnd`, which 한컴 reads\nas an unpaired field — visible bug.",
+          "type": "object",
+          "properties": {
+            "Memo": {
+              "type": "object",
+              "properties": {
+                "content": {
+                  "description": "Paragraphs forming the memo body content (rendered in\n`<hp:subList>`).",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/Paragraph"
+                  }
+                },
+                "anchor_runs": {
+                  "description": "Runs that form the visible *anchor* text — the body span the memo\nis attached to. Encoders interleave these between `fieldBegin`\nand `fieldEnd` inside one `<hp:run>`. Should normally hold only\n`RunContent::Text`; other variants are downgraded by the encoder\nwith a warning (memos cannot anchor on tables/images/nested\ncontrols in HWPX).",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/Run"
+                  }
+                },
+                "metadata": {
+                  "description": "HWPX `<hp:parameters>` for the memo. Carrying these as a\ndedicated [`MemoMetadata`] (instead of half-empty hard-coded\nvalues) keeps the metadata format-agnostic — encoders for HWPX\n(and any future format with similar metadata) consume the same\nstruct.",
+                  "$ref": "#/$defs/MemoMetadata"
+                }
+              },
+              "required": [
+                "content",
+                "anchor_runs",
+                "metadata"
+              ]
+            }
+          },
+          "required": [
+            "Memo"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "An index mark for building a document index (찾아보기).\nMaps to HWPX `<hp:ctrl><hp:indexmark>`.",
+          "type": "object",
+          "properties": {
+            "IndexMark": {
+              "type": "object",
+              "properties": {
+                "primary": {
+                  "description": "Primary index key (required).",
+                  "type": "string"
+                },
+                "secondary": {
+                  "description": "Secondary (sub-entry) index key.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "primary"
+              ]
+            }
+          },
+          "required": [
+            "IndexMark"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "An unknown SUMMERY (`%smr`) `$token` carried verbatim for forward\ncompatibility (Wave 12n).\n\nWave 12n only models the five HwpForge-observed tokens (`$author`,\n`$lastsaveby`, `$createtime`, `$modifiedtime`, `$title`) as typed\n[`FieldType`] variants. Any other `%smr` Command (e.g. additional\n한컴 metadata tokens not yet measured) is preserved here instead of\nbeing silently coerced to `ClickHere`.",
+          "type": "object",
+          "properties": {
+            "UnknownSummary": {
+              "type": "object",
+              "properties": {
+                "token": {
+                  "description": "Raw `Command` string after envelope (e.g. `\"$company\"`).",
+                  "type": "string"
+                },
+                "display_text": {
+                  "description": "Cached resolved value rendered between `fieldBegin`/`fieldEnd`.\nSame semantics as [`Self::Field::display_text`]; empty = none.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "token",
+                "display_text"
+              ]
+            }
+          },
+          "required": [
+            "UnknownSummary"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "A `%dte` date/time **format-pattern** field (Wave 12n).\n\nHWP5 family `%dte` (ctrl_id `0x2564_7465`) used by 한컴\n`입력 → 날짜/시간/파일 이름 → 날짜/시간 코드` menu. Unlike SUMMERY\n(which carries semantic tokens like `$createtime`), `%dte` carries\na raw format pattern string (e.g. `\"\\:1년 2월 3일 (6);0;\"` for date,\n`\"T\\:;0;\"` for time-only). The HWP5 wire format pattern is\nsmithy-internal; the format-agnostic core retains only the derived\n`is_time_mode` helper (was based on the `T` prefix at projection time).",
+          "type": "object",
+          "properties": {
+            "DateCodeField": {
+              "type": "object",
+              "properties": {
+                "is_time_mode": {
+                  "description": "Helper view: `true` for a time-only (`T`-prefixed) format,\n`false` for a date format. Derived at HWP5 projection time.",
+                  "type": "boolean"
+                },
+                "display_text": {
+                  "description": "Cached resolved value rendered between `fieldBegin`/`fieldEnd`\n(the locale-formatted date/time string). Same semantics as\n[`Self::Field::display_text`]; empty = none.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "is_time_mode",
+                "display_text"
+              ]
+            }
+          },
+          "required": [
+            "DateCodeField"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "A `%pat` path / file-name field (Wave 12n).\n\nHWP5 family `%pat` (ctrl_id `0x2570_6174`) emitted by 한컴\n`상용구 → 파일 이름 / 파일 이름과 경로`. Uses `$P` (path) and\n`$F` (file name) format codes.",
+          "type": "object",
+          "properties": {
+            "PathField": {
+              "type": "object",
+              "properties": {
+                "command": {
+                  "description": "Typed variant of the observed `Command` pattern.",
+                  "$ref": "#/$defs/PathFieldCommand"
+                },
+                "display_text": {
+                  "description": "Cached resolved value rendered between `fieldBegin`/`fieldEnd`\n(the absolute path/file name 한컴 last evaluated). Same semantics\nas [`Self::Field::display_text`]; empty = none. 한컴 recomputes\n`$P`/`$F` against the file's on-disk path on save, but an empty\nbody on open triggers the recovery warning (#120).",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "command",
+                "display_text"
+              ]
+            }
+          },
+          "required": [
+            "PathField"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "An `atno` **inline** page number control (Wave 12n).\n\nHWP5 family `atno` (ctrl_id `0x6174_6E6F`) used by 한컴\n`상용구 → 현재 쪽 번호 / 전체 쪽수 / 현재 쪽/전체 쪽수`. Distinct\nfrom `pgnp` (section-level page numbering control already modeled\nas `Section.page_number`). Inline `atno` renders to HWPX\n`<hp:autoNum>` inside a `<hp:run>`.\n\nThe 16-byte wire envelope carries a single 4-byte flag that\ndistinguishes current-page from total-pages; the HWP5 projection\nmaps it to [`InlinePageKind`].",
+          "type": "object",
+          "properties": {
+            "InlinePageNumber": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "description": "Typed variant of the observed `flag` byte.",
+                  "$ref": "#/$defs/InlinePageKind"
+                }
+              },
+              "required": [
+                "kind"
+              ]
+            }
+          },
+          "required": [
+            "InlinePageNumber"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "A `nwno` **새 번호 지정** control — restarts a numbering counter\nfrom this position (HWPX `<hp:newNum num numType>`).\n\nHWP5 wire (native fixture 실측 2026-08-12): 10 bytes —\n`ctrl_id + 속성 u32(bits 0-3 = kind) + 번호 u16`, anchored in the\nparagraph text by a `0x15` inline marker. 한컴 [쪽]→[새 번호로\n시작] 이 쓰는 경로다 (corpus: 407/2,231 문서). The restart applies\nfrom the **physical page containing the control** (PDF 실측:\n1쪽 앵커 = 전문서 재번호, 2쪽 앵커 = `1, 7`).",
+          "type": "object",
+          "properties": {
+            "NewNumber": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "description": "Which counter restarts ([`NewNumberKind::Page`] is the only\nrenderer-consumed kind; others carry through to HWPX).",
+                  "$ref": "#/$defs/NewNumberKind"
+                },
+                "number": {
+                  "description": "The new counter value (fixture sentinel `7`). `u32` covers both\nwires losslessly — HWP5 `nwno` carries u16, HWPX inline\n`hp:newNum@num` is `xs:integer` (so `0` is wire-valid and the\nHWPX encoder carries it verbatim into the regenerated number\ncache; range enforcement, if any, belongs to Core validation).",
+                  "type": "integer",
+                  "format": "uint32",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "kind",
+                "number"
+              ]
+            }
+          },
+          "required": [
+            "NewNumber"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "A `pghd` **감추기** control — hides the listed page furniture on the\n**physical page containing the control** (HWPX `<hp:pageHiding>`).\n\nHWP5 wire (native fixture 실측 2026-08-12): 8 bytes — `ctrl_id +\n속성 u32`, bits 0-5 = 머리말/꼬리말/바탕쪽/테두리/배경/쪽번호\n(secd 속성 word 와 동일 배열 — libhwp·hwp-rs 의 다른 주장은 반증).\n`0x15` inline marker 로 앵커. corpus: 403/2,231 문서, 87% 가\n쪽번호만 감춤 (표지 관행). 감춤은 쪽번호 **카운터 전진을 막지\n않는다** (PDF 실측: `1, _, 3`).",
+          "type": "object",
+          "properties": {
+            "PageHiding": {
+              "type": "object",
+              "properties": {
+                "hide_header": {
+                  "description": "머리말 감춤 (bit 0, `hideHeader`).",
+                  "type": "boolean"
+                },
+                "hide_footer": {
+                  "description": "꼬리말 감춤 (bit 1, `hideFooter`).",
+                  "type": "boolean"
+                },
+                "hide_master_page": {
+                  "description": "바탕쪽 감춤 (bit 2, `hideMasterPage`).",
+                  "type": "boolean"
+                },
+                "hide_border": {
+                  "description": "테두리 감춤 (bit 3, `hideBorder`).",
+                  "type": "boolean"
+                },
+                "hide_fill": {
+                  "description": "배경 감춤 (bit 4, `hideFill`).",
+                  "type": "boolean"
+                },
+                "hide_page_num": {
+                  "description": "쪽번호 감춤 (bit 5, `hidePageNum`).",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "hide_header",
+                "hide_footer",
+                "hide_master_page",
+                "hide_border",
+                "hide_fill",
+                "hide_page_num"
+              ]
+            }
+          },
+          "required": [
+            "PageHiding"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "An unrecognized control element preserved for round-trip fidelity.\n\n`tag` holds the element's tag name or type identifier.\n`data` holds optional serialized content for lossless preservation.",
+          "type": "object",
+          "properties": {
+            "Unknown": {
+              "type": "object",
+              "properties": {
+                "tag": {
+                  "description": "Tag name or type identifier of the unrecognized element.",
+                  "type": "string"
+                },
+                "data": {
+                  "description": "Optional serialized data for round-trip preservation.",
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "tag"
+              ]
+            }
+          },
+          "required": [
+            "Unknown"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ShapeStyle": {
+      "description": "Visual style overrides for drawing shapes.\n\nAll fields are `Option`; `None` means \"use the encoder's default\"\n(typically black solid border, white fill, 0.12 mm stroke).\n\n# Examples\n\n```\nuse hwpforge_core::control::{ShapeStyle, LineStyle};\nuse hwpforge_foundation::Color;\n\nlet style = ShapeStyle {\n    line_color: Some(Color::from_rgb(255, 0, 0)),\n    fill_color: Some(Color::from_rgb(0, 255, 0)),\n    line_width: Some(100),\n    line_style: Some(LineStyle::Dash),\n    ..Default::default()\n};\n```",
+      "type": "object",
+      "properties": {
+        "line_color": {
+          "description": "Stroke/border color (e.g. `Color::from_rgb(255, 0, 0)` for red).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fill_color": {
+          "description": "Fill color (e.g. `Color::from_rgb(0, 255, 0)` for green).\nFor advanced fills (gradient, pattern, image), use the `fill` field instead.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Color"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "line_width": {
+          "description": "Stroke width in HWPUNIT (33 ≈ 0.12mm, 100 ≈ 0.35mm).",
+          "type": [
+            "integer",
+            "null"
+          ],
+          "format": "uint32",
+          "minimum": 0
+        },
+        "line_style": {
+          "description": "Line drawing style (solid, dash, dot, etc.).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/LineStyle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "rotation": {
+          "description": "Rotation angle in degrees (0-360). `None` means no rotation.",
+          "type": [
+            "number",
+            "null"
+          ],
+          "format": "float"
+        },
+        "flip": {
+          "description": "Flip/mirror state. `None` means no flip.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Flip"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "head_arrow": {
+          "description": "Arrowhead at the start of a line. Only meaningful for `Control::Line`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArrowStyle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "tail_arrow": {
+          "description": "Arrowhead at the end of a line. Only meaningful for `Control::Line`.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ArrowStyle"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fill": {
+          "description": "Advanced fill (gradient, pattern, image). Overrides `fill_color` when present.",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Fill"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "drop_cap_style": {
+          "description": "Drop cap style for the shape (HWPX `dropcapstyle` attribute).\nControls whether the shape participates in a drop-cap layout.",
+          "$ref": "#/$defs/DropCapStyle",
+          "default": "None"
+        }
+      }
+    },
+    "LineStyle": {
+      "description": "Line drawing style for shapes.\n\nControls how the stroke of a shape is rendered (solid, dashed, etc.).\nMaps to HWPX `<hc:lineShape>` `dash` attribute values.\n\n# Examples\n\n```\nuse hwpforge_core::control::LineStyle;\n\nlet style = LineStyle::Dash;\nassert_eq!(style.to_string(), \"DASH\");\nassert_eq!(\"DOT\".parse::<LineStyle>().unwrap(), LineStyle::Dot);\n```",
+      "oneOf": [
+        {
+          "description": "Continuous solid line (default).",
+          "type": "string",
+          "const": "Solid"
+        },
+        {
+          "description": "Dashed line.",
+          "type": "string",
+          "const": "Dash"
+        },
+        {
+          "description": "Dotted line.",
+          "type": "string",
+          "const": "Dot"
+        },
+        {
+          "description": "Alternating dash and dot.",
+          "type": "string",
+          "const": "DashDot"
+        },
+        {
+          "description": "Alternating dash, dot, dot.",
+          "type": "string",
+          "const": "DashDotDot"
+        },
+        {
+          "description": "No visible line.",
+          "type": "string",
+          "const": "None"
+        }
+      ]
+    },
+    "Flip": {
+      "type": "string"
+    },
+    "ArrowStyle": {
+      "description": "Arrowhead style for line endpoints.\n\n# Examples\n\n```\nuse hwpforge_core::control::ArrowStyle;\nuse hwpforge_foundation::{ArrowType, ArrowSize};\n\nlet arrow = ArrowStyle {\n    arrow_type: ArrowType::Normal,\n    size: ArrowSize::Medium,\n    filled: true,\n};\n```",
+      "type": "object",
+      "properties": {
+        "arrow_type": {
+          "description": "Shape of the arrowhead.",
+          "$ref": "#/$defs/ArrowType"
+        },
+        "size": {
+          "description": "Size of the arrowhead.",
+          "$ref": "#/$defs/ArrowSize"
+        },
+        "filled": {
+          "description": "Whether the arrowhead is filled (true) or outlined (false).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "arrow_type",
+        "size",
+        "filled"
+      ]
+    },
+    "ArrowType": {
+      "type": "string"
+    },
+    "ArrowSize": {
+      "type": "string"
+    },
+    "Fill": {
+      "description": "Fill specification for shapes.\n\nReplaces simple `fill_color` for shapes that need gradient, pattern, or image fills.\n\n# Examples\n\n```\nuse hwpforge_core::control::Fill;\nuse hwpforge_foundation::Color;\n\nlet solid = Fill::Solid { color: Color::from_rgb(255, 0, 0) };\n```",
+      "oneOf": [
+        {
+          "description": "Solid color fill.",
+          "type": "object",
+          "properties": {
+            "Solid": {
+              "type": "object",
+              "properties": {
+                "color": {
+                  "description": "Fill color.",
+                  "$ref": "#/$defs/Color"
+                }
+              },
+              "required": [
+                "color"
+              ]
+            }
+          },
+          "required": [
+            "Solid"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "Gradient fill.",
+          "type": "object",
+          "properties": {
+            "Gradient": {
+              "type": "object",
+              "properties": {
+                "gradient_type": {
+                  "description": "Gradient direction type.",
+                  "$ref": "#/$defs/GradientType"
+                },
+                "angle": {
+                  "description": "Gradient angle in degrees.",
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "colors": {
+                  "description": "Color stops: (color, position 0-100).",
+                  "type": "array",
+                  "items": {
+                    "type": "array",
+                    "prefixItems": [
+                      {
+                        "$ref": "#/$defs/Color"
+                      },
+                      {
+                        "type": "integer",
+                        "format": "uint32",
+                        "minimum": 0
+                      }
+                    ],
+                    "minItems": 2,
+                    "maxItems": 2
+                  }
+                }
+              },
+              "required": [
+                "gradient_type",
+                "angle",
+                "colors"
+              ]
+            }
+          },
+          "required": [
+            "Gradient"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "Hatch pattern fill.",
+          "type": "object",
+          "properties": {
+            "Pattern": {
+              "type": "object",
+              "properties": {
+                "pattern_type": {
+                  "description": "Pattern type.",
+                  "$ref": "#/$defs/PatternType"
+                },
+                "fg_color": {
+                  "description": "Foreground pattern color.",
+                  "$ref": "#/$defs/Color"
+                },
+                "bg_color": {
+                  "description": "Background color.",
+                  "$ref": "#/$defs/Color"
+                }
+              },
+              "required": [
+                "pattern_type",
+                "fg_color",
+                "bg_color"
+              ]
+            }
+          },
+          "required": [
+            "Pattern"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "Image fill.",
+          "type": "object",
+          "properties": {
+            "Image": {
+              "type": "object",
+              "properties": {
+                "image_id": {
+                  "description": "Image binary data reference ID.",
+                  "type": "string"
+                },
+                "mode": {
+                  "description": "Image fill mode (tile, stretch, etc.).",
+                  "$ref": "#/$defs/ImageFillMode"
+                }
+              },
+              "required": [
+                "image_id",
+                "mode"
+              ]
+            }
+          },
+          "required": [
+            "Image"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "GradientType": {
+      "type": "string"
+    },
+    "PatternType": {
+      "type": "string"
+    },
+    "ImageFillMode": {
+      "type": "string"
+    },
+    "DropCapStyle": {
+      "type": "string"
+    },
+    "VerticalAlign": {
+      "type": "string"
+    },
+    "ShapePoint": {
+      "description": "A 2D point in raw HWPUNIT coordinates for shape geometry.\n\nUses `i32` (not `HwpUnit`) because shape geometry points are raw\ncoordinate values within a bounding box, not document-level measurements.",
+      "type": "object",
+      "properties": {
+        "x": {
+          "description": "X coordinate (HWPUNIT).",
+          "type": "integer",
+          "format": "int32"
+        },
+        "y": {
+          "description": "Y coordinate (HWPUNIT).",
+          "type": "integer",
+          "format": "int32"
+        }
+      },
+      "required": [
+        "x",
+        "y"
+      ]
+    },
+    "ChartType": {
+      "description": "OOXML chart types supported by 한글 (16 OOXML types → 18 variants).\n\nBar and Column are both `<c:barChart>` in OOXML, distinguished by\n`<c:barDir val=\"bar|col\">`. Similarly for 3D variants.\n\n# Examples\n\n```\nuse hwpforge_core::chart::ChartType;\n\nlet ct = ChartType::Column;\nassert_eq!(format!(\"{ct:?}\"), \"Column\");\n```",
+      "oneOf": [
+        {
+          "description": "Horizontal bar chart (`<c:barChart>` with `barDir=bar`).",
+          "type": "string",
+          "const": "Bar"
+        },
+        {
+          "description": "Vertical bar chart (`<c:barChart>` with `barDir=col`).",
+          "type": "string",
+          "const": "Column"
+        },
+        {
+          "description": "3D horizontal bar chart (`<c:bar3DChart>` with `barDir=bar`).",
+          "type": "string",
+          "const": "Bar3D"
+        },
+        {
+          "description": "3D vertical bar chart (`<c:bar3DChart>` with `barDir=col`).",
+          "type": "string",
+          "const": "Column3D"
+        },
+        {
+          "description": "Line chart (`<c:lineChart>`).",
+          "type": "string",
+          "const": "Line"
+        },
+        {
+          "description": "3D line chart (`<c:line3DChart>`).",
+          "type": "string",
+          "const": "Line3D"
+        },
+        {
+          "description": "Pie chart (`<c:pieChart>`).",
+          "type": "string",
+          "const": "Pie"
+        },
+        {
+          "description": "3D pie chart (`<c:pie3DChart>`).",
+          "type": "string",
+          "const": "Pie3D"
+        },
+        {
+          "description": "Doughnut chart (`<c:doughnutChart>`).",
+          "type": "string",
+          "const": "Doughnut"
+        },
+        {
+          "description": "Pie-of-pie or bar-of-pie chart (`<c:ofPieChart>`).",
+          "type": "string",
+          "const": "OfPie"
+        },
+        {
+          "description": "Area chart (`<c:areaChart>`).",
+          "type": "string",
+          "const": "Area"
+        },
+        {
+          "description": "3D area chart (`<c:area3DChart>`).",
+          "type": "string",
+          "const": "Area3D"
+        },
+        {
+          "description": "Scatter (XY) chart (`<c:scatterChart>`).",
+          "type": "string",
+          "const": "Scatter"
+        },
+        {
+          "description": "Bubble chart (`<c:bubbleChart>`).",
+          "type": "string",
+          "const": "Bubble"
+        },
+        {
+          "description": "Radar chart (`<c:radarChart>`).",
+          "type": "string",
+          "const": "Radar"
+        },
+        {
+          "description": "Surface chart (`<c:surfaceChart>`).",
+          "type": "string",
+          "const": "Surface"
+        },
+        {
+          "description": "3D surface chart (`<c:surface3DChart>`).",
+          "type": "string",
+          "const": "Surface3D"
+        },
+        {
+          "description": "Stock chart (`<c:stockChart>`).",
+          "type": "string",
+          "const": "Stock"
+        }
+      ]
+    },
+    "ChartData": {
+      "description": "Chart data — either category-based or XY-based.\n\n# Examples\n\n```\nuse hwpforge_core::chart::ChartData;\n\nlet cat = ChartData::category(\n    &[\"A\", \"B\"],\n    &[(\"Series1\", &[10.0, 20.0])],\n);\nassert!(matches!(cat, ChartData::Category { .. }));\n\nlet xy = ChartData::xy(&[(\"Points\", &[1.0, 2.0], &[3.0, 4.0])]);\nassert!(matches!(xy, ChartData::Xy { .. }));\n```",
+      "oneOf": [
+        {
+          "description": "Category-based data (bar, line, pie, area, radar, etc.).",
+          "type": "object",
+          "properties": {
+            "Category": {
+              "type": "object",
+              "properties": {
+                "categories": {
+                  "description": "Category labels (X-axis).",
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "series": {
+                  "description": "Data series, each with a name and values.",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/ChartSeries"
+                  }
+                }
+              },
+              "required": [
+                "categories",
+                "series"
+              ]
+            }
+          },
+          "required": [
+            "Category"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "XY-based data (scatter, bubble).",
+          "type": "object",
+          "properties": {
+            "Xy": {
+              "type": "object",
+              "properties": {
+                "series": {
+                  "description": "XY series, each with name + x/y value arrays.",
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/XySeries"
+                  }
+                }
+              },
+              "required": [
+                "series"
+              ]
+            }
+          },
+          "required": [
+            "Xy"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "ChartSeries": {
+      "description": "A named data series with values aligned to categories.",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Series name (shown in legend).",
+          "type": "string"
+        },
+        "values": {
+          "description": "Numeric values (one per category).",
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "values"
+      ]
+    },
+    "XySeries": {
+      "description": "A named XY data series (for scatter/bubble charts).",
+      "type": "object",
+      "properties": {
+        "name": {
+          "description": "Series name (shown in legend).",
+          "type": "string"
+        },
+        "x_values": {
+          "description": "X-axis values.",
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "y_values": {
+          "description": "Y-axis values (must be same length as `x_values`).",
+          "type": "array",
+          "items": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
+      "required": [
+        "name",
+        "x_values",
+        "y_values"
+      ]
+    },
+    "LegendPosition": {
+      "description": "Legend position relative to the chart area.",
+      "oneOf": [
+        {
+          "description": "Legend on the right side (default).",
+          "type": "string",
+          "const": "Right"
+        },
+        {
+          "description": "Legend at the bottom.",
+          "type": "string",
+          "const": "Bottom"
+        },
+        {
+          "description": "Legend at the top.",
+          "type": "string",
+          "const": "Top"
+        },
+        {
+          "description": "Legend on the left side.",
+          "type": "string",
+          "const": "Left"
+        },
+        {
+          "description": "No legend displayed.",
+          "type": "string",
+          "const": "None"
+        }
+      ]
+    },
+    "ChartGrouping": {
+      "description": "Chart data grouping mode.\n\nDetermines how multiple series are arranged visually.",
+      "oneOf": [
+        {
+          "description": "Side-by-side bars/areas (default).",
+          "type": "string",
+          "const": "Clustered"
+        },
+        {
+          "description": "Stacked on top of each other.",
+          "type": "string",
+          "const": "Stacked"
+        },
+        {
+          "description": "Stacked to 100%.",
+          "type": "string",
+          "const": "PercentStacked"
+        },
+        {
+          "description": "Standard grouping (used by line/scatter).",
+          "type": "string",
+          "const": "Standard"
+        }
+      ]
+    },
+    "BarShape": {
+      "description": "Bar/column 3D shape variant.\n\nControls the visual shape of bars in 3D bar and column charts.\nMaps to OOXML `<c:shape val=\"...\"/>` within `<c:bar3DChart>`.",
+      "oneOf": [
+        {
+          "description": "Standard rectangular box (default).",
+          "type": "string",
+          "const": "Box"
+        },
+        {
+          "description": "Cylindrical column.",
+          "type": "string",
+          "const": "Cylinder"
+        },
+        {
+          "description": "Conical column.",
+          "type": "string",
+          "const": "Cone"
+        },
+        {
+          "description": "Pyramid-shaped column.",
+          "type": "string",
+          "const": "Pyramid"
+        }
+      ]
+    },
+    "OfPieType": {
+      "description": "Pie-of-pie or bar-of-pie sub-type.\n\nDetermines whether the secondary chart is a pie or a bar.\nMaps to OOXML `<c:ofPieType val=\"...\"/>` within `<c:ofPieChart>`.",
+      "oneOf": [
+        {
+          "description": "Pie-of-pie chart.",
+          "type": "string",
+          "const": "Pie"
+        },
+        {
+          "description": "Bar-of-pie chart.",
+          "type": "string",
+          "const": "Bar"
+        }
+      ]
+    },
+    "RadarStyle": {
+      "description": "Radar chart rendering style.\n\nControls how the radar chart area is rendered.\nMaps to OOXML `<c:radarStyle val=\"...\"/>` within `<c:radarChart>`.",
+      "oneOf": [
+        {
+          "description": "Standard radar (lines only).",
+          "type": "string",
+          "const": "Standard"
+        },
+        {
+          "description": "Radar with data point markers.",
+          "type": "string",
+          "const": "Marker"
+        },
+        {
+          "description": "Filled/shaded radar area.",
+          "type": "string",
+          "const": "Filled"
+        }
+      ]
+    },
+    "ScatterStyle": {
+      "description": "Scatter chart line/marker style.\n\nControls how data points are connected and displayed in scatter charts.\nMaps to OOXML `<c:scatterStyle val=\"...\"/>` within `<c:scatterChart>`.",
+      "oneOf": [
+        {
+          "description": "Points only, no lines.",
+          "type": "string",
+          "const": "Dots"
+        },
+        {
+          "description": "Straight lines with markers.",
+          "type": "string",
+          "const": "LineMarker"
+        },
+        {
+          "description": "Smooth curves with markers.",
+          "type": "string",
+          "const": "SmoothMarker"
+        },
+        {
+          "description": "Straight lines without markers.",
+          "type": "string",
+          "const": "Line"
+        },
+        {
+          "description": "Smooth curves without markers.",
+          "type": "string",
+          "const": "Smooth"
+        }
+      ]
+    },
+    "StockVariant": {
+      "description": "Stock chart sub-variant determining series composition.\n\nThe basic `ChartType::Stock` maps to HLC (High-Low-Close, 3 series).\nVolume variants require a composite `<c:plotArea>` with both a `<c:barChart>`\n(volume series) and a `<c:stockChart>` (price series).\n\n# OOXML mapping\n\n| Variant | Series | plotArea layout |\n|---------|--------|-----------------|\n| `Hlc`   | 3      | stockChart only |\n| `Ohlc`  | 4      | stockChart only |\n| `Vhlc`  | 4      | barChart + stockChart |\n| `Vohlc` | 5      | barChart + stockChart |",
+      "oneOf": [
+        {
+          "description": "High-Low-Close (3 price series, default).",
+          "type": "string",
+          "const": "Hlc"
+        },
+        {
+          "description": "Open-High-Low-Close (4 price series).",
+          "type": "string",
+          "const": "Ohlc"
+        },
+        {
+          "description": "Volume-High-Low-Close (1 volume + 3 price series, composite plotArea).",
+          "type": "string",
+          "const": "Vhlc"
+        },
+        {
+          "description": "Volume-Open-High-Low-Close (1 volume + 4 price series, composite plotArea).",
+          "type": "string",
+          "const": "Vohlc"
+        }
+      ]
+    },
+    "DutmalPosition": {
+      "description": "Position of dutmal annotation text relative to the main text.",
+      "oneOf": [
+        {
+          "description": "Annotation above main text (default).",
+          "type": "string",
+          "const": "Top"
+        },
+        {
+          "description": "Annotation below main text.",
+          "type": "string",
+          "const": "Bottom"
+        },
+        {
+          "description": "Annotation to the right.",
+          "type": "string",
+          "const": "Right"
+        },
+        {
+          "description": "Annotation to the left.",
+          "type": "string",
+          "const": "Left"
+        }
+      ]
+    },
+    "DutmalAlign": {
+      "description": "Alignment of dutmal annotation text.",
+      "oneOf": [
+        {
+          "description": "Center-aligned (default).",
+          "type": "string",
+          "const": "Center"
+        },
+        {
+          "description": "Left-aligned.",
+          "type": "string",
+          "const": "Left"
+        },
+        {
+          "description": "Right-aligned.",
+          "type": "string",
+          "const": "Right"
+        }
+      ]
+    },
+    "DutmalMetadata": {
+      "description": "Wire-mirrored metadata attached to a `Control::Dutmal`.\n\nCarries HWPX `<hp:dutmal>` attributes that HwpForge does not yet\nmodel as typed fields — currently just `option`. Field is mirrored\nverbatim from HWP5 wire / HWPX `option=` attribute and emitted\nverbatim on encode so round-trips preserve the value even when the\nsemantics aren't pinned down (see\n`.docs/algorithms/2026-06-01_dutmal_carry.md`).\n\n`#[non_exhaustive]` — additions like `style_id_ref` or the two\nreserved tail words are additive and don't break existing\ndestructure / pattern-match sites.",
+      "type": "object",
+      "properties": {
+        "option": {
+          "description": "`<hp:dutmal option=…>` value mirrored verbatim. Likely a\nbit-field or enum on the HWPX side; HwpForge treats it as an\nopaque u32 until the spec is confirmed.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "option"
+      ]
+    },
+    "ArcType": {
+      "type": "string"
+    },
+    "CurveSegmentType": {
+      "type": "string"
+    },
+    "BookmarkType": {
+      "type": "string"
+    },
+    "RefTarget": {
+      "description": "Cross-reference target identifier (Wave 12m Phase 2).\n\nReplaces the previous `target_name: String` field on\n[`Control::CrossRef`] with a type-safe enum that distinguishes the\nthree observed wire forms in HWP5 `%xrf` Command strings:\n\n- **`Name(String)`** — 사용자 지정 책갈피 이름 (Bookmark 전용).\n  한컴 fixture 의 `?target1;6;0;0;0;` 형식에서 `target1` 부분.\n- **`Object(ObjectId)`** — 한컴 자동 생성 정수 ID (Footnote / Endnote /\n  Caption / Outline). 한컴 fixture 의 `?#1108165575;3;0;0;0;` 형식에서\n  `#` 접두사를 떼고 정수로 파싱한 값. 가리키는 타깃(Image/Table/…)의\n  `inst_id: Option<ObjectId>` 와 **같은 [`ObjectId`]** 를 공유해 링크를\n  타입 수준에서 보장한다 (ADR-010).\n- **`Raw(String)`** — 위 두 형식 어느쪽으로도 파싱이 안 된 wire 값.\n  silent fallback 위조 금지 원칙 (Codex(architect)) — 의미를\n  모르면 raw 보존.\n\n변환은 `smithy-hwp5/src/projection.rs::decode_hwp5_target` 의\nboundary 함수에서 수행 (Core 는 wire-agnostic).",
+      "oneOf": [
+        {
+          "description": "사용자 지정 책갈피 이름 (Bookmark 전용).",
+          "type": "object",
+          "properties": {
+            "Name": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Name"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "타깃 객체의 [`ObjectId`] (Footnote / Endnote / Caption / Outline).\n가리키는 타깃의 `inst_id` 와 같은 id 를 공유한다 (ADR-010).",
+          "type": "object",
+          "properties": {
+            "Object": {
+              "$ref": "#/$defs/ObjectId"
+            }
+          },
+          "required": [
+            "Object"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "위 형식 어느쪽으로도 정규화되지 않은 raw 값 — fallback 위조 금지.",
+          "type": "object",
+          "properties": {
+            "Raw": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Raw"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "RefType": {
+      "type": "string"
+    },
+    "RefContentType": {
+      "type": "string"
+    },
+    "FieldType": {
+      "type": "string"
+    },
+    "MemoMetadata": {
+      "description": "Metadata associated with a memo annotation (HWPX `<hp:parameters>`).\n\nCarries the seven HWPX memo parameters (`Prop`, `Command`, `ID`, `Number`,\n`Author`, `MemoShapeIDRef`, `CreateDateTime`). Empty / default values are\nrendered by encoders as sensible defaults: `Prop` is always `0` on\n한컴-authored fixtures so the field is omitted on the Core side, and\n`CreateDateTime` is auto-generated at encode time if blank (a 한컴-native\nmemo always has a timestamp).\n\nOther format encoders (Markdown, future ODT) can ignore the\nHWPX-specific fields and just use `author` if useful.",
+      "type": "object",
+      "properties": {
+        "shape_id_ref": {
+          "description": "Reference to the `MemoShape` table entry. 한컴 default is `65535`.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "number": {
+          "description": "Memo number (`<hp:integerParam name=\"Number\">`). Equals the HWP5\n`memo_id`. Encoders normally also derive the HWPX `ID` parameter\nfrom this value (`\"memo{number}\"`).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "id": {
+          "description": "HWPX `ID` parameter (typically `\"memo{number}\"`). Encoders may\nauto-derive from `number` when blank.",
+          "type": "string"
+        },
+        "author": {
+          "description": "Memo author (`Author` parameter). Empty when unknown.",
+          "type": "string"
+        },
+        "create_datetime": {
+          "description": "HWPX `CreateDateTime` parameter (ISO 8601 UTC). Empty triggers\nencoder-side auto-generation at write time.",
+          "type": "string"
+        },
+        "command": {
+          "description": "Raw wire `Command` parameter (`\"MEMO/{shape}/{number}/…\"` from HWP5).\nEmpty for HwpForge-authored memos — encoders synthesise a minimum\n`MEMO/{shape}/{number}/` form in that case.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "shape_id_ref",
+        "number",
+        "id",
+        "author",
+        "create_datetime",
+        "command"
+      ]
+    },
+    "PathFieldCommand": {
+      "description": "Typed variant of the HWP5 `%pat` Command string (Wave 12n).\n\nObserved forms are `$F` (file name only), `$P` (path only), and `$P$F`\n(full path). Anything else is preserved as [`PathFieldCommand::Unknown`].",
+      "oneOf": [
+        {
+          "description": "`$F` — file name only.",
+          "type": "string",
+          "const": "FileName"
+        },
+        {
+          "description": "`$P` — folder path only (no file name).",
+          "type": "string",
+          "const": "Path"
+        },
+        {
+          "description": "`$P$F` — full path including file name.",
+          "type": "string",
+          "const": "PathAndFileName"
+        },
+        {
+          "description": "Any other Command form, preserved verbatim.",
+          "type": "object",
+          "properties": {
+            "Unknown": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "Unknown"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "InlinePageKind": {
+      "description": "Typed variant of the HWP5 `atno` inline page-number `flag` byte\n(Wave 12n).\n\nObserved values: `0x00` = current page, `0x06` = total page count.\nOther values surface as [`InlinePageKind::Unknown`].",
+      "oneOf": [
+        {
+          "description": "Flag `0x00` — current page number.",
+          "type": "string",
+          "const": "CurrentPage"
+        },
+        {
+          "description": "Flag `0x06` — total page count.",
+          "type": "string",
+          "const": "TotalPages"
+        },
+        {
+          "description": "Any other flag value, surfaced when the HWP5 wire flag is neither\n`0x00` nor `0x06`.",
+          "type": "string",
+          "const": "Unknown"
+        }
+      ]
+    },
+    "NewNumberKind": {
+      "description": "Which counter a [`Control::NewNumber`] restarts.\n\n[`Control::NewNumber`]: crate::control::Control::NewNumber\n\nMaps 1:1 to HWPX `<hp:newNum numType>` and HWP5 `nwno` property\nbits 0-3 (native fixture 실측 2026-08-12: 쪽 번호 = `0`, corpus 613회 중\n607회가 `Page`). Unmapped wire values are surfaced as [`Self::Unknown`]\n— encoders must skip them instead of fabricating a type.",
+      "oneOf": [
+        {
+          "description": "쪽 번호 재시작 (`numType=\"PAGE\"`, wire `0`).",
+          "type": "string",
+          "const": "Page"
+        },
+        {
+          "description": "각주 번호 재시작 (`numType=\"FOOTNOTE\"`, wire `1`).",
+          "type": "string",
+          "const": "Footnote"
+        },
+        {
+          "description": "미주 번호 재시작 (`numType=\"ENDNOTE\"`, wire `2`).",
+          "type": "string",
+          "const": "Endnote"
+        },
+        {
+          "description": "그림 번호 재시작 (`numType=\"PICTURE\"`, wire `3`).",
+          "type": "string",
+          "const": "Picture"
+        },
+        {
+          "description": "표 번호 재시작 (`numType=\"TABLE\"`, wire `4`).",
+          "type": "string",
+          "const": "Table"
+        },
+        {
+          "description": "수식 번호 재시작 (`numType=\"EQUATION\"`, wire `5`).",
+          "type": "string",
+          "const": "Equation"
+        },
+        {
+          "description": "Unmapped wire value (6-15) — preserved as a warning signal only.",
+          "type": "string",
+          "const": "Unknown"
+        }
+      ]
+    },
+    "Index": {
+      "type": "integer",
+      "format": "uint",
+      "minimum": 0
+    },
+    "LayoutCache": {
+      "description": "문단 하나의 줄 조판 캐시 (HWPX `<hp:linesegarray>` 전체).\n\n[`crate::paragraph::Paragraph::layout_cache`] 로 부착된다.\n`lines` 는 wire 순서(첫 줄부터)를 그대로 보존한다.",
+      "type": "object",
+      "properties": {
+        "lines": {
+          "description": "줄 세그먼트 목록 (wire 순서).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/LineSeg"
+          }
+        }
+      },
+      "required": [
+        "lines"
+      ]
+    },
+    "LineSeg": {
+      "description": "한 줄의 조판 결과 (HWPX `<hp:lineseg>` 1개 / HWP5 LINE_SEG 36바이트 1개).\n\n모든 좌표·크기 단위는 HWPUNIT (1pt = 100). `vertpos` 는 본문 흐름\n기준 상대값이며 쪽 단위로 리셋된다 (표 셀 안에서는 셀 상대값).",
+      "type": "object",
+      "properties": {
+        "textpos": {
+          "description": "줄 시작 텍스트 위치 (문단 텍스트의 UTF-16 코드유닛 오프셋).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        },
+        "vertpos": {
+          "description": "줄 세로 위치 (컨테이너 상대, 쪽/셀 단위 리셋).",
+          "type": "integer",
+          "format": "int32"
+        },
+        "vertsize": {
+          "description": "줄 전체 높이.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "textheight": {
+          "description": "텍스트 부분 높이.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "baseline": {
+          "description": "줄 상단에서 베이스라인까지 거리.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "spacing": {
+          "description": "줄 간격 (다음 줄과의 간격).",
+          "type": "integer",
+          "format": "int32"
+        },
+        "horzpos": {
+          "description": "컬럼 기준 가로 시작 위치.",
+          "type": "integer",
+          "format": "int32"
+        },
+        "horzsize": {
+          "description": "줄 가로 폭 (컬럼 폭).",
+          "type": "integer",
+          "format": "int32"
+        },
+        "flags": {
+          "description": "줄 플래그 비트필드 (wire 그대로 보존 — 해석하지 않음).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "textpos",
+        "vertpos",
+        "vertsize",
+        "textheight",
+        "baseline",
+        "spacing",
+        "horzpos",
+        "horzsize",
+        "flags"
+      ]
+    },
+    "PageSettings": {
+      "description": "Physical page dimensions and margins for a section.\n\nContains 8 [`HwpUnit`] fields covering all geometry a page needs.\n`Copy` because it is 32 bytes -- small enough to pass by value.\n\n# Presets\n\n- [`PageSettings::a4()`] -- A4 (210 mm x 297 mm) with 20 mm margins\n- [`PageSettings::letter()`] -- US Letter (8.5\" x 11\") with 1\" margins\n\n# Examples\n\n```\nuse hwpforge_core::PageSettings;\nuse hwpforge_foundation::HwpUnit;\n\nlet custom = PageSettings {\n    width: HwpUnit::from_mm(148.0).unwrap(),\n    height: HwpUnit::from_mm(210.0).unwrap(),\n    ..PageSettings::a4()\n};\nassert!(custom.width.to_mm() < 149.0);\n```",
+      "type": "object",
+      "properties": {
+        "width": {
+          "description": "Page width.",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "height": {
+          "description": "Page height.",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "margin_left": {
+          "description": "Left margin.",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "margin_right": {
+          "description": "Right margin.",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "margin_top": {
+          "description": "Top margin.",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "margin_bottom": {
+          "description": "Bottom margin.",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "header_margin": {
+          "description": "Header margin (distance from page top to header baseline).",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "footer_margin": {
+          "description": "Footer margin (distance from page bottom to footer baseline).",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "gutter": {
+          "description": "Binding gutter width. Defaults to 0 (no gutter).",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "gutter_type": {
+          "description": "Gutter position type. Defaults to `LeftOnly`.",
+          "$ref": "#/$defs/GutterType",
+          "default": "LeftOnly"
+        },
+        "mirror_margins": {
+          "description": "Whether to mirror left/right margins on even pages (for bound documents).",
+          "type": "boolean",
+          "default": false
+        },
+        "landscape": {
+          "description": "Whether this section uses landscape orientation.\nWhen `true`, the encoder outputs `landscape=\"NARROWLY\"` (한글's reversed convention).\nWidth/height should remain in portrait order (e.g. 210x297 for A4);\n한글 handles the rotation internally.",
+          "type": "boolean",
+          "default": false
+        }
+      },
+      "required": [
+        "width",
+        "height",
+        "margin_left",
+        "margin_right",
+        "margin_top",
+        "margin_bottom",
+        "header_margin",
+        "footer_margin"
+      ]
+    },
+    "GutterType": {
+      "type": "string"
+    },
+    "HeaderFooter": {
+      "description": "A header or footer region containing paragraphs.\n\nIn HWPX, headers and footers appear as `<hp:header>` / `<hp:footer>`\nelements inside `<hp:ctrl>` in the section body. Each contains its own\nparagraphs and an [`ApplyPageType`] controlling which pages it applies to.\n\n# Examples\n\n```\nuse hwpforge_core::section::HeaderFooter;\nuse hwpforge_core::paragraph::Paragraph;\nuse hwpforge_foundation::{ApplyPageType, ParaShapeIndex};\n\nlet hf = HeaderFooter::new(\n    vec![Paragraph::new(ParaShapeIndex::new(0))],\n    ApplyPageType::Both,\n);\nassert_eq!(hf.paragraphs.len(), 1);\nassert_eq!(hf.apply_page_type, ApplyPageType::Both);\n```",
+      "type": "object",
+      "properties": {
+        "paragraphs": {
+          "description": "Paragraphs composing the header/footer content.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Paragraph"
+          }
+        },
+        "apply_page_type": {
+          "description": "Which pages this header/footer applies to.",
+          "$ref": "#/$defs/ApplyPageType"
+        },
+        "vert_align": {
+          "description": "컨테이너(subList) 세로 정렬 (W5-α H1 — 일반 꼬리말 실측 = BOTTOM).\n\n밴드 안에서 문단 블록을 어디에 앉히는지 결정한다 — 렌더 재생의\n필수 입력. HWPX `<hp:subList vertAlign>`.",
+          "$ref": "#/$defs/VerticalAlign",
+          "default": "Top"
+        },
+        "text_width": {
+          "description": "컨테이너 텍스트 폭 (HWPX `<hp:subList textWidth>`, 0 = 위임).",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "text_height": {
+          "description": "컨테이너 텍스트 높이 (HWPX `<hp:subList textHeight>`, 0 = 위임).\n\n밴드(margin.header/footer)와 다를 수 있다 — 초과 시 동작은 실측\n전이므로 렌더는 fail-closed 로 다룬다 (W5-a).",
+          "$ref": "#/$defs/HwpUnit"
+        }
+      },
+      "required": [
+        "paragraphs",
+        "apply_page_type"
+      ]
+    },
+    "ApplyPageType": {
+      "type": "string"
+    },
+    "PageNumber": {
+      "description": "Page number display settings for a section.\n\nIn HWPX, page numbers appear as `<hp:pageNum>` inside `<hp:ctrl>`.\nThis struct controls position, format, and optional decoration characters.\n\n# Examples\n\n```\nuse hwpforge_core::section::PageNumber;\nuse hwpforge_foundation::{NumberFormatType, PageNumberPosition};\n\nlet pn = PageNumber::new(\n    PageNumberPosition::BottomCenter,\n    NumberFormatType::Digit,\n);\nassert_eq!(pn.position, PageNumberPosition::BottomCenter);\n```",
+      "type": "object",
+      "properties": {
+        "position": {
+          "description": "Where to display the page number.",
+          "$ref": "#/$defs/PageNumberPosition"
+        },
+        "number_format": {
+          "description": "Numbering format (digits, roman, etc.).",
+          "$ref": "#/$defs/NumberFormatType"
+        },
+        "decoration": {
+          "description": "Optional decoration string placed around the number\n(e.g. `\"- \"` for `\"- 1 -\"`). Empty means no decoration.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "position",
+        "number_format",
+        "decoration"
+      ]
+    },
+    "PageNumberPosition": {
+      "type": "string"
+    },
+    "NumberFormatType": {
+      "type": "string"
+    },
+    "ColumnSettings": {
+      "description": "Multi-column layout settings for a section.\n\nMaps to HWPX `<hp:ctrl><hp:colPr>`. Single-column layout is\nrepresented as `None` on [`Section`](crate::section::Section)\nrather than a `ColumnSettings` with one column.\n\n# Examples\n\n```\nuse hwpforge_core::column::{ColumnSettings, ColumnType, ColumnLayoutMode};\nuse hwpforge_foundation::HwpUnit;\n\nlet cs = ColumnSettings::equal_columns(3, HwpUnit::from_mm(4.0).unwrap()).unwrap();\nassert_eq!(cs.columns.len(), 3);\nassert_eq!(cs.column_type, ColumnType::Newspaper);\nassert_eq!(cs.layout_mode, ColumnLayoutMode::Left);\n```",
+      "type": "object",
+      "properties": {
+        "column_type": {
+          "description": "Column flow type.",
+          "$ref": "#/$defs/ColumnType"
+        },
+        "layout_mode": {
+          "description": "Column balance strategy.",
+          "$ref": "#/$defs/ColumnLayoutMode"
+        },
+        "columns": {
+          "description": "Individual column definitions. Length = number of columns (>= 2).",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ColumnDef"
+          }
+        },
+        "col_line": {
+          "description": "Optional separator line drawn between columns (`<hp:colLine>`).\n`None` = no divider (the common case; keeps `<hp:colPr>` self-closing).",
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ColumnLine"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "column_type",
+        "layout_mode",
+        "columns"
+      ]
+    },
+    "ColumnType": {
+      "description": "Column flow type: how text flows between columns.\n\nIn HWPX this maps to the `type` attribute on `<hp:colPr>`.",
+      "oneOf": [
+        {
+          "description": "Text flows from column 1 -> 2 -> 3 (newspaper style). Most common.",
+          "type": "string",
+          "const": "Newspaper"
+        },
+        {
+          "description": "Each column is independent (side-by-side comparisons). Rare.",
+          "type": "string",
+          "const": "Parallel"
+        }
+      ]
+    },
+    "ColumnLayoutMode": {
+      "description": "Column balance strategy.\n\nIn HWPX this maps to the `layout` attribute on `<hp:colPr>`.",
+      "oneOf": [
+        {
+          "description": "Balance towards left column. Most common.",
+          "type": "string",
+          "const": "Left"
+        },
+        {
+          "description": "Balance towards right column.",
+          "type": "string",
+          "const": "Right"
+        },
+        {
+          "description": "Symmetric balance (mirrors on odd/even pages).",
+          "type": "string",
+          "const": "Mirror"
+        }
+      ]
+    },
+    "ColumnDef": {
+      "description": "Individual column dimensions.\n\nEach column has a width and a gap (space after the column).\nThe last column's gap should be [`HwpUnit::ZERO`].\n\n# Examples\n\n```\nuse hwpforge_core::column::ColumnDef;\nuse hwpforge_foundation::HwpUnit;\n\nlet col = ColumnDef {\n    width: HwpUnit::from_mm(80.0).unwrap(),\n    gap: HwpUnit::from_mm(4.0).unwrap(),\n};\nassert!(col.width.as_i32() > 0);\n```",
+      "type": "object",
+      "properties": {
+        "width": {
+          "description": "Column width (HWPUNIT).",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "gap": {
+          "description": "Gap after this column (HWPUNIT). Last column gap is always 0.",
+          "$ref": "#/$defs/HwpUnit"
+        }
+      },
+      "required": [
+        "width",
+        "gap"
+      ]
+    },
+    "ColumnLine": {
+      "description": "Separator line drawn between columns.\n\nMaps to the HWPX `<hp:colLine>` child of `<hp:colPr>` (OWPML\nKS X 6101 §10.7.1.2). Present only when the document draws a visible\ndivider between columns; [`ColumnSettings::col_line`] is `None` for the\ncommon no-separator case, which keeps `<hp:colPr>` self-closing.\n\nOWPML defaults: `SOLID`, `0.12 mm`, `#000000` (see [`Default`]).\n\n# Examples\n\n```\nuse hwpforge_core::column::ColumnLine;\nuse hwpforge_foundation::{BorderLineType, Color, HwpUnit};\n\nlet line = ColumnLine {\n    line_type: BorderLineType::DoubleSlim,\n    width: HwpUnit::from_mm(0.7).unwrap(),\n    color: Color::from_rgb(0x3A, 0x3C, 0x84),\n};\nassert_eq!(line.line_type, BorderLineType::DoubleSlim);\n```",
+      "type": "object",
+      "properties": {
+        "line_type": {
+          "description": "Separator line style. HWPX `type` attribute (e.g. `SOLID`, `DOUBLE_SLIM`).",
+          "$ref": "#/$defs/BorderLineType"
+        },
+        "width": {
+          "description": "Separator line thickness. HWPX `width` attribute, emitted in millimetres\n(e.g. `\"0.7 mm\"`).",
+          "$ref": "#/$defs/HwpUnit"
+        },
+        "color": {
+          "description": "Separator line color. HWPX `color` attribute (e.g. `#3A3C84`).",
+          "$ref": "#/$defs/Color"
+        }
+      },
+      "required": [
+        "line_type",
+        "width",
+        "color"
+      ]
+    },
+    "BorderLineType": {
+      "type": "string"
+    },
+    "Visibility": {
+      "description": "Controls visibility of headers, footers, master pages, borders, and fills.\n\nMaps to `<hp:visibility>` inside `<hp:secPr>`. All flags default to\nthe standard 한글 values (show everything, no hiding).",
+      "type": "object",
+      "properties": {
+        "hide_first_header": {
+          "description": "Hide header on the first page.",
+          "type": "boolean",
+          "default": false
+        },
+        "hide_first_footer": {
+          "description": "Hide footer on the first page.",
+          "type": "boolean",
+          "default": false
+        },
+        "hide_first_master_page": {
+          "description": "Hide master page on the first page.",
+          "type": "boolean",
+          "default": false
+        },
+        "hide_first_page_num": {
+          "description": "Hide page number on the first page.",
+          "type": "boolean",
+          "default": false
+        },
+        "hide_first_empty_line": {
+          "description": "Hide empty line on the first page.",
+          "type": "boolean",
+          "default": false
+        },
+        "show_line_number": {
+          "description": "Show line numbers in the section.",
+          "type": "boolean",
+          "default": false
+        },
+        "border": {
+          "description": "Border visibility mode.",
+          "$ref": "#/$defs/ShowMode",
+          "default": "ShowAll"
+        },
+        "fill": {
+          "description": "Fill visibility mode.",
+          "$ref": "#/$defs/ShowMode",
+          "default": "ShowAll"
+        }
+      }
+    },
+    "ShowMode": {
+      "type": "string"
+    },
+    "LineNumberShape": {
+      "description": "Line numbering settings for a section.\n\nMaps to `<hp:lineNumberShape>` inside `<hp:secPr>`.",
+      "type": "object",
+      "properties": {
+        "restart_type": {
+          "description": "Restart type: 0 = continuous, 1 = per page, 2 = per section.",
+          "type": "integer",
+          "format": "uint8",
+          "minimum": 0,
+          "maximum": 255,
+          "default": 0
+        },
+        "count_by": {
+          "description": "Count by N (show number every N lines, 0 = disabled).",
+          "type": "integer",
+          "format": "uint16",
+          "minimum": 0,
+          "maximum": 65535,
+          "default": 0
+        },
+        "distance": {
+          "description": "Distance from text to line number (HwpUnit).",
+          "$ref": "#/$defs/HwpUnit",
+          "default": 0
+        },
+        "start_number": {
+          "description": "Starting line number.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 0
+        }
+      }
+    },
+    "PageBorderFillEntry": {
+      "description": "A single page border/fill entry for the section.\n\nMaps to `<hp:pageBorderFill>` inside `<hp:secPr>`.\nStandard 한글 documents have 3 entries: BOTH, EVEN, ODD.",
+      "type": "object",
+      "properties": {
+        "apply_type": {
+          "description": "Which pages this border fill applies to: `\"BOTH\"`, `\"EVEN\"`, `\"ODD\"`.",
+          "type": "string"
+        },
+        "border_fill_id": {
+          "description": "Reference to a borderFill definition (1-based index).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 1
+        },
+        "text_border": {
+          "description": "Whether the border is relative to text or paper.",
+          "type": "string",
+          "default": "PAPER"
+        },
+        "header_inside": {
+          "description": "Whether header is inside the border.",
+          "type": "boolean",
+          "default": false
+        },
+        "footer_inside": {
+          "description": "Whether footer is inside the border.",
+          "type": "boolean",
+          "default": false
+        },
+        "fill_area": {
+          "description": "Fill area: `\"PAPER\"` or `\"PAGE\"`.",
+          "type": "string",
+          "default": "PAPER"
+        },
+        "offset": {
+          "description": "Offset from page edge (left, right, top, bottom) in HwpUnit.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/HwpUnit"
+          },
+          "minItems": 4,
+          "maxItems": 4,
+          "default": [
+            1417,
+            1417,
+            1417,
+            1417
+          ]
+        }
+      },
+      "required": [
+        "apply_type"
+      ]
+    },
+    "MasterPage": {
+      "description": "A master page (background/watermark page) for a section.\n\nMaster pages provide background content rendered behind the main body.\nMaps to `<masterPage>` elements inside `<hp:secPr>`.\n\nIn HWPX, each master page has an `applyPageType` attribute\n(`BOTH`, `EVEN`, or `ODD`) and contains its own paragraphs.",
+      "type": "object",
+      "properties": {
+        "apply_page_type": {
+          "description": "Which pages this master page applies to.",
+          "$ref": "#/$defs/ApplyPageType"
+        },
+        "paragraphs": {
+          "description": "Paragraphs composing the master page content.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/Paragraph"
+          }
+        }
+      },
+      "required": [
+        "apply_page_type",
+        "paragraphs"
+      ]
+    },
+    "BeginNum": {
+      "description": "Starting numbers for various auto-numbering sequences.\n\nMaps to `<hh:beginNum>` in header.xml and per-section\n`<hp:startNum>` in section XML.",
+      "type": "object",
+      "properties": {
+        "page": {
+          "description": "Starting page number.\n\n섹션 `<hp:startNum>` 의미론 (OWPML §10.6.2): **`0` = 이전 구역에서\n계속**, `n > 0` = 이 구역을 `n` 번부터 재시작. (\"기본값 1\" 이\n아니다 — serde 기본 1 은 header.xml `<hh:beginNum>` 쪽 관례.)",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 1
+        },
+        "footnote": {
+          "description": "Starting footnote number (default: 1).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 1
+        },
+        "endnote": {
+          "description": "Starting endnote number (default: 1).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 1
+        },
+        "pic": {
+          "description": "Starting picture number (default: 1).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 1
+        },
+        "tbl": {
+          "description": "Starting table number (default: 1).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 1
+        },
+        "equation": {
+          "description": "Starting equation number (default: 1).",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 1
+        },
+        "page_starts_on": {
+          "description": "Which page parity this section starts on (`pageStartsOn`).",
+          "$ref": "#/$defs/PageStartsOn"
+        }
+      }
+    },
+    "PageStartsOn": {
+      "description": "Which page parity a section starts on.\n\nMaps to HWPX `<hp:startNum pageStartsOn=\"BOTH|EVEN|ODD\">`. 홀짝 강제\n시작은 다중 섹션 쪽번호 연속성 계산의 입력이다 (W5-α C2 — 스키마에\n있던 값을 디코더가 폐기하던 것을 승격).",
+      "oneOf": [
+        {
+          "description": "아무 쪽성에서나 시작한다 (기본).",
+          "type": "string",
+          "const": "Both"
+        },
+        {
+          "description": "짝수 쪽에서 시작한다.",
+          "type": "string",
+          "const": "Even"
+        },
+        {
+          "description": "홀수 쪽에서 시작한다.",
+          "type": "string",
+          "const": "Odd"
+        }
+      ]
+    },
+    "TextDirection": {
+      "type": "string"
+    },
+    "SectionPreservation": {
+      "description": "Preservation metadata required for byte-preserving section patching.\n\nThis payload is intentionally opaque to end users: `to-json --section`\nproduces it, and `patch` consumes it to update only the touched `<hp:t>`\npayloads inside the original `sectionN.xml`.",
+      "type": "object",
+      "properties": {
+        "preservation_version": {
+          "description": "Version of the preservation metadata contract.",
+          "type": "integer",
+          "format": "uint32",
+          "minimum": 0,
+          "default": 0
+        },
+        "section_path": {
+          "description": "Archive path of the source section entry (for example `Contents/section0.xml`).",
+          "type": "string"
+        },
+        "section_sha256": {
+          "description": "SHA-256 digest of the original section XML bytes in lowercase hex.",
+          "type": "string"
+        },
+        "text_slots": {
+          "description": "Text slots, in semantic traversal order, that can be safely rewritten.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/PreservedTextSlot"
+          }
+        }
+      },
+      "required": [
+        "section_path",
+        "section_sha256",
+        "text_slots"
+      ]
+    },
+    "PreservedTextSlot": {
+      "description": "One patchable text slot inside a section export.",
+      "type": "object",
+      "properties": {
+        "path": {
+          "description": "Stable semantic path (for debugging and validation).",
+          "type": "string"
+        },
+        "original_text": {
+          "description": "Original decoded text content for this slot.",
+          "type": "string"
+        },
+        "has_inline_markup": {
+          "description": "Whether the original `<hp:t>` contained inline HWPX child markup such\nas `<hp:tab/>` or `<hp:fwSpace/>`.",
+          "type": "boolean",
+          "default": false
+        },
+        "locator": {
+          "description": "Raw XML locator used to apply the patch without regenerating the section.",
+          "$ref": "#/$defs/TextLocator"
+        }
+      },
+      "required": [
+        "path",
+        "original_text",
+        "locator"
+      ]
+    },
+    "TextLocator": {
+      "description": "Raw XML locator for a patchable text slot.",
+      "oneOf": [
+        {
+          "description": "Existing `<hp:t>` element inside the raw section XML.",
+          "type": "object",
+          "properties": {
+            "TextElement": {
+              "type": "object",
+              "properties": {
+                "element_start": {
+                  "description": "Start byte offset of the full `<hp:t...>` element.",
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 0
+                },
+                "element_end": {
+                  "description": "End byte offset of the full `<hp:t...>` element.",
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 0
+                },
+                "content_start": {
+                  "description": "Start byte offset of the element's inner text content, if the\nelement is not self-closing.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "uint",
+                  "minimum": 0
+                },
+                "content_end": {
+                  "description": "End byte offset of the element's inner text content, if the\nelement is not self-closing.",
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "uint",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "element_start",
+                "element_end"
+              ]
+            }
+          },
+          "required": [
+            "TextElement"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "description": "Empty `<hp:run>` placeholder that Core normalized into an empty text run.",
+          "type": "object",
+          "properties": {
+            "EmptyRun": {
+              "type": "object",
+              "properties": {
+                "run_start": {
+                  "description": "Start byte offset of the `<hp:run...>` element.",
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 0
+                },
+                "run_end": {
+                  "description": "End byte offset of the `<hp:run...>` element.",
+                  "type": "integer",
+                  "format": "uint",
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "run_start",
+                "run_end"
+              ]
+            }
+          },
+          "required": [
+            "EmptyRun"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    }
+  }
+}

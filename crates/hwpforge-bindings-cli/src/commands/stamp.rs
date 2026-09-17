@@ -281,6 +281,15 @@ fn exit_stamper_error(error: StamperError, json_mode: bool) -> ! {
         )
         .with_hint("산출물 검증 실패 — 코덱 버그 가능성이 있어 무출력으로 거부했습니다")
         .exit(json_mode, 2),
+        // R1 F4: 의미 손상은 typed 변형이 됐지만 **출력 계약은 그대로** 둔다
+        // — 코드는 과거 `Codec` 과 같은 STAMP_CODEC_FAILED, 메시지는 변형의
+        // Display (접두사 없는 문장이라 과거 `Codec(msg)` 과 바이트 동일),
+        // exit code 도 2 그대로. 표준 `ENCODE_SEMANTIC_LOSS` 매핑은 W3
+        // compat 테이블의 몫이다. 이 arm 이 없으면 아래 `other` 로 떨어져
+        // 코드가 STAMP_FAILED 로 바뀐다.
+        ref e @ StamperError::SemanticLoss { .. } => {
+            CliError::new("STAMP_CODEC_FAILED", e.to_string()).exit(json_mode, 2)
+        }
         other => CliError::new("STAMP_FAILED", other.to_string()).exit(json_mode, 2),
     }
 }

@@ -13,7 +13,7 @@ use hwpforge_core::section::Section;
 use hwpforge_core::{Document, PageSettings};
 use hwpforge_foundation::{CharShapeIndex, ParaShapeIndex};
 use hwpforge_smithy_hwpx::style_store::{HwpxCharShape, HwpxFont, HwpxParaShape, HwpxStyleStore};
-use hwpforge_smithy_hwpx::{HwpxDecoder, HwpxEncoder};
+use hwpforge_smithy_hwpx::{EncodeWarning, HwpxDecoder, HwpxEncoder};
 
 fn minimal_store() -> HwpxStyleStore {
     let mut store = HwpxStyleStore::new();
@@ -275,8 +275,23 @@ fn stamper_fails_closed_on_note_head_skip() {
 
     let err = HwpxStamper::stamp(&base, &[])
         .expect_err("titleMark 각주의 번호 머리 생략을 무음 반환하면 안 됨 (7차 평결 High)");
+
+    // R1 F4: `Codec(String)` 이 아니라 typed 경고를 실은 변형이어야 한다.
+    let StamperError::SemanticLoss { warnings, others } = &err else {
+        panic!("다른 오류: {err:?}");
+    };
+    assert!(!warnings.is_empty(), "의미 손상 경고가 비었다: {err:?}");
     assert!(
-        matches!(&err, StamperError::Codec(msg) if msg.contains("semantic-loss")),
-        "다른 오류: {err:?}"
+        warnings.iter().all(EncodeWarning::is_semantic_loss),
+        "warnings 에 비-의미 손상이 섞였다: {warnings:?}"
+    );
+    assert!(
+        !others.iter().any(EncodeWarning::is_semantic_loss),
+        "others 에 의미 손상이 샜다: {others:?}"
+    );
+    // 프론트엔드(CLI/MCP stamp)가 찍는 문자열은 이 리팩터로 바뀌면 안 된다.
+    assert!(
+        err.to_string().starts_with("encode produced a semantic-loss warning (fail-closed): "),
+        "Display 문자열이 드리프트했다: {err}"
     );
 }

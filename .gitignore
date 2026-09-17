@@ -506,3 +506,6 @@ temp/
 # are tracked and tests convert them in-memory; these .hwpx are regenerable byproducts,
 # not fixtures (no test references them). Targeted rule — golden .hwpx elsewhere stay tracked.
 tests/fixtures/hwp5/crossref/*.hwpx
+
+# uv lockfile — untracked, same policy as Cargo.lock (CI resolves latest deps)
+uv.lock

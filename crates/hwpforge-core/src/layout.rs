@@ -302,6 +302,53 @@ mod tests {
         }
 
         #[test]
+        fn immutable_walker_matches_the_mutable_one() {
+            // 두 순회의 순서가 갈라지면 "문단 방문 번호" 로 주소를 잡는
+            // 호출자(smithy-md 자산 계획 등)가 조용히 어긋난다.
+            let (mut doc, expected) = document_with_all_containers();
+            let mut by_ref = Vec::new();
+            doc.for_each_paragraph(|p| by_ref.push(p.text_content()));
+            let mut by_mut = Vec::new();
+            doc.for_each_paragraph_mut(|p| by_mut.push(p.text_content()));
+
+            assert_eq!(by_ref.len(), expected, "visited: {by_ref:?}");
+            assert_eq!(by_ref, by_mut, "immutable and mutable walk order must be identical");
+        }
+
+        #[test]
+        fn image_caption_paragraphs_are_skipped_documents_known_gap() {
+            // 이것은 의도된 계약이 아니라 **현 동작의 기록**이다: 표·글상자
+            // 캡션은 방문되는데 이미지 캡션만 빠진다. 재귀 대상을 넓히면
+            // 캐시 정규화·편집 파이프라인 등 기존 호출자 전부의 동작이
+            // 바뀌므로 픽스처를 갖춘 별도 슬라이스로 다룬다
+            // (`.docs/followups.md`). 그때 이 테스트는 갱신 대상이다.
+            //
+            // 지금 잠그는 것: 두 순회가 **같은 선택**을 한다는 점 — 한쪽만
+            // 고치면 문단 방문 번호가 어긋나기 때문이다.
+            use crate::image::{Image, ImageFormat};
+
+            let mut img = Image::new(
+                "logo.png",
+                HwpUnit::from_pt(10.0).unwrap(),
+                HwpUnit::from_pt(10.0).unwrap(),
+                ImageFormat::Png,
+            );
+            img.caption = Some(Caption::new(vec![cached_para("img-caption")], CaptionSide::Bottom));
+            let mut host = cached_para("img-host");
+            host.add_run(Run::image(img, CharShapeIndex::new(0)));
+
+            let mut doc = Document::new();
+            doc.add_section(Section::with_paragraphs(vec![host], PageSettings::a4()));
+
+            let mut by_ref = Vec::new();
+            doc.for_each_paragraph(|p| by_ref.push(p.text_content()));
+            assert_eq!(by_ref, vec!["img-host".to_string()], "이미지 캡션은 방문하지 않는다");
+            let mut by_mut = Vec::new();
+            doc.for_each_paragraph_mut(|p| by_mut.push(p.text_content()));
+            assert_eq!(by_ref, by_mut);
+        }
+
+        #[test]
         fn strip_layout_caches_clears_every_container() {
             let (mut doc, expected) = document_with_all_containers();
             doc.strip_layout_caches();

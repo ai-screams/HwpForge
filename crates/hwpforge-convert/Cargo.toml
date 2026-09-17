@@ -11,8 +11,19 @@ license.workspace = true
 publish = false
 readme.workspace = true
 repository.workspace = true
-rust-version.workspace = true
+# `ops::to_pdf` consumes hwpforge-smithy-pdf, whose krilla 0.8 dependency
+# requires 1.92 — so this crate exceeds the workspace MSRV (1.88) exactly the
+# way smithy-pdf and bindings-cli already do. publish = false, so there is no
+# MSRV consumer contract; the CI `msrv` job excludes this crate from the 1.88
+# lane and checks it in the 1.92 step instead (design §2.2 "HWP5·PDF 작업의 자리").
+rust-version = "1.92"
 description = "Cross-format conversion orchestrator for HwpForge (HWP5 -> HWPX)"
+
+[features]
+## `JsonSchema` derives on the wire DTOs this crate owns (`Hwp5Meta`,
+## `PdfMeta`), mirroring the umbrella's `schemars` feature so a frontend can
+## turn schemas on across the whole operation layer with one flag.
+schemars = ["dep:schemars", "hwpforge-smithy-hwpx/schemars"]
 
 [dependencies]
 # publish = false: path-only deps (no version pin) so release-plz can bump
@@ -23,9 +34,16 @@ hwpforge-core = { path = "../hwpforge-core" }
 hwpforge-foundation = { path = "../hwpforge-foundation" }
 hwpforge-smithy-hwp5 = { path = "../hwpforge-smithy-hwp5" }
 hwpforge-smithy-hwpx = { path = "../hwpforge-smithy-hwpx" }
+hwpforge-smithy-pdf = { path = "../hwpforge-smithy-pdf" }
 quick-xml = { workspace = true }
+schemars = { workspace = true, optional = true }
 serde = { workspace = true }
+thiserror = { workspace = true }
 zip = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+# `tests/ops_inventory.rs` parses the upstream error/warning enums to prove no
+# variant goes unclassified. `visit` walks inline modules; `full` is what lets
+# `syn` parse a whole source file rather than just an expression.
+syn = { version = "2", features = ["full", "visit"] }

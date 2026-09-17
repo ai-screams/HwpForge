@@ -26,6 +26,7 @@
 #![deny(unsafe_code)]
 #![deny(clippy::all)]
 
+pub mod assets;
 mod decoder;
 pub mod embed;
 mod encoder;
@@ -35,6 +36,10 @@ pub mod frontmatter;
 mod internal_styles;
 mod mapper;
 
+pub use assets::{
+    collect_asset_plan, finish_assets, validate_assets, warnings_from, AssetIdentity, AssetOutcome,
+    AssetPlanEntry, AssetReject, AssetSource, FinishedAssets, ProvidedAsset, RunLocator,
+};
 pub use decoder::{MdDecoder, MdDocument};
 pub use embed::{load_referenced_images, EmbeddedImages, ImageEmbedSkipReason};
 pub use encoder::{MdEncoder, MdOutput, MdWarning};

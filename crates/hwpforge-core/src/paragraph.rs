@@ -134,11 +134,16 @@ impl Paragraph {
         }
     }
 
-    /// 이 문단 자신과 안에 중첩된 모든 문단(표 셀·캡션·글상자·각주/미주·
-    /// 메모 등)을 문서 순서로 방문한다.
+    /// 이 문단 자신과 안에 중첩된 문단을 문서 순서로 방문한다 — 자신을
+    /// 먼저 방문한 뒤 run 내용물로 재귀한다 (pre-order).
     ///
-    /// 자신을 먼저 방문한 뒤 run 내용물로 재귀한다. 캐시 정규화 등
-    /// 전 문단 일괄 변환의 기반 유틸 —
+    /// 재귀 대상은 표 셀 문단(중첩 표 포함)과 표 캡션, 글상자/타원/다각형
+    /// 본문과 캡션, 선·사각형·호·곡선·연결선의 캡션, 각주/미주 본문, 메모
+    /// 본문과 앵커 run, 묶음 객체 자식이다.
+    ///
+    /// **[`crate::image::Image::caption`] 안의 문단은 방문하지 않는다** —
+    /// 알려진 갭이며 `.docs/followups.md` 에 기록돼 있다. 배경과 왜 별도
+    /// 슬라이스인지는
     /// [`crate::document::Document::for_each_paragraph_mut`] 참조.
     pub fn for_each_paragraph_mut<F: FnMut(&mut Paragraph)>(&mut self, mut f: F) {
         self.walk_paragraphs_mut(&mut f);
@@ -149,6 +154,23 @@ impl Paragraph {
         f(self);
         for run in &mut self.runs {
             run.walk_paragraphs_mut(f);
+        }
+    }
+
+    /// [`Self::for_each_paragraph_mut`] 의 불변 쌍둥이 — 방문 순서와 재귀
+    /// 대상이 동일하며, 이미지 캡션 갭도 동일하게 적용된다.
+    pub fn for_each_paragraph<F: FnMut(&Paragraph)>(&self, mut f: F) {
+        self.walk_paragraphs(&mut f);
+    }
+
+    /// [`Self::for_each_paragraph`] 의 내부 재귀 본체 (dyn 으로 단형화 제한).
+    ///
+    /// [`Self::walk_paragraphs_mut`] 와 같이 **자신을 먼저** 방문한 뒤 run
+    /// 내용물로 재귀한다 (pre-order).
+    pub(crate) fn walk_paragraphs(&self, f: &mut dyn FnMut(&Paragraph)) {
+        f(self);
+        for run in &self.runs {
+            run.walk_paragraphs(f);
         }
     }
 

@@ -180,6 +180,17 @@ pub enum CellEditError {
         /// Names of the uncarried entries.
         entries: Vec<String>,
     },
+    /// 인코드가 의미 손상 경고를 내 편집을 거부했다 (fail-closed — 바이트 없음).
+    ///
+    /// 분류의 정의는 [`EncodeWarning::is_semantic_loss`](crate::EncodeWarning::is_semantic_loss)
+    /// 하나뿐이다. 두 벡터 모두 인코더가 낸 **원래 순서**를 유지하며, 이
+    /// 오류가 구성될 때 `warnings` 는 비어 있지 않다.
+    SemanticLoss {
+        /// 의미 손상 경고 전부 (원래 순서, 비어 있지 않음).
+        warnings: Vec<crate::EncodeWarning>,
+        /// 같은 인코드가 낸 나머지 경고 (원래 순서) — 진단용으로 함께 싣는다.
+        others: Vec<crate::EncodeWarning>,
+    },
 }
 
 impl core::fmt::Display for CellEditError {
@@ -223,6 +234,23 @@ impl core::fmt::Display for CellEditError {
             Self::UncarriedZipEntries { entries } => {
                 write!(f, "input has ZIP entries the encoder would not carry: {entries:?}")
             }
+            // 이 Display 는 **이 타입의 프론트엔드가 이미 찍고 있는 문자열**과
+            // 같아야 한다. CLI/MCP set-cell 은 둘 다 `error.to_string()` 을
+            // 쓰므로, 과거 `Codec(...)` 경로가 내던 "codec failure: " 접두사를
+            // 그대로 유지한다 (로그 드리프트 0).
+            //
+            // ⚠️ `StamperError::SemanticLoss` 는 접두사가 **없다** — 그쪽
+            // 프론트엔드는 `Codec` 의 안쪽 문자열을 썼기 때문이다. 둘을
+            // "통일" 하면 한쪽 출력이 바뀐다.
+            Self::SemanticLoss { warnings, .. } => match warnings.first() {
+                Some(w) => write!(
+                    f,
+                    "codec failure: encode produced a semantic-loss warning (fail-closed): {w}"
+                ),
+                None => {
+                    write!(f, "codec failure: encode produced a semantic-loss warning (fail-closed)")
+                }
+            },
         }
     }
 }
@@ -521,13 +549,56 @@ impl HwpxCellEditor {
     ///
     /// See [`CellEditError`].
     pub fn set_cells(base: &[u8], specs: &[CellSpec]) -> Result<CellEditResult, CellEditError> {
+        Self::set_cells_with_diagnostics(base, specs)
+            .map(crate::diagnostics::WithCodecWarnings::into_value)
+    }
+
+    /// Edits table cells, keeping both codec channels: what decoding the
+    /// input reported, and the successful encode's non-semantic warnings.
+    ///
+    /// Same bytes and same outcome as [`HwpxCellEditor::set_cells`], which is
+    /// a thin wrapper over this function; the difference is only that the
+    /// diagnostics survive.
+    ///
+    /// # What the decode warnings mean
+    ///
+    /// They come from the admission gate's read of `base` — the decode whose
+    /// document this edit mutates, so it is the one that says what the codec
+    /// could not carry across the regeneration. The gate also re-decodes its
+    /// own no-op encode; that package is a discarded verification artefact,
+    /// so its diagnostics are not reported as if they described the result.
+    ///
+    /// # What the encode warnings mean
+    ///
+    /// Semantic-loss warnings never appear here — they are the fail-closed
+    /// path and produce [`CellEditError::SemanticLoss`] with no bytes. What
+    /// is returned is the remainder, which describes the regenerated package
+    /// without claiming its meaning changed.
+    ///
+    /// The warnings come from the encode that produced the bytes, and they
+    /// are reported **before** the layout-cache carry step runs. A
+    /// [`EncodeWarning::LayoutCacheDropped`](crate::EncodeWarning::LayoutCacheDropped)
+    /// therefore means "this encode did not emit that cache", not "the
+    /// output lacks it": the layout-carry step may put an untouched
+    /// paragraph's original cache back afterwards. Reporting the
+    /// encode verbatim is deliberate — filtering would require proving which
+    /// paths the carry restored, and a dropped-then-restored cache is still
+    /// worth telling the caller about.
+    ///
+    /// # Errors
+    ///
+    /// See [`CellEditError`].
+    pub fn set_cells_with_diagnostics(
+        base: &[u8],
+        specs: &[CellSpec],
+    ) -> Result<crate::diagnostics::WithCodecWarnings<CellEditResult>, CellEditError> {
         let d0 = HwpxDecoder::decode(base).map_err(|e| CellEditError::Codec(e.to_string()))?;
         let e0 = encode_hwpx(&d0).map_err(map_admission_error)?;
         let d1 = HwpxDecoder::decode(&e0).map_err(|e| CellEditError::Codec(e.to_string()))?;
         admission_compare(&d0, &d1).map_err(map_admission_error)?;
         check_zip_carry(base, &e0).map_err(map_admission_error)?;
 
-        let HwpxDocument { mut document, style_store, image_store, .. } = d0;
+        let HwpxDocument { mut document, style_store, image_store, warnings: decode_warnings } = d0;
         let outcome = apply_set_cells(&mut document, specs)?;
         let validated =
             document.validate().map_err(|e| CellEditError::Codec(format!("validate: {e}")))?;
@@ -538,27 +609,27 @@ impl HwpxCellEditor {
             crate::EncodeOptions::default(),
         )
         .map_err(|e| CellEditError::Codec(e.to_string()))?;
-        // 의미 손상 fail-closed (7차 평결 High) — stamper 의
-        // `encode_fail_closed` 와 동일 계약: 편집기가 알고 있는 의미
-        // 손상(번호 머리/titleMark 생략 등)을 무음 반환하지 않는다.
-        if let Some(w) = encode_outcome.warnings.iter().find(|w| {
-            matches!(
-                w,
-                crate::EncodeWarning::NoteHeadSkipped { .. }
-                    | crate::EncodeWarning::TitleMarkSkipped { .. }
-                    | crate::EncodeWarning::NoteRestartIgnored { .. }
-            )
-        }) {
-            return Err(CellEditError::Codec(format!(
-                "encode produced a semantic-loss warning (fail-closed): {w}"
-            )));
-        }
-        let bytes = encode_outcome.bytes;
+        // 의미 손상 fail-closed (7차 평결 High) — 편집기가 알고 있는 의미
+        // 손상(번호 머리/titleMark 생략 등)을 무음 반환하지 않는다. 손상
+        // 집합의 정의는 `EncodeWarning::is_semantic_loss` 하나뿐이다 —
+        // stamper 의 `encode_fail_closed` 도 같은 메서드를 호출한다.
+        // R1 F4: typed 경고를 실어 돌려준다 (과거엔 `Codec(String)` 으로
+        // 뭉개져 호출자가 어떤 경고였는지 알 수 없었다).
+        // R2 HIGH 1: the non-semantic half is no longer discarded — it is
+        // what `set_cells_with_diagnostics` hands back on success. The
+        // split is shared with the stamper (`split_successful_encode`), so
+        // the two editors cannot drift apart.
+        let (bytes, others) = crate::encoder::split_successful_encode(encode_outcome)
+            .map_err(|(warnings, others)| CellEditError::SemanticLoss { warnings, others })?;
         // Untouched paragraphs keep Hancom's line-layout cache so the
         // renderer does not reflow (and repaginate) the whole document.
         let bytes = crate::layout_carry::carry_line_segs(base, &e0, &bytes)
             .map_err(|e| CellEditError::Codec(e.to_string()))?;
-        Ok(CellEditResult { bytes, outcome })
+        Ok(crate::diagnostics::WithCodecWarnings::new(
+            CellEditResult { bytes, outcome },
+            decode_warnings,
+            others,
+        ))
     }
 }
 
@@ -569,6 +640,15 @@ fn map_admission_error(error: StamperError) -> CellEditError {
         }
         StamperError::UncarriedZipEntries { entries } => {
             CellEditError::UncarriedZipEntries { entries }
+        }
+        // 오늘의 admission encode (`encode_hwpx`) 는 permissive 한
+        // `HwpxEncoder::encode` 를 쓰므로 이 갈래는 실제로 발생하지 않는다.
+        // 그래도 명시한다 — 아래 `other` catch-all 이 typed 경고를 다시
+        // `Codec(String)` 으로 뭉개는 것이 바로 R1 F4 가 지적한 결함이라,
+        // admission 경로가 나중에 fail-closed 로 바뀌어도 타입이 살아남아야
+        // 한다.
+        StamperError::SemanticLoss { warnings, others } => {
+            CellEditError::SemanticLoss { warnings, others }
         }
         other => CellEditError::Codec(other.to_string()),
     }

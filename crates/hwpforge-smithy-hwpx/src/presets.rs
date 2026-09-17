@@ -2,7 +2,7 @@
 //!
 //! Shared between CLI and MCP bindings so that preset data stays in sync.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use hwpforge_blueprint::registry::StyleRegistry;
 use hwpforge_foundation::FontId;
@@ -10,7 +10,13 @@ use hwpforge_foundation::FontId;
 use crate::HwpxStyleStore;
 
 /// Information about a single style preset.
-#[derive(Debug, Clone, Serialize)]
+///
+/// `Deserialize` and `JsonSchema` are here so that a frontend can carry this
+/// type inside a wire payload it also reads back or publishes a schema for —
+/// `hwpforge::ops::TemplateList` is the first such caller. The `schemars`
+/// gate matches every other wire type in this crate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "schemars", derive(schemars::JsonSchema))]
 pub struct PresetInfo {
     /// Preset name (e.g., `"default"`).
     pub name: String,

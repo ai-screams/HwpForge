@@ -251,7 +251,23 @@ impl HwpxFiller {
     ///
     /// 패키지 디코드에 실패하면 [`HwpxError`] 를 반환한다.
     pub fn list_fields(base: &[u8]) -> HwpxResult<Vec<FieldInfo>> {
+        Self::list_fields_with_diagnostics(base)
+            .map(crate::diagnostics::WithDecodeWarnings::into_value)
+    }
+
+    /// 모든 누름틀을 나열하되 **디코더 경고를 함께** 돌려준다.
+    ///
+    /// 투영 결과는 [`HwpxFiller::list_fields`] 와 동일하다 — 그쪽이 이
+    /// 함수의 얇은 래퍼라 둘이 어긋날 수 없다.
+    ///
+    /// # Errors
+    ///
+    /// 패키지 디코드에 실패하면 [`HwpxError`] 를 반환한다.
+    pub fn list_fields_with_diagnostics(
+        base: &[u8],
+    ) -> HwpxResult<crate::diagnostics::WithDecodeWarnings<Vec<FieldInfo>>> {
         let mut decoded = HwpxDecoder::decode(base)?;
+        let warnings = decoded.warnings.clone();
         let mut fields = Vec::new();
         for (section_idx, section) in decoded.document.sections_mut().iter_mut().enumerate() {
             visit_section_fields(section, section_idx, &mut |slot| {
@@ -273,7 +289,7 @@ impl HwpxFiller {
                 }
             });
         }
-        Ok(fields)
+        Ok(crate::diagnostics::WithDecodeWarnings::new(fields, warnings))
     }
 
     /// 이름 → 값 맵으로 누름틀을 채운 새 패키지 바이트를 만든다.
@@ -285,6 +301,30 @@ impl HwpxFiller {
     ///
     /// [`FillError`] 의 각 variant 문서를 참조.
     pub fn fill(base: &[u8], values: &BTreeMap<String, String>) -> Result<FillOutcome, FillError> {
+        Self::fill_with_diagnostics(base, values)
+            .map(crate::diagnostics::WithDecodeWarnings::into_value)
+    }
+
+    /// 누름틀을 채우되 **디코더 경고를 함께** 돌려준다.
+    ///
+    /// 바이트·`filled` 목록은 [`HwpxFiller::fill`] 과 동일하다 — 그쪽이 이
+    /// 함수의 얇은 래퍼라 둘이 어긋날 수 없다.
+    ///
+    /// # 어느 디코드인가
+    ///
+    /// 이름 해석용 **입력 디코드 한 번**의 경고만 싣는다. 채우기는
+    /// preserve-first 라 재인코드가 없고(인코더 경고 없음), 뒤따르는
+    /// preserve 패치는 섹션마다 같은 base 를 다시 디코드하지만 그것은 이미
+    /// 보고한 디코드의 재실행이므로 합치면 한 경고가 섹션 수만큼 불어난다.
+    /// 그래서 경고 개수는 편집이 건드린 섹션 수와 무관하게 일정하다.
+    ///
+    /// # Errors
+    ///
+    /// [`FillError`] 의 각 variant 문서를 참조.
+    pub fn fill_with_diagnostics(
+        base: &[u8],
+        values: &BTreeMap<String, String>,
+    ) -> Result<crate::diagnostics::WithDecodeWarnings<FillOutcome>, FillError> {
         // ── preflight 1: 값 자체 검증 ──
         for (name, value) in values {
             if value.is_empty() {
@@ -293,6 +333,7 @@ impl HwpxFiller {
         }
 
         let mut decoded = HwpxDecoder::decode(base)?;
+        let decode_warnings = decoded.warnings.clone();
 
         // ── preflight 2: 이름 해석 (개수·채움가능성) ──
         let mut inventory: Vec<(String, usize, String)> = Vec::new(); // (name, section, display)
@@ -395,7 +436,10 @@ impl HwpxFiller {
         // 무조건**이다. 문단당 정확히 1회 제거 (이후 재조판은 한글 몫).
         bytes = strip_linesegarray_for_changed_fields(&bytes, &changed_fields)?;
 
-        Ok(FillOutcome { bytes, filled })
+        Ok(crate::diagnostics::WithDecodeWarnings::new(
+            FillOutcome { bytes, filled },
+            decode_warnings,
+        ))
     }
 }
 

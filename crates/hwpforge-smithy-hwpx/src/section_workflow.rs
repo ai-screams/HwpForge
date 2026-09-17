@@ -97,8 +97,35 @@ impl HwpxPatcher {
         section_idx: usize,
         include_styles: bool,
     ) -> Result<SectionExportOutcome, SectionWorkflowError> {
+        Self::export_section_for_edit_with_diagnostics(base_bytes, section_idx, include_styles)
+            .map(crate::diagnostics::WithDecodeWarnings::into_value)
+    }
+
+    /// Export a section for editing, keeping the decoder's warnings.
+    ///
+    /// Same outcome as [`HwpxPatcher::export_section_for_edit`], which is a
+    /// thin wrapper over this function.
+    ///
+    /// The two warning channels are distinct and neither subsumes the other:
+    /// [`SectionExportOutcome::warning`] says the export cannot be patched
+    /// back, while the returned decoder warnings say what the *input* lost on
+    /// the way in. A caller that reports both should put the decoder
+    /// warnings first, since they describe the document the workflow warning
+    /// is about.
+    ///
+    /// # Errors
+    ///
+    /// [`SectionWorkflowError::Decode`] for an undecodable package and
+    /// [`SectionWorkflowError::SectionOutOfRange`] for a missing section.
+    pub fn export_section_for_edit_with_diagnostics(
+        base_bytes: &[u8],
+        section_idx: usize,
+        include_styles: bool,
+    ) -> Result<crate::diagnostics::WithDecodeWarnings<SectionExportOutcome>, SectionWorkflowError>
+    {
         let hwpx_doc = HwpxDecoder::decode(base_bytes)
             .map_err(|error| SectionWorkflowError::Decode { detail: error.to_string() })?;
+        let decode_warnings = hwpx_doc.warnings.clone();
 
         let section = hwpx_doc.document.sections().get(section_idx).cloned().ok_or(
             SectionWorkflowError::SectionOutOfRange {
@@ -125,7 +152,10 @@ impl HwpxPatcher {
             preservation: preservation.0,
         };
 
-        Ok(SectionExportOutcome { exported, warning: preservation.1 })
+        Ok(crate::diagnostics::WithDecodeWarnings::new(
+            SectionExportOutcome { exported, warning: preservation.1 },
+            decode_warnings,
+        ))
     }
 
     /// Apply a section export back onto a base HWPX package.
@@ -134,6 +164,29 @@ impl HwpxPatcher {
         section_idx: usize,
         exported: &ExportedSection,
     ) -> Result<SectionPatchOutcome, SectionWorkflowError> {
+        Self::patch_exported_section_with_diagnostics(base_bytes, section_idx, exported)
+            .map(crate::diagnostics::WithDecodeWarnings::into_value)
+    }
+
+    /// Apply a section export back, keeping the decoder's warnings.
+    ///
+    /// Same outcome as [`HwpxPatcher::patch_exported_section`], which is a
+    /// thin wrapper over this function.
+    ///
+    /// A preserving patch re-writes one section's XML and leaves every other
+    /// ZIP entry alone, so there is no encode and therefore no encoder
+    /// warning. It does decode the base to validate the replacement against
+    /// it, and those decoder warnings are what this twin carries.
+    ///
+    /// # Errors
+    ///
+    /// See [`SectionWorkflowError`].
+    pub fn patch_exported_section_with_diagnostics(
+        base_bytes: &[u8],
+        section_idx: usize,
+        exported: &ExportedSection,
+    ) -> Result<crate::diagnostics::WithDecodeWarnings<SectionPatchOutcome>, SectionWorkflowError>
+    {
         let section_count = PackageReader::new(base_bytes)
             .map_err(|error| SectionWorkflowError::Decode { detail: error.to_string() })?
             .section_count();
@@ -152,7 +205,7 @@ impl HwpxPatcher {
             });
         }
 
-        let bytes = HwpxPatcher::patch_section_preserving(
+        let patched = HwpxPatcher::patch_section_preserving_with_diagnostics(
             base_bytes,
             section_idx,
             &exported.section,
@@ -160,7 +213,14 @@ impl HwpxPatcher {
             exported.preservation.as_ref(),
         )?;
 
-        Ok(SectionPatchOutcome { bytes, patched_section: section_idx, sections: section_count })
+        Ok(crate::diagnostics::WithDecodeWarnings::new(
+            SectionPatchOutcome {
+                bytes: patched.value,
+                patched_section: section_idx,
+                sections: section_count,
+            },
+            patched.warnings,
+        ))
     }
 }
 

@@ -194,6 +194,11 @@ fn exit_cell_edit_error(error: CellEditError, json_mode: bool) -> ! {
         ),
         CellEditError::UncarriedZipEntries { .. } => ("INPUT_ENTRIES_NOT_CARRIED", None),
         CellEditError::Codec(_) => ("SET_CELL_CODEC_FAILED", None),
+        // R1 F4: 의미 손상은 typed 변형이 됐지만 **출력 계약은 그대로** 둔다
+        // (코드·메시지 불변). 표준 `ENCODE_SEMANTIC_LOSS` 매핑은 W3 compat
+        // 테이블의 몫이다. 이 arm 이 없으면 아래 `_` 로 떨어져 코드가
+        // SET_CELL_CODEC_FAILED → SET_CELL_FAILED 로 바뀐다.
+        CellEditError::SemanticLoss { .. } => ("SET_CELL_CODEC_FAILED", None),
         _ => ("SET_CELL_FAILED", None),
     };
     let mut err = CliError::new(code, error.to_string());

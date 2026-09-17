@@ -108,6 +108,13 @@ impl Caption {
         }
     }
 
+    /// [`Self::walk_paragraphs_mut`] 의 불변 쌍둥이 — 방문 순서 동일.
+    pub(crate) fn walk_paragraphs(&self, f: &mut dyn FnMut(&Paragraph)) {
+        for p in &self.paragraphs {
+            p.walk_paragraphs(f);
+        }
+    }
+
     /// Creates a caption with the given paragraphs and side.
     pub fn new(paragraphs: Vec<Paragraph>, side: CaptionSide) -> Self {
         Self {

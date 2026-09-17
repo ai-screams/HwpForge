@@ -203,7 +203,60 @@ fn map_stamper_error(error: StamperError) -> ToolErrorInfo {
             format!("post-encode verification failed at {stage}: {detail}"),
             "산출물 검증 실패 — 코덱 버그 가능성이 있어 무출력으로 거부했습니다.",
         ),
+        // R1 F4: 의미 손상은 typed 변형이 됐지만 **출력 계약은 그대로** 둔다
+        // — 코드·hint 는 과거 `Codec` 과 같고, 메시지는 변형의 Display
+        // (접두사 없는 문장이라 과거 `Codec(msg)` 과 바이트 동일). 표준
+        // `ENCODE_SEMANTIC_LOSS` 매핑은 W3 compat 테이블의 몫이다. 이 arm 이
+        // 없으면 아래 `other` 로 떨어져 코드가 STAMP_FAILED 로 바뀐다.
+        ref e @ StamperError::SemanticLoss { .. } => ToolErrorInfo::new(
+            "STAMP_CODEC_FAILED",
+            e.to_string(),
+            "Check that the file is valid HWPX.",
+        ),
         other => ToolErrorInfo::new("STAMP_FAILED", other.to_string(), "Unexpected failure."),
+    }
+}
+
+#[cfg(test)]
+mod semantic_loss_contract_tests {
+    use super::*;
+    use hwpforge_smithy_hwpx::{EncodeWarning, ParagraphPath, PathSeg};
+
+    fn warning(reason: &str) -> EncodeWarning {
+        EncodeWarning::NoteHeadSkipped {
+            path: ParagraphPath(vec![PathSeg::Section(0), PathSeg::BodyParagraph(1)]),
+            reason: reason.into(),
+        }
+    }
+
+    /// R1 F4 회귀 잠금: `SemanticLoss` 는 typed 변형이 됐지만 MCP 가 내보내는
+    /// 코드·메시지·hint 는 과거 `Codec` 경로와 **바이트 동일**해야 한다.
+    /// (arm 이 빠지면 `other` 로 떨어져 STAMP_FAILED 가 된다.)
+    #[test]
+    fn semantic_loss_maps_to_the_codec_contract() {
+        let typed = map_stamper_error(StamperError::SemanticLoss {
+            warnings: vec![warning("titleMark first run")],
+            others: vec![],
+        });
+        let legacy = map_stamper_error(StamperError::Codec(
+            "encode produced a semantic-loss warning (fail-closed): note number head skipped at \
+             section[0].para[1]: titleMark first run"
+                .to_string(),
+        ));
+
+        assert_eq!(typed.code, "STAMP_CODEC_FAILED");
+        assert_eq!(typed.code, legacy.code);
+        assert_eq!(typed.message, legacy.message, "메시지가 드리프트했다");
+        assert_eq!(typed.hint, legacy.hint, "hint 가 드리프트했다");
+    }
+
+    /// 빈 `warnings` 로도 panic 하지 않아야 한다 (변형은 외부에서 구성 가능).
+    #[test]
+    fn empty_warnings_does_not_panic() {
+        let info =
+            map_stamper_error(StamperError::SemanticLoss { warnings: vec![], others: vec![] });
+        assert_eq!(info.code, "STAMP_CODEC_FAILED");
+        assert_eq!(info.message, "encode produced a semantic-loss warning (fail-closed)");
     }
 }
 

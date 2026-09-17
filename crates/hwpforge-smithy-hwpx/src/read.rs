@@ -27,6 +27,7 @@ use hwpforge_core::{
     classify_paragraph, Caption, Control, HeadingSource, ParaKind, RunContent, StyleLookup,
 };
 
+use crate::diagnostics::WithDecodeWarnings;
 use crate::error::HwpxResult;
 use crate::fill::FieldInfo;
 use crate::table_inventory::{tables_in_document, PathSeg};
@@ -151,7 +152,27 @@ impl HwpxReader {
     ///
     /// Returns an error when the input is not a decodable HWPX package.
     pub fn outline(bytes: &[u8]) -> HwpxResult<DocumentOutline> {
+        Self::outline_with_diagnostics(bytes).map(WithDecodeWarnings::into_value)
+    }
+
+    /// Builds the document navigation map, keeping the decoder's warnings.
+    ///
+    /// Same projection as [`HwpxReader::outline`], which is a thin wrapper
+    /// over this function — the two can never disagree about the map itself.
+    ///
+    /// The field walk re-decodes `bytes` (see the note inside), so the
+    /// decoder runs twice over the same input. Its warnings are therefore
+    /// identical to the ones already collected and are **not** appended a
+    /// second time; the returned list has each warning exactly once.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the input is not a decodable HWPX package.
+    pub fn outline_with_diagnostics(
+        bytes: &[u8],
+    ) -> HwpxResult<WithDecodeWarnings<DocumentOutline>> {
         let decoded = HwpxDecoder::decode(bytes)?;
+        let warnings = decoded.warnings.clone();
         let document = &decoded.document;
         let styles = &decoded.style_store;
 
@@ -211,14 +232,17 @@ impl HwpxReader {
         // decode of `bytes`.
         let fields = HwpxFiller::list_fields(bytes)?;
 
-        Ok(DocumentOutline {
-            title: document.metadata().title.clone(),
-            sections,
-            headings,
-            tables,
-            fields,
-            bookmarks,
-        })
+        Ok(WithDecodeWarnings::new(
+            DocumentOutline {
+                title: document.metadata().title.clone(),
+                sections,
+                headings,
+                tables,
+                fields,
+                bookmarks,
+            },
+            warnings,
+        ))
     }
 
     /// Reads the text projection of a paragraph range in a section.
@@ -237,7 +261,28 @@ impl HwpxReader {
         section: usize,
         range: Option<(usize, usize)>,
     ) -> Result<ParagraphsView, ReadError> {
+        Self::read_paragraphs_with_diagnostics(bytes, section, range)
+            .map(WithDecodeWarnings::into_value)
+    }
+
+    /// Reads a paragraph range, keeping the decoder's warnings.
+    ///
+    /// Same projection as [`HwpxReader::read_paragraphs`], which is a thin
+    /// wrapper over this function.
+    ///
+    /// # Errors
+    ///
+    /// Fails on undecodable input, an out-of-range section, or an invalid
+    /// paragraph range. A range rejection happens after the decode, so the
+    /// warnings are discarded with the error — they describe an input the
+    /// caller is not going to get a projection of.
+    pub fn read_paragraphs_with_diagnostics(
+        bytes: &[u8],
+        section: usize,
+        range: Option<(usize, usize)>,
+    ) -> Result<WithDecodeWarnings<ParagraphsView>, ReadError> {
         let decoded = HwpxDecoder::decode(bytes)?;
+        let warnings = decoded.warnings.clone();
         let document = &decoded.document;
         let styles = &decoded.style_store;
 
@@ -267,7 +312,7 @@ impl HwpxReader {
             })
             .collect();
 
-        Ok(ParagraphsView { section, from, to, paragraphs })
+        Ok(WithDecodeWarnings::new(ParagraphsView { section, from, to, paragraphs }, warnings))
     }
 
     /// Reads the logical-grid text matrix of the table at `ordinal`.
@@ -282,7 +327,24 @@ impl HwpxReader {
     /// Fails on undecodable input, an unknown ordinal, or a table whose
     /// strict grid cannot be derived.
     pub fn read_table(bytes: &[u8], ordinal: usize) -> Result<TableView, ReadError> {
+        Self::read_table_with_diagnostics(bytes, ordinal).map(WithDecodeWarnings::into_value)
+    }
+
+    /// Reads a table's grid text, keeping the decoder's warnings.
+    ///
+    /// Same projection as [`HwpxReader::read_table`], which is a thin wrapper
+    /// over this function.
+    ///
+    /// # Errors
+    ///
+    /// Fails on undecodable input, an unknown ordinal, or a table whose
+    /// strict grid cannot be derived.
+    pub fn read_table_with_diagnostics(
+        bytes: &[u8],
+        ordinal: usize,
+    ) -> Result<WithDecodeWarnings<TableView>, ReadError> {
         let decoded = HwpxDecoder::decode(bytes)?;
+        let warnings = decoded.warnings.clone();
         let document = &decoded.document;
 
         let entries = tables_in_document(document);
@@ -329,13 +391,16 @@ impl HwpxReader {
             })
             .unwrap_or(0);
 
-        Ok(TableView {
-            ordinal,
-            at: ParaLocator { section: entry.section, para },
-            rows,
-            cols,
-            cells,
-        })
+        Ok(WithDecodeWarnings::new(
+            TableView {
+                ordinal,
+                at: ParaLocator { section: entry.section, para },
+                rows,
+                cols,
+                cells,
+            },
+            warnings,
+        ))
     }
 
     /// Reads every field named `name` (document order).
@@ -345,14 +410,30 @@ impl HwpxReader {
     /// Fails on undecodable input or when no field carries that name; the
     /// error lists the available names.
     pub fn read_field(bytes: &[u8], name: &str) -> Result<Vec<FieldInfo>, ReadError> {
-        let fields = HwpxFiller::list_fields(bytes)?;
+        Self::read_field_with_diagnostics(bytes, name).map(WithDecodeWarnings::into_value)
+    }
+
+    /// Reads every field named `name`, keeping the decoder's warnings.
+    ///
+    /// Same projection as [`HwpxReader::read_field`], which is a thin wrapper
+    /// over this function.
+    ///
+    /// # Errors
+    ///
+    /// Fails on undecodable input or when no field carries that name; the
+    /// error lists the available names.
+    pub fn read_field_with_diagnostics(
+        bytes: &[u8],
+        name: &str,
+    ) -> Result<WithDecodeWarnings<Vec<FieldInfo>>, ReadError> {
+        let listed = HwpxFiller::list_fields_with_diagnostics(bytes)?;
         let matches: Vec<FieldInfo> =
-            fields.iter().filter(|f| f.name.as_deref() == Some(name)).cloned().collect();
+            listed.value.iter().filter(|f| f.name.as_deref() == Some(name)).cloned().collect();
         if matches.is_empty() {
-            let available = fields.iter().filter_map(|f| f.name.clone()).collect();
+            let available = listed.value.iter().filter_map(|f| f.name.clone()).collect();
             return Err(ReadError::FieldNotFound { name: name.to_string(), available });
         }
-        Ok(matches)
+        Ok(WithDecodeWarnings::new(matches, listed.warnings))
     }
 }
 

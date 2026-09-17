@@ -183,7 +183,17 @@ jobs:
         with:
           tool: cargo-nextest
       - name: cargo nextest run (all features, ci profile)
-        run: cargo nextest run --workspace --all-features --profile ci
+        # bindings-py 제외: `--all-features` 는 `extension-module` 을 켜고, 그
+        # 상태의 테스트 바이너리는 libpython 을 링크하지 않는다. 지금은 유닛
+        # 테스트가 pyo3 C API 를 참조하지 않아 링커가 전부 잘라내지만(로컬 실측:
+        # 테스트 바이너리의 미해결 `_Py*` 심볼 0), 테스트 하나가 `PyErr`·`Python`
+        # 을 건드리는 순간 Linux 링크가 깨진다 — 워크스페이스 게이트가 그때
+        # 빨개지지 않게 미리 제외한다. 그 9개 유닛 테스트는 `Verify › Python` 이
+        # `extension-module` 없이 돌리고, 층 자체의 검증은 pytest 가 한다.
+        # Makefile `test`·`test-ci`·`cov` 의 제외 목록과 함께 고친다.
+        run: >-
+          cargo nextest run --workspace --all-features --profile ci
+          --exclude hwpforge-bindings-py
 
   audit-hwp5:
     name: "Verify › HWP5 Audit Gate"
@@ -217,9 +227,16 @@ jobs:
         with:
           tool: cargo-nextest,cargo-llvm-cov
       - name: cargo llvm-cov (fail-under-lines ${{ env.COVERAGE_THRESHOLD }}%)
+        # `Verify › Test` 와 같은 링크 사유에 더해, 커버리지에는 독립된 이유가
+        # 하나 더 있다: 이 크레이트는 Rust 테스트로는 덮을 수 없는 FFI 표면
+        # (23 함수의 인자 변환·GIL 해제 경로)이라 포함하면 워크스페이스 수치를
+        # 90% 게이트 쪽으로 끌어내린다 — linux 가 macOS 보다 0.02~0.06% 낮게
+        # 나와 마진이 이미 얇다. 이 층의 90% 게이트는 `Verify › Python` 이
+        # 순수 Python 층에 대해 따로 본다.
         run: >-
           cargo llvm-cov nextest
           --workspace --all-features
+          --exclude hwpforge-bindings-py
           --fail-under-lines ${{ env.COVERAGE_THRESHOLD }}
           --lcov --output-path coverage.lcov
       - name: Upload coverage artifact
@@ -318,19 +335,252 @@ jobs:
         with:
           key: msrv
       - name: cargo +1.88 check
-        # smithy-pdf 는 krilla(rust-version 1.92) 의존으로 워크스페이스 MSRV(1.88) 초과 —
-        # publish=false 라 MSRV 소비자 계약이 없어 MSRV 검증에서만 제외한다 (W2 계획 §6-7).
-        # bindings-cli 는 W6a 부터 smithy-pdf 를 소비 (rust-version 1.92 명시) — 1.88
-        # 레인에서 제외하고 아래 1.92 스텝이 커버한다.
+        # 1.92 를 선언한 크레이트는 넷이고, 전부 publish=false 라 MSRV 소비자
+        # 계약이 없다 — 1.88 레인에서 제외하고 아래 1.92 스텝이 커버한다.
+        #   smithy-pdf     krilla 0.8 가 1.92 요구 (W2 계획 §6-7)
+        #   bindings-cli   W6a 부터 smithy-pdf 소비
+        #   convert        ops::to_pdf 가 smithy-pdf 소비 (Python 바인딩 에픽 §2.2)
+        #   bindings-py    convert 소비
         run: >-
           cargo +1.88 check --workspace --all-features
           --exclude hwpforge-smithy-pdf
           --exclude hwpforge-bindings-cli
+          --exclude hwpforge-convert
+          --exclude hwpforge-bindings-py
       - name: Install PDF MSRV toolchain (1.92)
         run: rustup toolchain install 1.92 --profile minimal
       - name: cargo +1.92 check (PDF 소비 크레이트)
-        # smithy-pdf + 소비자(bindings-cli)의 실질 MSRV 검증 레인.
-        run: cargo +1.92 check --all-features -p hwpforge-smithy-pdf -p hwpforge-bindings-cli
+        # smithy-pdf + 소비자 셋의 실질 MSRV 검증 레인 (위 제외 목록과 정확히 동일).
+        run: >-
+          cargo +1.92 check --all-features
+          -p hwpforge-smithy-pdf
+          -p hwpforge-bindings-cli
+          -p hwpforge-convert
+          -p hwpforge-bindings-py
+      - name: cargo check (standalone fuzz workspace)
+        # fuzz 는 루트 워크스페이스에서 제외된 별도 워크스페이스라 위 명령들이
+        # 건드리지 않는다. convert 를 path 로 의존하므로 convert 의 MSRV 상향이
+        # 여기서만 조용히 깨질 수 있다 — 스모크로 잡는다 (계획 §2.3 R3 #5).
+        run: cargo +1.92 check --manifest-path fuzz/Cargo.toml
+
+  python:
+    name: "Verify › Python"
+    # 경로 필터도 `if:` 도 없이 PR·머지 큐 양쪽에서 무조건 실행한다. skip 된
+    # 체크런은 GitHub 가 required 를 "충족" 으로 취급하므로(CI 다이어트 P1 과
+    # 같은 메커니즘) 이 잡에 조건을 걸면 실패가 통과로 둔갑한다 — `plan` 과
+    # 같은 무조건 실행 모양을 쓰고, 다른 잡 결과에도 의존하지 않는다.
+    #
+    # required checks 등록은 관리자(사용자) 작업이다: 이 체크 컨텍스트가 PR 에
+    # 처음 나타난 뒤 큐 등록 전에 `Verify › Python` 을 브랜치 보호에 추가하고
+    # `gh api` 출력을 `.docs/prs/` 에 기록한다 (Python 바인딩 계획 W1d 행).
+    #
+    # ubuntu-22.04 고정 = glibc 2.35. 인터프리터 테스트와 sdist 는 러너에서 바로
+    # 돌고, 후보 wheel 만 manylinux_2_28 컨테이너에서 만든다 — 그래야 PR 에서
+    # 검증한 wheel 이 릴리스가 내보낼 wheel 과 같은 물건이 된다(계획 부록 A-1).
+    runs-on: ubuntu-22.04
+    # W0 (h): CI 시간은 이 첫 run 이 실측이다. 계획의 초기값은 20 분이지만 이 잡은
+    # cold release 빌드 + 인터프리터 3종 + feature 조합 2벌 + manylinux 컨테이너
+    # 안의 또 한 벌 cold release 빌드까지 한 잡에서 치른다 — required 가 될 잡을
+    # 타임아웃으로 빨갛게 만드는 비용이 넉넉한 상한보다 크므로 40 에서 시작하고
+    # 첫 run 의 실측으로 조인다 (컨테이너 빌드는 러너 캐시를 쓰지 못한다).
+    timeout-minutes: 40
+    env:
+      # 기본 인터프리터와 그 환경. lint·타입 검사·wheel 빌드가 이것을 쓰고,
+      # pytest 루프만 자기 셸에서 버전별로 덮어쓴다. wheel 은 abi3 라 어느
+      # 인터프리터로 빌드해도 같은 산출물이다.
+      UV_PYTHON: "3.11"
+      UV_PROJECT_ENVIRONMENT: ".venv/3.11"
+    steps:
+      - uses: actions/checkout@v7
+      # 서드파티 액션은 40자리 커밋 SHA 로 핀하고 태그는 주석으로만 남긴다
+      # (아래 `Standalone › Workflow Lint` 가 단언한다).
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+        with:
+          version: "0.12.13"
+          enable-cache: true
+          cache-dependency-glob: "crates/hwpforge-bindings-py/pyproject.toml"
+      - name: Install CPython 3.9 / 3.11 / 3.14
+        # 최소·중간·최신 표준 빌드. wheel 은 abi3-py39 하나뿐이라 인터프리터가
+        # 늘어도 산출물은 하나다. free-threaded 빌드는 stable ABI 가 없어
+        # 미지원(패키지 사양 §2) — 여기서도 표준 빌드만 설치한다.
+        run: uv python install 3.9 3.11 3.14
+      - name: Install Rust toolchain
+        run: rustup show
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: python
+      - name: uv sync (dev group)
+        working-directory: crates/hwpforge-bindings-py
+        run: uv sync --group dev
+      - name: ruff check + ruff format --check
+        run: make py-lint
+      - name: ty check
+        run: make py-check
+      - name: pytest (CPython 3.9 / 3.11 / 3.14)
+        # 매트릭스가 아니라 한 잡 안의 루프인 이유: abi3 wheel 은 하나이고 무거운
+        # Rust 의존성은 인터프리터에 의존하지 않는다. 매트릭스로 쪼개면
+        # checkout·rust-cache·release 빌드를 3배로 치르고 얻는 것이 없다.
+        # 인터프리터마다 별도 venv 를 써서 uv 가 `.venv` 를 지웠다 다시 만드는
+        # 왕복을 피한다. 경로를 `.venv/<버전>` 으로 두는 이유는 `.venv` 가 이미
+        # gitignore 이고 ruff 의 기본 제외 목록에도 있어서다 — `.venv-3.9` 처럼
+        # 형제 이름으로 두면 `ruff check .` 이 그 안의 site-packages 를 훑는다. coverage 는 3.11 에서 한 번만 — 게이트 대상이 순수
+        # Python 층(`[tool.coverage.run] source = ["hwpforge"]`)이라 인터프리터
+        # 별로 결과가 갈리지 않는다. 버전 목록은 위 `uv python install` 과 같다.
+        run: |
+          set -euo pipefail
+          for v in 3.9 3.11 3.14; do
+            echo "::group::CPython $v"
+            export UV_PYTHON="$v"
+            export UV_PROJECT_ENVIRONMENT=".venv/$v"
+            (cd crates/hwpforge-bindings-py && uv sync --group dev)
+            if [ "$v" = "3.11" ]; then
+              make py-cov
+            else
+              make py-test
+            fi
+            echo "::endgroup::"
+          done
+      - name: Install nextest
+        uses: taiki-e/install-action@v2.86.5
+        with:
+          tool: cargo-nextest
+      - name: cargo nextest (bindings-py Rust unit tests)
+        # 이 크레이트는 워크스페이스 nextest·coverage 에서 제외돼 있으므로 여기서
+        # 돌지 않으면 크레이트의 Rust 유닛 테스트가 어디서도 돌지 않는다.
+        # `extension-module` 을 **끄고**(기본 feature 아님) 돌리는 것이 지원되는
+        # 조합이다 — pyo3 가 libpython 을 정상적으로 링크하므로 앞으로 테스트가
+        # pyo3 C API 를 참조해도 깨지지 않는다. uv 가 설치한 인터프리터는 공유
+        # libpython 을 포함하므로 그것을 가리킨다. 프로파일을 release 로 맞춰
+        # 바로 위 `maturin develop --release` 가 만든 의존성 아티팩트를 재사용한다
+        # (다시 빌드되는 것은 pyo3 와 이 크레이트뿐).
+        run: make py-rust-test
+      - name: Build candidate wheel (manylinux_2_28, x86_64)
+        # 릴리스와 **같은 방식**으로 만든다: SHA 핀한 maturin-action 의
+        # manylinux_2_28 컨테이너. 네이티브 ubuntu-22.04 링크로는 2_28 wheel 이
+        # 나올 수 없다 — 첫 CI 실행에서 maturin 감사가 정확히 그 이유로 거부했다
+        # ("too-recent versioned symbols: libc.so.6: GLIBC_2.33, GLIBC_2.30,
+        # GLIBC_2.34; libm.so.6: GLIBC_2.29"). 감사가 제 일을 한 것이므로 빌드
+        # 방식을 릴리스 경로(`pypi-publish.yml` 의 linux 매트릭스)와 일치시킨다.
+        # 컨테이너 cold 빌드 몇 분이 "PR 에서 통과한 wheel 이 진짜 배포 wheel 과
+        # 다른 물건" 인 상태보다 싸다. `--zig` 는 기각 — 핀할 툴체인이 하나 늘고
+        # 링커가 릴리스 경로와 달라진다.
+        #
+        # 액션은 워크스페이스를 컨테이너 안 **같은 절대 경로**로 마운트하므로
+        # (`src/index.ts`: `${hostWorkspace}:${workspace}`) `--out` 에 워크스페이스
+        # 절대 경로를 줘도 호스트의 같은 자리에 떨어진다. 컨테이너가 root 로
+        # 쓴 산출물은 액션이 끝나며 러너 uid:gid 로 chown 한다(같은 파일의
+        # "Fixing file permissions for output directory" 경로) — 이후 스텝이
+        # 그대로 읽는다.
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          command: build
+          target: x86_64
+          manylinux: "2_28"
+          maturin-version: v1.15.0 # 액션은 태그된 릴리스 정확 버전만 받는다(범위 불가) — pypi-publish.yml 과 같은 값
+          working-directory: crates/hwpforge-bindings-py
+          args: --release --out ${{ github.workspace }}/dist
+      - name: Build sdist
+        # 사양 §7 이 약속한 sdist. maturin 은 워크스페이스 path 의존성을 sdist 안에
+        # 함께 넣고 members 목록을 줄여 다시 쓴다 (로컬 실측: 10 크레이트 + 루트
+        # Cargo.toml + Cargo.lock 이 들어간다).
+        working-directory: crates/hwpforge-bindings-py
+        run: uv run maturin sdist --out "$GITHUB_WORKSPACE/dist"
+      - name: Assert glibc floor (<= 2.28)
+        # maturin 의 감사와 독립된 두 번째 확인. 파이프 각 단계를 검사하고
+        # (`pipefail` + 단계별 -n 검사) 최대 GLIBC_* 를 정책 바닥과 비교한다.
+        run: |
+          set -euo pipefail
+          whl="$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
+          [ -n "$whl" ] || { echo "::error::no wheel in dist/"; exit 1; }
+          echo "wheel: $whl"
+          sha256sum "$whl"
+          rm -rf "$RUNNER_TEMP/whl"
+          mkdir -p "$RUNNER_TEMP/whl"
+          unzip -q -o "$whl" -d "$RUNNER_TEMP/whl"
+          so="$(find "$RUNNER_TEMP/whl" -name '*.so' -print -quit)"
+          [ -n "$so" ] || { echo "::error::no shared object inside the wheel"; exit 1; }
+          objdump -T "$so" > "$RUNNER_TEMP/dynsyms.txt"
+          syms="$(grep -oE 'GLIBC_[0-9]+\.[0-9]+' "$RUNNER_TEMP/dynsyms.txt" | sort -Vu || true)"
+          [ -n "$syms" ] || { echo "::error::no GLIBC_* version symbols found in $so"; exit 1; }
+          echo "$syms"
+          max="$(printf '%s\n' "$syms" | tail -n 1)"
+          echo "max glibc requirement: $max"
+          if [ "$(printf '%s\n%s\n' GLIBC_2.28 "$max" | sort -V | tail -n 1)" != "GLIBC_2.28" ]; then
+            echo "::error::$max exceeds the manylinux_2_28 floor"
+            exit 1
+          fi
+      - name: Verify sdist is self-contained
+        # 체크아웃 **밖**에 풀어서, 남아 있는 path 의존성이 원본 트리로 새는 것을
+        # 구조적으로 막는다. `pip install` 로 검증하지 않는다 — cold release 컴파일
+        # 이라 이 잡의 예산을 넘는다. 실제 설치 리허설은 W1e 의 TestPyPI 단계다.
+        run: |
+          set -euo pipefail
+          sd="$(find dist -maxdepth 1 -name '*.tar.gz' -print -quit)"
+          [ -n "$sd" ] || { echo "::error::no sdist in dist/"; exit 1; }
+          echo "sdist: $sd"
+          sha256sum "$sd"
+          rm -rf "$RUNNER_TEMP/sdist"
+          mkdir -p "$RUNNER_TEMP/sdist"
+          tar xzf "$sd" -C "$RUNNER_TEMP/sdist"
+          ext="$(find "$RUNNER_TEMP/sdist" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+          [ -n "$ext" ] || { echo "::error::sdist has no top-level directory"; exit 1; }
+          echo "extracted: $ext"
+          cargo metadata --no-deps --format-version 1 --manifest-path "$ext/Cargo.toml" \
+            > "$RUNNER_TEMP/sdist-metadata.json"
+          python3 - "$ext" "$RUNNER_TEMP/sdist-metadata.json" <<'PY'
+          import json
+          import os
+          import sys
+
+          root = os.path.realpath(sys.argv[1])
+          packages = json.load(open(sys.argv[2]))["packages"]
+          ours = [p for p in packages if p["name"].startswith("hwpforge")]
+          outside = [
+              p["name"]
+              for p in ours
+              if not os.path.realpath(p["manifest_path"]).startswith(root + os.sep)
+          ]
+          print(f"hwpforge* packages in the sdist: {len(ours)}")
+          if outside:
+              raise SystemExit(f"::error::path dependencies resolve outside the sdist: {outside}")
+          PY
+          CARGO_TARGET_DIR="$RUNNER_TEMP/sdist-target" \
+          PYO3_PYTHON="$(uv python find 3.11)" \
+            cargo check --manifest-path "$ext/Cargo.toml" -p hwpforge-bindings-py
+      - name: Bundle smoke script + fixture
+        # 아티팩트 하나로 "wheel + 재현 스크립트 + fixture" 가 되게 한다
+        # (계획 §8 결정 8 — 미배포 후보를 상대에게 전달해 검증 피드백을 받는다).
+        run: |
+          set -euo pipefail
+          cp crates/hwpforge-bindings-py/tests/smoke_unpacked_wheel.py dist/
+          cp tests/fixtures/fields/clickhere_named.hwpx dist/fixture.hwpx
+      - name: Upload candidate wheel + sdist
+        uses: actions/upload-artifact@v7
+        with:
+          name: hwpforge-wheel-candidate
+          path: dist
+          retention-days: 14
+          if-no-files-found: error
+      - name: Debian 12 unpack smoke (no pip)
+        # 계획 부록 A-1: pip 를 부르지 않고 wheel 을 풀어 PYTHONPATH 로만
+        # import → open → outline → fill → save → to_json. 컨테이너 페이로드는
+        # 파일로 써서 넘긴다 — YAML 안의 중첩 따옴표 한 줄짜리는 actionlint 의
+        # shellcheck 를 깨뜨린다.
+        run: |
+          set -euo pipefail
+          cat > dist/run_smoke.sh <<'SH'
+          set -eu
+          python3 - <<'PY'
+          import glob
+          import zipfile
+
+          whl = sorted(glob.glob("/w/hwpforge-*.whl"))[0]
+          zipfile.ZipFile(whl).extractall("/opt/hf")
+          print("unpacked:", whl)
+          PY
+          PYTHONPATH=/opt/hf python3 /w/smoke_unpacked_wheel.py /w/fixture.hwpx
+          SH
+          docker run --rm -v "$PWD/dist:/w" python:3.11-slim-bookworm bash /w/run_smoke.sh
 
   workflow-compat:
     name: "Standalone › Workflow Lint"
@@ -351,3 +601,35 @@ jobs:
             echo "::error::Outdated core action major version detected"
             exit 1
           fi
+      - name: Verify Python-toolchain actions are SHA-pinned
+        # 파이썬 빌드·배포 경로의 서드파티 액션은 태그가 아니라 40자리 커밋 SHA
+        # 로만 참조한다 (설계 §2.4 — 태그는 옮겨 붙을 수 있고, 이 액션들은 wheel
+        # 을 만들어 PyPI 로 보내는 경로에 있다). 태그는 뒤에 주석으로 남긴다.
+        run: |
+          set -euo pipefail
+          unpinned="$(grep -R -hoE 'uses:[[:space:]]*(PyO3/maturin-action|astral-sh/setup-uv)@[A-Za-z0-9._/-]+' .github/workflows/*.yml | grep -vE '@[0-9a-f]{40}$' || true)"
+          if [ -n "$unpinned" ]; then
+            echo "$unpinned"
+            echo "::error::Python toolchain action must be pinned to a 40-hex commit SHA"
+            exit 1
+          fi
+      - name: Verify every action in the publishing workflow is SHA-pinned
+        # 배포 워크플로는 wheel 을 만들어 PyPI 로 보내는 경로 전체다. 여기서는
+        # 서드파티뿐 아니라 `actions/*` 까지 **전부** 커밋 SHA 로 고정한다 —
+        # 움직일 수 있는 major 태그는 그 경로에서 새 코드를 실행하게 만든다.
+        # `docker://` 참조는 이미지 다이제스트 규칙이 달라 제외한다.
+        run: |
+          set -euo pipefail
+          # 줄 앞에서만 잡는다 — 산문 주석 안의 `uses:` 를 참조로 오인하지 않도록.
+          # 뒤에 붙은 ` # v1.2.3` 주석은 떼어내고 참조만 남긴다.
+          refs="$(grep -hE '^[[:space:]]*(- )?uses:[[:space:]]*[^[:space:]#]+' .github/workflows/pypi-publish.yml \
+            | sed -E 's/^[[:space:]]*(- )?uses:[[:space:]]*//; s/[[:space:]]+#.*$//' \
+            | grep -v 'docker://' || true)"
+          [ -n "$refs" ] || { echo "::error::no action references found in pypi-publish.yml"; exit 1; }
+          unpinned="$(printf '%s\n' "$refs" | grep -vE '@[0-9a-f]{40}$' || true)"
+          if [ -n "$unpinned" ]; then
+            echo "$unpinned"
+            echo "::error::every action in pypi-publish.yml must be pinned to a 40-hex commit SHA"
+            exit 1
+          fi
+          printf '%s\n' "$refs"

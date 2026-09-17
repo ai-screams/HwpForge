@@ -36,6 +36,7 @@ allow = [
   "Zlib",
   "BSD-3-Clause",
   "BSD-2-Clause", # arrayref (krilla 전이 의존, smithy-pdf W2)
+  "Apache-2.0 WITH LLVM-exception", # target-lexicon (pyo3-build-config 의 빌드 의존, bindings-py W1d — 빌드 시점에만 링크)
 ]
 
 [sources]

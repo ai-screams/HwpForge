@@ -226,6 +226,25 @@ pub struct DocumentDiff {
     pub package: PackageDiff,
 }
 
+/// A diff report plus the decoder warnings of **both** inputs.
+///
+/// A diff decodes two packages, so one warning list would not say which
+/// document a warning came from. The two lists are kept apart rather than
+/// concatenated, and each keeps its decoder's order.
+///
+/// Returned by [`HwpxDiffer::diff_with_diagnostics`]; `#[non_exhaustive]` so
+/// a further channel can be added without breaking callers.
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub struct DiffDiagnostics {
+    /// The two-channel report, exactly as [`HwpxDiffer::diff`] returns it.
+    pub diff: DocumentDiff,
+    /// Decoder warnings for the `base` input.
+    pub base_warnings: Vec<crate::decoder::DecodeWarning>,
+    /// Decoder warnings for the `revised` input.
+    pub revised_warnings: Vec<crate::decoder::DecodeWarning>,
+}
+
 /// Two-document diff facade.
 pub struct HwpxDiffer;
 
@@ -236,8 +255,29 @@ impl HwpxDiffer {
     ///
     /// Fails when either input cannot be decoded as HWPX.
     pub fn diff(base: &[u8], revised: &[u8]) -> HwpxResult<DocumentDiff> {
+        Self::diff_with_diagnostics(base, revised).map(|d| d.diff)
+    }
+
+    /// Diffs `base` against `revised`, keeping both decoders' warnings.
+    ///
+    /// Same report as [`HwpxDiffer::diff`], which is a thin wrapper over this
+    /// function. The warnings are returned in two separate lists so a caller
+    /// can attribute each one to the document it came from; see
+    /// [`DiffDiagnostics`].
+    ///
+    /// The field channel and the package channel re-read the same bytes
+    /// (`list_fields` decodes again, `diff_package` reads the ZIP), so their
+    /// diagnostics would duplicate what the two decodes above already
+    /// reported. Each warning therefore appears exactly once.
+    ///
+    /// # Errors
+    ///
+    /// Fails when either input cannot be decoded as HWPX.
+    pub fn diff_with_diagnostics(base: &[u8], revised: &[u8]) -> HwpxResult<DiffDiagnostics> {
         let d_base = HwpxDecoder::decode(base)?;
         let d_rev = HwpxDecoder::decode(revised)?;
+        let base_warnings = d_base.warnings.clone();
+        let revised_warnings = d_rev.warnings.clone();
 
         let mut semantic = SemanticDiff::default();
         diff_fields(base, revised, &mut semantic)?;
@@ -255,7 +295,11 @@ impl HwpxDiffer {
 
         let package = diff_package(base, revised)?;
         let identical = semantic.is_empty() && package.is_empty();
-        Ok(DocumentDiff { identical, note: COMPARISON_NOTE.to_string(), semantic, package })
+        Ok(DiffDiagnostics {
+            diff: DocumentDiff { identical, note: COMPARISON_NOTE.to_string(), semantic, package },
+            base_warnings,
+            revised_warnings,
+        })
     }
 }
 

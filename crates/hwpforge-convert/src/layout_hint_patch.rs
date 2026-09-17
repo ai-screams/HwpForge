@@ -15,10 +15,10 @@ use quick_xml::{Reader, Writer};
 use zip::write::SimpleFileOptions;
 use zip::{CompressionMethod, ZipArchive, ZipWriter};
 
+use crate::error::{LayoutPatchError, LayoutPatchResult};
 use hwpforge_smithy_hwp5::layout_hint_patch::{
     ParagraphLayoutHint, SectionLayoutHints, TableLayoutHint,
 };
-use hwpforge_smithy_hwp5::{Hwp5Error, Hwp5Result};
 
 #[derive(Debug, Clone)]
 struct RawPackage {
@@ -36,7 +36,7 @@ struct RawPackageEntry {
 pub(crate) fn patch_hwpx_layout_hints(
     hwpx_bytes: &[u8],
     sections: &[SectionLayoutHints],
-) -> Hwp5Result<Vec<u8>> {
+) -> LayoutPatchResult<Vec<u8>> {
     let mut package = RawPackage::read(hwpx_bytes)?;
     for (section_idx, section) in sections.iter().enumerate() {
         if !section.has_payload() {
@@ -65,7 +65,7 @@ const MAX_TOTAL_SIZE: u64 = 500 * 1024 * 1024;
 const MAX_ENTRIES: usize = 10_000;
 
 impl RawPackage {
-    fn read(bytes: &[u8]) -> Hwp5Result<Self> {
+    fn read(bytes: &[u8]) -> LayoutPatchResult<Self> {
         Self::read_capped(bytes, MAX_ENTRY_SIZE, MAX_TOTAL_SIZE, MAX_ENTRIES)
     }
 
@@ -76,13 +76,13 @@ impl RawPackage {
         max_entry: u64,
         max_total: u64,
         max_entries: usize,
-    ) -> Hwp5Result<Self> {
+    ) -> LayoutPatchResult<Self> {
         let cursor = Cursor::new(bytes);
         let mut archive = ZipArchive::new(cursor)
-            .map_err(|e| Hwp5Error::Cfb { detail: format!("open hwpx package: {e}") })?;
+            .map_err(|e| LayoutPatchError::Package { detail: format!("open hwpx package: {e}") })?;
 
         if archive.len() > max_entries {
-            return Err(Hwp5Error::Cfb {
+            return Err(LayoutPatchError::Package {
                 detail: format!(
                     "hwpx package has {} entries, exceeds limit of {max_entries}",
                     archive.len()
@@ -95,9 +95,9 @@ impl RawPackage {
         let mut total: u64 = 0;
 
         for index in 0..archive.len() {
-            let file = archive
-                .by_index(index)
-                .map_err(|e| Hwp5Error::Cfb { detail: format!("read hwpx entry #{index}: {e}") })?;
+            let file = archive.by_index(index).map_err(|e| LayoutPatchError::Package {
+                detail: format!("read hwpx entry #{index}: {e}"),
+            })?;
             let path = file.name().to_string();
             let compression = file.compression();
             // `file.size()` comes from the ZIP central directory and can be
@@ -106,11 +106,11 @@ impl RawPackage {
             // pre-allocating an attacker-controlled buffer.
             let hint = file.size().min(max_entry) as usize;
             let mut bytes = Vec::with_capacity(hint);
-            file.take(max_entry + 1)
-                .read_to_end(&mut bytes)
-                .map_err(|e| Hwp5Error::Cfb { detail: format!("read '{path}' bytes: {e}") })?;
+            file.take(max_entry + 1).read_to_end(&mut bytes).map_err(|e| {
+                LayoutPatchError::Package { detail: format!("read '{path}' bytes: {e}") }
+            })?;
             if bytes.len() as u64 > max_entry {
-                return Err(Hwp5Error::Cfb {
+                return Err(LayoutPatchError::Package {
                     detail: format!(
                         "hwpx entry '{path}' decompressed to {} bytes, exceeds limit of {max_entry}",
                         bytes.len()
@@ -119,7 +119,7 @@ impl RawPackage {
             }
             total = total.saturating_add(bytes.len() as u64);
             if total > max_total {
-                return Err(Hwp5Error::Cfb {
+                return Err(LayoutPatchError::Package {
                     detail: format!(
                         "hwpx package total decompressed data ({total} bytes) exceeds limit of {max_total}"
                     ),
@@ -132,14 +132,14 @@ impl RawPackage {
         Ok(Self { entries, index_by_path })
     }
 
-    fn read_text_entry(&self, path: &str) -> Hwp5Result<String> {
+    fn read_text_entry(&self, path: &str) -> LayoutPatchResult<String> {
         let index = self
             .index_by_path
             .get(path)
             .copied()
-            .ok_or_else(|| Hwp5Error::MissingStream { name: path.to_string() })?;
-        String::from_utf8(self.entries[index].bytes.clone()).map_err(|e| Hwp5Error::Cfb {
-            detail: format!("entry '{path}' is not valid UTF-8: {e}"),
+            .ok_or_else(|| LayoutPatchError::MissingEntry { name: path.to_string() })?;
+        String::from_utf8(self.entries[index].bytes.clone()).map_err(|e| {
+            LayoutPatchError::Package { detail: format!("entry '{path}' is not valid UTF-8: {e}") }
         })
     }
 
@@ -149,21 +149,21 @@ impl RawPackage {
         }
     }
 
-    fn write(&self) -> Hwp5Result<Vec<u8>> {
+    fn write(&self) -> LayoutPatchResult<Vec<u8>> {
         let cursor = Cursor::new(Vec::<u8>::new());
         let mut zip = ZipWriter::new(cursor);
         for entry in &self.entries {
             let options = SimpleFileOptions::default().compression_method(entry.compression);
-            zip.start_file(&entry.path, options).map_err(|e| Hwp5Error::Cfb {
+            zip.start_file(&entry.path, options).map_err(|e| LayoutPatchError::Package {
                 detail: format!("zip start '{}': {e}", entry.path),
             })?;
-            zip.write_all(&entry.bytes).map_err(|e| Hwp5Error::Cfb {
+            zip.write_all(&entry.bytes).map_err(|e| LayoutPatchError::Package {
                 detail: format!("zip write '{}': {e}", entry.path),
             })?;
         }
-        let cursor = zip
-            .finish()
-            .map_err(|e| Hwp5Error::Cfb { detail: format!("finish hwpx patch package: {e}") })?;
+        let cursor = zip.finish().map_err(|e| LayoutPatchError::Package {
+            detail: format!("finish hwpx patch package: {e}"),
+        })?;
         Ok(cursor.into_inner())
     }
 }
@@ -190,7 +190,7 @@ impl SectionXmlPatchState {
         &mut self,
         event: BytesStart<'_>,
         writer: &mut Writer<W>,
-    ) -> Hwp5Result<()> {
+    ) -> LayoutPatchResult<()> {
         let local = local_name(event.name().as_ref()).to_vec();
         if local.as_slice() == b"p" {
             self.push_paragraph_hint()?;
@@ -199,9 +199,9 @@ impl SectionXmlPatchState {
         }
 
         let event = self.patch_table_size_event(local.as_slice(), event.into_owned())?;
-        writer
-            .write_event(Event::Start(event))
-            .map_err(|e| Hwp5Error::Cfb { detail: format!("write patched section xml: {e}") })?;
+        writer.write_event(Event::Start(event)).map_err(|e| LayoutPatchError::Package {
+            detail: format!("write patched section xml: {e}"),
+        })?;
         self.element_stack.push(local);
         Ok(())
     }
@@ -210,12 +210,12 @@ impl SectionXmlPatchState {
         &mut self,
         event: BytesStart<'_>,
         writer: &mut Writer<W>,
-    ) -> Hwp5Result<()> {
+    ) -> LayoutPatchResult<()> {
         let local = local_name(event.name().as_ref()).to_vec();
         let event = self.patch_table_size_event(local.as_slice(), event.into_owned())?;
-        writer
-            .write_event(Event::Empty(event))
-            .map_err(|e| Hwp5Error::Cfb { detail: format!("write patched section xml: {e}") })?;
+        writer.write_event(Event::Empty(event)).map_err(|e| LayoutPatchError::Package {
+            detail: format!("write patched section xml: {e}"),
+        })?;
         Ok(())
     }
 
@@ -223,15 +223,15 @@ impl SectionXmlPatchState {
         &mut self,
         event: BytesEnd<'_>,
         writer: &mut Writer<W>,
-    ) -> Hwp5Result<()> {
+    ) -> LayoutPatchResult<()> {
         let local = local_name(event.name().as_ref()).to_vec();
         if local.as_slice() == b"p" {
             self.pop_paragraph_hint()?;
         }
 
-        writer
-            .write_event(Event::End(event.into_owned()))
-            .map_err(|e| Hwp5Error::Cfb { detail: format!("write patched section xml: {e}") })?;
+        writer.write_event(Event::End(event.into_owned())).map_err(|e| {
+            LayoutPatchError::Package { detail: format!("write patched section xml: {e}") }
+        })?;
 
         self.pop_element(local.as_slice())?;
         if local.as_slice() == b"tbl" {
@@ -240,12 +240,12 @@ impl SectionXmlPatchState {
         Ok(())
     }
 
-    fn finish(self) -> Hwp5Result<()> {
+    fn finish(self) -> LayoutPatchResult<()> {
         if !self.hints.paragraphs.is_empty()
             || !self.hints.tables.is_empty()
             || !self.paragraph_stack.is_empty()
         {
-            return Err(Hwp5Error::Cfb {
+            return Err(LayoutPatchError::Package {
                 detail: "layout hint patch left unconsumed hints".into(),
             });
         }
@@ -256,7 +256,7 @@ impl SectionXmlPatchState {
         &self,
         local: &[u8],
         event: BytesStart<'static>,
-    ) -> Hwp5Result<BytesStart<'static>> {
+    ) -> LayoutPatchResult<BytesStart<'static>> {
         if !self.is_active_table_size_element(local) {
             return Ok(event);
         }
@@ -272,46 +272,44 @@ impl SectionXmlPatchState {
             && self.element_stack.last().is_some_and(|parent| parent.as_slice() == b"tbl")
     }
 
-    fn active_table_height(&self) -> Hwp5Result<Option<i32>> {
+    fn active_table_height(&self) -> LayoutPatchResult<Option<i32>> {
         self.table_stack
             .last()
             .copied()
-            .ok_or_else(|| Hwp5Error::Cfb {
+            .ok_or_else(|| LayoutPatchError::Package {
                 detail: "table size encountered without active table hint".into(),
             })
             .map(|hint| hint.height)
     }
 
-    fn push_paragraph_hint(&mut self) -> Hwp5Result<()> {
-        let hint = self.hints.paragraphs.pop_front().ok_or_else(|| Hwp5Error::Cfb {
+    fn push_paragraph_hint(&mut self) -> LayoutPatchResult<()> {
+        let hint = self.hints.paragraphs.pop_front().ok_or_else(|| LayoutPatchError::Package {
             detail: "paragraph layout hint count underflow".into(),
         })?;
         self.paragraph_stack.push(hint);
         Ok(())
     }
 
-    fn push_table_hint(&mut self) -> Hwp5Result<()> {
-        let hint =
-            self.hints.tables.pop_front().ok_or_else(|| Hwp5Error::Cfb {
-                detail: "table layout hint count underflow".into(),
-            })?;
+    fn push_table_hint(&mut self) -> LayoutPatchResult<()> {
+        let hint = self.hints.tables.pop_front().ok_or_else(|| LayoutPatchError::Package {
+            detail: "table layout hint count underflow".into(),
+        })?;
         self.table_stack.push(hint);
         Ok(())
     }
 
-    fn pop_paragraph_hint(&mut self) -> Hwp5Result<ParagraphLayoutHint> {
-        self.paragraph_stack.pop().ok_or_else(|| Hwp5Error::Cfb {
+    fn pop_paragraph_hint(&mut self) -> LayoutPatchResult<ParagraphLayoutHint> {
+        self.paragraph_stack.pop().ok_or_else(|| LayoutPatchError::Package {
             detail: "paragraph layout hint stack underflow".into(),
         })
     }
 
-    fn pop_element(&mut self, local: &[u8]) -> Hwp5Result<()> {
-        let popped = self
-            .element_stack
-            .pop()
-            .ok_or_else(|| Hwp5Error::Cfb { detail: "xml element stack underflow".into() })?;
+    fn pop_element(&mut self, local: &[u8]) -> LayoutPatchResult<()> {
+        let popped = self.element_stack.pop().ok_or_else(|| LayoutPatchError::Package {
+            detail: "xml element stack underflow".into(),
+        })?;
         if popped != local {
-            return Err(Hwp5Error::Cfb {
+            return Err(LayoutPatchError::Package {
                 detail: format!(
                     "xml element stack mismatch: opened '{}' closed '{}'",
                     String::from_utf8_lossy(&popped),
@@ -323,23 +321,22 @@ impl SectionXmlPatchState {
     }
 }
 
-fn patch_section_xml(xml: &str, hints: SectionLayoutHints) -> Hwp5Result<String> {
+fn patch_section_xml(xml: &str, hints: SectionLayoutHints) -> LayoutPatchResult<String> {
     let mut reader = Reader::from_str(xml);
     let mut writer = Writer::new(Cursor::new(Vec::with_capacity(xml.len() + 1024)));
     let mut buf = Vec::new();
     let mut state = SectionXmlPatchState::new(hints);
 
     loop {
-        match reader
-            .read_event_into(&mut buf)
-            .map_err(|e| Hwp5Error::Cfb { detail: format!("parse generated section xml: {e}") })?
-        {
+        match reader.read_event_into(&mut buf).map_err(|e| LayoutPatchError::Package {
+            detail: format!("parse generated section xml: {e}"),
+        })? {
             Event::Start(event) => state.handle_start(event, &mut writer)?,
             Event::Empty(event) => state.handle_empty(event, &mut writer)?,
             Event::End(event) => state.handle_end(event, &mut writer)?,
             Event::Eof => break,
             event => {
-                writer.write_event(event.into_owned()).map_err(|e| Hwp5Error::Cfb {
+                writer.write_event(event.into_owned()).map_err(|e| LayoutPatchError::Package {
                     detail: format!("write patched section xml: {e}"),
                 })?;
             }
@@ -350,7 +347,7 @@ fn patch_section_xml(xml: &str, hints: SectionLayoutHints) -> Hwp5Result<String>
     state.finish()?;
 
     let bytes = writer.into_inner().into_inner();
-    String::from_utf8(bytes).map_err(|e| Hwp5Error::Cfb {
+    String::from_utf8(bytes).map_err(|e| LayoutPatchError::Package {
         detail: format!("patched section xml is not valid UTF-8: {e}"),
     })
 }
@@ -359,23 +356,25 @@ fn rewrite_element_attr(
     event: BytesStart<'static>,
     target_attr: &str,
     new_value: &str,
-) -> Hwp5Result<BytesStart<'static>> {
-    let name = String::from_utf8(event.name().as_ref().to_vec())
-        .map_err(|e| Hwp5Error::Cfb { detail: format!("element name is not valid UTF-8: {e}") })?;
+) -> LayoutPatchResult<BytesStart<'static>> {
+    let name = String::from_utf8(event.name().as_ref().to_vec()).map_err(|e| {
+        LayoutPatchError::Package { detail: format!("element name is not valid UTF-8: {e}") }
+    })?;
     let mut rebuilt = BytesStart::new(name);
     let mut replaced = false;
 
     for attr in event.attributes().with_checks(false) {
-        let attr =
-            attr.map_err(|e| Hwp5Error::Cfb { detail: format!("read xml attribute: {e}") })?;
-        let key = std::str::from_utf8(attr.key.as_ref()).map_err(|e| Hwp5Error::Cfb {
-            detail: format!("attribute key is not valid UTF-8: {e}"),
+        let attr = attr.map_err(|e| LayoutPatchError::Package {
+            detail: format!("read xml attribute: {e}"),
+        })?;
+        let key = std::str::from_utf8(attr.key.as_ref()).map_err(|e| {
+            LayoutPatchError::Package { detail: format!("attribute key is not valid UTF-8: {e}") }
         })?;
         let value = if local_name(attr.key.as_ref()) == target_attr.as_bytes() {
             replaced = true;
             new_value
         } else {
-            std::str::from_utf8(attr.value.as_ref()).map_err(|e| Hwp5Error::Cfb {
+            std::str::from_utf8(attr.value.as_ref()).map_err(|e| LayoutPatchError::Package {
                 detail: format!("attribute value is not valid UTF-8: {e}"),
             })?
         };

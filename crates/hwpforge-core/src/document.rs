@@ -182,12 +182,32 @@ impl Document<Draft> {
         Self { sections: Vec::new(), metadata, _state: PhantomData }
     }
 
-    /// 문서의 모든 문단(전 섹션 본문·머리말·꼬리말·바탕쪽 + 표 셀·캡션·
-    /// 글상자·각주/미주·메모 등 중첩 문단 전부)을 문서 순서로 방문한다.
+    /// 문서의 문단을 문서 순서(pre-order)로 방문한다.
     ///
     /// 캐시 정규화([`Self::strip_layout_caches`]) 등 전 문단 일괄 변환의
     /// 진입점이다. `Draft` 전용 — `Validated` 는 typestate 상 불변이므로
     /// 비교가 필요하면 검증 전 사본에서 수행한다.
+    ///
+    /// # 재귀 대상 (정확한 목록)
+    ///
+    /// 섹션마다 본문 → 머리말 → 꼬리말 → 바탕쪽 순으로 돌고, 각 문단은
+    /// **자신을 먼저** 방문한 뒤 run 안으로 내려간다:
+    ///
+    /// - 표: 행 → 셀 → 셀 문단(중첩 표 포함), 그다음 표 캡션
+    /// - 도형/글상자: 본문 문단 + 캡션 (타원·다각형 동일; 선·사각형·호·
+    ///   곡선·연결선은 캡션만)
+    /// - 각주·미주: 본문 문단
+    /// - 메모: 본문 문단 + 앵커 run 안의 중첩
+    /// - 묶음 객체: 자식 컨트롤로 재귀
+    ///
+    /// # 방문하지 않는 것 (알려진 갭)
+    ///
+    /// **[`crate::image::Image::caption`] 안의 문단은 방문하지 않는다.**
+    /// [`crate::run::RunContent::Image`] 는 재귀 대상이 아니기 때문이다.
+    /// 표·글상자 캡션은 방문되므로 캡션 처리가 비대칭이다 — 의도된 설계가
+    /// 아니라 갭이며, 재귀 대상을 넓히면 캐시 정규화·편집 파이프라인 등
+    /// **모든 기존 호출자의 동작이 바뀌므로** 픽스처를 갖춘 별도 슬라이스로
+    /// 다룬다. `.docs/followups.md` 에 기록돼 있다.
     ///
     /// # Examples
     ///
@@ -210,6 +230,39 @@ impl Document<Draft> {
     pub fn for_each_paragraph_mut<F: FnMut(&mut Paragraph)>(&mut self, mut f: F) {
         for section in &mut self.sections {
             section.walk_paragraphs_mut(&mut f);
+        }
+    }
+
+    /// [`Self::for_each_paragraph_mut`] 의 불변 쌍둥이 — **방문 순서와 재귀
+    /// 대상이 완전히 같다**. 재귀 대상 목록과 이미지 캡션 갭은 그쪽 문서에
+    /// 있다.
+    ///
+    /// 문서를 바꾸지 않고 훑기만 하는 호출자(자산 계획 수집·통계·검증)를
+    /// 위한 것이다. 순서가 같아야 두 순회를 같은 문단 번호로 짝지을 수
+    /// 있으므로, 한쪽만 고치면 안 된다 —
+    /// `layout::tests::immutable_walker_matches_the_mutable_one` 이 잠근다.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use hwpforge_core::document::Document;
+    /// use hwpforge_core::page::PageSettings;
+    /// use hwpforge_core::paragraph::Paragraph;
+    /// use hwpforge_core::section::Section;
+    /// use hwpforge_foundation::ParaShapeIndex;
+    ///
+    /// let mut doc = Document::new();
+    /// doc.add_section(Section::with_paragraphs(
+    ///     vec![Paragraph::new(ParaShapeIndex::new(0))],
+    ///     PageSettings::a4(),
+    /// ));
+    /// let mut count = 0;
+    /// doc.for_each_paragraph(|_| count += 1);
+    /// assert_eq!(count, 1);
+    /// ```
+    pub fn for_each_paragraph<F: FnMut(&Paragraph)>(&self, mut f: F) {
+        for section in &self.sections {
+            section.walk_paragraphs(&mut f);
         }
     }
 

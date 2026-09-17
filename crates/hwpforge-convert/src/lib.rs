@@ -7,7 +7,9 @@
 //! without modifying the decoders.
 #![deny(missing_docs)]
 
+mod error;
 mod layout_hint_patch;
+pub mod ops;
 mod style_store_border_fill;
 mod style_store_convert;
 mod warning_utils;
@@ -28,6 +30,8 @@ use crate::style_store_convert::{
 };
 use crate::warning_utils::push_projection_fallback;
 use hwpforge_smithy_hwpx::EncodeWarning;
+
+pub use crate::error::{ConvertError, LayoutPatchError};
 
 /// 변환 전 단계의 typed 경고 합성 (W1b — §1g v5 변경 2).
 ///
@@ -127,7 +131,9 @@ pub fn hwp5_to_hwpx_with_options(
 /// # Errors
 ///
 /// Returns [`Hwp5Error`] if the bytes cannot be decoded, the document fails
-/// validation, or HWPX encoding fails.
+/// validation, or HWPX encoding fails. All four stages report through
+/// [`Hwp5Error`] here for compatibility; use
+/// [`hwp5_to_hwpx_bytes_with_diagnostics`] to learn which one failed.
 pub fn hwp5_to_hwpx_bytes(bytes: &[u8]) -> Hwp5Result<(Vec<u8>, Vec<ConvertWarning>)> {
     hwp5_to_hwpx_bytes_with_options(bytes, ConvertOptions::default())
 }
@@ -166,12 +172,44 @@ impl ConvertOptions {
 ///
 /// # Errors
 ///
-/// [`hwp5_to_hwpx_bytes`] 와 동일.
+/// [`hwp5_to_hwpx_bytes`] 와 동일 — 이 진입점은
+/// [`hwp5_to_hwpx_bytes_with_diagnostics`] 의 단계별 오류를
+/// [`ConvertError::into_hwp5_error`] 로 되돌린 호환 래퍼다 (값·메시지 동일).
 pub fn hwp5_to_hwpx_bytes_with_options(
     bytes: &[u8],
     options: ConvertOptions,
 ) -> Hwp5Result<(Vec<u8>, Vec<ConvertWarning>)> {
-    let decoded = decode_hwp5_to_core(bytes)?;
+    hwp5_to_hwpx_bytes_with_diagnostics(bytes, options).map_err(ConvertError::into_hwp5_error)
+}
+
+/// [`hwp5_to_hwpx_bytes_with_options`] 의 **단계 보존** 쌍둥이 — 실패가
+/// 어느 단계에서 났는지를 [`ConvertError`] 로 돌려준다.
+///
+/// 성공 동작·산출 바이트·경고 순서는 래퍼와 완전히 같다. 다른 것은 오류
+/// 타입 하나뿐이다: 래퍼는 디코드 이후 단계의 실패까지 [`Hwp5Error`] 의
+/// 이웃 variant (`Cfb`·`MissingStream`) 로 보고하지만, 이쪽은 decode /
+/// validate / encode / layout-patch 를 구분한다. 안정 코드를 내보내는
+/// 프런트엔드([`ops`])는 이 진입점을 쓴다 — 읽히지도 않은 파일을
+/// `HWP5_DECODE_FAILED` 로 지목하지 않기 위해서다.
+///
+/// # Errors
+///
+/// [`ConvertError`] — 실패한 단계와 그 단계의 상류 오류.
+///
+/// # Examples
+///
+/// ```
+/// use hwpforge_convert::{hwp5_to_hwpx_bytes_with_diagnostics, ConvertOptions};
+///
+/// let error = hwp5_to_hwpx_bytes_with_diagnostics(b"not a document", ConvertOptions::default())
+///     .expect_err("not an OLE2 container");
+/// assert_eq!(error.stage(), "decode");
+/// ```
+pub fn hwp5_to_hwpx_bytes_with_diagnostics(
+    bytes: &[u8],
+    options: ConvertOptions,
+) -> Result<(Vec<u8>, Vec<ConvertWarning>), ConvertError> {
+    let decoded = decode_hwp5_to_core(bytes).map_err(ConvertError::Decode)?;
     let (hwpx_style_store, style_warnings) = hwp5_style_store_to_hwpx(&decoded.style_store);
     // Warning order: decode-phase warnings (intermediate + projection +
     // border-fill supplement) first, then HWPX style-mapping warnings. This
@@ -182,7 +220,7 @@ pub fn hwp5_to_hwpx_bytes_with_options(
     let mut warnings = decoded.warnings;
     warnings.extend(style_warnings);
 
-    let validated = decoded.document.validate().map_err(Hwp5Error::Core)?;
+    let validated = decoded.document.validate().map_err(ConvertError::Validate)?;
     let encode_options =
         EncodeOptions::default().with_emit_layout_cache(options.carry_layout_cache);
     // W1b: 진단 보존 경로 — 캐시 드롭이 있어도 변환은 성공하되 경고를
@@ -194,7 +232,7 @@ pub fn hwp5_to_hwpx_bytes_with_options(
         &decoded.image_store,
         encode_options,
     )
-    .map_err(|e| Hwp5Error::Cfb { detail: format!("HWPX encoding failed: {e}") })?;
+    .map_err(ConvertError::Encode)?;
     let hwpx_bytes =
         layout_hint_patch::patch_hwpx_layout_hints(&outcome.bytes, &decoded.layout_hints)?;
 
