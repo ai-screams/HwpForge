@@ -573,7 +573,7 @@ impl EncodeWarning {
 /// [`EncodeWarning::is_semantic_loss`] 가 분류의 유일한 정의이고, 이 함수는
 /// 편집기가 그 분류로 목록을 쪼갤 때 쓰는 유일한 경로다 — 순서 계약을 한
 /// 곳에만 두려는 것이다 (fail-closed 오류가 두 벡터를 그대로 싣는다).
-pub(crate) fn partition_semantic_loss(
+pub fn partition_semantic_loss(
     warnings: Vec<EncodeWarning>,
 ) -> (Vec<EncodeWarning>, Vec<EncodeWarning>) {
     warnings.into_iter().partition(EncodeWarning::is_semantic_loss)

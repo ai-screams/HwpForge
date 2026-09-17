@@ -87,7 +87,9 @@ pub use diff::{
     ParagraphChange, ParagraphChangeKind, RawChange, SemanticDiff, StructureChange,
     COMPARISON_NOTE, RAW_CAP,
 };
-pub use encoder::{EncodeOptions, EncodeOutcome, EncodeWarning, HwpxEncoder};
+pub use encoder::{
+    partition_semantic_loss, EncodeOptions, EncodeOutcome, EncodeWarning, HwpxEncoder,
+};
 pub use error::{HwpxError, HwpxErrorCode, HwpxResult};
 pub use exchange::{
     ExportedDocument, ExportedSection, PreservedTextSlot, SectionPreservation, TextLocator,
