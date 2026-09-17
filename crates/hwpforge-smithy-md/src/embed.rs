@@ -49,6 +49,7 @@ use hwpforge_core::run::RunContent;
 /// [`load_referenced_images`] 가 이미지 참조를 제외한 사유 (typed —
 /// warning-first, 무음 드롭 금지).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ImageEmbedSkipReason {
     /// 파일이 존재하지 않거나 경로를 정규화할 수 없음.

@@ -195,6 +195,7 @@ impl fmt::Display for AssetIdentity {
 /// 3단계에서만 판정되는 사유(바이트 스니핑 실패·`data:` 파싱 실패)는 여기
 /// 없다 — 그쪽은 [`ImageEmbedSkipReason`] 으로 직접 나온다.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum AssetReject {
     /// 상대 경로인데 해석 가능한 base 디렉터리가 없다 (또는 절대 경로의
@@ -258,6 +259,7 @@ impl ProvidedAsset {
 
 /// 계획 1건의 최종 처리 결과.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum AssetOutcome {
     /// 패키지에 적재됐다. run 의 `path`/`format` 이 여기 값으로 재작성된다.
