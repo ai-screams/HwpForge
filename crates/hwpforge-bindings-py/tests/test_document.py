@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import pickle
 import re
+import subprocess
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -256,3 +258,118 @@ def test_a_cell_can_be_named_by_a_neighbouring_label(generated_bytes: bytes) -> 
 
     assert result.report["results"][0]["table"] == 0
     assert result.document != document
+
+
+def test_fields_reports_the_warnings_reading_the_document_produced(
+    stale_line_cache_bytes: bytes,
+) -> None:
+    """Listing fields decodes the document, so it reports what decoding lost.
+
+    Without this the operation would be the one query that drops its warnings
+    on the floor: a caller listing the fields of a document with a stale line
+    cache would never learn the cache had gone.
+    """
+    report = Document.from_bytes(stale_line_cache_bytes).fields()
+
+    assert set(report) == {"fields", "warnings"}
+    assert [warning["code"] for warning in report["warnings"]] == ["LAYOUT_CACHE_DROPPED"]
+    assert "section[0].para[4]" in report["warnings"][0]["message"]
+
+
+RELOAD_PROBE = """
+import importlib, json
+
+import hwpforge
+
+broken = hwpforge.Document.from_bytes(b"not a package at all")
+measured = {}
+
+
+def raised():
+    try:
+        broken.outline()
+    except BaseException as error:
+        return error
+    raise SystemExit("the call must fail")
+
+
+# 1. Untouched: the class the extension raises is the one both names hold.
+first = hwpforge.errors.HwpForgeError
+error = raised()
+measured["fresh_is_module_class"] = type(error) is first
+measured["fresh_caught_by_package"] = isinstance(error, hwpforge.HwpForgeError)
+measured["code"] = getattr(error, "code", None)
+
+# 2. Submodule reloaded: a new class, and the raise follows it rather than a
+#    cached one. The package alias still holds the previous class, which is
+#    ordinary reload semantics for a re-exported name.
+importlib.reload(hwpforge.errors)
+second = hwpforge.errors.HwpForgeError
+error = raised()
+measured["reload_made_a_new_class"] = second is not first
+measured["submodule_raises_live_class"] = type(error) is second
+measured["submodule_raises_stale_class"] = type(error) is first
+measured["submodule_caught_by_module"] = isinstance(error, hwpforge.errors.HwpForgeError)
+measured["submodule_caught_by_package"] = isinstance(error, hwpforge.HwpForgeError)
+
+# 3. Package reloaded: the alias is rebound to the live class and catches again.
+importlib.reload(hwpforge)
+third = hwpforge.errors.HwpForgeError
+error = raised()
+measured["package_reload_kept_the_class"] = third is second
+measured["package_alias_rebound"] = hwpforge.HwpForgeError is third
+measured["package_raises_live_class"] = type(error) is third
+measured["package_caught_by_package"] = isinstance(error, hwpforge.HwpForgeError)
+
+print(json.dumps(measured))
+"""
+
+
+def test_the_exception_survives_reloading_its_module() -> None:
+    """The class the extension raises is looked up per raise, never cached.
+
+    A cached class keeps pointing at the module object that existed when the
+    cache was filled. After a reload that object is stale, so the extension
+    would raise a class with the right name that is not the one the module now
+    holds, and a caller's `except` would silently stop matching.
+
+    Three states are checked. Untouched, both names agree. With the submodule
+    reloaded, the raise follows the live class, while `hwpforge.HwpForgeError`
+    still holds the previous one: that is what a re-exported name does on a
+    reload, not a pinned class, so the assertion below states it rather than
+    calling it a defect. With the package reloaded too, the alias is rebound
+    and catches again.
+
+    It runs in a subprocess. Rebinding a class that other test modules have
+    already imported by name would break them for the rest of the session,
+    which is the same staleness this test exists to catch.
+    """
+    finished = subprocess.run(
+        [sys.executable, "-c", RELOAD_PROBE],
+        capture_output=True,
+        text=True,
+        check=True,
+        timeout=120,
+        cwd=Path(__file__).resolve().parent,
+    )
+    measured = json.loads(finished.stdout.strip().splitlines()[-1])
+
+    assert measured["fresh_is_module_class"]
+    assert measured["fresh_caught_by_package"]
+    assert measured["code"] == "DECODE_FAILED"
+
+    assert measured["reload_made_a_new_class"], "the reload did not produce a new class"
+    assert measured["submodule_raises_live_class"], (
+        "the raised class is not the one the reloaded module holds, so it was cached"
+    )
+    assert not measured["submodule_raises_stale_class"]
+    assert measured["submodule_caught_by_module"]
+    assert not measured["submodule_caught_by_package"], (
+        "the package alias is a re-exported name, so it keeps the previous class "
+        "until the package itself is reloaded"
+    )
+
+    assert measured["package_reload_kept_the_class"]
+    assert measured["package_alias_rebound"]
+    assert measured["package_raises_live_class"]
+    assert measured["package_caught_by_package"]

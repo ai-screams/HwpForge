@@ -1,11 +1,11 @@
 //! The bridge from the Rust operation errors to the Python exception.
 //!
 //! Every failure of an operation becomes one Python class,
-//! `hwpforge.errors.HwpForgeError`, carrying the stable code, the message and
-//! the static hint. The class is **pure Python** (it lives in the package, not
-//! here) because `abi3-py39` cannot define an exception type in Rust; it is
-//! imported once per interpreter into a [`PyOnceLock`] and called like any
-//! other callable.
+//! `hwpforge.errors.HwpForgeError`, carrying the stable code, the message, the
+//! static hint and, where there is one, a structured detail. The class is
+//! **pure Python** (it lives in the package, not here) because `abi3-py39`
+//! cannot define an exception type in Rust; it is looked up by name on every
+//! raise and called like any other callable.
 //!
 //! Nothing else is wrapped. Argument conversion failures stay as the
 //! `TypeError`/`ValueError` PyO3 and pythonize raise, and a Rust panic stays a
@@ -16,13 +16,23 @@ use hwpforge::ops::OpsError;
 use hwpforge_convert::ops::{ConvertOpsError, PdfCause};
 use hwpforge_foundation::diagnostics::WarningInfo;
 use pyo3::prelude::*;
-use pyo3::sync::PyOnceLock;
-use pyo3::types::PyType;
+use serde::Serialize;
 
 use crate::results::meta;
 
-/// The four arguments `HwpForgeError(code, message, hint, cause)` takes.
-struct ErrorParts {
+/// The structured half of a fail-closed refusal, so that a caller can read the
+/// warnings instead of parsing them back out of the sentence.
+#[derive(Serialize)]
+struct SemanticLossDetails<'a> {
+    /// The semantic-loss warnings that caused the refusal.
+    warnings: &'a [WarningInfo],
+    /// The remaining, non-semantic warnings of the same encode.
+    others: &'a [WarningInfo],
+}
+
+/// The five arguments `HwpForgeError(code, message, hint, cause, details)`
+/// takes.
+struct ErrorParts<'a> {
     /// The stable `OpsCode` spelling, for example `DECODE_FAILED`.
     code: &'static str,
     /// The failure's own sentence.
@@ -33,6 +43,8 @@ struct ErrorParts {
     /// is the only failure that has one. Pythonized into the same
     /// `{stage, code, kind?, location?}` object the command line prints.
     cause: Option<PdfCause>,
+    /// The failure's structured payload, when the class of failure has one.
+    details: Option<SemanticLossDetails<'a>>,
 }
 
 /// Turns an operation failure into the Python exception.
@@ -57,19 +69,27 @@ impl<T> OrPy<T> for Result<T, ConvertOpsError> {
     }
 }
 
-/// Builds `HwpForgeError(code, message, hint, cause)` and turns it into a
-/// `PyErr`.
+/// Builds `HwpForgeError(code, message, hint, cause, details)` and turns it
+/// into a `PyErr`.
 ///
-/// All four arguments are passed positionally on every call, so the pure-Python
-/// class must take four. Importing the package's `errors` module is what makes
-/// the exception available; if that import fails (a broken installation, or the
-/// extension loaded without its pure-Python half) the `ImportError` is raised
-/// as-is rather than being replaced by a generic exception, so the real cause
+/// All five arguments are passed positionally on every call, so the
+/// pure-Python class must take five.
+///
+/// The class is resolved **on every raise**, never cached. Caching it would
+/// pin the class object an interpreter had at first use, so after
+/// `importlib.reload(hwpforge.errors)` a native raise would produce an
+/// instance of a class no longer reachable under that name, and an `except`
+/// clause naming the live one would miss it. Raising is the cold path — an
+/// attribute lookup on an already-imported module costs nothing worth keeping
+/// that hazard for.
+///
+/// Importing the package's `errors` module is what makes the exception
+/// available; if that import fails (a broken installation, or the extension
+/// loaded without its pure-Python half) the `ImportError` is raised as-is
+/// rather than being replaced by a generic exception, so the real cause
 /// reaches the caller.
-fn raise(py: Python<'_>, parts: ErrorParts) -> PyErr {
-    static HWPFORGE_ERROR: PyOnceLock<Py<PyType>> = PyOnceLock::new();
-
-    let class = match HWPFORGE_ERROR.import(py, "hwpforge.errors", "HwpForgeError") {
+fn raise(py: Python<'_>, parts: ErrorParts<'_>) -> PyErr {
+    let class = match py.import("hwpforge.errors").and_then(|m| m.getattr("HwpForgeError")) {
         Ok(class) => class,
         Err(error) => return error,
     };
@@ -77,7 +97,11 @@ fn raise(py: Python<'_>, parts: ErrorParts) -> PyErr {
         Ok(cause) => cause,
         Err(error) => return error,
     };
-    match class.call1((parts.code, parts.message, parts.hint, cause)) {
+    let details = match parts.details.as_ref().map(|details| meta(py, details)).transpose() {
+        Ok(details) => details,
+        Err(error) => return error,
+    };
+    match class.call1((parts.code, parts.message, parts.hint, cause, details)) {
         Ok(instance) => PyErr::from_value(instance),
         Err(error) => error,
     }
@@ -87,12 +111,18 @@ fn raise(py: Python<'_>, parts: ErrorParts) -> PyErr {
 ///
 /// `cause` is always absent: the second classification exists only for the PDF
 /// renderer, which no umbrella operation reaches.
-fn ops_parts(error: &OpsError) -> ErrorParts {
+fn ops_parts(error: &OpsError) -> ErrorParts<'_> {
     ErrorParts {
         code: error.code().as_str(),
         message: ops_message(error),
         hint: error.hint(),
         cause: None,
+        details: match error {
+            OpsError::EncodeSemanticLoss { warnings, others } => {
+                Some(SemanticLossDetails { warnings, others })
+            }
+            _ => None,
+        },
     }
 }
 
@@ -103,12 +133,13 @@ fn ops_parts(error: &OpsError) -> ErrorParts {
 /// met. The second one is the actionable half, so it crosses as the same
 /// `{stage, code, kind?, location?}` object the command line prints under
 /// `cause`, rather than being flattened to a code or folded into the message.
-fn convert_parts(error: &ConvertOpsError) -> ErrorParts {
+fn convert_parts(error: &ConvertOpsError) -> ErrorParts<'static> {
     ErrorParts {
         code: error.code().as_str(),
         message: error.to_string(),
         hint: error.hint(),
         cause: error.cause_info(),
+        details: None,
     }
 }
 
@@ -121,6 +152,8 @@ fn convert_parts(error: &ConvertOpsError) -> ErrorParts {
 /// hint) to check a warning list it never received, so the semantic-loss
 /// warnings are appended — the same choice the MCP server makes for
 /// `ENCODE_SEMANTIC_LOSS`, which reports the joined warnings as its message.
+/// The same warnings also travel structurally, as `details`, so that reading
+/// them back never means parsing this sentence.
 fn ops_message(error: &OpsError) -> String {
     match error {
         OpsError::EncodeSemanticLoss { warnings, .. } if !warnings.is_empty() => {
@@ -186,6 +219,33 @@ mod tests {
             !parts.message.contains("LAYOUT_CACHE_DROPPED"),
             "only the losses that caused the refusal belong in the sentence"
         );
+    }
+
+    /// The sentence is for a human; `details` is for a caller that has to act
+    /// on which warnings blocked the edit. Asserting the serialised shape here
+    /// pins exactly what pythonize hands Python.
+    #[test]
+    fn fail_closed_carries_the_two_warning_lists_structurally() {
+        let error = OpsError::EncodeSemanticLoss {
+            warnings: vec![info("NOTE_HEAD_SKIPPED", "footnote head skipped")],
+            others: vec![info("LAYOUT_CACHE_DROPPED", "line cache dropped")],
+        };
+
+        let details = ops_parts(&error).details.expect("a fail-closed refusal has details");
+
+        assert_eq!(
+            serde_json::to_value(&details).expect("serialise details"),
+            serde_json::json!({
+                "warnings": [{ "code": "NOTE_HEAD_SKIPPED", "message": "footnote head skipped" }],
+                "others": [{ "code": "LAYOUT_CACHE_DROPPED", "message": "line cache dropped" }],
+            })
+        );
+    }
+
+    #[test]
+    fn every_other_failure_has_no_details() {
+        assert!(ops_parts(&OpsError::NoFonts).details.is_none());
+        assert!(convert_parts(&ConvertOpsError::UnrecognizedFormat).details.is_none());
     }
 
     #[test]

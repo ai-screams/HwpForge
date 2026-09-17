@@ -23,6 +23,8 @@ HWPX_FIXTURES = CRATES / "hwpforge-smithy-hwpx" / "tests" / "fixtures"
 USER_SAMPLES = REPO / "tests" / "fixtures" / "user_samples"
 FIELD_FIXTURES = REPO / "tests" / "fixtures" / "fields"
 PDF_FIXTURES = REPO / "tests" / "fixtures" / "pdf-rules"
+LIST_FIXTURES = REPO / "tests" / "fixtures" / "user_samples" / "lists"
+LAYOUT_FIXTURES = REPO / "tests" / "fixtures" / "layout"
 SYNTHETIC_FACE = Path(__file__).resolve().parent / "fixtures" / "synthetic_face.hwpx"
 PDF_TEST_FONTS = Path(__file__).resolve().parent / "fixtures" / "fonts"
 
@@ -118,6 +120,37 @@ def pdf_bytes() -> bytes:
 def pdf_font_dir() -> str:
     """The committed synthetic faces smithy-pdf renders its own tests with."""
     return str(PDF_TEST_FONTS)
+
+
+@pytest.fixture(scope="session")
+def checkable_list_bytes() -> bytes:
+    """A document whose list items carry a checkbox, both ticked and not."""
+    return _read(LIST_FIXTURES / "sample-checkable-bullet-basic.hwpx")
+
+
+@pytest.fixture(scope="session")
+def heading_and_numbered_bytes() -> bytes:
+    """A document with a heading and a numbered list, for the other two variants."""
+    return _read(LIST_FIXTURES / "sample-checkable-bullet-transition.hwpx")
+
+
+@pytest.fixture(scope="session")
+def stale_line_cache_bytes() -> bytes:
+    """A document whose line layout cache the decoder has to drop, with a warning."""
+    return _read(LAYOUT_FIXTURES / "stale-line-cache.hwpx")
+
+
+def all_paragraphs(data: bytes) -> list:
+    """Every top-level paragraph of section 0, as `read` projects them.
+
+    The range comes from `top_level_paragraphs` rather than the report's
+    `paragraphs`, which counts deeply and includes the paragraphs inside table
+    cells that `read` does not address.
+    """
+    count = _hwpforge.inspect(data)["section_details"][0]["top_level_paragraphs"]
+    view = _hwpforge.read(data, section=0, paras=f"0..{count - 1}")["paragraphs"]
+    assert view is not None
+    return view["paragraphs"]
 
 
 @pytest.fixture(scope="session")

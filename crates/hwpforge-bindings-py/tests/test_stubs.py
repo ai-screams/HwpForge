@@ -84,10 +84,14 @@ def test_the_error_and_its_cause_are_declared() -> None:
     assert required == {"stage", "code"}
     assert optional == {"kind", "location"}
 
+    loss_required, loss_optional = _stub.typed_dict_keys("SemanticLossDetails")
+    assert loss_required == {"warnings", "others"}
+    assert loss_optional == set()
+
     parameters = inspect_module.signature(HwpForgeError.__init__).parameters
-    assert list(parameters) == ["self", "code", "message", "hint", "cause"]
-    assert parameters["hint"].default is None
-    assert parameters["cause"].default is None
+    assert list(parameters) == ["self", "code", "message", "hint", "cause", "details"]
+    for optional_name in ("hint", "cause", "details"):
+        assert parameters[optional_name].default is None, optional_name
 
 
 def test_the_package_is_marked_as_typed() -> None:

@@ -9,6 +9,8 @@ its result is matched against `_hwpforge.pyi`.
 from __future__ import annotations
 
 import base64
+from collections.abc import Mapping
+from typing import TYPE_CHECKING
 
 import _stub
 import pytest
@@ -20,9 +22,12 @@ from _ffi_names import (
     SHAPES,
     TEXT_AND_REPORT,
 )
-from conftest import FONT_UNRESOLVED, INVALID_CACHE
+from conftest import FONT_UNRESOLVED, INVALID_CACHE, all_paragraphs
 
 from hwpforge import HwpForgeError, _hwpforge
+
+if TYPE_CHECKING:
+    from hwpforge._hwpforge import StampRequestV2
 
 
 def _always_reports_warnings(name: str) -> bool:
@@ -260,3 +265,85 @@ def test_read_without_a_target_is_refused(table_bytes: bytes) -> None:
         _hwpforge.read(table_bytes)
 
     assert caught.value.code == "READ_TARGET_REQUIRED"
+
+
+def _keys_match_stub(value: Mapping[str, object], stub_name: str) -> None:
+    """Assert one object's keys against the stub's TypedDict for it."""
+    required, optional = _stub.typed_dict_keys(stub_name)
+    observed = set(value)
+    assert required <= observed, f"{stub_name} is missing {sorted(required - observed)}"
+    extra = sorted(observed - required - optional)
+    assert not extra, f"{stub_name} has keys the stub does not declare: {extra}"
+
+
+def test_a_body_paragraph_carries_no_variant_keys(table_bytes: bytes) -> None:
+    body = [para for para in all_paragraphs(table_bytes) if para["kind"] == "body"]
+
+    assert body, "the fixture must have at least one plain paragraph"
+    for paragraph in body:
+        _keys_match_stub(paragraph, "BodyParagraph")
+
+
+def test_a_heading_paragraph_carries_its_level(heading_and_numbered_bytes: bytes) -> None:
+    headings = [
+        para for para in all_paragraphs(heading_and_numbered_bytes) if para["kind"] == "heading"
+    ]
+
+    assert headings, "the fixture must have at least one heading"
+    for paragraph in headings:
+        _keys_match_stub(paragraph, "HeadingParagraph")
+        assert 1 <= paragraph["level"] <= 6
+
+
+def test_a_list_paragraph_carries_its_family_depth_and_checkbox(
+    checkable_list_bytes: bytes, heading_and_numbered_bytes: bytes
+) -> None:
+    """`checked` is present on every list item and `None` when it is not checkable."""
+    checkable = [para for para in all_paragraphs(checkable_list_bytes) if para["kind"] == "list"]
+    numbered = [
+        para
+        for para in all_paragraphs(heading_and_numbered_bytes)
+        if para["kind"] == "list" and para["numbered"]
+    ]
+
+    assert checkable, "the fixture must have checkable list items"
+    assert numbered, "the fixture must have a numbered list item"
+    for paragraph in checkable + numbered:
+        _keys_match_stub(paragraph, "ListParagraph")
+        assert isinstance(paragraph["numbered"], bool)
+        assert isinstance(paragraph["level"], int)
+    assert {para["checked"] for para in checkable} == {True, False}
+    assert all(para["checked"] is None for para in numbered)
+
+
+def test_inspect_includes_the_style_summary_only_when_asked(table_bytes: bytes) -> None:
+    """`styles` is absent, not `None`, when it was not requested."""
+    without = _hwpforge.inspect(table_bytes, styles=False)
+    with_styles = _hwpforge.inspect(table_bytes, styles=True)
+
+    assert "styles" not in without
+    assert "styles" in with_styles
+    assert set(with_styles["styles"]) == {"fonts", "char_shapes", "para_shapes"}
+
+
+def test_stamp_includes_the_manifest_only_when_asked(
+    generated_bytes: bytes, stamp_request: StampRequestV2
+) -> None:
+    _bytes, without = _hwpforge.stamp(generated_bytes, request=stamp_request, manifest=False)
+    _again, with_manifest = _hwpforge.stamp(generated_bytes, request=stamp_request, manifest=True)
+
+    assert set(without) == {"warnings"}
+    assert set(with_manifest) == {"manifest", "warnings"}
+    _keys_match_stub(with_manifest["manifest"], "StampManifest")
+
+
+def test_a_warning_is_absent_or_a_string_never_none(stale_line_cache_bytes: bytes) -> None:
+    """The optional `hint` follows the same absent-not-null rule as every other key."""
+    report = _hwpforge.outline(stale_line_cache_bytes)
+
+    assert report["warnings"], "the fixture must produce at least one warning"
+    for warning in report["warnings"]:
+        _keys_match_stub(warning, "WarningInfo")
+        if "hint" in warning:
+            assert isinstance(warning["hint"], str)
+            assert warning["hint"]

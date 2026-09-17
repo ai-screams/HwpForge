@@ -1,21 +1,30 @@
 """The extension releases the GIL, so another thread runs while an operation does.
 
-If a long operation held the GIL for its whole duration, a second thread would
-not be scheduled until it finished. The test measures that it is: a counter
-thread must make progress while a whole-document re-encode is in flight.
+If a native call held the interpreter for its whole duration, no other thread
+would be scheduled until it returned. The test puts the call in a worker and
+counts in the main thread, and the counting window is bounded by two events the
+worker sets around the call, so what is measured is progress *during* the call
+rather than progress after it returned.
+
+The pass criterion is a count, not a ratio of wall-clock times: a held
+interpreter yields no ticks at all inside the window, while a released one
+yields millions, so the threshold below sits far from both the noise and the
+handful of ticks the microsecond gap between `started` and the call itself
+could produce.
 """
 
 from __future__ import annotations
 
-import sys
 import threading
-import time
 
 import hwpforge
 from hwpforge import Document
 
 PARAGRAPHS = 20_000
-"""Enough that one re-encode runs for tens of milliseconds, many switch intervals."""
+"""Enough that one re-encode runs for tens of milliseconds."""
+
+MINIMUM_TICKS = 1_000
+"""Far below the millions a released interpreter yields, far above the gap's few."""
 
 
 def _big_document() -> Document:
@@ -26,34 +35,36 @@ def _big_document() -> Document:
     return hwpforge.convert_md(f"# 제목\n\n{body}\n").document
 
 
-def test_another_thread_progresses_during_an_operation() -> None:
+def test_the_main_thread_runs_while_a_native_call_is_in_flight() -> None:
     document = _big_document()
+    started = threading.Event()
+    finished = threading.Event()
+    failure: list[BaseException] = []
+
+    def work() -> None:
+        started.set()
+        try:
+            document.restyle(preset="modern")
+        except BaseException as error:
+            failure.append(error)
+        finally:
+            finished.set()
+
+    worker = threading.Thread(target=work)
+    worker.start()
+    assert started.wait(timeout=30), "the worker never began"
+
     ticks = 0
-    stop = threading.Event()
+    while not finished.is_set():
+        ticks += 1
 
-    def count() -> None:
-        nonlocal ticks
-        while not stop.is_set():
-            ticks += 1
-
-    counter = threading.Thread(target=count, daemon=True)
-    counter.start()
-    try:
-        before = ticks
-        started = time.perf_counter()
-        document.restyle(preset="modern")
-        elapsed = time.perf_counter() - started
-        during = ticks - before
-    finally:
-        stop.set()
-        counter.join(timeout=5)
-
-    minimum = 5 * sys.getswitchinterval()
-    assert elapsed > minimum, (
-        f"the re-encode finished in {elapsed * 1000:.1f} ms, too fast to prove anything "
-        f"against a {sys.getswitchinterval() * 1000:.1f} ms switch interval — raise PARAGRAPHS"
+    worker.join(timeout=60)
+    assert not worker.is_alive(), "the worker did not finish"
+    assert not failure, failure
+    assert ticks > MINIMUM_TICKS, (
+        f"the main thread advanced only {ticks} times while the re-encode was in flight, "
+        "which is what holding the interpreter across the call would look like"
     )
-    assert during > 0, "no other thread ran while the re-encode held the interpreter"
 
 
 def test_the_same_document_can_be_read_from_several_threads() -> None:

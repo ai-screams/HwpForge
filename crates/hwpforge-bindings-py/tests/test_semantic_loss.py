@@ -66,6 +66,35 @@ def test_regenerating_edit_fails_closed(note_head_document: Document) -> None:
     assert caught.value.message
 
 
+def test_the_refusal_carries_the_warnings_that_caused_it(note_head_document: Document) -> None:
+    """The refusal is not a bare code: it hands back what it refused over.
+
+    `warnings` holds the semantic losses that made the encode fail closed, and
+    `others` keeps the non-semantic warnings from the same encode rather than
+    discarding them, so a caller can tell the two apart without re-running
+    anything.
+    """
+    with pytest.raises(HwpForgeError) as caught:
+        note_head_document.restyle(preset="modern")
+    details = caught.value.details
+
+    assert details is not None, "a semantic-loss refusal must say what was lost"
+    assert set(details) == {"warnings", "others"}
+    assert details["warnings"], "the losses that caused the refusal must be listed"
+    assert "NOTE_HEAD_SKIPPED" in [warning["code"] for warning in details["warnings"]]
+    assert isinstance(details["others"], list)
+    for warning in details["warnings"] + details["others"]:
+        assert set(warning) <= {"code", "message", "hint"}
+
+
+def test_a_failure_that_lost_nothing_carries_no_details() -> None:
+    """`details` is `None`, not an empty pair of lists, for every other failure."""
+    with pytest.raises(HwpForgeError) as caught:
+        Document.from_bytes(b"not a package").outline()
+
+    assert caught.value.details is None
+
+
 def test_stamping_fails_closed_on_the_same_document(note_head_document: Document) -> None:
     plan = note_head_document.stamp_plan()
     request: StampRequestV2 = {

@@ -36,6 +36,14 @@ class PdfCause(TypedDict):
     kind: NotRequired[str]
     location: NotRequired[str]
 
+# What an `ENCODE_SEMANTIC_LOSS` refusal carries as `HwpForgeError.details`:
+# the semantic-loss warnings that caused it, and the non-semantic warnings the
+# same encode produced, kept rather than discarded. `None` on every other
+# failure.
+class SemanticLossDetails(TypedDict):
+    warnings: list[WarningInfo]
+    others: list[WarningInfo]
+
 class GridCoord(TypedDict):
     row: int
     col: int
@@ -278,11 +286,35 @@ class OutlineReport(TypedDict):
     outline: DocumentOutline
     warnings: list[WarningInfo]
 
-class ParagraphView(TypedDict):
+# A paragraph as `read` projects it, discriminated on `kind`. The variants are
+# the serde form of `ParaKindView` (smithy-hwpx `read.rs:497`), flattened into
+# the paragraph object, so a heading carries `level` and a list carries
+# `numbered`, `level` and `checked`. `checked` is present and `None` on a list
+# that is not checkable; `contains` is omitted when the paragraph embeds
+# nothing.
+class BodyParagraph(TypedDict):
     at: ParaLocator
-    kind: str
+    kind: Literal["body"]
     text: str
     contains: NotRequired[list[dict[str, Any]]]
+
+class HeadingParagraph(TypedDict):
+    at: ParaLocator
+    kind: Literal["heading"]
+    level: int
+    text: str
+    contains: NotRequired[list[dict[str, Any]]]
+
+class ListParagraph(TypedDict):
+    at: ParaLocator
+    kind: Literal["list"]
+    numbered: bool
+    level: int
+    checked: bool | None
+    text: str
+    contains: NotRequired[list[dict[str, Any]]]
+
+ParagraphView: TypeAlias = BodyParagraph | HeadingParagraph | ListParagraph
 
 ParagraphsView = TypedDict(
     "ParagraphsView",
@@ -312,6 +344,7 @@ class ReadReport(TypedDict):
 
 class FieldsReport(TypedDict):
     fields: list[FieldInfo]
+    warnings: list[WarningInfo]
 
 class SemanticDiff(TypedDict):
     field_values: list[dict[str, Any]]

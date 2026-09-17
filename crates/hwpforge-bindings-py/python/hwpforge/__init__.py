@@ -21,9 +21,15 @@ import os
 from importlib.metadata import PackageNotFoundError, version
 from typing import TYPE_CHECKING
 
+# The extension module resolves `hwpforge.errors.HwpForgeError` by name every
+# time it raises, so that module has to be importable before any operation
+# runs. Importing it first makes the dependency explicit rather than incidental.
+from .errors import HwpForgeError
+
+# isort: split
+
 from . import _hwpforge
 from .document import Document
-from .errors import HwpForgeError  # imported first: the extension module looks it up by name
 from .results import BytesResult, DocumentResult, TextResult
 
 if TYPE_CHECKING:
