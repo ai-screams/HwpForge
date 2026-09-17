@@ -114,7 +114,12 @@ def _python_only_version(raw: str, cargo: str) -> str:
 
 
 def resolve_target(event_name: str, input_target: str, is_python_only: bool, ref_type: str = "tag") -> str:
-    """Production is reachable only from a release, a `py-v*` tag, or an explicit input.
+    """Production is reachable from a release event or an explicit manual target.
+
+    Pushing a tag deliberately does nothing: rehearsal tags have to exist on the
+    remote before they can be chosen under "Use workflow from", and a push
+    trigger would turn that preparation step into a production upload that burns
+    the filename for the real release.
 
     `ref_type` is the kind of ref the run was started on. A manual run must be
     started on a tag, because the tag is the only thing this workflow publishes
@@ -123,9 +128,10 @@ def resolve_target(event_name: str, input_target: str, is_python_only: bool, ref
     if event_name == "release":
         return "pypi"
     if event_name == "push":
-        if not is_python_only:
-            raise TagError("only py-v* tag pushes publish; workspace tags publish via release: published")
-        return "pypi"
+        raise TagError(
+            "a tag push does not publish; pushing a py-v* tag only makes it selectable, "
+            "and the release itself is a manual run on that tag with target=pypi"
+        )
     if event_name == "workflow_dispatch":
         if ref_type != "tag":
             raise TagError(
@@ -171,7 +177,7 @@ ACCEPT_REJECT_TABLE: tuple[tuple[str, str, bool], ...] = (
 # (event, input target, is_python_only, ref type) -> expected target, or None to reject.
 TARGET_TABLE: tuple[tuple[tuple[str, str, bool, str], str | None], ...] = (
     (("release", "", False, "tag"), "pypi"),
-    (("push", "", True, "tag"), "pypi"),
+    (("push", "", True, "tag"), None),
     (("push", "", False, "tag"), None),
     (("workflow_dispatch", "testpypi", True, "tag"), "testpypi"),
     (("workflow_dispatch", "pypi", False, "tag"), "pypi"),
