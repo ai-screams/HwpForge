@@ -374,17 +374,16 @@ jobs:
     # 처음 나타난 뒤 큐 등록 전에 `Verify › Python` 을 브랜치 보호에 추가하고
     # `gh api` 출력을 `.docs/prs/` 에 기록한다 (Python 바인딩 계획 W1d 행).
     #
-    # ubuntu-22.04 고정 = glibc 2.35. 후보 wheel 은 `--compatibility manylinux_2_28`
-    # 로 **릴리스와 같은 정책**을 요구하고 maturin 의 감사가 그것을 집행한다 —
-    # 네이티브 빌드가 Debian 12(glibc 2.36)에서만 되고 진짜 manylinux_2_28 호스트
-    # 에서 깨지는 경우를 막는다(계획 부록 A-1). 컨테이너를 쓰지 않는 이유는 캐시
-    # 없는 release 빌드를 한 벌 더 치르지 않기 위해서다 — 대안은 wheel 스텝 주석.
+    # ubuntu-22.04 고정 = glibc 2.35. 인터프리터 테스트와 sdist 는 러너에서 바로
+    # 돌고, 후보 wheel 만 manylinux_2_28 컨테이너에서 만든다 — 그래야 PR 에서
+    # 검증한 wheel 이 릴리스가 내보낼 wheel 과 같은 물건이 된다(계획 부록 A-1).
     runs-on: ubuntu-22.04
     # W0 (h): CI 시간은 이 첫 run 이 실측이다. 계획의 초기값은 20 분이지만 이 잡은
-    # cold release 빌드 + 인터프리터 3종 + feature 조합 2벌 + wheel + 컨테이너
-    # 풀까지 한 잡에서 치른다 — required 가 될 잡을 타임아웃으로 빨갛게 만드는
-    # 비용이 넉넉한 상한보다 크므로 30 에서 시작하고 실측 후 조인다.
-    timeout-minutes: 30
+    # cold release 빌드 + 인터프리터 3종 + feature 조합 2벌 + manylinux 컨테이너
+    # 안의 또 한 벌 cold release 빌드까지 한 잡에서 치른다 — required 가 될 잡을
+    # 타임아웃으로 빨갛게 만드는 비용이 넉넉한 상한보다 크므로 40 에서 시작하고
+    # 첫 run 의 실측으로 조인다 (컨테이너 빌드는 러너 캐시를 쓰지 못한다).
+    timeout-minutes: 40
     env:
       # 기본 인터프리터와 그 환경. lint·타입 검사·wheel 빌드가 이것을 쓰고,
       # pytest 루프만 자기 셸에서 버전별로 덮어쓴다. wheel 은 abi3 라 어느
@@ -456,28 +455,30 @@ jobs:
         # (다시 빌드되는 것은 pyo3 와 이 크레이트뿐).
         run: make py-rust-test
       - name: Build candidate wheel (manylinux_2_28, x86_64)
-        # `--compatibility manylinux_2_28` 로 **릴리스와 같은 정책**을 요구한다.
-        # maturin 의 내장 auditwheel(`[tool.maturin] auditwheel = "repair"`)이
-        # 요청한 정책에 대해 외부 라이브러리와 **버전 심볼**을 검사하고, 넘으면
-        # 태그를 붙이지 않고 실패한다("External libraries … require newer symbol
-        # versions than … allows. Consider using --compatibility …" — maturin
-        # 1.15 바이너리의 `VersionedSymbolTooNewError` 경로). 즉 네이티브 빌드라도
-        # 2.28 정책 위반은 여기서 걸린다. 컨테이너를 쓰지 않는 이유는 위 develop
-        # 빌드의 캐시를 그대로 쓰기 위해서다.
+        # 릴리스와 **같은 방식**으로 만든다: SHA 핀한 maturin-action 의
+        # manylinux_2_28 컨테이너. 네이티브 ubuntu-22.04 링크로는 2_28 wheel 이
+        # 나올 수 없다 — 첫 CI 실행에서 maturin 감사가 정확히 그 이유로 거부했다
+        # ("too-recent versioned symbols: libc.so.6: GLIBC_2.33, GLIBC_2.30,
+        # GLIBC_2.34; libm.so.6: GLIBC_2.29"). 감사가 제 일을 한 것이므로 빌드
+        # 방식을 릴리스 경로(`pypi-publish.yml` 의 linux 매트릭스)와 일치시킨다.
+        # 컨테이너 cold 빌드 몇 분이 "PR 에서 통과한 wheel 이 진짜 배포 wheel 과
+        # 다른 물건" 인 상태보다 싸다. `--zig` 는 기각 — 핀할 툴체인이 하나 늘고
+        # 링커가 릴리스 경로와 달라진다.
         #
-        # 이 러너(glibc 2.35)의 cdylib 이 GLIBC_2.34 심볼(pthread 계열이 libc 로
-        # 합쳐진 버전 노드)을 참조하면 이 스텝이 빨개진다. 그때의 선택지는 둘:
-        #   1. `--zig` 추가 (maturin 이 zig 로 2.28 을 타깃 — 타깃 트리플이 달라져
-        #      release 빌드를 한 벌 더 치른다)
-        #   2. SHA 핀한 `PyO3/maturin-action` 의 manylinux_2_28 컨테이너로 이동
-        #      (아래 Workflow Lint 의 SHA 단언이 이미 그 액션을 커버한다)
-        # `--compatibility` 의 linux 값은 비-linux 에서는 무시된다(로컬 macOS 실측:
-        # 플래그를 줘도 macosx_11_0_arm64 wheel 이 나오고 감사는 돌지 않는다).
-        working-directory: crates/hwpforge-bindings-py
-        run: >-
-          uv run maturin build --release
-          --compatibility manylinux_2_28
-          --out "$GITHUB_WORKSPACE/dist"
+        # 액션은 워크스페이스를 컨테이너 안 **같은 절대 경로**로 마운트하므로
+        # (`src/index.ts`: `${hostWorkspace}:${workspace}`) `--out` 에 워크스페이스
+        # 절대 경로를 줘도 호스트의 같은 자리에 떨어진다. 컨테이너가 root 로
+        # 쓴 산출물은 액션이 끝나며 러너 uid:gid 로 chown 한다(같은 파일의
+        # "Fixing file permissions for output directory" 경로) — 이후 스텝이
+        # 그대로 읽는다.
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
+        with:
+          command: build
+          target: x86_64
+          manylinux: "2_28"
+          maturin-version: ">=1.15,<2"
+          working-directory: crates/hwpforge-bindings-py
+          args: --release --out ${{ github.workspace }}/dist
       - name: Build sdist
         # 사양 §7 이 약속한 sdist. maturin 은 워크스페이스 path 의존성을 sdist 안에
         # 함께 넣고 members 목록을 줄여 다시 쓴다 (로컬 실측: 10 크레이트 + 루트
