@@ -76,13 +76,11 @@ def check_wheel(path: pathlib.Path, expected: str, platform_pattern: str | None)
             return problems + [f"{path.name}: expected exactly one METADATA, found {len(names)}"]
         text = archive.read(names[0]).decode("utf-8")
     problems.extend(_check_core_metadata(path.name, text, expected, "METADATA"))
-    requires = [line for line in text.splitlines() if line.startswith("Requires-Dist:")]
-    if requires:
-        problems.append(f"{path.name}: {len(requires)} Requires-Dist lines, expected 0: {requires}")
     return problems
 
 
 def _check_core_metadata(label: str, text: str, expected: str, kind: str) -> list[str]:
+    """Name, Version and the A-8 dependency-free rule, for both metadata kinds."""
     problems: list[str] = []
     name = _metadata_field(text, "Name")
     if name != PROJECT:
@@ -90,6 +88,11 @@ def _check_core_metadata(label: str, text: str, expected: str, kind: str) -> lis
     version = _metadata_field(text, "Version")
     if version != expected:
         problems.append(f"{label}: {kind} Version is {version!r}, expected {expected!r}")
+    # A-8 applies to the sdist too: a dependency declared there would install
+    # from a source build even though no wheel carries it.
+    requires = [line for line in text.splitlines() if line.startswith("Requires-Dist:")]
+    if requires:
+        problems.append(f"{label}: {kind} has {len(requires)} Requires-Dist lines, expected 0: {requires}")
     return problems
 
 
