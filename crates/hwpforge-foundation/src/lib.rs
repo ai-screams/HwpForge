@@ -21,6 +21,7 @@
 #![deny(unsafe_code)]
 
 pub mod color;
+pub mod diagnostics;
 pub mod enums;
 pub mod error;
 pub mod ids;
@@ -29,6 +30,7 @@ mod macros;
 pub mod units;
 
 pub use color::Color;
+pub use diagnostics::{OpsCode, UnknownOpsCode, WarningInfo};
 pub use enums::{
     Alignment, ApplyPageType, ArcType, ArrowSize, ArrowType, BookmarkType, BorderLineType,
     BreakType, CurveSegmentType, DropCapStyle, EmbossType, EmphasisType, EngraveType, FieldType,
