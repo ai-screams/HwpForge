@@ -89,9 +89,64 @@ fn map_cell_edit_error(error: CellEditError) -> ToolErrorInfo {
             "인코더가 carry 하지 않는 ZIP entry 가 있어 편집을 거부합니다 (fail-closed).",
         ),
         CellEditError::Codec(_) => ("SET_CELL_CODEC_FAILED", "Report this as a bug."),
+        // R1 F4: 의미 손상은 typed 변형이 됐지만 **출력 계약은 그대로** 둔다
+        // (코드·메시지·hint 불변). 표준 `ENCODE_SEMANTIC_LOSS` 매핑은 W3
+        // compat 테이블의 몫이다. 이 arm 이 없으면 아래 `_` 로 떨어져 코드가
+        // SET_CELL_CODEC_FAILED → SET_CELL_FAILED 로 바뀐다.
+        CellEditError::SemanticLoss { .. } => ("SET_CELL_CODEC_FAILED", "Report this as a bug."),
         _ => ("SET_CELL_FAILED", "Report this as a bug."),
     };
     ToolErrorInfo::new(code, error.to_string(), hint)
+}
+
+#[cfg(test)]
+mod semantic_loss_contract_tests {
+    use super::*;
+    use hwpforge_smithy_hwpx::{EncodeWarning, ParagraphPath, PathSeg};
+
+    fn warning(reason: &str) -> EncodeWarning {
+        EncodeWarning::NoteHeadSkipped {
+            path: ParagraphPath(vec![PathSeg::Section(0), PathSeg::BodyParagraph(1)]),
+            reason: reason.into(),
+        }
+    }
+
+    /// R1 F4 회귀 잠금: `SemanticLoss` 는 typed 변형이 됐지만 MCP 가 내보내는
+    /// 코드·메시지·hint 는 과거 `Codec` 경로와 **바이트 동일**해야 한다.
+    /// (arm 이 빠지면 `_` 로 떨어져 SET_CELL_FAILED 가 된다.)
+    ///
+    /// ⚠️ 이 타입의 Display 에는 `StamperError` 와 달리 "codec failure: "
+    /// 접두사가 있다 — 프론트엔드가 `error.to_string()` 을 쓰기 때문이다.
+    #[test]
+    fn semantic_loss_maps_to_the_codec_contract() {
+        let typed = map_cell_edit_error(CellEditError::SemanticLoss {
+            warnings: vec![warning("titleMark first run")],
+            others: vec![],
+        });
+        let legacy = map_cell_edit_error(CellEditError::Codec(
+            "encode produced a semantic-loss warning (fail-closed): note number head skipped at \
+             section[0].para[1]: titleMark first run"
+                .to_string(),
+        ));
+
+        assert_eq!(typed.code, "SET_CELL_CODEC_FAILED");
+        assert_eq!(typed.code, legacy.code);
+        assert_eq!(typed.message, legacy.message, "메시지가 드리프트했다");
+        assert_eq!(typed.hint, legacy.hint, "hint 가 드리프트했다");
+        assert!(typed.message.starts_with("codec failure: "), "{}", typed.message);
+    }
+
+    /// 빈 `warnings` 로도 panic 하지 않아야 한다 (변형은 외부에서 구성 가능).
+    #[test]
+    fn empty_warnings_does_not_panic() {
+        let info =
+            map_cell_edit_error(CellEditError::SemanticLoss { warnings: vec![], others: vec![] });
+        assert_eq!(info.code, "SET_CELL_CODEC_FAILED");
+        assert_eq!(
+            info.message,
+            "codec failure: encode produced a semantic-loss warning (fail-closed)"
+        );
+    }
 }
 
 #[cfg(test)]
