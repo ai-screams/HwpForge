@@ -207,8 +207,17 @@ py-check:
 # 돌리는 것이 지원되는 조합 — pyo3 가 libpython 을 정상 링크하므로 테스트가 앞으로
 # pyo3 C API 를 참조해도 깨지지 않는다. uv 가 설치한 인터프리터는 공유 libpython 을
 # 포함한다. release 프로파일은 `py-dev` 가 만든 의존성 아티팩트를 재사용하기 위한 것.
+# 테스트 바이너리는 uv 가 설치한 인터프리터의 공유 libpython 을 링크하는데, 그 lib
+# 디렉터리는 로더 경로에 없다(Linux 러너 실측: `libpython3.11.so.1.0: cannot open shared
+# object file`). 인터프리터가 아는 `LIBDIR` 를 로더 경로 앞에 붙인다 — macOS 는 rpath 로
+# 이미 찾지만 같은 변수를 두어도 무해하다.
 py-rust-test:
-	PYO3_PYTHON="$$(uv python find 3.11)" cargo nextest run -p hwpforge-bindings-py --cargo-profile release
+	PY="$$(uv python find 3.11)"; \
+	LIBDIR="$$("$$PY" -c 'import sysconfig; print(sysconfig.get_config_var("LIBDIR"))')"; \
+	PYO3_PYTHON="$$PY" \
+	LD_LIBRARY_PATH="$$LIBDIR$${LD_LIBRARY_PATH:+:$$LD_LIBRARY_PATH}" \
+	DYLD_LIBRARY_PATH="$$LIBDIR$${DYLD_LIBRARY_PATH:+:$$DYLD_LIBRARY_PATH}" \
+	cargo nextest run -p hwpforge-bindings-py --cargo-profile release
 
 py-all: py-lint py-check py-rust-test py-test py-cov
 	@echo "✅ Python binding checks passed!"
