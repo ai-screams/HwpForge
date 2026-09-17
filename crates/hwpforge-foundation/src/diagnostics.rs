@@ -79,6 +79,14 @@ ops_codes! {
     UnknownSchemaType => "UNKNOWN_SCHEMA_TYPE",
     /// Named style preset does not exist.
     PresetNotFound => "PRESET_NOT_FOUND",
+    /// Input exceeds the accepted size limit.
+    InputTooLarge => "INPUT_TOO_LARGE",
+    /// A library surfaced an I/O error although the ops layer passed it in-memory bytes.
+    IoFailed => "IO_FAILED",
+    /// Provisioned assets do not line up with the document's asset plan (missing, extra, duplicate or reordered occurrence).
+    AssetPlanMismatch => "ASSET_PLAN_MISMATCH",
+    /// Two provisioned assets claim the same identity with different bytes.
+    AssetIdentityConflict => "ASSET_IDENTITY_CONFLICT",
     // ── codec ──────────────────────────────────────────────────────
     /// HWPX package or XML could not be decoded.
     DecodeFailed => "DECODE_FAILED",
@@ -92,6 +100,8 @@ ops_codes! {
     MdDecodeFailed => "MD_DECODE_FAILED",
     /// Style store could not be built from the preset.
     StyleStoreFailed => "STYLE_STORE_FAILED",
+    /// The document has no fonts, so a restyle has nothing to rebind.
+    NoFonts => "NO_FONTS",
     /// Style references could not be rebound to the preset.
     StyleRebindFailed => "STYLE_REBIND_FAILED",
     /// Document analysis (inspect) failed.
