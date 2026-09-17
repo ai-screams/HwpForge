@@ -114,14 +114,16 @@ pub struct EmbeddedImages {
 ///
 /// [`assets::collect_asset_plan`] → [`assets::fs::resolve_files_from_dir`]
 /// → [`assets::finish_assets`] 와 같은 일을 한다. 여기서는 계획을 만든
-/// 그 자리에서 파일 해석 결과를 계획 순서로 받으므로, 계약 검증
-/// ([`crate::MdError::AssetPlanMismatch`] 등)이 구조적으로 불필요하다 —
-/// 그래서 이 진입점은 오늘처럼 **무오류**로 남는다.
+/// 그 자리에서 파일 해석 결과를 계획 순서로 받고 그대로 적용하므로, 계약
+/// 검증도 계획 대조([`crate::MdError::AssetPlanMismatch`])도 구조적으로
+/// 불필요하다 — 문서가 그 사이에 바뀔 틈이 없다. 그래서 이 진입점은
+/// 오늘처럼 **무오류**로 남는다. 경고도 결과와 같은 자리에서 나오므로
+/// 패닉 경로가 없다.
 pub fn load_referenced_images(document: &mut Document, base_dir: Option<&Path>) -> EmbeddedImages {
     let plan = assets::collect_asset_plan(&*document);
     let prepared = assets::fs::resolve_aligned(&plan, base_dir);
-    let (store, outcomes) = assets::apply(document, prepared);
-    EmbeddedImages { store, warnings: assets::warnings_from(&plan, &outcomes) }
+    let (store, _outcomes, warnings) = assets::apply(document, &plan, prepared);
+    EmbeddedImages { store, warnings }
 }
 
 #[cfg(test)]

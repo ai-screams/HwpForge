@@ -238,7 +238,8 @@ mod tests {
         let plan = collect_asset_plan(&doc);
         let provided = resolve_files_from_dir(&plan, None);
         assert!(provided.is_empty(), "원격은 2단계가 만지지 않는다");
-        let finished = finish_assets(doc, provided).expect("remote-only plan needs no provision");
+        let finished =
+            finish_assets(doc, &plan, provided).expect("remote-only plan needs no provision");
 
         assert!(matches!(finished.outcomes[0], AssetOutcome::Remote { .. }));
         let runs = &finished.document.sections()[0].paragraphs[0].runs;
@@ -256,7 +257,7 @@ mod tests {
         let doc = doc_with_srcs(&["x.png", "./x.png"]);
         let plan = collect_asset_plan(&doc);
         let provided = resolve_files_from_dir(&plan, Some(dir.path()));
-        let finished = finish_assets(doc, provided).expect("both spellings resolve");
+        let finished = finish_assets(doc, &plan, provided).expect("both spellings resolve");
 
         assert_eq!(finished.outcomes.len(), plan.len(), "계획 1건당 결과 1건");
         let keys: Vec<_> = finished
@@ -269,7 +270,7 @@ mod tests {
             .collect();
         assert_eq!(keys, vec!["image1.png".to_string(), "image1.png".to_string()]);
         assert_eq!(finished.image_store.len(), 1);
-        assert!(warnings_from(&plan, &finished.outcomes).is_empty());
+        assert!(warnings_from(&plan, &finished.outcomes).expect("aligned").is_empty());
     }
 
     #[test]
@@ -279,8 +280,8 @@ mod tests {
         let staged = doc_with_srcs(&["a.png", "missing.png", "https://e.test/x.png"]);
         let plan = collect_asset_plan(&staged);
         let provided = resolve_files_from_dir(&plan, Some(dir.path()));
-        let finished = finish_assets(staged, provided).expect("plan is satisfied");
-        let staged_warnings = warnings_from(&plan, &finished.outcomes);
+        let finished = finish_assets(staged, &plan, provided).expect("plan is satisfied");
+        let staged_warnings = warnings_from(&plan, &finished.outcomes).expect("aligned");
 
         let mut direct = doc_with_srcs(&["a.png", "missing.png", "https://e.test/x.png"]);
         let embedded = crate::embed::load_referenced_images(&mut direct, Some(dir.path()));

@@ -107,14 +107,16 @@ pub enum MdError {
     /// Raised by [`crate::assets::finish_assets`] when an occurrence is
     /// unknown, provided twice, provided for a non-`File` source, or when a
     /// `File` occurrence was never provided. It also fires when the document
-    /// was structurally modified between planning and finishing, because the
-    /// locators then no longer address the same runs.
+    /// drifted from the plan the caller provisioned against — the plan is
+    /// re-collected and compared entry by entry, so a source swapped behind
+    /// unchanged locators is caught rather than embedded into the wrong run.
     #[error("asset plan mismatch at {occurrence}: {detail}")]
     AssetPlanMismatch {
         /// Image run the mismatch was detected at.
         occurrence: crate::assets::RunLocator,
-        /// Fixed diagnostic phrase describing the violated rule.
-        detail: &'static str,
+        /// Which rule was violated. Contract breaches use a fixed phrase;
+        /// plan drift names the first differing index and both entries.
+        detail: String,
     },
 
     /// The same asset identity was provided with two different byte sequences.
@@ -255,7 +257,8 @@ mod tests {
     #[test]
     fn asset_contract_error_codes_and_display() {
         let at = crate::assets::RunLocator::new(3, 1);
-        let mismatch = MdError::AssetPlanMismatch { occurrence: at, detail: "not provided" };
+        let mismatch =
+            MdError::AssetPlanMismatch { occurrence: at, detail: "not provided".to_string() };
         assert_eq!(mismatch.code(), MdErrorCode::AssetPlanMismatch);
         assert_eq!(MdErrorCode::AssetPlanMismatch.to_string(), "E6017");
         assert!(mismatch.to_string().contains("paragraph 3 run 1"), "{mismatch}");

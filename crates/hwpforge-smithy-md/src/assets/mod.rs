@@ -26,10 +26,14 @@
 //! 머리말/꼬리말·바탕쪽 등 중첩 문단 전부 포함), `run` = 그 문단의
 //! **변형 전** run 벡터 안 인덱스.
 //!
-//! 따라서 [`collect_asset_plan`] 과 [`finish_assets`] 사이에서 문서를
-//! **구조적으로 변형하면 안 된다**. 어긋나면 [`crate::MdError::AssetPlanMismatch`]
-//! 로 드러난다 — [`finish_assets`] 는 호출자가 건네준 계획을 믿지 않고
-//! 문서에서 계획을 **다시 수집**해 대조하기 때문이다.
+//! 따라서 [`collect_asset_plan`] 과 [`finish_assets`] 사이에서 이미지 run
+//! 구성을 **바꾸면 안 된다**. 주소만으로는 이를 알 수 없다 — 두 이미지의
+//! `src` 가 서로 맞바뀌면 주소는 그대로인 채 내용만 뒤바뀌므로, 대조 없이는
+//! A 의 바이트가 B 의 run 에 박힌다. 그래서 [`finish_assets`] 는 호출자가
+//! 건네준 `plan` 을 믿지 않고 문서에서 계획을 **다시 수집해 전건 대조**한다
+//! (길이·주소·출처·순서). 어긋나면 [`crate::MdError::AssetPlanMismatch`] 다.
+//! 이미지 run 과 무관한 변경(텍스트 수정 등)은 계획에 나타나지 않으므로
+//! 통과한다.
 //!
 //! 이미지 run 을 드롭해도 이 번호가 밀리지 않는다:
 //! `Run::walk_paragraphs_mut` 는 `RunContent::Image` 안으로 재귀하지 않으므로
@@ -40,7 +44,8 @@
 //!
 //! `outcomes.len() == plan.len()` 이고 **i 번째 outcome 은 i 번째 계획
 //! 항목의 결과**다 (dedup 으로 키를 재사용해도 [`AssetOutcome::Embedded`]
-//! 가 하나 나온다). [`warnings_from`] 이 zip 하나로 성립하는 근거다.
+//! 가 하나 나온다). [`warnings_from`] 이 위치 짝짓기로 성립하는 근거이며,
+//! 길이가 어긋나면 경고가 무음 드롭되므로 그쪽은 오류로 거부한다.
 
 pub mod fs;
 
@@ -360,9 +365,15 @@ pub(crate) enum Prepared {
 
 /// 제공된 바이트로 문서를 완성한다 (I/O 없음).
 ///
-/// `document` 에서 계획을 **다시 수집**해 `provided` 와 대조하므로, 계획
-/// 수집 이후 문서가 구조적으로 바뀌었거나 `provided` 가 계약을 어기면
-/// [`MdError::AssetPlanMismatch`] 로 거부한다. 계약:
+/// `plan` 은 호출자가 [`collect_asset_plan`] 으로 얻어 `provided` 를 만들 때
+/// 근거로 삼은 계획이다. 이 함수는 `document` 에서 계획을 **다시 수집해
+/// `plan` 과 전건 대조**한 뒤에야 나머지 검사를 한다. 주소(
+/// [`RunLocator`])는 문서 순서 방문 번호일 뿐이라, 계획 수집과 완성 사이에
+/// 두 이미지의 `src` 가 서로 **맞바뀌면 주소는 그대로인 채 내용만 뒤바뀐다**
+/// — 대조 없이는 A 의 바이트가 B 의 run 에 박힌다. 그래서 길이·주소·출처·
+/// 순서가 하나라도 다르면 즉시 [`MdError::AssetPlanMismatch`] 다.
+///
+/// 나머지 계약:
 ///
 /// - 계획의 [`AssetSource::File`] 항목마다 **정확히 하나**의
 ///   [`ProvidedAsset`] 이 있어야 한다.
@@ -379,28 +390,89 @@ pub(crate) enum Prepared {
 /// **전에** 끝나므로 부분 변형된 문서가 나오는 일은 없다 — 다만 `document`
 /// 는 이 함수가 가져갔으므로 **오류일 때 돌려받지 못한다**. 소유권을
 /// 넘기기 전에 확인하려면 [`validate_assets`] 를 먼저 부른다.
+///
+/// # 이력
+///
+/// `plan` 인자는 R1 리뷰(F1)에서 추가됐다. 이 API 는 아직 릴리스되지
+/// 않았으므로(브랜치 `feat/python-bindings` 안에서만 존재) 시그니처 변경은
+/// semver 사건이 아니다.
 pub fn finish_assets(
     mut document: Document,
+    plan: &[AssetPlanEntry],
     provided: Vec<ProvidedAsset>,
 ) -> MdResult<FinishedAssets> {
-    let plan = collect_asset_plan(&document);
-    let prepared = align(&plan, provided)?;
-    let (image_store, outcomes) = apply(&mut document, prepared);
+    check_plan_matches(plan, &document)?;
+    let prepared = align(plan, provided)?;
+    let (image_store, outcomes, _warnings) = apply(&mut document, plan, prepared);
     Ok(FinishedAssets { document, image_store, outcomes })
 }
 
-/// [`finish_assets`] 가 이 문서·자산 쌍을 받아들일지 **소유권을 넘기지 않고**
-/// 미리 확인한다.
+/// [`finish_assets`] 가 이 문서·계획·자산 조합을 받아들일지 **소유권을
+/// 넘기지 않고** 미리 확인한다.
 ///
 /// 검사 내용과 오류는 [`finish_assets`] 와 완전히 같다 (같은 구현을 쓴다).
 /// `Ok(())` 면 같은 인자로 부른 [`finish_assets`] 는 계약 오류를 내지
-/// 않는다 — 그 사이에 문서를 구조적으로 바꾸지 않는 한.
+/// 않는다 — 그 사이에 문서를 바꾸지 않는 한.
 ///
 /// # Errors
 ///
 /// [`MdError::AssetPlanMismatch`] · [`MdError::AssetIdentityConflict`].
-pub fn validate_assets(document: &Document, provided: &[ProvidedAsset]) -> MdResult<()> {
-    check_contract(&collect_asset_plan(document), provided)
+pub fn validate_assets(
+    document: &Document,
+    plan: &[AssetPlanEntry],
+    provided: &[ProvidedAsset],
+) -> MdResult<()> {
+    check_plan_matches(plan, document)?;
+    check_contract(plan, provided)
+}
+
+/// 문서에서 계획을 다시 수집해 `plan` 과 전건 대조한다.
+///
+/// 이미지 run 이 아닌 곳(텍스트·표 구조 등)의 변경은 계획에 나타나지
+/// 않으므로 통과한다 — 이 검사는 **계획**이 그대로인지를 묻지 문서가
+/// 그대로인지를 묻지 않는다.
+fn check_plan_matches(plan: &[AssetPlanEntry], document: &Document) -> MdResult<()> {
+    let collected = collect_asset_plan(document);
+    if collected == plan {
+        return Ok(());
+    }
+    let index = plan
+        .iter()
+        .zip(&collected)
+        .position(|(expected, actual)| expected != actual)
+        .unwrap_or_else(|| plan.len().min(collected.len()));
+    let occurrence = plan
+        .get(index)
+        .or_else(|| collected.get(index))
+        .map_or_else(|| RunLocator::new(0, 0), |entry| entry.occurrence);
+    Err(MdError::AssetPlanMismatch {
+        occurrence,
+        detail: format!(
+            "the document drifted from the plan it was provisioned against \
+             (plan has {} entries, the document now yields {}); first difference at index {}: \
+             expected {}, found {}",
+            plan.len(),
+            collected.len(),
+            index,
+            render_entry(plan.get(index)),
+            render_entry(collected.get(index)),
+        ),
+    })
+}
+
+/// 진단용 계획 항목 표시 — 출처 종류 + 절단된 src.
+fn render_entry(entry: Option<&AssetPlanEntry>) -> String {
+    match entry {
+        None => "<none>".to_string(),
+        Some(entry) => {
+            let kind = match &entry.source {
+                AssetSource::File(_) => "file",
+                AssetSource::DataUri(_) => "data",
+                AssetSource::Remote(_) => "remote",
+            };
+            format!("{} {kind}:{}", entry.occurrence, truncate_for_display(&entry.source.as_src()))
+        }
+    }
 }
 
 /// `provided` 를 계획에 맞춰 검증·정렬한다 — 모든 오류가 여기서 난다.
@@ -420,16 +492,25 @@ fn check_contract(plan: &[AssetPlanEntry], provided: &[ProvidedAsset]) -> MdResu
     for asset in provided {
         let occurrence = asset.occurrence();
         let Some(&i) = index.get(&occurrence) else {
-            return Err(MdError::AssetPlanMismatch { occurrence, detail: MISMATCH_NOT_IN_PLAN });
+            return Err(MdError::AssetPlanMismatch {
+                occurrence,
+                detail: MISMATCH_NOT_IN_PLAN.to_string(),
+            });
         };
         match plan[i].source {
             AssetSource::File(_) => {}
             AssetSource::DataUri(_) | AssetSource::Remote(_) => {
-                return Err(MdError::AssetPlanMismatch { occurrence, detail: MISMATCH_NOT_A_FILE });
+                return Err(MdError::AssetPlanMismatch {
+                    occurrence,
+                    detail: MISMATCH_NOT_A_FILE.to_string(),
+                });
             }
         }
         if filled[i] {
-            return Err(MdError::AssetPlanMismatch { occurrence, detail: MISMATCH_DUPLICATE });
+            return Err(MdError::AssetPlanMismatch {
+                occurrence,
+                detail: MISMATCH_DUPLICATE.to_string(),
+            });
         }
         filled[i] = true;
     }
@@ -438,7 +519,7 @@ fn check_contract(plan: &[AssetPlanEntry], provided: &[ProvidedAsset]) -> MdResu
             AssetSource::File(_) if !done => {
                 return Err(MdError::AssetPlanMismatch {
                     occurrence: entry.occurrence,
-                    detail: MISMATCH_NOT_PROVIDED,
+                    detail: MISMATCH_NOT_PROVIDED.to_string(),
                 });
             }
             AssetSource::File(_) | AssetSource::DataUri(_) | AssetSource::Remote(_) => {}
@@ -461,7 +542,7 @@ fn check_contract(plan: &[AssetPlanEntry], provided: &[ProvidedAsset]) -> MdResu
                 if inline.contains(identity) {
                     return Err(MdError::AssetPlanMismatch {
                         occurrence: *occurrence,
-                        detail: MISMATCH_IDENTITY_IS_INLINE,
+                        detail: MISMATCH_IDENTITY_IS_INLINE.to_string(),
                     });
                 }
                 if let Some(previous) = seen.insert(identity, bytes.as_slice()) {
@@ -557,15 +638,21 @@ impl Embedder {
 
 /// 준비된 결정을 문서에 적용한다 — 무오류.
 ///
-/// `prepared` 는 [`collect_asset_plan`] 이 만든 계획과 1:1 정렬이므로,
-/// 같은 순회를 다시 돌며 이미지 run 마다 하나씩 소비한다.
+/// `plan` 과 `prepared` 는 [`collect_asset_plan`] 이 만든 계획과 1:1
+/// 정렬이므로, 같은 순회를 다시 돌며 이미지 run 마다 하나씩 소비한다.
+///
+/// 경고는 결과를 만드는 **바로 그 자리에서** 함께 만든다 — 길이가 어긋날
+/// 여지가 없으므로 호출자 쪽에 패닉 경로가 생기지 않는다. 결과→경고 사상
+/// 자체는 [`warning_for`] 하나뿐이고 [`warnings_from`] 도 그것을 쓴다.
 pub(crate) fn apply(
     document: &mut Document,
+    plan: &[AssetPlanEntry],
     prepared: Vec<Prepared>,
-) -> (ImageStore, Vec<AssetOutcome>) {
+) -> (ImageStore, Vec<AssetOutcome>, Vec<MdWarning>) {
     let mut embedder = Embedder::new();
     let mut outcomes = Vec::with_capacity(prepared.len());
-    let mut queue = prepared.into_iter();
+    let mut warnings = Vec::new();
+    let mut queue = plan.iter().zip(prepared);
     let mut paragraph = 0usize;
 
     document.for_each_paragraph_mut(|para| {
@@ -579,10 +666,17 @@ pub(crate) fn apply(
             let char_shape_id = item.char_shape_id;
             let RunContent::Image(img) = &mut item.content else { return true };
             let occurrence = RunLocator::new(paragraph, run);
-            let ready = queue.next().expect("prepared is aligned 1:1 with the document's plan");
+            let (entry, ready) =
+                queue.next().expect("prepared is aligned 1:1 with the document's plan");
+            let mut record = |outcome: AssetOutcome| {
+                if let Some(warning) = warning_for(&entry.source, &outcome) {
+                    warnings.push(warning);
+                }
+                outcomes.push(outcome);
+            };
             let embedded = match ready {
                 Prepared::Remote => {
-                    outcomes.push(AssetOutcome::Remote { occurrence });
+                    record(AssetOutcome::Remote { occurrence });
                     dropped_char_shape = Some(char_shape_id);
                     return false;
                 }
@@ -595,11 +689,11 @@ pub(crate) fn apply(
                 Ok((key, format)) => {
                     img.path.clone_from(&key);
                     img.format = format.clone();
-                    outcomes.push(AssetOutcome::Embedded { occurrence, key, format });
+                    record(AssetOutcome::Embedded { occurrence, key, format });
                     true
                 }
                 Err(reason) => {
-                    outcomes.push(AssetOutcome::Dropped { occurrence, reason });
+                    record(AssetOutcome::Dropped { occurrence, reason });
                     dropped_char_shape = Some(char_shape_id);
                     false
                 }
@@ -615,7 +709,7 @@ pub(crate) fn apply(
         paragraph += 1;
     });
 
-    (embedder.store, outcomes)
+    (embedder.store, outcomes, warnings)
 }
 
 /// `data:` URI 전문을 디코드한다 — base64 payload 만 지원한다 (이미지의
@@ -644,22 +738,51 @@ fn decode_data_uri(src: &str) -> Result<Vec<u8>, ImageEmbedSkipReason> {
 /// 계획과 결과를 짝지어 사용자 경고를 만든다.
 ///
 /// 경고는 결과에서 **파생**된다 — 두 목록이 갈라질 수 없게 하려는 것이다.
-/// 위치로 짝지으므로 (모듈 문서의 불변식), 길이가 다르면 짧은 쪽에서
-/// 멈춘다 (패닉 없음).
-#[must_use]
-pub fn warnings_from(plan: &[AssetPlanEntry], outcomes: &[AssetOutcome]) -> Vec<MdWarning> {
-    plan.iter()
+/// 위치로 짝지으므로 (모듈 문서의 불변식) 두 목록의 길이는 반드시 같아야
+/// 한다.
+///
+/// # Errors
+///
+/// 길이가 다르면 [`MdError::AssetPlanMismatch`]. 짧은 쪽에서 조용히 멈추면
+/// **경고가 소리 없이 사라지므로**(= 무음 드롭) 거부한다 — R1 리뷰 F7.
+pub fn warnings_from(
+    plan: &[AssetPlanEntry],
+    outcomes: &[AssetOutcome],
+) -> MdResult<Vec<MdWarning>> {
+    if plan.len() != outcomes.len() {
+        let occurrence = plan
+            .first()
+            .map(|entry| entry.occurrence)
+            .or_else(|| outcomes.first().map(AssetOutcome::occurrence))
+            .unwrap_or_else(|| RunLocator::new(0, 0));
+        return Err(MdError::AssetPlanMismatch {
+            occurrence,
+            detail: format!(
+                "cannot derive warnings: the plan has {} entries but {} outcomes were given",
+                plan.len(),
+                outcomes.len(),
+            ),
+        });
+    }
+    Ok(plan
+        .iter()
         .zip(outcomes)
-        .filter_map(|(entry, outcome)| match outcome {
-            AssetOutcome::Embedded { .. } => None,
-            AssetOutcome::Dropped { reason, .. } => {
-                Some(skip_warning(&entry.source.as_src(), reason.clone()))
-            }
-            AssetOutcome::Remote { .. } => {
-                Some(skip_warning(&entry.source.as_src(), ImageEmbedSkipReason::RemoteUrl))
-            }
-        })
-        .collect()
+        .filter_map(|(entry, outcome)| warning_for(&entry.source, outcome))
+        .collect())
+}
+
+/// 결과 1건 → 경고 0..1건. 결과에서 경고를 뽑는 **유일한** 사상이다
+/// ([`apply`] 와 [`warnings_from`] 이 함께 쓴다).
+fn warning_for(source: &AssetSource, outcome: &AssetOutcome) -> Option<MdWarning> {
+    match outcome {
+        AssetOutcome::Embedded { .. } => None,
+        AssetOutcome::Dropped { reason, .. } => {
+            Some(skip_warning(&source.as_src(), reason.clone()))
+        }
+        AssetOutcome::Remote { .. } => {
+            Some(skip_warning(&source.as_src(), ImageEmbedSkipReason::RemoteUrl))
+        }
+    }
 }
 
 /// src 를 표시용으로 절단해 경고를 만든다 (`data:` URI 전문 방지).
@@ -774,7 +897,7 @@ mod tests {
         let inline = data_uri("image/png", PNG);
         let doc = doc_with_srcs(&[&inline, "https://example.com/b.png", &inline]);
         let plan = collect_asset_plan(&doc);
-        let finished = finish_assets(doc, Vec::new()).expect("no File entries to provide");
+        let finished = finish_assets(doc, &plan, Vec::new()).expect("no File entries to provide");
 
         assert_eq!(finished.outcomes.len(), plan.len());
         assert_eq!(
@@ -791,8 +914,10 @@ mod tests {
     #[test]
     fn finish_rejects_provided_occurrence_outside_the_plan() {
         let doc = doc_with_srcs(&["a.png"]);
+        let plan = collect_asset_plan(&doc);
         let err = finish_assets(
             doc,
+            &plan,
             vec![ProvidedAsset::Rejected {
                 occurrence: RunLocator::new(9, 9),
                 reason: AssetReject::Missing,
@@ -800,7 +925,7 @@ mod tests {
         )
         .expect_err("locator is not in the plan");
         assert!(
-            matches!(err, MdError::AssetPlanMismatch { detail, .. } if detail == MISMATCH_NOT_IN_PLAN),
+            matches!(&err, MdError::AssetPlanMismatch { detail, .. } if detail.as_str() == MISMATCH_NOT_IN_PLAN),
             "{err:?}"
         );
     }
@@ -808,9 +933,11 @@ mod tests {
     #[test]
     fn finish_rejects_duplicate_occurrence() {
         let doc = doc_with_srcs(&["a.png"]);
+        let plan = collect_asset_plan(&doc);
         let at = RunLocator::new(0, 0);
         let err = finish_assets(
             doc,
+            &plan,
             vec![
                 ProvidedAsset::Resolved {
                     occurrence: at,
@@ -822,7 +949,7 @@ mod tests {
         )
         .expect_err("same occurrence provided twice");
         assert!(
-            matches!(err, MdError::AssetPlanMismatch { detail, .. } if detail == MISMATCH_DUPLICATE),
+            matches!(&err, MdError::AssetPlanMismatch { detail, .. } if detail.as_str() == MISMATCH_DUPLICATE),
             "{err:?}"
         );
     }
@@ -830,9 +957,10 @@ mod tests {
     #[test]
     fn finish_rejects_missing_file_occurrence() {
         let doc = doc_with_srcs(&["a.png"]);
-        let err = finish_assets(doc, Vec::new()).expect_err("File entry was not provided");
+        let plan = collect_asset_plan(&doc);
+        let err = finish_assets(doc, &plan, Vec::new()).expect_err("File entry was not provided");
         assert!(
-            matches!(err, MdError::AssetPlanMismatch { detail, .. } if detail == MISMATCH_NOT_PROVIDED),
+            matches!(&err, MdError::AssetPlanMismatch { detail, .. } if detail.as_str() == MISMATCH_NOT_PROVIDED),
             "{err:?}"
         );
     }
@@ -841,8 +969,10 @@ mod tests {
     fn finish_rejects_provided_entry_for_a_non_file_occurrence() {
         // 원격을 바깥에서 채워 넣는 우회로를 열지 않는다.
         let doc = doc_with_srcs(&["https://example.com/a.png"]);
+        let plan = collect_asset_plan(&doc);
         let err = finish_assets(
             doc,
+            &plan,
             vec![ProvidedAsset::Resolved {
                 occurrence: RunLocator::new(0, 0),
                 identity: AssetIdentity::Opaque("fetched".to_string()),
@@ -851,7 +981,7 @@ mod tests {
         )
         .expect_err("remote occurrences are finish-owned");
         assert!(
-            matches!(err, MdError::AssetPlanMismatch { detail, .. } if detail == MISMATCH_NOT_A_FILE),
+            matches!(&err, MdError::AssetPlanMismatch { detail, .. } if detail.as_str() == MISMATCH_NOT_A_FILE),
             "{err:?}"
         );
     }
@@ -859,9 +989,11 @@ mod tests {
     #[test]
     fn same_identity_with_different_bytes_is_a_conflict() {
         let doc = doc_with_srcs(&["a.png", "b.png"]);
+        let plan = collect_asset_plan(&doc);
         let shared = AssetIdentity::Opaque("mem:shared".to_string());
         let err = finish_assets(
             doc,
+            &plan,
             vec![
                 ProvidedAsset::Resolved {
                     occurrence: RunLocator::new(0, 0),
@@ -883,8 +1015,10 @@ mod tests {
     fn provided_identity_may_not_squat_an_inline_data_uri() {
         let inline = data_uri("image/png", PNG);
         let doc = doc_with_srcs(&[&inline, "a.png"]);
+        let plan = collect_asset_plan(&doc);
         let err = finish_assets(
             doc,
+            &plan,
             vec![ProvidedAsset::Resolved {
                 occurrence: RunLocator::new(0, 1),
                 identity: AssetIdentity::Opaque(inline),
@@ -893,7 +1027,7 @@ mod tests {
         )
         .expect_err("data: URI identities are owned by the document");
         assert!(
-            matches!(err, MdError::AssetPlanMismatch { detail, .. } if detail == MISMATCH_IDENTITY_IS_INLINE),
+            matches!(&err, MdError::AssetPlanMismatch { detail, .. } if detail.as_str() == MISMATCH_IDENTITY_IS_INLINE),
             "{err:?}"
         );
     }
@@ -905,7 +1039,8 @@ mod tests {
         let b = data_uri("image/x-png", PNG);
         assert_ne!(a, b);
         let doc = doc_with_srcs(&[&a, &b]);
-        let finished = finish_assets(doc, Vec::new()).expect("inline only");
+        let plan = collect_asset_plan(&doc);
+        let finished = finish_assets(doc, &plan, Vec::new()).expect("inline only");
 
         assert_eq!(image_paths(&finished.document), vec!["image1.png", "image2.png"]);
         assert_eq!(finished.image_store.len(), 2);
@@ -916,8 +1051,10 @@ mod tests {
         // provider 비의존 증명: 디스크에 없는 상대 경로를 Opaque·ContentHash
         // 정체의 메모리 바이트로 채운다.
         let doc = doc_with_srcs(&["does/not/exist.png", "also/missing.png"]);
+        let plan = collect_asset_plan(&doc);
         let finished = finish_assets(
             doc,
+            &plan,
             vec![
                 ProvidedAsset::Resolved {
                     occurrence: RunLocator::new(0, 0),
@@ -945,6 +1082,7 @@ mod tests {
         let plan = collect_asset_plan(&doc);
         let finished = finish_assets(
             doc,
+            &plan,
             vec![ProvidedAsset::Rejected {
                 occurrence: RunLocator::new(0, 0),
                 reason: AssetReject::Escapes,
@@ -957,7 +1095,7 @@ mod tests {
             finished.outcomes[0],
             AssetOutcome::Dropped { reason: ImageEmbedSkipReason::PathEscapes, .. }
         ));
-        let warnings = warnings_from(&plan, &finished.outcomes);
+        let warnings = warnings_from(&plan, &finished.outcomes).expect("aligned");
         assert!(matches!(
             &warnings[..],
             [MdWarning::ImageEmbedSkipped { reason: ImageEmbedSkipReason::PathEscapes, src }]
@@ -974,9 +1112,10 @@ mod tests {
             occurrence: RunLocator::new(9, 9),
             reason: AssetReject::Missing,
         }];
-        let err = validate_assets(&doc, &bad).expect_err("locator is not in the plan");
+        let plan = collect_asset_plan(&doc);
+        let err = validate_assets(&doc, &plan, &bad).expect_err("locator is not in the plan");
         assert!(
-            matches!(err, MdError::AssetPlanMismatch { detail, .. } if detail == MISMATCH_NOT_IN_PLAN),
+            matches!(&err, MdError::AssetPlanMismatch { detail, .. } if detail.as_str() == MISMATCH_NOT_IN_PLAN),
             "{err:?}"
         );
 
@@ -986,18 +1125,113 @@ mod tests {
             identity: AssetIdentity::Opaque("mem:a".to_string()),
             bytes: PNG.to_vec(),
         }];
-        validate_assets(&doc, &good).expect("contract is satisfied");
-        let finished = finish_assets(doc, good).expect("validated input finishes");
+        validate_assets(&doc, &plan, &good).expect("contract is satisfied");
+        let finished = finish_assets(doc, &plan, good).expect("validated input finishes");
         assert_eq!(image_paths(&finished.document), vec!["image1.png"]);
     }
 
     #[test]
-    fn warnings_from_ignores_length_mismatch_instead_of_panicking() {
-        let doc = doc_with_srcs(&["a.png"]);
+    fn warnings_from_rejects_length_mismatch() {
+        // 짧은 쪽에서 멈추면 경고가 무음 드롭된다 — 거부해야 한다 (R1 F7).
+        let doc = doc_with_srcs(&["https://example.com/a.png"]);
         let plan = collect_asset_plan(&doc);
-        assert!(warnings_from(&plan, &[]).is_empty());
-        assert!(warnings_from(&[], &[AssetOutcome::Remote { occurrence: RunLocator::new(0, 0) }])
-            .is_empty());
+        let err = warnings_from(&plan, &[]).expect_err("1 plan entry vs 0 outcomes");
+        assert!(
+            matches!(&err, MdError::AssetPlanMismatch { detail, .. }
+                if detail.contains("1 entries but 0 outcomes")),
+            "{err:?}"
+        );
+        let err = warnings_from(&[], &[AssetOutcome::Remote { occurrence: RunLocator::new(0, 0) }])
+            .expect_err("0 plan entries vs 1 outcome");
+        assert!(matches!(err, MdError::AssetPlanMismatch { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn finish_rejects_sources_swapped_behind_unchanged_locators() {
+        // R1 F1: 주소는 그대로인데 두 이미지의 src 가 맞바뀌면, 대조가 없으면
+        // a.png 의 바이트가 b.png 의 run 에 박힌다.
+        let mut doc = doc_with_srcs(&["a.png", "b.png"]);
+        let plan = collect_asset_plan(&doc);
+        let provided = vec![
+            ProvidedAsset::Resolved {
+                occurrence: RunLocator::new(0, 0),
+                identity: AssetIdentity::Opaque("mem:a".to_string()),
+                bytes: PNG.to_vec(),
+            },
+            ProvidedAsset::Resolved {
+                occurrence: RunLocator::new(0, 1),
+                identity: AssetIdentity::Opaque("mem:b".to_string()),
+                bytes: PNG_OTHER.to_vec(),
+            },
+        ];
+
+        // 주소는 건드리지 않고 src 만 맞바꾼다.
+        doc.for_each_paragraph_mut(|para| {
+            for run in &mut para.runs {
+                if let RunContent::Image(img) = &mut run.content {
+                    img.path = if img.path == "a.png" { "b.png" } else { "a.png" }.to_string();
+                }
+            }
+        });
+        assert_eq!(collect_asset_plan(&doc).len(), plan.len(), "주소 수는 그대로");
+
+        let err = validate_assets(&doc, &plan, &provided).expect_err("the plan drifted");
+        assert!(
+            matches!(&err, MdError::AssetPlanMismatch { detail, .. }
+                if detail.contains("first difference at index 0")
+                    && detail.contains("expected paragraph 0 run 0 file:a.png")
+                    && detail.contains("found paragraph 0 run 0 file:b.png")),
+            "{err:?}"
+        );
+        let err = finish_assets(doc, &plan, provided).expect_err("the plan drifted");
+        assert!(matches!(err, MdError::AssetPlanMismatch { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn finish_tolerates_edits_that_do_not_touch_the_plan() {
+        // 대조 대상은 **계획**이지 문서 전체가 아니다 — 텍스트 run 수정은
+        // 계획에 나타나지 않으므로 통과해야 한다.
+        let para = Paragraph::with_runs(
+            vec![Run::text("before", CharShapeIndex::new(0)), image_run("a.png")],
+            ParaShapeIndex::new(0),
+        );
+        let mut doc = Document::new();
+        doc.add_section(Section::with_paragraphs(vec![para], PageSettings::a4()));
+        let plan = collect_asset_plan(&doc);
+        let provided = vec![ProvidedAsset::Resolved {
+            occurrence: plan[0].occurrence,
+            identity: AssetIdentity::Opaque("mem:a".to_string()),
+            bytes: PNG.to_vec(),
+        }];
+
+        doc.for_each_paragraph_mut(|para| {
+            for run in &mut para.runs {
+                if let RunContent::Text(text) = &mut run.content {
+                    *text = "after the caller edited unrelated prose".to_string();
+                }
+            }
+        });
+
+        validate_assets(&doc, &plan, &provided).expect("text edits do not move the plan");
+        let finished =
+            finish_assets(doc, &plan, provided).expect("text edits do not move the plan");
+        assert_eq!(image_paths(&finished.document), vec!["image1.png"]);
+    }
+
+    #[test]
+    fn finish_rejects_a_plan_whose_length_no_longer_matches() {
+        let mut doc = doc_with_srcs(&["a.png", "b.png"]);
+        let plan = collect_asset_plan(&doc);
+        doc.for_each_paragraph_mut(|para| para.runs.truncate(1));
+
+        let err = validate_assets(&doc, &plan, &[]).expect_err("an image run disappeared");
+        assert!(
+            matches!(&err, MdError::AssetPlanMismatch { detail, .. }
+                if detail.contains("plan has 2 entries, the document now yields 1")
+                    && detail.contains("first difference at index 1")
+                    && detail.contains("found <none>")),
+            "{err:?}"
+        );
     }
 
     #[test]
