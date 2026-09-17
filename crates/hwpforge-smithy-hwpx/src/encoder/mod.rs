@@ -539,7 +539,24 @@ impl EncodeWarning {
     /// | [`Self::NoteHeadSkipped`] | 예 | 각주/미주 가시 번호가 산출물에서 사라진다 |
     /// | [`Self::TitleMarkSkipped`] | 예 | TOC 제목 표식이 붙지 않아 목차가 어긋난다 |
     /// | [`Self::NoteRestartIgnored`] | 예 | 구역별 재시작 번호가 반영되지 않아 번호가 틀어진다 |
-    /// | [`Self::LayoutCacheDropped`] | 아니오 | 줄 조판 캐시는 렌더러가 재생성한다 |
+    /// | [`Self::LayoutCacheDropped`] | 아니오 | 줄 조판 캐시는 문서 의미가 아니라 렌더 입력이다 (아래) |
+    ///
+    /// # `LayoutCacheDropped` 가 비-의미 손상인 이유
+    ///
+    /// "렌더러가 알아서 재생성하니까" 가 아니다 — 재생성하는 렌더러와 하지
+    /// 않는 렌더러가 갈린다.
+    ///
+    /// - **한컴**은 문서를 열 때 직접 조판하므로 캐시가 없어도 같은 지면을 만든다.
+    /// - **HwpForge 자체 PDF 렌더러는 조판을 하지 않는다.** 저장된 줄 조판 캐시를
+    ///   그대로 재생하는 구조라, 캐시가 빠진 문서는 PDF 단계에서 `MISSING_LAYOUT_CACHE`
+    ///   / `NO_RENDERABLE_CACHE` 로 **렌더가 실패**한다.
+    ///
+    /// 그래도 비-의미 손상인 이유는, 그 실패가 **렌더 파이프라인의 가용성**
+    /// 문제로 드러날 뿐 문서가 뜻하는 바는 그대로이기 때문이다 — 본문·각주
+    /// 번호·TOC 표식 어느 것도 사라지지 않고, 조판할 수 있는 소비자(한컴)는
+    /// 원본과 같은 결과를 얻는다. 편집기가 바이트를 거부해야 하는 사유는
+    /// "열어 보니 뜻이 달라졌다" 이지 "우리 렌더러가 캐시를 필요로 한다" 가
+    /// 아니므로, 이 변형은 fail-closed 대상에서 제외한다.
     #[must_use]
     pub fn is_semantic_loss(&self) -> bool {
         match self {
@@ -549,6 +566,17 @@ impl EncodeWarning {
             Self::LayoutCacheDropped { .. } => false,
         }
     }
+}
+
+/// 경고 목록을 `(의미 손상, 그 외)` 로 가른다 — **양쪽 모두 원래 순서 유지**.
+///
+/// [`EncodeWarning::is_semantic_loss`] 가 분류의 유일한 정의이고, 이 함수는
+/// 편집기가 그 분류로 목록을 쪼갤 때 쓰는 유일한 경로다 — 순서 계약을 한
+/// 곳에만 두려는 것이다 (fail-closed 오류가 두 벡터를 그대로 싣는다).
+pub(crate) fn partition_semantic_loss(
+    warnings: Vec<EncodeWarning>,
+) -> (Vec<EncodeWarning>, Vec<EncodeWarning>) {
+    warnings.into_iter().partition(EncodeWarning::is_semantic_loss)
 }
 
 impl std::fmt::Display for EncodeWarning {
@@ -598,6 +626,31 @@ mod is_semantic_loss_tests {
         let warning =
             EncodeWarning::LayoutCacheDropped { path: path(), reason: "ledger failed".into() };
         assert!(!warning.is_semantic_loss(), "layout cache is regenerable: {warning:?}");
+    }
+
+    #[test]
+    fn partition_keeps_original_order_within_each_side() {
+        let cache = |n: &str| EncodeWarning::LayoutCacheDropped { path: path(), reason: n.into() };
+        let note = |n: &str| EncodeWarning::NoteHeadSkipped { path: path(), reason: n.into() };
+        // Interleaved so a partition that sorted or reversed would be caught.
+        let input = vec![cache("c1"), note("n1"), cache("c2"), note("n2"), note("n3")];
+
+        let (semantic, others) = super::partition_semantic_loss(input);
+
+        let reasons = |ws: &[EncodeWarning]| {
+            ws.iter()
+                .map(|w| match w {
+                    EncodeWarning::LayoutCacheDropped { reason, .. }
+                    | EncodeWarning::NoteHeadSkipped { reason, .. }
+                    | EncodeWarning::TitleMarkSkipped { reason, .. }
+                    | EncodeWarning::NoteRestartIgnored { reason, .. } => reason.clone(),
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(reasons(&semantic), ["n1", "n2", "n3"]);
+        assert_eq!(reasons(&others), ["c1", "c2"]);
+        assert!(semantic.iter().all(EncodeWarning::is_semantic_loss));
+        assert!(!others.iter().any(EncodeWarning::is_semantic_loss));
     }
 }
 

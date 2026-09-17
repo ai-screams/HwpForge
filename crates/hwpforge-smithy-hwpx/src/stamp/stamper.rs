@@ -64,10 +64,12 @@ fn encode_fail_closed(
         crate::EncodeOptions::default(),
     )
     .map_err(|e| StamperError::Codec(e.to_string()))?;
-    if let Some(w) = outcome.warnings.iter().find(|w| w.is_semantic_loss()) {
-        return Err(StamperError::Codec(format!(
-            "encode produced a semantic-loss warning (fail-closed): {w}"
-        )));
+    // R1 F4: typed 경고를 실어 돌려준다 (과거엔 `Codec(String)` 으로 뭉개져
+    // 호출자가 어떤 경고였는지 알 수 없었다). Display 문자열은 불변이라
+    // 프론트엔드 출력은 그대로다.
+    if outcome.warnings.iter().any(|w| w.is_semantic_loss()) {
+        let (warnings, others) = crate::encoder::partition_semantic_loss(outcome.warnings);
+        return Err(StamperError::SemanticLoss { warnings, others });
     }
     Ok(outcome.bytes)
 }
@@ -179,6 +181,17 @@ pub enum StamperError {
         /// First differing component or a description of the failure.
         detail: String,
     },
+    /// 인코드가 의미 손상 경고를 내 스탬핑을 거부했다 (fail-closed — 바이트 없음).
+    ///
+    /// 분류의 정의는 [`crate::EncodeWarning::is_semantic_loss`] 하나뿐이다.
+    /// 두 벡터 모두 인코더가 낸 **원래 순서**를 유지하며, 이 오류가 구성될
+    /// 때 `warnings` 는 비어 있지 않다.
+    SemanticLoss {
+        /// 의미 손상 경고 전부 (원래 순서, 비어 있지 않음).
+        warnings: Vec<crate::EncodeWarning>,
+        /// 같은 인코드가 낸 나머지 경고 (원래 순서) — 진단용으로 함께 싣는다.
+        others: Vec<crate::EncodeWarning>,
+    },
 }
 
 impl std::fmt::Display for StamperError {
@@ -208,6 +221,20 @@ impl std::fmt::Display for StamperError {
             Self::DeltaMismatch { stage, detail } => {
                 write!(f, "post-encode verification failed at {stage}: {detail}")
             }
+            // 이 Display 는 **이 타입의 프론트엔드가 이미 찍고 있는 문자열**과
+            // 같아야 한다. CLI/MCP stamp 는 `Codec(msg)` 의 **안쪽 문자열**을
+            // 그대로 메시지로 썼으므로 여기에는 "codec failure: " 접두사가
+            // 없다 (로그 드리프트 0).
+            //
+            // ⚠️ `CellEditError::SemanticLoss` 는 접두사가 **있다** — 그쪽
+            // 프론트엔드는 `error.to_string()` 을 쓰기 때문이다. 둘을 "통일"
+            // 하면 한쪽 출력이 바뀐다.
+            Self::SemanticLoss { warnings, .. } => match warnings.first() {
+                Some(w) => {
+                    write!(f, "encode produced a semantic-loss warning (fail-closed): {w}")
+                }
+                None => write!(f, "encode produced a semantic-loss warning (fail-closed)"),
+            },
         }
     }
 }
