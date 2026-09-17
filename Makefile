@@ -50,15 +50,21 @@ help:
 
 install-tools:
 	@echo "Installing Rust development tools..."
-	cargo install cargo-nextest
-	cargo install cargo-llvm-cov
-	cargo install bacon
-	cargo install cargo-deny
-	cargo install cargo-machete
-	cargo install dprint
+	cargo install --locked cargo-nextest
+	cargo install --locked cargo-llvm-cov
+	cargo install --locked bacon
+	cargo install --locked cargo-deny
+	cargo install --locked cargo-machete
+	cargo install --locked dprint
 	cargo install --locked --version $(MDBOOK_VERSION) mdbook
 	cargo install --locked --version $(MDBOOK_ADMONISH_VERSION) mdbook-admonish
 	cargo install --locked --version $(MDBOOK_MERMAID_VERSION) mdbook-mermaid
+	@echo "Installing Python build tool (maturin via uv)..."
+	@if command -v uv >/dev/null 2>&1; then \
+		uv tool install 'maturin>=1.15,<2'; \
+	else \
+		echo "⚠ uv not found — skipping maturin (install uv first: https://docs.astral.sh/uv/)"; \
+	fi
 	@echo "Installing lint/format tools..."
 	@if command -v npm >/dev/null 2>&1; then \
 		npm install -g markdownlint-cli2; \
