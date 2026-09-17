@@ -374,11 +374,11 @@ jobs:
     # 처음 나타난 뒤 큐 등록 전에 `Verify › Python` 을 브랜치 보호에 추가하고
     # `gh api` 출력을 `.docs/prs/` 에 기록한다 (Python 바인딩 계획 W1d 행).
     #
-    # ubuntu-22.04 고정 = glibc 2.35. 후보 wheel 의 glibc 심볼 바닥이 2.35 이하로
-    # 잡혀 Debian 12(glibc 2.36) 언팩 스모크(계획 부록 A-1)가 구조적으로 성립한다.
-    # 릴리스용 manylinux_2_28 wheel 은 W1e 의 maturin-action 컨테이너가 만든다
-    # (설계 §2.4 wheel 매트릭스 — 이 잡에서 컨테이너를 쓰면 캐시 없는 release
-    # 빌드를 한 번 더 치러 PR 피드백 예산을 넘긴다).
+    # ubuntu-22.04 고정 = glibc 2.35. 후보 wheel 은 `--compatibility manylinux_2_28`
+    # 로 **릴리스와 같은 정책**을 요구하고 maturin 의 감사가 그것을 집행한다 —
+    # 네이티브 빌드가 Debian 12(glibc 2.36)에서만 되고 진짜 manylinux_2_28 호스트
+    # 에서 깨지는 경우를 막는다(계획 부록 A-1). 컨테이너를 쓰지 않는 이유는 캐시
+    # 없는 release 빌드를 한 벌 더 치르지 않기 위해서다 — 대안은 wheel 스텝 주석.
     runs-on: ubuntu-22.04
     # W0 (h): CI 시간은 이 첫 run 이 실측이다. 계획의 초기값은 20 분이지만 이 잡은
     # cold release 빌드 + 인터프리터 3종 + feature 조합 2벌 + wheel + 컨테이너
@@ -455,24 +455,97 @@ jobs:
         # 바로 위 `maturin develop --release` 가 만든 의존성 아티팩트를 재사용한다
         # (다시 빌드되는 것은 pyo3 와 이 크레이트뿐).
         run: make py-rust-test
-      - name: Build candidate wheel (x86_64)
-        # 같은 러너·같은 target/ 이라 위 `maturin develop --release` 의 캐시를
-        # 그대로 쓴다 (feature·프로파일 동일).
+      - name: Build candidate wheel (manylinux_2_28, x86_64)
+        # `--compatibility manylinux_2_28` 로 **릴리스와 같은 정책**을 요구한다.
+        # maturin 의 내장 auditwheel(`[tool.maturin] auditwheel = "repair"`)이
+        # 요청한 정책에 대해 외부 라이브러리와 **버전 심볼**을 검사하고, 넘으면
+        # 태그를 붙이지 않고 실패한다("External libraries … require newer symbol
+        # versions than … allows. Consider using --compatibility …" — maturin
+        # 1.15 바이너리의 `VersionedSymbolTooNewError` 경로). 즉 네이티브 빌드라도
+        # 2.28 정책 위반은 여기서 걸린다. 컨테이너를 쓰지 않는 이유는 위 develop
+        # 빌드의 캐시를 그대로 쓰기 위해서다.
+        #
+        # 이 러너(glibc 2.35)의 cdylib 이 GLIBC_2.34 심볼(pthread 계열이 libc 로
+        # 합쳐진 버전 노드)을 참조하면 이 스텝이 빨개진다. 그때의 선택지는 둘:
+        #   1. `--zig` 추가 (maturin 이 zig 로 2.28 을 타깃 — 타깃 트리플이 달라져
+        #      release 빌드를 한 벌 더 치른다)
+        #   2. SHA 핀한 `PyO3/maturin-action` 의 manylinux_2_28 컨테이너로 이동
+        #      (아래 Workflow Lint 의 SHA 단언이 이미 그 액션을 커버한다)
+        # `--compatibility` 의 linux 값은 비-linux 에서는 무시된다(로컬 macOS 실측:
+        # 플래그를 줘도 macosx_11_0_arm64 wheel 이 나오고 감사는 돌지 않는다).
         working-directory: crates/hwpforge-bindings-py
-        run: uv run maturin build --release --out "$GITHUB_WORKSPACE/dist"
-      - name: Record glibc symbol floor
-        # 후보 wheel 이 Debian 12 에서 import 되려면 여기 나오는 최대 GLIBC_* 가
-        # 2.36 이하여야 한다. 실제 게이트는 아래 스모크이고, 이 스텝은 실패했을 때
-        # 원인을 로그에서 바로 읽게 하는 진단이다.
+        run: >-
+          uv run maturin build --release
+          --compatibility manylinux_2_28
+          --out "$GITHUB_WORKSPACE/dist"
+      - name: Build sdist
+        # 사양 §7 이 약속한 sdist. maturin 은 워크스페이스 path 의존성을 sdist 안에
+        # 함께 넣고 members 목록을 줄여 다시 쓴다 (로컬 실측: 10 크레이트 + 루트
+        # Cargo.toml + Cargo.lock 이 들어간다).
+        working-directory: crates/hwpforge-bindings-py
+        run: uv run maturin sdist --out "$GITHUB_WORKSPACE/dist"
+      - name: Assert glibc floor (<= 2.28)
+        # maturin 의 감사와 독립된 두 번째 확인. 파이프 각 단계를 검사하고
+        # (`pipefail` + 단계별 -n 검사) 최대 GLIBC_* 를 정책 바닥과 비교한다.
         run: |
           set -euo pipefail
-          whl="$(find dist -maxdepth 1 -name '*.whl' | head -n 1)"
+          whl="$(find dist -maxdepth 1 -name '*.whl' -print -quit)"
+          [ -n "$whl" ] || { echo "::error::no wheel in dist/"; exit 1; }
           echo "wheel: $whl"
           sha256sum "$whl"
-          rm -rf dist-unpacked
-          unzip -q -o "$whl" -d dist-unpacked
-          find dist-unpacked -name '*.so' -print -exec sh -c \
-            'objdump -T "$1" | grep -oE "GLIBC_[0-9.]+" | sort -Vu | tail -3' _ {} \;
+          rm -rf "$RUNNER_TEMP/whl"
+          mkdir -p "$RUNNER_TEMP/whl"
+          unzip -q -o "$whl" -d "$RUNNER_TEMP/whl"
+          so="$(find "$RUNNER_TEMP/whl" -name '*.so' -print -quit)"
+          [ -n "$so" ] || { echo "::error::no shared object inside the wheel"; exit 1; }
+          objdump -T "$so" > "$RUNNER_TEMP/dynsyms.txt"
+          syms="$(grep -oE 'GLIBC_[0-9]+\.[0-9]+' "$RUNNER_TEMP/dynsyms.txt" | sort -Vu || true)"
+          [ -n "$syms" ] || { echo "::error::no GLIBC_* version symbols found in $so"; exit 1; }
+          echo "$syms"
+          max="$(printf '%s\n' "$syms" | tail -n 1)"
+          echo "max glibc requirement: $max"
+          if [ "$(printf '%s\n%s\n' GLIBC_2.28 "$max" | sort -V | tail -n 1)" != "GLIBC_2.28" ]; then
+            echo "::error::$max exceeds the manylinux_2_28 floor"
+            exit 1
+          fi
+      - name: Verify sdist is self-contained
+        # 체크아웃 **밖**에 풀어서, 남아 있는 path 의존성이 원본 트리로 새는 것을
+        # 구조적으로 막는다. `pip install` 로 검증하지 않는다 — cold release 컴파일
+        # 이라 이 잡의 예산을 넘는다. 실제 설치 리허설은 W1e 의 TestPyPI 단계다.
+        run: |
+          set -euo pipefail
+          sd="$(find dist -maxdepth 1 -name '*.tar.gz' -print -quit)"
+          [ -n "$sd" ] || { echo "::error::no sdist in dist/"; exit 1; }
+          echo "sdist: $sd"
+          sha256sum "$sd"
+          rm -rf "$RUNNER_TEMP/sdist"
+          mkdir -p "$RUNNER_TEMP/sdist"
+          tar xzf "$sd" -C "$RUNNER_TEMP/sdist"
+          ext="$(find "$RUNNER_TEMP/sdist" -mindepth 1 -maxdepth 1 -type d -print -quit)"
+          [ -n "$ext" ] || { echo "::error::sdist has no top-level directory"; exit 1; }
+          echo "extracted: $ext"
+          cargo metadata --no-deps --format-version 1 --manifest-path "$ext/Cargo.toml" \
+            > "$RUNNER_TEMP/sdist-metadata.json"
+          python3 - "$ext" "$RUNNER_TEMP/sdist-metadata.json" <<'PY'
+          import json
+          import os
+          import sys
+
+          root = os.path.realpath(sys.argv[1])
+          packages = json.load(open(sys.argv[2]))["packages"]
+          ours = [p for p in packages if p["name"].startswith("hwpforge")]
+          outside = [
+              p["name"]
+              for p in ours
+              if not os.path.realpath(p["manifest_path"]).startswith(root + os.sep)
+          ]
+          print(f"hwpforge* packages in the sdist: {len(ours)}")
+          if outside:
+              raise SystemExit(f"::error::path dependencies resolve outside the sdist: {outside}")
+          PY
+          CARGO_TARGET_DIR="$RUNNER_TEMP/sdist-target" \
+          PYO3_PYTHON="$(uv python find 3.11)" \
+            cargo check --manifest-path "$ext/Cargo.toml" -p hwpforge-bindings-py
       - name: Bundle smoke script + fixture
         # 아티팩트 하나로 "wheel + 재현 스크립트 + fixture" 가 되게 한다
         # (계획 §8 결정 8 — 미배포 후보를 상대에게 전달해 검증 피드백을 받는다).
@@ -480,7 +553,7 @@ jobs:
           set -euo pipefail
           cp crates/hwpforge-bindings-py/tests/smoke_unpacked_wheel.py dist/
           cp tests/fixtures/fields/clickhere_named.hwpx dist/fixture.hwpx
-      - name: Upload candidate wheel
+      - name: Upload candidate wheel + sdist
         uses: actions/upload-artifact@v7
         with:
           name: hwpforge-wheel-candidate
