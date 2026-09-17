@@ -20,6 +20,11 @@
 ## 보존 (삭제 금지)
 
 - `target/debug/deps` — warm 의존성 캐시. 지우면 cold 재빌드 15분+.
+  - **예외**: Cargo.lock 이 미추적이라 `cargo update` 마다 구버전 rlib 이
+    deps 에 쌓인다. deps 만으로 `target/` 임계(80GB)를 넘으면 위 1~3 으로는
+    못 내려오므로, 빌드 미실행을 확인하고 **1회 `cargo clean`** 으로 전체를
+    비운다 (2026-09-17 실측: deps 87GB, `cargo clean` 67초에 120GiB 회수,
+    이후 `clippy --workspace` cold 23초).
 - `fuzz/corpus` · `.docs/papers` — 재생성 불가 자산.
 
 ## 실행 주의
