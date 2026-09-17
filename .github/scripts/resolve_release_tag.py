@@ -26,6 +26,11 @@ import sys
 from packaging.version import InvalidVersion, Version
 
 PY_PREFIX = "py-v"
+# A release version is exactly three numeric components. Anything else — a
+# pre-release, build metadata, a fourth component — is not something this
+# workflow is allowed to push to PyPI, and it must not become one by way of the
+# Cargo version drifting (`0.17.0-rc.1` would otherwise be accepted verbatim).
+NUMERIC_TRIPLE_RE = re.compile(r"^\d+\.\d+\.\d+$")
 WORKSPACE_VERSION_RE = re.compile(
     r"^\[workspace\.package\][^\[]*?^version\s*=\s*\"([^\"]+)\"",
     re.MULTILINE | re.DOTALL,
@@ -53,10 +58,20 @@ def _release_tuple(text: str) -> tuple[int, ...]:
 
 def resolve_version(tag: str, cargo: str) -> tuple[str, bool]:
     """Return `(pep440 version, is_python_only)` or raise `TagError`."""
+    if not NUMERIC_TRIPLE_RE.match(cargo):
+        raise TagError(
+            f"the Cargo workspace version {cargo!r} is not a plain X.Y.Z release; "
+            "this workflow publishes release versions only"
+        )
     if tag.startswith(PY_PREFIX):
         return _python_only_version(tag[len(PY_PREFIX) :], cargo), True
     if tag.startswith("v"):
         rest = tag[1:]
+        if not NUMERIC_TRIPLE_RE.match(rest):
+            raise TagError(
+                f"workspace tag {tag!r} is not a plain vX.Y.Z tag; pre-release and build "
+                "metadata tags are not published"
+            )
         if rest != cargo:
             raise TagError(
                 f"workspace tag {tag!r} does not match the Cargo version {cargo!r}; "
@@ -132,6 +147,14 @@ ACCEPT_REJECT_TABLE: tuple[tuple[str, str, bool], ...] = (
     ("py-v0.16.04", "0.16.4", False),
     ("py-v1!0.16.4", "0.16.4", False),
     ("0.16.4", "0.16.4", False),
+    # A Cargo version that is not a plain release blocks both tag languages.
+    ("v0.17.0-rc.1", "0.17.0-rc.1", False),
+    ("v0.17.0+meta", "0.17.0+meta", False),
+    ("v0.17.0", "0.17.0-rc.1", False),
+    ("py-v0.17.0", "0.17.0-rc.1", False),
+    # …and a pre-release tag is refused even when Cargo is a plain release.
+    ("v0.16.4-rc.1", "0.16.4", False),
+    ("v0.16.4+meta", "0.16.4", False),
 )
 
 

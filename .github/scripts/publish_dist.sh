@@ -34,11 +34,14 @@ echo "publishing ${#files[@]} files to ${TARGET_NAME} (${PUBLISH_URL})"
 printf '  %s\n' "${files[@]}"
 
 log="${RUNNER_TEMP:-/tmp}/uv-publish.log"
+set +e
 uv publish \
   --trusted-publishing always \
   --publish-url "$PUBLISH_URL" \
   --check-url "$CHECK_URL" \
   "${files[@]}" 2>&1 | tee "$log"
+status="${PIPESTATUS[0]}"
+set -e
 
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
   {
@@ -48,4 +51,14 @@ if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     grep -iE 'upload|skip' "$log" || echo "(uv printed no upload/skip lines; see the job log)"
     echo '```'
   } >> "$GITHUB_STEP_SUMMARY"
+fi
+
+# uv fails on its own for the interesting cases — no Trusted Publishing record
+# for this owner/repository/workflow/environment, or a filename that already
+# exists with different bytes — but it does so without a GitHub annotation, so
+# the failure is easy to miss in a long log. Say it in the job's error channel
+# and keep uv's status as this script's status.
+if [ "$status" -ne 0 ]; then
+  echo "::error::uv publish failed against ${TARGET_NAME} (exit ${status}); the usual causes are a missing or mismatched Trusted Publishing record (owner, repository, workflow file, environment) and a file that already exists with different contents"
+  exit "$status"
 fi

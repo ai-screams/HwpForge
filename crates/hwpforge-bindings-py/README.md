@@ -42,9 +42,10 @@ python3 -c "import zipfile; zipfile.ZipFile('hwpforge-<version>-cp39-abi3-manyli
 PYTHONPATH=/opt/hf python3 -c "import hwpforge; print(hwpforge.__version__)"
 ```
 
-Every wheel and the source distribution are attached to the matching
-[GitHub Release](https://github.com/ai-screams/HwpForge/releases), so an air-gapped host
-can be served from there as well as from PyPI.
+For a workspace release, every wheel and the source distribution are also attached to the
+matching [GitHub Release](https://github.com/ai-screams/HwpForge/releases), so an air-gapped
+host can be served from there instead of from PyPI. A Python-only fix, versioned `X.Y.Z.N`,
+is published to PyPI alone and has no Release of its own.
 
 ## Example
 

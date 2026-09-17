@@ -10,12 +10,21 @@
 # 프로덕션(`pypi`)은 위 두 태그 이벤트이거나 dispatch 에서 명시적으로 고를 때만
 # 선택된다. 리허설이 실수로 프로덕션을 치지 못하게 하는 구조적 장치다.
 #
+# **태그는 한 번만 해석한다.** `resolve` 가 `refs/tags/<tag>` 를 커밋 SHA 로 풀고
+# 이후 모든 잡이 그 SHA 를 체크아웃한다 — 같은 이름의 브랜치가 태그를 이기거나
+# (actions/checkout 의 ref 해석 순서), 실행 도중 태그가 옮겨가 매트릭스 잡마다
+# 다른 커밋을 빌드하는 일을 구조적으로 막는다. 게시 직전에 태그가 여전히 그
+# SHA 를 가리키는지 다시 확인한다.
+#
 # 멱등성은 오직 `uv publish --check-url` 에서 온다 — PyPI 는 파일명 재사용을
 # 절대 허용하지 않으므로, 버전 단위 사전 검사로 건너뛰지 않는다 (설계 §2.4).
 #
 # 사용자(관리자) 선행 작업이 없으면 이 워크플로는 **조용히 건너뛰지 않고 실패**한다:
 # GitHub environment(`pypi`·`testpypi`)와 PyPI 쪽 pending publisher 가 없으면
 # `--trusted-publishing always` 가 인증을 못 만들고 그 자리에서 죽는다.
+#
+# 모든 액션은 40자리 커밋 SHA 로 핀한다 (태그는 주석). `Standalone › Workflow Lint`
+# 가 이 파일의 `uses:` 전부에 대해 그것을 단언한다.
 # =============================================================================
 
 name: PyPI Publish
@@ -57,6 +66,7 @@ jobs:
     timeout-minutes: 15
     outputs:
       tag: ${{ steps.validate.outputs.tag }}
+      sha: ${{ steps.deref.outputs.sha }}
       target: ${{ steps.validate.outputs.target }}
       version: ${{ steps.validate.outputs.version }}
       is_python_only: ${{ steps.validate.outputs.is_python_only }}
@@ -65,25 +75,61 @@ jobs:
       - name: Resolve the tag from the event
         id: raw
         # 이벤트마다 태그가 있는 자리가 다르다. 값은 env 로 넘겨 셸 주입을 막는다.
+        # `release: published` 는 정식 릴리스와 프리릴리스를 **둘 다** 포함하므로
+        # (GitHub 이벤트 문서), 프리릴리스·draft 는 여기서 소리내어 거부한다.
+        # `if:` 로 건너뛰면 required check 를 충족한 것처럼 보일 수 있다.
         env:
           EVENT_NAME: ${{ github.event_name }}
           RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+          RELEASE_DRAFT: ${{ github.event.release.draft }}
           REF_NAME: ${{ github.ref_name }}
           INPUT_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           case "$EVENT_NAME" in
-            release) tag="$RELEASE_TAG" ;;
+            release)
+              if [ "$RELEASE_PRERELEASE" = "true" ]; then
+                echo "::error::this release is marked as a pre-release; HwpForge publishes stable releases only"
+                exit 1
+              fi
+              if [ "$RELEASE_DRAFT" = "true" ]; then
+                echo "::error::this release is a draft; publish it first"
+                exit 1
+              fi
+              tag="$RELEASE_TAG"
+              ;;
             push) tag="$REF_NAME" ;;
             workflow_dispatch) tag="$INPUT_TAG" ;;
             *) echo "::error::unsupported event $EVENT_NAME"; exit 1 ;;
           esac
           [ -n "$tag" ] || { echo "::error::no tag for event $EVENT_NAME"; exit 1; }
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v7
+      - name: Dereference the tag to a commit SHA
+        id: deref
+        # 체크아웃 전에 API 로 푼다 — 체크아웃에 태그 **이름**을 넘기면 같은 이름의
+        # 브랜치가 이긴다. annotated 태그는 태그 오브젝트를 한 번 더 푼다.
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.raw.outputs.tag }}
+        run: |
+          set -euo pipefail
+          ref="$(gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$TAG" --jq '.object.type + " " + .object.sha')"
+          kind="${ref%% *}"
+          sha="${ref##* }"
+          if [ "$kind" = "tag" ]; then
+            sha="$(gh api "repos/$GITHUB_REPOSITORY/git/tags/$sha" --jq '.object.sha')"
+          fi
+          case "$sha" in
+            [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*) ;;
+            *) echo "::error::refs/tags/$TAG did not resolve to a commit SHA (got '$sha')"; exit 1 ;;
+          esac
+          echo "refs/tags/$TAG -> $sha"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # 브랜치 머리가 아니라 **그 태그**를 받는다.
-          ref: ${{ steps.raw.outputs.tag }}
+          # 태그 이름이 아니라 방금 푼 커밋 SHA 를 받는다.
+          ref: ${{ steps.deref.outputs.sha }}
           persist-credentials: false
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
@@ -125,7 +171,7 @@ jobs:
           [ -n "$digest" ] || { echo "::error::could not hash Cargo.lock"; exit 1; }
           echo "sha256=$digest" >> "$GITHUB_OUTPUT"
           echo "lockfile sha256: \`$digest\`" >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: cargo-lock
           path: Cargo.lock
@@ -143,6 +189,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
+        # `platform_tag` 는 산출물 검사에 그대로 쓰이는 fnmatch 패턴이다 — 러너를
+        # 갈아끼우면 여기도 같이 고쳐야 검사가 의미를 유지한다.
+        # 러너 라벨 출처 = actions/runner-images README (macos-13 은 은퇴, macos-14 는
+        # deprecated 표시, 현행 Intel 라벨은 macos-15-intel).
         include:
           - name: linux-x86_64
             runner: ubuntu-22.04
@@ -150,6 +200,9 @@ jobs:
             target: x86_64
             manylinux: "2_28"
             args: --release --locked
+            platform_tag: manylinux_2_28_x86_64
+            expect_wheels: 1
+            expect_sdists: 0
             smoke: true
           - name: linux-aarch64
             runner: ubuntu-24.04-arm
@@ -157,20 +210,29 @@ jobs:
             target: aarch64
             manylinux: "2_28"
             args: --release --locked
+            platform_tag: manylinux_2_28_aarch64
+            expect_wheels: 1
+            expect_sdists: 0
             smoke: true
           - name: macos-arm64
-            runner: macos-14
+            runner: macos-15
             command: build
             target: aarch64-apple-darwin
             manylinux: auto
             args: --release --locked
+            platform_tag: macosx_*_arm64
+            expect_wheels: 1
+            expect_sdists: 0
             smoke: false
           - name: macos-x86_64
-            runner: macos-13
+            runner: macos-15-intel
             command: build
             target: x86_64-apple-darwin
             manylinux: auto
             args: --release --locked
+            platform_tag: macosx_*_x86_64
+            expect_wheels: 1
+            expect_sdists: 0
             smoke: false
           - name: windows-x64
             runner: windows-latest
@@ -178,42 +240,39 @@ jobs:
             target: x64
             manylinux: auto
             args: --release --locked
+            platform_tag: win_amd64
+            expect_wheels: 1
+            expect_sdists: 0
             smoke: false
           - name: sdist
             runner: ubuntu-22.04
             command: sdist
             target: ""
             manylinux: auto
+            # `maturin sdist` 는 `--locked` 를 받지 않는다 (1.15 에서
+            # "unexpected argument '--locked' found"). 그래서 이 잡의 락파일
+            # 불변식은 빌드 **후** 재해시 하나에 걸려 있다.
             args: ""
+            platform_tag: ""
+            expect_wheels: 0
+            expect_sdists: 1
             smoke: false
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.resolve.outputs.tag }}
+          ref: ${{ needs.resolve.outputs.sha }}
           persist-credentials: false
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: "0.12.13"
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           name: cargo-lock
       - name: Verify the shared lockfile
         env:
           LOCK_SHA256: ${{ needs.resolve.outputs.lock_sha256 }}
-        run: |
-          set -euo pipefail
-          uv run --no-project python - <<'PY'
-          import hashlib
-          import os
-          import sys
-
-          want = os.environ["LOCK_SHA256"]
-          got = hashlib.sha256(open("Cargo.lock", "rb").read()).hexdigest()
-          print(f"expected {want}")
-          print(f"actual   {got}")
-          if want != got:
-              sys.exit("::error::Cargo.lock differs from the resolve job's resolution")
-          PY
+          WHEN: before the build
+        run: bash .github/scripts/verify_lockfile.sh
       - name: Pin the Python-only version
         # `py-v*` 만 해당. 러너의 일회용 체크아웃에서 pyproject 를 제자리 수정하고,
         # 빌드 뒤 원본을 되돌려 `git diff --exit-code` 로 증명한다. 커밋은 없다.
@@ -234,17 +293,30 @@ jobs:
           maturin-version: ${{ env.MATURIN_VERSION }}
           working-directory: crates/hwpforge-bindings-py
           args: ${{ matrix.args }} --out ${{ github.workspace }}/dist
+      - name: Re-verify the lockfile after the build
+        env:
+          LOCK_SHA256: ${{ needs.resolve.outputs.lock_sha256 }}
+          WHEN: after the build
+        run: bash .github/scripts/verify_lockfile.sh
       - name: Restore pyproject.toml
         if: needs.resolve.outputs.is_python_only == 'true'
         run: |
           set -euo pipefail
           cat "$RUNNER_TEMP/pyproject.orig" > crates/hwpforge-bindings-py/pyproject.toml
           git diff --exit-code -- crates/hwpforge-bindings-py/pyproject.toml
-      - name: Assert filenames and metadata carry the resolved version
+      - name: Assert the artifact is the one this job was asked to build
         env:
           VERSION: ${{ needs.resolve.outputs.version }}
-        run: >-
-          uv run --no-project python .github/scripts/check_dist.py dist "$VERSION"
+          PLATFORM_TAG: ${{ matrix.platform_tag }}
+          EXPECT_WHEELS: ${{ matrix.expect_wheels }}
+          EXPECT_SDISTS: ${{ matrix.expect_sdists }}
+        run: |
+          set -euo pipefail
+          args=(dist "$VERSION" --expect-wheels "$EXPECT_WHEELS" --expect-sdists "$EXPECT_SDISTS")
+          if [ -n "$PLATFORM_TAG" ]; then
+            args+=(--platform-tag "$PLATFORM_TAG")
+          fi
+          uv run --no-project python .github/scripts/check_dist.py "${args[@]}"
       - name: Debian 12 import smoke (no pip, same architecture)
         if: matrix.smoke
         # 계획 부록 A-1 과 같은 경로. 러너 아키텍처가 곧 컨테이너 아키텍처다.
@@ -266,7 +338,7 @@ jobs:
           SH
           docker run --rm -v "$PWD/dist:/w" python:3.11-slim-bookworm bash /w/run_smoke.sh
           rm -f dist/run_smoke.sh dist/smoke_unpacked_wheel.py dist/fixture.hwpx
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           # v4 이후 아티팩트는 불변이라 매트릭스 잡들이 같은 이름에 덧쓸 수 없다.
           # 잡별로 올리고 게시 잡이 패턴으로 한 폴더에 합친다.
@@ -286,14 +358,29 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: "0.12.13"
-      - uses: actions/download-artifact@v7
+      - name: Assert the tag still points at the commit we built
+        env:
+          TAG: ${{ needs.resolve.outputs.tag }}
+          EXPECTED_SHA: ${{ needs.resolve.outputs.sha }}
+        run: bash .github/scripts/assert_tag_sha.sh
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           pattern: dist-${{ needs.resolve.outputs.tag }}-*
           merge-multiple: true
           path: dist
+      - name: Assert the merged set is the whole matrix
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: >-
+          uv run --no-project python .github/scripts/check_dist.py dist "$VERSION"
+          --expect-wheels 5 --expect-sdists 1 --distinct-platforms
       - name: Publish to TestPyPI
         env:
           TARGET_NAME: TestPyPI
@@ -311,14 +398,29 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
           version: "0.12.13"
-      - uses: actions/download-artifact@v7
+      - name: Assert the tag still points at the commit we built
+        env:
+          TAG: ${{ needs.resolve.outputs.tag }}
+          EXPECTED_SHA: ${{ needs.resolve.outputs.sha }}
+        run: bash .github/scripts/assert_tag_sha.sh
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           pattern: dist-${{ needs.resolve.outputs.tag }}-*
           merge-multiple: true
           path: dist
+      - name: Assert the merged set is the whole matrix
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+        run: >-
+          uv run --no-project python .github/scripts/check_dist.py dist "$VERSION"
+          --expect-wheels 5 --expect-sdists 1 --distinct-platforms
       - name: Publish to PyPI
         env:
           TARGET_NAME: PyPI
@@ -335,13 +437,24 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      - name: Assert the tag still points at the commit we built
+        env:
+          TAG: ${{ needs.resolve.outputs.tag }}
+          EXPECTED_SHA: ${{ needs.resolve.outputs.sha }}
+        run: bash .github/scripts/assert_tag_sha.sh
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0
         with:
           pattern: dist-${{ needs.resolve.outputs.tag }}-*
           merge-multiple: true
           path: dist
       - name: Upload the artifacts to the release
         # 설계 §2.4 "상대 전달": 상대는 Release 에서 manylinux_2_28 wheel 을 받는다.
+        # `release` 이벤트에서만 도는 잡이므로 워크스페이스 릴리스에만 붙는다 —
+        # `py-v*` 는 PyPI 로만 나간다 (README 가 그렇게 적혀 있다).
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.resolve.outputs.tag }}

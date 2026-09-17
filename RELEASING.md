@@ -1,8 +1,10 @@
 # Releasing HwpForge
 
-릴리스는 **[release-plz](https://release-plz.dev/)** 가 소유한다. 사람이 직접 버전을
-올리거나 태그를 찍거나 `cargo publish` 하지 **않는다**. 사람이 하는 일은 단 하나:
+**워크스페이스 릴리스**는 **[release-plz](https://release-plz.dev/)** 가 소유한다. 사람이 직접 버전을
+올리거나 `v*` 태그를 찍거나 `cargo publish` 하지 **않는다**. 사람이 하는 일은 단 하나:
 **release-plz가 만든 "Release PR"을 리뷰하고 머지**하는 것.
+
+**예외는 하나뿐이다.** Python 전용 긴급 수정에 붙이는 `py-v*` 태그는 사람이 직접 만든다 (§9.3). 접두사가 다르고 Rust 크레이트 버전을 건드리지 않으므로 release-plz 와 충돌하지 않는다. 이 예외를 워크스페이스 `v*` 태그로 일반화하지 말 것 — `v*` 는 여전히 release-plz 만 찍는다.
 
 > 설정 위치: `.github/workflows/release-plz.yml` (자동화) · `release-plz.toml` (정책) ·
 > `.github/workflows/npm-publish.yml` (MCP npm 배포) · `.github/workflows/pages.yml` (문서 배포).
@@ -126,7 +128,7 @@ release-plz가 cargo-semver-checks로 이를 자동 판정하므로, breaking을
 - [ ] **breaking은 반드시 `type!:` 로 표기.** 안 하면 0.x에서 patch로 잘못 bump.
 - [ ] **로컬에서 태그 기반 검증 시 `git fetch --tags` 먼저.** 로컬 클론에 최신 태그가
       없으면 잘못된 baseline으로 거짓 통과한다 (PR #78에서 겪은 함정).
-- [ ] **release 전 `make ci` 통과 확인** (release-plz.yml 은 preflight 없이 곧바로 release job 을 돌리므로, 로컬에서 먼저 막는 게 유일한 사전 방어선 — CI 다이어트 P2).
+- [ ] **release 전 `make ci-full` 통과 확인** (release-plz.yml 은 preflight 없이 곧바로 release job 을 돌리므로, 로컬에서 먼저 막는 게 유일한 사전 방어선 — CI 다이어트 P2). `make ci` 는 `ci-fast` 별칭이라 coverage 와 MSRV 두 레인이 빠진다 — 릴리스 전 점검으로는 부족하다.
 - [ ] umbrella만 GitHub Release를 만든다 — npm/pages는 거기에 매달려 있다. umbrella가
       bump되지 않으면 npm·문서 배포도 안 일어난다는 점을 기억.
 
@@ -191,9 +193,16 @@ release-plz 의 `git_tag_name = "v{{ version }}"` 과 접두사가 달라 충돌
 
 - [ ] 네 가지 태그 형태 각각으로 dispatch — `py-v0.16.4` · `py-v0.16.4.post1` · `py-v0.16.4.1` · `py-v0.16.4.1.post2`. 넷 다 `Resolve › Tag` 통과, wheel 파일명·`METADATA`·`PKG-INFO` 버전이 태그와 일치.
 - [ ] 거부되어야 할 태그 하나를 일부러 넣어 본다 (`py-v0.16.4.0` 등) — `Resolve › Tag` 에서 **실패**해야 한다.
-- [ ] **부분 게시 시뮬레이션**: 한 번 게시한 뒤 같은 태그로 다시 돌린다. 이미 올라간 파일은 `--check-url` 로 건너뛰고 나머지만 올라가며 run 은 성공해야 한다.
+- [ ] **부분 게시 복구**: 여섯 개 중 **셋만** 먼저 올린 상태를 만든 뒤 워크플로를 돌린다. 아티팩트를 내려받아 손으로 `uv publish --trusted-publishing never --publish-url https://test.pypi.org/legacy/ --check-url https://test.pypi.org/simple/ <파일 3개>` 를 먼저 실행하고(토큰 사용), 그다음 같은 태그로 워크플로를 dispatch 한다. 로그에 **skip 3 · upload 3** 이 찍히고 run 은 성공해야 한다. "한 번 게시한 뒤 그대로 재실행" 은 여섯 개 전부 skip 이라 복구 경로를 시험하지 못한다.
 - [ ] **`--check-url` 실패 테스트**: 같은 파일명으로 내용이 다른 wheel 을 만들어 올려 본다. 건너뛰지 않고 **실패**해야 한다 (멱등성은 오직 이 검사에서 온다 — PyPI 는 파일명 재사용을 영구히 거부한다).
-- [ ] 설치 확인 — 새 환경에서:
+- [ ] **sdist 강제 설치** — wheel 이 있으면 설치 해석기가 그것을 고르므로, 소스 배포를 실제로 컴파일해 보려면 명시적으로 막아야 한다 (Rust 1.92 + maturin 필요):
+
+```console
+uv venv /tmp/hf-sdist
+uv pip install --python /tmp/hf-sdist/bin/python --no-binary hwpforge --index-url https://test.pypi.org/simple/ "hwpforge==<ver>"
+```
+
+- [ ] 설치 확인 (wheel 경로) — 새 환경에서:
 
 ```console
 uv venv /tmp/hf-rehearsal

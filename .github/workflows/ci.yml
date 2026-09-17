@@ -612,3 +612,23 @@ jobs:
             echo "::error::Python toolchain action must be pinned to a 40-hex commit SHA"
             exit 1
           fi
+      - name: Verify every action in the publishing workflow is SHA-pinned
+        # 배포 워크플로는 wheel 을 만들어 PyPI 로 보내는 경로 전체다. 여기서는
+        # 서드파티뿐 아니라 `actions/*` 까지 **전부** 커밋 SHA 로 고정한다 —
+        # 움직일 수 있는 major 태그는 그 경로에서 새 코드를 실행하게 만든다.
+        # `docker://` 참조는 이미지 다이제스트 규칙이 달라 제외한다.
+        run: |
+          set -euo pipefail
+          # 줄 앞에서만 잡는다 — 산문 주석 안의 `uses:` 를 참조로 오인하지 않도록.
+          # 뒤에 붙은 ` # v1.2.3` 주석은 떼어내고 참조만 남긴다.
+          refs="$(grep -hE '^[[:space:]]*(- )?uses:[[:space:]]*[^[:space:]#]+' .github/workflows/pypi-publish.yml \
+            | sed -E 's/^[[:space:]]*(- )?uses:[[:space:]]*//; s/[[:space:]]+#.*$//' \
+            | grep -v 'docker://' || true)"
+          [ -n "$refs" ] || { echo "::error::no action references found in pypi-publish.yml"; exit 1; }
+          unpinned="$(printf '%s\n' "$refs" | grep -vE '@[0-9a-f]{40}$' || true)"
+          if [ -n "$unpinned" ]; then
+            echo "$unpinned"
+            echo "::error::every action in pypi-publish.yml must be pinned to a 40-hex commit SHA"
+            exit 1
+          fi
+          printf '%s\n' "$refs"

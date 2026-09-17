@@ -1,0 +1,12 @@
+# actionlint 설정.
+#
+# actionlint 1.7.7 이 내장한 러너 라벨 목록은 2024년판이라 은퇴한 `macos-13` 을
+# 여전히 유효하다고 보고, 현행 Intel 라벨인 `macos-15-intel` 은 모른다. 라벨의
+# 권위 있는 출처는 actions/runner-images README 이며 거기서 macOS 15 x64 는
+# `macos-15-large` 또는 `macos-15-intel`, macOS 15 arm64 는 `macos-15` 다
+# (`macos-14` 계열은 deprecated 표시, `macos-13` 은 2025-12-04 은퇴).
+#
+# 린터의 목록이 갱신되면 이 파일에서 해당 줄을 지운다.
+self-hosted-runner:
+  labels:
+    - macos-15-intel
