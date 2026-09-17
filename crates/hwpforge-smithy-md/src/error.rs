@@ -102,6 +102,30 @@ pub enum MdError {
         limit: u64,
     },
 
+    /// The provided asset set does not match the plan collected from the document.
+    ///
+    /// Raised by [`crate::assets::finish_assets`] when an occurrence is
+    /// unknown, provided twice, provided for a non-`File` source, or when a
+    /// `File` occurrence was never provided. It also fires when the document
+    /// was structurally modified between planning and finishing, because the
+    /// locators then no longer address the same runs.
+    #[error("asset plan mismatch at {occurrence}: {detail}")]
+    AssetPlanMismatch {
+        /// Image run the mismatch was detected at.
+        occurrence: crate::assets::RunLocator,
+        /// Fixed diagnostic phrase describing the violated rule.
+        detail: &'static str,
+    },
+
+    /// The same asset identity was provided with two different byte sequences.
+    #[error("asset identity conflict at {occurrence}: {identity} was provided with two different byte sequences")]
+    AssetIdentityConflict {
+        /// Image run where the second, differing provision appeared.
+        occurrence: crate::assets::RunLocator,
+        /// Display form of the conflicting identity (truncated).
+        identity: String,
+    },
+
     /// I/O error for file convenience APIs.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -157,6 +181,10 @@ pub enum MdErrorCode {
     NestedNoteReference = 6015,
     /// Expanded note content exceeded budget.
     NoteExpansionBudgetExceeded = 6016,
+    /// Provided assets do not match the document's asset plan.
+    AssetPlanMismatch = 6017,
+    /// One asset identity carried two different byte sequences.
+    AssetIdentityConflict = 6018,
 }
 
 impl fmt::Display for MdErrorCode {
@@ -182,6 +210,8 @@ impl MdError {
             Self::LosslessMissingAttribute { .. } => MdErrorCode::LosslessMissingAttribute,
             Self::LosslessInvalidAttribute { .. } => MdErrorCode::LosslessInvalidAttribute,
             Self::FileTooLarge { .. } => MdErrorCode::FileTooLarge,
+            Self::AssetPlanMismatch { .. } => MdErrorCode::AssetPlanMismatch,
+            Self::AssetIdentityConflict { .. } => MdErrorCode::AssetIdentityConflict,
             Self::Io(_) => MdErrorCode::Io,
             Self::Core(_) => MdErrorCode::Core,
             Self::Blueprint(_) => MdErrorCode::Blueprint,
@@ -220,6 +250,20 @@ mod tests {
     fn lossless_attribute_error_code_mapping() {
         let err = MdError::LosslessMissingAttribute { element: "img", attribute: "src" };
         assert_eq!(err.code(), MdErrorCode::LosslessMissingAttribute);
+    }
+
+    #[test]
+    fn asset_contract_error_codes_and_display() {
+        let at = crate::assets::RunLocator::new(3, 1);
+        let mismatch = MdError::AssetPlanMismatch { occurrence: at, detail: "not provided" };
+        assert_eq!(mismatch.code(), MdErrorCode::AssetPlanMismatch);
+        assert_eq!(MdErrorCode::AssetPlanMismatch.to_string(), "E6017");
+        assert!(mismatch.to_string().contains("paragraph 3 run 1"), "{mismatch}");
+
+        let conflict =
+            MdError::AssetIdentityConflict { occurrence: at, identity: "opaque:x".to_string() };
+        assert_eq!(conflict.code(), MdErrorCode::AssetIdentityConflict);
+        assert_eq!(MdErrorCode::AssetIdentityConflict.to_string(), "E6018");
     }
 
     #[test]

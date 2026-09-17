@@ -18,24 +18,37 @@
 //!   금지).
 //! - 실패(부재·탈출·원격·미지 바이트 등)는 **이미지 run 을 드롭 + typed
 //!   경고** — dangling 참조를 남기지 않는다 (no-fake-support).
+//!
+//! # 이 모듈의 위치 (W1a 이후)
+//!
+//! 위 동작의 구현은 [`crate::assets`] 의 3단계 계약(계획 → 파일 읽기 →
+//! 완성)으로 옮겼다. 파일시스템이 없는 호출자(Python 바인딩 등)가 2단계만
+//! 갈아끼울 수 있게 하기 위한 것이다. 이 모듈은 **파일 기반 호출자를 위한
+//! 한 줄짜리 조립**이며, 공개 시그니처와 동작은 그대로다.
 
-use std::collections::HashMap;
 use std::fmt;
 use std::path::Path;
 
-use base64::Engine as _;
 use hwpforge_core::document::Document;
-use hwpforge_core::image::{ImageFormat, ImageStore};
-use hwpforge_core::run::RunContent;
+use hwpforge_core::image::ImageStore;
+use serde::{Deserialize, Serialize};
 
+use crate::assets;
 use crate::encoder::MdWarning;
 
-/// 이미지 파일 1개의 적재 상한 (md 입력 자체의 50 MB 상한과 동일 계열).
-const MAX_IMAGE_BYTES: u64 = 50 * 1024 * 1024;
+// 아래 셋은 이 모듈 본문이 아니라 `mod tests` 의 `use super::*` 가 쓴다 —
+// 13개 회귀 테스트가 오늘의 동작 잠금이라 그대로 두기 위해, 테스트가 기대하는
+// 이름을 부모 모듈에 유지한다.
+#[cfg(test)]
+use base64::Engine as _;
+#[cfg(test)]
+use hwpforge_core::image::ImageFormat;
+#[cfg(test)]
+use hwpforge_core::run::RunContent;
 
 /// [`load_referenced_images`] 가 이미지 참조를 제외한 사유 (typed —
 /// warning-first, 무음 드롭 금지).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum ImageEmbedSkipReason {
     /// 파일이 존재하지 않거나 경로를 정규화할 수 없음.
@@ -96,128 +109,19 @@ pub struct EmbeddedImages {
 /// 텍스트 run 으로 문단을 보존한다 — `![..](url)` 단독 문단은 md 표준
 /// 형태라, 빈 문단 거부(validate)로 문서 전체가 죽으면 회귀다 (독립
 /// 리뷰 B1).
+///
+/// # 단계 구성
+///
+/// [`assets::collect_asset_plan`] → [`assets::fs::resolve_files_from_dir`]
+/// → [`assets::finish_assets`] 와 같은 일을 한다. 여기서는 계획을 만든
+/// 그 자리에서 파일 해석 결과를 계획 순서로 받으므로, 계약 검증
+/// ([`crate::MdError::AssetPlanMismatch`] 등)이 구조적으로 불필요하다 —
+/// 그래서 이 진입점은 오늘처럼 **무오류**로 남는다.
 pub fn load_referenced_images(document: &mut Document, base_dir: Option<&Path>) -> EmbeddedImages {
-    let mut out = EmbeddedImages::default();
-    // dedup: 해석된 정체(canonical 경로 문자열 또는 data URI 전문) →
-    // (합성 키, 스니핑 포맷) — dedup 경로도 format 을 동일 갱신 (리뷰 L1).
-    let mut seen: HashMap<String, (String, ImageFormat)> = HashMap::new();
-    let mut counter: usize = 0;
-    // base_dir 은 한 번만 정규화 (부재/실패 = None → NoBaseDir 계열).
-    let canonical_base = base_dir.and_then(|d| d.canonicalize().ok());
-
-    document.for_each_paragraph_mut(|para| {
-        let mut dropped_char_shape = None;
-        para.runs.retain_mut(|run| {
-            let RunContent::Image(img) = &mut run.content else { return true };
-            let src = img.path.clone();
-            match resolve_source(&src, canonical_base.as_deref()) {
-                Ok((identity, bytes)) => {
-                    if let Some((key, format)) = seen.get(&identity) {
-                        img.path.clone_from(key);
-                        img.format = format.clone();
-                        return true;
-                    }
-                    let Some(format) = ImageFormat::sniff(&bytes) else {
-                        out.warnings
-                            .push(skip_warning(&src, ImageEmbedSkipReason::UnsupportedBytes));
-                        dropped_char_shape = Some(run.char_shape_id);
-                        return false;
-                    };
-                    let ext = format.canonical_extension().expect("sniff never returns Unknown");
-                    counter += 1;
-                    let key = format!("image{counter}.{ext}");
-                    out.store.insert(key.clone(), bytes);
-                    seen.insert(identity, (key.clone(), format.clone()));
-                    img.path = key;
-                    img.format = format;
-                    true
-                }
-                Err(reason) => {
-                    out.warnings.push(skip_warning(&src, reason));
-                    dropped_char_shape = Some(run.char_shape_id);
-                    false
-                }
-            }
-        });
-        // B1: 이미지 단독 문단이 드롭으로 비면 빈 텍스트 run 으로 문단
-        // 유효성을 보존한다 (validate 는 run 0 문단을 거부).
-        if para.runs.is_empty() {
-            if let Some(cs) = dropped_char_shape {
-                para.runs.push(hwpforge_core::run::Run::text("", cs));
-            }
-        }
-    });
-    out
-}
-
-/// src 를 분류·해석해 (dedup 정체, 바이트) 를 돌려준다.
-fn resolve_source(
-    src: &str,
-    canonical_base: Option<&Path>,
-) -> Result<(String, Vec<u8>), ImageEmbedSkipReason> {
-    if let Some(rest) = src.strip_prefix("data:") {
-        let bytes = decode_data_uri(rest).ok_or(ImageEmbedSkipReason::InvalidDataUri)?;
-        if bytes.len() as u64 > MAX_IMAGE_BYTES {
-            return Err(ImageEmbedSkipReason::TooLarge);
-        }
-        return Ok((src.to_string(), bytes));
-    }
-    if src.contains("://") || src.starts_with("//") {
-        return Err(ImageEmbedSkipReason::RemoteUrl);
-    }
-    let path = Path::new(src);
-    let candidate = if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        let Some(base) = canonical_base else {
-            return Err(ImageEmbedSkipReason::NoBaseDir);
-        };
-        base.join(path)
-    };
-    let canonical = candidate.canonicalize().map_err(|_| ImageEmbedSkipReason::MissingFile)?;
-    // 포함 검사 (C1): 절대경로 저작 포함 — 정규화 결과가 base 밖이면 차단.
-    // base 자체가 없으면(절대 src + 인라인 입력) 포함을 증명할 수 없으므로
-    // 동일하게 차단한다.
-    let Some(base) = canonical_base else {
-        return Err(ImageEmbedSkipReason::NoBaseDir);
-    };
-    if !canonical.starts_with(base) {
-        return Err(ImageEmbedSkipReason::PathEscapes);
-    }
-    let meta = std::fs::metadata(&canonical).map_err(|_| ImageEmbedSkipReason::Unreadable)?;
-    // 정규 파일만 (리뷰 L3 — FIFO 는 read 무한 블록, len=0 이라 상한도 통과).
-    if !meta.is_file() {
-        return Err(ImageEmbedSkipReason::Unreadable);
-    }
-    if meta.len() > MAX_IMAGE_BYTES {
-        return Err(ImageEmbedSkipReason::TooLarge);
-    }
-    let bytes = std::fs::read(&canonical).map_err(|_| ImageEmbedSkipReason::Unreadable)?;
-    Ok((canonical.to_string_lossy().into_owned(), bytes))
-}
-
-/// `data:` 접두 이후(`<mime>[;base64],<payload>`)를 디코드한다 —
-/// base64 payload 만 지원 (이미지의 비-base64 data URI 는 비현실적).
-fn decode_data_uri(rest: &str) -> Option<Vec<u8>> {
-    let comma = rest.find(',')?;
-    let (meta, payload) = rest.split_at(comma);
-    let payload = &payload[1..];
-    if !meta.ends_with(";base64") {
-        return None;
-    }
-    base64::engine::general_purpose::STANDARD.decode(payload.trim()).ok()
-}
-
-/// src 를 표시용으로 절단해 경고를 만든다 (data URI 전문 방지).
-fn skip_warning(src: &str, reason: ImageEmbedSkipReason) -> MdWarning {
-    const MAX_SRC: usize = 64;
-    let shown = if src.chars().count() > MAX_SRC {
-        let head: String = src.chars().take(MAX_SRC).collect();
-        format!("{head}…")
-    } else {
-        src.to_string()
-    };
-    MdWarning::ImageEmbedSkipped { src: shown, reason }
+    let plan = assets::collect_asset_plan(&*document);
+    let prepared = assets::fs::resolve_aligned(&plan, base_dir);
+    let (store, outcomes) = assets::apply(document, prepared);
+    EmbeddedImages { store, warnings: assets::warnings_from(&plan, &outcomes) }
 }
 
 #[cfg(test)]
